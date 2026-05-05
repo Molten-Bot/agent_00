@@ -117,9 +117,6 @@ func summarizeOutputTail(text string) string {
 		}
 		tail = append(tail, line)
 	}
-	if len(tail) == 0 {
-		return ""
-	}
 	for i, j := 0, len(tail)-1; i < j; i, j = i+1, j-1 {
 		tail[i], tail[j] = tail[j], tail[i]
 	}

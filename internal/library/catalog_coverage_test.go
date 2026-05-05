@@ -127,8 +127,15 @@ func TestLoadTaskDefinitionsAndDecodeTaskDefinitionValidationPaths(t *testing.T)
 }
 
 func TestResolveCatalogHelpersCoverFallbackBranches(t *testing.T) {
+	t.Setenv(catalogDirEnv, "")
+	t.Setenv(agentsSeedEnv, "")
+
 	if got := resolveCatalogDir(""); got != "" {
 		t.Fatalf("resolveCatalogDir(\"\") = %q, want empty", got)
+	}
+	absMissing := filepath.Join(t.TempDir(), "missing")
+	if got := resolveCatalogDir(absMissing); got != absMissing {
+		t.Fatalf("resolveCatalogDir(abs missing) = %q, want %q", got, absMissing)
 	}
 
 	root := t.TempDir()
@@ -138,6 +145,55 @@ func TestResolveCatalogHelpersCoverFallbackBranches(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(catalogDir, "task.json"), []byte(`{"name":"x","prompt":"p"}`), 0o644); err != nil {
 		t.Fatalf("WriteFile(task) error = %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("Chdir(root) error = %v", err)
+	}
+	if got := resolveCatalogDir("library"); got != "library" {
+		t.Fatalf("resolveCatalogDir(local catalog) = %q, want library", got)
+	}
+	nestedForResolve := filepath.Join(root, "nested", "child")
+	if err := os.MkdirAll(nestedForResolve, 0o755); err != nil {
+		t.Fatalf("MkdirAll(nestedForResolve) error = %v", err)
+	}
+	if err := os.Chdir(nestedForResolve); err != nil {
+		t.Fatalf("Chdir(nestedForResolve) error = %v", err)
+	}
+	if got := resolveCatalogDir("library"); got != catalogDir {
+		t.Fatalf("resolveCatalogDir(upward catalog) = %q, want %q", got, catalogDir)
+	}
+	outside := t.TempDir()
+	if err := os.Chdir(outside); err != nil {
+		t.Fatalf("Chdir(outside) error = %v", err)
+	}
+	if got := resolveCatalogDir("library"); got == "" || !isCatalogDir(got) {
+		t.Fatalf("resolveCatalogDir(source fallback) = %q, want catalog dir", got)
+	}
+	exePath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("Executable() error = %v", err)
+	}
+	exeCatalogName := "moltenhub-test-exe-catalog"
+	exeCatalogDir := filepath.Join(filepath.Dir(exePath), exeCatalogName)
+	if err := os.MkdirAll(exeCatalogDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(exeCatalogDir) error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(exeCatalogDir)
+	})
+	if err := os.WriteFile(filepath.Join(exeCatalogDir, "task.json"), []byte(`{"name":"x","prompt":"p"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(exe catalog task) error = %v", err)
+	}
+	if got := resolveCatalogDir(exeCatalogName); got != exeCatalogDir {
+		t.Fatalf("resolveCatalogDir(exe fallback) = %q, want %q", got, exeCatalogDir)
 	}
 
 	if got := catalogDirFromHint(filepath.Join(catalogDir, "missing.json")); got != catalogDir {
