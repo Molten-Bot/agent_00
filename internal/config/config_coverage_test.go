@@ -168,6 +168,9 @@ func TestNormalizationAndValidationHelpers(t *testing.T) {
 	if err := validateRepoRef("https:///repo.git"); err == nil {
 		t.Fatal("validateRepoRef(missing host) error = nil, want non-nil")
 	}
+	if err := validateRepoRef("https://github.com/acme/git@github.com:other/repo.git"); err == nil {
+		t.Fatal("validateRepoRef(nested repository URL path) error = nil, want non-nil")
+	}
 	if err := validateRepoRef("file:///tmp/repo.git"); err != nil {
 		t.Fatalf("validateRepoRef(file URL) error = %v", err)
 	}
