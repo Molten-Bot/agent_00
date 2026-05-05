@@ -4798,7 +4798,7 @@ html.pink {
   --hub-muted-rgb: 241 164 205;
   --hub-meta-rgb: 214 118 166;
   --hub-good-rgb: 43 182 115;
-  --hub-online-rgb: 34 211 238;
+  --hub-online-rgb: 236 72 153;
   --hub-warn-rgb: 245 158 11;
   --hub-bad-rgb: 239 68 68;
   --hub-running-rgb: 236 72 153;
@@ -4816,7 +4816,7 @@ html.pink {
   --muted: #e998c2;
   --meta: #d676a6;
   --good: #2bb673;
-  --online: #22d3ee;
+  --online: var(--running);
   --warn: #f59e0b;
   --bad: #ef4444;
   --running: #ec4899;
