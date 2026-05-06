@@ -1,4 +1,4 @@
-FROM golang:1.26.1-bookworm AS build
+FROM golang:1.26.1-trixie AS build
 WORKDIR /src
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
@@ -13,7 +13,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/harness ./cmd/harness
 
-FROM node:25.8.1-bookworm-slim AS runtime
+FROM node:25.9.0-trixie-slim AS runtime
 ENV GIT_TERMINAL_PROMPT=0 \
     HARNESS_AGENT_HARNESS="" \
     HARNESS_AGENT_COMMAND="" \
