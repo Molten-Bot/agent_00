@@ -68,5 +68,7 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.tags.outputs.value }}
+          provenance: mode=max
+          sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
