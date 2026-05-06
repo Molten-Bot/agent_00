@@ -25,12 +25,14 @@ import (
 type stubAgentAuthGate struct {
 	statusState web.AgentAuthState
 	statusErr   error
+	statusCalls int
 	startState  web.AgentAuthState
 	startErr    error
 	startCalls  int
 }
 
 func (g *stubAgentAuthGate) Status(context.Context) (web.AgentAuthState, error) {
+	g.statusCalls++
 	return g.statusState, g.statusErr
 }
 
@@ -444,6 +446,32 @@ func TestMaybeStartAgentAuthStartsClaudeLoginWhenBrowserAuthIsNeeded(t *testing.
 	}
 	if got := strings.Join(logs, "\n"); !strings.Contains(got, "status=start harness=claude action=start_device_auth state=pending_browser_login") {
 		t.Fatalf("logs missing start marker: %q", got)
+	}
+}
+
+func TestMaybeStartAgentAuthChecksStatusForNonClaudeBeforeUI(t *testing.T) {
+	t.Parallel()
+
+	gate := &stubAgentAuthGate{
+		statusState: web.AgentAuthState{
+			Required: true,
+			Ready:    true,
+			State:    "ready",
+		},
+	}
+
+	maybeStartAgentAuth(
+		context.Background(),
+		agentruntime.Runtime{Harness: agentruntime.HarnessCodex, Command: "codex"},
+		gate,
+		func(string, ...any) {},
+	)
+
+	if got, want := gate.statusCalls, 1; got != want {
+		t.Fatalf("statusCalls = %d, want %d", got, want)
+	}
+	if got, want := gate.startCalls, 0; got != want {
+		t.Fatalf("startCalls = %d, want %d", got, want)
 	}
 }
 

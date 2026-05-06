@@ -2292,13 +2292,13 @@ func maybeStartAgentAuth(ctx context.Context, runtime agentruntime.Runtime, gate
 	if gate == nil || logf == nil {
 		return
 	}
-	if strings.TrimSpace(runtime.Harness) != agentruntime.HarnessClaude {
-		return
-	}
 
 	status, err := gate.Status(ctx)
 	if err != nil {
 		logf("hub.auth status=warn harness=%s action=check err=%q", runtime.Harness, err)
+		return
+	}
+	if strings.TrimSpace(runtime.Harness) != agentruntime.HarnessClaude {
 		return
 	}
 	if !status.Required || status.Ready {

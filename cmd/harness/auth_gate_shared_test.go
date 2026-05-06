@@ -32,6 +32,10 @@ func gitHubTokenValidationArgsStringForTest() string {
 	return strings.Join(gitHubTokenValidationCommand().Args, " ")
 }
 
+func gitHubTokenValidationFallbackArgsStringForTest() string {
+	return strings.Join(gitHubTokenValidationFallbackCommand().Args, " ")
+}
+
 func isGitHubTokenValidationCommandForTest(cmd execx.Command) bool {
 	return cmd.Name == "gh" && strings.Join(cmd.Args, " ") == gitHubTokenValidationArgsStringForTest()
 }
@@ -220,6 +224,59 @@ func TestGitHubTokenRequirementStateRejectsInvalidStartupToken(t *testing.T) {
 	}
 	if got := os.Getenv("GITHUB_TOKEN"); got != "" {
 		t.Fatalf("GITHUB_TOKEN = %q, want empty", got)
+	}
+}
+
+func TestValidateGitHubTokenRetriesWithoutActiveFlagWhenUnsupported(t *testing.T) {
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	var calls []string
+	runner := &sharedAuthGateRunnerStub{
+		run: func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+			calls = append(calls, strings.Join(cmd.Args, " "))
+			switch strings.Join(cmd.Args, " ") {
+			case gitHubTokenValidationArgsStringForTest():
+				return execx.Result{
+					Stderr: "unknown flag: --active\nFlags:\n  -h, --hostname string   Check a specific hostname's auth status\n  -t, --show-token         Display the auth token\n",
+				}, errors.New("exit status 1")
+			case gitHubTokenValidationFallbackArgsStringForTest():
+				if got, want := os.Getenv("GH_TOKEN"), "github_token_valid"; got != want {
+					t.Fatalf("GH_TOKEN during fallback = %q, want %q", got, want)
+				}
+				if got, want := os.Getenv("GITHUB_TOKEN"), "github_token_valid"; got != want {
+					t.Fatalf("GITHUB_TOKEN during fallback = %q, want %q", got, want)
+				}
+				return execx.Result{Stdout: "github.com logged in"}, nil
+			default:
+				t.Fatalf("unexpected validation command: %+v", cmd)
+				return execx.Result{}, nil
+			}
+		},
+	}
+
+	if err := validateGitHubToken(context.Background(), runner, "github_token_valid"); err != nil {
+		t.Fatalf("validateGitHubToken() error = %v", err)
+	}
+	wantCalls := []string{
+		gitHubTokenValidationArgsStringForTest(),
+		gitHubTokenValidationFallbackArgsStringForTest(),
+	}
+	if strings.Join(calls, "\n") != strings.Join(wantCalls, "\n") {
+		t.Fatalf("calls = %v, want %v", calls, wantCalls)
+	}
+	if got := os.Getenv("GH_TOKEN"); got != "" {
+		t.Fatalf("GH_TOKEN after validation = %q, want restored empty", got)
+	}
+	if got := os.Getenv("GITHUB_TOKEN"); got != "" {
+		t.Fatalf("GITHUB_TOKEN after validation = %q, want restored empty", got)
+	}
+}
+
+func TestShouldRetryGitHubTokenValidationWithoutActiveFlagFromHelpTail(t *testing.T) {
+	err := errors.New("run gh [auth status --active --hostname github.com]: exit status 1 (Flags: | -h, --hostname string Check a specific hostname's auth status | -t, --show-token Display the auth token)")
+	if !shouldRetryGitHubTokenValidationWithoutActiveFlag(execx.Result{}, err) {
+		t.Fatal("shouldRetryGitHubTokenValidationWithoutActiveFlag() = false, want true")
 	}
 }
 

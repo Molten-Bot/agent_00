@@ -327,8 +327,7 @@ func validateGitHubToken(ctx context.Context, runner execx.Runner, token string)
 	defer cancel()
 
 	if err := withTemporaryGitHubTokenEnvironment(token, func() error {
-		_, runErr := runner.Run(probeCtx, gitHubTokenValidationCommand())
-		return runErr
+		return runGitHubTokenValidationCommand(probeCtx, runner)
 	}); err != nil {
 		return fmt.Errorf("validate github token: %w", err)
 	}
@@ -337,6 +336,44 @@ func validateGitHubToken(ctx context.Context, runner execx.Runner, token string)
 
 func gitHubTokenValidationCommand() execx.Command {
 	return execx.Command{Name: "gh", Args: []string{"auth", "status", "--active", "--hostname", "github.com"}}
+}
+
+func gitHubTokenValidationFallbackCommand() execx.Command {
+	return execx.Command{Name: "gh", Args: []string{"auth", "status", "--hostname", "github.com"}}
+}
+
+func runGitHubTokenValidationCommand(ctx context.Context, runner execx.Runner) error {
+	res, err := runner.Run(ctx, gitHubTokenValidationCommand())
+	if err == nil {
+		return nil
+	}
+	if !shouldRetryGitHubTokenValidationWithoutActiveFlag(res, err) {
+		return err
+	}
+	_, fallbackErr := runner.Run(ctx, gitHubTokenValidationFallbackCommand())
+	return fallbackErr
+}
+
+func shouldRetryGitHubTokenValidationWithoutActiveFlag(res execx.Result, err error) bool {
+	if err == nil {
+		return false
+	}
+	outputText := strings.ToLower(strings.TrimSpace(res.Stdout + "\n" + res.Stderr))
+	errText := strings.ToLower(strings.TrimSpace(err.Error()))
+	combined := strings.TrimSpace(outputText + "\n" + errText)
+	if !strings.Contains(combined, "active") {
+		return false
+	}
+	if strings.Contains(combined, "unknown flag") || strings.Contains(combined, "flag provided but not defined") {
+		return true
+	}
+	if strings.Contains(combined, "flags:") &&
+		strings.Contains(combined, "--hostname") &&
+		strings.Contains(combined, "--show-token") &&
+		!strings.Contains(outputText, "--active") {
+		return true
+	}
+	return false
 }
 
 func withTemporaryGitHubTokenEnvironment(token string, run func() error) error {
