@@ -190,6 +190,10 @@
   display: none !important;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .pointer-events-none {
   pointer-events: none;
 }
