@@ -335,6 +335,30 @@
               <strong id="dashboard-velocity">0/h</strong>
               <span class="dashboard-stat-meta">Tasks observed per hour</span>
             </div>
+            <div class="dashboard-stat-card dashboard-stat-card-primary">
+              <span class="dashboard-stat-label">Time Saved</span>
+              <strong id="dashboard-time-saved">0m</strong>
+              <span class="dashboard-stat-meta">Successful agent runtime</span>
+            </div>
+            <div class="dashboard-stat-card">
+              <span class="dashboard-stat-label">Average Runtime</span>
+              <strong id="dashboard-average-runtime">0m</strong>
+              <span class="dashboard-stat-meta">Completed task runtime</span>
+            </div>
+          </div>
+          <div class="dashboard-time-grid" aria-label="Time breakdowns">
+            <section class="dashboard-time-panel" aria-labelledby="dashboard-workflow-times-title">
+              <div class="dashboard-chart-head">
+                <span id="dashboard-workflow-times-title">Workflow Time Saved</span>
+              </div>
+              <div id="dashboard-workflow-times" class="dashboard-time-list"></div>
+            </section>
+            <section class="dashboard-time-panel" aria-labelledby="dashboard-agent-times-title">
+              <div class="dashboard-chart-head">
+                <span id="dashboard-agent-times-title">Agent Time Saved</span>
+              </div>
+              <div id="dashboard-agent-times" class="dashboard-time-list"></div>
+            </section>
           </div>
           <div class="dashboard-chart-shell">
             <div class="dashboard-chart-head">
@@ -1751,6 +1775,10 @@
     const dashboardTotalTasks = document.getElementById("dashboard-total-tasks");
     const dashboardThroughput = document.getElementById("dashboard-throughput");
     const dashboardVelocity = document.getElementById("dashboard-velocity");
+    const dashboardTimeSaved = document.getElementById("dashboard-time-saved");
+    const dashboardAverageRuntime = document.getElementById("dashboard-average-runtime");
+    const dashboardWorkflowTimes = document.getElementById("dashboard-workflow-times");
+    const dashboardAgentTimes = document.getElementById("dashboard-agent-times");
     const dashboardSuccessRate = document.getElementById("dashboard-success-rate");
     const dashboardTaskChart = document.getElementById("dashboard-task-chart");
     const chatDisplay = document.getElementById("chat-display");
@@ -4406,6 +4434,43 @@
       return `${Math.round(value * 100)}%`;
     }
 
+    function dashboardDuration(seconds) {
+      const total = Math.max(0, Math.round(Number(seconds || 0)));
+      if (!Number.isFinite(total) || total <= 0) return "0m";
+      const hours = Math.floor(total / 3600);
+      const minutes = Math.floor((total % 3600) / 60);
+      if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
+      if (hours > 0) return `${hours}h`;
+      if (minutes > 0) return `${minutes}m`;
+      return `${total}s`;
+    }
+
+    function renderDashboardTimeList(container, rows) {
+      if (!container) return;
+      container.textContent = "";
+      const items = Array.isArray(rows) ? rows.slice(0, 5) : [];
+      if (items.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "dashboard-time-empty";
+        empty.textContent = "No completed runtime yet.";
+        container.appendChild(empty);
+        return;
+      }
+      for (const row of items) {
+        const item = document.createElement("div");
+        item.className = "dashboard-time-row";
+        const label = document.createElement("span");
+        label.className = "dashboard-time-name";
+        label.textContent = String(row?.name || "Unknown");
+        const meta = document.createElement("span");
+        meta.className = "dashboard-time-meta";
+        const tasks = Number(row?.completed_tasks || row?.tasks || 0);
+        meta.textContent = `${dashboardDuration(Number(row?.total_saved_seconds || 0))} saved - ${tasks} task${tasks === 1 ? "" : "s"}`;
+        item.append(label, meta);
+        container.appendChild(item);
+      }
+    }
+
     function dashboardUpdatedLabel(value) {
       const date = new Date(String(value || ""));
       if (Number.isNaN(date.getTime())) return "Waiting for data";
@@ -4468,9 +4533,17 @@
       if (dashboardVelocity) {
         dashboardVelocity.textContent = dashboardRate(Number(stats.velocity_per_hour || 0));
       }
+      if (dashboardTimeSaved) {
+        dashboardTimeSaved.textContent = dashboardDuration(Number(stats.total_saved_seconds || 0));
+      }
+      if (dashboardAverageRuntime) {
+        dashboardAverageRuntime.textContent = dashboardDuration(Number(stats.average_duration_seconds || 0));
+      }
       if (dashboardSuccessRate) {
         dashboardSuccessRate.textContent = `${dashboardPercent(Number(stats.success_rate || 0))} success`;
       }
+      renderDashboardTimeList(dashboardWorkflowTimes, stats.workflow_times);
+      renderDashboardTimeList(dashboardAgentTimes, stats.agent_times);
       const chart = ensureDashboardChart();
       if (chart) {
         chart.data.datasets[0].data = [active, completed, failed];
