@@ -2121,6 +2121,53 @@ func TestHandlerServesReleasesWithIconStatuses(t *testing.T) {
 	}
 }
 
+func TestHandlerServesDashboardWhenEnabled(t *testing.T) {
+	t.Setenv(showDashboardEnv, "true")
+
+	srv := NewServer("", NewBroker())
+	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d", resp.Code)
+	}
+	if ct := resp.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Fatalf("content-type = %q", ct)
+	}
+	if got, want := resp.Header().Get("Cache-Control"), "no-store"; got != want {
+		t.Fatalf("cache-control = %q, want %q", got, want)
+	}
+
+	markup := resp.Body.String()
+	required := []string{
+		`<title>Molten Hub Code Dashboard</title>`,
+		`class="site-page-header"`,
+		`class="site-page-footer"`,
+		`href="/static/style.css"`,
+		`href="/dashboard" aria-current="page"`,
+		`class="dashboard-blank" aria-label="Dashboard workspace"`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(markup, needle) {
+			t.Fatalf("expected dashboard html to include %q", needle)
+		}
+	}
+}
+
+func TestHandlerDashboardCanBeDisabled(t *testing.T) {
+	t.Setenv(showDashboardEnv, "false")
+
+	srv := NewServer("", NewBroker())
+	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.Code)
+	}
+}
+
 func TestHandlerServesStaticCSS(t *testing.T) {
 	t.Parallel()
 
@@ -2142,6 +2189,9 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	}
 	if !strings.Contains(css, ".hub-emoji-picker-panel") || !strings.Contains(css, ".hub-emoji-picker-mart") {
 		t.Fatalf("expected stylesheet to include emoji picker styles")
+	}
+	if !strings.Contains(css, ".site-page-header,\n.site-page-footer") || !strings.Contains(css, ".dashboard-blank {") {
+		t.Fatalf("expected stylesheet to include shared site page shell and dashboard styles")
 	}
 	if !strings.Contains(css, ".prompt-select-action-wrap") || !strings.Contains(css, ".prompt-history-delete") {
 		t.Fatalf("expected stylesheet to include inline delete controls for repository and reviewer history selects")

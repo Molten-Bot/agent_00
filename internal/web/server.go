@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"io/fs"
 	"net/http"
@@ -29,6 +30,56 @@ const maxAgentAuthConfigureBodyBytes = 1 << 20
 const maxHubSetupConfigureBodyBytes = 1 << 20
 const streamSnapshotInterval = 120 * time.Millisecond
 const maxStreamTaskLogs = 500
+const showDashboardEnv = "SHOW_DASHBOARD"
+
+var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype html>
+<html lang="en" class="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <script src="/static/lucide.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="min-h-screen antialiased site-page-body {{.BodyClass}}">
+  <div class="site-page {{.PageClass}}">
+    <header class="site-page-header">
+      <a class="site-page-brand" href="/" aria-label="Molten Hub Code home">
+        <img class="site-page-brand-logo" src="/static/logo.svg" alt="" aria-hidden="true">
+        <span>Molten Hub Code</span>
+      </a>
+      <nav class="site-page-nav" aria-label="Primary">
+        <a href="/"{{if eq .ActivePath "/"}} aria-current="page"{{end}}>Home</a>
+        <a href="/releases"{{if eq .ActivePath "/releases"}} aria-current="page"{{end}}>Releases</a>
+        {{if .ShowDashboardNav}}<a href="/dashboard"{{if eq .ActivePath "/dashboard"}} aria-current="page"{{end}}>Dashboard</a>{{end}}
+      </nav>
+    </header>
+    <main class="site-page-main {{.MainClass}}" aria-label="{{.Heading}}">
+      {{.Content}}
+    </main>
+    <footer class="site-page-footer">
+      <span>Molten Hub Code</span>
+      <span>Local monitor</span>
+    </footer>
+  </div>
+  <script>
+    if (window.lucide) {
+      window.lucide.createIcons();
+    }
+  </script>
+</body>
+</html>`))
+
+type sitePageData struct {
+	Title            string
+	BodyClass        string
+	PageClass        string
+	MainClass        string
+	Heading          string
+	ActivePath       string
+	ShowDashboardNav bool
+	Content          template.HTML
+}
 
 // Server provides an HTTP UI for live hub/task monitoring.
 type Server struct {
@@ -185,6 +236,7 @@ func (s Server) Handler() http.Handler {
 	}
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/releases", s.handleReleases)
+	mux.HandleFunc("/dashboard", s.handleDashboard)
 	mux.HandleFunc("/api/state", s.handleState)
 	mux.HandleFunc("/api/library", s.handleLibrary)
 	mux.HandleFunc("/api/library/run", s.handleLibraryRun)
@@ -300,6 +352,49 @@ func (s Server) handleReleases(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(data)
+}
+
+func (s Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/dashboard" || !dashboardEnabled() {
+		http.NotFound(w, r)
+		return
+	}
+
+	s.renderSitePage(w, sitePageData{
+		Title:            "Molten Hub Code Dashboard",
+		BodyClass:        "dashboard-body",
+		PageClass:        "dashboard-page",
+		MainClass:        "dashboard-main",
+		Heading:          "Dashboard",
+		ActivePath:       "/dashboard",
+		ShowDashboardNav: true,
+		Content:          template.HTML(`<section class="dashboard-blank" aria-label="Dashboard workspace"></section>`),
+	})
+}
+
+func (s Server) renderSitePage(w http.ResponseWriter, data sitePageData) {
+	var page bytes.Buffer
+	if err := sitePageTemplate.Execute(&page, data); err != nil {
+		s.logf("hub.ui status=warn event=render_site_page err=%q", err)
+		http.Error(w, "page is unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(page.Bytes())
+}
+
+func dashboardEnabled() bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(showDashboardEnv)))
+	switch value {
+	case "", "1", "t", "true", "y", "yes", "on":
+		return true
+	case "0", "f", "false", "n", "no", "off":
+		return false
+	default:
+		return false
+	}
 }
 
 func (s Server) injectIndexConfig(data []byte) []byte {
