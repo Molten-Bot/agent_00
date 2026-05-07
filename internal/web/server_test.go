@@ -84,6 +84,52 @@ func TestHandlerStateEndpointReturnsSnapshot(t *testing.T) {
 	}
 }
 
+func TestHandlerStateEndpointReturnsDashboardStats(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	b := NewBroker()
+	b.now = func() time.Time { return now }
+	b.IngestLog("dispatch status=start request_id=req-1")
+	now = now.Add(10 * time.Second)
+	b.IngestLog("dispatch status=start request_id=req-2")
+	now = now.Add(20 * time.Second)
+	b.IngestLog("dispatch status=completed request_id=req-1")
+
+	srv := NewServer("", b)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/state")
+	if err != nil {
+		t.Fatalf("GET /api/state error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	var snap Snapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if snap.Stats.TotalTasks != 2 {
+		t.Fatalf("stats.total_tasks = %d, want 2", snap.Stats.TotalTasks)
+	}
+	if snap.Stats.ActiveTasks != 1 {
+		t.Fatalf("stats.active_tasks = %d, want 1", snap.Stats.ActiveTasks)
+	}
+	if snap.Stats.CompletedTasks != 1 {
+		t.Fatalf("stats.completed_tasks = %d, want 1", snap.Stats.CompletedTasks)
+	}
+	if snap.Stats.MaxConcurrentTasks != 2 {
+		t.Fatalf("stats.max_concurrent_tasks = %d, want 2", snap.Stats.MaxConcurrentTasks)
+	}
+	if snap.Stats.ThroughputPerHour <= 0 {
+		t.Fatalf("stats.throughput_per_hour = %f, want positive", snap.Stats.ThroughputPerHour)
+	}
+	if snap.Stats.VelocityPerHour <= snap.Stats.ThroughputPerHour {
+		t.Fatalf("stats.velocity_per_hour = %f, throughput = %f, want velocity above throughput", snap.Stats.VelocityPerHour, snap.Stats.ThroughputPerHour)
+	}
+}
+
 func TestHandlerLibraryEndpointReturnsTasks(t *testing.T) {
 	t.Parallel()
 
@@ -187,6 +233,15 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(markup, `<title>Molten Hub Code</title>`) {
 		t.Fatalf("expected index html to set app title to Molten Hub Code")
+	}
+	if !strings.Contains(markup, `src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"`) {
+		t.Fatalf("expected index html to load Chart.js for dashboard stats")
+	}
+	if !strings.Contains(markup, `id="dashboard-display"`) ||
+		!strings.Contains(markup, `<h1 id="dashboard-title">Dashboard</h1>`) ||
+		!strings.Contains(markup, `id="dashboard-max-concurrent"`) ||
+		!strings.Contains(markup, `id="dashboard-task-chart"`) {
+		t.Fatalf("expected index html to render the dashboard stats panel")
 	}
 	if !strings.Contains(markup, `<moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>`) {
 		t.Fatalf("expected index html to render app heading through the shared site header")
