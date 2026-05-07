@@ -74,6 +74,8 @@ type logFn func(string, ...any)
 
 var authSetupGitMu sync.Mutex
 
+var errPRCreatePermissionDenied = errors.New("pull request create permission denied")
+
 // Result captures run output and status.
 type Result struct {
 	ExitCode     int
@@ -452,6 +454,18 @@ func (h Harness) processChangedRepo(
 	if repo.PRURL == "" {
 		prURL, err := h.createPullRequestURL(ctx, *repo, cfg, createWorkBranch, headRef, targetRepo)
 		if err != nil {
+			if errors.Is(err, errPRCreatePermissionDenied) {
+				h.logf(
+					"stage=pr status=warn action=manual_create_required reason=create_pull_request_permission_denied repo=%s repo_dir=%s branch=%s head=%s target_repo=%s err=%q",
+					repo.URL,
+					repo.RelDir,
+					repo.Branch,
+					headRef,
+					targetRepo,
+					err,
+				)
+				return ExitSuccess, "", nil
+			}
 			return ExitPR, "pr", err
 		}
 		repo.PRURL = prURL
@@ -1164,6 +1178,9 @@ func (h Harness) createPullRequestURL(
 			}
 
 			if !retryable || attempt >= maxPRCreateAttempts {
+				if isPRCreatePermissionDenied(prRes, err) {
+					return "", fmt.Errorf("%w: %v", errPRCreatePermissionDenied, err)
+				}
 				return "", err
 			}
 			h.logf(
@@ -2284,6 +2301,20 @@ func existingPRURLFromCreateFailure(res execx.Result, err error) (string, bool) 
 		}
 	}
 	return "", false
+}
+
+func isPRCreatePermissionDenied(res execx.Result, err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(strings.Join([]string{res.Stdout, res.Stderr, err.Error()}, "\n"))
+	if !strings.Contains(text, "createpullrequest") {
+		return false
+	}
+	return strings.Contains(text, "correct permissions") ||
+		strings.Contains(text, "resource not accessible by integration") ||
+		strings.Contains(text, "permission") ||
+		strings.Contains(text, "forbidden")
 }
 
 func shouldRetryPRCreate(res execx.Result, err error) bool {
