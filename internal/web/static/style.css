@@ -990,7 +990,7 @@ body .right-col.prompt-collapsed.task-list-hidden {
   transform-origin: center bottom;
   transform: none;
   transition: box-shadow 0.24s ease, background 0.24s ease, border-color 0.24s ease;
-  border-color: var(--surface-glow-border);
+  border-color: rgb(var(--hub-border-rgb) / 1);
   background: var(--surface-glow);
   box-shadow: var(--surface-glow-shadow);
 }
