@@ -221,6 +221,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `id="prompt-panel-title" class="panel-section-title">Prompt</span>`) {
 		t.Fatalf("expected index html to label the builder mode as Prompt")
 	}
+	if !strings.Contains(markup, `setPromptMode(promptModeFromHash() || "builder");`) {
+		t.Fatalf("expected index html to default Studio to the Prompt view")
+	}
 	if !strings.Contains(markup, `id="prompt-panel-copy"`) || !strings.Contains(markup, `Compose a repository run, start from a library task, or edit the raw JSON payload.`) {
 		t.Fatalf("expected index html to include prompt panel supporting copy")
 	}
@@ -1088,9 +1091,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, "return normalizeTaskStatusFilter(state.taskStatusFilter) === \"completed\" && runningCount === 0 && completedCount === 0;") {
 		t.Fatalf("expected index html to keep completed-history empty state visible only in completed-history view")
 	}
-	if !strings.Contains(markup, `const showTaskPanel = state.appDisplay === "studio" || state.appDisplay === "dashboard";`) ||
+	if !strings.Contains(markup, `const showTaskPanel = state.appDisplay === "studio" || state.appDisplay === "dashboard" || state.appDisplay === "releases" || state.appDisplay === "chat";`) ||
 		!strings.Contains(markup, "taskPanel.classList.toggle(\"hidden\", !showTaskPanel);") {
-		t.Fatalf("expected index html to show the task queue panel in Studio and Dashboard views")
+		t.Fatalf("expected index html to show the task queue panel across app views")
 	}
 	if !strings.Contains(markup, "taskPanel.setAttribute(\"aria-hidden\", showTaskPanel ? \"false\" : \"true\");") {
 		t.Fatalf("expected index html to keep task panel aria visibility in sync with rendered content")
@@ -1456,8 +1459,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `if (mode === "chat" && !state.githubReposReady) {`) ||
 		!strings.Contains(markup, `appLayout.hidden = false;`) ||
 		!strings.Contains(markup, `promptWrap.hidden = !showStudio;`) ||
-		!strings.Contains(markup, `const showTaskPanel = state.appDisplay === "studio" || state.appDisplay === "dashboard";`) {
-		t.Fatalf("expected index html to switch main views while keeping Current Work in Studio and Dashboard")
+		!strings.Contains(markup, `const showTaskPanel = state.appDisplay === "studio" || state.appDisplay === "dashboard" || state.appDisplay === "releases" || state.appDisplay === "chat";`) {
+		t.Fatalf("expected index html to switch main views while keeping Current Work stable across app views")
 	}
 	if !strings.Contains(markup, `promptPanelTitle.textContent = promptModeTitle(state.promptMode);`) {
 		t.Fatalf("expected index html to update the panel heading when the prompt mode changes")
@@ -1488,6 +1491,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `fetch("/api/github/profile", { cache: "no-store" })`) {
 		t.Fatalf("expected index html to resolve the authenticated GitHub public profile through the hub ui api")
 	}
+	if !strings.Contains(markup, `void loadHubSetupStatus().then(() => {`) ||
+		!strings.Contains(markup, `void loadAgentAuthStatus();`) ||
+		!strings.Contains(markup, `void loadGitHubProfileLink();`) ||
+		!strings.Contains(markup, `void loadLibraryTasks();`) {
+		t.Fatalf("expected index html startup to load validation and setup data in the background")
+	}
 	if !strings.Contains(markup, `const chatDockLink = document.querySelector('[data-app-display="chat"]');`) ||
 		!strings.Contains(markup, `const GITHUB_REPOS_LOADING_TASK_ID = "github-repos-loading";`) ||
 		!strings.Contains(markup, `chatDockLink.setAttribute("aria-disabled", String(!available));`) ||
@@ -1499,6 +1508,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if strings.Contains(markup, `taskItems.push(githubReposLoadingTask())`) {
 		t.Fatalf("expected GitHub repository loading to stay out of Current Work task rendering")
+	}
+	if !strings.Contains(markup, `function submitChatRepoPrompt(repo, input, statusNode)`) ||
+		!strings.Contains(markup, `const card = document.createElement("div");`) ||
+		!strings.Contains(markup, `card.setAttribute("role", "button");`) ||
+		!strings.Contains(markup, `card.setAttribute("aria-expanded", "false");`) ||
+		!strings.Contains(markup, `fetch("/api/local-prompt", {`) ||
+		!strings.Contains(markup, `payload.baseBranch = branch;`) {
+		t.Fatalf("expected index chat repositories to open prompt panels and submit repository tasks")
 	}
 	if !strings.Contains(markup, `class="prompt-mode-link prompt-mode-link-logo"`) ||
 		!strings.Contains(markup, `src="/static/logos/github.svg"`) {
@@ -2224,6 +2241,10 @@ func TestHandlerServesChatView(t *testing.T) {
 		`<i data-lucide="message-circle" aria-hidden="true"></i>`,
 		`id="chat-repo-grid" class="chat-repo-grid" aria-label="GitHub repositories"`,
 		`fetch("/api/github/repos", { cache: "no-store" })`,
+		`const card = document.createElement("div");`,
+		`card.setAttribute("role", "button");`,
+		`fetch("/api/local-prompt", {`,
+		`payload.baseBranch = branch;`,
 		`window.MoltenHubHeader.startConnectionStatus();`,
 	}
 	for _, needle := range required {
@@ -2242,12 +2263,13 @@ func TestHandlerGitHubReposUsesOverride(t *testing.T) {
 	srv := NewServer("", NewBroker())
 	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
 		return []GitHubRepo{{
-			Name:        "repo",
-			FullName:    "acme/repo",
-			Description: "Docs",
-			HTMLURL:     "https://github.com/acme/repo",
-			Language:    "Go",
-			Private:     true,
+			Name:          "repo",
+			FullName:      "acme/repo",
+			Description:   "Docs",
+			HTMLURL:       "https://github.com/acme/repo",
+			DefaultBranch: "main",
+			Language:      "Go",
+			Private:       true,
 		}}, nil
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/github/repos", nil)
@@ -2261,6 +2283,7 @@ func TestHandlerGitHubReposUsesOverride(t *testing.T) {
 	if !strings.Contains(body, `"ok":true`) ||
 		!strings.Contains(body, `"full_name":"acme/repo"`) ||
 		!strings.Contains(body, `"html_url":"https://github.com/acme/repo"`) ||
+		!strings.Contains(body, `"default_branch":"main"`) ||
 		!strings.Contains(body, `"private":true`) {
 		t.Fatalf("unexpected github repos response %q", body)
 	}
