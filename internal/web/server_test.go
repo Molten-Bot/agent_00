@@ -2084,6 +2084,12 @@ func TestHandlerServesReleasesWithIconStatuses(t *testing.T) {
 	if !strings.Contains(markup, `window.gtag("config", "G-BY33RFG2WB");`) {
 		t.Fatalf("expected releases html to configure google analytics with the moltenhub measurement id")
 	}
+	if !strings.Contains(markup, `class="page-bottom-dock"`) ||
+		!strings.Contains(markup, `class="prompt-mode-tabs prompt-mode-tabs-dock"`) ||
+		!strings.Contains(markup, `src="/static/bottom-dock.js"`) ||
+		strings.Contains(markup, `<!-- hub-bottom-dock -->`) {
+		t.Fatalf("expected releases html to render the shared dock component as the page footer")
+	}
 	if !strings.Contains(markup, `trackAnalyticsNavigation(event, "releases_home_opened", { source: "releases_header" });`) ||
 		!strings.Contains(markup, `if (key === "event_callback" && typeof value === "function") {`) ||
 		!strings.Contains(markup, `event_timeout: 1000`) ||
@@ -2101,6 +2107,49 @@ func TestHandlerServesReleasesWithIconStatuses(t *testing.T) {
 	if strings.Contains(markup, `>IMPROVED<`) || strings.Contains(markup, `>FIXED<`) {
 		t.Fatalf("expected release status labels to be icons instead of visible text badges")
 	}
+}
+
+func TestHandlerRendersSharedBottomDockComponentAcrossPages(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	indexMarkup := renderHandlerMarkup(t, srv, "/")
+	releasesMarkup := renderHandlerMarkup(t, srv, "/releases")
+
+	indexDock := extractBottomDockComponent(t, indexMarkup)
+	releasesDock := extractBottomDockComponent(t, releasesMarkup)
+	if indexDock != releasesDock {
+		t.Fatalf("expected index and releases pages to render identical shared bottom dock component")
+	}
+	if strings.Contains(indexMarkup, bottomDockPlaceholder) || strings.Contains(releasesMarkup, bottomDockPlaceholder) {
+		t.Fatalf("expected shared bottom dock placeholders to be replaced before serving pages")
+	}
+}
+
+func renderHandlerMarkup(t *testing.T, srv Server, path string) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("%s status = %d", path, resp.Code)
+	}
+	return resp.Body.String()
+}
+
+func extractBottomDockComponent(t *testing.T, markup string) string {
+	t.Helper()
+	start := strings.Index(markup, `<div class="page-bottom-dock"`)
+	if start < 0 {
+		t.Fatalf("expected rendered page to include bottom dock component")
+	}
+	script := `<script src="/static/bottom-dock.js"></script>`
+	relativeEnd := strings.Index(markup[start:], script)
+	if relativeEnd < 0 {
+		t.Fatalf("expected rendered bottom dock component to include shared script")
+	}
+	end := start + relativeEnd + len(script)
+	return markup[start:end]
 }
 
 func TestHandlerServesDashboardWhenEnabled(t *testing.T) {
