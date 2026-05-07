@@ -1028,6 +1028,9 @@ body .right-col.prompt-collapsed.task-list-hidden {
   width: 40px;
   height: 40px;
   flex: 0 0 40px;
+  appearance: none;
+  border: 0;
+  background: transparent;
   color: var(--muted-foreground);
   text-decoration: none;
   border-radius: var(--radius);
@@ -1221,6 +1224,10 @@ body .right-col.prompt-collapsed.task-list-hidden {
   stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.hub-profile-button .prompt-mode-link-shell {
+  display: none;
 }
 
 .hub-profile-button:hover,

@@ -238,9 +238,9 @@
       plus.classList.toggle("hidden", configured);
     }
     if (hubLink) {
-      const targetURL = configured ? dashboardURL : connectURL;
-      hubLink.href = targetURL || HUB_LOGIN_URL;
-      const title = configured ? "Open Molten Bot Hub in a new window" : "Configure Molten Hub";
+      hubLink.classList.toggle("hidden", configured);
+      hubLink.href = connectURL || HUB_LOGIN_URL;
+      const title = "Configure Molten Hub";
       hubLink.title = title;
       hubLink.setAttribute("aria-label", title);
     }

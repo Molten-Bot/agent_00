@@ -2341,9 +2341,9 @@
         moltenBotHubPlus.classList.toggle("hidden", configured);
       }
       if (moltenBotHubLink) {
-        const targetURL = configured ? state.hubSetup.dashboardURL : state.hubSetup.connectURL;
-        moltenBotHubLink.href = targetURL || HUB_LOGIN_URL;
-        const title = configured ? "Open Molten Bot Hub in a new window" : "Configure Molten Hub";
+        moltenBotHubLink.classList.toggle("hidden", configured);
+        moltenBotHubLink.href = state.hubSetup.connectURL || HUB_LOGIN_URL;
+        const title = "Configure Molten Hub";
         moltenBotHubLink.title = title;
         moltenBotHubLink.setAttribute("aria-label", title);
       }
