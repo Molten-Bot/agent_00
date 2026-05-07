@@ -566,10 +566,13 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `pi: "/static/logos/pi.svg"`) {
 		t.Fatalf("expected index html to map the pi harness to the pi logo asset")
 	}
+	if !strings.Contains(markup, `opencode: "/static/logos/opencode.svg"`) {
+		t.Fatalf("expected index html to map the opencode harness to the opencode logo asset")
+	}
 	if !strings.Contains(markup, "task-progress-step-icon") {
 		t.Fatalf("expected index html to render task progress step icons")
 	}
-	if !strings.Contains(markup, `const TASK_PROGRESS_AGENT_STAGES = new Set(["codex", "claude", "auggie", "pi", "augment", "agent", "review"]);`) {
+	if !strings.Contains(markup, `const TASK_PROGRESS_AGENT_STAGES = new Set(["codex", "claude", "auggie", "pi", "opencode", "augment", "agent", "review"]);`) {
 		t.Fatalf("expected index html to define the stage set that maps runtime agent stages into the agent progress step")
 	}
 	if strings.Contains(markup, "current step:") {
@@ -978,6 +981,11 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(markup, "function animateTaskReflow(listNode, previousRects)") {
 		t.Fatalf("expected index html to animate task reflow transitions")
+	}
+	if !strings.Contains(markup, "function captureTaskScrollAnchor(listNode)") ||
+		!strings.Contains(markup, "restoreTaskScrollAnchor(listNode, scrollAnchor);") ||
+		!strings.Contains(markup, "container.scrollTop += nextRect.top - containerRect.top - topOffset;") {
+		t.Fatalf("expected index html to preserve visible task scroll position while task order redraws")
 	}
 	if strings.Contains(markup, "taskFullscreenBody.classList.toggle(\"task-output-hidden\", !outputVisible);") {
 		t.Fatalf("expected index html to remove full screen output visibility toggling")
@@ -2175,7 +2183,9 @@ func TestHandlerServesDashboardWhenEnabled(t *testing.T) {
 		`<title>Molten Hub Code Dashboard</title>`,
 		`src="/static/site-header.js"`,
 		`<moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>`,
-		`class="site-page-footer"`,
+		`class="page-bottom-dock"`,
+		`class="prompt-mode-tabs prompt-mode-tabs-dock"`,
+		`src="/static/bottom-dock.js"`,
 		`href="/static/style.css"`,
 		`href="/dashboard" aria-current="page"`,
 		`class="dashboard-blank" aria-label="Dashboard workspace"`,
@@ -2184,6 +2194,12 @@ func TestHandlerServesDashboardWhenEnabled(t *testing.T) {
 		if !strings.Contains(markup, needle) {
 			t.Fatalf("expected dashboard html to include %q", needle)
 		}
+	}
+	if strings.Contains(markup, `class="site-page-footer"`) ||
+		strings.Contains(markup, bottomDockPlaceholder) ||
+		!strings.Contains(markup, `id="prompt-mode-builder" class="prompt-mode-link active"`) ||
+		!strings.Contains(markup, `id="theme-toggle" class="prompt-mode-link theme-toggle theme-toggle-dock"`) {
+		t.Fatalf("expected dashboard footer to use shared bottom dock with default button states")
 	}
 }
 
@@ -2606,6 +2622,7 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 		`<header class="header site-header">`,
 		`id="moltenhub-logo"`,
 		`id="configured-agent-logo"`,
+		`opencode: "/static/logos/opencode.svg"`,
 		`id="configured-agent-gorilla-subtitle" class="site-header-subtitle">Codex is now a 600LB Gorilla!</span>`,
 		`id="local-conn-item" class="status-item status-item-compact status-item-compact-expandable"`,
 		`id="hub-conn-item" class="status-item status-item-compact status-item-compact-expandable"`,
