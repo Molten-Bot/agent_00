@@ -567,10 +567,21 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             card.setAttribute("aria-expanded", "false");
             card.setAttribute("aria-label", "Open " + String(repo.full_name || repo.name || "repository") + " panel");
 
+            const head = document.createElement("span");
+            head.className = "chat-repo-card-head";
+
             const title = document.createElement("span");
             title.className = "chat-repo-card-title";
             title.textContent = String(repo.full_name || repo.name || "Unnamed repository");
-            card.appendChild(title);
+            head.appendChild(title);
+
+            const chatIcon = document.createElement("span");
+            chatIcon.className = "chat-repo-card-chat-icon";
+            chatIcon.title = "Prompt";
+            chatIcon.setAttribute("aria-hidden", "true");
+            chatIcon.innerHTML = '<i data-lucide="message-circle" aria-hidden="true"></i>';
+            head.appendChild(chatIcon);
+            card.appendChild(head);
 
             const description = document.createElement("span");
             description.className = "chat-repo-card-description";
@@ -613,19 +624,25 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             panel.append(input, panelStatus);
             card.appendChild(panel);
 
-            card.addEventListener("click", () => {
-              const nextOpen = card.getAttribute("aria-expanded") !== "true";
+            const openPrompt = () => {
               grid.querySelectorAll(".chat-repo-card[aria-expanded='true']").forEach((node) => {
                 if (node !== card) node.setAttribute("aria-expanded", "false");
               });
-              card.setAttribute("aria-expanded", String(nextOpen));
-              if (nextOpen) input.focus();
+              card.setAttribute("aria-expanded", "true");
+              input.focus();
+            };
+
+            card.addEventListener("click", () => {
+              openPrompt();
             });
             card.addEventListener("keydown", (event) => {
               if (event.target === input || (event.key !== "Enter" && event.key !== " ")) return;
               event.preventDefault();
-              card.click();
+              openPrompt();
             });
+            if (window.lucide && typeof window.lucide.createIcons === "function") {
+              window.lucide.createIcons({ root: card });
+            }
 
             return card;
           }
