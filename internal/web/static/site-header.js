@@ -143,6 +143,30 @@
     `;
   }
 
+  const NAV_ITEMS = Object.freeze([
+    { href: "/", label: "Home" },
+    { href: "/releases", label: "Releases" },
+    { href: "/dashboard", label: "Dashboard" },
+  ]);
+
+  function normalizePath(path) {
+    const value = String(path || "/").trim() || "/";
+    if (value.length > 1) {
+      return value.replace(/\/+$/, "");
+    }
+    return value;
+  }
+
+  function navTemplate(activePath) {
+    const currentPath = normalizePath(activePath);
+    const links = NAV_ITEMS.map((item) => {
+      const itemPath = normalizePath(item.href);
+      const current = itemPath === currentPath ? ` aria-current="page"` : "";
+      return `<a href="${item.href}"${current}>${item.label}</a>`;
+    }).join("");
+    return `<nav class="site-page-nav" aria-label="Primary">${links}</nav>`;
+  }
+
   class MoltenHubCodeHeader extends HTMLElement {
     constructor() {
       super();
@@ -248,10 +272,20 @@
     }
   }
 
+  class MoltenHubCodeNav extends HTMLElement {
+    connectedCallback() {
+      const activePath = this.getAttribute("active-path") || window.location.pathname || "/";
+      this.innerHTML = navTemplate(activePath);
+    }
+  }
+
   applyPersistedTheme();
 
   if (!customElements.get("moltenhub-code-header")) {
     customElements.define("moltenhub-code-header", MoltenHubCodeHeader);
+  }
+  if (!customElements.get("moltenhub-code-nav")) {
+    customElements.define("moltenhub-code-nav", MoltenHubCodeNav);
   }
 
   window.MoltenHubHeader = {
@@ -264,5 +298,6 @@
     },
     agentAuthLabel,
     resolveAgentLogoURL,
+    navItems: NAV_ITEMS,
   };
 })();
