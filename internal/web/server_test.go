@@ -2505,6 +2505,9 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	if !strings.Contains(css, ".task-fullscreen") {
 		t.Fatalf("expected stylesheet to include full screen task layout styles")
 	}
+	if !strings.Contains(css, "#task-panel.task-panel-collapsed.is-empty .task-scroll {\n  display: none;\n}") {
+		t.Fatalf("expected stylesheet to keep minimized task panel body hidden for empty task states")
+	}
 	if !strings.Contains(css, ".task-copy-link {") ||
 		!strings.Contains(css, "width: 34px;") ||
 		!strings.Contains(css, "height: 34px;") ||
