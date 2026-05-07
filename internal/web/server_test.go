@@ -2186,11 +2186,11 @@ func TestHandlerServesDashboardWhenEnabled(t *testing.T) {
 		`<title>Molten Hub Code Dashboard</title>`,
 		`src="/static/site-header.js"`,
 		`<moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>`,
+		`<moltenhub-code-nav></moltenhub-code-nav>`,
 		`class="page-bottom-dock"`,
 		`class="prompt-mode-tabs prompt-mode-tabs-dock"`,
 		`src="/static/bottom-dock.js"`,
 		`href="/static/style.css"`,
-		`href="/dashboard" aria-current="page"`,
 		`class="dashboard-blank" aria-label="Dashboard workspace"`,
 	}
 	for _, needle := range required {
@@ -2199,10 +2199,11 @@ func TestHandlerServesDashboardWhenEnabled(t *testing.T) {
 		}
 	}
 	if strings.Contains(markup, `class="site-page-footer"`) ||
+		strings.Contains(markup, `<nav class="site-page-nav"`) ||
 		strings.Contains(markup, bottomDockPlaceholder) ||
 		!strings.Contains(markup, `id="prompt-mode-builder" class="prompt-mode-link active"`) ||
 		!strings.Contains(markup, `id="theme-toggle" class="prompt-mode-link theme-toggle theme-toggle-dock"`) {
-		t.Fatalf("expected dashboard footer to use shared bottom dock with default button states")
+		t.Fatalf("expected dashboard footer and nav to use shared components with default button states")
 	}
 }
 
@@ -2242,6 +2243,7 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		t.Fatalf("expected stylesheet to include emoji picker styles")
 	}
 	if !strings.Contains(css, "moltenhub-code-header {\n  display: block;") ||
+		!strings.Contains(css, "moltenhub-code-nav {\n  display: block;") ||
 		!strings.Contains(css, ".site-page-footer {") ||
 		!strings.Contains(css, ".dashboard-blank {") {
 		t.Fatalf("expected stylesheet to include shared site page shell and dashboard styles")
@@ -2620,6 +2622,10 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 	script := resp.Body.String()
 	required := []string{
 		`customElements.define("moltenhub-code-header", MoltenHubCodeHeader);`,
+		`customElements.define("moltenhub-code-nav", MoltenHubCodeNav);`,
+		`const NAV_ITEMS = Object.freeze([`,
+		`{ href: "/dashboard", label: "Dashboard" },`,
+		"return `<nav class=\"site-page-nav\" aria-label=\"Primary\">${links}</nav>`;",
 		`const LOGO_ROTATION_INTERVAL_MS = 8_000;`,
 		`localStorage.getItem(THEME_KEY)`,
 		`<header class="header site-header">`,

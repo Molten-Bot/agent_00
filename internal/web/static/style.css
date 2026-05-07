@@ -329,6 +329,10 @@ moltenhub-code-header {
   z-index: 5;
 }
 
+moltenhub-code-nav {
+  display: block;
+}
+
 .header {
   position: relative;
   z-index: 5;

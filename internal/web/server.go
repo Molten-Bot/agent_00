@@ -46,11 +46,7 @@ var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype 
 <body class="min-h-screen antialiased site-page-body {{.BodyClass}}">
   <div class="site-page {{.PageClass}}">
     <moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>
-    <nav class="site-page-nav" aria-label="Primary">
-      <a href="/"{{if eq .ActivePath "/"}} aria-current="page"{{end}}>Home</a>
-      <a href="/releases"{{if eq .ActivePath "/releases"}} aria-current="page"{{end}}>Releases</a>
-      {{if .ShowDashboardNav}}<a href="/dashboard"{{if eq .ActivePath "/dashboard"}} aria-current="page"{{end}}>Dashboard</a>{{end}}
-    </nav>
+    <moltenhub-code-nav></moltenhub-code-nav>
     <main class="site-page-main {{.MainClass}}" aria-label="{{.Heading}}">
       {{.Content}}
     </main>
@@ -65,15 +61,13 @@ var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype 
 </html>`))
 
 type sitePageData struct {
-	Title            string
-	BodyClass        string
-	PageClass        string
-	MainClass        string
-	Heading          string
-	ActivePath       string
-	ShowDashboardNav bool
-	Content          template.HTML
-	BottomDock       template.HTML
+	Title      string
+	BodyClass  string
+	PageClass  string
+	MainClass  string
+	Heading    string
+	Content    template.HTML
+	BottomDock template.HTML
 }
 
 // Server provides an HTTP UI for live hub/task monitoring.
@@ -431,14 +425,12 @@ func (s Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.renderSitePage(r.Context(), w, sitePageData{
-		Title:            "Molten Hub Code Dashboard",
-		BodyClass:        "dashboard-body",
-		PageClass:        "dashboard-page",
-		MainClass:        "dashboard-main",
-		Heading:          "Dashboard",
-		ActivePath:       "/dashboard",
-		ShowDashboardNav: true,
-		Content:          template.HTML(`<section class="dashboard-blank" aria-label="Dashboard workspace"></section>`),
+		Title:     "Molten Hub Code Dashboard",
+		BodyClass: "dashboard-body",
+		PageClass: "dashboard-page",
+		MainClass: "dashboard-main",
+		Heading:   "Dashboard",
+		Content:   template.HTML(`<section class="dashboard-blank" aria-label="Dashboard workspace"></section>`),
 	})
 }
 
