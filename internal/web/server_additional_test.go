@@ -105,9 +105,10 @@ func TestHandlerReleasesBottomDockUsesHubSetupStatus(t *testing.T) {
 		t.Fatalf("expected releases dock to render configured Hub state")
 	}
 	if !strings.Contains(markup, `id="moltenbot-hub-link"`) ||
-		!strings.Contains(markup, `href="https://app.molten.bot/hub/agents/test-agent"`) ||
-		!strings.Contains(markup, `aria-label="Open Molten Bot Hub in a new window"`) {
-		t.Fatalf("expected configured releases dock to link to the Hub dashboard")
+		!strings.Contains(markup, `class="prompt-mode-link prompt-mode-link-logo hidden"`) ||
+		!strings.Contains(markup, `href="https://app.molten.bot/signin?target=hub"`) ||
+		!strings.Contains(markup, `aria-label="Configure Molten Hub"`) {
+		t.Fatalf("expected configured releases dock to hide the Hub setup icon")
 	}
 	if !strings.Contains(markup, `<span id="moltenbot-hub-plus" class="hub-dock-plus hidden" aria-hidden="true">+</span>`) {
 		t.Fatalf("expected configured releases dock to hide the Hub plus badge")

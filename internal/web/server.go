@@ -368,18 +368,12 @@ func (s Server) applyBottomDockHubState(ctx context.Context, dock []byte) []byte
 	if connectURL == "" {
 		connectURL = defaultHubSetupState().ConnectURL
 	}
-	dashboardURL := strings.TrimSpace(state.DashboardURL)
-	if dashboardURL == "" {
-		dashboardURL = defaultHubSetupState().DashboardURL
-	}
-
-	hubURL := connectURL
 	hubTitle := "Configure Molten Hub"
+	hubLinkClass := "prompt-mode-link prompt-mode-link-logo"
 	profileButtonAttr := " hidden"
 	plusClass := "hub-dock-plus"
 	if configured {
-		hubURL = dashboardURL
-		hubTitle = "Open Molten Bot Hub in a new window"
+		hubLinkClass = "prompt-mode-link prompt-mode-link-logo hidden"
 		profileButtonAttr = ""
 		plusClass = "hub-dock-plus hidden"
 	}
@@ -391,16 +385,21 @@ func (s Server) applyBottomDockHubState(ctx context.Context, dock []byte) []byte
 	)
 	dock = bytes.Replace(dock,
 		[]byte(`href="https://app.molten.bot/signin?target=hub"`),
-		[]byte(`href="`+template.HTMLEscapeString(hubURL)+`"`),
+		[]byte(`href="`+template.HTMLEscapeString(connectURL)+`"`),
 		1,
 	)
 	dock = bytes.Replace(dock,
-		[]byte(`aria-label="Open Molten Bot Hub in a new window"`),
+		[]byte("id=\"moltenbot-hub-link\"\n        class=\"prompt-mode-link prompt-mode-link-logo\""),
+		[]byte("id=\"moltenbot-hub-link\"\n        class=\""+template.HTMLEscapeString(hubLinkClass)+"\""),
+		1,
+	)
+	dock = bytes.Replace(dock,
+		[]byte(`aria-label="Configure Molten Hub"`),
 		[]byte(`aria-label="`+template.HTMLEscapeString(hubTitle)+`"`),
 		1,
 	)
 	dock = bytes.Replace(dock,
-		[]byte(`title="Open Molten Bot Hub in a new window"`),
+		[]byte(`title="Configure Molten Hub"`),
 		[]byte(`title="`+template.HTMLEscapeString(hubTitle)+`"`),
 		1,
 	)

@@ -280,6 +280,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `href="https://app.molten.bot/signin?target=hub"`) {
 		t.Fatalf("expected index html to link unconfigured dock icon to molten hub sign-in")
 	}
+	if strings.Contains(markup, `aria-label="Home"`) || strings.Contains(markup, `data-page-nav-link="/"`) || strings.Contains(markup, `data-lucide="home"`) {
+		t.Fatalf("expected bottom dock to omit the home navigation button")
+	}
 	if !strings.Contains(markup, `img src="https://app.molten.bot/logo.svg"`) {
 		t.Fatalf("expected index html to use the remote molten bot logo asset")
 	}
