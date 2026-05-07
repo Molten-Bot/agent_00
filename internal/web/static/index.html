@@ -8677,7 +8677,7 @@
       const tasks = displayTasks(snapshot);
       const hasTasks = tasks.length > 0;
       const hasTaskPanelTasks = hasTaskPanelContent(snapshot);
-      const showTaskPanel = state.appDisplay === "studio" || state.appDisplay === "dashboard" || state.appDisplay === "releases" || state.appDisplay === "chat";
+      const showTaskPanel = state.appDisplay === "studio" || state.appDisplay === "chat";
       const promptOnly = normalizeTaskPanelView(state.taskPanelView) === "prompt";
       if (!showTaskPanel && state.taskFullscreenOpen) {
         state.taskFullscreenOpen = false;
