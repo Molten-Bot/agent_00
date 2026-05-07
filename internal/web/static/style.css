@@ -2707,60 +2707,13 @@ select.prompt-control {
   font-weight: 700;
 }
 
-.dashboard-main {
-  display: grid;
-  align-items: stretch;
-}
-
-.dashboard-blank {
-  min-height: clamp(360px, 58vh, 680px);
-  border: 1px dashed var(--border);
-  border-radius: 8px;
-  background: var(--surface-glass-solid);
-  box-shadow: var(--shadow-sm);
-}
-
-@media (max-width: 640px) {
-  .site-page {
-    width: min(100% - 24px, var(--hub-page-width));
-    padding: 20px 0;
-    gap: 18px;
-  }
-
-  .site-page-footer {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .site-page-nav {
-    justify-content: flex-start;
-    width: 100%;
-  }
-
-  .site-page-nav a {
-    flex: 1 1 94px;
-  }
-
-  .dashboard-blank {
-    min-height: 52vh;
-  }
-}
-
-.releases-body {
-  color: var(--text);
-}
-
-.releases-app {
-  padding-bottom: 56px;
-}
-
-.releases-page {
+.releases-display {
   width: min(920px, 100%);
   margin: 0 auto;
-  padding: 28px 0 var(--hub-content-bottom-padding);
+  padding: 12px 0 var(--hub-content-bottom-padding);
 }
 
-.releases-page h1 {
+.releases-display h1 {
   margin: 0;
   margin-bottom: 18px;
   font-size: clamp(1.55rem, 3vw, 2.3rem);

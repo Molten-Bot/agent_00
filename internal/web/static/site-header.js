@@ -203,8 +203,6 @@
 
   const NAV_ITEMS = Object.freeze([
     { href: "/", label: "Home" },
-    { href: "/releases", label: "Releases" },
-    { href: "/dashboard", label: "Dashboard" },
   ]);
 
   function normalizePath(path) {

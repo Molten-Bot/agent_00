@@ -284,6 +284,13 @@
 
       </div>
     </div>
+
+    <section id="releases-display" class="releases-display hidden" aria-label="Releases" aria-hidden="true">
+      <h1>Releases</h1>
+      <div class="release-empty" aria-label="No releases">
+        <p>No releases yet.</p>
+      </div>
+    </section>
   </div>
 
   <div id="task-fullscreen" class="task-fullscreen hidden" aria-hidden="true">
@@ -1614,6 +1621,9 @@
     const promptModeBuilder = document.getElementById("prompt-mode-builder");
     const promptModeLibrary = document.getElementById("prompt-mode-library");
     const promptModeJSON = document.getElementById("prompt-mode-json");
+    const appLayout = document.querySelector(".layout");
+    const releasesDisplay = document.getElementById("releases-display");
+    const appDisplayLinks = Array.from(document.querySelectorAll("[data-app-display]"));
     const promptPanelTitle = document.getElementById("prompt-panel-title");
     const promptPanelCopy = document.getElementById("prompt-panel-copy");
     const githubProfileLink = document.getElementById("github-profile-link");
@@ -5145,6 +5155,38 @@
           return "Edit the raw payload exactly as the hub receives it, including multi-repo runs and review configuration.";
         default:
           return "Compose a repository run, start from a library task, or edit the raw JSON payload.";
+      }
+    }
+
+    function appDisplayFromHash() {
+      const hash = String(window.location.hash || "").replace(/^#/, "").trim().toLowerCase();
+      return hash === "releases" ? "releases" : "dashboard";
+    }
+
+    function setAppDisplay(display, options = {}) {
+      const mode = display === "releases" ? "releases" : "dashboard";
+      const showReleases = mode === "releases";
+      if (appLayout) {
+        appLayout.hidden = showReleases;
+      }
+      if (releasesDisplay) {
+        releasesDisplay.classList.toggle("hidden", !showReleases);
+        releasesDisplay.setAttribute("aria-hidden", String(!showReleases));
+      }
+      for (const link of appDisplayLinks) {
+        const active = String(link.dataset.appDisplay || "").trim() === mode;
+        link.classList.toggle("active", active);
+        if (active) {
+          link.setAttribute("aria-current", "true");
+        } else {
+          link.removeAttribute("aria-current");
+        }
+      }
+      if (options.updateHash) {
+        const nextHash = mode === "releases" ? "#releases" : "#dashboard";
+        if (window.location.hash !== nextHash) {
+          window.history.pushState(null, "", nextHash);
+        }
       }
     }
 
@@ -8873,6 +8915,7 @@
           // Keep current builder inputs if raw JSON is empty or invalid.
         }
       }
+      setAppDisplay("dashboard", { updateHash: true });
       setPromptMode("builder");
     });
 
@@ -8886,6 +8929,7 @@
           // Keep current library inputs if raw JSON is empty or invalid.
         }
       }
+      setAppDisplay("dashboard", { updateHash: true });
       setPromptMode("library");
     });
 
@@ -8897,8 +8941,17 @@
       } catch (_err) {
         // Leave raw editor unchanged if prompt fields are incomplete.
       }
+      setAppDisplay("dashboard", { updateHash: true });
       setPromptMode("json");
     });
+
+    for (const link of appDisplayLinks) {
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        setAppDisplay(link.dataset.appDisplay, { updateHash: true });
+      });
+    }
+    window.addEventListener("hashchange", () => setAppDisplay(appDisplayFromHash()));
 
     localPromptForm.addEventListener("submit", submitLocalPrompt);
     libraryRepoInput.value = builderRepoInput.value;
@@ -8921,6 +8974,7 @@
     }
     initAppearanceControls();
     initSnowfallBackground();
+    setAppDisplay(appDisplayFromHash());
     setPromptMode(state.promptMode);
     applyPromptVisibility();
     if (normalizeTaskStatusFilter(state.taskStatusFilter) === "completed") {

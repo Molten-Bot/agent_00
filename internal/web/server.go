@@ -30,47 +30,7 @@ const maxAgentAuthConfigureBodyBytes = 1 << 20
 const maxHubSetupConfigureBodyBytes = 1 << 20
 const streamSnapshotInterval = 120 * time.Millisecond
 const maxStreamTaskLogs = 500
-const showDashboardEnv = "SHOW_DASHBOARD"
 const bottomDockPlaceholder = "<!-- hub-bottom-dock -->"
-
-var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype html>
-<html lang="en" class="light">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{.Title}}</title>
-  <script src="/static/lucide.min.js"></script>
-  <script src="/static/site-header.js"></script>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body class="site-page-body {{.BodyClass}}">
-  <div class="site-page {{.PageClass}}">
-    <moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>
-    <main class="site-page-main {{.MainClass}}" aria-label="{{.Heading}}">
-      {{.Content}}
-    </main>
-    {{.BottomDock}}
-  </div>
-  <script>
-    if (window.MoltenHubHeader && typeof window.MoltenHubHeader.startConnectionStatus === "function") {
-      window.MoltenHubHeader.startConnectionStatus();
-    }
-    if (window.lucide) {
-      window.lucide.createIcons();
-    }
-  </script>
-</body>
-</html>`))
-
-type sitePageData struct {
-	Title      string
-	BodyClass  string
-	PageClass  string
-	MainClass  string
-	Heading    string
-	Content    template.HTML
-	BottomDock template.HTML
-}
 
 // Server provides an HTTP UI for live hub/task monitoring.
 type Server struct {
@@ -226,8 +186,6 @@ func (s Server) Handler() http.Handler {
 		mux.Handle("/static/", withCacheControl(staticHandler, "public, max-age=3600"))
 	}
 	mux.HandleFunc("/", s.handleIndex)
-	mux.HandleFunc("/releases", s.handleReleases)
-	mux.HandleFunc("/dashboard", s.handleDashboard)
 	mux.HandleFunc("/api/state", s.handleState)
 	mux.HandleFunc("/api/status", s.handleState)
 	mux.HandleFunc("/api/library", s.handleLibrary)
@@ -330,24 +288,6 @@ func (s Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-func (s Server) handleReleases(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/releases" {
-		http.NotFound(w, r)
-		return
-	}
-
-	data, err := fs.ReadFile(staticFiles, "static/releases.html")
-	if err != nil {
-		http.Error(w, "releases page is unavailable", http.StatusInternalServerError)
-		return
-	}
-	data = s.injectBottomDockComponent(r.Context(), data)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(data)
-}
-
 func (s Server) injectBottomDockComponent(ctx context.Context, data []byte) []byte {
 	if !bytes.Contains(data, []byte(bottomDockPlaceholder)) {
 		return data
@@ -418,49 +358,6 @@ func (s Server) applyBottomDockHubState(ctx context.Context, dock []byte) []byte
 		1,
 	)
 	return dock
-}
-
-func (s Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/dashboard" || !dashboardEnabled() {
-		http.NotFound(w, r)
-		return
-	}
-
-	s.renderSitePage(r.Context(), w, sitePageData{
-		Title:     "Molten Hub Code Dashboard",
-		BodyClass: "dashboard-body",
-		PageClass: "dashboard-page",
-		MainClass: "dashboard-main",
-		Heading:   "Dashboard",
-		Content:   template.HTML(`<section class="dashboard-blank" aria-label="Dashboard workspace"></section>`),
-	})
-}
-
-func (s Server) renderSitePage(ctx context.Context, w http.ResponseWriter, data sitePageData) {
-	data.BottomDock = template.HTML(bottomDockPlaceholder)
-	var page bytes.Buffer
-	if err := sitePageTemplate.Execute(&page, data); err != nil {
-		s.logf("hub.ui status=warn event=render_site_page err=%q", err)
-		http.Error(w, "page is unavailable", http.StatusInternalServerError)
-		return
-	}
-	rendered := s.injectBottomDockComponent(ctx, page.Bytes())
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(rendered)
-}
-
-func dashboardEnabled() bool {
-	value := strings.TrimSpace(strings.ToLower(os.Getenv(showDashboardEnv)))
-	switch value {
-	case "", "1", "t", "true", "y", "yes", "on":
-		return true
-	case "0", "f", "false", "n", "no", "off":
-		return false
-	default:
-		return false
-	}
 }
 
 func (s Server) injectIndexConfig(data []byte) []byte {
