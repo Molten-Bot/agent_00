@@ -632,6 +632,7 @@
     const CLAUDE_POST_SUBMIT_VERIFY_INTERVAL_MS = 1200;
     const CLAUDE_POST_SUBMIT_VERIFY_MAX_ATTEMPTS = 25;
     const HUB_SETUP_DIALOG_MODES = ["connect", "profile"];
+    const HUB_PROFILE_DEEP_LINK_HASH = "#agent-profile";
     const HUB_PROFILE_DEFAULT_EMOJI = "🙂";
     const EMOJI_PANEL_VIEWPORT_GUTTER = 8;
     const EMOJI_PANEL_OFFSET = 8;
@@ -1230,6 +1231,18 @@
 
     function isHubProfileDialogMode() {
       return normalizeHubSetupDialogMode(state.hubSetupDialogMode) === "profile";
+    }
+
+    function shouldOpenInitialHubProfileDialog() {
+      if (String(window.location.hash || "").toLowerCase() === HUB_PROFILE_DEEP_LINK_HASH) {
+        return true;
+      }
+      try {
+        const params = new URLSearchParams(window.location.search || "");
+        return params.get("hubProfile") === "1" || params.get("hub_profile") === "1";
+      } catch (_err) {
+        return false;
+      }
     }
 
     let hubSetupProfileBaseline = null;
@@ -2511,6 +2524,15 @@
           console.error("Failed to refresh hub setup profile.", detail);
         }
       }
+    }
+
+    function openHubProfileDialog(source = "dock") {
+      state.hubSetupDialogMode = "profile";
+      trackAnalyticsEvent("hub_profile_opened", { source });
+      setHubSetupOpen(true);
+      applyHubSetupState(state.hubSetup);
+      setHubSetupStatus("", "");
+      void refreshHubSetupProfile();
     }
 
     function currentHubSetupPayload() {
@@ -8246,6 +8268,9 @@
     async function loadInitial() {
       try {
         await loadHubSetupStatus();
+        if (shouldOpenInitialHubProfileDialog()) {
+          openHubProfileDialog("deep_link");
+        }
         await loadAgentAuthStatus();
         await loadGitHubProfileLink();
         await loadLibraryTasks();
@@ -8660,12 +8685,7 @@
     }
     if (moltenBotHubProfileButton) {
       moltenBotHubProfileButton.addEventListener("click", () => {
-        state.hubSetupDialogMode = "profile";
-        trackAnalyticsEvent("hub_profile_opened", { source: "dock" });
-        setHubSetupOpen(true);
-        applyHubSetupState(state.hubSetup);
-        setHubSetupStatus("", "");
-        void refreshHubSetupProfile();
+        openHubProfileDialog("dock");
       });
     }
     if (hubSetupRegionNAToggle) {
