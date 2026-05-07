@@ -59,6 +59,11 @@ func TestRunHubReturnsSuccessWhenPingPrecheckFailsInHeadlessNoHubMode(t *testing
 
 	t.Setenv("PATH", "")
 	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", "")
+	t.Setenv("HARNESS_AGENT_HARNESS", "")
+	t.Setenv("HARNESS_AGENT_COMMAND", "")
+	t.Setenv("MOLTEN_HUB_TOKEN", "")
+	t.Setenv("MOLTEN_HUB_REGION", "")
+	t.Setenv("MOLTEN_HUB_URL", "")
 	os.Args = []string{"harness", "hub", "--init", initPath, "--ui-listen", ""}
 
 	if code := run(); code != app.ExitSuccess {
