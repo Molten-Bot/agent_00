@@ -1583,12 +1583,19 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `let githubReposLoadPromise = null;`) ||
 		!strings.Contains(markup, `const response = await fetch("/api/github/repos", { cache: "no-store" });`) ||
 		!strings.Contains(markup, `state.githubRepos = Array.isArray(body.repos) ? body.repos : [];`) ||
-		!strings.Contains(markup, `const repos = Array.isArray(state.githubRepos) ? state.githubRepos : [];`) ||
+		!strings.Contains(markup, `let repos = Array.isArray(state.githubRepos) ? state.githubRepos : [];`) ||
 		!strings.Contains(markup, `const CHAT_REPOS_PER_PAGE = 24;`) ||
 		!strings.Contains(markup, `const pageRepos = repos.slice(start, start + CHAT_REPOS_PER_PAGE);`) ||
 		!strings.Contains(markup, `function renderChatRepoPagination(totalRepos, totalPages)`) ||
 		!strings.Contains(markup, `if (!state.githubReposReady) {`) {
 		t.Fatalf("expected index html to gate chat availability on GitHub repository loading")
+	}
+	if !strings.Contains(markup, `id="chat-repo-tabs"`) ||
+		!strings.Contains(markup, `function chatPromptedRepoTabs()`) ||
+		!strings.Contains(markup, `state.snapshot.prompted_repos`) ||
+		!strings.Contains(markup, `reposButton.textContent = "Repos";`) ||
+		!strings.Contains(markup, `repos = repos.filter((repo) => !promptedKeys.has(chatRepoKey(chatRepoRunValue(repo))));`) {
+		t.Fatalf("expected index html chat to render prompted repository tabs and filter the repos tab")
 	}
 	if strings.Contains(markup, `taskItems.push(githubReposLoadingTask())`) ||
 		strings.Contains(markup, `repoRead.textContent = "repos: reading GitHub projects";`) ||

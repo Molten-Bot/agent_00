@@ -609,11 +609,26 @@ func TestBrokerRecordTaskRunConfigCreatesPendingTaskAndNotifies(t *testing.T) {
 	if got, want := strings.Join(task.Repos, ","), "git@github.com:acme/repo.git,git@github.com:acme/repo-two.git"; got != want {
 		t.Fatalf("task.Repos = %q, want %q", got, want)
 	}
+	if got, want := strings.Join(snap.PromptedRepos, ","), "git@github.com:acme/repo.git,git@github.com:acme/repo-two.git"; got != want {
+		t.Fatalf("snapshot.PromptedRepos = %q, want %q", got, want)
+	}
 	if task.BaseBranch != "main" || task.Branch != "main" {
 		t.Fatalf("task branches = (%q, %q), want main", task.BaseBranch, task.Branch)
 	}
 	if !task.CanRerun {
 		t.Fatal("task.CanRerun = false, want true")
+	}
+}
+
+func TestBrokerTracksPromptedReposFromDispatchLogs(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	b.IngestLog("dispatch status=start request_id=req-42 repos=git@github.com:acme/repo.git,https://github.com/acme/repo-two")
+
+	snap := b.Snapshot()
+	if got, want := strings.Join(snap.PromptedRepos, ","), "git@github.com:acme/repo.git,https://github.com/acme/repo-two"; got != want {
+		t.Fatalf("snapshot.PromptedRepos = %q, want %q", got, want)
 	}
 }
 

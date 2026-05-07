@@ -392,6 +392,7 @@
               </div>
               <p id="chat-status" class="chat-status" aria-live="polite"></p>
             </div>
+            <div id="chat-repo-tabs" class="chat-repo-tabs" role="tablist" aria-label="Prompted repositories"></div>
             <div id="chat-repo-grid" class="chat-repo-grid" aria-label="GitHub repositories"></div>
             <nav id="chat-repo-pagination" class="chat-repo-pagination hidden" aria-label="GitHub repository pages"></nav>
           </section>
@@ -1690,6 +1691,8 @@
       githubRepos: stateUI.githubRepos,
       chatSubmittingRepos: new Set(),
       chatPromptLog: new Map(),
+      chatPromptedRepos: [],
+      chatActiveRepoTab: "repos",
       chatRepoPage: 1,
       taskSoundMuted: loadTaskSoundMuted(),
       taskSoundInitialized: false,
@@ -1796,6 +1799,7 @@
     const dashboardSuccessRate = document.getElementById("dashboard-success-rate");
     const dashboardTaskChart = document.getElementById("dashboard-task-chart");
     const chatDisplay = document.getElementById("chat-display");
+    const chatRepoTabs = document.getElementById("chat-repo-tabs");
     const chatRepoGrid = document.getElementById("chat-repo-grid");
     const chatStatus = document.getElementById("chat-status");
     const chatRepoPagination = document.getElementById("chat-repo-pagination");
@@ -5795,21 +5799,133 @@
       chatRepoPagination.append(previous, label, next);
     }
 
+    function chatRepoKey(value) {
+      return githubRepoPathFromValue(value).toLowerCase();
+    }
+
+    function chatRepoTabLabel(value) {
+      const path = githubRepoPathFromValue(value) || cleanRepoName(value);
+      const parts = path.split("/").filter(Boolean);
+      return parts.length >= 2 ? parts[1] : (parts[0] || "Repo");
+    }
+
+    function chatPromptedRepoTabs() {
+      const repos = [];
+      if (Array.isArray(state.snapshot?.prompted_repos)) {
+        repos.push(...state.snapshot.prompted_repos);
+      }
+      for (const task of state.snapshot?.tasks || []) {
+        repos.push(...taskRepoValues(task));
+      }
+      repos.push(...state.chatPromptedRepos);
+
+      const seen = new Set();
+      const out = [];
+      for (const repo of repos) {
+        const key = chatRepoKey(repo);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push({ key, value: repo, label: chatRepoTabLabel(repo) });
+      }
+      const labelCounts = new Map();
+      for (const tab of out) {
+        labelCounts.set(tab.label, (labelCounts.get(tab.label) || 0) + 1);
+      }
+      for (const tab of out) {
+        if (labelCounts.get(tab.label) > 1) {
+          tab.label = githubRepoPathFromValue(tab.value) || tab.label;
+        }
+      }
+      return out;
+    }
+
+    function chatRepoMatchesTab(repo, tab) {
+      return chatRepoKey(chatRepoRunValue(repo)) === tab.key;
+    }
+
+    function fallbackChatRepo(tab) {
+      const path = githubRepoPathFromValue(tab.value) || cleanRepoName(tab.value);
+      return {
+        name: tab.label,
+        full_name: path || tab.label,
+        description: "Prompted repository.",
+        html_url: normalizeCloneRepoURL(tab.value),
+        private: false,
+      };
+    }
+
+    function renderChatRepoTabs(tabs) {
+      if (!chatRepoTabs) return;
+      chatRepoTabs.replaceChildren();
+      chatRepoTabs.classList.toggle("hidden", tabs.length === 0);
+      if (tabs.length === 0) {
+        state.chatActiveRepoTab = "repos";
+        return;
+      }
+      if (state.chatActiveRepoTab !== "repos" && !tabs.some((tab) => tab.key === state.chatActiveRepoTab)) {
+        state.chatActiveRepoTab = "repos";
+      }
+
+      for (const tab of tabs) {
+        const button = document.createElement("button");
+        button.className = "chat-repo-tab";
+        button.type = "button";
+        button.role = "tab";
+        button.textContent = tab.label;
+        button.dataset.repoKey = tab.key;
+        button.setAttribute("aria-selected", String(state.chatActiveRepoTab === tab.key));
+        button.addEventListener("click", () => {
+          if (state.chatActiveRepoTab === tab.key) return;
+          state.chatActiveRepoTab = tab.key;
+          state.chatRepoPage = 1;
+          renderChatRepos();
+        });
+        chatRepoTabs.appendChild(button);
+      }
+
+      const reposButton = document.createElement("button");
+      reposButton.className = "chat-repo-tab";
+      reposButton.type = "button";
+      reposButton.role = "tab";
+      reposButton.textContent = "Repos";
+      reposButton.dataset.repoKey = "repos";
+      reposButton.setAttribute("aria-selected", String(state.chatActiveRepoTab === "repos"));
+      reposButton.addEventListener("click", () => {
+        if (state.chatActiveRepoTab === "repos") return;
+        state.chatActiveRepoTab = "repos";
+        state.chatRepoPage = 1;
+        renderChatRepos();
+      });
+      chatRepoTabs.appendChild(reposButton);
+    }
+
     function renderChatRepos() {
       if (!chatRepoGrid || !chatStatus) return;
-      const repos = Array.isArray(state.githubRepos) ? state.githubRepos : [];
+      const tabs = chatPromptedRepoTabs();
+      const selectedTab = tabs.find((tab) => tab.key === state.chatActiveRepoTab);
+      const promptedKeys = new Set(tabs.map((tab) => tab.key));
+      let repos = Array.isArray(state.githubRepos) ? state.githubRepos : [];
+      if (selectedTab) {
+        const matched = repos.filter((repo) => chatRepoMatchesTab(repo, selectedTab));
+        repos = matched.length > 0 ? matched : [fallbackChatRepo(selectedTab)];
+      } else if (promptedKeys.size > 0) {
+        repos = repos.filter((repo) => !promptedKeys.has(chatRepoKey(chatRepoRunValue(repo))));
+      }
       const totalPages = Math.max(1, Math.ceil(repos.length / CHAT_REPOS_PER_PAGE));
       state.chatRepoPage = Math.min(Math.max(1, state.chatRepoPage), totalPages);
       const start = (state.chatRepoPage - 1) * CHAT_REPOS_PER_PAGE;
       const pageRepos = repos.slice(start, start + CHAT_REPOS_PER_PAGE);
 
+      renderChatRepoTabs(tabs);
       chatRepoGrid.replaceChildren(...pageRepos.map(renderChatRepoCard));
       if (repos.length === 0) {
         chatStatus.textContent = "0 repositories";
         const empty = document.createElement("p");
         empty.className = "chat-empty";
-        empty.textContent = "No repositories found.";
+        empty.textContent = selectedTab ? "Repository not found." : "No repositories found.";
         chatRepoGrid.appendChild(empty);
+      } else if (selectedTab) {
+        chatStatus.textContent = chatRepoTabLabel(selectedTab.value);
       } else if (repos.length <= CHAT_REPOS_PER_PAGE) {
         chatStatus.textContent = repos.length === 1 ? "1 repository" : `${repos.length} repositories`;
       } else {
@@ -5887,12 +6003,16 @@
           requestID,
           imageCount: promptImages.length,
         });
+        state.chatPromptedRepos = dedupeRepoValues([repoValue, ...state.chatPromptedRepos]);
+        state.chatActiveRepoTab = chatRepoKey(repoValue) || state.chatActiveRepoTab;
+        state.chatRepoPage = 1;
         renderChatRepoPromptLog(repo, logNode);
         input.value = "";
         if (typeof setImages === "function") {
           setImages([]);
         }
         rememberRepos([repoValue]);
+        renderChatRepos();
         trackAnalyticsEvent("chat_repo_prompt_succeeded", { request_id: requestID });
         statusNode.textContent = `Queued request ${requestID}`;
         statusNode.dataset.tone = "ok";
@@ -9185,6 +9305,7 @@
       renderDashboardStats(snapshot);
       renderTasks(snapshot);
       renderFullscreenTasks(snapshot);
+      renderChatRepos();
       renderFullscreenTerminal(snapshot);
     }
 

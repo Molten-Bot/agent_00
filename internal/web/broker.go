@@ -145,12 +145,13 @@ type TimeStatsGroup struct {
 
 // Snapshot is the complete monitor payload for the web UI.
 type Snapshot struct {
-	GeneratedAt string          `json:"generated_at"`
-	Connection  Connection      `json:"connection"`
-	Resources   ResourceMetrics `json:"resources"`
-	Stats       DashboardStats  `json:"stats"`
-	Events      []Event         `json:"events"`
-	Tasks       []Task          `json:"tasks"`
+	GeneratedAt   string          `json:"generated_at"`
+	Connection    Connection      `json:"connection"`
+	Resources     ResourceMetrics `json:"resources"`
+	Stats         DashboardStats  `json:"stats"`
+	Events        []Event         `json:"events"`
+	Tasks         []Task          `json:"tasks"`
+	PromptedRepos []string        `json:"prompted_repos,omitempty"`
 }
 
 // Broker collects daemon logs and exposes monitor state snapshots.
@@ -161,15 +162,16 @@ type Broker struct {
 	maxEvents  int
 	maxTaskLog int
 
-	nextEventID  int64
-	events       []Event
-	tasks        map[string]*taskState
-	closedTasks  map[string]time.Time
-	runConfigs   map[string][]byte
-	attempts     map[string][]taskAttemptState
-	attemptRoots map[string]string
-	rejectedSeq  uint64
-	subs         map[chan struct{}]struct{}
+	nextEventID   int64
+	events        []Event
+	tasks         map[string]*taskState
+	closedTasks   map[string]time.Time
+	runConfigs    map[string][]byte
+	promptedRepos []string
+	attempts      map[string][]taskAttemptState
+	attemptRoots  map[string]string
+	rejectedSeq   uint64
+	subs          map[chan struct{}]struct{}
 
 	hubConnected       bool
 	hubTransport       string
@@ -294,8 +296,9 @@ func (b *Broker) Snapshot() Snapshot {
 			HubBaseURL:   b.hubBaseURL,
 			HubDetail:    strings.TrimSpace(b.hubDetail),
 		},
-		Resources: b.resources,
-		Events:    append([]Event(nil), b.events...),
+		Resources:     b.resources,
+		Events:        append([]Event(nil), b.events...),
+		PromptedRepos: append([]string(nil), b.promptedRepos...),
 	}
 
 	tasks := make([]*taskState, 0, len(b.tasks))
@@ -419,6 +422,10 @@ func (b *Broker) RecordTaskRunConfig(requestID string, runConfigJSON []byte) {
 	changed := false
 	if existing, ok := b.runConfigs[requestID]; !ok || !bytes.Equal(existing, cfgCopy) {
 		b.runConfigs[requestID] = cfgCopy
+		changed = true
+	}
+	if next := appendNonEmptyUnique(b.promptedRepos, repos...); !sameStringSlice(b.promptedRepos, next) {
+		b.promptedRepos = next
 		changed = true
 	}
 	t, taskExists := b.tasks[requestID]
@@ -1003,7 +1010,9 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		t.Skill = firstNonEmpty(t.Skill, fields["skill"])
 		t.Workflow = firstNonEmpty(t.Workflow, workflowFromFields(fields))
 		t.AgentHarness = firstNonEmpty(t.AgentHarness, agentHarnessFromFields(fields))
-		t.Repos = appendNonEmptyUnique(t.Repos, reposFromFields(fields)...)
+		repos := reposFromFields(fields)
+		t.Repos = appendNonEmptyUnique(t.Repos, repos...)
+		b.promptedRepos = appendNonEmptyUnique(b.promptedRepos, repos...)
 		if len(t.Repos) > 0 {
 			t.Repo = t.Repos[0]
 		} else {
