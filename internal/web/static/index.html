@@ -4720,9 +4720,20 @@
       };
     }
 
+    function clipboardPngFiles(event) {
+      return Array.from(event?.clipboardData?.items || [])
+        .filter((item) => item && item.kind === "file")
+        .map((item) => item.getAsFile())
+        .filter((file) => file && /^image\/png$/i.test(String(file.type || "")));
+    }
+
+    function promptImagesFromFiles(files, startIndex = 0) {
+      return Promise.all((files || []).map((file, index) => promptImageFromFile(file, startIndex + index)));
+    }
+
     async function appendPromptImages(files) {
       const startIndex = state.promptImages.length;
-      const next = await Promise.all((files || []).map((file, index) => promptImageFromFile(file, startIndex + index)));
+      const next = await promptImagesFromFiles(files, startIndex);
       setPromptImages([...state.promptImages, ...next]);
       if (state.promptMode === "json") {
         try {
@@ -4735,11 +4746,7 @@
     }
 
     async function handlePromptImagePaste(event) {
-      const items = Array.from(event?.clipboardData?.items || []);
-      const files = items
-        .filter((item) => item && item.kind === "file")
-        .map((item) => item.getAsFile())
-        .filter((file) => file && /^image\/png$/i.test(String(file.type || "")));
+      const files = clipboardPngFiles(event);
       if (!files.length) {
         return;
       }
@@ -4756,6 +4763,17 @@
         trackAnalyticsEvent("prompt_screenshots_failed", { prompt_mode: state.promptMode });
         setLocalPromptStatus("error", `Screenshot paste failed: ${err.message}`);
       }
+    }
+
+    function renderChatRepoImages(target, images) {
+      if (!target) return;
+      const normalized = normalizePromptImages(images);
+      const summary = promptImageSummary(normalized);
+      const hasImages = normalized.length > 0;
+      target.textContent = summary;
+      target.title = hasImages ? summary : "Paste screenshots.";
+      target.setAttribute("aria-label", hasImages ? `Attached screenshots: ${summary}` : "Paste screenshots.");
+      target.dataset.empty = hasImages ? "false" : "true";
     }
 
     function persistRepoHistory() {
@@ -5454,6 +5472,7 @@
 
       const panel = document.createElement("span");
       panel.className = "chat-repo-panel";
+      let promptImages = [];
 
       const prompt = document.createElement("textarea");
       prompt.className = "chat-repo-prompt";
@@ -5461,24 +5480,64 @@
       prompt.placeholder = "Prompt for default branch";
       prompt.setAttribute("aria-label", `Prompt for ${String(repo?.full_name || repo?.name || "repository")}`);
 
+      const pasteTarget = document.createElement("div");
+      pasteTarget.className = "prompt-control prompt-action-paste chat-repo-image-paste";
+      pasteTarget.setAttribute("role", "button");
+      pasteTarget.tabIndex = 0;
+      renderChatRepoImages(pasteTarget, promptImages);
+
       const submitStatus = document.createElement("span");
       submitStatus.className = "chat-repo-submit-status";
       submitStatus.setAttribute("aria-live", "polite");
       submitStatus.textContent = "Press Enter to run.";
 
+      const handleChatRepoImagePaste = async (event) => {
+        const files = clipboardPngFiles(event);
+        if (!files.length) return;
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          const next = await promptImagesFromFiles(files, promptImages.length);
+          promptImages = normalizePromptImages([...promptImages, ...next]);
+          renderChatRepoImages(pasteTarget, promptImages);
+          trackAnalyticsEvent("chat_repo_screenshots_attached", {
+            repo: chatRepoRunValue(repo),
+            image_count: next.length,
+          });
+          submitStatus.textContent = `Attached ${next.length} screenshot${next.length === 1 ? "" : "s"}.`;
+          submitStatus.dataset.tone = "ok";
+        } catch (err) {
+          trackAnalyticsEvent("chat_repo_screenshots_failed", { repo: chatRepoRunValue(repo) });
+          submitStatus.textContent = `Screenshot paste failed: ${err.message}`;
+          submitStatus.dataset.tone = "error";
+        }
+      };
+
       prompt.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" || event.shiftKey) return;
         event.preventDefault();
         event.stopPropagation();
-        void submitChatRepoPrompt(repo, prompt, submitStatus);
+        void submitChatRepoPrompt(repo, prompt, submitStatus, promptImages, (images) => {
+          promptImages = normalizePromptImages(images);
+          renderChatRepoImages(pasteTarget, promptImages);
+        });
       });
+      prompt.addEventListener("paste", handleChatRepoImagePaste);
       prompt.addEventListener("click", (event) => {
         event.stopPropagation();
       });
       prompt.addEventListener("pointerdown", (event) => {
         event.stopPropagation();
       });
-      panel.append(prompt, submitStatus);
+      pasteTarget.addEventListener("paste", handleChatRepoImagePaste);
+      pasteTarget.addEventListener("click", (event) => {
+        event.stopPropagation();
+        pasteTarget.focus();
+      });
+      pasteTarget.addEventListener("pointerdown", (event) => {
+        event.stopPropagation();
+      });
+      panel.append(prompt, pasteTarget, submitStatus);
       card.appendChild(panel);
 
       card.addEventListener("click", () => {
@@ -5567,9 +5626,10 @@
       return String(repo?.name || "").trim();
     }
 
-    async function submitChatRepoPrompt(repo, input, statusNode) {
+    async function submitChatRepoPrompt(repo, input, statusNode, images = [], setImages = null) {
       const repoValue = chatRepoRunValue(repo);
       const prompt = String(input?.value || "").trim();
+      const promptImages = normalizePromptImages(images);
       if (!repoValue) {
         statusNode.textContent = "Repository is unavailable.";
         statusNode.dataset.tone = "error";
@@ -5582,7 +5642,7 @@
         return;
       }
 
-      const submitKey = `${repoValue}\n${prompt}`;
+      const submitKey = `${repoValue}\n${prompt}\n${JSON.stringify(promptImages)}`;
       if (state.chatSubmittingRepos.has(submitKey)) {
         return;
       }
@@ -5593,6 +5653,7 @@
       const payload = {
         repo: repoValue,
         prompt,
+        images: promptImages,
       };
       const branch = String(repo?.default_branch || "").trim();
       if (branch) {
@@ -5621,6 +5682,9 @@
         }
         const requestID = body?.request_id || "(unknown)";
         input.value = "";
+        if (typeof setImages === "function") {
+          setImages([]);
+        }
         rememberRepos([repoValue]);
         trackAnalyticsEvent("chat_repo_prompt_succeeded", { request_id: requestID });
         statusNode.textContent = `Queued request ${requestID}`;
