@@ -156,23 +156,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `function configureTailwindRuntime()`) {
-		t.Fatalf("expected index html to isolate tailwind runtime setup in a guarded bootstrap function")
-	}
-	if !strings.Contains(markup, `window.tailwind = tw;`) {
-		t.Fatalf("expected index html to initialize window.tailwind before setting runtime config")
-	}
-	if !strings.Contains(markup, `window.tailwind.config = {`) {
-		t.Fatalf("expected index html to assign tailwind runtime config through window.tailwind")
-	}
-	if !strings.Contains(markup, `catch (_err)`) {
-		t.Fatalf("expected index html to tolerate tailwind runtime setup errors without aborting UI boot")
-	}
-	if !strings.Contains(markup, `src="https://cdn.tailwindcss.com"`) {
-		t.Fatalf("expected index html to include tailwind runtime")
-	}
 	if !strings.Contains(markup, `href="/static/style.css"`) {
 		t.Fatalf("expected index html to include external stylesheet link")
+	}
+	if strings.Contains(markup, `tailwind`) || strings.Contains(markup, `cdn.tailwindcss.com`) {
+		t.Fatalf("expected index html styling to be owned by the global stylesheet instead of the Tailwind runtime")
+	}
+	if !strings.Contains(markup, `class="app dashboard-app"`) {
+		t.Fatalf("expected dashboard page layout styles to be attached through global stylesheet classes")
 	}
 	if strings.Contains(markup, `src="/static/emoji-picker.js"`) {
 		t.Fatalf("expected index html to use the inline dispatch-style emoji picker instead of the external picker script")
@@ -902,8 +893,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `if (!state.promptVisible && !Boolean(state.ui?.automaticMode)) {`) {
 		t.Fatalf("expected index html to auto-expand studio when a mode tab is selected")
 	}
-	if !strings.Contains(markup, `id="task-panel" class="panel brand-login-card-shell min-h-[220px] overflow-hidden rounded-md border border-hub-border bg-hub-panel bg-[linear-gradient(170deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01))]" aria-hidden="false"`) {
-		t.Fatalf("expected index html to render the task queue panel immediately with the shared glass shell")
+	if !strings.Contains(markup, `id="task-panel" class="panel brand-login-card-shell" aria-hidden="false"`) {
+		t.Fatalf("expected index html to render the task queue panel with globally owned shell styles")
 	}
 	if !strings.Contains(markup, `id="task-panel-title" class="panel-section-title">Current Work</span>`) {
 		t.Fatalf("expected index html to render a dedicated task panel title node for task-view state synchronization")
@@ -1901,8 +1892,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, `theme-cycle-next`) || strings.Contains(markup, `theme-cycle-current`) || strings.Contains(markup, `Next: Dark`) {
 		t.Fatalf("expected index html to remove the legacy theme cycle markup")
 	}
-	if !strings.Contains(markup, `rgb(var(--hub-panel-rgb) / <alpha-value>)`) || !strings.Contains(markup, `rgb(var(--hub-text-rgb) / <alpha-value>)`) {
-		t.Fatalf("expected index html to drive tailwind hub colors from CSS theme variables")
+	if strings.Contains(markup, `rgb(var(--hub-panel-rgb) / <alpha-value>)`) || strings.Contains(markup, `rgb(var(--hub-text-rgb) / <alpha-value>)`) {
+		t.Fatalf("expected index html to keep theme color wiring in the global stylesheet")
 	}
 	if strings.Contains(markup, `id="hover-select"`) || strings.Contains(markup, ">Hover<") {
 		t.Fatalf("expected index html to remove the docked hover selector")
@@ -2051,7 +2042,7 @@ func TestHandlerIndexIncludesClaudeBrowserCodeFlow(t *testing.T) {
 		`id="agent-auth-browser-command-secondary-copy"`,
 		`id="agent-auth-configure-copy"`,
 		`aria-label="Copy configure command"`,
-		`id="agent-auth-configure-secret-input" class="prompt-text agent-auth-configure-input-github agent-auth-configure-input-single-line font-mono text-[0.9rem] hidden" type="password"`,
+		`id="agent-auth-configure-secret-input" class="prompt-text agent-auth-configure-input-github agent-auth-configure-input-single-line hidden" type="password"`,
 		`agentAuthConfigureSecretInput.value = "";`,
 		`cat ~/.pi/agent/auth.json`,
 		`Paste ~/.pi/agent/auth.json contents...`,
@@ -2189,9 +2180,9 @@ func TestHandlerServesDashboardWhenEnabled(t *testing.T) {
 		`<title>Molten Hub Code Dashboard</title>`,
 		`src="/static/site-header.js"`,
 		`<moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>`,
-		`<moltenhub-code-nav></moltenhub-code-nav>`,
 		`class="page-bottom-dock"`,
 		`class="prompt-mode-tabs prompt-mode-tabs-dock"`,
+		`data-page-nav-link="/dashboard"`,
 		`src="/static/bottom-dock.js"`,
 		`href="/static/style.css"`,
 		`class="dashboard-blank" aria-label="Dashboard workspace"`,
@@ -2269,8 +2260,8 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		t.Fatalf("expected stylesheet to include theme toggle styles")
 	}
 	if !strings.Contains(css, ".prompt-mode-mobile-label {\n  display: none;\n}") ||
-		!strings.Contains(css, ".prompt-mode-mobile-label {\n    position: relative;\n    z-index: 1;\n    display: block;") {
-		t.Fatalf("expected stylesheet to expose mobile labels for docked nav controls")
+		!strings.Contains(css, ".prompt-mode-link-tooltip {\n    display: none;\n  }") {
+		t.Fatalf("expected stylesheet to keep docked nav controls icon-only on mobile")
 	}
 	if !strings.Contains(css, ".prompt-mode-link-icon {\n  position: relative;\n  z-index: 1;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  width: 18px;\n  height: 18px;\n  overflow: hidden;\n  border: 0;\n  background: transparent;\n  box-shadow: none;") {
 		t.Fatalf("expected stylesheet to render dock link icons without circular button chrome")
@@ -2317,7 +2308,7 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	if !strings.Contains(css, `--primary: #ec4899;`) || !strings.Contains(css, `--accent: #db2777;`) || !strings.Contains(css, `--theme-button-text: #ffe4f1;`) {
 		t.Fatalf("expected stylesheet to define pink theme palette tokens")
 	}
-	if !strings.Contains(css, ".agent-auth-shell {\n  padding: clamp(24px, 3vw, 32px);\n  border: 1px solid var(--surface-auth-panel-border);\n  border-radius: var(--radius-card);\n  background: var(--surface-auth-panel-bg);\n  box-shadow: var(--surface-auth-panel-shadow);\n}") {
+	if !strings.Contains(css, ".agent-auth-shell {\n  display: flex;\n  flex-direction: column;\n  width: 100%;\n  max-width: 36rem;\n  min-height: 220px;\n  padding: clamp(24px, 3vw, 32px);\n  border: 1px solid var(--surface-auth-panel-border);\n  border-radius: var(--radius-card);\n  background: var(--surface-auth-panel-bg);\n  box-shadow: var(--surface-auth-panel-shadow);\n}") {
 		t.Fatalf("expected stylesheet to render onboarding content inside a readable auth panel")
 	}
 	if !strings.Contains(css, ".agent-auth-secret-input {\n  -webkit-text-security: disc;\n}") ||
@@ -2637,6 +2628,7 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 		`const LOGO_ROTATION_INTERVAL_MS = 8_000;`,
 		`localStorage.getItem(THEME_KEY)`,
 		`<header class="header site-header">`,
+		`<a class="brand-lockup site-header-home" href="/" aria-label="Molten Hub Code home" data-site-header-home>`,
 		`id="moltenhub-logo"`,
 		`id="configured-agent-logo"`,
 		`opencode: "/static/logos/opencode.svg"`,

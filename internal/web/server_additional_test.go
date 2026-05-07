@@ -1062,7 +1062,7 @@ func TestStudioStylesKeepPromptActionsVisible(t *testing.T) {
 	if !strings.Contains(css, ".prompt-mode-link {\n  position: relative;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;") {
 		t.Fatalf("expected Studio mode controls to render as clickable icon pills inside the dock")
 	}
-	if !strings.Contains(css, ".prompt-mode-link.active {\n  color: var(--running);\n}") {
+	if !strings.Contains(css, ".prompt-mode-link.active,\n.prompt-mode-link[aria-current=\"page\"] {\n  color: var(--running);\n}") {
 		t.Fatalf("expected active Studio mode link to stay visually highlighted without button sections")
 	}
 	if !strings.Contains(css, ".prompt-mode-link-icon img {\n  display: block;\n  width: 15px;\n  height: 15px;\n  object-fit: contain;\n  filter: var(--agent-logo-filter);\n}") {
@@ -1074,7 +1074,7 @@ func TestStudioStylesKeepPromptActionsVisible(t *testing.T) {
 	if !strings.Contains(css, ".prompt-mode-divider {\n  width: 1px;\n  height: 24px;\n  margin-inline: 4px;") {
 		t.Fatalf("expected the leading dock icon to share the segmented main-menu treatment instead of rendering as a detached control")
 	}
-	if !strings.Contains(css, ".prompt-form {\n  display: grid;\n  gap: 10px;\n  padding: 14px 14px 18px;\n  min-width: 0;\n  min-height: 0;\n  overflow-y: auto;\n}") {
+	if !strings.Contains(css, ".prompt-form {\n  display: grid;\n  gap: 10px;\n  padding: 12px;\n  min-width: 0;\n  min-height: 0;\n  overflow-y: auto;\n}") {
 		t.Fatalf("expected studio form content to use the full panel now that the mode dock lives outside it")
 	}
 	if !strings.Contains(css, ".prompt-compose-stack {\n  display: grid;\n  gap: 8px;\n  min-width: 0;\n}") {
@@ -1134,11 +1134,11 @@ func TestStudioStylesKeepPromptActionsVisible(t *testing.T) {
 	if !strings.Contains(css, ".prompt-mode-tabs-dock {\n    width: 100%;\n    max-width: none;\n    overflow: visible;\n  }\n\n  .prompt-mode-tabs {\n    width: 100%;\n    justify-content: space-around;\n    gap: 4px;\n    padding: 8px 8px calc(env(safe-area-inset-bottom) + 8px);\n    border: 0;\n    border-top: 1px solid var(--glass-border);\n    border-radius: 0;\n    box-shadow: 0 -2px 14px rgba(0, 0, 0, 0.18);\n  }") {
 		t.Fatalf("expected mobile dock menu to use a full-width glass footer bar")
 	}
-	if !strings.Contains(css, ".prompt-mode-link {\n    width: auto;\n    min-width: 0;\n    max-width: 72px;\n    height: auto;\n    flex: 1 1 44px;\n    flex-direction: column;\n    gap: 4px;\n    padding: 6px 2px;\n  }") {
-		t.Fatalf("expected mobile dock items to use compact icon-over-label controls")
+	if !strings.Contains(css, ".prompt-mode-link {\n    width: auto;\n    min-width: 0;\n    max-width: 72px;\n    height: 44px;\n    flex: 1 1 44px;\n    padding: 6px 2px;\n  }") {
+		t.Fatalf("expected mobile dock items to use compact icon-only controls")
 	}
-	if !strings.Contains(css, ".prompt-mode-link-tooltip {\n    position: static;\n    display: block;\n    max-width: 70px;\n    padding: 0;\n    opacity: 1;") {
-		t.Fatalf("expected mobile dock labels to stay visible under each icon")
+	if !strings.Contains(css, ".prompt-mode-link-tooltip {\n    display: none;\n  }") {
+		t.Fatalf("expected mobile dock labels to hide behind accessible labels")
 	}
 	if !strings.Contains(css, "@media (max-width: 640px) {\n  .panel-section-copy {\n    max-width: none;\n  }\n\n  .prompt-actions {\n    flex-wrap: wrap;\n    gap: 6px;\n  }\n\n  .prompt-actions-start,\n  .submit-status-inline,\n  .prompt-actions-end {\n    flex: 1 1 100%;\n    width: 100%;\n  }\n\n  .prompt-actions-end {\n    justify-content: flex-end;\n    margin-left: 0;\n  }\n\n  .prompt-action-paste {\n    max-width: none;\n  }\n\n  .submit-status-inline {\n    min-width: 0;\n  }\n\n  .prompt-action-button {\n    flex: 1 1 0;\n    min-inline-size: 0;\n  }\n\n  .task-empty {\n    min-height: 0;\n    padding: 18px;\n  }") {
 		t.Fatalf("expected mobile layout to keep Studio action controls fully visible")
@@ -1191,7 +1191,7 @@ func TestStudioStylesUseRefinedPanelAndInputTreatment(t *testing.T) {
 	if !strings.Contains(css, ".prompt-wrap .panel-header {\n  border-bottom-color: var(--surface-header-border);\n  background: var(--surface-header);\n  color: var(--surface-label);\n  letter-spacing: 0.11em;\n  justify-content: space-between;\n}") {
 		t.Fatalf("expected studio header to separate its title from the minimize control in the stacked layout")
 	}
-	if !strings.Contains(css, ".prompt-mode-link.active {\n  color: var(--running);\n}") {
+	if !strings.Contains(css, ".prompt-mode-link.active,\n.prompt-mode-link[aria-current=\"page\"] {\n  color: var(--running);\n}") {
 		t.Fatalf("expected active studio mode link to stay highlighted after removing button sections")
 	}
 	if !strings.Contains(css, ".prompt-control,\n.prompt-text,\n.prompt-action-paste {\n  width: 100%;\n  border: 1px solid var(--surface-control-border);\n  border-radius: var(--radius-card);\n  background: var(--surface-control-bg);") {
@@ -1308,7 +1308,7 @@ func TestAuthGateVerifyButtonHidesWhileVerificationIsPending(t *testing.T) {
 		!strings.Contains(html, `agentAuthDeviceCodeRow.classList.toggle("hidden", !state.agentAuth.deviceCode);`) {
 		t.Fatalf("expected empty device-code command row to stay hidden until a device code exists")
 	}
-	if !strings.Contains(html, "class=\"agent-auth-shell flex min-h-[220px] w-full max-w-xl flex-col\"") {
+	if !strings.Contains(html, `class="agent-auth-shell"`) {
 		t.Fatalf("expected auth gate content to render inside a theme-aware auth shell")
 	}
 	if !strings.Contains(html, `id="agent-auth-shell"`) ||
@@ -1328,9 +1328,9 @@ func TestAuthGateVerifyButtonHidesWhileVerificationIsPending(t *testing.T) {
 		t.Fatalf("expected auth gate to include Claude browser-code input")
 	}
 	if !strings.Contains(html, `id="agent-auth-browser-code-input"`) ||
-		!strings.Contains(html, `class="prompt-text agent-auth-secret-input min-h-[96px] font-mono text-[0.9rem]"`) ||
-		!strings.Contains(html, `id="agent-auth-configure-input" class="prompt-text agent-auth-secret-input font-mono text-[0.9rem]"`) ||
-		!strings.Contains(html, `id="agent-auth-configure-secret-input" class="prompt-text agent-auth-configure-input-github agent-auth-configure-input-single-line font-mono text-[0.9rem] hidden" type="password"`) ||
+		!strings.Contains(html, `class="prompt-text agent-auth-secret-input"`) ||
+		!strings.Contains(html, `id="agent-auth-configure-input" class="prompt-text agent-auth-secret-input"`) ||
+		!strings.Contains(html, `id="agent-auth-configure-secret-input" class="prompt-text agent-auth-configure-input-github agent-auth-configure-input-single-line hidden" type="password"`) ||
 		!strings.Contains(html, `agentAuthConfigureInput.classList.toggle("hidden", needsClaudeGitHubConfigure);`) ||
 		!strings.Contains(html, `autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"`) {
 		t.Fatalf("expected init auth credential text boxes to hide pasted secrets and disable browser text helpers")
