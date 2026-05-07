@@ -59,6 +59,55 @@ func TestBrokerTracksTaskLifecycleAndCommandOutput(t *testing.T) {
 	}
 }
 
+func TestBrokerTracksTaskRuntimeAndSavedTimeStats(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	b := NewBroker()
+	b.now = func() time.Time { return now }
+
+	b.RecordTaskRunConfig("req-1", []byte(`{"repo":"git@github.com:acme/repo.git","libraryTaskName":"unit-test-coverage","agentHarness":"codex"}`))
+	b.IngestLog("dispatch status=start request_id=req-1 skill=library_task repo=git@github.com:acme/repo.git")
+	b.IngestLog("dispatch request_id=req-1 stage=codex status=start")
+	now = now.Add(2 * time.Minute)
+	b.IngestLog("dispatch status=completed request_id=req-1 workspace=/tmp/run branch=moltenhub-feature")
+
+	b.RecordTaskRunConfig("req-2", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"fix tests","agentHarness":"claude"}`))
+	now = now.Add(time.Minute)
+	b.IngestLog("dispatch status=start request_id=req-2 skill=moltenhub_code_run repo=git@github.com:acme/repo.git")
+	now = now.Add(time.Minute)
+
+	snap := b.Snapshot()
+	if got, want := snap.Stats.TotalSavedSeconds, 120.0; got != want {
+		t.Fatalf("stats.total_saved_seconds = %v, want %v", got, want)
+	}
+	if got, want := snap.Stats.AverageDurationSeconds, 120.0; got != want {
+		t.Fatalf("stats.average_duration_seconds = %v, want %v", got, want)
+	}
+	if len(snap.Stats.WorkflowTimes) == 0 || snap.Stats.WorkflowTimes[0].Name != "unit-test-coverage" {
+		t.Fatalf("stats.workflow_times = %#v, want unit-test-coverage first", snap.Stats.WorkflowTimes)
+	}
+	if got, want := snap.Stats.WorkflowTimes[0].TotalSavedSeconds, 120.0; got != want {
+		t.Fatalf("workflow total_saved_seconds = %v, want %v", got, want)
+	}
+	if len(snap.Stats.AgentTimes) == 0 || snap.Stats.AgentTimes[0].Name != "codex" {
+		t.Fatalf("stats.agent_times = %#v, want codex first", snap.Stats.AgentTimes)
+	}
+	var active Task
+	for _, task := range snap.Tasks {
+		if task.RequestID == "req-2" {
+			active = task
+			break
+		}
+	}
+	if active.AgentHarness != "claude" {
+		t.Fatalf("active.AgentHarness = %q, want claude", active.AgentHarness)
+	}
+	if active.DurationSeconds != 120 {
+		t.Fatalf("active.DurationSeconds = %v, want 120", active.DurationSeconds)
+	}
+}
+
 func TestBrokerNormalizesLegacyOKTerminalStatusToCompleted(t *testing.T) {
 	t.Parallel()
 
