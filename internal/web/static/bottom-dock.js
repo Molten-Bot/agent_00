@@ -5,8 +5,8 @@
   const THEME_MODES = ["light", "dark", "night", "pink"];
   const DEFAULT_THEME_MODE = "light";
   const HOME_PATH = "/";
+  const HUB_PROFILE_DEEP_LINK_HASH = "#agent-profile";
   const HUB_LOGIN_URL = "https://app.molten.bot/signin?target=hub";
-  const HUB_DASHBOARD_URL = "https://app.molten.bot/hub";
   const THEME_ICON_NAMES = {
     light: "sun",
     dark: "moon",
@@ -228,7 +228,6 @@
     const hubLink = document.getElementById("moltenbot-hub-link");
     const plus = document.getElementById("moltenbot-hub-plus");
     const profileButton = document.getElementById("moltenbot-hub-profile-button");
-    const dashboardURL = String(hub && hub.dashboard_url || hub && hub.dashboardURL || HUB_DASHBOARD_URL).trim();
     const connectURL = String(hub && hub.connect_url || hub && hub.connectURL || HUB_LOGIN_URL).trim();
 
     if (dockGroup) {
@@ -250,7 +249,7 @@
         profileButton.dataset.bottomDockBound = "true";
         profileButton.addEventListener("click", () => {
           trackDockEvent("hub_profile_opened", { source: "dock" });
-          window.open(dashboardURL || HUB_DASHBOARD_URL, "_blank", "noopener");
+          window.location.assign(`${HOME_PATH}${HUB_PROFILE_DEEP_LINK_HASH}`);
         });
       }
     }

@@ -123,6 +123,23 @@ func TestHandlerReleasesBottomDockUsesHubSetupStatus(t *testing.T) {
 	}
 }
 
+func TestBottomDockProfileButtonRoutesToLocalProfileDialog(t *testing.T) {
+	t.Parallel()
+
+	data, err := fs.ReadFile(staticFiles, "static/bottom-dock.js")
+	if err != nil {
+		t.Fatalf("read bottom dock script: %v", err)
+	}
+	script := string(data)
+	if !strings.Contains(script, `const HUB_PROFILE_DEEP_LINK_HASH = "#agent-profile";`) ||
+		!strings.Contains(script, "window.location.assign(`${HOME_PATH}${HUB_PROFILE_DEEP_LINK_HASH}`);") {
+		t.Fatalf("expected shared dock profile button to route to the local agent profile modal deep link")
+	}
+	if strings.Contains(script, `window.open(dashboardURL || HUB_DASHBOARD_URL`) {
+		t.Fatalf("expected shared dock profile button to stop opening the remote Hub dashboard")
+	}
+}
+
 func TestHandleHubSetupConfigureRejectsBadPayload(t *testing.T) {
 	t.Parallel()
 

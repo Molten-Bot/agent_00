@@ -460,6 +460,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `if (autoSubmit || isHubProfileDialogMode()) {`) || !strings.Contains(markup, `await new Promise((resolve) => window.setTimeout(resolve, 700));`) {
 		t.Fatalf("expected index html to close the profile dialog after a successful save confirmation")
 	}
+	if !strings.Contains(markup, `const HUB_PROFILE_DEEP_LINK_HASH = "#agent-profile";`) ||
+		!strings.Contains(markup, `function shouldOpenInitialHubProfileDialog()`) ||
+		!strings.Contains(markup, `openHubProfileDialog("deep_link");`) ||
+		!strings.Contains(markup, `openHubProfileDialog("dock");`) {
+		t.Fatalf("expected index html to support opening the local agent profile modal from a dock deep link")
+	}
 	hubSetupStatusIndex := strings.Index(markup, `id="hub-setup-status"`)
 	hubSetupSaveIndex := strings.Index(markup, `id="hub-setup-submit"`)
 	if hubSetupStatusIndex == -1 || hubSetupSaveIndex == -1 || hubSetupStatusIndex > hubSetupSaveIndex {
