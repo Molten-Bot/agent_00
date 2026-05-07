@@ -1680,6 +1680,7 @@
       githubReposLoadError: "",
       githubRepos: stateUI.githubRepos,
       chatSubmittingRepos: new Set(),
+      chatPromptLog: new Map(),
       chatRepoPage: 1,
       taskSoundMuted: loadTaskSoundMuted(),
       taskSoundInitialized: false,
@@ -5558,9 +5559,16 @@
       meta.textContent = language ? `${visibility} | ${language}` : visibility;
       card.appendChild(meta);
 
-      const panel = document.createElement("span");
+      const panel = document.createElement("div");
       panel.className = "chat-repo-panel";
       let promptImages = [];
+
+      const promptLog = document.createElement("div");
+      promptLog.className = "chat-repo-log";
+      promptLog.setAttribute("aria-label", `Prompt history for ${String(repo?.full_name || repo?.name || "repository")}`);
+      promptLog.setAttribute("role", "log");
+      promptLog.setAttribute("aria-live", "polite");
+      renderChatRepoPromptLog(repo, promptLog);
 
       const prompt = document.createElement("textarea");
       prompt.className = "chat-repo-prompt";
@@ -5608,7 +5616,7 @@
         if (event.key !== "Enter" || event.shiftKey) return;
         event.preventDefault();
         event.stopPropagation();
-        void submitChatRepoPrompt(repo, prompt, submitStatus, promptImages, (images) => {
+        void submitChatRepoPrompt(repo, prompt, submitStatus, promptImages, promptLog, (images) => {
           promptImages = normalizePromptImages(images);
           renderChatRepoImages(pasteTarget, promptImages);
         });
@@ -5628,8 +5636,14 @@
       pasteTarget.addEventListener("pointerdown", (event) => {
         event.stopPropagation();
       });
+      panel.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+      panel.addEventListener("pointerdown", (event) => {
+        event.stopPropagation();
+      });
       imageActions.append(pasteTarget, submitStatus);
-      panel.append(prompt, imageActions);
+      panel.append(promptLog, prompt, imageActions);
       card.appendChild(panel);
 
       card.addEventListener("click", () => {
@@ -5649,6 +5663,79 @@
       });
 
       return card;
+    }
+
+    function chatRepoLogKey(repo) {
+      return chatRepoRunValue(repo);
+    }
+
+    function chatRepoPromptMessages(repo) {
+      const key = chatRepoLogKey(repo);
+      if (!key) return [];
+      const messages = state.chatPromptLog.get(key);
+      return Array.isArray(messages) ? messages : [];
+    }
+
+    function appendChatRepoPromptMessage(repo, message) {
+      const key = chatRepoLogKey(repo);
+      if (!key) return [];
+      const current = chatRepoPromptMessages(repo);
+      const next = [
+        ...current,
+        {
+          prompt: String(message?.prompt || "").trim(),
+          requestID: String(message?.requestID || "").trim(),
+          imageCount: Number.isFinite(message?.imageCount) ? message.imageCount : 0,
+          createdAt: message?.createdAt || new Date().toISOString(),
+        },
+      ].slice(-20);
+      state.chatPromptLog.set(key, next);
+      return next;
+    }
+
+    function chatPromptMessageTime(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "";
+      return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+
+    function renderChatRepoPromptLog(repo, logNode) {
+      if (!logNode) return;
+      const messages = chatRepoPromptMessages(repo);
+      logNode.replaceChildren();
+      logNode.classList.toggle("is-empty", messages.length === 0);
+      if (messages.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "chat-repo-log-empty";
+        empty.textContent = "No prompts yet.";
+        logNode.appendChild(empty);
+        return;
+      }
+
+      for (const message of messages) {
+        const bubble = document.createElement("article");
+        bubble.className = "chat-repo-message chat-repo-message-user";
+
+        const body = document.createElement("p");
+        body.className = "chat-repo-message-body";
+        body.textContent = message.prompt;
+        bubble.appendChild(body);
+
+        const meta = document.createElement("footer");
+        meta.className = "chat-repo-message-meta";
+        const parts = [];
+        const time = chatPromptMessageTime(message.createdAt);
+        if (time) parts.push(time);
+        if (message.requestID) parts.push(`Queued ${message.requestID}`);
+        if (message.imageCount > 0) {
+          parts.push(`${message.imageCount} screenshot${message.imageCount === 1 ? "" : "s"}`);
+        }
+        meta.textContent = parts.join(" | ");
+        bubble.appendChild(meta);
+
+        logNode.appendChild(bubble);
+      }
+      logNode.scrollTop = logNode.scrollHeight;
     }
 
     function renderChatRepoPagination(totalRepos, totalPages) {
@@ -5718,7 +5805,7 @@
       return String(repo?.name || "").trim();
     }
 
-    async function submitChatRepoPrompt(repo, input, statusNode, images = [], setImages = null) {
+    async function submitChatRepoPrompt(repo, input, statusNode, images = [], logNode = null, setImages = null) {
       const repoValue = chatRepoRunValue(repo);
       const prompt = String(input?.value || "").trim();
       const promptImages = normalizePromptImages(images);
@@ -5773,6 +5860,12 @@
           throw new Error(body?.error || `submit http ${response.status}`);
         }
         const requestID = body?.request_id || "(unknown)";
+        appendChatRepoPromptMessage(repo, {
+          prompt,
+          requestID,
+          imageCount: promptImages.length,
+        });
+        renderChatRepoPromptLog(repo, logNode);
         input.value = "";
         if (typeof setImages === "function") {
           setImages([]);
