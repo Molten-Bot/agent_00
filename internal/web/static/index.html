@@ -2244,6 +2244,10 @@
     }
 
     function setLocalConnection(online, text) {
+      if (window.MoltenHubHeader && typeof window.MoltenHubHeader.updateLocalConnection === "function") {
+        window.MoltenHubHeader.updateLocalConnection(online, text);
+        return;
+      }
       setIndicator(localConnItem, localConnDot, localConnText, "Local", online, text);
     }
 
@@ -3971,6 +3975,11 @@
     }
 
     function renderHubConnection(snapshot) {
+      if (window.MoltenHubHeader && typeof window.MoltenHubHeader.updateConnectionStatus === "function") {
+        window.MoltenHubHeader.updateConnectionStatus(snapshot, { hubSetup: state.hubSetup });
+        renderHubSetupConnectionToggle();
+        return;
+      }
       if (!snapshot || typeof snapshot.connection !== "object" || snapshot.connection === null) {
         setHubConnection("disconnected", "Hub status unavailable");
         renderHubSetupConnectionToggle();
@@ -8240,9 +8249,9 @@
         await loadAgentAuthStatus();
         await loadGitHubProfileLink();
         await loadLibraryTasks();
-        const response = await fetch("/api/state", { cache: "no-store" });
+        const response = await fetch("/api/status", { cache: "no-store" });
         if (!response.ok) {
-          throw new Error(`state http ${response.status}`);
+          throw new Error(`status http ${response.status}`);
         }
         const snapshot = await response.json();
         render(snapshot);

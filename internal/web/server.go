@@ -52,8 +52,8 @@ var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype 
     {{.BottomDock}}
   </div>
   <script>
-    if (window.MoltenHubHeader && typeof window.MoltenHubHeader.startResourceMetrics === "function") {
-      window.MoltenHubHeader.startResourceMetrics();
+    if (window.MoltenHubHeader && typeof window.MoltenHubHeader.startConnectionStatus === "function") {
+      window.MoltenHubHeader.startConnectionStatus();
     }
     if (window.lucide) {
       window.lucide.createIcons();
@@ -229,6 +229,7 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/releases", s.handleReleases)
 	mux.HandleFunc("/dashboard", s.handleDashboard)
 	mux.HandleFunc("/api/state", s.handleState)
+	mux.HandleFunc("/api/status", s.handleState)
 	mux.HandleFunc("/api/library", s.handleLibrary)
 	mux.HandleFunc("/api/library/run", s.handleLibraryRun)
 	mux.HandleFunc("/api/stream", s.handleStream)

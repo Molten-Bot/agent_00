@@ -117,8 +117,8 @@
       });
     }
 
-    if (window.MoltenHubHeader && typeof window.MoltenHubHeader.startResourceMetrics === "function") {
-      window.MoltenHubHeader.startResourceMetrics();
+    if (window.MoltenHubHeader && typeof window.MoltenHubHeader.startConnectionStatus === "function") {
+      window.MoltenHubHeader.startConnectionStatus();
     }
 
     if (window.lucide) {
