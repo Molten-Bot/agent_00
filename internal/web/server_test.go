@@ -186,7 +186,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `<title>Molten Hub Code</title>`) {
 		t.Fatalf("expected index html to set app title to Molten Hub Code")
 	}
-	if !strings.Contains(markup, `<moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>`) {
+	if !strings.Contains(markup, `<moltenhub-code-header agent-harness="codex" agent-label="Codex" home-href="/"></moltenhub-code-header>`) {
 		t.Fatalf("expected index html to render app heading through the shared site header")
 	}
 	if !strings.Contains(markup, `Current Work</span>`) {
@@ -237,7 +237,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `src="/static/site-header.js"`) {
 		t.Fatalf("expected index html to load the shared site header component")
 	}
-	if !strings.Contains(markup, `<moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>`) {
+	if !strings.Contains(markup, `<moltenhub-code-header agent-harness="codex" agent-label="Codex" home-href="/"></moltenhub-code-header>`) {
 		t.Fatalf("expected index html to render the shared site header component")
 	}
 	if strings.Contains(markup, `id="moltenhub-logo"`) || strings.Contains(markup, `id="configured-agent-logo"`) {
@@ -2182,7 +2182,7 @@ func TestHandlerServesDashboardWhenEnabled(t *testing.T) {
 	required := []string{
 		`<title>Molten Hub Code Dashboard</title>`,
 		`src="/static/site-header.js"`,
-		`<moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>`,
+		`<moltenhub-code-header agent-harness="codex" agent-label="Codex" home-href="/"></moltenhub-code-header>`,
 		`class="page-bottom-dock"`,
 		`class="prompt-mode-tabs prompt-mode-tabs-dock"`,
 		`src="/static/bottom-dock.js"`,

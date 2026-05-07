@@ -45,7 +45,7 @@ var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype 
 </head>
 <body class="min-h-screen antialiased site-page-body {{.BodyClass}}">
   <div class="site-page {{.PageClass}}">
-    <moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>
+    <moltenhub-code-header agent-harness="codex" agent-label="Codex" home-href="/"></moltenhub-code-header>
     <nav class="site-page-nav" aria-label="Primary">
       <a href="/"{{if eq .ActivePath "/"}} aria-current="page"{{end}}>Home</a>
       <a href="/releases"{{if eq .ActivePath "/releases"}} aria-current="page"{{end}}>Releases</a>
