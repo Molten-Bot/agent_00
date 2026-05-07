@@ -11,6 +11,7 @@ import (
 	"html/template"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -95,8 +96,10 @@ type Server struct {
 	ConfigureHubSetup       func(context.Context, HubSetupRequest) (HubSetupState, error)
 	ConnectHubSetup         func(context.Context) (HubSetupState, error)
 	DisconnectHubSetup      func(context.Context) (HubSetupState, error)
+	RenderHubSetupStatus    func(context.Context) (HubSetupState, error)
 	ResolveGitHubProfileURL func(context.Context) (string, error)
 	ResolveGitHubRepos      func(context.Context) ([]GitHubRepo, error)
+	Ready                   chan<- error
 }
 
 // AgentAuthState describes current runtime agent-auth readiness and device flow hints.
@@ -209,6 +212,12 @@ func (s Server) Run(ctx context.Context) error {
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	listener, err := net.Listen("tcp", s.Addr)
+	if err != nil {
+		notifyServerReady(s.Ready, err)
+		return err
+	}
+	notifyServerReady(s.Ready, nil)
 
 	go func() {
 		<-ctx.Done()
@@ -218,12 +227,22 @@ func (s Server) Run(ctx context.Context) error {
 	}()
 
 	s.logf("hub.ui status=starting listen=%s", s.Addr)
-	err := httpServer.ListenAndServe()
+	err = httpServer.Serve(listener)
 	if err == nil || errors.Is(err, http.ErrServerClosed) {
 		s.logf("hub.ui status=stopped")
 		return nil
 	}
 	return err
+}
+
+func notifyServerReady(ready chan<- error, err error) {
+	if ready == nil {
+		return
+	}
+	select {
+	case ready <- err:
+	default:
+	}
 }
 
 // Handler returns the HTTP handler for the monitor UI/API.
@@ -379,7 +398,7 @@ func (s Server) injectBottomDockComponent(ctx context.Context, data []byte) []by
 }
 
 func (s Server) applyBottomDockHubState(ctx context.Context, dock []byte) []byte {
-	state, err := s.currentHubSetupState(ctx)
+	state, err := s.renderHubSetupState(ctx)
 	if err != nil {
 		s.logf("hub.ui status=warn event=load_bottom_dock_hub_state err=%q", err)
 	}
@@ -734,6 +753,27 @@ func (s Server) currentHubSetupState(ctx context.Context) (HubSetupState, error)
 		return state, nil
 	}
 	next, err := s.HubSetupStatus(ctx)
+	if strings.TrimSpace(next.ConnectURL) == "" {
+		next.ConnectURL = state.ConnectURL
+	}
+	if strings.TrimSpace(next.DashboardURL) == "" {
+		next.DashboardURL = state.DashboardURL
+	}
+	if strings.TrimSpace(next.AgentMode) == "" {
+		next.AgentMode = state.AgentMode
+	}
+	if strings.TrimSpace(next.TokenType) == "" {
+		next.TokenType = state.TokenType
+	}
+	return next, err
+}
+
+func (s Server) renderHubSetupState(ctx context.Context) (HubSetupState, error) {
+	if s.RenderHubSetupStatus == nil {
+		return s.currentHubSetupState(ctx)
+	}
+	state := defaultHubSetupState()
+	next, err := s.RenderHubSetupStatus(ctx)
 	if strings.TrimSpace(next.ConnectURL) == "" {
 		next.ConnectURL = state.ConnectURL
 	}

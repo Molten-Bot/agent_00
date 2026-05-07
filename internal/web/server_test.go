@@ -1483,6 +1483,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `fetch("/api/github/profile", { cache: "no-store" })`) {
 		t.Fatalf("expected index html to resolve the authenticated GitHub public profile through the hub ui api")
 	}
+	if !strings.Contains(markup, `void loadHubSetupStatus().then(() => {`) ||
+		!strings.Contains(markup, `void loadAgentAuthStatus();`) ||
+		!strings.Contains(markup, `void loadGitHubProfileLink();`) ||
+		!strings.Contains(markup, `void loadLibraryTasks();`) {
+		t.Fatalf("expected index html startup to load validation and setup data in the background")
+	}
 	if !strings.Contains(markup, `const chatDockLink = document.querySelector('[data-app-display="chat"]');`) ||
 		!strings.Contains(markup, `const GITHUB_REPOS_LOADING_TASK_ID = "github-repos-loading";`) ||
 		!strings.Contains(markup, `chatDockLink.setAttribute("aria-disabled", String(!available));`) ||

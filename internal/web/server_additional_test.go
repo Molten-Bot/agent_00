@@ -274,10 +274,19 @@ func TestServerRunValidationAndShutdownPaths(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	srv := NewServer("127.0.0.1:0", NewBroker())
+	ready := make(chan error, 1)
+	srv.Ready = ready
 	done := make(chan error, 1)
 	go func() { done <- srv.Run(ctx) }()
 
-	time.Sleep(60 * time.Millisecond)
+	select {
+	case err := <-ready:
+		if err != nil {
+			t.Fatalf("Run() ready error = %v, want nil", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run() did not report readiness in time")
+	}
 	cancel()
 
 	select {
@@ -287,6 +296,32 @@ func TestServerRunValidationAndShutdownPaths(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run(cancel) did not stop in time")
+	}
+}
+
+func TestRenderSitePageUsesFastHubSetupStatus(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	srv.HubSetupStatus = func(context.Context) (HubSetupState, error) {
+		t.Fatal("render should not call remote-capable hub setup status")
+		return HubSetupState{}, nil
+	}
+	srv.RenderHubSetupStatus = func(context.Context) (HubSetupState, error) {
+		state := defaultHubSetupState()
+		state.Configured = true
+		return state, nil
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/chat", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /chat status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `data-configured="true"`) {
+		t.Fatalf("GET /chat body should use render hub setup status")
 	}
 }
 

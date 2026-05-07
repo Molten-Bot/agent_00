@@ -8627,23 +8627,25 @@
     async function loadInitial() {
       try {
         const githubReposPromise = loadGitHubReposForChat();
-        await loadHubSetupStatus();
-        if (shouldOpenInitialHubProfileDialog()) {
-          openHubProfileDialog("deep_link");
-        }
-        await loadAgentAuthStatus();
-        await loadGitHubProfileLink();
-        await loadLibraryTasks();
+        void loadHubSetupStatus().then(() => {
+          if (shouldOpenInitialHubProfileDialog()) {
+            openHubProfileDialog("deep_link");
+          }
+        });
+        void loadAgentAuthStatus();
+        void loadGitHubProfileLink();
+        void loadLibraryTasks();
         const response = await fetch("/api/status", { cache: "no-store" });
         if (!response.ok) {
           throw new Error(`status http ${response.status}`);
         }
         const snapshot = await response.json();
         render(snapshot);
-        await githubReposPromise;
-        if (appDisplayFromHash() === "chat") {
-          setAppDisplay("chat");
-        }
+        void githubReposPromise.then(() => {
+          if (appDisplayFromHash() === "chat") {
+            setAppDisplay("chat");
+          }
+        });
       } catch (err) {
         setLocalConnection(false, `Unable to load state: ${err.message}`);
       }

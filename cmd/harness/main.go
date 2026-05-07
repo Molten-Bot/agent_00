@@ -298,20 +298,7 @@ func runHub(args []string) int {
 		return hub.LoadRuntimeConfig(cfg.RuntimeConfigPath)
 	}
 	hubConfigured := hubCredentialsConfigured(cfg, runtimeCfgLoader)
-	bootDiag := runHubBootDiagnosticsWithRuntimeLoaderDetailed(ctx, runner, daemonLogger, cfg, runtimeCfgLoader)
-	forceLocalOnlyMode := shouldRunHubInLocalOnlyMode(bootDiag.PingChecked, bootDiag.PingOK, *uiListen, hubConfigured)
 	var hubPingLive <-chan struct{}
-	if bootDiag.PingChecked && !bootDiag.PingOK {
-		if pingURL, pingURLErr := hubPingURL(cfg.BaseURL); pingURLErr == nil {
-			hubPingLive = startHubPingRetryLoop(ctx, cfg.BaseURL, pingURL, bootDiag.PingErr, daemonLogger, checkHubPing)
-		}
-		if forceLocalOnlyMode {
-			daemonLogger("hub.auth status=local_only detail=%q", hubPingFailureDetail(hubPingLocalOnlyDetail, bootDiag.PingErr))
-		} else {
-			daemonLogger("boot.diagnosis status=warn requirement=moltenhub_ping detail=%q", hubPingFailureDetail(hubPingRemoteContinueDetail, bootDiag.PingErr))
-		}
-	}
-	maybeStartAgentAuth(ctx, runtimeCfg, authGate, daemonLogger)
 
 	dispatchController := hub.NewAdaptiveDispatchController(cfg.Dispatcher, daemonLogger)
 	dispatchController.Start(ctx)
@@ -740,6 +727,8 @@ func runHub(args []string) int {
 
 	if strings.TrimSpace(*uiListen) != "" {
 		uiServer := web.NewServer(*uiListen, monitorBroker)
+		uiReady := make(chan error, 1)
+		uiServer.Ready = uiReady
 		uiServer.AutomaticMode = *uiAutomatic
 		uiServer.ConfiguredHarness = cfg.AgentHarness
 		uiServer.Logf = daemonLogger
@@ -788,6 +777,9 @@ func runHub(args []string) int {
 		}
 		uiServer.HubSetupStatus = func(reqCtx context.Context) (web.HubSetupState, error) {
 			return currentHubSetupStateWithRemoteProfile(reqCtx, cfg), nil
+		}
+		uiServer.RenderHubSetupStatus = func(context.Context) (web.HubSetupState, error) {
+			return currentHubSetupState(cfg), nil
 		}
 		uiServer.ConfigureHubSetup = func(reqCtx context.Context, req web.HubSetupRequest) (web.HubSetupState, error) {
 			return configureHubSetup(reqCtx, cfg, req, hubController.Update)
@@ -852,7 +844,21 @@ func runHub(args []string) int {
 			daemonLogger("dispatch status=stopped request_id=%s err=%q", requestID, errTaskStoppedByOperator)
 			return nil
 		}
-		daemonLogger("hub.ui status=ready url=%s", monitorURL(*uiListen))
+		go func() {
+			if err := uiServer.Run(ctx); err != nil {
+				daemonLogger("hub.ui status=error err=%q", err)
+			}
+		}()
+		select {
+		case err := <-uiReady:
+			if err != nil {
+				writeStderrLine(logger, fmt.Sprintf("error: %v", err))
+				return app.ExitPreflight
+			}
+			daemonLogger("hub.ui status=ready url=%s", monitorURL(*uiListen))
+		case <-ctx.Done():
+			return app.ExitSuccess
+		}
 		prMonitor := &web.PRMergeMonitor{
 			Runner:      runner,
 			Broker:      monitorBroker,
@@ -864,11 +870,20 @@ func runHub(args []string) int {
 				daemonLogger("hub.ui status=warn event=pr_monitor err=%q", err)
 			}
 		}()
-		go func() {
-			if err := uiServer.Run(ctx); err != nil {
-				daemonLogger("hub.ui status=error err=%q", err)
-			}
-		}()
+	}
+
+	maybeStartAgentAuth(ctx, runtimeCfg, authGate, daemonLogger)
+	bootDiag := runHubBootDiagnosticsWithRuntimeLoaderDetailed(ctx, runner, daemonLogger, cfg, runtimeCfgLoader)
+	forceLocalOnlyMode := shouldRunHubInLocalOnlyMode(bootDiag.PingChecked, bootDiag.PingOK, *uiListen, hubConfigured)
+	if bootDiag.PingChecked && !bootDiag.PingOK {
+		if pingURL, pingURLErr := hubPingURL(cfg.BaseURL); pingURLErr == nil {
+			hubPingLive = startHubPingRetryLoop(ctx, cfg.BaseURL, pingURL, bootDiag.PingErr, daemonLogger, checkHubPing)
+		}
+		if forceLocalOnlyMode {
+			daemonLogger("hub.auth status=local_only detail=%q", hubPingFailureDetail(hubPingLocalOnlyDetail, bootDiag.PingErr))
+		} else {
+			daemonLogger("boot.diagnosis status=warn requirement=moltenhub_ping detail=%q", hubPingFailureDetail(hubPingRemoteContinueDetail, bootDiag.PingErr))
+		}
 	}
 
 	if forceLocalOnlyMode {
