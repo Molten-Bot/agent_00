@@ -2890,6 +2890,44 @@ select.prompt-control {
   text-align: right;
 }
 
+.chat-repo-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 16px;
+}
+
+.chat-repo-tab {
+  min-width: 0;
+  min-height: 34px;
+  max-width: 180px;
+  padding: 0 12px;
+  overflow: hidden;
+  border: 1px solid var(--surface-control-border);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface-control-bg);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-repo-tab[aria-selected="true"] {
+  border-color: var(--border-strong);
+  color: var(--theme-button-text);
+  background: var(--theme-button-bg);
+  box-shadow: var(--theme-button-shadow);
+}
+
+.chat-repo-tab:not([aria-selected="true"]):hover,
+.chat-repo-tab:not([aria-selected="true"]):focus-visible {
+  border-color: var(--border-strong);
+  outline: none;
+  box-shadow: var(--theme-button-focus);
+}
+
 .chat-repo-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
