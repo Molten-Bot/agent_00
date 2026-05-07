@@ -127,6 +127,10 @@ func SaveRuntimeConfig(path string, initCfg InitConfig, token string) error {
 		path = defaultRuntimeConfigPath()
 	}
 
+	if strings.TrimSpace(initCfg.AgentHarness) == "" {
+		return fmt.Errorf(unboundAgentRuntimeErrorMessage)
+	}
+
 	token = strings.TrimSpace(token)
 	cfg := RuntimeConfig{
 		InitConfig: initCfg,
@@ -136,9 +140,6 @@ func SaveRuntimeConfig(path string, initCfg InitConfig, token string) error {
 	cfg.AgentToken = token
 	cfg.LibraryTaskUsage = ReadRuntimeConfigLibraryTaskUsage(path)
 	cfg.ApplyDefaults()
-	if strings.TrimSpace(cfg.AgentHarness) == "" {
-		return fmt.Errorf(unboundAgentRuntimeErrorMessage)
-	}
 	if strings.TrimSpace(cfg.AgentToken) == "" && strings.TrimSpace(cfg.BindToken) == "" {
 		return fmt.Errorf("runtime config requires agent_token or bind_token")
 	}
@@ -165,10 +166,10 @@ func SaveRuntimeConfigHubSettings(path string, initCfg InitConfig, resolvedAgent
 		path = defaultRuntimeConfigPath()
 	}
 
-	initCfg.ApplyDefaults()
 	if strings.TrimSpace(initCfg.AgentHarness) == "" {
 		return fmt.Errorf(unboundAgentRuntimeErrorMessage)
 	}
+	initCfg.ApplyDefaults()
 	resolvedAgentToken = strings.TrimSpace(resolvedAgentToken)
 	if resolvedAgentToken == "" && strings.TrimSpace(initCfg.BindToken) == "" {
 		return fmt.Errorf("runtime config requires agent_token or bind_token")
@@ -652,7 +653,15 @@ func SaveRuntimeConfigClaudeOAuthToken(path string, initCfg InitConfig, oauthTok
 }
 
 func runtimeConfigBaseDoc(initCfg InitConfig) (map[string]any, error) {
+	explicitHarness := strings.TrimSpace(initCfg.AgentHarness)
+	explicitCommand := strings.TrimSpace(initCfg.AgentCommand)
 	initCfg.ApplyDefaults()
+	if explicitHarness == "" {
+		initCfg.AgentHarness = ""
+	}
+	if explicitCommand == "" {
+		initCfg.AgentCommand = ""
+	}
 	encoded, err := json.Marshal(initCfg)
 	if err != nil {
 		return nil, fmt.Errorf("encode runtime config base: %w", err)
