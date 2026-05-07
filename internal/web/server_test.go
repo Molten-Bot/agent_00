@@ -286,7 +286,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `id="moltenbot-hub-profile-button"`) {
 		t.Fatalf("expected index html to include molten bot hub profile gear button")
 	}
-	if !strings.Contains(markup, `href="https://app.molten.bot/signin?target=hub"`) {
+	if !strings.Contains(markup, `href="https://molten.bot/login?target=hub"`) {
 		t.Fatalf("expected index html to link unconfigured dock icon to molten hub sign-in")
 	}
 	if strings.Contains(markup, `aria-label="Home"`) || strings.Contains(markup, `data-page-nav-link="/"`) || strings.Contains(markup, `data-lucide="home"`) {
@@ -323,7 +323,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `id="hub-setup-emoji-picker"`) || !strings.Contains(markup, `id="hub-setup-emoji-panel"`) {
 		t.Fatalf("expected index html to include the emoji picker control shell")
 	}
-	if !strings.Contains(markup, `id="hub-setup-signin-link"`) || !strings.Contains(markup, `https://app.molten.bot/signin?target=hub`) {
+	if !strings.Contains(markup, `id="hub-setup-signin-link"`) || !strings.Contains(markup, `https://molten.bot/login?target=hub`) {
 		t.Fatalf("expected index html to include molten hub sign-in shortcut inside the setup dialog")
 	}
 	if !strings.Contains(markup, `class="hub-setup-signin-logo"`) {
@@ -1276,7 +1276,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "Hub endpoint is live at") {
 		t.Fatalf("expected index html to include ping reachable connection copy")
 	}
-	if !strings.Contains(markup, `const HUB_LOGIN_URL = "https://app.molten.bot/signin?target=hub";`) {
+	if !strings.Contains(markup, `const HUB_LOGIN_URL = "https://molten.bot/login?target=hub";`) {
 		t.Fatalf("expected index html to define the molten hub login url for disconnected runtimes")
 	}
 	if !strings.Contains(markup, `const HUB_DASHBOARD_URL = "https://app.molten.bot/hub";`) {
@@ -2661,6 +2661,11 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 		`<a class="brand-lockup site-header-home" href="/" aria-label="Molten Hub Code home" data-site-header-home>`,
 		`id="moltenhub-logo"`,
 		`id="configured-agent-logo"`,
+		`id="hub-logo-link"`,
+		`class="status-item status-item-compact hub-logo-link hub-logo-link-offline"`,
+		`href="${HUB_LOGIN_URL}"`,
+		`src="https://app.molten.bot/logo.svg"`,
+		`id="hub-logo-plus" class="hub-logo-link-plus">+</span>`,
 		`opencode: "/static/logos/opencode.svg"`,
 		`id="configured-agent-gorilla-subtitle" class="site-header-subtitle">Codex is now a 600LB Gorilla!</span>`,
 		`id="local-conn-item" class="status-item status-item-compact status-item-compact-expandable"`,
@@ -2673,6 +2678,7 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 		`startConnectionStatus`,
 		`const response = await fetch("/api/status", { cache: "no-store" });`,
 		`connectionStatusStream = new EventSource("/api/stream");`,
+		`setHubLogoLink(connected, logoTargetURL);`,
 		`${headerState.label} is now a 600LB Gorilla!`,
 	}
 	for _, needle := range required {

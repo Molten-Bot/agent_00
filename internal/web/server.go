@@ -262,7 +262,7 @@ func defaultHubSetupState() HubSetupState {
 		AgentMode:       "existing",
 		TokenType:       "agent",
 		Region:          "na",
-		ConnectURL:      "https://app.molten.bot/signin?target=hub",
+		ConnectURL:      "https://molten.bot/login?target=hub",
 		DashboardURL:    "https://app.molten.bot/hub",
 		Onboarding:      DefaultHubSetupOnboarding("existing"),
 		OnboardingStage: "bind",
@@ -388,7 +388,7 @@ func (s Server) applyBottomDockHubState(ctx context.Context, dock []byte) []byte
 		1,
 	)
 	dock = bytes.Replace(dock,
-		[]byte(`href="https://app.molten.bot/signin?target=hub"`),
+		[]byte(`href="https://molten.bot/login?target=hub"`),
 		[]byte(`href="`+template.HTMLEscapeString(connectURL)+`"`),
 		1,
 	)

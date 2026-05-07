@@ -6,7 +6,7 @@
   const DEFAULT_THEME_MODE = "light";
   const HOME_PATH = "/";
   const HUB_PROFILE_DEEP_LINK_HASH = "#agent-profile";
-  const HUB_LOGIN_URL = "https://app.molten.bot/signin?target=hub";
+  const HUB_LOGIN_URL = "https://molten.bot/login?target=hub";
   const THEME_ICON_NAMES = {
     light: "sun",
     dark: "moon",
