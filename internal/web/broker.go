@@ -112,11 +112,26 @@ type ResourceMetrics struct {
 	UpdatedAt     string  `json:"updated_at,omitempty"`
 }
 
+// DashboardStats captures in-memory run stats for the monitor dashboard.
+type DashboardStats struct {
+	TotalTasks             int     `json:"total_tasks"`
+	ActiveTasks            int     `json:"active_tasks"`
+	CompletedTasks         int     `json:"completed_tasks"`
+	FailedTasks            int     `json:"failed_tasks"`
+	MaxConcurrentTasks     int     `json:"max_concurrent_tasks"`
+	SuccessRate            float64 `json:"success_rate"`
+	AverageDurationSeconds float64 `json:"average_duration_seconds"`
+	VelocityPerHour        float64 `json:"velocity_per_hour"`
+	ThroughputPerHour      float64 `json:"throughput_per_hour"`
+	UpdatedAt              string  `json:"updated_at,omitempty"`
+}
+
 // Snapshot is the complete monitor payload for the web UI.
 type Snapshot struct {
 	GeneratedAt string          `json:"generated_at"`
 	Connection  Connection      `json:"connection"`
 	Resources   ResourceMetrics `json:"resources"`
+	Stats       DashboardStats  `json:"stats"`
 	Events      []Event         `json:"events"`
 	Tasks       []Task          `json:"tasks"`
 }
@@ -139,12 +154,13 @@ type Broker struct {
 	rejectedSeq  uint64
 	subs         map[chan struct{}]struct{}
 
-	hubConnected bool
-	hubTransport string
-	hubBaseURL   string
-	hubDomain    string
-	hubDetail    string
-	resources    ResourceMetrics
+	hubConnected       bool
+	hubTransport       string
+	hubBaseURL         string
+	hubDomain          string
+	hubDetail          string
+	resources          ResourceMetrics
+	maxConcurrentTasks int
 }
 
 type taskState struct {
@@ -297,6 +313,7 @@ func (b *Broker) Snapshot() Snapshot {
 			Logs:              append([]TaskLog(nil), t.Logs...),
 		})
 	}
+	snapshot.Stats = b.dashboardStatsLocked(now, tasks)
 
 	return snapshot
 }
@@ -486,8 +503,122 @@ func (b *Broker) RecordRejectedPromptSubmission(runConfigJSON []byte, status str
 		},
 	}
 	b.tasks[requestID] = t
+	b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, now)
 	b.notifySubscribersLocked()
 	return requestID
+}
+
+func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) DashboardStats {
+	active := 0
+	seen := map[string]taskAttemptState{}
+	for _, t := range tasks {
+		if t == nil {
+			continue
+		}
+		if isActiveTaskStatus(t.Status) {
+			active++
+		}
+		if strings.TrimSpace(t.RequestID) == "" {
+			continue
+		}
+		seen[t.RequestID] = taskAttemptState{
+			RequestID: t.RequestID,
+			Status:    normalizeTaskTerminalStatus(t.Status),
+			Error:     strings.TrimSpace(t.Error),
+			StartedAt: t.StartedAt,
+			UpdatedAt: t.UpdatedAt,
+		}
+	}
+	for _, attempts := range b.attempts {
+		for _, attempt := range attempts {
+			requestID := strings.TrimSpace(attempt.RequestID)
+			if requestID == "" {
+				continue
+			}
+			seen[requestID] = attempt
+		}
+	}
+	if active > b.maxConcurrentTasks {
+		b.maxConcurrentTasks = active
+	}
+
+	stats := DashboardStats{
+		TotalTasks:         len(seen),
+		ActiveTasks:        active,
+		MaxConcurrentTasks: b.maxConcurrentTasks,
+		UpdatedAt:          now.UTC().Format(time.RFC3339Nano),
+	}
+	var earliest time.Time
+	var totalDuration time.Duration
+	durationCount := 0
+	successfulTerminals := 0
+	for _, attempt := range seen {
+		startedAt := attempt.StartedAt
+		updatedAt := attempt.UpdatedAt
+		if startedAt.IsZero() {
+			startedAt = updatedAt
+		}
+		if updatedAt.IsZero() {
+			updatedAt = startedAt
+		}
+		if !startedAt.IsZero() && (earliest.IsZero() || startedAt.Before(earliest)) {
+			earliest = startedAt
+		}
+		status := normalizeTaskTerminalStatus(attempt.Status)
+		if isSuccessfulTaskStatus(status) {
+			stats.CompletedTasks++
+			successfulTerminals++
+		} else if isFailedTaskStatus(status) {
+			stats.FailedTasks++
+		}
+		if isCompletedTaskStatus(status) && !startedAt.IsZero() && !updatedAt.IsZero() && !updatedAt.Before(startedAt) {
+			totalDuration += updatedAt.Sub(startedAt)
+			durationCount++
+		}
+	}
+	terminalTasks := stats.CompletedTasks + stats.FailedTasks
+	if terminalTasks > 0 {
+		stats.SuccessRate = float64(successfulTerminals) / float64(terminalTasks)
+	}
+	if durationCount > 0 {
+		stats.AverageDurationSeconds = totalDuration.Seconds() / float64(durationCount)
+	}
+	if !earliest.IsZero() {
+		elapsedHours := now.Sub(earliest).Hours()
+		if elapsedHours <= 0 {
+			elapsedHours = 1.0 / 3600.0
+		}
+		stats.VelocityPerHour = float64(stats.TotalTasks) / elapsedHours
+		stats.ThroughputPerHour = float64(stats.CompletedTasks) / elapsedHours
+	}
+	return stats
+}
+
+func isActiveTaskStatus(status string) bool {
+	switch normalizeTaskTerminalStatus(status) {
+	case "completed", "no_changes", "error", "invalid", "duplicate", "stopped":
+		return false
+	default:
+		return true
+	}
+}
+
+func isSuccessfulTaskStatus(status string) bool {
+	switch normalizeTaskTerminalStatus(status) {
+	case "completed", "no_changes":
+		return true
+	default:
+		return false
+	}
+}
+
+func isFailedTaskStatus(status string) bool {
+	switch normalizeTaskTerminalStatus(status) {
+	case "error", "invalid", "duplicate":
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *Broker) taskBaseBranchLocked(requestID string) string {
@@ -1046,11 +1177,24 @@ func (b *Broker) updateResourceMetricsFromLineLocked(line string, fields map[str
 }
 
 func (b *Broker) notifySubscribersLocked() {
+	b.updateMaxConcurrentTasksLocked()
 	for ch := range b.subs {
 		select {
 		case ch <- struct{}{}:
 		default:
 		}
+	}
+}
+
+func (b *Broker) updateMaxConcurrentTasksLocked() {
+	active := 0
+	for _, task := range b.tasks {
+		if task != nil && isActiveTaskStatus(task.Status) {
+			active++
+		}
+	}
+	if active > b.maxConcurrentTasks {
+		b.maxConcurrentTasks = active
 	}
 }
 

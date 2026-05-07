@@ -2967,6 +2967,108 @@ select.prompt-control {
   font-weight: 700;
 }
 
+.dashboard-display {
+  display: grid;
+  gap: 16px;
+  width: min(920px, 100%);
+  margin: 0 auto;
+  padding: 12px 0 var(--hub-content-bottom-padding);
+}
+
+.dashboard-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: clamp(18px, 3vw, 28px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-glass-solid);
+  box-shadow: var(--shadow-sm);
+}
+
+.dashboard-head h1 {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-size: clamp(1.7rem, 3vw, 2.35rem);
+  letter-spacing: 0;
+  line-height: 1.05;
+}
+
+.dashboard-updated {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.dashboard-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dashboard-stat-card,
+.dashboard-chart-shell {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-control-bg-strong);
+  box-shadow: var(--surface-control-shadow);
+}
+
+.dashboard-stat-card {
+  display: grid;
+  gap: 8px;
+  min-height: 144px;
+  padding: 16px;
+}
+
+.dashboard-stat-card-primary {
+  border-color: var(--border-strong);
+}
+
+.dashboard-stat-label,
+.dashboard-stat-meta,
+.dashboard-chart-head {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 850;
+  letter-spacing: 0;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.dashboard-stat-card strong {
+  color: var(--text);
+  font-size: clamp(1.9rem, 3.5vw, 3rem);
+  line-height: 0.95;
+}
+
+.dashboard-stat-meta {
+  align-self: end;
+  color: var(--meta);
+  text-transform: none;
+}
+
+.dashboard-chart-shell {
+  display: grid;
+  gap: 12px;
+  min-height: 320px;
+  padding: 16px;
+}
+
+.dashboard-chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#dashboard-task-chart {
+  min-height: 250px;
+}
+
 @media (max-width: 640px) {
   .site-page {
     width: min(100% - 24px, var(--hub-page-width));
@@ -3000,6 +3102,20 @@ select.prompt-control {
 
   .chat-status {
     text-align: left;
+  }
+
+  .dashboard-head,
+  .dashboard-chart-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .dashboard-updated {
+    text-align: left;
+  }
+
+  .dashboard-stats-grid {
+    grid-template-columns: 1fr;
   }
 }
 
