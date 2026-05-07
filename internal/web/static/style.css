@@ -2824,8 +2824,10 @@ select.prompt-control {
   min-height: clamp(360px, 58vh, 680px);
   padding: clamp(18px, 3vw, 28px);
   border: 1px solid var(--border);
+  border-color: rgb(var(--hub-border-rgb) / 1);
   border-radius: 8px;
-  background: var(--surface-glass-solid);
+  background-color: rgb(var(--hub-panel-rgb) / 1);
+  background-image: linear-gradient(170deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.01));
   box-shadow: var(--shadow-sm);
 }
 
@@ -2835,7 +2837,7 @@ select.prompt-control {
   justify-content: space-between;
   gap: 16px;
   padding-bottom: 18px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid rgb(var(--hub-border-rgb) / 1);
 }
 
 .chat-head h1 {
@@ -2907,6 +2909,7 @@ select.prompt-control {
 }
 
 .chat-repo-card[aria-expanded="true"] {
+  grid-column: 1 / -1;
   grid-template-rows: auto minmax(42px, 1fr) auto auto;
   border-color: var(--border-strong);
 }
@@ -3045,27 +3048,47 @@ select.prompt-control {
 }
 
 .releases-display {
-  width: min(920px, 100%);
-  margin: 0 auto;
-  padding: 12px 0 var(--hub-content-bottom-padding);
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: none;
+  min-height: 220px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--radius);
+  border-color: rgb(var(--hub-border-rgb) / 1);
+  background: var(--surface-glow);
+  box-shadow: var(--surface-glow-shadow);
+}
+
+.releases-display > .panel-header {
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom-color: var(--surface-header-border);
+  background: var(--surface-header);
+  color: var(--surface-label);
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  justify-content: space-between;
 }
 
 .releases-display h1 {
   margin: 0;
-  margin-bottom: 18px;
-  font-size: clamp(1.55rem, 3vw, 2.3rem);
-  line-height: 1.05;
-  letter-spacing: 0;
 }
 
 .release-list {
   display: grid;
   gap: 10px;
+  flex: 1 1 auto;
+  padding: 12px;
+  min-width: 0;
 }
 
 .release-empty {
   display: grid;
-  min-height: 84px;
+  min-height: 144px;
   align-items: center;
   padding: 16px;
   border: 1px solid var(--border);

@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/moltenhub-code/internal/config"
 	"github.com/Molten-Bot/moltenhub-code/internal/library"
@@ -1506,7 +1508,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `function renderChatRepoPagination(totalRepos, totalPages)`) ||
 		!strings.Contains(markup, `repoRead.textContent = "repos: reading GitHub projects";`) ||
 		!strings.Contains(markup, `if (!state.githubReposReady) {`) {
-		t.Fatalf("expected index html to gate chat availability on GitHub repository loading and show that read as current work")
+		t.Fatalf("expected index html to gate chat availability on GitHub repository loading")
+	}
+	if strings.Contains(markup, `taskItems.push(githubReposLoadingTask())`) {
+		t.Fatalf("expected GitHub repository loading to stay out of Current Work task rendering")
 	}
 	if !strings.Contains(markup, `function submitChatRepoPrompt(repo, input, statusNode)`) ||
 		!strings.Contains(markup, `const card = document.createElement("div");`) ||
@@ -1890,7 +1895,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "clearSubmittedPromptState();") {
 		t.Fatalf("expected index html to clear the submitted prompt state after a successful queue")
 	}
-	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"`+config.DefaultRepositoryURL+`","promptImageHarnesses":["codex","pi"]};`) {
+	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"`+config.DefaultRepositoryURL+`","promptImageHarnesses":["codex","pi"],"githubReposReady":false};`) {
 		t.Fatalf("expected index html to include default UI config")
 	}
 	if !strings.Contains(markup, `id="theme-toggle"`) || !strings.Contains(markup, `function nextThemeMode(theme)`) {
@@ -2045,7 +2050,7 @@ func TestHandlerIndexInjectsAutomaticModeConfig(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":true,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"`+config.DefaultRepositoryURL+`","promptImageHarnesses":["codex","pi"]};`) {
+	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":true,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"`+config.DefaultRepositoryURL+`","promptImageHarnesses":["codex","pi"],"githubReposReady":false};`) {
 		t.Fatalf("expected automatic mode UI config, got %q", markup)
 	}
 }
@@ -2064,7 +2069,7 @@ func TestHandlerIndexInjectsConfiguredHarness(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"claude","configuredAgentLabel":"Claude","defaultRepository":"`+config.DefaultRepositoryURL+`","promptImageHarnesses":["codex","pi"]};`) {
+	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"claude","configuredAgentLabel":"Claude","defaultRepository":"`+config.DefaultRepositoryURL+`","promptImageHarnesses":["codex","pi"],"githubReposReady":false};`) {
 		t.Fatalf("expected configured harness UI config, got %q", markup)
 	}
 }
@@ -2083,7 +2088,7 @@ func TestHandlerIndexInjectsPiHarnessConfig(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"pi","configuredAgentLabel":"Pi","defaultRepository":"`+config.DefaultRepositoryURL+`","promptImageHarnesses":["codex","pi"]};`) {
+	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"pi","configuredAgentLabel":"Pi","defaultRepository":"`+config.DefaultRepositoryURL+`","promptImageHarnesses":["codex","pi"],"githubReposReady":false};`) {
 		t.Fatalf("expected configured pi harness UI config, got %q", markup)
 	}
 	if !strings.Contains(markup, `pi: "/static/logos/pi.svg"`) {
@@ -2173,7 +2178,8 @@ func TestHandlerServesReleasesAsIndexDisplay(t *testing.T) {
 		strings.Contains(markup, `<!-- hub-bottom-dock -->`) {
 		t.Fatalf("expected index html to render shared dock component")
 	}
-	if !strings.Contains(markup, `id="releases-display" class="releases-display hidden" aria-label="Releases"`) ||
+	if !strings.Contains(markup, `id="releases-display" class="releases-display hidden panel brand-login-card-shell" aria-label="Releases"`) ||
+		!strings.Contains(markup, `<h1 class="panel-section-title releases-title">Releases</h1>`) ||
 		!strings.Contains(markup, `class="release-empty" aria-label="No releases"`) ||
 		!strings.Contains(markup, `No releases yet.`) {
 		t.Fatalf("expected index html to include releases display empty state")
@@ -2291,6 +2297,123 @@ func TestHandlerGitHubReposUsesOverride(t *testing.T) {
 	}
 }
 
+func TestHandlerGitHubReposCachesSuccessfulLoad(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	calls := 0
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		calls++
+		return []GitHubRepo{{
+			Name:     "repo",
+			FullName: "acme/repo",
+			HTMLURL:  "https://github.com/acme/repo",
+		}}, nil
+	}
+	handler := srv.Handler()
+
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/github/repos", nil)
+		resp := httptest.NewRecorder()
+		handler.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("request %d status = %d", i+1, resp.Code)
+		}
+		if !strings.Contains(resp.Body.String(), `"full_name":"acme/repo"`) {
+			t.Fatalf("request %d unexpected github repos response %q", i+1, resp.Body.String())
+		}
+	}
+
+	if calls != 1 {
+		t.Fatalf("ResolveGitHubRepos calls = %d, want 1", calls)
+	}
+}
+
+func TestHandlerIndexHydratesCachedGitHubRepos(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{{
+			Name:     "repo",
+			FullName: "acme/repo",
+			HTMLURL:  "https://github.com/acme/repo",
+		}}, nil
+	}
+	handler := srv.Handler()
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/github/repos", nil))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d", resp.Code)
+	}
+	markup := resp.Body.String()
+	if !strings.Contains(markup, `"githubReposReady":true`) ||
+		!strings.Contains(markup, `"githubRepos":[{"name":"repo","full_name":"acme/repo"`) {
+		t.Fatalf("expected index html to hydrate cached github repositories, got %q", markup)
+	}
+}
+
+func TestHandlerIndexPreloadsGitHubReposOnce(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return []GitHubRepo{{
+			Name:     "repo",
+			FullName: "acme/repo",
+			HTMLURL:  "https://github.com/acme/repo",
+		}}, nil
+	}
+	handler := srv.Handler()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d", resp.Code)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for github repo preload")
+	}
+	close(release)
+	deadline := time.After(2 * time.Second)
+	for {
+		if _, ready := srv.cachedGitHubRepos(); ready {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for preloaded github repos to cache")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/", nil))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("second status = %d", resp.Code)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("ResolveGitHubRepos calls = %d, want 1", got)
+	}
+	if !strings.Contains(resp.Body.String(), `"githubReposReady":true`) {
+		t.Fatalf("expected second index render to hydrate preloaded github repositories")
+	}
+}
+
 func TestHandlerServesStaticCSS(t *testing.T) {
 	t.Parallel()
 
@@ -2326,6 +2449,9 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	}
 	if !strings.Contains(css, ".prompt-select-action-wrap") || !strings.Contains(css, ".prompt-history-delete") {
 		t.Fatalf("expected stylesheet to include inline delete controls for repository and reviewer history selects")
+	}
+	if !strings.Contains(css, ".chat-repo-card[aria-expanded=\"true\"] {\n  grid-column: 1 / -1;") {
+		t.Fatalf("expected expanded chat repository cards to span the full repository grid width")
 	}
 	if !strings.Contains(css, ".hub-emoji-picker-panel-header") || !strings.Contains(css, ".hub-emoji-picker-grid") || !strings.Contains(css, ".hub-emoji-picker-option") {
 		t.Fatalf("expected stylesheet to include the refreshed emoji picker layout styles")
