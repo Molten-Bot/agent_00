@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	HarnessCodex  = "codex"
-	HarnessClaude = "claude"
-	HarnessAuggie = "auggie"
-	HarnessPi     = "pi"
+	HarnessCodex    = "codex"
+	HarnessClaude   = "claude"
+	HarnessAuggie   = "auggie"
+	HarnessPi       = "pi"
+	HarnessOpencode = "opencode"
 )
 
 const defaultHarness = HarnessCodex
@@ -24,6 +25,7 @@ var harnessDisplayNames = map[string]string{
 	HarnessAuggie: "Auggie",
 	HarnessClaude: "Claude",
 	HarnessCodex:  "Codex",
+	HarnessOpencode: "Opencode",
 	HarnessPi:     "Pi",
 }
 
@@ -72,6 +74,11 @@ var definitions = map[string]definition{
 		defaultCommand: HarnessPi,
 		defaultPackage: "@mariozechner/pi-coding-agent@latest",
 		build:          buildPiCommand,
+	},
+	HarnessOpencode: {
+		defaultCommand: HarnessOpencode,
+		defaultPackage: "opencode-ai@latest",
+		build:          buildOpencodeCommand,
 	},
 }
 
@@ -261,6 +268,15 @@ func buildPiCommand(targetDir, prompt string, opts RunOptions) (execx.Command, e
 		args = append(args, "@"+imagePath)
 	}
 	args = append(args, prompt)
+	return execx.Command{Dir: targetDir, Args: args}, nil
+}
+
+func buildOpencodeCommand(targetDir, prompt string, opts RunOptions) (execx.Command, error) {
+	if err := validatePromptImageSupport(HarnessOpencode, opts.ImagePaths); err != nil {
+		return execx.Command{}, err
+	}
+
+	args := []string{"run", "--dangerously-skip-permissions", prompt}
 	return execx.Command{Dir: targetDir, Args: args}, nil
 }
 
