@@ -106,7 +106,7 @@ func TestHandlerReleasesBottomDockUsesHubSetupStatus(t *testing.T) {
 	}
 	if !strings.Contains(markup, `id="moltenbot-hub-link"`) ||
 		!strings.Contains(markup, `class="prompt-mode-link prompt-mode-link-logo hidden"`) ||
-		!strings.Contains(markup, `href="https://app.molten.bot/signin?target=hub"`) ||
+		!strings.Contains(markup, `href="https://molten.bot/login?target=hub"`) ||
 		!strings.Contains(markup, `aria-label="Configure Molten Hub"`) {
 		t.Fatalf("expected configured releases dock to hide the Hub setup icon")
 	}

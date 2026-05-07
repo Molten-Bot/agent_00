@@ -3,7 +3,7 @@
   const THEME_MODES = ["light", "dark", "night", "pink"];
   const DEFAULT_THEME_MODE = "light";
   const LOGO_ROTATION_INTERVAL_MS = 8_000;
-  const HUB_LOGIN_URL = "https://app.molten.bot/signin?target=hub";
+  const HUB_LOGIN_URL = "https://molten.bot/login?target=hub";
   const HUB_DASHBOARD_URL = "https://app.molten.bot/hub";
   const AGENT_LOGO_URLS = Object.freeze({
     codex: "/static/logos/codex-cli.svg",
@@ -147,6 +147,17 @@
           </span>
         </a>
         <div class="status-row" aria-label="Connection status">
+          <a
+            id="hub-logo-link"
+            class="status-item status-item-compact hub-logo-link hub-logo-link-offline"
+            href="${HUB_LOGIN_URL}"
+            aria-label="Connect to Molten Hub"
+            title="Connect to Molten Hub">
+            <span class="hub-logo-link-mark" aria-hidden="true">
+              <img class="hub-logo-link-image" src="https://app.molten.bot/logo.svg" alt="">
+              <span id="hub-logo-plus" class="hub-logo-link-plus">+</span>
+            </span>
+          </a>
           <div id="local-conn-item" class="status-item status-item-compact status-item-compact-expandable" title="Local: Ready" aria-label="Local: Ready" tabindex="0">
             <span id="local-conn-dot" class="dot online"></span>
             <span id="local-conn-text" class="status-tooltip">Local: Ready</span>
@@ -411,6 +422,8 @@
         hubItem: this.querySelector("#hub-conn-item"),
         hubDot: this.querySelector("#hub-conn-dot"),
         hubText: this.querySelector("#hub-conn-text"),
+        hubLogoLink: this.querySelector("#hub-logo-link"),
+        hubLogoPlus: this.querySelector("#hub-logo-plus"),
       };
     }
 
@@ -456,6 +469,20 @@
       hubItem.setAttribute("data-href", href);
     }
 
+    setHubLogoLink(connected, href) {
+      const { hubLogoLink, hubLogoPlus } = this.connectionNodes();
+      if (!hubLogoLink) return;
+      const label = connected ? "Open Molten Hub" : "Connect to Molten Hub";
+      hubLogoLink.href = href || (connected ? HUB_DASHBOARD_URL : HUB_LOGIN_URL);
+      hubLogoLink.classList.toggle("hub-logo-link-online", connected);
+      hubLogoLink.classList.toggle("hub-logo-link-offline", !connected);
+      hubLogoLink.setAttribute("aria-label", label);
+      hubLogoLink.title = label;
+      if (hubLogoPlus) {
+        hubLogoPlus.classList.toggle("hidden", connected);
+      }
+    }
+
     setHubConnection(mode, text, hubSetup = {}) {
       const nodes = this.connectionNodes();
       const configured = Boolean(hubSetup && hubSetup.configured);
@@ -465,6 +492,7 @@
       const actionable = connected || mode === "disconnected";
       const actionTone = connected ? "online" : (mode === "disconnected" ? "offline" : "");
       const targetURL = connected || configured ? dashboardURL : connectURL;
+      const logoTargetURL = connected ? HUB_DASHBOARD_URL : connectURL;
       let message = String(text || "").trim();
       if (mode === "disconnected" && !message) {
         message = configured
@@ -474,6 +502,7 @@
       this.setIndicator(nodes.hubItem, nodes.hubDot, nodes.hubText, "Molten Hub", connected, message);
       this.applyHubDotMode(mode);
       this.setHubConnectionActionable(actionable, targetURL, actionTone);
+      this.setHubLogoLink(connected, logoTargetURL);
     }
 
     updateConnectionStatus(snapshot, options = {}) {
