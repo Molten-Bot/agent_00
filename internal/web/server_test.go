@@ -2106,6 +2106,9 @@ func TestHandlerServesReleasesWithoutDefaultEntries(t *testing.T) {
 		!strings.Contains(markup, `fallbackTimer = window.setTimeout(navigate, 1200);`) {
 		t.Fatalf("expected releases html to track header home CTA clicks before navigation")
 	}
+	if !strings.Contains(markup, `window.MoltenHubHeader.startResourceMetrics();`) {
+		t.Fatalf("expected releases html to hydrate shared header metrics from the monitor API")
+	}
 	if !strings.Contains(markup, `class="release-empty" aria-label="No releases"`) ||
 		!strings.Contains(markup, `No releases yet.`) {
 		t.Fatalf("expected releases html to render an empty state")
@@ -2193,6 +2196,7 @@ func TestHandlerServesDashboardWhenEnabled(t *testing.T) {
 		`data-page-nav-link="/dashboard"`,
 		`src="/static/bottom-dock.js"`,
 		`href="/static/style.css"`,
+		`window.MoltenHubHeader.startResourceMetrics();`,
 		`class="dashboard-blank" aria-label="Dashboard workspace"`,
 	}
 	for _, needle := range required {
@@ -2647,6 +2651,10 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 		`data-lucide="cpu"`,
 		`data-lucide="memory-stick"`,
 		`data-lucide="hard-drive"`,
+		`updateResourceMetrics(snapshot)`,
+		`startResourceMetrics`,
+		`const response = await fetch("/api/state", { cache: "no-store" });`,
+		`resourceMetricStream = new EventSource("/api/stream");`,
 		`${headerState.label} is now a 600LB Gorilla!`,
 	}
 	for _, needle := range required {
