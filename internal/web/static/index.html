@@ -324,28 +324,28 @@
           </form>
         </section>
 
+        <section id="releases-display" class="releases-display hidden" aria-label="Releases" aria-hidden="true">
+          <h1>Releases</h1>
+          <div class="release-empty" aria-label="No releases">
+            <p>No releases yet.</p>
+          </div>
+        </section>
+
+        <section id="chat-display" class="chat-main hidden" aria-label="Chat" aria-hidden="true">
+          <section class="chat-shell" aria-labelledby="chat-title">
+            <div class="chat-head">
+              <div>
+                <p class="eyebrow">GitHub</p>
+                <h1 id="chat-title">Chat</h1>
+              </div>
+              <p id="chat-status" class="chat-status" aria-live="polite">Loading repositories...</p>
+            </div>
+            <div id="chat-repo-grid" class="chat-repo-grid" aria-label="GitHub repositories"></div>
+          </section>
+        </section>
+
       </div>
     </div>
-
-    <section id="releases-display" class="releases-display hidden" aria-label="Releases" aria-hidden="true">
-      <h1>Releases</h1>
-      <div class="release-empty" aria-label="No releases">
-        <p>No releases yet.</p>
-      </div>
-    </section>
-
-    <section id="chat-display" class="chat-main hidden" aria-label="Chat" aria-hidden="true">
-      <section class="chat-shell" aria-labelledby="chat-title">
-        <div class="chat-head">
-          <div>
-            <p class="eyebrow">GitHub</p>
-            <h1 id="chat-title">Chat</h1>
-          </div>
-          <p id="chat-status" class="chat-status" aria-live="polite">Loading repositories...</p>
-        </div>
-        <div id="chat-repo-grid" class="chat-repo-grid" aria-label="GitHub repositories"></div>
-      </section>
-    </section>
   </div>
 
   <div id="task-fullscreen" class="task-fullscreen hidden" aria-hidden="true">
@@ -8359,7 +8359,7 @@
       const tasks = displayTasks(snapshot);
       const hasTasks = tasks.length > 0;
       const hasTaskPanelTasks = hasTaskPanelContent(snapshot);
-      const showTaskPanel = true;
+      const showTaskPanel = state.appDisplay === "studio" || state.appDisplay === "dashboard";
       const promptOnly = normalizeTaskPanelView(state.taskPanelView) === "prompt";
       if (!showTaskPanel && state.taskFullscreenOpen) {
         state.taskFullscreenOpen = false;

@@ -1086,9 +1086,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, "return normalizeTaskStatusFilter(state.taskStatusFilter) === \"completed\" && runningCount === 0 && completedCount === 0;") {
 		t.Fatalf("expected index html to keep completed-history empty state visible only in completed-history view")
 	}
-	if !strings.Contains(markup, "const showTaskPanel = true;") ||
+	if !strings.Contains(markup, `const showTaskPanel = state.appDisplay === "studio" || state.appDisplay === "dashboard";`) ||
 		!strings.Contains(markup, "taskPanel.classList.toggle(\"hidden\", !showTaskPanel);") {
-		t.Fatalf("expected index html to keep the task queue panel available across app views")
+		t.Fatalf("expected index html to show the task queue panel in Studio and Dashboard views")
 	}
 	if !strings.Contains(markup, "taskPanel.setAttribute(\"aria-hidden\", showTaskPanel ? \"false\" : \"true\");") {
 		t.Fatalf("expected index html to keep task panel aria visibility in sync with rendered content")
@@ -1453,8 +1453,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `const mode = display === "releases" || display === "dashboard" || display === "chat" ? display : "studio";`) ||
 		!strings.Contains(markup, `appLayout.hidden = false;`) ||
 		!strings.Contains(markup, `promptWrap.hidden = !showStudio;`) ||
-		!strings.Contains(markup, `const showTaskPanel = true;`) {
-		t.Fatalf("expected index html to switch main views while keeping Current Work available")
+		!strings.Contains(markup, `const showTaskPanel = state.appDisplay === "studio" || state.appDisplay === "dashboard";`) {
+		t.Fatalf("expected index html to switch main views while keeping Current Work in Studio and Dashboard")
 	}
 	if !strings.Contains(markup, `promptPanelTitle.textContent = promptModeTitle(state.promptMode);`) {
 		t.Fatalf("expected index html to update the panel heading when the prompt mode changes")
