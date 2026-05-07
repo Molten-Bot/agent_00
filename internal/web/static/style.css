@@ -1011,6 +1011,13 @@ body .right-col.prompt-collapsed.task-list-hidden {
   min-height: 52px;
 }
 
+.prompt-titlebar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
 .panel-section-title {
   color: var(--text);
   font-family: var(--font-family);
@@ -1018,6 +1025,13 @@ body .right-col.prompt-collapsed.task-list-hidden {
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+#prompt-panel-title::before {
+  content: "/";
+  margin-inline: 8px;
+  color: var(--text-muted);
+  font-weight: 600;
 }
 
 .panel-section-copy {
@@ -1077,6 +1091,30 @@ body .right-col.prompt-collapsed.task-list-hidden {
 
 .prompt-mode-row {
   margin-bottom: 2px;
+}
+
+.prompt-mode-tabs-panel {
+  padding: 4px;
+  gap: 2px;
+  box-shadow: none;
+}
+
+.prompt-mode-tabs-panel .prompt-mode-link {
+  width: 34px;
+  height: 34px;
+  flex-basis: 34px;
+}
+
+.prompt-mode-tabs-panel .prompt-mode-link-line {
+  width: 12px;
+}
+
+.prompt-mode-tabs-panel .prompt-mode-link-line-top {
+  top: 5px;
+}
+
+.prompt-mode-tabs-panel .prompt-mode-link-line-bottom {
+  bottom: 5px;
 }
 
 .prompt-form.hidden,
@@ -5634,6 +5672,27 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
     box-shadow: 0 -2px 14px rgba(0, 0, 0, 0.18);
   }
 
+  .prompt-titlebar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .prompt-titlebar-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .prompt-mode-tabs-panel {
+    width: auto;
+    max-width: calc(100% - 48px);
+    flex: 0 1 auto;
+    justify-content: flex-start;
+    padding: 4px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-card);
+    box-shadow: none;
+  }
+
   .prompt-mode-link {
     width: auto;
     min-width: 0;
@@ -5641,6 +5700,13 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
     height: 44px;
     flex: 1 1 44px;
     padding: 6px 2px;
+  }
+
+  .prompt-mode-tabs-panel .prompt-mode-link {
+    width: 34px;
+    max-width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
   }
 
   .prompt-mode-link:hover,
