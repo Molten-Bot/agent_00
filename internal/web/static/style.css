@@ -2907,6 +2907,7 @@ select.prompt-control {
 }
 
 .chat-repo-card[aria-expanded="true"] {
+  grid-column: 1 / -1;
   grid-template-rows: auto minmax(42px, 1fr) auto auto;
   border-color: var(--border-strong);
 }
