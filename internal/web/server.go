@@ -430,7 +430,7 @@ func (s Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.renderSitePage(w, sitePageData{
+	s.renderSitePage(r.Context(), w, sitePageData{
 		Title:            "Molten Hub Code Dashboard",
 		BodyClass:        "dashboard-body",
 		PageClass:        "dashboard-page",
@@ -442,7 +442,7 @@ func (s Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s Server) renderSitePage(w http.ResponseWriter, data sitePageData) {
+func (s Server) renderSitePage(ctx context.Context, w http.ResponseWriter, data sitePageData) {
 	data.BottomDock = template.HTML(bottomDockPlaceholder)
 	var page bytes.Buffer
 	if err := sitePageTemplate.Execute(&page, data); err != nil {
@@ -450,7 +450,7 @@ func (s Server) renderSitePage(w http.ResponseWriter, data sitePageData) {
 		http.Error(w, "page is unavailable", http.StatusInternalServerError)
 		return
 	}
-	rendered := s.injectBottomDockComponent(page.Bytes())
+	rendered := s.injectBottomDockComponent(ctx, page.Bytes())
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
