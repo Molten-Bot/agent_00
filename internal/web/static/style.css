@@ -2148,6 +2148,10 @@ select.prompt-control {
   align-items: stretch;
 }
 
+#task-panel.task-panel-collapsed.is-empty .task-scroll {
+  display: none;
+}
+
 .task-empty {
   display: grid;
   gap: 12px;
