@@ -1074,7 +1074,7 @@ func TestStudioStylesKeepPromptActionsVisible(t *testing.T) {
 	if !strings.Contains(css, ".prompt-mode-divider {\n  width: 1px;\n  height: 24px;\n  margin-inline: 4px;") {
 		t.Fatalf("expected the leading dock icon to share the segmented main-menu treatment instead of rendering as a detached control")
 	}
-	if !strings.Contains(css, ".prompt-form {\n  display: grid;\n  gap: 10px;\n  padding: 14px 14px 18px;\n  min-width: 0;\n  min-height: 0;\n  overflow-y: auto;\n}") {
+	if !strings.Contains(css, ".prompt-form {\n  display: grid;\n  gap: 10px;\n  padding: 12px;\n  min-width: 0;\n  min-height: 0;\n  overflow-y: auto;\n}") {
 		t.Fatalf("expected studio form content to use the full panel now that the mode dock lives outside it")
 	}
 	if !strings.Contains(css, ".prompt-compose-stack {\n  display: grid;\n  gap: 8px;\n  min-width: 0;\n}") {
@@ -1308,7 +1308,7 @@ func TestAuthGateVerifyButtonHidesWhileVerificationIsPending(t *testing.T) {
 		!strings.Contains(html, `agentAuthDeviceCodeRow.classList.toggle("hidden", !state.agentAuth.deviceCode);`) {
 		t.Fatalf("expected empty device-code command row to stay hidden until a device code exists")
 	}
-	if !strings.Contains(html, "class=\"agent-auth-shell flex min-h-[220px] w-full max-w-xl flex-col\"") {
+	if !strings.Contains(html, `class="agent-auth-shell"`) {
 		t.Fatalf("expected auth gate content to render inside a theme-aware auth shell")
 	}
 	if !strings.Contains(html, `id="agent-auth-shell"`) ||
@@ -1328,9 +1328,9 @@ func TestAuthGateVerifyButtonHidesWhileVerificationIsPending(t *testing.T) {
 		t.Fatalf("expected auth gate to include Claude browser-code input")
 	}
 	if !strings.Contains(html, `id="agent-auth-browser-code-input"`) ||
-		!strings.Contains(html, `class="prompt-text agent-auth-secret-input min-h-[96px] font-mono text-[0.9rem]"`) ||
-		!strings.Contains(html, `id="agent-auth-configure-input" class="prompt-text agent-auth-secret-input font-mono text-[0.9rem]"`) ||
-		!strings.Contains(html, `id="agent-auth-configure-secret-input" class="prompt-text agent-auth-configure-input-github agent-auth-configure-input-single-line font-mono text-[0.9rem] hidden" type="password"`) ||
+		!strings.Contains(html, `class="prompt-text agent-auth-secret-input"`) ||
+		!strings.Contains(html, `id="agent-auth-configure-input" class="prompt-text agent-auth-secret-input"`) ||
+		!strings.Contains(html, `id="agent-auth-configure-secret-input" class="prompt-text agent-auth-configure-input-github agent-auth-configure-input-single-line hidden" type="password"`) ||
 		!strings.Contains(html, `agentAuthConfigureInput.classList.toggle("hidden", needsClaudeGitHubConfigure);`) ||
 		!strings.Contains(html, `autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"`) {
 		t.Fatalf("expected init auth credential text boxes to hide pasted secrets and disable browser text helpers")
