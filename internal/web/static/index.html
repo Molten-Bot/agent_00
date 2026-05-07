@@ -913,6 +913,30 @@
       return icon;
     }
 
+    function isPlainPrimaryClick(event) {
+      if (!event || event.defaultPrevented) return false;
+      if (typeof event.button === "number" && event.button !== 0) return false;
+      return !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+    }
+
+    function openExternalTaskLink(event, url, trackOpen) {
+      if (event && typeof event.stopPropagation === "function") {
+        event.stopPropagation();
+      }
+      if (typeof trackOpen === "function") {
+        trackOpen();
+      }
+      if (!isPlainPrimaryClick(event)) {
+        return;
+      }
+      if (event && typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      if (typeof window.open === "function") {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+    }
+
     function renderTaskPullRequestAction(task) {
       const prURL = taskPullRequestURL(task);
       if (!isCompletedTask(task) || !prURL) {
@@ -935,8 +959,9 @@
 
       link.appendChild(logo);
       link.addEventListener("click", (event) => {
-        event.stopPropagation();
-        trackAnalyticsEvent("task_pull_request_opened", { request_id: taskRequestID(task) });
+        openExternalTaskLink(event, prURL, () => {
+          trackAnalyticsEvent("task_pull_request_opened", { request_id: taskRequestID(task) });
+        });
       });
       return link;
     }
@@ -7676,10 +7701,11 @@
           marker.target = "_blank";
           marker.rel = "noopener noreferrer";
           marker.addEventListener("click", (event) => {
-            event.stopPropagation();
-            trackAnalyticsEvent("task_github_step_opened", {
-              request_id: taskRequestID(task),
-              progress_step: step.label,
+            openExternalTaskLink(event, githubHref, () => {
+              trackAnalyticsEvent("task_github_step_opened", {
+                request_id: taskRequestID(task),
+                progress_step: step.label,
+              });
             });
           });
         }
@@ -7770,8 +7796,10 @@
         label.textContent = "Open PR";
 
         link.append(logo, label);
-        link.addEventListener("click", () => {
-          trackAnalyticsEvent("task_pull_request_opened", { request_id: taskRequestID(task) });
+        link.addEventListener("click", (event) => {
+          openExternalTaskLink(event, prURL, () => {
+            trackAnalyticsEvent("task_pull_request_opened", { request_id: taskRequestID(task) });
+          });
         });
         node.appendChild(link);
       }

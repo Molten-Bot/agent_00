@@ -1176,6 +1176,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		strings.Count(markup, "const githubAction = renderTaskPullRequestAction(task);") < 2 {
 		t.Fatalf("expected completed task cards to render GitHub-logo pull request links")
 	}
+	if !strings.Contains(markup, "function openExternalTaskLink(event, url, trackOpen)") ||
+		!strings.Contains(markup, `window.open(url, "_blank", "noopener,noreferrer");`) ||
+		strings.Count(markup, "openExternalTaskLink(event, prURL") < 2 ||
+		!strings.Contains(markup, "openExternalTaskLink(event, githubHref") {
+		t.Fatalf("expected task GitHub links to open on the first primary click")
+	}
 	if !strings.Contains(markup, `detail.textContent = prURL ? "Pull request ready." : "Completed.";`) ||
 		!strings.Contains(markup, `link.className = "task-result-link task-result-github-link";`) ||
 		!strings.Contains(markup, `label.textContent = "Open PR";`) {
