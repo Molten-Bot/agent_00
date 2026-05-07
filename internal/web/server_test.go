@@ -240,6 +240,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `id="dashboard-display"`) ||
 		!strings.Contains(markup, `<h1 id="dashboard-title">Dashboard</h1>`) ||
 		!strings.Contains(markup, `id="dashboard-max-concurrent"`) ||
+		!strings.Contains(markup, `id="dashboard-time-saved"`) ||
+		!strings.Contains(markup, `id="dashboard-workflow-times"`) ||
+		!strings.Contains(markup, `id="dashboard-agent-times"`) ||
 		!strings.Contains(markup, `id="dashboard-task-chart"`) {
 		t.Fatalf("expected index html to render the dashboard stats panel")
 	}
@@ -273,8 +276,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, `task-empty-chip`) {
 		t.Fatalf("expected index html to remove empty queue stage chips")
 	}
-	if !strings.Contains(markup, `id="prompt-panel-title" class="panel-section-title">Prompt</span>`) {
-		t.Fatalf("expected index html to label the builder mode as Prompt")
+	if !strings.Contains(markup, `id="prompt-panel-title" class="panel-section-title prompt-title-breadcrumb"`) ||
+		!strings.Contains(markup, `data-prompt-title-mode="builder">Prompt</span><span class="prompt-title-mode-divider" aria-hidden="true">|</span><span class="prompt-title-mode" data-prompt-title-mode="library">Library</span><span class="prompt-title-mode-divider" aria-hidden="true">|</span><span class="prompt-title-mode" data-prompt-title-mode="json">JSON</span>`) {
+		t.Fatalf("expected index html to label Studio modes as Prompt|Library|JSON")
 	}
 	if !strings.Contains(markup, `setPromptMode(promptModeFromHash() || "builder");`) {
 		t.Fatalf("expected index html to default Studio to the Prompt view")
@@ -1396,8 +1400,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `aria-label="Minimize Studio panel"`) || !strings.Contains(markup, `title="Minimize Studio panel">▾</button>`) {
 		t.Fatalf("expected index html to initialize the studio toggle as an arrow minimize control")
 	}
-	if !strings.Contains(markup, `id="prompt-panel-title" class="panel-section-title">Prompt</span>`) {
-		t.Fatalf("expected index html to render the prompt panel under a Prompt heading by default")
+	if !strings.Contains(markup, `id="prompt-panel-title" class="panel-section-title prompt-title-breadcrumb"`) {
+		t.Fatalf("expected index html to render compact Studio mode heading")
 	}
 	if !strings.Contains(markup, "library-task-option-subtitle") {
 		t.Fatalf("expected index html to include library task subtitles")
@@ -1525,9 +1529,6 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `activatePromptMode("json");`) {
 		t.Fatalf("expected bottom dock Library and JSON controls to activate their Studio views through the shared mode path")
 	}
-	if !strings.Contains(markup, "function promptModeTitle(mode)") {
-		t.Fatalf("expected index html to include promptModeTitle helper")
-	}
 	if !strings.Contains(markup, `let mode = display === "releases" || display === "dashboard" || display === "chat" ? display : "studio";`) ||
 		!strings.Contains(markup, `if (mode === "chat" && !state.githubReposReady) {`) ||
 		!strings.Contains(markup, `appLayout.hidden = false;`) ||
@@ -1535,8 +1536,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `const showTaskPanel = state.appDisplay === "studio" || state.appDisplay === "chat";`) {
 		t.Fatalf("expected index html to switch main views while hiding Current Work on dashboard and releases")
 	}
-	if !strings.Contains(markup, `promptPanelTitle.textContent = promptModeTitle(state.promptMode);`) {
-		t.Fatalf("expected index html to update the panel heading when the prompt mode changes")
+	if !strings.Contains(markup, `function syncPromptTitleModes()`) ||
+		!strings.Contains(markup, `item.classList.toggle("active", String(item.dataset.promptTitleMode || "") === state.promptMode);`) {
+		t.Fatalf("expected index html to update the compact Studio mode heading when the prompt mode changes")
 	}
 	if !strings.Contains(markup, `id="prompt-mode-builder" class="prompt-mode-link active" href="#studio-builder" aria-selected="true"`) {
 		t.Fatalf("expected builder mode to render as an anchor-style control inside the shared segmented dock")
@@ -1945,7 +1947,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(markup, "function clipboardPngFiles(event)") ||
 		!strings.Contains(markup, "prompt.addEventListener(\"paste\", handleChatRepoImagePaste);") ||
-		!strings.Contains(markup, "pasteTarget.className = \"prompt-control prompt-action-paste chat-repo-image-paste\"") {
+		!strings.Contains(markup, "pasteTarget.className = \"prompt-control prompt-action-paste chat-repo-image-paste\"") ||
+		!strings.Contains(markup, "imageActions.className = \"chat-repo-image-actions\"") ||
+		!strings.Contains(markup, "imageActions.append(pasteTarget, submitStatus);") {
 		t.Fatalf("expected chat repository prompts to accept pasted screenshots")
 	}
 	if !strings.Contains(markup, "images: promptImages,") ||
@@ -2536,6 +2540,13 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		!strings.Contains(css, "width: min(var(--hub-page-width), 100%);") ||
 		!strings.Contains(css, "width: min(var(--hub-page-width), calc(100vw - 32px));") {
 		t.Fatalf("expected stylesheet to define shared app and dashboard page widths")
+	}
+	if !strings.Contains(css, ".app.dashboard-app {\n  width: 100%;\n  max-width: 1500px;\n  padding: 20px 20px var(--hub-content-bottom-padding);") ||
+		!strings.Contains(css, ".site-page {\n  width: min(var(--hub-page-width), calc(100vw - 32px));\n  min-height: 100vh;\n  margin: 0 auto;\n  padding: 28px 0 var(--hub-content-bottom-padding);") {
+		t.Fatalf("expected app and standalone site pages to reserve vertical space below content for the floating bottom dock")
+	}
+	if !strings.Contains(css, "@media (max-width: 640px) {\n  .site-page {\n    width: min(100% - 24px, var(--hub-page-width));\n    padding: 20px 0 var(--hub-content-bottom-padding);") {
+		t.Fatalf("expected mobile site pages to preserve floating dock clearance")
 	}
 	if !strings.Contains(css, ".prompt-select-action-wrap") || !strings.Contains(css, ".prompt-history-delete") {
 		t.Fatalf("expected stylesheet to include inline delete controls for repository and reviewer history selects")

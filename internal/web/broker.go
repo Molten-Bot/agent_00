@@ -66,6 +66,8 @@ type Task struct {
 	Prompt            string       `json:"prompt,omitempty"`
 	PromptIsUserInput bool         `json:"prompt_is_user_input"`
 	Skill             string       `json:"skill,omitempty"`
+	Workflow          string       `json:"workflow,omitempty"`
+	AgentHarness      string       `json:"agent_harness,omitempty"`
 	Repo              string       `json:"repo,omitempty"`
 	Repos             []string     `json:"repos,omitempty"`
 	BaseBranch        string       `json:"base_branch,omitempty"`
@@ -79,6 +81,7 @@ type Task struct {
 	Error             string       `json:"error,omitempty"`
 	StartedAt         string       `json:"started_at"`
 	UpdatedAt         string       `json:"updated_at"`
+	DurationSeconds   float64      `json:"duration_seconds,omitempty"`
 	CanRerun          bool         `json:"can_rerun,omitempty"`
 	Controls          TaskControls `json:"controls,omitempty"`
 	Logs              []TaskLog    `json:"logs"`
@@ -114,16 +117,30 @@ type ResourceMetrics struct {
 
 // DashboardStats captures in-memory run stats for the monitor dashboard.
 type DashboardStats struct {
-	TotalTasks             int     `json:"total_tasks"`
+	TotalTasks             int              `json:"total_tasks"`
+	ActiveTasks            int              `json:"active_tasks"`
+	CompletedTasks         int              `json:"completed_tasks"`
+	FailedTasks            int              `json:"failed_tasks"`
+	MaxConcurrentTasks     int              `json:"max_concurrent_tasks"`
+	TotalSavedSeconds      float64          `json:"total_saved_seconds"`
+	SuccessRate            float64          `json:"success_rate"`
+	AverageDurationSeconds float64          `json:"average_duration_seconds"`
+	VelocityPerHour        float64          `json:"velocity_per_hour"`
+	ThroughputPerHour      float64          `json:"throughput_per_hour"`
+	UpdatedAt              string           `json:"updated_at,omitempty"`
+	WorkflowTimes          []TimeStatsGroup `json:"workflow_times,omitempty"`
+	AgentTimes             []TimeStatsGroup `json:"agent_times,omitempty"`
+}
+
+// TimeStatsGroup captures observed runtime and saved time for one workflow or agent.
+type TimeStatsGroup struct {
+	Name                   string  `json:"name"`
+	Tasks                  int     `json:"tasks"`
 	ActiveTasks            int     `json:"active_tasks"`
 	CompletedTasks         int     `json:"completed_tasks"`
-	FailedTasks            int     `json:"failed_tasks"`
-	MaxConcurrentTasks     int     `json:"max_concurrent_tasks"`
-	SuccessRate            float64 `json:"success_rate"`
+	TotalDurationSeconds   float64 `json:"total_duration_seconds"`
+	TotalSavedSeconds      float64 `json:"total_saved_seconds"`
 	AverageDurationSeconds float64 `json:"average_duration_seconds"`
-	VelocityPerHour        float64 `json:"velocity_per_hour"`
-	ThroughputPerHour      float64 `json:"throughput_per_hour"`
-	UpdatedAt              string  `json:"updated_at,omitempty"`
 }
 
 // Snapshot is the complete monitor payload for the web UI.
@@ -168,6 +185,8 @@ type taskState struct {
 	Prompt            string
 	PromptIsUserInput bool
 	Skill             string
+	Workflow          string
+	AgentHarness      string
 	Repo              string
 	Repos             []string
 	BaseBranch        string
@@ -187,6 +206,8 @@ type taskState struct {
 type taskAttemptState struct {
 	RequestID string
 	RerunOf   string
+	Workflow  string
+	Agent     string
 	Status    string
 	Error     string
 	StartedAt time.Time
@@ -291,15 +312,18 @@ func (b *Broker) Snapshot() Snapshot {
 	snapshot.Tasks = make([]Task, 0, len(tasks))
 	for _, t := range tasks {
 		_, canRerun := b.runConfigs[t.RequestID]
+		status := normalizeTaskTerminalStatus(t.Status)
 		snapshot.Tasks = append(snapshot.Tasks, Task{
 			RequestID:         t.RequestID,
 			Prompt:            t.Prompt,
 			PromptIsUserInput: t.PromptIsUserInput,
 			Skill:             t.Skill,
+			Workflow:          taskWorkflow(t),
+			AgentHarness:      taskAgentHarness(t),
 			Repo:              t.Repo,
 			Repos:             append([]string(nil), t.Repos...),
 			BaseBranch:        t.BaseBranch,
-			Status:            normalizeTaskTerminalStatus(t.Status),
+			Status:            status,
 			Stage:             t.Stage,
 			StageStatus:       t.StageStatus,
 			ExitCode:          t.ExitCode,
@@ -309,6 +333,7 @@ func (b *Broker) Snapshot() Snapshot {
 			Error:             t.Error,
 			StartedAt:         t.StartedAt.UTC().Format(time.RFC3339Nano),
 			UpdatedAt:         t.UpdatedAt.UTC().Format(time.RFC3339Nano),
+			DurationSeconds:   taskDuration(t.StartedAt, t.UpdatedAt, now, status).Seconds(),
 			CanRerun:          canRerun,
 			Logs:              append([]TaskLog(nil), t.Logs...),
 		})
@@ -341,15 +366,18 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		return Task{}, false
 	}
 	_, canRerun := b.runConfigs[requestID]
+	status := normalizeTaskTerminalStatus(t.Status)
 	return Task{
 		RequestID:         t.RequestID,
 		Prompt:            t.Prompt,
 		PromptIsUserInput: t.PromptIsUserInput,
 		Skill:             t.Skill,
+		Workflow:          taskWorkflow(t),
+		AgentHarness:      taskAgentHarness(t),
 		Repo:              t.Repo,
 		Repos:             append([]string(nil), t.Repos...),
 		BaseBranch:        t.BaseBranch,
-		Status:            normalizeTaskTerminalStatus(t.Status),
+		Status:            status,
 		Stage:             t.Stage,
 		StageStatus:       t.StageStatus,
 		ExitCode:          t.ExitCode,
@@ -359,6 +387,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		Error:             t.Error,
 		StartedAt:         t.StartedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt:         t.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		DurationSeconds:   taskDuration(t.StartedAt, t.UpdatedAt, now, status).Seconds(),
 		CanRerun:          canRerun,
 		Logs:              append([]TaskLog(nil), t.Logs...),
 	}, true
@@ -378,6 +407,8 @@ func (b *Broker) RecordTaskRunConfig(requestID string, runConfigJSON []byte) {
 	prompt := promptFromRunConfigJSON(cfgCopy)
 	baseBranch := branchFromRunConfigJSON(cfgCopy)
 	repos := reposFromRunConfigJSON(cfgCopy)
+	workflow := workflowFromRunConfigJSON(cfgCopy)
+	agentHarness := agentHarnessFromRunConfigJSON(cfgCopy)
 	now := b.now().UTC()
 
 	b.mu.Lock()
@@ -396,6 +427,8 @@ func (b *Broker) RecordTaskRunConfig(requestID string, runConfigJSON []byte) {
 			RequestID:         requestID,
 			Prompt:            prompt,
 			PromptIsUserInput: promptIsUserInputForTask(requestID, prompt),
+			Workflow:          workflow,
+			AgentHarness:      agentHarness,
 			Repo:              firstRepo(repos),
 			Repos:             append([]string(nil), repos...),
 			BaseBranch:        baseBranch,
@@ -407,7 +440,7 @@ func (b *Broker) RecordTaskRunConfig(requestID string, runConfigJSON []byte) {
 			UpdatedAt:         now,
 		}
 		b.tasks[requestID] = t
-		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, now)
+		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, now)
 		changed = true
 	}
 	if prompt != "" {
@@ -422,6 +455,14 @@ func (b *Broker) RecordTaskRunConfig(requestID string, runConfigJSON []byte) {
 				changed = true
 			}
 		}
+	}
+	if workflow != "" && t != nil && t.Workflow != workflow {
+		t.Workflow = workflow
+		changed = true
+	}
+	if agentHarness != "" && t != nil && t.AgentHarness != agentHarness {
+		t.AgentHarness = agentHarness
+		changed = true
 	}
 	if len(repos) > 0 && t != nil {
 		if !sameStringSlice(t.Repos, repos) {
@@ -469,6 +510,8 @@ func (b *Broker) RecordRejectedPromptSubmission(runConfigJSON []byte, status str
 	repos := reposFromRunConfigJSON(runConfigJSON)
 	baseBranch := branchFromRunConfigJSON(runConfigJSON)
 	prompt := promptFromRunConfigJSON(runConfigJSON)
+	workflow := workflowFromRunConfigJSON(runConfigJSON)
+	agentHarness := agentHarnessFromRunConfigJSON(runConfigJSON)
 	errText := strings.TrimSpace(errorText(err))
 	if errText == "" {
 		errText = "prompt submission failed"
@@ -484,6 +527,8 @@ func (b *Broker) RecordRejectedPromptSubmission(runConfigJSON []byte, status str
 		RequestID:         requestID,
 		Prompt:            prompt,
 		PromptIsUserInput: promptIsUserInputForTask(requestID, prompt),
+		Workflow:          workflow,
+		AgentHarness:      agentHarness,
 		Repo:              firstRepo(repos),
 		Repos:             append([]string(nil), repos...),
 		BaseBranch:        baseBranch,
@@ -503,7 +548,7 @@ func (b *Broker) RecordRejectedPromptSubmission(runConfigJSON []byte, status str
 		},
 	}
 	b.tasks[requestID] = t
-	b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, now)
+	b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, now)
 	b.notifySubscribersLocked()
 	return requestID
 }
@@ -523,6 +568,8 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 		}
 		seen[t.RequestID] = taskAttemptState{
 			RequestID: t.RequestID,
+			Workflow:  taskWorkflow(t),
+			Agent:     taskAgentHarness(t),
 			Status:    normalizeTaskTerminalStatus(t.Status),
 			Error:     strings.TrimSpace(t.Error),
 			StartedAt: t.StartedAt,
@@ -552,6 +599,8 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 	var totalDuration time.Duration
 	durationCount := 0
 	successfulTerminals := 0
+	workflowGroups := map[string]*TimeStatsGroup{}
+	agentGroups := map[string]*TimeStatsGroup{}
 	for _, attempt := range seen {
 		startedAt := attempt.StartedAt
 		updatedAt := attempt.UpdatedAt
@@ -572,9 +621,16 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 			stats.FailedTasks++
 		}
 		if isCompletedTaskStatus(status) && !startedAt.IsZero() && !updatedAt.IsZero() && !updatedAt.Before(startedAt) {
-			totalDuration += updatedAt.Sub(startedAt)
+			duration := updatedAt.Sub(startedAt)
+			totalDuration += duration
 			durationCount++
+			if isSuccessfulTaskStatus(status) {
+				stats.TotalSavedSeconds += duration.Seconds()
+			}
 		}
+		duration := taskDuration(startedAt, updatedAt, now, status)
+		addTimeStatsGroup(workflowGroups, normalizedGroupName(attempt.Workflow, "Ad Hoc Prompt"), status, duration)
+		addTimeStatsGroup(agentGroups, normalizedGroupName(attempt.Agent, "Unknown Agent"), status, duration)
 	}
 	terminalTasks := stats.CompletedTasks + stats.FailedTasks
 	if terminalTasks > 0 {
@@ -591,6 +647,8 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 		stats.VelocityPerHour = float64(stats.TotalTasks) / elapsedHours
 		stats.ThroughputPerHour = float64(stats.CompletedTasks) / elapsedHours
 	}
+	stats.WorkflowTimes = sortedTimeStatsGroups(workflowGroups)
+	stats.AgentTimes = sortedTimeStatsGroups(agentGroups)
 	return stats
 }
 
@@ -619,6 +677,87 @@ func isFailedTaskStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func taskDuration(startedAt, updatedAt, now time.Time, status string) time.Duration {
+	if startedAt.IsZero() {
+		return 0
+	}
+	end := updatedAt
+	if !isCompletedTaskStatus(status) {
+		end = now
+	}
+	if end.IsZero() || end.Before(startedAt) {
+		return 0
+	}
+	return end.Sub(startedAt)
+}
+
+func taskWorkflow(t *taskState) string {
+	if t == nil {
+		return ""
+	}
+	return firstNonEmpty(t.Workflow, t.Skill)
+}
+
+func taskAgentHarness(t *taskState) string {
+	if t == nil {
+		return ""
+	}
+	return firstNonEmpty(t.AgentHarness, agentHarnessFromStage(t.Stage))
+}
+
+func addTimeStatsGroup(groups map[string]*TimeStatsGroup, name, status string, duration time.Duration) {
+	if groups == nil {
+		return
+	}
+	name = normalizedGroupName(name, "Unknown")
+	group := groups[name]
+	if group == nil {
+		group = &TimeStatsGroup{Name: name}
+		groups[name] = group
+	}
+	group.Tasks++
+	if isActiveTaskStatus(status) {
+		group.ActiveTasks++
+	}
+	if isSuccessfulTaskStatus(status) {
+		group.CompletedTasks++
+		group.TotalSavedSeconds += duration.Seconds()
+	}
+	group.TotalDurationSeconds += duration.Seconds()
+	completed := group.Tasks - group.ActiveTasks
+	if completed > 0 {
+		group.AverageDurationSeconds = group.TotalDurationSeconds / float64(group.Tasks)
+	}
+}
+
+func sortedTimeStatsGroups(groups map[string]*TimeStatsGroup) []TimeStatsGroup {
+	if len(groups) == 0 {
+		return nil
+	}
+	out := make([]TimeStatsGroup, 0, len(groups))
+	for _, group := range groups {
+		if group == nil {
+			continue
+		}
+		out = append(out, *group)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].TotalSavedSeconds == out[j].TotalSavedSeconds {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].TotalSavedSeconds > out[j].TotalSavedSeconds
+	})
+	return out
+}
+
+func normalizedGroupName(name, fallback string) string {
+	name = strings.TrimSpace(name)
+	if name != "" {
+		return name
+	}
+	return fallback
 }
 
 func (b *Broker) taskBaseBranchLocked(requestID string) string {
@@ -730,7 +869,7 @@ func (b *Broker) RecordTaskRerunAttempt(rerunOf, requestID string) {
 	if root == "" {
 		root = rerunOf
 	}
-	b.recordTaskAttemptLocked(root, requestID, rerunOf, "queued", "", now)
+	b.recordTaskAttemptLocked(root, requestID, rerunOf, "queued", "", "", "", now)
 	b.notifySubscribersLocked()
 }
 
@@ -815,6 +954,12 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 			existing.Prompt = b.taskPromptLocked(requestID)
 			existing.PromptIsUserInput = promptIsUserInputForTask(requestID, existing.Prompt)
 		}
+		if existing.Workflow == "" {
+			existing.Workflow = workflowFromRunConfigJSON(b.runConfigs[requestID])
+		}
+		if existing.AgentHarness == "" {
+			existing.AgentHarness = agentHarnessFromRunConfigJSON(b.runConfigs[requestID])
+		}
 		if existing.BaseBranch == "" {
 			existing.BaseBranch = b.taskBaseBranchLocked(requestID)
 		}
@@ -822,7 +967,7 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 			existing.Branch = b.taskInitialBranchLocked(requestID)
 		}
 		existing.UpdatedAt = now
-		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", existing.Status, existing.Error, now)
+		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", existing.Status, existing.Error, existing.Workflow, existing.AgentHarness, now)
 		return existing
 	}
 
@@ -831,6 +976,8 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 		RequestID:         requestID,
 		Prompt:            prompt,
 		PromptIsUserInput: promptIsUserInputForTask(requestID, prompt),
+		Workflow:          workflowFromRunConfigJSON(b.runConfigs[requestID]),
+		AgentHarness:      agentHarnessFromRunConfigJSON(b.runConfigs[requestID]),
 		BaseBranch:        b.taskBaseBranchLocked(requestID),
 		Branch:            b.taskInitialBranchLocked(requestID),
 		Status:            "pending",
@@ -838,14 +985,14 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 		UpdatedAt:         now,
 	}
 	b.tasks[requestID] = t
-	b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, now)
+	b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, now)
 	return t
 }
 
 func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[string]string, now time.Time) {
 	defer func() {
 		if t != nil {
-			b.recordTaskAttemptLocked(b.taskAttemptRootLocked(t.RequestID), t.RequestID, "", t.Status, t.Error, now)
+			b.recordTaskAttemptLocked(b.taskAttemptRootLocked(t.RequestID), t.RequestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, now)
 		}
 	}()
 
@@ -854,6 +1001,8 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 	if strings.HasPrefix(line, "dispatch status=start") {
 		t.Status = "running"
 		t.Skill = firstNonEmpty(t.Skill, fields["skill"])
+		t.Workflow = firstNonEmpty(t.Workflow, workflowFromFields(fields))
+		t.AgentHarness = firstNonEmpty(t.AgentHarness, agentHarnessFromFields(fields))
 		t.Repos = appendNonEmptyUnique(t.Repos, reposFromFields(fields)...)
 		if len(t.Repos) > 0 {
 			t.Repo = t.Repos[0]
@@ -953,6 +1102,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 	if strings.HasPrefix(line, "dispatch request_id=") {
 		if stage := fields["stage"]; stage != "" {
 			t.Stage = stage
+			t.AgentHarness = firstNonEmpty(t.AgentHarness, agentHarnessFromStage(stage))
 		}
 		if stageStatus := fields["status"]; stageStatus != "" {
 			t.StageStatus = stageStatus
@@ -1024,7 +1174,7 @@ func (b *Broker) taskAttemptRootLocked(requestID string) string {
 	return requestID
 }
 
-func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errText string, now time.Time) {
+func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errText, workflow, agent string, now time.Time) {
 	root = strings.TrimSpace(root)
 	requestID = strings.TrimSpace(requestID)
 	if root == "" {
@@ -1046,6 +1196,8 @@ func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errTe
 	}
 	errText = strings.TrimSpace(errText)
 	rerunOf = strings.TrimSpace(rerunOf)
+	workflow = strings.TrimSpace(workflow)
+	agent = strings.TrimSpace(agent)
 
 	attempts := b.attempts[root]
 	for i := range attempts {
@@ -1054,6 +1206,12 @@ func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errTe
 		}
 		if rerunOf != "" {
 			attempts[i].RerunOf = rerunOf
+		}
+		if workflow != "" {
+			attempts[i].Workflow = workflow
+		}
+		if agent != "" {
+			attempts[i].Agent = agent
 		}
 		attempts[i].Status = status
 		attempts[i].Error = errText
@@ -1064,6 +1222,8 @@ func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errTe
 	b.attempts[root] = append(attempts, taskAttemptState{
 		RequestID: requestID,
 		RerunOf:   rerunOf,
+		Workflow:  workflow,
+		Agent:     agent,
 		Status:    status,
 		Error:     errText,
 		StartedAt: now,
@@ -1388,6 +1548,29 @@ func reposFromFields(fields map[string]string) []string {
 	return appendNonEmptyUnique(nil, merged...)
 }
 
+func workflowFromFields(fields map[string]string) string {
+	if fields == nil {
+		return ""
+	}
+	return firstNonEmpty(fields["workflow"], fields["library_task"], fields["libraryTaskName"], fields["skill"])
+}
+
+func agentHarnessFromFields(fields map[string]string) string {
+	if fields == nil {
+		return ""
+	}
+	return firstNonEmpty(fields["agent_harness"], fields["agentHarness"], agentHarnessFromStage(fields["stage"]))
+}
+
+func agentHarnessFromStage(stage string) string {
+	switch strings.ToLower(strings.TrimSpace(stage)) {
+	case "codex", "claude", "auggie", "pi", "opencode":
+		return strings.ToLower(strings.TrimSpace(stage))
+	default:
+		return ""
+	}
+}
+
 func taskPRURLFromFields(fields map[string]string) string {
 	if fields == nil {
 		return ""
@@ -1556,6 +1739,35 @@ func branchFromRunConfigJSON(runConfigJSON []byte) string {
 		return ""
 	}
 	return firstNonEmpty(raw.BaseBranch, raw.Branch)
+}
+
+func workflowFromRunConfigJSON(runConfigJSON []byte) string {
+	if len(runConfigJSON) == 0 {
+		return ""
+	}
+	var raw struct {
+		LibraryTaskName      string `json:"libraryTaskName"`
+		LibraryTaskNameLower string `json:"librarytaskname"`
+		Skill                string `json:"skill"`
+	}
+	if err := json.Unmarshal(runConfigJSON, &raw); err != nil {
+		return ""
+	}
+	return firstNonEmpty(raw.LibraryTaskName, raw.LibraryTaskNameLower, raw.Skill)
+}
+
+func agentHarnessFromRunConfigJSON(runConfigJSON []byte) string {
+	if len(runConfigJSON) == 0 {
+		return ""
+	}
+	var raw struct {
+		AgentHarness      string `json:"agentHarness"`
+		AgentHarnessSnake string `json:"agent_harness"`
+	}
+	if err := json.Unmarshal(runConfigJSON, &raw); err != nil {
+		return ""
+	}
+	return firstNonEmpty(raw.AgentHarness, raw.AgentHarnessSnake)
 }
 
 func firstRepo(repos []string) string {

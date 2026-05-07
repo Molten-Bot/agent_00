@@ -349,7 +349,7 @@ button {
 .app.dashboard-app {
   width: 100%;
   max-width: 1500px;
-  padding: 20px;
+  padding: 20px 20px var(--hub-content-bottom-padding);
   gap: 16px;
 }
 
@@ -1016,7 +1016,7 @@ body .right-col.prompt-collapsed.task-list-hidden {
 }
 
 .prompt-titlebar .panel-header-copy {
-  grid-template-columns: max-content max-content;
+  grid-template-columns: minmax(0, 1fr);
   column-gap: 0;
 }
 
@@ -1036,11 +1036,34 @@ body .right-col.prompt-collapsed.task-list-hidden {
   text-transform: uppercase;
 }
 
-#prompt-panel-title::before {
-  content: "/";
-  margin-inline: 8px;
-  color: var(--text-muted);
-  font-weight: 600;
+.prompt-title-breadcrumb {
+  display: inline-flex;
+  align-items: baseline;
+  justify-self: start;
+  min-width: 0;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.prompt-title-separator {
+  margin-inline: 4px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.prompt-title-mode {
+  color: var(--muted);
+}
+
+.prompt-title-mode.active {
+  color: var(--text);
+}
+
+.prompt-title-mode-divider {
+  color: var(--muted);
+  margin-inline: 0;
+  font-weight: 700;
 }
 
 .prompt-titlebar .panel-section-copy {
@@ -2761,7 +2784,7 @@ select.prompt-control {
   width: min(var(--hub-page-width), calc(100vw - 32px));
   min-height: 100vh;
   margin: 0 auto;
-  padding: 28px 0;
+  padding: 28px 0 var(--hub-content-bottom-padding);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 24px;
@@ -3011,18 +3034,33 @@ select.prompt-control {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--running) 18%, transparent);
 }
 
+.chat-repo-image-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .chat-repo-image-paste {
+  flex: 0 1 auto;
+  width: max-content;
+  max-width: 100%;
   min-height: 36px;
-  padding-block: 0;
+  padding: 0 12px;
   font-size: 0.86rem;
 }
 
 .chat-repo-submit-status {
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 1.2em;
   color: var(--muted);
   font-size: 0.8rem;
   font-weight: 800;
   line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-repo-submit-status[data-tone="ok"] {
@@ -3122,12 +3160,13 @@ select.prompt-control {
 
 .dashboard-stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 12px;
 }
 
 .dashboard-stat-card,
-.dashboard-chart-shell {
+.dashboard-chart-shell,
+.dashboard-time-panel {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-control-bg-strong);
@@ -3184,6 +3223,55 @@ select.prompt-control {
   gap: 12px;
 }
 
+.dashboard-time-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dashboard-time-panel {
+  display: grid;
+  gap: 12px;
+  min-height: 180px;
+  padding: 16px;
+}
+
+.dashboard-time-list {
+  display: grid;
+  gap: 10px;
+}
+
+.dashboard-time-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+}
+
+.dashboard-time-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-time-meta,
+.dashboard-time-empty {
+  color: var(--meta);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.dashboard-time-empty {
+  margin: 0;
+}
+
 #dashboard-task-chart {
   width: 100% !important;
   height: 100% !important;
@@ -3191,10 +3279,16 @@ select.prompt-control {
   max-height: 100%;
 }
 
+@media (max-width: 980px) {
+  .dashboard-stats-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 640px) {
   .site-page {
     width: min(100% - 24px, var(--hub-page-width));
-    padding: 20px 0;
+    padding: 20px 0 var(--hub-content-bottom-padding);
     gap: 18px;
   }
 
@@ -3237,6 +3331,14 @@ select.prompt-control {
   }
 
   .dashboard-stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-time-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-time-row {
     grid-template-columns: 1fr;
   }
 }
