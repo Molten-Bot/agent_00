@@ -474,6 +474,7 @@
       if (!hubLogoLink) return;
       const label = connected ? "Open Molten Hub" : "Connect to Molten Hub";
       hubLogoLink.href = href || (connected ? HUB_DASHBOARD_URL : HUB_LOGIN_URL);
+      hubLogoLink.classList.toggle("hidden", connected);
       hubLogoLink.classList.toggle("hub-logo-link-online", connected);
       hubLogoLink.classList.toggle("hub-logo-link-offline", !connected);
       hubLogoLink.setAttribute("aria-label", label);
