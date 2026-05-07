@@ -2617,6 +2617,24 @@ select.prompt-control {
   gap: 10px;
 }
 
+.release-empty {
+  display: grid;
+  min-height: 84px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-glass-solid);
+  box-shadow: var(--shadow-sm);
+}
+
+.release-empty p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.98rem;
+  line-height: 1.55;
+}
+
 .release-card {
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr);

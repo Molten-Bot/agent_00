@@ -2070,7 +2070,7 @@ func TestHandlerIndexIncludesClaudeBrowserCodeFlow(t *testing.T) {
 	}
 }
 
-func TestHandlerServesReleasesWithIconStatuses(t *testing.T) {
+func TestHandlerServesReleasesWithoutDefaultEntries(t *testing.T) {
 	t.Parallel()
 
 	srv := NewServer("", NewBroker())
@@ -2104,16 +2104,19 @@ func TestHandlerServesReleasesWithIconStatuses(t *testing.T) {
 		!strings.Contains(markup, `fallbackTimer = window.setTimeout(navigate, 1200);`) {
 		t.Fatalf("expected releases html to track header home CTA clicks before navigation")
 	}
-	if !strings.Contains(markup, `class="release-change-status release-change-status-improved" title="Improved" aria-label="Improved"`) ||
-		!strings.Contains(markup, `data-lucide="trending-up"`) {
-		t.Fatalf("expected improved release changes to use icon status with hover text")
+	if !strings.Contains(markup, `class="release-empty" aria-label="No releases"`) ||
+		!strings.Contains(markup, `No releases yet.`) {
+		t.Fatalf("expected releases html to render an empty state")
 	}
-	if !strings.Contains(markup, `class="release-change-status release-change-status-fixed" title="Fixed" aria-label="Fixed"`) ||
-		!strings.Contains(markup, `data-lucide="wrench"`) {
-		t.Fatalf("expected fixed release changes to use icon status with hover text")
+	defaultEntries := []string{
+		"Refresh task cards so change summaries scan faster in narrow views.",
+		"Polish release notes presentation for smaller screens.",
+		"Preserve change status reference without showing text badges.",
 	}
-	if strings.Contains(markup, `>IMPROVED<`) || strings.Contains(markup, `>FIXED<`) {
-		t.Fatalf("expected release status labels to be icons instead of visible text badges")
+	for _, entry := range defaultEntries {
+		if strings.Contains(markup, entry) {
+			t.Fatalf("expected releases html to omit fake default entry %q", entry)
+		}
 	}
 }
 
