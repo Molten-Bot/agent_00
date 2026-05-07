@@ -1589,13 +1589,15 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		strings.Contains(markup, `Loading repositories...`) {
 		t.Fatalf("expected GitHub repository loading to stay out of Current Work and visible chat text")
 	}
-	if !strings.Contains(markup, `function submitChatRepoPrompt(repo, input, statusNode, images = [], setImages = null)`) ||
+	if !strings.Contains(markup, `function submitChatRepoPrompt(repo, input, statusNode, images = [], logNode = null, setImages = null)`) ||
 		!strings.Contains(markup, `const card = document.createElement("div");`) ||
 		!strings.Contains(markup, `card.setAttribute("role", "button");`) ||
 		!strings.Contains(markup, `card.setAttribute("aria-expanded", "false");`) ||
+		!strings.Contains(markup, `promptLog.className = "chat-repo-log";`) ||
+		!strings.Contains(markup, `appendChatRepoPromptMessage(repo, {`) ||
 		!strings.Contains(markup, `fetch("/api/local-prompt", {`) ||
 		!strings.Contains(markup, `payload.baseBranch = branch;`) {
-		t.Fatalf("expected index chat repositories to open prompt panels and submit repository tasks")
+		t.Fatalf("expected index chat repositories to open prompt panels, show prompt chat logs, and submit repository tasks")
 	}
 	if !strings.Contains(markup, `class="prompt-mode-link prompt-mode-link-logo"`) ||
 		!strings.Contains(markup, `src="/static/logos/github.svg"`) {
