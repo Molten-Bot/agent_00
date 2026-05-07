@@ -2920,11 +2920,44 @@ select.prompt-control {
   box-shadow: var(--shadow-sm);
 }
 
+.chat-repo-card-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  min-width: 0;
+}
+
 .chat-repo-card-title {
   overflow-wrap: anywhere;
   font-size: 1rem;
   font-weight: 850;
   line-height: 1.25;
+}
+
+.chat-repo-card-chat-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--running);
+  background: var(--surface-button-bg);
+  box-shadow: var(--surface-button-shadow);
+}
+
+.chat-repo-card-chat-icon svg {
+  width: 17px;
+  height: 17px;
+  stroke-width: 2.25;
+}
+
+.chat-repo-card:hover .chat-repo-card-chat-icon,
+.chat-repo-card:focus-visible .chat-repo-card-chat-icon,
+.chat-repo-card[aria-expanded="true"] .chat-repo-card-chat-icon {
+  border-color: var(--border-strong);
+  background: var(--accent-soft);
 }
 
 .chat-repo-card-description {

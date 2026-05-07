@@ -1947,10 +1947,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(markup, "function clipboardPngFiles(event)") ||
 		!strings.Contains(markup, "prompt.addEventListener(\"paste\", handleChatRepoImagePaste);") ||
+		!strings.Contains(markup, `chatIcon.className = "chat-repo-card-chat-icon";`) ||
+		!strings.Contains(markup, "chatIcon.innerHTML = `<i data-lucide=\"message-circle\" aria-hidden=\"true\"></i>`;") ||
+		!strings.Contains(markup, `const openPrompt = () => {`) ||
+		!strings.Contains(markup, `card.setAttribute("aria-expanded", "true");`) ||
 		!strings.Contains(markup, "pasteTarget.className = \"prompt-control prompt-action-paste chat-repo-image-paste\"") ||
 		!strings.Contains(markup, "imageActions.className = \"chat-repo-image-actions\"") ||
 		!strings.Contains(markup, "imageActions.append(pasteTarget, submitStatus);") {
-		t.Fatalf("expected chat repository prompts to accept pasted screenshots")
+		t.Fatalf("expected chat repository prompts to open from card/icon and accept pasted screenshots")
 	}
 	if !strings.Contains(markup, "images: promptImages,") ||
 		!strings.Contains(markup, "setImages([]);") {
@@ -2342,6 +2346,10 @@ func TestHandlerServesChatView(t *testing.T) {
 		`fetch("/api/github/repos", { cache: "no-store" })`,
 		`const card = document.createElement("div");`,
 		`card.setAttribute("role", "button");`,
+		`chatIcon.className = "chat-repo-card-chat-icon";`,
+		`chatIcon.innerHTML = '<i data-lucide="message-circle" aria-hidden="true"></i>';`,
+		`const openPrompt = () => {`,
+		`card.setAttribute("aria-expanded", "true");`,
 		`fetch("/api/local-prompt", {`,
 		`payload.baseBranch = branch;`,
 		`window.MoltenHubHeader.startConnectionStatus();`,
@@ -2553,6 +2561,11 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	}
 	if !strings.Contains(css, ".chat-repo-card[aria-expanded=\"true\"] {\n  grid-column: 1 / -1;") {
 		t.Fatalf("expected expanded chat repository cards to span the full repository grid width")
+	}
+	if !strings.Contains(css, ".chat-repo-card-head {") ||
+		!strings.Contains(css, ".chat-repo-card-chat-icon {") ||
+		!strings.Contains(css, ".chat-repo-card:hover .chat-repo-card-chat-icon,") {
+		t.Fatalf("expected stylesheet to render chat icons inside repository cards")
 	}
 	if !strings.Contains(css, ".hub-emoji-picker-panel-header") || !strings.Contains(css, ".hub-emoji-picker-grid") || !strings.Contains(css, ".hub-emoji-picker-option") {
 		t.Fatalf("expected stylesheet to include the refreshed emoji picker layout styles")
