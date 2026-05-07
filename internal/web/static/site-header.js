@@ -78,6 +78,51 @@
     }
   }
 
+  function formatCompactMetricNumber(value, suffix = "") {
+    if (!Number.isFinite(value) || value < 0) {
+      return "--";
+    }
+    if (value >= 100) {
+      return `${Math.round(value)}${suffix}`;
+    }
+    if (value >= 10) {
+      return `${Math.round(value * 10) / 10}${suffix}`;
+    }
+    if (value > 0 && value < 1) {
+      return `<1${suffix}`;
+    }
+    return `${Math.round(value)}${suffix}`;
+  }
+
+  function formatDiskThroughput(valueInMBs) {
+    if (!Number.isFinite(valueInMBs) || valueInMBs < 0) {
+      return { value: "--", unit: "MB/s" };
+    }
+    if (valueInMBs < 1) {
+      return {
+        value: formatCompactMetricNumber(valueInMBs * 1000),
+        unit: "KB/s",
+      };
+    }
+    if (valueInMBs >= 1000) {
+      return {
+        value: formatCompactMetricNumber(valueInMBs / 1000),
+        unit: "GB/s",
+      };
+    }
+    return {
+      value: formatCompactMetricNumber(valueInMBs),
+      unit: "MB/s",
+    };
+  }
+
+  function metricSeverityClass(value) {
+    if (!Number.isFinite(value) || value < 0) return "metric-icon-neutral";
+    if (value < 65) return "metric-icon-good";
+    if (value <= 85) return "metric-icon-warn";
+    return "metric-icon-bad";
+  }
+
   function headerTemplate() {
     return `
       <header class="header site-header">
@@ -174,6 +219,11 @@
       this.logoRotationPhase = 0;
       this.headerConfig = {};
       this.agentAuth = {};
+      this.resourceMetricVisible = {
+        cpu: false,
+        mem: false,
+        disk: false,
+      };
     }
 
     connectedCallback() {
@@ -199,6 +249,87 @@
       };
       this.agentAuth = auth && typeof auth === "object" ? auth : {};
       this.renderAgent();
+    }
+
+    resourceNodes() {
+      return {
+        item: this.querySelector("#resource-metrics-item"),
+        cpuChip: this.querySelector("#resource-cpu-chip"),
+        memChip: this.querySelector("#resource-mem-chip"),
+        diskChip: this.querySelector("#resource-disk-chip"),
+        cpuIcon: this.querySelector("#resource-cpu-icon"),
+        cpuText: this.querySelector("#resource-cpu-text"),
+        memIcon: this.querySelector("#resource-mem-icon"),
+        memText: this.querySelector("#resource-mem-text"),
+        diskIcon: this.querySelector("#resource-disk-icon"),
+        diskText: this.querySelector("#resource-metrics-text"),
+        diskUnit: this.querySelector("#resource-metrics-unit"),
+      };
+    }
+
+    setMetricIcon(iconNode, value) {
+      if (!iconNode) return;
+      iconNode.classList.remove("metric-icon-neutral", "metric-icon-good", "metric-icon-warn", "metric-icon-bad");
+      iconNode.classList.add(metricSeverityClass(value));
+    }
+
+    markMetricVisible(metric, value) {
+      if (Number.isFinite(value) && value > 0) {
+        this.resourceMetricVisible[metric] = true;
+      }
+      return this.resourceMetricVisible[metric] === true;
+    }
+
+    setMetricChipVisibility(showCPU, showMem, showDisk) {
+      const nodes = this.resourceNodes();
+      if (nodes.cpuChip) nodes.cpuChip.hidden = !showCPU;
+      if (nodes.memChip) nodes.memChip.hidden = !showMem;
+      if (nodes.diskChip) nodes.diskChip.hidden = !showDisk;
+      if (nodes.item) nodes.item.hidden = !(showCPU || showMem || showDisk);
+    }
+
+    setMetricText(cpu, mem, disk) {
+      const nodes = this.resourceNodes();
+      if (nodes.cpuText) nodes.cpuText.textContent = formatCompactMetricNumber(cpu, "%");
+      if (nodes.memText) nodes.memText.textContent = formatCompactMetricNumber(mem, "%");
+      if (nodes.diskText) {
+        const diskThroughput = formatDiskThroughput(disk);
+        nodes.diskText.textContent = diskThroughput.value;
+        if (nodes.diskUnit) {
+          nodes.diskUnit.textContent = diskThroughput.unit;
+        }
+      } else if (nodes.diskUnit) {
+        nodes.diskUnit.textContent = "MB/s";
+      }
+      this.setMetricIcon(nodes.cpuIcon, cpu);
+      this.setMetricIcon(nodes.memIcon, mem);
+      this.setMetricIcon(nodes.diskIcon, disk);
+    }
+
+    updateResourceMetrics(snapshot) {
+      const resources = snapshot && typeof snapshot.resources === "object" && snapshot.resources !== null
+        ? snapshot.resources
+        : null;
+      if (!resources) {
+        const showCPU = Boolean(this.resourceMetricVisible.cpu);
+        const showMem = Boolean(this.resourceMetricVisible.mem);
+        const showDisk = Boolean(this.resourceMetricVisible.disk);
+        this.setMetricChipVisibility(showCPU, showMem, showDisk);
+        this.setMetricText(NaN, NaN, NaN);
+        return;
+      }
+
+      const cpuRaw = Number(resources.cpu_percent);
+      const memRaw = Number(resources.memory_percent);
+      const diskRaw = Number(resources.disk_io_mb_s);
+      const cpu = Number.isFinite(cpuRaw) ? cpuRaw : 0;
+      const mem = Number.isFinite(memRaw) ? memRaw : 0;
+      const disk = Number.isFinite(diskRaw) ? diskRaw : 0;
+      const showCPU = this.markMetricVisible("cpu", cpu);
+      const showMem = this.markMetricVisible("mem", mem);
+      const showDisk = this.markMetricVisible("disk", disk);
+      this.setMetricChipVisibility(showCPU, showMem, showDisk);
+      this.setMetricText(showCPU ? cpu : NaN, showMem ? mem : NaN, showDisk ? disk : NaN);
     }
 
     logoNodes() {
@@ -287,6 +418,46 @@
     customElements.define("moltenhub-code-nav", MoltenHubCodeNav);
   }
 
+  let resourceMetricStream = null;
+
+  function updateResourceMetrics(snapshot) {
+    document.querySelectorAll("moltenhub-code-header").forEach((header) => {
+      if (typeof header.updateResourceMetrics === "function") {
+        header.updateResourceMetrics(snapshot);
+      }
+    });
+  }
+
+  async function loadResourceMetrics() {
+    const response = await fetch("/api/state", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`state http ${response.status}`);
+    }
+    updateResourceMetrics(await response.json());
+  }
+
+  function startResourceMetrics() {
+    void loadResourceMetrics().catch(() => {});
+    if (resourceMetricStream || typeof EventSource !== "function") {
+      return;
+    }
+    resourceMetricStream = new EventSource("/api/stream");
+    resourceMetricStream.onmessage = (event) => {
+      try {
+        updateResourceMetrics(JSON.parse(event.data));
+      } catch (_err) {
+        // Ignore malformed event packets.
+      }
+    };
+    resourceMetricStream.onerror = () => {
+      if (resourceMetricStream) {
+        resourceMetricStream.close();
+        resourceMetricStream = null;
+      }
+      window.setTimeout(startResourceMetrics, 1500);
+    };
+  }
+
   window.MoltenHubHeader = {
     update(config = {}, auth = {}) {
       document.querySelectorAll("moltenhub-code-header").forEach((header) => {
@@ -295,8 +466,13 @@
         }
       });
     },
+    updateResourceMetrics,
+    startResourceMetrics,
     agentAuthLabel,
     resolveAgentLogoURL,
+    formatCompactMetricNumber,
+    formatDiskThroughput,
+    metricSeverityClass,
     navItems: NAV_ITEMS,
   };
 })();

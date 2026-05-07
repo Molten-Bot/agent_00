@@ -52,6 +52,9 @@ var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype 
     {{.BottomDock}}
   </div>
   <script>
+    if (window.MoltenHubHeader && typeof window.MoltenHubHeader.startResourceMetrics === "function") {
+      window.MoltenHubHeader.startResourceMetrics();
+    }
     if (window.lucide) {
       window.lucide.createIcons();
     }

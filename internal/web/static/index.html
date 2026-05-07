@@ -4124,6 +4124,10 @@
     }
 
     function renderResourceMetrics(snapshot) {
+      if (window.MoltenHubHeader && typeof window.MoltenHubHeader.updateResourceMetrics === "function") {
+        window.MoltenHubHeader.updateResourceMetrics(snapshot);
+        return;
+      }
       const resources = snapshot && typeof snapshot.resources === "object" && snapshot.resources !== null
         ? snapshot.resources
         : null;
