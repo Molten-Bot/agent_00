@@ -450,7 +450,7 @@ func (s Server) renderSitePage(w http.ResponseWriter, data sitePageData) {
 		http.Error(w, "page is unavailable", http.StatusInternalServerError)
 		return
 	}
-	rendered := s.injectBottomDockComponent(page.Bytes())
+	rendered := s.injectBottomDockComponent(context.Background(), page.Bytes())
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

@@ -2919,6 +2919,11 @@
       return authHarness(current) === "pi" && isManualConfigureState(current) && !isGitHubTokenConfigureState(current);
     }
 
+    function isOpencodeConfigureState(auth) {
+      const current = auth && typeof auth === "object" ? auth : state.agentAuth;
+      return authHarness(current) === "opencode" && isManualConfigureState(current) && !isGitHubTokenConfigureState(current);
+    }
+
     function isClaudeGitHubConfigureState(auth) {
       const current = auth && typeof auth === "object" ? auth : state.agentAuth;
       return isManualConfigureState(current) && isGitHubTokenConfigureState(current);
@@ -3190,6 +3195,7 @@
       const requiresManualConfigure = isManualConfigureState(state.agentAuth);
       const needsHarnessSelection = isHarnessSelectionState(state.agentAuth);
       const needsAuggieConfigure = isAuggieConfigureState(state.agentAuth);
+      const needsOpencodeConfigure = isOpencodeConfigureState(state.agentAuth);
       const needsClaudeGitHubConfigure = isClaudeGitHubConfigureState(state.agentAuth);
       const needsClaudeCredentialsConfigure = isClaudeCredentialsConfigureState(state.agentAuth);
 
@@ -3250,6 +3256,8 @@
           agentAuthTitle.textContent = "Select Agent";
         } else if (needsAuggieConfigure) {
           agentAuthTitle.textContent = "Setup Auggie";
+        } else if (needsOpencodeConfigure) {
+          agentAuthTitle.textContent = "Setup Opencode";
         } else if (isPiConfigureState(state.agentAuth)) {
           agentAuthTitle.textContent = "Setup Pi";
         } else if (needsClaudeGitHubConfigure) {
@@ -3331,9 +3339,11 @@
       if (agentAuthConfigureCommand) {
         const fallbackCommand = needsAuggieConfigure
           ? "auggie token print"
-          : needsPiConfigure
-            ? "cat ~/.pi/agent/auth.json"
-            : "gh auth token";
+          : needsOpencodeConfigure
+            ? "opencode auth login"
+            : needsPiConfigure
+              ? "cat ~/.pi/agent/auth.json"
+              : "gh auth token";
         agentAuthConfigureCommand.textContent = state.agentAuth.configureCommand || fallbackCommand;
       }
       if (agentAuthConfigureCommandLabel) {
@@ -3352,6 +3362,8 @@
           agentAuthConfigureLabel.textContent = "Paste Claude credentials";
         } else if (needsPiConfigure) {
           agentAuthConfigureLabel.textContent = "Paste ~/.pi/agent/auth.json";
+        } else if (needsOpencodeConfigure) {
+          agentAuthConfigureLabel.textContent = "Configure Opencode locally";
         } else {
           agentAuthConfigureLabel.textContent = "Paste configuration value";
         }
@@ -3364,7 +3376,9 @@
             ? "Paste ~/.claude/.credentials.json contents or CLAUDE_CODE_OAUTH_TOKEN..."
             : needsPiConfigure
               ? "Paste ~/.pi/agent/auth.json contents..."
-              : "ghp_xxx";
+              : needsOpencodeConfigure
+                ? "Run opencode auth login or set provider credentials, then click Done."
+                : "ghp_xxx";
         const placeholder = state.agentAuth.configurePlaceholder || fallbackPlaceholder;
         agentAuthConfigureInput.placeholder = placeholder;
         agentAuthConfigureInput.classList.toggle("agent-auth-configure-input-github", needsClaudeGitHubConfigure);

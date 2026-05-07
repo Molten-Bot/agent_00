@@ -22,11 +22,11 @@ const defaultHarness = HarnessCodex
 var ErrPromptImagesUnsupported = errors.New("prompt images are unsupported for this agent harness")
 
 var harnessDisplayNames = map[string]string{
-	HarnessAuggie: "Auggie",
-	HarnessClaude: "Claude",
-	HarnessCodex:  "Codex",
+	HarnessAuggie:   "Auggie",
+	HarnessClaude:   "Claude",
+	HarnessCodex:    "Codex",
 	HarnessOpencode: "Opencode",
-	HarnessPi:     "Pi",
+	HarnessPi:       "Pi",
 }
 
 var promptImageHarnesses = map[string]struct{}{
