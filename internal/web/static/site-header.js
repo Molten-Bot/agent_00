@@ -78,10 +78,10 @@
     }
   }
 
-  function headerTemplate(homeHref) {
+  function headerTemplate() {
     return `
       <header class="header site-header">
-        <a class="brand-lockup site-header-home" href="${homeHref}" aria-label="Molten Hub Code home" data-site-header-home>
+        <a class="brand-lockup site-header-home" href="/" aria-label="Molten Hub Code home" data-site-header-home>
           <span class="brand-logo-group">
             <img
               id="moltenhub-logo"
@@ -154,8 +154,7 @@
 
     connectedCallback() {
       if (!this.firstElementChild) {
-        const homeHref = this.getAttribute("home-href") || "/";
-        this.innerHTML = headerTemplate(homeHref);
+        this.innerHTML = headerTemplate();
       }
       this.headerConfig = {
         agentHarness: this.getAttribute("agent-harness") || "codex",
