@@ -372,12 +372,18 @@ func (s Server) applyBottomDockHubState(ctx context.Context, dock []byte) []byte
 	if connectURL == "" {
 		connectURL = defaultHubSetupState().ConnectURL
 	}
+	dashboardURL := strings.TrimSpace(state.DashboardURL)
+	if dashboardURL == "" {
+		dashboardURL = defaultHubSetupState().DashboardURL
+	}
 	hubTitle := "Configure Molten Hub"
+	hubURL := connectURL
 	hubLinkClass := "prompt-mode-link prompt-mode-link-logo"
 	profileButtonAttr := " hidden"
 	plusClass := "hub-dock-plus"
 	if configured {
-		hubLinkClass = "prompt-mode-link prompt-mode-link-logo hidden"
+		hubTitle = "Open Molten Hub"
+		hubURL = dashboardURL
 		profileButtonAttr = ""
 		plusClass = "hub-dock-plus hidden"
 	}
@@ -389,7 +395,7 @@ func (s Server) applyBottomDockHubState(ctx context.Context, dock []byte) []byte
 	)
 	dock = bytes.Replace(dock,
 		[]byte(`href="https://molten.bot/login?target=hub"`),
-		[]byte(`href="`+template.HTMLEscapeString(connectURL)+`"`),
+		[]byte(`href="`+template.HTMLEscapeString(hubURL)+`"`),
 		1,
 	)
 	dock = bytes.Replace(dock,

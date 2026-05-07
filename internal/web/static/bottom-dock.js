@@ -7,6 +7,7 @@
   const HOME_PATH = "/";
   const HUB_PROFILE_DEEP_LINK_HASH = "#agent-profile";
   const HUB_LOGIN_URL = "https://molten.bot/login?target=hub";
+  const HUB_DASHBOARD_URL = "https://app.molten.bot/hub";
   const THEME_ICON_NAMES = {
     light: "sun",
     dark: "moon",
@@ -229,6 +230,7 @@
     const plus = document.getElementById("moltenbot-hub-plus");
     const profileButton = document.getElementById("moltenbot-hub-profile-button");
     const connectURL = String(hub && hub.connect_url || hub && hub.connectURL || HUB_LOGIN_URL).trim();
+    const dashboardURL = String(hub && hub.dashboard_url || hub && hub.dashboardURL || HUB_DASHBOARD_URL).trim();
 
     if (dockGroup) {
       dockGroup.setAttribute("data-configured", configured ? "true" : "false");
@@ -237,9 +239,9 @@
       plus.classList.toggle("hidden", configured);
     }
     if (hubLink) {
-      hubLink.classList.toggle("hidden", configured);
-      hubLink.href = connectURL || HUB_LOGIN_URL;
-      const title = "Configure Molten Hub";
+      hubLink.classList.remove("hidden");
+      hubLink.href = configured ? (dashboardURL || HUB_DASHBOARD_URL) : (connectURL || HUB_LOGIN_URL);
+      const title = configured ? "Open Molten Hub" : "Configure Molten Hub";
       hubLink.title = title;
       hubLink.setAttribute("aria-label", title);
     }

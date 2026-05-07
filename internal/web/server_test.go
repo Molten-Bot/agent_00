@@ -2678,6 +2678,7 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 		`startConnectionStatus`,
 		`const response = await fetch("/api/status", { cache: "no-store" });`,
 		`connectionStatusStream = new EventSource("/api/stream");`,
+		`hubLogoLink.classList.toggle("hidden", connected);`,
 		`setHubLogoLink(connected, logoTargetURL);`,
 		`${headerState.label} is now a 600LB Gorilla!`,
 	}
