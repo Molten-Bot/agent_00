@@ -31,6 +31,7 @@ const maxHubSetupConfigureBodyBytes = 1 << 20
 const streamSnapshotInterval = 120 * time.Millisecond
 const maxStreamTaskLogs = 500
 const showDashboardEnv = "SHOW_DASHBOARD"
+const bottomDockPlaceholder = "<!-- hub-bottom-dock -->"
 
 var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype html>
 <html lang="en" class="light">
@@ -331,6 +332,7 @@ func (s Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data = s.injectIndexConfig(data)
+	data = s.injectBottomDockComponent(data)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -348,10 +350,23 @@ func (s Server) handleReleases(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "releases page is unavailable", http.StatusInternalServerError)
 		return
 	}
+	data = s.injectBottomDockComponent(data)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(data)
+}
+
+func (s Server) injectBottomDockComponent(data []byte) []byte {
+	if !bytes.Contains(data, []byte(bottomDockPlaceholder)) {
+		return data
+	}
+	dock, err := fs.ReadFile(staticFiles, "static/bottom-dock.html")
+	if err != nil {
+		s.logf("hub.ui status=warn event=load_bottom_dock_component err=%q", err)
+		return data
+	}
+	return bytes.Replace(data, []byte(bottomDockPlaceholder), bytes.TrimSpace(dock), 1)
 }
 
 func (s Server) handleDashboard(w http.ResponseWriter, r *http.Request) {

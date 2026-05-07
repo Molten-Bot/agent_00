@@ -2581,7 +2581,7 @@ select.prompt-control {
 .releases-page {
   width: min(920px, calc(100vw - 32px));
   margin: 0 auto;
-  padding: 28px 0 56px;
+  padding: 28px 0 var(--hub-content-bottom-padding);
 }
 
 .releases-header {
