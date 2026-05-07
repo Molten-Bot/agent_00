@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -164,6 +165,7 @@ type GitHubRepo struct {
 	Private       bool   `json:"private"`
 	Language      string `json:"language,omitempty"`
 	UpdatedAt     string `json:"updated_at,omitempty"`
+	PushedAt      string `json:"pushed_at,omitempty"`
 }
 
 // HubSetupRequest captures the late-stage Hub connect modal payload.
@@ -1292,7 +1294,7 @@ func resolveAuthenticatedGitHubRepos(ctx context.Context, client *http.Client) (
 	}
 
 	var repos []GitHubRepo
-	nextURL := "https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=updated"
+	nextURL := "https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=pushed"
 	for nextURL != "" {
 		req, err := newGitHubAPIRequest(ctx, http.MethodGet, nextURL)
 		if err != nil {
@@ -1329,6 +1331,7 @@ func resolveAuthenticatedGitHubRepos(ctx context.Context, client *http.Client) (
 			Private       bool   `json:"private"`
 			Language      string `json:"language"`
 			UpdatedAt     string `json:"updated_at"`
+			PushedAt      string `json:"pushed_at"`
 		}
 		decodeErr := json.Unmarshal(bodyBytes, &body)
 		if decodeErr != nil && !errors.Is(decodeErr, io.EOF) {
@@ -1344,11 +1347,33 @@ func resolveAuthenticatedGitHubRepos(ctx context.Context, client *http.Client) (
 				Private:       repo.Private,
 				Language:      strings.TrimSpace(repo.Language),
 				UpdatedAt:     strings.TrimSpace(repo.UpdatedAt),
+				PushedAt:      strings.TrimSpace(repo.PushedAt),
 			})
 		}
 		nextURL = nextGitHubPageURL(resp.Header.Get("Link"))
 	}
+	sortGitHubReposByActivity(repos)
 	return repos, nil
+}
+
+func sortGitHubReposByActivity(repos []GitHubRepo) {
+	sort.SliceStable(repos, func(i, j int) bool {
+		left := githubRepoActivityTime(repos[i])
+		right := githubRepoActivityTime(repos[j])
+		if !left.Equal(right) {
+			return left.After(right)
+		}
+		return strings.ToLower(repos[i].FullName) < strings.ToLower(repos[j].FullName)
+	})
+}
+
+func githubRepoActivityTime(repo GitHubRepo) time.Time {
+	for _, value := range []string{repo.PushedAt, repo.UpdatedAt} {
+		if ts, err := time.Parse(time.RFC3339, strings.TrimSpace(value)); err == nil {
+			return ts
+		}
+	}
+	return time.Time{}
 }
 
 func nextGitHubPageURL(linkHeader string) string {
