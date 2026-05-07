@@ -3023,9 +3023,9 @@ select.prompt-control {
 .dashboard-display {
   display: grid;
   gap: 16px;
-  width: min(920px, 100%);
-  margin: 0 auto;
-  padding: 12px 0 var(--hub-content-bottom-padding);
+  width: 100%;
+  margin: 0;
+  padding: 0;
 }
 
 .dashboard-head {
@@ -3106,7 +3106,9 @@ select.prompt-control {
 
 .dashboard-chart-shell {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
+  height: 360px;
   min-height: 320px;
   padding: 16px;
 }
@@ -3119,7 +3121,10 @@ select.prompt-control {
 }
 
 #dashboard-task-chart {
-  min-height: 250px;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0;
+  max-height: 100%;
 }
 
 @media (max-width: 640px) {
