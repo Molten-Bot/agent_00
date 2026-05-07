@@ -15,53 +15,11 @@
   <script>
     window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"git@github.com:Molten-Bot/moltenhub-code.git","promptImageHarnesses":["codex","pi"]};
   </script>
-  <script>
-    (function configureTailwindRuntime() {
-      try {
-        const tw = window.tailwind || {};
-        window.tailwind = tw;
-        window.tailwind.config = {
-          theme: {
-            extend: {
-              colors: {
-                hub: {
-                  bg: "rgb(var(--hub-bg-rgb) / <alpha-value>)",
-                  panel: "rgb(var(--hub-panel-rgb) / <alpha-value>)",
-                  panelSoft: "rgb(var(--hub-panel-soft-rgb) / <alpha-value>)",
-                  border: "rgb(var(--hub-border-rgb) / <alpha-value>)",
-                  text: "rgb(var(--hub-text-rgb) / <alpha-value>)",
-                  muted: "rgb(var(--hub-muted-rgb) / <alpha-value>)",
-                  good: "rgb(var(--hub-good-rgb) / <alpha-value>)",
-                  warn: "rgb(var(--hub-warn-rgb) / <alpha-value>)",
-                  bad: "rgb(var(--hub-bad-rgb) / <alpha-value>)",
-                  running: "rgb(var(--hub-running-rgb) / <alpha-value>)",
-                  meta: "rgb(var(--hub-meta-rgb) / <alpha-value>)",
-                  accent: "rgb(var(--hub-accent-rgb) / <alpha-value>)"
-                }
-              },
-              fontFamily: {
-                sans: ["SF Pro", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "sans-serif"],
-                mono: ["ui-monospace", "SFMono-Regular", "Menlo", "Monaco", "monospace"]
-              },
-              borderRadius: {
-                md: "4px",
-                lg: "4px",
-                "2xl": "8px"
-              }
-            }
-          }
-        };
-      } catch (_err) {
-        // Keep UI booting even if the Tailwind runtime cannot be configured.
-      }
-    })();
-  </script>
-  <script src="https://cdn.tailwindcss.com" defer></script>
   <script src="/static/lucide.min.js"></script>
   <script src="/static/site-header.js"></script>
   <link rel="stylesheet" href="/static/style.css">
 </head>
-<body class="min-h-screen antialiased">
+<body>
   <div class="site-bg" aria-hidden="true">
     <canvas id="snowfall-canvas" class="snowfall-canvas"></canvas>
     <div class="glow glow-a"></div>
@@ -70,14 +28,14 @@
     <div class="grain"></div>
   </div>
 
-  <div class="app mx-auto grid w-full max-w-[1500px] gap-4 p-5">
+  <div class="app dashboard-app">
     <moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>
     <moltenhub-code-nav></moltenhub-code-nav>
 
-    <div class="layout min-h-[calc(100vh-130px)] max-[980px]:min-h-0">
-      <div class="right-col grid gap-4">
-        <section id="task-panel" class="panel brand-login-card-shell min-h-[220px] overflow-hidden rounded-md border border-hub-border bg-hub-panel bg-[linear-gradient(170deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01))]" aria-hidden="false">
-          <div class="panel-header flex items-center justify-between gap-2 border-b border-hub-border px-3.5 py-3 text-[0.92rem] font-semibold uppercase tracking-[0.03em]">
+    <div class="layout">
+      <div class="right-col">
+        <section id="task-panel" class="panel brand-login-card-shell" aria-hidden="false">
+          <div class="panel-header">
             <div class="panel-header-copy">
               <span id="task-panel-title" class="panel-section-title">Current Work</span>
             </div>
@@ -121,22 +79,22 @@
               </button>
             </div>
           </div>
-          <div class="scroll task-scroll h-[calc(100%-48px)] overflow-auto">
-            <div id="task-list" class="task-list grid gap-2 p-3"></div>
+          <div class="scroll task-scroll">
+            <div id="task-list" class="task-list"></div>
           </div>
         </section>
 
-        <section class="panel prompt-wrap brand-login-card-shell min-h-[220px] overflow-visible rounded-md border border-hub-border bg-hub-panel bg-[linear-gradient(170deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01))]">
-          <div class="panel-header prompt-titlebar flex items-center justify-between gap-2 border-b border-hub-border px-3.5 py-3 text-[0.92rem] font-semibold uppercase tracking-[0.03em]">
+        <section class="panel prompt-wrap brand-login-card-shell">
+          <div class="panel-header prompt-titlebar">
             <div class="panel-header-copy">
               <span id="prompt-panel-title" class="panel-section-title">Studio</span>
               <p id="prompt-panel-copy" class="panel-section-copy">Compose a repository run, start from a library task, or edit the raw JSON payload.</p>
             </div>
             <button id="prompt-visibility-toggle" class="prompt-visibility-toggle" type="button" aria-pressed="true" aria-label="Minimize Studio panel" title="Minimize Studio panel">▾</button>
           </div>
-          <form id="local-prompt-form" class="prompt-form grid gap-2.5 p-3">
+          <form id="local-prompt-form" class="prompt-form">
             <div class="prompt-compose-stack">
-              <div id="prompt-builder-panel" class="prompt-panel grid gap-2.5">
+              <div id="prompt-builder-panel" class="prompt-panel">
                 <div class="prompt-grid">
                   <label id="builder-repo-history-field" class="prompt-field prompt-field-repo-history">
                     <span class="prompt-label">Repository</span>
@@ -205,14 +163,14 @@
                   <span class="prompt-label">Prompt</span>
                   <textarea
                     id="builder-prompt-input"
-                    class="prompt-text prompt-control h-[calc(6*1.4em+18px)] min-h-[calc(6*1.4em+18px)] w-full resize-y rounded-md border border-hub-border p-2.5 font-mono text-[0.79rem] leading-[1.4]"
+                    class="prompt-text prompt-control"
                     rows="6"
                     spellcheck="false"
                     placeholder="Describe the change you want"></textarea>
                 </label>
               </div>
 
-              <div id="prompt-library-panel" class="prompt-panel hidden grid gap-2.5">
+              <div id="prompt-library-panel" class="prompt-panel hidden">
                 <div class="prompt-grid">
                   <label id="library-repo-history-field" class="prompt-field prompt-field-repo-history">
                     <span class="prompt-label">Repository</span>
@@ -276,7 +234,7 @@
               <div id="prompt-raw-panel" class="prompt-panel hidden">
                 <textarea
                   id="local-prompt-input"
-                  class="prompt-text prompt-control h-[calc(7*1.4em+20px)] min-h-[calc(7*1.4em+20px)] w-full resize-y rounded-md border border-hub-border p-2.5 font-mono text-[0.79rem] leading-[1.4]"
+                  class="prompt-text prompt-control"
                   rows="7"
                   spellcheck="false"
                   placeholder='{
@@ -301,7 +259,7 @@
                 </div>
                 <span
                   id="local-prompt-status"
-                  class="submit-status submit-status-inline is-visible min-h-[1.3em] text-[0.74rem] leading-[1.3] text-hub-muted"
+                  class="submit-status submit-status-inline is-visible"
                   data-default-text="Prompt with plain language, paste screenshots directly into the prompt when visual context matters."
                   aria-live="polite">Prompt with plain language, paste screenshots directly into the prompt when visual context matters.</span>
                 <div class="prompt-actions-end">
@@ -373,21 +331,21 @@
     </div>
   </div>
 
-  <div id="agent-auth-gate" class="agent-auth-gate fixed inset-0 z-[95] hidden items-center justify-center p-4 backdrop-blur-sm" aria-live="polite">
-    <div id="agent-auth-shell" class="agent-auth-shell flex min-h-[220px] w-full max-w-xl flex-col">
-      <h2 id="agent-auth-title" class="text-[2rem] font-semibold leading-tight text-hub-text">Authorize Agent to get started</h2>
-      <p id="agent-auth-message" class="mt-3 max-w-lg text-base leading-7 text-hub-text/85"></p>
+  <div id="agent-auth-gate" class="agent-auth-gate hidden" aria-live="polite">
+    <div id="agent-auth-shell" class="agent-auth-shell">
+      <h2 id="agent-auth-title">Authorize Agent to get started</h2>
+      <p id="agent-auth-message"></p>
 
-      <div id="agent-auth-harness-picker" class="mt-5 hidden space-y-3">
+      <div id="agent-auth-harness-picker" class="hidden">
         <div id="agent-auth-harness-grid" class="agent-auth-harness-grid" role="group" aria-label="Select an agent"></div>
       </div>
 
-      <div id="agent-auth-details" class="mt-5 hidden space-y-3">
+      <div id="agent-auth-details" class="hidden">
         <div id="agent-auth-device-code-row" class="agent-auth-command-box agent-auth-command-box-inline hidden">
-          <code id="agent-auth-code" class="agent-auth-command-text agent-auth-command-text-inline font-mono text-[1.15rem] tracking-[0.22em] text-hub-text"></code>
+          <code id="agent-auth-code" class="agent-auth-command-text agent-auth-command-text-inline"></code>
           <button
             id="agent-auth-copy"
-            class="agent-auth-copy agent-auth-command-copy rounded-md p-2"
+            class="agent-auth-copy agent-auth-command-copy"
             type="button"
             aria-label="Copy device code"
             title="Copy device code">
@@ -395,7 +353,7 @@
             <span class="sr-only">Copy device code</span>
           </button>
         </div>
-        <a id="agent-auth-url" class="agent-auth-url block break-all text-[1.05rem] underline decoration-dotted underline-offset-2" href="" target="_blank" rel="noopener noreferrer">
+        <a id="agent-auth-url" class="agent-auth-url" href="" target="_blank" rel="noopener noreferrer">
           <img
             id="agent-auth-url-logo"
             class="agent-auth-url-logo hidden"
@@ -403,13 +361,13 @@
             alt="Open Claude login">
           <span id="agent-auth-url-text"></span>
         </a>
-        <div id="agent-auth-browser-code" class="hidden space-y-2">
-          <div id="agent-auth-browser-commands" class="space-y-2">
+        <div id="agent-auth-browser-code" class="hidden">
+          <div id="agent-auth-browser-commands">
             <div class="agent-auth-command-box agent-auth-command-box-inline">
               <code id="agent-auth-browser-command-primary" class="agent-auth-command-text agent-auth-command-text-inline">cat ~/.claude/.credentials.json</code>
               <button
                 id="agent-auth-browser-command-primary-copy"
-                class="agent-auth-copy agent-auth-command-copy rounded-md p-2"
+                class="agent-auth-copy agent-auth-command-copy"
                 type="button"
                 aria-label="Copy Claude credentials command"
                 title="Copy Claude credentials command">
@@ -417,12 +375,12 @@
                 <span class="sr-only">Copy Claude credentials command</span>
               </button>
             </div>
-            <div class="text-sm text-hub-text/80">If credentials use config directory, paste this output</div>
+            <div class="agent-auth-browser-code-hint">If credentials use config directory, paste this output</div>
             <div class="agent-auth-command-box">
               <code id="agent-auth-browser-command-secondary" class="agent-auth-command-text">if [ -f ~/.claude/.credentials.json ]; then cat ~/.claude/.credentials.json; else cat ~/.config/claude/.credentials.json; fi</code>
               <button
                 id="agent-auth-browser-command-secondary-copy"
-                class="agent-auth-copy agent-auth-command-copy rounded-md p-2"
+                class="agent-auth-copy agent-auth-command-copy"
                 type="button"
                 aria-label="Copy Claude credentials command"
                 title="Copy Claude credentials command">
@@ -433,23 +391,23 @@
           </div>
           <textarea
             id="agent-auth-browser-code-input"
-            class="prompt-text agent-auth-secret-input min-h-[96px] font-mono text-[0.9rem]"
+            class="prompt-text agent-auth-secret-input"
             aria-label="Authentication code or token input"
             placeholder="Paste browser code, token, or output of: cat ~/.claude/.credentials.json"
             autocomplete="off"
             autocapitalize="off"
             autocorrect="off"
             spellcheck="false"></textarea>
-          <p id="agent-auth-browser-code-error" class="hidden text-sm text-rose-200"></p>
+          <p id="agent-auth-browser-code-error" class="agent-auth-error hidden"></p>
         </div>
       </div>
 
-      <div id="agent-auth-configure" class="mt-5 hidden space-y-3">
+      <div id="agent-auth-configure" class="hidden">
         <div id="agent-auth-configure-command-row" class="agent-auth-command-box agent-auth-command-box-inline">
-          <code id="agent-auth-configure-command" class="agent-auth-command-text agent-auth-command-text-inline font-mono text-[1rem] tracking-[0.04em] text-hub-text">auggie token print</code>
+          <code id="agent-auth-configure-command" class="agent-auth-command-text agent-auth-command-text-inline">auggie token print</code>
           <button
             id="agent-auth-configure-copy"
-            class="agent-auth-copy agent-auth-command-copy rounded-md p-2"
+            class="agent-auth-copy agent-auth-command-copy"
             type="button"
             aria-label="Copy configure command"
             title="Copy configure command">
@@ -457,14 +415,14 @@
             <span class="sr-only">Copy configure command</span>
           </button>
         </div>
-        <label id="agent-auth-configure-label" class="text-sm font-medium text-hub-text/85" for="agent-auth-configure-input">Paste configuration value</label>
-        <textarea id="agent-auth-configure-input" class="prompt-text agent-auth-secret-input font-mono text-[0.9rem]" placeholder='{"accessToken":"XXX","tenantURL":"https://YYY/","scopes":["email"]}' autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" rows="5" wrap="off"></textarea>
-        <input id="agent-auth-configure-secret-input" class="prompt-text agent-auth-configure-input-github agent-auth-configure-input-single-line font-mono text-[0.9rem] hidden" type="password" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Paste GitHub token" placeholder="ghp_xxx">
-        <p id="agent-auth-configure-error" class="hidden text-sm text-rose-200"></p>
+        <label id="agent-auth-configure-label" for="agent-auth-configure-input">Paste configuration value</label>
+        <textarea id="agent-auth-configure-input" class="prompt-text agent-auth-secret-input" placeholder='{"accessToken":"XXX","tenantURL":"https://YYY/","scopes":["email"]}' autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" rows="5" wrap="off"></textarea>
+        <input id="agent-auth-configure-secret-input" class="prompt-text agent-auth-configure-input-github agent-auth-configure-input-single-line hidden" type="password" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Paste GitHub token" placeholder="ghp_xxx">
+        <p id="agent-auth-configure-error" class="agent-auth-error hidden"></p>
       </div>
 
-      <div class="mt-auto flex justify-end pt-4">
-        <button id="agent-auth-verify" class="agent-auth-verify hidden rounded-md border px-3 py-2 text-sm font-medium" type="button" onclick="return window.__hubAuthVerifyClick ? window.__hubAuthVerifyClick(event) : true;">Done</button>
+      <div class="agent-auth-footer">
+        <button id="agent-auth-verify" class="agent-auth-verify hidden" type="button" onclick="return window.__hubAuthVerifyClick ? window.__hubAuthVerifyClick(event) : true;">Done</button>
       </div>
     </div>
   </div>
