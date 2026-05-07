@@ -2953,6 +2953,12 @@ select.prompt-control {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--running) 18%, transparent);
 }
 
+.chat-repo-image-paste {
+  min-height: 36px;
+  padding-block: 0;
+  font-size: 0.86rem;
+}
+
 .chat-repo-submit-status {
   min-height: 1.2em;
   color: var(--muted);

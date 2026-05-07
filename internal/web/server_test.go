@@ -1579,7 +1579,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, `taskItems.push(githubReposLoadingTask())`) {
 		t.Fatalf("expected GitHub repository loading to stay out of Current Work task rendering")
 	}
-	if !strings.Contains(markup, `function submitChatRepoPrompt(repo, input, statusNode)`) ||
+	if !strings.Contains(markup, `function submitChatRepoPrompt(repo, input, statusNode, images = [], setImages = null)`) ||
 		!strings.Contains(markup, `const card = document.createElement("div");`) ||
 		!strings.Contains(markup, `card.setAttribute("role", "button");`) ||
 		!strings.Contains(markup, `card.setAttribute("aria-expanded", "false");`) ||
@@ -1930,6 +1930,15 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(markup, "function handlePromptImagePaste(") {
 		t.Fatalf("expected index html to include screenshot paste handler")
+	}
+	if !strings.Contains(markup, "function clipboardPngFiles(event)") ||
+		!strings.Contains(markup, "prompt.addEventListener(\"paste\", handleChatRepoImagePaste);") ||
+		!strings.Contains(markup, "pasteTarget.className = \"prompt-control prompt-action-paste chat-repo-image-paste\"") {
+		t.Fatalf("expected chat repository prompts to accept pasted screenshots")
+	}
+	if !strings.Contains(markup, "images: promptImages,") ||
+		!strings.Contains(markup, "setImages([]);") {
+		t.Fatalf("expected chat repository submits to include pasted screenshots and clear them after queueing")
 	}
 	if !strings.Contains(markup, "function clearPromptImages(syncRaw = true)") {
 		t.Fatalf("expected index html to allow screenshot clearing without forcing raw prompt resync")
