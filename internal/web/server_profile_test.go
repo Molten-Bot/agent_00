@@ -154,17 +154,17 @@ func TestResolveAuthenticatedGitHubRepos(t *testing.T) {
 			}
 			switch requests {
 			case 1:
-				if got, want := req.URL.String(), "https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=updated"; got != want {
+				if got, want := req.URL.String(), "https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=pushed"; got != want {
 					t.Fatalf("request URL = %q, want %q", got, want)
 				}
 				header := make(http.Header)
 				header.Set("Link", `<https://api.github.com/user/repos?page=2>; rel="next"`)
-				return githubResponse(http.StatusOK, `[{"name":"repo","full_name":"acme/repo","description":"Docs","html_url":"https://github.com/acme/repo","default_branch":"trunk","private":true,"language":"Go","updated_at":"2026-05-01T00:00:00Z"}]`, header), nil
+				return githubResponse(http.StatusOK, `[{"name":"repo","full_name":"acme/repo","description":"Docs","html_url":"https://github.com/acme/repo","default_branch":"trunk","private":true,"language":"Go","updated_at":"2026-05-01T00:00:00Z","pushed_at":"2026-05-02T00:00:00Z"}]`, header), nil
 			case 2:
 				if got, want := req.URL.String(), "https://api.github.com/user/repos?page=2"; got != want {
 					t.Fatalf("request URL = %q, want %q", got, want)
 				}
-				return githubResponse(http.StatusOK, `[{"name":"web","full_name":"acme/web","html_url":"https://github.com/acme/web","private":false}]`, nil), nil
+				return githubResponse(http.StatusOK, `[{"name":"web","full_name":"acme/web","html_url":"https://github.com/acme/web","private":false,"updated_at":"2026-04-01T00:00:00Z","pushed_at":"2026-05-03T00:00:00Z"}]`, nil), nil
 			default:
 				t.Fatalf("unexpected request %d", requests)
 			}
@@ -176,7 +176,7 @@ func TestResolveAuthenticatedGitHubRepos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveAuthenticatedGitHubRepos() error = %v", err)
 	}
-	if len(repos) != 2 || repos[0].FullName != "acme/repo" || repos[0].DefaultBranch != "trunk" || !repos[0].Private || repos[0].Language != "Go" || repos[1].FullName != "acme/web" {
+	if len(repos) != 2 || repos[0].FullName != "acme/web" || repos[0].PushedAt != "2026-05-03T00:00:00Z" || repos[1].FullName != "acme/repo" || repos[1].DefaultBranch != "trunk" || !repos[1].Private || repos[1].Language != "Go" {
 		t.Fatalf("repos = %#v, want paged repository summaries", repos)
 	}
 
