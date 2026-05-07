@@ -2090,11 +2090,11 @@ func TestHandlerIndexIncludesClaudeBrowserCodeFlow(t *testing.T) {
 	}
 }
 
-func TestHandlerServesReleasesWithoutDefaultEntries(t *testing.T) {
+func TestHandlerServesReleasesAsIndexDisplay(t *testing.T) {
 	t.Parallel()
 
 	srv := NewServer("", NewBroker())
-	req := httptest.NewRequest(http.MethodGet, "/releases", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	resp := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(resp, req)
 
@@ -2106,30 +2106,16 @@ func TestHandlerServesReleasesWithoutDefaultEntries(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"`) {
-		t.Fatalf("expected releases html to load the google analytics tag script")
-	}
-	if !strings.Contains(markup, `window.gtag("config", "G-BY33RFG2WB");`) {
-		t.Fatalf("expected releases html to configure google analytics with the moltenhub measurement id")
-	}
 	if !strings.Contains(markup, `class="page-bottom-dock"`) ||
 		!strings.Contains(markup, `class="prompt-mode-tabs prompt-mode-tabs-dock"`) ||
 		!strings.Contains(markup, `src="/static/bottom-dock.js"`) ||
 		strings.Contains(markup, `<!-- hub-bottom-dock -->`) {
-		t.Fatalf("expected releases html to render the shared dock component as the page footer")
+		t.Fatalf("expected index html to render shared dock component")
 	}
-	if !strings.Contains(markup, `trackAnalyticsNavigation(event, "releases_home_opened", { source: "releases_header" });`) ||
-		!strings.Contains(markup, `if (key === "event_callback" && typeof value === "function") {`) ||
-		!strings.Contains(markup, `event_timeout: 1000`) ||
-		!strings.Contains(markup, `fallbackTimer = window.setTimeout(navigate, 1200);`) {
-		t.Fatalf("expected releases html to track header home CTA clicks before navigation")
-	}
-	if !strings.Contains(markup, `window.MoltenHubHeader.startConnectionStatus();`) {
-		t.Fatalf("expected releases html to hydrate shared header status from the monitor API")
-	}
-	if !strings.Contains(markup, `class="release-empty" aria-label="No releases"`) ||
+	if !strings.Contains(markup, `id="releases-display" class="releases-display hidden" aria-label="Releases"`) ||
+		!strings.Contains(markup, `class="release-empty" aria-label="No releases"`) ||
 		!strings.Contains(markup, `No releases yet.`) {
-		t.Fatalf("expected releases html to render an empty state")
+		t.Fatalf("expected index html to include releases display empty state")
 	}
 	defaultEntries := []string{
 		"Refresh task cards so change summaries scan faster in narrow views.",
@@ -2143,20 +2129,17 @@ func TestHandlerServesReleasesWithoutDefaultEntries(t *testing.T) {
 	}
 }
 
-func TestHandlerRendersSharedBottomDockComponentAcrossPages(t *testing.T) {
+func TestHandlerRemovesStandaloneSitePages(t *testing.T) {
 	t.Parallel()
 
 	srv := NewServer("", NewBroker())
-	indexMarkup := renderHandlerMarkup(t, srv, "/")
-	releasesMarkup := renderHandlerMarkup(t, srv, "/releases")
-
-	indexDock := extractBottomDockComponent(t, indexMarkup)
-	releasesDock := extractBottomDockComponent(t, releasesMarkup)
-	if indexDock != releasesDock {
-		t.Fatalf("expected index and releases pages to render identical shared bottom dock component")
-	}
-	if strings.Contains(indexMarkup, bottomDockPlaceholder) || strings.Contains(releasesMarkup, bottomDockPlaceholder) {
-		t.Fatalf("expected shared bottom dock placeholders to be replaced before serving pages")
+	for _, path := range []string{"/releases", "/dashboard"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		resp := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(resp, req)
+		if resp.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want 404", path, resp.Code)
+		}
 	}
 }
 
@@ -2169,79 +2152,6 @@ func renderHandlerMarkup(t *testing.T, srv Server, path string) string {
 		t.Fatalf("%s status = %d", path, resp.Code)
 	}
 	return resp.Body.String()
-}
-
-func extractBottomDockComponent(t *testing.T, markup string) string {
-	t.Helper()
-	start := strings.Index(markup, `<div class="page-bottom-dock"`)
-	if start < 0 {
-		t.Fatalf("expected rendered page to include bottom dock component")
-	}
-	script := `<script src="/static/bottom-dock.js"></script>`
-	relativeEnd := strings.Index(markup[start:], script)
-	if relativeEnd < 0 {
-		t.Fatalf("expected rendered bottom dock component to include shared script")
-	}
-	end := start + relativeEnd + len(script)
-	return markup[start:end]
-}
-
-func TestHandlerServesDashboardWhenEnabled(t *testing.T) {
-	t.Setenv(showDashboardEnv, "true")
-
-	srv := NewServer("", NewBroker())
-	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
-	resp := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusOK {
-		t.Fatalf("status = %d", resp.Code)
-	}
-	if ct := resp.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
-		t.Fatalf("content-type = %q", ct)
-	}
-	if got, want := resp.Header().Get("Cache-Control"), "no-store"; got != want {
-		t.Fatalf("cache-control = %q, want %q", got, want)
-	}
-
-	markup := resp.Body.String()
-	required := []string{
-		`<title>Molten Hub Code Dashboard</title>`,
-		`src="/static/site-header.js"`,
-		`<moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>`,
-		`class="page-bottom-dock"`,
-		`class="prompt-mode-tabs prompt-mode-tabs-dock"`,
-		`data-page-nav-link="/dashboard"`,
-		`src="/static/bottom-dock.js"`,
-		`href="/static/style.css"`,
-		`window.MoltenHubHeader.startConnectionStatus();`,
-		`class="dashboard-blank" aria-label="Dashboard workspace"`,
-	}
-	for _, needle := range required {
-		if !strings.Contains(markup, needle) {
-			t.Fatalf("expected dashboard html to include %q", needle)
-		}
-	}
-	if strings.Contains(markup, `class="site-page-footer"`) ||
-		strings.Contains(markup, `<nav class="site-page-nav"`) ||
-		strings.Contains(markup, bottomDockPlaceholder) ||
-		!strings.Contains(markup, `id="prompt-mode-builder" class="prompt-mode-link active"`) ||
-		!strings.Contains(markup, `id="theme-toggle" class="prompt-mode-link theme-toggle theme-toggle-dock"`) {
-		t.Fatalf("expected dashboard footer and nav to use shared components with default button states")
-	}
-}
-
-func TestHandlerDashboardCanBeDisabled(t *testing.T) {
-	t.Setenv(showDashboardEnv, "false")
-
-	srv := NewServer("", NewBroker())
-	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
-	resp := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", resp.Code)
-	}
 }
 
 func TestHandlerServesStaticCSS(t *testing.T) {
@@ -2269,8 +2179,8 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	if !strings.Contains(css, "moltenhub-code-header {\n  display: block;") ||
 		!strings.Contains(css, "moltenhub-code-nav {\n  display: block;") ||
 		!strings.Contains(css, ".site-page-footer {") ||
-		!strings.Contains(css, ".dashboard-blank {") {
-		t.Fatalf("expected stylesheet to include shared site page shell and dashboard styles")
+		!strings.Contains(css, ".releases-display {") {
+		t.Fatalf("expected stylesheet to include shared site page shell and SPA release display styles")
 	}
 	if !strings.Contains(css, "--hub-page-width: 1500px;") ||
 		!strings.Contains(css, "width: min(var(--hub-page-width), 100%);") ||
@@ -2653,7 +2563,7 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 		`customElements.define("moltenhub-code-header", MoltenHubCodeHeader);`,
 		`customElements.define("moltenhub-code-nav", MoltenHubCodeNav);`,
 		`const NAV_ITEMS = Object.freeze([`,
-		`{ href: "/dashboard", label: "Dashboard" },`,
+		`{ href: "/", label: "Home" },`,
 		"return `<nav class=\"site-page-nav\" aria-label=\"Primary\">${links}</nav>`;",
 		`const LOGO_ROTATION_INTERVAL_MS = 8_000;`,
 		`localStorage.getItem(THEME_KEY)`,

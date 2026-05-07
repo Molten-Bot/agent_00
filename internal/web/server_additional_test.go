@@ -100,7 +100,7 @@ func TestHandlerReleasesBottomDockUsesHubSetupStatus(t *testing.T) {
 		return state, nil
 	}
 
-	markup := renderHandlerMarkup(t, srv, "/releases")
+	markup := renderHandlerMarkup(t, srv, "/")
 	if !strings.Contains(markup, `id="moltenbot-hub-dock-group" class="hub-dock-group" data-configured="true"`) {
 		t.Fatalf("expected releases dock to render configured Hub state")
 	}
