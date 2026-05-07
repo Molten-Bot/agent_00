@@ -3,6 +3,8 @@
   const THEME_MODES = ["light", "dark", "night", "pink"];
   const DEFAULT_THEME_MODE = "light";
   const LOGO_ROTATION_INTERVAL_MS = 8_000;
+  const HUB_LOGIN_URL = "https://app.molten.bot/signin?target=hub";
+  const HUB_DASHBOARD_URL = "https://app.molten.bot/hub";
   const AGENT_LOGO_URLS = Object.freeze({
     codex: "/static/logos/codex-cli.svg",
     claude: "/static/logos/claude-code.svg",
@@ -400,6 +402,122 @@
       }
       this.syncLogoRotation(configuredAgentLogo);
     }
+
+    connectionNodes() {
+      return {
+        localItem: this.querySelector("#local-conn-item"),
+        localDot: this.querySelector("#local-conn-dot"),
+        localText: this.querySelector("#local-conn-text"),
+        hubItem: this.querySelector("#hub-conn-item"),
+        hubDot: this.querySelector("#hub-conn-dot"),
+        hubText: this.querySelector("#hub-conn-text"),
+      };
+    }
+
+    setIndicator(itemNode, dot, textNode, label, online, text) {
+      const message = `${label}: ${text}`;
+      if (dot) {
+        dot.classList.toggle("online", online);
+      }
+      if (textNode) {
+        textNode.textContent = message;
+      }
+      if (itemNode) {
+        itemNode.title = message;
+        itemNode.setAttribute("aria-label", message);
+      }
+    }
+
+    updateLocalConnection(online, text) {
+      const nodes = this.connectionNodes();
+      this.setIndicator(nodes.localItem, nodes.localDot, nodes.localText, "Local", online, text);
+    }
+
+    applyHubDotMode(mode) {
+      const { hubDot } = this.connectionNodes();
+      if (!hubDot) return;
+      hubDot.classList.remove("http", "disconnected");
+      if (mode === "http_long_poll") {
+        hubDot.classList.add("http");
+        return;
+      }
+      if (mode === "disconnected") {
+        hubDot.classList.add("disconnected");
+      }
+    }
+
+    setHubConnectionActionable(actionable, href = "", tone = "") {
+      const { hubItem } = this.connectionNodes();
+      if (!hubItem) return;
+      hubItem.classList.toggle("status-item-action", actionable);
+      hubItem.classList.toggle("status-item-action-online", actionable && tone === "online");
+      hubItem.classList.toggle("status-item-action-offline", actionable && tone === "offline");
+      hubItem.setAttribute("data-actionable", actionable ? "true" : "false");
+      hubItem.setAttribute("data-href", href);
+    }
+
+    setHubConnection(mode, text, hubSetup = {}) {
+      const nodes = this.connectionNodes();
+      const configured = Boolean(hubSetup && hubSetup.configured);
+      const dashboardURL = String(hubSetup && (hubSetup.dashboardURL || hubSetup.dashboard_url) || HUB_DASHBOARD_URL).trim() || HUB_DASHBOARD_URL;
+      const connectURL = String(hubSetup && (hubSetup.connectURL || hubSetup.connect_url) || HUB_LOGIN_URL).trim() || HUB_LOGIN_URL;
+      const connected = mode === "ws" || mode === "http_long_poll" || mode === "connected";
+      const actionable = connected || mode === "disconnected";
+      const actionTone = connected ? "online" : (mode === "disconnected" ? "offline" : "");
+      const targetURL = connected || configured ? dashboardURL : connectURL;
+      let message = String(text || "").trim();
+      if (mode === "disconnected" && !message) {
+        message = configured
+          ? "Configured locally. Restart runtime to connect."
+          : "Connect to Molten Hub";
+      }
+      this.setIndicator(nodes.hubItem, nodes.hubDot, nodes.hubText, "Molten Hub", connected, message);
+      this.applyHubDotMode(mode);
+      this.setHubConnectionActionable(actionable, targetURL, actionTone);
+    }
+
+    updateConnectionStatus(snapshot, options = {}) {
+      const hubSetup = options && typeof options.hubSetup === "object" && options.hubSetup !== null
+        ? options.hubSetup
+        : {};
+      if (!snapshot || typeof snapshot.connection !== "object" || snapshot.connection === null) {
+        this.setHubConnection("disconnected", "Hub status unavailable", hubSetup);
+        return;
+      }
+
+      const conn = snapshot.connection;
+      const domain = typeof conn.hub_domain === "string" ? conn.hub_domain.trim() : "";
+      const baseURL = typeof conn.hub_base_url === "string" ? conn.hub_base_url.trim() : "";
+      const transport = typeof conn.hub_transport === "string" ? conn.hub_transport.trim() : "";
+      const detail = typeof conn.hub_detail === "string" ? conn.hub_detail.trim() : "";
+      const target = domain || baseURL || "hub";
+
+      if (transport === "ws") {
+        this.setHubConnection("ws", `Connected via WebSocket to ${target}`, hubSetup);
+        return;
+      }
+      if (transport === "http_long_poll") {
+        this.setHubConnection("http_long_poll", `Connected via HTTP long polling to ${target}`, hubSetup);
+        return;
+      }
+      if (conn.hub_connected) {
+        this.setHubConnection("connected", `Connected to ${target} (transport pending)`, hubSetup);
+        return;
+      }
+      if (transport === "reachable") {
+        this.setHubConnection("reachable", detail || `Hub endpoint is live at ${target}. Connecting...`, hubSetup);
+        return;
+      }
+      if (transport === "retrying") {
+        this.setHubConnection("retrying", detail || `Hub endpoint is waking up at ${target}. Retrying ping every 12s.`, hubSetup);
+        return;
+      }
+      if (domain || baseURL) {
+        this.setHubConnection("disconnected", detail || `Disconnected from ${target}`, hubSetup);
+        return;
+      }
+      this.setHubConnection("disconnected", "", hubSetup);
+    }
   }
 
   class MoltenHubCodeNav extends HTMLElement {
@@ -418,7 +536,8 @@
     customElements.define("moltenhub-code-nav", MoltenHubCodeNav);
   }
 
-  let resourceMetricStream = null;
+  let connectionStatusStream = null;
+  let connectionStatusStarted = false;
 
   function updateResourceMetrics(snapshot) {
     document.querySelectorAll("moltenhub-code-header").forEach((header) => {
@@ -429,33 +548,92 @@
   }
 
   async function loadResourceMetrics() {
-    const response = await fetch("/api/state", { cache: "no-store" });
+    const response = await fetch("/api/status", { cache: "no-store" });
     if (!response.ok) {
-      throw new Error(`state http ${response.status}`);
+      throw new Error(`status http ${response.status}`);
     }
     updateResourceMetrics(await response.json());
   }
 
-  function startResourceMetrics() {
-    void loadResourceMetrics().catch(() => {});
-    if (resourceMetricStream || typeof EventSource !== "function") {
+  function updateLocalConnection(online, text) {
+    document.querySelectorAll("moltenhub-code-header").forEach((header) => {
+      if (typeof header.updateLocalConnection === "function") {
+        header.updateLocalConnection(online, text);
+      }
+    });
+  }
+
+  function updateConnectionStatus(snapshot, options = {}) {
+    document.querySelectorAll("moltenhub-code-header").forEach((header) => {
+      if (typeof header.updateConnectionStatus === "function") {
+        header.updateConnectionStatus(snapshot, options);
+      }
+    });
+  }
+
+  async function loadConnectionStatus(options = {}) {
+    const response = await fetch("/api/status", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`status http ${response.status}`);
+    }
+    const snapshot = await response.json();
+    updateLocalConnection(true, "Connected");
+    updateConnectionStatus(snapshot, options);
+    updateResourceMetrics(snapshot);
+  }
+
+  async function loadSharedHubSetup() {
+    const response = await fetch("/api/hub-setup", { cache: "no-store" });
+    if (!response.ok) {
+      return {};
+    }
+    const body = await response.json();
+    return body && typeof body.hub === "object" && body.hub !== null ? body.hub : {};
+  }
+
+  function startConnectionStatus(options = {}) {
+    let streamOptions = options;
+    const initialOptionsPromise = options && typeof options.hubSetup === "object" && options.hubSetup !== null
+      ? Promise.resolve(options)
+      : loadSharedHubSetup().then((hubSetup) => ({ ...options, hubSetup })).catch(() => options);
+    void initialOptionsPromise.then((initialOptions) => {
+      streamOptions = initialOptions;
+      return loadConnectionStatus(initialOptions);
+    }).catch((err) => {
+      const message = err && err.message ? err.message : "Unable to load status";
+      updateLocalConnection(false, `Unable to load status: ${message}`);
+      updateConnectionStatus(null, options);
+    });
+    if (connectionStatusStarted || connectionStatusStream || typeof EventSource !== "function") {
       return;
     }
-    resourceMetricStream = new EventSource("/api/stream");
-    resourceMetricStream.onmessage = (event) => {
+    connectionStatusStarted = true;
+    connectionStatusStream = new EventSource("/api/stream");
+    connectionStatusStream.onopen = () => {
+      updateLocalConnection(true, "Connected");
+    };
+    connectionStatusStream.onmessage = (event) => {
       try {
-        updateResourceMetrics(JSON.parse(event.data));
+        const snapshot = JSON.parse(event.data);
+        updateConnectionStatus(snapshot, streamOptions);
+        updateResourceMetrics(snapshot);
       } catch (_err) {
         // Ignore malformed event packets.
       }
     };
-    resourceMetricStream.onerror = () => {
-      if (resourceMetricStream) {
-        resourceMetricStream.close();
-        resourceMetricStream = null;
+    connectionStatusStream.onerror = () => {
+      updateLocalConnection(false, "Reconnecting...");
+      if (connectionStatusStream) {
+        connectionStatusStream.close();
+        connectionStatusStream = null;
       }
-      window.setTimeout(startResourceMetrics, 1500);
+      connectionStatusStarted = false;
+      window.setTimeout(() => startConnectionStatus(streamOptions), 1500);
     };
+  }
+
+  function startResourceMetrics() {
+    startConnectionStatus();
   }
 
   window.MoltenHubHeader = {
@@ -466,7 +644,10 @@
         }
       });
     },
+    updateLocalConnection,
+    updateConnectionStatus,
     updateResourceMetrics,
+    startConnectionStatus,
     startResourceMetrics,
     agentAuthLabel,
     resolveAgentLogoURL,

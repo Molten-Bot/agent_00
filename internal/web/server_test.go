@@ -58,6 +58,15 @@ func TestHandlerStateEndpointReturnsSnapshot(t *testing.T) {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 
+	statusResp, err := http.Get(ts.URL + "/api/status")
+	if err != nil {
+		t.Fatalf("GET /api/status error = %v", err)
+	}
+	defer statusResp.Body.Close()
+	if statusResp.StatusCode != http.StatusOK {
+		t.Fatalf("/api/status status = %d", statusResp.StatusCode)
+	}
+
 	var snap Snapshot
 	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode snapshot: %v", err)
@@ -1210,11 +1219,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `document.getElementById("local-conn-text")`) {
 		t.Fatalf("expected index html to bind the shared local connection indicator")
 	}
-	if !strings.Contains(markup, `setIndicator(localConnItem, localConnDot, localConnText, "Local", online, text);`) {
-		t.Fatalf("expected index html to update local indicator tooltip copy")
+	if !strings.Contains(markup, `window.MoltenHubHeader.updateLocalConnection(online, text);`) {
+		t.Fatalf("expected index html to update local indicator through shared header component")
 	}
 	if !strings.Contains(markup, `document.getElementById("hub-conn-text")`) {
 		t.Fatalf("expected index html to bind the shared moltenhub connection indicator")
+	}
+	if !strings.Contains(markup, `window.MoltenHubHeader.updateConnectionStatus(snapshot, { hubSetup: state.hubSetup });`) {
+		t.Fatalf("expected index html to update hub indicator through shared header component")
 	}
 	if !strings.Contains(markup, `setIndicator(hubConnItem, hubConnDot, hubConnText, "Molten Hub", online, text);`) {
 		t.Fatalf("expected index html to update hub indicator tooltip copy")
@@ -2106,8 +2118,8 @@ func TestHandlerServesReleasesWithoutDefaultEntries(t *testing.T) {
 		!strings.Contains(markup, `fallbackTimer = window.setTimeout(navigate, 1200);`) {
 		t.Fatalf("expected releases html to track header home CTA clicks before navigation")
 	}
-	if !strings.Contains(markup, `window.MoltenHubHeader.startResourceMetrics();`) {
-		t.Fatalf("expected releases html to hydrate shared header metrics from the monitor API")
+	if !strings.Contains(markup, `window.MoltenHubHeader.startConnectionStatus();`) {
+		t.Fatalf("expected releases html to hydrate shared header status from the monitor API")
 	}
 	if !strings.Contains(markup, `class="release-empty" aria-label="No releases"`) ||
 		!strings.Contains(markup, `No releases yet.`) {
@@ -2196,7 +2208,7 @@ func TestHandlerServesDashboardWhenEnabled(t *testing.T) {
 		`data-page-nav-link="/dashboard"`,
 		`src="/static/bottom-dock.js"`,
 		`href="/static/style.css"`,
-		`window.MoltenHubHeader.startResourceMetrics();`,
+		`window.MoltenHubHeader.startConnectionStatus();`,
 		`class="dashboard-blank" aria-label="Dashboard workspace"`,
 	}
 	for _, needle := range required {
@@ -2652,9 +2664,9 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 		`data-lucide="memory-stick"`,
 		`data-lucide="hard-drive"`,
 		`updateResourceMetrics(snapshot)`,
-		`startResourceMetrics`,
-		`const response = await fetch("/api/state", { cache: "no-store" });`,
-		`resourceMetricStream = new EventSource("/api/stream");`,
+		`startConnectionStatus`,
+		`const response = await fetch("/api/status", { cache: "no-store" });`,
+		`connectionStatusStream = new EventSource("/api/stream");`,
 		`${headerState.label} is now a 600LB Gorilla!`,
 	}
 	for _, needle := range required {
