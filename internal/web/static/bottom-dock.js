@@ -176,14 +176,15 @@
   }
 
   function syncPageNavLinks(root) {
-    const currentPath = normalizePath(window.location.pathname || HOME_PATH);
-    const links = root.querySelectorAll("[data-page-nav-link]");
+    const hashDisplay = String(window.location.hash || "").replace(/^#/, "").trim();
+    const currentDisplay = hashDisplay === "releases" ? "releases" : "dashboard";
+    const links = root.querySelectorAll("[data-app-display]");
     links.forEach((link) => {
-      const linkPath = normalizePath(link.getAttribute("data-page-nav-link") || link.getAttribute("href"));
-      const active = linkPath === currentPath;
+      const linkDisplay = String(link.getAttribute("data-app-display") || "").trim() || "dashboard";
+      const active = linkDisplay === currentDisplay;
       link.classList.toggle("active", active);
       if (active) {
-        link.setAttribute("aria-current", "page");
+        link.setAttribute("aria-current", "true");
       } else {
         link.removeAttribute("aria-current");
       }
@@ -299,7 +300,7 @@
   }
 
   function bindPageNavAnalytics(root) {
-    root.querySelectorAll("[data-page-nav-link]").forEach((link) => {
+    root.querySelectorAll("[data-app-display]").forEach((link) => {
       if (link.dataset.bottomDockPageNavBound === "true") {
         return;
       }
@@ -307,7 +308,7 @@
       link.addEventListener("click", () => {
         trackDockEvent("site_page_nav_opened", {
           source: "dock",
-          target: normalizePath(link.getAttribute("data-page-nav-link") || link.getAttribute("href")),
+          target: String(link.getAttribute("data-app-display") || "").trim(),
         });
       });
     });
@@ -321,6 +322,7 @@
     root.dataset.bottomDockReady = "true";
     replaceLucideIcons(root);
     syncPageNavLinks(root);
+    window.addEventListener("hashchange", () => syncPageNavLinks(root));
     routeStudioLinksToHome(root);
     initThemeToggle(root);
     bindStaticDockAnalytics(root);

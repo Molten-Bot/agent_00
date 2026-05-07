@@ -30,7 +30,6 @@ const maxAgentAuthConfigureBodyBytes = 1 << 20
 const maxHubSetupConfigureBodyBytes = 1 << 20
 const streamSnapshotInterval = 120 * time.Millisecond
 const maxStreamTaskLogs = 500
-const showDashboardEnv = "SHOW_DASHBOARD"
 const bottomDockPlaceholder = "<!-- hub-bottom-dock -->"
 
 var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype html>
@@ -238,8 +237,6 @@ func (s Server) Handler() http.Handler {
 		mux.Handle("/static/", withCacheControl(staticHandler, "public, max-age=3600"))
 	}
 	mux.HandleFunc("/", s.handleIndex)
-	mux.HandleFunc("/releases", s.handleReleases)
-	mux.HandleFunc("/dashboard", s.handleDashboard)
 	mux.HandleFunc("/chat", s.handleChat)
 	mux.HandleFunc("/api/state", s.handleState)
 	mux.HandleFunc("/api/status", s.handleState)
@@ -368,24 +365,6 @@ func (s Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-func (s Server) handleReleases(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/releases" {
-		http.NotFound(w, r)
-		return
-	}
-
-	data, err := fs.ReadFile(staticFiles, "static/releases.html")
-	if err != nil {
-		http.Error(w, "releases page is unavailable", http.StatusInternalServerError)
-		return
-	}
-	data = s.injectBottomDockComponent(r.Context(), data)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(data)
-}
-
 func (s Server) injectBottomDockComponent(ctx context.Context, data []byte) []byte {
 	if !bytes.Contains(data, []byte(bottomDockPlaceholder)) {
 		return data
@@ -462,22 +441,6 @@ func (s Server) applyBottomDockHubState(ctx context.Context, dock []byte) []byte
 		1,
 	)
 	return dock
-}
-
-func (s Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/dashboard" || !dashboardEnabled() {
-		http.NotFound(w, r)
-		return
-	}
-
-	s.renderSitePage(r.Context(), w, sitePageData{
-		Title:     "Molten Hub Code Dashboard",
-		BodyClass: "dashboard-body",
-		PageClass: "dashboard-page",
-		MainClass: "dashboard-main",
-		Heading:   "Dashboard",
-		Content:   template.HTML(`<section class="dashboard-blank" aria-label="Dashboard workspace"></section>`),
-	})
 }
 
 func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
@@ -576,18 +539,6 @@ func (s Server) renderSitePage(ctx context.Context, w http.ResponseWriter, data 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(rendered)
-}
-
-func dashboardEnabled() bool {
-	value := strings.TrimSpace(strings.ToLower(os.Getenv(showDashboardEnv)))
-	switch value {
-	case "", "1", "t", "true", "y", "yes", "on":
-		return true
-	case "0", "f", "false", "n", "no", "off":
-		return false
-	default:
-		return false
-	}
 }
 
 func (s Server) injectIndexConfig(data []byte) []byte {

@@ -128,7 +128,6 @@ Useful environment variables:
 - `MOLTEN_HUB_REGION`: `na` or `eu`; defaults to `na`.
 - `MOLTEN_HUB_URL`: explicit Hub API URL, either `https://na.hub.molten.bot/v1` or `https://eu.hub.molten.bot/v1`.
 - `MOLTEN_HUB_SESSION_KEY`: runtime config session key. Defaults to `main`.
-- `SHOW_DASHBOARD`: set to `false` to disable the local `/dashboard` page. Defaults to enabled.
 - `OPENAI_API_KEY`, `AUGMENT_SESSION_AUTH`, `PI_PROVIDER_AUTH`, `PI_AUTH_JSON`: optional agent auth values loaded by the entrypoint or persisted config. Opencode can use `opencode auth login`, its persisted auth file under `HOME`, or provider environment variables such as `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`.
 
 Docker Compose list syntax should use `KEY=value`, for example `MOLTEN_HUB_TOKEN=t_XXX`; mapping syntax should use `MOLTEN_HUB_TOKEN: t_XXX`. List entries such as `MOLTEN_HUB_TOKEN:t_XXX` are not valid Compose environment values.

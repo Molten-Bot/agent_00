@@ -856,6 +856,14 @@ moltenhub-code-nav {
   border-bottom-color: rgb(var(--hub-border-rgb) / 1);
 }
 
+#task-panel.task-panel-collapsed {
+  min-height: var(--hub-studio-collapsed-height);
+}
+
+#task-panel.task-panel-collapsed .task-scroll {
+  display: none;
+}
+
 .task-fullscreen-head-label {
   min-width: 0;
   flex: 1 1 auto;
@@ -2716,19 +2724,6 @@ select.prompt-control {
   font-weight: 700;
 }
 
-.dashboard-main {
-  display: grid;
-  align-items: stretch;
-}
-
-.dashboard-blank {
-  min-height: clamp(360px, 58vh, 680px);
-  border: 1px dashed var(--border);
-  border-radius: 8px;
-  background: var(--surface-glass-solid);
-  box-shadow: var(--shadow-sm);
-}
-
 .chat-main {
   display: grid;
   align-items: start;
@@ -2845,10 +2840,6 @@ select.prompt-control {
     flex: 1 1 94px;
   }
 
-  .dashboard-blank {
-    min-height: 52vh;
-  }
-
   .chat-shell {
     min-height: 52vh;
     padding: 16px;
@@ -2864,21 +2855,13 @@ select.prompt-control {
   }
 }
 
-.releases-body {
-  color: var(--text);
-}
-
-.releases-app {
-  padding-bottom: 56px;
-}
-
-.releases-page {
+.releases-display {
   width: min(920px, 100%);
   margin: 0 auto;
-  padding: 28px 0 var(--hub-content-bottom-padding);
+  padding: 12px 0 var(--hub-content-bottom-padding);
 }
 
-.releases-page h1 {
+.releases-display h1 {
   margin: 0;
   margin-bottom: 18px;
   font-size: clamp(1.55rem, 3vw, 2.3rem);
