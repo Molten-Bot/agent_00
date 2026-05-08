@@ -1044,6 +1044,8 @@ body .right-col.prompt-collapsed.task-list-hidden {
   justify-self: start;
   min-width: 0;
   white-space: nowrap;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
 }
 
 .prompt-title-mode {
@@ -1055,6 +1057,7 @@ body .right-col.prompt-collapsed.task-list-hidden {
 
 .prompt-title-mode.active {
   display: inline-flex;
+  color: var(--text);
 }
 
 .prompt-title-icon {
@@ -2847,7 +2850,7 @@ select.prompt-control {
 
 .chat-shell {
   min-height: clamp(360px, 58vh, 680px);
-  padding: clamp(18px, 3vw, 28px);
+  padding: clamp(14px, 2.2vw, 22px);
   border: 1px solid var(--border);
   border-color: rgb(var(--hub-border-rgb) / 1);
   border-radius: 8px;
@@ -2860,8 +2863,8 @@ select.prompt-control {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 18px;
+  gap: 12px;
+  padding-bottom: 12px;
   border-bottom: 1px solid rgb(var(--hub-border-rgb) / 1);
 }
 
@@ -2882,8 +2885,8 @@ select.prompt-control {
 .chat-status {
   margin: 0;
   color: var(--muted);
-  font-size: 0.9rem;
-  font-weight: 800;
+  font-size: 0.78rem;
+  font-weight: 750;
   line-height: 1.4;
   text-align: right;
 }
@@ -2928,18 +2931,18 @@ select.prompt-control {
 
 .chat-repo-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
-  gap: 12px;
-  padding-top: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 10px;
+  padding-top: 12px;
 }
 
 .chat-repo-card {
   position: relative;
   display: grid;
-  grid-template-rows: auto minmax(42px, 1fr) auto;
-  gap: 10px;
-  min-height: 154px;
-  padding: 16px;
+  grid-template-rows: auto minmax(32px, 1fr) auto;
+  gap: 8px;
+  min-height: 122px;
+  padding: 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text);
@@ -2959,35 +2962,35 @@ select.prompt-control {
 
 .chat-repo-card-head {
   display: block;
-  padding-right: 42px;
   min-width: 0;
+  padding-right: 34px;
 }
 
 .chat-repo-card-title {
   overflow-wrap: anywhere;
-  font-size: 1rem;
+  font-size: 0.9rem;
   font-weight: 850;
   line-height: 1.25;
 }
 
 .chat-repo-card-chat-icon {
   position: absolute;
-  top: 16px;
-  right: 16px;
+  top: 10px;
+  right: 10px;
   display: inline-grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 7px;
   color: var(--running);
   background: var(--surface-button-bg);
   box-shadow: var(--surface-button-shadow);
 }
 
 .chat-repo-card-chat-icon svg {
-  width: 17px;
-  height: 17px;
+  width: 15px;
+  height: 15px;
   stroke-width: 2.25;
 }
 
@@ -3000,21 +3003,22 @@ select.prompt-control {
 
 .chat-repo-card-description {
   color: var(--muted);
-  font-size: 0.9rem;
-  line-height: 1.4;
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .chat-repo-card-meta {
   color: var(--meta);
-  font-size: 0.78rem;
-  font-weight: 800;
+  font-size: 0.66rem;
+  font-weight: 750;
   letter-spacing: 0;
   text-transform: uppercase;
+  opacity: 0.78;
 }
 
 .chat-repo-card[aria-expanded="true"] {
   grid-column: 1 / -1;
-  grid-template-rows: auto minmax(42px, 1fr) auto auto;
+  grid-template-rows: auto minmax(32px, 1fr) auto auto;
   border-color: var(--border-strong);
 }
 
@@ -3031,11 +3035,11 @@ select.prompt-control {
 .chat-repo-log {
   display: grid;
   align-content: end;
-  gap: 8px;
-  max-height: min(34vh, 320px);
-  min-height: 104px;
+  gap: 7px;
+  max-height: min(34vh, 300px);
+  min-height: 96px;
   overflow-y: auto;
-  padding: 12px;
+  padding: 10px;
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   border-radius: 8px;
   background:
@@ -3059,12 +3063,13 @@ select.prompt-control {
   display: grid;
   justify-self: end;
   width: fit-content;
-  max-width: min(76ch, 88%);
-  gap: 5px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--running) 34%, var(--border));
-  border-radius: 8px 8px 2px 8px;
-  background: color-mix(in srgb, var(--running) 14%, var(--bg-elevated));
+  max-width: min(68ch, 82%);
+  gap: 4px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--running) 40%, var(--border));
+  border-radius: 14px 14px 4px 14px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--running) 22%, var(--bg-elevated)), color-mix(in srgb, var(--running) 14%, var(--bg-elevated)));
   color: var(--text);
   box-shadow: 0 8px 18px rgba(10, 44, 102, 0.08);
 }
@@ -3073,14 +3078,14 @@ select.prompt-control {
   margin: 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-  font-size: 0.92rem;
-  line-height: 1.4;
+  font-size: 0.9rem;
+  line-height: 1.38;
 }
 
 .chat-repo-message-meta {
-  color: var(--meta);
-  font-size: 0.72rem;
-  font-weight: 800;
+  color: color-mix(in srgb, var(--meta) 82%, transparent);
+  font-size: 0.62rem;
+  font-weight: 700;
   line-height: 1.25;
   text-align: right;
 }

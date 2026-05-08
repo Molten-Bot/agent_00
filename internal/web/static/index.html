@@ -5713,10 +5713,12 @@
             repo: chatRepoRunValue(repo),
             image_count: next.length,
           });
+          submitStatus.removeAttribute("title");
           submitStatus.textContent = `Attached ${next.length} screenshot${next.length === 1 ? "" : "s"}.`;
           submitStatus.dataset.tone = "ok";
         } catch (err) {
           trackAnalyticsEvent("chat_repo_screenshots_failed", { repo: chatRepoRunValue(repo) });
+          submitStatus.removeAttribute("title");
           submitStatus.textContent = `Screenshot paste failed: ${err.message}`;
           submitStatus.dataset.tone = "error";
         }
@@ -5811,6 +5813,17 @@
       return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     }
 
+    function compactChatRequestID(value) {
+      const requestID = String(value || "").trim();
+      if (!requestID) return "";
+      const localMatch = requestID.match(/^local-\d+-(\d+)$/);
+      if (localMatch) return `Queued #${localMatch[1]}`;
+      if (requestID.length > 18) {
+        return `Queued ${requestID.slice(0, 8)}...${requestID.slice(-4)}`;
+      }
+      return `Queued ${requestID}`;
+    }
+
     function renderChatRepoPromptLog(repo, logNode) {
       if (!logNode) return;
       const messages = chatRepoPromptMessages(repo);
@@ -5838,11 +5851,15 @@
         const parts = [];
         const time = chatPromptMessageTime(message.createdAt);
         if (time) parts.push(time);
-        if (message.requestID) parts.push(`Queued ${message.requestID}`);
+        const compactRequestID = compactChatRequestID(message.requestID);
+        if (compactRequestID) parts.push(compactRequestID);
         if (message.imageCount > 0) {
           parts.push(`${message.imageCount} screenshot${message.imageCount === 1 ? "" : "s"}`);
         }
         meta.textContent = parts.join(" | ");
+        if (message.requestID) {
+          meta.title = `Queued request ${message.requestID}`;
+        }
         bubble.appendChild(meta);
 
         logNode.appendChild(bubble);
@@ -6033,6 +6050,7 @@
       const repoValue = chatRepoRunValue(repo);
       const prompt = String(input?.value || "").trim();
       const promptImages = normalizePromptImages(images);
+      statusNode.removeAttribute("title");
       if (!repoValue) {
         statusNode.textContent = "Repository is unavailable.";
         statusNode.dataset.tone = "error";
@@ -6100,7 +6118,8 @@
         rememberRepos([repoValue]);
         renderChatRepos();
         trackAnalyticsEvent("chat_repo_prompt_succeeded", { request_id: requestID });
-        statusNode.textContent = `Queued request ${requestID}`;
+        statusNode.textContent = compactChatRequestID(requestID) || "Queued.";
+        statusNode.title = `Queued request ${requestID}`;
         statusNode.dataset.tone = "ok";
       } catch (err) {
         trackAnalyticsEvent("chat_repo_prompt_failed");
