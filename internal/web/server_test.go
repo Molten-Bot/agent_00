@@ -1611,7 +1611,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `function submitChatRepoPrompt(repo, input, statusNode, images = [], logNode = null, setImages = null)`) ||
 		!strings.Contains(markup, `const card = document.createElement("div");`) ||
 		!strings.Contains(markup, `card.setAttribute("role", "button");`) ||
-		!strings.Contains(markup, `card.setAttribute("aria-expanded", "false");`) ||
+		!strings.Contains(markup, `card.setAttribute("aria-expanded", repoKey && state.chatOpenRepoKey === repoKey ? "true" : "false");`) ||
 		!strings.Contains(markup, `promptLog.className = "chat-repo-log";`) ||
 		!strings.Contains(markup, `appendChatRepoPromptMessage(repo, {`) ||
 		!strings.Contains(markup, `fetch("/api/local-prompt", {`) ||
@@ -1976,6 +1976,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "images: promptImages,") ||
 		!strings.Contains(markup, "setImages([]);") {
 		t.Fatalf("expected chat repository submits to include pasted screenshots and clear them after queueing")
+	}
+	if !strings.Contains(markup, "chatPromptDrafts: new Map(),") ||
+		!strings.Contains(markup, `chatOpenRepoKey: "",`) ||
+		!strings.Contains(markup, `card.dataset.repoKey = repoKey;`) ||
+		!strings.Contains(markup, `state.chatPromptDrafts.set(repoKey, prompt.value);`) ||
+		!strings.Contains(markup, `const activePrompt = document.activeElement instanceof HTMLTextAreaElement &&`) ||
+		!strings.Contains(markup, `restoredPrompt.setSelectionRange(Math.min(restoreSelectionStart, end), end);`) {
+		t.Fatalf("expected chat repository prompts to preserve open panel, draft text, and cursor focus across re-renders")
 	}
 	if !strings.Contains(markup, "function clearPromptImages(syncRaw = true)") {
 		t.Fatalf("expected index html to allow screenshot clearing without forcing raw prompt resync")
