@@ -504,7 +504,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           const grid = document.getElementById("chat-repo-grid");
           const status = document.getElementById("chat-status");
           const pagination = document.getElementById("chat-repo-pagination");
-          const CHAT_REPOS_PER_PAGE = 24;
+          const CHAT_REPOS_PER_PAGE = 15;
           let repoPage = 1;
           if (!grid || !status) return;
 

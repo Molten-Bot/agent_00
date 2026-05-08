@@ -1589,7 +1589,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `const response = await fetch("/api/github/repos", { cache: "no-store" });`) ||
 		!strings.Contains(markup, `state.githubRepos = Array.isArray(body.repos) ? body.repos : [];`) ||
 		!strings.Contains(markup, `let repos = Array.isArray(state.githubRepos) ? state.githubRepos : [];`) ||
-		!strings.Contains(markup, `const CHAT_REPOS_PER_PAGE = 24;`) ||
+		!strings.Contains(markup, `const CHAT_REPOS_PER_PAGE = 15;`) ||
 		!strings.Contains(markup, `const pageRepos = repos.slice(start, start + CHAT_REPOS_PER_PAGE);`) ||
 		!strings.Contains(markup, `function renderChatRepoPagination(totalRepos, totalPages)`) ||
 		!strings.Contains(markup, `if (!state.githubReposReady) {`) {
@@ -2358,7 +2358,7 @@ func TestHandlerServesChatView(t *testing.T) {
 		`<i data-lucide="message-circle" aria-hidden="true"></i>`,
 		`id="chat-repo-grid" class="chat-repo-grid" aria-label="GitHub repositories"`,
 		`id="chat-repo-pagination" class="chat-repo-pagination hidden" aria-label="GitHub repository pages"`,
-		`const CHAT_REPOS_PER_PAGE = 24;`,
+		`const CHAT_REPOS_PER_PAGE = 15;`,
 		`const pageRepos = repos.slice(start, start + CHAT_REPOS_PER_PAGE);`,
 		`fetch("/api/github/repos", { cache: "no-store" })`,
 		`const card = document.createElement("div");`,
