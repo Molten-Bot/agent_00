@@ -6636,26 +6636,38 @@
       const restoreSelectionEnd = activePrompt?.selectionEnd ?? restoreSelectionStart;
       const tabs = chatPromptedRepoTabs();
       const selectedTab = tabs.find((tab) => tab.key === state.chatActiveRepoTab);
-      let repos = Array.isArray(state.githubRepos) ? state.githubRepos : [];
-      const unfilteredRepoCount = repos.length;
-      repos = filterChatRepos(repos, state.chatRepoSearchQuery);
-      syncChatOpenRepoKey(repos, selectedTab, restoreFocusKey);
-      const openRepo = selectedChatRepo(repos, selectedTab);
+      const allRepos = Array.isArray(state.githubRepos) ? state.githubRepos : [];
+      const unfilteredRepoCount = allRepos.length;
+      const repos = filterChatRepos(allRepos, state.chatRepoSearchQuery);
+      const reposForSelection = selectedTab ? allRepos : repos;
+      syncChatOpenRepoKey(reposForSelection, selectedTab, restoreFocusKey);
+      const openRepo = selectedChatRepo(reposForSelection, selectedTab);
       const openRepoKey = openRepo ? chatRepoKey(chatRepoRunValue(openRepo)) : "";
-      const listedRepos = openRepoKey
-        ? repos.filter((repo) => chatRepoKey(chatRepoRunValue(repo)) !== openRepoKey)
-        : repos;
+      const viewingRepoChat = Boolean(selectedTab && openRepo);
+      let listedRepos = repos;
+      if (viewingRepoChat) {
+        listedRepos = [];
+      } else if (openRepoKey) {
+        listedRepos = repos.filter((repo) => chatRepoKey(chatRepoRunValue(repo)) !== openRepoKey);
+      }
       const reposPerPage = chatReposPerPage();
       const totalPages = Math.max(1, Math.ceil(listedRepos.length / reposPerPage));
       state.chatRepoPage = Math.min(Math.max(1, state.chatRepoPage), totalPages);
       const start = (state.chatRepoPage - 1) * reposPerPage;
       const pageRepos = listedRepos.slice(start, start + reposPerPage);
-      const displayRepos = openRepo ? [openRepo, ...pageRepos] : pageRepos;
+      let displayRepos = pageRepos;
+      if (viewingRepoChat) {
+        displayRepos = [openRepo];
+      } else if (openRepo) {
+        displayRepos = [openRepo, ...pageRepos];
+      }
 
       renderChatRepoTabs(tabs);
       chatRepoGrid.classList.toggle("chat-repo-grid-active-repo", Boolean(openRepo));
       chatRepoGrid.replaceChildren(...displayRepos.map(renderChatRepoCard));
-      if (repos.length === 0) {
+      if (viewingRepoChat) {
+        chatStatus.textContent = "1 repository";
+      } else if (repos.length === 0) {
         chatStatus.textContent = "0 repositories";
         const empty = document.createElement("p");
         empty.className = "chat-empty";
