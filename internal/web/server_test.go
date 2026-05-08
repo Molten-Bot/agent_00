@@ -1617,10 +1617,13 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `card.setAttribute("role", "button");`) ||
 		!strings.Contains(markup, `card.setAttribute("aria-expanded", repoKey && state.chatOpenRepoKey === repoKey ? "true" : "false");`) ||
 		!strings.Contains(markup, `promptLog.className = "chat-repo-log";`) ||
+		!strings.Contains(markup, `visibilityIcon.className = `) ||
+		!strings.Contains(markup, `chat-repo-card-visibility-public`) ||
+		!strings.Contains(markup, `chat-repo-card-visibility-private`) ||
 		!strings.Contains(markup, `appendChatRepoPromptMessage(repo, {`) ||
 		!strings.Contains(markup, `fetch("/api/local-prompt", {`) ||
 		!strings.Contains(markup, `payload.baseBranch = branch;`) {
-		t.Fatalf("expected index chat repositories to open prompt panels, show prompt chat logs, and submit repository tasks")
+		t.Fatalf("expected index chat repositories to open prompt panels, show visibility icons, show prompt chat logs, and submit repository tasks")
 	}
 	if !strings.Contains(markup, `function renderChatReposFromSnapshot()`) ||
 		!strings.Contains(markup, `if (chatRepoPanelContainsFocus()) {`) ||
@@ -2384,6 +2387,8 @@ func TestHandlerServesChatView(t *testing.T) {
 		`card.setAttribute("role", "button");`,
 		`chatIcon.className = "chat-repo-card-chat-icon";`,
 		`chatIcon.innerHTML = '<i data-lucide="message-circle" aria-hidden="true"></i>';`,
+		`visibilityIcon.className = "chat-repo-card-visibility " + (repo.private ? "chat-repo-card-visibility-private" : "chat-repo-card-visibility-public");`,
+		`visibilityIcon.innerHTML = '<i data-lucide="' + (repo.private ? "lock" : "globe") + '" aria-hidden="true"></i>';`,
 		`const openPrompt = () => {`,
 		`card.setAttribute("aria-expanded", "true");`,
 		`fetch("/api/local-prompt", {`,
@@ -2601,9 +2606,11 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	if !strings.Contains(css, ".chat-repo-card-head {") ||
 		!strings.Contains(css, ".chat-repo-card {\n  position: relative;") ||
 		!strings.Contains(css, ".chat-repo-card-chat-icon {") ||
+		!strings.Contains(css, ".chat-repo-card-visibility {") ||
+		!strings.Contains(css, ".chat-repo-card-visibility-private {") ||
 		!strings.Contains(css, "  position: absolute;\n  top: 10px;\n  right: 10px;") ||
 		!strings.Contains(css, ".chat-repo-card:hover .chat-repo-card-chat-icon,") {
-		t.Fatalf("expected stylesheet to render chat icons inside repository cards")
+		t.Fatalf("expected stylesheet to render chat and visibility icons inside repository cards")
 	}
 	if !strings.Contains(css, ".hub-emoji-picker-panel-header") || !strings.Contains(css, ".hub-emoji-picker-grid") || !strings.Contains(css, ".hub-emoji-picker-option") {
 		t.Fatalf("expected stylesheet to include the refreshed emoji picker layout styles")
