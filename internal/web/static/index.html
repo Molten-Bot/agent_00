@@ -6661,6 +6661,16 @@
       }
     }
 
+    function syncTaskVisibilityForAppDisplay() {
+      if (state.appDisplay === "chat") {
+        state.taskVisible = false;
+        return;
+      }
+      if (state.appDisplay === "studio") {
+        state.taskVisible = true;
+      }
+    }
+
     function setAppDisplay(display, options = {}) {
       let mode = display === "dashboard" || display === "chat" ? display : "studio";
       if (mode === "chat" && !state.githubReposReady) {
@@ -6675,6 +6685,7 @@
       const showChat = mode === "chat";
       const showStudio = mode === "studio";
       state.appDisplay = mode;
+      syncTaskVisibilityForAppDisplay();
       if (appLayout) {
         appLayout.hidden = false;
         appLayout.dataset.appDisplay = mode;
