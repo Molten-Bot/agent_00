@@ -1617,6 +1617,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `card.setAttribute("role", "button");`) ||
 		!strings.Contains(markup, `card.setAttribute("aria-expanded", repoKey && state.chatOpenRepoKey === repoKey ? "true" : "false");`) ||
 		!strings.Contains(markup, `promptLog.className = "chat-repo-log";`) ||
+		!strings.Contains(markup, `logNode.hidden = !hasMessages;`) ||
+		!strings.Contains(markup, `logNode.setAttribute("aria-hidden", "true");`) ||
 		!strings.Contains(markup, `appendChatRepoPromptMessage(repo, {`) ||
 		!strings.Contains(markup, `fetch("/api/local-prompt", {`) ||
 		!strings.Contains(markup, `payload.baseBranch = branch;`) {
