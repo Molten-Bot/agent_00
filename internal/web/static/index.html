@@ -6221,6 +6221,28 @@
       return String(message?.statusTitle || "").trim() || `Queued request ${requestID}`;
     }
 
+    function renderChatPromptTaskStageIcon(requestID, title) {
+      const task = chatTaskByRequestID(requestID);
+      if (!task || !TASK_PROGRESS_VISIBLE) return null;
+
+      const model = taskProgressModel(task);
+      const steps = Array.isArray(model?.steps) ? model.steps : [];
+      const index = Number.isFinite(model?.index) ? model.index : 0;
+      const step = steps[index] || null;
+      if (!step) return null;
+
+      const icon = document.createElement("span");
+      icon.className = "chat-repo-message-meta-stage-icon";
+      icon.title = title || `Current task stage: ${step.label}.`;
+      icon.setAttribute("aria-label", `Current task stage: ${step.label}.`);
+      icon.dataset.progressStep = String(step.id || "");
+      appendTaskStepIcon(icon, step, task, {
+        iconClass: "chat-repo-message-meta-stage-img",
+        glyphClass: "chat-repo-message-meta-stage-glyph",
+      });
+      return icon;
+    }
+
     function chatPromptMessageTone(message) {
       const requestID = String(message?.requestID || "").trim();
       const task = chatTaskByRequestID(requestID);
@@ -6351,6 +6373,10 @@
         }
         meta.appendChild(item);
       }
+      const stageIcon = renderChatPromptTaskStageIcon(requestID, statusTitle);
+      if (stageIcon) {
+        meta.appendChild(stageIcon);
+      }
       meta.dataset.requestId = requestID;
       meta.dataset.createdAt = String(message?.createdAt || "");
       meta.dataset.imageCount = String(imageCount);
@@ -6361,6 +6387,7 @@
       } else {
         meta.removeAttribute("title");
       }
+      replaceLucideIcons(meta);
     }
 
     function syncChatPromptMessageTaskStatuses(snapshot = state.snapshot) {
