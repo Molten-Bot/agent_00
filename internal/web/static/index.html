@@ -97,15 +97,15 @@
               <span id="prompt-panel-title" class="panel-section-title prompt-title-list" aria-label="Studio views">
                 <span class="prompt-title-mode active" data-prompt-title-mode="builder">
                   <i data-lucide="pencil" class="prompt-title-icon" aria-hidden="true"></i>
-                  <span>Studio <span class="prompt-title-separator" aria-hidden="true">/</span> Prompt</span>
+                  <span>Studio</span>
                 </span>
                 <span class="prompt-title-mode" data-prompt-title-mode="library">
                   <i data-lucide="book-open" class="prompt-title-icon" aria-hidden="true"></i>
-                  <span>Studio <span class="prompt-title-separator" aria-hidden="true">/</span> Library</span>
+                  <span>Studio</span>
                 </span>
                 <span class="prompt-title-mode" data-prompt-title-mode="json">
                   <i data-lucide="braces" class="prompt-title-icon" aria-hidden="true"></i>
-                  <span>Studio <span class="prompt-title-separator" aria-hidden="true">/</span> JSON</span>
+                  <span>Studio</span>
                 </span>
               </span>
               <p id="prompt-panel-copy" class="panel-section-copy">Compose a repository run, start from a library task, or edit the raw JSON payload.</p>
@@ -5623,10 +5623,12 @@
             repo: chatRepoRunValue(repo),
             image_count: next.length,
           });
+          submitStatus.removeAttribute("title");
           submitStatus.textContent = `Attached ${next.length} screenshot${next.length === 1 ? "" : "s"}.`;
           submitStatus.dataset.tone = "ok";
         } catch (err) {
           trackAnalyticsEvent("chat_repo_screenshots_failed", { repo: chatRepoRunValue(repo) });
+          submitStatus.removeAttribute("title");
           submitStatus.textContent = `Screenshot paste failed: ${err.message}`;
           submitStatus.dataset.tone = "error";
         }
@@ -5721,6 +5723,17 @@
       return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     }
 
+    function compactChatRequestID(value) {
+      const requestID = String(value || "").trim();
+      if (!requestID) return "";
+      const localMatch = requestID.match(/^local-\d+-(\d+)$/);
+      if (localMatch) return `Queued #${localMatch[1]}`;
+      if (requestID.length > 18) {
+        return `Queued ${requestID.slice(0, 8)}...${requestID.slice(-4)}`;
+      }
+      return `Queued ${requestID}`;
+    }
+
     function renderChatRepoPromptLog(repo, logNode) {
       if (!logNode) return;
       const messages = chatRepoPromptMessages(repo);
@@ -5748,11 +5761,15 @@
         const parts = [];
         const time = chatPromptMessageTime(message.createdAt);
         if (time) parts.push(time);
-        if (message.requestID) parts.push(`Queued ${message.requestID}`);
+        const compactRequestID = compactChatRequestID(message.requestID);
+        if (compactRequestID) parts.push(compactRequestID);
         if (message.imageCount > 0) {
           parts.push(`${message.imageCount} screenshot${message.imageCount === 1 ? "" : "s"}`);
         }
         meta.textContent = parts.join(" | ");
+        if (message.requestID) {
+          meta.title = `Queued request ${message.requestID}`;
+        }
         bubble.appendChild(meta);
 
         logNode.appendChild(bubble);
@@ -5831,6 +5848,7 @@
       const repoValue = chatRepoRunValue(repo);
       const prompt = String(input?.value || "").trim();
       const promptImages = normalizePromptImages(images);
+      statusNode.removeAttribute("title");
       if (!repoValue) {
         statusNode.textContent = "Repository is unavailable.";
         statusNode.dataset.tone = "error";
@@ -5894,7 +5912,8 @@
         }
         rememberRepos([repoValue]);
         trackAnalyticsEvent("chat_repo_prompt_succeeded", { request_id: requestID });
-        statusNode.textContent = `Queued request ${requestID}`;
+        statusNode.textContent = compactChatRequestID(requestID) || "Queued.";
+        statusNode.title = `Queued request ${requestID}`;
         statusNode.dataset.tone = "ok";
       } catch (err) {
         trackAnalyticsEvent("chat_repo_prompt_failed");
