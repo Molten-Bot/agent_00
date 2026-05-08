@@ -3299,11 +3299,9 @@ select.prompt-control {
 .chat-repo-message-link {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
   color: inherit;
   font-weight: 850;
-  text-decoration: underline;
-  text-underline-offset: 2px;
+  text-decoration: none;
 }
 
 .chat-repo-message-link-logo {

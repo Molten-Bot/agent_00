@@ -1692,7 +1692,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `if (!href) {`) ||
 		!strings.Contains(markup, `body.appendChild(document.createTextNode("Your task is complete "));`) ||
 		!strings.Contains(markup, `logo.src = GITHUB_LOGO_URL;`) ||
-		!strings.Contains(markup, `label.textContent = "Link to PR";`) ||
+		!strings.Contains(markup, `link.append(logo);`) ||
 		!strings.Contains(markup, `bubble.className = "chat-repo-message chat-repo-message-assistant";`) ||
 		!strings.Contains(markup, `syncChatPromptCompletionBubble(bubble, message);`) ||
 		!strings.Contains(markup, `bubble.dataset.tone = chatPromptMessageTone(message);`) ||
