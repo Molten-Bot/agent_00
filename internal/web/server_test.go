@@ -3145,6 +3145,25 @@ func TestHandlerServesStaticPiLogoAsset(t *testing.T) {
 	}
 }
 
+func TestHandlerServesStaticOpenCodeLogoAsset(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	req := httptest.NewRequest(http.MethodGet, "/static/logos/opencode.svg", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d", resp.Code)
+	}
+	if ct := resp.Header().Get("Content-Type"); !strings.Contains(ct, "image/svg+xml") {
+		t.Fatalf("content-type = %q", ct)
+	}
+	if body := resp.Body.String(); !strings.Contains(body, `aria-label="OpenCode logo"`) {
+		t.Fatalf("expected OpenCode svg payload, got %q", body)
+	}
+}
+
 func TestHandlerServesTransparentMoltenHubLogoAsset(t *testing.T) {
 	t.Parallel()
 
