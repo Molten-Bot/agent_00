@@ -3565,7 +3565,7 @@ select.prompt-control {
 
 .dashboard-stats-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -3605,6 +3605,11 @@ select.prompt-control {
   color: var(--text);
   font-size: clamp(2.15rem, 3.8vw, 3.3rem);
   line-height: 0.95;
+}
+
+.dashboard-stat-card strong.dashboard-total-stat {
+  font-size: clamp(1.35rem, 2.1vw, 2rem);
+  line-height: 1.05;
 }
 
 .dashboard-stat-meta {

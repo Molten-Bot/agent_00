@@ -89,6 +89,7 @@ func TestHandlerStateEndpointReturnsDashboardStats(t *testing.T) {
 
 	now := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
 	b := NewBroker()
+	b.sessionStartedAt = now.Add(-30 * time.Second)
 	b.now = func() time.Time { return now }
 	b.IngestLog("dispatch status=start request_id=req-1")
 	now = now.Add(10 * time.Second)
@@ -121,6 +122,9 @@ func TestHandlerStateEndpointReturnsDashboardStats(t *testing.T) {
 	}
 	if snap.Stats.MaxConcurrentTasks != 2 {
 		t.Fatalf("stats.max_concurrent_tasks = %d, want 2", snap.Stats.MaxConcurrentTasks)
+	}
+	if snap.Stats.SessionRuntimeSeconds != 60 {
+		t.Fatalf("stats.session_runtime_seconds = %f, want 60", snap.Stats.SessionRuntimeSeconds)
 	}
 	if snap.Stats.ThroughputPerHour <= 0 {
 		t.Fatalf("stats.throughput_per_hour = %f, want positive", snap.Stats.ThroughputPerHour)
@@ -244,6 +248,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `id="dashboard-display"`) ||
 		!strings.Contains(markup, `<h1 id="dashboard-title">Session Dashboard</h1>`) ||
 		!strings.Contains(markup, `id="dashboard-max-concurrent"`) ||
+		!strings.Contains(markup, `id="dashboard-session-runtime"`) ||
+		!strings.Contains(markup, `Session Runtime`) ||
+		!strings.Contains(markup, `stats.session_runtime_seconds`) ||
 		!strings.Contains(markup, `id="dashboard-time-saved"`) ||
 		!strings.Contains(markup, `id="dashboard-workflow-times"`) ||
 		!strings.Contains(markup, `id="dashboard-agent-times"`) ||
@@ -251,6 +258,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `id="dashboard-source-chart"`) ||
 		!strings.Contains(markup, `id="dashboard-source-total"`) {
 		t.Fatalf("expected index html to render the dashboard stats panel")
+	}
+	if !strings.Contains(markup, `<span class="dashboard-stat-label">Totals</span>`) ||
+		!strings.Contains(markup, `<strong id="dashboard-total-tasks" class="dashboard-total-stat">Tasks 0 PRs 0</strong>`) ||
+		!strings.Contains(markup, "function dashboardPullRequestCount(snapshot)") ||
+		!strings.Contains(markup, "dashboardTotalTasks.textContent = `Tasks ${Number(stats.total_tasks || 0)} PRs ${dashboardPullRequestCount(snapshot)}`;") {
+		t.Fatalf("expected dashboard total card to show task and pull-request totals")
 	}
 	if !strings.Contains(markup, `id="dashboard-share-x"`) ||
 		!strings.Contains(markup, `id="dashboard-share-facebook"`) ||
@@ -1657,15 +1670,17 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `id="chat-repo-tabs"`) ||
 		!strings.Contains(markup, `function chatPromptedRepoTabs()`) ||
 		!strings.Contains(markup, `state.snapshot.prompted_repos`) ||
-		!strings.Contains(markup, `reposButton.textContent = "All";`) ||
+		!strings.Contains(markup, `reposIcon.innerHTML = `+"`"+`<i data-lucide="brick-wall" aria-hidden="true"></i>`+"`"+`;`) ||
+		!strings.Contains(markup, `reposLabel.textContent = "All repositories";`) ||
 		!strings.Contains(markup, `function selectedChatRepo(repos, selectedTab)`) ||
 		!strings.Contains(markup, `chatRepoGrid.classList.toggle("chat-repo-grid-active-repo", Boolean(openRepo));`) ||
 		!strings.Contains(markup, `const displayRepos = openRepo ? [openRepo, ...pageRepos] : pageRepos;`) {
-		t.Fatalf("expected index html chat to render prompted repository tabs and pin the open repository above the repository list")
+		t.Fatalf("expected index html chat to render prompted repository tabs, icon-only repos tab, and pin the open repository above the repository list")
 	}
-	if strings.Contains(markup, `chatStatus.textContent = chatRepoTabLabel(selectedTab.value);`) ||
-		strings.Contains(markup, `repos = repos.filter((repo) => !promptedKeys.has(chatRepoKey(chatRepoRunValue(repo))));`) {
-		t.Fatalf("expected chat repository list to keep all repositories below the open repository")
+	if strings.Contains(markup, `reposButton.textContent = "All";`) ||
+		strings.Contains(markup, `repos = repos.filter((repo) => !promptedKeys.has(chatRepoKey(chatRepoRunValue(repo))));`) ||
+		strings.Contains(markup, `chatStatus.textContent = chatRepoTabLabel(selectedTab.value);`) {
+		t.Fatalf("expected chat repository list to keep all repositories below the open repository with an icon-only repos tab")
 	}
 	if strings.Contains(markup, `taskItems.push(githubReposLoadingTask())`) ||
 		strings.Contains(markup, `repoRead.textContent = "repos: reading GitHub projects";`) ||
