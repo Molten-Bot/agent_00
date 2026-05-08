@@ -1666,6 +1666,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, `reposButton.textContent = "All";`) {
 		t.Fatalf("expected index html chat repos tab to render as an icon-only control")
 	}
+	if !strings.Contains(markup, "} else if (selectedTab) {\n        chatStatus.textContent = \"\";") ||
+		strings.Contains(markup, `chatStatus.textContent = chatRepoTabLabel(selectedTab.value);`) {
+		t.Fatalf("expected active chat repository tabs to avoid duplicating the repository name in the status label")
+	}
 	if strings.Contains(markup, `taskItems.push(githubReposLoadingTask())`) ||
 		strings.Contains(markup, `repoRead.textContent = "repos: reading GitHub projects";`) ||
 		strings.Contains(markup, `const GITHUB_REPOS_LOADING_TASK_ID = "github-repos-loading";`) ||
@@ -1706,7 +1710,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `function chatPromptMessageTone(message)`) ||
 		!strings.Contains(markup, `function chatPromptCompletion(message)`) ||
 		!strings.Contains(markup, `if (!href) {`) ||
-		!strings.Contains(markup, `body.appendChild(document.createTextNode("Your task is complete "));`) ||
+		!strings.Contains(markup, `body.appendChild(link);`) ||
+		!strings.Contains(markup, `body.appendChild(document.createTextNode(" Your task is complete"));`) ||
 		!strings.Contains(markup, `logo.src = GITHUB_LOGO_URL;`) ||
 		!strings.Contains(markup, `link.append(logo);`) ||
 		!strings.Contains(markup, `bubble.className = "chat-repo-message chat-repo-message-assistant";`) ||
