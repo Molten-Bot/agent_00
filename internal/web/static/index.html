@@ -5638,6 +5638,18 @@
       }
     }
 
+    function chatRepoOwnerType(repo) {
+      return String(repo?.owner_type || repo?.owner?.type || "").trim().toLowerCase();
+    }
+
+    function chatRepoOwnerIconName(repo) {
+      return chatRepoOwnerType(repo) === "organization" ? "building-2" : "user";
+    }
+
+    function chatRepoOwnerIconLabel(repo) {
+      return chatRepoOwnerType(repo) === "organization" ? "Organization repository" : "Personal repository";
+    }
+
     function renderChatRepoCard(repo) {
       const repoKey = chatRepoKey(chatRepoRunValue(repo));
       const visibility = repo?.private ? "Private" : "Public";
@@ -5651,6 +5663,13 @@
 
       const head = document.createElement("span");
       head.className = "chat-repo-card-head";
+
+      const ownerIcon = document.createElement("span");
+      ownerIcon.className = "chat-repo-card-owner-icon";
+      ownerIcon.title = chatRepoOwnerIconLabel(repo);
+      ownerIcon.setAttribute("aria-hidden", "true");
+      ownerIcon.innerHTML = `<i data-lucide="${chatRepoOwnerIconName(repo)}" aria-hidden="true"></i>`;
+      head.appendChild(ownerIcon);
 
       const title = document.createElement("span");
       title.className = "chat-repo-card-title";
