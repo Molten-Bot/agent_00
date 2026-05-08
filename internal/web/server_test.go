@@ -259,11 +259,15 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `id="dashboard-source-total"`) {
 		t.Fatalf("expected index html to render the dashboard stats panel")
 	}
-	if !strings.Contains(markup, `<span class="dashboard-stat-label">Totals</span>`) ||
-		!strings.Contains(markup, `<strong id="dashboard-total-tasks" class="dashboard-total-stat">Tasks 0 PRs 0</strong>`) ||
+	if !strings.Contains(markup, `<span class="dashboard-stat-label">Total Tasks</span>`) ||
+		!strings.Contains(markup, `<strong id="dashboard-total-tasks">0</strong>`) ||
+		!strings.Contains(markup, `<span class="dashboard-stat-label">Pull Requests</span>`) ||
+		!strings.Contains(markup, `<strong id="dashboard-total-prs">0</strong>`) ||
 		!strings.Contains(markup, "function dashboardPullRequestCount(snapshot)") ||
-		!strings.Contains(markup, "dashboardTotalTasks.textContent = `Tasks ${Number(stats.total_tasks || 0)} PRs ${dashboardPullRequestCount(snapshot)}`;") {
-		t.Fatalf("expected dashboard total card to show task and pull-request totals")
+		!strings.Contains(markup, `const dashboardTotalPRs = document.getElementById("dashboard-total-prs");`) ||
+		!strings.Contains(markup, "dashboardTotalTasks.textContent = String(Number(stats.total_tasks || 0));") ||
+		!strings.Contains(markup, "dashboardTotalPRs.textContent = String(dashboardPullRequestCount(snapshot));") {
+		t.Fatalf("expected dashboard to show task and pull-request totals in separate stat cards")
 	}
 	if !strings.Contains(markup, `id="dashboard-share-x"`) ||
 		!strings.Contains(markup, `id="dashboard-share-facebook"`) ||
