@@ -2963,6 +2963,10 @@ func isNoImplementationTargetLine(lowerLine string) bool {
 		"no implementation task was given",
 		"no implementation task provided",
 		"no implementation task was provided",
+		"no task given",
+		"no task was given",
+		"no task provided",
+		"no task was provided",
 	} {
 		if strings.Contains(lowerLine, marker) {
 			return true
@@ -2975,6 +2979,10 @@ func isNoImplementationTargetLine(lowerLine string) bool {
 			"waiting for task",
 			"provide implementation task",
 			"provide an implementation task",
+			"send actual change request",
+			"send actual repo task",
+			"need actual change request",
+			"need actual repo task",
 		} {
 			if strings.Contains(lowerLine, marker) {
 				return true
