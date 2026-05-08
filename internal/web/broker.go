@@ -749,7 +749,7 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 			}
 		}
 		duration := taskDuration(startedAt, updatedAt, now, status)
-		addTimeStatsGroup(workflowGroups, normalizedGroupName(attempt.Workflow, "Ad Hoc Prompt"), status, duration)
+		addTimeStatsGroup(workflowGroups, workflowStatsGroupName(attempt.Workflow), status, duration)
 		addTimeStatsGroup(agentGroups, normalizedGroupName(attempt.Agent, "Unknown Agent"), status, duration)
 		addCountStatsGroup(sourceGroups, sourceGroupName(attempt.Source), status)
 	}
@@ -881,6 +881,32 @@ func taskAgentHarness(t *taskState) string {
 		return ""
 	}
 	return firstNonEmpty(t.AgentHarness, agentHarnessFromStage(t.Stage))
+}
+
+func workflowStatsGroupName(name string) string {
+	name = normalizedGroupName(name, "Ad Hoc Prompt")
+	if displayName := libraryTaskDisplayNameByName(name); displayName != "" {
+		return displayName
+	}
+	return name
+}
+
+func libraryTaskDisplayNameByName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	catalog, err := library.LoadCatalog(library.DefaultDir)
+	if err != nil {
+		return ""
+	}
+	for _, task := range catalog.Summaries() {
+		if strings.TrimSpace(task.Name) != name {
+			continue
+		}
+		return strings.TrimSpace(task.DisplayName)
+	}
+	return ""
 }
 
 func addTimeStatsGroup(groups map[string]*TimeStatsGroup, name, status string, duration time.Duration) {
