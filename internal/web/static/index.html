@@ -305,19 +305,6 @@
           </form>
         </section>
 
-        <section id="releases-display" class="releases-display hidden panel brand-login-card-shell" aria-label="Releases" aria-hidden="true">
-          <div class="panel-header">
-            <div class="panel-header-copy">
-              <h1 class="panel-section-title releases-title">Releases</h1>
-            </div>
-          </div>
-          <div id="release-list" class="release-list">
-            <div class="release-empty" aria-label="No releases">
-              <p>No releases yet.</p>
-            </div>
-          </div>
-        </section>
-
         <section id="dashboard-display" class="dashboard-display hidden" aria-labelledby="dashboard-title" aria-hidden="true">
           <div class="dashboard-head">
             <div>
@@ -1804,8 +1791,6 @@
     const promptModeJSON = document.getElementById("prompt-mode-json");
     const promptTitleModes = Array.from(document.querySelectorAll("[data-prompt-title-mode]"));
     const appLayout = document.querySelector(".layout");
-    const releasesDisplay = document.getElementById("releases-display");
-    const releaseList = document.getElementById("release-list");
     const dashboardDisplay = document.getElementById("dashboard-display");
     const dashboardUpdated = document.getElementById("dashboard-updated");
     const dashboardMaxConcurrent = document.getElementById("dashboard-max-concurrent");
@@ -1826,7 +1811,6 @@
     const chatRepoPagination = document.getElementById("chat-repo-pagination");
     const appDisplayLinks = Array.from(document.querySelectorAll("[data-app-display]"));
     const chatDockLink = document.querySelector('[data-app-display="chat"]');
-    const releaseDockLink = document.querySelector('[data-app-display="releases"]');
     const promptPanelTitle = document.getElementById("prompt-panel-title");
     const promptPanelCopy = document.getElementById("prompt-panel-copy");
     const githubProfileLink = document.getElementById("github-profile-link");
@@ -2201,44 +2185,6 @@
         chatDockLink.removeAttribute("href");
       }
       chatDockLink.title = available ? "Chat" : (state.githubReposLoadError || "Chat unavailable until repositories load");
-    }
-
-    function snapshotHasReleases(snapshot = state.snapshot) {
-      return Array.isArray(snapshot?.releases) && snapshot.releases.length > 0;
-    }
-
-    function releasesAvailable(snapshot = state.snapshot) {
-      if (snapshot && typeof snapshot === "object") {
-        return snapshotHasReleases(snapshot);
-      }
-      return releaseDockLink && releaseDockLink.getAttribute("aria-disabled") !== "true";
-    }
-
-    function syncReleaseDockLinkAvailability(snapshot = state.snapshot) {
-      if (window.HubBottomDock && typeof window.HubBottomDock.syncReleaseDockLinkAvailability === "function") {
-        window.HubBottomDock.syncReleaseDockLinkAvailability(snapshot);
-        return;
-      }
-      if (!releaseDockLink) {
-        return;
-      }
-      if (!snapshot || typeof snapshot !== "object") {
-        return;
-      }
-      const available = snapshotHasReleases(snapshot);
-      releaseDockLink.classList.toggle("is-disabled", !available);
-      releaseDockLink.setAttribute("aria-disabled", String(!available));
-      if (available) {
-        releaseDockLink.href = "#releases";
-        releaseDockLink.removeAttribute("tabindex");
-        releaseDockLink.title = "Releases";
-      } else {
-        releaseDockLink.removeAttribute("href");
-        releaseDockLink.tabIndex = -1;
-        releaseDockLink.title = "No releases yet";
-        releaseDockLink.classList.remove("active");
-        releaseDockLink.removeAttribute("aria-current");
-      }
     }
 
     function loadGitHubReposForChat() {
@@ -4645,91 +4591,6 @@
       }
     }
 
-    function releasePromptLabel(release) {
-      const prompt = String(release?.prompt || "").trim();
-      if (prompt) return prompt;
-      const workflow = String(release?.workflow || release?.skill || "").trim();
-      if (workflow) return workflow;
-      return "Merged prompt";
-    }
-
-    function releaseMetaParts(release) {
-      const parts = [];
-      const repos = normalizedTaskRepos(release);
-      if (repos.length) parts.push(repos.join(", "));
-      const branch = formatTaskBranch(release);
-      if (branch && branch !== "-") parts.push(branch);
-      const agent = String(release?.agent_harness || "").trim();
-      if (agent) parts.push(agent);
-      return parts;
-    }
-
-    function renderReleases(snapshot) {
-      if (!releaseList) return;
-      syncReleaseDockLinkAvailability(snapshot);
-      releaseList.textContent = "";
-      const releases = Array.isArray(snapshot?.releases) ? snapshot.releases : [];
-      if (!releases.length) {
-        const empty = document.createElement("div");
-        empty.className = "release-empty";
-        empty.setAttribute("aria-label", "No releases");
-        const text = document.createElement("p");
-        text.textContent = "No releases yet.";
-        empty.appendChild(text);
-        releaseList.appendChild(empty);
-        return;
-      }
-
-      for (const release of releases) {
-        const card = document.createElement("article");
-        card.className = "release-card";
-
-        const icon = document.createElement("span");
-        icon.className = "release-change-status release-change-status-preserved";
-        icon.setAttribute("aria-hidden", "true");
-        const iconNode = document.createElement("i");
-        iconNode.dataset.lucide = "git-merge";
-        iconNode.className = "release-change-icon";
-        icon.appendChild(iconNode);
-
-        const body = document.createElement("div");
-        body.className = "release-card-body";
-        const title = document.createElement("p");
-        title.className = "release-prompt";
-        title.textContent = releasePromptLabel(release);
-        body.appendChild(title);
-
-        const metaParts = releaseMetaParts(release);
-        const mergedAt = relativeTime(release?.merged_at || release?.released_at);
-        const duration = dashboardDuration(Number(release?.duration_seconds || 0));
-        if (mergedAt) metaParts.push(`merged ${mergedAt}`);
-        if (duration && duration !== "0m") metaParts.push(`${duration} runtime`);
-        if (metaParts.length) {
-          const meta = document.createElement("div");
-          meta.className = "release-meta";
-          meta.textContent = metaParts.join(" | ");
-          body.appendChild(meta);
-        }
-
-        const prURL = String(release?.pr_url || "").trim();
-        if (prURL) {
-          const link = document.createElement("a");
-          link.className = "release-link";
-          link.href = prURL;
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          link.textContent = "Pull request";
-          body.appendChild(link);
-        }
-
-        card.append(icon, body);
-        releaseList.appendChild(card);
-      }
-      if (window.lucide) {
-        window.lucide.createIcons();
-      }
-    }
-
     function escapeLiteralNewlinesInJSONStrings(raw) {
       let out = "";
       let inString = false;
@@ -6675,9 +6536,6 @@
 
     function appDisplayFromHash() {
       const hash = String(window.location.hash || "").replace(/^#/, "").trim().toLowerCase();
-      if (hash === "releases") {
-        return releasesAvailable() ? "releases" : "studio";
-      }
       if (hash === "dashboard" || hash === "chat") {
         return hash;
       }
@@ -6738,11 +6596,7 @@
     }
 
     function setAppDisplay(display, options = {}) {
-      let mode = display === "releases" || display === "dashboard" || display === "chat" ? display : "studio";
-      if (mode === "releases" && !releasesAvailable()) {
-        syncReleaseDockLinkAvailability();
-        mode = "studio";
-      }
+      let mode = display === "dashboard" || display === "chat" ? display : "studio";
       if (mode === "chat" && !state.githubReposReady) {
         void loadGitHubReposForChat().then(() => {
           if (state.githubReposReady && appDisplayFromHash() === "chat") {
@@ -6751,7 +6605,6 @@
         });
         mode = "studio";
       }
-      const showReleases = mode === "releases";
       const showDashboard = mode === "dashboard";
       const showChat = mode === "chat";
       const showStudio = mode === "studio";
@@ -6759,10 +6612,6 @@
       if (appLayout) {
         appLayout.hidden = false;
         appLayout.dataset.appDisplay = mode;
-      }
-      if (releasesDisplay) {
-        releasesDisplay.classList.toggle("hidden", !showReleases);
-        releasesDisplay.setAttribute("aria-hidden", String(!showReleases));
       }
       if (dashboardDisplay) {
         dashboardDisplay.classList.toggle("hidden", !showDashboard);
@@ -6786,14 +6635,11 @@
         }
       }
       syncPromptModeLinks();
-      renderReleases(state.snapshot);
       renderTasks(state.snapshot);
       renderDashboardStats(state.snapshot);
       if (options.updateHash) {
         const nextHash = typeof options.updateHash === "string"
           ? options.updateHash
-          : mode === "releases"
-            ? "#releases"
           : mode === "dashboard"
             ? "#dashboard"
             : mode === "chat"
@@ -10018,17 +9864,11 @@
       syncTaskIconStateMemory(snapshot.tasks || []);
       renderHubConnection(snapshot);
       renderResourceMetrics(snapshot);
-      renderReleases(snapshot);
       renderDashboardStats(snapshot);
       renderTasks(snapshot);
       renderFullscreenTasks(snapshot);
       renderChatReposFromSnapshot();
       renderFullscreenTerminal(snapshot);
-      if (state.appDisplay === "releases" && !snapshotHasReleases(snapshot)) {
-        setAppDisplay("studio");
-      } else if (state.appDisplay !== "releases" && appDisplayFromHash() === "releases") {
-        setAppDisplay("releases");
-      }
     }
 
     async function loadLibraryTasks() {
@@ -10696,13 +10536,6 @@
           return;
         }
         const display = String(link.dataset.appDisplay || "").trim();
-        if (display === "releases" && !releasesAvailable()) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          syncReleaseDockLinkAvailability();
-          trackAnalyticsEvent("releases_open_blocked", { reason: "no_releases" });
-          return;
-        }
         event.preventDefault();
         setAppDisplay(display, { updateHash: true });
       });

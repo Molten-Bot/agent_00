@@ -400,10 +400,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `id="prompt-mode-builder" class="prompt-mode-link active" href="#studio-builder" aria-selected="true" title="Prompt"`) {
 		t.Fatalf("expected index html to relabel the primary dock mode as Prompt")
 	}
-	if !strings.Contains(markup, `class="prompt-mode-link site-dock-link is-disabled" data-app-display="releases" aria-label="Releases" aria-disabled="true" tabindex="-1" title="No releases yet"`) ||
-		strings.Contains(markup, `href="#releases" data-app-display="releases"`) ||
-		strings.Contains(markup, `data-app-display="releases" aria-label="Releases" aria-hidden="true"`) {
-		t.Fatalf("expected index html to render the releases dock link as disabled until releases exist")
+	if strings.Contains(markup, `data-app-display="releases"`) ||
+		strings.Contains(markup, `href="#releases"`) ||
+		strings.Contains(markup, `data-lucide="tag"`) {
+		t.Fatalf("expected index html to omit the releases dock link")
 	}
 	if !strings.Contains(markup, `id="hub-setup-emoji-picker"`) || !strings.Contains(markup, `id="hub-setup-emoji-panel"`) {
 		t.Fatalf("expected index html to include the emoji picker control shell")
@@ -1550,15 +1550,13 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `activatePromptMode("json");`) {
 		t.Fatalf("expected bottom dock Library and JSON controls to activate their Studio views through the shared mode path")
 	}
-	if !strings.Contains(markup, `let mode = display === "releases" || display === "dashboard" || display === "chat" ? display : "studio";`) ||
-		!strings.Contains(markup, `function releasesAvailable(snapshot = state.snapshot)`) ||
-		!strings.Contains(markup, `if (mode === "releases" && !releasesAvailable()) {`) ||
-		!strings.Contains(markup, `mode = "studio";`) ||
+	if !strings.Contains(markup, `let mode = display === "dashboard" || display === "chat" ? display : "studio";`) ||
 		!strings.Contains(markup, `if (mode === "chat" && !state.githubReposReady) {`) ||
+		!strings.Contains(markup, `mode = "studio";`) ||
 		!strings.Contains(markup, `appLayout.hidden = false;`) ||
 		!strings.Contains(markup, `promptWrap.hidden = !showStudio;`) ||
 		!strings.Contains(markup, `const showTaskPanel = state.appDisplay === "studio" || state.appDisplay === "chat";`) {
-		t.Fatalf("expected index html to switch main views while hiding Current Work on dashboard and releases")
+		t.Fatalf("expected index html to switch main views while hiding Current Work on dashboard")
 	}
 	if !strings.Contains(markup, `function syncPromptTitleModes()`) ||
 		!strings.Contains(markup, `item.hidden = !active;`) ||
@@ -1600,12 +1598,6 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `const chatDockLink = document.querySelector('[data-app-display="chat"]');`) ||
 		!strings.Contains(markup, `chatDockLink.setAttribute("aria-disabled", String(!available));`) ||
 		!strings.Contains(markup, `chatDockLink.removeAttribute("href");`) ||
-		!strings.Contains(markup, `const releaseDockLink = document.querySelector('[data-app-display="releases"]');`) ||
-		!strings.Contains(markup, `function syncReleaseDockLinkAvailability(snapshot = state.snapshot)`) ||
-		!strings.Contains(markup, `releaseDockLink.setAttribute("aria-disabled", String(!available));`) ||
-		!strings.Contains(markup, `releaseDockLink.removeAttribute("href");`) ||
-		!strings.Contains(markup, `if (display === "releases" && !releasesAvailable()) {`) ||
-		!strings.Contains(markup, `trackAnalyticsEvent("releases_open_blocked", { reason: "no_releases" });`) ||
 		!strings.Contains(markup, `let githubReposLoadPromise = null;`) ||
 		!strings.Contains(markup, `const response = await fetch("/api/github/repos", { cache: "no-store" });`) ||
 		!strings.Contains(markup, `state.githubRepos = Array.isArray(body.repos) ? body.repos : [];`) ||
@@ -1621,6 +1613,11 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `state.chatRepoSearchQuery = chatRepoSearch.value;`) ||
 		!strings.Contains(markup, `empty.textContent = state.chatRepoSearchQuery ? "No repositories match search."`) {
 		t.Fatalf("expected index html to gate chat availability on GitHub repository loading")
+	}
+	if strings.Contains(markup, `const releaseDockLink = document.querySelector('[data-app-display="releases"]');`) ||
+		strings.Contains(markup, `function syncReleaseDockLinkAvailability`) ||
+		strings.Contains(markup, `releases_open_blocked`) {
+		t.Fatalf("expected index html to omit release dock availability handling")
 	}
 	if !strings.Contains(markup, `id="chat-repo-tabs"`) ||
 		!strings.Contains(markup, `function chatPromptedRepoTabs()`) ||
@@ -2338,7 +2335,7 @@ func TestHandlerIndexIncludesClaudeBrowserCodeFlow(t *testing.T) {
 	}
 }
 
-func TestHandlerServesReleasesAsIndexDisplay(t *testing.T) {
+func TestHandlerOmitsReleasesIndexDisplay(t *testing.T) {
 	t.Parallel()
 
 	srv := NewServer("", NewBroker())
@@ -2360,25 +2357,22 @@ func TestHandlerServesReleasesAsIndexDisplay(t *testing.T) {
 		strings.Contains(markup, `<!-- hub-bottom-dock -->`) {
 		t.Fatalf("expected index html to render shared dock component")
 	}
-	if !strings.Contains(markup, `id="releases-display" class="releases-display hidden panel brand-login-card-shell" aria-label="Releases"`) ||
-		!strings.Contains(markup, `<h1 class="panel-section-title releases-title">Releases</h1>`) ||
-		!strings.Contains(markup, `class="release-empty" aria-label="No releases"`) ||
-		!strings.Contains(markup, `No releases yet.`) {
-		t.Fatalf("expected index html to include releases display empty state")
-	}
-	defaultEntries := []string{
-		"Refresh task cards so change summaries scan faster in narrow views.",
-		"Polish release notes presentation for smaller screens.",
-		"Preserve change status reference without showing text badges.",
-	}
-	for _, entry := range defaultEntries {
-		if strings.Contains(markup, entry) {
-			t.Fatalf("expected releases html to omit fake default entry %q", entry)
+	for _, removed := range []string{
+		`id="releases-display"`,
+		`class="releases-display`,
+		`id="release-list"`,
+		`class="release-empty"`,
+		`data-app-display="releases"`,
+		`href="#releases"`,
+		`No releases yet.`,
+	} {
+		if strings.Contains(markup, removed) {
+			t.Fatalf("expected index html to omit release UI %q", removed)
 		}
 	}
 }
 
-func TestHandlerEnablesReleasesDockWhenSnapshotHasReleases(t *testing.T) {
+func TestHandlerKeepsReleasesDockRemovedWhenSnapshotHasReleases(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
@@ -2402,10 +2396,9 @@ func TestHandlerEnablesReleasesDockWhenSnapshotHasReleases(t *testing.T) {
 		t.Fatalf("status = %d", resp.Code)
 	}
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `class="prompt-mode-link site-dock-link" href="#releases" data-app-display="releases" aria-label="Releases" title="Releases"`) ||
-		strings.Contains(markup, `data-app-display="releases" aria-label="Releases" aria-disabled="true"`) ||
-		strings.Contains(markup, `data-app-display="releases" aria-label="Releases" tabindex="-1"`) {
-		t.Fatalf("expected index html to enable the releases dock link when releases exist")
+	if strings.Contains(markup, `data-app-display="releases"`) ||
+		strings.Contains(markup, `href="#releases"`) {
+		t.Fatalf("expected index html to keep releases dock link removed even when releases exist")
 	}
 }
 
@@ -2670,9 +2663,13 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	}
 	if !strings.Contains(css, "moltenhub-code-header {\n  display: block;") ||
 		!strings.Contains(css, "moltenhub-code-nav {\n  display: block;") ||
-		!strings.Contains(css, ".site-page-footer {") ||
-		!strings.Contains(css, ".releases-display {") {
-		t.Fatalf("expected stylesheet to include shared site page shell and SPA release display styles")
+		!strings.Contains(css, ".site-page-footer {") {
+		t.Fatalf("expected stylesheet to include shared site page shell styles")
+	}
+	if strings.Contains(css, ".releases-display {") ||
+		strings.Contains(css, ".release-card {") ||
+		strings.Contains(css, ".release-empty {") {
+		t.Fatalf("expected stylesheet to omit release display styles")
 	}
 	if !strings.Contains(css, "--hub-page-width: 1500px;") ||
 		!strings.Contains(css, "width: min(var(--hub-page-width), 100%);") ||

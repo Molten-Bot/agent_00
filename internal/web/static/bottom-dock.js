@@ -5,9 +5,6 @@
   const THEME_MODES = ["light", "dark", "night", "pink"];
   const DEFAULT_THEME_MODE = "light";
   const HOME_PATH = "/";
-  const RELEASES_HASH = "#releases";
-  const RELEASES_READY_TITLE = "Releases";
-  const RELEASES_EMPTY_TITLE = "No releases yet";
   const HUB_PROFILE_DEEP_LINK_HASH = "#agent-profile";
   const HUB_LOGIN_URL = "https://molten.bot/login?target=hub";
   const HUB_DASHBOARD_URL = "https://app.molten.bot/hub";
@@ -180,7 +177,7 @@
 
   function syncPageNavLinks(root) {
     const hashDisplay = String(window.location.hash || "").replace(/^#/, "").trim();
-    const currentDisplay = hashDisplay === "releases" || hashDisplay === "dashboard" || hashDisplay === "chat"
+    const currentDisplay = hashDisplay === "dashboard" || hashDisplay === "chat"
       ? hashDisplay
       : normalizePath(window.location.pathname) === "/chat"
         ? "chat"
@@ -196,52 +193,6 @@
         link.removeAttribute("aria-current");
       }
     });
-  }
-
-  function snapshotHasReleases(snapshot) {
-    return Array.isArray(snapshot?.releases) && snapshot.releases.length > 0;
-  }
-
-  function syncReleaseDockLinkAvailability(snapshot, root = document) {
-    const releaseLink = root.querySelector('[data-app-display="releases"]');
-    if (!releaseLink) {
-      return;
-    }
-    if (!snapshot || typeof snapshot !== "object") {
-      return;
-    }
-    const available = snapshotHasReleases(snapshot);
-    releaseLink.classList.toggle("is-disabled", !available);
-    releaseLink.setAttribute("aria-disabled", String(!available));
-    if (available) {
-      releaseLink.href = RELEASES_HASH;
-      releaseLink.removeAttribute("tabindex");
-      releaseLink.title = RELEASES_READY_TITLE;
-    } else {
-      releaseLink.removeAttribute("href");
-      releaseLink.tabIndex = -1;
-      releaseLink.title = RELEASES_EMPTY_TITLE;
-      releaseLink.classList.remove("active");
-      releaseLink.removeAttribute("aria-current");
-    }
-  }
-
-  async function resolveReleaseDockState(root) {
-    if (isHomePage()) {
-      return;
-    }
-    try {
-      const response = await fetch("/api/status", { cache: "no-store" });
-      let body = null;
-      try {
-        body = await response.json();
-      } catch (_err) {
-        body = null;
-      }
-      syncReleaseDockLinkAvailability(response.ok ? body : { releases: [] }, root);
-    } catch (_err) {
-      syncReleaseDockLinkAvailability({ releases: [] }, root);
-    }
   }
 
   function dockLinkDisabled(link) {
@@ -414,7 +365,6 @@
     bindStaticDockAnalytics(root);
     bindPageNavAnalytics(root);
     void resolveGitHubProfileLink();
-    void resolveReleaseDockState(root);
     void resolveHubDockState();
   }
 
@@ -422,7 +372,6 @@
     init,
     applyThemeMode,
     syncThemeToggle,
-    syncReleaseDockLinkAvailability,
   });
 
   if (document.readyState === "loading") {
