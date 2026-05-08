@@ -6023,10 +6023,7 @@
       logo.alt = "";
       logo.setAttribute("aria-hidden", "true");
 
-      const label = document.createElement("span");
-      label.textContent = "Link to PR";
-
-      link.append(logo, label);
+      link.append(logo);
       link.addEventListener("click", (event) => {
         openExternalTaskLink(event, completion.href, () => {
           trackAnalyticsEvent("chat_prompt_completion_pr_opened", { request_id: completion.requestID });
