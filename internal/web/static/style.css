@@ -3154,6 +3154,39 @@ select.prompt-control {
   box-shadow: 0 8px 18px rgba(10, 44, 102, 0.08);
 }
 
+.chat-repo-message[data-tone="success"] {
+  border-color: color-mix(in srgb, var(--surface-success) 42%, var(--border));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-success) 16%, var(--bg-elevated)), color-mix(in srgb, var(--surface-success) 9%, var(--bg-elevated)));
+}
+
+.chat-repo-message[data-tone="success"] .chat-repo-message-body,
+.chat-repo-message[data-tone="success"] .chat-repo-message-meta {
+  color: var(--surface-success);
+}
+
+.chat-repo-message[data-tone="failure"] {
+  border-color: color-mix(in srgb, var(--surface-danger) 42%, var(--border));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-danger) 14%, var(--bg-elevated)), color-mix(in srgb, var(--surface-danger) 8%, var(--bg-elevated)));
+}
+
+.chat-repo-message[data-tone="failure"] .chat-repo-message-body,
+.chat-repo-message[data-tone="failure"] .chat-repo-message-meta {
+  color: var(--surface-danger);
+}
+
+.chat-repo-message[data-tone="warning"] {
+  border-color: color-mix(in srgb, var(--surface-warning) 42%, var(--border));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-warning) 15%, var(--bg-elevated)), color-mix(in srgb, var(--surface-warning) 8%, var(--bg-elevated)));
+}
+
+.chat-repo-message[data-tone="warning"] .chat-repo-message-body,
+.chat-repo-message[data-tone="warning"] .chat-repo-message-meta {
+  color: var(--surface-warning);
+}
+
 .chat-repo-message-body {
   margin: 0;
   overflow-wrap: anywhere;

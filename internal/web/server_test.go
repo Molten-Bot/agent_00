@@ -1647,10 +1647,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `function chatPromptTaskStatusLabel(task)`) ||
 		!strings.Contains(markup, `function syncChatPromptMessageTaskStatuses(snapshot = state.snapshot)`) ||
 		!strings.Contains(markup, `function refreshVisibleChatPromptStatuses()`) ||
+		!strings.Contains(markup, `function chatPromptMessageTone(message)`) ||
+		!strings.Contains(markup, `bubble.dataset.tone = chatPromptMessageTone(message);`) ||
+		!strings.Contains(markup, `status === "completed" || status === "no_changes"`) ||
+		!strings.Contains(markup, `status === "error" || status === "invalid" || status === "stopped"`) ||
 		!strings.Contains(markup, `meta.dataset.statusText = statusText;`) ||
 		!strings.Contains(markup, `refreshVisibleChatPromptStatuses();`) ||
 		!strings.Contains(markup, `syncChatPromptMessageTaskStatuses(snapshot);`) {
-		t.Fatalf("expected index chat prompt history to update queued request labels from live task status snapshots")
+		t.Fatalf("expected index chat prompt history to update queued request labels and message tones from live task status snapshots")
 	}
 	if !strings.Contains(markup, `class="prompt-mode-link prompt-mode-link-logo"`) ||
 		!strings.Contains(markup, `src="/static/logos/github.svg"`) {
@@ -2627,6 +2631,13 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	}
 	if !strings.Contains(css, ".chat-repo-card[aria-expanded=\"true\"] {\n  grid-column: 1 / -1;") {
 		t.Fatalf("expected expanded chat repository cards to span the full repository grid width")
+	}
+	if !strings.Contains(css, ".chat-repo-message[data-tone=\"success\"] {") ||
+		!strings.Contains(css, ".chat-repo-message[data-tone=\"failure\"] {") ||
+		!strings.Contains(css, ".chat-repo-message[data-tone=\"warning\"] {") ||
+		!strings.Contains(css, "color: var(--surface-success);") ||
+		!strings.Contains(css, "color: var(--surface-danger);") {
+		t.Fatalf("expected stylesheet to color-code chat prompt messages by terminal task result")
 	}
 	if !strings.Contains(css, ".chat-repo-card-head {") ||
 		!strings.Contains(css, ".chat-repo-card {\n  position: relative;") ||
