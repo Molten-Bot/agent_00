@@ -1629,6 +1629,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `if (state.appDisplay !== "chat" || !state.githubReposReady) return;`) {
 		t.Fatalf("expected index chat repositories to defer snapshot rerenders while a repo prompt panel has focus")
 	}
+	if !strings.Contains(markup, `function chatPromptTaskStatusLabel(task)`) ||
+		!strings.Contains(markup, `function syncChatPromptMessageTaskStatuses(snapshot = state.snapshot)`) ||
+		!strings.Contains(markup, `function refreshVisibleChatPromptStatuses()`) ||
+		!strings.Contains(markup, `meta.dataset.statusText = statusText;`) ||
+		!strings.Contains(markup, `refreshVisibleChatPromptStatuses();`) ||
+		!strings.Contains(markup, `syncChatPromptMessageTaskStatuses(snapshot);`) {
+		t.Fatalf("expected index chat prompt history to update queued request labels from live task status snapshots")
+	}
 	if !strings.Contains(markup, `class="prompt-mode-link prompt-mode-link-logo"`) ||
 		!strings.Contains(markup, `src="/static/logos/github.svg"`) {
 		t.Fatalf("expected index html to render GitHub as an icon-only item inside the shared segmented dock using the shared logo-link class")
