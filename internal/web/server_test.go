@@ -1622,6 +1622,13 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `payload.baseBranch = branch;`) {
 		t.Fatalf("expected index chat repositories to open prompt panels, show prompt chat logs, and submit repository tasks")
 	}
+	if !strings.Contains(markup, `function renderChatReposFromSnapshot()`) ||
+		!strings.Contains(markup, `if (chatRepoPanelContainsFocus()) {`) ||
+		!strings.Contains(markup, `state.chatRepoRenderPending = true;`) ||
+		!strings.Contains(markup, `chatRepoGrid.addEventListener("focusout", () => {`) ||
+		!strings.Contains(markup, `if (state.appDisplay !== "chat" || !state.githubReposReady) return;`) {
+		t.Fatalf("expected index chat repositories to defer snapshot rerenders while a repo prompt panel has focus")
+	}
 	if !strings.Contains(markup, `class="prompt-mode-link prompt-mode-link-logo"`) ||
 		!strings.Contains(markup, `src="/static/logos/github.svg"`) {
 		t.Fatalf("expected index html to render GitHub as an icon-only item inside the shared segmented dock using the shared logo-link class")

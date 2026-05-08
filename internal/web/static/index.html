@@ -1697,6 +1697,7 @@
       chatPromptedRepos: [],
       chatActiveRepoTab: "repos",
       chatRepoPage: 1,
+      chatRepoRenderPending: false,
       taskSoundMuted: loadTaskSoundMuted(),
       taskSoundInitialized: false,
       taskSoundSeenStatuses: new Map(),
@@ -6044,6 +6045,7 @@
 
     function renderChatRepos() {
       if (!chatRepoGrid || !chatStatus) return;
+      state.chatRepoRenderPending = false;
       const activePrompt = document.activeElement instanceof HTMLTextAreaElement &&
         document.activeElement.classList.contains("chat-repo-prompt")
         ? document.activeElement
@@ -6095,6 +6097,22 @@
           restoredPrompt.setSelectionRange(Math.min(restoreSelectionStart, end), end);
         }
       }
+    }
+
+    function chatRepoPanelContainsFocus() {
+      const active = document.activeElement;
+      return active instanceof HTMLElement && Boolean(active.closest(".chat-repo-panel"));
+    }
+
+    function renderChatReposFromSnapshot() {
+      if (state.appDisplay !== "chat" || !state.githubReposReady) {
+        return;
+      }
+      if (chatRepoPanelContainsFocus()) {
+        state.chatRepoRenderPending = true;
+        return;
+      }
+      renderChatRepos();
     }
 
     function queueChatRepoResizeRender() {
@@ -9492,7 +9510,7 @@
       renderDashboardStats(snapshot);
       renderTasks(snapshot);
       renderFullscreenTasks(snapshot);
-      renderChatRepos();
+      renderChatReposFromSnapshot();
       renderFullscreenTerminal(snapshot);
     }
 
@@ -10171,6 +10189,16 @@
         setPromptMode(hashPromptMode);
       }
     });
+    if (chatRepoGrid) {
+      chatRepoGrid.addEventListener("focusout", () => {
+        if (!state.chatRepoRenderPending) return;
+        window.setTimeout(() => {
+          if (state.appDisplay !== "chat" || !state.githubReposReady) return;
+          if (!state.chatRepoRenderPending || chatRepoPanelContainsFocus()) return;
+          renderChatRepos();
+        }, 0);
+      });
+    }
     window.addEventListener("resize", queueChatRepoResizeRender, { passive: true });
 
     localPromptForm.addEventListener("submit", submitLocalPrompt);
