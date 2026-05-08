@@ -1620,6 +1620,9 @@ func dispatchResultMessage(status string, res app.Result) string {
 	if status == "no_changes" {
 		return "No changes: task completed without repository changes or pull requests."
 	}
+	if prURLs := strings.TrimSpace(completedPRURLs(res)); prURLs != "" {
+		return "Your PR is now ready: " + prURLs
+	}
 	return "Success: task completed."
 }
 

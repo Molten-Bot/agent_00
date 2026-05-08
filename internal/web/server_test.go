@@ -1613,16 +1613,22 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected GitHub repository loading to stay out of Current Work and visible chat text")
 	}
 	if !strings.Contains(markup, `function submitChatRepoPrompt(repo, input, statusNode, images = [], logNode = null, setImages = null)`) ||
+		!strings.Contains(markup, `function chatRepoOwnerIconName(repo)`) ||
+		!strings.Contains(markup, `return chatRepoOwnerType(repo) === "organization" ? "building-2" : "user";`) ||
 		!strings.Contains(markup, `const card = document.createElement("div");`) ||
 		!strings.Contains(markup, `card.setAttribute("role", "button");`) ||
 		!strings.Contains(markup, `card.setAttribute("aria-expanded", repoKey && state.chatOpenRepoKey === repoKey ? "true" : "false");`) ||
+		!strings.Contains(markup, `ownerIcon.className = "chat-repo-card-owner-icon";`) ||
 		!strings.Contains(markup, `promptLog.className = "chat-repo-log";`) ||
 		!strings.Contains(markup, `logNode.hidden = !hasMessages;`) ||
 		!strings.Contains(markup, `logNode.setAttribute("aria-hidden", "true");`) ||
+		!strings.Contains(markup, `visibilityIcon.className = `) ||
+		!strings.Contains(markup, `chat-repo-card-visibility-public`) ||
+		!strings.Contains(markup, `chat-repo-card-visibility-private`) ||
 		!strings.Contains(markup, `appendChatRepoPromptMessage(repo, {`) ||
 		!strings.Contains(markup, `fetch("/api/local-prompt", {`) ||
 		!strings.Contains(markup, `payload.baseBranch = branch;`) {
-		t.Fatalf("expected index chat repositories to open prompt panels, show prompt chat logs, and submit repository tasks")
+		t.Fatalf("expected index chat repositories to open prompt panels, show visibility icons, show prompt chat logs, and submit repository tasks")
 	}
 	if !strings.Contains(markup, `function renderChatReposFromSnapshot()`) ||
 		!strings.Contains(markup, `if (chatRepoPanelContainsFocus()) {`) ||
@@ -1630,6 +1636,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `chatRepoGrid.addEventListener("focusout", () => {`) ||
 		!strings.Contains(markup, `if (state.appDisplay !== "chat" || !state.githubReposReady) return;`) {
 		t.Fatalf("expected index chat repositories to defer snapshot rerenders while a repo prompt panel has focus")
+	}
+	if !strings.Contains(markup, `function chatPromptTaskStatusLabel(task)`) ||
+		!strings.Contains(markup, `function syncChatPromptMessageTaskStatuses(snapshot = state.snapshot)`) ||
+		!strings.Contains(markup, `function refreshVisibleChatPromptStatuses()`) ||
+		!strings.Contains(markup, `meta.dataset.statusText = statusText;`) ||
+		!strings.Contains(markup, `refreshVisibleChatPromptStatuses();`) ||
+		!strings.Contains(markup, `syncChatPromptMessageTaskStatuses(snapshot);`) {
+		t.Fatalf("expected index chat prompt history to update queued request labels from live task status snapshots")
 	}
 	if !strings.Contains(markup, `class="prompt-mode-link prompt-mode-link-logo"`) ||
 		!strings.Contains(markup, `src="/static/logos/github.svg"`) {
@@ -2382,10 +2396,15 @@ func TestHandlerServesChatView(t *testing.T) {
 		`const CHAT_REPOS_PER_PAGE = 15;`,
 		`const pageRepos = repos.slice(start, start + CHAT_REPOS_PER_PAGE);`,
 		`fetch("/api/github/repos", { cache: "no-store" })`,
+		`function repoOwnerIconName(repo)`,
+		`return repoOwnerType(repo) === "organization" ? "building-2" : "user";`,
 		`const card = document.createElement("div");`,
 		`card.setAttribute("role", "button");`,
+		`ownerIcon.className = "chat-repo-card-owner-icon";`,
 		`chatIcon.className = "chat-repo-card-chat-icon";`,
 		`chatIcon.innerHTML = '<i data-lucide="message-circle" aria-hidden="true"></i>';`,
+		`visibilityIcon.className = "chat-repo-card-visibility " + (repo.private ? "chat-repo-card-visibility-private" : "chat-repo-card-visibility-public");`,
+		`visibilityIcon.innerHTML = '<i data-lucide="' + (repo.private ? "lock" : "globe") + '" aria-hidden="true"></i>';`,
 		`const openPrompt = () => {`,
 		`card.setAttribute("aria-expanded", "true");`,
 		`fetch("/api/local-prompt", {`,
@@ -2415,6 +2434,7 @@ func TestHandlerGitHubReposUsesOverride(t *testing.T) {
 			FullName:      "acme/repo",
 			Description:   "Docs",
 			HTMLURL:       "https://github.com/acme/repo",
+			OwnerType:     "Organization",
 			DefaultBranch: "main",
 			Language:      "Go",
 			Private:       true,
@@ -2431,6 +2451,7 @@ func TestHandlerGitHubReposUsesOverride(t *testing.T) {
 	if !strings.Contains(body, `"ok":true`) ||
 		!strings.Contains(body, `"full_name":"acme/repo"`) ||
 		!strings.Contains(body, `"html_url":"https://github.com/acme/repo"`) ||
+		!strings.Contains(body, `"owner_type":"Organization"`) ||
 		!strings.Contains(body, `"default_branch":"main"`) ||
 		!strings.Contains(body, `"private":true`) {
 		t.Fatalf("unexpected github repos response %q", body)
@@ -2602,10 +2623,13 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	}
 	if !strings.Contains(css, ".chat-repo-card-head {") ||
 		!strings.Contains(css, ".chat-repo-card {\n  position: relative;") ||
+		!strings.Contains(css, ".chat-repo-card-owner-icon {") ||
 		!strings.Contains(css, ".chat-repo-card-chat-icon {") ||
+		!strings.Contains(css, ".chat-repo-card-visibility {") ||
+		!strings.Contains(css, ".chat-repo-card-visibility-private {") ||
 		!strings.Contains(css, "  position: absolute;\n  top: 10px;\n  right: 10px;") ||
 		!strings.Contains(css, ".chat-repo-card:hover .chat-repo-card-chat-icon,") {
-		t.Fatalf("expected stylesheet to render chat icons inside repository cards")
+		t.Fatalf("expected stylesheet to render chat and visibility icons inside repository cards")
 	}
 	if !strings.Contains(css, ".hub-emoji-picker-panel-header") || !strings.Contains(css, ".hub-emoji-picker-grid") || !strings.Contains(css, ".hub-emoji-picker-option") {
 		t.Fatalf("expected stylesheet to include the refreshed emoji picker layout styles")

@@ -717,14 +717,15 @@ func TestDispatchResultPayloadNoChangesIncludesExistingPRURLs(t *testing.T) {
 	if len(prURLs) != 1 || prURLs[0] != "https://github.com/acme/repo-a/pull/10" {
 		t.Fatalf("prUrls = %#v, want [https://github.com/acme/repo-a/pull/10]", prURLs)
 	}
-	if got := payload["message"]; got != "Success: task completed." {
-		t.Fatalf("message = %#v, want %q", got, "Success: task completed.")
+	wantMessage := "Your PR is now ready: https://github.com/acme/repo-a/pull/10"
+	if got := payload["message"]; got != wantMessage {
+		t.Fatalf("message = %#v, want %q", got, wantMessage)
 	}
 	if got := result["status"]; got != "completed" {
 		t.Fatalf("result.status = %#v, want %q", got, "completed")
 	}
-	if got := result["message"]; got != "Success: task completed." {
-		t.Fatalf("result.message = %#v, want %q", got, "Success: task completed.")
+	if got := result["message"]; got != wantMessage {
+		t.Fatalf("result.message = %#v, want %q", got, wantMessage)
 	}
 }
 
