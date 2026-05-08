@@ -1691,6 +1691,8 @@
       githubRepos: stateUI.githubRepos,
       chatSubmittingRepos: new Set(),
       chatPromptLog: new Map(),
+      chatPromptDrafts: new Map(),
+      chatOpenRepoKey: "",
       chatPromptedRepos: [],
       chatActiveRepoTab: "repos",
       chatRepoPage: 1,
@@ -5634,11 +5636,13 @@
     }
 
     function renderChatRepoCard(repo) {
+      const repoKey = chatRepoKey(chatRepoRunValue(repo));
       const card = document.createElement("div");
       card.className = "chat-repo-card";
       card.tabIndex = 0;
       card.setAttribute("role", "button");
-      card.setAttribute("aria-expanded", "false");
+      card.dataset.repoKey = repoKey;
+      card.setAttribute("aria-expanded", repoKey && state.chatOpenRepoKey === repoKey ? "true" : "false");
       card.setAttribute("aria-label", `Open ${String(repo?.full_name || repo?.name || "repository")} panel`);
 
       const head = document.createElement("span");
@@ -5685,6 +5689,9 @@
       prompt.rows = 3;
       prompt.placeholder = "Prompt for default branch";
       prompt.setAttribute("aria-label", `Prompt for ${String(repo?.full_name || repo?.name || "repository")}`);
+      if (repoKey && state.chatPromptDrafts.has(repoKey)) {
+        prompt.value = state.chatPromptDrafts.get(repoKey);
+      }
 
       const pasteTarget = document.createElement("div");
       pasteTarget.className = "prompt-control prompt-action-paste chat-repo-image-paste";
@@ -5734,6 +5741,20 @@
         });
       });
       prompt.addEventListener("paste", handleChatRepoImagePaste);
+      prompt.addEventListener("input", () => {
+        if (!repoKey) return;
+        if (prompt.value) {
+          state.chatPromptDrafts.set(repoKey, prompt.value);
+        } else {
+          state.chatPromptDrafts.delete(repoKey);
+        }
+      });
+      prompt.addEventListener("focus", () => {
+        if (repoKey) {
+          state.chatOpenRepoKey = repoKey;
+          card.setAttribute("aria-expanded", "true");
+        }
+      });
       prompt.addEventListener("click", (event) => {
         event.stopPropagation();
       });
@@ -5762,6 +5783,9 @@
         chatRepoGrid?.querySelectorAll(".chat-repo-card[aria-expanded='true']").forEach((node) => {
           if (node !== card) node.setAttribute("aria-expanded", "false");
         });
+        if (repoKey) {
+          state.chatOpenRepoKey = repoKey;
+        }
         card.setAttribute("aria-expanded", "true");
         prompt.focus();
       };
@@ -6004,6 +6028,13 @@
 
     function renderChatRepos() {
       if (!chatRepoGrid || !chatStatus) return;
+      const activePrompt = document.activeElement instanceof HTMLTextAreaElement &&
+        document.activeElement.classList.contains("chat-repo-prompt")
+        ? document.activeElement
+        : null;
+      const restoreFocusKey = activePrompt?.closest(".chat-repo-card")?.dataset.repoKey || "";
+      const restoreSelectionStart = activePrompt?.selectionStart ?? 0;
+      const restoreSelectionEnd = activePrompt?.selectionEnd ?? restoreSelectionStart;
       const tabs = chatPromptedRepoTabs();
       const selectedTab = tabs.find((tab) => tab.key === state.chatActiveRepoTab);
       const promptedKeys = new Set(tabs.map((tab) => tab.key));
@@ -6036,6 +6067,17 @@
         chatStatus.textContent = `${start + 1}-${end} of ${repos.length} repositories`;
       }
       renderChatRepoPagination(repos.length, totalPages);
+      if (restoreFocusKey) {
+        const restoredCard = Array.from(chatRepoGrid.querySelectorAll(".chat-repo-card"))
+          .find((node) => node instanceof HTMLElement && node.dataset.repoKey === restoreFocusKey);
+        const restoredPrompt = restoredCard?.querySelector(".chat-repo-prompt");
+        if (restoredCard instanceof HTMLElement && restoredPrompt instanceof HTMLTextAreaElement) {
+          restoredCard.setAttribute("aria-expanded", "true");
+          restoredPrompt.focus();
+          const end = Math.min(restoreSelectionEnd, restoredPrompt.value.length);
+          restoredPrompt.setSelectionRange(Math.min(restoreSelectionStart, end), end);
+        }
+      }
     }
 
     function chatRepoRunValue(repo) {
@@ -6112,6 +6154,7 @@
         state.chatRepoPage = 1;
         renderChatRepoPromptLog(repo, logNode);
         input.value = "";
+        state.chatPromptDrafts.delete(chatRepoKey(repoValue));
         if (typeof setImages === "function") {
           setImages([]);
         }
