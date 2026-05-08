@@ -34,6 +34,7 @@ const maxHubSetupConfigureBodyBytes = 1 << 20
 const streamSnapshotInterval = 120 * time.Millisecond
 const maxStreamTaskLogs = 500
 const bottomDockPlaceholder = "<!-- hub-bottom-dock -->"
+const taskSourceHeader = "X-MoltenHub-Task-Source"
 
 var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype html>
 <html lang="en" class="light">
@@ -1594,11 +1595,11 @@ func nextGitHubPageURL(linkHeader string) string {
 }
 
 func (s Server) handleLocalPrompt(w http.ResponseWriter, r *http.Request) {
-	s.handlePromptSubmit(w, r, s.SubmitLocalPrompt, "studio submit is unavailable")
+	s.handlePromptSubmit(w, r, s.SubmitLocalPrompt, "studio submit is unavailable", "prompt")
 }
 
 func (s Server) handleLibraryRun(w http.ResponseWriter, r *http.Request) {
-	s.handlePromptSubmit(w, r, s.SubmitLocalPrompt, "library task submit is unavailable")
+	s.handlePromptSubmit(w, r, s.SubmitLocalPrompt, "library task submit is unavailable", "library")
 }
 
 func (s Server) handlePromptSubmit(
@@ -1606,6 +1607,7 @@ func (s Server) handlePromptSubmit(
 	r *http.Request,
 	submit func(context.Context, []byte) (string, error),
 	unavailableMessage string,
+	defaultSource string,
 ) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -1630,6 +1632,7 @@ func (s Server) handlePromptSubmit(
 		return
 	}
 
+	source := taskSourceFromRequest(r, defaultSource)
 	requestID, err := submit(r.Context(), body)
 	if err != nil {
 		if duplicateRequestID, duplicateState, ok := duplicateSubmissionDetails(err); ok {
@@ -1643,7 +1646,7 @@ func (s Server) handlePromptSubmit(
 			return
 		}
 		if s.Broker != nil {
-			s.Broker.RecordRejectedPromptSubmission(body, "invalid", err)
+			s.Broker.RecordRejectedPromptSubmissionWithSource(body, "invalid", err, source)
 		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"ok":    false,
@@ -1651,11 +1654,22 @@ func (s Server) handlePromptSubmit(
 		})
 		return
 	}
+	if s.Broker != nil {
+		s.Broker.RecordTaskSource(requestID, source)
+	}
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"ok":         true,
 		"request_id": requestID,
 	})
+}
+
+func taskSourceFromRequest(r *http.Request, fallback string) string {
+	source := ""
+	if r != nil {
+		source = r.Header.Get(taskSourceHeader)
+	}
+	return firstNonEmpty(normalizeTaskSource(source), normalizeTaskSource(fallback))
 }
 
 func (s Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
@@ -1884,6 +1898,9 @@ func (s Server) handleTaskRerun(w http.ResponseWriter, r *http.Request, requestI
 	}
 
 	s.Broker.RecordTaskRerunAttempt(requestID, newRequestID)
+	if sourceTaskFound {
+		s.Broker.RecordTaskSource(newRequestID, sourceTask.Source)
+	}
 	if sourceTaskFound && isCompletedTaskStatus(sourceTask.Status) {
 		if err := s.Broker.CloseTask(requestID); err != nil {
 			s.logf("hub.ui status=warn event=task_rerun_close_source request_id=%s rerun_request_id=%s err=%q", requestID, newRequestID, err)

@@ -64,6 +64,7 @@ type TaskControls struct {
 // Task represents one hub dispatch execution state.
 type Task struct {
 	RequestID         string       `json:"request_id"`
+	Source            string       `json:"source,omitempty"`
 	Prompt            string       `json:"prompt,omitempty"`
 	PromptIsUserInput bool         `json:"prompt_is_user_input"`
 	Skill             string       `json:"skill,omitempty"`
@@ -207,6 +208,7 @@ type Broker struct {
 
 type taskState struct {
 	RequestID         string
+	Source            string
 	Prompt            string
 	PromptIsUserInput bool
 	Skill             string
@@ -360,6 +362,7 @@ func (b *Broker) Snapshot() Snapshot {
 		status := normalizeTaskTerminalStatus(t.Status)
 		snapshot.Tasks = append(snapshot.Tasks, Task{
 			RequestID:         t.RequestID,
+			Source:            t.Source,
 			Prompt:            t.Prompt,
 			PromptIsUserInput: t.PromptIsUserInput,
 			Skill:             t.Skill,
@@ -415,6 +418,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 	status := normalizeTaskTerminalStatus(t.Status)
 	return Task{
 		RequestID:         t.RequestID,
+		Source:            t.Source,
 		Prompt:            t.Prompt,
 		PromptIsUserInput: t.PromptIsUserInput,
 		Skill:             t.Skill,
@@ -441,6 +445,11 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 
 // RecordTaskRunConfig stores a parsed task run config payload for future reruns.
 func (b *Broker) RecordTaskRunConfig(requestID string, runConfigJSON []byte) {
+	b.RecordTaskRunConfigWithSource(requestID, runConfigJSON, "")
+}
+
+// RecordTaskRunConfigWithSource stores a parsed task run config payload and task start source.
+func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON []byte, source string) {
 	if b == nil {
 		return
 	}
@@ -455,6 +464,11 @@ func (b *Broker) RecordTaskRunConfig(requestID string, runConfigJSON []byte) {
 	repos := reposFromRunConfigJSON(cfgCopy)
 	workflow := workflowFromRunConfigJSON(cfgCopy)
 	agentHarness := agentHarnessFromRunConfigJSON(cfgCopy)
+	source = firstNonEmpty(
+		normalizeTaskSource(source),
+		sourceFromRunConfigJSON(cfgCopy),
+		defaultTaskSourceForRequestID(requestID),
+	)
 	now := b.now().UTC()
 
 	b.mu.Lock()
@@ -475,6 +489,7 @@ func (b *Broker) RecordTaskRunConfig(requestID string, runConfigJSON []byte) {
 	if !taskExists && !b.isClosedTaskLocked(requestID, now) {
 		t = &taskState{
 			RequestID:         requestID,
+			Source:            source,
 			Prompt:            prompt,
 			PromptIsUserInput: promptIsUserInputForTask(requestID, prompt),
 			Workflow:          workflow,
@@ -491,6 +506,10 @@ func (b *Broker) RecordTaskRunConfig(requestID string, runConfigJSON []byte) {
 		}
 		b.tasks[requestID] = t
 		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, now)
+		changed = true
+	}
+	if source != "" && t != nil && t.Source != source {
+		t.Source = source
 		changed = true
 	}
 	if prompt != "" {
@@ -544,8 +563,38 @@ func (b *Broker) RecordTaskRunConfig(requestID string, runConfigJSON []byte) {
 	}
 }
 
+// RecordTaskSource updates the start source for an already visible task.
+func (b *Broker) RecordTaskSource(requestID string, source string) {
+	if b == nil {
+		return
+	}
+	requestID = strings.TrimSpace(requestID)
+	source = normalizeTaskSource(source)
+	if requestID == "" || source == "" {
+		return
+	}
+
+	now := b.now().UTC()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.pruneExpiredTasksLocked(now)
+	t, ok := b.tasks[requestID]
+	if !ok || t == nil || t.Source == source {
+		return
+	}
+	t.Source = source
+	t.UpdatedAt = now
+	b.notifySubscribersLocked()
+}
+
 // RecordRejectedPromptSubmission stores a failed prompt submission so it remains visible in the task list.
 func (b *Broker) RecordRejectedPromptSubmission(runConfigJSON []byte, status string, err error) string {
+	return b.RecordRejectedPromptSubmissionWithSource(runConfigJSON, status, err, "")
+}
+
+// RecordRejectedPromptSubmissionWithSource stores a failed prompt submission with its start source.
+func (b *Broker) RecordRejectedPromptSubmissionWithSource(runConfigJSON []byte, status string, err error, source string) string {
 	if b == nil {
 		return ""
 	}
@@ -575,6 +624,7 @@ func (b *Broker) RecordRejectedPromptSubmission(runConfigJSON []byte, status str
 	requestID := fmt.Sprintf("local-rejected-%d-%06d", now.Unix(), b.rejectedSeq)
 	t := &taskState{
 		RequestID:         requestID,
+		Source:            firstNonEmpty(normalizeTaskSource(source), sourceFromRunConfigJSON(runConfigJSON), defaultTaskSourceForRequestID(requestID)),
 		Prompt:            prompt,
 		PromptIsUserInput: promptIsUserInputForTask(requestID, prompt),
 		Workflow:          workflow,
@@ -1126,6 +1176,9 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 		if existing.AgentHarness == "" {
 			existing.AgentHarness = agentHarnessFromRunConfigJSON(b.runConfigs[requestID])
 		}
+		if existing.Source == "" {
+			existing.Source = firstNonEmpty(sourceFromRunConfigJSON(b.runConfigs[requestID]), defaultTaskSourceForRequestID(requestID))
+		}
 		if existing.BaseBranch == "" {
 			existing.BaseBranch = b.taskBaseBranchLocked(requestID)
 		}
@@ -1140,6 +1193,7 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 	prompt := b.taskPromptLocked(requestID)
 	t := &taskState{
 		RequestID:         requestID,
+		Source:            firstNonEmpty(sourceFromRunConfigJSON(b.runConfigs[requestID]), defaultTaskSourceForRequestID(requestID)),
 		Prompt:            prompt,
 		PromptIsUserInput: promptIsUserInputForTask(requestID, prompt),
 		Workflow:          workflowFromRunConfigJSON(b.runConfigs[requestID]),
@@ -1166,6 +1220,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 
 	if strings.HasPrefix(line, "dispatch status=start") {
 		t.Status = "running"
+		t.Source = firstNonEmpty(t.Source, normalizeTaskSource(fields["source"]), defaultTaskSourceForRequestID(t.RequestID))
 		t.Skill = firstNonEmpty(t.Skill, fields["skill"])
 		t.Workflow = firstNonEmpty(t.Workflow, workflowFromFields(fields))
 		t.AgentHarness = firstNonEmpty(t.AgentHarness, agentHarnessFromFields(fields))
@@ -1936,6 +1991,64 @@ func agentHarnessFromRunConfigJSON(runConfigJSON []byte) string {
 		return ""
 	}
 	return firstNonEmpty(raw.AgentHarness, raw.AgentHarnessSnake)
+}
+
+func sourceFromRunConfigJSON(runConfigJSON []byte) string {
+	if len(runConfigJSON) == 0 {
+		return ""
+	}
+	var raw struct {
+		Source             string `json:"source"`
+		StartSource        string `json:"startSource"`
+		StartSourceSnake   string `json:"start_source"`
+		TaskSource         string `json:"taskSource"`
+		TaskSourceSnake    string `json:"task_source"`
+		RequestSource      string `json:"requestSource"`
+		RequestSourceSnake string `json:"request_source"`
+	}
+	if err := json.Unmarshal(runConfigJSON, &raw); err != nil {
+		return ""
+	}
+	return firstNonEmpty(
+		normalizeTaskSource(raw.Source),
+		normalizeTaskSource(raw.StartSource),
+		normalizeTaskSource(raw.StartSourceSnake),
+		normalizeTaskSource(raw.TaskSource),
+		normalizeTaskSource(raw.TaskSourceSnake),
+		normalizeTaskSource(raw.RequestSource),
+		normalizeTaskSource(raw.RequestSourceSnake),
+	)
+}
+
+func defaultTaskSourceForRequestID(requestID string) string {
+	requestID = strings.ToLower(strings.TrimSpace(requestID))
+	switch {
+	case strings.HasPrefix(requestID, "req-"), strings.HasPrefix(requestID, "hub-"):
+		return "hub"
+	case strings.HasPrefix(requestID, "local-"):
+		return "prompt"
+	default:
+		return ""
+	}
+}
+
+func normalizeTaskSource(source string) string {
+	source = strings.ToLower(strings.TrimSpace(source))
+	source = strings.ReplaceAll(source, "-", "_")
+	switch source {
+	case "chat":
+		return "chat"
+	case "hub", "hub_dispatch", "moltenhub", "molten_hub":
+		return "hub"
+	case "prompt", "builder", "studio", "local", "local_submit":
+		return "prompt"
+	case "library", "library_task", "librarytask":
+		return "library"
+	case "json", "raw":
+		return "json"
+	default:
+		return ""
+	}
 }
 
 func firstRepo(repos []string) string {
