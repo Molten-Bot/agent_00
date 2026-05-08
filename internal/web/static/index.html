@@ -2343,6 +2343,7 @@
       root.classList.add(normalized);
       root.setAttribute("data-theme", normalized);
       syncThemeToggle(normalized);
+      refreshDashboardChartTheme();
       if (persist) {
         try {
           localStorage.setItem(THEME_KEY, normalized);
@@ -4588,6 +4589,61 @@
       dashboardUpdated.textContent = dashboardUpdatedLabel(dashboardUpdated.dataset.updatedAt);
     }
 
+    const DASHBOARD_TASK_COLOR_VARS = [
+      "--dashboard-chart-active",
+      "--dashboard-chart-completed",
+      "--dashboard-chart-failed",
+    ];
+    const DASHBOARD_TASK_COLOR_FALLBACKS = ["#5aa7f2", "#63c892", "#f07c78"];
+    const DASHBOARD_SOURCE_COLOR_VARS = {
+      chat: "--dashboard-chart-chat",
+      hub: "--dashboard-chart-hub",
+      json: "--dashboard-chart-json",
+      library: "--dashboard-chart-library",
+      prompt: "--dashboard-chart-prompt",
+      other: "--dashboard-chart-other",
+    };
+    const DASHBOARD_SOURCE_COLOR_FALLBACKS = {
+      chat: "#56c8ba",
+      hub: "#9a8cff",
+      json: "#e8b35a",
+      library: "#6fb0f4",
+      prompt: "#7bc99a",
+      other: "#8ca0bd",
+    };
+
+    function dashboardCSSValue(name, fallback) {
+      const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      return value || fallback;
+    }
+
+    function dashboardTaskColors() {
+      return DASHBOARD_TASK_COLOR_VARS.map((name, index) => dashboardCSSValue(name, DASHBOARD_TASK_COLOR_FALLBACKS[index]));
+    }
+
+    function dashboardSourceColor(label) {
+      const key = DASHBOARD_SOURCE_COLOR_VARS[String(label || "").trim().toLowerCase()] ? String(label || "").trim().toLowerCase() : "other";
+      return dashboardCSSValue(DASHBOARD_SOURCE_COLOR_VARS[key], DASHBOARD_SOURCE_COLOR_FALLBACKS[key]);
+    }
+
+    function applyDashboardChartTheme(chart) {
+      if (!chart) return;
+      const dataset = chart.data.datasets[0];
+      if (chart === dashboardChart) {
+        dataset.backgroundColor = dashboardTaskColors();
+      } else {
+        dataset.backgroundColor = chart.data.labels.map(dashboardSourceColor);
+      }
+      dataset.borderColor = dashboardCSSValue("--dashboard-chart-border", "rgba(255, 255, 255, 0.76)");
+      chart.options.plugins.legend.labels.color = dashboardCSSValue("--muted", "#5a6f95");
+      chart.update("none");
+    }
+
+    function refreshDashboardChartTheme() {
+      applyDashboardChartTheme(dashboardChart);
+      applyDashboardChartTheme(dashboardSourceChart);
+    }
+
     function ensureDashboardChart() {
       if (dashboardChart || !dashboardTaskChart || !window.Chart) {
         return dashboardChart;
@@ -4601,8 +4657,8 @@
           labels: ["Active", "Completed", "Failed"],
           datasets: [{
             data: [0, 0, 0],
-            backgroundColor: ["#0a84ff", "#2bb673", "#ef4444"],
-            borderColor: "rgba(255, 255, 255, 0.8)",
+            backgroundColor: dashboardTaskColors(),
+            borderColor: dashboardCSSValue("--dashboard-chart-border", "rgba(255, 255, 255, 0.76)"),
             borderWidth: 2,
           }],
         },
@@ -4615,6 +4671,7 @@
               position: "bottom",
               labels: {
                 boxWidth: 10,
+                color: dashboardCSSValue("--muted", "#5a6f95"),
                 usePointStyle: true,
               },
             },
@@ -4637,8 +4694,8 @@
           labels: ["Chat", "Hub", "JSON", "Library", "Prompt", "Other"],
           datasets: [{
             data: [0, 0, 0, 0, 0, 0],
-            backgroundColor: ["#14b8a6", "#7b61ff", "#f59e0b", "#0a84ff", "#2bb673", "#7188b1"],
-            borderColor: "rgba(255, 255, 255, 0.8)",
+            backgroundColor: ["Chat", "Hub", "JSON", "Library", "Prompt", "Other"].map(dashboardSourceColor),
+            borderColor: dashboardCSSValue("--dashboard-chart-border", "rgba(255, 255, 255, 0.76)"),
             borderWidth: 2,
           }],
         },
@@ -4651,6 +4708,7 @@
               position: "bottom",
               labels: {
                 boxWidth: 10,
+                color: dashboardCSSValue("--muted", "#5a6f95"),
                 usePointStyle: true,
               },
             },
@@ -4658,23 +4716,6 @@
         },
       });
       return dashboardSourceChart;
-    }
-
-    function dashboardSourceColor(label) {
-      switch (String(label || "").trim().toLowerCase()) {
-        case "chat":
-          return "#14b8a6";
-        case "hub":
-          return "#7b61ff";
-        case "json":
-          return "#f59e0b";
-        case "library":
-          return "#0a84ff";
-        case "prompt":
-          return "#2bb673";
-        default:
-          return "#7188b1";
-      }
     }
 
     function renderDashboardSourceMix(stats) {

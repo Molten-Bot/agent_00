@@ -123,6 +123,16 @@
   --surface-auth-verify-shadow: 0 12px 24px rgba(10, 132, 255, 0.22);
   --surface-auth-verify-hover-shadow: 0 16px 28px rgba(10, 132, 255, 0.28);
   --surface-auth-verify-text: #ffffff;
+  --dashboard-chart-active: #5aa7f2;
+  --dashboard-chart-completed: #63c892;
+  --dashboard-chart-failed: #f07c78;
+  --dashboard-chart-chat: #56c8ba;
+  --dashboard-chart-hub: #9a8cff;
+  --dashboard-chart-json: #e8b35a;
+  --dashboard-chart-library: #6fb0f4;
+  --dashboard-chart-prompt: #7bc99a;
+  --dashboard-chart-other: #8ca0bd;
+  --dashboard-chart-border: rgba(255, 255, 255, 0.76);
   --radius: 4px;
   --radius-card: 8px;
   --radius-sm: calc(var(--radius) - 2px);
@@ -5953,6 +5963,16 @@ html.dark {
   --surface-auth-verify-border: rgba(61, 155, 255, 0.28);
   --surface-auth-verify-shadow: 0 14px 28px rgba(10, 132, 255, 0.24);
   --surface-auth-verify-hover-shadow: 0 18px 34px rgba(10, 132, 255, 0.3);
+  --dashboard-chart-active: #69aaf0;
+  --dashboard-chart-completed: #74c99a;
+  --dashboard-chart-failed: #eb8a86;
+  --dashboard-chart-chat: #66c7bb;
+  --dashboard-chart-hub: #a598f4;
+  --dashboard-chart-json: #ddb466;
+  --dashboard-chart-library: #74afea;
+  --dashboard-chart-prompt: #87c99f;
+  --dashboard-chart-other: #8fa2bf;
+  --dashboard-chart-border: rgba(20, 30, 52, 0.9);
   --foreground: rgba(245, 245, 247, 1);
   --muted-foreground: rgba(152, 152, 157, 1);
   --glass-bg: rgba(50, 50, 52, 0.55);
@@ -6098,6 +6118,16 @@ html.night {
   --surface-auth-verify-border: rgba(61, 155, 255, 0.28);
   --surface-auth-verify-shadow: 0 14px 28px rgba(10, 132, 255, 0.24);
   --surface-auth-verify-hover-shadow: 0 18px 34px rgba(10, 132, 255, 0.3);
+  --dashboard-chart-active: #5f9ce6;
+  --dashboard-chart-completed: #6fbd91;
+  --dashboard-chart-failed: #df817e;
+  --dashboard-chart-chat: #5ebeb2;
+  --dashboard-chart-hub: #968ae8;
+  --dashboard-chart-json: #d4aa5f;
+  --dashboard-chart-library: #6aa4de;
+  --dashboard-chart-prompt: #7cbe96;
+  --dashboard-chart-other: #8798b4;
+  --dashboard-chart-border: rgba(12, 18, 31, 0.92);
   --foreground: rgba(220, 220, 225, 1);
   --muted-foreground: rgba(118, 118, 128, 1);
   --elevation-sm: 0px 1px 3px 0px rgba(0, 0, 0, 0.7);
@@ -6275,6 +6305,16 @@ html.pink {
     inset 0 1px 0 rgba(255, 255, 255, 0.03);
   --glass-icon-bg: rgba(82, 31, 59, 0.82);
   --glass-icon-border: rgba(244, 114, 182, 0.28);
+  --dashboard-chart-active: #f09ac6;
+  --dashboard-chart-completed: #b58be7;
+  --dashboard-chart-failed: #e9788d;
+  --dashboard-chart-chat: #d98ec1;
+  --dashboard-chart-hub: #ad88e8;
+  --dashboard-chart-json: #e7b365;
+  --dashboard-chart-library: #f3a4ce;
+  --dashboard-chart-prompt: #c994db;
+  --dashboard-chart-other: #c487a8;
+  --dashboard-chart-border: rgba(48, 18, 35, 0.92);
   --glass-icon-shadow:
     0 1px 3px rgba(10, 2, 7, 0.28),
     0 4px 12px rgba(10, 2, 7, 0.18);
