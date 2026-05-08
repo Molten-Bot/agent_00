@@ -89,7 +89,7 @@ func TestHandleHubSetupStatusAndConfigure(t *testing.T) {
 	}
 }
 
-func TestHandlerReleasesBottomDockUsesHubSetupStatus(t *testing.T) {
+func TestHandlerBottomDockUsesHubSetupStatus(t *testing.T) {
 	t.Parallel()
 
 	srv := NewServer("", NewBroker())
@@ -102,20 +102,20 @@ func TestHandlerReleasesBottomDockUsesHubSetupStatus(t *testing.T) {
 
 	markup := renderHandlerMarkup(t, srv, "/")
 	if !strings.Contains(markup, `id="moltenbot-hub-dock-group" class="hub-dock-group" data-configured="true"`) {
-		t.Fatalf("expected releases dock to render configured Hub state")
+		t.Fatalf("expected bottom dock to render configured Hub state")
 	}
 	if !strings.Contains(markup, `id="moltenbot-hub-link"`) ||
 		!strings.Contains(markup, `class="prompt-mode-link prompt-mode-link-logo"`) ||
 		!strings.Contains(markup, `href="https://app.molten.bot/hub/agents/test-agent"`) ||
 		!strings.Contains(markup, `aria-label="Open Molten Hub"`) {
-		t.Fatalf("expected configured releases dock to show the Hub icon as a dashboard link")
+		t.Fatalf("expected configured bottom dock to show the Hub icon as a dashboard link")
 	}
 	if strings.Contains(markup, `id="moltenbot-hub-link"
         class="prompt-mode-link prompt-mode-link-logo hidden"`) {
-		t.Fatalf("expected configured releases dock to keep the Hub icon visible")
+		t.Fatalf("expected configured bottom dock to keep the Hub icon visible")
 	}
 	if !strings.Contains(markup, `<span id="moltenbot-hub-plus" class="hub-dock-plus hidden" aria-hidden="true">+</span>`) {
-		t.Fatalf("expected configured releases dock to hide the Hub plus badge")
+		t.Fatalf("expected configured bottom dock to hide the Hub plus badge")
 	}
 	if strings.Contains(markup, `id="moltenbot-hub-profile-button"
         class="prompt-mode-link prompt-mode-link-logo hub-profile-button"
@@ -123,7 +123,7 @@ func TestHandlerReleasesBottomDockUsesHubSetupStatus(t *testing.T) {
         aria-label="Edit agent profile"
         title="Edit agent profile"
         hidden>`) {
-		t.Fatalf("expected configured releases dock to show the profile button")
+		t.Fatalf("expected configured bottom dock to show the profile button")
 	}
 }
 
@@ -147,14 +147,14 @@ func TestBottomDockProfileButtonRoutesToLocalProfileDialog(t *testing.T) {
 		!strings.Contains(script, `const title = configured ? "Open Molten Hub" : "Configure Molten Hub";`) {
 		t.Fatalf("expected shared dock Hub logo to stay visible and link to the dashboard when configured")
 	}
-	if !strings.Contains(script, `function syncReleaseDockLinkAvailability(snapshot, root = document)`) ||
-		!strings.Contains(script, `const active = linkDisplay === currentDisplay && !dockLinkDisabled(link);`) ||
-		!strings.Contains(script, `releaseLink.setAttribute("aria-disabled", String(!available));`) ||
-		!strings.Contains(script, `releaseLink.removeAttribute("href");`) ||
-		!strings.Contains(script, `releaseLink.classList.remove("active");`) ||
-		!strings.Contains(script, `const response = await fetch("/api/status", { cache: "no-store" });`) ||
+	if !strings.Contains(script, `const active = linkDisplay === currentDisplay && !dockLinkDisabled(link);`) ||
 		!strings.Contains(script, `event.stopImmediatePropagation();`) {
-		t.Fatalf("expected shared dock script to disable releases navigation until releases exist")
+		t.Fatalf("expected shared dock script to keep disabled-link navigation guards")
+	}
+	if strings.Contains(script, `syncReleaseDockLinkAvailability`) ||
+		strings.Contains(script, `data-app-display="releases"`) ||
+		strings.Contains(script, `fetch("/api/status", { cache: "no-store" })`) {
+		t.Fatalf("expected shared dock script to omit release navigation state")
 	}
 }
 
