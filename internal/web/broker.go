@@ -21,6 +21,7 @@ const (
 	defaultMaxEvents           = 600
 	defaultMaxTaskLogs         = 2000
 	defaultClosedTaskRetention = 24 * time.Hour
+	defaultMaxReleases         = 100
 )
 
 var (
@@ -87,6 +88,26 @@ type Task struct {
 	Logs              []TaskLog    `json:"logs"`
 }
 
+// Release represents a merged pull request that shipped from one originating prompt.
+type Release struct {
+	RequestID         string   `json:"request_id"`
+	Prompt            string   `json:"prompt,omitempty"`
+	PromptIsUserInput bool     `json:"prompt_is_user_input"`
+	Skill             string   `json:"skill,omitempty"`
+	Workflow          string   `json:"workflow,omitempty"`
+	AgentHarness      string   `json:"agent_harness,omitempty"`
+	Repo              string   `json:"repo,omitempty"`
+	Repos             []string `json:"repos,omitempty"`
+	BaseBranch        string   `json:"base_branch,omitempty"`
+	Branch            string   `json:"branch,omitempty"`
+	PRURL             string   `json:"pr_url,omitempty"`
+	StartedAt         string   `json:"started_at,omitempty"`
+	CompletedAt       string   `json:"completed_at,omitempty"`
+	MergedAt          string   `json:"merged_at,omitempty"`
+	ReleasedAt        string   `json:"released_at"`
+	DurationSeconds   float64  `json:"duration_seconds,omitempty"`
+}
+
 // TaskAttempt is an internal record of queued/running terminal attempts for one original task.
 // It is intentionally not included in Snapshot responses.
 type TaskAttempt struct {
@@ -145,12 +166,14 @@ type TimeStatsGroup struct {
 
 // Snapshot is the complete monitor payload for the web UI.
 type Snapshot struct {
-	GeneratedAt string          `json:"generated_at"`
-	Connection  Connection      `json:"connection"`
-	Resources   ResourceMetrics `json:"resources"`
-	Stats       DashboardStats  `json:"stats"`
-	Events      []Event         `json:"events"`
-	Tasks       []Task          `json:"tasks"`
+	GeneratedAt   string          `json:"generated_at"`
+	Connection    Connection      `json:"connection"`
+	Resources     ResourceMetrics `json:"resources"`
+	Stats         DashboardStats  `json:"stats"`
+	Releases      []Release       `json:"releases"`
+	Events        []Event         `json:"events"`
+	Tasks         []Task          `json:"tasks"`
+	PromptedRepos []string        `json:"prompted_repos,omitempty"`
 }
 
 // Broker collects daemon logs and exposes monitor state snapshots.
@@ -161,15 +184,17 @@ type Broker struct {
 	maxEvents  int
 	maxTaskLog int
 
-	nextEventID  int64
-	events       []Event
-	tasks        map[string]*taskState
-	closedTasks  map[string]time.Time
-	runConfigs   map[string][]byte
-	attempts     map[string][]taskAttemptState
-	attemptRoots map[string]string
-	rejectedSeq  uint64
-	subs         map[chan struct{}]struct{}
+	nextEventID   int64
+	events        []Event
+	releases      []releaseState
+	tasks         map[string]*taskState
+	closedTasks   map[string]time.Time
+	runConfigs    map[string][]byte
+	promptedRepos []string
+	attempts      map[string][]taskAttemptState
+	attemptRoots  map[string]string
+	rejectedSeq   uint64
+	subs          map[chan struct{}]struct{}
 
 	hubConnected       bool
 	hubTransport       string
@@ -201,6 +226,25 @@ type taskState struct {
 	StartedAt         time.Time
 	UpdatedAt         time.Time
 	Logs              []TaskLog
+}
+
+type releaseState struct {
+	RequestID         string
+	Prompt            string
+	PromptIsUserInput bool
+	Skill             string
+	Workflow          string
+	AgentHarness      string
+	Repo              string
+	Repos             []string
+	BaseBranch        string
+	Branch            string
+	PRURL             string
+	StartedAt         time.Time
+	CompletedAt       time.Time
+	MergedAt          time.Time
+	ReleasedAt        time.Time
+	Duration          time.Duration
 }
 
 type taskAttemptState struct {
@@ -294,8 +338,9 @@ func (b *Broker) Snapshot() Snapshot {
 			HubBaseURL:   b.hubBaseURL,
 			HubDetail:    strings.TrimSpace(b.hubDetail),
 		},
-		Resources: b.resources,
-		Events:    append([]Event(nil), b.events...),
+		Resources:     b.resources,
+		Events:        append([]Event(nil), b.events...),
+		PromptedRepos: append([]string(nil), b.promptedRepos...),
 	}
 
 	tasks := make([]*taskState, 0, len(b.tasks))
@@ -338,6 +383,7 @@ func (b *Broker) Snapshot() Snapshot {
 			Logs:              append([]TaskLog(nil), t.Logs...),
 		})
 	}
+	snapshot.Releases = b.releasesSnapshotLocked()
 	snapshot.Stats = b.dashboardStatsLocked(now, tasks)
 
 	return snapshot
@@ -419,6 +465,10 @@ func (b *Broker) RecordTaskRunConfig(requestID string, runConfigJSON []byte) {
 	changed := false
 	if existing, ok := b.runConfigs[requestID]; !ok || !bytes.Equal(existing, cfgCopy) {
 		b.runConfigs[requestID] = cfgCopy
+		changed = true
+	}
+	if next := appendNonEmptyUnique(b.promptedRepos, repos...); !sameStringSlice(b.promptedRepos, next) {
+		b.promptedRepos = next
 		changed = true
 	}
 	t, taskExists := b.tasks[requestID]
@@ -693,6 +743,60 @@ func taskDuration(startedAt, updatedAt, now time.Time, status string) time.Durat
 	return end.Sub(startedAt)
 }
 
+func parseTimeOrZero(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return t.UTC()
+}
+
+func formatTimeOrEmpty(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func (b *Broker) releasesSnapshotLocked() []Release {
+	if len(b.releases) == 0 {
+		return nil
+	}
+	releases := append([]releaseState(nil), b.releases...)
+	sort.Slice(releases, func(i, j int) bool {
+		if releases[i].ReleasedAt.Equal(releases[j].ReleasedAt) {
+			return releases[i].RequestID > releases[j].RequestID
+		}
+		return releases[i].ReleasedAt.After(releases[j].ReleasedAt)
+	})
+	out := make([]Release, 0, len(releases))
+	for _, release := range releases {
+		out = append(out, Release{
+			RequestID:         release.RequestID,
+			Prompt:            release.Prompt,
+			PromptIsUserInput: release.PromptIsUserInput,
+			Skill:             release.Skill,
+			Workflow:          release.Workflow,
+			AgentHarness:      release.AgentHarness,
+			Repo:              release.Repo,
+			Repos:             append([]string(nil), release.Repos...),
+			BaseBranch:        release.BaseBranch,
+			Branch:            release.Branch,
+			PRURL:             release.PRURL,
+			StartedAt:         formatTimeOrEmpty(release.StartedAt),
+			CompletedAt:       formatTimeOrEmpty(release.CompletedAt),
+			MergedAt:          formatTimeOrEmpty(release.MergedAt),
+			ReleasedAt:        formatTimeOrEmpty(release.ReleasedAt),
+			DurationSeconds:   release.Duration.Seconds(),
+		})
+	}
+	return out
+}
+
 func taskWorkflow(t *taskState) string {
 	if t == nil {
 		return ""
@@ -816,6 +920,68 @@ func (b *Broker) DropTaskRunConfig(requestID string) {
 	defer b.mu.Unlock()
 
 	delete(b.runConfigs, requestID)
+}
+
+// RecordReleaseFromTask stores a release entry for a merged pull request before
+// the originating task is removed from the live task list.
+func (b *Broker) RecordReleaseFromTask(task Task, mergedAt string) {
+	if b == nil {
+		return
+	}
+	requestID := strings.TrimSpace(task.RequestID)
+	prURL := strings.TrimSpace(task.PRURL)
+	if requestID == "" || prURL == "" {
+		return
+	}
+
+	now := b.now().UTC()
+	startedAt := parseTimeOrZero(task.StartedAt)
+	completedAt := parseTimeOrZero(task.UpdatedAt)
+	mergedTime := parseTimeOrZero(mergedAt)
+	if mergedTime.IsZero() {
+		mergedTime = now
+	}
+	duration := time.Duration(0)
+	if task.DurationSeconds > 0 {
+		duration = time.Duration(task.DurationSeconds * float64(time.Second))
+	} else if !startedAt.IsZero() && !completedAt.IsZero() && completedAt.After(startedAt) {
+		duration = completedAt.Sub(startedAt)
+	}
+
+	release := releaseState{
+		RequestID:         requestID,
+		Prompt:            strings.TrimSpace(task.Prompt),
+		PromptIsUserInput: task.PromptIsUserInput,
+		Skill:             strings.TrimSpace(task.Skill),
+		Workflow:          strings.TrimSpace(task.Workflow),
+		AgentHarness:      strings.TrimSpace(task.AgentHarness),
+		Repo:              strings.TrimSpace(task.Repo),
+		Repos:             append([]string(nil), task.Repos...),
+		BaseBranch:        strings.TrimSpace(task.BaseBranch),
+		Branch:            strings.TrimSpace(task.Branch),
+		PRURL:             prURL,
+		StartedAt:         startedAt,
+		CompletedAt:       completedAt,
+		MergedAt:          mergedTime,
+		ReleasedAt:        now,
+		Duration:          duration,
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for i := range b.releases {
+		if b.releases[i].RequestID == requestID {
+			b.releases[i] = release
+			b.notifySubscribersLocked()
+			return
+		}
+	}
+	b.releases = append([]releaseState{release}, b.releases...)
+	if len(b.releases) > defaultMaxReleases {
+		b.releases = b.releases[:defaultMaxReleases]
+	}
+	b.notifySubscribersLocked()
 }
 
 // TaskAttempts returns a copy of internal attempt records for requestID's root task.
@@ -1003,7 +1169,9 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		t.Skill = firstNonEmpty(t.Skill, fields["skill"])
 		t.Workflow = firstNonEmpty(t.Workflow, workflowFromFields(fields))
 		t.AgentHarness = firstNonEmpty(t.AgentHarness, agentHarnessFromFields(fields))
-		t.Repos = appendNonEmptyUnique(t.Repos, reposFromFields(fields)...)
+		repos := reposFromFields(fields)
+		t.Repos = appendNonEmptyUnique(t.Repos, repos...)
+		b.promptedRepos = appendNonEmptyUnique(b.promptedRepos, repos...)
 		if len(t.Repos) > 0 {
 			t.Repo = t.Repos[0]
 		} else {

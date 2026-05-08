@@ -276,15 +276,18 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, `task-empty-chip`) {
 		t.Fatalf("expected index html to remove empty queue stage chips")
 	}
-	if !strings.Contains(markup, `id="prompt-panel-title" class="panel-section-title prompt-title-list"`) ||
+	if !strings.Contains(markup, `id="prompt-panel-title" class="panel-section-title prompt-title-list" aria-label="Prompt Studio"`) ||
 		!strings.Contains(markup, `data-lucide="pencil" class="prompt-title-icon"`) ||
+		!strings.Contains(markup, `data-prompt-title-label="Prompt Studio" aria-label="Prompt Studio"`) ||
 		!strings.Contains(markup, `data-lucide="book-open" class="prompt-title-icon"`) ||
+		!strings.Contains(markup, `data-prompt-title-label="Library Studio" aria-label="Library Studio" hidden aria-hidden="true"`) ||
 		!strings.Contains(markup, `data-lucide="braces" class="prompt-title-icon"`) ||
+		!strings.Contains(markup, `data-prompt-title-label="JSON Studio" aria-label="JSON Studio" hidden aria-hidden="true"`) ||
 		!strings.Contains(markup, `<span>Studio</span>`) {
-		t.Fatalf("expected index html to label Studio with mode-specific icons")
+		t.Fatalf("expected index html to label Studio as a single active mode icon title")
 	}
 	if strings.Contains(markup, `Studio <span class="prompt-title-separator" aria-hidden="true">/</span>`) {
-		t.Fatalf("expected index html to avoid duplicate Studio mode title text")
+		t.Fatalf("expected index html to remove duplicated Studio mode breadcrumb text")
 	}
 	if !strings.Contains(markup, `setPromptMode(promptModeFromHash() || "builder");`) {
 		t.Fatalf("expected index html to default Studio to the Prompt view")
@@ -1543,8 +1546,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected index html to switch main views while hiding Current Work on dashboard and releases")
 	}
 	if !strings.Contains(markup, `function syncPromptTitleModes()`) ||
-		!strings.Contains(markup, `item.classList.toggle("active", String(item.dataset.promptTitleMode || "") === state.promptMode);`) {
-		t.Fatalf("expected index html to update the compact Studio mode heading when the prompt mode changes")
+		!strings.Contains(markup, `item.hidden = !active;`) ||
+		!strings.Contains(markup, `promptPanelTitle.setAttribute("aria-label", label);`) {
+		t.Fatalf("expected index html to update and hide inactive compact Studio mode headings when the prompt mode changes")
 	}
 	if !strings.Contains(markup, `id="prompt-mode-builder" class="prompt-mode-link active" href="#studio-builder" aria-selected="true"`) {
 		t.Fatalf("expected builder mode to render as an anchor-style control inside the shared segmented dock")
@@ -1584,12 +1588,19 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `let githubReposLoadPromise = null;`) ||
 		!strings.Contains(markup, `const response = await fetch("/api/github/repos", { cache: "no-store" });`) ||
 		!strings.Contains(markup, `state.githubRepos = Array.isArray(body.repos) ? body.repos : [];`) ||
-		!strings.Contains(markup, `const repos = Array.isArray(state.githubRepos) ? state.githubRepos : [];`) ||
+		!strings.Contains(markup, `let repos = Array.isArray(state.githubRepos) ? state.githubRepos : [];`) ||
 		!strings.Contains(markup, `const CHAT_REPOS_PER_PAGE = 24;`) ||
 		!strings.Contains(markup, `const pageRepos = repos.slice(start, start + CHAT_REPOS_PER_PAGE);`) ||
 		!strings.Contains(markup, `function renderChatRepoPagination(totalRepos, totalPages)`) ||
 		!strings.Contains(markup, `if (!state.githubReposReady) {`) {
 		t.Fatalf("expected index html to gate chat availability on GitHub repository loading")
+	}
+	if !strings.Contains(markup, `id="chat-repo-tabs"`) ||
+		!strings.Contains(markup, `function chatPromptedRepoTabs()`) ||
+		!strings.Contains(markup, `state.snapshot.prompted_repos`) ||
+		!strings.Contains(markup, `reposButton.textContent = "Repos";`) ||
+		!strings.Contains(markup, `repos = repos.filter((repo) => !promptedKeys.has(chatRepoKey(chatRepoRunValue(repo))));`) {
+		t.Fatalf("expected index html chat to render prompted repository tabs and filter the repos tab")
 	}
 	if strings.Contains(markup, `taskItems.push(githubReposLoadingTask())`) ||
 		strings.Contains(markup, `repoRead.textContent = "repos: reading GitHub projects";`) ||
@@ -2569,7 +2580,9 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		t.Fatalf("expected expanded chat repository cards to span the full repository grid width")
 	}
 	if !strings.Contains(css, ".chat-repo-card-head {") ||
+		!strings.Contains(css, ".chat-repo-card {\n  position: relative;") ||
 		!strings.Contains(css, ".chat-repo-card-chat-icon {") ||
+		!strings.Contains(css, "  position: absolute;\n  top: 10px;\n  right: 10px;") ||
 		!strings.Contains(css, ".chat-repo-card:hover .chat-repo-card-chat-icon,") {
 		t.Fatalf("expected stylesheet to render chat icons inside repository cards")
 	}

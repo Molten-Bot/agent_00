@@ -94,16 +94,16 @@
         <section class="panel prompt-wrap brand-login-card-shell">
           <div class="panel-header prompt-titlebar">
             <div class="panel-header-copy">
-              <span id="prompt-panel-title" class="panel-section-title prompt-title-list" aria-label="Studio views">
-                <span class="prompt-title-mode active" data-prompt-title-mode="builder">
+              <span id="prompt-panel-title" class="panel-section-title prompt-title-list" aria-label="Prompt Studio">
+                <span class="prompt-title-mode active" data-prompt-title-mode="builder" data-prompt-title-label="Prompt Studio" aria-label="Prompt Studio">
                   <i data-lucide="pencil" class="prompt-title-icon" aria-hidden="true"></i>
                   <span>Studio</span>
                 </span>
-                <span class="prompt-title-mode" data-prompt-title-mode="library">
+                <span class="prompt-title-mode" data-prompt-title-mode="library" data-prompt-title-label="Library Studio" aria-label="Library Studio" hidden aria-hidden="true">
                   <i data-lucide="book-open" class="prompt-title-icon" aria-hidden="true"></i>
                   <span>Studio</span>
                 </span>
-                <span class="prompt-title-mode" data-prompt-title-mode="json">
+                <span class="prompt-title-mode" data-prompt-title-mode="json" data-prompt-title-label="JSON Studio" aria-label="JSON Studio" hidden aria-hidden="true">
                   <i data-lucide="braces" class="prompt-title-icon" aria-hidden="true"></i>
                   <span>Studio</span>
                 </span>
@@ -311,7 +311,7 @@
               <h1 class="panel-section-title releases-title">Releases</h1>
             </div>
           </div>
-          <div class="release-list">
+          <div id="release-list" class="release-list">
             <div class="release-empty" aria-label="No releases">
               <p>No releases yet.</p>
             </div>
@@ -385,13 +385,14 @@
           <section class="chat-shell" aria-labelledby="chat-title">
             <div class="chat-head">
               <div>
-                <h1 id="chat-title" class="chat-title" aria-label="GitHub / Chat">
-                  <span class="panel-section-title">GitHub</span>
+                <h1 id="chat-title" class="chat-title" aria-label="Git / Chat">
+                  <span class="panel-section-title">Git</span>
                   <span class="panel-section-title chat-title-current">Chat</span>
                 </h1>
               </div>
               <p id="chat-status" class="chat-status" aria-live="polite"></p>
             </div>
+            <div id="chat-repo-tabs" class="chat-repo-tabs" role="tablist" aria-label="Prompted repositories"></div>
             <div id="chat-repo-grid" class="chat-repo-grid" aria-label="GitHub repositories"></div>
             <nav id="chat-repo-pagination" class="chat-repo-pagination hidden" aria-label="GitHub repository pages"></nav>
           </section>
@@ -1690,6 +1691,8 @@
       githubRepos: stateUI.githubRepos,
       chatSubmittingRepos: new Set(),
       chatPromptLog: new Map(),
+      chatPromptedRepos: [],
+      chatActiveRepoTab: "repos",
       chatRepoPage: 1,
       taskSoundMuted: loadTaskSoundMuted(),
       taskSoundInitialized: false,
@@ -1783,6 +1786,7 @@
     const promptTitleModes = Array.from(document.querySelectorAll("[data-prompt-title-mode]"));
     const appLayout = document.querySelector(".layout");
     const releasesDisplay = document.getElementById("releases-display");
+    const releaseList = document.getElementById("release-list");
     const dashboardDisplay = document.getElementById("dashboard-display");
     const dashboardUpdated = document.getElementById("dashboard-updated");
     const dashboardMaxConcurrent = document.getElementById("dashboard-max-concurrent");
@@ -1796,11 +1800,13 @@
     const dashboardSuccessRate = document.getElementById("dashboard-success-rate");
     const dashboardTaskChart = document.getElementById("dashboard-task-chart");
     const chatDisplay = document.getElementById("chat-display");
+    const chatRepoTabs = document.getElementById("chat-repo-tabs");
     const chatRepoGrid = document.getElementById("chat-repo-grid");
     const chatStatus = document.getElementById("chat-status");
     const chatRepoPagination = document.getElementById("chat-repo-pagination");
     const appDisplayLinks = Array.from(document.querySelectorAll("[data-app-display]"));
     const chatDockLink = document.querySelector('[data-app-display="chat"]');
+    const promptPanelTitle = document.getElementById("prompt-panel-title");
     const promptPanelCopy = document.getElementById("prompt-panel-copy");
     const githubProfileLink = document.getElementById("github-profile-link");
     const moltenBotHubDockGroup = document.getElementById("moltenbot-hub-dock-group");
@@ -4564,6 +4570,90 @@
       }
     }
 
+    function releasePromptLabel(release) {
+      const prompt = String(release?.prompt || "").trim();
+      if (prompt) return prompt;
+      const workflow = String(release?.workflow || release?.skill || "").trim();
+      if (workflow) return workflow;
+      return "Merged prompt";
+    }
+
+    function releaseMetaParts(release) {
+      const parts = [];
+      const repos = normalizedTaskRepos(release);
+      if (repos.length) parts.push(repos.join(", "));
+      const branch = formatTaskBranch(release);
+      if (branch && branch !== "-") parts.push(branch);
+      const agent = String(release?.agent_harness || "").trim();
+      if (agent) parts.push(agent);
+      return parts;
+    }
+
+    function renderReleases(snapshot) {
+      if (!releaseList) return;
+      releaseList.textContent = "";
+      const releases = Array.isArray(snapshot?.releases) ? snapshot.releases : [];
+      if (!releases.length) {
+        const empty = document.createElement("div");
+        empty.className = "release-empty";
+        empty.setAttribute("aria-label", "No releases");
+        const text = document.createElement("p");
+        text.textContent = "No releases yet.";
+        empty.appendChild(text);
+        releaseList.appendChild(empty);
+        return;
+      }
+
+      for (const release of releases) {
+        const card = document.createElement("article");
+        card.className = "release-card";
+
+        const icon = document.createElement("span");
+        icon.className = "release-change-status release-change-status-preserved";
+        icon.setAttribute("aria-hidden", "true");
+        const iconNode = document.createElement("i");
+        iconNode.dataset.lucide = "git-merge";
+        iconNode.className = "release-change-icon";
+        icon.appendChild(iconNode);
+
+        const body = document.createElement("div");
+        body.className = "release-card-body";
+        const title = document.createElement("p");
+        title.className = "release-prompt";
+        title.textContent = releasePromptLabel(release);
+        body.appendChild(title);
+
+        const metaParts = releaseMetaParts(release);
+        const mergedAt = relativeTime(release?.merged_at || release?.released_at);
+        const duration = dashboardDuration(Number(release?.duration_seconds || 0));
+        if (mergedAt) metaParts.push(`merged ${mergedAt}`);
+        if (duration && duration !== "0m") metaParts.push(`${duration} runtime`);
+        if (metaParts.length) {
+          const meta = document.createElement("div");
+          meta.className = "release-meta";
+          meta.textContent = metaParts.join(" | ");
+          body.appendChild(meta);
+        }
+
+        const prURL = String(release?.pr_url || "").trim();
+        if (prURL) {
+          const link = document.createElement("a");
+          link.className = "release-link";
+          link.href = prURL;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.textContent = "Pull request";
+          body.appendChild(link);
+        }
+
+        card.append(icon, body);
+        releaseList.appendChild(card);
+      }
+      if (window.lucide) {
+        window.lucide.createIcons();
+      }
+    }
+
     function escapeLiteralNewlinesInJSONStrings(raw) {
       let out = "";
       let inString = false;
@@ -5812,21 +5902,133 @@
       chatRepoPagination.append(previous, label, next);
     }
 
+    function chatRepoKey(value) {
+      return githubRepoPathFromValue(value).toLowerCase();
+    }
+
+    function chatRepoTabLabel(value) {
+      const path = githubRepoPathFromValue(value) || cleanRepoName(value);
+      const parts = path.split("/").filter(Boolean);
+      return parts.length >= 2 ? parts[1] : (parts[0] || "Repo");
+    }
+
+    function chatPromptedRepoTabs() {
+      const repos = [];
+      if (Array.isArray(state.snapshot?.prompted_repos)) {
+        repos.push(...state.snapshot.prompted_repos);
+      }
+      for (const task of state.snapshot?.tasks || []) {
+        repos.push(...taskRepoValues(task));
+      }
+      repos.push(...state.chatPromptedRepos);
+
+      const seen = new Set();
+      const out = [];
+      for (const repo of repos) {
+        const key = chatRepoKey(repo);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push({ key, value: repo, label: chatRepoTabLabel(repo) });
+      }
+      const labelCounts = new Map();
+      for (const tab of out) {
+        labelCounts.set(tab.label, (labelCounts.get(tab.label) || 0) + 1);
+      }
+      for (const tab of out) {
+        if (labelCounts.get(tab.label) > 1) {
+          tab.label = githubRepoPathFromValue(tab.value) || tab.label;
+        }
+      }
+      return out;
+    }
+
+    function chatRepoMatchesTab(repo, tab) {
+      return chatRepoKey(chatRepoRunValue(repo)) === tab.key;
+    }
+
+    function fallbackChatRepo(tab) {
+      const path = githubRepoPathFromValue(tab.value) || cleanRepoName(tab.value);
+      return {
+        name: tab.label,
+        full_name: path || tab.label,
+        description: "Prompted repository.",
+        html_url: normalizeCloneRepoURL(tab.value),
+        private: false,
+      };
+    }
+
+    function renderChatRepoTabs(tabs) {
+      if (!chatRepoTabs) return;
+      chatRepoTabs.replaceChildren();
+      chatRepoTabs.classList.toggle("hidden", tabs.length === 0);
+      if (tabs.length === 0) {
+        state.chatActiveRepoTab = "repos";
+        return;
+      }
+      if (state.chatActiveRepoTab !== "repos" && !tabs.some((tab) => tab.key === state.chatActiveRepoTab)) {
+        state.chatActiveRepoTab = "repos";
+      }
+
+      for (const tab of tabs) {
+        const button = document.createElement("button");
+        button.className = "chat-repo-tab";
+        button.type = "button";
+        button.role = "tab";
+        button.textContent = tab.label;
+        button.dataset.repoKey = tab.key;
+        button.setAttribute("aria-selected", String(state.chatActiveRepoTab === tab.key));
+        button.addEventListener("click", () => {
+          if (state.chatActiveRepoTab === tab.key) return;
+          state.chatActiveRepoTab = tab.key;
+          state.chatRepoPage = 1;
+          renderChatRepos();
+        });
+        chatRepoTabs.appendChild(button);
+      }
+
+      const reposButton = document.createElement("button");
+      reposButton.className = "chat-repo-tab";
+      reposButton.type = "button";
+      reposButton.role = "tab";
+      reposButton.textContent = "Repos";
+      reposButton.dataset.repoKey = "repos";
+      reposButton.setAttribute("aria-selected", String(state.chatActiveRepoTab === "repos"));
+      reposButton.addEventListener("click", () => {
+        if (state.chatActiveRepoTab === "repos") return;
+        state.chatActiveRepoTab = "repos";
+        state.chatRepoPage = 1;
+        renderChatRepos();
+      });
+      chatRepoTabs.appendChild(reposButton);
+    }
+
     function renderChatRepos() {
       if (!chatRepoGrid || !chatStatus) return;
-      const repos = Array.isArray(state.githubRepos) ? state.githubRepos : [];
+      const tabs = chatPromptedRepoTabs();
+      const selectedTab = tabs.find((tab) => tab.key === state.chatActiveRepoTab);
+      const promptedKeys = new Set(tabs.map((tab) => tab.key));
+      let repos = Array.isArray(state.githubRepos) ? state.githubRepos : [];
+      if (selectedTab) {
+        const matched = repos.filter((repo) => chatRepoMatchesTab(repo, selectedTab));
+        repos = matched.length > 0 ? matched : [fallbackChatRepo(selectedTab)];
+      } else if (promptedKeys.size > 0) {
+        repos = repos.filter((repo) => !promptedKeys.has(chatRepoKey(chatRepoRunValue(repo))));
+      }
       const totalPages = Math.max(1, Math.ceil(repos.length / CHAT_REPOS_PER_PAGE));
       state.chatRepoPage = Math.min(Math.max(1, state.chatRepoPage), totalPages);
       const start = (state.chatRepoPage - 1) * CHAT_REPOS_PER_PAGE;
       const pageRepos = repos.slice(start, start + CHAT_REPOS_PER_PAGE);
 
+      renderChatRepoTabs(tabs);
       chatRepoGrid.replaceChildren(...pageRepos.map(renderChatRepoCard));
       if (repos.length === 0) {
         chatStatus.textContent = "0 repositories";
         const empty = document.createElement("p");
         empty.className = "chat-empty";
-        empty.textContent = "No repositories found.";
+        empty.textContent = selectedTab ? "Repository not found." : "No repositories found.";
         chatRepoGrid.appendChild(empty);
+      } else if (selectedTab) {
+        chatStatus.textContent = chatRepoTabLabel(selectedTab.value);
       } else if (repos.length <= CHAT_REPOS_PER_PAGE) {
         chatStatus.textContent = repos.length === 1 ? "1 repository" : `${repos.length} repositories`;
       } else {
@@ -5905,12 +6107,16 @@
           requestID,
           imageCount: promptImages.length,
         });
+        state.chatPromptedRepos = dedupeRepoValues([repoValue, ...state.chatPromptedRepos]);
+        state.chatActiveRepoTab = chatRepoKey(repoValue) || state.chatActiveRepoTab;
+        state.chatRepoPage = 1;
         renderChatRepoPromptLog(repo, logNode);
         input.value = "";
         if (typeof setImages === "function") {
           setImages([]);
         }
         rememberRepos([repoValue]);
+        renderChatRepos();
         trackAnalyticsEvent("chat_repo_prompt_succeeded", { request_id: requestID });
         statusNode.textContent = compactChatRequestID(requestID) || "Queued.";
         statusNode.title = `Queued request ${requestID}`;
@@ -5989,7 +6195,16 @@
 
     function syncPromptTitleModes() {
       for (const item of promptTitleModes) {
-        item.classList.toggle("active", String(item.dataset.promptTitleMode || "") === state.promptMode);
+        const active = String(item.dataset.promptTitleMode || "") === state.promptMode;
+        item.classList.toggle("active", active);
+        item.hidden = !active;
+        item.setAttribute("aria-hidden", String(!active));
+        if (active && promptPanelTitle) {
+          const label = String(item.dataset.promptTitleLabel || "").trim();
+          if (label) {
+            promptPanelTitle.setAttribute("aria-label", label);
+          }
+        }
       }
     }
 
@@ -6038,6 +6253,7 @@
         }
       }
       syncPromptModeLinks();
+      renderReleases(state.snapshot);
       renderTasks(state.snapshot);
       renderDashboardStats(state.snapshot);
       if (options.updateHash) {
@@ -9201,9 +9417,11 @@
       syncTaskIconStateMemory(snapshot.tasks || []);
       renderHubConnection(snapshot);
       renderResourceMetrics(snapshot);
+      renderReleases(snapshot);
       renderDashboardStats(snapshot);
       renderTasks(snapshot);
       renderFullscreenTasks(snapshot);
+      renderChatRepos();
       renderFullscreenTerminal(snapshot);
     }
 
