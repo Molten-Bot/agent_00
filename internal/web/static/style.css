@@ -2903,6 +2903,56 @@ select.prompt-control {
   text-align: right;
 }
 
+.chat-controls {
+  display: flex;
+  align-items: center;
+  padding-top: 14px;
+}
+
+.chat-search-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(100%, 420px);
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--surface-control-border);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface-control-bg);
+  box-shadow: var(--surface-control-shadow);
+}
+
+.chat-search-field:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--running) 18%, transparent);
+}
+
+.chat-search-field svg {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.25;
+}
+
+.chat-search-input {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 750;
+  line-height: 1.2;
+  outline: none;
+}
+
+.chat-search-input::placeholder {
+  color: var(--muted);
+  opacity: 0.78;
+}
+
 .chat-repo-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -3507,6 +3557,10 @@ select.prompt-control {
 
   .chat-status {
     text-align: left;
+  }
+
+  .chat-search-field {
+    width: 100%;
   }
 
   .dashboard-head,

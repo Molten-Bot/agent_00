@@ -392,6 +392,12 @@
               </div>
               <p id="chat-status" class="chat-status" aria-live="polite"></p>
             </div>
+            <div class="chat-controls">
+              <label class="chat-search-field">
+                <i data-lucide="search" aria-hidden="true"></i>
+                <input id="chat-repo-search" class="chat-search-input" type="search" spellcheck="false" placeholder="Search repositories" aria-label="Search repositories">
+              </label>
+            </div>
             <div id="chat-repo-tabs" class="chat-repo-tabs" role="tablist" aria-label="Prompted repositories"></div>
             <div id="chat-repo-grid" class="chat-repo-grid" aria-label="GitHub repositories"></div>
             <nav id="chat-repo-pagination" class="chat-repo-pagination hidden" aria-label="GitHub repository pages"></nav>
@@ -1704,6 +1710,7 @@
       chatPromptedRepos: [],
       chatActiveRepoTab: "repos",
       chatRepoPage: 1,
+      chatRepoSearchQuery: "",
       chatRepoRenderPending: false,
       taskSoundMuted: loadTaskSoundMuted(),
       taskSoundInitialized: false,
@@ -1814,6 +1821,7 @@
     const chatDisplay = document.getElementById("chat-display");
     const chatRepoTabs = document.getElementById("chat-repo-tabs");
     const chatRepoGrid = document.getElementById("chat-repo-grid");
+    const chatRepoSearch = document.getElementById("chat-repo-search");
     const chatStatus = document.getElementById("chat-status");
     const chatRepoPagination = document.getElementById("chat-repo-pagination");
     const appDisplayLinks = Array.from(document.querySelectorAll("[data-app-display]"));
@@ -6269,6 +6277,8 @@
       } else if (promptedKeys.size > 0) {
         repos = repos.filter((repo) => !promptedKeys.has(chatRepoKey(chatRepoRunValue(repo))));
       }
+      const unfilteredRepoCount = repos.length;
+      repos = filterChatRepos(repos, state.chatRepoSearchQuery);
       const reposPerPage = chatReposPerPage();
       const totalPages = Math.max(1, Math.ceil(repos.length / reposPerPage));
       state.chatRepoPage = Math.min(Math.max(1, state.chatRepoPage), totalPages);
@@ -6281,10 +6291,14 @@
         chatStatus.textContent = "0 repositories";
         const empty = document.createElement("p");
         empty.className = "chat-empty";
-        empty.textContent = selectedTab ? "Repository not found." : "No repositories found.";
+        empty.textContent = state.chatRepoSearchQuery ? "No repositories match search." : (selectedTab ? "Repository not found." : "No repositories found.");
         chatRepoGrid.appendChild(empty);
       } else if (selectedTab) {
         chatStatus.textContent = chatRepoTabLabel(selectedTab.value);
+      } else if (state.chatRepoSearchQuery) {
+        chatStatus.textContent = repos.length === unfilteredRepoCount
+          ? `${repos.length} repositories`
+          : `${repos.length} of ${unfilteredRepoCount} repositories`;
       } else if (repos.length <= reposPerPage) {
         chatStatus.textContent = repos.length === 1 ? "1 repository" : `${repos.length} repositories`;
       } else {
@@ -6303,6 +6317,23 @@
           restoredPrompt.setSelectionRange(Math.min(restoreSelectionStart, end), end);
         }
       }
+    }
+
+    function filterChatRepos(repos, query) {
+      const terms = String(query || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+      if (terms.length === 0) return repos;
+      return repos.filter((repo) => {
+        const haystack = [
+          repo?.full_name,
+          repo?.name,
+          repo?.description,
+          repo?.language,
+          repo?.owner_type,
+          repo?.html_url,
+          repo?.default_branch,
+        ].map((value) => String(value || "").toLowerCase()).join(" ");
+        return terms.every((term) => haystack.includes(term));
+      });
     }
 
     function chatRepoPanelContainsFocus() {
@@ -10471,6 +10502,15 @@
           if (!state.chatRepoRenderPending || chatRepoPanelContainsFocus()) return;
           renderChatRepos();
         }, 0);
+      });
+    }
+    if (chatRepoSearch) {
+      chatRepoSearch.addEventListener("input", () => {
+        state.chatRepoSearchQuery = chatRepoSearch.value;
+        state.chatRepoPage = 1;
+        if (state.appDisplay === "chat" && state.githubReposReady) {
+          renderChatRepos();
+        }
       });
     }
     window.addEventListener("resize", queueChatRepoResizeRender, { passive: true });

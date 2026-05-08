@@ -1603,7 +1603,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `function chatReposPerPage()`) ||
 		!strings.Contains(markup, `const pageRepos = repos.slice(start, start + reposPerPage);`) ||
 		!strings.Contains(markup, `function renderChatRepoPagination(totalRepos, totalPages)`) ||
-		!strings.Contains(markup, `if (!state.githubReposReady) {`) {
+		!strings.Contains(markup, `if (!state.githubReposReady) {`) ||
+		!strings.Contains(markup, `id="chat-repo-search" class="chat-search-input" type="search"`) ||
+		!strings.Contains(markup, `const chatRepoSearch = document.getElementById("chat-repo-search");`) ||
+		!strings.Contains(markup, `function filterChatRepos(repos, query)`) ||
+		!strings.Contains(markup, `state.chatRepoSearchQuery = chatRepoSearch.value;`) ||
+		!strings.Contains(markup, `empty.textContent = state.chatRepoSearchQuery ? "No repositories match search."`) {
 		t.Fatalf("expected index html to gate chat availability on GitHub repository loading")
 	}
 	if !strings.Contains(markup, `id="chat-repo-tabs"`) ||
@@ -2402,10 +2407,15 @@ func TestHandlerServesChatView(t *testing.T) {
 		`class="page-bottom-dock"`,
 		`data-app-display="chat"`,
 		`<i data-lucide="message-circle" aria-hidden="true"></i>`,
+		`id="chat-repo-search" class="chat-search-input" type="search"`,
 		`id="chat-repo-grid" class="chat-repo-grid" aria-label="GitHub repositories"`,
 		`id="chat-repo-pagination" class="chat-repo-pagination hidden" aria-label="GitHub repository pages"`,
+		`const search = document.getElementById("chat-repo-search");`,
 		`const CHAT_REPOS_PER_PAGE = 15;`,
 		`const pageRepos = repos.slice(start, start + CHAT_REPOS_PER_PAGE);`,
+		`function filterRepos(repos, query)`,
+		`empty.textContent = repoSearchQuery ? "No repositories match search." : "No repositories found.";`,
+		`repoSearchQuery = search.value;`,
 		`fetch("/api/github/repos", { cache: "no-store" })`,
 		`function repoOwnerIconName(repo)`,
 		`return repoOwnerType(repo) === "organization" ? "building-2" : "user";`,
@@ -2904,6 +2914,11 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		!strings.Contains(css, ".chat-repo-page-button {") ||
 		!strings.Contains(css, ".chat-repo-page-label {") {
 		t.Fatalf("expected stylesheet to include chat repository pagination controls")
+	}
+	if !strings.Contains(css, ".chat-controls {") ||
+		!strings.Contains(css, ".chat-search-field {") ||
+		!strings.Contains(css, ".chat-search-input {") {
+		t.Fatalf("expected stylesheet to include chat repository search controls")
 	}
 	if !strings.Contains(css, ".task-result-github-link {") ||
 		!strings.Contains(css, ".task-result-link-logo {") {

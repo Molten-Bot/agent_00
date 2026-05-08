@@ -498,6 +498,12 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           </div>
           <p id="chat-status" class="chat-status" aria-live="polite"></p>
         </div>
+        <div class="chat-controls">
+          <label class="chat-search-field">
+            <i data-lucide="search" aria-hidden="true"></i>
+            <input id="chat-repo-search" class="chat-search-input" type="search" spellcheck="false" placeholder="Search repositories" aria-label="Search repositories">
+          </label>
+        </div>
         <div id="chat-repo-grid" class="chat-repo-grid" aria-label="GitHub repositories"></div>
         <nav id="chat-repo-pagination" class="chat-repo-pagination hidden" aria-label="GitHub repository pages"></nav>
       </section>
@@ -505,9 +511,12 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
         (function initChatRepos() {
           const grid = document.getElementById("chat-repo-grid");
           const status = document.getElementById("chat-status");
+          const search = document.getElementById("chat-repo-search");
           const pagination = document.getElementById("chat-repo-pagination");
           const CHAT_REPOS_PER_PAGE = 15;
           let repoPage = 1;
+          let allRepos = [];
+          let repoSearchQuery = "";
           if (!grid || !status) return;
 
           function repoRunValue(repo) {
@@ -716,7 +725,26 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             pagination.append(previous, label, next);
           }
 
-          function renderRepos(repos) {
+          function filterRepos(repos, query) {
+            const terms = String(query || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+            if (terms.length === 0) return repos;
+            return repos.filter((repo) => {
+              const haystack = [
+                repo.full_name,
+                repo.name,
+                repo.description,
+                repo.language,
+                repo.owner_type,
+                repo.html_url,
+                repo.default_branch
+              ].map((value) => String(value || "").toLowerCase()).join(" ");
+              return terms.every((term) => haystack.includes(term));
+            });
+          }
+
+          function renderRepos(sourceRepos) {
+            const unfilteredRepoCount = sourceRepos.length;
+            const repos = filterRepos(sourceRepos, repoSearchQuery);
             const totalPages = Math.max(1, Math.ceil(repos.length / CHAT_REPOS_PER_PAGE));
             repoPage = Math.min(Math.max(1, repoPage), totalPages);
             const start = (repoPage - 1) * CHAT_REPOS_PER_PAGE;
@@ -726,15 +754,27 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               status.textContent = "0 repositories";
               const empty = document.createElement("p");
               empty.className = "chat-empty";
-              empty.textContent = "No repositories found.";
+              empty.textContent = repoSearchQuery ? "No repositories match search." : "No repositories found.";
               grid.appendChild(empty);
+            } else if (repoSearchQuery) {
+              status.textContent = repos.length === unfilteredRepoCount
+                ? (repos.length === 1 ? "1 repository" : repos.length + " repositories")
+                : repos.length + " of " + unfilteredRepoCount + " repositories";
             } else if (repos.length <= CHAT_REPOS_PER_PAGE) {
               status.textContent = repos.length === 1 ? "1 repository" : repos.length + " repositories";
             } else {
               const end = start + pageRepos.length;
               status.textContent = (start + 1) + "-" + end + " of " + repos.length + " repositories";
             }
-            renderPagination(repos.length, totalPages, () => renderRepos(repos));
+            renderPagination(repos.length, totalPages, () => renderRepos(sourceRepos));
+          }
+
+          if (search) {
+            search.addEventListener("input", () => {
+              repoSearchQuery = search.value;
+              repoPage = 1;
+              renderRepos(allRepos);
+            });
           }
 
           async function loadRepos() {
@@ -745,7 +785,8 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
                 throw new Error(body && body.error ? body.error : "github repositories request failed");
               }
               const repos = Array.isArray(body.repos) ? body.repos : [];
-              renderRepos(repos);
+              allRepos = repos;
+              renderRepos(allRepos);
             } catch (err) {
               status.textContent = err && err.message ? err.message : "Unable to load repositories.";
             }
