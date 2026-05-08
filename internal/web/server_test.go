@@ -1662,6 +1662,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `repos = repos.filter((repo) => !promptedKeys.has(chatRepoKey(chatRepoRunValue(repo))));`) {
 		t.Fatalf("expected index html chat to render prompted repository tabs and filter the repos tab")
 	}
+	if !strings.Contains(markup, "} else if (selectedTab) {\n        chatStatus.textContent = \"\";") ||
+		strings.Contains(markup, `chatStatus.textContent = chatRepoTabLabel(selectedTab.value);`) {
+		t.Fatalf("expected active chat repository tabs to avoid duplicating the repository name in the status label")
+	}
 	if strings.Contains(markup, `taskItems.push(githubReposLoadingTask())`) ||
 		strings.Contains(markup, `repoRead.textContent = "repos: reading GitHub projects";`) ||
 		strings.Contains(markup, `const GITHUB_REPOS_LOADING_TASK_ID = "github-repos-loading";`) ||

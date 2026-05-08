@@ -6550,7 +6550,7 @@
         empty.textContent = state.chatRepoSearchQuery ? "No repositories match search." : (selectedTab ? "Repository not found." : "No repositories found.");
         chatRepoGrid.appendChild(empty);
       } else if (selectedTab) {
-        chatStatus.textContent = chatRepoTabLabel(selectedTab.value);
+        chatStatus.textContent = "";
       } else if (state.chatRepoSearchQuery) {
         chatStatus.textContent = repos.length === unfilteredRepoCount
           ? `${repos.length} repositories`
