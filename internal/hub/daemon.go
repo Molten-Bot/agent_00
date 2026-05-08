@@ -1521,6 +1521,7 @@ func dispatchResultPayload(cfg InitConfig, dispatch SkillDispatch, res app.Resul
 	}
 	detailStatus := dispatchResultDetailStatus(status, res)
 	message := dispatchResultMessage(status, res)
+	response := dispatchResultResponse(status, res)
 
 	prURLs := completedPRURLs(res)
 
@@ -1535,6 +1536,7 @@ func dispatchResultPayload(cfg InitConfig, dispatch SkillDispatch, res app.Resul
 		"noChanges":    res.NoChanges,
 		"status":       detailStatus,
 		"message":      message,
+		"response":     response,
 	}
 	if res.Err != nil {
 		errText := res.Err.Error()
@@ -1558,6 +1560,7 @@ func dispatchResultPayload(cfg InitConfig, dispatch SkillDispatch, res app.Resul
 		"failed":     res.Err != nil,
 		"ok":         res.Err == nil,
 		"message":    message,
+		"response":   response,
 		"result":     result,
 	}
 	if hubTaskID := strings.TrimSpace(dispatch.HubTaskID); hubTaskID != "" {
@@ -1614,6 +1617,10 @@ func dispatchResultDetailStatus(status string, res app.Result) string {
 }
 
 func dispatchResultMessage(status string, res app.Result) string {
+	return dispatchResultResponse(status, res)
+}
+
+func dispatchResultResponse(status string, res app.Result) string {
 	if res.Err != nil || status == "error" {
 		return failureResponseMessage(res.Err.Error())
 	}
@@ -1621,9 +1628,21 @@ func dispatchResultMessage(status string, res app.Result) string {
 		return "No changes: task completed without repository changes or pull requests."
 	}
 	if prURLs := strings.TrimSpace(completedPRURLs(res)); prURLs != "" {
-		return "Your PR is now ready: " + prURLs
+		return prReadyResponse(prURLs)
 	}
 	return "Success: task completed."
+}
+
+func prReadyResponse(prURLs string) string {
+	urls := splitNonEmptyCSV(prURLs)
+	if len(urls) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(urls))
+	for _, url := range urls {
+		lines = append(lines, fmt.Sprintf("[PR is ready](%s) for your review.", url))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func failureResponseMessage(errText string) string {
