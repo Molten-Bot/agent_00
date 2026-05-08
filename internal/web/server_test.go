@@ -234,6 +234,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `<title>Molten Hub Code</title>`) {
 		t.Fatalf("expected index html to set app title to Molten Hub Code")
 	}
+	if !strings.Contains(markup, `<meta property="og:image" content="https://app.molten.bot/logo.svg">`) ||
+		!strings.Contains(markup, `<meta name="twitter:image" content="https://app.molten.bot/logo.svg">`) {
+		t.Fatalf("expected index html to use the molten hub logo for social previews")
+	}
 	if !strings.Contains(markup, `src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"`) {
 		t.Fatalf("expected index html to load Chart.js for dashboard stats")
 	}
@@ -245,6 +249,16 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `id="dashboard-agent-times"`) ||
 		!strings.Contains(markup, `id="dashboard-task-chart"`) {
 		t.Fatalf("expected index html to render the dashboard stats panel")
+	}
+	if !strings.Contains(markup, `id="dashboard-share-x"`) ||
+		!strings.Contains(markup, `id="dashboard-share-facebook"`) ||
+		!strings.Contains(markup, `id="dashboard-share-whatsapp"`) ||
+		!strings.Contains(markup, `const DASHBOARD_SHARE_IMAGE_URL = "https://app.molten.bot/logo.svg";`) ||
+		!strings.Contains(markup, `function updateDashboardShareLinks(stats)`) ||
+		!strings.Contains(markup, `https://twitter.com/intent/tweet`) ||
+		!strings.Contains(markup, `https://www.facebook.com/sharer/sharer.php`) ||
+		!strings.Contains(markup, `https://wa.me/`) {
+		t.Fatalf("expected index html to render dashboard social sharing links")
 	}
 	if !strings.Contains(markup, "return `Updated ${dashboardRelativeTime(date.getTime())}`;") ||
 		!strings.Contains(markup, "if (seconds < 60) return `${seconds}s ago`;") ||
@@ -2678,6 +2692,11 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		!strings.Contains(css, "width: min(var(--hub-page-width), 100%);") ||
 		!strings.Contains(css, "width: min(var(--hub-page-width), calc(100vw - 32px));") {
 		t.Fatalf("expected stylesheet to define shared app and dashboard page widths")
+	}
+	if !strings.Contains(css, ".dashboard-share-links") ||
+		!strings.Contains(css, ".dashboard-share-link") ||
+		!strings.Contains(css, ".dashboard-share-icon") {
+		t.Fatalf("expected stylesheet to include dashboard share link styles")
 	}
 	if !strings.Contains(css, ".app.dashboard-app {\n  width: 100%;\n  max-width: 1500px;\n  padding: 20px 20px var(--hub-content-bottom-padding);") ||
 		!strings.Contains(css, ".site-page {\n  width: min(var(--hub-page-width), calc(100vw - 32px));\n  min-height: 100vh;\n  margin: 0 auto;\n  padding: 28px 0 var(--hub-content-bottom-padding);") {
