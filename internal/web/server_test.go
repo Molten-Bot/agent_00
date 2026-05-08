@@ -1613,9 +1613,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected GitHub repository loading to stay out of Current Work and visible chat text")
 	}
 	if !strings.Contains(markup, `function submitChatRepoPrompt(repo, input, statusNode, images = [], logNode = null, setImages = null)`) ||
+		!strings.Contains(markup, `function chatRepoOwnerIconName(repo)`) ||
+		!strings.Contains(markup, `return chatRepoOwnerType(repo) === "organization" ? "building-2" : "user";`) ||
 		!strings.Contains(markup, `const card = document.createElement("div");`) ||
 		!strings.Contains(markup, `card.setAttribute("role", "button");`) ||
 		!strings.Contains(markup, `card.setAttribute("aria-expanded", repoKey && state.chatOpenRepoKey === repoKey ? "true" : "false");`) ||
+		!strings.Contains(markup, `ownerIcon.className = "chat-repo-card-owner-icon";`) ||
 		!strings.Contains(markup, `promptLog.className = "chat-repo-log";`) ||
 		!strings.Contains(markup, `appendChatRepoPromptMessage(repo, {`) ||
 		!strings.Contains(markup, `fetch("/api/local-prompt", {`) ||
@@ -2380,8 +2383,11 @@ func TestHandlerServesChatView(t *testing.T) {
 		`const CHAT_REPOS_PER_PAGE = 15;`,
 		`const pageRepos = repos.slice(start, start + CHAT_REPOS_PER_PAGE);`,
 		`fetch("/api/github/repos", { cache: "no-store" })`,
+		`function repoOwnerIconName(repo)`,
+		`return repoOwnerType(repo) === "organization" ? "building-2" : "user";`,
 		`const card = document.createElement("div");`,
 		`card.setAttribute("role", "button");`,
+		`ownerIcon.className = "chat-repo-card-owner-icon";`,
 		`chatIcon.className = "chat-repo-card-chat-icon";`,
 		`chatIcon.innerHTML = '<i data-lucide="message-circle" aria-hidden="true"></i>';`,
 		`const openPrompt = () => {`,
@@ -2413,6 +2419,7 @@ func TestHandlerGitHubReposUsesOverride(t *testing.T) {
 			FullName:      "acme/repo",
 			Description:   "Docs",
 			HTMLURL:       "https://github.com/acme/repo",
+			OwnerType:     "Organization",
 			DefaultBranch: "main",
 			Language:      "Go",
 			Private:       true,
@@ -2429,6 +2436,7 @@ func TestHandlerGitHubReposUsesOverride(t *testing.T) {
 	if !strings.Contains(body, `"ok":true`) ||
 		!strings.Contains(body, `"full_name":"acme/repo"`) ||
 		!strings.Contains(body, `"html_url":"https://github.com/acme/repo"`) ||
+		!strings.Contains(body, `"owner_type":"Organization"`) ||
 		!strings.Contains(body, `"default_branch":"main"`) ||
 		!strings.Contains(body, `"private":true`) {
 		t.Fatalf("unexpected github repos response %q", body)
@@ -2600,6 +2608,7 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	}
 	if !strings.Contains(css, ".chat-repo-card-head {") ||
 		!strings.Contains(css, ".chat-repo-card {\n  position: relative;") ||
+		!strings.Contains(css, ".chat-repo-card-owner-icon {") ||
 		!strings.Contains(css, ".chat-repo-card-chat-icon {") ||
 		!strings.Contains(css, "  position: absolute;\n  top: 10px;\n  right: 10px;") ||
 		!strings.Contains(css, ".chat-repo-card:hover .chat-repo-card-chat-icon,") {

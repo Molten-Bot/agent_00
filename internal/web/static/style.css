@@ -2974,12 +2974,33 @@ select.prompt-control {
 }
 
 .chat-repo-card-head {
-  display: block;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   min-width: 0;
   padding-right: 34px;
 }
 
+.chat-repo-card-owner-icon {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 6px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+}
+
+.chat-repo-card-owner-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.2;
+}
+
 .chat-repo-card-title {
+  min-width: 0;
   overflow-wrap: anywhere;
   font-size: 0.9rem;
   font-weight: 850;

@@ -163,6 +163,7 @@ type GitHubRepo struct {
 	FullName      string `json:"full_name"`
 	Description   string `json:"description,omitempty"`
 	HTMLURL       string `json:"html_url"`
+	OwnerType     string `json:"owner_type,omitempty"`
 	DefaultBranch string `json:"default_branch,omitempty"`
 	Private       bool   `json:"private"`
 	Language      string `json:"language,omitempty"`
@@ -516,6 +517,19 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             return String(repo.name || "").trim();
           }
 
+          function repoOwnerType(repo) {
+            const owner = repo && repo.owner ? repo.owner : {};
+            return String(repo.owner_type || owner.type || "").trim().toLowerCase();
+          }
+
+          function repoOwnerIconName(repo) {
+            return repoOwnerType(repo) === "organization" ? "building-2" : "user";
+          }
+
+          function repoOwnerIconLabel(repo) {
+            return repoOwnerType(repo) === "organization" ? "Organization repository" : "Personal repository";
+          }
+
           async function submitRepoPrompt(repo, input, statusNode) {
             const prompt = String(input.value || "").trim();
             if (!prompt) {
@@ -569,6 +583,13 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
             const head = document.createElement("span");
             head.className = "chat-repo-card-head";
+
+            const ownerIcon = document.createElement("span");
+            ownerIcon.className = "chat-repo-card-owner-icon";
+            ownerIcon.title = repoOwnerIconLabel(repo);
+            ownerIcon.setAttribute("aria-hidden", "true");
+            ownerIcon.innerHTML = '<i data-lucide="' + repoOwnerIconName(repo) + '" aria-hidden="true"></i>';
+            head.appendChild(ownerIcon);
 
             const title = document.createElement("span");
             title.className = "chat-repo-card-title";
@@ -1488,10 +1509,13 @@ func resolveAuthenticatedGitHubRepos(ctx context.Context, client *http.Client) (
 		}
 
 		var body []struct {
-			Name          string `json:"name"`
-			FullName      string `json:"full_name"`
-			Description   string `json:"description"`
-			HTMLURL       string `json:"html_url"`
+			Name        string `json:"name"`
+			FullName    string `json:"full_name"`
+			Description string `json:"description"`
+			HTMLURL     string `json:"html_url"`
+			Owner       struct {
+				Type string `json:"type"`
+			} `json:"owner"`
 			DefaultBranch string `json:"default_branch"`
 			Private       bool   `json:"private"`
 			Language      string `json:"language"`
@@ -1508,6 +1532,7 @@ func resolveAuthenticatedGitHubRepos(ctx context.Context, client *http.Client) (
 				FullName:      strings.TrimSpace(repo.FullName),
 				Description:   strings.TrimSpace(repo.Description),
 				HTMLURL:       strings.TrimSpace(repo.HTMLURL),
+				OwnerType:     strings.TrimSpace(repo.Owner.Type),
 				DefaultBranch: strings.TrimSpace(repo.DefaultBranch),
 				Private:       repo.Private,
 				Language:      strings.TrimSpace(repo.Language),
