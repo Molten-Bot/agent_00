@@ -1658,6 +1658,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `bubble.dataset.tone = chatPromptMessageTone(message);`) ||
 		!strings.Contains(markup, `status === "completed" || status === "no_changes"`) ||
 		!strings.Contains(markup, `status === "error" || status === "invalid" || status === "stopped"`) ||
+		!strings.Contains(markup, `storedStatus.startsWith("completed") || storedStatus.startsWith("no changes")`) ||
 		!strings.Contains(markup, `meta.dataset.statusText = statusText;`) ||
 		!strings.Contains(markup, `refreshVisibleChatPromptStatuses();`) ||
 		!strings.Contains(markup, `syncChatPromptMessageTaskStatuses(snapshot);`) {

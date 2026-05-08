@@ -6013,6 +6013,10 @@
       if (status === "completed" || status === "no_changes") return "success";
       if (status === "error" || status === "invalid" || status === "stopped") return "failure";
       if (status === "duplicate") return "warning";
+      const storedStatus = String(message?.statusText || message?.statusTitle || "").trim().toLowerCase();
+      if (storedStatus.startsWith("completed") || storedStatus.startsWith("no changes")) return "success";
+      if (storedStatus.startsWith("failed") || storedStatus.startsWith("invalid") || storedStatus.startsWith("stopped")) return "failure";
+      if (storedStatus.startsWith("duplicate")) return "warning";
       return "";
     }
 
