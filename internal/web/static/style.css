@@ -3248,11 +3248,6 @@ select.prompt-control {
   grid-template-rows: minmax(0, 1fr) auto auto;
 }
 
-.chat-repo-grid-active-repo .chat-repo-card[aria-expanded="true"] .chat-repo-panel:has(.chat-repo-log[data-empty="true"]) {
-  align-content: end;
-  grid-template-rows: auto auto;
-}
-
 .chat-repo-log {
   display: grid;
   align-content: end;

@@ -791,6 +791,9 @@ func TestEmbeddedChatPromptLogStylesHideEmptyAndScrollHistory(t *testing.T) {
 	css := string(data)
 
 	for _, want := range []string{
+		".chat-repo-grid-active-repo .chat-repo-card[aria-expanded=\"true\"] .chat-repo-panel {",
+		"grid-template-rows: minmax(0, 1fr) auto auto;",
+		".chat-repo-grid-active-repo .chat-repo-log:not([hidden]) {",
 		".chat-repo-log[hidden] {",
 		"overflow-y: scroll;",
 		"scrollbar-gutter: stable;",
@@ -799,6 +802,9 @@ func TestEmbeddedChatPromptLogStylesHideEmptyAndScrollHistory(t *testing.T) {
 		if !strings.Contains(css, want) {
 			t.Fatalf("embedded style.css missing %q", want)
 		}
+	}
+	if strings.Contains(css, `.chat-repo-panel:has(.chat-repo-log[data-empty="true"])`) {
+		t.Fatalf("embedded style.css should keep empty chat prompt logs height-filling in active repository view")
 	}
 }
 
