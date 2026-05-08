@@ -3124,15 +3124,21 @@ select.prompt-control {
 }
 
 .chat-repo-card-description {
+  padding-right: 88px;
   color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.35;
 }
 
 .chat-repo-card-meta {
+  position: absolute;
+  top: 47px;
+  right: 12px;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
+  max-width: 88px;
   color: var(--meta);
   font-size: 0.66rem;
   font-weight: 750;
@@ -3165,7 +3171,9 @@ select.prompt-control {
 
 .chat-repo-card-language {
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-repo-card[aria-expanded="true"] {
