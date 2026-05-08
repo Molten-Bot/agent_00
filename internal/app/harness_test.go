@@ -5041,6 +5041,26 @@ func TestCodexReportedFailureDetectsAwaitingTaskResponse(t *testing.T) {
 	}
 }
 
+func TestCodexReportedFailureDetectsNoTaskGivenResponse(t *testing.T) {
+	t.Parallel()
+
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"No task given yet.",
+			"Repo read. `AGENTS.md` loaded. Go project. Worktree has untracked `AGENTS.md` only.",
+			"Send actual change request: bug, feature, test failure, or PR review target.",
+		}, "\n"),
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(no task given) = false, want true")
+	}
+	if !strings.Contains(detail, "Failure: agent did not identify an implementation target") {
+		t.Fatalf("codexReportedFailure(no task given) detail = %q", detail)
+	}
+}
+
 func TestCodexReportedFailureIgnoresSendTaskSummary(t *testing.T) {
 	t.Parallel()
 
