@@ -6725,7 +6725,7 @@
       chatRepoGrid.classList.toggle("chat-repo-grid-active-repo", Boolean(openRepo));
       chatRepoGrid.replaceChildren(...displayRepos.map(renderChatRepoCard));
       if (viewingRepoChat) {
-        chatStatus.textContent = "1 repository";
+        chatStatus.textContent = "";
       } else if (repos.length === 0) {
         chatStatus.textContent = "0 repositories";
         const empty = document.createElement("p");

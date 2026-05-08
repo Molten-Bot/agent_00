@@ -1706,6 +1706,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `displayRepos = [openRepo];`) {
 		t.Fatalf("expected index html chat to render prompted repository tabs, icon-only repos tab, and isolate active repository chat")
 	}
+	if !strings.Contains(markup, `if (viewingRepoChat) {
+        chatStatus.textContent = "";`) {
+		t.Fatalf("expected active repository chat to clear repository count status")
+	}
 	if strings.Contains(markup, `reposButton.textContent = "All";`) ||
 		strings.Contains(markup, `repos = repos.filter((repo) => !promptedKeys.has(chatRepoKey(chatRepoRunValue(repo))));`) {
 		t.Fatalf("expected chat repository list to keep an icon-only repos tab without filtering prompted repos out of the all-repositories view")
