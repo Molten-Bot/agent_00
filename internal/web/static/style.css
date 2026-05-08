@@ -2935,8 +2935,9 @@ select.prompt-control {
 }
 
 .chat-repo-grid {
+  --chat-repo-card-min-width: 220px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--chat-repo-card-min-width)), 1fr));
   gap: 10px;
   padding-top: 12px;
 }

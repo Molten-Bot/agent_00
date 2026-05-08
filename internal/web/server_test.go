@@ -1592,8 +1592,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `const response = await fetch("/api/github/repos", { cache: "no-store" });`) ||
 		!strings.Contains(markup, `state.githubRepos = Array.isArray(body.repos) ? body.repos : [];`) ||
 		!strings.Contains(markup, `let repos = Array.isArray(state.githubRepos) ? state.githubRepos : [];`) ||
-		!strings.Contains(markup, `const CHAT_REPOS_PER_PAGE = 15;`) ||
-		!strings.Contains(markup, `const pageRepos = repos.slice(start, start + CHAT_REPOS_PER_PAGE);`) ||
+		!strings.Contains(markup, `const CHAT_REPOS_MAX_PER_PAGE = 15;`) ||
+		!strings.Contains(markup, `function chatReposPerPage()`) ||
+		!strings.Contains(markup, `const pageRepos = repos.slice(start, start + reposPerPage);`) ||
 		!strings.Contains(markup, `function renderChatRepoPagination(totalRepos, totalPages)`) ||
 		!strings.Contains(markup, `if (!state.githubReposReady) {`) {
 		t.Fatalf("expected index html to gate chat availability on GitHub repository loading")

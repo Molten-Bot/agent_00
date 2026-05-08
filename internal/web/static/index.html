@@ -756,7 +756,8 @@
     const EMOJI_PANEL_MAX_WIDTH = 360;
     const EMOJI_PANEL_ESTIMATED_HEIGHT = 430;
     const EMOJI_PANEL_ANIMATION_DURATION_MS = 180;
-    const CHAT_REPOS_PER_PAGE = 15;
+    const CHAT_REPOS_MAX_PER_PAGE = 15;
+    const CHAT_REPO_CARD_MIN_WIDTH = 220;
     const PROFILE_EMOJI_GROUPS = Object.freeze([
       { label: "Smileys", emoji: ["😀", "😃", "😄", "😁", "😆", "😅", "😂", "🙂", "🙃", "😉", "😊", "😇", "😍", "🤩", "😘", "😎", "🥳", "🤔", "🫡", "🤯", "😴", "😭", "😤", "😈"] },
       { label: "People", emoji: ["👋", "👏", "🙌", "🙏", "💪", "🦾", "👍", "👎", "✌️", "🤘", "👌", "🤌", "👀", "🧠", "🧑‍💻", "🧑‍🔬", "🧑‍🚀", "🧙", "🥷", "🦸", "🧟", "💃", "🕺", "🏃"] },
@@ -1738,6 +1739,7 @@
     let taskAudioContext = null;
     let dashboardChart = null;
     let githubReposLoadPromise = null;
+    let chatRepoResizeRenderQueued = false;
     const localConnItem = document.getElementById("local-conn-item");
     const localConnDot = document.getElementById("local-conn-dot");
     const localConnText = document.getElementById("local-conn-text");
@@ -5926,6 +5928,20 @@
       chatRepoPagination.append(previous, label, next);
     }
 
+    function chatReposPerPage() {
+      if (!chatRepoGrid) return CHAT_REPOS_MAX_PER_PAGE;
+      const width = chatRepoGrid.clientWidth;
+      if (!Number.isFinite(width) || width <= 0) {
+        return CHAT_REPOS_MAX_PER_PAGE;
+      }
+      const styles = window.getComputedStyle(chatRepoGrid);
+      const gap = Number.parseFloat(styles.columnGap || styles.gap || "0") || 0;
+      const minWidth = Number.parseFloat(styles.getPropertyValue("--chat-repo-card-min-width")) || CHAT_REPO_CARD_MIN_WIDTH;
+      const columns = Math.max(1, Math.floor((width + gap) / (minWidth + gap)));
+      const rows = Math.max(1, Math.floor(CHAT_REPOS_MAX_PER_PAGE / columns));
+      return columns * rows;
+    }
+
     function chatRepoKey(value) {
       return githubRepoPathFromValue(value).toLowerCase();
     }
@@ -6045,10 +6061,11 @@
       } else if (promptedKeys.size > 0) {
         repos = repos.filter((repo) => !promptedKeys.has(chatRepoKey(chatRepoRunValue(repo))));
       }
-      const totalPages = Math.max(1, Math.ceil(repos.length / CHAT_REPOS_PER_PAGE));
+      const reposPerPage = chatReposPerPage();
+      const totalPages = Math.max(1, Math.ceil(repos.length / reposPerPage));
       state.chatRepoPage = Math.min(Math.max(1, state.chatRepoPage), totalPages);
-      const start = (state.chatRepoPage - 1) * CHAT_REPOS_PER_PAGE;
-      const pageRepos = repos.slice(start, start + CHAT_REPOS_PER_PAGE);
+      const start = (state.chatRepoPage - 1) * reposPerPage;
+      const pageRepos = repos.slice(start, start + reposPerPage);
 
       renderChatRepoTabs(tabs);
       chatRepoGrid.replaceChildren(...pageRepos.map(renderChatRepoCard));
@@ -6060,7 +6077,7 @@
         chatRepoGrid.appendChild(empty);
       } else if (selectedTab) {
         chatStatus.textContent = chatRepoTabLabel(selectedTab.value);
-      } else if (repos.length <= CHAT_REPOS_PER_PAGE) {
+      } else if (repos.length <= reposPerPage) {
         chatStatus.textContent = repos.length === 1 ? "1 repository" : `${repos.length} repositories`;
       } else {
         const end = start + pageRepos.length;
@@ -6078,6 +6095,17 @@
           restoredPrompt.setSelectionRange(Math.min(restoreSelectionStart, end), end);
         }
       }
+    }
+
+    function queueChatRepoResizeRender() {
+      if (state.appDisplay !== "chat" || !state.githubReposReady || chatRepoResizeRenderQueued) {
+        return;
+      }
+      chatRepoResizeRenderQueued = true;
+      window.requestAnimationFrame(() => {
+        chatRepoResizeRenderQueued = false;
+        renderChatRepos();
+      });
     }
 
     function chatRepoRunValue(repo) {
@@ -10143,6 +10171,7 @@
         setPromptMode(hashPromptMode);
       }
     });
+    window.addEventListener("resize", queueChatRepoResizeRender, { passive: true });
 
     localPromptForm.addEventListener("submit", submitLocalPrompt);
     libraryRepoInput.value = builderRepoInput.value;
