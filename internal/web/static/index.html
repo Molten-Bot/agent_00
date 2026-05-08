@@ -5782,13 +5782,14 @@
 
     function renderChatRepoCard(repo) {
       const repoKey = chatRepoKey(chatRepoRunValue(repo));
+      const expanded = Boolean(repoKey && state.chatOpenRepoKey === repoKey);
       const visibility = repo?.private ? "Private" : "Public";
       const card = document.createElement("div");
       card.className = "chat-repo-card";
       card.tabIndex = 0;
       card.setAttribute("role", "button");
       card.dataset.repoKey = repoKey;
-      card.setAttribute("aria-expanded", repoKey && state.chatOpenRepoKey === repoKey ? "true" : "false");
+      card.setAttribute("aria-expanded", String(expanded));
       card.setAttribute("aria-label", `Open ${String(repo?.full_name || repo?.name || "repository")} panel (${visibility} repository)`);
 
       const head = document.createElement("span");
@@ -6269,9 +6270,10 @@
       const messages = chatRepoPromptMessages(repo);
       logNode.replaceChildren();
       const hasMessages = messages.length > 0;
-      logNode.hidden = !hasMessages;
+      logNode.hidden = false;
+      logNode.dataset.empty = String(!hasMessages);
       if (!hasMessages) {
-        logNode.setAttribute("aria-hidden", "true");
+        logNode.removeAttribute("aria-hidden");
         return;
       }
       logNode.removeAttribute("aria-hidden");
@@ -6355,6 +6357,24 @@
       const path = githubRepoPathFromValue(value) || cleanRepoName(value);
       const parts = path.split("/").filter(Boolean);
       return parts.length >= 2 ? parts[1] : (parts[0] || "Repo");
+    }
+
+    function syncChatOpenRepoKey(pageRepos, selectedTab, restoreFocusKey) {
+      const visibleKeys = pageRepos
+        .map((repo) => chatRepoKey(chatRepoRunValue(repo)))
+        .filter(Boolean);
+      if (restoreFocusKey && visibleKeys.includes(restoreFocusKey)) {
+        state.chatOpenRepoKey = restoreFocusKey;
+        return;
+      }
+      if (state.chatOpenRepoKey && visibleKeys.includes(state.chatOpenRepoKey)) {
+        return;
+      }
+      if (selectedTab?.key && visibleKeys.includes(selectedTab.key)) {
+        state.chatOpenRepoKey = selectedTab.key;
+        return;
+      }
+      state.chatOpenRepoKey = visibleKeys[0] || "";
     }
 
     function chatPromptedRepoTabs() {
@@ -6539,6 +6559,7 @@
       state.chatRepoPage = Math.min(Math.max(1, state.chatRepoPage), totalPages);
       const start = (state.chatRepoPage - 1) * reposPerPage;
       const pageRepos = repos.slice(start, start + reposPerPage);
+      syncChatOpenRepoKey(pageRepos, selectedTab, restoreFocusKey);
 
       renderChatRepoTabs(tabs);
       chatRepoGrid.classList.toggle("chat-repo-grid-active-repo", Boolean(selectedTab));

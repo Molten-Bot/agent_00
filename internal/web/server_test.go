@@ -1673,11 +1673,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `return chatRepoOwnerType(repo) === "organization" ? "building-2" : "user";`) ||
 		!strings.Contains(markup, `const card = document.createElement("div");`) ||
 		!strings.Contains(markup, `card.setAttribute("role", "button");`) ||
-		!strings.Contains(markup, `card.setAttribute("aria-expanded", repoKey && state.chatOpenRepoKey === repoKey ? "true" : "false");`) ||
+		!strings.Contains(markup, `const expanded = Boolean(repoKey && state.chatOpenRepoKey === repoKey);`) ||
+		!strings.Contains(markup, `card.setAttribute("aria-expanded", String(expanded));`) ||
 		!strings.Contains(markup, `ownerIcon.className = "chat-repo-card-owner-icon";`) ||
 		!strings.Contains(markup, `promptLog.className = "chat-repo-log";`) ||
-		!strings.Contains(markup, `logNode.hidden = !hasMessages;`) ||
-		!strings.Contains(markup, `logNode.setAttribute("aria-hidden", "true");`) ||
+		!strings.Contains(markup, `function syncChatOpenRepoKey(pageRepos, selectedTab, restoreFocusKey)`) ||
+		!strings.Contains(markup, `syncChatOpenRepoKey(pageRepos, selectedTab, restoreFocusKey);`) ||
+		!strings.Contains(markup, `logNode.hidden = false;`) ||
+		!strings.Contains(markup, `logNode.dataset.empty = String(!hasMessages);`) ||
 		!strings.Contains(markup, `visibilityIcon.className = `) ||
 		!strings.Contains(markup, `chat-repo-card-visibility-public`) ||
 		!strings.Contains(markup, `chat-repo-card-visibility-private`) ||
