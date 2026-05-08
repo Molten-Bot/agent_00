@@ -560,12 +560,13 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           }
 
           function repoCard(repo) {
+            const visibility = repo.private ? "Private" : "Public";
             const card = document.createElement("div");
             card.className = "chat-repo-card";
             card.tabIndex = 0;
             card.setAttribute("role", "button");
             card.setAttribute("aria-expanded", "false");
-            card.setAttribute("aria-label", "Open " + String(repo.full_name || repo.name || "repository") + " panel");
+            card.setAttribute("aria-label", "Open " + String(repo.full_name || repo.name || "repository") + " panel (" + visibility + " repository)");
 
             const head = document.createElement("span");
             head.className = "chat-repo-card-head";
@@ -590,9 +591,20 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
             const meta = document.createElement("span");
             meta.className = "chat-repo-card-meta";
-            const visibility = repo.private ? "Private" : "Public";
             const language = String(repo.language || "").trim();
-            meta.textContent = language ? visibility + " | " + language : visibility;
+            const visibilityIcon = document.createElement("span");
+            visibilityIcon.className = "chat-repo-card-visibility " + (repo.private ? "chat-repo-card-visibility-private" : "chat-repo-card-visibility-public");
+            visibilityIcon.title = visibility;
+            visibilityIcon.setAttribute("role", "img");
+            visibilityIcon.setAttribute("aria-label", visibility);
+            visibilityIcon.innerHTML = '<i data-lucide="' + (repo.private ? "lock" : "globe") + '" aria-hidden="true"></i>';
+            meta.appendChild(visibilityIcon);
+            if (language) {
+              const languageNode = document.createElement("span");
+              languageNode.className = "chat-repo-card-language";
+              languageNode.textContent = language;
+              meta.appendChild(languageNode);
+            }
             card.appendChild(meta);
 
             const panel = document.createElement("span");
