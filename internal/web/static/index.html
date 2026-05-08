@@ -5859,6 +5859,8 @@
           requestID: String(message?.requestID || "").trim(),
           imageCount: Number.isFinite(message?.imageCount) ? message.imageCount : 0,
           createdAt: message?.createdAt || new Date().toISOString(),
+          statusText: String(message?.statusText || "").trim(),
+          statusTitle: String(message?.statusTitle || "").trim(),
         },
       ].slice(-20);
       state.chatPromptLog.set(key, next);
@@ -5871,15 +5873,160 @@
       return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     }
 
-    function compactChatRequestID(value) {
+    function chatStatusDisplayLabel(value) {
+      const text = String(value || "").replace(/_/g, " ").trim();
+      if (!text) return "Queued";
+      return text.charAt(0).toUpperCase() + text.slice(1);
+    }
+
+    function compactChatRequestID(value, status = "Queued") {
       const requestID = String(value || "").trim();
       if (!requestID) return "";
+      const statusLabel = chatStatusDisplayLabel(status);
       const localMatch = requestID.match(/^local-\d+-(\d+)$/);
-      if (localMatch) return `Queued #${localMatch[1]}`;
+      if (localMatch) return `${statusLabel} #${localMatch[1]}`;
       if (requestID.length > 18) {
-        return `Queued ${requestID.slice(0, 8)}...${requestID.slice(-4)}`;
+        return `${statusLabel} ${requestID.slice(0, 8)}...${requestID.slice(-4)}`;
       }
-      return `Queued ${requestID}`;
+      return `${statusLabel} ${requestID}`;
+    }
+
+    function chatTaskByRequestID(requestID, snapshot = state.snapshot) {
+      const target = String(requestID || "").trim();
+      if (!target) return null;
+      for (const task of snapshot?.tasks || []) {
+        if (taskRequestID(task) === target) {
+          return task;
+        }
+      }
+      if (state.taskHistoryByID instanceof Map) {
+        const historyTask = state.taskHistoryByID.get(target);
+        if (historyTask) {
+          return historyTask;
+        }
+      }
+      return null;
+    }
+
+    function chatPromptTaskStatusLabel(task) {
+      const status = normalizedTaskStatus(task?.status) || "pending";
+      if (status === "completed") return "Completed";
+      if (status === "no_changes") return "No changes";
+      if (status === "error") return "Failed";
+      if (status === "invalid") return "Invalid";
+      if (status === "duplicate") return "Duplicate";
+      if (status === "stopped") return "Stopped";
+      if (status === "paused") return "Paused";
+      if (status === "pending") return "Queued";
+
+      if (status === "running" || status === "active") {
+        const model = taskProgressModel(task);
+        const steps = Array.isArray(model?.steps) ? model.steps : [];
+        const index = Number.isFinite(model?.index) ? model.index : 0;
+        const step = steps[index] || null;
+        return String(step?.label || "").trim() || "Running";
+      }
+
+      return chatStatusDisplayLabel(taskStatusLabel(status));
+    }
+
+    function chatPromptTaskStatusForTask(requestID, task) {
+      const normalizedRequestID = String(requestID || "").trim();
+      if (!normalizedRequestID || !task) return null;
+      const statusLabel = chatPromptTaskStatusLabel(task);
+      const status = normalizedTaskStatus(task?.status) || "pending";
+      const stage = String(task?.stage || "").trim();
+      const stageStatus = String(task?.stage_status || "").trim();
+      const titleParts = [`${statusLabel} for request ${normalizedRequestID}`, `status ${taskStatusLabel(status)}`];
+      if (stage) {
+        titleParts.push(`stage ${stage}`);
+      }
+      if (stageStatus && stageStatus !== status) {
+        titleParts.push(`stage status ${stageStatus}`);
+      }
+      return {
+        text: compactChatRequestID(normalizedRequestID, statusLabel),
+        title: `${titleParts.join(", ")}.`,
+      };
+    }
+
+    function chatPromptTaskStatus(requestID) {
+      return chatPromptTaskStatusForTask(requestID, chatTaskByRequestID(requestID));
+    }
+
+    function chatPromptMessageStatusText(message) {
+      const requestID = String(message?.requestID || "").trim();
+      if (!requestID) return "";
+      const liveStatus = chatPromptTaskStatus(requestID);
+      if (liveStatus?.text) {
+        return liveStatus.text;
+      }
+      return String(message?.statusText || "").trim() || compactChatRequestID(requestID);
+    }
+
+    function chatPromptMessageStatusTitle(message) {
+      const requestID = String(message?.requestID || "").trim();
+      if (!requestID) return "";
+      const liveStatus = chatPromptTaskStatus(requestID);
+      if (liveStatus?.title) {
+        return liveStatus.title;
+      }
+      return String(message?.statusTitle || "").trim() || `Queued request ${requestID}`;
+    }
+
+    function renderChatPromptMessageMeta(meta, message) {
+      if (!meta) return;
+      const requestID = String(message?.requestID || "").trim();
+      const imageCount = Number.isFinite(message?.imageCount) ? message.imageCount : 0;
+      const statusText = chatPromptMessageStatusText(message);
+      const statusTitle = chatPromptMessageStatusTitle(message);
+      const parts = [];
+      const time = chatPromptMessageTime(message?.createdAt);
+      if (time) parts.push(time);
+      if (statusText) parts.push(statusText);
+      if (imageCount > 0) {
+        parts.push(`${imageCount} screenshot${imageCount === 1 ? "" : "s"}`);
+      }
+
+      meta.textContent = parts.join(" | ");
+      meta.dataset.requestId = requestID;
+      meta.dataset.createdAt = String(message?.createdAt || "");
+      meta.dataset.imageCount = String(imageCount);
+      meta.dataset.statusText = statusText;
+      meta.dataset.statusTitle = statusTitle;
+      if (requestID && statusTitle) {
+        meta.title = statusTitle;
+      } else {
+        meta.removeAttribute("title");
+      }
+    }
+
+    function syncChatPromptMessageTaskStatuses(snapshot = state.snapshot) {
+      if (!(state.chatPromptLog instanceof Map)) return;
+      for (const messages of state.chatPromptLog.values()) {
+        for (const message of messages || []) {
+          const requestID = String(message?.requestID || "").trim();
+          if (!requestID) continue;
+          const task = chatTaskByRequestID(requestID, snapshot);
+          if (!task) continue;
+          const status = chatPromptTaskStatusForTask(requestID, task);
+          if (!status) continue;
+          message.statusText = status.text;
+          message.statusTitle = status.title;
+        }
+      }
+    }
+
+    function refreshVisibleChatPromptStatuses() {
+      document.querySelectorAll(".chat-repo-message-meta[data-request-id]").forEach((meta) => {
+        renderChatPromptMessageMeta(meta, {
+          requestID: meta.dataset.requestId,
+          createdAt: meta.dataset.createdAt,
+          imageCount: Number.parseInt(meta.dataset.imageCount || "0", 10) || 0,
+          statusText: meta.dataset.statusText,
+          statusTitle: meta.dataset.statusTitle,
+        });
+      });
     }
 
     function renderChatRepoPromptLog(repo, logNode) {
@@ -5906,18 +6053,7 @@
 
         const meta = document.createElement("footer");
         meta.className = "chat-repo-message-meta";
-        const parts = [];
-        const time = chatPromptMessageTime(message.createdAt);
-        if (time) parts.push(time);
-        const compactRequestID = compactChatRequestID(message.requestID);
-        if (compactRequestID) parts.push(compactRequestID);
-        if (message.imageCount > 0) {
-          parts.push(`${message.imageCount} screenshot${message.imageCount === 1 ? "" : "s"}`);
-        }
-        meta.textContent = parts.join(" | ");
-        if (message.requestID) {
-          meta.title = `Queued request ${message.requestID}`;
-        }
+        renderChatPromptMessageMeta(meta, message);
         bubble.appendChild(meta);
 
         logNode.appendChild(bubble);
@@ -6139,6 +6275,7 @@
       if (state.appDisplay !== "chat" || !state.githubReposReady) {
         return;
       }
+      refreshVisibleChatPromptStatuses();
       if (chatRepoPanelContainsFocus()) {
         state.chatRepoRenderPending = true;
         return;
@@ -9523,6 +9660,7 @@
       syncNewHubTaskFocus(previousSnapshot, snapshot);
       syncTaskCompletionSparkles(previousSnapshot, snapshot);
       rememberCompletedTaskHistory(snapshot);
+      syncChatPromptMessageTaskStatuses(snapshot);
       const observedRepos = [];
       const failedRepoAccessRepos = [];
       for (const task of snapshot.tasks || []) {
