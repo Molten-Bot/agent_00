@@ -37,7 +37,7 @@
     if (normalized === "claude") return "Claude Code";
     if (normalized === "auggie") return "Auggie";
     if (normalized === "augment") return "Auggie";
-    if (normalized === "opencode") return "Opencode";
+    if (normalized === "opencode") return "OpenCode";
     if (normalized === "pi") return "Pi";
     return "Agent";
   }

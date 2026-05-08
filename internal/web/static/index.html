@@ -1449,7 +1449,7 @@
       if (normalized === "codex") return "Codex";
       if (normalized === "claude") return "Claude Code";
       if (normalized === "auggie") return "Auggie";
-      if (normalized === "opencode") return "Opencode";
+      if (normalized === "opencode") return "OpenCode";
       if (normalized === "pi") return "Pi";
       return "Agent";
     }
@@ -3503,7 +3503,7 @@
         } else if (needsAuggieConfigure) {
           agentAuthTitle.textContent = "Setup Auggie";
         } else if (needsOpencodeConfigure) {
-          agentAuthTitle.textContent = "Setup Opencode";
+          agentAuthTitle.textContent = "Setup OpenCode";
         } else if (isPiConfigureState(state.agentAuth)) {
           agentAuthTitle.textContent = "Setup Pi";
         } else if (needsClaudeGitHubConfigure) {
@@ -3609,7 +3609,7 @@
         } else if (needsPiConfigure) {
           agentAuthConfigureLabel.textContent = "Paste ~/.pi/agent/auth.json";
         } else if (needsOpencodeConfigure) {
-          agentAuthConfigureLabel.textContent = "Configure Opencode locally";
+          agentAuthConfigureLabel.textContent = "Configure OpenCode locally";
         } else {
           agentAuthConfigureLabel.textContent = "Paste configuration value";
         }

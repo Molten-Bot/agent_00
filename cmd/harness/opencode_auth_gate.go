@@ -18,11 +18,11 @@ const (
 	opencodeAuthProbeTimeout       = 12 * time.Second
 	opencodeConfigureCommand       = "opencode auth login"
 	opencodeConfigurePlaceholder   = "Run opencode auth login or configure provider credentials, then click Done."
-	opencodeConfigureMessage       = "Opencode provider auth is required. Run `opencode auth login` or configure provider credentials, then click Done."
-	opencodeProviderAuthReady      = "Opencode provider auth is ready."
+	opencodeConfigureMessage       = "OpenCode provider auth is required. Run `opencode auth login` or configure provider credentials, then click Done."
+	opencodeProviderAuthReady      = "OpenCode provider auth is ready."
 	opencodeAuthFileRelativePath   = ".local/share/opencode/auth.json"
-	opencodeAuthFileReadyMessage   = "Opencode auth is ready via ~/.local/share/opencode/auth.json."
-	opencodeProviderEnvReadyFormat = "Opencode provider auth is ready via %s."
+	opencodeAuthFileReadyMessage   = "OpenCode auth is ready via ~/.local/share/opencode/auth.json."
+	opencodeProviderEnvReadyFormat = "OpenCode provider auth is ready via %s."
 )
 
 var opencodeProviderEnvVars = []string{
@@ -285,7 +285,7 @@ func opencodeProbeConfigureMessage(err error) string {
 	}
 	errText := strings.ToLower(err.Error())
 	if strings.Contains(errText, "executable file not found") || strings.Contains(errText, "no such file or directory") {
-		return "Opencode CLI was not found. Install it with `npm install -g opencode-ai`, then click Done."
+		return "OpenCode CLI was not found. Install it with `npm install -g opencode-ai`, then click Done."
 	}
 	return ""
 }

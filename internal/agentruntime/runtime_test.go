@@ -111,7 +111,7 @@ func TestDisplayName(t *testing.T) {
 		HarnessClaude:   "Claude",
 		HarnessAuggie:   "Auggie",
 		HarnessPi:       "Pi",
-		HarnessOpencode: "Opencode",
+		HarnessOpencode: "OpenCode",
 		"  CLAUDE  ":    "Claude",
 	}
 	for harness, want := range cases {

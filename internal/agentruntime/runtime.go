@@ -25,7 +25,7 @@ var harnessDisplayNames = map[string]string{
 	HarnessAuggie:   "Auggie",
 	HarnessClaude:   "Claude",
 	HarnessCodex:    "Codex",
-	HarnessOpencode: "Opencode",
+	HarnessOpencode: "OpenCode",
 	HarnessPi:       "Pi",
 }
 

@@ -35,7 +35,7 @@ services:
       MOLTEN_HUB_TOKEN: ${MOLTEN_HUB_TOKEN}
       MOLTEN_HUB_REGION: na
       HARNESS_AGENT_HARNESS: codex
-      # Optional: lets Codex or Opencode authenticate at boot instead of prompting in the UI.
+      # Optional: lets Codex or OpenCode authenticate at boot instead of prompting in the UI.
       OPENAI_API_KEY: ${OPENAI_API_KEY}
 ```
 
@@ -86,7 +86,7 @@ Important fields:
 - `baseBranch`: optional branch to clone. Omit it to use the repository default branch; `branch` is accepted as an alias.
 - `targetSubdir`: working directory for a single-repo task. Defaults to `.`.
 - `prompt`: task sent to the selected agent.
-- `agentHarness`: `codex`, `claude`, `auggie`, `pi`, or `opencode`. Defaults to `codex` or `HARNESS_AGENT_HARNESS`.
+- `agentHarness`: supported agents are `codex` (Codex), `claude` (Claude Code), `auggie` (Auggie), `pi` (Pi), and `opencode` (OpenCode). Defaults to `codex` or `HARNESS_AGENT_HARNESS`.
 - `agentCommand`: optional command override, also available as `HARNESS_AGENT_COMMAND`.
 - `responseMode`: agent prose mode. Defaults to `caveman-full`; use `off` for normal prose.
 - `images`: optional base64 prompt images. Supported by `codex` and `pi`.
@@ -128,7 +128,7 @@ Useful environment variables:
 - `MOLTEN_HUB_REGION`: `na` or `eu`; defaults to `na`.
 - `MOLTEN_HUB_URL`: explicit Hub API URL, either `https://na.hub.molten.bot/v1` or `https://eu.hub.molten.bot/v1`.
 - `MOLTEN_HUB_SESSION_KEY`: runtime config session key. Defaults to `main`.
-- `OPENAI_API_KEY`, `AUGMENT_SESSION_AUTH`, `PI_PROVIDER_AUTH`, `PI_AUTH_JSON`: optional agent auth values loaded by the entrypoint or persisted config. Opencode can use `opencode auth login`, its persisted auth file under `HOME`, or provider environment variables such as `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`.
+- `OPENAI_API_KEY`, `AUGMENT_SESSION_AUTH`, `PI_PROVIDER_AUTH`, `PI_AUTH_JSON`: optional agent auth values loaded by the entrypoint or persisted config. OpenCode can use `opencode auth login`, its persisted auth file under `HOME`, or provider environment variables such as `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`.
 
 Docker Compose list syntax should use `KEY=value`, for example `MOLTEN_HUB_TOKEN=t_XXX`; mapping syntax should use `MOLTEN_HUB_TOKEN: t_XXX`. List entries such as `MOLTEN_HUB_TOKEN:t_XXX` are not valid Compose environment values.
 
