@@ -2965,6 +2965,33 @@ func isNoImplementationTargetLine(lowerLine string) bool {
 			return true
 		}
 	}
+	if len(lowerLine) <= 160 {
+		for _, marker := range []string{
+			"send implementation task",
+			"send target bug/feature/change",
+			"waiting for task",
+			"provide implementation task",
+			"provide an implementation task",
+		} {
+			if strings.Contains(lowerLine, marker) {
+				return true
+			}
+		}
+		if containsStandaloneSentence(lowerLine, "send task") {
+			return true
+		}
+	}
+	return false
+}
+
+func containsStandaloneSentence(lowerLine, sentence string) bool {
+	for _, part := range strings.FieldsFunc(lowerLine, func(r rune) bool {
+		return r == '.' || r == '!' || r == '?'
+	}) {
+		if strings.TrimSpace(part) == sentence {
+			return true
+		}
+	}
 	return false
 }
 
