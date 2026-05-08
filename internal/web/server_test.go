@@ -1572,6 +1572,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `const showTaskPanel = state.appDisplay === "studio" || state.appDisplay === "chat";`) {
 		t.Fatalf("expected index html to switch main views while hiding Current Work on dashboard")
 	}
+	if !strings.Contains(markup, `function syncTaskVisibilityForAppDisplay()`) ||
+		!strings.Contains(markup, "if (state.appDisplay === \"chat\") {\n        state.taskVisible = false;\n        return;\n      }") ||
+		!strings.Contains(markup, "if (state.appDisplay === \"studio\") {\n        state.taskVisible = true;\n      }") ||
+		!strings.Contains(markup, `syncTaskVisibilityForAppDisplay();`) {
+		t.Fatalf("expected index html to minimize Current Work on chat entry while expanding it in Studio views")
+	}
 	if !strings.Contains(markup, `function syncPromptTitleModes()`) ||
 		!strings.Contains(markup, `item.hidden = !active;`) ||
 		!strings.Contains(markup, `promptPanelTitle.setAttribute("aria-label", label);`) {
