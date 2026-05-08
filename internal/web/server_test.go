@@ -1661,10 +1661,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `function refreshVisibleChatPromptStatuses()`) ||
 		!strings.Contains(markup, `function chatPromptMessageTone(message)`) ||
 		!strings.Contains(markup, `function chatPromptCompletion(message)`) ||
-		!strings.Contains(markup, `link.textContent = text;`) ||
+		!strings.Contains(markup, `if (!href) {`) ||
+		!strings.Contains(markup, `body.appendChild(document.createTextNode("Your task is complete "));`) ||
+		!strings.Contains(markup, `logo.src = GITHUB_LOGO_URL;`) ||
+		!strings.Contains(markup, `label.textContent = "Link to PR";`) ||
 		!strings.Contains(markup, `bubble.className = "chat-repo-message chat-repo-message-assistant";`) ||
 		!strings.Contains(markup, `syncChatPromptCompletionBubble(bubble, message);`) ||
-		!strings.Contains(markup, `const text = "Your task has completed";`) ||
 		!strings.Contains(markup, `bubble.dataset.tone = chatPromptMessageTone(message);`) ||
 		!strings.Contains(markup, `status === "completed" || status === "no_changes"`) ||
 		!strings.Contains(markup, `status === "error" || status === "invalid" || status === "stopped"`) ||
@@ -2691,6 +2693,7 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		!strings.Contains(css, ".chat-repo-message[data-tone=\"warning\"] {") ||
 		!strings.Contains(css, ".chat-repo-message-assistant {\n  justify-self: start;") ||
 		!strings.Contains(css, ".chat-repo-message-link {") ||
+		!strings.Contains(css, ".chat-repo-message-link-logo {") ||
 		!strings.Contains(css, "color: var(--surface-success);") ||
 		!strings.Contains(css, "color: var(--surface-danger);") {
 		t.Fatalf("expected stylesheet to color-code chat prompt messages by terminal task result")

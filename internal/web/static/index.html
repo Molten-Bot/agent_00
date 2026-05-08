@@ -6057,9 +6057,13 @@
       if (status !== "completed" && status !== "no_changes") {
         return null;
       }
+      const href = taskPullRequestURL(task);
+      if (!href) {
+        return null;
+      }
       return {
         requestID,
-        href: taskPullRequestURL(task),
+        href,
       };
     }
 
@@ -6067,24 +6071,32 @@
       if (!body || !completion) return;
       body.replaceChildren();
 
-      const text = "Your task has completed";
-      if (completion.href) {
-        const link = document.createElement("a");
-        link.className = "chat-repo-message-link";
-        link.href = completion.href;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.title = "Open pull request on GitHub.";
-        link.textContent = text;
-        link.addEventListener("click", (event) => {
-          openExternalTaskLink(event, completion.href, () => {
-            trackAnalyticsEvent("chat_prompt_completion_pr_opened", { request_id: completion.requestID });
-          });
+      body.appendChild(document.createTextNode("Your task is complete "));
+
+      const link = document.createElement("a");
+      link.className = "chat-repo-message-link";
+      link.href = completion.href;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.title = "Open pull request on GitHub.";
+      link.setAttribute("aria-label", "Open pull request on GitHub.");
+
+      const logo = document.createElement("img");
+      logo.className = "chat-repo-message-link-logo";
+      logo.src = GITHUB_LOGO_URL;
+      logo.alt = "";
+      logo.setAttribute("aria-hidden", "true");
+
+      const label = document.createElement("span");
+      label.textContent = "Link to PR";
+
+      link.append(logo, label);
+      link.addEventListener("click", (event) => {
+        openExternalTaskLink(event, completion.href, () => {
+          trackAnalyticsEvent("chat_prompt_completion_pr_opened", { request_id: completion.requestID });
         });
-        body.appendChild(link);
-      } else {
-        body.textContent = text;
-      }
+      });
+      body.appendChild(link);
     }
 
     function syncChatPromptCompletionBubble(userBubble, message) {
