@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Molten Hub Code</title>
+  <meta property="og:image" content="https://app.molten.bot/logo.svg">
+  <meta name="twitter:image" content="https://app.molten.bot/logo.svg">
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"></script>
   <script>
     window.dataLayer = window.dataLayer || [];
@@ -323,7 +325,29 @@
             <div>
               <h1 id="dashboard-title">Session Dashboard</h1>
             </div>
-            <span id="dashboard-updated" class="dashboard-updated">Waiting for data</span>
+            <div class="dashboard-head-actions">
+              <span id="dashboard-updated" class="dashboard-updated">Waiting for data</span>
+              <nav class="dashboard-share-links" aria-label="Share session highlights">
+                <a id="dashboard-share-x" class="dashboard-share-link" href="https://twitter.com/intent/tweet" target="_blank" rel="noopener noreferrer" aria-label="Share session highlights on X" title="Share on X">
+                  <svg class="dashboard-share-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M13.9 10.5 21.3 2h-1.8l-6.4 7.4L8 2H2l7.8 11.4L2 22h1.8l6.8-7.8L16 22h6l-8.1-11.5Zm-2.4 2.7-.8-1.1L4.5 3.3h2.7l5 7.1.8 1.1 6.5 9.2h-2.7l-5.3-7.5Z"></path>
+                  </svg>
+                  <span>X</span>
+                </a>
+                <a id="dashboard-share-facebook" class="dashboard-share-link" href="https://www.facebook.com/sharer/sharer.php" target="_blank" rel="noopener noreferrer" aria-label="Share session highlights on Facebook" title="Share on Facebook">
+                  <svg class="dashboard-share-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M14.2 8.4V6.7c0-.8.6-1 1.1-1h2.1V2.1L14.5 2c-3.2 0-5 2-5 5.4v1H6.3v4h3.2V22h4.1v-9.6H17l.5-4h-3.3Z"></path>
+                  </svg>
+                  <span>Facebook</span>
+                </a>
+                <a id="dashboard-share-whatsapp" class="dashboard-share-link" href="https://wa.me/" target="_blank" rel="noopener noreferrer" aria-label="Share session highlights on WhatsApp" title="Share on WhatsApp">
+                  <svg class="dashboard-share-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M12 2a9.9 9.9 0 0 0-8.5 15.1L2.2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.1 8.1 0 0 1-4.2-1.1l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.4-.7-1.6-.8-.2-.1-.4-.1-.6.1l-.8 1c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.2-.3 0-.4.1-.6l.4-.5c.1-.2.2-.3.3-.5.1-.2 0-.4 0-.5l-.7-1.6c-.2-.4-.4-.4-.6-.4h-.5c-.2 0-.5.1-.7.3-.2.2-.9.8-.9 2.1 0 1.2.9 2.4 1 2.6.1.2 1.8 2.8 4.4 3.9.6.3 1.1.4 1.5.5.6.2 1.2.2 1.6.1.5-.1 1.4-.6 1.6-1.1.2-.6.2-1 .2-1.1-.1-.1-.3-.2-.5-.3Z"></path>
+                  </svg>
+                  <span>WhatsApp</span>
+                </a>
+              </nav>
+            </div>
           </div>
           <div class="dashboard-stats-grid" aria-label="Run stats">
             <div class="dashboard-stat-card dashboard-stat-card-primary" tabindex="0" aria-describedby="dashboard-max-concurrent-meta">
@@ -683,6 +707,7 @@
     const TASK_PROGRESS_VISIBLE = true;
     const HUB_LOGIN_URL = "https://molten.bot/login?target=hub";
     const HUB_DASHBOARD_URL = "https://app.molten.bot/hub";
+    const DASHBOARD_SHARE_IMAGE_URL = "https://app.molten.bot/logo.svg";
     const GOOGLE_ANALYTICS_MEASUREMENT_ID = "G-BY33RFG2WB";
     const COMPLETED_STATUSES = new Set(["completed", "no_changes", "error", "invalid", "duplicate", "stopped"]);
     const TASK_PROGRESS_PREP_STAGES = new Set(["preflight", "auth", "workspace", "config", "submit", "dispatch"]);
@@ -1818,6 +1843,9 @@
     const dashboardAgentTimes = document.getElementById("dashboard-agent-times");
     const dashboardSuccessRate = document.getElementById("dashboard-success-rate");
     const dashboardTaskChart = document.getElementById("dashboard-task-chart");
+    const dashboardShareX = document.getElementById("dashboard-share-x");
+    const dashboardShareFacebook = document.getElementById("dashboard-share-facebook");
+    const dashboardShareWhatsApp = document.getElementById("dashboard-share-whatsapp");
     const chatDisplay = document.getElementById("chat-display");
     const chatRepoTabs = document.getElementById("chat-repo-tabs");
     const chatRepoGrid = document.getElementById("chat-repo-grid");
@@ -4548,6 +4576,43 @@
       }
     }
 
+    function dashboardShareURL() {
+      const current = new URL(window.location.href);
+      current.hash = "dashboard";
+      return current.toString();
+    }
+
+    function dashboardShareText(stats) {
+      const total = Number(stats.total_tasks || 0);
+      const completed = Number(stats.completed_tasks || 0);
+      const saved = dashboardDuration(Number(stats.total_saved_seconds || 0));
+      const success = dashboardPercent(Number(stats.success_rate || 0));
+      return `Molten Hub session highlights: ${completed}/${total} tasks completed, ${saved} time saved, ${success} success.`;
+    }
+
+    function updateDashboardShareLinks(stats) {
+      const text = dashboardShareText(stats || {});
+      const shareURL = dashboardShareURL();
+      if (dashboardShareX) {
+        const url = new URL("https://twitter.com/intent/tweet");
+        url.searchParams.set("text", text);
+        url.searchParams.set("url", shareURL);
+        dashboardShareX.href = url.toString();
+      }
+      if (dashboardShareFacebook) {
+        const url = new URL("https://www.facebook.com/sharer/sharer.php");
+        url.searchParams.set("u", shareURL);
+        url.searchParams.set("quote", text);
+        url.searchParams.set("picture", DASHBOARD_SHARE_IMAGE_URL);
+        dashboardShareFacebook.href = url.toString();
+      }
+      if (dashboardShareWhatsApp) {
+        const url = new URL("https://wa.me/");
+        url.searchParams.set("text", `${text} ${shareURL}`);
+        dashboardShareWhatsApp.href = url.toString();
+      }
+    }
+
     function dashboardRelativeTime(timestamp) {
       const delta = Math.max(0, Date.now() - timestamp);
       const seconds = Math.floor(delta / 1000);
@@ -4636,6 +4701,7 @@
       if (dashboardSuccessRate) {
         dashboardSuccessRate.textContent = `${dashboardPercent(Number(stats.success_rate || 0))} success`;
       }
+      updateDashboardShareLinks(stats);
       renderDashboardTimeList(dashboardWorkflowTimes, stats.workflow_times);
       renderDashboardTimeList(dashboardAgentTimes, stats.agent_times);
       const chart = ensureDashboardChart();
