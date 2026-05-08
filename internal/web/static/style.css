@@ -811,6 +811,34 @@ moltenhub-code-nav {
   min-height: calc(100vh - 130px);
 }
 
+body[data-app-display="chat"] .app.dashboard-app {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+body[data-app-display="chat"] .layout,
+body[data-app-display="chat"] .right-col,
+body[data-app-display="chat"] .chat-main,
+body[data-app-display="chat"] .chat-shell {
+  min-height: 0;
+  height: 100%;
+}
+
+body[data-app-display="chat"] .right-col {
+  align-content: stretch;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+body[data-app-display="chat"] #task-panel {
+  display: none;
+}
+
+body[data-app-display="chat"] .chat-shell {
+  overflow: hidden;
+}
+
 .panel {
   border-radius: var(--radius-card);
   overflow: hidden;
@@ -3047,6 +3075,7 @@ select.prompt-control {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--chat-repo-card-min-width)), 1fr));
   gap: 10px;
   padding-top: 12px;
+  min-height: 0;
 }
 
 .chat-repo-grid-active-repo {
@@ -3762,8 +3791,21 @@ select.prompt-control {
   }
 
   .chat-shell {
-    min-height: 52vh;
     padding: 16px;
+  }
+
+  .chat-repo-card:not([aria-expanded="true"]) {
+    grid-template-rows: auto;
+    min-height: auto;
+  }
+
+  .chat-repo-card-description,
+  .chat-repo-card-meta {
+    display: none;
+  }
+
+  .chat-repo-grid-active-repo .chat-repo-card[aria-expanded="true"] {
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .chat-head {

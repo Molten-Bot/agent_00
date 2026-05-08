@@ -6951,6 +6951,7 @@
       const showChat = mode === "chat";
       const showStudio = mode === "studio";
       state.appDisplay = mode;
+      document.body.dataset.appDisplay = mode;
       syncTaskVisibilityForAppDisplay();
       if (appLayout) {
         appLayout.hidden = false;
