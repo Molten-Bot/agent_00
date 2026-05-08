@@ -238,7 +238,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected index html to load Chart.js for dashboard stats")
 	}
 	if !strings.Contains(markup, `id="dashboard-display"`) ||
-		!strings.Contains(markup, `<h1 id="dashboard-title">Dashboard</h1>`) ||
+		!strings.Contains(markup, `<h1 id="dashboard-title">Session Dashboard</h1>`) ||
 		!strings.Contains(markup, `id="dashboard-max-concurrent"`) ||
 		!strings.Contains(markup, `id="dashboard-time-saved"`) ||
 		!strings.Contains(markup, `id="dashboard-workflow-times"`) ||

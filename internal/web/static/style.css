@@ -3406,6 +3406,7 @@ select.prompt-control {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  position: relative;
   padding: clamp(18px, 3vw, 28px);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -3414,7 +3415,7 @@ select.prompt-control {
 }
 
 .dashboard-head h1 {
-  margin: 2px 0 0;
+  margin: 0;
   color: var(--text);
   font-size: clamp(1.7rem, 3vw, 2.35rem);
   letter-spacing: 0;
@@ -3423,9 +3424,12 @@ select.prompt-control {
 
 .dashboard-updated {
   color: var(--muted);
-  font-size: 0.86rem;
+  font-size: 0.74rem;
   font-weight: 800;
   line-height: 1.35;
+  position: absolute;
+  right: clamp(18px, 3vw, 28px);
+  top: clamp(18px, 3vw, 28px);
   text-align: right;
 }
 
@@ -3629,6 +3633,7 @@ select.prompt-control {
   }
 
   .dashboard-updated {
+    position: static;
     text-align: left;
   }
 
