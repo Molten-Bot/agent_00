@@ -1677,7 +1677,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `let githubReposLoadPromise = null;`) ||
 		!strings.Contains(markup, `const response = await fetch("/api/github/repos", { cache: "no-store" });`) ||
 		!strings.Contains(markup, `state.githubRepos = Array.isArray(body.repos) ? body.repos : [];`) ||
-		!strings.Contains(markup, `let repos = Array.isArray(state.githubRepos) ? state.githubRepos : [];`) ||
+		!strings.Contains(markup, `const allRepos = Array.isArray(state.githubRepos) ? state.githubRepos : [];`) ||
 		!strings.Contains(markup, `const CHAT_REPOS_MAX_PER_PAGE = 15;`) ||
 		!strings.Contains(markup, `function chatReposPerPage()`) ||
 		!strings.Contains(markup, `const pageRepos = listedRepos.slice(start, start + reposPerPage);`) ||
@@ -1702,13 +1702,13 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `reposLabel.textContent = "All repositories";`) ||
 		!strings.Contains(markup, `function selectedChatRepo(repos, selectedTab)`) ||
 		!strings.Contains(markup, `chatRepoGrid.classList.toggle("chat-repo-grid-active-repo", Boolean(openRepo));`) ||
-		!strings.Contains(markup, `const displayRepos = openRepo ? [openRepo, ...pageRepos] : pageRepos;`) {
-		t.Fatalf("expected index html chat to render prompted repository tabs, icon-only repos tab, and pin the open repository above the repository list")
+		!strings.Contains(markup, `const viewingRepoChat = Boolean(selectedTab && openRepo);`) ||
+		!strings.Contains(markup, `displayRepos = [openRepo];`) {
+		t.Fatalf("expected index html chat to render prompted repository tabs, icon-only repos tab, and isolate active repository chat")
 	}
 	if strings.Contains(markup, `reposButton.textContent = "All";`) ||
-		strings.Contains(markup, `repos = repos.filter((repo) => !promptedKeys.has(chatRepoKey(chatRepoRunValue(repo))));`) ||
-		strings.Contains(markup, `chatStatus.textContent = chatRepoTabLabel(selectedTab.value);`) {
-		t.Fatalf("expected chat repository list to keep all repositories below the open repository with an icon-only repos tab")
+		strings.Contains(markup, `repos = repos.filter((repo) => !promptedKeys.has(chatRepoKey(chatRepoRunValue(repo))));`) {
+		t.Fatalf("expected chat repository list to keep an icon-only repos tab without filtering prompted repos out of the all-repositories view")
 	}
 	if strings.Contains(markup, `taskItems.push(githubReposLoadingTask())`) ||
 		strings.Contains(markup, `repoRead.textContent = "repos: reading GitHub projects";`) ||
@@ -1726,7 +1726,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `ownerIcon.className = "chat-repo-card-owner-icon";`) ||
 		!strings.Contains(markup, `promptLog.className = "chat-repo-log";`) ||
 		!strings.Contains(markup, `function syncChatOpenRepoKey(pageRepos, selectedTab, restoreFocusKey)`) ||
-		!strings.Contains(markup, `syncChatOpenRepoKey(repos, selectedTab, restoreFocusKey);`) ||
+		!strings.Contains(markup, `syncChatOpenRepoKey(reposForSelection, selectedTab, restoreFocusKey);`) ||
 		!strings.Contains(markup, `logNode.hidden = false;`) ||
 		!strings.Contains(markup, `logNode.dataset.empty = String(!hasMessages);`) ||
 		!strings.Contains(markup, `visibilityIcon.className = `) ||
