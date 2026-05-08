@@ -392,7 +392,7 @@ func runHub(args []string) int {
 		runCtx, cancelRun := context.WithCancelCause(ctx)
 		taskHandle := localTaskController.Register(requestID, cancelRun)
 		if runConfigJSON, ok := marshalRunConfigJSON(runCfg); ok {
-			monitorBroker.RecordTaskRunConfig(requestID, runConfigJSON)
+			monitorBroker.RecordTaskRunConfigWithSource(requestID, runConfigJSON, taskStartSourceForSubmission(source, runCfg))
 		}
 
 		go func(
@@ -675,7 +675,7 @@ func runHub(args []string) int {
 	hubController.completeTaskControl = localTaskController.Complete
 	hubController.onDispatchQueued = func(requestID string, runCfg config.Config) {
 		if runConfigJSON, ok := marshalRunConfigJSON(runCfg); ok {
-			monitorBroker.RecordTaskRunConfig(requestID, runConfigJSON)
+			monitorBroker.RecordTaskRunConfigWithSource(requestID, runConfigJSON, "hub")
 		}
 	}
 	hubController.onDispatchFailed = func(requestID string, runCfg config.Config, result app.Result) {
@@ -2129,6 +2129,20 @@ func marshalRunConfigJSON(cfg config.Config) ([]byte, bool) {
 		return nil, false
 	}
 	return payload, true
+}
+
+func taskStartSourceForSubmission(source string, runCfg config.Config) string {
+	switch strings.TrimSpace(source) {
+	case "hub_dispatch":
+		return "hub"
+	case localSubmitSource:
+		if strings.TrimSpace(runCfg.LibraryTaskName) != "" {
+			return "library"
+		}
+		return "prompt"
+	default:
+		return ""
+	}
 }
 
 type runtimeConfigLoader func() (hub.RuntimeConfig, error)

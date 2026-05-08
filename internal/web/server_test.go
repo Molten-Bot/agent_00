@@ -618,10 +618,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `node.classList.add("task-compact-state-left");`) {
 		t.Fatalf("expected compact/minimized task rows to render their state icon on the left")
 	}
-	if !strings.Contains(markup, `icon: "entry_local"`) || !strings.Contains(markup, `icon: "entry_hub"`) || !strings.Contains(markup, `icon: "prepare"`) || !strings.Contains(markup, `icon: "clone"`) || !strings.Contains(markup, `icon: "branch"`) || !strings.Contains(markup, `icon: "publish"`) || !strings.Contains(markup, `icon: "fork"`) || !strings.Contains(markup, `icon: "agent"`) || !strings.Contains(markup, `icon: "commit"`) || !strings.Contains(markup, `icon: "pr"`) || !strings.Contains(markup, `icon: "checks"`) || !strings.Contains(markup, `icon: "github"`) {
+	if !strings.Contains(markup, `icon: "entry_chat"`) || !strings.Contains(markup, `icon: "entry_hub"`) || !strings.Contains(markup, `icon: "entry_prompt"`) || !strings.Contains(markup, `icon: "entry_library"`) || !strings.Contains(markup, `icon: "entry_json"`) || !strings.Contains(markup, `icon: "prepare"`) || !strings.Contains(markup, `icon: "clone"`) || !strings.Contains(markup, `icon: "branch"`) || !strings.Contains(markup, `icon: "publish"`) || !strings.Contains(markup, `icon: "fork"`) || !strings.Contains(markup, `icon: "agent"`) || !strings.Contains(markup, `icon: "commit"`) || !strings.Contains(markup, `icon: "pr"`) || !strings.Contains(markup, `icon: "checks"`) || !strings.Contains(markup, `icon: "github"`) {
 		t.Fatalf("expected index html to classify dynamic progress steps by action icon keys")
 	}
-	if !strings.Contains(markup, `entry_local: "laptop"`) || !strings.Contains(markup, `entry_hub: "satellite-dish"`) || !strings.Contains(markup, `prepare: "wrench"`) || !strings.Contains(markup, `clone: "git-branch-plus"`) || !strings.Contains(markup, `branch: "git-branch"`) || !strings.Contains(markup, `publish: "upload"`) || !strings.Contains(markup, `fork: "git-fork"`) || !strings.Contains(markup, `agent: "bot"`) || !strings.Contains(markup, `commit: "git-commit-horizontal"`) || !strings.Contains(markup, `pr: "git-pull-request"`) || !strings.Contains(markup, `checks: "shield-check"`) {
+	if !strings.Contains(markup, `entry_chat: "message-circle"`) || !strings.Contains(markup, `entry_hub: "satellite-dish"`) || !strings.Contains(markup, `entry_prompt: "pencil"`) || !strings.Contains(markup, `entry_library: "book-open"`) || !strings.Contains(markup, `entry_json: "braces"`) || !strings.Contains(markup, `prepare: "wrench"`) || !strings.Contains(markup, `clone: "git-branch-plus"`) || !strings.Contains(markup, `branch: "git-branch"`) || !strings.Contains(markup, `publish: "upload"`) || !strings.Contains(markup, `fork: "git-fork"`) || !strings.Contains(markup, `agent: "bot"`) || !strings.Contains(markup, `commit: "git-commit-horizontal"`) || !strings.Contains(markup, `pr: "git-pull-request"`) || !strings.Contains(markup, `checks: "shield-check"`) {
 		t.Fatalf("expected index html to map progress icon keys to lucide action glyphs")
 	}
 	if !strings.Contains(markup, `finalize: { id: "finalize", label: "GitHub"`) ||
@@ -3239,6 +3239,44 @@ func TestHandlerLocalPromptSubmitAccepted(t *testing.T) {
 	}
 }
 
+func TestHandlerLocalPromptSubmitRecordsTaskSourceHeader(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	srv := NewServer("", b)
+	srv.SubmitLocalPrompt = func(_ context.Context, body []byte) (string, error) {
+		b.RecordTaskRunConfig("local-source", body)
+		return "local-source", nil
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	payload := `{"repo":"git@github.com:acme/repo.git","baseBranch":"main","targetSubdir":".","prompt":"update docs"}`
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/local-prompt", bytes.NewBufferString(payload))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(taskSourceHeader, "chat")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/local-prompt error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusAccepted)
+	}
+
+	task, ok := b.Task("local-source")
+	if !ok {
+		t.Fatal("Task() found = false, want true")
+	}
+	if got, want := task.Source, "chat"; got != want {
+		t.Fatalf("task.Source = %q, want %q", got, want)
+	}
+}
+
 func TestHandlerLocalPromptSubmitAcceptedWithImages(t *testing.T) {
 	t.Parallel()
 
@@ -3345,7 +3383,13 @@ func TestHandlerLocalPromptSubmitFailureCreatesVisibleRejectedTask(t *testing.T)
 	defer ts.Close()
 
 	payload := `{"repo":"git@github.com:acme/repo.git","baseBranch":"main","targetSubdir":".","prompt":"show this failed prompt"}`
-	resp, err := http.Post(ts.URL+"/api/local-prompt", "application/json", bytes.NewBufferString(payload))
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/local-prompt", bytes.NewBufferString(payload))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(taskSourceHeader, "json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST /api/local-prompt error = %v", err)
 	}
@@ -3363,6 +3407,9 @@ func TestHandlerLocalPromptSubmitFailureCreatesVisibleRejectedTask(t *testing.T)
 	task := snap.Tasks[0]
 	if task.Status != "invalid" {
 		t.Fatalf("task.Status = %q, want invalid", task.Status)
+	}
+	if task.Source != "json" {
+		t.Fatalf("task.Source = %q, want json", task.Source)
 	}
 	if task.Prompt != "show this failed prompt" {
 		t.Fatalf("task.Prompt = %q, want %q", task.Prompt, "show this failed prompt")

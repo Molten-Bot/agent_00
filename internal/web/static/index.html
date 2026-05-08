@@ -670,6 +670,7 @@
     const TASK_ICON_IDLE_SPIN_MS = 16_000;
     const TASK_ICON_IDLE_REFRESH_MS = 1_000;
     const DEFERRED_SELECTION_RENDER_FLUSH_DELAY_MS = 32;
+    const TASK_SOURCE_HEADER = "X-MoltenHub-Task-Source";
     const BACKGROUND_PARTICLE_ANIMATION_ENABLED = false;
     const TASK_HISTORY_LIMIT = 25;
     const TASK_HISTORY_MAX_AGE_MS = 20 * 60 * 60 * 1000;
@@ -682,8 +683,11 @@
     const TASK_PROGRESS_PREP_STAGES = new Set(["preflight", "auth", "workspace", "config", "submit", "dispatch"]);
     const TASK_PROGRESS_AGENT_STAGES = new Set(["codex", "claude", "auggie", "pi", "opencode", "augment", "agent", "review"]);
     const TASK_PROGRESS_STEP_DEFS = Object.freeze({
-      entry_local: { id: "entry_local", label: "Local Submit", detail: "Queued from this runtime.", icon: "entry_local" },
-      entry_hub: { id: "entry_hub", label: "Hub Dispatch", detail: "Queued by Molten Hub.", icon: "entry_hub" },
+      entry_chat: { id: "entry_chat", label: "Chat", detail: "Queued from Chat.", icon: "entry_chat" },
+      entry_hub: { id: "entry_hub", label: "Hub", detail: "Queued by Molten Hub.", icon: "entry_hub" },
+      entry_prompt: { id: "entry_prompt", label: "Prompt", detail: "Queued from Prompt Studio.", icon: "entry_prompt" },
+      entry_library: { id: "entry_library", label: "Library", detail: "Queued from Library Studio.", icon: "entry_library" },
+      entry_json: { id: "entry_json", label: "JSON", detail: "Queued from JSON Studio.", icon: "entry_json" },
       prepare: { id: "prepare", label: "Prepare", detail: "Local auth and workspace conditioning.", icon: "prepare" },
       clone: { id: "clone", label: "Clone", detail: "Repository clone and sync.", icon: "clone" },
       branch: { id: "branch", label: "Branch", detail: "Branch selection or creation.", icon: "branch" },
@@ -734,8 +738,11 @@
       default: "clock-3",
     });
     const TASK_PROGRESS_ICON_NAMES = Object.freeze({
-      entry_local: "laptop",
+      entry_chat: "message-circle",
       entry_hub: "satellite-dish",
+      entry_prompt: "pencil",
+      entry_library: "book-open",
+      entry_json: "braces",
       prepare: "wrench",
       clone: "git-branch-plus",
       branch: "git-branch",
@@ -6339,7 +6346,7 @@
       try {
         const response = await fetch("/api/local-prompt", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", [TASK_SOURCE_HEADER]: "chat" },
           body: JSON.stringify(payload),
         });
         let body = null;
@@ -7097,12 +7104,7 @@
     }
 
     function isHubTask(task) {
-      const requestID = taskRequestID(task).toLowerCase();
-      if (requestID.startsWith("req-") || requestID.startsWith("hub-")) {
-        return true;
-      }
-      const source = String(task?.source || task?.origin || task?.request_source || "").trim().toLowerCase();
-      return source === "hub" || source === "moltenhub";
+      return taskStartSource(task) === "hub";
     }
 
     function triggerNewHubTaskHighlight(requestID) {
@@ -7830,6 +7832,68 @@
       return String(task?.request_id || "").trim();
     }
 
+    function normalizeTaskStartSource(source) {
+      const normalized = String(source || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+      switch (normalized) {
+        case "chat":
+          return "chat";
+        case "hub":
+        case "hub_dispatch":
+        case "moltenhub":
+        case "molten_hub":
+          return "hub";
+        case "prompt":
+        case "builder":
+        case "studio":
+        case "local":
+        case "local_submit":
+          return "prompt";
+        case "library":
+        case "library_task":
+        case "librarytask":
+          return "library";
+        case "json":
+        case "raw":
+          return "json";
+        default:
+          return "";
+      }
+    }
+
+    function taskStartSource(task) {
+      const candidates = [
+        task?.source,
+        task?.start_source,
+        task?.startSource,
+        task?.task_source,
+        task?.taskSource,
+        task?.request_source,
+        task?.requestSource,
+        task?.origin,
+      ];
+      for (const candidate of candidates) {
+        const source = normalizeTaskStartSource(candidate);
+        if (source) {
+          return source;
+        }
+      }
+      const requestID = taskRequestID(task).toLowerCase();
+      if (requestID.startsWith("req-") || requestID.startsWith("hub-")) {
+        return "hub";
+      }
+      if (requestID.startsWith("local-")) {
+        return "prompt";
+      }
+      return "";
+    }
+
+    function promptModeTaskSource(mode) {
+      const normalized = String(mode || "").trim().toLowerCase();
+      if (normalized === "library") return "library";
+      if (normalized === "json") return "json";
+      return "prompt";
+    }
+
     function taskIconStateSignature(task) {
       const status = normalizedTaskStatus(task?.status) || "pending";
       const stage = String(task?.stage || "").trim().toLowerCase();
@@ -8389,14 +8453,20 @@
     }
 
     function taskProgressEntryStepID(task) {
-      const requestID = String(task?.request_id || "").trim().toLowerCase();
-      if (requestID.startsWith("local-")) {
-        return "entry_local";
+      switch (taskStartSource(task)) {
+        case "chat":
+          return "entry_chat";
+        case "hub":
+          return "entry_hub";
+        case "library":
+          return "entry_library";
+        case "json":
+          return "entry_json";
+        case "prompt":
+          return "entry_prompt";
+        default:
+          return "entry_hub";
       }
-      if (requestID.startsWith("req-") || requestID.startsWith("hub-")) {
-        return "entry_hub";
-      }
-      return "entry_hub";
     }
 
     function parseTaskProgressField(line, key) {
@@ -8601,6 +8671,7 @@
         String(task?.stage || ""),
         String(task?.stage_status || ""),
         String(task?.status || ""),
+        taskStartSource(task),
         String(task?.pr_url || ""),
         String(logs.length),
         tail,
@@ -8979,6 +9050,7 @@
             newHubTask: shouldHighlightNewHubTask(task),
             status: String(task?.status || ""),
             stage: String(task?.stage || ""),
+            source: taskStartSource(task),
             currentState: taskCurrentStateSignature(task),
             prompt: taskDisplayLabel(task),
             repos: formatTaskRepos(task),
@@ -9800,7 +9872,7 @@
         const submitEndpoint = state.promptMode === "library" ? "/api/library/run" : "/api/local-prompt";
         const response = await fetch(submitEndpoint, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", [TASK_SOURCE_HEADER]: promptModeTaskSource(state.promptMode) },
           body: normalized.compact,
         });
 

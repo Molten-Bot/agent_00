@@ -661,6 +661,33 @@ func TestBrokerRecordTaskRunConfigCreatesPendingTaskAndNotifies(t *testing.T) {
 	}
 }
 
+func TestBrokerRecordTaskRunConfigWithSource(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	requestID := "local-source-config"
+	payload := []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"show source"}`)
+
+	b.RecordTaskRunConfigWithSource(requestID, payload, "chat")
+
+	task, ok := b.Task(requestID)
+	if !ok {
+		t.Fatal("Task() found = false, want true")
+	}
+	if got, want := task.Source, "chat"; got != want {
+		t.Fatalf("task.Source = %q, want %q", got, want)
+	}
+
+	b.RecordTaskSource(requestID, "json")
+	task, ok = b.Task(requestID)
+	if !ok {
+		t.Fatal("Task() after source update found = false, want true")
+	}
+	if got, want := task.Source, "json"; got != want {
+		t.Fatalf("task.Source after update = %q, want %q", got, want)
+	}
+}
+
 func TestBrokerTracksPromptedReposFromDispatchLogs(t *testing.T) {
 	t.Parallel()
 
@@ -1069,6 +1096,9 @@ func TestBrokerRecordsRejectedPromptSubmission(t *testing.T) {
 	if task.Status != "invalid" {
 		t.Fatalf("task.Status = %q, want invalid", task.Status)
 	}
+	if task.Source != "prompt" {
+		t.Fatalf("task.Source = %q, want prompt", task.Source)
+	}
 	if task.Prompt != "fix broken prompt" {
 		t.Fatalf("task.Prompt = %q, want %q", task.Prompt, "fix broken prompt")
 	}
@@ -1089,6 +1119,26 @@ func TestBrokerRecordsRejectedPromptSubmission(t *testing.T) {
 	}
 	if len(task.Logs) != 1 || !strings.Contains(task.Logs[0].Text, "prompt submission failed: invalid run config: prompt failed checks") {
 		t.Fatalf("task.Logs = %#v, want failure log entry", task.Logs)
+	}
+}
+
+func TestBrokerRecordsRejectedPromptSubmissionWithSource(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	requestID := b.RecordRejectedPromptSubmissionWithSource(
+		[]byte(`{"repo":"git@github.com:acme/repo.git","baseBranch":"main","prompt":"fix broken prompt"}`),
+		"invalid",
+		errors.New("invalid run config: prompt failed checks"),
+		"json",
+	)
+
+	task, ok := b.Task(requestID)
+	if !ok {
+		t.Fatal("Task() found = false, want true")
+	}
+	if got, want := task.Source, "json"; got != want {
+		t.Fatalf("task.Source = %q, want %q", got, want)
 	}
 }
 
