@@ -1508,6 +1508,55 @@ func TestRunNoChangesSkipsPR(t *testing.T) {
 	}
 }
 
+func TestRunAgentAwaitingTaskReturnsCodexFailure(t *testing.T) {
+	t.Parallel()
+
+	cfg := sampleConfig()
+	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
+	guid := "abcdef123456"
+	runDir := testRunDir(guid)
+	agentsPath := filepath.Join(runDir, "AGENTS.md")
+	repoDir := filepath.Join(runDir, "repo")
+	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
+	branch := "moltenhub-build-api"
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "codex", Args: []string{"--help"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"auth", "status"}}},
+		{cmd: cloneCommand(cfg, repoDir)},
+		{cmd: branchCommand(repoDir, branch)},
+		{cmd: pushDryRunCommand(repoDir, branch)},
+		{
+			cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath)),
+			res: execx.Result{Stdout: "AGENTS.md rules active. Caveman full active. Send task."},
+		},
+	}}
+
+	h := New(fake)
+	h.Now = func() time.Time { return now }
+	h.Workspace = testWorkspaceManager(guid)
+	h.TargetDirOK = func(path string) bool { return path == targetDir }
+
+	res := h.Run(context.Background(), cfg)
+	if res.Err == nil {
+		t.Fatal("Run() err = nil, want codex failure")
+	}
+	if res.ExitCode != ExitCodex {
+		t.Fatalf("ExitCode = %d, want %d", res.ExitCode, ExitCodex)
+	}
+	if res.NoChanges {
+		t.Fatal("NoChanges = true, want false")
+	}
+	if !strings.Contains(res.Err.Error(), "agent did not identify an implementation target") {
+		t.Fatalf("Run() err = %v, want missing implementation target detail", res.Err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
 func TestRunNoChangesOnMainReportsExistingPR(t *testing.T) {
 	t.Parallel()
 
@@ -4943,6 +4992,35 @@ func TestCodexReportedFailureDetectsNoImplementationTaskGiven(t *testing.T) {
 	}
 	if !strings.Contains(detail, "Failure: agent did not identify an implementation target") {
 		t.Fatalf("codexReportedFailure(no implementation task) detail = %q", detail)
+	}
+}
+
+func TestCodexReportedFailureDetectsAwaitingTaskResponse(t *testing.T) {
+	t.Parallel()
+
+	res := execx.Result{
+		Stdout: "AGENTS.md rules active. Caveman full active. Send task.",
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(send task) = false, want true")
+	}
+	if !strings.Contains(detail, "Failure: agent did not identify an implementation target") {
+		t.Fatalf("codexReportedFailure(send task) detail = %q", detail)
+	}
+}
+
+func TestCodexReportedFailureIgnoresSendTaskSummary(t *testing.T) {
+	t.Parallel()
+
+	res := execx.Result{
+		Stdout: "Send task button now creates a queued dispatch request.",
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if failed || detail != "" {
+		t.Fatalf("codexReportedFailure(send task summary) = (%v, %q), want (false, \"\")", failed, detail)
 	}
 }
 
