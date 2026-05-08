@@ -5991,6 +5991,16 @@
       return String(message?.statusTitle || "").trim() || `Queued request ${requestID}`;
     }
 
+    function chatPromptMessageTone(message) {
+      const requestID = String(message?.requestID || "").trim();
+      const task = chatTaskByRequestID(requestID);
+      const status = normalizedTaskStatus(task?.status);
+      if (status === "completed" || status === "no_changes") return "success";
+      if (status === "error" || status === "invalid" || status === "stopped") return "failure";
+      if (status === "duplicate") return "warning";
+      return "";
+    }
+
     function renderChatPromptMessageMeta(meta, message) {
       if (!meta) return;
       const requestID = String(message?.requestID || "").trim();
@@ -6036,13 +6046,18 @@
 
     function refreshVisibleChatPromptStatuses() {
       document.querySelectorAll(".chat-repo-message-meta[data-request-id]").forEach((meta) => {
-        renderChatPromptMessageMeta(meta, {
+        const message = {
           requestID: meta.dataset.requestId,
           createdAt: meta.dataset.createdAt,
           imageCount: Number.parseInt(meta.dataset.imageCount || "0", 10) || 0,
           statusText: meta.dataset.statusText,
           statusTitle: meta.dataset.statusTitle,
-        });
+        };
+        renderChatPromptMessageMeta(meta, message);
+        const bubble = meta.closest(".chat-repo-message");
+        if (bubble) {
+          bubble.dataset.tone = chatPromptMessageTone(message);
+        }
       });
     }
 
@@ -6061,6 +6076,7 @@
       for (const message of messages) {
         const bubble = document.createElement("article");
         bubble.className = "chat-repo-message chat-repo-message-user";
+        bubble.dataset.tone = chatPromptMessageTone(message);
 
         const body = document.createElement("p");
         body.className = "chat-repo-message-body";
