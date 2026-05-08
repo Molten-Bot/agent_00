@@ -413,9 +413,14 @@ func TestStaticStyleIncludesSharedDockIconStyles(t *testing.T) {
 	if !strings.Contains(stylesheet, `#moltenbot-hub-link:hover img,`) {
 		t.Fatalf("expected stylesheet to give molten bot hub icon a hover-specific treatment")
 	}
-	if !strings.Contains(stylesheet, `.hub-dock-group[data-configured="true"] #moltenbot-hub-link img {`) ||
+	if !strings.Contains(stylesheet, "#moltenbot-hub-link img {\n  filter: none;") {
+		t.Fatalf("expected molten bot hub dock icon to keep native logo colors in the light theme")
+	}
+	if !strings.Contains(stylesheet, `html.dark .hub-dock-group[data-configured="true"] #moltenbot-hub-link img,`) ||
+		!strings.Contains(stylesheet, `html.night .hub-dock-group[data-configured="true"] #moltenbot-hub-link img,`) ||
+		!strings.Contains(stylesheet, `html.pink .hub-dock-group[data-configured="true"] #moltenbot-hub-link img {`) ||
 		!strings.Contains(stylesheet, `filter: brightness(0) saturate(100%) invert(1);`) {
-		t.Fatalf("expected configured molten bot hub dock icon to render white")
+		t.Fatalf("expected configured molten bot hub dock icon to render white on non-light themes")
 	}
 	if !strings.Contains(stylesheet, `#moltenbot-hub-link:focus-visible img {`) {
 		t.Fatalf("expected stylesheet to give molten bot hub icon a keyboard-focus treatment")

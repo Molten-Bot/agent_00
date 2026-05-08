@@ -1410,10 +1410,13 @@ body .right-col.prompt-collapsed.task-list-hidden {
 }
 
 #moltenbot-hub-link img {
+  filter: none;
   transition: filter 180ms ease, transform 180ms ease;
 }
 
-.hub-dock-group[data-configured="true"] #moltenbot-hub-link img {
+html.dark .hub-dock-group[data-configured="true"] #moltenbot-hub-link img,
+html.night .hub-dock-group[data-configured="true"] #moltenbot-hub-link img,
+html.pink .hub-dock-group[data-configured="true"] #moltenbot-hub-link img {
   filter: brightness(0) saturate(100%) invert(1);
 }
 
@@ -1423,8 +1426,12 @@ body .right-col.prompt-collapsed.task-list-hidden {
   transform: translateY(-1px);
 }
 
-.hub-dock-group[data-configured="true"] #moltenbot-hub-link:hover img,
-.hub-dock-group[data-configured="true"] #moltenbot-hub-link:focus-visible img {
+html.dark .hub-dock-group[data-configured="true"] #moltenbot-hub-link:hover img,
+html.dark .hub-dock-group[data-configured="true"] #moltenbot-hub-link:focus-visible img,
+html.night .hub-dock-group[data-configured="true"] #moltenbot-hub-link:hover img,
+html.night .hub-dock-group[data-configured="true"] #moltenbot-hub-link:focus-visible img,
+html.pink .hub-dock-group[data-configured="true"] #moltenbot-hub-link:hover img,
+html.pink .hub-dock-group[data-configured="true"] #moltenbot-hub-link:focus-visible img {
   filter: brightness(0) saturate(100%) invert(1);
 }
 
