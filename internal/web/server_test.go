@@ -317,6 +317,13 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, "refreshDashboardUpdatedLabel();") {
 		t.Fatalf("expected dashboard updated label to render relative seconds, minutes, and hours")
 	}
+	if !strings.Contains(markup, `const DASHBOARD_RUNTIME_IDLE_PAUSE_MS = 2 * 60 * 1000;`) ||
+		!strings.Contains(markup, `function markDashboardRuntimeInteraction()`) ||
+		!strings.Contains(markup, `function syncDashboardRuntimeTaskActivity(activeTasks, nowMs = Date.now())`) ||
+		!strings.Contains(markup, `state.dashboardRuntimePausedSeconds = dashboardSessionRuntimeSecondsAt(idlePauseAt);`) ||
+		!strings.Contains(markup, `document.addEventListener(eventName, markDashboardRuntimeInteraction, { capture: true, passive: true });`) {
+		t.Fatalf("expected dashboard session runtime to pause after two idle minutes with no active tasks")
+	}
 	if !strings.Contains(markup, `const dashboardDockLink = document.querySelector('[data-app-display="dashboard"]');`) ||
 		!strings.Contains(markup, `function dashboardHasStartedTask(snapshot)`) ||
 		!strings.Contains(markup, `dashboardDockLink.setAttribute("aria-disabled", String(!available));`) ||
