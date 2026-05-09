@@ -2628,8 +2628,11 @@ func TestHandlerGitHubReposUsesOverride(t *testing.T) {
 		!strings.Contains(body, `"full_name":"acme/repo"`) ||
 		!strings.Contains(body, `"html_url":"https://github.com/acme/repo"`) ||
 		!strings.Contains(body, `"owner_type":"Organization"`) ||
+		!strings.Contains(body, `"owner_kind":"organization"`) ||
 		!strings.Contains(body, `"default_branch":"main"`) ||
-		!strings.Contains(body, `"private":true`) {
+		!strings.Contains(body, `"private":true`) ||
+		!strings.Contains(body, `"visibility":"private"`) ||
+		!strings.Contains(body, `"organization":true`) {
 		t.Fatalf("unexpected github repos response %q", body)
 	}
 }
