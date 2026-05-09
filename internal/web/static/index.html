@@ -702,6 +702,7 @@
     const TASK_TIMING_REFRESH_INTERVAL_MS = 30_000;
     const TASK_ICON_IDLE_SPIN_MS = 16_000;
     const TASK_ICON_IDLE_REFRESH_MS = 1_000;
+    const DASHBOARD_RUNTIME_IDLE_PAUSE_MS = 2 * 60 * 1000;
     const DEFERRED_SELECTION_RENDER_FLUSH_DELAY_MS = 32;
     const TASK_SOURCE_HEADER = "X-MoltenHub-Task-Source";
     const BACKGROUND_PARTICLE_ANIMATION_ENABLED = false;
@@ -1726,6 +1727,11 @@
       taskOrderPendingSince: 0,
       taskOrderPendingDesired: [],
       taskOrderLastSyncBucket: Math.floor(Date.now() / TASK_ORDER_SYNC_INTERVAL_MS),
+      dashboardLastInteractionAt: Date.now(),
+      dashboardNoActiveTasksSince: Date.now(),
+      dashboardRuntimeActiveTasks: 0,
+      dashboardRuntimePausedAt: 0,
+      dashboardRuntimePausedSeconds: 0,
       taskHistoryByID: loadTaskHistory(),
       taskHistoryUnseenIDs: loadTaskHistoryUnseenIDs(),
       githubReposLoading: false,
@@ -4560,12 +4566,76 @@
       return `${total}s`;
     }
 
-    function refreshDashboardSessionRuntime() {
-      if (!dashboardSessionRuntime) return;
+    function dashboardActiveTaskCount(snapshot) {
+      const stats = snapshot && typeof snapshot.stats === "object" && snapshot.stats !== null ? snapshot.stats : {};
+      const activeTasks = Number(stats.active_tasks);
+      if (Number.isFinite(activeTasks) && activeTasks > 0) {
+        return activeTasks;
+      }
+      if (!Array.isArray(snapshot?.tasks)) {
+        return 0;
+      }
+      return snapshot.tasks.filter((task) => !COMPLETED_STATUSES.has(normalizedTaskStatus(task?.status))).length;
+    }
+
+    function clearDashboardRuntimePause() {
+      state.dashboardRuntimePausedAt = 0;
+      state.dashboardRuntimePausedSeconds = 0;
+    }
+
+    function markDashboardRuntimeInteraction() {
+      state.dashboardLastInteractionAt = Date.now();
+      clearDashboardRuntimePause();
+      refreshDashboardSessionRuntime();
+    }
+
+    function syncDashboardRuntimeTaskActivity(activeTasks, nowMs = Date.now()) {
+      const normalizedActive = Math.max(0, Number(activeTasks || 0));
+      const hadActiveTasks = state.dashboardRuntimeActiveTasks > 0;
+      state.dashboardRuntimeActiveTasks = normalizedActive;
+      if (normalizedActive > 0) {
+        state.dashboardNoActiveTasksSince = 0;
+        clearDashboardRuntimePause();
+        return;
+      }
+      if (hadActiveTasks || !state.dashboardNoActiveTasksSince) {
+        state.dashboardNoActiveTasksSince = nowMs;
+      }
+    }
+
+    function dashboardSessionRuntimeSecondsAt(atMs) {
+      if (!dashboardSessionRuntime) return 0;
       const baseSeconds = Number(dashboardSessionRuntime.dataset.runtimeSeconds || 0);
       const updatedAt = new Date(String(dashboardSessionRuntime.dataset.updatedAt || "")).getTime();
-      const elapsedSeconds = Number.isNaN(updatedAt) ? 0 : Math.max(0, (Date.now() - updatedAt) / 1000);
-      dashboardSessionRuntime.textContent = dashboardDuration(baseSeconds + elapsedSeconds);
+      if (!Number.isFinite(baseSeconds)) return 0;
+      if (Number.isNaN(updatedAt)) return Math.max(0, baseSeconds);
+      return Math.max(0, baseSeconds + ((atMs - updatedAt) / 1000));
+    }
+
+    function syncDashboardRuntimePause(nowMs = Date.now()) {
+      if (state.dashboardRuntimeActiveTasks > 0 || !state.dashboardNoActiveTasksSince) {
+        clearDashboardRuntimePause();
+        return;
+      }
+      const idlePauseAt = Math.max(state.dashboardLastInteractionAt, state.dashboardNoActiveTasksSince) + DASHBOARD_RUNTIME_IDLE_PAUSE_MS;
+      if (nowMs < idlePauseAt) {
+        clearDashboardRuntimePause();
+        return;
+      }
+      if (!state.dashboardRuntimePausedAt) {
+        state.dashboardRuntimePausedAt = idlePauseAt;
+        state.dashboardRuntimePausedSeconds = dashboardSessionRuntimeSecondsAt(idlePauseAt);
+      }
+    }
+
+    function refreshDashboardSessionRuntime() {
+      if (!dashboardSessionRuntime) return;
+      const nowMs = Date.now();
+      syncDashboardRuntimePause(nowMs);
+      const seconds = state.dashboardRuntimePausedAt
+        ? state.dashboardRuntimePausedSeconds
+        : dashboardSessionRuntimeSecondsAt(nowMs);
+      dashboardSessionRuntime.textContent = dashboardDuration(seconds);
     }
 
     function renderDashboardTimeList(container, rows) {
@@ -4867,6 +4937,7 @@
       const active = Number(stats.active_tasks || 0);
       const completed = Number(stats.completed_tasks || 0);
       const failed = Number(stats.failed_tasks || 0);
+      syncDashboardRuntimeTaskActivity(dashboardActiveTaskCount(snapshot));
       if (dashboardUpdated) {
         const dashboardUpdatedAt = stats.updated_at || snapshot?.generated_at;
         dashboardUpdated.dataset.updatedAt = String(dashboardUpdatedAt || "").trim();
@@ -10942,6 +11013,9 @@
     document.addEventListener("pointerdown", primeTaskAudioContextFromInteraction, true);
     document.addEventListener("keydown", primeTaskAudioContextFromInteraction, true);
     document.addEventListener("click", primeTaskAudioContextFromInteraction, true);
+    for (const eventName of ["pointerdown", "keydown", "wheel", "touchstart"]) {
+      document.addEventListener(eventName, markDashboardRuntimeInteraction, { capture: true, passive: true });
+    }
     taskViewToggle.addEventListener("click", () => {
       const nextView = normalizeTaskPanelView(state.taskPanelView) === "prompt" ? "main" : "prompt";
       setTaskPanelView(nextView);
