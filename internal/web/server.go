@@ -165,8 +165,13 @@ type GitHubRepo struct {
 	Description   string `json:"description,omitempty"`
 	HTMLURL       string `json:"html_url"`
 	OwnerType     string `json:"owner_type,omitempty"`
+	OwnerKind     string `json:"owner_kind,omitempty"`
 	DefaultBranch string `json:"default_branch,omitempty"`
 	Private       bool   `json:"private"`
+	Public        bool   `json:"public"`
+	Personal      bool   `json:"personal,omitempty"`
+	Organization  bool   `json:"organization,omitempty"`
+	Visibility    string `json:"visibility,omitempty"`
 	Language      string `json:"language,omitempty"`
 	UpdatedAt     string `json:"updated_at,omitempty"`
 	PushedAt      string `json:"pushed_at,omitempty"`
@@ -1429,10 +1434,23 @@ func (s Server) resolveGitHubRepos(ctx context.Context) ([]GitHubRepo, error) {
 }
 
 func (s Server) loadGitHubRepos(ctx context.Context) ([]GitHubRepo, error) {
+	var (
+		repos []GitHubRepo
+		err   error
+	)
 	if s.ResolveGitHubRepos != nil {
-		return s.ResolveGitHubRepos(ctx)
+		repos, err = s.ResolveGitHubRepos(ctx)
+	} else {
+		repos, err = resolveAuthenticatedGitHubRepos(ctx, http.DefaultClient)
 	}
-	return resolveAuthenticatedGitHubRepos(ctx, http.DefaultClient)
+	if err != nil {
+		return nil, err
+	}
+	repos = enrichGitHubRepos(repos)
+	if s.Broker != nil {
+		s.Broker.SetGitHubRepositories(repos)
+	}
+	return repos, nil
 }
 
 func (s Server) cachedGitHubRepos() ([]GitHubRepo, bool) {
@@ -1600,14 +1618,20 @@ func resolveAuthenticatedGitHubRepos(ctx context.Context, client *http.Client) (
 			return nil, fmt.Errorf("decode github repositories: %w", decodeErr)
 		}
 		for _, repo := range body {
+			ownerKind := repositoryOwnerKind(repo.Owner.Type)
 			repos = append(repos, GitHubRepo{
 				Name:          strings.TrimSpace(repo.Name),
 				FullName:      strings.TrimSpace(repo.FullName),
 				Description:   strings.TrimSpace(repo.Description),
 				HTMLURL:       strings.TrimSpace(repo.HTMLURL),
 				OwnerType:     strings.TrimSpace(repo.Owner.Type),
+				OwnerKind:     string(ownerKind),
 				DefaultBranch: strings.TrimSpace(repo.DefaultBranch),
 				Private:       repo.Private,
+				Public:        !repo.Private,
+				Personal:      ownerKind == RepositoryOwnerPersonal,
+				Organization:  ownerKind == RepositoryOwnerOrganization,
+				Visibility:    repositoryVisibilityString(repo.Private),
 				Language:      strings.TrimSpace(repo.Language),
 				UpdatedAt:     strings.TrimSpace(repo.UpdatedAt),
 				PushedAt:      strings.TrimSpace(repo.PushedAt),
@@ -1617,6 +1641,32 @@ func resolveAuthenticatedGitHubRepos(ctx context.Context, client *http.Client) (
 	}
 	sortGitHubReposByActivity(repos)
 	return repos, nil
+}
+
+func enrichGitHubRepos(repos []GitHubRepo) []GitHubRepo {
+	out := append([]GitHubRepo(nil), repos...)
+	for i := range out {
+		ownerKind := repositoryOwnerKind(out[i].OwnerType)
+		if out[i].OwnerKind == "" {
+			out[i].OwnerKind = string(ownerKind)
+		}
+		if !out[i].Personal && !out[i].Organization {
+			out[i].Personal = ownerKind == RepositoryOwnerPersonal
+			out[i].Organization = ownerKind == RepositoryOwnerOrganization
+		}
+		out[i].Public = !out[i].Private
+		if out[i].Visibility == "" {
+			out[i].Visibility = repositoryVisibilityString(out[i].Private)
+		}
+	}
+	return out
+}
+
+func repositoryVisibilityString(private bool) string {
+	if private {
+		return string(RepositoryVisibilityPrivate)
+	}
+	return string(RepositoryVisibilityPublic)
 }
 
 func sortGitHubReposByActivity(repos []GitHubRepo) {

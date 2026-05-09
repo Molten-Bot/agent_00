@@ -156,6 +156,53 @@ type DashboardStats struct {
 	SourceMix              []CountStatsGroup `json:"source_mix,omitempty"`
 }
 
+type RepositoryVisibility string
+
+const (
+	RepositoryVisibilityUnknown RepositoryVisibility = "unknown"
+	RepositoryVisibilityPublic  RepositoryVisibility = "public"
+	RepositoryVisibilityPrivate RepositoryVisibility = "private"
+)
+
+type RepositoryOwnerKind string
+
+const (
+	RepositoryOwnerUnknown      RepositoryOwnerKind = "unknown"
+	RepositoryOwnerPersonal     RepositoryOwnerKind = "personal"
+	RepositoryOwnerOrganization RepositoryOwnerKind = "organization"
+)
+
+// Repository is the in-memory view of one repository and the work observed for it.
+type Repository struct {
+	Key           string               `json:"key"`
+	Name          string               `json:"name,omitempty"`
+	FullName      string               `json:"full_name,omitempty"`
+	Description   string               `json:"description,omitempty"`
+	HTMLURL       string               `json:"html_url,omitempty"`
+	DefaultBranch string               `json:"default_branch,omitempty"`
+	Language      string               `json:"language,omitempty"`
+	UpdatedAt     string               `json:"updated_at,omitempty"`
+	PushedAt      string               `json:"pushed_at,omitempty"`
+	Visibility    RepositoryVisibility `json:"visibility"`
+	OwnerKind     RepositoryOwnerKind  `json:"owner_kind"`
+	Private       bool                 `json:"private"`
+	Public        bool                 `json:"public"`
+	Personal      bool                 `json:"personal"`
+	Organization  bool                 `json:"organization"`
+	Stats         RepositoryStats      `json:"stats"`
+	PullRequests  []string             `json:"pull_requests,omitempty"`
+}
+
+type RepositoryStats struct {
+	TotalTasks             int     `json:"total_tasks"`
+	ActiveTasks            int     `json:"active_tasks"`
+	CompletedTasks         int     `json:"completed_tasks"`
+	FailedTasks            int     `json:"failed_tasks"`
+	TotalDurationSeconds   float64 `json:"total_duration_seconds"`
+	TotalSavedSeconds      float64 `json:"total_saved_seconds"`
+	AverageDurationSeconds float64 `json:"average_duration_seconds"`
+}
+
 // TimeStatsGroup captures observed runtime and saved time for one workflow or agent.
 type TimeStatsGroup struct {
 	Name                   string  `json:"name"`
@@ -182,6 +229,7 @@ type Snapshot struct {
 	Connection    Connection      `json:"connection"`
 	Resources     ResourceMetrics `json:"resources"`
 	Stats         DashboardStats  `json:"stats"`
+	Repositories  []Repository    `json:"repositories,omitempty"`
 	Releases      []Release       `json:"releases"`
 	Events        []Event         `json:"events"`
 	Tasks         []Task          `json:"tasks"`
@@ -203,6 +251,8 @@ type Broker struct {
 	closedTasks   map[string]time.Time
 	runConfigs    map[string][]byte
 	promptedRepos []string
+	repositories  []Repository
+	repoIndex     map[string]int
 	attempts      map[string][]taskAttemptState
 	attemptRoots  map[string]string
 	rejectedSeq   uint64
@@ -267,6 +317,8 @@ type taskAttemptState struct {
 	Workflow  string
 	Agent     string
 	Source    string
+	Repos     []string
+	PRURL     string
 	Status    string
 	Error     string
 	StartedAt time.Time
@@ -283,6 +335,7 @@ func NewBroker() *Broker {
 		tasks:            map[string]*taskState{},
 		closedTasks:      map[string]time.Time{},
 		runConfigs:       map[string][]byte{},
+		repoIndex:        map[string]int{},
 		attempts:         map[string][]taskAttemptState{},
 		attemptRoots:     map[string]string{},
 		subs:             map[chan struct{}]struct{}{},
@@ -403,6 +456,7 @@ func (b *Broker) Snapshot() Snapshot {
 	}
 	snapshot.Releases = b.releasesSnapshotLocked()
 	snapshot.Stats = b.dashboardStatsLocked(now, tasks)
+	snapshot.Repositories = b.repositoriesSnapshotLocked()
 
 	return snapshot
 }
@@ -500,6 +554,9 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 		b.promptedRepos = next
 		changed = true
 	}
+	if b.registerRepositoriesLocked(repos, nil) {
+		changed = true
+	}
 	t, taskExists := b.tasks[requestID]
 	if !taskExists && !b.isClosedTaskLocked(requestID, now) {
 		t = &taskState{
@@ -520,12 +577,12 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 			UpdatedAt:         now,
 		}
 		b.tasks[requestID] = t
-		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, now)
+		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, t.Repos, t.PRURL, now)
 		changed = true
 	}
 	if source != "" && t != nil && t.Source != source {
 		t.Source = source
-		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, now)
+		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, t.Repos, t.PRURL, now)
 		changed = true
 	}
 	if prompt != "" {
@@ -601,7 +658,7 @@ func (b *Broker) RecordTaskSource(requestID string, source string) {
 	}
 	t.Source = source
 	t.UpdatedAt = now
-	b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, now)
+	b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, t.Repos, t.PRURL, now)
 	b.notifySubscribersLocked()
 }
 
@@ -665,7 +722,8 @@ func (b *Broker) RecordRejectedPromptSubmissionWithSource(runConfigJSON []byte, 
 		},
 	}
 	b.tasks[requestID] = t
-	b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, now)
+	b.registerRepositoriesLocked(t.Repos, nil)
+	b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, t.Repos, t.PRURL, now)
 	b.notifySubscribersLocked()
 	return requestID
 }
@@ -688,6 +746,8 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 			Workflow:  taskWorkflow(t),
 			Agent:     taskAgentHarness(t),
 			Source:    normalizeTaskSource(t.Source),
+			Repos:     append([]string(nil), t.Repos...),
+			PRURL:     strings.TrimSpace(t.PRURL),
 			Status:    normalizeTaskTerminalStatus(t.Status),
 			Error:     strings.TrimSpace(t.Error),
 			StartedAt: t.StartedAt,
@@ -721,7 +781,16 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 	workflowGroups := map[string]*TimeStatsGroup{}
 	agentGroups := map[string]*TimeStatsGroup{}
 	sourceGroups := map[string]*CountStatsGroup{}
-	for _, attempt := range seen {
+	repoAttempts := b.updateRepositoryStatsLocked(now, seen)
+	counted := map[string]struct{}{}
+	recordAttempt := func(attempt taskAttemptState) {
+		requestID := strings.TrimSpace(attempt.RequestID)
+		if requestID != "" {
+			if _, ok := counted[requestID]; ok {
+				return
+			}
+			counted[requestID] = struct{}{}
+		}
 		startedAt := attempt.StartedAt
 		updatedAt := attempt.UpdatedAt
 		if startedAt.IsZero() {
@@ -752,6 +821,14 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 		addTimeStatsGroup(workflowGroups, normalizedGroupName(attempt.Workflow, "Ad Hoc Prompt"), status, duration)
 		addTimeStatsGroup(agentGroups, normalizedGroupName(attempt.Agent, "Unknown Agent"), status, duration)
 		addCountStatsGroup(sourceGroups, sourceGroupName(attempt.Source), status)
+	}
+	for _, repo := range b.repositories {
+		for _, attempt := range repoAttempts[repo.Key] {
+			recordAttempt(attempt)
+		}
+	}
+	for _, attempt := range seen {
+		recordAttempt(attempt)
 	}
 	terminalTasks := stats.CompletedTasks + stats.FailedTasks
 	if terminalTasks > 0 {
@@ -867,6 +944,127 @@ func (b *Broker) releasesSnapshotLocked() []Release {
 		})
 	}
 	return out
+}
+
+func (b *Broker) repositoriesSnapshotLocked() []Repository {
+	if len(b.repositories) == 0 {
+		return nil
+	}
+	repos := append([]Repository(nil), b.repositories...)
+	sort.SliceStable(repos, func(i, j int) bool {
+		left := strings.ToLower(firstNonEmpty(repos[i].FullName, repos[i].HTMLURL, repos[i].Key))
+		right := strings.ToLower(firstNonEmpty(repos[j].FullName, repos[j].HTMLURL, repos[j].Key))
+		return left < right
+	})
+	for i := range repos {
+		repos[i].PullRequests = append([]string(nil), repos[i].PullRequests...)
+	}
+	return repos
+}
+
+func (b *Broker) SetGitHubRepositories(repos []GitHubRepo) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.registerRepositoriesLocked(nil, repos) {
+		b.notifySubscribersLocked()
+	}
+}
+
+func (b *Broker) registerRepositoriesLocked(values []string, githubRepos []GitHubRepo) bool {
+	if b.repoIndex == nil {
+		b.repoIndex = map[string]int{}
+	}
+	changed := false
+	for _, value := range values {
+		key := repositoryKey(value)
+		if key == "" {
+			continue
+		}
+		if _, ok := b.repoIndex[key]; ok {
+			continue
+		}
+		b.repoIndex[key] = len(b.repositories)
+		b.repositories = append(b.repositories, Repository{
+			Key:        key,
+			Name:       repositoryNameFromValue(value),
+			FullName:   repositoryFullNameFromValue(value),
+			HTMLURL:    repositoryHTMLURLFromKey(key),
+			Visibility: RepositoryVisibilityUnknown,
+			OwnerKind:  RepositoryOwnerUnknown,
+		})
+		changed = true
+	}
+	for _, repo := range githubRepos {
+		key := repositoryKey(firstNonEmpty(repo.FullName, repo.HTMLURL, repo.Name))
+		if key == "" {
+			continue
+		}
+		next := repositoryFromGitHubRepo(key, repo)
+		if idx, ok := b.repoIndex[key]; ok {
+			current := b.repositories[idx]
+			next.Stats = current.Stats
+			next.PullRequests = current.PullRequests
+			b.repositories[idx] = mergeRepository(current, next)
+			changed = true
+			continue
+		}
+		b.repoIndex[key] = len(b.repositories)
+		b.repositories = append(b.repositories, next)
+		changed = true
+	}
+	return changed
+}
+
+func (b *Broker) updateRepositoryStatsLocked(now time.Time, attempts map[string]taskAttemptState) map[string][]taskAttemptState {
+	for i := range b.repositories {
+		b.repositories[i].Stats = RepositoryStats{}
+		b.repositories[i].PullRequests = nil
+	}
+	repoAttempts := map[string][]taskAttemptState{}
+	for _, attempt := range attempts {
+		repos := appendNonEmptyUnique(nil, attempt.Repos...)
+		b.registerRepositoriesLocked(repos, nil)
+		for _, repoValue := range repos {
+			key := repositoryKey(repoValue)
+			idx, ok := b.repoIndex[key]
+			if !ok {
+				continue
+			}
+			repoAttempts[key] = append(repoAttempts[key], attempt)
+			addRepositoryAttemptStats(&b.repositories[idx].Stats, attempt, now)
+			if prURL := strings.TrimSpace(attempt.PRURL); prURL != "" {
+				b.repositories[idx].PullRequests = appendNonEmptyUnique(b.repositories[idx].PullRequests, prURL)
+			}
+		}
+	}
+	return repoAttempts
+}
+
+func addRepositoryAttemptStats(stats *RepositoryStats, attempt taskAttemptState, now time.Time) {
+	if stats == nil {
+		return
+	}
+	status := normalizeTaskTerminalStatus(attempt.Status)
+	duration := taskDuration(attempt.StartedAt, attempt.UpdatedAt, now, status)
+	stats.TotalTasks++
+	if isActiveTaskStatus(status) {
+		stats.ActiveTasks++
+	}
+	if isSuccessfulTaskStatus(status) {
+		stats.CompletedTasks++
+		stats.TotalSavedSeconds += duration.Seconds()
+	}
+	if isFailedTaskStatus(status) {
+		stats.FailedTasks++
+	}
+	stats.TotalDurationSeconds += duration.Seconds()
+	completed := stats.TotalTasks - stats.ActiveTasks
+	if completed > 0 {
+		stats.AverageDurationSeconds = stats.TotalDurationSeconds / float64(stats.TotalTasks)
+	}
 }
 
 func taskWorkflow(t *taskState) string {
@@ -1167,10 +1365,14 @@ func (b *Broker) RecordTaskRerunAttempt(rerunOf, requestID string) {
 		root = rerunOf
 	}
 	source := ""
+	var repos []string
+	prURL := ""
 	if t, ok := b.tasks[rerunOf]; ok && t != nil {
 		source = t.Source
+		repos = append([]string(nil), t.Repos...)
+		prURL = t.PRURL
 	}
-	b.recordTaskAttemptLocked(root, requestID, rerunOf, "queued", "", "", "", source, now)
+	b.recordTaskAttemptLocked(root, requestID, rerunOf, "queued", "", "", "", source, repos, prURL, now)
 	b.notifySubscribersLocked()
 }
 
@@ -1271,7 +1473,7 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 			existing.Branch = b.taskInitialBranchLocked(requestID)
 		}
 		existing.UpdatedAt = now
-		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", existing.Status, existing.Error, existing.Workflow, existing.AgentHarness, existing.Source, now)
+		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", existing.Status, existing.Error, existing.Workflow, existing.AgentHarness, existing.Source, existing.Repos, existing.PRURL, now)
 		return existing
 	}
 
@@ -1290,14 +1492,15 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 		UpdatedAt:         now,
 	}
 	b.tasks[requestID] = t
-	b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, now)
+	b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, t.Repos, t.PRURL, now)
 	return t
 }
 
 func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[string]string, now time.Time) {
 	defer func() {
 		if t != nil {
-			b.recordTaskAttemptLocked(b.taskAttemptRootLocked(t.RequestID), t.RequestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, now)
+			b.registerRepositoriesLocked(t.Repos, nil)
+			b.recordTaskAttemptLocked(b.taskAttemptRootLocked(t.RequestID), t.RequestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, t.Repos, t.PRURL, now)
 		}
 	}()
 
@@ -1482,7 +1685,7 @@ func (b *Broker) taskAttemptRootLocked(requestID string) string {
 	return requestID
 }
 
-func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errText, workflow, agent, source string, now time.Time) {
+func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errText, workflow, agent, source string, repos []string, prURL string, now time.Time) {
 	root = strings.TrimSpace(root)
 	requestID = strings.TrimSpace(requestID)
 	if root == "" {
@@ -1507,6 +1710,8 @@ func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errTe
 	workflow = strings.TrimSpace(workflow)
 	agent = strings.TrimSpace(agent)
 	source = normalizeTaskSource(source)
+	repos = appendNonEmptyUnique(nil, repos...)
+	prURL = strings.TrimSpace(prURL)
 
 	attempts := b.attempts[root]
 	for i := range attempts {
@@ -1525,6 +1730,12 @@ func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errTe
 		if source != "" {
 			attempts[i].Source = source
 		}
+		if len(repos) > 0 {
+			attempts[i].Repos = append([]string(nil), repos...)
+		}
+		if prURL != "" {
+			attempts[i].PRURL = prURL
+		}
 		attempts[i].Status = status
 		attempts[i].Error = errText
 		attempts[i].UpdatedAt = now
@@ -1537,6 +1748,8 @@ func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errTe
 		Workflow:  workflow,
 		Agent:     agent,
 		Source:    source,
+		Repos:     append([]string(nil), repos...),
+		PRURL:     prURL,
 		Status:    status,
 		Error:     errText,
 		StartedAt: now,
@@ -1848,6 +2061,112 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func repositoryFromGitHubRepo(key string, repo GitHubRepo) Repository {
+	ownerKind := repositoryOwnerKind(repo.OwnerType)
+	visibility := RepositoryVisibilityPublic
+	if repo.Private {
+		visibility = RepositoryVisibilityPrivate
+	}
+	fullName := strings.TrimSpace(repo.FullName)
+	return Repository{
+		Key:           key,
+		Name:          strings.TrimSpace(repo.Name),
+		FullName:      fullName,
+		Description:   strings.TrimSpace(repo.Description),
+		HTMLURL:       strings.TrimSpace(repo.HTMLURL),
+		DefaultBranch: strings.TrimSpace(repo.DefaultBranch),
+		Language:      strings.TrimSpace(repo.Language),
+		UpdatedAt:     strings.TrimSpace(repo.UpdatedAt),
+		PushedAt:      strings.TrimSpace(repo.PushedAt),
+		Visibility:    visibility,
+		OwnerKind:     ownerKind,
+		Private:       repo.Private,
+		Public:        !repo.Private,
+		Personal:      ownerKind == RepositoryOwnerPersonal,
+		Organization:  ownerKind == RepositoryOwnerOrganization,
+	}
+}
+
+func mergeRepository(current, next Repository) Repository {
+	next.Key = firstNonEmpty(next.Key, current.Key)
+	next.Name = firstNonEmpty(next.Name, current.Name)
+	next.FullName = firstNonEmpty(next.FullName, current.FullName)
+	next.Description = firstNonEmpty(next.Description, current.Description)
+	next.HTMLURL = firstNonEmpty(next.HTMLURL, current.HTMLURL)
+	next.DefaultBranch = firstNonEmpty(next.DefaultBranch, current.DefaultBranch)
+	next.Language = firstNonEmpty(next.Language, current.Language)
+	next.UpdatedAt = firstNonEmpty(next.UpdatedAt, current.UpdatedAt)
+	next.PushedAt = firstNonEmpty(next.PushedAt, current.PushedAt)
+	if next.Visibility == "" || next.Visibility == RepositoryVisibilityUnknown {
+		next.Visibility = current.Visibility
+	}
+	if next.OwnerKind == "" || next.OwnerKind == RepositoryOwnerUnknown {
+		next.OwnerKind = current.OwnerKind
+	}
+	next.Private = next.Visibility == RepositoryVisibilityPrivate
+	next.Public = next.Visibility == RepositoryVisibilityPublic
+	next.Personal = next.OwnerKind == RepositoryOwnerPersonal
+	next.Organization = next.OwnerKind == RepositoryOwnerOrganization
+	return next
+}
+
+func repositoryOwnerKind(ownerType string) RepositoryOwnerKind {
+	switch strings.ToLower(strings.TrimSpace(ownerType)) {
+	case "organization", "org":
+		return RepositoryOwnerOrganization
+	case "user", "personal":
+		return RepositoryOwnerPersonal
+	default:
+		return RepositoryOwnerUnknown
+	}
+}
+
+func repositoryKey(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	normalized := strings.TrimSuffix(value, ".git")
+	if strings.HasPrefix(normalized, "git@github.com:") {
+		normalized = strings.TrimPrefix(normalized, "git@github.com:")
+		return strings.ToLower(strings.Trim(normalized, "/"))
+	}
+	if strings.HasPrefix(normalized, "https://github.com/") || strings.HasPrefix(normalized, "http://github.com/") {
+		if u, err := url.Parse(normalized); err == nil {
+			return strings.ToLower(strings.Trim(u.Path, "/"))
+		}
+	}
+	if strings.Count(normalized, "/") == 1 && !strings.Contains(normalized, "://") {
+		return strings.ToLower(strings.Trim(normalized, "/"))
+	}
+	return strings.ToLower(normalized)
+}
+
+func repositoryFullNameFromValue(value string) string {
+	key := repositoryKey(value)
+	if strings.Count(key, "/") == 1 {
+		return key
+	}
+	return ""
+}
+
+func repositoryNameFromValue(value string) string {
+	fullName := repositoryFullNameFromValue(value)
+	if fullName == "" {
+		return strings.TrimSpace(value)
+	}
+	parts := strings.Split(fullName, "/")
+	return parts[len(parts)-1]
+}
+
+func repositoryHTMLURLFromKey(key string) string {
+	key = strings.Trim(strings.TrimSpace(key), "/")
+	if key == "" || strings.Count(key, "/") != 1 {
+		return ""
+	}
+	return "https://github.com/" + key
 }
 
 func reposFromFields(fields map[string]string) []string {

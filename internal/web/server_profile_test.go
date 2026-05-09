@@ -176,7 +176,7 @@ func TestResolveAuthenticatedGitHubRepos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveAuthenticatedGitHubRepos() error = %v", err)
 	}
-	if len(repos) != 2 || repos[0].FullName != "acme/web" || repos[0].OwnerType != "User" || repos[0].PushedAt != "2026-05-03T00:00:00Z" || repos[1].FullName != "acme/repo" || repos[1].OwnerType != "Organization" || repos[1].DefaultBranch != "trunk" || !repos[1].Private || repos[1].Language != "Go" {
+	if len(repos) != 2 || repos[0].FullName != "acme/web" || repos[0].OwnerType != "User" || repos[0].OwnerKind != "personal" || !repos[0].Public || !repos[0].Personal || repos[0].Visibility != "public" || repos[0].PushedAt != "2026-05-03T00:00:00Z" || repos[1].FullName != "acme/repo" || repos[1].OwnerType != "Organization" || repos[1].OwnerKind != "organization" || repos[1].DefaultBranch != "trunk" || !repos[1].Private || repos[1].Public || !repos[1].Organization || repos[1].Visibility != "private" || repos[1].Language != "Go" {
 		t.Fatalf("repos = %#v, want paged repository summaries", repos)
 	}
 

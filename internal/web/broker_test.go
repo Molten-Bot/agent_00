@@ -134,6 +134,149 @@ func TestBrokerTracksDashboardSourceMix(t *testing.T) {
 	}
 }
 
+func TestBrokerTracksRepositoryStatsAndPullRequests(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	b := NewBroker()
+	b.now = func() time.Time { return now }
+	b.SetGitHubRepositories([]GitHubRepo{{
+		Name:          "repo",
+		FullName:      "acme/repo",
+		HTMLURL:       "https://github.com/acme/repo",
+		OwnerType:     "Organization",
+		DefaultBranch: "main",
+		Private:       true,
+	}})
+
+	b.RecordTaskRunConfig("req-1", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"ship it"}`))
+	b.IngestLog("dispatch status=start request_id=req-1 repo=git@github.com:acme/repo.git")
+	now = now.Add(2 * time.Minute)
+	b.IngestLog("dispatch status=completed request_id=req-1 pr_url=https://github.com/acme/repo/pull/1")
+	b.RecordTaskRunConfig("req-2", []byte(`{"repo":"https://github.com/acme/new-repo","prompt":"keep going"}`))
+
+	snap := b.Snapshot()
+	if len(snap.Repositories) != 2 {
+		t.Fatalf("repositories = %#v, want loaded repo plus runtime repo", snap.Repositories)
+	}
+	var loaded Repository
+	for _, repo := range snap.Repositories {
+		if repo.Key == "acme/repo" {
+			loaded = repo
+			break
+		}
+	}
+	if loaded.Key == "" {
+		t.Fatalf("repositories = %#v, want acme/repo", snap.Repositories)
+	}
+	if !loaded.Private || loaded.Public || !loaded.Organization || loaded.Personal || loaded.Visibility != RepositoryVisibilityPrivate || loaded.OwnerKind != RepositoryOwnerOrganization {
+		t.Fatalf("loaded repository flags = %#v", loaded)
+	}
+	if got, want := loaded.Stats.CompletedTasks, 1; got != want {
+		t.Fatalf("loaded.Stats.CompletedTasks = %d, want %d", got, want)
+	}
+	if got, want := loaded.Stats.TotalSavedSeconds, 120.0; got != want {
+		t.Fatalf("loaded.Stats.TotalSavedSeconds = %v, want %v", got, want)
+	}
+	if got, want := strings.Join(loaded.PullRequests, ","), "https://github.com/acme/repo/pull/1"; got != want {
+		t.Fatalf("loaded.PullRequests = %q, want %q", got, want)
+	}
+	if snap.Stats.TotalTasks != 2 || snap.Stats.CompletedTasks != 1 || snap.Stats.ActiveTasks != 1 {
+		t.Fatalf("dashboard stats = %#v, want deduped repository task totals", snap.Stats)
+	}
+}
+
+func TestBrokerDedupesDashboardStatsAcrossMultiRepoTasks(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	b.RecordTaskRunConfig("req-multi", []byte(`{"repos":["git@github.com:acme/repo.git","git@github.com:acme/repo-two.git"],"prompt":"run everywhere"}`))
+
+	snap := b.Snapshot()
+	if got, want := snap.Stats.TotalTasks, 1; got != want {
+		t.Fatalf("stats.total_tasks = %d, want %d", got, want)
+	}
+	if len(snap.Repositories) != 2 {
+		t.Fatalf("repositories = %#v, want both repos tracked", snap.Repositories)
+	}
+	for _, repo := range snap.Repositories {
+		if repo.Stats.TotalTasks != 1 {
+			t.Fatalf("repo %s stats = %#v, want task counted for each repo", repo.Key, repo.Stats)
+		}
+	}
+}
+
+func TestBrokerMergesRuntimeAndLoadedRepositoryMetadata(t *testing.T) {
+	t.Parallel()
+
+	var nilBroker *Broker
+	nilBroker.SetGitHubRepositories([]GitHubRepo{{Name: "ignored"}})
+
+	b := NewBroker()
+	b.RecordTaskRunConfig("req-runtime", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"before preload"}`))
+	b.SetGitHubRepositories([]GitHubRepo{{
+		Name:          "repo",
+		FullName:      "acme/repo",
+		Description:   "Docs",
+		HTMLURL:       "https://github.com/acme/repo",
+		OwnerType:     "User",
+		DefaultBranch: "trunk",
+		Private:       false,
+		Language:      "Go",
+	}})
+
+	snap := b.Snapshot()
+	if len(snap.Repositories) != 1 {
+		t.Fatalf("repositories = %#v, want merged single repo", snap.Repositories)
+	}
+	repo := snap.Repositories[0]
+	if repo.FullName != "acme/repo" || repo.Description != "Docs" || repo.DefaultBranch != "trunk" || repo.Language != "Go" {
+		t.Fatalf("repository metadata = %#v, want loaded metadata merged onto runtime repo", repo)
+	}
+	if !repo.Public || repo.Private || !repo.Personal || repo.Organization || repo.Visibility != RepositoryVisibilityPublic || repo.OwnerKind != RepositoryOwnerPersonal {
+		t.Fatalf("repository flags = %#v, want public personal repository", repo)
+	}
+	if repo.Stats.TotalTasks != 1 {
+		t.Fatalf("repository stats = %#v, want existing runtime task preserved", repo.Stats)
+	}
+}
+
+func TestRepositoryKeyNormalizesGitHubReferences(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"git@github.com:Acme/Repo.git":      "acme/repo",
+		"https://github.com/Acme/Repo.git":  "acme/repo",
+		"http://github.com/Acme/Repo":       "acme/repo",
+		"Acme/Repo":                         "acme/repo",
+		"https://example.com/Acme/Repo.git": "https://example.com/acme/repo",
+		"":                                  "",
+	}
+	for input, want := range cases {
+		if got := repositoryKey(input); got != want {
+			t.Fatalf("repositoryKey(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestMergeRepositoryKeepsExistingClassificationFallbacks(t *testing.T) {
+	t.Parallel()
+
+	merged := mergeRepository(Repository{
+		Key:          "acme/repo",
+		Visibility:   RepositoryVisibilityPrivate,
+		OwnerKind:    RepositoryOwnerOrganization,
+		PullRequests: []string{"https://github.com/acme/repo/pull/1"},
+		Stats:        RepositoryStats{TotalTasks: 1},
+	}, Repository{Key: "acme/repo"})
+	if !merged.Private || merged.Public || !merged.Organization || merged.Personal {
+		t.Fatalf("merged flags = %#v, want existing private organization fallback", merged)
+	}
+	if merged.Visibility != RepositoryVisibilityPrivate || merged.OwnerKind != RepositoryOwnerOrganization {
+		t.Fatalf("merged classification = %#v", merged)
+	}
+}
+
 func TestBrokerRecordsMergedPRReleaseFromTask(t *testing.T) {
 	t.Parallel()
 
