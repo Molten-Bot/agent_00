@@ -3268,6 +3268,8 @@ func TestCommandBuilders(t *testing.T) {
 		"--allow-empty",
 		"-m",
 		"chore: initialize main branch",
+		"-m",
+		moltenbotCoAuthorTrailer,
 	}
 	if initMain.Name != "git" || initMain.Dir != repoDir || !reflect.DeepEqual(initMain.Args, wantInitMain) {
 		t.Fatalf("initialize main branch command unexpected: %+v", initMain)
@@ -3522,6 +3524,36 @@ func TestCommandBuilders(t *testing.T) {
 	remoteSetURL := gitRemoteSetURLCommand(repoDir, "fork", "git@github.com:octocat/repo.git")
 	if remoteSetURL.Name != "git" || remoteSetURL.Dir != repoDir || !reflect.DeepEqual(remoteSetURL.Args, []string{"remote", "set-url", "fork", "git@github.com:octocat/repo.git"}) {
 		t.Fatalf("git remote set-url command unexpected: %+v", remoteSetURL)
+	}
+}
+
+func TestCommitCommandAddsMoltenbotCoAuthorTrailer(t *testing.T) {
+	t.Parallel()
+
+	const wantTrailer = "Co-authored-by: Molten Bot 000 <260473928+moltenbot000@users.noreply.github.com>"
+	if moltenbotCoAuthorTrailer != wantTrailer {
+		t.Fatalf("moltenbotCoAuthorTrailer = %q, want %q", moltenbotCoAuthorTrailer, wantTrailer)
+	}
+
+	repoDir := "/tmp/run/repo"
+	commit := commitCommand(repoDir, "feat: automate api")
+	want := []string{"commit", "-m", "feat: automate api", "-m", wantTrailer}
+	if commit.Name != "git" || commit.Dir != repoDir || !reflect.DeepEqual(commit.Args, want) {
+		t.Fatalf("commit command unexpected: %+v", commit)
+	}
+
+	remediationMessage := remediationCommitMessage("fix: tests", 2)
+	remediation := commitCommand(repoDir, remediationMessage)
+	wantRemediation := []string{"commit", "-m", "fix: tests (ci remediation 2)", "-m", wantTrailer}
+	if remediation.Name != "git" || remediation.Dir != repoDir || !reflect.DeepEqual(remediation.Args, wantRemediation) {
+		t.Fatalf("remediation commit command unexpected: %+v", remediation)
+	}
+
+	messageWithTrailer := "feat: automate api\n\n" + wantTrailer
+	deduped := commitCommand(repoDir, messageWithTrailer)
+	wantDeduped := []string{"commit", "-m", messageWithTrailer}
+	if deduped.Name != "git" || deduped.Dir != repoDir || !reflect.DeepEqual(deduped.Args, wantDeduped) {
+		t.Fatalf("deduped commit command unexpected: %+v", deduped)
 	}
 }
 

@@ -62,6 +62,7 @@ const (
 	bootstrapGitUserName             = "MoltenHub Code"
 	bootstrapGitUserEmail            = "bot@molten.bot"
 	bootstrapMainCommitMessage       = "chore: initialize main branch"
+	moltenbotCoAuthorTrailer         = "Co-authored-by: Molten Bot 000 <260473928+moltenbot000@users.noreply.github.com>"
 	agentsCredentialGuardInstruction = "YOU ARE NOT ALLOWED TO SHARE: GITHUB PAT and YOUR (AGENTS) AUTH CREDENTIALS"
 	prCommentScreenshotsRelDir       = ".moltenhub/pr-comment-screenshots"
 	publishRemoteOrigin              = "origin"
@@ -3604,19 +3605,19 @@ func switchMainBranchCommand(repoDir string) execx.Command {
 }
 
 func initializeMainBranchCommitCommand(repoDir string) execx.Command {
+	args := []string{
+		"-c",
+		"user.name=" + bootstrapGitUserName,
+		"-c",
+		"user.email=" + bootstrapGitUserEmail,
+		"commit",
+		"--allow-empty",
+	}
+	args = append(args, commitMessageArgs(bootstrapMainCommitMessage)...)
 	return execx.Command{
 		Dir:  repoDir,
 		Name: "git",
-		Args: []string{
-			"-c",
-			"user.name=" + bootstrapGitUserName,
-			"-c",
-			"user.email=" + bootstrapGitUserEmail,
-			"commit",
-			"--allow-empty",
-			"-m",
-			bootstrapMainCommitMessage,
-		},
+		Args: args,
 	}
 }
 
@@ -3903,7 +3904,16 @@ func addPRCommentScreenshotsCommand(repoDir string, files []string) execx.Comman
 }
 
 func commitCommand(repoDir, msg string) execx.Command {
-	return execx.Command{Dir: repoDir, Name: "git", Args: []string{"commit", "-m", msg}}
+	args := append([]string{"commit"}, commitMessageArgs(msg)...)
+	return execx.Command{Dir: repoDir, Name: "git", Args: args}
+}
+
+func commitMessageArgs(msg string) []string {
+	args := []string{"-m", msg}
+	if !strings.Contains(msg, moltenbotCoAuthorTrailer) {
+		args = append(args, "-m", moltenbotCoAuthorTrailer)
+	}
+	return args
 }
 
 func pushCommand(repoDir, branch string) execx.Command {
