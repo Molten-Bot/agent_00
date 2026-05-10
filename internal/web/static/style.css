@@ -531,58 +531,6 @@ moltenhub-code-nav {
   outline-offset: 2px;
 }
 
-.hub-logo-link {
-  color: var(--muted);
-  text-decoration: none;
-}
-
-.hub-logo-link-mark {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-}
-
-.hub-logo-link-image {
-  display: block;
-  width: 22px;
-  height: 22px;
-  object-fit: contain;
-  filter: grayscale(1) brightness(0) saturate(100%) opacity(0.72);
-  transition: filter 0.18s ease, transform 0.18s ease;
-}
-
-.hub-logo-link:hover .hub-logo-link-image,
-.hub-logo-link:focus-visible .hub-logo-link-image,
-.hub-logo-link-online .hub-logo-link-image {
-  filter: none;
-}
-
-.hub-logo-link:hover .hub-logo-link-image,
-.hub-logo-link:focus-visible .hub-logo-link-image {
-  transform: translateY(-1px);
-}
-
-.hub-logo-link-plus {
-  position: absolute;
-  right: -7px;
-  bottom: -7px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 15px;
-  height: 15px;
-  border: 2px solid var(--bg-elevated);
-  border-radius: 50%;
-  background: var(--running);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 800;
-  line-height: 1;
-}
-
 .status-tooltip {
   position: static;
   max-width: 0;
