@@ -2814,6 +2814,10 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		strings.Contains(css, ".release-empty {") {
 		t.Fatalf("expected stylesheet to omit release display styles")
 	}
+	if strings.Contains(css, ".hub-logo-link") ||
+		strings.Contains(css, ".hub-logo-link-plus") {
+		t.Fatalf("expected stylesheet to omit top Hub logo styles")
+	}
 	if !strings.Contains(css, "--hub-page-width: 1500px;") ||
 		!strings.Contains(css, "width: min(var(--hub-page-width), 100%);") ||
 		!strings.Contains(css, "width: min(var(--hub-page-width), calc(100vw - 32px));") {
@@ -3266,11 +3270,6 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 		`<a class="brand-lockup site-header-home" href="/" aria-label="Molten Hub Code home" data-site-header-home>`,
 		`id="moltenhub-logo"`,
 		`id="configured-agent-logo"`,
-		`id="hub-logo-link"`,
-		`class="status-item status-item-compact hub-logo-link hub-logo-link-offline"`,
-		`href="${HUB_LOGIN_URL}"`,
-		`src="https://app.molten.bot/logo.svg"`,
-		`id="hub-logo-plus" class="hub-logo-link-plus">+</span>`,
 		`opencode: "/static/logos/opencode.svg"`,
 		`id="configured-agent-gorilla-subtitle" class="site-header-subtitle">Codex is now a 600LB Gorilla!</span>`,
 		`id="local-conn-item" class="status-item status-item-compact status-item-compact-expandable"`,
@@ -3283,13 +3282,25 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 		`startConnectionStatus`,
 		`const response = await fetch("/api/status", { cache: "no-store" });`,
 		`connectionStatusStream = new EventSource("/api/stream");`,
-		`hubLogoLink.classList.toggle("hidden", connected);`,
-		`setHubLogoLink(connected, logoTargetURL);`,
 		`${headerState.label} is now a 600LB Gorilla!`,
 	}
 	for _, needle := range required {
 		if !strings.Contains(script, needle) {
 			t.Fatalf("expected shared site header component to include %q", needle)
+		}
+	}
+	forbidden := []string{
+		`id="hub-logo-link"`,
+		`hub-logo-link`,
+		`hubLogoLink`,
+		`id="hub-logo-plus"`,
+		`hub-logo-plus`,
+		`hubLogoPlus`,
+		`setHubLogoLink`,
+	}
+	for _, needle := range forbidden {
+		if strings.Contains(script, needle) {
+			t.Fatalf("expected shared site header component to omit top Hub logo %q", needle)
 		}
 	}
 }
