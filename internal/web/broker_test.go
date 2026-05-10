@@ -88,8 +88,8 @@ func TestBrokerTracksTaskRuntimeAndSavedTimeStats(t *testing.T) {
 	if got, want := snap.Stats.AverageDurationSeconds, 120.0; got != want {
 		t.Fatalf("stats.average_duration_seconds = %v, want %v", got, want)
 	}
-	if len(snap.Stats.WorkflowTimes) == 0 || snap.Stats.WorkflowTimes[0].Name != "unit-test-coverage" {
-		t.Fatalf("stats.workflow_times = %#v, want unit-test-coverage first", snap.Stats.WorkflowTimes)
+	if len(snap.Stats.WorkflowTimes) == 0 || snap.Stats.WorkflowTimes[0].Name != "100% Unit Test Coverage" {
+		t.Fatalf("stats.workflow_times = %#v, want 100%% Unit Test Coverage first", snap.Stats.WorkflowTimes)
 	}
 	if got, want := snap.Stats.WorkflowTimes[0].TotalSavedSeconds, 120.0; got != want {
 		t.Fatalf("workflow total_saved_seconds = %v, want %v", got, want)
