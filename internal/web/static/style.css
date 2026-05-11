@@ -1117,6 +1117,29 @@ body .right-col.prompt-collapsed.task-list-hidden {
   gap: 10px;
 }
 
+body[data-app-display="studio"][data-prompt-mode="library"] .prompt-wrap:not(.prompt-collapsed) {
+  min-height: min(760px, calc(100dvh - var(--hub-content-bottom-padding) - 8px));
+}
+
+body[data-app-display="studio"][data-prompt-mode="library"] .prompt-wrap:not(.prompt-collapsed) .prompt-form {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+body[data-app-display="studio"][data-prompt-mode="library"] .prompt-wrap:not(.prompt-collapsed) .prompt-compose-stack {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+body[data-app-display="studio"][data-prompt-mode="library"] #prompt-library-panel {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+body[data-app-display="studio"][data-prompt-mode="library"] #prompt-library-panel > .prompt-field:last-child {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .prompt-mode-row {
   margin-bottom: 2px;
 }
@@ -2109,6 +2132,12 @@ select.prompt-control {
   max-height: 280px;
   overflow: auto;
   padding-right: 2px;
+}
+
+body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 0;
 }
 
 .library-task-empty,
