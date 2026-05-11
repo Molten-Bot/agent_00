@@ -3006,6 +3006,10 @@ select.prompt-control {
   color: var(--accent);
 }
 
+.chat-repo-tab-has-success-activity .chat-repo-tab-icon {
+  color: var(--surface-success);
+}
+
 .chat-repo-tab-has-activity .chat-repo-tab-icon svg {
   fill: currentColor;
 }

@@ -1744,6 +1744,7 @@
       chatOpenRepoKey: "",
       chatPromptedRepos: [],
       chatRepoActivityKeys: new Set(),
+      chatRepoActivityTones: new Map(),
       chatActiveRepoTab: "repos",
       chatRepoPage: 1,
       chatRepoSearchQuery: "",
@@ -6824,6 +6825,7 @@
       const lastLog = logs.length > 0 ? logs[logs.length - 1] : null;
       return [
         normalizedTaskStatus(task?.status) || "pending",
+        taskPullRequestURL(task),
         String(task?.stage || "").trim(),
         String(task?.stage_status || "").trim(),
         String(task?.updated_at || "").trim(),
@@ -6846,6 +6848,28 @@
       return keys;
     }
 
+    function chatRepoActivityTone(task) {
+      const status = normalizedTaskStatus(task?.status);
+      if (status === "completed" || status === "no_changes" || taskPullRequestURL(task)) {
+        return "success";
+      }
+      return "update";
+    }
+
+    function setChatRepoActivity(key, tone) {
+      if (!key || key === state.chatActiveRepoTab) return;
+      state.chatRepoActivityKeys.add(key);
+      const previous = state.chatRepoActivityTones.get(key);
+      if (previous === "success") return;
+      state.chatRepoActivityTones.set(key, tone === "success" ? "success" : "update");
+    }
+
+    function clearChatRepoActivity(key) {
+      if (!key) return;
+      state.chatRepoActivityKeys.delete(key);
+      state.chatRepoActivityTones.delete(key);
+    }
+
     function syncChatRepoActivity(previousSnapshot, nextSnapshot) {
       if (!previousSnapshot) return;
       const previousSignatures = new Map();
@@ -6861,10 +6885,9 @@
         const previousSignature = previousSignatures.get(requestID);
         const nextSignature = chatRepoActivitySignature(task);
         if (previousSignature === nextSignature) continue;
+        const tone = chatRepoActivityTone(task);
         for (const key of chatRepoKeysForTask(task)) {
-          if (key && key !== state.chatActiveRepoTab) {
-            state.chatRepoActivityKeys.add(key);
-          }
+          setChatRepoActivity(key, tone);
         }
       }
     }
@@ -6899,10 +6922,11 @@
         button.role = "tab";
         button.dataset.repoKey = tab.key;
         if (state.chatActiveRepoTab === tab.key) {
-          state.chatRepoActivityKeys.delete(tab.key);
+          clearChatRepoActivity(tab.key);
         }
         const hasActivity = state.chatRepoActivityKeys.has(tab.key);
         button.classList.toggle("chat-repo-tab-has-activity", hasActivity);
+        button.classList.toggle("chat-repo-tab-has-success-activity", hasActivity && state.chatRepoActivityTones.get(tab.key) === "success");
         button.title = hasActivity ? "New run activity" : "Prompted repository";
         button.setAttribute("aria-selected", String(state.chatActiveRepoTab === tab.key));
         const icon = document.createElement("span");
@@ -6915,7 +6939,7 @@
         button.append(icon, label);
         button.addEventListener("click", () => {
           if (state.chatActiveRepoTab === tab.key) return;
-          state.chatRepoActivityKeys.delete(tab.key);
+          clearChatRepoActivity(tab.key);
           state.chatActiveRepoTab = tab.key;
           state.chatOpenRepoKey = tab.key;
           state.chatRepoPage = 1;
