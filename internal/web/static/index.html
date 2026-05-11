@@ -6096,14 +6096,14 @@
           promptImages = normalizePromptImages([...promptImages, ...next]);
           renderChatRepoImages(pasteTarget, promptImages);
           trackAnalyticsEvent("chat_repo_screenshots_attached", {
-            repo: chatRepoRunValue(repo),
             image_count: next.length,
+            repo_visibility: repo?.private ? "private" : "public",
           });
           submitStatus.removeAttribute("title");
           submitStatus.textContent = `Attached ${next.length} screenshot${next.length === 1 ? "" : "s"}.`;
           submitStatus.dataset.tone = "ok";
         } catch (err) {
-          trackAnalyticsEvent("chat_repo_screenshots_failed", { repo: chatRepoRunValue(repo) });
+          trackAnalyticsEvent("chat_repo_screenshots_failed", { repo_visibility: repo?.private ? "private" : "public" });
           submitStatus.removeAttribute("title");
           submitStatus.textContent = `Screenshot paste failed: ${err.message}`;
           submitStatus.dataset.tone = "error";

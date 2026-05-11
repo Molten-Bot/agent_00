@@ -42,6 +42,14 @@ var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype 
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Title}}</title>
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag() { window.dataLayer.push(arguments); }
+    window.gtag = window.gtag || gtag;
+    window.gtag("js", new Date());
+    window.gtag("config", "G-BY33RFG2WB");
+  </script>
   <script src="/static/lucide.min.js"></script>
   <script src="/static/site-header.js"></script>
   <link rel="stylesheet" href="/static/style.css">
@@ -525,6 +533,30 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           let repoSearchQuery = "";
           if (!grid || !status) return;
 
+          function trackChatEvent(name, params) {
+            const eventName = String(name || "").trim();
+            if (!eventName || typeof window.gtag !== "function") return;
+            const payload = { send_to: "G-BY33RFG2WB" };
+            for (const [key, value] of Object.entries(params || {})) {
+              if (typeof value === "string" && value.trim()) {
+                payload[key] = value.trim();
+                continue;
+              }
+              if (typeof value === "number" && Number.isFinite(value)) {
+                payload[key] = value;
+                continue;
+              }
+              if (typeof value === "boolean") {
+                payload[key] = value;
+              }
+            }
+            try {
+              window.gtag("event", eventName, payload);
+            } catch (_err) {
+              // Analytics must not block chat interactions.
+            }
+          }
+
           function repoRunValue(repo) {
             const htmlURL = String(repo.html_url || "").trim();
             if (htmlURL) return htmlURL;
@@ -546,6 +578,15 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             return repoOwnerType(repo) === "organization" ? "Organization repository" : "Personal repository";
           }
 
+          function repoAnalyticsParams(repo, extra) {
+            return Object.assign({
+              repo_visibility: repo && repo.private ? "private" : "public",
+              owner_type: repoOwnerType(repo) || "unknown",
+              has_language: Boolean(String(repo && repo.language || "").trim()),
+              source: "chat_page"
+            }, extra || {});
+          }
+
           function isRepoCardControlTarget(target, card) {
             if (!(target instanceof Element)) return false;
             const control = target.closest("a, button, input, select, textarea, [contenteditable='true'], [role='button']");
@@ -558,6 +599,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               statusNode.textContent = "Prompt is required.";
               statusNode.dataset.tone = "error";
               input.focus();
+              trackChatEvent("chat_repo_prompt_validation_failed", repoAnalyticsParams(repo, { validation_error: "missing_prompt" }));
               return;
             }
             const payload = {
@@ -570,6 +612,9 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             }
             statusNode.textContent = "Submitting...";
             statusNode.dataset.tone = "warn";
+            trackChatEvent("chat_repo_prompt_started", repoAnalyticsParams(repo, {
+              has_base_branch: Boolean(branch)
+            }));
             try {
               const response = await fetch("/api/local-prompt", {
                 method: "POST",
@@ -589,9 +634,11 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               input.value = "";
               statusNode.textContent = "Queued request " + requestID;
               statusNode.dataset.tone = "ok";
+              trackChatEvent("chat_repo_prompt_succeeded", repoAnalyticsParams(repo, { request_id: requestID }));
             } catch (err) {
               statusNode.textContent = "Submit failed: " + (err && err.message ? err.message : "unknown error");
               statusNode.dataset.tone = "error";
+              trackChatEvent("chat_repo_prompt_failed", repoAnalyticsParams(repo));
             }
           }
 
@@ -717,6 +764,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             previous.addEventListener("click", () => {
               if (repoPage <= 1) return;
               repoPage -= 1;
+              trackChatEvent("chat_repo_page_changed", { direction: "previous", page: repoPage });
               renderPage();
             });
 
@@ -732,6 +780,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             next.addEventListener("click", () => {
               if (repoPage >= totalPages) return;
               repoPage += 1;
+              trackChatEvent("chat_repo_page_changed", { direction: "next", page: repoPage });
               renderPage();
             });
 
@@ -798,6 +847,11 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               repoSearchQuery = search.value;
               repoPage = 1;
               renderRepos(allRepos);
+              const resultCount = filterRepos(allRepos, repoSearchQuery).length;
+              trackChatEvent("chat_repo_search_changed", {
+                has_query: Boolean(String(repoSearchQuery || "").trim()),
+                result_count: resultCount
+              });
             });
           }
 
@@ -811,9 +865,11 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               const repos = Array.isArray(body.repos) ? body.repos : [];
               allRepos = repos;
               renderRepos(allRepos);
+              trackChatEvent("chat_repos_loaded", { repo_count: repos.length });
             } catch (err) {
               status.textContent = err && err.message ? err.message : "Unable to load repositories.";
               syncSearchVisibility(false);
+              trackChatEvent("chat_repos_load_failed");
             }
           }
 

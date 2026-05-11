@@ -2310,6 +2310,10 @@ func TestHandlerGameServesZooCatch(t *testing.T) {
 	if !strings.Contains(markup, `id="game-board"`) || !strings.Contains(markup, `src="/static/game.js"`) {
 		t.Fatalf("expected game markup to include board and script")
 	}
+	if !strings.Contains(markup, `src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"`) ||
+		!strings.Contains(markup, `window.gtag("config", "G-BY33RFG2WB");`) {
+		t.Fatalf("expected game page to load and configure google analytics")
+	}
 }
 
 func TestIndexPromptReviewerClearBehavior(t *testing.T) {
@@ -2586,6 +2590,8 @@ func TestHandlerServesChatView(t *testing.T) {
 	markup := resp.Body.String()
 	required := []string{
 		`<title>Molten Hub Code Chat</title>`,
+		`src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"`,
+		`window.gtag("config", "G-BY33RFG2WB");`,
 		`src="/static/site-header.js"`,
 		`<moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>`,
 		`class="page-bottom-dock"`,
@@ -2620,6 +2626,10 @@ func TestHandlerServesChatView(t *testing.T) {
 		`fetch("/api/local-prompt", {`,
 		`headers: { "Content-Type": "application/json", "X-MoltenHub-Task-Source": "chat" },`,
 		`payload.baseBranch = branch;`,
+		`function trackChatEvent(name, params)`,
+		`trackChatEvent("chat_repo_prompt_started"`,
+		`trackChatEvent("chat_repo_prompt_succeeded"`,
+		`trackChatEvent("chat_repo_search_changed"`,
 		`window.MoltenHubHeader.startConnectionStatus();`,
 	}
 	for _, needle := range required {
