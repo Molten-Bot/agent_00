@@ -24,6 +24,32 @@
   let badGuy = { x: 72, y: 78, dx: 1, dy: 1 };
   let animalState = [];
   let badGuyTimer = 0;
+  let moveCount = 0;
+  let caughtThisRound = 0;
+
+  function trackGameEvent(name, params) {
+    const eventName = String(name || "").trim();
+    if (!eventName || typeof window.gtag !== "function") return;
+    const payload = { send_to: "G-BY33RFG2WB" };
+    for (const [key, value] of Object.entries(params || {})) {
+      if (typeof value === "string" && value.trim()) {
+        payload[key] = value.trim();
+        continue;
+      }
+      if (typeof value === "number" && Number.isFinite(value)) {
+        payload[key] = value;
+        continue;
+      }
+      if (typeof value === "boolean") {
+        payload[key] = value;
+      }
+    }
+    try {
+      window.gtag("event", eventName, payload);
+    } catch (_err) {
+      // Analytics must not block game input.
+    }
+  }
 
   function currentBoardSize() {
     return {
@@ -126,12 +152,19 @@
     });
     if (changed) {
       const remaining = animalState.filter((animal) => !animal.caught).length;
+      caughtThisRound = animalState.length - remaining;
       message.textContent = remaining ? "Animal caught." : "All animals safe.";
+      trackGameEvent(remaining ? "game_animal_caught" : "game_completed", {
+        caught_count: caughtThisRound,
+        remaining_count: remaining,
+        move_count: moveCount
+      });
     }
   }
 
   function moveWorker(dx, dy) {
     const boardSize = currentBoardSize();
+    moveCount += 1;
     worker.x = clamp(worker.x + dx, 0, boardSize.width - actorSize);
     worker.y = clamp(worker.y + dy, 0, boardSize.height - actorSize);
     catchAnimals();
@@ -157,6 +190,8 @@
       y: zooRect.y + Math.round((zooRect.height - actorSize) / 2)
     };
     badGuy = { x: 72, y: 78, dx: 1, dy: 1 };
+    moveCount = 0;
+    caughtThisRound = 0;
     zooSlots.innerHTML = "";
     animalState.forEach((animal) => animal.el.remove());
     animalState = animals.map((animal) => {
@@ -172,6 +207,7 @@
     draw();
     board.focus();
     badGuyTimer = window.setInterval(tickBadGuy, 90);
+    trackGameEvent("game_started", { animal_count: animalState.length });
   }
 
   document.addEventListener("keydown", (event) => {
@@ -191,7 +227,13 @@
     moveWorker(moves[key][0], moves[key][1]);
   });
 
-  newGame.addEventListener("click", resetGame);
+  newGame.addEventListener("click", () => {
+    trackGameEvent("game_restarted", {
+      caught_count: caughtThisRound,
+      move_count: moveCount
+    });
+    resetGame();
+  });
   createBadGuySprite();
   resetGame();
 }());
