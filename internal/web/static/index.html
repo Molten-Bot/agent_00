@@ -7360,6 +7360,7 @@
       const isBuilder = state.promptMode === "builder";
       const isLibrary = state.promptMode === "library";
       const isJSON = state.promptMode === "json";
+      document.body.dataset.promptMode = state.promptMode;
       syncPromptModeLinks();
       syncPromptTitleModes();
       if (promptPanelCopy) {
