@@ -1,8 +1,8 @@
 # MoltenHub Code
 
-Run AI coding agents across GitHub repositories, publish their changes, and watch pull request checks.
-
-For product details, see [molten.bot/code](https://molten.bot/code).
+Run AI coding agents against GitHub repositories, publish their changes, and
+watch pull request checks. Product details live at
+[molten.bot/code](https://molten.bot/code).
 
 ## Quick Start
 
@@ -16,11 +16,17 @@ docker run --rm -p 7777:7777 \
   moltenai/moltenhub-code:latest
 ```
 
-The container starts the hub UI on port `7777`. It persists onboarding, runtime config, and CLI auth home data in `/workspace/config`, so mount that path for repeat runs.
+The image defaults to `with-config`, which uses `/workspace/config` as the
+persistent config and CLI auth home:
 
-Docker Compose should use mapping syntax (`KEY: value`) or list syntax (`KEY=value`).
-Do not use list entries like `KEY:value`; Compose passes those as malformed
-environment entries and the container cannot use them.
+- `MOLTEN_HUB_TOKEN` present: write or update `config.json`, then start
+  `harness hub`.
+- `config.json` with Hub fields: start `harness hub --config`.
+- `config.json` with run fields: execute `harness run --config`.
+- `init.json` present and `config.json` absent: start `harness hub --init`.
+- No config files: start local Hub onboarding UI on port `7777`.
+
+Compose example:
 
 ```yaml
 services:
@@ -35,19 +41,26 @@ services:
       MOLTEN_HUB_TOKEN: ${MOLTEN_HUB_TOKEN}
       MOLTEN_HUB_REGION: na
       HARNESS_AGENT_HARNESS: codex
-      # Optional: lets Codex or OpenCode authenticate at boot instead of prompting in the UI.
       OPENAI_API_KEY: ${OPENAI_API_KEY}
 ```
 
-The runtime image includes:
+Compose environment must use mapping syntax (`KEY: value`) or list syntax
+(`KEY=value`). List entries like `KEY:value` are malformed.
 
-- Go `1.26.1`
-- Python 3, `pip`, `virtualenv`, and the latest OpenAI Python SDK (`openai`)
-- `git`, `gh`, `jq`, `openssh-client`, `rg`, `file`
-- `@openai/codex`, `@anthropic-ai/claude-code`, `@augmentcode/auggie`, `@mariozechner/pi-coding-agent`, `opencode-ai`, and `@playwright/test`
-- Playwright Chromium browser binaries and system dependencies for screenshots and UI checks
+The runtime image includes Go `1.26.2`, Node `25.9.0`, Python 3, `git`, `gh`,
+`jq`, `rg`, Playwright Chromium, and these agent CLIs:
+
+- `@openai/codex`
+- `@anthropic-ai/claude-code`
+- `@augmentcode/auggie`
+- `@mariozechner/pi-coding-agent`
+- `opencode-ai`
+
+More Docker config details: [docker/config/README.md](docker/config/README.md).
 
 ### Local Build
+
+Requires Go `1.26.2` or newer plus `git`, `gh`, and the selected agent CLI.
 
 ```bash
 go build -o bin/harness ./cmd/harness
@@ -65,7 +78,9 @@ harness hub --config ./.moltenhub/config.json
 harness hub --init ./.moltenhub/init.json
 ```
 
-`harness run` executes one task. `harness multiplex` runs multiple task configs. `harness hub` starts the local UI and optional remote Hub transport.
+- `run` executes one repository task.
+- `multiplex` runs multiple config files or config directories.
+- `hub` starts the local UI and optional remote Hub transport.
 
 ## Run Config
 
@@ -74,65 +89,75 @@ Run configs are JSON or JSONC. Minimal example:
 ```json
 {
   "repo": "git@github.com:owner/repo.git",
-  "targetSubdir": ".",
   "agentHarness": "codex",
   "prompt": "Update README setup instructions."
 }
 ```
 
-Important fields:
+Common fields:
 
 - `repo`, `repoUrl`, or `repos`: target repository or repositories.
-- `baseBranch`: optional branch to clone. Omit it to use the repository default branch; `branch` is accepted as an alias.
-- `targetSubdir`: working directory for a single-repo task. Defaults to `.`.
-- `prompt`: task sent to the selected agent.
-- `agentHarness`: supported agents are `codex` (Codex), `claude` (Claude Code), `auggie` (Auggie), `pi` (Pi), and `opencode` (OpenCode). Defaults to `codex` or `HARNESS_AGENT_HARNESS`.
-- `agentCommand`: optional command override, also available as `HARNESS_AGENT_COMMAND`.
-- `responseMode`: agent prose mode. Defaults to `caveman-full`; use `off` for normal prose.
-- `images`: optional base64 prompt images. Supported by `codex` and `pi`.
-- `review`: optional pull request review context for single-repo review tasks.
+- `baseBranch`: branch to clone; omit for repository default branch.
+- `branch`: alias for `baseBranch`.
+- `targetSubdir`: repository subdirectory for single-repo work; defaults to `.`.
+- `prompt`: task sent to the agent.
+- `agentHarness`: `codex`, `claude`, `auggie`, `pi`, or `opencode`.
+- `agentCommand`: optional executable override.
+- `responseMode`: defaults to `caveman-full`; set `off` for normal prose.
+- `images`: base64 prompt images; supported by `codex` and `pi`.
+- `review`: PR review selector using `prNumber`, `prUrl`, or `headBranch`.
+- `commitMessage`, `prTitle`, `prBody`, `labels`, `reviewers`: optional PR
+  metadata.
+
+Use camelCase field names. Snake_case run-config fields are rejected.
 
 See [run.example.json](run.example.json) for a commented template.
 
 ## Runtime Behavior
 
-Each task run:
+Each `harness run`:
 
 1. Checks required tools and selected agent CLI.
 2. Verifies GitHub auth with `gh auth status`.
 3. Creates an isolated workspace under `/workspace`.
-4. Clones each repo at `baseBranch`, or the repository default branch when no branch is specified. Missing `main` on an empty repo is bootstrapped with an empty commit.
-5. Creates a `moltenhub-...` work branch when starting from the repository default branch; otherwise reuses the requested branch.
-6. Probes publish access before agent execution. Public GitHub repos can fall back to a fork when direct write access is denied.
-7. Runs the selected agent in `targetSubdir` for one repo, or workspace root for multi-repo runs.
-8. Commits changed repos, pushes branches, opens or reuses PRs, and watches required checks.
-9. If checks fail, runs up to three focused remediation attempts and pushes follow-up commits.
+4. Clones each repo at `baseBranch`, or the repository default branch when
+   omitted.
+5. Bootstraps an empty `main` branch when a new GitHub repo has no refs.
+6. Creates a `moltenhub-...` work branch from `main` or `master`; for other
+   branches it works directly on that branch.
+7. Probes publish access before agent execution. Public GitHub repos may fall
+   back to a fork when direct push is denied.
+8. Runs the selected agent in `targetSubdir` for one repo, or the workspace root
+   for multi-repo runs.
+9. Commits changed repos, pushes branches, opens or reuses PRs, and watches
+   required checks.
+10. If checks fail, runs up to three focused remediation attempts and pushes
+    follow-up commits.
 
-Harness-created commits include the hard-coded GitHub co-author trailer `Co-authored-by: Molten Bot 000 <260473928+moltenbot000@users.noreply.github.com>`. Commits created by an agent before the harness commit step are pushed as-is and are not amended or rewritten.
+Harness-created commits include:
 
-If no repository changes remain after the agent runs, the task exits successfully with `status=no_changes`.
+```text
+Co-authored-by: Molten Bot 000 <260473928+moltenbot000@users.noreply.github.com>
+```
+
+If no repository changes remain after the agent runs, the task exits
+successfully with `status=no_changes`.
 
 ## Hub Configuration
 
-The Docker entrypoint looks for config in this order:
-
-1. `MOLTEN_HUB_TOKEN` bootstrap, written to `/workspace/config/config.json`
-2. `/workspace/config/config.json`
-3. `/workspace/config/init.json`
-4. Local onboarding UI
-
-When bootstrap environment variables are set, they override matching values already in `config.json` on load and are persisted back to that file.
-
 Useful environment variables:
 
-- `GITHUB_TOKEN` or `GH_TOKEN`: GitHub auth for clone, push, PR, and checks.
+- `GITHUB_TOKEN` or `GH_TOKEN`: GitHub auth for clone, push, PRs, and checks.
 - `MOLTEN_HUB_TOKEN`: remote Hub agent token.
 - `MOLTEN_HUB_REGION`: `na` or `eu`; defaults to `na`.
-- `MOLTEN_HUB_URL`: explicit Hub API URL, either `https://na.hub.molten.bot/v1` or `https://eu.hub.molten.bot/v1`.
-- `MOLTEN_HUB_SESSION_KEY`: runtime config session key. Defaults to `main`.
-- `OPENAI_API_KEY`, `AUGMENT_SESSION_AUTH`, `PI_PROVIDER_AUTH`, `PI_AUTH_JSON`: optional agent auth values loaded by the entrypoint or persisted config. OpenCode can use `opencode auth login`, its persisted auth file under `HOME`, or provider environment variables such as `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`.
-
-Docker Compose list syntax should use `KEY=value`, for example `MOLTEN_HUB_TOKEN=t_XXX`; mapping syntax should use `MOLTEN_HUB_TOKEN: t_XXX`. List entries such as `MOLTEN_HUB_TOKEN:t_XXX` are not valid Compose environment values.
+- `MOLTEN_HUB_URL`: explicit hosted Hub API URL,
+  `https://na.hub.molten.bot/v1` or `https://eu.hub.molten.bot/v1`.
+- `MOLTEN_HUB_SESSION_KEY`: runtime config session key; defaults to `main`.
+- `HARNESS_AGENT_HARNESS`: default agent harness.
+- `HARNESS_AGENT_COMMAND`: default agent executable.
+- `OPENAI_API_KEY`: Codex login bootstrap; also usable by OpenCode providers.
+- `AUGMENT_SESSION_AUTH`: Auggie session JSON from `auggie token print`.
+- `PI_PROVIDER_AUTH` or `PI_AUTH_JSON`: Pi provider auth bootstrap.
 
 Hub OpenAPI:
 
@@ -152,7 +177,9 @@ Supported `responseMode` values:
 - `caveman-wenyan-full`
 - `caveman-wenyan-ultra`
 
-Omitted or `default` maps to `caveman-full`. The mode is applied by prepending the bundled [Caveman skill](skills/caveman/SKILL.md) to the agent prompt.
+Omitted or `default` maps to `caveman-full`. The harness prepends the bundled
+[Caveman skill](skills/caveman/SKILL.md) to the agent prompt unless
+`responseMode` is `off`.
 
 ## Development
 
@@ -160,4 +187,5 @@ Omitted or `default` maps to `caveman-full`. The mode is applied by prepending t
 go test ./...
 ```
 
-There is no separate dependency install step for the Go module today; dependencies come from `go.mod`.
+There is no separate dependency install step for the Go module. Dependencies are
+declared in [go.mod](go.mod).
