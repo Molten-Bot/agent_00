@@ -685,6 +685,7 @@
     const TASK_HISTORY_KEY = "hubui.taskHistory.v1";
     const TASK_HISTORY_UNSEEN_KEY = "hubui.taskHistoryUnseen.v1";
     const TASK_SOUND_MUTED_KEY = "hubui.taskSoundMuted";
+    const CHAT_CLOSED_REPOS_KEY = "hubui.chatClosedRepoKeys.v1";
     const THEME_KEY = "hubui.theme";
     const HOVER_MODE_KEY = "hubui.hoverMode";
     const THEME_MODES = ["light", "dark", "night", "pink"];
@@ -1662,6 +1663,20 @@
       }
     }
 
+    function loadChatClosedRepoKeys() {
+      try {
+        const raw = localStorage.getItem(CHAT_CLOSED_REPOS_KEY);
+        if (!raw) return new Set();
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return new Set();
+        return new Set(parsed
+          .map((key) => String(key || "").trim().toLowerCase())
+          .filter(Boolean));
+      } catch (_err) {
+        return new Set();
+      }
+    }
+
     function loadTaskSoundMuted() {
       try {
         return localStorage.getItem(TASK_SOUND_MUTED_KEY) === "true";
@@ -1740,6 +1755,7 @@
       chatPromptDrafts: new Map(),
       chatOpenRepoKey: "",
       chatPromptedRepos: [],
+      chatClosedRepoKeys: loadChatClosedRepoKeys(),
       chatRepoActivityKeys: new Set(),
       chatRepoActivityTones: new Map(),
       chatActiveRepoTab: "repos",
@@ -5318,6 +5334,14 @@
       }
     }
 
+    function persistChatClosedRepoKeys() {
+      try {
+        localStorage.setItem(CHAT_CLOSED_REPOS_KEY, JSON.stringify(Array.from(state.chatClosedRepoKeys)));
+      } catch (_err) {
+        // Ignore localStorage failures.
+      }
+    }
+
     function rememberRepos(repos) {
       const unique = dedupeRepoValues([...(repos || []), ...state.repoHistory]);
       if (unique.length === state.repoHistory.length && unique.every((value, index) => value === state.repoHistory[index])) {
@@ -5984,14 +6008,56 @@
       return Boolean(control && control !== card);
     }
 
+    function activeChatRepoKeys() {
+      const keys = new Set();
+      for (const task of state.snapshot?.tasks || []) {
+        if (isCompletedTask(task)) continue;
+        for (const key of chatRepoKeysForTask(task)) {
+          keys.add(key);
+        }
+      }
+      return keys;
+    }
+
+    function chatRepoHasActiveWork(repoKey) {
+      const key = String(repoKey || "").trim();
+      return Boolean(key && activeChatRepoKeys().has(key));
+    }
+
+    function canCloseChatProject(repoKey) {
+      const key = String(repoKey || "").trim();
+      return Boolean(key && state.chatActiveRepoTab === key && !chatRepoHasActiveWork(key));
+    }
+
+    function closeChatProject(repoKey) {
+      const key = String(repoKey || "").trim();
+      if (!key || chatRepoHasActiveWork(key)) return false;
+      state.chatClosedRepoKeys.add(key);
+      persistChatClosedRepoKeys();
+      state.chatPromptedRepos = state.chatPromptedRepos.filter((repo) => chatRepoKey(repo) !== key);
+      clearChatRepoActivity(key);
+      if (state.chatActiveRepoTab === key) {
+        state.chatActiveRepoTab = "repos";
+      }
+      if (state.chatOpenRepoKey === key) {
+        state.chatOpenRepoKey = "";
+      }
+      state.chatRepoPage = 1;
+      renderChatRepos();
+      trackAnalyticsEvent("chat_project_closed", { source: "chat" });
+      return true;
+    }
+
     function renderChatRepoCard(repo) {
       const repoKey = chatRepoKey(chatRepoRunValue(repo));
       const expanded = Boolean(repoKey && state.chatOpenRepoKey === repoKey);
+      const canCloseProject = canCloseChatProject(repoKey);
       const visibility = repo?.private ? "Private" : "Public";
       const repoTitle = String(repo?.full_name || repo?.name || "Unnamed repository");
       const repoDescription = String(repo?.description || "No description.");
       const card = document.createElement("div");
       card.className = "chat-repo-card";
+      card.classList.toggle("chat-repo-card-closable", canCloseProject);
       card.tabIndex = 0;
       card.setAttribute("role", "button");
       card.dataset.repoKey = repoKey;
@@ -6016,12 +6082,30 @@
       }
       head.appendChild(title);
 
+      const actions = document.createElement("span");
+      actions.className = "chat-repo-card-actions";
+      if (canCloseProject) {
+        const closeButton = document.createElement("button");
+        closeButton.className = "chat-repo-card-close";
+        closeButton.type = "button";
+        closeButton.title = "Close project";
+        closeButton.setAttribute("aria-label", `Close ${repoTitle} project`);
+        closeButton.innerHTML = `<i data-lucide="x" aria-hidden="true"></i>`;
+        closeButton.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          closeChatProject(repoKey);
+        });
+        actions.appendChild(closeButton);
+      }
+
       const chatIcon = document.createElement("span");
       chatIcon.className = "chat-repo-card-chat-icon";
       chatIcon.title = "Prompt";
       chatIcon.setAttribute("aria-hidden", "true");
       chatIcon.innerHTML = `<i data-lucide="message-circle" aria-hidden="true"></i>`;
-      head.appendChild(chatIcon);
+      actions.appendChild(chatIcon);
+      head.appendChild(actions);
       card.appendChild(head);
 
       const description = document.createElement("span");
@@ -6793,11 +6877,13 @@
       }
       repos.push(...state.chatPromptedRepos);
 
+      const activeKeys = activeChatRepoKeys();
       const seen = new Set();
       const out = [];
       for (const repo of repos) {
         const key = chatRepoKey(repo);
         if (!key || seen.has(key)) continue;
+        if (state.chatClosedRepoKeys.has(key) && !activeKeys.has(key)) continue;
         seen.add(key);
         out.push({ key, value: repo, label: chatRepoTabLabel(repo) });
       }
@@ -7171,6 +7257,8 @@
           source: "chat",
           sourceLabel: "Chat",
         });
+        state.chatClosedRepoKeys.delete(chatRepoKey(repoValue));
+        persistChatClosedRepoKeys();
         state.chatPromptedRepos = dedupeRepoValues([repoValue, ...state.chatPromptedRepos]);
         state.chatActiveRepoTab = chatRepoKey(repoValue) || state.chatActiveRepoTab;
         state.chatRepoPage = 1;

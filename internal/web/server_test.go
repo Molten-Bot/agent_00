@@ -1730,13 +1730,19 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `id="chat-repo-tabs"`) ||
 		!strings.Contains(markup, `function chatPromptedRepoTabs()`) ||
 		!strings.Contains(markup, `state.snapshot.prompted_repos`) ||
+		!strings.Contains(markup, `chatClosedRepoKeys: loadChatClosedRepoKeys(),`) ||
+		!strings.Contains(markup, `function canCloseChatProject(repoKey)`) ||
+		!strings.Contains(markup, `const canCloseProject = canCloseChatProject(repoKey);`) ||
+		!strings.Contains(markup, `closeButton.className = "chat-repo-card-close";`) ||
+		!strings.Contains(markup, `if (state.chatClosedRepoKeys.has(key) && !activeKeys.has(key)) continue;`) ||
+		!strings.Contains(markup, `state.chatClosedRepoKeys.delete(chatRepoKey(repoValue));`) ||
 		!strings.Contains(markup, `reposIcon.innerHTML = `+"`"+`<i data-lucide="brick-wall" aria-hidden="true"></i>`+"`"+`;`) ||
 		!strings.Contains(markup, `reposLabel.textContent = "All repositories";`) ||
 		!strings.Contains(markup, `function selectedChatRepo(repos, selectedTab)`) ||
 		!strings.Contains(markup, `chatRepoGrid.classList.toggle("chat-repo-grid-active-repo", Boolean(openRepo));`) ||
 		!strings.Contains(markup, `const viewingRepoChat = Boolean(selectedTab && openRepo);`) ||
 		!strings.Contains(markup, `displayRepos = [openRepo];`) {
-		t.Fatalf("expected index html chat to render prompted repository tabs, icon-only repos tab, and isolate active repository chat")
+		t.Fatalf("expected index html chat to render closable prompted repository tabs, icon-only repos tab, and isolate active repository chat")
 	}
 	if !strings.Contains(markup, `if (viewingRepoChat) {
         chatStatus.textContent = "";`) {
@@ -2901,6 +2907,11 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	}
 	if !strings.Contains(css, ".chat-repo-card[aria-expanded=\"true\"] {\n  grid-column: 1 / -1;") {
 		t.Fatalf("expected expanded chat repository cards to span the full repository grid width")
+	}
+	if !strings.Contains(css, ".chat-repo-card-actions") ||
+		!strings.Contains(css, ".chat-repo-card-close") ||
+		!strings.Contains(css, ".chat-repo-card-closable .chat-repo-card-head") {
+		t.Fatalf("expected stylesheet to place active chat project close button beside the chat icon")
 	}
 	if !strings.Contains(css, ".chat-shell {\n  display: flex;\n  flex-direction: column;") ||
 		!strings.Contains(css, ".chat-repo-grid-active-repo {\n  flex: 1 1 auto;") ||

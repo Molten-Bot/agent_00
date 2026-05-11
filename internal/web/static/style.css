@@ -1577,6 +1577,7 @@ html.pink .hub-dock-group[data-configured="true"] #moltenbot-hub-link:focus-visi
 .task-sound-toggle:focus-visible,
 .task-history-toggle:focus-visible,
 .task-close:focus-visible,
+.chat-repo-card-close:focus-visible,
 .task-rerun:focus-visible,
 .task-control-toggle:focus-visible,
 .task-stop:focus-visible,
@@ -3106,6 +3107,10 @@ select.prompt-control {
   padding-right: 34px;
 }
 
+.chat-repo-card-closable .chat-repo-card-head {
+  padding-right: 70px;
+}
+
 .chat-repo-card-owner-icon {
   flex: 0 0 auto;
   display: inline-grid;
@@ -3132,10 +3137,17 @@ select.prompt-control {
   line-height: 1.25;
 }
 
-.chat-repo-card-chat-icon {
+.chat-repo-card-actions {
   position: absolute;
   top: 10px;
   right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-repo-card-chat-icon,
+.chat-repo-card-close {
   display: inline-grid;
   place-items: center;
   width: 28px;
@@ -3147,7 +3159,19 @@ select.prompt-control {
   box-shadow: var(--surface-button-shadow);
 }
 
-.chat-repo-card-chat-icon svg {
+.chat-repo-card-close {
+  color: var(--text-soft);
+}
+
+.chat-repo-card-close:hover,
+.chat-repo-card-close:focus-visible {
+  border-color: color-mix(in srgb, var(--surface-danger) 36%, var(--border));
+  background: color-mix(in srgb, var(--surface-danger) 10%, var(--surface-button-bg));
+  color: color-mix(in srgb, var(--surface-danger) 72%, var(--text-soft));
+}
+
+.chat-repo-card-chat-icon svg,
+.chat-repo-card-close svg {
   width: 15px;
   height: 15px;
   stroke-width: 2.25;
@@ -6516,6 +6540,7 @@ html[data-hover-mode="on"] .task-view-toggle:not(:disabled),
 html[data-hover-mode="on"] .task-fullscreen-toggle:not(:disabled),
 html[data-hover-mode="on"] .prompt-visibility-toggle:not(:disabled),
 html[data-hover-mode="on"] .task-close:not(:disabled),
+html[data-hover-mode="on"] .chat-repo-card-close:not(:disabled),
 html[data-hover-mode="on"] .task-control-toggle:not(:disabled),
 html[data-hover-mode="on"] .task-stop:not(:disabled),
 html[data-hover-mode="on"] .task:not(.task-closing) {
@@ -6552,6 +6577,7 @@ html[data-hover-mode="on"] .task-fullscreen-toggle:not(:disabled) {
 
 html[data-hover-mode="off"] .task,
 html[data-hover-mode="off"] .task-close,
+html[data-hover-mode="off"] .chat-repo-card-close,
 html[data-hover-mode="off"] .task-control-toggle,
 html[data-hover-mode="off"] .task-stop,
 html[data-hover-mode="off"] .prompt-action-button,
@@ -6568,6 +6594,7 @@ html[data-hover-mode="off"] .prompt-visibility-toggle {
 
 html[data-hover-mode="off"] .task:hover,
 html[data-hover-mode="off"] .task-close:hover,
+html[data-hover-mode="off"] .chat-repo-card-close:hover,
 html[data-hover-mode="off"] .task-control-toggle:hover,
 html[data-hover-mode="off"] .task-stop:hover,
 html[data-hover-mode="off"] .prompt-action-button:hover,
