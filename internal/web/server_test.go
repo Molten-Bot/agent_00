@@ -278,6 +278,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, `<span class="dashboard-stat-label">Max Concurrent Tasks</span>`) {
 		t.Fatalf("expected dashboard max concurrency label to use concise copy")
 	}
+	if !strings.Contains(markup, "if (hours > 0) return `${(total / 3600).toFixed(1)}h`;") {
+		t.Fatalf("expected dashboard hour durations to render as compact decimal hours")
+	}
 	lastDashboardStatLabel := -1
 	for _, label := range []string{
 		"Time Saved",
