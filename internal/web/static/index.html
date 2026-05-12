@@ -4574,8 +4574,7 @@
       if (!Number.isFinite(total) || total <= 0) return "0m";
       const hours = Math.floor(total / 3600);
       const minutes = Math.floor((total % 3600) / 60);
-      if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
-      if (hours > 0) return `${hours}h`;
+      if (hours > 0) return `${(total / 3600).toFixed(1)}h`;
       if (minutes > 0) return `${minutes}m`;
       return `${total}s`;
     }
