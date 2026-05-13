@@ -3732,7 +3732,9 @@ body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
   color: var(--text);
   font-size: clamp(1.9rem, 3vw, 2.8rem);
   line-height: 0.95;
+  text-align: right;
   white-space: nowrap;
+  width: 100%;
 }
 
 .dashboard-stat-meta {
