@@ -2947,6 +2947,20 @@ body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
   line-height: 1.2;
 }
 
+.chat-title-github-logo {
+  display: inline-flex;
+  align-items: center;
+  height: 1em;
+}
+
+.chat-title-github-logo img {
+  display: block;
+  width: 1.05em;
+  height: 1.05em;
+  object-fit: contain;
+  filter: var(--agent-logo-filter);
+}
+
 .chat-title-current::before {
   content: "/";
   margin-inline: 8px;

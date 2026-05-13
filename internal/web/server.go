@@ -507,8 +507,12 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Content: template.HTML(`<section class="chat-shell" aria-labelledby="chat-title">
         <div class="chat-head">
           <div>
-            <p class="eyebrow">GitHub</p>
-            <h1 id="chat-title">Chat</h1>
+            <h1 id="chat-title" class="chat-title" aria-label="Git / Chat">
+              <span class="panel-section-title chat-title-github-logo" aria-hidden="true">
+                <img src="/static/logos/github.svg" alt="">
+              </span>
+              <span class="panel-section-title chat-title-current">Chat</span>
+            </h1>
           </div>
           <p id="chat-status" class="chat-status" aria-live="polite"></p>
         </div>
