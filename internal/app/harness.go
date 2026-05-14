@@ -3028,11 +3028,13 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 }
 
 func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
-	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{
-		detail,
-		res.Stdout,
-		res.Stderr,
-	}, "\n")))
+	text := strings.ToLower(strings.TrimSpace(detail))
+	if text == "" {
+		text = strings.ToLower(strings.TrimSpace(strings.Join([]string{
+			res.Stdout,
+			res.Stderr,
+		}, "\n")))
+	}
 	if text == "" {
 		return false
 	}
