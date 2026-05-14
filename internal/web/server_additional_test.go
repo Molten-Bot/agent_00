@@ -865,6 +865,47 @@ func TestEmbeddedChatPromptLogStylesHideEmptyAndScrollHistory(t *testing.T) {
 	}
 }
 
+func TestEmbeddedChatPromptLogMessagesCanBeCopied(t *testing.T) {
+	t.Parallel()
+
+	markup, err := staticFiles.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	html := string(markup)
+	for _, want := range []string{
+		`if (target.closest(".chat-repo-log")) return true;`,
+		`promptLog.addEventListener("pointerdown", (event) => {`,
+		`function renderChatPromptMessageCopyButton(value, requestID)`,
+		`button.className = "chat-repo-message-copy";`,
+		`copyTextToClipboard(text, button, {`,
+		`copiedLabel: "Copied message",`,
+		`trackAnalyticsEvent("chat_prompt_message_copied"`,
+		`nodeContainsActiveSelection(chatRepoGrid)`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("embedded index.html missing %q", want)
+		}
+	}
+
+	data, err := fs.ReadFile(staticFiles, "static/style.css")
+	if err != nil {
+		t.Fatalf("read embedded style.css: %v", err)
+	}
+	css := string(data)
+	for _, want := range []string{
+		".chat-repo-log {\n  display: grid;",
+		"user-select: text;",
+		".chat-repo-message-copy {",
+		".chat-repo-message-copy.is-copied {",
+		".chat-repo-message-copy svg {",
+	} {
+		if !strings.Contains(css, want) {
+			t.Fatalf("embedded style.css missing %q", want)
+		}
+	}
+}
+
 func TestAgentAuthEndpointsWithCallbacks(t *testing.T) {
 	t.Parallel()
 

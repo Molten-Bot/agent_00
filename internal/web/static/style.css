@@ -3352,6 +3352,7 @@ body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--bg-panel-muted) 40%, transparent), transparent),
     color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+  user-select: text;
 }
 
 .chat-repo-grid-active-repo .chat-repo-log:not([hidden]) {
@@ -3395,6 +3396,7 @@ body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
     linear-gradient(180deg, color-mix(in srgb, var(--running) 22%, var(--bg-elevated)), color-mix(in srgb, var(--running) 14%, var(--bg-elevated)));
   color: var(--text);
   box-shadow: 0 8px 18px rgba(10, 44, 102, 0.08);
+  user-select: text;
 }
 
 .chat-repo-message-assistant {
@@ -3497,9 +3499,40 @@ body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
   color: inherit;
 }
 
+.chat-repo-message-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, currentColor 32%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chat-repo-message-copy:hover,
+.chat-repo-message-copy:focus-visible {
+  border-color: color-mix(in srgb, currentColor 52%, transparent);
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  outline: none;
+}
+
+.chat-repo-message-copy.is-copied {
+  color: var(--surface-success);
+  border-color: color-mix(in srgb, var(--surface-success) 46%, transparent);
+  background: color-mix(in srgb, var(--surface-success) 14%, transparent);
+}
+
 .chat-repo-message-meta-stage-img,
 .chat-repo-message-meta-stage-glyph,
-.chat-repo-message-meta-stage-icon .task-status-glyph {
+.chat-repo-message-meta-stage-icon .task-status-glyph,
+.chat-repo-message-copy svg {
   display: block;
   width: 12px;
   height: 12px;
@@ -3516,7 +3549,8 @@ body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
 }
 
 .chat-repo-message-meta-stage-glyph,
-.chat-repo-message-meta-stage-icon .task-status-glyph {
+.chat-repo-message-meta-stage-icon .task-status-glyph,
+.chat-repo-message-copy svg {
   stroke-width: 2.4;
 }
 

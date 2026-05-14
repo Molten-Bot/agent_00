@@ -1802,11 +1802,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected index chat repositories to open prompt panels, show visibility icons, show prompt chat logs, and submit repository tasks")
 	}
 	if !strings.Contains(markup, `function renderChatReposFromSnapshot()`) ||
-		!strings.Contains(markup, `if (chatRepoPanelContainsFocus()) {`) ||
+		!strings.Contains(markup, `if (chatRepoPanelContainsFocus() || nodeContainsActiveSelection(chatRepoGrid)) {`) ||
 		!strings.Contains(markup, `state.chatRepoRenderPending = true;`) ||
+		!strings.Contains(markup, `scheduleDeferredSelectionRenderFlush();`) ||
 		!strings.Contains(markup, `chatRepoGrid.addEventListener("focusout", () => {`) ||
 		!strings.Contains(markup, `if (state.appDisplay !== "chat" || !state.githubReposReady) return;`) {
-		t.Fatalf("expected index chat repositories to defer snapshot rerenders while a repo prompt panel has focus")
+		t.Fatalf("expected index chat repositories to defer snapshot rerenders while a repo prompt panel has focus or selected text")
 	}
 	if !strings.Contains(markup, `function chatPromptTaskStatusLabel(task)`) ||
 		!strings.Contains(markup, `function syncChatPromptMessagesFromSnapshot(snapshot = state.snapshot)`) ||
@@ -3330,7 +3331,10 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	if !strings.Contains(css, ".hub-emoji-picker-toggle:disabled {\n  opacity: 0.6;\n  transform: none;\n  cursor: not-allowed;\n}") {
 		t.Fatalf("expected stylesheet to mark disabled emoji picker buttons as unavailable")
 	}
-	if strings.Count(css, "cursor:") != 3 {
+	if !strings.Contains(css, ".chat-repo-message-copy {\n  display: inline-flex;") || !strings.Contains(css, "  cursor: pointer;\n}") {
+		t.Fatalf("expected stylesheet to use a pointer cursor for chat message copy buttons")
+	}
+	if strings.Count(css, "cursor:") != 4 {
 		t.Fatalf("expected stylesheet to avoid unrelated custom cursor styles")
 	}
 	if strings.Contains(css, "cursor-not-allowed") {

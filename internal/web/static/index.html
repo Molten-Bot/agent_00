@@ -6028,6 +6028,7 @@
 
     function isChatRepoCardControlTarget(target, card) {
       if (!(target instanceof Element)) return false;
+      if (target.closest(".chat-repo-log")) return true;
       const control = target.closest("a, button, input, select, textarea, [contenteditable='true'], [role='button']");
       return Boolean(control && control !== card);
     }
@@ -6168,6 +6169,12 @@
       promptLog.setAttribute("role", "log");
       promptLog.setAttribute("aria-live", "polite");
       renderChatRepoPromptLog(repo, promptLog);
+      promptLog.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+      promptLog.addEventListener("pointerdown", (event) => {
+        event.stopPropagation();
+      });
 
       const prompt = document.createElement("textarea");
       prompt.className = "chat-repo-prompt";
@@ -6676,12 +6683,37 @@
       }
     }
 
+    function renderChatPromptMessageCopyButton(value, requestID) {
+      const text = String(value || "").trim();
+      if (!text) return null;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "chat-repo-message-copy";
+      button.title = "Copy message";
+      button.setAttribute("aria-label", "Copy chat message");
+      button.innerHTML = '<i data-lucide="copy" aria-hidden="true"></i>';
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void copyTextToClipboard(text, button, {
+          preserveContents: true,
+          copiedLabel: "Copied message",
+        });
+        trackAnalyticsEvent("chat_prompt_message_copied", { request_id: String(requestID || "").trim() });
+      });
+      button.addEventListener("pointerdown", (event) => {
+        event.stopPropagation();
+      });
+      return button;
+    }
+
     function renderChatPromptMessageMeta(meta, message) {
       if (!meta) return;
       const requestID = String(message?.requestID || "").trim();
       const imageCount = Number.isFinite(message?.imageCount) ? message.imageCount : 0;
       const statusText = chatPromptMessageStatusText(message);
       const statusTitle = chatPromptMessageStatusTitle(message);
+      const copyText = String(message?.copyText || message?.prompt || meta.dataset.copyText || "").trim();
       const stats = [];
       const time = chatPromptMessageTime(message?.createdAt);
       if (time) {
@@ -6719,6 +6751,10 @@
       if (stageIcon) {
         meta.appendChild(stageIcon);
       }
+      const copyButton = renderChatPromptMessageCopyButton(copyText, requestID);
+      if (copyButton) {
+        meta.appendChild(copyButton);
+      }
       meta.dataset.requestId = requestID;
       meta.dataset.createdAt = String(message?.createdAt || "");
       meta.dataset.imageCount = String(imageCount);
@@ -6726,6 +6762,7 @@
       meta.dataset.statusTitle = statusTitle;
       meta.dataset.source = normalizeTaskStartSource(message?.source || "");
       meta.dataset.sourceLabel = sourceLabel;
+      meta.dataset.copyText = copyText;
       if (requestID && statusTitle) {
         meta.title = statusTitle;
       } else {
@@ -6796,7 +6833,10 @@
 
         const meta = document.createElement("footer");
         meta.className = "chat-repo-message-meta";
-        renderChatPromptMessageMeta(meta, message);
+        renderChatPromptMessageMeta(meta, {
+          ...message,
+          copyText: message.prompt,
+        });
         bubble.appendChild(meta);
 
         logNode.appendChild(bubble);
@@ -7083,6 +7123,11 @@
 
     function renderChatRepos() {
       if (!chatRepoGrid || !chatStatus) return;
+      if (nodeContainsActiveSelection(chatRepoGrid)) {
+        state.chatRepoRenderPending = true;
+        scheduleDeferredSelectionRenderFlush();
+        return;
+      }
       state.chatRepoRenderPending = false;
       const activePrompt = document.activeElement instanceof HTMLTextAreaElement &&
         document.activeElement.classList.contains("chat-repo-prompt")
@@ -7191,11 +7236,14 @@
       if (state.appDisplay !== "chat" || !state.githubReposReady) {
         return;
       }
-      refreshVisibleChatPromptStatuses();
-      if (chatRepoPanelContainsFocus()) {
+      if (chatRepoPanelContainsFocus() || nodeContainsActiveSelection(chatRepoGrid)) {
         state.chatRepoRenderPending = true;
+        if (nodeContainsActiveSelection(chatRepoGrid)) {
+          scheduleDeferredSelectionRenderFlush();
+        }
         return;
       }
+      refreshVisibleChatPromptStatuses();
       renderChatRepos();
     }
 
@@ -10624,6 +10672,17 @@
         !nodeContainsActiveSelection(taskFullscreenTerminal)
       ) {
         renderFullscreenTerminal(state.snapshot);
+      }
+
+      if (
+        state.appDisplay === "chat" &&
+        state.githubReposReady &&
+        state.chatRepoRenderPending &&
+        chatRepoGrid &&
+        !chatRepoPanelContainsFocus() &&
+        !nodeContainsActiveSelection(chatRepoGrid)
+      ) {
+        renderChatRepos();
       }
     }
 
