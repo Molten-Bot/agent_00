@@ -2,6 +2,8 @@ package hub
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,6 +54,8 @@ type Daemon struct {
 const wsUpgradePullProbeTimeoutMs = 1000
 const dispatchDedupTTL = 2 * time.Hour
 const agentStatusUpdateTimeout = 5 * time.Second
+const defaultMaxReconnectDelay = 30 * time.Second
+const reconnectOfflineAfterFailures = 5
 const failureFollowUpRequestIDSuffix = "-failure-review"
 const failureRerunRequestIDSuffix = "-rerun"
 const automaticFailureRerunDisabledReason = "automatic failure rerun disabled; queue failure follow-up in moltenhub-code"
@@ -81,6 +85,10 @@ func (d Daemon) Run(ctx context.Context, cfg InitConfig) error {
 	}
 	if d.ReconnectDelay <= 0 {
 		d.ReconnectDelay = 3 * time.Second
+	}
+	maxReconnectDelay := defaultMaxReconnectDelay
+	if maxReconnectDelay < d.ReconnectDelay {
+		maxReconnectDelay = d.ReconnectDelay
 	}
 
 	runtimeCfgPath := strings.TrimSpace(cfg.RuntimeConfigPath)
@@ -197,6 +205,7 @@ func (d Daemon) Run(ctx context.Context, cfg InitConfig) error {
 		return d.runPullLoop(ctx, api, cfg, dispatchController, &workers, deduper, pullTimeoutMs)
 	}
 
+	websocketFailures := 0
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -210,12 +219,19 @@ func (d Daemon) Run(ctx context.Context, cfg InitConfig) error {
 		} else if isUnauthorizedHubError(err) {
 			return fmt.Errorf("hub auth: %w", err)
 		} else if !shouldFallbackToPull(err) {
-			d.logf("hub.ws status=disconnected err=%q", err)
-			if !sleepWithContext(ctx, d.ReconnectDelay) {
+			websocketFailures++
+			delay := reconnectBackoffDelay(d.ReconnectDelay, maxReconnectDelay, websocketFailures)
+			if websocketFailures >= reconnectOfflineAfterFailures {
+				d.logf("hub.ws status=offline attempts=%d retry_in=%s err=%q", websocketFailures, delay, err)
+			} else {
+				d.logf("hub.ws status=retrying attempts=%d retry_in=%s err=%q", websocketFailures, delay, err)
+			}
+			if !sleepWithContext(ctx, delay) {
 				return nil
 			}
 			continue
 		} else {
+			websocketFailures = 0
 			d.logf("hub.ws status=error err=%q", err)
 		}
 
@@ -230,6 +246,55 @@ func (d Daemon) Run(ctx context.Context, cfg InitConfig) error {
 			}
 		}
 	}
+}
+
+func reconnectBackoffDelay(base, max time.Duration, failures int) time.Duration {
+	if base <= 0 {
+		base = 3 * time.Second
+	}
+	if max <= 0 || max < base {
+		max = base
+	}
+	if failures < 1 {
+		failures = 1
+	}
+
+	delay := base
+	for i := 1; i < failures; i++ {
+		if delay >= max/2 {
+			delay = max
+			break
+		}
+		delay *= 2
+	}
+	if delay > max {
+		delay = max
+	}
+
+	jitterRange := delay / 5
+	if jitterRange <= 0 {
+		return delay
+	}
+	jitter := randomDuration(jitterRange*2+1) - jitterRange
+	delay += jitter
+	if delay < base {
+		return base
+	}
+	if delay > max {
+		return max
+	}
+	return delay
+}
+
+func randomDuration(maxExclusive time.Duration) time.Duration {
+	if maxExclusive <= 0 {
+		return 0
+	}
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return 0
+	}
+	return time.Duration(binary.BigEndian.Uint64(raw[:]) % uint64(maxExclusive))
 }
 
 func (d Daemon) tryWebsocketUpgrade(
@@ -372,7 +437,7 @@ func (d Daemon) runWebsocketLoop(
 
 		var raw map[string]any
 		if err := ws.ReadJSON(&raw); err != nil {
-			if errors.Is(err, io.EOF) && ctx.Err() != nil {
+			if ctx.Err() != nil {
 				return nil
 			}
 			return err
