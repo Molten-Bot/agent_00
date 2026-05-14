@@ -319,14 +319,14 @@ func TestDecodeTaskDefinitionBuildsPRTitleFromDisplayName(t *testing.T) {
 	t.Parallel()
 
 	task, err := decodeTaskDefinition("tasks.json", "reduce-codebase-centralize-classes", []byte(`{
-  "displayName": "Reduce Codebase And Centralize Classes",
+  "displayName": "Reduce Codebase and Centralize Classes",
   "prompt": "Reduce the codebase.",
   "prTitle": "Molten Hub Code: reduce-codebase-centralize-classes"
 }`))
 	if err != nil {
 		t.Fatalf("decodeTaskDefinition() error = %v", err)
 	}
-	if got, want := task.PRTitle, "Molten Hub Code: Reduce Codebase And Centralize Classes"; got != want {
+	if got, want := task.PRTitle, "Molten Hub Code: Reduce Codebase and Centralize Classes"; got != want {
 		t.Fatalf("PRTitle = %q, want %q", got, want)
 	}
 }
@@ -413,7 +413,7 @@ func TestDefaultCatalogIncludesReduceCodebaseCentralizeClassesTask(t *testing.T)
 	if !strings.Contains(strings.ToLower(task.Prompt), "avoid regressions") {
 		t.Fatalf("prompt = %q, want regression-prevention guidance", task.Prompt)
 	}
-	if got, want := task.PRTitle, "Molten Hub Code: Reduce Codebase And Centralize Classes"; got != want {
+	if got, want := task.PRTitle, "Molten Hub Code: Reduce Codebase and Centralize Classes"; got != want {
 		t.Fatalf("PRTitle = %q, want %q", got, want)
 	}
 }
@@ -477,7 +477,7 @@ func TestDefaultCatalogIncludesMovePageCSSToGlobalCSSTask(t *testing.T) {
 			t.Fatalf("prompt = %q, want %q guidance", task.Prompt, want)
 		}
 	}
-	if got, want := task.PRTitle, "Molten Hub Code: Move Page CSS To Global CSS"; got != want {
+	if got, want := task.PRTitle, "Molten Hub Code: Move Page CSS to Global CSS"; got != want {
 		t.Fatalf("PRTitle = %q, want %q", got, want)
 	}
 }
