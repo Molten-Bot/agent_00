@@ -3,10 +3,12 @@ package hub
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1783,6 +1785,273 @@ func TestRunWebsocketLoopReadsMessageThenReturnsOnDisconnect(t *testing.T) {
 
 	if serverErr := <-serverDone; serverErr != nil {
 		t.Fatalf("websocket server error = %v", serverErr)
+	}
+}
+
+func TestRunWebsocketLoopPongsWhileIdle(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer listener.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serverDone := make(chan error, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			serverDone <- acceptErr
+			return
+		}
+		defer conn.Close()
+
+		if err := performTestWebsocketHandshake(conn); err != nil {
+			serverDone <- err
+			return
+		}
+		time.Sleep(75 * time.Millisecond)
+		if err := writeFrameToConn(conn, true, opcodePing, []byte("server-keepalive"), false); err != nil {
+			serverDone <- err
+			return
+		}
+		pong, err := readFrameFromConn(conn)
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		if pong.opcode != opcodePong || string(pong.payload) != "server-keepalive" {
+			serverDone <- fmt.Errorf("unexpected pong frame: %+v", pong)
+			return
+		}
+		cancel()
+		serverDone <- nil
+	}()
+
+	d := NewDaemon(nil)
+	api := &stubMoltenHubAPI{token: "token"}
+	cfg := InitConfig{
+		Skill: SkillConfig{
+			Name:         "code_for_me",
+			DispatchType: "skill_request",
+			ResultType:   "skill_result",
+		},
+	}
+	var workers sync.WaitGroup
+
+	wsURL := "ws://" + listener.Addr().String() + "/runtime/messages/ws"
+	if err := d.runWebsocketLoop(ctx, wsURL, api, cfg, nil, &workers, nil); err != nil {
+		t.Fatalf("runWebsocketLoop() error = %v", err)
+	}
+	if serverErr := <-serverDone; serverErr != nil {
+		t.Fatalf("websocket server error = %v", serverErr)
+	}
+}
+
+func TestDaemonRunReconnectsAfterStaleWebsocketCloseWithoutDuplicateAck(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu          sync.Mutex
+		wsAttempts  int
+		wsSessions  []string
+		ackIDs      []string
+		published   int
+		offlineBody []map[string]any
+	)
+	acked := make(chan struct{})
+	secondWS := make(chan struct{})
+	wsShutdown := make(chan struct{})
+	defer close(wsShutdown)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ping":
+			w.WriteHeader(http.StatusNoContent)
+		case "/health":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/v1/a2a":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		case "/v1/agents/me", "/v1/agents/me/status", "/v1/agents/me/metadata", "/v1/agents/me/activities":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/v1/runtime/messages/pull":
+			w.WriteHeader(http.StatusNoContent)
+		case "/v1/runtime/messages/ack":
+			defer r.Body.Close()
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode ack body: %v", err)
+			}
+			mu.Lock()
+			ackIDs = append(ackIDs, fmt.Sprint(body["delivery_id"]))
+			mu.Unlock()
+			closeOnce(acked)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/v1/runtime/messages/publish":
+			mu.Lock()
+			published++
+			mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/v1/runtime/messages/offline":
+			defer r.Body.Close()
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode offline body: %v", err)
+			}
+			mu.Lock()
+			offlineBody = append(offlineBody, body)
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/v1/runtime/messages/ws":
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatalf("response writer does not support hijack")
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatalf("Hijack() error = %v", err)
+			}
+			go func() {
+				defer conn.Close()
+				if err := performTestWebsocketHandshakeWithRequest(conn, r); err != nil {
+					return
+				}
+				mu.Lock()
+				wsAttempts++
+				attempt := wsAttempts
+				wsSessions = append(wsSessions, r.URL.Query().Get("session_key"))
+				mu.Unlock()
+				if attempt == 1 {
+					_ = writeFrameToConn(conn, true, opcodeClose, nil, false)
+					return
+				}
+				closeOnce(secondWS)
+				_ = writeFrameToConn(conn, true, opcodeText, []byte(`{"delivery_id":"delivery-1","message_id":"message-1","message":{"type":"noop","skill":"other_skill"}}`), false)
+				<-wsShutdown
+			}()
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	d := NewDaemon(execx.OSRunner{})
+	d.ReconnectDelay = time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- d.Run(ctx, InitConfig{
+			BaseURL:    server.URL + "/v1",
+			AgentToken: "agent-token",
+			SessionKey: "stable-session",
+			Skill: SkillConfig{
+				Name:         "code_for_me",
+				DispatchType: "skill_request",
+				ResultType:   "skill_result",
+			},
+		})
+	}()
+
+	select {
+	case <-secondWS:
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("timed out waiting for websocket reconnect")
+	}
+	select {
+	case <-acked:
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("timed out waiting for websocket delivery ack")
+	}
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Daemon.Run() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for daemon shutdown")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if wsAttempts < 2 {
+		t.Fatalf("websocket attempts = %d, want at least 2", wsAttempts)
+	}
+	for _, session := range wsSessions {
+		if session != "stable-session" {
+			t.Fatalf("websocket session_key = %q, want stable-session; sessions=%v", session, wsSessions)
+		}
+	}
+	if got := len(ackIDs); got != 1 {
+		t.Fatalf("ack count = %d, want 1; ackIDs=%v", got, ackIDs)
+	}
+	if ackIDs[0] != "delivery-1" {
+		t.Fatalf("ack delivery_id = %q, want delivery-1", ackIDs[0])
+	}
+	if published != 0 {
+		t.Fatalf("publish count = %d, want 0 for ignored duplicate-free noop delivery", published)
+	}
+	if got := len(offlineBody); got != 1 {
+		t.Fatalf("offline requests = %d, want 1", got)
+	}
+	if got := fmt.Sprint(offlineBody[0]["session_key"]); got != "stable-session" {
+		t.Fatalf("offline session_key = %q, want stable-session", got)
+	}
+	if got := fmt.Sprint(offlineBody[0]["reason"]); got != transportOfflineReasonAgent {
+		t.Fatalf("offline reason = %q, want %q", got, transportOfflineReasonAgent)
+	}
+}
+
+func TestReconnectBackoffDelayIsBounded(t *testing.T) {
+	t.Parallel()
+
+	base := 10 * time.Millisecond
+	maxDelay := 80 * time.Millisecond
+	for failures := 1; failures <= 10; failures++ {
+		got := reconnectBackoffDelay(base, maxDelay, failures)
+		if got < base {
+			t.Fatalf("reconnectBackoffDelay(%d) = %s, want >= %s", failures, got, base)
+		}
+		if got > maxDelay {
+			t.Fatalf("reconnectBackoffDelay(%d) = %s, want <= %s", failures, got, maxDelay)
+		}
+	}
+}
+
+func performTestWebsocketHandshake(conn net.Conn) error {
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		return err
+	}
+	return performTestWebsocketHandshakeWithRequest(conn, req)
+}
+
+func performTestWebsocketHandshakeWithRequest(conn net.Conn, req *http.Request) error {
+	key := strings.TrimSpace(req.Header.Get("Sec-WebSocket-Key"))
+	_, err := fmt.Fprintf(
+		conn,
+		"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n",
+		websocketAccept(key),
+	)
+	return err
+}
+
+func closeOnce(ch chan struct{}) {
+	select {
+	case <-ch:
+	default:
+		close(ch)
 	}
 }
 

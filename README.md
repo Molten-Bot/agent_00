@@ -164,6 +164,14 @@ Hub OpenAPI:
 - Live: [`https://na.hub.molten.bot/openapi.yaml`](https://na.hub.molten.bot/openapi.yaml)
 - Offline snapshot: [na.hub.molten.bot.openapi.yaml](na.hub.molten.bot.openapi.yaml)
 
+Runtime websocket clients that connect to `/v1/runtime/messages/ws` must keep a
+read loop active for the full connection lifetime. The Hub sends websocket ping
+control frames and expects timely pong responses; libraries with automatic pong
+handling still need an active read loop so control frames are processed. On
+shutdown, mark the current `session_key` offline with
+`/v1/runtime/messages/offline`; reconnects should reuse the same `session_key`
+unless starting a new runtime session.
+
 ## Response Modes
 
 Supported `responseMode` values:
