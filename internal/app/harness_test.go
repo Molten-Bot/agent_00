@@ -4560,6 +4560,49 @@ func TestRunCodexDoesNotDowngradeMissingImplementationTargetToValidationGap(t *t
 	}
 }
 
+func TestRunCodexDoesNotDowngradeProductionHealthFailureToValidationGap(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "is production working and stable -> https://na.hub.molten.bot/health"
+	firstCmd := codexCommand(targetDir, prompt)
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: firstCmd,
+			res: execx.Result{
+				Stdout: strings.Join([]string{
+					"Failure: Cannot confirm production working/stable.",
+					"Error details: runtime cannot resolve `na.hub.molten.bot`. Repo health script failed after 3 attempts:",
+					"`curl: (6) Could not resolve host: na.hub.molten.bot`",
+					"`HTTP 000`",
+					"No repo changes made.",
+				}, "\n"),
+				Stderr: strings.Join([]string{
+					"If local test or validation tooling is unavailable in this runtime (for example `command not found` or missing `node_modules`), do not fail solely for that.",
+					"Failure: Cannot confirm production working/stable.",
+					"Error details: runtime cannot resolve `na.hub.molten.bot`.",
+				}, "\n"),
+			},
+		},
+	}}
+
+	h := New(fake)
+	err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil {
+		t.Fatal("runCodex() error = nil, want codex reported production health failure")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "codex reported failure") {
+		t.Fatalf("runCodex() error = %v, want codex reported failure marker", err)
+	}
+	if !strings.Contains(err.Error(), "Cannot confirm production working/stable") {
+		t.Fatalf("runCodex() error = %v, want production health failure detail", err)
+	}
+	if strings.Contains(err.Error(), "validation_tooling_unavailable") {
+		t.Fatalf("runCodex() error = %v, should not downgrade to validation tooling gap", err)
+	}
+}
+
 func TestRunCodexAllowsValidationToolingMissingFailure(t *testing.T) {
 	t.Parallel()
 
