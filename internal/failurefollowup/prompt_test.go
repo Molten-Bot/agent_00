@@ -58,6 +58,9 @@ func TestWithExecutionContractIncludesValidationToolingInstruction(t *testing.T)
 	if !strings.Contains(got, ValidationToolingInstruction) {
 		t.Fatalf("WithExecutionContract() missing validation-tooling instruction: %q", got)
 	}
+	if !strings.Contains(got, "do not use `Failure:` solely for that validation gap") {
+		t.Fatalf("WithExecutionContract() missing validation-gap failure guidance: %q", got)
+	}
 }
 
 func TestWithExecutionContractIncludesHubActivityPrivacyInstruction(t *testing.T) {
