@@ -3111,6 +3111,17 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		strings.Contains(text, "have node_modules installed") ||
 		strings.Contains(text, "not installed in runtime") ||
 		strings.Contains(text, "tooling/deps not installed") ||
+		strings.Contains(text, "missing deps") ||
+		strings.Contains(text, "missing dependencies") ||
+		strings.Contains(text, "missing dependency") ||
+		strings.Contains(text, "shim missing") ||
+		strings.Contains(text, "tool missing") ||
+		strings.Contains(text, "runner missing") ||
+		strings.Contains(text, "executable missing") ||
+		strings.Contains(text, "binary missing") ||
+		strings.Contains(text, "command missing") ||
+		strings.Contains(text, "`uv` missing") ||
+		strings.Contains(text, "uv missing") ||
 		strings.Contains(text, "node_modules missing")
 	if !missingTooling {
 		return false

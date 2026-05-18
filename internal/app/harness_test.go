@@ -4857,6 +4857,39 @@ func TestRunCodexAllowsLocalValidationCommandFailedWithToolingGap(t *testing.T) 
 	}
 }
 
+func TestRunCodexAllowsFullSuiteValidationUnavailableWithMissingDeps(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "improve unit test coverage"
+	firstCmd := codexCommand(targetDir, prompt)
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: firstCmd,
+			res: execx.Result{
+				Stdout: strings.Join([]string{
+					"Failure: full-suite validation unavailable in runtime.",
+					"Error details: `uv` missing, `python` shim missing; direct `python3 -m pytest` collection fails on missing deps including `pipecat`, `aiohttp`, `typer`, `loguru`.",
+				}, "\n"),
+				Stderr: "tokens used",
+			},
+		},
+	}}
+
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
+		t.Fatalf("runCodex() error = %v, want nil for full-suite validation tooling gap", err)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "action=validation_tooling_unavailable") {
+		t.Fatalf("logs missing validation tooling warning:\n%s", strings.Join(logs, "\n"))
+	}
+}
+
 func TestRunCodexAllowsNPMCheckMissingNodeModulesPluginResolution(t *testing.T) {
 	t.Parallel()
 
@@ -5437,7 +5470,7 @@ func TestWithCompletionGatePromptIncludesAgentRuntimeGuidance(t *testing.T) {
 		"Treat non-empty product, bug, feature, or review text in it as the implementation target.",
 		"Do not answer that no implementation task was given when the agent input includes a requested repository change.",
 		"When failures occur, send a response back to the calling agent that clearly states failure and includes the error details. Use explicit `Failure:` and `Error details:` fields.",
-		"If local test or validation tooling is unavailable in this runtime (for example `command not found` or missing `node_modules`), do not fail solely for that.",
+		"If local test or validation tooling is unavailable in this runtime (for example `command not found` or missing `node_modules`), do not fail solely for that and do not use `Failure:` solely for that validation gap.",
 		"Before sharing repository or pull-request links in Hub activity, use `gh repo view OWNER/REPO --json isPrivate,nameWithOwner` during clone or PR tooling.",
 		"Share repo and PR links only when GitHub reports `isPrivate:false`; never share private repository links.",
 		"If a repository is not initialized after clone, use only gh CLI/git tools to create and push a main branch, then continue once git state is ready for work.",
