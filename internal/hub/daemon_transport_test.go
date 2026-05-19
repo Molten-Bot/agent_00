@@ -99,6 +99,96 @@ func TestIsUnauthorizedHubError(t *testing.T) {
 	}
 }
 
+func TestIsUnsupportedRuntimeWebsocketError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "websocket handshake 404",
+			err:  errors.New("websocket handshake failed: status=404"),
+			want: true,
+		},
+		{
+			name: "websocket handshake 405",
+			err:  errors.New("websocket handshake failed: status=405"),
+			want: true,
+		},
+		{
+			name: "websocket handshake 501",
+			err:  errors.New("websocket handshake failed: status=501"),
+			want: true,
+		},
+		{
+			name: "unsupported status without websocket handshake",
+			err:  errors.New("http status=404"),
+			want: false,
+		},
+		{
+			name: "websocket handshake unauthorized",
+			err:  errors.New("websocket handshake failed: status=401"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isUnsupportedRuntimeWebsocketError(tt.err); got != tt.want {
+				t.Fatalf("isUnsupportedRuntimeWebsocketError() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeDispatchStatusMessageIDPart(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{
+			name:  "keeps lowercase digits dash and underscore",
+			value: "Stage_1-OK",
+			want:  "stage_1-ok",
+		},
+		{
+			name:  "replaces punctuation and trims separators",
+			value: "  *** waiting: repo/clone ***  ",
+			want:  "waiting--repo-clone",
+		},
+		{
+			name:  "empty after sanitizing",
+			value: "!!!",
+			want:  "status",
+		},
+		{
+			name:  "truncates long values and trims trailing separators",
+			value: strings.Repeat("a", 39) + "!!!tail",
+			want:  strings.Repeat("a", 39),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := sanitizeDispatchStatusMessageIDPart(tt.value); got != tt.want {
+				t.Fatalf("sanitizeDispatchStatusMessageIDPart(%q) = %q, want %q", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDaemonRunRepeatsPingHealthPullBeforeEachWebsocketAttempt(t *testing.T) {
 	t.Parallel()
 
