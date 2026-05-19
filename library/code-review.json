@@ -1,6 +1,7 @@
 {
   "code-review": {
     "displayName": "Pull Request Code Review",
+    "type": "review",
     "icon": "clipboard-check",
     "description": "Review a pull request, including existing discussion and the git diff, and produce a documented findings report.",
     "targetSubdir": ".",

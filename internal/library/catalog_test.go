@@ -23,7 +23,7 @@ func TestDefaultLibraryJSONFilesHaveCanonicalShape(t *testing.T) {
 		t.Fatalf("no library json files found in %q", dir)
 	}
 
-	wantFields := []string{"commitMessage", "description", "displayName", "icon", "prTitle", "prompt", "targetSubdir"}
+	wantFields := []string{"commitMessage", "description", "displayName", "icon", "prTitle", "prompt", "targetSubdir", "type"}
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -89,6 +89,33 @@ func TestDefaultLibraryJSONFilesHaveCanonicalShape(t *testing.T) {
 	}
 }
 
+func TestDefaultCatalogTasksUseLibraryTypes(t *testing.T) {
+	t.Setenv(catalogDirEnv, "")
+	t.Setenv(agentsSeedEnv, "")
+
+	catalog, err := LoadCatalog(DefaultDir)
+	if err != nil {
+		t.Fatalf("LoadCatalog(%q) error = %v", DefaultDir, err)
+	}
+
+	wantTypes := map[string]struct{}{
+		"maintenance": {},
+		"quality":     {},
+		"review":      {},
+		"security":    {},
+	}
+	gotTypes := map[string]struct{}{}
+	for _, task := range catalog.Tasks {
+		if _, ok := wantTypes[task.Type]; !ok {
+			t.Fatalf("task %q type = %q, want one of %v", task.Name, task.Type, sortedStringMapKeys(wantTypes))
+		}
+		gotTypes[task.Type] = struct{}{}
+	}
+	if !reflect.DeepEqual(sortedStringMapKeys(gotTypes), sortedStringMapKeys(wantTypes)) {
+		t.Fatalf("catalog types = %v, want %v", sortedStringMapKeys(gotTypes), sortedStringMapKeys(wantTypes))
+	}
+}
+
 func TestLoadCatalogReadsJSONTasks(t *testing.T) {
 	t.Parallel()
 
@@ -96,6 +123,7 @@ func TestLoadCatalogReadsJSONTasks(t *testing.T) {
 	data := `{
   "security-review": {
     "displayName": "Security Review",
+    "type": "security",
     "icon": "shield-check",
     "description": "Audit security boundaries.",
     "targetSubdir": ".",
@@ -122,6 +150,9 @@ func TestLoadCatalogReadsJSONTasks(t *testing.T) {
 	if got, want := catalog.Tasks[0].Icon, "shield-check"; got != want {
 		t.Fatalf("Icon = %q, want %q", got, want)
 	}
+	if got, want := catalog.Tasks[0].Type, "security"; got != want {
+		t.Fatalf("Type = %q, want %q", got, want)
+	}
 	if got, want := catalog.Tasks[0].TargetSubdir, "."; got != want {
 		t.Fatalf("TargetSubdir = %q, want %q", got, want)
 	}
@@ -141,9 +172,21 @@ func TestLoadCatalogReadsJSONTasks(t *testing.T) {
 	if got, want := summaries[0].Icon, "shield-check"; got != want {
 		t.Fatalf("Summaries()[0].Icon = %q, want %q", got, want)
 	}
+	if got, want := summaries[0].Type, "security"; got != want {
+		t.Fatalf("Summaries()[0].Type = %q, want %q", got, want)
+	}
 }
 
 func sortedKeys(values map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedStringMapKeys(values map[string]struct{}) []string {
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)

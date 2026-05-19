@@ -1,6 +1,7 @@
 {
   "contributor-history-ranking": {
     "displayName": "Contributor History Ranking",
+    "type": "review",
     "icon": "users",
     "description": "Review full git history, stack-rank contributor impact by change frequency and complexity, and publish docs/contributors.md.",
     "targetSubdir": ".",

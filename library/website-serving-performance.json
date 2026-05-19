@@ -1,6 +1,7 @@
 {
   "website-serving-performance": {
     "displayName": "Website Serving Performance",
+    "type": "maintenance",
     "icon": "gauge",
     "description": "Analyze a website or app codebase, then improve serving and runtime performance while preserving functionality.",
     "targetSubdir": ".",

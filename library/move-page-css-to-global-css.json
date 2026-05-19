@@ -1,6 +1,7 @@
 {
   "move-page-css-to-global-css": {
     "displayName": "Move Page CSS to Global CSS",
+    "type": "maintenance",
     "icon": "paintbrush",
     "description": "Move CSS out of page files and page-scoped styles into a global stylesheet while preserving exact UI behavior.",
     "targetSubdir": ".",

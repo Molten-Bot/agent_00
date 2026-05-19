@@ -1,6 +1,7 @@
 {
   "e2e-smoke-test-creation": {
     "displayName": "E2E Smoke Test Creation",
+    "type": "quality",
     "icon": "monitor-check",
     "description": "Add minimal high-value end-to-end smoke coverage for critical user flows.",
     "targetSubdir": ".",

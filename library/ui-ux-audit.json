@@ -1,6 +1,7 @@
 {
   "ui-ux-audit": {
     "displayName": "Exhaustive SaaS UI/UX Audit",
+    "type": "review",
     "icon": "palette",
     "description": "Holistic application review that helps teams plan better user outcomes.",
     "targetSubdir": ".",

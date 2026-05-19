@@ -1,6 +1,7 @@
 {
   "unused-code-asset-cleanup": {
     "displayName": "Unused Code and Asset Cleanup",
+    "type": "maintenance",
     "icon": "trash-2",
     "description": "Remove code and assets proven unused while preserving behavior and improving repository hygiene.",
     "targetSubdir": ".",

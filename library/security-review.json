@@ -1,6 +1,7 @@
 {
   "security-review": {
     "displayName": "Security Boundary Review",
+    "type": "security",
     "icon": "shield-check",
     "description": "Review security boundaries and produce a documented findings PR.",
     "targetSubdir": ".",

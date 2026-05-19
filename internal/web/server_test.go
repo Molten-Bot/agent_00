@@ -141,8 +141,8 @@ func TestHandlerLibraryEndpointReturnsTasks(t *testing.T) {
 	srv := NewServer("", NewBroker())
 	srv.LoadLibraryTasks = func() ([]library.TaskSummary, error) {
 		return []library.TaskSummary{
-			{Name: "security-review", DisplayName: "Security Review", Icon: "shield-check", Prompt: "Review the repository."},
-			{Name: "unit-test-coverage", DisplayName: "100% Unit Test Coverage", Icon: "badge-check", Prompt: "Raise coverage."},
+			{Name: "security-review", DisplayName: "Security Review", Type: "security", Icon: "shield-check", Prompt: "Review the repository."},
+			{Name: "unit-test-coverage", DisplayName: "100% Unit Test Coverage", Type: "quality", Icon: "badge-check", Prompt: "Raise coverage."},
 		}, nil
 	}
 
@@ -172,6 +172,9 @@ func TestHandlerLibraryEndpointReturnsTasks(t *testing.T) {
 	}
 	if got, want := body.Tasks[0].Icon, "shield-check"; got != want {
 		t.Fatalf("tasks[0].icon = %q, want %q", got, want)
+	}
+	if got, want := body.Tasks[0].Type, "security"; got != want {
+		t.Fatalf("tasks[0].type = %q, want %q", got, want)
 	}
 }
 
@@ -3557,6 +3560,14 @@ func TestIndexLibraryModeUsesDedicatedRunEndpointAndShowsLoadErrors(t *testing.T
 	}
 	if !strings.Contains(markup, `state.libraryLoadError || "No library tasks are available."`) {
 		t.Fatalf("expected index html to surface library load errors in the task list")
+	}
+	if !strings.Contains(markup, `id="library-type-tabs" class="library-type-tabs" role="tablist" aria-label="Library task types"`) ||
+		!strings.Contains(markup, `const LIBRARY_TASK_TYPE_DEFS = Object.freeze({`) ||
+		!strings.Contains(markup, `function renderLibraryTypeTabs(types, activeType)`) ||
+		!strings.Contains(markup, `type: normalizeLibraryTaskType(task),`) ||
+		!strings.Contains(markup, `state.selectedLibraryTask = "";`) ||
+		!strings.Contains(markup, `let activeType = selectedEntry?.type || String(state.selectedLibraryType || "").trim();`) {
+		t.Fatalf("expected index html to build library type tabs from loaded task metadata")
 	}
 	if !strings.Contains(markup, `id="library-target-subdir"`) {
 		t.Fatalf("expected index html to render a directory input in library mode")

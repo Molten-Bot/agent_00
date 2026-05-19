@@ -1,6 +1,7 @@
 {
   "readme-upkeep": {
     "displayName": "README Upkeep",
+    "type": "maintenance",
     "icon": "book-open",
     "description": "Keep README up-to-date, human-readable, and concise.",
     "targetSubdir": ".",

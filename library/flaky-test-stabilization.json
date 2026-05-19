@@ -1,6 +1,7 @@
 {
   "flaky-test-stabilization": {
     "displayName": "Flaky Test Stabilization",
+    "type": "quality",
     "icon": "flask-conical",
     "description": "Diagnose nondeterministic tests and stabilize them without weakening coverage.",
     "targetSubdir": ".",

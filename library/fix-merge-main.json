@@ -1,6 +1,7 @@
 {
   "fix-merge-main": {
     "displayName": "Fix Merge Conflicts with Main",
+    "type": "quality",
     "icon": "git-merge",
     "description": "Resolve merge conflicts against main and keep iterating until checks pass.",
     "targetSubdir": ".",
