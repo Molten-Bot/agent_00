@@ -322,6 +322,37 @@ func TestIncrementRuntimeConfigLibraryTaskUsagePersistsAndMergesCounts(t *testin
 	}
 }
 
+func TestRuntimeConfigLibraryTaskUsageCount(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		value     any
+		wantCount int
+		wantOK    bool
+	}{
+		{name: "int", value: int(3), wantCount: 3, wantOK: true},
+		{name: "int8", value: int8(4), wantCount: 4, wantOK: true},
+		{name: "int16", value: int16(5), wantCount: 5, wantOK: true},
+		{name: "int32", value: int32(6), wantCount: 6, wantOK: true},
+		{name: "int64", value: int64(7), wantCount: 7, wantOK: true},
+		{name: "whole float", value: float64(8), wantCount: 8, wantOK: true},
+		{name: "fractional float", value: float64(8.5), wantOK: false},
+		{name: "string", value: "9", wantOK: false},
+		{name: "nil", value: nil, wantOK: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			gotCount, gotOK := runtimeConfigLibraryTaskUsageCount(tt.value)
+			if gotOK != tt.wantOK || gotCount != tt.wantCount {
+				t.Fatalf("runtimeConfigLibraryTaskUsageCount(%#v) = (%d, %v), want (%d, %v)", tt.value, gotCount, gotOK, tt.wantCount, tt.wantOK)
+			}
+		})
+	}
+}
+
 func TestSaveRuntimeConfigPreservesLibraryTaskUsage(t *testing.T) {
 	t.Parallel()
 
@@ -498,6 +529,35 @@ func TestSaveRuntimeConfigClaudeOAuthTokenPersistsValue(t *testing.T) {
 	}
 	if got, want := doc["claude_code_oauth_token"], "oauth_token_saved"; got != want {
 		t.Fatalf("claude_code_oauth_token = %#v, want %q", got, want)
+	}
+}
+
+func TestSaveRuntimeConfigClaudeOAuthTokenRejectsEmptyToken(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	if err := SaveRuntimeConfigClaudeOAuthToken(path, InitConfig{}, " \t "); err == nil {
+		t.Fatal("SaveRuntimeConfigClaudeOAuthToken(empty) error = nil, want error")
+	}
+}
+
+func TestSaveRuntimeConfigClaudeOAuthTokenRejectsMalformedConfig(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"base_url":`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	err := SaveRuntimeConfigClaudeOAuthToken(path, InitConfig{}, "oauth_token_saved")
+	if err == nil {
+		t.Fatal("SaveRuntimeConfigClaudeOAuthToken(malformed) error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "parse runtime config") {
+		t.Fatalf("SaveRuntimeConfigClaudeOAuthToken(malformed) error = %v, want parse runtime config", err)
 	}
 }
 

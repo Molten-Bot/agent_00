@@ -934,6 +934,36 @@ sleep 30
 	}
 }
 
+func TestNewClaudeAuthGateWithContextAndConfigUsesDefaultsAndRuntimeConfig(t *testing.T) {
+	t.Setenv("GH_TOKEN", "github_token_ready")
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	path := filepath.Join(t.TempDir(), "runtime.json")
+	g := newClaudeAuthGateWithContextAndConfig(context.Background(), "", path, hub.InitConfig{
+		BaseURL:    "https://hub.example/v1",
+		SessionKey: "unit-test",
+	}, nil)
+	if g == nil {
+		t.Fatal("newClaudeAuthGateWithContextAndConfig() = nil")
+	}
+	if got, want := g.command, agentruntime.HarnessClaude; got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+	if got := g.runtimeConfigPath; got != path {
+		t.Fatalf("runtimeConfigPath = %q, want %q", got, path)
+	}
+	if got := g.initCfg.SessionKey; got != "unit-test" {
+		t.Fatalf("initCfg.SessionKey = %q, want unit-test", got)
+	}
+	status, err := g.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if !status.Ready {
+		t.Fatalf("Status().Ready = false, want true; status=%+v", status)
+	}
+}
+
 func TestClaudeAuthHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -1009,6 +1039,20 @@ func TestClaudeAuthHelpers(t *testing.T) {
 	}
 	if !shouldCaptureClaudeOAuthToken("Your OAuth token (valid for 1 year):") {
 		t.Fatalf("shouldCaptureClaudeOAuthToken() = false, want true")
+	}
+	for _, line := range []string{
+		"Store this token securely.",
+		"Use this token by setting CLAUDE_CODE_OAUTH_TOKEN.",
+		"Login successful",
+	} {
+		if !shouldStopClaudeOAuthTokenCapture(line) {
+			t.Fatalf("shouldStopClaudeOAuthTokenCapture(%q) = false, want true", line)
+		}
+	}
+	for _, line := range []string{"", "Copy the token below"} {
+		if shouldStopClaudeOAuthTokenCapture(line) {
+			t.Fatalf("shouldStopClaudeOAuthTokenCapture(%q) = true, want false", line)
+		}
 	}
 	if got, want := extractClaudeOAuthTokenCandidate("abc.DEF_123-xyz-token-value"), "abc.DEF_123-xyz-token-value"; got != want {
 		t.Fatalf("extractClaudeOAuthTokenCandidate() = %q, want %q", got, want)
