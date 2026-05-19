@@ -1,6 +1,7 @@
 {
   "release-readiness-review": {
     "displayName": "Release Readiness Review",
+    "type": "review",
     "icon": "rocket",
     "description": "Check release blockers, configuration, migrations, docs, tests, deployment assumptions, and produce fixes or a focused readiness report.",
     "targetSubdir": ".",

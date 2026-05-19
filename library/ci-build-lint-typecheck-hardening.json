@@ -1,6 +1,7 @@
 {
   "ci-build-lint-typecheck-hardening": {
     "displayName": "CI Build, Lint, and Type Check Hardening",
+    "type": "quality",
     "icon": "wrench",
     "description": "Repair CI, build, lint, and type checking failures while strengthening validation paths.",
     "targetSubdir": ".",

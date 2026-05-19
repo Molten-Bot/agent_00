@@ -1,6 +1,7 @@
 {
   "unit-test-coverage": {
     "displayName": "100% Unit Test Coverage",
+    "type": "quality",
     "icon": "badge-check",
     "description": "Drive the repository to full unit-test coverage and keep CI green.",
     "targetSubdir": ".",

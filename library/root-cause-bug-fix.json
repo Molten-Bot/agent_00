@@ -1,6 +1,7 @@
 {
   "root-cause-bug-fix": {
     "displayName": "Root Cause Bug Fix",
+    "type": "quality",
     "icon": "search-code",
     "description": "Reproduce a bug, diagnose the root cause, fix it safely, and add regression coverage.",
     "targetSubdir": ".",

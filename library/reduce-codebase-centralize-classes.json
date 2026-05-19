@@ -1,6 +1,7 @@
 {
   "reduce-codebase-centralize-classes": {
     "displayName": "Reduce Codebase and Centralize Classes",
+    "type": "maintenance",
     "icon": "code-xml",
     "description": "Reduce code volume, centralize duplicated classes and logic, and prove behavior stays stable.",
     "targetSubdir": ".",

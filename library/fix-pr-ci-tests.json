@@ -1,6 +1,7 @@
 {
   "fix-pr-ci-tests": {
     "displayName": "Fix PR CI Test Failures",
+    "type": "quality",
     "icon": "bug",
     "description": "Check PR CI status, repair broken tests or code, and preserve or improve coverage.",
     "targetSubdir": ".",

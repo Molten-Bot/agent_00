@@ -2125,6 +2125,94 @@ select.prompt-control {
   color: var(--bad);
 }
 
+.library-type-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.library-type-tabs[hidden] {
+  display: none;
+}
+
+.library-type-tab {
+  appearance: none;
+  align-items: center;
+  background: var(--surface-task-button-bg);
+  border: 1px solid rgba(17, 34, 68, 0.12);
+  border-radius: var(--radius);
+  color: var(--muted);
+  display: inline-flex;
+  flex: 0 1 auto;
+  gap: 7px;
+  min-height: 34px;
+  min-width: 0;
+  padding: 7px 9px;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, color 0.12s ease, background-color 0.12s ease;
+}
+
+.library-type-tab:hover,
+.library-type-tab:focus-visible {
+  border-color: rgba(10, 132, 255, 0.35);
+  color: var(--text);
+}
+
+.library-type-tab:focus-visible {
+  outline: 2px solid rgba(10, 132, 255, 0.28);
+  outline-offset: 2px;
+}
+
+.library-type-tab.active,
+.library-type-tab[aria-selected="true"] {
+  background: var(--surface-library-bg);
+  border-color: rgba(10, 132, 255, 0.38);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px rgba(10, 132, 255, 0.12);
+}
+
+.library-type-tab-icon {
+  align-items: center;
+  color: var(--accent);
+  display: inline-flex;
+  flex: 0 0 18px;
+  height: 18px;
+  justify-content: center;
+  width: 18px;
+}
+
+.library-type-tab-icon svg,
+.library-type-tab-icon .lucide,
+.library-type-tab-icon [data-lucide] {
+  display: block;
+  height: 16px;
+  width: 16px;
+}
+
+.library-type-tab-label {
+  font-size: 0.76rem;
+  font-weight: 800;
+  line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-type-tab-count {
+  align-items: center;
+  background: rgba(10, 132, 255, 0.1);
+  border-radius: 999px;
+  color: var(--accent);
+  display: inline-flex;
+  font-size: 0.68rem;
+  font-weight: 800;
+  justify-content: center;
+  line-height: 1;
+  min-width: 18px;
+  padding: 3px 5px;
+}
+
 .library-task-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4765,6 +4853,16 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
 }
 
 @media (max-width: 720px) {
+  .library-type-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .library-type-tab {
+    justify-content: center;
+    width: 100%;
+  }
+
   .library-task-list {
     grid-template-columns: minmax(0, 1fr);
   }

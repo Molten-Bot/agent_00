@@ -251,6 +251,7 @@
                 </div>
                 <div class="prompt-field">
                   <span class="prompt-label">Task Library</span>
+                  <div id="library-type-tabs" class="library-type-tabs" role="tablist" aria-label="Library task types"></div>
                   <div id="library-task-list" class="library-task-list"></div>
                 </div>
               </div>
@@ -719,6 +720,13 @@
     const COMPLETED_STATUSES = new Set(["completed", "no_changes", "error", "invalid", "duplicate", "stopped"]);
     const TASK_PROGRESS_PREP_STAGES = new Set(["preflight", "auth", "workspace", "config", "submit", "dispatch"]);
     const TASK_PROGRESS_AGENT_STAGES = new Set(["codex", "claude", "auggie", "pi", "opencode", "augment", "agent", "review"]);
+    const LIBRARY_TASK_TYPE_ORDER = Object.freeze(["quality", "maintenance", "security", "review"]);
+    const LIBRARY_TASK_TYPE_DEFS = Object.freeze({
+      quality: { label: "Quality", icon: "badge-check" },
+      maintenance: { label: "Maintenance", icon: "wrench" },
+      security: { label: "Security", icon: "shield-check" },
+      review: { label: "Review", icon: "clipboard-check" },
+    });
     const TASK_PROGRESS_STEP_DEFS = Object.freeze({
       entry_chat: { id: "entry_chat", label: "Chat", detail: "Queued from Chat.", icon: "entry_chat" },
       entry_hub: { id: "entry_hub", label: "Hub", detail: "Queued by Molten Hub.", icon: "entry_hub" },
@@ -1718,6 +1726,7 @@
       repoHistory: loadRepoHistory(),
       reviewerHistory: loadReviewerHistory(),
       promptMode: loadPromptMode(),
+      selectedLibraryType: "",
       selectedLibraryTask: "",
       promptVisible: loadPromptVisibility(),
       taskVisible: loadTaskVisibility(),
@@ -1925,6 +1934,7 @@
     const libraryReviewerHistoryField = document.getElementById("library-reviewer-history-field");
     const libraryReviewerField = document.getElementById("library-reviewer-field");
     const libraryReviewerInput = document.getElementById("library-reviewer-input");
+    const libraryTypeTabs = document.getElementById("library-type-tabs");
     const libraryTaskList = document.getElementById("library-task-list");
     const rightCol = document.querySelector(".right-col");
     const promptWrap = document.querySelector(".prompt-wrap");
@@ -5441,6 +5451,118 @@
       return String(task.icon || "").trim() || "book-open";
     }
 
+    function normalizeLibraryTaskType(task) {
+      if (!task || typeof task !== "object") return "other";
+      return String(task.type || "").trim().toLowerCase() || "other";
+    }
+
+    function libraryTaskTypeMeta(typeID) {
+      const id = String(typeID || "").trim().toLowerCase() || "other";
+      const defined = LIBRARY_TASK_TYPE_DEFS[id] || {};
+      const label = String(defined.label || id.replace(/[-_]+/g, " ") || "Other").trim();
+      return {
+        id,
+        label: label ? label.charAt(0).toUpperCase() + label.slice(1) : "Other",
+        icon: String(defined.icon || "library").trim() || "library",
+      };
+    }
+
+    function libraryTaskTypeSortIndex(typeID) {
+      const index = LIBRARY_TASK_TYPE_ORDER.indexOf(typeID);
+      return index >= 0 ? index : LIBRARY_TASK_TYPE_ORDER.length;
+    }
+
+    function libraryTaskTypes(entries) {
+      const byID = new Map();
+      for (const entry of entries) {
+        if (!entry || !entry.type) continue;
+        const existing = byID.get(entry.type);
+        if (existing) {
+          existing.count += 1;
+          continue;
+        }
+        byID.set(entry.type, { ...libraryTaskTypeMeta(entry.type), count: 1 });
+      }
+      return Array.from(byID.values()).sort((left, right) => {
+        const leftIndex = libraryTaskTypeSortIndex(left.id);
+        const rightIndex = libraryTaskTypeSortIndex(right.id);
+        if (leftIndex !== rightIndex) return leftIndex - rightIndex;
+        return left.label.localeCompare(right.label);
+      });
+    }
+
+    function libraryTaskTypeDOMID(typeID) {
+      return String(typeID || "other").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-") || "other";
+    }
+
+    function renderLibraryTypeTabs(types, activeType) {
+      if (!libraryTypeTabs) return;
+
+      libraryTypeTabs.replaceChildren();
+      if (types.length <= 1) {
+        libraryTypeTabs.hidden = true;
+        libraryTypeTabs.setAttribute("aria-hidden", "true");
+        return;
+      }
+
+      libraryTypeTabs.hidden = false;
+      libraryTypeTabs.setAttribute("aria-hidden", "false");
+      for (const type of types) {
+        const tabID = libraryTaskTypeDOMID(type.id);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.id = `library-type-tab-${tabID}`;
+        button.className = "library-type-tab";
+        button.setAttribute("role", "tab");
+        button.setAttribute("aria-selected", String(type.id === activeType));
+        button.setAttribute("aria-controls", "library-task-list");
+        if (type.id === activeType) {
+          button.classList.add("active");
+        }
+
+        const iconWrap = document.createElement("span");
+        iconWrap.className = "library-type-tab-icon";
+        iconWrap.setAttribute("aria-hidden", "true");
+        const icon = document.createElement("i");
+        icon.setAttribute("data-lucide", type.icon);
+        icon.setAttribute("aria-hidden", "true");
+        iconWrap.appendChild(icon);
+        button.appendChild(iconWrap);
+
+        const label = document.createElement("span");
+        label.className = "library-type-tab-label";
+        label.textContent = type.label;
+        button.appendChild(label);
+
+        const count = document.createElement("span");
+        count.className = "library-type-tab-count";
+        count.textContent = String(type.count);
+        count.setAttribute("aria-label", `${type.count} tasks`);
+        button.appendChild(count);
+
+        button.addEventListener("click", () => {
+          if (state.selectedLibraryType === type.id) return;
+          state.selectedLibraryType = type.id;
+          state.selectedLibraryTask = "";
+          trackAnalyticsEvent("library_type_selected", {
+            prompt_mode: state.promptMode,
+            library_type: type.id,
+          });
+          renderLibraryTaskOptions();
+          if (state.promptMode === "json") {
+            try {
+              syncRawFromMode("library");
+            } catch (_err) {
+              // Leave raw editor unchanged if library fields are incomplete.
+            }
+          }
+        });
+
+        libraryTypeTabs.appendChild(button);
+      }
+      replaceLucideIcons(libraryTypeTabs);
+    }
+
     function closeLibraryPromptModal() {
       if (state.libraryPromptModalOpen) {
         trackAnalyticsEvent("library_prompt_modal_closed", { prompt_mode: state.promptMode });
@@ -5481,6 +5603,7 @@
         entries.push({
           name,
           displayName: libraryTaskDisplayName(task),
+          type: normalizeLibraryTaskType(task),
           icon: libraryTaskIcon(task),
           description: libraryTaskDescription(task),
           prompt: String(task.prompt || "").trim(),
@@ -5488,13 +5611,33 @@
       }
 
       let selected = selectedLibraryTaskName();
-      if (!entries.some((entry) => entry.name === selected)) {
-        selected = entries.length ? entries[0].name : "";
+      const selectedEntry = entries.find((entry) => entry.name === selected);
+      const types = libraryTaskTypes(entries);
+      let activeType = selectedEntry?.type || String(state.selectedLibraryType || "").trim();
+      if (!types.some((type) => type.id === activeType)) {
+        activeType = types[0]?.id || "";
+      }
+      let visibleEntries = activeType ? entries.filter((entry) => entry.type === activeType) : entries;
+      if (!visibleEntries.some((entry) => entry.name === selected)) {
+        selected = visibleEntries.length ? visibleEntries[0].name : "";
+      }
+      const activeEntry = entries.find((entry) => entry.name === selected);
+      if (activeEntry) {
+        activeType = activeEntry.type;
+        visibleEntries = entries.filter((entry) => entry.type === activeType);
       }
       state.selectedLibraryTask = selected;
+      state.selectedLibraryType = activeType;
+      renderLibraryTypeTabs(types, activeType);
 
       libraryTaskList.replaceChildren();
-      if (!entries.length) {
+      libraryTaskList.setAttribute("role", "tabpanel");
+      if (activeType) {
+        libraryTaskList.setAttribute("aria-labelledby", `library-type-tab-${libraryTaskTypeDOMID(activeType)}`);
+      } else {
+        libraryTaskList.removeAttribute("aria-labelledby");
+      }
+      if (!visibleEntries.length) {
         const empty = document.createElement("div");
         empty.className = "library-task-empty";
         empty.textContent = state.libraryLoadError || "No library tasks are available.";
@@ -5502,7 +5645,7 @@
         return;
       }
 
-      for (const entry of entries) {
+      for (const entry of visibleEntries) {
         const item = document.createElement("div");
         item.className = "library-task-option";
         if (entry.name === selected) {

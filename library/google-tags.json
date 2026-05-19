@@ -1,6 +1,7 @@
 {
   "google-tags": {
     "displayName": "Google Tags",
+    "type": "maintenance",
     "icon": "tags",
     "description": "Review Google tags, preserve existing tags where possible, and improve user engagement tracking.",
     "targetSubdir": ".",
