@@ -1372,14 +1372,18 @@ func TestLibraryTaskListUsesDesktopTwoColumnAndMobileSingleColumnLayout(t *testi
 	if !strings.Contains(css, ".library-type-tab.active,\n.library-type-tab[aria-selected=\"true\"] {") {
 		t.Fatalf("expected active library task type tabs to have selected styling")
 	}
-	if !strings.Contains(css, ".library-task-list {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));") {
-		t.Fatalf("expected library task list to use two columns in wide layouts")
+	if !strings.Contains(css, ".library-task-list {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  align-content: start;\n  align-items: start;") {
+		t.Fatalf("expected library task list to use compact two-column rows in wide layouts")
 	}
 	if !strings.Contains(css, "@media (max-width: 720px) {\n  .library-type-tabs {\n    display: grid;\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n  }\n\n  .library-type-tab {\n    justify-content: center;\n    width: 100%;\n  }\n\n  .library-task-list {\n    grid-template-columns: minmax(0, 1fr);\n  }") {
 		t.Fatalf("expected library task list to collapse to one column only on mobile")
 	}
 	if !strings.Contains(css, ".library-task-option-content {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) 34px;\n  align-items: start;\n  gap: 8px;\n  min-height: auto;") {
 		t.Fatalf("expected library task cards to size to title and subtitle copy")
+	}
+	if strings.Contains(css, `body[data-app-display="studio"][data-prompt-mode="library"] .prompt-wrap:not(.prompt-collapsed)`) ||
+		strings.Contains(css, `body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list`) {
+		t.Fatalf("expected library studio to stay content-sized instead of stretching the panel and task list by default")
 	}
 }
 
