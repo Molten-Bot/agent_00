@@ -1375,6 +1375,13 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	if ok || !strings.Contains(reason, "refusing to allow an oauth app to create or update workflow") {
 		t.Fatalf("shouldQueueFailureFollowUp(workflow scope failure) = (%v, %q), want non-remediable workflow-scope skip", ok, reason)
 	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		Err: errors.New("codex: codex reported failure: Failure: user-portal changes not applied. Error details: sandbox rejected writes to `/home/jef/git/moltenbot/user-portal`: `writing outside of the project; rejected by user approval settings`."),
+	})
+	if ok || !strings.Contains(reason, "sandbox rejected writes to") {
+		t.Fatalf("shouldQueueFailureFollowUp(sandbox write rejection) = (%v, %q), want non-remediable sandbox skip", ok, reason)
+	}
 }
 
 func TestHubPingURLValidationAndCheckHubPingFailures(t *testing.T) {

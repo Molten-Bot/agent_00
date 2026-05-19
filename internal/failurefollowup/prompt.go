@@ -70,6 +70,8 @@ var nonRemediableFailureMarkers = []string{
 	"invalid api key",
 	"invalid_authentication",
 	"authentication error",
+	"sandbox rejected writes to",
+	"writing outside of the project; rejected by user approval settings",
 }
 
 func WithExecutionContract(base string) string {
