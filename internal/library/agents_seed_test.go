@@ -30,6 +30,7 @@ func TestAgentsSeedSharesRuntimeToolingAndSafety(t *testing.T) {
 		"`npm` is available",
 		"Python, `pip`, and `virtualenv`",
 		"Go is available",
+		"`git-changes-by-day` is available",
 		"`Failure:` and `Error details:`",
 		"`gh repo view OWNER/REPO --json isPrivate,nameWithOwner`",
 		"concrete repository evidence",

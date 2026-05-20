@@ -2,10 +2,16 @@ FROM golang:1.26.2-trixie AS build
 WORKDIR /src
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
+ARG GIT_CHANGES_BY_DAY_VERSION=latest
 
 COPY go.mod ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOBIN=/out \
+    go install github.com/moltenbot000/git-changes-by-day@${GIT_CHANGES_BY_DAY_VERSION}
 
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -58,6 +64,7 @@ RUN apt-get update \
 WORKDIR /workspace
 
 COPY --from=build --chmod=755 /out/harness /usr/local/bin/harness
+COPY --from=build --chmod=755 /out/git-changes-by-day /usr/local/bin/git-changes-by-day
 COPY --from=build /usr/local/go /usr/local/go
 COPY library /opt/moltenhub/library
 COPY skills /opt/moltenhub/skills

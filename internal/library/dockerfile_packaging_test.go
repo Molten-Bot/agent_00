@@ -152,6 +152,34 @@ func TestRuntimeDockerfileInstallsRailsmith(t *testing.T) {
 	}
 }
 
+func TestRuntimeDockerfileInstallsGitChangesByDay(t *testing.T) {
+	t.Parallel()
+
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	dockerfilePath := filepath.Join(repoRoot, "Dockerfile")
+
+	data, err := os.ReadFile(dockerfilePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", dockerfilePath, err)
+	}
+
+	content := string(data)
+	for _, want := range []string{
+		"ARG GIT_CHANGES_BY_DAY_VERSION=latest",
+		"go install github.com/moltenbot000/git-changes-by-day@${GIT_CHANGES_BY_DAY_VERSION}",
+		"COPY --from=build --chmod=755 /out/git-changes-by-day /usr/local/bin/git-changes-by-day",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("%s does not install git-changes-by-day runtime requirement %q", dockerfilePath, want)
+		}
+	}
+}
+
 func TestRuntimeDockerfileInstallsPythonTooling(t *testing.T) {
 	t.Parallel()
 
