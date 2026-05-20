@@ -32,6 +32,18 @@ go get github.com/Molten-Bot/moltenhub-code@v1.0.0
 go install github.com/Molten-Bot/moltenhub-code/cmd/harness@v1.0.0
 ```
 
+## Bundled Tools
+
+The Docker image includes `git-changes-by-day`, a Go CLI for exporting git
+history to CSV. Agents can use it when a task needs per-commit change data.
+
+```bash
+git-changes-by-day -repo /path/to/repo -text-out /tmp/commit-text.csv
+```
+
+The CSV includes UTC datetime/date columns, commit metadata, changed file
+counts, and line change counts.
+
 ## Environment Variables
 
 Useful environment variables:
