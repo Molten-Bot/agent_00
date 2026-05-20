@@ -1,4 +1,4 @@
-# MoltenHub Code
+# Molten Hub Code
 
 The highest velocity way to make code changes. Run AI coding agents against GitHub repositories, prompt to PR. Product details live at
 [molten.bot/code](https://molten.bot/code).
