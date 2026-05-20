@@ -2041,6 +2041,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "function rememberRepos(") {
 		t.Fatalf("expected index html to include repo history persistence")
 	}
+	if !strings.Contains(markup, "function repoDedupeKey(value)") ||
+		!strings.Contains(markup, "const githubPath = githubRepoPathFromValue(normalized);") ||
+		!strings.Contains(markup, "return githubPath ? `github:${githubPath.toLowerCase()}` : normalized;") ||
+		!strings.Contains(markup, "const key = repoDedupeKey(normalized);") ||
+		!strings.Contains(markup, "const blocked = new Set(dedupeRepoValues(repos).map(repoDedupeKey));") ||
+		!strings.Contains(markup, "state.repoHistory.some((repo) => repoDedupeKey(repo) === key)") {
+		t.Fatalf("expected repository dropdown history to dedupe equivalent GitHub repository URLs")
+	}
 	if !strings.Contains(markup, "function rememberManualRepoEntry(value) {") ||
 		!strings.Contains(markup, "builderRepoInput.addEventListener(\"change\", () => {") ||
 		!strings.Contains(markup, "builderRepoInput.addEventListener(\"blur\", () => {") ||

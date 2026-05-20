@@ -5149,13 +5149,21 @@
       return out;
     }
 
+    function repoDedupeKey(value) {
+      const normalized = normalizeRepoValue(value);
+      if (!normalized) return "";
+      const githubPath = githubRepoPathFromValue(normalized);
+      return githubPath ? `github:${githubPath.toLowerCase()}` : normalized;
+    }
+
     function dedupeRepoValues(values) {
       const out = [];
       const seen = new Set();
       for (const value of values || []) {
         const normalized = normalizeRepoValue(value);
-        if (!normalized || seen.has(normalized)) continue;
-        seen.add(normalized);
+        const key = repoDedupeKey(normalized);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
         out.push(normalized);
       }
       return out;
@@ -5410,10 +5418,10 @@
     }
 
     function dropReposFromHistory(repos) {
-      const blocked = new Set(dedupeRepoValues(repos));
+      const blocked = new Set(dedupeRepoValues(repos).map(repoDedupeKey));
       if (!blocked.size) return;
 
-      const filtered = state.repoHistory.filter((repo) => !blocked.has(repo));
+      const filtered = state.repoHistory.filter((repo) => !blocked.has(repoDedupeKey(repo)));
       if (filtered.length === state.repoHistory.length) {
         return;
       }
@@ -5822,7 +5830,8 @@
 
     function canDeleteRepoSelection(select) {
       const value = normalizeRepoValue(select?.value);
-      return value !== "" && state.repoHistory.includes(value);
+      const key = repoDedupeKey(value);
+      return key !== "" && state.repoHistory.some((repo) => repoDedupeKey(repo) === key);
     }
 
     function canDeleteReviewerSelection(select) {
@@ -5874,14 +5883,15 @@
         return;
       }
 
-      const nextRepo = state.repoHistory.filter((repo) => repo !== selected)[0] || "";
+      const selectedKey = repoDedupeKey(selected);
+      const nextRepo = state.repoHistory.filter((repo) => repoDedupeKey(repo) !== selectedKey)[0] || "";
       dropReposFromHistory([selected]);
       const builderValue = normalizeRepoValue(builderRepoInput.value);
       const libraryValue = normalizeRepoValue(libraryRepoInput.value);
-      if (builderValue === selected || builderValue === "") {
+      if (repoDedupeKey(builderValue) === selectedKey || builderValue === "") {
         builderRepoInput.value = nextRepo;
       }
-      if (libraryValue === selected || libraryValue === "") {
+      if (repoDedupeKey(libraryValue) === selectedKey || libraryValue === "") {
         libraryRepoInput.value = nextRepo;
       }
       renderRepoHistoryOptions();
@@ -5906,6 +5916,8 @@
     }
 
     function displayRepoLabel(repo) {
+      const githubPath = githubRepoPathFromValue(repo);
+      if (githubPath) return githubPath;
       const cleaned = cleanRepoName(repo);
       return cleaned || repo;
     }
