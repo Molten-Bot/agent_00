@@ -3243,15 +3243,25 @@ func isNonFatalHubSnapshotRefreshFailure(detail string, res execx.Result) bool {
 	if text == "" {
 		return false
 	}
-	requiredMarkers := []string{
+	snapshotRefreshMarkers := []string{
 		"prebuild hub snapshot refresh could not fetch live snapshot",
-		"moltenhub_admin_snapshot_key is not configured",
-		"build kept existing `hub-snapshot.json` and completed",
+		"hub snapshot refresh unavailable during build pre-step",
+		"hub snapshot refresh could not fetch live snapshot",
+		"hub snapshot refresh unavailable",
 	}
-	for _, marker := range requiredMarkers {
-		if !strings.Contains(text, marker) {
-			return false
-		}
+	existingSnapshotMarkers := []string{
+		"build kept existing `hub-snapshot.json` and completed",
+		"build continued using existing snapshot",
+		"using existing snapshot",
+	}
+	if !containsAny(text, snapshotRefreshMarkers) {
+		return false
+	}
+	if !strings.Contains(text, "moltenhub_admin_snapshot_key is not configured") {
+		return false
+	}
+	if !containsAny(text, existingSnapshotMarkers) {
+		return false
 	}
 	return true
 }

@@ -5344,6 +5344,42 @@ func TestCodexReportedFailureTreatsCompletedHubSnapshotRefreshWarningAsNonFatal(
 	}
 }
 
+func TestRunCodexAllowsBuildPreStepHubSnapshotRefreshWarning(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "remove fake copy from product page"
+	firstCmd := codexCommand(targetDir, prompt)
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: firstCmd,
+			res: execx.Result{
+				Stdout: strings.Join([]string{
+					"Done.",
+					"Verified:",
+					"- `npm test` passed.",
+					"- `npm run build` passed.",
+					"Failure: Hub snapshot refresh unavailable during build pre-step, but build continued using existing snapshot.",
+					"Error details: `MOLTENHUB_ADMIN_SNAPSHOT_KEY is not configured for this build` for NA and EU snapshot endpoints.",
+				}, "\n"),
+			},
+		},
+	}}
+
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
+		t.Fatalf("runCodex() error = %v, want nil for completed hub snapshot warning", err)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "action=hub_snapshot_refresh_unavailable") {
+		t.Fatalf("logs missing hub snapshot warning:\n%s", strings.Join(logs, "\n"))
+	}
+}
+
 func TestCodexReportedFailureDoesNotIgnoreIncompleteHubSnapshotRefreshFailure(t *testing.T) {
 	t.Parallel()
 
