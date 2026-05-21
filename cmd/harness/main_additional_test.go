@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -876,6 +877,37 @@ func TestShouldQueueUnexpectedNoChangesFollowUpSkipsVerificationPrompt(t *testin
 	}
 }
 
+func TestShouldQueueUnexpectedNoChangesFollowUpSkipsConcreteNoOpEvidenceLog(t *testing.T) {
+	t.Parallel()
+
+	logPath := writeNoChangeEvidenceLog(t)
+	runCfg := config.Config{
+		Prompt: "Move all CSS that lives in page files into the app's global CSS file.",
+	}
+
+	ok, reason := shouldQueueUnexpectedNoChangesFollowUpWithLogs(app.Result{NoChanges: true}, runCfg, []string{logPath})
+	if ok {
+		t.Fatal("shouldQueueUnexpectedNoChangesFollowUpWithLogs(concrete evidence) = true, want false")
+	}
+	if reason != "agent cited concrete no-change evidence" {
+		t.Fatalf("reason = %q, want concrete evidence skip", reason)
+	}
+}
+
+func TestShouldQueueUnexpectedNoChangesFollowUpIgnoresNoOpEvidenceFromStderr(t *testing.T) {
+	t.Parallel()
+
+	logPath := writeNoChangeEvidenceLogWithStream(t, "stderr")
+	runCfg := config.Config{
+		Prompt: "Move all CSS that lives in page files into the app's global CSS file.",
+	}
+
+	ok, reason := shouldQueueUnexpectedNoChangesFollowUpWithLogs(app.Result{NoChanges: true}, runCfg, []string{logPath})
+	if !ok || reason != "" {
+		t.Fatalf("shouldQueueUnexpectedNoChangesFollowUpWithLogs(stderr evidence) = (%v, %q), want (true, \"\")", ok, reason)
+	}
+}
+
 func TestShouldQueueFailureFollowUpSkipsNestedFailureFollowUpSource(t *testing.T) {
 	t.Parallel()
 
@@ -1045,6 +1077,21 @@ func TestShouldEscalateNoChangesFollowUpRequiresFollowUpSourceAndMissingPR(t *te
 	}
 	if reason != "original prompt does not clearly request repository changes" {
 		t.Fatalf("reason = %q, want %q", reason, "original prompt does not clearly request repository changes")
+	}
+}
+
+func TestShouldEscalateNoChangesFollowUpSkipsConcreteNoOpEvidenceLog(t *testing.T) {
+	t.Parallel()
+
+	logPath := writeNoChangeEvidenceLog(t)
+	runCfg := config.Config{Prompt: "fix the broken no-change handler"}
+
+	ok, reason := shouldEscalateNoChangesFollowUpWithLogs(noChangesFollowUpSource, app.Result{NoChanges: true}, runCfg, []string{logPath})
+	if ok {
+		t.Fatal("shouldEscalateNoChangesFollowUpWithLogs(concrete evidence) = true, want false")
+	}
+	if reason != "agent cited concrete no-change evidence" {
+		t.Fatalf("reason = %q, want concrete evidence skip", reason)
 	}
 }
 
@@ -1275,6 +1322,32 @@ func TestPromptRequestsRepositoryChange(t *testing.T) {
 			t.Fatalf("promptRequestsRepositoryChange(%q) = %v, want %v", tt.prompt, got, tt.want)
 		}
 	}
+}
+
+func writeNoChangeEvidenceLog(t *testing.T) string {
+	t.Helper()
+
+	return writeNoChangeEvidenceLogWithStream(t, "stdout")
+}
+
+func writeNoChangeEvidenceLogWithStream(t *testing.T, stream string) string {
+	t.Helper()
+
+	logPath := filepath.Join(t.TempDir(), logFileName)
+	lines := []string{
+		"Done: no tracked diff. Requested CSS org already true.",
+		"Page styles moved: none. [src/pages/index.astro](/tmp/repo/src/pages/index.astro:2) has no `<style>`, inline `style=`, CSS module, or route stylesheet.",
+		"Only CSS import is existing global file: [src/styles/global.css](/tmp/repo/src/styles/global.css:1).",
+	}
+	var b strings.Builder
+	for _, line := range lines {
+		encoded := base64.StdEncoding.EncodeToString([]byte(line))
+		fmt.Fprintf(&b, "dispatch request_id=req cmd phase=codex name=codex stream=%s b64=%s\n", stream, encoded)
+	}
+	if err := os.WriteFile(logPath, []byte(b.String()), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	return logPath
 }
 
 func TestFollowUpTaskLogPathsArchivesLocalTaskLogs(t *testing.T) {
