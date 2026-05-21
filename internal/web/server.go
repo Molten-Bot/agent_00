@@ -166,7 +166,7 @@ type HubSetupStep struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-// GitHubRepo captures the repository fields shown in the chat view.
+// GitHubRepo captures the repository fields shown in the dialogue view.
 type GitHubRepo struct {
 	Name          string `json:"name"`
 	FullName      string `json:"full_name"`
@@ -499,19 +499,19 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.renderSitePage(r.Context(), w, sitePageData{
-		Title:     "Molten Hub Code Chat",
+		Title:     "Molten Hub Code Dialogue",
 		BodyClass: "chat-body",
 		PageClass: "chat-page",
 		MainClass: "chat-main",
-		Heading:   "Chat",
+		Heading:   "Dialogue",
 		Content: template.HTML(`<section class="chat-shell" aria-labelledby="chat-title">
         <div class="chat-head">
           <div>
-            <h1 id="chat-title" class="chat-title" aria-label="Git / Chat">
+            <h1 id="chat-title" class="chat-title" aria-label="Git / Dialogue">
               <span class="panel-section-title chat-title-github-logo" aria-hidden="true">
                 <img src="/static/logos/github.svg" alt="">
               </span>
-              <span class="panel-section-title chat-title-current">Chat</span>
+              <span class="panel-section-title chat-title-current">Dialogue</span>
             </h1>
           </div>
           <p id="chat-status" class="chat-status" aria-live="polite"></p>
