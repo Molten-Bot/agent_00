@@ -850,6 +850,8 @@ func TestEmbeddedChatPromptLogStylesHideEmptyAndScrollHistory(t *testing.T) {
 	for _, want := range []string{
 		".chat-repo-grid-active-repo .chat-repo-card[aria-expanded=\"true\"] .chat-repo-panel {",
 		"grid-template-rows: minmax(0, 1fr) auto auto;",
+		".chat-repo-log {\n  display: flex;\n  flex-direction: column;",
+		".chat-repo-log::before {\n  content: \"\";\n  margin-top: auto;\n}",
 		".chat-repo-grid-active-repo .chat-repo-log:not([hidden]) {",
 		".chat-repo-log[hidden] {",
 		"overflow-y: scroll;",
@@ -862,6 +864,30 @@ func TestEmbeddedChatPromptLogStylesHideEmptyAndScrollHistory(t *testing.T) {
 	}
 	if strings.Contains(css, `.chat-repo-panel:has(.chat-repo-log[data-empty="true"])`) {
 		t.Fatalf("embedded style.css should keep empty chat prompt logs height-filling in active repository view")
+	}
+	if strings.Contains(css, "align-content: end;") {
+		t.Fatalf("embedded style.css should not bottom-align scroll history with align-content")
+	}
+
+	markup, err := staticFiles.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	html := string(markup)
+	for _, want := range []string{
+		`const CHAT_PROMPT_LOG_STICKY_SCROLL_PX = 24;`,
+		`const previousScrollTop = logNode.scrollTop;`,
+		`const wasNearBottom = previousScrollHeight <= previousClientHeight ||`,
+		`previousScrollHeight - previousScrollTop - previousClientHeight <= CHAT_PROMPT_LOG_STICKY_SCROLL_PX;`,
+		`logNode.scrollTop = wasEmpty || wasNearBottom`,
+		`: Math.min(previousScrollTop, maxScrollTop);`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("embedded index.html missing %q", want)
+		}
+	}
+	if strings.Contains(html, `logNode.scrollTop = logNode.scrollHeight;`) {
+		t.Fatalf("embedded index.html should preserve manual prompt history scroll")
 	}
 }
 
@@ -894,7 +920,7 @@ func TestEmbeddedChatPromptLogMessagesCanBeCopied(t *testing.T) {
 	}
 	css := string(data)
 	for _, want := range []string{
-		".chat-repo-log {\n  display: grid;",
+		".chat-repo-log {\n  display: flex;",
 		"user-select: text;",
 		".chat-repo-message-copy {",
 		".chat-repo-message-copy.is-copied {",

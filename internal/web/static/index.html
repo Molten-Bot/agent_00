@@ -409,15 +409,15 @@
           </div>
         </section>
 
-        <section id="chat-display" class="chat-main hidden" aria-label="Chat" aria-hidden="true">
+        <section id="chat-display" class="chat-main hidden" aria-label="Dialogue" aria-hidden="true">
           <section class="chat-shell" aria-labelledby="chat-title">
             <div class="chat-head">
               <div>
-                <h1 id="chat-title" class="chat-title" aria-label="Git / Chat">
+                <h1 id="chat-title" class="chat-title" aria-label="Git / Dialogue">
                   <span class="panel-section-title chat-title-github-logo" aria-hidden="true">
                     <img src="/static/logos/github.svg" alt="">
                   </span>
-                  <span class="panel-section-title chat-title-current">Chat</span>
+                  <span class="panel-section-title chat-title-current">Dialogue</span>
                 </h1>
               </div>
               <p id="chat-status" class="chat-status" aria-live="polite"></p>
@@ -711,6 +711,7 @@
     const TASK_HISTORY_LIMIT = 25;
     const TASK_HISTORY_MAX_AGE_MS = 20 * 60 * 60 * 1000;
     const MAX_TERMINAL_LINES = 500;
+    const CHAT_PROMPT_LOG_STICKY_SCROLL_PX = 24;
     const TASK_PROGRESS_VISIBLE = true;
     const HUB_LOGIN_URL = "https://molten.bot/login?target=hub";
     const HUB_DASHBOARD_URL = "https://app.molten.bot/hub";
@@ -728,7 +729,7 @@
       review: { label: "Review", icon: "clipboard-check" },
     });
     const TASK_PROGRESS_STEP_DEFS = Object.freeze({
-      entry_chat: { id: "entry_chat", label: "Chat", detail: "Queued from Chat.", icon: "entry_chat" },
+      entry_chat: { id: "entry_chat", label: "Dialogue", detail: "Queued from Dialogue.", icon: "entry_chat" },
       entry_hub: { id: "entry_hub", label: "Hub", detail: "Queued by Molten Hub.", icon: "entry_hub" },
       entry_prompt: { id: "entry_prompt", label: "Prompt", detail: "Queued from Prompt Studio.", icon: "entry_prompt" },
       entry_library: { id: "entry_library", label: "Library", detail: "Queued from Library Studio.", icon: "entry_library" },
@@ -2288,7 +2289,7 @@
       } else {
         chatDockLink.removeAttribute("href");
       }
-      chatDockLink.title = available ? "Chat" : (state.githubReposLoadError || "Chat unavailable until repositories load");
+      chatDockLink.title = available ? "Dialogue" : (state.githubReposLoadError || "Dialogue unavailable until repositories load");
     }
 
     function dashboardHasStartedTask(snapshot) {
@@ -4611,11 +4612,13 @@
 
     function dashboardSourceKey(label) {
       const key = String(label || "").trim().toLowerCase();
+      if (key === "dialogue") return "chat";
       return DASHBOARD_SOURCE_COLOR_VARS[key] ? key : "other";
     }
 
     function dashboardSourceIconName(label) {
       switch (String(label || "").trim().toLowerCase()) {
+        case "dialogue":
         case "chat":
           return "message-circle";
         case "hub":
@@ -4724,10 +4727,10 @@
       dashboardSourceChart = new window.Chart(dashboardSourceChartCanvas, {
         type: "doughnut",
         data: {
-          labels: ["Chat", "Hub", "JSON", "Library", "Prompt", "Other"],
+          labels: ["Dialogue", "Hub", "JSON", "Library", "Prompt", "Other"],
           datasets: [{
             data: [0, 0, 0, 0, 0, 0],
-            backgroundColor: ["Chat", "Hub", "JSON", "Library", "Prompt", "Other"].map(dashboardSourceColor),
+            backgroundColor: ["Dialogue", "Hub", "JSON", "Library", "Prompt", "Other"].map(dashboardSourceColor),
             borderColor: dashboardCSSValue("--dashboard-chart-border", "rgba(255, 255, 255, 0.76)"),
             borderWidth: 2,
           }],
@@ -6298,7 +6301,7 @@
     function chatPromptSourceLabel(source) {
       switch (normalizeTaskStartSource(source)) {
         case "chat":
-          return "Chat";
+          return "Dialogue";
         case "hub":
           return "Hub";
         case "library":
@@ -6312,12 +6315,17 @@
       }
     }
 
+    function chatPromptDisplaySourceLabel(value) {
+      const label = String(value || "").trim();
+      return label.toLowerCase() === "chat" ? "Dialogue" : label;
+    }
+
     function normalizeChatPromptMessage(message, existing = null) {
       const prompt = String(message?.prompt || existing?.prompt || "").trim();
       if (!prompt) return null;
       const requestID = String(message?.requestID || existing?.requestID || "").trim();
       const source = normalizeTaskStartSource(message?.source || existing?.source || "");
-      const sourceLabel = String(message?.sourceLabel || existing?.sourceLabel || chatPromptSourceLabel(source)).trim();
+      const sourceLabel = chatPromptDisplaySourceLabel(message?.sourceLabel || existing?.sourceLabel || chatPromptSourceLabel(source));
       return {
         prompt,
         requestID,
@@ -6692,7 +6700,7 @@
       button.type = "button";
       button.className = "chat-repo-message-copy";
       button.title = "Copy message";
-      button.setAttribute("aria-label", "Copy chat message");
+      button.setAttribute("aria-label", "Copy dialogue message");
       button.innerHTML = '<i data-lucide="copy" aria-hidden="true"></i>';
       button.addEventListener("click", (event) => {
         event.preventDefault();
@@ -6731,7 +6739,7 @@
           title: `${imageCount} screenshot${imageCount === 1 ? "" : "s"} attached`,
         });
       }
-      const sourceLabel = String(message?.sourceLabel || chatPromptSourceLabel(message?.source)).trim();
+      const sourceLabel = chatPromptDisplaySourceLabel(message?.sourceLabel || chatPromptSourceLabel(message?.source));
       if (sourceLabel) {
         stats.push({
           text: sourceLabel,
@@ -6802,6 +6810,12 @@
     function renderChatRepoPromptLog(repo, logNode) {
       if (!logNode) return;
       const messages = chatRepoPromptMessages(repo);
+      const previousScrollTop = logNode.scrollTop;
+      const previousScrollHeight = logNode.scrollHeight;
+      const previousClientHeight = logNode.clientHeight;
+      const wasEmpty = logNode.dataset.empty === "true" || logNode.childElementCount === 0;
+      const wasNearBottom = previousScrollHeight <= previousClientHeight ||
+        previousScrollHeight - previousScrollTop - previousClientHeight <= CHAT_PROMPT_LOG_STICKY_SCROLL_PX;
       logNode.replaceChildren();
       const hasMessages = messages.length > 0;
       logNode.hidden = false;
@@ -6839,7 +6853,10 @@
 
         logNode.appendChild(bubble);
       }
-      logNode.scrollTop = logNode.scrollHeight;
+      const maxScrollTop = Math.max(0, logNode.scrollHeight - logNode.clientHeight);
+      logNode.scrollTop = wasEmpty || wasNearBottom
+        ? maxScrollTop
+        : Math.min(previousScrollTop, maxScrollTop);
     }
 
     function renderChatRepoPagination(totalRepos, totalPages) {
@@ -7328,7 +7345,7 @@
           requestID,
           imageCount: promptImages.length,
           source: "chat",
-          sourceLabel: "Chat",
+          sourceLabel: "Dialogue",
         });
         state.chatClosedRepoKeys.delete(chatRepoKey(repoValue));
         persistChatClosedRepoKeys();

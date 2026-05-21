@@ -1197,7 +1197,7 @@ func sortedCountStatsGroups(groups map[string]*CountStatsGroup) []CountStatsGrou
 func sourceGroupName(source string) string {
 	switch normalizeTaskSource(source) {
 	case "chat":
-		return "Chat"
+		return "Dialogue"
 	case "hub":
 		return "Hub"
 	case "json":

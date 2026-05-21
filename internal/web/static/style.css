@@ -3395,8 +3395,8 @@ select.prompt-control {
 }
 
 .chat-repo-log {
-  display: grid;
-  align-content: end;
+  display: flex;
+  flex-direction: column;
   gap: 7px;
   max-height: min(34vh, 300px);
   min-height: 96px;
@@ -3413,6 +3413,11 @@ select.prompt-control {
     linear-gradient(180deg, color-mix(in srgb, var(--bg-panel-muted) 40%, transparent), transparent),
     color-mix(in srgb, var(--bg-elevated) 72%, transparent);
   user-select: text;
+}
+
+.chat-repo-log::before {
+  content: "";
+  margin-top: auto;
 }
 
 .chat-repo-grid-active-repo .chat-repo-log:not([hidden]) {
@@ -3445,7 +3450,7 @@ select.prompt-control {
 
 .chat-repo-message {
   display: grid;
-  justify-self: end;
+  align-self: flex-end;
   width: fit-content;
   max-width: min(68ch, 82%);
   gap: 4px;
@@ -3460,7 +3465,7 @@ select.prompt-control {
 }
 
 .chat-repo-message-assistant {
-  justify-self: start;
+  align-self: flex-start;
   border-radius: 14px 14px 14px 4px;
 }
 
