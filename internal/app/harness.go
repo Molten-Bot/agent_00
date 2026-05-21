@@ -3244,6 +3244,7 @@ func isNonFatalHubSnapshotRefreshFailure(detail string, res execx.Result) bool {
 		return false
 	}
 	snapshotRefreshMarkers := []string{
+		"non-fatal prebuild snapshot refresh warning",
 		"prebuild hub snapshot refresh could not fetch live snapshot",
 		"hub snapshot refresh unavailable during build pre-step",
 		"hub snapshot refresh could not fetch live snapshot",
@@ -3252,6 +3253,7 @@ func isNonFatalHubSnapshotRefreshFailure(detail string, res execx.Result) bool {
 	existingSnapshotMarkers := []string{
 		"build kept existing `hub-snapshot.json` and completed",
 		"build continued using existing snapshot",
+		"build still completed",
 		"using existing snapshot",
 	}
 	if !containsAny(text, snapshotRefreshMarkers) {

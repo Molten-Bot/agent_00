@@ -5380,6 +5380,44 @@ func TestRunCodexAllowsBuildPreStepHubSnapshotRefreshWarning(t *testing.T) {
 	}
 }
 
+func TestRunCodexAllowsNonFatalPrebuildSnapshotRefreshWarning(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "display image in social sharing should be the product image"
+	firstCmd := codexCommand(targetDir, prompt)
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: firstCmd,
+			res: execx.Result{
+				Stdout: strings.Join([]string{
+					"Done: src/pages/schweebles.astro now passes `productImage` to `PageLayout`.",
+					"Verified:",
+					"`npm test` passed: 36 files, 185 tests.",
+					"`npm run typecheck` passed.",
+					"`npm run build` passed, and `dist/schweebles/index.html` contains product image social tags.",
+					"Validation note:",
+					"Failure: non-fatal prebuild snapshot refresh warning.",
+					"Error details: `MOLTENHUB_ADMIN_SNAPSHOT_KEY is not configured for this build` for NA/EU snapshot refresh. Build still completed.",
+				}, "\n"),
+			},
+		},
+	}}
+
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
+		t.Fatalf("runCodex() error = %v, want nil for non-fatal snapshot refresh warning", err)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "action=hub_snapshot_refresh_unavailable") {
+		t.Fatalf("logs missing hub snapshot warning:\n%s", strings.Join(logs, "\n"))
+	}
+}
+
 func TestCodexReportedFailureDoesNotIgnoreIncompleteHubSnapshotRefreshFailure(t *testing.T) {
 	t.Parallel()
 
