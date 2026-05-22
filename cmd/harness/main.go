@@ -2327,6 +2327,12 @@ func markLocalRunRuntimeOffline(ctx context.Context, cfg hub.InitConfig, request
 	client := hub.NewAPIClient(baseURL)
 	if err := client.MarkRuntimeOffline(offlineCtx, token, cfg.SessionKey, localTransportOfflineReasonExecutionFailure); err != nil {
 		logf("dispatch status=warn action=mark_offline request_id=%s err=%q", requestID, err)
+	} else {
+		logf(
+			"dispatch status=ok action=mark_offline request_id=%s reason=%s",
+			requestID,
+			localTransportOfflineReasonExecutionFailure,
+		)
 	}
 }
 

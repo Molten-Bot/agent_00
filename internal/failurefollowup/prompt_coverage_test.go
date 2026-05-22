@@ -57,6 +57,9 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: user-portal changes not applied. Error details: sandbox rejected writes to `/home/jef/git/moltenbot/user-portal`: `writing outside of the project; rejected by user approval settings`.")); got != "sandbox rejected writes to" {
 		t.Fatalf("NonRemediableFailureReason(sandbox write rejection) = %q, want %q", got, "sandbox rejected writes to")
 	}
+	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: Full site/assets download not completed. Error details: shell network blocked. `wget` failed DNS for `www.kaanawaveco.com`; `curl --resolve` failed connect to port 443. Browser tool crawled public pages, but cannot save binary assets.")); got != "shell network blocked" {
+		t.Fatalf("NonRemediableFailureReason(shell network blocked) = %q, want %q", got, "shell network blocked")
+	}
 	if got := NonRemediableFailureReason(errors.New("task failed because this branch has no delta from `main`; No commits between main and moltenhub-fix")); got != "" {
 		t.Fatalf("NonRemediableFailureReason(no delta) = %q, want empty", got)
 	}

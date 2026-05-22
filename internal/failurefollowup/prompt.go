@@ -72,6 +72,8 @@ var nonRemediableFailureMarkers = []string{
 	"authentication error",
 	"sandbox rejected writes to",
 	"writing outside of the project; rejected by user approval settings",
+	"shell network blocked",
+	"browser tool crawled public pages, but cannot save binary assets",
 }
 
 func WithExecutionContract(base string) string {
