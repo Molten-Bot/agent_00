@@ -262,17 +262,23 @@ func TestMarkLocalRunRuntimeOfflinePublishesWhenHubConnected(t *testing.T) {
 	}))
 	defer ts.Close()
 
+	var logs []string
 	markLocalRunRuntimeOffline(context.Background(), hub.InitConfig{
 		BaseURL:    ts.URL + "/v1",
 		AgentToken: "token",
 		SessionKey: "local-session",
-	}, "req-local-offline", func() bool { return true }, nil)
+	}, "req-local-offline", func() bool { return true }, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
 
 	if got, want := fmt.Sprint(offlineBody["session_key"]), "local-session"; got != want {
 		t.Fatalf("session_key = %s, want %s", got, want)
 	}
 	if got, want := fmt.Sprint(offlineBody["reason"]), localTransportOfflineReasonExecutionFailure; got != want {
 		t.Fatalf("reason = %s, want %s", got, want)
+	}
+	if len(logs) != 1 || !strings.Contains(logs[0], "action=mark_offline") || !strings.Contains(logs[0], "status=ok") {
+		t.Fatalf("offline logs = %#v, want successful mark_offline log", logs)
 	}
 }
 
@@ -1475,6 +1481,13 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	})
 	if ok || !strings.Contains(reason, "sandbox rejected writes to") {
 		t.Fatalf("shouldQueueFailureFollowUp(sandbox write rejection) = (%v, %q), want non-remediable sandbox skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		Err: errors.New("codex: codex reported failure: Failure: Full site/assets download not completed. Error details: shell network blocked. `wget` failed DNS for `www.kaanawaveco.com`; `curl --resolve` failed connect to port 443. Browser tool crawled public pages, but cannot save binary assets."),
+	})
+	if ok || !strings.Contains(reason, "shell network blocked") {
+		t.Fatalf("shouldQueueFailureFollowUp(shell network blocked) = (%v, %q), want non-remediable network skip", ok, reason)
 	}
 }
 

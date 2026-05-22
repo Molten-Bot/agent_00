@@ -1946,6 +1946,12 @@ func (d Daemon) handleFailedDispatchAfterPublish(
 	}
 	if err := api.MarkRuntimeOffline(ctx, cfg.SessionKey, transportOfflineReasonExecutionFailure); err != nil {
 		d.logf("dispatch status=warn action=mark_offline request_id=%s err=%q", dispatch.RequestID, err)
+	} else {
+		d.logf(
+			"dispatch status=ok action=mark_offline request_id=%s reason=%s",
+			dispatch.RequestID,
+			transportOfflineReasonExecutionFailure,
+		)
 	}
 	if ok, reason := shouldQueueFailureRerun(dispatch, res); !ok {
 		d.logf(

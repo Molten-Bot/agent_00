@@ -1047,6 +1047,10 @@ func TestHandleDispatchQueuesFailureFollowUpAfterPublishingFailureResult(t *test
 	t.Parallel()
 
 	d := NewDaemon(failingRunner{err: errors.New("runner exploded")})
+	var logs []string
+	d.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
 	api := &stubMoltenHubAPI{token: "t"}
 	cfg := InitConfig{
 		Skill: SkillConfig{
@@ -1128,6 +1132,16 @@ func TestHandleDispatchQueuesFailureFollowUpAfterPublishingFailureResult(t *test
 	}
 	if got := api.offlineCalls[0].Reason; got != transportOfflineReasonExecutionFailure {
 		t.Fatalf("offline reason = %q, want %q", got, transportOfflineReasonExecutionFailure)
+	}
+	foundOfflineLog := false
+	for _, line := range logs {
+		if strings.Contains(line, "status=ok action=mark_offline") {
+			foundOfflineLog = true
+			break
+		}
+	}
+	if !foundOfflineLog {
+		t.Fatalf("logs missing successful mark_offline entry: %#v", logs)
 	}
 	if got := api.codingEvents; got != 1 {
 		t.Fatalf("coding activity events = %d, want 1", got)
@@ -1612,6 +1626,13 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailures(t *testing.T) {
 	})
 	if ok || !strings.Contains(reason, "sandbox rejected writes to") {
 		t.Fatalf("shouldQueueFailureFollowUp(sandbox write rejection) = (%v, %q), want non-remediable sandbox skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp(dispatch, app.Result{
+		Err: errors.New("codex: codex reported failure: Failure: Full site/assets download not completed. Error details: shell network blocked. `wget` failed DNS for `www.kaanawaveco.com`; `curl --resolve` failed connect to port 443. Browser tool crawled public pages, but cannot save binary assets."),
+	})
+	if ok || !strings.Contains(reason, "shell network blocked") {
+		t.Fatalf("shouldQueueFailureFollowUp(shell network blocked) = (%v, %q), want non-remediable network skip", ok, reason)
 	}
 }
 
