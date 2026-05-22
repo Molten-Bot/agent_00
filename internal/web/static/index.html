@@ -289,6 +289,17 @@
                   aria-live="polite">Prompt with plain language, paste screenshots directly into the prompt when visual context matters.</span>
                 <div class="prompt-actions-end">
                   <button
+                    id="prompt-speech-toggle"
+                    class="prompt-action-button prompt-action-icon-only prompt-speech-toggle hidden"
+                    type="button"
+                    aria-label="Dictate prompt"
+                    aria-pressed="false"
+                    title="Dictate prompt"
+                    disabled>
+                    <i data-lucide="mic" class="prompt-action-icon" aria-hidden="true"></i>
+                    <span class="sr-only">Dictate</span>
+                  </button>
+                  <button
                     id="builder-images-clear"
                     class="prompt-action-button prompt-action-clear prompt-action-icon-only"
                     type="button"
@@ -796,6 +807,8 @@
     });
     const CLAUDE_POST_SUBMIT_VERIFY_INTERVAL_MS = 1200;
     const CLAUDE_POST_SUBMIT_VERIFY_MAX_ATTEMPTS = 25;
+    const SPEECH_SAMPLE_RATE = 16000;
+    const SPEECH_STATUS_REFRESH_MS = 10000;
     const HUB_SETUP_DIALOG_MODES = ["connect", "profile"];
     const HUB_PROFILE_DEEP_LINK_HASH = "#agent-profile";
     const HUB_PROFILE_DEFAULT_EMOJI = "🙂";
@@ -1791,6 +1804,19 @@
       chatRepoPage: 1,
       chatRepoSearchQuery: "",
       chatRepoRenderPending: false,
+      speech: {
+        enabled: false,
+        reachable: false,
+        recording: false,
+        submitting: false,
+        chunks: [],
+        mediaStream: null,
+        audioContext: null,
+        source: null,
+        processor: null,
+        zeroGain: null,
+        statusTimer: 0,
+      },
       taskSoundMuted: loadTaskSoundMuted(),
       taskSoundInitialized: false,
       taskSoundSeenStatuses: new Map(),
@@ -1880,6 +1906,7 @@
     const localPromptStatus = document.getElementById("local-prompt-status");
     const localPromptStatusDefaultText = String(localPromptStatus?.dataset.defaultText || "").trim();
     let localPromptStatusTimer = 0;
+    const promptSpeechToggle = document.getElementById("prompt-speech-toggle");
     const promptModeBuilder = document.getElementById("prompt-mode-builder");
     const promptModeLibrary = document.getElementById("prompt-mode-library");
     const promptModeJSON = document.getElementById("prompt-mode-json");
@@ -5088,6 +5115,226 @@
       syncBuilderDraftClearState();
     }
 
+    function browserSpeechCaptureSupported() {
+      return Boolean(
+        navigator.mediaDevices &&
+        typeof navigator.mediaDevices.getUserMedia === "function" &&
+        (window.AudioContext || window.webkitAudioContext)
+      );
+    }
+
+    function syncPromptSpeechButton() {
+      if (!promptSpeechToggle) return;
+      const supported = browserSpeechCaptureSupported();
+      const visible = supported && state.promptMode === "builder" && Boolean(state.speech.enabled) && Boolean(state.speech.reachable);
+      const busy = Boolean(state.speech.recording || state.speech.submitting);
+      promptSpeechToggle.classList.toggle("hidden", !visible);
+      promptSpeechToggle.disabled = !visible || Boolean(state.speech.submitting);
+      promptSpeechToggle.classList.toggle("recording", Boolean(state.speech.recording));
+      promptSpeechToggle.setAttribute("aria-hidden", visible ? "false" : "true");
+      promptSpeechToggle.setAttribute("aria-pressed", state.speech.recording ? "true" : "false");
+      promptSpeechToggle.setAttribute("aria-label", state.speech.recording ? "Stop dictation" : "Dictate prompt");
+      promptSpeechToggle.title = state.speech.recording ? "Stop dictation" : (busy ? "Transcribing" : "Dictate prompt");
+      promptSpeechToggle.innerHTML = state.speech.recording
+        ? '<i data-lucide="square" class="prompt-action-icon" aria-hidden="true"></i><span class="sr-only">Stop dictation</span>'
+        : '<i data-lucide="mic" class="prompt-action-icon" aria-hidden="true"></i><span class="sr-only">Dictate</span>';
+      replaceLucideIcons(promptSpeechToggle);
+    }
+
+    async function refreshSpeechStatus() {
+      try {
+        const response = await fetch("/api/speech/status", { cache: "no-store" });
+        const body = await response.json().catch(() => null);
+        const speech = body && body.speech ? body.speech : {};
+        state.speech.enabled = Boolean(speech.enabled);
+        state.speech.reachable = Boolean(speech.reachable);
+      } catch (_err) {
+        state.speech.enabled = false;
+        state.speech.reachable = false;
+      } finally {
+        syncPromptSpeechButton();
+        if (!state.speech.statusTimer) {
+          state.speech.statusTimer = window.setInterval(refreshSpeechStatus, SPEECH_STATUS_REFRESH_MS);
+        }
+      }
+    }
+
+    async function togglePromptSpeechDictation() {
+      if (state.speech.recording) {
+        await stopPromptSpeechDictation();
+        return;
+      }
+      await startPromptSpeechDictation();
+    }
+
+    async function startPromptSpeechDictation() {
+      if (!browserSpeechCaptureSupported()) {
+        setLocalPromptStatus("error", "This browser does not support microphone capture.");
+        return;
+      }
+      if (!state.speech.reachable) {
+        await refreshSpeechStatus();
+      }
+      if (!state.speech.reachable) {
+        setLocalPromptStatus("error", "Speech dictation is unavailable.");
+        return;
+      }
+
+      try {
+        const AudioCtor = window.AudioContext || window.webkitAudioContext;
+        state.speech.chunks = [];
+        state.speech.mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
+        });
+        state.speech.audioContext = new AudioCtor();
+        state.speech.source = state.speech.audioContext.createMediaStreamSource(state.speech.mediaStream);
+        state.speech.processor = state.speech.audioContext.createScriptProcessor(4096, 1, 1);
+        state.speech.zeroGain = state.speech.audioContext.createGain();
+        state.speech.zeroGain.gain.value = 0;
+        state.speech.processor.onaudioprocess = (event) => {
+          if (!state.speech.recording || !state.speech.audioContext) return;
+          const input = event.inputBuffer.getChannelData(0);
+          const downsampled = downsampleSpeech(input, state.speech.audioContext.sampleRate, SPEECH_SAMPLE_RATE);
+          state.speech.chunks.push(floatToSpeechPCM(downsampled));
+        };
+        state.speech.source.connect(state.speech.processor);
+        state.speech.processor.connect(state.speech.zeroGain);
+        state.speech.zeroGain.connect(state.speech.audioContext.destination);
+        state.speech.recording = true;
+        syncPromptSpeechButton();
+        setLocalPromptStatus("warn", "Listening. Press the mic again to stop.");
+        trackAnalyticsEvent("prompt_speech_started", { prompt_mode: state.promptMode });
+      } catch (err) {
+        cleanupPromptSpeechCapture();
+        setLocalPromptStatus("error", `Dictation failed: ${err.message}`);
+        trackAnalyticsEvent("prompt_speech_failed", { stage: "capture" });
+      }
+    }
+
+    async function stopPromptSpeechDictation() {
+      const chunks = state.speech.chunks.slice();
+      cleanupPromptSpeechCapture();
+      if (!chunks.length) {
+        setLocalPromptStatus("warn", "No speech audio was captured.");
+        return;
+      }
+
+      state.speech.submitting = true;
+      syncPromptSpeechButton();
+      setLocalPromptStatus("warn", "Transcribing...");
+      try {
+        const response = await fetch("/api/speech/transcribe?language=auto", {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: concatSpeechBuffers(chunks),
+        });
+        const body = await response.json().catch(() => null);
+        if (!response.ok || !body?.ok) {
+          throw new Error(body?.error || `speech http ${response.status}`);
+        }
+        const text = String(body.text || "").trim();
+        if (!text) {
+          setLocalPromptStatus("warn", "No speech was recognized.");
+          return;
+        }
+        appendDictatedPromptText(text);
+        trackAnalyticsEvent("prompt_speech_succeeded", { prompt_mode: state.promptMode });
+        setLocalPromptStatus("ok", "Dictation added to prompt.");
+      } catch (err) {
+        trackAnalyticsEvent("prompt_speech_failed", { stage: "transcribe" });
+        setLocalPromptStatus("error", `Dictation failed: ${err.message}`);
+      } finally {
+        state.speech.submitting = false;
+        syncPromptSpeechButton();
+      }
+    }
+
+    function cleanupPromptSpeechCapture() {
+      state.speech.recording = false;
+      if (state.speech.processor) {
+        state.speech.processor.disconnect();
+        state.speech.processor.onaudioprocess = null;
+      }
+      if (state.speech.source) {
+        state.speech.source.disconnect();
+      }
+      if (state.speech.zeroGain) {
+        state.speech.zeroGain.disconnect();
+      }
+      if (state.speech.mediaStream) {
+        for (const track of state.speech.mediaStream.getTracks()) {
+          track.stop();
+        }
+      }
+      if (state.speech.audioContext) {
+        state.speech.audioContext.close().catch(() => {});
+      }
+      state.speech.mediaStream = null;
+      state.speech.audioContext = null;
+      state.speech.source = null;
+      state.speech.processor = null;
+      state.speech.zeroGain = null;
+      state.speech.chunks = [];
+      syncPromptSpeechButton();
+    }
+
+    function appendDictatedPromptText(text) {
+      const dictated = String(text || "").trim();
+      if (!dictated) return;
+      const current = String(builderPromptInput.value || "");
+      const separator = current.trim() ? (current.endsWith("\n") ? "" : "\n") : "";
+      builderPromptInput.value = `${current}${separator}${dictated}`;
+      builderPromptInput.dispatchEvent(new Event("input", { bubbles: true }));
+      builderPromptInput.focus();
+      builderPromptInput.selectionStart = builderPromptInput.value.length;
+      builderPromptInput.selectionEnd = builderPromptInput.value.length;
+    }
+
+    function downsampleSpeech(input, inputRate, outputRate) {
+      if (inputRate === outputRate) return input;
+      const ratio = inputRate / outputRate;
+      const outputLength = Math.round(input.length / ratio);
+      const output = new Float32Array(outputLength);
+      let inputOffset = 0;
+      for (let outputOffset = 0; outputOffset < outputLength; outputOffset += 1) {
+        const nextInputOffset = Math.round((outputOffset + 1) * ratio);
+        let sum = 0;
+        let count = 0;
+        for (let i = inputOffset; i < nextInputOffset && i < input.length; i += 1) {
+          sum += input[i];
+          count += 1;
+        }
+        output[outputOffset] = count > 0 ? sum / count : 0;
+        inputOffset = nextInputOffset;
+      }
+      return output;
+    }
+
+    function floatToSpeechPCM(input) {
+      const buffer = new ArrayBuffer(input.length * 2);
+      const view = new DataView(buffer);
+      for (let i = 0; i < input.length; i += 1) {
+        const sample = Math.max(-1, Math.min(1, input[i]));
+        view.setInt16(i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      }
+      return buffer;
+    }
+
+    function concatSpeechBuffers(chunks) {
+      const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+      const output = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        output.set(new Uint8Array(chunk), offset);
+        offset += chunk.byteLength;
+      }
+      return output;
+    }
+
     function readFileAsDataURL(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -7695,6 +7942,7 @@
       promptRawPanel.classList.toggle("hidden", !isJSON);
       builderImagePasteTarget.classList.toggle("hidden", isLibrary);
       builderImagesClear.classList.toggle("hidden", isLibrary);
+      syncPromptSpeechButton();
       if (!state.promptVisible && !Boolean(state.ui?.automaticMode)) {
         state.promptVisible = true;
         persistPromptVisibility();
@@ -11214,6 +11462,11 @@
 
     builderPromptInput.addEventListener("input", syncBuilderDraftClearState);
     builderPromptInput.addEventListener("keydown", submitBuilderPromptOnEnter);
+    if (promptSpeechToggle) {
+      promptSpeechToggle.addEventListener("click", () => {
+        void togglePromptSpeechDictation();
+      });
+    }
     builderTargetSubdir.addEventListener("input", () => {
       libraryTargetSubdir.value = builderTargetSubdir.value;
       syncBuilderDraftClearState();
@@ -11632,6 +11885,7 @@
     syncDashboardDockLinkAvailability();
     syncBaseBranchClearState();
     syncBuilderDraftClearState();
+    syncPromptSpeechButton();
     try {
       syncRawFromMode(state.promptMode === "library" ? "library" : "builder");
     } catch (_err) {
@@ -11651,6 +11905,7 @@
     renderConfiguredAgent();
     applyAgentAuthGate(state.agentAuth);
     applyHubSetupState(state.hubSetup);
+    void refreshSpeechStatus();
     loadInitial();
     startStream();
   </script>

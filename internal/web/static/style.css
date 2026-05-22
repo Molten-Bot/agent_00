@@ -2064,6 +2064,12 @@ select.prompt-control {
   color: var(--text-soft);
 }
 
+.prompt-speech-toggle.recording {
+  border-color: rgba(255, 59, 48, 0.28);
+  color: var(--bad);
+  background: rgba(255, 59, 48, 0.08);
+}
+
 .prompt-submit {
   border: 0;
   background: var(--brand-gradient);

@@ -294,6 +294,8 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/library/run", s.handleLibraryRun)
 	mux.HandleFunc("/api/stream", s.handleStream)
 	mux.HandleFunc("/api/local-prompt", s.handleLocalPrompt)
+	mux.HandleFunc("/api/speech/status", s.handleSpeechStatus)
+	mux.HandleFunc("/api/speech/transcribe", s.handleSpeechTranscribe)
 	mux.HandleFunc("/api/github/profile", s.handleGitHubProfile)
 	mux.HandleFunc("/api/github/repos", s.handleGitHubRepos)
 	mux.HandleFunc("/api/hub-setup", s.handleHubSetup)

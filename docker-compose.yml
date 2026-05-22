@@ -1,0 +1,45 @@
+services:
+  moltenhub-code:
+    image: ${MOLTENHUB_CODE_IMAGE:-moltenai/moltenhub-code:latest}
+    ports:
+      - "${MOLTENHUB_CODE_PORT:-7777}:7777"
+    environment:
+      HARNESS_HUB_UI_LISTEN: ":7777"
+      HARNESS_AGENT_HARNESS: ${HARNESS_AGENT_HARNESS:-codex}
+      HARNESS_AGENT_COMMAND: ${HARNESS_AGENT_COMMAND:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MOLTEN_HUB_TOKEN: ${MOLTEN_HUB_TOKEN:-}
+      MOLTEN_HUB_REGION: ${MOLTEN_HUB_REGION:-na}
+      MOLTEN_HUB_URL: ${MOLTEN_HUB_URL:-}
+      MOLTEN_HUB_SESSION_KEY: ${MOLTEN_HUB_SESSION_KEY:-main}
+      MOLTEN_HUB_SPEECH_HOST: faster-whisper
+      MOLTEN_HUB_SPEECH_PORT: "10300"
+    volumes:
+      - ./.moltenhub:/workspace/config
+    depends_on:
+      faster-whisper:
+        condition: service_started
+    restart: unless-stopped
+
+  faster-whisper:
+    image: lscr.io/linuxserver/faster-whisper:latest
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: "${TZ:-America/Vancouver}"
+      WHISPER_MODEL: "${WHISPER_MODEL:-tiny-int8}"
+      WHISPER_LANG: "${WHISPER_LANG:-auto}"
+      WHISPER_BEAM: "${WHISPER_BEAM:-1}"
+    volumes:
+      - ./.faster-whisper:/config
+    ports:
+      - "${WHISPER_PORT:-10300}:10300"
+    restart: unless-stopped
+
+networks:
+  default:
+    name: moltenhub_code_speech
+    ipam:
+      config:
+        - subnet: ${MOLTENHUB_CODE_SUBNET:-10.89.80.0/24}
