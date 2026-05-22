@@ -11,6 +11,24 @@ The highest velocity way to make code changes. Run AI coding agents against GitH
 docker run -p 7777:7777 moltenai/moltenhub-code
 ```
 
+### Docker Compose with Prompt Dictation
+
+```bash
+cp .env.example .env
+docker compose up
+```
+
+For a local image build instead of the published Docker Hub image:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
+```
+
+The Compose stack runs `moltenhub-code` with a `linuxserver/faster-whisper`
+sidecar. The web UI probes `faster-whisper:10300`; when it is reachable, the
+Prompt Studio shows a microphone button that appends dictated text to the
+prompt field.
+
 ### Local Build
 
 Requires Go `1.26.2` or newer plus `git`, `gh`, and the selected agent CLI.
@@ -57,6 +75,11 @@ Useful environment variables:
 - `HARNESS_AGENT_HARNESS`: default agent harness.
 - `HARNESS_AGENT_COMMAND`: default agent executable.
 - `OPENAI_API_KEY`: Codex login bootstrap.
+- `MOLTEN_HUB_SPEECH_HOST`: optional speech sidecar host; defaults to
+  `faster-whisper`.
+- `MOLTEN_HUB_SPEECH_PORT`: optional speech sidecar Wyoming port; defaults to
+  `10300`.
+- `MOLTEN_HUB_SPEECH_DISABLED`: set to `true` to hide prompt dictation.
 
 ## Response Modes
 
