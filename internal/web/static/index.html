@@ -5148,9 +5148,18 @@
         const speech = body && body.speech ? body.speech : {};
         state.speech.enabled = Boolean(speech.enabled);
         state.speech.reachable = Boolean(speech.reachable);
+        if (window.MoltenHubHeader && typeof window.MoltenHubHeader.updateSpeechConnection === "function") {
+          window.MoltenHubHeader.updateSpeechConnection(
+            state.speech.enabled && state.speech.reachable,
+            state.speech.reachable ? "Connected" : "Unavailable",
+          );
+        }
       } catch (_err) {
         state.speech.enabled = false;
         state.speech.reachable = false;
+        if (window.MoltenHubHeader && typeof window.MoltenHubHeader.updateSpeechConnection === "function") {
+          window.MoltenHubHeader.updateSpeechConnection(false, "Unavailable");
+        }
       } finally {
         syncPromptSpeechButton();
         if (!state.speech.statusTimer) {

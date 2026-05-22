@@ -1454,6 +1454,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `window.MoltenHubHeader.updateConnectionStatus(snapshot, { hubSetup: state.hubSetup });`) {
 		t.Fatalf("expected index html to update hub indicator through shared header component")
 	}
+	if !strings.Contains(markup, `window.MoltenHubHeader.updateSpeechConnection(`) {
+		t.Fatalf("expected index html to update the shared whisper connection indicator")
+	}
+	if !strings.Contains(markup, `state.speech.enabled && state.speech.reachable`) {
+		t.Fatalf("expected index html to show whisper connection only when speech sidecar is reachable")
+	}
 	if !strings.Contains(markup, `setIndicator(hubConnItem, hubConnDot, hubConnText, "Molten Hub", online, text);`) {
 		t.Fatalf("expected index html to update hub indicator tooltip copy")
 	}
@@ -3396,11 +3402,13 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 		`id="configured-agent-gorilla-subtitle" class="site-header-subtitle">Codex is now a 600LB Gorilla!</span>`,
 		`id="local-conn-item" class="status-item status-item-compact status-item-compact-expandable"`,
 		`id="hub-conn-item" class="status-item status-item-compact status-item-compact-expandable"`,
+		`id="speech-conn-item" class="status-item status-item-compact status-item-compact-expandable hidden"`,
 		`id="resource-metrics-item" class="status-item status-item-metrics"`,
 		`data-lucide="cpu"`,
 		`data-lucide="memory-stick"`,
 		`data-lucide="hard-drive"`,
 		`updateResourceMetrics(snapshot)`,
+		`updateSpeechConnection`,
 		`startConnectionStatus`,
 		`const response = await fetch("/api/status", { cache: "no-store" });`,
 		`connectionStatusStream = new EventSource("/api/stream");`,
