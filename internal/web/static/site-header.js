@@ -144,6 +144,10 @@
             <span id="hub-conn-dot" class="dot online"></span>
             <span id="hub-conn-text" class="status-tooltip">Molten Hub: Ready</span>
           </div>
+          <div id="speech-conn-item" class="status-item status-item-compact status-item-compact-expandable hidden" title="Whisper: Connected" aria-label="Whisper: Connected" tabindex="0">
+            <span id="speech-conn-dot" class="dot online"></span>
+            <span id="speech-conn-text" class="status-tooltip">Whisper: Connected</span>
+          </div>
           <div id="resource-metrics-item" class="status-item status-item-metrics" title="Resource metrics" aria-label="Resource metrics">
             <span id="resource-cpu-chip" class="metric-chip">
               <span id="resource-cpu-icon" class="metric-icon metric-icon-neutral" aria-hidden="true">
@@ -398,6 +402,9 @@
         hubItem: this.querySelector("#hub-conn-item"),
         hubDot: this.querySelector("#hub-conn-dot"),
         hubText: this.querySelector("#hub-conn-text"),
+        speechItem: this.querySelector("#speech-conn-item"),
+        speechDot: this.querySelector("#speech-conn-dot"),
+        speechText: this.querySelector("#speech-conn-text"),
       };
     }
 
@@ -418,6 +425,15 @@
     updateLocalConnection(online, text) {
       const nodes = this.connectionNodes();
       this.setIndicator(nodes.localItem, nodes.localDot, nodes.localText, "Local", online, text);
+    }
+
+    updateSpeechConnection(connected, text = "") {
+      const nodes = this.connectionNodes();
+      if (!nodes.speechItem) return;
+      const online = Boolean(connected);
+      nodes.speechItem.classList.toggle("hidden", !online);
+      nodes.speechItem.setAttribute("aria-hidden", online ? "false" : "true");
+      this.setIndicator(nodes.speechItem, nodes.speechDot, nodes.speechText, "Whisper", online, text || "Connected");
     }
 
     applyHubDotMode(mode) {
@@ -558,6 +574,14 @@
     });
   }
 
+  function updateSpeechConnection(connected, text = "") {
+    document.querySelectorAll("moltenhub-code-header").forEach((header) => {
+      if (typeof header.updateSpeechConnection === "function") {
+        header.updateSpeechConnection(connected, text);
+      }
+    });
+  }
+
   async function loadConnectionStatus(options = {}) {
     const response = await fetch("/api/status", { cache: "no-store" });
     if (!response.ok) {
@@ -633,6 +657,7 @@
     },
     updateLocalConnection,
     updateConnectionStatus,
+    updateSpeechConnection,
     updateResourceMetrics,
     startConnectionStatus,
     startResourceMetrics,
