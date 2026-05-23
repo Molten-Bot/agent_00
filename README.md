@@ -79,6 +79,8 @@ Useful environment variables:
   `faster-whisper`.
 - `MOLTEN_HUB_SPEECH_PORT`: optional speech sidecar Wyoming port; defaults to
   `10300`.
+- `MOLTEN_HUB_SPEECH_LANGUAGE`: optional speech language hint; defaults to
+  `en`. Set to `auto` to use Whisper language detection.
 - `MOLTEN_HUB_SPEECH_DISABLED`: set to `true` to hide prompt dictation.
 
 ## Response Modes
