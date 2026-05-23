@@ -72,15 +72,16 @@ services:
       HARNESS_AGENT_HARNESS: codex
       MOLTEN_HUB_SPEECH_HOST: faster-whisper
       MOLTEN_HUB_SPEECH_PORT: "10300"
-      MOLTEN_HUB_SPEECH_LANGUAGE: en
+      MOLTEN_HUB_SPEECH_LANGUAGE: auto
       # Optional for Codex agent auth bootstrap:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
 
   faster-whisper:
     image: lscr.io/linuxserver/faster-whisper:latest
     environment:
-      WHISPER_MODEL: tiny-int8
-      WHISPER_LANG: en
+      WHISPER_MODEL: auto
+      WHISPER_LANG: auto
+      WHISPER_BEAM: "0"
     ports:
       - "10300:10300"
 ```
