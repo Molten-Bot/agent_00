@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/moltenhub-code/internal/agentruntime"
-	"github.com/Molten-Bot/moltenhub-code/internal/config"
 	"github.com/Molten-Bot/moltenhub-code/internal/library"
 )
 
@@ -1038,7 +1037,7 @@ func (s Server) injectIndexConfig(data []byte) []byte {
 		AutomaticMode:        s.AutomaticMode,
 		ConfiguredHarness:    configuredHarness,
 		ConfiguredAgentLabel: configuredAgentLabel,
-		DefaultRepository:    config.DefaultRepositoryURL,
+		DefaultRepository:    defaultStudioRepository(),
 		PromptImageHarnesses: agentruntime.SupportedPromptImageHarnesses(),
 		GitHubReposReady:     reposReady,
 		GitHubRepos:          repos,
@@ -1050,10 +1049,14 @@ func (s Server) injectIndexConfig(data []byte) []byte {
 
 	return bytes.Replace(
 		data,
-		[]byte(`window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"git@github.com:Molten-Bot/moltenhub-code.git","promptImageHarnesses":["codex"],"githubReposReady":false};`),
+		[]byte(`window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};`),
 		[]byte("window.__HUB_UI_CONFIG__ = "+string(cfg)+";"),
 		1,
 	)
+}
+
+func defaultStudioRepository() string {
+	return strings.TrimSpace(os.Getenv("MOLTEN_HUB_DEFAULT_REPOSITORY"))
 }
 
 func (s Server) handleState(w http.ResponseWriter, _ *http.Request) {

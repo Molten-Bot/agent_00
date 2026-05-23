@@ -27,7 +27,8 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
 The Compose stack runs `moltenhub-code` with a `linuxserver/faster-whisper`
 sidecar. The web UI probes `faster-whisper:10300`; when it is reachable, the
 Prompt Studio shows a microphone button that appends dictated text to the
-prompt field.
+prompt field. The Compose sidecar disables Docker log capture because
+`wyoming-faster-whisper` logs transcript text at INFO level.
 
 ### Local Build
 
@@ -75,6 +76,8 @@ Useful environment variables:
 - `HARNESS_AGENT_HARNESS`: default agent harness.
 - `HARNESS_AGENT_COMMAND`: default agent executable.
 - `OPENAI_API_KEY`: Codex login bootstrap.
+- `MOLTEN_HUB_DEFAULT_REPOSITORY`: optional repository prefill for Prompt
+  Studio; omitted leaves the repository field empty.
 - `MOLTEN_HUB_SPEECH_HOST`: optional speech sidecar host; defaults to
   `faster-whisper`.
 - `MOLTEN_HUB_SPEECH_PORT`: optional speech sidecar Wyoming port; defaults to

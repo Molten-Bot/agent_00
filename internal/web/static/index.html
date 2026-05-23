@@ -15,7 +15,7 @@
     window.gtag("config", "G-BY33RFG2WB");
   </script>
   <script>
-    window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"git@github.com:Molten-Bot/moltenhub-code.git","promptImageHarnesses":["codex"],"githubReposReady":false};
+    window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};
   </script>
   <script src="/static/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
@@ -837,7 +837,7 @@
         automaticMode: Boolean(config.automaticMode),
         configuredHarness: String(config.configuredHarness || "").trim(),
         configuredAgentLabel: String(config.configuredAgentLabel || "").trim(),
-        defaultRepository: normalizeRepoValue(config.defaultRepository || "") || "git@github.com:Molten-Bot/moltenhub-code.git",
+        defaultRepository: normalizeRepoValue(config.defaultRepository || ""),
         githubReposReady: Boolean(config.githubReposReady),
         githubRepos: Array.isArray(config.githubRepos) ? config.githubRepos : [],
       };
@@ -962,7 +962,7 @@
     }
 
     function defaultRepository() {
-      return normalizeRepoValue(state.ui.defaultRepository || "") || "git@github.com:Molten-Bot/moltenhub-code.git";
+      return normalizeRepoValue(state.ui.defaultRepository || "");
     }
 
     function configuredAgentLogoURL() {

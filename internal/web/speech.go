@@ -232,14 +232,26 @@ func transcribeSpeechPCM(ctx context.Context, cfg speechConfig, pcm []byte, lang
 	}
 
 	reader := bufio.NewReader(conn)
+	var streamedTranscript strings.Builder
 	for {
 		event, err := readWyomingEvent(reader)
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if text := strings.TrimSpace(streamedTranscript.String()); text != "" {
+					return text, nil
+				}
+			}
 			return "", fmt.Errorf("read speech transcript: %w", err)
 		}
 		switch event.Type {
 		case "transcript":
 			return strings.TrimSpace(fmt.Sprint(event.Data["text"])), nil
+		case "transcript-chunk":
+			streamedTranscript.WriteString(fmt.Sprint(event.Data["text"]))
+		case "transcript-stop":
+			if text := strings.TrimSpace(streamedTranscript.String()); text != "" {
+				return text, nil
+			}
 		case "error":
 			message := strings.TrimSpace(fmt.Sprint(event.Data["text"]))
 			if message == "" {
@@ -255,14 +267,25 @@ func transcribeSpeechPCM(ctx context.Context, cfg speechConfig, pcm []byte, lang
 
 func writeWyomingEvent(writer *bufio.Writer, eventType string, data map[string]any, payload []byte) error {
 	header := wyomingEventHeader{Type: eventType}
+	var dataPayload []byte
 	if len(data) > 0 {
-		header.Data = data
+		var err error
+		dataPayload, err = json.Marshal(data)
+		if err != nil {
+			return err
+		}
+		header.DataLength = len(dataPayload)
 	}
 	if len(payload) > 0 {
 		header.PayloadLength = len(payload)
 	}
 	if err := json.NewEncoder(writer).Encode(header); err != nil {
 		return err
+	}
+	if len(dataPayload) > 0 {
+		if _, err := writer.Write(dataPayload); err != nil {
+			return err
+		}
 	}
 	if len(payload) > 0 {
 		if _, err := writer.Write(payload); err != nil {

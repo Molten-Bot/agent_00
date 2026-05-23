@@ -126,6 +126,94 @@ func TestHandleSpeechTranscribeUsesWyomingServer(t *testing.T) {
 	}
 }
 
+func TestHandleSpeechTranscribeUsesStreamingTranscriptFallback(t *testing.T) {
+	listener := listenFakeSpeechServer(t, func(conn net.Conn) {
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		for {
+			event, err := readWyomingEvent(reader)
+			if err != nil {
+				t.Errorf("read Wyoming event: %v", err)
+				return
+			}
+			if event.Type == "audio-stop" {
+				break
+			}
+		}
+		writer := bufio.NewWriter(conn)
+		if err := writeWyomingEvent(writer, "transcript-start", nil, nil); err != nil {
+			t.Errorf("write transcript start: %v", err)
+			return
+		}
+		if err := writeWyomingEvent(writer, "transcript-chunk", map[string]any{"text": "Dictated "}, nil); err != nil {
+			t.Errorf("write transcript chunk: %v", err)
+			return
+		}
+		if err := writeWyomingEvent(writer, "transcript-chunk", map[string]any{"text": "prompt"}, nil); err != nil {
+			t.Errorf("write transcript chunk: %v", err)
+			return
+		}
+		if err := writeWyomingEvent(writer, "transcript-stop", nil, nil); err != nil {
+			t.Errorf("write transcript stop: %v", err)
+		}
+	})
+
+	host, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener address: %v", err)
+	}
+	t.Setenv("MOLTEN_HUB_SPEECH_HOST", host)
+	t.Setenv("MOLTEN_HUB_SPEECH_PORT", port)
+
+	srv := NewServer("", NewBroker())
+	req := httptest.NewRequest(http.MethodPost, "/api/speech/transcribe?language=auto", bytes.NewReader([]byte{1, 0, 2, 0}))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("POST /api/speech/transcribe status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+
+	var body struct {
+		OK   bool   `json:"ok"`
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode transcription: %v", err)
+	}
+	if !body.OK || body.Text != "Dictated prompt" {
+		t.Fatalf("transcription body = %#v", body)
+	}
+}
+
+func TestWriteWyomingEventUsesCanonicalDataLength(t *testing.T) {
+	var out bytes.Buffer
+	if err := writeWyomingEvent(bufio.NewWriter(&out), "transcribe", map[string]any{"language": "en"}, []byte{1, 2}); err != nil {
+		t.Fatalf("write Wyoming event: %v", err)
+	}
+
+	reader := bufio.NewReader(&out)
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("read Wyoming header: %v", err)
+	}
+	var header map[string]any
+	if err := json.Unmarshal(line, &header); err != nil {
+		t.Fatalf("decode Wyoming header: %v", err)
+	}
+	if _, ok := header["data"]; ok {
+		t.Fatalf("Wyoming header data = %#v, want canonical data_length payload", header["data"])
+	}
+	if got := int(header["data_length"].(float64)); got == 0 {
+		t.Fatalf("Wyoming data_length = %d, want non-zero", got)
+	}
+	if got := int(header["payload_length"].(float64)); got != 2 {
+		t.Fatalf("Wyoming payload_length = %d, want 2", got)
+	}
+}
+
 func TestLoadSpeechConfigAllowsAutomaticLanguage(t *testing.T) {
 	t.Setenv("MOLTEN_HUB_SPEECH_LANGUAGE", "auto")
 
