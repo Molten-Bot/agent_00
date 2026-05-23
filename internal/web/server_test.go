@@ -1459,6 +1459,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `state.speech.enabled && state.speech.reachable`) {
 		t.Fatalf("expected index html to show whisper connection only when speech sidecar is reachable")
 	}
+	if !strings.Contains(markup, `fetch("/api/speech/transcribe",`) {
+		t.Fatalf("expected index html to use configured speech language defaults")
+	}
 	if !strings.Contains(markup, `setIndicator(hubConnItem, hubConnDot, hubConnText, "Molten Hub", online, text);`) {
 		t.Fatalf("expected index html to update hub indicator tooltip copy")
 	}
