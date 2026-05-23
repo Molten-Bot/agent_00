@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Molten-Bot/moltenhub-code/internal/config"
 	"github.com/Molten-Bot/moltenhub-code/internal/library"
 )
 
@@ -2084,14 +2083,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "function defaultRepoSelection(") {
 		t.Fatalf("expected index html to include repo history default selection helper")
 	}
-	if !strings.Contains(markup, `"defaultRepository":"`+config.DefaultRepositoryURL+`"`) {
-		t.Fatalf("expected index html to inject the default repository")
+	if !strings.Contains(markup, `"defaultRepository":""`) {
+		t.Fatalf("expected index html to leave the default repository empty")
 	}
 	if !strings.Contains(markup, "if (state.repoHistory.length > 0 && unique.length > 0)") {
 		t.Fatalf("expected index html to default repo selection to saved history when available")
 	}
 	if !strings.Contains(markup, "return defaultRepository();") {
-		t.Fatalf("expected index html to fall back to the configured default repository when history is empty")
+		t.Fatalf("expected index html to fall back only when a default repository is configured")
 	}
 	if !strings.Contains(markup, "const keepManualSelection = manualSelected && select.dataset.manual === \"true\";") ||
 		!strings.Contains(markup, "const nextValue = keepManualSelection") ||
@@ -2131,7 +2130,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(markup, "const repo = normalizeRepoValue(builderRepoInput.value) || defaultRepository();") ||
 		!strings.Contains(markup, "const repo = normalizeRepoValue(libraryRepoInput.value) || defaultRepository();") {
-		t.Fatalf("expected index html payload builders to fall back to the configured default repository")
+		t.Fatalf("expected index html payload builders to require a repository unless a default is configured")
 	}
 	if !strings.Contains(markup, "const payload = {\n        repos: [repo],\n        targetsubdir:") ||
 		!strings.Contains(markup, "if (branch) {\n        payload.branch = branch;\n      }") {
@@ -2272,7 +2271,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "clearSubmittedPromptState();") {
 		t.Fatalf("expected index html to clear the submitted prompt state after a successful queue")
 	}
-	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"`+config.DefaultRepositoryURL+`","promptImageHarnesses":["codex"],"githubReposReady":false};`) {
+	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};`) {
 		t.Fatalf("expected index html to include default UI config")
 	}
 	if !strings.Contains(markup, `id="theme-toggle"`) || !strings.Contains(markup, `function nextThemeMode(theme)`) {
@@ -2492,8 +2491,26 @@ func TestHandlerIndexInjectsAutomaticModeConfig(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":true,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"`+config.DefaultRepositoryURL+`","promptImageHarnesses":["codex"],"githubReposReady":false};`) {
+	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":true,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};`) {
 		t.Fatalf("expected automatic mode UI config, got %q", markup)
+	}
+}
+
+func TestHandlerIndexInjectsConfiguredDefaultRepository(t *testing.T) {
+	t.Setenv("MOLTEN_HUB_DEFAULT_REPOSITORY", "git@github.com:acme/project.git")
+
+	srv := NewServer("", NewBroker())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d", resp.Code)
+	}
+
+	markup := resp.Body.String()
+	if !strings.Contains(markup, `"defaultRepository":"git@github.com:acme/project.git"`) {
+		t.Fatalf("expected configured default repository, got %q", markup)
 	}
 }
 
@@ -2511,7 +2528,7 @@ func TestHandlerIndexInjectsConfiguredHarness(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"claude","configuredAgentLabel":"Claude","defaultRepository":"`+config.DefaultRepositoryURL+`","promptImageHarnesses":["codex"],"githubReposReady":false};`) {
+	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"claude","configuredAgentLabel":"Claude","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};`) {
 		t.Fatalf("expected configured harness UI config, got %q", markup)
 	}
 }

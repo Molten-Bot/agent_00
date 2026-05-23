@@ -13,6 +13,7 @@ services:
       MOLTEN_HUB_REGION: ${MOLTEN_HUB_REGION:-na}
       MOLTEN_HUB_URL: ${MOLTEN_HUB_URL:-}
       MOLTEN_HUB_SESSION_KEY: ${MOLTEN_HUB_SESSION_KEY:-main}
+      MOLTEN_HUB_DEFAULT_REPOSITORY: ${MOLTEN_HUB_DEFAULT_REPOSITORY:-}
       MOLTEN_HUB_SPEECH_HOST: faster-whisper
       MOLTEN_HUB_SPEECH_PORT: "10300"
       MOLTEN_HUB_SPEECH_LANGUAGE: "${MOLTEN_HUB_SPEECH_LANGUAGE:-${WHISPER_LANG:-en}}"
@@ -25,6 +26,8 @@ services:
 
   faster-whisper:
     image: lscr.io/linuxserver/faster-whisper:latest
+    logging:
+      driver: "none"
     environment:
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
