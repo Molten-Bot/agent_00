@@ -78,8 +78,9 @@ services:
   faster-whisper:
     image: lscr.io/linuxserver/faster-whisper:latest
     environment:
-      WHISPER_MODEL: tiny-int8
+      WHISPER_MODEL: auto
       WHISPER_LANG: auto
+      WHISPER_BEAM: "0"
     ports:
       - "10300:10300"
 ```
