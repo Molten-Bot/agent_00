@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Molten-Bot/moltenhub-code/internal/config"
 	"github.com/Molten-Bot/moltenhub-code/internal/library"
 )
 
@@ -1724,8 +1723,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `chatDockLink.setAttribute("aria-disabled", String(!available));`) ||
 		!strings.Contains(markup, `chatDockLink.removeAttribute("href");`) ||
 		!strings.Contains(markup, `let githubReposLoadPromise = null;`) ||
-		!strings.Contains(markup, `const response = await fetch("/api/github/repos", { cache: "no-store" });`) ||
+		!strings.Contains(markup, `let githubReposLoadSequence = 0;`) ||
+		!strings.Contains(markup, `function loadGitHubReposForChat(options = {})`) ||
+		!strings.Contains(markup, `const forceNewRequest = force && refresh;`) ||
+		!strings.Contains(markup, `if (loadSequence !== githubReposLoadSequence)`) ||
+		!strings.Contains(markup, `const response = await fetch(refresh ? "/api/github/repos?refresh=1" : "/api/github/repos", { cache: "no-store" });`) ||
 		!strings.Contains(markup, `state.githubRepos = Array.isArray(body.repos) ? body.repos : [];`) ||
+		!strings.Contains(markup, `loadGitHubReposForChat({ force: true, refresh: true, keepExisting: true })`) ||
+		!strings.Contains(markup, `loadGitHubReposForChat({ force: true, refresh: true });`) ||
 		!strings.Contains(markup, `const allRepos = Array.isArray(state.githubRepos) ? state.githubRepos : [];`) ||
 		!strings.Contains(markup, `const CHAT_REPOS_MAX_PER_PAGE = 15;`) ||
 		!strings.Contains(markup, `function chatReposPerPage()`) ||
@@ -2083,14 +2088,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "function defaultRepoSelection(") {
 		t.Fatalf("expected index html to include repo history default selection helper")
 	}
-	if !strings.Contains(markup, `"defaultRepository":"`+config.DefaultRepositoryURL+`"`) {
-		t.Fatalf("expected index html to inject the default repository")
+	if !strings.Contains(markup, `"defaultRepository":""`) {
+		t.Fatalf("expected index html to leave the default repository empty")
 	}
 	if !strings.Contains(markup, "if (state.repoHistory.length > 0 && unique.length > 0)") {
 		t.Fatalf("expected index html to default repo selection to saved history when available")
 	}
 	if !strings.Contains(markup, "return defaultRepository();") {
-		t.Fatalf("expected index html to fall back to the configured default repository when history is empty")
+		t.Fatalf("expected index html to fall back only when a default repository is configured")
 	}
 	if !strings.Contains(markup, "const keepManualSelection = manualSelected && select.dataset.manual === \"true\";") ||
 		!strings.Contains(markup, "const nextValue = keepManualSelection") ||
@@ -2130,7 +2135,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(markup, "const repo = normalizeRepoValue(builderRepoInput.value) || defaultRepository();") ||
 		!strings.Contains(markup, "const repo = normalizeRepoValue(libraryRepoInput.value) || defaultRepository();") {
-		t.Fatalf("expected index html payload builders to fall back to the configured default repository")
+		t.Fatalf("expected index html payload builders to require a repository unless a default is configured")
 	}
 	if !strings.Contains(markup, "const payload = {\n        repos: [repo],\n        targetsubdir:") ||
 		!strings.Contains(markup, "if (branch) {\n        payload.branch = branch;\n      }") {
@@ -2271,7 +2276,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "clearSubmittedPromptState();") {
 		t.Fatalf("expected index html to clear the submitted prompt state after a successful queue")
 	}
-	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"`+config.DefaultRepositoryURL+`","promptImageHarnesses":["codex"],"githubReposReady":false};`) {
+	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};`) {
 		t.Fatalf("expected index html to include default UI config")
 	}
 	if !strings.Contains(markup, `id="theme-toggle"`) || !strings.Contains(markup, `function nextThemeMode(theme)`) {
@@ -2491,8 +2496,26 @@ func TestHandlerIndexInjectsAutomaticModeConfig(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":true,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"`+config.DefaultRepositoryURL+`","promptImageHarnesses":["codex"],"githubReposReady":false};`) {
+	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":true,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};`) {
 		t.Fatalf("expected automatic mode UI config, got %q", markup)
+	}
+}
+
+func TestHandlerIndexInjectsConfiguredDefaultRepository(t *testing.T) {
+	t.Setenv("MOLTEN_HUB_DEFAULT_REPOSITORY", "git@github.com:acme/project.git")
+
+	srv := NewServer("", NewBroker())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d", resp.Code)
+	}
+
+	markup := resp.Body.String()
+	if !strings.Contains(markup, `"defaultRepository":"git@github.com:acme/project.git"`) {
+		t.Fatalf("expected configured default repository, got %q", markup)
 	}
 }
 
@@ -2510,7 +2533,7 @@ func TestHandlerIndexInjectsConfiguredHarness(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"claude","configuredAgentLabel":"Claude","defaultRepository":"`+config.DefaultRepositoryURL+`","promptImageHarnesses":["codex"],"githubReposReady":false};`) {
+	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"claude","configuredAgentLabel":"Claude","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};`) {
 		t.Fatalf("expected configured harness UI config, got %q", markup)
 	}
 }
@@ -2818,6 +2841,153 @@ func TestHandlerGitHubReposCachesSuccessfulLoad(t *testing.T) {
 
 	if calls != 1 {
 		t.Fatalf("ResolveGitHubRepos calls = %d, want 1", calls)
+	}
+}
+
+func TestHandlerGitHubReposRefreshBypassesCache(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	calls := 0
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		calls++
+		switch calls {
+		case 1:
+			return []GitHubRepo{{
+				Name:     "old",
+				FullName: "acme/old",
+				HTMLURL:  "https://github.com/acme/old",
+			}}, nil
+		default:
+			return []GitHubRepo{{
+				Name:     "new",
+				FullName: "acme/new",
+				HTMLURL:  "https://github.com/acme/new",
+			}}, nil
+		}
+	}
+	handler := srv.Handler()
+
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/api/github/repos", nil))
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"full_name":"acme/old"`) {
+		t.Fatalf("initial github repos response = status %d body %q", resp.Code, resp.Body.String())
+	}
+
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/api/github/repos?refresh=1", nil))
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"full_name":"acme/new"`) {
+		t.Fatalf("refresh github repos response = status %d body %q", resp.Code, resp.Body.String())
+	}
+
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/api/github/repos", nil))
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"full_name":"acme/new"`) {
+		t.Fatalf("cached refreshed github repos response = status %d body %q", resp.Code, resp.Body.String())
+	}
+	if calls != 2 {
+		t.Fatalf("ResolveGitHubRepos calls = %d, want 2", calls)
+	}
+}
+
+func TestHandlerAgentAuthConfigureInvalidatesGitHubRepoCache(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	calls := 0
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		calls++
+		if calls == 1 {
+			return []GitHubRepo{{
+				Name:     "old",
+				FullName: "acme/old",
+				HTMLURL:  "https://github.com/acme/old",
+			}}, nil
+		}
+		return []GitHubRepo{{
+			Name:     "new",
+			FullName: "acme/new",
+			HTMLURL:  "https://github.com/acme/new",
+		}}, nil
+	}
+	srv.ConfigureAgentAuth = func(context.Context, string) (AgentAuthState, error) {
+		return AgentAuthState{Required: true, Ready: true, State: "ready"}, nil
+	}
+	handler := srv.Handler()
+
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/api/github/repos", nil))
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"full_name":"acme/old"`) {
+		t.Fatalf("initial github repos response = status %d body %q", resp.Code, resp.Body.String())
+	}
+
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "/api/agent-auth/configure", strings.NewReader(`{"github_token":"github_pat_test"}`)))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("agent auth configure status = %d body %q", resp.Code, resp.Body.String())
+	}
+
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/api/github/repos", nil))
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"full_name":"acme/new"`) {
+		t.Fatalf("github repos after auth configure = status %d body %q", resp.Code, resp.Body.String())
+	}
+	if calls != 2 {
+		t.Fatalf("ResolveGitHubRepos calls = %d, want 2", calls)
+	}
+}
+
+func TestGitHubRepoCacheInvalidateSkipsInFlightStore(t *testing.T) {
+	t.Parallel()
+
+	cache := &gitHubRepoCache{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan []GitHubRepo, 1)
+	go func() {
+		repos, _ := cache.resolve(context.Background(), func(context.Context) ([]GitHubRepo, error) {
+			close(started)
+			<-release
+			return []GitHubRepo{{
+				Name:     "old",
+				FullName: "acme/old",
+				HTMLURL:  "https://github.com/acme/old",
+			}}, nil
+		})
+		done <- repos
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for github repo cache load to start")
+	}
+	cache.invalidate()
+	close(release)
+	select {
+	case repos := <-done:
+		if len(repos) != 1 || repos[0].FullName != "acme/old" {
+			t.Fatalf("in-flight resolve repos = %#v, want old repo for original caller", repos)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for github repo cache load")
+	}
+	if repos, ready := cache.snapshot(); ready || len(repos) != 0 {
+		t.Fatalf("cache snapshot after invalidate = repos %#v ready %t, want empty not-ready cache", repos, ready)
+	}
+
+	repos, err := cache.resolve(context.Background(), func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{{
+			Name:     "new",
+			FullName: "acme/new",
+			HTMLURL:  "https://github.com/acme/new",
+		}}, nil
+	})
+	if err != nil {
+		t.Fatalf("resolve after invalidate error = %v", err)
+	}
+	if len(repos) != 1 || repos[0].FullName != "acme/new" {
+		t.Fatalf("resolve after invalidate repos = %#v, want new repo", repos)
 	}
 }
 

@@ -72,6 +72,7 @@ services:
       HARNESS_AGENT_HARNESS: codex
       MOLTEN_HUB_SPEECH_HOST: faster-whisper
       MOLTEN_HUB_SPEECH_PORT: "10300"
+      MOLTEN_HUB_SPEECH_LANGUAGE: auto
       # Optional for Codex agent auth bootstrap:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
 

@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/moltenhub-code/internal/agentruntime"
-	"github.com/Molten-Bot/moltenhub-code/internal/config"
 	"github.com/Molten-Bot/moltenhub-code/internal/library"
 )
 
@@ -187,11 +186,12 @@ type GitHubRepo struct {
 }
 
 type gitHubRepoCache struct {
-	mu      sync.Mutex
-	loaded  bool
-	loading bool
-	wait    chan struct{}
-	repos   []GitHubRepo
+	mu         sync.Mutex
+	loaded     bool
+	loading    bool
+	wait       chan struct{}
+	repos      []GitHubRepo
+	generation uint64
 }
 
 // HubSetupRequest captures the late-stage Hub connect modal payload.
@@ -381,7 +381,15 @@ func (s Server) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repos, err := s.resolveGitHubRepos(r.Context())
+	var (
+		repos []GitHubRepo
+		err   error
+	)
+	if gitHubReposRefreshRequested(r) {
+		repos, err = s.refreshGitHubRepos(r.Context())
+	} else {
+		repos, err = s.resolveGitHubRepos(r.Context())
+	}
 	if err != nil {
 		s.logf("hub.ui status=warn endpoint=github_repos err=%q", err)
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -1038,7 +1046,7 @@ func (s Server) injectIndexConfig(data []byte) []byte {
 		AutomaticMode:        s.AutomaticMode,
 		ConfiguredHarness:    configuredHarness,
 		ConfiguredAgentLabel: configuredAgentLabel,
-		DefaultRepository:    config.DefaultRepositoryURL,
+		DefaultRepository:    defaultStudioRepository(),
 		PromptImageHarnesses: agentruntime.SupportedPromptImageHarnesses(),
 		GitHubReposReady:     reposReady,
 		GitHubRepos:          repos,
@@ -1050,10 +1058,14 @@ func (s Server) injectIndexConfig(data []byte) []byte {
 
 	return bytes.Replace(
 		data,
-		[]byte(`window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"git@github.com:Molten-Bot/moltenhub-code.git","promptImageHarnesses":["codex"],"githubReposReady":false};`),
+		[]byte(`window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};`),
 		[]byte("window.__HUB_UI_CONFIG__ = "+string(cfg)+";"),
 		1,
 	)
+}
+
+func defaultStudioRepository() string {
+	return strings.TrimSpace(os.Getenv("MOLTEN_HUB_DEFAULT_REPOSITORY"))
 }
 
 func (s Server) handleState(w http.ResponseWriter, _ *http.Request) {
@@ -1536,6 +1548,7 @@ func (s Server) handleAgentAuthConfigure(w http.ResponseWriter, r *http.Request)
 		})
 		return
 	}
+	s.invalidateGitHubRepos()
 	s.logf("hub.ui status=ok endpoint=agent_auth_configure state=%s ready=%t", strings.TrimSpace(state.State), state.Ready)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":   true,
@@ -1599,6 +1612,37 @@ func (s Server) resolveGitHubRepos(ctx context.Context) ([]GitHubRepo, error) {
 		})
 	}
 	return s.loadGitHubRepos(ctx)
+}
+
+func (s Server) refreshGitHubRepos(ctx context.Context) ([]GitHubRepo, error) {
+	if s.gitHubRepos == nil {
+		return s.loadGitHubRepos(ctx)
+	}
+	generation := s.gitHubRepos.beginRefresh()
+	repos, err := s.loadGitHubRepos(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.gitHubRepos.storeIfCurrent(generation, repos)
+	return append([]GitHubRepo(nil), repos...), nil
+}
+
+func (s Server) invalidateGitHubRepos() {
+	if s.gitHubRepos != nil {
+		s.gitHubRepos.invalidate()
+	}
+}
+
+func gitHubReposRefreshRequested(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("refresh"))) {
+	case "1", "true", "yes", "y":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s Server) loadGitHubRepos(ctx context.Context) ([]GitHubRepo, error) {
@@ -1675,6 +1719,7 @@ func (c *gitHubRepoCache) resolve(ctx context.Context, load func(context.Context
 	c.loading = true
 	c.wait = make(chan struct{})
 	wait := c.wait
+	generation := c.generation
 	c.mu.Unlock()
 
 	repos, err := load(ctx)
@@ -1685,9 +1730,37 @@ func (c *gitHubRepoCache) resolve(ctx context.Context, load func(context.Context
 	if err != nil {
 		return nil, err
 	}
+	if generation == c.generation {
+		c.repos = append([]GitHubRepo(nil), repos...)
+		c.loaded = true
+		return append([]GitHubRepo(nil), c.repos...), nil
+	}
+	return append([]GitHubRepo(nil), repos...), nil
+}
+
+func (c *gitHubRepoCache) invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.generation++
+	c.loaded = false
+	c.repos = nil
+}
+
+func (c *gitHubRepoCache) beginRefresh() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.generation++
+	return c.generation
+}
+
+func (c *gitHubRepoCache) storeIfCurrent(generation uint64, repos []GitHubRepo) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if generation != c.generation {
+		return
+	}
 	c.repos = append([]GitHubRepo(nil), repos...)
 	c.loaded = true
-	return append([]GitHubRepo(nil), c.repos...), nil
 }
 
 func resolveAuthenticatedGitHubProfileURL(ctx context.Context, client *http.Client) (string, error) {
@@ -1739,7 +1812,7 @@ func resolveAuthenticatedGitHubRepos(ctx context.Context, client *http.Client) (
 	}
 
 	var repos []GitHubRepo
-	nextURL := "https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=pushed"
+	nextURL := "https://api.github.com/user/repos?per_page=100&visibility=all&affiliation=owner,collaborator,organization_member&sort=pushed"
 	for nextURL != "" {
 		req, err := newGitHubAPIRequest(ctx, http.MethodGet, nextURL)
 		if err != nil {
