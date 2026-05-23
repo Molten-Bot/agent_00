@@ -5262,12 +5262,6 @@
         setLocalPromptStatus("warn", "No speech audio was captured.");
         return;
       }
-      if (captureStats.nearSilent) {
-        trackAnalyticsEvent("prompt_speech_failed", { stage: "silent_input" });
-        setLocalPromptStatus("warn", "No microphone signal was captured.");
-        return;
-      }
-
       state.speech.submitting = true;
       syncPromptSpeechButton();
       setLocalPromptStatus("warn", "Transcribing...");
@@ -5283,8 +5277,11 @@
         }
         const text = String(body.text || "").trim();
         if (!text) {
-          trackAnalyticsEvent("prompt_speech_failed", { stage: body?.reason === "empty_transcript" ? "empty_transcript" : "empty_text" });
-          setLocalPromptStatus("warn", "No speech was recognized.");
+          const nearSilent = Boolean(body?.audio?.near_silent || captureStats.nearSilent);
+          trackAnalyticsEvent("prompt_speech_failed", {
+            stage: nearSilent ? "quiet_empty_transcript" : (body?.reason === "empty_transcript" ? "empty_transcript" : "empty_text"),
+          });
+          setLocalPromptStatus("warn", nearSilent ? "No speech was recognized. Check microphone input." : "No speech was recognized.");
           return;
         }
         appendDictatedPromptText(text);
