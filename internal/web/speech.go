@@ -18,6 +18,7 @@ import (
 const (
 	defaultSpeechHost       = "faster-whisper"
 	defaultSpeechPort       = "10300"
+	defaultSpeechLanguage   = "en"
 	defaultSpeechRate       = 16000
 	defaultSpeechSampleSize = 2
 	defaultSpeechChannels   = 1
@@ -31,6 +32,7 @@ type speechConfig struct {
 	Enabled  bool
 	Host     string
 	Port     string
+	Language string
 	Rate     int
 	Width    int
 	Channel  int
@@ -43,6 +45,7 @@ type speechStatus struct {
 	Reachable bool   `json:"reachable"`
 	Host      string `json:"host,omitempty"`
 	Port      string `json:"port,omitempty"`
+	Language  string `json:"language,omitempty"`
 	Rate      int    `json:"rate"`
 }
 
@@ -143,6 +146,7 @@ func loadSpeechConfig() speechConfig {
 	if strings.TrimSpace(port) == "" {
 		port = defaultSpeechPort
 	}
+	language := configuredSpeechLanguage(firstNonEmptyEnv("MOLTEN_HUB_SPEECH_LANGUAGE", "MOLTENHUB_SPEECH_LANGUAGE", "WHISPER_LANG"))
 	timeout := envDuration("MOLTEN_HUB_SPEECH_TIMEOUT_SECONDS", defaultSpeechTimeout)
 	maxBytes := int64(defaultSpeechRate * defaultSpeechSampleSize * defaultSpeechChannels * maxSpeechSeconds)
 	enabled := !envBool("MOLTEN_HUB_SPEECH_DISABLED") && !envBool("MOLTENHUB_SPEECH_DISABLED")
@@ -154,6 +158,7 @@ func loadSpeechConfig() speechConfig {
 		Enabled:  enabled,
 		Host:     strings.TrimSpace(host),
 		Port:     strings.TrimSpace(port),
+		Language: language,
 		Rate:     defaultSpeechRate,
 		Width:    defaultSpeechSampleSize,
 		Channel:  defaultSpeechChannels,
@@ -164,10 +169,11 @@ func loadSpeechConfig() speechConfig {
 
 func speechStatusFromConfig(cfg speechConfig) speechStatus {
 	return speechStatus{
-		Enabled: cfg.Enabled,
-		Host:    cfg.Host,
-		Port:    cfg.Port,
-		Rate:    cfg.Rate,
+		Enabled:  cfg.Enabled,
+		Host:     cfg.Host,
+		Port:     cfg.Port,
+		Language: cfg.Language,
+		Rate:     cfg.Rate,
 	}
 }
 
@@ -202,7 +208,7 @@ func transcribeSpeechPCM(ctx context.Context, cfg speechConfig, pcm []byte, lang
 
 	writer := bufio.NewWriter(conn)
 	transcribeData := map[string]any{}
-	if lang := normalizeSpeechLanguage(language); lang != "" {
+	if lang := resolveSpeechLanguage(language, cfg.Language); lang != "" {
 		transcribeData["language"] = lang
 	}
 	if err := writeWyomingEvent(writer, "transcribe", transcribeData, nil); err != nil {
@@ -368,4 +374,22 @@ func normalizeSpeechLanguage(language string) string {
 		}
 	}
 	return value
+}
+
+func configuredSpeechLanguage(language string) string {
+	value := strings.ToLower(strings.TrimSpace(language))
+	if value == "auto" {
+		return ""
+	}
+	if lang := normalizeSpeechLanguage(value); lang != "" {
+		return lang
+	}
+	return defaultSpeechLanguage
+}
+
+func resolveSpeechLanguage(requested, fallback string) string {
+	if lang := normalizeSpeechLanguage(requested); lang != "" {
+		return lang
+	}
+	return normalizeSpeechLanguage(fallback)
 }
