@@ -304,6 +304,7 @@ func TestPublishLocalRunFailureResultPublishesExplicitFailurePayload(t *testing.
 	publishLocalRunFailureResult(context.Background(), hub.InitConfig{
 		BaseURL:    ts.URL + "/v1",
 		AgentToken: "token",
+		SessionKey: "local-session",
 	}, "req-local-fail", app.Result{
 		ExitCode:     app.ExitGit,
 		Err:          errors.New("git: merge conflict"),
@@ -316,6 +317,12 @@ func TestPublishLocalRunFailureResultPublishesExplicitFailurePayload(t *testing.
 	msg, ok := publishBody["message"].(map[string]any)
 	if !ok {
 		t.Fatalf("published message missing: %#v", publishBody)
+	}
+	if got := publishBody["session_key"]; got != "local-session" {
+		t.Fatalf("session_key = %#v, want local-session", got)
+	}
+	if got := msg["session_key"]; got != "local-session" {
+		t.Fatalf("message.session_key = %#v, want local-session", got)
 	}
 	if got := msg["status"]; got != "error" {
 		t.Fatalf("message.status = %#v, want error", got)
