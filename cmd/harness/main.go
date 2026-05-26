@@ -2297,16 +2297,17 @@ func localRunFailurePayload(cfg hub.InitConfig, requestID string, result app.Res
 	addFailureFields(resultPayload, errText)
 
 	payload := map[string]any{
-		"type":       cfg.Skill.ResultType,
-		"skill":      cfg.Skill.Name,
-		"request_id": strings.TrimSpace(requestID),
-		"status":     "error",
-		"failed":     true,
-		"ok":         false,
-		"message":    message,
-		"response":   message,
-		"error":      errText,
-		"result":     resultPayload,
+		"type":        cfg.Skill.ResultType,
+		"skill":       cfg.Skill.Name,
+		"request_id":  strings.TrimSpace(requestID),
+		"session_key": cfg.SessionKey,
+		"status":      "error",
+		"failed":      true,
+		"ok":          false,
+		"message":     message,
+		"response":    message,
+		"error":       errText,
+		"result":      resultPayload,
 	}
 	addFailureFields(payload, errText)
 	failure := map[string]any{

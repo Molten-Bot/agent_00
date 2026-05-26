@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,22 @@ func TestToMapParsesMapAndJSONString(t *testing.T) {
 	}
 	if got := toMap("{invalid"); got != nil {
 		t.Fatalf("toMap(invalid json string) = %#v, want nil", got)
+	}
+}
+
+func TestRuntimeAttemptStatusTraceIncludesResponseBody(t *testing.T) {
+	t.Parallel()
+
+	got := runtimeAttemptStatusTrace(apiAttempt{
+		Method: http.MethodPost,
+		Path:   runtimeMessagesPublishPath,
+	}, http.StatusBadRequest, []byte(`{"error":"missing session_key"}`))
+
+	if !strings.Contains(got, "POST /runtime/messages/publish status=400") {
+		t.Fatalf("trace = %q, want status", got)
+	}
+	if !strings.Contains(got, `body={"error":"missing session_key"}`) {
+		t.Fatalf("trace = %q, want response body", got)
 	}
 }
 

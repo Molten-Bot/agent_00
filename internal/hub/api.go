@@ -737,7 +737,7 @@ func (c APIClient) tryRuntimeTransport(ctx context.Context, token string, attemp
 	}
 	var traces []string
 	for _, attempt := range attempts {
-		status, _, err := c.doJSON(ctx, attempt.Method, attempt.Path, token, attempt.Body)
+		status, body, err := c.doJSON(ctx, attempt.Method, attempt.Path, token, attempt.Body)
 		if err != nil {
 			traces = append(traces, fmt.Sprintf("%s %s network=%v", attempt.Method, attempt.Path, err))
 			return false, strings.Join(traces, "; ")
@@ -745,10 +745,18 @@ func (c APIClient) tryRuntimeTransport(ctx context.Context, token string, attemp
 		if status/100 == 2 {
 			return true, fmt.Sprintf("%s %s", attempt.Method, attempt.Path)
 		}
-		traces = append(traces, fmt.Sprintf("%s %s status=%d", attempt.Method, attempt.Path, status))
+		traces = append(traces, runtimeAttemptStatusTrace(attempt, status, body))
 		break
 	}
 	return false, strings.Join(traces, "; ")
+}
+
+func runtimeAttemptStatusTrace(attempt apiAttempt, status int, body []byte) string {
+	trace := fmt.Sprintf("%s %s status=%d", attempt.Method, attempt.Path, status)
+	if strings.TrimSpace(string(body)) == "" {
+		return trace
+	}
+	return trace + " body=" + truncateBody(body)
 }
 
 func requireHubToken(token, operation string) (string, error) {

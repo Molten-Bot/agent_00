@@ -184,16 +184,25 @@ func publishResultA2ARouteTarget(payload map[string]any) (a2aRouteTarget, bool) 
 		return a2aRouteTarget{AgentUUID: toAgentUUID}, true
 	} else if toAgentID := firstString(payload["to_agent_id"]); toAgentID != "" {
 		return a2aRouteTarget{AgentID: toAgentID}, true
+	} else if targetAgent := firstString(payload["target_agent"], payload["targetAgent"]); targetAgent != "" {
+		return a2aRouteTargetFromString(targetAgent), true
+	} else if target := firstString(payload["target"]); target != "" {
+		return a2aRouteTargetFromString(target), true
 	} else if routeTarget := firstString(payload["to"], payload["reply_to"]); routeTarget != "" {
-		if looksLikeAgentURI(routeTarget) {
-			return a2aRouteTarget{AgentURI: routeTarget}, true
-		} else if looksLikeUUID(routeTarget) {
-			return a2aRouteTarget{AgentUUID: routeTarget}, true
-		} else {
-			return a2aRouteTarget{AgentID: routeTarget}, true
-		}
+		return a2aRouteTargetFromString(routeTarget), true
 	}
 	return a2aRouteTarget{}, false
+}
+
+func a2aRouteTargetFromString(routeTarget string) a2aRouteTarget {
+	routeTarget = strings.TrimSpace(routeTarget)
+	if looksLikeAgentURI(routeTarget) {
+		return a2aRouteTarget{AgentURI: routeTarget}
+	}
+	if looksLikeUUID(routeTarget) {
+		return a2aRouteTarget{AgentUUID: routeTarget}
+	}
+	return a2aRouteTarget{AgentID: routeTarget}
 }
 
 func looksLikeUUID(value string) bool {
@@ -221,22 +230,44 @@ func publishResultRuntimeBody(payload map[string]any) (map[string]any, bool) {
 		"message": payload,
 	}
 	routed := false
+	if sessionKey := firstString(payload["session_key"], payload["sessionKey"]); sessionKey != "" {
+		body["session_key"] = sessionKey
+	}
 	if toAgentURI := firstString(payload["to_agent_uri"]); toAgentURI != "" {
 		body["to_agent_uri"] = toAgentURI
+		body["target"] = toAgentURI
 		routed = true
 	} else if toAgentUUID := firstString(payload["to_agent_uuid"]); toAgentUUID != "" {
 		body["to_agent_uuid"] = toAgentUUID
+		body["target"] = toAgentUUID
+		body["target_agent"] = toAgentUUID
 		routed = true
 	} else if toAgentID := firstString(payload["to_agent_id"]); toAgentID != "" {
 		body["to_agent_id"] = toAgentID
+		body["target"] = toAgentID
+		body["target_agent"] = toAgentID
+		routed = true
+	} else if targetAgent := firstString(payload["target_agent"], payload["targetAgent"]); targetAgent != "" {
+		body["target"] = targetAgent
+		body["target_agent"] = targetAgent
+		setRuntimeRouteAlias(body, targetAgent)
+		routed = true
+	} else if target := firstString(payload["target"]); target != "" {
+		body["target"] = target
+		setRuntimeRouteAlias(body, target)
 		routed = true
 	} else if routeTarget := firstString(payload["to"], payload["reply_to"]); routeTarget != "" {
 		if looksLikeAgentURI(routeTarget) {
 			body["to_agent_uri"] = routeTarget
+			body["target"] = routeTarget
 		} else if looksLikeUUID(routeTarget) {
 			body["to_agent_uuid"] = routeTarget
+			body["target"] = routeTarget
+			body["target_agent"] = routeTarget
 		} else {
 			body["to_agent_id"] = routeTarget
+			body["target"] = routeTarget
+			body["target_agent"] = routeTarget
 		}
 		routed = true
 	}
@@ -250,4 +281,22 @@ func publishResultRuntimeBody(payload map[string]any) (map[string]any, bool) {
 		body["client_msg_id"] = clientMsgID
 	}
 	return body, routed
+}
+
+func setRuntimeRouteAlias(body map[string]any, routeTarget string) {
+	routeTarget = strings.TrimSpace(routeTarget)
+	if routeTarget == "" {
+		return
+	}
+	if looksLikeAgentURI(routeTarget) {
+		body["to_agent_uri"] = routeTarget
+		return
+	}
+	if looksLikeUUID(routeTarget) {
+		body["to_agent_uuid"] = routeTarget
+		body["target_agent"] = routeTarget
+		return
+	}
+	body["to_agent_id"] = routeTarget
+	body["target_agent"] = routeTarget
 }
