@@ -1153,6 +1153,13 @@ func TestTaskPanelStylesConstrainHorizontalOverflow(t *testing.T) {
 	}
 
 	css := resp.Body.String()
+	if !strings.Contains(css, "body[data-app-display=\"work\"] .app.dashboard-app {\n  height: 100vh;\n  height: 100dvh;\n  min-height: 0;\n  grid-template-rows: auto minmax(0, 1fr);\n}") {
+		t.Fatalf("expected Current Work view to size the app shell from the viewport and leave bottom dock padding intact")
+	}
+	if !strings.Contains(css, "body[data-app-display=\"work\"] .layout,\nbody[data-app-display=\"work\"] .right-col {\n  min-height: 0;\n  height: 100%;\n}") ||
+		!strings.Contains(css, "body[data-app-display=\"work\"] #task-panel {\n  min-height: 0;\n  height: 100%;\n}") {
+		t.Fatalf("expected Current Work task panel to fill the padded app row instead of extending under the dock")
+	}
 	if !strings.Contains(css, ".task-meta {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 4px 0;\n  color: var(--muted);\n  font-size: 0.74rem;\n  min-width: 0;\n}") {
 		t.Fatalf("expected task metadata to share one line when space allows")
 	}
