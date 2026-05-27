@@ -5205,12 +5205,51 @@
       builderImagesClear.disabled = !hasBuilderDraftToClear();
     }
 
+    function syncPromptInputSize(input) {
+      if (!(input instanceof HTMLTextAreaElement)) {
+        return;
+      }
+      input.style.height = "auto";
+      const styles = window.getComputedStyle(input);
+      const minHeight = Number.parseFloat(styles.minHeight) || 0;
+      const parsedMaxHeight = Number.parseFloat(styles.maxHeight);
+      const maxHeight = Number.isFinite(parsedMaxHeight) && parsedMaxHeight > 0
+        ? parsedMaxHeight
+        : Number.POSITIVE_INFINITY;
+      const borderHeight = styles.boxSizing === "border-box"
+        ? (Number.parseFloat(styles.borderTopWidth) || 0) + (Number.parseFloat(styles.borderBottomWidth) || 0)
+        : 0;
+      const contentHeight = (input.scrollHeight || minHeight) + borderHeight;
+      const nextHeight = Math.max(minHeight, Math.min(contentHeight, maxHeight));
+      input.style.height = `${Math.ceil(nextHeight)}px`;
+      input.classList.toggle("prompt-textarea-scroll", contentHeight > nextHeight + 1);
+    }
+
+    function queuePromptInputSizeSync(input) {
+      syncPromptInputSize(input);
+      if (typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(() => syncPromptInputSize(input));
+      }
+    }
+
+    function syncPromptInputSizes() {
+      queuePromptInputSizeSync(builderPromptInput);
+      queuePromptInputSizeSync(localPromptInput);
+    }
+
+    function handlePromptTextInput(input) {
+      syncPromptInputSize(input);
+      syncBuilderDraftClearState();
+    }
+
     function resetPromptInputSize(input) {
       if (!input) {
         return;
       }
       input.style.removeProperty("height");
       input.style.removeProperty("width");
+      input.classList.remove("prompt-textarea-scroll");
+      syncPromptInputSize(input);
     }
 
     function clearSubmittedPromptDraft() {
@@ -6252,6 +6291,7 @@
       const normalizedMode = mode === "library" ? "library" : "builder";
       const payload = normalizedMode === "library" ? libraryPayload() : builderPayload();
       localPromptInput.value = JSON.stringify(payload, null, 2);
+      queuePromptInputSizeSync(localPromptInput);
     }
 
     function syncFormsFromPayload(payload) {
@@ -6284,6 +6324,7 @@
       builderTargetSubdir.value = targetSubdir;
       libraryTargetSubdir.value = targetSubdir;
       builderPromptInput.value = String(payload.prompt || "").trim();
+      queuePromptInputSizeSync(builderPromptInput);
       setPromptImages(payload.images);
       syncBuilderDraftClearState();
       state.selectedLibraryTask = String(payload.librarytaskname || payload.libraryTaskName || "").trim();
@@ -8208,6 +8249,9 @@
       if (showChat) {
         void loadChatRepos();
       }
+      if (showStudio) {
+        syncPromptInputSizes();
+      }
     }
 
     function setPromptMode(mode) {
@@ -8232,6 +8276,7 @@
       promptRawPanel.classList.toggle("hidden", !isJSON);
       builderImagePasteTarget.classList.toggle("hidden", isLibrary);
       builderImagesClear.classList.toggle("hidden", isLibrary);
+      queuePromptInputSizeSync(isJSON ? localPromptInput : builderPromptInput);
       syncPromptSpeechButton();
       if (!state.promptVisible && !Boolean(state.ui?.automaticMode)) {
         state.promptVisible = true;
@@ -11769,6 +11814,7 @@
         return;
       }
       localPromptInput.value = normalized.pretty;
+      queuePromptInputSizeSync(localPromptInput);
 
       localPromptSubmit.disabled = true;
       trackAnalyticsEvent("prompt_submit_started", {
@@ -11984,7 +12030,7 @@
       resetBaseBranchToDefault();
     });
 
-    builderPromptInput.addEventListener("input", syncBuilderDraftClearState);
+    builderPromptInput.addEventListener("input", () => handlePromptTextInput(builderPromptInput));
     builderPromptInput.addEventListener("keydown", submitBuilderPromptOnEnter);
     if (promptSpeechToggle) {
       promptSpeechToggle.addEventListener("click", () => {
@@ -12002,7 +12048,7 @@
     builderPromptInput.addEventListener("paste", handlePromptImagePaste);
     builderImagePasteTarget.addEventListener("paste", handlePromptImagePaste);
     builderImagesClear.addEventListener("click", clearBuilderPromptDraft);
-    localPromptInput.addEventListener("input", syncBuilderDraftClearState);
+    localPromptInput.addEventListener("input", () => handlePromptTextInput(localPromptInput));
     if (agentAuthURL) {
       agentAuthURL.addEventListener("click", () => {
         markAgentAuthInteraction();
@@ -12394,7 +12440,10 @@
         });
       });
     }
-    window.addEventListener("resize", queueChatRepoResizeRender, { passive: true });
+    window.addEventListener("resize", () => {
+      queueChatRepoResizeRender();
+      syncPromptInputSizes();
+    }, { passive: true });
 
     localPromptForm.addEventListener("submit", submitLocalPrompt);
     libraryRepoInput.value = builderRepoInput.value;

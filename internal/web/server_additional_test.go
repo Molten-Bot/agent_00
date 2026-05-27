@@ -1391,6 +1391,11 @@ func TestStudioStylesUseRefinedPanelAndInputTreatment(t *testing.T) {
 	if !strings.Contains(css, ".prompt-control,\n.prompt-text,\n.prompt-action-paste {\n  width: 100%;\n  border: 1px solid var(--surface-control-border);\n  border-radius: var(--radius-card);\n  background: var(--surface-control-bg);") {
 		t.Fatalf("expected studio controls to use theme-aware input tokens")
 	}
+	if !strings.Contains(css, "#builder-prompt-input,\n#local-prompt-input {\n  --prompt-text-min-lines: 3;") ||
+		!strings.Contains(css, "  overflow-y: hidden;\n}\n\n#builder-prompt-input {\n  --prompt-text-max-lines: 10;") ||
+		!strings.Contains(css, "#builder-prompt-input.prompt-textarea-scroll,\n#local-prompt-input.prompt-textarea-scroll {\n  overflow-y: auto;\n}") {
+		t.Fatalf("expected studio prompt textareas to hide vertical scrollbars until content exceeds their height cap")
+	}
 	if !strings.Contains(css, "select.prompt-control {\n  appearance: none;\n  background-image:\n    linear-gradient(45deg, transparent 50%, var(--surface-control-arrow) 50%),\n    linear-gradient(135deg, var(--surface-control-arrow) 50%, transparent 50%);") {
 		t.Fatalf("expected repository selector to use theme-aware chevron treatment")
 	}
