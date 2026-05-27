@@ -1217,6 +1217,10 @@ func TestStudioStylesKeepPromptActionsVisible(t *testing.T) {
 	if !strings.Contains(css, "--hub-content-bottom-padding: calc(var(--hub-floating-bottom) + var(--hub-floating-stack-height) + var(--hub-studio-dock-gap) + 28px);") {
 		t.Fatalf("expected Studio shell to compute bottom content clearance from floating dock stack tokens")
 	}
+	if !strings.Contains(css, "body[data-app-display=\"studio\"] .app.dashboard-app {\n  height: 100vh;\n  height: 100dvh;\n  min-height: 0;\n  grid-template-rows: auto minmax(0, 1fr);\n}") ||
+		!strings.Contains(css, "body[data-app-display=\"studio\"] .layout,\nbody[data-app-display=\"studio\"] .right-col {\n  min-height: 0;\n  height: 100%;\n}") {
+		t.Fatalf("expected Studio view to fill the viewport row while preserving app bottom dock padding")
+	}
 	if !strings.Contains(css, ".app {\n  width: min(var(--hub-page-width), 100%);\n  margin: 0 auto;\n  padding: 28px 20px var(--hub-content-bottom-padding);\n  display: grid;\n  gap: 24px;\n}") {
 		t.Fatalf("expected app shell to reserve dynamic bottom space for the floating dock")
 	}
@@ -1225,6 +1229,16 @@ func TestStudioStylesKeepPromptActionsVisible(t *testing.T) {
 	}
 	if !strings.Contains(css, ".prompt-wrap.panel {\n  display: flex;\n  flex-direction: column;\n  position: relative;") {
 		t.Fatalf("expected studio panel to participate in the page flow instead of docking itself to the viewport")
+	}
+	if !strings.Contains(css, "body[data-app-display=\"studio\"] .prompt-wrap.panel:not(.prompt-collapsed) {\n  min-height: 0;\n  height: 100%;\n  overflow: hidden;\n}") ||
+		!strings.Contains(css, "body[data-app-display=\"studio\"] .prompt-wrap.panel:not(.prompt-collapsed) .prompt-compose-stack {\n  grid-template-rows: minmax(0, 1fr) auto;\n  min-height: 0;\n  height: 100%;\n}") {
+		t.Fatalf("expected expanded Studio panel to consume remaining view space above the dock")
+	}
+	if !strings.Contains(css, ".prompt-wrap.prompt-collapsed {\n  align-self: start;\n  height: auto;\n  min-height: var(--hub-studio-collapsed-height);\n  max-height: none;\n  overflow: visible;\n  transform: none;\n}") {
+		t.Fatalf("expected collapsed Studio panel to remain compact even though expanded Studio fills the view row")
+	}
+	if !strings.Contains(css, "body[data-app-display=\"studio\"] .prompt-panel:not(.hidden) {\n  min-height: 0;\n  overflow: auto;\n}") {
+		t.Fatalf("expected active Studio panel content to scroll above the prompt action row in short viewports")
 	}
 	if !strings.Contains(css, ".prompt-mode-tabs {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  padding: 8px 10px;\n  border-radius: var(--radius-card);\n  border: 1px solid var(--glass-border);\n  background: var(--glass-bg);") {
 		t.Fatalf("expected studio mode tabs to use theme-aware segmented-control treatment")
@@ -1346,9 +1360,9 @@ func TestLibraryTaskListUsesDesktopTwoColumnAndMobileSingleColumnLayout(t *testi
 	if !strings.Contains(css, ".library-task-option-content {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) 34px;\n  align-items: start;\n  gap: 8px;\n  min-height: auto;") {
 		t.Fatalf("expected library task cards to size to title and subtitle copy")
 	}
-	if strings.Contains(css, `body[data-app-display="studio"][data-prompt-mode="library"] .prompt-wrap:not(.prompt-collapsed)`) ||
-		strings.Contains(css, `body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list`) {
-		t.Fatalf("expected library studio to stay content-sized instead of stretching the panel and task list by default")
+	if !strings.Contains(css, "body[data-app-display=\"studio\"][data-prompt-mode=\"library\"] #prompt-library-panel {\n  grid-template-rows: auto auto auto minmax(0, 1fr);\n}") ||
+		!strings.Contains(css, "body[data-app-display=\"studio\"][data-prompt-mode=\"library\"] .library-task-list {\n  max-height: none;\n  min-height: 0;\n  height: 100%;\n}") {
+		t.Fatalf("expected library Studio to fill available view space after Current Work moved to its own view")
 	}
 }
 

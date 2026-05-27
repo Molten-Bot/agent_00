@@ -766,6 +766,24 @@ moltenhub-code-nav {
   min-height: calc(100vh - 130px);
 }
 
+body[data-app-display="studio"] .app.dashboard-app {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+body[data-app-display="studio"] .layout,
+body[data-app-display="studio"] .right-col {
+  min-height: 0;
+  height: 100%;
+}
+
+body[data-app-display="studio"] .right-col {
+  align-content: stretch;
+  grid-template-rows: minmax(0, 1fr);
+}
+
 body[data-app-display="chat"] .app.dashboard-app {
   height: 100vh;
   height: 100dvh;
@@ -1108,9 +1126,18 @@ body .right-col.prompt-collapsed.task-list-hidden {
 }
 
 .prompt-wrap.prompt-collapsed {
+  align-self: start;
+  height: auto;
   min-height: var(--hub-studio-collapsed-height);
   max-height: none;
+  overflow: visible;
   transform: none;
+}
+
+body[data-app-display="studio"] .prompt-wrap.panel:not(.prompt-collapsed) {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .prompt-wrap.prompt-hidden-dock .panel-header {
@@ -1138,16 +1165,65 @@ body .right-col.prompt-collapsed.task-list-hidden {
   flex: 1 1 auto;
 }
 
+body[data-app-display="studio"] .prompt-wrap.panel:not(.prompt-collapsed) .prompt-form {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .prompt-compose-stack {
   display: grid;
   gap: 8px;
   min-width: 0;
 }
 
+body[data-app-display="studio"] .prompt-wrap.panel:not(.prompt-collapsed) .prompt-compose-stack {
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  height: 100%;
+}
+
 #prompt-builder-panel,
 #prompt-library-panel {
   display: grid;
   gap: 10px;
+}
+
+body[data-app-display="studio"] .prompt-panel:not(.hidden) {
+  min-height: 0;
+  overflow: auto;
+}
+
+body[data-app-display="studio"][data-prompt-mode="builder"] #prompt-builder-panel {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+body[data-app-display="studio"][data-prompt-mode="builder"] #builder-prompt-field {
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+body[data-app-display="studio"][data-prompt-mode="builder"] #builder-prompt-field .speech-stream-wrap {
+  display: grid;
+  min-height: 0;
+}
+
+body[data-app-display="studio"][data-prompt-mode="builder"] #builder-prompt-input,
+body[data-app-display="studio"][data-prompt-mode="json"] #local-prompt-input {
+  height: 100%;
+}
+
+body[data-app-display="studio"][data-prompt-mode="library"] #prompt-library-panel {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+body[data-app-display="studio"][data-prompt-mode="library"] #prompt-library-panel > .prompt-field:last-child {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
+  max-height: none;
+  min-height: 0;
+  height: 100%;
 }
 
 .prompt-mode-row {
