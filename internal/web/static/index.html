@@ -18,6 +18,8 @@
     window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};
   </script>
   <script src="/static/lucide.min.js"></script>
+  <link rel="stylesheet" href="/static/xterm.css" data-xterm-version="6.0.0">
+  <script src="/static/xterm.js" data-xterm-version="6.0.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script src="/static/site-header.js"></script>
   <link rel="stylesheet" href="/static/style.css">
@@ -472,7 +474,7 @@
             <span id="task-fullscreen-head-label" class="task-fullscreen-head-label">Task output</span>
           </div>
           <div id="task-fullscreen-result" class="task-result hidden"></div>
-          <pre id="task-fullscreen-terminal" class="term task-scroll"></pre>
+          <div id="task-fullscreen-terminal" class="term task-scroll" role="log" aria-label="Task output terminal logs"></div>
         </section>
       </div>
     </div>
@@ -725,6 +727,11 @@
     const TASK_HISTORY_LIMIT = 25;
     const TASK_HISTORY_MAX_AGE_MS = 20 * 60 * 60 * 1000;
     const MAX_TERMINAL_LINES = 500;
+    const TASK_XTERM_VERSION = "6.0.0";
+    const TASK_XTERM_MIN_COLS = 24;
+    const TASK_XTERM_MIN_ROWS = 6;
+    const TASK_XTERM_DEFAULT_COLS = 120;
+    const TASK_XTERM_DEFAULT_ROWS = 24;
     const CHAT_PROMPT_LOG_STICKY_SCROLL_PX = 24;
     const TASK_PROGRESS_VISIBLE = true;
     const HUB_LOGIN_URL = "https://molten.bot/login?target=hub";
@@ -1871,6 +1878,10 @@
     let githubReposLoadPromise = null;
     let githubReposLoadSequence = 0;
     let chatRepoResizeRenderQueued = false;
+    let taskFullscreenXterm = null;
+    let taskFullscreenXtermMount = null;
+    let taskFullscreenXtermResizeObserver = null;
+    let taskFullscreenXtermResizeQueued = false;
     const localConnItem = document.getElementById("local-conn-item");
     const localConnDot = document.getElementById("local-conn-dot");
     const localConnText = document.getElementById("local-conn-text");
@@ -2508,6 +2519,7 @@
       root.setAttribute("data-theme", normalized);
       syncThemeToggle(normalized);
       refreshDashboardChartTheme();
+      refreshTaskFullscreenXtermTheme();
       if (persist) {
         try {
           localStorage.setItem(THEME_KEY, normalized);
@@ -4654,6 +4666,11 @@
     };
 
     function dashboardCSSValue(name, fallback) {
+      const value = rootCSSValue(name, fallback);
+      return value || fallback;
+    }
+
+    function rootCSSValue(name, fallback) {
       const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
       return value || fallback;
     }
@@ -11137,8 +11154,250 @@
       if (taskFullscreenTerminal) {
         taskFullscreenTerminal.dataset.renderSig = "";
         taskFullscreenTerminal.dataset.pendingRenderSig = "";
-        taskFullscreenTerminal.textContent = "";
+        clearTaskFullscreenTerminalNode(taskFullscreenTerminal);
       }
+    }
+
+    function taskFullscreenXtermAvailable() {
+      return typeof window.Terminal === "function";
+    }
+
+    function taskFullscreenXtermTheme() {
+      return {
+        background: rootCSSValue("--bg-elevated", "#ffffff"),
+        foreground: rootCSSValue("--text", "#0f1b33"),
+        cursor: rootCSSValue("--accent", "#7b61ff"),
+        selectionBackground: "rgba(123, 97, 255, 0.24)",
+        black: "#1f2937",
+        red: rootCSSValue("--surface-stderr", "#c2410c"),
+        green: rootCSSValue("--good", "#2bb673"),
+        yellow: rootCSSValue("--warn", "#f59e0b"),
+        blue: rootCSSValue("--running", "#0a84ff"),
+        magenta: rootCSSValue("--accent", "#7b61ff"),
+        cyan: "#14b8a6",
+        white: rootCSSValue("--text", "#0f1b33"),
+        brightBlack: rootCSSValue("--meta", "#7188b1"),
+        brightRed: rootCSSValue("--bad", "#ef4444"),
+        brightGreen: rootCSSValue("--good", "#2bb673"),
+        brightYellow: rootCSSValue("--warn", "#f59e0b"),
+        brightBlue: rootCSSValue("--running", "#0a84ff"),
+        brightMagenta: rootCSSValue("--accent", "#7b61ff"),
+        brightCyan: "#06b6d4",
+        brightWhite: rootCSSValue("--text", "#0f1b33"),
+      };
+    }
+
+    function refreshTaskFullscreenXtermTheme() {
+      if (!taskFullscreenXterm) {
+        return;
+      }
+      taskFullscreenXterm.options.theme = taskFullscreenXtermTheme();
+      try {
+        taskFullscreenXterm.refresh(0, Math.max(0, taskFullscreenXterm.rows - 1));
+      } catch (_err) {
+        // Theme changes are best-effort while the terminal is hidden.
+      }
+    }
+
+    function destroyTaskFullscreenXterm() {
+      if (taskFullscreenXtermResizeObserver) {
+        taskFullscreenXtermResizeObserver.disconnect();
+        taskFullscreenXtermResizeObserver = null;
+      }
+      if (taskFullscreenXterm) {
+        try {
+          taskFullscreenXterm.dispose();
+        } catch (_err) {
+          // Ignore disposal failures during fallback rendering.
+        }
+      }
+      taskFullscreenXterm = null;
+      taskFullscreenXtermMount = null;
+      if (taskFullscreenTerminal) {
+        taskFullscreenTerminal.classList.remove("task-xterm-ready");
+      }
+    }
+
+    function ensureTaskFullscreenXterm(terminalNode) {
+      if (!terminalNode || !taskFullscreenXtermAvailable()) {
+        return null;
+      }
+      if (taskFullscreenXterm && taskFullscreenXtermMount && nodeContainsTarget(terminalNode, taskFullscreenXtermMount)) {
+        return taskFullscreenXterm;
+      }
+
+      destroyTaskFullscreenXterm();
+      terminalNode.replaceChildren();
+      terminalNode.classList.add("task-xterm-ready");
+      const mount = document.createElement("div");
+      mount.className = "task-xterm-mount";
+      terminalNode.appendChild(mount);
+
+      try {
+        taskFullscreenXterm = new window.Terminal({
+          cols: TASK_XTERM_DEFAULT_COLS,
+          rows: TASK_XTERM_DEFAULT_ROWS,
+          convertEol: true,
+          cursorBlink: false,
+          disableStdin: true,
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace",
+          fontSize: 13,
+          lineHeight: 1.35,
+          scrollback: Math.max(1000, MAX_TERMINAL_LINES * 3),
+          theme: taskFullscreenXtermTheme(),
+        });
+        taskFullscreenXterm.open(mount);
+        taskFullscreenXtermMount = mount;
+        observeTaskFullscreenXtermResize(terminalNode);
+        queueTaskFullscreenXtermResize();
+        return taskFullscreenXterm;
+      } catch (_err) {
+        destroyTaskFullscreenXterm();
+        return null;
+      }
+    }
+
+    function observeTaskFullscreenXtermResize(terminalNode) {
+      if (!terminalNode || taskFullscreenXtermResizeObserver || typeof ResizeObserver !== "function") {
+        return;
+      }
+      taskFullscreenXtermResizeObserver = new ResizeObserver(() => queueTaskFullscreenXtermResize());
+      taskFullscreenXtermResizeObserver.observe(terminalNode);
+    }
+
+    function queueTaskFullscreenXtermResize() {
+      if (taskFullscreenXtermResizeQueued) {
+        return;
+      }
+      taskFullscreenXtermResizeQueued = true;
+      window.requestAnimationFrame(() => {
+        taskFullscreenXtermResizeQueued = false;
+        resizeTaskFullscreenXterm();
+      });
+    }
+
+    function parseCSSPixels(value) {
+      const parsed = Number.parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    function measureTaskFullscreenTerminalCell(mount) {
+      if (!mount) {
+        return { width: 8, height: 18 };
+      }
+      const measure = document.createElement("span");
+      measure.className = "task-xterm-measure";
+      measure.textContent = "MMMMMMMMMM";
+      mount.appendChild(measure);
+      const rect = measure.getBoundingClientRect();
+      measure.remove();
+      return {
+        width: Math.max(6, rect.width / 10 || 8),
+        height: Math.max(14, rect.height || 18),
+      };
+    }
+
+    function resizeTaskFullscreenXterm() {
+      if (!taskFullscreenXterm || !taskFullscreenXtermMount) {
+        return;
+      }
+      const rect = taskFullscreenXtermMount.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) {
+        return;
+      }
+      const styles = window.getComputedStyle(taskFullscreenXtermMount);
+      const width = rect.width - parseCSSPixels(styles.paddingLeft) - parseCSSPixels(styles.paddingRight);
+      const height = rect.height - parseCSSPixels(styles.paddingTop) - parseCSSPixels(styles.paddingBottom);
+      const cell = measureTaskFullscreenTerminalCell(taskFullscreenXtermMount);
+      const cols = Math.max(TASK_XTERM_MIN_COLS, Math.floor(width / cell.width));
+      const rows = Math.max(TASK_XTERM_MIN_ROWS, Math.floor(height / cell.height));
+      if (taskFullscreenXterm.cols !== cols || taskFullscreenXterm.rows !== rows) {
+        taskFullscreenXterm.resize(cols, rows);
+      }
+    }
+
+    function taskFullscreenXtermPinnedToBottom(term) {
+      try {
+        const buffer = term?.buffer?.active;
+        return !buffer || buffer.viewportY >= buffer.baseY - 1;
+      } catch (_err) {
+        return true;
+      }
+    }
+
+    function streamANSIStyle(stream) {
+      if (stream === "stderr") return "\x1b[31m";
+      if (stream === "meta") return "\x1b[2m";
+      return "";
+    }
+
+    function normalizeTerminalLogText(value) {
+      return String(value || "").replace(/\r?\n/g, "\r\n");
+    }
+
+    function taskLogToTerminalText(row) {
+      const stream = row?.stream || "meta";
+      const style = streamANSIStyle(stream);
+      const reset = style ? "\x1b[0m" : "";
+      const prefix = `[${relativeTime(row?.time)}] [${stream}] `;
+      return `${style}${prefix}${normalizeTerminalLogText(row?.text)}${reset}\r\n`;
+    }
+
+    function renderXtermTaskLogs(logs, terminalNode) {
+      const term = ensureTaskFullscreenXterm(terminalNode);
+      if (!term) {
+        return false;
+      }
+      const wasPinnedToBottom = taskFullscreenXtermPinnedToBottom(term);
+      const output = logs.length
+        ? logs.map(taskLogToTerminalText).join("")
+        : "\x1b[2mNo output captured yet.\x1b[0m\r\n";
+      queueTaskFullscreenXtermResize();
+      term.write(`\x1bc${output}`, () => {
+        if (wasPinnedToBottom) {
+          term.scrollToBottom();
+        }
+      });
+      return true;
+    }
+
+    function renderPlainTaskLogs(logs, terminalNode, wasPinnedToBottom) {
+      destroyTaskFullscreenXterm();
+      terminalNode.replaceChildren();
+
+      if (!logs.length) {
+        terminalNode.textContent = "No output captured yet.";
+        return;
+      }
+
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < logs.length; i += 1) {
+        const row = logs[i];
+        const line = document.createElement("div");
+        const stream = row.stream || "meta";
+        line.className = stream === "stderr" ? "stderr-line" : (stream === "stdout" ? "stdout-line" : "meta-line");
+        line.textContent = `[${relativeTime(row.time)}] [${stream}] ${row.text}`;
+        frag.appendChild(line);
+      }
+      terminalNode.appendChild(frag);
+      if (wasPinnedToBottom) {
+        terminalNode.scrollTop = terminalNode.scrollHeight;
+      }
+    }
+
+    function clearTaskFullscreenTerminalNode(terminalNode) {
+      if (!terminalNode) {
+        return;
+      }
+      if (terminalNode === taskFullscreenTerminal && taskFullscreenXterm) {
+        try {
+          taskFullscreenXterm.write("\x1bc");
+        } catch (_err) {
+          destroyTaskFullscreenXterm();
+        }
+        return;
+      }
+      terminalNode.textContent = "";
     }
 
     function renderTerminalForTasks(tasks, headLabelNode, resultNode, terminalNode) {
@@ -11148,7 +11407,7 @@
         clearTaskResult(resultNode);
         terminalNode.dataset.renderSig = "";
         terminalNode.dataset.pendingRenderSig = "";
-        terminalNode.textContent = "";
+        clearTaskFullscreenTerminalNode(terminalNode);
         return;
       }
 
@@ -11180,25 +11439,8 @@
       headLabelNode.textContent = `${selectedLabel} | ${selected.status || "pending"} | ${selected.stage || "-"}`;
       renderTaskResult(selected, resultNode);
       const wasPinnedToBottom = terminalNode.scrollTop + terminalNode.clientHeight >= terminalNode.scrollHeight - 24;
-      terminalNode.replaceChildren();
-
-      if (!logs.length) {
-        terminalNode.textContent = "No output captured yet.";
-        return;
-      }
-
-      const frag = document.createDocumentFragment();
-      for (let i = 0; i < logs.length; i += 1) {
-        const row = logs[i];
-        const line = document.createElement("div");
-        const stream = row.stream || "meta";
-        line.className = stream === "stderr" ? "stderr-line" : (stream === "stdout" ? "stdout-line" : "meta-line");
-        line.textContent = `[${relativeTime(row.time)}] [${stream}] ${row.text}`;
-        frag.appendChild(line);
-      }
-      terminalNode.appendChild(frag);
-      if (wasPinnedToBottom) {
-        terminalNode.scrollTop = terminalNode.scrollHeight;
+      if (!renderXtermTaskLogs(logs, terminalNode)) {
+        renderPlainTaskLogs(logs, terminalNode, wasPinnedToBottom);
       }
     }
 

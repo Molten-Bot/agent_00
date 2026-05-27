@@ -1169,6 +1169,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, "function renderPromptHistory(") {
 		t.Fatalf("expected index html to remove prompt history renderer")
 	}
+	if !strings.Contains(markup, `href="/static/xterm.css" data-xterm-version="6.0.0"`) ||
+		!strings.Contains(markup, `src="/static/xterm.js" data-xterm-version="6.0.0"`) ||
+		!strings.Contains(markup, `const TASK_XTERM_VERSION = "6.0.0";`) ||
+		!strings.Contains(markup, `new window.Terminal({`) ||
+		!strings.Contains(markup, `disableStdin: true,`) ||
+		!strings.Contains(markup, `function renderXtermTaskLogs(`) {
+		t.Fatalf("expected full screen task output to load and render through vendored xterm.js 6.0.0")
+	}
 	if !strings.Contains(markup, "function sortTasksByActivity(") {
 		t.Fatalf("expected index html to include activity-based task sorting for list rendering")
 	}
@@ -2387,6 +2395,30 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if strings.Contains(markup, `id="hover-select"`) || strings.Contains(markup, ">Hover<") {
 		t.Fatalf("expected index html to remove the docked hover selector")
+	}
+}
+
+func TestHandlerServesVendoredXtermAssets(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{path: "/static/xterm.js", want: "Terminal"},
+		{path: "/static/xterm.css", want: "Default styles for xterm.js"},
+		{path: "/static/xterm-LICENSE.txt", want: "Permission is hereby granted"},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		resp := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", tc.path, resp.Code)
+		}
+		if !strings.Contains(resp.Body.String(), tc.want) {
+			t.Fatalf("%s missing %q", tc.path, tc.want)
+		}
 	}
 }
 
