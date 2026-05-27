@@ -1797,6 +1797,7 @@
       dashboardRuntimeActiveTasks: 0,
       dashboardRuntimePausedAt: 0,
       dashboardRuntimePausedSeconds: 0,
+      taskViewDockCompletionPending: false,
       taskHistoryByID: loadTaskHistory(),
       taskHistoryUnseenIDs: loadTaskHistoryUnseenIDs(),
       githubReposLoading: false,
@@ -1961,6 +1962,8 @@
     const appDisplayLinks = Array.from(document.querySelectorAll("[data-app-display]"));
     const chatDockLink = document.querySelector('[data-app-display="chat"]');
     const dashboardDockLink = document.querySelector('[data-app-display="dashboard"]');
+    const taskViewDockLink = document.getElementById("task-view-dock-link") || document.querySelector('[data-app-display="work"]');
+    const taskViewDockRunningCount = document.getElementById("task-view-dock-running-count");
     const promptPanelTitle = document.getElementById("prompt-panel-title");
     const promptPanelCopy = document.getElementById("prompt-panel-copy");
     const githubProfileLink = document.getElementById("github-profile-link");
@@ -2375,6 +2378,80 @@
       if (!available && state.appDisplay === "dashboard") {
         setAppDisplay("studio", { updateHash: promptHashFromMode(state.promptMode) });
       }
+    }
+
+    function syncTaskViewDockCompletion(previousSnapshot, nextSnapshot) {
+      if (!previousSnapshot) {
+        return;
+      }
+      const previousStatuses = new Map();
+      for (const task of previousSnapshot?.tasks || []) {
+        const requestID = taskRequestID(task);
+        if (!requestID) {
+          continue;
+        }
+        previousStatuses.set(requestID, normalizedTaskStatus(task?.status));
+      }
+      for (const task of nextSnapshot?.tasks || []) {
+        const requestID = taskRequestID(task);
+        if (!requestID || state.dismissedTaskIDs.has(requestID)) {
+          continue;
+        }
+        const status = normalizedTaskStatus(task?.status);
+        if (!isSuccessfulTaskStatus(status)) {
+          continue;
+        }
+        if (isSuccessfulTaskStatus(previousStatuses.get(requestID))) {
+          continue;
+        }
+        state.taskViewDockCompletionPending = true;
+        return;
+      }
+    }
+
+    function taskViewDockRunningTaskCount(snapshot) {
+      let count = 0;
+      for (const task of snapshot?.tasks || []) {
+        const requestID = taskRequestID(task);
+        if (!requestID || isCompletedTask(task)) {
+          continue;
+        }
+        count += 1;
+      }
+      return count;
+    }
+
+    function syncTaskViewDockState(snapshot = state.snapshot) {
+      if (!taskViewDockLink) {
+        return;
+      }
+      const runningCount = taskViewDockRunningTaskCount(snapshot);
+      taskViewDockLink.classList.toggle("task-view-dock-complete", Boolean(state.taskViewDockCompletionPending));
+      taskViewDockLink.dataset.runningTasks = String(runningCount);
+      taskViewDockLink.dataset.completionPending = state.taskViewDockCompletionPending ? "true" : "false";
+      if (taskViewDockRunningCount) {
+        taskViewDockRunningCount.textContent = String(Math.min(99, runningCount));
+        taskViewDockRunningCount.classList.toggle("hidden", runningCount <= 0);
+      }
+
+      const labelParts = ["Current Work"];
+      if (runningCount > 0) {
+        labelParts.push(runningCount === 1 ? "1 running task" : `${runningCount} running tasks`);
+      }
+      if (state.taskViewDockCompletionPending) {
+        labelParts.push("new completed task");
+      }
+      const label = labelParts.join(", ");
+      taskViewDockLink.setAttribute("aria-label", label);
+      taskViewDockLink.title = label;
+    }
+
+    function clearTaskViewDockCompletion() {
+      if (!state.taskViewDockCompletionPending) {
+        return;
+      }
+      state.taskViewDockCompletionPending = false;
+      syncTaskViewDockState(state.snapshot);
     }
 
     function loadGitHubReposForChat(options = {}) {
@@ -8107,6 +8184,7 @@
           link.removeAttribute("aria-current");
         }
       }
+      syncTaskViewDockState(state.snapshot);
       syncPromptModeLinks();
       renderTasks(state.snapshot);
       renderDashboardStats(state.snapshot);
@@ -8642,6 +8720,11 @@
         return false;
       }
       return COMPLETED_STATUSES.has(normalizedTaskStatus(task.status));
+    }
+
+    function isSuccessfulTaskStatus(status) {
+      const normalized = normalizedTaskStatus(status);
+      return normalized === "completed" || normalized === "no_changes";
     }
 
     function isTaskClosing(requestID) {
@@ -11545,6 +11628,7 @@
       const previousSnapshot = state.snapshot;
       state.snapshot = snapshot;
       syncTaskCompletionSounds(snapshot);
+      syncTaskViewDockCompletion(previousSnapshot, snapshot);
       syncNewHubTaskFocus(previousSnapshot, snapshot);
       syncTaskCompletionSparkles(previousSnapshot, snapshot);
       syncChatRepoActivity(previousSnapshot, snapshot);
@@ -11566,6 +11650,7 @@
       renderHubConnection(snapshot);
       renderResourceMetrics(snapshot);
       syncDashboardDockLinkAvailability(snapshot);
+      syncTaskViewDockState(snapshot);
       renderDashboardStats(snapshot);
       renderTasks(snapshot);
       renderFullscreenTasks(snapshot);
@@ -12265,6 +12350,9 @@
           return;
         }
         event.preventDefault();
+        if (display === "work") {
+          clearTaskViewDockCompletion();
+        }
         setAppDisplay(display, { updateHash: true });
       });
     }

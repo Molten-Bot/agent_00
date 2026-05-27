@@ -1395,6 +1395,30 @@ body .right-col.prompt-collapsed.task-list-hidden {
   line-height: 1;
 }
 
+.task-view-dock-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  display: inline-flex;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #0a84ff, #0057d8);
+  box-shadow: 0 8px 18px rgba(10, 132, 255, 0.3);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.prompt-mode-link.task-view-dock-complete {
+  color: var(--good);
+}
+
 .hub-dock-group {
   display: inline-flex;
   align-items: center;
