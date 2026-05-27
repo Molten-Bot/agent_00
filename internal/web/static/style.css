@@ -1193,12 +1193,14 @@ body[data-app-display="studio"] .prompt-panel:not(.hidden) {
 }
 
 body[data-app-display="studio"][data-prompt-mode="builder"] #prompt-builder-panel {
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  align-content: start;
 }
 
 body[data-app-display="studio"][data-prompt-mode="builder"] #builder-prompt-field {
   min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: start;
 }
 
 body[data-app-display="studio"][data-prompt-mode="builder"] #builder-prompt-field .speech-stream-wrap {
@@ -1208,7 +1210,8 @@ body[data-app-display="studio"][data-prompt-mode="builder"] #builder-prompt-fiel
 
 body[data-app-display="studio"][data-prompt-mode="builder"] #builder-prompt-input,
 body[data-app-display="studio"][data-prompt-mode="json"] #local-prompt-input {
-  height: 100%;
+  align-self: start;
+  height: auto;
 }
 
 body[data-app-display="studio"][data-prompt-mode="library"] #prompt-library-panel {
@@ -1904,21 +1907,32 @@ select.prompt-control {
 
 #builder-prompt-input,
 #local-prompt-input {
+  --prompt-text-min-lines: 3;
+  --prompt-text-max-lines: 12;
+  --prompt-text-padding-y: 20px;
   width: 100%;
   border-color: rgb(var(--hub-border-rgb) / 1);
   border-radius: var(--radius);
   padding: 10px;
   line-height: 1.4;
+  min-height: calc(var(--prompt-text-min-lines) * 1.4em + var(--prompt-text-padding-y));
+  max-height: min(34vh, calc(var(--prompt-text-max-lines) * 1.4em + var(--prompt-text-padding-y)));
+  height: auto;
+  overflow-y: hidden;
 }
 
 #builder-prompt-input {
-  height: calc(6 * 1.4em + 18px);
-  min-height: calc(6 * 1.4em + 18px);
+  --prompt-text-max-lines: 10;
 }
 
 #local-prompt-input {
-  height: calc(7 * 1.4em + 20px);
-  min-height: calc(7 * 1.4em + 20px);
+  --prompt-text-min-lines: 4;
+  --prompt-text-max-lines: 14;
+}
+
+#builder-prompt-input.prompt-textarea-scroll,
+#local-prompt-input.prompt-textarea-scroll {
+  overflow-y: auto;
 }
 
 .prompt-hint,

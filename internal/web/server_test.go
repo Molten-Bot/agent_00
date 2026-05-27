@@ -2069,10 +2069,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, "clearReviewerSelection();") {
 		t.Fatalf("expected index html Clear button to reset reviewers explicitly")
 	}
-	if !strings.Contains(markup, "builderPromptInput.addEventListener(\"input\", syncBuilderDraftClearState);") ||
+	if !strings.Contains(markup, "builderPromptInput.addEventListener(\"input\", () => handlePromptTextInput(builderPromptInput));") ||
 		!strings.Contains(markup, "builderTargetSubdir.addEventListener(\"input\", () => {") ||
 		!strings.Contains(markup, "libraryTargetSubdir.addEventListener(\"input\", () => {") ||
-		!strings.Contains(markup, "localPromptInput.addEventListener(\"input\", syncBuilderDraftClearState);") {
+		!strings.Contains(markup, "localPromptInput.addEventListener(\"input\", () => handlePromptTextInput(localPromptInput));") {
 		t.Fatalf("expected index html to update shared Clear availability as prompt fields change")
 	}
 	if !strings.Contains(markup, "builderImagePasteTarget.classList.toggle(\"hidden\", isLibrary);") {
@@ -2294,6 +2294,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, "input.style.removeProperty(\"width\");") {
 		t.Fatalf("expected index html to include prompt textarea resize reset behavior")
 	}
+	if !strings.Contains(markup, "function syncPromptInputSize(input)") ||
+		!strings.Contains(markup, `input.classList.toggle("prompt-textarea-scroll", contentHeight > nextHeight + 1);`) ||
+		!strings.Contains(markup, "builderPromptInput.addEventListener(\"input\", () => handlePromptTextInput(builderPromptInput));") ||
+		!strings.Contains(markup, "localPromptInput.addEventListener(\"input\", () => handlePromptTextInput(localPromptInput));") {
+		t.Fatalf("expected index html to autosize prompt textareas and enable scrollbars only after content exceeds the cap")
+	}
 	if !strings.Contains(markup, "builderPromptInput.value = \"\";") || !strings.Contains(markup, "localPromptInput.value = \"\";") {
 		t.Fatalf("expected index html to clear builder and raw prompt inputs after submit")
 	}
@@ -2366,6 +2372,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		}
 	}
 	if !strings.Contains(markup, `localPromptInput.value = normalized.pretty;
+      queuePromptInputSizeSync(localPromptInput);
 
       localPromptSubmit.disabled = true;`) {
 		t.Fatalf("expected index html to keep selected task history filter when Run starts")
