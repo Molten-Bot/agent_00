@@ -5322,7 +5322,7 @@
 
     function syncPromptSpeechButton() {
       const supported = browserSpeechCaptureSupported();
-      const available = supported && Boolean(state.speech.enabled) && Boolean(state.speech.reachable);
+      const available = supported && Boolean(state.speech.enabled);
       const activeMode = state.speech.target?.mode || "";
       const anyBusy = Boolean(state.speech.recording || state.speech.submitting);
       syncSpeechToggleButton(
@@ -5408,12 +5408,14 @@
     }
 
     async function refreshSpeechStatus() {
+      const active = Boolean(state.speech.recording || state.speech.submitting);
       try {
         const response = await fetch("/api/speech/status", { cache: "no-store" });
         const body = await response.json().catch(() => null);
         const speech = body && body.speech ? body.speech : {};
         state.speech.enabled = Boolean(speech.enabled);
-        state.speech.reachable = Boolean(speech.reachable);
+        const reachable = Boolean(speech.reachable);
+        state.speech.reachable = active && state.speech.reachable ? state.speech.reachable : reachable;
         if (window.MoltenHubHeader && typeof window.MoltenHubHeader.updateSpeechConnection === "function") {
           window.MoltenHubHeader.updateSpeechConnection(
             state.speech.enabled && state.speech.reachable,
@@ -5421,8 +5423,10 @@
           );
         }
       } catch (_err) {
-        state.speech.enabled = false;
-        state.speech.reachable = false;
+        if (!active) {
+          state.speech.enabled = false;
+          state.speech.reachable = false;
+        }
         if (window.MoltenHubHeader && typeof window.MoltenHubHeader.updateSpeechConnection === "function") {
           window.MoltenHubHeader.updateSpeechConnection(false, "Unavailable");
         }
@@ -5447,6 +5451,9 @@
     }
 
     async function toggleSpeechDictation(target) {
+      if (state.speech.submitting) {
+        return;
+      }
       if (state.speech.recording) {
         await stopPromptSpeechDictation();
         return;
@@ -6943,7 +6950,7 @@
       card.appendChild(panel);
       syncSpeechToggleButton(
         speechToggle,
-        browserSpeechCaptureSupported() && Boolean(state.speech.enabled) && Boolean(state.speech.reachable),
+        browserSpeechCaptureSupported() && Boolean(state.speech.enabled),
         Boolean(state.speech.recording && state.speech.target?.button === speechToggle),
         Boolean(state.speech.submitting && state.speech.target?.button === speechToggle),
         "Dictate chat prompt",
