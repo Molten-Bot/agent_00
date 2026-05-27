@@ -1169,13 +1169,22 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, "function renderPromptHistory(") {
 		t.Fatalf("expected index html to remove prompt history renderer")
 	}
-	if !strings.Contains(markup, `href="/static/xterm.css" data-xterm-version="6.0.0"`) ||
-		!strings.Contains(markup, `src="/static/xterm.js" data-xterm-version="6.0.0"`) ||
+	if strings.Contains(markup, `href="/static/xterm.css"`) {
+		t.Fatalf("expected xterm stylesheet to be loaded through the global stylesheet instead of the index page")
+	}
+	if !strings.Contains(markup, `src="/static/xterm.js" data-xterm-version="6.0.0"`) ||
 		!strings.Contains(markup, `const TASK_XTERM_VERSION = "6.0.0";`) ||
 		!strings.Contains(markup, `new window.Terminal({`) ||
 		!strings.Contains(markup, `disableStdin: true,`) ||
 		!strings.Contains(markup, `function renderXtermTaskLogs(`) {
 		t.Fatalf("expected full screen task output to load and render through vendored xterm.js 6.0.0")
+	}
+	xtermStylesheet, err := staticFiles.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatalf("read style.css: %v", err)
+	}
+	if !strings.Contains(string(xtermStylesheet), `@import url("/static/xterm.css");`) {
+		t.Fatalf("expected global stylesheet to import xterm stylesheet")
 	}
 	if !strings.Contains(markup, "function sortTasksByActivity(") {
 		t.Fatalf("expected index html to include activity-based task sorting for list rendering")
