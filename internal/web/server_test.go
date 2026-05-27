@@ -243,7 +243,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"`) {
 		t.Fatalf("expected index html to load the google analytics tag script")
 	}
-	if !strings.Contains(markup, `window.gtag("config", "G-BY33RFG2WB");`) {
+	if !strings.Contains(markup, `window.gtag("config", "G-BY33RFG2WB", { send_page_view: false });`) {
 		t.Fatalf("expected index html to configure google analytics with the moltenhub measurement id")
 	}
 	if !strings.Contains(markup, `<title>Molten Hub Code</title>`) {
@@ -2311,7 +2311,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `function trackAnalyticsPageView(appDisplay)`) ||
 		!strings.Contains(markup, `function analyticsPageLocation()`) ||
 		!strings.Contains(markup, `window.gtag("event", "page_view", payload);`) ||
-		!strings.Contains(markup, `lastAnalyticsPageLocation = currentLocation;`) {
+		!strings.Contains(markup, `lastAnalyticsPageLocation = currentLocation;`) ||
+		!strings.Contains(markup, `setAppDisplay(appDisplayFromHash(), { trackPageView: false });`) ||
+		!strings.Contains(markup, `trackAnalyticsPageView(state.appDisplay);`) {
 		t.Fatalf("expected index html to track virtual page views for hash-routed app screens")
 	}
 	if !strings.Contains(markup, `const payload = { send_to: GOOGLE_ANALYTICS_MEASUREMENT_ID };`) {
@@ -2332,6 +2334,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		`trackAnalyticsEvent("chat_repo_tab_selected", { source: "chat", tab_type: "project" });`,
 		`trackAnalyticsEvent("chat_repos_loaded", { repo_count: state.githubRepos.length });`,
 		`trackAnalyticsEvent("chat_repos_load_failed");`,
+		`trackAnalyticsEvent("chat_repo_prompt_validation_failed", {`,
+		`trackAnalyticsEvent("chat_repo_prompt_started", {`,
+		`trackAnalyticsEvent("chat_repo_prompt_duplicate", {`,
 	} {
 		if !strings.Contains(markup, want) {
 			t.Fatalf("expected index html to include analytics event tag %q", want)

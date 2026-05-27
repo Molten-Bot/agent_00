@@ -12,7 +12,7 @@
     function gtag() { window.dataLayer.push(arguments); }
     window.gtag = window.gtag || gtag;
     window.gtag("js", new Date());
-    window.gtag("config", "G-BY33RFG2WB");
+    window.gtag("config", "G-BY33RFG2WB", { send_page_view: false });
   </script>
   <script>
     window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};
@@ -1862,7 +1862,7 @@
       persistTaskHistory();
       persistTaskHistoryUnseenIDs();
     }
-    let lastAnalyticsPageLocation = analyticsPageLocation();
+    let lastAnalyticsPageLocation = "";
     let agentAuthRefreshTimer = null;
     let agentAuthAutoSubmitTimer = null;
     let claudePostSubmitVerifyTimer = null;
@@ -7852,22 +7852,43 @@
       if (!repoValue) {
         statusNode.textContent = "Repository is unavailable.";
         statusNode.dataset.tone = "error";
+        trackAnalyticsEvent("chat_repo_prompt_validation_failed", {
+          validation_error: "missing_repo",
+          repo_visibility: repo?.private ? "private" : "public",
+          source: "chat",
+        });
         return;
       }
       if (!prompt) {
         statusNode.textContent = "Prompt is required.";
         statusNode.dataset.tone = "error";
+        trackAnalyticsEvent("chat_repo_prompt_validation_failed", {
+          validation_error: "missing_prompt",
+          repo_visibility: repo?.private ? "private" : "public",
+          source: "chat",
+        });
         input?.focus();
         return;
       }
 
       const submitKey = `${repoValue}\n${prompt}\n${JSON.stringify(promptImages)}`;
       if (state.chatSubmittingRepos.has(submitKey)) {
+        trackAnalyticsEvent("chat_repo_prompt_duplicate", {
+          repo_visibility: repo?.private ? "private" : "public",
+          image_count: promptImages.length,
+          source: "chat",
+        });
         return;
       }
       state.chatSubmittingRepos.add(submitKey);
       statusNode.textContent = "Submitting...";
       statusNode.dataset.tone = "warn";
+      trackAnalyticsEvent("chat_repo_prompt_started", {
+        repo_visibility: repo?.private ? "private" : "public",
+        image_count: promptImages.length,
+        has_default_branch: Boolean(String(repo?.default_branch || "").trim()),
+        source: "chat",
+      });
 
       const payload = {
         repo: repoValue,
@@ -7895,6 +7916,11 @@
           if (response.status === 409 && body?.duplicate) {
             statusNode.textContent = duplicateNotice(body);
             statusNode.dataset.tone = "warn";
+            trackAnalyticsEvent("chat_repo_prompt_duplicate", {
+              repo_visibility: repo?.private ? "private" : "public",
+              image_count: promptImages.length,
+              source: "chat",
+            });
             return;
           }
           throw new Error(body?.error || `submit http ${response.status}`);
@@ -7920,12 +7946,21 @@
         }
         rememberRepos([repoValue]);
         renderChatRepos();
-        trackAnalyticsEvent("chat_repo_prompt_succeeded", { request_id: requestID });
+        trackAnalyticsEvent("chat_repo_prompt_succeeded", {
+          request_id: requestID,
+          repo_visibility: repo?.private ? "private" : "public",
+          image_count: promptImages.length,
+          source: "chat",
+        });
         statusNode.textContent = compactChatRequestID(requestID) || "Queued.";
         statusNode.title = `Queued request ${requestID}`;
         statusNode.dataset.tone = "ok";
       } catch (err) {
-        trackAnalyticsEvent("chat_repo_prompt_failed");
+        trackAnalyticsEvent("chat_repo_prompt_failed", {
+          repo_visibility: repo?.private ? "private" : "public",
+          image_count: promptImages.length,
+          source: "chat",
+        });
         statusNode.textContent = `Submit failed: ${err.message}`;
         statusNode.dataset.tone = "error";
       } finally {
@@ -8084,7 +8119,7 @@
           window.history.pushState(null, "", nextHash);
         }
       }
-      if (previousMode !== mode) {
+      if (previousMode !== mode && options.trackPageView !== false) {
         trackAnalyticsPageView(mode);
       }
       if (showChat) {
@@ -12292,8 +12327,9 @@
     }
     initAppearanceControls();
     initSnowfallBackground();
-    setAppDisplay(appDisplayFromHash());
+    setAppDisplay(appDisplayFromHash(), { trackPageView: false });
     setPromptMode(promptModeFromHash() || "builder");
+    trackAnalyticsPageView(state.appDisplay);
     applyPromptVisibility();
     if (normalizeTaskStatusFilter(state.taskStatusFilter) === "completed") {
       clearTaskHistoryUnseen();
