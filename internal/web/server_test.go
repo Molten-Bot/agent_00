@@ -1894,9 +1894,16 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected Current Work to render as a dock view before Dashboard")
 	}
 	if !strings.Contains(markup, `href="#current-work" data-app-display="work"`) ||
+		!strings.Contains(markup, `id="task-view-dock-link"`) ||
+		!strings.Contains(markup, `id="task-view-dock-running-count" class="task-view-dock-badge hidden"`) ||
 		!strings.Contains(markup, `data-lucide="combine"`) ||
 		!strings.Contains(markup, `<span class="prompt-mode-link-tooltip" aria-hidden="true">Current Work</span>`) {
-		t.Fatalf("expected Current Work dock view to use the combine icon and label")
+		t.Fatalf("expected Current Work dock view to use the combine icon, running-task badge, and label")
+	}
+	if !strings.Contains(markup, `function syncTaskViewDockState`) ||
+		!strings.Contains(markup, `function syncTaskViewDockCompletion`) ||
+		!strings.Contains(markup, `clearTaskViewDockCompletion();`) {
+		t.Fatalf("expected index script to update Current Work dock count, completion color, and click acknowledgment")
 	}
 	if !strings.Contains(markup, `id="builder-repo-select"`) {
 		t.Fatalf("expected index html to include repo history select")
@@ -3525,6 +3532,10 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	}
 	if !strings.Contains(css, ".prompt-mode-link-icon img {\n  display: block;\n  width: 15px;\n  height: 15px;") {
 		t.Fatalf("expected stylesheet to size dock icons for integrated menu items")
+	}
+	if !strings.Contains(css, ".task-view-dock-badge {") ||
+		!strings.Contains(css, ".prompt-mode-link.task-view-dock-complete {\n  color: var(--good);") {
+		t.Fatalf("expected stylesheet to show running task count and successful-completion state on Current Work dock icon")
 	}
 	if !strings.Contains(css, ".prompt-mode-link-logo {\n  min-width: 40px;\n  padding-inline: 0;\n}") {
 		t.Fatalf("expected stylesheet to keep icon-only dock items balanced with the text tabs")
