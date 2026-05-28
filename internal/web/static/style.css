@@ -1536,8 +1536,14 @@ body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
   box-shadow: none;
 }
 
+#moltenbot-hub-link .prompt-mode-link-icon {
+  overflow: visible;
+}
+
 #moltenbot-hub-link img {
   filter: none;
+  width: 20px;
+  height: 20px;
   transition: filter 180ms ease, transform 180ms ease;
 }
 

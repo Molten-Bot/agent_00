@@ -425,6 +425,10 @@ func TestStaticStyleIncludesSharedDockIconStyles(t *testing.T) {
 	if !strings.Contains(stylesheet, "#moltenbot-hub-link img {\n  filter: none;") {
 		t.Fatalf("expected molten bot hub dock icon to keep native logo colors in the light theme")
 	}
+	if !strings.Contains(stylesheet, "#moltenbot-hub-link .prompt-mode-link-icon {\n  overflow: visible;\n}") ||
+		!strings.Contains(stylesheet, "#moltenbot-hub-link img {\n  filter: none;\n  width: 20px;\n  height: 20px;") {
+		t.Fatalf("expected molten bot hub dock icon to render larger than the shared square image box")
+	}
 	if !strings.Contains(stylesheet, `html.dark .hub-dock-group[data-configured="true"] #moltenbot-hub-link img,`) ||
 		!strings.Contains(stylesheet, `html.night .hub-dock-group[data-configured="true"] #moltenbot-hub-link img,`) ||
 		!strings.Contains(stylesheet, `html.pink .hub-dock-group[data-configured="true"] #moltenbot-hub-link img {`) ||
