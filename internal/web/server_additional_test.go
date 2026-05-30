@@ -898,7 +898,7 @@ func TestEmbeddedChatPromptLogStylesHideEmptyAndScrollHistory(t *testing.T) {
 	}
 }
 
-func TestEmbeddedChatPromptLogMessagesCanBeCopied(t *testing.T) {
+func TestEmbeddedChatPromptLogMessagesDoNotRenderCopyButtons(t *testing.T) {
 	t.Parallel()
 
 	markup, err := staticFiles.ReadFile("static/index.html")
@@ -909,15 +909,19 @@ func TestEmbeddedChatPromptLogMessagesCanBeCopied(t *testing.T) {
 	for _, want := range []string{
 		`if (target.closest(".chat-repo-log")) return true;`,
 		`promptLog.addEventListener("pointerdown", (event) => {`,
-		`function renderChatPromptMessageCopyButton(value, requestID)`,
-		`button.className = "chat-repo-message-copy";`,
-		`copyTextToClipboard(text, button, {`,
-		`copiedLabel: "Copied message",`,
-		`trackAnalyticsEvent("chat_prompt_message_copied"`,
 		`nodeContainsActiveSelection(chatRepoGrid)`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("embedded index.html missing %q", want)
+		}
+	}
+	for _, removed := range []string{
+		`function renderChatPromptMessageCopyButton(value, requestID)`,
+		`button.className = "chat-repo-message-copy";`,
+		`trackAnalyticsEvent("chat_prompt_message_copied"`,
+	} {
+		if strings.Contains(html, removed) {
+			t.Fatalf("embedded index.html should not render chat prompt copy button %q", removed)
 		}
 	}
 
@@ -929,13 +933,13 @@ func TestEmbeddedChatPromptLogMessagesCanBeCopied(t *testing.T) {
 	for _, want := range []string{
 		".chat-repo-log {\n  display: flex;",
 		"user-select: text;",
-		".chat-repo-message-copy {",
-		".chat-repo-message-copy.is-copied {",
-		".chat-repo-message-copy svg {",
 	} {
 		if !strings.Contains(css, want) {
 			t.Fatalf("embedded style.css missing %q", want)
 		}
+	}
+	if strings.Contains(css, ".chat-repo-message-copy") {
+		t.Fatalf("embedded style.css should not include chat prompt copy button styles")
 	}
 }
 
