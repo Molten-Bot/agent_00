@@ -3644,10 +3644,10 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	if !strings.Contains(css, ".hub-emoji-picker-toggle:disabled {\n  opacity: 0.6;\n  transform: none;\n  cursor: not-allowed;\n}") {
 		t.Fatalf("expected stylesheet to mark disabled emoji picker buttons as unavailable")
 	}
-	if !strings.Contains(css, ".chat-repo-message-copy {\n  display: inline-flex;") || !strings.Contains(css, "  cursor: pointer;\n}") {
-		t.Fatalf("expected stylesheet to use a pointer cursor for chat message copy buttons")
+	if strings.Contains(css, ".chat-repo-message-copy") {
+		t.Fatalf("expected stylesheet to omit chat message copy button styles")
 	}
-	if strings.Count(css, "cursor:") != 4 {
+	if strings.Count(css, "cursor:") != 3 {
 		t.Fatalf("expected stylesheet to avoid unrelated custom cursor styles")
 	}
 	if strings.Contains(css, "cursor-not-allowed") {

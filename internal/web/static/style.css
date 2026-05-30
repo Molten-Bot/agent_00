@@ -3870,40 +3870,9 @@ select.prompt-control {
   color: inherit;
 }
 
-.chat-repo-message-copy {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  min-width: 18px;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, currentColor 32%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, currentColor 8%, transparent);
-  color: inherit;
-  font: inherit;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.chat-repo-message-copy:hover,
-.chat-repo-message-copy:focus-visible {
-  border-color: color-mix(in srgb, currentColor 52%, transparent);
-  background: color-mix(in srgb, currentColor 14%, transparent);
-  outline: none;
-}
-
-.chat-repo-message-copy.is-copied {
-  color: var(--surface-success);
-  border-color: color-mix(in srgb, var(--surface-success) 46%, transparent);
-  background: color-mix(in srgb, var(--surface-success) 14%, transparent);
-}
-
 .chat-repo-message-meta-stage-img,
 .chat-repo-message-meta-stage-glyph,
-.chat-repo-message-meta-stage-icon .task-status-glyph,
-.chat-repo-message-copy svg {
+.chat-repo-message-meta-stage-icon .task-status-glyph {
   display: block;
   width: 12px;
   height: 12px;
@@ -3920,8 +3889,7 @@ select.prompt-control {
 }
 
 .chat-repo-message-meta-stage-glyph,
-.chat-repo-message-meta-stage-icon .task-status-glyph,
-.chat-repo-message-copy svg {
+.chat-repo-message-meta-stage-icon .task-status-glyph {
   stroke-width: 2.4;
 }
 
