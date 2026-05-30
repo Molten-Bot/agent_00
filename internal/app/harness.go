@@ -2199,10 +2199,7 @@ func (h Harness) buildReviewPromptContext(
 		return nil, fmt.Errorf("fetch pull request head for #%d: %w", metadata.Number, err)
 	}
 
-	commentsRes, err := h.runCommand(ctx, "review", prReviewCommentsCommand(repo.Dir, selector))
-	if err != nil {
-		return nil, fmt.Errorf("load pull request comments: %w", err)
-	}
+	discussionText := h.loadReviewDiscussion(ctx, repo, metadata)
 
 	baseRef := remoteTrackingRef(metadata.BaseRefName)
 	headRef := pullRequestTrackingRef(metadata.Number)
@@ -2241,7 +2238,7 @@ func (h Harness) buildReviewPromptContext(
 	b.WriteString(truncateForPrompt(string(metadataJSON), maxReviewMetadataChars))
 	b.WriteString("\n```\n\n")
 	b.WriteString("Existing pull request discussion:\n```text\n")
-	b.WriteString(truncateForPrompt(nonEmptyOrDefault(commentsRes.Stdout, "No pull-request comments were returned by gh pr view --comments."), maxReviewCommentsChars))
+	b.WriteString(truncateForPrompt(nonEmptyOrDefault(discussionText, "No pull-request discussion was returned by GitHub."), maxReviewCommentsChars))
 	b.WriteString("\n```\n\n")
 	b.WriteString("Local git diff summary:\n```text\n")
 	b.WriteString(truncateForPrompt(nonEmptyOrDefault(joinCommandOutput(diffStatRes), "No diff summary output was returned by git diff --stat --summary."), maxReviewDiffStatChars))
@@ -2254,6 +2251,58 @@ func (h Harness) buildReviewPromptContext(
 		Metadata: metadata,
 		Prompt:   strings.TrimSpace(b.String()),
 	}, nil
+}
+
+func (h Harness) loadReviewDiscussion(ctx context.Context, repo repoWorkspace, metadata reviewPRMetadata) string {
+	ownerRepo := githubutil.PullRequestRepository(metadata.URL)
+	if ownerRepo == "" {
+		h.logf("stage=review status=warn action=load_discussion reason=missing_pr_repository repo=%s repo_dir=%s", repo.URL, repo.RelDir)
+		return "Pull-request discussion was not fetched: pull request repository could not be derived from metadata URL."
+	}
+
+	sections := []struct {
+		title string
+		cmd   execx.Command
+	}{
+		{title: "Issue comments", cmd: prReviewIssueCommentsCommand(repo.Dir, ownerRepo, metadata.Number)},
+		{title: "Reviews", cmd: prReviewReviewsCommand(repo.Dir, ownerRepo, metadata.Number)},
+		{title: "Review comments", cmd: prReviewReviewCommentsCommand(repo.Dir, ownerRepo, metadata.Number)},
+	}
+
+	var b strings.Builder
+	for i, section := range sections {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(section.title)
+		b.WriteString(":\n")
+
+		res, err := h.runCommand(ctx, "review", section.cmd)
+		if err != nil {
+			h.logf("stage=review status=warn action=load_discussion section=%q err=%q", section.title, err)
+			b.WriteString("Fetch failed: ")
+			b.WriteString(err.Error())
+			continue
+		}
+		b.WriteString(formatReviewDiscussionJSON(res.Stdout))
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func formatReviewDiscussionJSON(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "[]"
+	}
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return raw
+	}
+	pretty, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return raw
+	}
+	return string(pretty)
 }
 
 type reviewFinding struct {
@@ -2645,11 +2694,27 @@ func prReviewMetadataCommand(repoDir, selector string) execx.Command {
 	}
 }
 
-func prReviewCommentsCommand(repoDir, selector string) execx.Command {
+func prReviewIssueCommentsCommand(repoDir, ownerRepo string, prNumber int) execx.Command {
 	return execx.Command{
 		Dir:  repoDir,
 		Name: "gh",
-		Args: []string{"pr", "view", selector, "--comments"},
+		Args: []string{"api", "--method", "GET", fmt.Sprintf("repos/%s/issues/%d/comments", ownerRepo, prNumber), "-F", "per_page=100", "--paginate"},
+	}
+}
+
+func prReviewReviewsCommand(repoDir, ownerRepo string, prNumber int) execx.Command {
+	return execx.Command{
+		Dir:  repoDir,
+		Name: "gh",
+		Args: []string{"api", "--method", "GET", fmt.Sprintf("repos/%s/pulls/%d/reviews", ownerRepo, prNumber), "-F", "per_page=100", "--paginate"},
+	}
+}
+
+func prReviewReviewCommentsCommand(repoDir, ownerRepo string, prNumber int) execx.Command {
+	return execx.Command{
+		Dir:  repoDir,
+		Name: "gh",
+		Args: []string{"api", "--method", "GET", fmt.Sprintf("repos/%s/pulls/%d/comments", ownerRepo, prNumber), "-F", "per_page=100", "--paginate"},
 	}
 }
 

@@ -288,6 +288,9 @@ func TestPublishLocalRunFailureResultPublishesExplicitFailurePayload(t *testing.
 	var publishBody map[string]any
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/a2a":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/runtime/messages/publish":
 			if err := json.NewDecoder(r.Body).Decode(&publishBody); err != nil {
 				t.Fatalf("decode publish body: %v", err)
@@ -305,6 +308,7 @@ func TestPublishLocalRunFailureResultPublishesExplicitFailurePayload(t *testing.
 		BaseURL:    ts.URL + "/v1",
 		AgentToken: "token",
 		SessionKey: "local-session",
+		Handle:     "calling-agent",
 	}, "req-local-fail", app.Result{
 		ExitCode:     app.ExitGit,
 		Err:          errors.New("git: merge conflict"),
@@ -320,6 +324,9 @@ func TestPublishLocalRunFailureResultPublishesExplicitFailurePayload(t *testing.
 	}
 	if got := publishBody["session_key"]; got != "local-session" {
 		t.Fatalf("session_key = %#v, want local-session", got)
+	}
+	if got := publishBody["to_agent_id"]; got != "calling-agent" {
+		t.Fatalf("to_agent_id = %#v, want calling-agent", got)
 	}
 	if got := msg["session_key"]; got != "local-session" {
 		t.Fatalf("message.session_key = %#v, want local-session", got)
@@ -348,6 +355,31 @@ func TestPublishLocalRunFailureResultPublishesExplicitFailurePayload(t *testing.
 	}
 	if len(logs) != 1 || !strings.Contains(logs[0], "action=publish_failure_result") || !strings.Contains(logs[0], "status=ok") {
 		t.Fatalf("publish logs = %#v, want successful publish_failure_result log", logs)
+	}
+}
+
+func TestPublishLocalRunFailureResultSkipsWithoutTarget(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected publish without target: %s %s", r.Method, r.URL.Path)
+	}))
+	defer ts.Close()
+
+	var logs []string
+	publishLocalRunFailureResult(context.Background(), hub.InitConfig{
+		BaseURL:    ts.URL + "/v1",
+		AgentToken: "token",
+		SessionKey: "local-session",
+	}, "req-local-fail", app.Result{
+		ExitCode: app.ExitGit,
+		Err:      errors.New("git: merge conflict"),
+	}, func() bool { return true }, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+
+	if len(logs) != 1 || !strings.Contains(logs[0], "action=publish_failure_result") || !strings.Contains(logs[0], "reason=missing_target_agent") {
+		t.Fatalf("publish logs = %#v, want missing target skip", logs)
 	}
 }
 

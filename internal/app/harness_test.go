@@ -181,6 +181,14 @@ func expectedPreparedReviewContext(repoURL, metadataJSON, commentsText, diffStat
 	return b.String()
 }
 
+func expectedReviewDiscussion(issueComments, reviews, reviewComments string) string {
+	return strings.Join([]string{
+		"Issue comments:\n" + issueComments,
+		"Reviews:\n" + reviews,
+		"Review comments:\n" + reviewComments,
+	}, "\n\n")
+}
+
 func testWorkspaceManager(guid string) workspace.Manager {
 	return workspace.Manager{
 		PathExists: func(string) bool { return false },
@@ -615,7 +623,10 @@ func TestRunBuildsReviewContextBeforeInvokingCodex(t *testing.T) {
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
 	metadataJSON := `{"number":42,"title":"Improve tests","body":"Adds stronger coverage.","url":"https://github.com/acme/repo/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","headRefName":"feature/improve-tests","author":{"login":"octocat"}}`
-	commentsText := "reviewer: Please add one more regression test."
+	issueComments := `[{"user":{"login":"reviewer"},"body":"Please add one more regression test."}]`
+	reviews := `[]`
+	reviewComments := `[]`
+	commentsText := expectedReviewDiscussion(formatReviewDiscussionJSON(issueComments), formatReviewDiscussionJSON(reviews), formatReviewDiscussionJSON(reviewComments))
 	diffStat := " internal/service_test.go | 12 ++++++++++++\n 1 file changed, 12 insertions(+)"
 	diffPatch := "diff --git a/internal/service_test.go b/internal/service_test.go\n+func TestServiceRegression(t *testing.T) {}\n"
 
@@ -628,7 +639,9 @@ func TestRunBuildsReviewContextBeforeInvokingCodex(t *testing.T) {
 		{cmd: prReviewMetadataCommand(repoDir, "42"), res: execx.Result{Stdout: metadataJSON}},
 		{cmd: fetchRemoteBranchCommand(repoDir, "main")},
 		{cmd: fetchPullRequestHeadCommand(repoDir, 42)},
-		{cmd: prReviewCommentsCommand(repoDir, "42"), res: execx.Result{Stdout: commentsText}},
+		{cmd: prReviewIssueCommentsCommand(repoDir, "acme/repo", 42), res: execx.Result{Stdout: issueComments}},
+		{cmd: prReviewReviewsCommand(repoDir, "acme/repo", 42), res: execx.Result{Stdout: reviews}},
+		{cmd: prReviewReviewCommentsCommand(repoDir, "acme/repo", 42), res: execx.Result{Stdout: reviewComments}},
 		{cmd: reviewDiffStatCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffStat}},
 		{cmd: reviewDiffPatchCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffPatch}},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(strings.TrimSpace(cfg.Prompt+"\n\n"+expectedPreparedReviewContext(repoURLFromConfig(cfg), metadataJSON, commentsText, diffStat, diffPatch)), agentsPath))},
@@ -674,7 +687,10 @@ func TestRunBuildsReviewContextFromHeadBranchSelector(t *testing.T) {
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
 	metadataJSON := `{"number":42,"title":"Improve tests","body":"Adds stronger coverage.","url":"https://github.com/acme/repo/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","headRefName":"feature/improve-tests","headRefOid":"abc123","author":{"login":"octocat"}}`
-	commentsText := "reviewer: Please add one more regression test."
+	issueComments := `[{"user":{"login":"reviewer"},"body":"Please add one more regression test."}]`
+	reviews := `[]`
+	reviewComments := `[]`
+	commentsText := expectedReviewDiscussion(formatReviewDiscussionJSON(issueComments), formatReviewDiscussionJSON(reviews), formatReviewDiscussionJSON(reviewComments))
 	diffStat := " internal/service_test.go | 12 ++++++++++++\n 1 file changed, 12 insertions(+)"
 	diffPatch := "diff --git a/internal/service_test.go b/internal/service_test.go\n+func TestServiceRegression(t *testing.T) {}\n"
 	reviewOutput := "No material issues found.\n\n```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"No material issues found.\",\"findings\":[]}\n```"
@@ -688,7 +704,9 @@ func TestRunBuildsReviewContextFromHeadBranchSelector(t *testing.T) {
 		{cmd: prReviewMetadataCommand(repoDir, "feature/improve-tests"), res: execx.Result{Stdout: metadataJSON}},
 		{cmd: fetchRemoteBranchCommand(repoDir, "main")},
 		{cmd: fetchPullRequestHeadCommand(repoDir, 42)},
-		{cmd: prReviewCommentsCommand(repoDir, "feature/improve-tests"), res: execx.Result{Stdout: commentsText}},
+		{cmd: prReviewIssueCommentsCommand(repoDir, "acme/repo", 42), res: execx.Result{Stdout: issueComments}},
+		{cmd: prReviewReviewsCommand(repoDir, "acme/repo", 42), res: execx.Result{Stdout: reviews}},
+		{cmd: prReviewReviewCommentsCommand(repoDir, "acme/repo", 42), res: execx.Result{Stdout: reviewComments}},
 		{cmd: reviewDiffStatCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffStat}},
 		{cmd: reviewDiffPatchCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffPatch}},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(strings.TrimSpace(cfg.Prompt+"\n\n"+expectedPreparedReviewContext(repoURLFromConfig(cfg), metadataJSON, commentsText, diffStat, diffPatch)), agentsPath)), res: execx.Result{Stdout: reviewOutput}},
@@ -714,6 +732,40 @@ func TestRunBuildsReviewContextFromHeadBranchSelector(t *testing.T) {
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestLoadReviewDiscussionContinuesAfterSectionFailure(t *testing.T) {
+	t.Parallel()
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: prReviewIssueCommentsCommand(repoDir, "acme/repo", 42),
+			err: errors.New("GraphQL: Projects (classic) is being deprecated"),
+		},
+		{cmd: prReviewReviewsCommand(repoDir, "acme/repo", 42), res: execx.Result{Stdout: `[]`}},
+		{cmd: prReviewReviewCommentsCommand(repoDir, "acme/repo", 42), res: execx.Result{Stdout: `[]`}},
+	}}
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	got := h.loadReviewDiscussion(context.Background(), repoWorkspace{Dir: repoDir, URL: "https://github.com/acme/repo.git", RelDir: "repo"}, reviewPRMetadata{
+		Number: 42,
+		URL:    "https://github.com/acme/repo/pull/42",
+	})
+
+	if !strings.Contains(got, "Issue comments:\nFetch failed:") {
+		t.Fatalf("discussion = %q, want fetch failure in issue comments section", got)
+	}
+	if !strings.Contains(got, "Reviews:\n[]") || !strings.Contains(got, "Review comments:\n[]") {
+		t.Fatalf("discussion = %q, want remaining sections", got)
+	}
+	if len(logs) == 0 || !strings.Contains(strings.Join(logs, "\n"), "action=load_discussion") {
+		t.Fatalf("logs = %#v, want load_discussion warning", logs)
 	}
 }
 

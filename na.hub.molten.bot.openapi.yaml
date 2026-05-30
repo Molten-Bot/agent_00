@@ -352,10 +352,20 @@ components:
     RuntimePublishRequest:
       type: object
       additionalProperties: true
+      anyOf:
+        - required: [to_agent_uri]
+        - required: [to_agent_uuid]
+        - required: [to_agent_id]
       properties:
         message:
           type: object
           additionalProperties: true
+        to_agent_uri:
+          type: string
+        to_agent_uuid:
+          type: string
+        to_agent_id:
+          type: string
         target:
           type: string
         target_agent:
