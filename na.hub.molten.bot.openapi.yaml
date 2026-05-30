@@ -360,6 +360,12 @@ components:
           type: string
         target_agent:
           type: string
+        to_agent_id:
+          type: string
+        to_agent_uuid:
+          type: string
+        to_agent_uri:
+          type: string
         session_key:
           type: string
     RuntimePulledMessage:

@@ -181,6 +181,14 @@ func expectedPreparedReviewContext(repoURL, metadataJSON, commentsText, diffStat
 	return b.String()
 }
 
+func expectedReviewDiscussion(issueComments, reviewComments, reviews string) string {
+	return strings.Join([]string{
+		"Issue comments:\n" + issueComments,
+		"Review comments:\n" + reviewComments,
+		"Reviews:\n" + reviews,
+	}, "\n\n")
+}
+
 func testWorkspaceManager(guid string) workspace.Manager {
 	return workspace.Manager{
 		PathExists: func(string) bool { return false },
@@ -615,7 +623,11 @@ func TestRunBuildsReviewContextBeforeInvokingCodex(t *testing.T) {
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
 	metadataJSON := `{"number":42,"title":"Improve tests","body":"Adds stronger coverage.","url":"https://github.com/acme/repo/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","headRefName":"feature/improve-tests","author":{"login":"octocat"}}`
-	commentsText := "reviewer: Please add one more regression test."
+	commentsText := expectedReviewDiscussion(
+		`[{"user":{"login":"reviewer"},"body":"Please add one more regression test."}]`,
+		`[]`,
+		`[]`,
+	)
 	diffStat := " internal/service_test.go | 12 ++++++++++++\n 1 file changed, 12 insertions(+)"
 	diffPatch := "diff --git a/internal/service_test.go b/internal/service_test.go\n+func TestServiceRegression(t *testing.T) {}\n"
 
@@ -628,7 +640,9 @@ func TestRunBuildsReviewContextBeforeInvokingCodex(t *testing.T) {
 		{cmd: prReviewMetadataCommand(repoDir, "42"), res: execx.Result{Stdout: metadataJSON}},
 		{cmd: fetchRemoteBranchCommand(repoDir, "main")},
 		{cmd: fetchPullRequestHeadCommand(repoDir, 42)},
-		{cmd: prReviewCommentsCommand(repoDir, "42"), res: execx.Result{Stdout: commentsText}},
+		{cmd: prReviewIssueCommentsCommand(repoDir, 42), res: execx.Result{Stdout: `[{"user":{"login":"reviewer"},"body":"Please add one more regression test."}]`}},
+		{cmd: prReviewReviewCommentsCommand(repoDir, 42), res: execx.Result{Stdout: `[]`}},
+		{cmd: prReviewReviewsCommand(repoDir, 42), res: execx.Result{Stdout: `[]`}},
 		{cmd: reviewDiffStatCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffStat}},
 		{cmd: reviewDiffPatchCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffPatch}},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(strings.TrimSpace(cfg.Prompt+"\n\n"+expectedPreparedReviewContext(repoURLFromConfig(cfg), metadataJSON, commentsText, diffStat, diffPatch)), agentsPath))},
@@ -674,7 +688,11 @@ func TestRunBuildsReviewContextFromHeadBranchSelector(t *testing.T) {
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
 	metadataJSON := `{"number":42,"title":"Improve tests","body":"Adds stronger coverage.","url":"https://github.com/acme/repo/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","headRefName":"feature/improve-tests","headRefOid":"abc123","author":{"login":"octocat"}}`
-	commentsText := "reviewer: Please add one more regression test."
+	commentsText := expectedReviewDiscussion(
+		`[{"user":{"login":"reviewer"},"body":"Please add one more regression test."}]`,
+		`[]`,
+		`[]`,
+	)
 	diffStat := " internal/service_test.go | 12 ++++++++++++\n 1 file changed, 12 insertions(+)"
 	diffPatch := "diff --git a/internal/service_test.go b/internal/service_test.go\n+func TestServiceRegression(t *testing.T) {}\n"
 	reviewOutput := "No material issues found.\n\n```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"No material issues found.\",\"findings\":[]}\n```"
@@ -688,7 +706,9 @@ func TestRunBuildsReviewContextFromHeadBranchSelector(t *testing.T) {
 		{cmd: prReviewMetadataCommand(repoDir, "feature/improve-tests"), res: execx.Result{Stdout: metadataJSON}},
 		{cmd: fetchRemoteBranchCommand(repoDir, "main")},
 		{cmd: fetchPullRequestHeadCommand(repoDir, 42)},
-		{cmd: prReviewCommentsCommand(repoDir, "feature/improve-tests"), res: execx.Result{Stdout: commentsText}},
+		{cmd: prReviewIssueCommentsCommand(repoDir, 42), res: execx.Result{Stdout: `[{"user":{"login":"reviewer"},"body":"Please add one more regression test."}]`}},
+		{cmd: prReviewReviewCommentsCommand(repoDir, 42), res: execx.Result{Stdout: `[]`}},
+		{cmd: prReviewReviewsCommand(repoDir, 42), res: execx.Result{Stdout: `[]`}},
 		{cmd: reviewDiffStatCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffStat}},
 		{cmd: reviewDiffPatchCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffPatch}},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(strings.TrimSpace(cfg.Prompt+"\n\n"+expectedPreparedReviewContext(repoURLFromConfig(cfg), metadataJSON, commentsText, diffStat, diffPatch)), agentsPath)), res: execx.Result{Stdout: reviewOutput}},

@@ -288,6 +288,8 @@ func TestPublishLocalRunFailureResultPublishesExplicitFailurePayload(t *testing.
 	var publishBody map[string]any
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/a2a":
+			http.NotFound(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/runtime/messages/publish":
 			if err := json.NewDecoder(r.Body).Decode(&publishBody); err != nil {
 				t.Fatalf("decode publish body: %v", err)
@@ -305,6 +307,7 @@ func TestPublishLocalRunFailureResultPublishesExplicitFailurePayload(t *testing.
 		BaseURL:    ts.URL + "/v1",
 		AgentToken: "token",
 		SessionKey: "local-session",
+		Handle:     "caller-agent",
 	}, "req-local-fail", app.Result{
 		ExitCode:     app.ExitGit,
 		Err:          errors.New("git: merge conflict"),
@@ -321,8 +324,17 @@ func TestPublishLocalRunFailureResultPublishesExplicitFailurePayload(t *testing.
 	if got := publishBody["session_key"]; got != "local-session" {
 		t.Fatalf("session_key = %#v, want local-session", got)
 	}
+	if got := publishBody["to_agent_id"]; got != "caller-agent" {
+		t.Fatalf("to_agent_id = %#v, want caller-agent", got)
+	}
+	if got := publishBody["target_agent"]; got != "caller-agent" {
+		t.Fatalf("target_agent = %#v, want caller-agent", got)
+	}
 	if got := msg["session_key"]; got != "local-session" {
 		t.Fatalf("message.session_key = %#v, want local-session", got)
+	}
+	if got := msg["to_agent_id"]; got != "caller-agent" {
+		t.Fatalf("message.to_agent_id = %#v, want caller-agent", got)
 	}
 	if got := msg["status"]; got != "error" {
 		t.Fatalf("message.status = %#v, want error", got)
