@@ -2199,10 +2199,7 @@ func (h Harness) buildReviewPromptContext(
 		return nil, fmt.Errorf("fetch pull request head for #%d: %w", metadata.Number, err)
 	}
 
-	commentsRes, err := h.runCommand(ctx, "review", prReviewCommentsCommand(repo.Dir, selector))
-	if err != nil {
-		return nil, fmt.Errorf("load pull request comments: %w", err)
-	}
+	discussionText := h.loadPullRequestDiscussion(ctx, repo.Dir, metadata.Number)
 
 	baseRef := remoteTrackingRef(metadata.BaseRefName)
 	headRef := pullRequestTrackingRef(metadata.Number)
@@ -2241,7 +2238,7 @@ func (h Harness) buildReviewPromptContext(
 	b.WriteString(truncateForPrompt(string(metadataJSON), maxReviewMetadataChars))
 	b.WriteString("\n```\n\n")
 	b.WriteString("Existing pull request discussion:\n```text\n")
-	b.WriteString(truncateForPrompt(nonEmptyOrDefault(commentsRes.Stdout, "No pull-request comments were returned by gh pr view --comments."), maxReviewCommentsChars))
+	b.WriteString(truncateForPrompt(nonEmptyOrDefault(discussionText, "No pull-request discussion was returned by GitHub."), maxReviewCommentsChars))
 	b.WriteString("\n```\n\n")
 	b.WriteString("Local git diff summary:\n```text\n")
 	b.WriteString(truncateForPrompt(nonEmptyOrDefault(joinCommandOutput(diffStatRes), "No diff summary output was returned by git diff --stat --summary."), maxReviewDiffStatChars))
@@ -2254,6 +2251,36 @@ func (h Harness) buildReviewPromptContext(
 		Metadata: metadata,
 		Prompt:   strings.TrimSpace(b.String()),
 	}, nil
+}
+
+func (h Harness) loadPullRequestDiscussion(ctx context.Context, repoDir string, number int) string {
+	if number <= 0 {
+		return "Pull-request discussion unavailable: invalid pull request number."
+	}
+	sections := []struct {
+		title string
+		cmd   execx.Command
+	}{
+		{title: "Issue comments", cmd: prReviewIssueCommentsCommand(repoDir, number)},
+		{title: "Review comments", cmd: prReviewReviewCommentsCommand(repoDir, number)},
+		{title: "Reviews", cmd: prReviewReviewsCommand(repoDir, number)},
+	}
+	var b strings.Builder
+	for i, section := range sections {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(section.title)
+		b.WriteString(":\n")
+		res, err := h.runCommand(ctx, "review", section.cmd)
+		if err != nil {
+			b.WriteString("Unavailable: ")
+			b.WriteString(err.Error())
+			continue
+		}
+		b.WriteString(nonEmptyOrDefault(strings.TrimSpace(res.Stdout), "[]"))
+	}
+	return strings.TrimSpace(b.String())
 }
 
 type reviewFinding struct {
@@ -2645,11 +2672,27 @@ func prReviewMetadataCommand(repoDir, selector string) execx.Command {
 	}
 }
 
-func prReviewCommentsCommand(repoDir, selector string) execx.Command {
+func prReviewIssueCommentsCommand(repoDir string, number int) execx.Command {
 	return execx.Command{
 		Dir:  repoDir,
 		Name: "gh",
-		Args: []string{"pr", "view", selector, "--comments"},
+		Args: []string{"api", fmt.Sprintf("repos/:owner/:repo/issues/%d/comments", number), "--paginate"},
+	}
+}
+
+func prReviewReviewCommentsCommand(repoDir string, number int) execx.Command {
+	return execx.Command{
+		Dir:  repoDir,
+		Name: "gh",
+		Args: []string{"api", fmt.Sprintf("repos/:owner/:repo/pulls/%d/comments", number), "--paginate"},
+	}
+}
+
+func prReviewReviewsCommand(repoDir string, number int) execx.Command {
+	return execx.Command{
+		Dir:  repoDir,
+		Name: "gh",
+		Args: []string{"api", fmt.Sprintf("repos/:owner/:repo/pulls/%d/reviews", number), "--paginate"},
 	}
 }
 

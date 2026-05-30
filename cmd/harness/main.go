@@ -2284,6 +2284,10 @@ func publishLocalRunFailureResult(ctx context.Context, cfg hub.InitConfig, reque
 	defer cancel()
 
 	cfg.ApplyDefaults()
+	if localFailureReplyTarget(cfg) == "" {
+		logf("dispatch status=warn action=publish_failure_result request_id=%s err=%q", requestID, "missing hub reply target")
+		return
+	}
 	client := hub.NewAPIClient(baseURL)
 	if err := client.PublishResult(publishCtx, token, localRunFailurePayload(cfg, requestID, result)); err != nil {
 		logf("dispatch status=warn action=publish_failure_result request_id=%s err=%q", requestID, err)
@@ -2328,6 +2332,11 @@ func localRunFailurePayload(cfg hub.InitConfig, requestID string, result app.Res
 		"error":       errText,
 		"result":      resultPayload,
 	}
+	if target := localFailureReplyTarget(cfg); target != "" {
+		payload["to_agent_id"] = target
+		payload["target"] = target
+		payload["target_agent"] = target
+	}
 	addFailureFields(payload, errText)
 	failure := map[string]any{
 		"status":  "failed",
@@ -2338,6 +2347,10 @@ func localRunFailurePayload(cfg hub.InitConfig, requestID string, result app.Res
 	addFailureFields(failure, errText)
 	payload["failure"] = failure
 	return payload
+}
+
+func localFailureReplyTarget(cfg hub.InitConfig) string {
+	return strings.TrimSpace(cfg.Handle)
 }
 
 func failureMessage(errText string) string {
