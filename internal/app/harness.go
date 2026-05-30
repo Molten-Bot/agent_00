@@ -2267,6 +2267,7 @@ type reviewOutcome struct {
 	Status     string          `json:"status"`
 	MergeReady bool            `json:"mergeReady"`
 	Summary    string          `json:"summary"`
+	Positives  []string        `json:"positives"`
 	Findings   []reviewFinding `json:"findings"`
 }
 
@@ -2301,9 +2302,9 @@ func (h Harness) completeReviewRun(
 		repo.Branch = head
 	}
 
-	outcome, _ := parseReviewOutcome(reviewOutputText(agentRes))
+	outcome, outcomeOK := parseReviewOutcome(reviewOutputText(agentRes))
 	if reviewWritebackMode(cfg.Review.Writeback) == "summary-comment" {
-		body := reviewCommentBody(agentRes, outcome)
+		body := reviewCommentBody(agentRes, outcome, outcomeOK)
 		bodyPath := reviewSummaryBodyPath(runDir, metadata.Number)
 		if err := h.writeWorkspaceFile(bodyPath, []byte(body), 0o600); err != nil {
 			return fmt.Errorf("write review summary body: %w", err)
@@ -2399,7 +2400,11 @@ func reviewOutputText(res execx.Result) string {
 	}
 }
 
-func reviewCommentBody(res execx.Result, outcome reviewOutcome) string {
+func reviewCommentBody(res execx.Result, outcome reviewOutcome, outcomeOK bool) string {
+	if outcomeOK {
+		return truncateReviewCommentBody(conciseReviewCommentBody(outcome))
+	}
+
 	body := strings.TrimSpace(stripReviewOutcomeJSON(reviewOutputText(res)))
 	if body == "" {
 		body = strings.TrimSpace(outcome.Summary)
@@ -2412,6 +2417,113 @@ func reviewCommentBody(res execx.Result, outcome reviewOutcome) string {
 		}
 	}
 	return truncateReviewCommentBody(body)
+}
+
+func conciseReviewCommentBody(outcome reviewOutcome) string {
+	positives := normalizeReviewCommentPoints(outcome.Positives, 3)
+	if len(positives) == 0 {
+		if reviewOutcomeAllowsAutoMerge(outcome) || (strings.EqualFold(outcome.Status, "clean") && len(outcome.Findings) == 0) {
+			positives = []string{"No material issues found."}
+		} else if summary := cleanReviewCommentPoint(outcome.Summary); summary != "" {
+			positives = []string{summary}
+		} else {
+			positives = []string{"Review completed."}
+		}
+	}
+
+	negatives := reviewFindingPoints(outcome.Findings, 6)
+	if len(negatives) == 0 {
+		if strings.EqualFold(outcome.Status, "blocked") && strings.TrimSpace(outcome.Summary) != "" {
+			negatives = []string{cleanReviewCommentPoint(outcome.Summary)}
+		} else {
+			negatives = []string{"No material issues found."}
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("**Positive**\n")
+	writeReviewCommentBullets(&b, positives)
+	b.WriteString("\n**Negative**\n")
+	writeReviewCommentBullets(&b, negatives)
+	return strings.TrimSpace(b.String())
+}
+
+func writeReviewCommentBullets(b *strings.Builder, points []string) {
+	for _, point := range points {
+		point = cleanReviewCommentPoint(point)
+		if point == "" {
+			continue
+		}
+		b.WriteString("- ")
+		b.WriteString(point)
+		b.WriteString("\n")
+	}
+}
+
+func normalizeReviewCommentPoints(points []string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	out := make([]string, 0, min(len(points), limit))
+	for _, point := range points {
+		point = cleanReviewCommentPoint(point)
+		if point == "" {
+			continue
+		}
+		out = append(out, point)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func reviewFindingPoints(findings []reviewFinding, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	out := make([]string, 0, min(len(findings), limit))
+	for _, finding := range findings {
+		point := cleanReviewCommentPoint(reviewFindingPoint(finding))
+		if point == "" {
+			continue
+		}
+		out = append(out, point)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func reviewFindingPoint(finding reviewFinding) string {
+	title := cleanReviewCommentPoint(finding.Title)
+	if title == "" {
+		return ""
+	}
+	severity := strings.TrimSpace(finding.Severity)
+	if severity == "" {
+		severity = "Finding"
+	}
+	location := strings.TrimSpace(finding.Path)
+	if location != "" && finding.Line > 0 {
+		location = fmt.Sprintf("%s:%d", location, finding.Line)
+	}
+	if location == "" {
+		return fmt.Sprintf("[%s] %s", severity, title)
+	}
+	return fmt.Sprintf("[%s] %s - %s", severity, location, title)
+}
+
+func cleanReviewCommentPoint(point string) string {
+	point = strings.TrimSpace(point)
+	point = strings.TrimLeft(point, "-* \t")
+	point = strings.Join(strings.Fields(point), " ")
+	const maxPointChars = 220
+	if len(point) <= maxPointChars {
+		return point
+	}
+	return strings.TrimSpace(point[:maxPointChars-3]) + "..."
 }
 
 const maxReviewCommentBodyChars = 60000
@@ -2460,10 +2572,11 @@ func parseReviewOutcomeJSON(raw string) (reviewOutcome, bool) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &outcome); err != nil {
 		return reviewOutcome{}, false
 	}
-	if strings.TrimSpace(outcome.Status) == "" && !outcome.MergeReady && strings.TrimSpace(outcome.Summary) == "" && len(outcome.Findings) == 0 {
+	if strings.TrimSpace(outcome.Status) == "" && !outcome.MergeReady && strings.TrimSpace(outcome.Summary) == "" && len(outcome.Positives) == 0 && len(outcome.Findings) == 0 {
 		return reviewOutcome{}, false
 	}
 	outcome.Status = strings.ToLower(strings.TrimSpace(outcome.Status))
+	outcome.Positives = normalizeReviewCommentPoints(outcome.Positives, 3)
 	return outcome, true
 }
 

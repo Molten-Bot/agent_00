@@ -717,6 +717,66 @@ func TestRunBuildsReviewContextFromHeadBranchSelector(t *testing.T) {
 	}
 }
 
+func TestReviewCommentBodyUsesStructuredPositiveNegativePoints(t *testing.T) {
+	t.Parallel()
+
+	output := `Here is extra analysis that should not be posted.
+
+` + "```json" + `
+{
+  "status": "findings",
+  "mergeReady": false,
+  "summary": "Review found one issue.",
+  "positives": [
+    "Adds focused regression coverage.",
+    "Keeps the existing public API unchanged."
+  ],
+  "findings": [
+    {
+      "severity": "Medium",
+      "path": "src/worker.js",
+      "line": 42,
+      "title": "Redaction misses query strings"
+    }
+  ]
+}
+` + "```"
+
+	outcome, ok := parseReviewOutcome(output)
+	if !ok {
+		t.Fatal("parseReviewOutcome() ok = false, want true")
+	}
+	got := reviewCommentBody(execx.Result{Stdout: output}, outcome, ok)
+	want := "**Positive**\n" +
+		"- Adds focused regression coverage.\n" +
+		"- Keeps the existing public API unchanged.\n" +
+		"\n" +
+		"**Negative**\n" +
+		"- [Medium] src/worker.js:42 - Redaction misses query strings"
+	if got != want {
+		t.Fatalf("reviewCommentBody() = %q, want %q", got, want)
+	}
+}
+
+func TestReviewCommentBodyCleanOutcomeKeepsPositiveNegativeShape(t *testing.T) {
+	t.Parallel()
+
+	output := "Verbose text that should be ignored.\n\n```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"No material issues found.\",\"findings\":[]}\n```"
+	outcome, ok := parseReviewOutcome(output)
+	if !ok {
+		t.Fatal("parseReviewOutcome() ok = false, want true")
+	}
+	got := reviewCommentBody(execx.Result{Stdout: output}, outcome, ok)
+	want := "**Positive**\n" +
+		"- No material issues found.\n" +
+		"\n" +
+		"**Negative**\n" +
+		"- No material issues found."
+	if got != want {
+		t.Fatalf("reviewCommentBody(clean) = %q, want %q", got, want)
+	}
+}
+
 func TestRunWithGitHubTokenRunsAuthSetupGitBeforeCodex(t *testing.T) {
 	cfg := sampleConfig()
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
