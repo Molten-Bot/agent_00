@@ -82,9 +82,6 @@ func (w *Watcher) PollOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if len(threads) == 0 {
-		return nil
-	}
 
 	viewer, err := w.viewerLogin(ctx)
 	if err != nil {
@@ -104,47 +101,91 @@ func (w *Watcher) PollOnce(ctx context.Context) error {
 			continue
 		}
 
-		requested, err := w.isRequestedReviewer(ctx, ownerRepo, prNumber, viewer)
-		if err != nil {
-			w.logf("review_watch status=warn action=verify_requested_reviewer owner_repo=%s pr=%d err=%q", ownerRepo, prNumber, err)
-			continue
-		}
-		if !requested {
-			w.logf("review_watch status=skip reason=not_current_requested_reviewer owner_repo=%s pr=%d reviewer=%s", ownerRepo, prNumber, viewer)
-			continue
-		}
+		w.queueCandidate(ctx, reviewCandidate{
+			OwnerRepo:              ownerRepo,
+			PRNumber:               prNumber,
+			NotificationThreadID:   thread.ID,
+			NotificationCloneURL:   thread.Repository.CloneURL,
+			NotificationSSHURL:     thread.Repository.SSHURL,
+			NotificationSubjectURL: thread.Subject.URL,
+		}, viewer)
+	}
 
-		details, err := w.pullRequestDetails(ctx, ownerRepo, prNumber)
-		if err != nil {
-			w.logf("review_watch status=warn action=load_pr owner_repo=%s pr=%d err=%q", ownerRepo, prNumber, err)
+	searchResults, err := w.requestedReviewPullRequests(ctx)
+	if err != nil {
+		w.logf("review_watch status=warn action=search_requested_reviews err=%q", err)
+		return nil
+	}
+	for _, result := range searchResults {
+		ownerRepo := strings.TrimSpace(result.Repository.NameWithOwner)
+		if ownerRepo == "" || result.Number <= 0 {
 			continue
 		}
-		if !strings.EqualFold(strings.TrimSpace(details.State), "open") {
-			w.logf("review_watch status=skip reason=pr_not_open owner_repo=%s pr=%d state=%s", ownerRepo, prNumber, details.State)
-			continue
-		}
-
-		key := reviewDedupeKey(ownerRepo, prNumber, details.Head.SHA)
-		if w.seenKey(key) {
-			w.logf("review_watch status=skip reason=duplicate owner_repo=%s pr=%d head=%s", ownerRepo, prNumber, details.Head.SHA)
-			continue
-		}
-
-		runCfg, err := w.runConfigForReview(thread, ownerRepo, prNumber, details, viewer)
-		if err != nil {
-			w.logf("review_watch status=warn action=build_config owner_repo=%s pr=%d err=%q", ownerRepo, prNumber, err)
-			continue
-		}
-		requestID, err := w.Enqueue(ctx, runCfg)
-		if err != nil {
-			w.logf("review_watch status=warn action=enqueue owner_repo=%s pr=%d err=%q", ownerRepo, prNumber, err)
-			continue
-		}
-		w.markSeen(key)
-		w.logf("review_watch status=queued request_id=%s owner_repo=%s pr=%d reviewer=%s head=%s", requestID, ownerRepo, prNumber, viewer, details.Head.SHA)
+		w.queueCandidate(ctx, reviewCandidate{
+			OwnerRepo: ownerRepo,
+			PRNumber:  result.Number,
+			PRURL:     result.URL,
+		}, viewer)
 	}
 
 	return nil
+}
+
+type reviewCandidate struct {
+	OwnerRepo              string
+	PRNumber               int
+	PRURL                  string
+	NotificationThreadID   string
+	NotificationCloneURL   string
+	NotificationSSHURL     string
+	NotificationSubjectURL string
+}
+
+func (w *Watcher) queueCandidate(ctx context.Context, candidate reviewCandidate, viewer string) {
+	ownerRepo := strings.TrimSpace(candidate.OwnerRepo)
+	prNumber := candidate.PRNumber
+	if ownerRepo == "" || prNumber <= 0 {
+		return
+	}
+
+	requested, err := w.isRequestedReviewer(ctx, ownerRepo, prNumber, viewer)
+	if err != nil {
+		w.logf("review_watch status=warn action=verify_requested_reviewer owner_repo=%s pr=%d err=%q", ownerRepo, prNumber, err)
+		return
+	}
+	if !requested {
+		w.logf("review_watch status=skip reason=not_current_requested_reviewer owner_repo=%s pr=%d reviewer=%s", ownerRepo, prNumber, viewer)
+		return
+	}
+
+	details, err := w.pullRequestDetails(ctx, ownerRepo, prNumber)
+	if err != nil {
+		w.logf("review_watch status=warn action=load_pr owner_repo=%s pr=%d err=%q", ownerRepo, prNumber, err)
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(details.State), "open") {
+		w.logf("review_watch status=skip reason=pr_not_open owner_repo=%s pr=%d state=%s", ownerRepo, prNumber, details.State)
+		return
+	}
+
+	key := reviewDedupeKey(ownerRepo, prNumber, details.Head.SHA)
+	if w.seenKey(key) {
+		w.logf("review_watch status=skip reason=duplicate owner_repo=%s pr=%d head=%s", ownerRepo, prNumber, details.Head.SHA)
+		return
+	}
+
+	runCfg, err := w.runConfigForReview(candidate, ownerRepo, prNumber, details, viewer)
+	if err != nil {
+		w.logf("review_watch status=warn action=build_config owner_repo=%s pr=%d err=%q", ownerRepo, prNumber, err)
+		return
+	}
+	requestID, err := w.Enqueue(ctx, runCfg)
+	if err != nil {
+		w.logf("review_watch status=warn action=enqueue owner_repo=%s pr=%d err=%q", ownerRepo, prNumber, err)
+		return
+	}
+	w.markSeen(key)
+	w.logf("review_watch status=queued request_id=%s owner_repo=%s pr=%d reviewer=%s head=%s", requestID, ownerRepo, prNumber, viewer, details.Head.SHA)
 }
 
 func (w *Watcher) notifications(ctx context.Context) ([]notificationThread, error) {
@@ -171,6 +212,18 @@ func (w *Watcher) viewerLogin(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("decode github viewer: %w", err)
 	}
 	return strings.TrimSpace(viewer.Login), nil
+}
+
+func (w *Watcher) requestedReviewPullRequests(ctx context.Context) ([]searchPullRequest, error) {
+	res, err := w.Runner.Run(ctx, requestedReviewPullRequestsCommand())
+	if err != nil {
+		return nil, fmt.Errorf("search requested review pull requests: %w", err)
+	}
+	var prs []searchPullRequest
+	if err := json.Unmarshal([]byte(strings.TrimSpace(res.Stdout)), &prs); err != nil {
+		return nil, fmt.Errorf("decode requested review pull request search: %w", err)
+	}
+	return prs, nil
 }
 
 func (w *Watcher) isRequestedReviewer(ctx context.Context, ownerRepo string, prNumber int, viewer string) (bool, error) {
@@ -202,8 +255,14 @@ func (w *Watcher) pullRequestDetails(ctx context.Context, ownerRepo string, prNu
 	return details, nil
 }
 
-func (w *Watcher) runConfigForReview(thread notificationThread, ownerRepo string, prNumber int, details pullRequestDetails, viewer string) (config.Config, error) {
-	repoURL := firstNonEmpty(thread.Repository.CloneURL, fmt.Sprintf("https://github.com/%s.git", ownerRepo), thread.Repository.SSHURL)
+func (w *Watcher) runConfigForReview(candidate reviewCandidate, ownerRepo string, prNumber int, details pullRequestDetails, viewer string) (config.Config, error) {
+	repoURL := firstNonEmpty(
+		candidate.NotificationCloneURL,
+		details.Base.Repo.CloneURL,
+		fmt.Sprintf("https://github.com/%s.git", ownerRepo),
+		candidate.NotificationSSHURL,
+		details.Base.Repo.SSHURL,
+	)
 	catalog, err := library.LoadCatalog(library.DefaultDir)
 	if err != nil {
 		return config.Config{}, err
@@ -215,10 +274,10 @@ func (w *Watcher) runConfigForReview(thread notificationThread, ownerRepo string
 	runCfg.ResponseMode = firstNonEmpty(w.Options.ResponseMode, "off")
 	runCfg.Review = &config.ReviewConfig{
 		PRNumber:                 prNumber,
-		PRURL:                    firstNonEmpty(details.HTMLURL, fmt.Sprintf("https://github.com/%s/pull/%d", ownerRepo, prNumber)),
+		PRURL:                    firstNonEmpty(candidate.PRURL, details.HTMLURL, fmt.Sprintf("https://github.com/%s/pull/%d", ownerRepo, prNumber)),
 		HeadBranch:               strings.TrimSpace(details.Head.Ref),
 		Trigger:                  "github-notification",
-		NotificationThreadID:     strings.TrimSpace(thread.ID),
+		NotificationThreadID:     strings.TrimSpace(candidate.NotificationThreadID),
 		RequestedReviewer:        strings.TrimSpace(viewer),
 		RequireRequestedReviewer: true,
 		Writeback:                firstNonEmpty(w.Options.Writeback, "summary-comment"),
@@ -295,16 +354,46 @@ type pullRequestDetails struct {
 	HTMLURL string `json:"html_url"`
 	State   string `json:"state"`
 	Draft   bool   `json:"draft"`
-	Head    struct {
+	Base    struct {
+		Repo struct {
+			FullName string `json:"full_name"`
+			CloneURL string `json:"clone_url"`
+			SSHURL   string `json:"ssh_url"`
+		} `json:"repo"`
+	} `json:"base"`
+	Head struct {
 		Ref string `json:"ref"`
 		SHA string `json:"sha"`
 	} `json:"head"`
+}
+
+type searchPullRequest struct {
+	Number     int    `json:"number"`
+	URL        string `json:"url"`
+	State      string `json:"state"`
+	IsDraft    bool   `json:"isDraft"`
+	Repository struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"repository"`
 }
 
 func notificationsCommand() execx.Command {
 	return execx.Command{
 		Name: "gh",
 		Args: []string{"api", "--method", "GET", "notifications", "-F", "participating=true", "-F", "per_page=50"},
+	}
+}
+
+func requestedReviewPullRequestsCommand() execx.Command {
+	return execx.Command{
+		Name: "gh",
+		Args: []string{
+			"search", "prs",
+			"--review-requested=@me",
+			"--state=open",
+			"--limit", "50",
+			"--json", "number,url,state,isDraft,repository",
+		},
 	}
 }
 

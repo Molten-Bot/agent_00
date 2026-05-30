@@ -162,6 +162,7 @@ func TestBrokerTracksDashboardSourceMix(t *testing.T) {
 	b.RecordTaskRunConfigWithSource("local-json", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"from json"}`), "json")
 	b.RecordTaskRunConfigWithSource("local-library", []byte(`{"repo":"git@github.com:acme/repo.git","libraryTaskName":"unit-test-coverage"}`), "library")
 	b.RecordTaskRunConfigWithSource("local-prompt", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"from prompt"}`), "prompt")
+	b.RecordTaskRunConfigWithSource("local-review", []byte(`{"repo":"git@github.com:acme/repo.git","libraryTaskName":"code-review"}`), "review")
 	b.RecordTaskRunConfigWithSource("req-hub", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"from hub"}`), "hub")
 
 	snap := b.Snapshot()
@@ -169,7 +170,7 @@ func TestBrokerTracksDashboardSourceMix(t *testing.T) {
 	for _, group := range snap.Stats.SourceMix {
 		got[group.Name] = group.Tasks
 	}
-	for _, name := range []string{"Chat", "Hub", "JSON", "Library", "Prompt"} {
+	for _, name := range []string{"Chat", "Hub", "JSON", "Library", "Prompt", "Review"} {
 		if got[name] != 1 {
 			t.Fatalf("source_mix[%q] = %d, want 1 (all groups: %#v)", name, got[name], snap.Stats.SourceMix)
 		}

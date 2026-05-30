@@ -53,6 +53,7 @@ func TestPollOnceQueuesReviewOnlyForCurrentRequestedReviewer(t *testing.T) {
 		{cmd: viewerCommand(), res: execx.Result{Stdout: `{"login":"octocat"}`}},
 		{cmd: requestedReviewersCommand("acme/repo", 42), res: execx.Result{Stdout: requested}},
 		{cmd: pullRequestDetailsCommand("acme/repo", 42), res: execx.Result{Stdout: details}},
+		{cmd: requestedReviewPullRequestsCommand(), res: execx.Result{Stdout: `[]`}},
 	}}
 
 	var enqueued config.Config
@@ -116,6 +117,7 @@ func TestPollOnceSkipsWhenViewerIsNoLongerRequested(t *testing.T) {
 		{cmd: notificationsCommand(), res: execx.Result{Stdout: notifications}},
 		{cmd: viewerCommand(), res: execx.Result{Stdout: `{"login":"octocat"}`}},
 		{cmd: requestedReviewersCommand("acme/repo", 42), res: execx.Result{Stdout: `{"users":[{"login":"someone-else"}]}`}},
+		{cmd: requestedReviewPullRequestsCommand(), res: execx.Result{Stdout: `[]`}},
 	}}
 
 	called := false
@@ -135,6 +137,55 @@ func TestPollOnceSkipsWhenViewerIsNoLongerRequested(t *testing.T) {
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestPollOnceFallsBackToRequestedReviewSearch(t *testing.T) {
+	t.Parallel()
+
+	searchResults := `[{
+		"number":42,
+		"url":"https://github.com/acme/repo/pull/42",
+		"state":"open",
+		"isDraft":false,
+		"repository":{"nameWithOwner":"acme/repo"}
+	}]`
+	details := `{"html_url":"https://github.com/acme/repo/pull/42","state":"open","draft":false,"base":{"repo":{"full_name":"acme/repo","clone_url":"https://github.com/acme/repo.git","ssh_url":"git@github.com:acme/repo.git"}},"head":{"ref":"feature/improve-tests","sha":"abc123"}}`
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: notificationsCommand(), res: execx.Result{Stdout: `[]`}},
+		{cmd: viewerCommand(), res: execx.Result{Stdout: `{"login":"octocat"}`}},
+		{cmd: requestedReviewPullRequestsCommand(), res: execx.Result{Stdout: searchResults}},
+		{cmd: requestedReviewersCommand("acme/repo", 42), res: execx.Result{Stdout: `{"users":[{"login":"octocat"}]}`}},
+		{cmd: pullRequestDetailsCommand("acme/repo", 42), res: execx.Result{Stdout: details}},
+	}}
+
+	var enqueued config.Config
+	w := &Watcher{
+		Runner: fake,
+		Enqueue: func(_ context.Context, cfg config.Config) (string, error) {
+			enqueued = cfg
+			return "local-123", nil
+		},
+	}
+
+	if err := w.PollOnce(context.Background()); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+	if got, want := enqueued.RepoURL, "https://github.com/acme/repo.git"; got != want {
+		t.Fatalf("RepoURL = %q, want %q", got, want)
+	}
+	if enqueued.Review == nil {
+		t.Fatal("Review = nil, want populated review config")
+	}
+	if got, want := enqueued.Review.PRNumber, 42; got != want {
+		t.Fatalf("Review.PRNumber = %d, want %d", got, want)
+	}
+	if got, want := enqueued.Review.PRURL, "https://github.com/acme/repo/pull/42"; got != want {
+		t.Fatalf("Review.PRURL = %q, want %q", got, want)
 	}
 }
 

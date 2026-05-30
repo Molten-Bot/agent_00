@@ -781,6 +781,7 @@
       entry_prompt: { id: "entry_prompt", label: "Prompt", detail: "Queued from Prompt Studio.", icon: "entry_prompt" },
       entry_library: { id: "entry_library", label: "Library", detail: "Queued from Library Studio.", icon: "entry_library" },
       entry_json: { id: "entry_json", label: "JSON", detail: "Queued from JSON Studio.", icon: "entry_json" },
+      entry_review: { id: "entry_review", label: "Review", detail: "Queued from a pull request review request.", icon: "entry_review" },
       prepare: { id: "prepare", label: "Prepare", detail: "Local auth and workspace conditioning.", icon: "prepare" },
       clone: { id: "clone", label: "Clone", detail: "Repository clone and sync.", icon: "clone" },
       branch: { id: "branch", label: "Branch", detail: "Branch selection or creation.", icon: "branch" },
@@ -832,6 +833,7 @@
       entry_prompt: "pencil",
       entry_library: "book-open",
       entry_json: "braces",
+      entry_review: "git-pull-request",
       prepare: "wrench",
       clone: "git-branch-plus",
       branch: "git-branch",
@@ -4784,6 +4786,7 @@
       json: "--dashboard-chart-json",
       library: "--dashboard-chart-library",
       prompt: "--dashboard-chart-prompt",
+      review: "--dashboard-chart-review",
       other: "--dashboard-chart-other",
     };
     const DASHBOARD_SOURCE_COLOR_FALLBACKS = {
@@ -4792,6 +4795,7 @@
       json: "#e8b35a",
       library: "#6fb0f4",
       prompt: "#7bc99a",
+      review: "#f08fb2",
       other: "#8ca0bd",
     };
 
@@ -4831,6 +4835,8 @@
           return "braces";
         case "library":
           return "book-open";
+        case "review":
+          return "git-pull-request";
         case "prompt":
           return "pencil";
         default:
@@ -7066,6 +7072,8 @@
           return "Hub";
         case "library":
           return "Library";
+        case "review":
+          return "Review";
         case "json":
           return "JSON";
         case "prompt":
@@ -9809,6 +9817,11 @@
         case "library_task":
         case "librarytask":
           return "library";
+        case "review":
+        case "code_review":
+        case "pull_request_review":
+        case "pr_review":
+          return "review";
         case "json":
         case "raw":
           return "json";
@@ -10419,6 +10432,8 @@
           return "entry_library";
         case "json":
           return "entry_json";
+        case "review":
+          return "entry_review";
         case "prompt":
           return "entry_prompt";
         default:
