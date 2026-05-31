@@ -737,6 +737,42 @@ func TestRunBuildsReviewContextFromHeadBranchSelector(t *testing.T) {
 	}
 }
 
+func TestAutoMergeCleanReviewSkipsUnsupportedAutoMergeConfiguration(t *testing.T) {
+	t.Parallel()
+
+	repo := repoWorkspace{Dir: "/repo"}
+	metadata := reviewPRMetadata{
+		URL:        "https://github.com/acme/repo/pull/42",
+		State:      "OPEN",
+		HeadRefOID: "abc123",
+	}
+	outcome := reviewOutcome{Status: "clean", MergeReady: true}
+	autoMergeErr := errors.New("run gh [pr merge 42 --auto --match-head-commit abc123 --squash]: exit status 1 (GraphQL: Pull request Protected branch rules not configured for this branch (enablePullRequestAutoMerge))")
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: prMergeAutoCommand(repo.Dir, "42", "squash", "abc123"),
+			err: autoMergeErr,
+		},
+	}}
+
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	if err := h.autoMergeCleanReview(context.Background(), repo, "42", "squash", metadata, outcome); err != nil {
+		t.Fatalf("autoMergeCleanReview() err = %v, want nil for unsupported auto-merge config", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+	if got := strings.Join(logs, "\n"); !strings.Contains(got, "reason=unsupported_or_unconfigured") {
+		t.Fatalf("logs = %q, want unsupported auto-merge skip reason", got)
+	}
+}
+
 func TestReviewCommentBodyUsesStructuredPositiveNegativePoints(t *testing.T) {
 	t.Parallel()
 
