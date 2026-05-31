@@ -683,6 +683,69 @@ func TestPublishResultFallsBackToRuntimeTransport(t *testing.T) {
 	}
 }
 
+func TestPublishResultRetriesTransientRuntimePublishFailure(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/runtime/messages/publish" {
+			t.Fatalf("unexpected path = %s", r.URL.Path)
+		}
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"message":"moltenhub is starting","status":"starting"}`))
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer ts.Close()
+
+	client := NewAPIClient(ts.URL + "/v1")
+	client.PublishResultMaxAttempts = 3
+	client.PublishResultRetryDelay = -1
+	if err := client.PublishResult(context.Background(), "token", map[string]any{
+		"type":       "skill_result",
+		"request_id": "req-retry",
+	}); err != nil {
+		t.Fatalf("PublishResult() error = %v", err)
+	}
+
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
+func TestPublishResultDoesNotRetryNonTransientRuntimePublishFailure(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/runtime/messages/publish" {
+			t.Fatalf("unexpected path = %s", r.URL.Path)
+		}
+		calls++
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"not found"}`))
+	}))
+	defer ts.Close()
+
+	client := NewAPIClient(ts.URL + "/v1")
+	client.PublishResultMaxAttempts = 3
+	client.PublishResultRetryDelay = -1
+	if err := client.PublishResult(context.Background(), "token", map[string]any{
+		"type":       "skill_result",
+		"request_id": "req-no-retry",
+	}); err == nil {
+		t.Fatal("PublishResult() error = nil, want failure")
+	}
+
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
 func TestPublishResultDoesNotFallbackToRetiredCompatibilityTransport(t *testing.T) {
 	t.Parallel()
 
