@@ -47,6 +47,11 @@ const (
 	runtimeMessagesOfflinePath   = "/runtime/messages/offline"
 )
 
+const (
+	defaultPublishResultMaxAttempts = 12
+	defaultPublishResultRetryDelay  = 5 * time.Second
+)
+
 type agentActivityPublish struct {
 	Activity string
 	Category string
@@ -68,9 +73,11 @@ type AgentProfile struct {
 
 // APIClient wraps hub HTTP interactions.
 type APIClient struct {
-	BaseURL    string
-	HTTPClient *http.Client
-	Logf       func(string, ...any)
+	BaseURL                  string
+	HTTPClient               *http.Client
+	Logf                     func(string, ...any)
+	PublishResultMaxAttempts int
+	PublishResultRetryDelay  time.Duration
 }
 
 // NewAPIClient returns an API client with defaults.
@@ -478,13 +485,72 @@ func (c APIClient) PublishResult(ctx context.Context, token string, payload map[
 		}
 	}
 
-	ok, trace := c.tryRuntimeTransport(ctx, token, []apiAttempt{
-		{Method: http.MethodPost, Path: runtimeMessagesPublishPath, Body: body},
-	})
-	if !ok {
-		return fmt.Errorf("publish result failed: %s", trace)
+	attempt := apiAttempt{Method: http.MethodPost, Path: runtimeMessagesPublishPath, Body: body}
+	var trace string
+	maxAttempts := c.publishResultMaxAttempts()
+	for i := 1; i <= maxAttempts; i++ {
+		ok, attemptTrace := c.tryRuntimeTransport(ctx, token, []apiAttempt{attempt})
+		trace = attemptTrace
+		if ok {
+			return nil
+		}
+		if i == maxAttempts || !isRetryablePublishResultTrace(attemptTrace) {
+			break
+		}
+		delay := c.publishResultRetryDelay()
+		c.logf("hub.runtime status=retrying action=publish_result attempt=%d/%d retry_in=%s err=%q", i, maxAttempts, delay, attemptTrace)
+		if !sleepContext(ctx, delay) {
+			return fmt.Errorf("publish result failed: %s", ctx.Err())
+		}
 	}
-	return nil
+	return fmt.Errorf("publish result failed: %s", trace)
+}
+
+func (c APIClient) publishResultMaxAttempts() int {
+	if c.PublishResultMaxAttempts > 0 {
+		return c.PublishResultMaxAttempts
+	}
+	return defaultPublishResultMaxAttempts
+}
+
+func (c APIClient) publishResultRetryDelay() time.Duration {
+	if c.PublishResultRetryDelay < 0 {
+		return 0
+	}
+	if c.PublishResultRetryDelay > 0 {
+		return c.PublishResultRetryDelay
+	}
+	return defaultPublishResultRetryDelay
+}
+
+func isRetryablePublishResultTrace(trace string) bool {
+	text := strings.ToLower(strings.TrimSpace(trace))
+	if text == "" {
+		return false
+	}
+	if strings.Contains(text, " network=") {
+		return true
+	}
+	for _, status := range []string{"status=429", "status=500", "status=502", "status=503", "status=504"} {
+		if strings.Contains(text, status) {
+			return true
+		}
+	}
+	return strings.Contains(text, "moltenhub is starting") || strings.Contains(text, "worker threw exception")
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return true
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // PullRuntimeMessage claims the next runtime envelope using long-poll transport.
