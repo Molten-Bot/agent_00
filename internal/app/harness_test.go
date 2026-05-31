@@ -39,6 +39,10 @@ func (f *fakeRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, er
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.exps) == 0 {
+		if isImplicitBranchFreshnessCommand(cmd) {
+			f.calls = append(f.calls, cmd)
+			return execx.Result{}, nil
+		}
 		f.t.Fatalf("unexpected command: %+v", cmd)
 	}
 
@@ -58,6 +62,10 @@ func (f *fakeRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, er
 	}
 
 	if matchIndex < 0 {
+		if isImplicitBranchFreshnessCommand(cmd) {
+			f.calls = append(f.calls, cmd)
+			return execx.Result{}, nil
+		}
 		f.t.Fatalf("command mismatch\n got:  %+v\n want: %+v", cmd, f.exps[0].cmd)
 	}
 
@@ -68,11 +76,35 @@ func (f *fakeRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, er
 }
 
 func commandsEqual(a, b execx.Command) bool {
-	return a.Name == b.Name && a.Dir == b.Dir && reflect.DeepEqual(a.Args, b.Args)
+	if a.Name != b.Name || a.Dir != b.Dir {
+		return false
+	}
+	if isClaudePromptArgCommand(a) && isClaudePromptArgCommand(b) {
+		return reflect.DeepEqual(a.Args[:len(a.Args)-1], b.Args[:len(b.Args)-1])
+	}
+	return reflect.DeepEqual(a.Args, b.Args)
 }
 
 func isCloneGitCommand(cmd execx.Command) bool {
 	return cmd.Name == "git" && len(cmd.Args) > 0 && cmd.Args[0] == "clone"
+}
+
+func isClaudePromptArgCommand(cmd execx.Command) bool {
+	return len(cmd.Args) >= 5 &&
+		cmd.Args[0] == "--print" &&
+		cmd.Args[1] == "--output-format" &&
+		cmd.Args[2] == "text" &&
+		cmd.Args[3] == "--dangerously-skip-permissions"
+}
+
+func isImplicitBranchFreshnessCommand(cmd execx.Command) bool {
+	if cmd.Name != "git" {
+		return false
+	}
+	if len(cmd.Args) >= 3 && cmd.Args[0] == "fetch" && cmd.Args[1] == "origin" {
+		return isKnownDefaultBranchName(cmd.Args[2])
+	}
+	return len(cmd.Args) == 3 && cmd.Args[0] == "merge" && cmd.Args[1] == "--no-edit" && cmd.Args[2] == "FETCH_HEAD"
 }
 
 type captureRunner struct {
@@ -5849,6 +5881,233 @@ func TestWithCompletionGatePromptPreservesTerseImplementationTarget(t *testing.T
 
 	if strings.Index(got, "in git chat") > strings.Index(got, "Task packet handling:") {
 		t.Fatalf("withCompletionGatePrompt() put task handling before terse task: %q", got)
+	}
+}
+
+func TestWithBackpressurePromptIncludesAdaptiveCriteria(t *testing.T) {
+	t.Parallel()
+
+	got := withBackpressurePrompt("Build API", nil)
+	wantSnippets := []string{
+		"Build API",
+		backpressureHeading,
+		"only consider the task done",
+		"linting, formatting, type-checking, build, test",
+		"curl against a local endpoint",
+		"Playwright or an actual browser path",
+		"benchmarks or performance measurements only when",
+		"functional correctness, tests, types, security/privacy, brevity/scope control, and visual design",
+		"Remote pull-request creation, pull-request check monitoring, and CI remediation are managed by the harness",
+	}
+	for _, snippet := range wantSnippets {
+		if !strings.Contains(got, snippet) {
+			t.Fatalf("withBackpressurePrompt() missing snippet %q in:\n%s", snippet, got)
+		}
+	}
+
+	if again := withBackpressurePrompt(got, nil); again != got {
+		t.Fatalf("withBackpressurePrompt() duplicated idempotent block:\n%s", again)
+	}
+}
+
+func TestCollectBackpressureRequirementsReadsRootAndTargetFiles(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	targetDir := filepath.Join(repoDir, "services", "api")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, backpressureFilename), []byte("Run repo-wide audit."), 0o644); err != nil {
+		t.Fatalf("write root backpressure: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, backpressureFilename), []byte("Exercise the API health route."), 0o644); err != nil {
+		t.Fatalf("write target backpressure: %v", err)
+	}
+
+	h := New(&fakeRunner{t: t})
+	requirements := h.collectBackpressureRequirements([]repoWorkspace{{Dir: repoDir, RelDir: "repo", URL: "git@github.com:acme/repo.git"}}, "services/api")
+	got := withBackpressurePrompt("Build API", requirements)
+
+	for _, snippet := range []string{
+		"Project-specific backpressure requirements:",
+		"From BACKPRESSURE.md:",
+		"Run repo-wide audit.",
+		"From services/api/BACKPRESSURE.md:",
+		"Exercise the API health route.",
+	} {
+		if !strings.Contains(got, snippet) {
+			t.Fatalf("prompt missing %q in:\n%s", snippet, got)
+		}
+	}
+}
+
+func TestCollectBackpressureRequirementsReadsMultiRepoRootFiles(t *testing.T) {
+	t.Parallel()
+
+	repoA := t.TempDir()
+	repoB := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repoA, backpressureFilename), []byte("Validate service A."), 0o644); err != nil {
+		t.Fatalf("write repo A backpressure: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoB, backpressureFilename), []byte("Validate service B."), 0o644); err != nil {
+		t.Fatalf("write repo B backpressure: %v", err)
+	}
+
+	h := New(&fakeRunner{t: t})
+	requirements := h.collectBackpressureRequirements([]repoWorkspace{
+		{Dir: repoA, RelDir: "repo-a", URL: "git@github.com:acme/repo-a.git"},
+		{Dir: repoB, RelDir: "repo-b", URL: "git@github.com:acme/repo-b.git"},
+	}, ".")
+	got := withBackpressurePrompt("Build API", requirements)
+
+	for _, snippet := range []string{
+		"repo-a/BACKPRESSURE.md (git@github.com:acme/repo-a.git)",
+		"Validate service A.",
+		"repo-b/BACKPRESSURE.md (git@github.com:acme/repo-b.git)",
+		"Validate service B.",
+	} {
+		if !strings.Contains(got, snippet) {
+			t.Fatalf("prompt missing %q in:\n%s", snippet, got)
+		}
+	}
+}
+
+func TestRunCodexInjectsBackpressureBeforeResponseModeWrapping(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	runner := &captureRunner{}
+	h := New(runner)
+	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, "ship fix", codexRunOptions{}, "", "caveman-full"); err != nil {
+		t.Fatalf("runCodex() error = %v", err)
+	}
+
+	prompt := runner.cmd.Stdin
+	if !strings.Contains(prompt, "Caveman response mode is enabled for this run only.") {
+		t.Fatalf("prompt missing response mode wrapper:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, backpressureHeading) {
+		t.Fatalf("prompt missing backpressure contract:\n%s", prompt)
+	}
+	if strings.Index(prompt, backpressureHeading) < strings.Index(prompt, "ship fix") {
+		t.Fatalf("backpressure contract should be appended after task context:\n%s", prompt)
+	}
+}
+
+func TestBackpressurePromptCoversReviewAndRemediationPrompts(t *testing.T) {
+	t.Parallel()
+
+	reviewPrompt := withBackpressurePrompt("Review the pull request\n\nPrepared pull-request review context:\n{}", nil)
+	for _, snippet := range []string{"Review the pull request", "Prepared pull-request review context:", backpressureHeading} {
+		if !strings.Contains(reviewPrompt, snippet) {
+			t.Fatalf("review prompt missing %q in:\n%s", snippet, reviewPrompt)
+		}
+	}
+
+	basePrompt := withBackpressurePrompt("Build API", nil)
+	repairPrompt := remediationPrompt(basePrompt, "https://github.com/acme/repo/pull/42", "unit tests failed", 1)
+	if !strings.Contains(repairPrompt, backpressureHeading) {
+		t.Fatalf("remediation prompt missing backpressure context:\n%s", repairPrompt)
+	}
+	if count := strings.Count(repairPrompt, backpressureHeading); count != 1 {
+		t.Fatalf("remediation prompt has %d backpressure blocks, want 1:\n%s", count, repairPrompt)
+	}
+}
+
+func TestSyncGeneratedWorkBranchFetchesAndMergesBase(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	repo := &repoWorkspace{
+		URL:              "git@github.com:acme/repo.git",
+		Dir:              repoDir,
+		RelDir:           "repo",
+		Branch:           "moltenhub-build-api",
+		BaseBranch:       "main",
+		CreateWorkBranch: true,
+	}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: fetchBranchCommand(repoDir, "main")},
+		{cmd: mergeFetchedBranchCommand(repoDir)},
+	}}
+
+	h := New(fake)
+	exitCode, stage, err := h.syncGeneratedWorkBranchWithBase(context.Background(), repo, agentruntime.Default(), repoDir, codexRunOptions{}, "Build API", "", "", ".", "codex")
+	if err != nil {
+		t.Fatalf("syncGeneratedWorkBranchWithBase() err = %v", err)
+	}
+	if exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("syncGeneratedWorkBranchWithBase() = (%d, %q), want success", exitCode, stage)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("remaining expected commands = %d", len(fake.exps))
+	}
+}
+
+func TestSyncGeneratedWorkBranchSkipsExistingNonDefaultBranch(t *testing.T) {
+	t.Parallel()
+
+	repo := &repoWorkspace{
+		URL:              "git@github.com:acme/repo.git",
+		Dir:              t.TempDir(),
+		RelDir:           "repo",
+		Branch:           "release/2026.04-hotfix",
+		BaseBranch:       "release/2026.04-hotfix",
+		CreateWorkBranch: false,
+	}
+	fake := &fakeRunner{t: t}
+
+	h := New(fake)
+	exitCode, stage, err := h.syncGeneratedWorkBranchWithBase(context.Background(), repo, agentruntime.Default(), repo.Dir, codexRunOptions{}, "Build API", "", "", ".", "codex")
+	if err != nil {
+		t.Fatalf("syncGeneratedWorkBranchWithBase() err = %v", err)
+	}
+	if exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("syncGeneratedWorkBranchWithBase() = (%d, %q), want success", exitCode, stage)
+	}
+	if len(fake.calls) != 0 {
+		t.Fatalf("syncGeneratedWorkBranchWithBase() ran commands for non-default branch: %+v", fake.calls)
+	}
+}
+
+func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	repo := &repoWorkspace{
+		URL:              "git@github.com:acme/repo.git",
+		Dir:              repoDir,
+		RelDir:           "repo",
+		Branch:           "moltenhub-build-api",
+		BaseBranch:       "main",
+		CreateWorkBranch: true,
+	}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: fetchBranchCommand(repoDir, "main")},
+		{
+			cmd: mergeFetchedBranchCommand(repoDir),
+			res: execx.Result{Stdout: "CONFLICT (content): Merge conflict in file.go\nAutomatic merge failed; fix conflicts and then commit the result."},
+			err: errors.New("merge failed"),
+		},
+		{cmd: codexCommand(repoDir, "resolve conflict")},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## moltenhub-build-api\n M file.go\n"}},
+		{cmd: addCommand(repoDir)},
+		{cmd: commitCommand(repoDir, baseSyncCommitMessage("main"))},
+		{cmd: fetchBranchCommand(repoDir, "main")},
+		{cmd: mergeFetchedBranchCommand(repoDir)},
+	}}
+
+	h := New(fake)
+	exitCode, stage, err := h.syncGeneratedWorkBranchWithBase(context.Background(), repo, agentruntime.Default(), repoDir, codexRunOptions{}, "Build API", "", "", ".", "codex")
+	if err != nil {
+		t.Fatalf("syncGeneratedWorkBranchWithBase() err = %v", err)
+	}
+	if exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("syncGeneratedWorkBranchWithBase() = (%d, %q), want success", exitCode, stage)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("remaining expected commands = %d", len(fake.exps))
 	}
 }
 
