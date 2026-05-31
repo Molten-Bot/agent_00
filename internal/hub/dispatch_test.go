@@ -523,6 +523,30 @@ func TestParseRunConfigJSONWithImages(t *testing.T) {
 	}
 }
 
+func TestParseRunConfigJSONWithLegacyDataURIImages(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := ParseRunConfigJSON([]byte(`{
+		"repo": "git@github.com:acme/repo.git",
+		"prompt": "inspect screenshot",
+		"images": [
+			"data:image/png;base64,aGVsbG8="
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("ParseRunConfigJSON() error = %v", err)
+	}
+	if got, want := len(cfg.Images), 1; got != want {
+		t.Fatalf("len(Images) = %d, want %d", got, want)
+	}
+	if got, want := cfg.Images[0].MediaType, "image/png"; got != want {
+		t.Fatalf("Images[0].MediaType = %q, want %q", got, want)
+	}
+	if got, want := cfg.Images[0].DataBase64, "aGVsbG8="; got != want {
+		t.Fatalf("Images[0].DataBase64 = %q, want %q", got, want)
+	}
+}
+
 func TestParseRunConfigJSONExpandsLibraryTaskPayload(t *testing.T) {
 	// This test resolves the on-disk library catalog and must not race tests that
 	// temporarily change process working directory.
