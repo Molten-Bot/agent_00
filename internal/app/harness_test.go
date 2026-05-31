@@ -5366,6 +5366,43 @@ func TestShouldRetryCodexWithoutSandbox(t *testing.T) {
 	}
 }
 
+func TestAgentOutputClaimsFileChangesUsesStdoutOnly(t *testing.T) {
+	t.Parallel()
+
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Issue already fixed in `HEAD`.",
+			"No new tracked diff.",
+		}, "\n"),
+		Stderr: strings.Join([]string{
+			"exec /bin/bash -lc 'git diff -- src/main.jsx'",
+			"Changed [AGENTS.md](/workspace/repo/AGENTS.md:1).",
+			"diff --git a/generated.js b/generated.js",
+		}, "\n"),
+	}
+
+	if agentOutputClaimsFileChanges(res) {
+		t.Fatal("agentOutputClaimsFileChanges() = true for stderr transcript noise, want false")
+	}
+}
+
+func TestAgentOutputClaimsFileChangesDetectsStdoutDiff(t *testing.T) {
+	t.Parallel()
+
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Changed [src/main.jsx](/workspace/repo/src/main.jsx:5427).",
+			"diff --git a/src/main.jsx b/src/main.jsx",
+			"--- a/src/main.jsx",
+			"+++ b/src/main.jsx",
+		}, "\n"),
+	}
+
+	if !agentOutputClaimsFileChanges(res) {
+		t.Fatal("agentOutputClaimsFileChanges() = false for stdout diff, want true")
+	}
+}
+
 func TestCodexReportedFailure(t *testing.T) {
 	t.Parallel()
 

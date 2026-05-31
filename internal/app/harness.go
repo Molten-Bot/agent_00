@@ -3639,7 +3639,7 @@ func (h Harness) runCodexCapture(
 }
 
 func agentOutputClaimsFileChanges(res execx.Result) bool {
-	text := strings.ReplaceAll(strings.Join([]string{res.Stdout, res.Stderr}, "\n"), "\r\n", "\n")
+	text := strings.ReplaceAll(res.Stdout, "\r\n", "\n")
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return false
