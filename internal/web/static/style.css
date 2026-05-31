@@ -6248,23 +6248,35 @@ body.onboarding-modal-open {
 
 .settings-tabbar {
   display: inline-grid;
-  grid-template-columns: repeat(2, minmax(110px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  gap: 10px;
   justify-self: start;
-  padding: 4px;
+  padding: 6px;
   border: 1px solid var(--surface-control-border);
   border-radius: var(--radius-card);
   background: var(--surface-control-bg);
 }
 
 .settings-tab {
-  min-height: 38px;
-  padding: 8px 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 10px 18px;
   border: 1px solid transparent;
   border-radius: var(--radius);
   background: transparent;
   color: var(--text-soft);
+  font-size: 1rem;
   font-weight: 700;
+}
+
+.settings-tab svg,
+.settings-tab .lucide,
+.settings-tab [data-lucide] {
+  width: 18px;
+  height: 18px;
 }
 
 .settings-tab:hover,
@@ -6310,6 +6322,40 @@ body.onboarding-modal-open {
   width: 18px;
   height: 18px;
   accent-color: var(--running);
+}
+
+.review-settings-merge-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 4px;
+  border: 1px solid var(--surface-control-border);
+  border-radius: var(--radius-card);
+  background: var(--surface-control-bg);
+}
+
+.review-settings-merge-option {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-soft);
+  font: inherit;
+  font-weight: 750;
+}
+
+.review-settings-merge-option:hover,
+.review-settings-merge-option:focus-visible {
+  color: var(--text);
+}
+
+.review-settings-merge-option.active,
+.review-settings-merge-option[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--running) 44%, var(--surface-control-border));
+  background: var(--surface-control-bg-strong);
+  color: var(--text);
+  box-shadow: var(--surface-control-shadow);
 }
 
 .stack {
@@ -6638,7 +6684,12 @@ body.onboarding-modal-open {
   }
 
   .settings-tabbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
+  }
+
+  .review-settings-merge-options {
+    grid-template-columns: 1fr;
   }
 
   .onboarding-profile-grid,
