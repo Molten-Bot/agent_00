@@ -34,6 +34,37 @@ func TestValidatePromptImageValidationPaths(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsLegacyDataURIPromptImageStrings(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	json := `{
+  "repo": "git@github.com:acme/repo.git",
+  "prompt": "inspect screenshot",
+  "images": [
+    "data:image/png;base64,aGVsbG8="
+  ]
+}`
+	if err := os.WriteFile(path, []byte(json), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got, want := len(cfg.Images), 1; got != want {
+		t.Fatalf("len(Images) = %d, want %d", got, want)
+	}
+	if got, want := cfg.Images[0].MediaType, "image/png"; got != want {
+		t.Fatalf("Images[0].MediaType = %q, want %q", got, want)
+	}
+	if got, want := cfg.Images[0].DataBase64, "aGVsbG8="; got != want {
+		t.Fatalf("Images[0].DataBase64 = %q, want %q", got, want)
+	}
+}
+
 func TestValidateSubdirAndRepoRefEdgeCases(t *testing.T) {
 	t.Parallel()
 

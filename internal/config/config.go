@@ -61,6 +61,75 @@ type PromptImage struct {
 	DataBase64 string `json:"dataBase64,omitempty"`
 }
 
+// UnmarshalJSON accepts the canonical object shape and legacy base64 data URI
+// strings emitted by older hub producers.
+func (p *PromptImage) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if bytes.Equal(data, []byte("null")) {
+		*p = PromptImage{}
+		return nil
+	}
+	if len(data) > 0 && data[0] == '"' {
+		var raw string
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return err
+		}
+		image, err := promptImageFromDataURI(raw)
+		if err != nil {
+			return err
+		}
+		*p = image
+		return nil
+	}
+
+	type promptImageAlias PromptImage
+	var parsed promptImageAlias
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return err
+	}
+	*p = PromptImage(parsed)
+	return nil
+}
+
+func promptImageFromDataURI(value string) (PromptImage, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return PromptImage{}, nil
+	}
+	if len(value) < len("data:") || !strings.EqualFold(value[:len("data:")], "data:") {
+		return PromptImage{}, fmt.Errorf("prompt image string must be a base64 data URI")
+	}
+
+	metadata, dataBase64, ok := strings.Cut(value[len("data:"):], ",")
+	if !ok {
+		return PromptImage{}, fmt.Errorf("prompt image data URI is missing base64 data")
+	}
+
+	mediaType := ""
+	hasBase64 := false
+	for idx, part := range strings.Split(metadata, ";") {
+		part = strings.TrimSpace(part)
+		if idx == 0 {
+			mediaType = strings.ToLower(part)
+			continue
+		}
+		if strings.EqualFold(part, "base64") {
+			hasBase64 = true
+		}
+	}
+	if !hasBase64 {
+		return PromptImage{}, fmt.Errorf("prompt image data URI must be base64 encoded")
+	}
+	if mediaType == "" {
+		return PromptImage{}, fmt.Errorf("prompt image data URI must include an image MIME type")
+	}
+
+	return PromptImage{
+		MediaType:  mediaType,
+		DataBase64: strings.TrimSpace(dataBase64),
+	}, nil
+}
+
 // ReviewConfig captures structured pull-request review context for review tasks.
 type ReviewConfig struct {
 	PRNumber                 int    `json:"prNumber,omitempty"`
