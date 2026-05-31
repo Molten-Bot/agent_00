@@ -2422,10 +2422,35 @@ func (h Harness) autoMergeCleanReview(
 	method := reviewMergeMethod(mergeMethod)
 	h.logf("stage=review status=start action=auto_merge method=%s pr_url=%s", method, metadata.URL)
 	if _, err := h.runCommand(ctx, "review", prMergeAutoCommand(repo.Dir, selector, method, headRefOID)); err != nil {
+		if isAutoMergeUnsupportedError(err) {
+			h.logf("stage=review status=skip action=auto_merge reason=unsupported_or_unconfigured pr_url=%s err=%q", metadata.URL, err)
+			return nil
+		}
 		return fmt.Errorf("enable clean-review auto-merge: %w", err)
 	}
 	h.logf("stage=review status=ok action=auto_merge method=%s pr_url=%s", method, metadata.URL)
 	return nil
+}
+
+func isAutoMergeUnsupportedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	unsupportedFragments := []string{
+		"enablepullrequestautomerge",
+		"protected branch rules not configured",
+		"auto-merge is disabled",
+		"auto merge is disabled",
+		"automerge is disabled",
+		"auto-merge is not enabled",
+	}
+	for _, fragment := range unsupportedFragments {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h Harness) writeWorkspaceFile(path string, data []byte, perm os.FileMode) error {
