@@ -652,9 +652,15 @@
           </div>
         </header>
 
-        <div id="settings-tabbar" class="settings-tabbar hidden" role="tablist" aria-label="Settings">
-          <button id="settings-tab-review" class="settings-tab active" type="button" role="tab" aria-selected="true" data-settings-tab="review">Review</button>
-          <button id="settings-tab-hub" class="settings-tab" type="button" role="tab" aria-selected="false" data-settings-tab="hub">Hub</button>
+        <div id="settings-tabbar" class="settings-tabbar hidden" role="tablist" aria-label="Settings sections">
+          <button id="settings-tab-review" class="settings-tab active" type="button" role="tab" aria-selected="true" data-settings-tab="review">
+            <i data-lucide="git-pull-request-arrow" aria-hidden="true"></i>
+            <span>Review</span>
+          </button>
+          <button id="settings-tab-hub" class="settings-tab" type="button" role="tab" aria-selected="false" data-settings-tab="hub">
+            <i data-lucide="radio-tower" aria-hidden="true"></i>
+            <span>Hub</span>
+          </button>
         </div>
 
         <form id="review-settings-form" class="stack review-settings-form hidden" data-settings-panel="review">
@@ -665,14 +671,15 @@
               <span>Auto-merge clean reviews</span>
             </label>
           </fieldset>
-          <label class="review-settings-section">
-            <span>Merge Method</span>
-            <select id="review-settings-merge-method">
-              <option value="squash">Squash</option>
-              <option value="merge">Merge commit</option>
-              <option value="rebase">Rebase</option>
-            </select>
-          </label>
+          <div class="review-settings-section">
+            <span id="review-settings-merge-method-label">Merge Method</span>
+            <input id="review-settings-merge-method" type="hidden" value="squash">
+            <div class="review-settings-merge-options" role="radiogroup" aria-labelledby="review-settings-merge-method-label">
+              <button class="review-settings-merge-option active" type="button" role="radio" aria-checked="true" data-review-settings-merge-method="squash">Squash</button>
+              <button class="review-settings-merge-option" type="button" role="radio" aria-checked="false" data-review-settings-merge-method="merge">Merge</button>
+              <button class="review-settings-merge-option" type="button" role="radio" aria-checked="false" data-review-settings-merge-method="rebase">Rebase</button>
+            </div>
+          </div>
           <div class="onboarding-form-actions hub-setup-footer">
             <p id="review-settings-status" class="hub-setup-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
             <div class="hub-setup-actions">
@@ -2112,6 +2119,7 @@
     const reviewSettingsForm = document.getElementById("review-settings-form");
     const reviewSettingsAutoMerge = document.getElementById("review-settings-auto-merge");
     const reviewSettingsMergeMethod = document.getElementById("review-settings-merge-method");
+    const reviewSettingsMergeOptions = Array.from(document.querySelectorAll("[data-review-settings-merge-method]"));
     const reviewSettingsStatus = document.getElementById("review-settings-status");
     const reviewSettingsClose = document.getElementById("review-settings-close");
     const reviewSettingsSave = document.getElementById("review-settings-save");
@@ -2976,14 +2984,26 @@
       reviewSettingsStatus.textContent = value;
     }
 
+    function setReviewSettingsMergeMethod(method) {
+      const normalized = ["merge", "squash", "rebase"].includes(String(method || "").trim().toLowerCase())
+        ? String(method || "").trim().toLowerCase()
+        : "squash";
+      if (reviewSettingsMergeMethod instanceof HTMLInputElement) {
+        reviewSettingsMergeMethod.value = normalized;
+      }
+      reviewSettingsMergeOptions.forEach((button) => {
+        const selected = button.getAttribute("data-review-settings-merge-method") === normalized;
+        button.classList.toggle("active", selected);
+        button.setAttribute("aria-checked", selected ? "true" : "false");
+      });
+    }
+
     function applyReviewSettingsState(nextState) {
       state.reviewSettings = normalizeReviewSettings(nextState);
       if (reviewSettingsAutoMerge instanceof HTMLInputElement) {
         reviewSettingsAutoMerge.checked = state.reviewSettings.autoMerge;
       }
-      if (reviewSettingsMergeMethod instanceof HTMLSelectElement) {
-        reviewSettingsMergeMethod.value = state.reviewSettings.mergeMethod;
-      }
+      setReviewSettingsMergeMethod(state.reviewSettings.mergeMethod);
       if (state.reviewSettings.message) {
         setReviewSettingsStatus("ok", state.reviewSettings.message);
       }
@@ -3042,6 +3062,9 @@
       }
       if (reviewSettingsAutoMerge) reviewSettingsAutoMerge.disabled = state.hubSetupBusy;
       if (reviewSettingsMergeMethod) reviewSettingsMergeMethod.disabled = state.hubSetupBusy;
+      reviewSettingsMergeOptions.forEach((button) => {
+        button.disabled = state.hubSetupBusy;
+      });
       if (reviewSettingsSave) reviewSettingsSave.disabled = state.hubSetupBusy;
       if (reviewSettingsClose) reviewSettingsClose.disabled = state.hubSetupBusy;
       syncHubSetupSubmitState();
@@ -3324,6 +3347,8 @@
           auto_merge: payload.auto_merge,
           merge_method: payload.merge_method,
         });
+        setHubSetupOpen(false);
+        state.hubSetupDialogMode = "connect";
       } catch (err) {
         const message = err && err.message ? err.message : "Review settings save failed.";
         setReviewSettingsStatus("error", message);
@@ -12699,6 +12724,11 @@
     if (reviewSettingsForm) {
       reviewSettingsForm.addEventListener("submit", submitReviewSettings);
     }
+    reviewSettingsMergeOptions.forEach((button) => {
+      button.addEventListener("click", () => {
+        setReviewSettingsMergeMethod(button.getAttribute("data-review-settings-merge-method"));
+      });
+    });
     if (reviewSettingsClose) {
       reviewSettingsClose.addEventListener("click", () => {
         trackAnalyticsEvent("hub_setup_closed", { source: "review_settings_close", dialog_mode: state.hubSetupDialogMode });
