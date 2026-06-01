@@ -2307,7 +2307,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "function clipboardPngFiles(event)") ||
 		!strings.Contains(markup, "prompt.addEventListener(\"paste\", handleChatRepoImagePaste);") ||
 		!strings.Contains(markup, `chatIcon.className = "chat-repo-card-chat-icon";`) ||
-		!strings.Contains(markup, "chatIcon.innerHTML = `<i data-lucide=\"message-circle\" aria-hidden=\"true\"></i>`;") ||
+		!strings.Contains(markup, "chatIcon.innerHTML = `<i data-lucide=\"${hasPendingRelease ? \"lightbulb\" : \"message-circle\"}\" aria-hidden=\"true\"></i>`;") ||
 		!strings.Contains(markup, `const openPrompt = () => {`) ||
 		!strings.Contains(markup, `if (isChatRepoCardControlTarget(event.target, card)) return;`) ||
 		!strings.Contains(markup, `card.setAttribute("aria-expanded", "true");`) ||
@@ -2319,6 +2319,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "images: promptImages,") ||
 		!strings.Contains(markup, "setImages([]);") {
 		t.Fatalf("expected chat repository submits to include pasted screenshots and clear them after queueing")
+	}
+	if !strings.Contains(markup, "function chatRepoHasPendingRelease(repoKey)") ||
+		!strings.Contains(markup, "function pendingReleaseChatRepoKeys()") ||
+		!strings.Contains(markup, "hasPendingRelease ? \"lightbulb\" : \"message-circle\"") ||
+		!strings.Contains(markup, "tab.pendingRelease ? \"lightbulb\" : \"message-circle\"") {
+		t.Fatalf("expected chat project icons to switch to lucide lightbulb when a pull request is pending release")
 	}
 	if !strings.Contains(markup, "chatPromptDrafts: new Map(),") ||
 		!strings.Contains(markup, `chatOpenRepoKey: "",`) ||

@@ -1159,9 +1159,6 @@ func (d Daemon) handleDispatch(
 			if status, state, message, details, ok := dispatchStatusFromHarnessLogLine(line); ok {
 				d.publishDispatchStatus(ctx, api, cfg, dispatch, status, state, message, details)
 			}
-			if childDispatch, status, state, message, details, ok := dispatchChildWorkflowStatusFromHarnessLogLine(dispatch, line); ok {
-				d.publishDispatchStatus(ctx, api, cfg, childDispatch, status, state, message, details)
-			}
 			return
 		}
 		d.logf("dispatch %s", line)

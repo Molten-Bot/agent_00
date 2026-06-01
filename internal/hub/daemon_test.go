@@ -860,7 +860,7 @@ func (r *workflowVisibilityRunner) Run(_ context.Context, cmd execx.Command) (ex
 	return execx.Result{}, nil
 }
 
-func TestHandleDispatchPublishesParentAndChildWorkflowStatusesForAgentLogs(t *testing.T) {
+func TestHandleDispatchPublishesAgentLogsOnParentTaskOnly(t *testing.T) {
 	t.Parallel()
 
 	runCfg := config.Config{
@@ -897,7 +897,7 @@ func TestHandleDispatchPublishesParentAndChildWorkflowStatusesForAgentLogs(t *te
 	statusUpdates := statusPayloads(api.published)
 	api.mu.Unlock()
 
-	var parentStart, childStart map[string]any
+	var parentStart map[string]any
 	for _, payload := range statusUpdates {
 		details, _ := payload["details"].(map[string]any)
 		if details["stage"] != "codex" || details["stage_status"] != "start" {
@@ -907,7 +907,7 @@ func TestHandleDispatchPublishesParentAndChildWorkflowStatusesForAgentLogs(t *te
 		case "task-workflow":
 			parentStart = payload
 		case "task-workflow-child-agent-implementation-1":
-			childStart = payload
+			t.Fatalf("unexpected child workflow task status: %#v", payload)
 		}
 	}
 	if parentStart == nil {
@@ -917,32 +917,6 @@ func TestHandleDispatchPublishesParentAndChildWorkflowStatusesForAgentLogs(t *te
 	parentMetadata, _ := parentStatusUpdate["metadata"].(map[string]any)
 	if _, hasWorkflowNode := parentMetadata["workflow_node_type"]; hasWorkflowNode {
 		t.Fatalf("parent metadata unexpectedly marked as workflow child: %#v", parentMetadata)
-	}
-
-	if childStart == nil {
-		t.Fatalf("child codex start status missing: %#v", statusUpdates)
-	}
-	if got := childStart["context_id"]; got != "ctx-workflow" {
-		t.Fatalf("child context_id = %#v, want ctx-workflow", got)
-	}
-	if got := childStart["a2a_state"]; got != a2a.TaskStateSubmitted.String() {
-		t.Fatalf("child a2a_state = %#v, want %s", got, a2a.TaskStateSubmitted)
-	}
-	childStatusUpdate, _ := childStart["statusUpdate"].(map[string]any)
-	childMetadata, _ := childStatusUpdate["metadata"].(map[string]any)
-	for key, want := range map[string]any{
-		"parent_task_id":     "task-workflow",
-		"workflow_node_type": workflowNodeTypeAgentInvocation,
-		"agent_harness":      "codex",
-		"agent_run_id":       "agent-implementation-1",
-		"mode":               "implementation",
-		"repo":               "repo",
-		"repo_dir":           "repo",
-		"target":             "services/api",
-	} {
-		if got := childMetadata[key]; got != want {
-			t.Fatalf("child metadata[%s] = %#v, want %#v", key, got, want)
-		}
 	}
 }
 
