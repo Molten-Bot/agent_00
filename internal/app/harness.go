@@ -2615,6 +2615,11 @@ func (h Harness) completeReviewRun(
 	}
 
 	outcome, outcomeOK := parseReviewOutcome(reviewOutputText(agentRes))
+	writebackSelector, writebackRepo := reviewWritebackTarget(metadata, *cfg.Review, selector)
+	if writebackSelector == "" {
+		return fmt.Errorf("review selector is required")
+	}
+
 	if reviewWritebackMode(cfg.Review.Writeback) == "summary-comment" {
 		body := reviewCommentBody(agentRes, outcome, outcomeOK)
 		bodyPath := reviewSummaryBodyPath(runDir, metadata.Number)
@@ -2622,17 +2627,49 @@ func (h Harness) completeReviewRun(
 			return fmt.Errorf("write review summary body: %w", err)
 		}
 		h.logf("stage=review status=start action=comment pr_url=%s", prURL)
-		if _, err := h.runCommand(ctx, "review", prReviewSummaryCommand(repo.Dir, selector, bodyPath)); err != nil {
+		if err := h.postReviewSummary(ctx, repo.Dir, writebackSelector, writebackRepo, metadata.Number, bodyPath, prURL); err != nil {
 			return fmt.Errorf("post pull request review summary: %w", err)
 		}
 		h.logf("stage=review status=ok action=comment pr_url=%s", prURL)
 	}
 
 	if cfg.Review.AutoMerge {
-		if err := h.autoMergeCleanReview(ctx, *repo, selector, cfg.Review.MergeMethod, metadata, outcome); err != nil {
+		if err := h.autoMergeCleanReview(ctx, *repo, writebackSelector, writebackRepo, cfg.Review.MergeMethod, metadata, outcome); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+func reviewWritebackTarget(metadata reviewPRMetadata, reviewCfg config.ReviewConfig, fallbackSelector string) (string, string) {
+	prURL := pickFirstNonEmpty(metadata.URL, reviewCfg.PRURL)
+	selector := strings.TrimSpace(fallbackSelector)
+	if metadata.Number > 0 {
+		selector = strconv.Itoa(metadata.Number)
+	} else if prSelector := githubutil.PullRequestSelector(prURL); prSelector != "" {
+		selector = prSelector
+	}
+	return selector, githubutil.PullRequestRepository(prURL)
+}
+
+func (h Harness) postReviewSummary(
+	ctx context.Context,
+	repoDir string,
+	selector string,
+	targetRepo string,
+	prNumber int,
+	bodyPath string,
+	prURL string,
+) error {
+	if _, err := h.runCommand(ctx, "review", prReviewSummaryCommand(repoDir, selector, targetRepo, bodyPath)); err == nil {
+		return nil
+	} else {
+		h.logf("stage=review status=warn action=comment_review_failed pr_url=%s err=%q", prURL, err)
+		if _, fallbackErr := h.runCommand(ctx, "review", prReviewSummaryFallbackCommand(repoDir, selector, targetRepo, prNumber, bodyPath)); fallbackErr != nil {
+			return fmt.Errorf("review command failed: %w; fallback pull request comment failed: %v", err, fallbackErr)
+		}
+	}
+	h.logf("stage=review status=ok action=comment_fallback pr_url=%s", prURL)
 	return nil
 }
 
@@ -2640,6 +2677,7 @@ func (h Harness) autoMergeCleanReview(
 	ctx context.Context,
 	repo repoWorkspace,
 	selector string,
+	targetRepo string,
 	mergeMethod string,
 	metadata reviewPRMetadata,
 	outcome reviewOutcome,
@@ -2664,7 +2702,7 @@ func (h Harness) autoMergeCleanReview(
 
 	method := reviewMergeMethod(mergeMethod)
 	h.logf("stage=review status=start action=auto_merge method=%s pr_url=%s", method, metadata.URL)
-	if _, err := h.runCommand(ctx, "review", prMergeAutoCommand(repo.Dir, selector, method, headRefOID)); err != nil {
+	if _, err := h.runCommand(ctx, "review", prMergeAutoCommand(repo.Dir, selector, targetRepo, method, headRefOID)); err != nil {
 		if isAutoMergeUnsupportedError(err) {
 			h.logf("stage=review status=skip action=auto_merge reason=unsupported_or_unconfigured pr_url=%s err=%q", metadata.URL, err)
 			return nil
@@ -3006,15 +3044,45 @@ func prReviewReviewsCommand(repoDir string, number int) execx.Command {
 	}
 }
 
-func prReviewSummaryCommand(repoDir, selector, bodyFile string) execx.Command {
+func prReviewSummaryCommand(repoDir, selector, targetRepo, bodyFile string) execx.Command {
+	args := []string{"pr", "review", selector, "--comment", "--body-file", bodyFile}
+	args = appendGHRepoArg(args, targetRepo)
 	return execx.Command{
 		Dir:  repoDir,
 		Name: "gh",
-		Args: []string{"pr", "review", selector, "--comment", "--body-file", bodyFile},
+		Args: args,
 	}
 }
 
-func prMergeAutoCommand(repoDir, selector, method, headRefOID string) execx.Command {
+func prReviewSummaryFallbackCommand(repoDir, selector, targetRepo string, prNumber int, bodyFile string) execx.Command {
+	targetRepo = strings.TrimSpace(targetRepo)
+	if targetRepo != "" {
+		if prNumber <= 0 {
+			prNumber, _ = strconv.Atoi(strings.TrimSpace(selector))
+		}
+		if prNumber > 0 {
+			return execx.Command{
+				Dir:  repoDir,
+				Name: "gh",
+				Args: []string{
+					"api",
+					fmt.Sprintf("repos/%s/issues/%d/comments", targetRepo, prNumber),
+					"-F",
+					"body=@" + bodyFile,
+				},
+			}
+		}
+	}
+	args := []string{"pr", "comment", selector, "--body-file", bodyFile}
+	args = appendGHRepoArg(args, targetRepo)
+	return execx.Command{
+		Dir:  repoDir,
+		Name: "gh",
+		Args: args,
+	}
+}
+
+func prMergeAutoCommand(repoDir, selector, targetRepo, method, headRefOID string) execx.Command {
 	args := []string{"pr", "merge", selector, "--auto", "--match-head-commit", headRefOID}
 	switch reviewMergeMethod(method) {
 	case "merge":
@@ -3024,11 +3092,20 @@ func prMergeAutoCommand(repoDir, selector, method, headRefOID string) execx.Comm
 	default:
 		args = append(args, "--squash")
 	}
+	args = appendGHRepoArg(args, targetRepo)
 	return execx.Command{
 		Dir:  repoDir,
 		Name: "gh",
 		Args: args,
 	}
+}
+
+func appendGHRepoArg(args []string, targetRepo string) []string {
+	targetRepo = strings.TrimSpace(targetRepo)
+	if targetRepo == "" {
+		return args
+	}
+	return append(args, "--repo", targetRepo)
 }
 
 func fetchRemoteBranchCommand(repoDir, branch string) execx.Command {

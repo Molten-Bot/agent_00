@@ -679,7 +679,7 @@ func TestRunBuildsReviewContextBeforeInvokingCodex(t *testing.T) {
 		{cmd: reviewDiffPatchCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffPatch}},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(strings.TrimSpace(cfg.Prompt+"\n\n"+expectedPreparedReviewContext(repoURLFromConfig(cfg), metadataJSON, commentsText, diffStat, diffPatch)), agentsPath))},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## main\n"}},
-		{cmd: prReviewSummaryCommand(repoDir, "42", reviewSummaryBodyPath(runDir, 42))},
+		{cmd: prReviewSummaryCommand(repoDir, "42", "acme/repo", reviewSummaryBodyPath(runDir, 42))},
 	}}
 
 	h := New(fake)
@@ -745,8 +745,8 @@ func TestRunBuildsReviewContextFromHeadBranchSelector(t *testing.T) {
 		{cmd: reviewDiffPatchCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffPatch}},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(strings.TrimSpace(cfg.Prompt+"\n\n"+expectedPreparedReviewContext(repoURLFromConfig(cfg), metadataJSON, commentsText, diffStat, diffPatch)), agentsPath)), res: execx.Result{Stdout: reviewOutput}},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## main\n"}},
-		{cmd: prReviewSummaryCommand(repoDir, "feature/improve-tests", reviewSummaryBodyPath(runDir, 42))},
-		{cmd: prMergeAutoCommand(repoDir, "feature/improve-tests", "squash", "abc123")},
+		{cmd: prReviewSummaryCommand(repoDir, "42", "acme/repo", reviewSummaryBodyPath(runDir, 42))},
+		{cmd: prMergeAutoCommand(repoDir, "42", "acme/repo", "squash", "abc123")},
 	}}
 
 	h := New(fake)
@@ -769,6 +769,49 @@ func TestRunBuildsReviewContextFromHeadBranchSelector(t *testing.T) {
 	}
 }
 
+func TestCompleteReviewRunFallsBackToIssueCommentWhenReviewWritebackFails(t *testing.T) {
+	t.Parallel()
+
+	runDir := t.TempDir()
+	repoDir := t.TempDir()
+	bodyPath := reviewSummaryBodyPath(runDir, 42)
+	reviewErr := errors.New("run gh [pr review 42 --comment --body-file body --repo acme/repo]: exit status 1 (GraphQL: Could not resolve to a Repository with the name 'acme/repo'. (repository))")
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: prReviewSummaryCommand(repoDir, "42", "acme/repo", bodyPath),
+			err: reviewErr,
+		},
+		{cmd: prReviewSummaryFallbackCommand(repoDir, "42", "acme/repo", 42, bodyPath)},
+	}}
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	cfg := config.Config{Review: &config.ReviewConfig{PRNumber: 42}}
+	repo := repoWorkspace{Dir: repoDir}
+	reviewContext := &preparedReviewContext{
+		Selector: "42",
+		Metadata: reviewPRMetadata{
+			Number:      42,
+			URL:         "https://github.com/acme/repo/pull/42",
+			HeadRefName: "feature/improve-tests",
+		},
+	}
+	agentRes := execx.Result{Stdout: "```json\n{\"status\":\"findings\",\"mergeReady\":false,\"summary\":\"One issue.\",\"findings\":[{\"severity\":\"Medium\",\"path\":\"src/app.js\",\"line\":9,\"title\":\"Bug\"}]}\n```"}
+
+	if err := h.completeReviewRun(context.Background(), cfg, &repo, reviewContext, agentRes, runDir); err != nil {
+		t.Fatalf("completeReviewRun() err = %v, want nil after fallback", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+	if got := strings.Join(logs, "\n"); !strings.Contains(got, "action=comment_review_failed") || !strings.Contains(got, "action=comment_fallback") {
+		t.Fatalf("logs = %q, want review failure and fallback entries", got)
+	}
+}
+
 func TestAutoMergeCleanReviewSkipsUnsupportedAutoMergeConfiguration(t *testing.T) {
 	t.Parallel()
 
@@ -783,7 +826,7 @@ func TestAutoMergeCleanReviewSkipsUnsupportedAutoMergeConfiguration(t *testing.T
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{
-			cmd: prMergeAutoCommand(repo.Dir, "42", "squash", "abc123"),
+			cmd: prMergeAutoCommand(repo.Dir, "42", "", "squash", "abc123"),
 			err: autoMergeErr,
 		},
 	}}
@@ -794,7 +837,7 @@ func TestAutoMergeCleanReviewSkipsUnsupportedAutoMergeConfiguration(t *testing.T
 		logs = append(logs, fmt.Sprintf(format, args...))
 	}
 
-	if err := h.autoMergeCleanReview(context.Background(), repo, "42", "squash", metadata, outcome); err != nil {
+	if err := h.autoMergeCleanReview(context.Background(), repo, "42", "", "squash", metadata, outcome); err != nil {
 		t.Fatalf("autoMergeCleanReview() err = %v, want nil for unsupported auto-merge config", err)
 	}
 	if len(fake.exps) != 0 {
