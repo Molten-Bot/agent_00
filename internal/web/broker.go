@@ -81,6 +81,7 @@ type Task struct {
 	WorkspaceDir      string        `json:"workspace_dir,omitempty"`
 	Branch            string        `json:"branch,omitempty"`
 	PRURL             string        `json:"pr_url,omitempty"`
+	LiveAppURL        string        `json:"live_app_url,omitempty"`
 	Error             string        `json:"error,omitempty"`
 	StartedAt         string        `json:"started_at"`
 	UpdatedAt         string        `json:"updated_at"`
@@ -301,6 +302,7 @@ type taskState struct {
 	WorkspaceDir      string
 	Branch            string
 	PRURL             string
+	LiveAppURL        string
 	Error             string
 	StartedAt         time.Time
 	UpdatedAt         time.Time
@@ -462,6 +464,7 @@ func (b *Broker) Snapshot() Snapshot {
 			WorkspaceDir:      t.WorkspaceDir,
 			Branch:            t.Branch,
 			PRURL:             t.PRURL,
+			LiveAppURL:        t.LiveAppURL,
 			Error:             t.Error,
 			StartedAt:         t.StartedAt.UTC().Format(time.RFC3339Nano),
 			UpdatedAt:         t.UpdatedAt.UTC().Format(time.RFC3339Nano),
@@ -520,6 +523,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		WorkspaceDir:      t.WorkspaceDir,
 		Branch:            t.Branch,
 		PRURL:             t.PRURL,
+		LiveAppURL:        t.LiveAppURL,
 		Error:             t.Error,
 		StartedAt:         t.StartedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt:         t.UpdatedAt.UTC().Format(time.RFC3339Nano),
@@ -1658,6 +1662,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 	}()
 
 	t.UpdatedAt = now
+	t.LiveAppURL = firstNonEmpty(taskLiveAppURLFromFields(fields), t.LiveAppURL)
 
 	if strings.HasPrefix(line, "dispatch status=start") {
 		t.Status = "running"
@@ -2379,6 +2384,41 @@ func taskPRURLFromFields(fields map[string]string) string {
 	prURLs := splitCommaSeparatedNonEmpty(fields["pr_urls"])
 	if len(prURLs) > 0 {
 		return prURLs[0]
+	}
+	return ""
+}
+
+func taskLiveAppURLFromFields(fields map[string]string) string {
+	if fields == nil {
+		return ""
+	}
+	for _, key := range []string{
+		"live_app_url",
+		"liveAppURL",
+		"live_app",
+		"app_url",
+		"appURL",
+		"preview_url",
+		"previewURL",
+	} {
+		if url := normalizeHTTPURL(fields[key]); url != "" {
+			return url
+		}
+	}
+	event := strings.ToLower(strings.TrimSpace(firstNonEmpty(fields["event"], fields["kind"], fields["type"])))
+	if strings.Contains(event, "live_app") || strings.Contains(event, "app_url") || strings.Contains(event, "preview") {
+		return normalizeHTTPURL(fields["url"])
+	}
+	return ""
+}
+
+func normalizeHTTPURL(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return value
 	}
 	return ""
 }
