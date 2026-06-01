@@ -1510,6 +1510,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `state.speech.enabled && state.speech.reachable`) {
 		t.Fatalf("expected index html to show whisper connection only when speech sidecar is reachable")
 	}
+	if !strings.Contains(markup, `const available = supported && Boolean(state.speech.enabled) && Boolean(state.speech.reachable);`) ||
+		!strings.Contains(markup, `browserSpeechCaptureSupported() && Boolean(state.speech.enabled) && Boolean(state.speech.reachable),`) {
+		t.Fatalf("expected index html to hide speech dictation buttons when speech is unavailable")
+	}
+	if !strings.Contains(markup, `body?.code === "speech_unavailable" || body?.code === "speech_disabled"`) ||
+		!strings.Contains(markup, `state.speech.reachable = false;`) {
+		t.Fatalf("expected index html to hide speech dictation buttons after unavailable transcribe responses")
+	}
 	if !strings.Contains(markup, `fetch("/api/speech/transcribe",`) {
 		t.Fatalf("expected index html to use configured speech language defaults")
 	}
@@ -2853,10 +2861,12 @@ func TestHandlerServesChatView(t *testing.T) {
 		`function activeChatPromptInput()`,
 		`function refreshChatSpeechStatus()`,
 		`fetch("/api/speech/status", { cache: "no-store" })`,
+		`const visible = browserSpeechCaptureSupported() && Boolean(speech.enabled) && Boolean(speech.reachable);`,
 		`function toggleChatSpeechDictation()`,
 		`function startChatSpeechDictation()`,
 		`function stopChatSpeechDictation()`,
 		`fetch("/api/speech/transcribe",`,
+		`body && (body.code === "speech_unavailable" || body.code === "speech_disabled")`,
 		`function appendDictatedChatText(input, text)`,
 		`speechToggle.addEventListener("click",`,
 		`const CHAT_REPOS_PER_PAGE = 15;`,

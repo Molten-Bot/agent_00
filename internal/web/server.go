@@ -881,6 +881,10 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               });
               const body = await response.json().catch(() => null);
               if (!response.ok || !body || !body.ok) {
+                if (body && (body.code === "speech_unavailable" || body.code === "speech_disabled")) {
+                  speech.enabled = body.code !== "speech_disabled";
+                  speech.reachable = false;
+                }
                 throw new Error(body && body.error ? body.error : "speech http " + response.status);
               }
               const text = String(body.text || "").trim();

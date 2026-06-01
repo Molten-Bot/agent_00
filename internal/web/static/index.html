@@ -5601,7 +5601,7 @@
 
     function syncPromptSpeechButton() {
       const supported = browserSpeechCaptureSupported();
-      const available = supported && Boolean(state.speech.enabled);
+      const available = supported && Boolean(state.speech.enabled) && Boolean(state.speech.reachable);
       const activeMode = state.speech.target?.mode || "";
       const anyBusy = Boolean(state.speech.recording || state.speech.submitting);
       syncSpeechToggleButton(
@@ -5820,6 +5820,10 @@
         });
         const body = await response.json().catch(() => null);
         if (!response.ok || !body?.ok) {
+          if (body?.code === "speech_unavailable" || body?.code === "speech_disabled") {
+            state.speech.enabled = body.code !== "speech_disabled";
+            state.speech.reachable = false;
+          }
           throw new Error(body?.error || `speech http ${response.status}`);
         }
         const text = String(body.text || "").trim();
@@ -7244,7 +7248,7 @@
       card.appendChild(panel);
       syncSpeechToggleButton(
         speechToggle,
-        browserSpeechCaptureSupported() && Boolean(state.speech.enabled),
+        browserSpeechCaptureSupported() && Boolean(state.speech.enabled) && Boolean(state.speech.reachable),
         Boolean(state.speech.recording && state.speech.target?.button === speechToggle),
         Boolean(state.speech.submitting && state.speech.target?.button === speechToggle),
         "Dictate chat prompt",
