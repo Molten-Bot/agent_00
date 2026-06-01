@@ -6974,6 +6974,20 @@
       return Boolean(key && activeChatRepoKeys().has(key));
     }
 
+    function chatRepoHasPendingRelease(repoKey) {
+      const key = String(repoKey || "").trim();
+      if (!key) return false;
+      for (const task of state.snapshot?.tasks || []) {
+        if (!isSuccessfulTaskStatus(task?.status) || isMergedTask(task) || !taskPullRequestURL(task)) {
+          continue;
+        }
+        if (chatRepoKeysForTask(task).includes(key)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
     function canCloseChatProject(repoKey) {
       const key = String(repoKey || "").trim();
       return Boolean(key && state.chatActiveRepoTab === key && !chatRepoHasActiveWork(key));
@@ -7051,9 +7065,10 @@
 
       const chatIcon = document.createElement("span");
       chatIcon.className = "chat-repo-card-chat-icon";
-      chatIcon.title = "Prompt";
+      const hasPendingRelease = chatRepoHasPendingRelease(repoKey);
+      chatIcon.title = hasPendingRelease ? "Pending release" : "Prompt";
       chatIcon.setAttribute("aria-hidden", "true");
-      chatIcon.innerHTML = `<i data-lucide="message-circle" aria-hidden="true"></i>`;
+      chatIcon.innerHTML = `<i data-lucide="${hasPendingRelease ? "lightbulb" : "message-circle"}" aria-hidden="true"></i>`;
       actions.appendChild(chatIcon);
       head.appendChild(actions);
       card.appendChild(head);
@@ -7921,6 +7936,7 @@
       repos.push(...state.chatPromptedRepos);
 
       const activeKeys = activeChatRepoKeys();
+      const pendingReleaseKeys = pendingReleaseChatRepoKeys();
       const seen = new Set();
       const out = [];
       for (const repo of repos) {
@@ -7928,7 +7944,7 @@
         if (!key || seen.has(key)) continue;
         if (state.chatClosedRepoKeys.has(key) && !activeKeys.has(key)) continue;
         seen.add(key);
-        out.push({ key, value: repo, label: chatRepoTabLabel(repo) });
+        out.push({ key, value: repo, label: chatRepoTabLabel(repo), pendingRelease: pendingReleaseKeys.has(key) });
       }
       const labelCounts = new Map();
       for (const tab of out) {
@@ -7940,6 +7956,19 @@
         }
       }
       return out;
+    }
+
+    function pendingReleaseChatRepoKeys() {
+      const keys = new Set();
+      for (const task of state.snapshot?.tasks || []) {
+        if (!isSuccessfulTaskStatus(task?.status) || isMergedTask(task) || !taskPullRequestURL(task)) {
+          continue;
+        }
+        for (const key of chatRepoKeysForTask(task)) {
+          keys.add(key);
+        }
+      }
+      return keys;
     }
 
     function chatRepoMatchesTab(repo, tab) {
@@ -8070,7 +8099,7 @@
         const icon = document.createElement("span");
         icon.className = "chat-repo-tab-icon";
         icon.setAttribute("aria-hidden", "true");
-        icon.innerHTML = `<i data-lucide="message-circle" aria-hidden="true"></i>`;
+        icon.innerHTML = `<i data-lucide="${tab.pendingRelease ? "lightbulb" : "message-circle"}" aria-hidden="true"></i>`;
         const label = document.createElement("span");
         label.className = "chat-repo-tab-label";
         label.textContent = tab.label;
@@ -8123,6 +8152,7 @@
           return {
             key: tab.key,
             label: tab.label,
+            pendingRelease: Boolean(tab.pendingRelease),
             hasActivity,
             tone: hasActivity ? (state.chatRepoActivityTones.get(tab.key) || "update") : "",
           };

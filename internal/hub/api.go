@@ -1651,9 +1651,7 @@ func mergeWorkflowVisibilityMetadata(metadata map[string]any) {
 	if metadata == nil {
 		return
 	}
-	metadata["workflow_model"] = "single_agent_child_tasks"
-	metadata["workflow_node_types"] = []string{workflowNodeTypeAgentInvocation}
-	metadata["workflow_child_harnesses"] = agentruntime.SupportedHarnesses()
+	metadata["workflow_model"] = "single_agent"
 }
 
 func mergeRuntimeRegistrationMetadata(metadata map[string]any, cfg InitConfig, libraryTasks []library.TaskSummary) {

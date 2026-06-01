@@ -107,16 +107,14 @@ func TestSyncProfileUsesAgentMetadataPayload(t *testing.T) {
 	if got := metadata["harness"]; got != runtimeIdentifier+"@v1" {
 		t.Fatalf("metadata.harness = %#v", got)
 	}
-	if got := metadata["workflow_model"]; got != "single_agent_child_tasks" {
+	if got := metadata["workflow_model"]; got != "single_agent" {
 		t.Fatalf("metadata.workflow_model = %#v", got)
 	}
-	nodeTypes, ok := metadata["workflow_node_types"].([]any)
-	if !ok || len(nodeTypes) != 1 || nodeTypes[0] != workflowNodeTypeAgentInvocation {
-		t.Fatalf("metadata.workflow_node_types = %#v", metadata["workflow_node_types"])
+	if _, ok := metadata["workflow_node_types"]; ok {
+		t.Fatalf("metadata.workflow_node_types unexpectedly present: %#v", metadata["workflow_node_types"])
 	}
-	childHarnesses, ok := metadata["workflow_child_harnesses"].([]any)
-	if !ok || !stringSliceContainsAny(childHarnesses, "codex") || !stringSliceContainsAny(childHarnesses, "claude") {
-		t.Fatalf("metadata.workflow_child_harnesses = %#v", metadata["workflow_child_harnesses"])
+	if _, ok := metadata["workflow_child_harnesses"]; ok {
+		t.Fatalf("metadata.workflow_child_harnesses unexpectedly present: %#v", metadata["workflow_child_harnesses"])
 	}
 	skills, ok := metadata["skills"].([]any)
 	if !ok || len(skills) != 2 {
@@ -136,15 +134,6 @@ func TestSyncProfileUsesAgentMetadataPayload(t *testing.T) {
 	if got := strings.TrimSpace(secondSkill["name"].(string)); got != "code_review" {
 		t.Fatalf("metadata.skills[1].name = %q, want code_review", got)
 	}
-}
-
-func stringSliceContainsAny(values []any, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestSyncProfileClearsMetadataEmojiWhenProfileEmojiEmpty(t *testing.T) {
