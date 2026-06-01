@@ -5154,7 +5154,15 @@
         })
         .transition()
         .duration(220)
-        .attr("d", arc);
+        .attrTween("d", function (datum) {
+          const previous = this.__dashboardArcDatum || datum;
+          const interpolate = d3.interpolateObject(previous, datum);
+          return (time) => {
+            const current = interpolate(time);
+            this.__dashboardArcDatum = current;
+            return arc(current);
+          };
+        });
 
       root.selectAll("circle.dashboard-d3-empty")
         .data(total > 0 ? [] : [null])
