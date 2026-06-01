@@ -1397,8 +1397,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, "function taskRepoRootURL(task)") ||
 		!strings.Contains(markup, "function taskGitHubLinkURL(task)") ||
 		!strings.Contains(markup, "function taskPullRequestURL(task)") ||
+		!strings.Contains(markup, "function taskLiveAppURL(task)") ||
+		!strings.Contains(markup, "liveAppURL: taskLiveAppURL(task),") ||
 		!strings.Contains(markup, "return `https://github.com/${repoPath}`;") {
 		t.Fatalf("expected index html to derive unfinished task GitHub links from repository roots")
+	}
+	if strings.Contains(markup, "renderTaskLiveAppAction") ||
+		strings.Contains(markup, "task-live-app-link") {
+		t.Fatalf("expected task cards to avoid a duplicate live-app open-in-new-window action")
 	}
 	if !strings.Contains(markup, "if (prURL) {") ||
 		!strings.Contains(markup, "return prURL;") {

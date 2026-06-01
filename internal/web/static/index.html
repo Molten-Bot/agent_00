@@ -9073,6 +9073,10 @@
       return String(task?.pr_url || "").trim();
     }
 
+    function taskLiveAppURL(task) {
+      return String(task?.live_app_url || task?.liveAppURL || "").trim();
+    }
+
     function shellQuote(value) {
       const text = String(value || "");
       if (!text) return "''";
@@ -11410,6 +11414,7 @@
             timing: taskTimingSignature(task),
             imageCount: taskImages(task).length,
             prURL: String(task?.pr_url || "").trim(),
+            liveAppURL: taskLiveAppURL(task),
             githubURL: taskGitHubLinkURL(task),
             canRerun: canRerunTask(task),
             canCopyClone: canCopyTaskCloneCommand(task),

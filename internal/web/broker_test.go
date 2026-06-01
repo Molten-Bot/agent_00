@@ -59,6 +59,31 @@ func TestBrokerTracksTaskLifecycleAndCommandOutput(t *testing.T) {
 	}
 }
 
+func TestBrokerTracksLiveAppURLFromTaskLogs(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	b.IngestLog("dispatch status=start request_id=req-live skill=moltenhub_code_run repo=git@github.com:acme/app.git")
+	b.IngestLog("dispatch request_id=req-live event=live_app_ready live_app_url=http://127.0.0.1:5173")
+	b.IngestLog("dispatch status=completed request_id=req-live workspace=/tmp/run branch=moltenhub-app")
+
+	task, ok := b.Task("req-live")
+	if !ok {
+		t.Fatal("Task(req-live) ok = false, want true")
+	}
+	if got, want := task.LiveAppURL, "http://127.0.0.1:5173"; got != want {
+		t.Fatalf("task.LiveAppURL = %q, want %q", got, want)
+	}
+
+	snap := b.Snapshot()
+	if len(snap.Tasks) != 1 {
+		t.Fatalf("tasks = %d, want 1", len(snap.Tasks))
+	}
+	if got, want := snap.Tasks[0].LiveAppURL, "http://127.0.0.1:5173"; got != want {
+		t.Fatalf("snapshot task.LiveAppURL = %q, want %q", got, want)
+	}
+}
+
 func TestBrokerIncludesPromptImagesInTaskSnapshots(t *testing.T) {
 	t.Parallel()
 
