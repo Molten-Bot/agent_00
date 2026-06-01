@@ -3,7 +3,7 @@
     "name": "code_for_me",
     "handle": "code_for_me",
     "mode": "prompt",
-    "displayName": "Happy to Code",
+    "displayName": "Code",
     "description": "Repository task run. Send repo+prompt for ad hoc work, or repos+librarytaskname for a checked-in library task. Omitted or `default` `responsemode` uses bundled `caveman-full`; set `off` for normal prose.",
     "activation": {
       "type": "skill_request",
