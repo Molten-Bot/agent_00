@@ -9334,10 +9334,6 @@
       return COMPLETED_STATUSES.has(normalizedTaskStatus(task.status));
     }
 
-    function isMergedTask(task) {
-      return normalizedTaskStatus(task?.status) === "merged";
-    }
-
     function isSuccessfulTaskStatus(status) {
       const normalized = normalizedTaskStatus(status);
       return normalized === "completed" || normalized === "no_changes" || normalized === "merged";
@@ -10785,7 +10781,7 @@
 
     function runningTasks(snapshot) {
       const out = currentTasks(snapshot);
-      return out.filter((task) => !isCompletedTask(task) || isMergedTask(task));
+      return out.filter((task) => !isCompletedTask(task));
     }
 
     function taskHistoryDedupeKeys(task) {
