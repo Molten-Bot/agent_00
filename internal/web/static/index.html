@@ -7118,7 +7118,7 @@
       const key = String(repoKey || "").trim();
       if (!key) return false;
       for (const task of state.snapshot?.tasks || []) {
-        if (!isSuccessfulTaskStatus(task?.status) || isMergedTask(task) || !taskPullRequestURL(task)) {
+        if (!isSuccessfulTaskStatus(task?.status) || normalizedTaskStatus(task?.status) === "merged" || !taskPullRequestURL(task)) {
           continue;
         }
         if (chatRepoKeysForTask(task).includes(key)) {
@@ -8101,7 +8101,7 @@
     function pendingReleaseChatRepoKeys() {
       const keys = new Set();
       for (const task of state.snapshot?.tasks || []) {
-        if (!isSuccessfulTaskStatus(task?.status) || isMergedTask(task) || !taskPullRequestURL(task)) {
+        if (!isSuccessfulTaskStatus(task?.status) || normalizedTaskStatus(task?.status) === "merged" || !taskPullRequestURL(task)) {
           continue;
         }
         for (const key of chatRepoKeysForTask(task)) {
