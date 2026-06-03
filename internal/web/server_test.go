@@ -700,9 +700,6 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `"task-close"`) {
 		t.Fatalf("expected index html to include task close class usage")
 	}
-	if !strings.Contains(markup, `"task-closing"`) {
-		t.Fatalf("expected index html to include task closing class usage")
-	}
 	if !strings.Contains(markup, `"task-rerun task-icon-button"`) && !strings.Contains(markup, `"task-rerun"`) {
 		t.Fatalf("expected index html to include task rerun class usage")
 	}
@@ -715,20 +712,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `close.title = historyOnly ? "Remove task from history view" : "Close finished task";`) {
 		t.Fatalf("expected index html to label close actions for both history-only and live completed tasks")
 	}
-	if !strings.Contains(markup, "const CLOSE_TASK_FADE_MS = 2000;") {
-		t.Fatalf("expected index html to include close task fade timing")
-	}
-	if !strings.Contains(markup, "closingTaskIDs: new Set()") {
-		t.Fatalf("expected index html to track closing tasks")
-	}
 	if !strings.Contains(markup, "function isTaskClosePending(") {
 		t.Fatalf("expected index html to include immediate close-button hiding helper")
 	}
 	if !strings.Contains(markup, "close.hidden = closePending;") {
 		t.Fatalf("expected index html to hide the close button immediately while close is pending")
 	}
-	if !strings.Contains(markup, "completeTaskDismissal(requestID)") {
-		t.Fatalf("expected index html to include delayed task dismissal helper")
+	if !strings.Contains(markup, "setLocalPromptStatus(\"ok\", `Closed task ${requestID}`);\n        completeTaskDismissal(requestID);") {
+		t.Fatalf("expected index html to dismiss closed tasks immediately after a successful close")
 	}
 	if !strings.Contains(markup, "state.taskHistoryByID.delete(requestID);") {
 		t.Fatalf("expected index html to remove dismissed tasks from persisted completed history")
@@ -3436,11 +3427,8 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	if !strings.Contains(css, "--body-linear: linear-gradient(180deg, #0d1424, #0a1120 58%, #09101d);") || !strings.Contains(css, "--body-linear: linear-gradient(180deg, #05070d, #070b14 55%, #090f1a);") {
 		t.Fatalf("expected stylesheet to define distinct dark and night backgrounds")
 	}
-	if !strings.Contains(css, ".task.task-closing") {
-		t.Fatalf("expected stylesheet to include task closing styles")
-	}
-	if !strings.Contains(css, ".task.task-closing {\n  pointer-events: none;\n  opacity: 0;") {
-		t.Fatalf("expected stylesheet to fade closing tasks instead of animating them")
+	if strings.Contains(css, ".task.task-closing") || strings.Contains(css, ":not(.task-closing)") {
+		t.Fatalf("expected stylesheet to avoid delayed closing-task fade state")
 	}
 	if strings.Contains(css, "@keyframes taskCloseSlideFade") || strings.Contains(css, "@keyframes taskCloseWiggleFade") || strings.Contains(css, "@keyframes taskCloseButtonWiggle") {
 		t.Fatalf("expected stylesheet to remove close animations")

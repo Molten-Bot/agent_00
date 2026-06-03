@@ -771,7 +771,6 @@
     const THEME_MODES = ["light", "dark", "night", "pink"];
     const DEFAULT_THEME_MODE = "light";
     const HOVER_MODES = ["auto", "on", "off"];
-    const CLOSE_TASK_FADE_MS = 2000;
     const QUEUED_STATUS_TIMEOUT_MS = 12_000;
     const LOCAL_PROMPT_STATUS_FADE_MS = 240;
     const STREAM_RENDER_INTERVAL_MS = 120;
@@ -1866,8 +1865,6 @@
       promptImages: [],
       rerunInFlight: new Set(),
       closeInFlight: new Set(),
-      closingTaskIDs: new Set(),
-      closingTaskTimers: new Map(),
       taskControlInFlight: new Set(),
       taskIconStateSignatures: new Map(),
       taskIconStateChangedAt: new Map(),
@@ -9339,30 +9336,15 @@
       return normalized === "completed" || normalized === "no_changes" || normalized === "merged";
     }
 
-    function isTaskClosing(requestID) {
-      requestID = String(requestID || "").trim();
-      if (!requestID) return false;
-      return state.closingTaskIDs.has(requestID);
-    }
-
     function isTaskClosePending(requestID) {
       requestID = String(requestID || "").trim();
       if (!requestID) return false;
-      return state.closeInFlight.has(requestID) || state.closingTaskIDs.has(requestID);
-    }
-
-    function clearClosingTaskTimer(requestID) {
-      const timer = state.closingTaskTimers.get(requestID);
-      if (!timer) return;
-      window.clearTimeout(timer);
-      state.closingTaskTimers.delete(requestID);
+      return state.closeInFlight.has(requestID);
     }
 
     function completeTaskDismissal(requestID) {
       requestID = String(requestID || "").trim();
       if (!requestID) return;
-      clearClosingTaskTimer(requestID);
-      state.closingTaskIDs.delete(requestID);
       state.dismissedTaskIDs.add(requestID);
       if (state.taskHistoryByID instanceof Map) {
         state.taskHistoryByID.delete(requestID);
@@ -10038,13 +10020,8 @@
           throw new Error(body?.error || `close http ${response.status}`);
         }
 
-        clearClosingTaskTimer(requestID);
-        state.closingTaskIDs.add(requestID);
         setLocalPromptStatus("ok", `Closed task ${requestID}`);
-        const closeTimer = window.setTimeout(() => {
-          completeTaskDismissal(requestID);
-        }, CLOSE_TASK_FADE_MS);
-        state.closingTaskTimers.set(requestID, closeTimer);
+        completeTaskDismissal(requestID);
         trackAnalyticsEvent("task_close_succeeded", { request_id: requestID });
         render(state.snapshot);
       } catch (err) {
@@ -11490,7 +11467,6 @@
             requestID,
             selected: requestID === state.selectedTaskId,
             collapsed: allowCollapse && isMinimizedTask(task),
-            closing: isTaskClosing(requestID),
             sparkle: shouldSparkleTask(task),
             newHubTask: shouldHighlightNewHubTask(task),
             status: String(task?.status || ""),
@@ -11665,7 +11641,6 @@
         const requestID = taskRequestID(task);
         const collapsed = !promptOnly && allowCollapse && isMinimizedTask(task);
         const taskHistoryView = historyView && isCompletedTask(task);
-        const closing = isTaskClosing(requestID);
         const node = document.createElement("article");
         node.className = "task";
         node.classList.toggle("task-merged", normalizedTaskStatus(task?.status) === "merged");
@@ -11678,9 +11653,6 @@
         }
         if (collapsed) {
           node.classList.add("task-collapsed");
-        }
-        if (closing) {
-          node.classList.add("task-closing");
         }
         if (shouldHighlightNewHubTask(task)) {
           node.classList.add("task-new-hub");
