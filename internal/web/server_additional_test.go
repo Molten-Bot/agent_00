@@ -1780,7 +1780,7 @@ func TestMergedTaskCardsUseMutedTreatment(t *testing.T) {
 	css := cssResp.Body.String()
 	if !strings.Contains(css, ".task.task-merged {\n  opacity: 0.62;") ||
 		!strings.Contains(css, "filter: saturate(0.72);") ||
-		!strings.Contains(css, `html[data-hover-mode="on"] .task:not(.task-closing):not(.task-merged)`) {
+		!strings.Contains(css, `html[data-hover-mode="on"] .task:not(.task-merged)`) {
 		t.Fatalf("expected merged tasks to use muted styling and skip active hover treatment")
 	}
 }
