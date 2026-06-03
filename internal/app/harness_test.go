@@ -17,6 +17,7 @@ import (
 	"github.com/Molten-Bot/moltenhub-code/internal/agentruntime"
 	"github.com/Molten-Bot/moltenhub-code/internal/config"
 	"github.com/Molten-Bot/moltenhub-code/internal/execx"
+	"github.com/Molten-Bot/moltenhub-code/internal/slug"
 	"github.com/Molten-Bot/moltenhub-code/internal/workspace"
 )
 
@@ -1878,6 +1879,121 @@ func TestRunNoChangesSkipsPR(t *testing.T) {
 	}
 	if res.PRURL != "" {
 		t.Fatalf("PRURL = %q, want empty", res.PRURL)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestRunNoChangesFollowUpWithoutConcreteEvidenceFails(t *testing.T) {
+	t.Parallel()
+
+	cfg := sampleConfig()
+	cfg.Prompt = strings.Join([]string{
+		"Review the previous local task logs first.",
+		"Identify every root cause behind the no-change result, fix the underlying MoltenHub Code application issue in this repository, validate locally where possible, and summarize the verified results.",
+		"Only return a no-op if you can cite concrete repository evidence that no MoltenHub Code change is required; otherwise produce the smallest correct diff or return an explicit failure with blocker details.",
+	}, " ")
+	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
+	guid := "abcdef123456"
+	runDir := testRunDir(guid)
+	agentsPath := filepath.Join(runDir, "AGENTS.md")
+	repoDir := filepath.Join(runDir, "repo")
+	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
+	branch := slug.BranchName(cfg.Prompt, now, guid)
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "codex", Args: []string{"--help"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"auth", "status"}}},
+		{cmd: cloneCommand(cfg, repoDir)},
+		{cmd: branchCommand(repoDir, branch)},
+		{cmd: pushDryRunCommand(repoDir, branch)},
+		{
+			cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath)),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"No repo diff. Existing code already covers reported failure path.",
+				"Validated: `go test ./...` passed.",
+			}, "\n")},
+		},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "\n"}},
+	}}
+
+	h := New(fake)
+	h.Now = func() time.Time { return now }
+	h.Workspace = testWorkspaceManager(guid)
+	h.TargetDirOK = func(path string) bool { return path == targetDir }
+
+	res := h.Run(context.Background(), cfg)
+	if res.Err == nil {
+		t.Fatal("Run() err = nil, want no-change follow-up failure")
+	}
+	if res.ExitCode != ExitCodex {
+		t.Fatalf("ExitCode = %d, want %d", res.ExitCode, ExitCodex)
+	}
+	if res.NoChanges {
+		t.Fatal("NoChanges = true, want false")
+	}
+	if !strings.Contains(res.Err.Error(), "no concrete MoltenHub Code evidence") {
+		t.Fatalf("Run() err = %v, want concrete evidence detail", res.Err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestRunNoChangesFollowUpWithConcreteEvidenceAllowsNoChanges(t *testing.T) {
+	t.Parallel()
+
+	cfg := sampleConfig()
+	cfg.Prompt = strings.Join([]string{
+		"Review the previous local task logs first.",
+		"Identify every root cause behind the no-change result, fix the underlying MoltenHub Code application issue in this repository, validate locally where possible, and summarize the verified results.",
+		"Only return a no-op if you can cite concrete repository evidence that no MoltenHub Code change is required; otherwise produce the smallest correct diff or return an explicit failure with blocker details.",
+	}, " ")
+	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
+	guid := "abcdef123456"
+	runDir := testRunDir(guid)
+	agentsPath := filepath.Join(runDir, "AGENTS.md")
+	repoDir := filepath.Join(runDir, "repo")
+	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
+	branch := slug.BranchName(cfg.Prompt, now, guid)
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "codex", Args: []string{"--help"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"auth", "status"}}},
+		{cmd: cloneCommand(cfg, repoDir)},
+		{cmd: branchCommand(repoDir, branch)},
+		{cmd: pushDryRunCommand(repoDir, branch)},
+		{
+			cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath)),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"No repository changes required.",
+				"Concrete evidence: [internal/hub/daemon.go](" + filepath.ToSlash(filepath.Join(repoDir, "internal/hub/daemon.go")) + ":2210) already skips failure follow-up loops.",
+			}, "\n")},
+		},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "\n"}},
+		{cmd: remoteBranchExistsOnOriginCommand(repoDir, branch)},
+		{cmd: prLookupAnyByHeadCommand(repoDir, branch)},
+	}}
+
+	h := New(fake)
+	h.Now = func() time.Time { return now }
+	h.Workspace = testWorkspaceManager(guid)
+	h.TargetDirOK = func(path string) bool { return path == targetDir }
+
+	res := h.Run(context.Background(), cfg)
+	if res.Err != nil {
+		t.Fatalf("Run() err = %v", res.Err)
+	}
+	if res.ExitCode != ExitSuccess {
+		t.Fatalf("ExitCode = %d, want %d", res.ExitCode, ExitSuccess)
+	}
+	if !res.NoChanges {
+		t.Fatal("NoChanges = false, want true")
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))

@@ -403,6 +403,14 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 				runDir,
 			)
 		}
+		if requiresConcreteNoChangeEvidence(cfg.Prompt) && !agentOutputCitesConcreteNoChangeEvidence(agentRes) {
+			return h.fail(
+				ExitCodex,
+				agentStage,
+				fmt.Errorf("%s completed a failure/no-changes follow-up with no repository changes and no concrete MoltenHub Code evidence for a no-op", agentStage),
+				runDir,
+			)
+		}
 		h.populateNoChangePRURLs(ctx, repos)
 		h.logf("stage=git status=no_changes")
 		res := buildResult(runDir, repos, true)
@@ -3758,6 +3766,53 @@ func agentOutputClaimsFileChanges(res execx.Result) bool {
 		line = strings.TrimSpace(line)
 		lineLower := strings.ToLower(line)
 		if strings.HasPrefix(lineLower, "changed [") || strings.HasPrefix(lineLower, "changed `") {
+			return true
+		}
+	}
+	return false
+}
+
+func requiresConcreteNoChangeEvidence(prompt string) bool {
+	text := strings.ToLower(strings.TrimSpace(prompt))
+	if text == "" {
+		return false
+	}
+	return strings.Contains(text, "fix the underlying moltenhub code application issue") &&
+		strings.Contains(text, "only return a no-op") &&
+		(strings.Contains(text, "no-change") || strings.Contains(text, "failed task"))
+}
+
+func agentOutputCitesConcreteNoChangeEvidence(res execx.Result) bool {
+	text := strings.ToLower(strings.TrimSpace(res.Stdout))
+	if text == "" || strings.Contains(text, "failure:") || strings.Contains(text, "error details:") {
+		return false
+	}
+
+	noOpMarkers := []string{
+		"no file changes required",
+		"no repository changes required",
+		"no changes needed",
+		"no changes required",
+		"already implemented",
+		"already present",
+		"already satisfied",
+		"requested state already",
+	}
+	if !containsAnySubstring(text, noOpMarkers) {
+		return false
+	}
+
+	evidenceMarkers := []string{
+		"internal/", "cmd/", "library/", "na.hub.molten.bot.openapi.yaml",
+		".go", ".json", ".yaml", ".yml", ".md",
+		"](/",
+	}
+	return containsAnySubstring(text, evidenceMarkers)
+}
+
+func containsAnySubstring(text string, markers []string) bool {
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
 			return true
 		}
 	}
