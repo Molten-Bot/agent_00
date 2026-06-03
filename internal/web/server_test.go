@@ -3296,6 +3296,9 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		!strings.Contains(css, ".dashboard-share-icon") {
 		t.Fatalf("expected stylesheet to include dashboard share link styles")
 	}
+	if !strings.Contains(css, ".dashboard-stats-grid {\n  display: grid;\n  grid-template-columns: repeat(8, minmax(0, 1fr));") {
+		t.Fatalf("expected dashboard stats grid to size eight stat cards across the full row")
+	}
 	if !strings.Contains(css, ".app.dashboard-app {\n  width: 100%;\n  max-width: 1500px;\n  padding: 20px 20px var(--hub-content-bottom-padding);") ||
 		!strings.Contains(css, ".site-page {\n  width: min(var(--hub-page-width), calc(100vw - 32px));\n  min-height: 100vh;\n  margin: 0 auto;\n  padding: 28px 0 var(--hub-content-bottom-padding);") {
 		t.Fatalf("expected app and standalone site pages to reserve vertical space below content for the floating bottom dock")
