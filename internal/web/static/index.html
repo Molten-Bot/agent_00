@@ -5108,10 +5108,15 @@
       const total = entries.reduce((sum, row) => sum + Number(row.value || 0), 0);
       const { width, height } = dashboardChartNodeSize(svgNode);
       const margin = 18;
-      const radius = Math.max(72, Math.min(width, height) / 2 - margin);
+      const sideLegendMinWidth = 420;
+      const legendSideWidth = 150;
+      const legendGap = 28;
+      const useSideLegend = width >= sideLegendMinWidth;
+      const chartWidth = useSideLegend ? Math.max(180, width - legendSideWidth - legendGap) : width;
+      const radius = Math.max(72, Math.min(chartWidth, height) / 2 - margin);
       const innerRadius = radius * 0.62;
-      const centerX = width / 2;
-      const centerY = height / 2 - 8;
+      const centerX = useSideLegend ? margin + radius : width / 2;
+      const centerY = useSideLegend ? height / 2 : height / 2 - 8;
       const svg = d3.select(svgNode)
         .attr("viewBox", `0 0 ${width} ${height}`)
         .attr("preserveAspectRatio", "xMidYMid meet");
@@ -5231,10 +5236,18 @@
           (exit) => exit.remove(),
         );
       const legendWidth = Math.min(width - 20, labelRows.length * 96);
+      const legendX = useSideLegend ? Math.min(width - legendSideWidth, centerX + radius + legendGap) : 0;
+      const legendRowGap = 24;
+      const legendStartY = useSideLegend
+        ? (height / 2) - (((labelRows.length - 1) * legendRowGap) / 2)
+        : height - 24;
       legendItems
         .attr("transform", (_row, index) => {
+          if (useSideLegend) {
+            return `translate(${legendX},${legendStartY + (index * legendRowGap)})`;
+          }
           const x = (width - legendWidth) / 2 + (index * legendWidth / Math.max(1, labelRows.length));
-          return `translate(${x},${height - 24})`;
+          return `translate(${x},${legendStartY})`;
         });
       legendItems.select("rect")
         .attr("fill", (row) => row.color)
