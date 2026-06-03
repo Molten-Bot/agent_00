@@ -263,7 +263,6 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `Session Runtime`) ||
 		!strings.Contains(markup, `stats.session_runtime_seconds`) ||
 		!strings.Contains(markup, `id="dashboard-time-saved"`) ||
-		!strings.Contains(markup, `id="dashboard-review-saved"`) ||
 		!strings.Contains(markup, `id="dashboard-workflow-times"`) ||
 		!strings.Contains(markup, `id="dashboard-agent-times"`) ||
 		!strings.Contains(markup, `id="dashboard-task-chart"`) ||
@@ -275,15 +274,22 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `<strong id="dashboard-total-tasks">0</strong>`) ||
 		!strings.Contains(markup, `<span class="dashboard-stat-label">Pull Requests</span>`) ||
 		!strings.Contains(markup, `<strong id="dashboard-total-prs">0</strong>`) ||
-		!strings.Contains(markup, `<span class="dashboard-stat-label">Review Saved</span>`) ||
-		!strings.Contains(markup, `<strong id="dashboard-review-saved">0m</strong>`) ||
+		!strings.Contains(markup, `<span class="dashboard-stat-label">Time Saved</span>`) ||
+		!strings.Contains(markup, `<strong id="dashboard-time-saved">0m</strong>`) ||
 		!strings.Contains(markup, "function dashboardPullRequestCount(snapshot)") ||
 		!strings.Contains(markup, `const dashboardTotalPRs = document.getElementById("dashboard-total-prs");`) ||
-		!strings.Contains(markup, `const dashboardReviewSaved = document.getElementById("dashboard-review-saved");`) ||
+		!strings.Contains(markup, "const combinedSavedSeconds = totalSavedSeconds;") ||
 		!strings.Contains(markup, "dashboardTotalTasks.textContent = String(totalTasks);") ||
 		!strings.Contains(markup, "dashboardTotalPRs.textContent = String(prCount);") ||
-		!strings.Contains(markup, "dashboardReviewSaved.textContent = dashboardDuration(reviewSavedSeconds);") {
-		t.Fatalf("expected dashboard to show task, pull-request, and review saved-time totals in separate stat cards")
+		!strings.Contains(markup, "dashboardTimeSaved.textContent = dashboardDuration(combinedSavedSeconds);") {
+		t.Fatalf("expected dashboard to show task, pull-request, and saved-time totals")
+	}
+	if strings.Contains(markup, "const combinedSavedSeconds = totalSavedSeconds + reviewSavedSeconds;") {
+		t.Fatalf("expected dashboard saved-time total to avoid double-counting review saved seconds")
+	}
+	if strings.Contains(markup, `id="dashboard-review-saved"`) ||
+		strings.Contains(markup, `<span class="dashboard-stat-label">Review Saved</span>`) {
+		t.Fatalf("expected dashboard to merge review saved into time saved instead of rendering a separate review saved stat")
 	}
 	if strings.Contains(markup, `<span class="dashboard-stat-label">Max Concurrent Tasks</span>`) {
 		t.Fatalf("expected dashboard max concurrency label to use concise copy")
@@ -294,7 +300,6 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	lastDashboardStatLabel := -1
 	for _, label := range []string{
 		"Time Saved",
-		"Review Saved",
 		"Throughput",
 		"Velocity",
 		"Max Concurrency",
@@ -319,6 +324,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `const DASHBOARD_SHARE_URL = "https://molten.bot/code";`) ||
 		!strings.Contains(markup, `const DASHBOARD_SHARE_IMAGE_URL = "https://app.molten.bot/logo.svg";`) ||
 		!strings.Contains(markup, `return DASHBOARD_SHARE_URL;`) ||
+		!strings.Contains(markup, `const saved = dashboardDuration(Number(stats.total_saved_seconds || 0));`) ||
 		!strings.Contains(markup, `function updateDashboardShareLinks(stats)`) ||
 		!strings.Contains(markup, `function trackDashboardShare(destination)`) ||
 		!strings.Contains(markup, `trackAnalyticsEvent("dashboard_share_opened", {`) ||
@@ -326,6 +332,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `https://www.facebook.com/sharer/sharer.php`) ||
 		!strings.Contains(markup, `https://wa.me/`) {
 		t.Fatalf("expected index html to render dashboard social sharing links")
+	}
+	if strings.Contains(markup, `const saved = dashboardDuration(Number(stats.total_saved_seconds || 0) + Number(stats.review_saved_seconds || 0));`) {
+		t.Fatalf("expected dashboard share saved-time total to avoid double-counting review saved seconds")
 	}
 	if strings.Contains(markup, `const current = new URL(window.location.href);`) ||
 		strings.Contains(markup, `current.hash = "dashboard";`) {

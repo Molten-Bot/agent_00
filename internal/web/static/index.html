@@ -349,12 +349,7 @@
             <div class="dashboard-stat-card dashboard-stat-card-primary" tabindex="0" aria-describedby="dashboard-time-saved-meta">
               <span class="dashboard-stat-label">Time Saved</span>
               <strong id="dashboard-time-saved">0m</strong>
-              <span id="dashboard-time-saved-meta" class="dashboard-stat-meta">Agent and review runtime counted as saved</span>
-            </div>
-            <div class="dashboard-stat-card dashboard-stat-card-primary" tabindex="0" aria-describedby="dashboard-review-saved-meta">
-              <span class="dashboard-stat-label">Review Saved</span>
-              <strong id="dashboard-review-saved">0m</strong>
-              <span id="dashboard-review-saved-meta" class="dashboard-stat-meta">Pull request review runtime</span>
+              <span id="dashboard-time-saved-meta" class="dashboard-stat-meta">Agent and review saved totals combined</span>
             </div>
             <div class="dashboard-stat-card" tabindex="0" aria-describedby="dashboard-throughput-meta">
               <span class="dashboard-stat-label">Throughput</span>
@@ -2043,8 +2038,6 @@
     const dashboardThroughput = document.getElementById("dashboard-throughput");
     const dashboardVelocity = document.getElementById("dashboard-velocity");
     const dashboardTimeSaved = document.getElementById("dashboard-time-saved");
-    const dashboardReviewSaved = document.getElementById("dashboard-review-saved");
-    const dashboardReviewSavedMeta = document.getElementById("dashboard-review-saved-meta");
     const dashboardAverageRuntime = document.getElementById("dashboard-average-runtime");
     const dashboardWorkflowTimes = document.getElementById("dashboard-workflow-times");
     const dashboardAgentTimes = document.getElementById("dashboard-agent-times");
@@ -5321,7 +5314,7 @@
       const totalTasks = Number(stats.total_tasks || 0);
       const maxConcurrent = Number(stats.max_concurrent_tasks || 0);
       const totalSavedSeconds = Number(stats.total_saved_seconds || 0);
-      const reviewSavedSeconds = Number(stats.review_saved_seconds || 0);
+      const combinedSavedSeconds = totalSavedSeconds;
       const sessionRuntimeSeconds = Number(stats.session_runtime_seconds || 0);
       const throughputPerHour = Number(stats.throughput_per_hour || 0);
       const velocityPerHour = Number(stats.velocity_per_hour || 0);
@@ -5349,7 +5342,7 @@
         dashboardSessionRuntime.dataset.runtimeSeconds = String(sessionRuntimeSeconds);
         dashboardSessionRuntime.dataset.updatedAt = String(stats.updated_at || snapshot?.generated_at || "");
         refreshDashboardSessionRuntime();
-        setDashboardStatMeter(dashboardSessionRuntime, sessionRuntimeSeconds, Math.max(sessionRuntimeSeconds, totalSavedSeconds, 1));
+        setDashboardStatMeter(dashboardSessionRuntime, sessionRuntimeSeconds, Math.max(sessionRuntimeSeconds, combinedSavedSeconds, 1));
       }
       if (dashboardThroughput) {
         dashboardThroughput.textContent = dashboardRate(throughputPerHour);
@@ -5360,22 +5353,12 @@
         setDashboardStatMeter(dashboardVelocity, velocityPerHour, Math.max(throughputPerHour, velocityPerHour, 1));
       }
       if (dashboardTimeSaved) {
-        dashboardTimeSaved.textContent = dashboardDuration(totalSavedSeconds);
-        setDashboardStatMeter(dashboardTimeSaved, totalSavedSeconds, Math.max(totalSavedSeconds, sessionRuntimeSeconds, 1));
-      }
-      if (dashboardReviewSaved) {
-        dashboardReviewSaved.textContent = dashboardDuration(reviewSavedSeconds);
-        setDashboardStatMeter(dashboardReviewSaved, reviewSavedSeconds, Math.max(totalSavedSeconds, reviewSavedSeconds, 1));
-      }
-      if (dashboardReviewSavedMeta) {
-        const reviewTasks = Number(stats.review_tasks || 0);
-        const activeReviewTasks = Number(stats.review_active_tasks || 0);
-        const activeCopy = activeReviewTasks > 0 ? `, ${activeReviewTasks} active` : "";
-        dashboardReviewSavedMeta.textContent = `${reviewTasks} review task${reviewTasks === 1 ? "" : "s"}${activeCopy}`;
+        dashboardTimeSaved.textContent = dashboardDuration(combinedSavedSeconds);
+        setDashboardStatMeter(dashboardTimeSaved, combinedSavedSeconds, Math.max(combinedSavedSeconds, sessionRuntimeSeconds, 1));
       }
       if (dashboardAverageRuntime) {
         dashboardAverageRuntime.textContent = dashboardDuration(averageDurationSeconds);
-        setDashboardStatMeter(dashboardAverageRuntime, averageDurationSeconds, Math.max(averageDurationSeconds, totalSavedSeconds / Math.max(1, completed), 1));
+        setDashboardStatMeter(dashboardAverageRuntime, averageDurationSeconds, Math.max(averageDurationSeconds, combinedSavedSeconds / Math.max(1, completed), 1));
       }
       if (dashboardSuccessRate) {
         dashboardSuccessRate.textContent = `${dashboardPercent(Number(stats.success_rate || 0))} success`;
