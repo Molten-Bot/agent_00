@@ -33,6 +33,14 @@ func (s *stubPRMonitorRunner) Commands() []execx.Command {
 	return slices.Clone(s.commands)
 }
 
+func TestDefaultPRMergePollIntervalIsLowLatency(t *testing.T) {
+	t.Parallel()
+
+	if defaultPRMergePollInterval > 10*time.Second {
+		t.Fatalf("defaultPRMergePollInterval = %s, want low-latency merge updates", defaultPRMergePollInterval)
+	}
+}
+
 func TestPRMergeMonitorMarksMergedTaskDoneAndRunsCleanup(t *testing.T) {
 	t.Parallel()
 
