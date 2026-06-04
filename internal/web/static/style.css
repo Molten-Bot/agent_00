@@ -530,8 +530,7 @@ moltenhub-code-nav {
   height: 42px;
   min-height: 42px;
   padding: 0;
-  overflow: hidden;
-  transition: width 180ms ease, padding 180ms ease, gap 180ms ease;
+  overflow: visible;
 }
 
 .status-item-compact:focus-visible {
@@ -540,43 +539,38 @@ moltenhub-code-nav {
 }
 
 .status-tooltip {
-  position: static;
-  max-width: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 50%;
+  z-index: 10;
+  width: max-content;
+  max-width: min(220px, calc(100vw - 32px));
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-glass-strong);
   color: var(--text-soft);
-  box-shadow: none;
+  box-shadow: var(--shadow-sm);
   font-size: 0.72rem;
   line-height: 1.35;
   white-space: nowrap;
   opacity: 0;
-  visibility: visible;
-  overflow: hidden;
-  transform: translateX(-8px);
-  transition: max-width 180ms ease, opacity 180ms ease, transform 180ms ease;
+  visibility: hidden;
+  overflow: visible;
+  transform: translate(50%, -4px);
+  transition: opacity 180ms ease, transform 180ms ease, visibility 180ms ease;
   pointer-events: none;
 }
 
-.status-row:hover .status-item-compact-expandable,
-.status-row:focus-within .status-item-compact-expandable {
-  width: auto;
-  min-width: 42px;
-  padding-left: 11px;
-  padding-right: 11px;
-  gap: 8px;
-}
-
-.status-row:hover .status-tooltip,
-.status-row:focus-within .status-tooltip {
-  max-width: 220px;
+.status-item-compact-expandable:hover .status-tooltip,
+.status-item-compact-expandable:focus-visible .status-tooltip,
+.status-item-compact-expandable:focus-within .status-tooltip {
   opacity: 1;
-  transform: translateX(0);
+  visibility: visible;
+  transform: translate(50%, 0);
 }
 
-.status-row:hover .status-item-compact-expandable,
-.status-row:focus-within .status-item-compact-expandable,
+.status-item-compact-expandable:hover,
 .status-item-compact:focus-visible,
 .status-item-compact:focus-within {
   z-index: 7;
@@ -679,24 +673,24 @@ moltenhub-code-nav {
   line-height: 1;
 }
 
-.status-row:hover .metric-label,
-.status-row:hover .metric-value,
-.status-row:hover .metric-unit,
-.status-row:focus-within .metric-label,
-.status-row:focus-within .metric-value,
-.status-row:focus-within .metric-unit {
+.status-item-metrics:hover .metric-label,
+.status-item-metrics:hover .metric-value,
+.status-item-metrics:hover .metric-unit,
+.status-item-metrics:focus-within .metric-label,
+.status-item-metrics:focus-within .metric-value,
+.status-item-metrics:focus-within .metric-unit {
   max-width: 64px;
   opacity: 1;
   transform: translateX(0);
 }
 
-.status-row:hover .metric-label,
-.status-row:focus-within .metric-label {
+.status-item-metrics:hover .metric-label,
+.status-item-metrics:focus-within .metric-label {
   margin-right: 4px;
 }
 
-.status-row:hover .metric-unit,
-.status-row:focus-within .metric-unit {
+.status-item-metrics:hover .metric-unit,
+.status-item-metrics:focus-within .metric-unit {
   margin-left: 3px;
 }
 
