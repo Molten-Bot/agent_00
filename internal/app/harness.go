@@ -609,7 +609,7 @@ func (h Harness) processChangedRepo(
 					attempt+1,
 					checkErr,
 				)
-				timedOutChecksFailing, timedOutChecksSummary, timedOutChecksErr := h.latestChecksHaveFailures(ctx, *repo, true)
+				timedOutChecksPassing, timedOutChecksSummary, timedOutChecksErr := h.latestChecksAreAllPassing(ctx, *repo, true)
 				if timedOutChecksErr != nil {
 					h.logf(
 						"stage=checks status=warn action=watch_timeout_snapshot reason=query_failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
@@ -625,7 +625,7 @@ func (h Harness) processChangedRepo(
 				if timedOutChecksSummary != "" {
 					checkSummary = timedOutChecksSummary
 				}
-				if !timedOutChecksFailing {
+				if timedOutChecksPassing {
 					h.logf("stage=checks status=ok reason=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 					return ExitSuccess, "", nil
 				}
@@ -674,7 +674,7 @@ func (h Harness) processChangedRepo(
 						attempt+1,
 						checkErr,
 					)
-					timedOutChecksFailing, timedOutChecksSummary, timedOutChecksErr := h.latestChecksHaveFailures(ctx, *repo, false)
+					timedOutChecksPassing, timedOutChecksSummary, timedOutChecksErr := h.latestChecksAreAllPassing(ctx, *repo, false)
 					if timedOutChecksErr != nil {
 						h.logf(
 							"stage=checks status=warn action=watch_timeout_snapshot reason=query_failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
@@ -690,7 +690,7 @@ func (h Harness) processChangedRepo(
 					if timedOutChecksSummary != "" {
 						checkSummary = timedOutChecksSummary
 					}
-					if !timedOutChecksFailing {
+					if timedOutChecksPassing {
 						h.logf("stage=checks status=ok reason=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 						return ExitSuccess, "", nil
 					}
@@ -6028,7 +6028,7 @@ func (h Harness) reconcileChecksAfterFailure(ctx context.Context, repo repoWorks
 	return !snapshot.HasFailures && snapshot.AllPassing, snapshot.Summary, nil
 }
 
-func (h Harness) latestChecksHaveFailures(ctx context.Context, repo repoWorkspace, requiredOnly bool) (bool, string, error) {
+func (h Harness) latestChecksAreAllPassing(ctx context.Context, repo repoWorkspace, requiredOnly bool) (bool, string, error) {
 	res, err := h.runCommand(ctx, "checks", prChecksJSONCommand(repo.Dir, repo.PRURL, requiredOnly))
 	if err != nil {
 		return false, "", err
@@ -6037,7 +6037,7 @@ func (h Harness) latestChecksHaveFailures(ctx context.Context, repo repoWorkspac
 	if err != nil {
 		return false, "", err
 	}
-	return snapshot.HasFailures, snapshot.Summary, nil
+	return snapshot.AllPassing, snapshot.Summary, nil
 }
 
 type latestChecksSnapshot struct {
