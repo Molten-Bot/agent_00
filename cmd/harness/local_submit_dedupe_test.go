@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Molten-Bot/moltenhub-code/internal/app"
 	"github.com/Molten-Bot/moltenhub-code/internal/config"
 )
 
@@ -248,6 +249,46 @@ func TestDedupeFinalStateForSubmissionTreatsAutomaticFollowUpErrorsAsCompleted(t
 	}
 	if got, want := dedupeFinalStateForSubmission(localSubmitSource, "error"), "error"; got != want {
 		t.Fatalf("dedupeFinalStateForSubmission(local_submit,error) = %q, want %q", got, want)
+	}
+}
+
+func TestUnexpectedNoChangesFollowUpSkipsWhenAgentCitedConcreteEvidence(t *testing.T) {
+	t.Parallel()
+
+	result := app.Result{
+		NoChanges:        true,
+		NoChangeEvidence: true,
+	}
+	runCfg := config.Config{
+		Prompt: "FIX THIS: move openapi.yml under public/ or add serving.",
+	}
+
+	ok, reason := shouldQueueUnexpectedNoChangesFollowUp(result, runCfg)
+	if ok {
+		t.Fatal("shouldQueueUnexpectedNoChangesFollowUp(...) = true, want false")
+	}
+	if !strings.Contains(reason, "concrete evidence") {
+		t.Fatalf("reason = %q, want concrete evidence skip reason", reason)
+	}
+}
+
+func TestNoChangesEscalationSkipsWhenAgentCitedConcreteEvidence(t *testing.T) {
+	t.Parallel()
+
+	result := app.Result{
+		NoChanges:        true,
+		NoChangeEvidence: true,
+	}
+	runCfg := config.Config{
+		Prompt: "FIX THIS: move openapi.yml under public/ or add serving.",
+	}
+
+	ok, reason := shouldEscalateNoChangesFollowUp(noChangesFollowUpSource, result, runCfg)
+	if ok {
+		t.Fatal("shouldEscalateNoChangesFollowUp(...) = true, want false")
+	}
+	if !strings.Contains(reason, "concrete evidence") {
+		t.Fatalf("reason = %q, want concrete evidence skip reason", reason)
 	}
 }
 

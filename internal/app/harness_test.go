@@ -5000,6 +5000,67 @@ func TestRunUsesConfiguredRuntimeCommand(t *testing.T) {
 	}
 }
 
+func TestRunNoChangesRecordsConcreteNoChangeEvidence(t *testing.T) {
+	t.Parallel()
+
+	cfg := sampleConfig()
+	cfg.Prompt = "FIX THIS: move openapi.yml under public/ or add serving."
+	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
+	guid := "nochangeevidence123"
+	runDir := testRunDir(guid)
+	agentsPath := filepath.Join(runDir, "AGENTS.md")
+	repoDir := filepath.Join(runDir, "repo")
+	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
+	branch := "moltenhub-fix-this-move-openapi-yml-under-public-o"
+
+	runtime := agentruntime.Default()
+	runtimePrompt := withAgentsPrompt(cfg.Prompt, agentsPath)
+	runtimePrompt, err := withResponseModePrompt(runtimePrompt, cfg.ResponseMode)
+	if err != nil {
+		t.Fatalf("withResponseModePrompt() error = %v", err)
+	}
+	runtimeCmd, err := agentCommandWithOptions(runtime, targetDir, runtimePrompt, codexRunOptions{})
+	if err != nil {
+		t.Fatalf("agentCommandWithOptions() error = %v", err)
+	}
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"--version"}}},
+		{cmd: runtime.PreflightCommand()},
+		{cmd: execx.Command{Name: "gh", Args: []string{"auth", "status"}}},
+		{cmd: cloneCommand(cfg, repoDir)},
+		{cmd: branchCommand(repoDir, branch)},
+		{cmd: pushDryRunCommand(repoDir, branch)},
+		{
+			cmd: runtimeCmd,
+			res: execx.Result{Stdout: strings.Join([]string{
+				"No repository changes required.",
+				"MoltenHub Code evidence: internal/app/harness.go already rejects failure/no-changes follow-up no-ops without concrete evidence.",
+			}, "\n")},
+		},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: ""}},
+		{cmd: remoteBranchExistsOnOriginCommand(repoDir, branch)},
+		{cmd: prLookupAnyByHeadCommand(repoDir, branch)},
+	}}
+
+	h := New(fake)
+	h.Now = func() time.Time { return now }
+	h.Workspace = testWorkspaceManager(guid)
+	h.TargetDirOK = func(path string) bool { return path == targetDir }
+
+	res := h.Run(context.Background(), cfg)
+	if res.Err != nil {
+		t.Fatalf("Run() err = %v", res.Err)
+	}
+	if !res.NoChanges {
+		t.Fatal("NoChanges = false, want true")
+	}
+	if !res.NoChangeEvidence {
+		t.Fatal("NoChangeEvidence = false, want true")
+	}
+}
+
 func TestRunAppliesResponseModeAcrossNonCodexRuntimes(t *testing.T) {
 	t.Parallel()
 
