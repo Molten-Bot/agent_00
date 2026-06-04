@@ -1785,6 +1785,34 @@ func TestMergedTaskCardsUseMutedTreatment(t *testing.T) {
 	}
 }
 
+func TestTaskProgressIncludesAutoMergeStepWhenEnabled(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.Code)
+	}
+	html := resp.Body.String()
+	for _, want := range []string{
+		`auto_merge: { id: "auto_merge", label: "Auto-merge", detail: "Clean pull request waits for GitHub auto-merge.", icon: "auto_merge" },`,
+		`auto_merge: "git-merge",`,
+		`function taskAutoMergeStepEnabled()`,
+		`if (taskAutoMergeStepEnabled() && status !== "no_changes") {`,
+		`stepIDs.push("auto_merge");`,
+		`autoMergeStep: taskAutoMergeStepEnabled(),`,
+		`taskAutoMergeStepEnabled() ? "auto_merge" : "",`,
+		`if (action === "auto_merge") {`,
+		`return "auto_merge";`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("expected index html to include auto-merge task progress fragment %q", want)
+		}
+	}
+}
+
 func TestNewHubTasksShowCurrentWorkAndHighlight(t *testing.T) {
 	t.Parallel()
 

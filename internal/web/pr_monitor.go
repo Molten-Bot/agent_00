@@ -14,7 +14,7 @@ import (
 	"github.com/Molten-Bot/moltenhub-code/internal/githubutil"
 )
 
-const defaultPRMergePollInterval = 2 * time.Minute
+const defaultPRMergePollInterval = 10 * time.Second
 
 // PRMergeMonitor watches task pull requests and marks merged tasks as done.
 type PRMergeMonitor struct {

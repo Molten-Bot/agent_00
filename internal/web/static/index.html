@@ -826,6 +826,7 @@
       pr: { id: "pr", label: "Pull Request", detail: "Pull request lookup or creation.", icon: "pr" },
       checks: { id: "checks", label: "Checks", detail: "PR checks and remediation loop.", icon: "checks" },
       finalize: { id: "finalize", label: "GitHub", detail: "Repository link before PR creation; pull request link once available.", icon: "github" },
+      auto_merge: { id: "auto_merge", label: "Auto-merge", detail: "Clean pull request waits for GitHub auto-merge.", icon: "auto_merge" },
     });
     const AGENT_LOGO_URLS = Object.freeze({
       codex: "/static/logos/codex-cli.svg",
@@ -877,6 +878,7 @@
       commit: "git-commit-horizontal",
       pr: "git-pull-request",
       checks: "shield-check",
+      auto_merge: "git-merge",
     });
     const CLAUDE_POST_SUBMIT_VERIFY_INTERVAL_MS = 1200;
     const CLAUDE_POST_SUBMIT_VERIFY_MAX_ATTEMPTS = 25;
@@ -1227,6 +1229,10 @@
       badge.setAttribute("aria-label", `Status: ${statusLabel}.`);
       badge.appendChild(createTaskStatusIcon(status));
       return badge;
+    }
+
+    function taskAutoMergeStepEnabled() {
+      return Boolean(state.reviewSettings?.autoMerge);
     }
 
     function appendTaskStepIcon(parent, step, task, options = {}) {
@@ -10932,6 +10938,7 @@
         hasPublishGitSeen: false,
         hasPRSeen: false,
         hasChecksSeen: false,
+        hasAutoMergeSeen: false,
       };
 
       const logs = Array.isArray(task?.logs) ? task.logs : [];
@@ -10956,6 +10963,10 @@
         }
         if (TASK_PROGRESS_AGENT_STAGES.has(stage)) {
           signals.hasAgentSeen = true;
+          const action = String(parseTaskProgressField(line, "action") || "").trim().toLowerCase();
+          if (action === "auto_merge") {
+            signals.hasAutoMergeSeen = true;
+          }
         }
         if (stage === "git") {
           const gitAction = String(parseTaskProgressField(line, "action") || "").trim().toLowerCase();
@@ -11023,6 +11034,9 @@
         stepIDs.push("checks");
       }
       stepIDs.push("finalize");
+      if (taskAutoMergeStepEnabled() && status !== "no_changes") {
+        stepIDs.push("auto_merge");
+      }
 
       const unique = [];
       const seen = new Set();
@@ -11056,6 +11070,9 @@
       }
       if (stage === "workflow") {
         return signals.hasForkFallback ? "fork" : "publish";
+      }
+      if (taskAutoMergeStepEnabled() && signals.hasAutoMergeSeen) {
+        return "auto_merge";
       }
       if (TASK_PROGRESS_AGENT_STAGES.has(stage)) {
         return "agent";
@@ -11101,6 +11118,7 @@
         String(task?.stage || ""),
         String(task?.stage_status || ""),
         String(task?.status || ""),
+        taskAutoMergeStepEnabled() ? "auto_merge" : "",
         taskStartSource(task),
         String(task?.pr_url || ""),
         String(logs.length),
@@ -11458,6 +11476,7 @@
         selectedTaskId: state.selectedTaskId,
         viewMode,
         statusFilter,
+        autoMergeStep: taskAutoMergeStepEnabled(),
         showOutputAction,
         showImageAction,
         allowCollapse,
