@@ -911,6 +911,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "function isTaskHistoryExpired(task, nowMs = Date.now()) {") {
 		t.Fatalf("expected index html to include a helper for completed-task history expiry checks")
 	}
+	if !strings.Contains(markup, "const completedAt = historyTaskCompletedAt(task);") ||
+		!strings.Contains(markup, "return (nowMs - completedAt) > TASK_HISTORY_MAX_AGE_MS;") {
+		t.Fatalf("expected completed-task history expiry to use completed time instead of refreshed activity time")
+	}
 	if !strings.Contains(markup, "function historyTaskCompletedAt(task)") {
 		t.Fatalf("expected index html to include stable completed-task history ordering timestamps")
 	}
@@ -933,12 +937,17 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "if (!requestID || state.dismissedTaskIDs.has(requestID) || isTaskHistoryExpired(task, nowMs)) {") {
 		t.Fatalf("expected index html to skip expired completed tasks when rebuilding task history")
 	}
-	if !strings.Contains(markup, "if (isCompletedTask(task) && isTaskHistoryExpired(task, nowMs)) {") {
+	if !strings.Contains(markup, "if (isCompletedTask(task) && isTaskHistoryExpired(historyCopy || task, nowMs)) {") {
 		t.Fatalf("expected index html to hide live completed tasks from history once they exceed max age")
 	}
 	if !strings.Contains(markup, "if (pruneTaskHistory()) {") ||
 		!strings.Contains(markup, "persistTaskHistoryUnseenIDs();") {
 		t.Fatalf("expected index html startup to sanitize expired task history and unseen markers")
+	}
+	if !strings.Contains(markup, "let taskHistoryPruneTimer = null;") ||
+		!strings.Contains(markup, "function scheduleTaskHistoryPrune()") ||
+		!strings.Contains(markup, "taskHistoryPruneTimer = window.setTimeout(() => {") {
+		t.Fatalf("expected index html to schedule local completed-task history pruning")
 	}
 	if !strings.Contains(markup, ".filter((task) => !isTaskHistoryExpired(task))") {
 		t.Fatalf("expected index html to remove expired completed task history from storage")

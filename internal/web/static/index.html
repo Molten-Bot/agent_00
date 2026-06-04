@@ -1964,6 +1964,7 @@
     let claudePostSubmitVerifyAttempts = 0;
     let pendingStreamSnapshotText = "";
     let streamRenderTimer = null;
+    let taskHistoryPruneTimer = null;
     let taskTimingRefreshTimer = null;
     let deferredSelectionRenderTimer = null;
     let taskAudioContext = null;
@@ -1973,6 +1974,7 @@
     let taskFullscreenXterm = null;
     let taskFullscreenXtermMount = null;
     let taskFullscreenXtermResizeObserver = null;
+    scheduleTaskHistoryPrune();
     let taskFullscreenXtermResizeQueued = false;
     const localConnItem = document.getElementById("local-conn-item");
     const localConnDot = document.getElementById("local-conn-dot");
@@ -10575,11 +10577,11 @@
       if (!Number.isFinite(TASK_HISTORY_MAX_AGE_MS) || TASK_HISTORY_MAX_AGE_MS <= 0) {
         return false;
       }
-      const updatedAt = historyTaskUpdatedAt(task);
-      if (!Number.isFinite(updatedAt) || updatedAt <= 0) {
+      const completedAt = historyTaskCompletedAt(task);
+      if (!Number.isFinite(completedAt) || completedAt <= 0) {
         return false;
       }
-      return (nowMs - updatedAt) > TASK_HISTORY_MAX_AGE_MS;
+      return (nowMs - completedAt) > TASK_HISTORY_MAX_AGE_MS;
     }
 
     function cloneTaskForHistory(task) {
@@ -10634,6 +10636,65 @@
       return true;
     }
 
+    function nextTaskHistoryPruneDelay(nowMs = Date.now()) {
+      if (!Number.isFinite(TASK_HISTORY_MAX_AGE_MS) || TASK_HISTORY_MAX_AGE_MS <= 0) {
+        return Infinity;
+      }
+      let nextExpiryAt = Infinity;
+      const consider = (task) => {
+        const completedAt = historyTaskCompletedAt(task);
+        if (!Number.isFinite(completedAt) || completedAt <= 0) {
+          return;
+        }
+        nextExpiryAt = Math.min(nextExpiryAt, completedAt + TASK_HISTORY_MAX_AGE_MS + 1);
+      };
+      if (state.taskHistoryByID instanceof Map) {
+        for (const task of state.taskHistoryByID.values()) {
+          consider(task);
+        }
+      }
+      for (const task of state.snapshot?.tasks || []) {
+        if (!isCompletedTask(task)) {
+          continue;
+        }
+        const requestID = String(task?.request_id || "").trim();
+        consider((requestID && state.taskHistoryByID.get(requestID)) || task);
+      }
+      if (!Number.isFinite(nextExpiryAt)) {
+        return Infinity;
+      }
+      return Math.max(0, nextExpiryAt - nowMs);
+    }
+
+    function scheduleTaskHistoryPrune() {
+      if (taskHistoryPruneTimer !== null) {
+        window.clearTimeout(taskHistoryPruneTimer);
+        taskHistoryPruneTimer = null;
+      }
+      const delay = nextTaskHistoryPruneDelay();
+      if (!Number.isFinite(delay)) {
+        return;
+      }
+      taskHistoryPruneTimer = window.setTimeout(() => {
+        taskHistoryPruneTimer = null;
+        const pruned = pruneTaskHistory();
+        const prunedUnseen = pruneTaskHistoryUnseenIDs();
+        if (pruned) {
+          persistTaskHistory();
+          persistTaskHistoryUnseenIDs();
+        } else if (prunedUnseen) {
+          persistTaskHistoryUnseenIDs();
+        }
+        renderTasks(state.snapshot);
+        renderFullscreenTasks(state.snapshot);
+        syncChatPromptMessagesFromSnapshot(state.snapshot);
+        if (prunedUnseen) {
+          applyTaskPanelViewMeta();
+        }
+        scheduleTaskHistoryPrune();
+      }, Math.min(delay, 2147483647));
+    }
+
     function rememberCompletedTaskHistory(snapshot) {
       const nowMs = Date.now();
       let changed = false;
@@ -10686,6 +10747,7 @@
       if (prunedUnseen) {
         applyTaskPanelViewMeta();
       }
+      scheduleTaskHistoryPrune();
     }
 
     function currentTasks(snapshot) {
@@ -10722,10 +10784,10 @@
         if (!requestID || state.dismissedTaskIDs.has(requestID)) {
           continue;
         }
-        if (isCompletedTask(task) && isTaskHistoryExpired(task, nowMs)) {
+        const historyCopy = state.taskHistoryByID.get(requestID);
+        if (isCompletedTask(task) && isTaskHistoryExpired(historyCopy || task, nowMs)) {
           continue;
         }
-        const historyCopy = state.taskHistoryByID.get(requestID);
         const stablePrompt = isCompletedTask(task) &&
           typeof historyCopy?.prompt === "string" &&
           historyCopy.prompt.trim() !== ""
