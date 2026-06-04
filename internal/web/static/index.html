@@ -2996,6 +2996,7 @@
     }
 
     function applyReviewSettingsState(nextState) {
+      const previousAutoMerge = taskAutoMergeStepEnabled();
       state.reviewSettings = normalizeReviewSettings(nextState);
       if (reviewSettingsAutoMerge instanceof HTMLInputElement) {
         reviewSettingsAutoMerge.checked = state.reviewSettings.autoMerge;
@@ -3003,6 +3004,10 @@
       setReviewSettingsMergeMethod(state.reviewSettings.mergeMethod);
       if (state.reviewSettings.message) {
         setReviewSettingsStatus("ok", state.reviewSettings.message);
+      }
+      if (state.snapshot && previousAutoMerge !== taskAutoMergeStepEnabled()) {
+        renderTasks(state.snapshot);
+        renderFullscreenTasks(state.snapshot);
       }
     }
 
@@ -12493,11 +12498,13 @@
         void loadAgentAuthStatus();
         void loadGitHubProfileLink();
         void loadLibraryTasks();
+        const reviewSettingsPromise = loadReviewSettings();
         const response = await fetch("/api/status", { cache: "no-store" });
         if (!response.ok) {
           throw new Error(`status http ${response.status}`);
         }
         const snapshot = await response.json();
+        await reviewSettingsPromise;
         render(snapshot);
         if (appDisplayFromHash() === "dashboard") {
           setAppDisplay("dashboard");
