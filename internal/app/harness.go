@@ -86,13 +86,14 @@ var errPRChecksWatchTimeout = errors.New("pull request checks watch timed out")
 
 // Result captures run output and status.
 type Result struct {
-	ExitCode     int
-	Err          error
-	WorkspaceDir string
-	Branch       string
-	PRURL        string
-	NoChanges    bool
-	RepoResults  []RepoResult
+	ExitCode         int
+	Err              error
+	WorkspaceDir     string
+	Branch           string
+	PRURL            string
+	NoChanges        bool
+	NoChangeEvidence bool
+	RepoResults      []RepoResult
 }
 
 // RepoResult captures outcome details for one repository in a run.
@@ -420,6 +421,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		h.populateNoChangePRURLs(ctx, repos)
 		h.logf("stage=git status=no_changes")
 		res := buildResult(runDir, repos, true)
+		res.NoChangeEvidence = agentOutputCitesConcreteNoChangeEvidence(agentRes)
 		res.ExitCode = ExitSuccess
 		return res
 	}

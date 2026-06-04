@@ -1503,6 +1503,9 @@ func shouldQueueUnexpectedNoChangesFollowUp(result app.Result, runCfg config.Con
 	if strings.TrimSpace(joinAllPRURLs(result.RepoResults)) != "" || strings.TrimSpace(result.PRURL) != "" {
 		return false, "task already has a pull request"
 	}
+	if result.NoChangeEvidence {
+		return false, "agent cited concrete evidence that no repository changes are required"
+	}
 	if !promptRequestsRepositoryChange(runCfg.Prompt) {
 		return false, "original prompt does not clearly require repository changes"
 	}
@@ -1522,6 +1525,9 @@ func shouldEscalateNoChangesFollowUp(source string, result app.Result, runCfg co
 	}
 	if strings.TrimSpace(joinAllPRURLs(result.RepoResults)) != "" || strings.TrimSpace(result.PRURL) != "" {
 		return false, "task already has a pull request"
+	}
+	if result.NoChangeEvidence {
+		return false, "agent cited concrete evidence that no repository changes are required"
 	}
 	if !promptRequestsRepositoryChange(runCfg.Prompt) {
 		return false, "original prompt does not clearly request repository changes"
