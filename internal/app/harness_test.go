@@ -2129,6 +2129,67 @@ func TestRunNoChangesFollowUpWithConcreteEvidenceAllowsNoChanges(t *testing.T) {
 	}
 }
 
+func TestRunNoChangesFollowUpWithOnlyOriginalRepoEvidenceFails(t *testing.T) {
+	t.Parallel()
+
+	cfg := sampleConfig()
+	cfg.Prompt = strings.Join([]string{
+		"Review the previous local task logs first.",
+		"Identify every root cause behind the no-change result, fix the underlying MoltenHub Code application issue in this repository, validate locally where possible, and summarize the verified results.",
+		"Only return a no-op if you can cite concrete repository evidence that no MoltenHub Code change is required; otherwise produce the smallest correct diff or return an explicit failure with blocker details.",
+	}, " ")
+	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
+	guid := "abcdef123456"
+	runDir := testRunDir(guid)
+	agentsPath := filepath.Join(runDir, "AGENTS.md")
+	repoDir := filepath.Join(runDir, "repo")
+	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
+	branch := slug.BranchName(cfg.Prompt, now, guid)
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "codex", Args: []string{"--help"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"auth", "status"}}},
+		{cmd: cloneCommand(cfg, repoDir)},
+		{cmd: branchCommand(repoDir, branch)},
+		{cmd: pushDryRunCommand(repoDir, branch)},
+		{
+			cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath)),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"No code change. Request already satisfied.",
+				"Evidence:",
+				"- [index.html](/workspace/moltenhub-code/tasks/original/repo/index.html:9): SEO description set.",
+				"- [src/pageTitle.js](/workspace/moltenhub-code/tasks/original/repo/src/pageTitle.js:1): shared runtime metadata constants set.",
+				"Git diff empty. Only untracked `.moltenhub-agents-3149905286.md` exists from harness instructions.",
+			}, "\n")},
+		},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "\n"}},
+	}}
+
+	h := New(fake)
+	h.Now = func() time.Time { return now }
+	h.Workspace = testWorkspaceManager(guid)
+	h.TargetDirOK = func(path string) bool { return path == targetDir }
+
+	res := h.Run(context.Background(), cfg)
+	if res.Err == nil {
+		t.Fatal("Run() err = nil, want no-change follow-up failure")
+	}
+	if res.ExitCode != ExitCodex {
+		t.Fatalf("ExitCode = %d, want %d", res.ExitCode, ExitCodex)
+	}
+	if res.NoChanges {
+		t.Fatal("NoChanges = true, want false")
+	}
+	if !strings.Contains(res.Err.Error(), "no concrete MoltenHub Code evidence") {
+		t.Fatalf("Run() err = %v, want concrete MoltenHub Code evidence detail", res.Err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
 func TestRunAgentClaimsChangesButGitIsCleanFails(t *testing.T) {
 	t.Parallel()
 
