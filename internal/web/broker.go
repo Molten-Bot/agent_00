@@ -1567,6 +1567,7 @@ func (b *Broker) pruneExpiredTasksLocked(now time.Time) {
 		}
 		if !terminalAt.IsZero() && now.Sub(terminalAt) >= defaultTerminalTaskTimeout {
 			delete(b.tasks, requestID)
+			b.closedTasks[requestID] = now.UTC()
 		}
 	}
 	for requestID, closedAt := range b.closedTasks {

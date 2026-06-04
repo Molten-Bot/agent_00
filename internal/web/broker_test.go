@@ -1359,6 +1359,11 @@ func TestBrokerRemovesCompletedTasksAfterTimeout(t *testing.T) {
 	if _, ok := b.TaskRunConfig("req-ok"); !ok {
 		t.Fatal("TaskRunConfig() found = false for expired completed task, want true")
 	}
+
+	b.IngestLog("dispatch status=ok action=task_close_cleanup request_id=req-ok log_dir=/tmp/.log/req/ok")
+	if got := len(b.Snapshot().Tasks); got != 0 {
+		t.Fatalf("len(tasks) after late cleanup log = %d, want 0", got)
+	}
 }
 
 func TestBrokerRemovesFailedTasksAfterTimeout(t *testing.T) {
