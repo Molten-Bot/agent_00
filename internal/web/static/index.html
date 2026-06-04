@@ -5105,14 +5105,14 @@
       const total = entries.reduce((sum, row) => sum + Number(row.value || 0), 0);
       const { width, height } = dashboardChartNodeSize(svgNode);
       const margin = 18;
-      const sideLegendMinWidth = 420;
       const legendSideWidth = 150;
       const legendGap = 28;
+      const sideLegendMinWidth = 560;
       const useSideLegend = width >= sideLegendMinWidth;
-      const chartWidth = useSideLegend ? Math.max(180, width - legendSideWidth - legendGap) : width;
+      const chartWidth = useSideLegend ? Math.max(180, width - ((legendSideWidth + legendGap) * 2)) : width;
       const radius = Math.max(72, Math.min(chartWidth, height) / 2 - margin);
       const innerRadius = radius * 0.62;
-      const centerX = useSideLegend ? margin + radius : width / 2;
+      const centerX = width / 2;
       const centerY = useSideLegend ? height / 2 : height / 2 - 8;
       const svg = d3.select(svgNode)
         .attr("viewBox", `0 0 ${width} ${height}`)
