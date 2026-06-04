@@ -1783,7 +1783,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `void loadHubSetupStatus().then(() => {`) ||
 		!strings.Contains(markup, `void loadAgentAuthStatus();`) ||
 		!strings.Contains(markup, `void loadGitHubProfileLink();`) ||
-		!strings.Contains(markup, `void loadLibraryTasks();`) {
+		!strings.Contains(markup, `void loadLibraryTasks();`) ||
+		!strings.Contains(markup, `const reviewSettingsPromise = loadReviewSettings();`) ||
+		!strings.Contains(markup, `await reviewSettingsPromise;`) {
 		t.Fatalf("expected index html startup to load validation and setup data in the background")
 	}
 	if !strings.Contains(markup, `const chatDockLink = document.querySelector('[data-app-display="chat"]');`) ||
