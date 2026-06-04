@@ -3937,8 +3937,6 @@ func agentOutputCitesConcreteNoChangeEvidence(res execx.Result) bool {
 
 	evidenceMarkers := []string{
 		"internal/", "cmd/", "library/", "na.hub.molten.bot.openapi.yaml",
-		".go", ".json", ".yaml", ".yml", ".md",
-		"](/",
 	}
 	return containsAnySubstring(text, evidenceMarkers)
 }
