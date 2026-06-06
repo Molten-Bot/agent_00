@@ -10098,10 +10098,6 @@
         if (historyOnly) {
           trackAnalyticsEvent("task_history_removed", { request_id: requestID });
           state.dismissedTaskIDs.add(requestID);
-          if (state.taskHistoryByID instanceof Map) {
-            state.taskHistoryByID.delete(requestID);
-            persistTaskHistory();
-          }
           persistDismissedTaskIDs();
           setLocalPromptStatus("ok", `Removed task ${requestID} from history`);
           render(state.snapshot);

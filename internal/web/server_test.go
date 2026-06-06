@@ -727,8 +727,18 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "setLocalPromptStatus(\"ok\", `Closed task ${requestID}`);\n        completeTaskDismissal(requestID);") {
 		t.Fatalf("expected index html to dismiss closed tasks immediately after a successful close")
 	}
-	if !strings.Contains(markup, "state.taskHistoryByID.delete(requestID);") {
-		t.Fatalf("expected index html to remove dismissed tasks from persisted completed history")
+	closeButtonStart := strings.Index(markup, "function renderTaskCloseButton(task, requestID)")
+	canRerunStart := strings.Index(markup, "function canRerunTask(task)")
+	if closeButtonStart < 0 || canRerunStart < 0 || canRerunStart <= closeButtonStart {
+		t.Fatalf("expected index html to include renderTaskCloseButton before canRerunTask")
+	}
+	closeButtonBody := markup[closeButtonStart:canRerunStart]
+	if strings.Contains(closeButtonBody, "state.taskHistoryByID.delete(requestID);") {
+		t.Fatalf("expected index html to keep history-only dismissed tasks available for the removed history view")
+	}
+	if !strings.Contains(closeButtonBody, "state.dismissedTaskIDs.add(requestID);") ||
+		!strings.Contains(closeButtonBody, "persistDismissedTaskIDs();") {
+		t.Fatalf("expected index html to dismiss history-only tasks by persisted dismissed ID")
 	}
 	if !strings.Contains(markup, "state.taskHistoryUnseenIDs instanceof Set && state.taskHistoryUnseenIDs.delete(requestID)") {
 		t.Fatalf("expected index html to clear unseen completed history state for dismissed tasks")
