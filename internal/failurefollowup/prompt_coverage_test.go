@@ -60,6 +60,9 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: Full site/assets download not completed. Error details: shell network blocked. `wget` failed DNS for `www.kaanawaveco.com`; `curl --resolve` failed connect to port 443. Browser tool crawled public pages, but cannot save binary assets.")); got != "shell network blocked" {
 		t.Fatalf("NonRemediableFailureReason(shell network blocked) = %q, want %q", got, "shell network blocked")
 	}
+	if got := NonRemediableFailureReason(errors.New("clone: run git [clone --single-branch git@github.com:Molten-Bot/forum.git /workspace/repo]: exit status 128 (fatal: unable to access 'https://github.com/Molten-Bot/forum.git/': Could not resolve host: github.com)")); got != "could not resolve host" {
+		t.Fatalf("NonRemediableFailureReason(clone DNS failure) = %q, want %q", got, "could not resolve host")
+	}
 	if got := NonRemediableFailureReason(errors.New("task failed because this branch has no delta from `main`; No commits between main and moltenhub-fix")); got != "" {
 		t.Fatalf("NonRemediableFailureReason(no delta) = %q, want empty", got)
 	}

@@ -73,6 +73,9 @@ var nonRemediableFailureMarkers = []string{
 	"sandbox rejected writes to",
 	"writing outside of the project; rejected by user approval settings",
 	"shell network blocked",
+	"could not resolve host",
+	"temporary failure in name resolution",
+	"no such host",
 	"browser tool crawled public pages, but cannot save binary assets",
 }
 
