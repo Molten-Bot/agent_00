@@ -1627,17 +1627,24 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	}
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
-		Err: errors.New("clone: run git [clone ...]: exit status 128"),
-	})
-	if !ok || reason != "" {
-		t.Fatalf("shouldQueueFailureFollowUp(clone failure) = (%v, %q), want (true, \"\")", ok, reason)
-	}
-
-	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
 		Err: errors.New("git: verify remote write access for repo https://github.com/acme/repo.git branch \"moltenhub-fix\": exit status 128: remote: Write access to repository not granted. fatal: unable to access 'https://github.com/acme/repo.git/': The requested URL returned error: 403"),
 	})
 	if ok || !strings.Contains(reason, "write access to repository not granted") {
 		t.Fatalf("shouldQueueFailureFollowUp(repo write access failure) = (%v, %q), want non-remediable repo access skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		Err: errors.New("clone: run git [clone --single-branch git@github.com:Molten-Bot/forum.git /workspace/repo]: exit status 128 (fatal: unable to access 'https://github.com/Molten-Bot/forum.git/': Could not resolve host: github.com)"),
+	})
+	if ok || !strings.Contains(reason, "could not resolve host") {
+		t.Fatalf("shouldQueueFailureFollowUp(clone DNS failure) = (%v, %q), want non-remediable DNS skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		Err: errors.New("clone: run git [clone ...]: exit status 128"),
+	})
+	if !ok || reason != "" {
+		t.Fatalf("shouldQueueFailureFollowUp(generic clone failure) = (%v, %q), want (true, \"\")", ok, reason)
 	}
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
