@@ -275,6 +275,8 @@ body::after {
 /* User-portal derived glass primitives */
 
 .brand-login-card-shell {
+  box-sizing: border-box;
+  width: 100%;
   border-radius: var(--radius-card);
   border: 1px solid var(--glass-border);
   background: var(--glass-bg);
@@ -2807,7 +2809,8 @@ select.prompt-control {
   flex-wrap: nowrap;
   gap: 6px;
   flex: 0 0 auto;
-  min-width: max-content;
+  min-width: 0;
+  max-width: 100%;
   justify-self: end;
 }
 
@@ -5524,6 +5527,27 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   }
 }
 
+@media (max-width: 720px) {
+  .task-top {
+    gap: 6px;
+  }
+
+  .task-top-actions {
+    gap: 4px;
+  }
+
+  .task-rerun.task-icon-button,
+  .task-image-toggle.task-icon-button,
+  .task-output-toggle.task-icon-button,
+  .task-control-toggle.task-icon-button,
+  .task-stop.task-icon-button {
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+  }
+}
+
 @media (max-width: 640px) {
   .panel-section-copy {
     max-width: none;
@@ -5562,6 +5586,12 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   .task-empty {
     min-height: 0;
     padding: 18px;
+  }
+
+  .brand-login-card-shell,
+  .agent-auth-shell {
+    width: 100%;
+    max-width: none;
   }
 
   :root {
