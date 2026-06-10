@@ -737,7 +737,10 @@ func (c APIClient) verifyToken(ctx context.Context, token string) bool {
 		return false
 	}
 	if ok, err := c.verifyTokenA2A(ctx, token); err == nil {
-		return ok
+		if ok {
+			return true
+		}
+		c.logf("hub.auth verify_a2a status=fallback verified=false")
 	} else {
 		c.logf("hub.auth verify_a2a status=fallback err=%q", err)
 	}

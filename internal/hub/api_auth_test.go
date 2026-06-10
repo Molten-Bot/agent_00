@@ -14,9 +14,11 @@ func TestResolveAgentToken_UsesConfiguredAgentTokenWhenVerified(t *testing.T) {
 	t.Parallel()
 
 	var bindCalls int
+	var agentMeCalls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/agents/me":
+			agentMeCalls++
 			if r.Header.Get("Authorization") == "Bearer agent_saved" {
 				w.WriteHeader(http.StatusOK)
 				return
@@ -44,6 +46,9 @@ func TestResolveAgentToken_UsesConfiguredAgentTokenWhenVerified(t *testing.T) {
 	}
 	if bindCalls != 0 {
 		t.Fatalf("expected bind flow not to run, bindCalls=%d", bindCalls)
+	}
+	if agentMeCalls == 0 {
+		t.Fatal("expected legacy agent verification fallback")
 	}
 }
 
