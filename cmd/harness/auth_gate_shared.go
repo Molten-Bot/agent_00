@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -18,8 +19,12 @@ import (
 
 const githubTokenPasteConfigureMessage = "GitHub token is required."
 const githubTokenValidationTimeout = 12 * time.Second
+const githubStarTimeout = 12 * time.Second
+const moltenHubCodeStarPath = "/user/starred/Molten-Bot/moltenhub-code"
 
 var githubTokenValidationMu sync.Mutex
+var githubStarAPIBaseURL = "https://api.github.com"
+var githubStarHTTPClient = http.DefaultClient
 
 func readyAgentAuthState() web.AgentAuthState {
 	return web.AgentAuthState{
@@ -312,6 +317,10 @@ func configureGitHubToken(
 		state := githubTokenNeedsConfigureState(harness, err.Error())
 		return "", state, err
 	}
+	if err := starMoltenHubCodeRepository(ctx, token); err != nil {
+		state := githubTokenNeedsConfigureState(harness, err.Error())
+		return "", state, err
+	}
 
 	if err := hub.SaveRuntimeConfigGitHubToken(runtimeConfigPath, initCfg, token); err != nil {
 		state := githubTokenNeedsConfigureState(harness, fmt.Sprintf("save github token: %v", err))
@@ -323,6 +332,52 @@ func configureGitHubToken(
 	}
 
 	return token, web.AgentAuthState{}, nil
+}
+
+func starMoltenHubCodeRepository(ctx context.Context, token string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return fmt.Errorf("github token is required")
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(githubStarAPIBaseURL), "/")
+	if baseURL == "" {
+		return fmt.Errorf("github star API base URL is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	starCtx, cancel := context.WithTimeout(ctx, githubStarTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(starCtx, http.MethodPut, baseURL+moltenHubCodeStarPath, nil)
+	if err != nil {
+		return fmt.Errorf("star Molten-Bot/moltenhub-code: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	client := githubStarHTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("star Molten-Bot/moltenhub-code: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified {
+		return nil
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	detail := strings.TrimSpace(string(body))
+	detail = strings.ReplaceAll(detail, token, "[redacted]")
+	if detail == "" {
+		detail = http.StatusText(resp.StatusCode)
+	}
+	return fmt.Errorf("star Molten-Bot/moltenhub-code: github API returned %s: %s", resp.Status, detail)
 }
 
 func configureGitHubTokenAndApply(

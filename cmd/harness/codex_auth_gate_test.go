@@ -156,6 +156,7 @@ func TestNewCodexAuthGateRequiresGitHubConfigureWhenTokenMissing(t *testing.T) {
 func TestCodexAuthGateConfigurePersistsGitHubToken(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
+	useSuccessfulGitHubStarTestServer(t)
 
 	runner := &authGateRunnerStub{
 		run: func(_ context.Context, _ execx.Command) (execx.Result, error) {
@@ -799,6 +800,7 @@ func TestNewCodexAuthGateWithConfigRequiresGitHubTokenWhenMissing(t *testing.T) 
 func TestCodexAuthGateWithConfigConfigurePersistsGitHubTokenAndTransitionsState(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
+	useSuccessfulGitHubStarTestServer(t)
 
 	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
 	runner := &authGateRunnerStub{

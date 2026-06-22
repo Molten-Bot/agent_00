@@ -275,6 +275,7 @@ func TestClaudeAuthGateConfigurePersistsGitHubTokenAndEnvironment(t *testing.T) 
 	clearClaudeCredentialSignals(t)
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
+	useSuccessfulGitHubStarTestServer(t)
 
 	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
 	g := newClaudeAuthGateWithConfig("", path, hub.InitConfig{

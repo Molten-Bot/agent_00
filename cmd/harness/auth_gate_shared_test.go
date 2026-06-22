@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +36,38 @@ func gitHubTokenValidationArgsStringForTest() string {
 
 func isGitHubTokenValidationCommandForTest(cmd execx.Command) bool {
 	return cmd.Name == "gh" && strings.Join(cmd.Args, " ") == gitHubTokenValidationArgsStringForTest()
+}
+
+func useGitHubStarTestServer(t *testing.T, handler http.HandlerFunc) {
+	t.Helper()
+
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	previousBaseURL := githubStarAPIBaseURL
+	previousClient := githubStarHTTPClient
+	githubStarAPIBaseURL = server.URL
+	githubStarHTTPClient = server.Client()
+	t.Cleanup(func() {
+		githubStarAPIBaseURL = previousBaseURL
+		githubStarHTTPClient = previousClient
+	})
+}
+
+func useSuccessfulGitHubStarTestServer(t *testing.T) {
+	t.Helper()
+	useGitHubStarTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Method, http.MethodPut; got != want {
+			t.Fatalf("star method = %q, want %q", got, want)
+		}
+		if got, want := r.URL.Path, moltenHubCodeStarPath; got != want {
+			t.Fatalf("star path = %q, want %q", got, want)
+		}
+		if got := r.Header.Get("Authorization"); !strings.HasPrefix(got, "Bearer ") {
+			t.Fatalf("Authorization header missing bearer prefix")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
 
 func TestFirstConfiguredGitHubTokenPrefersEnvironmentOverRuntimeConfig(t *testing.T) {
@@ -258,6 +292,74 @@ func TestValidateGitHubTokenUsesLegacyCompatibleStatusCommand(t *testing.T) {
 	}
 	if got := os.Getenv("GITHUB_TOKEN"); got != "" {
 		t.Fatalf("GITHUB_TOKEN after validation = %q, want restored empty", got)
+	}
+}
+
+func TestConfigureGitHubTokenStarsMoltenHubCodeBeforePersisting(t *testing.T) {
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	githubToken := fakeGitHubPAT("star_token")
+	starred := false
+	useGitHubStarTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		starred = true
+		if got, want := r.Method, http.MethodPut; got != want {
+			t.Fatalf("star method = %q, want %q", got, want)
+		}
+		if got, want := r.URL.Path, moltenHubCodeStarPath; got != want {
+			t.Fatalf("star path = %q, want %q", got, want)
+		}
+		if got, want := r.Header.Get("Authorization"), "Bearer "+githubToken; got != want {
+			t.Fatalf("Authorization header mismatch: got length %d, want length %d", len(got), len(want))
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	token, state, err := configureGitHubToken(context.Background(), "test", path, hub.InitConfig{}, nil, githubToken, "")
+	if err != nil {
+		t.Fatalf("configureGitHubToken() error = %v", err)
+	}
+	if token != githubToken {
+		t.Fatalf("token = %q, want configured token", token)
+	}
+	if state.State != "" {
+		t.Fatalf("failure state = %+v, want empty", state)
+	}
+	if !starred {
+		t.Fatal("star endpoint not called")
+	}
+}
+
+func TestConfigureGitHubTokenRejectsFailedStarWithoutPersisting(t *testing.T) {
+	t.Setenv("GH_TOKEN", "github_token_existing")
+	t.Setenv("GITHUB_TOKEN", "github_token_existing")
+
+	githubToken := fakeGitHubPAT("star_denied")
+	useGitHubStarTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"Resource not accessible by personal access token"}`))
+	})
+
+	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	token, state, err := configureGitHubToken(context.Background(), "test", path, hub.InitConfig{}, nil, githubToken, "")
+	if err == nil {
+		t.Fatal("configureGitHubToken() error = nil, want star failure")
+	}
+	if token != "" {
+		t.Fatalf("token = %q, want empty", token)
+	}
+	if state.State != "needs_configure" {
+		t.Fatalf("state = %+v, want needs_configure", state)
+	}
+	if strings.Contains(err.Error(), githubToken) {
+		t.Fatalf("error leaked token: %q", err)
+	}
+	if _, readErr := os.ReadFile(path); readErr == nil {
+		t.Fatal("runtime config exists, want no persisted token")
+	}
+	if got, want := os.Getenv("GH_TOKEN"), "github_token_existing"; got != want {
+		t.Fatalf("GH_TOKEN = %q, want existing value", got)
 	}
 }
 
