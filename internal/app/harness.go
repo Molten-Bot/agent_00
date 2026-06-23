@@ -2953,6 +2953,10 @@ func isAutoMergeUnsupportedError(err error) bool {
 	message := strings.ToLower(err.Error())
 	unsupportedFragments := []string{
 		"enablepullrequestautomerge",
+		"does not have the correct permissions to execute `mergepullrequest`",
+		"does not have the correct permissions to execute mergepullrequest",
+		"resource not accessible by integration",
+		"mergepullrequest permission",
 		"protected branch rules not configured",
 		"auto-merge is disabled",
 		"auto merge is disabled",
