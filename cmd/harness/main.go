@@ -76,6 +76,12 @@ var defaultHubSetupLocations = []hubSetupLocation{
 
 var hubSetupLocationsLoader = fetchHubSetupLocations
 
+var runSingleHarness = func(ctx context.Context, cfg config.Config, logf func(string, ...any)) app.Result {
+	h := app.New(execx.OSRunner{})
+	h.Logf = logf
+	return h.Run(ctx, cfg)
+}
+
 var hubSetupLocationsCache struct {
 	mu        sync.Mutex
 	locations []hubSetupLocation
@@ -143,10 +149,11 @@ func runSingle(args []string) int {
 
 	logger := newDefaultTerminalLogger()
 	defer logger.Close()
-	h := app.New(execx.OSRunner{})
-	h.Logf = logger.Printf
 
-	result := h.Run(context.Background(), cfg)
+	result := runSingleHarness(context.Background(), cfg, logger.Printf)
+	if failureResult, failed := localNoChangesFailureResult(localSubmitSource, result, cfg); failed {
+		result = failureResult
+	}
 	if result.Err != nil {
 		writeStderrLine(logger, fmt.Sprintf("error: %v", result.Err))
 		if result.WorkspaceDir != "" {
