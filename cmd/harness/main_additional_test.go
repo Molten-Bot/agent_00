@@ -1159,6 +1159,58 @@ func TestLocalNoChangesFailurePayloadIncludesExplicitFailureFields(t *testing.T)
 	}
 }
 
+func TestRunSingleActionableNoChangesReturnsFailure(t *testing.T) {
+	configPath := writeRunSingleConfig(t, "fix broken release generation")
+	previous := runSingleHarness
+	t.Cleanup(func() { runSingleHarness = previous })
+
+	runSingleHarness = func(_ context.Context, cfg config.Config, _ func(string, ...any)) app.Result {
+		if cfg.Prompt != "fix broken release generation" {
+			t.Fatalf("Prompt = %q", cfg.Prompt)
+		}
+		return app.Result{
+			ExitCode:     app.ExitSuccess,
+			WorkspaceDir: "/tmp/work",
+			Branch:       "moltenhub-fix",
+			NoChanges:    true,
+		}
+	}
+
+	if code := runSingle([]string{"--config", configPath}); code != app.ExitCodex {
+		t.Fatalf("runSingle() = %d, want %d", code, app.ExitCodex)
+	}
+}
+
+func TestRunSingleConcreteNoChangeEvidenceStaysSuccess(t *testing.T) {
+	configPath := writeRunSingleConfig(t, "fix broken release generation")
+	previous := runSingleHarness
+	t.Cleanup(func() { runSingleHarness = previous })
+
+	runSingleHarness = func(_ context.Context, _ config.Config, _ func(string, ...any)) app.Result {
+		return app.Result{
+			ExitCode:         app.ExitSuccess,
+			WorkspaceDir:     "/tmp/work",
+			Branch:           "moltenhub-fix",
+			NoChanges:        true,
+			NoChangeEvidence: true,
+		}
+	}
+
+	if code := runSingle([]string{"--config", configPath}); code != app.ExitSuccess {
+		t.Fatalf("runSingle() = %d, want %d", code, app.ExitSuccess)
+	}
+}
+
+func writeRunSingleConfig(t *testing.T, prompt string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := fmt.Sprintf(`{"repo":"git@github.com:acme/repo.git","prompt":%q}`, prompt)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
+}
+
 func TestShouldQueueUnexpectedNoChangesFollowUpQueuesDespiteConcreteNoOpEvidenceLog(t *testing.T) {
 	t.Parallel()
 
