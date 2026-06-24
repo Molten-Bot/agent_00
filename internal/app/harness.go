@@ -2940,6 +2940,10 @@ func (h Harness) autoMergeCleanReview(
 			h.logf("stage=review status=skip action=auto_merge reason=unsupported_or_unconfigured pr_url=%s err=%q", metadata.URL, err)
 			return nil
 		}
+		if isAutoMergePermissionError(err) {
+			h.logf("stage=review status=skip action=auto_merge reason=permission_denied pr_url=%s err=%q", metadata.URL, err)
+			return nil
+		}
 		return fmt.Errorf("enable clean-review auto-merge: %w", err)
 	}
 	h.logf("stage=review status=ok action=auto_merge method=%s pr_url=%s", method, metadata.URL)
@@ -2960,6 +2964,25 @@ func isAutoMergeUnsupportedError(err error) bool {
 		"auto-merge is not enabled",
 	}
 	for _, fragment := range unsupportedFragments {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAutoMergePermissionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	permissionFragments := []string{
+		"mergepullrequest",
+		"does not have the correct permissions",
+		"resource not accessible by integration",
+		"permission denied",
+	}
+	for _, fragment := range permissionFragments {
 		if strings.Contains(message, fragment) {
 			return true
 		}
