@@ -350,6 +350,8 @@ func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 
 	runDir := t.TempDir()
 	homeDir := filepath.Join(t.TempDir(), "home")
+	codexConfigDir := filepath.Join(t.TempDir(), "codex-config")
+	claudeConfigDir := filepath.Join(t.TempDir(), "claude-config")
 	codexAuthPath := filepath.Join(homeDir, ".codex", "auth.json")
 	claudeAuthPath := filepath.Join(homeDir, ".claude", ".credentials.json")
 	if err := os.MkdirAll(filepath.Dir(codexAuthPath), 0o700); err != nil {
@@ -364,12 +366,28 @@ func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 	if err := os.WriteFile(claudeAuthPath, []byte(`{"claude":"ok"}`), 0o600); err != nil {
 		t.Fatalf("WriteFile(claude auth) error = %v", err)
 	}
+	if err := os.MkdirAll(codexConfigDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(codex config dir) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(codexConfigDir, "auth.json"), []byte(`{"codex":"ok"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(codex config auth) error = %v", err)
+	}
+	if err := os.MkdirAll(claudeConfigDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(claude config dir) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeConfigDir, ".credentials.json"), []byte(`{"claude":"ok"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(claude config auth) error = %v", err)
+	}
 
 	env, err := prepareAgentIOEnv(runDir, []string{
 		"PATH=/bin",
 		"HOME=" + homeDir,
+		"CODEX_HOME=/disk/codex-old",
 		"TMPDIR=/disk/tmp",
+		"CODEX_HOME=" + codexConfigDir,
 		"XDG_CONFIG_HOME=/disk/config",
+		"CLAUDE_CONFIG_DIR=/disk/claude-old",
+		"CLAUDE_CONFIG_DIR=" + claudeConfigDir,
 		"GH_TOKEN=keep",
 	})
 	if err != nil {
@@ -397,8 +415,14 @@ func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 	if got, want := envValue(env, "CODEX_HOME"), filepath.Join(wantRoot, "config", "codex"); got != want {
 		t.Fatalf("CODEX_HOME = %q, want %q", got, want)
 	}
+	if got := countEnvKey(env, "CODEX_HOME"); got != 1 {
+		t.Fatalf("CODEX_HOME entries = %d, want 1", got)
+	}
 	if got, want := envValue(env, "CLAUDE_CONFIG_DIR"), filepath.Join(wantRoot, "config", "claude"); got != want {
 		t.Fatalf("CLAUDE_CONFIG_DIR = %q, want %q", got, want)
+	}
+	if got := countEnvKey(env, "CLAUDE_CONFIG_DIR"); got != 1 {
+		t.Fatalf("CLAUDE_CONFIG_DIR entries = %d, want 1", got)
 	}
 	if got, err := os.ReadFile(filepath.Join(wantRoot, "config", "codex", "auth.json")); err != nil || string(got) != `{"codex":"ok"}` {
 		t.Fatalf("copied codex auth = (%q, %v), want seeded auth", string(got), err)
@@ -431,4 +455,15 @@ func envValue(environ []string, key string) string {
 		}
 	}
 	return ""
+}
+
+func countEnvKey(environ []string, key string) int {
+	count := 0
+	for _, entry := range environ {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok && name == key {
+			count++
+		}
+	}
+	return count
 }
