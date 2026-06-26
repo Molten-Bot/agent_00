@@ -348,7 +348,7 @@ func TestPublishLocalRunFailureResultPublishesExplicitFailurePayload(t *testing.
 	if got := msg["Error details:"]; got != "git: merge conflict" {
 		t.Fatalf("message.Error details: = %#v", got)
 	}
-	if got := msg["message"]; got != "Failure: task failed. Error details: git: merge conflict" {
+	if got := msg["message"]; got != "Failure: task failed.\nError details: git: merge conflict" {
 		t.Fatalf("message.message = %#v", got)
 	}
 	result, _ := msg["result"].(map[string]any)
@@ -1147,7 +1147,7 @@ func TestLocalNoChangesFailurePayloadIncludesExplicitFailureFields(t *testing.T)
 		t.Fatalf("payload.Error details: = %q, want no-changes follow-up detail", got)
 	}
 	msg, _ := payload["message"].(string)
-	if !strings.Contains(msg, "Failure: task failed. Error details:") {
+	if !strings.Contains(msg, "Failure: task failed.\nError details:") {
 		t.Fatalf("payload.message = %q, want explicit failure message", msg)
 	}
 	resultPayload, _ := payload["result"].(map[string]any)
