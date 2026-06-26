@@ -349,6 +349,11 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	if reviewContext != nil && reviewContext.GitHubTokenEnvSanitized {
 		codexOpts.Env = githubTokenSanitizedEnv()
 	}
+	if env, err := prepareAgentIOEnv(runDir, codexOpts.Env); err != nil {
+		return h.fail(ExitWorkspace, "workspace", err, runDir)
+	} else {
+		codexOpts.Env = env
+	}
 	codexBasePrompt = withBackpressurePrompt(codexBasePrompt, h.collectBackpressureRequirements(repos, cfg.TargetSubdir))
 	codexTargetLabel := codexTargetLabel(cfg.TargetSubdir, len(repos) > 1)
 	initialRepo, initialRepoDir := initialAgentInvocationRepoMetadata(repos)
@@ -793,6 +798,7 @@ func (h Harness) processChangedRepo(
 						attempt+1,
 						recreateErr,
 					)
+					return ExitPR, "pr", recreateErr
 				}
 				if recreated {
 					noReportRetry = -1
@@ -1003,7 +1009,15 @@ func (h Harness) recreatePullRequestIfClosed(ctx context.Context, repo *repoWork
 	}
 	state, err := h.loadPullRequestState(ctx, repo.Dir, repo.PRURL)
 	if err != nil {
-		return false, err
+		h.logf(
+			"stage=checks status=warn action=recreate_closed_pr reason=state_lookup_failed repo=%s repo_dir=%s branch=%s pr_url=%s err=%q",
+			repo.URL,
+			repo.RelDir,
+			repo.Branch,
+			repo.PRURL,
+			err,
+		)
+		return false, nil
 	}
 	if pullRequestStateIsOpen(state) {
 		return false, nil
@@ -5338,6 +5352,174 @@ func commandWithoutGitHubTokenEnv(cmd execx.Command) execx.Command {
 
 func githubTokenSanitizedEnv() []string {
 	return environWithoutKeys(os.Environ(), "GH_TOKEN", "GITHUB_TOKEN")
+}
+
+func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
+	runDir = strings.TrimSpace(runDir)
+	if runDir == "" {
+		return nil, fmt.Errorf("run directory is required for agent io")
+	}
+
+	root := filepath.Join(runDir, ".moltenhub-agent-io")
+	homeDir := filepath.Join(root, "home")
+	tmpDir := filepath.Join(root, "tmp")
+	configDir := filepath.Join(root, "config")
+	codexConfigDir := filepath.Join(configDir, "codex")
+	claudeConfigDir := filepath.Join(configDir, "claude")
+	cacheDir := filepath.Join(root, "cache")
+	stateDir := filepath.Join(root, "state")
+	logDir := filepath.Join(root, "log")
+	runtimeDir := filepath.Join(root, "runtime")
+	for _, dir := range []string{homeDir, tmpDir, configDir, codexConfigDir, claudeConfigDir, cacheDir, stateDir, logDir, runtimeDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("prepare agent io dir %s: %w", dir, err)
+		}
+	}
+
+	if len(environ) == 0 {
+		environ = os.Environ()
+	}
+	if err := seedAgentConfigDir(agentConfigSource(environ, "CODEX_HOME", filepath.Join(".codex")), codexConfigDir); err != nil {
+		return nil, fmt.Errorf("seed codex config dir: %w", err)
+	}
+	if err := seedAgentConfigDir(agentConfigSource(environ, "CLAUDE_CONFIG_DIR", filepath.Join(".claude")), claudeConfigDir); err != nil {
+		return nil, fmt.Errorf("seed claude config dir: %w", err)
+	}
+	return environWithOverrides(environ,
+		"MOLTENHUB_AGENT_IO_DIR="+root,
+		"HOME="+homeDir,
+		"TMPDIR="+tmpDir,
+		"TEMP="+tmpDir,
+		"TMP="+tmpDir,
+		"XDG_CONFIG_HOME="+configDir,
+		"XDG_CACHE_HOME="+cacheDir,
+		"XDG_STATE_HOME="+stateDir,
+		"XDG_RUNTIME_DIR="+runtimeDir,
+		"CODEX_HOME="+codexConfigDir,
+		"CLAUDE_CONFIG_DIR="+claudeConfigDir,
+		"npm_config_cache="+filepath.Join(cacheDir, "npm"),
+		"YARN_CACHE_FOLDER="+filepath.Join(cacheDir, "yarn"),
+		"PNPM_HOME="+filepath.Join(cacheDir, "pnpm"),
+		"PIP_CACHE_DIR="+filepath.Join(cacheDir, "pip"),
+		"UV_CACHE_DIR="+filepath.Join(cacheDir, "uv"),
+		"GOCACHE="+filepath.Join(cacheDir, "go-build"),
+		"GOMODCACHE="+filepath.Join(cacheDir, "go-mod"),
+		"CARGO_HOME="+filepath.Join(cacheDir, "cargo"),
+		"GRADLE_USER_HOME="+filepath.Join(cacheDir, "gradle"),
+		"PLAYWRIGHT_BROWSERS_PATH="+filepath.Join(cacheDir, "ms-playwright"),
+		"LOGDIR="+logDir,
+	), nil
+}
+
+func agentConfigSource(environ []string, configEnvKey, homeRel string) string {
+	if configured, ok := environValue(environ, configEnvKey); ok && strings.TrimSpace(configured) != "" {
+		return strings.TrimSpace(configured)
+	}
+	if home, ok := environValue(environ, "HOME"); ok && strings.TrimSpace(home) != "" {
+		return filepath.Join(strings.TrimSpace(home), homeRel)
+	}
+	return ""
+}
+
+func seedAgentConfigDir(sourcePath, targetDir string) error {
+	sourcePath = strings.TrimSpace(sourcePath)
+	targetDir = strings.TrimSpace(targetDir)
+	if sourcePath == "" || targetDir == "" || pathContains(targetDir, sourcePath) || pathContains(sourcePath, targetDir) {
+		return nil
+	}
+
+	info, err := os.Lstat(sourcePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil
+	}
+	if !info.IsDir() {
+		return copyFile(sourcePath, filepath.Join(targetDir, filepath.Base(sourcePath)), info.Mode().Perm())
+	}
+
+	entries, err := os.ReadDir(sourcePath)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		if entry.IsDir() || !entry.Type().IsRegular() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if err := copyFile(filepath.Join(sourcePath, entry.Name()), filepath.Join(targetDir, entry.Name()), info.Mode().Perm()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFile(sourcePath, targetPath string, mode os.FileMode) error {
+	content, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(targetPath, content, mode)
+}
+
+func pathContains(parent, child string) bool {
+	parent = filepath.Clean(strings.TrimSpace(parent))
+	child = filepath.Clean(strings.TrimSpace(child))
+	if parent == "" || child == "" {
+		return false
+	}
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!filepath.IsAbs(rel) && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func environValue(environ []string, key string) (string, bool) {
+	for _, entry := range environ {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok && name == key {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+func environWithOverrides(environ []string, overrides ...string) []string {
+	out := append([]string(nil), environ...)
+	index := make(map[string]int, len(out))
+	for i, entry := range out {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok && name != "" {
+			index[name] = i
+		}
+	}
+	for _, entry := range overrides {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok || strings.TrimSpace(name) == "" {
+			continue
+		}
+		if existing, ok := index[name]; ok {
+			out[existing] = entry
+			continue
+		}
+		index[name] = len(out)
+		out = append(out, entry)
+	}
+	return out
 }
 
 func environWithoutKeys(environ []string, keys ...string) []string {
