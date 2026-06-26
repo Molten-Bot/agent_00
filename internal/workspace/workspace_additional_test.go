@@ -55,11 +55,21 @@ func TestResolveAgentsSeedPathReturnsEmptyWhenNoCandidatesExist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
 	}
-	tmp := t.TempDir()
+	tmp, err := os.MkdirTemp("/tmp", "no-agents-seed-")
+	if err != nil {
+		t.Fatalf("MkdirTemp() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatalf("Chdir(%q) error = %v", tmp, err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(wd) })
+
+	if exePath, err := os.Executable(); err == nil {
+		if path, ok := findPathUpward(filepath.Dir(exePath), agentsSeedPath); ok {
+			t.Skipf("test executable has ambient agents seed candidate %q", path)
+		}
+	}
 
 	t.Setenv(agentsSeedEnv, filepath.Join(tmp, "missing-seed.md"))
 	if got := resolveAgentsSeedPath(); got != "" {
