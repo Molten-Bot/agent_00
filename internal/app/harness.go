@@ -2961,9 +2961,14 @@ func (h Harness) completeReviewRun(
 		}
 		h.logf("stage=review status=start action=comment pr_url=%s", prURL)
 		if err := h.postReviewSummary(ctx, repo.Dir, writebackSelector, writebackRepo, metadata.Number, bodyPath, prURL, reviewContext != nil && reviewContext.GitHubTokenEnvSanitized); err != nil {
-			return fmt.Errorf("post pull request review summary: %w", err)
+			if isTransientGitHubCLIError(err) {
+				h.logf("stage=review status=warn action=comment_writeback_deferred pr_url=%s err=%q", prURL, err)
+			} else {
+				return fmt.Errorf("post pull request review summary: %w", err)
+			}
+		} else {
+			h.logf("stage=review status=ok action=comment pr_url=%s", prURL)
 		}
-		h.logf("stage=review status=ok action=comment pr_url=%s", prURL)
 	}
 
 	if cfg.Review.AutoMerge {
@@ -3794,6 +3799,41 @@ func shouldRetryPRCreate(res execx.Result, err error) bool {
 	return false
 }
 
+func isTransientGitHubCLIError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	transientMarkers := []string{
+		"githubstatus.com",
+		"http 500",
+		"http 502",
+		"http 503",
+		"http 504",
+		"we couldn't respond to your request in time",
+		"try resubmitting your request",
+		"context deadline exceeded",
+		"client.timeout exceeded",
+		"tls handshake timeout",
+		"i/o timeout",
+		"connection reset by peer",
+		"econnreset",
+		"etimedout",
+		"failed to connect",
+		"could not connect to server",
+		"temporary failure in name resolution",
+		"failed to lookup address information",
+		"error connecting to",
+		"check your internet connection",
+	}
+	for _, marker := range transientMarkers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func shouldTreatReusedBranchPRLookupFailureAsNonFatal(err error) bool {
 	return errors.Is(err, errTransientPRLookup) || shouldRetryPRCreate(execx.Result{}, err)
 }
@@ -4564,6 +4604,9 @@ func (h Harness) runCodexWithHeartbeat(
 				return run.res, fmt.Errorf("%s reported failure: %s", agentStage, detail)
 			}
 			if run.err != nil {
+				if isCodexExecutionTransportFailure(run.res, run.err) {
+					return run.res, run.err
+				}
 				if isNonFatalValidationToolingFailure("", run.res) {
 					h.logf(
 						"stage=%s status=warn action=validation_tooling_unavailable detail=%q%s",
@@ -4885,6 +4928,29 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 
 func isImplementationTargetFailure(detail string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(detail)), "agent did not identify an implementation target")
+}
+
+func isCodexExecutionTransportFailure(res execx.Result, err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		err.Error(),
+		res.Stdout,
+		res.Stderr,
+	}, "\n")))
+	if text == "" {
+		return false
+	}
+	transportMarkers := []string{
+		"backend-api/codex",
+		"responses_websocket",
+		"stream disconnected before completion",
+		"failed to connect to websocket",
+		"failed to lookup address information",
+		"temporary failure in name resolution",
+	}
+	return containsAny(text, transportMarkers)
 }
 
 func containsAny(text string, markers []string) bool {
