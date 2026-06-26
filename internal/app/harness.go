@@ -5351,12 +5351,16 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 	}
 
 	root := filepath.Join(runDir, ".moltenhub-agent-io")
+	homeDir := filepath.Join(root, "home")
 	tmpDir := filepath.Join(root, "tmp")
+	configDir := filepath.Join(root, "config")
+	codexConfigDir := filepath.Join(configDir, "codex")
+	claudeConfigDir := filepath.Join(configDir, "claude")
 	cacheDir := filepath.Join(root, "cache")
 	stateDir := filepath.Join(root, "state")
 	logDir := filepath.Join(root, "log")
 	runtimeDir := filepath.Join(root, "runtime")
-	for _, dir := range []string{tmpDir, cacheDir, stateDir, logDir, runtimeDir} {
+	for _, dir := range []string{homeDir, tmpDir, configDir, codexConfigDir, claudeConfigDir, cacheDir, stateDir, logDir, runtimeDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("prepare agent io dir %s: %w", dir, err)
 		}
@@ -5365,14 +5369,24 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 	if len(environ) == 0 {
 		environ = os.Environ()
 	}
+	if err := seedAgentConfigDir(agentConfigSource(environ, "CODEX_HOME", filepath.Join(".codex")), codexConfigDir); err != nil {
+		return nil, fmt.Errorf("seed codex config dir: %w", err)
+	}
+	if err := seedAgentConfigDir(agentConfigSource(environ, "CLAUDE_CONFIG_DIR", filepath.Join(".claude")), claudeConfigDir); err != nil {
+		return nil, fmt.Errorf("seed claude config dir: %w", err)
+	}
 	return environWithOverrides(environ,
 		"MOLTENHUB_AGENT_IO_DIR="+root,
+		"HOME="+homeDir,
 		"TMPDIR="+tmpDir,
 		"TEMP="+tmpDir,
 		"TMP="+tmpDir,
+		"XDG_CONFIG_HOME="+configDir,
 		"XDG_CACHE_HOME="+cacheDir,
 		"XDG_STATE_HOME="+stateDir,
 		"XDG_RUNTIME_DIR="+runtimeDir,
+		"CODEX_HOME="+codexConfigDir,
+		"CLAUDE_CONFIG_DIR="+claudeConfigDir,
 		"npm_config_cache="+filepath.Join(cacheDir, "npm"),
 		"YARN_CACHE_FOLDER="+filepath.Join(cacheDir, "yarn"),
 		"PNPM_HOME="+filepath.Join(cacheDir, "pnpm"),
@@ -5385,6 +5399,93 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 		"PLAYWRIGHT_BROWSERS_PATH="+filepath.Join(cacheDir, "ms-playwright"),
 		"LOGDIR="+logDir,
 	), nil
+}
+
+func agentConfigSource(environ []string, configEnvKey, homeRel string) string {
+	if configured, ok := environValue(environ, configEnvKey); ok && strings.TrimSpace(configured) != "" {
+		return strings.TrimSpace(configured)
+	}
+	if home, ok := environValue(environ, "HOME"); ok && strings.TrimSpace(home) != "" {
+		return filepath.Join(strings.TrimSpace(home), homeRel)
+	}
+	return ""
+}
+
+func seedAgentConfigDir(sourcePath, targetDir string) error {
+	sourcePath = strings.TrimSpace(sourcePath)
+	targetDir = strings.TrimSpace(targetDir)
+	if sourcePath == "" || targetDir == "" || pathContains(targetDir, sourcePath) || pathContains(sourcePath, targetDir) {
+		return nil
+	}
+
+	info, err := os.Lstat(sourcePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil
+	}
+	if !info.IsDir() {
+		return copyFile(sourcePath, filepath.Join(targetDir, filepath.Base(sourcePath)), info.Mode().Perm())
+	}
+
+	entries, err := os.ReadDir(sourcePath)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		if entry.IsDir() || !entry.Type().IsRegular() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if err := copyFile(filepath.Join(sourcePath, entry.Name()), filepath.Join(targetDir, entry.Name()), info.Mode().Perm()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFile(sourcePath, targetPath string, mode os.FileMode) error {
+	content, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(targetPath, content, mode)
+}
+
+func pathContains(parent, child string) bool {
+	parent = filepath.Clean(strings.TrimSpace(parent))
+	child = filepath.Clean(strings.TrimSpace(child))
+	if parent == "" || child == "" {
+		return false
+	}
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!filepath.IsAbs(rel) && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func environValue(environ []string, key string) (string, bool) {
+	for _, entry := range environ {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok && name == key {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 func environWithOverrides(environ []string, overrides ...string) []string {
