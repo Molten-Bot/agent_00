@@ -793,6 +793,7 @@ func (h Harness) processChangedRepo(
 						attempt+1,
 						recreateErr,
 					)
+					return ExitPR, "pr", recreateErr
 				}
 				if recreated {
 					noReportRetry = -1
@@ -1015,6 +1016,7 @@ func (h Harness) recreatePullRequestIfClosed(ctx context.Context, repo *repoWork
 	if err := h.renameGeneratedWorkBranch(ctx, repo, pushRemote, "closed_pr"); err != nil {
 		return false, err
 	}
+	repo.PRURL = ""
 	if err := h.pushWithSync(ctx, repo, 0); err != nil {
 		return false, err
 	}
