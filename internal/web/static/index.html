@@ -2663,6 +2663,7 @@
           state.githubRepos = Array.isArray(body.repos) ? body.repos : [];
           state.githubReposReady = true;
           state.chatReposLoaded = false;
+          pruneRepoHistoryToLoadedGitHubRepos();
           renderRepoHistoryOptions();
           trackAnalyticsEvent("chat_repos_loaded", { repo_count: state.githubRepos.length });
         } catch (err) {
@@ -6293,6 +6294,26 @@
       state.repoHistory = filtered;
       persistRepoHistory();
       renderRepoHistoryOptions();
+    }
+
+    function pruneRepoHistoryToLoadedGitHubRepos() {
+      if (!state.githubReposReady) {
+        return false;
+      }
+      const available = new Set(githubRepoSelectValues().map(repoDedupeKey).filter(Boolean));
+      const filtered = state.repoHistory.filter((repo) => {
+        if (!githubRepoPathFromValue(repo)) {
+          return true;
+        }
+        return available.has(repoDedupeKey(repo));
+      });
+      if (filtered.length === state.repoHistory.length) {
+        return false;
+      }
+      state.repoHistory = filtered;
+      persistRepoHistory();
+      renderRepoHistoryOptions();
+      return true;
     }
 
     function rememberManualRepoEntry(value) {
@@ -13734,6 +13755,7 @@
     libraryReviewerInput.value = builderReviewerInput.value;
     scheduleTaskTimingRefresh();
     window.setInterval(refreshTaskIdleSpinClasses, TASK_ICON_IDLE_REFRESH_MS);
+    pruneRepoHistoryToLoadedGitHubRepos();
     renderRepoHistoryOptions();
     renderReviewerHistoryOptions();
     renderLibraryTaskOptions();
