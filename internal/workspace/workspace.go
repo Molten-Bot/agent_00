@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -177,16 +178,37 @@ func baseAllowsExec(path string) bool {
 		baseAllowsExecCache.Store(path, true)
 		return true
 	}
-	opts, ok := mountOptionsForPath(path)
-	if !ok {
-		// If mount details are unavailable, keep existing behavior.
+	if st, err := os.Stat(path); err != nil || !st.IsDir() {
 		baseAllowsExecCache.Store(path, true)
 		return true
 	}
+	opts, ok := mountOptionsForPath(path)
+	if !ok {
+		allowed := probeBaseAllowsExec(path)
+		baseAllowsExecCache.Store(path, allowed)
+		return allowed
+	}
 	_, noExec := opts["noexec"]
-	allowed := !noExec
+	allowed := !noExec && probeBaseAllowsExec(path)
 	baseAllowsExecCache.Store(path, allowed)
 	return allowed
+}
+
+func probeBaseAllowsExec(base string) bool {
+	dir, err := os.MkdirTemp(base, ".moltenhub-exec-check-")
+	if err != nil {
+		return false
+	}
+	defer os.RemoveAll(dir)
+
+	path := filepath.Join(dir, "check")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		return false
+	}
+	if err := exec.Command(path).Run(); err != nil {
+		return false
+	}
+	return true
 }
 
 func mountOptionsForPath(targetPath string) (map[string]struct{}, bool) {

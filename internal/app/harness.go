@@ -5489,34 +5489,45 @@ func pathContains(parent, child string) bool {
 }
 
 func environValue(environ []string, key string) (string, bool) {
+	var (
+		found bool
+		value string
+	)
 	for _, entry := range environ {
-		name, value, ok := strings.Cut(entry, "=")
+		name, entryValue, ok := strings.Cut(entry, "=")
 		if ok && name == key {
-			return value, true
+			value = entryValue
+			found = true
 		}
 	}
-	return "", false
+	return value, found
 }
 
 func environWithOverrides(environ []string, overrides ...string) []string {
-	out := append([]string(nil), environ...)
-	index := make(map[string]int, len(out))
-	for i, entry := range out {
+	overrideKeys := make(map[string]struct{}, len(overrides))
+	for _, entry := range overrides {
 		name, _, ok := strings.Cut(entry, "=")
-		if ok && name != "" {
-			index[name] = i
+		if ok {
+			if name = strings.TrimSpace(name); name != "" {
+				overrideKeys[name] = struct{}{}
+			}
 		}
+	}
+	out := make([]string, 0, len(environ)+len(overrides))
+	for _, entry := range environ {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok {
+			if _, replaced := overrideKeys[name]; replaced {
+				continue
+			}
+		}
+		out = append(out, entry)
 	}
 	for _, entry := range overrides {
 		name, _, ok := strings.Cut(entry, "=")
 		if !ok || strings.TrimSpace(name) == "" {
 			continue
 		}
-		if existing, ok := index[name]; ok {
-			out[existing] = entry
-			continue
-		}
-		index[name] = len(out)
 		out = append(out, entry)
 	}
 	return out

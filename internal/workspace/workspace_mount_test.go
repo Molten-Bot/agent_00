@@ -87,6 +87,39 @@ func TestMountOptionsForPathAndBaseAllowsExecInputHandling(t *testing.T) {
 	}
 }
 
+func TestBaseAllowsExecRejectsNoExecDevShmWhenReported(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux mount options only")
+	}
+	if _, err := os.Stat(defaultRAMBase); err != nil {
+		t.Skipf("%s unavailable: %v", defaultRAMBase, err)
+	}
+	opts, ok := mountOptionsForPath(defaultRAMBase)
+	if !ok {
+		t.Skip("mount options unavailable")
+	}
+	if _, noExec := opts["noexec"]; !noExec {
+		t.Skipf("%s is executable in this environment", defaultRAMBase)
+	}
+
+	baseAllowsExecCache.Delete(defaultRAMBase)
+	t.Cleanup(func() { baseAllowsExecCache.Delete(defaultRAMBase) })
+	if baseAllowsExec(defaultRAMBase) {
+		t.Fatalf("baseAllowsExec(%q) = true, want false for noexec mount", defaultRAMBase)
+	}
+}
+
+func TestProbeBaseAllowsExecAcceptsExecutableTempDir(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "linux" {
+		t.Skip("linux executable probe only")
+	}
+	if !probeBaseAllowsExec(t.TempDir()) {
+		t.Fatal("probeBaseAllowsExec(temp dir) = false, want true")
+	}
+}
+
 func TestMountHelpersCoverInvalidInputs(t *testing.T) {
 	t.Parallel()
 
