@@ -760,7 +760,7 @@ func TestProcessInboundMessageDedupesIdenticalConfigAcrossRequestIDs(t *testing.
 	}
 }
 
-func TestProcessInboundMessagePublishesStoppedFailureWhenTaskControlStopsDispatch(t *testing.T) {
+func TestProcessInboundMessagePublishesStoppedResultWhenTaskControlStopsDispatch(t *testing.T) {
 	t.Parallel()
 
 	d := NewDaemon(nil)
@@ -846,18 +846,64 @@ func TestProcessInboundMessagePublishesStoppedFailureWhenTaskControlStopsDispatc
 
 	api.mu.Lock()
 	defer api.mu.Unlock()
+	statuses := statusPayloads(api.published)
+	var stoppedStatus map[string]any
+	for _, payload := range statuses {
+		if payload["status"] == "stopped" {
+			stoppedStatus = payload
+			break
+		}
+	}
+	if stoppedStatus == nil {
+		t.Fatalf("stopped status payload missing in %#v", statuses)
+	}
+	if got := stoppedStatus["failed"]; got != false {
+		t.Fatalf("stopped status failed = %#v, want false", got)
+	}
+	for _, key := range []string{"error", "Failure", "Failure:", "Error details", "Error details:"} {
+		if _, ok := stoppedStatus[key]; ok {
+			t.Fatalf("stopped status %s present: %#v", key, stoppedStatus[key])
+		}
+	}
+	if details, _ := stoppedStatus["details"].(map[string]any); details != nil {
+		for _, key := range []string{"error", "Failure", "Failure:", "Error details", "Error details:"} {
+			if _, ok := details[key]; ok {
+				t.Fatalf("stopped status details %s present: %#v", key, details[key])
+			}
+		}
+	}
 	publishedResults := nonStatusPayloads(api.published)
 	if got, want := len(publishedResults), 1; got != want {
 		t.Fatalf("published payload count = %d, want %d", got, want)
 	}
-	if got, want := fmt.Sprint(publishedResults[0]["status"]), "error"; got != want {
+	if got, want := fmt.Sprint(publishedResults[0]["status"]), "stopped"; got != want {
 		t.Fatalf("result status = %q, want %q", got, want)
 	}
-	if got := fmt.Sprint(publishedResults[0]["message"]); !strings.Contains(got, "Failure: task failed.\nError details: task was stopped by operator") {
+	if got := publishedResults[0]["failed"]; got != false {
+		t.Fatalf("result failed = %#v, want false", got)
+	}
+	if got := publishedResults[0]["ok"]; got != false {
+		t.Fatalf("result ok = %#v, want false", got)
+	}
+	if got := fmt.Sprint(publishedResults[0]["message"]); got != "Task stopped by operator." {
 		t.Fatalf("result message = %q", got)
 	}
-	if got := fmt.Sprint(publishedResults[0]["error"]); got != "task was stopped by operator" {
-		t.Fatalf("result error = %q, want %q", got, "task was stopped by operator")
+	if _, ok := publishedResults[0]["failure"]; ok {
+		t.Fatalf("result failure present: %#v", publishedResults[0]["failure"])
+	}
+	for _, key := range []string{"error", "Failure", "Failure:", "Error details", "Error details:"} {
+		if _, ok := publishedResults[0][key]; ok {
+			t.Fatalf("result %s present: %#v", key, publishedResults[0][key])
+		}
+	}
+	result, _ := publishedResults[0]["result"].(map[string]any)
+	if result == nil {
+		t.Fatal("result payload missing")
+	}
+	for _, key := range []string{"error", "Failure", "Failure:", "Error details", "Error details:"} {
+		if _, ok := result[key]; ok {
+			t.Fatalf("result details %s present: %#v", key, result[key])
+		}
 	}
 	if got := len(api.offlineCalls); got != 0 {
 		t.Fatalf("offline calls = %d, want 0 for operator stop", got)
@@ -1038,8 +1084,14 @@ func TestProcessInboundMessageFallsBackToDeliveryIDForTaskControlRequestID(t *te
 	if got := fmt.Sprint(publishedResults[0]["request_id"]); got != "delivery-fallback" {
 		t.Fatalf("result request_id = %q, want %q", got, "delivery-fallback")
 	}
-	if got := fmt.Sprint(publishedResults[0]["message"]); !strings.Contains(got, "Failure: task failed.\nError details: task was stopped by operator") {
+	if got := fmt.Sprint(publishedResults[0]["status"]); got != "stopped" {
+		t.Fatalf("result status = %q, want stopped", got)
+	}
+	if got := fmt.Sprint(publishedResults[0]["message"]); got != "Task stopped by operator." {
 		t.Fatalf("result message = %q", got)
+	}
+	if _, ok := publishedResults[0]["failure"]; ok {
+		t.Fatalf("result failure present: %#v", publishedResults[0]["failure"])
 	}
 }
 

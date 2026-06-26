@@ -1223,6 +1223,66 @@ func TestDispatchResultPayloadIncludesTopLevelFailureMessage(t *testing.T) {
 	}
 }
 
+func TestDispatchResultPayloadStoppedOmitsFailureFields(t *testing.T) {
+	t.Parallel()
+
+	cfg := InitConfig{
+		Skill: SkillConfig{
+			Name:       "code_for_me",
+			ResultType: "skill_result",
+		},
+	}
+	dispatch := SkillDispatch{
+		RequestID: "req-stopped",
+		Skill:     "code_for_me",
+		ReplyTo:   "agent-123",
+	}
+	res := app.Result{
+		ExitCode: app.ExitPreflight,
+		Err:      fmt.Errorf("task was stopped by operator"),
+	}
+
+	payload := dispatchResultPayloadWithStatus(cfg, dispatch, res, "stopped")
+	if got := payload["status"]; got != "stopped" {
+		t.Fatalf("status = %#v, want stopped", got)
+	}
+	if got := payload["failed"]; got != false {
+		t.Fatalf("failed = %#v, want false", got)
+	}
+	if got := payload["ok"]; got != false {
+		t.Fatalf("ok = %#v, want false", got)
+	}
+	if got := payload["message"]; got != "Task stopped by operator." {
+		t.Fatalf("message = %#v", got)
+	}
+	for _, key := range []string{"error", "Failure", "Failure:", "Error details", "Error details:", "failure"} {
+		if _, ok := payload[key]; ok {
+			t.Fatalf("payload %s present: %#v", key, payload[key])
+		}
+	}
+	if got := payload["reason"]; got != "task was stopped by operator" {
+		t.Fatalf("reason = %#v", got)
+	}
+	result, _ := payload["result"].(map[string]any)
+	if result == nil {
+		t.Fatal("result payload missing")
+	}
+	if got := result["status"]; got != "stopped" {
+		t.Fatalf("result.status = %#v, want stopped", got)
+	}
+	if got := result["message"]; got != "Task stopped by operator." {
+		t.Fatalf("result.message = %#v", got)
+	}
+	for _, key := range []string{"error", "Failure", "Failure:", "Error details", "Error details:"} {
+		if _, ok := result[key]; ok {
+			t.Fatalf("result %s present: %#v", key, result[key])
+		}
+	}
+	if got := result["reason"]; got != "task was stopped by operator" {
+		t.Fatalf("result.reason = %#v", got)
+	}
+}
+
 func TestDuplicateDispatchResultPayloadIncludesDuplicateMetadataAndFailureDetails(t *testing.T) {
 	t.Parallel()
 

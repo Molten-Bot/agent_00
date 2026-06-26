@@ -622,7 +622,8 @@ func (d Daemon) processInboundMessage(
 		}
 
 		publishFailure := func(status, stage string, err error, triggerFollowUps bool) {
-			finalState = "error"
+			status = firstNonEmpty(status, "error")
+			finalState = status
 			if err == nil {
 				err = errors.New("unknown error")
 			}
@@ -638,20 +639,22 @@ func (d Daemon) processInboundMessage(
 				d.OnDispatchFailed(dispatch.RequestID, dispatch.Config, failRes)
 			}
 			taskState := a2a.TaskStateFailed
-			if firstNonEmpty(status, "error") == "stopped" {
+			statusDetails := map[string]any{"error": failErr.Error()}
+			if status == "stopped" {
 				taskState = a2a.TaskStateCanceled
+				statusDetails = map[string]any{"reason": failErr.Error()}
 			}
 			d.publishDispatchStatus(
 				runCtx,
 				api,
 				cfg,
 				dispatch,
-				firstNonEmpty(status, "error"),
+				status,
 				taskState,
-				dispatchResultMessage("error", failRes),
-				map[string]any{"error": failErr.Error()},
+				dispatchResultMessage(status, failRes),
+				statusDetails,
 			)
-			payload := dispatchResultPayload(cfg, dispatch, failRes)
+			payload := dispatchResultPayloadWithStatus(cfg, dispatch, failRes, status)
 			if publishErr := api.PublishResult(runCtx, payload); publishErr != nil {
 				d.logf("dispatch status=publish_error request_id=%s err=%q", dispatch.RequestID, publishErr)
 				if !ackedEarly && strings.TrimSpace(deliveryID) != "" {
@@ -671,7 +674,7 @@ func (d Daemon) processInboundMessage(
 			}
 			d.logf(
 				"dispatch status=%s request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
-				firstNonEmpty(status, "error"),
+				status,
 				firstNonEmpty(dispatch.RequestID, dedupeKey),
 				failRes.ExitCode,
 				failRes.WorkspaceDir,
@@ -1199,10 +1202,15 @@ func (d Daemon) handleDispatch(
 	}
 	if res.Err != nil {
 		statusDetails["error"] = res.Err.Error()
-		addExplicitFailureFields(statusDetails, res.Err.Error())
+		if stoppedByOperator {
+			delete(statusDetails, "error")
+			statusDetails["reason"] = res.Err.Error()
+		} else {
+			addExplicitFailureFields(statusDetails, res.Err.Error())
+		}
 	}
 	d.publishDispatchStatus(ctx, api, cfg, dispatch, status, taskState, dispatchResultMessage(status, res), statusDetails)
-	payload := dispatchResultPayload(cfg, dispatch, res)
+	payload := dispatchResultPayloadWithStatus(cfg, dispatch, res, status)
 	if err := api.PublishResult(ctx, payload); err != nil {
 		d.logf("dispatch status=publish_error request_id=%s err=%q", dispatch.RequestID, err)
 		if !ackedEarly && strings.TrimSpace(deliveryID) != "" {
@@ -1211,7 +1219,7 @@ func (d Daemon) handleDispatch(
 			}
 		}
 		if res.Err != nil {
-			return "error"
+			return status
 		}
 		if res.NoChanges && !resultHasPR(res) {
 			return "no_changes"
@@ -1242,7 +1250,7 @@ func (d Daemon) handleDispatch(
 			res.PRURL,
 			res.Err,
 		)
-		return "error"
+		return status
 	}
 	if api != nil {
 		if err := api.RecordRunCompletedActivity(ctx, dispatch.Config); err != nil {
@@ -1947,11 +1955,20 @@ func dispatchOriginatorPayload(dispatch SkillDispatch) map[string]any {
 }
 
 func dispatchResultPayload(cfg InitConfig, dispatch SkillDispatch, res app.Result) map[string]any {
-	status := "completed"
+	return dispatchResultPayloadWithStatus(cfg, dispatch, res, "")
+}
+
+func dispatchResultPayloadWithStatus(cfg InitConfig, dispatch SkillDispatch, res app.Result, status string) map[string]any {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = dispatchResultStatus(res)
+	}
+	canceled := isCanceledDispatchStatus(status)
+	failed := res.Err != nil && !canceled
+
+	errText := ""
 	if res.Err != nil {
-		status = "error"
-	} else if res.NoChanges && !resultHasPR(res) {
-		status = "no_changes"
+		errText = res.Err.Error()
 	}
 	detailStatus := dispatchResultDetailStatus(status, res)
 	message := dispatchResultMessage(status, res)
@@ -1972,10 +1989,12 @@ func dispatchResultPayload(cfg InitConfig, dispatch SkillDispatch, res app.Resul
 		"message":      message,
 		"response":     response,
 	}
-	if res.Err != nil {
-		errText := res.Err.Error()
+	if failed {
 		result["error"] = errText
 		addExplicitFailureFields(result, errText)
+	} else if canceled && strings.TrimSpace(errText) != "" {
+		result["reason"] = errText
+		result["cancellationReason"] = errText
 	}
 	if hubTaskID := strings.TrimSpace(dispatch.HubTaskID); hubTaskID != "" {
 		result["hubTaskId"] = hubTaskID
@@ -1991,8 +2010,8 @@ func dispatchResultPayload(cfg InitConfig, dispatch SkillDispatch, res app.Resul
 		"skill":      firstNonEmpty(dispatch.Skill, cfg.Skill.Name),
 		"request_id": dispatch.RequestID,
 		"status":     status,
-		"failed":     res.Err != nil,
-		"ok":         res.Err == nil,
+		"failed":     failed,
+		"ok":         !failed && !canceled,
 		"message":    message,
 		"response":   response,
 		"result":     result,
@@ -2005,8 +2024,7 @@ func dispatchResultPayload(cfg InitConfig, dispatch SkillDispatch, res app.Resul
 		payload["context_id"] = contextID
 		payload["a2a_context_id"] = contextID
 	}
-	if res.Err != nil {
-		errText := res.Err.Error()
+	if failed {
 		payload["error"] = errText
 		addExplicitFailureFields(payload, errText)
 		failure := map[string]any{
@@ -2017,6 +2035,9 @@ func dispatchResultPayload(cfg InitConfig, dispatch SkillDispatch, res app.Resul
 		}
 		addExplicitFailureFields(failure, errText)
 		payload["failure"] = failure
+	} else if canceled && strings.TrimSpace(errText) != "" {
+		payload["reason"] = errText
+		payload["cancellation_reason"] = errText
 	}
 	applyDispatchResponseRouting(payload, dispatch)
 	applyDispatchOriginator(payload, dispatch)
@@ -2027,6 +2048,25 @@ func dispatchResultPayload(cfg InitConfig, dispatch SkillDispatch, res app.Resul
 		}
 	}
 	return payload
+}
+
+func dispatchResultStatus(res app.Result) string {
+	status := "completed"
+	if res.Err != nil {
+		status = "error"
+	} else if res.NoChanges && !resultHasPR(res) {
+		status = "no_changes"
+	}
+	return status
+}
+
+func isCanceledDispatchStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "stopped", "canceled", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func addExplicitFailureFields(payload map[string]any, errText string) {
@@ -2044,6 +2084,9 @@ func addExplicitFailureFields(payload map[string]any, errText string) {
 }
 
 func dispatchResultDetailStatus(status string, res app.Result) string {
+	if isCanceledDispatchStatus(status) {
+		return "stopped"
+	}
 	if res.Err != nil || status == "error" {
 		return "failed"
 	}
@@ -2055,6 +2098,9 @@ func dispatchResultMessage(status string, res app.Result) string {
 }
 
 func dispatchResultResponse(status string, res app.Result) string {
+	if isCanceledDispatchStatus(status) {
+		return "Task stopped by operator."
+	}
 	if res.Err != nil || status == "error" {
 		return failureResponseMessage(res.Err.Error())
 	}
