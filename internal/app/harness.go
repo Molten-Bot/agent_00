@@ -1004,7 +1004,15 @@ func (h Harness) recreatePullRequestIfClosed(ctx context.Context, repo *repoWork
 	}
 	state, err := h.loadPullRequestState(ctx, repo.Dir, repo.PRURL)
 	if err != nil {
-		return false, err
+		h.logf(
+			"stage=checks status=warn action=recreate_closed_pr reason=state_lookup_failed repo=%s repo_dir=%s branch=%s pr_url=%s err=%q",
+			repo.URL,
+			repo.RelDir,
+			repo.Branch,
+			repo.PRURL,
+			err,
+		)
+		return false, nil
 	}
 	if pullRequestStateIsOpen(state) {
 		return false, nil
