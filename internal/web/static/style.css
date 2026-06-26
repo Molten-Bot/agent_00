@@ -1559,31 +1559,16 @@ body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
 }
 
 #moltenbot-hub-link img {
-  filter: none;
+  filter: var(--agent-logo-filter);
   width: 20px;
   height: 20px;
   transition: filter 180ms ease, transform 180ms ease;
 }
 
-html.dark .hub-dock-group[data-configured="true"] #moltenbot-hub-link img,
-html.night .hub-dock-group[data-configured="true"] #moltenbot-hub-link img,
-html.pink .hub-dock-group[data-configured="true"] #moltenbot-hub-link img {
-  filter: brightness(0) saturate(100%) invert(1);
-}
-
 #moltenbot-hub-link:hover img,
 #moltenbot-hub-link:focus-visible img {
-  filter: none;
+  filter: var(--agent-logo-filter);
   transform: translateY(-1px);
-}
-
-html.dark .hub-dock-group[data-configured="true"] #moltenbot-hub-link:hover img,
-html.dark .hub-dock-group[data-configured="true"] #moltenbot-hub-link:focus-visible img,
-html.night .hub-dock-group[data-configured="true"] #moltenbot-hub-link:hover img,
-html.night .hub-dock-group[data-configured="true"] #moltenbot-hub-link:focus-visible img,
-html.pink .hub-dock-group[data-configured="true"] #moltenbot-hub-link:hover img,
-html.pink .hub-dock-group[data-configured="true"] #moltenbot-hub-link:focus-visible img {
-  filter: brightness(0) saturate(100%) invert(1);
 }
 
 .prompt-titlebar .prompt-visibility-toggle {
