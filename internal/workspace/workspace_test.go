@@ -28,7 +28,7 @@ func TestSelectBaseFallsBackToTmp(t *testing.T) {
 	}
 }
 
-func TestSelectBaseFallsBackToTmpWhenDevShmIsNoExec(t *testing.T) {
+func TestSelectBaseFallsBackToTmpWhenDevShmNoExec(t *testing.T) {
 	t.Parallel()
 
 	m := Manager{
