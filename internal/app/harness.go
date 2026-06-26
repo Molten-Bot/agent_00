@@ -793,6 +793,7 @@ func (h Harness) processChangedRepo(
 						attempt+1,
 						recreateErr,
 					)
+					return ExitPR, "pr", recreateErr
 				}
 				if recreated {
 					noReportRetry = -1
@@ -1003,7 +1004,15 @@ func (h Harness) recreatePullRequestIfClosed(ctx context.Context, repo *repoWork
 	}
 	state, err := h.loadPullRequestState(ctx, repo.Dir, repo.PRURL)
 	if err != nil {
-		return false, err
+		h.logf(
+			"stage=checks status=warn action=recreate_closed_pr reason=state_lookup_failed repo=%s repo_dir=%s branch=%s pr_url=%s err=%q",
+			repo.URL,
+			repo.RelDir,
+			repo.Branch,
+			repo.PRURL,
+			err,
+		)
+		return false, nil
 	}
 	if pullRequestStateIsOpen(state) {
 		return false, nil
@@ -1015,6 +1024,7 @@ func (h Harness) recreatePullRequestIfClosed(ctx context.Context, repo *repoWork
 	if err := h.renameGeneratedWorkBranch(ctx, repo, pushRemote, "closed_pr"); err != nil {
 		return false, err
 	}
+	repo.PRURL = ""
 	if err := h.pushWithSync(ctx, repo, 0); err != nil {
 		return false, err
 	}
