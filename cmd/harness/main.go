@@ -2315,7 +2315,7 @@ func failureMessage(errText string) string {
 	if errText == "" {
 		errText = "unknown error"
 	}
-	return "Failure: task failed. Error details: " + errText
+	return "Failure: task failed.\nError details: " + errText
 }
 
 func addFailureFields(payload map[string]any, errText string) {

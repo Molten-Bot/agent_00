@@ -443,7 +443,7 @@ func TestDispatchParseErrorPayloadIncludesRequiredSchema(t *testing.T) {
 	if got := payload["status"]; got != "error" {
 		t.Fatalf("status = %#v, want %q", got, "error")
 	}
-	if got := payload["message"]; got != `Failure: task failed. Error details: dispatch parse: bad payload` {
+	if got := payload["message"]; got != "Failure: task failed.\nError details: dispatch parse: bad payload" {
 		t.Fatalf("message = %#v", got)
 	}
 	if got := payload["error"]; got != "dispatch parse: bad payload" {
@@ -452,7 +452,7 @@ func TestDispatchParseErrorPayloadIncludesRequiredSchema(t *testing.T) {
 	if got := result["status"]; got != "failed" {
 		t.Fatalf("result.status = %#v", got)
 	}
-	if got := result["message"]; got != `Failure: task failed. Error details: dispatch parse: bad payload` {
+	if got := result["message"]; got != "Failure: task failed.\nError details: dispatch parse: bad payload" {
 		t.Fatalf("result.message = %#v", got)
 	}
 	if got := result["error"]; got != "dispatch parse: bad payload" {
@@ -465,7 +465,7 @@ func TestDispatchParseErrorPayloadIncludesRequiredSchema(t *testing.T) {
 	if got := failure["status"]; got != "failed" {
 		t.Fatalf("failure.status = %#v", got)
 	}
-	if got := failure["message"]; got != `Failure: task failed. Error details: dispatch parse: bad payload` {
+	if got := failure["message"]; got != "Failure: task failed.\nError details: dispatch parse: bad payload" {
 		t.Fatalf("failure.message = %#v", got)
 	}
 	if got := failure["error"]; got != "dispatch parse: bad payload" {
@@ -1101,7 +1101,7 @@ func TestDispatchResultPayloadIncludesTopLevelFailureMessage(t *testing.T) {
 	if got := payload["Error details:"]; got != "codex: process exited with status 1" {
 		t.Fatalf("Error details: = %#v", got)
 	}
-	if got := payload["message"]; got != "Failure: task failed. Error details: codex: process exited with status 1" {
+	if got := payload["message"]; got != "Failure: task failed.\nError details: codex: process exited with status 1" {
 		t.Fatalf("message = %#v", got)
 	}
 	result, _ := payload["result"].(map[string]any)
@@ -1111,7 +1111,7 @@ func TestDispatchResultPayloadIncludesTopLevelFailureMessage(t *testing.T) {
 	if got := result["status"]; got != "failed" {
 		t.Fatalf("result.status = %#v", got)
 	}
-	if got := result["message"]; got != "Failure: task failed. Error details: codex: process exited with status 1" {
+	if got := result["message"]; got != "Failure: task failed.\nError details: codex: process exited with status 1" {
 		t.Fatalf("result.message = %#v", got)
 	}
 	if got := result["error"]; got != "codex: process exited with status 1" {
@@ -1130,7 +1130,7 @@ func TestDispatchResultPayloadIncludesTopLevelFailureMessage(t *testing.T) {
 	if got := failure["status"]; got != "failed" {
 		t.Fatalf("failure.status = %#v", got)
 	}
-	if got := failure["message"]; got != "Failure: task failed. Error details: codex: process exited with status 1" {
+	if got := failure["message"]; got != "Failure: task failed.\nError details: codex: process exited with status 1" {
 		t.Fatalf("failure.message = %#v", got)
 	}
 	if got := failure["error"]; got != "codex: process exited with status 1" {
@@ -1149,7 +1149,7 @@ func TestDispatchResultPayloadIncludesTopLevelFailureMessage(t *testing.T) {
 	if got := details["status"]; got != "failed" {
 		t.Fatalf("failure.details.status = %#v", got)
 	}
-	if got := details["message"]; got != "Failure: task failed. Error details: codex: process exited with status 1" {
+	if got := details["message"]; got != "Failure: task failed.\nError details: codex: process exited with status 1" {
 		t.Fatalf("failure.details.message = %#v", got)
 	}
 	if got := details["error"]; got != "codex: process exited with status 1" {
@@ -1200,7 +1200,7 @@ func TestDuplicateDispatchResultPayloadIncludesDuplicateMetadataAndFailureDetail
 	if got := payload["duplicate_of"]; got != "req-existing" {
 		t.Fatalf("duplicate_of = %#v, want req-existing", got)
 	}
-	if got := payload["message"]; got != "Failure: task failed. Error details: duplicate submission ignored (request_id=req-existing state=in_flight)" {
+	if got := payload["message"]; got != "Failure: task failed.\nError details: duplicate submission ignored (request_id=req-existing state=in_flight)" {
 		t.Fatalf("message = %#v", got)
 	}
 
@@ -1477,7 +1477,7 @@ func TestProcessInboundMessagePublishesAcquireFailurePayload(t *testing.T) {
 	if got := fmt.Sprint(publishedResults[0]["status"]); got != "error" {
 		t.Fatalf("message.status = %v, want error", publishedResults[0]["status"])
 	}
-	if got := fmt.Sprint(publishedResults[0]["message"]); !strings.Contains(got, "Failure: task failed. Error details: dispatch acquire: dispatch controller is closed") {
+	if got := fmt.Sprint(publishedResults[0]["message"]); !strings.Contains(got, "Failure: task failed.\nError details: dispatch acquire: dispatch controller is closed") {
 		t.Fatalf("message.message = %q", got)
 	}
 	if got := fmt.Sprint(publishedResults[0]["error"]); !strings.Contains(got, "dispatch acquire: dispatch controller is closed") {

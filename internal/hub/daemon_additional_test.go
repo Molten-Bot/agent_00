@@ -610,7 +610,7 @@ func TestProcessInboundMessageDuplicateDeliveryPublishesFailureToCallerAndAcks(t
 	if got := resultPayload["duplicate_of"]; got != "req-dup" {
 		t.Fatalf("result duplicate_of = %#v, want req-dup", got)
 	}
-	if got := fmt.Sprint(resultPayload["message"]); !strings.Contains(got, "Failure: task failed. Error details: duplicate submission ignored (request_id=req-dup state=in_flight)") {
+	if got := fmt.Sprint(resultPayload["message"]); !strings.Contains(got, "Failure: task failed.\nError details: duplicate submission ignored (request_id=req-dup state=in_flight)") {
 		t.Fatalf("result message = %q", got)
 	}
 }
@@ -853,7 +853,7 @@ func TestProcessInboundMessagePublishesStoppedFailureWhenTaskControlStopsDispatc
 	if got, want := fmt.Sprint(publishedResults[0]["status"]), "error"; got != want {
 		t.Fatalf("result status = %q, want %q", got, want)
 	}
-	if got := fmt.Sprint(publishedResults[0]["message"]); !strings.Contains(got, "Failure: task failed. Error details: task was stopped by operator") {
+	if got := fmt.Sprint(publishedResults[0]["message"]); !strings.Contains(got, "Failure: task failed.\nError details: task was stopped by operator") {
 		t.Fatalf("result message = %q", got)
 	}
 	if got := fmt.Sprint(publishedResults[0]["error"]); got != "task was stopped by operator" {
@@ -1038,7 +1038,7 @@ func TestProcessInboundMessageFallsBackToDeliveryIDForTaskControlRequestID(t *te
 	if got := fmt.Sprint(publishedResults[0]["request_id"]); got != "delivery-fallback" {
 		t.Fatalf("result request_id = %q, want %q", got, "delivery-fallback")
 	}
-	if got := fmt.Sprint(publishedResults[0]["message"]); !strings.Contains(got, "Failure: task failed. Error details: task was stopped by operator") {
+	if got := fmt.Sprint(publishedResults[0]["message"]); !strings.Contains(got, "Failure: task failed.\nError details: task was stopped by operator") {
 		t.Fatalf("result message = %q", got)
 	}
 }
@@ -1214,7 +1214,7 @@ func TestHandleDispatchPublishesHarnessStageStatusUpdates(t *testing.T) {
 	if got := stageError["a2a_state"]; got != "TASK_STATE_FAILED" {
 		t.Fatalf("preflight error a2a_state = %#v, want TASK_STATE_FAILED", got)
 	}
-	if got := fmt.Sprint(stageError["message"]); !strings.Contains(got, "Failure: task failed. Error details:") {
+	if got := fmt.Sprint(stageError["message"]); !strings.Contains(got, "Failure: task failed.\nError details:") {
 		t.Fatalf("preflight error message = %q", got)
 	}
 	if got := fmt.Sprint(stageError["Error details"]); !strings.Contains(got, "preflight exploded") {

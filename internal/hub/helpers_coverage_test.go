@@ -13,7 +13,7 @@ import (
 func TestFailureFollowUpHelperBranches(t *testing.T) {
 	t.Parallel()
 
-	if got := failureResponseMessage(""); got != "Failure: task failed. Error details: unknown error." {
+	if got := failureResponseMessage(""); got != "Failure: task failed.\nError details: unknown error." {
 		t.Fatalf("failureResponseMessage(empty) = %q", got)
 	}
 	if got := duplicateDispatchErrorText("", ""); got != "duplicate submission ignored" {

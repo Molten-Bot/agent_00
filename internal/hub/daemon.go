@@ -2080,9 +2080,9 @@ func prReadyResponse(prURLs string) string {
 func failureResponseMessage(errText string) string {
 	errText = strings.TrimSpace(errText)
 	if errText == "" {
-		return "Failure: task failed. Error details: unknown error."
+		return "Failure: task failed.\nError details: unknown error."
 	}
-	return "Failure: task failed. Error details: " + errText
+	return "Failure: task failed.\nError details: " + errText
 }
 
 func duplicateDispatchResultPayload(cfg InitConfig, dispatch SkillDispatch, state, duplicateOf string) map[string]any {
