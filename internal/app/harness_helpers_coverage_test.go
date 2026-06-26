@@ -345,6 +345,75 @@ func TestShouldReplaceCheckSnapshotBranches(t *testing.T) {
 	}
 }
 
+func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
+	t.Parallel()
+
+	runDir := t.TempDir()
+	homeDir := filepath.Join(t.TempDir(), "home")
+	codexAuthPath := filepath.Join(homeDir, ".codex", "auth.json")
+	claudeAuthPath := filepath.Join(homeDir, ".claude", ".credentials.json")
+	if err := os.MkdirAll(filepath.Dir(codexAuthPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll(codex auth dir) error = %v", err)
+	}
+	if err := os.WriteFile(codexAuthPath, []byte(`{"codex":"ok"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(codex auth) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(claudeAuthPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll(claude auth dir) error = %v", err)
+	}
+	if err := os.WriteFile(claudeAuthPath, []byte(`{"claude":"ok"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(claude auth) error = %v", err)
+	}
+
+	env, err := prepareAgentIOEnv(runDir, []string{
+		"PATH=/bin",
+		"HOME=" + homeDir,
+		"TMPDIR=/disk/tmp",
+		"XDG_CONFIG_HOME=/disk/config",
+		"GH_TOKEN=keep",
+	})
+	if err != nil {
+		t.Fatalf("prepareAgentIOEnv() error = %v", err)
+	}
+
+	wantRoot := filepath.Join(runDir, ".moltenhub-agent-io")
+	for _, rel := range []string{"home", "tmp", "config", filepath.Join("config", "codex"), filepath.Join("config", "claude"), "cache", "state", "log", "runtime"} {
+		if st, err := os.Stat(filepath.Join(wantRoot, rel)); err != nil || !st.IsDir() {
+			t.Fatalf("agent io dir %s stat = (%v, %v), want directory", rel, st, err)
+		}
+	}
+	if got, want := envValue(env, "HOME"), filepath.Join(wantRoot, "home"); got != want {
+		t.Fatalf("HOME = %q, want %q", got, want)
+	}
+	if got, want := envValue(env, "TMPDIR"), filepath.Join(wantRoot, "tmp"); got != want {
+		t.Fatalf("TMPDIR = %q, want %q", got, want)
+	}
+	if got, want := envValue(env, "XDG_CONFIG_HOME"), filepath.Join(wantRoot, "config"); got != want {
+		t.Fatalf("XDG_CONFIG_HOME = %q, want %q", got, want)
+	}
+	if got, want := envValue(env, "XDG_CACHE_HOME"), filepath.Join(wantRoot, "cache"); got != want {
+		t.Fatalf("XDG_CACHE_HOME = %q, want %q", got, want)
+	}
+	if got, want := envValue(env, "CODEX_HOME"), filepath.Join(wantRoot, "config", "codex"); got != want {
+		t.Fatalf("CODEX_HOME = %q, want %q", got, want)
+	}
+	if got, want := envValue(env, "CLAUDE_CONFIG_DIR"), filepath.Join(wantRoot, "config", "claude"); got != want {
+		t.Fatalf("CLAUDE_CONFIG_DIR = %q, want %q", got, want)
+	}
+	if got, err := os.ReadFile(filepath.Join(wantRoot, "config", "codex", "auth.json")); err != nil || string(got) != `{"codex":"ok"}` {
+		t.Fatalf("copied codex auth = (%q, %v), want seeded auth", string(got), err)
+	}
+	if got, err := os.ReadFile(filepath.Join(wantRoot, "config", "claude", ".credentials.json")); err != nil || string(got) != `{"claude":"ok"}` {
+		t.Fatalf("copied claude auth = (%q, %v), want seeded auth", string(got), err)
+	}
+	if got, want := envValue(env, "MOLTENHUB_AGENT_IO_DIR"), wantRoot; got != want {
+		t.Fatalf("MOLTENHUB_AGENT_IO_DIR = %q, want %q", got, want)
+	}
+	if got := envValue(env, "GH_TOKEN"); got != "keep" {
+		t.Fatalf("GH_TOKEN = %q, want preserved", got)
+	}
+}
+
 func slicesContains(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
@@ -352,4 +421,14 @@ func slicesContains(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func envValue(environ []string, key string) string {
+	for _, entry := range environ {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok && name == key {
+			return value
+		}
+	}
+	return ""
 }
