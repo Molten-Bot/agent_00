@@ -487,8 +487,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, `aria-label="Home"`) || strings.Contains(markup, `data-page-nav-link="/"`) || strings.Contains(markup, `data-lucide="home"`) {
 		t.Fatalf("expected bottom dock to omit the home navigation button")
 	}
-	if !strings.Contains(markup, `img src="https://app.molten.bot/logo.svg"`) {
-		t.Fatalf("expected index html to use the remote molten bot logo asset")
+	if !strings.Contains(markup, `img src="/static/logo.svg"`) {
+		t.Fatalf("expected index html to use the embedded molten bot logo asset")
 	}
 	if !strings.Contains(markup, `id="moltenbot-hub-plus"`) {
 		t.Fatalf("expected index html to include molten hub plus badge")
@@ -1981,6 +1981,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `class="prompt-mode-link prompt-mode-link-logo"`) ||
 		!strings.Contains(markup, `src="/static/logos/github.svg"`) {
 		t.Fatalf("expected index html to render GitHub as an icon-only item inside the shared segmented dock using the shared logo-link class")
+	}
+	if !strings.Contains(markup, `id="moltenbot-hub-link"`) ||
+		!strings.Contains(markup, `src="/static/logo.svg"`) {
+		t.Fatalf("expected index html to render the Molten Hub dock item with the local embedded logo")
 	}
 	if !strings.Contains(markup, `<span class="sr-only">GitHub</span>`) {
 		t.Fatalf("expected index html to keep the GitHub dock item screen-reader accessible without visible text")
