@@ -2294,6 +2294,13 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "function dropReposFromHistory(") {
 		t.Fatalf("expected index html to include repo history cleanup helper")
 	}
+	if !strings.Contains(markup, "function pruneRepoHistoryToLoadedGitHubRepos(") ||
+		!strings.Contains(markup, "const available = new Set(githubRepoSelectValues().map(repoDedupeKey).filter(Boolean));") ||
+		!strings.Contains(markup, "if (!githubRepoPathFromValue(repo)) {") ||
+		!strings.Contains(markup, "pruneRepoHistoryToLoadedGitHubRepos();\n          renderRepoHistoryOptions();") ||
+		!strings.Contains(markup, "pruneRepoHistoryToLoadedGitHubRepos();\n    renderRepoHistoryOptions();") {
+		t.Fatalf("expected index html to prune saved GitHub repositories that are absent from the loaded repository list")
+	}
 	if !strings.Contains(markup, "function dropReviewersFromHistory(") {
 		t.Fatalf("expected index html to include reviewer history cleanup helper")
 	}
