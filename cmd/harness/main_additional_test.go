@@ -406,6 +406,47 @@ func TestPublishLocalRunFailureResultRetriesTransientRuntimePublishFailure(t *te
 	}
 }
 
+func TestPublishLocalRunFailureResultUsesCanceledParentForFailureNotification(t *testing.T) {
+	t.Parallel()
+
+	var publishBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/a2a":
+			http.NotFound(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/runtime/messages/publish":
+			if err := json.NewDecoder(r.Body).Decode(&publishBody); err != nil {
+				t.Fatalf("decode publish body: %v", err)
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	publishLocalRunFailureResult(ctx, hub.InitConfig{
+		BaseURL:    ts.URL + "/v1",
+		AgentToken: "token",
+		SessionKey: "local-session",
+		Handle:     "caller-agent",
+	}, "req-local-fail", app.Result{
+		ExitCode: app.ExitPR,
+		Err:      errors.New("checks: required PR checks failed"),
+	}, func() bool { return true }, nil)
+
+	msg, ok := publishBody["message"].(map[string]any)
+	if !ok {
+		t.Fatalf("published message missing: %#v", publishBody)
+	}
+	if got := msg["Error details:"]; got != "checks: required PR checks failed" {
+		t.Fatalf("message.Error details: = %#v", got)
+	}
+}
+
 func TestPublishLocalRunFailureResultSkipsWhenHubDisconnected(t *testing.T) {
 	t.Parallel()
 
@@ -436,6 +477,38 @@ func TestMarkLocalRunRuntimeOfflineSkipsWhenHubDisconnected(t *testing.T) {
 		AgentToken: "token",
 		SessionKey: "local-session",
 	}, "req-local-offline", func() bool { return false }, nil)
+}
+
+func TestMarkLocalRunRuntimeOfflineUsesCanceledParentForFailureNotification(t *testing.T) {
+	t.Parallel()
+
+	var offlineBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/runtime/messages/offline" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&offlineBody); err != nil {
+			t.Fatalf("decode offline body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	markLocalRunRuntimeOffline(ctx, hub.InitConfig{
+		BaseURL:    ts.URL + "/v1",
+		AgentToken: "token",
+		SessionKey: "local-session",
+	}, "req-local-offline", func() bool { return true }, nil)
+
+	if got := offlineBody["session_key"]; got != "local-session" {
+		t.Fatalf("session_key = %#v, want local-session", got)
+	}
+	if got := offlineBody["reason"]; got != localTransportOfflineReasonExecutionFailure {
+		t.Fatalf("reason = %#v, want %s", got, localTransportOfflineReasonExecutionFailure)
+	}
 }
 
 func TestShouldFallbackToLocalOnlyMode(t *testing.T) {
