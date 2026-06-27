@@ -6757,6 +6757,9 @@ type latestCheckState struct {
 func (h Harness) reconcileChecksAfterFailure(ctx context.Context, repo repoWorkspace, requiredOnly bool) (bool, string, error) {
 	res, err := h.runCommand(ctx, "checks", prChecksJSONCommand(repo.Dir, repo.PRURL, requiredOnly))
 	if err != nil {
+		if snapshot, ok := latestCheckTextSnapshot(res.Stdout); ok {
+			return !snapshot.HasFailures && snapshot.AllPassing, snapshot.Summary, nil
+		}
 		return false, "", err
 	}
 
@@ -6770,6 +6773,9 @@ func (h Harness) reconcileChecksAfterFailure(ctx context.Context, repo repoWorks
 func (h Harness) latestChecksAreAllPassing(ctx context.Context, repo repoWorkspace, requiredOnly bool) (bool, string, error) {
 	res, err := h.runCommand(ctx, "checks", prChecksJSONCommand(repo.Dir, repo.PRURL, requiredOnly))
 	if err != nil {
+		if snapshot, ok := latestCheckTextSnapshot(res.Stdout); ok {
+			return snapshot.AllPassing, snapshot.Summary, nil
+		}
 		return false, "", err
 	}
 	snapshot, err := latestCheckSnapshot(res.Stdout)
@@ -6790,8 +6796,37 @@ func latestCheckSnapshot(raw string) (latestChecksSnapshot, error) {
 	if parseErr := json.Unmarshal([]byte(strings.TrimSpace(raw)), &checks); parseErr != nil {
 		return latestChecksSnapshot{}, fmt.Errorf("decode checks snapshot: %w", parseErr)
 	}
+	return latestCheckSnapshotFromChecks(checks), nil
+}
+
+func latestCheckTextSnapshot(raw string) (latestChecksSnapshot, bool) {
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	checks := make([]ghPRCheck, 0, len(lines))
+	for _, line := range lines {
+		fields := strings.Split(strings.TrimSpace(line), "\t")
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.TrimSpace(fields[0])
+		bucket := strings.ToLower(strings.TrimSpace(fields[1]))
+		if name == "" || !isKnownCheckBucket(bucket) {
+			continue
+		}
+		checks = append(checks, ghPRCheck{
+			Name:   name,
+			Bucket: bucket,
+		})
+	}
 	if len(checks) == 0 {
-		return latestChecksSnapshot{}, nil
+		return latestChecksSnapshot{}, false
+	}
+	snapshot := latestCheckSnapshotFromChecks(checks)
+	return snapshot, snapshot.Summary != ""
+}
+
+func latestCheckSnapshotFromChecks(checks []ghPRCheck) latestChecksSnapshot {
+	if len(checks) == 0 {
+		return latestChecksSnapshot{}
 	}
 
 	latestByName := make(map[string]latestCheckState, len(checks))
@@ -6812,7 +6847,7 @@ func latestCheckSnapshot(raw string) (latestChecksSnapshot, error) {
 		}
 	}
 	if len(latestByName) == 0 {
-		return latestChecksSnapshot{}, nil
+		return latestChecksSnapshot{}
 	}
 
 	names := make([]string, 0, len(latestByName))
@@ -6840,7 +6875,16 @@ func latestCheckSnapshot(raw string) (latestChecksSnapshot, error) {
 		AllPassing:  allPassing,
 		HasFailures: hasFailures,
 		Summary:     strings.Join(lines, "\n"),
-	}, nil
+	}
+}
+
+func isKnownCheckBucket(bucket string) bool {
+	switch strings.ToLower(strings.TrimSpace(bucket)) {
+	case "pass", "fail", "pending", "skipping", "cancel", "cancelled", "timed_out", "action_required":
+		return true
+	default:
+		return false
+	}
 }
 
 func checkSnapshotTime(check ghPRCheck) time.Time {

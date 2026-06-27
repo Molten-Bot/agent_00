@@ -165,6 +165,29 @@ func TestHarnessRuntimeAndCheckSnapshotHelpers(t *testing.T) {
 	if ts := checkSnapshotTime(ghPRCheck{StartedAt: "2026-04-09T10:11:12Z"}); ts.IsZero() {
 		t.Fatal("checkSnapshotTime(valid startedAt) = zero, want parsed time")
 	}
+	textSnapshot, ok := latestCheckTextSnapshot(strings.Join([]string{
+		"Workers Builds: design\tfail\t0\thttps://dash.cloudflare.com/builds/1",
+		"Release to Cloudflare\tskipping\t0\thttps://github.com/acme/repo/actions/runs/1",
+		"Build and validate\tpass\t58s\thttps://github.com/acme/repo/actions/runs/1/job/1",
+		"Workers Builds: design\tfail\t0\thttps://dash.cloudflare.com/builds/1",
+		"Release to Cloudflare\tskipping\t0\thttps://github.com/acme/repo/actions/runs/1",
+		"Build and validate\tpass\t58s\thttps://github.com/acme/repo/actions/runs/1/job/1",
+	}, "\n"))
+	if !ok {
+		t.Fatal("latestCheckTextSnapshot() ok = false, want true")
+	}
+	if textSnapshot.AllPassing {
+		t.Fatal("latestCheckTextSnapshot().AllPassing = true, want false")
+	}
+	if !textSnapshot.HasFailures {
+		t.Fatal("latestCheckTextSnapshot().HasFailures = false, want true")
+	}
+	if got, want := strings.Count(textSnapshot.Summary, "Workers Builds: design"), 1; got != want {
+		t.Fatalf("Workers Builds summary count = %d, want %d; summary:\n%s", got, want, textSnapshot.Summary)
+	}
+	if !strings.Contains(textSnapshot.Summary, "Build and validate\tpass") {
+		t.Fatalf("text snapshot summary missing pass row:\n%s", textSnapshot.Summary)
+	}
 	if !shouldReplaceCheckSnapshot(latestCheckState{Index: 1}, latestCheckState{Index: 2}) {
 		t.Fatal("shouldReplaceCheckSnapshot(later index) = false, want true")
 	}
@@ -435,6 +458,48 @@ func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 	}
 	if got := envValue(env, "GH_TOKEN"); got != "keep" {
 		t.Fatalf("GH_TOKEN = %q, want preserved", got)
+	}
+}
+
+func TestReconcileChecksAfterFailureFallsBackToTextSnapshotWhenJSONUnsupported(t *testing.T) {
+	t.Parallel()
+
+	repoDir := "/tmp/run/repo"
+	prURL := "https://github.com/acme/repo/pull/42"
+	checkOutput := strings.Join([]string{
+		"Workers Builds: design\tfail\t0\thttps://dash.cloudflare.com/builds/1",
+		"Release to Cloudflare\tskipping\t0\thttps://github.com/acme/repo/actions/runs/1",
+		"Build and validate\tpass\t58s\thttps://github.com/acme/repo/actions/runs/1/job/1",
+		"Workers Builds: design\tfail\t0\thttps://dash.cloudflare.com/builds/1",
+		"Release to Cloudflare\tskipping\t0\thttps://github.com/acme/repo/actions/runs/1",
+		"Build and validate\tpass\t58s\thttps://github.com/acme/repo/actions/runs/1/job/1",
+	}, "\n")
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{{
+		cmd: prChecksJSONCommand(repoDir, prURL, false),
+		res: execx.Result{
+			Stdout: checkOutput,
+			Stderr: "unknown flag: --json\nUsage: gh pr checks [<number> | <url> | <branch>] [flags]\n",
+		},
+		err: errors.New("exit status 1"),
+	}}}
+	h := New(fake)
+
+	reconciled, summary, err := h.reconcileChecksAfterFailure(context.Background(), repoWorkspace{Dir: repoDir, PRURL: prURL}, false)
+	if err != nil {
+		t.Fatalf("reconcileChecksAfterFailure() error = %v", err)
+	}
+	if reconciled {
+		t.Fatal("reconcileChecksAfterFailure() reconciled = true, want false")
+	}
+	if strings.Contains(summary, "unknown flag") {
+		t.Fatalf("summary contains gh flag noise:\n%s", summary)
+	}
+	if got, want := strings.Count(summary, "Workers Builds: design"), 1; got != want {
+		t.Fatalf("Workers Builds summary count = %d, want %d; summary:\n%s", got, want, summary)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
 	}
 }
 
