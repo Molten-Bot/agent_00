@@ -437,16 +437,20 @@ func runHub(args []string) int {
 						}
 						finalState = "error"
 						daemonLogger("dispatch status=error request_id=%s err=%q", requestID, waitErr)
-						if !errors.Is(waitErr, context.Canceled) && allowFailureFollowUp {
+						if !errors.Is(waitErr, context.Canceled) {
 							failedResult := app.Result{
 								ExitCode: app.ExitPreflight,
 								Err:      fmt.Errorf("dispatch wait: %w", waitErr),
 							}
-							if queueFailureRerun != nil {
-								queueFailureRerun(requestID, failedResult, runCfg, source)
-							}
-							if queueFailureFollowUp != nil {
-								queueFailureFollowUp(requestID, failedResult, runCfg, source)
+							publishLocalRunFailureResult(runCtx, activeCfg, requestID, failedResult, hubRuntimeConnected, daemonLogger)
+							markLocalRunRuntimeOffline(runCtx, activeCfg, requestID, hubRuntimeConnected, daemonLogger)
+							if allowFailureFollowUp {
+								if queueFailureRerun != nil {
+									queueFailureRerun(requestID, failedResult, runCfg, source)
+								}
+								if queueFailureFollowUp != nil {
+									queueFailureFollowUp(requestID, failedResult, runCfg, source)
+								}
 							}
 						}
 						return
@@ -485,16 +489,20 @@ func runHub(args []string) int {
 					}
 					finalState = "error"
 					daemonLogger("dispatch status=error request_id=%s err=%q", requestID, acquireErr)
-					if !errors.Is(acquireErr, context.Canceled) && allowFailureFollowUp {
+					if !errors.Is(acquireErr, context.Canceled) {
 						failedResult := app.Result{
 							ExitCode: app.ExitPreflight,
 							Err:      fmt.Errorf("dispatch acquire: %w", acquireErr),
 						}
-						if queueFailureRerun != nil {
-							queueFailureRerun(requestID, failedResult, runCfg, source)
-						}
-						if queueFailureFollowUp != nil {
-							queueFailureFollowUp(requestID, failedResult, runCfg, source)
+						publishLocalRunFailureResult(runCtx, activeCfg, requestID, failedResult, hubRuntimeConnected, daemonLogger)
+						markLocalRunRuntimeOffline(runCtx, activeCfg, requestID, hubRuntimeConnected, daemonLogger)
+						if allowFailureFollowUp {
+							if queueFailureRerun != nil {
+								queueFailureRerun(requestID, failedResult, runCfg, source)
+							}
+							if queueFailureFollowUp != nil {
+								queueFailureFollowUp(requestID, failedResult, runCfg, source)
+							}
 						}
 					}
 					return
@@ -2237,7 +2245,7 @@ func publishLocalRunFailureResult(ctx context.Context, cfg hub.InitConfig, reque
 		logf = func(string, ...any) {}
 	}
 
-	publishCtx, cancel := context.WithTimeout(ctx, localFailurePublishTimeout)
+	publishCtx, cancel := context.WithTimeout(detachedLocalNotificationContext(ctx), localFailurePublishTimeout)
 	defer cancel()
 
 	cfg.ApplyDefaults()
@@ -2428,7 +2436,7 @@ func markLocalRunRuntimeOffline(ctx context.Context, cfg hub.InitConfig, request
 		logf = func(string, ...any) {}
 	}
 
-	offlineCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	offlineCtx, cancel := context.WithTimeout(detachedLocalNotificationContext(ctx), 15*time.Second)
 	defer cancel()
 
 	client := hub.NewAPIClient(baseURL)
@@ -2441,6 +2449,13 @@ func markLocalRunRuntimeOffline(ctx context.Context, cfg hub.InitConfig, request
 			localTransportOfflineReasonExecutionFailure,
 		)
 	}
+}
+
+func detachedLocalNotificationContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(ctx)
 }
 
 func completedPRURLs(result app.Result) string {
