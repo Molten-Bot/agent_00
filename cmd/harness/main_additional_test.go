@@ -1083,6 +1083,17 @@ func TestLocalNoChangesFailureResultForActionablePrompt(t *testing.T) {
 	if !strings.Contains(result.Err.Error(), "no file changes and no pull request") {
 		t.Fatalf("Err = %v, want no-change failure detail", result.Err)
 	}
+	for _, want := range []string{
+		"Root causes:",
+		"no tracked file changes",
+		"no pull request URL",
+		"prompt requested repository changes",
+		"no concrete repository evidence justified a no-op",
+	} {
+		if !strings.Contains(result.Err.Error(), want) {
+			t.Fatalf("Err = %v, want root-cause detail %q", result.Err, want)
+		}
+	}
 }
 
 func TestLocalNoChangesFailureResultForGeneratedFollowUpPrompt(t *testing.T) {

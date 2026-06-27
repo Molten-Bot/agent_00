@@ -1575,6 +1575,17 @@ func localNoChangesFailureResult(source string, result app.Result, runCfg config
 		return app.Result{}, false
 	}
 
+	detail := noChangesFailureDetail(source)
+	failed := result
+	if failed.ExitCode == app.ExitSuccess {
+		failed.ExitCode = app.ExitCodex
+	}
+	failed.Err = errors.New(detail)
+	return failed, true
+}
+
+func noChangesFailureDetail(source string) string {
+	rootCauses := "Root causes: no tracked file changes; no pull request URL; prompt requested repository changes; no concrete repository evidence justified a no-op."
 	detail := "task completed with no file changes and no pull request even though the prompt appears to require repository changes"
 	switch strings.TrimSpace(source) {
 	case noChangesFollowUpSource:
@@ -1582,13 +1593,7 @@ func localNoChangesFailureResult(source string, result app.Result, runCfg config
 	case noChangesEscalationSource:
 		detail = "no-changes escalation completed with no file changes and no pull request, without concrete evidence that no MoltenHub Code change is required"
 	}
-
-	failed := result
-	if failed.ExitCode == app.ExitSuccess {
-		failed.ExitCode = app.ExitCodex
-	}
-	failed.Err = errors.New(detail)
-	return failed, true
+	return detail + ". " + rootCauses
 }
 
 func failureFollowUpRepos(_ app.Result, _ config.Config) []string {
