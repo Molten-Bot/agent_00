@@ -2792,9 +2792,49 @@ func compactStreamSnapshot(snapshot Snapshot) Snapshot {
 		if len(logs) <= maxStreamTaskLogs {
 			continue
 		}
-		snapshot.Tasks[i].Logs = logs[len(logs)-maxStreamTaskLogs:]
+		snapshot.Tasks[i].Logs = compactStreamTaskLogs(logs)
 	}
 	return snapshot
+}
+
+func compactStreamTaskLogs(logs []TaskLog) []TaskLog {
+	if len(logs) <= maxStreamTaskLogs {
+		return logs
+	}
+	tailStart := len(logs) - maxStreamTaskLogs
+	compacted := make([]TaskLog, 0, maxStreamTaskLogs)
+	seenSignals := map[string]struct{}{}
+	for _, log := range logs[:tailStart] {
+		key, ok := taskProgressSignalLogKey(log.Text)
+		if !ok {
+			continue
+		}
+		if _, seen := seenSignals[key]; seen {
+			continue
+		}
+		seenSignals[key] = struct{}{}
+		compacted = append(compacted, log)
+	}
+	return append(compacted, logs[tailStart:]...)
+}
+
+func taskProgressSignalLogKey(text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" || !strings.Contains(text, "stage=") {
+		return "", false
+	}
+	fields := parseKVFields(text)
+	stage := strings.TrimSpace(fields["stage"])
+	if stage == "" {
+		return "", false
+	}
+	return strings.Join([]string{
+		stage,
+		strings.TrimSpace(fields["action"]),
+		strings.TrimSpace(fields["strategy"]),
+		strings.TrimSpace(fields["remote"]),
+		strings.TrimSpace(fields["reason"]),
+	}, "\x00"), true
 }
 
 func withCacheControl(next http.Handler, cacheControl string) http.Handler {

@@ -634,6 +634,35 @@ func TestCompactStreamSnapshotTrimsTaskLogs(t *testing.T) {
 	}
 }
 
+func TestCompactStreamSnapshotPreservesEarlyProgressSignals(t *testing.T) {
+	t.Parallel()
+
+	logs := make([]TaskLog, maxStreamTaskLogs+9)
+	logs[0] = TaskLog{Text: "dispatch request_id=req-1 stage=clone status=ok"}
+	for i := 1; i < len(logs); i++ {
+		logs[i] = TaskLog{Text: fmt.Sprintf("line-%d", i)}
+	}
+
+	snap := compactStreamSnapshot(Snapshot{
+		Tasks: []Task{
+			{
+				RequestID: "req-1",
+				Logs:      logs,
+			},
+		},
+	})
+
+	if got, want := snap.Tasks[0].Logs[0].Text, "dispatch request_id=req-1 stage=clone status=ok"; got != want {
+		t.Fatalf("first retained log = %q, want early progress signal %q", got, want)
+	}
+	if got, want := len(snap.Tasks[0].Logs), maxStreamTaskLogs+1; got != want {
+		t.Fatalf("len(task logs) = %d, want %d", got, want)
+	}
+	if got, want := snap.Tasks[0].Logs[1].Text, "line-9"; got != want {
+		t.Fatalf("first retained tail log = %q, want %q", got, want)
+	}
+}
+
 func TestHandlerGzipCompressionForIndexAndNoCompressionForSSE(t *testing.T) {
 	t.Parallel()
 
