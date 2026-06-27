@@ -65,6 +65,7 @@ const failureFollowUpPromptBase = failurefollowup.RequiredPrompt
 const failureFollowUpNoPathGuidance = "No workspace or log path was captured before the failure. Investigate the task history and runtime error details first."
 const failureFollowUpTargetSubdir = "."
 const transportOfflineReasonExecutionFailure = "task_execution_failure"
+const executionFailureOfflineTimeout = 15 * time.Second
 const dispatchTaskStatusType = "task_status_update"
 const taskStoppedByOperatorReason = "task was stopped by operator"
 const workflowNodeTypeAgentInvocation = "agent_invocation"
@@ -2208,7 +2209,9 @@ func (d Daemon) handleFailedDispatchAfterPublish(
 	if api == nil {
 		return
 	}
-	if err := api.MarkRuntimeOffline(ctx, cfg.SessionKey, transportOfflineReasonExecutionFailure); err != nil {
+	offlineCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), executionFailureOfflineTimeout)
+	defer cancel()
+	if err := api.MarkRuntimeOffline(offlineCtx, cfg.SessionKey, transportOfflineReasonExecutionFailure); err != nil {
 		d.logf("dispatch status=warn action=mark_offline request_id=%s err=%q", dispatch.RequestID, err)
 	} else {
 		d.logf(

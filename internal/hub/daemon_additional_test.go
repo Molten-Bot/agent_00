@@ -29,6 +29,7 @@ type stubMoltenHubAPI struct {
 	recordFn         func(context.Context) error
 	recordCodingFn   func(context.Context) error
 	recordActivityFn func(context.Context, string) error
+	markOfflineFn    func(context.Context, string, string) error
 
 	mu           sync.Mutex
 	acked        []string
@@ -157,7 +158,10 @@ func (s *stubMoltenHubAPI) ResolveAgentToken(context.Context, InitConfig) (strin
 }
 func (s *stubMoltenHubAPI) SyncProfile(context.Context, InitConfig) error   { return nil }
 func (s *stubMoltenHubAPI) UpdateAgentStatus(context.Context, string) error { return nil }
-func (s *stubMoltenHubAPI) MarkRuntimeOffline(_ context.Context, sessionKey, reason string) error {
+func (s *stubMoltenHubAPI) MarkRuntimeOffline(ctx context.Context, sessionKey, reason string) error {
+	if s.markOfflineFn != nil {
+		return s.markOfflineFn(ctx, sessionKey, reason)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.offlineCalls = append(s.offlineCalls, struct {
@@ -1197,6 +1201,46 @@ func TestHandleDispatchQueuesFailureFollowUpAfterPublishingFailureResult(t *test
 	}
 	if got := api.codingEvents; got != 1 {
 		t.Fatalf("coding activity events = %d, want 1", got)
+	}
+}
+
+func TestHandleFailedDispatchMarksOfflineWithFreshContext(t *testing.T) {
+	t.Parallel()
+
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ctxErrs := make(chan error, 1)
+	api := &stubMoltenHubAPI{
+		token: "t",
+		markOfflineFn: func(ctx context.Context, sessionKey, reason string) error {
+			ctxErrs <- ctx.Err()
+			if sessionKey != "main" {
+				t.Fatalf("sessionKey = %q, want main", sessionKey)
+			}
+			if reason != transportOfflineReasonExecutionFailure {
+				t.Fatalf("reason = %q, want %q", reason, transportOfflineReasonExecutionFailure)
+			}
+			return nil
+		},
+	}
+	d := NewDaemon(failingRunner{err: errors.New("runner exploded")})
+
+	d.handleFailedDispatchAfterPublish(
+		parent,
+		api,
+		InitConfig{SessionKey: "main"},
+		SkillDispatch{RequestID: "req-fail"},
+		app.Result{Err: errors.New("runner exploded")},
+	)
+
+	select {
+	case err := <-ctxErrs:
+		if err != nil {
+			t.Fatalf("offline context err = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for offline call")
 	}
 }
 

@@ -1114,6 +1114,93 @@ func TestCompleteReviewRunFallsBackToIssueCommentWhenReviewWritebackFails(t *tes
 	}
 }
 
+func TestCompleteReviewRunDefersTransientGitHubWritebackFailure(t *testing.T) {
+	t.Parallel()
+
+	runDir := t.TempDir()
+	repoDir := t.TempDir()
+	bodyPath := reviewSummaryBodyPath(runDir, 42)
+	reviewErr := errors.New("run gh [pr review 42 --comment --body-file body --repo acme/repo]: exit status 1 (error connecting to api.github.com | check your internet connection or https://githubstatus.com)")
+	fallbackErr := errors.New("run gh [api repos/acme/repo/issues/42/comments -F body=@body]: exit status 1 (error connecting to api.github.com | check your internet connection or https://githubstatus.com)")
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: prReviewSummaryCommand(repoDir, "42", "acme/repo", bodyPath),
+			err: reviewErr,
+		},
+		{
+			cmd: prReviewSummaryFallbackCommand(repoDir, "42", "acme/repo", 42, bodyPath),
+			err: fallbackErr,
+		},
+	}}
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	cfg := config.Config{Review: &config.ReviewConfig{PRNumber: 42}}
+	repo := repoWorkspace{Dir: repoDir}
+	reviewContext := &preparedReviewContext{
+		Selector: "42",
+		Metadata: reviewPRMetadata{
+			Number:      42,
+			URL:         "https://github.com/acme/repo/pull/42",
+			HeadRefName: "feature/improve-tests",
+		},
+	}
+	agentRes := execx.Result{Stdout: "```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"No material issues.\",\"positives\":[\"Focused tests pass.\"],\"findings\":[]}\n```"}
+
+	if err := h.completeReviewRun(context.Background(), cfg, &repo, reviewContext, agentRes, runDir); err != nil {
+		t.Fatalf("completeReviewRun() err = %v, want nil for transient GitHub writeback failure", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+	if got := strings.Join(logs, "\n"); !strings.Contains(got, "action=comment_writeback_deferred") {
+		t.Fatalf("logs = %q, want deferred writeback warning", got)
+	}
+}
+
+func TestCompleteReviewRunReturnsNonTransientWritebackFailure(t *testing.T) {
+	t.Parallel()
+
+	runDir := t.TempDir()
+	repoDir := t.TempDir()
+	bodyPath := reviewSummaryBodyPath(runDir, 42)
+	reviewErr := errors.New("run gh [pr review 42 --comment --body-file body --repo acme/repo]: exit status 1 (HTTP 401: Requires authentication (https://api.github.com/graphql))")
+	fallbackErr := errors.New("run gh [api repos/acme/repo/issues/42/comments -F body=@body]: exit status 1 (HTTP 403: Resource not accessible by integration (https://api.github.com/graphql))")
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: prReviewSummaryCommand(repoDir, "42", "acme/repo", bodyPath),
+			err: reviewErr,
+		},
+		{
+			cmd: prReviewSummaryFallbackCommand(repoDir, "42", "acme/repo", 42, bodyPath),
+			err: fallbackErr,
+		},
+	}}
+	h := New(fake)
+
+	cfg := config.Config{Review: &config.ReviewConfig{PRNumber: 42}}
+	repo := repoWorkspace{Dir: repoDir}
+	reviewContext := &preparedReviewContext{
+		Selector: "42",
+		Metadata: reviewPRMetadata{
+			Number: 42,
+			URL:    "https://github.com/acme/repo/pull/42",
+		},
+	}
+	agentRes := execx.Result{Stdout: "```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"No material issues.\",\"positives\":[\"Focused tests pass.\"],\"findings\":[]}\n```"}
+
+	err := h.completeReviewRun(context.Background(), cfg, &repo, reviewContext, agentRes, runDir)
+	if err == nil {
+		t.Fatal("completeReviewRun() err = nil, want non-transient writeback failure")
+	}
+	if !strings.Contains(err.Error(), "post pull request review summary") {
+		t.Fatalf("completeReviewRun() err = %q, want writeback context", err)
+	}
+}
+
 func TestBuildReviewPromptContextRetriesMetadataWithoutInvalidGitHubTokenEnv(t *testing.T) {
 	t.Setenv("GH_TOKEN", "stale-token")
 	t.Setenv("GITHUB_TOKEN", "stale-token")
@@ -6300,6 +6387,35 @@ func TestRunCodexAllowsValidationToolingGapWhenCommandReturnsError(t *testing.T)
 	h := New(fake)
 	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
 		t.Fatalf("runCodex() error = %v, want nil for validation tooling gap on non-zero exit", err)
+	}
+}
+
+func TestRunCodexDoesNotDowngradeTransportFailureToValidationToolingGap(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "review pull request"
+	firstCmd := codexCommand(targetDir, prompt)
+	transportErr := errors.New("ERROR: stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses)")
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: firstCmd,
+			res: execx.Result{
+				Stdout: "If local validation tooling is unavailable in this runtime, do not fail solely for that validation gap.",
+				Stderr: "source mentions tooling/deps not installed in runtime, then responses_websocket failed to lookup address information",
+			},
+			err: transportErr,
+		},
+	}}
+
+	h := New(fake)
+	err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil {
+		t.Fatal("runCodex() error = nil, want transport failure")
+	}
+	if !strings.Contains(err.Error(), "stream disconnected before completion") {
+		t.Fatalf("runCodex() error = %v, want original transport error", err)
 	}
 }
 
