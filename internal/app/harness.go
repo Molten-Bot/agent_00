@@ -6357,8 +6357,8 @@ func prCommentScreenshotsBody(prURL, headOwner, branch string, files []string) (
 		if file == "" {
 			continue
 		}
-		rawURL := rawGitHubFileURL(owner, repo, branch, file)
-		b.WriteString(fmt.Sprintf("### %s\n\n![%s](%s)\n\n", file, file, rawURL))
+		imageURL := githubFileImageURL(owner, repo, branch, file)
+		b.WriteString(fmt.Sprintf("### %s\n\n![%s](%s)\n\n", file, file, imageURL))
 	}
 	return strings.TrimSpace(b.String()), nil
 }
@@ -6380,12 +6380,12 @@ func parseGitHubPRRepo(raw string) (owner, repo string, ok bool) {
 	return owner, repo, owner != "" && repo != ""
 }
 
-func rawGitHubFileURL(owner, repo, branch, path string) string {
+func githubFileImageURL(owner, repo, branch, path string) string {
 	return fmt.Sprintf(
-		"https://raw.githubusercontent.com/%s/%s/%s/%s",
+		"https://github.com/%s/%s/blob/%s/%s?raw=1",
 		url.PathEscape(owner),
 		url.PathEscape(repo),
-		url.PathEscape(branch),
+		escapePathSegments(branch),
 		escapePathSegments(path),
 	)
 }
