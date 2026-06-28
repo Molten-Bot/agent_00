@@ -41,10 +41,18 @@ type prViewState struct {
 	Title          string                 `json:"title"`
 	HeadRefName    string                 `json:"headRefName"`
 	BaseRefName    string                 `json:"baseRefName"`
+	HeadRepository prRepository           `json:"headRepository"`
+	HeadRepoOwner  prActor                `json:"headRepositoryOwner"`
 	ReviewDecision string                 `json:"reviewDecision"`
 	LatestReviews  []prReviewEntry        `json:"latestReviews"`
 	Comments       []prCommentEntry       `json:"comments"`
 	ReviewComments []prReviewCommentEntry `json:"-"`
+}
+
+type prRepository struct {
+	Name          string  `json:"name"`
+	NameWithOwner string  `json:"nameWithOwner"`
+	Owner         prActor `json:"owner"`
 }
 
 type prReviewEntry struct {
@@ -270,9 +278,12 @@ func (m *PRMergeMonitor) deleteMergedBranchesEnabled() bool {
 }
 
 func (m *PRMergeMonitor) deleteMergedBranch(ctx context.Context, task Task, state prViewState) error {
-	repo := githubutil.PullRequestRepository(task.PRURL)
+	repo := state.HeadRepositoryNameWithOwner()
 	if repo == "" {
-		return fmt.Errorf("pull request repository is required")
+		repo = githubutil.PullRequestRepository(task.PRURL)
+	}
+	if repo == "" {
+		return fmt.Errorf("pull request head repository is required")
 	}
 	branch := strings.TrimSpace(state.HeadRefName)
 	if branch == "" {
@@ -308,6 +319,18 @@ func isMissingGitHubRefError(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "reference does not exist") ||
 		strings.Contains(message, "not found (http 404)")
+}
+
+func (s prViewState) HeadRepositoryNameWithOwner() string {
+	if repo := strings.TrimSpace(s.HeadRepository.NameWithOwner); repo != "" {
+		return repo
+	}
+	owner := strings.TrimSpace(firstNonEmpty(s.HeadRepository.Owner.Login, s.HeadRepoOwner.Login))
+	name := strings.TrimSpace(s.HeadRepository.Name)
+	if owner == "" || name == "" {
+		return ""
+	}
+	return owner + "/" + name
 }
 
 func (m *PRMergeMonitor) maybeQueueReviewFeedback(ctx context.Context, task Task, state prViewState) {
@@ -370,7 +393,7 @@ func (m *PRMergeMonitor) prState(ctx context.Context, prURL string) (prViewState
 	if prURL == "" {
 		return prViewState{}, fmt.Errorf("pull request url is required")
 	}
-	args := []string{"pr", "view", githubutil.PullRequestSelector(prURL), "--json", "state,mergedAt,url,number,title,headRefName,baseRefName,reviewDecision,latestReviews,comments"}
+	args := []string{"pr", "view", githubutil.PullRequestSelector(prURL), "--json", "state,mergedAt,url,number,title,headRefName,baseRefName,headRepository,headRepositoryOwner,reviewDecision,latestReviews,comments"}
 	if repo := githubutil.PullRequestRepository(prURL); repo != "" {
 		args = append(args, "--repo", repo)
 	}

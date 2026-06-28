@@ -139,7 +139,7 @@ func TestPRMergeMonitorMarksMergedTaskDoneAndRunsCleanup(t *testing.T) {
 	if got, want := commands[0].Name, "gh"; got != want {
 		t.Fatalf("command name = %q, want %q", got, want)
 	}
-	if got, want := commands[0].Args, []string{"pr", "view", "42", "--json", "state,mergedAt,url,number,title,headRefName,baseRefName,reviewDecision,latestReviews,comments", "--repo", "acme/repo"}; !slices.Equal(got, want) {
+	if got, want := commands[0].Args, []string{"pr", "view", "42", "--json", "state,mergedAt,url,number,title,headRefName,baseRefName,headRepository,headRepositoryOwner,reviewDecision,latestReviews,comments", "--repo", "acme/repo"}; !slices.Equal(got, want) {
 		t.Fatalf("command args = %v, want %v", got, want)
 	}
 }
@@ -215,6 +215,38 @@ func TestPRMergeMonitorDeletesMergedBranchAndClosesTaskWhenEnabled(t *testing.T)
 		t.Fatalf("delete command name = %q, want %q", got, want)
 	}
 	if got, want := commands[1].Args, []string{"api", "-X", "DELETE", "repos/acme/repo/git/refs/heads/moltenhub-ship"}; !slices.Equal(got, want) {
+		t.Fatalf("delete command args = %v, want %v", got, want)
+	}
+}
+
+func TestPRMergeMonitorDeletesMergedForkBranchFromHeadRepository(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubPRMonitorRunner{}
+	monitor := PRMergeMonitor{Runner: runner}
+
+	err := monitor.deleteMergedBranch(context.Background(), Task{
+		PRURL:  "https://github.com/acme/repo/pull/42",
+		Branch: "moltenhub-ship",
+	}, prViewState{
+		HeadRefName: "moltenhub-ship",
+		BaseRefName: "main",
+		HeadRepository: prRepository{
+			Name: "repo",
+		},
+		HeadRepoOwner: prActor{
+			Login: "contributor",
+		},
+	})
+	if err != nil {
+		t.Fatalf("deleteMergedBranch() error = %v", err)
+	}
+
+	commands := runner.Commands()
+	if got, want := len(commands), 1; got != want {
+		t.Fatalf("len(commands) = %d, want %d", got, want)
+	}
+	if got, want := commands[0].Args, []string{"api", "-X", "DELETE", "repos/contributor/repo/git/refs/heads/moltenhub-ship"}; !slices.Equal(got, want) {
 		t.Fatalf("delete command args = %v, want %v", got, want)
 	}
 }
