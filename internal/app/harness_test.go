@@ -5564,13 +5564,13 @@ func TestChangedPRCommentScreenshotFilesFindsOnlyNewOrModifiedImages(t *testing.
 	}
 }
 
-func TestPRCommentScreenshotsBodyBuildsRawImageLinks(t *testing.T) {
+func TestPRCommentScreenshotsBodyBuildsGitHubImageLinks(t *testing.T) {
 	t.Parallel()
 
 	body, err := prCommentScreenshotsBody(
 		"https://github.com/acme/repo/pull/42",
 		"",
-		"moltenhub-pink",
+		"moltenhub/pink",
 		[]string{".moltenhub/pr-comment-screenshots/before shot.png"},
 	)
 	if err != nil {
@@ -5580,7 +5580,7 @@ func TestPRCommentScreenshotsBodyBuildsRawImageLinks(t *testing.T) {
 		"Automated screenshots captured during the run.",
 		"### .moltenhub/pr-comment-screenshots/before shot.png",
 		"![.moltenhub/pr-comment-screenshots/before shot.png]",
-		"https://raw.githubusercontent.com/acme/repo/moltenhub-pink/.moltenhub/pr-comment-screenshots/before%20shot.png",
+		"https://github.com/acme/repo/blob/moltenhub/pink/.moltenhub/pr-comment-screenshots/before%20shot.png?raw=1",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)
@@ -5600,9 +5600,9 @@ func TestPRCommentScreenshotsBodyUsesForkHeadOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prCommentScreenshotsBody() error = %v", err)
 	}
-	want := "https://raw.githubusercontent.com/octocat/repo/moltenhub-pink/.moltenhub/pr-comment-screenshots/after.png"
+	want := "https://github.com/octocat/repo/blob/moltenhub-pink/.moltenhub/pr-comment-screenshots/after.png?raw=1"
 	if !strings.Contains(body, want) {
-		t.Fatalf("body missing fork raw URL %q:\n%s", want, body)
+		t.Fatalf("body missing fork image URL %q:\n%s", want, body)
 	}
 }
 
