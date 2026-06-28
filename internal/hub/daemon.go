@@ -1177,6 +1177,9 @@ func (d Daemon) handleDispatch(
 		}
 		res.Err = stopErr
 	}
+	if failed, ok := unexpectedNoChangesDispatchFailure(res, dispatch.Config); ok {
+		res = failed
+	}
 	if res.Err != nil && !stoppedByOperator && d.OnDispatchFailed != nil {
 		d.OnDispatchFailed(dispatch.RequestID, dispatch.Config, res)
 	}
@@ -2059,6 +2062,128 @@ func dispatchResultStatus(res app.Result) string {
 		status = "no_changes"
 	}
 	return status
+}
+
+func unexpectedNoChangesDispatchFailure(res app.Result, runCfg config.Config) (app.Result, bool) {
+	if !res.NoChanges {
+		return app.Result{}, false
+	}
+	if resultHasPR(res) {
+		return app.Result{}, false
+	}
+	if res.NoChangeEvidence {
+		return app.Result{}, false
+	}
+	if !dispatchPromptRequestsRepositoryChange(runCfg.Prompt) {
+		return app.Result{}, false
+	}
+
+	failed := res
+	if failed.ExitCode == app.ExitSuccess {
+		failed.ExitCode = app.ExitCodex
+	}
+	failed.Err = errors.New(unexpectedNoChangesDispatchFailureDetail())
+	return failed, true
+}
+
+func unexpectedNoChangesDispatchFailureDetail() string {
+	return "task completed with no file changes and no pull request even though the prompt appears to require repository changes. Root causes: no tracked file changes; no pull request URL; prompt requested repository changes; no concrete repository evidence justified a no-op."
+}
+
+func dispatchPromptRequestsRepositoryChange(prompt string) bool {
+	text := strings.ToLower(strings.TrimSpace(prompt))
+	if text == "" {
+		return true
+	}
+
+	if strings.Contains(text, "?") {
+		questionPrefixes := []string{"what ", "why ", "how ", "when ", "where ", "who "}
+		for _, prefix := range questionPrefixes {
+			if strings.HasPrefix(text, prefix) {
+				return false
+			}
+		}
+	}
+
+	if dispatchPromptAllowsSuccessfulNoOp(text) {
+		return false
+	}
+
+	changeMarkers := []string{
+		"fix", "change", "update", "modify", "refactor", "add", "remove", "create",
+		"implement", "make", "rename", "replace", "convert", "style", "color",
+		"pink", "build", "ship", "wire", "hook up", "repair",
+	}
+	for _, marker := range changeMarkers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+
+	readOnlyMarkers := []string{
+		"review", "investigate", "analysis", "analyze", "summarize", "summary",
+		"explain", "inspect", "read", "show", "list", "find", "compare", "audit",
+		"why", "what", "how",
+	}
+	for _, marker := range readOnlyMarkers {
+		if strings.Contains(text, marker) {
+			return false
+		}
+	}
+
+	if strings.Contains(text, "?") {
+		return false
+	}
+	return true
+}
+
+func dispatchPromptAllowsSuccessfulNoOp(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+	phraseText := dispatchPromptPhraseText(text)
+
+	strongChangeMarkers := []string{
+		"fix", "implement", "add", "remove", "create", "replace", "rename",
+		"refactor", "repair", "build", "ship", "wire", "hook up",
+		"change the", "change this", "modify", "update", "make the",
+	}
+	for _, marker := range strongChangeMarkers {
+		if dispatchPromptPhraseTextContains(phraseText, marker) {
+			return false
+		}
+	}
+
+	verificationMarkers := []string{
+		"make sure", "ensure", "verify", "confirm", "check", "validate", "review",
+		"inspect", "audit", "compare",
+	}
+	consistencyMarkers := []string{
+		"up to date", "up-to-date", "current", "latest", "in sync", "out of sync",
+		"drift", "no drift", "match", "matches", "matching", "consistent",
+		"consistency",
+	}
+	for _, verify := range verificationMarkers {
+		if !dispatchPromptPhraseTextContains(phraseText, verify) {
+			continue
+		}
+		for _, consistency := range consistencyMarkers {
+			if dispatchPromptPhraseTextContains(phraseText, consistency) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func dispatchPromptPhraseText(text string) string {
+	normalized := strings.NewReplacer("-", " ", "_", " ", "\n", " ", "\t", " ").Replace(text)
+	return strings.Join(strings.Fields(normalized), " ")
+}
+
+func dispatchPromptPhraseTextContains(text, marker string) bool {
+	return strings.Contains(dispatchPromptPhraseText(text), dispatchPromptPhraseText(marker))
 }
 
 func isCanceledDispatchStatus(status string) bool {
