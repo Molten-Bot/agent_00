@@ -6757,7 +6757,14 @@ type latestCheckState struct {
 func (h Harness) reconcileChecksAfterFailure(ctx context.Context, repo repoWorkspace, requiredOnly bool) (bool, string, error) {
 	res, err := h.runCommand(ctx, "checks", prChecksJSONCommand(repo.Dir, repo.PRURL, requiredOnly))
 	if err != nil {
-		return false, "", err
+		if !isUnsupportedPRChecksJSON(res, err) {
+			return false, "", err
+		}
+		snapshot, parseErr := latestCheckSnapshotFromText(res.Stdout)
+		if parseErr != nil {
+			return false, "", err
+		}
+		return !snapshot.HasFailures && snapshot.AllPassing, snapshot.Summary, nil
 	}
 
 	snapshot, err := latestCheckSnapshot(res.Stdout)
@@ -6770,7 +6777,14 @@ func (h Harness) reconcileChecksAfterFailure(ctx context.Context, repo repoWorks
 func (h Harness) latestChecksAreAllPassing(ctx context.Context, repo repoWorkspace, requiredOnly bool) (bool, string, error) {
 	res, err := h.runCommand(ctx, "checks", prChecksJSONCommand(repo.Dir, repo.PRURL, requiredOnly))
 	if err != nil {
-		return false, "", err
+		if !isUnsupportedPRChecksJSON(res, err) {
+			return false, "", err
+		}
+		snapshot, parseErr := latestCheckSnapshotFromText(res.Stdout)
+		if parseErr != nil {
+			return false, "", err
+		}
+		return snapshot.AllPassing, snapshot.Summary, nil
 	}
 	snapshot, err := latestCheckSnapshot(res.Stdout)
 	if err != nil {
@@ -6814,7 +6828,47 @@ func latestCheckSnapshot(raw string) (latestChecksSnapshot, error) {
 	if len(latestByName) == 0 {
 		return latestChecksSnapshot{}, nil
 	}
+	return latestCheckSnapshotFromStates(latestByName), nil
+}
 
+func isUnsupportedPRChecksJSON(res execx.Result, err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(strings.Join([]string{res.Stdout, res.Stderr, err.Error()}, "\n"))
+	return strings.Contains(text, "unknown flag: --json") &&
+		strings.Contains(text, "gh pr checks")
+}
+
+func latestCheckSnapshotFromText(raw string) (latestChecksSnapshot, error) {
+	lines := splitOutputLines(raw)
+	if len(lines) == 0 {
+		return latestChecksSnapshot{}, fmt.Errorf("parse checks text snapshot: no check output")
+	}
+
+	latestByName := make(map[string]latestCheckState)
+	for i, line := range lines {
+		fields := strings.Split(line, "\t")
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.TrimSpace(fields[0])
+		bucket := strings.ToLower(strings.TrimSpace(fields[1]))
+		if name == "" || bucket == "" || strings.Contains(name, "refreshing checks status") {
+			continue
+		}
+		latestByName[name] = latestCheckState{
+			Bucket: bucket,
+			Index:  i,
+		}
+	}
+	if len(latestByName) == 0 {
+		return latestChecksSnapshot{}, fmt.Errorf("parse checks text snapshot: no tabular checks found")
+	}
+	return latestCheckSnapshotFromStates(latestByName), nil
+}
+
+func latestCheckSnapshotFromStates(latestByName map[string]latestCheckState) latestChecksSnapshot {
 	names := make([]string, 0, len(latestByName))
 	for name := range latestByName {
 		names = append(names, name)
@@ -6840,7 +6894,7 @@ func latestCheckSnapshot(raw string) (latestChecksSnapshot, error) {
 		AllPassing:  allPassing,
 		HasFailures: hasFailures,
 		Summary:     strings.Join(lines, "\n"),
-	}, nil
+	}
 }
 
 func checkSnapshotTime(check ghPRCheck) time.Time {
