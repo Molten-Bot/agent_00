@@ -132,6 +132,87 @@ func TestPublicPullRequestActivityURLsVerifiesRepoVisibility(t *testing.T) {
 	}
 }
 
+func TestHandleDispatchUnexpectedNoChangesPublishesFailureAndQueuesFollowUp(t *testing.T) {
+	t.Parallel()
+
+	runCfg := config.Config{
+		RepoURL:      "git@github.com:acme/repo.git",
+		Repo:         "git@github.com:acme/repo.git",
+		BaseBranch:   "main",
+		TargetSubdir: ".",
+		Prompt:       "fix the broken release flow",
+	}
+	runCfg.ApplyDefaults()
+
+	api := &stubMoltenHubAPI{token: "t"}
+	d := NewDaemon(&workflowVisibilityRunner{targetSubdir: runCfg.TargetSubdir})
+	finalState := d.handleDispatch(
+		context.Background(),
+		api,
+		InitConfig{
+			SessionKey: "main",
+			Skill:      runtimeSkillConfig(),
+		},
+		SkillDispatch{
+			RequestID: "req-no-changes",
+			Skill:     "code_for_me",
+			ReplyTo:   "caller-agent",
+			Config:    runCfg,
+		},
+		"",
+		false,
+	)
+	if finalState != "error" {
+		t.Fatalf("handleDispatch() final state = %q, want error", finalState)
+	}
+
+	api.mu.Lock()
+	defer api.mu.Unlock()
+
+	if len(api.offlineCalls) != 1 {
+		t.Fatalf("offline calls = %d, want 1", len(api.offlineCalls))
+	}
+	if got, want := api.offlineCalls[0].Reason, transportOfflineReasonExecutionFailure; got != want {
+		t.Fatalf("offline reason = %q, want %q", got, want)
+	}
+
+	var failurePayload map[string]any
+	var followUpPayload map[string]any
+	for _, payload := range api.published {
+		switch payload["request_id"] {
+		case "req-no-changes":
+			if payload["status"] == "error" {
+				failurePayload = payload
+			}
+		case "req-no-changes-failure-review":
+			followUpPayload = payload
+		}
+	}
+	if failurePayload == nil {
+		t.Fatalf("failure payload missing: %#v", api.published)
+	}
+	if got := failurePayload["Failure:"]; got != "task failed" {
+		t.Fatalf("Failure: = %#v, want task failed", got)
+	}
+	if got := fmt.Sprint(failurePayload["Error details:"]); !strings.Contains(got, "no file changes and no pull request") {
+		t.Fatalf("Error details: = %q, want no-change failure detail", got)
+	}
+	if followUpPayload == nil {
+		t.Fatalf("follow-up payload missing: %#v", api.published)
+	}
+	runConfig, _ := followUpPayload["config"].(map[string]any)
+	if runConfig == nil {
+		t.Fatalf("follow-up config missing: %#v", followUpPayload)
+	}
+	repos, _ := runConfig["repos"].([]string)
+	if len(repos) != 1 || repos[0] != config.DefaultRepositoryURL {
+		t.Fatalf("follow-up repos = %#v", runConfig["repos"])
+	}
+	if got := fmt.Sprint(runConfig["prompt"]); !strings.Contains(got, "Observed failure context:") || !strings.Contains(got, "request_id=req-no-changes") {
+		t.Fatalf("follow-up prompt missing failure context: %q", got)
+	}
+}
+
 type stubDispatchTaskControl struct {
 	waitErr error
 	stopped bool

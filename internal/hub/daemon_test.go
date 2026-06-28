@@ -928,7 +928,7 @@ func TestHandleDispatchPublishesAgentLogsOnParentTaskOnly(t *testing.T) {
 		Repo:         "git@github.com:acme/repo.git",
 		BaseBranch:   "main",
 		TargetSubdir: "services/api",
-		Prompt:       "Build API",
+		Prompt:       "review API workflow logs",
 	}
 	runCfg.ApplyDefaults()
 
