@@ -1879,7 +1879,7 @@ func TestRunNonMainBranchPushNonFastForwardRetriesWithMergeSync(t *testing.T) {
 	}
 }
 
-func TestRunNonMainBranchPushSyncMergeConflictAbortsAndFailsWithDetails(t *testing.T) {
+func TestRunNonMainBranchPushSyncMergeConflictInvokesAgentAndRetries(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
@@ -1898,6 +1898,16 @@ func TestRunNonMainBranchPushSyncMergeConflictAbortsAndFailsWithDetails(t *testi
 		Stdout: "Auto-merging test/worker.test.js\nCONFLICT (content): Merge conflict in test/worker.test.js\n",
 		Stderr: "Automatic merge failed; fix conflicts and then commit the result.\n",
 	}
+	remoteSyncPrompt := remoteBranchSyncConflictPrompt(
+		withAgentsPrompt(cfg.Prompt, agentsPath),
+		"repo",
+		cfg.RepoURL,
+		cfg.BaseBranch,
+		publishRemoteOrigin,
+		mergeConflict,
+	)
+	syncCommitMessage := remoteBranchSyncCommitMessage(cfg.BaseBranch)
+	prURL := "https://github.com/acme/repo/pull/77"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -1915,7 +1925,14 @@ func TestRunNonMainBranchPushSyncMergeConflictAbortsAndFailsWithDetails(t *testi
 		{cmd: pushCommand(repoDir, cfg.BaseBranch), res: pushRejected, err: errors.New("push rejected")},
 		{cmd: fetchBranchCommand(repoDir, cfg.BaseBranch)},
 		{cmd: mergeFetchedBranchCommand(repoDir), res: mergeConflict, err: errors.New("exit status 1")},
-		{cmd: mergeAbortCommand(repoDir)},
+		{cmd: codexCommand(targetDir, remoteSyncPrompt)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: " M test/worker.test.js\n"}},
+		{cmd: addCommand(repoDir)},
+		{cmd: commitCommand(repoDir, syncCommitMessage)},
+		{cmd: pushCommand(repoDir, cfg.BaseBranch)},
+		{cmd: remoteBranchExistsOnOriginCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "abc123\trefs/heads/" + cfg.BaseBranch + "\n"}},
+		{cmd: prLookupByHeadCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: prURL + "\n"}},
+		{cmd: prChecksCommand(repoDir, prURL)},
 	}}
 
 	h := New(fake)
@@ -1924,21 +1941,14 @@ func TestRunNonMainBranchPushSyncMergeConflictAbortsAndFailsWithDetails(t *testi
 	h.TargetDirOK = func(path string) bool { return path == targetDir }
 
 	res := h.Run(context.Background(), cfg)
-	if res.Err == nil {
-		t.Fatal("Run() err = nil, want merge conflict failure")
+	if res.Err != nil {
+		t.Fatalf("Run() err = %v", res.Err)
 	}
-	if res.ExitCode != ExitGit {
-		t.Fatalf("ExitCode = %d, want %d", res.ExitCode, ExitGit)
+	if res.ExitCode != ExitSuccess {
+		t.Fatalf("ExitCode = %d, want %d", res.ExitCode, ExitSuccess)
 	}
-	errText := res.Err.Error()
-	for _, want := range []string{
-		`sync branch "release/2026.04-hotfix" on remote "origin" before push retry`,
-		"Merge conflict in test/worker.test.js",
-		"merge conflict while syncing remote branch before push retry",
-	} {
-		if !strings.Contains(errText, want) {
-			t.Fatalf("Run() err = %q, want substring %q", errText, want)
-		}
+	if got, want := res.PRURL, prURL; got != want {
+		t.Fatalf("PRURL = %q, want %q", got, want)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))

@@ -565,8 +565,20 @@ func (h Harness) processChangedRepo(
 			return ExitSuccess, "", nil
 		}
 	}
-	if err := h.pushWithSync(ctx, repo, 0); err != nil {
-		return ExitGit, "git", err
+	if exitCode, stage, err := h.pushWithSyncAndConflictResolution(
+		ctx,
+		repo,
+		0,
+		runtime,
+		codexDir,
+		codexOpts,
+		codexBasePrompt,
+		agentsPath,
+		cfg.ResponseMode,
+		codexTargetLabel,
+		agentStage,
+	); err != nil {
+		return exitCode, stage, err
 	}
 	h.logf("stage=git status=ok action=commit repo=%s repo_dir=%s", repo.URL, repo.RelDir)
 
@@ -987,8 +999,20 @@ func (h Harness) processChangedRepo(
 				repo.RelDir,
 			)
 		}
-		if err := h.pushWithSync(ctx, repo, attempt+1); err != nil {
-			return ExitGit, "git", err
+		if exitCode, stage, err := h.pushWithSyncAndConflictResolution(
+			ctx,
+			repo,
+			attempt+1,
+			runtime,
+			codexDir,
+			codexOpts,
+			codexBasePrompt,
+			agentsPath,
+			cfg.ResponseMode,
+			codexTargetLabel,
+			agentStage,
+		); err != nil {
+			return exitCode, stage, err
 		}
 		h.logf("stage=git status=ok action=repair_commit attempt=%d repo=%s repo_dir=%s", attempt+1, repo.URL, repo.RelDir)
 	}
@@ -1031,7 +1055,7 @@ func (h Harness) recreatePullRequestIfClosed(ctx context.Context, repo *repoWork
 		return false, err
 	}
 	repo.PRURL = ""
-	if err := h.pushWithSync(ctx, repo, 0); err != nil {
+	if err := h.pushWithSync(ctx, repo, 0, false); err != nil {
 		return false, err
 	}
 	prURL, err := h.createPullRequestURL(ctx, *repo, cfg, true, repoPRHeadRef(*repo), repoPRTargetRepo(*repo))
@@ -1272,6 +1296,90 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 	return ExitSuccess, "", nil
 }
 
+func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
+	ctx context.Context,
+	repo *repoWorkspace,
+	runtime agentruntime.Runtime,
+	codexDir string,
+	codexOpts codexRunOptions,
+	codexBasePrompt string,
+	agentsPath string,
+	responseMode string,
+	codexTargetLabel string,
+	agentStage string,
+	remote string,
+	mergeRes execx.Result,
+	attempt int,
+) (int, string, error) {
+	if repo == nil {
+		return ExitConfig, "config", fmt.Errorf("repo workspace is required")
+	}
+	branch := normalizeBranchRef(repo.Branch)
+	prompt := remoteBranchSyncConflictPrompt(
+		codexBasePrompt,
+		repo.RelDir,
+		repo.URL,
+		branch,
+		remote,
+		mergeRes,
+	)
+	invocation := newAgentInvocationLogMetadata(runtime, "remote_branch_sync_conflict", attempt, repo.RelDir, repo.RelDir, codexTargetLabel)
+	h.logf(
+		"stage=%s status=start target=%s mode=remote_branch_sync_conflict attempt=%d repo=%s repo_dir=%s%s",
+		agentStage,
+		codexTargetLabel,
+		attempt,
+		repo.URL,
+		repo.RelDir,
+		invocation.logFieldsSuffix(),
+	)
+	agentStart := time.Now()
+	if _, err := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation); err != nil {
+		return ExitCodex, agentStage, err
+	}
+	h.logf(
+		"stage=%s status=ok elapsed_s=%d mode=remote_branch_sync_conflict attempt=%d repo=%s repo_dir=%s%s",
+		agentStage,
+		int(time.Since(agentStart).Seconds()),
+		attempt,
+		repo.URL,
+		repo.RelDir,
+		invocation.logFieldsSuffix(),
+	)
+
+	statusRes, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
+	if err != nil {
+		return ExitGit, "git", err
+	}
+	if hasUnmergedPaths(statusRes.Stdout) {
+		return ExitGit, "git", fmt.Errorf("remote branch sync for repo %s still has unmerged paths after remediation", repo.URL)
+	}
+	if !hasTrackedWorktreeChanges(statusRes.Stdout) && !hasAheadCommitsInStatus(statusRes.Stdout) {
+		return ExitSuccess, "", nil
+	}
+
+	h.logf("stage=git status=start action=sync_remote_branch_commit repo=%s repo_dir=%s branch=%s remote=%s", repo.URL, repo.RelDir, branch, remote)
+	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
+		return ExitGit, "git", err
+	}
+	commitRes, commitErr := h.runCommand(ctx, "git", commitCommand(repo.Dir, remoteBranchSyncCommitMessage(branch)))
+	if commitErr != nil {
+		noChanges, statusErr := h.refreshRepoChangeStateAfterNoOpCommit(ctx, repo, commitRes, commitErr)
+		if statusErr != nil {
+			return ExitGit, "git", statusErr
+		}
+		if noChanges {
+			h.logf("stage=git status=ok action=sync_remote_branch_commit repo=%s repo_dir=%s reason=no_changes_after_add", repo.URL, repo.RelDir)
+			return ExitSuccess, "", nil
+		}
+		if !isNothingToCommitResult(commitRes, commitErr) {
+			return ExitGit, "git", commitErr
+		}
+	}
+	h.logf("stage=git status=ok action=sync_remote_branch_commit repo=%s repo_dir=%s branch=%s remote=%s", repo.URL, repo.RelDir, branch, remote)
+	return ExitSuccess, "", nil
+}
+
 func isMergeConflictResult(res execx.Result, err error) bool {
 	if err == nil {
 		return false
@@ -1324,7 +1432,87 @@ func baseSyncCommitMessage(baseBranch string) string {
 	return fmt.Sprintf("fix: sync with %s", baseBranch)
 }
 
-func (h Harness) pushWithSync(ctx context.Context, repo *repoWorkspace, remediationAttempt int) error {
+func remoteBranchSyncCommitMessage(branch string) string {
+	branch = normalizeBranchRef(branch)
+	if branch == "" {
+		branch = "remote branch"
+	}
+	return fmt.Sprintf("fix: sync with %s", branch)
+}
+
+type remoteBranchSyncConflictError struct {
+	err      error
+	mergeRes execx.Result
+	remote   string
+	branch   string
+}
+
+func (e *remoteBranchSyncConflictError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *remoteBranchSyncConflictError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func (h Harness) pushWithSyncAndConflictResolution(
+	ctx context.Context,
+	repo *repoWorkspace,
+	remediationAttempt int,
+	runtime agentruntime.Runtime,
+	codexDir string,
+	codexOpts codexRunOptions,
+	codexBasePrompt string,
+	agentsPath string,
+	responseMode string,
+	codexTargetLabel string,
+	agentStage string,
+) (int, string, error) {
+	for attempt := 0; attempt <= maxPrePRBaseSyncRemediation; attempt++ {
+		err := h.pushWithSync(ctx, repo, remediationAttempt, true)
+		if err == nil {
+			return ExitSuccess, "", nil
+		}
+		var conflictErr *remoteBranchSyncConflictError
+		if !errors.As(err, &conflictErr) || attempt >= maxPrePRBaseSyncRemediation {
+			return ExitGit, "git", err
+		}
+		h.logf(
+			"stage=git status=warn action=push_sync reason=merge_conflict repo=%s repo_dir=%s branch=%s remote=%s attempt=%d",
+			repo.URL,
+			repo.RelDir,
+			repo.Branch,
+			conflictErr.remote,
+			attempt+1,
+		)
+		if exitCode, stage, resolveErr := h.resolveRemoteBranchSyncConflictWithAgent(
+			ctx,
+			repo,
+			runtime,
+			codexDir,
+			codexOpts,
+			codexBasePrompt,
+			agentsPath,
+			responseMode,
+			codexTargetLabel,
+			agentStage,
+			conflictErr.remote,
+			conflictErr.mergeRes,
+			attempt+1,
+		); resolveErr != nil {
+			return exitCode, stage, resolveErr
+		}
+	}
+	return ExitGit, "git", fmt.Errorf("push sync conflict retries exhausted for branch %q on remote %q", repo.Branch, repoPushRemote(*repo))
+}
+
+func (h Harness) pushWithSync(ctx context.Context, repo *repoWorkspace, remediationAttempt int, leaveMergeConflicts bool) error {
 	if repo == nil {
 		return fmt.Errorf("repo workspace is required")
 	}
@@ -1375,10 +1563,19 @@ func (h Harness) pushWithSync(ctx context.Context, repo *repoWorkspace, remediat
 				maxGitErrorDetailChars,
 			)
 			if isMergeConflictResult(mergeRes, syncErr) {
+				conflictErr := &remoteBranchSyncConflictError{
+					err:      fmt.Errorf("%w; merge conflict while syncing remote branch before push retry", mergeErr),
+					mergeRes: mergeRes,
+					remote:   pushRemote,
+					branch:   repo.Branch,
+				}
+				if leaveMergeConflicts {
+					return conflictErr
+				}
 				if _, abortErr := h.runCommand(ctx, "git", mergeAbortCommand(repo.Dir)); abortErr != nil {
 					return fmt.Errorf("%w; abort merge after push retry conflict: %v", mergeErr, abortErr)
 				}
-				return fmt.Errorf("%w; merge conflict while syncing remote branch before push retry", mergeErr)
+				return conflictErr
 			}
 			return mergeErr
 		}
@@ -6726,6 +6923,28 @@ func baseSyncConflictPrompt(basePrompt, repoPath, repoURL, branch, baseBranch st
 		strings.TrimSpace(repoURL),
 		strings.TrimSpace(branch),
 		strings.TrimSpace(baseBranch),
+		mergeSummary,
+		strings.TrimSpace(basePrompt),
+	)
+}
+
+func remoteBranchSyncConflictPrompt(basePrompt, repoPath, repoURL, branch, remote string, mergeRes execx.Result) string {
+	mergePrompt := mergeMainLibraryPrompt()
+	mergeSummary := summarizeCommandErrorDetail(mergeRes, maxGitErrorDetailChars)
+	if mergeSummary == "" {
+		mergeSummary = "git merge reported conflicts but did not provide output."
+	}
+	if strings.TrimSpace(remote) == "" {
+		remote = publishRemoteOrigin
+	}
+	return fmt.Sprintf(
+		"%s\n\nRemote-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nRemote being merged: %s/%s\n\nThe harness committed the original task work, then `git push` was rejected because the remote branch had new commits. The harness fetched that branch and `git merge --no-edit FETCH_HEAD` reported conflicts before push retry.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest remote-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. After resolving conflicts, leave the repository ready for the harness to commit the merge resolution and retry the push.\n\nOriginal task context:\n%s",
+		mergePrompt,
+		strings.TrimSpace(repoPath),
+		strings.TrimSpace(repoURL),
+		strings.TrimSpace(branch),
+		strings.TrimSpace(remote),
+		strings.TrimSpace(branch),
 		mergeSummary,
 		strings.TrimSpace(basePrompt),
 	)
