@@ -60,6 +60,7 @@ const localFailurePublishTimeout = 75 * time.Second
 const hubBootDiagnosticTimeout = 10 * time.Second
 const hubPingDiagnosticTimeout = 5 * time.Second
 const hubPingRetryInterval = 12 * time.Second
+const agentAuthReadyRetryInterval = 2 * time.Second
 const hubSetupLocationsFetchTimeout = 2 * time.Second
 const hubSetupLocationsCacheTTL = 5 * time.Minute
 
@@ -310,6 +311,9 @@ func runHub(args []string) int {
 		return hub.LoadRuntimeConfig(cfg.RuntimeConfigPath)
 	}
 	hubConfigured := hubCredentialsConfigured(cfg, runtimeCfgLoader)
+	hubConfiguredNow := func() bool {
+		return hubCredentialsConfigured(cfg, runtimeCfgLoader)
+	}
 	var hubPingLive <-chan struct{}
 
 	dispatchController := hub.NewAdaptiveDispatchController(cfg.Dispatcher, daemonLogger)
@@ -729,7 +733,53 @@ func runHub(args []string) int {
 			queueFailureFollowUp(requestID, result, runCfg, "hub_dispatch")
 		}
 	}
-	hubRuntimeReloader := newHubRuntimeConfigReloader(cfg, hubController.Update, hubController.Stop, daemonLogger)
+
+	agentAuthReadyNotify := make(chan struct{}, 1)
+	var (
+		agentAuthReadyWatchMu sync.Mutex
+		agentAuthReadyWatchOn bool
+	)
+	startAgentAuthReadyWatch := func() {
+		if authGate == nil {
+			return
+		}
+		agentAuthReadyWatchMu.Lock()
+		if agentAuthReadyWatchOn {
+			agentAuthReadyWatchMu.Unlock()
+			return
+		}
+		agentAuthReadyWatchOn = true
+		agentAuthReadyWatchMu.Unlock()
+		go func() {
+			<-startAgentAuthReadyLoop(ctx, authGate, daemonLogger)
+			agentAuthReadyWatchMu.Lock()
+			agentAuthReadyWatchOn = false
+			agentAuthReadyWatchMu.Unlock()
+			select {
+			case agentAuthReadyNotify <- struct{}{}:
+			default:
+			}
+		}()
+	}
+	gatedHubUpdate := func(reqCtx context.Context, updateCfg hub.InitConfig) error {
+		ready, detail, authErr := agentAuthReadyForHub(reqCtx, authGate)
+		if authErr != nil {
+			daemonLogger("hub.auth status=deferred action=remote_connect err=%q", authErr)
+			startAgentAuthReadyWatch()
+			return nil
+		}
+		if !ready {
+			daemonLogger(
+				"hub.auth status=deferred action=remote_connect detail=%q",
+				firstNonEmptyString(detail, "complete agent authorization before remote hub transport starts"),
+			)
+			startAgentAuthReadyWatch()
+			return nil
+		}
+		return hubController.Update(reqCtx, updateCfg)
+	}
+
+	hubRuntimeReloader := newHubRuntimeConfigReloader(cfg, gatedHubUpdate, hubController.Stop, daemonLogger)
 	go hubRuntimeReloader.Run(ctx, hubRuntimeConfigReloadInterval)
 
 	waitForHubRuntime := func() int {
@@ -740,10 +790,25 @@ func runHub(args []string) int {
 				return app.ExitSuccess
 			case <-pingLive:
 				pingLive = nil
-				if !hubConfigured {
+				if !hubConfiguredNow() {
 					continue
 				}
-				if err := hubController.Update(ctx, cfg); err != nil {
+				if err := gatedHubUpdate(ctx, cfg); err != nil {
+					if shouldFallbackToLocalOnlyMode(*uiListen, err) {
+						daemonLogger(
+							"hub.auth status=local_only detail=%q",
+							"Remote hub auth failed; continuing in local-only mode. Use the local UI/API to submit tasks.",
+						)
+						continue
+					}
+					writeStderrLine(logger, fmt.Sprintf("error: %v", err))
+					return hubExitCode(err)
+				}
+			case <-agentAuthReadyNotify:
+				if !hubConfiguredNow() || hubController.Running() {
+					continue
+				}
+				if err := gatedHubUpdate(ctx, cfg); err != nil {
 					if shouldFallbackToLocalOnlyMode(*uiListen, err) {
 						daemonLogger(
 							"hub.auth status=local_only detail=%q",
@@ -829,10 +894,10 @@ func runHub(args []string) int {
 			return currentHubSetupState(cfg), nil
 		}
 		uiServer.ConfigureHubSetup = func(reqCtx context.Context, req web.HubSetupRequest) (web.HubSetupState, error) {
-			return configureHubSetup(reqCtx, cfg, req, hubController.Update)
+			return configureHubSetup(reqCtx, cfg, req, gatedHubUpdate)
 		}
 		uiServer.ConnectHubSetup = func(reqCtx context.Context) (web.HubSetupState, error) {
-			return connectHubSetup(reqCtx, cfg, hubController.Update)
+			return connectHubSetup(reqCtx, cfg, gatedHubUpdate)
 		}
 		uiServer.DisconnectHubSetup = func(reqCtx context.Context) (web.HubSetupState, error) {
 			return disconnectHubSetup(reqCtx, cfg, hubController.Stop)
@@ -1006,7 +1071,7 @@ func runHub(args []string) int {
 		return waitForHubRuntime()
 	}
 
-	if err := hubController.Update(ctx, cfg); err != nil {
+	if err := gatedHubUpdate(ctx, cfg); err != nil {
 		if shouldFallbackToLocalOnlyMode(*uiListen, err) {
 			daemonLogger(
 				"hub.auth status=local_only detail=%q",
@@ -2788,6 +2853,54 @@ func maybeStartAgentAuth(ctx context.Context, runtime agentruntime.Runtime, gate
 		runtime.Harness,
 		firstNonEmptyString(started.State, "pending_browser_login"),
 	)
+}
+
+func agentAuthReadyForHub(ctx context.Context, gate agentAuthGate) (bool, string, error) {
+	if gate == nil {
+		return true, "", nil
+	}
+	state, err := gate.Status(ctx)
+	if err != nil {
+		return false, "", err
+	}
+	if state.Required && !state.Ready {
+		return false, firstNonEmptyString(state.Message, "complete agent authorization in the UI"), nil
+	}
+	return true, "", nil
+}
+
+func startAgentAuthReadyLoop(ctx context.Context, gate agentAuthGate, logf func(string, ...any)) <-chan struct{} {
+	ready := make(chan struct{})
+	if gate == nil {
+		close(ready)
+		return ready
+	}
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+
+	go func() {
+		defer close(ready)
+		ticker := time.NewTicker(agentAuthReadyRetryInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				ok, _, err := agentAuthReadyForHub(ctx, gate)
+				if err != nil {
+					logf("hub.auth status=deferred action=remote_connect err=%q", err)
+					continue
+				}
+				if ok {
+					logf("hub.auth status=ready action=remote_connect")
+					return
+				}
+			}
+		}
+	}()
+	return ready
 }
 
 func shouldEnableAgentAuthConfigure(harness string) bool {
