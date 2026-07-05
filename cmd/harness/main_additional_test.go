@@ -787,6 +787,67 @@ func TestMaybeStartAgentAuthLogsStartErrors(t *testing.T) {
 	}
 }
 
+func TestAgentAuthReadyForHub(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		gate       agentAuthGate
+		wantReady  bool
+		wantDetail string
+		wantErr    string
+	}{
+		{
+			name:      "nil gate",
+			wantReady: true,
+		},
+		{
+			name: "ready",
+			gate: &stubAgentAuthGate{
+				statusState: web.AgentAuthState{Required: true, Ready: true, State: "ready"},
+			},
+			wantReady: true,
+		},
+		{
+			name: "required not ready",
+			gate: &stubAgentAuthGate{
+				statusState: web.AgentAuthState{Required: true, Ready: false, Message: "Codex login required"},
+			},
+			wantDetail: "Codex login required",
+		},
+		{
+			name: "status error",
+			gate: &stubAgentAuthGate{
+				statusErr: errors.New("status failed"),
+			},
+			wantErr: "status failed",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ready, detail, err := agentAuthReadyForHub(context.Background(), tt.gate)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("agentAuthReadyForHub() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("agentAuthReadyForHub() error = %v", err)
+			}
+			if ready != tt.wantReady {
+				t.Fatalf("agentAuthReadyForHub() ready = %t, want %t", ready, tt.wantReady)
+			}
+			if !strings.Contains(detail, tt.wantDetail) {
+				t.Fatalf("agentAuthReadyForHub() detail = %q, want contains %q", detail, tt.wantDetail)
+			}
+		})
+	}
+}
+
 func TestShouldEnableAgentAuthConfigure(t *testing.T) {
 	t.Parallel()
 
