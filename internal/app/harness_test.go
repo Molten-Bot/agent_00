@@ -5912,12 +5912,47 @@ func TestRunNoChangesRecordsConcreteNoChangeEvidence(t *testing.T) {
 func TestAgentOutputCitesGeneralNoChangeEvidenceForZeroCommits(t *testing.T) {
 	t.Parallel()
 
-	result := execx.Result{Stdout: strings.Join([]string{
-		"No-op. git-changes-by-day ran across all 10 repos. June 30 UTC: zero commits.",
-		"No `releases.json` change was produced.",
-	}, "\n")}
-	if !agentOutputCitesGeneralNoChangeEvidence(result) {
-		t.Fatal("agentOutputCitesGeneralNoChangeEvidence(zero commits) = false, want true")
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{
+			name: "zero commits with file evidence",
+			output: strings.Join([]string{
+				"No-op. git-changes-by-day ran across all 10 repos. June 30 UTC: zero commits.",
+				"No `releases.json` change was produced.",
+			}, "\n"),
+			want: true,
+		},
+		{
+			name:   "numeric zero commits with file evidence",
+			output: "0 commits matched; `releases.json` remains unchanged.",
+			want:   true,
+		},
+		{
+			name:   "claim without file evidence",
+			output: "No-op. Zero commits matched.",
+		},
+		{
+			name:   "file mention without no-change claim",
+			output: "Checked `releases.json`; changes are still required.",
+		},
+		{
+			name:   "explicit failure is not evidence",
+			output: "Failure: zero commits because `releases.json` could not be read.",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := agentOutputCitesGeneralNoChangeEvidence(execx.Result{Stdout: tt.output})
+			if got != tt.want {
+				t.Fatalf("agentOutputCitesGeneralNoChangeEvidence() = %t, want %t", got, tt.want)
+			}
+		})
 	}
 }
 

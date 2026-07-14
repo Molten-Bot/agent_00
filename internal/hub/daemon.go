@@ -2219,6 +2219,7 @@ func dispatchPromptExplicitlyAllowsNoChanges(text string) bool {
 
 	const maxConditionalNoOpClauseChars = 240
 	for _, condition := range conditions {
+		condition = dispatchPromptPhraseText(condition)
 		remaining := text
 		for {
 			conditionIndex := strings.Index(remaining, condition)
@@ -2230,7 +2231,7 @@ func dispatchPromptExplicitlyAllowsNoChanges(text string) bool {
 				clause = clause[:maxConditionalNoOpClauseChars]
 			}
 			for _, action := range actions {
-				if strings.Contains(clause, action) {
+				if dispatchPromptPhraseTextContains(clause, action) {
 					return true
 				}
 			}

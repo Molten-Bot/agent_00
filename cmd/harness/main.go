@@ -1930,6 +1930,7 @@ func promptExplicitlyAllowsNoChanges(text string) bool {
 
 	const maxConditionalNoOpClauseChars = 240
 	for _, condition := range conditions {
+		condition = promptPhraseText(condition)
 		remaining := text
 		for {
 			conditionIndex := strings.Index(remaining, condition)
@@ -1941,7 +1942,7 @@ func promptExplicitlyAllowsNoChanges(text string) bool {
 				clause = clause[:maxConditionalNoOpClauseChars]
 			}
 			for _, action := range actions {
-				if strings.Contains(clause, action) {
+				if promptPhraseTextContains(clause, action) {
 					return true
 				}
 			}

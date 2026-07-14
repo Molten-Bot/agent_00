@@ -216,12 +216,47 @@ func TestHandleDispatchUnexpectedNoChangesPublishesFailureAndQueuesFollowUp(t *t
 func TestUnexpectedNoChangesDispatchFailureAllowsConditionalNoOp(t *testing.T) {
 	t.Parallel()
 
-	result := app.Result{NoChanges: true}
-	runCfg := config.Config{
-		Prompt: "Build the June 30 release. If there are no changes, do not produce an output change in the JSON.",
+	tests := []struct {
+		name   string
+		prompt string
+		failed bool
+	}{
+		{
+			name:   "explicit do not produce",
+			prompt: "Build the June 30 release. If there are no changes, do not produce an output change in the JSON.",
+		},
+		{
+			name:   "explicit do not create",
+			prompt: "Build the release. If no changes, don't create a pull request.",
+		},
+		{
+			name:   "explicit leave unchanged",
+			prompt: "Validate the release. When nothing changed, leave unchanged and report the result.",
+		},
+		{
+			name:   "condition still requires fix",
+			prompt: "If there are no changes, investigate and fix the collector.",
+			failed: true,
+		},
+		{
+			name:   "condition still requires pull request",
+			prompt: "If there are no changes, create an empty pull request.",
+			failed: true,
+		},
 	}
-	if _, failed := unexpectedNoChangesDispatchFailure(result, runCfg); failed {
-		t.Fatal("unexpectedNoChangesDispatchFailure(conditional no-op) failed = true, want false")
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, failed := unexpectedNoChangesDispatchFailure(
+				app.Result{NoChanges: true},
+				config.Config{Prompt: tt.prompt},
+			)
+			if failed != tt.failed {
+				t.Fatalf("unexpectedNoChangesDispatchFailure() failed = %t, want %t", failed, tt.failed)
+			}
+		})
 	}
 }
 
