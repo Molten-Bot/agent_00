@@ -120,33 +120,6 @@ func (d Daemon) Run(ctx context.Context, cfg InitConfig) error {
 	transport.Logf = d.logf
 	api := NewAsyncAPIClientFrom(transport, cfg.AgentToken)
 
-	token, err := api.ResolveAgentToken(ctx, cfg)
-	if err != nil {
-		return fmt.Errorf("hub auth: %w", err)
-	}
-	if strings.TrimSpace(api.BaseURL()) != "" {
-		cfg.BaseURL = strings.TrimRight(strings.TrimSpace(api.BaseURL()), "/")
-	}
-	cfg.AgentToken = strings.TrimSpace(token)
-	if remoteProfile, profileErr := transport.AgentProfile(ctx, token); profileErr != nil {
-		d.logf("hub.profile status=warn action=load err=%q", profileErr)
-	} else {
-		merged := mergeAgentProfiles(remoteProfile, AgentProfile{
-			Handle:  cfg.Handle,
-			Profile: cfg.Profile,
-		})
-		cfg.Handle = strings.TrimSpace(merged.Handle)
-		cfg.Profile = merged.Profile
-		cfg.ApplyDefaults()
-	}
-	d.logf("hub.connection status=configured base_url=%s", cfg.BaseURL)
-	d.logf("hub.auth status=ok")
-	if err := SaveRuntimeConfigHubSettings(runtimeCfgPath, cfg, token); err != nil {
-		d.logf("hub.runtime_config status=warn action=save err=%q", err)
-	} else {
-		d.logf("hub.runtime_config status=saved path=%s", runtimeCfgPath)
-	}
-
 	libraryCatalog, libraryErr := library.LoadCatalog(library.DefaultDir)
 	orderedLibrarySummaries := []library.TaskSummary{}
 	if libraryErr != nil {
@@ -158,23 +131,12 @@ func (d Daemon) Run(ctx context.Context, cfg InitConfig) error {
 		)
 		d.logf("hub.library status=loaded tasks=%d", len(libraryCatalog.Tasks))
 	}
-	if err := api.SyncProfile(ctx, cfg); err != nil {
-		d.logf("hub.profile status=warn err=%q", err)
-	} else {
-		d.logf("hub.profile status=ok")
-	}
 
-	if err := api.RegisterRuntime(ctx, cfg, orderedLibrarySummaries); err != nil {
-		d.logf("hub.runtime status=warn action=register err=%q", err)
-	} else {
-		d.logf("hub.runtime status=registered skills=%d library_tasks=%d", len(supportedProfileSkills()), len(libraryCatalog.Tasks))
+	bootstrapCfg, _, err := d.bootstrapHubConnection(ctx, api, transport, cfg, runtimeCfgPath, orderedLibrarySummaries, len(libraryCatalog.Tasks), maxReconnectDelay)
+	if err != nil {
+		return err
 	}
-
-	if err := api.UpdateAgentStatus(ctx, "online"); err != nil {
-		d.logf("hub.agent status=warn state=online err=%q", err)
-	} else {
-		d.logf("hub.agent status=online")
-	}
+	cfg = bootstrapCfg
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), agentStatusUpdateTimeout)
 		defer cancel()
@@ -250,6 +212,110 @@ func (d Daemon) Run(ctx context.Context, cfg InitConfig) error {
 			}
 		}
 	}
+}
+
+func (d Daemon) bootstrapHubConnection(
+	ctx context.Context,
+	api MoltenHubAPI,
+	transport APIClient,
+	cfg InitConfig,
+	runtimeCfgPath string,
+	libraryTasks []library.TaskSummary,
+	libraryTaskCount int,
+	maxReconnectDelay time.Duration,
+) (InitConfig, string, error) {
+	failures := 0
+	for {
+		if ctx.Err() != nil {
+			return cfg, "", nil
+		}
+
+		nextCfg, token, err := d.tryBootstrapHubConnection(ctx, api, transport, cfg, runtimeCfgPath, libraryTasks, libraryTaskCount)
+		if err == nil {
+			return nextCfg, token, nil
+		}
+		if isUnauthorizedHubError(err) || !isRetryableHubConnectionError(err) {
+			return cfg, "", fmt.Errorf("hub auth: %w", err)
+		}
+
+		failures++
+		delay := reconnectBackoffDelay(d.ReconnectDelay, maxReconnectDelay, failures)
+		d.logf("hub.connection status=retrying base_url=%s retry_in=%s err=%q", cfg.BaseURL, delay, err)
+		if !sleepWithContext(ctx, delay) {
+			return cfg, "", nil
+		}
+	}
+}
+
+func (d Daemon) tryBootstrapHubConnection(
+	ctx context.Context,
+	api MoltenHubAPI,
+	transport APIClient,
+	cfg InitConfig,
+	runtimeCfgPath string,
+	libraryTasks []library.TaskSummary,
+	libraryTaskCount int,
+) (InitConfig, string, error) {
+	token, err := api.ResolveAgentToken(ctx, cfg)
+	if err != nil {
+		return cfg, "", err
+	}
+	if strings.TrimSpace(api.BaseURL()) != "" {
+		cfg.BaseURL = strings.TrimRight(strings.TrimSpace(api.BaseURL()), "/")
+	}
+	cfg.AgentToken = strings.TrimSpace(token)
+
+	if remoteProfile, profileErr := transport.AgentProfile(ctx, token); profileErr != nil {
+		if isUnauthorizedHubError(profileErr) || isRetryableHubConnectionError(profileErr) {
+			return cfg, token, fmt.Errorf("load agent profile: %w", profileErr)
+		}
+		d.logf("hub.profile status=warn action=load err=%q", profileErr)
+	} else {
+		merged := mergeAgentProfiles(remoteProfile, AgentProfile{
+			Handle:  cfg.Handle,
+			Profile: cfg.Profile,
+		})
+		cfg.Handle = strings.TrimSpace(merged.Handle)
+		cfg.Profile = merged.Profile
+		cfg.ApplyDefaults()
+	}
+
+	d.logf("hub.connection status=configured base_url=%s", cfg.BaseURL)
+	d.logf("hub.auth status=ok")
+	if err := SaveRuntimeConfigHubSettings(runtimeCfgPath, cfg, token); err != nil {
+		d.logf("hub.runtime_config status=warn action=save err=%q", err)
+	} else {
+		d.logf("hub.runtime_config status=saved path=%s", runtimeCfgPath)
+	}
+
+	if err := api.SyncProfile(ctx, cfg); err != nil {
+		if isUnauthorizedHubError(err) || isRetryableHubConnectionError(err) {
+			return cfg, token, fmt.Errorf("sync profile: %w", err)
+		}
+		d.logf("hub.profile status=warn err=%q", err)
+	} else {
+		d.logf("hub.profile status=ok")
+	}
+
+	if err := api.RegisterRuntime(ctx, cfg, libraryTasks); err != nil {
+		if isUnauthorizedHubError(err) || isRetryableHubConnectionError(err) {
+			return cfg, token, fmt.Errorf("register runtime: %w", err)
+		}
+		d.logf("hub.runtime status=warn action=register err=%q", err)
+	} else {
+		d.logf("hub.runtime status=registered skills=%d library_tasks=%d", len(supportedProfileSkills()), libraryTaskCount)
+	}
+
+	if err := api.UpdateAgentStatus(ctx, "online"); err != nil {
+		if isUnauthorizedHubError(err) || isRetryableHubConnectionError(err) {
+			return cfg, token, fmt.Errorf("update agent status: %w", err)
+		}
+		d.logf("hub.agent status=warn state=online err=%q", err)
+	} else {
+		d.logf("hub.agent status=online")
+	}
+
+	return cfg, token, nil
 }
 
 func reconnectBackoffDelay(base, max time.Duration, failures int) time.Duration {
@@ -964,6 +1030,43 @@ func isUnauthorizedHubError(err error) bool {
 	return strings.Contains(text, "status=401") ||
 		strings.Contains(text, "status 401") ||
 		strings.Contains(text, "unauthorized")
+}
+
+func isRetryableHubConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(err.Error()))
+	if text == "" {
+		return false
+	}
+	if isRetryableRuntimeTransportTrace(text) {
+		return true
+	}
+	for _, marker := range []string{
+		" network error:",
+		"network error:",
+		"connection refused",
+		"connection reset",
+		"connection reset by peer",
+		"could not resolve host",
+		"no such host",
+		"temporary failure",
+		"timeout",
+		"i/o timeout",
+		"tls handshake timeout",
+		"service unavailable",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	for _, status := range []string{"status=429", "status=500", "status=502", "status=503", "status=504"} {
+		if strings.Contains(text, status) || strings.Contains(text, strings.Replace(status, "=", " ", 1)) {
+			return true
+		}
+	}
+	return false
 }
 
 func isStoppedByOperatorErr(err error) bool {

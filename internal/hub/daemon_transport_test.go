@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -99,6 +100,51 @@ func TestIsUnauthorizedHubError(t *testing.T) {
 	}
 }
 
+func TestIsRetryableHubConnectionError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "service unavailable",
+			err:  errors.New("load agent profile: status=503 body=moltenhub is starting"),
+			want: true,
+		},
+		{
+			name: "network error",
+			err:  errors.New("bind flow failed: bind status=500; bind.auth network error: dial tcp: connection refused"),
+			want: true,
+		},
+		{
+			name: "not found",
+			err:  errors.New("load agent profile: status=404 body=missing"),
+			want: false,
+		},
+		{
+			name: "bad credentials",
+			err:  errors.New("websocket handshake status=401 body=unauthorized"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isRetryableHubConnectionError(tt.err); got != tt.want {
+				t.Fatalf("isRetryableHubConnectionError() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsUnsupportedRuntimeWebsocketError(t *testing.T) {
 	t.Parallel()
 
@@ -186,6 +232,112 @@ func TestSanitizeDispatchStatusMessageIDPart(t *testing.T) {
 				t.Fatalf("sanitizeDispatchStatusMessageIDPart(%q) = %q, want %q", tt.value, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDaemonRunRetriesTransientBootstrapFailure(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu              sync.Mutex
+		agentProfileHit int
+		statusHit       int
+		retryLogged     bool
+		wsHit           = make(chan struct{})
+		wsOnce          sync.Once
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/a2a/agent-card":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"name":"agent","description":"ok","url":"http://example.test","version":"1.0.0","capabilities":{},"skills":[]}`))
+		case "/v1/agents/me":
+			mu.Lock()
+			agentProfileHit++
+			hit := agentProfileHit
+			mu.Unlock()
+			if hit <= 2 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"message":"moltenhub is starting"}`))
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"handle":"saved"}`))
+		case "/v1/agents/me/status", "/v1/agents/me/metadata":
+			if r.URL.Path == "/v1/agents/me/status" {
+				mu.Lock()
+				statusHit++
+				mu.Unlock()
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/ping", "/health", "/v1/runtime/messages/pull":
+			w.WriteHeader(http.StatusNoContent)
+		case "/v1/runtime/messages/ws":
+			wsOnce.Do(func() { close(wsHit) })
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"message":"moltenhub is starting"}`))
+		case "/v1/runtime/messages/offline":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	d := NewDaemon(execx.OSRunner{})
+	d.ReconnectDelay = time.Millisecond
+	d.Logf = func(format string, args ...any) {
+		line := fmt.Sprintf(format, args...)
+		if strings.HasPrefix(line, "hub.connection status=retrying") {
+			mu.Lock()
+			retryLogged = true
+			mu.Unlock()
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- d.Run(ctx, InitConfig{
+			BaseURL:    server.URL + "/v1",
+			AgentToken: "agent-token",
+			SessionKey: "main",
+		})
+	}()
+
+	select {
+	case <-wsHit:
+		cancel()
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("timed out waiting for websocket attempt after bootstrap retry")
+	}
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Daemon.Run() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for daemon shutdown")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if agentProfileHit < 3 {
+		t.Fatalf("agent profile hits = %d, want >= 3", agentProfileHit)
+	}
+	if statusHit == 0 {
+		t.Fatal("status update was not attempted after bootstrap retry")
+	}
+	if !retryLogged {
+		t.Fatal("missing hub.connection retrying log")
 	}
 }
 
