@@ -52,6 +52,8 @@ const (
 	defaultCIWorkflowPath            = ".github/workflows/ci.yml"
 	ciFixLibraryTaskName             = "fix-pr-ci-tests"
 	mergeMainLibraryTaskName         = "fix-merge-main"
+	codeReviewLibraryTaskName        = "code-review"
+	resolvePRCommentsLibraryTaskName = "resolve-pr-comments"
 	maxPushSyncAttempts              = 3
 	maxPrePRBaseSyncRemediation      = 1
 	maxCloneAttempts                 = 3
@@ -158,6 +160,9 @@ type Harness struct {
 	// PRChecksWatchTimeout bounds each gh pr checks --watch call when positive.
 	// Zero uses the default timeout; negative disables the timeout.
 	PRChecksWatchTimeout time.Duration
+	// FinalReviewPasses is the exact number of read-only review passes to run
+	// after a changed repository has a pull request and initial checks finish.
+	FinalReviewPasses int
 }
 
 // New returns a harness configured with defaults.
@@ -195,6 +200,11 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	if h.Sleep == nil {
 		h.Sleep = sleepWithContext
 	}
+	h.logf(
+		"stage=config status=ok review_mode=%s review_total=%d",
+		finalReviewMode(h.FinalReviewPasses),
+		h.FinalReviewPasses,
+	)
 	runtime, err := agentruntime.Resolve(cfg.AgentHarness, cfg.AgentCommand)
 	if err != nil {
 		return h.fail(ExitConfig, "config", err, "")
@@ -346,6 +356,16 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		codexBasePrompt = reviewPrompt
 		reviewContext = preparedContext
 	}
+	agentResponseMode := cfg.ResponseMode
+	invocationMode := "implementation"
+	if reviewRun {
+		codexBasePrompt, err = withReviewSkillPrompt(codexBasePrompt)
+		if err != nil {
+			return h.fail(ExitConfig, "review", err, runDir)
+		}
+		agentResponseMode = config.DisabledResponseMode
+		invocationMode = "review"
+	}
 	if reviewContext != nil && reviewContext.GitHubTokenEnvSanitized {
 		codexOpts.Env = githubTokenSanitizedEnv()
 	}
@@ -357,11 +377,11 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	codexBasePrompt = withBackpressurePrompt(codexBasePrompt, h.collectBackpressureRequirements(repos, cfg.TargetSubdir))
 	codexTargetLabel := codexTargetLabel(cfg.TargetSubdir, len(repos) > 1)
 	initialRepo, initialRepoDir := initialAgentInvocationRepoMetadata(repos)
-	initialAgentInvocation := newAgentInvocationLogMetadata(runtime, "implementation", 1, initialRepo, initialRepoDir, codexTargetLabel)
+	initialAgentInvocation := newAgentInvocationLogMetadata(runtime, invocationMode, 1, initialRepo, initialRepoDir, codexTargetLabel)
 
 	h.logf("stage=%s status=start target=%s%s", agentStage, codexTargetLabel, initialAgentInvocation.logFieldsSuffix())
 	codexStart := time.Now()
-	agentRes, err := h.runCodexCapture(ctx, runtime, codexDir, codexBasePrompt, codexOpts, agentsPath, cfg.ResponseMode, initialAgentInvocation)
+	agentRes, err := h.runCodexCapture(ctx, runtime, codexDir, codexBasePrompt, codexOpts, agentsPath, agentResponseMode, initialAgentInvocation)
 	if err != nil {
 		return h.fail(ExitCodex, agentStage, err, runDir)
 	}
@@ -480,6 +500,41 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 }
 
 func (h Harness) processChangedRepo(
+	ctx context.Context,
+	cfg config.Config,
+	repo *repoWorkspace,
+	runtime agentruntime.Runtime,
+	codexDir string,
+	codexOpts codexRunOptions,
+	codexBasePrompt string,
+	agentsPath string,
+	codexTargetLabel string,
+	agentStage string,
+	multiRepo bool,
+) (int, string, error) {
+	exitCode, stage, err := h.processChangedRepoWithoutFinalReviews(
+		ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt,
+		agentsPath, codexTargetLabel, agentStage, multiRepo,
+	)
+	if err != nil || h.FinalReviewPasses <= 0 || isReviewOnlyRun(cfg) || repo == nil || !repo.Changed || strings.TrimSpace(repo.PRURL) == "" {
+		return exitCode, stage, err
+	}
+	return h.runFinalReviewCycle(
+		ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt,
+		agentsPath, codexTargetLabel, agentStage, multiRepo,
+	)
+}
+
+func isReviewOnlyRun(cfg config.Config) bool {
+	if cfg.Review != nil {
+		return true
+	}
+	taskName := strings.ToLower(strings.TrimSpace(cfg.LibraryTaskName))
+	taskName = strings.ReplaceAll(taskName, "_", "-")
+	return taskName == codeReviewLibraryTaskName
+}
+
+func (h Harness) processChangedRepoWithoutFinalReviews(
 	ctx context.Context,
 	cfg config.Config,
 	repo *repoWorkspace,
@@ -2977,6 +3032,293 @@ func (h Harness) prepareReviewPrompt(
 		return reviewContext.Prompt, reviewContext, nil
 	}
 	return strings.TrimSpace(basePrompt + "\n\n" + reviewContext.Prompt), reviewContext, nil
+}
+
+func (h Harness) runFinalReviewCycle(
+	ctx context.Context,
+	cfg config.Config,
+	repo *repoWorkspace,
+	runtime agentruntime.Runtime,
+	codexDir string,
+	codexOpts codexRunOptions,
+	codexBasePrompt string,
+	agentsPath string,
+	codexTargetLabel string,
+	agentStage string,
+	multiRepo bool,
+) (int, string, error) {
+	if repo == nil || h.FinalReviewPasses <= 0 || strings.TrimSpace(repo.PRURL) == "" {
+		return ExitSuccess, "", nil
+	}
+
+	for pass := 1; pass <= h.FinalReviewPasses; pass++ {
+		reviewMode := finalReviewMode(h.FinalReviewPasses)
+		h.logf(
+			"stage=review status=start action=pass review_mode=%s pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",
+			reviewMode,
+			pass,
+			h.FinalReviewPasses,
+			repo.URL,
+			repo.RelDir,
+			repo.PRURL,
+		)
+		headBefore, err := h.currentHead(ctx, *repo)
+		if err != nil {
+			return ExitGit, "git", err
+		}
+		reviewCfg := config.ReviewConfig{
+			PRURL:      repo.PRURL,
+			HeadBranch: repo.Branch,
+			Trigger:    "post-task-cycle",
+			Writeback:  "summary-comment",
+		}
+		reviewContext, err := h.buildReviewPromptContext(ctx, *repo, reviewCfg)
+		if err != nil {
+			return ExitPR, "review", err
+		}
+		reviewPrompt := finalReviewPrompt(cfg.Prompt, reviewContext.Prompt, pass, h.FinalReviewPasses)
+		reviewPrompt, err = withReviewSkillPrompt(reviewPrompt)
+		if err != nil {
+			return ExitConfig, "review", err
+		}
+		reviewOpts := codexOpts
+		reviewOpts.ImagePaths = nil
+		if reviewContext.GitHubTokenEnvSanitized {
+			if len(reviewOpts.Env) == 0 {
+				reviewOpts.Env = githubTokenSanitizedEnv()
+			} else {
+				reviewOpts.Env = environWithoutKeys(reviewOpts.Env, "GH_TOKEN", "GITHUB_TOKEN")
+			}
+		}
+		invocation := newAgentInvocationLogMetadata(runtime, "review", pass, repo.RelDir, repo.RelDir, repo.RelDir)
+		reviewRes, err := h.runCodexCapture(
+			ctx,
+			runtime,
+			repo.Dir,
+			reviewPrompt,
+			reviewOpts,
+			agentsPath,
+			config.DisabledResponseMode,
+			invocation,
+		)
+		if err != nil {
+			return ExitCodex, agentStage, err
+		}
+		statusRes, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
+		if err != nil {
+			return ExitGit, "git", err
+		}
+		headAfter, err := h.currentHead(ctx, *repo)
+		if err != nil {
+			return ExitGit, "git", err
+		}
+		if hasTrackedWorktreeChanges(statusRes.Stdout) || headAfter != headBefore {
+			return ExitCodex, "review", fmt.Errorf("post-task review pass %d modified repository files or history", pass)
+		}
+
+		outcome, ok := parseReviewOutcome(reviewOutputText(reviewRes))
+		if !ok {
+			return ExitCodex, "review", fmt.Errorf("post-task review pass %d returned no valid structured outcome", pass)
+		}
+		switch outcome.Status {
+		case "blocked":
+			return ExitCodex, "review", fmt.Errorf("post-task review pass %d was blocked: %s", pass, strings.TrimSpace(outcome.Summary))
+		case "clean":
+			if len(outcome.Findings) != 0 || !outcome.MergeReady {
+				return ExitCodex, "review", fmt.Errorf("post-task review pass %d returned an inconsistent clean outcome", pass)
+			}
+		case "findings":
+			if len(outcome.Findings) == 0 {
+				return ExitCodex, "review", fmt.Errorf("post-task review pass %d reported findings without actionable items", pass)
+			}
+		default:
+			return ExitCodex, "review", fmt.Errorf("post-task review pass %d returned unsupported status %q", pass, outcome.Status)
+		}
+
+		commentBody := finalReviewCommentBody(outcome, pass, h.FinalReviewPasses)
+		bodyPath := finalReviewSummaryBodyPath(filepath.Dir(repo.Dir), reviewContext.Metadata.Number, pass)
+		if err := h.writeWorkspaceFile(bodyPath, []byte(commentBody), 0o600); err != nil {
+			return ExitWorkspace, "review", fmt.Errorf("write post-task review comment: %w", err)
+		}
+		selector, targetRepo := reviewWritebackTarget(reviewContext.Metadata, reviewCfg, reviewContext.Selector)
+		if err := h.postReviewSummary(
+			ctx,
+			repo.Dir,
+			selector,
+			targetRepo,
+			reviewContext.Metadata.Number,
+			bodyPath,
+			repo.PRURL,
+			reviewContext.GitHubTokenEnvSanitized,
+		); err != nil {
+			return ExitPR, "review", fmt.Errorf("post review cycle comment for pass %d: %w", pass, err)
+		}
+		h.logf(
+			"stage=review status=ok action=pass review_mode=%s pass=%d total=%d findings=%d repo=%s repo_dir=%s pr_url=%s",
+			reviewMode,
+			pass,
+			h.FinalReviewPasses,
+			len(outcome.Findings),
+			repo.URL,
+			repo.RelDir,
+			repo.PRURL,
+		)
+		if len(outcome.Findings) == 0 {
+			continue
+		}
+
+		h.logf(
+			"stage=review_fix status=start action=agent review_mode=%s pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",
+			reviewMode,
+			pass,
+			h.FinalReviewPasses,
+			repo.URL,
+			repo.RelDir,
+			repo.PRURL,
+		)
+		fixHeadBefore, err := h.currentHead(ctx, *repo)
+		if err != nil {
+			return ExitGit, "git", err
+		}
+		fixPrompt := finalReviewFixPrompt(cfg.Prompt, *repo, outcome.Findings, pass, h.FinalReviewPasses)
+		fixInvocation := newAgentInvocationLogMetadata(runtime, "review_fix", pass, repo.RelDir, repo.RelDir, repo.RelDir)
+		if _, err := h.runCodexCapture(
+			ctx,
+			runtime,
+			repo.Dir,
+			fixPrompt,
+			codexOpts,
+			agentsPath,
+			cfg.ResponseMode,
+			fixInvocation,
+		); err != nil {
+			return ExitCodex, agentStage, err
+		}
+		fixStatus, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
+		if err != nil {
+			return ExitGit, "git", err
+		}
+		fixHeadAfter, err := h.currentHead(ctx, *repo)
+		if err != nil {
+			return ExitGit, "git", err
+		}
+		hasRealFixDiff := hasTrackedWorktreeChanges(fixStatus.Stdout)
+		if fixHeadAfter != fixHeadBefore {
+			fixDiff, diffErr := h.runCommand(ctx, "git", reviewFixDiffCommand(repo.Dir, fixHeadBefore))
+			if diffErr != nil {
+				return ExitGit, "git", fmt.Errorf("verify review fix diff for pass %d: %w", pass, diffErr)
+			}
+			hasRealFixDiff = hasRealFixDiff || strings.TrimSpace(fixDiff.Stdout) != ""
+		}
+		if !hasRealFixDiff {
+			return ExitCodex, "review_fix", fmt.Errorf("review fix pass %d produced no repository changes", pass)
+		}
+
+		fixCfg := cfg
+		fixCfg.CommitMessage = fmt.Sprintf("fix: address review findings (pass %d)", pass)
+		h.logf(
+			"stage=review_checks status=start action=verify review_mode=%s pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",
+			reviewMode,
+			pass,
+			h.FinalReviewPasses,
+			repo.URL,
+			repo.RelDir,
+			repo.PRURL,
+		)
+		exitCode, stage, err := h.processChangedRepoWithoutFinalReviews(
+			ctx,
+			fixCfg,
+			repo,
+			runtime,
+			codexDir,
+			codexOpts,
+			codexBasePrompt,
+			agentsPath,
+			codexTargetLabel,
+			agentStage,
+			multiRepo,
+		)
+		if err != nil {
+			return exitCode, stage, err
+		}
+		h.logf(
+			"stage=review_checks status=ok action=verify review_mode=%s pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",
+			reviewMode,
+			pass,
+			h.FinalReviewPasses,
+			repo.URL,
+			repo.RelDir,
+			repo.PRURL,
+		)
+	}
+	return ExitSuccess, "", nil
+}
+
+func finalReviewMode(passes int) string {
+	switch passes {
+	case 1:
+		return "low"
+	case 3:
+		return "medium"
+	case 6:
+		return "high"
+	default:
+		return "off"
+	}
+}
+
+func finalReviewPrompt(originalPrompt, preparedContext string, pass, total int) string {
+	return strings.TrimSpace(fmt.Sprintf(
+		"%s\n\nPost-task review pass %d/%d. Review the current pull request independently, even if an earlier pass was clean. Follow the bundled review skill as the controlling review standard and return its structured outcome.\n\nOriginal task prompt:\n%s\n\n%s",
+		codeReviewLibraryPrompt(),
+		pass,
+		total,
+		indentedPromptBlock(originalPrompt, "(not available)"),
+		strings.TrimSpace(preparedContext),
+	))
+}
+
+func finalReviewCommentBody(outcome reviewOutcome, pass, total int) string {
+	marker := fmt.Sprintf("<!-- moltenhub-review-cycle pass=%d total=%d -->", pass, total)
+	return truncateReviewCommentBody(marker + "\n" + conciseReviewCommentBody(outcome))
+}
+
+func finalReviewSummaryBodyPath(runDir string, prNumber, pass int) string {
+	if prNumber > 0 {
+		return filepath.Join(runDir, fmt.Sprintf("review-cycle-pr-%d-pass-%d.md", prNumber, pass))
+	}
+	return filepath.Join(runDir, fmt.Sprintf("review-cycle-pass-%d.md", pass))
+}
+
+func finalReviewFixPrompt(originalPrompt string, repo repoWorkspace, findings []reviewFinding, pass, total int) string {
+	var b strings.Builder
+	b.WriteString(resolvePRCommentsLibraryPrompt())
+	b.WriteString(fmt.Sprintf("\n\nAutomated review repair pass %d/%d.\n", pass, total))
+	b.WriteString("For this automated pass, the isolated findings below are the complete repair input. Do not independently collect, act on, or broaden the change to other PR comments or earlier pass findings.\n")
+	b.WriteString("Update the existing pull request branch; do not create a new pull request or change branches.\n")
+	b.WriteString("Do not commit or push; leave the verified changes for the harness.\n\n")
+	b.WriteString("Original task prompt:\n")
+	b.WriteString(indentedPromptBlock(originalPrompt, "(not available)"))
+	b.WriteString("\n\nPull request:\n")
+	b.WriteString("- URL: " + strings.TrimSpace(repo.PRURL) + "\n")
+	b.WriteString("- Head branch: " + strings.TrimSpace(repo.Branch) + "\n")
+	b.WriteString("\nIsolated findings from the current review pass:\n")
+	for i, finding := range findings {
+		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, reviewFindingPoint(finding)))
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func indentedPromptBlock(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = fallback
+	}
+	lines := strings.Split(value, "\n")
+	for i := range lines {
+		lines[i] = "  " + strings.TrimRight(lines[i], " \t")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func withAgentsPrompt(prompt, agentsPath string) string {
@@ -6313,6 +6655,10 @@ func statusCommand(repoDir string) execx.Command {
 	return execx.Command{Dir: repoDir, Name: "git", Args: []string{"status", "--porcelain", "--branch"}}
 }
 
+func reviewFixDiffCommand(repoDir, beforeHead string) execx.Command {
+	return execx.Command{Dir: repoDir, Name: "git", Args: []string{"diff", "--binary", strings.TrimSpace(beforeHead)}}
+}
+
 func localBranchFromStatus(stdout string) string {
 	for _, line := range strings.Split(stdout, "\n") {
 		line = strings.TrimSpace(line)
@@ -6958,6 +7304,26 @@ func ciFixLibraryPrompt() string {
 		}
 	}
 	return "You are a senior software engineer fixing pull-request CI failures.\n\nFix the root cause of broken CI with the smallest coherent repository diff. Validate locally where possible. If CI, tests, or validation fail, report `Failure:` and `Error details:`."
+}
+
+func codeReviewLibraryPrompt() string {
+	catalog, err := library.LoadCatalog(library.DefaultDir)
+	if err == nil {
+		if task, ok := catalog.Task(codeReviewLibraryTaskName); ok && strings.TrimSpace(task.Prompt) != "" {
+			return strings.TrimSpace(task.Prompt)
+		}
+	}
+	return "Perform a read-only pull request review. Prioritize correctness, security, regressions, and missing tests. Return a structured clean, findings, or blocked outcome."
+}
+
+func resolvePRCommentsLibraryPrompt() string {
+	catalog, err := library.LoadCatalog(library.DefaultDir)
+	if err == nil {
+		if task, ok := catalog.Task(resolvePRCommentsLibraryTaskName); ok && strings.TrimSpace(task.Prompt) != "" {
+			return strings.TrimSpace(task.Prompt)
+		}
+	}
+	return "Modify the existing pull request branch to resolve the supplied review findings with the smallest coherent diff. Preserve unrelated work and validate the result."
 }
 
 func mergeMainLibraryPrompt() string {

@@ -1156,6 +1156,13 @@ func (d Daemon) handleDispatch(
 	}
 
 	h := app.New(d.Runner)
+	reviewPasses := cfg.ReviewWatch.ReviewCount()
+	if strings.TrimSpace(cfg.RuntimeConfigPath) != "" {
+		if runtimeCfg, err := LoadRuntimeConfig(cfg.RuntimeConfigPath); err == nil {
+			reviewPasses = runtimeCfg.ReviewWatch.ReviewCount()
+		}
+	}
+	h.FinalReviewPasses = reviewPasses
 	h.Logf = func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)
 		if dispatch.RequestID != "" {

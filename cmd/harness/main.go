@@ -516,7 +516,11 @@ func runHub(args []string) int {
 					taskHandle.SetRunning(true)
 				}
 				recordLocalRunStartedActivity(runCtx, activeCfg, runCfg, requestID, hubRuntimeConnected, daemonLogger)
-				outcome := runLocalDispatch(runCtx, runner, daemonLogger, cfg.Skill.Name, requestID, runCfg, func() bool {
+				finalReviewPasses := activeCfg.ReviewWatch.ReviewCount()
+				if startCfg, startCfgErr := effectiveHubSetupConfig(activeCfg); startCfgErr == nil {
+					finalReviewPasses = startCfg.ReviewWatch.ReviewCount()
+				}
+				outcome := runLocalDispatch(runCtx, runner, daemonLogger, cfg.Skill.Name, requestID, runCfg, finalReviewPasses, func() bool {
 					if taskHandle == nil {
 						return false
 					}
@@ -1443,6 +1447,7 @@ func runLocalDispatch(
 	skill string,
 	requestID string,
 	runCfg config.Config,
+	finalReviewPasses int,
 	wasStopped func() bool,
 ) localDispatchOutcome {
 	logf(
@@ -1454,6 +1459,7 @@ func runLocalDispatch(
 	)
 
 	h := app.New(runner)
+	h.FinalReviewPasses = finalReviewPasses
 	h.Logf = func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)
 		logf("dispatch request_id=%s %s", requestID, line)
@@ -3621,6 +3627,7 @@ func currentReviewSettingsState(cfg hub.InitConfig) web.ReviewSettingsState {
 		AutoMerge:            activeCfg.ReviewWatch.AutoMergeEnabled(),
 		DeleteMergedBranches: activeCfg.ReviewWatch.DeleteMergedBranchesEnabled(),
 		MergeMethod:          activeCfg.ReviewWatch.MergeMethod,
+		ReviewLevel:          activeCfg.ReviewWatch.ReviewLevel,
 	}
 }
 
@@ -3630,6 +3637,15 @@ func configureReviewSettings(cfg hub.InitConfig, req web.ReviewSettingsRequest) 
 		state := currentReviewSettingsState(cfg)
 		return state, fmt.Errorf("review merge method must be merge, squash, or rebase")
 	}
+	rawReviewLevel := strings.TrimSpace(req.ReviewLevel)
+	if rawReviewLevel == "" {
+		rawReviewLevel = currentReviewSettingsState(cfg).ReviewLevel
+	}
+	reviewLevel := hub.NormalizeReviewLevel(rawReviewLevel)
+	if reviewLevel == "" {
+		state := currentReviewSettingsState(cfg)
+		return state, fmt.Errorf("review level must be off, low, medium, or high")
+	}
 
 	autoMerge := req.AutoMerge
 	deleteMergedBranches := req.DeleteMergedBranches
@@ -3637,6 +3653,7 @@ func configureReviewSettings(cfg hub.InitConfig, req web.ReviewSettingsRequest) 
 		AutoMerge:            &autoMerge,
 		DeleteMergedBranches: &deleteMergedBranches,
 		MergeMethod:          method,
+		ReviewLevel:          reviewLevel,
 	}
 	if err := hub.SaveRuntimeConfigReviewSettings(cfg.RuntimeConfigPath, cfg, reviewCfg); err != nil {
 		state := currentReviewSettingsState(cfg)

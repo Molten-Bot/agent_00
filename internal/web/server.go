@@ -214,6 +214,7 @@ type ReviewSettingsState struct {
 	AutoMerge            bool   `json:"auto_merge"`
 	DeleteMergedBranches bool   `json:"delete_merged_branches"`
 	MergeMethod          string `json:"merge_method"`
+	ReviewLevel          string `json:"review_level"`
 	Message              string `json:"message,omitempty"`
 }
 
@@ -221,6 +222,7 @@ type ReviewSettingsRequest struct {
 	AutoMerge            bool   `json:"auto_merge"`
 	DeleteMergedBranches bool   `json:"delete_merged_branches"`
 	MergeMethod          string `json:"merge_method"`
+	ReviewLevel          string `json:"review_level"`
 }
 
 // NewServer returns a monitor HTTP server.
@@ -1722,11 +1724,14 @@ func (s Server) handleHubSetup(w http.ResponseWriter, r *http.Request) {
 func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		state := ReviewSettingsState{MergeMethod: "squash"}
+		state := ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off"}
 		if s.ReviewSettingsStatus != nil {
 			next, err := s.ReviewSettingsStatus(r.Context())
 			if strings.TrimSpace(next.MergeMethod) == "" {
 				next.MergeMethod = state.MergeMethod
+			}
+			if strings.TrimSpace(next.ReviewLevel) == "" {
+				next.ReviewLevel = state.ReviewLevel
 			}
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]any{
@@ -1747,7 +1752,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotImplemented, map[string]any{
 				"ok":       false,
 				"error":    "review settings are unavailable",
-				"settings": ReviewSettingsState{MergeMethod: "squash"},
+				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off"},
 			})
 			return
 		}
@@ -1756,7 +1761,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"ok":       false,
 				"error":    fmt.Sprintf("read request body: %v", err),
-				"settings": ReviewSettingsState{MergeMethod: "squash"},
+				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off"},
 			})
 			return
 		}
@@ -1765,13 +1770,16 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"ok":       false,
 				"error":    fmt.Sprintf("decode request body: %v", err),
-				"settings": ReviewSettingsState{MergeMethod: "squash"},
+				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off"},
 			})
 			return
 		}
 		state, err := s.ConfigureReviewSettings(r.Context(), req)
 		if strings.TrimSpace(state.MergeMethod) == "" {
 			state.MergeMethod = "squash"
+		}
+		if strings.TrimSpace(state.ReviewLevel) == "" {
+			state.ReviewLevel = "off"
 		}
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{

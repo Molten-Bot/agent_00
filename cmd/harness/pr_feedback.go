@@ -5,10 +5,12 @@ import (
 	"strings"
 
 	"github.com/Molten-Bot/moltenhub-code/internal/config"
+	"github.com/Molten-Bot/moltenhub-code/internal/library"
 	"github.com/Molten-Bot/moltenhub-code/internal/web"
 )
 
 const prReviewFeedbackCommitMessage = "fix: address pull request review feedback"
+const resolvePRCommentsTaskName = "resolve-pr-comments"
 
 func prReviewFeedbackRunConfig(original config.Config, task web.Task, feedback web.PRReviewFeedback) (config.Config, error) {
 	cfg := original
@@ -20,8 +22,8 @@ func prReviewFeedbackRunConfig(original config.Config, task web.Task, feedback w
 		return config.Config{}, fmt.Errorf("pull request head branch is required")
 	}
 
-	cfg.LibraryTaskName = ""
-	cfg.LibraryTaskDisplayName = ""
+	cfg.LibraryTaskName = resolvePRCommentsTaskName
+	cfg.LibraryTaskDisplayName = "Resolve PR Comments"
 	cfg.Review = nil
 	cfg.BaseBranch = headBranch
 	cfg.Prompt = prReviewFeedbackPrompt(original.Prompt, task, feedback)
@@ -38,7 +40,8 @@ func prReviewFeedbackRunConfig(original config.Config, task web.Task, feedback w
 
 func prReviewFeedbackPrompt(originalPrompt string, task web.Task, feedback web.PRReviewFeedback) string {
 	var b strings.Builder
-	b.WriteString("Update the existing pull request to address review feedback.\n\n")
+	b.WriteString(resolvePRCommentsPrompt())
+	b.WriteString("\n\nUpdate the existing pull request to address only the review feedback below.\n\n")
 	b.WriteString("Original task prompt:\n")
 	b.WriteString(nonEmptyIndented(originalPrompt, "(not available)"))
 	b.WriteString("\n\nPull request:\n")
@@ -70,6 +73,16 @@ func prReviewFeedbackPrompt(originalPrompt string, task web.Task, feedback web.P
 	b.WriteString("- Preserve unrelated code and avoid broad refactors.\n")
 	b.WriteString("- Push the fix to the same PR branch so the existing pull request is updated.\n")
 	return strings.TrimSpace(b.String())
+}
+
+func resolvePRCommentsPrompt() string {
+	catalog, err := library.LoadCatalog(library.DefaultDir)
+	if err == nil {
+		if task, ok := catalog.Task(resolvePRCommentsTaskName); ok && strings.TrimSpace(task.Prompt) != "" {
+			return strings.TrimSpace(task.Prompt)
+		}
+	}
+	return "Modify the existing pull request branch to resolve the supplied review feedback with the smallest coherent diff. Preserve unrelated work and validate the result."
 }
 
 func writePromptField(b *strings.Builder, label, value string) {

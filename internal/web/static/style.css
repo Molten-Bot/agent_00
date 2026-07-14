@@ -6778,6 +6778,10 @@ body.onboarding-modal-open {
   background: var(--surface-control-bg);
 }
 
+.review-settings-level-options {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .review-settings-merge-option {
   min-height: 44px;
   padding: 8px 12px;

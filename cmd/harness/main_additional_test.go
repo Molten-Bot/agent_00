@@ -2210,6 +2210,7 @@ func TestRunLocalDispatchReportsErrorState(t *testing.T) {
 			RepoURL: "git@github.com:acme/repo.git",
 			Prompt:  "fix tests",
 		},
+		0,
 		nil,
 	)
 

@@ -494,6 +494,28 @@ func TestActionablePRReviewFeedbackIncludesInlineReviewComments(t *testing.T) {
 	}
 }
 
+func TestActionablePRReviewFeedbackIgnoresAutomatedReviewCycleComments(t *testing.T) {
+	t.Parallel()
+
+	task := Task{PRURL: "https://github.com/acme/repo/pull/120", Branch: "feature"}
+	feedback := actionablePRReviewFeedback(task, prViewState{
+		State:       "OPEN",
+		URL:         task.PRURL,
+		HeadRefName: "feature",
+		Comments: []prCommentEntry{
+			{ID: "bot", Body: "<!-- moltenhub-review-cycle pass=1 total=3 -->\n**Negative**\n- [Medium] fix this bug"},
+			{ID: "human", Author: prActor{Login: "reviewer"}, Body: "Please fix the human-reported regression."},
+		},
+	})
+
+	if got := len(feedback.Items); got != 1 {
+		t.Fatalf("len(feedback.Items) = %d, want only human feedback", got)
+	}
+	if got := feedback.Items[0].ID; got != "human" {
+		t.Fatalf("feedback item ID = %q, want human", got)
+	}
+}
+
 func TestPRMergeMonitorDoesNotQueueFeedbackForReviewTasks(t *testing.T) {
 	t.Parallel()
 

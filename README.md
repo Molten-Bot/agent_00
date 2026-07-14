@@ -50,6 +50,12 @@ as a PR reviewer, the harness queues the bundled `code-review` task and posts a
 summary comment back to the original PR. Auto-merge is off by default; opt in
 with `review_watch.auto_merge: true` in the runtime config.
 
+Post-task PR review cycles are also off by default. Configure
+`review_watch.review_level` as `off`, `low`, `medium`, or `high` to run exactly
+0, 1, 3, or 6 review passes after a task creates its pull request and initial
+checks finish. Actionable findings are repaired and checked before the next
+pass; final-pass findings are repaired and checked without an extra pass.
+
 ### Go Module
 
 MoltenHub Code is distributed as a Go module from this Git repository. Use a

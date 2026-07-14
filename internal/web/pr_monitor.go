@@ -15,6 +15,7 @@ import (
 )
 
 const defaultPRMergePollInterval = 10 * time.Second
+const automatedReviewCycleMarker = "<!-- moltenhub-review-cycle"
 
 // PRMergeMonitor watches task pull requests and marks merged tasks as done.
 type PRMergeMonitor struct {
@@ -476,6 +477,9 @@ func actionablePRReviewFeedback(task Task, state prViewState) PRReviewFeedback {
 		ReviewDecision: strings.TrimSpace(state.ReviewDecision),
 	}
 	for _, review := range state.LatestReviews {
+		if isAutomatedReviewCycleComment(review.Body) {
+			continue
+		}
 		body := conciseReviewFeedbackBody(review.Body)
 		if body == "" {
 			continue
@@ -493,6 +497,9 @@ func actionablePRReviewFeedback(task Task, state prViewState) PRReviewFeedback {
 		})
 	}
 	for _, comment := range state.Comments {
+		if isAutomatedReviewCycleComment(comment.Body) {
+			continue
+		}
 		body := conciseReviewFeedbackBody(comment.Body)
 		if body == "" || !commentBodyNeedsFollowUp(comment.Body) {
 			continue
@@ -506,6 +513,9 @@ func actionablePRReviewFeedback(task Task, state prViewState) PRReviewFeedback {
 		})
 	}
 	for _, comment := range state.ReviewComments {
+		if isAutomatedReviewCycleComment(comment.Body) {
+			continue
+		}
 		body := conciseReviewFeedbackBody(comment.Body)
 		if body == "" || !commentBodyNeedsFollowUp(comment.Body) {
 			continue
@@ -523,6 +533,10 @@ func actionablePRReviewFeedback(task Task, state prViewState) PRReviewFeedback {
 	}
 	feedback.Digest = reviewFeedbackDigest(feedback)
 	return feedback
+}
+
+func isAutomatedReviewCycleComment(body string) bool {
+	return strings.Contains(strings.ToLower(body), automatedReviewCycleMarker)
 }
 
 func reviewEntryNeedsFollowUp(review prReviewEntry) bool {

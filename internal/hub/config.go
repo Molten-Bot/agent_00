@@ -99,11 +99,12 @@ type DispatcherConfig struct {
 	DiskIOHighWatermarkMBs float64 `json:"disk_io_high_watermark_mb_s"`
 }
 
-// ReviewWatchConfig controls local GitHub notification polling for review requests.
+// ReviewWatchConfig controls GitHub review watching and post-task review automation.
 type ReviewWatchConfig struct {
 	Enabled              *bool  `json:"enabled,omitempty"`
 	PollIntervalMS       int    `json:"poll_interval_ms,omitempty"`
 	Writeback            string `json:"writeback,omitempty"`
+	ReviewLevel          string `json:"review_level,omitempty"`
 	AutoMerge            *bool  `json:"auto_merge,omitempty"`
 	DeleteMergedBranches *bool  `json:"delete_merged_branches,omitempty"`
 	MergeMethod          string `json:"merge_method,omitempty"`
@@ -126,6 +127,21 @@ func (c ReviewWatchConfig) AutoMergeEnabled() bool {
 		return false
 	}
 	return *c.AutoMerge
+}
+
+// ReviewCount returns the exact number of post-task review passes configured
+// by the review level.
+func (c ReviewWatchConfig) ReviewCount() int {
+	switch NormalizeReviewLevel(c.ReviewLevel) {
+	case "low":
+		return 1
+	case "medium":
+		return 3
+	case "high":
+		return 6
+	default:
+		return 0
+	}
 }
 
 // DeleteMergedBranchesEnabled returns the effective merged-branch cleanup setting.
@@ -231,6 +247,7 @@ func (c *InitConfig) ApplyDefaults() {
 
 	rawReviewWriteback := strings.TrimSpace(c.ReviewWatch.Writeback)
 	rawReviewMergeMethod := strings.TrimSpace(c.ReviewWatch.MergeMethod)
+	rawReviewLevel := strings.TrimSpace(c.ReviewWatch.ReviewLevel)
 	if normalized := normalizeReviewWatchWriteback(rawReviewWriteback); normalized != "" || rawReviewWriteback == "" {
 		c.ReviewWatch.Writeback = normalized
 	} else {
@@ -241,6 +258,11 @@ func (c *InitConfig) ApplyDefaults() {
 	} else {
 		c.ReviewWatch.MergeMethod = strings.ToLower(rawReviewMergeMethod)
 	}
+	if normalized := NormalizeReviewLevel(rawReviewLevel); normalized != "" || rawReviewLevel == "" {
+		c.ReviewWatch.ReviewLevel = normalized
+	} else {
+		c.ReviewWatch.ReviewLevel = strings.ToLower(rawReviewLevel)
+	}
 	c.ReviewWatch.ResponseMode = strings.TrimSpace(c.ReviewWatch.ResponseMode)
 	if c.ReviewWatch.PollIntervalMS <= 0 {
 		c.ReviewWatch.PollIntervalMS = 60000
@@ -250,6 +272,9 @@ func (c *InitConfig) ApplyDefaults() {
 	}
 	if c.ReviewWatch.MergeMethod == "" {
 		c.ReviewWatch.MergeMethod = "squash"
+	}
+	if c.ReviewWatch.ReviewLevel == "" {
+		c.ReviewWatch.ReviewLevel = "off"
 	}
 	if c.ReviewWatch.ResponseMode == "" {
 		c.ReviewWatch.ResponseMode = "off"
@@ -355,7 +380,20 @@ func (c InitConfig) Validate() error {
 	if c.ReviewWatch.MergeMethod != "" && normalizeReviewWatchMergeMethod(c.ReviewWatch.MergeMethod) == "" {
 		return fmt.Errorf("review_watch.merge_method must be merge, squash, or rebase")
 	}
+	if strings.TrimSpace(c.ReviewWatch.ReviewLevel) != "" && NormalizeReviewLevel(c.ReviewWatch.ReviewLevel) == "" {
+		return fmt.Errorf("review_watch.review_level must be off, low, medium, or high")
+	}
 	return nil
+}
+
+// NormalizeReviewLevel validates and canonicalizes the post-task review level.
+func NormalizeReviewLevel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "off", "low", "medium", "high":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
 }
 
 func normalizeReviewWatchWriteback(value string) string {

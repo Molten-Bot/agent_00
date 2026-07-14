@@ -7,6 +7,39 @@ import (
 	"testing"
 )
 
+func TestReviewWatchReviewCount(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		level string
+		want  int
+	}{
+		{level: "", want: 0},
+		{level: "off", want: 0},
+		{level: "LOW", want: 1},
+		{level: "medium", want: 3},
+		{level: " high ", want: 6},
+	}
+	for _, tt := range tests {
+		t.Run(tt.level, func(t *testing.T) {
+			t.Parallel()
+			if got := (ReviewWatchConfig{ReviewLevel: tt.level}).ReviewCount(); got != tt.want {
+				t.Fatalf("ReviewCount() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReviewWatchRejectsInvalidReviewLevel(t *testing.T) {
+	t.Parallel()
+
+	cfg := InitConfig{BindToken: "bind_test", ReviewWatch: ReviewWatchConfig{ReviewLevel: "extreme"}}
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "review_watch.review_level") {
+		t.Fatalf("Validate() error = %v, want review level error", err)
+	}
+}
+
 func TestLoadInitDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -77,6 +110,9 @@ func TestLoadInitDefaults(t *testing.T) {
 	}
 	if cfg.ReviewWatch.AutoMergeEnabled() {
 		t.Fatal("ReviewWatch.AutoMergeEnabled() = true, want false by default")
+	}
+	if cfg.ReviewWatch.ReviewLevel != "off" || cfg.ReviewWatch.ReviewCount() != 0 {
+		t.Fatalf("ReviewWatch review level/count = %q/%d, want off/0", cfg.ReviewWatch.ReviewLevel, cfg.ReviewWatch.ReviewCount())
 	}
 }
 

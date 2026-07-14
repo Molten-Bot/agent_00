@@ -349,6 +349,14 @@ func SaveRuntimeConfigReviewSettings(path string, initCfg InitConfig, reviewCfg 
 	if reviewCfg.MergeMethod == "" {
 		reviewCfg.MergeMethod = "squash"
 	}
+	rawReviewLevel := strings.TrimSpace(reviewCfg.ReviewLevel)
+	reviewCfg.ReviewLevel = NormalizeReviewLevel(rawReviewLevel)
+	if rawReviewLevel != "" && reviewCfg.ReviewLevel == "" {
+		return fmt.Errorf("review_watch.review_level must be off, low, medium, or high")
+	}
+	if reviewCfg.ReviewLevel == "" {
+		reviewCfg.ReviewLevel = "off"
+	}
 
 	doc, err := loadRuntimeConfigDoc(path, initCfg)
 	if err != nil {
@@ -372,6 +380,13 @@ func SaveRuntimeConfigReviewSettings(path string, initCfg InitConfig, reviewCfg 
 		reviewDoc["delete_merged_branches"] = true
 	} else {
 		delete(reviewDoc, "delete_merged_branches")
+	}
+
+	switch reviewCfg.ReviewLevel {
+	case "", "off":
+		delete(reviewDoc, "review_level")
+	default:
+		reviewDoc["review_level"] = reviewCfg.ReviewLevel
 	}
 
 	switch normalizeReviewWatchMergeMethod(reviewCfg.MergeMethod) {
@@ -408,6 +423,10 @@ func runtimeConfigReviewDocOnlyDefaults(doc map[string]any) bool {
 			}
 		case "response_mode":
 			if docStringValue(value) != "off" {
+				return false
+			}
+		case "review_level":
+			if NormalizeReviewLevel(docStringValue(value)) != "off" {
 				return false
 			}
 		default:

@@ -2385,11 +2385,12 @@ func TestConfigureReviewSettingsPersistsOnlyNonDefaults(t *testing.T) {
 		AutoMerge:            true,
 		DeleteMergedBranches: true,
 		MergeMethod:          "merge",
+		ReviewLevel:          "medium",
 	})
 	if err != nil {
 		t.Fatalf("configureReviewSettings() error = %v", err)
 	}
-	if !state.AutoMerge || !state.DeleteMergedBranches || state.MergeMethod != "merge" {
+	if !state.AutoMerge || !state.DeleteMergedBranches || state.MergeMethod != "merge" || state.ReviewLevel != "medium" {
 		t.Fatalf("state = %#v, want auto merge, delete merged branches, and merge method", state)
 	}
 
@@ -2414,6 +2415,9 @@ func TestConfigureReviewSettingsPersistsOnlyNonDefaults(t *testing.T) {
 	if got := strings.TrimSpace(reviewDoc["merge_method"].(string)); got != "merge" {
 		t.Fatalf("review_watch.merge_method = %q, want merge", got)
 	}
+	if got := strings.TrimSpace(reviewDoc["review_level"].(string)); got != "medium" {
+		t.Fatalf("review_watch.review_level = %q, want medium", got)
+	}
 
 	state, err = configureReviewSettings(hub.InitConfig{
 		RuntimeConfigPath: configPath,
@@ -2423,11 +2427,12 @@ func TestConfigureReviewSettingsPersistsOnlyNonDefaults(t *testing.T) {
 		AutoMerge:            false,
 		DeleteMergedBranches: false,
 		MergeMethod:          "squash",
+		ReviewLevel:          "off",
 	})
 	if err != nil {
 		t.Fatalf("configureReviewSettings(defaults) error = %v", err)
 	}
-	if state.AutoMerge || state.DeleteMergedBranches || state.MergeMethod != "squash" {
+	if state.AutoMerge || state.DeleteMergedBranches || state.MergeMethod != "squash" || state.ReviewLevel != "off" {
 		t.Fatalf("default state = %#v", state)
 	}
 	data, err = os.ReadFile(configPath)
@@ -2459,6 +2464,26 @@ func TestConfigureReviewSettingsRejectsInvalidMergeMethod(t *testing.T) {
 		t.Fatal("configureReviewSettings() error = nil, want non-nil")
 	}
 	if got := err.Error(); !strings.Contains(got, "merge, squash, or rebase") {
+		t.Fatalf("configureReviewSettings() error = %q", got)
+	}
+}
+
+func TestConfigureReviewSettingsRejectsInvalidReviewLevel(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	_, err := configureReviewSettings(hub.InitConfig{
+		RuntimeConfigPath: configPath,
+		BaseURL:           "https://na.hub.molten.bot/v1",
+		AgentHarness:      "codex",
+	}, web.ReviewSettingsRequest{
+		MergeMethod: "squash",
+		ReviewLevel: "extreme",
+	})
+	if err == nil {
+		t.Fatal("configureReviewSettings() error = nil, want non-nil")
+	}
+	if got := err.Error(); !strings.Contains(got, "off, low, medium, or high") {
 		t.Fatalf("configureReviewSettings() error = %q", got)
 	}
 }

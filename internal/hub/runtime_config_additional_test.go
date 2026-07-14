@@ -375,6 +375,7 @@ func TestSaveRuntimeConfigReviewSettingsPersistsOnlyNonDefaults(t *testing.T) {
 		AutoMerge:            &autoMerge,
 		DeleteMergedBranches: &deleteMergedBranches,
 		MergeMethod:          "rebase",
+		ReviewLevel:          "medium",
 	})
 	if err != nil {
 		t.Fatalf("SaveRuntimeConfigReviewSettings() error = %v", err)
@@ -394,6 +395,9 @@ func TestSaveRuntimeConfigReviewSettingsPersistsOnlyNonDefaults(t *testing.T) {
 	if got := docStringValue(reviewDoc["merge_method"]); got != "rebase" {
 		t.Fatalf("review_watch.merge_method = %q, want rebase", got)
 	}
+	if got := docStringValue(reviewDoc["review_level"]); got != "medium" {
+		t.Fatalf("review_watch.review_level = %q, want medium", got)
+	}
 	if got, ok := reviewDoc["enabled"].(bool); !ok || got {
 		t.Fatalf("review_watch.enabled = %#v, want preserved false", reviewDoc["enabled"])
 	}
@@ -410,6 +414,7 @@ func TestSaveRuntimeConfigReviewSettingsPersistsOnlyNonDefaults(t *testing.T) {
 		AutoMerge:            &autoMerge,
 		DeleteMergedBranches: &deleteMergedBranches,
 		MergeMethod:          "squash",
+		ReviewLevel:          "off",
 	})
 	if err != nil {
 		t.Fatalf("SaveRuntimeConfigReviewSettings(defaults) error = %v", err)
@@ -428,6 +433,9 @@ func TestSaveRuntimeConfigReviewSettingsPersistsOnlyNonDefaults(t *testing.T) {
 	if _, ok := reviewDoc["merge_method"]; ok {
 		t.Fatalf("review_watch.merge_method persisted for default squash: %#v", reviewDoc)
 	}
+	if _, ok := reviewDoc["review_level"]; ok {
+		t.Fatalf("review_watch.review_level persisted for default off: %#v", reviewDoc)
+	}
 	if got := docStringValue(reviewDoc["writeback"]); got != "off" {
 		t.Fatalf("review_watch.writeback = %q, want preserved off", got)
 	}
@@ -441,6 +449,22 @@ func TestSaveRuntimeConfigReviewSettingsRejectsInvalidMergeMethod(t *testing.T) 
 		BaseURL:      "https://na.hub.molten.bot/v1",
 		AgentHarness: "codex",
 	}, ReviewWatchConfig{MergeMethod: "octopus"})
+	if err == nil {
+		t.Fatal("SaveRuntimeConfigReviewSettings() error = nil, want non-nil")
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("config stat error = %v, want not exist", statErr)
+	}
+}
+
+func TestSaveRuntimeConfigReviewSettingsRejectsInvalidReviewLevel(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "moltenhub", "config.json")
+	err := SaveRuntimeConfigReviewSettings(path, InitConfig{
+		BaseURL:      "https://na.hub.molten.bot/v1",
+		AgentHarness: "codex",
+	}, ReviewWatchConfig{ReviewLevel: "extreme"})
 	if err == nil {
 		t.Fatal("SaveRuntimeConfigReviewSettings() error = nil, want non-nil")
 	}
