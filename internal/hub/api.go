@@ -180,8 +180,7 @@ func (c *APIClient) bindTokenFlow(ctx context.Context, bindToken string) (string
 	for _, attempt := range attempts {
 		status, body, err := c.doJSON(ctx, http.MethodPost, attempt.path, attempt.authToken, attempt.body)
 		if err != nil {
-			failures = append(failures, fmt.Sprintf("%s network error: %v", attempt.name, err))
-			continue
+			return "", fmt.Errorf("bind flow failed: %s network error: %w", attempt.name, err)
 		}
 
 		if status/100 == 2 {
@@ -205,7 +204,11 @@ func (c *APIClient) bindTokenFlow(ctx context.Context, bindToken string) (string
 			continue
 		}
 
-		failures = append(failures, fmt.Sprintf("%s status=%d", attempt.name, status))
+		failure := fmt.Sprintf("%s status=%d", attempt.name, status)
+		if isRetryableHubStatus(status) {
+			return "", fmt.Errorf("bind flow failed: %s", failure)
+		}
+		failures = append(failures, failure)
 	}
 
 	return "", fmt.Errorf("bind flow failed: %s", strings.Join(failures, "; "))
@@ -1320,7 +1323,7 @@ func extractAgentProfileFromJSON(body []byte) AgentProfile {
 func extractAPIBaseFromAny(v any) string {
 	switch typed := v.(type) {
 	case map[string]any:
-		for _, key := range []string{"api_base", "apiBase", "base_url", "baseUrl"} {
+		for _, key := range []string{"api_base_url", "apiBaseUrl", "api_base", "apiBase", "base_url", "baseUrl"} {
 			if raw, ok := typed[key]; ok {
 				if base, ok := raw.(string); ok && strings.TrimSpace(base) != "" {
 					return strings.TrimSpace(base)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -132,9 +133,12 @@ func (d Daemon) Run(ctx context.Context, cfg InitConfig) error {
 		d.logf("hub.library status=loaded tasks=%d", len(libraryCatalog.Tasks))
 	}
 
-	bootstrapCfg, _, err := d.bootstrapHubConnection(ctx, api, transport, cfg, runtimeCfgPath, orderedLibrarySummaries, len(libraryCatalog.Tasks), maxReconnectDelay)
+	bootstrapCfg, _, err := d.bootstrapHubConnection(ctx, api, &transport, cfg, runtimeCfgPath, orderedLibrarySummaries, len(libraryCatalog.Tasks), maxReconnectDelay)
 	if err != nil {
 		return err
+	}
+	if ctx.Err() != nil {
+		return nil
 	}
 	cfg = bootstrapCfg
 	defer func() {
@@ -217,7 +221,7 @@ func (d Daemon) Run(ctx context.Context, cfg InitConfig) error {
 func (d Daemon) bootstrapHubConnection(
 	ctx context.Context,
 	api MoltenHubAPI,
-	transport APIClient,
+	transport *APIClient,
 	cfg InitConfig,
 	runtimeCfgPath string,
 	libraryTasks []library.TaskSummary,
@@ -231,8 +235,12 @@ func (d Daemon) bootstrapHubConnection(
 		}
 
 		nextCfg, token, err := d.tryBootstrapHubConnection(ctx, api, transport, cfg, runtimeCfgPath, libraryTasks, libraryTaskCount)
+		cfg = nextCfg
 		if err == nil {
-			return nextCfg, token, nil
+			return cfg, token, nil
+		}
+		if ctx.Err() != nil {
+			return cfg, "", nil
 		}
 		if isUnauthorizedHubError(err) || !isRetryableHubConnectionError(err) {
 			return cfg, "", fmt.Errorf("hub auth: %w", err)
@@ -250,7 +258,7 @@ func (d Daemon) bootstrapHubConnection(
 func (d Daemon) tryBootstrapHubConnection(
 	ctx context.Context,
 	api MoltenHubAPI,
-	transport APIClient,
+	transport *APIClient,
 	cfg InitConfig,
 	runtimeCfgPath string,
 	libraryTasks []library.TaskSummary,
@@ -262,13 +270,11 @@ func (d Daemon) tryBootstrapHubConnection(
 	}
 	if strings.TrimSpace(api.BaseURL()) != "" {
 		cfg.BaseURL = strings.TrimRight(strings.TrimSpace(api.BaseURL()), "/")
+		transport.BaseURL = cfg.BaseURL
 	}
 	cfg.AgentToken = strings.TrimSpace(token)
 
 	if remoteProfile, profileErr := transport.AgentProfile(ctx, token); profileErr != nil {
-		if isUnauthorizedHubError(profileErr) || isRetryableHubConnectionError(profileErr) {
-			return cfg, token, fmt.Errorf("load agent profile: %w", profileErr)
-		}
 		d.logf("hub.profile status=warn action=load err=%q", profileErr)
 	} else {
 		merged := mergeAgentProfiles(remoteProfile, AgentProfile{
@@ -289,27 +295,18 @@ func (d Daemon) tryBootstrapHubConnection(
 	}
 
 	if err := api.SyncProfile(ctx, cfg); err != nil {
-		if isUnauthorizedHubError(err) || isRetryableHubConnectionError(err) {
-			return cfg, token, fmt.Errorf("sync profile: %w", err)
-		}
 		d.logf("hub.profile status=warn err=%q", err)
 	} else {
 		d.logf("hub.profile status=ok")
 	}
 
 	if err := api.RegisterRuntime(ctx, cfg, libraryTasks); err != nil {
-		if isUnauthorizedHubError(err) || isRetryableHubConnectionError(err) {
-			return cfg, token, fmt.Errorf("register runtime: %w", err)
-		}
 		d.logf("hub.runtime status=warn action=register err=%q", err)
 	} else {
 		d.logf("hub.runtime status=registered skills=%d library_tasks=%d", len(supportedProfileSkills()), libraryTaskCount)
 	}
 
 	if err := api.UpdateAgentStatus(ctx, "online"); err != nil {
-		if isUnauthorizedHubError(err) || isRetryableHubConnectionError(err) {
-			return cfg, token, fmt.Errorf("update agent status: %w", err)
-		}
 		d.logf("hub.agent status=warn state=online err=%q", err)
 	} else {
 		d.logf("hub.agent status=online")
@@ -1036,6 +1033,16 @@ func isRetryableHubConnectionError(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
 	text := strings.ToLower(strings.TrimSpace(err.Error()))
 	if text == "" {
 		return false
@@ -1049,9 +1056,16 @@ func isRetryableHubConnectionError(err error) bool {
 		"connection refused",
 		"connection reset",
 		"connection reset by peer",
+		"network is unreachable",
+		"no route to host",
+		"host is unreachable",
+		"server misbehaving",
 		"could not resolve host",
 		"no such host",
 		"temporary failure",
+		"connection timed out",
+		"unexpected eof",
+		"broken pipe",
 		"timeout",
 		"i/o timeout",
 		"tls handshake timeout",
@@ -1061,12 +1075,36 @@ func isRetryableHubConnectionError(err error) bool {
 			return true
 		}
 	}
-	for _, status := range []string{"status=429", "status=500", "status=502", "status=503", "status=504"} {
-		if strings.Contains(text, status) || strings.Contains(text, strings.Replace(status, "=", " ", 1)) {
-			return true
+	return containsRetryableHubStatus(text)
+}
+
+func containsRetryableHubStatus(text string) bool {
+	for _, separator := range []string{"status=", "status "} {
+		remaining := text
+		for {
+			index := strings.Index(remaining, separator)
+			if index < 0 {
+				break
+			}
+			remaining = remaining[index+len(separator):]
+			if len(remaining) < 3 {
+				break
+			}
+			code, err := strconv.Atoi(remaining[:3])
+			if err == nil && (len(remaining) == 3 || remaining[3] < '0' || remaining[3] > '9') && isRetryableHubStatus(code) {
+				return true
+			}
+			remaining = remaining[1:]
 		}
 	}
 	return false
+}
+
+func isRetryableHubStatus(status int) bool {
+	if status == 408 || status == 425 || status == 429 {
+		return true
+	}
+	return status >= 500 && status <= 599 && status != 501 && status != 505
 }
 
 func isStoppedByOperatorErr(err error) bool {

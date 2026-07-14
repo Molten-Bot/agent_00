@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -124,13 +125,48 @@ func TestIsRetryableHubConnectionError(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "network unreachable",
+			err:  errors.New("Get https://na.hub.molten.bot/v1/agents/me: dial tcp: connect: network is unreachable"),
+			want: true,
+		},
+		{
+			name: "no route to host",
+			err:  errors.New("dial tcp 203.0.113.1:443: connect: no route to host"),
+			want: true,
+		},
+		{
+			name: "dns server starting",
+			err:  errors.New("lookup na.hub.molten.bot on 127.0.0.11:53: server misbehaving"),
+			want: true,
+		},
+		{
+			name: "truncated response",
+			err:  fmt.Errorf("read body: %w", io.ErrUnexpectedEOF),
+			want: true,
+		},
+		{
+			name: "cloud proxy unavailable",
+			err:  errors.New("bind flow failed: bind-tokens.bind_token status=522"),
+			want: true,
+		},
+		{
 			name: "not found",
 			err:  errors.New("load agent profile: status=404 body=missing"),
 			want: false,
 		},
 		{
+			name: "not implemented",
+			err:  errors.New("load agent profile: status=501 body=unsupported"),
+			want: false,
+		},
+		{
 			name: "bad credentials",
 			err:  errors.New("websocket handshake status=401 body=unauthorized"),
+			want: false,
+		},
+		{
+			name: "canceled",
+			err:  context.Canceled,
 			want: false,
 		},
 	}
@@ -235,14 +271,15 @@ func TestSanitizeDispatchStatusMessageIDPart(t *testing.T) {
 	}
 }
 
-func TestDaemonRunRetriesTransientBootstrapFailure(t *testing.T) {
+func TestDaemonRunStartsTransportWhenOptionalBootstrapCallsFail(t *testing.T) {
 	t.Parallel()
 
 	var (
 		mu              sync.Mutex
-		agentProfileHit int
+		agentMeGETs     int
 		statusHit       int
-		retryLogged     bool
+		agentMeGETsAtWS int
+		statusHitAtWS   int
 		wsHit           = make(chan struct{})
 		wsOnce          sync.Once
 	)
@@ -254,30 +291,28 @@ func TestDaemonRunRetriesTransientBootstrapFailure(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"name":"agent","description":"ok","url":"http://example.test","version":"1.0.0","capabilities":{},"skills":[]}`))
 		case "/v1/agents/me":
-			mu.Lock()
-			agentProfileHit++
-			hit := agentProfileHit
-			mu.Unlock()
-			if hit <= 2 {
-				w.WriteHeader(http.StatusServiceUnavailable)
-				_, _ = w.Write([]byte(`{"message":"moltenhub is starting"}`))
-				return
+			if r.Method == http.MethodGet {
+				mu.Lock()
+				agentMeGETs++
+				mu.Unlock()
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"handle":"saved"}`))
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"message":"profile service is unavailable"}`))
 		case "/v1/agents/me/status", "/v1/agents/me/metadata":
 			if r.URL.Path == "/v1/agents/me/status" {
 				mu.Lock()
 				statusHit++
 				mu.Unlock()
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"ok":true}`))
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"message":"metadata service is unavailable"}`))
 		case "/ping", "/health", "/v1/runtime/messages/pull":
 			w.WriteHeader(http.StatusNoContent)
 		case "/v1/runtime/messages/ws":
+			mu.Lock()
+			agentMeGETsAtWS = agentMeGETs
+			statusHitAtWS = statusHit
+			mu.Unlock()
 			wsOnce.Do(func() { close(wsHit) })
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte(`{"message":"moltenhub is starting"}`))
@@ -292,22 +327,16 @@ func TestDaemonRunRetriesTransientBootstrapFailure(t *testing.T) {
 
 	d := NewDaemon(execx.OSRunner{})
 	d.ReconnectDelay = time.Millisecond
-	d.Logf = func(format string, args ...any) {
-		line := fmt.Sprintf(format, args...)
-		if strings.HasPrefix(line, "hub.connection status=retrying") {
-			mu.Lock()
-			retryLogged = true
-			mu.Unlock()
-		}
-	}
+	runtimeCfgPath := filepath.Join(t.TempDir(), "runtime.json")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	runDone := make(chan error, 1)
 	go func() {
 		runDone <- d.Run(ctx, InitConfig{
-			BaseURL:    server.URL + "/v1",
-			AgentToken: "agent-token",
-			SessionKey: "main",
+			BaseURL:           server.URL + "/v1",
+			AgentToken:        "agent-token",
+			SessionKey:        "main",
+			RuntimeConfigPath: runtimeCfgPath,
 		})
 	}()
 
@@ -316,7 +345,7 @@ func TestDaemonRunRetriesTransientBootstrapFailure(t *testing.T) {
 		cancel()
 	case <-time.After(3 * time.Second):
 		cancel()
-		t.Fatal("timed out waiting for websocket attempt after bootstrap retry")
+		t.Fatal("timed out waiting for websocket attempt during optional bootstrap outage")
 	}
 
 	select {
@@ -330,14 +359,11 @@ func TestDaemonRunRetriesTransientBootstrapFailure(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if agentProfileHit < 3 {
-		t.Fatalf("agent profile hits = %d, want >= 3", agentProfileHit)
+	if agentMeGETsAtWS < 3 {
+		t.Fatalf("GET /agents/me requests before websocket = %d, want at least 3", agentMeGETsAtWS)
 	}
-	if statusHit == 0 {
-		t.Fatal("status update was not attempted after bootstrap retry")
-	}
-	if !retryLogged {
-		t.Fatal("missing hub.connection retrying log")
+	if statusHitAtWS == 0 {
+		t.Fatal("online status update was not attempted before websocket")
 	}
 }
 
@@ -345,11 +371,12 @@ func TestDaemonRunRetriesTransientBindTokenOnlyBootstrapFailure(t *testing.T) {
 	t.Parallel()
 
 	var (
-		mu          sync.Mutex
-		bindHits    int
-		retryLogged bool
-		wsHit       = make(chan struct{})
-		wsOnce      sync.Once
+		mu                    sync.Mutex
+		bindHits              int
+		retryLogged           bool
+		secondBindBeforeRetry bool
+		wsHit                 = make(chan struct{})
+		wsOnce                sync.Once
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -358,8 +385,11 @@ func TestDaemonRunRetriesTransientBindTokenOnlyBootstrapFailure(t *testing.T) {
 			mu.Lock()
 			bindHits++
 			hit := bindHits
+			if hit == 2 && !retryLogged {
+				secondBindBeforeRetry = true
+			}
 			mu.Unlock()
-			if hit <= 7 {
+			if hit == 1 {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				_, _ = w.Write([]byte(`{"message":"moltenhub is starting"}`))
 				return
@@ -396,6 +426,7 @@ func TestDaemonRunRetriesTransientBindTokenOnlyBootstrapFailure(t *testing.T) {
 
 	d := NewDaemon(execx.OSRunner{})
 	d.ReconnectDelay = time.Millisecond
+	runtimeCfgPath := filepath.Join(t.TempDir(), "runtime.json")
 	d.Logf = func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)
 		if strings.HasPrefix(line, "hub.connection status=retrying") {
@@ -409,9 +440,10 @@ func TestDaemonRunRetriesTransientBindTokenOnlyBootstrapFailure(t *testing.T) {
 	runDone := make(chan error, 1)
 	go func() {
 		runDone <- d.Run(ctx, InitConfig{
-			BaseURL:    server.URL + "/v1",
-			BindToken:  "bind-token",
-			SessionKey: "main",
+			BaseURL:           server.URL + "/v1",
+			BindToken:         "bind-token",
+			SessionKey:        "main",
+			RuntimeConfigPath: runtimeCfgPath,
 		})
 	}()
 
@@ -434,11 +466,200 @@ func TestDaemonRunRetriesTransientBindTokenOnlyBootstrapFailure(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if bindHits < 8 {
-		t.Fatalf("bind hits = %d, want >= 8", bindHits)
+	if bindHits != 2 {
+		t.Fatalf("bind hits = %d, want 2", bindHits)
 	}
 	if !retryLogged {
 		t.Fatal("missing hub.connection retrying log")
+	}
+	if secondBindBeforeRetry {
+		t.Fatal("bind compatibility fallback ran before transient failure backoff")
+	}
+}
+
+func TestDaemonRunKeepsResolvedBindStateAndAPIBaseAfterProfileFailure(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu              sync.Mutex
+		bindHits        int
+		oldBaseHits     int
+		agentProfileHit int
+		wsHit           = make(chan struct{})
+		wsOnce          sync.Once
+	)
+
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/a2a/agent-card":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"name":"agent","description":"ok","url":"http://example.test","version":"1.0.0","capabilities":{},"skills":[]}`))
+		case "/v1/agents/me":
+			mu.Lock()
+			agentProfileHit++
+			hit := agentProfileHit
+			mu.Unlock()
+			if hit == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"message":"profile service is starting"}`))
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"handle":"saved"}`))
+		case "/v1/agents/me/status", "/v1/agents/me/metadata":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/ping", "/health", "/v1/runtime/messages/pull":
+			w.WriteHeader(http.StatusNoContent)
+		case "/v1/runtime/messages/ws":
+			wsOnce.Do(func() { close(wsHit) })
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"message":"moltenhub is starting"}`))
+		case "/v1/runtime/messages/offline":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer apiServer.Close()
+
+	bindServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/agents/bind-tokens", "/v1/agents/bind":
+			mu.Lock()
+			bindHits++
+			hit := bindHits
+			mu.Unlock()
+			if hit > 1 {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"agent_token":"agent-token","api_base_url":%q}`, apiServer.URL+"/v1")
+		default:
+			mu.Lock()
+			oldBaseHits++
+			mu.Unlock()
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer bindServer.Close()
+
+	d := NewDaemon(execx.OSRunner{})
+	d.ReconnectDelay = time.Millisecond
+	runtimeCfgPath := filepath.Join(t.TempDir(), "runtime.json")
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- d.Run(ctx, InitConfig{
+			BaseURL:           bindServer.URL + "/v1",
+			BindToken:         "single-use-bind-token",
+			SessionKey:        "main",
+			RuntimeConfigPath: runtimeCfgPath,
+		})
+	}()
+
+	select {
+	case <-wsHit:
+		cancel()
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("timed out waiting for websocket attempt on returned API base")
+	}
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Daemon.Run() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for daemon shutdown")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if bindHits != 1 {
+		t.Fatalf("bind hits = %d, want 1", bindHits)
+	}
+	if oldBaseHits != 0 {
+		t.Fatalf("requests to stale bind base = %d, want 0", oldBaseHits)
+	}
+	if agentProfileHit < 2 {
+		t.Fatalf("API-base profile hits = %d, want at least 2", agentProfileHit)
+	}
+}
+
+func TestDaemonRunCancelsDuringBootstrapWithoutOfflineUpdate(t *testing.T) {
+	t.Parallel()
+
+	requestStarted := make(chan struct{})
+	requestRelease := make(chan struct{})
+	var requestOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/agents/bind-tokens" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		requestOnce.Do(func() { close(requestStarted) })
+		<-requestRelease
+	}))
+	defer server.Close()
+
+	var (
+		mu            sync.Mutex
+		offlineLogged bool
+	)
+	d := NewDaemon(execx.OSRunner{})
+	d.ReconnectDelay = time.Millisecond
+	d.Logf = func(format string, args ...any) {
+		line := fmt.Sprintf(format, args...)
+		if strings.Contains(line, "state=offline") || strings.Contains(line, "status=offline") {
+			mu.Lock()
+			offlineLogged = true
+			mu.Unlock()
+		}
+	}
+	runtimeCfgPath := filepath.Join(t.TempDir(), "runtime.json")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- d.Run(ctx, InitConfig{
+			BaseURL:           server.URL + "/v1",
+			BindToken:         "bind-token",
+			SessionKey:        "main",
+			RuntimeConfigPath: runtimeCfgPath,
+		})
+	}()
+
+	select {
+	case <-requestStarted:
+		cancel()
+		close(requestRelease)
+	case <-time.After(3 * time.Second):
+		cancel()
+		close(requestRelease)
+		t.Fatal("timed out waiting for bootstrap request")
+	}
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Daemon.Run() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for canceled bootstrap shutdown")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if offlineLogged {
+		t.Fatal("offline update logged after bootstrap was canceled")
 	}
 }
 
