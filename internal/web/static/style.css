@@ -6738,18 +6738,40 @@ body.onboarding-modal-open {
 
 .review-settings-form {
   display: grid;
-  gap: 16px;
+  grid-template-columns: minmax(250px, 0.9fr) minmax(340px, 1.35fr);
+  grid-template-areas:
+    "automation review-level"
+    "merge-method merge-method"
+    "actions actions";
+  align-items: stretch;
+  gap: 14px 16px;
 }
 
 .review-settings-section {
   display: grid;
+  align-content: start;
   gap: 8px;
+  min-width: 0;
   margin: 0;
-  padding: 0;
-  border: 0;
+  padding: 14px;
+  border: 1px solid var(--surface-control-border);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--surface-control-bg) 72%, transparent);
   color: var(--surface-label);
   font-size: 0.86rem;
   font-weight: 700;
+}
+
+.review-settings-automation {
+  grid-area: automation;
+}
+
+.review-settings-level {
+  grid-area: review-level;
+}
+
+.review-settings-merge-method {
+  grid-area: merge-method;
 }
 
 .review-settings-toggle {
@@ -6776,6 +6798,28 @@ body.onboarding-modal-open {
   border: 1px solid var(--surface-control-border);
   border-radius: var(--radius-card);
   background: var(--surface-control-bg);
+}
+
+.review-settings-level-options {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.review-settings-level-option {
+  display: grid;
+  gap: 2px;
+  align-content: center;
+}
+
+.review-settings-level-option small {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.review-settings-level-option.active small,
+.review-settings-level-option[aria-checked="true"] small {
+  color: var(--text-soft);
 }
 
 .review-settings-merge-option {
@@ -7132,8 +7176,21 @@ body.onboarding-modal-open {
     width: 100%;
   }
 
+  .review-settings-form {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "automation"
+      "review-level"
+      "merge-method"
+      "actions";
+  }
+
   .review-settings-merge-options {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .review-settings-level-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .onboarding-profile-grid,

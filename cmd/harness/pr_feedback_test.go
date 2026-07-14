@@ -49,8 +49,8 @@ func TestPRReviewFeedbackRunConfigUpdatesExistingPRBranch(t *testing.T) {
 	if got, want := cfg.BaseBranch, "moltenhub-custom-themes"; got != want {
 		t.Fatalf("cfg.BaseBranch = %q, want %q", got, want)
 	}
-	if cfg.LibraryTaskName != "" || cfg.Review != nil {
-		t.Fatalf("cfg kept review/library mode: library=%q review=%#v", cfg.LibraryTaskName, cfg.Review)
+	if cfg.LibraryTaskName != resolvePRCommentsTaskName || cfg.Review != nil {
+		t.Fatalf("cfg review resolution mode = library=%q review=%#v", cfg.LibraryTaskName, cfg.Review)
 	}
 	if got, want := cfg.CommitMessage, prReviewFeedbackCommitMessage; got != want {
 		t.Fatalf("cfg.CommitMessage = %q, want %q", got, want)

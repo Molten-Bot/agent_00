@@ -516,7 +516,11 @@ func runHub(args []string) int {
 					taskHandle.SetRunning(true)
 				}
 				recordLocalRunStartedActivity(runCtx, activeCfg, runCfg, requestID, hubRuntimeConnected, daemonLogger)
-				outcome := runLocalDispatch(runCtx, runner, daemonLogger, cfg.Skill.Name, requestID, runCfg, func() bool {
+				finalReviewPasses := activeCfg.ReviewWatch.ReviewCount()
+				if startCfg, startCfgErr := effectiveHubSetupConfig(activeCfg); startCfgErr == nil {
+					finalReviewPasses = startCfg.ReviewWatch.ReviewCount()
+				}
+				outcome := runLocalDispatch(runCtx, runner, daemonLogger, cfg.Skill.Name, requestID, runCfg, finalReviewPasses, func() bool {
 					if taskHandle == nil {
 						return false
 					}
@@ -1443,6 +1447,7 @@ func runLocalDispatch(
 	skill string,
 	requestID string,
 	runCfg config.Config,
+	finalReviewPasses int,
 	wasStopped func() bool,
 ) localDispatchOutcome {
 	logf(
@@ -1454,6 +1459,7 @@ func runLocalDispatch(
 	)
 
 	h := app.New(runner)
+	h.FinalReviewPasses = finalReviewPasses
 	h.Logf = func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)
 		logf("dispatch request_id=%s %s", requestID, line)
@@ -1849,6 +1855,9 @@ func promptAllowsSuccessfulNoOp(text string) bool {
 		return false
 	}
 	phraseText := promptPhraseText(text)
+	if promptExplicitlyAllowsNoChanges(phraseText) {
+		return true
+	}
 
 	strongChangeMarkers := []string{
 		"fix", "implement", "add", "remove", "create", "replace", "rename",
@@ -1884,6 +1893,59 @@ func promptAllowsSuccessfulNoOp(text string) bool {
 	for _, marker := range consistencyMarkers {
 		if promptPhraseTextContains(phraseText, marker) {
 			return true
+		}
+	}
+	return false
+}
+
+func promptExplicitlyAllowsNoChanges(text string) bool {
+	conditions := []string{
+		"if there are no changes",
+		"if there are no file changes",
+		"if there are no repository changes",
+		"if no changes",
+		"when there are no changes",
+		"when there are no file changes",
+		"when there are no repository changes",
+		"when no changes",
+		"if nothing changed",
+		"when nothing changed",
+	}
+	actions := []string{
+		"do not produce",
+		"do not create",
+		"do not modify",
+		"do not change",
+		"don't produce",
+		"don't create",
+		"don't modify",
+		"don't change",
+		"return a no op",
+		"produce no output",
+		"make no changes",
+		"leave unchanged",
+		"skip the change",
+		"skip creating",
+	}
+
+	const maxConditionalNoOpClauseChars = 240
+	for _, condition := range conditions {
+		remaining := text
+		for {
+			conditionIndex := strings.Index(remaining, condition)
+			if conditionIndex < 0 {
+				break
+			}
+			clause := remaining[conditionIndex:]
+			if len(clause) > maxConditionalNoOpClauseChars {
+				clause = clause[:maxConditionalNoOpClauseChars]
+			}
+			for _, action := range actions {
+				if strings.Contains(clause, action) {
+					return true
+				}
+			}
+			remaining = remaining[conditionIndex+len(condition):]
 		}
 	}
 	return false
@@ -3621,6 +3683,7 @@ func currentReviewSettingsState(cfg hub.InitConfig) web.ReviewSettingsState {
 		AutoMerge:            activeCfg.ReviewWatch.AutoMergeEnabled(),
 		DeleteMergedBranches: activeCfg.ReviewWatch.DeleteMergedBranchesEnabled(),
 		MergeMethod:          activeCfg.ReviewWatch.MergeMethod,
+		ReviewLevel:          activeCfg.ReviewWatch.ReviewLevel,
 	}
 }
 
@@ -3630,6 +3693,15 @@ func configureReviewSettings(cfg hub.InitConfig, req web.ReviewSettingsRequest) 
 		state := currentReviewSettingsState(cfg)
 		return state, fmt.Errorf("review merge method must be merge, squash, or rebase")
 	}
+	rawReviewLevel := strings.TrimSpace(req.ReviewLevel)
+	if rawReviewLevel == "" {
+		rawReviewLevel = currentReviewSettingsState(cfg).ReviewLevel
+	}
+	reviewLevel := hub.NormalizeReviewLevel(rawReviewLevel)
+	if reviewLevel == "" {
+		state := currentReviewSettingsState(cfg)
+		return state, fmt.Errorf("review level must be off, low, medium, or high")
+	}
 
 	autoMerge := req.AutoMerge
 	deleteMergedBranches := req.DeleteMergedBranches
@@ -3637,6 +3709,7 @@ func configureReviewSettings(cfg hub.InitConfig, req web.ReviewSettingsRequest) 
 		AutoMerge:            &autoMerge,
 		DeleteMergedBranches: &deleteMergedBranches,
 		MergeMethod:          method,
+		ReviewLevel:          reviewLevel,
 	}
 	if err := hub.SaveRuntimeConfigReviewSettings(cfg.RuntimeConfigPath, cfg, reviewCfg); err != nil {
 		state := currentReviewSettingsState(cfg)

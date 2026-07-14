@@ -5909,6 +5909,18 @@ func TestRunNoChangesRecordsConcreteNoChangeEvidence(t *testing.T) {
 	}
 }
 
+func TestAgentOutputCitesGeneralNoChangeEvidenceForZeroCommits(t *testing.T) {
+	t.Parallel()
+
+	result := execx.Result{Stdout: strings.Join([]string{
+		"No-op. git-changes-by-day ran across all 10 repos. June 30 UTC: zero commits.",
+		"No `releases.json` change was produced.",
+	}, "\n")}
+	if !agentOutputCitesGeneralNoChangeEvidence(result) {
+		t.Fatal("agentOutputCitesGeneralNoChangeEvidence(zero commits) = false, want true")
+	}
+}
+
 func TestRunAppliesResponseModeAcrossNonCodexRuntimes(t *testing.T) {
 	t.Parallel()
 

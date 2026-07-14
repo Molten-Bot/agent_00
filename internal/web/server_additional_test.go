@@ -94,7 +94,7 @@ func TestHandleReviewSettingsStatusAndConfigure(t *testing.T) {
 
 	srv := NewServer("127.0.0.1:0", nil)
 	srv.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) {
-		return ReviewSettingsState{AutoMerge: false, MergeMethod: "squash"}, nil
+		return ReviewSettingsState{AutoMerge: false, MergeMethod: "squash", ReviewLevel: "low"}, nil
 	}
 	srv.ConfigureReviewSettings = func(_ context.Context, req ReviewSettingsRequest) (ReviewSettingsState, error) {
 		if !req.AutoMerge {
@@ -103,7 +103,10 @@ func TestHandleReviewSettingsStatusAndConfigure(t *testing.T) {
 		if req.MergeMethod != "rebase" {
 			return ReviewSettingsState{}, fmt.Errorf("unexpected merge method %q", req.MergeMethod)
 		}
-		return ReviewSettingsState{AutoMerge: true, MergeMethod: "rebase", Message: "Review settings saved."}, nil
+		if req.ReviewLevel != "high" {
+			return ReviewSettingsState{}, fmt.Errorf("unexpected review level %q", req.ReviewLevel)
+		}
+		return ReviewSettingsState{AutoMerge: true, MergeMethod: "rebase", ReviewLevel: "high", Message: "Review settings saved."}, nil
 	}
 	handler := srv.Handler()
 
@@ -120,11 +123,11 @@ func TestHandleReviewSettingsStatusAndConfigure(t *testing.T) {
 	if err := json.Unmarshal(getRes.Body.Bytes(), &getBody); err != nil {
 		t.Fatalf("decode get response: %v", err)
 	}
-	if !getBody.OK || getBody.Settings.AutoMerge || getBody.Settings.MergeMethod != "squash" {
+	if !getBody.OK || getBody.Settings.AutoMerge || getBody.Settings.MergeMethod != "squash" || getBody.Settings.ReviewLevel != "low" {
 		t.Fatalf("GET settings = %#v", getBody)
 	}
 
-	postReq := httptest.NewRequest(http.MethodPost, "/api/review-settings", strings.NewReader(`{"auto_merge":true,"merge_method":"rebase"}`))
+	postReq := httptest.NewRequest(http.MethodPost, "/api/review-settings", strings.NewReader(`{"auto_merge":true,"merge_method":"rebase","review_level":"high"}`))
 	postReq.Header.Set("Content-Type", "application/json")
 	postRes := httptest.NewRecorder()
 	handler.ServeHTTP(postRes, postReq)
@@ -138,7 +141,7 @@ func TestHandleReviewSettingsStatusAndConfigure(t *testing.T) {
 	if err := json.Unmarshal(postRes.Body.Bytes(), &postBody); err != nil {
 		t.Fatalf("decode post response: %v", err)
 	}
-	if !postBody.OK || !postBody.Settings.AutoMerge || postBody.Settings.MergeMethod != "rebase" {
+	if !postBody.OK || !postBody.Settings.AutoMerge || postBody.Settings.MergeMethod != "rebase" || postBody.Settings.ReviewLevel != "high" {
 		t.Fatalf("POST settings = %#v", postBody)
 	}
 }
@@ -1827,7 +1830,7 @@ func TestTaskProgressIncludesAutoMergeStepWhenEnabled(t *testing.T) {
 		`auto_merge: "git-merge",`,
 		`function taskAutoMergeStepEnabled()`,
 		`const previousAutoMerge = taskAutoMergeStepEnabled();`,
-		`if (state.snapshot && previousAutoMerge !== taskAutoMergeStepEnabled()) {`,
+		`previousAutoMerge !== taskAutoMergeStepEnabled() || previousReviewCycle !== taskReviewStepEnabled()`,
 		`renderTasks(state.snapshot);`,
 		`renderFullscreenTasks(state.snapshot);`,
 		`if (taskAutoMergeStepEnabled() && status !== "no_changes") {`,

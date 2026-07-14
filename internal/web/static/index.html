@@ -683,7 +683,7 @@
         </div>
 
         <form id="review-settings-form" class="stack review-settings-form hidden" data-settings-panel="review">
-          <fieldset class="review-settings-section">
+          <fieldset class="review-settings-section review-settings-automation">
             <legend>Automation</legend>
             <label class="review-settings-toggle">
               <input id="review-settings-auto-merge" type="checkbox">
@@ -694,7 +694,17 @@
               <span>Delete merged branches</span>
             </label>
           </fieldset>
-          <div class="review-settings-section">
+          <div class="review-settings-section review-settings-level">
+            <span id="review-settings-level-label">Post-task Review</span>
+            <input id="review-settings-level" type="hidden" value="off">
+            <div class="review-settings-merge-options review-settings-level-options" role="radiogroup" aria-labelledby="review-settings-level-label">
+              <button class="review-settings-merge-option review-settings-level-option active" type="button" role="radio" aria-checked="true" data-review-settings-level="off"><span>Off</span><small>0 reviews</small></button>
+              <button class="review-settings-merge-option review-settings-level-option" type="button" role="radio" aria-checked="false" data-review-settings-level="low"><span>Low</span><small>1 review</small></button>
+              <button class="review-settings-merge-option review-settings-level-option" type="button" role="radio" aria-checked="false" data-review-settings-level="medium"><span>Medium</span><small>3 reviews</small></button>
+              <button class="review-settings-merge-option review-settings-level-option" type="button" role="radio" aria-checked="false" data-review-settings-level="high"><span>High</span><small>6 reviews</small></button>
+            </div>
+          </div>
+          <div class="review-settings-section review-settings-merge-method">
             <span id="review-settings-merge-method-label">Merge Method</span>
             <input id="review-settings-merge-method" type="hidden" value="squash">
             <div class="review-settings-merge-options" role="radiogroup" aria-labelledby="review-settings-merge-method-label">
@@ -829,7 +839,7 @@
     const GOOGLE_ANALYTICS_MEASUREMENT_ID = "G-BY33RFG2WB";
     const COMPLETED_STATUSES = new Set(["completed", "no_changes", "merged", "error", "invalid", "duplicate", "stopped"]);
     const TASK_PROGRESS_PREP_STAGES = new Set(["preflight", "auth", "workspace", "config", "submit", "dispatch"]);
-    const TASK_PROGRESS_AGENT_STAGES = new Set(["codex", "claude", "agent", "review"]);
+    const TASK_PROGRESS_AGENT_STAGES = new Set(["codex", "claude", "agent"]);
     const LIBRARY_TASK_TYPE_ORDER = Object.freeze(["quality", "maintenance", "security", "review"]);
     const LIBRARY_TASK_TYPE_DEFS = Object.freeze({
       quality: { label: "Quality", icon: "badge-check" },
@@ -853,6 +863,9 @@
       commit: { id: "commit", label: "Commit", detail: "Git commit and push synchronization.", icon: "commit" },
       pr: { id: "pr", label: "Pull Request", detail: "Pull request lookup or creation.", icon: "pr" },
       checks: { id: "checks", label: "Checks", detail: "PR checks and remediation loop.", icon: "checks" },
+      review: { id: "review", label: "Review", detail: "Independent post-task pull request review.", icon: "review" },
+      review_fix: { id: "review_fix", label: "Fix Findings", detail: "Apply the current review pass findings.", icon: "review_fix" },
+      review_checks: { id: "review_checks", label: "Review Checks", detail: "Push review fixes and verify pull request checks.", icon: "review_checks" },
       finalize: { id: "finalize", label: "GitHub", detail: "Repository link before PR creation; pull request link once available.", icon: "github" },
       auto_merge: { id: "auto_merge", label: "Auto-merge", detail: "Clean pull request waits for GitHub auto-merge.", icon: "auto_merge" },
     });
@@ -907,6 +920,9 @@
       commit: "git-commit-horizontal",
       pr: "git-pull-request",
       checks: "shield-check",
+      review: "clipboard-check",
+      review_fix: "wrench",
+      review_checks: "shield-check",
       auto_merge: "git-merge",
     });
     const CLAUDE_POST_SUBMIT_VERIFY_INTERVAL_MS = 1200;
@@ -1309,6 +1325,18 @@
       return Boolean(state.reviewSettings?.autoMerge);
     }
 
+    function taskReviewStepEnabled() {
+      return String(state.reviewSettings?.reviewLevel || "off").trim().toLowerCase() !== "off";
+    }
+
+    function taskFinalReviewEligible(task) {
+      if (taskStartSource(task) === "review") {
+        return false;
+      }
+      const workflow = String(task?.workflow || "").trim().toLowerCase().replaceAll("_", "-");
+      return workflow !== "code-review" && workflow !== "pull request code review";
+    }
+
     function appendTaskStepIcon(parent, step, task, options = {}) {
       if (!parent || !step) {
         return false;
@@ -1518,10 +1546,12 @@
     function normalizeReviewSettings(raw) {
       const settings = raw && typeof raw === "object" ? raw : {};
       const method = String(settings.merge_method || settings.mergeMethod || "squash").trim().toLowerCase();
+      const level = String(settings.review_level || settings.reviewLevel || "off").trim().toLowerCase();
       return {
         autoMerge: Boolean(settings.auto_merge || settings.autoMerge),
         deleteMergedBranches: Boolean(settings.delete_merged_branches || settings.deleteMergedBranches),
         mergeMethod: ["merge", "squash", "rebase"].includes(method) ? method : "squash",
+        reviewLevel: ["off", "low", "medium", "high"].includes(level) ? level : "off",
         message: String(settings.message || "").trim(),
       };
     }
@@ -2209,6 +2239,8 @@
     const reviewSettingsDeleteMergedBranches = document.getElementById("review-settings-delete-merged-branches");
     const reviewSettingsMergeMethod = document.getElementById("review-settings-merge-method");
     const reviewSettingsMergeOptions = Array.from(document.querySelectorAll("[data-review-settings-merge-method]"));
+    const reviewSettingsLevel = document.getElementById("review-settings-level");
+    const reviewSettingsLevelOptions = Array.from(document.querySelectorAll("[data-review-settings-level]"));
     const reviewSettingsStatus = document.getElementById("review-settings-status");
     const reviewSettingsClose = document.getElementById("review-settings-close");
     const reviewSettingsSave = document.getElementById("review-settings-save");
@@ -3088,8 +3120,23 @@
       });
     }
 
+    function setReviewSettingsLevel(level) {
+      const normalized = ["off", "low", "medium", "high"].includes(String(level || "").trim().toLowerCase())
+        ? String(level || "").trim().toLowerCase()
+        : "off";
+      if (reviewSettingsLevel instanceof HTMLInputElement) {
+        reviewSettingsLevel.value = normalized;
+      }
+      reviewSettingsLevelOptions.forEach((button) => {
+        const selected = button.getAttribute("data-review-settings-level") === normalized;
+        button.classList.toggle("active", selected);
+        button.setAttribute("aria-checked", selected ? "true" : "false");
+      });
+    }
+
     function applyReviewSettingsState(nextState) {
       const previousAutoMerge = taskAutoMergeStepEnabled();
+      const previousReviewCycle = taskReviewStepEnabled();
       state.reviewSettings = normalizeReviewSettings(nextState);
       if (reviewSettingsAutoMerge instanceof HTMLInputElement) {
         reviewSettingsAutoMerge.checked = state.reviewSettings.autoMerge;
@@ -3098,10 +3145,14 @@
         reviewSettingsDeleteMergedBranches.checked = state.reviewSettings.deleteMergedBranches;
       }
       setReviewSettingsMergeMethod(state.reviewSettings.mergeMethod);
+      setReviewSettingsLevel(state.reviewSettings.reviewLevel);
       if (state.reviewSettings.message) {
         setReviewSettingsStatus("ok", state.reviewSettings.message);
       }
-      if (state.snapshot && previousAutoMerge !== taskAutoMergeStepEnabled()) {
+      if (
+        state.snapshot &&
+        (previousAutoMerge !== taskAutoMergeStepEnabled() || previousReviewCycle !== taskReviewStepEnabled())
+      ) {
         renderTasks(state.snapshot);
         renderFullscreenTasks(state.snapshot);
       }
@@ -3161,7 +3212,11 @@
       if (reviewSettingsAutoMerge) reviewSettingsAutoMerge.disabled = state.hubSetupBusy;
       if (reviewSettingsDeleteMergedBranches) reviewSettingsDeleteMergedBranches.disabled = state.hubSetupBusy;
       if (reviewSettingsMergeMethod) reviewSettingsMergeMethod.disabled = state.hubSetupBusy;
+      if (reviewSettingsLevel) reviewSettingsLevel.disabled = state.hubSetupBusy;
       reviewSettingsMergeOptions.forEach((button) => {
+        button.disabled = state.hubSetupBusy;
+      });
+      reviewSettingsLevelOptions.forEach((button) => {
         button.disabled = state.hubSetupBusy;
       });
       if (reviewSettingsSave) reviewSettingsSave.disabled = state.hubSetupBusy;
@@ -3416,6 +3471,7 @@
         auto_merge: Boolean(reviewSettingsAutoMerge?.checked),
         delete_merged_branches: Boolean(reviewSettingsDeleteMergedBranches?.checked),
         merge_method: String(reviewSettingsMergeMethod?.value || "squash").trim().toLowerCase() || "squash",
+        review_level: String(reviewSettingsLevel?.value || "off").trim().toLowerCase() || "off",
       };
     }
 
@@ -3447,6 +3503,7 @@
           auto_merge: payload.auto_merge,
           delete_merged_branches: payload.delete_merged_branches,
           merge_method: payload.merge_method,
+          review_level: payload.review_level,
         });
         setHubSetupOpen(false);
         state.hubSetupDialogMode = "connect";
@@ -11358,7 +11415,13 @@
         hasPublishGitSeen: false,
         hasPRSeen: false,
         hasChecksSeen: false,
+        hasReviewSeen: false,
+        hasReviewFixSeen: false,
+        hasReviewChecksSeen: false,
         hasAutoMergeSeen: false,
+        currentAgentMode: "",
+        hasReviewConfigSeen: false,
+        reviewPasses: 0,
       };
     }
 
@@ -11374,7 +11437,13 @@
       clone.hasPublishGitSeen = Boolean(signals?.hasPublishGitSeen);
       clone.hasPRSeen = Boolean(signals?.hasPRSeen);
       clone.hasChecksSeen = Boolean(signals?.hasChecksSeen);
+      clone.hasReviewSeen = Boolean(signals?.hasReviewSeen);
+      clone.hasReviewFixSeen = Boolean(signals?.hasReviewFixSeen);
+      clone.hasReviewChecksSeen = Boolean(signals?.hasReviewChecksSeen);
       clone.hasAutoMergeSeen = Boolean(signals?.hasAutoMergeSeen);
+      clone.currentAgentMode = String(signals?.currentAgentMode || "");
+      clone.hasReviewConfigSeen = Boolean(signals?.hasReviewConfigSeen);
+      clone.reviewPasses = Number(signals?.reviewPasses || 0);
       return clone;
     }
 
@@ -11396,6 +11465,11 @@
         return;
       }
       signals.stages.add(stage);
+      const reviewTotal = Number.parseInt(String(parseTaskProgressField(line, "review_total") || ""), 10);
+      if (Number.isFinite(reviewTotal) && reviewTotal >= 0) {
+        signals.hasReviewConfigSeen = true;
+        signals.reviewPasses = reviewTotal;
+      }
       if (stage === "workflow") {
         signals.hasWorkflowSeen = true;
       }
@@ -11405,8 +11479,27 @@
       if (stage === "checks") {
         signals.hasChecksSeen = true;
       }
+      if (stage === "review") {
+        signals.hasReviewSeen = true;
+      }
+      if (stage === "review_fix") {
+        signals.hasReviewFixSeen = true;
+      }
+      if (stage === "review_checks") {
+        signals.hasReviewChecksSeen = true;
+      }
       if (TASK_PROGRESS_AGENT_STAGES.has(stage)) {
         signals.hasAgentSeen = true;
+        const mode = String(parseTaskProgressField(line, "mode") || "").trim().toLowerCase();
+        if (mode) {
+          signals.currentAgentMode = mode;
+          if (mode === "review") {
+            signals.hasReviewSeen = true;
+          }
+          if (mode === "review_fix") {
+            signals.hasReviewFixSeen = true;
+          }
+        }
         const action = String(parseTaskProgressField(line, "action") || "").trim().toLowerCase();
         if (action === "auto_merge") {
           signals.hasAutoMergeSeen = true;
@@ -11493,6 +11586,15 @@
         if (TASK_PROGRESS_AGENT_STAGES.has(currentStage)) {
           signals.hasAgentSeen = true;
         }
+        if (currentStage === "review") {
+          signals.hasReviewSeen = true;
+        }
+        if (currentStage === "review_fix") {
+          signals.hasReviewFixSeen = true;
+        }
+        if (currentStage === "review_checks") {
+          signals.hasReviewChecksSeen = true;
+        }
         if (currentStage === "pr") {
           signals.hasPRSeen = true;
         }
@@ -11518,7 +11620,12 @@
         signals?.hasPublishGitSeen ? "publish_git" : "",
         signals?.hasPRSeen ? "pr" : "",
         signals?.hasChecksSeen ? "checks" : "",
+        signals?.hasReviewSeen ? "review" : "",
+        signals?.hasReviewFixSeen ? "review_fix" : "",
+        signals?.hasReviewChecksSeen ? "review_checks" : "",
         signals?.hasAutoMergeSeen ? "auto_merge" : "",
+        String(signals?.currentAgentMode || ""),
+        signals?.hasReviewConfigSeen ? `review_total:${signals.reviewPasses}` : "",
       ].join(",");
     }
 
@@ -11534,6 +11641,20 @@
       stepIDs.push("agent", "commit", "pr");
       if (status !== "no_changes") {
         stepIDs.push("checks");
+      }
+      if (
+        status !== "no_changes" &&
+        taskFinalReviewEligible(task) &&
+        (signals.hasReviewSeen || (signals.hasReviewConfigSeen ? signals.reviewPasses > 0 : taskReviewStepEnabled())) &&
+        (String(task?.pr_url || "").trim() !== "" || !COMPLETED_STATUSES.has(status))
+      ) {
+        stepIDs.push("review");
+        if (signals.hasReviewFixSeen) {
+          stepIDs.push("review_fix");
+        }
+        if (signals.hasReviewChecksSeen || signals.hasReviewFixSeen) {
+          stepIDs.push("review_checks");
+        }
       }
       stepIDs.push("finalize");
       if (taskAutoMergeStepEnabled() && status !== "no_changes") {
@@ -11576,10 +11697,28 @@
       if (taskAutoMergeStepEnabled() && signals.hasAutoMergeSeen) {
         return "auto_merge";
       }
+      if (stage === "review") {
+        return "review";
+      }
+      if (stage === "review_fix") {
+        return "review_fix";
+      }
+      if (stage === "review_checks") {
+        return "review_checks";
+      }
       if (TASK_PROGRESS_AGENT_STAGES.has(stage)) {
+        if (signals.currentAgentMode === "review") {
+          return "review";
+        }
+        if (signals.currentAgentMode === "review_fix") {
+          return "review_fix";
+        }
         return "agent";
       }
       if (stage === "git") {
+        if (signals.hasReviewFixSeen) {
+          return "review_checks";
+        }
         if (!signals.hasAgentSeen) {
           if (signals.hasWorkflowSeen || signals.hasForkFallback || signals.hasPublishGitSeen) {
             return signals.hasForkFallback ? "fork" : "publish";
@@ -11589,9 +11728,15 @@
         return "commit";
       }
       if (stage === "pr") {
+        if (signals.hasReviewFixSeen) {
+          return "review_checks";
+        }
         return "pr";
       }
       if (stage === "checks") {
+        if (signals.hasReviewFixSeen) {
+          return "review_checks";
+        }
         return "checks";
       }
       if (stage === "finalize") {
@@ -11620,6 +11765,7 @@
         String(task?.stage_status || ""),
         String(task?.status || ""),
         taskAutoMergeStepEnabled() ? "auto_merge" : "",
+        taskReviewStepEnabled() ? "review_cycle" : "",
         taskStartSource(task),
         String(task?.pr_url || ""),
         String(logs.length),
@@ -12015,6 +12161,7 @@
         viewMode,
         statusFilter,
         autoMergeStep: taskAutoMergeStepEnabled(),
+        reviewCycleStep: taskReviewStepEnabled(),
         showOutputAction,
         showImageAction,
         allowCollapse,
@@ -13674,6 +13821,11 @@
     reviewSettingsMergeOptions.forEach((button) => {
       button.addEventListener("click", () => {
         setReviewSettingsMergeMethod(button.getAttribute("data-review-settings-merge-method"));
+      });
+    });
+    reviewSettingsLevelOptions.forEach((button) => {
+      button.addEventListener("click", () => {
+        setReviewSettingsLevel(button.getAttribute("data-review-settings-level"));
       });
     });
     if (reviewSettingsClose) {

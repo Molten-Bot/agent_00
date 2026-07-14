@@ -618,6 +618,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(markup, `Auto-merge clean reviews`) ||
 		!strings.Contains(markup, `Delete merged branches`) ||
+		!strings.Contains(markup, `id="review-settings-level" type="hidden" value="off"`) ||
+		!strings.Contains(markup, `data-review-settings-level="low"><span>Low</span><small>1 review</small></button>`) ||
+		!strings.Contains(markup, `data-review-settings-level="medium"><span>Medium</span><small>3 reviews</small></button>`) ||
+		!strings.Contains(markup, `data-review-settings-level="high"><span>High</span><small>6 reviews</small></button>`) ||
 		!strings.Contains(markup, `id="review-settings-delete-merged-branches" type="checkbox"`) ||
 		!strings.Contains(markup, `id="review-settings-merge-method" type="hidden" value="squash"`) ||
 		!strings.Contains(markup, `role="radiogroup" aria-labelledby="review-settings-merge-method-label"`) ||
@@ -629,6 +633,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(markup, `reviewSettingsMergeOptions.forEach((button) => {`) ||
 		!strings.Contains(markup, `setReviewSettingsMergeMethod(button.getAttribute("data-review-settings-merge-method"));`) ||
+		!strings.Contains(markup, `setReviewSettingsLevel(button.getAttribute("data-review-settings-level"));`) ||
+		!strings.Contains(markup, `review: "clipboard-check"`) ||
+		!strings.Contains(markup, `review_fix: "wrench"`) ||
+		!strings.Contains(markup, `review_checks: "shield-check"`) ||
 		!strings.Contains(markup, `delete_merged_branches: Boolean(reviewSettingsDeleteMergedBranches?.checked),`) ||
 		!strings.Contains(markup, `setHubSetupOpen(false);`) {
 		t.Fatalf("expected review settings save and merge method selection behavior")
@@ -812,7 +820,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "task-progress-step-icon") {
 		t.Fatalf("expected index html to render task progress step icons")
 	}
-	if !strings.Contains(markup, `const TASK_PROGRESS_AGENT_STAGES = new Set(["codex", "claude", "agent", "review"]);`) {
+	if !strings.Contains(markup, `const TASK_PROGRESS_AGENT_STAGES = new Set(["codex", "claude", "agent"]);`) ||
+		!strings.Contains(markup, `if (stage === "review") {`) ||
+		!strings.Contains(markup, `return "review";`) {
 		t.Fatalf("expected index html to define the stage set that maps runtime agent stages into the agent progress step")
 	}
 	if strings.Contains(markup, "current step:") {

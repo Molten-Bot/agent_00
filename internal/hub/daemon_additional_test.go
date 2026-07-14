@@ -213,6 +213,18 @@ func TestHandleDispatchUnexpectedNoChangesPublishesFailureAndQueuesFollowUp(t *t
 	}
 }
 
+func TestUnexpectedNoChangesDispatchFailureAllowsConditionalNoOp(t *testing.T) {
+	t.Parallel()
+
+	result := app.Result{NoChanges: true}
+	runCfg := config.Config{
+		Prompt: "Build the June 30 release. If there are no changes, do not produce an output change in the JSON.",
+	}
+	if _, failed := unexpectedNoChangesDispatchFailure(result, runCfg); failed {
+		t.Fatal("unexpectedNoChangesDispatchFailure(conditional no-op) failed = true, want false")
+	}
+}
+
 type stubDispatchTaskControl struct {
 	waitErr error
 	stopped bool
