@@ -1255,6 +1255,11 @@ func TestLocalNoChangesFailureResultSkipsAllowedNoOps(t *testing.T) {
 		t.Fatal("localNoChangesFailureResult(read-only) failed = true, want false")
 	}
 
+	conditionalNoOp := config.Config{Prompt: "Build the June 30 release. If there are no changes, do not produce an output change in the JSON."}
+	if _, failed := localNoChangesFailureResult(localSubmitSource, app.Result{NoChanges: true}, conditionalNoOp); failed {
+		t.Fatal("localNoChangesFailureResult(conditional no-op) failed = true, want false")
+	}
+
 	verified := app.Result{NoChanges: true, NoChangeEvidence: true}
 	if _, failed := localNoChangesFailureResult(localSubmitSource, verified, config.Config{Prompt: "fix broken release generation"}); failed {
 		t.Fatal("localNoChangesFailureResult(concrete evidence) failed = true, want false")
@@ -1832,6 +1837,7 @@ func TestPromptRequestsRepositoryChange(t *testing.T) {
 		{prompt: "Ensure generated OpenAPI matches the API routes.", want: false},
 		{prompt: "Fix: ensure generated OpenAPI matches the API routes.", want: true},
 		{prompt: "Update generated OpenAPI to match the API routes.", want: true},
+		{prompt: "Build the June 30 release. If there are no changes, do not produce an output change in the JSON.", want: false},
 		{prompt: "", want: true},
 	}
 

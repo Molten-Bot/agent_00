@@ -4897,6 +4897,10 @@ func agentOutputHasNoChangeClaim(text string) bool {
 	}
 
 	noOpMarkers := []string{
+		"no-op",
+		"no op",
+		"zero commits",
+		"0 commits",
 		"no repo diff",
 		"no repository diff",
 		"no tracked file changes",

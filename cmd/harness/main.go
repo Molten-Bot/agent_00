@@ -1855,6 +1855,9 @@ func promptAllowsSuccessfulNoOp(text string) bool {
 		return false
 	}
 	phraseText := promptPhraseText(text)
+	if promptExplicitlyAllowsNoChanges(phraseText) {
+		return true
+	}
 
 	strongChangeMarkers := []string{
 		"fix", "implement", "add", "remove", "create", "replace", "rename",
@@ -1890,6 +1893,59 @@ func promptAllowsSuccessfulNoOp(text string) bool {
 	for _, marker := range consistencyMarkers {
 		if promptPhraseTextContains(phraseText, marker) {
 			return true
+		}
+	}
+	return false
+}
+
+func promptExplicitlyAllowsNoChanges(text string) bool {
+	conditions := []string{
+		"if there are no changes",
+		"if there are no file changes",
+		"if there are no repository changes",
+		"if no changes",
+		"when there are no changes",
+		"when there are no file changes",
+		"when there are no repository changes",
+		"when no changes",
+		"if nothing changed",
+		"when nothing changed",
+	}
+	actions := []string{
+		"do not produce",
+		"do not create",
+		"do not modify",
+		"do not change",
+		"don't produce",
+		"don't create",
+		"don't modify",
+		"don't change",
+		"return a no op",
+		"produce no output",
+		"make no changes",
+		"leave unchanged",
+		"skip the change",
+		"skip creating",
+	}
+
+	const maxConditionalNoOpClauseChars = 240
+	for _, condition := range conditions {
+		remaining := text
+		for {
+			conditionIndex := strings.Index(remaining, condition)
+			if conditionIndex < 0 {
+				break
+			}
+			clause := remaining[conditionIndex:]
+			if len(clause) > maxConditionalNoOpClauseChars {
+				clause = clause[:maxConditionalNoOpClauseChars]
+			}
+			for _, action := range actions {
+				if strings.Contains(clause, action) {
+					return true
+				}
+			}
+			remaining = remaining[conditionIndex+len(condition):]
 		}
 	}
 	return false
