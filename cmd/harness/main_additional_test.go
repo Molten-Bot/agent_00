@@ -1838,6 +1838,10 @@ func TestPromptRequestsRepositoryChange(t *testing.T) {
 		{prompt: "Fix: ensure generated OpenAPI matches the API routes.", want: true},
 		{prompt: "Update generated OpenAPI to match the API routes.", want: true},
 		{prompt: "Build the June 30 release. If there are no changes, do not produce an output change in the JSON.", want: false},
+		{prompt: "Build the release. If no changes, don't create a pull request.", want: false},
+		{prompt: "Validate the release. When nothing changed, leave unchanged and report the result.", want: false},
+		{prompt: "If there are no changes, investigate and fix the collector.", want: true},
+		{prompt: "If there are no changes, create an empty pull request.", want: true},
 		{prompt: "", want: true},
 	}
 
