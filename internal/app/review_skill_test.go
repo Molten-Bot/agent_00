@@ -1,4 +1,4 @@
-package app
+go build -o bin/harness ./cmd/harnesspackage app
 
 import (
 	"path/filepath"

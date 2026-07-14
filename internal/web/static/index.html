@@ -683,7 +683,7 @@
         </div>
 
         <form id="review-settings-form" class="stack review-settings-form hidden" data-settings-panel="review">
-          <fieldset class="review-settings-section">
+          <fieldset class="review-settings-section review-settings-automation">
             <legend>Automation</legend>
             <label class="review-settings-toggle">
               <input id="review-settings-auto-merge" type="checkbox">
@@ -694,18 +694,17 @@
               <span>Delete merged branches</span>
             </label>
           </fieldset>
-          <div class="review-settings-section">
+          <div class="review-settings-section review-settings-level">
             <span id="review-settings-level-label">Post-task Review</span>
             <input id="review-settings-level" type="hidden" value="off">
             <div class="review-settings-merge-options review-settings-level-options" role="radiogroup" aria-labelledby="review-settings-level-label">
-              <button class="review-settings-merge-option active" type="button" role="radio" aria-checked="true" data-review-settings-level="off">Off</button>
-              <button class="review-settings-merge-option" type="button" role="radio" aria-checked="false" data-review-settings-level="low">Low</button>
-              <button class="review-settings-merge-option" type="button" role="radio" aria-checked="false" data-review-settings-level="medium">Medium</button>
-              <button class="review-settings-merge-option" type="button" role="radio" aria-checked="false" data-review-settings-level="high">High</button>
+              <button class="review-settings-merge-option review-settings-level-option active" type="button" role="radio" aria-checked="true" data-review-settings-level="off"><span>Off</span><small>0 reviews</small></button>
+              <button class="review-settings-merge-option review-settings-level-option" type="button" role="radio" aria-checked="false" data-review-settings-level="low"><span>Low</span><small>1 review</small></button>
+              <button class="review-settings-merge-option review-settings-level-option" type="button" role="radio" aria-checked="false" data-review-settings-level="medium"><span>Medium</span><small>3 reviews</small></button>
+              <button class="review-settings-merge-option review-settings-level-option" type="button" role="radio" aria-checked="false" data-review-settings-level="high"><span>High</span><small>6 reviews</small></button>
             </div>
-            <small>Off: 0 reviews · Low: 1 · Medium: 3 · High: 6</small>
           </div>
-          <div class="review-settings-section">
+          <div class="review-settings-section review-settings-merge-method">
             <span id="review-settings-merge-method-label">Merge Method</span>
             <input id="review-settings-merge-method" type="hidden" value="squash">
             <div class="review-settings-merge-options" role="radiogroup" aria-labelledby="review-settings-merge-method-label">

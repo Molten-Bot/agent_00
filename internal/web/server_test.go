@@ -619,9 +619,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `Auto-merge clean reviews`) ||
 		!strings.Contains(markup, `Delete merged branches`) ||
 		!strings.Contains(markup, `id="review-settings-level" type="hidden" value="off"`) ||
-		!strings.Contains(markup, `data-review-settings-level="low">Low</button>`) ||
-		!strings.Contains(markup, `data-review-settings-level="medium">Medium</button>`) ||
-		!strings.Contains(markup, `data-review-settings-level="high">High</button>`) ||
+		!strings.Contains(markup, `data-review-settings-level="low"><span>Low</span><small>1 review</small></button>`) ||
+		!strings.Contains(markup, `data-review-settings-level="medium"><span>Medium</span><small>3 reviews</small></button>`) ||
+		!strings.Contains(markup, `data-review-settings-level="high"><span>High</span><small>6 reviews</small></button>`) ||
 		!strings.Contains(markup, `id="review-settings-delete-merged-branches" type="checkbox"`) ||
 		!strings.Contains(markup, `id="review-settings-merge-method" type="hidden" value="squash"`) ||
 		!strings.Contains(markup, `role="radiogroup" aria-labelledby="review-settings-merge-method-label"`) ||
