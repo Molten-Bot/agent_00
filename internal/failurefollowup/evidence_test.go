@@ -57,6 +57,51 @@ func TestAppendLogExcerptKeepsContextWhenLogsUnavailable(t *testing.T) {
 	}
 }
 
+func TestLogExcerptDoesNotProbeDirectories(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	content := fmt.Sprintf(
+		"cmd phase=codex name=codex stream=stdout b64=%s\n",
+		base64.StdEncoding.EncodeToString([]byte("workspace content must not be transported")),
+	)
+	if err := os.WriteFile(filepath.Join(dir, LogFileName), []byte(content), 0o644); err != nil {
+		t.Fatalf("write unrelated terminal log: %v", err)
+	}
+
+	if got := LogExcerpt([]string{dir}); got != "" {
+		t.Fatalf("LogExcerpt(directory) = %q, want empty", got)
+	}
+}
+
+func TestLogExcerptReadsDecodedDebugCommandRecords(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), LogFileName)
+	content := `dispatch request_id=req-debug cmd phase=codex name=codex stream=stderr text="No diff created. nested b64=%%% err=\"target already changed\""`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write debug log: %v", err)
+	}
+
+	got := LogExcerpt([]string{path})
+	if want := `codex stderr: No diff created. nested b64=%%% err="target already changed"`; !strings.Contains(got, want) {
+		t.Fatalf("LogExcerpt(debug text) = %q, want %q", got, want)
+	}
+}
+
+func TestRedactFollowUpEvidenceRedactsBasicAuthorization(t *testing.T) {
+	t.Parallel()
+
+	credential := "dXNlcjpwYXNzd29yZA=="
+	got := redactFollowUpEvidence("Authorization: Basic " + credential)
+	if strings.Contains(got, credential) {
+		t.Fatalf("redactFollowUpEvidence() exposed Basic credential: %q", got)
+	}
+	if !strings.Contains(got, "Authorization: [REDACTED]") {
+		t.Fatalf("redactFollowUpEvidence() = %q, want redacted Authorization field", got)
+	}
+}
+
 func TestLogExcerptIsBoundedToTail(t *testing.T) {
 	t.Parallel()
 

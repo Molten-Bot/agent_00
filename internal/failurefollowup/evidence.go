@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -16,8 +17,9 @@ const (
 )
 
 var (
-	followUpSecretFieldPattern = regexp.MustCompile(`(?i)((?:bind_token|agent_token|access_token|bearer_token|github_token|gh_token|openai_api_key|api_key|authorization|token)\s*[:=]\s*["']?)([^"',\s}]+)`)
+	followUpSecretFieldPattern = regexp.MustCompile(`(?i)((?:bind_token|agent_token|access_token|bearer_token|github_token|gh_token|openai_api_key|api_key|authorization|token)\s*[:=]\s*["']?)(?:(?:basic|bearer)\s+)?([^"',\s}]+)`)
 	followUpBearerPattern      = regexp.MustCompile(`(?i)(bearer\s+)([A-Za-z0-9._-]+)`)
+	followUpBasicPattern       = regexp.MustCompile(`(?i)(basic\s+)([^"',\s}]+)`)
 	followUpCredentialPattern  = regexp.MustCompile(`(?i)\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,})\b`)
 )
 
@@ -86,16 +88,9 @@ func preferredTaskLogFile(logPaths []string) string {
 		}
 	}
 
+	// Callers also include workspace and repository directories as path
+	// guidance. Never probe those directories for coincidentally named logs.
 	for _, path := range logPaths {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			continue
-		}
-		if stat, err := os.Stat(path); err == nil && stat.IsDir() {
-			appendCandidate(filepath.Join(path, LogFileName))
-			appendCandidate(filepath.Join(path, LegacyTaskLogFileName))
-			continue
-		}
 		appendCandidate(path)
 	}
 
@@ -149,15 +144,17 @@ func followUpEvidenceLine(line string) (string, bool) {
 		if phase != "codex" && phase != "claude" && phase != "agent" {
 			return "", false
 		}
-		encoded := simpleLogField(line, "b64")
-		if encoded == "" {
-			return "", false
+		var text string
+		if encoded := simpleLogField(line, "b64"); encoded != "" {
+			decoded, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				return "", false
+			}
+			text = string(decoded)
+		} else {
+			text = simpleLogField(line, "text")
 		}
-		decoded, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return "", false
-		}
-		text := strings.TrimSpace(strings.ReplaceAll(string(decoded), "\x00", ""))
+		text = strings.TrimSpace(strings.ReplaceAll(text, "\x00", ""))
 		if text == "" {
 			return "", false
 		}
@@ -180,23 +177,58 @@ func followUpEvidenceLine(line string) (string, bool) {
 }
 
 func simpleLogField(line, key string) string {
-	marker := key + "="
-	index := strings.Index(line, marker)
-	for index > 0 && line[index-1] != ' ' {
-		next := strings.Index(line[index+len(marker):], marker)
-		if next < 0 {
-			return ""
+	for index := 0; index < len(line); {
+		for index < len(line) && (line[index] == ' ' || line[index] == '\t') {
+			index++
 		}
-		index += len(marker) + next
+		nameStart := index
+		for index < len(line) && line[index] != '=' && line[index] != ' ' && line[index] != '\t' {
+			index++
+		}
+		if index >= len(line) || line[index] != '=' {
+			for index < len(line) && line[index] != ' ' && line[index] != '\t' {
+				index++
+			}
+			continue
+		}
+
+		name := line[nameStart:index]
+		index++
+		value, next := simpleLogValue(line, index)
+		if name == key {
+			return value
+		}
+		index = next
 	}
-	if index < 0 {
-		return ""
+	return ""
+}
+
+func simpleLogValue(line string, index int) (string, int) {
+	if index >= len(line) {
+		return "", index
 	}
-	value := line[index+len(marker):]
-	if end := strings.IndexByte(value, ' '); end >= 0 {
-		value = value[:end]
+	if line[index] == '"' {
+		start := index
+		for index++; index < len(line); index++ {
+			switch line[index] {
+			case '\\':
+				index++
+			case '"':
+				decoded, err := strconv.Unquote(line[start : index+1])
+				if err != nil {
+					return "", index + 1
+				}
+				return strings.TrimSpace(decoded), index + 1
+			}
+		}
+		return "", index
 	}
-	return strings.Trim(strings.TrimSpace(value), `"'`)
+
+	start := index
+	for index < len(line) && line[index] != ' ' && line[index] != '\t' {
+		index++
+	}
+	return strings.Trim(strings.TrimSpace(line[start:index]), `"'`), index
 }
 
 func redactFollowUpEvidence(value string) string {
@@ -215,8 +247,9 @@ func redactFollowUpEvidence(value string) string {
 			value = strings.ReplaceAll(value, secret, "[REDACTED]")
 		}
 	}
-	value = followUpBearerPattern.ReplaceAllString(value, `${1}[REDACTED]`)
 	value = followUpSecretFieldPattern.ReplaceAllString(value, `${1}[REDACTED]`)
+	value = followUpBearerPattern.ReplaceAllString(value, `${1}[REDACTED]`)
+	value = followUpBasicPattern.ReplaceAllString(value, `${1}[REDACTED]`)
 	return followUpCredentialPattern.ReplaceAllString(value, `[REDACTED]`)
 }
 
