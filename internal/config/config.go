@@ -32,26 +32,27 @@ const prBodyPromptHeading = "Original task prompt:"
 
 // Config is the v1 public contract for a harness run.
 type Config struct {
-	Version                string        `json:"version"`
-	RepoURL                string        `json:"repoUrl"`
-	Repo                   string        `json:"repo"`
-	Repos                  []string      `json:"repos"`
-	LibraryTaskName        string        `json:"libraryTaskName,omitempty"`
-	LibraryTaskDisplayName string        `json:"libraryTaskDisplayName,omitempty"`
-	ResponseMode           string        `json:"responseMode,omitempty"`
-	AgentHarness           string        `json:"agentHarness,omitempty"`
-	AgentCommand           string        `json:"agentCommand,omitempty"`
-	BaseBranch             string        `json:"baseBranch"`
-	TargetSubdir           string        `json:"targetSubdir"`
-	Prompt                 string        `json:"prompt"`
-	Images                 []PromptImage `json:"images,omitempty"`
-	CommitMessage          string        `json:"commitMessage"`
-	PRTitle                string        `json:"prTitle"`
-	PRBody                 string        `json:"prBody"`
-	Labels                 []string      `json:"labels"`
-	GitHubHandle           string        `json:"githubHandle"`
-	Reviewers              []string      `json:"reviewers"`
-	Review                 *ReviewConfig `json:"review,omitempty"`
+	Version                  string        `json:"version"`
+	RepoURL                  string        `json:"repoUrl"`
+	Repo                     string        `json:"repo"`
+	Repos                    []string      `json:"repos"`
+	LibraryTaskName          string        `json:"libraryTaskName,omitempty"`
+	LibraryTaskDisplayName   string        `json:"libraryTaskDisplayName,omitempty"`
+	RequiresNonDefaultBranch bool          `json:"requiresNonDefaultBranch,omitempty"`
+	ResponseMode             string        `json:"responseMode,omitempty"`
+	AgentHarness             string        `json:"agentHarness,omitempty"`
+	AgentCommand             string        `json:"agentCommand,omitempty"`
+	BaseBranch               string        `json:"baseBranch"`
+	TargetSubdir             string        `json:"targetSubdir"`
+	Prompt                   string        `json:"prompt"`
+	Images                   []PromptImage `json:"images,omitempty"`
+	CommitMessage            string        `json:"commitMessage"`
+	PRTitle                  string        `json:"prTitle"`
+	PRBody                   string        `json:"prBody"`
+	Labels                   []string      `json:"labels"`
+	GitHubHandle             string        `json:"githubHandle"`
+	Reviewers                []string      `json:"reviewers"`
+	Review                   *ReviewConfig `json:"review,omitempty"`
 }
 
 // PromptImage captures one prompt image attachment.
@@ -153,6 +154,9 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	if err := rejectSnakeCaseRunConfigFields(raw); err != nil {
 		return err
 	}
+	if err := rejectNonCanonicalGuardFields(raw); err != nil {
+		return err
+	}
 
 	type configAlias Config
 	var parsed configAlias
@@ -177,18 +181,19 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 
 func rejectSnakeCaseRunConfigFields(raw map[string]json.RawMessage) error {
 	forbidden := map[string]string{
-		"repo_url":                  "repoUrl",
-		"base_branch":               "baseBranch",
-		"target_subdir":             "targetSubdir",
-		"agent_harness":             "agentHarness",
-		"agent_command":             "agentCommand",
-		"commit_message":            "commitMessage",
-		"pr_title":                  "prTitle",
-		"pr_body":                   "prBody",
-		"github_handle":             "githubHandle",
-		"library_task_name":         "libraryTaskName",
-		"library_task_display_name": "libraryTaskDisplayName",
-		"response_mode":             "responseMode",
+		"repo_url":                    "repoUrl",
+		"base_branch":                 "baseBranch",
+		"target_subdir":               "targetSubdir",
+		"agent_harness":               "agentHarness",
+		"agent_command":               "agentCommand",
+		"commit_message":              "commitMessage",
+		"pr_title":                    "prTitle",
+		"pr_body":                     "prBody",
+		"github_handle":               "githubHandle",
+		"library_task_name":           "libraryTaskName",
+		"library_task_display_name":   "libraryTaskDisplayName",
+		"response_mode":               "responseMode",
+		"requires_non_default_branch": "requiresNonDefaultBranch",
 	}
 	for legacy, canonical := range forbidden {
 		if _, ok := raw[legacy]; ok {
@@ -196,6 +201,17 @@ func rejectSnakeCaseRunConfigFields(raw map[string]json.RawMessage) error {
 		}
 	}
 	return rejectSnakeCaseImageFields(raw["images"])
+}
+
+func rejectNonCanonicalGuardFields(raw map[string]json.RawMessage) error {
+	for _, canonical := range []string{"libraryTaskName", "requiresNonDefaultBranch"} {
+		for key := range raw {
+			if key != canonical && strings.EqualFold(key, canonical) {
+				return fmt.Errorf("json: unsupported field %q; use %q", key, canonical)
+			}
+		}
+	}
+	return nil
 }
 
 func rejectSnakeCaseImageFields(rawImages json.RawMessage) error {
@@ -320,6 +336,15 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Prompt) == "" {
 		return fmt.Errorf("prompt is required")
 	}
+	if c.RequiresNonDefaultBranch {
+		branch := normalizeRequiredNonDefaultBranch(c.BaseBranch)
+		if branch == "" {
+			return fmt.Errorf("baseBranch is required when requiresNonDefaultBranch is true")
+		}
+		if isProtectedDefaultBranchName(branch) {
+			return fmt.Errorf("baseBranch %q is a protected default branch name and cannot be used when requiresNonDefaultBranch is true", branch)
+		}
+	}
 	if err := validateReviewConfig(c.Review, repos); err != nil {
 		return err
 	}
@@ -348,6 +373,22 @@ func (c Config) Validate() error {
 		return fmt.Errorf("prBody is required")
 	}
 	return nil
+}
+
+func normalizeRequiredNonDefaultBranch(branch string) string {
+	branch = strings.TrimSpace(branch)
+	branch = strings.TrimPrefix(branch, "refs/heads/")
+	branch = strings.TrimPrefix(branch, "origin/")
+	return branch
+}
+
+func isProtectedDefaultBranchName(branch string) bool {
+	switch normalizeRequiredNonDefaultBranch(branch) {
+	case "main", "master", "trunk":
+		return true
+	default:
+		return false
+	}
 }
 
 // RepoList returns the normalized list of repositories for this run.
