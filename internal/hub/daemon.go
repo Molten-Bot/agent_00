@@ -726,6 +726,9 @@ func (d Daemon) processInboundMessage(
 						d.logf("dispatch status=nack_error delivery_id=%s err=%q", deliveryID, nackErr)
 					}
 				}
+				if triggerFollowUps {
+					d.handleFailedDispatchAfterPublish(runCtx, api, cfg, dispatch, failRes)
+				}
 			} else {
 				if triggerFollowUps {
 					d.handleFailedDispatchAfterPublish(runCtx, api, cfg, dispatch, failRes)
@@ -1369,6 +1372,9 @@ func (d Daemon) handleDispatch(
 			if nackErr := api.NackRuntimeDelivery(ctx, deliveryID); nackErr != nil {
 				d.logf("dispatch status=nack_error delivery_id=%s err=%q", deliveryID, nackErr)
 			}
+		}
+		if res.Err != nil && !stoppedByOperator {
+			d.handleFailedDispatchAfterPublish(ctx, api, cfg, dispatch, res)
 		}
 		if res.Err != nil {
 			return status

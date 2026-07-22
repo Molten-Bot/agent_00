@@ -30,6 +30,7 @@ type stubMoltenHubAPI struct {
 	recordCodingFn   func(context.Context) error
 	recordActivityFn func(context.Context, string) error
 	markOfflineFn    func(context.Context, string, string) error
+	publishFn        func(context.Context, map[string]any) error
 
 	mu           sync.Mutex
 	acked        []string
@@ -338,7 +339,12 @@ func (s *stubMoltenHubAPI) RecordRunCompletedActivity(ctx context.Context, runCf
 func (s *stubMoltenHubAPI) RegisterRuntime(context.Context, InitConfig, []library.TaskSummary) error {
 	return nil
 }
-func (s *stubMoltenHubAPI) PublishResult(_ context.Context, payload map[string]any) error {
+func (s *stubMoltenHubAPI) PublishResult(ctx context.Context, payload map[string]any) error {
+	if s.publishFn != nil {
+		if err := s.publishFn(ctx, payload); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.published = append(s.published, payload)
@@ -1329,6 +1335,75 @@ func TestHandleDispatchQueuesFailureFollowUpAfterPublishingFailureResult(t *test
 	}
 	if got := api.codingEvents; got != 1 {
 		t.Fatalf("coding activity events = %d, want 1", got)
+	}
+}
+
+func TestHandleDispatchQueuesFailureFollowUpWhenFailureResultPublishFails(t *testing.T) {
+	t.Parallel()
+
+	d := NewDaemon(failingRunner{err: errors.New("runner exploded")})
+	var logs []string
+	d.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	api := &stubMoltenHubAPI{token: "t"}
+	api.publishFn = func(_ context.Context, payload map[string]any) error {
+		if payload["type"] == "skill_result" && payload["status"] == "error" {
+			return errors.New("missing hub reply target")
+		}
+		return nil
+	}
+	cfg := InitConfig{
+		Skill: SkillConfig{
+			Name:         "code_for_me",
+			DispatchType: "skill_request",
+			ResultType:   "skill_result",
+		},
+	}
+	runCfg := config.Config{
+		Repo:   "git@github.com:acme/repo.git",
+		Prompt: "fix failing checks",
+	}
+	runCfg.ApplyDefaults()
+
+	d.handleDispatch(
+		context.Background(),
+		api,
+		cfg,
+		SkillDispatch{
+			RequestID: "req-publish-fail",
+			Skill:     "code_for_me",
+			Config:    runCfg,
+		},
+		"",
+		false,
+	)
+
+	api.mu.Lock()
+	defer api.mu.Unlock()
+
+	publishedResults := nonStatusPayloads(api.published)
+	if len(publishedResults) != 1 {
+		t.Fatalf("published non-status payload count = %d, want 1; payloads=%#v", len(publishedResults), api.published)
+	}
+	if got := publishedResults[0]["request_id"]; got != "req-publish-fail-failure-review" {
+		t.Fatalf("follow-up request_id = %#v, want req-publish-fail-failure-review", got)
+	}
+	if got := publishedResults[0]["type"]; got != "skill_request" {
+		t.Fatalf("follow-up payload type = %#v, want skill_request", got)
+	}
+	if got, want := len(api.offlineCalls), 1; got != want {
+		t.Fatalf("offline call count = %d, want %d", got, want)
+	}
+	foundPublishFailure := false
+	for _, line := range logs {
+		if strings.Contains(line, "status=publish_error") && strings.Contains(line, "missing hub reply target") {
+			foundPublishFailure = true
+			break
+		}
+	}
+	if !foundPublishFailure {
+		t.Fatalf("logs missing publish error: %#v", logs)
 	}
 }
 
