@@ -131,7 +131,7 @@
               alt="Codex logo">
           </span>
           <span class="site-header-copy">
-            <span class="title site-header-title">Molten Hub Code</span>
+            <span class="title site-header-title">Agent_00</span>
             <span id="configured-agent-gorilla-subtitle" class="site-header-subtitle">Codex is now a 600LB Gorilla!</span>
           </span>
         </a>
