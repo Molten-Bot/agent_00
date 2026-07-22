@@ -58,13 +58,12 @@ pass; final-pass findings are repaired and checked without an extra pass.
 
 ### Go Module
 
-MoltenHub Code is distributed as a Go module from this Git repository. Until a
-post-rename release is tagged, install from `main`; afterward, replace `main`
-with that release tag for a stable install.
+MoltenHub Code is distributed as a Go module from this Git repository. Install
+the latest stable release from the renamed module path.
 
 ```bash
-go get github.com/Molten-Bot/agent_00@main
-go install github.com/Molten-Bot/agent_00/cmd/harness@main
+go get github.com/Molten-Bot/agent_00@latest
+go install github.com/Molten-Bot/agent_00/cmd/harness@latest
 ```
 
 ## Bundled Tools

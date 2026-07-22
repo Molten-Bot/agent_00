@@ -191,13 +191,14 @@ func TestGoReleaserPublishesHarnessArtifactsToGitHubRelease(t *testing.T) {
 		"- zip",
 		"name_template: checksums.txt",
 		"release:",
-		"github:",
-		"owner: Molten-Bot",
-		"name: moltenhub-code",
 		"prerelease: auto",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("%s missing GoReleaser setting %q", configPath, want)
 		}
+	}
+
+	if strings.Contains(content, "github:") {
+		t.Fatalf("%s hard-codes a GitHub release repository instead of inferring the current origin", configPath)
 	}
 }

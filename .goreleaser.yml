@@ -51,7 +51,4 @@ changelog:
       - "^test:"
 
 release:
-  github:
-    owner: Molten-Bot
-    name: moltenhub-code
   prerelease: auto
