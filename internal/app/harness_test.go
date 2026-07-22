@@ -6906,6 +6906,38 @@ func TestRunCodexAllowsValidationToolingMissingFailure(t *testing.T) {
 	}
 }
 
+func TestRunCodexAllowsMissingCurlWhenSmokeFallbackSucceeded(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "rename application title"
+	firstCmd := codexCommand(targetDir, prompt)
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: firstCmd,
+			res: execx.Result{Stdout: strings.Join([]string{
+				"Changed application title and related tests.",
+				"Validation: `go test ./...` passed. Local server smoke check passed.",
+				"Failure: Initial `curl` smoke command unavailable; fallback succeeded.",
+				"Error details: `/bin/bash: curl: command not found`",
+			}, "\n")},
+		},
+	}}
+
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
+		t.Fatalf("runCodex() error = %v, want nil for recovered smoke tooling gap", err)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "action=validation_tooling_unavailable") {
+		t.Fatalf("logs missing validation tooling warning:\n%s", strings.Join(logs, "\n"))
+	}
+}
+
 func TestRunCodexAllowsLocalAutomatedTestsValidationGap(t *testing.T) {
 	t.Parallel()
 

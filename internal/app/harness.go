@@ -5851,6 +5851,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	}
 
 	validationUnavailableMarkers := []string{
+		"smoke command unavailable",
 		"could not run automated test suite",
 		"could not run automated tests",
 		"could not run local automated tests",
@@ -5918,6 +5919,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	}
 
 	validationCommandMarkers := []string{
+		"smoke command",
 		"npm run lint",
 		"npm run build",
 		"npm run check",
