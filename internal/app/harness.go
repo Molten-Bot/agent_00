@@ -5913,11 +5913,20 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	if !missingTooling {
 		return false
 	}
+	if strings.Contains(text, "smoke command") {
+		return containsAny(text, []string{
+			"fallback succeeded",
+			"fallback passed",
+			"fallback smoke check succeeded",
+			"fallback smoke check passed",
+		})
+	}
 	if validationUnavailable {
 		return true
 	}
 
 	validationCommandMarkers := []string{
+		"smoke command",
 		"npm run lint",
 		"npm run build",
 		"npm run check",

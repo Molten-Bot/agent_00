@@ -3838,6 +3838,7 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 		`<a class="brand-lockup site-header-home" href="/" aria-label="Agent_00 home" data-site-header-home>`,
 		`id="moltenhub-logo"`,
 		`id="configured-agent-logo"`,
+		`<span class="title site-header-title">Agent_00</span>`,
 		`id="configured-agent-gorilla-subtitle" class="site-header-subtitle">Codex is now a 600LB Gorilla!</span>`,
 		`id="local-conn-item" class="status-item status-item-compact status-item-compact-expandable"`,
 		`id="hub-conn-item" class="status-item status-item-compact status-item-compact-expandable"`,
