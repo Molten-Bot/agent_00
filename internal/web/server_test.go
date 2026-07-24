@@ -249,8 +249,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `window.gtag("config", "G-BY33RFG2WB", { send_page_view: false });`) {
 		t.Fatalf("expected index html to configure google analytics with the moltenhub measurement id")
 	}
-	if !strings.Contains(markup, `<title>Molten Hub Code</title>`) {
-		t.Fatalf("expected index html to set app title to Molten Hub Code")
+	if !strings.Contains(markup, `<title>Molten AI: Agent_00</title>`) {
+		t.Fatalf("expected index html to set app title to Molten AI: Agent_00")
 	}
 	if !strings.Contains(markup, `<meta property="og:image" content="https://app.molten.bot/logo.svg">`) ||
 		!strings.Contains(markup, `<meta name="twitter:image" content="https://app.molten.bot/logo.svg">`) {
