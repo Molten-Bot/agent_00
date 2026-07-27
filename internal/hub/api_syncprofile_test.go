@@ -43,9 +43,9 @@ func TestSyncProfileUsesAgentMetadataPayload(t *testing.T) {
 	client := NewAPIClient(ts.URL + "/v1")
 	cfg := InitConfig{
 		AgentHarness: "codex",
-		Handle:       "moltenhub-code",
+		Handle:       "agent_00",
 		Profile: ProfileConfig{
-			DisplayName: "MoltenHub Code",
+			DisplayName: "agent_00",
 			Emoji:       "🎮",
 			ProfileText: "Automation worker",
 		},
@@ -74,7 +74,7 @@ func TestSyncProfileUsesAgentMetadataPayload(t *testing.T) {
 	if calls[1].Path != "/v1/agents/me/metadata" {
 		t.Fatalf("second path = %q, want /v1/agents/me/metadata", calls[1].Path)
 	}
-	if got := calls[1].Body["handle"]; got != "moltenhub-code" {
+	if got := calls[1].Body["handle"]; got != "agent_00" {
 		t.Fatalf("handle = %#v", got)
 	}
 
@@ -86,7 +86,7 @@ func TestSyncProfileUsesAgentMetadataPayload(t *testing.T) {
 	if !ok {
 		t.Fatalf("metadata has wrong type: %#v", metadataRaw)
 	}
-	if got := metadata["display_name"]; got != "MoltenHub Code" {
+	if got := metadata["display_name"]; got != "agent_00" {
 		t.Fatalf("metadata.display_name = %#v", got)
 	}
 	if got := metadata["emoji"]; got != "🎮" {

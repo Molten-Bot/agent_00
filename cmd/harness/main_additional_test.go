@@ -981,7 +981,7 @@ func TestFailureFollowUpPromptDefaultWhenNoPaths(t *testing.T) {
 	if !strings.Contains(got, `"repos":["git@github.com:Molten-Bot/agent_00.git"],"targetSubdir":".","prompt":"`+failureFollowUpRequiredPrompt+`"`) {
 		t.Fatalf("prompt missing follow-up payload shape: %q", got)
 	}
-	if !strings.Contains(got, "Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix MoltenHub Code failure handling.") {
+	if !strings.Contains(got, "Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix agent_00 failure handling.") {
 		t.Fatalf("prompt missing failure follow-up scope boundary: %q", got)
 	}
 	if !strings.Contains(got, "Only return a no-op when the task is genuinely review/investigation-only") {
@@ -1279,7 +1279,7 @@ func TestLocalNoChangesFailurePayloadIncludesExplicitFailureFields(t *testing.T)
 		RepoResults: []app.RepoResult{
 			{RepoURL: "git@github.com:acme/repo.git", Branch: "moltenhub-build-release"},
 		},
-	}, config.Config{Prompt: "fix underlying MoltenHub Code no-change handling"})
+	}, config.Config{Prompt: "fix underlying agent_00 no-change handling"})
 	if !failed {
 		t.Fatal("localNoChangesFailureResult(no-change follow-up) failed = false, want true")
 	}
@@ -1658,7 +1658,7 @@ func TestUnexpectedNoChangesFollowUpRunConfigTargetsMoltenHubAndAddsContext(t *t
 
 	for _, want := range []string{
 		"Review the previous local task logs first.",
-		"fix the underlying MoltenHub Code application issue in this repository",
+		"fix the underlying agent_00 application issue in this repository",
 		"Treat the original task prompt as failure context only",
 		"Only return a no-op if you can cite concrete repository evidence",
 		expectedLogDir,
@@ -1806,8 +1806,8 @@ func TestEscalatedNoChangesFollowUpRunConfigAddsStricterPrompt(t *testing.T) {
 	}
 	for _, want := range []string{
 		"The original task and the no-changes follow-up both completed without file changes or a pull request.",
-		"fix the underlying MoltenHub Code application issue in this repository",
-		"do not implement that requested product change here unless it is required to fix MoltenHub Code failure handling",
+		"fix the underlying agent_00 application issue in this repository",
+		"do not implement that requested product change here unless it is required to fix agent_00 failure handling",
 		"Do not return another no-op unless you can cite exact file paths",
 		"Observed repeated no-change context:",
 		"- target_subdir=internal/web",

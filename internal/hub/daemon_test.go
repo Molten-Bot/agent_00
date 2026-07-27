@@ -1476,7 +1476,7 @@ func TestHandleDispatchInvokesOnDispatchFailed(t *testing.T) {
 		t.Fatalf("follow-up request_id = %q, want req-fail-failure-review", got)
 	}
 	if got := fmt.Sprint(publishedResults[1]["config"]); !strings.Contains(got, config.DefaultRepositoryURL) {
-		t.Fatalf("follow-up config = %q, want moltenhub-code repo", got)
+		t.Fatalf("follow-up config = %q, want agent_00 repo", got)
 	}
 	if got := len(offlineReasons); got != 1 {
 		t.Fatalf("offline requests = %d, want 1", got)
@@ -1617,7 +1617,7 @@ func TestProcessInboundMessagePublishesAcquireFailurePayload(t *testing.T) {
 		t.Fatalf("follow-up request_id = %q, want req-closed-controller-failure-review", got)
 	}
 	if got := fmt.Sprint(publishedResults[1]["config"]); !strings.Contains(got, config.DefaultRepositoryURL) {
-		t.Fatalf("follow-up config = %q, want moltenhub-code repo", got)
+		t.Fatalf("follow-up config = %q, want agent_00 repo", got)
 	}
 	if got := len(offlineReasons); got != 1 {
 		t.Fatalf("offline requests = %d, want 1", got)
@@ -1737,7 +1737,7 @@ func TestProcessInboundMessageSkipsIgnoredLogForUnknownSkill(t *testing.T) {
 
 	cfg := InitConfig{
 		Skill: SkillConfig{
-			Name:         "moltenhub_code_run",
+			Name:         "code_for_me",
 			DispatchType: "skill_request",
 			ResultType:   "skill_result",
 		},
@@ -1775,7 +1775,7 @@ func TestProcessInboundMessageLogsIgnoredKnownSkill(t *testing.T) {
 
 	cfg := InitConfig{
 		Skill: SkillConfig{
-			Name:         "moltenhub_code_run",
+			Name:         "code_for_me",
 			DispatchType: "skill_request",
 			ResultType:   "skill_result",
 		},
@@ -1839,7 +1839,7 @@ func TestProcessInboundMessageInvokesOnDispatchQueued(t *testing.T) {
 
 	cfg := InitConfig{
 		Skill: SkillConfig{
-			Name:         "moltenhub_code_run",
+			Name:         "code_for_me",
 			DispatchType: "skill_request",
 			ResultType:   "skill_result",
 		},
@@ -1857,7 +1857,7 @@ func TestProcessInboundMessageInvokesOnDispatchQueued(t *testing.T) {
 
 	msg := map[string]any{
 		"type":       "skill_request",
-		"skill":      "moltenhub_code_run",
+		"skill":      "code_for_me",
 		"request_id": "req-queued",
 		"config": map[string]any{
 			"repo":   "git@github.com:acme/repo.git",

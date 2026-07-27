@@ -193,7 +193,7 @@ func sampleConfig() config.Config {
 		Prompt:        "Build API",
 		CommitMessage: "feat: automate api",
 		PRTitle:       "feat: automate api",
-		PRBody:        "Proposed changes from Molten.Bot\n\nThis PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified.\n\nAutomated by MoltenHub Code\n\nOriginal task prompt:\n```text\nBuild API\n```\n\nCurious how this was built? See how AI agents can help with your own projects: [MoltenBot Code](https://molten.bot/code?source=pr)",
+		PRBody:        "Proposed changes from Molten.Bot\n\nThis PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified.\n\nAutomated by agent_00\n\nOriginal task prompt:\n```text\nBuild API\n```\n\nCurious how this was built? See how AI agents can help with your own projects: [agent_00](https://molten.bot/code?source=pr)",
 		Labels:        []string{"automation", ""},
 		Reviewers:     []string{"octocat", ""},
 	}
@@ -259,7 +259,7 @@ func testWorkspaceManager(guid string) workspace.Manager {
 }
 
 func testRunDir(guid string) string {
-	return filepath.Join("/tmp", "moltenhub-code", "tasks", guid)
+	return filepath.Join("/tmp", "agent_00", "tasks", guid)
 }
 
 func TestRunHappyPathCreatesPR(t *testing.T) {
@@ -947,7 +947,7 @@ func TestRunBuildsReviewContextBeforeInvokingCodex(t *testing.T) {
 
 	cfg := sampleConfig()
 	cfg.Prompt = "Review the pull request"
-	cfg.PRBody = "Proposed changes from Molten.Bot\n\nThis PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified.\n\nAutomated by MoltenHub Code\n\nOriginal task prompt:\n```text\nReview the pull request\n```\n\nCurious how this was built? See how AI agents can help with your own projects: [MoltenBot Code](https://molten.bot/code?source=pr)"
+	cfg.PRBody = "Proposed changes from Molten.Bot\n\nThis PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified.\n\nAutomated by agent_00\n\nOriginal task prompt:\n```text\nReview the pull request\n```\n\nCurious how this was built? See how AI agents can help with your own projects: [agent_00](https://molten.bot/code?source=pr)"
 	cfg.Review = &config.ReviewConfig{PRNumber: 42}
 
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
@@ -1012,7 +1012,7 @@ func TestRunBuildsReviewContextFromHeadBranchSelector(t *testing.T) {
 
 	cfg := sampleConfig()
 	cfg.Prompt = "Review the pull request"
-	cfg.PRBody = "Proposed changes from Molten.Bot\n\nThis PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified.\n\nAutomated by MoltenHub Code\n\nOriginal task prompt:\n```text\nReview the pull request\n```\n\nCurious how this was built? See how AI agents can help with your own projects: [MoltenBot Code](https://molten.bot/code?source=pr)"
+	cfg.PRBody = "Proposed changes from Molten.Bot\n\nThis PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified.\n\nAutomated by agent_00\n\nOriginal task prompt:\n```text\nReview the pull request\n```\n\nCurious how this was built? See how AI agents can help with your own projects: [agent_00](https://molten.bot/code?source=pr)"
 	cfg.Review = &config.ReviewConfig{HeadBranch: "feature/improve-tests", AutoMerge: true, MergeMethod: "squash"}
 
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
@@ -2677,8 +2677,8 @@ func TestRunNoChangesFollowUpWithoutConcreteEvidenceFails(t *testing.T) {
 	cfg := sampleConfig()
 	cfg.Prompt = strings.Join([]string{
 		"Review the previous local task logs first.",
-		"Identify every root cause behind the no-change result, fix the underlying MoltenHub Code application issue in this repository, validate locally where possible, and summarize the verified results.",
-		"Only return a no-op if you can cite concrete repository evidence that no MoltenHub Code change is required; otherwise produce the smallest correct diff or return an explicit failure with blocker details.",
+		"Identify every root cause behind the no-change result, fix the underlying agent_00 application issue in this repository, validate locally where possible, and summarize the verified results.",
+		"Only return a no-op if you can cite concrete repository evidence that no agent_00 change is required; otherwise produce the smallest correct diff or return an explicit failure with blocker details.",
 	}, " ")
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	guid := "abcdef123456"
@@ -2721,7 +2721,7 @@ func TestRunNoChangesFollowUpWithoutConcreteEvidenceFails(t *testing.T) {
 	if res.NoChanges {
 		t.Fatal("NoChanges = true, want false")
 	}
-	if !strings.Contains(res.Err.Error(), "no concrete MoltenHub Code evidence") {
+	if !strings.Contains(res.Err.Error(), "no concrete agent_00 evidence") {
 		t.Fatalf("Run() err = %v, want concrete evidence detail", res.Err)
 	}
 	if len(fake.exps) != 0 {
@@ -2735,8 +2735,8 @@ func TestRunNoChangesFollowUpWithConcreteEvidenceAllowsNoChanges(t *testing.T) {
 	cfg := sampleConfig()
 	cfg.Prompt = strings.Join([]string{
 		"Review the previous local task logs first.",
-		"Identify every root cause behind the no-change result, fix the underlying MoltenHub Code application issue in this repository, validate locally where possible, and summarize the verified results.",
-		"Only return a no-op if you can cite concrete repository evidence that no MoltenHub Code change is required; otherwise produce the smallest correct diff or return an explicit failure with blocker details.",
+		"Identify every root cause behind the no-change result, fix the underlying agent_00 application issue in this repository, validate locally where possible, and summarize the verified results.",
+		"Only return a no-op if you can cite concrete repository evidence that no agent_00 change is required; otherwise produce the smallest correct diff or return an explicit failure with blocker details.",
 	}, " ")
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	guid := "abcdef123456"
@@ -2851,8 +2851,8 @@ func TestRunNoChangesFollowUpWithOnlyOriginalRepoEvidenceFails(t *testing.T) {
 	cfg := sampleConfig()
 	cfg.Prompt = strings.Join([]string{
 		"Review the previous local task logs first.",
-		"Identify every root cause behind the no-change result, fix the underlying MoltenHub Code application issue in this repository, validate locally where possible, and summarize the verified results.",
-		"Only return a no-op if you can cite concrete repository evidence that no MoltenHub Code change is required; otherwise produce the smallest correct diff or return an explicit failure with blocker details.",
+		"Identify every root cause behind the no-change result, fix the underlying agent_00 application issue in this repository, validate locally where possible, and summarize the verified results.",
+		"Only return a no-op if you can cite concrete repository evidence that no agent_00 change is required; otherwise produce the smallest correct diff or return an explicit failure with blocker details.",
 	}, " ")
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	guid := "abcdef123456"
@@ -2875,8 +2875,8 @@ func TestRunNoChangesFollowUpWithOnlyOriginalRepoEvidenceFails(t *testing.T) {
 			res: execx.Result{Stdout: strings.Join([]string{
 				"No code change. Request already satisfied.",
 				"Evidence:",
-				"- [index.html](/workspace/moltenhub-code/tasks/original/repo/index.html:9): SEO description set.",
-				"- [src/pageTitle.js](/workspace/moltenhub-code/tasks/original/repo/src/pageTitle.js:1): shared runtime metadata constants set.",
+				"- [index.html](/workspace/agent_00/tasks/original/repo/index.html:9): SEO description set.",
+				"- [src/pageTitle.js](/workspace/agent_00/tasks/original/repo/src/pageTitle.js:1): shared runtime metadata constants set.",
 				"Git diff empty. Only untracked `.moltenhub-agents-3149905286.md` exists from harness instructions.",
 			}, "\n")},
 		},
@@ -2898,8 +2898,8 @@ func TestRunNoChangesFollowUpWithOnlyOriginalRepoEvidenceFails(t *testing.T) {
 	if res.NoChanges {
 		t.Fatal("NoChanges = true, want false")
 	}
-	if !strings.Contains(res.Err.Error(), "no concrete MoltenHub Code evidence") {
-		t.Fatalf("Run() err = %v, want concrete MoltenHub Code evidence detail", res.Err)
+	if !strings.Contains(res.Err.Error(), "no concrete agent_00 evidence") {
+		t.Fatalf("Run() err = %v, want concrete agent_00 evidence detail", res.Err)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
@@ -5507,7 +5507,7 @@ func TestCommandBuilders(t *testing.T) {
 	initMain := initializeMainBranchCommitCommand(repoDir)
 	wantInitMain := []string{
 		"-c",
-		"user.name=MoltenHub Code",
+		"user.name=agent_00",
 		"-c",
 		"user.email=bot@molten.bot",
 		"commit",
@@ -6003,7 +6003,7 @@ func TestPRCreateCommandsEnforceStandardBodyFormat(t *testing.T) {
 		"This PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified.",
 		"Hardened auth retry flow and fixed flaky assertions.",
 		"Original task prompt:\n```text\nInvestigate failing checks\n```",
-		"Curious how this was built? See how AI agents can help with your own projects: [MoltenBot Code](https://molten.bot/code?source=pr)",
+		"Curious how this was built? See how AI agents can help with your own projects: [agent_00](https://molten.bot/code?source=pr)",
 	}
 	for _, item := range required {
 		if !strings.Contains(body, item) {
@@ -6182,7 +6182,7 @@ func TestRunNoChangesRecordsConcreteNoChangeEvidence(t *testing.T) {
 			cmd: runtimeCmd,
 			res: execx.Result{Stdout: strings.Join([]string{
 				"No repository changes required.",
-				"MoltenHub Code evidence: internal/app/harness.go already rejects failure/no-changes follow-up no-ops without concrete evidence.",
+				"agent_00 evidence: internal/app/harness.go already rejects failure/no-changes follow-up no-ops without concrete evidence.",
 			}, "\n")},
 		},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: ""}},

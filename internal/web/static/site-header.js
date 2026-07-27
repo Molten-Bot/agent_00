@@ -117,7 +117,7 @@
   function headerTemplate() {
     return `
       <header class="header site-header">
-        <a class="brand-lockup site-header-home" href="/" aria-label="Molten Hub Code home" data-site-header-home>
+        <a class="brand-lockup site-header-home" href="/" aria-label="agent_00 home" data-site-header-home>
           <span class="brand-logo-group">
             <img
               id="moltenhub-logo"
@@ -131,7 +131,7 @@
               alt="Codex logo">
           </span>
           <span class="site-header-copy">
-            <span class="title site-header-title">Molten Hub Code</span>
+            <span class="title site-header-title">agent_00</span>
             <span id="configured-agent-gorilla-subtitle" class="site-header-subtitle">Codex is now a 600LB Gorilla!</span>
           </span>
         </a>
@@ -205,7 +205,7 @@
     return `<nav class="site-page-nav" aria-label="Primary">${links}</nav>`;
   }
 
-  class MoltenHubCodeHeader extends HTMLElement {
+  class Agent00Header extends HTMLElement {
     constructor() {
       super();
       this.logoRotationTimer = null;
@@ -523,7 +523,7 @@
     }
   }
 
-  class MoltenHubCodeNav extends HTMLElement {
+  class Agent00Nav extends HTMLElement {
     connectedCallback() {
       const activePath = this.getAttribute("active-path") || window.location.pathname || "/";
       this.innerHTML = navTemplate(activePath);
@@ -532,18 +532,18 @@
 
   applyPersistedTheme();
 
-  if (!customElements.get("moltenhub-code-header")) {
-    customElements.define("moltenhub-code-header", MoltenHubCodeHeader);
+  if (!customElements.get("agent-00-header")) {
+    customElements.define("agent-00-header", Agent00Header);
   }
-  if (!customElements.get("moltenhub-code-nav")) {
-    customElements.define("moltenhub-code-nav", MoltenHubCodeNav);
+  if (!customElements.get("agent-00-nav")) {
+    customElements.define("agent-00-nav", Agent00Nav);
   }
 
   let connectionStatusStream = null;
   let connectionStatusStarted = false;
 
   function updateResourceMetrics(snapshot) {
-    document.querySelectorAll("moltenhub-code-header").forEach((header) => {
+    document.querySelectorAll("agent-00-header").forEach((header) => {
       if (typeof header.updateResourceMetrics === "function") {
         header.updateResourceMetrics(snapshot);
       }
@@ -559,7 +559,7 @@
   }
 
   function updateLocalConnection(online, text) {
-    document.querySelectorAll("moltenhub-code-header").forEach((header) => {
+    document.querySelectorAll("agent-00-header").forEach((header) => {
       if (typeof header.updateLocalConnection === "function") {
         header.updateLocalConnection(online, text);
       }
@@ -567,7 +567,7 @@
   }
 
   function updateConnectionStatus(snapshot, options = {}) {
-    document.querySelectorAll("moltenhub-code-header").forEach((header) => {
+    document.querySelectorAll("agent-00-header").forEach((header) => {
       if (typeof header.updateConnectionStatus === "function") {
         header.updateConnectionStatus(snapshot, options);
       }
@@ -575,7 +575,7 @@
   }
 
   function updateSpeechConnection(connected, text = "") {
-    document.querySelectorAll("moltenhub-code-header").forEach((header) => {
+    document.querySelectorAll("agent-00-header").forEach((header) => {
       if (typeof header.updateSpeechConnection === "function") {
         header.updateSpeechConnection(connected, text);
       }
@@ -649,7 +649,7 @@
 
   window.MoltenHubHeader = {
     update(config = {}, auth = {}) {
-      document.querySelectorAll("moltenhub-code-header").forEach((header) => {
+      document.querySelectorAll("agent-00-header").forEach((header) => {
         if (typeof header.update === "function") {
           header.update(config, auth);
         }

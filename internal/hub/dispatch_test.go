@@ -10,7 +10,7 @@ func TestParseSkillDispatchFromPayloadConfig(t *testing.T) {
 
 	msg := map[string]any{
 		"type":       "skill_request",
-		"skill":      "moltenhub_code_run",
+		"skill":      "code_for_me",
 		"request_id": "req-1",
 		"message_id": "hub-task-1",
 		"from":       "agent-alpha",
@@ -24,7 +24,7 @@ func TestParseSkillDispatchFromPayloadConfig(t *testing.T) {
 		},
 	}
 
-	dispatch, matched, err := ParseSkillDispatch(msg, "skill_request", "moltenhub_code_run")
+	dispatch, matched, err := ParseSkillDispatch(msg, "skill_request", "code_for_me")
 	if err != nil {
 		t.Fatalf("ParseSkillDispatch() error = %v", err)
 	}
@@ -53,7 +53,7 @@ func TestParseSkillDispatchFromPayloadConfigWithReposArray(t *testing.T) {
 
 	msg := map[string]any{
 		"type":       "skill_request",
-		"skill":      "moltenhub_code_run",
+		"skill":      "code_for_me",
 		"request_id": "req-multi",
 		"payload": map[string]any{
 			"config": map[string]any{
@@ -66,7 +66,7 @@ func TestParseSkillDispatchFromPayloadConfigWithReposArray(t *testing.T) {
 		},
 	}
 
-	dispatch, matched, err := ParseSkillDispatch(msg, "skill_request", "moltenhub_code_run")
+	dispatch, matched, err := ParseSkillDispatch(msg, "skill_request", "code_for_me")
 	if err != nil {
 		t.Fatalf("ParseSkillDispatch() error = %v", err)
 	}
@@ -93,7 +93,7 @@ func TestParseSkillDispatchIgnoresDifferentSkill(t *testing.T) {
 		},
 	}
 
-	_, matched, err := ParseSkillDispatch(msg, "skill_request", "moltenhub_code_run")
+	_, matched, err := ParseSkillDispatch(msg, "skill_request", "code_for_me")
 	if err != nil {
 		t.Fatalf("ParseSkillDispatch() error = %v", err)
 	}
@@ -107,11 +107,11 @@ func TestParseSkillDispatchMissingPayloadIsValidationError(t *testing.T) {
 
 	msg := map[string]any{
 		"type":       "skill_request",
-		"skill":      "moltenhub_code_run",
+		"skill":      "code_for_me",
 		"request_id": "req-2",
 	}
 
-	dispatch, matched, err := ParseSkillDispatch(msg, "skill_request", "moltenhub_code_run")
+	dispatch, matched, err := ParseSkillDispatch(msg, "skill_request", "code_for_me")
 	if !matched {
 		t.Fatal("matched = false, want true")
 	}
@@ -128,7 +128,7 @@ func TestParseSkillDispatchWrongTypeIsValidationError(t *testing.T) {
 
 	msg := map[string]any{
 		"type":       "not_skill_request",
-		"skill":      "moltenhub_code_run",
+		"skill":      "code_for_me",
 		"request_id": "req-3",
 		"config": map[string]any{
 			"repo":   "git@github.com:acme/repo.git",
@@ -136,7 +136,7 @@ func TestParseSkillDispatchWrongTypeIsValidationError(t *testing.T) {
 		},
 	}
 
-	dispatch, matched, err := ParseSkillDispatch(msg, "skill_request", "moltenhub_code_run")
+	dispatch, matched, err := ParseSkillDispatch(msg, "skill_request", "code_for_me")
 	if !matched {
 		t.Fatal("matched = false, want true")
 	}
@@ -156,11 +156,11 @@ func TestParseSkillDispatchRequiresInlineConfigObject(t *testing.T) {
 
 	msg := map[string]any{
 		"type":   "skill_request",
-		"skill":  "moltenhub_code_run",
+		"skill":  "code_for_me",
 		"config": "/tmp/run.json",
 	}
 
-	_, matched, err := ParseSkillDispatch(msg, "skill_request", "moltenhub_code_run")
+	_, matched, err := ParseSkillDispatch(msg, "skill_request", "code_for_me")
 	if !matched {
 		t.Fatal("matched = false, want true")
 	}
@@ -318,7 +318,7 @@ func TestParseSkillDispatchAcceptsRuntimeTextMessageRunConfig(t *testing.T) {
 	}
 }
 
-func TestParseSkillDispatchMatchesLegacyCurrentAndRenamedSkillAliases(t *testing.T) {
+func TestParseSkillDispatchMatchesLegacySkillAlias(t *testing.T) {
 	t.Parallel()
 
 	msgCurrent := map[string]any{
@@ -351,27 +351,6 @@ func TestParseSkillDispatchMatchesLegacyCurrentAndRenamedSkillAliases(t *testing
 		t.Fatal("matched = false for legacy->current alias")
 	}
 
-	msgRenamed := map[string]any{
-		"type":  "skill_request",
-		"skill": "moltenhub_code_run",
-		"config": map[string]any{
-			"repo":   "git@github.com:acme/repo.git",
-			"prompt": "x",
-		},
-	}
-
-	if _, matched, err := ParseSkillDispatch(msgCurrent, "skill_request", "moltenhub_code_run"); err != nil {
-		t.Fatalf("ParseSkillDispatch() current->renamed error = %v", err)
-	} else if !matched {
-		t.Fatal("matched = false for current->renamed alias")
-	}
-
-	if _, matched, err := ParseSkillDispatch(msgRenamed, "skill_request", "code_for_me"); err != nil {
-		t.Fatalf("ParseSkillDispatch() renamed->current error = %v", err)
-	} else if !matched {
-		t.Fatal("matched = false for renamed->current alias")
-	}
-
 	msgCodeReview := map[string]any{
 		"type":  "skill_request",
 		"skill": "code_review",
@@ -401,7 +380,7 @@ func TestParseSkillDispatchIgnoresUnknownConfigFields(t *testing.T) {
 
 	msg := map[string]any{
 		"type":  "skill_request",
-		"skill": "moltenhub_code_run",
+		"skill": "code_for_me",
 		"config": map[string]any{
 			"repo":        "git@github.com:acme/repo.git",
 			"prompt":      "make change",
@@ -409,7 +388,7 @@ func TestParseSkillDispatchIgnoresUnknownConfigFields(t *testing.T) {
 		},
 	}
 
-	_, matched, err := ParseSkillDispatch(msg, "skill_request", "moltenhub_code_run")
+	_, matched, err := ParseSkillDispatch(msg, "skill_request", "code_for_me")
 	if !matched {
 		t.Fatal("matched = false, want true")
 	}

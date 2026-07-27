@@ -66,7 +66,7 @@ const (
 	maxReviewCommentsChars           = 16000
 	maxReviewDiffStatChars           = 12000
 	maxReviewDiffPatchChars          = 30000
-	bootstrapGitUserName             = "MoltenHub Code"
+	bootstrapGitUserName             = "agent_00"
 	bootstrapGitUserEmail            = "bot@molten.bot"
 	bootstrapMainCommitMessage       = "chore: initialize main branch"
 	moltenbotCoAuthorTrailer         = "Co-authored-by: Molten Bot 000 <260473928+moltenbot000@users.noreply.github.com>"
@@ -463,11 +463,11 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 				runDir,
 			)
 		}
-		if requiresConcreteNoChangeEvidence(cfg.Prompt) && !agentOutputCitesMoltenHubCodeNoChangeEvidence(agentRes) {
+		if requiresConcreteNoChangeEvidence(cfg.Prompt) && !agentOutputCitesAgent00NoChangeEvidence(agentRes) {
 			return h.fail(
 				ExitCodex,
 				agentStage,
-				fmt.Errorf("%s completed a failure/no-changes follow-up with no repository changes and no concrete MoltenHub Code evidence for a no-op", agentStage),
+				fmt.Errorf("%s completed a failure/no-changes follow-up with no repository changes and no concrete agent_00 evidence for a no-op", agentStage),
 				runDir,
 			)
 		}
@@ -4893,22 +4893,22 @@ func isMoltenHubFailureFollowUpConfig(cfg config.Config) bool {
 		return false
 	}
 	for _, repoURL := range cfg.RepoList() {
-		if isMoltenHubCodeRepository(repoURL) {
+		if isAgent00Repository(repoURL) {
 			return true
 		}
 	}
 	return false
 }
 
-func isMoltenHubCodeRepository(repoURL string) bool {
+func isAgent00Repository(repoURL string) bool {
 	ref, ok := parseGitHubRepoRef(repoURL)
 	if !ok {
 		return false
 	}
-	return strings.EqualFold(ref.owner, config.DefaultRepositoryOwner) && isMoltenHubCodeRepositoryName(ref.name)
+	return strings.EqualFold(ref.owner, config.DefaultRepositoryOwner) && isAgent00RepositoryName(ref.name)
 }
 
-func isMoltenHubCodeRepositoryName(name string) bool {
+func isAgent00RepositoryName(name string) bool {
 	return strings.EqualFold(name, config.DefaultRepositoryName) ||
 		strings.EqualFold(name, "moltenhub-code")
 }
@@ -5026,12 +5026,12 @@ func repoOwnerFallbackURL(repoURL string, ownerHints []string) (string, bool) {
 	defaultRef, hasDefaultRef := parseGitHubRepoRef(config.DefaultRepositoryURL)
 	for _, owner := range ownerHints {
 		name := ref.name
-		if hasDefaultRef && strings.EqualFold(owner, defaultRef.owner) && isMoltenHubCodeRepositoryName(ref.name) {
+		if hasDefaultRef && strings.EqualFold(owner, defaultRef.owner) && isAgent00RepositoryName(ref.name) {
 			name = defaultRef.name
 		}
 		appendCandidate(owner, name)
 	}
-	if hasDefaultRef && isMoltenHubCodeRepositoryName(ref.name) {
+	if hasDefaultRef && isAgent00RepositoryName(ref.name) {
 		appendCandidate(defaultRef.owner, defaultRef.name)
 	}
 
@@ -5195,7 +5195,7 @@ func requiresConcreteNoChangeEvidence(prompt string) bool {
 	if text == "" {
 		return false
 	}
-	return strings.Contains(text, "fix the underlying moltenhub code application issue") &&
+	return strings.Contains(text, "fix the underlying agent_00 application issue") &&
 		strings.Contains(text, "only return a no-op") &&
 		(strings.Contains(text, "no-change") || strings.Contains(text, "failed task"))
 }
@@ -5223,12 +5223,12 @@ func pullRequestURLFromPrompt(prompt string) string {
 
 func agentOutputCitesConcreteNoChangeEvidence(res execx.Result, prompt string) bool {
 	if requiresConcreteNoChangeEvidence(prompt) {
-		return agentOutputCitesMoltenHubCodeNoChangeEvidence(res)
+		return agentOutputCitesAgent00NoChangeEvidence(res)
 	}
 	return agentOutputCitesGeneralNoChangeEvidence(res)
 }
 
-func agentOutputCitesMoltenHubCodeNoChangeEvidence(res execx.Result) bool {
+func agentOutputCitesAgent00NoChangeEvidence(res execx.Result) bool {
 	text := strings.ToLower(strings.TrimSpace(res.Stdout))
 	if !agentOutputHasNoChangeClaim(text) {
 		return false

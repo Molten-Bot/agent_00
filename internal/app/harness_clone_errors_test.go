@@ -222,7 +222,7 @@ func TestGitHubRepoRefWithHTTPSOwner(t *testing.T) {
 	}
 }
 
-func TestIsMoltenHubCodeRepositorySupportsRenamedAndLegacyURLs(t *testing.T) {
+func TestIsAgent00RepositorySupportsRenamedAndLegacyURLs(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -242,8 +242,8 @@ func TestIsMoltenHubCodeRepositorySupportsRenamedAndLegacyURLs(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := isMoltenHubCodeRepository(tt.repoURL); got != tt.want {
-				t.Fatalf("isMoltenHubCodeRepository(%q) = %v, want %v", tt.repoURL, got, tt.want)
+			if got := isAgent00Repository(tt.repoURL); got != tt.want {
+				t.Fatalf("isAgent00Repository(%q) = %v, want %v", tt.repoURL, got, tt.want)
 			}
 		})
 	}

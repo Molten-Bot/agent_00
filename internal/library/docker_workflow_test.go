@@ -173,7 +173,7 @@ func TestGoReleaserPublishesHarnessArtifactsToGitHubRelease(t *testing.T) {
 	content := string(data)
 	for _, want := range []string{
 		"version: 2",
-		"project_name: moltenhub-code",
+		"project_name: agent_00",
 		"main: ./cmd/harness",
 		"binary: harness",
 		"CGO_ENABLED=0",

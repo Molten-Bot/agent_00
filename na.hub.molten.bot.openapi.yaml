@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Molten Hub API
   version: "1.0"
-  description: Offline contract snapshot for Molten Hub Code runtime integration.
+  description: Offline contract snapshot for agent_00 runtime integration.
 servers:
   - url: https://na.hub.molten.bot/v1
 paths:

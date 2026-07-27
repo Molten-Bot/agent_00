@@ -60,7 +60,7 @@ func useSuccessfulGitHubStarTestServer(t *testing.T) {
 		if got, want := r.Method, http.MethodPut; got != want {
 			t.Fatalf("star method = %q, want %q", got, want)
 		}
-		if got, want := r.URL.Path, moltenHubCodeStarPath; got != want {
+		if got, want := r.URL.Path, agent00StarPath; got != want {
 			t.Fatalf("star path = %q, want %q", got, want)
 		}
 		if got := r.Header.Get("Authorization"); !strings.HasPrefix(got, "Bearer ") {
@@ -70,11 +70,11 @@ func useSuccessfulGitHubStarTestServer(t *testing.T) {
 	})
 }
 
-func TestMoltenHubCodeStarPathUsesRenamedRepository(t *testing.T) {
+func TestAgent00StarPathUsesRenamedRepository(t *testing.T) {
 	t.Parallel()
 
-	if got, want := moltenHubCodeStarPath, "/user/starred/Molten-Bot/agent_00"; got != want {
-		t.Fatalf("moltenHubCodeStarPath = %q, want %q", got, want)
+	if got, want := agent00StarPath, "/user/starred/Molten-Bot/agent_00"; got != want {
+		t.Fatalf("agent00StarPath = %q, want %q", got, want)
 	}
 }
 
@@ -389,7 +389,7 @@ func TestValidateGitHubTokenUsesLegacyCompatibleStatusCommand(t *testing.T) {
 	}
 }
 
-func TestConfigureGitHubTokenStarsMoltenHubCodeBeforePersisting(t *testing.T) {
+func TestConfigureGitHubTokenStarsAgent00BeforePersisting(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 
@@ -400,7 +400,7 @@ func TestConfigureGitHubTokenStarsMoltenHubCodeBeforePersisting(t *testing.T) {
 		if got, want := r.Method, http.MethodPut; got != want {
 			t.Fatalf("star method = %q, want %q", got, want)
 		}
-		if got, want := r.URL.Path, moltenHubCodeStarPath; got != want {
+		if got, want := r.URL.Path, agent00StarPath; got != want {
 			t.Fatalf("star path = %q, want %q", got, want)
 		}
 		if got, want := r.Header.Get("Authorization"), "Bearer "+githubToken; got != want {

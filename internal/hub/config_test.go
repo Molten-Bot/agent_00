@@ -243,7 +243,7 @@ func TestValidateRejectsUnsupportedBaseURLScheme(t *testing.T) {
 		BindToken:  "token",
 		SessionKey: "main",
 		Skill: SkillConfig{
-			Name:         "moltenhub_code_run",
+			Name:         "code_for_me",
 			DispatchType: "skill_request",
 			ResultType:   "skill_result",
 		},
@@ -262,7 +262,7 @@ func TestLoadInitAllowsAgentTokenWithoutBindToken(t *testing.T) {
 	data := `{
   "agent_token": "agent_live_token",
   "skill": {
-    "name": "moltenhub_code_run"
+    "name": "code_for_me"
   },
   "dispatcher": {
     "max_parallel": 4
@@ -293,7 +293,7 @@ func TestValidateRejectsInvalidDispatcherThresholds(t *testing.T) {
 		BindToken:  "token",
 		SessionKey: "main",
 		Skill: SkillConfig{
-			Name:         "moltenhub_code_run",
+			Name:         "code_for_me",
 			DispatchType: "skill_request",
 			ResultType:   "skill_result",
 		},

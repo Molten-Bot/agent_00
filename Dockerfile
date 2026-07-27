@@ -56,7 +56,7 @@ RUN apt-get update \
     && playwright install --with-deps chromium \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/* /tmp/* \
-    && mkdir -p /workspace/config/home /workspace/moltenhub-code/tasks \
+    && mkdir -p /workspace/config/home /workspace/agent_00/tasks \
     && chown -R node:node /workspace /opt/ms-playwright
 WORKDIR /workspace
 

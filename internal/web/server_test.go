@@ -249,8 +249,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `window.gtag("config", "G-BY33RFG2WB", { send_page_view: false });`) {
 		t.Fatalf("expected index html to configure google analytics with the moltenhub measurement id")
 	}
-	if !strings.Contains(markup, `<title>Molten Hub Code</title>`) {
-		t.Fatalf("expected index html to set app title to Molten Hub Code")
+	if !strings.Contains(markup, `<title>agent_00</title>`) {
+		t.Fatalf("expected index html to set app title to agent_00")
 	}
 	if !strings.Contains(markup, `<meta property="og:image" content="https://app.molten.bot/logo.svg">`) ||
 		!strings.Contains(markup, `<meta name="twitter:image" content="https://app.molten.bot/logo.svg">`) {
@@ -371,7 +371,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `if (appDisplayLinkDisabled(link)) {`) {
 		t.Fatalf("expected dashboard dock link to stay disabled until the first task starts")
 	}
-	if !strings.Contains(markup, `<moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>`) {
+	if !strings.Contains(markup, `<agent-00-header agent-harness="codex" agent-label="Codex"></agent-00-header>`) {
 		t.Fatalf("expected index html to render app heading through the shared site header")
 	}
 	if !strings.Contains(markup, `Current Work</span>`) {
@@ -435,7 +435,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `src="/static/site-header.js"`) {
 		t.Fatalf("expected index html to load the shared site header component")
 	}
-	if !strings.Contains(markup, `<moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>`) {
+	if !strings.Contains(markup, `<agent-00-header agent-harness="codex" agent-label="Codex"></agent-00-header>`) {
 		t.Fatalf("expected index html to render the shared site header component")
 	}
 	if strings.Contains(markup, `id="moltenhub-logo"`) || strings.Contains(markup, `id="configured-agent-logo"`) {
@@ -2944,11 +2944,11 @@ func TestHandlerServesChatView(t *testing.T) {
 
 	markup := resp.Body.String()
 	required := []string{
-		`<title>Molten Hub Code Chat</title>`,
+		`<title>agent_00 Chat</title>`,
 		`src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"`,
 		`window.gtag("config", "G-BY33RFG2WB");`,
 		`src="/static/site-header.js"`,
-		`<moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>`,
+		`<agent-00-header agent-harness="codex" agent-label="Codex"></agent-00-header>`,
 		`class="page-bottom-dock"`,
 		`data-app-display="chat"`,
 		`class="panel-section-title chat-title-github-logo" aria-hidden="true"`,
@@ -3351,8 +3351,8 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	if !strings.Contains(css, ".hub-emoji-picker-panel") || !strings.Contains(css, ".hub-emoji-picker-mart") {
 		t.Fatalf("expected stylesheet to include emoji picker styles")
 	}
-	if !strings.Contains(css, "moltenhub-code-header {\n  display: block;") ||
-		!strings.Contains(css, "moltenhub-code-nav {\n  display: block;") ||
+	if !strings.Contains(css, "agent-00-header {\n  display: block;") ||
+		!strings.Contains(css, "agent-00-nav {\n  display: block;") ||
 		!strings.Contains(css, ".site-page-footer {") {
 		t.Fatalf("expected stylesheet to include shared site page shell styles")
 	}
@@ -3835,15 +3835,15 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 
 	script := resp.Body.String()
 	required := []string{
-		`customElements.define("moltenhub-code-header", MoltenHubCodeHeader);`,
-		`customElements.define("moltenhub-code-nav", MoltenHubCodeNav);`,
+		`customElements.define("agent-00-header", Agent00Header);`,
+		`customElements.define("agent-00-nav", Agent00Nav);`,
 		`const NAV_ITEMS = Object.freeze([`,
 		`{ href: "/", label: "Home" },`,
 		"return `<nav class=\"site-page-nav\" aria-label=\"Primary\">${links}</nav>`;",
 		`const LOGO_ROTATION_INTERVAL_MS = 8_000;`,
 		`localStorage.getItem(THEME_KEY)`,
 		`<header class="header site-header">`,
-		`<a class="brand-lockup site-header-home" href="/" aria-label="Molten Hub Code home" data-site-header-home>`,
+		`<a class="brand-lockup site-header-home" href="/" aria-label="agent_00 home" data-site-header-home>`,
 		`id="moltenhub-logo"`,
 		`id="configured-agent-logo"`,
 		`id="configured-agent-gorilla-subtitle" class="site-header-subtitle">Codex is now a 600LB Gorilla!</span>`,

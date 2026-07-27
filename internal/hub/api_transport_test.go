@@ -28,7 +28,7 @@ func TestPullRuntimeMessageParsesResult(t *testing.T) {
 			t.Fatalf("timeout_ms = %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"result":{"delivery_id":"d1","envelope":{"message":{"type":"skill_request","skill":"moltenhub_code_run","config":{"repo":"git@github.com:acme/repo.git","prompt":"x"}}}}}`))
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"delivery_id":"d1","envelope":{"message":{"type":"skill_request","skill":"code_for_me","config":{"repo":"git@github.com:acme/repo.git","prompt":"x"}}}}}`))
 	}))
 	defer ts.Close()
 
@@ -43,7 +43,7 @@ func TestPullRuntimeMessageParsesResult(t *testing.T) {
 	if pulled.DeliveryID != "d1" {
 		t.Fatalf("DeliveryID = %q", pulled.DeliveryID)
 	}
-	if got := pulled.Message["skill"]; got != "moltenhub_code_run" {
+	if got := pulled.Message["skill"]; got != "code_for_me" {
 		t.Fatalf("message.skill = %#v", got)
 	}
 }
@@ -1098,7 +1098,7 @@ func TestRecordGitHubTaskCompleteActivityMergesExistingMetadata(t *testing.T) {
 		case "/v1/agents/me":
 			calls = append(calls, captured{Method: r.Method, Path: r.URL.Path})
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"agent":{"metadata":{"display_name":"MoltenHub Code","activities":["started"],"visibility":"public"}}}}`))
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"agent":{"metadata":{"display_name":"agent_00","activities":["started"],"visibility":"public"}}}}`))
 		case "/v1/agents/me/metadata":
 			data, _ := io.ReadAll(r.Body)
 			var body map[string]any
@@ -1134,7 +1134,7 @@ func TestRecordGitHubTaskCompleteActivityMergesExistingMetadata(t *testing.T) {
 	if meta == nil {
 		t.Fatalf("metadata wrapper missing: %#v", calls[2].Body)
 	}
-	if got := meta["display_name"]; got != "MoltenHub Code" {
+	if got := meta["display_name"]; got != "agent_00" {
 		t.Fatalf("display_name = %#v", got)
 	}
 	if got := meta["visibility"]; got != "public" {
@@ -1212,7 +1212,7 @@ func TestRecordActivityMergesExistingMetadata(t *testing.T) {
 		case "/v1/agents/me":
 			calls = append(calls, captured{Method: r.Method, Path: r.URL.Path})
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"agent":{"metadata":{"display_name":"MoltenHub Code","activities":["started"],"visibility":"public"}}}}`))
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"agent":{"metadata":{"display_name":"agent_00","activities":["started"],"visibility":"public"}}}}`))
 		case "/v1/agents/me/metadata":
 			data, _ := io.ReadAll(r.Body)
 			var body map[string]any
@@ -1290,7 +1290,7 @@ func TestRecordCodingActivityRunningMergesExistingMetadata(t *testing.T) {
 		case "/v1/agents/me":
 			calls = append(calls, captured{Method: r.Method, Path: r.URL.Path})
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"agent":{"metadata":{"display_name":"MoltenHub Code","activities":["started"],"visibility":"public"}}}}`))
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"agent":{"metadata":{"display_name":"agent_00","activities":["started"],"visibility":"public"}}}}`))
 		case "/v1/agents/me/metadata":
 			data, _ := io.ReadAll(r.Body)
 			var body map[string]any
@@ -1326,7 +1326,7 @@ func TestRecordCodingActivityRunningMergesExistingMetadata(t *testing.T) {
 	if meta == nil {
 		t.Fatalf("metadata wrapper missing: %#v", calls[2].Body)
 	}
-	if got := meta["display_name"]; got != "MoltenHub Code" {
+	if got := meta["display_name"]; got != "agent_00" {
 		t.Fatalf("display_name = %#v", got)
 	}
 	if got := meta["visibility"]; got != "public" {

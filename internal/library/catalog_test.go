@@ -394,12 +394,12 @@ func TestDecodeTaskDefinitionBuildsPRTitleFromDisplayName(t *testing.T) {
 	task, err := decodeTaskDefinition("tasks.json", "reduce-codebase-centralize-classes", []byte(`{
   "displayName": "Reduce Codebase and Centralize Classes",
   "prompt": "Reduce the codebase.",
-  "prTitle": "Molten Hub Code: reduce-codebase-centralize-classes"
+  "prTitle": "agent_00: reduce-codebase-centralize-classes"
 }`))
 	if err != nil {
 		t.Fatalf("decodeTaskDefinition() error = %v", err)
 	}
-	if got, want := task.PRTitle, "Molten Hub Code: Reduce Codebase and Centralize Classes"; got != want {
+	if got, want := task.PRTitle, "agent_00: Reduce Codebase and Centralize Classes"; got != want {
 		t.Fatalf("PRTitle = %q, want %q", got, want)
 	}
 }
@@ -486,7 +486,7 @@ func TestDefaultCatalogIncludesReduceCodebaseCentralizeClassesTask(t *testing.T)
 	if !strings.Contains(strings.ToLower(task.Prompt), "avoid regressions") {
 		t.Fatalf("prompt = %q, want regression-prevention guidance", task.Prompt)
 	}
-	if got, want := task.PRTitle, "Molten Hub Code: Reduce Codebase and Centralize Classes"; got != want {
+	if got, want := task.PRTitle, "agent_00: Reduce Codebase and Centralize Classes"; got != want {
 		t.Fatalf("PRTitle = %q, want %q", got, want)
 	}
 }
@@ -519,7 +519,7 @@ func TestDefaultCatalogIncludesFixPRCITestsTask(t *testing.T) {
 			t.Fatalf("prompt = %q, want %q guidance", task.Prompt, want)
 		}
 	}
-	if got, want := task.PRTitle, "Molten Hub Code: Fix PR CI Test Failures"; got != want {
+	if got, want := task.PRTitle, "agent_00: Fix PR CI Test Failures"; got != want {
 		t.Fatalf("PRTitle = %q, want %q", got, want)
 	}
 }
@@ -550,7 +550,7 @@ func TestDefaultCatalogIncludesMovePageCSSToGlobalCSSTask(t *testing.T) {
 			t.Fatalf("prompt = %q, want %q guidance", task.Prompt, want)
 		}
 	}
-	if got, want := task.PRTitle, "Molten Hub Code: Move Page CSS to Global CSS"; got != want {
+	if got, want := task.PRTitle, "agent_00: Move Page CSS to Global CSS"; got != want {
 		t.Fatalf("PRTitle = %q, want %q", got, want)
 	}
 }
@@ -595,7 +595,7 @@ func TestDefaultCatalogIncludesAgentsMDGuardrailsTask(t *testing.T) {
 			t.Fatalf("prompt = %q, want %q guidance", task.Prompt, want)
 		}
 	}
-	if got, want := task.PRTitle, "Molten Hub Code: AGENTS.md improvements by Railsmith"; got != want {
+	if got, want := task.PRTitle, "agent_00: AGENTS.md improvements by Railsmith"; got != want {
 		t.Fatalf("PRTitle = %q, want %q", got, want)
 	}
 }
