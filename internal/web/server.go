@@ -55,7 +55,7 @@ var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype 
 </head>
 <body class="site-page-body {{.BodyClass}}">
   <div class="site-page {{.PageClass}}">
-    <moltenhub-code-header agent-harness="codex" agent-label="Codex"></moltenhub-code-header>
+    <agent-00-header agent-harness="codex" agent-label="Codex"></agent-00-header>
     <main class="site-page-main {{.MainClass}}" aria-label="{{.Heading}}">
       {{.Content}}
     </main>
@@ -528,7 +528,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.renderSitePage(r.Context(), w, sitePageData{
-		Title:     "Molten Hub Code Chat",
+		Title:     "agent_00 Chat",
 		BodyClass: "chat-body",
 		PageClass: "chat-page",
 		MainClass: "chat-main",
@@ -2069,7 +2069,7 @@ func newGitHubAPIRequest(ctx context.Context, method, endpoint string) (*http.Re
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", "moltenhub-code")
+	req.Header.Set("User-Agent", "agent_00")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	return req, nil
 }

@@ -274,7 +274,7 @@ func TestRuntimeDockerfileUsesDebianBaseImages(t *testing.T) {
 		"HARNESS_WORKSPACE_RAM_BASE=/workspace",
 		"HARNESS_WORKSPACE_DISK_BASE=/workspace",
 		"HOME=/workspace/config/home",
-		"mkdir -p /workspace/config/home /workspace/moltenhub-code/tasks",
+		"mkdir -p /workspace/config/home /workspace/agent_00/tasks",
 		"chown -R node:node /workspace",
 		"ln -sf /usr/local/go/bin/go /usr/local/bin/go",
 		"ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt",

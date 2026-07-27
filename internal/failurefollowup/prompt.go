@@ -8,7 +8,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/config"
 )
 
-const RequiredPrompt = "Review the failing log paths first, identify every root cause behind the failed task, fix the underlying MoltenHub Code application issues in this repository, validate locally where possible, and summarize the verified results. Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix MoltenHub Code failure handling."
+const RequiredPrompt = "Review the failing log paths first, identify every root cause behind the failed task, fix the underlying agent_00 application issues in this repository, validate locally where possible, and summarize the verified results. Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix agent_00 failure handling."
 
 const FollowUpRepositoryURL = config.DefaultRepositoryURL
 

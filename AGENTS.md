@@ -3,12 +3,12 @@
 ## Scope
 
 - These instructions apply to the whole repository. A nested `AGENTS.md` closer to the edited file takes precedence for that subtree.
-- This file is repository-local guidance for Molten Hub Code. The separate `library/AGENTS.md` file is the runtime seed copied into task workspaces for agents working on customer repositories.
+- This file is repository-local guidance for agent_00. The separate `library/AGENTS.md` file is the runtime seed copied into task workspaces for agents working on customer repositories.
 - Keep agent instructions evidence-backed. Add commands, paths, and conventions only when they are present in source, tests, docs, Dockerfiles, or CI.
 
 ## Project Overview
 
-- Molten Hub Code is a Go module and CLI for running AI coding agents against GitHub repositories and turning prompts into pull requests.
+- agent_00 is a Go module and CLI for running AI coding agents against GitHub repositories and turning prompts into pull requests.
 - The executable lives in `cmd/harness`. Shared behavior belongs in focused `internal/*` packages: `app`, `agentruntime`, `config`, `execx`, `hub`, `library`, `multiplex`, `slug`, `web`, and `workspace`.
 - The local web UI is served from embedded files under `internal/web/static`; there is no separate npm frontend build pipeline in this repo.
 

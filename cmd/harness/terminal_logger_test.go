@@ -106,7 +106,7 @@ func TestFormatTerminalLogLineDropsNestedDispatchLogEchoNoise(t *testing.T) {
 func TestFormatTerminalLogLineDropsNestedDispatchLogEchoFromSearchResults(t *testing.T) {
 	t.Parallel()
 
-	line := "cmd phase=codex name=codex stream=stderr b64=" + base64.StdEncoding.EncodeToString([]byte(`/home/jef/git/moltenbot/local/moltenhub-code/.log/terminal.log:431:dispatch request_id=local-1775872228-000004 cmd phase=codex name=codex stream=stderr text=\"fatal: unable to access 'https://github.com/acme/repo.git/': Could not resolve host: github.com\"`))
+	line := "cmd phase=codex name=codex stream=stderr b64=" + base64.StdEncoding.EncodeToString([]byte(`/home/jef/git/moltenbot/local/agent_00/.log/terminal.log:431:dispatch request_id=local-1775872228-000004 cmd phase=codex name=codex stream=stderr text=\"fatal: unable to access 'https://github.com/acme/repo.git/': Could not resolve host: github.com\"`))
 	got, mode := formatTerminalLogLine(line)
 	if mode != terminalLogModeDrop {
 		t.Fatalf("mode = %v, want drop", mode)

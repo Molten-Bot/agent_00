@@ -28,8 +28,8 @@ var errNoPulledMessage = errors.New("no pulled message")
 var errUnsupportedActivityPublishEndpoint = errors.New("unsupported activity publish endpoint")
 
 const (
-	runtimeIdentifier    = "moltenhub-code"
-	runtimeSkillFallback = "Executes MoltenHub Code tasks."
+	runtimeIdentifier    = "agent_00"
+	runtimeSkillFallback = "Executes agent_00 tasks."
 	agentVisibilityKey   = "visibility"
 	agentVisibilityValue = "public"
 	codingActivityRun    = "coding activity is running"

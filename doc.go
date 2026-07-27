@@ -1,2 +1,2 @@
-// Package moltenhubcode identifies the MoltenHub Code module for Go module consumers.
-package moltenhubcode
+// Package agent_00 identifies the agent_00 module for Go module consumers.
+package agent_00

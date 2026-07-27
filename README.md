@@ -1,7 +1,7 @@
-# Molten Hub Code
+# Agent_00
 
 The highest velocity way to make code changes. Run AI coding agents against GitHub repositories, prompt to PR. Product details live at
-[molten.bot/code](https://molten.bot/code).
+[molten.bot/agent_00](https://molten.bot/agent_00).
 
 ## Quick Start
 
@@ -24,7 +24,7 @@ For a local image build instead of the published Docker Hub image:
 docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
 ```
 
-The Compose stack runs `moltenhub-code` with a `linuxserver/faster-whisper`
+The Compose stack runs `agent_00` with a `linuxserver/faster-whisper`
 sidecar. The web UI probes `faster-whisper:10300`; when it is reachable, the
 Prompt Studio shows a microphone button that appends dictated text to the
 prompt field. The Compose sidecar disables Docker log capture because
@@ -58,7 +58,7 @@ pass; final-pass findings are repaired and checked without an extra pass.
 
 ### Go Module
 
-MoltenHub Code is distributed as a Go module from this Git repository. Install
+Agent_00 is distributed as a Go module from this Git repository. Install
 the latest stable release from the renamed module path.
 
 ```bash

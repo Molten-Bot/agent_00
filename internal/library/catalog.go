@@ -18,7 +18,7 @@ const DefaultDir = "library"
 const (
 	catalogDirEnv = "HARNESS_LIBRARY_DIR"
 	agentsSeedEnv = "HARNESS_AGENTS_SEED_PATH"
-	prTitlePrefix = "Molten Hub Code: "
+	prTitlePrefix = "agent_00: "
 )
 
 // TaskDefinition is one callable library entry loaded from ./library/*.json.

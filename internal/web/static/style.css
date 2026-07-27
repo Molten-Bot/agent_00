@@ -377,13 +377,13 @@ button {
   gap: 16px;
 }
 
-moltenhub-code-header {
+agent-00-header {
   display: block;
   position: relative;
   z-index: 5;
 }
 
-moltenhub-code-nav {
+agent-00-nav {
   display: block;
 }
 

@@ -244,7 +244,7 @@ func (g *codexAuthGate) StartDeviceAuth(_ context.Context) (web.AgentAuthState, 
 	}
 	g.mu.Unlock()
 
-	tmpDir, err := os.MkdirTemp("", "moltenhub-codex-auth-*")
+	tmpDir, err := os.MkdirTemp("", "agent_00-codex-auth-*")
 	if err != nil {
 		snap, _ := g.Status(context.Background())
 		return snap, fmt.Errorf("create codex device auth temp dir: %w", err)
@@ -459,7 +459,7 @@ func (g *codexAuthGate) probe(ctx context.Context) (bool, string, error) {
 		ctx = context.Background()
 	}
 
-	tmpDir, err := os.MkdirTemp("", "moltenhub-codex-auth-probe-*")
+	tmpDir, err := os.MkdirTemp("", "agent_00-codex-auth-probe-*")
 	if err != nil {
 		return false, "", fmt.Errorf("create auth probe dir: %w", err)
 	}

@@ -21,8 +21,8 @@ import (
 const githubTokenPasteConfigureMessage = "GitHub token is required."
 const githubTokenValidationTimeout = 12 * time.Second
 const githubStarTimeout = 12 * time.Second
-const moltenHubCodeRepository = config.DefaultRepositoryOwner + "/" + config.DefaultRepositoryName
-const moltenHubCodeStarPath = "/user/starred/" + moltenHubCodeRepository
+const agent00Repository = config.DefaultRepositoryOwner + "/" + config.DefaultRepositoryName
+const agent00StarPath = "/user/starred/" + agent00Repository
 
 var githubTokenValidationMu sync.Mutex
 var githubStarAPIBaseURL = "https://api.github.com"
@@ -319,7 +319,7 @@ func configureGitHubToken(
 		state := githubTokenNeedsConfigureState(harness, err.Error())
 		return "", state, err
 	}
-	if err := starMoltenHubCodeRepository(ctx, token); err != nil {
+	if err := starAgent00Repository(ctx, token); err != nil {
 		state := githubTokenNeedsConfigureState(harness, err.Error())
 		return "", state, err
 	}
@@ -336,7 +336,7 @@ func configureGitHubToken(
 	return token, web.AgentAuthState{}, nil
 }
 
-func starMoltenHubCodeRepository(ctx context.Context, token string) error {
+func starAgent00Repository(ctx context.Context, token string) error {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return fmt.Errorf("github token is required")
@@ -351,9 +351,9 @@ func starMoltenHubCodeRepository(ctx context.Context, token string) error {
 	starCtx, cancel := context.WithTimeout(ctx, githubStarTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(starCtx, http.MethodPut, baseURL+moltenHubCodeStarPath, nil)
+	req, err := http.NewRequestWithContext(starCtx, http.MethodPut, baseURL+agent00StarPath, nil)
 	if err != nil {
-		return fmt.Errorf("star %s: %w", moltenHubCodeRepository, err)
+		return fmt.Errorf("star %s: %w", agent00Repository, err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -365,7 +365,7 @@ func starMoltenHubCodeRepository(ctx context.Context, token string) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("star %s: %w", moltenHubCodeRepository, err)
+		return fmt.Errorf("star %s: %w", agent00Repository, err)
 	}
 	defer resp.Body.Close()
 
@@ -379,7 +379,7 @@ func starMoltenHubCodeRepository(ctx context.Context, token string) error {
 	if detail == "" {
 		detail = http.StatusText(resp.StatusCode)
 	}
-	return fmt.Errorf("star %s: github API returned %s: %s", moltenHubCodeRepository, resp.Status, detail)
+	return fmt.Errorf("star %s: github API returned %s: %s", agent00Repository, resp.Status, detail)
 }
 
 func configureGitHubTokenAndApply(

@@ -94,7 +94,7 @@ func defaultLogRoot() (string, error) {
 }
 
 func defaultLogRootForWorkingDir(wd string, reset func(string) error) (string, error) {
-	primary := filepath.Join(workspace.NewManager().SelectBase(), "moltenhub-code", "logs", logRootHash(wd), logDirectoryName)
+	primary := filepath.Join(workspace.NewManager().SelectBase(), "agent_00", "logs", logRootHash(wd), logDirectoryName)
 	if err := reset(primary); err == nil {
 		return primary, nil
 	} else {

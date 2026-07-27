@@ -16,7 +16,7 @@ import (
 const (
 	defaultRAMBase       = "/dev/shm"
 	defaultDiskBase      = "/tmp"
-	defaultWorkspaceRoot = "moltenhub-code/tasks"
+	defaultWorkspaceRoot = "agent_00/tasks"
 	agentsSeedPath       = "library/AGENTS.md"
 	agentsFileName       = "AGENTS.md"
 	agentsSeedEnv        = "HARNESS_AGENTS_SEED_PATH"

@@ -83,7 +83,7 @@ func TestExtractAgentProfileFromJSONUsesExplicitProfileObject(t *testing.T) {
 				"emoji": "🤖",
 				"profile": "Owns UI automation",
 				"llm": "claude",
-				"harness": "moltenhub-code",
+				"harness": "agent_00",
 				"skills": ["code_for_me"]
 			}
 		}
@@ -104,7 +104,7 @@ func TestExtractAgentProfileFromJSONUsesExplicitProfileObject(t *testing.T) {
 	if got, want := profile.Profile.LLM, "claude"; got != want {
 		t.Fatalf("LLM = %q, want %q", got, want)
 	}
-	if got, want := profile.Profile.Harness, "moltenhub-code"; got != want {
+	if got, want := profile.Profile.Harness, "agent_00"; got != want {
 		t.Fatalf("Harness = %q, want %q", got, want)
 	}
 	if len(profile.Profile.Skills) != 1 || profile.Profile.Skills[0] != "code_for_me" {

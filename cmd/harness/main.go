@@ -53,7 +53,7 @@ const rerunSource = "rerun"
 const failureFollowUpSource = "failure_followup"
 const noChangesFollowUpSource = "no_changes_followup"
 const noChangesEscalationSource = "no_changes_escalation"
-const automaticFailureRerunDisabledReason = "automatic failure rerun disabled; queue failure follow-up in moltenhub-code"
+const automaticFailureRerunDisabledReason = "automatic failure rerun disabled; queue failure follow-up in agent_00"
 const localTransportOfflineReasonExecutionFailure = "task_execution_failure"
 const localFailurePublishTimeout = 75 * time.Second
 
@@ -1679,9 +1679,9 @@ func noChangesFailureDetail(source string) string {
 	detail := "task completed with no file changes and no pull request even though the prompt appears to require repository changes"
 	switch strings.TrimSpace(source) {
 	case noChangesFollowUpSource:
-		detail = "no-changes follow-up completed with no file changes and no pull request, without concrete evidence that no MoltenHub Code change is required"
+		detail = "no-changes follow-up completed with no file changes and no pull request, without concrete evidence that no agent_00 change is required"
 	case noChangesEscalationSource:
-		detail = "no-changes escalation completed with no file changes and no pull request, without concrete evidence that no MoltenHub Code change is required"
+		detail = "no-changes escalation completed with no file changes and no pull request, without concrete evidence that no agent_00 change is required"
 	}
 	return detail + ". " + rootCauses
 }
@@ -1698,7 +1698,7 @@ func unexpectedNoChangesFollowUpRepos(runCfg config.Config) []string {
 }
 
 func unexpectedNoChangesFollowUpPrompt(logPaths []string, requestID string, result app.Result, runCfg config.Config) string {
-	const requiredPrompt = "Review the previous local task logs first. The prior run completed with no file changes and no pull request, which is unexpected for this task. Identify every root cause behind the no-change result, fix the underlying MoltenHub Code application issue in this repository, validate locally where possible, and summarize the verified results. Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix MoltenHub Code failure handling. Only return a no-op if you can cite concrete repository evidence that no MoltenHub Code change is required; otherwise produce the smallest correct diff or return an explicit failure with blocker details."
+	const requiredPrompt = "Review the previous local task logs first. The prior run completed with no file changes and no pull request, which is unexpected for this task. Identify every root cause behind the no-change result, fix the underlying agent_00 application issue in this repository, validate locally where possible, and summarize the verified results. Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix agent_00 failure handling. Only return a no-op if you can cite concrete repository evidence that no agent_00 change is required; otherwise produce the smallest correct diff or return an explicit failure with blocker details."
 
 	var contextLines []string
 	if requestID = strings.TrimSpace(requestID); requestID != "" {
@@ -1761,7 +1761,7 @@ func escalatedNoChangesFollowUpRunConfig(
 }
 
 func escalatedNoChangesFollowUpPrompt(logPaths []string, requestID string, result app.Result, runCfg config.Config) string {
-	const requiredPrompt = "Review the previous local task logs first. The original task and the no-changes follow-up both completed without file changes or a pull request. For this escalation, fix the underlying MoltenHub Code application issue in this repository. Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix MoltenHub Code failure handling. Do not return another no-op unless you can cite exact file paths and concrete repository evidence proving no MoltenHub Code change is required. If a real diff is blocked, return an explicit failure with the precise blocker details instead of another ambiguous no-op."
+	const requiredPrompt = "Review the previous local task logs first. The original task and the no-changes follow-up both completed without file changes or a pull request. For this escalation, fix the underlying agent_00 application issue in this repository. Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix agent_00 failure handling. Do not return another no-op unless you can cite exact file paths and concrete repository evidence proving no agent_00 change is required. If a real diff is blocked, return an explicit failure with the precise blocker details instead of another ambiguous no-op."
 
 	var contextLines []string
 	if requestID = strings.TrimSpace(requestID); requestID != "" {

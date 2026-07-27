@@ -1,8 +1,8 @@
 services:
-  moltenhub-code:
-    image: ${MOLTENHUB_CODE_IMAGE:-moltenai/moltenhub-code:latest}
+  agent_00:
+    image: ${AGENT_00_IMAGE:-moltenai/moltenhub-code:latest}
     ports:
-      - "${MOLTENHUB_CODE_PORT:-7777}:7777"
+      - "${AGENT_00_PORT:-7777}:7777"
     environment:
       HARNESS_HUB_UI_LISTEN: ":7777"
       HARNESS_AGENT_HARNESS: ${HARNESS_AGENT_HARNESS:-codex}
@@ -43,7 +43,7 @@ services:
 
 networks:
   default:
-    name: moltenhub_code_speech
+    name: agent_00_speech
     ipam:
       config:
-        - subnet: ${MOLTENHUB_CODE_SUBNET:-10.89.80.0/24}
+        - subnet: ${AGENT_00_SUBNET:-10.89.80.0/24}

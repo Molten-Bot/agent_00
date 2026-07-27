@@ -99,13 +99,13 @@ func TestWithExecutionContractIncludesRemoteOperationsHandoff(t *testing.T) {
 	}
 }
 
-func TestRequiredPromptScopesFailureFollowUpToMoltenHubCode(t *testing.T) {
+func TestRequiredPromptScopesFailureFollowUpToAgent00(t *testing.T) {
 	t.Parallel()
 
 	for _, want := range []string{
-		"fix the underlying MoltenHub Code application issues in this repository",
+		"fix the underlying agent_00 application issues in this repository",
 		"Treat the original task prompt as failure context only",
-		"do not implement that requested product change here unless it is required to fix MoltenHub Code failure handling",
+		"do not implement that requested product change here unless it is required to fix agent_00 failure handling",
 	} {
 		if !strings.Contains(RequiredPrompt, want) {
 			t.Fatalf("RequiredPrompt missing %q: %q", want, RequiredPrompt)
