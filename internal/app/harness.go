@@ -5913,11 +5913,15 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	if !missingTooling {
 		return false
 	}
+	if strings.Contains(text, "smoke command") {
+		return smokeFallbackSucceeded(text)
+	}
 	if validationUnavailable {
 		return true
 	}
 
 	validationCommandMarkers := []string{
+		"smoke command",
 		"npm run lint",
 		"npm run build",
 		"npm run check",
@@ -5961,6 +5965,58 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 
 	if hasValidationCommand && hasValidationContext {
 		return true
+	}
+	return false
+}
+
+func smokeFallbackSucceeded(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.Contains(line, "smoke") || !strings.Contains(line, "fallback") {
+			continue
+		}
+		if containsAny(line, []string{
+			"fallback failed",
+			"fallback did not pass",
+			"fallback did not succeed",
+			"fallback not passed",
+			"fallback not successful",
+			"fallback not succeeded",
+			"could not confirm",
+			"not confirmed",
+			"unconfirmed",
+			"succeeded: false",
+			"passed: false",
+		}) {
+			continue
+		}
+		if containsAny(line, []string{
+			"apparently",
+			"appears to",
+			"cannot verify",
+			"could not verify",
+			"likely",
+			"maybe",
+			"not sure",
+			"not verified",
+			"perhaps",
+			"possibly",
+			"probably",
+			"reportedly",
+			"seems to",
+			"uncertain",
+			"unknown",
+		}) {
+			continue
+		}
+		if containsAny(line, []string{
+			"fallback succeeded",
+			"fallback passed",
+			"fallback smoke check succeeded",
+			"fallback smoke check passed",
+		}) {
+			return true
+		}
 	}
 	return false
 }

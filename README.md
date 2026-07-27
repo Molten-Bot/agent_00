@@ -58,7 +58,7 @@ pass; final-pass findings are repaired and checked without an extra pass.
 
 ### Go Module
 
-agent_00 is distributed as a Go module from this Git repository. Install
+Agent_00 is distributed as a Go module from this Git repository. Install
 the latest stable release from the renamed module path.
 
 ```bash
