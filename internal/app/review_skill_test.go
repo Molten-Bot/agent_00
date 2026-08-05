@@ -18,7 +18,8 @@ func TestReviewSkillPromptAndRuntimePaths(t *testing.T) {
 	for _, want := range []string{
 		"The bundled review skill is mandatory",
 		"Do not edit files, commit, push",
-		`{"status":"clean|findings|blocked"`,
+		`{"status":"findings"`,
+		"never copy a list of choices",
 		"Review the pull request.",
 	} {
 		if !strings.Contains(prompt, want) {
