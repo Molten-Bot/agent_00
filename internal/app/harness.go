@@ -5252,9 +5252,6 @@ func agentOutputHasConcreteBehaviorEvidence(text string) bool {
 	if !strings.Contains(text, "verified:") && !strings.Contains(text, "verification:") {
 		return false
 	}
-	if !strings.Contains(text, "`") {
-		return false
-	}
 	validationMarkers := []string{
 		"validation passed",
 		"validation: passed",
@@ -5263,7 +5260,12 @@ func agentOutputHasConcreteBehaviorEvidence(text string) bool {
 		"test passed",
 		"tests passed",
 	}
-	return containsAnySubstring(text, validationMarkers)
+	for _, line := range splitOutputLines(text) {
+		if strings.Contains(line, "`") && containsAnySubstring(line, validationMarkers) {
+			return true
+		}
+	}
+	return false
 }
 
 func agentOutputHasNoChangeClaim(text string) bool {

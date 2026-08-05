@@ -6268,10 +6268,19 @@ func TestAgentOutputCitesGeneralNoChangeEvidenceForVerifiedBehavior(t *testing.T
 				"Hours already correct; no repository change needed.",
 				"Verified:",
 				"- Shop: Mon-Fri and Sat-Sun, `11am-6pm`",
-				"- Static validation passed.",
-				"- Local HTTP smoke check passed.",
+				"- Static validation passed for `11am-6pm`.",
+				"- Local HTTP smoke check passed for `11am-6pm`.",
 			}, "\n"),
 			want: true,
+		},
+		{
+			name: "unrelated validation",
+			output: strings.Join([]string{
+				"Hours already correct; no repository change needed.",
+				"Verified:",
+				"- Shop: Mon-Fri and Sat-Sun, `11am-6pm`.",
+				"- Unrelated authentication tests passed.",
+			}, "\n"),
 		},
 		{
 			name:   "vague validation claim",
