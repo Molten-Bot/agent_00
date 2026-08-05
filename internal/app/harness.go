@@ -4055,14 +4055,13 @@ func reviewMergeMethod(value string) string {
 func reviewOutputText(res execx.Result) string {
 	stdout := strings.TrimSpace(res.Stdout)
 	stderr := strings.TrimSpace(res.Stderr)
-	switch {
-	case stdout != "" && stderr != "":
-		return strings.TrimSpace(stdout + "\n\n" + stderr)
-	case stdout != "":
+	// Agent runtimes write progress and echoed prompts to stderr, while the
+	// requested review is returned on stdout. Mixing streams can make an echoed
+	// JSON example look like the final structured result.
+	if stdout != "" {
 		return stdout
-	default:
-		return stderr
 	}
+	return stderr
 }
 
 func reviewCommentBody(res execx.Result, outcome reviewOutcome, outcomeOK bool) string {
@@ -7762,7 +7761,7 @@ func codeReviewLibraryPrompt() string {
 	catalog, err := library.LoadCatalog(library.DefaultDir)
 	if err == nil {
 		if task, ok := catalog.Task(codeReviewLibraryTaskName); ok && strings.TrimSpace(task.Prompt) != "" {
-			return strings.TrimSpace(task.Prompt)
+			return strings.TrimSpace(task.Prompt) + "\n\nStructured outcome status must be exactly one of `clean`, `findings`, or `blocked`; never return the literal choice list `clean|findings|blocked`."
 		}
 	}
 	return "Perform a read-only pull request review. Prioritize correctness, security, regressions, and missing tests. Return a structured clean, findings, or blocked outcome."

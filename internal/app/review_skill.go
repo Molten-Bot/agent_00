@@ -41,20 +41,19 @@ func resolveReviewSkillPath() (string, error) {
 }
 
 func reviewSkillPathCandidates() []string {
-	candidates := []string{
-		reviewSkillRelativePath,
-		filepath.Join(workspaceSkillsDir, "review", "SKILL.md"),
-		filepath.Join(runtimeSkillsDir, "review", "SKILL.md"),
-	}
-	if seedPath := strings.TrimSpace(os.Getenv("HARNESS_AGENTS_SEED_PATH")); seedPath != "" {
-		baseDir := filepath.Dir(filepath.Dir(seedPath))
-		candidates = append(candidates, filepath.Join(baseDir, "skills", "review", "SKILL.md"))
-	}
+	candidates := []string{reviewSkillRelativePath}
 	if _, file, _, ok := goruntime.Caller(0); ok {
 		repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 		candidates = append(candidates, filepath.Join(repoRoot, reviewSkillRelativePath))
 	}
-
+	candidates = append(candidates,
+		filepath.Join(workspaceSkillsDir, "review", "SKILL.md"),
+		filepath.Join(runtimeSkillsDir, "review", "SKILL.md"),
+	)
+	if seedPath := strings.TrimSpace(os.Getenv("HARNESS_AGENTS_SEED_PATH")); seedPath != "" {
+		baseDir := filepath.Dir(filepath.Dir(seedPath))
+		candidates = append(candidates, filepath.Join(baseDir, "skills", "review", "SKILL.md"))
+	}
 	seen := make(map[string]struct{}, len(candidates))
 	deduped := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {

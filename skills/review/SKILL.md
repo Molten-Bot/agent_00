@@ -18,7 +18,7 @@ Return exactly two markdown sections, `**Positive**` and `**Negative**`, with bu
 End with a fenced JSON object using this shape:
 
 ```json
-{"status":"clean|findings|blocked","mergeReady":false,"summary":"short verdict","positives":["short positive point"],"findings":[{"severity":"Medium","path":"path/to/file.go","line":123,"title":"specific actionable finding"}]}
+{"status":"findings","mergeReady":false,"summary":"short verdict","positives":["short positive point"],"findings":[{"severity":"Medium","path":"path/to/file.go","line":123,"title":"specific actionable finding"}]}
 ```
 
-Keep the JSON consistent with the markdown. Set `status` to `clean` and `mergeReady` to `true` only when there are no material findings or blockers.
+`status` must be exactly one of `clean`, `findings`, or `blocked`; never copy a list of choices into the value. Keep the JSON consistent with the markdown. Set `status` to `clean` and `mergeReady` to `true` only when there are no material findings or blockers.

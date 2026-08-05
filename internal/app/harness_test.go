@@ -1417,6 +1417,22 @@ func TestReviewCommentBodyCleanOutcomeKeepsPositiveNegativeShape(t *testing.T) {
 	}
 }
 
+func TestReviewOutputTextPrefersStdoutOverStderrDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	res := execx.Result{
+		Stdout: "```json\n{\"status\":\"clean\",\"mergeReady\":true,\"findings\":[]}\n```",
+		Stderr: "echoed prompt: ```json\n{\"status\":\"clean|findings|blocked\",\"mergeReady\":false}\n```",
+	}
+	outcome, ok := parseReviewOutcome(reviewOutputText(res))
+	if !ok {
+		t.Fatal("parseReviewOutcome() ok = false, want true")
+	}
+	if outcome.Status != "clean" || !outcome.MergeReady {
+		t.Fatalf("outcome = %+v, want clean stdout outcome", outcome)
+	}
+}
+
 func TestRunWithGitHubTokenRunsAuthSetupGitBeforeCodex(t *testing.T) {
 	cfg := sampleConfig()
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
