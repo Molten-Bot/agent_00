@@ -1921,6 +1921,9 @@ func TestFollowUpTaskLogPathsArchivesLocalTaskLogs(t *testing.T) {
 	if got := existingPaths(paths); !reflect.DeepEqual(got, wantPaths) {
 		t.Fatalf("existingPaths(archived) = %v, want %v", got, wantPaths)
 	}
+	if got := followUpTaskLogPaths(logRoot, requestID); !reflect.DeepEqual(got, wantPaths) {
+		t.Fatalf("followUpTaskLogPaths(after source cleanup) = %v, want %v", got, wantPaths)
+	}
 }
 
 func TestShouldQueueFailureFollowUpQueuesNoDeltaFailures(t *testing.T) {

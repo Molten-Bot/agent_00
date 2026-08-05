@@ -6237,6 +6237,18 @@ func TestAgentOutputCitesGeneralNoChangeEvidenceForZeroCommits(t *testing.T) {
 			output: "Checked `releases.json`; changes are still required.",
 		},
 		{
+			name: "rendered route section evidence",
+			output: strings.Join([]string{
+				"No change needed. Requested Shop hours already present at `/plan-your-visit/#hours`.",
+				"Playwright desktop and mobile checks passed.",
+			}, "\n"),
+			want: true,
+		},
+		{
+			name:   "route without fragment is not exact evidence",
+			output: "No change needed at `/plan-your-visit/`.",
+		},
+		{
 			name:   "explicit failure is not evidence",
 			output: "Failure: zero commits because `releases.json` could not be read.",
 		},

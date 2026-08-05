@@ -5284,6 +5284,9 @@ func agentOutputHasConcreteFileEvidence(text string) bool {
 	evidencePatterns := []*regexp.Regexp{
 		regexp.MustCompile(`\[[^\]\n]+\]\([^)]+:[0-9]+\)`),
 		regexp.MustCompile("`[^`\\n]+\\.[a-z0-9]+`"),
+		// User-facing route plus a fragment identifies the exact rendered
+		// section even when the agent reports browser evidence, not source lines.
+		regexp.MustCompile("`?/[a-z0-9][a-z0-9_./-]*/?#[a-z0-9][a-z0-9_-]*`?"),
 		regexp.MustCompile(`(^|[\s(/])(?:src|app|pages|routes|components|styles|public|worker|internal|cmd|library|testdata)/[^\s)]+`),
 		regexp.MustCompile(`(^|[\s(/])(?:package\.json|go\.mod|vite\.config\.[jt]s|next\.config\.[jt]s|tsconfig\.json|index\.html)(:[0-9]+)?`),
 	}

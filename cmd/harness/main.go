@@ -534,6 +534,11 @@ func runHub(args []string) int {
 				finalState = outcome.State
 				switch outcome.State {
 				case "error":
+					if allowFailureFollowUp {
+						// Publishing can cause UI clients to close the task and delete its
+						// local logs. Archive them before exposing the terminal result.
+						_ = followUpTaskLogPaths(logRoot, requestID)
+					}
 					publishLocalRunFailureResult(runCtx, activeCfg, requestID, outcome.Result, hubRuntimeConnected, daemonLogger)
 					markLocalRunRuntimeOffline(runCtx, activeCfg, requestID, hubRuntimeConnected, daemonLogger)
 					if allowFailureFollowUp {
@@ -556,6 +561,11 @@ func runHub(args []string) int {
 							failureResult.PRURL,
 							failureResult.Err,
 						)
+						if source != noChangesFollowUpSource && source != noChangesEscalationSource {
+							// Preserve diagnostics before publishing lets UI cleanup race with
+							// follow-up construction.
+							_ = followUpTaskLogPaths(logRoot, requestID)
+						}
 						publishLocalRunFailureResult(runCtx, activeCfg, requestID, failureResult, hubRuntimeConnected, daemonLogger)
 						markLocalRunRuntimeOffline(runCtx, activeCfg, requestID, hubRuntimeConnected, daemonLogger)
 					} else {
@@ -2073,6 +2083,15 @@ func existingPaths(paths []string) []string {
 }
 
 func followUpTaskLogPaths(logRoot, requestID string) []string {
+	if archiveDir, ok := followUpTaskLogArchiveDir(logRoot, requestID); ok {
+		if archived := existingPaths([]string{
+			archiveDir,
+			filepath.Join(archiveDir, legacyTaskLogFileName),
+			filepath.Join(archiveDir, logFileName),
+		}); len(archived) > 1 {
+			return archived
+		}
+	}
 	paths := taskLogPaths(logRoot, requestID)
 	if _, ok := localTaskLogDir(logRoot, requestID); !ok {
 		return paths
