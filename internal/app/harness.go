@@ -5245,7 +5245,27 @@ func agentOutputCitesGeneralNoChangeEvidence(res execx.Result) bool {
 	if !agentOutputHasNoChangeClaim(text) {
 		return false
 	}
-	return agentOutputHasConcreteFileEvidence(text)
+	return agentOutputHasConcreteFileEvidence(text) || agentOutputHasConcreteBehaviorEvidence(text)
+}
+
+func agentOutputHasConcreteBehaviorEvidence(text string) bool {
+	if !strings.Contains(text, "verified:") && !strings.Contains(text, "verification:") {
+		return false
+	}
+	validationMarkers := []string{
+		"validation passed",
+		"validation: passed",
+		"smoke check passed",
+		"smoke test passed",
+		"test passed",
+		"tests passed",
+	}
+	for _, line := range splitOutputLines(text) {
+		if strings.Contains(line, "`") && containsAnySubstring(line, validationMarkers) {
+			return true
+		}
+	}
+	return false
 }
 
 func agentOutputHasNoChangeClaim(text string) bool {
@@ -5263,6 +5283,7 @@ func agentOutputHasNoChangeClaim(text string) bool {
 		"no tracked file changes",
 		"git diff empty",
 		"no file changes required",
+		"no repository change needed",
 		"no repository changes required",
 		"no changes needed",
 		"no changes required",
