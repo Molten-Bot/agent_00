@@ -6254,6 +6254,47 @@ func TestAgentOutputCitesGeneralNoChangeEvidenceForZeroCommits(t *testing.T) {
 	}
 }
 
+func TestAgentOutputCitesGeneralNoChangeEvidenceForVerifiedBehavior(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{
+			name: "verified requested state",
+			output: strings.Join([]string{
+				"Hours already correct; no repository change needed.",
+				"Verified:",
+				"- Shop: Mon-Fri and Sat-Sun, `11am-6pm`",
+				"- Static validation passed.",
+				"- Local HTTP smoke check passed.",
+			}, "\n"),
+			want: true,
+		},
+		{
+			name:   "vague validation claim",
+			output: "Already satisfied. Validation passed.",
+		},
+		{
+			name:   "unvalidated observed value",
+			output: "No changes required. Verified: configured value is `11am-6pm`.",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := agentOutputCitesGeneralNoChangeEvidence(execx.Result{Stdout: tt.output})
+			if got != tt.want {
+				t.Fatalf("agentOutputCitesGeneralNoChangeEvidence() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRunAppliesResponseModeAcrossNonCodexRuntimes(t *testing.T) {
 	t.Parallel()
 
