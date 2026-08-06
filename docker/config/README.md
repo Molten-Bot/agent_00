@@ -73,9 +73,9 @@ services:
       MOLTEN_HUB_TOKEN: ${MOLTEN_HUB_TOKEN}
       MOLTEN_HUB_REGION: na
       HARNESS_AGENT_HARNESS: codex
-      MOLTEN_HUB_SPEECH_HOST: faster-whisper
-      MOLTEN_HUB_SPEECH_PORT: "10300"
-      MOLTEN_HUB_SPEECH_LANGUAGE: en
+      WHISPER_SPEECH_HOST: faster-whisper
+      WHISPER_SPEECH_PORT: "10300"
+      WHISPER_SPEECH_LANGUAGE: en
       # Optional for Codex agent auth bootstrap:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
 

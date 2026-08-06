@@ -235,18 +235,18 @@ func (s Server) handleSpeechTranscribe(w http.ResponseWriter, r *http.Request) {
 }
 
 func loadSpeechConfig() speechConfig {
-	host := firstNonEmptyEnv("MOLTEN_HUB_SPEECH_HOST", "MOLTENHUB_SPEECH_HOST", "WHISPER_HOST")
+	host := firstNonEmptyEnv("WHISPER_SPEECH_HOST", "WHISPER_HOST")
 	if strings.TrimSpace(host) == "" {
 		host = defaultSpeechHost
 	}
-	port := firstNonEmptyEnv("MOLTEN_HUB_SPEECH_PORT", "MOLTENHUB_SPEECH_PORT", "WHISPER_PORT")
+	port := firstNonEmptyEnv("WHISPER_SPEECH_PORT", "WHISPER_PORT")
 	if strings.TrimSpace(port) == "" {
 		port = defaultSpeechPort
 	}
-	language := configuredSpeechLanguage(firstNonEmptyEnv("MOLTEN_HUB_SPEECH_LANGUAGE", "MOLTENHUB_SPEECH_LANGUAGE", "WHISPER_LANG"))
-	timeout := envDuration("MOLTEN_HUB_SPEECH_TIMEOUT_SECONDS", defaultSpeechTimeout)
+	language := configuredSpeechLanguage(firstNonEmptyEnv("WHISPER_SPEECH_LANGUAGE", "WHISPER_LANG"))
+	timeout := envDuration("WHISPER_SPEECH_TIMEOUT_SECONDS", defaultSpeechTimeout)
 	maxBytes := int64(defaultSpeechRate * defaultSpeechSampleSize * defaultSpeechChannels * maxSpeechSeconds)
-	enabled := !envBool("MOLTEN_HUB_SPEECH_DISABLED") && !envBool("MOLTENHUB_SPEECH_DISABLED")
+	enabled := !envBool("WHISPER_SPEECH_DISABLED")
 	if isDisabledSpeechHost(host) {
 		enabled = false
 	}
