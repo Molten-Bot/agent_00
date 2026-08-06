@@ -1029,6 +1029,37 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		codexStart := time.Now()
 		agentRes, err := h.runCodexCapture(ctx, runtime, codexDir, repairPrompt, codexOpts, agentsPath, cfg.ResponseMode, remediationInvocation)
 		if err != nil {
+			if runID, ok := remoteCIInfrastructureFailureRunID(agentRes, err, checkSummary); ok {
+				h.logf(
+					"stage=checks status=start action=rerun_failed reason=remote_ci_infrastructure repo=%s repo_dir=%s pr_url=%s run_id=%s attempt=%d",
+					repo.URL,
+					repo.RelDir,
+					repo.PRURL,
+					runID,
+					attempt+1,
+				)
+				if _, rerunErr := h.runCommand(ctx, "checks", rerunFailedWorkflowCommand(repo.Dir, runID)); rerunErr == nil {
+					h.logf(
+						"stage=checks status=ok action=rerun_failed reason=remote_ci_infrastructure repo=%s repo_dir=%s pr_url=%s run_id=%s attempt=%d",
+						repo.URL,
+						repo.RelDir,
+						repo.PRURL,
+						runID,
+						attempt+1,
+					)
+					continue
+				} else {
+					h.logf(
+						"stage=checks status=warn action=rerun_failed reason=remote_ci_infrastructure repo=%s repo_dir=%s pr_url=%s run_id=%s attempt=%d err=%q",
+						repo.URL,
+						repo.RelDir,
+						repo.PRURL,
+						runID,
+						attempt+1,
+						rerunErr,
+					)
+				}
+			}
 			return ExitCodex, agentStage, err
 		}
 		h.logf(
@@ -1048,7 +1079,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		if err != nil {
 			return ExitGit, "git", err
 		}
-		if strings.TrimSpace(statusRes.Stdout) == "" {
+		if !hasTrackedWorktreeChanges(statusRes.Stdout) && !hasAheadCommitsInStatus(statusRes.Stdout) {
 			if agentOutputClaimsFileChanges(agentRes) {
 				return ExitCodex, agentStage, fmt.Errorf("%s reported remediation file changes, but git detected no worktree or branch changes for repo %s", agentStage, repo.URL)
 			}
@@ -7595,6 +7626,14 @@ func prChecksAnyCommand(repoDir, prURL string) execx.Command {
 	}
 }
 
+func rerunFailedWorkflowCommand(repoDir, runID string) execx.Command {
+	return execx.Command{
+		Dir:  repoDir,
+		Name: "gh",
+		Args: []string{"run", "rerun", strings.TrimSpace(runID), "--failed"},
+	}
+}
+
 func prChecksJSONCommand(repoDir, prURL string, requiredOnly bool) execx.Command {
 	args := []string{
 		"pr", "checks", githubutil.PullRequestSelector(prURL),
@@ -7796,6 +7835,35 @@ func summarizeCheckOutput(res execx.Result) string {
 		return text
 	}
 	return strings.TrimSpace(text[:maxCheckSummaryChars]) + "...(truncated)"
+}
+
+var githubActionsRunURLPattern = regexp.MustCompile(`/actions/runs/([0-9]+)(?:/|$)`)
+
+// remoteCIInfrastructureFailureRunID recognizes a narrow class of agent-reported
+// GitHub Actions failures that happened while the runner was downloading actions,
+// before repository checkout or tests could run. Such failures need a workflow
+// rerun, not another repository-editing pass.
+func remoteCIInfrastructureFailureRunID(agentRes execx.Result, agentErr error, checkSummary string) (string, bool) {
+	detail := strings.ToLower(strings.Join([]string{agentRes.Stdout, agentRes.Stderr, errorString(agentErr)}, "\n"))
+	infrastructureFailure := strings.Contains(detail, "failed to resolve action download info") ||
+		(strings.Contains(detail, "service unavailable") &&
+			(strings.Contains(detail, "before checkout") || strings.Contains(detail, "download actions")))
+	if !infrastructureFailure {
+		return "", false
+	}
+
+	match := githubActionsRunURLPattern.FindStringSubmatch(checkSummary)
+	if len(match) != 2 {
+		return "", false
+	}
+	return match[1], true
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 type ghPRCheck struct {

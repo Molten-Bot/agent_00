@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -173,6 +174,25 @@ func TestHarnessRuntimeAndCheckSnapshotHelpers(t *testing.T) {
 	}
 	if got := remediationCommitMessage("", 1); got != "chore: automated update (ci remediation 1)" {
 		t.Fatalf("remediationCommitMessage(empty) = %q", got)
+	}
+	checkSummary := "Lint & Build\tfail\t4m53s\thttps://github.com/acme/repo/actions/runs/31117236324/job/92669892900"
+	runID, ok := remoteCIInfrastructureFailureRunID(
+		execx.Result{},
+		errors.New("codex reported failure: GitHub Actions failed before checkout/tests: Service Unavailable and Failed to resolve action download info"),
+		checkSummary,
+	)
+	if !ok || runID != "31117236324" {
+		t.Fatalf("remoteCIInfrastructureFailureRunID() = (%q, %v), want run ID", runID, ok)
+	}
+	if _, ok := remoteCIInfrastructureFailureRunID(execx.Result{}, errors.New("unit tests failed"), checkSummary); ok {
+		t.Fatal("remoteCIInfrastructureFailureRunID(repository failure) = true, want false")
+	}
+	if _, ok := remoteCIInfrastructureFailureRunID(execx.Result{}, errors.New("Failed to resolve action download info"), "missing run URL"); ok {
+		t.Fatal("remoteCIInfrastructureFailureRunID(missing URL) = true, want false")
+	}
+	wantRerun := execx.Command{Dir: "/repo", Name: "gh", Args: []string{"run", "rerun", "31117236324", "--failed"}}
+	if got := rerunFailedWorkflowCommand("/repo", " 31117236324 "); !reflect.DeepEqual(got, wantRerun) {
+		t.Fatalf("rerunFailedWorkflowCommand() = %#v, want %#v", got, wantRerun)
 	}
 	if got := workflowDispatchConclusionBucket("completed", "success"); got != "pass" {
 		t.Fatalf("workflowDispatchConclusionBucket(success) = %q, want pass", got)
