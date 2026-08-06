@@ -7852,11 +7852,20 @@ func remoteCIInfrastructureFailureRunID(agentRes execx.Result, agentErr error, c
 		return "", false
 	}
 
-	match := githubActionsRunURLPattern.FindStringSubmatch(checkSummary)
-	if len(match) != 2 {
+	matches := githubActionsRunURLPattern.FindAllStringSubmatch(checkSummary, -1)
+	uniqueRunIDs := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		if len(match) == 2 {
+			uniqueRunIDs[match[1]] = struct{}{}
+		}
+	}
+	if len(uniqueRunIDs) != 1 {
 		return "", false
 	}
-	return match[1], true
+	for runID := range uniqueRunIDs {
+		return runID, true
+	}
+	return "", false
 }
 
 func errorString(err error) string {

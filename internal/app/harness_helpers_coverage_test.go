@@ -190,6 +190,14 @@ func TestHarnessRuntimeAndCheckSnapshotHelpers(t *testing.T) {
 	if _, ok := remoteCIInfrastructureFailureRunID(execx.Result{}, errors.New("Failed to resolve action download info"), "missing run URL"); ok {
 		t.Fatal("remoteCIInfrastructureFailureRunID(missing URL) = true, want false")
 	}
+	duplicateRunSummary := checkSummary + "\nTests\tfail\t2m\thttps://github.com/acme/repo/actions/runs/31117236324/job/92669892901"
+	if runID, ok := remoteCIInfrastructureFailureRunID(execx.Result{}, errors.New("Failed to resolve action download info"), duplicateRunSummary); !ok || runID != "31117236324" {
+		t.Fatalf("remoteCIInfrastructureFailureRunID(duplicate run URLs) = (%q, %v), want unique run ID", runID, ok)
+	}
+	ambiguousSummary := checkSummary + "\nTests\tfail\t2m\thttps://github.com/acme/repo/actions/runs/41117236325/job/92669892902"
+	if _, ok := remoteCIInfrastructureFailureRunID(execx.Result{}, errors.New("Failed to resolve action download info"), ambiguousSummary); ok {
+		t.Fatal("remoteCIInfrastructureFailureRunID(multiple runs) = true, want false")
+	}
 	wantRerun := execx.Command{Dir: "/repo", Name: "gh", Args: []string{"run", "rerun", "31117236324", "--failed"}}
 	if got := rerunFailedWorkflowCommand("/repo", " 31117236324 "); !reflect.DeepEqual(got, wantRerun) {
 		t.Fatalf("rerunFailedWorkflowCommand() = %#v, want %#v", got, wantRerun)
