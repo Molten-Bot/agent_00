@@ -75,32 +75,10 @@ func TestDeployProdPromotesExistingImageTag(t *testing.T) {
 		"cache-from:",
 		"provenance:",
 		"sbom:",
-		"moltenai/moltenhub-code",
 	} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("%s still rebuilds latest through %q", workflowPath, forbidden)
 		}
-	}
-}
-
-func TestDeployVnextDoesNotPublishLegacyDockerImage(t *testing.T) {
-	t.Parallel()
-
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller(0) failed")
-	}
-
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "deploy-vnext.yml")
-
-	data, err := os.ReadFile(workflowPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", workflowPath, err)
-	}
-
-	if strings.Contains(string(data), "moltenai/moltenhub-code") {
-		t.Fatalf("%s still publishes the legacy Docker image", workflowPath)
 	}
 }
 

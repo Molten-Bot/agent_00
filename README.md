@@ -11,10 +11,6 @@ The highest velocity way to make code changes. Run AI coding agents against GitH
 docker run -p 7777:7777 moltenai/agent_00:latest
 ```
 
-`moltenai/moltenhub-code:v1.0.48` is the final release under the previous
-Docker image name. It remains available for migration, but all new releases
-are published as `moltenai/agent_00`.
-
 ### Docker Compose with Prompt Dictation
 
 ```bash

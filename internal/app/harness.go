@@ -4908,8 +4908,7 @@ func isAgent00Repository(repoURL string) bool {
 }
 
 func isAgent00RepositoryName(name string) bool {
-	return strings.EqualFold(name, config.DefaultRepositoryName) ||
-		strings.EqualFold(name, "moltenhub-code")
+	return strings.EqualFold(name, config.DefaultRepositoryName)
 }
 
 func isGitHubSSHRemoteURL(rawURL string) bool {
