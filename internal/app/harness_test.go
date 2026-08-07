@@ -193,7 +193,7 @@ func sampleConfig() config.Config {
 		Prompt:        "Build API",
 		CommitMessage: "feat: automate api",
 		PRTitle:       "feat: automate api",
-		PRBody:        "Proposed changes from Molten.Bot\n\nThis PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified.\n\nAutomated by agent_00\n\nOriginal task prompt:\n```text\nBuild API\n```\n\nCurious how this was built? See how AI agents can help with your own projects: [agent_00](https://molten.bot/code?source=pr)",
+		PRBody:        "Proposed changes from Agent_00\n\nThis PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified.\n\nAutomated by Agent_00\n\nOriginal task prompt:\n```text\nBuild API\n```\n\nCurious how this was built? See how AI agents can help with your own projects: [Agent_00](https://molten.bot/code?source=pr)",
 		Labels:        []string{"automation", ""},
 		Reviewers:     []string{"octocat", ""},
 	}
@@ -947,7 +947,7 @@ func TestRunBuildsReviewContextBeforeInvokingCodex(t *testing.T) {
 
 	cfg := sampleConfig()
 	cfg.Prompt = "Review the pull request"
-	cfg.PRBody = "Proposed changes from Molten.Bot\n\nThis PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified.\n\nAutomated by agent_00\n\nOriginal task prompt:\n```text\nReview the pull request\n```\n\nCurious how this was built? See how AI agents can help with your own projects: [agent_00](https://molten.bot/code?source=pr)"
+	cfg.PRBody = "Proposed changes from Agent_00\n\nThis PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified.\n\nAutomated by Agent_00\n\nOriginal task prompt:\n```text\nReview the pull request\n```\n\nCurious how this was built? See how AI agents can help with your own projects: [Agent_00](https://molten.bot/code?source=pr)"
 	cfg.Review = &config.ReviewConfig{PRNumber: 42}
 
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
@@ -1012,7 +1012,7 @@ func TestRunBuildsReviewContextFromHeadBranchSelector(t *testing.T) {
 
 	cfg := sampleConfig()
 	cfg.Prompt = "Review the pull request"
-	cfg.PRBody = "Proposed changes from Molten.Bot\n\nThis PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified.\n\nAutomated by agent_00\n\nOriginal task prompt:\n```text\nReview the pull request\n```\n\nCurious how this was built? See how AI agents can help with your own projects: [agent_00](https://molten.bot/code?source=pr)"
+	cfg.PRBody = "Proposed changes from Agent_00\n\nThis PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified.\n\nAutomated by Agent_00\n\nOriginal task prompt:\n```text\nReview the pull request\n```\n\nCurious how this was built? See how AI agents can help with your own projects: [Agent_00](https://molten.bot/code?source=pr)"
 	cfg.Review = &config.ReviewConfig{HeadBranch: "feature/improve-tests", AutoMerge: true, MergeMethod: "squash"}
 
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
@@ -5366,7 +5366,7 @@ func TestRunRepoNotFoundCloneFallsBackToKnownOwner(t *testing.T) {
 	cfg.Repo = ""
 	cfg.Repos = []string{
 		"git@github.com:Molten-Bot/user-portal.git",
-		"git@github.com:moltenbot000/moltenhub-code.git",
+		"git@github.com:moltenbot000/agent_00.git",
 	}
 	cfg.TargetSubdir = "."
 
@@ -6015,11 +6015,11 @@ func TestPRCreateCommandsEnforceStandardBodyFormat(t *testing.T) {
 	}
 
 	required := []string{
-		"Proposed changes from Molten.Bot",
+		"Proposed changes from Agent_00",
 		"This PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified.",
 		"Hardened auth retry flow and fixed flaky assertions.",
 		"Original task prompt:\n```text\nInvestigate failing checks\n```",
-		"Curious how this was built? See how AI agents can help with your own projects: [agent_00](https://molten.bot/code?source=pr)",
+		"Curious how this was built? See how AI agents can help with your own projects: [Agent_00](https://molten.bot/code?source=pr)",
 	}
 	for _, item := range required {
 		if !strings.Contains(body, item) {

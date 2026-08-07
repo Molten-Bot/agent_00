@@ -144,25 +144,13 @@ func TestIsRepoNotFoundCloneError(t *testing.T) {
 func TestRepoOwnerFallbackURL(t *testing.T) {
 	t.Parallel()
 
-	repoURL := "git@github.com:moltenbot000/moltenhub-code.git"
+	repoURL := "git@github.com:moltenbot000/agent_00.git"
 	hints := repoOwnerFallbackCandidates([]string{
 		"git@github.com:Molten-Bot/user-portal.git",
-		repoURL,
+		"git@github.com:Molten-Bot/agent_00.git",
 	})
 
 	got, ok := repoOwnerFallbackURL(repoURL, hints)
-	if !ok {
-		t.Fatal("repoOwnerFallbackURL() ok = false, want true")
-	}
-	if got != "git@github.com:Molten-Bot/agent_00.git" {
-		t.Fatalf("repoOwnerFallbackURL() = %q, want %q", got, "git@github.com:Molten-Bot/agent_00.git")
-	}
-}
-
-func TestRepoOwnerFallbackURLMigratesLegacyCanonicalURL(t *testing.T) {
-	t.Parallel()
-
-	got, ok := repoOwnerFallbackURL("git@github.com:Molten-Bot/moltenhub-code.git", nil)
 	if !ok {
 		t.Fatal("repoOwnerFallbackURL() ok = false, want true")
 	}
@@ -222,7 +210,7 @@ func TestGitHubRepoRefWithHTTPSOwner(t *testing.T) {
 	}
 }
 
-func TestIsAgent00RepositorySupportsRenamedAndLegacyURLs(t *testing.T) {
+func TestIsAgent00RepositorySupportsSSHandHTTPSURLs(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -230,9 +218,8 @@ func TestIsAgent00RepositorySupportsRenamedAndLegacyURLs(t *testing.T) {
 		repoURL string
 		want    bool
 	}{
-		{name: "renamed SSH", repoURL: config.DefaultRepositoryURL, want: true},
-		{name: "renamed HTTPS", repoURL: "https://github.com/Molten-Bot/agent_00.git", want: true},
-		{name: "legacy redirect", repoURL: "git@github.com:Molten-Bot/moltenhub-code.git", want: true},
+		{name: "SSH", repoURL: config.DefaultRepositoryURL, want: true},
+		{name: "HTTPS", repoURL: "https://github.com/Molten-Bot/agent_00.git", want: true},
 		{name: "wrong owner", repoURL: "git@github.com:octocat/agent_00.git", want: false},
 		{name: "other repository", repoURL: "git@github.com:Molten-Bot/moltenhub.git", want: false},
 		{name: "invalid", repoURL: "not-a-repository", want: false},
