@@ -1,10 +1,10 @@
-FROM golang:1.26.2-trixie AS build
+FROM golang:1.26.5-trixie AS build
 WORKDIR /src
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
-ARG GIT_CHANGES_BY_DAY_VERSION=latest
+ARG GIT_CHANGES_BY_DAY_VERSION=v0.0.0-20260518234615-87ad8a8d0d77
 
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
@@ -19,7 +19,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/harness ./cmd/harness
 
-FROM node:25.9.0-trixie-slim AS runtime
+FROM node:26.5.0-trixie-slim AS runtime
+ARG CODEX_VERSION=0.147.0
+ARG CLAUDE_CODE_VERSION=2.1.224
+ARG RAILSMITH_VERSION=0.1.2
+ARG PLAYWRIGHT_VERSION=1.62.1
+ARG OPENAI_PYTHON_VERSION=2.53.0
 ENV GIT_TERMINAL_PROMPT=0 \
     HARNESS_AGENT_HARNESS="" \
     HARNESS_AGENT_COMMAND="" \
@@ -32,7 +37,9 @@ ENV GIT_TERMINAL_PROMPT=0 \
     PLAYWRIGHT_SKIP_BROWSER_GC=1 \
     PATH="/usr/local/go/bin:${PATH}"
 
-RUN apt-get update \
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         file \
@@ -46,14 +53,14 @@ RUN apt-get update \
         ripgrep \
     && ln -sf /usr/bin/python3 /usr/local/bin/python \
     && ln -sf /usr/bin/pip3 /usr/local/bin/pip \
-    && python3 -m pip install --no-cache-dir --break-system-packages --root-user-action=ignore --upgrade openai \
-    && npm install --global \
-      @openai/codex@latest \
-      @anthropic-ai/claude-code@latest \
-      @moltenbot/railsmith@latest \
-      playwright@latest \
-      @playwright/test@latest \
-    && playwright install --with-deps chromium \
+    && python3 -m pip install --no-cache-dir --break-system-packages --root-user-action=ignore --upgrade "openai==${OPENAI_PYTHON_VERSION}" \
+    && npm install --global --no-audit --no-fund \
+      "@openai/codex@${CODEX_VERSION}" \
+      "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+      "@moltenbot/railsmith@${RAILSMITH_VERSION}" \
+      "playwright@${PLAYWRIGHT_VERSION}" \
+      "@playwright/test@${PLAYWRIGHT_VERSION}" \
+    && playwright install --with-deps --no-shell chromium \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/* /tmp/* \
     && mkdir -p /workspace/config/home /workspace/agent_00/tasks \
@@ -67,7 +74,8 @@ COPY library /opt/moltenhub/library
 COPY skills /opt/moltenhub/skills
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/entrypoint
 COPY --chmod=755 docker/with-config.sh /usr/local/bin/with-config
-RUN ln -sf /usr/local/go/bin/go /usr/local/bin/go \
+RUN rm -rf /usr/local/go/api /usr/local/go/doc /usr/local/go/misc /usr/local/go/test \
+    && ln -sf /usr/local/go/bin/go /usr/local/bin/go \
     && ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt \
     && ln -s /opt/moltenhub/library /workspace/library \
     && ln -s /opt/moltenhub/skills /workspace/skills

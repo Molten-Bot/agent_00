@@ -29,6 +29,9 @@ func TestDeployVnextPublishesSupplyChainAttestations(t *testing.T) {
 		"uses: docker/build-push-action@v7",
 		"provenance: mode=max",
 		"sbom: true",
+		"pull: true",
+		"platforms: linux/amd64",
+		"moltenai/agent_00:vnext",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("%s missing supply chain attestation setting %q", workflowPath, want)
@@ -59,9 +62,9 @@ func TestDeployProdPromotesExistingImageTag(t *testing.T) {
 		"SOURCE_TAG: ${{ github.event.inputs.source_tag }}",
 		"Invalid source_tag: ${SOURCE_TAG}",
 		"docker buildx imagetools create",
-		"--tag \"moltenai/moltenhub-code:${RELEASE_TAG}\"",
-		"--tag moltenai/moltenhub-code:latest",
-		"\"moltenai/moltenhub-code:${SOURCE_TAG}\"",
+		"--tag \"moltenai/agent_00:${RELEASE_TAG}\"",
+		"--tag moltenai/agent_00:latest",
+		"\"moltenai/agent_00:${SOURCE_TAG}\"",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("%s missing promotion setting %q", workflowPath, want)
@@ -72,10 +75,32 @@ func TestDeployProdPromotesExistingImageTag(t *testing.T) {
 		"cache-from:",
 		"provenance:",
 		"sbom:",
+		"moltenai/moltenhub-code",
 	} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("%s still rebuilds latest through %q", workflowPath, forbidden)
 		}
+	}
+}
+
+func TestDeployVnextDoesNotPublishLegacyDockerImage(t *testing.T) {
+	t.Parallel()
+
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	workflowPath := filepath.Join(repoRoot, ".github", "workflows", "deploy-vnext.yml")
+
+	data, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", workflowPath, err)
+	}
+
+	if strings.Contains(string(data), "moltenai/moltenhub-code") {
+		t.Fatalf("%s still publishes the legacy Docker image", workflowPath)
 	}
 }
 

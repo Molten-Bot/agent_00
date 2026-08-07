@@ -164,12 +164,12 @@ jobs:
           esac
 
           docker buildx imagetools create \
-            --tag "moltenai/moltenhub-code:${RELEASE_TAG}" \
-            --tag moltenai/moltenhub-code:latest \
-            "moltenai/moltenhub-code:${SOURCE_TAG}"
+            --tag "moltenai/agent_00:${RELEASE_TAG}" \
+            --tag moltenai/agent_00:latest \
+            "moltenai/agent_00:${SOURCE_TAG}"
 
           echo "### Docker promotion" >> "${GITHUB_STEP_SUMMARY}"
           echo "- Release: ${RELEASE_TAG}" >> "${GITHUB_STEP_SUMMARY}"
-          echo "- Promoted: moltenai/moltenhub-code:${SOURCE_TAG}" >> "${GITHUB_STEP_SUMMARY}"
-          echo "- Immutable: moltenai/moltenhub-code:${RELEASE_TAG}" >> "${GITHUB_STEP_SUMMARY}"
-          echo "- Latest: moltenai/moltenhub-code:latest" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Promoted: moltenai/agent_00:${SOURCE_TAG}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Immutable: moltenai/agent_00:${RELEASE_TAG}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- Latest: moltenai/agent_00:latest" >> "${GITHUB_STEP_SUMMARY}"

@@ -61,7 +61,7 @@ jobs:
       - name: Compute tags
         id: tags
         run: |
-          TAGS="moltenai/moltenhub-code:vnext,moltenai/moltenhub-code:${{ steps.version.outputs.tag }}"
+          TAGS="moltenai/agent_00:vnext,moltenai/agent_00:${{ steps.version.outputs.tag }}"
           echo "value=${TAGS}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
@@ -69,6 +69,8 @@ jobs:
         with:
           context: .
           push: true
+          pull: true
+          platforms: linux/amd64
           tags: ${{ steps.tags.outputs.value }}
           provenance: mode=max
           sbom: true

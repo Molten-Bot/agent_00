@@ -43,11 +43,8 @@ docker run --rm -p 7777:7777 \
   -e MOLTEN_HUB_TOKEN \
   -e MOLTEN_HUB_REGION=na \
   -v "$PWD/.moltenhub:/workspace/config" \
-  moltenhub-code:latest
+  moltenai/agent_00:latest
 ```
-
-The `agent_00` application continues to use the existing
-`moltenai/moltenhub-code` Docker Hub repository.
 
 `MOLTEN_HUB_TOKEN` only needs to be present for first bootstrap when no `config.json` or `init.json` exists yet. Optional extras:
 - `MOLTEN_HUB_REGION=na|eu` selects hosted hub region
@@ -63,7 +60,7 @@ Compose example:
 ```yaml
 services:
   codex:
-    image: moltenai/moltenhub-code:latest
+    image: moltenai/agent_00:latest
     ports:
       - "3331:7777"
     volumes:
