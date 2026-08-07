@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+printf '%s\n' \
+    'DEPRECATION: moltenai/moltenhub-code is deprecated and will receive no further updates.' \
+    'Use moltenai/agent_00 instead: docker pull moltenai/agent_00:latest' \
+    'https://hub.docker.com/r/moltenai/agent_00' >&2
+
 config_dir="${HARNESS_CONFIG_DIR:-/workspace/config}"
 if [ "${HOME:-}" = "" ]; then
     export HOME="${config_dir}/home"
