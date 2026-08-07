@@ -109,12 +109,13 @@ func TestRuntimeDockerfileInstallsPlaywrightTest(t *testing.T) {
 
 	content := string(data)
 	for _, want := range []string{
-		"playwright@latest",
-		"@playwright/test@latest",
+		"ARG PLAYWRIGHT_VERSION=1.62.1",
+		"\"playwright@${PLAYWRIGHT_VERSION}\"",
+		"\"@playwright/test@${PLAYWRIGHT_VERSION}\"",
 		"NODE_PATH=/usr/local/lib/node_modules",
 		"PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright",
 		"PLAYWRIGHT_SKIP_BROWSER_GC=1",
-		"playwright install --with-deps chromium",
+		"playwright install --with-deps --no-shell chromium",
 		"chown -R node:node /workspace /opt/ms-playwright",
 	} {
 		if !strings.Contains(content, want) {
@@ -147,8 +148,14 @@ func TestRuntimeDockerfileInstallsRailsmith(t *testing.T) {
 		t.Fatalf("ReadFile(%q) error = %v", dockerfilePath, err)
 	}
 
-	if !strings.Contains(string(data), "@moltenbot/railsmith@latest") {
-		t.Fatalf("%s does not install railsmith in the runtime image", dockerfilePath)
+	content := string(data)
+	for _, want := range []string{
+		"ARG RAILSMITH_VERSION=0.1.2",
+		"\"@moltenbot/railsmith@${RAILSMITH_VERSION}\"",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("%s does not install pinned railsmith runtime requirement %q", dockerfilePath, want)
+		}
 	}
 }
 
@@ -170,7 +177,7 @@ func TestRuntimeDockerfileInstallsGitChangesByDay(t *testing.T) {
 
 	content := string(data)
 	for _, want := range []string{
-		"ARG GIT_CHANGES_BY_DAY_VERSION=latest",
+		"ARG GIT_CHANGES_BY_DAY_VERSION=v0.0.0-20260518234615-87ad8a8d0d77",
 		"go install github.com/moltenbot000/git-changes-by-day@${GIT_CHANGES_BY_DAY_VERSION}",
 		"COPY --from=build --chmod=755 /out/git-changes-by-day /usr/local/bin/git-changes-by-day",
 	} {
@@ -228,8 +235,9 @@ func TestRuntimeDockerfileInstallsOpenAIPythonSDK(t *testing.T) {
 
 	content := string(data)
 	for _, want := range []string{
+		"ARG OPENAI_PYTHON_VERSION=2.53.0",
 		"python3 -m pip install",
-		"--upgrade openai",
+		"openai==${OPENAI_PYTHON_VERSION}",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("%s does not install latest OpenAI Python SDK requirement %q", dockerfilePath, want)
@@ -264,9 +272,11 @@ func TestRuntimeDockerfileUsesDebianBaseImages(t *testing.T) {
 
 	content := string(data)
 	for _, want := range []string{
-		"FROM golang:1.26.2-trixie AS build",
-		"FROM node:25.9.0-trixie-slim AS runtime",
+		"FROM golang:1.26.5-trixie AS build",
+		"COPY go.mod go.sum ./",
+		"FROM node:26.5.0-trixie-slim AS runtime",
 		"apt-get update",
+		"apt-get upgrade -y --no-install-recommends",
 		"apt-get install -y --no-install-recommends",
 		"file",
 		"gh",
@@ -293,6 +303,68 @@ func TestRuntimeDockerfileUsesDebianBaseImages(t *testing.T) {
 	} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("%s still contains Alpine-specific token %q", dockerfilePath, forbidden)
+		}
+	}
+}
+
+func TestRuntimeDockerfilePinsAgentCLIs(t *testing.T) {
+	t.Parallel()
+
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	dockerfilePath := filepath.Join(repoRoot, "Dockerfile")
+
+	data, err := os.ReadFile(dockerfilePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", dockerfilePath, err)
+	}
+
+	content := string(data)
+	for _, want := range []string{
+		"ARG CODEX_VERSION=0.147.0",
+		"ARG CLAUDE_CODE_VERSION=2.1.224",
+		"\"@openai/codex@${CODEX_VERSION}\"",
+		"\"@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}\"",
+		"npm install --global --no-audit --no-fund",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("%s missing pinned agent CLI requirement %q", dockerfilePath, want)
+		}
+	}
+	if strings.Contains(content, "@latest") {
+		t.Fatalf("%s contains an unpinned npm or Go dependency", dockerfilePath)
+	}
+}
+
+func TestRuntimeDockerfilePrunesNonRuntimeGoDistributionTrees(t *testing.T) {
+	t.Parallel()
+
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	dockerfilePath := filepath.Join(repoRoot, "Dockerfile")
+
+	data, err := os.ReadFile(dockerfilePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", dockerfilePath, err)
+	}
+
+	content := string(data)
+	for _, want := range []string{
+		"/usr/local/go/api",
+		"/usr/local/go/doc",
+		"/usr/local/go/misc",
+		"/usr/local/go/test",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("%s does not prune non-runtime Go tree %q", dockerfilePath, want)
 		}
 	}
 }

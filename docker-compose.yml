@@ -1,6 +1,6 @@
 services:
   agent_00:
-    image: ${AGENT_00_IMAGE:-moltenai/moltenhub-code:latest}
+    image: ${AGENT_00_IMAGE:-moltenai/agent_00:latest}
     ports:
       - "${AGENT_00_PORT:-7777}:7777"
     environment:

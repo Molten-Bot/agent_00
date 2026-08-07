@@ -9,43 +9,6 @@ import (
 	"testing"
 )
 
-const legacyImageDeprecationWarning = "DEPRECATION: moltenai/moltenhub-code is deprecated and will receive no further updates.\n" +
-	"Use moltenai/agent_00 instead: docker pull moltenai/agent_00:latest\n" +
-	"https://hub.docker.com/r/moltenai/agent_00\n"
-
-func TestEntrypointPrintsLegacyImageDeprecationWarning(t *testing.T) {
-	env := newEntrypointTestEnv(t)
-	writeEntrypointStub(t, env, "git", "#!/bin/sh\nexit 0\n")
-	writeEntrypointStub(t, env, "gh", "#!/bin/sh\nexit 0\n")
-	writeEntrypointStub(t, env, "true", "#!/bin/sh\nexit 0\n")
-
-	output, err := runEntrypointScript(t, env, nil, "true")
-	if err != nil {
-		t.Fatalf("entrypoint error: %v\noutput: %s", err, output)
-	}
-	if !strings.HasPrefix(output, legacyImageDeprecationWarning) {
-		t.Fatalf("entrypoint output does not begin with legacy image warning:\n%s", output)
-	}
-}
-
-func TestEntrypointPrintsLegacyImageDeprecationWarningForCustomCommand(t *testing.T) {
-	env := newEntrypointTestEnv(t)
-	writeEntrypointStub(t, env, "git", "#!/bin/sh\nexit 0\n")
-	writeEntrypointStub(t, env, "gh", "#!/bin/sh\nexit 0\n")
-	writeEntrypointStub(t, env, "custom-command", "#!/bin/sh\nprintf '%s\\n' custom-command-ran\n")
-
-	output, err := runEntrypointScript(t, env, nil, "custom-command")
-	if err != nil {
-		t.Fatalf("entrypoint error: %v\noutput: %s", err, output)
-	}
-	if !strings.HasPrefix(output, legacyImageDeprecationWarning) {
-		t.Fatalf("entrypoint output does not begin with legacy image warning:\n%s", output)
-	}
-	if !strings.Contains(output, "custom-command-ran\n") {
-		t.Fatalf("entrypoint did not execute custom command:\n%s", output)
-	}
-}
-
 func TestEntrypointSeedsRailsmithCodexSkill(t *testing.T) {
 	env := newEntrypointTestEnv(t)
 	guide := "# railsmith Agent Guide\n\nRun `railsmith doctor --root .`."

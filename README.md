@@ -8,8 +8,12 @@ The highest velocity way to make code changes. Run AI coding agents against GitH
 ### Docker
 
 ```bash
-docker run -p 7777:7777 moltenai/moltenhub-code
+docker run -p 7777:7777 moltenai/agent_00:latest
 ```
+
+`moltenai/moltenhub-code:v1.0.48` is the final release under the previous
+Docker image name. It remains available for migration, but all new releases
+are published as `moltenai/agent_00`.
 
 ### Docker Compose with Prompt Dictation
 
@@ -35,7 +39,7 @@ hints for more reliable short-form dictation; set both `WHISPER_LANG=auto` and
 
 ### Local Build
 
-Requires Go `1.26.2` or newer plus `git`, `gh`, and the selected agent CLI.
+Requires Go `1.26.5` or newer plus `git`, `gh`, and the selected agent CLI.
 
 ```bash
 go build -o bin/harness ./cmd/harness
@@ -89,6 +93,11 @@ git-changes-by-day -repo /path/to/repo -text-out /tmp/commit-text.csv
 
 The CSV includes UTC datetime/date columns, commit metadata, changed file
 counts, and line change counts.
+
+The image includes Playwright's full Chromium build without the legacy
+headless-shell download. For headless runs, select Playwright's new headless
+mode with `channel: "chromium"` in `playwright.config` or the equivalent launch
+option.
 
 ## Environment Variables
 

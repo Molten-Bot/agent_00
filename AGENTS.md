@@ -14,7 +14,7 @@
 
 ## Commands
 
-- Use Go `1.26.2` or newer, as declared in `go.mod`.
+- Use Go `1.26.5` or newer, as declared in `go.mod`.
 - Match CI before finishing broad changes:
   - `go mod download`
   - `go build ./...`
