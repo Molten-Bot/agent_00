@@ -22,10 +22,9 @@ func TestHandleSpeechStatusReportsReachableSidecar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split listener address: %v", err)
 	}
-	t.Setenv("MOLTEN_HUB_SPEECH_HOST", host)
-	t.Setenv("MOLTEN_HUB_SPEECH_PORT", port)
-	t.Setenv("MOLTEN_HUB_SPEECH_LANGUAGE", "")
-	t.Setenv("MOLTENHUB_SPEECH_LANGUAGE", "")
+	t.Setenv("WHISPER_SPEECH_HOST", host)
+	t.Setenv("WHISPER_SPEECH_PORT", port)
+	t.Setenv("WHISPER_SPEECH_LANGUAGE", "")
 	t.Setenv("WHISPER_LANG", "")
 
 	srv := NewServer("", NewBroker())
@@ -91,10 +90,9 @@ func TestHandleSpeechTranscribeUsesWyomingServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split listener address: %v", err)
 	}
-	t.Setenv("MOLTEN_HUB_SPEECH_HOST", host)
-	t.Setenv("MOLTEN_HUB_SPEECH_PORT", port)
-	t.Setenv("MOLTEN_HUB_SPEECH_LANGUAGE", "")
-	t.Setenv("MOLTENHUB_SPEECH_LANGUAGE", "")
+	t.Setenv("WHISPER_SPEECH_HOST", host)
+	t.Setenv("WHISPER_SPEECH_PORT", port)
+	t.Setenv("WHISPER_SPEECH_LANGUAGE", "")
 	t.Setenv("WHISPER_LANG", "")
 
 	srv := NewServer("", NewBroker())
@@ -158,9 +156,9 @@ func TestHandleSpeechTranscribeAutoLanguageOmitsWyomingLanguage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split listener address: %v", err)
 	}
-	t.Setenv("MOLTEN_HUB_SPEECH_HOST", host)
-	t.Setenv("MOLTEN_HUB_SPEECH_PORT", port)
-	t.Setenv("MOLTEN_HUB_SPEECH_LANGUAGE", "en")
+	t.Setenv("WHISPER_SPEECH_HOST", host)
+	t.Setenv("WHISPER_SPEECH_PORT", port)
+	t.Setenv("WHISPER_SPEECH_LANGUAGE", "en")
 
 	srv := NewServer("", NewBroker())
 	req := httptest.NewRequest(http.MethodPost, "/api/speech/transcribe?language=auto", bytes.NewReader([]byte{1, 0, 2, 0}))
@@ -200,8 +198,8 @@ func TestHandleSpeechTranscribeEmptyTranscriptReportsReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split listener address: %v", err)
 	}
-	t.Setenv("MOLTEN_HUB_SPEECH_HOST", host)
-	t.Setenv("MOLTEN_HUB_SPEECH_PORT", port)
+	t.Setenv("WHISPER_SPEECH_HOST", host)
+	t.Setenv("WHISPER_SPEECH_PORT", port)
 
 	srv := NewServer("", NewBroker())
 	req := httptest.NewRequest(http.MethodPost, "/api/speech/transcribe", bytes.NewReader([]byte{0, 0, 0, 0}))
@@ -251,8 +249,8 @@ func TestHandleSpeechTranscribeWyomingEOFReportsStructuredError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split listener address: %v", err)
 	}
-	t.Setenv("MOLTEN_HUB_SPEECH_HOST", host)
-	t.Setenv("MOLTEN_HUB_SPEECH_PORT", port)
+	t.Setenv("WHISPER_SPEECH_HOST", host)
+	t.Setenv("WHISPER_SPEECH_PORT", port)
 
 	srv := NewServer("", NewBroker())
 	req := httptest.NewRequest(http.MethodPost, "/api/speech/transcribe", bytes.NewReader([]byte{1, 0, 2, 0}))
@@ -318,8 +316,8 @@ func TestHandleSpeechTranscribeUsesStreamingTranscriptFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split listener address: %v", err)
 	}
-	t.Setenv("MOLTEN_HUB_SPEECH_HOST", host)
-	t.Setenv("MOLTEN_HUB_SPEECH_PORT", port)
+	t.Setenv("WHISPER_SPEECH_HOST", host)
+	t.Setenv("WHISPER_SPEECH_PORT", port)
 
 	srv := NewServer("", NewBroker())
 	req := httptest.NewRequest(http.MethodPost, "/api/speech/transcribe?language=auto", bytes.NewReader([]byte{1, 0, 2, 0}))
@@ -397,7 +395,7 @@ func TestAnalyzeSpeechPCMDetectsSilenceAndSignal(t *testing.T) {
 }
 
 func TestLoadSpeechConfigAllowsAutomaticLanguage(t *testing.T) {
-	t.Setenv("MOLTEN_HUB_SPEECH_LANGUAGE", "auto")
+	t.Setenv("WHISPER_SPEECH_LANGUAGE", "auto")
 
 	cfg := loadSpeechConfig()
 	if cfg.Language != "" {

@@ -31,7 +31,7 @@ prompt field. The Compose sidecar disables Docker log capture because
 `wyoming-faster-whisper` logs transcript text at INFO level.
 The bundled sidecar defaults to the `base-int8` model and English language
 hints for more reliable short-form dictation; set both `WHISPER_LANG=auto` and
-`MOLTEN_HUB_SPEECH_LANGUAGE=auto` to use Whisper language detection.
+`WHISPER_SPEECH_LANGUAGE=auto` to use Whisper language detection.
 
 ### Local Build
 
@@ -105,13 +105,15 @@ Useful environment variables:
 - `OPENAI_API_KEY`: Codex login bootstrap.
 - `MOLTEN_HUB_DEFAULT_REPOSITORY`: optional repository prefill for Prompt
   Studio; omitted leaves the repository field empty.
-- `MOLTEN_HUB_SPEECH_HOST`: optional speech sidecar host; defaults to
+- `WHISPER_SPEECH_HOST`: optional speech sidecar host; defaults to
   `faster-whisper`.
-- `MOLTEN_HUB_SPEECH_PORT`: optional speech sidecar Wyoming port; defaults to
+- `WHISPER_SPEECH_PORT`: optional speech sidecar Wyoming port; defaults to
   `10300`.
-- `MOLTEN_HUB_SPEECH_LANGUAGE`: optional speech language hint; defaults to
+- `WHISPER_SPEECH_LANGUAGE`: optional speech language hint; defaults to
   `en`. Set to `auto` to use Whisper language detection.
-- `MOLTEN_HUB_SPEECH_DISABLED`: set to `true` to hide prompt dictation.
+- `WHISPER_SPEECH_TIMEOUT_SECONDS`: optional speech transcription timeout in
+  seconds; defaults to `120`.
+- `WHISPER_SPEECH_DISABLED`: set to `true` to hide prompt dictation.
 
 ## Response Modes
 
