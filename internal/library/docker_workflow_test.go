@@ -59,6 +59,7 @@ func TestDeployProdPromotesExistingImageTag(t *testing.T) {
 		"SOURCE_TAG: ${{ github.event.inputs.source_tag }}",
 		"Invalid source_tag: ${SOURCE_TAG}",
 		"docker buildx imagetools create",
+		"--tag \"moltenai/moltenhub-code:${RELEASE_TAG}\"",
 		"--tag moltenai/moltenhub-code:latest",
 		"\"moltenai/moltenhub-code:${SOURCE_TAG}\"",
 	} {
