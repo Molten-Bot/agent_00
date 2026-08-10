@@ -3870,7 +3870,8 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 		`startConnectionStatus`,
 		`const response = await fetch("/api/status", { cache: "no-store" });`,
 		`connectionStatusStream = new EventSource("/api/stream");`,
-		`${headerState.label} is now a 600LB Gorilla!`,
+		`const gorillaLabel = headerState.label === "Claude Code" ? "Claude" : headerState.label;`,
+		`${gorillaLabel} is now a 600LB Gorilla!`,
 	}
 	for _, needle := range required {
 		if !strings.Contains(script, needle) {
