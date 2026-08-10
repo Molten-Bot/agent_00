@@ -195,7 +195,7 @@ func TestBuildCommandClaude(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildCommand() error = %v", err)
 	}
-	wantArgs := []string{"--print", "--output-format", "text", "--dangerously-skip-permissions", "--add-dir", "/tmp/run", "fix bug"}
+	wantArgs := []string{"--print", "--output-format", "text", "--dangerously-skip-permissions", "--add-dir", "/tmp/run", "--", "fix bug"}
 	if cmd.Name != "claude" || cmd.Dir != "/tmp/repo" || !reflect.DeepEqual(cmd.Args, wantArgs) {
 		t.Fatalf("unexpected claude command: %+v", cmd)
 	}

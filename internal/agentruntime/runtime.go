@@ -226,7 +226,7 @@ func buildClaudeCommand(targetDir, prompt string, opts RunOptions) (execx.Comman
 		}
 		args = append(args, "--add-dir", dir)
 	}
-	args = append(args, prompt)
+	args = append(args, "--", prompt)
 	return execx.Command{Dir: targetDir, Args: args, Env: append([]string(nil), opts.Env...)}, nil
 }
 
