@@ -610,6 +610,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if profileButtonIndex == -1 || profileButtonIndex < moltenbotIndex {
 		t.Fatalf("expected hub profile button to render to the right of the hub dock icon")
 	}
+	if !strings.Contains(markup, `id="moltenbot-hub-profile-button"`) ||
+		!strings.Contains(markup, `aria-label="Settings"`) ||
+		!strings.Contains(markup, `moltenBotHubProfileButton.hidden = false;`) ||
+		strings.Contains(markup, `moltenBotHubProfileButton.hidden = !configured;`) {
+		t.Fatalf("expected settings button to remain available before Hub setup")
+	}
 	if !strings.Contains(markup, `id="settings-tab-review"`) || !strings.Contains(markup, `id="settings-tab-hub"`) ||
 		!strings.Contains(markup, `role="tablist" aria-label="Settings sections"`) ||
 		!strings.Contains(markup, `data-lucide="git-pull-request-arrow"`) ||
