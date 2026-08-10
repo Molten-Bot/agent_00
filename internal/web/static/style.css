@@ -5244,12 +5244,21 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   grid-template-rows: minmax(0, 1fr);
 }
 
+.task-fullscreen[data-mode="console"] .task-fullscreen-body {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.task-fullscreen[data-mode="console"] .task-fullscreen-task-panel {
+  display: none;
+}
+
 .task-fullscreen[data-mode="work"] .task-fullscreen-task-panel .scroll {
   max-height: none;
 }
 
 .task-fullscreen-panel {
   min-height: 0;
+  min-width: 0;
   height: 100%;
 }
 
