@@ -5856,7 +5856,6 @@
       clearSubmittedPromptDraft();
       clearPromptImages(false);
       resetBuilderTargetSubdir();
-      resetBaseBranchToDefault(false);
       syncBuilderDraftClearState();
     }
 
@@ -6919,7 +6918,7 @@
       }
     }
 
-    function resetBaseBranchToDefault(syncRaw = true) {
+    function resetBaseBranchToDefault(syncRaw = true, focus = true) {
       builderBaseBranch.value = "";
       libraryBaseBranch.value = "";
       syncBaseBranchClearState();
@@ -6931,7 +6930,17 @@
           // Leave raw editor unchanged if builder fields are incomplete.
         }
       }
-      builderBaseBranch.focus();
+      if (focus) {
+        builderBaseBranch.focus();
+      }
+    }
+
+    function resetBaseBranchForRepositoryChange(previousRepo, nextRepo) {
+      const previousKey = repoDedupeKey(normalizeRepoValue(previousRepo) || defaultRepository());
+      const nextKey = repoDedupeKey(normalizeRepoValue(nextRepo) || defaultRepository());
+      if (previousKey && nextKey && previousKey !== nextKey) {
+        resetBaseBranchToDefault(true, false);
+      }
     }
 
     function syncRepositoryVisibility(select, repositoryField) {
@@ -7027,6 +7036,7 @@
       if (repoDedupeKey(libraryValue) === selectedKey || libraryValue === "") {
         libraryRepoInput.value = nextRepo;
       }
+      resetBaseBranchToDefault(true, false);
       renderRepoHistoryOptions();
     }
 
@@ -13329,12 +13339,14 @@
 
     builderRepoSelect.addEventListener("change", () => {
       const value = normalizeRepoValue(builderRepoSelect.value);
+      const previousRepo = normalizeRepoValue(builderRepoInput.value);
       trackAnalyticsEvent("repo_history_selected", { prompt_mode: "builder", manual: value === "" });
       builderRepoSelect.dataset.manual = value === "" ? "true" : "false";
       libraryRepoSelect.dataset.manual = value === "" ? "true" : "false";
       if (value) {
         builderRepoInput.value = value;
         libraryRepoInput.value = value;
+        resetBaseBranchForRepositoryChange(previousRepo, value);
       }
       renderRepoHistoryOptions();
     });
@@ -13345,12 +13357,14 @@
 
     libraryRepoSelect.addEventListener("change", () => {
       const value = normalizeRepoValue(libraryRepoSelect.value);
+      const previousRepo = normalizeRepoValue(libraryRepoInput.value);
       trackAnalyticsEvent("repo_history_selected", { prompt_mode: "library", manual: value === "" });
       libraryRepoSelect.dataset.manual = value === "" ? "true" : "false";
       builderRepoSelect.dataset.manual = value === "" ? "true" : "false";
       if (value) {
         libraryRepoInput.value = value;
         builderRepoInput.value = value;
+        resetBaseBranchForRepositoryChange(previousRepo, value);
       }
       renderRepoHistoryOptions();
     });
@@ -13418,7 +13432,12 @@
       libraryRepoSelect.dataset.manual = "true";
       renderRepoHistoryOptions();
     });
+    builderRepoInput.addEventListener("focus", () => {
+      builderRepoInput.dataset.repoBeforeEdit = normalizeRepoValue(builderRepoInput.value);
+    });
     builderRepoInput.addEventListener("change", () => {
+      resetBaseBranchForRepositoryChange(builderRepoInput.dataset.repoBeforeEdit, builderRepoInput.value);
+      builderRepoInput.dataset.repoBeforeEdit = normalizeRepoValue(builderRepoInput.value);
       rememberManualRepoEntry(builderRepoInput.value);
     });
     builderRepoInput.addEventListener("blur", () => {
@@ -13433,7 +13452,12 @@
       builderRepoSelect.dataset.manual = "true";
       renderRepoHistoryOptions();
     });
+    libraryRepoInput.addEventListener("focus", () => {
+      libraryRepoInput.dataset.repoBeforeEdit = normalizeRepoValue(libraryRepoInput.value);
+    });
     libraryRepoInput.addEventListener("change", () => {
+      resetBaseBranchForRepositoryChange(libraryRepoInput.dataset.repoBeforeEdit, libraryRepoInput.value);
+      libraryRepoInput.dataset.repoBeforeEdit = normalizeRepoValue(libraryRepoInput.value);
       rememberManualRepoEntry(libraryRepoInput.value);
     });
     libraryRepoInput.addEventListener("blur", () => {
