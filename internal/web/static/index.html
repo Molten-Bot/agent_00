@@ -7036,6 +7036,7 @@
       if (repoDedupeKey(libraryValue) === selectedKey || libraryValue === "") {
         libraryRepoInput.value = nextRepo;
       }
+      resetBaseBranchToDefault(true, false);
       renderRepoHistoryOptions();
     }
 

@@ -2480,6 +2480,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(markup, "function resetBaseBranchForRepositoryChange(previousRepo, nextRepo)") ||
 		!strings.Contains(markup, "resetBaseBranchForRepositoryChange(previousRepo, value);") ||
+		!strings.Contains(markup, "libraryRepoInput.value = nextRepo;\n      }\n      resetBaseBranchToDefault(true, false);\n      renderRepoHistoryOptions();") ||
 		!strings.Contains(markup, "builderRepoInput.dataset.repoBeforeEdit") ||
 		!strings.Contains(markup, "libraryRepoInput.dataset.repoBeforeEdit") {
 		t.Fatalf("expected index html to reset branch only when repository changes")
