@@ -387,9 +387,10 @@
         }
       }
       if (subtitle) {
+        const gorillaLabel = headerState.label === "Claude Code" ? "Claude" : headerState.label;
         subtitle.textContent = headerState.label === "Agent"
           ? "Select your agent to get started."
-          : `${headerState.label} is now a 600LB Gorilla!`;
+          : `${gorillaLabel} is now a 600LB Gorilla!`;
       }
       this.syncLogoRotation(configuredAgentLogo);
     }
