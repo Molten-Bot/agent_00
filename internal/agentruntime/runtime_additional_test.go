@@ -19,7 +19,7 @@ func TestUnsupportedPromptImagesErrorFallsBackWhenDisplayLabelEmpty(t *testing.T
 	if err == nil {
 		t.Fatal("UnsupportedPromptImagesError() = nil, want error")
 	}
-	if got, want := err.Error(), " does not support prompt images:"; len(got) < len(want) || got[:len(want)] != want {
+	if got, want := err.Error(), " does not support prompt images."; len(got) < len(want) || got[:len(want)] != want {
 		t.Fatalf("UnsupportedPromptImagesError() = %q, want empty label fallback prefix %q", got, want)
 	}
 }

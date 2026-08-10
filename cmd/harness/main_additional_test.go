@@ -220,8 +220,8 @@ func TestValidateRunConfigPromptImages(t *testing.T) {
 	if err := validateRunConfigPromptImages(config.Config{
 		AgentHarness: agentruntime.HarnessClaude,
 		Images:       []config.PromptImage{{Name: "shot.png"}},
-	}); err == nil || !errors.Is(err, agentruntime.ErrPromptImagesUnsupported) {
-		t.Fatalf("validateRunConfigPromptImages(claude image) error = %v, want unsupported images", err)
+	}); err != nil {
+		t.Fatalf("validateRunConfigPromptImages(claude image) error = %v", err)
 	}
 }
 

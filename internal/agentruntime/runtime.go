@@ -24,7 +24,8 @@ var harnessDisplayNames = map[string]string{
 }
 
 var promptImageHarnesses = map[string]struct{}{
-	HarnessCodex: {},
+	HarnessClaude: {},
+	HarnessCodex:  {},
 }
 
 // RunOptions controls provider-specific execution behavior.
@@ -213,16 +214,19 @@ func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command
 }
 
 func buildClaudeCommand(targetDir, prompt string, opts RunOptions) (execx.Command, error) {
-	if err := validatePromptImageSupport(HarnessClaude, opts.ImagePaths); err != nil {
-		return execx.Command{}, err
-	}
-
 	args := []string{
 		"--print",
 		"--output-format", "text",
 		"--dangerously-skip-permissions",
-		prompt,
 	}
+	for _, dir := range opts.WritableDirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		args = append(args, "--add-dir", dir)
+	}
+	args = append(args, prompt)
 	return execx.Command{Dir: targetDir, Args: args, Env: append([]string(nil), opts.Env...)}, nil
 }
 
