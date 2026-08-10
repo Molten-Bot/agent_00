@@ -6997,6 +6997,56 @@ func TestRunCodexAllowsValidationToolingMissingFailure(t *testing.T) {
 	}
 }
 
+func TestRunCodexAllowsExplicitlyUnrelatedValidationFailure(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "make typography responsive"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"Responsive typography and layout updated.",
+				"Failure: 2 unrelated booking smoke tests timed out waiting for `.bk-slot:enabled`.",
+				"Error details: static server provides no booking API slots; changed homepage behavior unaffected.",
+			}, "\n")},
+		},
+	}}
+
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
+		t.Fatalf("runCodex() error = %v, want nil for explicitly unrelated validation failure", err)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "action=unrelated_validation_failure") {
+		t.Fatalf("logs missing unrelated validation warning:\n%s", strings.Join(logs, "\n"))
+	}
+}
+
+func TestRunCodexRejectsTaskRelevantValidationFailure(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "fix booking slots"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"Failure: booking smoke tests timed out waiting for `.bk-slot:enabled`.",
+				"Error details: changed booking behavior remains broken.",
+			}, "\n")},
+		},
+	}}
+
+	h := New(fake)
+	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err == nil {
+		t.Fatal("runCodex() error = nil, want task-relevant validation failure")
+	}
+}
+
 func TestRunCodexAllowsMissingCurlWhenSmokeFallbackSucceeded(t *testing.T) {
 	t.Parallel()
 

@@ -5632,6 +5632,15 @@ func (h Harness) runCodexWithHeartbeat(
 					)
 					return run.res, nil
 				}
+				if isNonFatalUnrelatedValidationFailure(detail, run.res) {
+					h.logf(
+						"stage=%s status=warn action=unrelated_validation_failure detail=%q%s",
+						agentStage,
+						detail,
+						invocation.logFieldsSuffix(),
+					)
+					return run.res, nil
+				}
 				if isRecoveredTransientRegistryLookupFailure(detail, run.res) {
 					h.logf(
 						"stage=%s status=warn action=recovered_transient_registry_lookup detail=%q%s",
@@ -5988,6 +5997,35 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		return true
 	}
 	return false
+}
+
+func isNonFatalUnrelatedValidationFailure(detail string, res execx.Result) bool {
+	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		detail,
+		res.Stdout,
+		res.Stderr,
+	}, "\n")))
+	if text == "" || !strings.Contains(text, "unrelated") {
+		return false
+	}
+	behaviorUnaffected := containsAny(text, []string{
+		"changed behavior unaffected",
+		"change unaffected",
+		"changes unaffected",
+		"requested behavior unaffected",
+		"task unaffected",
+	}) || (strings.Contains(text, "changed") && strings.Contains(text, "behavior unaffected"))
+	if !behaviorUnaffected {
+		return false
+	}
+	return containsAny(text, []string{
+		"test failed",
+		"tests failed",
+		"test timed out",
+		"tests timed out",
+		"validation failed",
+		"smoke test",
+	})
 }
 
 func smokeFallbackSucceeded(text string) bool {
