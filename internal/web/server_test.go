@@ -1234,12 +1234,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `id="task-fullscreen-close"`) {
 		t.Fatalf("expected index html to include a dedicated full screen close control")
 	}
-	fullscreenTitleIndex := strings.Index(markup, `id="task-fullscreen-panel-title">Current Work</span>`)
 	fullscreenCloseIndex := strings.Index(markup, `id="task-fullscreen-close"`)
-	fullscreenListIndex := strings.Index(markup, `id="task-fullscreen-list"`)
-	if fullscreenTitleIndex == -1 || fullscreenCloseIndex == -1 || fullscreenListIndex == -1 ||
-		fullscreenCloseIndex < fullscreenTitleIndex || fullscreenCloseIndex > fullscreenListIndex {
-		t.Fatalf("expected full screen close control to render inside the Current Work panel header")
+	fullscreenBodyIndex := strings.Index(markup, `id="task-fullscreen-body"`)
+	if fullscreenCloseIndex < 0 || fullscreenBodyIndex < 0 || fullscreenCloseIndex > fullscreenBodyIndex {
+		t.Fatalf("expected fullscreen close control outside task panels so it remains available in console mode")
 	}
 	if !strings.Contains(markup, `class="task-fullscreen-close-icon"`) || !strings.Contains(markup, `data-lucide="x"`) {
 		t.Fatalf("expected index html to render the full screen close control as a lucide X icon button")

@@ -5186,6 +5186,10 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
 }
 
 .task-fullscreen-close {
+  position: absolute;
+  top: max(28px, calc(env(safe-area-inset-top) + 8px));
+  right: max(28px, calc(env(safe-area-inset-right) + 8px));
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5244,12 +5248,21 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   grid-template-rows: minmax(0, 1fr);
 }
 
+.task-fullscreen[data-mode="console"] .task-fullscreen-body {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.task-fullscreen[data-mode="console"] .task-fullscreen-task-panel {
+  display: none;
+}
+
 .task-fullscreen[data-mode="work"] .task-fullscreen-task-panel .scroll {
   max-height: none;
 }
 
 .task-fullscreen-panel {
   min-height: 0;
+  min-width: 0;
   height: 100%;
 }
 
@@ -5262,6 +5275,10 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   overflow: hidden;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.task-fullscreen-output-panel > .task-head {
+  padding-right: 56px;
 }
 
 .task-image-viewer {
