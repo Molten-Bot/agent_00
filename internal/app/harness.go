@@ -5632,7 +5632,7 @@ func (h Harness) runCodexWithHeartbeat(
 					)
 					return run.res, nil
 				}
-				if isNonFatalUnrelatedValidationFailure(detail) {
+				if isNonFatalUnrelatedValidationFailure(detail, run.res) {
 					h.logf(
 						"stage=%s status=warn action=unrelated_validation_failure detail=%q%s",
 						agentStage,
@@ -5999,7 +5999,20 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	return false
 }
 
-func isNonFatalUnrelatedValidationFailure(detail string) bool {
+func isNonFatalUnrelatedValidationFailure(detail string, res execx.Result) bool {
+	blocks := codexTerminalFailureBlocks(res)
+	if len(blocks) == 0 {
+		blocks = []string{detail}
+	}
+	for _, block := range blocks {
+		if !isUnrelatedValidationFailureBlock(block) {
+			return false
+		}
+	}
+	return true
+}
+
+func isUnrelatedValidationFailureBlock(detail string) bool {
 	text := strings.ToLower(strings.TrimSpace(detail))
 	if text == "" || !strings.Contains(text, "unrelated") {
 		return false
@@ -6022,6 +6035,36 @@ func isNonFatalUnrelatedValidationFailure(detail string) bool {
 		"validation failed",
 		"smoke test",
 	})
+}
+
+func codexTerminalFailureBlocks(res execx.Result) []string {
+	var blocks []string
+	for _, output := range []string{res.Stdout, res.Stderr} {
+		lines := splitOutputLines(output)
+		nonEmpty := make([]string, 0, len(lines))
+		for _, line := range lines {
+			if trimmed := strings.TrimSpace(line); trimmed != "" {
+				nonEmpty = append(nonEmpty, trimmed)
+			}
+		}
+		const terminalFailureWindow = 8
+		if len(nonEmpty) > terminalFailureWindow {
+			nonEmpty = nonEmpty[len(nonEmpty)-terminalFailureWindow:]
+		}
+		for i := 0; i < len(nonEmpty); {
+			if !strings.HasPrefix(strings.ToLower(nonEmpty[i]), "failure:") {
+				i++
+				continue
+			}
+			end := i + 1
+			for end < len(nonEmpty) && !strings.HasPrefix(strings.ToLower(nonEmpty[end]), "failure:") {
+				end++
+			}
+			blocks = append(blocks, strings.Join(nonEmpty[i:end], " "))
+			i = end
+		}
+	}
+	return blocks
 }
 
 func smokeFallbackSucceeded(text string) bool {
