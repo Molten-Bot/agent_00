@@ -2472,8 +2472,17 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "clearPromptImages(false);") {
 		t.Fatalf("expected index html to clear attached screenshots after a successful submit without repopulating raw JSON")
 	}
-	if !strings.Contains(markup, "resetBuilderTargetSubdir();") || !strings.Contains(markup, "resetBaseBranchToDefault(false);") {
-		t.Fatalf("expected index html to reset branch and target subdir as part of queued-submit cleanup")
+	if !strings.Contains(markup, "resetBuilderTargetSubdir();") {
+		t.Fatalf("expected index html to reset target subdir as part of queued-submit cleanup")
+	}
+	if strings.Contains(markup, "resetBaseBranchToDefault(false);") {
+		t.Fatalf("expected index html to retain selected branch after queued submit")
+	}
+	if !strings.Contains(markup, "function resetBaseBranchForRepositoryChange(previousRepo, nextRepo)") ||
+		!strings.Contains(markup, "resetBaseBranchForRepositoryChange(previousRepo, value);") ||
+		!strings.Contains(markup, "builderRepoInput.dataset.repoBeforeEdit") ||
+		!strings.Contains(markup, "libraryRepoInput.dataset.repoBeforeEdit") {
+		t.Fatalf("expected index html to reset branch only when repository changes")
 	}
 	if !strings.Contains(markup, "clearSubmittedPromptState();") {
 		t.Fatalf("expected index html to clear the submitted prompt state after a successful queue")
