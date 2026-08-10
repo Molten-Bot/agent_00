@@ -1667,6 +1667,29 @@ func TestAuthGateVerifyButtonHidesWhileVerificationIsPending(t *testing.T) {
 	}
 }
 
+func TestClaudeAuthGateVerifiesTaskAccessBeforeUnlockingPrompts(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	resp := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.Code)
+	}
+
+	html := resp.Body.String()
+	if !strings.Contains(html, `if (auth.ready && authHarness(auth) === "claude") {`) ||
+		!strings.Contains(html, `auth = await requestAgentAuth("/api/agent-auth/verify", "POST");`) {
+		t.Fatalf("expected ready Claude status to verify real task access before unlocking prompts")
+	}
+	if !strings.Contains(html, `let auth = await requestAgentAuth("/api/agent-auth/configure", "POST", {`) ||
+		!strings.Contains(html, "if (auth.ready) {\n          auth = await requestAgentAuth(\"/api/agent-auth/verify\", \"POST\");\n        }") {
+		t.Fatalf("expected newly configured Claude credentials to verify task access")
+	}
+}
+
 func TestAuthGateVerifyButtonUsesReadableContrastToken(t *testing.T) {
 	t.Parallel()
 

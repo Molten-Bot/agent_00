@@ -524,6 +524,30 @@ func TestSaveRuntimeConfigClaudeOAuthTokenPersistsValue(t *testing.T) {
 	}
 }
 
+func TestSaveRuntimeConfigAnthropicAPIKeyPersistsValue(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	if err := SaveRuntimeConfigAnthropicAPIKey(path, InitConfig{
+		BaseURL:      "https://na.hub.molten.bot/v1",
+		AgentHarness: "claude",
+	}, "anthropic_api_key_saved"); err != nil {
+		t.Fatalf("SaveRuntimeConfigAnthropicAPIKey() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if got, want := doc["anthropic_api_key"], "anthropic_api_key_saved"; got != want {
+		t.Fatalf("anthropic_api_key = %#v, want %q", got, want)
+	}
+}
+
 func TestSaveRuntimeConfigClaudeOAuthTokenRejectsEmptyToken(t *testing.T) {
 	t.Parallel()
 

@@ -2064,6 +2064,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `function promptImageSummary(images)`) {
 		t.Fatalf("expected index html to summarize screenshot names inline in the prompt action row")
 	}
+	if !strings.Contains(markup, `function clipboardImageFiles(event)`) ||
+		!strings.Contains(markup, `.filter((file) => file && /^image\//i.test(String(file.type || "")));`) ||
+		strings.Contains(markup, `function clipboardPngFiles(event)`) ||
+		strings.Contains(markup, `/^image\/png$/i.test`) {
+		t.Fatalf("expected screenshot paste handling to accept every image MIME type")
+	}
 	if !strings.Contains(markup, `librarytaskname: libraryTaskName,
         images: normalizePromptImages(state.promptImages),`) {
 		t.Fatalf("expected index html to include pasted screenshots in library mode payloads")
@@ -2408,7 +2414,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "function handlePromptImagePaste(") {
 		t.Fatalf("expected index html to include screenshot paste handler")
 	}
-	if !strings.Contains(markup, "function clipboardPngFiles(event)") ||
+	if !strings.Contains(markup, "function clipboardImageFiles(event)") ||
 		!strings.Contains(markup, "prompt.addEventListener(\"paste\", handleChatRepoImagePaste);") ||
 		!strings.Contains(markup, `chatIcon.className = "chat-repo-card-chat-icon";`) ||
 		!strings.Contains(markup, "chatIcon.innerHTML = `<i data-lucide=\"${hasPendingRelease ? \"lightbulb\" : \"message-circle\"}\" aria-hidden=\"true\"></i>`;") ||

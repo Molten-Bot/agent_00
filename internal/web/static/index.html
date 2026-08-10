@@ -4283,7 +4283,7 @@
         if (needsClaudeGitHubConfigure) {
           agentAuthConfigureLabel.textContent = "Paste GitHub token";
         } else if (needsClaudeCredentialsConfigure) {
-          agentAuthConfigureLabel.textContent = "Paste Claude credentials";
+          agentAuthConfigureLabel.textContent = "Paste Claude credentials or API key";
         } else {
           agentAuthConfigureLabel.textContent = "Paste configuration value";
         }
@@ -4291,7 +4291,7 @@
       }
       if (agentAuthConfigureInput) {
         const fallbackPlaceholder = needsClaudeCredentialsConfigure
-          ? "Paste ~/.claude/.credentials.json contents or CLAUDE_CODE_OAUTH_TOKEN..."
+          ? "Paste an Anthropic API key, ~/.claude/.credentials.json, or CLAUDE_CODE_OAUTH_TOKEN..."
           : "ghp_xxx";
         const placeholder = state.agentAuth.configurePlaceholder || fallbackPlaceholder;
         agentAuthConfigureInput.placeholder = placeholder;
@@ -4494,7 +4494,10 @@
 
     async function loadAgentAuthStatus() {
       try {
-        const auth = await requestAgentAuth("/api/agent-auth", "GET");
+        let auth = await requestAgentAuth("/api/agent-auth", "GET");
+        if (auth.ready && authHarness(auth) === "claude") {
+          auth = await requestAgentAuth("/api/agent-auth/verify", "POST");
+        }
         applyAgentAuthGate(auth);
       } catch (err) {
         applyAgentAuthGate({
@@ -4646,7 +4649,7 @@
       setAgentAuthConfigureError("");
       const credentials = agentAuthConfigureInput ? String(agentAuthConfigureInput.value || "").trim() : "";
       if (!credentials) {
-        setAgentAuthConfigureError("Paste Claude credentials first.");
+        setAgentAuthConfigureError("Paste Claude credentials or an Anthropic API key first.");
         return;
       }
 
@@ -4654,9 +4657,12 @@
       setAgentAuthBusy(true);
       trackAnalyticsEvent("agent_auth_configure_started", agentAuthAnalyticsParams({ auth_method: "claude_credentials" }));
       try {
-        const auth = await requestAgentAuth("/api/agent-auth/configure", "POST", {
+        let auth = await requestAgentAuth("/api/agent-auth/configure", "POST", {
           value: credentials,
         });
+        if (auth.ready) {
+          auth = await requestAgentAuth("/api/agent-auth/verify", "POST");
+        }
         applyAgentAuthGate(auth);
         if (auth.ready) {
           setAgentAuthConfigureError("");
@@ -6291,11 +6297,11 @@
       };
     }
 
-    function clipboardPngFiles(event) {
+    function clipboardImageFiles(event) {
       return Array.from(event?.clipboardData?.items || [])
         .filter((item) => item && item.kind === "file")
         .map((item) => item.getAsFile())
-        .filter((file) => file && /^image\/png$/i.test(String(file.type || "")));
+        .filter((file) => file && /^image\//i.test(String(file.type || "")));
     }
 
     function promptImagesFromFiles(files, startIndex = 0) {
@@ -6317,7 +6323,7 @@
     }
 
     async function handlePromptImagePaste(event) {
-      const files = clipboardPngFiles(event);
+      const files = clipboardImageFiles(event);
       if (!files.length) {
         return;
       }

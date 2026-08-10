@@ -709,6 +709,49 @@ func SaveRuntimeConfigClaudeOAuthToken(path string, initCfg InitConfig, oauthTok
 	}
 
 	doc["claude_code_oauth_token"] = oauthToken
+	delete(doc, "anthropic_api_key")
+	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
+
+	encoded, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode runtime config: %w", err)
+	}
+	encoded = append(encoded, '\n')
+	return writeRuntimeConfigFile(path, encoded)
+}
+
+// SaveRuntimeConfigAnthropicAPIKey persists anthropic_api_key to the runtime
+// config JSON while preserving other configuration fields.
+func SaveRuntimeConfigAnthropicAPIKey(path string, initCfg InitConfig, apiKey string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = defaultRuntimeConfigPath()
+	}
+
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return fmt.Errorf("anthropic api key is required")
+	}
+
+	doc := map[string]any{}
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &doc); err != nil {
+			return fmt.Errorf("parse runtime config: %w", err)
+		}
+	case errors.Is(err, os.ErrNotExist):
+		baseDoc, buildErr := runtimeConfigBaseDoc(initCfg)
+		if buildErr != nil {
+			return buildErr
+		}
+		doc = baseDoc
+	default:
+		return fmt.Errorf("read runtime config: %w", err)
+	}
+
+	doc["anthropic_api_key"] = apiKey
+	delete(doc, "claude_code_oauth_token")
 	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
 
 	encoded, err := json.MarshalIndent(doc, "", "  ")

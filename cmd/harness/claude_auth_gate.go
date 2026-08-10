@@ -25,9 +25,10 @@ const claudeAuthDocsURL = "https://code.claude.com/docs/en/authentication"
 const claudeGitHubConfigureCommand = "gh auth token"
 const claudeGitHubConfigurePlaceholder = "ghp_xxx"
 const claudeCredentialsConfigureCommand = "cat ~/.claude/.credentials.json"
-const claudeCredentialsConfigurePlaceholder = "Paste ~/.claude/.credentials.json contents or CLAUDE_CODE_OAUTH_TOKEN..."
+const claudeCredentialsConfigurePlaceholder = "Paste an Anthropic API key, ~/.claude/.credentials.json, or CLAUDE_CODE_OAUTH_TOKEN..."
 const claudeLoginCommand = "claude auth login"
 const claudeOAuthTokenEnv = "CLAUDE_CODE_OAUTH_TOKEN"
+const claudeAPIKeyEnv = "ANTHROPIC_API_KEY"
 
 var claudeAuthURLPattern = regexp.MustCompile(`https?://[^\s"'<>()]+`)
 var claudeOAuthTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{24,}$`)
@@ -48,8 +49,9 @@ type claudeAuthGate struct {
 	state    string
 	message  string
 
-	authURL   string
-	updatedAt time.Time
+	authURL                  string
+	updatedAt                time.Time
+	credentialFailureMessage string
 
 	procRunning           bool
 	procCancel            context.CancelFunc
@@ -134,6 +136,15 @@ func (g *claudeAuthGate) Status(_ context.Context) (web.AgentAuthState, error) {
 
 	g.mu.Lock()
 	if !g.procRunning {
+		if strings.TrimSpace(g.credentialFailureMessage) != "" {
+			g.ready = false
+			g.state = "needs_configure"
+			g.message = g.credentialFailureMessage
+			g.updatedAt = time.Now().UTC()
+			state := g.snapshotLocked()
+			g.mu.Unlock()
+			return state, nil
+		}
 		ready, probeMessage := g.probeClaude()
 		if ready {
 			g.ready = true
@@ -238,6 +249,7 @@ func (g *claudeAuthGate) StartDeviceAuth(_ context.Context) (web.AgentAuthState,
 	g.mu.Lock()
 	g.required = true
 	g.ready = false
+	g.credentialFailureMessage = ""
 	g.procRunning = true
 	g.procCancel = cancel
 	g.procInput = stdinPipe
@@ -276,14 +288,14 @@ func (g *claudeAuthGate) Verify(ctx context.Context) (web.AgentAuthState, error)
 
 	status, _ := g.Status(context.Background())
 	if status.Ready {
-		return status, nil
+		return g.verifyClaudeTaskAccess(ctx, status)
 	}
 	if status.State == "needs_configure" {
 		return status, nil
 	}
 	if status.State == "pending_browser_login" {
 		if snap, ok := g.completePendingBrowserLoginIfReady(); ok {
-			return snap, nil
+			return g.verifyClaudeTaskAccess(ctx, snap)
 		}
 		g.resubmitPendingBrowserCode()
 		g.advanceLoginPrompt()
@@ -291,6 +303,25 @@ func (g *claudeAuthGate) Verify(ctx context.Context) (web.AgentAuthState, error)
 	}
 
 	return g.StartDeviceAuth(ctx)
+}
+
+func (g *claudeAuthGate) verifyClaudeTaskAccess(ctx context.Context, status web.AgentAuthState) (web.AgentAuthState, error) {
+	if probeErr := g.probeClaudeExecution(ctx); probeErr != nil {
+		if !isClaudeCredentialAccessFailure(probeErr.Error()) {
+			return status, fmt.Errorf("verify Claude task access: %w", probeErr)
+		}
+		message := claudeCredentialAccessFailureMessage(probeErr.Error())
+		g.mu.Lock()
+		g.ready = false
+		g.state = "needs_configure"
+		g.message = message
+		g.credentialFailureMessage = message
+		g.updatedAt = time.Now().UTC()
+		state := g.snapshotLocked()
+		g.mu.Unlock()
+		return state, nil
+	}
+	return status, nil
 }
 
 func (g *claudeAuthGate) Configure(ctx context.Context, rawInput string) (web.AgentAuthState, error) {
@@ -312,6 +343,11 @@ func (g *claudeAuthGate) Configure(ctx context.Context, rawInput string) (web.Ag
 			state, _ := g.Status(context.Background())
 			return state, nil
 		}
+		if apiKey := extractClaudeAPIKeyFromInput(rawInput); apiKey != "" {
+			g.completeWithClaudeAPIKey(apiKey)
+			state, _ := g.Status(context.Background())
+			return state, nil
+		}
 		if token := extractClaudeOAuthTokenFromInput(rawInput); token != "" {
 			g.completeWithClaudeOAuthToken(token)
 			state, _ := g.Status(context.Background())
@@ -319,7 +355,7 @@ func (g *claudeAuthGate) Configure(ctx context.Context, rawInput string) (web.Ag
 		}
 		if isClaudeCredentialsConfigureState(status) {
 			state := status
-			state.Message = "Claude credentials are required. Paste ~/.claude/.credentials.json contents or CLAUDE_CODE_OAUTH_TOKEN."
+			state.Message = "Claude credentials are required. Paste an Anthropic API key, ~/.claude/.credentials.json contents, or CLAUDE_CODE_OAUTH_TOKEN."
 			return state, fmt.Errorf("claude credentials are required")
 		}
 		return g.submitBrowserCode(rawInput)
@@ -471,6 +507,15 @@ func extractClaudeOAuthTokenFromInput(raw string) string {
 	return extractClaudeOAuthTokenFromJSONValue(parsed)
 }
 
+func extractClaudeAPIKeyFromInput(raw string) string {
+	raw = strings.TrimSpace(raw)
+	fields := strings.Fields(raw)
+	if len(fields) != 1 || !isLikelyClaudeAPIKey(fields[0]) {
+		return ""
+	}
+	return fields[0]
+}
+
 func extractClaudeOAuthTokenFromJSONValue(value any) string {
 	switch typed := value.(type) {
 	case string:
@@ -520,10 +565,18 @@ func isLikelyClaudeOAuthToken(value string) bool {
 	if value == "" || strings.ContainsAny(value, " \t\r\n#") {
 		return false
 	}
+	if isLikelyClaudeAPIKey(value) {
+		return false
+	}
 	if strings.HasPrefix(value, "sk-ant-") || strings.HasPrefix(value, "sk-") {
 		return true
 	}
 	return false
+}
+
+func isLikelyClaudeAPIKey(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.HasPrefix(value, "sk-ant-api") && !strings.ContainsAny(value, " \t\r\n#")
 }
 
 func normalizeClaudeBrowserCodeForSubmission(rawInput, authURL string) string {
@@ -785,6 +838,14 @@ func (g *claudeAuthGate) githubTokenRequirementState() (bool, web.AgentAuthState
 func (g *claudeAuthGate) probeClaude() (bool, string) {
 	runtimeConfigPath := strings.TrimSpace(g.runtimeConfigPath)
 
+	if apiKey, source := firstConfiguredClaudeAPIKey(runtimeConfigPath, g.initCfg.AnthropicAPIKey); strings.TrimSpace(apiKey) != "" {
+		if err := setClaudeAPIKeyEnvironment(apiKey); err == nil {
+			if strings.TrimSpace(source) == "" {
+				source = "API key"
+			}
+			return true, fmt.Sprintf("Claude Code is configured with an Anthropic API key (%s).", source)
+		}
+	}
 	if oauthToken, source := firstConfiguredClaudeOAuthToken(runtimeConfigPath); strings.TrimSpace(oauthToken) != "" {
 		if err := setClaudeOAuthTokenEnvironment(oauthToken); err == nil {
 			if strings.TrimSpace(source) == "" {
@@ -813,6 +874,69 @@ func (g *claudeAuthGate) probeClaude() (bool, string) {
 	}
 
 	return false, claudeBrowserLoginRequiredMessage()
+}
+
+func (g *claudeAuthGate) probeClaudeExecution(ctx context.Context) error {
+	command := strings.TrimSpace(g.command)
+	if command == "" {
+		command = agentruntime.HarnessClaude
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	output, err := exec.CommandContext(
+		probeCtx,
+		command,
+		"--print",
+		"--output-format", "text",
+		"--",
+		"Reply with OK only.",
+	).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if probeCtx.Err() != nil {
+		return fmt.Errorf("Claude Code execution probe timed out: %w", probeCtx.Err())
+	}
+	detail := strings.TrimSpace(stripANSI(string(output)))
+	if detail == "" {
+		detail = err.Error()
+	}
+	const maxDetail = 600
+	if len(detail) > maxDetail {
+		detail = detail[:maxDetail] + "..."
+	}
+	return fmt.Errorf("Claude Code execution probe failed: %s", detail)
+}
+
+func isClaudeCredentialAccessFailure(detail string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(detail))
+	for _, marker := range []string{
+		"disabled claude subscription access",
+		"invalid api key",
+		"invalid x-api-key",
+		"authentication_error",
+		"oauth token has expired",
+		"not logged in",
+		"please run /login",
+		"credit balance is too low",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func claudeCredentialAccessFailureMessage(detail string) string {
+	normalized := strings.ToLower(strings.TrimSpace(detail))
+	if strings.Contains(normalized, "disabled claude subscription access") {
+		return "Claude credentials are signed in but the organization has disabled Claude subscription access. Paste an Anthropic API key or credentials for an enabled Claude account."
+	}
+	return "Claude credentials could not run a task. Paste an Anthropic API key, ~/.claude/.credentials.json contents, or CLAUDE_CODE_OAUTH_TOKEN."
 }
 
 func (g *claudeAuthGate) probeClaudeAuthStatus() (bool, string) {
@@ -1150,6 +1274,55 @@ func extractClaudeOAuthTokenCandidate(line string) string {
 	return line
 }
 
+func (g *claudeAuthGate) completeWithClaudeAPIKey(apiKey string) {
+	if g == nil {
+		return
+	}
+
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return
+	}
+	if err := setClaudeAPIKeyEnvironment(apiKey); err != nil {
+		g.logf("hub.auth status=warn harness=claude action=save_api_key err=%q", err)
+		return
+	}
+
+	g.mu.Lock()
+	runtimeConfigPath := g.runtimeConfigPath
+	initCfg := g.initCfg
+	cancel := g.procCancel
+	input := g.procInput
+	initCfg.AnthropicAPIKey = apiKey
+	g.initCfg.AnthropicAPIKey = apiKey
+	g.ready = true
+	g.state = "ready"
+	g.message = "Claude Code and GitHub token are ready."
+	g.credentialFailureMessage = ""
+	g.authURL = ""
+	g.pendingBrowserCode = ""
+	g.browserSubmitAttempts = 0
+	g.awaitingOAuthToken = false
+	g.procRunning = false
+	g.procCancel = nil
+	g.procInput = nil
+	g.updatedAt = time.Now().UTC()
+	g.mu.Unlock()
+
+	if runtimeConfigPath != "" {
+		if err := hub.SaveRuntimeConfigAnthropicAPIKey(runtimeConfigPath, initCfg, apiKey); err != nil {
+			g.logf("hub.auth status=warn harness=claude action=persist_api_key err=%q", err)
+		}
+	}
+	if input != nil {
+		_ = input.Close()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	g.logf("hub.auth status=ok harness=claude action=api_key_configured")
+}
+
 func (g *claudeAuthGate) completeWithClaudeOAuthToken(token string) {
 	if g == nil {
 		return
@@ -1175,11 +1348,14 @@ func (g *claudeAuthGate) completeWithClaudeOAuthToken(token string) {
 	g.mu.Lock()
 	runtimeConfigPath = g.runtimeConfigPath
 	initCfg = g.initCfg
+	initCfg.AnthropicAPIKey = ""
+	g.initCfg.AnthropicAPIKey = ""
 	cancel = g.procCancel
 	input = g.procInput
 	g.ready = true
 	g.state = "ready"
 	g.message = "Claude Code and GitHub token are ready."
+	g.credentialFailureMessage = ""
 	g.authURL = ""
 	g.pendingBrowserCode = ""
 	g.browserSubmitAttempts = 0
@@ -1221,6 +1397,8 @@ func (g *claudeAuthGate) completeWithClaudeCredentialsJSON(raw string) error {
 			g.mu.Lock()
 			runtimeConfigPath := g.runtimeConfigPath
 			initCfg := g.initCfg
+			initCfg.AnthropicAPIKey = ""
+			g.initCfg.AnthropicAPIKey = ""
 			g.mu.Unlock()
 			if runtimeConfigPath != "" {
 				if err := hub.SaveRuntimeConfigClaudeOAuthToken(runtimeConfigPath, initCfg, token); err != nil {
@@ -1240,6 +1418,7 @@ func (g *claudeAuthGate) completeWithClaudeCredentialsJSON(raw string) error {
 	g.ready = true
 	g.state = "ready"
 	g.message = "Claude Code and GitHub token are ready."
+	g.credentialFailureMessage = ""
 	g.authURL = ""
 	g.pendingBrowserCode = ""
 	g.browserSubmitAttempts = 0
@@ -1320,10 +1499,42 @@ func firstConfiguredClaudeOAuthToken(runtimeConfigPath string) (value string, so
 	return "", ""
 }
 
+func firstConfiguredClaudeAPIKey(runtimeConfigPath, configured string) (value string, source string) {
+	if env := strings.TrimSpace(os.Getenv(claudeAPIKeyEnv)); env != "" {
+		return env, "environment"
+	}
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return configured, "runtime config"
+	}
+	if persisted := hub.ReadRuntimeConfigString(
+		runtimeConfigPath,
+		"anthropic_api_key",
+		"anthropicApiKey",
+		"ANTHROPIC_API_KEY",
+	); persisted != "" {
+		return persisted, "runtime config"
+	}
+	return "", ""
+}
+
+func setClaudeAPIKeyEnvironment(apiKey string) error {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return fmt.Errorf("anthropic api key is required")
+	}
+	if err := os.Setenv(claudeAPIKeyEnv, apiKey); err != nil {
+		return err
+	}
+	return os.Unsetenv(claudeOAuthTokenEnv)
+}
+
 func setClaudeOAuthTokenEnvironment(token string) error {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return fmt.Errorf("claude oauth token is required")
+	}
+	if err := os.Unsetenv(claudeAPIKeyEnv); err != nil {
+		return err
 	}
 	return os.Setenv(claudeOAuthTokenEnv, token)
 }
@@ -1450,7 +1661,7 @@ func claudeBrowserLoginRequiredMessage() string {
 }
 
 func claudeCredentialsConfigureMessage() string {
-	return "Claude Code credentials are required. Paste `~/.claude/.credentials.json` contents or `CLAUDE_CODE_OAUTH_TOKEN`."
+	return "Claude Code credentials are required. Paste an Anthropic API key, `~/.claude/.credentials.json` contents, or `CLAUDE_CODE_OAUTH_TOKEN`."
 }
 
 func isClaudeDocsURL(raw string) bool {

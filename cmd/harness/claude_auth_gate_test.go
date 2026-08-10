@@ -76,7 +76,7 @@ func TestClaudeAuthGateRequiresCredentialsConfigureWhenClaudeCredentialsAreMissi
 	if got := status.AuthURL; got != "" {
 		t.Fatalf("AuthURL = %q, want empty until login command emits a browser URL", got)
 	}
-	if !strings.Contains(status.Message, "Paste `~/.claude/.credentials.json`") {
+	if !strings.Contains(status.Message, "Anthropic API key") || !strings.Contains(status.Message, "`~/.claude/.credentials.json`") {
 		t.Fatalf("message = %q", status.Message)
 	}
 }
@@ -127,7 +127,7 @@ func TestClaudeAuthGateRecognizesEnvironmentCredentials(t *testing.T) {
 	t.Run("api-key", func(t *testing.T) {
 		t.Setenv("GH_TOKEN", "github_token_ready")
 		t.Setenv("ANTHROPIC_API_KEY", "test-key")
-		g := newClaudeAuthGate(context.Background(), "", nil)
+		g := newClaudeAuthGate(context.Background(), writeClaudeExecutionProbeStub(t, "OK", 0), nil)
 		status, err := g.Verify(context.Background())
 		if err != nil {
 			t.Fatalf("Verify() error = %v", err)
@@ -143,7 +143,7 @@ func TestClaudeAuthGateRecognizesEnvironmentCredentials(t *testing.T) {
 	t.Run("auth-token", func(t *testing.T) {
 		t.Setenv("GH_TOKEN", "github_token_ready")
 		t.Setenv("ANTHROPIC_AUTH_TOKEN", "token")
-		g := newClaudeAuthGate(context.Background(), "", nil)
+		g := newClaudeAuthGate(context.Background(), writeClaudeExecutionProbeStub(t, "OK", 0), nil)
 		status, err := g.Verify(context.Background())
 		if err != nil {
 			t.Fatalf("Verify() error = %v", err)
@@ -159,7 +159,7 @@ func TestClaudeAuthGateRecognizesEnvironmentCredentials(t *testing.T) {
 	t.Run("cloud-provider", func(t *testing.T) {
 		t.Setenv("GH_TOKEN", "github_token_ready")
 		t.Setenv("CLAUDE_CODE_USE_BEDROCK", "true")
-		g := newClaudeAuthGate(context.Background(), "", nil)
+		g := newClaudeAuthGate(context.Background(), writeClaudeExecutionProbeStub(t, "OK", 0), nil)
 		status, err := g.Verify(context.Background())
 		if err != nil {
 			t.Fatalf("Verify() error = %v", err)
@@ -171,6 +171,86 @@ func TestClaudeAuthGateRecognizesEnvironmentCredentials(t *testing.T) {
 			t.Fatalf("message = %q, want %q", got, want)
 		}
 	})
+}
+
+func TestClaudeAuthGateVerifyRejectsCredentialsWithoutTaskAccess(t *testing.T) {
+	clearClaudeCredentialSignals(t)
+	t.Setenv("GH_TOKEN", "github_token_ready")
+
+	command := writeClaudeExecutionProbeStub(t, "Your organization has disabled Claude subscription access for Claude Code", 1)
+	g := newClaudeAuthGate(context.Background(), command, nil)
+	status, err := g.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if !status.Ready {
+		t.Fatalf("Status() ready = false before execution verification; status=%+v", status)
+	}
+
+	status, err = g.Verify(context.Background())
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if status.Ready || status.State != "needs_configure" {
+		t.Fatalf("Verify() status = %+v, want needs_configure", status)
+	}
+	if !strings.Contains(status.Message, "disabled Claude subscription access") ||
+		!strings.Contains(status.Message, "Anthropic API key") {
+		t.Fatalf("Verify() message = %q", status.Message)
+	}
+
+	status, err = g.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() after failed verification error = %v", err)
+	}
+	if status.Ready || status.State != "needs_configure" {
+		t.Fatalf("Status() after failed verification = %+v, want persistent needs_configure", status)
+	}
+}
+
+func TestClaudeAuthGateConfigureAcceptsAnthropicAPIKey(t *testing.T) {
+	clearClaudeCredentialSignals(t)
+	t.Setenv("GH_TOKEN", "github_token_ready")
+
+	runtimePath := filepath.Join(t.TempDir(), "config.json")
+	command := filepath.Join(t.TempDir(), "claude-logged-out-stub.sh")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	g := newClaudeAuthGateWithConfig(command, runtimePath, hub.InitConfig{
+		BaseURL:      "https://na.hub.molten.bot/v1",
+		AgentHarness: agentruntime.HarnessClaude,
+	})
+	const apiKey = "sk-ant-api03-test-key-value"
+	status, err := g.Configure(context.Background(), apiKey)
+	if err != nil {
+		t.Fatalf("Configure() error = %v", err)
+	}
+	if !status.Ready {
+		t.Fatalf("Configure() status = %+v, want ready", status)
+	}
+	if got := os.Getenv(claudeAPIKeyEnv); got != apiKey {
+		t.Fatalf("%s = %q, want configured API key", claudeAPIKeyEnv, got)
+	}
+	if got := os.Getenv(claudeOAuthTokenEnv); got != "" {
+		t.Fatalf("%s = %q, want cleared", claudeOAuthTokenEnv, got)
+	}
+	if got := hub.ReadRuntimeConfigString(runtimePath, "anthropic_api_key"); got != apiKey {
+		t.Fatalf("persisted anthropic_api_key = %q, want configured API key", got)
+	}
+	if token := extractClaudeOAuthTokenFromInput(apiKey); token != "" {
+		t.Fatalf("extractClaudeOAuthTokenFromInput(API key) = %q, want empty", token)
+	}
+}
+
+func writeClaudeExecutionProbeStub(t *testing.T, output string, exitCode int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "claude-probe-stub.sh")
+	script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then\n  echo '{\"loggedIn\":true,\"authMethod\":\"oauth\",\"apiProvider\":\"firstParty\"}'\n  exit 0\nfi\nprintf '%%s\\n' %q\nexit %d\n", output, exitCode)
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	return path
 }
 
 func TestClaudeAuthGateRecognizesCredentialFile(t *testing.T) {
@@ -868,6 +948,10 @@ func TestClaudeAuthGateVerifyCompletesWhenCredentialsAreReadyBeforeLoginExit(t *
 	capturedPath := filepath.Join(t.TempDir(), "captured-code.txt")
 	cmdPath := filepath.Join(t.TempDir(), "claude-login-verify-ready.sh")
 	if err := os.WriteFile(cmdPath, []byte(`#!/bin/sh
+if [ "$1" = "--print" ]; then
+  echo "OK"
+  exit 0
+fi
 if [ "$1" != "auth" ] || [ "$2" != "login" ]; then
   exit 64
 fi

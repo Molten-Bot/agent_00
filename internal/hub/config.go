@@ -37,6 +37,7 @@ type InitConfig struct {
 	Profile           ProfileConfig     `json:"profile"`
 	GitHubToken       string            `json:"github_token,omitempty"`
 	OpenAIAPIKey      string            `json:"openai_api_key,omitempty"`
+	AnthropicAPIKey   string            `json:"anthropic_api_key,omitempty"`
 	Skill             SkillConfig       `json:"-"`
 	RuntimeConfigPath string            `json:"-"`
 	Dispatcher        DispatcherConfig  `json:"dispatcher"`
