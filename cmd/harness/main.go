@@ -738,55 +738,16 @@ func runHub(args []string) int {
 		}
 	}
 
-	agentAuthReadyNotify := make(chan struct{}, 1)
-	var (
-		agentAuthReadyWatchMu sync.Mutex
-		agentAuthReadyWatchOn bool
-	)
-	startAgentAuthReadyWatch := func() {
-		if authGate == nil {
-			return
-		}
-		agentAuthReadyWatchMu.Lock()
-		if agentAuthReadyWatchOn {
-			agentAuthReadyWatchMu.Unlock()
-			return
-		}
-		agentAuthReadyWatchOn = true
-		agentAuthReadyWatchMu.Unlock()
-		go func() {
-			<-startAgentAuthReadyLoop(ctx, authGate, daemonLogger)
-			agentAuthReadyWatchMu.Lock()
-			agentAuthReadyWatchOn = false
-			agentAuthReadyWatchMu.Unlock()
-			select {
-			case agentAuthReadyNotify <- struct{}{}:
-			default:
-			}
-		}()
-	}
-	gatedHubUpdate := func(reqCtx context.Context, updateCfg hub.InitConfig) error {
-		ready, detail, authErr := agentAuthReadyForHub(reqCtx, authGate)
-		if authErr != nil {
-			daemonLogger("hub.auth status=deferred action=remote_connect err=%q", authErr)
-			startAgentAuthReadyWatch()
-			return nil
-		}
-		if !ready {
-			daemonLogger(
-				"hub.auth status=deferred action=remote_connect detail=%q",
-				firstNonEmptyString(detail, "complete agent authorization before remote hub transport starts"),
-			)
-			startAgentAuthReadyWatch()
-			return nil
-		}
+	// Hub transport uses its own bind/agent credentials. Agent CLI authorization
+	// controls task execution only and must not prevent websocket startup.
+	hubUpdate := func(reqCtx context.Context, updateCfg hub.InitConfig) error {
 		return applyEffectiveHubSetupConfig(reqCtx, updateCfg, effectiveHubSetupConfig, hubController.Update)
 	}
-	gatedEffectiveHubUpdate := func(reqCtx context.Context) error {
-		return applyEffectiveHubSetupConfig(reqCtx, cfg, effectiveHubSetupConfig, gatedHubUpdate)
+	effectiveHubUpdate := func(reqCtx context.Context) error {
+		return applyEffectiveHubSetupConfig(reqCtx, cfg, effectiveHubSetupConfig, hubUpdate)
 	}
 
-	hubRuntimeReloader := newHubRuntimeConfigReloader(cfg, gatedHubUpdate, hubController.Stop, daemonLogger)
+	hubRuntimeReloader := newHubRuntimeConfigReloader(cfg, hubUpdate, hubController.Stop, daemonLogger)
 	go hubRuntimeReloader.Run(ctx, hubRuntimeConfigReloadInterval)
 
 	waitForHubRuntime := func() int {
@@ -800,22 +761,7 @@ func runHub(args []string) int {
 				if !hubConfiguredNow() {
 					continue
 				}
-				if err := gatedEffectiveHubUpdate(ctx); err != nil {
-					if shouldFallbackToLocalOnlyMode(*uiListen, err) {
-						daemonLogger(
-							"hub.auth status=local_only detail=%q",
-							"Remote hub auth failed; continuing in local-only mode. Use the local UI/API to submit tasks.",
-						)
-						continue
-					}
-					writeStderrLine(logger, fmt.Sprintf("error: %v", err))
-					return hubExitCode(err)
-				}
-			case <-agentAuthReadyNotify:
-				if !hubConfiguredNow() || hubController.Running() {
-					continue
-				}
-				if err := gatedEffectiveHubUpdate(ctx); err != nil {
+				if err := effectiveHubUpdate(ctx); err != nil {
 					if shouldFallbackToLocalOnlyMode(*uiListen, err) {
 						daemonLogger(
 							"hub.auth status=local_only detail=%q",
@@ -901,10 +847,10 @@ func runHub(args []string) int {
 			return currentHubSetupState(cfg), nil
 		}
 		uiServer.ConfigureHubSetup = func(reqCtx context.Context, req web.HubSetupRequest) (web.HubSetupState, error) {
-			return configureHubSetup(reqCtx, cfg, req, gatedHubUpdate)
+			return configureHubSetup(reqCtx, cfg, req, hubUpdate)
 		}
 		uiServer.ConnectHubSetup = func(reqCtx context.Context) (web.HubSetupState, error) {
-			return connectHubSetup(reqCtx, cfg, gatedHubUpdate)
+			return connectHubSetup(reqCtx, cfg, hubUpdate)
 		}
 		uiServer.DisconnectHubSetup = func(reqCtx context.Context) (web.HubSetupState, error) {
 			return disconnectHubSetup(reqCtx, cfg, hubController.Stop)
@@ -1078,7 +1024,7 @@ func runHub(args []string) int {
 		return waitForHubRuntime()
 	}
 
-	if err := gatedEffectiveHubUpdate(ctx); err != nil {
+	if err := effectiveHubUpdate(ctx); err != nil {
 		if shouldFallbackToLocalOnlyMode(*uiListen, err) {
 			daemonLogger(
 				"hub.auth status=local_only detail=%q",
