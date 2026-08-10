@@ -5814,6 +5814,8 @@ func isNoImplementationTargetLine(lowerLine string) bool {
 			"send actual repo task",
 			"need actual change request",
 			"need actual repo task",
+			"need repository change request",
+			"send requested repository change",
 		} {
 			if strings.Contains(lowerLine, marker) {
 				return true

@@ -7856,6 +7856,20 @@ func TestCodexReportedFailureDetectsTerminalFailureInNoisyStdout(t *testing.T) {
 	}
 }
 
+func TestCodexReportedFailureDetectsRepositoryChangeRequestRefusal(t *testing.T) {
+	t.Parallel()
+
+	for _, output := range []string{
+		"Need repository change request. Send bug, feature, or review target.",
+		"Send requested repository change.",
+	} {
+		if failed, detail := codexReportedFailure(execx.Result{Stdout: output}); !failed ||
+			!strings.Contains(detail, "Failure: agent did not identify an implementation target") {
+			t.Fatalf("codexReportedFailure(%q) = (%v, %q), want implementation-target failure", output, failed, detail)
+		}
+	}
+}
+
 func TestCodexReportedFailureTreatsCompletedHubSnapshotRefreshWarningAsNonFatal(t *testing.T) {
 	t.Parallel()
 
