@@ -204,6 +204,11 @@ func TestBottomDockProfileButtonRoutesToLocalProfileDialog(t *testing.T) {
 		!strings.Contains(script, `const title = configured ? "Open Molten Hub" : "Configure Molten Hub";`) {
 		t.Fatalf("expected shared dock Hub logo to stay visible and link to the dashboard when configured")
 	}
+	if !strings.Contains(script, `profileButton.hidden = false;`) ||
+		strings.Contains(script, `profileButton.hidden = !configured;`) ||
+		strings.Contains(script, `if (configured && profileButton.dataset.bottomDockBound !== "true")`) {
+		t.Fatalf("expected shared dock settings button to remain visible and bound before Hub setup")
+	}
 	if !strings.Contains(script, `const active = linkDisplay === currentDisplay && !dockLinkDisabled(link);`) ||
 		!strings.Contains(script, `event.stopImmediatePropagation();`) {
 		t.Fatalf("expected shared dock script to keep disabled-link navigation guards")
