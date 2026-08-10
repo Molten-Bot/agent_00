@@ -140,8 +140,8 @@ func TestSupportsPromptImages(t *testing.T) {
 	if !SupportsPromptImages(HarnessCodex) {
 		t.Fatal("SupportsPromptImages(codex) = false, want true")
 	}
-	if SupportsPromptImages(HarnessClaude) {
-		t.Fatal("SupportsPromptImages(claude) = true, want false")
+	if !SupportsPromptImages(HarnessClaude) {
+		t.Fatal("SupportsPromptImages(claude) = false, want true")
 	}
 }
 
@@ -188,11 +188,14 @@ func TestBuildCommandClaude(t *testing.T) {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 
-	cmd, err := rt.BuildCommand("/tmp/repo", "fix bug", RunOptions{})
+	cmd, err := rt.BuildCommand("/tmp/repo", "fix bug", RunOptions{
+		ImagePaths:   []string{"/tmp/run/prompt-images/shot.png"},
+		WritableDirs: []string{"/tmp/run", "  "},
+	})
 	if err != nil {
 		t.Fatalf("BuildCommand() error = %v", err)
 	}
-	wantArgs := []string{"--print", "--output-format", "text", "--dangerously-skip-permissions", "fix bug"}
+	wantArgs := []string{"--print", "--output-format", "text", "--dangerously-skip-permissions", "--add-dir", "/tmp/run", "--", "fix bug"}
 	if cmd.Name != "claude" || cmd.Dir != "/tmp/repo" || !reflect.DeepEqual(cmd.Args, wantArgs) {
 		t.Fatalf("unexpected claude command: %+v", cmd)
 	}
@@ -204,16 +207,12 @@ func TestBuildCommandClaude(t *testing.T) {
 func TestBuildCommandRejectsImagesForUnsupportedHarnesses(t *testing.T) {
 	t.Parallel()
 
-	for _, harness := range []string{HarnessClaude} {
+	for _, harness := range []string{"unsupported"} {
 		harness := harness
 		t.Run(harness, func(t *testing.T) {
 			t.Parallel()
 
-			rt, err := Resolve(harness, "")
-			if err != nil {
-				t.Fatalf("Resolve() error = %v", err)
-			}
-			_, err = rt.BuildCommand("/tmp/repo", "fix bug", RunOptions{ImagePaths: []string{"img.png"}})
+			err := validatePromptImageSupport(harness, []string{"img.png"})
 			if err == nil {
 				t.Fatal("BuildCommand() error = nil, want image support error")
 			}

@@ -37,7 +37,7 @@
 
 - Run config JSON uses camelCase fields such as `repoUrl`, `targetSubdir`, `agentHarness`, `agentCommand`, `responseMode`, `libraryTaskName`, `githubHandle`, and `prTitle`. Snake_case run config fields are rejected. JSONC-style line comments are supported.
 - Hub init and persisted runtime config use snake_case fields such as `base_url`, `bind_token`, `agent_token`, `session_key`, and `github_token`. The default hub endpoint is `https://na.hub.molten.bot/v1` and the default session key is `main`.
-- Supported agent harnesses are `codex` and `claude`; default is `codex`. Prompt images are Codex-only. Honor `HARNESS_AGENT_HARNESS` and `HARNESS_AGENT_COMMAND`.
+- Supported agent harnesses are `codex` and `claude`; default is `codex`. Both harnesses accept prompt images. Honor `HARNESS_AGENT_HARNESS` and `HARNESS_AGENT_COMMAND`.
 - Supported response modes are `default`, `off`, `caveman-lite`, `caveman-full`, `caveman-ultra`, `caveman-wenyan-lite`, `caveman-wenyan-full`, and `caveman-wenyan-ultra`; omitted or `default` maps to `caveman-full`.
 - Library task definitions live in `library/*.json`, use strict camelCase task fields, reject unknown fields, and should keep one top-level task per checked-in file.
 - The OpenAPI snapshot in `na.hub.molten.bot.openapi.yaml` guards hub transport contracts. Update it deliberately when the API contract changes.

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -6067,30 +6068,28 @@ func TestAgentCommandWithOptionsUsesConfiguredRuntime(t *testing.T) {
 		t.Fatalf("claude stdin = %q, want empty", claudeCmd.Stdin)
 	}
 
-	if _, err := agentCommandWithOptions(claudeRuntime, targetDir, prompt, codexRunOptions{ImagePaths: []string{"x.png"}}); err == nil {
-		t.Fatal("agentCommandWithOptions(claude with images) error = nil, want non-nil")
+	claudeImageCmd, err := agentCommandWithOptions(claudeRuntime, targetDir, prompt, codexRunOptions{
+		ImagePaths:   []string{"x.png"},
+		WritableDirs: []string{"/tmp/run"},
+	})
+	if err != nil {
+		t.Fatalf("agentCommandWithOptions(claude with images) error = %v", err)
+	}
+	if !slices.Contains(claudeImageCmd.Args, "--add-dir") || !slices.Contains(claudeImageCmd.Args, "/tmp/run") {
+		t.Fatalf("claude image command args = %#v, want prompt image directory", claudeImageCmd.Args)
 	}
 }
 
-func TestRunRejectsUnsupportedPromptImagesBeforePreflight(t *testing.T) {
+func TestValidateRuntimePromptImagesAcceptsClaude(t *testing.T) {
 	t.Parallel()
 
-	cfg := sampleConfig()
-	cfg.AgentHarness = agentruntime.HarnessClaude
-	cfg.Images = []config.PromptImage{{Name: "shot.png", MediaType: "image/png", DataBase64: "aGVsbG8="}}
-
-	fake := &fakeRunner{t: t}
-	h := New(fake)
-
-	res := h.Run(context.Background(), cfg)
-	if res.Err == nil {
-		t.Fatal("Run() err = nil, want prompt image support error")
+	runtime, err := agentruntime.Resolve(agentruntime.HarnessClaude, "")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
 	}
-	if !errors.Is(res.Err, agentruntime.ErrPromptImagesUnsupported) {
-		t.Fatalf("Run() err = %v, want ErrPromptImagesUnsupported", res.Err)
-	}
-	if got, want := res.ExitCode, ExitConfig; got != want {
-		t.Fatalf("ExitCode = %d, want %d", got, want)
+	images := []config.PromptImage{{Name: "shot.png", MediaType: "image/png", DataBase64: "aGVsbG8="}}
+	if err := validateRuntimePromptImages(runtime, images); err != nil {
+		t.Fatalf("validateRuntimePromptImages() error = %v", err)
 	}
 }
 
