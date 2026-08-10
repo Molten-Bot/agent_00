@@ -2830,7 +2830,7 @@ func (h Harness) cloneRepository(ctx context.Context, repo *repoWorkspace, branc
 	}
 	if cloneErr == nil {
 		repo.BaseBranch = normalizeBranchRef(branch)
-		repo.CreateWorkBranch = shouldCreateWorkBranch(branch)
+		repo.CreateWorkBranch = shouldCreateWorkBranch(branch) && !shouldReuseExistingBranch(*repo)
 		h.logf("stage=clone status=ok repo=%s repo_dir=%s", repoURL, repo.RelDir)
 		return nil
 	}
@@ -6878,7 +6878,7 @@ func initializeMainBranchCommitCommand(repoDir string) execx.Command {
 }
 
 func shouldCreateWorkBranch(baseBranch string) bool {
-	return isKnownDefaultBranchName(baseBranch)
+	return normalizeBranchRef(baseBranch) != ""
 }
 
 func isKnownDefaultBranchName(branch string) bool {
@@ -6888,6 +6888,17 @@ func isKnownDefaultBranchName(branch string) bool {
 	default:
 		return false
 	}
+}
+
+// Existing-branch workflows update a branch that already backs a pull request.
+// All other runs isolate their changes on a generated branch rooted at BaseBranch.
+func shouldReuseExistingBranch(repo repoWorkspace) bool {
+	if repo.RequiresNonDefaultBranch {
+		return true
+	}
+	taskName := strings.ToLower(strings.TrimSpace(repo.RequiredBranchTask))
+	taskName = strings.ReplaceAll(taskName, "_", "-")
+	return taskName == resolvePRCommentsLibraryTaskName
 }
 
 func normalizeBranchRef(branch string) string {

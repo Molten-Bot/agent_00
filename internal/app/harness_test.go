@@ -1816,11 +1816,12 @@ func TestRunRequiredNonDefaultBranchChecksRemoteDefaultBeforeSandboxRetry(t *tes
 	}
 }
 
-func TestRunNonMainBranchReusesExistingBranchAndPR(t *testing.T) {
+func TestRunResolvePRCommentsReusesExistingBranchAndPR(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
 	cfg.BaseBranch = "release/2026.04-hotfix"
+	cfg.LibraryTaskName = resolvePRCommentsLibraryTaskName
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	guid := "abcdef123456"
 	runDir := testRunDir(guid)
@@ -1871,11 +1872,12 @@ func TestRunNonMainBranchReusesExistingBranchAndPR(t *testing.T) {
 	}
 }
 
-func TestRunNonMainBranchDetectsAgentCommittedAndPushedChange(t *testing.T) {
+func TestRunResolvePRCommentsDetectsAgentCommittedAndPushedChange(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
 	cfg.BaseBranch = "release/2026.04-hotfix"
+	cfg.LibraryTaskName = resolvePRCommentsLibraryTaskName
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	guid := "abcdef123456"
 	runDir := testRunDir(guid)
@@ -1933,11 +1935,12 @@ func TestRunNonMainBranchDetectsAgentCommittedAndPushedChange(t *testing.T) {
 	}
 }
 
-func TestRunNonMainBranchTreatsTransientPRLookupAfterPushAsSuccess(t *testing.T) {
+func TestRunResolvePRCommentsTreatsTransientPRLookupAfterPushAsSuccess(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
 	cfg.BaseBranch = "release/2026.04-hotfix"
+	cfg.LibraryTaskName = resolvePRCommentsLibraryTaskName
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	guid := "abcdef123456"
 	runDir := testRunDir(guid)
@@ -2043,11 +2046,12 @@ func TestRunTracksCurrentBranchFromLocalGitStatus(t *testing.T) {
 	}
 }
 
-func TestRunNonMainBranchPushNonFastForwardRetriesWithMergeSync(t *testing.T) {
+func TestRunResolvePRCommentsPushNonFastForwardRetriesWithMergeSync(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
 	cfg.BaseBranch = "release/2026.04-hotfix"
+	cfg.LibraryTaskName = resolvePRCommentsLibraryTaskName
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	guid := "abcdef123456"
 	runDir := testRunDir(guid)
@@ -2105,11 +2109,12 @@ func TestRunNonMainBranchPushNonFastForwardRetriesWithMergeSync(t *testing.T) {
 	}
 }
 
-func TestRunNonMainBranchPushSyncMergeConflictInvokesAgentAndRetries(t *testing.T) {
+func TestRunResolvePRCommentsPushSyncMergeConflictInvokesAgentAndRetries(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
 	cfg.BaseBranch = "release/2026.04-hotfix"
+	cfg.LibraryTaskName = resolvePRCommentsLibraryTaskName
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	guid := "abcdef123456"
 	runDir := testRunDir(guid)
@@ -3140,11 +3145,12 @@ func TestRunNoChangesReportsMergedPRWhenBranchNoLongerExists(t *testing.T) {
 	}
 }
 
-func TestRunNonMainBranchNoChangesReportsExistingPR(t *testing.T) {
+func TestRunResolvePRCommentsNoChangesReportsExistingPR(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
 	cfg.BaseBranch = "release/2026.04-hotfix"
+	cfg.LibraryTaskName = resolvePRCommentsLibraryTaskName
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	guid := "abcdef123456"
 	runDir := testRunDir(guid)
@@ -3202,6 +3208,7 @@ func TestRunExistingPRNoChangesUsesPromptPRURLWhenHeadLookupIsEmpty(t *testing.T
 
 	cfg := sampleConfig()
 	cfg.BaseBranch = "moltenhub-existing-pr"
+	cfg.LibraryTaskName = resolvePRCommentsLibraryTaskName
 	prURL := "https://github.com/acme/repo/pull/117"
 	cfg.Prompt = strings.Join([]string{
 		"Update the existing pull request to address review feedback.",
@@ -3265,6 +3272,7 @@ func TestRunExistingPRNoChangesRejectsPromptPRURLWhenHeadBranchDiffers(t *testin
 
 	cfg := sampleConfig()
 	cfg.BaseBranch = "moltenhub-existing-pr"
+	cfg.LibraryTaskName = resolvePRCommentsLibraryTaskName
 	prURL := "https://github.com/acme/repo/pull/117"
 	cfg.Prompt = strings.Join([]string{
 		"Update the existing pull request to address review feedback.",
@@ -3325,6 +3333,7 @@ func TestRunExistingPRNoChangesFailsWhenPRLookupFails(t *testing.T) {
 
 	cfg := sampleConfig()
 	cfg.BaseBranch = "moltenhub-existing-pr"
+	cfg.LibraryTaskName = resolvePRCommentsLibraryTaskName
 	cfg.Prompt = strings.Join([]string{
 		"Update the existing pull request to address review feedback.",
 		"Pull request:",
@@ -4812,11 +4821,12 @@ func TestRunMultiRepoClonesConcurrently(t *testing.T) {
 	}
 }
 
-func TestRunNonMainBranchReusesExistingPR(t *testing.T) {
+func TestRunResolvePRCommentsReusesExistingPR(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
 	cfg.BaseBranch = "release/fix-ci"
+	cfg.LibraryTaskName = resolvePRCommentsLibraryTaskName
 
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	guid := "abcdef123456"
@@ -4868,11 +4878,11 @@ func TestRunNonMainBranchReusesExistingPR(t *testing.T) {
 	}
 }
 
-func TestRunNonMainBranchCreatesPRWithoutExplicitBaseWhenNoOpenPR(t *testing.T) {
+func TestRunNonDefaultBaseCreatesWorkBranchAndTargetsSelectedBase(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
-	cfg.BaseBranch = "release/fix-ci"
+	cfg.BaseBranch = "dev"
 
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	guid := "abcdef123456"
@@ -4880,6 +4890,7 @@ func TestRunNonMainBranchCreatesPRWithoutExplicitBaseWhenNoOpenPR(t *testing.T) 
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
+	branch := "moltenhub-build-api"
 	prURL := "https://github.com/acme/repo/pull/88"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
@@ -4888,17 +4899,16 @@ func TestRunNonMainBranchCreatesPRWithoutExplicitBaseWhenNoOpenPR(t *testing.T) 
 		{cmd: execx.Command{Name: "codex", Args: []string{"--help"}}},
 		{cmd: execx.Command{Name: "gh", Args: []string{"auth", "status"}}},
 		{cmd: cloneCommand(cfg, repoDir)},
-		{cmd: fetchBaseBranchCommand(repoDir, cfg.BaseBranch)},
-		{cmd: pushDryRunCommand(repoDir, cfg.BaseBranch)},
-		{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "1111111111111111111111111111111111111111\n"}},
+		{cmd: branchCommand(repoDir, branch)},
+		{cmd: pushDryRunCommand(repoDir, branch)},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: " M file.go\n"}},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## " + branch + "\n M file.go\n"}},
 		{cmd: addCommand(repoDir)},
 		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
-		{cmd: pushCommand(repoDir, cfg.BaseBranch)},
-		{cmd: remoteBranchExistsOnOriginCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "abc123\trefs/heads/" + cfg.BaseBranch + "\n"}},
-		{cmd: prLookupByHeadCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "[]\n"}},
-		{cmd: prCreateWithoutBaseCommand(repoDir, cfg, cfg.BaseBranch), res: execx.Result{Stdout: prURL + "\n"}},
+		{cmd: fetchBranchCommand(repoDir, cfg.BaseBranch)},
+		{cmd: mergeFetchedBranchCommand(repoDir)},
+		{cmd: pushCommand(repoDir, branch)},
+		{cmd: prCreateWithOptionsCommand(repoDir, cfg, cfg.BaseBranch, branch, ""), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL)},
 	}}
 
@@ -4914,11 +4924,24 @@ func TestRunNonMainBranchCreatesPRWithoutExplicitBaseWhenNoOpenPR(t *testing.T) 
 	if res.ExitCode != ExitSuccess {
 		t.Fatalf("ExitCode = %d", res.ExitCode)
 	}
+	if got, want := res.Branch, branch; got != want {
+		t.Fatalf("Branch = %q, want generated work branch %q", got, want)
+	}
 	if got, want := res.PRURL, prURL; got != want {
 		t.Fatalf("PRURL = %q, want %q", got, want)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+	var prCreateArgs []string
+	for _, call := range fake.calls {
+		if call.Name == "gh" && containsSequence(call.Args, []string{"pr", "create"}) {
+			prCreateArgs = call.Args
+			break
+		}
+	}
+	if !containsSequence(prCreateArgs, []string{"--base", cfg.BaseBranch, "--head", branch}) {
+		t.Fatalf("PR create args = %v, want explicit dev base and generated head", prCreateArgs)
 	}
 }
 
@@ -5674,11 +5697,14 @@ func TestCommandBuilders(t *testing.T) {
 	if !shouldCreateWorkBranch("master") {
 		t.Fatal("shouldCreateWorkBranch(master) = false, want true")
 	}
-	if shouldCreateWorkBranch("Main") {
-		t.Fatal("shouldCreateWorkBranch(Main) = true, want false")
+	if !shouldCreateWorkBranch("Main") {
+		t.Fatal("shouldCreateWorkBranch(Main) = false, want true")
 	}
-	if shouldCreateWorkBranch("release/fix-ci") {
-		t.Fatal("shouldCreateWorkBranch(non-main) = true, want false")
+	if !shouldCreateWorkBranch("release/fix-ci") {
+		t.Fatal("shouldCreateWorkBranch(non-main) = false, want true")
+	}
+	if shouldCreateWorkBranch(" ") {
+		t.Fatal("shouldCreateWorkBranch(empty) = true, want false")
 	}
 
 	checks := prChecksCommand(repoDir, "https://github.com/acme/repo/pull/42")
@@ -8617,11 +8643,28 @@ func TestShouldCreateWorkBranch(t *testing.T) {
 	if !shouldCreateWorkBranch("master") {
 		t.Fatal("shouldCreateWorkBranch(master) = false, want true")
 	}
-	if shouldCreateWorkBranch("Main") {
-		t.Fatal("shouldCreateWorkBranch(Main) = true, want false")
+	if !shouldCreateWorkBranch("Main") {
+		t.Fatal("shouldCreateWorkBranch(Main) = false, want true")
 	}
-	if shouldCreateWorkBranch("release/hotfix") {
-		t.Fatal("shouldCreateWorkBranch(non-main) = true, want false")
+	if !shouldCreateWorkBranch("release/hotfix") {
+		t.Fatal("shouldCreateWorkBranch(non-main) = false, want true")
+	}
+	if shouldCreateWorkBranch("") {
+		t.Fatal("shouldCreateWorkBranch(empty) = true, want false")
+	}
+}
+
+func TestShouldReuseExistingBranch(t *testing.T) {
+	t.Parallel()
+
+	if shouldReuseExistingBranch(repoWorkspace{BaseBranch: "dev"}) {
+		t.Fatal("normal dev-base run should create a work branch")
+	}
+	if !shouldReuseExistingBranch(repoWorkspace{RequiresNonDefaultBranch: true}) {
+		t.Fatal("required non-default branch run should reuse its checked-out branch")
+	}
+	if !shouldReuseExistingBranch(repoWorkspace{RequiredBranchTask: "resolve_pr_comments"}) {
+		t.Fatal("resolve PR comments run should reuse the existing PR branch")
 	}
 }
 
