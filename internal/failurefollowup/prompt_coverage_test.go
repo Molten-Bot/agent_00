@@ -54,6 +54,9 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 	if got := NonRemediableFailureReason(errors.New("codex: ERROR: Quota exceeded. Check your plan and billing details.")); got != "quota exceeded" {
 		t.Fatalf("NonRemediableFailureReason(quota) = %q, want %q", got, "quota exceeded")
 	}
+	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: Live Claude task could not create PR. Error details: `Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access`")); got != "organization has disabled claude subscription access" {
+		t.Fatalf("NonRemediableFailureReason(Claude subscription disabled) = %q, want %q", got, "organization has disabled claude subscription access")
+	}
 	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: user-portal changes not applied. Error details: sandbox rejected writes to `/home/jef/git/moltenbot/user-portal`: `writing outside of the project; rejected by user approval settings`.")); got != "sandbox rejected writes to" {
 		t.Fatalf("NonRemediableFailureReason(sandbox write rejection) = %q, want %q", got, "sandbox rejected writes to")
 	}

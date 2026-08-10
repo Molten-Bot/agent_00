@@ -1846,6 +1846,13 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailures(t *testing.T) {
 	}
 
 	ok, reason = shouldQueueFailureFollowUp(dispatch, app.Result{
+		Err: errors.New("codex: codex reported failure: Failure: Live Claude task could not create PR. Error details: `Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access`"),
+	})
+	if ok || !strings.Contains(reason, "organization has disabled claude subscription access") {
+		t.Fatalf("shouldQueueFailureFollowUp(Claude subscription disabled) = (%v, %q), want non-remediable subscription-access skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp(dispatch, app.Result{
 		Err: errors.New("codex: codex reported failure: Failure: user-portal changes not applied. Error details: sandbox rejected writes to `/home/jef/git/moltenbot/user-portal`: `writing outside of the project; rejected by user approval settings`."),
 	})
 	if ok || !strings.Contains(reason, "sandbox rejected writes to") {
