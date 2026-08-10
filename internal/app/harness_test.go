@@ -7870,6 +7870,18 @@ func TestCodexReportedFailureDetectsRepositoryChangeRequestRefusal(t *testing.T)
 	}
 }
 
+func TestCodexReportedFailureIgnoresRepositoryChangeRequestSummary(t *testing.T) {
+	t.Parallel()
+
+	res := execx.Result{
+		Stdout: "Send requested repository change action now preserves prompt images.",
+	}
+
+	if failed, detail := codexReportedFailure(res); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(repository change request summary) = (%v, %q), want (false, \"\")", failed, detail)
+	}
+}
+
 func TestCodexReportedFailureTreatsCompletedHubSnapshotRefreshWarningAsNonFatal(t *testing.T) {
 	t.Parallel()
 

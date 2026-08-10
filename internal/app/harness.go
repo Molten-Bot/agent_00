@@ -5815,13 +5815,13 @@ func isNoImplementationTargetLine(lowerLine string) bool {
 			"need actual change request",
 			"need actual repo task",
 			"need repository change request",
-			"send requested repository change",
 		} {
 			if strings.Contains(lowerLine, marker) {
 				return true
 			}
 		}
-		if containsStandaloneSentence(lowerLine, "send task") {
+		if containsStandaloneSentence(lowerLine, "send task") ||
+			containsStandaloneSentence(lowerLine, "send requested repository change") {
 			return true
 		}
 	}
