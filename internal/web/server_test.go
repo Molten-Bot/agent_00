@@ -3756,6 +3756,10 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	if !strings.Contains(css, "grid-template-rows: auto auto minmax(0, 1fr);") {
 		t.Fatalf("expected stylesheet to dedicate remaining full screen height to the task output terminal")
 	}
+	if !strings.Contains(css, ".task-xterm-ready .xterm-scrollable-element {") ||
+		!strings.Contains(css, "scrollbar-gutter: stable;") {
+		t.Fatalf("expected stylesheet to keep the xterm 6 output scrollbar visible")
+	}
 	if !strings.Contains(css, ".task.task-collapsed") {
 		t.Fatalf("expected stylesheet to include collapsed task styles")
 	}
