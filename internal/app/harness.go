@@ -6052,12 +6052,12 @@ func codexTerminalFailureBlocks(res execx.Result) []string {
 			nonEmpty = nonEmpty[len(nonEmpty)-terminalFailureWindow:]
 		}
 		for i := 0; i < len(nonEmpty); {
-			if !strings.HasPrefix(strings.ToLower(nonEmpty[i]), "failure:") {
+			if !isTerminalFailureBlockStart(nonEmpty[i]) {
 				i++
 				continue
 			}
 			end := i + 1
-			for end < len(nonEmpty) && !strings.HasPrefix(strings.ToLower(nonEmpty[end]), "failure:") {
+			for end < len(nonEmpty) && !isTerminalFailureBlockStart(nonEmpty[end]) {
 				end++
 			}
 			blocks = append(blocks, strings.Join(nonEmpty[i:end], " "))
@@ -6065,6 +6065,11 @@ func codexTerminalFailureBlocks(res execx.Result) []string {
 		}
 	}
 	return blocks
+}
+
+func isTerminalFailureBlockStart(line string) bool {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	return strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed")
 }
 
 func smokeFallbackSucceeded(text string) bool {

@@ -7097,6 +7097,30 @@ func TestRunCodexDoesNotMaskLaterTaskFailureWithUnrelatedFailureBlock(t *testing
 	}
 }
 
+func TestRunCodexDoesNotMaskTaskFailedBlockWithUnrelatedFailureBlock(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "make typography responsive"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"Failure: unrelated booking smoke tests timed out.",
+				"Error details: changed homepage behavior unaffected.",
+				"Task failed: could not update responsive typography files.",
+				"Error details: permission denied writing src/styles.css.",
+			}, "\n")},
+		},
+	}}
+
+	h := New(fake)
+	err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil {
+		t.Fatal("runCodex() error = nil, want task failure despite unrelated failure block")
+	}
+}
+
 func TestRunCodexAllowsMissingCurlWhenSmokeFallbackSucceeded(t *testing.T) {
 	t.Parallel()
 
