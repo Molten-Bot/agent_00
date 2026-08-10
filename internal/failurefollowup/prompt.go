@@ -65,6 +65,7 @@ var nonRemediableFailureMarkers = []string{
 	"quota exceeded",
 	"insufficient_quota",
 	"billing",
+	"organization has disabled claude subscription access",
 	"401 unauthorized",
 	"missing bearer or basic authentication",
 	"invalid api key",

@@ -1978,6 +1978,13 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	}
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		Err: errors.New("codex: codex reported failure: Failure: Live Claude task could not create PR. Error details: `Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access`"),
+	})
+	if ok || !strings.Contains(reason, "organization has disabled claude subscription access") {
+		t.Fatalf("shouldQueueFailureFollowUp(Claude subscription disabled) = (%v, %q), want non-remediable subscription-access skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
 		Err: errors.New("git: verify remote write access for repo https://github.com/acme/repo.git branch \"moltenhub-fix\": exit status 128: remote: Write access to repository not granted. fatal: unable to access 'https://github.com/acme/repo.git/': The requested URL returned error: 403"),
 	})
 	if ok || !strings.Contains(reason, "write access to repository not granted") {
