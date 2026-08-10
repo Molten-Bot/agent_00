@@ -5632,7 +5632,7 @@ func (h Harness) runCodexWithHeartbeat(
 					)
 					return run.res, nil
 				}
-				if isNonFatalUnrelatedValidationFailure(detail, run.res) {
+				if isNonFatalUnrelatedValidationFailure(detail) {
 					h.logf(
 						"stage=%s status=warn action=unrelated_validation_failure detail=%q%s",
 						agentStage,
@@ -5999,12 +5999,8 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	return false
 }
 
-func isNonFatalUnrelatedValidationFailure(detail string, res execx.Result) bool {
-	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{
-		detail,
-		res.Stdout,
-		res.Stderr,
-	}, "\n")))
+func isNonFatalUnrelatedValidationFailure(detail string) bool {
+	text := strings.ToLower(strings.TrimSpace(detail))
 	if text == "" || !strings.Contains(text, "unrelated") {
 		return false
 	}

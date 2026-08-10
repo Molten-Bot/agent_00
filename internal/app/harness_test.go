@@ -7047,6 +7047,32 @@ func TestRunCodexRejectsTaskRelevantValidationFailure(t *testing.T) {
 	}
 }
 
+func TestRunCodexDoesNotMaskTaskFailureWithSeparateUnrelatedValidationNote(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "make typography responsive"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"Unrelated smoke test failed; changed behavior unaffected.",
+				"Failure: could not update responsive typography files.",
+				"Error details: permission denied writing src/styles.css.",
+			}, "\n")},
+		},
+	}}
+
+	h := New(fake)
+	err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil {
+		t.Fatal("runCodex() error = nil, want task failure despite separate unrelated validation note")
+	}
+	if !strings.Contains(err.Error(), "could not update responsive typography files") {
+		t.Fatalf("runCodex() error = %v, want task failure detail", err)
+	}
+}
+
 func TestRunCodexAllowsMissingCurlWhenSmokeFallbackSucceeded(t *testing.T) {
 	t.Parallel()
 
