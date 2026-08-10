@@ -5186,6 +5186,10 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
 }
 
 .task-fullscreen-close {
+  position: absolute;
+  top: max(28px, calc(env(safe-area-inset-top) + 8px));
+  right: max(28px, calc(env(safe-area-inset-right) + 8px));
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
