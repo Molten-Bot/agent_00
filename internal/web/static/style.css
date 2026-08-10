@@ -5087,27 +5087,33 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   color: var(--text);
 }
 
-.task-xterm-ready .xterm-viewport {
+.task-xterm-ready .xterm-viewport,
+.task-xterm-ready .xterm-scrollable-element {
   background: transparent !important;
+  overflow-y: scroll !important;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
-  scrollbar-color: var(--surface-scroll-thumb) rgba(17, 28, 42, 0.35);
+  scrollbar-color: var(--surface-scroll-thumb) var(--surface-scroll-track);
 }
 
 .task-xterm-ready .xterm-screen {
   background: transparent;
 }
 
-.task-xterm-ready .xterm-viewport::-webkit-scrollbar {
+.task-xterm-ready .xterm-viewport::-webkit-scrollbar,
+.task-xterm-ready .xterm-scrollable-element::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
-.task-xterm-ready .xterm-viewport::-webkit-scrollbar-track {
+.task-xterm-ready .xterm-viewport::-webkit-scrollbar-track,
+.task-xterm-ready .xterm-scrollable-element::-webkit-scrollbar-track {
   background: var(--surface-scroll-track);
   border-radius: 999px;
 }
 
-.task-xterm-ready .xterm-viewport::-webkit-scrollbar-thumb {
+.task-xterm-ready .xterm-viewport::-webkit-scrollbar-thumb,
+.task-xterm-ready .xterm-scrollable-element::-webkit-scrollbar-thumb {
   background: var(--surface-scroll-thumb);
   border-radius: 999px;
   border: 1px solid var(--surface-scroll-thumb-border);
