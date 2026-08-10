@@ -15,7 +15,8 @@
   // "libraryTaskName": "unit-test-coverage",
   // optional for subdirectory-scoped runs:
   // "targetSubdir": ".",
-  // optional branch override; omitted means the repository default branch
+  // optional PR base branch; the harness creates a work branch from it and targets it in the PR
+  // omitted means the repository default branch
   // "branch": "release/2026.04",
   // code review example: provide either "branch" or "prNumber"
   // "prNumber": 123,
