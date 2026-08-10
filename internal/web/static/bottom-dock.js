@@ -285,8 +285,8 @@
       hubLink.setAttribute("aria-label", title);
     }
     if (profileButton) {
-      profileButton.hidden = !configured;
-      if (configured && profileButton.dataset.bottomDockBound !== "true") {
+      profileButton.hidden = false;
+      if (profileButton.dataset.bottomDockBound !== "true") {
         profileButton.dataset.bottomDockBound = "true";
         profileButton.addEventListener("click", () => {
           trackDockEvent("hub_profile_opened", { source: "dock" });
