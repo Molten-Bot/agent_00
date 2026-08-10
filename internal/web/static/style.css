@@ -5277,6 +5277,10 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
+.task-fullscreen-output-panel > .task-head {
+  padding-right: 56px;
+}
+
 .task-image-viewer {
   position: absolute;
   inset: 0;
