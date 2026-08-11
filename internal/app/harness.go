@@ -163,8 +163,9 @@ type Harness struct {
 	// PRChecksWatchTimeout bounds each gh pr checks --watch call when positive.
 	// Zero uses the default timeout; negative disables the timeout.
 	PRChecksWatchTimeout time.Duration
-	// FinalReviewPasses is the exact number of read-only review passes to run
+	// FinalReviewPasses is the maximum number of read-only review passes to run
 	// after a changed repository has a pull request and initial checks finish.
+	// The cycle ends early when a pass reports no findings.
 	FinalReviewPasses   int
 	agentRetryInvariant func(context.Context) error
 }
@@ -3471,7 +3472,7 @@ func (h Harness) runFinalReviewCycle(
 			repo.PRURL,
 		)
 		if len(outcome.Findings) == 0 {
-			continue
+			return ExitSuccess, "", nil
 		}
 
 		h.logf(
@@ -3579,7 +3580,7 @@ func finalReviewMode(passes int) string {
 
 func finalReviewPrompt(originalPrompt, preparedContext string, pass, total int) string {
 	return strings.TrimSpace(fmt.Sprintf(
-		"%s\n\nPost-task review pass %d/%d. Review the current pull request independently, even if an earlier pass was clean. Follow the bundled review skill as the controlling review standard and return its structured outcome.\n\nOriginal task prompt:\n%s\n\n%s",
+		"%s\n\nPost-task review pass %d/%d. Review the current pull request independently. Follow the bundled review skill as the controlling review standard and return its structured outcome.\n\nOriginal task prompt:\n%s\n\n%s",
 		codeReviewLibraryPrompt(),
 		pass,
 		total,

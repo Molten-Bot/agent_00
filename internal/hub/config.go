@@ -129,7 +129,7 @@ func (c ReviewWatchConfig) AutoMergeEnabled() bool {
 	return *c.AutoMerge
 }
 
-// ReviewCount returns the exact number of post-task review passes configured
+// ReviewCount returns the maximum number of post-task review passes configured
 // by the review level.
 func (c ReviewWatchConfig) ReviewCount() int {
 	switch NormalizeReviewLevel(c.ReviewLevel) {
