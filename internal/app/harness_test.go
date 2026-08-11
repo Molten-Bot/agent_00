@@ -7453,6 +7453,57 @@ func TestRunCodexAllowsFocusedValidationUnavailableFailure(t *testing.T) {
 	}
 }
 
+func TestRunCodexAllowsBrowserVisualSuiteResourceExhaustion(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "optimize stay card image"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"Checks passed: static validation, typecheck, unit tests, direct HTTP asset smoke.",
+				"Failure: Browser visual suite unavailable.",
+				"Error details: Chromium crashed from workspace resource exhaustion; first install also hit `ENOSPC`.",
+			}, "\n")},
+		},
+	}}
+
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
+		t.Fatalf("runCodex() error = %v, want nil for browser resource validation gap", err)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "action=browser_validation_resource_unavailable") {
+		t.Fatalf("logs missing browser resource warning:\n%s", strings.Join(logs, "\n"))
+	}
+}
+
+func TestRunCodexRejectsBrowserVisualSuiteApplicationFailure(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update stay card"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"Failure: Browser visual suite unavailable.",
+				"Error details: Chromium crashed after application entered an infinite reload loop.",
+			}, "\n")},
+		},
+	}}
+
+	h := New(fake)
+	err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil || !strings.Contains(err.Error(), "codex reported failure") {
+		t.Fatalf("runCodex() error = %v, want application-caused browser failure", err)
+	}
+}
+
 func TestRunCodexAllowsRecoveredTransientRegistryLookupFailure(t *testing.T) {
 	t.Parallel()
 

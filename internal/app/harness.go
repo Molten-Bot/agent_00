@@ -5632,6 +5632,15 @@ func (h Harness) runCodexWithHeartbeat(
 					)
 					return run.res, nil
 				}
+				if isNonFatalBrowserResourceFailure(detail, run.res) {
+					h.logf(
+						"stage=%s status=warn action=browser_validation_resource_unavailable detail=%q%s",
+						agentStage,
+						detail,
+						invocation.logFieldsSuffix(),
+					)
+					return run.res, nil
+				}
 				if isRecoveredTransientRegistryLookupFailure(detail, run.res) {
 					h.logf(
 						"stage=%s status=warn action=recovered_transient_registry_lookup detail=%q%s",
@@ -5988,6 +5997,49 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		return true
 	}
 	return false
+}
+
+func isNonFatalBrowserResourceFailure(detail string, res execx.Result) bool {
+	text := strings.ToLower(strings.TrimSpace(detail))
+	if text == "" {
+		text = strings.ToLower(strings.TrimSpace(strings.Join([]string{
+			res.Stdout,
+			res.Stderr,
+		}, "\n")))
+	}
+	if text == "" {
+		return false
+	}
+
+	browserValidation := containsAny(text, []string{
+		"browser visual suite unavailable",
+		"browser validation unavailable",
+		"browser test suite unavailable",
+		"playwright suite unavailable",
+		"visual regression suite unavailable",
+	})
+	resourceUnavailable := containsAny(text, []string{
+		"resource exhaustion",
+		"resource exhausted",
+		"workspace resource",
+		"no space left on device",
+		"enospc",
+		"out of memory",
+		"out-of-memory",
+		"oom killed",
+		"oom-killed",
+	})
+	browserCrashed := containsAny(text, []string{
+		"browser crashed",
+		"chromium crashed",
+		"chrome crashed",
+		"playwright crashed",
+		"browser process crashed",
+	})
+
+	// Resource exhaustion belongs to the execution environment, not the
+	// repository. Keep browser assertion, navigation, and console failures fatal.
+	return browserValidation && resourceUnavailable && browserCrashed
 }
 
 func smokeFallbackSucceeded(text string) bool {
