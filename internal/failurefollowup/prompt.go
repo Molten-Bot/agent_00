@@ -81,6 +81,9 @@ var nonRemediableFailureMarkers = []string{
 	"would require invented",
 	"requires invented",
 	"require fabricating",
+	"task premise false",
+	"can't fabricate",
+	"cannot fabricate",
 }
 
 func WithExecutionContract(base string) string {
