@@ -6000,13 +6000,11 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 }
 
 func isNonFatalBrowserResourceFailure(detail string, res execx.Result) bool {
-	text := strings.ToLower(strings.TrimSpace(detail))
-	if text == "" {
-		text = strings.ToLower(strings.TrimSpace(strings.Join([]string{
-			res.Stdout,
-			res.Stderr,
-		}, "\n")))
-	}
+	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		detail,
+		res.Stdout,
+		res.Stderr,
+	}, "\n")))
 	if text == "" {
 		return false
 	}
@@ -6018,17 +6016,6 @@ func isNonFatalBrowserResourceFailure(detail string, res execx.Result) bool {
 		"playwright suite unavailable",
 		"visual regression suite unavailable",
 	})
-	resourceUnavailable := containsAny(text, []string{
-		"resource exhaustion",
-		"resource exhausted",
-		"workspace resource",
-		"no space left on device",
-		"enospc",
-		"out of memory",
-		"out-of-memory",
-		"oom killed",
-		"oom-killed",
-	})
 	browserCrashed := containsAny(text, []string{
 		"browser crashed",
 		"chromium crashed",
@@ -6036,10 +6023,23 @@ func isNonFatalBrowserResourceFailure(detail string, res execx.Result) bool {
 		"playwright crashed",
 		"browser process crashed",
 	})
+	diskExhaustionEvidence := strings.Contains(text, "no space left on device") && containsAny(text, []string{
+		"errno -28",
+		"syscall open",
+		"syscall write",
+	})
+	memoryExhaustionEvidence := containsAny(text, []string{
+		"exit status 137",
+		"exited with code 137",
+		"oom-kill:",
+		"out of memory: killed process",
+		"received signal sigkill",
+		"signal: killed",
+	})
 
-	// Resource exhaustion belongs to the execution environment, not the
-	// repository. Keep browser assertion, navigation, and console failures fatal.
-	return browserValidation && resourceUnavailable && browserCrashed
+	// Do not trust an agent's resource-exhaustion diagnosis alone. Require a
+	// concrete OS or process diagnostic so application-caused crashes stay fatal.
+	return browserValidation && browserCrashed && (diskExhaustionEvidence || memoryExhaustionEvidence)
 }
 
 func smokeFallbackSucceeded(text string) bool {

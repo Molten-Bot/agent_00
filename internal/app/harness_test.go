@@ -7464,7 +7464,11 @@ func TestRunCodexAllowsBrowserVisualSuiteResourceExhaustion(t *testing.T) {
 			res: execx.Result{Stdout: strings.Join([]string{
 				"Checks passed: static validation, typecheck, unit tests, direct HTTP asset smoke.",
 				"Failure: Browser visual suite unavailable.",
-				"Error details: Chromium crashed from workspace resource exhaustion; first install also hit `ENOSPC`.",
+				"Error details: Chromium crashed while writing its profile.",
+			}, "\n"), Stderr: strings.Join([]string{
+				"npm error syscall write",
+				"npm error errno -28",
+				"npm error ENOSPC: no space left on device, write",
 			}, "\n")},
 		},
 	}}
@@ -7479,6 +7483,28 @@ func TestRunCodexAllowsBrowserVisualSuiteResourceExhaustion(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(logs, "\n"), "action=browser_validation_resource_unavailable") {
 		t.Fatalf("logs missing browser resource warning:\n%s", strings.Join(logs, "\n"))
+	}
+}
+
+func TestRunCodexRejectsBrowserResourceExhaustionWithoutEnvironmentEvidence(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "optimize stay card image"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"Failure: Browser visual suite unavailable.",
+				"Error details: Chromium crashed from workspace resource exhaustion; first install also hit `ENOSPC`.",
+			}, "\n")},
+		},
+	}}
+
+	h := New(fake)
+	err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil || !strings.Contains(err.Error(), "codex reported failure") {
+		t.Fatalf("runCodex() error = %v, want unsubstantiated browser resource failure", err)
 	}
 }
 
