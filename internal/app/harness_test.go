@@ -7509,6 +7509,28 @@ func TestRunCodexRejectsBrowserFailureWithUnrelatedResourceDiagnostic(t *testing
 	}
 }
 
+func TestRunCodexRejectsBrowserFailureWithUnrelatedENOSPCInErrorDetails(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update stay card"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"Failure: Browser visual suite unavailable.",
+				"Error details: Chromium crashed from workspace resource exhaustion; first install also hit ENOSPC.",
+			}, "\n")},
+		},
+	}}
+
+	h := New(fake)
+	err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil || !strings.Contains(err.Error(), "codex reported failure") {
+		t.Fatalf("runCodex() error = %v, want browser failure despite unrelated ENOSPC detail", err)
+	}
+}
+
 func TestRunCodexRejectsBrowserSIGKILLWithoutOOMEvidence(t *testing.T) {
 	t.Parallel()
 

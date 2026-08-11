@@ -6022,17 +6022,19 @@ func isNonFatalBrowserResourceFailure(detail string, _ execx.Result) bool {
 		"playwright crashed",
 		"browser process crashed",
 	})
+	// Do not trust an agent's resource-exhaustion diagnosis alone. ENOSPC must be
+	// directly tied to the browser crash; an earlier install can fail separately.
 	diskExhaustionEvidence := containsAny(text, []string{
-		"enospc",
-		"no space left on device",
+		"browser crashed with enospc",
+		"chromium crashed with enospc",
+		"chrome crashed with enospc",
+		"playwright crashed with enospc",
+		"browser process crashed with enospc",
 	})
 	memoryExhaustionEvidence := containsAny(text, []string{
 		"oom-kill:",
 		"out of memory: killed process",
 	})
-
-	// Do not trust an agent's resource-exhaustion diagnosis alone. Require a
-	// concrete OS or process diagnostic so application-caused crashes stay fatal.
 	return browserValidation && browserCrashed && (diskExhaustionEvidence || memoryExhaustionEvidence)
 }
 
