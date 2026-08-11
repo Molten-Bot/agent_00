@@ -62,7 +62,7 @@ func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (exec
 	return execx.Result{}, fmt.Errorf("unexpected command")
 }
 
-func TestRunFinalReviewCycleRunsExactCleanPassCount(t *testing.T) {
+func TestRunFinalReviewCycleStopsAfterCleanPass(t *testing.T) {
 	runner := &cleanReviewCycleRunner{t: t}
 	h := New(runner)
 	h.FinalReviewPasses = 3
@@ -97,8 +97,8 @@ func TestRunFinalReviewCycleRunsExactCleanPassCount(t *testing.T) {
 	if err != nil || exitCode != ExitSuccess || stage != "" {
 		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
 	}
-	if runner.reviews != 3 || runner.comments != 3 {
-		t.Fatalf("review/comment counts = %d/%d, want 3/3", runner.reviews, runner.comments)
+	if runner.reviews != 1 || runner.comments != 1 {
+		t.Fatalf("review/comment counts = %d/%d, want 1/1", runner.reviews, runner.comments)
 	}
 	for i, prompt := range runner.prompts {
 		if !strings.Contains(prompt, "The bundled review skill is mandatory") || !strings.Contains(prompt, fmt.Sprintf("Post-task review pass %d/3", i+1)) {
@@ -227,7 +227,7 @@ func TestRunFinalReviewCycleFixesFinalPassWithoutExtraReview(t *testing.T) {
 	}
 }
 
-func TestRunFinalReviewCycleContinuesAfterFixToExactPassCount(t *testing.T) {
+func TestRunFinalReviewCycleContinuesAfterFixUntilClean(t *testing.T) {
 	runner := &finalFindingReviewCycleRunner{t: t, findingsPass: 1}
 	h := New(runner)
 	h.FinalReviewPasses = 3
@@ -257,7 +257,7 @@ func TestRunFinalReviewCycleContinuesAfterFixToExactPassCount(t *testing.T) {
 	if err != nil || exitCode != ExitSuccess || stage != "" {
 		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
 	}
-	if runner.reviews != 3 || runner.fixes != 1 || runner.comments != 3 || runner.checks != 1 {
-		t.Fatalf("reviews/fixes/comments/checks = %d/%d/%d/%d, want 3/1/3/1", runner.reviews, runner.fixes, runner.comments, runner.checks)
+	if runner.reviews != 2 || runner.fixes != 1 || runner.comments != 2 || runner.checks != 1 {
+		t.Fatalf("reviews/fixes/comments/checks = %d/%d/%d/%d, want 2/1/2/1", runner.reviews, runner.fixes, runner.comments, runner.checks)
 	}
 }
