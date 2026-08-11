@@ -343,6 +343,9 @@ func TestGitHubTokenRequirementStateRejectsInvalidStartupToken(t *testing.T) {
 	if !strings.Contains(snapshot.Message, "validate github token") {
 		t.Fatalf("message = %q, want validation failure", snapshot.Message)
 	}
+	if !strings.Contains(snapshot.Message, "init config GitHub token is invalid") {
+		t.Fatalf("message = %q, want invalid init config source", snapshot.Message)
+	}
 	if got := os.Getenv("GH_TOKEN"); got != "" {
 		t.Fatalf("GH_TOKEN = %q, want empty", got)
 	}

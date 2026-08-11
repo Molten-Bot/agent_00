@@ -238,7 +238,7 @@ func validatedGitHubToken(ctx context.Context, runner execx.Runner, runtimeConfi
 	var validationErrs []string
 	for _, candidate := range candidates {
 		if err := validateGitHubToken(ctx, runner, candidate.value); err != nil {
-			validationErrs = append(validationErrs, err.Error())
+			validationErrs = append(validationErrs, fmt.Sprintf("%s GitHub token is invalid: %v", candidate.source, err))
 			continue
 		}
 		return candidate.value, nil

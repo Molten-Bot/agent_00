@@ -3892,6 +3892,18 @@
       return message.includes("github token");
     }
 
+    function githubTokenStartupError(auth) {
+      const current = auth && typeof auth === "object" ? auth : state.agentAuth;
+      if (!isGitHubTokenConfigureState(current)) {
+        return "";
+      }
+      const message = String(current?.message || "").trim();
+      if (message === "" || message.toLowerCase() === "github token is required.") {
+        return "";
+      }
+      return message;
+    }
+
     function isManualConfigureState(auth) {
       const current = auth && typeof auth === "object" ? auth : state.agentAuth;
       const gateState = String(current?.state || "").trim().toLowerCase();
@@ -4325,9 +4337,7 @@
           agentAuthConfigureOption.value = nextValue;
         }
       }
-      if (!requiresManualConfigure) {
-        setAgentAuthConfigureError("");
-      }
+      setAgentAuthConfigureError(requiresManualConfigure ? githubTokenStartupError(state.agentAuth) : "");
       if (!isClaudePendingBrowserLoginState(state.agentAuth)) {
         setAgentAuthBrowserCodeError("");
       }

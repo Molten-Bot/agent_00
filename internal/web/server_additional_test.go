@@ -1625,6 +1625,10 @@ func TestAuthGateVerifyButtonHidesWhileVerificationIsPending(t *testing.T) {
 	if !strings.Contains(html, "function isGitHubTokenConfigureState(auth)") {
 		t.Fatalf("expected auth gate to detect GitHub token configure flows across harnesses")
 	}
+	if !strings.Contains(html, "function githubTokenStartupError(auth)") ||
+		!strings.Contains(html, `setAgentAuthConfigureError(requiresManualConfigure ? githubTokenStartupError(state.agentAuth) : "");`) {
+		t.Fatalf("expected invalid startup GitHub config to render in the configuration dialog error")
+	}
 	if !strings.Contains(html, "id=\"agent-auth-url-logo\"") {
 		t.Fatalf("expected auth gate to include Claude logo link element")
 	}
