@@ -7464,7 +7464,7 @@ func TestRunCodexAllowsBrowserVisualSuiteResourceExhaustion(t *testing.T) {
 			res: execx.Result{Stdout: strings.Join([]string{
 				"Checks passed: static validation, typecheck, unit tests, direct HTTP asset smoke.",
 				"Failure: Browser visual suite unavailable.",
-				"Error details: Chromium crashed while writing its profile.",
+				"Error details: Chromium crashed with ENOSPC while writing its profile.",
 			}, "\n"), Stderr: strings.Join([]string{
 				"npm error syscall write",
 				"npm error errno -28",
@@ -7486,6 +7486,51 @@ func TestRunCodexAllowsBrowserVisualSuiteResourceExhaustion(t *testing.T) {
 	}
 }
 
+func TestRunCodexRejectsBrowserFailureWithUnrelatedResourceDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update stay card"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"Earlier install failed with ENOSPC, then retry succeeded.",
+				"Failure: Browser visual suite unavailable.",
+				"Error details: Chromium crashed after application entered an infinite reload loop.",
+			}, "\n")},
+		},
+	}}
+
+	h := New(fake)
+	err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil || !strings.Contains(err.Error(), "codex reported failure") {
+		t.Fatalf("runCodex() error = %v, want browser failure despite unrelated resource diagnostic", err)
+	}
+}
+
+func TestRunCodexRejectsBrowserSIGKILLWithoutOOMEvidence(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update stay card"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"Failure: Browser visual suite unavailable.",
+				"Error details: Chromium crashed; browser process received signal SIGKILL.",
+			}, "\n")},
+		},
+	}}
+
+	h := New(fake)
+	err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil || !strings.Contains(err.Error(), "codex reported failure") {
+		t.Fatalf("runCodex() error = %v, want SIGKILL browser failure without OOM evidence", err)
+	}
+}
+
 func TestRunCodexRejectsBrowserResourceExhaustionWithoutEnvironmentEvidence(t *testing.T) {
 	t.Parallel()
 
@@ -7496,7 +7541,7 @@ func TestRunCodexRejectsBrowserResourceExhaustionWithoutEnvironmentEvidence(t *t
 			cmd: codexCommand(targetDir, prompt),
 			res: execx.Result{Stdout: strings.Join([]string{
 				"Failure: Browser visual suite unavailable.",
-				"Error details: Chromium crashed from workspace resource exhaustion; first install also hit `ENOSPC`.",
+				"Error details: Chromium crashed from workspace resource exhaustion.",
 			}, "\n")},
 		},
 	}}

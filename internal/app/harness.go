@@ -5999,12 +5999,11 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	return false
 }
 
-func isNonFatalBrowserResourceFailure(detail string, res execx.Result) bool {
-	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{
-		detail,
-		res.Stdout,
-		res.Stderr,
-	}, "\n")))
+func isNonFatalBrowserResourceFailure(detail string, _ execx.Result) bool {
+	// Only inspect the reported failure and its Error details. Diagnostics from
+	// earlier, unrelated commands must not turn an application browser crash
+	// into a non-fatal validation gap.
+	text := strings.ToLower(strings.TrimSpace(detail))
 	if text == "" {
 		return false
 	}
@@ -6023,18 +6022,13 @@ func isNonFatalBrowserResourceFailure(detail string, res execx.Result) bool {
 		"playwright crashed",
 		"browser process crashed",
 	})
-	diskExhaustionEvidence := strings.Contains(text, "no space left on device") && containsAny(text, []string{
-		"errno -28",
-		"syscall open",
-		"syscall write",
+	diskExhaustionEvidence := containsAny(text, []string{
+		"enospc",
+		"no space left on device",
 	})
 	memoryExhaustionEvidence := containsAny(text, []string{
-		"exit status 137",
-		"exited with code 137",
 		"oom-kill:",
 		"out of memory: killed process",
-		"received signal sigkill",
-		"signal: killed",
 	})
 
 	// Do not trust an agent's resource-exhaustion diagnosis alone. Require a
