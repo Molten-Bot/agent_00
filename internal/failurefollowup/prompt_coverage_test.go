@@ -72,4 +72,10 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 	if got := NonRemediableFailureReason(errors.New("task failed because this branch has no delta from `main`; No commits between main and moltenhub-fix")); got != "" {
 		t.Fatalf("NonRemediableFailureReason(no delta) = %q, want empty", got)
 	}
+	if got := NonRemediableFailureReason(errors.New("claude: claude reported failure: Failure: task premise false, source file no exist. Error details: `site/how-it-works.html` not in repo. Can't fabricate page content from nothing.")); got != "task premise false" {
+		t.Fatalf("NonRemediableFailureReason(task premise false) = %q, want %q", got, "task premise false")
+	}
+	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: cannot add pricing copy. Error details: no source pricing content exists in the repository. Cannot fabricate pricing figures.")); got != "cannot fabricate" {
+		t.Fatalf("NonRemediableFailureReason(cannot fabricate) = %q, want %q", got, "cannot fabricate")
+	}
 }
