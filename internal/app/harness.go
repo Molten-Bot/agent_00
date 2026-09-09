@@ -6618,30 +6618,57 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 	if err := seedAgentConfigDir(agentConfigSource(environ, "CLAUDE_CONFIG_DIR", filepath.Join(".claude")), claudeConfigDir); err != nil {
 		return nil, fmt.Errorf("seed claude config dir: %w", err)
 	}
-	return environWithOverrides(environ,
-		"MOLTENHUB_AGENT_IO_DIR="+root,
-		"HOME="+homeDir,
-		"TMPDIR="+tmpDir,
-		"TEMP="+tmpDir,
-		"TMP="+tmpDir,
-		"XDG_CONFIG_HOME="+configDir,
-		"XDG_CACHE_HOME="+cacheDir,
-		"XDG_STATE_HOME="+stateDir,
-		"XDG_RUNTIME_DIR="+runtimeDir,
-		"CODEX_HOME="+codexConfigDir,
-		"CLAUDE_CONFIG_DIR="+claudeConfigDir,
-		"npm_config_cache="+filepath.Join(cacheDir, "npm"),
-		"YARN_CACHE_FOLDER="+filepath.Join(cacheDir, "yarn"),
-		"PNPM_HOME="+filepath.Join(cacheDir, "pnpm"),
-		"PIP_CACHE_DIR="+filepath.Join(cacheDir, "pip"),
-		"UV_CACHE_DIR="+filepath.Join(cacheDir, "uv"),
-		"GOCACHE="+filepath.Join(cacheDir, "go-build"),
-		"GOMODCACHE="+filepath.Join(cacheDir, "go-mod"),
-		"CARGO_HOME="+filepath.Join(cacheDir, "cargo"),
-		"GRADLE_USER_HOME="+filepath.Join(cacheDir, "gradle"),
-		"PLAYWRIGHT_BROWSERS_PATH="+filepath.Join(cacheDir, "ms-playwright"),
-		"LOGDIR="+logDir,
-	), nil
+	overrides := []string{
+		"MOLTENHUB_AGENT_IO_DIR=" + root,
+		"HOME=" + homeDir,
+		"TMPDIR=" + tmpDir,
+		"TEMP=" + tmpDir,
+		"TMP=" + tmpDir,
+		"XDG_CONFIG_HOME=" + configDir,
+		"XDG_CACHE_HOME=" + cacheDir,
+		"XDG_STATE_HOME=" + stateDir,
+		"XDG_RUNTIME_DIR=" + runtimeDir,
+		"CODEX_HOME=" + codexConfigDir,
+		"CLAUDE_CONFIG_DIR=" + claudeConfigDir,
+		"npm_config_cache=" + filepath.Join(cacheDir, "npm"),
+		"YARN_CACHE_FOLDER=" + filepath.Join(cacheDir, "yarn"),
+		"PNPM_HOME=" + filepath.Join(cacheDir, "pnpm"),
+		"PIP_CACHE_DIR=" + filepath.Join(cacheDir, "pip"),
+		"UV_CACHE_DIR=" + filepath.Join(cacheDir, "uv"),
+		"GOCACHE=" + filepath.Join(cacheDir, "go-build"),
+		"GOMODCACHE=" + filepath.Join(cacheDir, "go-mod"),
+		"CARGO_HOME=" + filepath.Join(cacheDir, "cargo"),
+		"GRADLE_USER_HOME=" + filepath.Join(cacheDir, "gradle"),
+		"LOGDIR=" + logDir,
+	}
+	// Keep an image- or operator-provided browser location. Replacing it with an
+	// empty per-run cache makes an already installed Playwright browser disappear.
+	if value, ok := environValue(environ, "PLAYWRIGHT_BROWSERS_PATH"); !ok || strings.TrimSpace(value) == "" {
+		overrides = append(overrides, "PLAYWRIGHT_BROWSERS_PATH="+filepath.Join(cacheDir, "ms-playwright"))
+	}
+	environ = environWithOverrides(environ, overrides...)
+	return withAgentGitHubHTTPSConfig(environ), nil
+}
+
+// withAgentGitHubHTTPSConfig keeps GitHub remotes usable after HOME isolation.
+// SSH keys and known_hosts intentionally are not copied into the agent home;
+// Git instead rewrites SSH-style GitHub URLs to HTTPS and delegates credentials
+// to gh, which reads the inherited token without persisting it in the worktree.
+func withAgentGitHubHTTPSConfig(environ []string) []string {
+	count := 0
+	if value, ok := environValue(environ, "GIT_CONFIG_COUNT"); ok {
+		if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && parsed >= 0 {
+			count = parsed
+		}
+	}
+	overrides := []string{
+		fmt.Sprintf("GIT_CONFIG_COUNT=%d", count+2),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=url.https://github.com/.insteadOf", count),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=git@github.com:", count),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=credential.https://github.com.helper", count+1),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=!gh auth git-credential", count+1),
+	}
+	return environWithOverrides(environ, overrides...)
 }
 
 func agentConfigSource(environ []string, configEnvKey, homeRel string) string {

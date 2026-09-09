@@ -975,7 +975,7 @@ func TestFailureFollowUpPromptDefaultWhenNoPaths(t *testing.T) {
 	if !strings.Contains(got, "If a repository is not initialized after clone, use only gh CLI/git tools to create and push a main branch, then continue once git state is ready for work.") {
 		t.Fatalf("prompt missing uninitialized-repo instruction: %q", got)
 	}
-	if !strings.Contains(got, "Do not stop work just because you cannot create a pull request or watch remote CI/CD from inside this agent runtime.") {
+	if !strings.Contains(got, "Do not commit, push, create or update pull requests, or watch remote CI/CD from inside this agent runtime.") {
 		t.Fatalf("prompt missing remote operations handoff: %q", got)
 	}
 	if !strings.Contains(got, `"repos":["git@github.com:Molten-Bot/agent_00.git"],"targetSubdir":".","prompt":"`+failureFollowUpRequiredPrompt+`"`) {
