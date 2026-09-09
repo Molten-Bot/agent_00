@@ -8261,7 +8261,7 @@ func TestWithCompletionGatePromptIncludesAgentRuntimeGuidance(t *testing.T) {
 		"Before sharing repository or pull-request links in Hub activity, use `gh repo view OWNER/REPO --json isPrivate,nameWithOwner` during clone or PR tooling.",
 		"Share repo and PR links only when GitHub reports `isPrivate:false`; never share private repository links.",
 		"If a repository is not initialized after clone, use only gh CLI/git tools to create and push a main branch, then continue once git state is ready for work.",
-		"Do not stop work just because you cannot create a pull request or watch remote CI/CD from inside this agent runtime.",
+		"Do not commit, push, create or update pull requests, or watch remote CI/CD from inside this agent runtime.",
 		"For implementation or repository-change requests, do not stop at analysis.",
 		"Only return a no-op when the task is genuinely review/investigation-only",
 	}

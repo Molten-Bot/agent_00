@@ -97,6 +97,11 @@ func TestWithExecutionContractIncludesRemoteOperationsHandoff(t *testing.T) {
 	if !strings.Contains(got, RemoteOperationsInstruction) {
 		t.Fatalf("WithExecutionContract() missing remote-operations guidance: %q", got)
 	}
+	for _, want := range []string{"Do not commit, push", "harness performs them", "leave the worktree changes"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("WithExecutionContract() missing harness lifecycle ownership %q: %q", want, got)
+		}
+	}
 }
 
 func TestRequiredPromptScopesFailureFollowUpToAgent00(t *testing.T) {

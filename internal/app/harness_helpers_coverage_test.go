@@ -389,6 +389,10 @@ func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 		"CLAUDE_CONFIG_DIR=/disk/claude-old",
 		"CLAUDE_CONFIG_DIR=" + claudeConfigDir,
 		"GH_TOKEN=keep",
+		"PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright",
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=core.askPass",
+		"GIT_CONFIG_VALUE_0=true",
 	})
 	if err != nil {
 		t.Fatalf("prepareAgentIOEnv() error = %v", err)
@@ -435,6 +439,24 @@ func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 	}
 	if got := envValue(env, "GH_TOKEN"); got != "keep" {
 		t.Fatalf("GH_TOKEN = %q, want preserved", got)
+	}
+	if got := envValue(env, "PLAYWRIGHT_BROWSERS_PATH"); got != "/opt/ms-playwright" {
+		t.Fatalf("PLAYWRIGHT_BROWSERS_PATH = %q, want preinstalled browser path preserved", got)
+	}
+	if got := envValue(env, "GIT_CONFIG_COUNT"); got != "3" {
+		t.Fatalf("GIT_CONFIG_COUNT = %q, want existing config plus two GitHub entries", got)
+	}
+	if got := envValue(env, "GIT_CONFIG_KEY_1"); got != "url.https://github.com/.insteadOf" {
+		t.Fatalf("GIT_CONFIG_KEY_1 = %q, want GitHub SSH rewrite", got)
+	}
+	if got := envValue(env, "GIT_CONFIG_VALUE_1"); got != "git@github.com:" {
+		t.Fatalf("GIT_CONFIG_VALUE_1 = %q, want GitHub SSH prefix", got)
+	}
+	if got := envValue(env, "GIT_CONFIG_KEY_2"); got != "credential.https://github.com.helper" {
+		t.Fatalf("GIT_CONFIG_KEY_2 = %q, want GitHub credential helper", got)
+	}
+	if got := envValue(env, "GIT_CONFIG_VALUE_2"); got != "!gh auth git-credential" {
+		t.Fatalf("GIT_CONFIG_VALUE_2 = %q, want gh credential helper", got)
 	}
 }
 
