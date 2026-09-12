@@ -78,6 +78,9 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: cannot add pricing copy. Error details: no source pricing content exists in the repository. Cannot fabricate pricing figures.")); got != "cannot fabricate" {
 		t.Fatalf("NonRemediableFailureReason(cannot fabricate) = %q, want %q", got, "cannot fabricate")
 	}
+	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: Concept build stopped before planning. Error details: source belongs to a municipal site. Engine supports only medical, dental, law businesses. Source outside active scope.")); got != "source outside active scope" {
+		t.Fatalf("NonRemediableFailureReason(source outside active scope) = %q, want %q", got, "source outside active scope")
+	}
 }
 
 func TestInfrastructureFailureDoesNotSpawnAnotherCodingTask(t *testing.T) {
