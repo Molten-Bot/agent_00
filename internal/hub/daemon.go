@@ -2608,6 +2608,7 @@ func queueFailureRerun(ctx context.Context, api MoltenHubAPI, cfg InitConfig, di
 	payload := map[string]any{
 		"type":       firstNonEmpty(cfg.Skill.DispatchType, defaultRuntimeDispatchType),
 		"skill":      firstNonEmpty(cfg.Skill.Name, dispatch.Skill),
+		"skill_name": firstNonEmpty(cfg.Skill.Name, dispatch.Skill),
 		"request_id": failureRerunRequestID(dispatch.RequestID),
 		"config":     runConfig,
 		"rerun_of":   strings.TrimSpace(dispatch.RequestID),
@@ -2635,6 +2636,7 @@ func queueFailureFollowUp(ctx context.Context, api MoltenHubAPI, cfg InitConfig,
 	payload := map[string]any{
 		"type":       firstNonEmpty(cfg.Skill.DispatchType, defaultRuntimeDispatchType),
 		"skill":      firstNonEmpty(cfg.Skill.Name, dispatch.Skill),
+		"skill_name": firstNonEmpty(cfg.Skill.Name, dispatch.Skill),
 		"request_id": failureFollowUpRequestID(dispatch.RequestID),
 		"config":     runConfig,
 	}

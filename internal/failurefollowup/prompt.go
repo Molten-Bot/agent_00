@@ -62,6 +62,10 @@ var nonRemediableRepoAccessMarkers = []string{
 const githubSSHPermissionDeniedReason = "permission to repository denied"
 
 var nonRemediableFailureMarkers = []string{
+	"no space left on device",
+	"no permissions to create a new namespace",
+	"sandbox namespace creation denied",
+	"workspace storage",
 	"quota exceeded",
 	"insufficient_quota",
 	"billing",

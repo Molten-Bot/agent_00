@@ -79,3 +79,11 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 		t.Fatalf("NonRemediableFailureReason(cannot fabricate) = %q, want %q", got, "cannot fabricate")
 	}
 }
+
+func TestInfrastructureFailureDoesNotSpawnAnotherCodingTask(t *testing.T) {
+	for _, message := range []string{"clone: No space left on device", "workspace storage /mnt has only 0 MiB free", "bwrap: No permissions to create a new namespace", "Sandbox namespace creation denied"} {
+		if NonRemediableFailureReason(errors.New(message)) == "" {
+			t.Fatalf("infrastructure failure was treated as code-remediable: %s", message)
+		}
+	}
+}

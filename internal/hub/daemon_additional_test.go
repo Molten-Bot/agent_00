@@ -403,6 +403,9 @@ func TestQueueFailureRerunPublishesNormalizedRunConfig(t *testing.T) {
 		t.Fatalf("published payload count = %d, want 1", len(api.published))
 	}
 	payload := api.published[0]
+	if got := payload["skill_name"]; got != "code_for_me" {
+		t.Fatalf("rerun skill_name = %#v, want code_for_me", got)
+	}
 	if got, want := payload["request_id"], "req-1-rerun"; got != want {
 		t.Fatalf("request_id = %#v, want %q", got, want)
 	}
@@ -1708,6 +1711,10 @@ func TestQueueFailureFollowUpUsesDefaultRepository(t *testing.T) {
 
 	if len(api.published) != 1 {
 		t.Fatalf("published payload count = %d, want 1", len(api.published))
+	}
+
+	if got := api.published[0]["skill_name"]; got != "code_for_me" {
+		t.Fatalf("follow-up skill_name = %#v, want code_for_me", got)
 	}
 
 	runConfig, _ := api.published[0]["config"].(map[string]any)

@@ -33,6 +33,25 @@ The bundled sidecar defaults to the `base-int8` model and English language
 hints for more reliable short-form dictation; set both `WHISPER_LANG=auto` and
 `WHISPER_SPEECH_LANGUAGE=auto` to use Whisper language detection.
 
+### Workspace storage
+
+Retained task checkouts need disk capacity. For long-running Docker installations,
+mount a persistent volume at the configured workspace base. Do not point both
+`HARNESS_WORKSPACE_RAM_BASE` and `HARNESS_WORKSPACE_DISK_BASE` at the same small
+tmpfs: accumulated tasks can fill it and prevent even `git clone` from starting.
+Linux workspace allocation checks for at least 512 MiB free on each allocation
+and falls back to the configured disk base when the preferred base is full.
+This reserve is an early check, not a limit on an individual build's disk usage.
+Storage exhaustion requires an infrastructure repair and does not launch another
+coding task on the same exhausted filesystem.
+
+Codex sandboxing needs nested user/mount namespaces supported by the container
+runtime;
+a namespace permission failure is an infrastructure blocker, not a prompt or
+repository failure. Check the sandbox with `codex sandbox -- /bin/true` in the
+actual container before dispatching work. The runner keeps `workspace-write`
+enforcement and does not disable the sandbox on errors.
+
 ### Local Build
 
 Requires Go `1.26.5` or newer plus `git`, `gh`, and the selected agent CLI.

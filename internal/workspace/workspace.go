@@ -35,6 +35,7 @@ type Manager struct {
 	ReadFile   func(string) ([]byte, error)
 	WriteFile  func(string, []byte, os.FileMode) error
 	CanExec    func(string) bool
+	CheckSpace func(string) error
 }
 
 // NewManager returns a manager backed by os functions.
@@ -46,6 +47,7 @@ func NewManager() Manager {
 		ReadFile:   os.ReadFile,
 		WriteFile:  os.WriteFile,
 		CanExec:    baseAllowsExec,
+		CheckSpace: checkWorkspaceSpace,
 	}
 }
 
@@ -65,7 +67,7 @@ func (m Manager) SelectBase() string {
 		canExec = baseAllowsExec
 	}
 	ramBase := configuredRAMBase()
-	if exists(ramBase) && canExec(ramBase) {
+	if exists(ramBase) && canExec(ramBase) && (m.CheckSpace == nil || m.CheckSpace(ramBase) == nil) {
 		return ramBase
 	}
 	return configuredDiskBase()
@@ -83,6 +85,12 @@ func (m Manager) PrepareRoots() error {
 		if err := mkdirAll(rootDir, 0o755); err != nil {
 			lastErr = err
 			continue
+		}
+		if m.CheckSpace != nil {
+			if err := m.CheckSpace(rootDir); err != nil {
+				lastErr = err
+				continue
+			}
 		}
 		return nil
 	}
@@ -114,6 +122,13 @@ func (m Manager) CreateRunDir() (string, string, error) {
 		if err := mkdirAll(rootDir, 0o755); err != nil {
 			lastErr = err
 			continue
+		}
+
+		if m.CheckSpace != nil {
+			if err := m.CheckSpace(rootDir); err != nil {
+				lastErr = err
+				continue
+			}
 		}
 
 		runDir := filepath.Join(rootDir, guid)
