@@ -1760,7 +1760,7 @@ func TestRunRequiredNonDefaultBranchKeepsFeaturePublishPinned(t *testing.T) {
 	}
 }
 
-func TestRunRequiredNonDefaultBranchChecksRemoteDefaultBeforeSandboxRetry(t *testing.T) {
+func TestRunRequiredNonDefaultBranchStopsOnSandboxFailure(t *testing.T) {
 	cfg := sampleConfig()
 	cfg.LibraryTaskName = mergeMainLibraryTaskName
 	cfg.BaseBranch = "feature/conflicted"
@@ -1771,7 +1771,6 @@ func TestRunRequiredNonDefaultBranchChecksRemoteDefaultBeforeSandboxRetry(t *tes
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
 	defaultBranch := execx.Result{Stdout: "ref: refs/heads/main\tHEAD\nabc123\tHEAD\n"}
-	changedDefaultBranch := execx.Result{Stdout: "ref: refs/heads/" + cfg.BaseBranch + "\tHEAD\ndef456\tHEAD\n"}
 	featureHead := execx.Result{Stdout: "def456\trefs/heads/" + cfg.BaseBranch + "\n"}
 	bwrapFailure := execx.Result{
 		Stdout: "Failure: I could not start any local repository command.",
@@ -1791,7 +1790,6 @@ func TestRunRequiredNonDefaultBranchChecksRemoteDefaultBeforeSandboxRetry(t *tes
 		{cmd: pushDryRunCommand(repoDir, cfg.BaseBranch)},
 		{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "1111111111111111111111111111111111111111\n"}},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath)), res: bwrapFailure},
-		{cmd: remoteDefaultBranchCommand(repoDir), res: changedDefaultBranch},
 	}}
 
 	h := New(fake)
@@ -1803,8 +1801,8 @@ func TestRunRequiredNonDefaultBranchChecksRemoteDefaultBeforeSandboxRetry(t *tes
 	if res.ExitCode != ExitCodex {
 		t.Fatalf("ExitCode = %d, want %d", res.ExitCode, ExitCodex)
 	}
-	if res.Err == nil || !strings.Contains(res.Err.Error(), "verify required branch before agent sandbox retry") {
-		t.Fatalf("Run() error = %v, want pre-retry branch rejection", res.Err)
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "could not start any local repository command") {
+		t.Fatalf("Run() error = %v, want original sandbox failure", res.Err)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
@@ -6664,83 +6662,22 @@ func TestRunCodexInjectsResponseModePrompt(t *testing.T) {
 	}
 }
 
-func TestRunCodexRetriesWithoutSandboxOnBwrapFailure(t *testing.T) {
-	t.Parallel()
-
-	targetDir := t.TempDir()
-	prompt := "make home page pink"
-	firstCmd := codexCommand(targetDir, prompt)
-	retryCmd := firstCmd
-	retryCmd.Args = overrideCodexSandbox(retryCmd.Args, "danger-full-access")
-
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{
-			cmd: firstCmd,
-			res: execx.Result{
-				Stdout: "Failure: I could not start any local repository command.",
-				Stderr: "bwrap: namespace error: Operation not permitted",
-			},
-		},
-		{
-			cmd: retryCmd,
-			res: execx.Result{Stdout: "done"},
-		},
-	}}
-
-	var logs []string
-	h := New(fake)
-	h.Logf = func(format string, args ...any) {
-		logs = append(logs, fmt.Sprintf(format, args...))
-	}
-	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
-		t.Fatalf("runCodex() error = %v", err)
-	}
-	if got := len(fake.exps); got != 0 {
-		t.Fatalf("expected all fake runner commands to be consumed, remaining=%d", got)
-	}
-	joinedLogs := strings.Join(logs, "\n")
-	if strings.Contains(joinedLogs, "status=error") {
-		t.Fatalf("retryable sandbox failure logged terminal error before retry:\n%s", joinedLogs)
-	}
-	if !strings.Contains(joinedLogs, "status=warn action=retry_without_sandbox") {
-		t.Fatalf("retry log missing retry_without_sandbox warning:\n%s", joinedLogs)
-	}
-}
-
-func TestRunCodexChecksBranchInvariantBeforeSandboxRetry(t *testing.T) {
-	t.Parallel()
-
-	targetDir := t.TempDir()
-	prompt := "make home page pink"
-	firstCmd := codexCommand(targetDir, prompt)
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{
-			cmd: firstCmd,
-			res: execx.Result{
-				Stdout: "Failure: I could not start any local repository command.",
-				Stderr: "bwrap: namespace error: Operation not permitted",
-			},
-		},
-	}}
-
-	invariantCalls := 0
-	h := New(fake)
-	h.agentRetryInvariant = func(context.Context) error {
-		invariantCalls++
-		return errors.New("required branch changed")
-	}
-	err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
-	if err == nil || !strings.Contains(err.Error(), "verify required branch before agent sandbox retry") {
-		t.Fatalf("runCodex() error = %v, want branch invariant failure", err)
-	}
-	if invariantCalls != 1 {
-		t.Fatalf("invariant calls = %d, want 1", invariantCalls)
-	}
-	if len(fake.exps) != 0 {
-		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
-	}
-	if len(fake.calls) != 1 {
-		t.Fatalf("agent commands = %d, want no danger-full-access retry", len(fake.calls))
+func TestRunCodexPreservesSandboxOnRuntimeFailure(t *testing.T) {
+	for _, output := range []string{"bwrap: No permissions to create a new namespace", "warning: Codex could not find bubblewrap on PATH"} {
+		t.Run(output, func(t *testing.T) {
+			targetDir := t.TempDir()
+			fake := &fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(targetDir, "build"),
+				res: execx.Result{Stdout: "Failure: Runtime unavailable. Error details: command failed", Stderr: output},
+			}}}
+			h := New(fake)
+			if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, "build", codexRunOptions{}, "", ""); err == nil {
+				t.Fatal("expected original failure")
+			}
+			if len(fake.calls) != 1 || len(fake.exps) != 0 {
+				t.Fatal("unexpected sandbox retry")
+			}
+		})
 	}
 }
 
@@ -6768,9 +6705,7 @@ func TestRunCommandStreamRunnerMergesCapturedOutput(t *testing.T) {
 	if !strings.Contains(res.Stderr, "No permissions to create a new namespace") {
 		t.Fatalf("res.Stderr = %q, want merged streamed stderr detail", res.Stderr)
 	}
-	if !shouldRetryCodexWithoutSandbox(res, nil) {
-		t.Fatal("shouldRetryCodexWithoutSandbox(...) = false, want true")
-	}
+
 }
 
 func TestRunCommandSkipsLoggingEmptyStreamLines(t *testing.T) {
@@ -7570,57 +7505,6 @@ func TestRunCodexReturnsErrorWhenCodexReportsStructuredTaskFailure(t *testing.T)
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "codex reported failure") {
 		t.Fatalf("runCodex() error = %v, want codex reported failure marker", err)
-	}
-}
-
-func TestShouldRetryCodexWithoutSandbox(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		res  execx.Result
-		err  error
-		want bool
-	}{
-		{
-			name: "bwrap namespace error",
-			res: execx.Result{
-				Stderr: "bwrap: namespace error: Operation not permitted",
-			},
-			want: true,
-		},
-		{
-			name: "explicit no-permissions namespace text",
-			res: execx.Result{
-				Stderr: "bwrap: No permissions to create a new namespace",
-			},
-			want: true,
-		},
-		{
-			name: "model reports command start failure due sandbox",
-			res: execx.Result{
-				Stdout: "Failure: I could not start any local repository command.",
-				Stderr: "The blocker is the sandbox/runtime environment.",
-			},
-			want: true,
-		},
-		{
-			name: "generic task failure should not trigger retry",
-			res: execx.Result{
-				Stderr: "ERROR: failed to apply patch",
-			},
-			want: false,
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := shouldRetryCodexWithoutSandbox(tt.res, tt.err); got != tt.want {
-				t.Fatalf("shouldRetryCodexWithoutSandbox(...) = %v, want %v", got, tt.want)
-			}
-		})
 	}
 }
 

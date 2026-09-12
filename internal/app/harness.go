@@ -166,8 +166,7 @@ type Harness struct {
 	// FinalReviewPasses is the maximum number of read-only review passes to run
 	// after a changed repository has a pull request and initial checks finish.
 	// The cycle ends early when a pass reports no findings.
-	FinalReviewPasses   int
-	agentRetryInvariant func(context.Context) error
+	FinalReviewPasses int
 }
 
 // New returns a harness configured with defaults.
@@ -321,11 +320,6 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 			return h.fail(ExitGit, "git", err, runDir)
 		}
 		h.logf("stage=git status=ok action=branch branch=%s repo=%s repo_dir=%s", branch, repos[i].URL, repos[i].RelDir)
-	}
-	if runCfg.RequiresNonDefaultBranch {
-		h.agentRetryInvariant = func(ctx context.Context) error {
-			return h.validateEnforcedNonDefaultBranches(ctx, repos)
-		}
 	}
 	if !reviewRun {
 		for i := range repos {
@@ -5125,18 +5119,7 @@ func (h Harness) runCodexCapture(
 	}
 
 	invocation = invocation.withRuntimeDefaults(runtime)
-	res, err := h.runCodexWithHeartbeat(ctx, runtime, targetDir, finalPrompt, opts, "", invocation)
-	if shouldRetryCodexWithoutSandbox(res, err) {
-		if h.agentRetryInvariant != nil {
-			if invariantErr := h.agentRetryInvariant(ctx); invariantErr != nil {
-				err = fmt.Errorf("verify required branch before agent sandbox retry: %w", invariantErr)
-			} else {
-				res, err = h.retryCodexWithoutSandbox(ctx, runtime, targetDir, finalPrompt, opts, invocation)
-			}
-		} else {
-			res, err = h.retryCodexWithoutSandbox(ctx, runtime, targetDir, finalPrompt, opts, invocation)
-		}
-	}
+	res, err := h.runCodexWithHeartbeat(ctx, runtime, targetDir, finalPrompt, opts, invocation)
 	if err != nil {
 		agentStage := runtimeLogStage(runtime)
 		h.logf("stage=%s status=error%s err=%q", agentStage, invocation.logFieldsSuffix(), err)
@@ -5149,24 +5132,6 @@ func (h Harness) runCodexCapture(
 		)
 	}
 	return res, err
-}
-
-func (h Harness) retryCodexWithoutSandbox(
-	ctx context.Context,
-	runtime agentruntime.Runtime,
-	targetDir string,
-	prompt string,
-	opts codexRunOptions,
-	invocation agentInvocationLogMetadata,
-) (execx.Result, error) {
-	agentStage := runtimeLogStage(runtime)
-	h.logf(
-		"stage=%s status=warn action=retry_without_sandbox reason=%q%s",
-		agentStage,
-		"detected bubblewrap namespace sandbox failure; retrying with danger-full-access",
-		invocation.logFieldsSuffix(),
-	)
-	return h.runCodexWithHeartbeat(ctx, runtime, targetDir, prompt, opts, "danger-full-access", invocation)
 }
 
 func agentOutputClaimsFileChanges(res execx.Result) bool {
@@ -5578,15 +5543,11 @@ func (h Harness) runCodexWithHeartbeat(
 	runtime agentruntime.Runtime,
 	targetDir, prompt string,
 	opts codexRunOptions,
-	sandboxOverride string,
 	invocation agentInvocationLogMetadata,
 ) (execx.Result, error) {
 	cmd, err := agentCommandWithOptions(runtime, targetDir, prompt, opts)
 	if err != nil {
 		return execx.Result{}, err
-	}
-	if strings.TrimSpace(sandboxOverride) != "" {
-		cmd.Args = overrideCodexSandbox(cmd.Args, sandboxOverride)
 	}
 
 	runCtx := ctx
@@ -5695,45 +5656,6 @@ func (h Harness) agentStageTimeout() time.Duration {
 		return 0
 	}
 	return h.AgentStageTimeout
-}
-
-func overrideCodexSandbox(args []string, sandbox string) []string {
-	if len(args) == 0 {
-		return args
-	}
-	out := append([]string(nil), args...)
-	for i := 0; i+1 < len(out); i++ {
-		if out[i] == "--sandbox" {
-			out[i+1] = strings.TrimSpace(sandbox)
-			return out
-		}
-	}
-	return out
-}
-
-func shouldRetryCodexWithoutSandbox(res execx.Result, err error) bool {
-	if err == nil && strings.TrimSpace(res.Stdout) == "" && strings.TrimSpace(res.Stderr) == "" {
-		return false
-	}
-	text := strings.ToLower(strings.Join([]string{res.Stdout, res.Stderr}, "\n"))
-	if err != nil {
-		text = strings.TrimSpace(text + "\n" + strings.ToLower(err.Error()))
-	}
-
-	if strings.Contains(text, "bubblewrap") || strings.Contains(text, "bwrap") || strings.Contains(text, "unshare failed") {
-		return true
-	}
-	if strings.Contains(text, "no permissions to create a new namespace") {
-		return true
-	}
-	if strings.Contains(text, "namespace error") && strings.Contains(text, "operation not permitted") {
-		return true
-	}
-	if strings.Contains(text, "could not start any local repository command") &&
-		(strings.Contains(text, "sandbox/runtime environment") || strings.Contains(text, "namespace")) {
-		return true
-	}
-	return false
 }
 
 func codexReportedFailure(res execx.Result) (bool, string) {

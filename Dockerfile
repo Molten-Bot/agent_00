@@ -60,7 +60,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
       "@moltenbot/railsmith@${RAILSMITH_VERSION}" \
       "playwright@${PLAYWRIGHT_VERSION}" \
       "@playwright/test@${PLAYWRIGHT_VERSION}" \
-    && playwright install --with-deps --no-shell chromium \
+    && playwright install --with-deps chromium \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/* /tmp/* \
     && mkdir -p /workspace/config/home /workspace/agent_00/tasks \

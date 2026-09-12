@@ -51,6 +51,10 @@ a namespace permission failure is an infrastructure blocker, not a prompt or
 repository failure. Check the sandbox with `codex sandbox -- /bin/true` in the
 actual container before dispatching work. The runner keeps `workspace-write`
 enforcement and does not disable the sandbox on errors.
+For jobs that fetch source sites or dependencies, the operator can enable
+`sandbox_workspace_write.network_access = true` in the persistent Codex
+`config.toml`; filesystem enforcement remains enabled. The image installs both
+Chromium and its headless shell so default Playwright launches work.
 
 ### Local Build
 

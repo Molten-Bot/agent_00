@@ -98,12 +98,7 @@ func TestHarnessURLCloneAndSandboxHelpers(t *testing.T) {
 	if shouldBootstrapUninitializedMainBranch("main", execx.Result{}, nil) {
 		t.Fatal("shouldBootstrapUninitializedMainBranch(nil err) = true, want false")
 	}
-	if got := overrideCodexSandbox([]string{"exec", "--sandbox", "workspace-write"}, "danger-full-access"); got[2] != "danger-full-access" {
-		t.Fatalf("overrideCodexSandbox() = %#v", got)
-	}
-	if got := overrideCodexSandbox([]string{"exec"}, "danger-full-access"); len(got) != 1 {
-		t.Fatalf("overrideCodexSandbox(no flag) = %#v", got)
-	}
+
 }
 
 func TestHarnessFilesystemAndPromptHelpers(t *testing.T) {

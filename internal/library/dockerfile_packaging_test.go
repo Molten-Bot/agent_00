@@ -115,7 +115,7 @@ func TestRuntimeDockerfileInstallsPlaywrightTest(t *testing.T) {
 		"NODE_PATH=/usr/local/lib/node_modules",
 		"PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright",
 		"PLAYWRIGHT_SKIP_BROWSER_GC=1",
-		"playwright install --with-deps --no-shell chromium",
+		"playwright install --with-deps chromium",
 		"chown -R node:node /workspace /opt/ms-playwright",
 	} {
 		if !strings.Contains(content, want) {
