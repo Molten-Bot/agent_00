@@ -1879,6 +1879,13 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailures(t *testing.T) {
 	if ok || !strings.Contains(reason, "would require invented") {
 		t.Fatalf("shouldQueueFailureFollowUp(invented content) = (%v, %q), want non-remediable invented-content skip", ok, reason)
 	}
+
+	ok, reason = shouldQueueFailureFollowUp(dispatch, app.Result{
+		Err: errors.New("codex: codex reported failure: Failure: Concept build stopped before planning. Error details: source belongs to a municipal site. Engine supports only medical, dental, law businesses. Source outside active scope."),
+	})
+	if ok || !strings.Contains(reason, "source outside active scope") {
+		t.Fatalf("shouldQueueFailureFollowUp(out-of-scope source) = (%v, %q), want non-remediable scope-mismatch skip", ok, reason)
+	}
 }
 
 func TestFailureFollowUpPromptIncludesWorkspaceAndTargetPath(t *testing.T) {
