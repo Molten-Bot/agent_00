@@ -88,6 +88,7 @@ var nonRemediableFailureMarkers = []string{
 	"task premise false",
 	"can't fabricate",
 	"cannot fabricate",
+	"source outside active scope",
 }
 
 func WithExecutionContract(base string) string {
