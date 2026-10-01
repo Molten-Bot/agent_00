@@ -5915,7 +5915,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		strings.Contains(text, "uv missing") ||
 		strings.Contains(text, "node_modules missing")
 	if !missingTooling {
-		return false
+		return isNonFatalValidationEnvironmentFailure(text)
 	}
 	if strings.Contains(text, "smoke command") {
 		return smokeFallbackSucceeded(text)
@@ -5971,6 +5971,25 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		return true
 	}
 	return false
+}
+
+func isNonFatalValidationEnvironmentFailure(text string) bool {
+	if !containsAny(text, []string{
+		"validation",
+		"test suite",
+		"suite remains red",
+		"go test",
+		"go: -race",
+	}) {
+		return false
+	}
+	procUnavailable := containsAny(text, []string{
+		"cannot access parent `/proc` environment",
+		"cannot access parent /proc environment",
+	}) && strings.Contains(text, "pid-isolated runtime")
+	raceUnavailable := strings.HasPrefix(text, "failure: race validation unavailable") &&
+		containsAny(text, []string{"-race requires cgo", "race requires cgo"})
+	return procUnavailable || raceUnavailable
 }
 
 func smokeFallbackSucceeded(text string) bool {

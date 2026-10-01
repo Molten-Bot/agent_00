@@ -112,6 +112,13 @@ const [, , filePath] = process.argv;
 
 function rawEnvironmentEntries() {
   const entries = Object.entries(process.env).map(([key, value]) => `${key}=${value}`);
+  const rawEnvironmentFile = process.env.HARNESS_RAW_ENV_FILE || "";
+  if (rawEnvironmentFile !== "") {
+    try {
+      entries.push(...fs.readFileSync(rawEnvironmentFile, "utf8").split("\0").filter(Boolean));
+    } catch (_) {
+    }
+  }
   try {
     const parentEnv = fs.readFileSync(`/proc/${process.ppid}/environ`, "utf8");
     entries.push(...parentEnv.split("\0").filter(Boolean));

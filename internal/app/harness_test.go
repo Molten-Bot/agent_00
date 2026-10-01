@@ -6930,6 +6930,38 @@ func TestRunCodexAllowsValidationToolingMissingFailure(t *testing.T) {
 	}
 }
 
+func TestRunCodexAllowsValidationEnvironmentLimitations(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "stabilize flaky tests"
+	fake := &fakeRunner{t: t, exps: []expectedRun{{
+		cmd: codexCommand(targetDir, prompt),
+		res: execx.Result{Stdout: "Failure: Full `cmd/harness` suite remains red on unrelated pre-existing malformed Docker Compose environment test.\nError details: `TestWithConfigScriptAcceptsMalformedDockerComposeEnvEntries` cannot access parent `/proc` environment under this PID-isolated runtime. Race validation unavailable: `go: -race requires cgo; enable cgo by setting CGO_ENABLED=1`."},
+	}}}
+
+	h := New(fake)
+	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
+		t.Fatalf("runCodex() error = %v, want nil for validation environment limitations", err)
+	}
+}
+
+func TestRunCodexRejectsRealTestFailureMentioningCGO(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "fix race"
+	fake := &fakeRunner{t: t, exps: []expectedRun{{
+		cmd: codexCommand(targetDir, prompt),
+		res: execx.Result{Stdout: "Failure: `go test ./...` found a data race in auth cache.\nError details: unit tests failed; race validation also unavailable because `go: -race requires cgo`."},
+	}}}
+
+	h := New(fake)
+	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err == nil {
+		t.Fatal("runCodex() error = nil, want real test failure")
+	}
+}
+
 func TestRunCodexAllowsMissingCurlWhenSmokeFallbackSucceeded(t *testing.T) {
 	t.Parallel()
 

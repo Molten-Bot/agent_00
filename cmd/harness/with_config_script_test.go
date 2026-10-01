@@ -215,13 +215,20 @@ func TestWithConfigScriptWritesRuntimeConfigFromEnvGitHubTokenAndAgentRuntime(t 
 func TestWithConfigScriptAcceptsMalformedDockerComposeEnvEntries(t *testing.T) {
 	env := newWithConfigTestEnv(t)
 	configPath := filepath.Join(env.configDir, "config.json")
+	rawEnvPath := filepath.Join(env.root, "raw-environ")
+	rawEnv := strings.Join([]string{
+		"MOLTEN_HUB_TOKEN:hub_token_123=",
+		"MOLTEN_HUB_REGION:eu=",
+		"GITHUB_TOKEN:github_token_env_token=",
+		"MOLTEN_HUB_SESSION_KEY:session-dev=",
+		"HARNESS_AGENT_HARNESS:claude=",
+		"HARNESS_AGENT_COMMAND:claude-custom=",
+	}, "\x00") + "\x00"
+	if err := os.WriteFile(rawEnvPath, []byte(rawEnv), 0o600); err != nil {
+		t.Fatalf("write raw environment fixture: %v", err)
+	}
 	output, err := runWithConfigScript(t, env, map[string]string{
-		"MOLTEN_HUB_TOKEN:hub_token_123":      "",
-		"MOLTEN_HUB_REGION:eu":                "",
-		"GITHUB_TOKEN:github_token_env_token": "",
-		"MOLTEN_HUB_SESSION_KEY:session-dev":  "",
-		"HARNESS_AGENT_HARNESS:claude":        "",
-		"HARNESS_AGENT_COMMAND:claude-custom": "",
+		"HARNESS_RAW_ENV_FILE": rawEnvPath,
 	})
 	if err != nil {
 		t.Fatalf("with-config error: %v\noutput: %s", err, output)
