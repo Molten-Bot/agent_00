@@ -1,8 +1,11 @@
 package agentruntime
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -30,6 +33,8 @@ var promptImageHarnesses = map[string]struct{}{
 
 // RunOptions controls provider-specific execution behavior.
 type RunOptions struct {
+	// WorkspaceDir is the task's private parent directory, including repos and IO.
+	WorkspaceDir     string
 	SkipGitRepoCheck bool
 	ImagePaths       []string
 	WritableDirs     []string
@@ -161,6 +166,36 @@ func (r Runtime) PreflightCommand() execx.Command {
 
 // BuildCommand builds an execution command for this runtime.
 func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.Command, error) {
+	if root := strings.TrimSpace(opts.WorkspaceDir); root != "" {
+		absolute, err := resolveSandboxPath(root)
+		if err != nil {
+			return execx.Command{}, fmt.Errorf("resolve agent workspace: %w", err)
+		}
+		opts.WorkspaceDir = absolute
+		if strings.TrimSpace(targetDir) == "" {
+			return execx.Command{}, fmt.Errorf("agent working directory is required for task sandbox")
+		}
+		targetDir, err = resolveSandboxPath(targetDir)
+		if err != nil {
+			return execx.Command{}, fmt.Errorf("resolve agent working directory: %w", err)
+		}
+		// Resolve paths once, before the child changes cwd. Otherwise a relative
+		// directory could validate here but grant a different root in the CLI.
+		dirs := make([]string, 0, len(opts.WritableDirs))
+		for _, dir := range opts.WritableDirs {
+			if dir = strings.TrimSpace(dir); dir != "" {
+				resolved, err := resolveSandboxPath(dir)
+				if err != nil {
+					return execx.Command{}, fmt.Errorf("resolve writable agent directory: %w", err)
+				}
+				dirs = append(dirs, resolved)
+			}
+		}
+		opts.WritableDirs = dirs
+	}
+	if err := validateWorkspaceDirs(targetDir, opts); err != nil {
+		return execx.Command{}, err
+	}
 	def, ok := definitions[normalizeHarness(r.Harness)]
 	if !ok {
 		return execx.Command{}, fmt.Errorf("unsupported runtime harness %q", r.Harness)
@@ -174,7 +209,108 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 	if cmd.Name == "" {
 		return execx.Command{}, fmt.Errorf("runtime command is required")
 	}
+	if normalizeHarness(r.Harness) == HarnessClaude {
+		// Permission bypass alone does not enforce a filesystem boundary.
+		// Sandbox the entire Claude CLI and its child processes.
+		args := []string{"sandbox", "-c", `sandbox_mode="workspace-write"`}
+		args = append(args, workspaceSandboxArgs(opts)...)
+		args = append(args, "-c", "sandbox_workspace_write.network_access=true", "--", cmd.Name)
+		cmd.Args = append(args, cmd.Args...)
+		cmd.Name = "codex"
+		if opts.WorkspaceDir != "" {
+			// The sandbox helper needs no login or operator configuration.
+			env := cmd.Env
+			if len(env) == 0 {
+				env = os.Environ()
+			}
+			cmd.Env = make([]string, 0, len(env)+1)
+			for _, entry := range env {
+				if !strings.HasPrefix(entry, "CODEX_HOME=") {
+					cmd.Env = append(cmd.Env, entry)
+				}
+			}
+			cmd.Env = append(cmd.Env, "CODEX_HOME="+filepath.Join(opts.WorkspaceDir, ".moltenhub-agent-io", "config", "sandbox"))
+		}
+	}
 	return cmd, nil
+}
+
+// Resolve existing symlinks even when a descendant will be created later.
+// Never treat a dangling symlink as a safe, not-yet-created directory.
+func resolveSandboxPath(dir string) (string, error) {
+	path, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", err
+	}
+	if info, statErr := os.Lstat(path); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("sandbox directory %q is a dangling symlink", path)
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return "", err
+	}
+	resolved, err = resolveSandboxPath(parent)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(resolved, filepath.Base(path)), nil
+}
+
+func workspaceSandboxArgs(opts RunOptions) []string {
+	roots := make([]string, 0, len(opts.WritableDirs)+1)
+	if root := strings.TrimSpace(opts.WorkspaceDir); root != "" {
+		roots = append(roots, root)
+	}
+	for _, dir := range opts.WritableDirs {
+		if dir = strings.TrimSpace(dir); dir != "" {
+			roots = append(roots, dir)
+		}
+	}
+	unique := roots[:0]
+	seen := make(map[string]bool, len(roots))
+	for _, root := range roots {
+		if !seen[root] {
+			seen[root] = true
+			unique = append(unique, root)
+		}
+	}
+	encoded, _ := json.Marshal(unique)
+	return []string{
+		"-c", "sandbox_workspace_write.writable_roots=" + string(encoded),
+		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
+		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+	}
+}
+
+func validateWorkspaceDirs(targetDir string, opts RunOptions) error {
+	if strings.TrimSpace(opts.WorkspaceDir) == "" {
+		return nil
+	}
+	root, err := filepath.Abs(opts.WorkspaceDir)
+	if err != nil {
+		return fmt.Errorf("resolve agent workspace: %w", err)
+	}
+	for _, dir := range append([]string{targetDir}, opts.WritableDirs...) {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		path, err := filepath.Abs(dir)
+		if err != nil {
+			return fmt.Errorf("resolve agent directory: %w", err)
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("agent directory %q is outside task workspace %q", dir, root)
+		}
+	}
+	return nil
 }
 
 func normalizeHarness(harness string) string {
@@ -186,7 +322,8 @@ func normalizeHarness(harness string) string {
 }
 
 func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command, error) {
-	args := []string{"exec", "--sandbox", "workspace-write"}
+	args := []string{"exec", "--sandbox", "workspace-write", "-c", `approval_policy="never"`}
+	args = append(args, workspaceSandboxArgs(opts)...)
 	if opts.SkipGitRepoCheck {
 		args = append(args, "--skip-git-repo-check")
 	}

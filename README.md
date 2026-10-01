@@ -8,7 +8,10 @@ The highest velocity way to make code changes. Run AI coding agents against GitH
 ### Docker
 
 ```bash
-docker run -p 7777:7777 moltenai/agent_00:latest
+docker run -p 7777:7777 \
+  --security-opt seccomp=unconfined \
+  --security-opt apparmor=unconfined \
+  moltenai/agent_00:latest
 ```
 
 ### Docker Compose with Prompt Dictation
@@ -46,11 +49,47 @@ Storage exhaustion requires an infrastructure repair and does not launch another
 coding task on the same exhausted filesystem.
 
 Codex sandboxing needs nested user/mount namespaces supported by the container
-runtime;
-a namespace permission failure is an infrastructure blocker, not a prompt or
-repository failure. Check the sandbox with `codex sandbox -- /bin/true` in the
-actual container before dispatching work. The runner keeps `workspace-write`
-enforcement and does not disable the sandbox on errors.
+runtime. The image uses Codex's bundled bubblewrap helper. The startup warning
+about missing `bwrap` on PATH does not itself mean command execution failed.
+Docker's default seccomp profile blocks namespace creation, and its default
+AppArmor profile blocks the sandbox mounts. Compose and the Docker command above
+relax these two outer profiles for the agent container. This reduces Docker's
+defense in depth; the container still runs as `node` without additional
+capabilities, and Codex keeps its `workspace-write` filesystem enforcement.
+Hosts with custom security policies can use profiles that permit bubblewrap's
+nested namespaces and mounts instead. Host user namespace support is still
+required.
+
+Agent work can write only inside its allocated task directory (the parent of
+that task's cloned repositories). Temporary files, home directories, and build
+caches live under `.moltenhub-agent-io` inside that directory. The harness
+overrides Codex's writable roots, excludes global `/tmp` and implicit `$TMPDIR`
+access, and sets approvals to `never` so commands cannot escalate outside the
+task. Existing operator config cannot add extra writable roots. Multi-repository
+tasks share their own task parent; other tasks remain read-only.
+
+Claude runs through `codex sandbox` with the same task boundary, including its
+child processes. This requires the Codex CLI even when selecting Claude; both
+CLIs are included in the Docker image. Missing or failed sandbox tooling stops
+the run. The trusted Codex CLI still saves login rotation and session state to
+the persistent `CODEX_HOME`; model-issued commands cannot write there.
+
+Keep the bundled helper in this image: Debian trixie's `bubblewrap` 0.12.0 fails
+to mount `/proc` under Docker's masked proc paths in our container smoke check,
+while Codex 0.147.0's bundled helper succeeds with the security options above.
+
+Recreate an existing container to apply security options; restarting it does not
+change them. For Compose, run `docker compose up -d --force-recreate agent_00`.
+Check the sandbox in the actual container before dispatching work:
+
+```bash
+docker compose exec agent_00 codex sandbox \
+  -c 'sandbox_mode="workspace-write"' -- /bin/true
+```
+
+A namespace or sandbox mount permission failure is an infrastructure blocker,
+not a prompt or repository failure. The runner does not disable the Codex sandbox
+on errors.
 For jobs that fetch source sites or dependencies, the operator can enable
 `sandbox_workspace_write.network_access = true` in the persistent Codex
 `config.toml`; filesystem enforcement remains enabled. The image installs both
@@ -84,7 +123,8 @@ restore a token that the provider has invalidated.
 
 ### Local Build
 
-Requires Go `1.26.5` or newer plus `git`, `gh`, and the selected agent CLI.
+Requires Go `1.26.5` or newer plus `git`, `gh`, and the Codex CLI. Claude tasks
+also require the Claude CLI; Codex provides their filesystem sandbox.
 
 ```bash
 go build -o bin/harness ./cmd/harness

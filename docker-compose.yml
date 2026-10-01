@@ -1,6 +1,11 @@
 services:
   agent_00:
     image: ${AGENT_00_IMAGE:-moltenai/agent_00:latest}
+    # Codex's workspace-write sandbox creates nested namespaces and mounts.
+    # Docker's default seccomp and AppArmor profiles block these operations.
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
     ports:
       - "${AGENT_00_PORT:-7777}:7777"
     environment:

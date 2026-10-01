@@ -116,11 +116,11 @@ func isCloneGitCommand(cmd execx.Command) bool {
 }
 
 func isClaudePromptArgCommand(cmd execx.Command) bool {
-	return len(cmd.Args) >= 5 &&
-		cmd.Args[0] == "--print" &&
-		cmd.Args[1] == "--output-format" &&
-		cmd.Args[2] == "text" &&
-		cmd.Args[3] == "--dangerously-skip-permissions"
+	start := slices.Index(cmd.Args, "--print")
+	return start >= 0 && len(cmd.Args) >= start+5 &&
+		cmd.Args[start+1] == "--output-format" &&
+		cmd.Args[start+2] == "text" &&
+		cmd.Args[start+3] == "--dangerously-skip-permissions"
 }
 
 func isImplicitBranchFreshnessCommand(cmd execx.Command) bool {
@@ -5568,14 +5568,14 @@ func TestCommandBuilders(t *testing.T) {
 	}
 
 	codex := codexCommand(targetDir, prompt)
-	if codex.Name != "codex" || codex.Dir != targetDir || !reflect.DeepEqual(codex.Args, []string{"exec", "--sandbox", "workspace-write"}) {
+	if codex.Name != "codex" || codex.Dir != targetDir || !reflect.DeepEqual(codex.Args, expectedCodexArgs(nil)) {
 		t.Fatalf("codex command unexpected: %+v", codex)
 	}
 	if got, want := codex.Stdin, withCompletionGatePrompt(prompt); got != want {
 		t.Fatalf("codex stdin = %q, want %q", got, want)
 	}
 	codexWorkspace := codexCommandWithOptions(targetDir, prompt, codexRunOptions{SkipGitRepoCheck: true})
-	if codexWorkspace.Name != "codex" || codexWorkspace.Dir != targetDir || !reflect.DeepEqual(codexWorkspace.Args, []string{"exec", "--sandbox", "workspace-write", "--skip-git-repo-check"}) {
+	if codexWorkspace.Name != "codex" || codexWorkspace.Dir != targetDir || !reflect.DeepEqual(codexWorkspace.Args, expectedCodexArgs(nil, "--skip-git-repo-check")) {
 		t.Fatalf("codex workspace command unexpected: %+v", codexWorkspace)
 	}
 	if got, want := codexWorkspace.Stdin, withCompletionGatePrompt(prompt); got != want {
@@ -5586,14 +5586,12 @@ func TestCommandBuilders(t *testing.T) {
 		ImagePaths:       []string{"/tmp/run/prompt-images/01-shot.png", "/tmp/run/prompt-images/02-shot.png"},
 		WritableDirs:     []string{"/tmp/run"},
 	})
-	if codexWithImages.Name != "codex" || codexWithImages.Dir != targetDir || !reflect.DeepEqual(codexWithImages.Args, []string{
-		"exec",
-		"--sandbox", "workspace-write",
+	if codexWithImages.Name != "codex" || codexWithImages.Dir != targetDir || !reflect.DeepEqual(codexWithImages.Args, expectedCodexArgs([]string{"/tmp/run"},
 		"--skip-git-repo-check",
 		"--add-dir", "/tmp/run",
 		"--image", "/tmp/run/prompt-images/01-shot.png",
 		"--image", "/tmp/run/prompt-images/02-shot.png",
-	}) {
+	)) {
 		t.Fatalf("codex image command unexpected: %+v", codexWithImages)
 	}
 	if got, want := codexWithImages.Stdin, withCompletionGatePrompt(prompt); got != want {
@@ -6082,7 +6080,7 @@ func TestAgentCommandWithOptionsUsesConfiguredRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agentCommandWithOptions(claude) error = %v", err)
 	}
-	if claudeCmd.Name != "claude" || claudeCmd.Dir != targetDir {
+	if claudeCmd.Name != "codex" || claudeCmd.Dir != targetDir {
 		t.Fatalf("unexpected claude command: %+v", claudeCmd)
 	}
 	if got, want := claudeCmd.Args[len(claudeCmd.Args)-1], withCompletionGatePrompt(prompt); got != want {
@@ -6139,7 +6137,7 @@ func TestRunUsesConfiguredRuntimeCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("withResponseModePrompt() error = %v", err)
 	}
-	runtimeCmd, err := agentCommandWithOptions(runtime, targetDir, runtimePrompt, codexRunOptions{})
+	runtimeCmd, err := agentCommandWithOptions(runtime, targetDir, runtimePrompt, codexRunOptions{WorkspaceDir: runDir})
 	if err != nil {
 		t.Fatalf("agentCommandWithOptions() error = %v", err)
 	}
@@ -6204,7 +6202,7 @@ func TestRunNoChangesRecordsConcreteNoChangeEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("withResponseModePrompt() error = %v", err)
 	}
-	runtimeCmd, err := agentCommandWithOptions(runtime, targetDir, runtimePrompt, codexRunOptions{})
+	runtimeCmd, err := agentCommandWithOptions(runtime, targetDir, runtimePrompt, codexRunOptions{WorkspaceDir: runDir})
 	if err != nil {
 		t.Fatalf("agentCommandWithOptions() error = %v", err)
 	}
@@ -6380,7 +6378,7 @@ func TestRunAppliesResponseModeAcrossNonCodexRuntimes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("withResponseModePrompt() error = %v", err)
 			}
-			runtimeCmd, err := agentCommandWithOptions(runtime, targetDir, runtimePrompt, codexRunOptions{})
+			runtimeCmd, err := agentCommandWithOptions(runtime, targetDir, runtimePrompt, codexRunOptions{WorkspaceDir: runDir})
 			if err != nil {
 				t.Fatalf("agentCommandWithOptions() error = %v", err)
 			}
@@ -6582,8 +6580,8 @@ func TestRunCodexStagesAgentsPromptWithinTargetDir(t *testing.T) {
 	if runner.cmd.Name != "codex" || runner.cmd.Dir != targetDir {
 		t.Fatalf("unexpected codex command: %+v", runner.cmd)
 	}
-	if got, want := len(runner.cmd.Args), 3; got != want {
-		t.Fatalf("len(captured.Args) = %d, want %d", got, want)
+	if !reflect.DeepEqual(runner.cmd.Args, expectedCodexArgs(nil)) {
+		t.Fatalf("captured.Args = %v, want restricted sandbox", runner.cmd.Args)
 	}
 	prompt := runner.cmd.Stdin
 	re := regexp.MustCompile(`Use (.+) as your primary implementation instructions`)

@@ -365,6 +365,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		return h.fail(ExitConfig, "config", err, runDir)
 	}
 	codexOpts := codexRunOptions{
+		WorkspaceDir:     runDir,
 		SkipGitRepoCheck: len(repos) > 1,
 		ImagePaths:       imageArgs,
 	}
@@ -6579,11 +6580,12 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 	tmpDir := filepath.Join(root, "tmp")
 	configDir := filepath.Join(root, "config")
 	claudeConfigDir := filepath.Join(configDir, "claude")
+	sandboxConfigDir := filepath.Join(configDir, "sandbox")
 	cacheDir := filepath.Join(root, "cache")
 	stateDir := filepath.Join(root, "state")
 	logDir := filepath.Join(root, "log")
 	runtimeDir := filepath.Join(root, "runtime")
-	for _, dir := range []string{homeDir, tmpDir, configDir, claudeConfigDir, cacheDir, stateDir, logDir, runtimeDir} {
+	for _, dir := range []string{homeDir, tmpDir, configDir, claudeConfigDir, sandboxConfigDir, cacheDir, stateDir, logDir, runtimeDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("prepare agent io dir %s: %w", dir, err)
 		}
@@ -6942,18 +6944,6 @@ func branchMoveCommand(repoDir, branch string) execx.Command {
 		Name: "git",
 		Args: []string{"branch", "-m", branch},
 	}
-}
-
-func codexCommand(targetDir, prompt string) execx.Command {
-	return codexCommandWithOptions(targetDir, prompt, codexRunOptions{})
-}
-
-func codexCommandWithOptions(targetDir, prompt string, opts codexRunOptions) execx.Command {
-	cmd, err := agentCommandWithOptions(agentruntime.Default(), targetDir, prompt, opts)
-	if err != nil {
-		panic(err)
-	}
-	return cmd
 }
 
 func agentCommandWithOptions(

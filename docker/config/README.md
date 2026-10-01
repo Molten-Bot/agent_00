@@ -39,6 +39,8 @@ Example with persisted config mount and direct env bootstrap:
 
 ```bash
 docker run --rm -p 7777:7777 \
+  --security-opt seccomp=unconfined \
+  --security-opt apparmor=unconfined \
   -e GITHUB_TOKEN \
   -e MOLTEN_HUB_TOKEN \
   -e MOLTEN_HUB_REGION=na \
@@ -61,6 +63,9 @@ Compose example:
 services:
   codex:
     image: moltenai/agent_00:latest
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
     ports:
       - "3331:7777"
     volumes:

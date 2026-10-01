@@ -2,10 +2,123 @@ package agentruntime
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestTaskWorkspaceIsOnlyWritableRoot(t *testing.T) {
+	t.Parallel()
+	for _, harness := range []string{HarnessCodex, HarnessClaude} {
+		t.Run(harness, func(t *testing.T) {
+			t.Parallel()
+			rt, err := Resolve(harness, "custom-agent")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd, err := rt.BuildCommand("/tasks/current/repo/subdir", "fix it", RunOptions{
+				WorkspaceDir: "/tasks/current",
+				Env:          []string{"CODEX_HOME=/persistent/auth", "TMPDIR=/global/tmp"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, required := range []string{
+				`sandbox_workspace_write.writable_roots=["/tasks/current"]`,
+				"sandbox_workspace_write.exclude_slash_tmp=true",
+				"sandbox_workspace_write.exclude_tmpdir_env_var=true",
+			} {
+				if !slices.Contains(cmd.Args, required) {
+					t.Fatalf("missing sandbox restriction %q in %v", required, cmd.Args)
+				}
+			}
+			if harness == HarnessCodex {
+				if cmd.Name != "custom-agent" || !slices.Contains(cmd.Args, `approval_policy="never"`) {
+					t.Fatalf("Codex must not permit escalation: %+v", cmd)
+				}
+			} else {
+				if cmd.Name != "codex" || !slices.Contains(cmd.Args, "custom-agent") {
+					t.Fatalf("Claude must run inside the sandbox: %+v", cmd)
+				}
+				if slices.Contains(cmd.Env, "CODEX_HOME=/persistent/auth") ||
+					!slices.Contains(cmd.Env, "CODEX_HOME=/tasks/current/.moltenhub-agent-io/config/sandbox") {
+					t.Fatal("Claude sandbox helper must use task-local configuration")
+				}
+			}
+		})
+	}
+}
+
+func TestBuildCommandRejectsDirectoriesOutsideTask(t *testing.T) {
+	t.Parallel()
+	for _, harness := range []string{HarnessCodex, HarnessClaude} {
+		for _, dir := range []string{"/tasks/other/repo", "/tasks/current-sibling", "/tasks/current/../other", "/tmp"} {
+			t.Run(harness+dir, func(t *testing.T) {
+				t.Parallel()
+				rt, _ := Resolve(harness, "")
+				for _, opts := range []RunOptions{
+					{WorkspaceDir: "/tasks/current"},
+					{WorkspaceDir: "/tasks/current", WritableDirs: []string{dir}},
+				} {
+					target := dir
+					if len(opts.WritableDirs) != 0 {
+						target = "/tasks/current/repo"
+					}
+					if _, err := rt.BuildCommand(target, "fix it", opts); err == nil || !strings.Contains(err.Error(), "outside task workspace") {
+						t.Fatalf("BuildCommand(%q, %+v) = %v, want workspace rejection", target, opts, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestTaskSandboxResolvesRelativeDirectoriesBeforeChangingCWD(t *testing.T) {
+	t.Parallel()
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, harness := range []string{HarnessCodex, HarnessClaude} {
+		rt, _ := Resolve(harness, "")
+		cmd, err := rt.BuildCommand(filepath.Join(root, "repo"), "fix", RunOptions{
+			WorkspaceDir: ".", WritableDirs: []string{"."},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, arg := range cmd.Args {
+			if arg == "--add-dir" && cmd.Args[i+1] != root {
+				t.Fatalf("relative directory reached child: %v", cmd.Args)
+			}
+		}
+		if _, err := rt.BuildCommand("", "fix", RunOptions{WorkspaceDir: root}); err == nil {
+			t.Fatal("empty cwd must not add an implicit outside workspace")
+		}
+	}
+}
+
+func TestTaskSandboxRejectsSymlinkDirectoriesOutsideTask(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	outside := t.TempDir()
+	link := filepath.Join(root, "escape")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, harness := range []string{HarnessCodex, HarnessClaude} {
+		rt, _ := Resolve(harness, "")
+		if _, err := rt.BuildCommand(link, "fix", RunOptions{WorkspaceDir: root}); err == nil {
+			t.Fatal("symlink cwd must not add an outside writable root")
+		}
+		if _, err := rt.BuildCommand(root, "fix", RunOptions{WorkspaceDir: root, WritableDirs: []string{filepath.Join(link, "new-dir")}}); err == nil {
+			t.Fatal("nonexistent directory under outside symlink must be rejected")
+		}
+	}
+}
 
 func TestResolveDefaultsToCodex(t *testing.T) {
 	t.Parallel()
@@ -171,7 +284,13 @@ func TestBuildCommandCodex(t *testing.T) {
 	if got, want := cmd.Stdin, "ship it"; got != want {
 		t.Fatalf("Stdin = %q, want %q", got, want)
 	}
-	wantArgs := []string{"exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "--add-dir", "/tmp/run", "--image", "a.png", "--image", "b.png"}
+	wantArgs := []string{
+		"exec", "--sandbox", "workspace-write", "-c", `approval_policy="never"`,
+		"-c", `sandbox_workspace_write.writable_roots=["/tmp/run"]`,
+		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
+		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+		"--skip-git-repo-check", "--add-dir", "/tmp/run", "--image", "a.png", "--image", "b.png",
+	}
 	if !reflect.DeepEqual(cmd.Args, wantArgs) {
 		t.Fatalf("Args = %#v, want %#v", cmd.Args, wantArgs)
 	}
@@ -195,8 +314,15 @@ func TestBuildCommandClaude(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildCommand() error = %v", err)
 	}
-	wantArgs := []string{"--print", "--output-format", "text", "--dangerously-skip-permissions", "--add-dir", "/tmp/run", "--", "fix bug"}
-	if cmd.Name != "claude" || cmd.Dir != "/tmp/repo" || !reflect.DeepEqual(cmd.Args, wantArgs) {
+	wantArgs := []string{
+		"sandbox", "-c", `sandbox_mode="workspace-write"`,
+		"-c", `sandbox_workspace_write.writable_roots=["/tmp/run"]`,
+		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
+		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+		"-c", "sandbox_workspace_write.network_access=true", "--", "claude",
+		"--print", "--output-format", "text", "--dangerously-skip-permissions", "--add-dir", "/tmp/run", "--", "fix bug",
+	}
+	if cmd.Name != "codex" || cmd.Dir != "/tmp/repo" || !reflect.DeepEqual(cmd.Args, wantArgs) {
 		t.Fatalf("unexpected claude command: %+v", cmd)
 	}
 	if cmd.Stdin != "" {
