@@ -200,10 +200,10 @@ func TestExtractAgentProfileFromJSONMergesExplicitProfileWithMetadata(t *testing
 			"agent": {
 				"handle": "codex-beast",
 				"profile": {
-					"display_name": "Jef's Codex"
+					"display_name": "Demo Codex"
 				},
 				"metadata": {
-					"profile_markdown": "# 🦍 Jef's Codex\n\nRunning code updates quickly."
+					"profile_markdown": "# 🦍 Demo Codex\n\nRunning code updates quickly."
 				}
 			}
 		}
@@ -212,7 +212,7 @@ func TestExtractAgentProfileFromJSONMergesExplicitProfileWithMetadata(t *testing
 	if got, want := profile.Handle, "codex-beast"; got != want {
 		t.Fatalf("Handle = %q, want %q", got, want)
 	}
-	if got, want := profile.Profile.DisplayName, "Jef's Codex"; got != want {
+	if got, want := profile.Profile.DisplayName, "Demo Codex"; got != want {
 		t.Fatalf("DisplayName = %q, want %q", got, want)
 	}
 	if got, want := profile.Profile.Emoji, "🦍"; got != want {
@@ -229,7 +229,7 @@ func TestExtractAgentProfileFromJSONMergesDirectProfileAndMetadata(t *testing.T)
 	profile := extractAgentProfileFromJSON([]byte(`{
 		"handle": "codex-beast",
 		"profile": {
-			"display_name": "Jef's Codex",
+			"display_name": "Demo Codex",
 			"emoji": "🦍"
 		},
 		"metadata": {
@@ -240,7 +240,7 @@ func TestExtractAgentProfileFromJSONMergesDirectProfileAndMetadata(t *testing.T)
 	if got, want := profile.Handle, "codex-beast"; got != want {
 		t.Fatalf("Handle = %q, want %q", got, want)
 	}
-	if got, want := profile.Profile.DisplayName, "Jef's Codex"; got != want {
+	if got, want := profile.Profile.DisplayName, "Demo Codex"; got != want {
 		t.Fatalf("DisplayName = %q, want %q", got, want)
 	}
 	if got, want := profile.Profile.Emoji, "🦍"; got != want {

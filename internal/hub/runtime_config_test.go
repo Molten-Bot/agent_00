@@ -460,7 +460,7 @@ func TestClearRuntimeConfigHubSettingsRemovesHubIdentityAndPreservesAuth(t *test
     "unit-test-coverage": 2
   },
   "profile": {
-    "display_name": "Jef's Codex",
+    "display_name": "Demo Codex",
     "emoji": "🌊",
     "profile": "Running code updates quickly."
   }

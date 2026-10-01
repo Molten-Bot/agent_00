@@ -1163,10 +1163,10 @@ func TestCurrentHubSetupStateWithRemoteProfileMergesSplitProfileFields(t *testin
 				"agent": {
 					"handle": "codex-beast",
 					"profile": {
-						"display_name": "Jef's Codex"
+						"display_name": "Demo Codex"
 					},
 					"metadata": {
-						"profile_markdown": "# 🦍 Jef's Codex\n\nRunning code updates quickly."
+						"profile_markdown": "# 🦍 Demo Codex\n\nRunning code updates quickly."
 					}
 				}
 			}
@@ -1192,7 +1192,7 @@ func TestCurrentHubSetupStateWithRemoteProfileMergesSplitProfileFields(t *testin
 	if got, want := state.Handle, "codex-beast"; got != want {
 		t.Fatalf("Handle = %q, want %q", got, want)
 	}
-	if got, want := state.Profile.DisplayName, "Jef's Codex"; got != want {
+	if got, want := state.Profile.DisplayName, "Demo Codex"; got != want {
 		t.Fatalf("DisplayName = %q, want %q", got, want)
 	}
 	if got, want := state.Profile.Emoji, "🦍"; got != want {
@@ -1219,7 +1219,7 @@ func TestCurrentHubSetupStateWithRemoteProfileMergesDirectProfileAndMetadata(t *
 		_, _ = w.Write([]byte(`{
 			"handle": "codex-beast",
 			"profile": {
-				"display_name": "Jef's Codex",
+				"display_name": "Demo Codex",
 				"emoji": "🦍"
 			},
 			"metadata": {
@@ -1247,7 +1247,7 @@ func TestCurrentHubSetupStateWithRemoteProfileMergesDirectProfileAndMetadata(t *
 	if got, want := state.Handle, "codex-beast"; got != want {
 		t.Fatalf("Handle = %q, want %q", got, want)
 	}
-	if got, want := state.Profile.DisplayName, "Jef's Codex"; got != want {
+	if got, want := state.Profile.DisplayName, "Demo Codex"; got != want {
 		t.Fatalf("DisplayName = %q, want %q", got, want)
 	}
 	if got, want := state.Profile.Emoji, "🦍"; got != want {

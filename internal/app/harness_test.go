@@ -1483,7 +1483,7 @@ func TestRunWithGitHubTokenRunsAuthSetupGitBeforeCodex(t *testing.T) {
 }
 
 func TestRunAuthSetupGitRetriesGitConfigLockContention(t *testing.T) {
-	lockErr := errors.New("failed to set up git credential helper: failed to run git: error: could not lock config file /home/jef/.gitconfig: File exists")
+	lockErr := errors.New("failed to set up git credential helper: failed to run git: error: could not lock config file /home/developer/.gitconfig: File exists")
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: authSetupGitCommand(), err: lockErr},
 		{cmd: authSetupGitCommand()},
@@ -1508,7 +1508,7 @@ func TestRunAuthSetupGitRetriesGitConfigLockContention(t *testing.T) {
 }
 
 func TestRunAuthSetupGitSkipsFatalOnPersistentGitConfigLockContention(t *testing.T) {
-	lockErr := errors.New("failed to set up git credential helper: failed to run git: error: could not lock config file /home/jef/.gitconfig: File exists")
+	lockErr := errors.New("failed to set up git credential helper: failed to run git: error: could not lock config file /home/developer/.gitconfig: File exists")
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: authSetupGitCommand(), err: lockErr},
 		{cmd: authSetupGitCommand(), err: lockErr},

@@ -51,6 +51,7 @@
 
 ## Security
 
+- Use generic names, account handles, service names, and home-directory paths in checked-in examples and test fixtures. Keep operator-specific identifiers out of public repository content.
 - Never print, commit, or include in docs: `GITHUB_TOKEN`, `GH_TOKEN`, `MOLTEN_HUB_TOKEN`, `OPENAI_API_KEY`, GitHub PATs, bind tokens, agent tokens, or agent auth credentials.
 - Before sharing repository or PR links in runtime activity, preserve the existing private-repo check using `gh repo view OWNER/REPO --json isPrivate,nameWithOwner`.
 - Production hub base URLs must stay on HTTPS Molten Hub `/v1` endpoints. Non-Molten base URLs are for explicit local/test use behind `HARNESS_ALLOW_NON_MOLTEN_HUB_BASE_URL`.

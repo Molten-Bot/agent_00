@@ -57,7 +57,7 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: Live Claude task could not create PR. Error details: `Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access`")); got != "organization has disabled claude subscription access" {
 		t.Fatalf("NonRemediableFailureReason(Claude subscription disabled) = %q, want %q", got, "organization has disabled claude subscription access")
 	}
-	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: user-portal changes not applied. Error details: sandbox rejected writes to `/home/jef/git/moltenbot/user-portal`: `writing outside of the project; rejected by user approval settings`.")); got != "sandbox rejected writes to" {
+	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: user-portal changes not applied. Error details: sandbox rejected writes to `/home/developer/git/moltenbot/user-portal`: `writing outside of the project; rejected by user approval settings`.")); got != "sandbox rejected writes to" {
 		t.Fatalf("NonRemediableFailureReason(sandbox write rejection) = %q, want %q", got, "sandbox rejected writes to")
 	}
 	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: Full site/assets download not completed. Error details: shell network blocked. `wget` failed DNS for `www.kaanawaveco.com`; `curl --resolve` failed connect to port 443. Browser tool crawled public pages, but cannot save binary assets.")); got != "shell network blocked" {

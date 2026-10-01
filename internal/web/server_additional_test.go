@@ -1194,7 +1194,7 @@ func TestGitHubProfileEndpointReturnsResolvedPublicProfile(t *testing.T) {
 
 	srv := NewServer("", NewBroker())
 	srv.ResolveGitHubProfileURL = func(context.Context) (string, error) {
-		return "https://github.com/jefking", nil
+		return "https://github.com/example-user", nil
 	}
 
 	ts := httptest.NewServer(srv.Handler())
@@ -1219,7 +1219,7 @@ func TestGitHubProfileEndpointReturnsResolvedPublicProfile(t *testing.T) {
 	if !body.OK {
 		t.Fatalf("profile response ok = false, want true")
 	}
-	if got, want := body.ProfileURL, "https://github.com/jefking"; got != want {
+	if got, want := body.ProfileURL, "https://github.com/example-user"; got != want {
 		t.Fatalf("profileUrl = %q, want %q", got, want)
 	}
 }
