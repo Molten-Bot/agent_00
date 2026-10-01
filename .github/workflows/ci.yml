@@ -40,3 +40,6 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+      - name: Check credential and dispatch concurrency
+        run: go test -race ./internal/agentruntime ./internal/app ./cmd/harness ./internal/hub
