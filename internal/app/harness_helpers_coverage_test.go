@@ -394,7 +394,7 @@ func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 	}
 
 	wantRoot := filepath.Join(runDir, ".moltenhub-agent-io")
-	for _, rel := range []string{"home", "tmp", "config", filepath.Join("config", "codex"), filepath.Join("config", "claude"), "cache", "state", "log", "runtime"} {
+	for _, rel := range []string{"home", "tmp", "config", filepath.Join("config", "claude"), "cache", "state", "log", "runtime"} {
 		if st, err := os.Stat(filepath.Join(wantRoot, rel)); err != nil || !st.IsDir() {
 			t.Fatalf("agent io dir %s stat = (%v, %v), want directory", rel, st, err)
 		}
@@ -411,7 +411,7 @@ func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 	if got, want := envValue(env, "XDG_CACHE_HOME"), filepath.Join(wantRoot, "cache"); got != want {
 		t.Fatalf("XDG_CACHE_HOME = %q, want %q", got, want)
 	}
-	if got, want := envValue(env, "CODEX_HOME"), filepath.Join(wantRoot, "config", "codex"); got != want {
+	if got, want := envValue(env, "CODEX_HOME"), codexConfigDir; got != want {
 		t.Fatalf("CODEX_HOME = %q, want %q", got, want)
 	}
 	if got := countEnvKey(env, "CODEX_HOME"); got != 1 {
@@ -423,8 +423,8 @@ func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 	if got := countEnvKey(env, "CLAUDE_CONFIG_DIR"); got != 1 {
 		t.Fatalf("CLAUDE_CONFIG_DIR entries = %d, want 1", got)
 	}
-	if got, err := os.ReadFile(filepath.Join(wantRoot, "config", "codex", "auth.json")); err != nil || string(got) != `{"codex":"ok"}` {
-		t.Fatalf("copied codex auth = (%q, %v), want seeded auth", string(got), err)
+	if _, err := os.Stat(filepath.Join(wantRoot, "config", "codex", "auth.json")); !os.IsNotExist(err) {
+		t.Fatalf("Codex credentials must not be copied into the task tree: %v", err)
 	}
 	if got, err := os.ReadFile(filepath.Join(wantRoot, "config", "claude", ".credentials.json")); err != nil || string(got) != `{"claude":"ok"}` {
 		t.Fatalf("copied claude auth = (%q, %v), want seeded auth", string(got), err)

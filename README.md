@@ -56,6 +56,32 @@ For jobs that fetch source sites or dependencies, the operator can enable
 `config.toml`; filesystem enforcement remains enabled. The image installs both
 Chromium and its headless shell so default Playwright launches work.
 
+### Persistent Codex authentication
+
+Sign in once through the UI. Login and every Codex task use the same persistent
+`CODEX_HOME` (default `/workspace/config/home/.codex` in Docker). Codex saves
+rotated tokens there for subsequent tasks; credentials are never copied into
+task worktrees. The Compose configuration volume retains the login across
+container restarts. Mount `/workspace/config` when using plain `docker run` if
+you also need credentials to survive container replacement. Custom `CODEX_HOME`
+locations must be writable and mounted if persistence across replacement is needed.
+
+Codex invocations sharing a home run one at a time under a process-safe session
+lock, including device login. Git preparation and other task stages may still
+run concurrently. Waiting for the lock is cancelable and does not consume the
+agent execution timeout. The child retains the lock if the harness exits;
+the kernel releases it after the child exits. Do not delete the lock file to
+unblock tasks. Run external Codex clients with a separate
+login/home rather than sharing this container's credentials across machines.
+
+If a login is revoked, expired, or rejected, tasks stop with an authentication
+requirement and do not launch an automatic repair agent. Complete device login
+again in the UI, or replace the file-based login using the same `CODEX_HOME`
+inside the container. Keyring-backed logins should recover through the UI.
+A fresh login clears the blocked credential generation. Existing already-used
+refresh tokens need this one-time recovery after upgrading; persistence cannot
+restore a token that the provider has invalidated.
+
 ### Local Build
 
 Requires Go `1.26.5` or newer plus `git`, `gh`, and the selected agent CLI.

@@ -221,6 +221,15 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	if err := validateRuntimePromptImages(runtime, cfg.Images); err != nil {
 		return h.fail(ExitConfig, "config", err, "")
 	}
+	if runtime.Harness == agentruntime.HarnessCodex {
+		home, err := agentruntime.CodexHome(os.Environ())
+		if err == nil {
+			err = agentruntime.CheckCodexAuthentication(home)
+		}
+		if err != nil {
+			return h.fail(ExitAuth, "auth", err, "")
+		}
+	}
 	agentStage := runtimeLogStage(runtime)
 
 	h.logf("stage=preflight status=start")
@@ -5550,6 +5559,29 @@ func (h Harness) runCodexWithHeartbeat(
 		return execx.Result{}, err
 	}
 
+	if runtime.Harness == agentruntime.HarnessCodex {
+		home, err := agentruntime.CodexHome(cmd.Env)
+		if err != nil {
+			return execx.Result{}, err
+		}
+		h.logf("stage=codex status=waiting action=acquire_auth_session%s", invocation.logFieldsSuffix())
+		release, err := agentruntime.AcquireCodexSession(ctx, home)
+		if err != nil {
+			return execx.Result{}, err
+		}
+		defer release.Release()
+		cmd.InheritedFiles = release.ChildFiles()
+		if err := agentruntime.CheckCodexAuthentication(home); err != nil {
+			return execx.Result{}, err
+		}
+		// Resolve relative CODEX_HOME against the harness cwd, not the repo cwd.
+		env := cmd.Env
+		if len(env) == 0 {
+			env = os.Environ()
+		}
+		cmd.Env = environWithOverrides(env, "CODEX_HOME="+home)
+	}
+
 	runCtx := ctx
 	agentStage := runtimeLogStage(runtime)
 	if timeout := h.agentStageTimeout(); timeout > 0 {
@@ -5580,6 +5612,11 @@ func (h Harness) runCodexWithHeartbeat(
 	for {
 		select {
 		case run := <-done:
+			if runtime.Harness == agentruntime.HarnessCodex && codexInvocationAuthenticationFailed(run.res, run.err) {
+				home, _ := agentruntime.CodexHome(cmd.Env)
+				stateErr := agentruntime.MarkCodexAuthenticationRequired(home)
+				return run.res, errors.Join(agentruntime.ErrCodexAuthRequired, stateErr)
+			}
 			if failed, detail := codexReportedFailure(run.res); failed {
 				detail = codexFailureDetailWithErrorDetails(run.res, detail)
 				if isImplementationTargetFailure(detail) {
@@ -5642,6 +5679,9 @@ func (h Harness) runCodexWithHeartbeat(
 		case <-ticker.C:
 			h.logf("stage=%s status=running elapsed_s=%d%s", agentStage, int(time.Since(start).Seconds()), invocation.logFieldsSuffix())
 		case <-runCtx.Done():
+			// Keep the login lock until the runner has terminated its process group.
+			// Otherwise a canceled child could rotate credentials after the next run starts.
+			<-done
 			cause := context.Cause(runCtx)
 			if cause != nil {
 				return execx.Result{}, cause
@@ -5649,6 +5689,25 @@ func (h Harness) runCodexWithHeartbeat(
 			return execx.Result{}, runCtx.Err()
 		}
 	}
+}
+
+func codexInvocationAuthenticationFailed(res execx.Result, err error) bool {
+	if err == nil {
+		return false
+	}
+	if agentruntime.CodexAuthenticationFailure(err.Error()) {
+		return true
+	}
+	// Codex echoes the entire user prompt on stderr. Only provider diagnostic
+	// lines may invalidate credentials; a quoted failure in a task is not one.
+	for _, line := range strings.Split(res.Stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if (strings.HasPrefix(line, "ERROR:") || strings.Contains(line, " ERROR codex_login::auth")) &&
+			agentruntime.CodexAuthenticationFailure(line) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h Harness) agentStageTimeout() time.Duration {
@@ -6519,13 +6578,12 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 	homeDir := filepath.Join(root, "home")
 	tmpDir := filepath.Join(root, "tmp")
 	configDir := filepath.Join(root, "config")
-	codexConfigDir := filepath.Join(configDir, "codex")
 	claudeConfigDir := filepath.Join(configDir, "claude")
 	cacheDir := filepath.Join(root, "cache")
 	stateDir := filepath.Join(root, "state")
 	logDir := filepath.Join(root, "log")
 	runtimeDir := filepath.Join(root, "runtime")
-	for _, dir := range []string{homeDir, tmpDir, configDir, codexConfigDir, claudeConfigDir, cacheDir, stateDir, logDir, runtimeDir} {
+	for _, dir := range []string{homeDir, tmpDir, configDir, claudeConfigDir, cacheDir, stateDir, logDir, runtimeDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("prepare agent io dir %s: %w", dir, err)
 		}
@@ -6534,8 +6592,11 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 	if len(environ) == 0 {
 		environ = os.Environ()
 	}
-	if err := seedAgentConfigDir(agentConfigSource(environ, "CODEX_HOME", filepath.Join(".codex")), codexConfigDir); err != nil {
-		return nil, fmt.Errorf("seed codex config dir: %w", err)
+	// Codex owns persistent auth, configuration, skills and token rotation. Never
+	// clone its auth cache into a task worktree or discard a refreshed generation.
+	codexConfigDir, err := agentruntime.CodexHome(environ)
+	if err != nil {
+		return nil, err
 	}
 	if err := seedAgentConfigDir(agentConfigSource(environ, "CLAUDE_CONFIG_DIR", filepath.Join(".claude")), claudeConfigDir); err != nil {
 		return nil, fmt.Errorf("seed claude config dir: %w", err)

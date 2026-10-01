@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -51,6 +52,8 @@ type codexAuthGate struct {
 
 	procRunning bool
 	procCancel  context.CancelFunc
+	procRelease func()
+	authBlocked bool
 
 	lastAutoStartAttempt time.Time
 }
@@ -149,7 +152,7 @@ func newCodexAuthGateWithConfig(
 	return g
 }
 
-func (g *codexAuthGate) Status(_ context.Context) (web.AgentAuthState, error) {
+func (g *codexAuthGate) Status(ctx context.Context) (web.AgentAuthState, error) {
 	if g == nil {
 		return readyAgentAuthState(), nil
 	}
@@ -158,15 +161,18 @@ func (g *codexAuthGate) Status(_ context.Context) (web.AgentAuthState, error) {
 		return state, nil
 	}
 
+	if err := g.updateAuthenticationFailure(); err != nil {
+		return web.AgentAuthState{}, err
+	}
 	needsProbe := false
 	g.mu.Lock()
-	if !g.ready && !g.procRunning && strings.TrimSpace(g.state) == "needs_configure" {
+	if !g.ready && !g.procRunning && (strings.TrimSpace(g.state) == "needs_configure" || g.authBlocked) {
 		needsProbe = true
 	}
 	g.mu.Unlock()
 
 	if needsProbe {
-		ready, probeMessage, probeErr := g.probe(context.Background())
+		ready, probeMessage, probeErr := g.probe(ctx)
 		g.mu.Lock()
 		if probeErr != nil {
 			g.ready = false
@@ -174,6 +180,7 @@ func (g *codexAuthGate) Status(_ context.Context) (web.AgentAuthState, error) {
 			g.message = probeErr.Error()
 			g.updatedAt = time.Now().UTC()
 		} else if ready {
+			g.authBlocked = false
 			g.ready = true
 			g.state = "ready"
 			g.message = normalizeCodexStatusMessage(probeMessage)
@@ -213,15 +220,21 @@ func (g *codexAuthGate) Status(_ context.Context) (web.AgentAuthState, error) {
 	return g.snapshotLocked(), nil
 }
 
-func (g *codexAuthGate) StartDeviceAuth(_ context.Context) (web.AgentAuthState, error) {
+func (g *codexAuthGate) StartDeviceAuth(ctx context.Context) (web.AgentAuthState, error) {
 	if g == nil {
 		return readyAgentAuthState(), nil
 	}
 
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if blocked, state := g.githubTokenRequirementState(); blocked {
 		return state, fmt.Errorf("github token is required")
 	}
 
+	if err := g.updateAuthenticationFailure(); err != nil {
+		return web.AgentAuthState{}, err
+	}
 	g.mu.Lock()
 	if g.ready {
 		snap := g.snapshotLocked()
@@ -242,7 +255,32 @@ func (g *codexAuthGate) StartDeviceAuth(_ context.Context) (web.AgentAuthState, 
 		g.mu.Unlock()
 		return snap, nil
 	}
+	g.procRunning = true // Reserve startup so concurrent UI polls cannot launch two logins.
 	g.mu.Unlock()
+
+	started := false
+	defer func() {
+		if !started {
+			g.mu.Lock()
+			g.procRunning = false
+			g.mu.Unlock()
+		}
+	}()
+	home, err := agentruntime.CodexHome(os.Environ())
+	if err != nil {
+		return web.AgentAuthState{}, err
+	}
+	lockCtx, lockCancel := context.WithTimeout(ctx, codexAuthProbeTimeout)
+	defer lockCancel()
+	release, err := agentruntime.AcquireCodexSession(lockCtx, home)
+	if err != nil {
+		return web.AgentAuthState{}, fmt.Errorf("wait for Codex login session: %w", err)
+	}
+	defer func() {
+		if !started {
+			release.Release()
+		}
+	}()
 
 	tmpDir, err := os.MkdirTemp("", "agent_00-codex-auth-*")
 	if err != nil {
@@ -257,6 +295,8 @@ func (g *codexAuthGate) StartDeviceAuth(_ context.Context) (web.AgentAuthState, 
 	procCtx, cancel := context.WithCancel(baseCtx)
 	cmd := exec.CommandContext(procCtx, g.command, "login", "--device-auth")
 	cmd.Dir = tmpDir
+	cmd.Env = append(os.Environ(), "CODEX_HOME="+home)
+	cmd.ExtraFiles = release.ChildFiles()
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -285,7 +325,9 @@ func (g *codexAuthGate) StartDeviceAuth(_ context.Context) (web.AgentAuthState, 
 	}
 
 	g.mu.Lock()
+	started = true
 	g.procRunning = true
+	g.procRelease = release.Release
 	g.procCancel = cancel
 	g.state = "pending_device_auth"
 	g.message = "Waiting for device authorization. Use the link and code, then click Done."
@@ -309,6 +351,18 @@ func (g *codexAuthGate) Verify(ctx context.Context) (web.AgentAuthState, error) 
 		return state, nil
 	}
 
+	// A local login-status probe can still report the previous cached login.
+	// Only successful completion of the current device login may make it ready.
+	g.mu.Lock()
+	if g.procRunning {
+		g.state = "pending_device_auth"
+		g.message = "Still waiting for authorization. Complete browser auth, then click Done."
+		snap := g.snapshotLocked()
+		g.mu.Unlock()
+		return snap, nil
+	}
+	g.mu.Unlock()
+
 	ready, probeMessage, probeErr := g.probe(ctx)
 
 	g.mu.Lock()
@@ -328,9 +382,6 @@ func (g *codexAuthGate) Verify(ctx context.Context) (web.AgentAuthState, error) 
 			g.message = "Codex authorization is ready."
 		} else {
 			g.message = probeMessage
-		}
-		if g.procRunning && g.procCancel != nil {
-			g.procCancel()
 		}
 		g.updatedAt = time.Now().UTC()
 		return g.snapshotLocked(), nil
@@ -427,9 +478,27 @@ func (g *codexAuthGate) waitDeviceAuth(cmd *exec.Cmd, tempDir string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	if g.procRelease != nil {
+		defer g.procRelease()
+		g.procRelease = nil
+	}
 	g.procRunning = false
 	g.procCancel = nil
 
+	if err == nil {
+		home, homeErr := agentruntime.CodexHome(cmd.Env)
+		if homeErr == nil {
+			homeErr = agentruntime.ClearCodexAuthenticationRequired(home)
+		}
+		if homeErr != nil {
+			g.ready = false
+			g.state = "error"
+			g.message = "Codex signed in but could not clear authentication failure state."
+			g.updatedAt = time.Now().UTC()
+			return
+		}
+		g.authBlocked = false
+	}
 	if g.ready {
 		return
 	}
@@ -455,6 +524,16 @@ func (g *codexAuthGate) probe(ctx context.Context) (bool, string, error) {
 		return true, "Codex authorization is ready.", nil
 	}
 
+	home, err := agentruntime.CodexHome(os.Environ())
+	if err == nil {
+		err = agentruntime.CheckCodexAuthentication(home)
+	}
+	if errors.Is(err, agentruntime.ErrCodexAuthRequired) {
+		return false, agentruntime.ErrCodexAuthRequired.Error(), nil
+	}
+	if err != nil {
+		return false, "", err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -472,6 +551,7 @@ func (g *codexAuthGate) probe(ctx context.Context) (bool, string, error) {
 		Dir:  tmpDir,
 		Name: g.command,
 		Args: []string{"login", "status"},
+		Env:  append(os.Environ(), "CODEX_HOME="+home),
 	})
 
 	combined := strings.TrimSpace(strings.Join([]string{res.Stdout, res.Stderr}, "\n"))
@@ -483,6 +563,9 @@ func (g *codexAuthGate) probe(ctx context.Context) (bool, string, error) {
 	}
 	fullLower := strings.TrimSpace(combinedLower + " " + errLower)
 
+	if runErr != nil && !strings.Contains(fullLower, "not logged in") && agentruntime.CodexAuthenticationFailure(fullLower) {
+		return false, agentruntime.ErrCodexAuthRequired.Error(), nil
+	}
 	if runErr == nil {
 		return true, normalizeCodexStatusMessage(combined), nil
 	}
@@ -499,6 +582,31 @@ func (g *codexAuthGate) probe(ctx context.Context) (bool, string, error) {
 		return true, normalizeCodexStatusMessage(combined), nil
 	}
 	return false, firstNonEmptyString(combined, "Unable to verify Codex authorization status."), nil
+}
+
+// Re-read the shared failure marker even when the cached login status is ready.
+// Task execution is the authority on whether the cached credentials still work.
+func (g *codexAuthGate) updateAuthenticationFailure() error {
+	home, err := agentruntime.CodexHome(os.Environ())
+	if err == nil {
+		err = agentruntime.CheckCodexAuthentication(home)
+	}
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, agentruntime.ErrCodexAuthRequired) {
+		return err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.ready = false
+	g.authBlocked = true
+	if !g.procRunning {
+		g.state = "needs_device_auth"
+		g.message = agentruntime.ErrCodexAuthRequired.Error()
+	}
+	g.updatedAt = time.Now().UTC()
+	return nil
 }
 
 func (g *codexAuthGate) snapshotLocked() web.AgentAuthState {

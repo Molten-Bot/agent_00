@@ -2,10 +2,16 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestMain(m *testing.M) {
+	authRoot, err := os.MkdirTemp("", "agent00-test-auth-*")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("CODEX_HOME", filepath.Join(authRoot, "codex"))
 	_ = os.Setenv("HARNESS_ALLOW_NON_MOLTEN_HUB_BASE_URL", "1")
 	_ = os.Setenv("HARNESS_AGENT_HARNESS", "")
 	_ = os.Setenv("HARNESS_AGENT_COMMAND", "")
@@ -13,5 +19,7 @@ func TestMain(m *testing.M) {
 	_ = os.Setenv("MOLTEN_HUB_TOKEN", "")
 	_ = os.Setenv("MOLTEN_HUB_REGION", "")
 	_ = os.Setenv("MOLTEN_HUB_URL", "")
-	os.Exit(m.Run())
+	code := m.Run()
+	_ = os.RemoveAll(authRoot)
+	os.Exit(code)
 }

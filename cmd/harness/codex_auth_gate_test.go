@@ -390,7 +390,7 @@ func TestVerifyTransitions(t *testing.T) {
 		}
 	})
 
-	t.Run("ready-cancels-pending-process", func(t *testing.T) {
+	t.Run("cached-login-does-not-cancel-pending-process", func(t *testing.T) {
 		t.Parallel()
 		canceled := false
 		runner := &authGateRunnerStub{run: func(_ context.Context, _ execx.Command) (execx.Result, error) {
@@ -411,11 +411,11 @@ func TestVerifyTransitions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Verify() error = %v", err)
 		}
-		if !status.Ready || status.State != "ready" {
+		if status.Ready || status.State != "pending_device_auth" {
 			t.Fatalf("status = %+v", status)
 		}
-		if !canceled {
-			t.Fatal("expected running process cancel callback")
+		if canceled {
+			t.Fatal("cached credentials canceled the replacement login")
 		}
 	})
 

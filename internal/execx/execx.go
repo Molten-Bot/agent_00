@@ -18,6 +18,9 @@ type Command struct {
 	// Env optionally replaces the subprocess environment. When empty, the
 	// subprocess inherits the current process environment.
 	Env []string
+	// InheritedFiles keeps Unix session locks alive in a child even if its
+	// parent harness exits. These handles are not exposed to command output.
+	InheritedFiles []*os.File
 	// Stdin is optional input piped to the command's stdin.
 	Stdin string
 }
@@ -59,6 +62,7 @@ func runWithStream(ctx context.Context, cmd Command, handler StreamLineHandler) 
 		ctx = context.Background()
 	}
 	c := exec.CommandContext(ctx, cmd.Name, cmd.Args...)
+	c.ExtraFiles = cmd.InheritedFiles
 	configureCommandProcessGroup(c)
 	if cmd.Dir != "" {
 		c.Dir = cmd.Dir

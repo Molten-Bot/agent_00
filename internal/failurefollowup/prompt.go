@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/config"
 )
 
@@ -309,6 +310,9 @@ func NonRemediableFailureReason(err error) string {
 	text := strings.ToLower(strings.TrimSpace(err.Error()))
 	if text == "" {
 		return ""
+	}
+	if agentruntime.CodexAuthenticationFailure(text) {
+		return "codex authentication required"
 	}
 	for _, marker := range nonRemediableFailureMarkers {
 		if strings.Contains(text, marker) {

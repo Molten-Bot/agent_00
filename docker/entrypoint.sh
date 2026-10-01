@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+umask 077
 
 config_dir="${HARNESS_CONFIG_DIR:-/workspace/config}"
 if [ "${HOME:-}" = "" ]; then
@@ -7,6 +8,13 @@ if [ "${HOME:-}" = "" ]; then
 fi
 if ! mkdir -p "${HOME}"; then
     echo "warning: home directory ${HOME} could not be created; persisted CLI auth settings may fail to save." >&2
+fi
+
+# Login and task execution must resolve the same persistent credential store.
+export CODEX_HOME="${CODEX_HOME:-${HOME}/.codex}"
+if ! mkdir -p "${CODEX_HOME}" || [ ! -w "${CODEX_HOME}" ]; then
+    echo "error: persistent Codex home is not writable; fix the configuration volume before starting tasks." >&2
+    exit 1
 fi
 
 if [ ! -w "${config_dir}" ]; then
@@ -28,7 +36,7 @@ seed_railsmith_codex_skill() {
         return 0
     fi
 
-    skill_dir="${HOME}/.codex/skills/railsmith"
+    skill_dir="${CODEX_HOME}/skills/railsmith"
     skill_path="${skill_dir}/SKILL.md"
     if [ -f "${skill_path}" ]; then
         return 0
