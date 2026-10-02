@@ -9,6 +9,7 @@ The highest velocity way to make code changes. Run AI coding agents against GitH
 
 ```bash
 docker run -p 7777:7777 \
+  --cap-drop=ALL \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
   moltenai/agent_00:latest
@@ -54,8 +55,8 @@ about missing `bwrap` on PATH does not itself mean command execution failed.
 Docker's default seccomp profile blocks namespace creation, and its default
 AppArmor profile blocks the sandbox mounts. Compose and the Docker command above
 relax these two outer profiles for the agent container. This reduces Docker's
-defense in depth; the container still runs as `node` without additional
-capabilities, and Codex keeps its `workspace-write` filesystem enforcement.
+defense in depth; the container runs as `node` with all Linux capabilities
+dropped, and Codex keeps its `workspace-write` filesystem enforcement.
 Hosts with custom security policies can use profiles that permit bubblewrap's
 nested namespaces and mounts instead. Host user namespace support is still
 required.
@@ -80,12 +81,51 @@ while Codex 0.147.0's bundled helper succeeds with the security options above.
 
 Recreate an existing container to apply security options; restarting it does not
 change them. For Compose, run `docker compose up -d --force-recreate agent_00`.
+Pulling a newer image also does not change an existing container's security
+options. Check the container you actually dispatch tasks to:
+
+```bash
+docker inspect YOUR_CONTAINER --format '{{json .HostConfig.SecurityOpt}}'
+```
+
+If this prints `null` or `[]`, recreate it with the two security options above
+(or equivalent custom profiles), retaining its configuration/workspace volumes.
 Check the sandbox in the actual container before dispatching work:
 
 ```bash
 docker compose exec agent_00 codex sandbox \
   -c 'sandbox_mode="workspace-write"' -- /bin/true
 ```
+
+To verify a real authenticated task against a locally built image:
+
+```bash
+docker build -t agent00-local:smoke .
+./docker/smoke-test.sh agent00-local:smoke YOUR_AUTHENTICATED_CONTAINER
+```
+
+The smoke check runs an isolated container with the documented security options,
+checks Codex and Claude filesystem boundaries, then invokes Codex with the
+harness's task environment and command. It requires the source container's
+persisted login at `/workspace/config/home/.codex`, shares its session lock, and
+verifies that a shell task creates the expected file. It makes a provider request
+but does not clone, push, create a PR, or launch the Hub daemon. It does not change
+the source container's security options; the source still needs recreation if
+its own sandbox check fails.
+
+Run the repository build, full test suite and Go race tests inside the task
+sandbox as a separate check; this requires no provider login:
+
+```bash
+./docker/validate-sandbox.sh agent00-local:smoke
+```
+
+This uses the current source, keeps PID isolation and task-only writable roots,
+and runs the container with all Linux capabilities dropped. The runtime includes
+GCC and libc headers for cgo and `go test -race`; the shipped harness is still
+built with `CGO_ENABLED=0`. Bootstrap reads its own valid environment variables.
+Malformed Compose `KEY:value` entries are ignored, matching the documented
+environment format; bootstrap does not recover them from another process.
 
 A namespace or sandbox mount permission failure is an infrastructure blocker,
 not a prompt or repository failure. The runner does not disable the Codex sandbox

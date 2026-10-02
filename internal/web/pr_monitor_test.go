@@ -74,7 +74,7 @@ func TestPRMergeMonitorMarksMergedTaskDoneAndRunsCleanup(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -82,7 +82,7 @@ func TestPRMergeMonitorMarksMergedTaskDoneAndRunsCleanup(t *testing.T) {
 		done <- monitor.Run(ctx)
 	}()
 
-	waitForHubUITest(t, 300*time.Millisecond, func() bool {
+	waitForHubUITest(t, 5*time.Second, func() bool {
 		return len(runner.Commands()) > 0
 	})
 
@@ -91,7 +91,7 @@ func TestPRMergeMonitorMarksMergedTaskDoneAndRunsCleanup(t *testing.T) {
 		if got, want := requestID, "req-merged"; got != want {
 			t.Fatalf("cleanup requestID = %q, want %q", got, want)
 		}
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("expected automatic cleanup after merged PR observation")
 	}
 
@@ -101,7 +101,7 @@ func TestPRMergeMonitorMarksMergedTaskDoneAndRunsCleanup(t *testing.T) {
 		if err != nil {
 			t.Fatalf("monitor.Run() error = %v", err)
 		}
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for monitor shutdown")
 	}
 
@@ -171,7 +171,7 @@ func TestPRMergeMonitorDeletesMergedBranchAndClosesTaskWhenEnabled(t *testing.T)
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -179,7 +179,7 @@ func TestPRMergeMonitorDeletesMergedBranchAndClosesTaskWhenEnabled(t *testing.T)
 		done <- monitor.Run(ctx)
 	}()
 
-	waitForHubUITest(t, 300*time.Millisecond, func() bool {
+	waitForHubUITest(t, 5*time.Second, func() bool {
 		return len(runner.Commands()) >= 2
 	})
 
@@ -188,7 +188,7 @@ func TestPRMergeMonitorDeletesMergedBranchAndClosesTaskWhenEnabled(t *testing.T)
 		if got, want := requestID, "req-merged-delete"; got != want {
 			t.Fatalf("cleanup requestID = %q, want %q", got, want)
 		}
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("expected cleanup after branch deletion")
 	}
 
@@ -198,7 +198,7 @@ func TestPRMergeMonitorDeletesMergedBranchAndClosesTaskWhenEnabled(t *testing.T)
 		if err != nil {
 			t.Fatalf("monitor.Run() error = %v", err)
 		}
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for monitor shutdown")
 	}
 
@@ -274,7 +274,7 @@ func TestPRMergeMonitorKeepsMergedTaskVisibleWhenBranchDeleteFails(t *testing.T)
 		Logf:                 func(string, ...any) {},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 160*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -282,7 +282,7 @@ func TestPRMergeMonitorKeepsMergedTaskVisibleWhenBranchDeleteFails(t *testing.T)
 		done <- monitor.Run(ctx)
 	}()
 
-	waitForHubUITest(t, 120*time.Millisecond, func() bool {
+	waitForHubUITest(t, 5*time.Second, func() bool {
 		return len(runner.Commands()) >= 2
 	})
 
@@ -300,7 +300,7 @@ func TestPRMergeMonitorKeepsMergedTaskVisibleWhenBranchDeleteFails(t *testing.T)
 		if err != nil {
 			t.Fatalf("monitor.Run() error = %v", err)
 		}
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for monitor shutdown")
 	}
 }
@@ -322,7 +322,7 @@ func TestPRMergeMonitorKeepsTaskVisibleUntilPRIsMerged(t *testing.T) {
 		PollInterval: 10 * time.Millisecond,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -330,7 +330,7 @@ func TestPRMergeMonitorKeepsTaskVisibleUntilPRIsMerged(t *testing.T) {
 		done <- monitor.Run(ctx)
 	}()
 
-	waitForHubUITest(t, 80*time.Millisecond, func() bool {
+	waitForHubUITest(t, 5*time.Second, func() bool {
 		return len(runner.Commands()) > 0
 	})
 
@@ -348,7 +348,7 @@ func TestPRMergeMonitorKeepsTaskVisibleUntilPRIsMerged(t *testing.T) {
 		if err != nil {
 			t.Fatalf("monitor.Run() error = %v", err)
 		}
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for monitor shutdown")
 	}
 }
@@ -569,11 +569,14 @@ func TestPRMergeMonitorLogsCheckFailuresAndKeepsTask(t *testing.T) {
 		Broker:       broker,
 		PollInterval: 10 * time.Millisecond,
 		Logf: func(format string, args ...any) {
-			logs <- fmt.Sprintf(format, args...)
+			select {
+			case logs <- fmt.Sprintf(format, args...):
+			default:
+			}
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -581,7 +584,7 @@ func TestPRMergeMonitorLogsCheckFailuresAndKeepsTask(t *testing.T) {
 		done <- monitor.Run(ctx)
 	}()
 
-	waitForHubUITest(t, 80*time.Millisecond, func() bool {
+	waitForHubUITest(t, 5*time.Second, func() bool {
 		return len(runner.Commands()) > 0
 	})
 
@@ -596,7 +599,7 @@ func TestPRMergeMonitorLogsCheckFailuresAndKeepsTask(t *testing.T) {
 		if err != nil {
 			t.Fatalf("monitor.Run() error = %v", err)
 		}
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for monitor shutdown")
 	}
 
@@ -605,7 +608,7 @@ func TestPRMergeMonitorLogsCheckFailuresAndKeepsTask(t *testing.T) {
 		if line == "" {
 			t.Fatal("expected non-empty log line")
 		}
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("expected warning log for failed PR status check")
 	}
 }

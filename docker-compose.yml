@@ -1,6 +1,8 @@
 services:
   agent_00:
     image: ${AGENT_00_IMAGE:-moltenai/agent_00:latest}
+    cap_drop:
+      - ALL
     # Codex's workspace-write sandbox creates nested namespaces and mounts.
     # Docker's default seccomp and AppArmor profiles block these operations.
     security_opt:

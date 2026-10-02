@@ -110,33 +110,11 @@ const path = require("node:path");
 
 const [, , filePath] = process.argv;
 
-function rawEnvironmentEntries() {
-  const entries = Object.entries(process.env).map(([key, value]) => `${key}=${value}`);
-  try {
-    const parentEnv = fs.readFileSync(`/proc/${process.ppid}/environ`, "utf8");
-    entries.push(...parentEnv.split("\0").filter(Boolean));
-  } catch (_) {
-  }
-  return entries;
-}
-
 function envValue(...names) {
   for (const name of names) {
     const value = typeof process.env[name] === "string" ? process.env[name].trim() : "";
     if (value !== "") {
       return value;
-    }
-  }
-  for (const entry of rawEnvironmentEntries()) {
-    for (const name of names) {
-      const prefix = `${name}:`;
-      if (!entry.startsWith(prefix)) {
-        continue;
-      }
-      const suffix = entry.slice(prefix.length).replace(/=$/, "").trim();
-      if (suffix !== "") {
-        return suffix;
-      }
     }
   }
   return "";

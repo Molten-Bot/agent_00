@@ -83,17 +83,24 @@ func runWithStream(ctx context.Context, cmd Command, handler StreamLineHandler) 
 	c.Stdout = io.MultiWriter(&stdout, &stdoutEmitter)
 	c.Stderr = io.MultiWriter(&stderr, &stderrEmitter)
 
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			terminateCommandProcessGroup(c)
-		case <-done:
-		}
-	}()
-
-	err := c.Run()
+	err := c.Start()
+	if err == nil {
+		// Start initializes c.Process. A cancellation watcher must not read it
+		// while Start is still writing it, or survive after this run returns.
+		done := make(chan struct{})
+		watcherDone := make(chan struct{})
+		go func() {
+			defer close(watcherDone)
+			select {
+			case <-ctx.Done():
+				terminateCommandProcessGroup(c)
+			case <-done:
+			}
+		}()
+		err = c.Wait()
+		close(done)
+		<-watcherDone
+	}
 	stdoutEmitter.Flush()
 	stderrEmitter.Flush()
 	res := Result{Stdout: stdout.String(), Stderr: stderr.String()}

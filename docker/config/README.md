@@ -39,6 +39,7 @@ Example with persisted config mount and direct env bootstrap:
 
 ```bash
 docker run --rm -p 7777:7777 \
+  --cap-drop=ALL \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
   -e GITHUB_TOKEN \
@@ -56,6 +57,9 @@ docker run --rm -p 7777:7777 \
 Docker Compose environment values must use mapping syntax (`KEY: value`) or
 list syntax (`KEY=value`). List entries such as `KEY:value` are malformed and
 do not arrive in the container as usable environment variables.
+Bootstrap ignores these malformed entries and uses onboarding when no valid
+token or configuration is available. It does not read parent process environments
+to recover credentials from malformed variable names.
 
 Compose example:
 
@@ -63,6 +67,8 @@ Compose example:
 services:
   codex:
     image: moltenai/agent_00:latest
+    cap_drop:
+      - ALL
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined

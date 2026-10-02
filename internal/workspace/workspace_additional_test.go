@@ -55,11 +55,7 @@ func TestResolveAgentsSeedPathReturnsEmptyWhenNoCandidatesExist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
 	}
-	tmp, err := os.MkdirTemp("/tmp", "no-agents-seed-")
-	if err != nil {
-		t.Fatalf("MkdirTemp() error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
+	tmp := t.TempDir()
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatalf("Chdir(%q) error = %v", tmp, err)
 	}

@@ -260,7 +260,7 @@ func testWorkspaceManager(guid string) workspace.Manager {
 }
 
 func testRunDir(guid string) string {
-	return filepath.Join("/tmp", "agent_00", "tasks", guid)
+	return filepath.Join(testWorkspaceBase, "agent_00", "tasks", guid)
 }
 
 func TestRunHappyPathCreatesPR(t *testing.T) {

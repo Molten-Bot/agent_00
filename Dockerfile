@@ -44,8 +44,10 @@ RUN export DEBIAN_FRONTEND=noninteractive \
         ca-certificates \
         file \
         git \
+        gcc \
         gh \
         jq \
+        libc6-dev \
         openssh-client \
         python3-pip \
         python3-venv \

@@ -212,7 +212,7 @@ func TestWithConfigScriptWritesRuntimeConfigFromEnvGitHubTokenAndAgentRuntime(t 
 	}
 }
 
-func TestWithConfigScriptAcceptsMalformedDockerComposeEnvEntries(t *testing.T) {
+func TestWithConfigScriptIgnoresMalformedDockerComposeEnvEntries(t *testing.T) {
 	env := newWithConfigTestEnv(t)
 	configPath := filepath.Join(env.configDir, "config.json")
 	output, err := runWithConfigScript(t, env, map[string]string{
@@ -228,32 +228,57 @@ func TestWithConfigScriptAcceptsMalformedDockerComposeEnvEntries(t *testing.T) {
 	}
 
 	args := readFileTrimmed(t, env.argsPath)
-	if got, want := args, "hub --config "+configPath+" --ui-listen :7777"; got != want {
+	if got, want := args, "hub --ui-listen :7777"; got != want {
 		t.Fatalf("harness args = %q, want %q", got, want)
 	}
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("malformed entries must not bootstrap a config: %v", err)
+	}
+	if !strings.Contains(output, "starting hub onboarding mode") {
+		t.Fatalf("missing onboarding guidance: %s", output)
+	}
+	for _, secret := range []string{"hub_token_123", "github_token_env_token"} {
+		if strings.Contains(output, secret) {
+			t.Fatal("malformed credential leaked in startup output")
+		}
+	}
+}
 
-	initJSON := readFileTrimmed(t, env.initPath)
+func TestWithConfigScriptDoesNotRecoverMalformedValuesDuringBootstrap(t *testing.T) {
+	env := newWithConfigTestEnv(t)
+	output, err := runWithConfigScript(t, env, map[string]string{
+		"MOLTEN_HUB_TOKEN":                    "valid_hub_token",
+		"MOLTEN_HUB_TOKEN:malformed_token":    "",
+		"MOLTEN_HUB_REGION:eu":                "",
+		"GITHUB_TOKEN:malformed_github_token": "",
+		"MOLTEN_HUB_SESSION_KEY:session-dev":  "",
+		"HARNESS_AGENT_HARNESS:claude":        "",
+		"HARNESS_AGENT_COMMAND:claude-custom": "",
+	})
+	if err != nil {
+		t.Fatalf("with-config error: %v\noutput: %s", err, output)
+	}
 	var parsed map[string]string
-	if err := json.Unmarshal([]byte(initJSON), &parsed); err != nil {
-		t.Fatalf("parse generated runtime config json: %v", err)
+	if err := json.Unmarshal([]byte(readFileTrimmed(t, env.initPath)), &parsed); err != nil {
+		t.Fatalf("parse generated runtime config: %v", err)
 	}
-	if got, want := parsed["base_url"], "https://eu.hub.molten.bot/v1"; got != want {
-		t.Fatalf("base_url = %q, want %q", got, want)
+	for key, want := range map[string]string{
+		"agent_token": "valid_hub_token", "base_url": "https://na.hub.molten.bot/v1",
+		"session_key": "main", "agent_harness": "codex",
+	} {
+		if got := parsed[key]; got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
 	}
-	if got, want := parsed["agent_token"], "hub_token_123"; got != want {
-		t.Fatalf("agent_token = %q, want %q", got, want)
+	for _, key := range []string{"github_token", "agent_command"} {
+		if _, exists := parsed[key]; exists {
+			t.Fatalf("malformed environment value unexpectedly populated %s", key)
+		}
 	}
-	if got, want := parsed["github_token"], "github_token_env_token"; got != want {
-		t.Fatalf("github_token = %q, want %q", got, want)
-	}
-	if got, want := parsed["session_key"], "session-dev"; got != want {
-		t.Fatalf("session_key = %q, want %q", got, want)
-	}
-	if got, want := parsed["agent_harness"], "claude"; got != want {
-		t.Fatalf("agent_harness = %q, want %q", got, want)
-	}
-	if got, want := parsed["agent_command"], "claude-custom"; got != want {
-		t.Fatalf("agent_command = %q, want %q", got, want)
+	for _, secret := range []string{"valid_hub_token", "malformed_token", "malformed_github_token"} {
+		if strings.Contains(output, secret) {
+			t.Fatal("credential leaked in startup output")
+		}
 	}
 }
 

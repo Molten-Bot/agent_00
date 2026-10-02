@@ -8,8 +8,15 @@ import (
 )
 
 func TestPrepareDefaultRootsRunsWithoutError(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv(workspaceRAMBaseEnv, base)
+	t.Setenv(workspaceDiskBaseEnv, base)
+	t.Setenv(workspaceRootNameEnv, defaultWorkspaceRoot)
 	if err := PrepareDefaultRoots(); err != nil {
 		t.Fatalf("PrepareDefaultRoots() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, defaultWorkspaceRoot)); err != nil {
+		t.Fatalf("workspace root was not created: %v", err)
 	}
 }
 

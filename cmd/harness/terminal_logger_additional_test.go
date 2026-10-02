@@ -14,6 +14,8 @@ func TestNewDefaultTaskLogMirrorAndDefaultTerminalLogger(t *testing.T) {
 		t.Fatalf("Getwd() error = %v", err)
 	}
 	tmp := t.TempDir()
+	t.Setenv("HARNESS_WORKSPACE_RAM_BASE", tmp)
+	t.Setenv("HARNESS_WORKSPACE_DISK_BASE", tmp)
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatalf("Chdir(%q) error = %v", tmp, err)
 	}

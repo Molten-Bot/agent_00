@@ -16,7 +16,7 @@ func codexCommand(targetDir, prompt string) execx.Command {
 }
 
 func codexCommandWithOptions(targetDir, prompt string, opts codexRunOptions) execx.Command {
-	rel, err := filepath.Rel("/tmp/agent_00/tasks", targetDir)
+	rel, err := filepath.Rel(testRunDir(""), targetDir)
 	if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../") {
 		opts.WorkspaceDir = testRunDir(strings.Split(rel, string(filepath.Separator))[0])
 	}
