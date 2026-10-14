@@ -46,13 +46,13 @@ func TestRunMultiplexReturnsFirstSessionFailureExitCode(t *testing.T) {
 	}
 }
 
-func TestRunHubReturnsSuccessWhenPingPrecheckFailsInHeadlessNoHubMode(t *testing.T) {
+func TestRunServerRejectsDisabledListener(t *testing.T) {
 	origArgs := os.Args
 	t.Cleanup(func() { os.Args = origArgs })
 
 	dir := t.TempDir()
 	initPath := filepath.Join(dir, "init.json")
-	data := `{"base_url":"http://127.0.0.1:1/v1"}`
+	data := `{}`
 	if err := os.WriteFile(initPath, []byte(data), 0o644); err != nil {
 		t.Fatalf("WriteFile(init) error = %v", err)
 	}
@@ -61,12 +61,9 @@ func TestRunHubReturnsSuccessWhenPingPrecheckFailsInHeadlessNoHubMode(t *testing
 	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", "")
 	t.Setenv("HARNESS_AGENT_HARNESS", "")
 	t.Setenv("HARNESS_AGENT_COMMAND", "")
-	t.Setenv("MOLTEN_HUB_TOKEN", "")
-	t.Setenv("MOLTEN_HUB_REGION", "")
-	t.Setenv("MOLTEN_HUB_URL", "")
-	os.Args = []string{"harness", "hub", "--init", initPath, "--ui-listen", ""}
+	os.Args = []string{"harness", "serve", "--init", initPath, "--ui-listen", ""}
 
-	if code := run(); code != app.ExitSuccess {
-		t.Fatalf("run() = %d, want %d", code, app.ExitSuccess)
+	if code := run(); code != app.ExitUsage {
+		t.Fatalf("run() = %d, want %d", code, app.ExitUsage)
 	}
 }

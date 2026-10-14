@@ -273,7 +273,7 @@ func TestRuntimeDockerfileUsesDebianBaseImages(t *testing.T) {
 	content := string(data)
 	for _, want := range []string{
 		"FROM golang:1.26.5-trixie AS build",
-		"COPY go.mod go.sum ./",
+		"COPY go.mod ./",
 		"FROM node:26.5.0-trixie-slim AS runtime",
 		"apt-get update",
 		"apt-get upgrade -y --no-install-recommends",

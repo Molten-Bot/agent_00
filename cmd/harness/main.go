@@ -7,14 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -26,8 +23,8 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/githubreview"
-	"github.com/Molten-Bot/agent_00/internal/hub"
 	"github.com/Molten-Bot/agent_00/internal/library"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/multiplex"
 	"github.com/Molten-Bot/agent_00/internal/web"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
@@ -35,17 +32,9 @@ import (
 
 const failureFollowUpRequiredPrompt = failurefollowup.RequiredPrompt
 
-const hubBootRecommendation = "Recommended: connect this runtime to Molten Hub at https://molten.bot/hub so agents can dispatch work to it."
-const hubPingLocalOnlyDetail = "Hub endpoint ping precheck failed; continuing in local-only mode. Use the local UI/API to submit tasks."
-const hubPingRemoteContinueDetail = "Hub endpoint ping precheck failed; continuing remote startup because Hub credentials are configured and UI is disabled."
-const hubPingHeadlessNoopDetail = "Hub endpoint ping precheck failed with UI disabled and no Hub credentials configured; startup completed without remote transport."
 const gitHubCLIPackageLabel = "github-cli (gh)"
 const gitHubCLIAuthRecommendation = "Run `gh auth login` (the GitHub CLI binary from the `github-cli` package) or set GH_TOKEN before dispatching tasks."
 const followUpTaskLogArchiveSubdir = "followup"
-const hubSetupLocationsURL = "https://molten.bot/hubs.json"
-const moltenHubTokenEnv = "MOLTEN_HUB_TOKEN"
-const moltenHubURLEnv = "MOLTEN_HUB_URL"
-const moltenHubRegionEnv = "MOLTEN_HUB_REGION"
 const localSubmitSource = "local_submit"
 const reviewWatchSource = "github_review_watch"
 const prReviewFeedbackSource = "pr_review_feedback"
@@ -54,39 +43,12 @@ const failureFollowUpSource = "failure_followup"
 const noChangesFollowUpSource = "no_changes_followup"
 const noChangesEscalationSource = "no_changes_escalation"
 const automaticFailureRerunDisabledReason = "automatic failure rerun disabled; queue failure follow-up in agent_00"
-const localTransportOfflineReasonExecutionFailure = "task_execution_failure"
-const localFailurePublishTimeout = 75 * time.Second
-
-const hubBootDiagnosticTimeout = 10 * time.Second
-const hubPingDiagnosticTimeout = 5 * time.Second
-const hubPingRetryInterval = 12 * time.Second
-const agentAuthReadyRetryInterval = 2 * time.Second
-const hubSetupLocationsFetchTimeout = 2 * time.Second
-const hubSetupLocationsCacheTTL = 5 * time.Minute
-
-type hubSetupLocation struct {
-	Display string `json:"display"`
-	Key     string `json:"key"`
-	Domain  string `json:"domain"`
-}
-
-var defaultHubSetupLocations = []hubSetupLocation{
-	{Display: "North America", Key: "na", Domain: "na.hub.molten.bot"},
-	{Display: "Europe", Key: "eu", Domain: "eu.hub.molten.bot"},
-}
-
-var hubSetupLocationsLoader = fetchHubSetupLocations
+const bootDiagnosticTimeout = 10 * time.Second
 
 var runSingleHarness = func(ctx context.Context, cfg config.Config, logf func(string, ...any)) app.Result {
 	h := app.New(execx.OSRunner{})
 	h.Logf = logf
 	return h.Run(ctx, cfg)
-}
-
-var hubSetupLocationsCache struct {
-	mu        sync.Mutex
-	locations []hubSetupLocation
-	fetchedAt time.Time
 }
 
 func main() {
@@ -112,12 +74,12 @@ func run() int {
 			return app.ExitWorkspace
 		}
 		return runMultiplex(os.Args[2:])
-	case "hub":
+	case "serve":
 		if err := workspace.PrepareDefaultRoots(); err != nil {
 			fmt.Fprintf(os.Stderr, "workspace init error: %v\n", err)
 			return app.ExitWorkspace
 		}
-		return runHub(os.Args[2:])
+		return runServer(os.Args[2:])
 	default:
 		printUsage()
 		return app.ExitUsage
@@ -127,7 +89,7 @@ func run() int {
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "usage: harness run --config <path-to-json>")
 	fmt.Fprintln(os.Stderr, "   or: harness multiplex --config <path-or-dir> [--config <path-or-dir> ...] [--parallel <n>]")
-	fmt.Fprintln(os.Stderr, "   or: harness hub [--init <path-to-init-json> | --config <path-to-config-json>] [--parallel <n>] [--ui-listen <host:port>] [--ui-automatic]")
+	fmt.Fprintln(os.Stderr, "   or: harness serve [--init <path-to-init-json> | --config <path-to-config-json>] [--parallel <n>] [--ui-listen <host:port>] [--ui-automatic]")
 }
 
 func runSingle(args []string) int {
@@ -260,20 +222,24 @@ func runMultiplex(args []string) int {
 	return result.ExitCode()
 }
 
-func runHub(args []string) int {
-	fs := flag.NewFlagSet("hub", flag.ContinueOnError)
+func runServer(args []string) int {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	initPath := fs.String("init", "", "Path to hub init JSON")
-	configPath := fs.String("config", "", "Path to hub runtime config JSON")
+	initPath := fs.String("init", "", "Path to local init JSON")
+	configPath := fs.String("config", "", "Path to local runtime config JSON")
 	parallel := fs.Int("parallel", 0, "Optional override for dispatcher max parallel workers")
-	uiListen := fs.String("ui-listen", "127.0.0.1:7777", "Optional monitor web UI listen address (empty to disable)")
+	uiListen := fs.String("ui-listen", "127.0.0.1:7777", "Local web UI listen address")
 	uiAutomatic := fs.Bool("ui-automatic", false, "Hide the browser Studio form and run the monitor UI in automatic mode")
 
 	if err := fs.Parse(args); err != nil {
 		return app.ExitUsage
 	}
-	cfg, exitCode, err := loadHubBootConfig(*initPath, *configPath)
+	if strings.TrimSpace(*uiListen) == "" {
+		fmt.Fprintln(os.Stderr, "serve requires --ui-listen; use run or multiplex for noninteractive tasks")
+		return app.ExitUsage
+	}
+	cfg, exitCode, err := loadServerBootConfig(*initPath, *configPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return exitCode
@@ -286,11 +252,11 @@ func runHub(args []string) int {
 	defer logger.Close()
 	runner := execx.OSRunner{}
 	monitorBroker := web.NewBroker()
-	logLevel, err := hub.ParseLogLevel(cfg.LogLevel)
+	logLevel, err := localruntime.ParseLogLevel(cfg.LogLevel)
 	if err != nil {
-		logLevel = hub.LogLevelInfo
+		logLevel = localruntime.LogLevelInfo
 	}
-	logRouter := newHubLogRouter(logger, monitorBroker, logLevel)
+	logRouter := newRuntimeLogRouter(logger, monitorBroker, logLevel)
 	daemonLogger := logRouter.Printf
 
 	runtimeCfg, runtimeErr := agentruntime.Resolve(cfg.AgentHarness, cfg.AgentCommand)
@@ -307,16 +273,7 @@ func runHub(args []string) int {
 		authGate = newAgentAuthGate(ctx, runner, runtimeCfg, cfg, daemonLogger)
 	}
 
-	runtimeCfgLoader := func() (hub.RuntimeConfig, error) {
-		return hub.LoadRuntimeConfig(cfg.RuntimeConfigPath)
-	}
-	hubConfigured := hubCredentialsConfigured(cfg, runtimeCfgLoader)
-	hubConfiguredNow := func() bool {
-		return hubCredentialsConfigured(cfg, runtimeCfgLoader)
-	}
-	var hubPingLive <-chan struct{}
-
-	dispatchController := hub.NewAdaptiveDispatchController(cfg.Dispatcher, daemonLogger)
+	dispatchController := localruntime.NewAdaptiveDispatchController(cfg.Dispatcher, daemonLogger)
 	dispatchController.Start(ctx)
 
 	logRoot := ""
@@ -328,7 +285,6 @@ func runHub(args []string) int {
 	var queueFailureFollowUp func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string)
 	var queueUnexpectedNoChangesFollowUp func(requestID string, result app.Result, runCfg config.Config)
 	var queueEscalatedNoChangesFollowUp func(requestID string, result app.Result, runCfg config.Config)
-	hubRuntimeConnected := func() bool { return false }
 	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error)
 	enqueueLocalRun = func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error) {
 		if authGate != nil {
@@ -344,12 +300,12 @@ func runHub(args []string) int {
 			}
 		}
 
-		activeCfg, err := effectiveHubSetupConfig(cfg)
+		activeCfg, err := effectiveRuntimeConfig(cfg)
 		if err != nil {
 			return "", fmt.Errorf("load runtime config: %w", err)
 		}
 		runCfg = applyDefaultAgentRuntimeConfig(runCfg, activeCfg)
-		runCfg, err = hub.ApplyBoundAgentRuntime(runCfg, activeCfg)
+		runCfg, err = localruntime.ApplyBoundAgentRuntime(runCfg, activeCfg)
 		if err != nil {
 			return "", err
 		}
@@ -414,7 +370,7 @@ func runHub(args []string) int {
 		go func(
 			requestID string,
 			runCfg config.Config,
-			activeCfg hub.InitConfig,
+			activeCfg localruntime.InitConfig,
 			dedupeKey string,
 			source string,
 			allowFailureFollowUp bool,
@@ -446,8 +402,6 @@ func runHub(args []string) int {
 								ExitCode: app.ExitPreflight,
 								Err:      fmt.Errorf("dispatch wait: %w", waitErr),
 							}
-							publishLocalRunFailureResult(runCtx, activeCfg, requestID, failedResult, hubRuntimeConnected, daemonLogger)
-							markLocalRunRuntimeOffline(runCtx, activeCfg, requestID, hubRuntimeConnected, daemonLogger)
 							if allowFailureFollowUp {
 								if queueFailureRerun != nil {
 									queueFailureRerun(requestID, failedResult, runCfg, source)
@@ -498,8 +452,6 @@ func runHub(args []string) int {
 							ExitCode: app.ExitPreflight,
 							Err:      fmt.Errorf("dispatch acquire: %w", acquireErr),
 						}
-						publishLocalRunFailureResult(runCtx, activeCfg, requestID, failedResult, hubRuntimeConnected, daemonLogger)
-						markLocalRunRuntimeOffline(runCtx, activeCfg, requestID, hubRuntimeConnected, daemonLogger)
 						if allowFailureFollowUp {
 							if queueFailureRerun != nil {
 								queueFailureRerun(requestID, failedResult, runCfg, source)
@@ -515,12 +467,11 @@ func runHub(args []string) int {
 				if taskHandle != nil {
 					taskHandle.SetRunning(true)
 				}
-				recordLocalRunStartedActivity(runCtx, activeCfg, runCfg, requestID, hubRuntimeConnected, daemonLogger)
 				finalReviewPasses := activeCfg.ReviewWatch.ReviewCount()
-				if startCfg, startCfgErr := effectiveHubSetupConfig(activeCfg); startCfgErr == nil {
+				if startCfg, startCfgErr := effectiveRuntimeConfig(activeCfg); startCfgErr == nil {
 					finalReviewPasses = startCfg.ReviewWatch.ReviewCount()
 				}
-				outcome := runLocalDispatch(runCtx, runner, daemonLogger, cfg.Skill.Name, requestID, runCfg, finalReviewPasses, func() bool {
+				outcome := runLocalDispatch(runCtx, runner, daemonLogger, "local", requestID, runCfg, finalReviewPasses, func() bool {
 					if taskHandle == nil {
 						return false
 					}
@@ -534,8 +485,6 @@ func runHub(args []string) int {
 				finalState = outcome.State
 				switch outcome.State {
 				case "error":
-					publishLocalRunFailureResult(runCtx, activeCfg, requestID, outcome.Result, hubRuntimeConnected, daemonLogger)
-					markLocalRunRuntimeOffline(runCtx, activeCfg, requestID, hubRuntimeConnected, daemonLogger)
 					if allowFailureFollowUp {
 						if queueFailureRerun != nil {
 							queueFailureRerun(requestID, outcome.Result, runCfg, source)
@@ -556,10 +505,7 @@ func runHub(args []string) int {
 							failureResult.PRURL,
 							failureResult.Err,
 						)
-						publishLocalRunFailureResult(runCtx, activeCfg, requestID, failureResult, hubRuntimeConnected, daemonLogger)
-						markLocalRunRuntimeOffline(runCtx, activeCfg, requestID, hubRuntimeConnected, daemonLogger)
 					} else {
-						recordLocalRunCompletedActivity(runCtx, activeCfg, runCfg, requestID, hubRuntimeConnected, daemonLogger)
 					}
 					if source != noChangesFollowUpSource && source != noChangesEscalationSource && queueUnexpectedNoChangesFollowUp != nil {
 						queueUnexpectedNoChangesFollowUp(requestID, outcome.Result, runCfg)
@@ -570,7 +516,6 @@ func runHub(args []string) int {
 						}
 					}
 				case "completed":
-					recordLocalRunCompletedActivity(runCtx, activeCfg, runCfg, requestID, hubRuntimeConnected, daemonLogger)
 				}
 				return
 			}
@@ -710,85 +655,6 @@ func runHub(args []string) int {
 		)
 	}
 
-	hubController := newHubDaemonController(ctx, runner)
-	hubRuntimeConnected = hubController.Running
-	hubController.logf = daemonLogger
-	hubController.dispatchController = dispatchController
-	hubController.taskLogRoot = logRoot
-	hubController.registerTaskControl = func(requestID string, cancel context.CancelCauseFunc) hub.DispatchTaskControl {
-		return localTaskController.Register(requestID, cancel)
-	}
-	hubController.registerTaskAliases = localTaskController.RegisterAliases
-	hubController.cancelTaskControl = func(requestID string) (string, bool) {
-		canonical, err := localTaskController.StopWithCanonical(requestID)
-		if err != nil {
-			return firstNonEmptyString(canonical, requestID), false
-		}
-		return canonical, true
-	}
-	hubController.completeTaskControl = localTaskController.Complete
-	hubController.onDispatchQueued = func(requestID string, runCfg config.Config) {
-		if runConfigJSON, ok := marshalRunConfigJSON(runCfg); ok {
-			monitorBroker.RecordTaskRunConfigWithSource(requestID, runConfigJSON, "hub")
-		}
-	}
-	hubController.onDispatchFailed = func(requestID string, runCfg config.Config, result app.Result) {
-		if queueFailureFollowUp != nil {
-			queueFailureFollowUp(requestID, result, runCfg, "hub_dispatch")
-		}
-	}
-
-	// Hub transport uses its own bind/agent credentials. Agent CLI authorization
-	// controls task execution only and must not prevent websocket startup.
-	hubUpdate := func(reqCtx context.Context, updateCfg hub.InitConfig) error {
-		return applyEffectiveHubSetupConfig(reqCtx, updateCfg, effectiveHubSetupConfig, hubController.Update)
-	}
-	effectiveHubUpdate := func(reqCtx context.Context) error {
-		return applyEffectiveHubSetupConfig(reqCtx, cfg, effectiveHubSetupConfig, hubUpdate)
-	}
-
-	hubRuntimeReloader := newHubRuntimeConfigReloader(cfg, hubUpdate, hubController.Stop, daemonLogger)
-	go hubRuntimeReloader.Run(ctx, hubRuntimeConfigReloadInterval)
-
-	waitForHubRuntime := func() int {
-		pingLive := hubPingLive
-		for {
-			select {
-			case <-ctx.Done():
-				return app.ExitSuccess
-			case <-pingLive:
-				pingLive = nil
-				if !hubConfiguredNow() {
-					continue
-				}
-				if err := effectiveHubUpdate(ctx); err != nil {
-					if shouldFallbackToLocalOnlyMode(*uiListen, err) {
-						daemonLogger(
-							"hub.auth status=local_only detail=%q",
-							"Remote hub auth failed; continuing in local-only mode. Use the local UI/API to submit tasks.",
-						)
-						continue
-					}
-					writeStderrLine(logger, fmt.Sprintf("error: %v", err))
-					return hubExitCode(err)
-				}
-			case err := <-hubController.Errors():
-				if err == nil {
-					continue
-				}
-				if shouldFallbackToLocalOnlyMode(*uiListen, err) {
-					daemonLogger(
-						"hub.auth status=local_only detail=%q",
-						"Remote hub auth failed; continuing in local-only mode. Use the local UI/API to submit tasks.",
-					)
-					continue
-				}
-				writeStderrLine(logger, fmt.Sprintf("error: %v", err))
-				return hubExitCode(err)
-			}
-		}
-	}
-
 	var reviewWatcher *githubreview.Watcher
 	if strings.TrimSpace(*uiListen) != "" {
 		uiServer := web.NewServer(*uiListen, monitorBroker)
@@ -802,7 +668,7 @@ func runHub(args []string) int {
 			if err != nil {
 				return nil, err
 			}
-			usage := hub.ReadRuntimeConfigLibraryTaskUsage(cfg.RuntimeConfigPath)
+			usage := localruntime.ReadRuntimeConfigLibraryTaskUsage(cfg.RuntimeConfigPath)
 			return library.OrderSummariesByUsage(catalog.Summaries(), usage), nil
 		}
 		cleanupTaskLogs := func(_ context.Context, requestID string) error {
@@ -840,28 +706,13 @@ func runHub(args []string) int {
 				uiServer.ConfigureAgentAuth = authGate.Configure
 			}
 		}
-		uiServer.HubSetupStatus = func(reqCtx context.Context) (web.HubSetupState, error) {
-			return currentHubSetupStateWithRemoteProfile(reqCtx, cfg), nil
-		}
-		uiServer.RenderHubSetupStatus = func(context.Context) (web.HubSetupState, error) {
-			return currentHubSetupState(cfg), nil
-		}
-		uiServer.ConfigureHubSetup = func(reqCtx context.Context, req web.HubSetupRequest) (web.HubSetupState, error) {
-			return configureHubSetup(reqCtx, cfg, req, hubUpdate)
-		}
-		uiServer.ConnectHubSetup = func(reqCtx context.Context) (web.HubSetupState, error) {
-			return connectHubSetup(reqCtx, cfg, hubUpdate)
-		}
-		uiServer.DisconnectHubSetup = func(reqCtx context.Context) (web.HubSetupState, error) {
-			return disconnectHubSetup(reqCtx, cfg, hubController.Stop)
-		}
 		uiServer.ReviewSettingsStatus = func(context.Context) (web.ReviewSettingsState, error) {
 			return currentReviewSettingsState(cfg), nil
 		}
 		uiServer.ConfigureReviewSettings = func(_ context.Context, req web.ReviewSettingsRequest) (web.ReviewSettingsState, error) {
 			state, err := configureReviewSettings(cfg, req)
 			if err == nil && reviewWatcher != nil {
-				activeCfg, loadErr := effectiveHubSetupConfig(cfg)
+				activeCfg, loadErr := effectiveRuntimeConfig(cfg)
 				if loadErr != nil {
 					err = loadErr
 				} else {
@@ -874,12 +725,12 @@ func runHub(args []string) int {
 			if strings.TrimSpace(runCfg.LibraryTaskName) == "" {
 				return
 			}
-			if err := hub.IncrementRuntimeConfigLibraryTaskUsage(cfg.RuntimeConfigPath, cfg, runCfg.LibraryTaskName); err != nil {
+			if err := localruntime.IncrementRuntimeConfigLibraryTaskUsage(cfg.RuntimeConfigPath, cfg, runCfg.LibraryTaskName); err != nil {
 				daemonLogger("library.usage status=warn task=%s err=%q", runCfg.LibraryTaskName, err)
 			}
 		}
 		uiServer.SubmitLocalPrompt = func(reqCtx context.Context, body []byte) (string, error) {
-			runCfg, err := hub.ParseRunConfigJSON(body)
+			runCfg, err := localruntime.ParseRunConfigJSON(body)
 			if err != nil {
 				return "", fmt.Errorf("invalid run config: %w", err)
 			}
@@ -887,7 +738,7 @@ func runHub(args []string) int {
 			return enqueueLocalRun(reqCtx, runCfg, true, localSubmitSource, false)
 		}
 		uiServer.SubmitTaskRerun = func(reqCtx context.Context, _ string, body []byte, force bool) (string, error) {
-			runCfg, err := hub.ParseRunConfigJSON(body)
+			runCfg, err := localruntime.ParseRunConfigJSON(body)
 			if err != nil {
 				return "", fmt.Errorf("invalid run config: %w", err)
 			}
@@ -927,7 +778,7 @@ func runHub(args []string) int {
 		}
 		go func() {
 			if err := uiServer.Run(ctx); err != nil {
-				daemonLogger("hub.ui status=error err=%q", err)
+				daemonLogger("localruntime.ui status=error err=%q", err)
 			}
 		}()
 		select {
@@ -936,7 +787,7 @@ func runHub(args []string) int {
 				writeStderrLine(logger, fmt.Sprintf("error: %v", err))
 				return app.ExitPreflight
 			}
-			daemonLogger("hub.ui status=ready url=%s", monitorURL(*uiListen))
+			daemonLogger("localruntime.ui status=ready url=%s", monitorURL(*uiListen))
 		case <-ctx.Done():
 			return app.ExitSuccess
 		}
@@ -946,7 +797,7 @@ func runHub(args []string) int {
 			Logf:        daemonLogger,
 			CleanupTask: cleanupTaskLogs,
 			DeleteMergedBranchesEnabled: func() bool {
-				activeCfg, err := effectiveHubSetupConfig(cfg)
+				activeCfg, err := effectiveRuntimeConfig(cfg)
 				if err != nil {
 					activeCfg = cfg
 				}
@@ -958,7 +809,7 @@ func runHub(args []string) int {
 				if !ok {
 					return "", fmt.Errorf("stored run config not found for request %s", task.RequestID)
 				}
-				originalCfg, err := hub.ParseRunConfigJSON(runConfigJSON)
+				originalCfg, err := localruntime.ParseRunConfigJSON(runConfigJSON)
 				if err != nil {
 					return "", fmt.Errorf("parse stored run config for request %s: %w", task.RequestID, err)
 				}
@@ -971,116 +822,70 @@ func runHub(args []string) int {
 		}
 		go func() {
 			if err := prMonitor.Run(ctx); err != nil {
-				daemonLogger("hub.ui status=warn event=pr_monitor err=%q", err)
+				daemonLogger("localruntime.ui status=warn event=pr_monitor err=%q", err)
 			}
 		}()
 	}
 
 	maybeStartAgentAuth(ctx, runtimeCfg, authGate, daemonLogger)
 	reviewWatcherCfg := cfg
-	if activeCfg, err := effectiveHubSetupConfig(cfg); err == nil {
+	if activeCfg, err := effectiveRuntimeConfig(cfg); err == nil {
 		reviewWatcherCfg = activeCfg
 	} else {
 		daemonLogger("review_watch status=warn action=load_runtime_config err=%q", err)
 	}
 	reviewWatcher = startGitHubReviewWatcher(ctx, runner, reviewWatcherCfg, enqueueLocalRun, daemonLogger)
-	bootDiag := runHubBootDiagnosticsWithRuntimeLoaderDetailed(ctx, runner, daemonLogger, cfg, runtimeCfgLoader)
-	forceLocalOnlyMode := shouldRunHubInLocalOnlyMode(bootDiag.PingChecked, bootDiag.PingOK, *uiListen, hubConfigured)
-	if bootDiag.PingChecked && !bootDiag.PingOK {
-		if pingURL, pingURLErr := hubPingURL(cfg.BaseURL); pingURLErr == nil {
-			hubPingLive = startHubPingRetryLoop(ctx, cfg.BaseURL, pingURL, bootDiag.PingErr, daemonLogger, checkHubPing)
-		}
-		if forceLocalOnlyMode {
-			daemonLogger("hub.auth status=local_only detail=%q", hubPingFailureDetail(hubPingLocalOnlyDetail, bootDiag.PingErr))
-		} else {
-			daemonLogger("boot.diagnosis status=warn requirement=moltenhub_ping detail=%q", hubPingFailureDetail(hubPingRemoteContinueDetail, bootDiag.PingErr))
-		}
-	}
-
-	if forceLocalOnlyMode {
-		if strings.TrimSpace(*uiListen) == "" {
-			daemonLogger("hub.auth status=local_only detail=%q", hubPingFailureDetail(hubPingHeadlessNoopDetail, bootDiag.PingErr))
-			return app.ExitSuccess
-		}
-		return waitForHubRuntime()
-	}
-
-	if !hubConfigured {
-		daemonLogger(
-			"hub.auth status=local_only detail=%q",
-			"No bind_token/agent_token configured; skipping remote hub connection. Use the local UI/API to submit tasks.",
-		)
-		if strings.TrimSpace(*uiListen) == "" {
-			writeStderrLine(
-				logger,
-				"error: hub auth not configured and UI disabled; set bind_token/agent_token (or persisted runtime config) or enable --ui-listen",
-			)
-			return app.ExitAuth
-		}
-		return waitForHubRuntime()
-	}
-
-	if bootDiag.PingChecked && !bootDiag.PingOK && hubPingLive != nil {
-		return waitForHubRuntime()
-	}
-
-	if err := effectiveHubUpdate(ctx); err != nil {
-		if shouldFallbackToLocalOnlyMode(*uiListen, err) {
-			daemonLogger(
-				"hub.auth status=local_only detail=%q",
-				"Remote hub auth failed; continuing in local-only mode. Use the local UI/API to submit tasks.",
-			)
-			return waitForHubRuntime()
-		}
-		writeStderrLine(logger, fmt.Sprintf("error: %v", err))
-		return hubExitCode(err)
-	}
-	return waitForHubRuntime()
+	runBootDiagnostics(ctx, runner, daemonLogger, cfg)
+	<-ctx.Done()
+	return app.ExitSuccess
 }
 
-func loadHubBootConfig(initPath, configPath string) (hub.InitConfig, int, error) {
+func loadServerBootConfig(initPath, configPath string) (localruntime.InitConfig, int, error) {
 	initPath = strings.TrimSpace(initPath)
 	configPath = strings.TrimSpace(configPath)
 
 	if initPath != "" && configPath != "" {
-		return hub.InitConfig{}, app.ExitUsage, fmt.Errorf("provide only one of --init or --config")
+		return localruntime.InitConfig{}, app.ExitUsage, fmt.Errorf("provide only one of --init or --config")
 	}
 
 	if configPath != "" {
-		return finalizeHubBootConfig(loadHubBootRuntimeConfigOrDefault(configPath))
+		return finalizeServerBootConfig(loadServerBootRuntimeConfigOrDefault(configPath))
 	}
 
 	if initPath != "" {
-		cfg, err := hub.LoadInit(initPath)
+		cfg, err := localruntime.LoadInit(initPath)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				runtimePath := hub.ResolveRuntimeConfigPath(initPath)
-				runtimeCfg, runtimeErr := hub.LoadRuntimeConfig(runtimePath)
+				runtimePath := localruntime.ResolveRuntimeConfigPath(initPath)
+				runtimeCfg, runtimeErr := localruntime.LoadRuntimeConfig(runtimePath)
 				if runtimeErr == nil {
 					cfg := runtimeCfg.Init()
 					cfg.RuntimeConfigPath = runtimeCfg.RuntimeConfigPath
-					return finalizeHubBootConfig(cfg, app.ExitSuccess, nil)
+					return finalizeServerBootConfig(cfg, app.ExitSuccess, nil)
 				}
-				return finalizeHubBootConfig(loadHubBootRuntimeConfigOrDefault(runtimePath))
+				return finalizeServerBootConfig(loadServerBootRuntimeConfigOrDefault(runtimePath))
 			}
-			return hub.InitConfig{}, app.ExitConfig, fmt.Errorf("init config error: %w", err)
+			return localruntime.InitConfig{}, app.ExitConfig, fmt.Errorf("init config error: %w", err)
 		}
-		cfg.RuntimeConfigPath = hub.ResolveRuntimeConfigPath(initPath)
-		cfg.LogLevel = configuredHubLogLevel(cfg.LogLevel, cfg.RuntimeConfigPath)
-		return finalizeHubBootConfig(cfg, app.ExitSuccess, nil)
+		cfg.RuntimeConfigPath = localruntime.ResolveRuntimeConfigPath(initPath)
+		cfg.LogLevel = configuredLogLevel(cfg.LogLevel, cfg.RuntimeConfigPath)
+		return finalizeServerBootConfig(cfg, app.ExitSuccess, nil)
 	}
 
-	return finalizeHubBootConfig(loadHubBootRuntimeConfigOrDefault(""))
+	return finalizeServerBootConfig(loadServerBootRuntimeConfigOrDefault(""))
 }
 
-func loadHubBootRuntimeConfigOrDefault(path string) (hub.InitConfig, int, error) {
-	runtimeCfg, err := hub.LoadRuntimeConfig(path)
+func loadServerBootRuntimeConfigOrDefault(path string) (localruntime.InitConfig, int, error) {
+	runtimeCfg, err := localruntime.LoadRuntimeConfig(path)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return localruntime.InitConfig{}, app.ExitConfig, err
+		}
 		resolvedPath := strings.TrimSpace(path)
 		if resolvedPath == "" {
-			resolvedPath = hub.ResolveRuntimeConfigPath("")
+			resolvedPath = localruntime.ResolveRuntimeConfigPath("")
 		}
-		return defaultHubBootConfig(resolvedPath)
+		return defaultServerBootConfig(resolvedPath)
 	}
 
 	cfg := runtimeCfg.Init()
@@ -1088,69 +893,21 @@ func loadHubBootRuntimeConfigOrDefault(path string) (hub.InitConfig, int, error)
 	return cfg, app.ExitSuccess, nil
 }
 
-func finalizeHubBootConfig(cfg hub.InitConfig, exitCode int, err error) (hub.InitConfig, int, error) {
+func finalizeServerBootConfig(cfg localruntime.InitConfig, exitCode int, err error) (localruntime.InitConfig, int, error) {
 	if err != nil {
 		return cfg, exitCode, err
 	}
-	if err := applyMoltenHubEnvBootstrap(&cfg); err != nil {
-		return hub.InitConfig{}, app.ExitConfig, err
-	}
-	return cfg, exitCode, nil
-}
-
-func applyMoltenHubEnvBootstrap(cfg *hub.InitConfig) error {
-	if cfg == nil {
-		return nil
-	}
-
-	githubToken := githubTokenFromEnv()
-	if githubToken != "" {
-		cfg.GitHubToken = githubToken
-	}
-
-	hubToken := moltenHubEnvValue(moltenHubTokenEnv)
-	if hubToken != "" {
-		cfg.AgentToken = hubToken
-		cfg.BindToken = ""
-		if baseURL, err := moltenHubEnvBaseURL(); err != nil {
-			return err
-		} else if baseURL != "" {
-			cfg.BaseURL = baseURL
+	if token := githubTokenFromEnv(); token != "" {
+		cfg.GitHubToken = token
+		if err := localruntime.SaveRuntimeConfigGitHubToken(cfg.RuntimeConfigPath, cfg, token); err != nil {
+			return cfg, app.ExitConfig, err
 		}
 	}
-	if hubToken != "" && strings.TrimSpace(cfg.AgentHarness) == "" {
-		cfg.AgentHarness = agentruntime.Default().Harness
-	}
-
 	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("init config error: %w", err)
+		return cfg, app.ExitConfig, err
 	}
-	if err := persistMoltenHubEnvBootstrap(*cfg, hubToken, githubToken); err != nil {
-		return err
-	}
-	return nil
-}
-
-func persistMoltenHubEnvBootstrap(cfg hub.InitConfig, hubToken, githubToken string) error {
-	runtimeConfigPath := strings.TrimSpace(cfg.RuntimeConfigPath)
-	if runtimeConfigPath == "" {
-		return nil
-	}
-
-	if strings.TrimSpace(hubToken) != "" {
-		if err := hub.SaveRuntimeConfigHubSettings(runtimeConfigPath, cfg, cfg.AgentToken); err != nil {
-			return fmt.Errorf("save runtime config from environment: %w", err)
-		}
-		return nil
-	}
-
-	if strings.TrimSpace(githubToken) != "" {
-		if err := hub.SaveRuntimeConfigGitHubToken(runtimeConfigPath, cfg, githubToken); err != nil {
-			return fmt.Errorf("save github token from environment: %w", err)
-		}
-	}
-	return nil
+	return cfg, exitCode, nil
 }
 
 func githubTokenFromEnv() string {
@@ -1187,37 +944,10 @@ func malformedDockerComposeEnvValue(names ...string) string {
 	return ""
 }
 
-func moltenHubEnvValue(name string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return malformedDockerComposeEnvValue(name)
-}
-
-func moltenHubEnvBaseURL() (string, error) {
-	if rawURL := moltenHubEnvValue(moltenHubURLEnv); rawURL != "" {
-		baseURL, err := hub.CanonicalHubBaseURL(rawURL)
-		if err != nil {
-			return "", fmt.Errorf("%s: %w", moltenHubURLEnv, err)
-		}
-		return baseURL, nil
-	}
-
-	region := strings.ToLower(moltenHubEnvValue(moltenHubRegionEnv))
-	switch region {
-	case "":
-		return "", nil
-	case "na", "eu":
-		return hub.HubBaseURLForRegion(region), nil
-	default:
-		return "", fmt.Errorf("%s must be na or eu", moltenHubRegionEnv)
-	}
-}
-
-func configuredHubLogLevel(preferred, runtimeConfigPath string) string {
-	level := hub.NormalizeLogLevel(preferred)
+func configuredLogLevel(preferred, runtimeConfigPath string) string {
+	level := localruntime.NormalizeLogLevel(preferred)
 	if level == "" {
-		level = hub.DefaultLogLevel
+		level = localruntime.DefaultLogLevel
 	}
 
 	runtimeConfigPath = strings.TrimSpace(runtimeConfigPath)
@@ -1225,13 +955,13 @@ func configuredHubLogLevel(preferred, runtimeConfigPath string) string {
 		return level
 	}
 
-	configured := hub.NormalizeLogLevel(hub.ReadRuntimeConfigString(runtimeConfigPath, "log_level", "logLevel", "LOG_LEVEL"))
+	configured := localruntime.NormalizeLogLevel(localruntime.ReadRuntimeConfigString(runtimeConfigPath, "log_level", "logLevel", "LOG_LEVEL"))
 	if configured != "" {
 		return configured
 	}
 
-	if runtimeCfg, err := hub.LoadRuntimeConfig(runtimeConfigPath); err == nil {
-		if configured = hub.NormalizeLogLevel(runtimeCfg.LogLevel); configured != "" {
+	if runtimeCfg, err := localruntime.LoadRuntimeConfig(runtimeConfigPath); err == nil {
+		if configured = localruntime.NormalizeLogLevel(runtimeCfg.LogLevel); configured != "" {
 			return configured
 		}
 	}
@@ -1239,36 +969,36 @@ func configuredHubLogLevel(preferred, runtimeConfigPath string) string {
 	return level
 }
 
-func defaultHubBootConfig(runtimeConfigPath string) (hub.InitConfig, int, error) {
-	cfg := hub.InitConfig{
+func defaultServerBootConfig(runtimeConfigPath string) (localruntime.InitConfig, int, error) {
+	cfg := localruntime.InitConfig{
 		RuntimeConfigPath: strings.TrimSpace(runtimeConfigPath),
 	}
 	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
-		return hub.InitConfig{}, app.ExitConfig, fmt.Errorf("init config error: %w", err)
+		return localruntime.InitConfig{}, app.ExitConfig, fmt.Errorf("init config error: %w", err)
 	}
 	return cfg, app.ExitSuccess, nil
 }
 
-type hubLogRouter struct {
+type runtimeLogRouter struct {
 	logger *terminalLogger
 	broker *web.Broker
-	level  hub.LogLevel
+	level  localruntime.LogLevel
 }
 
-func newHubLogRouter(logger *terminalLogger, broker *web.Broker, level hub.LogLevel) hubLogRouter {
-	return hubLogRouter{
+func newRuntimeLogRouter(logger *terminalLogger, broker *web.Broker, level localruntime.LogLevel) runtimeLogRouter {
+	return runtimeLogRouter{
 		logger: logger,
 		broker: broker,
 		level:  level,
 	}
 }
 
-func (r hubLogRouter) Printf(format string, args ...any) {
+func (r runtimeLogRouter) Printf(format string, args ...any) {
 	r.Log(strings.TrimSpace(fmt.Sprintf(format, args...)))
 }
 
-func (r hubLogRouter) Log(line string) {
+func (r runtimeLogRouter) Log(line string) {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return
@@ -1278,7 +1008,7 @@ func (r hubLogRouter) Log(line string) {
 		r.broker.IngestLog(line)
 	}
 
-	eventLevel := classifyHubLogLine(line)
+	eventLevel := classifyRuntimeLogLine(line)
 	if !r.level.Allows(eventLevel) {
 		if r.logger != nil {
 			// Keep filtered lines in the task mirror for follow-up diagnostics.
@@ -1292,42 +1022,42 @@ func (r hubLogRouter) Log(line string) {
 	}
 }
 
-func classifyHubLogLine(line string) hub.LogLevel {
+func classifyRuntimeLogLine(line string) localruntime.LogLevel {
 	line = strings.TrimSpace(line)
 	if line == "" {
-		return hub.LogLevelInfo
+		return localruntime.LogLevelInfo
 	}
 
 	lowerLine := strings.ToLower(line)
 	if strings.HasPrefix(lowerLine, "error:") {
-		return hub.LogLevelError
+		return localruntime.LogLevelError
 	}
 	if strings.HasPrefix(lowerLine, "warn:") {
-		return hub.LogLevelWarn
+		return localruntime.LogLevelWarn
 	}
 	if strings.HasPrefix(line, "debug ") {
-		return hub.LogLevelDebug
+		return localruntime.LogLevelDebug
 	}
 
 	fields := parseSimpleKVFields(line)
 	status := strings.ToLower(strings.TrimSpace(fields["status"]))
 	switch status {
 	case "error", "failed", "invalid":
-		return hub.LogLevelError
+		return localruntime.LogLevelError
 	case "warn":
-		return hub.LogLevelWarn
+		return localruntime.LogLevelWarn
 	case "running":
-		return hub.LogLevelDebug
+		return localruntime.LogLevelDebug
 	}
 
-	if shouldClassifyHubDebugLine(line, lowerLine, fields, status) {
-		return hub.LogLevelDebug
+	if shouldClassifyRuntimeDebugLine(line, lowerLine, fields, status) {
+		return localruntime.LogLevelDebug
 	}
 
-	return hub.LogLevelInfo
+	return localruntime.LogLevelInfo
 }
 
-func shouldClassifyHubDebugLine(line, lowerLine string, fields map[string]string, status string) bool {
+func shouldClassifyRuntimeDebugLine(line, lowerLine string, fields map[string]string, status string) bool {
 	if isDebugCommandLogLine(line, fields) {
 		return true
 	}
@@ -1515,9 +1245,6 @@ func shouldQueueFailureFollowUp(source string, failedResult app.Result) (bool, s
 	if source == failureFollowUpSource || source == noChangesEscalationSource {
 		return false, "run is already a failure follow-up"
 	}
-	if source == "hub_dispatch" {
-		return false, "hub dispatch failures are already escalated by hub transport"
-	}
 	if reason := failurefollowup.NonRemediableFailureReason(failedResult.Err); reason != "" {
 		return false, "failure is not remediable by code changes: " + reason
 	}
@@ -1535,8 +1262,6 @@ func shouldQueueFailureRerun(source string, failedResult app.Result) (bool, stri
 	switch source {
 	case failureFollowUpSource, noChangesEscalationSource:
 		return false, "run is already a failure follow-up"
-	case "hub_dispatch":
-		return false, "hub dispatch failures are already rerun by hub transport"
 	case rerunSource:
 		return false, "run is already a failure rerun"
 	}
@@ -2237,50 +1962,6 @@ func monitorURL(addr string) string {
 	return "http://" + addr
 }
 
-func hubExitCode(err error) int {
-	text := strings.ToLower(strings.TrimSpace(err.Error()))
-	switch {
-	case strings.HasPrefix(text, "init config:"):
-		return app.ExitConfig
-	case strings.HasPrefix(text, "hub auth:"):
-		return app.ExitAuth
-	case strings.HasPrefix(text, "hub profile:"):
-		return app.ExitAuth
-	case strings.HasPrefix(text, "hub websocket url:"):
-		return app.ExitConfig
-	default:
-		return app.ExitPreflight
-	}
-}
-
-func shouldFallbackToLocalOnlyMode(uiListen string, err error) bool {
-	if strings.TrimSpace(uiListen) == "" || err == nil {
-		return false
-	}
-	return hubExitCode(err) == app.ExitAuth
-}
-
-func shouldRunHubInLocalOnlyMode(pingPrecheckChecked bool, pingPrecheckOK bool, uiListen string, hubConfigured bool) bool {
-	if !pingPrecheckChecked || pingPrecheckOK {
-		return false
-	}
-	if strings.TrimSpace(uiListen) != "" {
-		return true
-	}
-	return !hubConfigured
-}
-
-func hubPingFailureDetail(base string, pingErr error) string {
-	base = strings.TrimSpace(base)
-	if base == "" {
-		base = "Hub endpoint ping precheck failed."
-	}
-	if pingErr == nil {
-		return base
-	}
-	return fmt.Sprintf("%s Error: %v", base, pingErr)
-}
-
 func joinPRURLs(results []app.RepoResult) string {
 	if len(results) == 0 {
 		return ""
@@ -2316,238 +1997,6 @@ func resultHasPR(result app.Result) bool {
 	return strings.TrimSpace(joinAllPRURLs(result.RepoResults)) != ""
 }
 
-func publishLocalRunFailureResult(ctx context.Context, cfg hub.InitConfig, requestID string, result app.Result, hubConnected func() bool, logf func(string, ...any)) {
-	if result.Err == nil {
-		return
-	}
-	if hubConnected == nil || !hubConnected() {
-		return
-	}
-	token := strings.TrimSpace(cfg.AgentToken)
-	if token == "" {
-		return
-	}
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
-	if baseURL == "" {
-		return
-	}
-	if logf == nil {
-		logf = func(string, ...any) {}
-	}
-
-	publishCtx, cancel := context.WithTimeout(detachedLocalNotificationContext(ctx), localFailurePublishTimeout)
-	defer cancel()
-
-	cfg.ApplyDefaults()
-	if localFailureReplyTarget(cfg) == "" {
-		logf("dispatch status=warn action=publish_failure_result request_id=%s err=%q", requestID, "missing hub reply target")
-		return
-	}
-	client := hub.NewAPIClient(baseURL)
-	if err := client.PublishResult(publishCtx, token, localRunFailurePayload(cfg, requestID, result)); err != nil {
-		logf("dispatch status=warn action=publish_failure_result request_id=%s err=%q", requestID, err)
-		return
-	}
-	logf("dispatch status=ok action=publish_failure_result request_id=%s", requestID)
-}
-
-func localRunFailurePayload(cfg hub.InitConfig, requestID string, result app.Result) map[string]any {
-	cfg.ApplyDefaults()
-	errText := "unknown error"
-	if result.Err != nil && strings.TrimSpace(result.Err.Error()) != "" {
-		errText = strings.TrimSpace(result.Err.Error())
-	}
-	message := failureMessage(errText)
-	prURLs := completedPRURLs(result)
-	resultPayload := map[string]any{
-		"exitCode":     result.ExitCode,
-		"workspaceDir": result.WorkspaceDir,
-		"branch":       result.Branch,
-		"prUrl":        result.PRURL,
-		"prUrls":       splitCSV(prURLs),
-		"changedRepos": countChangedRepos(result.RepoResults),
-		"noChanges":    result.NoChanges,
-		"status":       "failed",
-		"message":      message,
-		"response":     message,
-		"error":        errText,
-	}
-	addFailureFields(resultPayload, errText)
-
-	payload := map[string]any{
-		"type":        cfg.Skill.ResultType,
-		"skill":       cfg.Skill.Name,
-		"request_id":  strings.TrimSpace(requestID),
-		"session_key": cfg.SessionKey,
-		"status":      "error",
-		"failed":      true,
-		"ok":          false,
-		"message":     message,
-		"response":    message,
-		"error":       errText,
-		"result":      resultPayload,
-	}
-	if target := localFailureReplyTarget(cfg); target != "" {
-		payload["to_agent_id"] = target
-		payload["target"] = target
-		payload["target_agent"] = target
-	}
-	addFailureFields(payload, errText)
-	failure := map[string]any{
-		"status":  "failed",
-		"message": message,
-		"error":   errText,
-		"details": resultPayload,
-	}
-	addFailureFields(failure, errText)
-	payload["failure"] = failure
-	return payload
-}
-
-func localFailureReplyTarget(cfg hub.InitConfig) string {
-	return strings.TrimSpace(cfg.Handle)
-}
-
-func failureMessage(errText string) string {
-	errText = strings.TrimSpace(errText)
-	if errText == "" {
-		errText = "unknown error"
-	}
-	return "Failure: task failed.\nError details: " + errText
-}
-
-func addFailureFields(payload map[string]any, errText string) {
-	if payload == nil {
-		return
-	}
-	errText = strings.TrimSpace(errText)
-	if errText == "" {
-		errText = "unknown error"
-	}
-	payload["Failure"] = "task failed"
-	payload["Failure:"] = "task failed"
-	payload["Error details"] = errText
-	payload["Error details:"] = errText
-}
-
-func splitCSV(value string) []string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
-}
-
-func recordLocalRunStartedActivity(ctx context.Context, cfg hub.InitConfig, runCfg config.Config, requestID string, hubConnected func() bool, logf func(string, ...any)) {
-	recordLocalRunActivity(
-		ctx,
-		cfg,
-		runCfg,
-		requestID,
-		hubConnected,
-		logf,
-		"record_local_run_started_activity",
-		func(ctx context.Context, client hub.APIClient, token string, runCfg config.Config) error {
-			return client.RecordRunStartedActivity(ctx, token, runCfg)
-		},
-	)
-}
-
-func recordLocalRunCompletedActivity(ctx context.Context, cfg hub.InitConfig, runCfg config.Config, requestID string, hubConnected func() bool, logf func(string, ...any)) {
-	recordLocalRunActivity(
-		ctx,
-		cfg,
-		runCfg,
-		requestID,
-		hubConnected,
-		logf,
-		"record_local_run_completed_activity",
-		func(ctx context.Context, client hub.APIClient, token string, runCfg config.Config) error {
-			return client.RecordRunCompletedActivity(ctx, token, runCfg)
-		},
-	)
-}
-
-func recordLocalRunActivity(
-	ctx context.Context,
-	cfg hub.InitConfig,
-	runCfg config.Config,
-	requestID string,
-	hubConnected func() bool,
-	logf func(string, ...any),
-	action string,
-	record func(context.Context, hub.APIClient, string, config.Config) error,
-) {
-	if hubConnected == nil || !hubConnected() {
-		return
-	}
-	token := strings.TrimSpace(cfg.AgentToken)
-	if token == "" || record == nil {
-		return
-	}
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
-	if baseURL == "" {
-		return
-	}
-	if logf == nil {
-		logf = func(string, ...any) {}
-	}
-
-	activityCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	client := hub.NewAPIClient(baseURL)
-	if err := record(activityCtx, client, token, runCfg); err != nil {
-		logf("dispatch status=warn action=%s request_id=%s err=%q", action, requestID, err)
-	}
-}
-
-func markLocalRunRuntimeOffline(ctx context.Context, cfg hub.InitConfig, requestID string, hubConnected func() bool, logf func(string, ...any)) {
-	if hubConnected == nil || !hubConnected() {
-		return
-	}
-	token := strings.TrimSpace(cfg.AgentToken)
-	if token == "" {
-		return
-	}
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
-	if baseURL == "" {
-		return
-	}
-	if logf == nil {
-		logf = func(string, ...any) {}
-	}
-
-	offlineCtx, cancel := context.WithTimeout(detachedLocalNotificationContext(ctx), 15*time.Second)
-	defer cancel()
-
-	client := hub.NewAPIClient(baseURL)
-	if err := client.MarkRuntimeOffline(offlineCtx, token, cfg.SessionKey, localTransportOfflineReasonExecutionFailure); err != nil {
-		logf("dispatch status=warn action=mark_offline request_id=%s err=%q", requestID, err)
-	} else {
-		logf(
-			"dispatch status=ok action=mark_offline request_id=%s reason=%s",
-			requestID,
-			localTransportOfflineReasonExecutionFailure,
-		)
-	}
-}
-
-func detachedLocalNotificationContext(ctx context.Context) context.Context {
-	if ctx == nil {
-		return context.Background()
-	}
-	return context.WithoutCancel(ctx)
-}
-
 func completedPRURLs(result app.Result) string {
 	if result.NoChanges {
 		return joinAllPRURLs(result.RepoResults)
@@ -2578,8 +2027,6 @@ func marshalRunConfigJSON(cfg config.Config) ([]byte, bool) {
 
 func taskStartSourceForSubmission(source string, runCfg config.Config) string {
 	switch strings.TrimSpace(source) {
-	case "hub_dispatch":
-		return "hub"
 	case reviewWatchSource, prReviewFeedbackSource:
 		return "review"
 	case localSubmitSource:
@@ -2595,7 +2042,7 @@ func taskStartSourceForSubmission(source string, runCfg config.Config) string {
 func startGitHubReviewWatcher(
 	ctx context.Context,
 	runner execx.Runner,
-	cfg hub.InitConfig,
+	cfg localruntime.InitConfig,
 	enqueueLocalRun func(context.Context, config.Config, bool, string, bool) (string, error),
 	logf func(string, ...any),
 ) *githubreview.Watcher {
@@ -2628,7 +2075,7 @@ func startGitHubReviewWatcher(
 	return watcher
 }
 
-func reviewWatcherOptions(cfg hub.ReviewWatchConfig) githubreview.Options {
+func reviewWatcherOptions(cfg localruntime.ReviewWatchConfig) githubreview.Options {
 	cfg.MergeMethod = normalizeReviewSettingsMergeMethod(cfg.MergeMethod)
 	if cfg.MergeMethod == "" {
 		cfg.MergeMethod = "squash"
@@ -2651,46 +2098,19 @@ func reviewWatcherOptions(cfg hub.ReviewWatchConfig) githubreview.Options {
 	}
 }
 
-type runtimeConfigLoader func() (hub.RuntimeConfig, error)
-
-type hubBootDiagnosticsResult struct {
-	PingChecked bool
-	PingOK      bool
-	PingErr     error
-}
-
-func runHubBootDiagnostics(ctx context.Context, runner execx.Runner, logf func(string, ...any), cfg hub.InitConfig) bool {
-	result := runHubBootDiagnosticsWithRuntimeLoaderDetailed(ctx, runner, logf, cfg, func() (hub.RuntimeConfig, error) {
-		return hub.LoadRuntimeConfig(cfg.RuntimeConfigPath)
-	})
-	return result.PingChecked && result.PingOK
-}
-
-func runHubBootDiagnosticsWithRuntimeLoader(
+func runBootDiagnostics(
 	ctx context.Context,
 	runner execx.Runner,
 	logf func(string, ...any),
-	cfg hub.InitConfig,
-	loadRuntimeConfig runtimeConfigLoader,
-) bool {
-	result := runHubBootDiagnosticsWithRuntimeLoaderDetailed(ctx, runner, logf, cfg, loadRuntimeConfig)
-	return result.PingChecked && result.PingOK
-}
-
-func runHubBootDiagnosticsWithRuntimeLoaderDetailed(
-	ctx context.Context,
-	runner execx.Runner,
-	logf func(string, ...any),
-	cfg hub.InitConfig,
-	loadRuntimeConfig runtimeConfigLoader,
-) hubBootDiagnosticsResult {
+	cfg localruntime.InitConfig,
+) {
 	if runner == nil || logf == nil {
-		return hubBootDiagnosticsResult{}
+		return
 	}
 	runtime, err := agentruntime.Resolve(cfg.AgentHarness, cfg.AgentCommand)
 	if err != nil {
 		logf("boot.diagnosis status=error requirement=agent_runtime err=%q", err)
-		return hubBootDiagnosticsResult{}
+		return
 	}
 
 	checks := []struct {
@@ -2710,15 +2130,12 @@ func runHubBootDiagnosticsWithRuntimeLoaderDetailed(
 			cmd:         runtime.PreflightCommand(),
 		},
 	}
-	checkNames := []string{"git_cli", "gh_cli", runtime.RequirementName(), "gh_auth", "moltenhub_ping", "moltenhub_hub"}
+	checkNames := []string{"git_cli", "gh_cli", runtime.RequirementName(), "gh_auth"}
 	logf("boot.diagnosis status=start checks=%s", strings.Join(checkNames, ","))
 
 	failedRequiredChecks := 0
-	pingChecked := false
-	pingOK := true
-	var pingFailureErr error
 	for _, check := range checks {
-		checkCtx, cancel := context.WithTimeout(ctx, hubBootDiagnosticTimeout)
+		checkCtx, cancel := context.WithTimeout(ctx, bootDiagnosticTimeout)
 		res, err := runner.Run(checkCtx, check.cmd)
 		cancel()
 		if err != nil {
@@ -2733,7 +2150,7 @@ func runHubBootDiagnosticsWithRuntimeLoaderDetailed(
 		)
 	}
 
-	authCtx, cancel := context.WithTimeout(ctx, hubBootDiagnosticTimeout)
+	authCtx, cancel := context.WithTimeout(ctx, bootDiagnosticTimeout)
 	authRes, authErr := runner.Run(authCtx, execx.Command{Name: "gh", Args: []string{"auth", "status"}})
 	cancel()
 	if authErr != nil {
@@ -2746,46 +2163,9 @@ func runHubBootDiagnosticsWithRuntimeLoaderDetailed(
 		logf("boot.diagnosis status=ok requirement=gh_auth detail=%q", diagnosticDetailForResult(authRes))
 	}
 
-	pingURL, pingURLErr := hubPingURL(cfg.BaseURL)
-	if pingURLErr != nil {
-		pingChecked = true
-		pingOK = false
-		pingFailureErr = pingURLErr
-		logf("boot.diagnosis status=error requirement=moltenhub_ping err=%q", pingURLErr)
-	} else {
-		pingChecked = true
-		pingCtx, pingCancel := context.WithTimeout(ctx, hubPingDiagnosticTimeout)
-		pingDetail, pingErr := checkHubPing(pingCtx, pingURL)
-		pingCancel()
-		if pingErr != nil {
-			pingOK = false
-			pingFailureErr = pingErr
-			logf("boot.diagnosis status=error requirement=moltenhub_ping err=%q", pingErr)
-		} else {
-			logf("boot.diagnosis status=ok requirement=moltenhub_ping detail=%q", pingDetail)
-		}
-	}
-
-	if hubCredentialsConfigured(cfg, loadRuntimeConfig) {
-		logf(
-			"boot.diagnosis status=ok requirement=moltenhub_hub detail=%q",
-			fmt.Sprintf("Hub endpoint configured: %s", strings.TrimSpace(cfg.BaseURL)),
-		)
-	} else {
-		logf(
-			"boot.diagnosis status=recommendation requirement=moltenhub_hub detail=%q",
-			hubBootRecommendation,
-		)
-	}
-
-	result := hubBootDiagnosticsResult{
-		PingChecked: pingChecked,
-		PingOK:      pingOK,
-		PingErr:     pingFailureErr,
-	}
 	if failedRequiredChecks == 0 {
 		logf("boot.diagnosis status=complete required_checks=ok")
-		return result
+		return
 	}
 	logf(
 		"boot.diagnosis status=warn required_checks=failed count=%d recommendation=%q",
@@ -2796,10 +2176,10 @@ func runHubBootDiagnosticsWithRuntimeLoaderDetailed(
 			strings.TrimSpace(runtime.Command),
 		),
 	)
-	return result
+	return
 }
 
-func applyDefaultAgentRuntimeConfig(runCfg config.Config, initCfg hub.InitConfig) config.Config {
+func applyDefaultAgentRuntimeConfig(runCfg config.Config, initCfg localruntime.InitConfig) config.Config {
 	if strings.TrimSpace(runCfg.AgentHarness) == "" {
 		runCfg.AgentHarness = strings.TrimSpace(initCfg.AgentHarness)
 	}
@@ -2830,7 +2210,7 @@ func maybeStartAgentAuth(ctx context.Context, runtime agentruntime.Runtime, gate
 
 	status, err := gate.Status(ctx)
 	if err != nil {
-		logf("hub.auth status=warn harness=%s action=check err=%q", runtime.Harness, err)
+		logf("localruntime.auth status=warn harness=%s action=check err=%q", runtime.Harness, err)
 		return
 	}
 	if strings.TrimSpace(runtime.Harness) != agentruntime.HarnessClaude {
@@ -2853,7 +2233,7 @@ func maybeStartAgentAuth(ctx context.Context, runtime agentruntime.Runtime, gate
 	started, startErr := gate.StartDeviceAuth(ctx)
 	if startErr != nil {
 		logf(
-			"hub.auth status=warn harness=%s action=start_device_auth err=%q detail=%q",
+			"localruntime.auth status=warn harness=%s action=start_device_auth err=%q detail=%q",
 			runtime.Harness,
 			startErr,
 			firstNonEmptyString(started.Message, status.Message),
@@ -2861,58 +2241,10 @@ func maybeStartAgentAuth(ctx context.Context, runtime agentruntime.Runtime, gate
 		return
 	}
 	logf(
-		"hub.auth status=start harness=%s action=start_device_auth state=%s",
+		"localruntime.auth status=start harness=%s action=start_device_auth state=%s",
 		runtime.Harness,
 		firstNonEmptyString(started.State, "pending_browser_login"),
 	)
-}
-
-func agentAuthReadyForHub(ctx context.Context, gate agentAuthGate) (bool, string, error) {
-	if gate == nil {
-		return true, "", nil
-	}
-	state, err := gate.Status(ctx)
-	if err != nil {
-		return false, "", err
-	}
-	if state.Required && !state.Ready {
-		return false, firstNonEmptyString(state.Message, "complete agent authorization in the UI"), nil
-	}
-	return true, "", nil
-}
-
-func startAgentAuthReadyLoop(ctx context.Context, gate agentAuthGate, logf func(string, ...any)) <-chan struct{} {
-	ready := make(chan struct{})
-	if gate == nil {
-		close(ready)
-		return ready
-	}
-	if logf == nil {
-		logf = func(string, ...any) {}
-	}
-
-	go func() {
-		defer close(ready)
-		ticker := time.NewTicker(agentAuthReadyRetryInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				ok, _, err := agentAuthReadyForHub(ctx, gate)
-				if err != nil {
-					logf("hub.auth status=deferred action=remote_connect err=%q", err)
-					continue
-				}
-				if ok {
-					logf("hub.auth status=ready action=remote_connect")
-					return
-				}
-			}
-		}
-	}()
-	return ready
 }
 
 func shouldEnableAgentAuthConfigure(harness string) bool {
@@ -2943,356 +2275,23 @@ func diagnosticDetailForResult(res execx.Result) string {
 	return "check completed"
 }
 
-func hubPingURL(baseURL string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil {
-		return "", fmt.Errorf("parse base url: %w", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("base url must use http or https")
-	}
-	if strings.TrimSpace(u.Host) == "" {
-		return "", fmt.Errorf("base url host is required")
-	}
-	u.Path = "/ping"
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u.String(), nil
-}
-
-func checkHubPing(ctx context.Context, pingURL string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pingURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("build ping request: %w", err)
-	}
-
-	client := &http.Client{Timeout: hubPingDiagnosticTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("GET %s failed: %w", pingURL, err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-	detail := fmt.Sprintf("%s status=%d", pingURL, resp.StatusCode)
-	if trimmed := strings.TrimSpace(string(body)); trimmed != "" {
-		trimmed = strings.Join(strings.Fields(trimmed), " ")
-		if len(trimmed) > 120 {
-			trimmed = trimmed[:117] + "..."
-		}
-		detail += fmt.Sprintf(" body=%q", trimmed)
-	}
-	if resp.StatusCode/100 != 2 {
-		return "", fmt.Errorf("GET %s returned status=%d", pingURL, resp.StatusCode)
-	}
-	return detail, nil
-}
-
-func startHubPingRetryLoop(
-	ctx context.Context,
-	baseURL string,
-	pingURL string,
-	initialErr error,
-	logf func(string, ...any),
-	pingCheck func(context.Context, string) (string, error),
-) <-chan struct{} {
-	return startHubPingRetryLoopWithInterval(ctx, baseURL, pingURL, initialErr, hubPingRetryInterval, logf, pingCheck)
-}
-
-func startHubPingRetryLoopWithInterval(
-	ctx context.Context,
-	baseURL string,
-	pingURL string,
-	initialErr error,
-	interval time.Duration,
-	logf func(string, ...any),
-	pingCheck func(context.Context, string) (string, error),
-) <-chan struct{} {
-	live := make(chan struct{}, 1)
-	if logf == nil {
-		logf = func(string, ...any) {}
-	}
-	baseURL = strings.TrimSpace(baseURL)
-	pingURL = strings.TrimSpace(pingURL)
-	if interval <= 0 {
-		interval = hubPingRetryInterval
-	}
-	if pingURL == "" {
-		return live
-	}
-	if pingCheck == nil {
-		pingCheck = checkHubPing
-	}
-
-	go func() {
-		logHubPingRetryState(logf, baseURL, interval, initialErr)
-
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-
-			pingCtx, cancel := context.WithTimeout(ctx, hubPingDiagnosticTimeout)
-			detail, err := pingCheck(pingCtx, pingURL)
-			cancel()
-			if err != nil {
-				logHubPingRetryState(logf, baseURL, interval, err)
-				continue
-			}
-
-			logf(
-				"hub.connection status=reachable base_url=%s detail=%q",
-				baseURL,
-				firstNonEmptyString(strings.TrimSpace(detail), "Hub endpoint is live."),
-			)
-			select {
-			case live <- struct{}{}:
-			default:
-			}
-			return
-		}
-	}()
-
-	return live
-}
-
-func logHubPingRetryState(logf func(string, ...any), baseURL string, interval time.Duration, pingErr error) {
-	if logf == nil {
-		return
-	}
-	logf(
-		"hub.connection status=retrying base_url=%s detail=%q",
-		strings.TrimSpace(baseURL),
-		hubPingFailureDetail(
-			fmt.Sprintf("Hub endpoint ping failed; retrying every %s until live.", interval),
-			pingErr,
-		),
-	)
-}
-
-func hubCredentialsConfigured(cfg hub.InitConfig, loadRuntimeConfig runtimeConfigLoader) bool {
-	if strings.TrimSpace(cfg.AgentToken) != "" || strings.TrimSpace(cfg.BindToken) != "" {
-		return true
-	}
-	if loadRuntimeConfig == nil {
-		return false
-	}
-	stored, err := loadRuntimeConfig()
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(stored.AgentToken) != "" || strings.TrimSpace(stored.BindToken) != ""
-}
-
-func currentHubSetupLocations() []hubSetupLocation {
-	hubSetupLocationsCache.mu.Lock()
-	defer hubSetupLocationsCache.mu.Unlock()
-
-	if len(hubSetupLocationsCache.locations) > 0 && time.Since(hubSetupLocationsCache.fetchedAt) < hubSetupLocationsCacheTTL {
-		return cloneHubSetupLocations(hubSetupLocationsCache.locations)
-	}
-
-	locations := cloneHubSetupLocations(defaultHubSetupLocations)
-	if hubSetupLocationsLoader != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), hubSetupLocationsFetchTimeout)
-		defer cancel()
-		if loaded, err := hubSetupLocationsLoader(ctx); err == nil && len(loaded) > 0 {
-			locations = cloneHubSetupLocations(loaded)
-		}
-	}
-
-	hubSetupLocationsCache.locations = cloneHubSetupLocations(locations)
-	hubSetupLocationsCache.fetchedAt = time.Now()
-	return cloneHubSetupLocations(locations)
-}
-
-func cloneHubSetupLocations(locations []hubSetupLocation) []hubSetupLocation {
-	if len(locations) == 0 {
-		return nil
-	}
-	cloned := make([]hubSetupLocation, 0, len(locations))
-	for _, location := range locations {
-		key := strings.ToLower(strings.TrimSpace(location.Key))
-		domain := normalizeHubSetupLocationDomain(location.Domain)
-		if key == "" || domain == "" {
-			continue
-		}
-		display := strings.TrimSpace(location.Display)
-		if display == "" {
-			display = strings.ToUpper(key)
-		}
-		cloned = append(cloned, hubSetupLocation{
-			Display: display,
-			Key:     key,
-			Domain:  domain,
-		})
-	}
-	return cloned
-}
-
-func fetchHubSetupLocations(ctx context.Context) ([]hubSetupLocation, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hubSetupLocationsURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build hub locations request: %w", err)
-	}
-
-	resp, err := (&http.Client{Timeout: hubSetupLocationsFetchTimeout}).Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch hub locations: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetch hub locations returned status=%d", resp.StatusCode)
-	}
-
-	var locations []hubSetupLocation
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&locations); err != nil {
-		return nil, fmt.Errorf("decode hub locations: %w", err)
-	}
-	locations = cloneHubSetupLocations(locations)
-	if len(locations) == 0 {
-		return nil, fmt.Errorf("hub locations registry returned no usable locations")
-	}
-	return locations, nil
-}
-
-func normalizeHubSetupLocationDomain(domain string) string {
-	domain = strings.TrimSpace(domain)
-	if domain == "" {
-		return ""
-	}
-	if strings.Contains(domain, "://") {
-		if parsed, err := url.Parse(domain); err == nil {
-			domain = parsed.Host
-		}
-	}
-	domain = strings.TrimSpace(strings.TrimRight(domain, "/"))
-	return strings.ToLower(domain)
-}
-
-func hubSetupLocationByKey(locations []hubSetupLocation, key string) (hubSetupLocation, bool) {
-	key = strings.ToLower(strings.TrimSpace(key))
-	for _, location := range locations {
-		if strings.EqualFold(strings.TrimSpace(location.Key), key) {
-			return location, true
-		}
-	}
-	return hubSetupLocation{}, false
-}
-
-func hubSetupLocationBaseURL(location hubSetupLocation) string {
-	domain := normalizeHubSetupLocationDomain(location.Domain)
-	if domain == "" {
-		return ""
-	}
-	return "https://" + domain + "/v1"
-}
-
-func hubSetupLocationForBaseURL(locations []hubSetupLocation, baseURL string) (hubSetupLocation, bool) {
-	baseURL = strings.TrimSpace(baseURL)
-	if baseURL == "" {
-		return hubSetupLocation{}, false
-	}
-	parsed, err := url.Parse(baseURL)
-	if err != nil {
-		return hubSetupLocation{}, false
-	}
-	host := strings.ToLower(strings.TrimSpace(parsed.Host))
-	if host == "" {
-		return hubSetupLocation{}, false
-	}
-	for _, location := range locations {
-		if normalizeHubSetupLocationDomain(location.Domain) == host {
-			return location, true
-		}
-	}
-	return hubSetupLocation{}, false
-}
-
-func resetHubSetupLocationsCache() {
-	hubSetupLocationsCache.mu.Lock()
-	defer hubSetupLocationsCache.mu.Unlock()
-	hubSetupLocationsCache.locations = nil
-	hubSetupLocationsCache.fetchedAt = time.Time{}
-}
-
-func currentHubSetupState(cfg hub.InitConfig) web.HubSetupState {
-	state := web.HubSetupState{
-		ConnectURL:      "https://app.molten.bot/signin?target=hub",
-		DashboardURL:    "https://app.molten.bot/hub",
-		AgentMode:       "existing",
-		TokenType:       "agent",
-		Region:          "na",
-		Onboarding:      web.DefaultHubSetupOnboarding("existing"),
-		OnboardingStage: "bind",
-	}
-	locations := currentHubSetupLocations()
-	state.Region = normalizeHubSetupRegion("")
-
-	activeCfg, err := effectiveHubSetupConfig(cfg)
-	if err != nil {
-		state.Message = fmt.Sprintf("Runtime config load failed: %v", err)
-	}
-	storedCfg, storedFound, storedErr := loadHubSetupRuntimeConfig(cfg.RuntimeConfigPath)
-	if storedErr != nil && state.Message == "" {
-		state.Message = fmt.Sprintf("Runtime config load failed: %v", storedErr)
-	}
-
-	persistedBindToken := ""
-	persistedAgentToken := ""
-	if storedFound {
-		persistedBindToken = strings.TrimSpace(storedCfg.BindToken)
-		persistedAgentToken = strings.TrimSpace(storedCfg.AgentToken)
-	}
-	activeBindToken := strings.TrimSpace(activeCfg.BindToken)
-	activeAgentToken := strings.TrimSpace(activeCfg.AgentToken)
-	state.Configured = persistedBindToken != "" || persistedAgentToken != "" ||
-		activeBindToken != "" || activeAgentToken != ""
-	if storedFound && strings.TrimSpace(storedCfg.BaseURL) != "" {
-		state.Region = hubSetupRegionForBaseURLWithLocations(storedCfg.BaseURL, locations)
-	} else {
-		state.Region = hubSetupRegionForBaseURLWithLocations(activeCfg.BaseURL, locations)
-	}
-	state.Handle = strings.TrimSpace(activeCfg.Handle)
-	state.Profile.ProfileText = strings.TrimSpace(activeCfg.Profile.ProfileText)
-	state.Profile.DisplayName = strings.TrimSpace(activeCfg.Profile.DisplayName)
-	state.Profile.Emoji = strings.TrimSpace(activeCfg.Profile.Emoji)
-	if state.Configured {
-		if persistedBindToken != "" || activeBindToken != "" {
-			state.AgentMode = "new"
-			state.TokenType = "bind"
-		} else {
-			state.TokenType = "agent"
-		}
-	}
-	state.Onboarding = web.DefaultHubSetupOnboarding(state.AgentMode)
-	state.ActivationReady = state.Configured
-	return state
-}
-
-func loadHubSetupRuntimeConfig(path string) (hub.InitConfig, bool, error) {
+func loadStoredRuntimeConfig(path string) (localruntime.InitConfig, bool, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return hub.InitConfig{}, false, nil
+		return localruntime.InitConfig{}, false, nil
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return hub.InitConfig{}, false, nil
+			return localruntime.InitConfig{}, false, nil
 		}
-		return hub.InitConfig{}, false, fmt.Errorf("read runtime config: %w", err)
+		return localruntime.InitConfig{}, false, fmt.Errorf("read runtime config: %w", err)
 	}
 
-	var runtimeCfg hub.RuntimeConfig
+	var runtimeCfg localruntime.RuntimeConfig
 	if err := json.Unmarshal(data, &runtimeCfg); err != nil {
-		return hub.InitConfig{}, false, fmt.Errorf("parse runtime config: %w", err)
+		return localruntime.InitConfig{}, false, fmt.Errorf("parse runtime config: %w", err)
 	}
 
 	runtimeCfg.RuntimeConfigPath = path
@@ -3301,84 +2300,11 @@ func loadHubSetupRuntimeConfig(path string) (hub.InitConfig, bool, error) {
 	return initCfg, true, nil
 }
 
-func currentHubSetupStateWithRemoteProfile(ctx context.Context, cfg hub.InitConfig) web.HubSetupState {
-	state := currentHubSetupState(cfg)
-	if !hubSetupProfileNeedsRemoteHydration(state) {
-		return state
-	}
-
-	activeCfg, err := effectiveHubSetupConfig(cfg)
-	if err != nil {
-		return state
-	}
-	token := strings.TrimSpace(activeCfg.AgentToken)
-	if token == "" {
-		return state
-	}
-
-	client := hub.NewAPIClient(activeCfg.BaseURL)
-	remoteProfile, err := client.AgentProfile(ctx, token)
-	if err != nil {
-		return state
-	}
-
-	if strings.TrimSpace(remoteProfile.Handle) != "" {
-		state.Handle = strings.TrimSpace(remoteProfile.Handle)
-	}
-	mergedProfile := mergeProfileConfig(
-		remoteProfile.Profile,
-		hub.ProfileConfig{
-			DisplayName: strings.TrimSpace(state.Profile.DisplayName),
-			Emoji:       strings.TrimSpace(state.Profile.Emoji),
-			ProfileText: strings.TrimSpace(state.Profile.ProfileText),
-		},
-	)
-	state.Profile.DisplayName = strings.TrimSpace(mergedProfile.DisplayName)
-	state.Profile.Emoji = strings.TrimSpace(mergedProfile.Emoji)
-	state.Profile.ProfileText = strings.TrimSpace(mergedProfile.ProfileText)
-	return state
-}
-
-func hubSetupProfileNeedsRemoteHydration(state web.HubSetupState) bool {
-	if !state.Configured {
-		return false
-	}
-	if strings.TrimSpace(state.Handle) == "" {
-		return true
-	}
-	return strings.TrimSpace(state.Profile.DisplayName) == "" &&
-		strings.TrimSpace(state.Profile.Emoji) == "" &&
-		strings.TrimSpace(state.Profile.ProfileText) == ""
-}
-
-func hubSetupProfilesMatch(submitted, remote hub.AgentProfile) bool {
-	if handle := strings.TrimSpace(submitted.Handle); handle != "" && handle != strings.TrimSpace(remote.Handle) {
-		return false
-	}
-	if displayName := strings.TrimSpace(submitted.Profile.DisplayName); displayName != "" && displayName != strings.TrimSpace(remote.Profile.DisplayName) {
-		return false
-	}
-	if emoji := strings.TrimSpace(submitted.Profile.Emoji); emoji != "" && emoji != strings.TrimSpace(remote.Profile.Emoji) {
-		return false
-	}
-	if profileText := strings.TrimSpace(submitted.Profile.ProfileText); profileText != "" && profileText != strings.TrimSpace(remote.Profile.ProfileText) {
-		return false
-	}
-	return true
-}
-
-func hubSetupProfileSubmissionHasValues(profile hub.AgentProfile) bool {
-	return strings.TrimSpace(profile.Handle) != "" ||
-		strings.TrimSpace(profile.Profile.DisplayName) != "" ||
-		strings.TrimSpace(profile.Profile.Emoji) != "" ||
-		strings.TrimSpace(profile.Profile.ProfileText) != ""
-}
-
-func effectiveHubSetupConfig(cfg hub.InitConfig) (hub.InitConfig, error) {
+func effectiveRuntimeConfig(cfg localruntime.InitConfig) (localruntime.InitConfig, error) {
 	activeCfg := cfg
 	activeCfg.ApplyDefaults()
 
-	storedCfg, found, err := loadHubSetupRuntimeConfig(cfg.RuntimeConfigPath)
+	storedCfg, found, err := loadStoredRuntimeConfig(cfg.RuntimeConfigPath)
 	if err != nil {
 		return activeCfg, err
 	}
@@ -3386,242 +2312,21 @@ func effectiveHubSetupConfig(cfg hub.InitConfig) (hub.InitConfig, error) {
 		return activeCfg, nil
 	}
 
-	if strings.TrimSpace(storedCfg.BindToken) == "" {
-		storedCfg.BindToken = strings.TrimSpace(activeCfg.BindToken)
-	}
-	if strings.TrimSpace(storedCfg.AgentToken) == "" {
-		storedCfg.AgentToken = strings.TrimSpace(activeCfg.AgentToken)
-	}
 	if strings.TrimSpace(storedCfg.GitHubToken) == "" {
 		storedCfg.GitHubToken = strings.TrimSpace(activeCfg.GitHubToken)
 	}
-	if strings.TrimSpace(storedCfg.Handle) == "" {
-		storedCfg.Handle = strings.TrimSpace(activeCfg.Handle)
-	}
-	storedCfg.Profile = mergeProfileConfig(storedCfg.Profile, activeCfg.Profile)
 	if strings.TrimSpace(storedCfg.AgentHarness) == "" {
 		storedCfg.AgentHarness = strings.TrimSpace(activeCfg.AgentHarness)
 	}
 	if strings.TrimSpace(storedCfg.AgentCommand) == "" {
 		storedCfg.AgentCommand = strings.TrimSpace(activeCfg.AgentCommand)
 	}
-	if strings.TrimSpace(storedCfg.BaseURL) == "" && strings.TrimSpace(activeCfg.BaseURL) != "" {
-		storedCfg.BaseURL = strings.TrimSpace(activeCfg.BaseURL)
-	}
 	storedCfg.ApplyDefaults()
 	return storedCfg, nil
 }
 
-func configureHubSetup(ctx context.Context, cfg hub.InitConfig, req web.HubSetupRequest, applyLive func(context.Context, hub.InitConfig) error) (web.HubSetupState, error) {
-	state := currentHubSetupState(cfg)
-	token := strings.TrimSpace(req.Token)
-	requestedRegion := strings.TrimSpace(req.Region)
-	state.AgentMode = hubSetupModeForToken(token, req.AgentMode)
-	state.TokenType = hubSetupTokenTypeForMode(state.AgentMode)
-	if requestedRegion != "" {
-		state.Region = normalizeHubSetupRegion(requestedRegion)
-	}
-	state.Handle = strings.TrimSpace(req.Handle)
-	state.Profile.ProfileText = strings.TrimSpace(req.Profile.ProfileText)
-	state.Profile.DisplayName = strings.TrimSpace(req.Profile.DisplayName)
-	state.Profile.Emoji = strings.TrimSpace(req.Profile.Emoji)
-	state.Onboarding = web.DefaultHubSetupOnboarding(state.AgentMode)
-	hubSetupMarkStep(&state, "bind", "current", "")
-	bindError := func(err error) (web.HubSetupState, error) {
-		hubSetupMarkStep(&state, "bind", "error", err.Error())
-		return state, err
-	}
-
-	activeCfg, err := effectiveHubSetupConfig(cfg)
-	if err != nil {
-		return bindError(fmt.Errorf("load runtime config: %w", err))
-	}
-	if requestedRegion != "" {
-		activeCfg.BaseURL = hubSetupBaseURL(activeCfg.BaseURL, state.Region)
-	}
-
-	useSavedCredentials := token == ""
-	if !useSavedCredentials {
-		if err := validateHubSetupToken(token); err != nil {
-			return bindError(err)
-		}
-	}
-	if useSavedCredentials {
-		if strings.TrimSpace(activeCfg.AgentToken) == "" && strings.TrimSpace(activeCfg.BindToken) == "" {
-			return bindError(fmt.Errorf("%s token is required", state.TokenType))
-		}
-	} else {
-		activeCfg.BindToken = ""
-		activeCfg.AgentToken = ""
-		if state.AgentMode == "new" {
-			activeCfg.BindToken = token
-		} else {
-			activeCfg.AgentToken = token
-		}
-	}
-	if strings.TrimSpace(activeCfg.AgentHarness) == "" {
-		return bindError(fmt.Errorf("agent harness is not configured; complete agent selection in the UI"))
-	}
-
-	client := hub.NewAPIClient(activeCfg.BaseURL)
-	resolvedToken, err := client.ResolveAgentToken(ctx, activeCfg)
-	if err != nil {
-		hubSetupMarkStep(&state, "bind", "error", err.Error())
-		return state, fmt.Errorf("resolve hub token: %w", err)
-	}
-	hubSetupMarkStep(&state, "bind", "completed", "")
-	hubSetupMarkStep(&state, "work_bind", "completed", "Molten Hub credentials verified.")
-
-	finalCfg := activeCfg
-	if baseURL := strings.TrimRight(strings.TrimSpace(client.BaseURL), "/"); baseURL != "" {
-		finalCfg.BaseURL = baseURL
-	}
-	finalCfg.BaseURL = hubSetupPersistedBaseURL(finalCfg.BaseURL, state.Region)
-	finalCfg.AgentToken = resolvedToken
-
-	submittedProfile := hub.AgentProfile{
-		Handle: strings.TrimSpace(state.Handle),
-		Profile: hub.ProfileConfig{
-			ProfileText: strings.TrimSpace(state.Profile.ProfileText),
-			DisplayName: strings.TrimSpace(state.Profile.DisplayName),
-			Emoji:       strings.TrimSpace(state.Profile.Emoji),
-		},
-	}
-	profileSubmissionHasValues := hubSetupProfileSubmissionHasValues(submittedProfile)
-	var remoteProfile hub.AgentProfile
-	if profileSubmissionHasValues {
-		var err error
-		remoteProfile, err = client.AgentProfile(ctx, resolvedToken)
-		if err != nil {
-			hubSetupMarkStep(&state, "profile_set", "error", err.Error())
-			return state, fmt.Errorf("load hub profile: %w", err)
-		}
-	}
-	profileUpdateRequested := profileSubmissionHasValues && !hubSetupProfilesMatch(submittedProfile, remoteProfile)
-	if profileUpdateRequested {
-		finalCfg.Handle = state.Handle
-		finalCfg.Profile.ProfileText = state.Profile.ProfileText
-		finalCfg.Profile.DisplayName = state.Profile.DisplayName
-		finalCfg.Profile.Emoji = state.Profile.Emoji
-		hubSetupMarkStep(&state, "profile_set", "current", "")
-		if err := client.SyncProfile(ctx, resolvedToken, finalCfg); err != nil {
-			hubSetupMarkStep(&state, "profile_set", "error", err.Error())
-			return state, fmt.Errorf("sync hub profile: %w", err)
-		}
-		hubSetupMarkStep(&state, "profile_set", "completed", "Molten Hub profile saved.")
-	} else {
-		_ = client.UpdateAgentStatus(ctx, resolvedToken, "online")
-		hubSetupMarkStep(&state, "profile_set", "completed", "Existing Molten Hub profile confirmed.")
-	}
-	hubSetupMarkStep(&state, "work_activate", "current", "")
-
-	if profileUpdateRequested {
-		// Read back after a profile PATCH so config follows any server-side normalization.
-		profile, err := client.AgentProfile(ctx, resolvedToken)
-		if err != nil {
-			hubSetupMarkStep(&state, "work_activate", "error", err.Error())
-			return state, fmt.Errorf("load hub profile: %w", err)
-		}
-		if strings.TrimSpace(finalCfg.Handle) == "" {
-			finalCfg.Handle = strings.TrimSpace(profile.Handle)
-		}
-		finalCfg.Profile = mergeProfileConfig(finalCfg.Profile, profile.Profile)
-	} else {
-		if !profileSubmissionHasValues {
-			var err error
-			remoteProfile, err = client.AgentProfile(ctx, resolvedToken)
-			if err != nil {
-				hubSetupMarkStep(&state, "work_activate", "error", err.Error())
-				return state, fmt.Errorf("load hub profile: %w", err)
-			}
-		}
-		if strings.TrimSpace(remoteProfile.Handle) != "" {
-			finalCfg.Handle = strings.TrimSpace(remoteProfile.Handle)
-		}
-		finalCfg.Profile = mergeProfileConfig(remoteProfile.Profile, finalCfg.Profile)
-	}
-	finalCfg.ApplyDefaults()
-
-	if err := hub.SaveRuntimeConfigHubSettings(cfg.RuntimeConfigPath, finalCfg, resolvedToken); err != nil {
-		hubSetupMarkStep(&state, "work_activate", "error", err.Error())
-		return state, fmt.Errorf("save runtime config: %w", err)
-	}
-
-	state.Configured = true
-	state.Region = hubSetupRegionForBaseURL(finalCfg.BaseURL)
-	state.Handle = strings.TrimSpace(finalCfg.Handle)
-	state.Profile.ProfileText = strings.TrimSpace(finalCfg.Profile.ProfileText)
-	state.Profile.DisplayName = strings.TrimSpace(finalCfg.Profile.DisplayName)
-	state.Profile.Emoji = strings.TrimSpace(finalCfg.Profile.Emoji)
-	state.Message = "Molten Hub setup saved and applied live."
-	state.NeedsRestart = false
-	state.ActivationReady = true
-	if applyLive != nil {
-		if err := applyLive(ctx, finalCfg); err != nil {
-			state.Message = fmt.Sprintf("Molten Hub setup was saved, but live apply failed: %v", err)
-			hubSetupMarkStep(&state, "work_activate", "error", err.Error())
-			return state, fmt.Errorf("apply live hub setup: %w", err)
-		}
-	}
-	hubSetupMarkStep(&state, "work_activate", "completed", "Molten Hub activation confirmed.")
-	state.OnboardingActive = false
-	return state, nil
-}
-
-func connectHubSetup(ctx context.Context, cfg hub.InitConfig, applyLive func(context.Context, hub.InitConfig) error) (web.HubSetupState, error) {
-	state := currentHubSetupState(cfg)
-	if !state.Configured {
-		return state, fmt.Errorf("molten hub is not configured")
-	}
-	if applyLive == nil {
-		return state, fmt.Errorf("live hub connect is unavailable")
-	}
-
-	activeCfg, err := effectiveHubSetupConfig(cfg)
-	if err != nil {
-		return state, fmt.Errorf("load runtime config: %w", err)
-	}
-	if strings.TrimSpace(activeCfg.AgentToken) == "" && strings.TrimSpace(activeCfg.BindToken) == "" {
-		return state, fmt.Errorf("saved Molten Hub credentials are unavailable")
-	}
-	if err := applyLive(ctx, activeCfg); err != nil {
-		state.Message = fmt.Sprintf("Molten Hub connect failed: %v", err)
-		return state, fmt.Errorf("apply live hub setup: %w", err)
-	}
-
-	state.Message = "Molten Hub connected."
-	state.NeedsRestart = false
-	state.ActivationReady = true
-	return state, nil
-}
-
-func disconnectHubSetup(ctx context.Context, cfg hub.InitConfig, stopLive func(context.Context) error) (web.HubSetupState, error) {
-	state := currentHubSetupState(cfg)
-	if !state.Configured {
-		return state, fmt.Errorf("molten hub is not configured")
-	}
-
-	var stopErr error
-	if stopLive != nil {
-		stopErr = stopLive(ctx)
-	}
-	if err := hub.ClearRuntimeConfigHubSettings(cfg.RuntimeConfigPath, cfg); err != nil {
-		state.Message = fmt.Sprintf("Molten Hub disconnect failed: %v", err)
-		return state, fmt.Errorf("clear hub setup: %w", err)
-	}
-
-	state = currentHubSetupState(cfg)
-	state.Message = "Molten Hub disconnected."
-	if stopErr != nil {
-		state.Message = fmt.Sprintf("Molten Hub disconnected. Live stop failed: %v", stopErr)
-	}
-	state.NeedsRestart = false
-	state.ActivationReady = false
-	return state, nil
-}
-
-func currentReviewSettingsState(cfg hub.InitConfig) web.ReviewSettingsState {
-	activeCfg, err := effectiveHubSetupConfig(cfg)
+func currentReviewSettingsState(cfg localruntime.InitConfig) web.ReviewSettingsState {
+	activeCfg, err := effectiveRuntimeConfig(cfg)
 	if err != nil {
 		activeCfg = cfg
 	}
@@ -3634,7 +2339,7 @@ func currentReviewSettingsState(cfg hub.InitConfig) web.ReviewSettingsState {
 	}
 }
 
-func configureReviewSettings(cfg hub.InitConfig, req web.ReviewSettingsRequest) (web.ReviewSettingsState, error) {
+func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettingsRequest) (web.ReviewSettingsState, error) {
 	method := normalizeReviewSettingsMergeMethod(req.MergeMethod)
 	if method == "" {
 		state := currentReviewSettingsState(cfg)
@@ -3644,7 +2349,7 @@ func configureReviewSettings(cfg hub.InitConfig, req web.ReviewSettingsRequest) 
 	if rawReviewLevel == "" {
 		rawReviewLevel = currentReviewSettingsState(cfg).ReviewLevel
 	}
-	reviewLevel := hub.NormalizeReviewLevel(rawReviewLevel)
+	reviewLevel := localruntime.NormalizeReviewLevel(rawReviewLevel)
 	if reviewLevel == "" {
 		state := currentReviewSettingsState(cfg)
 		return state, fmt.Errorf("review level must be off, low, medium, or high")
@@ -3652,13 +2357,13 @@ func configureReviewSettings(cfg hub.InitConfig, req web.ReviewSettingsRequest) 
 
 	autoMerge := req.AutoMerge
 	deleteMergedBranches := req.DeleteMergedBranches
-	reviewCfg := hub.ReviewWatchConfig{
+	reviewCfg := localruntime.ReviewWatchConfig{
 		AutoMerge:            &autoMerge,
 		DeleteMergedBranches: &deleteMergedBranches,
 		MergeMethod:          method,
 		ReviewLevel:          reviewLevel,
 	}
-	if err := hub.SaveRuntimeConfigReviewSettings(cfg.RuntimeConfigPath, cfg, reviewCfg); err != nil {
+	if err := localruntime.SaveRuntimeConfigReviewSettings(cfg.RuntimeConfigPath, cfg, reviewCfg); err != nil {
 		state := currentReviewSettingsState(cfg)
 		return state, err
 	}
@@ -3678,189 +2383,6 @@ func normalizeReviewSettingsMergeMethod(value string) string {
 	default:
 		return ""
 	}
-}
-
-func hubSetupMarkStep(state *web.HubSetupState, stepID, status, detail string) {
-	if state == nil {
-		return
-	}
-	stepID = strings.TrimSpace(stepID)
-	status = strings.TrimSpace(status)
-	if stepID == "" || status == "" {
-		return
-	}
-	state.OnboardingActive = status == "current"
-	state.OnboardingStage = stepID
-	for i := range state.Onboarding {
-		if status == "current" && state.Onboarding[i].ID != stepID && state.Onboarding[i].Status == "current" {
-			state.Onboarding[i].Status = "completed"
-		}
-		if status == "error" && state.Onboarding[i].ID != stepID && state.Onboarding[i].Status == "current" {
-			state.Onboarding[i].Status = "completed"
-		}
-		if state.Onboarding[i].ID != stepID {
-			continue
-		}
-		state.Onboarding[i].Status = status
-		if strings.TrimSpace(detail) != "" {
-			state.Onboarding[i].Detail = strings.TrimSpace(detail)
-		}
-		return
-	}
-}
-
-func validateHubSetupToken(token string) error {
-	token = strings.TrimSpace(token)
-	switch {
-	case len(token) < 40:
-		return fmt.Errorf("token looks too short; expected roughly 40 or more characters")
-	case len(token) > 128:
-		return fmt.Errorf("token looks too long; expected roughly 128 or fewer characters")
-	}
-
-	for _, ch := range token {
-		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' {
-			continue
-		}
-		return fmt.Errorf("token contains unsupported characters; use letters, numbers, '-' or '_'")
-	}
-	return nil
-}
-
-func normalizeHubSetupMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "new":
-		return "new"
-	default:
-		return "existing"
-	}
-}
-
-func normalizeHubSetupTokenType(tokenType string) string {
-	switch strings.ToLower(strings.TrimSpace(tokenType)) {
-	case "agent":
-		return "agent"
-	default:
-		return "bind"
-	}
-}
-
-func hubSetupModeForToken(token, fallbackMode string) string {
-	token = strings.ToLower(strings.TrimSpace(token))
-	switch {
-	case strings.HasPrefix(token, "b_"):
-		return "new"
-	case strings.HasPrefix(token, "t_"):
-		return "existing"
-	default:
-		return normalizeHubSetupMode(fallbackMode)
-	}
-}
-
-func normalizeHubSetupRegion(region string) string {
-	normalized := strings.ToLower(strings.TrimSpace(region))
-	locations := currentHubSetupLocations()
-	if location, ok := hubSetupLocationByKey(locations, normalized); ok {
-		return location.Key
-	}
-	normalized = hub.NormalizeHubRegion(normalized)
-	if location, ok := hubSetupLocationByKey(locations, normalized); ok {
-		return location.Key
-	}
-	if len(locations) > 0 {
-		return locations[0].Key
-	}
-	return normalized
-}
-
-func hubSetupRegionForBaseURL(baseURL string) string {
-	return hubSetupRegionForBaseURLWithLocations(baseURL, currentHubSetupLocations())
-}
-
-func hubSetupRegionForBaseURLWithLocations(baseURL string, locations []hubSetupLocation) string {
-	if location, ok := hubSetupLocationForBaseURL(locations, baseURL); ok {
-		return location.Key
-	}
-	return normalizeHubSetupRegion(hub.HubRegionFromBaseURL(baseURL))
-}
-
-func hubSetupBaseURL(baseURL, region string) string {
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	locations := currentHubSetupLocations()
-	region = normalizeHubSetupRegion(region)
-
-	selected, ok := hubSetupLocationByKey(locations, region)
-	if !ok {
-		if len(locations) > 0 {
-			selected = locations[0]
-			ok = true
-		}
-	}
-
-	if baseURL != "" {
-		if _, matched := hubSetupLocationForBaseURL(locations, baseURL); matched {
-			if ok {
-				if selectedBaseURL := hubSetupLocationBaseURL(selected); selectedBaseURL != "" {
-					return selectedBaseURL
-				}
-			}
-			return hub.HubBaseURLForRegion(region)
-		}
-	}
-
-	if ok {
-		if selectedBaseURL := hubSetupLocationBaseURL(selected); selectedBaseURL != "" {
-			return selectedBaseURL
-		}
-	}
-	return hub.HubBaseURLForRegion(region)
-}
-
-func hubSetupPersistedBaseURL(baseURL, region string) string {
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	locations := currentHubSetupLocations()
-	if location, ok := hubSetupLocationForBaseURL(locations, baseURL); ok {
-		if selectedBaseURL := hubSetupLocationBaseURL(location); selectedBaseURL != "" {
-			return selectedBaseURL
-		}
-	}
-	selected, ok := hubSetupLocationByKey(locations, region)
-	if !ok {
-		selected, _ = hubSetupLocationByKey(locations, hub.HubRegionFromBaseURL(baseURL))
-	}
-	if selectedBaseURL := hubSetupLocationBaseURL(selected); selectedBaseURL != "" {
-		return selectedBaseURL
-	}
-	return hub.HubBaseURLForRegion(region)
-}
-
-func hubSetupTokenTypeForMode(mode string) string {
-	if normalizeHubSetupMode(mode) == "new" {
-		return normalizeHubSetupTokenType("bind")
-	}
-	return normalizeHubSetupTokenType("agent")
-}
-
-func mergeProfileConfig(primary, secondary hub.ProfileConfig) hub.ProfileConfig {
-	if strings.TrimSpace(primary.DisplayName) == "" {
-		primary.DisplayName = strings.TrimSpace(secondary.DisplayName)
-	}
-	if strings.TrimSpace(primary.Emoji) == "" {
-		primary.Emoji = strings.TrimSpace(secondary.Emoji)
-	}
-	if strings.TrimSpace(primary.ProfileText) == "" {
-		primary.ProfileText = strings.TrimSpace(secondary.ProfileText)
-	}
-	if strings.TrimSpace(primary.LLM) == "" {
-		primary.LLM = strings.TrimSpace(secondary.LLM)
-	}
-	if strings.TrimSpace(primary.Harness) == "" {
-		primary.Harness = strings.TrimSpace(secondary.Harness)
-	}
-	if len(primary.Skills) == 0 && len(secondary.Skills) > 0 {
-		primary.Skills = append([]string(nil), secondary.Skills...)
-	}
-	return primary
 }
 
 func collectConfigPaths(inputs []string) ([]string, error) {
@@ -3921,4 +2443,11 @@ func collectConfigPaths(inputs []string) ([]string, error) {
 	}
 
 	return paths, nil
+}
+
+func failureMessage(text string) string {
+	if strings.TrimSpace(text) == "" {
+		text = "unknown error"
+	}
+	return "Failure: task failed.\nError details: " + strings.TrimSpace(text)
 }

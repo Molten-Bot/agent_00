@@ -438,7 +438,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `<agent-00-header agent-harness="codex" agent-label="Codex"></agent-00-header>`) {
 		t.Fatalf("expected index html to render the shared site header component")
 	}
-	if strings.Contains(markup, `id="moltenhub-logo"`) || strings.Contains(markup, `id="configured-agent-logo"`) {
+	if strings.Contains(markup, `id="agent-logo"`) || strings.Contains(markup, `id="configured-agent-logo"`) {
 		t.Fatalf("expected index html to isolate header logo markup inside the shared component")
 	}
 	if !strings.Contains(markup, `const BACKGROUND_PARTICLE_ANIMATION_ENABLED = false;`) ||
@@ -478,43 +478,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `scheduleTaskTimingRefresh();`) {
 		t.Fatalf("expected index html to start the task timing refresh scheduler during boot")
 	}
-	if !strings.Contains(markup, `id="moltenbot-hub-link"`) {
-		t.Fatalf("expected index html to include molten bot hub dock link")
-	}
-	if !strings.Contains(markup, `id="moltenbot-hub-profile-button"`) {
-		t.Fatalf("expected index html to include molten bot hub profile gear button")
-	}
-	if !strings.Contains(markup, `href="https://molten.bot/login?target=hub"`) {
-		t.Fatalf("expected index html to link unconfigured dock icon to molten hub sign-in")
-	}
+
 	if strings.Contains(markup, `aria-label="Home"`) || strings.Contains(markup, `data-page-nav-link="/"`) || strings.Contains(markup, `data-lucide="home"`) {
 		t.Fatalf("expected bottom dock to omit the home navigation button")
 	}
-	if !strings.Contains(markup, `img src="/static/logo.svg"`) {
+	if !strings.Contains(markup, `const APP_LOGO_URL = "/static/logo.svg"`) {
 		t.Fatalf("expected index html to use the embedded molten bot logo asset")
 	}
-	if !strings.Contains(markup, `id="moltenbot-hub-plus"`) {
-		t.Fatalf("expected index html to include molten hub plus badge")
-	}
-	if !strings.Contains(markup, `id="hub-setup-gate"`) {
-		t.Fatalf("expected index html to include hub setup modal gate")
-	}
-	if !strings.Contains(markup, `class="onboarding-modal-backdrop hidden"`) ||
-		!strings.Contains(markup, `class="onboarding-modal form-surface hub-setup-shell"`) {
-		t.Fatalf("expected hub setup modal to use the dispatch onboarding modal layout")
-	}
-	if !strings.Contains(markup, `id="hub-setup-form"`) {
-		t.Fatalf("expected index html to include hub setup form")
-	}
-	if strings.Contains(markup, `id="hub-setup-copy"`) || strings.Contains(markup, `Agent tokens start with t_; bind tokens start with b_`) {
-		t.Fatalf("expected index html to remove the extra Molten Hub setup guidance line")
-	}
-	if !strings.Contains(markup, `id="hub-setup-token-label" class="prompt-label">Agent Token</span>`) {
-		t.Fatalf("expected index html to default the setup token label to Agent Token")
-	}
-	if !strings.Contains(markup, `id="hub-setup-submit" class="prompt-action-button prompt-submit" type="submit">Connect Runtime</button>`) {
-		t.Fatalf("expected index html to use a clearer default hub setup submit label")
-	}
+
 	if !strings.Contains(markup, `id="prompt-mode-builder" class="prompt-mode-link active" href="#studio-builder" aria-selected="true" title="Prompt"`) {
 		t.Fatalf("expected index html to relabel the primary dock mode as Prompt")
 	}
@@ -523,108 +494,18 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		strings.Contains(markup, `data-lucide="tag"`) {
 		t.Fatalf("expected index html to omit the releases dock link")
 	}
-	if !strings.Contains(markup, `id="hub-setup-emoji-picker"`) || !strings.Contains(markup, `id="hub-setup-emoji-panel"`) {
-		t.Fatalf("expected index html to include the emoji picker control shell")
-	}
-	if !strings.Contains(markup, `id="hub-setup-signin-link"`) || !strings.Contains(markup, `https://molten.bot/login?target=hub`) {
-		t.Fatalf("expected index html to include molten hub sign-in shortcut inside the setup dialog")
-	}
-	if !strings.Contains(markup, `class="hub-setup-signin-logo"`) {
-		t.Fatalf("expected index html to render the hub sign-in shortcut as a logo")
-	}
-	if !strings.Contains(markup, `id="hub-setup-token-label"`) {
-		t.Fatalf("expected index html to include the dynamic hub setup token label")
-	}
-	if !strings.Contains(markup, `id="hub-setup-status" class="hub-setup-status submit-status submit-status-inline`) {
-		t.Fatalf("expected index html to include a dedicated hub setup status line")
-	}
-	if !strings.Contains(markup, `class="onboarding-form-actions hub-setup-footer"`) {
-		t.Fatalf("expected hub setup actions to use the dispatch onboarding action row")
-	}
-	if strings.Contains(markup, `id="hub-setup-onboarding"`) || strings.Contains(markup, `id="hub-setup-onboarding-steps"`) {
-		t.Fatalf("expected index html to remove the hub setup onboarding progress list")
-	}
-	if !strings.Contains(markup, `id="hub-setup-region-na-toggle"`) || !strings.Contains(markup, `id="hub-setup-region-eu-toggle"`) {
-		t.Fatalf("expected index html to include hub setup region toggles")
-	}
-	if strings.Contains(markup, `id="hub-setup-connect-agent-row"`) || strings.Contains(markup, `data-agent-mode=`) {
-		t.Fatalf("expected index html to remove the manual agent mode controls")
-	}
-	if strings.Contains(markup, `id="hub-setup-bind-toggle"`) || strings.Contains(markup, `id="hub-setup-agent-toggle"`) {
-		t.Fatalf("expected index html to remove the separate hub setup token type toggles")
-	}
-	if !strings.Contains(markup, `function scheduleHubSetupAutoSubmit()`) {
-		t.Fatalf("expected index html to include hub setup auto-submit scheduling")
-	}
-	if !strings.Contains(markup, `Bind Token`) {
-		t.Fatalf("expected index html to relabel new-agent token entry as Bind Token")
-	}
+
 	if !strings.Contains(markup, `>Done</button>`) {
 		t.Fatalf("expected hub setup submit button copy to be updated")
 	}
-	if !strings.Contains(markup, `function normalizeHubSetup(raw)`) {
-		t.Fatalf("expected index html to include hub setup state normalization")
-	}
-	if !strings.Contains(markup, `function limitGraphemes(value, maxGraphemes)`) || !strings.Contains(markup, `Intl.Segmenter`) {
-		t.Fatalf("expected index html to include grapheme clamp utility with Intl.Segmenter support")
-	}
-	if !strings.Contains(markup, `function normalizeProfileEmoji(value)`) {
-		t.Fatalf("expected index html to include profile emoji normalization helper")
-	}
-	if !strings.Contains(markup, `emoji: normalizeProfileEmoji(profile.emoji),`) {
-		t.Fatalf("expected index html to clamp profile emoji when loading hub setup state")
-	}
-	if !strings.Contains(markup, `emoji: normalizeProfileEmoji(syncHubSetupEmojiValue()),`) {
-		t.Fatalf("expected index html to clamp profile emoji before submitting hub setup payloads")
-	}
-	if !strings.Contains(markup, `function defaultHubSetupOnboarding(agentMode)`) {
-		t.Fatalf("expected index html to include default hub setup onboarding steps")
-	}
-	if !strings.Contains(markup, `function hubSetupStatusMessageForStep(stepID, fallbackText = "")`) {
-		t.Fatalf("expected index html to include hub setup step-to-status mapping")
-	}
-	if !strings.Contains(markup, `function normalizeHubSetupDialogMode(mode)`) {
-		t.Fatalf("expected index html to include hub setup dialog mode normalization")
-	}
-	if !strings.Contains(markup, `async function submitHubSetup(event, options = {})`) {
-		t.Fatalf("expected index html to include hub setup submit handler")
-	}
-	if !strings.Contains(markup, `async function loadHubSetupStatus()`) {
-		t.Fatalf("expected index html to include hub setup status loader")
-	}
-	if !strings.Contains(markup, `function attachHubEmojiPicker(root)`) || !strings.Contains(markup, `data-hub-emoji-picker`) {
-		t.Fatalf("expected index html to initialize the inline dispatch-style emoji picker")
-	}
+
 	if !strings.Contains(markup, `class="prompt-mode-divider"`) {
 		t.Fatalf("expected dock to include a shared divider between internal and external links")
 	}
 	if !strings.Contains(markup, `class="prompt-mode-link prompt-mode-link-logo"`) {
 		t.Fatalf("expected dock logo links to use shared icon-link styling")
 	}
-	githubIndex := strings.Index(markup, `id="github-profile-link"`)
-	moltenbotIndex := strings.Index(markup, `id="moltenbot-hub-link"`)
-	if githubIndex == -1 || moltenbotIndex == -1 || githubIndex > moltenbotIndex {
-		t.Fatalf("expected molten bot hub logo to render to the right of the github dock logo")
-	}
-	profileButtonIndex := strings.Index(markup, `id="moltenbot-hub-profile-button"`)
-	if profileButtonIndex == -1 || profileButtonIndex < moltenbotIndex {
-		t.Fatalf("expected hub profile button to render to the right of the hub dock icon")
-	}
-	if !strings.Contains(markup, `id="moltenbot-hub-profile-button"`) ||
-		!strings.Contains(markup, `aria-label="Settings"`) ||
-		!strings.Contains(markup, `moltenBotHubProfileButton.hidden = false;`) ||
-		strings.Contains(markup, `moltenBotHubProfileButton.hidden = !configured;`) {
-		t.Fatalf("expected settings button to remain available before Hub setup")
-	}
-	if !strings.Contains(markup, `id="settings-tab-review"`) || !strings.Contains(markup, `id="settings-tab-hub"`) ||
-		!strings.Contains(markup, `role="tablist" aria-label="Settings sections"`) ||
-		!strings.Contains(markup, `data-lucide="git-pull-request-arrow"`) ||
-		!strings.Contains(markup, `data-lucide="radio-tower"`) {
-		t.Fatalf("expected index html to include clear Review and Hub settings tabs")
-	}
-	if strings.Index(markup, `id="settings-tab-review"`) > strings.Index(markup, `id="settings-tab-hub"`) {
-		t.Fatalf("expected Review settings tab to render before Hub tab")
-	}
+
 	if !strings.Contains(markup, `Auto-merge clean reviews`) ||
 		!strings.Contains(markup, `Delete merged branches`) ||
 		!strings.Contains(markup, `id="review-settings-level" type="hidden" value="off"`) ||
@@ -640,87 +521,15 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		strings.Contains(markup, `Merge commit`) {
 		t.Fatalf("expected index html to include review automation controls")
 	}
-	if !strings.Contains(markup, `reviewSettingsMergeOptions.forEach((button) => {`) ||
-		!strings.Contains(markup, `setReviewSettingsMergeMethod(button.getAttribute("data-review-settings-merge-method"));`) ||
-		!strings.Contains(markup, `setReviewSettingsLevel(button.getAttribute("data-review-settings-level"));`) ||
-		!strings.Contains(markup, `review: "clipboard-check"`) ||
-		!strings.Contains(markup, `review_fix: "wrench"`) ||
-		!strings.Contains(markup, `review_checks: "shield-check"`) ||
-		!strings.Contains(markup, `delete_merged_branches: Boolean(reviewSettingsDeleteMergedBranches?.checked),`) ||
-		!strings.Contains(markup, `setHubSetupOpen(false);`) {
-		t.Fatalf("expected review settings save and merge method selection behavior")
-	}
-	if !strings.Contains(markup, `Review automation and Hub profile settings.`) {
-		t.Fatalf("expected index html to include settings modal message")
-	}
+
 	if strings.Contains(markup, `Update how this runtime appears in Molten Hub`) {
 		t.Fatalf("expected index html to remove the old runtime profile editor copy")
 	}
 	if strings.Contains(markup, `Edit Agent Profile`) {
 		t.Fatalf("expected index html to remove the old profile editor heading")
 	}
-	if !strings.Contains(markup, `id="hub-setup-connection-toggle"`) {
-		t.Fatalf("expected index html to include the hub connection toggle button")
-	}
-	if !strings.Contains(markup, `id="hub-setup-connection-toggle" class="secondary-button hub-setup-connection-toggle hidden"`) {
-		t.Fatalf("expected index html to render the disconnect action as an icon-only secondary button")
-	}
-	if !strings.Contains(markup, `id="hub-setup-submit" class="prompt-action-button prompt-submit"`) {
-		t.Fatalf("expected index html to render the profile save action with the shared submit button classes")
-	}
-	if !strings.Contains(markup, `async function submitHubConnectionToggle()`) {
-		t.Fatalf("expected index html to include hub connection toggle handler")
-	}
-	if !strings.Contains(markup, `function renderHubSetupConnectionToggle()`) {
-		t.Fatalf("expected index html to include hub connection toggle renderer")
-	}
-	if !strings.Contains(markup, `hubSetupConnectionToggle.addEventListener("click", submitHubConnectionToggle);`) {
-		t.Fatalf("expected index html to wire the hub connection toggle button")
-	}
-	if !strings.Contains(markup, `<span class="prompt-label">Bio</span>`) {
-		t.Fatalf("expected index html to relabel the agent summary field as Bio")
-	}
-	if !strings.Contains(markup, `hubSetupHandle.readOnly = profileEditor || state.hubSetupBusy;`) {
-		t.Fatalf("expected index html to make the handle field readonly in profile edit mode")
-	}
-	if !strings.Contains(markup, `hubSetupToken.readOnly = state.hubSetupBusy;`) {
-		t.Fatalf("expected index html to switch hub setup token entry to readonly while onboarding runs")
-	}
-	if !strings.Contains(markup, `id="hub-setup-profile" class="prompt-text prompt-control hub-setup-profile-input`) || !strings.Contains(markup, `rows="4"`) {
-		t.Fatalf("expected index html to render a dispatch-style four-line bio textarea")
-	}
-	if !strings.Contains(markup, `if (hubSetupForm) hubSetupForm.setAttribute("aria-busy", state.hubSetupBusy ? "true" : "false");`) {
-		t.Fatalf("expected index html to mark the hub setup form busy while saving")
-	}
-	if !strings.Contains(markup, `if (hubSetupClose) hubSetupClose.disabled = state.hubSetupBusy;`) {
-		t.Fatalf("expected index html to lock the setup dialog close control during save")
-	}
-	if !strings.Contains(markup, `hubSetupSubmit.textContent = profileEditor ? "Save" : (isNew ? "Lets Gooo!" : "Connect Runtime");`) {
-		t.Fatalf("expected index html to relabel the hub setup submit button for profile, new-agent, and reconnect flows")
-	}
-	if !strings.Contains(markup, `function hubSetupModeForToken(token, fallback = state.hubSetup.agentMode)`) ||
-		!strings.Contains(markup, `trimmed.startsWith("b_")`) ||
-		!strings.Contains(markup, `trimmed.startsWith("t_")`) {
-		t.Fatalf("expected index html to infer new/existing agent mode from token prefix")
-	}
-	if !strings.Contains(markup, `hubSetupStatus.className = value`) || !strings.Contains(markup, `hub-setup-status submit-status submit-status-inline is-visible`) {
-		t.Fatalf("expected index html to keep the hub setup status line visible when populated")
-	}
-	if !strings.Contains(markup, `if (autoSubmit || isHubProfileDialogMode()) {`) || !strings.Contains(markup, `await new Promise((resolve) => window.setTimeout(resolve, 700));`) {
-		t.Fatalf("expected index html to close the profile dialog after a successful save confirmation")
-	}
-	if !strings.Contains(markup, `const HUB_PROFILE_DEEP_LINK_HASH = "#agent-profile";`) ||
-		!strings.Contains(markup, `function shouldOpenInitialHubProfileDialog()`) ||
-		!strings.Contains(markup, `openHubProfileDialog("deep_link");`) ||
-		!strings.Contains(markup, `openHubProfileDialog("dock");`) {
-		t.Fatalf("expected index html to support opening the local agent profile modal from a dock deep link")
-	}
-	hubSetupStatusIndex := strings.Index(markup, `id="hub-setup-status"`)
-	hubSetupSaveIndex := strings.Index(markup, `id="hub-setup-submit"`)
-	if hubSetupStatusIndex == -1 || hubSetupSaveIndex == -1 || hubSetupStatusIndex > hubSetupSaveIndex {
-		t.Fatalf("expected the hub setup status line to render before the action buttons")
-	}
-	if !strings.Contains(markup, "window.MoltenHubHeader.update({") {
+
+	if !strings.Contains(markup, "window.AgentHeader.update({") {
 		t.Fatalf("expected index html to update the shared site header component")
 	}
 	if !strings.Contains(markup, `"task-close"`) {
@@ -783,10 +592,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `node.classList.add("task-compact-state-left");`) {
 		t.Fatalf("expected compact/minimized task rows to render their state icon on the left")
 	}
-	if !strings.Contains(markup, `icon: "entry_chat"`) || !strings.Contains(markup, `icon: "entry_hub"`) || !strings.Contains(markup, `icon: "entry_prompt"`) || !strings.Contains(markup, `icon: "entry_library"`) || !strings.Contains(markup, `icon: "entry_json"`) || !strings.Contains(markup, `icon: "prepare"`) || !strings.Contains(markup, `icon: "clone"`) || !strings.Contains(markup, `icon: "branch"`) || !strings.Contains(markup, `icon: "publish"`) || !strings.Contains(markup, `icon: "fork"`) || !strings.Contains(markup, `icon: "agent"`) || !strings.Contains(markup, `icon: "commit"`) || !strings.Contains(markup, `icon: "pr"`) || !strings.Contains(markup, `icon: "checks"`) || !strings.Contains(markup, `icon: "github"`) {
+	if !strings.Contains(markup, `icon: "entry_chat"`) || !strings.Contains(markup, `icon: "entry_prompt"`) || !strings.Contains(markup, `icon: "entry_library"`) || !strings.Contains(markup, `icon: "entry_json"`) || !strings.Contains(markup, `icon: "prepare"`) || !strings.Contains(markup, `icon: "clone"`) || !strings.Contains(markup, `icon: "branch"`) || !strings.Contains(markup, `icon: "publish"`) || !strings.Contains(markup, `icon: "fork"`) || !strings.Contains(markup, `icon: "agent"`) || !strings.Contains(markup, `icon: "commit"`) || !strings.Contains(markup, `icon: "pr"`) || !strings.Contains(markup, `icon: "checks"`) || !strings.Contains(markup, `icon: "github"`) {
 		t.Fatalf("expected index html to classify dynamic progress steps by action icon keys")
 	}
-	if !strings.Contains(markup, `entry_chat: "message-circle"`) || !strings.Contains(markup, `entry_hub: "satellite-dish"`) || !strings.Contains(markup, `entry_prompt: "pencil"`) || !strings.Contains(markup, `entry_library: "book-open"`) || !strings.Contains(markup, `entry_json: "braces"`) || !strings.Contains(markup, `prepare: "wrench"`) || !strings.Contains(markup, `clone: "git-branch-plus"`) || !strings.Contains(markup, `branch: "git-branch"`) || !strings.Contains(markup, `publish: "upload"`) || !strings.Contains(markup, `fork: "git-fork"`) || !strings.Contains(markup, `agent: "bot"`) || !strings.Contains(markup, `commit: "git-commit-horizontal"`) || !strings.Contains(markup, `pr: "git-pull-request"`) || !strings.Contains(markup, `checks: "shield-check"`) {
+	if !strings.Contains(markup, `entry_chat: "message-circle"`) || !strings.Contains(markup, `entry_prompt: "pencil"`) || !strings.Contains(markup, `entry_library: "book-open"`) || !strings.Contains(markup, `entry_json: "braces"`) || !strings.Contains(markup, `prepare: "wrench"`) || !strings.Contains(markup, `clone: "git-branch-plus"`) || !strings.Contains(markup, `branch: "git-branch"`) || !strings.Contains(markup, `publish: "upload"`) || !strings.Contains(markup, `fork: "git-fork"`) || !strings.Contains(markup, `agent: "bot"`) || !strings.Contains(markup, `commit: "git-commit-horizontal"`) || !strings.Contains(markup, `pr: "git-pull-request"`) || !strings.Contains(markup, `checks: "shield-check"`) {
 		t.Fatalf("expected index html to map progress icon keys to lucide action glyphs")
 	}
 	if !strings.Contains(markup, `finalize: { id: "finalize", label: "GitHub"`) ||
@@ -1576,16 +1385,11 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `document.getElementById("local-conn-text")`) {
 		t.Fatalf("expected index html to bind the shared local connection indicator")
 	}
-	if !strings.Contains(markup, `window.MoltenHubHeader.updateLocalConnection(online, text);`) {
+	if !strings.Contains(markup, `window.AgentHeader.updateLocalConnection(online, text);`) {
 		t.Fatalf("expected index html to update local indicator through shared header component")
 	}
-	if !strings.Contains(markup, `document.getElementById("hub-conn-text")`) {
-		t.Fatalf("expected index html to bind the shared moltenhub connection indicator")
-	}
-	if !strings.Contains(markup, `window.MoltenHubHeader.updateConnectionStatus(snapshot, { hubSetup: state.hubSetup });`) {
-		t.Fatalf("expected index html to update hub indicator through shared header component")
-	}
-	if !strings.Contains(markup, `window.MoltenHubHeader.updateSpeechConnection(`) {
+
+	if !strings.Contains(markup, `window.AgentHeader.updateSpeechConnection(`) {
 		t.Fatalf("expected index html to update the shared whisper connection indicator")
 	}
 	if !strings.Contains(markup, `state.speech.enabled && state.speech.reachable`) {
@@ -1602,101 +1406,11 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `fetch("/api/speech/transcribe",`) {
 		t.Fatalf("expected index html to use configured speech language defaults")
 	}
-	if !strings.Contains(markup, `setIndicator(hubConnItem, hubConnDot, hubConnText, "Molten Hub", online, text);`) {
-		t.Fatalf("expected index html to update hub indicator tooltip copy")
-	}
+
 	if !strings.Contains(markup, `setIndicator(localConnItem, localConnDot, localConnText, "Local", online, text);`) {
 		t.Fatalf("expected index html to render local indicator label as Local")
 	}
-	if !strings.Contains(markup, `setIndicator(hubConnItem, hubConnDot, hubConnText, "Molten Hub", online, text);`) {
-		t.Fatalf("expected index html to render hub indicator label as Molten Hub")
-	}
-	if !strings.Contains(markup, `const online = connected;`) {
-		t.Fatalf("expected index html to style transport-pending connected hub states as online")
-	}
-	if !strings.Contains(markup, `const actionTone = connected ? "online" : (mode === "disconnected" ? "offline" : "");`) {
-		t.Fatalf("expected index html to derive hub action styling from connection state")
-	}
-	if !strings.Contains(markup, `hubConnItem.classList.toggle("status-item-action-online", actionable && tone === "online");`) {
-		t.Fatalf("expected index html to apply online action styling for connected hub states")
-	}
-	if !strings.Contains(markup, `hubConnItem.classList.toggle("status-item-action-offline", actionable && tone === "offline");`) {
-		t.Fatalf("expected index html to preserve offline action styling for disconnected hub states")
-	}
-	if !strings.Contains(markup, "function applyHubDotMode(") {
-		t.Fatalf("expected index html to include hub transport dot mode handler")
-	}
-	if !strings.Contains(markup, "conn.hub_transport") {
-		t.Fatalf("expected index html to read hub transport mode from connection state")
-	}
-	if !strings.Contains(markup, "conn.hub_detail") {
-		t.Fatalf("expected index html to read hub connection detail from connection state")
-	}
-	if !strings.Contains(markup, "Connected via WebSocket") {
-		t.Fatalf("expected index html to include websocket connection copy")
-	}
-	if !strings.Contains(markup, "Connected via HTTP long polling") {
-		t.Fatalf("expected index html to include HTTP long-polling connection copy")
-	}
-	if !strings.Contains(markup, "Hub endpoint is waking up") {
-		t.Fatalf("expected index html to include ping retry connection copy")
-	}
-	if !strings.Contains(markup, "Hub endpoint is live at") {
-		t.Fatalf("expected index html to include ping reachable connection copy")
-	}
-	if !strings.Contains(markup, `const HUB_LOGIN_URL = "https://molten.bot/login?target=hub";`) {
-		t.Fatalf("expected index html to define the molten hub login url for disconnected runtimes")
-	}
-	if !strings.Contains(markup, `const HUB_DASHBOARD_URL = "https://app.molten.bot/hub";`) {
-		t.Fatalf("expected index html to define the molten hub dashboard url for connected runtimes")
-	}
-	if !strings.Contains(markup, `text = state.hubSetup.configured`) {
-		t.Fatalf("expected index html to tailor disconnected hub copy based on saved setup state")
-	}
-	if !strings.Contains(markup, `hubConnItem.addEventListener("click", maybeOpenHubConnectPage);`) {
-		t.Fatalf("expected index html to open the molten hub app when the disconnected indicator is clicked")
-	}
-	if !strings.Contains(markup, `window.open(hubURL, "_blank", "noopener,noreferrer");`) {
-		t.Fatalf("expected index html to open the current molten hub target in a new page")
-	}
-	if !strings.Contains(markup, `const targetURL = connected || state.hubSetup.configured`) {
-		t.Fatalf("expected index html to switch hub indicator targets based on connection state")
-	}
-	if !strings.Contains(markup, `hubConnItem.setAttribute("data-href", href);`) {
-		t.Fatalf("expected index html to persist the current hub target url on the indicator")
-	}
-	if !strings.Contains(markup, "setHubConnection(\"connected\", `Connected to ${target} (transport pending)`);") {
-		t.Fatalf("expected index html to treat transport-pending hub state as connected for dashboard linking")
-	}
-	if !strings.Contains(markup, `hubConnItem.classList.toggle("status-item-action", actionable);`) {
-		t.Fatalf("expected index html to mark actionable hub indicator states")
-	}
-	if !strings.Contains(markup, `id="prompt-visibility-toggle"`) {
-		t.Fatalf("expected index html to include studio visibility toggle")
-	}
-	if !strings.Contains(markup, `aria-label="Minimize Studio panel"`) || !strings.Contains(markup, `title="Minimize Studio panel">▾</button>`) {
-		t.Fatalf("expected index html to initialize the studio toggle as an arrow minimize control")
-	}
-	if !strings.Contains(markup, `id="prompt-panel-title" class="panel-section-title prompt-title-list"`) {
-		t.Fatalf("expected index html to render compact Studio mode title list")
-	}
-	if !strings.Contains(markup, "library-task-option-subtitle") {
-		t.Fatalf("expected index html to include library task subtitles")
-	}
-	if !strings.Contains(markup, "button.setAttribute(\"aria-pressed\", String(entry.name === selected));") {
-		t.Fatalf("expected index html to mark the selected library task")
-	}
-	if !strings.Contains(markup, `id="library-prompt-modal"`) ||
-		!strings.Contains(markup, `role="dialog"`) ||
-		!strings.Contains(markup, `promptLink.className = "library-task-option-link";`) ||
-		!strings.Contains(markup, `promptLink.title = "Open full prompt";`) ||
-		!strings.Contains(markup, `openLibraryPromptModal(entry);`) ||
-		!strings.Contains(markup, `libraryPromptModalBody.textContent = entry.prompt || "No prompt text provided.";`) {
-		t.Fatalf("expected index html to show full library prompts in a modal from each task link button")
-	}
-	if strings.Contains(markup, "library-task-option-name") {
-		t.Fatalf("expected index html to stop rendering library task internal names")
-	}
+
 	if !strings.Contains(markup, `document.getElementById("resource-metrics-text")`) {
 		t.Fatalf("expected index html to bind the shared resource metrics indicator")
 	}
@@ -1719,9 +1433,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, `bg-[#0d1825]`) || strings.Contains(markup, `bg-[#0c1724]`) || strings.Contains(markup, `bg-black/15`) {
 		t.Fatalf("expected index html to remove hardcoded dark background utilities from studio surfaces")
 	}
-	if !strings.Contains(markup, "function renderHubConnection(") {
-		t.Fatalf("expected index html to include renderHubConnection handler")
-	}
+
 	if !strings.Contains(markup, "function renderResourceMetrics(") {
 		t.Fatalf("expected index html to include renderResourceMetrics handler")
 	}
@@ -1743,9 +1455,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `document.getElementById("local-conn-item")`) {
 		t.Fatalf("expected index html to bind the shared local connection pill")
 	}
-	if !strings.Contains(markup, `document.getElementById("hub-conn-item")`) {
-		t.Fatalf("expected index html to bind the shared hub connection pill")
-	}
+
 	if !strings.Contains(markup, `document.getElementById("resource-mem-text")`) {
 		t.Fatalf("expected index html to bind the memory metric value inside the shared metrics wrapper")
 	}
@@ -1843,22 +1553,11 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `aria-label="Main menu"`) {
 		t.Fatalf("expected index html to expose the shared dock as the main menu")
 	}
-	if !strings.Contains(markup, `id="github-profile-link"`) ||
-		!strings.Contains(markup, `href="https://github.com/settings/profile"`) ||
-		!strings.Contains(markup, `target="_blank"`) {
-		t.Fatalf("expected index html to render an integrated GitHub dock link that opens in a new window")
-	}
+
 	if !strings.Contains(markup, `fetch("/api/github/profile", { cache: "no-store" })`) {
 		t.Fatalf("expected index html to resolve the authenticated GitHub public profile through the hub ui api")
 	}
-	if !strings.Contains(markup, `void loadHubSetupStatus().then(() => {`) ||
-		!strings.Contains(markup, `void loadAgentAuthStatus();`) ||
-		!strings.Contains(markup, `void loadGitHubProfileLink();`) ||
-		!strings.Contains(markup, `void loadLibraryTasks();`) ||
-		!strings.Contains(markup, `const reviewSettingsPromise = loadReviewSettings();`) ||
-		!strings.Contains(markup, `await reviewSettingsPromise;`) {
-		t.Fatalf("expected index html startup to load validation and setup data in the background")
-	}
+
 	if !strings.Contains(markup, `const chatDockLink = document.querySelector('[data-app-display="chat"]');`) ||
 		!strings.Contains(markup, `chatDockLink.setAttribute("aria-disabled", String(!available));`) ||
 		!strings.Contains(markup, `chatDockLink.removeAttribute("href");`) ||
@@ -2010,10 +1709,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `src="/static/logos/github.svg"`) {
 		t.Fatalf("expected index html to render GitHub as an icon-only item inside the shared segmented dock using the shared logo-link class")
 	}
-	if !strings.Contains(markup, `id="moltenbot-hub-link"`) ||
-		!strings.Contains(markup, `src="/static/logo.svg"`) {
-		t.Fatalf("expected index html to render the Molten Hub dock item with the local embedded logo")
-	}
+
 	if !strings.Contains(markup, `<span class="sr-only">GitHub</span>`) {
 		t.Fatalf("expected index html to keep the GitHub dock item screen-reader accessible without visible text")
 	}
@@ -2400,7 +2096,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected index html to persist prompt visibility preference")
 	}
 	if !strings.Contains(markup, "function renderConfiguredAgent()") ||
-		!strings.Contains(markup, "window.MoltenHubHeader.update({") {
+		!strings.Contains(markup, "window.AgentHeader.update({") {
 		t.Fatalf("expected index html to delegate dynamic configured agent subtitle copy to the shared header")
 	}
 	if !strings.Contains(markup, "function handlePromptImagePaste(") {
@@ -2492,7 +2188,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "clearSubmittedPromptState();") {
 		t.Fatalf("expected index html to clear the submitted prompt state after a successful queue")
 	}
-	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["claude","codex"],"githubReposReady":false};`) {
+	if !strings.Contains(markup, `window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["claude","codex"],"githubReposReady":false};`) {
 		t.Fatalf("expected index html to include default UI config")
 	}
 	if !strings.Contains(markup, `id="theme-toggle"`) || !strings.Contains(markup, `function nextThemeMode(theme)`) {
@@ -2528,7 +2224,6 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		`trackAnalyticsEvent("task_view_changed", { task_view: nextView });`,
 		`trackAnalyticsEvent("task_pull_request_opened", { request_id: taskRequestID(task) });`,
 		`trackAnalyticsEvent("task_github_step_opened", {`,
-		`trackAnalyticsEvent("hub_setup_started", hubSetupAnalyticsParams({ auto_submit: autoSubmit }));`,
 		`trackAnalyticsEvent("agent_auth_configure_started", agentAuthAnalyticsParams({ auth_method: "github_token" }));`,
 		`trackAnalyticsEvent("prompt_screenshots_attached", {`,
 		`trackAnalyticsEvent("chat_repo_search_changed", {`,
@@ -2742,13 +2437,13 @@ func TestHandlerIndexInjectsAutomaticModeConfig(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":true,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["claude","codex"],"githubReposReady":false};`) {
+	if !strings.Contains(markup, `window.__RUNTIME_UI_CONFIG__ = {"automaticMode":true,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["claude","codex"],"githubReposReady":false};`) {
 		t.Fatalf("expected automatic mode UI config, got %q", markup)
 	}
 }
 
 func TestHandlerIndexInjectsConfiguredDefaultRepository(t *testing.T) {
-	t.Setenv("MOLTEN_HUB_DEFAULT_REPOSITORY", "git@github.com:acme/project.git")
+	t.Setenv("HARNESS_DEFAULT_REPOSITORY", "git@github.com:acme/project.git")
 
 	srv := NewServer("", NewBroker())
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -2779,7 +2474,7 @@ func TestHandlerIndexInjectsConfiguredHarness(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"claude","configuredAgentLabel":"Claude","defaultRepository":"","promptImageHarnesses":["claude","codex"],"githubReposReady":false};`) {
+	if !strings.Contains(markup, `window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"claude","configuredAgentLabel":"Claude","defaultRepository":"","promptImageHarnesses":["claude","codex"],"githubReposReady":false};`) {
 		t.Fatalf("expected configured harness UI config, got %q", markup)
 	}
 }
@@ -2860,7 +2555,7 @@ func TestHandlerOmitsReleasesIndexDisplay(t *testing.T) {
 	if !strings.Contains(markup, `class="page-bottom-dock"`) ||
 		!strings.Contains(markup, `class="prompt-mode-tabs prompt-mode-tabs-dock"`) ||
 		!strings.Contains(markup, `src="/static/bottom-dock.js"`) ||
-		strings.Contains(markup, `<!-- hub-bottom-dock -->`) {
+		strings.Contains(markup, `<!-- bottom-dock -->`) {
 		t.Fatalf("expected index html to render shared dock component")
 	}
 	for _, removed := range []string{
@@ -3011,13 +2706,13 @@ func TestHandlerServesChatView(t *testing.T) {
 		`if (isRepoCardControlTarget(event.target, card)) return;`,
 		`card.setAttribute("aria-expanded", "true");`,
 		`fetch("/api/local-prompt", {`,
-		`headers: { "Content-Type": "application/json", "X-MoltenHub-Task-Source": "chat" },`,
+		`headers: { "Content-Type": "application/json", "X-Agent-Task-Source": "chat" },`,
 		`payload.baseBranch = branch;`,
 		`function trackChatEvent(name, params)`,
 		`trackChatEvent("chat_repo_prompt_started"`,
 		`trackChatEvent("chat_repo_prompt_succeeded"`,
 		`trackChatEvent("chat_repo_search_changed"`,
-		`window.MoltenHubHeader.startConnectionStatus();`,
+		`window.AgentHeader.startConnectionStatus();`,
 	}
 	for _, needle := range required {
 		if !strings.Contains(markup, needle) {
@@ -3711,9 +3406,7 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		!strings.Contains(css, ".task-result-link-logo {") {
 		t.Fatalf("expected stylesheet to size pull request links in task result banners")
 	}
-	if !strings.Contains(css, ".page-bottom-dock {\n  position: fixed;\n  left: 50%;\n  bottom: max(16px, env(safe-area-inset-bottom));\n  z-index: 61;\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  justify-content: center;") {
-		t.Fatalf("expected stylesheet to align the bottom dock tabs and GitHub profile link on a shared row")
-	}
+
 	if !strings.Contains(css, ".prompt-mode-link {\n  position: relative;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 40px;\n  height: 40px;") {
 		t.Fatalf("expected segmented dock links to use icon pill sizing within the shared menu")
 	}
@@ -3854,12 +3547,11 @@ func TestHandlerServesStaticSiteHeaderComponent(t *testing.T) {
 		`localStorage.getItem(THEME_KEY)`,
 		`<header class="header site-header">`,
 		`<a class="brand-lockup site-header-home" href="/" aria-label="Agent_00 home" data-site-header-home>`,
-		`id="moltenhub-logo"`,
+		`id="agent-logo"`,
 		`id="configured-agent-logo"`,
 		`<span class="title site-header-title">Agent_00</span>`,
 		`id="configured-agent-gorilla-subtitle" class="site-header-subtitle">Codex is now a 600LB Gorilla!</span>`,
 		`id="local-conn-item" class="status-item status-item-compact status-item-compact-expandable"`,
-		`id="hub-conn-item" class="status-item status-item-compact status-item-compact-expandable"`,
 		`id="speech-conn-item" class="status-item status-item-compact status-item-compact-expandable hidden"`,
 		`id="resource-metrics-item" class="status-item status-item-metrics" title="Resource metrics" aria-label="Resource metrics" tabindex="0"`,
 		`data-lucide="cpu"`,
@@ -4194,7 +3886,7 @@ func TestHandlerDashboardStatsIncludeTaskSourcesFromSubmitPaths(t *testing.T) {
 	for _, group := range snap.Stats.SourceMix {
 		got[group.Name] = group.Tasks
 	}
-	for _, name := range []string{"Chat", "Hub", "JSON", "Library", "Prompt"} {
+	for _, name := range []string{"Chat", "Other", "JSON", "Library", "Prompt"} {
 		if got[name] != 1 {
 			t.Fatalf("source_mix[%q] = %d, want 1 (all groups: %#v)", name, got[name], snap.Stats.SourceMix)
 		}
@@ -4380,7 +4072,7 @@ func TestHandlerLibraryRunSubmitAccepted(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	payload := `{"repos":["git@github.com:acme/repo.git","git@github.com:acme/repo-two.git"],"branch":"main","targetSubdir":"internal/hub","libraryTaskName":"unit-test-coverage","images":[{"name":"shot.png","mediaType":"image/png","dataBase64":"aGVsbG8="}]}`
+	payload := `{"repos":["git@github.com:acme/repo.git","git@github.com:acme/repo-two.git"],"branch":"main","targetSubdir":"internal/localruntime","libraryTaskName":"unit-test-coverage","images":[{"name":"shot.png","mediaType":"image/png","dataBase64":"aGVsbG8="}]}`
 	resp, err := http.Post(ts.URL+"/api/library/run", "application/json", bytes.NewBufferString(payload))
 	if err != nil {
 		t.Fatalf("POST /api/library/run error = %v", err)

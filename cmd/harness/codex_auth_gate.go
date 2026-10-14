@@ -15,7 +15,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
-	"github.com/Molten-Bot/agent_00/internal/hub"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
@@ -38,7 +38,7 @@ type codexAuthGate struct {
 	command string
 
 	runtimeConfigPath  string
-	initCfg            hub.InitConfig
+	initCfg            localruntime.InitConfig
 	requireGitHubToken bool
 
 	required bool
@@ -64,7 +64,7 @@ func newCodexAuthGate(
 	command string,
 	logf func(string, ...any),
 ) *codexAuthGate {
-	return newCodexAuthGateWithConfig(ctx, runner, command, "", hub.InitConfig{}, false, logf)
+	return newCodexAuthGateWithConfig(ctx, runner, command, "", localruntime.InitConfig{}, false, logf)
 }
 
 func newCodexAuthGateWithConfig(
@@ -72,7 +72,7 @@ func newCodexAuthGateWithConfig(
 	runner execx.Runner,
 	command string,
 	runtimeConfigPath string,
-	initCfg hub.InitConfig,
+	initCfg localruntime.InitConfig,
 	requireGitHubToken bool,
 	logf func(string, ...any),
 ) *codexAuthGate {
@@ -144,7 +144,7 @@ func newCodexAuthGateWithConfig(
 	if autoStartDeviceAuth {
 		if _, err := g.StartDeviceAuth(context.Background()); err != nil {
 			if g.logf != nil {
-				g.logf("hub.auth status=warn action=start_codex_device_auth err=%q", err)
+				g.logf("localruntime.auth status=warn action=start_codex_device_auth err=%q", err)
 			}
 		}
 	}
@@ -210,7 +210,7 @@ func (g *codexAuthGate) Status(ctx context.Context) (web.AgentAuthState, error) 
 	if autoStartDeviceAuth {
 		if _, err := g.StartDeviceAuth(context.Background()); err != nil {
 			if g.logf != nil {
-				g.logf("hub.auth status=warn action=start_codex_device_auth err=%q", err)
+				g.logf("localruntime.auth status=warn action=start_codex_device_auth err=%q", err)
 			}
 		}
 	}

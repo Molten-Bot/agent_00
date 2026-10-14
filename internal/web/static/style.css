@@ -6583,11 +6583,11 @@ body.onboarding-modal-open {
 .onboarding-profile-fields.hidden,
 .settings-tabbar.hidden,
 .review-settings-form.hidden,
-#hub-setup-form.hidden,
-#hub-setup-token-field.hidden,
-#hub-setup-connect-region-row.hidden,
-#hub-setup-signin-link.hidden,
-#hub-setup-connection-toggle.hidden {
+#settings-form.hidden,
+#settings-token-field.hidden,
+#settings-connect-region-row.hidden,
+#settings-signin-link.hidden,
+#settings-connection-toggle.hidden {
   display: none !important;
 }
 
@@ -6648,7 +6648,7 @@ body.onboarding-modal-open {
   color: rgba(241, 245, 249, 0.78);
 }
 
-.hub-setup-sidebar-actions {
+.settings-sidebar-actions {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
@@ -6656,7 +6656,7 @@ body.onboarding-modal-open {
 }
 
 .onboarding-signin-link,
-.hub-setup-signin-logo {
+.settings-signin-logo {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -6896,7 +6896,7 @@ body.onboarding-modal-open {
 
 .onboarding-form label,
 .onboarding-form legend,
-#hub-setup-token-label {
+#settings-token-label {
   color: var(--surface-label);
   font-size: 0.86rem;
   font-weight: 700;
@@ -6915,7 +6915,7 @@ body.onboarding-modal-open {
 }
 
 .onboarding-toggle,
-.hub-setup-toggle {
+.settings-toggle {
   min-height: 40px;
   padding: 8px 12px;
   border: 1px solid var(--surface-control-border);
@@ -6928,15 +6928,15 @@ body.onboarding-modal-open {
 }
 
 .onboarding-toggle:hover,
-.hub-setup-toggle:hover {
+.settings-toggle:hover {
   border-color: color-mix(in srgb, var(--running) 34%, var(--surface-control-border));
   color: var(--text);
 }
 
 .onboarding-toggle.active,
 .onboarding-toggle[aria-pressed="true"],
-.hub-setup-toggle.active,
-.hub-setup-toggle[aria-pressed="true"] {
+.settings-toggle.active,
+.settings-toggle[aria-pressed="true"] {
   border-color: color-mix(in srgb, var(--running) 58%, var(--surface-control-border));
   background: var(--brand-gradient);
   box-shadow: 0 14px 30px rgba(10, 132, 255, 0.18);
@@ -6947,7 +6947,7 @@ body.onboarding-modal-open {
   grid-area: token;
 }
 
-#hub-setup-new-agent-fields {
+#settings-new-agent-fields {
   grid-area: profile;
 }
 
@@ -6991,7 +6991,7 @@ body.onboarding-modal-open {
   line-height: 1.45;
 }
 
-.hub-setup-profile-grid {
+.settings-profile-grid {
   display: grid;
   gap: 16px;
   grid-template-columns: minmax(0, 1fr);
@@ -7020,15 +7020,15 @@ body.onboarding-modal-open {
   line-height: normal;
 }
 
-.hub-setup-profile-emoji {
+.settings-profile-emoji {
   grid-column: auto;
 }
 
-.hub-setup-profile-text {
+.settings-profile-text {
   grid-column: 1 / -1;
 }
 
-.hub-setup-profile-input {
+.settings-profile-input {
   height: auto;
   min-height: calc(2 * 1.45em + 24px);
   resize: vertical;
@@ -7039,7 +7039,7 @@ body.onboarding-modal-open {
 }
 
 .onboarding-form-actions,
-.hub-setup-footer {
+.settings-footer {
   grid-area: actions;
   display: flex;
   align-items: center;
@@ -7048,7 +7048,7 @@ body.onboarding-modal-open {
   min-height: 44px;
 }
 
-.hub-setup-actions {
+.settings-actions {
   display: grid;
   grid-template-columns: auto auto auto;
   align-items: center;
@@ -7058,7 +7058,7 @@ body.onboarding-modal-open {
   margin-left: auto;
 }
 
-.hub-setup-status {
+.settings-status {
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -7084,7 +7084,7 @@ body.onboarding-modal-open {
   color: var(--bad);
 }
 
-#hub-setup-submit {
+#settings-submit {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -7148,7 +7148,7 @@ body.onboarding-modal-open {
   stroke-linejoin: round;
 }
 
-.hub-setup-connection-toggle {
+.settings-connection-toggle {
   width: 44px;
   height: 44px;
   min-inline-size: 44px;
@@ -7159,7 +7159,7 @@ body.onboarding-modal-open {
   padding: 0;
 }
 
-.hub-setup-connection-toggle-offline {
+.settings-connection-toggle-offline {
   color: var(--surface-danger);
   border-color: color-mix(in srgb, var(--surface-danger) 26%, var(--surface-control-border));
 }
@@ -7179,7 +7179,7 @@ body.onboarding-modal-open {
     align-items: start;
   }
 
-  .hub-setup-sidebar-actions {
+  .settings-sidebar-actions {
     justify-content: space-between;
     width: 100%;
   }
@@ -7222,12 +7222,12 @@ body.onboarding-modal-open {
   }
 
   .onboarding-form-actions,
-  .hub-setup-footer {
+  .settings-footer {
     align-items: stretch;
     flex-wrap: wrap;
   }
 
-  .hub-setup-actions {
+  .settings-actions {
     width: 100%;
     grid-template-columns: auto auto auto;
     justify-content: flex-end;
@@ -7281,7 +7281,7 @@ body.onboarding-modal-open {
 }
 
 @media (max-width: 820px) {
-  .hub-setup-profile-grid {
+  .settings-profile-grid {
     grid-template-columns: 1fr;
   }
 
@@ -7295,11 +7295,11 @@ body.onboarding-modal-open {
     transform: translateX(0) scale(1);
   }
 
-  .hub-setup-footer {
+  .settings-footer {
     align-items: stretch;
   }
 
-  .hub-setup-actions {
+  .settings-actions {
     width: 100%;
     grid-template-columns: auto auto auto;
     justify-content: flex-end;

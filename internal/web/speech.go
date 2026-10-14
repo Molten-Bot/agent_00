@@ -177,7 +177,7 @@ func (s Server) handleSpeechTranscribe(w http.ResponseWriter, r *http.Request) {
 		languageMode = "auto"
 	}
 	s.logf(
-		"hub.ui status=start endpoint=speech_transcribe bytes=%d duration_seconds=%.3f peak=%.5f rms=%.5f near_silent=%t language=%q requested_language=%q",
+		"localruntime.ui status=start endpoint=speech_transcribe bytes=%d duration_seconds=%.3f peak=%.5f rms=%.5f near_silent=%t language=%q requested_language=%q",
 		stats.Bytes,
 		stats.DurationSeconds,
 		stats.Peak,
@@ -191,7 +191,7 @@ func (s Server) handleSpeechTranscribe(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		code := speechErrorCode(err)
 		s.logf(
-			"hub.ui status=warn endpoint=speech_transcribe code=%q bytes=%d duration_seconds=%.3f near_silent=%t err=%q",
+			"localruntime.ui status=warn endpoint=speech_transcribe code=%q bytes=%d duration_seconds=%.3f near_silent=%t err=%q",
 			code,
 			stats.Bytes,
 			stats.DurationSeconds,
@@ -215,7 +215,7 @@ func (s Server) handleSpeechTranscribe(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(text) == "" {
 		body["reason"] = speechReasonEmptyTranscript
 		s.logf(
-			"hub.ui status=warn endpoint=speech_transcribe reason=%q bytes=%d duration_seconds=%.3f peak=%.5f rms=%.5f near_silent=%t",
+			"localruntime.ui status=warn endpoint=speech_transcribe reason=%q bytes=%d duration_seconds=%.3f peak=%.5f rms=%.5f near_silent=%t",
 			speechReasonEmptyTranscript,
 			stats.Bytes,
 			stats.DurationSeconds,
@@ -225,7 +225,7 @@ func (s Server) handleSpeechTranscribe(w http.ResponseWriter, r *http.Request) {
 		)
 	} else {
 		s.logf(
-			"hub.ui status=ok endpoint=speech_transcribe text_chars=%d bytes=%d duration_seconds=%.3f",
+			"localruntime.ui status=ok endpoint=speech_transcribe text_chars=%d bytes=%d duration_seconds=%.3f",
 			len([]rune(text)),
 			stats.Bytes,
 			stats.DurationSeconds,

@@ -5,7 +5,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
-	"github.com/Molten-Bot/agent_00/internal/hub"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
@@ -20,7 +20,7 @@ func newConcreteAgentAuthGate(
 	ctx context.Context,
 	runner execx.Runner,
 	runtime agentruntime.Runtime,
-	initCfg hub.InitConfig,
+	initCfg localruntime.InitConfig,
 	logf func(string, ...any),
 ) agentAuthGate {
 	switch runtime.Harness {
@@ -52,7 +52,7 @@ func newAgentAuthGate(
 	ctx context.Context,
 	runner execx.Runner,
 	_ agentruntime.Runtime,
-	initCfg hub.InitConfig,
+	initCfg localruntime.InitConfig,
 	logf func(string, ...any),
 ) agentAuthGate {
 	return newSelectableAgentAuthGate(ctx, runner, initCfg, logf)

@@ -35,7 +35,6 @@ func TestAgentsSeedSharesRuntimeToolingAndSafety(t *testing.T) {
 		"railsmith doctor --root .",
 		"`Failure:` and `Error details:`",
 		"`gh repo view OWNER/REPO --json isPrivate,nameWithOwner`",
-		"`https://molten.bot/hubs.json`",
 		"retry the connection attempt a few times",
 		"concrete repository evidence",
 	} {

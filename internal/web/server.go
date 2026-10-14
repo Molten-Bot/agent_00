@@ -29,11 +29,11 @@ var staticFiles embed.FS
 
 const maxLocalPromptBodyBytes = 16 << 20
 const maxAgentAuthConfigureBodyBytes = 1 << 20
-const maxHubSetupConfigureBodyBytes = 1 << 20
+const maxSettingsConfigureBodyBytes = 1 << 20
 const streamSnapshotInterval = 120 * time.Millisecond
 const maxStreamTaskLogs = 500
-const bottomDockPlaceholder = "<!-- hub-bottom-dock -->"
-const taskSourceHeader = "X-MoltenHub-Task-Source"
+const bottomDockPlaceholder = "<!-- bottom-dock -->"
+const taskSourceHeader = "X-Agent-Task-Source"
 
 var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype html>
 <html lang="en" class="light">
@@ -62,8 +62,8 @@ var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype 
     {{.BottomDock}}
   </div>
   <script>
-    if (window.MoltenHubHeader && typeof window.MoltenHubHeader.startConnectionStatus === "function") {
-      window.MoltenHubHeader.startConnectionStatus();
+    if (window.AgentHeader && typeof window.AgentHeader.startConnectionStatus === "function") {
+      window.AgentHeader.startConnectionStatus();
     }
     if (window.lucide) {
       window.lucide.createIcons();
@@ -82,7 +82,7 @@ type sitePageData struct {
 	BottomDock template.HTML
 }
 
-// Server provides an HTTP UI for live hub/task monitoring.
+// Server provides an HTTP UI for local task monitoring.
 type Server struct {
 	Addr                    string
 	Broker                  *Broker
@@ -102,11 +102,6 @@ type Server struct {
 	StartAgentAuth          func(context.Context) (AgentAuthState, error)
 	VerifyAgentAuth         func(context.Context) (AgentAuthState, error)
 	ConfigureAgentAuth      func(context.Context, string) (AgentAuthState, error)
-	HubSetupStatus          func(context.Context) (HubSetupState, error)
-	ConfigureHubSetup       func(context.Context, HubSetupRequest) (HubSetupState, error)
-	ConnectHubSetup         func(context.Context) (HubSetupState, error)
-	DisconnectHubSetup      func(context.Context) (HubSetupState, error)
-	RenderHubSetupStatus    func(context.Context) (HubSetupState, error)
 	ReviewSettingsStatus    func(context.Context) (ReviewSettingsState, error)
 	ConfigureReviewSettings func(context.Context, ReviewSettingsRequest) (ReviewSettingsState, error)
 	ResolveGitHubProfileURL func(context.Context) (string, error)
@@ -137,36 +132,6 @@ type AgentAuthOption struct {
 	Description string `json:"description,omitempty"`
 }
 
-// HubSetupState describes whether Molten Hub is configured locally and what
-// profile details should be reflected in config.json.
-type HubSetupState struct {
-	Configured bool   `json:"configured"`
-	AgentMode  string `json:"agent_mode,omitempty"`
-	TokenType  string `json:"token_type,omitempty"`
-	Region     string `json:"region,omitempty"`
-	Handle     string `json:"handle,omitempty"`
-	Profile    struct {
-		ProfileText string `json:"profile"`
-		DisplayName string `json:"display_name"`
-		Emoji       string `json:"emoji"`
-	} `json:"profile"`
-	ConnectURL       string         `json:"connect_url,omitempty"`
-	DashboardURL     string         `json:"dashboard_url,omitempty"`
-	Message          string         `json:"message,omitempty"`
-	NeedsRestart     bool           `json:"needs_restart,omitempty"`
-	Onboarding       []HubSetupStep `json:"onboarding,omitempty"`
-	OnboardingActive bool           `json:"onboarding_active,omitempty"`
-	OnboardingStage  string         `json:"onboarding_stage,omitempty"`
-	ActivationReady  bool           `json:"activation_ready,omitempty"`
-}
-
-type HubSetupStep struct {
-	ID     string `json:"id,omitempty"`
-	Label  string `json:"label,omitempty"`
-	Status string `json:"status,omitempty"`
-	Detail string `json:"detail,omitempty"`
-}
-
 // GitHubRepo captures the repository fields shown in the chat view.
 type GitHubRepo struct {
 	Name           string `json:"name"`
@@ -194,20 +159,6 @@ type gitHubRepoCache struct {
 	wait       chan struct{}
 	repos      []GitHubRepo
 	generation uint64
-}
-
-// HubSetupRequest captures the late-stage Hub connect modal payload.
-type HubSetupRequest struct {
-	AgentMode string `json:"agent_mode"`
-	TokenType string `json:"token_type"`
-	Region    string `json:"region"`
-	Token     string `json:"token"`
-	Handle    string `json:"handle"`
-	Profile   struct {
-		ProfileText string `json:"profile"`
-		DisplayName string `json:"display_name"`
-		Emoji       string `json:"emoji"`
-	} `json:"profile"`
 }
 
 type ReviewSettingsState struct {
@@ -273,10 +224,10 @@ func (s Server) Run(ctx context.Context) error {
 		_ = httpServer.Shutdown(shutdownCtx)
 	}()
 
-	s.logf("hub.ui status=starting listen=%s", s.Addr)
+	s.logf("localruntime.ui status=starting listen=%s", s.Addr)
 	err = httpServer.Serve(listener)
 	if err == nil || errors.Is(err, http.ErrServerClosed) {
-		s.logf("hub.ui status=stopped")
+		s.logf("localruntime.ui status=stopped")
 		return nil
 	}
 	return err
@@ -297,7 +248,7 @@ func (s Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
-		s.logf("hub.ui status=warn event=load_static_files err=%q", err)
+		s.logf("localruntime.ui status=warn event=load_static_files err=%q", err)
 	} else {
 		staticHandler := http.StripPrefix("/static/", http.FileServer(http.FS(staticFS)))
 		mux.Handle("/static/", withCacheControl(staticHandler, "public, max-age=3600"))
@@ -315,9 +266,6 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/speech/transcribe", s.handleSpeechTranscribe)
 	mux.HandleFunc("/api/github/profile", s.handleGitHubProfile)
 	mux.HandleFunc("/api/github/repos", s.handleGitHubRepos)
-	mux.HandleFunc("/api/hub-setup", s.handleHubSetup)
-	mux.HandleFunc("/api/hub-setup/connect", s.handleHubSetupConnect)
-	mux.HandleFunc("/api/hub-setup/disconnect", s.handleHubSetupDisconnect)
 	mux.HandleFunc("/api/review-settings", s.handleReviewSettings)
 	mux.HandleFunc("/api/agent-auth", s.handleAgentAuthStatus)
 	mux.HandleFunc("/api/agent-auth/start-device", s.handleAgentAuthStart)
@@ -337,38 +285,6 @@ func defaultAgentAuthState() AgentAuthState {
 	}
 }
 
-func defaultHubSetupState() HubSetupState {
-	state := HubSetupState{
-		Configured:      false,
-		AgentMode:       "existing",
-		TokenType:       "agent",
-		Region:          "na",
-		ConnectURL:      "https://molten.bot/login?target=hub",
-		DashboardURL:    "https://app.molten.bot/hub",
-		Onboarding:      DefaultHubSetupOnboarding("existing"),
-		OnboardingStage: "bind",
-	}
-	state.Profile.ProfileText = ""
-	state.Profile.DisplayName = ""
-	state.Profile.Emoji = ""
-	return state
-}
-
-func DefaultHubSetupOnboarding(agentMode string) []HubSetupStep {
-	steps := []HubSetupStep{
-		{ID: "bind", Label: "Bind", Status: "pending"},
-		{ID: "work_bind", Label: "Work", Status: "pending", Detail: "Resolve and verify Molten Hub credentials."},
-		{ID: "profile_set", Label: "Profile Set", Status: "pending", Detail: "Persist the agent profile in Molten Hub."},
-		{ID: "work_activate", Label: "Work", Status: "pending", Detail: "Apply the runtime transport and confirm activation."},
-	}
-	if strings.EqualFold(strings.TrimSpace(agentMode), "existing") {
-		steps[0].Detail = "Verify the existing Molten Hub agent credential."
-	} else {
-		steps[0].Detail = "Exchange the bind token for an agent credential."
-	}
-	return steps
-}
-
 func (s Server) handleGitHubProfile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -378,7 +294,7 @@ func (s Server) handleGitHubProfile(w http.ResponseWriter, r *http.Request) {
 
 	profileURL, err := s.resolveGitHubProfileURL(r.Context())
 	if err != nil {
-		s.logf("hub.ui status=warn endpoint=github_profile err=%q", err)
+		s.logf("localruntime.ui status=warn endpoint=github_profile err=%q", err)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":    false,
 			"error": err.Error(),
@@ -409,7 +325,7 @@ func (s Server) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
 		repos, err = s.resolveGitHubRepos(r.Context())
 	}
 	if err != nil {
-		s.logf("hub.ui status=warn endpoint=github_repos err=%q", err)
+		s.logf("localruntime.ui status=warn endpoint=github_repos err=%q", err)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":    false,
 			"error": err.Error(),
@@ -449,76 +365,10 @@ func (s Server) injectBottomDockComponent(ctx context.Context, data []byte) []by
 	}
 	dock, err := fs.ReadFile(staticFiles, "static/bottom-dock.html")
 	if err != nil {
-		s.logf("hub.ui status=warn event=load_bottom_dock_component err=%q", err)
+		s.logf("localruntime.ui status=warn event=load_bottom_dock_component err=%q", err)
 		return data
 	}
-	dock = s.applyBottomDockHubState(ctx, dock)
 	return bytes.Replace(data, []byte(bottomDockPlaceholder), bytes.TrimSpace(dock), 1)
-}
-
-func (s Server) applyBottomDockHubState(ctx context.Context, dock []byte) []byte {
-	state, err := s.renderHubSetupState(ctx)
-	if err != nil {
-		s.logf("hub.ui status=warn event=load_bottom_dock_hub_state err=%q", err)
-	}
-
-	configured := state.Configured
-	connectURL := strings.TrimSpace(state.ConnectURL)
-	if connectURL == "" {
-		connectURL = defaultHubSetupState().ConnectURL
-	}
-	dashboardURL := strings.TrimSpace(state.DashboardURL)
-	if dashboardURL == "" {
-		dashboardURL = defaultHubSetupState().DashboardURL
-	}
-	hubTitle := "Configure Molten Hub"
-	hubURL := connectURL
-	hubLinkClass := "prompt-mode-link prompt-mode-link-logo"
-	profileButtonAttr := " hidden"
-	plusClass := "hub-dock-plus"
-	if configured {
-		hubTitle = "Open Molten Hub"
-		hubURL = dashboardURL
-		profileButtonAttr = ""
-		plusClass = "hub-dock-plus hidden"
-	}
-
-	dock = bytes.Replace(dock,
-		[]byte(`<div id="moltenbot-hub-dock-group" class="hub-dock-group" data-configured="false">`),
-		[]byte(fmt.Sprintf(`<div id="moltenbot-hub-dock-group" class="hub-dock-group" data-configured="%t">`, configured)),
-		1,
-	)
-	dock = bytes.Replace(dock,
-		[]byte(`href="https://molten.bot/login?target=hub"`),
-		[]byte(`href="`+template.HTMLEscapeString(hubURL)+`"`),
-		1,
-	)
-	dock = bytes.Replace(dock,
-		[]byte("id=\"moltenbot-hub-link\"\n        class=\"prompt-mode-link prompt-mode-link-logo\""),
-		[]byte("id=\"moltenbot-hub-link\"\n        class=\""+template.HTMLEscapeString(hubLinkClass)+"\""),
-		1,
-	)
-	dock = bytes.Replace(dock,
-		[]byte(`aria-label="Configure Molten Hub"`),
-		[]byte(`aria-label="`+template.HTMLEscapeString(hubTitle)+`"`),
-		1,
-	)
-	dock = bytes.Replace(dock,
-		[]byte(`title="Configure Molten Hub"`),
-		[]byte(`title="`+template.HTMLEscapeString(hubTitle)+`"`),
-		1,
-	)
-	dock = bytes.Replace(dock,
-		[]byte(`<span id="moltenbot-hub-plus" class="hub-dock-plus hidden" aria-hidden="true">+</span>`),
-		[]byte(`<span id="moltenbot-hub-plus" class="`+plusClass+`" aria-hidden="true">+</span>`),
-		1,
-	)
-	dock = bytes.Replace(dock,
-		[]byte("        hidden>\n"),
-		[]byte(profileButtonAttr+">\n"),
-		1,
-	)
-	return dock
 }
 
 func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
@@ -775,8 +625,8 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               const speechStatus = body && body.speech ? body.speech : {};
               speech.enabled = Boolean(speechStatus.enabled);
               speech.reachable = Boolean(speechStatus.reachable);
-              if (window.MoltenHubHeader && typeof window.MoltenHubHeader.updateSpeechConnection === "function") {
-                window.MoltenHubHeader.updateSpeechConnection(
+              if (window.AgentHeader && typeof window.AgentHeader.updateSpeechConnection === "function") {
+                window.AgentHeader.updateSpeechConnection(
                   speech.enabled && speech.reachable,
                   speech.reachable ? "Connected" : "Unavailable"
                 );
@@ -784,8 +634,8 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             } catch (_err) {
               speech.enabled = false;
               speech.reachable = false;
-              if (window.MoltenHubHeader && typeof window.MoltenHubHeader.updateSpeechConnection === "function") {
-                window.MoltenHubHeader.updateSpeechConnection(false, "Unavailable");
+              if (window.AgentHeader && typeof window.AgentHeader.updateSpeechConnection === "function") {
+                window.AgentHeader.updateSpeechConnection(false, "Unavailable");
               }
             } finally {
               syncChatSpeechButton();
@@ -1052,7 +902,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             try {
               const response = await fetch("/api/local-prompt", {
                 method: "POST",
-                headers: { "Content-Type": "application/json", "X-MoltenHub-Task-Source": "chat" },
+                headers: { "Content-Type": "application/json", "X-Agent-Task-Source": "chat" },
                 body: JSON.stringify(payload)
               });
               let body = null;
@@ -1405,7 +1255,7 @@ func (s Server) renderSitePage(ctx context.Context, w http.ResponseWriter, data 
 	data.BottomDock = template.HTML(bottomDockPlaceholder)
 	var page bytes.Buffer
 	if err := sitePageTemplate.Execute(&page, data); err != nil {
-		s.logf("hub.ui status=warn event=render_site_page err=%q", err)
+		s.logf("localruntime.ui status=warn event=render_site_page err=%q", err)
 		http.Error(w, "page is unavailable", http.StatusInternalServerError)
 		return
 	}
@@ -1443,20 +1293,20 @@ func (s Server) injectIndexConfig(data []byte) []byte {
 		GitHubRepos:          repos,
 	})
 	if err != nil {
-		s.logf("hub.ui status=warn event=marshal_index_config err=%q", err)
+		s.logf("localruntime.ui status=warn event=marshal_index_config err=%q", err)
 		return data
 	}
 
 	return bytes.Replace(
 		data,
-		[]byte(`window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};`),
-		[]byte("window.__HUB_UI_CONFIG__ = "+string(cfg)+";"),
+		[]byte(`window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};`),
+		[]byte("window.__RUNTIME_UI_CONFIG__ = "+string(cfg)+";"),
 		1,
 	)
 }
 
 func defaultStudioRepository() string {
-	return strings.TrimSpace(os.Getenv("MOLTEN_HUB_DEFAULT_REPOSITORY"))
+	return strings.TrimSpace(os.Getenv("HARNESS_DEFAULT_REPOSITORY"))
 }
 
 func (s Server) handleState(w http.ResponseWriter, _ *http.Request) {
@@ -1523,7 +1373,7 @@ func (s Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	writeSSESnapshot := func() bool {
 		payload, err := json.Marshal(compactStreamSnapshot(s.snapshot()))
 		if err != nil {
-			s.logf("hub.ui status=warn event=marshal_snapshot err=%q", err)
+			s.logf("localruntime.ui status=warn event=marshal_snapshot err=%q", err)
 			return true
 		}
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
@@ -1613,114 +1463,6 @@ func (s Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-func (s Server) currentHubSetupState(ctx context.Context) (HubSetupState, error) {
-	state := defaultHubSetupState()
-	if s.HubSetupStatus == nil {
-		return state, nil
-	}
-	next, err := s.HubSetupStatus(ctx)
-	if strings.TrimSpace(next.ConnectURL) == "" {
-		next.ConnectURL = state.ConnectURL
-	}
-	if strings.TrimSpace(next.DashboardURL) == "" {
-		next.DashboardURL = state.DashboardURL
-	}
-	if strings.TrimSpace(next.AgentMode) == "" {
-		next.AgentMode = state.AgentMode
-	}
-	if strings.TrimSpace(next.TokenType) == "" {
-		next.TokenType = state.TokenType
-	}
-	return next, err
-}
-
-func (s Server) renderHubSetupState(ctx context.Context) (HubSetupState, error) {
-	if s.RenderHubSetupStatus == nil {
-		return s.currentHubSetupState(ctx)
-	}
-	state := defaultHubSetupState()
-	next, err := s.RenderHubSetupStatus(ctx)
-	if strings.TrimSpace(next.ConnectURL) == "" {
-		next.ConnectURL = state.ConnectURL
-	}
-	if strings.TrimSpace(next.DashboardURL) == "" {
-		next.DashboardURL = state.DashboardURL
-	}
-	if strings.TrimSpace(next.AgentMode) == "" {
-		next.AgentMode = state.AgentMode
-	}
-	if strings.TrimSpace(next.TokenType) == "" {
-		next.TokenType = state.TokenType
-	}
-	return next, err
-}
-
-func (s Server) handleHubSetup(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		state, err := s.currentHubSetupState(r.Context())
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{
-				"ok":    false,
-				"error": fmt.Sprintf("load hub setup state: %v", err),
-				"hub":   state,
-			})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":  true,
-			"hub": state,
-		})
-	case http.MethodPost:
-		if s.ConfigureHubSetup == nil {
-			writeJSON(w, http.StatusNotImplemented, map[string]any{
-				"ok":    false,
-				"error": "hub setup is unavailable",
-				"hub":   defaultHubSetupState(),
-			})
-			return
-		}
-
-		body, err := io.ReadAll(io.LimitReader(r.Body, maxHubSetupConfigureBodyBytes))
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"ok":    false,
-				"error": fmt.Sprintf("read request body: %v", err),
-				"hub":   defaultHubSetupState(),
-			})
-			return
-		}
-
-		var req HubSetupRequest
-		if err := json.Unmarshal(body, &req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"ok":    false,
-				"error": fmt.Sprintf("decode request body: %v", err),
-				"hub":   defaultHubSetupState(),
-			})
-			return
-		}
-
-		state, err := s.ConfigureHubSetup(r.Context(), req)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"ok":    false,
-				"error": err.Error(),
-				"hub":   state,
-			})
-			return
-		}
-
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":  true,
-			"hub": state,
-		})
-	default:
-		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
 func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -1756,7 +1498,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		body, err := io.ReadAll(io.LimitReader(r.Body, maxHubSetupConfigureBodyBytes))
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxSettingsConfigureBodyBytes))
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"ok":       false,
@@ -1797,68 +1539,6 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
-}
-
-func (s Server) handleHubSetupConnect(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.ConnectHubSetup == nil {
-		writeJSON(w, http.StatusNotImplemented, map[string]any{
-			"ok":    false,
-			"error": "hub connect is unavailable",
-			"hub":   defaultHubSetupState(),
-		})
-		return
-	}
-
-	state, err := s.ConnectHubSetup(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"ok":    false,
-			"error": err.Error(),
-			"hub":   state,
-		})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":  true,
-		"hub": state,
-	})
-}
-
-func (s Server) handleHubSetupDisconnect(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.DisconnectHubSetup == nil {
-		writeJSON(w, http.StatusNotImplemented, map[string]any{
-			"ok":    false,
-			"error": "hub disconnect is unavailable",
-			"hub":   defaultHubSetupState(),
-		})
-		return
-	}
-
-	state, err := s.DisconnectHubSetup(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"ok":    false,
-			"error": err.Error(),
-			"hub":   state,
-		})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":  true,
-		"hub": state,
-	})
 }
 
 func (s Server) handleAgentAuthStatus(w http.ResponseWriter, r *http.Request) {
@@ -1917,7 +1597,7 @@ func (s Server) handleAgentAuthVerify(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s.logf("hub.ui status=start endpoint=agent_auth_verify")
+	s.logf("localruntime.ui status=start endpoint=agent_auth_verify")
 	if s.VerifyAgentAuth == nil {
 		writeJSON(w, http.StatusNotImplemented, map[string]any{
 			"ok":    false,
@@ -1928,7 +1608,7 @@ func (s Server) handleAgentAuthVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	state, err := s.VerifyAgentAuth(r.Context())
 	if err != nil {
-		s.logf("hub.ui status=error endpoint=agent_auth_verify state=%s err=%q", strings.TrimSpace(state.State), err)
+		s.logf("localruntime.ui status=error endpoint=agent_auth_verify state=%s err=%q", strings.TrimSpace(state.State), err)
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"ok":    false,
 			"error": err.Error(),
@@ -1936,7 +1616,7 @@ func (s Server) handleAgentAuthVerify(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	s.logf("hub.ui status=ok endpoint=agent_auth_verify state=%s ready=%t", strings.TrimSpace(state.State), state.Ready)
+	s.logf("localruntime.ui status=ok endpoint=agent_auth_verify state=%s ready=%t", strings.TrimSpace(state.State), state.Ready)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":   true,
 		"auth": state,
@@ -1959,7 +1639,7 @@ func (s Server) handleAgentAuthConfigure(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s.logf("hub.ui status=start endpoint=agent_auth_configure")
+	s.logf("localruntime.ui status=start endpoint=agent_auth_configure")
 	if s.ConfigureAgentAuth == nil {
 		writeJSON(w, http.StatusNotImplemented, map[string]any{
 			"ok":    false,
@@ -2009,7 +1689,7 @@ func (s Server) handleAgentAuthConfigure(w http.ResponseWriter, r *http.Request)
 
 	state, err := s.ConfigureAgentAuth(r.Context(), sessionAuth)
 	if err != nil {
-		s.logf("hub.ui status=error endpoint=agent_auth_configure state=%s err=%q", strings.TrimSpace(state.State), err)
+		s.logf("localruntime.ui status=error endpoint=agent_auth_configure state=%s err=%q", strings.TrimSpace(state.State), err)
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"ok":    false,
 			"error": err.Error(),
@@ -2018,7 +1698,7 @@ func (s Server) handleAgentAuthConfigure(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.invalidateGitHubRepos()
-	s.logf("hub.ui status=ok endpoint=agent_auth_configure state=%s ready=%t", strings.TrimSpace(state.State), state.Ready)
+	s.logf("localruntime.ui status=ok endpoint=agent_auth_configure state=%s ready=%t", strings.TrimSpace(state.State), state.Ready)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":   true,
 		"auth": state,
@@ -2149,7 +1829,7 @@ func (s Server) preloadGitHubRepos() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if _, err := s.resolveGitHubRepos(ctx); err != nil {
-			s.logf("hub.ui status=warn event=preload_github_repos err=%q", err)
+			s.logf("localruntime.ui status=warn event=preload_github_repos err=%q", err)
 		}
 	}()
 }
@@ -2726,7 +2406,7 @@ func (s Server) handleTaskRerun(w http.ResponseWriter, r *http.Request, requestI
 	}
 	if sourceTaskFound && isCompletedTaskStatus(sourceTask.Status) {
 		if err := s.Broker.CloseTask(requestID); err != nil {
-			s.logf("hub.ui status=warn event=task_rerun_close_source request_id=%s rerun_request_id=%s err=%q", requestID, newRequestID, err)
+			s.logf("localruntime.ui status=warn event=task_rerun_close_source request_id=%s rerun_request_id=%s err=%q", requestID, newRequestID, err)
 		}
 	}
 
@@ -2772,7 +2452,7 @@ func (s Server) handleTaskClose(w http.ResponseWriter, r *http.Request, requestI
 
 	if s.CloseTask != nil {
 		if err := s.CloseTask(r.Context(), requestID); err != nil {
-			s.logf("hub.ui status=warn event=task_close_cleanup request_id=%s err=%q", requestID, err)
+			s.logf("localruntime.ui status=warn event=task_close_cleanup request_id=%s err=%q", requestID, err)
 		}
 	}
 

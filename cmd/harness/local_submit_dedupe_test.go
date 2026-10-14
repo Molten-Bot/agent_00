@@ -166,7 +166,7 @@ func TestDedupeKeyForRunConfigDiffersByTargetSubdir(t *testing.T) {
 		TargetSubdir: ".",
 	}
 	otherDir := base
-	otherDir.TargetSubdir = "internal/hub"
+	otherDir.TargetSubdir = "internal/localruntime"
 
 	keyBase := dedupeKeyForRunConfig(base)
 	keyOtherDir := dedupeKeyForRunConfig(otherDir)
@@ -332,10 +332,10 @@ func TestDedupeKeyForRunConfigNormalizesTargetSubdir(t *testing.T) {
 		Prompt:       "fix release issue",
 		Repos:        []string{"git@github.com:acme/repo.git"},
 		BaseBranch:   "main",
-		TargetSubdir: "internal/hub",
+		TargetSubdir: "internal/localruntime",
 	}
 	b := a
-	b.TargetSubdir = "internal/hub/./"
+	b.TargetSubdir = "internal/localruntime/./"
 
 	keyA := dedupeKeyForRunConfig(a)
 	keyB := dedupeKeyForRunConfig(b)

@@ -19,76 +19,6 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/library"
 )
 
-func TestHandleHubSetupStatusAndConfigure(t *testing.T) {
-	t.Parallel()
-
-	token := "test_" + strings.Repeat("x", 35)
-
-	srv := NewServer("", NewBroker())
-	srv.HubSetupStatus = func(context.Context) (HubSetupState, error) {
-		state := defaultHubSetupState()
-		state.Configured = true
-		state.Region = "eu"
-		state.Handle = "molten-agent"
-		state.Profile.DisplayName = "Molten Agent"
-		return state, nil
-	}
-	srv.ConfigureHubSetup = func(_ context.Context, req HubSetupRequest) (HubSetupState, error) {
-		if req.Token != token {
-			return defaultHubSetupState(), fmt.Errorf("unexpected token")
-		}
-		if req.Region != "eu" {
-			return defaultHubSetupState(), fmt.Errorf("unexpected region %q", req.Region)
-		}
-		state := defaultHubSetupState()
-		state.Configured = true
-		state.AgentMode = req.AgentMode
-		state.TokenType = req.TokenType
-		state.Region = req.Region
-		state.Handle = "saved-agent"
-		state.Profile.DisplayName = "Saved Agent"
-		state.NeedsRestart = false
-		return state, nil
-	}
-
-	getReq := httptest.NewRequest(http.MethodGet, "/api/hub-setup", nil)
-	getResp := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(getResp, getReq)
-	if getResp.Code != http.StatusOK {
-		t.Fatalf("GET /api/hub-setup status = %d, want 200", getResp.Code)
-	}
-
-	var getBody struct {
-		OK  bool          `json:"ok"`
-		Hub HubSetupState `json:"hub"`
-	}
-	if err := json.NewDecoder(getResp.Body).Decode(&getBody); err != nil {
-		t.Fatalf("decode GET body: %v", err)
-	}
-	if !getBody.OK || !getBody.Hub.Configured {
-		t.Fatalf("GET hub setup body = %#v, want configured ok response", getBody)
-	}
-
-	postReq := httptest.NewRequest(http.MethodPost, "/api/hub-setup", strings.NewReader(fmt.Sprintf(`{"agent_mode":"new","token_type":"bind","region":"eu","token":%q}`, token)))
-	postReq.Header.Set("Content-Type", "application/json")
-	postResp := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(postResp, postReq)
-	if postResp.Code != http.StatusOK {
-		t.Fatalf("POST /api/hub-setup status = %d, want 200", postResp.Code)
-	}
-
-	var postBody struct {
-		OK  bool          `json:"ok"`
-		Hub HubSetupState `json:"hub"`
-	}
-	if err := json.NewDecoder(postResp.Body).Decode(&postBody); err != nil {
-		t.Fatalf("decode POST body: %v", err)
-	}
-	if !postBody.OK || postBody.Hub.Handle != "saved-agent" || postBody.Hub.NeedsRestart || postBody.Hub.AgentMode != "new" || postBody.Hub.TokenType != "bind" || postBody.Hub.Region != "eu" {
-		t.Fatalf("POST hub setup body = %#v, want saved state", postBody)
-	}
-}
-
 func TestHandleReviewSettingsStatusAndConfigure(t *testing.T) {
 	t.Parallel()
 
@@ -146,45 +76,7 @@ func TestHandleReviewSettingsStatusAndConfigure(t *testing.T) {
 	}
 }
 
-func TestHandlerBottomDockUsesHubSetupStatus(t *testing.T) {
-	t.Parallel()
-
-	srv := NewServer("", NewBroker())
-	srv.HubSetupStatus = func(context.Context) (HubSetupState, error) {
-		state := defaultHubSetupState()
-		state.Configured = true
-		state.DashboardURL = "https://app.molten.bot/hub/agents/test-agent"
-		return state, nil
-	}
-
-	markup := renderHandlerMarkup(t, srv, "/")
-	if !strings.Contains(markup, `id="moltenbot-hub-dock-group" class="hub-dock-group" data-configured="true"`) {
-		t.Fatalf("expected bottom dock to render configured Hub state")
-	}
-	if !strings.Contains(markup, `id="moltenbot-hub-link"`) ||
-		!strings.Contains(markup, `class="prompt-mode-link prompt-mode-link-logo"`) ||
-		!strings.Contains(markup, `href="https://app.molten.bot/hub/agents/test-agent"`) ||
-		!strings.Contains(markup, `aria-label="Open Molten Hub"`) {
-		t.Fatalf("expected configured bottom dock to show the Hub icon as a dashboard link")
-	}
-	if strings.Contains(markup, `id="moltenbot-hub-link"
-        class="prompt-mode-link prompt-mode-link-logo hidden"`) {
-		t.Fatalf("expected configured bottom dock to keep the Hub icon visible")
-	}
-	if !strings.Contains(markup, `<span id="moltenbot-hub-plus" class="hub-dock-plus hidden" aria-hidden="true">+</span>`) {
-		t.Fatalf("expected configured bottom dock to hide the Hub plus badge")
-	}
-	if strings.Contains(markup, `id="moltenbot-hub-profile-button"
-        class="prompt-mode-link prompt-mode-link-logo hub-profile-button"
-        type="button"
-        aria-label="Edit agent profile"
-        title="Edit agent profile"
-        hidden>`) {
-		t.Fatalf("expected configured bottom dock to show the profile button")
-	}
-}
-
-func TestBottomDockProfileButtonRoutesToLocalProfileDialog(t *testing.T) {
+func TestBottomDockNavigationGuards(t *testing.T) {
 	t.Parallel()
 
 	data, err := fs.ReadFile(staticFiles, "static/bottom-dock.js")
@@ -192,23 +84,7 @@ func TestBottomDockProfileButtonRoutesToLocalProfileDialog(t *testing.T) {
 		t.Fatalf("read bottom dock script: %v", err)
 	}
 	script := string(data)
-	if !strings.Contains(script, `const HUB_PROFILE_DEEP_LINK_HASH = "#agent-profile";`) ||
-		!strings.Contains(script, "window.location.assign(`${HOME_PATH}${HUB_PROFILE_DEEP_LINK_HASH}`);") {
-		t.Fatalf("expected shared dock profile button to route to the local agent profile modal deep link")
-	}
-	if strings.Contains(script, `window.open(dashboardURL || HUB_DASHBOARD_URL`) {
-		t.Fatalf("expected shared dock profile button to stop opening the remote Hub dashboard")
-	}
-	if !strings.Contains(script, `hubLink.classList.remove("hidden");`) ||
-		!strings.Contains(script, `hubLink.href = configured ? (dashboardURL || HUB_DASHBOARD_URL) : (connectURL || HUB_LOGIN_URL);`) ||
-		!strings.Contains(script, `const title = configured ? "Open Molten Hub" : "Configure Molten Hub";`) {
-		t.Fatalf("expected shared dock Hub logo to stay visible and link to the dashboard when configured")
-	}
-	if !strings.Contains(script, `profileButton.hidden = false;`) ||
-		strings.Contains(script, `profileButton.hidden = !configured;`) ||
-		strings.Contains(script, `if (configured && profileButton.dataset.bottomDockBound !== "true")`) {
-		t.Fatalf("expected shared dock settings button to remain visible and bound before Hub setup")
-	}
+
 	if !strings.Contains(script, `const active = linkDisplay === currentDisplay && !dockLinkDisabled(link);`) ||
 		!strings.Contains(script, `event.stopImmediatePropagation();`) {
 		t.Fatalf("expected shared dock script to keep disabled-link navigation guards")
@@ -217,78 +93,6 @@ func TestBottomDockProfileButtonRoutesToLocalProfileDialog(t *testing.T) {
 		strings.Contains(script, `data-app-display="releases"`) ||
 		strings.Contains(script, `fetch("/api/status", { cache: "no-store" })`) {
 		t.Fatalf("expected shared dock script to omit release navigation state")
-	}
-}
-
-func TestHandleHubSetupConfigureRejectsBadPayload(t *testing.T) {
-	t.Parallel()
-
-	srv := NewServer("", NewBroker())
-	srv.ConfigureHubSetup = func(context.Context, HubSetupRequest) (HubSetupState, error) {
-		t.Fatal("ConfigureHubSetup should not be called for malformed JSON")
-		return HubSetupState{}, nil
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/api/hub-setup", strings.NewReader("{"))
-	resp := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("POST /api/hub-setup malformed status = %d, want 400", resp.Code)
-	}
-}
-
-func TestHandleHubSetupConnectAndDisconnect(t *testing.T) {
-	t.Parallel()
-
-	srv := NewServer("", NewBroker())
-	srv.ConnectHubSetup = func(context.Context) (HubSetupState, error) {
-		state := defaultHubSetupState()
-		state.Configured = true
-		state.Message = "Molten Hub connected."
-		return state, nil
-	}
-	srv.DisconnectHubSetup = func(context.Context) (HubSetupState, error) {
-		state := defaultHubSetupState()
-		state.Configured = true
-		state.Message = "Molten Hub disconnected."
-		return state, nil
-	}
-
-	connectReq := httptest.NewRequest(http.MethodPost, "/api/hub-setup/connect", nil)
-	connectResp := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(connectResp, connectReq)
-	if connectResp.Code != http.StatusOK {
-		t.Fatalf("POST /api/hub-setup/connect status = %d, want 200", connectResp.Code)
-	}
-
-	var connectBody struct {
-		OK  bool          `json:"ok"`
-		Hub HubSetupState `json:"hub"`
-	}
-	if err := json.NewDecoder(connectResp.Body).Decode(&connectBody); err != nil {
-		t.Fatalf("decode connect body: %v", err)
-	}
-	if !connectBody.OK || connectBody.Hub.Message != "Molten Hub connected." {
-		t.Fatalf("connect body = %#v", connectBody)
-	}
-
-	disconnectReq := httptest.NewRequest(http.MethodPost, "/api/hub-setup/disconnect", nil)
-	disconnectResp := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(disconnectResp, disconnectReq)
-	if disconnectResp.Code != http.StatusOK {
-		t.Fatalf("POST /api/hub-setup/disconnect status = %d, want 200", disconnectResp.Code)
-	}
-
-	var disconnectBody struct {
-		OK  bool          `json:"ok"`
-		Hub HubSetupState `json:"hub"`
-	}
-	if err := json.NewDecoder(disconnectResp.Body).Decode(&disconnectBody); err != nil {
-		t.Fatalf("decode disconnect body: %v", err)
-	}
-	if !disconnectBody.OK || disconnectBody.Hub.Message != "Molten Hub disconnected." {
-		t.Fatalf("disconnect body = %#v", disconnectBody)
 	}
 }
 
@@ -313,7 +117,7 @@ func TestNewServerDefaultsAndLogfHelper(t *testing.T) {
 	srv.Logf = func(format string, args ...any) {
 		lines = append(lines, format)
 	}
-	srv.logf("hub.ui status=ok")
+	srv.logf("localruntime.ui status=ok")
 	if len(lines) != 1 {
 		t.Fatalf("logf() line count = %d, want 1", len(lines))
 	}
@@ -367,32 +171,6 @@ func TestServerRunValidationAndShutdownPaths(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run(cancel) did not stop in time")
-	}
-}
-
-func TestRenderSitePageUsesFastHubSetupStatus(t *testing.T) {
-	t.Parallel()
-
-	srv := NewServer("", NewBroker())
-	srv.HubSetupStatus = func(context.Context) (HubSetupState, error) {
-		t.Fatal("render should not call remote-capable hub setup status")
-		return HubSetupState{}, nil
-	}
-	srv.RenderHubSetupStatus = func(context.Context) (HubSetupState, error) {
-		state := defaultHubSetupState()
-		state.Configured = true
-		return state, nil
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/chat", nil)
-	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /chat status = %d, want 200", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), `data-configured="true"`) {
-		t.Fatalf("GET /chat body should use render hub setup status")
 	}
 }
 
@@ -481,77 +259,20 @@ func TestStaticStyleIncludesSharedDockIconStyles(t *testing.T) {
 		!strings.Contains(stylesheet, `html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {`) {
 		t.Fatalf("expected pink mode active task progress agent logo to sit on a colored background")
 	}
-	if !strings.Contains(stylesheet, `#moltenbot-hub-link:hover img,`) {
-		t.Fatalf("expected stylesheet to give molten bot hub icon a hover-specific treatment")
-	}
-	if !strings.Contains(stylesheet, "#moltenbot-hub-link img {\n  filter: var(--agent-logo-filter);") {
-		t.Fatalf("expected molten bot hub dock icon to use theme-aware contrast")
-	}
-	if !strings.Contains(stylesheet, "#moltenbot-hub-link .prompt-mode-link-icon {\n  overflow: visible;\n}") ||
-		!strings.Contains(stylesheet, "#moltenbot-hub-link img {\n  filter: var(--agent-logo-filter);\n  width: 20px;\n  height: 20px;") {
-		t.Fatalf("expected molten bot hub dock icon to render larger than the shared square image box")
-	}
-	if !strings.Contains(stylesheet, `#moltenbot-hub-link:focus-visible img {`) {
-		t.Fatalf("expected stylesheet to give molten bot hub icon a keyboard-focus treatment")
-	}
-	if !strings.Contains(stylesheet, "#moltenbot-hub-link:focus-visible img {\n  filter: var(--agent-logo-filter);") {
-		t.Fatalf("expected molten bot hub icon hover treatment to preserve theme-aware contrast")
-	}
+
 	if !strings.Contains(stylesheet, `.hub-dock-plus {`) {
 		t.Fatalf("expected stylesheet to include molten hub plus badge styles")
 	}
-	if !strings.Contains(stylesheet, `.hub-profile-button {`) {
-		t.Fatalf("expected stylesheet to include hub profile button base styles")
-	}
-	if !strings.Contains(stylesheet, ".hub-profile-button {\n  opacity: 1;\n  pointer-events: auto;") {
-		t.Fatalf("expected stylesheet to keep the hub profile button visible by default")
-	}
-	if !strings.Contains(stylesheet, ".hub-profile-button {\n  opacity: 1;\n  pointer-events: auto;\n  color: var(--theme-button-text);") {
-		t.Fatalf("expected hub profile button to use a readable default icon color without hover")
-	}
-	if strings.Contains(stylesheet, `.hub-dock-group[data-configured="true"]:hover .hub-profile-button`) {
-		t.Fatalf("expected stylesheet to remove hover-only hub profile button visibility")
-	}
-	if !strings.Contains(stylesheet, `.hub-profile-button svg {`) {
-		t.Fatalf("expected stylesheet to define hub profile button icon sizing")
-	}
-	if !strings.Contains(stylesheet, ".hub-profile-button:hover,\n.hub-profile-button:focus-visible {\n  color: var(--running);\n  background: transparent;\n  box-shadow: none;\n}") {
-		t.Fatalf("expected hub profile button hover treatment to avoid background and box-shadow")
-	}
-	if !strings.Contains(stylesheet, `.hub-setup-toggle {`) {
-		t.Fatalf("expected stylesheet to include hub setup toggle styles")
-	}
+
 	if !strings.Contains(stylesheet, `.onboarding-modal-backdrop {`) ||
 		!strings.Contains(stylesheet, `.onboarding-form {`) {
 		t.Fatalf("expected stylesheet to include the dispatch onboarding modal layout")
 	}
-	if !strings.Contains(stylesheet, `.hub-setup-profile-grid {`) {
-		t.Fatalf("expected stylesheet to include hub setup profile grid styles")
-	}
+
 	if !strings.Contains(stylesheet, `grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) auto;`) {
 		t.Fatalf("expected profile grid to match the dispatch handle, display name, emoji layout")
 	}
-	if !strings.Contains(stylesheet, `.hub-setup-profile-emoji {`) || !strings.Contains(stylesheet, `grid-column: auto;`) {
-		t.Fatalf("expected stylesheet to keep the emoji profile field in the compact third column")
-	}
-	if !strings.Contains(stylesheet, `.hub-setup-profile-text {`) {
-		t.Fatalf("expected stylesheet to keep the profile textarea spanning the full profile grid width")
-	}
-	if strings.Contains(stylesheet, `.hub-setup-onboarding {`) || strings.Contains(stylesheet, `.hub-setup-onboarding-step {`) {
-		t.Fatalf("expected stylesheet to remove the hub setup onboarding progress list styles")
-	}
-	if !strings.Contains(stylesheet, `.hub-setup-profile-input {`) || !strings.Contains(stylesheet, `min-height: calc(2 * 1.45em + 24px);`) {
-		t.Fatalf("expected stylesheet to size the hub profile textarea to two lines by default while keeping it resizable")
-	}
-	if !strings.Contains(stylesheet, `.hub-setup-signin-logo {`) {
-		t.Fatalf("expected stylesheet to include the hub setup sign-in logo styles")
-	}
-	if !strings.Contains(stylesheet, `.hub-setup-status {`) {
-		t.Fatalf("expected stylesheet to include hub setup status line styles")
-	}
-	if !strings.Contains(stylesheet, `.hub-setup-actions {`) || !strings.Contains(stylesheet, `margin-left: auto;`) {
-		t.Fatalf("expected stylesheet to keep the hub setup actions docked to the right edge")
-	}
+
 	if !strings.Contains(stylesheet, `.hub-emoji-picker-toggle {`) || !strings.Contains(stylesheet, `width: 44px;`) {
 		t.Fatalf("expected stylesheet to render the emoji picker as a compact icon button")
 	}
@@ -1411,15 +1132,7 @@ func TestStudioStylesKeepPromptActionsVisible(t *testing.T) {
 	if !strings.Contains(css, ".prompt-action-button {\n  width: auto;\n  display: inline-flex;") {
 		t.Fatalf("expected action buttons to avoid full-width auto-column overflow")
 	}
-	if !strings.Contains(css, ".hub-setup-actions {\n  display: grid;\n  grid-template-columns: auto auto auto;\n  align-items: center;\n  column-gap: 14px;\n  row-gap: 10px;\n  width: auto;\n  margin-left: auto;\n}") {
-		t.Fatalf("expected the profile modal action row to include disconnect, close, and save controls")
-	}
-	if !strings.Contains(css, ".hub-setup-status {\n  display: flex;\n  align-items: center;\n  justify-content: flex-start;\n  width: 100%;\n") {
-		t.Fatalf("expected the profile modal status copy to render as a single left-aligned line")
-	}
-	if !strings.Contains(css, ".hub-setup-connection-toggle {\n  width: 44px;\n  height: 44px;\n  min-inline-size: 44px;\n") {
-		t.Fatalf("expected the profile modal disconnect button to use the compact icon footprint")
-	}
+
 	if !strings.Contains(css, ".submit-status-inline {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  flex: 1 1 0;\n  min-width: 0;\n  text-align: center;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  opacity: 0;\n  transition: opacity 220ms ease;\n}") {
 		t.Fatalf("expected inline status to stay centered in the whitespace between screenshots and the action buttons")
 	}
@@ -1862,45 +1575,7 @@ func TestTaskProgressIncludesAutoMergeStepWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestNewHubTasksShowCurrentWorkAndHighlight(t *testing.T) {
-	t.Parallel()
-
-	srv := NewServer("", NewBroker())
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	resp := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.Code)
-	}
-
-	html := resp.Body.String()
-	for _, want := range []string{
-		"const NEW_HUB_TASK_HIGHLIGHT_MS = 4_000;",
-		"function syncNewHubTaskFocus(previousSnapshot, nextSnapshot) {",
-		"node.classList.add(\"task-new-hub\");",
-		"newHubTask: shouldHighlightNewHubTask(task),",
-	} {
-		if !strings.Contains(html, want) {
-			t.Fatalf("expected index html to contain %q", want)
-		}
-	}
-	if strings.Contains(html, "state.taskStatusFilter = \"running\";") {
-		t.Fatalf("expected new hub tasks to stay in the current task filter")
-	}
-
-	cssReq := httptest.NewRequest(http.MethodGet, "/static/style.css", nil)
-	cssResp := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(cssResp, cssReq)
-	if cssResp.Code != http.StatusOK {
-		t.Fatalf("style status = %d, want 200", cssResp.Code)
-	}
-	if !strings.Contains(cssResp.Body.String(), ".task.task-new-hub {\n  outline: 1px solid rgba(43, 182, 115, 0.9);") {
-		t.Fatalf("expected stylesheet to add green border treatment for new hub tasks")
-	}
-}
-
-func TestNewHubTasksPlayDistinctStartSounds(t *testing.T) {
+func TestReviewTasksPlayStartSounds(t *testing.T) {
 	t.Parallel()
 
 	srv := NewServer("", NewBroker())
@@ -1916,16 +1591,15 @@ func TestNewHubTasksPlayDistinctStartSounds(t *testing.T) {
 	for _, want := range []string{
 		"function playCodeTaskStartSound() {",
 		"function playReviewTaskStartSound() {",
-		"function playHubTaskStartSound(task) {",
+		"function playTaskStartSound(task) {",
 		"function isReviewTask(task) {",
-		`return source === "hub" || source === "review";`,
-		"playHubTaskStartSound(task);",
+		"playTaskStartSound(task);",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("expected index html to contain %q", want)
 		}
 	}
 	if !strings.Contains(html, "if (state.taskSoundMuted) {\n        return;\n      }\n      const audio = ensureTaskAudioContext();") {
-		t.Fatalf("expected hub task start sounds to keep using the task sound mute gate")
+		t.Fatalf("expected task start sounds to keep using the task sound mute gate")
 	}
 }

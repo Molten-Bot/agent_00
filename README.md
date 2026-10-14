@@ -109,7 +109,7 @@ checks Codex and Claude filesystem boundaries, then invokes Codex with the
 harness's task environment and command. It requires the source container's
 persisted login at `/workspace/config/home/.codex`, shares its session lock, and
 verifies that a shell task creates the expected file. It makes a provider request
-but does not clone, push, create a PR, or launch the Hub daemon. It does not change
+but does not clone, push, create a PR, or launch the local server. It does not change
 the source container's security options; the source still needs recreation if
 its own sandbox check fails.
 
@@ -168,12 +168,12 @@ also require the Claude CLI; Codex provides their filesystem sandbox.
 
 ```bash
 go build -o bin/harness ./cmd/harness
-./bin/harness hub
+./bin/harness serve
 ```
 
-Local `harness hub` listens on `127.0.0.1:7777` by default.
+Local `harness serve` listens on `127.0.0.1:7777` by default.
 
-With GitHub auth configured, local hub mode also watches GitHub review-request
+With GitHub auth configured, local server mode also watches GitHub review-request
 notifications by default. When the authenticated GitHub user is still requested
 as a PR reviewer, the harness queues the bundled `code-review` task and posts a
 summary comment back to the original PR. Auto-merge is off by default; opt in
@@ -230,15 +230,10 @@ option.
 Useful environment variables:
 
 - `GITHUB_TOKEN` or `GH_TOKEN`: GitHub auth for clone, push, PRs, and checks.
-- `MOLTEN_HUB_TOKEN`: remote Hub agent token.
-- `MOLTEN_HUB_REGION`: `na` or `eu`; defaults to `na`.
-- `MOLTEN_HUB_URL`: explicit hosted Hub API URL,
-  `https://na.hub.molten.bot/v1` or `https://eu.hub.molten.bot/v1`.
-- `MOLTEN_HUB_SESSION_KEY`: runtime config session key; defaults to `main`.
 - `HARNESS_AGENT_HARNESS`: default agent harness.
 - `HARNESS_AGENT_COMMAND`: default agent executable.
 - `OPENAI_API_KEY`: Codex login bootstrap.
-- `MOLTEN_HUB_DEFAULT_REPOSITORY`: optional repository prefill for Prompt
+- `HARNESS_DEFAULT_REPOSITORY`: optional repository prefill for Prompt
   Studio; omitted leaves the repository field empty.
 - `WHISPER_SPEECH_HOST`: optional speech sidecar host; defaults to
   `faster-whisper`.

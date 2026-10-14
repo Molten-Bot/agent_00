@@ -15,7 +15,7 @@
     window.gtag("config", "G-BY33RFG2WB", { send_page_view: false });
   </script>
   <script>
-    window.__HUB_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};
+    window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};
   </script>
   <script src="/static/lucide.min.js"></script>
   <script src="/static/xterm.js" data-xterm-version="6.0.0"></script>
@@ -635,54 +635,32 @@
       </div>
 
       <div class="agent-auth-footer">
-        <button id="agent-auth-verify" class="agent-auth-verify hidden" type="button" onclick="return window.__hubAuthVerifyClick ? window.__hubAuthVerifyClick(event) : true;">Done</button>
+        <button id="agent-auth-verify" class="agent-auth-verify hidden" type="button" onclick="return window.__agentAuthVerifyClick ? window.__agentAuthVerifyClick(event) : true;">Done</button>
       </div>
     </div>
   </div>
 
   <div
-    id="hub-setup-gate"
+    id="settings-gate"
     class="onboarding-modal-backdrop hidden"
     role="dialog"
     aria-modal="true"
     aria-live="polite"
     aria-hidden="true"
-    aria-labelledby="hub-setup-title"
-    aria-describedby="hub-setup-message"
+    aria-labelledby="settings-title"
+    aria-describedby="settings-message"
   >
-    <section class="onboarding-modal form-surface hub-setup-shell">
+    <section class="onboarding-modal form-surface settings-shell">
       <div class="onboarding-modal-shell">
         <header class="onboarding-modal-sidebar">
           <div class="onboarding-modal-header">
             <p class="eyebrow">agent_00</p>
-            <h2 id="hub-setup-title">Connect to Hub</h2>
-            <p id="hub-setup-message">Connect this runtime to Molten Hub.</p>
-          </div>
-          <div class="hub-setup-sidebar-actions">
-            <a
-              id="hub-setup-signin-link"
-              class="hub-setup-signin-logo"
-              href="https://molten.bot/login?target=hub"
-              target="_blank"
-              rel="noopener noreferrer">
-              <span>Agent Token</span>
-              <i data-lucide="external-link" aria-hidden="true"></i>
-            </a>
+            <h2 id="settings-title">Settings</h2>
+            <p id="settings-message">Configure review automation.</p>
           </div>
         </header>
 
-        <div id="settings-tabbar" class="settings-tabbar hidden" role="tablist" aria-label="Settings sections">
-          <button id="settings-tab-review" class="settings-tab active" type="button" role="tab" aria-selected="true" data-settings-tab="review">
-            <i data-lucide="git-pull-request-arrow" aria-hidden="true"></i>
-            <span>Review</span>
-          </button>
-          <button id="settings-tab-hub" class="settings-tab" type="button" role="tab" aria-selected="false" data-settings-tab="hub">
-            <i data-lucide="radio-tower" aria-hidden="true"></i>
-            <span>Hub</span>
-          </button>
-        </div>
-
-        <form id="review-settings-form" class="stack review-settings-form hidden" data-settings-panel="review">
+        <form id="review-settings-form" class="stack review-settings-form" data-settings-panel="review">
           <fieldset class="review-settings-section review-settings-automation">
             <legend>Automation</legend>
             <label class="review-settings-toggle">
@@ -713,9 +691,9 @@
               <button class="review-settings-merge-option" type="button" role="radio" aria-checked="false" data-review-settings-merge-method="rebase">Rebase</button>
             </div>
           </div>
-          <div class="onboarding-form-actions hub-setup-footer">
-            <p id="review-settings-status" class="hub-setup-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
-            <div class="hub-setup-actions">
+          <div class="onboarding-form-actions settings-footer">
+            <p id="review-settings-status" class="settings-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
+            <div class="settings-actions">
               <button id="review-settings-close" class="settings-modal-close onboarding-modal-close" type="button" aria-label="Close settings" title="Close">
                 <i data-lucide="x" aria-hidden="true"></i>
               </button>
@@ -724,72 +702,11 @@
           </div>
         </form>
 
-        <form id="hub-setup-form" class="stack profile-shell onboarding-form" data-bound="false" data-settings-panel="hub">
-          <fieldset id="hub-setup-connect-region-row" class="runtime-toggle onboarding-section">
-            <legend>Region</legend>
-            <div class="runtime-toggle-options hub-setup-toggle-group" role="tablist" aria-label="Region">
-              <button id="hub-setup-region-na-toggle" class="hub-setup-toggle onboarding-toggle active" type="button" data-hub-region="na" aria-pressed="true">NA</button>
-              <button id="hub-setup-region-eu-toggle" class="hub-setup-toggle onboarding-toggle" type="button" data-hub-region="eu" aria-pressed="false">EU</button>
-            </div>
-          </fieldset>
-
-          <label id="hub-setup-token-field" class="onboarding-token-field">
-            <span id="hub-setup-token-label" class="prompt-label">Agent Token</span>
-            <input id="hub-setup-token" type="password" inputmode="text" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Paste agent token or bind token">
-            <small id="hub-setup-token-hint" class="onboarding-token-hint">Use the agent token from Molten Hub.</small>
-          </label>
-
-          <div id="hub-setup-new-agent-fields" class="stack onboarding-profile-fields hub-setup-profile-grid hidden">
-            <div class="profile-grid profile-grid-top onboarding-profile-grid">
-              <label id="hub-setup-handle-field">Handle<input id="hub-setup-handle" type="text" spellcheck="false" placeholder="happy-molten-bot"></label>
-              <label>Display Name<input id="hub-setup-display-name" type="text" spellcheck="false" placeholder="Code Agent"></label>
-              <fieldset class="emoji-fieldset hub-setup-profile-emoji">
-                <legend>Emoji</legend>
-                <div id="hub-setup-emoji-picker" class="hub-emoji-picker" data-hub-emoji-picker>
-                  <input id="hub-setup-emoji" type="hidden" value="" data-hub-emoji-input>
-                  <button
-                    id="hub-setup-emoji-toggle"
-                    class="hub-emoji-picker-toggle"
-                    type="button"
-                    data-hub-emoji-toggle
-                    aria-label="Choose emoji"
-                    aria-haspopup="dialog"
-                    aria-expanded="false"
-                    title="Choose emoji">
-                    <span id="hub-setup-emoji-preview" class="hub-emoji-picker-toggle-preview" data-hub-emoji-preview aria-hidden="true">🙂</span>
-                  </button>
-                  <div id="hub-setup-emoji-panel" class="hub-emoji-picker-panel" data-hub-emoji-panel hidden>
-                    <div class="hub-emoji-picker-panel-header">
-                      <p class="hub-emoji-picker-label">Pick one emoji</p>
-                      <button type="button" class="hub-emoji-picker-clear" data-hub-emoji-clear>Clear</button>
-                    </div>
-                    <div class="hub-emoji-picker-mart" data-hub-emoji-mart-root aria-live="polite"></div>
-                  </div>
-                </div>
-                <span id="hub-setup-emoji-help" class="sr-only">Type or choose one emoji for this agent.</span>
-              </fieldset>
-            </div>
-            <label class="hub-setup-profile-text"><span class="prompt-label">Bio</span><textarea id="hub-setup-profile" class="prompt-text prompt-control hub-setup-profile-input" rows="4" spellcheck="false" placeholder="Please write the bio of your agent..."></textarea></label>
-          </div>
-
-          <div class="onboarding-form-actions hub-setup-footer">
-            <p id="hub-setup-status" class="hub-setup-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
-            <div class="hub-setup-actions">
-              <button id="hub-setup-connection-toggle" class="secondary-button hub-setup-connection-toggle hidden" type="button" aria-label="Disconnect agent" title="Disconnect">
-                <i data-lucide="unlink" aria-hidden="true"></i>
-              </button>
-              <button id="hub-setup-close" class="settings-modal-close onboarding-modal-close" type="button" aria-label="Close Molten Hub setup" title="Close">
-                <i data-lucide="x" aria-hidden="true"></i>
-              </button>
-              <button id="hub-setup-submit" class="prompt-action-button prompt-submit" type="submit">Connect Runtime</button>
-            </div>
-          </div>
-        </form>
       </div>
     </section>
   </div>
 
-  <!-- hub-bottom-dock -->
+  <!-- bottom-dock -->
 
   <script>
     const DISMISSED_TASKS_KEY = "hubui.dismissedTaskIds";
@@ -812,11 +729,10 @@
     const QUEUED_STATUS_TIMEOUT_MS = 12_000;
     const LOCAL_PROMPT_STATUS_FADE_MS = 240;
     const STREAM_RENDER_INTERVAL_MS = 500;
-    const NEW_HUB_TASK_HIGHLIGHT_MS = 4_000;
     const TASK_TIMING_REFRESH_INTERVAL_MS = 30_000;
     const DASHBOARD_RUNTIME_IDLE_PAUSE_MS = 2 * 60 * 1000;
     const DEFERRED_SELECTION_RENDER_FLUSH_DELAY_MS = 32;
-    const TASK_SOURCE_HEADER = "X-MoltenHub-Task-Source";
+    const TASK_SOURCE_HEADER = "X-Agent-Task-Source";
     const BACKGROUND_PARTICLE_ANIMATION_ENABLED = false;
     const TASK_HISTORY_LIMIT = 25;
     const TASK_HISTORY_MAX_AGE_MS = 60 * 60 * 1000;
@@ -830,8 +746,6 @@
     const TASK_PROGRESS_VISIBLE = true;
     const TASK_PROMPT_PREVIEW_MAX_CHARS = 180;
     const TASK_PROMPT_MODAL_TITLE_MAX_CHARS = 90;
-    const HUB_LOGIN_URL = "https://molten.bot/login?target=hub";
-    const HUB_DASHBOARD_URL = "https://app.molten.bot/hub";
     const DASHBOARD_SHARE_URL = "https://molten.bot/code";
     const DASHBOARD_SHARE_IMAGE_URL = "https://app.molten.bot/logo.svg";
     const GOOGLE_ANALYTICS_MEASUREMENT_ID = "G-BY33RFG2WB";
@@ -847,7 +761,6 @@
     });
     const TASK_PROGRESS_STEP_DEFS = Object.freeze({
       entry_chat: { id: "entry_chat", label: "Chat", detail: "Queued from Chat.", icon: "entry_chat" },
-      entry_hub: { id: "entry_hub", label: "Hub", detail: "Queued by Molten Hub.", icon: "entry_hub" },
       entry_prompt: { id: "entry_prompt", label: "Prompt", detail: "Queued from Prompt Studio.", icon: "entry_prompt" },
       entry_library: { id: "entry_library", label: "Library", detail: "Queued from Library Studio.", icon: "entry_library" },
       entry_json: { id: "entry_json", label: "JSON", detail: "Queued from JSON Studio.", icon: "entry_json" },
@@ -879,7 +792,7 @@
         return priority;
       }, {}),
     );
-    const MOLTENHUB_LOGO_URL = "/static/logo.svg";
+    const APP_LOGO_URL = "/static/logo.svg";
     const GITHUB_LOGO_URL = "/static/logos/github.svg";
     const CLAUDE_AUTH_LOGO_URL = "/static/logos/claude-code.svg";
     const TASK_ACTION_ICON_NAMES = Object.freeze({
@@ -904,7 +817,6 @@
     });
     const TASK_PROGRESS_ICON_NAMES = Object.freeze({
       entry_chat: "message-circle",
-      entry_hub: "satellite-dish",
       entry_prompt: "pencil",
       entry_library: "book-open",
       entry_json: "braces",
@@ -929,9 +841,6 @@
     const SPEECH_STATUS_REFRESH_MS = 10000;
     const SPEECH_MIN_PEAK = 0.01;
     const SPEECH_MIN_RMS = 0.0025;
-    const HUB_SETUP_DIALOG_MODES = ["connect", "profile"];
-    const HUB_PROFILE_DEEP_LINK_HASH = "#agent-profile";
-    const HUB_PROFILE_DEFAULT_EMOJI = "🙂";
     const EMOJI_PANEL_VIEWPORT_GUTTER = 8;
     const EMOJI_PANEL_OFFSET = 8;
     const EMOJI_PANEL_MAX_WIDTH = 360;
@@ -1054,17 +963,6 @@
       };
     }
 
-    function hubSetupAnalyticsParams(extra = {}) {
-      const payload = currentHubSetupPayload();
-      return {
-        agent_mode: payload.agent_mode,
-        token_type: payload.token_type,
-        region: payload.region,
-        dialog_mode: state.hubSetupDialogMode,
-        ...extra,
-      };
-    }
-
     function configuredHarnessName() {
       const authHarnessValue = String(state.agentAuth?.harness || "").trim().toLowerCase();
       if (authHarnessValue) {
@@ -1136,8 +1034,8 @@
       if (iconKey === "github") {
         return GITHUB_LOGO_URL;
       }
-      if (iconKey === "moltenhub" || iconKey === "fallback") {
-        return MOLTENHUB_LOGO_URL;
+      if (iconKey === "app" || iconKey === "fallback") {
+        return APP_LOGO_URL;
       }
       return "";
     }
@@ -1148,7 +1046,7 @@
     }
 
     function taskProgressFallbackIconURL() {
-      return MOLTENHUB_LOGO_URL;
+      return APP_LOGO_URL;
     }
 
     function createTaskActionIcon(type) {
@@ -1456,49 +1354,6 @@
       };
     }
 
-    function limitGraphemes(value, maxGraphemes) {
-      const clamp = window.MoltenEmojiPicker && typeof window.MoltenEmojiPicker.limitGraphemes === "function"
-        ? window.MoltenEmojiPicker.limitGraphemes
-        : null;
-      if (clamp) {
-        return clamp(value, maxGraphemes);
-      }
-
-      const max = Number.isFinite(maxGraphemes) && maxGraphemes > 0 ? Math.floor(maxGraphemes) : 0;
-      if (max <= 0) {
-        return "";
-      }
-      const input = String(value || "");
-      if (!input) {
-        return "";
-      }
-      if (typeof Intl === "object" && Intl && typeof Intl.Segmenter === "function") {
-        try {
-          const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-          const graphemes = [];
-          for (const part of segmenter.segment(input)) {
-            if (part && typeof part.segment === "string" && part.segment !== "") {
-              graphemes.push(part.segment);
-            }
-          }
-          if (graphemes.length > 0) {
-            return graphemes.slice(0, max).join("");
-          }
-        } catch (_err) {
-          // Fall back to code point splitting when Segmenter is unavailable.
-        }
-      }
-      return Array.from(input).slice(0, max).join("");
-    }
-
-    function normalizeProfileEmoji(value) {
-      return limitGraphemes(String(value || "").trim(), 1);
-    }
-
-    function profileEmojiOrFallback(value) {
-      return normalizeProfileEmoji(value) || HUB_PROFILE_DEFAULT_EMOJI;
-    }
-
     function escapeHTML(value) {
       return String(value || "")
         .replace(/&/g, "&amp;")
@@ -1506,39 +1361,6 @@
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#39;");
-    }
-
-    function normalizeHubSetup(raw) {
-      const hub = raw && typeof raw === "object" ? raw : {};
-      const profile = hub.profile && typeof hub.profile === "object" ? hub.profile : {};
-      const agentMode = String(hub.agent_mode || hub.agentMode || "").trim() || "existing";
-      const region = String(hub.region || "").trim().toLowerCase() === "eu" ? "eu" : "na";
-      const onboarding = Array.isArray(hub.onboarding) ? hub.onboarding : [];
-      return {
-        configured: Boolean(hub.configured),
-        agentMode,
-        region,
-        tokenType: agentMode === "new" ? "bind" : "agent",
-        handle: String(hub.handle || "").trim(),
-        profile: {
-          profileText: String(profile.profile || profile.bio || "").trim(),
-          displayName: String(profile.display_name || profile.displayName || "").trim(),
-          emoji: normalizeProfileEmoji(profile.emoji),
-        },
-        connectURL: String(hub.connect_url || hub.connectURL || HUB_LOGIN_URL).trim() || HUB_LOGIN_URL,
-        dashboardURL: String(hub.dashboard_url || hub.dashboardURL || HUB_DASHBOARD_URL).trim() || HUB_DASHBOARD_URL,
-        message: String(hub.message || "").trim(),
-        needsRestart: Boolean(hub.needs_restart || hub.needsRestart),
-        onboarding: onboarding.map((step) => ({
-          id: String(step && (step.id || "") || "").trim(),
-          label: String(step && (step.label || "") || "").trim(),
-          status: String(step && (step.status || "") || "").trim() || "pending",
-          detail: String(step && (step.detail || "") || "").trim(),
-        })),
-        onboardingActive: Boolean(hub.onboarding_active || hub.onboardingActive),
-        onboardingStage: String(hub.onboarding_stage || hub.onboardingStage || "").trim(),
-        activationReady: Boolean(hub.activation_ready || hub.activationReady),
-      };
     }
 
     function normalizeReviewSettings(raw) {
@@ -1552,186 +1374,6 @@
         reviewLevel: ["off", "low", "medium", "high"].includes(level) ? level : "off",
         message: String(settings.message || "").trim(),
       };
-    }
-
-    function hubSetupModeForToken(token, fallback = state.hubSetup.agentMode) {
-      const trimmed = String(token || "").trim().toLowerCase();
-      if (trimmed.startsWith("b_")) return "new";
-      if (trimmed.startsWith("t_")) return "existing";
-      return normalizeHubSetup({ agent_mode: fallback }).agentMode === "new" ? "new" : "existing";
-    }
-
-    function defaultHubSetupOnboarding(agentMode) {
-      const isNew = String(agentMode || "").trim() === "new";
-      return [
-        {
-          id: "bind",
-          label: "Bind",
-          status: "pending",
-          detail: isNew ? "Exchange the bind token for an agent credential." : "Verify the existing Molten Hub agent credential.",
-        },
-        {
-          id: "work_bind",
-          label: "Work",
-          status: "pending",
-          detail: "Resolve and verify Molten Hub credentials.",
-        },
-        {
-          id: "profile_set",
-          label: "Profile Set",
-          status: "pending",
-          detail: "Persist the agent profile in Molten Hub.",
-        },
-        {
-          id: "work_activate",
-          label: "Work",
-          status: "pending",
-          detail: "Apply the runtime transport and confirm activation.",
-        },
-      ];
-    }
-
-    function hubSetupWithOnboarding(overrides = {}) {
-      const next = normalizeHubSetup({ ...state.hubSetup, ...overrides });
-      if (!Array.isArray(next.onboarding) || next.onboarding.length === 0) {
-        next.onboarding = defaultHubSetupOnboarding(next.agentMode);
-      }
-      return next;
-    }
-
-    function updateHubSetupOnboarding(stepID, status, detail = "") {
-      const next = hubSetupWithOnboarding();
-      let found = false;
-      next.onboarding = next.onboarding.map((step) => {
-        if (step.id !== stepID) {
-          return step;
-        }
-        found = true;
-        return {
-          ...step,
-          status,
-          detail: String(detail || "").trim() || step.detail,
-        };
-      });
-      if (!found) {
-        return;
-      }
-      next.onboardingActive = status === "current";
-      next.onboardingStage = stepID;
-      applyHubSetupState(next);
-      setHubSetupStatus(status === "error" ? "error" : "ok", hubSetupStatusMessageForStep(stepID, detail));
-    }
-
-    function hubTokenValidationMessage(token) {
-      const trimmed = String(token || "").trim();
-      if (!trimmed) return "";
-      if (trimmed.length < 40) return "Token looks too short. Use the full Molten Hub token.";
-      if (trimmed.length > 128) return "Token looks too long. Check that you pasted only the token.";
-      if (!/^[A-Za-z0-9_-]+$/.test(trimmed)) return "Token contains unsupported characters.";
-      return "";
-    }
-
-    function syncHubTokenValidation() {
-      if (!hubSetupToken) return "";
-      const message = hubTokenValidationMessage(hubSetupToken.value);
-      if (typeof hubSetupToken.setCustomValidity === "function") {
-        hubSetupToken.setCustomValidity(message);
-      }
-      return message;
-    }
-
-    function currentHubSetupTokenLabel() {
-      return state.hubSetup.agentMode === "new" ? "Bind Token" : "Agent Token";
-    }
-
-    function currentHubSetupTokenPlaceholder() {
-      return "Paste agent token or bind token";
-    }
-
-    function currentHubSetupAutoSubmitKey() {
-      const payload = currentHubSetupPayload();
-      return `${payload.agent_mode}:${payload.region}:${payload.token}`;
-    }
-
-    function normalizeHubSetupDialogMode(mode) {
-      return HUB_SETUP_DIALOG_MODES.includes(mode) ? mode : "connect";
-    }
-
-    function isHubProfileDialogMode() {
-      return normalizeHubSetupDialogMode(state.hubSetupDialogMode) === "profile";
-    }
-
-    function normalizeSettingsTab(value) {
-      return value === "hub" ? "hub" : "review";
-    }
-
-    function isReviewSettingsTab() {
-      return isHubProfileDialogMode() && normalizeSettingsTab(state.settingsTab) === "review";
-    }
-
-    function shouldOpenInitialHubProfileDialog() {
-      if (String(window.location.hash || "").toLowerCase() === HUB_PROFILE_DEEP_LINK_HASH) {
-        return true;
-      }
-      try {
-        const params = new URLSearchParams(window.location.search || "");
-        return params.get("hubProfile") === "1" || params.get("hub_profile") === "1";
-      } catch (_err) {
-        return false;
-      }
-    }
-
-    let hubSetupProfileBaseline = null;
-
-    function hubSetupProfileSnapshot() {
-      return {
-        handle: String(hubSetupHandle?.value || "").trim(),
-        displayName: String(hubSetupDisplayName?.value || "").trim(),
-        emoji: normalizeProfileEmoji(syncHubSetupEmojiValue()),
-        profileText: String(hubSetupProfile?.value || "").trim(),
-      };
-    }
-
-    function hubSetupProfileChanged() {
-      if (!hubSetupProfileBaseline) {
-        return false;
-      }
-      const current = hubSetupProfileSnapshot();
-      return current.handle !== hubSetupProfileBaseline.handle ||
-        current.displayName !== hubSetupProfileBaseline.displayName ||
-        current.emoji !== hubSetupProfileBaseline.emoji ||
-        current.profileText !== hubSetupProfileBaseline.profileText;
-    }
-
-    function syncHubSetupSubmitState() {
-      if (!(hubSetupSubmit instanceof HTMLButtonElement)) {
-        return;
-      }
-      if (state.hubSetupBusy) {
-        hubSetupSubmit.disabled = true;
-        return;
-      }
-      if (!isHubProfileDialogMode()) {
-        hubSetupSubmit.disabled = false;
-        return;
-      }
-      hubSetupSubmit.disabled = !hubSetupProfileChanged();
-    }
-
-    function resetHubSetupProfileBaseline() {
-      hubSetupProfileBaseline = hubSetupProfileSnapshot();
-      syncHubSetupSubmitState();
-    }
-
-    function clearHubSetupAutoSubmitTimer() {
-      if (state.hubSetupAutoSubmitTimer) {
-        window.clearTimeout(state.hubSetupAutoSubmitTimer);
-        state.hubSetupAutoSubmitTimer = 0;
-      }
-    }
-
-    function scheduleHubSetupAutoSubmit() {
-      clearHubSetupAutoSubmitTimer();
     }
 
     function agentAuthLabel(harness) {
@@ -1952,11 +1594,10 @@
       }
     }
 
-    const stateUI = normalizeUIConfig(window.__HUB_UI_CONFIG__);
+    const stateUI = normalizeUIConfig(window.__RUNTIME_UI_CONFIG__);
     const state = {
       ui: stateUI,
       agentAuth: normalizeAgentAuth({ required: false, ready: true, state: "ready" }),
-      hubSetup: normalizeHubSetup({ configured: false }),
       reviewSettings: normalizeReviewSettings({}),
       settingsTab: "review",
       snapshot: null,
@@ -1982,8 +1623,6 @@
       taskProgressModelCache: new Map(),
       sparkleTaskIDs: new Set(),
       sparkleTimers: new Map(),
-      newHubTaskHighlightIDs: new Set(),
-      newHubTaskHighlightTimers: new Map(),
       taskImageViewer: { requestID: "", index: 0 },
       dashboardLastInteractionAt: Date.now(),
       dashboardNoActiveTasksSince: Date.now(),
@@ -2040,16 +1679,11 @@
       agentAuthLastAutoSubmittedCode: "",
       agentAuthURLLogoBroken: false,
       agentHarnessSelectionPending: "",
-      hubSetupBusy: false,
-      hubSetupOpen: false,
       libraryPromptModalOpen: false,
       taskPromptModalOpen: false,
       taskPromptModalPrompt: "",
       taskPromptModalTitle: "",
       taskPromptModalMode: "markdown",
-      hubSetupDialogMode: "connect",
-      hubSetupAutoSubmitTimer: 0,
-      hubSetupLastAutoSubmitKey: "",
       resourceMetricVisible: {
         cpu: false,
         mem: false,
@@ -2086,9 +1720,6 @@
     const localConnItem = document.getElementById("local-conn-item");
     const localConnDot = document.getElementById("local-conn-dot");
     const localConnText = document.getElementById("local-conn-text");
-    const hubConnItem = document.getElementById("hub-conn-item");
-    const hubConnDot = document.getElementById("hub-conn-dot");
-    const hubConnText = document.getElementById("hub-conn-text");
     const resourceMetricsItem = document.getElementById("resource-metrics-item");
     const resourceCPUChip = document.getElementById("resource-cpu-chip");
     const resourceMemChip = document.getElementById("resource-mem-chip");
@@ -2181,10 +1812,6 @@
     const promptPanelTitle = document.getElementById("prompt-panel-title");
     const promptPanelCopy = document.getElementById("prompt-panel-copy");
     const githubProfileLink = document.getElementById("github-profile-link");
-    const moltenBotHubDockGroup = document.getElementById("moltenbot-hub-dock-group");
-    const moltenBotHubLink = document.getElementById("moltenbot-hub-link");
-    const moltenBotHubProfileButton = document.getElementById("moltenbot-hub-profile-button");
-    const moltenBotHubPlus = document.getElementById("moltenbot-hub-plus");
     const promptBuilderPanel = document.getElementById("prompt-builder-panel");
     const promptLibraryPanel = document.getElementById("prompt-library-panel");
     const promptRawPanel = document.getElementById("prompt-raw-panel");
@@ -2224,10 +1851,6 @@
     const promptVisibilityToggle = document.getElementById("prompt-visibility-toggle");
     const agentAuthGate = document.getElementById("agent-auth-gate");
     const agentAuthShell = document.getElementById("agent-auth-shell");
-    const hubSetupGate = document.getElementById("hub-setup-gate");
-    const hubSetupTitle = document.getElementById("hub-setup-title");
-    const settingsTabbar = document.getElementById("settings-tabbar");
-    const settingsTabs = Array.from(document.querySelectorAll("[data-settings-tab]"));
     const reviewSettingsForm = document.getElementById("review-settings-form");
     const reviewSettingsAutoMerge = document.getElementById("review-settings-auto-merge");
     const reviewSettingsDeleteMergedBranches = document.getElementById("review-settings-delete-merged-branches");
@@ -2238,25 +1861,6 @@
     const reviewSettingsStatus = document.getElementById("review-settings-status");
     const reviewSettingsClose = document.getElementById("review-settings-close");
     const reviewSettingsSave = document.getElementById("review-settings-save");
-    const hubSetupForm = document.getElementById("hub-setup-form");
-    const hubSetupMessage = document.getElementById("hub-setup-message");
-    const hubSetupClose = document.getElementById("hub-setup-close");
-    const hubSetupConnectRegionRow = document.getElementById("hub-setup-connect-region-row");
-    const hubSetupRegionNAToggle = document.getElementById("hub-setup-region-na-toggle");
-    const hubSetupRegionEUToggle = document.getElementById("hub-setup-region-eu-toggle");
-    const hubSetupTokenField = document.getElementById("hub-setup-token-field");
-    const hubSetupTokenLabel = document.getElementById("hub-setup-token-label");
-    const hubSetupToken = document.getElementById("hub-setup-token");
-    const hubSetupNewAgentFields = document.getElementById("hub-setup-new-agent-fields");
-    const hubSetupHandle = document.getElementById("hub-setup-handle");
-    const hubSetupDisplayName = document.getElementById("hub-setup-display-name");
-    const hubSetupEmojiPickerRoot = document.getElementById("hub-setup-emoji-picker");
-    const hubSetupEmoji = document.getElementById("hub-setup-emoji");
-    const hubSetupProfile = document.getElementById("hub-setup-profile");
-    const hubSetupSigninLink = document.getElementById("hub-setup-signin-link");
-    const hubSetupStatus = document.getElementById("hub-setup-status");
-    const hubSetupConnectionToggle = document.getElementById("hub-setup-connection-toggle");
-    const hubSetupSubmit = document.getElementById("hub-setup-submit");
     const agentAuthTitle = document.getElementById("agent-auth-title");
     const agentAuthMessage = document.getElementById("agent-auth-message");
     const agentAuthHarnessPicker = document.getElementById("agent-auth-harness-picker");
@@ -2293,7 +1897,6 @@
     const themeToggleIcon = document.getElementById("theme-toggle-icon");
     const themeToggleTooltip = document.getElementById("theme-toggle-tooltip");
     const hoverSelect = document.getElementById("hover-select");
-    let closeActiveEmojiPicker = null;
 
     function eventIncludesNode(event, node) {
       if (!(node instanceof Node)) {
@@ -2303,242 +1906,6 @@
         return event.composedPath().some((entry) => entry === node || (entry instanceof Node && node.contains(entry)));
       }
       return event.target instanceof Node && node.contains(event.target);
-    }
-
-    function attachHubEmojiPicker(root) {
-      const input = root.querySelector("[data-hub-emoji-input]");
-      const toggle = root.querySelector("[data-hub-emoji-toggle]");
-      const preview = root.querySelector("[data-hub-emoji-preview]");
-      const panel = root.querySelector("[data-hub-emoji-panel]");
-      const clearButton = root.querySelector("[data-hub-emoji-clear]");
-      const pickerMount = root.querySelector("[data-hub-emoji-mart-root]");
-      if (
-        !(input instanceof HTMLInputElement) ||
-        !(toggle instanceof HTMLButtonElement) ||
-        !(preview instanceof HTMLElement) ||
-        !(panel instanceof HTMLElement) ||
-        !(clearButton instanceof HTMLButtonElement) ||
-        !(pickerMount instanceof HTMLElement)
-      ) {
-        return null;
-      }
-
-      let open = false;
-      let pickerMounted = false;
-      let panelCloseTimer = 0;
-      if (panel.parentElement !== document.body) {
-        document.body.appendChild(panel);
-      }
-
-      const syncSelectedState = () => {
-        const emojiValue = normalizeProfileEmoji(input.value);
-        if (emojiValue !== input.value) {
-          input.value = emojiValue;
-        }
-        preview.textContent = emojiValue || HUB_PROFILE_DEFAULT_EMOJI;
-      };
-
-      const positionPanel = () => {
-        if (!open) {
-          return;
-        }
-        const rect = root.getBoundingClientRect();
-        const viewportWidth = window.innerWidth;
-        const maxPanelWidth = Math.max(240, viewportWidth - EMOJI_PANEL_VIEWPORT_GUTTER * 2);
-        const panelWidth = Math.min(EMOJI_PANEL_MAX_WIDTH, maxPanelWidth);
-        const maxLeft = Math.max(EMOJI_PANEL_VIEWPORT_GUTTER, viewportWidth - panelWidth - EMOJI_PANEL_VIEWPORT_GUTTER);
-        const left = Math.min(Math.max(rect.left, EMOJI_PANEL_VIEWPORT_GUTTER), maxLeft);
-        const spaceBelow = window.innerHeight - rect.bottom - EMOJI_PANEL_VIEWPORT_GUTTER;
-        const spaceAbove = rect.top - EMOJI_PANEL_VIEWPORT_GUTTER;
-        const placeBelow = spaceBelow >= EMOJI_PANEL_ESTIMATED_HEIGHT || spaceBelow >= spaceAbove;
-
-        panel.dataset.placement = placeBelow ? "bottom" : "top";
-        panel.style.setProperty("--hub-emoji-panel-left", `${left}px`);
-        if (placeBelow) {
-          panel.style.setProperty("--hub-emoji-panel-top", `${rect.bottom + EMOJI_PANEL_OFFSET}px`);
-          panel.style.removeProperty("--hub-emoji-panel-bottom");
-        } else {
-          panel.style.removeProperty("--hub-emoji-panel-top");
-          panel.style.setProperty("--hub-emoji-panel-bottom", `${window.innerHeight - rect.top + EMOJI_PANEL_OFFSET}px`);
-        }
-      };
-
-      const detachPanelListeners = () => {
-        window.removeEventListener("mousedown", handleDocumentPointerDown);
-        window.removeEventListener("touchstart", handleDocumentPointerDown);
-        window.removeEventListener("keydown", handleWindowKeydown);
-        window.removeEventListener("resize", positionPanel);
-        window.removeEventListener("scroll", positionPanel, true);
-      };
-
-      const clearPanelCloseTimer = () => {
-        if (panelCloseTimer) {
-          window.clearTimeout(panelCloseTimer);
-          panelCloseTimer = 0;
-        }
-      };
-
-      const unmountPicker = () => {
-        pickerMounted = false;
-        pickerMount.innerHTML = "";
-      };
-
-      const closePanel = () => {
-        if (!open) {
-          return;
-        }
-        open = false;
-        toggle.classList.remove("is-open");
-        toggle.setAttribute("aria-expanded", "false");
-        detachPanelListeners();
-        panel.classList.remove("is-open");
-        panel.classList.add("is-closing");
-        clearPanelCloseTimer();
-        panelCloseTimer = window.setTimeout(() => {
-          panel.hidden = true;
-          panel.classList.remove("is-closing");
-          panel.style.removeProperty("--hub-emoji-panel-left");
-          panel.style.removeProperty("--hub-emoji-panel-top");
-          panel.style.removeProperty("--hub-emoji-panel-bottom");
-          unmountPicker();
-          panelCloseTimer = 0;
-        }, EMOJI_PANEL_ANIMATION_DURATION_MS);
-        if (closeActiveEmojiPicker === closePanel) {
-          closeActiveEmojiPicker = null;
-        }
-      };
-
-      const setEmojiValue = (nextValue, closeWhenDone = false) => {
-        const nextEmoji = normalizeProfileEmoji(nextValue);
-        const changed = input.value !== nextEmoji;
-        input.value = nextEmoji;
-        syncSelectedState();
-        if (changed) {
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-        }
-        if (closeWhenDone) {
-          closePanel();
-        }
-      };
-
-      const mountPicker = () => {
-        if (pickerMounted || !open) {
-          return;
-        }
-        pickerMount.innerHTML = "";
-        PROFILE_EMOJI_GROUPS.forEach((group) => {
-          if (!group || !Array.isArray(group.emoji) || group.emoji.length === 0) {
-            return;
-          }
-          const section = document.createElement("section");
-          section.className = "hub-emoji-picker-category";
-          const heading = document.createElement("p");
-          heading.className = "hub-emoji-picker-category-label";
-          heading.textContent = String(group.label || "Emoji");
-          section.appendChild(heading);
-
-          const grid = document.createElement("div");
-          grid.className = "hub-emoji-picker-grid";
-          group.emoji.forEach((emoji) => {
-            const emojiValue = normalizeProfileEmoji(emoji);
-            if (!emojiValue) {
-              return;
-            }
-            const option = document.createElement("button");
-            option.type = "button";
-            option.className = "hub-emoji-picker-option";
-            option.textContent = emojiValue;
-            option.setAttribute("aria-label", `Use ${emojiValue}`);
-            option.addEventListener("click", () => {
-              setEmojiValue(emojiValue, true);
-            });
-            grid.appendChild(option);
-          });
-          section.appendChild(grid);
-          pickerMount.appendChild(section);
-        });
-        pickerMounted = true;
-        window.requestAnimationFrame(positionPanel);
-      };
-
-      const openPanel = () => {
-        if (open || toggle.disabled || input.disabled || input.readOnly) {
-          return;
-        }
-        if (closeActiveEmojiPicker && closeActiveEmojiPicker !== closePanel) {
-          closeActiveEmojiPicker();
-        }
-        closeActiveEmojiPicker = closePanel;
-        open = true;
-        clearPanelCloseTimer();
-        panel.hidden = false;
-        panel.classList.remove("is-closing");
-        toggle.classList.add("is-open");
-        toggle.setAttribute("aria-expanded", "true");
-        positionPanel();
-        window.requestAnimationFrame(() => {
-          panel.classList.add("is-open");
-        });
-        window.addEventListener("mousedown", handleDocumentPointerDown);
-        window.addEventListener("touchstart", handleDocumentPointerDown);
-        window.addEventListener("keydown", handleWindowKeydown);
-        window.addEventListener("resize", positionPanel);
-        window.addEventListener("scroll", positionPanel, true);
-        mountPicker();
-      };
-
-      function handleDocumentPointerDown(event) {
-        if (eventIncludesNode(event, root) || eventIncludesNode(event, panel)) {
-          return;
-        }
-        closePanel();
-      }
-
-      function handleWindowKeydown(event) {
-        if (event.key === "Escape") {
-          closePanel();
-        }
-      }
-
-      toggle.addEventListener("click", () => {
-        if (open) {
-          closePanel();
-          return;
-        }
-        openPanel();
-      });
-
-      clearButton.addEventListener("click", () => {
-        setEmojiValue("", true);
-      });
-      setEmojiValue(input.value);
-
-      return {
-        sync() {
-          setEmojiValue(input.value);
-        },
-        setDisabled(disabled) {
-          toggle.disabled = Boolean(disabled);
-          if (disabled) {
-            closePanel();
-          }
-        },
-      };
-    }
-
-    const hubSetupEmojiPicker = hubSetupEmojiPickerRoot
-      ? attachHubEmojiPicker(hubSetupEmojiPickerRoot)
-      : null;
-
-    function syncHubSetupEmojiValue() {
-      if (!hubSetupEmoji) {
-        return "";
-      }
-      const normalized = normalizeProfileEmoji(hubSetupEmoji.value);
-      if (hubSetupEmoji.value !== normalized) {
-        hubSetupEmoji.value = normalized;
-      }
-      return normalized;
     }
 
     function applyGitHubProfileLink(profileURL) {
@@ -3051,52 +2418,19 @@
     }
 
     function setLocalConnection(online, text) {
-      if (window.MoltenHubHeader && typeof window.MoltenHubHeader.updateLocalConnection === "function") {
-        window.MoltenHubHeader.updateLocalConnection(online, text);
+      if (window.AgentHeader && typeof window.AgentHeader.updateLocalConnection === "function") {
+        window.AgentHeader.updateLocalConnection(online, text);
         return;
       }
       setIndicator(localConnItem, localConnDot, localConnText, "Local", online, text);
-    }
-
-    function setHubConnectionActionable(actionable, href = "", tone = "") {
-      if (!hubConnItem) return;
-      hubConnItem.classList.toggle("status-item-action", actionable);
-      hubConnItem.classList.toggle("status-item-action-online", actionable && tone === "online");
-      hubConnItem.classList.toggle("status-item-action-offline", actionable && tone === "offline");
-      hubConnItem.setAttribute("data-actionable", actionable ? "true" : "false");
-      hubConnItem.setAttribute("data-href", href);
-    }
-
-    function hubSetupStatusMessageForStep(stepID, fallbackText = "") {
-      const steps = Array.isArray(state.hubSetup.onboarding) ? state.hubSetup.onboarding : [];
-      for (let i = 0; i < steps.length; i += 1) {
-        const step = steps[i];
-        if (step && step.id === stepID) {
-          const detail = String(step.detail || "").trim();
-          if (detail) {
-            return detail;
-          }
-          break;
-        }
-      }
-      return String(fallbackText || "").trim();
-    }
-
-    function setHubSetupStatus(kind, text) {
-      if (!hubSetupStatus) return;
-      const value = String(text || "").trim();
-      hubSetupStatus.className = value
-        ? (kind ? `hub-setup-status submit-status submit-status-inline is-visible ${kind}${kind === "error" ? " is-error" : ""} onboarding-message` : "hub-setup-status submit-status submit-status-inline is-visible onboarding-message")
-        : "hub-setup-status submit-status submit-status-inline onboarding-message";
-      hubSetupStatus.textContent = value;
     }
 
     function setReviewSettingsStatus(kind, text) {
       if (!reviewSettingsStatus) return;
       const value = String(text || "").trim();
       reviewSettingsStatus.className = value
-        ? (kind ? `hub-setup-status submit-status submit-status-inline is-visible ${kind}${kind === "error" ? " is-error" : ""} onboarding-message` : "hub-setup-status submit-status submit-status-inline is-visible onboarding-message")
-        : "hub-setup-status submit-status submit-status-inline onboarding-message";
+        ? (kind ? `settings-status submit-status submit-status-inline is-visible ${kind}${kind === "error" ? " is-error" : ""} onboarding-message` : "settings-status submit-status submit-status-inline is-visible onboarding-message")
+        : "settings-status submit-status submit-status-inline onboarding-message";
       reviewSettingsStatus.textContent = value;
     }
 
@@ -3152,276 +2486,6 @@
       }
     }
 
-    function setSettingsTab(tab) {
-      const nextTab = normalizeSettingsTab(tab);
-      state.settingsTab = nextTab;
-      const profileEditor = isHubProfileDialogMode();
-      if (settingsTabbar) {
-        settingsTabbar.classList.toggle("hidden", !profileEditor);
-      }
-      settingsTabs.forEach((button) => {
-        const active = profileEditor && button.getAttribute("data-settings-tab") === nextTab;
-        button.classList.toggle("active", active);
-        button.setAttribute("aria-selected", active ? "true" : "false");
-      });
-      if (reviewSettingsForm) {
-        reviewSettingsForm.classList.toggle("hidden", !profileEditor || nextTab !== "review");
-      }
-      if (hubSetupForm) {
-        hubSetupForm.classList.toggle("hidden", profileEditor && nextTab !== "hub");
-      }
-      syncHubSetupSubmitState();
-    }
-
-    function setHubSetupBusy(busy) {
-      state.hubSetupBusy = Boolean(busy);
-      if (hubSetupForm) hubSetupForm.setAttribute("aria-busy", state.hubSetupBusy ? "true" : "false");
-      if (hubSetupRegionNAToggle) hubSetupRegionNAToggle.disabled = state.hubSetupBusy;
-      if (hubSetupRegionEUToggle) hubSetupRegionEUToggle.disabled = state.hubSetupBusy;
-      if (hubSetupClose) hubSetupClose.disabled = state.hubSetupBusy;
-      if (hubSetupToken) {
-        hubSetupToken.readOnly = state.hubSetupBusy;
-        hubSetupToken.setAttribute("aria-readonly", state.hubSetupBusy ? "true" : "false");
-      }
-      if (hubSetupHandle) {
-        hubSetupHandle.readOnly = state.hubSetupBusy || isHubProfileDialogMode();
-        hubSetupHandle.setAttribute("aria-readonly", hubSetupHandle.readOnly ? "true" : "false");
-      }
-      if (hubSetupDisplayName) {
-        hubSetupDisplayName.readOnly = state.hubSetupBusy;
-        hubSetupDisplayName.setAttribute("aria-readonly", state.hubSetupBusy ? "true" : "false");
-      }
-      if (hubSetupEmoji) {
-        hubSetupEmoji.readOnly = state.hubSetupBusy;
-        hubSetupEmoji.setAttribute("aria-readonly", state.hubSetupBusy ? "true" : "false");
-      }
-      if (hubSetupEmojiPicker && typeof hubSetupEmojiPicker.setDisabled === "function") {
-        hubSetupEmojiPicker.setDisabled(state.hubSetupBusy);
-      }
-      if (hubSetupConnectionToggle) hubSetupConnectionToggle.disabled = state.hubSetupBusy;
-      if (hubSetupProfile) {
-        hubSetupProfile.readOnly = state.hubSetupBusy;
-        hubSetupProfile.setAttribute("aria-readonly", state.hubSetupBusy ? "true" : "false");
-      }
-      if (reviewSettingsAutoMerge) reviewSettingsAutoMerge.disabled = state.hubSetupBusy;
-      if (reviewSettingsDeleteMergedBranches) reviewSettingsDeleteMergedBranches.disabled = state.hubSetupBusy;
-      if (reviewSettingsMergeMethod) reviewSettingsMergeMethod.disabled = state.hubSetupBusy;
-      if (reviewSettingsLevel) reviewSettingsLevel.disabled = state.hubSetupBusy;
-      reviewSettingsMergeOptions.forEach((button) => {
-        button.disabled = state.hubSetupBusy;
-      });
-      reviewSettingsLevelOptions.forEach((button) => {
-        button.disabled = state.hubSetupBusy;
-      });
-      if (reviewSettingsSave) reviewSettingsSave.disabled = state.hubSetupBusy;
-      if (reviewSettingsClose) reviewSettingsClose.disabled = state.hubSetupBusy;
-      syncHubSetupSubmitState();
-    }
-
-    function renderHubSetupConnectionToggle() {
-      if (!hubSetupConnectionToggle) {
-        return;
-      }
-      const show = isHubProfileDialogMode() && state.hubSetup.configured;
-      hubSetupConnectionToggle.classList.toggle("hidden", !show);
-      if (!show) {
-        return;
-      }
-      hubSetupConnectionToggle.setAttribute("data-action", "disconnect");
-      hubSetupConnectionToggle.classList.add("hub-setup-connection-toggle-offline");
-      hubSetupConnectionToggle.setAttribute("aria-label", "Disconnect agent");
-      hubSetupConnectionToggle.title = "Disconnect";
-      if (!hubSetupConnectionToggle.querySelector("[data-lucide], svg")) {
-        hubSetupConnectionToggle.innerHTML = `<i data-lucide="unlink" aria-hidden="true"></i>`;
-        replaceLucideIcons(hubSetupConnectionToggle);
-      }
-    }
-
-    function applyHubDockState() {
-      const configured = Boolean(state.hubSetup.configured);
-      if (moltenBotHubDockGroup) {
-        moltenBotHubDockGroup.setAttribute("data-configured", configured ? "true" : "false");
-      }
-      if (moltenBotHubPlus) {
-        moltenBotHubPlus.classList.toggle("hidden", configured);
-      }
-      if (moltenBotHubLink) {
-        moltenBotHubLink.classList.remove("hidden");
-        moltenBotHubLink.href = configured
-          ? (state.hubSetup.dashboardURL || HUB_DASHBOARD_URL)
-          : (state.hubSetup.connectURL || HUB_LOGIN_URL);
-        const title = configured ? "Open Molten Hub" : "Configure Molten Hub";
-        moltenBotHubLink.title = title;
-        moltenBotHubLink.setAttribute("aria-label", title);
-      }
-      if (moltenBotHubProfileButton) {
-        moltenBotHubProfileButton.hidden = false;
-      }
-    }
-
-    function applyHubSetupState(nextState) {
-      state.hubSetup = normalizeHubSetup(nextState);
-      if (!Array.isArray(state.hubSetup.onboarding) || state.hubSetup.onboarding.length === 0) {
-        state.hubSetup.onboarding = defaultHubSetupOnboarding(state.hubSetup.agentMode);
-      }
-      const profileEditor = isHubProfileDialogMode();
-      if (hubSetupForm) {
-        hubSetupForm.dataset.bound = profileEditor ? "true" : "false";
-      }
-      if (hubSetupSigninLink) {
-        hubSetupSigninLink.href = state.hubSetup.connectURL;
-        hubSetupSigninLink.classList.toggle("hidden", profileEditor);
-      }
-      if (hubSetupTitle) {
-        hubSetupTitle.textContent = profileEditor ? "Settings" : "Connect to Hub";
-      }
-      if (hubSetupMessage) {
-        hubSetupMessage.textContent = state.hubSetup.message || (profileEditor
-          ? "Review automation and Hub profile settings."
-          : "Connect this runtime to Molten Hub.");
-      }
-      if (!profileEditor) {
-        state.settingsTab = "hub";
-      } else {
-        state.settingsTab = normalizeSettingsTab(state.settingsTab);
-      }
-      if (hubSetupHandle) {
-        hubSetupHandle.value = state.hubSetup.handle || "";
-        hubSetupHandle.readOnly = profileEditor || state.hubSetupBusy;
-        hubSetupHandle.setAttribute("aria-readonly", hubSetupHandle.readOnly ? "true" : "false");
-      }
-      if (hubSetupDisplayName) {
-        hubSetupDisplayName.value = state.hubSetup.profile.displayName || "";
-      }
-      if (hubSetupEmoji) {
-        hubSetupEmoji.value = normalizeProfileEmoji(state.hubSetup.profile.emoji);
-        if (hubSetupEmojiPicker && typeof hubSetupEmojiPicker.sync === "function") {
-          hubSetupEmojiPicker.sync();
-        } else {
-          const previewNode = hubSetupEmojiPickerRoot ? hubSetupEmojiPickerRoot.querySelector(".hub-emoji-picker-toggle-preview") : null;
-          if (previewNode) {
-            previewNode.textContent = profileEmojiOrFallback(hubSetupEmoji.value);
-          }
-        }
-      }
-      if (hubSetupProfile) {
-        hubSetupProfile.value = state.hubSetup.profile.profileText || "";
-      }
-
-      const isNew = state.hubSetup.agentMode === "new";
-      if (hubSetupRegionNAToggle) {
-        const selected = state.hubSetup.region !== "eu";
-        hubSetupRegionNAToggle.classList.toggle("active", selected);
-        hubSetupRegionNAToggle.setAttribute("aria-pressed", String(selected));
-      }
-      if (hubSetupRegionEUToggle) {
-        const selected = state.hubSetup.region === "eu";
-        hubSetupRegionEUToggle.classList.toggle("active", selected);
-        hubSetupRegionEUToggle.setAttribute("aria-pressed", String(selected));
-      }
-      if (hubSetupNewAgentFields) {
-        hubSetupNewAgentFields.classList.toggle("hidden", !isNew && !profileEditor);
-      }
-      if (hubSetupConnectRegionRow) {
-        hubSetupConnectRegionRow.classList.toggle("hidden", profileEditor);
-      }
-      if (hubSetupTokenField) {
-        hubSetupTokenField.classList.toggle("hidden", profileEditor);
-      }
-      if (hubSetupTokenLabel) {
-        hubSetupTokenLabel.textContent = currentHubSetupTokenLabel();
-      }
-      if (hubSetupToken) {
-        hubSetupToken.placeholder = currentHubSetupTokenPlaceholder();
-        syncHubTokenValidation();
-      }
-      if (hubSetupSubmit) {
-        hubSetupSubmit.textContent = profileEditor ? "Save" : (isNew ? "Lets Gooo!" : "Connect Runtime");
-      }
-      if (profileEditor) {
-        resetHubSetupProfileBaseline();
-      } else {
-        hubSetupProfileBaseline = null;
-        syncHubSetupSubmitState();
-      }
-      setSettingsTab(state.settingsTab);
-      applyHubDockState();
-      renderHubSetupConnectionToggle();
-      renderHubConnection(state.snapshot);
-    }
-
-    function setHubSetupOpen(open) {
-      state.hubSetupOpen = Boolean(open);
-      if (hubSetupGate) {
-        hubSetupGate.classList.toggle("hidden", !state.hubSetupOpen);
-        hubSetupGate.setAttribute("aria-hidden", state.hubSetupOpen ? "false" : "true");
-      }
-      document.body.classList.toggle("onboarding-modal-open", state.hubSetupOpen);
-      if (!state.hubSetupOpen) {
-        if (closeActiveEmojiPicker) {
-          closeActiveEmojiPicker();
-        }
-        clearHubSetupAutoSubmitTimer();
-        setHubSetupStatus("", "");
-        return;
-      }
-      const focusTarget = isReviewSettingsTab() ? reviewSettingsAutoMerge : (isHubProfileDialogMode() ? hubSetupHandle : hubSetupToken);
-      if (focusTarget instanceof HTMLElement) {
-        window.requestAnimationFrame(() => {
-          focusTarget.focus({ preventScroll: true });
-        });
-      }
-    }
-
-    async function loadHubSetupStatus() {
-      try {
-        const response = await fetch("/api/hub-setup", { cache: "no-store" });
-        let body = null;
-        try {
-          body = await response.json();
-        } catch (_err) {
-          body = null;
-        }
-        if (!response.ok) {
-          throw new Error(body?.error || `hub setup http ${response.status}`);
-        }
-        applyHubSetupState(body?.hub);
-      } catch (err) {
-        applyHubSetupState({
-          configured: false,
-          message: err && err.message ? `Hub setup status failed: ${err.message}` : "Hub setup status failed.",
-        });
-      }
-    }
-
-    async function refreshHubSetupProfile() {
-      try {
-        const response = await fetch("/api/hub-setup", {
-          method: "GET",
-          headers: { Accept: "application/json" },
-          cache: "no-store",
-        });
-        let body = null;
-        try {
-          body = await response.json();
-        } catch (_parseError) {
-          body = null;
-        }
-        if (body?.hub) {
-          applyHubSetupState(body.hub);
-        }
-        if (!response.ok) {
-          const detail = String(body?.error || `hub setup refresh failed with ${response.status}`).trim();
-          throw new Error(detail);
-        }
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : "Unable to refresh hub setup profile.";
-        if (typeof console !== "undefined" && typeof console.error === "function") {
-          console.error("Failed to refresh hub setup profile.", detail);
-        }
-      }
-    }
-
     async function loadReviewSettings() {
       try {
         const response = await fetch("/api/review-settings", {
@@ -3448,18 +2512,6 @@
       }
     }
 
-    function openHubProfileDialog(source = "dock") {
-      state.hubSetupDialogMode = "profile";
-      state.settingsTab = "review";
-      trackAnalyticsEvent("hub_profile_opened", { source });
-      setHubSetupOpen(true);
-      applyHubSetupState(state.hubSetup);
-      setHubSetupStatus("", "");
-      setReviewSettingsStatus("", "");
-      void loadReviewSettings();
-      void refreshHubSetupProfile();
-    }
-
     function currentReviewSettingsPayload() {
       return {
         auto_merge: Boolean(reviewSettingsAutoMerge?.checked),
@@ -3474,7 +2526,7 @@
         event.preventDefault();
       }
       const payload = currentReviewSettingsPayload();
-      setHubSetupBusy(true);
+      setSettingsBusy(true);
       setReviewSettingsStatus("ok", "Saving review settings...");
       try {
         const response = await fetch("/api/review-settings", {
@@ -3499,205 +2551,14 @@
           merge_method: payload.merge_method,
           review_level: payload.review_level,
         });
-        setHubSetupOpen(false);
-        state.hubSetupDialogMode = "connect";
+        setSettingsOpen(false);
       } catch (err) {
         const message = err && err.message ? err.message : "Review settings save failed.";
         setReviewSettingsStatus("error", message);
         trackAnalyticsEvent("review_settings_failed", { merge_method: payload.merge_method });
       } finally {
-        setHubSetupBusy(false);
+        setSettingsBusy(false);
       }
-    }
-
-    function currentHubSetupPayload() {
-      const inferredMode = isHubProfileDialogMode()
-        ? state.hubSetup.agentMode
-        : hubSetupModeForToken(hubSetupToken?.value, state.hubSetup.agentMode);
-      const isNew = inferredMode === "new";
-      return {
-        agent_mode: isNew ? "new" : "existing",
-        token_type: isNew ? "bind" : "agent",
-        region: state.hubSetup.region === "eu" ? "eu" : "na",
-        token: String(hubSetupToken?.value || "").trim(),
-        handle: String(hubSetupHandle?.value || "").trim(),
-        profile: {
-          profile: String(hubSetupProfile?.value || "").trim(),
-          display_name: String(hubSetupDisplayName?.value || "").trim(),
-          emoji: normalizeProfileEmoji(syncHubSetupEmojiValue()),
-        },
-      };
-    }
-
-    function currentHubSetupDraft(overrides = {}) {
-      const payload = currentHubSetupPayload();
-      return {
-        ...state.hubSetup,
-        agentMode: payload.agent_mode,
-        tokenType: payload.token_type,
-        handle: payload.handle,
-        profile: {
-          profileText: payload.profile.profile,
-          displayName: payload.profile.display_name,
-          emoji: payload.profile.emoji,
-        },
-        onboarding: defaultHubSetupOnboarding(payload.agent_mode),
-        onboardingActive: false,
-        onboardingStage: "bind",
-        ...overrides,
-      };
-    }
-
-    async function submitHubSetup(event, options = {}) {
-      if (event && typeof event.preventDefault === "function") {
-        event.preventDefault();
-      }
-      const autoSubmit = Boolean(options && options.autoSubmit);
-      const payload = currentHubSetupPayload();
-      const requiresToken = !isHubProfileDialogMode();
-      if (requiresToken && !payload.token) {
-        trackAnalyticsEvent("hub_setup_validation_failed", hubSetupAnalyticsParams({ validation_error: "missing_token" }));
-        setHubSetupStatus("error", `${payload.agent_mode === "new" ? "Bind" : "Agent"} token is required.`);
-        return;
-      }
-      const tokenValidationMessage = requiresToken ? syncHubTokenValidation() : "";
-      if (tokenValidationMessage) {
-        trackAnalyticsEvent("hub_setup_validation_failed", hubSetupAnalyticsParams({ validation_error: "invalid_token" }));
-        setHubSetupStatus("error", tokenValidationMessage);
-        if (hubSetupToken && typeof hubSetupToken.reportValidity === "function") {
-          hubSetupToken.reportValidity();
-        }
-        return;
-      }
-
-      setHubSetupBusy(true);
-      const initialStage = isHubProfileDialogMode() ? "profile_set" : "bind";
-      applyHubSetupState(hubSetupWithOnboarding({
-        onboarding: defaultHubSetupOnboarding(payload.agent_mode),
-        onboardingActive: true,
-        onboardingStage: initialStage,
-      }));
-      updateHubSetupOnboarding(initialStage, "current");
-      trackAnalyticsEvent("hub_setup_started", hubSetupAnalyticsParams({ auto_submit: autoSubmit }));
-      setHubSetupStatus("ok", hubSetupStatusMessageForStep(initialStage, "Saving Molten Hub setup..."));
-      let body = null;
-      try {
-        const response = await fetch("/api/hub-setup", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        try {
-          body = await response.json();
-        } catch (_err) {
-          body = null;
-        }
-        if (!response.ok) {
-          throw new Error(body?.error || `hub setup http ${response.status}`);
-        }
-        state.hubSetupLastAutoSubmitKey = currentHubSetupAutoSubmitKey();
-        applyHubSetupState(body?.hub);
-        await loadAgentAuthStatus();
-        trackAnalyticsEvent("hub_setup_succeeded", hubSetupAnalyticsParams({ auto_submit: autoSubmit }));
-        const successMessage = state.hubSetup.message || "Molten Hub setup saved.";
-        setHubSetupStatus("ok", successMessage);
-        if (hubSetupToken) {
-          hubSetupToken.value = "";
-        }
-        if (autoSubmit || isHubProfileDialogMode()) {
-          await new Promise((resolve) => window.setTimeout(resolve, 700));
-          setHubSetupOpen(false);
-        } else {
-          window.setTimeout(() => {
-            state.hubSetupDialogMode = "connect";
-            setHubSetupOpen(false);
-          }, 420);
-        }
-      } catch (err) {
-        trackAnalyticsEvent("hub_setup_failed", hubSetupAnalyticsParams({ auto_submit: autoSubmit }));
-        state.hubSetupLastAutoSubmitKey = "";
-        if (body && body.hub) {
-          applyHubSetupState(body.hub);
-        } else {
-          updateHubSetupOnboarding(state.hubSetup.onboardingStage || "bind", "error", err && err.message ? err.message : "Hub setup failed.");
-        }
-        setHubSetupStatus("error", err && err.message ? err.message : "Hub setup failed.");
-      } finally {
-        setHubSetupBusy(false);
-      }
-    }
-
-    async function submitHubConnectionToggle() {
-      if (!hubSetupConnectionToggle || state.hubSetupBusy) {
-        return;
-      }
-      const endpoint = "/api/hub-setup/disconnect";
-      trackAnalyticsEvent("hub_connection_toggle_started", hubSetupAnalyticsParams({ action: "disconnect" }));
-      setHubSetupBusy(true);
-      setHubSetupStatus("ok", "Disconnecting from Molten Hub...");
-      try {
-        const response = await fetch(endpoint, { method: "POST" });
-        let body = null;
-        try {
-          body = await response.json();
-        } catch (_err) {
-          body = null;
-        }
-        if (!response.ok) {
-          throw new Error(body?.error || `hub disconnect http ${response.status}`);
-        }
-        const priorConnection = state.snapshot && typeof state.snapshot === "object" && state.snapshot !== null &&
-          typeof state.snapshot.connection === "object" && state.snapshot.connection !== null
-          ? state.snapshot.connection
-          : {};
-        state.snapshot = {
-          ...(state.snapshot && typeof state.snapshot === "object" && state.snapshot !== null ? state.snapshot : {}),
-          connection: {
-            ...priorConnection,
-            hub_connected: false,
-            hub_transport: "disconnected",
-          },
-        };
-        applyHubSetupState(body?.hub);
-        await loadHubSetupStatus();
-        trackAnalyticsEvent("hub_connection_toggle_succeeded", hubSetupAnalyticsParams({ action: "disconnect" }));
-        setHubSetupStatus("ok", body?.hub?.message || "Molten Hub disconnected.");
-        window.setTimeout(() => {
-          state.hubSetupDialogMode = "connect";
-          setHubSetupOpen(false);
-        }, 420);
-      } catch (err) {
-        trackAnalyticsEvent("hub_connection_toggle_failed", hubSetupAnalyticsParams({ action: "disconnect" }));
-        setHubSetupStatus("error", err && err.message ? err.message : "Hub disconnect failed.");
-      } finally {
-        setHubSetupBusy(false);
-      }
-    }
-
-    function openHubConnectPage() {
-      const hubURL = state.hubSetup.configured ? state.hubSetup.dashboardURL : state.hubSetup.connectURL;
-      trackAnalyticsEvent("hub_dashboard_opened", { configured: Boolean(state.hubSetup.configured) });
-      if (typeof window.open === "function") {
-        window.open(hubURL, "_blank", "noopener,noreferrer");
-        return;
-      }
-      window.location.assign(hubURL);
-    }
-
-    function maybeOpenHubConnectPage(event) {
-      if (!hubConnItem || hubConnItem.getAttribute("data-actionable") !== "true") {
-        return;
-      }
-      if (event) {
-        event.preventDefault();
-      }
-      trackAnalyticsEvent("hub_connection_clicked", { configured: Boolean(state.hubSetup.configured) });
-      if (!state.hubSetup.configured) {
-        trackAnalyticsEvent("hub_setup_opened", { source: "connection_status" });
-        setHubSetupOpen(true);
-        return;
-      }
-      openHubConnectPage();
     }
 
     function scheduleAgentAuthRefresh() {
@@ -4125,8 +2986,8 @@
     }
 
     function renderConfiguredAgent() {
-      if (window.MoltenHubHeader && typeof window.MoltenHubHeader.update === "function") {
-        window.MoltenHubHeader.update({
+      if (window.AgentHeader && typeof window.AgentHeader.update === "function") {
+        window.AgentHeader.update({
           configuredHarness: state.ui.configuredHarness,
           configuredAgentLabel: state.ui.configuredAgentLabel,
         }, state.agentAuth);
@@ -4751,100 +3612,6 @@
       }
     }
 
-    function applyHubDotMode(mode) {
-      if (!hubConnDot) return;
-      hubConnDot.classList.remove("http", "disconnected");
-      if (mode === "http_long_poll") {
-        hubConnDot.classList.add("http");
-        return;
-      }
-      if (mode === "disconnected") {
-        hubConnDot.classList.add("disconnected");
-      }
-    }
-
-    function setHubConnection(mode, text) {
-      const connected = mode === "ws" || mode === "http_long_poll" || mode === "connected";
-      const online = connected;
-      const actionable = connected || mode === "disconnected";
-      const actionTone = connected ? "online" : (mode === "disconnected" ? "offline" : "");
-      const targetURL = connected || state.hubSetup.configured
-        ? state.hubSetup.dashboardURL
-        : state.hubSetup.connectURL;
-      if (mode === "disconnected" && !text) {
-        text = state.hubSetup.configured
-          ? "Configured locally. Restart runtime to connect."
-          : "Connect to Molten Hub";
-      }
-      setIndicator(hubConnItem, hubConnDot, hubConnText, "Molten Hub", online, text);
-      applyHubDotMode(mode);
-      setHubConnectionActionable(actionable, targetURL, actionTone);
-    }
-
-    function renderHubConnection(snapshot) {
-      if (window.MoltenHubHeader && typeof window.MoltenHubHeader.updateConnectionStatus === "function") {
-        window.MoltenHubHeader.updateConnectionStatus(snapshot, { hubSetup: state.hubSetup });
-        renderHubSetupConnectionToggle();
-        return;
-      }
-      if (!snapshot || typeof snapshot.connection !== "object" || snapshot.connection === null) {
-        setHubConnection("disconnected", "Hub status unavailable");
-        renderHubSetupConnectionToggle();
-        return;
-      }
-
-      const conn = snapshot.connection;
-      const domain = typeof conn.hub_domain === "string" ? conn.hub_domain.trim() : "";
-      const baseURL = typeof conn.hub_base_url === "string" ? conn.hub_base_url.trim() : "";
-      const transport = typeof conn.hub_transport === "string" ? conn.hub_transport.trim() : "";
-      const detail = typeof conn.hub_detail === "string" ? conn.hub_detail.trim() : "";
-      const target = domain || baseURL || "hub";
-
-      if (transport === "ws") {
-        setHubConnection("ws", `Connected via WebSocket to ${target}`);
-        renderHubSetupConnectionToggle();
-        return;
-      }
-
-      if (transport === "http_long_poll") {
-        setHubConnection("http_long_poll", `Connected via HTTP long polling to ${target}`);
-        renderHubSetupConnectionToggle();
-        return;
-      }
-
-      if (conn.hub_connected) {
-        setHubConnection("connected", `Connected to ${target} (transport pending)`);
-        renderHubSetupConnectionToggle();
-        return;
-      }
-
-      if (transport === "reachable") {
-        setHubConnection("reachable", detail || `Hub endpoint is live at ${target}. Connecting...`);
-        renderHubSetupConnectionToggle();
-        return;
-      }
-
-      if (transport === "retrying") {
-        setHubConnection("retrying", detail || `Hub endpoint is waking up at ${target}. Retrying ping every 12s.`);
-        renderHubSetupConnectionToggle();
-        return;
-      }
-
-      if (domain || baseURL) {
-        setHubConnection("disconnected", detail || `Disconnected from ${target}`);
-        renderHubSetupConnectionToggle();
-        return;
-      }
-
-      if (state.hubSetup.configured) {
-        setHubConnection("disconnected", "Configured locally. Restart runtime to connect.");
-        renderHubSetupConnectionToggle();
-        return;
-      }
-      setHubConnection("disconnected", "Connect to Molten Hub");
-      renderHubSetupConnectionToggle();
-    }
-
     function formatCompactMetricNumber(value, suffix = "") {
       if (!Number.isFinite(value) || value < 0) {
         return "--";
@@ -4940,8 +3707,8 @@
     }
 
     function renderResourceMetrics(snapshot) {
-      if (window.MoltenHubHeader && typeof window.MoltenHubHeader.updateResourceMetrics === "function") {
-        window.MoltenHubHeader.updateResourceMetrics(snapshot);
+      if (window.AgentHeader && typeof window.AgentHeader.updateResourceMetrics === "function") {
+        window.AgentHeader.updateResourceMetrics(snapshot);
         return;
       }
       const resources = snapshot && typeof snapshot.resources === "object" && snapshot.resources !== null
@@ -5104,7 +3871,7 @@
       const completed = Number(stats.completed_tasks || 0);
       const saved = dashboardDuration(Number(stats.total_saved_seconds || 0));
       const success = dashboardPercent(Number(stats.success_rate || 0));
-      return `Molten Hub session highlights: ${completed}/${total} tasks completed, ${saved} time saved, ${success} success.`;
+      return `agent_00 session highlights: ${completed}/${total} tasks completed, ${saved} time saved, ${success} success.`;
     }
 
     function updateDashboardShareLinks(stats) {
@@ -5166,7 +3933,6 @@
     const DASHBOARD_TASK_COLOR_FALLBACKS = ["#5aa7f2", "#63c892", "#f07c78"];
     const DASHBOARD_SOURCE_COLOR_VARS = {
       chat: "--dashboard-chart-chat",
-      hub: "--dashboard-chart-hub",
       json: "--dashboard-chart-json",
       library: "--dashboard-chart-library",
       prompt: "--dashboard-chart-prompt",
@@ -5175,7 +3941,6 @@
     };
     const DASHBOARD_SOURCE_COLOR_FALLBACKS = {
       chat: "#56c8ba",
-      hub: "#9a8cff",
       json: "#e8b35a",
       library: "#6fb0f4",
       prompt: "#7bc99a",
@@ -5213,8 +3978,6 @@
         case "dialogue":
         case "chat":
           return "message-circle";
-        case "hub":
-          return "satellite-dish";
         case "json":
           return "braces";
         case "library":
@@ -5999,8 +4762,8 @@
         state.speech.enabled = Boolean(speech.enabled);
         const reachable = Boolean(speech.reachable);
         state.speech.reachable = active && state.speech.reachable ? state.speech.reachable : reachable;
-        if (window.MoltenHubHeader && typeof window.MoltenHubHeader.updateSpeechConnection === "function") {
-          window.MoltenHubHeader.updateSpeechConnection(
+        if (window.AgentHeader && typeof window.AgentHeader.updateSpeechConnection === "function") {
+          window.AgentHeader.updateSpeechConnection(
             state.speech.enabled && state.speech.reachable,
             state.speech.reachable ? "Connected" : "Unavailable",
           );
@@ -6010,8 +4773,8 @@
           state.speech.enabled = false;
           state.speech.reachable = false;
         }
-        if (window.MoltenHubHeader && typeof window.MoltenHubHeader.updateSpeechConnection === "function") {
-          window.MoltenHubHeader.updateSpeechConnection(false, "Unavailable");
+        if (window.AgentHeader && typeof window.AgentHeader.updateSpeechConnection === "function") {
+          window.AgentHeader.updateSpeechConnection(false, "Unavailable");
         }
       } finally {
         syncPromptSpeechButton();
@@ -7378,7 +6141,7 @@
         case "library":
           return "Start from a saved task recipe, then apply it to the repository, branch, directory, and reviewers above.";
         case "json":
-          return "Edit the raw payload exactly as the hub receives it, including multi-repo runs and review configuration.";
+          return "Edit the raw payload exactly as the runtime receives it, including multi-repo runs and review configuration.";
         default:
           return "Compose a repository run, start from a library task, or edit the raw JSON payload.";
       }
@@ -7800,8 +6563,6 @@
       switch (normalizeTaskStartSource(source)) {
         case "chat":
           return "Chat";
-        case "hub":
-          return "Hub";
         case "library":
           return "Library";
         case "review":
@@ -9820,15 +8581,6 @@
       return state.sparkleTaskIDs.has(requestID);
     }
 
-    function isHubTask(task) {
-      return taskStartSource(task) === "hub";
-    }
-
-    function isHubDeliveredTask(task) {
-      const source = taskStartSource(task);
-      return source === "hub" || source === "review";
-    }
-
     function isReviewTask(task) {
       if (taskStartSource(task) === "review") {
         return true;
@@ -9840,31 +8592,7 @@
       return workflow === "code_review" || workflow === "pull_request_code_review";
     }
 
-    function triggerNewHubTaskHighlight(requestID) {
-      requestID = String(requestID || "").trim();
-      if (!requestID) return;
-
-      const existingTimer = state.newHubTaskHighlightTimers.get(requestID);
-      if (existingTimer) {
-        window.clearTimeout(existingTimer);
-      }
-
-      state.newHubTaskHighlightIDs.add(requestID);
-      const timer = window.setTimeout(() => {
-        state.newHubTaskHighlightIDs.delete(requestID);
-        state.newHubTaskHighlightTimers.delete(requestID);
-        render(state.snapshot);
-      }, NEW_HUB_TASK_HIGHLIGHT_MS);
-      state.newHubTaskHighlightTimers.set(requestID, timer);
-    }
-
-    function shouldHighlightNewHubTask(task) {
-      const requestID = taskRequestID(task);
-      if (!requestID) return false;
-      return state.newHubTaskHighlightIDs.has(requestID);
-    }
-
-    function syncNewHubTaskFocus(previousSnapshot, nextSnapshot) {
+    function syncNewReviewTaskFocus(previousSnapshot, nextSnapshot) {
       if (!previousSnapshot) {
         return;
       }
@@ -9879,13 +8607,10 @@
 
       for (const task of nextSnapshot?.tasks || []) {
         const requestID = taskRequestID(task);
-        if (!requestID || previousIDs.has(requestID) || !isHubDeliveredTask(task)) {
+        if (!requestID || previousIDs.has(requestID) || !isReviewTask(task)) {
           continue;
         }
-        if (isHubTask(task)) {
-          triggerNewHubTaskHighlight(requestID);
-        }
-        playHubTaskStartSound(task);
+        playTaskStartSound(task);
       }
     }
 
@@ -10137,7 +8862,7 @@
       ]);
     }
 
-    function playHubTaskStartSound(task) {
+    function playTaskStartSound(task) {
       if (isReviewTask(task)) {
         playReviewTaskStartSound();
         return;
@@ -10669,11 +9394,6 @@
       switch (normalized) {
         case "chat":
           return "chat";
-        case "hub":
-        case "hub_dispatch":
-        case "moltenhub":
-        case "molten_hub":
-          return "hub";
         case "prompt":
         case "builder":
         case "studio":
@@ -10715,9 +9435,6 @@
         }
       }
       const requestID = taskRequestID(task).toLowerCase();
-      if (requestID.startsWith("req-") || requestID.startsWith("hub-")) {
-        return "hub";
-      }
       if (requestID.startsWith("local-")) {
         return "prompt";
       }
@@ -11240,8 +9957,6 @@
       switch (taskStartSource(task)) {
         case "chat":
           return "entry_chat";
-        case "hub":
-          return "entry_hub";
         case "library":
           return "entry_library";
         case "json":
@@ -11251,7 +9966,7 @@
         case "prompt":
           return "entry_prompt";
         default:
-          return "entry_hub";
+          return "entry_prompt";
       }
     }
 
@@ -12045,7 +10760,6 @@
             selected: requestID === state.selectedTaskId,
             collapsed: allowCollapse && isMinimizedTask(task),
             sparkle: shouldSparkleTask(task),
-            newHubTask: shouldHighlightNewHubTask(task),
             status: String(task?.status || ""),
             stage: String(task?.stage || ""),
             source: taskStartSource(task),
@@ -12129,7 +10843,7 @@
         badge.className = "brand-login-badge task-empty-badge";
         const badgeLogo = document.createElement("img");
         badgeLogo.className = "brand-login-badge-logo";
-        badgeLogo.src = MOLTENHUB_LOGO_URL;
+        badgeLogo.src = APP_LOGO_URL;
         badgeLogo.alt = "";
         badgeLogo.setAttribute("aria-hidden", "true");
         badge.appendChild(badgeLogo);
@@ -12257,9 +10971,6 @@
         }
         if (collapsed) {
           node.classList.add("task-collapsed");
-        }
-        if (shouldHighlightNewHubTask(task)) {
-          node.classList.add("task-new-hub");
         }
         node.addEventListener("click", () => selectTask(requestID));
 
@@ -13095,7 +11806,7 @@
       state.snapshot = snapshot;
       syncTaskCompletionSounds(snapshot);
       syncTaskViewDockCompletion(previousSnapshot, snapshot);
-      syncNewHubTaskFocus(previousSnapshot, snapshot);
+      syncNewReviewTaskFocus(previousSnapshot, snapshot);
       syncTaskCompletionSparkles(previousSnapshot, snapshot);
       syncChatRepoActivity(previousSnapshot, snapshot);
       rememberCompletedTaskHistory(snapshot);
@@ -13112,7 +11823,6 @@
       }
       dropReposFromHistory(failedRepoAccessRepos);
       rememberRepos(observedRepos);
-      renderHubConnection(snapshot);
       renderResourceMetrics(snapshot);
       syncDashboardDockLinkAvailability(snapshot);
       syncTaskViewDockState(snapshot);
@@ -13154,12 +11864,6 @@
         const githubReposPromise = state.githubReposReady
           ? loadGitHubReposForChat({ force: true, refresh: true, keepExisting: true })
           : loadGitHubReposForChat();
-        void loadHubSetupStatus().then(() => {
-          if (shouldOpenInitialHubProfileDialog()) {
-            openHubProfileDialog("deep_link");
-          }
-        });
-        void loadAgentAuthStatus();
         void loadGitHubProfileLink();
         void loadLibraryTasks();
         const reviewSettingsPromise = loadReviewSettings();
@@ -13641,67 +12345,31 @@
         }
       });
     }
-    if (hubConnItem) {
-      hubConnItem.addEventListener("click", maybeOpenHubConnectPage);
-      hubConnItem.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          maybeOpenHubConnectPage(event);
-        }
-      });
+    const settingsGate = document.getElementById("settings-gate");
+    function setSettingsOpen(open) {
+      state.settingsOpen = Boolean(open);
+      settingsGate.classList.toggle("hidden", !open);
+      settingsGate.setAttribute("aria-hidden", open ? "false" : "true");
+      document.body.classList.toggle("onboarding-modal-open", Boolean(open));
+      if (open) {
+        void loadReviewSettings();
+        window.requestAnimationFrame(() => reviewSettingsAutoMerge?.focus());
+      }
     }
-    if (hubSetupConnectionToggle) {
-      hubSetupConnectionToggle.addEventListener("click", submitHubConnectionToggle);
+    function setSettingsBusy(busy) {
+      state.settingsBusy = Boolean(busy);
+      reviewSettingsSave.disabled = Boolean(busy);
+      reviewSettingsClose.disabled = Boolean(busy);
     }
-    if (moltenBotHubLink) {
-      moltenBotHubLink.addEventListener("click", (event) => {
-        if (state.hubSetup.configured) {
-          trackAnalyticsEvent("hub_dashboard_link_opened", { source: "dock" });
-          return;
-        }
-        event.preventDefault();
-        state.hubSetupDialogMode = "connect";
-        trackAnalyticsEvent("hub_setup_opened", { source: "dock" });
-        setHubSetupOpen(true);
-        applyHubSetupState(currentHubSetupDraft());
-        setHubSetupStatus("", "");
-      });
-    }
-    if (moltenBotHubProfileButton) {
-      moltenBotHubProfileButton.addEventListener("click", () => {
-        openHubProfileDialog("dock");
-      });
-    }
-    if (hubSetupRegionNAToggle) {
-      hubSetupRegionNAToggle.addEventListener("click", () => {
-        state.hubSetupLastAutoSubmitKey = "";
-        trackAnalyticsEvent("hub_setup_region_changed", { region: "na" });
-        applyHubSetupState(currentHubSetupDraft({ region: "na" }));
-        scheduleHubSetupAutoSubmit();
-      });
-    }
-    if (hubSetupRegionEUToggle) {
-      hubSetupRegionEUToggle.addEventListener("click", () => {
-        state.hubSetupLastAutoSubmitKey = "";
-        trackAnalyticsEvent("hub_setup_region_changed", { region: "eu" });
-        applyHubSetupState(currentHubSetupDraft({ region: "eu" }));
-        scheduleHubSetupAutoSubmit();
-      });
-    }
-    if (hubSetupClose) {
-      hubSetupClose.addEventListener("click", () => {
-        trackAnalyticsEvent("hub_setup_closed", { source: "close_button", dialog_mode: state.hubSetupDialogMode });
-        setHubSetupOpen(false);
-        state.hubSetupDialogMode = "connect";
-      });
-    }
-    if (hubSetupSigninLink) {
-      hubSetupSigninLink.addEventListener("click", () => {
-        trackAnalyticsEvent("hub_setup_signin_opened", { source: "setup_dialog" });
-      });
-    }
-    if (hubSetupForm) {
-      hubSetupForm.addEventListener("submit", submitHubSetup);
-    }
+    document.getElementById("settings-open")?.addEventListener("click", (event) => {
+      event.preventDefault();
+      setSettingsOpen(true);
+    });
+    settingsGate.addEventListener("click", (event) => {
+      if (event.target === settingsGate && !state.settingsBusy) setSettingsOpen(false);
+    });
+    if (window.location.hash === "#settings") setSettingsOpen(true);
+
     if (reviewSettingsForm) {
       reviewSettingsForm.addEventListener("submit", submitReviewSettings);
     }
@@ -13717,90 +12385,10 @@
     });
     if (reviewSettingsClose) {
       reviewSettingsClose.addEventListener("click", () => {
-        trackAnalyticsEvent("hub_setup_closed", { source: "review_settings_close", dialog_mode: state.hubSetupDialogMode });
-        setHubSetupOpen(false);
-        state.hubSetupDialogMode = "connect";
+        setSettingsOpen(false);
       });
     }
-    settingsTabs.forEach((button) => {
-      button.addEventListener("click", () => {
-        const tab = normalizeSettingsTab(button.getAttribute("data-settings-tab"));
-        trackAnalyticsEvent("settings_tab_changed", { tab });
-        setSettingsTab(tab);
-        if (tab === "review") {
-          void loadReviewSettings();
-        }
-      });
-    });
-    [
-      hubSetupHandle,
-      hubSetupDisplayName,
-      hubSetupProfile,
-      hubSetupEmoji,
-    ].forEach((field) => {
-      if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) {
-        field.addEventListener("input", syncHubSetupSubmitState);
-      }
-    });
-    if (hubSetupGate) {
-      hubSetupGate.addEventListener("click", (event) => {
-        if (event.target !== hubSetupGate || state.hubSetupBusy) {
-          return;
-        }
-        trackAnalyticsEvent("hub_setup_closed", { source: "backdrop", dialog_mode: state.hubSetupDialogMode });
-        setHubSetupOpen(false);
-        state.hubSetupDialogMode = "connect";
-      });
-    }
-    if (hubSetupToken) {
-      const syncHubSetupModeFromToken = () => {
-        const inferredMode = hubSetupModeForToken(hubSetupToken.value, state.hubSetup.agentMode);
-        if (inferredMode !== state.hubSetup.agentMode) {
-          applyHubSetupState(currentHubSetupDraft({ agentMode: inferredMode }));
-        } else {
-          applyHubSetupState(currentHubSetupDraft());
-        }
-      };
-      hubSetupToken.addEventListener("input", () => {
-        syncHubSetupModeFromToken();
-        if (currentHubSetupAutoSubmitKey() !== state.hubSetupLastAutoSubmitKey) {
-          state.hubSetupLastAutoSubmitKey = "";
-        }
-        syncHubTokenValidation();
-        if (hubSetupStatus && hubSetupStatus.classList.contains("error")) {
-          setHubSetupStatus("", "");
-        }
-        scheduleHubSetupAutoSubmit();
-      });
-      hubSetupToken.addEventListener("paste", () => {
-        window.setTimeout(() => {
-          syncHubSetupModeFromToken();
-          if (currentHubSetupAutoSubmitKey() !== state.hubSetupLastAutoSubmitKey) {
-            state.hubSetupLastAutoSubmitKey = "";
-          }
-          syncHubTokenValidation();
-          scheduleHubSetupAutoSubmit();
-        }, 0);
-      });
-    }
-    if (hubSetupEmoji) {
-      const syncEmojiField = () => {
-        syncHubSetupEmojiValue();
-        if (hubSetupEmojiPicker && typeof hubSetupEmojiPicker.sync === "function") {
-          hubSetupEmojiPicker.sync();
-        } else {
-          const previewNode = hubSetupEmojiPickerRoot ? hubSetupEmojiPickerRoot.querySelector(".hub-emoji-picker-toggle-preview") : null;
-          if (previewNode) {
-            previewNode.textContent = profileEmojiOrFallback(hubSetupEmoji.value);
-          }
-        }
-      };
-      hubSetupEmoji.addEventListener("input", syncEmojiField);
-      hubSetupEmoji.addEventListener("paste", () => {
-        window.setTimeout(syncEmojiField, 0);
-      });
-    }
-    window.__hubAuthVerifyClick = (event) => {
+    window.__agentAuthVerifyClick = (event) => {
       if (event && typeof event.preventDefault === "function") {
         event.preventDefault();
       }
@@ -13928,18 +12516,7 @@
         trackAnalyticsEvent("task_fullscreen_toggled", { open: false, source: "escape_key" });
         return;
       }
-      if (event.key === "Escape" && state.hubSetupOpen) {
-        if (state.hubSetupBusy) {
-          return;
-        }
-        if (document.querySelector(".hub-emoji-picker-panel:not([hidden])")) {
-          return;
-        }
-        event.preventDefault();
-        trackAnalyticsEvent("hub_setup_closed", { source: "escape_key", dialog_mode: state.hubSetupDialogMode });
-        setHubSetupOpen(false);
-        state.hubSetupDialogMode = "connect";
-      }
+      if (event.key === "Escape" && state.settingsOpen && !state.settingsBusy) setSettingsOpen(false);
     });
     document.addEventListener("selectionchange", flushDeferredSelectionRenders);
 
@@ -14054,7 +12631,6 @@
     applyTaskSoundToggleMeta();
     renderConfiguredAgent();
     applyAgentAuthGate(state.agentAuth);
-    applyHubSetupState(state.hubSetup);
     void refreshSpeechStatus();
     loadInitial();
     startStream();

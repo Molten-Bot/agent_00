@@ -2778,7 +2778,7 @@ func TestRunNoChangesFollowUpWithConcreteEvidenceAllowsNoChanges(t *testing.T) {
 			cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath)),
 			res: execx.Result{Stdout: strings.Join([]string{
 				"No repository changes required.",
-				"Concrete evidence: [internal/hub/daemon.go](" + filepath.ToSlash(filepath.Join(repoDir, "internal/hub/daemon.go")) + ":2210) already skips failure follow-up loops.",
+				"Concrete evidence: [cmd/harness/main.go](" + filepath.ToSlash(filepath.Join(repoDir, "cmd/harness/main.go")) + ":2210) already skips failure follow-up loops.",
 			}, "\n")},
 		},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "\n"}},
@@ -6868,7 +6868,7 @@ func TestRunCodexDoesNotDowngradeProductionHealthFailureToValidationGap(t *testi
 	t.Parallel()
 
 	targetDir := t.TempDir()
-	prompt := "is production working and stable -> https://na.hub.molten.bot/health"
+	prompt := "is production working and stable -> https://service.example.com/health"
 	firstCmd := codexCommand(targetDir, prompt)
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
@@ -6877,15 +6877,15 @@ func TestRunCodexDoesNotDowngradeProductionHealthFailureToValidationGap(t *testi
 			res: execx.Result{
 				Stdout: strings.Join([]string{
 					"Failure: Cannot confirm production working/stable.",
-					"Error details: runtime cannot resolve `na.hub.molten.bot`. Repo health script failed after 3 attempts:",
-					"`curl: (6) Could not resolve host: na.hub.molten.bot`",
+					"Error details: runtime cannot resolve `service.example.com`. Repo health script failed after 3 attempts:",
+					"`curl: (6) Could not resolve host: service.example.com`",
 					"`HTTP 000`",
 					"No repo changes made.",
 				}, "\n"),
 				Stderr: strings.Join([]string{
 					"If local test or validation tooling is unavailable in this runtime (for example `command not found` or missing `node_modules`), do not fail solely for that.",
 					"Failure: Cannot confirm production working/stable.",
-					"Error details: runtime cannot resolve `na.hub.molten.bot`.",
+					"Error details: runtime cannot resolve `service.example.com`.",
 				}, "\n"),
 			},
 		},
@@ -7680,7 +7680,7 @@ func TestCodexReportedFailureIgnoresInterimFailureMarkerInNoisyStdout(t *testing
 			"ok   \tgithub.com/moltenbot000/moltenhub-dispatch/internal/app",
 			"ok   \tgithub.com/moltenbot000/moltenhub-dispatch/internal/web",
 			"go test ./...",
-			"ok   \tgithub.com/moltenbot000/moltenhub-dispatch/internal/hub",
+			"ok   \tgithub.com/moltenbot000/moltenhub-dispatch/internal/localruntime",
 			"Refactor complete. Tests pass.",
 		}, "\n"),
 	}
@@ -8140,7 +8140,7 @@ func TestWithCompletionGatePromptIncludesAgentRuntimeGuidance(t *testing.T) {
 		"Do not answer that no implementation task was given when the agent input includes a requested repository change.",
 		"When failures occur, send a response back to the calling agent that clearly states failure and includes the error details. Use explicit `Failure:` and `Error details:` fields.",
 		"If local test or validation tooling is unavailable in this runtime (for example `command not found` or missing `node_modules`), do not fail solely for that and do not use `Failure:` solely for that validation gap.",
-		"Before sharing repository or pull-request links in Hub activity, use `gh repo view OWNER/REPO --json isPrivate,nameWithOwner` during clone or PR tooling.",
+		"Before sharing repository or pull-request links in public activity, use `gh repo view OWNER/REPO --json isPrivate,nameWithOwner` during clone or PR tooling.",
 		"Share repo and PR links only when GitHub reports `isPrivate:false`; never share private repository links.",
 		"If a repository is not initialized after clone, use only gh CLI/git tools to create and push a main branch, then continue once git state is ready for work.",
 		"Do not commit, push, create or update pull requests, or watch remote CI/CD from inside this agent runtime.",

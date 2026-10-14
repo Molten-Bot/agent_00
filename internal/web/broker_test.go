@@ -188,14 +188,14 @@ func TestBrokerTracksDashboardSourceMix(t *testing.T) {
 	b.RecordTaskRunConfigWithSource("local-library", []byte(`{"repo":"git@github.com:acme/repo.git","libraryTaskName":"unit-test-coverage"}`), "library")
 	b.RecordTaskRunConfigWithSource("local-prompt", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"from prompt"}`), "prompt")
 	b.RecordTaskRunConfigWithSource("local-review", []byte(`{"repo":"git@github.com:acme/repo.git","libraryTaskName":"code-review"}`), "review")
-	b.RecordTaskRunConfigWithSource("req-hub", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"from hub"}`), "hub")
+	b.RecordTaskRunConfigWithSource("unknown-source", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"from unknown source"}`), "unknown")
 
 	snap := b.Snapshot()
 	got := map[string]int{}
 	for _, group := range snap.Stats.SourceMix {
 		got[group.Name] = group.Tasks
 	}
-	for _, name := range []string{"Chat", "Hub", "JSON", "Library", "Prompt", "Review"} {
+	for _, name := range []string{"Chat", "Other", "JSON", "Library", "Prompt", "Review"} {
 		if got[name] != 1 {
 			t.Fatalf("source_mix[%q] = %d, want 1 (all groups: %#v)", name, got[name], snap.Stats.SourceMix)
 		}
@@ -214,7 +214,7 @@ func TestBrokerTracksReviewRuntimeAsDashboardSavedTime(t *testing.T) {
 		"libraryTaskName":"code-review",
 		"agentHarness":"codex",
 		"review":{"prNumber":42}
-	}`), "hub")
+	}`), "unknown")
 	b.IngestLog("dispatch status=start request_id=req-hub-review skill=library_task repo=git@github.com:acme/repo.git")
 	now = now.Add(2 * time.Minute)
 	b.IngestLog("dispatch status=no_changes request_id=req-hub-review workspace=/tmp/review branch=feature pr_url=https://github.com/acme/repo/pull/42")
@@ -560,109 +560,6 @@ func TestBrokerDropsInvalidCommandPayloadMarkers(t *testing.T) {
 	}
 	if got, want := len(snap.Events), 1; got != want {
 		t.Fatalf("len(events) = %d, want %d (drop invalid command marker event)", got, want)
-	}
-}
-
-func TestBrokerTracksMoltenHubConnectionAndDomain(t *testing.T) {
-	t.Parallel()
-
-	b := NewBroker()
-	b.IngestLog("hub.connection status=configured base_url=https://na.hub.molten.bot/v1")
-	b.IngestLog("hub.auth status=ok")
-
-	snap := b.Snapshot()
-	if !snap.Connection.HubConnected {
-		t.Fatal("connection.hub_connected = false, want true")
-	}
-	if snap.Connection.HubTransport != "" {
-		t.Fatalf("connection.hub_transport = %q, want empty until transport mode is known", snap.Connection.HubTransport)
-	}
-	if snap.Connection.HubBaseURL != "https://na.hub.molten.bot/v1" {
-		t.Fatalf("connection.hub_base_url = %q", snap.Connection.HubBaseURL)
-	}
-	if snap.Connection.HubDomain != "na.hub.molten.bot" {
-		t.Fatalf("connection.hub_domain = %q", snap.Connection.HubDomain)
-	}
-}
-
-func TestBrokerTracksMoltenHubConnectionTransitions(t *testing.T) {
-	t.Parallel()
-
-	b := NewBroker()
-	b.IngestLog("hub.connection status=configured base_url=https://eu.hub.molten.bot/v1")
-	b.IngestLog("hub.ws status=connected")
-	snap := b.Snapshot()
-	if !snap.Connection.HubConnected {
-		t.Fatal("connection.hub_connected = false after websocket connect")
-	}
-	if snap.Connection.HubTransport != hubTransportWS {
-		t.Fatalf("connection.hub_transport = %q after websocket connect, want %q", snap.Connection.HubTransport, hubTransportWS)
-	}
-
-	b.IngestLog(`hub.ws status=disconnected err="network reset"`)
-	snap = b.Snapshot()
-	if snap.Connection.HubConnected {
-		t.Fatal("connection.hub_connected = true after websocket disconnect")
-	}
-	if snap.Connection.HubTransport != hubTransportDisconnected {
-		t.Fatalf("connection.hub_transport = %q after websocket disconnect, want %q", snap.Connection.HubTransport, hubTransportDisconnected)
-	}
-
-	b.IngestLog("hub.transport mode=runtime_pull")
-	snap = b.Snapshot()
-	if !snap.Connection.HubConnected {
-		t.Fatal("connection.hub_connected = false after pull transport fallback")
-	}
-	if snap.Connection.HubTransport != hubTransportHTTPLongPoll {
-		t.Fatalf("connection.hub_transport = %q after pull fallback, want %q", snap.Connection.HubTransport, hubTransportHTTPLongPoll)
-	}
-
-	b.IngestLog(`hub.pull status=error err="poll timeout"`)
-	snap = b.Snapshot()
-	if snap.Connection.HubConnected {
-		t.Fatal("connection.hub_connected = true after pull transport error")
-	}
-	if snap.Connection.HubTransport != hubTransportDisconnected {
-		t.Fatalf("connection.hub_transport = %q after pull error, want %q", snap.Connection.HubTransport, hubTransportDisconnected)
-	}
-	if snap.Connection.HubDomain != "eu.hub.molten.bot" {
-		t.Fatalf("connection.hub_domain = %q", snap.Connection.HubDomain)
-	}
-}
-
-func TestBrokerTracksMoltenHubPingRetryState(t *testing.T) {
-	t.Parallel()
-
-	b := NewBroker()
-	b.IngestLog(`hub.connection status=retrying base_url=https://na.hub.molten.bot/v1 detail="Hub endpoint ping failed; retrying every 12s until live. Error: GET https://na.hub.molten.bot/ping returned status=503"`)
-
-	snap := b.Snapshot()
-	if snap.Connection.HubConnected {
-		t.Fatal("connection.hub_connected = true during ping retry, want false")
-	}
-	if snap.Connection.HubTransport != hubTransportRetrying {
-		t.Fatalf("connection.hub_transport = %q, want %q", snap.Connection.HubTransport, hubTransportRetrying)
-	}
-	if !strings.Contains(snap.Connection.HubDetail, "retrying every 12s") {
-		t.Fatalf("connection.hub_detail = %q", snap.Connection.HubDetail)
-	}
-
-	b.IngestLog(`hub.connection status=reachable base_url=https://na.hub.molten.bot/v1 detail="https://na.hub.molten.bot/ping status=204"`)
-	snap = b.Snapshot()
-	if snap.Connection.HubTransport != hubTransportReachable {
-		t.Fatalf("connection.hub_transport = %q, want %q", snap.Connection.HubTransport, hubTransportReachable)
-	}
-	if snap.Connection.HubDetail != "https://na.hub.molten.bot/ping status=204" {
-		t.Fatalf("connection.hub_detail = %q", snap.Connection.HubDetail)
-	}
-
-	b.IngestLog("hub.ws status=connected")
-	snap = b.Snapshot()
-	if snap.Connection.HubTransport != hubTransportWS {
-		t.Fatalf("connection.hub_transport = %q after websocket connect, want %q", snap.Connection.HubTransport, hubTransportWS)
-	}
-	if snap.Connection.HubDetail != "" {
-		t.Fatalf("connection.hub_detail = %q after websocket connect, want empty", snap.Connection.HubDetail)
 	}
 }
 

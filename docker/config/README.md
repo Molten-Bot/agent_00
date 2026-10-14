@@ -1,97 +1,15 @@
 # Docker Runtime Config Mount
 
-`docker-compose.yml` mounts `./.moltenhub` to `/workspace/config` in the container.
+`docker-compose.yml` mounts `./.moltenhub` to `/workspace/config`. The existing mount name is retained so saved CLI credentials remain available. The image uses `/workspace/config/home` for persistent Codex and Claude authentication.
 
-This directory remains available if you prefer a manual bind mount (for example with `docker run`).
-The image sets `HOME=/workspace/config/home` by default so CLI auth files from Codex and Claude persist with the same config mount.
+With no config file, the container starts `harness serve` on port 7777. Complete agent and GitHub authorization in the dashboard, or supply `GITHUB_TOKEN` / `GH_TOKEN` and optional `OPENAI_API_KEY` through the environment.
 
-`GITHUB_TOKEN` also works as direct bootstrap input. When container starts, entrypoint copies `GITHUB_TOKEN` to `GH_TOKEN`, runs `gh` auth setup, and hub onboarding skips GitHub token prompt if token already exists.
+- A `config.json` containing task fields (`repo`, `repos`, `repoUrl`, `prompt`, or `libraryTaskName`) runs once with `harness run --config`.
+- A `config.json` containing local runtime preferences starts `harness serve --config`.
+- An `init.json` supplies initial local runtime preferences when `config.json` is absent.
 
-Provide one of these files:
+Local preferences include `agent_harness`, `agent_command`, `log_level`, `dispatcher`, and `review_watch`. Credentials saved during onboarding persist across restarts. Set `HARNESS_UI_LISTEN` to override the container listen address (default `:7777`).
 
-- `config.json` to run `harness run --config /workspace/config/config.json` when it contains task-run fields
-- `config.json` to run `harness hub --config /workspace/config/config.json` when it contains hub runtime fields
-- `init.json` to run `harness hub --init /workspace/config/init.json` when `config.json` is absent
-- if both files are absent and `MOLTEN_HUB_TOKEN` is set, `with-config` auto-generates a temporary init config and starts hub mode
-- if both files are absent and `MOLTEN_HUB_TOKEN` is unset, `with-config` starts `harness hub` onboarding mode with defaults (no init required)
+For a single task, copy `run.example.json` to `.moltenhub/config.json` and edit it. For the dashboard, leave that file absent or use local runtime preferences.
 
-When running hub mode, `init.json` may also include runtime secrets:
-
-- `github_token` for GitHub auth bootstrap
-- `openai_api_key` for Codex CLI login when using the Codex harness
-
-After first successful onboarding, persisted `config.json` may also contain `github_token`. Future boots load that automatically if `GITHUB_TOKEN`/`GH_TOKEN` are unset.
-
-After the first successful onboarding/hub auth, runtime fields are persisted into `config.json` so later boots can use `config.json` directly.
-
-You can bootstrap from examples:
-
-```bash
-mkdir -p .moltenhub
-cp run.example.json .moltenhub/config.json
-# Optional bootstrap if you want to pre-seed hub credentials:
-cp init.example.json .moltenhub/init.json
-```
-
-For manual `docker run` with a bind mount, if your host user is not uid/gid `1000`, add `--user "$(id -u):$(id -g)"` to avoid config write-permission failures.
-
-Example with persisted config mount and direct env bootstrap:
-
-```bash
-docker run --rm -p 7777:7777 \
-  --cap-drop=ALL \
-  --security-opt seccomp=unconfined \
-  --security-opt apparmor=unconfined \
-  -e GITHUB_TOKEN \
-  -e MOLTEN_HUB_TOKEN \
-  -e MOLTEN_HUB_REGION=na \
-  -v "$PWD/.moltenhub:/workspace/config" \
-  moltenai/agent_00:latest
-```
-
-`MOLTEN_HUB_TOKEN` only needs to be present for first bootstrap when no `config.json` or `init.json` exists yet. Optional extras:
-- `MOLTEN_HUB_REGION=na|eu` selects hosted hub region
-- `MOLTEN_HUB_URL=https://na.hub.molten.bot/v1` sets explicit hosted hub API URL
-- `MOLTEN_HUB_SESSION_KEY` customizes generated init config session key
-
-Docker Compose environment values must use mapping syntax (`KEY: value`) or
-list syntax (`KEY=value`). List entries such as `KEY:value` are malformed and
-do not arrive in the container as usable environment variables.
-Bootstrap ignores these malformed entries and uses onboarding when no valid
-token or configuration is available. It does not read parent process environments
-to recover credentials from malformed variable names.
-
-Compose example:
-
-```yaml
-services:
-  codex:
-    image: moltenai/agent_00:latest
-    cap_drop:
-      - ALL
-    security_opt:
-      - seccomp=unconfined
-      - apparmor=unconfined
-    ports:
-      - "3331:7777"
-    volumes:
-      - ./.moltenhub:/workspace/config
-    environment:
-      GITHUB_TOKEN: ${GITHUB_TOKEN}
-      MOLTEN_HUB_TOKEN: ${MOLTEN_HUB_TOKEN}
-      MOLTEN_HUB_REGION: na
-      HARNESS_AGENT_HARNESS: codex
-      WHISPER_SPEECH_HOST: faster-whisper
-      WHISPER_SPEECH_PORT: "10300"
-      WHISPER_SPEECH_LANGUAGE: en
-      # Optional for Codex agent auth bootstrap:
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-
-  faster-whisper:
-    image: lscr.io/linuxserver/faster-whisper:latest
-    environment:
-      WHISPER_MODEL: base-int8
-      WHISPER_LANG: en
-    ports:
-      - "10300:10300"
-```
+For manual bind mounts, use `--user "$(id -u):$(id -g)"` when your host user is not uid/gid 1000 to avoid write-permission failures.

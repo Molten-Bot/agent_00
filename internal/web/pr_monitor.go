@@ -230,7 +230,7 @@ func (m *PRMergeMonitor) forgetMissingTasks(active map[string]struct{}, activePR
 func (m *PRMergeMonitor) checkTaskPR(ctx context.Context, task Task) {
 	state, err := m.prState(ctx, task.PRURL)
 	if err != nil {
-		m.Logf("hub.ui status=warn event=pr_monitor request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
+		m.Logf("localruntime.ui status=warn event=pr_monitor request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
 		return
 	}
 	if !state.Merged() {
@@ -244,31 +244,31 @@ func (m *PRMergeMonitor) checkTaskPR(ctx context.Context, task Task) {
 			m.markMerged(task.RequestID)
 			return
 		default:
-			m.Logf("hub.ui status=warn event=pr_monitor_mark_merged request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
+			m.Logf("localruntime.ui status=warn event=pr_monitor_mark_merged request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
 			return
 		}
 	}
 	deleteMergedBranches := m.deleteMergedBranchesEnabled()
 	if deleteMergedBranches {
 		if err := m.deleteMergedBranch(ctx, task, state); err != nil {
-			m.Logf("hub.ui status=warn event=pr_monitor_delete_branch request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
+			m.Logf("localruntime.ui status=warn event=pr_monitor_delete_branch request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
 			return
 		}
 	}
 	m.Broker.DropTaskRunConfig(task.RequestID)
 	if deleteMergedBranches {
 		if err := m.Broker.CloseTask(task.RequestID); err != nil {
-			m.Logf("hub.ui status=warn event=pr_monitor_close_deleted_branch_task request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
+			m.Logf("localruntime.ui status=warn event=pr_monitor_close_deleted_branch_task request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
 			return
 		}
 	}
 	if m.CleanupTask != nil {
 		if err := m.CleanupTask(ctx, task.RequestID); err != nil {
-			m.Logf("hub.ui status=warn event=pr_monitor_cleanup request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
+			m.Logf("localruntime.ui status=warn event=pr_monitor_cleanup request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
 		}
 	}
 	m.markMerged(task.RequestID)
-	m.Logf("hub.ui status=ok event=pr_merged request_id=%s pr_url=%s branch_deleted=%t", task.RequestID, task.PRURL, deleteMergedBranches)
+	m.Logf("localruntime.ui status=ok event=pr_merged request_id=%s pr_url=%s branch_deleted=%t", task.RequestID, task.PRURL, deleteMergedBranches)
 }
 
 func (m *PRMergeMonitor) deleteMergedBranchesEnabled() bool {
@@ -348,11 +348,11 @@ func (m *PRMergeMonitor) maybeQueueReviewFeedback(ctx context.Context, task Task
 	followUpRequestID, err := m.OnReviewFeedback(ctx, task, feedback)
 	if err != nil {
 		m.rollbackFeedbackQueue(task, feedback.Digest)
-		m.Logf("hub.ui status=warn event=pr_review_feedback request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
+		m.Logf("localruntime.ui status=warn event=pr_review_feedback request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
 		return
 	}
 	m.Logf(
-		"hub.ui status=ok event=pr_review_feedback_queued request_id=%s follow_up_request_id=%s pr_url=%s items=%d",
+		"localruntime.ui status=ok event=pr_review_feedback_queued request_id=%s follow_up_request_id=%s pr_url=%s items=%d",
 		task.RequestID,
 		followUpRequestID,
 		task.PRURL,
@@ -412,7 +412,7 @@ func (m *PRMergeMonitor) prState(ctx context.Context, prURL string) (prViewState
 	if state.Open() {
 		reviewComments, commentsErr := m.prReviewComments(ctx, prURL)
 		if commentsErr != nil {
-			m.Logf("hub.ui status=warn event=pr_monitor_review_comments pr_url=%s err=%q", prURL, commentsErr)
+			m.Logf("localruntime.ui status=warn event=pr_monitor_review_comments pr_url=%s err=%q", prURL, commentsErr)
 		} else {
 			state.ReviewComments = reviewComments
 		}

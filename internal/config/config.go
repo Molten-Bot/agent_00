@@ -63,7 +63,7 @@ type PromptImage struct {
 }
 
 // UnmarshalJSON accepts the canonical object shape and legacy base64 data URI
-// strings emitted by older hub producers.
+// strings emitted by older task producers.
 func (p *PromptImage) UnmarshalJSON(data []byte) error {
 	data = bytes.TrimSpace(data)
 	if bytes.Equal(data, []byte("null")) {
@@ -545,7 +545,7 @@ func validateReviewConfig(review *ReviewConfig, repos []string) error {
 		}
 	}
 	if review.Trigger != "" && normalizeReviewTrigger(review.Trigger) == "" {
-		return fmt.Errorf("unsupported review.trigger %q; supported values: hub, github-notification, manual", review.Trigger)
+		return fmt.Errorf("unsupported review.trigger %q; supported values: github-notification, manual", review.Trigger)
 	}
 	if review.Trigger == "github-notification" && review.RequireRequestedReviewer && review.RequestedReviewer == "" {
 		return fmt.Errorf("review.requestedReviewer is required when review.trigger is github-notification")
@@ -581,8 +581,6 @@ func normalizeReviewTrigger(value string) string {
 	switch normalized {
 	case "":
 		return ""
-	case "hub", "remote":
-		return "hub"
 	case "github-notification", "github-notifications", "notification", "notifications":
 		return "github-notification"
 	case "manual", "local":

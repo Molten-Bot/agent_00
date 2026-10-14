@@ -7,20 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
-	"github.com/Molten-Bot/agent_00/internal/execx"
-	"github.com/Molten-Bot/agent_00/internal/hub"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
@@ -93,81 +89,6 @@ func TestWriteStdoutAndStderrLineCaptureToSink(t *testing.T) {
 	}
 }
 
-func TestHubExitCodeMappings(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		err  error
-		want int
-	}{
-		{err: fmt.Errorf("init config: invalid"), want: app.ExitConfig},
-		{err: fmt.Errorf("hub auth: invalid token"), want: app.ExitAuth},
-		{err: fmt.Errorf("hub profile: invalid handle"), want: app.ExitAuth},
-		{err: fmt.Errorf("hub websocket url: malformed"), want: app.ExitConfig},
-		{err: fmt.Errorf("something else"), want: app.ExitPreflight},
-	}
-	for _, tt := range tests {
-		if got := hubExitCode(tt.err); got != tt.want {
-			t.Fatalf("hubExitCode(%q) = %d, want %d", tt.err, got, tt.want)
-		}
-	}
-}
-
-func TestRecordLocalRunActivityPublishesWhenHubConnected(t *testing.T) {
-	t.Parallel()
-
-	var activityBodies []map[string]any
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/agents/me/activities":
-			var activityBody map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&activityBody); err != nil {
-				t.Fatalf("decode activity body: %v", err)
-			}
-			activityBodies = append(activityBodies, activityBody)
-			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		default:
-			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer ts.Close()
-
-	runCfg := config.Config{
-		Repo:                   "git@github.com:acme/repo.git",
-		BaseBranch:             "main",
-		LibraryTaskName:        "security-review",
-		LibraryTaskDisplayName: "Security Boundary Review",
-	}
-	runCfg.ApplyDefaults()
-	recordLocalRunStartedActivity(context.Background(), hub.InitConfig{
-		BaseURL:    ts.URL + "/v1",
-		AgentToken: "token",
-	}, runCfg, "req-local-activity", func() bool { return true }, nil)
-	recordLocalRunCompletedActivity(context.Background(), hub.InitConfig{
-		BaseURL:    ts.URL + "/v1",
-		AgentToken: "token",
-	}, runCfg, "req-local-activity", func() bool { return true }, nil)
-
-	if len(activityBodies) != 2 {
-		t.Fatalf("activity count = %d, want 2", len(activityBodies))
-	}
-	activityBody := activityBodies[0]
-	if got, want := fmt.Sprint(activityBody["activity"]), "working on library task: Security Boundary Review"; got != want {
-		t.Fatalf("activity = %s, want %s", got, want)
-	}
-	if activityBody["category"] != "coding" || activityBody["status"] != "started" {
-		t.Fatalf("activity state fields = %#v", activityBody)
-	}
-	completedBody := activityBodies[1]
-	if got, want := fmt.Sprint(completedBody["activity"]), "completed library task: Security Boundary Review"; got != want {
-		t.Fatalf("completed activity = %s, want %s", got, want)
-	}
-	if completedBody["category"] != "coding" || completedBody["status"] != "completed" {
-		t.Fatalf("completed activity state fields = %#v", completedBody)
-	}
-}
-
 func TestRunResultPRHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -222,417 +143,6 @@ func TestValidateRunConfigPromptImages(t *testing.T) {
 		Images:       []config.PromptImage{{Name: "shot.png"}},
 	}); err != nil {
 		t.Fatalf("validateRunConfigPromptImages(claude image) error = %v", err)
-	}
-}
-
-func TestRecordLocalRunActivitySkipsWhenHubDisconnected(t *testing.T) {
-	t.Parallel()
-
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("unexpected request while hub disconnected: %s %s", r.Method, r.URL.Path)
-	}))
-	defer ts.Close()
-
-	runCfg := config.Config{
-		Repo:            "git@github.com:acme/repo.git",
-		BaseBranch:      "main",
-		LibraryTaskName: "security-review",
-	}
-	runCfg.ApplyDefaults()
-	recordLocalRunStartedActivity(context.Background(), hub.InitConfig{
-		BaseURL:    ts.URL + "/v1",
-		AgentToken: "token",
-	}, runCfg, "req-local-activity", func() bool { return false }, nil)
-}
-
-func TestMarkLocalRunRuntimeOfflinePublishesWhenHubConnected(t *testing.T) {
-	t.Parallel()
-
-	var offlineBody map[string]any
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/runtime/messages/offline":
-			if err := json.NewDecoder(r.Body).Decode(&offlineBody); err != nil {
-				t.Fatalf("decode offline body: %v", err)
-			}
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		default:
-			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer ts.Close()
-
-	var logs []string
-	markLocalRunRuntimeOffline(context.Background(), hub.InitConfig{
-		BaseURL:    ts.URL + "/v1",
-		AgentToken: "token",
-		SessionKey: "local-session",
-	}, "req-local-offline", func() bool { return true }, func(format string, args ...any) {
-		logs = append(logs, fmt.Sprintf(format, args...))
-	})
-
-	if got, want := fmt.Sprint(offlineBody["session_key"]), "local-session"; got != want {
-		t.Fatalf("session_key = %s, want %s", got, want)
-	}
-	if got, want := fmt.Sprint(offlineBody["reason"]), localTransportOfflineReasonExecutionFailure; got != want {
-		t.Fatalf("reason = %s, want %s", got, want)
-	}
-	if len(logs) != 1 || !strings.Contains(logs[0], "action=mark_offline") || !strings.Contains(logs[0], "status=ok") {
-		t.Fatalf("offline logs = %#v, want successful mark_offline log", logs)
-	}
-}
-
-func TestPublishLocalRunFailureResultPublishesExplicitFailurePayload(t *testing.T) {
-	t.Parallel()
-
-	var publishBody map[string]any
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/a2a":
-			http.NotFound(w, r)
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/runtime/messages/publish":
-			if err := json.NewDecoder(r.Body).Decode(&publishBody); err != nil {
-				t.Fatalf("decode publish body: %v", err)
-			}
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		default:
-			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer ts.Close()
-
-	var logs []string
-	publishLocalRunFailureResult(context.Background(), hub.InitConfig{
-		BaseURL:    ts.URL + "/v1",
-		AgentToken: "token",
-		SessionKey: "local-session",
-		Handle:     "caller-agent",
-	}, "req-local-fail", app.Result{
-		ExitCode:     app.ExitGit,
-		Err:          errors.New("git: merge conflict"),
-		WorkspaceDir: "/tmp/work",
-		Branch:       "moltenhub-build-api",
-	}, func() bool { return true }, func(format string, args ...any) {
-		logs = append(logs, fmt.Sprintf(format, args...))
-	})
-
-	msg, ok := publishBody["message"].(map[string]any)
-	if !ok {
-		t.Fatalf("published message missing: %#v", publishBody)
-	}
-	if got := publishBody["session_key"]; got != "local-session" {
-		t.Fatalf("session_key = %#v, want local-session", got)
-	}
-	if got := publishBody["to_agent_id"]; got != "caller-agent" {
-		t.Fatalf("to_agent_id = %#v, want caller-agent", got)
-	}
-	if got := publishBody["target_agent"]; got != "caller-agent" {
-		t.Fatalf("target_agent = %#v, want caller-agent", got)
-	}
-	if got := msg["session_key"]; got != "local-session" {
-		t.Fatalf("message.session_key = %#v, want local-session", got)
-	}
-	if got := msg["to_agent_id"]; got != "caller-agent" {
-		t.Fatalf("message.to_agent_id = %#v, want caller-agent", got)
-	}
-	if got := msg["status"]; got != "error" {
-		t.Fatalf("message.status = %#v, want error", got)
-	}
-	if got := msg["failed"]; got != true {
-		t.Fatalf("message.failed = %#v, want true", got)
-	}
-	if got := msg["Failure:"]; got != "task failed" {
-		t.Fatalf("message.Failure: = %#v", got)
-	}
-	if got := msg["Error details:"]; got != "git: merge conflict" {
-		t.Fatalf("message.Error details: = %#v", got)
-	}
-	if got := msg["message"]; got != "Failure: task failed.\nError details: git: merge conflict" {
-		t.Fatalf("message.message = %#v", got)
-	}
-	result, _ := msg["result"].(map[string]any)
-	if result == nil {
-		t.Fatal("message.result missing")
-	}
-	if got := result["Error details:"]; got != "git: merge conflict" {
-		t.Fatalf("result.Error details: = %#v", got)
-	}
-	if len(logs) != 1 || !strings.Contains(logs[0], "action=publish_failure_result") || !strings.Contains(logs[0], "status=ok") {
-		t.Fatalf("publish logs = %#v, want successful publish_failure_result log", logs)
-	}
-}
-
-func TestPublishLocalRunFailureResultRetriesTransientRuntimePublishFailure(t *testing.T) {
-	t.Parallel()
-
-	var runtimePublishAttempts int
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/a2a":
-			http.NotFound(w, r)
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/runtime/messages/publish":
-			runtimePublishAttempts++
-			if runtimePublishAttempts == 1 {
-				http.Error(w, "temporary outage", http.StatusServiceUnavailable)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		default:
-			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer ts.Close()
-
-	var logs []string
-	publishLocalRunFailureResult(context.Background(), hub.InitConfig{
-		BaseURL:    ts.URL + "/v1",
-		AgentToken: "token",
-		SessionKey: "local-session",
-		Handle:     "caller-agent",
-	}, "req-local-fail", app.Result{
-		ExitCode: app.ExitPR,
-		Err:      errors.New("checks: required PR checks failed"),
-	}, func() bool { return true }, func(format string, args ...any) {
-		logs = append(logs, fmt.Sprintf(format, args...))
-	})
-
-	if runtimePublishAttempts != 2 {
-		t.Fatalf("runtime publish attempts = %d, want 2", runtimePublishAttempts)
-	}
-	if len(logs) != 1 || !strings.Contains(logs[0], "action=publish_failure_result") || !strings.Contains(logs[0], "status=ok") {
-		t.Fatalf("publish logs = %#v, want successful publish_failure_result log", logs)
-	}
-}
-
-func TestPublishLocalRunFailureResultUsesCanceledParentForFailureNotification(t *testing.T) {
-	t.Parallel()
-
-	var publishBody map[string]any
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/a2a":
-			http.NotFound(w, r)
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/runtime/messages/publish":
-			if err := json.NewDecoder(r.Body).Decode(&publishBody); err != nil {
-				t.Fatalf("decode publish body: %v", err)
-			}
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		default:
-			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer ts.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	publishLocalRunFailureResult(ctx, hub.InitConfig{
-		BaseURL:    ts.URL + "/v1",
-		AgentToken: "token",
-		SessionKey: "local-session",
-		Handle:     "caller-agent",
-	}, "req-local-fail", app.Result{
-		ExitCode: app.ExitPR,
-		Err:      errors.New("checks: required PR checks failed"),
-	}, func() bool { return true }, nil)
-
-	msg, ok := publishBody["message"].(map[string]any)
-	if !ok {
-		t.Fatalf("published message missing: %#v", publishBody)
-	}
-	if got := msg["Error details:"]; got != "checks: required PR checks failed" {
-		t.Fatalf("message.Error details: = %#v", got)
-	}
-}
-
-func TestPublishLocalRunFailureResultSkipsWhenHubDisconnected(t *testing.T) {
-	t.Parallel()
-
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("unexpected request while hub disconnected: %s %s", r.Method, r.URL.Path)
-	}))
-	defer ts.Close()
-
-	publishLocalRunFailureResult(context.Background(), hub.InitConfig{
-		BaseURL:    ts.URL + "/v1",
-		AgentToken: "token",
-	}, "req-local-fail", app.Result{
-		ExitCode: app.ExitGit,
-		Err:      errors.New("git: merge conflict"),
-	}, func() bool { return false }, nil)
-}
-
-func TestMarkLocalRunRuntimeOfflineSkipsWhenHubDisconnected(t *testing.T) {
-	t.Parallel()
-
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("unexpected request while hub disconnected: %s %s", r.Method, r.URL.Path)
-	}))
-	defer ts.Close()
-
-	markLocalRunRuntimeOffline(context.Background(), hub.InitConfig{
-		BaseURL:    ts.URL + "/v1",
-		AgentToken: "token",
-		SessionKey: "local-session",
-	}, "req-local-offline", func() bool { return false }, nil)
-}
-
-func TestMarkLocalRunRuntimeOfflineUsesCanceledParentForFailureNotification(t *testing.T) {
-	t.Parallel()
-
-	var offlineBody map[string]any
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/v1/runtime/messages/offline" {
-			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&offlineBody); err != nil {
-			t.Fatalf("decode offline body: %v", err)
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"ok":true}`))
-	}))
-	defer ts.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	markLocalRunRuntimeOffline(ctx, hub.InitConfig{
-		BaseURL:    ts.URL + "/v1",
-		AgentToken: "token",
-		SessionKey: "local-session",
-	}, "req-local-offline", func() bool { return true }, nil)
-
-	if got := offlineBody["session_key"]; got != "local-session" {
-		t.Fatalf("session_key = %#v, want local-session", got)
-	}
-	if got := offlineBody["reason"]; got != localTransportOfflineReasonExecutionFailure {
-		t.Fatalf("reason = %#v, want %s", got, localTransportOfflineReasonExecutionFailure)
-	}
-}
-
-func TestShouldFallbackToLocalOnlyMode(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		uiListen string
-		err      error
-		want     bool
-	}{
-		{
-			name:     "auth failure with ui enabled falls back",
-			uiListen: "127.0.0.1:7777",
-			err:      fmt.Errorf("hub auth: pull status=401"),
-			want:     true,
-		},
-		{
-			name:     "auth failure with ui disabled does not fall back",
-			uiListen: "",
-			err:      fmt.Errorf("hub auth: pull status=401"),
-			want:     false,
-		},
-		{
-			name:     "non-auth error does not fall back",
-			uiListen: "127.0.0.1:7777",
-			err:      fmt.Errorf("something else"),
-			want:     false,
-		},
-		{
-			name:     "nil error does not fall back",
-			uiListen: "127.0.0.1:7777",
-			err:      nil,
-			want:     false,
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := shouldFallbackToLocalOnlyMode(tt.uiListen, tt.err); got != tt.want {
-				t.Fatalf("shouldFallbackToLocalOnlyMode(%q, %v) = %v, want %v", tt.uiListen, tt.err, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRunHubBootDiagnosticsPingFailureBehavior(t *testing.T) {
-	t.Parallel()
-
-	if got := shouldRunHubInLocalOnlyMode(true, false, "127.0.0.1:7777", false); !got {
-		t.Fatal("shouldRunHubInLocalOnlyMode(ping_failed, ui_enabled, no_hub) = false, want true")
-	}
-	if got := shouldRunHubInLocalOnlyMode(true, false, "", false); !got {
-		t.Fatal("shouldRunHubInLocalOnlyMode(ping_failed, headless, no_hub) = false, want true")
-	}
-	if got := shouldRunHubInLocalOnlyMode(true, false, "", true); got {
-		t.Fatal("shouldRunHubInLocalOnlyMode(ping_failed, headless, hub_configured) = true, want false")
-	}
-	if got := shouldRunHubInLocalOnlyMode(true, true, "127.0.0.1:7777", false); got {
-		t.Fatal("shouldRunHubInLocalOnlyMode(ping_ok, ui_enabled, no_hub) = true, want false")
-	}
-	if got := shouldRunHubInLocalOnlyMode(false, false, "127.0.0.1:7777", false); got {
-		t.Fatal("shouldRunHubInLocalOnlyMode(ping_unchecked, ui_enabled, no_hub) = true, want false")
-	}
-}
-
-func TestHubPingFailureDetail(t *testing.T) {
-	t.Parallel()
-
-	if got, want := hubPingFailureDetail("base message", nil), "base message"; got != want {
-		t.Fatalf("hubPingFailureDetail(base,nil) = %q, want %q", got, want)
-	}
-	err := errors.New("GET https://na.hub.molten.bot/ping returned status=503")
-	if got := hubPingFailureDetail("base message", err); !strings.Contains(got, "status=503") {
-		t.Fatalf("hubPingFailureDetail(base,err) missing status detail: %q", got)
-	}
-}
-
-func TestStartHubPingRetryLoopSignalsWhenPingRecovers(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var logs []string
-	var attempts int
-	live := startHubPingRetryLoopWithInterval(
-		ctx,
-		"https://na.hub.molten.bot/v1",
-		"https://na.hub.molten.bot/ping",
-		errors.New("GET https://na.hub.molten.bot/ping returned status=503"),
-		5*time.Millisecond,
-		func(format string, args ...any) {
-			logs = append(logs, fmt.Sprintf(format, args...))
-		},
-		func(context.Context, string) (string, error) {
-			attempts++
-			if attempts == 1 {
-				return "", errors.New("GET https://na.hub.molten.bot/ping returned status=503")
-			}
-			return "https://na.hub.molten.bot/ping status=204", nil
-		},
-	)
-
-	select {
-	case <-live:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for hub ping retry loop to report liveness")
-	}
-
-	if attempts != 2 {
-		t.Fatalf("ping attempts = %d, want 2", attempts)
-	}
-	if len(logs) < 2 {
-		t.Fatalf("expected retry logs, got %v", logs)
-	}
-	if !strings.Contains(logs[0], `hub.connection status=retrying`) {
-		t.Fatalf("first log = %q, want retrying status", logs[0])
-	}
-	if !strings.Contains(strings.Join(logs, "\n"), `hub.connection status=reachable`) {
-		t.Fatalf("logs missing reachable status: %v", logs)
 	}
 }
 
@@ -787,67 +297,6 @@ func TestMaybeStartAgentAuthLogsStartErrors(t *testing.T) {
 	}
 }
 
-func TestAgentAuthReadyForHub(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		gate       agentAuthGate
-		wantReady  bool
-		wantDetail string
-		wantErr    string
-	}{
-		{
-			name:      "nil gate",
-			wantReady: true,
-		},
-		{
-			name: "ready",
-			gate: &stubAgentAuthGate{
-				statusState: web.AgentAuthState{Required: true, Ready: true, State: "ready"},
-			},
-			wantReady: true,
-		},
-		{
-			name: "required not ready",
-			gate: &stubAgentAuthGate{
-				statusState: web.AgentAuthState{Required: true, Ready: false, Message: "Codex login required"},
-			},
-			wantDetail: "Codex login required",
-		},
-		{
-			name: "status error",
-			gate: &stubAgentAuthGate{
-				statusErr: errors.New("status failed"),
-			},
-			wantErr: "status failed",
-		},
-	}
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			ready, detail, err := agentAuthReadyForHub(context.Background(), tt.gate)
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("agentAuthReadyForHub() error = %v, want %q", err, tt.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("agentAuthReadyForHub() error = %v", err)
-			}
-			if ready != tt.wantReady {
-				t.Fatalf("agentAuthReadyForHub() ready = %t, want %t", ready, tt.wantReady)
-			}
-			if !strings.Contains(detail, tt.wantDetail) {
-				t.Fatalf("agentAuthReadyForHub() detail = %q, want contains %q", detail, tt.wantDetail)
-			}
-		})
-	}
-}
-
 func TestShouldEnableAgentAuthConfigure(t *testing.T) {
 	t.Parallel()
 
@@ -938,7 +387,7 @@ func TestMarshalRunConfigJSONStoresLibraryTaskForReplay(t *testing.T) {
 		t.Fatalf("prompt = %q, want empty for library replay payload", got)
 	}
 
-	cfg, err := hub.ParseRunConfigJSON(payload)
+	cfg, err := localruntime.ParseRunConfigJSON(payload)
 	if err != nil {
 		t.Fatalf("ParseRunConfigJSON() error = %v", err)
 	}
@@ -966,9 +415,7 @@ func TestFailureFollowUpPromptDefaultWhenNoPaths(t *testing.T) {
 	if !strings.Contains(got, ".log/local/<request timestamp>/<request sequence>/terminal.log") {
 		t.Fatalf("prompt missing default log path hint: %q", got)
 	}
-	if !strings.Contains(got, "Issue an offline to moltenbot hub -> review na.hub.molten.bot.openapi.yaml for integration behaviours.") {
-		t.Fatalf("prompt missing molten hub integration instruction: %q", got)
-	}
+
 	if !strings.Contains(got, "When failures occur, send a response back to the calling agent that clearly states failure and includes the error details. Use explicit `Failure:` and `Error details:` fields.") {
 		t.Fatalf("prompt missing failure response instruction: %q", got)
 	}
@@ -1024,139 +471,6 @@ func TestFailureFollowUpPromptIncludesFailureContext(t *testing.T) {
 	}
 }
 
-func TestConfigureHubSetupTracksCompletedOnboardingSteps(t *testing.T) {
-	t.Parallel()
-
-	bindToken := fakeHubSetupToken("bind-")
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if handleHubSetupA2AVerifyFallback(w, r) {
-			return
-		}
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/agents/bind-tokens":
-			_, _ = w.Write([]byte(`{"agent_token":"agent_bound"}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/agents/me":
-			_, _ = w.Write([]byte(`{"handle":"saved-agent","profile":{"display_name":"Saved Agent","emoji":"🔥","profile":"Ships onboarding"}}`))
-		case r.Method == http.MethodPatch && r.URL.Path == "/v1/agents/me/status":
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		case (r.Method == http.MethodPatch || r.Method == http.MethodPost) &&
-			(r.URL.Path == "/v1/agents/me" || r.URL.Path == "/v1/agents/me/metadata"):
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	state, err := configureHubSetup(context.Background(), hub.InitConfig{
-		BaseURL:           server.URL + "/v1",
-		AgentHarness:      "codex",
-		RuntimeConfigPath: filepath.Join(t.TempDir(), ".moltenhub", "config.json"),
-	}, web.HubSetupRequest{
-		AgentMode: "new",
-		Token:     bindToken,
-		Handle:    "saved-agent",
-		Profile: struct {
-			ProfileText string `json:"profile"`
-			DisplayName string `json:"display_name"`
-			Emoji       string `json:"emoji"`
-		}{
-			ProfileText: "Ships onboarding",
-			DisplayName: "Saved Agent",
-			Emoji:       "🔥",
-		},
-	}, func(context.Context, hub.InitConfig) error {
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("configureHubSetup() error = %v", err)
-	}
-	if !state.ActivationReady {
-		t.Fatal("ActivationReady = false, want true")
-	}
-	if state.OnboardingActive {
-		t.Fatal("OnboardingActive = true, want false")
-	}
-	if got, want := state.OnboardingStage, "work_activate"; got != want {
-		t.Fatalf("OnboardingStage = %q, want %q", got, want)
-	}
-	wantStatuses := map[string]string{
-		"bind":          "completed",
-		"work_bind":     "completed",
-		"profile_set":   "completed",
-		"work_activate": "completed",
-	}
-	for _, step := range state.Onboarding {
-		if want, ok := wantStatuses[step.ID]; ok && step.Status != want {
-			t.Fatalf("step %q status = %q, want %q", step.ID, step.Status, want)
-		}
-	}
-}
-
-func TestConfigureHubSetupMarksFailingOnboardingStep(t *testing.T) {
-	t.Parallel()
-
-	bindToken := fakeHubSetupToken("bind-")
-	var agentProfileReads int
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if handleHubSetupA2AVerifyFallback(w, r) {
-			return
-		}
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/agents/bind-tokens":
-			_, _ = w.Write([]byte(`{"agent_token":"agent_bound"}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/agents/me":
-			agentProfileReads++
-			if agentProfileReads <= 1 {
-				_, _ = w.Write([]byte(`{"metadata":{"visibility":"public"}}`))
-				return
-			}
-			http.Error(w, `{"error":"profile unavailable"}`, http.StatusBadGateway)
-		case (r.Method == http.MethodPatch || r.Method == http.MethodPost) && r.URL.Path == "/v1/agents/me/status":
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		case (r.Method == http.MethodPatch || r.Method == http.MethodPost) &&
-			(r.URL.Path == "/v1/agents/me" || r.URL.Path == "/v1/agents/me/metadata"):
-			_, _ = w.Write([]byte(`{"ok":true}`))
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	state, err := configureHubSetup(context.Background(), hub.InitConfig{
-		BaseURL:           server.URL + "/v1",
-		AgentHarness:      "codex",
-		RuntimeConfigPath: filepath.Join(t.TempDir(), ".moltenhub", "config.json"),
-	}, web.HubSetupRequest{
-		AgentMode: "new",
-		Token:     bindToken,
-	}, func(context.Context, hub.InitConfig) error {
-		return nil
-	})
-	if err == nil {
-		t.Fatal("configureHubSetup() error = nil, want non-nil")
-	}
-	if got, want := state.OnboardingStage, "work_activate"; got != want {
-		t.Fatalf("OnboardingStage = %q, want %q", got, want)
-	}
-	for _, step := range state.Onboarding {
-		if step.ID == "work_activate" {
-			if step.Status != "error" {
-				t.Fatalf("work_activate status = %q, want error", step.Status)
-			}
-			if !strings.Contains(step.Detail, "status=502") {
-				t.Fatalf("work_activate detail = %q, want status details", step.Detail)
-			}
-			return
-		}
-	}
-	t.Fatal("work_activate step missing")
-}
-
 func TestShouldQueueUnexpectedNoChangesFollowUpRequiresMissingPR(t *testing.T) {
 	t.Parallel()
 
@@ -1183,7 +497,7 @@ func TestShouldQueueUnexpectedNoChangesFollowUpSkipsVerificationPrompt(t *testin
 	t.Parallel()
 
 	runCfg := config.Config{
-		Prompt: "Make sure that the openapi.yml is up to date with any new changes in the api.\n\nIssue an offline to moltenbot hub -> review na.hub.molten.bot.openapi.yaml for integration behaviours.\n\nFor implementation or repository-change requests, do not stop at analysis. Produce the smallest correct repository diff unless concrete file evidence proves no file changes are required.",
+		Prompt: "Make sure that the openapi.yml is up to date with any new changes in the api.\n\nFor implementation or repository-change requests, do not stop at analysis. Produce the smallest correct repository diff unless concrete file evidence proves no file changes are required.",
 	}
 
 	ok, reason := shouldQueueUnexpectedNoChangesFollowUp(app.Result{NoChanges: true}, runCfg)
@@ -1268,45 +582,6 @@ func TestLocalNoChangesFailureResultSkipsAllowedNoOps(t *testing.T) {
 	withPR := app.Result{NoChanges: true, PRURL: "https://github.com/acme/repo/pull/1"}
 	if _, failed := localNoChangesFailureResult(localSubmitSource, withPR, config.Config{Prompt: "fix broken release generation"}); failed {
 		t.Fatal("localNoChangesFailureResult(existing PR) failed = true, want false")
-	}
-}
-
-func TestLocalNoChangesFailurePayloadIncludesExplicitFailureFields(t *testing.T) {
-	t.Parallel()
-
-	result, failed := localNoChangesFailureResult(noChangesFollowUpSource, app.Result{
-		NoChanges: true,
-		RepoResults: []app.RepoResult{
-			{RepoURL: "git@github.com:acme/repo.git", Branch: "moltenhub-build-release"},
-		},
-	}, config.Config{Prompt: "fix underlying agent_00 no-change handling"})
-	if !failed {
-		t.Fatal("localNoChangesFailureResult(no-change follow-up) failed = false, want true")
-	}
-
-	payload := localRunFailurePayload(hub.InitConfig{
-		SessionKey: "local-session",
-		Handle:     "caller-agent",
-	}, "req-no-change", result)
-	if got := payload["status"]; got != "error" {
-		t.Fatalf("payload.status = %#v, want error", got)
-	}
-	if got := payload["Failure:"]; got != "task failed" {
-		t.Fatalf("payload.Failure: = %#v, want task failed", got)
-	}
-	if got := fmt.Sprint(payload["Error details:"]); !strings.Contains(got, "no-changes follow-up completed") {
-		t.Fatalf("payload.Error details: = %q, want no-changes follow-up detail", got)
-	}
-	msg, _ := payload["message"].(string)
-	if !strings.Contains(msg, "Failure: task failed.\nError details:") {
-		t.Fatalf("payload.message = %q, want explicit failure message", msg)
-	}
-	resultPayload, _ := payload["result"].(map[string]any)
-	if resultPayload == nil {
-		t.Fatal("payload.result missing")
-	}
-	if got := resultPayload["noChanges"]; got != true {
-		t.Fatalf("payload.result.noChanges = %#v, want true", got)
 	}
 }
 
@@ -1458,14 +733,6 @@ func TestShouldQueueFailureFollowUpSkipsNestedFailureFollowUpSource(t *testing.T
 		t.Fatalf("shouldQueueFailureFollowUp(local_submit,error) = (%v, %q), want (true, \"\")", ok, reason)
 	}
 
-	ok, reason = shouldQueueFailureFollowUp("hub_dispatch", app.Result{Err: errors.New("clone failed")})
-	if ok {
-		t.Fatal("shouldQueueFailureFollowUp(hub_dispatch,error) = true, want false")
-	}
-	if reason != "hub dispatch failures are already escalated by hub transport" {
-		t.Fatalf("reason = %q, want %q", reason, "hub dispatch failures are already escalated by hub transport")
-	}
-
 	ok, reason = shouldQueueFailureFollowUp(localSubmitSource, app.Result{})
 	if ok {
 		t.Fatal("shouldQueueFailureFollowUp(local_submit,nil error) = true, want false")
@@ -1489,14 +756,6 @@ func TestShouldQueueFailureRerunSkipsNestedFailureRerunSource(t *testing.T) {
 	ok, reason = shouldQueueFailureRerun(localSubmitSource, app.Result{Err: errors.New("clone failed")})
 	if ok || reason != automaticFailureRerunDisabledReason {
 		t.Fatalf("shouldQueueFailureRerun(local_submit,error) = (%v, %q), want (false, %q)", ok, reason, automaticFailureRerunDisabledReason)
-	}
-
-	ok, reason = shouldQueueFailureRerun("hub_dispatch", app.Result{Err: errors.New("clone failed")})
-	if ok {
-		t.Fatal("shouldQueueFailureRerun(hub_dispatch,error) = true, want false")
-	}
-	if reason != "hub dispatch failures are already rerun by hub transport" {
-		t.Fatalf("reason = %q, want %q", reason, "hub dispatch failures are already rerun by hub transport")
 	}
 
 	ok, reason = shouldQueueFailureRerun(failureFollowUpSource, app.Result{Err: errors.New("clone failed")})
@@ -1618,7 +877,7 @@ func TestShouldEscalateNoChangesFollowUpQueuesDespiteConcreteNoOpEvidenceLog(t *
 	}
 }
 
-func TestUnexpectedNoChangesFollowUpRunConfigTargetsMoltenHubAndAddsContext(t *testing.T) {
+func TestUnexpectedNoChangesFollowUpRunConfigTargetsHarnessAndAddsContext(t *testing.T) {
 	t.Parallel()
 
 	logRoot := filepath.Join(t.TempDir(), ".log")
@@ -1671,7 +930,6 @@ func TestUnexpectedNoChangesFollowUpRunConfigTargetsMoltenHubAndAddsContext(t *t
 		"- target_subdir=cmd/harness",
 		"Original task prompt:",
 		"fix the broken local no changes task handling",
-		"Issue an offline to moltenbot hub -> review na.hub.molten.bot.openapi.yaml for integration behaviours.",
 	} {
 		if !strings.Contains(cfg.Prompt, want) {
 			t.Fatalf("Prompt missing %q: %q", want, cfg.Prompt)
@@ -1703,7 +961,7 @@ func TestUnexpectedNoChangesFollowUpRunConfigForcesRemoteDefaultBranch(t *testin
 	}
 }
 
-func TestUnexpectedNoChangesFollowUpRunConfigUsesMoltenHubRepoAndKeepsOriginalReposInPrompt(t *testing.T) {
+func TestUnexpectedNoChangesFollowUpRunConfigUsesHarnessRepoAndKeepsOriginalReposInPrompt(t *testing.T) {
 	t.Parallel()
 
 	runCfg := config.Config{
@@ -1734,7 +992,7 @@ func TestUnexpectedNoChangesFollowUpRunConfigUsesMoltenHubRepoAndKeepsOriginalRe
 	}
 }
 
-func TestUnexpectedNoChangesFollowUpRunConfigFallsBackToMoltenHubRepoWhenNoOriginalRepo(t *testing.T) {
+func TestUnexpectedNoChangesFollowUpRunConfigFallsBackToHarnessRepoWhenNoOriginalRepo(t *testing.T) {
 	t.Parallel()
 
 	cfg := unexpectedNoChangesFollowUpRunConfig(
@@ -2034,170 +1292,10 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	}
 }
 
-func TestHubPingURLValidationAndCheckHubPingFailures(t *testing.T) {
-	t.Parallel()
-
-	if _, err := hubPingURL("ftp://example.com/v1"); err == nil {
-		t.Fatal("hubPingURL(ftp) error = nil, want non-nil")
-	}
-	if _, err := hubPingURL("https:///v1"); err == nil {
-		t.Fatal("hubPingURL(missing host) error = nil, want non-nil")
-	}
-
-	pingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, strings.Repeat("x", 200), http.StatusServiceUnavailable)
-	}))
-	defer pingServer.Close()
-
-	if _, err := checkHubPing(context.Background(), pingServer.URL); err == nil {
-		t.Fatal("checkHubPing(non-2xx) error = nil, want non-nil")
-	}
-}
-
-func TestRunHubBootDiagnosticsWithRuntimeLoaderRejectsNilDeps(t *testing.T) {
-	t.Parallel()
-
-	ok := runHubBootDiagnosticsWithRuntimeLoader(context.Background(), nil, nil, hub.InitConfig{}, nil)
-	if ok {
-		t.Fatal("runHubBootDiagnosticsWithRuntimeLoader(nil,nil,...) = true, want false")
-	}
-}
-
-func TestRunHubBootDiagnosticsWithRuntimeLoaderRejectsInvalidAgentHarness(t *testing.T) {
-	t.Parallel()
-
-	var logs []string
-	ok := runHubBootDiagnosticsWithRuntimeLoader(
-		context.Background(),
-		&stubExecRunner{},
-		func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
-		hub.InitConfig{
-			BaseURL:      "https://na.hub.molten.bot/v1",
-			AgentHarness: "unsupported",
-		},
-		nil,
-	)
-	if ok {
-		t.Fatal("runHubBootDiagnosticsWithRuntimeLoader() = true, want false")
-	}
-	assertLogContains(t, logs, "boot.diagnosis status=error requirement=agent_runtime")
-}
-
-func TestRunHubBootDiagnosticsWrapper(t *testing.T) {
-	t.Parallel()
-
-	pingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/ping" {
-			http.NotFound(w, r)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	}))
-	defer pingServer.Close()
-
-	runner := &stubExecRunner{
-		results: map[string]stubExecResult{
-			stubCommandKey(execx.Command{Name: "git", Args: []string{"--version"}}): {result: execx.Result{Stdout: "git version"}},
-			stubCommandKey(execx.Command{Name: "gh", Args: []string{"--version"}}):  {result: execx.Result{Stdout: "gh version"}},
-			stubCommandKey(execx.Command{Name: "codex", Args: []string{"--help"}}):  {result: execx.Result{Stdout: "codex help"}},
-			stubCommandKey(execx.Command{Name: "gh", Args: []string{"auth", "status"}}): {
-				err: errors.New("not authenticated"),
-			},
-		},
-	}
-
-	var logs []string
-	ok := runHubBootDiagnostics(
-		context.Background(),
-		runner,
-		func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
-		hub.InitConfig{BaseURL: pingServer.URL + "/v1"},
-	)
-	if !ok {
-		t.Fatal("runHubBootDiagnostics() = false, want true")
-	}
-	assertLogContains(t, logs, "boot.diagnosis status=ok requirement=git_cli")
-}
-
-func TestRunHubBootDiagnosticsUsesConfiguredAgentRuntime(t *testing.T) {
-	t.Parallel()
-
-	pingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/ping" {
-			http.NotFound(w, r)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	}))
-	defer pingServer.Close()
-
-	runner := &stubExecRunner{
-		results: map[string]stubExecResult{
-			stubCommandKey(execx.Command{Name: "git", Args: []string{"--version"}}):        {result: execx.Result{Stdout: "git version"}},
-			stubCommandKey(execx.Command{Name: "gh", Args: []string{"--version"}}):         {result: execx.Result{Stdout: "gh version"}},
-			stubCommandKey(execx.Command{Name: "claude-custom", Args: []string{"--help"}}): {result: execx.Result{Stdout: "claude help"}},
-			stubCommandKey(execx.Command{Name: "gh", Args: []string{"auth", "status"}}):    {result: execx.Result{Stdout: "Logged in to github.com as test\n"}},
-		},
-	}
-
-	var logs []string
-	ok := runHubBootDiagnostics(
-		context.Background(),
-		runner,
-		func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
-		hub.InitConfig{
-			BaseURL:      pingServer.URL + "/v1",
-			AgentHarness: "claude",
-			AgentCommand: "claude-custom",
-		},
-	)
-	if !ok {
-		t.Fatal("runHubBootDiagnostics() = false, want true")
-	}
-	assertLogContains(t, logs, "boot.diagnosis status=ok requirement=claude_cli")
-}
-
-func TestRunHubBootDiagnosticsMentionsGitHubCLIPackageWhenPreflightFails(t *testing.T) {
-	t.Parallel()
-
-	pingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/ping" {
-			http.NotFound(w, r)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	}))
-	defer pingServer.Close()
-
-	runner := &stubExecRunner{
-		results: map[string]stubExecResult{
-			stubCommandKey(execx.Command{Name: "git", Args: []string{"--version"}}):     {result: execx.Result{Stdout: "git version"}},
-			stubCommandKey(execx.Command{Name: "codex", Args: []string{"--help"}}):      {result: execx.Result{Stdout: "codex help"}},
-			stubCommandKey(execx.Command{Name: "gh", Args: []string{"auth", "status"}}): {result: execx.Result{Stdout: "Logged in to github.com as test\n"}},
-		},
-	}
-
-	var logs []string
-	ok := runHubBootDiagnostics(
-		context.Background(),
-		runner,
-		func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
-		hub.InitConfig{BaseURL: pingServer.URL + "/v1"},
-	)
-	if !ok {
-		t.Fatal("runHubBootDiagnostics() = false, want true")
-	}
-	assertLogContains(t, logs, "boot.diagnosis status=warn required_checks=failed")
-	assertLogContains(t, logs, gitHubCLIPackageLabel)
-}
-
 func TestApplyDefaultAgentRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
-	initCfg := hub.InitConfig{
+	initCfg := localruntime.InitConfig{
 		AgentHarness: "claude",
 		AgentCommand: "claude-custom",
 	}

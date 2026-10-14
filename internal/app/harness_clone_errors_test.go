@@ -221,7 +221,7 @@ func TestIsAgent00RepositorySupportsSSHandHTTPSURLs(t *testing.T) {
 		{name: "SSH", repoURL: config.DefaultRepositoryURL, want: true},
 		{name: "HTTPS", repoURL: "https://github.com/Molten-Bot/agent_00.git", want: true},
 		{name: "wrong owner", repoURL: "git@github.com:octocat/agent_00.git", want: false},
-		{name: "other repository", repoURL: "git@github.com:Molten-Bot/moltenhub.git", want: false},
+		{name: "other repository", repoURL: "git@github.com:acme/another-repo.git", want: false},
 		{name: "invalid", repoURL: "not-a-repository", want: false},
 	}
 

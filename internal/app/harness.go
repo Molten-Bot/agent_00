@@ -5209,7 +5209,7 @@ func agentOutputCitesAgent00NoChangeEvidence(res execx.Result) bool {
 	}
 
 	evidenceMarkers := []string{
-		"internal/", "cmd/", "library/", "na.hub.molten.bot.openapi.yaml",
+		"internal/", "cmd/", "library/",
 	}
 	return containsAnySubstring(text, evidenceMarkers)
 }

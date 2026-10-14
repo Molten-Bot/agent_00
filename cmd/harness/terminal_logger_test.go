@@ -80,7 +80,7 @@ func TestFormatTerminalLogLineKeepsImportantCodexOutput(t *testing.T) {
 func TestFormatTerminalLogLineDropsCodexSearchResultNoise(t *testing.T) {
 	t.Parallel()
 
-	line := "cmd phase=codex name=codex stream=stderr b64=" + base64.StdEncoding.EncodeToString([]byte(`internal/hub/daemon_test.go:621: if got := result["message"]; got != "Failure: task failed. Error details: codex: process exited with status 1" {`))
+	line := "cmd phase=codex name=codex stream=stderr b64=" + base64.StdEncoding.EncodeToString([]byte(`internal/localruntime/daemon_test.go:621: if got := result["message"]; got != "Failure: task failed. Error details: codex: process exited with status 1" {`))
 	got, mode := formatTerminalLogLine(line)
 	if mode != terminalLogModeDrop {
 		t.Fatalf("mode = %v, want drop", mode)

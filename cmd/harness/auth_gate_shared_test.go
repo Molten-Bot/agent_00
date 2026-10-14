@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
-	"github.com/Molten-Bot/agent_00/internal/hub"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
@@ -90,7 +90,7 @@ func TestFirstConfiguredGitHubTokenPrefersEnvironmentOverRuntimeConfig(t *testin
 		t.Fatalf("WriteFile(config) error = %v", err)
 	}
 
-	got, source := firstConfiguredGitHubToken(path, hub.InitConfig{GitHubToken: "github_token_init_token"})
+	got, source := firstConfiguredGitHubToken(path, localruntime.InitConfig{GitHubToken: "github_token_init_token"})
 	if want := "github_token_env_token"; got != want {
 		t.Fatalf("firstConfiguredGitHubToken() value = %q, want %q", got, want)
 	}
@@ -111,7 +111,7 @@ func TestFirstConfiguredGitHubTokenPrefersRuntimeConfigOverInitConfig(t *testing
 		t.Fatalf("WriteFile(config) error = %v", err)
 	}
 
-	got, source := firstConfiguredGitHubToken(path, hub.InitConfig{GitHubToken: "github_token_init_token"})
+	got, source := firstConfiguredGitHubToken(path, localruntime.InitConfig{GitHubToken: "github_token_init_token"})
 	if want := "github_token_runtime_token"; got != want {
 		t.Fatalf("firstConfiguredGitHubToken() value = %q, want %q", got, want)
 	}
@@ -124,7 +124,7 @@ func TestFirstConfiguredGitHubTokenFallsBackToGHAndGITHUBEnv(t *testing.T) {
 	t.Setenv("GH_TOKEN", "github_token_env_token")
 	t.Setenv("GITHUB_TOKEN", "github_token_env_token_alt")
 
-	got, source := firstConfiguredGitHubToken(filepath.Join(t.TempDir(), "missing.json"), hub.InitConfig{})
+	got, source := firstConfiguredGitHubToken(filepath.Join(t.TempDir(), "missing.json"), localruntime.InitConfig{})
 	if want := "github_token_env_token"; got != want {
 		t.Fatalf("firstConfiguredGitHubToken() value = %q, want %q", got, want)
 	}
@@ -133,7 +133,7 @@ func TestFirstConfiguredGitHubTokenFallsBackToGHAndGITHUBEnv(t *testing.T) {
 	}
 
 	t.Setenv("GH_TOKEN", "")
-	got, source = firstConfiguredGitHubToken(filepath.Join(t.TempDir(), "missing-2.json"), hub.InitConfig{})
+	got, source = firstConfiguredGitHubToken(filepath.Join(t.TempDir(), "missing-2.json"), localruntime.InitConfig{})
 	if want := "github_token_env_token_alt"; got != want {
 		t.Fatalf("firstConfiguredGitHubToken() value = %q, want %q", got, want)
 	}
@@ -147,7 +147,7 @@ func TestFirstConfiguredGitHubTokenAcceptsMalformedDockerComposeEnv(t *testing.T
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN:github_token_env_token", "")
 
-	got, source := firstConfiguredGitHubToken(filepath.Join(t.TempDir(), "missing.json"), hub.InitConfig{})
+	got, source := firstConfiguredGitHubToken(filepath.Join(t.TempDir(), "missing.json"), localruntime.InitConfig{})
 	if want := "github_token_env_token"; got != want {
 		t.Fatalf("firstConfiguredGitHubToken() value = %q, want %q", got, want)
 	}
@@ -277,7 +277,7 @@ func TestApplyGitHubTokenRequirementStateConfiguresPromptWhenMissing(t *testing.
 	t.Setenv("GITHUB_TOKEN", "")
 
 	var state configurableAgentAuthState
-	token, blocked := applyGitHubTokenRequirementState(context.Background(), nil, &state, "test", filepath.Join(t.TempDir(), "missing.json"), hub.InitConfig{})
+	token, blocked := applyGitHubTokenRequirementState(context.Background(), nil, &state, "test", filepath.Join(t.TempDir(), "missing.json"), localruntime.InitConfig{})
 	if token != "" || !blocked {
 		t.Fatalf("applyGitHubTokenRequirementState() = token %q blocked %v, want empty true", token, blocked)
 	}
@@ -306,7 +306,7 @@ func TestGitHubTokenRequirementStateAcceptsValidatedStartupToken(t *testing.T) {
 		},
 	}
 
-	blocked, state := githubTokenRequirementState(context.Background(), runner, "test", filepath.Join(t.TempDir(), "missing.json"), hub.InitConfig{GitHubToken: "github_token_valid"})
+	blocked, state := githubTokenRequirementState(context.Background(), runner, "test", filepath.Join(t.TempDir(), "missing.json"), localruntime.InitConfig{GitHubToken: "github_token_valid"})
 	if blocked {
 		t.Fatalf("githubTokenRequirementState() blocked = true, state = %+v", state)
 	}
@@ -332,7 +332,7 @@ func TestGitHubTokenRequirementStateRejectsInvalidStartupToken(t *testing.T) {
 	}
 
 	var state configurableAgentAuthState
-	token, blocked := applyGitHubTokenRequirementState(context.Background(), runner, &state, "test", filepath.Join(t.TempDir(), "missing.json"), hub.InitConfig{GitHubToken: "github_token_invalid"})
+	token, blocked := applyGitHubTokenRequirementState(context.Background(), runner, &state, "test", filepath.Join(t.TempDir(), "missing.json"), localruntime.InitConfig{GitHubToken: "github_token_invalid"})
 	if token != "" || !blocked {
 		t.Fatalf("applyGitHubTokenRequirementState() = token %q blocked %v, want empty true", token, blocked)
 	}
@@ -413,7 +413,7 @@ func TestConfigureGitHubTokenStarsAgent00BeforePersisting(t *testing.T) {
 	})
 
 	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
-	token, state, err := configureGitHubToken(context.Background(), "test", path, hub.InitConfig{}, nil, githubToken, "")
+	token, state, err := configureGitHubToken(context.Background(), "test", path, localruntime.InitConfig{}, nil, githubToken, "")
 	if err != nil {
 		t.Fatalf("configureGitHubToken() error = %v", err)
 	}
@@ -439,7 +439,7 @@ func TestConfigureGitHubTokenRejectsFailedStarWithoutPersisting(t *testing.T) {
 	})
 
 	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
-	token, state, err := configureGitHubToken(context.Background(), "test", path, hub.InitConfig{}, nil, githubToken, "")
+	token, state, err := configureGitHubToken(context.Background(), "test", path, localruntime.InitConfig{}, nil, githubToken, "")
 	if err == nil {
 		t.Fatal("configureGitHubToken() error = nil, want star failure")
 	}
@@ -486,7 +486,7 @@ func TestGitHubTokenRequirementStatePrefersValidatedEnvironmentTokenOverInvalidP
 		},
 	}
 
-	blocked, state := githubTokenRequirementState(context.Background(), runner, "test", path, hub.InitConfig{})
+	blocked, state := githubTokenRequirementState(context.Background(), runner, "test", path, localruntime.InitConfig{})
 	if blocked {
 		t.Fatalf("githubTokenRequirementState() blocked = true, state = %+v", state)
 	}
@@ -520,7 +520,7 @@ func TestApplyGitHubTokenRequirementStateFallsBackToLaterValidCandidate(t *testi
 		&state,
 		"test",
 		filepath.Join(t.TempDir(), "missing.json"),
-		hub.InitConfig{GitHubToken: "github_token_init_valid"},
+		localruntime.InitConfig{GitHubToken: "github_token_init_valid"},
 	)
 	if blocked {
 		t.Fatalf("applyGitHubTokenRequirementState() blocked = true, state = %+v", state.snapshot("test"))

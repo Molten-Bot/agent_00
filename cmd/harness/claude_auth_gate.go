@@ -17,7 +17,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
-	"github.com/Molten-Bot/agent_00/internal/hub"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
@@ -41,7 +41,7 @@ type claudeAuthGate struct {
 
 	command           string
 	runtimeConfigPath string
-	initCfg           hub.InitConfig
+	initCfg           localruntime.InitConfig
 
 	required bool
 	ready    bool
@@ -62,17 +62,17 @@ type claudeAuthGate struct {
 }
 
 func newClaudeAuthGate(ctx context.Context, command string, logf func(string, ...any)) *claudeAuthGate {
-	return newClaudeAuthGateWithContextAndConfigAndRunner(ctx, nil, command, "", hub.InitConfig{}, logf)
+	return newClaudeAuthGateWithContextAndConfigAndRunner(ctx, nil, command, "", localruntime.InitConfig{}, logf)
 }
 
-func newClaudeAuthGateWithConfig(command, runtimeConfigPath string, initCfg hub.InitConfig) *claudeAuthGate {
+func newClaudeAuthGateWithConfig(command, runtimeConfigPath string, initCfg localruntime.InitConfig) *claudeAuthGate {
 	return newClaudeAuthGateWithContextAndConfigAndRunner(context.Background(), nil, command, runtimeConfigPath, initCfg, nil)
 }
 
 func newClaudeAuthGateWithContextAndConfig(
 	ctx context.Context,
 	command, runtimeConfigPath string,
-	initCfg hub.InitConfig,
+	initCfg localruntime.InitConfig,
 	logf func(string, ...any),
 ) *claudeAuthGate {
 	return newClaudeAuthGateWithContextAndConfigAndRunner(ctx, nil, command, runtimeConfigPath, initCfg, logf)
@@ -82,7 +82,7 @@ func newClaudeAuthGateWithContextAndConfigAndRunner(
 	ctx context.Context,
 	runner execx.Runner,
 	command, runtimeConfigPath string,
-	initCfg hub.InitConfig,
+	initCfg localruntime.InitConfig,
 	logf func(string, ...any),
 ) *claudeAuthGate {
 	if ctx == nil {
@@ -263,7 +263,7 @@ func (g *claudeAuthGate) StartDeviceAuth(_ context.Context) (web.AgentAuthState,
 	// Prompt-driven login flows can emit non-newline terminal controls; proactively
 	// send Enter once so default selections continue and the browser URL is printed.
 	if _, err := io.WriteString(stdinPipe, "\n"); err != nil {
-		g.logf("hub.auth status=warn harness=claude action=advance_login_prompt err=%q", err)
+		g.logf("localruntime.auth status=warn harness=claude action=advance_login_prompt err=%q", err)
 	}
 
 	return snap, nil
@@ -404,7 +404,7 @@ func (g *claudeAuthGate) submitBrowserCode(rawInput string) (web.AgentAuthState,
 		return snap, err
 	}
 	g.logf(
-		"hub.auth status=progress harness=claude action=submit_browser_code chars=%d has_state=%t",
+		"localruntime.auth status=progress harness=claude action=submit_browser_code chars=%d has_state=%t",
 		len(code),
 		strings.Contains(code, "#"),
 	)
@@ -643,7 +643,7 @@ func (g *claudeAuthGate) advanceLoginPrompt() {
 		return
 	}
 	if _, err := io.WriteString(input, "\n"); err != nil {
-		g.logf("hub.auth status=warn harness=claude action=advance_login_prompt err=%q", err)
+		g.logf("localruntime.auth status=warn harness=claude action=advance_login_prompt err=%q", err)
 	}
 }
 
@@ -681,11 +681,11 @@ func (g *claudeAuthGate) resubmitPendingBrowserCode() {
 		return
 	}
 	if _, err := io.WriteString(input, code+"\n"); err != nil {
-		g.logf("hub.auth status=warn harness=claude action=resubmit_browser_code err=%q", err)
+		g.logf("localruntime.auth status=warn harness=claude action=resubmit_browser_code err=%q", err)
 		return
 	}
 	g.logf(
-		"hub.auth status=progress harness=claude action=resubmit_browser_code chars=%d attempt=%d variant=%s",
+		"localruntime.auth status=progress harness=claude action=resubmit_browser_code chars=%d attempt=%d variant=%s",
 		len(code),
 		attempt+1,
 		map[bool]string{true: "code_only", false: "full"}[altVariant],
@@ -881,7 +881,7 @@ func (g *claudeAuthGate) ingestLoginLine(line string) {
 		return
 	}
 	if shouldLogClaudeLoginLine(line) {
-		g.logf("hub.auth status=stream harness=claude line=%q", truncateClaudeAuthLine(line))
+		g.logf("localruntime.auth status=stream harness=claude line=%q", truncateClaudeAuthLine(line))
 	}
 
 	authURL := extractClaudeAuthURL(line)
@@ -934,7 +934,7 @@ func (g *claudeAuthGate) ingestLoginLine(line string) {
 	}
 	if input != nil {
 		if _, err := io.WriteString(input, "\n"); err != nil {
-			g.logf("hub.auth status=warn harness=claude action=advance_login_prompt err=%q", err)
+			g.logf("localruntime.auth status=warn harness=claude action=advance_login_prompt err=%q", err)
 		}
 	}
 }
@@ -945,9 +945,9 @@ func (g *claudeAuthGate) waitLogin(cmd *exec.Cmd, tempDir string, readerWG *sync
 	}
 	err := cmd.Wait()
 	if err != nil {
-		g.logf("hub.auth status=warn harness=claude action=login_process_exit err=%q", err)
+		g.logf("localruntime.auth status=warn harness=claude action=login_process_exit err=%q", err)
 	} else {
-		g.logf("hub.auth status=ok harness=claude action=login_process_exit")
+		g.logf("localruntime.auth status=ok harness=claude action=login_process_exit")
 	}
 	_ = os.RemoveAll(strings.TrimSpace(tempDir))
 
@@ -1161,7 +1161,7 @@ func (g *claudeAuthGate) completeWithClaudeOAuthToken(token string) {
 	}
 
 	if err := setClaudeOAuthTokenEnvironment(token); err != nil {
-		g.logf("hub.auth status=warn harness=claude action=save_oauth_token err=%q", err)
+		g.logf("localruntime.auth status=warn harness=claude action=save_oauth_token err=%q", err)
 		return
 	}
 
@@ -1169,7 +1169,7 @@ func (g *claudeAuthGate) completeWithClaudeOAuthToken(token string) {
 		cancel            context.CancelFunc
 		input             io.WriteCloser
 		runtimeConfigPath string
-		initCfg           hub.InitConfig
+		initCfg           localruntime.InitConfig
 	)
 
 	g.mu.Lock()
@@ -1191,8 +1191,8 @@ func (g *claudeAuthGate) completeWithClaudeOAuthToken(token string) {
 	g.mu.Unlock()
 
 	if runtimeConfigPath != "" {
-		if err := hub.SaveRuntimeConfigClaudeOAuthToken(runtimeConfigPath, initCfg, token); err != nil {
-			g.logf("hub.auth status=warn harness=claude action=persist_oauth_token err=%q", err)
+		if err := localruntime.SaveRuntimeConfigClaudeOAuthToken(runtimeConfigPath, initCfg, token); err != nil {
+			g.logf("localruntime.auth status=warn harness=claude action=persist_oauth_token err=%q", err)
 		}
 	}
 
@@ -1202,7 +1202,7 @@ func (g *claudeAuthGate) completeWithClaudeOAuthToken(token string) {
 	if cancel != nil {
 		cancel()
 	}
-	g.logf("hub.auth status=ok harness=claude action=oauth_token_captured")
+	g.logf("localruntime.auth status=ok harness=claude action=oauth_token_captured")
 }
 
 func (g *claudeAuthGate) completeWithClaudeCredentialsJSON(raw string) error {
@@ -1216,15 +1216,15 @@ func (g *claudeAuthGate) completeWithClaudeCredentialsJSON(raw string) error {
 	}
 	if token := extractClaudeOAuthTokenFromInput(raw); token != "" {
 		if err := setClaudeOAuthTokenEnvironment(token); err != nil {
-			g.logf("hub.auth status=warn harness=claude action=save_oauth_token err=%q", err)
+			g.logf("localruntime.auth status=warn harness=claude action=save_oauth_token err=%q", err)
 		} else {
 			g.mu.Lock()
 			runtimeConfigPath := g.runtimeConfigPath
 			initCfg := g.initCfg
 			g.mu.Unlock()
 			if runtimeConfigPath != "" {
-				if err := hub.SaveRuntimeConfigClaudeOAuthToken(runtimeConfigPath, initCfg, token); err != nil {
-					g.logf("hub.auth status=warn harness=claude action=persist_oauth_token err=%q", err)
+				if err := localruntime.SaveRuntimeConfigClaudeOAuthToken(runtimeConfigPath, initCfg, token); err != nil {
+					g.logf("localruntime.auth status=warn harness=claude action=persist_oauth_token err=%q", err)
 				}
 			}
 		}
@@ -1256,7 +1256,7 @@ func (g *claudeAuthGate) completeWithClaudeCredentialsJSON(raw string) error {
 	if cancel != nil {
 		cancel()
 	}
-	g.logf("hub.auth status=ok harness=claude action=credentials_json_captured path=%q", credentialsPath)
+	g.logf("localruntime.auth status=ok harness=claude action=credentials_json_captured path=%q", credentialsPath)
 	return nil
 }
 
@@ -1309,7 +1309,7 @@ func firstConfiguredClaudeOAuthToken(runtimeConfigPath string) (value string, so
 	if env := strings.TrimSpace(os.Getenv(claudeOAuthTokenEnv)); env != "" {
 		return env, "environment"
 	}
-	if persisted := hub.ReadRuntimeConfigString(
+	if persisted := localruntime.ReadRuntimeConfigString(
 		runtimeConfigPath,
 		"claude_code_oauth_token",
 		"claudeCodeOauthToken",

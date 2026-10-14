@@ -7,13 +7,13 @@ import (
 	"testing"
 )
 
-func TestInternalPackageLayoutMatchesAppHubWebSplit(t *testing.T) {
+func TestInternalPackageLayoutMatchesLocalRuntimeSplit(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := currentRepoRoot(t)
 	for _, rel := range []string{
 		"internal/app",
-		"internal/hub",
+		"internal/localruntime",
 		"internal/web",
 		"internal/web/static",
 	} {
@@ -26,7 +26,7 @@ func TestInternalPackageLayoutMatchesAppHubWebSplit(t *testing.T) {
 
 	for _, rel := range []string{
 		"internal/harness",
-		"internal/hubui",
+		"internal/hub",
 	} {
 		if _, err := os.Stat(filepath.Join(repoRoot, rel)); err == nil {
 			t.Fatalf("legacy package directory %s should not exist", rel)

@@ -30,14 +30,6 @@ var (
 	ErrTaskNotCompleted = errors.New("task is not completed")
 )
 
-const (
-	hubTransportWS           = "ws"
-	hubTransportHTTPLongPoll = "http_long_poll"
-	hubTransportDisconnected = "disconnected"
-	hubTransportReachable    = "reachable"
-	hubTransportRetrying     = "retrying"
-)
-
 // Event is one monitor timeline entry.
 type Event struct {
 	ID        int64  `json:"id"`
@@ -62,7 +54,7 @@ type TaskControls struct {
 	Stop     bool `json:"stop,omitempty"`
 }
 
-// Task represents one hub dispatch execution state.
+// Task represents one local task execution state.
 type Task struct {
 	RequestID         string        `json:"request_id"`
 	Source            string        `json:"source,omitempty"`
@@ -129,15 +121,6 @@ type TaskAttempt struct {
 	Error     string
 	StartedAt string
 	UpdatedAt string
-}
-
-// Connection captures current monitor connectivity state.
-type Connection struct {
-	HubConnected bool   `json:"hub_connected"`
-	HubTransport string `json:"hub_transport,omitempty"`
-	HubDomain    string `json:"hub_domain,omitempty"`
-	HubBaseURL   string `json:"hub_base_url,omitempty"`
-	HubDetail    string `json:"hub_detail,omitempty"`
 }
 
 // ResourceMetrics captures the current dispatcher sample window values.
@@ -243,7 +226,6 @@ type CountStatsGroup struct {
 // Snapshot is the complete monitor payload for the web UI.
 type Snapshot struct {
 	GeneratedAt   string          `json:"generated_at"`
-	Connection    Connection      `json:"connection"`
 	Resources     ResourceMetrics `json:"resources"`
 	Stats         DashboardStats  `json:"stats"`
 	Repositories  []Repository    `json:"repositories,omitempty"`
@@ -275,11 +257,6 @@ type Broker struct {
 	rejectedSeq   uint64
 	subs          map[chan struct{}]struct{}
 
-	hubConnected       bool
-	hubTransport       string
-	hubBaseURL         string
-	hubDomain          string
-	hubDetail          string
 	resources          ResourceMetrics
 	maxConcurrentTasks int
 	sessionStartedAt   time.Time
@@ -401,7 +378,6 @@ func (b *Broker) IngestLog(line string) {
 		t := b.ensureTaskLocked(requestID, now)
 		b.updateTaskFromLineLocked(t, line, fields, now)
 	}
-	b.updateHubConnectionFromLineLocked(line, fields)
 	b.updateResourceMetricsFromLineLocked(line, fields, now)
 
 	b.notifySubscribersLocked()
@@ -421,14 +397,7 @@ func (b *Broker) Snapshot() Snapshot {
 	b.pruneExpiredTasksLocked(now)
 
 	snapshot := Snapshot{
-		GeneratedAt: now.Format(time.RFC3339Nano),
-		Connection: Connection{
-			HubConnected: b.hubConnected,
-			HubTransport: b.hubTransport,
-			HubDomain:    b.hubDomain,
-			HubBaseURL:   b.hubBaseURL,
-			HubDetail:    strings.TrimSpace(b.hubDetail),
-		},
+		GeneratedAt:   now.Format(time.RFC3339Nano),
 		Resources:     b.resources,
 		Events:        append([]Event(nil), b.events...),
 		PromptedRepos: append([]string(nil), b.promptedRepos...),
@@ -1287,8 +1256,6 @@ func sourceGroupName(source string) string {
 	switch normalizeTaskSource(source) {
 	case "chat":
 		return "Chat"
-	case "hub":
-		return "Hub"
 	case "json":
 		return "JSON"
 	case "library":
@@ -1969,69 +1936,6 @@ func shouldDropNoisyCommandLine(line string, fields map[string]string) bool {
 	return strings.TrimSpace(string(decoded)) == ""
 }
 
-func (b *Broker) updateHubConnectionFromLineLocked(line string, fields map[string]string) {
-	if baseURL := strings.TrimSpace(fields["base_url"]); baseURL != "" {
-		b.hubBaseURL = baseURL
-		if domain := hubDomainFromBaseURL(baseURL); domain != "" {
-			b.hubDomain = domain
-		}
-	}
-	if domain := strings.TrimSpace(firstNonEmpty(fields["domain"], fields["hub_domain"])); domain != "" {
-		b.hubDomain = domain
-	}
-
-	switch {
-	case strings.HasPrefix(line, "hub.auth status=ok"):
-		b.hubConnected = true
-		b.hubDetail = ""
-		if b.hubTransport == hubTransportDisconnected || b.hubTransport == hubTransportRetrying {
-			b.hubTransport = ""
-		}
-	case strings.HasPrefix(line, "hub.ws status=connected"):
-		b.hubConnected = true
-		b.hubTransport = hubTransportWS
-		b.hubDetail = ""
-	case strings.HasPrefix(line, "hub.transport mode=runtime_pull"):
-		// Pull mode still means the daemon is connected to MoltenHub transport.
-		b.hubConnected = true
-		b.hubTransport = hubTransportHTTPLongPoll
-		b.hubDetail = ""
-	case strings.HasPrefix(line, "hub.transport mode=runtime_ws"):
-		b.hubConnected = true
-		b.hubTransport = hubTransportWS
-		b.hubDetail = ""
-	case strings.HasPrefix(line, "hub.connection "):
-		switch strings.ToLower(strings.TrimSpace(fields["status"])) {
-		case "connected", "online", "ok":
-			b.hubConnected = true
-			b.hubDetail = strings.TrimSpace(firstNonEmpty(fields["detail"], fields["err"]))
-			if b.hubTransport == hubTransportDisconnected || b.hubTransport == hubTransportRetrying {
-				b.hubTransport = ""
-			}
-		case "reachable":
-			b.hubConnected = false
-			b.hubTransport = hubTransportReachable
-			b.hubDetail = strings.TrimSpace(firstNonEmpty(fields["detail"], fields["err"]))
-		case "retrying":
-			b.hubConnected = false
-			b.hubTransport = hubTransportRetrying
-			b.hubDetail = strings.TrimSpace(firstNonEmpty(fields["detail"], fields["err"]))
-		case "disconnected", "offline", "error":
-			b.hubConnected = false
-			b.hubTransport = hubTransportDisconnected
-			b.hubDetail = strings.TrimSpace(firstNonEmpty(fields["detail"], fields["err"]))
-		}
-	case strings.HasPrefix(line, "hub.ws status=disabled"),
-		strings.HasPrefix(line, "hub.ws status=error"),
-		strings.HasPrefix(line, "hub.ws status=disconnected"),
-		strings.HasPrefix(line, "hub.pull status=error"),
-		strings.HasPrefix(line, "hub.agent status=offline"):
-		b.hubConnected = false
-		b.hubTransport = hubTransportDisconnected
-		b.hubDetail = strings.TrimSpace(firstNonEmpty(fields["detail"], fields["err"]))
-	}
-}
-
 func (b *Broker) updateResourceMetricsFromLineLocked(line string, fields map[string]string, now time.Time) {
 	if !strings.Contains(line, "dispatcher status=window") {
 		return
@@ -2084,8 +1988,8 @@ func classifyEventKind(line string) string {
 		return "dispatch_status"
 	case strings.Contains(line, " cmd "):
 		return "command_output"
-	case strings.HasPrefix(line, "hub."):
-		return "hub"
+	case strings.HasPrefix(line, "localruntime."):
+		return "runtime"
 	default:
 		return "log"
 	}
@@ -2234,18 +2138,6 @@ func parseFloatField(v string) (float64, bool) {
 		return 0, false
 	}
 	return n, true
-}
-
-func hubDomainFromBaseURL(baseURL string) string {
-	baseURL = strings.TrimSpace(baseURL)
-	if baseURL == "" {
-		return ""
-	}
-	u, err := url.Parse(baseURL)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(u.Hostname())
 }
 
 func firstNonEmpty(values ...string) string {
@@ -2750,8 +2642,6 @@ func sourceFromRunConfigJSON(runConfigJSON []byte) string {
 func defaultTaskSourceForRequestID(requestID string) string {
 	requestID = strings.ToLower(strings.TrimSpace(requestID))
 	switch {
-	case strings.HasPrefix(requestID, "req-"), strings.HasPrefix(requestID, "hub-"):
-		return "hub"
 	case strings.HasPrefix(requestID, "local-"):
 		return "prompt"
 	default:
@@ -2765,8 +2655,6 @@ func normalizeTaskSource(source string) string {
 	switch source {
 	case "chat":
 		return "chat"
-	case "hub", "hub_dispatch", "moltenhub", "molten_hub":
-		return "hub"
 	case "prompt", "builder", "studio", "local", "local_submit":
 		return "prompt"
 	case "library", "library_task", "librarytask":

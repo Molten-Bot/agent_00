@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,10 +29,10 @@ func TestWithConfigScriptPrefersRunConfig(t *testing.T) {
 	}
 }
 
-func TestWithConfigScriptUsesHubConfigWhenConfigJSONMatchesHubSchema(t *testing.T) {
+func TestWithConfigScriptUsesLocalRuntimeConfig(t *testing.T) {
 	env := newWithConfigTestEnv(t)
 	configPath := filepath.Join(env.configDir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"base_url":"https://na.hub.molten.bot/v1","agent_token":"tok"}`), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"agent_harness":"codex"}`), 0o644); err != nil {
 		t.Fatalf("write hub config: %v", err)
 	}
 
@@ -43,36 +42,15 @@ func TestWithConfigScriptUsesHubConfigWhenConfigJSONMatchesHubSchema(t *testing.
 	}
 
 	args := readFileTrimmed(t, env.argsPath)
-	if got, want := args, "hub --config "+configPath+" --ui-listen :7777"; got != want {
+	if got, want := args, "serve --config "+configPath+" --ui-listen :7777"; got != want {
 		t.Fatalf("harness args = %q, want %q", got, want)
-	}
-}
-
-func TestWithConfigScriptSkipsInvalidHubConfig(t *testing.T) {
-	env := newWithConfigTestEnv(t)
-	configPath := filepath.Join(env.configDir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"base_url":"http://127.0.0.1:41099/v1","agent_token":"tok"}`), 0o644); err != nil {
-		t.Fatalf("write hub config: %v", err)
-	}
-
-	output, err := runWithConfigScript(t, env, nil)
-	if err != nil {
-		t.Fatalf("with-config error: %v\noutput: %s", err, output)
-	}
-
-	args := readFileTrimmed(t, env.argsPath)
-	if got, want := args, "hub --ui-listen :7777"; got != want {
-		t.Fatalf("harness args = %q, want %q", got, want)
-	}
-	if !strings.Contains(output, "invalid hub config") {
-		t.Fatalf("output missing invalid hub config warning:\n%s", output)
 	}
 }
 
 func TestWithConfigScriptFallsBackToInitConfig(t *testing.T) {
 	env := newWithConfigTestEnv(t)
 	initPath := filepath.Join(env.configDir, "init.json")
-	if err := os.WriteFile(initPath, []byte(`{"base_url":"https://na.hub.molten.bot/v1","agent_token":"tok"}`), 0o644); err != nil {
+	if err := os.WriteFile(initPath, []byte(`{"agent_harness":"codex"}`), 0o644); err != nil {
 		t.Fatalf("write init config: %v", err)
 	}
 
@@ -82,226 +60,12 @@ func TestWithConfigScriptFallsBackToInitConfig(t *testing.T) {
 	}
 
 	args := readFileTrimmed(t, env.argsPath)
-	if got, want := args, "hub --init "+initPath+" --ui-listen :7777"; got != want {
+	if got, want := args, "serve --init "+initPath+" --ui-listen :7777"; got != want {
 		t.Fatalf("harness args = %q, want %q", got, want)
 	}
 }
 
-func TestWithConfigScriptWritesRuntimeConfigFromEnvTokenAndRegion(t *testing.T) {
-	env := newWithConfigTestEnv(t)
-	configPath := filepath.Join(env.configDir, "config.json")
-	output, err := runWithConfigScript(t, env, map[string]string{
-		"MOLTEN_HUB_TOKEN":       "hub_token_123",
-		"MOLTEN_HUB_REGION":      "eu",
-		"MOLTEN_HUB_SESSION_KEY": "session-dev",
-	})
-	if err != nil {
-		t.Fatalf("with-config error: %v\noutput: %s", err, output)
-	}
-
-	args := readFileTrimmed(t, env.argsPath)
-	if got, want := args, "hub --config "+configPath+" --ui-listen :7777"; got != want {
-		t.Fatalf("harness args = %q, want %q", got, want)
-	}
-
-	initJSON := readFileTrimmed(t, env.initPath)
-	var parsed map[string]string
-	if err := json.Unmarshal([]byte(initJSON), &parsed); err != nil {
-		t.Fatalf("parse generated runtime config json: %v", err)
-	}
-	if got, want := parsed["base_url"], "https://eu.hub.molten.bot/v1"; got != want {
-		t.Fatalf("base_url = %q, want %q", got, want)
-	}
-	if got, want := parsed["agent_token"], "hub_token_123"; got != want {
-		t.Fatalf("agent_token = %q, want %q", got, want)
-	}
-	if got, want := parsed["agent_harness"], "codex"; got != want {
-		t.Fatalf("agent_harness = %q, want %q", got, want)
-	}
-	if got, want := parsed["session_key"], "session-dev"; got != want {
-		t.Fatalf("session_key = %q, want %q", got, want)
-	}
-}
-
-func TestWithConfigScriptPrefersEnvTokenOverRunConfig(t *testing.T) {
-	env := newWithConfigTestEnv(t)
-	configPath := filepath.Join(env.configDir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"x"}`), 0o644); err != nil {
-		t.Fatalf("write run config: %v", err)
-	}
-	output, err := runWithConfigScript(t, env, map[string]string{
-		"MOLTEN_HUB_TOKEN":  "hub_token_123",
-		"MOLTEN_HUB_REGION": "eu",
-	})
-	if err != nil {
-		t.Fatalf("with-config error: %v\noutput: %s", err, output)
-	}
-
-	args := readFileTrimmed(t, env.argsPath)
-	if got, want := args, "hub --config "+configPath+" --ui-listen :7777"; got != want {
-		t.Fatalf("harness args = %q, want %q", got, want)
-	}
-
-	initJSON := readFileTrimmed(t, env.initPath)
-	var parsed map[string]string
-	if err := json.Unmarshal([]byte(initJSON), &parsed); err != nil {
-		t.Fatalf("parse generated runtime config json: %v", err)
-	}
-	if got, want := parsed["base_url"], "https://eu.hub.molten.bot/v1"; got != want {
-		t.Fatalf("base_url = %q, want %q", got, want)
-	}
-	if got, want := parsed["agent_token"], "hub_token_123"; got != want {
-		t.Fatalf("agent_token = %q, want %q", got, want)
-	}
-	if got, want := parsed["session_key"], "main"; got != want {
-		t.Fatalf("session_key = %q, want %q", got, want)
-	}
-}
-
-func TestWithConfigScriptWritesRuntimeConfigFromExplicitHubURL(t *testing.T) {
-	env := newWithConfigTestEnv(t)
-	configPath := filepath.Join(env.configDir, "config.json")
-	output, err := runWithConfigScript(t, env, map[string]string{
-		"MOLTEN_HUB_TOKEN": "hub_token_123",
-		"MOLTEN_HUB_URL":   "https://na.hub.molten.bot/v1",
-	})
-	if err != nil {
-		t.Fatalf("with-config error: %v\noutput: %s", err, output)
-	}
-
-	args := readFileTrimmed(t, env.argsPath)
-	if got, want := args, "hub --config "+configPath+" --ui-listen :7777"; got != want {
-		t.Fatalf("harness args = %q, want %q", got, want)
-	}
-
-	initJSON := readFileTrimmed(t, env.initPath)
-	var parsed map[string]string
-	if err := json.Unmarshal([]byte(initJSON), &parsed); err != nil {
-		t.Fatalf("parse generated runtime config json: %v", err)
-	}
-	if got, want := parsed["base_url"], "https://na.hub.molten.bot/v1"; got != want {
-		t.Fatalf("base_url = %q, want %q", got, want)
-	}
-}
-
-func TestWithConfigScriptWritesRuntimeConfigFromEnvGitHubTokenAndAgentRuntime(t *testing.T) {
-	env := newWithConfigTestEnv(t)
-	output, err := runWithConfigScript(t, env, map[string]string{
-		"MOLTEN_HUB_TOKEN":      "hub_token_123",
-		"GITHUB_TOKEN":          "github_token_env_token",
-		"HARNESS_AGENT_HARNESS": "claude",
-		"HARNESS_AGENT_COMMAND": "claude-custom",
-	})
-	if err != nil {
-		t.Fatalf("with-config error: %v\noutput: %s", err, output)
-	}
-
-	initJSON := readFileTrimmed(t, env.initPath)
-	var parsed map[string]string
-	if err := json.Unmarshal([]byte(initJSON), &parsed); err != nil {
-		t.Fatalf("parse generated runtime config json: %v", err)
-	}
-	if got, want := parsed["github_token"], "github_token_env_token"; got != want {
-		t.Fatalf("github_token = %q, want %q", got, want)
-	}
-	if got, want := parsed["agent_harness"], "claude"; got != want {
-		t.Fatalf("agent_harness = %q, want %q", got, want)
-	}
-	if got, want := parsed["agent_command"], "claude-custom"; got != want {
-		t.Fatalf("agent_command = %q, want %q", got, want)
-	}
-}
-
-func TestWithConfigScriptIgnoresMalformedDockerComposeEnvEntries(t *testing.T) {
-	env := newWithConfigTestEnv(t)
-	configPath := filepath.Join(env.configDir, "config.json")
-	output, err := runWithConfigScript(t, env, map[string]string{
-		"MOLTEN_HUB_TOKEN:hub_token_123":      "",
-		"MOLTEN_HUB_REGION:eu":                "",
-		"GITHUB_TOKEN:github_token_env_token": "",
-		"MOLTEN_HUB_SESSION_KEY:session-dev":  "",
-		"HARNESS_AGENT_HARNESS:claude":        "",
-		"HARNESS_AGENT_COMMAND:claude-custom": "",
-	})
-	if err != nil {
-		t.Fatalf("with-config error: %v\noutput: %s", err, output)
-	}
-
-	args := readFileTrimmed(t, env.argsPath)
-	if got, want := args, "hub --ui-listen :7777"; got != want {
-		t.Fatalf("harness args = %q, want %q", got, want)
-	}
-	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
-		t.Fatalf("malformed entries must not bootstrap a config: %v", err)
-	}
-	if !strings.Contains(output, "starting hub onboarding mode") {
-		t.Fatalf("missing onboarding guidance: %s", output)
-	}
-	for _, secret := range []string{"hub_token_123", "github_token_env_token"} {
-		if strings.Contains(output, secret) {
-			t.Fatal("malformed credential leaked in startup output")
-		}
-	}
-}
-
-func TestWithConfigScriptDoesNotRecoverMalformedValuesDuringBootstrap(t *testing.T) {
-	env := newWithConfigTestEnv(t)
-	output, err := runWithConfigScript(t, env, map[string]string{
-		"MOLTEN_HUB_TOKEN":                    "valid_hub_token",
-		"MOLTEN_HUB_TOKEN:malformed_token":    "",
-		"MOLTEN_HUB_REGION:eu":                "",
-		"GITHUB_TOKEN:malformed_github_token": "",
-		"MOLTEN_HUB_SESSION_KEY:session-dev":  "",
-		"HARNESS_AGENT_HARNESS:claude":        "",
-		"HARNESS_AGENT_COMMAND:claude-custom": "",
-	})
-	if err != nil {
-		t.Fatalf("with-config error: %v\noutput: %s", err, output)
-	}
-	var parsed map[string]string
-	if err := json.Unmarshal([]byte(readFileTrimmed(t, env.initPath)), &parsed); err != nil {
-		t.Fatalf("parse generated runtime config: %v", err)
-	}
-	for key, want := range map[string]string{
-		"agent_token": "valid_hub_token", "base_url": "https://na.hub.molten.bot/v1",
-		"session_key": "main", "agent_harness": "codex",
-	} {
-		if got := parsed[key]; got != want {
-			t.Fatalf("%s = %q, want %q", key, got, want)
-		}
-	}
-	for _, key := range []string{"github_token", "agent_command"} {
-		if _, exists := parsed[key]; exists {
-			t.Fatalf("malformed environment value unexpectedly populated %s", key)
-		}
-	}
-	for _, secret := range []string{"valid_hub_token", "malformed_token", "malformed_github_token"} {
-		if strings.Contains(output, secret) {
-			t.Fatal("credential leaked in startup output")
-		}
-	}
-}
-
-func TestWithConfigScriptRejectsInvalidHubURLEnvValue(t *testing.T) {
-	env := newWithConfigTestEnv(t)
-	output, err := runWithConfigScript(t, env, map[string]string{
-		"MOLTEN_HUB_TOKEN": "hub_token_123",
-		"MOLTEN_HUB_URL":   "http://127.0.0.1:37581/v1",
-	})
-	if err != nil {
-		t.Fatalf("with-config error: %v\noutput: %s", err, output)
-	}
-
-	args := readFileTrimmed(t, env.argsPath)
-	if got, want := args, "hub --ui-listen :7777"; got != want {
-		t.Fatalf("harness args = %q, want %q", got, want)
-	}
-	if !strings.Contains(output, "invalid MOLTEN_HUB_URL") {
-		t.Fatalf("output missing invalid MOLTEN_HUB_URL guidance:\n%s", output)
-	}
-}
-
-func TestWithConfigScriptMissingConfigStartsHubOnboardingMode(t *testing.T) {
+func TestWithConfigScriptMissingConfigStartsLocalOnboardingMode(t *testing.T) {
 	env := newWithConfigTestEnv(t)
 	output, err := runWithConfigScript(t, env, nil)
 	if err != nil {
@@ -309,15 +73,12 @@ func TestWithConfigScriptMissingConfigStartsHubOnboardingMode(t *testing.T) {
 	}
 
 	args := readFileTrimmed(t, env.argsPath)
-	if got, want := args, "hub --ui-listen :7777"; got != want {
+	if got, want := args, "serve --ui-listen :7777"; got != want {
 		t.Fatalf("harness args = %q, want %q", got, want)
 	}
 
 	for _, want := range []string{
-		"starting hub onboarding mode with defaults",
-		"optional run config path:",
-		"optional init config path:",
-		"set MOLTEN_HUB_TOKEN",
+		"starting local onboarding with defaults",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q\noutput: %s", want, output)
@@ -325,17 +86,17 @@ func TestWithConfigScriptMissingConfigStartsHubOnboardingMode(t *testing.T) {
 	}
 }
 
-func TestWithConfigScriptAllowsHubUIListenOverride(t *testing.T) {
+func TestWithConfigScriptAllowsUIListenOverride(t *testing.T) {
 	env := newWithConfigTestEnv(t)
 	output, err := runWithConfigScript(t, env, map[string]string{
-		"HARNESS_HUB_UI_LISTEN": ":8088",
+		"HARNESS_UI_LISTEN": ":8088",
 	})
 	if err != nil {
 		t.Fatalf("with-config error: %v\noutput: %s", err, output)
 	}
 
 	args := readFileTrimmed(t, env.argsPath)
-	if got, want := args, "hub --ui-listen :8088"; got != want {
+	if got, want := args, "serve --ui-listen :8088"; got != want {
 		t.Fatalf("harness args = %q, want %q", got, want)
 	}
 }

@@ -63,12 +63,12 @@ func TestWithExecutionContractIncludesValidationToolingInstruction(t *testing.T)
 	}
 }
 
-func TestWithExecutionContractIncludesHubActivityPrivacyInstruction(t *testing.T) {
+func TestWithExecutionContractIncludesActivityPrivacyInstruction(t *testing.T) {
 	t.Parallel()
 
 	got := WithExecutionContract("Base prompt")
-	if !strings.Contains(got, HubActivityPrivacyInstruction) {
-		t.Fatalf("WithExecutionContract() missing hub-activity privacy instruction: %q", got)
+	if !strings.Contains(got, ActivityPrivacyInstruction) {
+		t.Fatalf("WithExecutionContract() missing public-activity privacy instruction: %q", got)
 	}
 	for _, want := range []string{
 		"`gh repo view OWNER/REPO --json isPrivate,nameWithOwner`",
@@ -140,11 +140,10 @@ func TestComposePromptUsesFallbackPathsAndContract(t *testing.T) {
 		".log/local/<request timestamp>/<request sequence>/term",
 		".log/local/<request timestamp>/<request sequence>/terminal.log",
 		"Observed failure context:",
-		OfflineReviewInstruction,
 		FailureResponseInstruction,
 		RuntimeToolingInstruction,
 		ValidationToolingInstruction,
-		HubActivityPrivacyInstruction,
+		ActivityPrivacyInstruction,
 		UninitializedRepoInstruction,
 		RemoteOperationsInstruction,
 		ActionableChangeInstruction,
@@ -194,7 +193,7 @@ func TestFollowUpTargetingDefaultsToRemoteDefaultAndRoot(t *testing.T) {
 func TestFollowUpTargetingForcesRemoteDefaultAndRootForNonDefaultInputs(t *testing.T) {
 	t.Parallel()
 
-	baseBranch, targetSubdir := FollowUpTargeting("release/2026.04-hotfix", "internal/hub", "release/2026.04-hotfix")
+	baseBranch, targetSubdir := FollowUpTargeting("release/2026.04-hotfix", "internal/localruntime", "release/2026.04-hotfix")
 	if baseBranch != "" {
 		t.Fatalf("baseBranch = %q, want empty for remote default", baseBranch)
 	}

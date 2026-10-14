@@ -5,9 +5,6 @@
   const THEME_MODES = ["light", "dark", "night", "pink"];
   const DEFAULT_THEME_MODE = "light";
   const HOME_PATH = "/";
-  const HUB_PROFILE_DEEP_LINK_HASH = "#agent-profile";
-  const HUB_LOGIN_URL = "https://molten.bot/login?target=hub";
-  const HUB_DASHBOARD_URL = "https://app.molten.bot/hub";
   const THEME_ICON_NAMES = {
     light: "sun",
     dark: "moon",
@@ -262,79 +259,17 @@
     }
   }
 
-  function applyHubDockState(hub) {
-    const configured = Boolean(hub && hub.configured);
-    const dockGroup = document.getElementById("moltenbot-hub-dock-group");
-    const hubLink = document.getElementById("moltenbot-hub-link");
-    const plus = document.getElementById("moltenbot-hub-plus");
-    const profileButton = document.getElementById("moltenbot-hub-profile-button");
-    const connectURL = String(hub && hub.connect_url || hub && hub.connectURL || HUB_LOGIN_URL).trim();
-    const dashboardURL = String(hub && hub.dashboard_url || hub && hub.dashboardURL || HUB_DASHBOARD_URL).trim();
-
-    if (dockGroup) {
-      dockGroup.setAttribute("data-configured", configured ? "true" : "false");
-    }
-    if (plus) {
-      plus.classList.toggle("hidden", configured);
-    }
-    if (hubLink) {
-      hubLink.classList.remove("hidden");
-      hubLink.href = configured ? (dashboardURL || HUB_DASHBOARD_URL) : (connectURL || HUB_LOGIN_URL);
-      const title = configured ? "Open Molten Hub" : "Configure Molten Hub";
-      hubLink.title = title;
-      hubLink.setAttribute("aria-label", title);
-    }
-    if (profileButton) {
-      profileButton.hidden = false;
-      if (profileButton.dataset.bottomDockBound !== "true") {
-        profileButton.dataset.bottomDockBound = "true";
-        profileButton.addEventListener("click", () => {
-          trackDockEvent("hub_profile_opened", { source: "dock" });
-          window.location.assign(`${HOME_PATH}${HUB_PROFILE_DEEP_LINK_HASH}`);
-        });
-      }
-    }
-  }
-
-  async function resolveHubDockState() {
-    if (isHomePage()) {
-      return;
-    }
-    try {
-      const response = await fetch("/api/hub-setup", { cache: "no-store" });
-      let body = null;
-      try {
-        body = await response.json();
-      } catch (_err) {
-        body = null;
-      }
-      if (!response.ok || !body || body.ok === false) {
-        applyHubDockState(null);
-        return;
-      }
-      applyHubDockState(body.hub);
-    } catch (_err) {
-      applyHubDockState(null);
-    }
-  }
-
   function bindStaticDockAnalytics(root) {
     if (isHomePage()) {
       return;
     }
     const githubProfileLink = root.querySelector("#github-profile-link");
-    const hubLink = root.querySelector("#moltenbot-hub-link");
     if (githubProfileLink) {
       githubProfileLink.addEventListener("click", () => {
         trackDockEvent("github_profile_opened", { source: "dock" });
       });
     }
-    if (hubLink) {
-      hubLink.addEventListener("click", () => {
-        const configured = root.querySelector("#moltenbot-hub-dock-group")?.getAttribute("data-configured") === "true";
-        trackDockEvent(configured ? "hub_dashboard_link_opened" : "hub_setup_opened", { source: "dock" });
-      });
-    }
+
   }
 
   function bindPageNavAnalytics(root) {
@@ -370,10 +305,9 @@
     bindStaticDockAnalytics(root);
     bindPageNavAnalytics(root);
     void resolveGitHubProfileLink();
-    void resolveHubDockState();
   }
 
-  window.HubBottomDock = Object.assign(window.HubBottomDock || {}, {
+  window.BottomDock = Object.assign(window.BottomDock || {}, {
     init,
     applyThemeMode,
     syncThemeToggle,

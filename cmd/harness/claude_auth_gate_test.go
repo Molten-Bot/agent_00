@@ -12,7 +12,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
-	"github.com/Molten-Bot/agent_00/internal/hub"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
@@ -107,7 +107,7 @@ func TestClaudeAuthGateRequiresClaudeCredentialsAfterValidatedGITHUBTOKEN(t *tes
 		},
 	}
 
-	g := newClaudeAuthGateWithContextAndConfigAndRunner(context.Background(), runner, "", "", hub.InitConfig{}, nil)
+	g := newClaudeAuthGateWithContextAndConfigAndRunner(context.Background(), runner, "", "", localruntime.InitConfig{}, nil)
 	status, err := g.Status(context.Background())
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
@@ -278,8 +278,8 @@ func TestClaudeAuthGateConfigurePersistsGitHubTokenAndEnvironment(t *testing.T) 
 	useSuccessfulGitHubStarTestServer(t)
 
 	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
-	g := newClaudeAuthGateWithConfig("", path, hub.InitConfig{
-		BaseURL:      "https://na.hub.molten.bot/v1",
+	g := newClaudeAuthGateWithConfig("", path, localruntime.InitConfig{
+
 		AgentHarness: agentruntime.HarnessClaude,
 	})
 
@@ -329,8 +329,8 @@ func TestClaudeAuthGateConfigureAcceptsCredentialsJSONInConfigureState(t *testin
 		state:             "needs_configure",
 		message:           "auth pending",
 		runtimeConfigPath: path,
-		initCfg: hub.InitConfig{
-			BaseURL:      "https://na.hub.molten.bot/v1",
+		initCfg: localruntime.InitConfig{
+
 			AgentHarness: agentruntime.HarnessClaude,
 			GitHubToken:  "github_token_ready",
 		},
@@ -386,8 +386,8 @@ func TestClaudeAuthGateConfigureAcceptsUnknownCredentialsJSONSchemaInConfigureSt
 		required: true,
 		state:    "needs_configure",
 		message:  "auth pending",
-		initCfg: hub.InitConfig{
-			BaseURL:      "https://na.hub.molten.bot/v1",
+		initCfg: localruntime.InitConfig{
+
 			AgentHarness: agentruntime.HarnessClaude,
 			GitHubToken:  "github_token_ready",
 		},
@@ -428,8 +428,8 @@ func TestClaudeAuthGateConfigureRejectsInvalidCredentialsJSONInConfigureState(t 
 		required: true,
 		state:    "needs_configure",
 		message:  "auth pending",
-		initCfg: hub.InitConfig{
-			BaseURL:      "https://na.hub.molten.bot/v1",
+		initCfg: localruntime.InitConfig{
+
 			AgentHarness: agentruntime.HarnessClaude,
 			GitHubToken:  "github_token_ready",
 		},
@@ -935,36 +935,6 @@ sleep 30
 	}
 }
 
-func TestNewClaudeAuthGateWithContextAndConfigUsesDefaultsAndRuntimeConfig(t *testing.T) {
-	t.Setenv("GH_TOKEN", "github_token_ready")
-	t.Setenv("ANTHROPIC_API_KEY", "test-key")
-
-	path := filepath.Join(t.TempDir(), "runtime.json")
-	g := newClaudeAuthGateWithContextAndConfig(context.Background(), "", path, hub.InitConfig{
-		BaseURL:    "https://hub.example/v1",
-		SessionKey: "unit-test",
-	}, nil)
-	if g == nil {
-		t.Fatal("newClaudeAuthGateWithContextAndConfig() = nil")
-	}
-	if got, want := g.command, agentruntime.HarnessClaude; got != want {
-		t.Fatalf("command = %q, want %q", got, want)
-	}
-	if got := g.runtimeConfigPath; got != path {
-		t.Fatalf("runtimeConfigPath = %q, want %q", got, path)
-	}
-	if got := g.initCfg.SessionKey; got != "unit-test" {
-		t.Fatalf("initCfg.SessionKey = %q, want unit-test", got)
-	}
-	status, err := g.Status(context.Background())
-	if err != nil {
-		t.Fatalf("Status() error = %v", err)
-	}
-	if !status.Ready {
-		t.Fatalf("Status().Ready = false, want true; status=%+v", status)
-	}
-}
-
 func TestClaudeAuthHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -1072,16 +1042,16 @@ func TestClaudeAuthHelpers(t *testing.T) {
 func TestAgentAuthGateFactorySelectsSupportedHarnesses(t *testing.T) {
 	t.Parallel()
 
-	if gate := newConcreteAgentAuthGate(context.Background(), nil, agentruntime.Runtime{Harness: agentruntime.HarnessCodex, Command: "codex"}, hub.InitConfig{}, nil); gate == nil {
+	if gate := newConcreteAgentAuthGate(context.Background(), nil, agentruntime.Runtime{Harness: agentruntime.HarnessCodex, Command: "codex"}, localruntime.InitConfig{}, nil); gate == nil {
 		t.Fatal("newConcreteAgentAuthGate(codex) = nil")
 	}
-	if gate := newConcreteAgentAuthGate(context.Background(), nil, agentruntime.Runtime{Harness: agentruntime.HarnessClaude, Command: "claude"}, hub.InitConfig{}, nil); gate == nil {
+	if gate := newConcreteAgentAuthGate(context.Background(), nil, agentruntime.Runtime{Harness: agentruntime.HarnessClaude, Command: "claude"}, localruntime.InitConfig{}, nil); gate == nil {
 		t.Fatal("newConcreteAgentAuthGate(claude) = nil")
 	}
-	if gate := newConcreteAgentAuthGate(context.Background(), nil, agentruntime.Runtime{Harness: "unknown"}, hub.InitConfig{}, nil); gate != nil {
+	if gate := newConcreteAgentAuthGate(context.Background(), nil, agentruntime.Runtime{Harness: "unknown"}, localruntime.InitConfig{}, nil); gate != nil {
 		t.Fatalf("newConcreteAgentAuthGate(unknown) = %#v, want nil", gate)
 	}
-	if gate := newAgentAuthGate(context.Background(), nil, agentruntime.Runtime{Harness: "unknown"}, hub.InitConfig{}, nil); gate == nil {
+	if gate := newAgentAuthGate(context.Background(), nil, agentruntime.Runtime{Harness: "unknown"}, localruntime.InitConfig{}, nil); gate == nil {
 		t.Fatal("newAgentAuthGate(unknown) = nil, want selectable wrapper")
 	}
 }

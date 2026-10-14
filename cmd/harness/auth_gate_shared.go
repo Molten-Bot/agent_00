@@ -14,7 +14,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
-	"github.com/Molten-Bot/agent_00/internal/hub"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
@@ -54,7 +54,7 @@ type configurableAgentAuthGateBase struct {
 	runner execx.Runner
 
 	runtimeConfigPath string
-	initCfg           hub.InitConfig
+	initCfg           localruntime.InitConfig
 
 	authState configurableAgentAuthState
 }
@@ -186,11 +186,11 @@ func githubTokenNeedsConfigureState(harness, message string) web.AgentAuthState 
 	}
 }
 
-func firstConfiguredGitHubToken(runtimeConfigPath string, initCfg hub.InitConfig) (value string, source string) {
+func firstConfiguredGitHubToken(runtimeConfigPath string, initCfg localruntime.InitConfig) (value string, source string) {
 	if env := configuredGitHubTokenFromEnv(); env != "" {
 		return env, "environment"
 	}
-	if persisted := hub.ReadRuntimeConfigString(runtimeConfigPath, "github_token", "githubToken", "GITHUB_TOKEN"); persisted != "" {
+	if persisted := localruntime.ReadRuntimeConfigString(runtimeConfigPath, "github_token", "githubToken", "GITHUB_TOKEN"); persisted != "" {
 		return persisted, "runtime config"
 	}
 	if init := strings.TrimSpace(initCfg.GitHubToken); init != "" {
@@ -204,12 +204,12 @@ type configuredGitHubToken struct {
 	source string
 }
 
-func configuredGitHubTokens(runtimeConfigPath string, initCfg hub.InitConfig) []configuredGitHubToken {
+func configuredGitHubTokens(runtimeConfigPath string, initCfg localruntime.InitConfig) []configuredGitHubToken {
 	candidates := []configuredGitHubToken{
 		{value: strings.TrimSpace(os.Getenv("GH_TOKEN")), source: "environment"},
 		{value: strings.TrimSpace(os.Getenv("GITHUB_TOKEN")), source: "environment"},
 		{value: malformedDockerComposeGitHubTokenFromEnv(), source: "environment"},
-		{value: hub.ReadRuntimeConfigString(runtimeConfigPath, "github_token", "githubToken", "GITHUB_TOKEN"), source: "runtime config"},
+		{value: localruntime.ReadRuntimeConfigString(runtimeConfigPath, "github_token", "githubToken", "GITHUB_TOKEN"), source: "runtime config"},
 		{value: strings.TrimSpace(initCfg.GitHubToken), source: "init config"},
 	}
 
@@ -229,7 +229,7 @@ func configuredGitHubTokens(runtimeConfigPath string, initCfg hub.InitConfig) []
 	return filtered
 }
 
-func validatedGitHubToken(ctx context.Context, runner execx.Runner, runtimeConfigPath string, initCfg hub.InitConfig) (string, error) {
+func validatedGitHubToken(ctx context.Context, runner execx.Runner, runtimeConfigPath string, initCfg localruntime.InitConfig) (string, error) {
 	candidates := configuredGitHubTokens(runtimeConfigPath, initCfg)
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("github token is required")
@@ -271,12 +271,12 @@ func isLikelyGitHubToken(value string) bool {
 	return false
 }
 
-func githubTokenRequirementState(ctx context.Context, runner execx.Runner, harness, runtimeConfigPath string, initCfg hub.InitConfig) (bool, web.AgentAuthState) {
+func githubTokenRequirementState(ctx context.Context, runner execx.Runner, harness, runtimeConfigPath string, initCfg localruntime.InitConfig) (bool, web.AgentAuthState) {
 	_, state, blocked := githubTokenRequirement(ctx, runner, harness, runtimeConfigPath, initCfg)
 	return blocked, state
 }
 
-func applyGitHubTokenRequirementState(ctx context.Context, runner execx.Runner, state *configurableAgentAuthState, harness, runtimeConfigPath string, initCfg hub.InitConfig) (string, bool) {
+func applyGitHubTokenRequirementState(ctx context.Context, runner execx.Runner, state *configurableAgentAuthState, harness, runtimeConfigPath string, initCfg localruntime.InitConfig) (string, bool) {
 	githubToken, snapshot, blocked := githubTokenRequirement(ctx, runner, harness, runtimeConfigPath, initCfg)
 	if blocked {
 		state.applySnapshot(snapshot)
@@ -285,7 +285,7 @@ func applyGitHubTokenRequirementState(ctx context.Context, runner execx.Runner, 
 	return githubToken, false
 }
 
-func githubTokenRequirement(ctx context.Context, runner execx.Runner, harness, runtimeConfigPath string, initCfg hub.InitConfig) (string, web.AgentAuthState, bool) {
+func githubTokenRequirement(ctx context.Context, runner execx.Runner, harness, runtimeConfigPath string, initCfg localruntime.InitConfig) (string, web.AgentAuthState, bool) {
 	githubToken, err := validatedGitHubToken(ctx, runner, runtimeConfigPath, initCfg)
 	if err != nil {
 		if strings.TrimSpace(err.Error()) == "github token is required" {
@@ -305,7 +305,7 @@ func githubTokenRequirement(ctx context.Context, runner execx.Runner, harness, r
 func configureGitHubToken(
 	ctx context.Context,
 	harness, runtimeConfigPath string,
-	initCfg hub.InitConfig,
+	initCfg localruntime.InitConfig,
 	runner execx.Runner,
 	rawInput, requiredMessage string,
 ) (string, web.AgentAuthState, error) {
@@ -324,7 +324,7 @@ func configureGitHubToken(
 		return "", state, err
 	}
 
-	if err := hub.SaveRuntimeConfigGitHubToken(runtimeConfigPath, initCfg, token); err != nil {
+	if err := localruntime.SaveRuntimeConfigGitHubToken(runtimeConfigPath, initCfg, token); err != nil {
 		state := githubTokenNeedsConfigureState(harness, fmt.Sprintf("save github token: %v", err))
 		return "", state, err
 	}
@@ -385,7 +385,7 @@ func starAgent00Repository(ctx context.Context, token string) error {
 func configureGitHubTokenAndApply(
 	ctx context.Context,
 	harness, runtimeConfigPath string,
-	initCfg hub.InitConfig,
+	initCfg localruntime.InitConfig,
 	runner execx.Runner,
 	rawInput string,
 	onFailure func(web.AgentAuthState, error) (web.AgentAuthState, error),

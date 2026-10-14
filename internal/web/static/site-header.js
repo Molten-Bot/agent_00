@@ -1,10 +1,8 @@
-(function initMoltenHubHeader() {
+(function initAgentHeader() {
   const THEME_KEY = "hubui.theme";
   const THEME_MODES = ["light", "dark", "night", "pink"];
   const DEFAULT_THEME_MODE = "light";
   const LOGO_ROTATION_INTERVAL_MS = 8_000;
-  const HUB_LOGIN_URL = "https://molten.bot/login?target=hub";
-  const HUB_DASHBOARD_URL = "https://app.molten.bot/hub";
   const AGENT_LOGO_URLS = Object.freeze({
     codex: "/static/logos/codex-cli.svg",
     claude: "/static/logos/claude-code.svg",
@@ -120,10 +118,10 @@
         <a class="brand-lockup site-header-home" href="/" aria-label="Agent_00 home" data-site-header-home>
           <span class="brand-logo-group">
             <img
-              id="moltenhub-logo"
+              id="agent-logo"
               class="brand-logo rotating-brand-logo brand-logo-visible"
               src="/static/logo.svg"
-              alt="MoltenHub logo">
+              alt="agent_00 logo">
             <img
               id="configured-agent-logo"
               class="configured-agent-logo rotating-brand-logo"
@@ -139,10 +137,6 @@
           <div id="local-conn-item" class="status-item status-item-compact status-item-compact-expandable" title="Local: Ready" aria-label="Local: Ready" tabindex="0">
             <span id="local-conn-dot" class="dot online"></span>
             <span id="local-conn-text" class="status-tooltip">Local: Ready</span>
-          </div>
-          <div id="hub-conn-item" class="status-item status-item-compact status-item-compact-expandable" title="Molten Hub: Ready" aria-label="Molten Hub: Ready" tabindex="0">
-            <span id="hub-conn-dot" class="dot online"></span>
-            <span id="hub-conn-text" class="status-tooltip">Molten Hub: Ready</span>
           </div>
           <div id="speech-conn-item" class="status-item status-item-compact status-item-compact-expandable hidden" title="Whisper: Connected" aria-label="Whisper: Connected" tabindex="0">
             <span id="speech-conn-dot" class="dot online"></span>
@@ -327,16 +321,16 @@
 
     logoNodes() {
       return {
-        moltenHubLogo: this.querySelector("#moltenhub-logo"),
+        agentLogo: this.querySelector("#agent-logo"),
         configuredAgentLogo: this.querySelector("#configured-agent-logo"),
         subtitle: this.querySelector("#configured-agent-gorilla-subtitle"),
       };
     }
 
     setLogoVisibility(showConfiguredLogo) {
-      const { moltenHubLogo, configuredAgentLogo } = this.logoNodes();
-      if (moltenHubLogo) {
-        moltenHubLogo.classList.toggle("brand-logo-visible", !showConfiguredLogo);
+      const { agentLogo, configuredAgentLogo } = this.logoNodes();
+      if (agentLogo) {
+        agentLogo.classList.toggle("brand-logo-visible", !showConfiguredLogo);
       }
       if (configuredAgentLogo) {
         configuredAgentLogo.classList.toggle("brand-logo-visible", showConfiguredLogo);
@@ -400,9 +394,6 @@
         localItem: this.querySelector("#local-conn-item"),
         localDot: this.querySelector("#local-conn-dot"),
         localText: this.querySelector("#local-conn-text"),
-        hubItem: this.querySelector("#hub-conn-item"),
-        hubDot: this.querySelector("#hub-conn-dot"),
-        hubText: this.querySelector("#hub-conn-text"),
         speechItem: this.querySelector("#speech-conn-item"),
         speechDot: this.querySelector("#speech-conn-dot"),
         speechText: this.querySelector("#speech-conn-text"),
@@ -437,91 +428,6 @@
       this.setIndicator(nodes.speechItem, nodes.speechDot, nodes.speechText, "Whisper", online, text || "Connected");
     }
 
-    applyHubDotMode(mode) {
-      const { hubDot } = this.connectionNodes();
-      if (!hubDot) return;
-      hubDot.classList.remove("http", "disconnected");
-      if (mode === "http_long_poll") {
-        hubDot.classList.add("http");
-        return;
-      }
-      if (mode === "disconnected") {
-        hubDot.classList.add("disconnected");
-      }
-    }
-
-    setHubConnectionActionable(actionable, href = "", tone = "") {
-      const { hubItem } = this.connectionNodes();
-      if (!hubItem) return;
-      hubItem.classList.toggle("status-item-action", actionable);
-      hubItem.classList.toggle("status-item-action-online", actionable && tone === "online");
-      hubItem.classList.toggle("status-item-action-offline", actionable && tone === "offline");
-      hubItem.setAttribute("data-actionable", actionable ? "true" : "false");
-      hubItem.setAttribute("data-href", href);
-    }
-
-    setHubConnection(mode, text, hubSetup = {}) {
-      const nodes = this.connectionNodes();
-      const configured = Boolean(hubSetup && hubSetup.configured);
-      const dashboardURL = String(hubSetup && (hubSetup.dashboardURL || hubSetup.dashboard_url) || HUB_DASHBOARD_URL).trim() || HUB_DASHBOARD_URL;
-      const connectURL = String(hubSetup && (hubSetup.connectURL || hubSetup.connect_url) || HUB_LOGIN_URL).trim() || HUB_LOGIN_URL;
-      const connected = mode === "ws" || mode === "http_long_poll" || mode === "connected";
-      const actionable = connected || mode === "disconnected";
-      const actionTone = connected ? "online" : (mode === "disconnected" ? "offline" : "");
-      const targetURL = connected || configured ? dashboardURL : connectURL;
-      let message = String(text || "").trim();
-      if (mode === "disconnected" && !message) {
-        message = configured
-          ? "Configured locally. Restart runtime to connect."
-          : "Connect to Molten Hub";
-      }
-      this.setIndicator(nodes.hubItem, nodes.hubDot, nodes.hubText, "Molten Hub", connected, message);
-      this.applyHubDotMode(mode);
-      this.setHubConnectionActionable(actionable, targetURL, actionTone);
-    }
-
-    updateConnectionStatus(snapshot, options = {}) {
-      const hubSetup = options && typeof options.hubSetup === "object" && options.hubSetup !== null
-        ? options.hubSetup
-        : {};
-      if (!snapshot || typeof snapshot.connection !== "object" || snapshot.connection === null) {
-        this.setHubConnection("disconnected", "Hub status unavailable", hubSetup);
-        return;
-      }
-
-      const conn = snapshot.connection;
-      const domain = typeof conn.hub_domain === "string" ? conn.hub_domain.trim() : "";
-      const baseURL = typeof conn.hub_base_url === "string" ? conn.hub_base_url.trim() : "";
-      const transport = typeof conn.hub_transport === "string" ? conn.hub_transport.trim() : "";
-      const detail = typeof conn.hub_detail === "string" ? conn.hub_detail.trim() : "";
-      const target = domain || baseURL || "hub";
-
-      if (transport === "ws") {
-        this.setHubConnection("ws", `Connected via WebSocket to ${target}`, hubSetup);
-        return;
-      }
-      if (transport === "http_long_poll") {
-        this.setHubConnection("http_long_poll", `Connected via HTTP long polling to ${target}`, hubSetup);
-        return;
-      }
-      if (conn.hub_connected) {
-        this.setHubConnection("connected", `Connected to ${target} (transport pending)`, hubSetup);
-        return;
-      }
-      if (transport === "reachable") {
-        this.setHubConnection("reachable", detail || `Hub endpoint is live at ${target}. Connecting...`, hubSetup);
-        return;
-      }
-      if (transport === "retrying") {
-        this.setHubConnection("retrying", detail || `Hub endpoint is waking up at ${target}. Retrying ping every 12s.`, hubSetup);
-        return;
-      }
-      if (domain || baseURL) {
-        this.setHubConnection("disconnected", detail || `Disconnected from ${target}`, hubSetup);
-        return;
-      }
-      this.setHubConnection("disconnected", "", hubSetup);
-    }
   }
 
   class Agent00Nav extends HTMLElement {
@@ -567,14 +473,6 @@
     });
   }
 
-  function updateConnectionStatus(snapshot, options = {}) {
-    document.querySelectorAll("agent-00-header").forEach((header) => {
-      if (typeof header.updateConnectionStatus === "function") {
-        header.updateConnectionStatus(snapshot, options);
-      }
-    });
-  }
-
   function updateSpeechConnection(connected, text = "") {
     document.querySelectorAll("agent-00-header").forEach((header) => {
       if (typeof header.updateSpeechConnection === "function") {
@@ -590,31 +488,13 @@
     }
     const snapshot = await response.json();
     updateLocalConnection(true, "Connected");
-    updateConnectionStatus(snapshot, options);
     updateResourceMetrics(snapshot);
-  }
-
-  async function loadSharedHubSetup() {
-    const response = await fetch("/api/hub-setup", { cache: "no-store" });
-    if (!response.ok) {
-      return {};
-    }
-    const body = await response.json();
-    return body && typeof body.hub === "object" && body.hub !== null ? body.hub : {};
   }
 
   function startConnectionStatus(options = {}) {
     let streamOptions = options;
-    const initialOptionsPromise = options && typeof options.hubSetup === "object" && options.hubSetup !== null
-      ? Promise.resolve(options)
-      : loadSharedHubSetup().then((hubSetup) => ({ ...options, hubSetup })).catch(() => options);
-    void initialOptionsPromise.then((initialOptions) => {
-      streamOptions = initialOptions;
-      return loadConnectionStatus(initialOptions);
-    }).catch((err) => {
-      const message = err && err.message ? err.message : "Unable to load status";
-      updateLocalConnection(false, `Unable to load status: ${message}`);
-      updateConnectionStatus(null, options);
+    void loadConnectionStatus(options).catch((err) => {
+      updateLocalConnection(false, `Unable to load status: ${err.message}`);
     });
     if (connectionStatusStarted || connectionStatusStream || typeof EventSource !== "function") {
       return;
@@ -627,7 +507,6 @@
     connectionStatusStream.onmessage = (event) => {
       try {
         const snapshot = JSON.parse(event.data);
-        updateConnectionStatus(snapshot, streamOptions);
         updateResourceMetrics(snapshot);
       } catch (_err) {
         // Ignore malformed event packets.
@@ -648,7 +527,7 @@
     startConnectionStatus();
   }
 
-  window.MoltenHubHeader = {
+  window.AgentHeader = {
     update(config = {}, auth = {}) {
       document.querySelectorAll("agent-00-header").forEach((header) => {
         if (typeof header.update === "function") {
@@ -657,7 +536,6 @@
       });
     },
     updateLocalConnection,
-    updateConnectionStatus,
     updateSpeechConnection,
     updateResourceMetrics,
     startConnectionStatus,

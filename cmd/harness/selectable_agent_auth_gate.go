@@ -10,7 +10,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
-	"github.com/Molten-Bot/agent_00/internal/hub"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
@@ -28,17 +28,17 @@ type selectableAgentAuthGate struct {
 	runner            execx.Runner
 	logf              func(string, ...any)
 	runtimeConfigPath string
-	initCfg           hub.InitConfig
+	initCfg           localruntime.InitConfig
 
 	delegate       agentAuthGate
 	delegateKey    string
-	delegateConfig hub.InitConfig
+	delegateConfig localruntime.InitConfig
 }
 
 func newSelectableAgentAuthGate(
 	ctx context.Context,
 	runner execx.Runner,
-	initCfg hub.InitConfig,
+	initCfg localruntime.InitConfig,
 	logf func(string, ...any),
 ) *selectableAgentAuthGate {
 	if ctx == nil {
@@ -53,7 +53,7 @@ func newSelectableAgentAuthGate(
 
 	runtimeConfigPath := strings.TrimSpace(initCfg.RuntimeConfigPath)
 	if runtimeConfigPath == "" {
-		runtimeConfigPath = hub.ResolveRuntimeConfigPath("")
+		runtimeConfigPath = localruntime.ResolveRuntimeConfigPath("")
 	}
 	initCfg.RuntimeConfigPath = runtimeConfigPath
 
@@ -139,7 +139,7 @@ func (g *selectableAgentAuthGate) Configure(ctx context.Context, rawInput string
 			return state, resolveErr
 		}
 
-		if saveErr := hub.SaveRuntimeConfigAgentRuntime(
+		if saveErr := localruntime.SaveRuntimeConfigAgentRuntime(
 			g.runtimeConfigPath,
 			activeCfg,
 			selectedRuntime.Harness,
@@ -177,8 +177,8 @@ func (g *selectableAgentAuthGate) Configure(ctx context.Context, rawInput string
 	return delegate.Configure(ctx, rawInput)
 }
 
-func (g *selectableAgentAuthGate) selectionState(activeCfg hub.InitConfig) (agentruntime.Runtime, bool, web.AgentAuthState) {
-	runtime, err := hub.BoundAgentRuntime(activeCfg)
+func (g *selectableAgentAuthGate) selectionState(activeCfg localruntime.InitConfig) (agentruntime.Runtime, bool, web.AgentAuthState) {
+	runtime, err := localruntime.BoundAgentRuntime(activeCfg)
 	if err == nil {
 		return runtime, true, web.AgentAuthState{}
 	}
@@ -190,7 +190,7 @@ func (g *selectableAgentAuthGate) selectionState(activeCfg hub.InitConfig) (agen
 	return agentruntime.Runtime{}, false, g.harnessSelectionRequiredState("Select the agent logo to continue.")
 }
 
-func (g *selectableAgentAuthGate) resolveDelegate(runtime agentruntime.Runtime, activeCfg hub.InitConfig) (agentAuthGate, error) {
+func (g *selectableAgentAuthGate) resolveDelegate(runtime agentruntime.Runtime, activeCfg localruntime.InitConfig) (agentAuthGate, error) {
 	key := runtime.Harness + "\x00" + runtime.Command
 
 	g.mu.Lock()
@@ -217,7 +217,7 @@ func (g *selectableAgentAuthGate) resolveDelegate(runtime agentruntime.Runtime, 
 	return delegate, nil
 }
 
-func (g *selectableAgentAuthGate) activeConfig() (hub.InitConfig, error) {
+func (g *selectableAgentAuthGate) activeConfig() (localruntime.InitConfig, error) {
 	g.mu.Lock()
 	baseCfg := g.initCfg
 	runtimeConfigPath := g.runtimeConfigPath
@@ -226,9 +226,9 @@ func (g *selectableAgentAuthGate) activeConfig() (hub.InitConfig, error) {
 	if strings.TrimSpace(baseCfg.RuntimeConfigPath) == "" {
 		baseCfg.RuntimeConfigPath = runtimeConfigPath
 	}
-	activeCfg, err := effectiveHubSetupConfig(baseCfg)
+	activeCfg, err := effectiveRuntimeConfig(baseCfg)
 	if err != nil {
-		return hub.InitConfig{}, err
+		return localruntime.InitConfig{}, err
 	}
 	if strings.TrimSpace(activeCfg.RuntimeConfigPath) == "" {
 		activeCfg.RuntimeConfigPath = runtimeConfigPath
@@ -268,7 +268,7 @@ func (g *selectableAgentAuthGate) errorState(message string) web.AgentAuthState 
 func (g *selectableAgentAuthGate) resetDelegateLocked() {
 	g.delegate = nil
 	g.delegateKey = ""
-	g.delegateConfig = hub.InitConfig{}
+	g.delegateConfig = localruntime.InitConfig{}
 }
 
 func harnessSelectionOptions() []web.AgentAuthOption {

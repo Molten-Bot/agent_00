@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
-	"github.com/Molten-Bot/agent_00/internal/hub"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
 func selectableGitHubReadyRunner() *sharedAuthGateRunnerStub {
@@ -31,7 +31,7 @@ func TestSelectableAgentAuthGateStatusRequiresGitHubTokenWhenUnbound(t *testing.
 	t.Setenv("GITHUB_TOKEN", "")
 
 	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
-	gate := newSelectableAgentAuthGate(context.Background(), nil, hub.InitConfig{RuntimeConfigPath: path}, nil)
+	gate := newSelectableAgentAuthGate(context.Background(), nil, localruntime.InitConfig{RuntimeConfigPath: path}, nil)
 
 	state, err := gate.Status(context.Background())
 	if err != nil {
@@ -50,7 +50,7 @@ func TestSelectableAgentAuthGateStartVerifyAndErrorState(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 
 	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
-	gate := newSelectableAgentAuthGate(context.Background(), nil, hub.InitConfig{RuntimeConfigPath: path}, nil)
+	gate := newSelectableAgentAuthGate(context.Background(), nil, localruntime.InitConfig{RuntimeConfigPath: path}, nil)
 
 	startState, err := gate.StartDeviceAuth(context.Background())
 	if err != nil {
@@ -77,7 +77,7 @@ func TestSelectableAgentAuthGateStatusRequiresHarnessSelectionAfterGitHubReady(t
 	t.Setenv("GITHUB_TOKEN", "")
 
 	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
-	gate := newSelectableAgentAuthGate(context.Background(), selectableGitHubReadyRunner(), hub.InitConfig{RuntimeConfigPath: path}, nil)
+	gate := newSelectableAgentAuthGate(context.Background(), selectableGitHubReadyRunner(), localruntime.InitConfig{RuntimeConfigPath: path}, nil)
 
 	state, err := gate.Status(context.Background())
 	if err != nil {
@@ -123,7 +123,7 @@ func TestSelectableAgentAuthGateStatusRequiresHarnessSelectionAfterValidatedGITH
 			return execx.Result{Stdout: "github.com logged in"}, nil
 		},
 	}
-	gate := newSelectableAgentAuthGate(context.Background(), runner, hub.InitConfig{RuntimeConfigPath: path}, nil)
+	gate := newSelectableAgentAuthGate(context.Background(), runner, localruntime.InitConfig{RuntimeConfigPath: path}, nil)
 
 	state, err := gate.Status(context.Background())
 	if err != nil {
@@ -151,7 +151,7 @@ func TestSelectableAgentAuthGateStatusAcceptsMalformedDockerComposeGitHubEnv(t *
 			return execx.Result{Stdout: "github.com logged in"}, nil
 		},
 	}
-	gate := newSelectableAgentAuthGate(context.Background(), runner, hub.InitConfig{RuntimeConfigPath: path}, nil)
+	gate := newSelectableAgentAuthGate(context.Background(), runner, localruntime.InitConfig{RuntimeConfigPath: path}, nil)
 
 	state, err := gate.Status(context.Background())
 	if err != nil {
@@ -170,7 +170,7 @@ func TestSelectableAgentAuthGateConfigurePersistsSelectionAndRejectsSwitch(t *te
 	t.Setenv("GITHUB_TOKEN", "")
 
 	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
-	gate := newSelectableAgentAuthGate(context.Background(), selectableGitHubReadyRunner(), hub.InitConfig{RuntimeConfigPath: path}, nil)
+	gate := newSelectableAgentAuthGate(context.Background(), selectableGitHubReadyRunner(), localruntime.InitConfig{RuntimeConfigPath: path}, nil)
 
 	state, err := gate.Configure(context.Background(), "claude")
 	if err != nil {

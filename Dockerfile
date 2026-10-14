@@ -4,7 +4,7 @@ ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 ARG GIT_CHANGES_BY_DAY_VERSION=v0.0.0-20260518234615-87ad8a8d0d77
 
-COPY go.mod go.sum ./
+COPY go.mod ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 

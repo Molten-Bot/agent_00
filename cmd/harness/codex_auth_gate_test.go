@@ -14,7 +14,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
-	"github.com/Molten-Bot/agent_00/internal/hub"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
 type authGateRunnerStub struct {
@@ -30,8 +30,8 @@ func (s *authGateRunnerStub) Run(ctx context.Context, cmd execx.Command) (execx.
 	return s.run(ctx, cmd)
 }
 
-func codexGitHubReadyInitCfg() hub.InitConfig {
-	return hub.InitConfig{GitHubToken: "github_token_ready"}
+func codexGitHubReadyInitCfg() localruntime.InitConfig {
+	return localruntime.InitConfig{GitHubToken: "github_token_ready"}
 }
 
 func TestCodexAuthGateNilReceiversReturnReady(t *testing.T) {
@@ -137,7 +137,7 @@ func TestNewCodexAuthGateRequiresGitHubConfigureWhenTokenMissing(t *testing.T) {
 		runner,
 		"codex",
 		filepath.Join(t.TempDir(), ".moltenhub", "config.json"),
-		hub.InitConfig{},
+		localruntime.InitConfig{},
 		true,
 		nil,
 	)
@@ -170,8 +170,8 @@ func TestCodexAuthGateConfigurePersistsGitHubToken(t *testing.T) {
 		runner,
 		"codex",
 		configPath,
-		hub.InitConfig{
-			BaseURL:      "https://na.hub.molten.bot/v1",
+		localruntime.InitConfig{
+
 			AgentHarness: "codex",
 		},
 		true,
@@ -225,8 +225,8 @@ func TestCodexAuthGateConfigureRejectsInvalidGitHubTokenBeforePersisting(t *test
 		runner,
 		"codex",
 		configPath,
-		hub.InitConfig{
-			BaseURL:      "https://na.hub.molten.bot/v1",
+		localruntime.InitConfig{
+
 			AgentHarness: "codex",
 		},
 		true,
@@ -775,7 +775,7 @@ func TestNewCodexAuthGateWithConfigRequiresGitHubTokenWhenMissing(t *testing.T) 
 		runner,
 		"codex",
 		filepath.Join(t.TempDir(), ".moltenhub", "config.json"),
-		hub.InitConfig{},
+		localruntime.InitConfig{},
 		true,
 		nil,
 	)
@@ -794,63 +794,6 @@ func TestNewCodexAuthGateWithConfigRequiresGitHubTokenWhenMissing(t *testing.T) 
 	}
 	if got := len(runner.calls); got != 0 {
 		t.Fatalf("probe calls = %d, want 0", got)
-	}
-}
-
-func TestCodexAuthGateWithConfigConfigurePersistsGitHubTokenAndTransitionsState(t *testing.T) {
-	t.Setenv("GH_TOKEN", "")
-	t.Setenv("GITHUB_TOKEN", "")
-	useSuccessfulGitHubStarTestServer(t)
-
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
-	runner := &authGateRunnerStub{
-		run: func(_ context.Context, cmd execx.Command) (execx.Result, error) {
-			if isGitHubTokenValidationCommandForTest(cmd) {
-				return execx.Result{Stdout: "Logged in to github.com as octocat"}, nil
-			}
-			return execx.Result{}, errors.New("not logged in")
-		},
-	}
-
-	g := newCodexAuthGateWithConfig(
-		context.Background(),
-		runner,
-		"codex",
-		path,
-		hub.InitConfig{
-			BaseURL:      "https://na.hub.molten.bot/v1",
-			AgentToken:   "agent_token",
-			AgentHarness: agentruntime.HarnessCodex,
-		},
-		true,
-		nil,
-	)
-
-	githubToken := fakeGitHubPAT("saved_token")
-	status, err := g.Configure(context.Background(), githubToken)
-	if err != nil {
-		t.Fatalf("Configure() error = %v", err)
-	}
-	if status.Ready || status.State != "needs_device_auth" {
-		t.Fatalf("status = %+v", status)
-	}
-	if got, want := os.Getenv("GH_TOKEN"), githubToken; got != want {
-		t.Fatalf("GH_TOKEN = %q, want %q", got, want)
-	}
-	if got, want := os.Getenv("GITHUB_TOKEN"), githubToken; got != want {
-		t.Fatalf("GITHUB_TOKEN = %q, want %q", got, want)
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	var doc map[string]any
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatalf("Unmarshal() error = %v", err)
-	}
-	if got, want := doc["github_token"], githubToken; got != want {
-		t.Fatalf("github_token = %#v, want %q", got, want)
 	}
 }
 
