@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 )
@@ -16,11 +17,15 @@ const (
 	runtimeConfigPathEnv = "HARNESS_RUNTIME_CONFIG_PATH"
 )
 
+// Serialize read/modify/write operations across settings and recurring runs.
+var runtimeConfigMu sync.Mutex
+
 // RuntimeConfig persists local agent and review preferences.
 type RuntimeConfig struct {
 	InitConfig
 
-	LibraryTaskUsage map[string]int `json:"library_task_usage,omitempty"`
+	LibraryTaskUsage map[string]int             `json:"library_task_usage,omitempty"`
+	LibrarySchedules map[string]LibrarySchedule `json:"library_schedules,omitempty"`
 }
 
 // ApplyDefaults normalizes a persisted runtime config.
@@ -90,6 +95,8 @@ func SaveRuntimeConfigGitHubToken(path string, initCfg InitConfig, gitHubToken s
 // runtime config while preserving other configuration fields. Once configured,
 // switching to a different harness or command through this API is rejected.
 func SaveRuntimeConfigAgentRuntime(path string, initCfg InitConfig, harness, command string) error {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
 	path = strings.TrimSpace(path)
 	if path == "" {
 		path = defaultRuntimeConfigPath()
@@ -135,6 +142,8 @@ func SaveRuntimeConfigAgentRuntime(path string, initCfg InitConfig, harness, com
 // SaveRuntimeConfigReviewSettings persists user-editable review automation
 // settings while omitting fields whose values match runtime defaults.
 func SaveRuntimeConfigReviewSettings(path string, initCfg InitConfig, reviewCfg ReviewWatchConfig) error {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
 	path = strings.TrimSpace(path)
 	if path == "" {
 		path = defaultRuntimeConfigPath()
@@ -283,6 +292,8 @@ func ReadRuntimeConfigLibraryTaskUsage(path string) map[string]int {
 // of a library task in config.json while preserving unrelated runtime config
 // settings already stored on disk.
 func IncrementRuntimeConfigLibraryTaskUsage(path string, initCfg InitConfig, taskName string) error {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
 	path = strings.TrimSpace(path)
 	if path == "" {
 		path = defaultRuntimeConfigPath()
@@ -316,6 +327,8 @@ func saveRuntimeConfigStringField(
 	emptyErr string,
 	field string,
 ) error {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
 	path = strings.TrimSpace(path)
 	if path == "" {
 		path = defaultRuntimeConfigPath()
@@ -425,6 +438,8 @@ func runtimeConfigLogLevelFromDoc(doc map[string]any) string {
 }
 
 func ensureRuntimeConfigLogLevelPersisted(path, preferred string) error {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil
@@ -494,6 +509,8 @@ func runtimeConfigLibraryTaskUsageCount(v any) (int, bool) {
 // SaveRuntimeConfigClaudeOAuthToken persists claude_code_oauth_token to the
 // runtime config JSON while preserving other configuration fields.
 func SaveRuntimeConfigClaudeOAuthToken(path string, initCfg InitConfig, oauthToken string) error {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
 	path = strings.TrimSpace(path)
 	if path == "" {
 		path = defaultRuntimeConfigPath()

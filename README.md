@@ -37,6 +37,24 @@ The bundled sidecar defaults to the `base-int8` model and English language
 hints for more reliable short-form dictation; set both `WHISPER_LANG=auto` and
 `WHISPER_SPEECH_LANGUAGE=auto` to use Whisper language detection.
 
+### Recurring library tasks
+
+On the Library page, choose a repository and use the clock beside a task to
+schedule it every 1–168 hours. **Schedules** opens the list to edit the interval
+or delete a recurrence. **Run** continues to launch a one-time task.
+
+Schedules are stored in the app's `config.json` under `library_schedules`, keyed
+by task slug and canonical GitHub repository (`task-slug@owner/repo`). SSH and
+HTTPS URLs for the same repository share one schedule. Each run uses the current
+library prompt and the saved branch, directory, and reviewers.
+
+The first run is due one interval after saving; editing resets the next run time.
+Keep the app running for schedules to execute (checked every 30 seconds). After
+downtime, one overdue run resumes without replaying every missed interval. A run
+waits while the same task and repository are already pending, running, or paused.
+Submission failures appear in the schedules dialog and retry at the next interval.
+Deleting a schedule leaves any run already started intact.
+
 ### Workspace storage
 
 Retained task checkouts need disk capacity. For long-running Docker installations,

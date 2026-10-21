@@ -22,6 +22,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/library"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
 //go:embed static/*
@@ -97,6 +98,7 @@ type Server struct {
 	ForceRunTask            func(context.Context, string) error
 	StopTask                func(context.Context, string) error
 	ResolveTaskControls     func(string) TaskControls
+	LibrarySchedules        *localruntime.LibrarySchedules
 	LoadLibraryTasks        func() ([]library.TaskSummary, error)
 	AgentAuthStatus         func(context.Context) (AgentAuthState, error)
 	StartAgentAuth          func(context.Context) (AgentAuthState, error)
@@ -260,6 +262,7 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/status", s.handleState)
 	mux.HandleFunc("/api/library", s.handleLibrary)
 	mux.HandleFunc("/api/library/run", s.handleLibraryRun)
+	mux.HandleFunc("/api/library/schedules", s.handleLibrarySchedules)
 	mux.HandleFunc("/api/stream", s.handleStream)
 	mux.HandleFunc("/api/local-prompt", s.handleLocalPrompt)
 	mux.HandleFunc("/api/speech/status", s.handleSpeechStatus)

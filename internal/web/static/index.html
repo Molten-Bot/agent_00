@@ -250,7 +250,12 @@
                 </div>
                 <p class="prompt-field-copy">Library tasks provide a preset prompt, but they still run against the repository, branch, directory, and reviewers you choose here.</p>
                 <div class="prompt-field">
-                  <span class="prompt-label">Task Library</span>
+                  <div class="library-schedule-toolbar">
+                    <span class="prompt-label">Task Library</span>
+                    <button id="library-schedules-open" class="prompt-action-button" type="button" title="View and manage recurring library tasks">
+                      <i data-lucide="calendar-clock" aria-hidden="true"></i><span>Schedules</span><span id="library-schedules-count"></span>
+                    </button>
+                  </div>
                   <div id="library-type-tabs" class="library-type-tabs" role="tablist" aria-label="Library task types"></div>
                   <div id="library-task-list" class="library-task-list"></div>
                 </div>
@@ -501,6 +506,32 @@
       </div>
     </div>
   </div>
+
+  <dialog id="library-schedule-modal" class="library-schedule-modal" aria-labelledby="library-schedule-title">
+    <div class="library-prompt-modal-head">
+      <h2 id="library-schedule-title">Schedules</h2>
+      <button id="library-schedule-close" class="settings-modal-close" type="button" title="Close schedules" aria-label="Close schedules"><i data-lucide="x" aria-hidden="true"></i></button>
+    </div>
+    <div class="library-schedule-body">
+      <p class="library-schedule-copy">Repeat library tasks while the app is running. One schedule per task and repository.</p>
+      <div id="library-schedule-list"></div>
+      <form id="library-schedule-editor" hidden>
+        <h3 id="library-schedule-task"></h3>
+        <p id="library-schedule-repo" class="library-schedule-copy"></p>
+        <p id="library-schedule-options" class="library-schedule-copy"></p>
+        <label class="library-schedule-interval" for="library-schedule-hours">Repeat <output id="library-schedule-frequency" for="library-schedule-hours">every 24 hours</output></label>
+        <input id="library-schedule-hours" type="range" min="1" max="168" step="1" value="24" aria-label="Repeat interval in hours">
+        <div class="library-schedule-range"><span>1 hour</span><span>168 hours · 1 week</span></div>
+        <p id="library-schedule-next" class="library-schedule-copy"></p>
+        <div class="library-schedule-actions">
+          <button id="library-schedule-delete" class="prompt-action-button" type="button" title="Delete this recurring schedule" hidden><i data-lucide="trash-2" aria-hidden="true"></i><span>Delete</span></button>
+          <button id="library-schedule-back" class="prompt-action-button" type="button" title="Return to all schedules"><i data-lucide="arrow-left" aria-hidden="true"></i><span>Back</span></button>
+          <button id="library-schedule-save" class="prompt-action-button prompt-submit" type="submit" title="Save this recurring schedule"><i data-lucide="check" aria-hidden="true"></i><span>Save schedule</span></button>
+        </div>
+      </form>
+      <p id="library-schedule-status" class="library-schedule-copy" role="status" aria-live="polite"></p>
+    </div>
+  </dialog>
 
   <div
     id="library-prompt-modal"
@@ -5672,11 +5703,22 @@
 
         content.appendChild(button);
         content.appendChild(promptLink);
+        const scheduleButton = document.createElement("button");
+        scheduleButton.type = "button";
+        scheduleButton.className = "library-task-option-link library-schedule-task-button";
+        scheduleButton.dataset.taskName = entry.name;
+        scheduleButton.title = `Schedule ${entry.displayName}`;
+        scheduleButton.setAttribute("aria-label", `Schedule ${entry.displayName}`);
+        scheduleButton.innerHTML = `<i data-lucide="clock-3" aria-hidden="true"></i>`;
+        scheduleButton.addEventListener("click", () => window.LibrarySchedulesUI?.openFor(entry));
+        content.appendChild(scheduleButton);
+
         item.appendChild(content);
 
         libraryTaskList.appendChild(item);
       }
       replaceLucideIcons(libraryTaskList);
+      window.LibrarySchedulesUI?.refreshButtons();
     }
 
     function syncBaseBranchClearState() {
@@ -5891,13 +5933,13 @@
       return payload;
     }
 
-    function libraryPayload() {
+    function libraryPayload(taskName = selectedLibraryTaskName()) {
       const repo = normalizeRepoValue(libraryRepoInput.value) || defaultRepository();
       if (!repo) {
         throw new Error("Repository is required.");
       }
 
-      const libraryTaskName = selectedLibraryTaskName();
+      const libraryTaskName = taskName;
       if (!libraryTaskName) {
         throw new Error("Select a library task.");
       }
@@ -12640,5 +12682,6 @@
     loadInitial();
     startStream();
   </script>
+  <script src="/static/library-schedules.js"></script>
 </body>
 </html>

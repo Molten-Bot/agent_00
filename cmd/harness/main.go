@@ -36,6 +36,7 @@ const gitHubCLIPackageLabel = "github-cli (gh)"
 const gitHubCLIAuthRecommendation = "Run `gh auth login` (the GitHub CLI binary from the `github-cli` package) or set GH_TOKEN before running tasks."
 const followUpTaskLogArchiveSubdir = "followup"
 const localSubmitSource = "local_submit"
+const libraryScheduleSource = "library_schedule"
 const reviewWatchSource = "github_review_watch"
 const prReviewFeedbackSource = "pr_review_feedback"
 const rerunSource = "rerun"
@@ -321,7 +322,7 @@ func runServer(args []string) int {
 		if force {
 			dedupeKey = ""
 		}
-		allowCompletedDuplicate := source == rerunSource
+		allowCompletedDuplicate := source == rerunSource || source == libraryScheduleSource
 		if dedupeKey != "" {
 			if duplicate, state, duplicateOf := localSubmitDeduper.Check(dedupeKey, allowCompletedDuplicate); duplicate {
 				daemonLogger(
@@ -729,6 +730,22 @@ func runServer(args []string) int {
 				daemonLogger("library.usage status=warn task=%s err=%q", runCfg.LibraryTaskName, err)
 			}
 		}
+
+		schedules := &localruntime.LibrarySchedules{
+			Path: cfg.RuntimeConfigPath, Init: cfg, Logf: daemonLogger,
+			Submit: func(reqCtx context.Context, runCfg config.Config) (string, error) {
+				id, err := enqueueLocalRun(reqCtx, runCfg, true, libraryScheduleSource, false)
+				if err == nil {
+					recordLibraryUsage(runCfg)
+				}
+				return id, err
+			},
+			Active: func(schedule localruntime.LibrarySchedule) bool {
+				return libraryScheduleActive(monitorBroker, schedule)
+			},
+		}
+		uiServer.LibrarySchedules = schedules
+		go schedules.Run(ctx)
 		uiServer.SubmitLocalPrompt = func(reqCtx context.Context, body []byte) (string, error) {
 			runCfg, err := localruntime.ParseRunConfigJSON(body)
 			if err != nil {
@@ -2029,7 +2046,7 @@ func taskStartSourceForSubmission(source string, runCfg config.Config) string {
 	switch strings.TrimSpace(source) {
 	case reviewWatchSource, prReviewFeedbackSource:
 		return "review"
-	case localSubmitSource:
+	case localSubmitSource, libraryScheduleSource:
 		if strings.TrimSpace(runCfg.LibraryTaskName) != "" {
 			return "library"
 		}

@@ -8430,3 +8430,44 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
     flex-direction: column;
   }
 }
+
+.library-schedule-toolbar,
+.library-schedule-actions,
+.library-schedule-interval,
+.library-schedule-range {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.library-schedule-toolbar { margin-bottom: 12px; }
+.library-schedule-toolbar svg,
+.library-schedule-actions svg { width: 16px; height: 16px; }
+.library-schedule-modal {
+  color: var(--text);
+  background: var(--surface-auth-panel-bg);
+  border: 1px solid var(--surface-auth-panel-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--surface-auth-panel-shadow);
+  width: min(560px, calc(100vw - 32px));
+  max-height: 85vh;
+  padding: 0;
+}
+.library-schedule-modal::backdrop {
+  background: var(--surface-auth-backdrop);
+  backdrop-filter: blur(8px);
+}
+.library-schedule-body { padding: 16px; }
+.library-schedule-copy { color: var(--muted); font-size: .82rem; line-height: 1.5; overflow-wrap: anywhere; }
+.library-schedule-row { display: flex; align-items: center; gap: 8px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.library-schedule-row > div { flex: 1; min-width: 0; }
+.library-schedule-row strong { font-size: .9rem; }
+.library-schedule-row button { flex-shrink: 0; }
+.library-schedule-modal h3 { margin: 12px 0 6px; font-size: 1rem; }
+.library-schedule-interval { margin-top: 24px; font-weight: 600; font-size: .9rem; }
+#library-schedule-hours { display: block; width: 100%; margin: 16px 0 8px; accent-color: var(--accent); }
+.library-schedule-range { color: var(--muted); font-size: .72rem; }
+.library-schedule-actions { margin-top: 24px; flex-wrap: wrap; justify-content: flex-end; }
+.library-schedule-task-button.is-scheduled { color: var(--accent); border-color: currentColor; }
+.library-schedule-copy.is-error { color: #ef4444; }
+#library-schedule-status:empty { display: none; }
