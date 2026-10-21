@@ -314,6 +314,15 @@
                     <i data-lucide="x" class="prompt-action-icon" aria-hidden="true"></i>
                     <span class="sr-only">Clear</span>
                   </button>
+                  <button
+                    id="library-schedule-trigger"
+                    class="prompt-action-button prompt-action-icon-only library-schedule-task-button hidden"
+                    type="button"
+                    aria-label="Schedule this library task"
+                    title="Schedule this library task">
+                    <i data-lucide="clock-3" class="prompt-action-icon" aria-hidden="true"></i>
+                    <span class="sr-only">Schedule</span>
+                  </button>
                   <button id="local-prompt-submit" class="prompt-action-button prompt-submit" type="submit">
                     <i data-lucide="play" class="prompt-action-icon" aria-hidden="true"></i>
                     <span class="prompt-action-label">Run</span>
@@ -1801,6 +1810,7 @@
     const localPromptForm = document.getElementById("local-prompt-form");
     const localPromptInput = document.getElementById("local-prompt-input");
     const localPromptSubmit = document.getElementById("local-prompt-submit");
+    const libraryScheduleTrigger = document.getElementById("library-schedule-trigger");
     const localPromptStatus = document.getElementById("local-prompt-status");
     const localPromptStatusDefaultText = String(localPromptStatus?.dataset.defaultText || "").trim();
     let localPromptStatusTimer = 0;
@@ -5630,6 +5640,7 @@
         empty.className = "library-task-empty";
         empty.textContent = state.libraryLoadError || "No library tasks are available.";
         libraryTaskList.appendChild(empty);
+        updateLibraryScheduleTrigger(null);
         return;
       }
 
@@ -5703,22 +5714,28 @@
 
         content.appendChild(button);
         content.appendChild(promptLink);
-        const scheduleButton = document.createElement("button");
-        scheduleButton.type = "button";
-        scheduleButton.className = "library-task-option-link library-schedule-task-button";
-        scheduleButton.dataset.taskName = entry.name;
-        scheduleButton.title = `Schedule ${entry.displayName}`;
-        scheduleButton.setAttribute("aria-label", `Schedule ${entry.displayName}`);
-        scheduleButton.innerHTML = `<i data-lucide="clock-3" aria-hidden="true"></i>`;
-        scheduleButton.addEventListener("click", () => window.LibrarySchedulesUI?.openFor(entry));
-        content.appendChild(scheduleButton);
 
         item.appendChild(content);
 
         libraryTaskList.appendChild(item);
       }
       replaceLucideIcons(libraryTaskList);
+      updateLibraryScheduleTrigger(activeEntry);
       window.LibrarySchedulesUI?.refreshButtons();
+    }
+
+    function updateLibraryScheduleTrigger(entry) {
+      if (!libraryScheduleTrigger) return;
+      libraryScheduleTrigger.classList.toggle("hidden", !entry || state.promptMode !== "library");
+      if (!entry) {
+        delete libraryScheduleTrigger.dataset.taskName;
+        libraryScheduleTrigger.onclick = null;
+        return;
+      }
+      libraryScheduleTrigger.dataset.taskName = entry.name;
+      libraryScheduleTrigger.title = `Schedule ${entry.displayName}`;
+      libraryScheduleTrigger.setAttribute("aria-label", `Schedule ${entry.displayName}`);
+      libraryScheduleTrigger.onclick = () => window.LibrarySchedulesUI?.openFor(entry);
     }
 
     function syncBaseBranchClearState() {
@@ -7996,6 +8013,7 @@
       promptRawPanel.classList.toggle("hidden", !isJSON);
       builderImagePasteTarget.classList.toggle("hidden", isLibrary);
       builderImagesClear.classList.toggle("hidden", isLibrary);
+      renderLibraryTaskOptions();
       queuePromptInputSizeSync(isJSON ? localPromptInput : builderPromptInput);
       syncPromptSpeechButton();
       if (!state.promptVisible && !Boolean(state.ui?.automaticMode)) {

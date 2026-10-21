@@ -27,6 +27,7 @@
     document.getElementById("library-schedules-count").textContent = schedules.length ? String(schedules.length) : "";
     const repo = repoDedupeKey(libraryRepoInput.value || defaultRepository());
     for (const button of document.querySelectorAll(".library-schedule-task-button")) {
+      if (!button.dataset.taskName) continue;
       const entry = schedules.find((entry) => entry.libraryTaskName === button.dataset.taskName && repoDedupeKey(entry.repo) === repo);
       button.classList.toggle("is-scheduled", Boolean(entry));
       const label = entry ? `Edit schedule · ${frequency(entry.intervalHours)}` : `Schedule ${titleFor(button.dataset.taskName)}`;
