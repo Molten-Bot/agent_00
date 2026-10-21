@@ -7440,6 +7440,9 @@ func prCreateWithOptionsCommand(repoDir string, cfg config.Config, baseBranch, h
 	if strings.TrimSpace(repo) != "" {
 		args = append(args, "--repo", strings.TrimSpace(repo))
 	}
+	if cfg.Draft {
+		args = append(args, "--draft")
+	}
 	for _, label := range cfg.Labels {
 		if strings.TrimSpace(label) == "" {
 			continue
@@ -7464,6 +7467,9 @@ func prCreateWithoutBaseWithOptionsCommand(repoDir string, cfg config.Config, he
 	}
 	if strings.TrimSpace(repo) != "" {
 		args = append(args, "--repo", strings.TrimSpace(repo))
+	}
+	if cfg.Draft {
+		args = append(args, "--draft")
 	}
 	for _, label := range cfg.Labels {
 		if strings.TrimSpace(label) == "" {

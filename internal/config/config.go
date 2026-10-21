@@ -52,6 +52,7 @@ type Config struct {
 	Labels                   []string      `json:"labels"`
 	GitHubHandle             string        `json:"githubHandle"`
 	Reviewers                []string      `json:"reviewers"`
+	Draft                    bool          `json:"draft,omitempty"`
 	Review                   *ReviewConfig `json:"review,omitempty"`
 }
 
