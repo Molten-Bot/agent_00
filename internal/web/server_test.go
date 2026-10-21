@@ -1894,7 +1894,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, "const branchDirty = String(builderBaseBranch?.value || \"\").trim() !== \"\";") ||
 		!strings.Contains(markup, "const targetSubdirDirty = ![\"\", \".\"].includes(String(builderTargetSubdir?.value || \"\").trim());") ||
 		!strings.Contains(markup, "const rawDirty = String(localPromptInput?.value || \"\").trim() !== \"\";") ||
-		!strings.Contains(markup, "return promptDirty || branchDirty || targetSubdirDirty || rawDirty || hasReviewerDraftToClear() || state.promptImages.length > 0;") {
+		!strings.Contains(markup, "const draftPrDirty = Boolean(builderDraftPr?.checked);") ||
+		!strings.Contains(markup, "return promptDirty || branchDirty || targetSubdirDirty || rawDirty || hasReviewerDraftToClear() || state.promptImages.length > 0 || draftPrDirty;") {
 		t.Fatalf("expected index html to detect clearable builder draft changes")
 	}
 	if !strings.Contains(markup, "function syncBuilderDraftClearState(") ||

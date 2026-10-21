@@ -181,6 +181,14 @@
                     <span class="prompt-label">Directory</span>
                     <input id="builder-target-subdir" class="prompt-control prompt-input" type="text" value="." spellcheck="false" placeholder=".">
                   </label>
+                  <label id="builder-draft-pr-field" class="prompt-field prompt-field-draft-pr">
+                    <span class="prompt-label">Draft</span>
+                    <span class="prompt-draft-toggle">
+                      <input id="builder-draft-pr" class="prompt-draft-toggle-input" type="checkbox" aria-label="Open pull request as a draft">
+                      <i data-lucide="git-pull-request-draft" class="prompt-draft-toggle-icon" aria-hidden="true"></i>
+                      <span class="prompt-draft-toggle-text">Draft PR</span>
+                    </span>
+                  </label>
                 </div>
                 <label id="builder-prompt-field" class="prompt-field">
                   <span class="prompt-label">Prompt</span>
@@ -246,6 +254,14 @@
                   <label class="prompt-field prompt-field-target-subdir">
                     <span class="prompt-label">Directory</span>
                     <input id="library-target-subdir" class="prompt-control prompt-input" type="text" value="." spellcheck="false" placeholder=".">
+                  </label>
+                  <label id="library-draft-pr-field" class="prompt-field prompt-field-draft-pr">
+                    <span class="prompt-label">Draft</span>
+                    <span class="prompt-draft-toggle">
+                      <input id="library-draft-pr" class="prompt-draft-toggle-input" type="checkbox" aria-label="Open pull request as a draft">
+                      <i data-lucide="git-pull-request-draft" class="prompt-draft-toggle-icon" aria-hidden="true"></i>
+                      <span class="prompt-draft-toggle-text">Draft PR</span>
+                    </span>
                   </label>
                 </div>
                 <p class="prompt-field-copy">Library tasks provide a preset prompt, but they still run against the repository, branch, directory, and reviewers you choose here.</p>
@@ -1866,6 +1882,8 @@
     const builderBaseBranch = document.getElementById("builder-base-branch");
     const builderBaseBranchClear = document.getElementById("builder-base-branch-clear");
     const builderTargetSubdir = document.getElementById("builder-target-subdir");
+    const builderDraftPr = document.getElementById("builder-draft-pr");
+    const builderDraftPrToggle = document.querySelector("#builder-draft-pr-field .prompt-draft-toggle");
     const builderReviewerSelect = document.getElementById("builder-reviewer-select");
     const builderReviewerDelete = document.getElementById("builder-reviewer-delete");
     const builderReviewerHistoryField = document.getElementById("builder-reviewer-history-field");
@@ -1882,6 +1900,8 @@
     const libraryRepoInput = document.getElementById("library-repo-input");
     const libraryBaseBranch = document.getElementById("library-base-branch");
     const libraryTargetSubdir = document.getElementById("library-target-subdir");
+    const libraryDraftPr = document.getElementById("library-draft-pr");
+    const libraryDraftPrToggle = document.querySelector("#library-draft-pr-field .prompt-draft-toggle");
     const libraryReviewerSelect = document.getElementById("library-reviewer-select");
     const libraryReviewerDelete = document.getElementById("library-reviewer-delete");
     const libraryReviewerHistoryField = document.getElementById("library-reviewer-history-field");
@@ -4582,7 +4602,8 @@
       const branchDirty = String(builderBaseBranch?.value || "").trim() !== "";
       const targetSubdirDirty = !["", "."].includes(String(builderTargetSubdir?.value || "").trim());
       const rawDirty = String(localPromptInput?.value || "").trim() !== "";
-      return promptDirty || branchDirty || targetSubdirDirty || rawDirty || hasReviewerDraftToClear() || state.promptImages.length > 0;
+      const draftPrDirty = Boolean(builderDraftPr?.checked);
+      return promptDirty || branchDirty || targetSubdirDirty || rawDirty || hasReviewerDraftToClear() || state.promptImages.length > 0 || draftPrDirty;
     }
 
     function syncBuilderDraftClearState() {
@@ -4681,6 +4702,7 @@
       builderReviewerSelect.value = "none";
       libraryReviewerSelect.value = "none";
       renderReviewerHistoryOptions();
+      setDraftPrChecked(false);
       syncBuilderDraftClearState();
     }
 
@@ -5947,6 +5969,9 @@
       if (reviewers.length) {
         payload.reviewers = reviewers;
       }
+      if (builderDraftPr?.checked) {
+        payload.draft = true;
+      }
       return payload;
     }
 
@@ -5978,6 +6003,9 @@
       const reviewers = reviewerListFromValue(libraryReviewerInput.value);
       if (reviewers.length) {
         payload.reviewers = reviewers;
+      }
+      if (libraryDraftPr?.checked) {
+        payload.draft = true;
       }
       return payload;
     }
@@ -6021,6 +6049,7 @@
       builderPromptInput.value = String(payload.prompt || "").trim();
       queuePromptInputSizeSync(builderPromptInput);
       setPromptImages(payload.images);
+      setDraftPrChecked(Boolean(payload.draft));
       syncBuilderDraftClearState();
       state.selectedLibraryTask = String(payload.librarytaskname || payload.libraryTaskName || "").trim();
       renderRepoHistoryOptions();
@@ -6043,6 +6072,14 @@
     function resetBuilderTargetSubdir() {
       builderTargetSubdir.value = ".";
       libraryTargetSubdir.value = ".";
+      syncBuilderDraftClearState();
+    }
+
+    function setDraftPrChecked(checked) {
+      if (builderDraftPr) builderDraftPr.checked = checked;
+      if (libraryDraftPr) libraryDraftPr.checked = checked;
+      builderDraftPrToggle?.classList.toggle("is-active", checked);
+      libraryDraftPrToggle?.classList.toggle("is-active", checked);
       syncBuilderDraftClearState();
     }
 
@@ -12292,6 +12329,12 @@
       builderTargetSubdir.value = libraryTargetSubdir.value;
       syncBuilderDraftClearState();
     });
+    builderDraftPr?.addEventListener("change", () => {
+      setDraftPrChecked(builderDraftPr.checked);
+    });
+    libraryDraftPr?.addEventListener("change", () => {
+      setDraftPrChecked(libraryDraftPr.checked);
+    });
     builderPromptInput.addEventListener("paste", handlePromptImagePaste);
     builderImagePasteTarget.addEventListener("paste", handlePromptImagePaste);
     builderImagesClear.addEventListener("click", clearBuilderPromptDraft);
@@ -12664,6 +12707,7 @@
     libraryBaseBranch.value = builderBaseBranch.value;
     libraryTargetSubdir.value = builderTargetSubdir.value;
     libraryReviewerInput.value = builderReviewerInput.value;
+    setDraftPrChecked(Boolean(builderDraftPr?.checked));
     scheduleTaskTimingRefresh();
     pruneRepoHistoryToLoadedGitHubRepos();
     renderRepoHistoryOptions();

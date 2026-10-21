@@ -6055,6 +6055,28 @@ func TestPRCreateCommandsEnforceStandardBodyFormat(t *testing.T) {
 	}
 }
 
+func TestPRCreateCommandsIncludeDraftFlagWhenRequested(t *testing.T) {
+	t.Parallel()
+
+	cfg := sampleConfig()
+
+	notDraft := prCreateCommand("/tmp/repo", cfg, "topic-branch")
+	if _, ok := flagValue(notDraft.Args, "--draft"); ok {
+		t.Fatalf("pr create args unexpectedly included --draft: %v", notDraft.Args)
+	}
+
+	cfg.Draft = true
+	draft := prCreateCommand("/tmp/repo", cfg, "topic-branch")
+	if !slices.Contains(draft.Args, "--draft") {
+		t.Fatalf("pr create args missing --draft: %v", draft.Args)
+	}
+
+	draftNoBase := prCreateWithoutBaseCommand("/tmp/repo", cfg, "topic-branch")
+	if !slices.Contains(draftNoBase.Args, "--draft") {
+		t.Fatalf("pr create without base args missing --draft: %v", draftNoBase.Args)
+	}
+}
+
 func TestAgentCommandWithOptionsUsesConfiguredRuntime(t *testing.T) {
 	t.Parallel()
 
