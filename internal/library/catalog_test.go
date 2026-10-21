@@ -99,14 +99,20 @@ func TestDefaultLibraryJSONFilesHaveCanonicalShape(t *testing.T) {
 
 		// "prTitle" is deliberately absent from default library JSON: every
 		// default task sets displayName, so libraryTaskPRTitle always derives
-		// the title from prTitlePrefix+displayName, never from a stored
-		// per-task value. Assert the derived title directly instead.
+		// the title from prTitlePrefixFor(commitMessage)+displayName, never
+		// from a stored per-task value. Assert the derived title directly.
 		task, ok := catalog.Task(taskName)
 		if !ok {
 			t.Errorf("%s: catalog missing loaded task %q", path, taskName)
 			continue
 		}
-		if got, want := task.PRTitle, prTitlePrefix+strings.TrimSpace(displayName); got != want {
+		var commitMessage string
+		if err := json.Unmarshal(fields["commitMessage"], &commitMessage); err != nil {
+			t.Errorf("%s: commitMessage must be a string: %v", path, err)
+			continue
+		}
+		want := prTitlePrefixFor(commitMessage) + strings.TrimSpace(displayName)
+		if got := task.PRTitle; got != want {
 			t.Errorf("%s: PRTitle = %q, want %q", path, got, want)
 		}
 	}
@@ -398,18 +404,51 @@ func TestExpandRunConfigUsesRepoAndBranchInputs(t *testing.T) {
 	}
 }
 
-func TestDecodeTaskDefinitionBuildsPRTitleFromDisplayName(t *testing.T) {
+func TestDecodeTaskDefinitionBuildsPRTitleFromDisplayNameAndCommitMessageType(t *testing.T) {
 	t.Parallel()
 
 	task, err := decodeTaskDefinition("tasks.json", "reduce-codebase-centralize-classes", []byte(`{
   "displayName": "Reduce Codebase and Centralize Classes",
   "prompt": "Reduce the codebase.",
-  "prTitle": "chore(agent_00): reduce-codebase-centralize-classes"
+  "commitMessage": "refactor: reduce codebase and centralize classes"
 }`))
 	if err != nil {
 		t.Fatalf("decodeTaskDefinition() error = %v", err)
 	}
-	if got, want := task.PRTitle, "chore(agent_00): Reduce Codebase and Centralize Classes"; got != want {
+	if got, want := task.PRTitle, "refactor(agent_00): Reduce Codebase and Centralize Classes"; got != want {
+		t.Fatalf("PRTitle = %q, want %q", got, want)
+	}
+}
+
+func TestDecodeTaskDefinitionFallsBackToChoreForUnrecognizedCommitMessageType(t *testing.T) {
+	t.Parallel()
+
+	task, err := decodeTaskDefinition("tasks.json", "google-tags", []byte(`{
+  "displayName": "Google Tag Review",
+  "prompt": "Review Google tags.",
+  "commitMessage": "Add Google tag review library task"
+}`))
+	if err != nil {
+		t.Fatalf("decodeTaskDefinition() error = %v", err)
+	}
+	if got, want := task.PRTitle, "chore(agent_00): Google Tag Review"; got != want {
+		t.Fatalf("PRTitle = %q, want %q", got, want)
+	}
+}
+
+func TestDecodeTaskDefinitionExplicitPRTitleOverridesDisplayName(t *testing.T) {
+	t.Parallel()
+
+	task, err := decodeTaskDefinition("tasks.json", "custom-task", []byte(`{
+  "displayName": "Custom Task",
+  "prompt": "Do work.",
+  "commitMessage": "fix: do the thing",
+  "prTitle": "fix(MK-1234): do the thing"
+}`))
+	if err != nil {
+		t.Fatalf("decodeTaskDefinition() error = %v", err)
+	}
+	if got, want := task.PRTitle, "fix(MK-1234): do the thing"; got != want {
 		t.Fatalf("PRTitle = %q, want %q", got, want)
 	}
 }
@@ -496,7 +535,7 @@ func TestDefaultCatalogIncludesReduceCodebaseCentralizeClassesTask(t *testing.T)
 	if !strings.Contains(strings.ToLower(task.Prompt), "avoid regressions") {
 		t.Fatalf("prompt = %q, want regression-prevention guidance", task.Prompt)
 	}
-	if got, want := task.PRTitle, "chore(agent_00): Reduce Codebase and Centralize Classes"; got != want {
+	if got, want := task.PRTitle, "refactor(agent_00): Reduce Codebase and Centralize Classes"; got != want {
 		t.Fatalf("PRTitle = %q, want %q", got, want)
 	}
 }
@@ -529,7 +568,7 @@ func TestDefaultCatalogIncludesFixPRCITestsTask(t *testing.T) {
 			t.Fatalf("prompt = %q, want %q guidance", task.Prompt, want)
 		}
 	}
-	if got, want := task.PRTitle, "chore(agent_00): Fix PR CI Test Failures"; got != want {
+	if got, want := task.PRTitle, "fix(agent_00): Fix PR CI Test Failures"; got != want {
 		t.Fatalf("PRTitle = %q, want %q", got, want)
 	}
 }
@@ -560,7 +599,7 @@ func TestDefaultCatalogIncludesMovePageCSSToGlobalCSSTask(t *testing.T) {
 			t.Fatalf("prompt = %q, want %q guidance", task.Prompt, want)
 		}
 	}
-	if got, want := task.PRTitle, "chore(agent_00): Move Page CSS to Global CSS"; got != want {
+	if got, want := task.PRTitle, "refactor(agent_00): Move Page CSS to Global CSS"; got != want {
 		t.Fatalf("PRTitle = %q, want %q", got, want)
 	}
 }
@@ -605,7 +644,7 @@ func TestDefaultCatalogIncludesAgentsMDGuardrailsTask(t *testing.T) {
 			t.Fatalf("prompt = %q, want %q guidance", task.Prompt, want)
 		}
 	}
-	if got, want := task.PRTitle, "chore(agent_00): AGENTS.md improvements by Railsmith"; got != want {
+	if got, want := task.PRTitle, "docs(agent_00): AGENTS.md improvements by Railsmith"; got != want {
 		t.Fatalf("PRTitle = %q, want %q", got, want)
 	}
 }

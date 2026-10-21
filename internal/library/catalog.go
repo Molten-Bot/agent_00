@@ -18,20 +18,57 @@ const DefaultDir = "library"
 const (
 	catalogDirEnv = "HARNESS_LIBRARY_DIR"
 	agentsSeedEnv = "HARNESS_AGENTS_SEED_PATH"
-	// prTitlePrefix is a fixed conventional-commit type+scope applied to every
-	// default library task's PR title, regardless of that task's own
-	// commitMessage type. The "agent_00" scope is this harness's own project
-	// identifier, not a downstream repo's issue-tracker scope: repos whose own
+	// prTitleScope is this harness's own project identifier, used as the
+	// conventional-commit scope on every generated default library PR title.
+	// It is not a downstream repo's issue-tracker scope: repos whose own
 	// PR-title gate enforces a different type/scope allow-list (e.g. a
-	// ticket-ID pattern with requireScope) will still reject this default and
-	// need an explicit prTitle override on the run config for that repo.
-	//
-	// Default library task JSON files intentionally omit "prTitle": since
-	// every default task sets displayName, libraryTaskPRTitle below always
-	// derives the title from it, so a per-task "prTitle" value would be
-	// inert and could silently drift from the title's real type/scope.
-	prTitlePrefix = "chore(agent_00): "
+	// ticket-ID pattern with requireScope) will still reject this default.
+	// A catalog task loaded from a custom HARNESS_LIBRARY_DIR can override
+	// the whole title for such a repo by setting an explicit "prTitle" (see
+	// libraryTaskPRTitle), since that value now always wins.
+	prTitleScope        = "agent_00"
+	prTitleFallbackType = "chore"
 )
+
+// conventionalCommitTypes is the set of conventional-commit types this
+// harness recognizes when deriving a PR title type from a task's own
+// commitMessage. Keep in sync with the types actually used across
+// library/*.json commitMessage values.
+var conventionalCommitTypes = map[string]struct{}{
+	"build":    {},
+	"chore":    {},
+	"ci":       {},
+	"docs":     {},
+	"feat":     {},
+	"fix":      {},
+	"perf":     {},
+	"refactor": {},
+	"revert":   {},
+	"security": {},
+	"style":    {},
+	"test":     {},
+}
+
+// commitMessageType extracts the conventional-commit type prefix (the word
+// before the first ":") from a task's commitMessage, so the generated PR
+// title's type matches what the task itself declares instead of always
+// being "chore". Falls back to prTitleFallbackType when commitMessage has no
+// recognized type prefix (e.g. "Add Google tag review library task").
+func commitMessageType(commitMessage string) string {
+	prefix, _, ok := strings.Cut(commitMessage, ":")
+	if !ok {
+		return prTitleFallbackType
+	}
+	candidate := strings.ToLower(strings.TrimSpace(prefix))
+	if _, known := conventionalCommitTypes[candidate]; !known {
+		return prTitleFallbackType
+	}
+	return candidate
+}
+
+func prTitlePrefixFor(commitMessage string) string {
+	return fmt.Sprintf("%s(%s): ", commitMessageType(commitMessage), prTitleScope)
+}
 
 // TaskDefinition is one callable library entry loaded from ./library/*.json.
 type TaskDefinition struct {
@@ -345,19 +382,22 @@ func decodeTaskDefinition(path, key string, data []byte) (TaskDefinition, error)
 	return task, nil
 }
 
-// libraryTaskPRTitle always rebuilds the title from DisplayName when one is
-// set, so a task's own "prTitle" field is overridden for every default
-// library task (all of which set displayName and so omit "prTitle" from
-// their JSON entirely — see prTitlePrefix). An explicit "prTitle" only takes
-// effect for custom, non-catalog task definitions that omit displayName.
+// libraryTaskPRTitle honors an explicit "prTitle" first, so a custom catalog
+// task (loaded from HARNESS_LIBRARY_DIR) can fully override the generated
+// type/scope for a downstream repo whose PR-title gate needs something other
+// than "<commitMessage-type>(agent_00): <displayName>". Default library task
+// JSON files intentionally omit "prTitle" (enforced by
+// TestDefaultLibraryJSONFilesHaveCanonicalShape) and so always fall through
+// to the derived title below.
 func libraryTaskPRTitle(task TaskDefinition) string {
-	if task.DisplayName != "" {
-		return prTitlePrefix + task.DisplayName
-	}
 	if task.PRTitle != "" {
 		return task.PRTitle
 	}
-	return prTitlePrefix + task.Name
+	prefix := prTitlePrefixFor(task.CommitMessage)
+	if task.DisplayName != "" {
+		return prefix + task.DisplayName
+	}
+	return prefix + task.Name
 }
 
 func resolveCatalogDir(dir string) string {
