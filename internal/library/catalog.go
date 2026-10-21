@@ -18,6 +18,13 @@ const DefaultDir = "library"
 const (
 	catalogDirEnv = "HARNESS_LIBRARY_DIR"
 	agentsSeedEnv = "HARNESS_AGENTS_SEED_PATH"
+	// prTitlePrefix is a fixed conventional-commit type+scope applied to every
+	// default library task's PR title, regardless of that task's own
+	// commitMessage type. The "agent_00" scope is this harness's own project
+	// identifier, not a downstream repo's issue-tracker scope: repos whose own
+	// PR-title gate enforces a different type/scope allow-list (e.g. a
+	// ticket-ID pattern with requireScope) will still reject this default and
+	// need an explicit prTitle override on the run config for that repo.
 	prTitlePrefix = "chore(agent_00): "
 )
 
@@ -333,6 +340,14 @@ func decodeTaskDefinition(path, key string, data []byte) (TaskDefinition, error)
 	return task, nil
 }
 
+// libraryTaskPRTitle always rebuilds the title from DisplayName when one is
+// set, so a task's own "prTitle" field is overridden for every default
+// library task (all of which set displayName). That JSON field is kept only
+// as human-readable bookkeeping in sync with this formula (enforced by
+// TestDefaultLibraryJSONFilesHaveCanonicalShape); editing it per task has no
+// runtime effect and cannot change the title's type/scope. An explicit
+// "prTitle" only takes effect for custom, non-catalog task definitions that
+// omit displayName.
 func libraryTaskPRTitle(task TaskDefinition) string {
 	if task.DisplayName != "" {
 		return prTitlePrefix + task.DisplayName
