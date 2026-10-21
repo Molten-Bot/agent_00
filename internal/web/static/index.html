@@ -4602,7 +4602,8 @@
       const branchDirty = String(builderBaseBranch?.value || "").trim() !== "";
       const targetSubdirDirty = !["", "."].includes(String(builderTargetSubdir?.value || "").trim());
       const rawDirty = String(localPromptInput?.value || "").trim() !== "";
-      return promptDirty || branchDirty || targetSubdirDirty || rawDirty || hasReviewerDraftToClear() || state.promptImages.length > 0;
+      const draftPrDirty = Boolean(builderDraftPr?.checked);
+      return promptDirty || branchDirty || targetSubdirDirty || rawDirty || hasReviewerDraftToClear() || state.promptImages.length > 0 || draftPrDirty;
     }
 
     function syncBuilderDraftClearState() {
@@ -6079,6 +6080,7 @@
       if (libraryDraftPr) libraryDraftPr.checked = checked;
       builderDraftPrToggle?.classList.toggle("is-active", checked);
       libraryDraftPrToggle?.classList.toggle("is-active", checked);
+      syncBuilderDraftClearState();
     }
 
     function clearBuilderPromptDraft() {
