@@ -1292,6 +1292,24 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	}
 }
 
+func TestClaudeSessionLimitDoesNotQueueCodeRepair(t *testing.T) {
+	t.Parallel()
+	for _, message := range []string{
+		"You've hit your session limit · resets 7:10pm (UTC)",
+		"You’ve hit your session limit · resets 7:10pm (UTC)",
+	} {
+		for _, source := range []string{localSubmitSource, noChangesFollowUpSource, reviewWatchSource} {
+			result := app.Result{
+				ExitCode: app.ExitCodex,
+				Err:      fmt.Errorf("claude: run codex [sandbox -- claude --print --]: exit status 1 (%s)", message),
+			}
+			if ok, reason := shouldQueueFailureFollowUp(source, result); ok || !strings.Contains(reason, "session limit") {
+				t.Fatalf("shouldQueueFailureFollowUp(%s) = (%v, %q), want session limit blocker", source, ok, reason)
+			}
+		}
+	}
+}
+
 func TestApplyDefaultAgentRuntimeConfig(t *testing.T) {
 	t.Parallel()
 

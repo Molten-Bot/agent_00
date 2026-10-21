@@ -1,13 +1,17 @@
 package agentruntime
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Molten-Bot/agent_00/internal/execx"
 )
 
 func TestTaskWorkspaceIsOnlyWritableRoot(t *testing.T) {
@@ -320,13 +324,43 @@ func TestBuildCommandClaude(t *testing.T) {
 		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
 		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
 		"-c", "sandbox_workspace_write.network_access=true", "--", "claude",
-		"--print", "--output-format", "text", "--dangerously-skip-permissions", "--add-dir", "/tmp/run", "--", "fix bug",
+		"--print", "--output-format", "text", "--dangerously-skip-permissions", "--add-dir", "/tmp/run", "--",
 	}
 	if cmd.Name != "codex" || cmd.Dir != "/tmp/repo" || !reflect.DeepEqual(cmd.Args, wantArgs) {
 		t.Fatalf("unexpected claude command: %+v", cmd)
 	}
-	if cmd.Stdin != "" {
-		t.Fatalf("Stdin = %q, want empty", cmd.Stdin)
+	if cmd.Stdin != "fix bug" {
+		t.Fatalf("Stdin = %q, want prompt", cmd.Stdin)
+	}
+}
+
+func TestClaudePromptStdinPreservesLargePacketsAndFailureDetail(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX shell")
+	}
+	root := t.TempDir()
+	script := filepath.Join(root, "claude-probe")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ncat > received-prompt\nprintf \"You've hit your session limit · resets 7:10pm (UTC)\\n\"\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Exceed Linux's per-argument limit and retain leading flags/newlines.
+	prompt := "--private-task-context\n" + strings.Repeat("review packet\n", 20000)
+	cmd, err := buildClaudeCommand(root, prompt, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Name = script
+	_, err = (execx.OSRunner{}).Run(context.Background(), cmd)
+	if err == nil || !strings.Contains(err.Error(), "You've hit your session limit") {
+		t.Fatalf("expected provider failure detail, got %v", err)
+	}
+	if strings.Contains(err.Error(), "private-task-context") || strings.Contains(err.Error(), "review packet") {
+		t.Fatal("command error exposed task input")
+	}
+	got, readErr := os.ReadFile(filepath.Join(root, "received-prompt"))
+	if readErr != nil || string(got) != prompt {
+		t.Fatalf("stdin packet was not delivered intact: %v", readErr)
 	}
 }
 

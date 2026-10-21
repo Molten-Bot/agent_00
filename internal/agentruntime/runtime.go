@@ -363,8 +363,10 @@ func buildClaudeCommand(targetDir, prompt string, opts RunOptions) (execx.Comman
 		}
 		args = append(args, "--add-dir", dir)
 	}
-	args = append(args, "--", prompt)
-	return execx.Command{Dir: targetDir, Args: args, Env: append([]string(nil), opts.Env...)}, nil
+	// Keep task content out of argv: subprocess errors include the arguments,
+	// and large review packets can exceed the OS per-argument size limit.
+	args = append(args, "--")
+	return execx.Command{Dir: targetDir, Args: args, Env: append([]string(nil), opts.Env...), Stdin: prompt}, nil
 }
 
 func countNonEmptyStrings(values []string) int {

@@ -109,3 +109,43 @@ func TestCodexTaskStartup(t *testing.T) {
 	}
 	t.Log("authenticated Codex task executed shell commands and produced the verified artifact")
 }
+
+// Uses the same isolated IO environment and sandbox as a normal Claude task.
+func TestClaudeTaskStartup(t *testing.T) {
+	if os.Getenv("HARNESS_TEST_CLAUDE_TASK") != "1" {
+		t.Skip("set HARNESS_TEST_CLAUDE_TASK=1 with an authenticated Claude CLI to run a real task")
+	}
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.Mkdir(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "input.txt"), []byte("claude-startup-ok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env, err := prepareAgentIOEnv(root, os.Environ())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := agentruntime.Resolve(agentruntime.HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	h := New(execx.OSRunner{})
+	result, err := h.runCodexWithHeartbeat(ctx, runtime, repo,
+		"Local startup smoke test. Use the shell tool to run `cat input.txt > startup-smoke.txt`, then verify the output. Do not inspect credentials, use network tools, commit, push or create a PR. Finish with claude-startup-ok.",
+		codexRunOptions{WorkspaceDir: root, Env: env}, agentInvocationLogMetadata{})
+	if err != nil {
+		t.Fatalf("Claude startup failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(repo, "startup-smoke.txt"))
+	if err != nil || string(data) != "claude-startup-ok\n" {
+		t.Fatalf("Claude did not produce the expected artifact: %v", err)
+	}
+	if !strings.Contains(result.Stdout, "claude-startup-ok") {
+		t.Fatal("Claude did not confirm completion")
+	}
+	t.Log("authenticated Claude task executed shell commands and produced the verified artifact")
+}

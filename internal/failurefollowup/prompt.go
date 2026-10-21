@@ -66,6 +66,8 @@ var nonRemediableFailureMarkers = []string{
 	"sandbox namespace creation denied",
 	"workspace storage",
 	"quota exceeded",
+	"you've hit your session limit",
+	"you’ve hit your session limit",
 	"insufficient_quota",
 	"billing",
 	"organization has disabled claude subscription access",

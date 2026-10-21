@@ -95,9 +95,6 @@ func commandsEqual(a, b execx.Command) bool {
 	if a.Name != b.Name || a.Dir != b.Dir {
 		return false
 	}
-	if isClaudePromptArgCommand(a) && isClaudePromptArgCommand(b) {
-		return reflect.DeepEqual(a.Args[:len(a.Args)-1], b.Args[:len(b.Args)-1])
-	}
 	return reflect.DeepEqual(a.Args, b.Args)
 }
 
@@ -113,14 +110,6 @@ func envContainsKey(environ []string, key string) bool {
 
 func isCloneGitCommand(cmd execx.Command) bool {
 	return cmd.Name == "git" && len(cmd.Args) > 0 && cmd.Args[0] == "clone"
-}
-
-func isClaudePromptArgCommand(cmd execx.Command) bool {
-	start := slices.Index(cmd.Args, "--print")
-	return start >= 0 && len(cmd.Args) >= start+5 &&
-		cmd.Args[start+1] == "--output-format" &&
-		cmd.Args[start+2] == "text" &&
-		cmd.Args[start+3] == "--dangerously-skip-permissions"
 }
 
 func isImplicitBranchFreshnessCommand(cmd execx.Command) bool {
@@ -6083,11 +6072,8 @@ func TestAgentCommandWithOptionsUsesConfiguredRuntime(t *testing.T) {
 	if claudeCmd.Name != "codex" || claudeCmd.Dir != targetDir {
 		t.Fatalf("unexpected claude command: %+v", claudeCmd)
 	}
-	if got, want := claudeCmd.Args[len(claudeCmd.Args)-1], withCompletionGatePrompt(prompt); got != want {
-		t.Fatalf("claude prompt arg = %q, want completion-gated prompt", got)
-	}
-	if claudeCmd.Stdin != "" {
-		t.Fatalf("claude stdin = %q, want empty", claudeCmd.Stdin)
+	if got, want := claudeCmd.Stdin, withCompletionGatePrompt(prompt); got != want {
+		t.Fatalf("claude stdin = %q, want completion-gated prompt", got)
 	}
 
 	claudeImageCmd, err := agentCommandWithOptions(claudeRuntime, targetDir, prompt, codexRunOptions{
@@ -6360,6 +6346,16 @@ func TestAgentOutputCitesGeneralNoChangeEvidenceForNaturalPhrasing(t *testing.T)
 		{
 			name:   "zero file diff with file evidence",
 			output: "No PR needed — zero file diff, `releases.json` is unchanged.",
+			want:   true,
+		},
+		{
+			name:   "read only investigation with auxiliary verb",
+			output: "No changes are required for this investigation. Verified directly from `go.mod` (lines 1–3), which already declares the module path and Go version as requested.",
+			want:   true,
+		},
+		{
+			name:   "singular no change with auxiliary verb",
+			output: "No change is needed; `go.mod` already declares the requested Go version.",
 			want:   true,
 		},
 		{
