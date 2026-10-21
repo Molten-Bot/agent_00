@@ -3,7 +3,7 @@
 
   const THEME_KEY = "hubui.theme";
   const THEME_MODES = ["light", "dark", "night", "pink"];
-  const DEFAULT_THEME_MODE = "light";
+  const DEFAULT_THEME_MODE = "pink";
   const HOME_PATH = "/";
   const THEME_ICON_NAMES = {
     light: "sun",

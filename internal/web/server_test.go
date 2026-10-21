@@ -944,8 +944,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "taskPanelTitle.textContent = \"Current Work\";") || !strings.Contains(markup, "taskFullscreenPanelTitle.textContent = \"Current Work\";") {
 		t.Fatalf("expected index html to keep task panel labels anchored to Current Work across view states")
 	}
-	if !strings.Contains(markup, `<html lang="en" class="light">`) {
-		t.Fatalf("expected index html to default to light theme class")
+	if !strings.Contains(markup, `<html lang="en" class="pink">`) {
+		t.Fatalf("expected index html to default to pink theme class")
 	}
 	if strings.Contains(markup, `max-w-[1500px]`) {
 		t.Fatalf("expected index page width to be owned by the global app stylesheet")
@@ -2197,8 +2197,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `const THEME_MODES = ["light", "dark", "night", "pink"];`) {
 		t.Fatalf("expected index html to include pink in the theme selector cycle")
 	}
-	if !strings.Contains(markup, `const DEFAULT_THEME_MODE = "light";`) {
-		t.Fatalf("expected index html to define light as the default theme mode")
+	if !strings.Contains(markup, `const DEFAULT_THEME_MODE = "pink";`) {
+		t.Fatalf("expected index html to define pink as the default theme mode")
 	}
 	if !strings.Contains(markup, `const GOOGLE_ANALYTICS_MEASUREMENT_ID = "G-BY33RFG2WB";`) {
 		t.Fatalf("expected index html to expose the google analytics measurement id constant to the usage tracker")

@@ -36,7 +36,7 @@ const bottomDockPlaceholder = "<!-- bottom-dock -->"
 const taskSourceHeader = "X-Agent-Task-Source"
 
 var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype html>
-<html lang="en" class="light">
+<html lang="en" class="pink">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
