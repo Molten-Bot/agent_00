@@ -6341,6 +6341,49 @@ func TestAgentOutputCitesGeneralNoChangeEvidenceForVerifiedBehavior(t *testing.T
 	}
 }
 
+func TestAgentOutputCitesGeneralNoChangeEvidenceForNaturalPhrasing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{
+			name: "secret sweep found nothing to change",
+			output: strings.Join([]string{
+				"Done sweep. Full repo + git history scan, no code change needed — current tree already clean.",
+				"Checked `.gitleaks.toml`, `apps/ube/.env.local`, `.yarnrc.yml`; no real secret needs removal right now. Diff: none.",
+			}, "\n"),
+			want: true,
+		},
+		{
+			name:   "zero file diff with file evidence",
+			output: "No PR needed — zero file diff, `releases.json` is unchanged.",
+			want:   true,
+		},
+		{
+			name:   "no change claim without file evidence",
+			output: "No code change needed. Tree already clean.",
+		},
+		{
+			name:   "clean used without a no-change claim",
+			output: "The lint output looks clean; `releases.json` changes are still required.",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := agentOutputCitesGeneralNoChangeEvidence(execx.Result{Stdout: tt.output})
+			if got != tt.want {
+				t.Fatalf("agentOutputCitesGeneralNoChangeEvidence() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRunAppliesResponseModeAcrossNonCodexRuntimes(t *testing.T) {
 	t.Parallel()
 
