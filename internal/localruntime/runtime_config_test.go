@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -55,7 +54,7 @@ func TestRuntimeConfigLibraryTaskUsageCount(t *testing.T) {
 func TestSaveRuntimeConfigClaudeOAuthTokenRejectsEmptyToken(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	if err := SaveRuntimeConfigClaudeOAuthToken(path, InitConfig{}, " \t "); err == nil {
 		t.Fatal("SaveRuntimeConfigClaudeOAuthToken(empty) error = nil, want error")
 	}
@@ -64,7 +63,7 @@ func TestSaveRuntimeConfigClaudeOAuthTokenRejectsEmptyToken(t *testing.T) {
 func TestSaveRuntimeConfigClaudeOAuthTokenRejectsMalformedConfig(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -89,21 +88,6 @@ func TestDefaultRuntimeConfigPath(t *testing.T) {
 	}
 }
 
-func TestRuntimeConfigCandidatePathsDefaultIncludesLegacyLocation(t *testing.T) {
-	t.Parallel()
-
-	got := runtimeConfigCandidatePaths("")
-	want := []string{runtimeConfigPath, legacyRuntimeConfigPath}
-	if len(got) != len(want) {
-		t.Fatalf("len(runtimeConfigCandidatePaths()) = %d, want %d (%v)", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("runtimeConfigCandidatePaths()[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-}
-
 func TestResolveRuntimeConfigPathUsesInitSiblingDirectory(t *testing.T) {
 	t.Setenv(runtimeConfigPathEnv, "")
 
@@ -123,12 +107,32 @@ func TestResolveRuntimeConfigPathPrefersEnvOverride(t *testing.T) {
 	}
 }
 
-func TestRuntimeConfigCandidatePathsCustomPathIncludesLegacySibling(t *testing.T) {
-	t.Parallel()
-
-	got := runtimeConfigCandidatePaths("/workspace/config.json")
-	want := []string{"/workspace/config.json", "/workspace/config/config.json"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("runtimeConfigCandidatePaths() = %v, want %v", got, want)
+func TestLoadRuntimeConfigSupportsExplicitExistingDirectory(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv(runtimeConfigPathEnv, "")
+	path := filepath.Join("existing-config", "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":"v1","agent_harness":"claude","scheduler":{"max_parallel":2}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRuntimeConfig(""); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("default load error=%v, want missing new config", err)
+	}
+	cfg, err := LoadRuntimeConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RuntimeConfigPath != path || cfg.AgentHarness != "claude" || cfg.Scheduler.MaxParallel != 2 {
+		t.Fatal("existing config was not preserved")
+	}
+	t.Setenv(runtimeConfigPathEnv, path)
+	cfg, err = LoadRuntimeConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RuntimeConfigPath != path {
+		t.Fatalf("environment override ignored: %s", cfg.RuntimeConfigPath)
 	}
 }

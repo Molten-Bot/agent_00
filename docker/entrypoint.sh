@@ -214,8 +214,8 @@ if [ "${OPENAI_API_KEY:-}" = "" ]; then
     fi
 fi
 
-git config --global user.name "${GIT_USER_NAME:-moltenhub-bot}"
-git config --global user.email "${GIT_USER_EMAIL:-moltenhub-bot@users.noreply.github.com}"
+git config --global user.name "${GIT_USER_NAME:-agent00-bot}"
+git config --global user.email "${GIT_USER_EMAIL:-agent00-bot@users.noreply.github.com}"
 
 if ! git config --global --get-all url."https://github.com/".insteadOf 2>/dev/null | grep -Fxq "git@github.com:"; then
     git config --global --add url."https://github.com/".insteadOf "git@github.com:"

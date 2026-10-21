@@ -14,7 +14,7 @@ func TestLocalConfigDefaultsWithoutRemoteCredentials(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Dispatcher.MaxParallel < 1 || cfg.LogLevel != DefaultLogLevel || cfg.ReviewWatch.ReviewCount() != 0 {
+	if cfg.Scheduler.MaxParallel < 1 || cfg.LogLevel != DefaultLogLevel || cfg.ReviewWatch.ReviewCount() != 0 {
 		t.Fatalf("unexpected local defaults: %#v", cfg)
 	}
 	data, err := json.Marshal(cfg)

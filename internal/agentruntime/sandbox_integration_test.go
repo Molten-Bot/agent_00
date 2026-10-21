@@ -24,7 +24,7 @@ func TestAgentSandboxWriteBoundary(t *testing.T) {
 			tmp := filepath.Join(root, "tmp")
 			persistent := filepath.Join(base, "persistent")
 			sibling := filepath.Join(base, "other-task")
-			sandboxHome := filepath.Join(root, ".moltenhub-agent-io", "config", "sandbox")
+			sandboxHome := filepath.Join(root, ".agent00-agent-io", "config", "sandbox")
 			for _, dir := range []string{repo, tmp, persistent, sibling, sandboxHome} {
 				if err := os.MkdirAll(dir, 0o700); err != nil {
 					t.Fatal(err)

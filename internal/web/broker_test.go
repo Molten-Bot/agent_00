@@ -18,10 +18,10 @@ func TestBrokerTracksTaskLifecycleAndCommandOutput(t *testing.T) {
 	b := NewBroker()
 	requestID := "req-42"
 
-	b.IngestLog("dispatch status=start request_id=req-42 skill=code_for_me repo=git@github.com:acme/repo.git repos=git@github.com:acme/repo.git,git@github.com:acme/repo-two.git")
-	b.IngestLog("dispatch request_id=req-42 stage=codex status=start")
-	b.IngestLog("dispatch request_id=req-42 cmd phase=codex name=codex stream=stdout b64=" + base64.StdEncoding.EncodeToString([]byte("thinking...")))
-	b.IngestLog("dispatch status=completed request_id=req-42 workspace=/tmp/run branch=moltenhub-feature pr_url=https://github.com/acme/repo/pull/99")
+	b.IngestLog("task status=start request_id=req-42 skill=code_for_me repo=git@github.com:acme/repo.git repos=git@github.com:acme/repo.git,git@github.com:acme/repo-two.git")
+	b.IngestLog("task request_id=req-42 stage=codex status=start")
+	b.IngestLog("task request_id=req-42 cmd phase=codex name=codex stream=stdout b64=" + base64.StdEncoding.EncodeToString([]byte("thinking...")))
+	b.IngestLog("task status=completed request_id=req-42 workspace=/tmp/run branch=agent00-feature pr_url=https://github.com/acme/repo/pull/99")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -63,9 +63,9 @@ func TestBrokerTracksLiveAppURLFromTaskLogs(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog("dispatch status=start request_id=req-live skill=code_for_me repo=git@github.com:acme/app.git")
-	b.IngestLog("dispatch request_id=req-live event=live_app_ready live_app_url=http://127.0.0.1:5173")
-	b.IngestLog("dispatch status=completed request_id=req-live workspace=/tmp/run branch=moltenhub-app")
+	b.IngestLog("task status=start request_id=req-live skill=code_for_me repo=git@github.com:acme/app.git")
+	b.IngestLog("task request_id=req-live event=live_app_ready live_app_url=http://127.0.0.1:5173")
+	b.IngestLog("task status=completed request_id=req-live workspace=/tmp/run branch=agent00-app")
 
 	task, ok := b.Task("req-live")
 	if !ok {
@@ -135,14 +135,14 @@ func TestBrokerTracksTaskRuntimeAndSavedTimeStats(t *testing.T) {
 	b.now = func() time.Time { return now }
 
 	b.RecordTaskRunConfig("req-1", []byte(`{"repo":"git@github.com:acme/repo.git","libraryTaskName":"unit-test-coverage","agentHarness":"codex"}`))
-	b.IngestLog("dispatch status=start request_id=req-1 skill=library_task repo=git@github.com:acme/repo.git")
-	b.IngestLog("dispatch request_id=req-1 stage=codex status=start")
+	b.IngestLog("task status=start request_id=req-1 skill=library_task repo=git@github.com:acme/repo.git")
+	b.IngestLog("task request_id=req-1 stage=codex status=start")
 	now = now.Add(2 * time.Minute)
-	b.IngestLog("dispatch status=completed request_id=req-1 workspace=/tmp/run branch=moltenhub-feature")
+	b.IngestLog("task status=completed request_id=req-1 workspace=/tmp/run branch=agent00-feature")
 
 	b.RecordTaskRunConfig("req-2", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"fix tests","agentHarness":"claude"}`))
 	now = now.Add(time.Minute)
-	b.IngestLog("dispatch status=start request_id=req-2 skill=code_for_me repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=start request_id=req-2 skill=code_for_me repo=git@github.com:acme/repo.git")
 	now = now.Add(time.Minute)
 
 	snap := b.Snapshot()
@@ -215,9 +215,9 @@ func TestBrokerTracksReviewRuntimeAsDashboardSavedTime(t *testing.T) {
 		"agentHarness":"codex",
 		"review":{"prNumber":42}
 	}`), "unknown")
-	b.IngestLog("dispatch status=start request_id=req-hub-review skill=library_task repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=start request_id=req-hub-review skill=library_task repo=git@github.com:acme/repo.git")
 	now = now.Add(2 * time.Minute)
-	b.IngestLog("dispatch status=no_changes request_id=req-hub-review workspace=/tmp/review branch=feature pr_url=https://github.com/acme/repo/pull/42")
+	b.IngestLog("task status=no_changes request_id=req-hub-review workspace=/tmp/review branch=feature pr_url=https://github.com/acme/repo/pull/42")
 
 	b.RecordTaskRunConfigWithSource("local-review", []byte(`{
 		"repo":"git@github.com:acme/repo.git",
@@ -267,9 +267,9 @@ func TestBrokerCountsFailedReviewRuntimeAsSavedTime(t *testing.T) {
 		"agentHarness":"codex",
 		"review":{"prNumber":42}
 	}`), "review")
-	b.IngestLog("dispatch status=start request_id=req-review-error skill=library_task repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=start request_id=req-review-error skill=library_task repo=git@github.com:acme/repo.git")
 	now = now.Add(45 * time.Second)
-	b.IngestLog("dispatch status=error request_id=req-review-error error=blocked")
+	b.IngestLog("task status=error request_id=req-review-error error=blocked")
 
 	snap := b.Snapshot()
 	if got, want := snap.Stats.TotalSavedSeconds, 45.0; got != want {
@@ -306,9 +306,9 @@ func TestBrokerTracksRepositoryStatsAndPullRequests(t *testing.T) {
 	}})
 
 	b.RecordTaskRunConfig("req-1", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"ship it"}`))
-	b.IngestLog("dispatch status=start request_id=req-1 repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=start request_id=req-1 repo=git@github.com:acme/repo.git")
 	now = now.Add(2 * time.Minute)
-	b.IngestLog("dispatch status=completed request_id=req-1 pr_url=https://github.com/acme/repo/pull/1")
+	b.IngestLog("task status=completed request_id=req-1 pr_url=https://github.com/acme/repo/pull/1")
 	b.RecordTaskRunConfig("req-2", []byte(`{"repo":"https://github.com/acme/new-repo","prompt":"keep going"}`))
 
 	snap := b.Snapshot()
@@ -445,9 +445,9 @@ func TestBrokerRecordsMergedPRReleaseFromTask(t *testing.T) {
 	b.now = func() time.Time { return now }
 
 	b.RecordTaskRunConfig("req-release", []byte(`{"repo":"git@github.com:acme/repo.git","baseBranch":"main","prompt":"ship release panel","agentHarness":"codex"}`))
-	b.IngestLog("dispatch status=start request_id=req-release repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=start request_id=req-release repo=git@github.com:acme/repo.git")
 	now = now.Add(3 * time.Minute)
-	b.IngestLog("dispatch status=completed request_id=req-release workspace=/tmp/run branch=moltenhub-release pr_url=https://github.com/acme/repo/pull/42")
+	b.IngestLog("task status=completed request_id=req-release workspace=/tmp/run branch=agent00-release pr_url=https://github.com/acme/repo/pull/42")
 
 	task, ok := b.Task("req-release")
 	if !ok {
@@ -483,8 +483,8 @@ func TestBrokerCountsMergedTasksAsCompletedNotActive(t *testing.T) {
 
 	b := NewBroker()
 	b.RecordTaskRunConfig("req-merged", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"ship it"}`))
-	b.IngestLog("dispatch status=start request_id=req-merged repo=git@github.com:acme/repo.git")
-	b.IngestLog("dispatch status=completed request_id=req-merged workspace=/tmp/run branch=moltenhub-ship pr_url=https://github.com/acme/repo/pull/42")
+	b.IngestLog("task status=start request_id=req-merged repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=completed request_id=req-merged workspace=/tmp/run branch=agent00-ship pr_url=https://github.com/acme/repo/pull/42")
 
 	if err := b.MarkTaskPRMerged("req-merged", "2026-05-07T12:04:00Z"); err != nil {
 		t.Fatalf("MarkTaskPRMerged() error = %v", err)
@@ -509,8 +509,8 @@ func TestBrokerNormalizesLegacyOKTerminalStatusToCompleted(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog("dispatch status=start request_id=req-legacy")
-	b.IngestLog("dispatch status=ok request_id=req-legacy workspace=/tmp/run branch=moltenhub-legacy")
+	b.IngestLog("task status=start request_id=req-legacy")
+	b.IngestLog("task status=ok request_id=req-legacy workspace=/tmp/run branch=agent00-legacy")
 
 	snap := b.Snapshot()
 	if got, want := len(snap.Tasks), 1; got != want {
@@ -527,8 +527,8 @@ func TestBrokerDropsEmptyCommandPayloadMarkers(t *testing.T) {
 	b := NewBroker()
 	requestID := "req-empty-b64"
 
-	b.IngestLog("dispatch status=start request_id=" + requestID)
-	b.IngestLog("dispatch request_id=req-empty-b64 cmd phase=codex name=codex stream=stderr b64=")
+	b.IngestLog("task status=start request_id=" + requestID)
+	b.IngestLog("task request_id=req-empty-b64 cmd phase=codex name=codex stream=stderr b64=")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -548,8 +548,8 @@ func TestBrokerDropsInvalidCommandPayloadMarkers(t *testing.T) {
 	b := NewBroker()
 	requestID := "req-invalid-b64"
 
-	b.IngestLog("dispatch status=start request_id=" + requestID)
-	b.IngestLog("dispatch request_id=req-invalid-b64 cmd phase=codex name=codex stream=stderr b64=%%%")
+	b.IngestLog("task status=start request_id=" + requestID)
+	b.IngestLog("task request_id=req-invalid-b64 cmd phase=codex name=codex stream=stderr b64=%%%")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -563,11 +563,11 @@ func TestBrokerDropsInvalidCommandPayloadMarkers(t *testing.T) {
 	}
 }
 
-func TestBrokerTracksDispatcherResourceWindow(t *testing.T) {
+func TestBrokerTracksSchedulerResourceWindow(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog("debug dispatcher status=window state=steady cpu=12.5 memory=48.2 disk_io_mb_s=3.7 allowed=2 max=4 running=1 queue_depth=0")
+	b.IngestLog("debug scheduler status=window state=steady cpu=12.5 memory=48.2 disk_io_mb_s=3.7 allowed=2 max=4 running=1 queue_depth=0")
 
 	snap := b.Snapshot()
 	if got := snap.Resources.CPUPercent; got != 12.5 {
@@ -588,8 +588,8 @@ func TestBrokerCapturesPRURLFromStageLine(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog("dispatch status=start request_id=req-pr skill=code_for_me repo=git@github.com:acme/repo.git")
-	b.IngestLog("dispatch request_id=req-pr stage=pr status=ok pr_url=https://github.com/acme/repo/pull/101")
+	b.IngestLog("task status=start request_id=req-pr skill=code_for_me repo=git@github.com:acme/repo.git")
+	b.IngestLog("task request_id=req-pr stage=pr status=ok pr_url=https://github.com/acme/repo/pull/101")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -604,8 +604,8 @@ func TestBrokerCapturesFirstPRURLFromCompletedPRURLsField(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog("dispatch status=start request_id=req-prs skill=code_for_me repo=git@github.com:acme/repo.git")
-	b.IngestLog("dispatch status=completed request_id=req-prs workspace=/tmp/run branch=moltenhub-feature pr_url= pr_urls=https://github.com/acme/repo-a/pull/101,https://github.com/acme/repo-b/pull/202")
+	b.IngestLog("task status=start request_id=req-prs skill=code_for_me repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=completed request_id=req-prs workspace=/tmp/run branch=agent00-feature pr_url= pr_urls=https://github.com/acme/repo-a/pull/101,https://github.com/acme/repo-b/pull/202")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -620,7 +620,7 @@ func TestBrokerFallsBackToSingleRepoWhenReposFieldMissing(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog("dispatch status=start request_id=req-single skill=code_for_me repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=start request_id=req-single skill=code_for_me repo=git@github.com:acme/repo.git")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -638,7 +638,7 @@ func TestBrokerParsesQuotedErrorText(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog(`dispatch status=error request_id=req-err exit_code=50 err="codex exploded at step two"`)
+	b.IngestLog(`task status=error request_id=req-err exit_code=50 err="codex exploded at step two"`)
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -659,7 +659,7 @@ func TestBrokerParsesQuotedErrorTextWithEscapedQuotes(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog(`dispatch status=error request_id=req-err-escaped exit_code=10 err="decode run config payload: json: unknown field \"branch\""`)
+	b.IngestLog(`task status=error request_id=req-err-escaped exit_code=10 err="decode run config payload: json: unknown field \"branch\""`)
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -674,8 +674,8 @@ func TestBrokerParsesStageErrorText(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog("dispatch status=start request_id=req-stage-err")
-	b.IngestLog(`dispatch request_id=req-stage-err stage=codex status=error err="codex command failed"`)
+	b.IngestLog("task status=start request_id=req-stage-err")
+	b.IngestLog(`task request_id=req-stage-err stage=codex status=error err="codex command failed"`)
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -700,9 +700,9 @@ func TestBrokerKeepsAgentInvocationStageErrorRunning(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog("dispatch status=start request_id=req-agent-stage-err")
-	b.IngestLog(`dispatch request_id=req-agent-stage-err stage=codex status=error agent_run_id=agent-implementation-1 agent_harness=codex mode=implementation attempt=1 repo=repo repo_dir=repo err="sandbox blocked local commands"`)
-	b.IngestLog(`dispatch request_id=req-agent-stage-err stage=codex status=warn action=retry_without_sandbox agent_run_id=agent-implementation-1 agent_harness=codex mode=implementation attempt=1 repo=repo repo_dir=repo`)
+	b.IngestLog("task status=start request_id=req-agent-stage-err")
+	b.IngestLog(`task request_id=req-agent-stage-err stage=codex status=error agent_run_id=agent-implementation-1 agent_harness=codex mode=implementation attempt=1 repo=repo repo_dir=repo err="sandbox blocked local commands"`)
+	b.IngestLog(`task request_id=req-agent-stage-err stage=codex status=warn action=retry_without_sandbox agent_run_id=agent-implementation-1 agent_harness=codex mode=implementation attempt=1 repo=repo repo_dir=repo`)
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -727,8 +727,8 @@ func TestBrokerParsesStageErrorTextWithEscapedQuotes(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog("dispatch status=start request_id=req-stage-err-quoted")
-	b.IngestLog(`dispatch request_id=req-stage-err-quoted stage=codex status=error err="decode run config payload: json: unknown field \"branch\""`)
+	b.IngestLog("task status=start request_id=req-stage-err-quoted")
+	b.IngestLog(`task request_id=req-stage-err-quoted stage=codex status=error err="decode run config payload: json: unknown field \"branch\""`)
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -744,8 +744,8 @@ func TestBrokerIgnoresNestedRequestMetadataInsideQuotedCommandText(t *testing.T)
 
 	b := NewBroker()
 	requestID := "local-1712345678-000001"
-	b.IngestLog("dispatch status=start request_id=" + requestID)
-	b.IngestLog(`dispatch request_id=local-1712345678-000001 cmd phase=codex name=codex stream=stderr text="dispatch status=error request_id=req-err-ws err=\"clone failed\""`)
+	b.IngestLog("task status=start request_id=" + requestID)
+	b.IngestLog(`task request_id=local-1712345678-000001 cmd phase=codex name=codex stream=stderr text="task status=error request_id=req-err-ws err=\"clone failed\""`)
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -767,7 +767,7 @@ func TestBrokerCapturesWorkspaceAndBranchFromErrorStatus(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog(`dispatch status=error request_id=req-err-ws exit_code=40 workspace=/tmp/run-x branch=moltenhub-fix pr_url=https://github.com/acme/repo/pull/55 err="clone failed"`)
+	b.IngestLog(`task status=error request_id=req-err-ws exit_code=40 workspace=/tmp/run-x branch=agent00-fix pr_url=https://github.com/acme/repo/pull/55 err="clone failed"`)
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -777,8 +777,8 @@ func TestBrokerCapturesWorkspaceAndBranchFromErrorStatus(t *testing.T) {
 	if task.WorkspaceDir != "/tmp/run-x" {
 		t.Fatalf("workspace = %q, want /tmp/run-x", task.WorkspaceDir)
 	}
-	if task.Branch != "moltenhub-fix" {
-		t.Fatalf("branch = %q, want moltenhub-fix", task.Branch)
+	if task.Branch != "agent00-fix" {
+		t.Fatalf("branch = %q, want agent00-fix", task.Branch)
 	}
 	if task.PRURL != "https://github.com/acme/repo/pull/55" {
 		t.Fatalf("pr_url = %q", task.PRURL)
@@ -789,7 +789,7 @@ func TestBrokerDoesNotMaterializeDuplicateStatusAsTask(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog("dispatch status=duplicate request_id=req-dup state=in_flight duplicate_of=req-100")
+	b.IngestLog("task status=duplicate request_id=req-dup state=in_flight duplicate_of=req-100")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 0 {
@@ -804,11 +804,11 @@ func TestBrokerDuplicateStatusDoesNotReplaceOriginalTask(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog("dispatch status=start request_id=req-100 skill=code_for_me repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=start request_id=req-100 skill=code_for_me repo=git@github.com:acme/repo.git")
 	b.IngestLog(
-		"dispatch status=completed request_id=req-100 workspace=/tmp/run branch=moltenhub-fix pr_url=https://github.com/acme/repo/pull/55",
+		"task status=completed request_id=req-100 workspace=/tmp/run branch=agent00-fix pr_url=https://github.com/acme/repo/pull/55",
 	)
-	b.IngestLog("dispatch status=duplicate request_id=req-dup state=completed duplicate_of=req-100")
+	b.IngestLog("task status=duplicate request_id=req-dup state=completed duplicate_of=req-100")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -833,7 +833,7 @@ func TestBrokerSubscribeSignalsChanges(t *testing.T) {
 	updates, cancel := b.Subscribe()
 	defer cancel()
 
-	b.IngestLog("dispatch status=start request_id=req-1")
+	b.IngestLog("task status=start request_id=req-1")
 
 	select {
 	case <-updates:
@@ -851,7 +851,7 @@ func TestBrokerTaskRunConfigSupportsRerunMetadata(t *testing.T) {
 	payload := []byte(`{"repo":"git@github.com:acme/repo.git","baseBranch":"main","targetSubdir":".","prompt":"rerun me"}`)
 
 	b.RecordTaskRunConfig(requestID, payload)
-	b.IngestLog("dispatch status=start request_id=req-rerun skill=code_for_me repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=start request_id=req-rerun skill=code_for_me repo=git@github.com:acme/repo.git")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -935,8 +935,8 @@ func TestBrokerRecordTaskRunConfigCreatesPendingTaskAndNotifies(t *testing.T) {
 	if task.Status != "pending" {
 		t.Fatalf("task.Status = %q, want pending", task.Status)
 	}
-	if task.Stage != "dispatch" || task.StageStatus != "queued" {
-		t.Fatalf("task stage = (%q, %q), want (dispatch, queued)", task.Stage, task.StageStatus)
+	if task.Stage != "task" || task.StageStatus != "queued" {
+		t.Fatalf("task stage = (%q, %q), want (task, queued)", task.Stage, task.StageStatus)
 	}
 	if task.Prompt != "show immediately" {
 		t.Fatalf("task.Prompt = %q, want %q", task.Prompt, "show immediately")
@@ -989,7 +989,7 @@ func TestBrokerTracksPromptedReposFromDispatchLogs(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog("dispatch status=start request_id=req-42 repos=git@github.com:acme/repo.git,https://github.com/acme/repo-two")
+	b.IngestLog("task status=start request_id=req-42 repos=git@github.com:acme/repo.git,https://github.com/acme/repo-two")
 
 	snap := b.Snapshot()
 	if got, want := strings.Join(snap.PromptedRepos, ","), "git@github.com:acme/repo.git,https://github.com/acme/repo-two"; got != want {
@@ -1005,7 +1005,7 @@ func TestBrokerTaskRunConfigSupportsBranchAlias(t *testing.T) {
 	payload := []byte(`{"repo":"git@github.com:acme/repo.git","branch":"release/2026.04","targetSubdir":".","prompt":"rerun me"}`)
 
 	b.RecordTaskRunConfig(requestID, payload)
-	b.IngestLog("dispatch status=start request_id=req-rerun-branch-alias skill=code_for_me repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=start request_id=req-rerun-branch-alias skill=code_for_me repo=git@github.com:acme/repo.git")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -1025,8 +1025,8 @@ func TestBrokerUpdatesTaskBranchFromStageLogsWhileRetainingBaseBranch(t *testing
 	b := NewBroker()
 	requestID := "req-branch-transition"
 	b.RecordTaskRunConfig(requestID, []byte(`{"repo":"git@github.com:acme/repo.git","baseBranch":"main","prompt":"rerun me"}`))
-	b.IngestLog("dispatch status=start request_id=req-branch-transition skill=code_for_me repo=git@github.com:acme/repo.git")
-	b.IngestLog("dispatch request_id=req-branch-transition stage=git status=ok action=branch branch=moltenhub-branch-transition")
+	b.IngestLog("task status=start request_id=req-branch-transition skill=code_for_me repo=git@github.com:acme/repo.git")
+	b.IngestLog("task request_id=req-branch-transition stage=git status=ok action=branch branch=agent00-branch-transition")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -1035,7 +1035,7 @@ func TestBrokerUpdatesTaskBranchFromStageLogsWhileRetainingBaseBranch(t *testing
 	if got, want := snap.Tasks[0].BaseBranch, "main"; got != want {
 		t.Fatalf("task.BaseBranch = %q, want %q", got, want)
 	}
-	if got, want := snap.Tasks[0].Branch, "moltenhub-branch-transition"; got != want {
+	if got, want := snap.Tasks[0].Branch, "agent00-branch-transition"; got != want {
 		t.Fatalf("task.Branch = %q, want %q", got, want)
 	}
 }
@@ -1046,8 +1046,8 @@ func TestBrokerCloseTaskRemovesCompletedTaskAndPreservesRunConfig(t *testing.T) 
 	b := NewBroker()
 	requestID := "req-close"
 	b.RecordTaskRunConfig(requestID, []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"close me"}`))
-	b.IngestLog("dispatch status=start request_id=req-close")
-	b.IngestLog("dispatch status=completed request_id=req-close workspace=/tmp/run branch=moltenhub-close")
+	b.IngestLog("task status=start request_id=req-close")
+	b.IngestLog("task status=completed request_id=req-close workspace=/tmp/run branch=agent00-close")
 
 	if err := b.CloseTask(requestID); err != nil {
 		t.Fatalf("CloseTask() error = %v", err)
@@ -1069,14 +1069,14 @@ func TestBrokerCloseTaskIgnoresLateCleanupLogs(t *testing.T) {
 	b := NewBroker()
 	requestID := "req-close-cleanup"
 	b.RecordTaskRunConfig(requestID, []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"close me"}`))
-	b.IngestLog("dispatch status=start request_id=req-close-cleanup")
-	b.IngestLog("dispatch status=completed request_id=req-close-cleanup workspace=/tmp/run branch=moltenhub-close-cleanup")
+	b.IngestLog("task status=start request_id=req-close-cleanup")
+	b.IngestLog("task status=completed request_id=req-close-cleanup workspace=/tmp/run branch=agent00-close-cleanup")
 
 	if err := b.CloseTask(requestID); err != nil {
 		t.Fatalf("CloseTask() error = %v", err)
 	}
 
-	b.IngestLog("dispatch status=ok action=task_close_cleanup request_id=req-close-cleanup log_dir=/tmp/.log/req/close/cleanup")
+	b.IngestLog("task status=ok action=task_close_cleanup request_id=req-close-cleanup log_dir=/tmp/.log/req/close/cleanup")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 0 {
@@ -1089,9 +1089,9 @@ func TestBrokerIgnoresActionOnlyDispatchStatusForTerminalState(t *testing.T) {
 
 	b := NewBroker()
 
-	b.IngestLog("dispatch status=start request_id=req-follow-up")
-	b.IngestLog(`dispatch status=error request_id=req-follow-up exit_code=50 err="codex failed"`)
-	b.IngestLog("dispatch status=ok action=queue_failure_followup request_id=req-follow-up follow_up_request_id=req-fix")
+	b.IngestLog("task status=start request_id=req-follow-up")
+	b.IngestLog(`task status=error request_id=req-follow-up exit_code=50 err="codex failed"`)
+	b.IngestLog("task status=ok action=queue_failure_followup request_id=req-follow-up follow_up_request_id=req-fix")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -1110,18 +1110,18 @@ func TestBrokerClosedTaskTombstoneExpires(t *testing.T) {
 	b.now = func() time.Time { return now }
 
 	requestID := "req-reuse-after-close"
-	b.IngestLog("dispatch status=stopped request_id=req-reuse-after-close err=\"task stopped by operator\"")
+	b.IngestLog("task status=stopped request_id=req-reuse-after-close err=\"task stopped by operator\"")
 	if err := b.CloseTask(requestID); err != nil {
 		t.Fatalf("CloseTask() error = %v", err)
 	}
 
-	b.IngestLog("dispatch status=start request_id=req-reuse-after-close")
+	b.IngestLog("task status=start request_id=req-reuse-after-close")
 	if got := len(b.Snapshot().Tasks); got != 0 {
 		t.Fatalf("len(tasks) before tombstone expiry = %d, want 0", got)
 	}
 
 	now = now.Add(defaultClosedTaskRetention + time.Second)
-	b.IngestLog("dispatch status=start request_id=req-reuse-after-close")
+	b.IngestLog("task status=start request_id=req-reuse-after-close")
 
 	snap := b.Snapshot()
 	if got := len(snap.Tasks); got != 1 {
@@ -1137,7 +1137,7 @@ func TestBrokerCloseTaskRejectsIncompleteTask(t *testing.T) {
 
 	b := NewBroker()
 	requestID := "req-running"
-	b.IngestLog("dispatch status=start request_id=req-running")
+	b.IngestLog("task status=start request_id=req-running")
 
 	err := b.CloseTask(requestID)
 	if !errors.Is(err, ErrTaskNotCompleted) {
@@ -1164,7 +1164,7 @@ func TestBrokerTracksPausedResumedAndStoppedStatuses(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog("dispatch status=paused request_id=req-control")
+	b.IngestLog("task status=paused request_id=req-control")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -1174,13 +1174,13 @@ func TestBrokerTracksPausedResumedAndStoppedStatuses(t *testing.T) {
 		t.Fatalf("status after pause = %q, want %q", got, "paused")
 	}
 
-	b.IngestLog("dispatch status=resumed request_id=req-control")
+	b.IngestLog("task status=resumed request_id=req-control")
 	snap = b.Snapshot()
 	if got := snap.Tasks[0].Status; got != "pending" {
 		t.Fatalf("status after resume = %q, want %q", got, "pending")
 	}
 
-	b.IngestLog(`dispatch status=stopped request_id=req-control err="task was stopped by operator"`)
+	b.IngestLog(`task status=stopped request_id=req-control err="task was stopped by operator"`)
 	snap = b.Snapshot()
 	if got := snap.Tasks[0].Status; got != "stopped" {
 		t.Fatalf("status after stop = %q, want %q", got, "stopped")
@@ -1196,7 +1196,7 @@ func TestBrokerCloseTaskAllowsStoppedTasks(t *testing.T) {
 	b := NewBroker()
 	requestID := "req-stopped-close"
 	b.RecordTaskRunConfig(requestID, []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"stop me"}`))
-	b.IngestLog(`dispatch status=stopped request_id=req-stopped-close err="task stopped by operator"`)
+	b.IngestLog(`task status=stopped request_id=req-stopped-close err="task stopped by operator"`)
 
 	if err := b.CloseTask(requestID); err != nil {
 		t.Fatalf("CloseTask() for stopped task error = %v", err)
@@ -1210,11 +1210,11 @@ func TestBrokerTracksTaskAttemptsAcrossRerunsAndFailures(t *testing.T) {
 	t.Parallel()
 
 	b := NewBroker()
-	b.IngestLog("dispatch status=start request_id=req-attempt")
-	b.IngestLog(`dispatch status=error request_id=req-attempt exit_code=1 err="first failure"`)
+	b.IngestLog("task status=start request_id=req-attempt")
+	b.IngestLog(`task status=error request_id=req-attempt exit_code=1 err="first failure"`)
 	b.RecordTaskRerunAttempt("req-attempt", "req-attempt-rerun")
-	b.IngestLog("dispatch status=start request_id=req-attempt-rerun")
-	b.IngestLog("dispatch status=completed request_id=req-attempt-rerun workspace=/tmp/run branch=moltenhub-attempt")
+	b.IngestLog("task status=start request_id=req-attempt-rerun")
+	b.IngestLog("task status=completed request_id=req-attempt-rerun workspace=/tmp/run branch=agent00-attempt")
 
 	attempts := b.TaskAttempts("req-attempt")
 	if len(attempts) != 2 {
@@ -1253,8 +1253,8 @@ func TestBrokerRemovesCompletedTasksAfterTimeout(t *testing.T) {
 	b.now = func() time.Time { return now }
 
 	b.RecordTaskRunConfig("req-ok", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"keep me visible"}`))
-	b.IngestLog("dispatch status=start request_id=req-ok")
-	b.IngestLog("dispatch status=completed request_id=req-ok workspace=/tmp/run branch=moltenhub-cleanup")
+	b.IngestLog("task status=start request_id=req-ok")
+	b.IngestLog("task status=completed request_id=req-ok workspace=/tmp/run branch=agent00-cleanup")
 
 	if got := len(b.Snapshot().Tasks); got != 1 {
 		t.Fatalf("len(tasks) before timeout = %d, want 1", got)
@@ -1274,7 +1274,7 @@ func TestBrokerRemovesCompletedTasksAfterTimeout(t *testing.T) {
 		t.Fatal("TaskRunConfig() found = false for expired completed task, want true")
 	}
 
-	b.IngestLog("dispatch status=ok action=task_close_cleanup request_id=req-ok log_dir=/tmp/.log/req/ok")
+	b.IngestLog("task status=ok action=task_close_cleanup request_id=req-ok log_dir=/tmp/.log/req/ok")
 	if got := len(b.Snapshot().Tasks); got != 0 {
 		t.Fatalf("len(tasks) after late cleanup log = %d, want 0", got)
 	}
@@ -1288,8 +1288,8 @@ func TestBrokerRemovesFailedTasksAfterTimeout(t *testing.T) {
 	b.now = func() time.Time { return now }
 
 	b.RecordTaskRunConfig("req-error", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"fail visibly"}`))
-	b.IngestLog("dispatch status=start request_id=req-error")
-	b.IngestLog(`dispatch status=error request_id=req-error exit_code=50 err="codex exploded"`)
+	b.IngestLog("task status=start request_id=req-error")
+	b.IngestLog(`task status=error request_id=req-error exit_code=50 err="codex exploded"`)
 
 	now = now.Add(defaultTerminalTaskTimeout)
 	snap := b.Snapshot()
@@ -1307,7 +1307,7 @@ func TestBrokerAppliesPromptWhenConfigRecordedAfterTaskStart(t *testing.T) {
 	b := NewBroker()
 	requestID := "req-after-start"
 
-	b.IngestLog("dispatch status=start request_id=req-after-start skill=code_for_me repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=start request_id=req-after-start skill=code_for_me repo=git@github.com:acme/repo.git")
 	b.RecordTaskRunConfig(requestID, []byte(`{"repo":"git@github.com:acme/repo.git","baseBranch":"release/2026.04","prompt":"late prompt value"}`))
 
 	snap := b.Snapshot()
@@ -1334,7 +1334,7 @@ func TestBrokerMarksFailureFollowUpPromptAsSystemGenerated(t *testing.T) {
 	b := NewBroker()
 	requestID := "req-after-start-failure-review"
 
-	b.IngestLog("dispatch status=start request_id=req-after-start-failure-review skill=code_for_me repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=start request_id=req-after-start-failure-review skill=code_for_me repo=git@github.com:acme/repo.git")
 	b.RecordTaskRunConfig(requestID, []byte(`{"repo":"git@github.com:acme/repo.git","baseBranch":"main","prompt":"Review the failing log paths first, identify every root cause behind the failed task, fix the underlying agent_00 application issues in this repository, validate locally where possible, and summarize the verified results. Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix agent_00 failure handling.\n\nObserved failure context:\n- error=boom"}`))
 
 	snap := b.Snapshot()
@@ -1361,7 +1361,7 @@ func TestBrokerResolvesLibraryTaskDisplayTextFromRunConfig(t *testing.T) {
 	b := NewBroker()
 	requestID := "req-library-task"
 	b.RecordTaskRunConfig(requestID, []byte(`{"repo":"git@github.com:acme/repo.git","baseBranch":"main","libraryTaskName":"unit-test-coverage"}`))
-	b.IngestLog("dispatch status=start request_id=req-library-task skill=library_task repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=start request_id=req-library-task skill=library_task repo=git@github.com:acme/repo.git")
 
 	snap := b.Snapshot()
 	if len(snap.Tasks) != 1 {
@@ -1569,7 +1569,7 @@ func TestBrokerCapsEventsWithoutGrowingSlice(t *testing.T) {
 	b.maxEvents = 3
 
 	for i := 1; i <= 5; i++ {
-		b.IngestLog(fmt.Sprintf("dispatch status=start request_id=req-%d", i))
+		b.IngestLog(fmt.Sprintf("task status=start request_id=req-%d", i))
 	}
 
 	snap := b.Snapshot()
@@ -1591,9 +1591,9 @@ func TestBrokerCapsTaskLogsWithoutGrowingSlice(t *testing.T) {
 	b := NewBroker()
 	b.maxTaskLog = 2
 
-	b.IngestLog("dispatch status=start request_id=req-cap")
-	b.IngestLog("dispatch request_id=req-cap stage=clone status=start")
-	b.IngestLog("dispatch request_id=req-cap stage=pr status=ok")
+	b.IngestLog("task status=start request_id=req-cap")
+	b.IngestLog("task request_id=req-cap stage=clone status=start")
+	b.IngestLog("task request_id=req-cap stage=pr status=ok")
 
 	snap := b.Snapshot()
 	if got, want := len(snap.Tasks), 1; got != want {
@@ -1603,10 +1603,10 @@ func TestBrokerCapsTaskLogsWithoutGrowingSlice(t *testing.T) {
 	if got, want := len(logs), 2; got != want {
 		t.Fatalf("len(task logs) = %d, want %d", got, want)
 	}
-	if logs[0].Text != "dispatch request_id=req-cap stage=clone status=start" {
+	if logs[0].Text != "task request_id=req-cap stage=clone status=start" {
 		t.Fatalf("logs[0].Text = %q", logs[0].Text)
 	}
-	if logs[1].Text != "dispatch request_id=req-cap stage=pr status=ok" {
+	if logs[1].Text != "task request_id=req-cap stage=pr status=ok" {
 		t.Fatalf("logs[1].Text = %q", logs[1].Text)
 	}
 }

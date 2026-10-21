@@ -22,12 +22,12 @@ type InitConfig struct {
 	GitHubToken       string            `json:"github_token,omitempty"`
 	OpenAIAPIKey      string            `json:"openai_api_key,omitempty"`
 	RuntimeConfigPath string            `json:"-"`
-	Dispatcher        DispatcherConfig  `json:"dispatcher"`
+	Scheduler         SchedulerConfig   `json:"scheduler"`
 	ReviewWatch       ReviewWatchConfig `json:"review_watch,omitempty"`
 }
 
-// DispatcherConfig controls local worker behavior.
-type DispatcherConfig struct {
+// SchedulerConfig controls local worker behavior.
+type SchedulerConfig struct {
 	MaxParallel            int     `json:"max_parallel"`
 	MinParallel            int     `json:"min_parallel"`
 	SampleWindow           int     `json:"sample_window"`
@@ -98,6 +98,10 @@ func LoadInit(path string) (InitConfig, error) {
 	}
 
 	cleaned := stripLineComments(data)
+	cleaned, err = normalizeSchedulerJSON(cleaned)
+	if err != nil {
+		return InitConfig{}, fmt.Errorf("parse init json: %w", err)
+	}
 	var cfg InitConfig
 	dec := json.NewDecoder(bytes.NewReader(cleaned))
 	if err := dec.Decode(&cfg); err != nil {
@@ -109,6 +113,21 @@ func LoadInit(path string) (InitConfig, error) {
 		return InitConfig{}, err
 	}
 	return cfg, nil
+}
+
+// Accept existing preferences while writing only the current scheduler key.
+func normalizeSchedulerJSON(data []byte) ([]byte, error) {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	if _, exists := doc["scheduler"]; !exists {
+		if value, ok := doc["dispatcher"]; ok {
+			doc["scheduler"] = value
+		}
+	}
+	delete(doc, "dispatcher")
+	return json.Marshal(doc)
 }
 
 // ApplyDefaults normalizes and fills optional values.
@@ -138,29 +157,29 @@ func (c *InitConfig) ApplyDefaults() {
 	if c.AgentCommand == "" {
 		c.AgentCommand = strings.TrimSpace(os.Getenv("HARNESS_AGENT_COMMAND"))
 	}
-	if c.Dispatcher.MinParallel < 1 {
-		c.Dispatcher.MinParallel = 1
+	if c.Scheduler.MinParallel < 1 {
+		c.Scheduler.MinParallel = 1
 	}
-	if c.Dispatcher.MaxParallel < 1 {
-		c.Dispatcher.MaxParallel = defaultDispatcherMaxParallel()
+	if c.Scheduler.MaxParallel < 1 {
+		c.Scheduler.MaxParallel = defaultSchedulerMaxParallel()
 	}
-	if c.Dispatcher.MaxParallel < c.Dispatcher.MinParallel {
-		c.Dispatcher.MaxParallel = c.Dispatcher.MinParallel
+	if c.Scheduler.MaxParallel < c.Scheduler.MinParallel {
+		c.Scheduler.MaxParallel = c.Scheduler.MinParallel
 	}
-	if c.Dispatcher.SampleWindow < 1 {
-		c.Dispatcher.SampleWindow = 5
+	if c.Scheduler.SampleWindow < 1 {
+		c.Scheduler.SampleWindow = 5
 	}
-	if c.Dispatcher.SampleIntervalMS < 250 {
-		c.Dispatcher.SampleIntervalMS = 1500
+	if c.Scheduler.SampleIntervalMS < 250 {
+		c.Scheduler.SampleIntervalMS = 1500
 	}
-	if c.Dispatcher.CPUHighWatermark <= 0 {
-		c.Dispatcher.CPUHighWatermark = 85
+	if c.Scheduler.CPUHighWatermark <= 0 {
+		c.Scheduler.CPUHighWatermark = 85
 	}
-	if c.Dispatcher.MemoryHighWatermark <= 0 {
-		c.Dispatcher.MemoryHighWatermark = 90
+	if c.Scheduler.MemoryHighWatermark <= 0 {
+		c.Scheduler.MemoryHighWatermark = 90
 	}
-	if c.Dispatcher.DiskIOHighWatermarkMBs <= 0 {
-		c.Dispatcher.DiskIOHighWatermarkMBs = 120
+	if c.Scheduler.DiskIOHighWatermarkMBs <= 0 {
+		c.Scheduler.DiskIOHighWatermarkMBs = 120
 	}
 
 	rawReviewWriteback := strings.TrimSpace(c.ReviewWatch.Writeback)
@@ -217,29 +236,29 @@ func (c InitConfig) Validate() error {
 	if _, err := agentruntime.Resolve(c.AgentHarness, c.AgentCommand); err != nil {
 		return err
 	}
-	if c.Dispatcher.MaxParallel < 1 {
-		return fmt.Errorf("dispatcher.max_parallel must be >= 1")
+	if c.Scheduler.MaxParallel < 1 {
+		return fmt.Errorf("scheduler.max_parallel must be >= 1")
 	}
-	if c.Dispatcher.MinParallel < 1 {
-		return fmt.Errorf("dispatcher.min_parallel must be >= 1")
+	if c.Scheduler.MinParallel < 1 {
+		return fmt.Errorf("scheduler.min_parallel must be >= 1")
 	}
-	if c.Dispatcher.MinParallel > c.Dispatcher.MaxParallel {
-		return fmt.Errorf("dispatcher.min_parallel must be <= dispatcher.max_parallel")
+	if c.Scheduler.MinParallel > c.Scheduler.MaxParallel {
+		return fmt.Errorf("scheduler.min_parallel must be <= scheduler.max_parallel")
 	}
-	if c.Dispatcher.SampleWindow < 1 {
-		return fmt.Errorf("dispatcher.sample_window must be >= 1")
+	if c.Scheduler.SampleWindow < 1 {
+		return fmt.Errorf("scheduler.sample_window must be >= 1")
 	}
-	if c.Dispatcher.SampleIntervalMS < 250 {
-		return fmt.Errorf("dispatcher.sample_interval_ms must be >= 250")
+	if c.Scheduler.SampleIntervalMS < 250 {
+		return fmt.Errorf("scheduler.sample_interval_ms must be >= 250")
 	}
-	if c.Dispatcher.CPUHighWatermark <= 0 || c.Dispatcher.CPUHighWatermark > 100 {
-		return fmt.Errorf("dispatcher.cpu_high_watermark must be > 0 and <= 100")
+	if c.Scheduler.CPUHighWatermark <= 0 || c.Scheduler.CPUHighWatermark > 100 {
+		return fmt.Errorf("scheduler.cpu_high_watermark must be > 0 and <= 100")
 	}
-	if c.Dispatcher.MemoryHighWatermark <= 0 || c.Dispatcher.MemoryHighWatermark > 100 {
-		return fmt.Errorf("dispatcher.memory_high_watermark must be > 0 and <= 100")
+	if c.Scheduler.MemoryHighWatermark <= 0 || c.Scheduler.MemoryHighWatermark > 100 {
+		return fmt.Errorf("scheduler.memory_high_watermark must be > 0 and <= 100")
 	}
-	if c.Dispatcher.DiskIOHighWatermarkMBs <= 0 {
-		return fmt.Errorf("dispatcher.disk_io_high_watermark_mb_s must be > 0")
+	if c.Scheduler.DiskIOHighWatermarkMBs <= 0 {
+		return fmt.Errorf("scheduler.disk_io_high_watermark_mb_s must be > 0")
 	}
 	if c.ReviewWatch.EnabledValue() && c.ReviewWatch.PollIntervalMS < 5000 {
 		return fmt.Errorf("review_watch.poll_interval_ms must be >= 5000")
@@ -292,11 +311,11 @@ func normalizeReviewWatchMergeMethod(value string) string {
 	}
 }
 
-func defaultDispatcherMaxParallel() int {
-	return defaultDispatcherMaxParallelForCores(runtime.NumCPU())
+func defaultSchedulerMaxParallel() int {
+	return defaultSchedulerMaxParallelForCores(runtime.NumCPU())
 }
 
-func defaultDispatcherMaxParallelForCores(cores int) int {
+func defaultSchedulerMaxParallelForCores(cores int) int {
 	// A single reported CPU often still has enough headroom for at least two
 	// concurrent harness jobs because work is frequently I/O-bound.
 	switch {

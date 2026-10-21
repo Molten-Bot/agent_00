@@ -48,7 +48,7 @@ func TestTaskWorkspaceIsOnlyWritableRoot(t *testing.T) {
 					t.Fatalf("Claude must run inside the sandbox: %+v", cmd)
 				}
 				if slices.Contains(cmd.Env, "CODEX_HOME=/persistent/auth") ||
-					!slices.Contains(cmd.Env, "CODEX_HOME=/tasks/current/.moltenhub-agent-io/config/sandbox") {
+					!slices.Contains(cmd.Env, "CODEX_HOME=/tasks/current/.agent00-agent-io/config/sandbox") {
 					t.Fatal("Claude sandbox helper must use task-local configuration")
 				}
 			}

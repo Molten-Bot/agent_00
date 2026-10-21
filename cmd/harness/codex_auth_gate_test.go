@@ -136,7 +136,7 @@ func TestNewCodexAuthGateRequiresGitHubConfigureWhenTokenMissing(t *testing.T) {
 		context.Background(),
 		runner,
 		"codex",
-		filepath.Join(t.TempDir(), ".moltenhub", "config.json"),
+		filepath.Join(t.TempDir(), ".agent00", "config.json"),
 		localruntime.InitConfig{},
 		true,
 		nil,
@@ -164,7 +164,7 @@ func TestCodexAuthGateConfigurePersistsGitHubToken(t *testing.T) {
 		},
 	}
 
-	configPath := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	configPath := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	g := newCodexAuthGateWithConfig(
 		context.Background(),
 		runner,
@@ -219,7 +219,7 @@ func TestCodexAuthGateConfigureRejectsInvalidGitHubTokenBeforePersisting(t *test
 		},
 	}
 
-	configPath := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	configPath := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	g := newCodexAuthGateWithConfig(
 		context.Background(),
 		runner,
@@ -774,7 +774,7 @@ func TestNewCodexAuthGateWithConfigRequiresGitHubTokenWhenMissing(t *testing.T) 
 		context.Background(),
 		runner,
 		"codex",
-		filepath.Join(t.TempDir(), ".moltenhub", "config.json"),
+		filepath.Join(t.TempDir(), ".agent00", "config.json"),
 		localruntime.InitConfig{},
 		true,
 		nil,

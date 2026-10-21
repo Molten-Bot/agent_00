@@ -57,7 +57,7 @@ func TestPRMergeMonitorMarksMergedTaskDoneAndRunsCleanup(t *testing.T) {
 	broker := NewBroker()
 	broker.RecordTaskRunConfig("req-merged", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"ship it"}`))
 	broker.IngestLog("dispatch status=start request_id=req-merged repo=git@github.com:acme/repo.git")
-	broker.IngestLog("dispatch status=completed request_id=req-merged workspace=/tmp/run branch=moltenhub-ship pr_url=https://github.com/acme/repo/pull/42")
+	broker.IngestLog("dispatch status=completed request_id=req-merged workspace=/tmp/run branch=agent00-ship pr_url=https://github.com/acme/repo/pull/42")
 
 	runner := &stubPRMonitorRunner{
 		result: execx.Result{Stdout: `{"state":"MERGED","mergedAt":"2026-04-09T12:00:00Z"}`},
@@ -150,11 +150,11 @@ func TestPRMergeMonitorDeletesMergedBranchAndClosesTaskWhenEnabled(t *testing.T)
 	broker := NewBroker()
 	broker.RecordTaskRunConfig("req-merged-delete", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"ship it"}`))
 	broker.IngestLog("dispatch status=start request_id=req-merged-delete repo=git@github.com:acme/repo.git")
-	broker.IngestLog("dispatch status=completed request_id=req-merged-delete workspace=/tmp/run branch=moltenhub-ship pr_url=https://github.com/acme/repo/pull/42")
+	broker.IngestLog("dispatch status=completed request_id=req-merged-delete workspace=/tmp/run branch=agent00-ship pr_url=https://github.com/acme/repo/pull/42")
 
 	runner := &stubPRMonitorRunner{
 		results: []execx.Result{
-			{Stdout: `{"state":"MERGED","mergedAt":"2026-04-09T12:00:00Z","headRefName":"moltenhub-ship","baseRefName":"main"}`},
+			{Stdout: `{"state":"MERGED","mergedAt":"2026-04-09T12:00:00Z","headRefName":"agent00-ship","baseRefName":"main"}`},
 			{Stdout: `{}`},
 		},
 	}
@@ -214,7 +214,7 @@ func TestPRMergeMonitorDeletesMergedBranchAndClosesTaskWhenEnabled(t *testing.T)
 	if got, want := commands[1].Name, "gh"; got != want {
 		t.Fatalf("delete command name = %q, want %q", got, want)
 	}
-	if got, want := commands[1].Args, []string{"api", "-X", "DELETE", "repos/acme/repo/git/refs/heads/moltenhub-ship"}; !slices.Equal(got, want) {
+	if got, want := commands[1].Args, []string{"api", "-X", "DELETE", "repos/acme/repo/git/refs/heads/agent00-ship"}; !slices.Equal(got, want) {
 		t.Fatalf("delete command args = %v, want %v", got, want)
 	}
 }
@@ -227,9 +227,9 @@ func TestPRMergeMonitorDeletesMergedForkBranchFromHeadRepository(t *testing.T) {
 
 	err := monitor.deleteMergedBranch(context.Background(), Task{
 		PRURL:  "https://github.com/acme/repo/pull/42",
-		Branch: "moltenhub-ship",
+		Branch: "agent00-ship",
 	}, prViewState{
-		HeadRefName: "moltenhub-ship",
+		HeadRefName: "agent00-ship",
 		BaseRefName: "main",
 		HeadRepository: prRepository{
 			Name: "repo",
@@ -246,7 +246,7 @@ func TestPRMergeMonitorDeletesMergedForkBranchFromHeadRepository(t *testing.T) {
 	if got, want := len(commands), 1; got != want {
 		t.Fatalf("len(commands) = %d, want %d", got, want)
 	}
-	if got, want := commands[0].Args, []string{"api", "-X", "DELETE", "repos/contributor/repo/git/refs/heads/moltenhub-ship"}; !slices.Equal(got, want) {
+	if got, want := commands[0].Args, []string{"api", "-X", "DELETE", "repos/contributor/repo/git/refs/heads/agent00-ship"}; !slices.Equal(got, want) {
 		t.Fatalf("delete command args = %v, want %v", got, want)
 	}
 }
@@ -256,11 +256,11 @@ func TestPRMergeMonitorKeepsMergedTaskVisibleWhenBranchDeleteFails(t *testing.T)
 
 	broker := NewBroker()
 	broker.IngestLog("dispatch status=start request_id=req-delete-fails repo=git@github.com:acme/repo.git")
-	broker.IngestLog("dispatch status=completed request_id=req-delete-fails workspace=/tmp/run branch=moltenhub-ship pr_url=https://github.com/acme/repo/pull/42")
+	broker.IngestLog("dispatch status=completed request_id=req-delete-fails workspace=/tmp/run branch=agent00-ship pr_url=https://github.com/acme/repo/pull/42")
 
 	runner := &stubPRMonitorRunner{
 		results: []execx.Result{
-			{Stdout: `{"state":"MERGED","mergedAt":"2026-04-09T12:00:00Z","headRefName":"moltenhub-ship","baseRefName":"main"}`},
+			{Stdout: `{"state":"MERGED","mergedAt":"2026-04-09T12:00:00Z","headRefName":"agent00-ship","baseRefName":"main"}`},
 			{},
 		},
 		errs: []error{nil, errors.New("delete denied")},
@@ -310,7 +310,7 @@ func TestPRMergeMonitorKeepsTaskVisibleUntilPRIsMerged(t *testing.T) {
 
 	broker := NewBroker()
 	broker.IngestLog("dispatch status=start request_id=req-open repo=git@github.com:acme/repo.git")
-	broker.IngestLog("dispatch status=completed request_id=req-open workspace=/tmp/run branch=moltenhub-ship pr_url=https://github.com/acme/repo/pull/77")
+	broker.IngestLog("dispatch status=completed request_id=req-open workspace=/tmp/run branch=agent00-ship pr_url=https://github.com/acme/repo/pull/77")
 
 	runner := &stubPRMonitorRunner{
 		result: execx.Result{Stdout: `{"state":"OPEN","mergedAt":""}`},
@@ -359,7 +359,7 @@ func TestPRMergeMonitorQueuesActionableReviewFeedbackOncePerPR(t *testing.T) {
 	broker := NewBroker()
 	broker.RecordTaskRunConfig("req-feedback", []byte(`{"repo":"git@github.com:acme/repo.git","baseBranch":"main","prompt":"ship it"}`))
 	broker.IngestLog("dispatch status=start request_id=req-feedback repo=git@github.com:acme/repo.git")
-	broker.IngestLog("dispatch status=completed request_id=req-feedback workspace=/tmp/run branch=moltenhub-ship pr_url=https://github.com/acme/repo/pull/117")
+	broker.IngestLog("dispatch status=completed request_id=req-feedback workspace=/tmp/run branch=agent00-ship pr_url=https://github.com/acme/repo/pull/117")
 
 	reviewBody := "**Positive**\n- Good scope.\n\n**Negative**\n- [Medium] src/main.jsx:1139 - Custom theme radiogroup lacks arrow-key navigation."
 	runner := &stubPRMonitorRunner{
@@ -369,7 +369,7 @@ func TestPRMergeMonitorQueuesActionableReviewFeedbackOncePerPR(t *testing.T) {
 			"url":"https://github.com/acme/repo/pull/117",
 			"number":117,
 			"title":"Ship it",
-			"headRefName":"moltenhub-ship",
+			"headRefName":"agent00-ship",
 			"baseRefName":"main",
 			"reviewDecision":"REVIEW_REQUIRED",
 			"latestReviews":[{"id":"review-1","author":{"login":"reviewer"},"state":"COMMENTED","submittedAt":"2026-05-30T12:00:00Z","body":%q}],
@@ -405,7 +405,7 @@ func TestPRMergeMonitorQueuesActionableReviewFeedbackOncePerPR(t *testing.T) {
 	if got, want := gotFeedback.PRURL, "https://github.com/acme/repo/pull/117"; got != want {
 		t.Fatalf("feedback.PRURL = %q, want %q", got, want)
 	}
-	if got, want := gotFeedback.HeadBranch, "moltenhub-ship"; got != want {
+	if got, want := gotFeedback.HeadBranch, "agent00-ship"; got != want {
 		t.Fatalf("feedback.HeadBranch = %q, want %q", got, want)
 	}
 	if got, want := gotFeedback.BaseBranch, "main"; got != want {
@@ -427,7 +427,7 @@ func TestPRMergeMonitorIgnoresCleanReviewFeedback(t *testing.T) {
 
 	broker := NewBroker()
 	broker.IngestLog("dispatch status=start request_id=req-clean repo=git@github.com:acme/repo.git")
-	broker.IngestLog("dispatch status=completed request_id=req-clean workspace=/tmp/run branch=moltenhub-clean pr_url=https://github.com/acme/repo/pull/118")
+	broker.IngestLog("dispatch status=completed request_id=req-clean workspace=/tmp/run branch=agent00-clean pr_url=https://github.com/acme/repo/pull/118")
 
 	reviewBody := "**Positive**\n- Looks safe.\n\n**Negative**\n- No material issues found."
 	runner := &stubPRMonitorRunner{
@@ -435,7 +435,7 @@ func TestPRMergeMonitorIgnoresCleanReviewFeedback(t *testing.T) {
 			"state":"OPEN",
 			"mergedAt":"",
 			"url":"https://github.com/acme/repo/pull/118",
-			"headRefName":"moltenhub-clean",
+			"headRefName":"agent00-clean",
 			"baseRefName":"main",
 			"latestReviews":[{"id":"review-1","author":{"login":"reviewer"},"state":"COMMENTED","submittedAt":"2026-05-30T12:00:00Z","body":%q}],
 			"comments":[]
@@ -503,7 +503,8 @@ func TestActionablePRReviewFeedbackIgnoresAutomatedReviewCycleComments(t *testin
 		URL:         task.PRURL,
 		HeadRefName: "feature",
 		Comments: []prCommentEntry{
-			{ID: "bot", Body: "<!-- moltenhub-review-cycle pass=1 total=3 -->\n**Negative**\n- [Medium] fix this bug"},
+			{ID: "legacy-bot", Body: "<!-- previous-agent-review-cycle pass=1 total=3 -->\n**Negative**\n- [Medium] fix this bug"},
+			{ID: "bot", Body: "<!-- agent00-review-cycle pass=1 total=3 -->\n**Negative**\n- [Medium] fix this bug"},
 			{ID: "human", Author: prActor{Login: "reviewer"}, Body: "Please fix the human-reported regression."},
 		},
 	})
@@ -560,7 +561,7 @@ func TestPRMergeMonitorLogsCheckFailuresAndKeepsTask(t *testing.T) {
 
 	broker := NewBroker()
 	broker.IngestLog("dispatch status=start request_id=req-fail repo=git@github.com:acme/repo.git")
-	broker.IngestLog("dispatch status=completed request_id=req-fail workspace=/tmp/run branch=moltenhub-ship pr_url=https://github.com/acme/repo/pull/99")
+	broker.IngestLog("dispatch status=completed request_id=req-fail workspace=/tmp/run branch=agent00-ship pr_url=https://github.com/acme/repo/pull/99")
 
 	runner := &stubPRMonitorRunner{err: errors.New("gh failed")}
 	logs := make(chan string, 8)

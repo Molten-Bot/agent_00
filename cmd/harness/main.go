@@ -33,7 +33,7 @@ import (
 const failureFollowUpRequiredPrompt = failurefollowup.RequiredPrompt
 
 const gitHubCLIPackageLabel = "github-cli (gh)"
-const gitHubCLIAuthRecommendation = "Run `gh auth login` (the GitHub CLI binary from the `github-cli` package) or set GH_TOKEN before dispatching tasks."
+const gitHubCLIAuthRecommendation = "Run `gh auth login` (the GitHub CLI binary from the `github-cli` package) or set GH_TOKEN before running tasks."
 const followUpTaskLogArchiveSubdir = "followup"
 const localSubmitSource = "local_submit"
 const reviewWatchSource = "github_review_watch"
@@ -228,7 +228,7 @@ func runServer(args []string) int {
 
 	initPath := fs.String("init", "", "Path to local init JSON")
 	configPath := fs.String("config", "", "Path to local runtime config JSON")
-	parallel := fs.Int("parallel", 0, "Optional override for dispatcher max parallel workers")
+	parallel := fs.Int("parallel", 0, "Optional override for scheduler max parallel workers")
 	uiListen := fs.String("ui-listen", "127.0.0.1:7777", "Local web UI listen address")
 	uiAutomatic := fs.Bool("ui-automatic", false, "Hide the browser Studio form and run the monitor UI in automatic mode")
 
@@ -245,7 +245,7 @@ func runServer(args []string) int {
 		return exitCode
 	}
 	if *parallel > 0 {
-		cfg.Dispatcher.MaxParallel = *parallel
+		cfg.Scheduler.MaxParallel = *parallel
 	}
 
 	logger := newDefaultTerminalLogger()
@@ -264,7 +264,7 @@ func runServer(args []string) int {
 
 	localSubmitDeduper := newLocalSubmissionDeduper(localSubmissionDedupTTL)
 	localTaskController := newLocalTaskController()
-	var localDispatchSeq uint64
+	var localTaskSeq uint64
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -273,8 +273,8 @@ func runServer(args []string) int {
 		authGate = newAgentAuthGate(ctx, runner, runtimeCfg, cfg, daemonLogger)
 	}
 
-	dispatchController := localruntime.NewAdaptiveDispatchController(cfg.Dispatcher, daemonLogger)
-	dispatchController.Start(ctx)
+	scheduler := localruntime.NewAdaptiveScheduler(cfg.Scheduler, daemonLogger)
+	scheduler.Start(ctx)
 
 	logRoot := ""
 	if mirror, ok := logger.sink.(*taskLogMirror); ok {
@@ -325,7 +325,7 @@ func runServer(args []string) int {
 		if dedupeKey != "" {
 			if duplicate, state, duplicateOf := localSubmitDeduper.Check(dedupeKey, allowCompletedDuplicate); duplicate {
 				daemonLogger(
-					"dispatch status=duplicate source=%s state=%s duplicate_of=%s",
+					"task status=duplicate source=%s state=%s duplicate_of=%s",
 					source,
 					state,
 					duplicateOf,
@@ -348,12 +348,12 @@ func runServer(args []string) int {
 		requestID := fmt.Sprintf(
 			"local-%d-%06d",
 			time.Now().UTC().Unix(),
-			atomic.AddUint64(&localDispatchSeq, 1),
+			atomic.AddUint64(&localTaskSeq, 1),
 		)
 		if dedupeKey != "" {
 			if accepted, state, duplicateOf := localSubmitDeduper.Begin(dedupeKey, requestID, allowCompletedDuplicate); !accepted {
 				daemonLogger(
-					"dispatch status=duplicate source=%s state=%s duplicate_of=%s",
+					"task status=duplicate source=%s state=%s duplicate_of=%s",
 					source,
 					state,
 					duplicateOf,
@@ -392,15 +392,15 @@ func runServer(args []string) int {
 					if waitErr := taskHandle.WaitUntilRunnable(runCtx); waitErr != nil {
 						if errors.Is(waitErr, errTaskStoppedByOperator) {
 							finalState = "stopped"
-							daemonLogger("dispatch status=stopped request_id=%s err=%q", requestID, waitErr)
+							daemonLogger("task status=stopped request_id=%s err=%q", requestID, waitErr)
 							return
 						}
 						finalState = "error"
-						daemonLogger("dispatch status=error request_id=%s err=%q", requestID, waitErr)
+						daemonLogger("task status=error request_id=%s err=%q", requestID, waitErr)
 						if !errors.Is(waitErr, context.Canceled) {
 							failedResult := app.Result{
 								ExitCode: app.ExitPreflight,
-								Err:      fmt.Errorf("dispatch wait: %w", waitErr),
+								Err:      fmt.Errorf("task wait: %w", waitErr),
 							}
 							if allowFailureFollowUp {
 								if queueFailureRerun != nil {
@@ -423,9 +423,9 @@ func runServer(args []string) int {
 				if taskHandle != nil {
 					forceAcquire = taskHandle.ConsumeForceAcquire()
 				}
-				acquire := dispatchController.Acquire
+				acquire := scheduler.Acquire
 				if forceAcquire {
-					acquire = dispatchController.AcquireForce
+					acquire = scheduler.AcquireForce
 				}
 				release, acquireErr := acquire(acquireCtx, requestID)
 				if taskHandle != nil {
@@ -436,7 +436,7 @@ func runServer(args []string) int {
 				if acquireErr != nil {
 					if taskHandle != nil && taskHandle.IsStopped() {
 						finalState = "stopped"
-						daemonLogger("dispatch status=stopped request_id=%s err=%q", requestID, errTaskStoppedByOperator)
+						daemonLogger("task status=stopped request_id=%s err=%q", requestID, errTaskStoppedByOperator)
 						return
 					}
 					if taskHandle != nil && taskHandle.IsPaused() && errors.Is(acquireErr, context.Canceled) && runCtx.Err() == nil {
@@ -446,11 +446,11 @@ func runServer(args []string) int {
 						continue
 					}
 					finalState = "error"
-					daemonLogger("dispatch status=error request_id=%s err=%q", requestID, acquireErr)
+					daemonLogger("task status=error request_id=%s err=%q", requestID, acquireErr)
 					if !errors.Is(acquireErr, context.Canceled) {
 						failedResult := app.Result{
 							ExitCode: app.ExitPreflight,
-							Err:      fmt.Errorf("dispatch acquire: %w", acquireErr),
+							Err:      fmt.Errorf("task acquire: %w", acquireErr),
 						}
 						if allowFailureFollowUp {
 							if queueFailureRerun != nil {
@@ -471,7 +471,7 @@ func runServer(args []string) int {
 				if startCfg, startCfgErr := effectiveRuntimeConfig(activeCfg); startCfgErr == nil {
 					finalReviewPasses = startCfg.ReviewWatch.ReviewCount()
 				}
-				outcome := runLocalDispatch(runCtx, runner, daemonLogger, "local", requestID, runCfg, finalReviewPasses, func() bool {
+				outcome := runLocalTask(runCtx, runner, daemonLogger, "local", requestID, runCfg, finalReviewPasses, func() bool {
 					if taskHandle == nil {
 						return false
 					}
@@ -497,7 +497,7 @@ func runServer(args []string) int {
 					if failureResult, failed := localNoChangesFailureResult(source, outcome.Result, runCfg); failed {
 						finalState = "error"
 						daemonLogger(
-							"dispatch status=error request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
+							"task status=error request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
 							requestID,
 							failureResult.ExitCode,
 							failureResult.WorkspaceDir,
@@ -526,7 +526,7 @@ func runServer(args []string) int {
 	queueFailureRerun = func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string) {
 		if ok, reason := shouldQueueFailureRerun(source, failedResult); !ok {
 			daemonLogger(
-				"dispatch status=warn action=skip_failure_rerun request_id=%s err=%q",
+				"task status=warn action=skip_failure_rerun request_id=%s err=%q",
 				failedRequestID,
 				reason,
 			)
@@ -536,14 +536,14 @@ func runServer(args []string) int {
 		rerunRequestID, rerunErr := enqueueFailureRerun(ctx, enqueueLocalRun, failedRunCfg)
 		if rerunErr != nil {
 			daemonLogger(
-				"dispatch status=warn action=queue_failure_rerun request_id=%s err=%q",
+				"task status=warn action=queue_failure_rerun request_id=%s err=%q",
 				failedRequestID,
 				rerunErr,
 			)
 			return
 		}
 		daemonLogger(
-			"dispatch status=ok action=queue_failure_rerun request_id=%s rerun_request_id=%s",
+			"task status=ok action=queue_failure_rerun request_id=%s rerun_request_id=%s",
 			failedRequestID,
 			rerunRequestID,
 		)
@@ -551,7 +551,7 @@ func runServer(args []string) int {
 	queueFailureFollowUp = func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string) {
 		if ok, reason := shouldQueueFailureFollowUp(source, failedResult); !ok {
 			daemonLogger(
-				"dispatch status=warn action=skip_failure_followup request_id=%s err=%q",
+				"task status=warn action=skip_failure_followup request_id=%s err=%q",
 				failedRequestID,
 				reason,
 			)
@@ -561,7 +561,7 @@ func runServer(args []string) int {
 		followUpCfg := failureFollowUpRunConfig(failedRequestID, failedResult, failedRunCfg, logRoot)
 		if len(followUpCfg.RepoList()) == 0 {
 			daemonLogger(
-				"dispatch status=warn action=queue_failure_followup request_id=%s err=%q",
+				"task status=warn action=queue_failure_followup request_id=%s err=%q",
 				failedRequestID,
 				"no failed-task repo found for follow-up",
 			)
@@ -570,14 +570,14 @@ func runServer(args []string) int {
 		followUpRequestID, followUpErr := enqueueLocalRun(ctx, followUpCfg, true, failureFollowUpSource, false)
 		if followUpErr != nil {
 			daemonLogger(
-				"dispatch status=warn action=queue_failure_followup request_id=%s err=%q",
+				"task status=warn action=queue_failure_followup request_id=%s err=%q",
 				failedRequestID,
 				followUpErr,
 			)
 			return
 		}
 		daemonLogger(
-			"dispatch status=ok action=queue_failure_followup request_id=%s follow_up_request_id=%s",
+			"task status=ok action=queue_failure_followup request_id=%s follow_up_request_id=%s",
 			failedRequestID,
 			followUpRequestID,
 		)
@@ -586,7 +586,7 @@ func runServer(args []string) int {
 		logPaths := existingPaths(followUpTaskLogPaths(logRoot, requestID))
 		if ok, reason := shouldQueueUnexpectedNoChangesFollowUpWithLogs(result, runCfg, logPaths); !ok {
 			daemonLogger(
-				"dispatch status=warn action=skip_no_changes_followup request_id=%s err=%q",
+				"task status=warn action=skip_no_changes_followup request_id=%s err=%q",
 				requestID,
 				reason,
 			)
@@ -596,7 +596,7 @@ func runServer(args []string) int {
 		followUpCfg := unexpectedNoChangesFollowUpRunConfig(requestID, result, runCfg, logRoot)
 		if len(followUpCfg.RepoList()) == 0 {
 			daemonLogger(
-				"dispatch status=warn action=queue_no_changes_followup request_id=%s err=%q",
+				"task status=warn action=queue_no_changes_followup request_id=%s err=%q",
 				requestID,
 				"no task repo found for no-changes follow-up",
 			)
@@ -606,14 +606,14 @@ func runServer(args []string) int {
 		followUpRequestID, followUpErr := enqueueLocalRun(ctx, followUpCfg, true, noChangesFollowUpSource, false)
 		if followUpErr != nil {
 			daemonLogger(
-				"dispatch status=warn action=queue_no_changes_followup request_id=%s err=%q",
+				"task status=warn action=queue_no_changes_followup request_id=%s err=%q",
 				requestID,
 				followUpErr,
 			)
 			return
 		}
 		daemonLogger(
-			"dispatch status=ok action=queue_no_changes_followup request_id=%s follow_up_request_id=%s",
+			"task status=ok action=queue_no_changes_followup request_id=%s follow_up_request_id=%s",
 			requestID,
 			followUpRequestID,
 		)
@@ -622,7 +622,7 @@ func runServer(args []string) int {
 		logPaths := existingPaths(followUpTaskLogPaths(logRoot, requestID))
 		if ok, reason := shouldEscalateNoChangesFollowUpWithLogs(noChangesFollowUpSource, result, runCfg, logPaths); !ok {
 			daemonLogger(
-				"dispatch status=warn action=skip_no_changes_escalation request_id=%s err=%q",
+				"task status=warn action=skip_no_changes_escalation request_id=%s err=%q",
 				requestID,
 				reason,
 			)
@@ -632,7 +632,7 @@ func runServer(args []string) int {
 		followUpCfg := escalatedNoChangesFollowUpRunConfig(requestID, result, runCfg, logRoot)
 		if len(followUpCfg.RepoList()) == 0 {
 			daemonLogger(
-				"dispatch status=warn action=queue_no_changes_escalation request_id=%s err=%q",
+				"task status=warn action=queue_no_changes_escalation request_id=%s err=%q",
 				requestID,
 				"no task repo found for no-changes escalation",
 			)
@@ -642,14 +642,14 @@ func runServer(args []string) int {
 		followUpRequestID, followUpErr := enqueueLocalRun(ctx, followUpCfg, false, noChangesEscalationSource, false)
 		if followUpErr != nil {
 			daemonLogger(
-				"dispatch status=warn action=queue_no_changes_escalation request_id=%s err=%q",
+				"task status=warn action=queue_no_changes_escalation request_id=%s err=%q",
 				requestID,
 				followUpErr,
 			)
 			return
 		}
 		daemonLogger(
-			"dispatch status=ok action=queue_no_changes_escalation request_id=%s follow_up_request_id=%s",
+			"task status=ok action=queue_no_changes_escalation request_id=%s follow_up_request_id=%s",
 			requestID,
 			followUpRequestID,
 		)
@@ -681,7 +681,7 @@ func runServer(args []string) int {
 				if err := os.RemoveAll(logDir); err != nil {
 					errs = append(errs, fmt.Errorf("remove task log dir %s: %w", logDir, err))
 				} else {
-					daemonLogger("dispatch status=ok action=task_close_cleanup request_id=%s log_dir=%s", requestID, logDir)
+					daemonLogger("task status=ok action=task_close_cleanup request_id=%s log_dir=%s", requestID, logDir)
 				}
 			}
 
@@ -690,9 +690,9 @@ func runServer(args []string) int {
 				case removeErr != nil:
 					errs = append(errs, removeErr)
 				case removed:
-					daemonLogger("dispatch status=ok action=task_close_cleanup request_id=%s workspace_dir=%s", requestID, workspaceDir)
+					daemonLogger("task status=ok action=task_close_cleanup request_id=%s workspace_dir=%s", requestID, workspaceDir)
 				default:
-					daemonLogger("dispatch status=warn action=skip_workspace_cleanup request_id=%s workspace_dir=%s", requestID, workspaceDir)
+					daemonLogger("task status=warn action=skip_workspace_cleanup request_id=%s workspace_dir=%s", requestID, workspaceDir)
 				}
 			}
 
@@ -751,21 +751,21 @@ func runServer(args []string) int {
 			if err := localTaskController.Pause(requestID); err != nil {
 				return err
 			}
-			daemonLogger("dispatch status=paused request_id=%s", requestID)
+			daemonLogger("task status=paused request_id=%s", requestID)
 			return nil
 		}
 		uiServer.RunTask = func(_ context.Context, requestID string) error {
 			if err := localTaskController.Run(requestID); err != nil {
 				return err
 			}
-			daemonLogger("dispatch status=resumed request_id=%s", requestID)
+			daemonLogger("task status=resumed request_id=%s", requestID)
 			return nil
 		}
 		uiServer.ForceRunTask = func(_ context.Context, requestID string) error {
 			if err := localTaskController.ForceRun(requestID); err != nil {
 				return err
 			}
-			daemonLogger("dispatch status=forced request_id=%s", requestID)
+			daemonLogger("task status=forced request_id=%s", requestID)
 			return nil
 		}
 		uiServer.StopTask = func(_ context.Context, requestID string) error {
@@ -773,7 +773,7 @@ func runServer(args []string) int {
 			if err != nil {
 				return err
 			}
-			daemonLogger("dispatch status=stopped request_id=%s err=%q", firstNonEmptyString(canonical, requestID), errTaskStoppedByOperator)
+			daemonLogger("task status=stopped request_id=%s err=%q", firstNonEmptyString(canonical, requestID), errTaskStoppedByOperator)
 			return nil
 		}
 		go func() {
@@ -1064,13 +1064,13 @@ func shouldClassifyRuntimeDebugLine(line, lowerLine string, fields map[string]st
 	if strings.TrimSpace(fields["stage"]) != "" {
 		return true
 	}
-	if strings.HasPrefix(lowerLine, "dispatch status=") && isDebugDispatchStatus(status) {
+	if strings.HasPrefix(lowerLine, "task status=") && isDebugTaskStatus(status) {
 		return true
 	}
 	return false
 }
 
-func isDebugDispatchStatus(status string) bool {
+func isDebugTaskStatus(status string) bool {
 	switch strings.TrimSpace(status) {
 	case "start", "ack", "queued", "duplicate", "paused", "resumed", "forced", "running":
 		return true
@@ -1111,12 +1111,12 @@ func writeStderrLine(logger *terminalLogger, line string) {
 	}
 }
 
-type localDispatchOutcome struct {
+type localTaskOutcome struct {
 	State  string
 	Result app.Result
 }
 
-func runLocalDispatch(
+func runLocalTask(
 	ctx context.Context,
 	runner execx.Runner,
 	logf func(string, ...any),
@@ -1125,9 +1125,9 @@ func runLocalDispatch(
 	runCfg config.Config,
 	finalReviewPasses int,
 	wasStopped func() bool,
-) localDispatchOutcome {
+) localTaskOutcome {
 	logf(
-		"dispatch status=start request_id=%s skill=%s repo=%s repos=%s",
+		"task status=start request_id=%s skill=%s repo=%s repos=%s",
 		requestID,
 		skill,
 		runCfg.RepoURL,
@@ -1138,7 +1138,7 @@ func runLocalDispatch(
 	h.FinalReviewPasses = finalReviewPasses
 	h.Logf = func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)
-		logf("dispatch request_id=%s %s", requestID, line)
+		logf("task request_id=%s %s", requestID, line)
 	}
 
 	res := h.Run(ctx, runCfg)
@@ -1149,7 +1149,7 @@ func runLocalDispatch(
 				stopErr = errTaskStoppedByOperator
 			}
 			logf(
-				"dispatch status=stopped request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
+				"task status=stopped request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
 				requestID,
 				res.ExitCode,
 				res.WorkspaceDir,
@@ -1157,10 +1157,10 @@ func runLocalDispatch(
 				res.PRURL,
 				stopErr,
 			)
-			return localDispatchOutcome{State: "stopped", Result: res}
+			return localTaskOutcome{State: "stopped", Result: res}
 		}
 		logf(
-			"dispatch status=error request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
+			"task status=error request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
 			requestID,
 			res.ExitCode,
 			res.WorkspaceDir,
@@ -1168,21 +1168,21 @@ func runLocalDispatch(
 			res.PRURL,
 			res.Err,
 		)
-		return localDispatchOutcome{State: "error", Result: res}
+		return localTaskOutcome{State: "error", Result: res}
 	}
 	if res.NoChanges && !resultHasPR(res) {
 		logf(
-			"dispatch status=no_changes request_id=%s workspace=%s branch=%s pr_url=%s pr_urls=%s",
+			"task status=no_changes request_id=%s workspace=%s branch=%s pr_url=%s pr_urls=%s",
 			requestID,
 			res.WorkspaceDir,
 			res.Branch,
 			res.PRURL,
 			joinAllPRURLs(res.RepoResults),
 		)
-		return localDispatchOutcome{State: "no_changes", Result: res}
+		return localTaskOutcome{State: "no_changes", Result: res}
 	}
 	logf(
-		"dispatch status=completed request_id=%s workspace=%s branch=%s pr_url=%s pr_urls=%s changed_repos=%d",
+		"task status=completed request_id=%s workspace=%s branch=%s pr_url=%s pr_urls=%s changed_repos=%d",
 		requestID,
 		res.WorkspaceDir,
 		res.Branch,
@@ -1190,7 +1190,7 @@ func runLocalDispatch(
 		completedPRURLs(res),
 		countChangedRepos(res.RepoResults),
 	)
-	return localDispatchOutcome{State: "completed", Result: res}
+	return localTaskOutcome{State: "completed", Result: res}
 }
 
 func failureFollowUpRunConfig(
@@ -1901,7 +1901,7 @@ func taskWorkspaceDirFromLogContent(content, requestID string) string {
 	lines := splitLogLines(content)
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
-		if line == "" || !strings.HasPrefix(line, "dispatch status=") {
+		if !strings.HasPrefix(line, "task status=") && !strings.HasPrefix(line, "dispatch status=") {
 			continue
 		}
 

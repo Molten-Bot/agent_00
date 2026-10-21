@@ -741,8 +741,8 @@ func normalizePRTitle(title string) string {
 	if title == "" {
 		return "Automated update"
 	}
-	if strings.HasPrefix(strings.ToLower(title), "moltenhub-") {
-		title = strings.TrimSpace(title[len("moltenhub-"):])
+	if strings.HasPrefix(strings.ToLower(title), "agent00-") {
+		title = strings.TrimSpace(title[len("agent00-"):])
 	}
 	if title == "" {
 		return "Automated update"

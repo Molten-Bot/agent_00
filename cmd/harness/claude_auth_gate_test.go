@@ -277,7 +277,7 @@ func TestClaudeAuthGateConfigurePersistsGitHubTokenAndEnvironment(t *testing.T) 
 	t.Setenv("GITHUB_TOKEN", "")
 	useSuccessfulGitHubStarTestServer(t)
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	g := newClaudeAuthGateWithConfig("", path, localruntime.InitConfig{
 
 		AgentHarness: agentruntime.HarnessClaude,
@@ -322,7 +322,7 @@ func TestClaudeAuthGateConfigureAcceptsCredentialsJSONInConfigureState(t *testin
 	claudeConfigDir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeConfigDir)
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	g := &claudeAuthGate{
 		baseCtx:           context.Background(),
 		required:          true,

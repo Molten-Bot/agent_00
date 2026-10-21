@@ -63,7 +63,7 @@ required.
 
 Agent work can write only inside its allocated task directory (the parent of
 that task's cloned repositories). Temporary files, home directories, and build
-caches live under `.moltenhub-agent-io` inside that directory. The harness
+caches live under `.agent00-agent-io` inside that directory. The harness
 overrides Codex's writable roots, excludes global `/tmp` and implicit `$TMPDIR`
 access, and sets approvals to `never` so commands cannot escalate outside the
 task. Existing operator config cannot add extra writable roots. Multi-repository
@@ -82,7 +82,7 @@ while Codex 0.147.0's bundled helper succeeds with the security options above.
 Recreate an existing container to apply security options; restarting it does not
 change them. For Compose, run `docker compose up -d --force-recreate agent_00`.
 Pulling a newer image also does not change an existing container's security
-options. Check the container you actually dispatch tasks to:
+options. Check the container you actually run tasks in:
 
 ```bash
 docker inspect YOUR_CONTAINER --format '{{json .HostConfig.SecurityOpt}}'
@@ -90,7 +90,7 @@ docker inspect YOUR_CONTAINER --format '{{json .HostConfig.SecurityOpt}}'
 
 If this prints `null` or `[]`, recreate it with the two security options above
 (or equivalent custom profiles), retaining its configuration/workspace volumes.
-Check the sandbox in the actual container before dispatching work:
+Check the sandbox in the actual container before running work:
 
 ```bash
 docker compose exec agent_00 codex sandbox \

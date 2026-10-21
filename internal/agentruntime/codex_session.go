@@ -14,7 +14,7 @@ import (
 
 var ErrCodexAuthRequired = errors.New("Codex authentication required; sign in again in the harness runtime")
 
-const codexAuthFailureFile = ".moltenhub-auth-required"
+const codexAuthFailureFile = ".agent00-auth-required"
 
 // CodexHome resolves the operator's persistent home before task HOME isolation.
 func CodexHome(environ []string) (string, error) {
@@ -60,7 +60,7 @@ func AcquireCodexSession(ctx context.Context, home string) (*CodexSession, error
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return nil, fmt.Errorf("prepare persistent Codex home: %w", err)
 	}
-	file, err := os.OpenFile(filepath.Join(home, ".moltenhub-session.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(filepath.Join(home, ".agent00-session.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open Codex session lock: %w", err)
 	}
@@ -107,7 +107,7 @@ func CodexAuthenticationFailure(text string) bool {
 }
 
 // CheckCodexAuthentication remembers a failed credential generation across
-// dispatches and restarts. A fresh auth.json from an external login recovers it.
+// tasks and restarts. A fresh auth.json from an external login recovers it.
 // Only a digest is stored; tokens never enter the marker, task tree, or logs.
 func CheckCodexAuthentication(home string) error {
 	marker, err := os.ReadFile(filepath.Join(home, codexAuthFailureFile))
@@ -133,7 +133,7 @@ func MarkCodexAuthenticationRequired(home string) error {
 	if err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(home, ".moltenhub-auth-required-*")
+	file, err := os.CreateTemp(home, ".agent00-auth-required-*")
 	if err != nil {
 		return fmt.Errorf("record Codex authentication failure: %w", err)
 	}

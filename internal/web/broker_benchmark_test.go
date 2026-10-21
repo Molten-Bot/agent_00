@@ -9,7 +9,7 @@ func BenchmarkBrokerIngestLogDispatchStatus(b *testing.B) {
 	b.ReportAllocs()
 
 	broker := NewBroker()
-	line := "dispatch status=start request_id=req-bench skill=code_for_me repo=git@github.com:acme/repo.git"
+	line := "task status=start request_id=req-bench skill=code_for_me repo=git@github.com:acme/repo.git"
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -22,7 +22,7 @@ func BenchmarkBrokerIngestLogCommandOutput(b *testing.B) {
 
 	broker := NewBroker()
 	encoded := base64.StdEncoding.EncodeToString([]byte("thinking..."))
-	line := "dispatch request_id=req-bench cmd phase=codex name=codex stream=stdout b64=" + encoded
+	line := "task request_id=req-bench cmd phase=codex name=codex stream=stdout b64=" + encoded
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

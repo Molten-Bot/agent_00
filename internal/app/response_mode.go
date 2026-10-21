@@ -13,7 +13,7 @@ import (
 const (
 	cavemanSkillRelativePath = "skills/caveman/SKILL.md"
 	workspaceSkillsDir       = "/workspace/skills"
-	runtimeSkillsDir         = "/opt/moltenhub/skills"
+	runtimeSkillsDir         = "/opt/agent00/skills"
 )
 
 func withResponseModePrompt(prompt, responseMode string) (string, error) {

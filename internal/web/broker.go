@@ -123,7 +123,7 @@ type TaskAttempt struct {
 	UpdatedAt string
 }
 
-// ResourceMetrics captures the current dispatcher sample window values.
+// ResourceMetrics captures the current scheduler sample window values.
 type ResourceMetrics struct {
 	CPUPercent    float64 `json:"cpu_percent,omitempty"`
 	MemoryPercent float64 `json:"memory_percent,omitempty"`
@@ -347,6 +347,13 @@ func (b *Broker) IngestLog(line string) {
 		return
 	}
 	line = strings.TrimSpace(line)
+	// Normalize persisted logs from older harness versions at the input boundary.
+	for old, current := range map[string]string{"dispatch ": "task ", "dispatcher ": "scheduler ", "debug dispatcher ": "debug scheduler "} {
+		if strings.HasPrefix(line, old) {
+			line = current + strings.TrimPrefix(line, old)
+			break
+		}
+	}
 	if line == "" {
 		return
 	}
@@ -373,7 +380,7 @@ func (b *Broker) IngestLog(line string) {
 	})
 
 	if requestID != "" &&
-		!isDuplicateTaskDispatchLine(fields) &&
+		!isDuplicateTaskLifecycleLine(fields) &&
 		!b.isClosedTaskLocked(requestID, now) {
 		t := b.ensureTaskLocked(requestID, now)
 		b.updateTaskFromLineLocked(t, line, fields, now)
@@ -571,7 +578,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 			BaseBranch:        baseBranch,
 			Branch:            baseBranch,
 			Status:            "pending",
-			Stage:             "dispatch",
+			Stage:             "task",
 			StageStatus:       "queued",
 			StartedAt:         now,
 			UpdatedAt:         now,
@@ -1653,7 +1660,7 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[string]string, now time.Time) {
 	defer func() {
 		if t != nil {
-			if isFinalTaskDispatchLine(fields) && isCompletedTaskStatus(t.Status) {
+			if isFinalTaskLifecycleLine(fields) && isCompletedTaskStatus(t.Status) {
 				t.TerminalAt = now
 			}
 			b.registerRepositoriesLocked(t.Repos, nil)
@@ -1664,7 +1671,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 	t.UpdatedAt = now
 	t.LiveAppURL = firstNonEmpty(taskLiveAppURLFromFields(fields), t.LiveAppURL)
 
-	if strings.HasPrefix(line, "dispatch status=start") {
+	if strings.HasPrefix(line, "task status=start") {
 		t.Status = "running"
 		t.Source = firstNonEmpty(t.Source, normalizeTaskSource(fields["source"]), defaultTaskSourceForRequestID(t.RequestID))
 		t.Skill = firstNonEmpty(t.Skill, fields["skill"])
@@ -1680,42 +1687,42 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		}
 	}
 
-	if isFinalTaskDispatchLine(fields) && strings.HasPrefix(line, "dispatch status=completed") {
+	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=completed") {
 		t.Status = "completed"
 		t.WorkspaceDir = firstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
 		t.Branch = firstNonEmpty(fields["branch"], t.Branch)
 		t.PRURL = firstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
 	}
 
-	if isFinalTaskDispatchLine(fields) && strings.HasPrefix(line, "dispatch status=ok") {
+	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=ok") {
 		t.Status = "completed"
 		t.WorkspaceDir = firstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
 		t.Branch = firstNonEmpty(fields["branch"], t.Branch)
 		t.PRURL = firstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
 	}
 
-	if isFinalTaskDispatchLine(fields) && strings.HasPrefix(line, "dispatch status=no_changes") {
+	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=no_changes") {
 		t.Status = "no_changes"
 		t.WorkspaceDir = firstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
 		t.Branch = firstNonEmpty(fields["branch"], t.Branch)
 		t.PRURL = firstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
 	}
 
-	if strings.HasPrefix(line, "dispatch status=paused") {
+	if strings.HasPrefix(line, "task status=paused") {
 		t.Status = "paused"
-		t.Stage = firstNonEmpty(t.Stage, "dispatch")
+		t.Stage = firstNonEmpty(t.Stage, "task")
 		t.StageStatus = firstNonEmpty(fields["status"], "paused")
 	}
 
-	if strings.HasPrefix(line, "dispatch status=resumed") {
+	if strings.HasPrefix(line, "task status=resumed") {
 		if t.Status == "" || t.Status == "paused" || t.Status == "pending" {
 			t.Status = "pending"
 		}
-		t.Stage = firstNonEmpty(t.Stage, "dispatch")
+		t.Stage = firstNonEmpty(t.Stage, "task")
 		t.StageStatus = firstNonEmpty(fields["status"], "resumed")
 	}
 
-	if isFinalTaskDispatchLine(fields) && strings.HasPrefix(line, "dispatch status=stopped") {
+	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=stopped") {
 		t.Status = "stopped"
 		if code, ok := parseIntField(fields["exit_code"]); ok {
 			t.ExitCode = code
@@ -1729,7 +1736,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		}
 	}
 
-	if isFinalTaskDispatchLine(fields) && strings.HasPrefix(line, "dispatch status=error") {
+	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=error") {
 		t.Status = "error"
 		if code, ok := parseIntField(fields["exit_code"]); ok {
 			t.ExitCode = code
@@ -1740,15 +1747,15 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		t.Error = firstNonEmpty(fields["err"], fields["error"], t.Error)
 	}
 
-	if isFinalTaskDispatchLine(fields) && strings.HasPrefix(line, "dispatch status=invalid") {
+	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=invalid") {
 		t.Status = "invalid"
 		t.Error = firstNonEmpty(fields["err"], fields["error"], t.Error)
 	}
 
-	if isFinalTaskDispatchLine(fields) && strings.HasPrefix(line, "dispatch status=duplicate") {
+	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=duplicate") {
 		if t.Status == "" || t.Status == "pending" || t.Status == "duplicate" {
 			t.Status = "duplicate"
-			t.Stage = firstNonEmpty(t.Stage, "dispatch")
+			t.Stage = firstNonEmpty(t.Stage, "task")
 			t.StageStatus = firstNonEmpty(fields["state"], t.StageStatus)
 			t.Error = firstNonEmpty(fields["err"], fields["error"], t.Error)
 			if t.Error == "" {
@@ -1768,7 +1775,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		}
 	}
 
-	if strings.HasPrefix(line, "dispatch request_id=") {
+	if strings.HasPrefix(line, "task request_id=") {
 		agentInvocationLine := isAgentInvocationWorkflowStatusFields(fields)
 		if stage := fields["stage"]; stage != "" {
 			t.Stage = stage
@@ -1811,7 +1818,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		return
 	}
 
-	if strings.HasPrefix(line, "dispatch ") {
+	if strings.HasPrefix(line, "task ") {
 		b.appendTaskLogLocked(t, TaskLog{
 			Time:   now.Format(time.RFC3339Nano),
 			Stream: "meta",
@@ -1820,7 +1827,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 	}
 }
 
-func isDuplicateTaskDispatchLine(fields map[string]string) bool {
+func isDuplicateTaskLifecycleLine(fields map[string]string) bool {
 	if fields == nil {
 		return false
 	}
@@ -1937,7 +1944,7 @@ func shouldDropNoisyCommandLine(line string, fields map[string]string) bool {
 }
 
 func (b *Broker) updateResourceMetricsFromLineLocked(line string, fields map[string]string, now time.Time) {
-	if !strings.Contains(line, "dispatcher status=window") {
+	if !strings.Contains(line, "scheduler status=window") {
 		return
 	}
 
@@ -1984,8 +1991,8 @@ func (b *Broker) updateMaxConcurrentTasksLocked() {
 
 func classifyEventKind(line string) string {
 	switch {
-	case strings.HasPrefix(line, "dispatch status="):
-		return "dispatch_status"
+	case strings.HasPrefix(line, "task status="):
+		return "task_status"
 	case strings.Contains(line, " cmd "):
 		return "command_output"
 	case strings.HasPrefix(line, "localruntime."):
@@ -2694,7 +2701,7 @@ func isCompletedTaskStatus(status string) bool {
 	}
 }
 
-func isFinalTaskDispatchLine(fields map[string]string) bool {
+func isFinalTaskLifecycleLine(fields map[string]string) bool {
 	return strings.TrimSpace(fields["action"]) == ""
 }
 

@@ -261,7 +261,7 @@ func TestStaticStyleIncludesSharedDockIconStyles(t *testing.T) {
 	}
 
 	if !strings.Contains(stylesheet, `.hub-dock-plus {`) {
-		t.Fatalf("expected stylesheet to include molten hub plus badge styles")
+		t.Fatalf("expected stylesheet to include agent plus badge styles")
 	}
 
 	if !strings.Contains(stylesheet, `.onboarding-modal-backdrop {`) ||

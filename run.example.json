@@ -9,8 +9,8 @@
   "prompt": "Add your prompt here."
   // library task example:
   // "repos": [
-  //   "git@github.com:Molten-Bot/moltenhub.git",
-  //   "git@github.com:Molten-Bot/agent_00.git"
+  //   "git@github.com:acme/service-a.git",
+  //   "git@github.com:acme/service-b.git"
   // ],
   // "libraryTaskName": "unit-test-coverage",
   // optional for subdirectory-scoped runs:

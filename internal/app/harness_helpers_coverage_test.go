@@ -71,11 +71,11 @@ func TestHarnessURLCloneAndSandboxHelpers(t *testing.T) {
 	if !shouldRetryClone(errors.New("transient"), execx.Result{Stderr: "connection reset"}) {
 		t.Fatal("shouldRetryClone(transient) = false, want true")
 	}
-	if !shouldFallbackCloneToDefaultBranch("moltenhub-topic", execx.Result{Stderr: "remote branch moltenhub-topic not found"}, errors.New("missing")) {
+	if !shouldFallbackCloneToDefaultBranch("agent00-topic", execx.Result{Stderr: "remote branch agent00-topic not found"}, errors.New("missing")) {
 		t.Fatal("shouldFallbackCloneToDefaultBranch() = false, want true")
 	}
-	if !shouldFallbackCloneToDefaultBranch("moltenbot000:moltenhub-topic", execx.Result{Stderr: "remote branch moltenbot000:moltenhub-topic not found"}, errors.New("missing")) {
-		t.Fatal("shouldFallbackCloneToDefaultBranch(owner-qualified moltenhub branch) = false, want true")
+	if !shouldFallbackCloneToDefaultBranch("moltenbot000:agent00-topic", execx.Result{Stderr: "remote branch moltenbot000:agent00-topic not found"}, errors.New("missing")) {
+		t.Fatal("shouldFallbackCloneToDefaultBranch(owner-qualified agent00 branch) = false, want true")
 	}
 	if !shouldFallbackCloneToDefaultBranch("main", execx.Result{Stderr: "remote branch main not found"}, errors.New("missing")) {
 		t.Fatal("shouldFallbackCloneToDefaultBranch(main) = false, want true")
@@ -84,10 +84,10 @@ func TestHarnessURLCloneAndSandboxHelpers(t *testing.T) {
 		t.Fatal("shouldFallbackCloneToDefaultBranch(master) = false, want true")
 	}
 	if shouldFallbackCloneToDefaultBranch("release", execx.Result{Stderr: "remote branch release not found"}, errors.New("missing")) {
-		t.Fatal("shouldFallbackCloneToDefaultBranch(non-moltenhub) = true, want false")
+		t.Fatal("shouldFallbackCloneToDefaultBranch(non-agent00) = true, want false")
 	}
 	if shouldFallbackCloneToDefaultBranch("octocat:release", execx.Result{Stderr: "remote branch octocat:release not found"}, errors.New("missing")) {
-		t.Fatal("shouldFallbackCloneToDefaultBranch(owner-qualified non-moltenhub) = true, want false")
+		t.Fatal("shouldFallbackCloneToDefaultBranch(owner-qualified non-agent00) = true, want false")
 	}
 	if !shouldBootstrapUninitializedMainBranch("main", execx.Result{Stderr: "remote branch main not found"}, errors.New("missing")) {
 		t.Fatal("shouldBootstrapUninitializedMainBranch(main) = false, want true")
@@ -393,7 +393,7 @@ func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 		t.Fatalf("prepareAgentIOEnv() error = %v", err)
 	}
 
-	wantRoot := filepath.Join(runDir, ".moltenhub-agent-io")
+	wantRoot := filepath.Join(runDir, ".agent00-agent-io")
 	for _, rel := range []string{"home", "tmp", "config", filepath.Join("config", "claude"), "cache", "state", "log", "runtime"} {
 		if st, err := os.Stat(filepath.Join(wantRoot, rel)); err != nil || !st.IsDir() {
 			t.Fatalf("agent io dir %s stat = (%v, %v), want directory", rel, st, err)
@@ -429,8 +429,8 @@ func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(wantRoot, "config", "claude", ".credentials.json")); err != nil || string(got) != `{"claude":"ok"}` {
 		t.Fatalf("copied claude auth = (%q, %v), want seeded auth", string(got), err)
 	}
-	if got, want := envValue(env, "MOLTENHUB_AGENT_IO_DIR"), wantRoot; got != want {
-		t.Fatalf("MOLTENHUB_AGENT_IO_DIR = %q, want %q", got, want)
+	if got, want := envValue(env, "AGENT00_AGENT_IO_DIR"), wantRoot; got != want {
+		t.Fatalf("AGENT00_AGENT_IO_DIR = %q, want %q", got, want)
 	}
 	if got := envValue(env, "GH_TOKEN"); got != "keep" {
 		t.Fatalf("GH_TOKEN = %q, want preserved", got)

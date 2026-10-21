@@ -82,7 +82,7 @@ func TestFirstConfiguredGitHubTokenPrefersEnvironmentOverRuntimeConfig(t *testin
 	t.Setenv("GH_TOKEN", "github_token_env_token")
 	t.Setenv("GITHUB_TOKEN", "github_token_env_token_alt")
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -103,7 +103,7 @@ func TestFirstConfiguredGitHubTokenPrefersRuntimeConfigOverInitConfig(t *testing
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -412,7 +412,7 @@ func TestConfigureGitHubTokenStarsAgent00BeforePersisting(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	token, state, err := configureGitHubToken(context.Background(), "test", path, localruntime.InitConfig{}, nil, githubToken, "")
 	if err != nil {
 		t.Fatalf("configureGitHubToken() error = %v", err)
@@ -438,7 +438,7 @@ func TestConfigureGitHubTokenRejectsFailedStarWithoutPersisting(t *testing.T) {
 		_, _ = w.Write([]byte(`{"message":"Resource not accessible by personal access token"}`))
 	})
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	token, state, err := configureGitHubToken(context.Background(), "test", path, localruntime.InitConfig{}, nil, githubToken, "")
 	if err == nil {
 		t.Fatal("configureGitHubToken() error = nil, want star failure")
@@ -464,7 +464,7 @@ func TestGitHubTokenRequirementStatePrefersValidatedEnvironmentTokenOverInvalidP
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "github_token_env_valid")
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}

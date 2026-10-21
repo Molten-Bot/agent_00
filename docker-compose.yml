@@ -21,7 +21,8 @@ services:
       WHISPER_SPEECH_PORT: "10300"
       WHISPER_SPEECH_LANGUAGE: "${WHISPER_SPEECH_LANGUAGE:-${WHISPER_LANG:-en}}"
     volumes:
-      - ./.moltenhub:/workspace/config
+      # Set AGENT_00_CONFIG_DIR to reuse an existing configuration directory.
+      - ${AGENT_00_CONFIG_DIR:-./.agent00}:/workspace/config
     depends_on:
       faster-whisper:
         condition: service_started

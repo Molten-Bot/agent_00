@@ -627,7 +627,7 @@ func TestApplyDefaultsRemovesExistingPRTitlePrefix(t *testing.T) {
 	cfg := Config{
 		RepoURL: "git@github.com:acme/repo.git",
 		Prompt:  "fix tests",
-		PRTitle: "moltenhub-release cleanup",
+		PRTitle: "agent00-release cleanup",
 	}
 	cfg.ApplyDefaults()
 
@@ -642,7 +642,7 @@ func TestApplyDefaultsTrimsGeneratedSuffixFromCustomPRTitle(t *testing.T) {
 	cfg := Config{
 		RepoURL: "git@github.com:acme/repo.git",
 		Prompt:  "fix tests",
-		PRTitle: "moltenhub-queue-dedup-needs-to-be-repo-base-branc-20260406-233219-575aeb56",
+		PRTitle: "agent00-queue-dedup-needs-to-be-repo-base-branc-20260406-233219-575aeb56",
 	}
 	cfg.ApplyDefaults()
 
@@ -657,7 +657,7 @@ func TestApplyDefaultsTrimsGeneratedSuffixWithShortHashFromCustomPRTitle(t *test
 	cfg := Config{
 		RepoURL: "git@github.com:acme/repo.git",
 		Prompt:  "fix tests",
-		PRTitle: "moltenhub-if-repo-history-is-being-used-the-text-b-20260407-002959-2fc3c",
+		PRTitle: "agent00-if-repo-history-is-being-used-the-text-b-20260407-002959-2fc3c",
 	}
 	cfg.ApplyDefaults()
 
@@ -686,7 +686,7 @@ func TestApplyDefaultsTrimsGeneratedSuffixWithoutHashFromCustomPRTitle(t *testin
 	cfg := Config{
 		RepoURL: "git@github.com:acme/repo.git",
 		Prompt:  "fix tests",
-		PRTitle: "moltenhub-release-cleanup-20260407-002959",
+		PRTitle: "agent00-release-cleanup-20260407-002959",
 	}
 	cfg.ApplyDefaults()
 

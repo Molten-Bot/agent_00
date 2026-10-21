@@ -26,12 +26,12 @@ func TestPRReviewFeedbackRunConfigUpdatesExistingPRBranch(t *testing.T) {
 	task := web.Task{
 		RequestID: "req-117",
 		PRURL:     "https://github.com/acme/repo/pull/117",
-		Branch:    "moltenhub-custom-themes",
+		Branch:    "agent00-custom-themes",
 	}
 	feedback := web.PRReviewFeedback{
 		PRURL:          "https://github.com/acme/repo/pull/117",
 		Title:          "Build custom themes",
-		HeadBranch:     "moltenhub-custom-themes",
+		HeadBranch:     "agent00-custom-themes",
 		BaseBranch:     "main",
 		ReviewDecision: "REVIEW_REQUIRED",
 		Items: []web.PRReviewFeedbackItem{{
@@ -46,7 +46,7 @@ func TestPRReviewFeedbackRunConfigUpdatesExistingPRBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prReviewFeedbackRunConfig() error = %v", err)
 	}
-	if got, want := cfg.BaseBranch, "moltenhub-custom-themes"; got != want {
+	if got, want := cfg.BaseBranch, "agent00-custom-themes"; got != want {
 		t.Fatalf("cfg.BaseBranch = %q, want %q", got, want)
 	}
 	if cfg.LibraryTaskName != resolvePRCommentsTaskName || cfg.Review != nil {
@@ -58,7 +58,7 @@ func TestPRReviewFeedbackRunConfigUpdatesExistingPRBranch(t *testing.T) {
 	for _, want := range []string{
 		"Original task prompt:",
 		"Build keyboard-accessible custom themes.",
-		"Head branch to update: moltenhub-custom-themes",
+		"Head branch to update: agent00-custom-themes",
 		"Custom theme radiogroup lacks arrow-key navigation",
 		"do not create a separate PR",
 	} {

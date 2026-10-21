@@ -10,7 +10,7 @@ import (
 func TestSaveRuntimeConfigAgentRuntimeRejectsHarnessSwitch(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -30,7 +30,7 @@ func TestSaveRuntimeConfigAgentRuntimeRejectsHarnessSwitch(t *testing.T) {
 func TestSaveRuntimeConfigAgentRuntimeRejectsCommandSwitchForBoundHarness(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -50,7 +50,7 @@ func TestSaveRuntimeConfigAgentRuntimeRejectsCommandSwitchForBoundHarness(t *tes
 func TestSaveRuntimeConfigAgentRuntimeAllowsIdempotentResave(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}

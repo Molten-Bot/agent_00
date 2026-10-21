@@ -23,24 +23,10 @@ func TestResolveRuntimeConfigPathEmptyInitUsesDefault(t *testing.T) {
 	}
 }
 
-func TestLegacyRuntimeConfigPathForVariants(t *testing.T) {
-	t.Parallel()
-
-	if got, want := legacyRuntimeConfigPathFor(""), legacyRuntimeConfigPath; got != want {
-		t.Fatalf("legacyRuntimeConfigPathFor(empty) = %q, want %q", got, want)
-	}
-	if got, want := legacyRuntimeConfigPathFor(runtimeConfigPath), legacyRuntimeConfigPath; got != want {
-		t.Fatalf("legacyRuntimeConfigPathFor(default) = %q, want %q", got, want)
-	}
-	if got, want := legacyRuntimeConfigPathFor("/workspace/config.json"), "/workspace/config/config.json"; got != want {
-		t.Fatalf("legacyRuntimeConfigPathFor(custom) = %q, want %q", got, want)
-	}
-}
-
 func TestSaveRuntimeConfigGitHubTokenMergesIntoExistingConfig(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -86,7 +72,7 @@ func readJSONDocForTest(t *testing.T, path string) map[string]any {
 func TestReadRuntimeConfigString(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -124,7 +110,7 @@ func TestReadRuntimeConfigStringInvalidInputs(t *testing.T) {
 func TestLoadRuntimeConfigBackfillsMissingLogLevel(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -156,7 +142,7 @@ func TestLoadRuntimeConfigBackfillsMissingLogLevel(t *testing.T) {
 func TestLoadRuntimeConfigHonorsConfiguredLogLevel(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}

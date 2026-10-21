@@ -28,7 +28,7 @@ ARG OPENAI_PYTHON_VERSION=2.53.0
 ENV GIT_TERMINAL_PROMPT=0 \
     HARNESS_AGENT_HARNESS="" \
     HARNESS_AGENT_COMMAND="" \
-    HARNESS_AGENTS_SEED_PATH=/opt/moltenhub/library/AGENTS.md \
+    HARNESS_AGENTS_SEED_PATH=/opt/agent00/library/AGENTS.md \
     HARNESS_WORKSPACE_RAM_BASE=/workspace \
     HARNESS_WORKSPACE_DISK_BASE=/workspace \
     HOME=/workspace/config/home \
@@ -72,15 +72,15 @@ WORKDIR /workspace
 COPY --from=build --chmod=755 /out/harness /usr/local/bin/harness
 COPY --from=build --chmod=755 /out/git-changes-by-day /usr/local/bin/git-changes-by-day
 COPY --from=build /usr/local/go /usr/local/go
-COPY library /opt/moltenhub/library
-COPY skills /opt/moltenhub/skills
+COPY library /opt/agent00/library
+COPY skills /opt/agent00/skills
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/entrypoint
 COPY --chmod=755 docker/with-config.sh /usr/local/bin/with-config
 RUN rm -rf /usr/local/go/api /usr/local/go/doc /usr/local/go/misc /usr/local/go/test \
     && ln -sf /usr/local/go/bin/go /usr/local/bin/go \
     && ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt \
-    && ln -s /opt/moltenhub/library /workspace/library \
-    && ln -s /opt/moltenhub/skills /workspace/skills
+    && ln -s /opt/agent00/library /workspace/library \
+    && ln -s /opt/agent00/skills /workspace/skills
 
 VOLUME ["/workspace/config"]
 

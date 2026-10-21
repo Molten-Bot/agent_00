@@ -53,7 +53,7 @@ func TestFormatTerminalLogLineSuppressesLowSignalCodexOutput(t *testing.T) {
 func TestFormatTerminalLogLineDropsEmptyCommandPayloadMarker(t *testing.T) {
 	t.Parallel()
 
-	line := "dispatch request_id=local-1712345678-000007 cmd phase=codex name=codex stream=stderr b64="
+	line := "task request_id=local-1712345678-000007 cmd phase=codex name=codex stream=stderr b64="
 	got, mode := formatTerminalLogLine(line)
 	if mode != terminalLogModeDrop {
 		t.Fatalf("mode = %v, want drop", mode)
@@ -93,7 +93,7 @@ func TestFormatTerminalLogLineDropsCodexSearchResultNoise(t *testing.T) {
 func TestFormatTerminalLogLineDropsNestedDispatchLogEchoNoise(t *testing.T) {
 	t.Parallel()
 
-	line := "cmd phase=codex name=codex stream=stderr b64=" + base64.StdEncoding.EncodeToString([]byte(`dispatch request_id=local-1775872065-000001 cmd phase=codex name=codex stream=stderr text="fatal: unable to access 'https://github.com/acme/repo.git/': Could not resolve host: github.com"`))
+	line := "cmd phase=codex name=codex stream=stderr b64=" + base64.StdEncoding.EncodeToString([]byte(`task request_id=local-1775872065-000001 cmd phase=codex name=codex stream=stderr text="fatal: unable to access 'https://github.com/acme/repo.git/': Could not resolve host: github.com"`))
 	got, mode := formatTerminalLogLine(line)
 	if mode != terminalLogModeDrop {
 		t.Fatalf("mode = %v, want drop", mode)
@@ -106,7 +106,7 @@ func TestFormatTerminalLogLineDropsNestedDispatchLogEchoNoise(t *testing.T) {
 func TestFormatTerminalLogLineDropsNestedDispatchLogEchoFromSearchResults(t *testing.T) {
 	t.Parallel()
 
-	line := "cmd phase=codex name=codex stream=stderr b64=" + base64.StdEncoding.EncodeToString([]byte(`/home/developer/git/moltenbot/local/agent_00/.log/terminal.log:431:dispatch request_id=local-1775872228-000004 cmd phase=codex name=codex stream=stderr text=\"fatal: unable to access 'https://github.com/acme/repo.git/': Could not resolve host: github.com\"`))
+	line := "cmd phase=codex name=codex stream=stderr b64=" + base64.StdEncoding.EncodeToString([]byte(`/home/developer/git/moltenbot/local/agent_00/.log/terminal.log:431:task request_id=local-1775872228-000004 cmd phase=codex name=codex stream=stderr text=\"fatal: unable to access 'https://github.com/acme/repo.git/': Could not resolve host: github.com\"`))
 	got, mode := formatTerminalLogLine(line)
 	if mode != terminalLogModeDrop {
 		t.Fatalf("mode = %v, want drop", mode)
@@ -158,7 +158,7 @@ func TestFormatTerminalLogLineKeepsCodexCompilerStyleFailure(t *testing.T) {
 func TestFormatTerminalLogLineDropsNestedHarnessLogLinesFromCodexOutput(t *testing.T) {
 	t.Parallel()
 
-	line := "cmd phase=codex name=codex stream=stderr b64=" + base64.StdEncoding.EncodeToString([]byte(`dispatch request_id=local-1775872076-000002 stage=codex status=running elapsed_s=75`))
+	line := "cmd phase=codex name=codex stream=stderr b64=" + base64.StdEncoding.EncodeToString([]byte(`task request_id=local-1775872076-000002 stage=codex status=running elapsed_s=75`))
 	got, mode := formatTerminalLogLine(line)
 	if mode != terminalLogModeDrop {
 		t.Fatalf("mode = %v, want drop", mode)
@@ -171,7 +171,7 @@ func TestFormatTerminalLogLineDropsNestedHarnessLogLinesFromCodexOutput(t *testi
 func TestFormatTerminalLogLineDropsNestedHarnessErrorLinesFromCodexOutput(t *testing.T) {
 	t.Parallel()
 
-	line := "cmd phase=codex name=codex stream=stderr b64=" + base64.StdEncoding.EncodeToString([]byte(`dispatch request_id=local-1775872076-000002 cmd phase=clone name=git stream=stderr text="fatal: Remote branch moltenhub-review missing"`))
+	line := "cmd phase=codex name=codex stream=stderr b64=" + base64.StdEncoding.EncodeToString([]byte(`task request_id=local-1775872076-000002 cmd phase=clone name=git stream=stderr text="fatal: Remote branch agent00-review missing"`))
 	got, mode := formatTerminalLogLine(line)
 	if mode != terminalLogModeDrop {
 		t.Fatalf("mode = %v, want drop", mode)
@@ -184,7 +184,7 @@ func TestFormatTerminalLogLineDropsNestedHarnessErrorLinesFromCodexOutput(t *tes
 func TestFormatTerminalLogLineDropsNumberedNestedHarnessErrorLinesFromCodexOutput(t *testing.T) {
 	t.Parallel()
 
-	line := "cmd phase=codex name=codex stream=stderr b64=" + base64.StdEncoding.EncodeToString([]byte(`25:dispatch request_id=local-1775873174-000001 cmd phase=clone name=git stream=stderr text="fatal: Remote branch moltenhub-review-the-previous-local-task-logs-firs not found in upstream origin"`))
+	line := "cmd phase=codex name=codex stream=stderr b64=" + base64.StdEncoding.EncodeToString([]byte(`25:task request_id=local-1775873174-000001 cmd phase=clone name=git stream=stderr text="fatal: Remote branch agent00-review-the-previous-local-task-logs-firs not found in upstream origin"`))
 	got, mode := formatTerminalLogLine(line)
 	if mode != terminalLogModeDrop {
 		t.Fatalf("mode = %v, want drop", mode)
@@ -221,7 +221,7 @@ func TestFormatTerminalLogLineCompactsGenericAgentHeartbeat(t *testing.T) {
 func TestFormatTerminalLogLineLeavesHubHeartbeatUntouched(t *testing.T) {
 	t.Parallel()
 
-	line := "dispatch request_id=req-9 stage=codex status=running elapsed_s=30"
+	line := "task request_id=req-9 stage=codex status=running elapsed_s=30"
 	got, mode := formatTerminalLogLine(line)
 	if mode != terminalLogModeNormal {
 		t.Fatalf("mode = %v, want normal", mode)
@@ -257,7 +257,7 @@ func TestTerminalLoggerHidesDebugLinesFromRegularOutputButKeepsSink(t *testing.T
 	logger := newTerminalLogger(&out, false)
 	logger.sink = sink
 
-	logger.Print("debug dispatcher status=window state=steady cpu=11.6 memory=35.2 disk_io_mb_s=0.4 allowed=24 max=24 running=0 queue_depth=0")
+	logger.Print("debug scheduler status=window state=steady cpu=11.6 memory=35.2 disk_io_mb_s=0.4 allowed=24 max=24 running=0 queue_depth=0")
 
 	if got := out.String(); got != "" {
 		t.Fatalf("terminal output = %q, want empty", got)
@@ -265,7 +265,7 @@ func TestTerminalLoggerHidesDebugLinesFromRegularOutputButKeepsSink(t *testing.T
 	if len(sink.lines) != 1 {
 		t.Fatalf("sink lines = %d, want 1", len(sink.lines))
 	}
-	if sink.lines[0] != "debug dispatcher status=window state=steady cpu=11.6 memory=35.2 disk_io_mb_s=0.4 allowed=24 max=24 running=0 queue_depth=0" {
+	if sink.lines[0] != "debug scheduler status=window state=steady cpu=11.6 memory=35.2 disk_io_mb_s=0.4 allowed=24 max=24 running=0 queue_depth=0" {
 		t.Fatalf("sink line = %q", sink.lines[0])
 	}
 }

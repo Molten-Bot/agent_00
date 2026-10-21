@@ -55,7 +55,7 @@ You are working inside an existing repository. Solve the user's actual problem w
 
 ## Pull Request Screenshot Handoff
 
-- When asked to add screenshots to PR comments, save the PNG or JPEG files under `.moltenhub/pr-comment-screenshots/` in the repository with descriptive names such as `before.png` and `after.png`.
+- When asked to add screenshots to PR comments, save the PNG or JPEG files under `.agent00/pr-comment-screenshots/` in the repository with descriptive names such as `before.png` and `after.png`.
 - The harness creates or reuses the pull request after your run and posts those saved screenshots as a PR comment. Do not fail only because no pull request exists while you are still running.
 
 ## Failure And Privacy

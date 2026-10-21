@@ -2,6 +2,7 @@
 !/templates/*.example.json
 .*
 .log/
+# Keep retired local data out of source control.
 moltenhub/
 !.github/
 !.github/workflows/

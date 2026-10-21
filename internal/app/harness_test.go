@@ -262,7 +262,7 @@ func TestRunHappyPathCreatesPR(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	fake := &fakeRunner{t: t, allowUnorderedClones: true, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -273,7 +273,7 @@ func TestRunHappyPathCreatesPR(t *testing.T) {
 		{cmd: branchCommand(repoDir, branch)},
 		{cmd: pushDryRunCommand(repoDir, branch)},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## moltenhub-build-api\n M file.go\n"}},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n M file.go\n"}},
 		{cmd: addCommand(repoDir)},
 		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
 		{cmd: pushCommand(repoDir, branch)},
@@ -317,7 +317,7 @@ func TestRunPRCreateAlreadyExistsReusesExistingPR(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
 	prCreateStderr := fmt.Sprintf(
 		"a pull request for branch %q into branch %q already exists:\n%s\n",
@@ -373,7 +373,7 @@ func TestRunPRCreatePermissionDeniedAfterPushCompletesWithBranch(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prCreateStderr := "pull request create failed: GraphQL: moltenbot000 does not have the correct permissions to execute `CreatePullRequest` (createPullRequest)"
 
 	fake := &fakeRunner{t: t, allowUnorderedClones: true, exps: []expectedRun{
@@ -432,7 +432,7 @@ func TestRunPRCreateRequiresAuthenticationAfterPushCompletesWithBranch(t *testin
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prCreateStderr := "HTTP 401: Requires authentication (https://api.github.com/graphql)\nTry authenticating with:  gh auth login"
 
 	fake := &fakeRunner{t: t, allowUnorderedClones: true, exps: []expectedRun{
@@ -491,7 +491,7 @@ func TestRunNoChangesLogsInitialAgentInvocationWorkflowMetadata(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	fake := &fakeRunner{t: t, allowUnorderedClones: true, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -602,7 +602,7 @@ func TestRunPRCreateTransientFailureRetriesAndSucceeds(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
 	transientErr := errors.New("error checking for existing pull request: HTTP 504: We couldn't respond to your request in time. Sorry about that. Please try resubmitting your request and contact us if the problem persists. (https://api.github.com/graphql)")
 
@@ -667,7 +667,7 @@ func TestRunPRCreateTransientFailureReusesLookupResult(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
 	transientErr := errors.New("error checking for existing pull request: HTTP 504: We couldn't respond to your request in time. (https://api.github.com/graphql)")
 
@@ -724,7 +724,7 @@ func TestRunCommitNoOpReturnsNoChanges(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -735,14 +735,14 @@ func TestRunCommitNoOpReturnsNoChanges(t *testing.T) {
 		{cmd: branchCommand(repoDir, branch)},
 		{cmd: pushDryRunCommand(repoDir, branch)},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## moltenhub-build-api\n M file.go\n"}},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n M file.go\n"}},
 		{cmd: addCommand(repoDir)},
 		{
 			cmd: commitCommand(repoDir, cfg.CommitMessage),
-			res: execx.Result{Stdout: "On branch moltenhub-build-api\nnothing to commit, working tree clean\n"},
+			res: execx.Result{Stdout: "On branch agent00-build-api\nnothing to commit, working tree clean\n"},
 			err: errors.New("exit status 1"),
 		},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## moltenhub-build-api\n"}},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n"}},
 		{cmd: commitsAheadOfBaseCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "0\n"}},
 		{cmd: remoteBranchExistsOnOriginCommand(repoDir, branch)},
 		{cmd: prLookupAnyByHeadCommand(repoDir, branch)},
@@ -778,7 +778,7 @@ func TestRunCommitNoOpWithExistingLocalCommitPushesAndCreatesPR(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/4242"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
@@ -790,15 +790,15 @@ func TestRunCommitNoOpWithExistingLocalCommitPushesAndCreatesPR(t *testing.T) {
 		{cmd: branchCommand(repoDir, branch)},
 		{cmd: pushDryRunCommand(repoDir, branch)},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## moltenhub-build-api\n"}},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n"}},
 		{cmd: commitsAheadOfBaseCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "1\n"}},
 		{cmd: addCommand(repoDir)},
 		{
 			cmd: commitCommand(repoDir, cfg.CommitMessage),
-			res: execx.Result{Stdout: "On branch moltenhub-build-api\nnothing to commit, working tree clean\n"},
+			res: execx.Result{Stdout: "On branch agent00-build-api\nnothing to commit, working tree clean\n"},
 			err: errors.New("exit status 1"),
 		},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## moltenhub-build-api\n"}},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n"}},
 		{cmd: commitsAheadOfBaseCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "1\n"}},
 		{cmd: fetchBranchCommand(repoDir, cfg.BaseBranch)},
 		{cmd: mergeFetchedBranchCommand(repoDir)},
@@ -838,7 +838,7 @@ func TestRunSkipsPRWhenWorkBranchHasNoDeltaFromRemoteBase(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -885,7 +885,7 @@ func TestRunSkipsPRWhenPostSyncWorkBranchHasNoDeltaFromRemoteBase(t *testing.T) 
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -1246,8 +1246,8 @@ func TestBuildReviewPromptContextRetriesMetadataWithoutInvalidGitHubTokenEnv(t *
 		{cmd: prReviewIssueCommentsCommand(repoDir, 2), res: execx.Result{Stdout: "[]"}},
 		{cmd: prReviewReviewCommentsCommand(repoDir, 2), res: execx.Result{Stdout: "[]"}},
 		{cmd: prReviewReviewsCommand(repoDir, 2), res: execx.Result{Stdout: "[]"}},
-		{cmd: reviewDiffStatCommand(repoDir, "refs/remotes/origin/main", "refs/remotes/origin/moltenhub-pr-2"), res: execx.Result{Stdout: " file.go | 1 +"}},
-		{cmd: reviewDiffPatchCommand(repoDir, "refs/remotes/origin/main", "refs/remotes/origin/moltenhub-pr-2"), res: execx.Result{Stdout: "diff --git a/file.go b/file.go"}},
+		{cmd: reviewDiffStatCommand(repoDir, "refs/remotes/origin/main", "refs/remotes/origin/agent00-pr-2"), res: execx.Result{Stdout: " file.go | 1 +"}},
+		{cmd: reviewDiffPatchCommand(repoDir, "refs/remotes/origin/main", "refs/remotes/origin/agent00-pr-2"), res: execx.Result{Stdout: "diff --git a/file.go b/file.go"}},
 	}}
 	var logs []string
 	h := New(fake)
@@ -1431,7 +1431,7 @@ func TestRunWithGitHubTokenRunsAuthSetupGitBeforeCodex(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	t.Setenv("GITHUB_TOKEN", "github_token_example_token")
 	t.Setenv("GH_TOKEN", "")
@@ -1541,7 +1541,7 @@ func TestRunWithPromptImagesKeepsArtifactsOutOfRepo(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	imagePath := filepath.Join(runDir, "prompt-images", "01-clipboard-shot.png")
 	imageArg := imagePath
 
@@ -1996,8 +1996,8 @@ func TestRunTracksCurrentBranchFromLocalGitStatus(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	createdBranch := "moltenhub-build-api"
-	activeBranch := "moltenhub-build-api-refined"
+	createdBranch := "agent00-build-api"
+	activeBranch := "agent00-build-api-refined"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -2008,7 +2008,7 @@ func TestRunTracksCurrentBranchFromLocalGitStatus(t *testing.T) {
 		{cmd: branchCommand(repoDir, createdBranch)},
 		{cmd: pushDryRunCommand(repoDir, createdBranch)},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## moltenhub-build-api-refined...origin/moltenhub-build-api-refined\n M file.go\n"}},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api-refined...origin/agent00-build-api-refined\n M file.go\n"}},
 		{cmd: addCommand(repoDir)},
 		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
 		{cmd: pushCommand(repoDir, activeBranch)},
@@ -2183,7 +2183,7 @@ func TestRunCodexFailureStopsBeforeCommitAndPR(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -2226,7 +2226,7 @@ func TestRunRemoteWriteAccessFailureStopsBeforeCodex(t *testing.T) {
 	runDir := testRunDir(guid)
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	push403 := execx.Result{
 		Stderr: "remote: Write access to repository not granted.\nfatal: unable to access 'https://github.com/acme/repo.git/': The requested URL returned error: 403\n",
 	}
@@ -2271,7 +2271,7 @@ func TestPreparePublishWorkflowDirectWriteReady(t *testing.T) {
 	t.Parallel()
 
 	repoDir := "/tmp/repo"
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	repo := repoWorkspace{
 		URL:    "git@github.com:acme/repo.git",
 		Dir:    repoDir,
@@ -2319,7 +2319,7 @@ func TestRunPublicGitHubDeniedDirectAccessUsesForkFallback(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	push403 := execx.Result{
 		Stderr: "remote: Write access to repository not granted.\n" +
 			"fatal: unable to access 'https://github.com/acme/repo.git/': The requested URL returned error: 403\n",
@@ -2341,7 +2341,7 @@ func TestRunPublicGitHubDeniedDirectAccessUsesForkFallback(t *testing.T) {
 		{cmd: gitRemoteAddCommand(repoDir, publishRemoteFork, "git@github.com:octocat/repo.git")},
 		{cmd: pushDryRunToRemoteCommand(repoDir, publishRemoteFork, branch)},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## moltenhub-build-api\n M file.go\n"}},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n M file.go\n"}},
 		{cmd: addCommand(repoDir)},
 		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
 		{cmd: pushToRemoteCommand(repoDir, publishRemoteFork, branch)},
@@ -2376,7 +2376,7 @@ func TestPreparePublishWorkflowForkAlreadyExistsIsIdempotent(t *testing.T) {
 	t.Parallel()
 
 	repoDir := "/tmp/repo"
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	repo := repoWorkspace{
 		URL:    "git@github.com:acme/repo.git",
 		Dir:    repoDir,
@@ -2425,7 +2425,7 @@ func TestPreparePublishWorkflowGitHubSSHPermissionDeniedUsesForkFallback(t *test
 	t.Parallel()
 
 	repoDir := "/tmp/repo"
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	repo := repoWorkspace{
 		URL:    "git@github.com:acme/repo.git",
 		Dir:    repoDir,
@@ -2476,7 +2476,7 @@ func TestPreparePublishWorkflowForkFallbackSwitchesToHTTPSWhenSSHForkProbeFailsW
 	t.Setenv("GITHUB_TOKEN", "")
 
 	repoDir := "/tmp/repo"
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	repo := repoWorkspace{
 		URL:    "git@github.com:acme/repo.git",
 		Dir:    repoDir,
@@ -2537,7 +2537,7 @@ func TestRunPrivateGitHubDeniedDirectAccessFailsBeforeCodex(t *testing.T) {
 	runDir := testRunDir(guid)
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	push403 := execx.Result{
 		Stderr: "remote: Write access to repository not granted.\n" +
 			"fatal: unable to access 'https://github.com/acme/repo.git/': The requested URL returned error: 403\n",
@@ -2587,7 +2587,7 @@ func TestRunNoChangesSkipsPR(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -2636,7 +2636,7 @@ func TestRunNoChangesWithConcreteTaskRepoEvidenceRecordsEvidence(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -2886,7 +2886,7 @@ func TestRunNoChangesFollowUpWithOnlyOriginalRepoEvidenceFails(t *testing.T) {
 				"Evidence:",
 				"- [index.html](/workspace/agent_00/tasks/original/repo/index.html:9): SEO description set.",
 				"- [src/pageTitle.js](/workspace/agent_00/tasks/original/repo/src/pageTitle.js:1): shared runtime metadata constants set.",
-				"Git diff empty. Only untracked `.moltenhub-agents-3149905286.md` exists from harness instructions.",
+				"Git diff empty. Only untracked `.agent00-agents-3149905286.md` exists from harness instructions.",
 			}, "\n")},
 		},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "\n"}},
@@ -2925,7 +2925,7 @@ func TestRunAgentClaimsChangesButGitIsCleanFails(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	agentOutput := strings.Join([]string{
 		"Changed [AGENTS.md](" + filepath.ToSlash(filepath.Join(repoDir, "AGENTS.md")) + ":1).",
@@ -2981,7 +2981,7 @@ func TestRunAgentAwaitingTaskReturnsCodexFailure(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -3030,7 +3030,7 @@ func TestRunNoChangesOnMainReportsExistingPR(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/123"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
@@ -3086,7 +3086,7 @@ func TestRunNoChangesReportsMergedPRWhenBranchNoLongerExists(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/123"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
@@ -3194,14 +3194,14 @@ func TestRunExistingPRNoChangesUsesPromptPRURLWhenHeadLookupIsEmpty(t *testing.T
 	t.Parallel()
 
 	cfg := sampleConfig()
-	cfg.BaseBranch = "moltenhub-existing-pr"
+	cfg.BaseBranch = "agent00-existing-pr"
 	cfg.LibraryTaskName = resolvePRCommentsLibraryTaskName
 	prURL := "https://github.com/acme/repo/pull/117"
 	cfg.Prompt = strings.Join([]string{
 		"Update the existing pull request to address review feedback.",
 		"Pull request:",
 		"- URL: " + prURL,
-		"- Head branch to update: moltenhub-existing-pr",
+		"- Head branch to update: agent00-existing-pr",
 		"- Base branch: main",
 	}, "\n")
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
@@ -3258,14 +3258,14 @@ func TestRunExistingPRNoChangesRejectsPromptPRURLWhenHeadBranchDiffers(t *testin
 	t.Parallel()
 
 	cfg := sampleConfig()
-	cfg.BaseBranch = "moltenhub-existing-pr"
+	cfg.BaseBranch = "agent00-existing-pr"
 	cfg.LibraryTaskName = resolvePRCommentsLibraryTaskName
 	prURL := "https://github.com/acme/repo/pull/117"
 	cfg.Prompt = strings.Join([]string{
 		"Update the existing pull request to address review feedback.",
 		"Pull request:",
 		"- URL: " + prURL,
-		"- Head branch to update: moltenhub-existing-pr",
+		"- Head branch to update: agent00-existing-pr",
 		"- Base branch: main",
 	}, "\n")
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
@@ -3289,7 +3289,7 @@ func TestRunExistingPRNoChangesRejectsPromptPRURLWhenHeadBranchDiffers(t *testin
 		{cmd: remoteBranchExistsOnOriginCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "abc123\trefs/heads/" + cfg.BaseBranch + "\n"}},
 		{cmd: prLookupByHeadCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "[]\n"}},
 		{cmd: prLookupAnyByHeadCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "[]\n"}},
-		{cmd: prStateViewCommand(repoDir, prURL), res: execx.Result{Stdout: `{"url":"` + prURL + `","state":"OPEN","headRefName":"moltenhub-other-pr"}`}},
+		{cmd: prStateViewCommand(repoDir, prURL), res: execx.Result{Stdout: `{"url":"` + prURL + `","state":"OPEN","headRefName":"agent00-other-pr"}`}},
 	}}
 
 	h := New(fake)
@@ -3307,7 +3307,7 @@ func TestRunExistingPRNoChangesRejectsPromptPRURLWhenHeadBranchDiffers(t *testin
 	if res.PRURL != "" {
 		t.Fatalf("PRURL = %q, want empty", res.PRURL)
 	}
-	if !strings.Contains(res.Err.Error(), `prompt PR head branch "moltenhub-other-pr" did not match`) {
+	if !strings.Contains(res.Err.Error(), `prompt PR head branch "agent00-other-pr" did not match`) {
 		t.Fatalf("Run() err = %v, want prompt PR branch mismatch", res.Err)
 	}
 	if len(fake.exps) != 0 {
@@ -3319,12 +3319,12 @@ func TestRunExistingPRNoChangesFailsWhenPRLookupFails(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
-	cfg.BaseBranch = "moltenhub-existing-pr"
+	cfg.BaseBranch = "agent00-existing-pr"
 	cfg.LibraryTaskName = resolvePRCommentsLibraryTaskName
 	cfg.Prompt = strings.Join([]string{
 		"Update the existing pull request to address review feedback.",
 		"Pull request:",
-		"- Head branch to update: moltenhub-existing-pr",
+		"- Head branch to update: agent00-existing-pr",
 		"- Base branch: main",
 	}, "\n")
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
@@ -3384,7 +3384,7 @@ func TestRunFailedChecksTriggersCodexRemediation(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
 
 	checkSummary := "X unit-tests failing"
@@ -3456,7 +3456,7 @@ func TestRunTreatsChecksWatchTimeoutWithAllChecksPassingAsSuccess(t *testing.T) 
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
 	checkSnapshot := `[
 		{"name":"build","bucket":"pass","completedAt":"2026-04-02T15:05:00Z"},
@@ -3522,7 +3522,7 @@ func TestRunTreatsChecksAuthFailureAfterPRCreateAsSuccess(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
 	checksStderr := "HTTP 401: Requires authentication (https://api.github.com/graphql)\nTry authenticating with:  gh auth login"
 
@@ -3581,7 +3581,7 @@ func TestRunTreatsChecksWatchTimeoutWithPendingChecksAsFailure(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
 	checkSnapshot := `[
 		{"name":"build","bucket":"pass","completedAt":"2026-04-02T15:05:00Z"},
@@ -3653,7 +3653,7 @@ func TestRunTreatsChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.T) 
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
 	checkSummary := "No check output was provided by gh."
 
@@ -3718,9 +3718,9 @@ func TestRunTreatsAnyChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
-	noRequired := "no required checks reported on the 'moltenhub-build-api' branch"
+	noRequired := "no required checks reported on the 'agent00-build-api' branch"
 	checkSummary := "No check output was provided by gh."
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
@@ -3805,7 +3805,7 @@ func TestRunFailedChecksWithStaleFailureSnapshotPasses(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
 
 	checkOutput := strings.Join([]string{
@@ -3865,7 +3865,7 @@ func TestRunFailedChecksFallsBackToTextSnapshotWhenGHJSONUnsupported(t *testing.
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
 
 	checkOutput := strings.Join([]string{
@@ -3957,7 +3957,7 @@ func TestRunFailedChecksWithNoRemediationChangesFails(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
 
 	checkSummary := "X unit-tests failing"
@@ -4019,9 +4019,9 @@ func TestRunNoChecksReportedRetriesBeforePassing(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
-	noChecks := "no checks reported on the 'moltenhub-build-api' branch"
+	noChecks := "no checks reported on the 'agent00-build-api' branch"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -4082,9 +4082,9 @@ func TestRunNoChecksReportedAfterRetryWindowTriggersRemediation(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
-	noChecks := "no checks reported on the 'moltenhub-build-api' branch"
+	noChecks := "no checks reported on the 'agent00-build-api' branch"
 
 	exps := []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -4163,9 +4163,9 @@ func TestRunNoChecksReportedResolvesFromWorkflowDispatchSnapshot(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
-	noChecks := "no checks reported on the 'moltenhub-build-api' branch"
+	noChecks := "no checks reported on the 'agent00-build-api' branch"
 
 	exps := []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -4241,9 +4241,9 @@ func TestRunNoChecksReportedWithNoRequiredStatusChecksPasses(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
-	noChecks := "no checks reported on the 'moltenhub-build-api' branch"
+	noChecks := "no checks reported on the 'agent00-build-api' branch"
 
 	exps := []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -4316,9 +4316,9 @@ func TestRunNoRequiredChecksFallsBackToAllChecks(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
-	noRequired := "no required checks reported on the 'moltenhub-build-api' branch"
+	noRequired := "no required checks reported on the 'agent00-build-api' branch"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -4374,9 +4374,9 @@ func TestRunNoRequiredChecksWithNoConfiguredRequiredChecksPasses(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
-	noRequired := "no required checks reported on the 'moltenhub-build-api' branch"
+	noRequired := "no required checks reported on the 'agent00-build-api' branch"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -4433,7 +4433,7 @@ func TestRunMultiRepoCreatesPRsForEachChangedRepo(t *testing.T) {
 	guid := "abcdef123456"
 	runDir := testRunDir(guid)
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	repoRelA := repoWorkspaceDirName(cfg.Repos[0], 0, len(cfg.Repos))
 	repoRelB := repoWorkspaceDirName(cfg.Repos[1], 1, len(cfg.Repos))
@@ -4510,7 +4510,7 @@ func TestRunMultiRepoMixedDirectAndForkFallbackResolvesBeforeAgent(t *testing.T)
 	guid := "abcdef123456"
 	runDir := testRunDir(guid)
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	repoRelA := repoWorkspaceDirName(cfg.Repos[0], 0, len(cfg.Repos))
 	repoRelB := repoWorkspaceDirName(cfg.Repos[1], 1, len(cfg.Repos))
@@ -4601,7 +4601,7 @@ func TestRunMultiRepoUnresolvedWorkflowFailsBeforeAgent(t *testing.T) {
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	guid := "abcdef123456"
 	runDir := testRunDir(guid)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	repoRelA := repoWorkspaceDirName(cfg.Repos[0], 0, len(cfg.Repos))
 	repoRelB := repoWorkspaceDirName(cfg.Repos[1], 1, len(cfg.Repos))
@@ -4665,7 +4665,7 @@ func TestRunMultiRepoRemediationUsesWorkspaceCodexOptions(t *testing.T) {
 	guid := "abcdef123456"
 	runDir := testRunDir(guid)
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	repoRelA := repoWorkspaceDirName(cfg.Repos[0], 0, len(cfg.Repos))
 	repoRelB := repoWorkspaceDirName(cfg.Repos[1], 1, len(cfg.Repos))
@@ -4877,7 +4877,7 @@ func TestRunNonDefaultBaseCreatesWorkBranchAndTargetsSelectedBase(t *testing.T) 
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/88"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
@@ -4932,11 +4932,11 @@ func TestRunNonDefaultBaseCreatesWorkBranchAndTargetsSelectedBase(t *testing.T) 
 	}
 }
 
-func TestRunMissingMoltenhubBaseBranchFallsBackToDefaultAndCreatesNewBranch(t *testing.T) {
+func TestRunMissingAgent00BaseBranchFallsBackToDefaultAndCreatesNewBranch(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
-	cfg.BaseBranch = "moltenhub-the-top-left-should-show-our-logo-https-20260406-192020-bf8c1ade"
+	cfg.BaseBranch = "agent00-the-top-left-should-show-our-logo-https-20260406-192020-bf8c1ade"
 
 	now := time.Date(2026, 4, 6, 19, 53, 52, 0, time.UTC)
 	guid := "9ded650b29c70708825082be50fbf433"
@@ -4944,12 +4944,12 @@ func TestRunMissingMoltenhubBaseBranchFallsBackToDefaultAndCreatesNewBranch(t *t
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/112"
 
 	cloneMissingBranch := execx.Result{
-		Stderr: "warning: Could not find remote branch moltenhub-the-top-left-should-show-our-logo-https-20260406-192020-bf8c1ade to clone.\n" +
-			"fatal: Remote branch moltenhub-the-top-left-should-show-our-logo-https-20260406-192020-bf8c1ade not found in upstream origin\n",
+		Stderr: "warning: Could not find remote branch agent00-the-top-left-should-show-our-logo-https-20260406-192020-bf8c1ade to clone.\n" +
+			"fatal: Remote branch agent00-the-top-left-should-show-our-logo-https-20260406-192020-bf8c1ade not found in upstream origin\n",
 	}
 	cfgMain := cfg
 	cfgMain.BaseBranch = "main"
@@ -5009,7 +5009,7 @@ func TestRunEmptyBaseBranchClonesRemoteDefaultAndCreatesNewBranch(t *testing.T) 
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/114"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
@@ -5128,7 +5128,7 @@ func TestRunMissingMainBaseBranchFallsBackToRemoteDefaultAndCreatesNewBranch(t *
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/115"
 
 	cloneMissingMain := execx.Result{
@@ -5181,7 +5181,7 @@ func TestRunMissingMainBaseBranchFallsBackToRemoteDefaultAndCreatesNewBranch(t *
 }
 
 func TestCloneRequiredNonDefaultBranchRefusesDefaultFallback(t *testing.T) {
-	branch := "moltenhub-missing-feature"
+	branch := "agent00-missing-feature"
 	repo := repoWorkspace{
 		URL:                      "git@github.com:acme/repo.git",
 		Dir:                      "/tmp/required-feature-repo",
@@ -5220,7 +5220,7 @@ func TestRunMissingMainBaseBranchBootstrapsUninitializedRepository(t *testing.T)
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/113"
 
 	cloneMissingMain := execx.Result{
@@ -5283,7 +5283,7 @@ func TestRunCloneRetriesTransientFailureThenSucceeds(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/112"
 
 	cloneTransientFailure := execx.Result{
@@ -5385,7 +5385,7 @@ func TestRunRepoNotFoundCloneFallsBackToKnownOwner(t *testing.T) {
 	guid := "abcdef123456"
 	runDir := testRunDir(guid)
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	repoRelA := repoWorkspaceDirName(cfg.Repos[0], 0, len(cfg.Repos))
 	repoRelB := repoWorkspaceDirName(cfg.Repos[1], 1, len(cfg.Repos))
@@ -5454,7 +5454,7 @@ func TestRunRepoNotFoundCloneFallsBackToKnownOwner(t *testing.T) {
 	}
 }
 
-func TestRunMissingNonMoltenhubBaseBranchFailsClone(t *testing.T) {
+func TestRunMissingNonAgent00BaseBranchFailsClone(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
@@ -5497,7 +5497,7 @@ func TestCommandBuilders(t *testing.T) {
 
 	cfg := sampleConfig()
 	repoDir := "/tmp/run/repo"
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prompt := "fix tests"
 	targetDir := filepath.Join(repoDir, "services/api")
 
@@ -5636,8 +5636,8 @@ func TestCommandBuilders(t *testing.T) {
 	if prComment.Name != "gh" || prComment.Dir != repoDir || !reflect.DeepEqual(prComment.Args, wantComment) {
 		t.Fatalf("pr comment command unexpected: %+v", prComment)
 	}
-	addScreenshots := addPRCommentScreenshotsCommand(repoDir, []string{".moltenhub/pr-comment-screenshots/after.png"})
-	wantAddScreenshots := []string{"add", "-f", "--", ".moltenhub/pr-comment-screenshots/after.png"}
+	addScreenshots := addPRCommentScreenshotsCommand(repoDir, []string{".agent00/pr-comment-screenshots/after.png"})
+	wantAddScreenshots := []string{"add", "-f", "--", ".agent00/pr-comment-screenshots/after.png"}
 	if addScreenshots.Name != "git" || addScreenshots.Dir != repoDir || !reflect.DeepEqual(addScreenshots.Args, wantAddScreenshots) {
 		t.Fatalf("add PR comment screenshots command unexpected: %+v", addScreenshots)
 	}
@@ -5856,9 +5856,9 @@ func TestPRCommentScreenshotFilesFindsImagesInHandoffDirectory(t *testing.T) {
 		t.Fatalf("prCommentScreenshotFiles() error = %v", err)
 	}
 	want := []string{
-		".moltenhub/pr-comment-screenshots/after.png",
-		".moltenhub/pr-comment-screenshots/before.JPG",
-		".moltenhub/pr-comment-screenshots/nested/app.jpeg",
+		".agent00/pr-comment-screenshots/after.png",
+		".agent00/pr-comment-screenshots/before.JPG",
+		".agent00/pr-comment-screenshots/nested/app.jpeg",
 	}
 	if !reflect.DeepEqual(files, want) {
 		t.Fatalf("files = %#v, want %#v", files, want)
@@ -5881,7 +5881,7 @@ func TestRepoHasPendingChangesTreatsScreenshotHandoffAsChange(t *testing.T) {
 		Dir:              repoDir,
 		CreateWorkBranch: true,
 		BaseBranch:       "main",
-	}, "## moltenhub-validation\n")
+	}, "## agent00-validation\n")
 	if err != nil {
 		t.Fatalf("repoHasPendingChanges() error = %v", err)
 	}
@@ -5910,7 +5910,7 @@ func TestRepoHasPendingChangesIgnoresUnchangedScreenshotHandoffBaseline(t *testi
 		Dir:                         repoDir,
 		BaseBranch:                  "main",
 		PRCommentScreenshotBaseline: baseline,
-	}, "## moltenhub-validation\n")
+	}, "## agent00-validation\n")
 	if err != nil {
 		t.Fatalf("repoHasPendingChanges() error = %v", err)
 	}
@@ -5946,8 +5946,8 @@ func TestChangedPRCommentScreenshotFilesFindsOnlyNewOrModifiedImages(t *testing.
 		t.Fatalf("changedPRCommentScreenshotFiles() error = %v", err)
 	}
 	want := []string{
-		".moltenhub/pr-comment-screenshots/after.jpg",
-		".moltenhub/pr-comment-screenshots/before.png",
+		".agent00/pr-comment-screenshots/after.jpg",
+		".agent00/pr-comment-screenshots/before.png",
 	}
 	if !reflect.DeepEqual(files, want) {
 		t.Fatalf("files = %#v, want %#v", files, want)
@@ -5960,17 +5960,17 @@ func TestPRCommentScreenshotsBodyBuildsGitHubImageLinks(t *testing.T) {
 	body, err := prCommentScreenshotsBody(
 		"https://github.com/acme/repo/pull/42",
 		"",
-		"moltenhub/pink",
-		[]string{".moltenhub/pr-comment-screenshots/before shot.png"},
+		"agent00/pink",
+		[]string{".agent00/pr-comment-screenshots/before shot.png"},
 	)
 	if err != nil {
 		t.Fatalf("prCommentScreenshotsBody() error = %v", err)
 	}
 	for _, want := range []string{
 		"Automated screenshots captured during the run.",
-		"### .moltenhub/pr-comment-screenshots/before shot.png",
-		"![.moltenhub/pr-comment-screenshots/before shot.png]",
-		"https://github.com/acme/repo/blob/moltenhub/pink/.moltenhub/pr-comment-screenshots/before%20shot.png?raw=1",
+		"### .agent00/pr-comment-screenshots/before shot.png",
+		"![.agent00/pr-comment-screenshots/before shot.png]",
+		"https://github.com/acme/repo/blob/agent00/pink/.agent00/pr-comment-screenshots/before%20shot.png?raw=1",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)
@@ -5984,13 +5984,13 @@ func TestPRCommentScreenshotsBodyUsesForkHeadOwner(t *testing.T) {
 	body, err := prCommentScreenshotsBody(
 		"https://github.com/acme/repo/pull/42",
 		"octocat",
-		"moltenhub-pink",
-		[]string{".moltenhub/pr-comment-screenshots/after.png"},
+		"agent00-pink",
+		[]string{".agent00/pr-comment-screenshots/after.png"},
 	)
 	if err != nil {
 		t.Fatalf("prCommentScreenshotsBody() error = %v", err)
 	}
-	want := "https://github.com/octocat/repo/blob/moltenhub-pink/.moltenhub/pr-comment-screenshots/after.png?raw=1"
+	want := "https://github.com/octocat/repo/blob/agent00-pink/.agent00/pr-comment-screenshots/after.png?raw=1"
 	if !strings.Contains(body, want) {
 		t.Fatalf("body missing fork image URL %q:\n%s", want, body)
 	}
@@ -6113,7 +6113,7 @@ func TestRunUsesConfiguredRuntimeCommand(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	runtime, err := agentruntime.Resolve(cfg.AgentHarness, cfg.AgentCommand)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -6180,7 +6180,7 @@ func TestRunNoChangesRecordsConcreteNoChangeEvidence(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-fix-this-move-openapi-yml-under-public-o"
+	branch := "agent00-fix-this-move-openapi-yml-under-public-o"
 
 	runtime := agentruntime.Default()
 	runtimePrompt := withAgentsPrompt(cfg.Prompt, agentsPath)
@@ -6405,7 +6405,7 @@ func TestRunAppliesResponseModeAcrossNonCodexRuntimes(t *testing.T) {
 			agentsPath := filepath.Join(runDir, "AGENTS.md")
 			repoDir := filepath.Join(runDir, "repo")
 			targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-			branch := "moltenhub-build-api"
+			branch := "agent00-build-api"
 
 			runtime, err := agentruntime.Resolve(cfg.AgentHarness, cfg.AgentCommand)
 			if err != nil {
@@ -6629,8 +6629,8 @@ func TestRunCodexStagesAgentsPromptWithinTargetDir(t *testing.T) {
 		t.Fatalf("staged agents prompt path missing from prompt: %q", prompt)
 	}
 	stagedPath := strings.TrimSpace(matches[1])
-	if !strings.HasPrefix(stagedPath, "./.moltenhub-agents-") || !strings.HasSuffix(stagedPath, ".md") {
-		t.Fatalf("staged agents path = %q, want hidden moltenhub seed path", stagedPath)
+	if !strings.HasPrefix(stagedPath, "./.agent00-agents-") || !strings.HasSuffix(stagedPath, ".md") {
+		t.Fatalf("staged agents path = %q, want hidden agent00 seed path", stagedPath)
 	}
 	if _, err := os.Stat(filepath.Join(targetDir, "AGENTS.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("target AGENTS.md still exists after codex run: err=%v", err)
@@ -7045,7 +7045,7 @@ func TestRunCodexAllowsLocalAutomatedTestsValidationGap(t *testing.T) {
 	t.Parallel()
 
 	targetDir := t.TempDir()
-	prompt := "review hub diagnostics"
+	prompt := "review application diagnostics"
 	firstCmd := codexCommand(targetDir, prompt)
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
@@ -7053,7 +7053,7 @@ func TestRunCodexAllowsLocalAutomatedTestsValidationGap(t *testing.T) {
 			cmd: firstCmd,
 			res: execx.Result{
 				Stdout: "Failure: Could not run local automated tests in this runtime.",
-				Stderr: "Error details: `npm test -- src/features/hub/components/__tests__/HubAgentsSection.test.tsx` -> `sh: 1: vitest: not found`",
+				Stderr: "Error details: `npm test -- src/features/dashboard/components/__tests__/AgentsSection.test.tsx` -> `sh: 1: vitest: not found`",
 			},
 		},
 	}}
@@ -7145,7 +7145,7 @@ func TestRunCodexAllowsLocalValidationToolMissingInRuntime(t *testing.T) {
 			cmd: firstCmd,
 			res: execx.Result{
 				Stdout: "Failure: Local validation tool missing in runtime.",
-				Stderr: "Error details: `npm run test -- src/features/hub/components/__tests__/HubAgentsSection.test.tsx` failed with `sh: 1: vitest: not found`.",
+				Stderr: "Error details: `npm run test -- src/features/dashboard/components/__tests__/AgentsSection.test.tsx` failed with `sh: 1: vitest: not found`.",
 			},
 		},
 	}}
@@ -7168,7 +7168,7 @@ func TestRunCodexAllowsLocalTestRunnerUnavailableInRuntime(t *testing.T) {
 			cmd: firstCmd,
 			res: execx.Result{
 				Stdout: "Failure: Local test runner unavailable in runtime.",
-				Stderr: "Error details: `npm test -- --run src/features/hub/components/__tests__/HubOrganizationSection.test.tsx` failed with `sh: 1: vitest: not found`.",
+				Stderr: "Error details: `npm test -- --run src/features/dashboard/components/__tests__/OrganizationSection.test.tsx` failed with `sh: 1: vitest: not found`.",
 			},
 		},
 	}}
@@ -7527,9 +7527,9 @@ func TestRunCodexReturnsErrorWhenCodexReportsStructuredTaskFailure(t *testing.T)
 			res: execx.Result{
 				Stderr: strings.Join([]string{
 					`"summary": "Task failed.",`,
-					`"message": "Task failed. One or more hub snapshot regions failed to refresh.",`,
-					`"error": "One or more hub snapshot regions failed to refresh.",`,
-					`"stack": "Error: One or more hub snapshot regions failed to refresh."`,
+					`"message": "Task failed. One or more snapshot regions failed to refresh.",`,
+					`"error": "One or more snapshot regions failed to refresh.",`,
+					`"stack": "Error: One or more snapshot regions failed to refresh."`,
 				}, "\n"),
 			},
 		},
@@ -7716,10 +7716,10 @@ func TestCodexReportedFailureIgnoresInterimFailureMarkerInNoisyStdout(t *testing
 			"apply patch",
 			"patch: completed",
 			"go test ./internal/app ./internal/web",
-			"ok   \tgithub.com/moltenbot000/moltenhub-dispatch/internal/app",
-			"ok   \tgithub.com/moltenbot000/moltenhub-dispatch/internal/web",
+			"ok   \tgithub.com/moltenbot000/agent00-dispatch/internal/app",
+			"ok   \tgithub.com/moltenbot000/agent00-dispatch/internal/web",
 			"go test ./...",
-			"ok   \tgithub.com/moltenbot000/moltenhub-dispatch/internal/localruntime",
+			"ok   \tgithub.com/moltenbot000/agent00-dispatch/internal/localruntime",
 			"Refactor complete. Tests pass.",
 		}, "\n"),
 	}
@@ -7792,7 +7792,7 @@ func TestCodexReportedFailureDetectsTerminalFailureInNoisyStdout(t *testing.T) {
 			"patch: completed",
 			"go test ./internal/app ./internal/web",
 			"internal/app/service.go:1905:6: connectedAgentSkills redeclared in this block",
-			"FAIL\tgithub.com/moltenbot000/moltenhub-dispatch/internal/app [build failed]",
+			"FAIL\tgithub.com/moltenbot000/agent00-dispatch/internal/app [build failed]",
 			"Failure: focused tests failed on compile due duplicated helper after refactor.",
 			"Error details: internal/app/service.go:1905:6: connectedAgentSkills redeclared in this block",
 		}, "\n"),
@@ -7826,105 +7826,6 @@ func TestCodexReportedFailureIgnoresRepositoryChangeRequestSummary(t *testing.T)
 
 	if failed, detail := codexReportedFailure(res); failed || detail != "" {
 		t.Fatalf("codexReportedFailure(repository change request summary) = (%v, %q), want (false, \"\")", failed, detail)
-	}
-}
-
-func TestCodexReportedFailureTreatsCompletedHubSnapshotRefreshWarningAsNonFatal(t *testing.T) {
-	t.Parallel()
-
-	res := execx.Result{
-		Stdout: strings.Join([]string{
-			"Done. Blog post added at [src/data/blogposts.json](/tmp/repo/src/data/blogposts.json:2).",
-			"Validation:",
-			"`npm run generate:content` passed.",
-			"`npm run build` passed after `npm ci`.",
-			"Failure: prebuild hub snapshot refresh could not fetch live snapshot.",
-			"Error details: `MOLTENHUB_ADMIN_SNAPSHOT_KEY is not configured for this build.` Build kept existing `hub-snapshot.json` and completed.",
-			"Sources used: npm package facts from `npm view @moltenbot/railsmith`.",
-		}, "\n"),
-	}
-
-	failed, detail := codexReportedFailure(res)
-	if !failed {
-		t.Fatal("codexReportedFailure(hub snapshot warning) = false, want initial terminal failure detection")
-	}
-	detail = codexFailureDetailWithErrorDetails(res, detail)
-	if !isNonFatalHubSnapshotRefreshFailure(detail, res) {
-		t.Fatalf("isNonFatalHubSnapshotRefreshFailure(...) = false, detail=%q", detail)
-	}
-}
-
-func TestRunCodexAllowsBuildPreStepHubSnapshotRefreshWarning(t *testing.T) {
-	t.Parallel()
-
-	targetDir := t.TempDir()
-	prompt := "remove fake copy from product page"
-	firstCmd := codexCommand(targetDir, prompt)
-
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{
-			cmd: firstCmd,
-			res: execx.Result{
-				Stdout: strings.Join([]string{
-					"Done.",
-					"Verified:",
-					"- `npm test` passed.",
-					"- `npm run build` passed.",
-					"Failure: Hub snapshot refresh unavailable during build pre-step, but build continued using existing snapshot.",
-					"Error details: `MOLTENHUB_ADMIN_SNAPSHOT_KEY is not configured for this build` for NA and EU snapshot endpoints.",
-				}, "\n"),
-			},
-		},
-	}}
-
-	var logs []string
-	h := New(fake)
-	h.Logf = func(format string, args ...any) {
-		logs = append(logs, fmt.Sprintf(format, args...))
-	}
-	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
-		t.Fatalf("runCodex() error = %v, want nil for completed hub snapshot warning", err)
-	}
-	if !strings.Contains(strings.Join(logs, "\n"), "action=hub_snapshot_refresh_unavailable") {
-		t.Fatalf("logs missing hub snapshot warning:\n%s", strings.Join(logs, "\n"))
-	}
-}
-
-func TestRunCodexAllowsNonFatalPrebuildSnapshotRefreshWarning(t *testing.T) {
-	t.Parallel()
-
-	targetDir := t.TempDir()
-	prompt := "display image in social sharing should be the product image"
-	firstCmd := codexCommand(targetDir, prompt)
-
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{
-			cmd: firstCmd,
-			res: execx.Result{
-				Stdout: strings.Join([]string{
-					"Done: src/pages/schweebles.astro now passes `productImage` to `PageLayout`.",
-					"Verified:",
-					"`npm test` passed: 36 files, 185 tests.",
-					"`npm run typecheck` passed.",
-					"`npm run build` passed, and `dist/schweebles/index.html` contains product image social tags.",
-					"Validation note:",
-					"Failure: non-fatal prebuild snapshot refresh warning.",
-					"Error details: `MOLTENHUB_ADMIN_SNAPSHOT_KEY is not configured for this build` for NA/EU snapshot refresh. Build still completed.",
-				}, "\n"),
-			},
-		},
-	}}
-
-	var logs []string
-	h := New(fake)
-	h.Logf = func(format string, args ...any) {
-		logs = append(logs, fmt.Sprintf(format, args...))
-	}
-	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
-		t.Fatalf("runCodex() error = %v, want nil for non-fatal snapshot refresh warning", err)
-	}
-	if !strings.Contains(strings.Join(logs, "\n"), "action=hub_snapshot_refresh_unavailable") {
-		t.Fatalf("logs missing hub snapshot warning:\n%s", strings.Join(logs, "\n"))
 	}
 }
 
@@ -8023,35 +7924,15 @@ func TestRunCodexKeepsRemoteDeploymentFailureFatalWhenRepoSideReproduced(t *test
 	}
 }
 
-func TestCodexReportedFailureDoesNotIgnoreIncompleteHubSnapshotRefreshFailure(t *testing.T) {
-	t.Parallel()
-
-	res := execx.Result{
-		Stdout: strings.Join([]string{
-			"Failure: prebuild hub snapshot refresh could not fetch live snapshot.",
-			"Error details: `MOLTENHUB_ADMIN_SNAPSHOT_KEY is not configured for this build.`",
-		}, "\n"),
-	}
-
-	failed, detail := codexReportedFailure(res)
-	if !failed {
-		t.Fatal("codexReportedFailure(incomplete hub snapshot failure) = false, want failure")
-	}
-	detail = codexFailureDetailWithErrorDetails(res, detail)
-	if isNonFatalHubSnapshotRefreshFailure(detail, res) {
-		t.Fatalf("isNonFatalHubSnapshotRefreshFailure(...) = true for incomplete build detail %q", detail)
-	}
-}
-
 func TestCodexReportedFailureDetectsStructuredTaskFailurePayload(t *testing.T) {
 	t.Parallel()
 
 	res := execx.Result{
 		Stderr: strings.Join([]string{
 			`"summary": "Task failed.",`,
-			`"message": "Task failed. One or more hub snapshot regions failed to refresh.",`,
-			`"error": "One or more hub snapshot regions failed to refresh.",`,
-			`"stack": "Error: One or more hub snapshot regions failed to refresh."`,
+			`"message": "Task failed. One or more snapshot regions failed to refresh.",`,
+			`"error": "One or more snapshot regions failed to refresh.",`,
+			`"stack": "Error: One or more snapshot regions failed to refresh."`,
 		}, "\n"),
 	}
 
@@ -8072,9 +7953,9 @@ func TestCodexReportedFailureIgnoresStructuredTaskFailureInNoisyStderr(t *testin
 		Stderr: strings.Join([]string{
 			"setTimeout(loadGA, 2000);",
 			`"summary": "Task failed.",`,
-			`"message": "Task failed. One or more hub snapshot regions failed to refresh.",`,
-			`"error": "One or more hub snapshot regions failed to refresh.",`,
-			`"stack": "Error: One or more hub snapshot regions failed to refresh."`,
+			`"message": "Task failed. One or more snapshot regions failed to refresh.",`,
+			`"error": "One or more snapshot regions failed to refresh.",`,
+			`"stack": "Error: One or more snapshot regions failed to refresh."`,
 			"</script> </body> </html>",
 			"window.setTimeout(() => {",
 			"setTimeout(() => {",
@@ -8094,8 +7975,8 @@ func TestCodexReportedFailureIgnoresCompactStructuredStderrWhenStdoutHasSuccess(
 		Stdout: "Implemented requested changes.",
 		Stderr: strings.Join([]string{
 			`"summary": "Task failed.",`,
-			`"message": "Task failed. One or more hub snapshot regions failed to refresh.",`,
-			`"error": "One or more hub snapshot regions failed to refresh.",`,
+			`"message": "Task failed. One or more snapshot regions failed to refresh.",`,
+			`"error": "One or more snapshot regions failed to refresh.",`,
 		}, "\n"),
 	}
 
@@ -8145,7 +8026,7 @@ func TestCodexReportedFailureIgnoresQuotedDispatchLogEcho(t *testing.T) {
 	res := execx.Result{
 		Stderr: strings.Join([]string{
 			`dispatch request_id=local-1775867707-000003 cmd phase=codex name=codex stream=stderr text="\"summary\": \"Task failed.\","`,
-			`dispatch request_id=local-1775867707-000003 cmd phase=codex name=codex stream=stderr text="\"error\": \"One or more hub snapshot regions failed to refresh.\","`,
+			`dispatch request_id=local-1775867707-000003 cmd phase=codex name=codex stream=stderr text="\"error\": \"One or more snapshot regions failed to refresh.\","`,
 		}, "\n"),
 	}
 
@@ -8360,7 +8241,7 @@ func TestSyncGeneratedWorkBranchFetchesAndMergesBase(t *testing.T) {
 		URL:              "git@github.com:acme/repo.git",
 		Dir:              repoDir,
 		RelDir:           "repo",
-		Branch:           "moltenhub-build-api",
+		Branch:           "agent00-build-api",
 		BaseBranch:       "main",
 		CreateWorkBranch: true,
 	}
@@ -8416,7 +8297,7 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 		URL:              "git@github.com:acme/repo.git",
 		Dir:              repoDir,
 		RelDir:           "repo",
-		Branch:           "moltenhub-build-api",
+		Branch:           "agent00-build-api",
 		BaseBranch:       "main",
 		CreateWorkBranch: true,
 	}
@@ -8428,7 +8309,7 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 			err: errors.New("merge failed"),
 		},
 		{cmd: codexCommand(repoDir, "resolve conflict")},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## moltenhub-build-api\n M file.go\n"}},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n M file.go\n"}},
 		{cmd: addCommand(repoDir)},
 		{cmd: commitCommand(repoDir, baseSyncCommitMessage("main"))},
 		{cmd: fetchBranchCommand(repoDir, "main")},
@@ -8515,7 +8396,7 @@ func TestRunHTTPSGitHubRepoConfiguresGitAuthWithoutEnvToken(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 
 	fake := &fakeRunner{t: t, allowUnorderedClones: true, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -8527,7 +8408,7 @@ func TestRunHTTPSGitHubRepoConfiguresGitAuthWithoutEnvToken(t *testing.T) {
 		{cmd: branchCommand(repoDir, branch)},
 		{cmd: pushDryRunCommand(repoDir, branch)},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## moltenhub-build-api\n M file.go\n"}},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n M file.go\n"}},
 		{cmd: addCommand(repoDir)},
 		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
 		{cmd: pushCommand(repoDir, branch)},
@@ -8599,8 +8480,8 @@ func TestLocalBranchFromStatus(t *testing.T) {
 	}{
 		{
 			name:   "branch only",
-			stdout: "## moltenhub-branch\n",
-			want:   "moltenhub-branch",
+			stdout: "## agent00-branch\n",
+			want:   "agent00-branch",
 		},
 		{
 			name:   "branch with upstream",
@@ -8628,10 +8509,10 @@ func TestLocalBranchFromStatus(t *testing.T) {
 func TestHasTrackedWorktreeChanges(t *testing.T) {
 	t.Parallel()
 
-	if hasTrackedWorktreeChanges("## moltenhub-branch\n") {
+	if hasTrackedWorktreeChanges("## agent00-branch\n") {
 		t.Fatal("hasTrackedWorktreeChanges(branch-only) = true, want false")
 	}
-	if !hasTrackedWorktreeChanges("## moltenhub-branch\n M file.go\n") {
+	if !hasTrackedWorktreeChanges("## agent00-branch\n M file.go\n") {
 		t.Fatal("hasTrackedWorktreeChanges(with diff) = false, want true")
 	}
 	if hasTrackedWorktreeChanges("\n") {
@@ -8642,10 +8523,10 @@ func TestHasTrackedWorktreeChanges(t *testing.T) {
 func TestHasAheadCommitsInStatus(t *testing.T) {
 	t.Parallel()
 
-	if !hasAheadCommitsInStatus("## moltenhub-branch...origin/moltenhub-branch [ahead 1]\n") {
+	if !hasAheadCommitsInStatus("## agent00-branch...origin/agent00-branch [ahead 1]\n") {
 		t.Fatal("hasAheadCommitsInStatus(ahead) = false, want true")
 	}
-	if hasAheadCommitsInStatus("## moltenhub-branch...origin/moltenhub-branch [behind 2]\n") {
+	if hasAheadCommitsInStatus("## agent00-branch...origin/agent00-branch [behind 2]\n") {
 		t.Fatal("hasAheadCommitsInStatus(behind) = true, want false")
 	}
 	if hasAheadCommitsInStatus(" M file.go\n") {
@@ -8937,4 +8818,18 @@ func flagValue(args []string, flag string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func TestRunCodexDoesNotSuppressRetiredServiceBuildFailure(t *testing.T) {
+	t.Parallel()
+	targetDir := t.TempDir()
+	prompt := "update the product page"
+	fake := &fakeRunner{t: t, exps: []expectedRun{{
+		cmd: codexCommand(targetDir, prompt),
+		res: execx.Result{Stdout: "Failure: Hub snapshot refresh unavailable during build pre-step, but build continued using existing snapshot.\nError details: MOLTENHUB_ADMIN_SNAPSHOT_KEY is not configured for this build."},
+	}}}
+	err := New(fake).runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil || !strings.Contains(err.Error(), "reported failure") {
+		t.Fatalf("reported repository failure suppressed: %v", err)
+	}
 }

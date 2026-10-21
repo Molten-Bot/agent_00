@@ -47,5 +47,5 @@ func BranchName(prompt string, now time.Time, guid string) string {
 	slug := FromPrompt(prompt)
 	_ = now
 	_ = guid
-	return fmt.Sprintf("moltenhub-%s", slug)
+	return fmt.Sprintf("agent00-%s", slug)
 }

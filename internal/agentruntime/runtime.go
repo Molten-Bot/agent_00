@@ -229,7 +229,7 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 					cmd.Env = append(cmd.Env, entry)
 				}
 			}
-			cmd.Env = append(cmd.Env, "CODEX_HOME="+filepath.Join(opts.WorkspaceDir, ".moltenhub-agent-io", "config", "sandbox"))
+			cmd.Env = append(cmd.Env, "CODEX_HOME="+filepath.Join(opts.WorkspaceDir, ".agent00-agent-io", "config", "sandbox"))
 		}
 	}
 	return cmd, nil

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +16,7 @@ import (
 )
 
 const defaultPRMergePollInterval = 10 * time.Second
-const automatedReviewCycleMarker = "<!-- moltenhub-review-cycle"
+const automatedReviewCycleMarker = "<!-- agent00-review-cycle"
 
 // PRMergeMonitor watches task pull requests and marks merged tasks as done.
 type PRMergeMonitor struct {
@@ -535,8 +536,11 @@ func actionablePRReviewFeedback(task Task, state prViewState) PRReviewFeedback {
 	return feedback
 }
 
+var automatedReviewCyclePattern = regexp.MustCompile(`<!-- [a-z0-9_-]+-review-cycle pass=[0-9]+ total=[0-9]+ -->`)
+
 func isAutomatedReviewCycleComment(body string) bool {
-	return strings.Contains(strings.ToLower(body), automatedReviewCycleMarker)
+	text := strings.ToLower(body)
+	return strings.Contains(text, automatedReviewCycleMarker) || automatedReviewCyclePattern.MatchString(text)
 }
 
 func reviewEntryNeedsFollowUp(review prReviewEntry) bool {

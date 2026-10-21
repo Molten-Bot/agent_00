@@ -250,7 +250,7 @@ func TestDefaultMetadataAndStringHelpers(t *testing.T) {
 	if got := defaultPRBody("run the full regression suite"); !strings.Contains(got, "Original task prompt:\n```text\nrun the full regression suite\n```") {
 		t.Fatalf("defaultPRBody(prompt) = %q, want original prompt block", got)
 	}
-	if got := normalizePRTitle("moltenhub-existing-title"); got != "existing-title" {
+	if got := normalizePRTitle("agent00-existing-title"); got != "existing-title" {
 		t.Fatalf("normalizePRTitle(existing prefix) = %q", got)
 	}
 	if got := normalizePRTitle(" "); got != "Automated update" {

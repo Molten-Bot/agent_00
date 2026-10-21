@@ -12,9 +12,8 @@ import (
 )
 
 const (
-	runtimeConfigPath       = "./.moltenhub/config.json"
-	legacyRuntimeConfigPath = "./.moltenhub/config/config.json"
-	runtimeConfigPathEnv    = "HARNESS_RUNTIME_CONFIG_PATH"
+	runtimeConfigPath    = "./.agent00/config.json"
+	runtimeConfigPathEnv = "HARNESS_RUNTIME_CONFIG_PATH"
 )
 
 // RuntimeConfig persists local agent and review preferences.
@@ -57,6 +56,10 @@ func LoadRuntimeConfig(path string) (RuntimeConfig, error) {
 	}
 
 	var cfg RuntimeConfig
+	data, err = normalizeSchedulerJSON(data)
+	if err != nil {
+		return RuntimeConfig{}, fmt.Errorf("parse runtime config: %w", err)
+	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return RuntimeConfig{}, fmt.Errorf("parse runtime config: %w", err)
 	}
@@ -334,6 +337,12 @@ func saveRuntimeConfigStringField(
 }
 
 func writeRuntimeConfigDoc(path string, doc map[string]any) error {
+	if _, exists := doc["scheduler"]; !exists {
+		if value, ok := doc["dispatcher"]; ok {
+			doc["scheduler"] = value
+		}
+	}
+	delete(doc, "dispatcher")
 	// Discard retired remote-service preferences when saving local settings.
 	for _, key := range []string{
 		"base_url", "baseUrl", "bind_token", "bindToken", "agent_token", "agentToken",
@@ -514,13 +523,7 @@ func SaveRuntimeConfigClaudeOAuthToken(path string, initCfg InitConfig, oauthTok
 
 	doc["claude_code_oauth_token"] = oauthToken
 	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
-
-	encoded, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode runtime config: %w", err)
-	}
-	encoded = append(encoded, '\n')
-	return writeRuntimeConfigFile(path, encoded)
+	return writeRuntimeConfigDoc(path, doc)
 }
 
 func runtimeConfigBaseDoc(initCfg InitConfig) (map[string]any, error) {
@@ -596,27 +599,4 @@ func ResolveRuntimeConfigPath(initPath string) string {
 	}
 
 	return filepath.Join(filepath.Dir(initPath), "config.json")
-}
-
-func runtimeConfigCandidatePaths(path string) []string {
-	path = strings.TrimSpace(path)
-	if path != "" {
-		candidates := []string{path}
-		if legacyPath := legacyRuntimeConfigPathFor(path); legacyPath != "" && legacyPath != path {
-			candidates = append(candidates, legacyPath)
-		}
-		return candidates
-	}
-	return []string{runtimeConfigPath, legacyRuntimeConfigPath}
-}
-
-func legacyRuntimeConfigPathFor(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return legacyRuntimeConfigPath
-	}
-	if path == runtimeConfigPath {
-		return legacyRuntimeConfigPath
-	}
-	return filepath.Join(filepath.Dir(path), "config", filepath.Base(path))
 }

@@ -205,7 +205,7 @@ func TestFollowUpTargetingForcesRemoteDefaultAndRootForNonDefaultInputs(t *testi
 func TestFollowUpTargetingUsesRemoteDefaultAndRootWhenBaseIsMain(t *testing.T) {
 	t.Parallel()
 
-	baseBranch, targetSubdir := FollowUpTargeting("main", ".", "moltenhub-fix-issue")
+	baseBranch, targetSubdir := FollowUpTargeting("main", ".", "agent00-fix-issue")
 	if baseBranch != "" {
 		t.Fatalf("baseBranch = %q, want empty for remote default", baseBranch)
 	}

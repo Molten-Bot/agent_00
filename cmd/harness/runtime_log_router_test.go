@@ -15,13 +15,13 @@ func TestClassifyRuntimeLogLine(t *testing.T) {
 		line string
 		want localruntime.LogLevel
 	}{
-		{line: `dispatch status=error request_id=req-1 err="boom"`, want: localruntime.LogLevelError},
+		{line: `task status=error request_id=req-1 err="boom"`, want: localruntime.LogLevelError},
 		{line: `localruntime.auth status=warn action=start err="denied"`, want: localruntime.LogLevelWarn},
 		{line: `cmd phase=git name=git stream=stdout b64=SGVsbG8=`, want: localruntime.LogLevelDebug},
-		{line: `dispatch status=start request_id=req-1 skill=code_for_me`, want: localruntime.LogLevelDebug},
-		{line: `dispatch request_id=req-1 stage=clone status=ok repo=git@github.com:acme/repo.git`, want: localruntime.LogLevelDebug},
-		{line: `dispatch request_id=req-1 stage=codex status=running elapsed_s=9`, want: localruntime.LogLevelDebug},
-		{line: `dispatch status=completed request_id=req-1 workspace=/tmp/run branch=moltenhub-fix`, want: localruntime.LogLevelInfo},
+		{line: `task status=start request_id=req-1 skill=code_for_me`, want: localruntime.LogLevelDebug},
+		{line: `task request_id=req-1 stage=clone status=ok repo=git@github.com:acme/repo.git`, want: localruntime.LogLevelDebug},
+		{line: `task request_id=req-1 stage=codex status=running elapsed_s=9`, want: localruntime.LogLevelDebug},
+		{line: `task status=completed request_id=req-1 workspace=/tmp/run branch=agent00-fix`, want: localruntime.LogLevelInfo},
 		{line: `localruntime.auth status=ok`, want: localruntime.LogLevelInfo},
 	}
 
@@ -48,7 +48,7 @@ func TestRuntimeLogRouterFiltersByConfiguredLevel(t *testing.T) {
 
 	router.Log(`cmd phase=git name=git stream=stdout b64=SGVsbG8=`)
 	router.Log(`localruntime.auth status=ok`)
-	router.Log(`dispatch status=error request_id=req-1 err="boom"`)
+	router.Log(`task status=error request_id=req-1 err="boom"`)
 
 	out := rendered.String()
 	if strings.Contains(out, "cmd phase=git") {
@@ -57,7 +57,7 @@ func TestRuntimeLogRouterFiltersByConfiguredLevel(t *testing.T) {
 	if !strings.Contains(out, "localruntime.auth status=ok") {
 		t.Fatalf("info line missing from rendered output: %q", out)
 	}
-	if !strings.Contains(out, "dispatch status=error") {
+	if !strings.Contains(out, "task status=error") {
 		t.Fatalf("error line missing from rendered output: %q", out)
 	}
 
@@ -86,7 +86,7 @@ func TestRuntimeLogRouterWarnLevelSuppressesInfoAndKeepsErrors(t *testing.T) {
 
 	router.Log(`localruntime.auth status=ok`)
 	router.Log(`localruntime.auth status=warn action=start err="denied"`)
-	router.Log(`dispatch status=error request_id=req-1 err="boom"`)
+	router.Log(`task status=error request_id=req-1 err="boom"`)
 
 	out := rendered.String()
 	if strings.Contains(out, "localruntime.auth status=ok") {
@@ -95,7 +95,7 @@ func TestRuntimeLogRouterWarnLevelSuppressesInfoAndKeepsErrors(t *testing.T) {
 	if !strings.Contains(out, "localruntime.auth status=warn") {
 		t.Fatalf("warn line missing from rendered output: %q", out)
 	}
-	if !strings.Contains(out, "dispatch status=error") {
+	if !strings.Contains(out, "task status=error") {
 		t.Fatalf("error line missing from rendered output: %q", out)
 	}
 
@@ -115,16 +115,16 @@ func TestRuntimeLogRouterInfoLevelSuppressesHighVolumeDebugLifecycleLogs(t *test
 	broker := web.NewBroker()
 	router := newRuntimeLogRouter(logger, broker, localruntime.LogLevelInfo)
 
-	router.Log(`dispatch request_id=req-1 stage=clone status=start repo=git@github.com:acme/repo.git`)
-	router.Log(`dispatch status=start request_id=req-1 skill=code_for_me`)
+	router.Log(`task request_id=req-1 stage=clone status=start repo=git@github.com:acme/repo.git`)
+	router.Log(`task status=start request_id=req-1 skill=code_for_me`)
 	router.Log(`localruntime.auth status=ok`)
 
 	out := rendered.String()
 	if strings.Contains(out, "stage=clone status=start") {
 		t.Fatalf("stage debug line rendered at info level: %q", out)
 	}
-	if strings.Contains(out, "dispatch status=start request_id=req-1") {
-		t.Fatalf("dispatch lifecycle debug line rendered at info level: %q", out)
+	if strings.Contains(out, "task status=start request_id=req-1") {
+		t.Fatalf("task lifecycle debug line rendered at info level: %q", out)
 	}
 	if !strings.Contains(out, "localruntime.auth status=ok") {
 		t.Fatalf("info line missing from rendered output: %q", out)

@@ -313,16 +313,18 @@ func isImportantCodexCommandText(text string) bool {
 }
 
 func looksLikeNestedHarnessLogLine(lower string) bool {
+	// Older task logs may be quoted by agents troubleshooting a previous run.
+	lower = strings.ReplaceAll(lower, "dispatch ", "task ")
 	lower = strings.TrimSpace(lower)
 	if lower == "" {
 		return false
 	}
-	if strings.HasPrefix(lower, "dispatch ") || strings.HasPrefix(lower, "stage=") || strings.HasPrefix(lower, "cmd phase=") {
+	if strings.HasPrefix(lower, "task ") || strings.HasPrefix(lower, "stage=") || strings.HasPrefix(lower, "cmd phase=") {
 		return true
 	}
-	// rg search output often prefixes matched lines with "<line>:dispatch ...".
+	// rg search output often prefixes matched lines with "<line>:task ...".
 	// Match the embedded harness line so those echoes stay suppressed too.
-	if strings.Contains(lower, "dispatch request_id=") &&
+	if strings.Contains(lower, "task request_id=") &&
 		(strings.Contains(lower, " stage=") || strings.Contains(lower, " cmd phase=")) {
 		return true
 	}

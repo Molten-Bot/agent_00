@@ -22,7 +22,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH="$(docker image inspect "$image" --format '{{.Ar
 
 # Share the persisted login without copying credentials; the task test acquires
 # the same process-safe session lock used by the harness in AUTH_CONTAINER.
-# Override the entrypoint so this check cannot dispatch Hub work or run onboarding.
+# Override the entrypoint so this check cannot start tasks or run onboarding.
 docker run --rm --cap-drop=ALL \
     --security-opt seccomp=unconfined \
     --security-opt apparmor=unconfined \

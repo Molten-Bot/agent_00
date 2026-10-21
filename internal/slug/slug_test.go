@@ -49,7 +49,7 @@ func TestBranchNameUsesStableSlug(t *testing.T) {
 
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	got := BranchName("Build API", now, "abcdef123456")
-	want := "moltenhub-build-api"
+	want := "agent00-build-api"
 	if got != want {
 		t.Fatalf("BranchName() = %q, want %q", got, want)
 	}

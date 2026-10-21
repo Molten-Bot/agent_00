@@ -155,7 +155,7 @@ func TestLoadServerBootConfigAcceptsMalformedDockerComposeGitHubEnv(t *testing.T
 }
 
 func TestEffectiveRuntimeConfigKeepsBootstrapGitHubToken(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), ".moltenhub", "config.json")
+	configPath := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
@@ -315,11 +315,11 @@ func TestFailureFollowUpRunConfigForcesRemoteDefaultBranchAndRootTarget(t *testi
 	logRoot := filepath.Join(t.TempDir(), ".log")
 	failedResult := app.Result{
 		Err:    fmt.Errorf("git: nothing to commit, working tree clean"),
-		Branch: "moltenhub-add-slight-padding-between-prompt-and-lo",
+		Branch: "agent00-add-slight-padding-between-prompt-and-lo",
 	}
 	failedRunCfg := config.Config{
 		Repos:        []string{"git@github.com:acme/repo.git"},
-		BaseBranch:   "moltenhub-add-slight-padding-between-prompt-and-lo",
+		BaseBranch:   "agent00-add-slight-padding-between-prompt-and-lo",
 		TargetSubdir: "internal/web",
 		Prompt:       "add slight padding between prompt and lower items",
 	}

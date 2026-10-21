@@ -15,7 +15,7 @@ import (
 
 // This opt-in smoke test invokes the real provider and uses its persistent login.
 // It exercises task IO isolation, session locking and the generated agent command
-// without cloning, pushing, creating a PR or starting the Hub daemon.
+// without cloning, pushing, creating a PR or starting the local server.
 func TestCodexTaskStartup(t *testing.T) {
 	if os.Getenv("HARNESS_TEST_CODEX_TASK") != "1" {
 		t.Skip("set HARNESS_TEST_CODEX_TASK=1 with an authenticated Codex CLI to run a real task")

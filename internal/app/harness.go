@@ -71,7 +71,7 @@ const (
 	bootstrapMainCommitMessage       = "chore: initialize main branch"
 	moltenbotCoAuthorTrailer         = "Co-authored-by: Molten Bot 000 <260473928+moltenbot000@users.noreply.github.com>"
 	agentsCredentialGuardInstruction = "YOU ARE NOT ALLOWED TO SHARE: GITHUB PAT and YOUR (AGENTS) AUTH CREDENTIALS"
-	prCommentScreenshotsRelDir       = ".moltenhub/pr-comment-screenshots"
+	prCommentScreenshotsRelDir       = ".agent00/pr-comment-screenshots"
 	publishRemoteOrigin              = "origin"
 	publishRemoteFork                = "fork"
 	publishStrategyDirect            = "direct"
@@ -1786,7 +1786,7 @@ func sanitizeBranchSuffix(value string) string {
 func collisionAvoidanceBranchName(branch, suffix string) string {
 	branch = strings.Trim(normalizeBranchRef(branch), "-/")
 	if branch == "" {
-		branch = "moltenhub-task"
+		branch = "agent00-task"
 	}
 	suffix = branchCollisionSuffixVariant(suffix, 1)
 	if strings.HasSuffix(branch, "-"+suffix) {
@@ -1794,13 +1794,13 @@ func collisionAvoidanceBranchName(branch, suffix string) string {
 	}
 	const maxCollisionBranchNameLen = 120
 	maxBaseLen := maxCollisionBranchNameLen - len(suffix) - 1
-	if maxBaseLen < len("moltenhub-task") {
-		maxBaseLen = len("moltenhub-task")
+	if maxBaseLen < len("agent00-task") {
+		maxBaseLen = len("agent00-task")
 	}
 	if len(branch) > maxBaseLen {
 		branch = strings.Trim(branch[:maxBaseLen], "-/")
 		if branch == "" {
-			branch = "moltenhub-task"
+			branch = "agent00-task"
 		}
 	}
 	return branch + "-" + suffix
@@ -3309,7 +3309,7 @@ func workspaceCodexPrompt(prompt, targetSubdir string, repos []repoWorkspace) st
 	}
 	b.WriteString("- If you modify files in any repository, keep each changed repository on its own branch and PR.\n")
 	b.WriteString("- Only create a new branch when starting from the repository default branch; if you're fixing an existing non-default branch, stay on it.\n")
-	b.WriteString("- Start every new branch name with 'moltenhub-'. Do not prefix PR titles with it.\n")
+	b.WriteString("- Start every new branch name with 'agent00-'. Do not prefix PR titles with it.\n")
 	return strings.TrimSpace(b.String())
 }
 
@@ -3594,7 +3594,7 @@ func finalReviewPrompt(originalPrompt, preparedContext string, pass, total int) 
 }
 
 func finalReviewCommentBody(outcome reviewOutcome, pass, total int) string {
-	marker := fmt.Sprintf("<!-- moltenhub-review-cycle pass=%d total=%d -->", pass, total)
+	marker := fmt.Sprintf("<!-- agent00-review-cycle pass=%d total=%d -->", pass, total)
 	return truncateReviewCommentBody(marker + "\n" + conciseReviewCommentBody(outcome))
 }
 
@@ -4423,7 +4423,7 @@ func remoteTrackingRef(branch string) string {
 }
 
 func pullRequestTrackingRef(prNumber int) string {
-	return fmt.Sprintf("refs/remotes/origin/moltenhub-pr-%d", prNumber)
+	return fmt.Sprintf("refs/remotes/origin/agent00-pr-%d", prNumber)
 }
 
 func reviewDiffStatCommand(repoDir, baseRef, headRef string) execx.Command {
@@ -4885,14 +4885,14 @@ func normalizeFailureFollowUpTargeting(cfg *config.Config) {
 	if cfg == nil {
 		return
 	}
-	if !isMoltenHubFailureFollowUpConfig(*cfg) {
+	if !isHarnessFailureFollowUpConfig(*cfg) {
 		return
 	}
 	cfg.BaseBranch = ""
 	cfg.TargetSubdir = "."
 }
 
-func isMoltenHubFailureFollowUpConfig(cfg config.Config) bool {
+func isHarnessFailureFollowUpConfig(cfg config.Config) bool {
 	if !strings.Contains(cfg.Prompt, failurefollowup.RequiredPrompt) {
 		return false
 	}
@@ -5053,7 +5053,7 @@ func shouldFallbackCloneToDefaultBranch(baseBranch string, res execx.Result, err
 		return false
 	}
 	normalized := cloneFallbackBranchName(baseBranch)
-	if !strings.HasPrefix(normalized, "moltenhub-") && !isKnownDefaultBranchName(normalized) {
+	if !strings.HasPrefix(normalized, "agent00-") && !isKnownDefaultBranchName(normalized) {
 		return false
 	}
 	return isMissingRemoteBranchCloneError(err, res)
@@ -5495,7 +5495,7 @@ func stageAgentsPromptFile(targetDir, agentsPath string) (string, func() error, 
 		return "", nil, fmt.Errorf("read agents source file: %w", err)
 	}
 
-	f, err := os.CreateTemp(targetDir, ".moltenhub-agents-*.md")
+	f, err := os.CreateTemp(targetDir, ".agent00-agents-*.md")
 	if err != nil {
 		return "", nil, fmt.Errorf("create staged agents file: %w", err)
 	}
@@ -5651,15 +5651,6 @@ func (h Harness) runCodexWithHeartbeat(
 				if isRecoveredTransientRegistryLookupFailure(detail, run.res) {
 					h.logf(
 						"stage=%s status=warn action=recovered_transient_registry_lookup detail=%q%s",
-						agentStage,
-						detail,
-						invocation.logFieldsSuffix(),
-					)
-					return run.res, nil
-				}
-				if isNonFatalHubSnapshotRefreshFailure(detail, run.res) {
-					h.logf(
-						"stage=%s status=warn action=hub_snapshot_refresh_unavailable detail=%q%s",
 						agentStage,
 						detail,
 						invocation.logFieldsSuffix(),
@@ -6110,40 +6101,6 @@ func isRecoveredTransientRegistryLookupFailure(detail string, res execx.Result) 
 	return false
 }
 
-func isNonFatalHubSnapshotRefreshFailure(detail string, res execx.Result) bool {
-	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{
-		detail,
-		res.Stdout,
-		res.Stderr,
-	}, "\n")))
-	if text == "" {
-		return false
-	}
-	snapshotRefreshMarkers := []string{
-		"non-fatal prebuild snapshot refresh warning",
-		"prebuild hub snapshot refresh could not fetch live snapshot",
-		"hub snapshot refresh unavailable during build pre-step",
-		"hub snapshot refresh could not fetch live snapshot",
-		"hub snapshot refresh unavailable",
-	}
-	existingSnapshotMarkers := []string{
-		"build kept existing `hub-snapshot.json` and completed",
-		"build continued using existing snapshot",
-		"build still completed",
-		"using existing snapshot",
-	}
-	if !containsAny(text, snapshotRefreshMarkers) {
-		return false
-	}
-	if !strings.Contains(text, "moltenhub_admin_snapshot_key is not configured") {
-		return false
-	}
-	if !containsAny(text, existingSnapshotMarkers) {
-		return false
-	}
-	return true
-}
-
 func isNonFatalRemoteDeploymentAuthFailure(detail string, res execx.Result) bool {
 	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{
 		detail,
@@ -6591,7 +6548,7 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 		return nil, fmt.Errorf("run directory is required for agent io")
 	}
 
-	root := filepath.Join(runDir, ".moltenhub-agent-io")
+	root := filepath.Join(runDir, ".agent00-agent-io")
 	homeDir := filepath.Join(root, "home")
 	tmpDir := filepath.Join(root, "tmp")
 	configDir := filepath.Join(root, "config")
@@ -6620,7 +6577,7 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 		return nil, fmt.Errorf("seed claude config dir: %w", err)
 	}
 	overrides := []string{
-		"MOLTENHUB_AGENT_IO_DIR=" + root,
+		"AGENT00_AGENT_IO_DIR=" + root,
 		"HOME=" + homeDir,
 		"TMPDIR=" + tmpDir,
 		"TEMP=" + tmpDir,

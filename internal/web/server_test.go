@@ -247,14 +247,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected index html to load the google analytics tag script")
 	}
 	if !strings.Contains(markup, `window.gtag("config", "G-BY33RFG2WB", { send_page_view: false });`) {
-		t.Fatalf("expected index html to configure google analytics with the moltenhub measurement id")
+		t.Fatalf("expected index html to configure google analytics with the agent00 measurement id")
 	}
 	if !strings.Contains(markup, `<title>Molten AI: Agent_00</title>`) {
 		t.Fatalf("expected index html to set app title to Molten AI: Agent_00")
 	}
 	if !strings.Contains(markup, `<meta property="og:image" content="https://app.molten.bot/logo.svg">`) ||
 		!strings.Contains(markup, `<meta name="twitter:image" content="https://app.molten.bot/logo.svg">`) {
-		t.Fatalf("expected index html to use the molten hub logo for social previews")
+		t.Fatalf("expected index html to use the agent logo for social previews")
 	}
 	if !strings.Contains(markup, `src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"`) {
 		t.Fatalf("expected index html to load D3.js for dashboard stats")
@@ -621,7 +621,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected index html to include task progress icon URL resolver")
 	}
 	if !strings.Contains(markup, "function taskProgressFallbackIconURL(") {
-		t.Fatalf("expected index html to include a moltenhub logo fallback for unknown progress icons")
+		t.Fatalf("expected index html to include a agent00 logo fallback for unknown progress icons")
 	}
 	if !strings.Contains(markup, "function taskProgressStepsForTask(") || !strings.Contains(markup, "function taskProgressCurrentStepID(") || !strings.Contains(markup, "function taskProgressModel(") {
 		t.Fatalf("expected index html to build dynamic progress steps per task")
@@ -3478,7 +3478,7 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		t.Fatalf("expected stylesheet to size the rotating header logos to match the title and subtitle stack")
 	}
 	if !strings.Contains(css, ".brand-logo {\n  display: block;\n  padding: 0;\n  border: 0;\n  border-radius: 0;\n  background: transparent;\n  box-shadow: none;\n}") {
-		t.Fatalf("expected stylesheet to keep the moltenhub logo transparent instead of rendering it inside a tile")
+		t.Fatalf("expected stylesheet to keep the agent00 logo transparent instead of rendering it inside a tile")
 	}
 	if !strings.Contains(css, ".rotating-brand-logo {\n  position: absolute;\n  inset: 0;\n  display: block;\n  width: 100%;\n  height: 100%;") {
 		t.Fatalf("expected stylesheet to make rotating header logos fill the shared logo frame")
@@ -3653,7 +3653,7 @@ func TestHandlerServesStaticLogoAsset(t *testing.T) {
 	}
 }
 
-func TestHandlerServesTransparentMoltenHubLogoAsset(t *testing.T) {
+func TestHandlerServesTransparentAgentLogoAsset(t *testing.T) {
 	t.Parallel()
 
 	srv := NewServer("", NewBroker())
@@ -3673,7 +3673,7 @@ func TestHandlerServesTransparentMoltenHubLogoAsset(t *testing.T) {
 		t.Fatalf("expected svg payload, got %q", body)
 	}
 	if strings.Contains(body, "<rect") {
-		t.Fatalf("expected moltenhub logo svg to avoid embedded background boxes, got %q", body)
+		t.Fatalf("expected agent00 logo svg to avoid embedded background boxes, got %q", body)
 	}
 }
 
@@ -4153,7 +4153,7 @@ func TestHandlerTaskRerunAcceptedRemovesCompletedSourceTask(t *testing.T) {
 	payload := `{"repo":"git@github.com:acme/repo.git","baseBranch":"main","targetSubdir":".","prompt":"rerun this"}`
 	b.RecordTaskRunConfig(requestID, []byte(payload))
 	b.IngestLog("dispatch status=start request_id=req-100")
-	b.IngestLog("dispatch status=completed request_id=req-100 workspace=/tmp/run branch=moltenhub-rerun")
+	b.IngestLog("dispatch status=completed request_id=req-100 workspace=/tmp/run branch=agent00-rerun")
 
 	var gotBody string
 	var closeCalls []string
@@ -4477,7 +4477,7 @@ func TestHandlerTaskCloseAccepted(t *testing.T) {
 	b := NewBroker()
 	b.RecordTaskRunConfig("req-close", []byte(`{"repo":"x","prompt":"x"}`))
 	b.IngestLog("dispatch status=start request_id=req-close")
-	b.IngestLog("dispatch status=completed request_id=req-close workspace=/tmp/run branch=moltenhub-close")
+	b.IngestLog("dispatch status=completed request_id=req-close workspace=/tmp/run branch=agent00-close")
 
 	var closedID string
 	srv := NewServer("", b)

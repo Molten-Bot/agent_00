@@ -190,7 +190,7 @@ func (g *claudeAuthGate) StartDeviceAuth(_ context.Context) (web.AgentAuthState,
 		baseCtx = context.Background()
 	}
 
-	tmpDir, err := os.MkdirTemp("", "moltenhub-claude-auth-*")
+	tmpDir, err := os.MkdirTemp("", "agent00-claude-auth-*")
 	if err != nil {
 		snap, _ := g.Status(context.Background())
 		return snap, fmt.Errorf("create %s temp dir: %w", claudeLoginCommand, err)

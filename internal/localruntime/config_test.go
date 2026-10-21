@@ -97,7 +97,7 @@ func TestLoadInitCanDisableDefaultReviewWatch(t *testing.T) {
 	}
 }
 
-func TestDefaultDispatcherMaxParallelForCores(t *testing.T) {
+func TestDefaultSchedulerMaxParallelForCores(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
@@ -115,8 +115,8 @@ func TestDefaultDispatcherMaxParallelForCores(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := defaultDispatcherMaxParallelForCores(tc.cores); got != tc.want {
-				t.Fatalf("defaultDispatcherMaxParallelForCores(%d) = %d, want %d", tc.cores, got, tc.want)
+			if got := defaultSchedulerMaxParallelForCores(tc.cores); got != tc.want {
+				t.Fatalf("defaultSchedulerMaxParallelForCores(%d) = %d, want %d", tc.cores, got, tc.want)
 			}
 		})
 	}

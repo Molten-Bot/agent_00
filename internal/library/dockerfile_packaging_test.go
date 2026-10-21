@@ -25,19 +25,19 @@ func TestRuntimeDockerfileCopiesFullLibraryCatalog(t *testing.T) {
 	}
 
 	content := string(data)
-	if !strings.Contains(content, "HARNESS_AGENTS_SEED_PATH=/opt/moltenhub/library/AGENTS.md") {
+	if !strings.Contains(content, "HARNESS_AGENTS_SEED_PATH=/opt/agent00/library/AGENTS.md") {
 		t.Fatalf("%s does not configure the runtime agents seed path", dockerfilePath)
 	}
-	if !strings.Contains(content, "COPY library /opt/moltenhub/library") {
+	if !strings.Contains(content, "COPY library /opt/agent00/library") {
 		t.Fatalf("%s does not copy the full library directory into the runtime image", dockerfilePath)
 	}
 	if !containsAny(content,
 		"COPY library /workspace/library",
-		"ln -s /opt/moltenhub/library /workspace/library",
+		"ln -s /opt/agent00/library /workspace/library",
 	) {
 		t.Fatalf("%s does not make the full library directory available at /workspace/library for hub runtime loading", dockerfilePath)
 	}
-	if strings.Contains(content, "COPY library/AGENTS.md /opt/moltenhub/library/AGENTS.md") {
+	if strings.Contains(content, "COPY library/AGENTS.md /opt/agent00/library/AGENTS.md") {
 		t.Fatalf("%s still only copies library/AGENTS.md into the runtime image", dockerfilePath)
 	}
 }
@@ -59,12 +59,12 @@ func TestRuntimeDockerfileCopiesSkillsCatalog(t *testing.T) {
 	}
 
 	content := string(data)
-	if !strings.Contains(content, "COPY skills /opt/moltenhub/skills") {
+	if !strings.Contains(content, "COPY skills /opt/agent00/skills") {
 		t.Fatalf("%s does not copy the full skills directory into the runtime image", dockerfilePath)
 	}
 	if !containsAny(content,
 		"COPY skills /workspace/skills",
-		"ln -s /opt/moltenhub/skills /workspace/skills",
+		"ln -s /opt/agent00/skills /workspace/skills",
 	) {
 		t.Fatalf("%s does not make the full skills directory available at /workspace/skills for hub runtime inspection", dockerfilePath)
 	}

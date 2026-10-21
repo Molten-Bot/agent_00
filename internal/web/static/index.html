@@ -752,7 +752,7 @@
     const DASHBOARD_SHARE_IMAGE_URL = "https://app.molten.bot/logo.svg";
     const GOOGLE_ANALYTICS_MEASUREMENT_ID = "G-BY33RFG2WB";
     const COMPLETED_STATUSES = new Set(["completed", "no_changes", "merged", "error", "invalid", "duplicate", "stopped"]);
-    const TASK_PROGRESS_PREP_STAGES = new Set(["preflight", "auth", "workspace", "config", "submit", "dispatch"]);
+    const TASK_PROGRESS_PREP_STAGES = new Set(["preflight", "auth", "workspace", "config", "submit", "task"]);
     const TASK_PROGRESS_AGENT_STAGES = new Set(["codex", "claude", "agent"]);
     const LIBRARY_TASK_TYPE_ORDER = Object.freeze(["quality", "maintenance", "security", "review"]);
     const LIBRARY_TASK_TYPE_DEFS = Object.freeze({
@@ -921,7 +921,7 @@
       try {
         window.gtag("event", eventName, payload);
       } catch (_err) {
-        // Keep UI interactions working even if analytics dispatch fails.
+        // Keep UI interactions working even if analytics delivery fails.
       }
     }
 
@@ -953,7 +953,7 @@
         window.gtag("event", "page_view", payload);
         lastAnalyticsPageLocation = currentLocation;
       } catch (_err) {
-        // Keep navigation working even if analytics dispatch fails.
+        // Keep navigation working even if analytics delivery fails.
       }
     }
 

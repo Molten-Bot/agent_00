@@ -445,7 +445,7 @@ func TestFailureFollowUpPromptIncludesFailureContext(t *testing.T) {
 			ExitCode:     app.ExitClone,
 			Err:          errors.New("clone: repository not found"),
 			WorkspaceDir: "/tmp/run-123",
-			Branch:       "moltenhub-fix-clone",
+			Branch:       "agent00-fix-clone",
 			PRURL:        "https://github.com/acme/repo/pull/17",
 		},
 		config.Config{
@@ -461,7 +461,7 @@ func TestFailureFollowUpPromptIncludesFailureContext(t *testing.T) {
 		"- exit_code=40",
 		`- error="clone: repository not found"`,
 		"- workspace_dir=/tmp/run-123",
-		"- branch=moltenhub-fix-clone",
+		"- branch=agent00-fix-clone",
 		"- pr_url=https://github.com/acme/repo/pull/17",
 		"- repos=git@github.com:acme/repo-a.git,git@github.com:acme/repo-b.git",
 	} {
@@ -515,7 +515,7 @@ func TestLocalNoChangesFailureResultForActionablePrompt(t *testing.T) {
 	result, failed := localNoChangesFailureResult(localSubmitSource, app.Result{
 		NoChanges:    true,
 		WorkspaceDir: "/tmp/work",
-		Branch:       "moltenhub-build-release",
+		Branch:       "agent00-build-release",
 	}, config.Config{Prompt: "fix broken release generation"})
 	if !failed {
 		t.Fatal("localNoChangesFailureResult(actionable) failed = false, want true")
@@ -597,7 +597,7 @@ func TestRunSingleActionableNoChangesReturnsFailure(t *testing.T) {
 		return app.Result{
 			ExitCode:     app.ExitSuccess,
 			WorkspaceDir: "/tmp/work",
-			Branch:       "moltenhub-fix",
+			Branch:       "agent00-fix",
 			NoChanges:    true,
 		}
 	}
@@ -660,7 +660,7 @@ func TestRunSingleConcreteNoChangeEvidenceStaysSuccess(t *testing.T) {
 		return app.Result{
 			ExitCode:         app.ExitSuccess,
 			WorkspaceDir:     "/tmp/work",
-			Branch:           "moltenhub-fix",
+			Branch:           "agent00-fix",
 			NoChanges:        true,
 			NoChangeEvidence: true,
 		}
@@ -886,7 +886,7 @@ func TestUnexpectedNoChangesFollowUpRunConfigTargetsHarnessAndAddsContext(t *tes
 		t.Fatalf("mkdir log dir: %v", err)
 	}
 	logPath := filepath.Join(logDir, logFileName)
-	if err := os.WriteFile(logPath, []byte("dispatch status=no_changes\n"), 0o644); err != nil {
+	if err := os.WriteFile(logPath, []byte("task status=no_changes\n"), 0o644); err != nil {
 		t.Fatalf("write log file: %v", err)
 	}
 
@@ -947,7 +947,7 @@ func TestUnexpectedNoChangesFollowUpRunConfigForcesRemoteDefaultBranch(t *testin
 		"local-1712345678-000001",
 		app.Result{
 			NoChanges: true,
-			Branch:    "moltenhub-add-the-emoji-picker-to-the-agent-profil",
+			Branch:    "agent00-add-the-emoji-picker-to-the-agent-profil",
 		},
 		config.Config{
 			Repos:      []string{"git@github.com:acme/repo.git"},
@@ -1041,7 +1041,7 @@ func TestEscalatedNoChangesFollowUpRunConfigAddsStricterPrompt(t *testing.T) {
 		t.Fatalf("mkdir log dir: %v", err)
 	}
 	logPath := filepath.Join(logDir, logFileName)
-	if err := os.WriteFile(logPath, []byte("dispatch status=no_changes\n"), 0o644); err != nil {
+	if err := os.WriteFile(logPath, []byte("task status=no_changes\n"), 0o644); err != nil {
 		t.Fatalf("write log file: %v", err)
 	}
 
@@ -1128,7 +1128,7 @@ func writeNoChangeEvidenceLogWithStream(t *testing.T, stream string) string {
 	var b strings.Builder
 	for _, line := range lines {
 		encoded := base64.StdEncoding.EncodeToString([]byte(line))
-		fmt.Fprintf(&b, "dispatch request_id=req cmd phase=codex name=codex stream=%s b64=%s\n", stream, encoded)
+		fmt.Fprintf(&b, "task request_id=req cmd phase=codex name=codex stream=%s b64=%s\n", stream, encoded)
 	}
 	if err := os.WriteFile(logPath, []byte(b.String()), 0o644); err != nil {
 		t.Fatalf("write log: %v", err)
@@ -1185,7 +1185,7 @@ func TestShouldQueueFailureFollowUpQueuesNoDeltaFailures(t *testing.T) {
 	t.Parallel()
 
 	result := app.Result{
-		Err: errors.New("task failed to meet completion requirements because this branch has no delta from `main`; No commits between main and moltenhub-fix"),
+		Err: errors.New("task failed to meet completion requirements because this branch has no delta from `main`; No commits between main and agent00-fix"),
 	}
 
 	ok, reason := shouldQueueFailureFollowUp("local_submit", result)
@@ -1243,7 +1243,7 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	}
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
-		Err: errors.New("git: verify remote write access for repo https://github.com/acme/repo.git branch \"moltenhub-fix\": exit status 128: remote: Write access to repository not granted. fatal: unable to access 'https://github.com/acme/repo.git/': The requested URL returned error: 403"),
+		Err: errors.New("git: verify remote write access for repo https://github.com/acme/repo.git branch \"agent00-fix\": exit status 128: remote: Write access to repository not granted. fatal: unable to access 'https://github.com/acme/repo.git/': The requested URL returned error: 403"),
 	})
 	if ok || !strings.Contains(reason, "write access to repository not granted") {
 		t.Fatalf("shouldQueueFailureFollowUp(repo write access failure) = (%v, %q), want non-remediable repo access skip", ok, reason)
@@ -1264,7 +1264,7 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	}
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
-		Err: errors.New("git: run git [push -u origin moltenhub-branch]: exit status 1: remote: refusing to allow an OAuth App to create or update workflow `.github/workflows/docker-release.yml` without `workflow` scope"),
+		Err: errors.New("git: run git [push -u origin agent00-branch]: exit status 1: remote: refusing to allow an OAuth App to create or update workflow `.github/workflows/docker-release.yml` without `workflow` scope"),
 	})
 	if ok || !strings.Contains(reason, "refusing to allow an oauth app to create or update workflow") {
 		t.Fatalf("shouldQueueFailureFollowUp(workflow scope failure) = (%v, %q), want non-remediable workflow-scope skip", ok, reason)
@@ -1329,11 +1329,11 @@ func TestApplyDefaultAgentRuntimeConfig(t *testing.T) {
 	}
 }
 
-func TestRunLocalDispatchReportsErrorState(t *testing.T) {
+func TestRunLocalTaskReportsErrorState(t *testing.T) {
 	t.Parallel()
 
 	var logs []string
-	outcome := runLocalDispatch(
+	outcome := runLocalTask(
 		context.Background(),
 		nil,
 		func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
@@ -1348,22 +1348,22 @@ func TestRunLocalDispatchReportsErrorState(t *testing.T) {
 	)
 
 	if outcome.State != "error" {
-		t.Fatalf("runLocalDispatch() state = %q, want error", outcome.State)
+		t.Fatalf("runLocalTask() state = %q, want error", outcome.State)
 	}
 	if outcome.Result.Err == nil {
-		t.Fatal("runLocalDispatch() result error = nil, want non-nil")
+		t.Fatal("runLocalTask() result error = nil, want non-nil")
 	}
-	assertLogContains(t, logs, "dispatch status=error request_id=req-1")
+	assertLogContains(t, logs, "task status=error request_id=req-1")
 }
 
 func TestTaskWorkspaceDirFromLogContent(t *testing.T) {
 	t.Parallel()
 
 	content := strings.Join([]string{
-		"dispatch status=start request_id=req-1",
-		"dispatch status=completed request_id=req-2 workspace=/tmp/ignore",
-		"dispatch status=completed request_id=req-1 workspace=/tmp/work-old",
-		"dispatch status=error request_id=req-1 workspace=/tmp/work-new err=\"boom\"",
+		"task status=start request_id=req-1",
+		"task status=completed request_id=req-2 workspace=/tmp/ignore",
+		"task status=completed request_id=req-1 workspace=/tmp/work-old",
+		"task status=error request_id=req-1 workspace=/tmp/work-new err=\"boom\"",
 	}, "\n")
 
 	if got, want := taskWorkspaceDirFromLogContent(content, "req-1"), "/tmp/work-new"; got != want {
@@ -1378,7 +1378,7 @@ func TestTaskWorkspaceDirFromLogDir(t *testing.T) {
 	t.Parallel()
 
 	logDir := t.TempDir()
-	logContent := "dispatch status=completed request_id=req-log workspace=/tmp/workspace-from-log\n"
+	logContent := "task status=completed request_id=req-log workspace=/tmp/workspace-from-log\n"
 	if err := os.WriteFile(filepath.Join(logDir, logFileName), []byte(logContent), 0o644); err != nil {
 		t.Fatalf("write log file: %v", err)
 	}

@@ -197,7 +197,7 @@ func TestTaskSetupReusesDefaultCodexHomeWithoutReseeding(t *testing.T) {
 		if got := envValue(env, "HOME"); got == operatorHome {
 			t.Fatal("task HOME isolation was lost")
 		}
-		if _, err := os.Stat(filepath.Join(runDir, ".moltenhub-agent-io", "config", "codex", "auth.json")); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(runDir, ".agent00-agent-io", "config", "codex", "auth.json")); !os.IsNotExist(err) {
 			t.Fatalf("task contains a copied credential file: %v", err)
 		}
 		data, err := os.ReadFile(authPath)

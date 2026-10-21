@@ -210,7 +210,7 @@ func baseAllowsExec(path string) bool {
 }
 
 func probeBaseAllowsExec(base string) bool {
-	dir, err := os.MkdirTemp(base, ".moltenhub-exec-check-")
+	dir, err := os.MkdirTemp(base, ".agent00-exec-check-")
 	if err != nil {
 		return false
 	}

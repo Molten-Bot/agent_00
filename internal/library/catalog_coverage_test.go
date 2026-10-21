@@ -189,7 +189,7 @@ func TestResolveCatalogHelpersCoverFallbackBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Executable() error = %v", err)
 	}
-	exeCatalogName := "moltenhub-test-exe-catalog"
+	exeCatalogName := "agent00-test-exe-catalog"
 	exeCatalogDir := filepath.Join(filepath.Dir(exePath), exeCatalogName)
 	if err := os.MkdirAll(exeCatalogDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(exeCatalogDir) error = %v", err)

@@ -17,7 +17,7 @@ func TestTaskLogSubdirForLine(t *testing.T) {
 	}{
 		{
 			name: "request_id_local",
-			line: "dispatch request_id=local-1712345678-000007 stage=codex status=start",
+			line: "task request_id=local-1712345678-000007 stage=codex status=start",
 			want: filepath.Join("local", "1712345678", "000007"),
 		},
 		{
@@ -27,7 +27,7 @@ func TestTaskLogSubdirForLine(t *testing.T) {
 		},
 		{
 			name: "request_id_preferred_over_session",
-			line: "dispatch request_id=local-1700000000-000001 session=task-020 status=start",
+			line: "task request_id=local-1700000000-000001 session=task-020 status=start",
 			want: filepath.Join("local", "1700000000", "000001"),
 		},
 		{
@@ -37,17 +37,17 @@ func TestTaskLogSubdirForLine(t *testing.T) {
 		},
 		{
 			name: "sanitize_identifier_parts",
-			line: "dispatch request_id=local-17/abc-00*01 status=start",
+			line: "task request_id=local-17/abc-00*01 status=start",
 			want: filepath.Join("local", "17-abc", "00-01"),
 		},
 		{
 			name: "ignore_nested_request_id_inside_quoted_text",
-			line: `dispatch request_id=local-1712345678-000123 cmd phase=codex name=codex stream=stderr text="dispatch status=error request_id=req-err-ws err=\"clone failed\""`,
+			line: `task request_id=local-1712345678-000123 cmd phase=codex name=codex stream=stderr text="task status=error request_id=req-err-ws err=\"clone failed\""`,
 			want: filepath.Join("local", "1712345678", "000123"),
 		},
 		{
 			name: "do_not_extract_request_id_from_quoted_text_without_outer_id",
-			line: `dispatch cmd phase=codex name=codex stream=stderr text="dispatch status=error request_id=req-err-ws err=\"clone failed\""`,
+			line: `task cmd phase=codex name=codex stream=stderr text="task status=error request_id=req-err-ws err=\"clone failed\""`,
 			want: fallbackLogSubdir,
 		},
 	}
@@ -73,7 +73,7 @@ func TestTaskLogMirrorWritesAggregateAndTaskLogs(t *testing.T) {
 	}
 
 	lines := []string{
-		"dispatch request_id=local-1712345678-000111 stage=codex status=start",
+		"task request_id=local-1712345678-000111 stage=codex status=start",
 		"session=task-005 stage=clone status=ok",
 		"status=ok workspace=/tmp/workspace branch=codex/fix",
 	}
@@ -115,19 +115,19 @@ func TestTaskLogMirrorResetsExistingRootOnInit(t *testing.T) {
 		t.Fatalf("stale log path still exists after init: stat err = %v", statErr)
 	}
 
-	mirror.WriteLine("dispatch request_id=local-1712345678-000222 stage=codex status=start")
+	mirror.WriteLine("task request_id=local-1712345678-000222 stage=codex status=start")
 	if err := mirror.Close(); err != nil {
 		t.Fatalf("mirror.Close() error = %v", err)
 	}
 	assertLogFileContent(
 		t,
 		filepath.Join(root, "local", "1712345678", "000222", logFileName),
-		[]string{"dispatch request_id=local-1712345678-000222 stage=codex status=start"},
+		[]string{"task request_id=local-1712345678-000222 stage=codex status=start"},
 	)
 	assertLogFileContent(
 		t,
 		filepath.Join(root, "local", "1712345678", "000222", legacyTaskLogFileName),
-		[]string{"dispatch request_id=local-1712345678-000222 stage=codex status=start"},
+		[]string{"task request_id=local-1712345678-000222 stage=codex status=start"},
 	)
 }
 
@@ -142,7 +142,7 @@ func TestTaskLogMirrorEvictsOldTaskFilesAndContinuesWriting(t *testing.T) {
 
 	total := maxOpenTaskLogFiles + 16
 	for i := 0; i < total; i++ {
-		mirror.WriteLine(fmt.Sprintf("dispatch request_id=req-%03d status=start", i))
+		mirror.WriteLine(fmt.Sprintf("task request_id=req-%03d status=start", i))
 	}
 
 	if err := mirror.Close(); err != nil {
@@ -152,22 +152,22 @@ func TestTaskLogMirrorEvictsOldTaskFilesAndContinuesWriting(t *testing.T) {
 	assertLogFileContent(
 		t,
 		filepath.Join(root, "req", "000", logFileName),
-		[]string{"dispatch request_id=req-000 status=start"},
+		[]string{"task request_id=req-000 status=start"},
 	)
 	assertLogFileContent(
 		t,
 		filepath.Join(root, "req", "000", legacyTaskLogFileName),
-		[]string{"dispatch request_id=req-000 status=start"},
+		[]string{"task request_id=req-000 status=start"},
 	)
 	assertLogFileContent(
 		t,
 		filepath.Join(root, "req", fmt.Sprintf("%03d", total-1), logFileName),
-		[]string{fmt.Sprintf("dispatch request_id=req-%03d status=start", total-1)},
+		[]string{fmt.Sprintf("task request_id=req-%03d status=start", total-1)},
 	)
 	assertLogFileContent(
 		t,
 		filepath.Join(root, "req", fmt.Sprintf("%03d", total-1), legacyTaskLogFileName),
-		[]string{fmt.Sprintf("dispatch request_id=req-%03d status=start", total-1)},
+		[]string{fmt.Sprintf("task request_id=req-%03d status=start", total-1)},
 	)
 }
 

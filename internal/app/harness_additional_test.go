@@ -73,8 +73,8 @@ func TestRunRenamesGeneratedWorkBranchWhenRemoteBranchAlreadyDiverged(t *testing
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
-	renamedBranch := "moltenhub-build-api-abcdef12"
+	branch := "agent00-build-api"
+	renamedBranch := "agent00-build-api-abcdef12"
 	prURL := "https://github.com/acme/repo/pull/42"
 	pushRejected := execx.Result{Stderr: "! [rejected] HEAD -> " + branch + " (fetch first)\n"}
 
@@ -127,8 +127,8 @@ func TestRunRenamesGeneratedWorkBranchWhenPushCollidesAfterCommit(t *testing.T) 
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
-	renamedBranch := "moltenhub-build-api-abcdef12"
+	branch := "agent00-build-api"
+	renamedBranch := "agent00-build-api-abcdef12"
 	prURL := "https://github.com/acme/repo/pull/42"
 	pushRejected := execx.Result{Stderr: "! [rejected] " + branch + " -> " + branch + " (fetch first)\n"}
 
@@ -181,11 +181,11 @@ func TestRunRecreatesPRWhenNoChecksReportedOnMergedPR(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
-	renamedBranch := "moltenhub-build-api-abcdef12"
+	branch := "agent00-build-api"
+	renamedBranch := "agent00-build-api-abcdef12"
 	oldPRURL := "https://github.com/acme/repo/pull/42"
 	newPRURL := "https://github.com/acme/repo/pull/43"
-	noChecks := "no checks reported on the 'moltenhub-build-api' branch"
+	noChecks := "no checks reported on the 'agent00-build-api' branch"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -239,9 +239,9 @@ func TestRunFallsBackToNoChecksWorkflowDispatchWhenRecreateStateLookupFails(t *t
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
-	noChecks := "no checks reported on the 'moltenhub-build-api' branch"
+	noChecks := "no checks reported on the 'agent00-build-api' branch"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -294,9 +294,9 @@ func TestRunFallsBackToNoChecksWorkflowDispatchWhenRecreateStateDecodeFails(t *t
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
+	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
-	noChecks := "no checks reported on the 'moltenhub-build-api' branch"
+	noChecks := "no checks reported on the 'agent00-build-api' branch"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -349,10 +349,10 @@ func TestRunClearsOldPRURLWhenRecreateFailsAfterBranchRename(t *testing.T) {
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	branch := "moltenhub-build-api"
-	renamedBranch := "moltenhub-build-api-abcdef12"
+	branch := "agent00-build-api"
+	renamedBranch := "agent00-build-api-abcdef12"
 	oldPRURL := "https://github.com/acme/repo/pull/42"
-	noChecks := "no checks reported on the 'moltenhub-build-api' branch"
+	noChecks := "no checks reported on the 'agent00-build-api' branch"
 	createErr := errors.New("pr create failed")
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
@@ -408,8 +408,8 @@ func TestRecreatePullRequestClearsOldPRURLWhenCreateFailsAfterBranchRename(t *te
 	cfg := sampleConfig()
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	repoDir := filepath.Join(t.TempDir(), "repo")
-	branch := "moltenhub-build-api"
-	renamedBranch := "moltenhub-build-api-abcdef12"
+	branch := "agent00-build-api"
+	renamedBranch := "agent00-build-api-abcdef12"
 	oldPRURL := "https://github.com/acme/repo/pull/42"
 	createErr := errors.New("create failed")
 

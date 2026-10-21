@@ -8,7 +8,9 @@ harness
 !.env.example
 .faster-whisper
 .codex
+# Keep retired local data out of image build contexts.
 .moltenhub
+.agent00
 moltenhub
 init.example.json
 run.example.json

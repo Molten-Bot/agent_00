@@ -69,7 +69,7 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: No June 14 release entry created. Error details: `git-changes-by-day` ran across all repos. `2026-06-14` UTC rows: `0` in every repo. Adding entry would require invented project/note content.")); got != "would require invented" {
 		t.Fatalf("NonRemediableFailureReason(invented content) = %q, want %q", got, "would require invented")
 	}
-	if got := NonRemediableFailureReason(errors.New("task failed because this branch has no delta from `main`; No commits between main and moltenhub-fix")); got != "" {
+	if got := NonRemediableFailureReason(errors.New("task failed because this branch has no delta from `main`; No commits between main and agent00-fix")); got != "" {
 		t.Fatalf("NonRemediableFailureReason(no delta) = %q, want empty", got)
 	}
 	if got := NonRemediableFailureReason(errors.New("claude: claude reported failure: Failure: task premise false, source file no exist. Error details: `site/how-it-works.html` not in repo. Can't fabricate page content from nothing.")); got != "task premise false" {
