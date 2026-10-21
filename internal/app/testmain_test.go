@@ -16,6 +16,8 @@ func TestMain(m *testing.M) {
 	_ = os.Setenv("CODEX_HOME", filepath.Join(authRoot, "codex"))
 	_ = os.Unsetenv("GH_TOKEN")
 	_ = os.Unsetenv("GITHUB_TOKEN")
+	_ = os.Unsetenv("HARNESS_AGENT_HARNESS")
+	_ = os.Unsetenv("HARNESS_AGENT_COMMAND")
 	testWorkspaceBase = filepath.Join(authRoot, "workspaces")
 	_ = os.Setenv("HARNESS_WORKSPACE_RAM_BASE", testWorkspaceBase)
 	_ = os.Setenv("HARNESS_WORKSPACE_DISK_BASE", testWorkspaceBase)
