@@ -143,9 +143,9 @@ func (g *claudeAuthGate) Status(_ context.Context) (web.AgentAuthState, error) {
 		} else {
 			g.ready = false
 			if g.state != "pending_browser_login" && g.state != "error" {
-				g.state = "needs_configure"
+				g.state = "needs_browser_login"
 			}
-			if g.state == "needs_configure" || strings.TrimSpace(g.message) == "" {
+			if g.state == "needs_browser_login" || strings.TrimSpace(g.message) == "" {
 				g.message = firstNonEmptyString(
 					probeMessage,
 					claudeCredentialsConfigureMessage(),
@@ -295,7 +295,7 @@ func (g *claudeAuthGate) Verify(ctx context.Context) (web.AgentAuthState, error)
 
 func (g *claudeAuthGate) Configure(ctx context.Context, rawInput string) (web.AgentAuthState, error) {
 	status, _ := g.Status(context.Background())
-	if status.State == "pending_browser_login" || isClaudeCredentialsConfigureState(status) {
+	if status.State == "pending_browser_login" || status.State == "needs_browser_login" || isClaudeCredentialsConfigureState(status) {
 		if credentialsJSON, looksLikeJSON, err := normalizeClaudeCredentialsJSON(rawInput); looksLikeJSON {
 			if err != nil {
 				return g.pendingBrowserLoginFailure(
@@ -1446,7 +1446,7 @@ func claudeCredentialCandidates() []string {
 }
 
 func claudeBrowserLoginRequiredMessage() string {
-	return claudeCredentialsConfigureMessage()
+	return "Sign in to Claude to get started. Click Sign in to Claude, open the login link, and paste the code returned by Claude."
 }
 
 func claudeCredentialsConfigureMessage() string {

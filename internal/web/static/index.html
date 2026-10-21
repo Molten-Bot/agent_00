@@ -575,7 +575,9 @@
           <span id="agent-auth-url-text"></span>
         </a>
         <div id="agent-auth-browser-code" class="hidden">
-          <div id="agent-auth-browser-commands">
+          <p>Open the Claude login link above, sign in, then paste the code here.</p>
+          <details id="agent-auth-browser-commands">
+            <summary>Use existing Claude credentials instead</summary>
             <div class="agent-auth-command-box agent-auth-command-box-inline">
               <code id="agent-auth-browser-command-primary" class="agent-auth-command-text agent-auth-command-text-inline">cat ~/.claude/.credentials.json</code>
               <button
@@ -601,7 +603,7 @@
                 <span class="sr-only">Copy Claude credentials command</span>
               </button>
             </div>
-          </div>
+          </details>
           <textarea
             id="agent-auth-browser-code-input"
             class="prompt-text agent-auth-secret-input"
@@ -1597,7 +1599,7 @@
     const stateUI = normalizeUIConfig(window.__RUNTIME_UI_CONFIG__);
     const state = {
       ui: stateUI,
-      agentAuth: normalizeAgentAuth({ required: false, ready: true, state: "ready" }),
+      agentAuth: normalizeAgentAuth({ required: true, ready: false, state: "checking", message: "Checking agent authorization…" }),
       reviewSettings: normalizeReviewSettings({}),
       settingsTab: "review",
       snapshot: null,
@@ -2956,7 +2958,11 @@
 
     function updateAgentAuthDoneVisibility() {
       if (!agentAuthVerify) return;
-      if (isHarnessSelectionState(state.agentAuth)) {
+      agentAuthVerify.textContent = state.agentAuth.state === "needs_browser_login" && authHarness(state.agentAuth) === "claude"
+        ? "Sign in to Claude"
+        : "Done";
+      agentAuthVerify.disabled = state.agentAuthBusy || state.agentAuth.state === "checking";
+      if (state.agentAuth.state === "checking" || isHarnessSelectionState(state.agentAuth)) {
         agentAuthVerify.classList.add("hidden");
         return;
       }
@@ -3094,12 +3100,11 @@
       }
       if (agentAuthURL) {
         const authURL = state.agentAuth.authURL || "";
-        const useClaudeCommandFlow = isClaudePendingBrowserLoginState(state.agentAuth);
-        const useClaudeLogoLink = authHarness(state.agentAuth) === "claude" && authURL !== "" && !useClaudeCommandFlow;
+        const useClaudeLogoLink = authHarness(state.agentAuth) === "claude" && authURL !== "";
         const showClaudeLogoLink = useClaudeLogoLink && !state.agentAuthURLLogoBroken;
         agentAuthURL.href = state.agentAuth.authURL || "#";
         agentAuthURL.classList.toggle("pointer-events-none", !authURL);
-        agentAuthURL.classList.toggle("hidden", !authURL || useClaudeCommandFlow);
+        agentAuthURL.classList.toggle("hidden", !authURL);
         agentAuthURL.classList.toggle("agent-auth-url-logo-link", showClaudeLogoLink);
         if (agentAuthURLLogo) {
           if (agentAuthURLLogo.getAttribute("src") !== CLAUDE_AUTH_LOGO_URL) {
@@ -3109,9 +3114,6 @@
         }
         if (agentAuthURLText) {
           if (!authURL) {
-            agentAuthURLText.textContent = "";
-            agentAuthURLText.classList.add("hidden");
-          } else if (showClaudeLogoLink) {
             agentAuthURLText.textContent = "";
             agentAuthURLText.classList.add("hidden");
           } else if (useClaudeLogoLink) {
@@ -7752,6 +7754,7 @@
         });
         statusNode.textContent = `Submit failed: ${err.message}`;
         statusNode.dataset.tone = "error";
+        await loadAgentAuthStatus();
       } finally {
         state.chatSubmittingRepos.delete(submitKey);
       }
@@ -12031,8 +12034,9 @@
       } catch (err) {
         trackAnalyticsEvent("prompt_submit_failed", { prompt_mode: state.promptMode });
         setLocalPromptStatus("error", `Submit failed: ${err.message}`);
+        await loadAgentAuthStatus();
       } finally {
-        localPromptSubmit.disabled = false;
+        localPromptSubmit.disabled = state.agentAuthBusy || (state.agentAuth.required && !state.agentAuth.ready);
       }
     }
 
@@ -12631,6 +12635,7 @@
     applyTaskSoundToggleMeta();
     renderConfiguredAgent();
     applyAgentAuthGate(state.agentAuth);
+    void loadAgentAuthStatus();
     void refreshSpeechStatus();
     loadInitial();
     startStream();

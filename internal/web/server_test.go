@@ -2523,7 +2523,7 @@ func TestHandlerIndexIncludesClaudeBrowserCodeFlow(t *testing.T) {
 		`function clearAgentAuthConfigureInputIfSensitive()`,
 		"state.agentAuth.configureCommand}|${state.agentAuth.configurePlaceholder}",
 		`agentAuthConfigureInput.value = "";`,
-		`const useClaudeLogoLink = authHarness(state.agentAuth) === "claude" && authURL !== "" && !useClaudeCommandFlow;`,
+		`const useClaudeLogoLink = authHarness(state.agentAuth) === "claude" && authURL !== "";`,
 		`const code = claudeBrowserCodeValue();`,
 		`trackAnalyticsEvent("agent_auth_link_opened", agentAuthAnalyticsParams());`,
 		`copiedLabel: "Copied device code"`,
