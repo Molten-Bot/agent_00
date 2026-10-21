@@ -23,7 +23,12 @@ func TestDefaultLibraryJSONFilesHaveCanonicalShape(t *testing.T) {
 		t.Fatalf("no library json files found in %q", dir)
 	}
 
-	requiredFields := []string{"commitMessage", "description", "displayName", "icon", "prTitle", "prompt", "targetSubdir", "type"}
+	catalog, err := LoadCatalog(DefaultDir)
+	if err != nil {
+		t.Fatalf("LoadCatalog(%q) error = %v", DefaultDir, err)
+	}
+
+	requiredFields := []string{"commitMessage", "description", "displayName", "icon", "prompt", "targetSubdir", "type"}
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -91,13 +96,18 @@ func TestDefaultLibraryJSONFilesHaveCanonicalShape(t *testing.T) {
 			t.Errorf("%s: displayName must be a string: %v", path, err)
 			continue
 		}
-		var prTitle string
-		if err := json.Unmarshal(fields["prTitle"], &prTitle); err != nil {
-			t.Errorf("%s: prTitle must be a string: %v", path, err)
+
+		// "prTitle" is deliberately absent from default library JSON: every
+		// default task sets displayName, so libraryTaskPRTitle always derives
+		// the title from prTitlePrefix+displayName, never from a stored
+		// per-task value. Assert the derived title directly instead.
+		task, ok := catalog.Task(taskName)
+		if !ok {
+			t.Errorf("%s: catalog missing loaded task %q", path, taskName)
 			continue
 		}
-		if got, want := strings.TrimSpace(prTitle), prTitlePrefix+strings.TrimSpace(displayName); got != want {
-			t.Errorf("%s: prTitle = %q, want %q", path, got, want)
+		if got, want := task.PRTitle, prTitlePrefix+strings.TrimSpace(displayName); got != want {
+			t.Errorf("%s: PRTitle = %q, want %q", path, got, want)
 		}
 	}
 }

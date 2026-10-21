@@ -25,6 +25,11 @@ const (
 	// PR-title gate enforces a different type/scope allow-list (e.g. a
 	// ticket-ID pattern with requireScope) will still reject this default and
 	// need an explicit prTitle override on the run config for that repo.
+	//
+	// Default library task JSON files intentionally omit "prTitle": since
+	// every default task sets displayName, libraryTaskPRTitle below always
+	// derives the title from it, so a per-task "prTitle" value would be
+	// inert and could silently drift from the title's real type/scope.
 	prTitlePrefix = "chore(agent_00): "
 )
 
@@ -342,12 +347,9 @@ func decodeTaskDefinition(path, key string, data []byte) (TaskDefinition, error)
 
 // libraryTaskPRTitle always rebuilds the title from DisplayName when one is
 // set, so a task's own "prTitle" field is overridden for every default
-// library task (all of which set displayName). That JSON field is kept only
-// as human-readable bookkeeping in sync with this formula (enforced by
-// TestDefaultLibraryJSONFilesHaveCanonicalShape); editing it per task has no
-// runtime effect and cannot change the title's type/scope. An explicit
-// "prTitle" only takes effect for custom, non-catalog task definitions that
-// omit displayName.
+// library task (all of which set displayName and so omit "prTitle" from
+// their JSON entirely — see prTitlePrefix). An explicit "prTitle" only takes
+// effect for custom, non-catalog task definitions that omit displayName.
 func libraryTaskPRTitle(task TaskDefinition) string {
 	if task.DisplayName != "" {
 		return prTitlePrefix + task.DisplayName
