@@ -27,6 +27,7 @@
     document.getElementById("library-schedules-count").textContent = schedules.length ? String(schedules.length) : "";
     const repo = repoDedupeKey(libraryRepoInput.value || defaultRepository());
     for (const button of document.querySelectorAll(".library-schedule-task-button")) {
+      if (!button.dataset.taskName) continue;
       const entry = schedules.find((entry) => entry.libraryTaskName === button.dataset.taskName && repoDedupeKey(entry.repo) === repo);
       button.classList.toggle("is-scheduled", Boolean(entry));
       const label = entry ? `Edit schedule · ${frequency(entry.intervalHours)}` : `Schedule ${titleFor(button.dataset.taskName)}`;
@@ -65,7 +66,7 @@
     if (!schedules.length) {
       const empty = document.createElement("p");
       empty.className = "library-schedule-copy";
-      empty.textContent = "No schedules yet. Use the clock beside a library task to add one. Run still starts a one-time task.";
+      empty.textContent = "No schedules yet. Use the clock next to the Run button to add one. Run still starts a one-time task.";
       list.appendChild(empty);
     }
     for (const entry of schedules) {
