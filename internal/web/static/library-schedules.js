@@ -66,7 +66,7 @@
     if (!schedules.length) {
       const empty = document.createElement("p");
       empty.className = "library-schedule-copy";
-      empty.textContent = "No schedules yet. Use the clock beside a library task to add one. Run still starts a one-time task.";
+      empty.textContent = "No schedules yet. Use the clock next to the Run button to add one. Run still starts a one-time task.";
       list.appendChild(empty);
     }
     for (const entry of schedules) {
