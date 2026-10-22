@@ -1917,7 +1917,9 @@ select.prompt-control {
 .custom-library-fields .prompt-text {
   height: 44px;
   min-height: 44px;
-  resize: none;
+  padding: 11px 14px;
+  font-size: 0.84rem;
+  line-height: normal;
 }
 
 .speech-stream-wrap {
