@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,7 @@ type cleanReviewCycleRunner struct {
 	reviews  int
 	comments int
 	prompts  []string
+	argv     [][]string
 }
 
 func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, error) {
@@ -31,6 +33,7 @@ func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (exec
 	case "codex":
 		r.reviews++
 		r.prompts = append(r.prompts, cmd.Stdin)
+		r.argv = append(r.argv, append([]string(nil), cmd.Args...))
 		return execx.Result{Stdout: "**Positive**\n- Scoped change.\n\n**Negative**\n- No material issues found.\n\n```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"clean\",\"positives\":[\"Scoped change.\"],\"findings\":[]}\n```"}, nil
 	case "git":
 		if len(cmd.Args) == 0 {
@@ -103,6 +106,125 @@ func TestRunFinalReviewCycleStopsAfterCleanPass(t *testing.T) {
 	for i, prompt := range runner.prompts {
 		if !strings.Contains(prompt, "The bundled review skill is mandatory") || !strings.Contains(prompt, fmt.Sprintf("Post-task review pass %d/3", i+1)) {
 			t.Fatalf("review prompt %d did not include skill and pass context", i+1)
+		}
+	}
+}
+
+func TestRunFinalReviewCycleDisallowsMutatingToolsOnClaude(t *testing.T) {
+	runner := &cleanReviewCycleRunner{t: t}
+	h := New(runner)
+	h.FinalReviewPasses = 1
+
+	claudeRuntime, err := agentruntime.Resolve(agentruntime.HarnessClaude, "")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:        "https://github.com/acme/repo.git",
+		Dir:        repoDir,
+		RelDir:     "repo",
+		Branch:     "feature",
+		BaseBranch: "main",
+		PRURL:      "https://github.com/acme/repo/pull/7",
+		Changed:    true,
+	}
+
+	exitCode, stage, err := h.runFinalReviewCycle(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior."},
+		repo,
+		claudeRuntime,
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err != nil || exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
+	}
+	if len(runner.argv) != 1 {
+		t.Fatalf("captured invocations = %d, want 1", len(runner.argv))
+	}
+	args := runner.argv[0]
+	idx := -1
+	for i, arg := range args {
+		if arg == "--disallowedTools" {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		t.Fatalf("args %v did not include --disallowedTools", args)
+	}
+	wantTools := []string{"Edit", "Write", "NotebookEdit"}
+	if got := args[idx+1 : idx+1+len(wantTools)]; !reflect.DeepEqual(got, wantTools) {
+		t.Fatalf("disallowed tools = %v, want %v", got, wantTools)
+	}
+}
+
+func TestRunFinalReviewCycleUsesReadOnlySandboxOnCodex(t *testing.T) {
+	runner := &cleanReviewCycleRunner{t: t}
+	h := New(runner)
+	h.FinalReviewPasses = 1
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:        "https://github.com/acme/repo.git",
+		Dir:        repoDir,
+		RelDir:     "repo",
+		Branch:     "feature",
+		BaseBranch: "main",
+		PRURL:      "https://github.com/acme/repo/pull/7",
+		Changed:    true,
+	}
+
+	exitCode, stage, err := h.runFinalReviewCycle(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior."},
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err != nil || exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
+	}
+	if len(runner.argv) != 1 {
+		t.Fatalf("captured invocations = %d, want 1", len(runner.argv))
+	}
+	args := runner.argv[0]
+	idx := -1
+	for i, arg := range args {
+		if arg == "--sandbox" {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 || idx+1 >= len(args) {
+		t.Fatalf("args %v did not include --sandbox", args)
+	}
+	if got := args[idx+1]; got != "read-only" {
+		t.Fatalf("sandbox mode = %q, want %q (review pass must not retain workspace-write access)", got, "read-only")
+	}
+	for _, arg := range args {
+		if arg == "--add-dir" || strings.Contains(arg, "sandbox_workspace_write") {
+			t.Fatalf("args %v unexpectedly retained workspace-write configuration during a read-only review pass", args)
 		}
 	}
 }
