@@ -225,14 +225,15 @@ type CountStatsGroup struct {
 
 // Snapshot is the complete monitor payload for the web UI.
 type Snapshot struct {
-	GeneratedAt   string          `json:"generated_at"`
-	Resources     ResourceMetrics `json:"resources"`
-	Stats         DashboardStats  `json:"stats"`
-	Repositories  []Repository    `json:"repositories,omitempty"`
-	Releases      []Release       `json:"releases"`
-	Events        []Event         `json:"events"`
-	Tasks         []Task          `json:"tasks"`
-	PromptedRepos []string        `json:"prompted_repos,omitempty"`
+	GeneratedAt             string          `json:"generated_at"`
+	Resources               ResourceMetrics `json:"resources"`
+	Stats                   DashboardStats  `json:"stats"`
+	Repositories            []Repository    `json:"repositories,omitempty"`
+	Releases                []Release       `json:"releases"`
+	Events                  []Event         `json:"events"`
+	Tasks                   []Task          `json:"tasks"`
+	PromptedRepos           []string        `json:"prompted_repos,omitempty"`
+	CustomLibraryGeneration int64           `json:"custom_library_generation"`
 }
 
 // Broker collects daemon logs and exposes monitor state snapshots.
@@ -260,6 +261,8 @@ type Broker struct {
 	resources          ResourceMetrics
 	maxConcurrentTasks int
 	sessionStartedAt   time.Time
+
+	customLibraryGeneration int64
 }
 
 type taskState struct {
@@ -457,8 +460,22 @@ func (b *Broker) Snapshot() Snapshot {
 	snapshot.Releases = b.releasesSnapshotLocked()
 	snapshot.Stats = b.dashboardStatsLocked(now, tasks)
 	snapshot.Repositories = b.repositoriesSnapshotLocked()
+	snapshot.CustomLibraryGeneration = b.customLibraryGeneration
 
 	return snapshot
+}
+
+// NotifyCustomLibraryUpdated bumps the custom library generation counter and
+// wakes every subscribed /api/stream client, so the UI can tell a background
+// custom library sync changed what tasks are available and refresh itself.
+func (b *Broker) NotifyCustomLibraryUpdated() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.customLibraryGeneration++
+	b.notifySubscribersLocked()
+	b.mu.Unlock()
 }
 
 // Task returns a copy of the current task snapshot for one request id.
@@ -1151,7 +1168,7 @@ func libraryTaskDisplayNameByName(name string) string {
 	if name == "" {
 		return ""
 	}
-	catalog, err := library.LoadCatalog(library.DefaultDir)
+	catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 	if err != nil {
 		return ""
 	}
@@ -2434,7 +2451,7 @@ func promptFromRunConfigJSON(runConfigJSON []byte) string {
 	}
 	taskName := stringAt("librarytaskname", "libraryTaskName")
 	if taskName != "" {
-		catalog, err := library.LoadCatalog(library.DefaultDir)
+		catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 		if err == nil {
 			for _, task := range catalog.Summaries() {
 				if strings.TrimSpace(task.Name) != taskName {

@@ -39,6 +39,7 @@
 - Supported agent harnesses are `codex` and `claude`; default is `codex`. Both harnesses accept prompt images. Honor `HARNESS_AGENT_HARNESS` and `HARNESS_AGENT_COMMAND`.
 - Supported response modes are `default`, `off`, `caveman-lite`, `caveman-full`, `caveman-ultra`, `caveman-wenyan-lite`, `caveman-wenyan-full`, and `caveman-wenyan-ultra`; omitted or `default` maps to `caveman-full`.
 - Library task definitions live in `library/*.json`, use strict camelCase task fields, reject unknown fields, and should keep one top-level task per checked-in file.
+- `internal/customlibrary` lets a company pull its own library tasks from a private git repo's `./prompt/*.md` files (frontmatter plus body, same fields as the JSON task schema). `internal/library.LoadCustomizedCatalog` merges these into the catalog from `library.CustomSourcesRoot()` (override with `HARNESS_LIBRARY_CUSTOM_DIR`); `internal/localruntime.CustomLibrarySources` persists configured sources and resyncs them on startup and hourly.
 
 ## Tests
 

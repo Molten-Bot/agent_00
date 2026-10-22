@@ -284,7 +284,7 @@ func (w *Watcher) runConfigForReview(candidate reviewCandidate, ownerRepo string
 		candidate.NotificationSSHURL,
 		details.Base.Repo.SSHURL,
 	)
-	catalog, err := library.LoadCatalog(library.DefaultDir)
+	catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 	if err != nil {
 		return config.Config{}, err
 	}

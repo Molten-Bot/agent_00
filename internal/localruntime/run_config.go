@@ -272,7 +272,7 @@ func expandLibraryTaskRunConfig(m map[string]any, taskName string) (map[string]a
 		}
 	}
 
-	catalog, err := library.LoadCatalog(library.DefaultDir)
+	catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 	if err != nil {
 		return nil, fmt.Errorf("load library catalog: %w", err)
 	}

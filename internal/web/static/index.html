@@ -728,6 +728,16 @@
           <button id="settings-tab-signing" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="commit-signing-section" data-settings-tab="signing">
             <i data-lucide="globe-lock" aria-hidden="true"></i><span>Commit Signing</span>
           </button>
+          <button id="settings-tab-library" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="custom-library-section" data-settings-tab="library">
+            <svg class="custom-library-tab-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="13" height="3" rx="1"></rect>
+              <rect x="3" y="10.5" width="10" height="3" rx="1"></rect>
+              <rect x="3" y="17" width="13" height="3" rx="1"></rect>
+              <path d="M19.5 4.5a4 4 0 1 1-1.2-2.8"></path>
+              <path d="M19.5 1v3.5h-3.5"></path>
+            </svg>
+            <span>Company Library</span>
+          </button>
         </div>
 
         <form id="review-settings-form" class="stack review-settings-form" data-settings-panel="review">
@@ -795,6 +805,21 @@
                 <button id="commit-signing-save" type="button" class="prompt-action-button prompt-submit">Save signing settings</button>
               </div>
               <p id="commit-signing-status" role="status" aria-live="polite"></p>
+            </div>
+          </div>
+          <div class="review-settings-section custom-library-section" id="custom-library-section" role="tabpanel" aria-labelledby="settings-tab-library" hidden>
+            <h3 class="review-settings-section-title">Company library</h3>
+            <div class="stack custom-library-fields">
+              <p>Pull library tasks from a private git repository your account can already access. Add the repo's SSH or HTTPS URL and a display name; this app clones <code>./prompt/*.md</code> from it once now, then refreshes hourly or whenever you reopen the app.</p>
+              <label for="custom-library-name">Name</label>
+              <input id="custom-library-name" class="prompt-text" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="acme-docs" maxlength="48">
+              <label for="custom-library-repo">Git repository (SSH or HTTPS)</label>
+              <input id="custom-library-repo" class="prompt-text" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="git@github.com:acme/internal-library.git">
+              <div class="commit-signing-actions">
+                <button id="custom-library-add" type="button" class="prompt-action-button prompt-submit">Add library repo</button>
+              </div>
+              <p id="custom-library-status" role="status" aria-live="polite"></p>
+              <div id="custom-library-list"></div>
             </div>
           </div>
           <div class="onboarding-form-actions settings-footer">
@@ -1706,6 +1731,7 @@
       agentAuth: normalizeAgentAuth({ required: true, ready: false, state: "checking", message: "Checking agent authorization…" }),
       reviewSettings: normalizeReviewSettings({}),
       settingsTab: "review",
+      customLibraryGeneration: null,
       snapshot: null,
       selectedTaskId: "",
       dismissedTaskIDs: loadDismissedTaskIDs(),
@@ -1974,6 +2000,7 @@
       review: document.getElementById("settings-panel-review"),
       merge: document.getElementById("settings-panel-merge"),
       signing: document.getElementById("commit-signing-section"),
+      library: document.getElementById("custom-library-section"),
     };
     const reviewSettingsLevel = document.getElementById("review-settings-level");
     const reviewSettingsLevelOptions = Array.from(document.querySelectorAll("[data-review-settings-level]"));
@@ -11975,8 +12002,20 @@
       }
     }
 
+    function syncCustomLibraryGeneration(snapshot) {
+      const next = Number(snapshot.custom_library_generation || 0);
+      if (state.customLibraryGeneration === null) {
+        state.customLibraryGeneration = next;
+        return;
+      }
+      if (next !== state.customLibraryGeneration) {
+        window.location.reload();
+      }
+    }
+
     function render(snapshot) {
       if (!snapshot) return;
+      syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
       state.snapshot = snapshot;
       syncTaskCompletionSounds(snapshot);
@@ -12537,6 +12576,7 @@
       if (open) {
         void loadReviewSettings();
         window.dispatchEvent(new Event("commit-signing-open"));
+        window.dispatchEvent(new Event("custom-library-sources-open"));
         window.requestAnimationFrame(() => reviewSettingsAutoMerge?.focus());
       }
     }
@@ -12829,5 +12869,6 @@
   </script>
   <script src="/static/library-schedules.js"></script>
   <script src="/static/commit-signing.js"></script>
+  <script src="/static/custom-library-sources.js"></script>
 </body>
 </html>

@@ -20,6 +20,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/customlibrary"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/githubreview"
@@ -673,7 +674,7 @@ func runServer(args []string) int {
 		uiServer.ConfiguredHarness = cfg.AgentHarness
 		uiServer.Logf = daemonLogger
 		uiServer.LoadLibraryTasks = func() ([]library.TaskSummary, error) {
-			catalog, err := library.LoadCatalog(library.DefaultDir)
+			catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 			if err != nil {
 				return nil, err
 			}
@@ -756,6 +757,18 @@ func runServer(args []string) int {
 		}
 		uiServer.LibrarySchedules = schedules
 		go schedules.Run(ctx)
+
+		customLibrarySources := &localruntime.CustomLibrarySources{
+			Path:   cfg.RuntimeConfigPath,
+			Init:   cfg,
+			Logf:   daemonLogger,
+			Syncer: customlibrary.Syncer{Root: customlibrary.DefaultRoot, Runner: runner},
+			OnChanged: func() {
+				monitorBroker.NotifyCustomLibraryUpdated()
+			},
+		}
+		uiServer.CustomLibrarySources = customLibrarySources
+		go customLibrarySources.Run(ctx, time.Hour)
 		uiServer.SubmitLocalPrompt = func(reqCtx context.Context, body []byte) (string, error) {
 			runCfg, err := localruntime.ParseRunConfigJSON(body)
 			if err != nil {

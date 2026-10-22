@@ -100,6 +100,7 @@ type Server struct {
 	StopTask                func(context.Context, string) error
 	ResolveTaskControls     func(string) TaskControls
 	LibrarySchedules        *localruntime.LibrarySchedules
+	CustomLibrarySources    *localruntime.CustomLibrarySources
 	LoadLibraryTasks        func() ([]library.TaskSummary, error)
 	AgentAuthStatus         func(context.Context) (AgentAuthState, error)
 	StartAgentAuth          func(context.Context) (AgentAuthState, error)
@@ -187,7 +188,7 @@ func NewServer(addr string, broker *Broker) Server {
 		Logf:        func(string, ...any) {},
 		gitHubRepos: &gitHubRepoCache{},
 		LoadLibraryTasks: func() ([]library.TaskSummary, error) {
-			catalog, err := library.LoadCatalog(library.DefaultDir)
+			catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 			if err != nil {
 				return nil, err
 			}
@@ -264,6 +265,7 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/library", s.handleLibrary)
 	mux.HandleFunc("/api/library/run", s.handleLibraryRun)
 	mux.HandleFunc("/api/library/schedules", s.handleLibrarySchedules)
+	mux.HandleFunc("/api/library/sources", s.handleCustomLibrarySources)
 	mux.HandleFunc("/api/stream", s.handleStream)
 	mux.HandleFunc("/api/local-prompt", s.handleLocalPrompt)
 	mux.HandleFunc("/api/speech/status", s.handleSpeechStatus)
