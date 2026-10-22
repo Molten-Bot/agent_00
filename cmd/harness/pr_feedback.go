@@ -76,7 +76,7 @@ func prReviewFeedbackPrompt(originalPrompt string, task web.Task, feedback web.P
 }
 
 func resolvePRCommentsPrompt() string {
-	catalog, err := library.LoadCatalog(library.DefaultDir)
+	catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 	if err == nil {
 		if task, ok := catalog.Task(resolvePRCommentsTaskName); ok && strings.TrimSpace(task.Prompt) != "" {
 			return strings.TrimSpace(task.Prompt)

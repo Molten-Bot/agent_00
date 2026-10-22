@@ -2655,7 +2655,7 @@ func libraryTaskRequiresNonDefaultBranch(cfg config.Config) (bool, error) {
 		return cfg.RequiresNonDefaultBranch, nil
 	}
 
-	catalog, err := library.LoadCatalog(library.DefaultDir)
+	catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 	if err != nil {
 		return false, fmt.Errorf("load library task metadata for %q: %w", taskName, err)
 	}
@@ -7772,7 +7772,7 @@ func remoteBranchSyncConflictPrompt(basePrompt, repoPath, repoURL, branch, remot
 }
 
 func ciFixLibraryPrompt() string {
-	catalog, err := library.LoadCatalog(library.DefaultDir)
+	catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 	if err == nil {
 		if task, ok := catalog.Task(ciFixLibraryTaskName); ok && strings.TrimSpace(task.Prompt) != "" {
 			return strings.TrimSpace(task.Prompt)
@@ -7782,7 +7782,7 @@ func ciFixLibraryPrompt() string {
 }
 
 func codeReviewLibraryPrompt() string {
-	catalog, err := library.LoadCatalog(library.DefaultDir)
+	catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 	if err == nil {
 		if task, ok := catalog.Task(codeReviewLibraryTaskName); ok && strings.TrimSpace(task.Prompt) != "" {
 			return strings.TrimSpace(task.Prompt) + "\n\nStructured outcome status must be exactly one of `clean`, `findings`, or `blocked`; never return the literal choice list `clean|findings|blocked`."
@@ -7792,7 +7792,7 @@ func codeReviewLibraryPrompt() string {
 }
 
 func resolvePRCommentsLibraryPrompt() string {
-	catalog, err := library.LoadCatalog(library.DefaultDir)
+	catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 	if err == nil {
 		if task, ok := catalog.Task(resolvePRCommentsLibraryTaskName); ok && strings.TrimSpace(task.Prompt) != "" {
 			return strings.TrimSpace(task.Prompt)
@@ -7802,7 +7802,7 @@ func resolvePRCommentsLibraryPrompt() string {
 }
 
 func mergeMainLibraryPrompt() string {
-	catalog, err := library.LoadCatalog(library.DefaultDir)
+	catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 	if err == nil {
 		if task, ok := catalog.Task(mergeMainLibraryTaskName); ok && strings.TrimSpace(task.Prompt) != "" {
 			return strings.TrimSpace(task.Prompt)
