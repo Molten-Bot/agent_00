@@ -6766,11 +6766,19 @@ body.onboarding-modal-open {
   gap: 14px 16px;
 }
 
+.settings-header-slim {
+  padding: clamp(12px, 1.6vw, 16px) clamp(16px, 2vw, 22px);
+}
+
+.settings-header-slim .onboarding-modal-header {
+  gap: 0;
+}
+
 .settings-tabbar {
-  display: inline-grid;
-  grid-template-columns: repeat(2, minmax(140px, 1fr));
-  gap: 10px;
-  justify-self: start;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 8px;
+  width: 100%;
   padding: 6px;
   border: 1px solid var(--surface-control-border);
   border-radius: var(--radius-card);
@@ -6814,14 +6822,12 @@ body.onboarding-modal-open {
 
 .review-settings-form {
   display: grid;
-  grid-template-columns: minmax(250px, 0.9fr) minmax(340px, 1.35fr);
-  grid-template-areas:
-    "automation review-level"
-    "merge-method merge-method"
-    "signing signing"
-    "actions actions";
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px 16px;
+}
+
+.review-settings-form .settings-footer {
+  grid-area: auto;
 }
 
 .review-settings-section {
@@ -6839,16 +6845,11 @@ body.onboarding-modal-open {
   font-weight: 700;
 }
 
-.review-settings-automation {
-  grid-area: automation;
-}
-
-.review-settings-level {
-  grid-area: review-level;
-}
-
-.review-settings-merge-method {
-  grid-area: merge-method;
+.review-settings-section-title {
+  margin: 0;
+  color: var(--surface-label);
+  font-size: 0.86rem;
+  font-weight: 700;
 }
 
 .review-settings-toggle {
@@ -6921,6 +6922,55 @@ body.onboarding-modal-open {
   background: var(--surface-control-bg-strong);
   color: var(--text);
   box-shadow: var(--surface-control-shadow);
+}
+
+.review-settings-merge-slider {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 4px;
+  border: 1px solid var(--surface-control-border);
+  border-radius: var(--radius-card);
+  background: var(--surface-control-bg);
+}
+
+.review-settings-merge-slider-thumb {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: calc((100% - 8px - 16px) / 3);
+  height: calc(100% - 8px);
+  border: 1px solid color-mix(in srgb, var(--running) 44%, var(--surface-control-border));
+  border-radius: var(--radius);
+  background: var(--surface-control-bg-strong);
+  box-shadow: var(--surface-control-shadow);
+  transition: transform 0.2s ease;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.review-settings-merge-slider .review-settings-merge-option {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.review-settings-merge-slider .review-settings-merge-option.active,
+.review-settings-merge-slider .review-settings-merge-option[aria-checked="true"] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.review-settings-merge-option svg,
+.review-settings-merge-option .lucide,
+.review-settings-merge-option [data-lucide] {
+  width: 18px;
+  height: 18px;
 }
 
 .stack {
@@ -7251,16 +7301,6 @@ body.onboarding-modal-open {
   .settings-tabbar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
-  }
-
-  .review-settings-form {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      "automation"
-      "review-level"
-      "merge-method"
-      "signing"
-      "actions";
   }
 
   .review-settings-merge-options {
@@ -8527,10 +8567,6 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 .library-schedule-copy.is-error { color: #ef4444; }
 #library-schedule-status:empty { display: none; }
 
-.commit-signing-section { grid-area: signing; display: block; }
-.commit-signing-section summary {
-  font-weight: 600;
-}
 .commit-signing-fields { padding-top: 12px; }
 .commit-signing-fields p { margin: 0; font-size: 0.85rem; overflow-wrap: anywhere; }
 .commit-signing-fields textarea, .commit-signing-fields input[type="password"] { width: 100%; box-sizing: border-box; }

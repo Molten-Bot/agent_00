@@ -515,9 +515,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `id="review-settings-delete-merged-branches" type="checkbox"`) ||
 		!strings.Contains(markup, `id="review-settings-merge-method" type="hidden" value="squash"`) ||
 		!strings.Contains(markup, `role="radiogroup" aria-labelledby="review-settings-merge-method-label"`) ||
-		!strings.Contains(markup, `data-review-settings-merge-method="squash">Squash</button>`) ||
-		!strings.Contains(markup, `data-review-settings-merge-method="merge">Merge</button>`) ||
-		!strings.Contains(markup, `data-review-settings-merge-method="rebase">Rebase</button>`) ||
+		!strings.Contains(markup, `data-review-settings-merge-method="squash">`) ||
+		!strings.Contains(markup, `<i data-lucide="git-commit-horizontal" aria-hidden="true"></i><span>Squash</span>`) ||
+		!strings.Contains(markup, `data-review-settings-merge-method="merge">`) ||
+		!strings.Contains(markup, `<i data-lucide="git-merge" aria-hidden="true"></i><span>Merge</span>`) ||
+		!strings.Contains(markup, `data-review-settings-merge-method="rebase">`) ||
+		!strings.Contains(markup, `<i data-lucide="git-branch" aria-hidden="true"></i><span>Rebase</span>`) ||
 		strings.Contains(markup, `Merge commit`) {
 		t.Fatalf("expected index html to include review automation controls")
 	}
