@@ -119,26 +119,31 @@ func (s SigningSettings) Configure(ctx context.Context, req CommitSigningRequest
 		if err != nil {
 			return signingState(current), err
 		}
+		// Persist the new key's public material now so it stays visible to copy and
+		// register on GitHub even if the identity/registration checks below fail.
+		if err := s.save(cfg); err != nil {
+			return signingState(current), err
+		}
 	}
 	registered := false
 	if importing || req.Enabled {
 		cfg, err = s.github().Identity(ctx, cfg)
 		if err != nil {
-			return signingState(current), err
+			return signingState(cfg), err
 		}
 		snapshot, loadErr := gitsigning.Load(s.keyDir(), cfg)
 		if loadErr != nil {
-			return signingState(current), loadErr
+			return signingState(cfg), loadErr
 		}
 		if testErr := snapshot.Test(ctx, s.runner()); testErr != nil {
-			return signingState(current), testErr
+			return signingState(cfg), testErr
 		}
 		registered, err = s.github().Registered(ctx, cfg)
 		if req.Enabled && (err != nil || !registered) {
 			if err == nil {
 				err = fmt.Errorf("%w: add the public key to this GitHub account as a Signing Key before enabling", gitsigning.ErrSetup)
 			}
-			return signingState(current), err
+			return signingState(cfg), err
 		}
 	}
 	cfg.Enabled = req.Enabled
