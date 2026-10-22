@@ -591,6 +591,46 @@ func TestEmbeddedPromptActionStylesCoverPasteWidthAndStatusFade(t *testing.T) {
 	}
 }
 
+func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
+	t.Parallel()
+
+	data, err := fs.ReadFile(staticFiles, "static/style.css")
+	if err != nil {
+		t.Fatalf("read embedded style.css: %v", err)
+	}
+	css := string(data)
+
+	if !strings.Contains(css, "overflow-x: auto;") {
+		t.Fatalf("embedded style.css should let .settings-tabbar scroll horizontally instead of clipping overflow tabs")
+	}
+	settingsTabbarIdx := strings.Index(css, ".settings-tabbar {")
+	if settingsTabbarIdx == -1 {
+		t.Fatalf("embedded style.css missing .settings-tabbar rule")
+	}
+	settingsTabbarEnd := strings.Index(css[settingsTabbarIdx:], "}")
+	if settingsTabbarEnd == -1 {
+		t.Fatalf("embedded style.css .settings-tabbar rule missing closing brace")
+	}
+	settingsTabbarRule := css[settingsTabbarIdx : settingsTabbarIdx+settingsTabbarEnd]
+	if strings.Contains(settingsTabbarRule, "overflow: hidden;") {
+		t.Fatalf("embedded style.css .settings-tabbar should not hard-clip overflow, trailing tabs would become unreachable on narrow viewports")
+	}
+
+	narrowMediaIdx := strings.Index(css, "@media (max-width: 820px) {")
+	if narrowMediaIdx == -1 {
+		t.Fatalf("embedded style.css missing narrow viewport media query")
+	}
+	narrowMedia := css[narrowMediaIdx:]
+	for _, want := range []string{
+		".settings-tab.active span,",
+		".settings-tab[aria-selected=\"true\"] span {\n    max-width: 96px;\n  }",
+	} {
+		if !strings.Contains(narrowMedia, want) {
+			t.Fatalf("embedded style.css narrow viewport rules missing %q", want)
+		}
+	}
+}
+
 func TestDashboardSourceLegendStylesLiveInGlobalStylesheet(t *testing.T) {
 	t.Parallel()
 

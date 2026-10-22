@@ -6790,7 +6790,10 @@ body.onboarding-modal-open {
   gap: 4px;
   width: 100%;
   padding: 6px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
   border: 1px solid var(--surface-control-border);
   border-radius: var(--radius-card);
   background: var(--surface-control-bg);
@@ -7332,6 +7335,21 @@ body.onboarding-modal-open {
       "token"
       "profile"
       "actions";
+  }
+
+  .settings-tabbar {
+    gap: 2px;
+  }
+
+  .settings-tab {
+    padding: 10px 10px;
+  }
+
+  .settings-tab:hover span,
+  .settings-tab:focus-visible span,
+  .settings-tab.active span,
+  .settings-tab[aria-selected="true"] span {
+    max-width: 96px;
   }
 
   .review-settings-merge-options {
