@@ -6402,6 +6402,62 @@ func TestAgentOutputCitesGeneralNoChangeEvidenceForNaturalPhrasing(t *testing.T)
 	}
 }
 
+// TestAgentOutputCitesAgent00NoChangeEvidenceForRetrospectivePhrasing reproduces
+// a real false-negative from local task logs: a codex CI-repair investigation
+// that reran the CI commands, found them green, diagnosed a one-off runner-image
+// flake, and concluded "Verdict: no code change made." Before
+// agentNoChangeClaimPattern covered the past-tense "made" completion (alongside
+// "needed"/"required"), this evidenced conclusion was not recognized as a
+// no-change claim, so NoChangeEvidence stayed false and the harness classified
+// the run as an ExitCodex failure despite ample cited evidence.
+func TestAgentOutputCitesAgent00NoChangeEvidenceForRetrospectivePhrasing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{
+			name: "ci investigation verdict with retrospective made phrasing",
+			output: strings.Join([]string{
+				"Done digging. Here's state of play:",
+				"**CI now:** green. Checked `gh run list` - last 5+ runs on main all pass.",
+				"**Local repro, same cmds as CI:**",
+				"- `go test ./...`: OK, 9.4s",
+				"- `go test -race ./internal/agentruntime ./internal/app ./cmd/harness ./internal/localruntime`: OK, 21s",
+				"No fail path exist right now.",
+				"**Verdict: no code change made.** Evidence says current validation paths healthy, not fragile in reproducible way.",
+			}, "\n"),
+			want: true,
+		},
+		{
+			name:   "singular no change made with evidence marker",
+			output: "No change made; `internal/config` already validates the required field.",
+			want:   true,
+		},
+		{
+			name:   "no change claim without agent00 evidence marker",
+			output: "Verdict: no code change made. The release notes already covered this.",
+		},
+		{
+			name:   "explicit failure is not evidence even with internal path",
+			output: "Failure: no code change made because `internal/app` tests could not run.",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := agentOutputCitesAgent00NoChangeEvidence(execx.Result{Stdout: tt.output})
+			if got != tt.want {
+				t.Fatalf("agentOutputCitesAgent00NoChangeEvidence() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRunAppliesResponseModeAcrossNonCodexRuntimes(t *testing.T) {
 	t.Parallel()
 
