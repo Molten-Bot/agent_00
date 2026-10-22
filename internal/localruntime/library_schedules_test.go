@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -157,6 +159,129 @@ func TestLibrarySchedulesDueRestartOverlapAndFailure(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatal("deleted schedule ran")
+	}
+}
+
+// Run is a thin wrapper that loops RunDue on a 30-second ticker until its
+// context is canceled. RunDue itself already has thorough coverage above via
+// injected Now/Active/Submit, so these tests focus on Run's own control flow:
+// it must perform an initial RunDue pass without waiting for the ticker, it
+// must propagate RunDue failures to Logf, and it must return promptly on
+// context cancellation rather than blocking for the full ticker interval.
+func TestLibrarySchedulesRunPerformsInitialPassAndStopsOnCancel(t *testing.T) {
+	t.Parallel()
+
+	// A thread-safe clock: the test goroutine advances it past the schedule's
+	// due time while Run's background goroutine reads it concurrently.
+	var nowNano atomic.Int64
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	nowNano.Store(base.UnixNano())
+
+	s := &LibrarySchedules{
+		Path: filepath.Join(t.TempDir(), "config.json"),
+		Init: InitConfig{Version: "v1"},
+		Now:  func() time.Time { return time.Unix(0, nowNano.Load()).UTC() },
+	}
+	input := scheduleTestInput()
+	input.IntervalHours = 1
+	if _, err := s.Save(input); err != nil {
+		t.Fatal(err)
+	}
+	// The schedule isn't due until base+1h; advance the clock so Run's first
+	// pass finds it due immediately instead of waiting on the 30s ticker.
+	nowNano.Store(base.Add(2 * time.Hour).UnixNano())
+
+	var mu sync.Mutex
+	submitCalls := 0
+	s.Submit = func(context.Context, config.Config) (string, error) {
+		mu.Lock()
+		submitCalls++
+		mu.Unlock()
+		return "req-1", nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		s.Run(ctx)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		calls := submitCalls
+		mu.Unlock()
+		if calls > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Run() never performed its initial RunDue pass")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not return promptly after context cancellation")
+	}
+}
+
+func TestLibrarySchedulesRunLogsRunDueErrors(t *testing.T) {
+	t.Parallel()
+
+	// Pointing Path at a directory makes every RunDue call fail with a
+	// non-not-exist read error, exercising Run's error-logging branch. Submit
+	// must be non-nil for RunDue to attempt List() at all.
+	s := &LibrarySchedules{
+		Path:   t.TempDir(),
+		Init:   InitConfig{Version: "v1"},
+		Now:    func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
+		Submit: func(context.Context, config.Config) (string, error) { return "", nil },
+	}
+
+	var mu sync.Mutex
+	var logs []string
+	s.Logf = func(format string, args ...any) {
+		mu.Lock()
+		logs = append(logs, fmt.Sprintf(format, args...))
+		mu.Unlock()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		s.Run(ctx)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		n := len(logs)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Run() never logged a RunDue error")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not return promptly after context cancellation")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(logs) == 0 || !strings.Contains(logs[0], "status=error") {
+		t.Fatalf("logs = %v, want a library.schedule status=error entry", logs)
 	}
 }
 

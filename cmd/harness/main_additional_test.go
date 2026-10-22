@@ -1359,6 +1359,180 @@ func TestRunLocalTaskReportsErrorState(t *testing.T) {
 	assertLogContains(t, logs, "task status=error request_id=req-1")
 }
 
+func TestRunLocalTaskReportsStoppedStateWithoutCancelCause(t *testing.T) {
+	t.Parallel()
+
+	var logs []string
+	outcome := runLocalTask(
+		context.Background(),
+		nil,
+		func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
+		"code_for_me",
+		"req-stopped-1",
+		config.Config{
+			RepoURL: "git@github.com:acme/repo.git",
+			Prompt:  "fix tests",
+		},
+		0,
+		func() bool { return true },
+	)
+
+	if outcome.State != "stopped" {
+		t.Fatalf("runLocalTask() state = %q, want stopped", outcome.State)
+	}
+	if outcome.Result.Err == nil {
+		t.Fatal("runLocalTask() result error = nil, want non-nil")
+	}
+	assertLogContains(t, logs, "task status=stopped request_id=req-stopped-1")
+	assertLogContains(t, logs, errTaskStoppedByOperator.Error())
+}
+
+func TestRunLocalTaskReportsStoppedStateWithCancelCause(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	customCause := errors.New("stopped for maintenance")
+	cancel(customCause)
+
+	var logs []string
+	outcome := runLocalTask(
+		ctx,
+		nil,
+		func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
+		"code_for_me",
+		"req-stopped-2",
+		config.Config{
+			RepoURL: "git@github.com:acme/repo.git",
+			Prompt:  "fix tests",
+		},
+		0,
+		func() bool { return true },
+	)
+
+	if outcome.State != "stopped" {
+		t.Fatalf("runLocalTask() state = %q, want stopped", outcome.State)
+	}
+	assertLogContains(t, logs, "task status=stopped request_id=req-stopped-2")
+	assertLogContains(t, logs, customCause.Error())
+}
+
+func TestRunLocalTaskUsesProvidedSigningConfig(t *testing.T) {
+	t.Parallel()
+
+	var logs []string
+	outcome := runLocalTask(
+		context.Background(),
+		nil,
+		func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
+		"code_for_me",
+		"req-signing",
+		config.Config{
+			RepoURL: "git@github.com:acme/repo.git",
+			Prompt:  "fix tests",
+		},
+		0,
+		nil,
+		localruntime.InitConfig{AgentHarness: "claude"},
+	)
+
+	if outcome.State != "error" {
+		t.Fatalf("runLocalTask() state = %q, want error", outcome.State)
+	}
+}
+
+func TestContainsAny(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		text    string
+		markers []string
+		want    bool
+	}{
+		{name: "nil markers", text: "some text", markers: nil, want: false},
+		{name: "empty markers", text: "some text", markers: []string{}, want: false},
+		{name: "no match", text: "some text", markers: []string{"xyz", "abc"}, want: false},
+		{name: "match first", text: "hello world", markers: []string{"hello", "xyz"}, want: true},
+		{name: "match last", text: "hello world", markers: []string{"xyz", "world"}, want: true},
+		{name: "empty text no markers match", text: "", markers: []string{"a"}, want: false},
+		{name: "empty marker always matches", text: "anything", markers: []string{""}, want: true},
+		{name: "empty text and empty marker", text: "", markers: []string{""}, want: true},
+		{name: "case sensitive", text: "Hello", markers: []string{"hello"}, want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := containsAny(tt.text, tt.markers); got != tt.want {
+				t.Fatalf("containsAny(%q, %v) = %v, want %v", tt.text, tt.markers, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTaskStartSourceForSubmissionTable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		runCfg config.Config
+		want   string
+	}{
+		{name: "review watch source", source: reviewWatchSource, runCfg: config.Config{}, want: "review"},
+		{name: "pr review feedback source", source: prReviewFeedbackSource, runCfg: config.Config{}, want: "review"},
+		{
+			name:   "local submit with library task name",
+			source: localSubmitSource,
+			runCfg: config.Config{LibraryTaskName: "my-task"},
+			want:   "library",
+		},
+		{
+			name:   "local submit without library task name",
+			source: localSubmitSource,
+			runCfg: config.Config{},
+			want:   "prompt",
+		},
+		{
+			name:   "library schedule with library task name",
+			source: libraryScheduleSource,
+			runCfg: config.Config{LibraryTaskName: "scheduled-task"},
+			want:   "library",
+		},
+		{
+			name:   "library schedule without library task name",
+			source: libraryScheduleSource,
+			runCfg: config.Config{},
+			want:   "prompt",
+		},
+		{
+			name:   "whitespace-only library task name falls back to prompt",
+			source: localSubmitSource,
+			runCfg: config.Config{LibraryTaskName: "   "},
+			want:   "prompt",
+		},
+		{name: "unknown source", source: "something_else", runCfg: config.Config{}, want: ""},
+		{name: "empty source", source: "", runCfg: config.Config{}, want: ""},
+		{
+			name:   "source with surrounding whitespace is trimmed",
+			source: "  " + reviewWatchSource + "  ",
+			runCfg: config.Config{},
+			want:   "review",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := taskStartSourceForSubmission(tt.source, tt.runCfg); got != tt.want {
+				t.Fatalf("taskStartSourceForSubmission(%q, %+v) = %q, want %q", tt.source, tt.runCfg, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTaskWorkspaceDirFromLogContent(t *testing.T) {
 	t.Parallel()
 

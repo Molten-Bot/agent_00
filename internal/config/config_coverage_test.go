@@ -235,6 +235,270 @@ func TestValidateRejectsUnsupportedResponseMode(t *testing.T) {
 	}
 }
 
+func TestPromptImageUnmarshalJSON(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		data    string
+		wantErr bool
+		want    PromptImage
+	}{
+		{
+			name: "null becomes zero value",
+			data: `null`,
+			want: PromptImage{},
+		},
+		{
+			name:    "malformed json string literal",
+			data:    `"unterminated`,
+			wantErr: true,
+		},
+		{
+			name:    "string that is not a data URI",
+			data:    `"not-a-data-uri"`,
+			wantErr: true,
+		},
+		{
+			name: "string legacy data URI",
+			data: `"data:image/png;base64,aGVsbG8="`,
+			want: PromptImage{MediaType: "image/png", DataBase64: "aGVsbG8="},
+		},
+		{
+			name:    "malformed object json",
+			data:    `{"name":}`,
+			wantErr: true,
+		},
+		{
+			name: "canonical object fields",
+			data: `{"name":"shot.png","mediaType":"image/png","dataBase64":"aGVsbG8="}`,
+			want: PromptImage{Name: "shot.png", MediaType: "image/png", DataBase64: "aGVsbG8="},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var got PromptImage
+			err := got.UnmarshalJSON([]byte(test.data))
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("UnmarshalJSON(%s) error = nil, want non-nil", test.data)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("UnmarshalJSON(%s) error = %v", test.data, err)
+			}
+			if got != test.want {
+				t.Fatalf("UnmarshalJSON(%s) = %#v, want %#v", test.data, got, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadDecodesCanonicalObjectFormPromptImages(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	payload := `{
+  "repo": "git@github.com:acme/repo.git",
+  "prompt": "inspect screenshot",
+  "images": [
+    {"name":"shot.png","mediaType":"image/png","dataBase64":"aGVsbG8="}
+  ]
+}`
+	if err := os.WriteFile(path, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got, want := len(cfg.Images), 1; got != want {
+		t.Fatalf("len(Images) = %d, want %d", got, want)
+	}
+	if got, want := cfg.Images[0].Name, "shot.png"; got != want {
+		t.Fatalf("Images[0].Name = %q, want %q", got, want)
+	}
+	if got, want := cfg.Images[0].MediaType, "image/png"; got != want {
+		t.Fatalf("Images[0].MediaType = %q, want %q", got, want)
+	}
+	if got, want := cfg.Images[0].DataBase64, "aGVsbG8="; got != want {
+		t.Fatalf("Images[0].DataBase64 = %q, want %q", got, want)
+	}
+}
+
+func TestLoadIgnoresUnrecognizedFields(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	payload := `{
+  "repo": "git@github.com:acme/repo.git",
+  "prompt": "fix tests",
+  "someFutureField": "value",
+  "anotherUnknownThing": {"nested": true}
+}`
+	if err := os.WriteFile(path, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want unrecognized fields to be ignored", err)
+	}
+	if cfg.Prompt != "fix tests" {
+		t.Fatalf("Prompt = %q, want %q", cfg.Prompt, "fix tests")
+	}
+}
+
+func TestPromptImageFromDataURI(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		value   string
+		wantErr string
+		want    PromptImage
+	}{
+		{name: "empty value", value: "   ", want: PromptImage{}},
+		{name: "missing data prefix", value: "not-a-data-uri", wantErr: "must be a base64 data URI"},
+		{name: "missing comma", value: "data:image/png;base64", wantErr: "missing base64 data"},
+		{name: "missing base64 flag", value: "data:image/png,aGVsbG8=", wantErr: "must be base64 encoded"},
+		{name: "missing media type", value: "data:;base64,aGVsbG8=", wantErr: "must include an image MIME type"},
+		{name: "success", value: "data:image/png;base64,aGVsbG8=", want: PromptImage{MediaType: "image/png", DataBase64: "aGVsbG8="}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := promptImageFromDataURI(test.value)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("promptImageFromDataURI(%q) error = %v, want containing %q", test.value, err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("promptImageFromDataURI(%q) error = %v", test.value, err)
+			}
+			if got != test.want {
+				t.Fatalf("promptImageFromDataURI(%q) = %#v, want %#v", test.value, got, test.want)
+			}
+		})
+	}
+}
+
+func TestReviewConfigHasMeaningfulValueNilReceiver(t *testing.T) {
+	t.Parallel()
+
+	if got := reviewConfigHasMeaningfulValue(nil); got {
+		t.Fatalf("reviewConfigHasMeaningfulValue(nil) = %v, want false", got)
+	}
+}
+
+func TestNormalizeReviewTriggerAndWritebackAliases(t *testing.T) {
+	t.Parallel()
+
+	triggerTests := []struct {
+		value string
+		want  string
+	}{
+		{"", ""},
+		{"manual", "manual"},
+		{"local", "manual"},
+		{"github_notification", "github-notification"},
+		{"notifications", "github-notification"},
+		{"webhook", ""},
+	}
+	for _, test := range triggerTests {
+		if got := normalizeReviewTrigger(test.value); got != test.want {
+			t.Fatalf("normalizeReviewTrigger(%q) = %q, want %q", test.value, got, test.want)
+		}
+	}
+
+	writebackTests := []struct {
+		value string
+		want  string
+	}{
+		{"", ""},
+		{"summary", "summary-comment"},
+		{"comment", "summary-comment"},
+		{"off", "off"},
+		{"none", "off"},
+		{"disabled", "off"},
+		{"inline", ""},
+	}
+	for _, test := range writebackTests {
+		if got := normalizeReviewWriteback(test.value); got != test.want {
+			t.Fatalf("normalizeReviewWriteback(%q) = %q, want %q", test.value, got, test.want)
+		}
+	}
+}
+
+func TestValidateReviewConfigRequiresRequestedReviewerForGithubNotificationTrigger(t *testing.T) {
+	t.Parallel()
+
+	review := &ReviewConfig{
+		PRNumber:                 1,
+		Trigger:                  "github-notification",
+		RequireRequestedReviewer: true,
+	}
+	err := validateReviewConfig(review, []string{"a"})
+	if err == nil || !strings.Contains(err.Error(), "review.requestedReviewer is required when review.trigger is github-notification") {
+		t.Fatalf("validateReviewConfig(missing requested reviewer) error = %v", err)
+	}
+
+	review.RequestedReviewer = "octocat"
+	if err := validateReviewConfig(review, []string{"a"}); err != nil {
+		t.Fatalf("validateReviewConfig(requested reviewer present) error = %v", err)
+	}
+}
+
+func TestResponseModeContractCoversAllSupportedValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"default", DefaultResponseMode},
+		{"", DefaultResponseMode},
+		{"off", "off"},
+		{"caveman-lite", "caveman-lite"},
+		{"caveman-full", "caveman-full"},
+		{"caveman-ultra", "caveman-ultra"},
+		{"caveman-wenyan-lite", "caveman-wenyan-lite"},
+		{"caveman-wenyan-full", "caveman-wenyan-full"},
+		{"caveman-wenyan-ultra", "caveman-wenyan-ultra"},
+	}
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			t.Parallel()
+			if got := NormalizeResponseMode(test.input); got != test.want {
+				t.Fatalf("NormalizeResponseMode(%q) = %q, want %q", test.input, got, test.want)
+			}
+
+			cfg := Config{
+				Version:       "v1",
+				RepoURL:       "git@github.com:acme/repo.git",
+				BaseBranch:    "main",
+				TargetSubdir:  ".",
+				Prompt:        "run task",
+				ResponseMode:  test.input,
+				AgentHarness:  "codex",
+				CommitMessage: "msg",
+				PRTitle:       "title",
+				PRBody:        "body",
+			}
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("Validate() error = %v for responseMode %q", err, test.input)
+			}
+		})
+	}
+}
+
 func TestDefaultMetadataAndStringHelpers(t *testing.T) {
 	t.Parallel()
 

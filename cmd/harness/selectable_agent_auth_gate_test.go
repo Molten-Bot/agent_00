@@ -202,4 +202,119 @@ func TestSelectableAgentAuthGateConfigurePersistsSelectionAndRejectsSwitch(t *te
 	if got := strings.ToLower(err.Error()); !strings.Contains(got, "already configured") || !strings.Contains(got, "cannot be changed") {
 		t.Fatalf("Configure(codex) error = %q, want lock-once guidance", err)
 	}
+
+	// Re-selecting the harness that is already bound should simply return the
+	// current status rather than treating it as a rejected switch.
+	reselectState, err := gate.Configure(context.Background(), "claude")
+	if err != nil {
+		t.Fatalf("Configure(claude) re-select error = %v", err)
+	}
+	if got, want := reselectState.Harness, "claude"; got != want {
+		t.Fatalf("re-select Harness = %q, want %q", got, want)
+	}
+}
+
+func blockedRuntimeConfigPath(t *testing.T) string {
+	t.Helper()
+	blockerFile := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blockerFile, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile(blocker) error = %v", err)
+	}
+	return filepath.Join(blockerFile, "config.json")
+}
+
+func TestSelectableAgentAuthGateStatusReturnsErrorWhenRuntimeConfigUnreadable(t *testing.T) {
+	path := blockedRuntimeConfigPath(t)
+	gate := newSelectableAgentAuthGate(context.Background(), nil, localruntime.InitConfig{RuntimeConfigPath: path}, nil)
+
+	state, err := gate.Status(context.Background())
+	if err == nil {
+		t.Fatal("Status() error = nil, want load runtime config failure")
+	}
+	if state.State != "error" {
+		t.Fatalf("state = %+v, want error state", state)
+	}
+	if !strings.Contains(state.Message, "load runtime config") {
+		t.Fatalf("state.Message = %q, want load runtime config detail", state.Message)
+	}
+}
+
+func TestSelectableAgentAuthGateConfigureReturnsErrorWhenRuntimeConfigUnreadable(t *testing.T) {
+	path := blockedRuntimeConfigPath(t)
+	gate := newSelectableAgentAuthGate(context.Background(), nil, localruntime.InitConfig{RuntimeConfigPath: path}, nil)
+
+	state, err := gate.Configure(context.Background(), "claude")
+	if err == nil {
+		t.Fatal("Configure() error = nil, want load runtime config failure")
+	}
+	if state.State != "error" {
+		t.Fatalf("state = %+v, want error state", state)
+	}
+	if !strings.Contains(state.Message, "load runtime config") {
+		t.Fatalf("state.Message = %q, want load runtime config detail", state.Message)
+	}
+}
+
+func TestSelectableAgentAuthGateConfigureAppliesGitHubTokenWhenNeedsConfigure(t *testing.T) {
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	useSuccessfulGitHubStarTestServer(t)
+
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
+	gate := newSelectableAgentAuthGate(context.Background(), nil, localruntime.InitConfig{RuntimeConfigPath: path}, nil)
+
+	state, err := gate.Configure(context.Background(), fakeGitHubPAT("selectable_needs_configure"))
+	if err != nil {
+		t.Fatalf("Configure() error = %v", err)
+	}
+	if state.State != agentHarnessSelectionState {
+		t.Fatalf("state.State = %q, want harness selection state once GitHub token is applied", state.State)
+	}
+}
+
+func TestSelectableAgentAuthGateConfigureRejectsUnsupportedHarnessSelection(t *testing.T) {
+	t.Setenv("GH_TOKEN", "github_token_ready_token")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
+	gate := newSelectableAgentAuthGate(context.Background(), selectableGitHubReadyRunner(), localruntime.InitConfig{RuntimeConfigPath: path}, nil)
+
+	state, err := gate.Configure(context.Background(), "not-a-real-harness")
+	if err == nil || err.Error() != "agent selection is required" {
+		t.Fatalf("Configure(unsupported) error = %v, want agent selection required", err)
+	}
+	if state.State != agentHarnessSelectionState {
+		t.Fatalf("state.State = %q, want %q", state.State, agentHarnessSelectionState)
+	}
+	if got, want := state.Message, "Select an agent to continue."; got != want {
+		t.Fatalf("state.Message = %q, want %q", got, want)
+	}
+}
+
+func TestSelectableAgentAuthGateConfigureSaveFailure(t *testing.T) {
+	t.Setenv("GH_TOKEN", "github_token_ready_token")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	readOnlyDir := t.TempDir()
+	if err := os.Chmod(readOnlyDir, 0o555); err != nil {
+		t.Fatalf("Chmod(read-only) error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(readOnlyDir, 0o755)
+	})
+
+	path := filepath.Join(readOnlyDir, "config.json")
+	gate := newSelectableAgentAuthGate(context.Background(), selectableGitHubReadyRunner(), localruntime.InitConfig{RuntimeConfigPath: path}, nil)
+
+	state, err := gate.Configure(context.Background(), "claude")
+	if err == nil {
+		t.Fatal("Configure() error = nil, want save failure")
+	}
+	if state.State != agentHarnessSelectionState {
+		t.Fatalf("state = %+v, want harness selection state with save-failure message", state)
+	}
+	if !strings.Contains(state.Message, "Save selected agent failed") {
+		t.Fatalf("state.Message = %q, want save-failure detail", state.Message)
+	}
 }

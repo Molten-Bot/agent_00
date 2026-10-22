@@ -625,3 +625,96 @@ func waitForHubUITest(t *testing.T, timeout time.Duration, cond func() bool) {
 	}
 	t.Fatal("condition not met before timeout")
 }
+
+func TestBeginAndRollbackFeedbackQueue(t *testing.T) {
+	t.Parallel()
+
+	monitor := &PRMergeMonitor{}
+	task := Task{RequestID: "req-1", PRURL: "https://github.com/acme/repo/pull/7"}
+
+	// Missing PR URL or digest must not queue or panic on rollback.
+	if monitor.beginFeedbackQueue(Task{}, "digest-1") {
+		t.Fatal("beginFeedbackQueue(no pr url) = true, want false")
+	}
+	if monitor.beginFeedbackQueue(task, "  ") {
+		t.Fatal("beginFeedbackQueue(blank digest) = true, want false")
+	}
+	monitor.rollbackFeedbackQueue(Task{}, "digest-1")
+	monitor.rollbackFeedbackQueue(task, "  ")
+
+	if !monitor.beginFeedbackQueue(task, "digest-1") {
+		t.Fatal("beginFeedbackQueue(first digest) = false, want true")
+	}
+	// Re-queuing the same digest for the same PR must be rejected.
+	if monitor.beginFeedbackQueue(task, "digest-1") {
+		t.Fatal("beginFeedbackQueue(duplicate digest) = true, want false")
+	}
+
+	// Rolling back a stale digest must not evict the queued entry: the
+	// matching digest is still considered queued.
+	monitor.rollbackFeedbackQueue(task, "digest-stale")
+	if monitor.beginFeedbackQueue(task, "digest-1") {
+		t.Fatal("beginFeedbackQueue after rollback of mismatched digest = true, want queue entry still retained (false)")
+	}
+
+	// Rolling back the matching digest clears the entry so it can be requeued.
+	monitor.rollbackFeedbackQueue(task, "digest-1")
+	if !monitor.beginFeedbackQueue(task, "digest-1") {
+		t.Fatal("beginFeedbackQueue after matching rollback = false, want true")
+	}
+}
+
+func TestReviewEntryNeedsFollowUp(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		review prReviewEntry
+		want   bool
+	}{
+		{
+			name:   "changes requested with body needs follow up",
+			review: prReviewEntry{State: "changes_requested", Body: "please fix the bug"},
+			want:   true,
+		},
+		{
+			name:   "changes requested with blank body does not need follow up",
+			review: prReviewEntry{State: "CHANGES_REQUESTED", Body: "   "},
+			want:   false,
+		},
+		{
+			name:   "approved with plain praise does not need follow up",
+			review: prReviewEntry{State: "APPROVED", Body: "Negative\n- No material issues found"},
+			want:   false,
+		},
+		{
+			name:   "approved with actionable negative needs follow up",
+			review: prReviewEntry{State: "APPROVED", Body: "Negative\n- fix the flaky test"},
+			want:   true,
+		},
+		{
+			name:   "commented with actionable language needs follow up",
+			review: prReviewEntry{State: "COMMENTED", Body: "could you please add a test for this"},
+			want:   true,
+		},
+		{
+			name:   "commented with neutral body does not need follow up",
+			review: prReviewEntry{State: "COMMENTED", Body: "Looks good overall, nice work"},
+			want:   false,
+		},
+		{
+			name:   "empty state behaves like comment path",
+			review: prReviewEntry{State: "", Body: "this is broken"},
+			want:   true,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := reviewEntryNeedsFollowUp(tt.review); got != tt.want {
+				t.Fatalf("reviewEntryNeedsFollowUp(%#v) = %t, want %t", tt.review, got, tt.want)
+			}
+		})
+	}
+}
