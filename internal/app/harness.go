@@ -3406,9 +3406,20 @@ func (h Harness) runFinalReviewCycle(
 
 	// Allow one extra pass beyond FinalReviewPasses so a fix applied on the
 	// final configured pass is always confirmed clean by a follow-up review
-	// before the PR can be released from draft.
-	for pass := 1; pass <= h.FinalReviewPasses+1; pass++ {
+	// before the PR can be released from draft. The loop has no upper bound
+	// here because the body below always returns once pass exceeds
+	// FinalReviewPasses (either a clean confirmation or the exhausted-passes
+	// error); a redundant bound would leave an unreachable statement after
+	// the loop for Go's terminating-statement check to flag.
+	for pass := 1; ; pass++ {
 		reviewMode := finalReviewMode(h.FinalReviewPasses)
+		// The confirmation pass (pass == FinalReviewPasses+1) has no fix-pass
+		// budget of its own, so label it against itself (e.g. "4/4") instead
+		// of the fix-pass total (e.g. "4/3"), which reads as a miscount.
+		passLabelTotal := h.FinalReviewPasses
+		if pass > passLabelTotal {
+			passLabelTotal = pass
+		}
 		h.logf(
 			"stage=review status=start action=pass review_mode=%s pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",
 			reviewMode,
@@ -3432,7 +3443,7 @@ func (h Harness) runFinalReviewCycle(
 		if err != nil {
 			return ExitPR, "review", err
 		}
-		reviewPrompt := finalReviewPrompt(cfg.Prompt, reviewContext.Prompt, pass, h.FinalReviewPasses)
+		reviewPrompt := finalReviewPrompt(cfg.Prompt, reviewContext.Prompt, pass, passLabelTotal)
 		reviewPrompt, err = withReviewSkillPrompt(reviewPrompt)
 		if err != nil {
 			return ExitConfig, "review", err
@@ -3495,7 +3506,7 @@ func (h Harness) runFinalReviewCycle(
 			return ExitCodex, "review", fmt.Errorf("post-task review pass %d returned unsupported status %q", pass, outcome.Status)
 		}
 
-		commentBody := finalReviewCommentBody(outcome, pass, h.FinalReviewPasses)
+		commentBody := finalReviewCommentBody(outcome, pass, passLabelTotal)
 		bodyPath := finalReviewSummaryBodyPath(filepath.Dir(repo.Dir), reviewContext.Metadata.Number, pass)
 		if err := h.writeWorkspaceFile(bodyPath, []byte(commentBody), 0o600); err != nil {
 			return ExitWorkspace, "review", fmt.Errorf("write post-task review comment: %w", err)
@@ -3617,7 +3628,6 @@ func (h Harness) runFinalReviewCycle(
 			repo.PRURL,
 		)
 	}
-	return ExitCodex, "review", fmt.Errorf("post-task review cycle ended without a conclusive clean review")
 }
 
 func finalReviewMode(passes int) string {
@@ -4075,6 +4085,13 @@ func (h Harness) markPullRequestReadyForReview(ctx context.Context, repo repoWor
 	return nil
 }
 
+// isPRAlreadyReadyError recognizes the "already ready for review" state from
+// a failed `gh pr ready` invocation. Current gh releases (confirmed on
+// v2.46.0) already treat this state as a no-op: they print the same message
+// to stderr but exit 0, so h.runCommand returns a nil error and the success
+// path above handles it without ever reaching this check. This fallback only
+// guards against older gh builds or GitHub Enterprise Server CLI pins that
+// may still surface it as a non-zero exit.
 func isPRAlreadyReadyError(err error) bool {
 	if err == nil {
 		return false
