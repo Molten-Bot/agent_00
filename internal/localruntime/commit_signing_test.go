@@ -158,6 +158,26 @@ func TestSigningSettingsConcurrentUpdates(t *testing.T) {
 	}
 }
 
+func TestSigningSettingsImportSurvivesIdentityFailure(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.json")
+	// Avoid a real API request: an unavailable local transport is a setup error too.
+	store := SigningSettings{Path: path, GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: "://invalid"} }}
+	raw := signingTestPrivateKey(t)
+	state, err := store.Configure(context.Background(), CommitSigningRequest{PrivateKey: raw, Passphrase: "test-passphrase"})
+	if !errors.Is(err, gitsigning.ErrSetup) {
+		t.Fatalf("expected a setup error when GitHub identity cannot be resolved, got %v", err)
+	}
+	if !state.Configured || state.PublicKey == "" {
+		t.Fatalf("imported key should remain visible even if identity resolution fails: %+v", state)
+	}
+	// The key must also be persisted, not just returned in this one response.
+	status, err := store.Status(context.Background())
+	if err != nil || !status.Configured || status.PublicKey != state.PublicKey {
+		t.Fatalf("imported key was not persisted: %+v %v", status, err)
+	}
+}
+
 func TestSigningSettingsMissingKeyFailsClosed(t *testing.T) {
 	t.Parallel()
 	store := SigningSettings{Path: filepath.Join(t.TempDir(), "config.json")}
