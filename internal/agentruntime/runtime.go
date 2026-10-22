@@ -220,20 +220,26 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 		// caller asks for a read-only pass (DisallowedTools set, for example
 		// a post-task review that must not touch the repository),
 		// --disallowedTools alone only blocks the named Claude tools; a
-		// sandboxed Bash call could still write to disk. Drop the whole
-		// invocation into Codex's read-only sandbox instead of
-		// workspace-write so nothing can write regardless of which tool it
-		// tries to use.
+		// sandboxed Bash call could still write to disk. Codex's read-only
+		// sandbox_mode would stop that, but it also cuts all network access
+		// with no override (only sandbox_workspace_write exposes
+		// network_access), and this wrapper sandboxes Claude's whole process
+		// tree including its own HTTPS calls to the Anthropic API. Stay in
+		// workspace-write with zero writable roots instead: nothing can
+		// write regardless of which tool it tries to use, but Claude can
+		// still reach its API.
 		readOnly := len(nonEmptyStrings(opts.DisallowedTools)) > 0
-		sandboxMode := "workspace-write"
+		args := []string{"sandbox", "-c", `sandbox_mode="workspace-write"`}
 		if readOnly {
-			sandboxMode = "read-only"
-		}
-		args := []string{"sandbox", "-c", fmt.Sprintf("sandbox_mode=%q", sandboxMode)}
-		if !readOnly {
+			args = append(args,
+				"-c", "sandbox_workspace_write.writable_roots=[]",
+				"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
+				"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+			)
+		} else {
 			args = append(args, workspaceSandboxArgs(opts)...)
-			args = append(args, "-c", "sandbox_workspace_write.network_access=true")
 		}
+		args = append(args, "-c", "sandbox_workspace_write.network_access=true")
 		args = append(args, "--", cmd.Name)
 		cmd.Args = append(args, cmd.Args...)
 		cmd.Name = "codex"
