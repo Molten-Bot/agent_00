@@ -486,6 +486,11 @@ func runServer(args []string) int {
 				finalState = outcome.State
 				switch outcome.State {
 				case "error":
+					if errors.Is(outcome.Result.Err, agentruntime.ErrClaudeAuthRequired) {
+						if gate, ok := authGate.(interface{ RequireReauthentication() }); ok {
+							gate.RequireReauthentication()
+						}
+					}
 					if allowFailureFollowUp {
 						if queueFailureRerun != nil {
 							queueFailureRerun(requestID, outcome.Result, runCfg, source)
@@ -1253,6 +1258,9 @@ func unexpectedNoChangesFollowUpRunConfig(
 
 func shouldQueueFailureFollowUp(source string, failedResult app.Result) (bool, string) {
 	source = strings.TrimSpace(source)
+	if errors.Is(failedResult.Err, agentruntime.ErrClaudeAuthRequired) {
+		return false, "agent authentication requires user sign-in"
+	}
 	if failedResult.Err == nil {
 		return false, "failed task did not include an error"
 	}

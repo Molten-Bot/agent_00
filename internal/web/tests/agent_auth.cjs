@@ -110,6 +110,20 @@ test('already authorized users can start working', async t => {
   await expect(page.locator('#local-prompt-submit')).toBeEnabled();
 });
 
+test('runtime auth expiry reopens sign-in without another submission and recovers', async t => {
+  let auth = ready;
+  const page = await openPage(t, route => reply(route, auth));
+  await expect(page.locator('#agent-auth-gate')).toBeHidden();
+  await expect(page.locator('#local-prompt-submit')).toBeEnabled();
+  auth = { ...needsLogin, message: 'Claude authentication required; sign in again, then rerun the failed task' };
+  await expect(page.locator('#agent-auth-gate')).toBeVisible({ timeout: 10000 });
+  await expect(page.locator('#agent-auth-message')).toContainText('rerun the failed task');
+  await expect(page.locator('#local-prompt-submit')).toBeDisabled();
+  auth = ready;
+  await expect(page.locator('#agent-auth-gate')).toBeHidden();
+  await expect(page.locator('#local-prompt-submit')).toBeEnabled();
+});
+
 test('submission rejected for expired auth reopens onboarding and keeps work disabled', async t => {
   let auth = ready;
   const page = await openPage(t, route => reply(route, auth));

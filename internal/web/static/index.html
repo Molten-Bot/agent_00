@@ -2634,13 +2634,13 @@
       }
       const needsChallenge = state.agentAuth.required && !state.agentAuth.ready &&
         (!state.agentAuth.authURL || !state.agentAuth.deviceCode);
-      if (!needsChallenge) {
+      if (!needsChallenge && !state.agentAuth.ready) {
         return;
       }
       agentAuthRefreshTimer = window.setTimeout(() => {
         agentAuthRefreshTimer = null;
         loadAgentAuthStatus();
-      }, 700);
+      }, state.agentAuth.ready ? 5000 : 700);
     }
 
     function clearAgentAuthAutoSubmitTimer() {

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,7 +34,9 @@ var claudeAuthURLPattern = regexp.MustCompile(`https?://[^\s"'<>()]+`)
 var claudeOAuthTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{24,}$`)
 
 type claudeAuthGate struct {
-	mu sync.Mutex
+	mu                  sync.Mutex
+	rejectedMu          sync.Mutex
+	rejectedCredentials string
 
 	baseCtx context.Context
 	runner  execx.Runner
@@ -784,6 +787,12 @@ func (g *claudeAuthGate) githubTokenRequirementState() (bool, web.AgentAuthState
 
 func (g *claudeAuthGate) probeClaude() (bool, string) {
 	runtimeConfigPath := strings.TrimSpace(g.runtimeConfigPath)
+	g.rejectedMu.Lock()
+	rejected := g.rejectedCredentials != "" && g.rejectedCredentials == g.credentialsFingerprint()
+	g.rejectedMu.Unlock()
+	if rejected {
+		return false, agentruntime.ErrClaudeAuthRequired.Error()
+	}
 
 	if oauthToken, source := firstConfiguredClaudeOAuthToken(runtimeConfigPath); strings.TrimSpace(oauthToken) != "" {
 		if err := setClaudeOAuthTokenEnvironment(oauthToken); err == nil {
@@ -813,6 +822,36 @@ func (g *claudeAuthGate) probeClaude() (bool, string) {
 	}
 
 	return false, claudeBrowserLoginRequiredMessage()
+}
+
+// RequireReauthentication keeps presence-only probes from accepting credentials
+// that an actual task has rejected. Store only a digest, never credential text.
+func (g *claudeAuthGate) RequireReauthentication() {
+	g.rejectedMu.Lock()
+	g.rejectedCredentials = g.credentialsFingerprint()
+	g.rejectedMu.Unlock()
+	g.mu.Lock()
+	g.ready = false
+	g.state = "needs_browser_login"
+	g.message = agentruntime.ErrClaudeAuthRequired.Error()
+	g.authURL = ""
+	g.updatedAt = time.Now().UTC()
+	g.mu.Unlock()
+}
+
+func (g *claudeAuthGate) credentialsFingerprint() string {
+	token, _ := firstConfiguredClaudeOAuthToken(g.runtimeConfigPath)
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("ANTHROPIC_AUTH_TOKEN"))
+	}
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+	}
+	if token != "" {
+		return fmt.Sprintf("token:%x", sha256.Sum256([]byte(token)))
+	}
+	content, _ := os.ReadFile(claudeCredentialsPath())
+	return fmt.Sprintf("file:%x", sha256.Sum256(content))
 }
 
 func (g *claudeAuthGate) probeClaudeAuthStatus() (bool, string) {

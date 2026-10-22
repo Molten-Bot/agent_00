@@ -78,6 +78,15 @@ func (g *selectableAgentAuthGate) Verify(ctx context.Context) (web.AgentAuthStat
 	return g.runDelegateAction(ctx, agentAuthGate.Verify)
 }
 
+func (g *selectableAgentAuthGate) RequireReauthentication() {
+	g.mu.Lock()
+	delegate := g.delegate
+	g.mu.Unlock()
+	if gate, ok := delegate.(interface{ RequireReauthentication() }); ok {
+		gate.RequireReauthentication()
+	}
+}
+
 func (g *selectableAgentAuthGate) runDelegateAction(
 	ctx context.Context,
 	action func(agentAuthGate, context.Context) (web.AgentAuthState, error),

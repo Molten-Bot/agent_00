@@ -5629,6 +5629,10 @@ func (h Harness) runCodexWithHeartbeat(
 	for {
 		select {
 		case run := <-done:
+			if runtime.Harness == agentruntime.HarnessClaude && run.err != nil &&
+				(agentruntime.ClaudeAuthenticationFailure(run.res.Stdout) || agentruntime.ClaudeAuthenticationFailure(run.res.Stderr)) {
+				return run.res, agentruntime.ErrClaudeAuthRequired
+			}
 			if runtime.Harness == agentruntime.HarnessCodex && codexInvocationAuthenticationFailed(run.res, run.err) {
 				home, _ := agentruntime.CodexHome(cmd.Env)
 				stateErr := agentruntime.MarkCodexAuthenticationRequired(home)
