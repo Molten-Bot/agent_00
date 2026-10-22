@@ -1466,6 +1466,9 @@ func (s Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet, http.MethodPost) {
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		state := ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off"}
@@ -1537,9 +1540,6 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			"ok":       true,
 			"settings": state,
 		})
-	default:
-		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 

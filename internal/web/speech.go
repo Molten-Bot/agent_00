@@ -98,9 +98,7 @@ type wyomingEventHeader struct {
 }
 
 func (s Server) handleSpeechStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -116,9 +114,7 @@ func (s Server) handleSpeechStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s Server) handleSpeechTranscribe(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 
