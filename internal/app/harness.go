@@ -4073,10 +4073,18 @@ func (h Harness) markPullRequestReadyForReview(ctx context.Context, repo repoWor
 	if prURL == "" {
 		return nil
 	}
+	if state, err := h.loadPullRequestState(ctx, repo.Dir, prURL); err == nil && !pullRequestStateIsOpen(state) {
+		h.logf("stage=review status=skip action=mark_ready reason=pr_not_open pr_url=%s state=%s", prURL, state.State)
+		return nil
+	}
 	h.logf("stage=review status=start action=mark_ready pr_url=%s", prURL)
 	if _, err := h.runCommand(ctx, "review", prReadyCommand(repo.Dir, prURL)); err != nil {
 		if isPRAlreadyReadyError(err) {
 			h.logf("stage=review status=skip action=mark_ready reason=already_ready pr_url=%s", prURL)
+			return nil
+		}
+		if isPRClosedOrMergedError(err) {
+			h.logf("stage=review status=skip action=mark_ready reason=pr_not_open pr_url=%s", prURL)
 			return nil
 		}
 		return fmt.Errorf("mark pull request ready for review: %w", err)
@@ -4101,6 +4109,27 @@ func isPRAlreadyReadyError(err error) bool {
 		"is already ready for review",
 	}
 	for _, fragment := range alreadyReadyFragments {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPRClosedOrMergedError recognizes the error `gh pr ready` raises when the
+// pull request was externally merged or closed during the review cycle, so
+// the harness can skip releasing it from draft instead of failing the run.
+func isPRClosedOrMergedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	closedOrMergedFragments := []string{
+		"because it is merged",
+		"because it is closed",
+		"is already merged",
+	}
+	for _, fragment := range closedOrMergedFragments {
 		if strings.Contains(message, fragment) {
 			return true
 		}
