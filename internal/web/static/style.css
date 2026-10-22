@@ -6862,8 +6862,6 @@ body.onboarding-modal-open {
   color: var(--text);
 }
 
-.settings-tab.active span,
-.settings-tab[aria-selected="true"] span,
 .settings-tab:hover span,
 .settings-tab:focus-visible span {
   max-width: 200px;
@@ -7365,13 +7363,8 @@ body.onboarding-modal-open {
     padding: 10px 10px;
   }
 
-  .settings-tab.active span,
-  .settings-tab[aria-selected="true"] span {
-    max-width: 96px;
-  }
-
-  .settings-tab:not(.active):not([aria-selected="true"]):hover span,
-  .settings-tab:not(.active):not([aria-selected="true"]):focus-visible span {
+  .settings-tab:hover span,
+  .settings-tab:focus-visible span {
     max-width: 96px;
   }
 
