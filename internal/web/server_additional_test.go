@@ -623,11 +623,23 @@ func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
 	narrowMedia := css[narrowMediaIdx:]
 	for _, want := range []string{
 		".settings-tab.active span,",
-		".settings-tab[aria-selected=\"true\"] span {\n    max-width: 96px;\n  }",
+		".settings-tab[aria-selected=\"true\"] span {",
 	} {
 		if !strings.Contains(narrowMedia, want) {
 			t.Fatalf("embedded style.css narrow viewport rules missing %q", want)
 		}
+	}
+	activeSpanSelectorIdx := strings.Index(narrowMedia, ".settings-tab.active span,")
+	if activeSpanSelectorIdx == -1 {
+		t.Fatalf("embedded style.css narrow viewport rules missing active tab span selector")
+	}
+	activeSpanRuleEnd := strings.Index(narrowMedia[activeSpanSelectorIdx:], "}")
+	if activeSpanRuleEnd == -1 {
+		t.Fatalf("embedded style.css narrow viewport active tab span rule missing closing brace")
+	}
+	activeSpanRule := narrowMedia[activeSpanSelectorIdx : activeSpanSelectorIdx+activeSpanRuleEnd]
+	if !strings.Contains(activeSpanRule, "max-width: 96px;") {
+		t.Fatalf("embedded style.css narrow viewport active tab span rule should cap max-width at 96px, got %q", activeSpanRule)
 	}
 }
 

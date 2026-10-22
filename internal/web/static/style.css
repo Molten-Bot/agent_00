@@ -6794,9 +6794,29 @@ body.onboarding-modal-open {
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
+  scrollbar-color: var(--surface-scroll-thumb) var(--surface-scroll-track);
   border: 1px solid var(--surface-control-border);
   border-radius: var(--radius-card);
   background: var(--surface-control-bg);
+}
+
+.settings-tabbar::-webkit-scrollbar {
+  height: 6px;
+}
+
+.settings-tabbar::-webkit-scrollbar-track {
+  background: var(--surface-scroll-track);
+  border-radius: 999px;
+}
+
+.settings-tabbar::-webkit-scrollbar-thumb {
+  background: var(--surface-scroll-thumb);
+  border-radius: 999px;
+  border: 1px solid var(--surface-scroll-thumb-border);
+}
+
+.settings-tabbar::-webkit-scrollbar-thumb:hover {
+  background: var(--surface-scroll-thumb-hover);
 }
 
 .settings-tab {
