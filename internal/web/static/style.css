@@ -6791,7 +6791,6 @@ body.onboarding-modal-open {
   width: 100%;
   padding: 6px;
   overflow-x: auto;
-  overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
   scrollbar-color: var(--surface-scroll-thumb) var(--surface-scroll-track);

@@ -615,16 +615,18 @@ func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
 	if strings.Contains(settingsTabbarRule, "overflow: hidden;") {
 		t.Fatalf("embedded style.css .settings-tabbar should not hard-clip overflow, trailing tabs would become unreachable on narrow viewports")
 	}
+	// overflow-y: hidden previously clipped the hover/focus label reveal:
+	// .settings-tab is a normal-flow descendant of the tabbar, so any
+	// taller-than-expected reveal (e.g. a wrapped or zoomed label) was
+	// silently cut off with only 6px of padding to spare. overflow-x:
+	// auto alone already gives horizontal scrolling; per the CSS Overflow
+	// spec a 'visible' overflow-y paired with a non-visible overflow-x
+	// computes to 'auto', so dropping the explicit overflow-y keeps
+	// scroll behavior identical while removing the clip hazard entirely.
+	if strings.Contains(settingsTabbarRule, "overflow-y: hidden") {
+		t.Fatalf("embedded style.css .settings-tabbar must not set overflow-y: hidden, it clips the hover/focus label reveal, got %q", settingsTabbarRule)
+	}
 
-	// A hover/focus tab label positioned absolutely below the tab (a
-	// floating tooltip) would be clipped by .settings-tabbar's
-	// overflow-y: hidden: the tooltip's containing block is
-	// .settings-tab, a normal-flow descendant of the clipped tabbar, so
-	// it cannot be repositioned to a non-clipped ancestor without
-	// breaking per-tab horizontal alignment. The hover/focus reveal must
-	// therefore share the active tab's in-flow label rule (grow the
-	// label next to the icon within the row) instead of floating below
-	// it, or the revealed text is invisible on hover.
 	normalized := normalizeCSSWhitespace(css)
 	combinedLabelSelector := `.settings-tab.active span, .settings-tab[aria-selected="true"] span, .settings-tab:hover span, .settings-tab:focus-visible span {`
 	combinedLabelIdx := strings.Index(normalized, combinedLabelSelector)
@@ -637,7 +639,30 @@ func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
 	}
 	combinedLabelRule := normalized[combinedLabelIdx : combinedLabelIdx+combinedLabelRuleEnd]
 	if strings.Contains(combinedLabelRule, "position: absolute") {
-		t.Fatalf("embedded style.css hover/focus tab label must not use position: absolute, it would be clipped by .settings-tabbar's overflow-y: hidden, got %q", combinedLabelRule)
+		t.Fatalf("embedded style.css hover/focus tab label must not use position: absolute, it would float outside the in-flow row and misalign with its tab, got %q", combinedLabelRule)
+	}
+	// The reveal must only ever animate width/opacity-style properties.
+	// Anything that can grow the label's height (white-space: normal,
+	// line-height, height) would make the label taller than its tab and
+	// risk clipping again regardless of the tabbar's overflow-y value, so
+	// ban those here instead of relying solely on overflow-y staying
+	// off.
+	for _, forbidden := range []string{"white-space: normal", "line-height:", "height:"} {
+		if strings.Contains(combinedLabelRule, forbidden) {
+			t.Fatalf("embedded style.css hover/focus tab label rule must not set %q, it could grow the label taller than its tab and get clipped, got %q", forbidden, combinedLabelRule)
+		}
+	}
+	spanIdx := strings.Index(css, ".settings-tab span {")
+	if spanIdx == -1 {
+		t.Fatalf("embedded style.css missing .settings-tab span rule")
+	}
+	spanEnd := strings.Index(css[spanIdx:], "}")
+	if spanEnd == -1 {
+		t.Fatalf("embedded style.css .settings-tab span rule missing closing brace")
+	}
+	spanRule := css[spanIdx : spanIdx+spanEnd]
+	if !strings.Contains(spanRule, "white-space: nowrap;") {
+		t.Fatalf("embedded style.css .settings-tab span must keep white-space: nowrap, wrapped text would grow taller than its tab and risk clipping, got %q", spanRule)
 	}
 
 	// Siblings must not visually compress when the active or hovered
