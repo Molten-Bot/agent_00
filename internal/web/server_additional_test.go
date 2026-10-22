@@ -12,6 +12,8 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -754,6 +756,36 @@ func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
 // without caring about exact selector punctuation placement.
 func normalizeCSSWhitespace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// TestSettingsTabbarRenderedLayoutMatchesPlaywrightSpec renders the real
+// settings tabbar in a headless browser and measures it, unlike the
+// string-matching tests above which only see the CSS source text and can't
+// tell whether a rule actually prevents clipping or sibling shift once the
+// browser applies cascade, inheritance, and layout. It skips (rather than
+// fails) when Node or Playwright aren't available in the environment, since
+// ci.yml does not provision them; the asserted behavior still has coverage
+// from the string-based tests above whenever this one can't run.
+func TestSettingsTabbarRenderedLayoutMatchesPlaywrightSpec(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not available, skipping rendered-layout check")
+	}
+	if err := exec.Command("node", "-e", "require.resolve('playwright')").Run(); err != nil {
+		t.Skip("playwright module not available, skipping rendered-layout check")
+	}
+
+	srv := NewServer("", nil)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "node", "--test", "tests/settings_tabs.cjs")
+	cmd.Env = append(os.Environ(), "HARNESS_TEST_URL="+ts.URL)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("rendered settings tabbar layout check failed:\n%s", out)
+	}
 }
 
 func TestDashboardSourceLegendStylesLiveInGlobalStylesheet(t *testing.T) {

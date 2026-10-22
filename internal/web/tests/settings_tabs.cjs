@@ -61,6 +61,11 @@ test('selecting a different settings tab does not shift later sibling tabs', asy
   const before = await signingTab.boundingBox();
   await page.locator('#settings-tab-automation').click();
   await page.waitForFunction(() => document.getElementById('settings-tab-automation').classList.contains('active'));
+  // The click leaves the pointer resting on the activated tab, which also
+  // satisfies :hover - move away so the measurement reflects the settled,
+  // non-hovered selection state rather than the transient hover reveal that
+  // test 1 already covers.
+  await page.mouse.move(0, 0);
   // The label reveal animates over 0.2s (max-width/margin-left) - wait for
   // the transition to finish so the measurement reflects the settled layout,
   // not a mid-animation frame that hasn't shifted yet.
