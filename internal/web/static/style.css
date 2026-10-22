@@ -6820,11 +6820,12 @@ body.onboarding-modal-open {
 }
 
 .settings-tab {
+  position: relative;
   display: inline-flex;
   flex: 0 1 auto;
   min-width: 44px;
   max-width: 100%;
-  overflow: hidden;
+  overflow: visible;
   align-items: center;
   justify-content: center;
   gap: 0;
@@ -6862,13 +6863,31 @@ body.onboarding-modal-open {
   color: var(--text);
 }
 
-.settings-tab:hover span,
-.settings-tab:focus-visible span,
 .settings-tab.active span,
 .settings-tab[aria-selected="true"] span {
   max-width: 200px;
   margin-left: 8px;
   opacity: 1;
+}
+
+.settings-tab:not(.active):not([aria-selected="true"]):hover span,
+.settings-tab:not(.active):not([aria-selected="true"]):focus-visible span {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-top: 6px;
+  margin-left: 0;
+  transform: translateX(-50%);
+  max-width: 160px;
+  opacity: 1;
+  padding: 4px 8px;
+  background: var(--surface-control-bg-strong);
+  border: 1px solid var(--surface-control-border);
+  border-radius: var(--radius);
+  box-shadow: var(--surface-control-shadow);
+  white-space: nowrap;
+  z-index: 5;
+  pointer-events: none;
 }
 
 .settings-tab.active,
@@ -7365,10 +7384,13 @@ body.onboarding-modal-open {
     padding: 10px 10px;
   }
 
-  .settings-tab:hover span,
-  .settings-tab:focus-visible span,
   .settings-tab.active span,
   .settings-tab[aria-selected="true"] span {
+    max-width: 96px;
+  }
+
+  .settings-tab:not(.active):not([aria-selected="true"]):hover span,
+  .settings-tab:not(.active):not([aria-selected="true"]):focus-visible span {
     max-width: 96px;
   }
 

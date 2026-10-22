@@ -620,16 +620,16 @@ func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
 	if narrowMediaIdx == -1 {
 		t.Fatalf("embedded style.css missing narrow viewport media query")
 	}
-	narrowMedia := css[narrowMediaIdx:]
+	narrowMedia := normalizeCSSWhitespace(css[narrowMediaIdx:])
 	for _, want := range []string{
-		".settings-tab.active span,",
-		".settings-tab[aria-selected=\"true\"] span {",
+		".settings-tab.active span",
+		".settings-tab[aria-selected=\"true\"] span",
 	} {
 		if !strings.Contains(narrowMedia, want) {
 			t.Fatalf("embedded style.css narrow viewport rules missing %q", want)
 		}
 	}
-	activeSpanSelectorIdx := strings.Index(narrowMedia, ".settings-tab.active span,")
+	activeSpanSelectorIdx := strings.Index(narrowMedia, ".settings-tab.active span")
 	if activeSpanSelectorIdx == -1 {
 		t.Fatalf("embedded style.css narrow viewport rules missing active tab span selector")
 	}
@@ -641,6 +641,13 @@ func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
 	if !strings.Contains(activeSpanRule, "max-width: 96px;") {
 		t.Fatalf("embedded style.css narrow viewport active tab span rule should cap max-width at 96px, got %q", activeSpanRule)
 	}
+}
+
+// normalizeCSSWhitespace collapses all whitespace runs to single spaces so
+// assertions survive harmless reformatting (indentation, line wrapping)
+// without caring about exact selector punctuation placement.
+func normalizeCSSWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func TestDashboardSourceLegendStylesLiveInGlobalStylesheet(t *testing.T) {
