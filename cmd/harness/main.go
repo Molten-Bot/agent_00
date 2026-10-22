@@ -1503,6 +1503,9 @@ func promptRequestsRepositoryChange(prompt string) bool {
 	if text == "" {
 		return true
 	}
+	if isPlaceholderPrompt(text) {
+		return false
+	}
 
 	if strings.Contains(text, "?") {
 		questionPrefixes := []string{"what ", "why ", "how ", "when ", "where ", "who "}
@@ -1543,6 +1546,22 @@ func promptRequestsRepositoryChange(prompt string) bool {
 		return false
 	}
 	return true
+}
+
+// isPlaceholderPrompt reports whether text is a bare connectivity/smoke-test
+// prompt (e.g. "test", "ping") with no actionable content, as opposed to a
+// genuine request that simply avoided the known marker words. Such prompts
+// cannot be satisfied with a real diff, so they must not be treated as
+// requiring a repository change.
+func isPlaceholderPrompt(text string) bool {
+	if len(strings.Fields(text)) > 2 {
+		return false
+	}
+	switch strings.Trim(text, ".!? ") {
+	case "test", "testing", "ping", "hello", "hi", "hey", "noop", "no-op", "sample", "example", "placeholder":
+		return true
+	}
+	return false
 }
 
 func promptAllowsSuccessfulNoOp(text string) bool {
