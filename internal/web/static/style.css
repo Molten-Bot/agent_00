@@ -1914,6 +1914,14 @@ select.prompt-control {
   background: var(--surface-control-bg-strong);
 }
 
+.custom-library-fields .prompt-text {
+  height: 44px;
+  min-height: 44px;
+  padding: 11px 14px;
+  font-size: 0.84rem;
+  line-height: normal;
+}
+
 .speech-stream-wrap {
   position: relative;
   display: block;
