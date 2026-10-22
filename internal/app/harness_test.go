@@ -969,7 +969,7 @@ func TestRunBuildsReviewContextBeforeInvokingCodex(t *testing.T) {
 		{cmd: prReviewReviewsCommand(repoDir, 42), res: execx.Result{Stdout: `[]`}},
 		{cmd: reviewDiffStatCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffStat}},
 		{cmd: reviewDiffPatchCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffPatch}},
-		{cmd: codexCommand(targetDir, withAgentsPrompt(strings.TrimSpace(cfg.Prompt+"\n\n"+expectedPreparedReviewContext(repoURLFromConfig(cfg), metadataJSON, commentsText, diffStat, diffPatch)), agentsPath))},
+		{cmd: codexCommandWithOptions(targetDir, withAgentsPrompt(strings.TrimSpace(cfg.Prompt+"\n\n"+expectedPreparedReviewContext(repoURLFromConfig(cfg), metadataJSON, commentsText, diffStat, diffPatch)), agentsPath), codexRunOptions{DisallowedTools: readOnlyReviewDisallowedTools})},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## main\n"}},
 		{cmd: prReviewSummaryCommand(repoDir, "42", "acme/repo", reviewSummaryBodyPath(runDir, 42))},
 	}}
@@ -1035,7 +1035,7 @@ func TestRunBuildsReviewContextFromHeadBranchSelector(t *testing.T) {
 		{cmd: prReviewReviewsCommand(repoDir, 42), res: execx.Result{Stdout: `[]`}},
 		{cmd: reviewDiffStatCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffStat}},
 		{cmd: reviewDiffPatchCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffPatch}},
-		{cmd: codexCommand(targetDir, withAgentsPrompt(strings.TrimSpace(cfg.Prompt+"\n\n"+expectedPreparedReviewContext(repoURLFromConfig(cfg), metadataJSON, commentsText, diffStat, diffPatch)), agentsPath)), res: execx.Result{Stdout: reviewOutput}},
+		{cmd: codexCommandWithOptions(targetDir, withAgentsPrompt(strings.TrimSpace(cfg.Prompt+"\n\n"+expectedPreparedReviewContext(repoURLFromConfig(cfg), metadataJSON, commentsText, diffStat, diffPatch)), agentsPath), codexRunOptions{DisallowedTools: readOnlyReviewDisallowedTools}), res: execx.Result{Stdout: reviewOutput}},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## main\n"}},
 		{cmd: prReviewSummaryCommand(repoDir, "42", "acme/repo", reviewSummaryBodyPath(runDir, 42))},
 		{cmd: prMergeAutoCommand(repoDir, "42", "acme/repo", "squash", "abc123")},

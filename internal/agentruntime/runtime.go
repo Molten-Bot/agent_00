@@ -39,6 +39,11 @@ type RunOptions struct {
 	ImagePaths       []string
 	WritableDirs     []string
 	Env              []string
+	// DisallowedTools names tools the agent CLI must not expose for this
+	// invocation (for example Edit/Write/NotebookEdit for a read-only review
+	// pass). Only honored by harnesses that support a tool denylist; ignored
+	// otherwise.
+	DisallowedTools []string
 }
 
 // Runtime describes one executable LLM harness runtime.
@@ -211,10 +216,25 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 	}
 	if normalizeHarness(r.Harness) == HarnessClaude {
 		// Permission bypass alone does not enforce a filesystem boundary.
-		// Sandbox the entire Claude CLI and its child processes.
-		args := []string{"sandbox", "-c", `sandbox_mode="workspace-write"`}
-		args = append(args, workspaceSandboxArgs(opts)...)
-		args = append(args, "-c", "sandbox_workspace_write.network_access=true", "--", cmd.Name)
+		// Sandbox the entire Claude CLI and its child processes. When the
+		// caller asks for a read-only pass (DisallowedTools set, for example
+		// a post-task review that must not touch the repository),
+		// --disallowedTools alone only blocks the named Claude tools; a
+		// sandboxed Bash call could still write to disk. Drop the whole
+		// invocation into Codex's read-only sandbox instead of
+		// workspace-write so nothing can write regardless of which tool it
+		// tries to use.
+		readOnly := len(nonEmptyStrings(opts.DisallowedTools)) > 0
+		sandboxMode := "workspace-write"
+		if readOnly {
+			sandboxMode = "read-only"
+		}
+		args := []string{"sandbox", "-c", fmt.Sprintf("sandbox_mode=%q", sandboxMode)}
+		if !readOnly {
+			args = append(args, workspaceSandboxArgs(opts)...)
+			args = append(args, "-c", "sandbox_workspace_write.network_access=true")
+		}
+		args = append(args, "--", cmd.Name)
 		cmd.Args = append(args, cmd.Args...)
 		cmd.Name = "codex"
 		if opts.WorkspaceDir != "" {
@@ -322,17 +342,32 @@ func normalizeHarness(harness string) string {
 }
 
 func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command, error) {
-	args := []string{"exec", "--sandbox", "workspace-write", "-c", `approval_policy="never"`}
-	args = append(args, workspaceSandboxArgs(opts)...)
+	// Codex has no per-tool denylist like Claude's --disallowedTools. When the
+	// caller asks for a read-only pass (for example a post-task review that
+	// must not touch the repository), the only enforceable equivalent is to
+	// drop the whole invocation into Codex's read-only sandbox instead of
+	// workspace-write, so the CLI cannot write anywhere regardless of which
+	// tool it tries to use.
+	readOnly := len(nonEmptyStrings(opts.DisallowedTools)) > 0
+	sandboxMode := "workspace-write"
+	if readOnly {
+		sandboxMode = "read-only"
+	}
+	args := []string{"exec", "--sandbox", sandboxMode, "-c", `approval_policy="never"`}
+	if !readOnly {
+		args = append(args, workspaceSandboxArgs(opts)...)
+	}
 	if opts.SkipGitRepoCheck {
 		args = append(args, "--skip-git-repo-check")
 	}
-	for _, dir := range opts.WritableDirs {
-		dir = strings.TrimSpace(dir)
-		if dir == "" {
-			continue
+	if !readOnly {
+		for _, dir := range opts.WritableDirs {
+			dir = strings.TrimSpace(dir)
+			if dir == "" {
+				continue
+			}
+			args = append(args, "--add-dir", dir)
 		}
-		args = append(args, "--add-dir", dir)
 	}
 	for _, imagePath := range opts.ImagePaths {
 		imagePath = strings.TrimSpace(imagePath)
@@ -363,10 +398,24 @@ func buildClaudeCommand(targetDir, prompt string, opts RunOptions) (execx.Comman
 		}
 		args = append(args, "--add-dir", dir)
 	}
+	if tools := nonEmptyStrings(opts.DisallowedTools); len(tools) > 0 {
+		args = append(args, "--disallowedTools")
+		args = append(args, tools...)
+	}
 	// Keep task content out of argv: subprocess errors include the arguments,
 	// and large review packets can exceed the OS per-argument size limit.
 	args = append(args, "--")
 	return execx.Command{Dir: targetDir, Args: args, Env: append([]string(nil), opts.Env...), Stdin: prompt}, nil
+}
+
+func nonEmptyStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func countNonEmptyStrings(values []string) int {

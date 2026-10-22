@@ -29,6 +29,13 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
+// readOnlyReviewDisallowedTools blocks the mutating Claude Code tools for
+// review-only agent invocations, so a review pass cannot edit the repository
+// even if it disregards the review skill's read-only instructions. Bash is
+// included because it can write files (or run git commands) just as easily
+// as the dedicated Edit/Write tools, leaving the same mutation vector open.
+var readOnlyReviewDisallowedTools = []string{"Edit", "Write", "NotebookEdit", "Bash"}
+
 const (
 	ExitSuccess   = 0
 	ExitUsage     = 2
@@ -404,6 +411,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		}
 		agentResponseMode = config.DisabledResponseMode
 		invocationMode = "review"
+		codexOpts.DisallowedTools = readOnlyReviewDisallowedTools
 	}
 	if reviewContext != nil && reviewContext.GitHubTokenEnvSanitized {
 		codexOpts.Env = githubTokenSanitizedEnv()
@@ -3410,6 +3418,7 @@ func (h Harness) runFinalReviewCycle(
 		}
 		reviewOpts := codexOpts
 		reviewOpts.ImagePaths = nil
+		reviewOpts.DisallowedTools = readOnlyReviewDisallowedTools
 		if reviewContext.GitHubTokenEnvSanitized {
 			if len(reviewOpts.Env) == 0 {
 				reviewOpts.Env = githubTokenSanitizedEnv()
