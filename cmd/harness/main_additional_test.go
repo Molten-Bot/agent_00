@@ -1101,6 +1101,9 @@ func TestPromptRequestsRepositoryChange(t *testing.T) {
 		{prompt: "If there are no changes, investigate and fix the collector.", want: true},
 		{prompt: "If there are no changes, create an empty pull request.", want: true},
 		{prompt: "", want: true},
+		{prompt: "test", want: false},
+		{prompt: "ping", want: false},
+		{prompt: "hello", want: false},
 	}
 
 	for _, tt := range tests {
