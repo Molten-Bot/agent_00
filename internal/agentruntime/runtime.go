@@ -216,10 +216,25 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 	}
 	if normalizeHarness(r.Harness) == HarnessClaude {
 		// Permission bypass alone does not enforce a filesystem boundary.
-		// Sandbox the entire Claude CLI and its child processes.
-		args := []string{"sandbox", "-c", `sandbox_mode="workspace-write"`}
-		args = append(args, workspaceSandboxArgs(opts)...)
-		args = append(args, "-c", "sandbox_workspace_write.network_access=true", "--", cmd.Name)
+		// Sandbox the entire Claude CLI and its child processes. When the
+		// caller asks for a read-only pass (DisallowedTools set, for example
+		// a post-task review that must not touch the repository),
+		// --disallowedTools alone only blocks the named Claude tools; a
+		// sandboxed Bash call could still write to disk. Drop the whole
+		// invocation into Codex's read-only sandbox instead of
+		// workspace-write so nothing can write regardless of which tool it
+		// tries to use.
+		readOnly := len(nonEmptyStrings(opts.DisallowedTools)) > 0
+		sandboxMode := "workspace-write"
+		if readOnly {
+			sandboxMode = "read-only"
+		}
+		args := []string{"sandbox", "-c", fmt.Sprintf("sandbox_mode=%q", sandboxMode)}
+		if !readOnly {
+			args = append(args, workspaceSandboxArgs(opts)...)
+			args = append(args, "-c", "sandbox_workspace_write.network_access=true")
+		}
+		args = append(args, "--", cmd.Name)
 		cmd.Args = append(args, cmd.Args...)
 		cmd.Name = "codex"
 		if opts.WorkspaceDir != "" {

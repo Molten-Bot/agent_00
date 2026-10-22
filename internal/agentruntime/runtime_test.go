@@ -349,11 +349,8 @@ func TestBuildCommandClaudeDisallowedTools(t *testing.T) {
 		t.Fatalf("BuildCommand() error = %v", err)
 	}
 	wantArgs := []string{
-		"sandbox", "-c", `sandbox_mode="workspace-write"`,
-		"-c", `sandbox_workspace_write.writable_roots=[]`,
-		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
-		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-		"-c", "sandbox_workspace_write.network_access=true", "--", "claude",
+		"sandbox", "-c", `sandbox_mode="read-only"`,
+		"--", "claude",
 		"--print", "--output-format", "text", "--dangerously-skip-permissions",
 		"--disallowedTools", "Edit", "Write", "NotebookEdit", "--",
 	}

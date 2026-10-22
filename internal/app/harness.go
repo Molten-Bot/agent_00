@@ -30,8 +30,10 @@ import (
 
 // readOnlyReviewDisallowedTools blocks the mutating Claude Code tools for
 // review-only agent invocations, so a review pass cannot edit the repository
-// even if it disregards the review skill's read-only instructions.
-var readOnlyReviewDisallowedTools = []string{"Edit", "Write", "NotebookEdit"}
+// even if it disregards the review skill's read-only instructions. Bash is
+// included because it can write files (or run git commands) just as easily
+// as the dedicated Edit/Write tools, leaving the same mutation vector open.
+var readOnlyReviewDisallowedTools = []string{"Edit", "Write", "NotebookEdit", "Bash"}
 
 const (
 	ExitSuccess   = 0
