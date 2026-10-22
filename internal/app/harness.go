@@ -43,10 +43,15 @@ import (
 // output becomes a short "stale follow-up" acknowledgment instead of the
 // required fenced JSON outcome, and parseReviewOutcome has nothing to parse.
 // A review pass must run synchronously in the invoking turn so its own final
-// message always carries the mandated verdict. ReportFindings is blocked for
-// the same reason: the bundled review skill requires the verdict as fenced
-// JSON in that final text message, not routed through a separate
-// structured-output tool call that parseReviewOutcome never inspects.
+// message always carries the mandated verdict. This is blocked even for
+// read-only sub-agent use (e.g. Explore) because the harness cannot
+// distinguish a read-only dispatch from one that backgrounds itself; losing
+// that parallel-exploration capability during review is an accepted
+// trade-off against the alternative of silently dropping the verdict.
+// ReportFindings is blocked for the same reason: the bundled review skill
+// requires the verdict as fenced JSON in that final text message, not routed
+// through a separate structured-output tool call that parseReviewOutcome
+// never inspects.
 var readOnlyReviewDisallowedTools = []string{"Edit", "Write", "NotebookEdit", "Bash", "Agent", "Skill", "Workflow", "ReportFindings"}
 
 const (
