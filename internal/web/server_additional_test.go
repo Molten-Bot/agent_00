@@ -762,10 +762,10 @@ func normalizeCSSWhitespace(s string) string {
 // settings tabbar in a headless browser and measures it, unlike the
 // string-matching tests above which only see the CSS source text and can't
 // tell whether a rule actually prevents clipping or sibling shift once the
-// browser applies cascade, inheritance, and layout. It skips (rather than
-// fails) when Node or Playwright aren't available in the environment, since
-// ci.yml does not provision them; the asserted behavior still has coverage
-// from the string-based tests above whenever this one can't run.
+// browser applies cascade, inheritance, and layout. ci.yml provisions Node
+// and Playwright so this runs for real in CI; it only skips (rather than
+// fails) in local/dev environments that lack them, where the asserted
+// behavior still has coverage from the string-based tests above.
 func TestSettingsTabbarRenderedLayoutMatchesPlaywrightSpec(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not available, skipping rendered-layout check")

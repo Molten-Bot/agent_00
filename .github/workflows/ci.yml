@@ -38,6 +38,16 @@ jobs:
           go build ./...
           go build -o bin/harness ./cmd/harness
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Playwright
+        run: |
+          npm install --no-save playwright@1.62.1
+          npx playwright install --with-deps chromium
+
       - name: Test
         run: go test ./...
 
