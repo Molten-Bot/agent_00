@@ -1423,6 +1423,15 @@ func TestReviewOutputTextPrefersStdoutOverStderrDiagnostics(t *testing.T) {
 	}
 }
 
+func TestReadOnlyReviewDisallowedToolsBlocksBackgroundCapableTools(t *testing.T) {
+	t.Parallel()
+
+	want := []string{"Edit", "Write", "NotebookEdit", "Bash", "Agent", "Skill", "Workflow", "ReportFindings"}
+	if !reflect.DeepEqual(readOnlyReviewDisallowedTools, want) {
+		t.Fatalf("readOnlyReviewDisallowedTools = %v, want %v", readOnlyReviewDisallowedTools, want)
+	}
+}
+
 func TestRunWithGitHubTokenRunsAuthSetupGitBeforeCodex(t *testing.T) {
 	cfg := sampleConfig()
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
