@@ -750,17 +750,20 @@
           <details class="review-settings-section commit-signing-section" id="commit-signing-section">
             <summary>Commit signing</summary>
             <div class="stack commit-signing-fields">
-              <label class="review-settings-toggle"><input id="commit-signing-enabled" type="checkbox"><span>Sign commits for all tasks</span></label>
-              <p>Save a key, register its public key on GitHub, then enable signing. Changes apply to tasks that start after saving.</p>
+              <label class="review-settings-toggle"><input id="commit-signing-enabled" type="checkbox" disabled aria-describedby="commit-signing-enabled-help"><span>Sign commits for all tasks</span></label>
+              <p id="commit-signing-enabled-help">Save an SSH private key below to unlock this checkbox.</p>
+              <p>1. Paste your SSH private key and click Save signing settings. 2. Copy the public key shown below and add it to GitHub as a Signing Key. 3. Check registration, select the checkbox, and save again. Changes apply to tasks that start after saving.</p>
               <label for="commit-signing-private-key">SSH private key</label>
-              <textarea id="commit-signing-private-key" class="prompt-text agent-auth-secret-input" rows="4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste a private key to add or replace it"></textarea>
+              <textarea id="commit-signing-private-key" class="prompt-text agent-auth-secret-input" rows="4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="commit-signing-private-key-help" placeholder="Paste the full SSH private key, including BEGIN and END lines"></textarea>
+              <p id="commit-signing-private-key-help">Signing requires the private key. A public key alone cannot sign commits.</p>
               <label for="commit-signing-passphrase">Passphrase (if your key is protected)</label>
               <input id="commit-signing-passphrase" class="prompt-text" type="password" autocomplete="off">
               <p>The app saves an unlocked copy of the key with restricted file permissions so background tasks can sign unattended. Your passphrase is never saved.</p>
               <p id="commit-signing-account"></p>
               <p id="commit-signing-fingerprint"></p>
-              <label for="commit-signing-public-key">Public signing key</label>
-              <textarea id="commit-signing-public-key" class="prompt-text" rows="3" readonly placeholder="Save a key to see its public key"></textarea>
+              <label for="commit-signing-public-key">Public signing key (read-only)</label>
+              <p id="commit-signing-public-key-help">Generated from your saved private key. Copy this key to GitHub; there is nothing to paste into this box.</p>
+              <textarea id="commit-signing-public-key" class="prompt-text" rows="3" readonly aria-describedby="commit-signing-public-key-help" placeholder="Your public key appears here after you save an SSH private key"></textarea>
               <div class="commit-signing-actions">
                 <button id="commit-signing-copy" type="button" class="prompt-action-button" disabled>Copy public key</button>
                 <a href="https://github.com/settings/ssh/new" target="_blank" rel="noopener noreferrer">Add to GitHub as a Signing Key</a>

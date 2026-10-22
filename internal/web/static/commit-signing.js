@@ -13,6 +13,11 @@
     busy = value;
     for (const name of ['save', 'private-key', 'passphrase']) element(name).disabled = value;
     enabled.disabled = value || !configured;
+    element('enabled-help').textContent = value
+      ? 'Please wait while signing settings are being processed.'
+      : configured
+        ? 'After registering the public key on GitHub, select this checkbox and click Save signing settings.'
+        : 'Save an SSH private key below to unlock this checkbox.';
     element('verify').disabled = value || !configured;
     element('copy').disabled = value || !publicKey.value;
   }

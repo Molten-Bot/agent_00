@@ -45,6 +45,10 @@ test('import, register, enable, reload and disable without returning private mat
     }
     return route.fulfill({ json: { ok: true, settings } });
   });
+  assert.equal(await page.locator('#commit-signing-enabled').isDisabled(), true);
+  assert.match(await page.locator('#commit-signing-enabled-help').textContent(), /Save an SSH private key below to unlock/);
+  assert.equal(await page.locator('#commit-signing-public-key').isEditable(), false);
+  assert.match(await page.locator('#commit-signing-public-key-help').textContent(), /Generated from your saved private key/);
   await page.locator('#commit-signing-private-key').fill('test-private-key');
   await page.locator('#commit-signing-passphrase').fill('test-passphrase');
   await page.locator('#commit-signing-save').click();
@@ -52,6 +56,8 @@ test('import, register, enable, reload and disable without returning private mat
   assert.equal(await page.locator('#commit-signing-private-key').inputValue(), '');
   assert.equal(await page.locator('#commit-signing-passphrase').inputValue(), '');
   assert.equal(await page.locator('#commit-signing-public-key').inputValue(), saved.public_key);
+  assert.equal(await page.locator('#commit-signing-enabled').isEnabled(), true);
+  assert.match(await page.locator('#commit-signing-enabled-help').textContent(), /After registering the public key on GitHub/);
   assert.match(await page.locator('#commit-signing-account').textContent(), /test-bot/);
   await page.locator('#commit-signing-verify').click();
   await page.waitForFunction(() => document.getElementById('commit-signing-registration').textContent.startsWith('Registered'));
