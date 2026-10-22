@@ -570,10 +570,19 @@ func (h Harness) processChangedRepo(
 	if err != nil || h.FinalReviewPasses <= 0 || isReviewOnlyRun(cfg) || repo == nil || !repo.Changed || strings.TrimSpace(repo.PRURL) == "" {
 		return exitCode, stage, err
 	}
-	return h.runFinalReviewCycle(
+	exitCode, stage, err = h.runFinalReviewCycle(
 		ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt,
 		agentsPath, codexTargetLabel, agentStage, multiRepo,
 	)
+	if err != nil {
+		return exitCode, stage, err
+	}
+	if !cfg.Draft {
+		if releaseErr := h.markPullRequestReadyForReview(ctx, *repo); releaseErr != nil {
+			return ExitPR, "review", releaseErr
+		}
+	}
+	return exitCode, stage, err
 }
 
 func isReviewOnlyRun(cfg config.Config) bool {
@@ -583,6 +592,14 @@ func isReviewOnlyRun(cfg config.Config) bool {
 	taskName := strings.ToLower(strings.TrimSpace(cfg.LibraryTaskName))
 	taskName = strings.ReplaceAll(taskName, "_", "-")
 	return taskName == codeReviewLibraryTaskName
+}
+
+// autoDraftForReviewCycle reports whether a PR should open as a draft because
+// a post-task review cycle will run against it. The PR is released from
+// draft once that cycle finishes clean, so the run's explicit cfg.Draft
+// request is left untouched here and checked separately before release.
+func (h Harness) autoDraftForReviewCycle(cfg config.Config) bool {
+	return h.FinalReviewPasses > 0 && !isReviewOnlyRun(cfg)
 }
 
 func (h Harness) processChangedRepoWithoutFinalReviews(
@@ -2266,6 +2283,7 @@ func (h Harness) createPullRequestURL(
 	headRef,
 	targetRepo string,
 ) (string, error) {
+	cfg.Draft = cfg.Draft || h.autoDraftForReviewCycle(cfg)
 	var cmd execx.Command
 	if createWorkBranch {
 		cmd = prCreateWithOptionsCommand(repo.Dir, cfg, repo.BaseBranch, headRef, targetRepo)
@@ -4032,6 +4050,44 @@ func (h Harness) autoMergeCleanReview(
 	return nil
 }
 
+// markPullRequestReadyForReview releases a PR that was auto-drafted for
+// autoDraftForReviewCycle once its final review cycle finishes clean.
+func (h Harness) markPullRequestReadyForReview(ctx context.Context, repo repoWorkspace) error {
+	prURL := strings.TrimSpace(repo.PRURL)
+	if prURL == "" {
+		return nil
+	}
+	h.logf("stage=review status=start action=mark_ready pr_url=%s", prURL)
+	if _, err := h.runCommand(ctx, "review", prReadyCommand(repo.Dir, prURL)); err != nil {
+		if isPRAlreadyReadyError(err) {
+			h.logf("stage=review status=skip action=mark_ready reason=already_ready pr_url=%s", prURL)
+			return nil
+		}
+		return fmt.Errorf("mark pull request ready for review: %w", err)
+	}
+	h.logf("stage=review status=ok action=mark_ready pr_url=%s", prURL)
+	return nil
+}
+
+func isPRAlreadyReadyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	alreadyReadyFragments := []string{
+		"not a draft",
+		"not in draft",
+		"isn't a draft",
+		"is not draft",
+	}
+	for _, fragment := range alreadyReadyFragments {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
 func isAutoMergeUnsupportedError(err error) bool {
 	if err == nil {
 		return false
@@ -4400,6 +4456,14 @@ func prReviewSummaryFallbackCommand(repoDir, selector, targetRepo string, prNumb
 		Dir:  repoDir,
 		Name: "gh",
 		Args: args,
+	}
+}
+
+func prReadyCommand(repoDir, prURL string) execx.Command {
+	return execx.Command{
+		Dir:  repoDir,
+		Name: "gh",
+		Args: []string{"pr", "ready", prURL},
 	}
 }
 
