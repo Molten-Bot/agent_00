@@ -1661,8 +1661,8 @@ body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
 }
 
 .prompt-field-draft-pr {
-  flex: 0 1 clamp(120px, 13%, 160px);
-  min-width: 130px;
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
 .prompt-draft-toggle {
@@ -1697,11 +1697,6 @@ body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
   height: 16px;
   color: inherit;
   flex-shrink: 0;
-}
-
-.prompt-draft-toggle-text {
-  font-size: 0.82rem;
-  white-space: nowrap;
 }
 
 .prompt-draft-toggle.is-active {
