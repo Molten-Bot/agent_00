@@ -4330,49 +4330,39 @@ func reviewSelector(reviewCfg config.ReviewConfig) string {
 	return strings.TrimSpace(reviewCfg.HeadBranch)
 }
 
+// gitCommand builds a git invocation run in dir with the given arguments.
+func gitCommand(dir string, args ...string) execx.Command {
+	return execx.Command{Dir: dir, Name: "git", Args: args}
+}
+
+// ghCommand builds a gh (GitHub CLI) invocation run in dir with the given arguments.
+func ghCommand(dir string, args ...string) execx.Command {
+	return execx.Command{Dir: dir, Name: "gh", Args: args}
+}
+
 func prReviewMetadataCommand(repoDir, selector string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: []string{
-			"pr", "view", selector,
-			"--json", "number,title,body,url,state,isDraft,baseRefName,headRefName,headRefOid,author",
-		},
-	}
+	return ghCommand(repoDir,
+		"pr", "view", selector,
+		"--json", "number,title,body,url,state,isDraft,baseRefName,headRefName,headRefOid,author",
+	)
 }
 
 func prReviewIssueCommentsCommand(repoDir string, number int) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: []string{"api", fmt.Sprintf("repos/:owner/:repo/issues/%d/comments", number), "--paginate"},
-	}
+	return ghCommand(repoDir, "api", fmt.Sprintf("repos/:owner/:repo/issues/%d/comments", number), "--paginate")
 }
 
 func prReviewReviewCommentsCommand(repoDir string, number int) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: []string{"api", fmt.Sprintf("repos/:owner/:repo/pulls/%d/comments", number), "--paginate"},
-	}
+	return ghCommand(repoDir, "api", fmt.Sprintf("repos/:owner/:repo/pulls/%d/comments", number), "--paginate")
 }
 
 func prReviewReviewsCommand(repoDir string, number int) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: []string{"api", fmt.Sprintf("repos/:owner/:repo/pulls/%d/reviews", number), "--paginate"},
-	}
+	return ghCommand(repoDir, "api", fmt.Sprintf("repos/:owner/:repo/pulls/%d/reviews", number), "--paginate")
 }
 
 func prReviewSummaryCommand(repoDir, selector, targetRepo, bodyFile string) execx.Command {
 	args := []string{"pr", "review", selector, "--comment", "--body-file", bodyFile}
 	args = appendGHRepoArg(args, targetRepo)
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: args,
-	}
+	return ghCommand(repoDir, args...)
 }
 
 func prReviewSummaryFallbackCommand(repoDir, selector, targetRepo string, prNumber int, bodyFile string) execx.Command {
@@ -4382,25 +4372,17 @@ func prReviewSummaryFallbackCommand(repoDir, selector, targetRepo string, prNumb
 			prNumber, _ = strconv.Atoi(strings.TrimSpace(selector))
 		}
 		if prNumber > 0 {
-			return execx.Command{
-				Dir:  repoDir,
-				Name: "gh",
-				Args: []string{
-					"api",
-					fmt.Sprintf("repos/%s/issues/%d/comments", targetRepo, prNumber),
-					"-F",
-					"body=@" + bodyFile,
-				},
-			}
+			return ghCommand(repoDir,
+				"api",
+				fmt.Sprintf("repos/%s/issues/%d/comments", targetRepo, prNumber),
+				"-F",
+				"body=@"+bodyFile,
+			)
 		}
 	}
 	args := []string{"pr", "comment", selector, "--body-file", bodyFile}
 	args = appendGHRepoArg(args, targetRepo)
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: args,
-	}
+	return ghCommand(repoDir, args...)
 }
 
 func prMergeAutoCommand(repoDir, selector, targetRepo, method, headRefOID string) execx.Command {
@@ -4414,11 +4396,7 @@ func prMergeAutoCommand(repoDir, selector, targetRepo, method, headRefOID string
 		args = append(args, "--squash")
 	}
 	args = appendGHRepoArg(args, targetRepo)
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: args,
-	}
+	return ghCommand(repoDir, args...)
 }
 
 func appendGHRepoArg(args []string, targetRepo string) []string {
@@ -4430,19 +4408,11 @@ func appendGHRepoArg(args []string, targetRepo string) []string {
 }
 
 func fetchRemoteBranchCommand(repoDir, branch string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"fetch", "origin", fmt.Sprintf("%s:refs/remotes/origin/%s", branch, branch)},
-	}
+	return gitCommand(repoDir, "fetch", "origin", fmt.Sprintf("%s:refs/remotes/origin/%s", branch, branch))
 }
 
 func fetchPullRequestHeadCommand(repoDir string, prNumber int) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"fetch", "origin", fmt.Sprintf("pull/%d/head:%s", prNumber, pullRequestTrackingRef(prNumber))},
-	}
+	return gitCommand(repoDir, "fetch", "origin", fmt.Sprintf("pull/%d/head:%s", prNumber, pullRequestTrackingRef(prNumber)))
 }
 
 func remoteTrackingRef(branch string) string {
@@ -4454,19 +4424,11 @@ func pullRequestTrackingRef(prNumber int) string {
 }
 
 func reviewDiffStatCommand(repoDir, baseRef, headRef string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"diff", "--stat", "--summary", fmt.Sprintf("%s...%s", baseRef, headRef)},
-	}
+	return gitCommand(repoDir, "diff", "--stat", "--summary", fmt.Sprintf("%s...%s", baseRef, headRef))
 }
 
 func reviewDiffPatchCommand(repoDir, baseRef, headRef string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"diff", "--unified=3", "--no-ext-diff", fmt.Sprintf("%s...%s", baseRef, headRef)},
-	}
+	return gitCommand(repoDir, "diff", "--unified=3", "--no-ext-diff", fmt.Sprintf("%s...%s", baseRef, headRef))
 }
 
 func repoDirSlug(repoURL string) string {
@@ -6492,18 +6454,18 @@ func preflightCommands() []execx.Command {
 
 func preflightCommandsWithRuntime(runtime agentruntime.Runtime) []execx.Command {
 	return []execx.Command{
-		{Name: "git", Args: []string{"--version"}},
-		{Name: "gh", Args: []string{"--version"}},
+		gitCommand("", "--version"),
+		ghCommand("", "--version"),
 		runtime.PreflightCommand(),
 	}
 }
 
 func authCommand() execx.Command {
-	return execx.Command{Name: "gh", Args: []string{"auth", "status"}}
+	return ghCommand("", "auth", "status")
 }
 
 func authSetupGitCommand() execx.Command {
-	return execx.Command{Name: "gh", Args: []string{"auth", "setup-git"}}
+	return ghCommand("", "auth", "setup-git")
 }
 
 func (h Harness) runAuthSetupGit(ctx context.Context) error {
@@ -6826,56 +6788,31 @@ func cloneCommand(cfg config.Config, repoDir string) execx.Command {
 }
 
 func cloneRepoCommand(repoURL, baseBranch, repoDir string) execx.Command {
-	return execx.Command{
-		Name: "git",
-		Args: []string{"clone", "--branch", baseBranch, "--single-branch", repoURL, repoDir},
-	}
+	return gitCommand("", "clone", "--branch", baseBranch, "--single-branch", repoURL, repoDir)
 }
 
 func remoteRefsCommand(repoURL string) execx.Command {
-	return execx.Command{
-		Name: "git",
-		Args: []string{"ls-remote", "--heads", "--tags", repoURL},
-	}
+	return gitCommand("", "ls-remote", "--heads", "--tags", repoURL)
 }
 
 func remoteDefaultBranchCommand(repoDir string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"ls-remote", "--symref", "origin", "HEAD"},
-	}
+	return gitCommand(repoDir, "ls-remote", "--symref", "origin", "HEAD")
 }
 
 func currentBranchCommand(repoDir string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"branch", "--show-current"},
-	}
+	return gitCommand(repoDir, "branch", "--show-current")
 }
 
 func fetchBaseBranchCommand(repoDir, branch string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"fetch", "origin", fmt.Sprintf("%s:refs/remotes/origin/%s", normalizeBranchRef(branch), normalizeBranchRef(branch))},
-	}
+	return gitCommand(repoDir, "fetch", "origin", fmt.Sprintf("%s:refs/remotes/origin/%s", normalizeBranchRef(branch), normalizeBranchRef(branch)))
 }
 
 func cloneRepoDefaultBranchCommand(repoURL, repoDir string) execx.Command {
-	return execx.Command{
-		Name: "git",
-		Args: []string{"clone", "--single-branch", repoURL, repoDir},
-	}
+	return gitCommand("", "clone", "--single-branch", repoURL, repoDir)
 }
 
 func switchMainBranchCommand(repoDir string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"switch", "-C", "main"},
-	}
+	return gitCommand(repoDir, "switch", "-C", "main")
 }
 
 func initializeMainBranchCommitCommand(repoDir string) execx.Command {
@@ -6888,11 +6825,7 @@ func initializeMainBranchCommitCommand(repoDir string) execx.Command {
 		"--allow-empty",
 	}
 	args = append(args, commitMessageArgs(bootstrapMainCommitMessage)...)
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: args,
-	}
+	return gitCommand(repoDir, args...)
 }
 
 func shouldCreateWorkBranch(baseBranch string) bool {
@@ -6936,19 +6869,11 @@ func cloneFallbackBranchName(branch string) string {
 }
 
 func branchCommand(repoDir, branch string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"switch", "-c", branch},
-	}
+	return gitCommand(repoDir, "switch", "-c", branch)
 }
 
 func branchMoveCommand(repoDir, branch string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"branch", "-m", branch},
-	}
+	return gitCommand(repoDir, "branch", "-m", branch)
 }
 
 func agentCommandWithOptions(
@@ -7121,11 +7046,11 @@ func promptImageExtension(mediaType string) string {
 }
 
 func statusCommand(repoDir string) execx.Command {
-	return execx.Command{Dir: repoDir, Name: "git", Args: []string{"status", "--porcelain", "--branch"}}
+	return gitCommand(repoDir, "status", "--porcelain", "--branch")
 }
 
 func reviewFixDiffCommand(repoDir, beforeHead string) execx.Command {
-	return execx.Command{Dir: repoDir, Name: "git", Args: []string{"diff", "--binary", strings.TrimSpace(beforeHead)}}
+	return gitCommand(repoDir, "diff", "--binary", strings.TrimSpace(beforeHead))
 }
 
 func localBranchFromStatus(stdout string) string {
@@ -7175,7 +7100,7 @@ func hasAheadCommitsInStatus(stdout string) bool {
 }
 
 func addCommand(repoDir string) execx.Command {
-	return execx.Command{Dir: repoDir, Name: "git", Args: []string{"add", "-A"}}
+	return gitCommand(repoDir, "add", "-A")
 }
 
 func addPRCommentScreenshotsCommand(repoDir string, files []string) execx.Command {
@@ -7185,12 +7110,12 @@ func addPRCommentScreenshotsCommand(repoDir string, files []string) execx.Comman
 	} else {
 		args = append(args, files...)
 	}
-	return execx.Command{Dir: repoDir, Name: "git", Args: args}
+	return gitCommand(repoDir, args...)
 }
 
 func commitCommand(repoDir, msg string) execx.Command {
 	args := append([]string{"commit"}, commitMessageArgs(msg)...)
-	return execx.Command{Dir: repoDir, Name: "git", Args: args}
+	return gitCommand(repoDir, args...)
 }
 
 func commitMessageArgs(msg string) []string {
@@ -7207,7 +7132,7 @@ func pushCommand(repoDir, branch string) execx.Command {
 
 func pushToRemoteCommand(repoDir, remote, branch string) execx.Command {
 	remote = normalizeGitRemoteName(remote)
-	return execx.Command{Dir: repoDir, Name: "git", Args: []string{"push", "-u", remote, branch}}
+	return gitCommand(repoDir, "push", "-u", remote, branch)
 }
 
 func pushDryRunCommand(repoDir, branch string) execx.Command {
@@ -7216,11 +7141,7 @@ func pushDryRunCommand(repoDir, branch string) execx.Command {
 
 func pushDryRunToRemoteCommand(repoDir, remote, branch string) execx.Command {
 	remote = normalizeGitRemoteName(remote)
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"push", "--dry-run", remote, fmt.Sprintf("HEAD:refs/heads/%s", normalizeBranchRef(branch))},
-	}
+	return gitCommand(repoDir, "push", "--dry-run", remote, fmt.Sprintf("HEAD:refs/heads/%s", normalizeBranchRef(branch)))
 }
 
 func commitsAheadOfBaseCommand(repoDir, baseBranch string) execx.Command {
@@ -7228,11 +7149,7 @@ func commitsAheadOfBaseCommand(repoDir, baseBranch string) execx.Command {
 	if baseRef == "" {
 		baseRef = "HEAD"
 	}
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"rev-list", "--count", fmt.Sprintf("%s..HEAD", baseRef)},
-	}
+	return gitCommand(repoDir, "rev-list", "--count", fmt.Sprintf("%s..HEAD", baseRef))
 }
 
 func remoteBaseComparisonRef(baseBranch string) string {
@@ -7251,33 +7168,25 @@ func fetchBranchCommand(repoDir, branch string) execx.Command {
 
 func fetchBranchFromRemoteCommand(repoDir, remote, branch string) execx.Command {
 	remote = normalizeGitRemoteName(remote)
-	return execx.Command{Dir: repoDir, Name: "git", Args: []string{"fetch", remote, branch}}
+	return gitCommand(repoDir, "fetch", remote, branch)
 }
 
 func mergeFetchedBranchCommand(repoDir string) execx.Command {
-	return execx.Command{Dir: repoDir, Name: "git", Args: []string{"merge", "--no-edit", "FETCH_HEAD"}}
+	return gitCommand(repoDir, "merge", "--no-edit", "FETCH_HEAD")
 }
 
 func mergeAbortCommand(repoDir string) execx.Command {
-	return execx.Command{Dir: repoDir, Name: "git", Args: []string{"merge", "--abort"}}
+	return gitCommand(repoDir, "merge", "--abort")
 }
 
 func gitRemoteAddCommand(repoDir, remote, remoteURL string) execx.Command {
 	remote = normalizeGitRemoteName(remote)
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"remote", "add", remote, remoteURL},
-	}
+	return gitCommand(repoDir, "remote", "add", remote, remoteURL)
 }
 
 func gitRemoteSetURLCommand(repoDir, remote, remoteURL string) execx.Command {
 	remote = normalizeGitRemoteName(remote)
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"remote", "set-url", remote, remoteURL},
-	}
+	return gitCommand(repoDir, "remote", "set-url", remote, remoteURL)
 }
 
 func normalizeGitRemoteName(remote string) string {
@@ -7449,11 +7358,7 @@ func escapePathSegments(path string) string {
 }
 
 func prCommentCommand(repoDir, prURL, body string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: []string{"pr", "comment", prURL, "--body", body},
-	}
+	return ghCommand(repoDir, "pr", "comment", prURL, "--body", body)
 }
 
 func prCreateCommand(repoDir string, cfg config.Config, branch string) execx.Command {
@@ -7482,7 +7387,7 @@ func prCreateWithOptionsCommand(repoDir string, cfg config.Config, baseBranch, h
 		args = append(args, "--label", label)
 	}
 	args = appendPRReviewers(args, cfg.Reviewers)
-	return execx.Command{Dir: repoDir, Name: "gh", Args: args}
+	return ghCommand(repoDir, args...)
 }
 
 func prCreateWithoutBaseCommand(repoDir string, cfg config.Config, branch string) execx.Command {
@@ -7510,7 +7415,7 @@ func prCreateWithoutBaseWithOptionsCommand(repoDir string, cfg config.Config, he
 		args = append(args, "--label", label)
 	}
 	args = appendPRReviewers(args, cfg.Reviewers)
-	return execx.Command{Dir: repoDir, Name: "gh", Args: args}
+	return ghCommand(repoDir, args...)
 }
 
 func remoteBranchExistsOnOriginCommand(repoDir, branch string) execx.Command {
@@ -7519,11 +7424,7 @@ func remoteBranchExistsOnOriginCommand(repoDir, branch string) execx.Command {
 
 func remoteBranchExistsOnRemoteCommand(repoDir, remote, branch string) execx.Command {
 	remote = normalizeGitRemoteName(remote)
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"ls-remote", "--heads", remote, normalizeBranchRef(branch)},
-	}
+	return gitCommand(repoDir, "ls-remote", "--heads", remote, normalizeBranchRef(branch))
 }
 
 func prLookupByHeadCommand(repoDir, branch string) execx.Command {
@@ -7535,11 +7436,7 @@ func prLookupByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Command 
 	if strings.TrimSpace(repo) != "" {
 		args = append(args, "--repo", strings.TrimSpace(repo))
 	}
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: args,
-	}
+	return ghCommand(repoDir, args...)
 }
 
 func prLookupAnyByHeadCommand(repoDir, branch string) execx.Command {
@@ -7551,11 +7448,7 @@ func prLookupAnyByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Comma
 	if strings.TrimSpace(repo) != "" {
 		args = append(args, "--repo", strings.TrimSpace(repo))
 	}
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: args,
-	}
+	return ghCommand(repoDir, args...)
 }
 
 func prStateViewCommand(repoDir, prURL string) execx.Command {
@@ -7564,59 +7457,35 @@ func prStateViewCommand(repoDir, prURL string) execx.Command {
 	if repo := githubutil.PullRequestRepository(prURL); repo != "" {
 		args = append(args, "--repo", repo)
 	}
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: args,
-	}
+	return ghCommand(repoDir, args...)
 }
 
 func ghViewerLoginCommand(repoDir string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: []string{"api", "user"},
-	}
+	return ghCommand(repoDir, "api", "user")
 }
 
 func ghRepoViewVisibilityCommand(repoDir, repo string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: []string{"repo", "view", strings.TrimSpace(repo), "--json", "isPrivate,nameWithOwner"},
-	}
+	return ghCommand(repoDir, "repo", "view", strings.TrimSpace(repo), "--json", "isPrivate,nameWithOwner")
 }
 
 func ghRepoForkCommand(repoDir, repo string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: []string{"repo", "fork", strings.TrimSpace(repo)},
-	}
+	return ghCommand(repoDir, "repo", "fork", strings.TrimSpace(repo))
 }
 
 func prChecksCommand(repoDir, prURL string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: []string{
-			"pr", "checks", githubutil.PullRequestSelector(prURL),
-			"--watch",
-			"--interval", fmt.Sprintf("%d", prChecksWatchIntervalSeconds),
-		},
-	}
+	return ghCommand(repoDir,
+		"pr", "checks", githubutil.PullRequestSelector(prURL),
+		"--watch",
+		"--interval", fmt.Sprintf("%d", prChecksWatchIntervalSeconds),
+	)
 }
 
 func prChecksAnyCommand(repoDir, prURL string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: []string{
-			"pr", "checks", githubutil.PullRequestSelector(prURL),
-			"--watch",
-			"--interval", fmt.Sprintf("%d", prChecksWatchIntervalSeconds),
-		},
-	}
+	return ghCommand(repoDir,
+		"pr", "checks", githubutil.PullRequestSelector(prURL),
+		"--watch",
+		"--interval", fmt.Sprintf("%d", prChecksWatchIntervalSeconds),
+	)
 }
 
 func prChecksJSONCommand(repoDir, prURL string, requiredOnly bool) execx.Command {
@@ -7627,11 +7496,7 @@ func prChecksJSONCommand(repoDir, prURL string, requiredOnly bool) execx.Command
 	if requiredOnly {
 		args = append(args, "--required")
 	}
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: args,
-	}
+	return ghCommand(repoDir, args...)
 }
 
 func prChecksTextCommand(repoDir, prURL string, requiredOnly bool) execx.Command {
@@ -7639,38 +7504,26 @@ func prChecksTextCommand(repoDir, prURL string, requiredOnly bool) execx.Command
 	if requiredOnly {
 		args = append(args, "--required")
 	}
-	return execx.Command{Dir: repoDir, Name: "gh", Args: args}
+	return ghCommand(repoDir, args...)
 }
 
 func headCommitSHACommand(repoDir string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "git",
-		Args: []string{"rev-parse", "HEAD"},
-	}
+	return gitCommand(repoDir, "rev-parse", "HEAD")
 }
 
 func workflowDispatchCommand(repoDir, branch string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: []string{"workflow", "run", defaultCIWorkflowPath, "--ref", branch},
-	}
+	return ghCommand(repoDir, "workflow", "run", defaultCIWorkflowPath, "--ref", branch)
 }
 
 func workflowDispatchRunsCommand(repoDir, branch string) execx.Command {
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: []string{
-			"run", "list",
-			"--workflow", defaultCIWorkflowPath,
-			"--branch", branch,
-			"--event", "workflow_dispatch",
-			"--json", "status,conclusion,workflowName,displayTitle,headSha",
-			"--limit", "1",
-		},
-	}
+	return ghCommand(repoDir,
+		"run", "list",
+		"--workflow", defaultCIWorkflowPath,
+		"--branch", branch,
+		"--event", "workflow_dispatch",
+		"--json", "status,conclusion,workflowName,displayTitle,headSha",
+		"--limit", "1",
+	)
 }
 
 func requiredStatusChecksCommand(repoDir, repoNameWithOwner, branch string) execx.Command {
@@ -7680,11 +7533,7 @@ func requiredStatusChecksCommand(repoDir, repoNameWithOwner, branch string) exec
 		strings.Trim(strings.TrimSpace(repoNameWithOwner), "/"),
 		url.PathEscape(branch),
 	)
-	return execx.Command{
-		Dir:  repoDir,
-		Name: "gh",
-		Args: []string{"api", route},
-	}
+	return ghCommand(repoDir, "api", route)
 }
 
 func withCompletionGatePrompt(prompt string) string {
