@@ -327,17 +327,32 @@ func normalizeHarness(harness string) string {
 }
 
 func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command, error) {
-	args := []string{"exec", "--sandbox", "workspace-write", "-c", `approval_policy="never"`}
-	args = append(args, workspaceSandboxArgs(opts)...)
+	// Codex has no per-tool denylist like Claude's --disallowedTools. When the
+	// caller asks for a read-only pass (for example a post-task review that
+	// must not touch the repository), the only enforceable equivalent is to
+	// drop the whole invocation into Codex's read-only sandbox instead of
+	// workspace-write, so the CLI cannot write anywhere regardless of which
+	// tool it tries to use.
+	readOnly := len(nonEmptyStrings(opts.DisallowedTools)) > 0
+	sandboxMode := "workspace-write"
+	if readOnly {
+		sandboxMode = "read-only"
+	}
+	args := []string{"exec", "--sandbox", sandboxMode, "-c", `approval_policy="never"`}
+	if !readOnly {
+		args = append(args, workspaceSandboxArgs(opts)...)
+	}
 	if opts.SkipGitRepoCheck {
 		args = append(args, "--skip-git-repo-check")
 	}
-	for _, dir := range opts.WritableDirs {
-		dir = strings.TrimSpace(dir)
-		if dir == "" {
-			continue
+	if !readOnly {
+		for _, dir := range opts.WritableDirs {
+			dir = strings.TrimSpace(dir)
+			if dir == "" {
+				continue
+			}
+			args = append(args, "--add-dir", dir)
 		}
-		args = append(args, "--add-dir", dir)
 	}
 	for _, imagePath := range opts.ImagePaths {
 		imagePath = strings.TrimSpace(imagePath)

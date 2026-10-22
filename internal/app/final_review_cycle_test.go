@@ -170,6 +170,65 @@ func TestRunFinalReviewCycleDisallowsMutatingToolsOnClaude(t *testing.T) {
 	}
 }
 
+func TestRunFinalReviewCycleUsesReadOnlySandboxOnCodex(t *testing.T) {
+	runner := &cleanReviewCycleRunner{t: t}
+	h := New(runner)
+	h.FinalReviewPasses = 1
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:        "https://github.com/acme/repo.git",
+		Dir:        repoDir,
+		RelDir:     "repo",
+		Branch:     "feature",
+		BaseBranch: "main",
+		PRURL:      "https://github.com/acme/repo/pull/7",
+		Changed:    true,
+	}
+
+	exitCode, stage, err := h.runFinalReviewCycle(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior."},
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err != nil || exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
+	}
+	if len(runner.argv) != 1 {
+		t.Fatalf("captured invocations = %d, want 1", len(runner.argv))
+	}
+	args := runner.argv[0]
+	idx := -1
+	for i, arg := range args {
+		if arg == "--sandbox" {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 || idx+1 >= len(args) {
+		t.Fatalf("args %v did not include --sandbox", args)
+	}
+	if got := args[idx+1]; got != "read-only" {
+		t.Fatalf("sandbox mode = %q, want %q (review pass must not retain workspace-write access)", got, "read-only")
+	}
+	for _, arg := range args {
+		if arg == "--add-dir" || strings.Contains(arg, "sandbox_workspace_write") {
+			t.Fatalf("args %v unexpectedly retained workspace-write configuration during a read-only review pass", args)
+		}
+	}
+}
+
 type finalFindingReviewCycleRunner struct {
 	t            *testing.T
 	findingsPass int
