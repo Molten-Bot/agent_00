@@ -85,6 +85,7 @@ type sitePageData struct {
 
 // Server provides an HTTP UI for local task monitoring.
 type Server struct {
+	CommitSigning           *localruntime.SigningSettings
 	Addr                    string
 	Broker                  *Broker
 	AutomaticMode           bool
@@ -270,6 +271,8 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/github/profile", s.handleGitHubProfile)
 	mux.HandleFunc("/api/github/repos", s.handleGitHubRepos)
 	mux.HandleFunc("/api/review-settings", s.handleReviewSettings)
+	mux.HandleFunc("/api/commit-signing", s.handleCommitSigning)
+	mux.HandleFunc("/api/commit-signing/verify", s.handleCommitSigning)
 	mux.HandleFunc("/api/agent-auth", s.handleAgentAuthStatus)
 	mux.HandleFunc("/api/agent-auth/start-device", s.handleAgentAuthStart)
 	mux.HandleFunc("/api/agent-auth/verify", s.handleAgentAuthVerify)

@@ -23,6 +23,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/githubreview"
+	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/multiplex"
@@ -49,6 +50,7 @@ const bootDiagnosticTimeout = 10 * time.Second
 var runSingleHarness = func(ctx context.Context, cfg config.Config, logf func(string, ...any)) app.Result {
 	h := app.New(execx.OSRunner{})
 	h.Logf = logf
+	h.LoadSigning = signingSettings(localruntime.InitConfig{}, h.Runner).Snapshot
 	return h.Run(ctx, cfg)
 }
 
@@ -197,6 +199,7 @@ func runMultiplex(args []string) int {
 	mx := multiplex.New(execx.OSRunner{})
 	mx.MaxParallel = *parallel
 	mx.Logf = logger.Printf
+	mx.LoadSigning = signingSettings(localruntime.InitConfig{}, execx.OSRunner{}).Snapshot
 
 	result := mx.Run(context.Background(), configPaths)
 	for _, s := range result.Sessions {
@@ -477,7 +480,7 @@ func runServer(args []string) int {
 						return false
 					}
 					return taskHandle.IsStopped()
-				})
+				}, activeCfg)
 				if taskHandle != nil {
 					taskHandle.SetRunning(false)
 				}
@@ -712,6 +715,8 @@ func runServer(args []string) int {
 				uiServer.ConfigureAgentAuth = authGate.Configure
 			}
 		}
+		signing := signingSettings(cfg, runner)
+		uiServer.CommitSigning = &signing
 		uiServer.ReviewSettingsStatus = func(context.Context) (web.ReviewSettingsState, error) {
 			return currentReviewSettingsState(cfg), nil
 		}
@@ -1147,6 +1152,7 @@ func runLocalTask(
 	runCfg config.Config,
 	finalReviewPasses int,
 	wasStopped func() bool,
+	signingConfigs ...localruntime.InitConfig,
 ) localTaskOutcome {
 	logf(
 		"task status=start request_id=%s skill=%s repo=%s repos=%s",
@@ -1158,6 +1164,11 @@ func runLocalTask(
 
 	h := app.New(runner)
 	h.FinalReviewPasses = finalReviewPasses
+	var signingCfg localruntime.InitConfig
+	if len(signingConfigs) > 0 {
+		signingCfg = signingConfigs[0]
+	}
+	h.LoadSigning = signingSettings(signingCfg, runner).Snapshot
 	h.Logf = func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)
 		logf("task request_id=%s %s", requestID, line)
@@ -1257,6 +1268,9 @@ func unexpectedNoChangesFollowUpRunConfig(
 }
 
 func shouldQueueFailureFollowUp(source string, failedResult app.Result) (bool, string) {
+	if errors.Is(failedResult.Err, gitsigning.ErrSetup) {
+		return false, "commit signing requires configuration in Settings"
+	}
 	source = strings.TrimSpace(source)
 	if errors.Is(failedResult.Err, agentruntime.ErrClaudeAuthRequired) {
 		return false, "agent authentication requires user sign-in"
@@ -1277,6 +1291,9 @@ func shouldQueueFailureFollowUp(source string, failedResult app.Result) (bool, s
 }
 
 func shouldQueueFailureRerun(source string, failedResult app.Result) (bool, string) {
+	if errors.Is(failedResult.Err, gitsigning.ErrSetup) {
+		return false, "commit signing requires configuration in Settings"
+	}
 	source = strings.TrimSpace(source)
 	if failedResult.Err == nil {
 		return false, "failed task did not include an error"

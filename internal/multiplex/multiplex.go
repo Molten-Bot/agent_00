@@ -9,6 +9,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 )
 
 type logFn func(string, ...any)
@@ -61,6 +62,7 @@ type runSessionFn func(context.Context, config.Config, logFn) app.Result
 
 // Multiplexer runs many harness sessions concurrently.
 type Multiplexer struct {
+	LoadSigning func(context.Context) (*gitsigning.Snapshot, error)
 	Runner      execx.Runner
 	MaxParallel int
 	Logf        logFn
@@ -91,6 +93,7 @@ func (m Multiplexer) Run(ctx context.Context, configPaths []string) Result {
 		runner := m.Runner
 		m.RunSession = func(ctx context.Context, cfg config.Config, logf logFn) app.Result {
 			h := app.New(runner)
+			h.LoadSigning = m.LoadSigning
 			h.Logf = func(format string, args ...any) {
 				logf(format, args...)
 			}

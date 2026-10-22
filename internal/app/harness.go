@@ -23,6 +23,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
+	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/slug"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
@@ -148,12 +149,15 @@ type agentInvocationLogMetadata struct {
 
 // Harness executes the clone -> codex -> PR workflow.
 type Harness struct {
-	Runner      execx.Runner
-	Workspace   workspace.Manager
-	Now         func() time.Time
-	Logf        logFn
-	TargetDirOK func(string) bool
-	Sleep       func(context.Context, time.Duration) error
+	Signing        *gitsigning.Snapshot
+	LoadSigning    func(context.Context) (*gitsigning.Snapshot, error)
+	signingHistory map[string]map[string]bool
+	Runner         execx.Runner
+	Workspace      workspace.Manager
+	Now            func() time.Time
+	Logf           logFn
+	TargetDirOK    func(string) bool
+	Sleep          func(context.Context, time.Duration) error
 	// AgentStageTimeout bounds each agent execution attempt when positive;
 	// zero or negative disables the timeout.
 	AgentStageTimeout time.Duration
@@ -186,6 +190,16 @@ func New(runner execx.Runner) Harness {
 func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	if h.Runner == nil {
 		return h.fail(ExitUsage, "usage", fmt.Errorf("runner is required"), "")
+	}
+	if h.LoadSigning != nil {
+		var err error
+		h.Signing, err = h.LoadSigning(ctx)
+		if err != nil {
+			return h.fail(ExitConfig, "signing", err, "")
+		}
+	}
+	if h.Signing != nil {
+		h.signingHistory = make(map[string]map[string]bool)
 	}
 	cfg.ApplyDefaults()
 	normalizeFailureFollowUpTargeting(&cfg)
@@ -397,7 +411,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	if env, err := prepareAgentIOEnv(runDir, codexOpts.Env); err != nil {
 		return h.fail(ExitWorkspace, "workspace", err, runDir)
 	} else {
-		codexOpts.Env = env
+		codexOpts.Env = h.Signing.Environment(env)
 	}
 	codexBasePrompt = withBackpressurePrompt(codexBasePrompt, h.collectBackpressureRequirements(repos, cfg.TargetSubdir))
 	codexTargetLabel := codexTargetLabel(cfg.TargetSubdir, len(repos) > 1)
@@ -2972,7 +2986,11 @@ func (h Harness) bootstrapUninitializedMainBranch(ctx context.Context, repo repo
 	if _, err := h.runCommand(ctx, "clone", switchMainBranchCommand(repo.Dir)); err != nil {
 		return err
 	}
-	if _, err := h.runCommand(ctx, "clone", initializeMainBranchCommitCommand(repo.Dir)); err != nil {
+	bootstrapCommit := initializeMainBranchCommitCommand(repo.Dir)
+	if h.Signing != nil {
+		bootstrapCommit.Args = bootstrapCommit.Args[4:]
+	}
+	if _, err := h.runCommand(ctx, "clone", bootstrapCommit); err != nil {
 		return err
 	}
 	if _, err := h.runCommand(ctx, "clone", pushCommand(repo.Dir, "main")); err != nil {
@@ -4494,7 +4512,7 @@ func (h Harness) logf(format string, args ...any) {
 	h.Logf(format, args...)
 }
 
-func (h Harness) runCommand(ctx context.Context, phase string, cmd execx.Command) (execx.Result, error) {
+func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd execx.Command) (execx.Result, error) {
 	onLine := func(stream, line string) {
 		if strings.TrimSpace(line) == "" {
 			return

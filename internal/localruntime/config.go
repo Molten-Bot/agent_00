@@ -9,12 +9,14 @@ import (
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
+	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 )
 
 const defaultInitVersion = "v1"
 
 // InitConfig is the init.json contract for local server mode.
 type InitConfig struct {
+	CommitSigning     gitsigning.Config `json:"commit_signing,omitempty"`
 	Version           string            `json:"version"`
 	LogLevel          string            `json:"log_level,omitempty"`
 	AgentHarness      string            `json:"agent_harness,omitempty"`

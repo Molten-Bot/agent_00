@@ -712,7 +712,7 @@
           <div class="onboarding-modal-header">
             <p class="eyebrow">agent_00</p>
             <h2 id="settings-title">Settings</h2>
-            <p id="settings-message">Configure review automation.</p>
+            <p id="settings-message">Configure reviews and commit signing.</p>
           </div>
         </header>
 
@@ -747,6 +747,32 @@
               <button class="review-settings-merge-option" type="button" role="radio" aria-checked="false" data-review-settings-merge-method="rebase">Rebase</button>
             </div>
           </div>
+          <details class="review-settings-section commit-signing-section" id="commit-signing-section">
+            <summary>Commit signing</summary>
+            <div class="stack commit-signing-fields">
+              <label class="review-settings-toggle"><input id="commit-signing-enabled" type="checkbox"><span>Sign commits for all tasks</span></label>
+              <p>Save a key, register its public key on GitHub, then enable signing. Changes apply to tasks that start after saving.</p>
+              <label for="commit-signing-private-key">SSH private key</label>
+              <textarea id="commit-signing-private-key" class="prompt-text agent-auth-secret-input" rows="4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste a private key to add or replace it"></textarea>
+              <label for="commit-signing-passphrase">Passphrase (if your key is protected)</label>
+              <input id="commit-signing-passphrase" class="prompt-text" type="password" autocomplete="off">
+              <p>The app saves an unlocked copy of the key with restricted file permissions so background tasks can sign unattended. Your passphrase is never saved.</p>
+              <p id="commit-signing-account"></p>
+              <p id="commit-signing-fingerprint"></p>
+              <label for="commit-signing-public-key">Public signing key</label>
+              <textarea id="commit-signing-public-key" class="prompt-text" rows="3" readonly placeholder="Save a key to see its public key"></textarea>
+              <div class="commit-signing-actions">
+                <button id="commit-signing-copy" type="button" class="prompt-action-button" disabled>Copy public key</button>
+                <a href="https://github.com/settings/ssh/new" target="_blank" rel="noopener noreferrer">Add to GitHub as a Signing Key</a>
+              </div>
+              <p id="commit-signing-registration">No signing key configured.</p>
+              <div class="commit-signing-actions">
+                <button id="commit-signing-verify" type="button" class="prompt-action-button" disabled>Check registration</button>
+                <button id="commit-signing-save" type="button" class="prompt-action-button prompt-submit">Save signing settings</button>
+              </div>
+              <p id="commit-signing-status" role="status" aria-live="polite"></p>
+            </div>
+          </details>
           <div class="onboarding-form-actions settings-footer">
             <p id="review-settings-status" class="settings-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
             <div class="settings-actions">
@@ -12456,8 +12482,10 @@
       settingsGate.classList.toggle("hidden", !open);
       settingsGate.setAttribute("aria-hidden", open ? "false" : "true");
       document.body.classList.toggle("onboarding-modal-open", Boolean(open));
+      if (!open) window.dispatchEvent(new Event("commit-signing-close"));
       if (open) {
         void loadReviewSettings();
+        window.dispatchEvent(new Event("commit-signing-open"));
         window.requestAnimationFrame(() => reviewSettingsAutoMerge?.focus());
       }
     }
@@ -12743,5 +12771,6 @@
     startStream();
   </script>
   <script src="/static/library-schedules.js"></script>
+  <script src="/static/commit-signing.js"></script>
 </body>
 </html>

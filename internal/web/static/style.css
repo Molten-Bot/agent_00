@@ -6818,6 +6818,7 @@ body.onboarding-modal-open {
   grid-template-areas:
     "automation review-level"
     "merge-method merge-method"
+    "signing signing"
     "actions actions";
   align-items: stretch;
   gap: 14px 16px;
@@ -7258,6 +7259,7 @@ body.onboarding-modal-open {
       "automation"
       "review-level"
       "merge-method"
+      "signing"
       "actions";
   }
 
@@ -8524,3 +8526,16 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 .library-schedule-task-button.is-scheduled { color: var(--accent); border-color: currentColor; }
 .library-schedule-copy.is-error { color: #ef4444; }
 #library-schedule-status:empty { display: none; }
+
+.commit-signing-section { grid-area: signing; display: block; }
+.commit-signing-section summary {
+  font-weight: 600;
+}
+.commit-signing-fields { padding-top: 12px; }
+.commit-signing-fields p { margin: 0; font-size: 0.85rem; overflow-wrap: anywhere; }
+.commit-signing-fields textarea, .commit-signing-fields input[type="password"] { width: 100%; box-sizing: border-box; }
+.commit-signing-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.commit-signing-actions a { font-size: 0.85rem; }
+.commit-signing-fields input[type="password"] { min-height: 42px; height: 42px; padding: 10px 12px; }
+.commit-signing-fields textarea { min-height: 88px; }
+.commit-signing-fields p { font-weight: 400; line-height: 1.45; }

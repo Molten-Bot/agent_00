@@ -153,6 +153,41 @@ For jobs that fetch source sites or dependencies, the operator can enable
 `config.toml`; filesystem enforcement remains enabled. The image installs both
 Chromium and its headless shell so default Playwright launches work.
 
+### Optional commit signing
+
+Open **Settings → Commit signing** to paste an SSH private key and its passphrase
+(if protected), then choose **Save signing settings**. Ed25519, RSA, and ECDSA keys
+are supported. The app validates the key and tests local signing. Copy the public
+key shown in Settings into the same GitHub account under **SSH and GPG keys → New
+SSH key**, choosing **Signing Key**, then use **Check registration**. Enable **Sign
+commits for all tasks** and save again. GitHub authentication still uses the
+existing token; the signing key is a separate credential.
+
+Signing is off by default. When enabled, it applies to tasks that start after
+saving, including scheduled tasks, review fixes, agent-created commits, merges,
+and empty-repository initialization. The signing identity uses the authenticated
+GitHub account and its ID-based noreply email. Setup errors stop the task, and
+unsigned or invalid newly created commits stop publication. Existing commits are
+not rewritten; this setting does not repair an existing PR's unsigned history or
+resolve its review conversations. Confirm GitHub's **Verified** badge on a new PR.
+
+The app saves an **unlocked private key** for unattended signing, even when the
+imported key has a passphrase. The passphrase is never saved. Keys live in a
+`signing/` directory beside the runtime `config.json`, with directory permissions
+`0700` and key permissions `0600`; the JSON stores only metadata and a key reference.
+The public key and fingerprint are visible in Settings; the private key is never
+returned to the browser. Disabling retains the key. Replacing it retains previous
+key files so running tasks can finish with their original signing configuration.
+Treat backups of this configuration directory as credentials.
+
+Native installations need Git 2.34+ and `ssh-keygen` on PATH. The Docker image
+already includes the required tools; keep the whole configuration directory on
+its persistent volume so `config.json` and `signing/` survive recreation. The
+`run` and `multiplex` CLI modes read the same signing settings from
+`HARNESS_RUNTIME_CONFIG_PATH` (default `./.agent00/config.json`). No signing secrets
+belong in task JSON. Git settings are applied to subprocesses without changing
+the host's global Git configuration.
+
 ### Persistent Codex authentication
 
 Sign in once through the UI. Login and every Codex task use the same persistent
