@@ -3,14 +3,18 @@ package web
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHandleSpeechStatusReportsReachableSidecar(t *testing.T) {
@@ -425,4 +429,225 @@ func listenFakeSpeechServer(t *testing.T, handle func(net.Conn)) net.Listener {
 		handle(conn)
 	}()
 	return listener
+}
+
+func TestSpeechTranscribeErrorUnwrap(t *testing.T) {
+	t.Parallel()
+
+	var nilErr *speechTranscribeError
+	if got := nilErr.Unwrap(); got != nil {
+		t.Fatalf("(*speechTranscribeError)(nil).Unwrap() = %v, want nil", got)
+	}
+	if got := nilErr.Error(); got != "" {
+		t.Fatalf("(*speechTranscribeError)(nil).Error() = %q, want empty", got)
+	}
+
+	wrapped := errors.New("boom")
+	withCause := &speechTranscribeError{Code: speechCodeWyomingError, Err: wrapped}
+	if got := withCause.Unwrap(); got != wrapped {
+		t.Fatalf("Unwrap() = %v, want %v", got, wrapped)
+	}
+	if got := withCause.Error(); got != "boom" {
+		t.Fatalf("Error() = %q, want %q", got, "boom")
+	}
+	if !errors.Is(withCause, wrapped) {
+		t.Fatal("errors.Is(withCause, wrapped) = false, want true (Unwrap must expose the cause)")
+	}
+
+	noErr := &speechTranscribeError{Code: speechCodeUnavailable}
+	if got := noErr.Error(); got != "" {
+		t.Fatalf("Error() with nil cause = %q, want empty", got)
+	}
+}
+
+func TestEnvDuration(t *testing.T) {
+	fallback := 42 * time.Second
+
+	tests := []struct {
+		name  string
+		value string
+		unset bool
+		want  time.Duration
+	}{
+		{name: "unset env uses fallback", unset: true, want: fallback},
+		{name: "blank env uses fallback", value: "   ", want: fallback},
+		{name: "non numeric env uses fallback", value: "soon", want: fallback},
+		{name: "zero seconds uses fallback", value: "0", want: fallback},
+		{name: "negative seconds uses fallback", value: "-5", want: fallback},
+		{name: "positive seconds overrides fallback", value: "7", want: 7 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const key = "WEB_TEST_ENV_DURATION"
+			if tt.unset {
+				t.Setenv(key, "")
+				os.Unsetenv(key)
+			} else {
+				t.Setenv(key, tt.value)
+			}
+			if got := envDuration(key, fallback); got != tt.want {
+				t.Fatalf("envDuration(%q) = %s, want %s", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSpeechErrorCode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "nil error falls back to wyoming read code", err: nil, want: speechCodeWyomingRead},
+		{
+			name: "structured speech error preserves its code",
+			err:  &speechTranscribeError{Code: speechCodeWyomingWrite, Err: errors.New("write failed")},
+			want: speechCodeWyomingWrite,
+		},
+		{
+			name: "structured speech error with blank code falls back",
+			err:  &speechTranscribeError{Code: "  ", Err: errors.New("write failed")},
+			want: speechCodeWyomingRead,
+		},
+		{
+			name: "context deadline exceeded maps to timeout",
+			err:  context.DeadlineExceeded,
+			want: speechCodeTimeout,
+		},
+		{
+			name: "generic error falls back to wyoming read code",
+			err:  errors.New("some unexpected failure"),
+			want: speechCodeWyomingRead,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := speechErrorCode(tt.err); got != tt.want {
+				t.Fatalf("speechErrorCode(%v) = %q, want %q", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHandleSpeechTranscribeMethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	req := httptest.NewRequest(http.MethodGet, "/api/speech/transcribe", nil)
+	resp := httptest.NewRecorder()
+	srv.handleSpeechTranscribe(resp, req)
+
+	if resp.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /api/speech/transcribe status = %d, want 405", resp.Code)
+	}
+	if got := resp.Header().Get("Allow"); got != http.MethodPost {
+		t.Fatalf("Allow header = %q, want %q", got, http.MethodPost)
+	}
+}
+
+func TestHandleSpeechTranscribeDisabledReturnsServiceUnavailable(t *testing.T) {
+	t.Setenv("WHISPER_SPEECH_DISABLED", "true")
+
+	srv := NewServer("", NewBroker())
+	req := httptest.NewRequest(http.MethodPost, "/api/speech/transcribe", bytes.NewReader([]byte{1, 2, 3, 4}))
+	resp := httptest.NewRecorder()
+	srv.handleSpeechTranscribe(resp, req)
+
+	if resp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("disabled speech status = %d, want 503", resp.Code)
+	}
+
+	var body struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode disabled response: %v", err)
+	}
+	if body.OK || body.Code != speechCodeDisabled {
+		t.Fatalf("disabled response = %#v", body)
+	}
+}
+
+func TestHandleSpeechTranscribeEmptySampleReturnsBadRequest(t *testing.T) {
+	srv := NewServer("", NewBroker())
+	req := httptest.NewRequest(http.MethodPost, "/api/speech/transcribe", bytes.NewReader(nil))
+	resp := httptest.NewRecorder()
+	srv.handleSpeechTranscribe(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("empty sample status = %d, want 400, body=%s", resp.Code, resp.Body.String())
+	}
+
+	var body struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode empty sample response: %v", err)
+	}
+	if body.OK || body.Code != speechCodeSampleEmpty {
+		t.Fatalf("empty sample response = %#v", body)
+	}
+}
+
+func TestHandleSpeechTranscribeOverLimitSampleReturnsRequestEntityTooLarge(t *testing.T) {
+	srv := NewServer("", NewBroker())
+	cfg := loadSpeechConfig()
+
+	// One byte past the configured limit triggers the MaxBytesReader error path.
+	oversized := bytes.Repeat([]byte{0x01}, int(cfg.MaxBytes)+2)
+	req := httptest.NewRequest(http.MethodPost, "/api/speech/transcribe", bytes.NewReader(oversized))
+	resp := httptest.NewRecorder()
+	srv.handleSpeechTranscribe(resp, req)
+
+	if resp.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized sample status = %d, want 413, body=%s", resp.Code, resp.Body.String())
+	}
+
+	var body struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode oversized sample response: %v", err)
+	}
+	if body.OK || body.Code != speechCodeSampleTooLarge {
+		t.Fatalf("oversized sample response = %#v", body)
+	}
+}
+
+func TestHandleSpeechTranscribeOverLimitAfterReadReturnsRequestEntityTooLarge(t *testing.T) {
+	srv := NewServer("", NewBroker())
+	cfg := loadSpeechConfig()
+
+	// Exactly MaxBytes+1 is accepted by MaxBytesReader but still exceeds the
+	// configured sample size once read, hitting the post-read size check.
+	oversized := bytes.Repeat([]byte{0x01}, int(cfg.MaxBytes)+1)
+	req := httptest.NewRequest(http.MethodPost, "/api/speech/transcribe", bytes.NewReader(oversized))
+	resp := httptest.NewRecorder()
+	srv.handleSpeechTranscribe(resp, req)
+
+	if resp.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-limit-after-read sample status = %d, want 413, body=%s", resp.Code, resp.Body.String())
+	}
+
+	var body struct {
+		OK    bool             `json:"ok"`
+		Code  string           `json:"code"`
+		Audio speechAudioStats `json:"audio"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode over-limit-after-read response: %v", err)
+	}
+	if body.OK || body.Code != speechCodeSampleTooLarge {
+		t.Fatalf("over-limit-after-read response = %#v", body)
+	}
+	if body.Audio.Bytes != cfg.MaxBytes+1 {
+		t.Fatalf("audio bytes = %d, want %d", body.Audio.Bytes, cfg.MaxBytes+1)
+	}
 }

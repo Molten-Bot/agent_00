@@ -1,13 +1,16 @@
 package web
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 type nonFlushingResponseWriter struct {
@@ -195,5 +198,250 @@ func TestHandleAgentAuthConfigureDecodeFailure(t *testing.T) {
 	}
 	if ok, _ := body["ok"].(bool); ok {
 		t.Fatalf("ok = true, want false (%v)", body)
+	}
+}
+
+func TestHandleChatAndHandleGameReportNotFoundForOtherPaths(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+
+	rec := httptest.NewRecorder()
+	srv.handleChat(rec, httptest.NewRequest(http.MethodGet, "/chat/extra", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("handleChat(other path) status = %d, want 404", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.handleGame(rec, httptest.NewRequest(http.MethodGet, "/game/extra", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("handleGame(other path) status = %d, want 404", rec.Code)
+	}
+}
+
+func TestInjectBottomDockComponentSkipsDataWithoutPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	data := []byte("<html><body>no dock placeholder here</body></html>")
+	got := srv.injectBottomDockComponent(context.Background(), data)
+	if string(got) != string(data) {
+		t.Fatalf("injectBottomDockComponent(no placeholder) = %q, want unchanged %q", got, data)
+	}
+}
+
+func TestHandleGitHubReposMethodAndErrorAndRefreshPaths(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	handler := srv.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/github/repos", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/github/repos status = %d, want 405", resp.Code)
+	}
+
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return nil, errors.New("github unavailable")
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/github/repos", nil)
+	resp = httptest.NewRecorder()
+	srv.handleGitHubRepos(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("GET /api/github/repos (error) status = %d, want 200", resp.Code)
+	}
+	body := decodeJSONMapFromCoverageTest(t, resp.Body.Bytes())
+	if ok, _ := body["ok"].(bool); ok {
+		t.Fatalf("github repos error response ok = %#v, want false", body["ok"])
+	}
+	if got, _ := body["error"].(string); !strings.Contains(got, "github unavailable") {
+		t.Fatalf("github repos error = %q, want github unavailable", got)
+	}
+
+	var calls int
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		calls++
+		return []GitHubRepo{{Name: "repo", FullName: "acme/repo"}}, nil
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/github/repos?refresh=1", nil)
+	resp = httptest.NewRecorder()
+	srv.handleGitHubRepos(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("GET /api/github/repos?refresh=1 status = %d, want 200", resp.Code)
+	}
+	if calls != 1 {
+		t.Fatalf("ResolveGitHubRepos calls = %d, want 1 (refresh must still resolve)", calls)
+	}
+	body = decodeJSONMapFromCoverageTest(t, resp.Body.Bytes())
+	if ok, _ := body["ok"].(bool); !ok {
+		t.Fatalf("github repos refresh response ok = %#v, want true", body["ok"])
+	}
+}
+
+func decodeJSONMapFromCoverageTest(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode json body error = %v (body=%q)", err, raw)
+	}
+	return decoded
+}
+
+func TestHandleReviewSettingsAdditionalBranches(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	handler := srv.Handler()
+
+	// Method not allowed.
+	req := httptest.NewRequest(http.MethodDelete, "/api/review-settings", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("DELETE /api/review-settings status = %d, want 405", resp.Code)
+	}
+
+	// GET with no status callback falls back to the default state.
+	req = httptest.NewRequest(http.MethodGet, "/api/review-settings", nil)
+	resp = httptest.NewRecorder()
+	srv.handleReviewSettings(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("GET /api/review-settings (nil status) status = %d, want 200", resp.Code)
+	}
+	var getBody struct {
+		OK       bool                `json:"ok"`
+		Settings ReviewSettingsState `json:"settings"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &getBody); err != nil {
+		t.Fatalf("decode default settings: %v", err)
+	}
+	if !getBody.OK || getBody.Settings.MergeMethod != "squash" || getBody.Settings.ReviewLevel != "off" {
+		t.Fatalf("default settings = %#v", getBody)
+	}
+
+	// GET with a failing status callback reports an error but still includes settings.
+	srv.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) {
+		return ReviewSettingsState{}, errors.New("load failed")
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/review-settings", nil)
+	resp = httptest.NewRecorder()
+	srv.handleReviewSettings(resp, req)
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("GET /api/review-settings (status error) status = %d, want 500", resp.Code)
+	}
+
+	// POST with no configure callback.
+	srv.ReviewSettingsStatus = nil
+	req = httptest.NewRequest(http.MethodPost, "/api/review-settings", bytes.NewBufferString(`{}`))
+	resp = httptest.NewRecorder()
+	srv.handleReviewSettings(resp, req)
+	if resp.Code != http.StatusNotImplemented {
+		t.Fatalf("POST /api/review-settings (nil configure) status = %d, want 501", resp.Code)
+	}
+
+	// POST with malformed JSON body.
+	srv.ConfigureReviewSettings = func(_ context.Context, req ReviewSettingsRequest) (ReviewSettingsState, error) {
+		return ReviewSettingsState{AutoMerge: req.AutoMerge, MergeMethod: req.MergeMethod, ReviewLevel: req.ReviewLevel}, nil
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/review-settings", bytes.NewBufferString(`{"auto_merge":`))
+	resp = httptest.NewRecorder()
+	srv.handleReviewSettings(resp, req)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/review-settings (malformed json) status = %d, want 400", resp.Code)
+	}
+
+	// POST where the configure callback fails.
+	srv.ConfigureReviewSettings = func(context.Context, ReviewSettingsRequest) (ReviewSettingsState, error) {
+		return ReviewSettingsState{}, errors.New("configure failed")
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/review-settings", bytes.NewBufferString(`{"auto_merge":true}`))
+	resp = httptest.NewRecorder()
+	srv.handleReviewSettings(resp, req)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/review-settings (configure error) status = %d, want 400", resp.Code)
+	}
+	var postBody struct {
+		OK       bool                `json:"ok"`
+		Error    string              `json:"error"`
+		Settings ReviewSettingsState `json:"settings"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &postBody); err != nil {
+		t.Fatalf("decode configure error response: %v", err)
+	}
+	if postBody.OK || postBody.Error != "configure failed" {
+		t.Fatalf("configure error response = %#v", postBody)
+	}
+	if postBody.Settings.MergeMethod != "squash" || postBody.Settings.ReviewLevel != "off" {
+		t.Fatalf("configure error response fills in defaults = %#v", postBody.Settings)
+	}
+}
+
+func TestHandleStreamCoalescesUpdatesAndStopsOnContextCancel(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	srv := NewServer("", b)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/stream", nil)
+	if err != nil {
+		t.Fatalf("build stream request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/stream: %v", err)
+	}
+	defer resp.Body.Close()
+
+	reader := bufio.NewReader(resp.Body)
+	readDataLine := func() string {
+		t.Helper()
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("read stream line: %v", err)
+			}
+			if strings.HasPrefix(line, "data: ") {
+				return line
+			}
+		}
+	}
+
+	// Initial snapshot.
+	_ = readDataLine()
+
+	// Ingest a couple of updates in quick succession; the handler must either
+	// coalesce them behind a short timer or flush immediately, exercising the
+	// "case <-updates" branch (and, after enough wall time, the scheduled
+	// timer-fired branch) without relying on the 15s keepalive ticker.
+	b.IngestLog("dispatch status=start request_id=req-stream-a")
+	b.IngestLog("dispatch status=start request_id=req-stream-b")
+	_ = readDataLine()
+
+	time.Sleep(150 * time.Millisecond)
+	b.IngestLog("dispatch status=completed request_id=req-stream-a workspace=/tmp/run branch=agent00-a")
+	_ = readDataLine()
+
+	cancel()
+	readErr := make(chan error, 1)
+	go func() {
+		for {
+			if _, err := reader.ReadString('\n'); err != nil {
+				readErr <- err
+				return
+			}
+		}
+	}()
+	select {
+	case err := <-readErr:
+		if err == nil {
+			t.Fatal("expected stream read to fail after client context cancellation")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for stream to close after client context cancellation")
 	}
 }

@@ -5270,12 +5270,13 @@ func agentOutputHasConcreteBehaviorEvidence(text string) bool {
 }
 
 // agentNoChangeClaimPattern generalizes recurring no-op phrasings (e.g. "no
-// code change needed", "diff: none", "tree already clean", "zero file diff")
-// that the fixed noOpMarkers list below does not literally contain, so a
-// well-evidenced no-op conclusion phrased in a new way is not misclassified
-// as a failed task requiring an unnecessary follow-up run.
+// code change needed", "no code change made", "diff: none", "tree already
+// clean", "zero file diff") that the fixed noOpMarkers list below does not
+// literally contain, so a well-evidenced no-op conclusion phrased in a new
+// way is not misclassified as a failed task requiring an unnecessary
+// follow-up run.
 var agentNoChangeClaimPattern = regexp.MustCompile(
-	`no\s+(?:[a-z][a-z/_.-]{0,30}\s+)?changes?\s+(?:is\s+|are\s+|were\s+)?(?:needed|required)` +
+	`no\s+(?:[a-z][a-z/_.-]{0,30}\s+)?changes?\s+(?:is\s+|are\s+|were\s+)?(?:needed|required|made|necessary|warranted)` +
 		`|\bdiff\s*:?\s*(?:is\s+)?(?:none|empty|clean)\b` +
 		`|\b(?:tree|repo|repository|working tree)\s+(?:is\s+|was\s+)?already\s+clean\b` +
 		`|\bzero\s+\S+\s+diff\b`,

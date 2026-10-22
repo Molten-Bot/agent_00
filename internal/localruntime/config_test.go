@@ -167,6 +167,82 @@ func TestLoadInitSupportsAgentHarnessAndCommand(t *testing.T) {
 	}
 }
 
+func validInitConfigForValidateTest() InitConfig {
+	return InitConfig{
+		Version:      "v1",
+		LogLevel:     "info",
+		AgentHarness: "codex",
+		Scheduler: SchedulerConfig{
+			MaxParallel:            2,
+			MinParallel:            1,
+			SampleWindow:           5,
+			SampleIntervalMS:       1500,
+			CPUHighWatermark:       85,
+			MemoryHighWatermark:    90,
+			DiskIOHighWatermarkMBs: 120,
+		},
+		ReviewWatch: ReviewWatchConfig{
+			PollIntervalMS: 60000,
+			Writeback:      "summary-comment",
+			MergeMethod:    "squash",
+			ReviewLevel:    "off",
+		},
+	}
+}
+
+func TestInitConfigValidateAcceptsWellFormedConfig(t *testing.T) {
+	t.Parallel()
+
+	if err := validInitConfigForValidateTest().Validate(); err != nil {
+		t.Fatalf("Validate(valid config) error = %v, want nil", err)
+	}
+}
+
+func TestInitConfigValidateRejectsInvalidValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		mutate  func(*InitConfig)
+		wantErr string
+	}{
+		{"empty version", func(c *InitConfig) { c.Version = "" }, "version is required"},
+		{"unsupported version", func(c *InitConfig) { c.Version = "v2" }, `unsupported version "v2"`},
+		{"unknown log level", func(c *InitConfig) { c.LogLevel = "chatty" }, "log_level must be one of"},
+		{"unknown agent harness", func(c *InitConfig) { c.AgentHarness = "bogus" }, "unsupported agentHarness"},
+		{"max_parallel below minimum", func(c *InitConfig) { c.Scheduler.MaxParallel = 0 }, "scheduler.max_parallel must be >= 1"},
+		{"min_parallel below minimum", func(c *InitConfig) { c.Scheduler.MinParallel = 0 }, "scheduler.min_parallel must be >= 1"},
+		{"min_parallel exceeds max_parallel", func(c *InitConfig) {
+			c.Scheduler.MinParallel = 3
+			c.Scheduler.MaxParallel = 2
+		}, "scheduler.min_parallel must be <= scheduler.max_parallel"},
+		{"sample_window below minimum", func(c *InitConfig) { c.Scheduler.SampleWindow = 0 }, "scheduler.sample_window must be >= 1"},
+		{"sample_interval_ms below minimum", func(c *InitConfig) { c.Scheduler.SampleIntervalMS = 100 }, "scheduler.sample_interval_ms must be >= 250"},
+		{"cpu_high_watermark zero", func(c *InitConfig) { c.Scheduler.CPUHighWatermark = 0 }, "scheduler.cpu_high_watermark must be > 0 and <= 100"},
+		{"cpu_high_watermark above 100", func(c *InitConfig) { c.Scheduler.CPUHighWatermark = 101 }, "scheduler.cpu_high_watermark must be > 0 and <= 100"},
+		{"memory_high_watermark zero", func(c *InitConfig) { c.Scheduler.MemoryHighWatermark = 0 }, "scheduler.memory_high_watermark must be > 0 and <= 100"},
+		{"memory_high_watermark above 100", func(c *InitConfig) { c.Scheduler.MemoryHighWatermark = 150 }, "scheduler.memory_high_watermark must be > 0 and <= 100"},
+		{"disk_io_high_watermark non-positive", func(c *InitConfig) { c.Scheduler.DiskIOHighWatermarkMBs = 0 }, "scheduler.disk_io_high_watermark_mb_s must be > 0"},
+		{"review poll interval too low while enabled", func(c *InitConfig) { c.ReviewWatch.PollIntervalMS = 1000 }, "review_watch.poll_interval_ms must be >= 5000"},
+		{"review writeback invalid", func(c *InitConfig) { c.ReviewWatch.Writeback = "sideways" }, "review_watch.writeback must be summary-comment or off"},
+		{"review merge method invalid", func(c *InitConfig) { c.ReviewWatch.MergeMethod = "fast-forward" }, "review_watch.merge_method must be merge, squash, or rebase"},
+		{"review level invalid", func(c *InitConfig) { c.ReviewWatch.ReviewLevel = "extreme" }, "review_watch.review_level must be off, low, medium, or high"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := validInitConfigForValidateTest()
+			tc.mutate(&cfg)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Validate() error = %v, want containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadInitReadsAgentRuntimeFromEnv(t *testing.T) {
 	t.Setenv("HARNESS_AGENT_HARNESS", "CLAUDE")
 	t.Setenv("HARNESS_AGENT_COMMAND", "claude-custom")

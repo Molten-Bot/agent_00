@@ -563,3 +563,161 @@ func TestDecodeJSONOrWrappedString(t *testing.T) {
 		t.Fatalf("Value = %q, want %q", got, want)
 	}
 }
+
+func TestFirstConfiguredGitHubTokenFallsBackToInitConfig(t *testing.T) {
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	got, source := firstConfiguredGitHubToken(filepath.Join(t.TempDir(), "missing.json"), localruntime.InitConfig{GitHubToken: "github_token_init_only"})
+	if want := "github_token_init_only"; got != want {
+		t.Fatalf("firstConfiguredGitHubToken() value = %q, want %q", got, want)
+	}
+	if want := "init config"; source != want {
+		t.Fatalf("firstConfiguredGitHubToken() source = %q, want %q", source, want)
+	}
+}
+
+func TestFirstConfiguredGitHubTokenReturnsEmptyWhenUnconfigured(t *testing.T) {
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	got, source := firstConfiguredGitHubToken(filepath.Join(t.TempDir(), "missing.json"), localruntime.InitConfig{})
+	if got != "" {
+		t.Fatalf("firstConfiguredGitHubToken() value = %q, want empty", got)
+	}
+	if source != "" {
+		t.Fatalf("firstConfiguredGitHubToken() source = %q, want empty", source)
+	}
+}
+
+func TestConfigureGitHubTokenRejectsEmptyInput(t *testing.T) {
+	t.Parallel()
+
+	token, state, err := configureGitHubToken(context.Background(), "test", filepath.Join(t.TempDir(), "missing.json"), localruntime.InitConfig{}, nil, "   ", "")
+	if err == nil || err.Error() != "github token is required" {
+		t.Fatalf("configureGitHubToken(empty) error = %v, want required", err)
+	}
+	if token != "" {
+		t.Fatalf("token = %q, want empty", token)
+	}
+	if state.State != "needs_configure" {
+		t.Fatalf("state = %+v, want needs_configure", state)
+	}
+	if state.Message != githubTokenPasteConfigureMessage {
+		t.Fatalf("message = %q, want default paste-configure message %q", state.Message, githubTokenPasteConfigureMessage)
+	}
+}
+
+func TestConfigureGitHubTokenRejectsInvalidatedToken(t *testing.T) {
+	t.Parallel()
+
+	runner := &sharedAuthGateRunnerStub{
+		run: func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+			if !isGitHubTokenValidationCommandForTest(cmd) {
+				t.Fatalf("unexpected command = %+v", cmd)
+			}
+			return execx.Result{Stderr: "bad credentials"}, errors.New("token invalid")
+		},
+	}
+
+	token, state, err := configureGitHubToken(context.Background(), "test", filepath.Join(t.TempDir(), "missing.json"), localruntime.InitConfig{}, runner, "github_token_bad", "")
+	if err == nil {
+		t.Fatal("configureGitHubToken(invalid) error = nil, want validation failure")
+	}
+	if token != "" {
+		t.Fatalf("token = %q, want empty", token)
+	}
+	if state.State != "needs_configure" {
+		t.Fatalf("state = %+v, want needs_configure", state)
+	}
+	if !strings.Contains(state.Message, "validate github token") {
+		t.Fatalf("message = %q, want validation failure detail", state.Message)
+	}
+}
+
+func TestConfigureGitHubTokenRejectsSaveFailureAfterStarSucceeds(t *testing.T) {
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	useSuccessfulGitHubStarTestServer(t)
+
+	blockerFile := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blockerFile, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile(blocker) error = %v", err)
+	}
+	blockedPath := filepath.Join(blockerFile, "config.json")
+
+	token, state, err := configureGitHubToken(context.Background(), "test", blockedPath, localruntime.InitConfig{}, nil, fakeGitHubPAT("save_failure"), "")
+	if err == nil {
+		t.Fatal("configureGitHubToken(blocked path) error = nil, want save failure")
+	}
+	if token != "" {
+		t.Fatalf("token = %q, want empty", token)
+	}
+	if state.State != "needs_configure" {
+		t.Fatalf("state = %+v, want needs_configure", state)
+	}
+	if !strings.Contains(state.Message, "save github token") {
+		t.Fatalf("message = %q, want save failure detail", state.Message)
+	}
+}
+
+func TestConfigurableAgentAuthGateBaseConfigureGitHubTokenAndRefreshSucceeds(t *testing.T) {
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	useSuccessfulGitHubStarTestServer(t)
+
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
+	gate := &configurableAgentAuthGateBase{
+		runtimeConfigPath: path,
+	}
+
+	refreshCalled := false
+	githubToken := fakeGitHubPAT("refresh_success")
+	state, err := gate.configureGitHubTokenAndRefresh(context.Background(), "codex", githubToken, func() {
+		refreshCalled = true
+	})
+	if err != nil {
+		t.Fatalf("configureGitHubTokenAndRefresh() error = %v", err)
+	}
+	if !refreshCalled {
+		t.Fatal("configureGitHubTokenAndRefresh() did not invoke refreshLocked on success")
+	}
+	if got, want := gate.initCfg.GitHubToken, githubToken; got != want {
+		t.Fatalf("gate.initCfg.GitHubToken = %q, want %q", got, want)
+	}
+	if got, want := state.Harness, "codex"; got != want {
+		t.Fatalf("state.Harness = %q, want %q", got, want)
+	}
+	if got, want := os.Getenv("GH_TOKEN"), githubToken; got != want {
+		t.Fatalf("GH_TOKEN = %q, want %q", got, want)
+	}
+}
+
+func TestConfigurableAgentAuthGateBaseConfigureGitHubTokenAndRefreshFailureSkipsRefresh(t *testing.T) {
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
+	gate := &configurableAgentAuthGateBase{
+		runtimeConfigPath: path,
+	}
+
+	refreshCalled := false
+	state, err := gate.configureGitHubTokenAndRefresh(context.Background(), "codex", "   ", func() {
+		refreshCalled = true
+	})
+	if err == nil {
+		t.Fatal("configureGitHubTokenAndRefresh(empty) error = nil, want required")
+	}
+	if refreshCalled {
+		t.Fatal("configureGitHubTokenAndRefresh(empty) invoked refreshLocked on failure, want skipped")
+	}
+	if state.State != "needs_configure" {
+		t.Fatalf("state = %+v, want needs_configure", state)
+	}
+	if gate.initCfg.GitHubToken != "" {
+		t.Fatalf("gate.initCfg.GitHubToken = %q, want unchanged empty", gate.initCfg.GitHubToken)
+	}
+}

@@ -168,6 +168,49 @@ func TestDedupeKeyDiffersByRequestedReviewer(t *testing.T) {
 	}
 }
 
+func TestDedupeKeyOmitsReviewWithoutMeaningfulFields(t *testing.T) {
+	t.Parallel()
+
+	got := DedupeKey(Config{
+		RepoURL:    "git@github.com:acme/repo.git",
+		BaseBranch: "main",
+		Prompt:     "fix tests",
+		Review: &ReviewConfig{
+			RequireRequestedReviewer: false,
+			AutoMerge:                false,
+		},
+	})
+	if strings.Contains(got, `"review"`) {
+		t.Fatalf("DedupeKey() = %q, want no review payload for a review config without meaningful fields", got)
+	}
+}
+
+func TestReviewDedupePayloadForDeduperReturnsNilForNilAndEmptyReview(t *testing.T) {
+	t.Parallel()
+
+	if got := reviewDedupePayloadForDeduper(nil); got != nil {
+		t.Fatalf("reviewDedupePayloadForDeduper(nil) = %#v, want nil", got)
+	}
+	if got := reviewDedupePayloadForDeduper(&ReviewConfig{}); got != nil {
+		t.Fatalf("reviewDedupePayloadForDeduper(empty) = %#v, want nil", got)
+	}
+}
+
+func TestNormalizeReviewerListForDeduperDeduplicatesCaseInsensitively(t *testing.T) {
+	t.Parallel()
+
+	got := normalizeReviewerListForDeduper([]string{"OctoCat", "octocat", "@Hubot"})
+	want := []string{"hubot", "octocat"}
+	if len(got) != len(want) {
+		t.Fatalf("normalizeReviewerListForDeduper() = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("normalizeReviewerListForDeduper()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestDedupeHelpersHandleEmptyValues(t *testing.T) {
 	t.Parallel()
 

@@ -3,8 +3,10 @@ package localruntime
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseFlexibleFloatAndClampFloat(t *testing.T) {
@@ -185,6 +187,49 @@ echo '"(PDH-CSV 4.0)","\\Processor(_Total)\\% Processor Time"'
 	sampler := &defaultResourceSampler{}
 	if _, err := sampler.sampleWindows(); err == nil {
 		t.Fatal("sampleWindows() error = nil, want non-nil")
+	}
+}
+
+func TestSampleLinuxReadsRealProcFilesystem(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("sampleLinux is linux-only")
+	}
+	t.Parallel()
+
+	// Sample/sampleLinux hardcode real system paths (/proc/stat, /proc/meminfo,
+	// /proc/diskstats, /proc/1/cgroup) instead of accepting injectable paths, so
+	// there is no way to point them at t.TempDir() fixtures without changing
+	// production behavior. This test exercises the real procfs available in the
+	// Linux sandbox/CI container and only asserts sanity bounds (no error,
+	// percentages within range) rather than exact values, since the underlying
+	// system counters are not deterministic across runs or environments.
+	sampler := &defaultResourceSampler{}
+
+	first, err := sampler.Sample()
+	if err != nil {
+		t.Fatalf("Sample() first call error = %v", err)
+	}
+	if first.CPUPercent != 0 {
+		t.Fatalf("Sample() first call CPUPercent = %v, want 0 (no baseline yet)", first.CPUPercent)
+	}
+	if first.MemoryPercent <= 0 || first.MemoryPercent > 100 {
+		t.Fatalf("Sample() first call MemoryPercent = %v, want in (0, 100]", first.MemoryPercent)
+	}
+	if !sampler.haveCPU {
+		t.Fatal("Sample() did not record a CPU baseline after the first call")
+	}
+
+	time.Sleep(20 * time.Millisecond)
+
+	second, err := sampler.Sample()
+	if err != nil {
+		t.Fatalf("Sample() second call error = %v", err)
+	}
+	if second.CPUPercent < 0 || second.CPUPercent > 100 {
+		t.Fatalf("Sample() second call CPUPercent = %v, want in [0, 100]", second.CPUPercent)
+	}
+	if second.MemoryPercent <= 0 || second.MemoryPercent > 100 {
+		t.Fatalf("Sample() second call MemoryPercent = %v, want in (0, 100]", second.MemoryPercent)
 	}
 }
 
