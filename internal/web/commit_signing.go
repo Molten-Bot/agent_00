@@ -11,12 +11,11 @@ import (
 func (s Server) handleCommitSigning(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	verify := r.URL.Path == "/api/commit-signing/verify"
-	if (verify && r.Method != http.MethodPost) || (!verify && r.Method != http.MethodGet && r.Method != http.MethodPost) {
-		w.Header().Set("Allow", "GET, POST")
-		if verify {
-			w.Header().Set("Allow", "POST")
+	if verify {
+		if !requireMethod(w, r, http.MethodPost) {
+			return
 		}
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	} else if !requireMethod(w, r, http.MethodGet, http.MethodPost) {
 		return
 	}
 	if s.CommitSigning == nil {

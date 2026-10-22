@@ -294,9 +294,7 @@ func defaultAgentAuthState() AgentAuthState {
 }
 
 func (s Server) handleGitHubProfile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -317,9 +315,7 @@ func (s Server) handleGitHubProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s Server) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -1326,9 +1322,7 @@ func (s Server) handleState(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s Server) handleLibrary(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -1472,6 +1466,9 @@ func (s Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet, http.MethodPost) {
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		state := ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off"}
@@ -1543,16 +1540,11 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			"ok":       true,
 			"settings": state,
 		})
-	default:
-		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 func (s Server) handleAgentAuthStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	state, err := s.currentAgentAuthState(r.Context())
@@ -1571,9 +1563,7 @@ func (s Server) handleAgentAuthStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s Server) handleAgentAuthStart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	if s.StartAgentAuth == nil {
@@ -1600,9 +1590,7 @@ func (s Server) handleAgentAuthStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s Server) handleAgentAuthVerify(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	s.logf("localruntime.ui status=start endpoint=agent_auth_verify")
@@ -1642,9 +1630,7 @@ type agentAuthConfigureRequest struct {
 }
 
 func (s Server) handleAgentAuthConfigure(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	s.logf("localruntime.ui status=start endpoint=agent_auth_configure")
@@ -2120,9 +2106,7 @@ func (s Server) handlePromptSubmit(
 	unavailableMessage string,
 	defaultSource string,
 ) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 
@@ -2276,9 +2260,7 @@ func (s Server) handleTaskControlWithMeta(
 	handler func(context.Context, string) error,
 	meta map[string]any,
 ) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	if handler == nil {
@@ -2350,9 +2332,7 @@ func (s Server) taskControlUnavailableResponse(requestID string, action string) 
 }
 
 func (s Server) handleTaskRerun(w http.ResponseWriter, r *http.Request, requestID string) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	if s.Broker == nil {
@@ -2427,9 +2407,7 @@ func (s Server) handleTaskRerun(w http.ResponseWriter, r *http.Request, requestI
 }
 
 func (s Server) handleTaskClose(w http.ResponseWriter, r *http.Request, requestID string) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	if s.Broker == nil {
@@ -2481,6 +2459,38 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
+}
+
+func writeJSONError(w http.ResponseWriter, status int, err error) {
+	writeJSON(w, status, map[string]any{"ok": false, "error": err.Error()})
+}
+
+// requireMethod writes a 405 response with an Allow header listing allowed
+// and returns false when r.Method is not among them.
+func requireMethod(w http.ResponseWriter, r *http.Request, allowed ...string) bool {
+	for _, m := range allowed {
+		if r.Method == m {
+			return true
+		}
+	}
+	w.Header().Set("Allow", strings.Join(allowed, ", "))
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	return false
+}
+
+// decodeStrictJSON decodes exactly one JSON object of type T from the
+// request body, rejecting unknown fields and trailing data.
+func decodeStrictJSON[T any](w http.ResponseWriter, r *http.Request, limit int64, invalidMsg, trailingMsg string) (T, error) {
+	var v T
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&v); err != nil {
+		return v, fmt.Errorf("%s: %w", invalidMsg, err)
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return v, errors.New(trailingMsg)
+	}
+	return v, nil
 }
 
 func compactStreamSnapshot(snapshot Snapshot) Snapshot {
