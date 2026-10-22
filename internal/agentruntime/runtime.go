@@ -39,6 +39,11 @@ type RunOptions struct {
 	ImagePaths       []string
 	WritableDirs     []string
 	Env              []string
+	// DisallowedTools names tools the agent CLI must not expose for this
+	// invocation (for example Edit/Write/NotebookEdit for a read-only review
+	// pass). Only honored by harnesses that support a tool denylist; ignored
+	// otherwise.
+	DisallowedTools []string
 }
 
 // Runtime describes one executable LLM harness runtime.
@@ -363,10 +368,24 @@ func buildClaudeCommand(targetDir, prompt string, opts RunOptions) (execx.Comman
 		}
 		args = append(args, "--add-dir", dir)
 	}
+	if tools := nonEmptyStrings(opts.DisallowedTools); len(tools) > 0 {
+		args = append(args, "--disallowedTools")
+		args = append(args, tools...)
+	}
 	// Keep task content out of argv: subprocess errors include the arguments,
 	// and large review packets can exceed the OS per-argument size limit.
 	args = append(args, "--")
 	return execx.Command{Dir: targetDir, Args: args, Env: append([]string(nil), opts.Env...), Stdin: prompt}, nil
+}
+
+func nonEmptyStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func countNonEmptyStrings(values []string) int {

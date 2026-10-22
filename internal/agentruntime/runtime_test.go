@@ -334,6 +334,34 @@ func TestBuildCommandClaude(t *testing.T) {
 	}
 }
 
+func TestBuildCommandClaudeDisallowedTools(t *testing.T) {
+	t.Parallel()
+
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	cmd, err := rt.BuildCommand("/tmp/repo", "review pr", RunOptions{
+		DisallowedTools: []string{"Edit", "Write", "NotebookEdit", "  "},
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand() error = %v", err)
+	}
+	wantArgs := []string{
+		"sandbox", "-c", `sandbox_mode="workspace-write"`,
+		"-c", `sandbox_workspace_write.writable_roots=[]`,
+		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
+		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+		"-c", "sandbox_workspace_write.network_access=true", "--", "claude",
+		"--print", "--output-format", "text", "--dangerously-skip-permissions",
+		"--disallowedTools", "Edit", "Write", "NotebookEdit", "--",
+	}
+	if cmd.Name != "codex" || cmd.Dir != "/tmp/repo" || !reflect.DeepEqual(cmd.Args, wantArgs) {
+		t.Fatalf("unexpected claude command: %+v", cmd)
+	}
+}
+
 func TestClaudePromptStdinPreservesLargePacketsAndFailureDetail(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
