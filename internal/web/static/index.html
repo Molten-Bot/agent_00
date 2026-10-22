@@ -708,17 +708,31 @@
   >
     <section class="onboarding-modal form-surface settings-shell">
       <div class="onboarding-modal-shell">
-        <header class="onboarding-modal-sidebar">
+        <header class="onboarding-modal-sidebar settings-header-slim">
           <div class="onboarding-modal-header">
-            <p class="eyebrow">agent_00</p>
             <h2 id="settings-title">Settings</h2>
-            <p id="settings-message">Configure reviews and commit signing.</p>
+            <p id="settings-message" class="sr-only">Configure reviews and commit signing.</p>
           </div>
         </header>
 
+        <div class="settings-tabbar" role="tablist" aria-label="Settings sections">
+          <button id="settings-tab-automation" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-automation" data-settings-tab="automation">
+            <i data-lucide="wand-sparkles" aria-hidden="true"></i><span>Automation</span>
+          </button>
+          <button id="settings-tab-review" class="settings-tab active" type="button" role="tab" aria-selected="true" aria-controls="settings-panel-review" data-settings-tab="review">
+            <i data-lucide="message-circle-code" aria-hidden="true"></i><span>Post-task Review</span>
+          </button>
+          <button id="settings-tab-merge" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-merge" data-settings-tab="merge">
+            <i data-lucide="merge" aria-hidden="true"></i><span>Merge Method</span>
+          </button>
+          <button id="settings-tab-signing" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="commit-signing-section" data-settings-tab="signing">
+            <i data-lucide="globe-lock" aria-hidden="true"></i><span>Commit Signing</span>
+          </button>
+        </div>
+
         <form id="review-settings-form" class="stack review-settings-form" data-settings-panel="review">
-          <fieldset class="review-settings-section review-settings-automation">
-            <legend>Automation</legend>
+          <fieldset id="settings-panel-automation" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-automation" hidden>
+            <legend class="sr-only">Automation</legend>
             <label class="review-settings-toggle">
               <input id="review-settings-auto-merge" type="checkbox">
               <span>Auto-merge clean reviews</span>
@@ -728,7 +742,7 @@
               <span>Delete merged branches</span>
             </label>
           </fieldset>
-          <div class="review-settings-section review-settings-level">
+          <div id="settings-panel-review" class="review-settings-section review-settings-level" role="tabpanel" aria-labelledby="settings-tab-review">
             <span id="review-settings-level-label">Post-task Review</span>
             <input id="review-settings-level" type="hidden" value="off">
             <div class="review-settings-merge-options review-settings-level-options" role="radiogroup" aria-labelledby="review-settings-level-label">
@@ -738,17 +752,24 @@
               <button class="review-settings-merge-option review-settings-level-option" type="button" role="radio" aria-checked="false" data-review-settings-level="high"><span>High</span><small>6 reviews</small></button>
             </div>
           </div>
-          <div class="review-settings-section review-settings-merge-method">
+          <div id="settings-panel-merge" class="review-settings-section review-settings-merge-method" role="tabpanel" aria-labelledby="settings-tab-merge" hidden>
             <span id="review-settings-merge-method-label">Merge Method</span>
             <input id="review-settings-merge-method" type="hidden" value="squash">
-            <div class="review-settings-merge-options" role="radiogroup" aria-labelledby="review-settings-merge-method-label">
-              <button class="review-settings-merge-option active" type="button" role="radio" aria-checked="true" data-review-settings-merge-method="squash">Squash</button>
-              <button class="review-settings-merge-option" type="button" role="radio" aria-checked="false" data-review-settings-merge-method="merge">Merge</button>
-              <button class="review-settings-merge-option" type="button" role="radio" aria-checked="false" data-review-settings-merge-method="rebase">Rebase</button>
+            <div class="review-settings-merge-slider" role="radiogroup" aria-labelledby="review-settings-merge-method-label">
+              <span class="review-settings-merge-slider-thumb" aria-hidden="true"></span>
+              <button class="review-settings-merge-option active" type="button" role="radio" aria-checked="true" data-review-settings-merge-method="squash">
+                <i data-lucide="git-commit-horizontal" aria-hidden="true"></i><span>Squash</span>
+              </button>
+              <button class="review-settings-merge-option" type="button" role="radio" aria-checked="false" data-review-settings-merge-method="merge">
+                <i data-lucide="git-merge" aria-hidden="true"></i><span>Merge</span>
+              </button>
+              <button class="review-settings-merge-option" type="button" role="radio" aria-checked="false" data-review-settings-merge-method="rebase">
+                <i data-lucide="git-branch" aria-hidden="true"></i><span>Rebase</span>
+              </button>
             </div>
           </div>
-          <details class="review-settings-section commit-signing-section" id="commit-signing-section">
-            <summary>Commit signing</summary>
+          <div class="review-settings-section commit-signing-section" id="commit-signing-section" role="tabpanel" aria-labelledby="settings-tab-signing" hidden>
+            <h3 class="review-settings-section-title">Commit signing</h3>
             <div class="stack commit-signing-fields">
               <label class="review-settings-toggle"><input id="commit-signing-enabled" type="checkbox" disabled aria-describedby="commit-signing-enabled-help"><span>Sign commits for all tasks</span></label>
               <p id="commit-signing-enabled-help">Save an SSH private key below to unlock this checkbox.</p>
@@ -775,7 +796,7 @@
               </div>
               <p id="commit-signing-status" role="status" aria-live="polite"></p>
             </div>
-          </details>
+          </div>
           <div class="onboarding-form-actions settings-footer">
             <p id="review-settings-status" class="settings-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
             <div class="settings-actions">
@@ -1946,6 +1967,14 @@
     const reviewSettingsDeleteMergedBranches = document.getElementById("review-settings-delete-merged-branches");
     const reviewSettingsMergeMethod = document.getElementById("review-settings-merge-method");
     const reviewSettingsMergeOptions = Array.from(document.querySelectorAll("[data-review-settings-merge-method]"));
+    const reviewSettingsMergeSliderThumb = document.querySelector(".review-settings-merge-slider-thumb");
+    const settingsTabButtons = Array.from(document.querySelectorAll("[data-settings-tab]"));
+    const settingsTabPanels = {
+      automation: document.getElementById("settings-panel-automation"),
+      review: document.getElementById("settings-panel-review"),
+      merge: document.getElementById("settings-panel-merge"),
+      signing: document.getElementById("commit-signing-section"),
+    };
     const reviewSettingsLevel = document.getElementById("review-settings-level");
     const reviewSettingsLevelOptions = Array.from(document.querySelectorAll("[data-review-settings-level]"));
     const reviewSettingsStatus = document.getElementById("review-settings-status");
@@ -2524,8 +2553,10 @@
       reviewSettingsStatus.textContent = value;
     }
 
+    const REVIEW_SETTINGS_MERGE_METHOD_ORDER = ["squash", "merge", "rebase"];
+
     function setReviewSettingsMergeMethod(method) {
-      const normalized = ["merge", "squash", "rebase"].includes(String(method || "").trim().toLowerCase())
+      const normalized = REVIEW_SETTINGS_MERGE_METHOD_ORDER.includes(String(method || "").trim().toLowerCase())
         ? String(method || "").trim().toLowerCase()
         : "squash";
       if (reviewSettingsMergeMethod instanceof HTMLInputElement) {
@@ -2535,6 +2566,23 @@
         const selected = button.getAttribute("data-review-settings-merge-method") === normalized;
         button.classList.toggle("active", selected);
         button.setAttribute("aria-checked", selected ? "true" : "false");
+      });
+      if (reviewSettingsMergeSliderThumb) {
+        const index = Math.max(0, REVIEW_SETTINGS_MERGE_METHOD_ORDER.indexOf(normalized));
+        reviewSettingsMergeSliderThumb.style.transform = `translateX(calc(${index} * (100% + 8px)))`;
+      }
+    }
+
+    function setSettingsTab(tab) {
+      const normalized = Object.prototype.hasOwnProperty.call(settingsTabPanels, tab) ? tab : "review";
+      state.settingsTab = normalized;
+      settingsTabButtons.forEach((button) => {
+        const selected = button.getAttribute("data-settings-tab") === normalized;
+        button.classList.toggle("active", selected);
+        button.setAttribute("aria-selected", selected ? "true" : "false");
+      });
+      Object.entries(settingsTabPanels).forEach(([key, panel]) => {
+        if (panel) panel.hidden = key !== normalized;
       });
     }
 
@@ -12519,6 +12567,12 @@
         setReviewSettingsLevel(button.getAttribute("data-review-settings-level"));
       });
     });
+    settingsTabButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        setSettingsTab(button.getAttribute("data-settings-tab"));
+      });
+    });
+    setSettingsTab(state.settingsTab);
     if (reviewSettingsClose) {
       reviewSettingsClose.addEventListener("click", () => {
         setSettingsOpen(false);

@@ -20,7 +20,7 @@ async function openSettings(t, handler, viewport = { width: 1280, height: 900 })
   await page.route('**/api/review-settings', route => route.fulfill({ json: { ok: true, settings: { merge_method: 'squash', review_level: 'off' } } }));
   await page.route('**/api/commit-signing**', handler);
   await page.goto(`${baseURL}/#settings`);
-  await page.locator('#commit-signing-section summary').click();
+  await page.locator('#settings-tab-signing').click();
   await page.waitForFunction(() => !document.getElementById('commit-signing-save').disabled);
   return page;
 }
@@ -66,7 +66,7 @@ test('import, register, enable, reload and disable without returning private mat
   await page.waitForFunction(() => document.getElementById('commit-signing-status').textContent === 'Commit signing settings saved.');
   assert.equal(settings.enabled, true);
   await page.reload();
-  await page.locator('#commit-signing-section summary').click();
+  await page.locator('#settings-tab-signing').click();
   await page.waitForFunction(() => document.getElementById('commit-signing-enabled').checked);
   assert.equal(await page.locator('#commit-signing-private-key').inputValue(), '');
   await page.locator('#commit-signing-enabled').uncheck();
