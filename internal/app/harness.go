@@ -3404,7 +3404,10 @@ func (h Harness) runFinalReviewCycle(
 		return ExitSuccess, "", nil
 	}
 
-	for pass := 1; pass <= h.FinalReviewPasses; pass++ {
+	// Allow one extra pass beyond FinalReviewPasses so a fix applied on the
+	// final configured pass is always confirmed clean by a follow-up review
+	// before the PR can be released from draft.
+	for pass := 1; pass <= h.FinalReviewPasses+1; pass++ {
 		reviewMode := finalReviewMode(h.FinalReviewPasses)
 		h.logf(
 			"stage=review status=start action=pass review_mode=%s pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",
@@ -3523,6 +3526,9 @@ func (h Harness) runFinalReviewCycle(
 		if len(outcome.Findings) == 0 {
 			return ExitSuccess, "", nil
 		}
+		if pass > h.FinalReviewPasses {
+			return ExitCodex, "review", fmt.Errorf("post-task review cycle still reported findings after exhausting %d fix pass(es); leaving pull request in draft for human review", h.FinalReviewPasses)
+		}
 
 		h.logf(
 			"stage=review_fix status=start action=agent review_mode=%s pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",
@@ -3611,7 +3617,7 @@ func (h Harness) runFinalReviewCycle(
 			repo.PRURL,
 		)
 	}
-	return ExitSuccess, "", nil
+	return ExitCodex, "review", fmt.Errorf("post-task review cycle ended without a conclusive clean review")
 }
 
 func finalReviewMode(passes int) string {
@@ -4075,10 +4081,8 @@ func isPRAlreadyReadyError(err error) bool {
 	}
 	message := strings.ToLower(err.Error())
 	alreadyReadyFragments := []string{
-		"not a draft",
-		"not in draft",
-		"isn't a draft",
-		"is not draft",
+		`is already "ready for review"`,
+		"is already ready for review",
 	}
 	for _, fragment := range alreadyReadyFragments {
 		if strings.Contains(message, fragment) {

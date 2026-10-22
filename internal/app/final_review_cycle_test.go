@@ -232,6 +232,7 @@ func TestRunFinalReviewCycleUsesReadOnlySandboxOnCodex(t *testing.T) {
 type finalFindingReviewCycleRunner struct {
 	t            *testing.T
 	findingsPass int
+	neverClean   bool
 	reviews      int
 	fixes        int
 	statusCalls  int
@@ -250,7 +251,7 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 			return execx.Result{Stdout: "Fixed and tested."}, nil
 		}
 		r.reviews++
-		if r.reviews == r.findingsPass {
+		if r.neverClean || r.reviews == r.findingsPass {
 			return execx.Result{Stdout: "**Positive**\n- Scoped change.\n\n**Negative**\n- [Medium] main.go:12 - Handle the error.\n\n```json\n{\"status\":\"findings\",\"mergeReady\":false,\"summary\":\"fix needed\",\"positives\":[\"Scoped change.\"],\"findings\":[{\"severity\":\"Medium\",\"path\":\"main.go\",\"line\":12,\"title\":\"Handle the error\"}]}\n```"}, nil
 		}
 		return execx.Result{Stdout: "**Positive**\n- Scoped change.\n\n**Negative**\n- No material issues found.\n\n```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"clean\",\"positives\":[\"Scoped change.\"],\"findings\":[]}\n```"}, nil
@@ -297,7 +298,7 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 	return execx.Result{}, fmt.Errorf("unexpected command")
 }
 
-func TestRunFinalReviewCycleFixesFinalPassWithoutExtraReview(t *testing.T) {
+func TestRunFinalReviewCycleConfirmsFinalPassFixBeforeRelease(t *testing.T) {
 	runner := &finalFindingReviewCycleRunner{t: t, findingsPass: 1}
 	h := New(runner)
 	h.FinalReviewPasses = 1
@@ -336,16 +337,65 @@ func TestRunFinalReviewCycleFixesFinalPassWithoutExtraReview(t *testing.T) {
 	if err != nil || exitCode != ExitSuccess || stage != "" {
 		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
 	}
-	if runner.reviews != 1 || runner.fixes != 1 {
-		t.Fatalf("review/fix calls = %d/%d, want 1/1", runner.reviews, runner.fixes)
+	// A fix applied on the final configured pass must be confirmed clean by
+	// an extra review before the cycle reports success, so there are two
+	// review calls even though FinalReviewPasses is 1.
+	if runner.reviews != 2 || runner.fixes != 1 {
+		t.Fatalf("review/fix calls = %d/%d, want 2/1", runner.reviews, runner.fixes)
 	}
-	if runner.comments != 1 || runner.checks != 1 {
-		t.Fatalf("comment/check counts = %d/%d, want 1/1", runner.comments, runner.checks)
+	if runner.comments != 2 || runner.checks != 1 {
+		t.Fatalf("comment/check counts = %d/%d, want 2/1", runner.comments, runner.checks)
 	}
 	for _, want := range []string{"resolve", "Implement the requested behavior.", "main.go:12", "complete repair input"} {
 		if !strings.Contains(strings.ToLower(runner.fixPrompt), strings.ToLower(want)) {
 			t.Fatalf("fix prompt missing %q", want)
 		}
+	}
+}
+
+func TestRunFinalReviewCycleFailsWhenFinalConfirmationStillHasFindings(t *testing.T) {
+	runner := &finalFindingReviewCycleRunner{t: t, neverClean: true}
+	h := New(runner)
+	h.FinalReviewPasses = 1
+	h.PRChecksWatchTimeout = -1
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:                "https://github.com/acme/repo.git",
+		Dir:                repoDir,
+		RelDir:             "repo",
+		Branch:             "feature",
+		BaseBranch:         "main",
+		PRURL:              "https://github.com/acme/repo/pull/7",
+		Changed:            true,
+		WriteAccessChecked: true,
+		WriteAccessAllowed: true,
+		PushRemote:         publishRemoteOrigin,
+	}
+
+	exitCode, stage, err := h.runFinalReviewCycle(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "fix review"},
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	// The PR must never be released from draft when findings persist after
+	// every configured fix pass has been exhausted.
+	if err == nil || exitCode != ExitCodex || stage != "review" {
+		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want failure leaving PR in draft", exitCode, stage, err)
+	}
+	if runner.reviews != 2 || runner.fixes != 1 {
+		t.Fatalf("review/fix calls = %d/%d, want 2/1", runner.reviews, runner.fixes)
 	}
 }
 

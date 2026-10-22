@@ -6147,7 +6147,7 @@ func TestMarkPullRequestReadyForReviewSkipsAlreadyReady(t *testing.T) {
 	t.Parallel()
 
 	repo := repoWorkspace{Dir: "/repo", PRURL: "https://github.com/acme/repo/pull/9"}
-	alreadyReadyErr := errors.New("run gh [pr ready 9]: exit status 1 (pull request #9 is already not a draft)")
+	alreadyReadyErr := errors.New(`run gh [pr ready 9]: exit status 1 (! Pull request acme/repo#9 is already "ready for review")`)
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: prReadyCommand(repo.Dir, repo.PRURL), err: alreadyReadyErr},
