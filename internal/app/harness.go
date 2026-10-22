@@ -4085,13 +4085,12 @@ func (h Harness) markPullRequestReadyForReview(ctx context.Context, repo repoWor
 	return nil
 }
 
-// isPRAlreadyReadyError recognizes the "already ready for review" state from
-// a failed `gh pr ready` invocation. Current gh releases (confirmed on
-// v2.46.0) already treat this state as a no-op: they print the same message
-// to stderr but exit 0, so h.runCommand returns a nil error and the success
-// path above handles it without ever reaching this check. This fallback only
-// guards against older gh builds or GitHub Enterprise Server CLI pins that
-// may still surface it as a non-zero exit.
+// isPRAlreadyReadyError recognizes the "already ready for review" message
+// from a failed `gh pr ready` invocation. Some gh builds exit 0 for this
+// case, in which case h.runCommand returns a nil error and the success path
+// above handles it without reaching this check. This fallback covers gh
+// builds (older releases, GitHub Enterprise Server CLI pins, etc.) that
+// instead surface it as a non-zero exit with one of these message fragments.
 func isPRAlreadyReadyError(err error) bool {
 	if err == nil {
 		return false

@@ -20,6 +20,8 @@ type cleanReviewCycleRunner struct {
 	mu       sync.Mutex
 	reviews  int
 	comments int
+	checks   int
+	released int
 	prompts  []string
 	argv     [][]string
 }
@@ -44,7 +46,7 @@ func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (exec
 			return execx.Result{Stdout: "head-sha\n"}, nil
 		case "status":
 			return execx.Result{Stdout: "## feature\n"}, nil
-		case "fetch":
+		case "fetch", "merge", "add", "commit", "push":
 			return execx.Result{}, nil
 		case "diff":
 			return execx.Result{Stdout: "diff --git a/main.go b/main.go\n"}, nil
@@ -55,6 +57,14 @@ func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (exec
 		}
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "review" {
 			r.comments++
+			return execx.Result{}, nil
+		}
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "checks" {
+			r.checks++
+			return execx.Result{Stdout: "tests\tpass\n"}, nil
+		}
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "ready" {
+			r.released++
 			return execx.Result{}, nil
 		}
 		if len(cmd.Args) >= 1 && cmd.Args[0] == "api" {
@@ -268,7 +278,7 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 				return execx.Result{Stdout: "## feature\n M main.go\n"}, nil
 			}
 			return execx.Result{Stdout: "## feature\n"}, nil
-		case "fetch", "add", "commit", "push":
+		case "fetch", "merge", "add", "commit", "push":
 			return execx.Result{}, nil
 		case "diff":
 			return execx.Result{Stdout: "diff --git a/main.go b/main.go\n"}, nil
@@ -431,5 +441,109 @@ func TestRunFinalReviewCycleContinuesAfterFixUntilClean(t *testing.T) {
 	}
 	if runner.reviews != 2 || runner.fixes != 1 || runner.comments != 2 || runner.checks != 1 {
 		t.Fatalf("reviews/fixes/comments/checks = %d/%d/%d/%d, want 2/1/2/1", runner.reviews, runner.fixes, runner.comments, runner.checks)
+	}
+}
+
+// TestProcessChangedRepoReleasesPRFromDraftAfterCleanFinalReviewCycle exercises
+// the end-to-end wiring in processChangedRepo: once the normal commit/push/PR
+// flow finishes, a configured final review cycle must run, and a clean cycle
+// must release the auto-drafted PR instead of leaving it in draft.
+func TestProcessChangedRepoReleasesPRFromDraftAfterCleanFinalReviewCycle(t *testing.T) {
+	runner := &cleanReviewCycleRunner{t: t}
+	h := New(runner)
+	h.FinalReviewPasses = 1
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:                "https://github.com/acme/repo.git",
+		Dir:                repoDir,
+		RelDir:             "repo",
+		Branch:             "feature",
+		BaseBranch:         "main",
+		PRURL:              "https://github.com/acme/repo/pull/7",
+		Changed:            true,
+		CreateWorkBranch:   true,
+		WriteAccessChecked: true,
+		WriteAccessAllowed: true,
+		PushRemote:         publishRemoteOrigin,
+	}
+
+	cfg := config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "do the work"}
+
+	exitCode, stage, err := h.processChangedRepo(
+		context.Background(),
+		cfg,
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err != nil || exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("processChangedRepo() = (%d, %q, %v), want success", exitCode, stage, err)
+	}
+	if runner.reviews != 1 || runner.comments != 1 {
+		t.Fatalf("review/comment counts = %d/%d, want 1/1", runner.reviews, runner.comments)
+	}
+	if runner.released != 1 {
+		t.Fatalf("released count = %d, want 1 (PR must be released once the final review cycle is clean)", runner.released)
+	}
+}
+
+// TestProcessChangedRepoLeavesPRInDraftWhenFinalReviewCycleFails exercises the
+// same wiring for the failure path: when the final review cycle cannot reach
+// a clean pass, processChangedRepo must surface the failure and must never
+// call through to release the PR from draft.
+func TestProcessChangedRepoLeavesPRInDraftWhenFinalReviewCycleFails(t *testing.T) {
+	runner := &finalFindingReviewCycleRunner{t: t, neverClean: true}
+	h := New(runner)
+	h.FinalReviewPasses = 1
+	h.PRChecksWatchTimeout = -1
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:                "https://github.com/acme/repo.git",
+		Dir:                repoDir,
+		RelDir:             "repo",
+		Branch:             "feature",
+		BaseBranch:         "main",
+		PRURL:              "https://github.com/acme/repo/pull/7",
+		Changed:            true,
+		CreateWorkBranch:   true,
+		WriteAccessChecked: true,
+		WriteAccessAllowed: true,
+		PushRemote:         publishRemoteOrigin,
+	}
+
+	cfg := config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "do the work"}
+
+	exitCode, stage, err := h.processChangedRepo(
+		context.Background(),
+		cfg,
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err == nil || exitCode != ExitCodex || stage != "review" {
+		t.Fatalf("processChangedRepo() = (%d, %q, %v), want final review cycle failure", exitCode, stage, err)
+	}
+	if runner.reviews != 2 || runner.fixes != 1 {
+		t.Fatalf("review/fix calls = %d/%d, want 2/1", runner.reviews, runner.fixes)
 	}
 }
