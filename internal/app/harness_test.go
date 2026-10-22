@@ -6078,6 +6078,139 @@ func TestPRCreateCommandsIncludeDraftFlagWhenRequested(t *testing.T) {
 	}
 }
 
+func TestAutoDraftForReviewCycle(t *testing.T) {
+	t.Parallel()
+
+	h := New(nil)
+	h.FinalReviewPasses = 2
+
+	if h.autoDraftForReviewCycle(config.Config{}) != true {
+		t.Fatalf("autoDraftForReviewCycle() = false, want true when a final review cycle will run")
+	}
+	if h.autoDraftForReviewCycle(config.Config{Review: &config.ReviewConfig{PRURL: "https://github.com/acme/repo/pull/1"}}) {
+		t.Fatalf("autoDraftForReviewCycle() = true, want false for review-only runs")
+	}
+
+	h.FinalReviewPasses = 0
+	if h.autoDraftForReviewCycle(config.Config{}) {
+		t.Fatalf("autoDraftForReviewCycle() = true, want false when no final review cycle will run")
+	}
+}
+
+func TestCreatePullRequestURLAutoDraftsWhenFinalReviewCycleActive(t *testing.T) {
+	t.Parallel()
+
+	cfg := sampleConfig()
+	repo := repoWorkspace{Dir: "/repo", BaseBranch: cfg.BaseBranch}
+
+	draftCfg := cfg
+	draftCfg.Draft = true
+	expectedDraftCmd := prCreateWithOptionsCommand(repo.Dir, draftCfg, repo.BaseBranch, "topic-branch", "")
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: expectedDraftCmd, res: execx.Result{Stdout: "https://github.com/acme/repo/pull/9\n"}},
+	}}
+	h := New(fake)
+	h.FinalReviewPasses = 1
+
+	prURL, err := h.createPullRequestURL(context.Background(), repo, cfg, true, "topic-branch", "")
+	if err != nil {
+		t.Fatalf("createPullRequestURL() err = %v, want nil", err)
+	}
+	if prURL != "https://github.com/acme/repo/pull/9" {
+		t.Fatalf("createPullRequestURL() = %q, want pull/9", prURL)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestMarkPullRequestReadyForReview(t *testing.T) {
+	t.Parallel()
+
+	repo := repoWorkspace{Dir: "/repo", PRURL: "https://github.com/acme/repo/pull/9"}
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: prStateViewCommand(repo.Dir, repo.PRURL), res: execx.Result{Stdout: `{"url":"https://github.com/acme/repo/pull/9","state":"OPEN"}`}},
+		{cmd: prReadyCommand(repo.Dir, repo.PRURL), res: execx.Result{}},
+	}}
+	h := New(fake)
+
+	if err := h.markPullRequestReadyForReview(context.Background(), repo); err != nil {
+		t.Fatalf("markPullRequestReadyForReview() err = %v, want nil", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestMarkPullRequestReadyForReviewSkipsAlreadyReady(t *testing.T) {
+	t.Parallel()
+
+	repo := repoWorkspace{Dir: "/repo", PRURL: "https://github.com/acme/repo/pull/9"}
+	alreadyReadyErr := errors.New(`run gh [pr ready 9]: exit status 1 (! Pull request acme/repo#9 is already "ready for review")`)
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: prStateViewCommand(repo.Dir, repo.PRURL), res: execx.Result{Stdout: `{"url":"https://github.com/acme/repo/pull/9","state":"OPEN"}`}},
+		{cmd: prReadyCommand(repo.Dir, repo.PRURL), err: alreadyReadyErr},
+	}}
+	h := New(fake)
+
+	if err := h.markPullRequestReadyForReview(context.Background(), repo); err != nil {
+		t.Fatalf("markPullRequestReadyForReview() err = %v, want nil when PR is already ready", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestMarkPullRequestReadyForReviewSkipsWhenAlreadyMergedExternally(t *testing.T) {
+	t.Parallel()
+
+	repo := repoWorkspace{Dir: "/repo", PRURL: "https://github.com/acme/repo/pull/9"}
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: prStateViewCommand(repo.Dir, repo.PRURL), res: execx.Result{Stdout: `{"url":"https://github.com/acme/repo/pull/9","state":"MERGED","mergedAt":"2026-10-22T00:00:00Z"}`}},
+	}}
+	h := New(fake)
+
+	if err := h.markPullRequestReadyForReview(context.Background(), repo); err != nil {
+		t.Fatalf("markPullRequestReadyForReview() err = %v, want nil when PR was merged externally", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestMarkPullRequestReadyForReviewSkipsWhenGHReportsMerged(t *testing.T) {
+	t.Parallel()
+
+	repo := repoWorkspace{Dir: "/repo", PRURL: "https://github.com/acme/repo/pull/9"}
+	mergedErr := errors.New(`run gh [pr ready 9]: exit status 1 (X Pull request #9 can't be marked as "ready for review" because it is merged)`)
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: prStateViewCommand(repo.Dir, repo.PRURL), err: errors.New("boom")},
+		{cmd: prReadyCommand(repo.Dir, repo.PRURL), err: mergedErr},
+	}}
+	h := New(fake)
+
+	if err := h.markPullRequestReadyForReview(context.Background(), repo); err != nil {
+		t.Fatalf("markPullRequestReadyForReview() err = %v, want nil when gh reports the PR merged", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestMarkPullRequestReadyForReviewNoOpWithoutPRURL(t *testing.T) {
+	t.Parallel()
+
+	h := New(&fakeRunner{t: t})
+	if err := h.markPullRequestReadyForReview(context.Background(), repoWorkspace{Dir: "/repo"}); err != nil {
+		t.Fatalf("markPullRequestReadyForReview() err = %v, want nil when no PR URL", err)
+	}
+}
+
 func TestAgentCommandWithOptionsUsesConfiguredRuntime(t *testing.T) {
 	t.Parallel()
 
