@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -2017,7 +2018,35 @@ func removeManagedWorkspaceDir(workspaceDir string) (bool, error) {
 		return false, nil
 	}
 	if err := os.RemoveAll(workspaceDir); err != nil {
-		return false, fmt.Errorf("remove workspace dir %s: %w", workspaceDir, err)
+		if !errors.Is(err, os.ErrPermission) {
+			return false, fmt.Errorf("remove workspace dir %s: %w", workspaceDir, err)
+		}
+		// Go module caches contain read-only directories. Restore owner write
+		// permission only inside this closed task before retrying cleanup.
+		root, openErr := os.OpenRoot(workspaceDir)
+		if openErr != nil {
+			return false, fmt.Errorf("open workspace for cleanup: %w", openErr)
+		}
+		defer root.Close()
+		walkErr := fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !entry.IsDir() {
+				return nil
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			return root.Chmod(path, info.Mode().Perm()|0700)
+		})
+		if walkErr != nil {
+			return false, fmt.Errorf("prepare workspace cleanup: %w", walkErr)
+		}
+		if err := os.RemoveAll(workspaceDir); err != nil {
+			return false, fmt.Errorf("remove workspace dir %s: %w", workspaceDir, err)
+		}
 	}
 	return true, nil
 }

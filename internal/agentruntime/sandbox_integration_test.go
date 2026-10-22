@@ -2,6 +2,8 @@ package agentruntime
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +11,63 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
+
+func TestClaudeReviewSandboxNetworkAndReadOnly(t *testing.T) {
+	if os.Getenv("HARNESS_TEST_CODEX_SANDBOX") != "1" {
+		t.Skip("set HARNESS_TEST_CODEX_SANDBOX=1 to exercise the installed sandbox")
+	}
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	home := filepath.Join(root, ".agent00-agent-io", "config", "sandbox")
+	tmp := filepath.Join(root, ".agent00-agent-io", "tmp")
+	for _, dir := range []string{repo, home, tmp} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("network-ok"))
+	}))
+	defer server.Close()
+	script := filepath.Join(root, "review-probe")
+	if err := os.WriteFile(script, []byte(`#!/usr/bin/env python3
+import errno, os, urllib.request
+assert urllib.request.urlopen(os.environ["PROBE_URL"], timeout=5).read() == b"network-ok"
+with open(os.environ["TMPDIR"] + "/tmp-write", "w") as f:
+    f.write("allowed runtime IO")
+for path in ["repo-write", ".git/config", os.environ["TEST_ROOT"] + "/outside-write", "/tmp/agent00-review-write"]:
+    try:
+        with open(path, "w") as f:
+            f.write("unexpected write")
+    except OSError as error:
+        if error.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+            continue
+        raise
+    raise SystemExit("review sandbox allowed write: " + path)
+`), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := Resolve(HarnessClaude, script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := rt.BuildCommand(repo, "review", RunOptions{
+		WorkspaceDir: root, DisallowedTools: []string{"Edit", "Write", "NotebookEdit", "Bash"},
+		Env: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "TMPDIR=" + tmp, "TEST_ROOT=" + root, "PROBE_URL=" + server.URL},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	res, err := (execx.OSRunner{}).Run(ctx, cmd)
+	if err != nil {
+		t.Fatalf("review sandbox probe failed: %v\n%s\n%s", err, res.Stdout, res.Stderr)
+	}
+}
 
 // Opt in on a host/container capable of creating Codex sandbox namespaces.
 // No provider login, network access, or model invocation is required.

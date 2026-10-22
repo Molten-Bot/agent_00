@@ -124,6 +124,23 @@ func TestTaskSandboxRejectsSymlinkDirectoriesOutsideTask(t *testing.T) {
 	}
 }
 
+func TestClaudeReviewRejectsRedirectedIO(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.Mkdir(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(repo, filepath.Join(root, ".agent00-agent-io")); err != nil {
+		t.Fatal(err)
+	}
+	rt, _ := Resolve(HarnessClaude, "")
+	_, err := rt.BuildCommand(repo, "review", RunOptions{WorkspaceDir: root, DisallowedTools: []string{"Write"}})
+	if err == nil {
+		t.Fatal("review must not grant repository writes through an IO symlink")
+	}
+}
+
 func TestResolveDefaultsToCodex(t *testing.T) {
 	t.Parallel()
 
@@ -349,11 +366,8 @@ func TestBuildCommandClaudeDisallowedTools(t *testing.T) {
 		t.Fatalf("BuildCommand() error = %v", err)
 	}
 	wantArgs := []string{
-		"sandbox", "-c", `sandbox_mode="workspace-write"`,
-		"-c", "sandbox_workspace_write.writable_roots=[]",
-		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
-		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-		"-c", "sandbox_workspace_write.network_access=true",
+		"sandbox", "-P", "agent00_review",
+		"-c", `permissions.agent00_review={filesystem={":root"="read"},network={enabled=true}}`,
 		"--", "claude",
 		"--print", "--output-format", "text", "--dangerously-skip-permissions",
 		"--disallowedTools", "Edit", "Write", "NotebookEdit", "--",

@@ -3892,7 +3892,8 @@ func TestRunFailedChecksFallsBackToTextSnapshotWhenGHJSONUnsupported(t *testing.
 		{cmd: pushCommand(repoDir, branch)},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: checkOutput + "\n"}, err: errors.New("checks failed")},
-		{cmd: prChecksJSONCommand(repoDir, prURL, false), res: execx.Result{Stdout: checkOutput + "\n", Stderr: unsupportedJSON}, err: errors.New("exit status 1")},
+		{cmd: prChecksJSONCommand(repoDir, prURL, false), res: execx.Result{Stderr: unsupportedJSON}, err: errors.New("exit status 1")},
+		{cmd: prChecksTextCommand(repoDir, prURL, false), res: execx.Result{Stdout: checkOutput + "\n"}},
 	}}
 
 	h := New(fake)

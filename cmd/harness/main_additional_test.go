@@ -1581,6 +1581,23 @@ func TestRemoveManagedWorkspaceDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(managedDir, "file.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write managed file: %v", err)
 	}
+	cacheDir := filepath.Join(managedDir, ".agent00-agent-io", "cache", "go-mod", "example.com", "module@v1.0.0")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "module.go"), []byte("package example"), 0444); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Chmod(outside, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(cacheDir, "outside")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cacheDir, 0555); err != nil {
+		t.Fatal(err)
+	}
 
 	removed, err := removeManagedWorkspaceDir(managedDir)
 	if err != nil {
@@ -1591,6 +1608,9 @@ func TestRemoveManagedWorkspaceDir(t *testing.T) {
 	}
 	if _, err := os.Stat(managedDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("managed dir still exists after cleanup: %v", err)
+	}
+	if info, err := os.Stat(outside); err != nil || info.Mode().Perm() != 0700 {
+		t.Fatalf("cleanup modified outside symlink target: %v, %v", info, err)
 	}
 
 	unmanagedDir := filepath.Join(t.TempDir(), "unmanaged")

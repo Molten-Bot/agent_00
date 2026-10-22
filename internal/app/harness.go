@@ -7634,6 +7634,14 @@ func prChecksJSONCommand(repoDir, prURL string, requiredOnly bool) execx.Command
 	}
 }
 
+func prChecksTextCommand(repoDir, prURL string, requiredOnly bool) execx.Command {
+	args := []string{"pr", "checks", githubutil.PullRequestSelector(prURL)}
+	if requiredOnly {
+		args = append(args, "--required")
+	}
+	return execx.Command{Dir: repoDir, Name: "gh", Args: args}
+}
+
 func headCommitSHACommand(repoDir string) execx.Command {
 	return execx.Command{
 		Dir:  repoDir,
@@ -7853,19 +7861,7 @@ type latestCheckState struct {
 }
 
 func (h Harness) reconcileChecksAfterFailure(ctx context.Context, repo repoWorkspace, requiredOnly bool) (bool, string, error) {
-	res, err := h.runCommand(ctx, "checks", prChecksJSONCommand(repo.Dir, repo.PRURL, requiredOnly))
-	if err != nil {
-		if !isUnsupportedPRChecksJSON(res, err) {
-			return false, "", err
-		}
-		snapshot, parseErr := latestCheckSnapshotFromText(res.Stdout)
-		if parseErr != nil {
-			return false, "", err
-		}
-		return !snapshot.HasFailures && snapshot.AllPassing, snapshot.Summary, nil
-	}
-
-	snapshot, err := latestCheckSnapshot(res.Stdout)
+	snapshot, err := h.latestChecks(ctx, repo, requiredOnly)
 	if err != nil {
 		return false, "", err
 	}
@@ -7873,22 +7869,34 @@ func (h Harness) reconcileChecksAfterFailure(ctx context.Context, repo repoWorks
 }
 
 func (h Harness) latestChecksAreAllPassing(ctx context.Context, repo repoWorkspace, requiredOnly bool) (bool, string, error) {
-	res, err := h.runCommand(ctx, "checks", prChecksJSONCommand(repo.Dir, repo.PRURL, requiredOnly))
-	if err != nil {
-		if !isUnsupportedPRChecksJSON(res, err) {
-			return false, "", err
-		}
-		snapshot, parseErr := latestCheckSnapshotFromText(res.Stdout)
-		if parseErr != nil {
-			return false, "", err
-		}
-		return snapshot.AllPassing, snapshot.Summary, nil
-	}
-	snapshot, err := latestCheckSnapshot(res.Stdout)
+	snapshot, err := h.latestChecks(ctx, repo, requiredOnly)
 	if err != nil {
 		return false, "", err
 	}
 	return snapshot.AllPassing, snapshot.Summary, nil
+}
+
+func (h Harness) latestChecks(ctx context.Context, repo repoWorkspace, requiredOnly bool) (latestChecksSnapshot, error) {
+	res, err := h.runCommand(ctx, "checks", prChecksJSONCommand(repo.Dir, repo.PRURL, requiredOnly))
+	if isUnsupportedPRChecksJSON(res, err) {
+		// Older gh versions emit only usage text when --json is unsupported.
+		// Query again without it; never treat the failed query as a snapshot.
+		res, err = h.runCommand(ctx, "checks", prChecksTextCommand(repo.Dir, repo.PRURL, requiredOnly))
+		snapshot, parseErr := latestCheckSnapshotFromText(res.Stdout)
+		if err != nil {
+			// gh also exits nonzero for failed or pending checks. Such output
+			// can explain the failure, but must never turn an error into success.
+			if parseErr == nil && !snapshot.AllPassing {
+				return snapshot, nil
+			}
+			return latestChecksSnapshot{}, err
+		}
+		return snapshot, parseErr
+	}
+	if err != nil {
+		return latestChecksSnapshot{}, err
+	}
+	return latestCheckSnapshot(res.Stdout)
 }
 
 type latestChecksSnapshot struct {

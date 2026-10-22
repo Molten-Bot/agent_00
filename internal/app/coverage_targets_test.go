@@ -860,9 +860,10 @@ func TestLatestChecksAreAllPassing(t *testing.T) {
 		fake := &fakeRunner{t: t, exps: []expectedRun{
 			{
 				cmd: prChecksJSONCommand(repo.Dir, repo.PRURL, true),
-				res: execx.Result{Stdout: checkOutput, Stderr: unsupportedJSON},
+				res: execx.Result{Stderr: unsupportedJSON},
 				err: errors.New("exit status 1"),
 			},
+			{cmd: prChecksTextCommand(repo.Dir, repo.PRURL, true), res: execx.Result{Stdout: checkOutput}},
 		}}
 		h := New(fake)
 		allPassing, _, err := h.latestChecksAreAllPassing(context.Background(), repo, true)

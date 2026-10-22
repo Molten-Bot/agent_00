@@ -215,31 +215,32 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 		return execx.Command{}, fmt.Errorf("runtime command is required")
 	}
 	if normalizeHarness(r.Harness) == HarnessClaude {
-		// Permission bypass alone does not enforce a filesystem boundary.
-		// Sandbox the entire Claude CLI and its child processes. When the
-		// caller asks for a read-only pass (DisallowedTools set, for example
-		// a post-task review that must not touch the repository),
-		// --disallowedTools alone only blocks the named Claude tools; a
-		// sandboxed Bash call could still write to disk. Codex's read-only
-		// sandbox_mode would stop that, but it also cuts all network access
-		// with no override (only sandbox_workspace_write exposes
-		// network_access), and this wrapper sandboxes Claude's whole process
-		// tree including its own HTTPS calls to the Anthropic API. Stay in
-		// workspace-write with zero writable roots instead: nothing can
-		// write regardless of which tool it tries to use, but Claude can
-		// still reach its API.
+		// Sandbox Claude's whole process, including its provider requests.
+		// Reviews need network access with a genuinely read-only filesystem:
+		// workspace-write implicitly permits cwd even with writable_roots=[].
 		readOnly := len(nonEmptyStrings(opts.DisallowedTools)) > 0
-		args := []string{"sandbox", "-c", `sandbox_mode="workspace-write"`}
+		args := []string{"sandbox"}
 		if readOnly {
+			filesystem := `":root"="read"`
+			if opts.WorkspaceDir != "" {
+				// Claude needs its isolated cache, temp files and session state.
+				// Permit only harness-owned IO, never the repository or task root.
+				ioDir := filepath.Join(opts.WorkspaceDir, ".agent00-agent-io")
+				resolved, err := resolveSandboxPath(ioDir)
+				if err != nil || resolved != ioDir {
+					return execx.Command{}, fmt.Errorf("review agent IO directory must not be a symlink")
+				}
+				filesystem += fmt.Sprintf(",%q=\"write\"", ioDir)
+			}
 			args = append(args,
-				"-c", "sandbox_workspace_write.writable_roots=[]",
-				"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
-				"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+				"-P", "agent00_review",
+				"-c", "permissions.agent00_review={filesystem={"+filesystem+"},network={enabled=true}}",
 			)
 		} else {
+			args = append(args, "-c", `sandbox_mode="workspace-write"`)
 			args = append(args, workspaceSandboxArgs(opts)...)
+			args = append(args, "-c", "sandbox_workspace_write.network_access=true")
 		}
-		args = append(args, "-c", "sandbox_workspace_write.network_access=true")
 		args = append(args, "--", cmd.Name)
 		cmd.Args = append(args, cmd.Args...)
 		cmd.Name = "codex"
