@@ -349,6 +349,50 @@ func promptHashForTest(prompt string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func TestGcLockedNilAndNonPositiveTTLNoop(t *testing.T) {
+	t.Parallel()
+
+	var nilDeduper *localSubmissionDeduper
+	nilDeduper.gcLocked(time.Now())
+
+	d := &localSubmissionDeduper{
+		completed: map[string]dedupeRecord{
+			"stale": {requestID: "r1", completedAt: time.Now().Add(-time.Hour)},
+		},
+		ttl: 0,
+	}
+	d.gcLocked(time.Now())
+	if _, ok := d.completed["stale"]; !ok {
+		t.Fatal("gcLocked() with non-positive ttl removed entries, want no-op")
+	}
+}
+
+func TestGcLockedRemovesExpiredEntries(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	d := &localSubmissionDeduper{
+		completed: map[string]dedupeRecord{
+			"expired":    {requestID: "r1", completedAt: now.Add(-2 * time.Minute)},
+			"fresh":      {requestID: "r2", completedAt: now},
+			"exact-edge": {requestID: "r3", completedAt: now.Add(-1 * time.Minute)},
+		},
+		ttl: time.Minute,
+	}
+
+	d.gcLocked(now)
+
+	if _, ok := d.completed["expired"]; ok {
+		t.Fatal("gcLocked() kept an entry older than ttl")
+	}
+	if _, ok := d.completed["fresh"]; !ok {
+		t.Fatal("gcLocked() removed a fresh entry")
+	}
+	if _, ok := d.completed["exact-edge"]; !ok {
+		t.Fatal("gcLocked() removed an entry exactly at the ttl boundary, want kept (only strictly greater than ttl is expired)")
+	}
+}
+
 func TestLocalSubmissionDeduperCheckBeginDone(t *testing.T) {
 	t.Parallel()
 

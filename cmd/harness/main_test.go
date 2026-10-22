@@ -154,6 +154,199 @@ func TestLoadServerBootConfigAcceptsMalformedDockerComposeGitHubEnv(t *testing.T
 	}
 }
 
+func TestLoadServerBootConfigRejectsBothInitAndConfig(t *testing.T) {
+	t.Parallel()
+
+	_, exitCode, err := loadServerBootConfig("init.json", "config.json")
+	if err == nil || !strings.Contains(err.Error(), "provide only one of --init or --config") {
+		t.Fatalf("loadServerBootConfig(both) error = %v, want mutually exclusive error", err)
+	}
+	if exitCode != app.ExitUsage {
+		t.Fatalf("loadServerBootConfig(both) exitCode = %d, want %d", exitCode, app.ExitUsage)
+	}
+}
+
+func TestLoadServerBootConfigWithMissingInitFallsBackToExistingRuntimeConfig(t *testing.T) {
+	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", "")
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	tempDir := t.TempDir()
+	initPath := filepath.Join(tempDir, "init.json")
+	runtimeConfigPath := filepath.Join(tempDir, "config.json")
+	if err := os.WriteFile(runtimeConfigPath, []byte(`{"agent_harness":"claude"}`), 0o600); err != nil {
+		t.Fatalf("write runtime config: %v", err)
+	}
+
+	cfg, exitCode, err := loadServerBootConfig(initPath, "")
+	if err != nil {
+		t.Fatalf("loadServerBootConfig() error = %v", err)
+	}
+	if exitCode != app.ExitSuccess {
+		t.Fatalf("loadServerBootConfig() exitCode = %d, want %d", exitCode, app.ExitSuccess)
+	}
+	if got, want := cfg.AgentHarness, "claude"; got != want {
+		t.Fatalf("AgentHarness = %q, want %q", got, want)
+	}
+}
+
+func TestLoadServerBootConfigWithMissingInitAndMissingRuntimeConfigUsesDefault(t *testing.T) {
+	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", "")
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	tempDir := t.TempDir()
+	initPath := filepath.Join(tempDir, "init.json")
+
+	cfg, exitCode, err := loadServerBootConfig(initPath, "")
+	if err != nil {
+		t.Fatalf("loadServerBootConfig() error = %v", err)
+	}
+	if exitCode != app.ExitSuccess {
+		t.Fatalf("loadServerBootConfig() exitCode = %d, want %d", exitCode, app.ExitSuccess)
+	}
+	if got, want := cfg.RuntimeConfigPath, filepath.Join(tempDir, "config.json"); got != want {
+		t.Fatalf("RuntimeConfigPath = %q, want %q", got, want)
+	}
+}
+
+func TestLoadServerBootConfigWithInvalidInitJSONReturnsConfigError(t *testing.T) {
+	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", "")
+
+	initPath := filepath.Join(t.TempDir(), "init.json")
+	if err := os.WriteFile(initPath, []byte(`{not valid json`), 0o600); err != nil {
+		t.Fatalf("write init config: %v", err)
+	}
+
+	_, exitCode, err := loadServerBootConfig(initPath, "")
+	if err == nil || !strings.Contains(err.Error(), "init config error") {
+		t.Fatalf("loadServerBootConfig(invalid init) error = %v, want init config error", err)
+	}
+	if exitCode != app.ExitConfig {
+		t.Fatalf("loadServerBootConfig(invalid init) exitCode = %d, want %d", exitCode, app.ExitConfig)
+	}
+}
+
+func TestLoadServerBootConfigDefaultsWhenNoInitOrConfigProvided(t *testing.T) {
+	envPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", envPath)
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	cfg, exitCode, err := loadServerBootConfig("", "")
+	if err != nil {
+		t.Fatalf("loadServerBootConfig() error = %v", err)
+	}
+	if exitCode != app.ExitSuccess {
+		t.Fatalf("loadServerBootConfig() exitCode = %d, want %d", exitCode, app.ExitSuccess)
+	}
+	if got, want := cfg.RuntimeConfigPath, envPath; got != want {
+		t.Fatalf("RuntimeConfigPath = %q, want %q", got, want)
+	}
+}
+
+func TestLoadServerBootRuntimeConfigOrDefaultPropagatesNonNotExistError(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{not valid json`), 0o600); err != nil {
+		t.Fatalf("write runtime config: %v", err)
+	}
+
+	_, exitCode, err := loadServerBootRuntimeConfigOrDefault(path)
+	if err == nil || !strings.Contains(err.Error(), "parse runtime config") {
+		t.Fatalf("loadServerBootRuntimeConfigOrDefault(malformed) error = %v, want parse error", err)
+	}
+	if exitCode != app.ExitConfig {
+		t.Fatalf("loadServerBootRuntimeConfigOrDefault(malformed) exitCode = %d, want %d", exitCode, app.ExitConfig)
+	}
+}
+
+func TestLoadServerBootRuntimeConfigOrDefaultLoadsExistingConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"agent_harness":"claude"}`), 0o600); err != nil {
+		t.Fatalf("write runtime config: %v", err)
+	}
+
+	cfg, exitCode, err := loadServerBootRuntimeConfigOrDefault(path)
+	if err != nil {
+		t.Fatalf("loadServerBootRuntimeConfigOrDefault() error = %v", err)
+	}
+	if exitCode != app.ExitSuccess {
+		t.Fatalf("loadServerBootRuntimeConfigOrDefault() exitCode = %d, want %d", exitCode, app.ExitSuccess)
+	}
+	if got, want := cfg.AgentHarness, "claude"; got != want {
+		t.Fatalf("AgentHarness = %q, want %q", got, want)
+	}
+	if got, want := cfg.RuntimeConfigPath, path; got != want {
+		t.Fatalf("RuntimeConfigPath = %q, want %q", got, want)
+	}
+}
+
+func TestLoadServerBootRuntimeConfigOrDefaultResolvesEmptyPathUsingDefault(t *testing.T) {
+	envPath := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", envPath)
+
+	cfg, exitCode, err := loadServerBootRuntimeConfigOrDefault("")
+	if err != nil {
+		t.Fatalf("loadServerBootRuntimeConfigOrDefault() error = %v", err)
+	}
+	if exitCode != app.ExitSuccess {
+		t.Fatalf("loadServerBootRuntimeConfigOrDefault() exitCode = %d, want %d", exitCode, app.ExitSuccess)
+	}
+	if got, want := cfg.RuntimeConfigPath, envPath; got != want {
+		t.Fatalf("RuntimeConfigPath = %q, want %q", got, want)
+	}
+}
+
+func TestFinalizeServerBootConfigPassesThroughError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("boom")
+	cfg, exitCode, err := finalizeServerBootConfig(localruntime.InitConfig{AgentHarness: "claude"}, app.ExitUsage, wantErr)
+	if err != wantErr {
+		t.Fatalf("finalizeServerBootConfig() error = %v, want %v", err, wantErr)
+	}
+	if exitCode != app.ExitUsage {
+		t.Fatalf("finalizeServerBootConfig() exitCode = %d, want %d", exitCode, app.ExitUsage)
+	}
+	if cfg.AgentHarness != "claude" {
+		t.Fatalf("finalizeServerBootConfig() cfg = %+v, want unchanged input cfg", cfg)
+	}
+}
+
+func TestFinalizeServerBootConfigReportsSaveTokenFailure(t *testing.T) {
+	t.Setenv("GH_TOKEN", "github_token_from_env")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	blockerFile := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blockerFile, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile(blocker) error = %v", err)
+	}
+	blockedPath := filepath.Join(blockerFile, "config.json")
+
+	_, exitCode, err := finalizeServerBootConfig(localruntime.InitConfig{RuntimeConfigPath: blockedPath}, app.ExitSuccess, nil)
+	if err == nil {
+		t.Fatal("finalizeServerBootConfig() error = nil, want save token failure")
+	}
+	if exitCode != app.ExitConfig {
+		t.Fatalf("finalizeServerBootConfig() exitCode = %d, want %d", exitCode, app.ExitConfig)
+	}
+}
+
+func TestFinalizeServerBootConfigReportsValidateFailure(t *testing.T) {
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	_, exitCode, err := finalizeServerBootConfig(localruntime.InitConfig{Version: "v2"}, app.ExitSuccess, nil)
+	if err == nil || !strings.Contains(err.Error(), "unsupported version") {
+		t.Fatalf("finalizeServerBootConfig(invalid version) error = %v, want unsupported version error", err)
+	}
+	if exitCode != app.ExitConfig {
+		t.Fatalf("finalizeServerBootConfig(invalid version) exitCode = %d, want %d", exitCode, app.ExitConfig)
+	}
+}
+
 func TestEffectiveRuntimeConfigKeepsBootstrapGitHubToken(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
