@@ -262,7 +262,7 @@ func TestSelectableAgentAuthGateConfigureAppliesGitHubTokenWhenNeedsConfigure(t 
 	useSuccessfulGitHubStarTestServer(t)
 
 	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
-	gate := newSelectableAgentAuthGate(context.Background(), nil, localruntime.InitConfig{RuntimeConfigPath: path}, nil)
+	gate := newSelectableAgentAuthGate(context.Background(), selectableGitHubReadyRunner(), localruntime.InitConfig{RuntimeConfigPath: path}, nil)
 
 	state, err := gate.Configure(context.Background(), fakeGitHubPAT("selectable_needs_configure"))
 	if err != nil {
