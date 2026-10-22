@@ -6775,11 +6775,14 @@ body.onboarding-modal-open {
 }
 
 .settings-tabbar {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
-  gap: 8px;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 4px;
   width: 100%;
   padding: 6px;
+  overflow: hidden;
   border: 1px solid var(--surface-control-border);
   border-radius: var(--radius-card);
   background: var(--surface-control-bg);
@@ -6787,11 +6790,15 @@ body.onboarding-modal-open {
 
 .settings-tab {
   display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 44px;
+  max-width: 100%;
+  overflow: hidden;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 0;
   min-height: 48px;
-  padding: 10px 18px;
+  padding: 10px 14px;
   border: 1px solid transparent;
   border-radius: var(--radius);
   background: transparent;
@@ -6805,11 +6812,32 @@ body.onboarding-modal-open {
 .settings-tab [data-lucide] {
   width: 18px;
   height: 18px;
+  flex: none;
+}
+
+.settings-tab span {
+  display: inline-block;
+  max-width: 0;
+  margin-left: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transition: max-width 0.2s ease, margin-left 0.2s ease, opacity 0.15s ease;
 }
 
 .settings-tab:hover,
 .settings-tab:focus-visible {
   color: var(--text);
+}
+
+.settings-tab:hover span,
+.settings-tab:focus-visible span,
+.settings-tab.active span,
+.settings-tab[aria-selected="true"] span {
+  max-width: 200px;
+  margin-left: 8px;
+  opacity: 1;
 }
 
 .settings-tab.active,
@@ -7296,11 +7324,6 @@ body.onboarding-modal-open {
       "token"
       "profile"
       "actions";
-  }
-
-  .settings-tabbar {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    width: 100%;
   }
 
   .review-settings-merge-options {
