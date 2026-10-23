@@ -175,11 +175,13 @@ type ReviewSettingsState struct {
 }
 
 type ReviewSettingsRequest struct {
-	AutoMerge             bool   `json:"auto_merge"`
-	DeleteMergedBranches  bool   `json:"delete_merged_branches"`
-	MergeMethod           string `json:"merge_method"`
-	ReviewLevel           string `json:"review_level"`
-	DefaultLibraryEnabled bool   `json:"default_library_enabled"`
+	AutoMerge            bool   `json:"auto_merge"`
+	DeleteMergedBranches bool   `json:"delete_merged_branches"`
+	MergeMethod          string `json:"merge_method"`
+	ReviewLevel          string `json:"review_level"`
+	// DefaultLibraryEnabled is a pointer so a POST body that omits the field
+	// is distinguishable from an explicit false (the bool zero value).
+	DefaultLibraryEnabled *bool `json:"default_library_enabled,omitempty"`
 }
 
 // NewServer returns a monitor HTTP server.

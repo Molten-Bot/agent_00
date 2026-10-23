@@ -749,10 +749,11 @@ func TestConfigureReviewSettingsPersistsDefaultLibraryEnabled(t *testing.T) {
 		t.Fatal("default library should start enabled before any config is saved")
 	}
 
+	disabled := false
 	state, err := configureReviewSettings(initCfg, web.ReviewSettingsRequest{
 		MergeMethod:           "squash",
 		ReviewLevel:           "off",
-		DefaultLibraryEnabled: false,
+		DefaultLibraryEnabled: &disabled,
 	})
 	if err != nil {
 		t.Fatalf("configureReviewSettings() error = %v", err)
@@ -776,10 +777,11 @@ func TestConfigureReviewSettingsPersistsDefaultLibraryEnabled(t *testing.T) {
 		t.Fatalf("default_library_enabled = %#v, want false", doc["default_library_enabled"])
 	}
 
+	enabled := true
 	state, err = configureReviewSettings(initCfg, web.ReviewSettingsRequest{
 		MergeMethod:           "squash",
 		ReviewLevel:           "off",
-		DefaultLibraryEnabled: true,
+		DefaultLibraryEnabled: &enabled,
 	})
 	if err != nil {
 		t.Fatalf("configureReviewSettings(default) error = %v", err)
@@ -797,6 +799,40 @@ func TestConfigureReviewSettingsPersistsDefaultLibraryEnabled(t *testing.T) {
 	}
 	if _, ok := doc["default_library_enabled"]; ok {
 		t.Fatalf("default_library_enabled persisted for the default (enabled) value: %#v", doc["default_library_enabled"])
+	}
+}
+
+func TestConfigureReviewSettingsOmittedDefaultLibraryEnabledKeepsCurrentValue(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	initCfg := localruntime.InitConfig{RuntimeConfigPath: configPath, AgentHarness: "codex"}
+
+	disabled := false
+	if _, err := configureReviewSettings(initCfg, web.ReviewSettingsRequest{
+		MergeMethod:           "squash",
+		ReviewLevel:           "off",
+		DefaultLibraryEnabled: &disabled,
+	}); err != nil {
+		t.Fatalf("configureReviewSettings() error = %v", err)
+	}
+
+	// A request that omits default_library_enabled (nil pointer, as happens
+	// when a client sends a JSON body without the field) must not reset the
+	// persisted setting back to enabled.
+	state, err := configureReviewSettings(initCfg, web.ReviewSettingsRequest{
+		AutoMerge:   true,
+		MergeMethod: "squash",
+		ReviewLevel: "off",
+	})
+	if err != nil {
+		t.Fatalf("configureReviewSettings() error = %v", err)
+	}
+	if state.DefaultLibraryEnabled {
+		t.Fatalf("state.DefaultLibraryEnabled = true, want false (omitted field should keep prior value)")
+	}
+	if currentReviewSettingsState(initCfg).DefaultLibraryEnabled {
+		t.Fatal("default library should still read back disabled after an update that omits the field")
 	}
 }
 

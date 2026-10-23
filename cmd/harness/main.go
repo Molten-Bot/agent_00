@@ -2477,7 +2477,11 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		state := currentReviewSettingsState(cfg)
 		return state, err
 	}
-	if err := localruntime.SaveRuntimeConfigDefaultLibraryEnabled(cfg.RuntimeConfigPath, cfg, req.DefaultLibraryEnabled); err != nil {
+	defaultLibraryEnabled := localruntime.ReadRuntimeConfigDefaultLibraryEnabled(cfg.RuntimeConfigPath)
+	if req.DefaultLibraryEnabled != nil {
+		defaultLibraryEnabled = *req.DefaultLibraryEnabled
+	}
+	if err := localruntime.SaveRuntimeConfigDefaultLibraryEnabled(cfg.RuntimeConfigPath, cfg, defaultLibraryEnabled); err != nil {
 		state := currentReviewSettingsState(cfg)
 		return state, err
 	}

@@ -38,7 +38,10 @@ func TestHandleReviewSettingsStatusAndConfigure(t *testing.T) {
 		if req.ReviewLevel != "high" {
 			return ReviewSettingsState{}, fmt.Errorf("unexpected review level %q", req.ReviewLevel)
 		}
-		if req.DefaultLibraryEnabled {
+		if req.DefaultLibraryEnabled == nil {
+			return ReviewSettingsState{}, fmt.Errorf("expected default_library_enabled to be set")
+		}
+		if *req.DefaultLibraryEnabled {
 			return ReviewSettingsState{}, fmt.Errorf("unexpected default_library_enabled true")
 		}
 		return ReviewSettingsState{AutoMerge: true, MergeMethod: "rebase", ReviewLevel: "high", DefaultLibraryEnabled: false, Message: "Review settings saved."}, nil
