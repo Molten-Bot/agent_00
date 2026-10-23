@@ -6789,7 +6789,6 @@ body.onboarding-modal-open {
   border: 1px solid var(--surface-control-border);
   border-radius: var(--radius-card);
   background: var(--surface-control-bg);
-  overflow: hidden;
 }
 
 .settings-tabbar {
