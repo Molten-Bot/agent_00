@@ -7796,7 +7796,7 @@ func mergeMainLibraryPrompt() string {
 			return strings.TrimSpace(task.Prompt)
 		}
 	}
-	return "You are a senior software engineer resolving merge conflicts with the latest base branch. Preserve both sides' intended behavior, keep the diff scoped to conflict resolution, validate locally where possible, and report `Failure:` and `Error details:` if the conflict cannot be resolved safely."
+	return "You are a senior software engineer resolving merge conflicts with the latest base branch. Preserve both sides' intended behavior, keep the diff scoped to conflict resolution, validate locally where possible, and report `Failure:` and `Error details:` if the conflict cannot be resolved safely. After editing a conflicted file to remove its conflict markers, immediately run `git add <file>` on it — removing the markers alone does not clear git's merge state, and the path stays unmerged in the index until re-added. Before finishing, run `git status --porcelain` and confirm no path is still marked unmerged."
 }
 
 func summarizeCheckOutput(res execx.Result) string {
