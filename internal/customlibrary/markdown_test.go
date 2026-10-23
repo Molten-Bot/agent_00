@@ -86,6 +86,18 @@ func TestTaskFromMarkdownWithoutFrontmatter(t *testing.T) {
 	}
 }
 
+func TestTaskFromMarkdownDefaultsDisplayNameToSourceName(t *testing.T) {
+	t.Parallel()
+
+	task, err := taskFromMarkdown("acme-docs", "fix-flaky-build", "Stabilize the build.\n")
+	if err != nil {
+		t.Fatalf("taskFromMarkdown() error: %v", err)
+	}
+	if want := "Acme Docs: Fix Flaky Build"; task.DisplayName != want {
+		t.Fatalf("DisplayName = %q, want %q", task.DisplayName, want)
+	}
+}
+
 func TestTaskFromMarkdownEmptyPromptRejected(t *testing.T) {
 	t.Parallel()
 

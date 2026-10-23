@@ -6925,6 +6925,50 @@ body.onboarding-modal-open {
   accent-color: var(--running);
 }
 
+.review-settings-switch {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  width: 40px;
+  height: 22px;
+}
+
+.review-settings-switch input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: 1px solid var(--surface-control-border);
+  border-radius: 999px;
+  background: var(--surface-control-bg);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.review-settings-switch input[type="checkbox"]::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-soft);
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.review-settings-switch input[type="checkbox"]:checked {
+  background: var(--running);
+  border-color: var(--running);
+}
+
+.review-settings-switch input[type="checkbox"]:checked::before {
+  transform: translateX(18px);
+  background: var(--surface-control-bg-strong);
+}
+
 .review-settings-merge-options {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

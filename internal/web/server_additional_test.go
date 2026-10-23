@@ -38,7 +38,13 @@ func TestHandleReviewSettingsStatusAndConfigure(t *testing.T) {
 		if req.ReviewLevel != "high" {
 			return ReviewSettingsState{}, fmt.Errorf("unexpected review level %q", req.ReviewLevel)
 		}
-		return ReviewSettingsState{AutoMerge: true, MergeMethod: "rebase", ReviewLevel: "high", Message: "Review settings saved."}, nil
+		if req.DefaultLibraryEnabled == nil {
+			return ReviewSettingsState{}, fmt.Errorf("expected default_library_enabled to be set")
+		}
+		if *req.DefaultLibraryEnabled {
+			return ReviewSettingsState{}, fmt.Errorf("unexpected default_library_enabled true")
+		}
+		return ReviewSettingsState{AutoMerge: true, MergeMethod: "rebase", ReviewLevel: "high", DefaultLibraryEnabled: false, Message: "Review settings saved."}, nil
 	}
 	handler := srv.Handler()
 
@@ -59,7 +65,7 @@ func TestHandleReviewSettingsStatusAndConfigure(t *testing.T) {
 		t.Fatalf("GET settings = %#v", getBody)
 	}
 
-	postReq := httptest.NewRequest(http.MethodPost, "/api/review-settings", strings.NewReader(`{"auto_merge":true,"merge_method":"rebase","review_level":"high"}`))
+	postReq := httptest.NewRequest(http.MethodPost, "/api/review-settings", strings.NewReader(`{"auto_merge":true,"merge_method":"rebase","review_level":"high","default_library_enabled":false}`))
 	postReq.Header.Set("Content-Type", "application/json")
 	postRes := httptest.NewRecorder()
 	handler.ServeHTTP(postRes, postReq)
@@ -73,7 +79,7 @@ func TestHandleReviewSettingsStatusAndConfigure(t *testing.T) {
 	if err := json.Unmarshal(postRes.Body.Bytes(), &postBody); err != nil {
 		t.Fatalf("decode post response: %v", err)
 	}
-	if !postBody.OK || !postBody.Settings.AutoMerge || postBody.Settings.MergeMethod != "rebase" || postBody.Settings.ReviewLevel != "high" {
+	if !postBody.OK || !postBody.Settings.AutoMerge || postBody.Settings.MergeMethod != "rebase" || postBody.Settings.ReviewLevel != "high" || postBody.Settings.DefaultLibraryEnabled {
 		t.Fatalf("POST settings = %#v", postBody)
 	}
 }

@@ -39,7 +39,7 @@ func TestSaveLocalSettingsDiscardsRetiredCredentials(t *testing.T) {
 	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveRuntimeConfigReviewSettings(path, InitConfig{}, ReviewWatchConfig{ReviewLevel: "low"}); err != nil {
+	if err := SaveRuntimeConfigReviewAndDefaultLibrarySettings(path, InitConfig{}, ReviewWatchConfig{ReviewLevel: "low"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadRuntimeConfig(path)
@@ -61,5 +61,41 @@ func TestSaveLocalSettingsDiscardsRetiredCredentials(t *testing.T) {
 		if _, exists := doc[key]; exists {
 			t.Errorf("saved configuration retained %q", key)
 		}
+	}
+}
+
+func TestDefaultLibraryEnabledDefaultsTrueAndRoundTrips(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.json")
+
+	if !ReadRuntimeConfigDefaultLibraryEnabled(path) {
+		t.Fatal("default library should default to enabled before any config file exists")
+	}
+
+	disabled := false
+	if err := SaveRuntimeConfigReviewAndDefaultLibrarySettings(path, InitConfig{}, ReviewWatchConfig{}, &disabled); err != nil {
+		t.Fatal(err)
+	}
+	if ReadRuntimeConfigDefaultLibraryEnabled(path) {
+		t.Fatal("default library should be disabled after saving false")
+	}
+
+	enabled := true
+	if err := SaveRuntimeConfigReviewAndDefaultLibrarySettings(path, InitConfig{}, ReviewWatchConfig{}, &enabled); err != nil {
+		t.Fatal(err)
+	}
+	if !ReadRuntimeConfigDefaultLibraryEnabled(path) {
+		t.Fatal("default library should be enabled after saving true")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := doc["default_library_enabled"]; exists {
+		t.Error("saving the default (enabled) value should omit the key, keeping the file minimal")
 	}
 }

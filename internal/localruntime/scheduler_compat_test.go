@@ -35,7 +35,7 @@ func TestSchedulerSettingsCompatibility(t *testing.T) {
 			if init.Scheduler.MaxParallel != tc.want || cfg.Scheduler.MaxParallel != tc.want {
 				t.Fatalf("max parallel: init=%d runtime=%d want=%d", init.Scheduler.MaxParallel, cfg.Scheduler.MaxParallel, tc.want)
 			}
-			if err := SaveRuntimeConfigReviewSettings(path, cfg.Init(), cfg.ReviewWatch); err != nil {
+			if err := SaveRuntimeConfigReviewAndDefaultLibrarySettings(path, cfg.Init(), cfg.ReviewWatch, nil); err != nil {
 				t.Fatal(err)
 			}
 			saved, err := os.ReadFile(path)
