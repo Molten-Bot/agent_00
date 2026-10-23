@@ -13,7 +13,7 @@ let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
 
-async function openSettings(t, viewport = { width: 1280, height: 900 }) {
+async function openSettings(t, viewport = { width: 1280, height: 900 }, configurePage) {
   const page = await browser.newPage({ viewport });
   t.after(() => page.close());
   const errors = [];
@@ -23,10 +23,59 @@ async function openSettings(t, viewport = { width: 1280, height: 900 }) {
   await page.route('**/api/agent-auth**', route => route.fulfill({ json: { ok: true, auth: { required: true, ready: true, harness: 'claude', state: 'ready' } } }));
   await page.route('**/api/review-settings', route => route.fulfill({ json: { ok: true, settings: { merge_method: 'squash', review_level: 'off' } } }));
   await page.route('**/api/commit-signing**', route => route.fulfill({ json: { ok: true, settings: {} } }));
+  if (configurePage) await configurePage(page);
   await page.goto(`${baseURL}/#settings`);
   await page.waitForSelector('.settings-tabbar .settings-tab.active');
   return page;
 }
+
+test('library sources lead the picker and the default-library switch saves and reloads', async t => {
+  let enabled = true;
+  let savedSettings;
+  const tasks = [
+    { name: 'builtin', displayName: 'Built-in task', type: 'quality' },
+    { name: 'acme-docs--review', displayName: 'Editorial review', type: 'quality', sourceName: 'acme-docs' },
+    { name: 'acme-docs--fix', displayName: 'Fix docs', type: 'maintenance', sourceName: 'acme-docs' },
+    { name: 'quality--check', displayName: 'Company check', type: 'quality', sourceName: 'quality' },
+  ];
+  const page = await openSettings(t, undefined, async page => {
+    await page.route('**/api/review-settings', async route => {
+      if (route.request().method() === 'POST') {
+        savedSettings = route.request().postDataJSON();
+        enabled = savedSettings.default_library_enabled;
+      }
+      await route.fulfill({ json: { ok: true, settings: { merge_method: 'squash', review_level: 'off', default_library_enabled: enabled } } });
+    });
+    await page.route('**/api/library', route => route.fulfill({ json: { ok: true, tasks: enabled ? tasks : tasks.filter(task => task.sourceName) } }));
+  });
+
+  assert.equal(await page.locator('.settings-tab').first().getAttribute('id'), 'settings-tab-library');
+  await page.locator('#settings-tab-library').click();
+  assert.equal(await page.locator('#settings-tab-library span').textContent(), 'Library');
+  const toggle = page.getByRole('switch', { name: 'Show default library' });
+  assert.equal(await toggle.isChecked(), true);
+
+  await page.goto(`${baseURL}/#studio-library`);
+  await page.waitForSelector('#library-type-tabs .library-type-tab');
+  assert.deepEqual(await page.locator('.library-type-tab-label').allTextContents(), ['acme-docs', 'quality', 'Quality']);
+  assert.deepEqual(await page.locator('.library-task-option-title').allTextContents(), ['Editorial review', 'Fix docs']);
+
+  await page.goto(`${baseURL}/#settings`);
+  await page.locator('#settings-tab-library').click();
+  await toggle.uncheck();
+  await page.locator('#review-settings-save').click();
+  await page.waitForFunction(() => document.querySelectorAll('.library-type-tab').length === 2);
+  assert.equal(savedSettings.default_library_enabled, false);
+
+  await page.reload();
+  await page.goto(`${baseURL}/#settings`);
+  await page.locator('#settings-tab-library').click();
+  assert.equal(await toggle.isChecked(), false);
+  await toggle.check();
+  await page.locator('#review-settings-save').click();
+  await page.waitForFunction(() => document.querySelectorAll('.library-type-tab').length === 3);
+  assert.equal(savedSettings.default_library_enabled, true);
+});
 
 test('hovering an inactive settings tab reveals its label without the tabbar clipping it', async t => {
   const page = await openSettings(t);

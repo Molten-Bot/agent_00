@@ -82,6 +82,7 @@ func loadCustomizedCatalog(dir string, includeDefault bool) (Catalog, error) {
 			if _, exists := catalog.byName[task.Name]; exists {
 				continue
 			}
+			task.sourceName = name
 			catalog.byName[task.Name] = task
 			catalog.Tasks = append(catalog.Tasks, task)
 		}

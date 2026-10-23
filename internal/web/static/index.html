@@ -5452,11 +5452,16 @@
 
     function normalizeLibraryTaskType(task) {
       if (!task || typeof task !== "object") return "other";
+      const sourceName = String(task.sourceName || "").trim();
+      if (sourceName) return `source:${sourceName}`;
       return String(task.type || "").trim().toLowerCase() || "other";
     }
 
     function libraryTaskTypeMeta(typeID) {
       const id = String(typeID || "").trim().toLowerCase() || "other";
+      if (id.startsWith("source:")) {
+        return { id, label: id.slice("source:".length), icon: "library" };
+      }
       const defined = LIBRARY_TASK_TYPE_DEFS[id] || {};
       const label = String(defined.label || id.replace(/[-_]+/g, " ") || "Other").trim();
       return {
@@ -5467,6 +5472,7 @@
     }
 
     function libraryTaskTypeSortIndex(typeID) {
+      if (typeID.startsWith("source:")) return -1;
       const index = LIBRARY_TASK_TYPE_ORDER.indexOf(typeID);
       return index >= 0 ? index : LIBRARY_TASK_TYPE_ORDER.length;
     }
@@ -5498,7 +5504,7 @@
       if (!libraryTypeTabs) return;
 
       libraryTypeTabs.replaceChildren();
-      if (types.length <= 1) {
+      if (!types.length || (types.length === 1 && !types[0].id.startsWith("source:"))) {
         libraryTypeTabs.hidden = true;
         libraryTypeTabs.setAttribute("aria-hidden", "true");
         return;
