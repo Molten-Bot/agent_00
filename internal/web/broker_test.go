@@ -505,6 +505,44 @@ func TestBrokerCountsMergedTasksAsCompletedNotActive(t *testing.T) {
 	}
 }
 
+func TestBrokerTracksStoppedAndPausedTasksSeparatelyFromFailed(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	b.RecordTaskRunConfig("req-stopped", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"stop me"}`))
+	b.IngestLog("task status=start request_id=req-stopped repo=git@github.com:acme/repo.git")
+	b.IngestLog(`task status=stopped request_id=req-stopped err="task stopped by operator"`)
+
+	b.RecordTaskRunConfig("req-paused", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"pause me"}`))
+	b.IngestLog("task status=start request_id=req-paused repo=git@github.com:acme/repo.git")
+	b.IngestLog("task status=paused request_id=req-paused")
+
+	b.RecordTaskRunConfig("req-running", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"keep running"}`))
+	b.IngestLog("task status=start request_id=req-running repo=git@github.com:acme/repo.git")
+
+	b.RecordTaskRunConfig("req-pending", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"queue me"}`))
+
+	snap := b.Snapshot()
+	if got, want := snap.Stats.StoppedTasks, 1; got != want {
+		t.Fatalf("Stats.StoppedTasks = %d, want %d", got, want)
+	}
+	if got, want := snap.Stats.FailedTasks, 0; got != want {
+		t.Fatalf("Stats.FailedTasks = %d, want %d", got, want)
+	}
+	if got, want := snap.Stats.PausedTasks, 1; got != want {
+		t.Fatalf("Stats.PausedTasks = %d, want %d", got, want)
+	}
+	if got, want := snap.Stats.RunningTasks, 1; got != want {
+		t.Fatalf("Stats.RunningTasks = %d, want %d", got, want)
+	}
+	if got, want := snap.Stats.PendingTasks, 1; got != want {
+		t.Fatalf("Stats.PendingTasks = %d, want %d", got, want)
+	}
+	if got, want := snap.Stats.ActiveTasks, 3; got != want {
+		t.Fatalf("Stats.ActiveTasks = %d, want %d", got, want)
+	}
+}
+
 func TestBrokerNormalizesLegacyOKTerminalStatusToCompleted(t *testing.T) {
 	t.Parallel()
 
