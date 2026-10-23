@@ -72,6 +72,8 @@ func prTitlePrefixFor(commitMessage string) string {
 
 // TaskDefinition is one callable library entry loaded from ./library/*.json.
 type TaskDefinition struct {
+	// sourceName is assigned when loading a configured custom source, never by task JSON.
+	sourceName               string
 	Name                     string   `json:"name"`
 	DisplayName              string   `json:"displayName"`
 	Type                     string   `json:"type"`
@@ -113,6 +115,7 @@ func (t *TaskDefinition) UnmarshalJSON(data []byte) error {
 // TaskSummary is the public UI/runtime registration view of one library task.
 type TaskSummary struct {
 	Name                     string `json:"name"`
+	SourceName               string `json:"sourceName,omitempty"`
 	DisplayName              string `json:"displayName,omitempty"`
 	Type                     string `json:"type,omitempty"`
 	Icon                     string `json:"icon,omitempty"`
@@ -196,6 +199,7 @@ func (c Catalog) Summaries() []TaskSummary {
 	for _, task := range c.Tasks {
 		out = append(out, TaskSummary{
 			Name:                     task.Name,
+			SourceName:               task.sourceName,
 			DisplayName:              task.DisplayName,
 			Type:                     task.Type,
 			Icon:                     task.Icon,

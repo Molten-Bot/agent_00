@@ -37,6 +37,18 @@ The bundled sidecar defaults to the `base-int8` model and English language
 hints for more reliable short-form dictation; set both `WHISPER_LANG=auto` and
 `WHISPER_SPEECH_LANGUAGE=auto` to use Whisper language detection.
 
+### Library settings
+
+Open **Settings → Library** to add a private library repository and choose its
+name. Its tasks appear under that name in tabs to the left of the built-in
+categories. An explicit task `displayName` is preserved; otherwise the task title
+is derived from the source name and task slug.
+
+Turn off **Show default library** and save to hide built-in tasks from the
+picker. The setting persists across restarts and leaves custom tasks available.
+Existing schedules for built-in tasks continue to run; delete a schedule to stop
+its recurring runs.
+
 ### Recurring library tasks
 
 On the Library page, choose a repository and use the clock beside a task to

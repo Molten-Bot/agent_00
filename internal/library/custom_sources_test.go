@@ -38,6 +38,15 @@ func TestLoadCustomizedCatalogMergesCustomSources(t *testing.T) {
 	if task, ok := catalog.Task("acme--fix-bug"); !ok || task.Prompt != "Fix the bug." {
 		t.Fatalf("missing/incorrect custom task: ok=%v task=%+v", ok, task)
 	}
+	for _, task := range catalog.Summaries() {
+		wantSource := ""
+		if task.Name == "acme--fix-bug" {
+			wantSource = "acme"
+		}
+		if task.SourceName != wantSource {
+			t.Errorf("task %q source = %q, want %q", task.Name, task.SourceName, wantSource)
+		}
+	}
 }
 
 func TestLoadCustomizedCatalogIgnoresMissingCustomRoot(t *testing.T) {
@@ -102,5 +111,28 @@ func TestLoadCustomizedCatalogSkipsNameCollisionWithBuiltin(t *testing.T) {
 	}
 	if len(catalog.Tasks) != 1 {
 		t.Fatalf("Tasks = %+v, want exactly one task after collision skip", catalog.Tasks)
+	}
+}
+
+func TestLoadCustomLibraryCatalogExcludesBuiltIn(t *testing.T) {
+	t.Setenv(catalogDirEnv, "")
+	t.Setenv(agentsSeedEnv, "")
+
+	customRoot := t.TempDir()
+	t.Setenv(CustomSourcesDirEnv, customRoot)
+	writeGeneratedTask(t, filepath.Join(customRoot, "acme", "generated"), "acme--fix-bug", "Fix the bug.")
+
+	catalog, err := LoadCustomLibraryCatalog()
+	if err != nil {
+		t.Fatalf("LoadCustomLibraryCatalog() error: %v", err)
+	}
+	if len(catalog.Tasks) != 1 {
+		t.Fatalf("Tasks = %+v, want exactly the custom task with no built-in catalog", catalog.Tasks)
+	}
+	if got := catalog.Summaries()[0].SourceName; got != "acme" {
+		t.Fatalf("custom-only task source = %q, want acme", got)
+	}
+	if task, ok := catalog.Task("acme--fix-bug"); !ok || task.Prompt != "Fix the bug." {
+		t.Fatalf("missing/incorrect custom task: ok=%v task=%+v", ok, task)
 	}
 }

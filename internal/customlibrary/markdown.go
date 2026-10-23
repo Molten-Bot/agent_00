@@ -81,9 +81,14 @@ func taskFromMarkdown(sourceName, fileBaseName, content string) (library.TaskDef
 		name = slug.FromPrompt(fileBaseName)
 	}
 
+	displayName := strings.TrimSpace(scalars["displayName"])
+	if displayName == "" {
+		displayName = defaultCustomLibraryDisplayName(sourceName, name)
+	}
+
 	task := library.TaskDefinition{
 		Name:                     sourceName + "--" + name,
-		DisplayName:              strings.TrimSpace(scalars["displayName"]),
+		DisplayName:              displayName,
 		Type:                     strings.TrimSpace(scalars["type"]),
 		Icon:                     strings.TrimSpace(scalars["icon"]),
 		Description:              strings.TrimSpace(scalars["description"]),
@@ -101,6 +106,27 @@ func taskFromMarkdown(sourceName, fileBaseName, content string) (library.TaskDef
 		return library.TaskDefinition{}, fmt.Errorf("prompt body is required")
 	}
 	return task, nil
+}
+
+// defaultCustomLibraryDisplayName builds a display name from the source's
+// configured name (the "Name" field set up when adding the library repo in
+// settings) and the task's own slug, so a task without an explicit
+// "displayName" frontmatter field still shows its source in the UI instead
+// of the raw "sourceName--task-slug" internal task name.
+func defaultCustomLibraryDisplayName(sourceName, name string) string {
+	return titleCaseWords(sourceName) + ": " + titleCaseWords(name)
+}
+
+func titleCaseWords(s string) string {
+	words := strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == '_' || r == ' ' })
+	for i, word := range words {
+		runes := []rune(word)
+		if len(runes) > 0 {
+			runes[0] = []rune(strings.ToUpper(string(runes[0])))[0]
+		}
+		words[i] = string(runes)
+	}
+	return strings.Join(words, " ")
 }
 
 // splitFrontmatter separates a leading "---" delimited block from the rest

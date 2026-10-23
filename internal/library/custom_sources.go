@@ -32,9 +32,27 @@ func CustomSourcesRoot() string {
 // validates a source's content before it ever reaches disk here, so a skip
 // at this layer should only happen transiently.
 func LoadCustomizedCatalog(dir string) (Catalog, error) {
-	catalog, err := LoadCatalog(dir)
-	if err != nil {
-		return Catalog{}, err
+	return loadCustomizedCatalog(dir, true)
+}
+
+// LoadCustomLibraryCatalog merges every configured custom library source's
+// generated catalog without the built-in ./library/*.json catalog. It backs
+// the settings "default library" toggle, which hides built-in tasks from the
+// picker without breaking already-scheduled recurring tasks that reference a
+// default library task name: those keep resolving through
+// LoadCustomizedCatalog regardless of the toggle.
+func LoadCustomLibraryCatalog() (Catalog, error) {
+	return loadCustomizedCatalog("", false)
+}
+
+func loadCustomizedCatalog(dir string, includeDefault bool) (Catalog, error) {
+	catalog := Catalog{byName: map[string]TaskDefinition{}}
+	if includeDefault {
+		var err error
+		catalog, err = LoadCatalog(dir)
+		if err != nil {
+			return Catalog{}, err
+		}
 	}
 
 	root := CustomSourcesRoot()
@@ -64,6 +82,7 @@ func LoadCustomizedCatalog(dir string) (Catalog, error) {
 			if _, exists := catalog.byName[task.Name]; exists {
 				continue
 			}
+			task.sourceName = name
 			catalog.byName[task.Name] = task
 			catalog.Tasks = append(catalog.Tasks, task)
 		}
