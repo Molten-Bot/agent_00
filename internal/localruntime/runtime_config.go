@@ -280,29 +280,6 @@ func runtimeConfigReviewDocOnlyDefaults(doc map[string]any) bool {
 	return true
 }
 
-// SaveRuntimeConfigDefaultLibraryEnabled persists whether the built-in
-// library catalog should appear in the task picker alongside configured
-// custom library sources. Already-scheduled recurring tasks that reference a
-// default library task name keep resolving regardless of this setting.
-func SaveRuntimeConfigDefaultLibraryEnabled(path string, initCfg InitConfig, enabled bool) error {
-	runtimeConfigMu.Lock()
-	defer runtimeConfigMu.Unlock()
-	path = strings.TrimSpace(path)
-	if path == "" {
-		path = defaultRuntimeConfigPath()
-	}
-
-	doc, err := loadRuntimeConfigDoc(path, initCfg)
-	if err != nil {
-		return err
-	}
-
-	applyDefaultLibraryEnabledToDoc(doc, enabled)
-	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
-
-	return writeRuntimeConfigDoc(path, doc)
-}
-
 func applyDefaultLibraryEnabledToDoc(doc map[string]any, enabled bool) {
 	if enabled {
 		delete(doc, "default_library_enabled")
