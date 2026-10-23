@@ -4,6 +4,8 @@
   const editor = byID("editor");
   const list = byID("list");
   const slider = byID("hours");
+  const draftInput = byID("draft");
+  const draftToggle = draftInput.closest(".prompt-draft-toggle");
   const endpoint = "/api/library/schedules";
   let schedules = [];
   let editing = null;
@@ -111,7 +113,8 @@
     byID("task").textContent = titleFor(entry.libraryTaskName);
     byID("repo").textContent = displayRepoLabel(entry.repo);
     byID("options").textContent = `Branch: ${entry.baseBranch || "default"} · Directory: ${entry.targetSubdir || "."}` + (entry.reviewers?.length ? ` · Reviewers: ${entry.reviewers.join(", ")}` : "");
-    byID("draft").checked = Boolean(entry.draft);
+    draftInput.checked = Boolean(entry.draft);
+    draftToggle?.classList.toggle("is-active", draftInput.checked);
     byID("delete").hidden = !entry.key;
     slider.value = String(entry.intervalHours || 24);
     updateInterval();
@@ -162,6 +165,7 @@
   modal.addEventListener("close", () => opener?.focus());
   modal.addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
   byID("back").addEventListener("click", () => { showList(); status(""); });
+  draftInput.addEventListener("change", () => draftToggle?.classList.toggle("is-active", draftInput.checked));
   byID("delete").addEventListener("click", () => { if (editing?.key) void remove(editing); });
   slider.addEventListener("input", () => updateInterval(true));
   editor.addEventListener("submit", (event) => {

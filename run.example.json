@@ -2,6 +2,8 @@
   // optional; defaults to "v1" when omitted
   // "version": "v1",
   "repo": "git@github.com:Molten-Bot/agent_00.git",
+  // "repoUrl" is accepted as an alias for "repo":
+  // "repoUrl": "git@github.com:Molten-Bot/agent_00.git",
   "agentHarness": "codex",
   // optional override when executable name differs from harness default
   // "agentCommand": "codex",
