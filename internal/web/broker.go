@@ -780,7 +780,7 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 			active++
 			if isPausedTaskStatus(t.Status) {
 				paused++
-			} else {
+			} else if isRunningTaskStatus(t.Status) {
 				running++
 			}
 		}
@@ -895,7 +895,7 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 	for _, attempt := range seen {
 		recordAttempt(attempt)
 	}
-	terminalTasks := stats.CompletedTasks + stats.FailedTasks
+	terminalTasks := stats.CompletedTasks + stats.FailedTasks + stats.StoppedTasks
 	if terminalTasks > 0 {
 		stats.SuccessRate = float64(successfulTerminals) / float64(terminalTasks)
 	}
@@ -943,6 +943,19 @@ func isFailedTaskStatus(status string) bool {
 
 func isPausedTaskStatus(status string) bool {
 	return normalizeTaskTerminalStatus(status) == "paused"
+}
+
+func isPendingTaskStatus(status string) bool {
+	switch normalizeTaskTerminalStatus(status) {
+	case "", "pending", "queued":
+		return true
+	default:
+		return false
+	}
+}
+
+func isRunningTaskStatus(status string) bool {
+	return !isCompletedTaskStatus(status) && !isPausedTaskStatus(status) && !isPendingTaskStatus(status)
 }
 
 func isStoppedTaskStatus(status string) bool {
