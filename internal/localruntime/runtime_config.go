@@ -24,19 +24,8 @@ var runtimeConfigMu sync.Mutex
 type RuntimeConfig struct {
 	InitConfig
 
-	LibraryTaskUsage      map[string]int             `json:"library_task_usage,omitempty"`
-	LibrarySchedules      map[string]LibrarySchedule `json:"library_schedules,omitempty"`
-	DefaultLibraryEnabled *bool                      `json:"default_library_enabled,omitempty"`
-}
-
-// DefaultLibraryEnabledValue returns the effective default-library setting.
-// The built-in library catalog is shown by default so the task picker is
-// never empty before any custom library source is configured.
-func (c RuntimeConfig) DefaultLibraryEnabledValue() bool {
-	if c.DefaultLibraryEnabled == nil {
-		return true
-	}
-	return *c.DefaultLibraryEnabled
+	LibraryTaskUsage map[string]int             `json:"library_task_usage,omitempty"`
+	LibrarySchedules map[string]LibrarySchedule `json:"library_schedules,omitempty"`
 }
 
 // ApplyDefaults normalizes a persisted runtime config.
@@ -160,6 +149,49 @@ func SaveRuntimeConfigReviewSettings(path string, initCfg InitConfig, reviewCfg 
 		path = defaultRuntimeConfigPath()
 	}
 
+	doc, err := loadRuntimeConfigDoc(path, initCfg)
+	if err != nil {
+		return err
+	}
+	if err := applyReviewWatchSettingsToDoc(doc, reviewCfg); err != nil {
+		return err
+	}
+	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
+
+	return writeRuntimeConfigDoc(path, doc)
+}
+
+// SaveRuntimeConfigReviewAndDefaultLibrarySettings persists review automation
+// settings and the default-library-enabled flag in a single load/modify/write
+// cycle so a mid-save failure cannot leave one setting persisted without the
+// other.
+func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
+	path string,
+	initCfg InitConfig,
+	reviewCfg ReviewWatchConfig,
+	defaultLibraryEnabled bool,
+) error {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = defaultRuntimeConfigPath()
+	}
+
+	doc, err := loadRuntimeConfigDoc(path, initCfg)
+	if err != nil {
+		return err
+	}
+	if err := applyReviewWatchSettingsToDoc(doc, reviewCfg); err != nil {
+		return err
+	}
+	applyDefaultLibraryEnabledToDoc(doc, defaultLibraryEnabled)
+	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
+
+	return writeRuntimeConfigDoc(path, doc)
+}
+
+func applyReviewWatchSettingsToDoc(doc map[string]any, reviewCfg ReviewWatchConfig) error {
 	rawMergeMethod := strings.TrimSpace(reviewCfg.MergeMethod)
 	reviewCfg.MergeMethod = normalizeReviewWatchMergeMethod(rawMergeMethod)
 	if rawMergeMethod != "" && reviewCfg.MergeMethod == "" {
@@ -175,11 +207,6 @@ func SaveRuntimeConfigReviewSettings(path string, initCfg InitConfig, reviewCfg 
 	}
 	if reviewCfg.ReviewLevel == "" {
 		reviewCfg.ReviewLevel = "off"
-	}
-
-	doc, err := loadRuntimeConfigDoc(path, initCfg)
-	if err != nil {
-		return err
 	}
 
 	reviewDoc := map[string]any{}
@@ -220,9 +247,7 @@ func SaveRuntimeConfigReviewSettings(path string, initCfg InitConfig, reviewCfg 
 	} else {
 		doc["review_watch"] = reviewDoc
 	}
-	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
-
-	return writeRuntimeConfigDoc(path, doc)
+	return nil
 }
 
 func runtimeConfigReviewDocOnlyDefaults(doc map[string]any) bool {
@@ -272,14 +297,18 @@ func SaveRuntimeConfigDefaultLibraryEnabled(path string, initCfg InitConfig, ena
 		return err
 	}
 
+	applyDefaultLibraryEnabledToDoc(doc, enabled)
+	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
+
+	return writeRuntimeConfigDoc(path, doc)
+}
+
+func applyDefaultLibraryEnabledToDoc(doc map[string]any, enabled bool) {
 	if enabled {
 		delete(doc, "default_library_enabled")
 	} else {
 		doc["default_library_enabled"] = false
 	}
-	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
-
-	return writeRuntimeConfigDoc(path, doc)
 }
 
 // ReadRuntimeConfigDefaultLibraryEnabled returns the persisted default

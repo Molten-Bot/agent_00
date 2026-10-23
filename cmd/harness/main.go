@@ -2473,15 +2473,11 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		MergeMethod:          method,
 		ReviewLevel:          reviewLevel,
 	}
-	if err := localruntime.SaveRuntimeConfigReviewSettings(cfg.RuntimeConfigPath, cfg, reviewCfg); err != nil {
-		state := currentReviewSettingsState(cfg)
-		return state, err
-	}
 	defaultLibraryEnabled := localruntime.ReadRuntimeConfigDefaultLibraryEnabled(cfg.RuntimeConfigPath)
 	if req.DefaultLibraryEnabled != nil {
 		defaultLibraryEnabled = *req.DefaultLibraryEnabled
 	}
-	if err := localruntime.SaveRuntimeConfigDefaultLibraryEnabled(cfg.RuntimeConfigPath, cfg, defaultLibraryEnabled); err != nil {
+	if err := localruntime.SaveRuntimeConfigReviewAndDefaultLibrarySettings(cfg.RuntimeConfigPath, cfg, reviewCfg, defaultLibraryEnabled); err != nil {
 		state := currentReviewSettingsState(cfg)
 		return state, err
 	}
