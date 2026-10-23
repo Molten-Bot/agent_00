@@ -137,6 +137,7 @@ type DashboardStats struct {
 	ActiveTasks            int               `json:"active_tasks"`
 	RunningTasks           int               `json:"running_tasks"`
 	PausedTasks            int               `json:"paused_tasks"`
+	PendingTasks           int               `json:"pending_tasks"`
 	CompletedTasks         int               `json:"completed_tasks"`
 	FailedTasks            int               `json:"failed_tasks"`
 	StoppedTasks           int               `json:"stopped_tasks"`
@@ -771,6 +772,7 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 	active := 0
 	running := 0
 	paused := 0
+	pending := 0
 	seen := map[string]taskAttemptState{}
 	for _, t := range tasks {
 		if t == nil {
@@ -780,6 +782,8 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 			active++
 			if isPausedTaskStatus(t.Status) {
 				paused++
+			} else if isPendingTaskStatus(t.Status) {
+				pending++
 			} else if isRunningTaskStatus(t.Status) {
 				running++
 			}
@@ -818,6 +822,7 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 		ActiveTasks:           active,
 		RunningTasks:          running,
 		PausedTasks:           paused,
+		PendingTasks:          pending,
 		MaxConcurrentTasks:    b.maxConcurrentTasks,
 		SessionRuntimeSeconds: taskDuration(b.sessionStartedAt, time.Time{}, now, "").Seconds(),
 		UpdatedAt:             now.UTC().Format(time.RFC3339Nano),

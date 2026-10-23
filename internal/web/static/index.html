@@ -4118,11 +4118,12 @@
     const DASHBOARD_TASK_COLOR_VARS = [
       "--dashboard-chart-running",
       "--dashboard-chart-paused",
+      "--dashboard-chart-pending",
       "--dashboard-chart-stopped",
       "--dashboard-chart-completed",
       "--dashboard-chart-failed",
     ];
-    const DASHBOARD_TASK_COLOR_FALLBACKS = ["#5aa7f2", "#f0b355", "#9aa6bd", "#63c892", "#f07c78"];
+    const DASHBOARD_TASK_COLOR_FALLBACKS = ["#5aa7f2", "#f0b355", "#c98bf2", "#9aa6bd", "#63c892", "#f07c78"];
     const DASHBOARD_SOURCE_COLOR_VARS = {
       chat: "--dashboard-chart-chat",
       json: "--dashboard-chart-json",
@@ -4190,6 +4191,9 @@
           return "activity";
         case "paused":
           return "pause";
+        case "pending":
+        case "queued":
+          return "clock";
         case "stopped":
           return "octagon";
         case "completed":
@@ -4453,6 +4457,7 @@
       const active = Number(stats.active_tasks || 0);
       const running = Number(stats.running_tasks || 0);
       const paused = Number(stats.paused_tasks || 0);
+      const pending = Number(stats.pending_tasks || 0);
       const completed = Number(stats.completed_tasks || 0);
       const failed = Number(stats.failed_tasks || 0);
       const stopped = Number(stats.stopped_tasks || 0);
@@ -4515,9 +4520,10 @@
       const rows = [
         { label: "Running", value: running, color: dashboardTaskColors()[0] },
         { label: "Paused", value: paused, color: dashboardTaskColors()[1] },
-        { label: "Stopped", value: stopped, color: dashboardTaskColors()[2] },
-        { label: "Completed", value: completed, color: dashboardTaskColors()[3] },
-        { label: "Failed", value: failed, color: dashboardTaskColors()[4] },
+        { label: "Pending", value: pending, color: dashboardTaskColors()[2] },
+        { label: "Stopped", value: stopped, color: dashboardTaskColors()[3] },
+        { label: "Completed", value: completed, color: dashboardTaskColors()[4] },
+        { label: "Failed", value: failed, color: dashboardTaskColors()[5] },
       ];
       renderDashboardD3Donut(dashboardTaskChart, rows, {
         centerLabel: "tasks",
