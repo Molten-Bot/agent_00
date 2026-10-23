@@ -12,6 +12,8 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -615,29 +617,85 @@ func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
 	if strings.Contains(settingsTabbarRule, "overflow: hidden;") {
 		t.Fatalf("embedded style.css .settings-tabbar should not hard-clip overflow, trailing tabs would become unreachable on narrow viewports")
 	}
+	// overflow-y: hidden previously clipped the hover/focus label reveal:
+	// .settings-tab is a normal-flow descendant of the tabbar, so any
+	// taller-than-expected reveal (e.g. a wrapped or zoomed label) was
+	// silently cut off with only 6px of padding to spare. overflow-x:
+	// auto alone already gives horizontal scrolling; per the CSS Overflow
+	// spec a 'visible' overflow-y paired with a non-visible overflow-x
+	// computes to 'auto', so dropping the explicit overflow-y keeps
+	// scroll behavior identical while removing the clip hazard entirely.
+	if strings.Contains(settingsTabbarRule, "overflow-y: hidden") {
+		t.Fatalf("embedded style.css .settings-tabbar must not set overflow-y: hidden, it clips the hover/focus label reveal, got %q", settingsTabbarRule)
+	}
 
-	// A hover/focus tab label positioned absolutely below the tab (a
-	// floating tooltip) would be clipped by .settings-tabbar's
-	// overflow-y: hidden: the tooltip's containing block is
-	// .settings-tab, a normal-flow descendant of the clipped tabbar, so
-	// it cannot be repositioned to a non-clipped ancestor without
-	// breaking per-tab horizontal alignment. The hover/focus reveal must
-	// therefore share the active tab's in-flow label rule (grow the
-	// label next to the icon within the row) instead of floating below
-	// it, or the revealed text is invisible on hover.
 	normalized := normalizeCSSWhitespace(css)
-	combinedLabelSelector := `.settings-tab.active span, .settings-tab[aria-selected="true"] span, .settings-tab:hover span, .settings-tab:focus-visible span {`
-	combinedLabelIdx := strings.Index(normalized, combinedLabelSelector)
-	if combinedLabelIdx == -1 {
-		t.Fatalf("embedded style.css hover/focus tab label should share the active tab's in-flow label reveal rule, missing %q", combinedLabelSelector)
+	hoverLabelSelector := `.settings-tab:hover span, .settings-tab:focus-visible span {`
+	hoverLabelIdx := strings.Index(normalized, hoverLabelSelector)
+	if hoverLabelIdx == -1 {
+		t.Fatalf("embedded style.css missing hover/focus tab label reveal rule %q", hoverLabelSelector)
 	}
-	combinedLabelRuleEnd := strings.Index(normalized[combinedLabelIdx:], "}")
-	if combinedLabelRuleEnd == -1 {
-		t.Fatalf("embedded style.css in-flow label reveal rule missing closing brace")
+	hoverLabelRuleEnd := strings.Index(normalized[hoverLabelIdx:], "}")
+	if hoverLabelRuleEnd == -1 {
+		t.Fatalf("embedded style.css hover/focus label reveal rule missing closing brace")
 	}
-	combinedLabelRule := normalized[combinedLabelIdx : combinedLabelIdx+combinedLabelRuleEnd]
-	if strings.Contains(combinedLabelRule, "position: absolute") {
-		t.Fatalf("embedded style.css hover/focus tab label must not use position: absolute, it would be clipped by .settings-tabbar's overflow-y: hidden, got %q", combinedLabelRule)
+	hoverLabelRule := normalized[hoverLabelIdx : hoverLabelIdx+hoverLabelRuleEnd]
+	if strings.Contains(hoverLabelRule, "position: absolute") {
+		t.Fatalf("embedded style.css hover/focus tab label must not use position: absolute, it would float outside the in-flow row and misalign with its tab, got %q", hoverLabelRule)
+	}
+	// The reveal must only ever animate width/opacity-style properties.
+	// Anything that can grow the label's height (white-space: normal,
+	// line-height, height) would make the label taller than its tab and
+	// risk clipping again regardless of the tabbar's overflow-y value, so
+	// ban those here instead of relying solely on overflow-y staying
+	// off. Match declarations by exact property name so a future, unrelated
+	// min-height/max-height addition doesn't false-positive on the "height:"
+	// substring.
+	if strings.Contains(hoverLabelRule, "white-space: normal") {
+		t.Fatalf("embedded style.css hover/focus tab label rule must not set %q, it could grow the label taller than its tab and get clipped, got %q", "white-space: normal", hoverLabelRule)
+	}
+	for _, decl := range strings.Split(hoverLabelRule, ";") {
+		propEnd := strings.Index(decl, ":")
+		if propEnd == -1 {
+			continue
+		}
+		switch strings.TrimSpace(decl[:propEnd]) {
+		case "height", "line-height":
+			t.Fatalf("embedded style.css hover/focus tab label rule must not set %q, it could grow the label taller than its tab and get clipped, got %q", strings.TrimSpace(decl), hoverLabelRule)
+		}
+	}
+
+	// The active/selected tab must not grow its label in-flow either: unlike
+	// the transient hover/focus reveal, an activated tab stays expanded
+	// indefinitely, so if it shared the hover rule's max-width growth every
+	// selection change would permanently shift sibling tabs. Selection is
+	// still communicated via the border/background styling below.
+	activeLabelSelectors := []string{".settings-tab.active span", `.settings-tab[aria-selected="true"] span`}
+	for _, selector := range activeLabelSelectors {
+		idx := strings.Index(normalized, selector+" {")
+		if idx == -1 {
+			continue
+		}
+		ruleEnd := strings.Index(normalized[idx:], "}")
+		if ruleEnd == -1 {
+			t.Fatalf("embedded style.css %q rule missing closing brace", selector)
+		}
+		rule := normalized[idx : idx+ruleEnd]
+		if strings.Contains(rule, "max-width: 200px") || strings.Contains(rule, "margin-left: 8px") {
+			t.Fatalf("embedded style.css %q must not expand the label in-flow on selection, it would shift sibling tabs every time the active tab changes, got %q", selector, rule)
+		}
+	}
+	spanIdx := strings.Index(css, ".settings-tab span {")
+	if spanIdx == -1 {
+		t.Fatalf("embedded style.css missing .settings-tab span rule")
+	}
+	spanEnd := strings.Index(css[spanIdx:], "}")
+	if spanEnd == -1 {
+		t.Fatalf("embedded style.css .settings-tab span rule missing closing brace")
+	}
+	spanRule := css[spanIdx : spanIdx+spanEnd]
+	if !strings.Contains(spanRule, "white-space: nowrap;") {
+		t.Fatalf("embedded style.css .settings-tab span must keep white-space: nowrap, wrapped text would grow taller than its tab and risk clipping, got %q", spanRule)
 	}
 
 	// Siblings must not visually compress when the active or hovered
@@ -661,25 +719,35 @@ func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
 		t.Fatalf("embedded style.css missing narrow viewport media query")
 	}
 	narrowMedia := normalizeCSSWhitespace(css[narrowMediaIdx:])
-	for _, want := range []string{
-		".settings-tab.active span",
-		".settings-tab[aria-selected=\"true\"] span",
-	} {
-		if !strings.Contains(narrowMedia, want) {
-			t.Fatalf("embedded style.css narrow viewport rules missing %q", want)
+	narrowHoverSelector := `.settings-tab:hover span, .settings-tab:focus-visible span {`
+	narrowHoverIdx := strings.Index(narrowMedia, narrowHoverSelector)
+	if narrowHoverIdx == -1 {
+		t.Fatalf("embedded style.css narrow viewport rules missing %q", narrowHoverSelector)
+	}
+	narrowHoverRuleEnd := strings.Index(narrowMedia[narrowHoverIdx:], "}")
+	if narrowHoverRuleEnd == -1 {
+		t.Fatalf("embedded style.css narrow viewport hover tab span rule missing closing brace")
+	}
+	narrowHoverRule := narrowMedia[narrowHoverIdx : narrowHoverIdx+narrowHoverRuleEnd]
+	if !strings.Contains(narrowHoverRule, "max-width: 96px;") {
+		t.Fatalf("embedded style.css narrow viewport hover tab span rule should cap max-width at 96px, got %q", narrowHoverRule)
+	}
+	// Same as the base rule: active/selected tabs must not get their own
+	// in-flow expansion at narrow widths either, or switching tabs would
+	// shift siblings there too.
+	for _, selector := range []string{".settings-tab.active span", `.settings-tab[aria-selected="true"] span`} {
+		idx := strings.Index(narrowMedia, selector+" {")
+		if idx == -1 {
+			continue
 		}
-	}
-	activeSpanSelectorIdx := strings.Index(narrowMedia, ".settings-tab.active span")
-	if activeSpanSelectorIdx == -1 {
-		t.Fatalf("embedded style.css narrow viewport rules missing active tab span selector")
-	}
-	activeSpanRuleEnd := strings.Index(narrowMedia[activeSpanSelectorIdx:], "}")
-	if activeSpanRuleEnd == -1 {
-		t.Fatalf("embedded style.css narrow viewport active tab span rule missing closing brace")
-	}
-	activeSpanRule := narrowMedia[activeSpanSelectorIdx : activeSpanSelectorIdx+activeSpanRuleEnd]
-	if !strings.Contains(activeSpanRule, "max-width: 96px;") {
-		t.Fatalf("embedded style.css narrow viewport active tab span rule should cap max-width at 96px, got %q", activeSpanRule)
+		ruleEnd := strings.Index(narrowMedia[idx:], "}")
+		if ruleEnd == -1 {
+			t.Fatalf("embedded style.css narrow viewport %q rule missing closing brace", selector)
+		}
+		rule := narrowMedia[idx : idx+ruleEnd]
+		if strings.Contains(rule, "max-width: 96px") {
+			t.Fatalf("embedded style.css narrow viewport %q must not expand the label in-flow on selection, got %q", selector, rule)
+		}
 	}
 }
 
@@ -688,6 +756,36 @@ func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
 // without caring about exact selector punctuation placement.
 func normalizeCSSWhitespace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// TestSettingsTabbarRenderedLayoutMatchesPlaywrightSpec renders the real
+// settings tabbar in a headless browser and measures it, unlike the
+// string-matching tests above which only see the CSS source text and can't
+// tell whether a rule actually prevents clipping or sibling shift once the
+// browser applies cascade, inheritance, and layout. ci.yml provisions Node
+// and Playwright so this runs for real in CI; it only skips (rather than
+// fails) in local/dev environments that lack them, where the asserted
+// behavior still has coverage from the string-based tests above.
+func TestSettingsTabbarRenderedLayoutMatchesPlaywrightSpec(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not available, skipping rendered-layout check")
+	}
+	if err := exec.Command("node", "-e", "require.resolve('playwright')").Run(); err != nil {
+		t.Skip("playwright module not available, skipping rendered-layout check")
+	}
+
+	srv := NewServer("", nil)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "node", "--test", "tests/settings_tabs.cjs")
+	cmd.Env = append(os.Environ(), "HARNESS_TEST_URL="+ts.URL)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("rendered settings tabbar layout check failed:\n%s", out)
+	}
 }
 
 func TestDashboardSourceLegendStylesLiveInGlobalStylesheet(t *testing.T) {
