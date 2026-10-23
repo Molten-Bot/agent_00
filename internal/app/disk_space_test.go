@@ -20,6 +20,7 @@ func (r diskFullRunner) Run(_ context.Context, _ execx.Command) (execx.Result, e
 }
 
 func TestRunCommandUnchecked_ClassifiesDiskSpaceExhaustion(t *testing.T) {
+	t.Parallel()
 	underlying := errors.New("exit status 128")
 	cases := []struct {
 		name   string
@@ -32,6 +33,7 @@ func TestRunCommandUnchecked_ClassifiesDiskSpaceExhaustion(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			h := Harness{
 				Logf:   func(string, ...any) {},
 				Runner: diskFullRunner{res: execx.Result{Stderr: tc.stderr}, err: underlying},
@@ -54,6 +56,7 @@ func TestRunCommandUnchecked_ClassifiesDiskSpaceExhaustion(t *testing.T) {
 }
 
 func TestRunCommandUnchecked_LeavesUnrelatedErrorsUntouched(t *testing.T) {
+	t.Parallel()
 	underlying := errors.New("exit status 1")
 	h := Harness{
 		Logf:   func(string, ...any) {},
@@ -66,9 +69,11 @@ func TestRunCommandUnchecked_LeavesUnrelatedErrorsUntouched(t *testing.T) {
 }
 
 func TestEnsureWorkspaceSpaceForCommit(t *testing.T) {
+	t.Parallel()
 	repo := &repoWorkspace{URL: "https://example.com/org/repo.git", Dir: "/mnt/agent_00/tasks/x/repo"}
 
 	t.Run("no checker configured", func(t *testing.T) {
+		t.Parallel()
 		h := Harness{Workspace: workspace.Manager{}}
 		if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -76,6 +81,7 @@ func TestEnsureWorkspaceSpaceForCommit(t *testing.T) {
 	})
 
 	t.Run("space available", func(t *testing.T) {
+		t.Parallel()
 		h := Harness{Workspace: workspace.Manager{CheckSpace: func(string) error { return nil }}}
 		if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -83,6 +89,7 @@ func TestEnsureWorkspaceSpaceForCommit(t *testing.T) {
 	})
 
 	t.Run("space exhausted", func(t *testing.T) {
+		t.Parallel()
 		checkErr := errors.New("workspace storage /mnt/agent_00/tasks/x has only 3 MiB free")
 		var checkedPath string
 		h := Harness{Workspace: workspace.Manager{CheckSpace: func(p string) error {
