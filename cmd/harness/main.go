@@ -1288,6 +1288,9 @@ func unexpectedNoChangesFollowUpRunConfig(
 }
 
 func shouldQueueFailureFollowUp(source string, failedResult app.Result) (bool, string) {
+	if errors.Is(failedResult.Err, app.ErrPRFeedbackTarget) {
+		return false, "PR feedback requires the original pull request target"
+	}
 	if errors.Is(failedResult.Err, gitsigning.ErrSetup) {
 		return false, "commit signing requires configuration in Settings"
 	}
@@ -1351,7 +1354,7 @@ func shouldQueueUnexpectedNoChangesFollowUp(result app.Result, runCfg config.Con
 	if result.NoChangeEvidence {
 		return false, "agent cited concrete evidence that no repository changes are required"
 	}
-	if !promptRequestsRepositoryChange(runCfg.Prompt) {
+	if !runRequestsRepositoryChange(runCfg) {
 		return false, "original prompt does not clearly require repository changes"
 	}
 	return true, ""
@@ -1374,7 +1377,7 @@ func shouldEscalateNoChangesFollowUp(source string, result app.Result, runCfg co
 	if result.NoChangeEvidence {
 		return false, "agent cited concrete evidence that no repository changes are required"
 	}
-	if !promptRequestsRepositoryChange(runCfg.Prompt) {
+	if !runRequestsRepositoryChange(runCfg) {
 		return false, "original prompt does not clearly request repository changes"
 	}
 	return true, ""
@@ -1394,7 +1397,7 @@ func localNoChangesFailureResult(source string, result app.Result, runCfg config
 	if result.NoChangeEvidence {
 		return app.Result{}, false
 	}
-	if !promptRequestsRepositoryChange(runCfg.Prompt) {
+	if !runRequestsRepositoryChange(runCfg) {
 		return app.Result{}, false
 	}
 
@@ -1535,6 +1538,14 @@ func escalatedNoChangesFollowUpPrompt(logPaths []string, requestID string, resul
 	)
 }
 
+func runRequestsRepositoryChange(cfg config.Config) bool {
+	task := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(cfg.LibraryTaskName)), "_", "-")
+	if cfg.Review != nil || task == "code-review" {
+		return false
+	}
+	return promptRequestsRepositoryChange(cfg.Prompt)
+}
+
 func promptRequestsRepositoryChange(prompt string) bool {
 	text := strings.ToLower(strings.TrimSpace(prompt))
 	if text == "" {
@@ -1542,6 +1553,17 @@ func promptRequestsRepositoryChange(prompt string) bool {
 	}
 	if isPlaceholderPrompt(text) {
 		return false
+	}
+	// Scope declarations take precedence over incidental verbs in review
+	// instructions (e.g. "issues the author can fix" or "remove other headings").
+	// Restrict this to the opening paragraph so quoted review prompts in repair
+	// follow-ups do not turn implementation tasks into successful no-ops.
+	opening, _, _ := strings.Cut(text, "\n\n")
+	opening = promptPhraseText(opening)
+	for _, scope := range []string{"review only task", "read only task", "investigation only task", "analysis only task"} {
+		if strings.HasPrefix(opening, " "+scope+" ") || promptPhraseTextContains(opening, "this is a "+scope) {
+			return false
+		}
 	}
 
 	if strings.Contains(text, "?") {

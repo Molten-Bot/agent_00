@@ -244,6 +244,13 @@ as a PR reviewer, the harness queues the bundled `code-review` task and posts a
 summary comment back to the original PR. Auto-merge is off by default; opt in
 with `review_watch.auto_merge: true` in the runtime config.
 
+For a manual `code-review` task, select the PR's head branch or include its PR
+URL. The review is read-only and posts back to that PR; a clean worktree is a
+successful review, not a reason to queue a repair task. Free-text requests such
+as "fix the comments in the review" also use the selected head branch or PR URL
+to update the existing PR. If that target cannot be resolved or updated, the
+harness reports the targeting error instead of opening a replacement PR.
+
 Post-task PR review cycles are also off by default. Configure
 `review_watch.review_level` as `off`, `low`, `medium`, or `high` to run 0 or up
 to 1, 3, or 6 review passes after a task creates its pull request and
