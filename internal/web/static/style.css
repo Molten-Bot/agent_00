@@ -6785,6 +6785,12 @@ body.onboarding-modal-open {
   gap: 0;
 }
 
+.settings-tabbed-panel {
+  border: 1px solid var(--surface-control-border);
+  border-radius: var(--radius-card);
+  background: var(--surface-control-bg);
+}
+
 .settings-tabbar {
   display: flex;
   flex-wrap: nowrap;
@@ -6797,9 +6803,10 @@ body.onboarding-modal-open {
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
   scrollbar-color: var(--surface-scroll-thumb) var(--surface-scroll-track);
-  border: 1px solid var(--surface-control-border);
-  border-radius: var(--radius-card);
-  background: var(--surface-control-bg);
+  border: none;
+  border-bottom: 1px solid var(--surface-control-border);
+  border-radius: 0;
+  background: transparent;
 }
 
 .settings-tabbar::-webkit-scrollbar {
@@ -6884,6 +6891,23 @@ body.onboarding-modal-open {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 14px 16px;
+  padding: 14px;
+}
+
+.settings-tab-caption {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0;
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.settings-tabbed-panel .review-settings-section {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
 }
 
 .review-settings-form .settings-footer {

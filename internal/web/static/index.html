@@ -553,8 +553,8 @@
           </span>
         </label>
         <label class="library-schedule-interval" for="library-schedule-hours">Repeat <output id="library-schedule-frequency" for="library-schedule-hours">every 24 hours</output></label>
-        <input id="library-schedule-hours" type="range" min="1" max="168" step="1" value="24" aria-label="Repeat interval in hours">
-        <div class="library-schedule-range"><span>1 hour</span><span>168 hours · 1 week</span></div>
+        <input id="library-schedule-hours" type="range" min="0" max="0" step="1" value="0" aria-label="Repeat interval in hours">
+        <div class="library-schedule-range"><span id="library-schedule-range-min"></span><span id="library-schedule-range-max"></span></div>
         <p id="library-schedule-next" class="library-schedule-copy"></p>
         <div class="library-schedule-actions">
           <button id="library-schedule-delete" class="prompt-action-button" type="button" title="Delete this recurring schedule" hidden><i data-lucide="trash-2" aria-hidden="true"></i><span>Delete</span></button>
@@ -725,6 +725,7 @@
           </div>
         </header>
 
+        <div class="settings-tabbed-panel">
         <div class="settings-tabbar" role="tablist" aria-label="Settings sections">
           <button id="settings-tab-library" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="custom-library-section" data-settings-tab="library">
             <svg class="custom-library-tab-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -751,8 +752,9 @@
         </div>
 
         <form id="review-settings-form" class="stack review-settings-form" data-settings-panel="review">
+          <p id="settings-tab-caption" class="settings-tab-caption" role="status" aria-live="polite"></p>
           <fieldset id="settings-panel-automation" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-automation" hidden>
-            <legend class="review-settings-section-title">Automation</legend>
+            <legend class="review-settings-section-title sr-only">Automation</legend>
             <label class="review-settings-toggle">
               <input id="review-settings-auto-merge" type="checkbox">
               <span>Auto-merge clean reviews</span>
@@ -763,7 +765,7 @@
             </label>
           </fieldset>
           <div id="settings-panel-review" class="review-settings-section review-settings-level" role="tabpanel" aria-labelledby="settings-tab-review">
-            <span id="review-settings-level-label">Post-task Review</span>
+            <span id="review-settings-level-label" class="sr-only">Post-task Review</span>
             <input id="review-settings-level" type="hidden" value="off">
             <div class="review-settings-merge-options review-settings-level-options" role="radiogroup" aria-labelledby="review-settings-level-label">
               <button class="review-settings-merge-option review-settings-level-option active" type="button" role="radio" aria-checked="true" data-review-settings-level="off"><span>Off</span><small>0 reviews</small></button>
@@ -773,7 +775,7 @@
             </div>
           </div>
           <div id="settings-panel-merge" class="review-settings-section review-settings-merge-method" role="tabpanel" aria-labelledby="settings-tab-merge" hidden>
-            <span id="review-settings-merge-method-label">Merge Method</span>
+            <span id="review-settings-merge-method-label" class="sr-only">Merge Method</span>
             <input id="review-settings-merge-method" type="hidden" value="squash">
             <div class="review-settings-merge-slider" role="radiogroup" aria-labelledby="review-settings-merge-method-label">
               <span class="review-settings-merge-slider-thumb" aria-hidden="true"></span>
@@ -789,7 +791,7 @@
             </div>
           </div>
           <div class="review-settings-section commit-signing-section" id="commit-signing-section" role="tabpanel" aria-labelledby="settings-tab-signing" hidden>
-            <h3 class="review-settings-section-title">Commit signing</h3>
+            <h3 class="review-settings-section-title sr-only">Commit signing</h3>
             <div class="stack commit-signing-fields">
               <label class="review-settings-toggle"><input id="commit-signing-enabled" type="checkbox" disabled aria-describedby="commit-signing-enabled-help"><span>Sign commits for all tasks</span></label>
               <p id="commit-signing-enabled-help">Save an SSH private key below to unlock this checkbox.</p>
@@ -818,7 +820,7 @@
             </div>
           </div>
           <div class="review-settings-section custom-library-section" id="custom-library-section" role="tabpanel" aria-labelledby="settings-tab-library" hidden>
-            <h3 class="review-settings-section-title">Library</h3>
+            <h3 class="review-settings-section-title sr-only">Library</h3>
             <label class="review-settings-toggle review-settings-toggle-switch">
               <span class="review-settings-switch">
                 <input id="review-settings-default-library" type="checkbox" checked role="switch">
@@ -848,6 +850,7 @@
             </div>
           </div>
         </form>
+        </div>
 
       </div>
     </section>
@@ -2014,6 +2017,7 @@
     const reviewSettingsMergeOptions = Array.from(document.querySelectorAll("[data-review-settings-merge-method]"));
     const reviewSettingsMergeSliderThumb = document.querySelector(".review-settings-merge-slider-thumb");
     const settingsTabButtons = Array.from(document.querySelectorAll("[data-settings-tab]"));
+    const settingsTabCaption = document.getElementById("settings-tab-caption");
     const settingsTabPanels = {
       automation: document.getElementById("settings-panel-automation"),
       review: document.getElementById("settings-panel-review"),
@@ -2622,11 +2626,14 @@
     function setSettingsTab(tab) {
       const normalized = Object.prototype.hasOwnProperty.call(settingsTabPanels, tab) ? tab : "review";
       state.settingsTab = normalized;
+      let activeLabel = "";
       settingsTabButtons.forEach((button) => {
         const selected = button.getAttribute("data-settings-tab") === normalized;
         button.classList.toggle("active", selected);
         button.setAttribute("aria-selected", selected ? "true" : "false");
+        if (selected) activeLabel = button.querySelector("span")?.textContent || "";
       });
+      if (settingsTabCaption) settingsTabCaption.textContent = activeLabel;
       Object.entries(settingsTabPanels).forEach(([key, panel]) => {
         if (panel) panel.hidden = key !== normalized;
       });
