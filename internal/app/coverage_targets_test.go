@@ -689,6 +689,73 @@ func TestRemoteBranchSyncConflictErrorMethods(t *testing.T) {
 	}
 }
 
+func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
+	t.Parallel()
+
+	repoDir := "/repo"
+	repo := &repoWorkspace{
+		URL:        "git@github.com:acme/repo.git",
+		Dir:        repoDir,
+		RelDir:     "repo",
+		Branch:     "agent00-build-api",
+		BaseBranch: "main",
+	}
+	mergeConflict := execx.Result{Stdout: "CONFLICT (content): Merge conflict in file.go\nAutomatic merge failed; fix conflicts and then commit the result."}
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: codexCommand(repoDir, "resolve conflict")},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
+	}}
+
+	h := New(fake)
+	exitCode, stage, err := h.resolveBaseSyncConflictWithAgent(
+		context.Background(), repo, agentruntime.Default(), repoDir, codexRunOptions{},
+		"Build API", "", "", ".", "codex", mergeConflict, 1,
+	)
+	if err == nil || !strings.Contains(err.Error(), "still has unmerged paths after remediation") {
+		t.Fatalf("resolveBaseSyncConflictWithAgent() err = %v, want unmerged-paths fatal error", err)
+	}
+	if exitCode != ExitGit || stage != "git" {
+		t.Fatalf("resolveBaseSyncConflictWithAgent() = (%d, %q), want (%d, \"git\")", exitCode, stage, ExitGit)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
+	t.Parallel()
+
+	repoDir := "/repo"
+	repo := &repoWorkspace{
+		URL:    "git@github.com:acme/repo.git",
+		Dir:    repoDir,
+		RelDir: "repo",
+		Branch: "agent00-build-api",
+	}
+	mergeConflict := execx.Result{Stdout: "CONFLICT (content): Merge conflict in file.go\nAutomatic merge failed; fix conflicts and then commit the result."}
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: codexCommand(repoDir, "resolve conflict")},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
+	}}
+
+	h := New(fake)
+	exitCode, stage, err := h.resolveRemoteBranchSyncConflictWithAgent(
+		context.Background(), repo, agentruntime.Default(), repoDir, codexRunOptions{},
+		"Build API", "", "", ".", "codex", publishRemoteOrigin, mergeConflict, 1,
+	)
+	if err == nil || !strings.Contains(err.Error(), "still has unmerged paths after remediation") {
+		t.Fatalf("resolveRemoteBranchSyncConflictWithAgent() err = %v, want unmerged-paths fatal error", err)
+	}
+	if exitCode != ExitGit || stage != "git" {
+		t.Fatalf("resolveRemoteBranchSyncConflictWithAgent() = (%d, %q), want (%d, \"git\")", exitCode, stage, ExitGit)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
 func TestReviewSummaryWritebackErrorMethods(t *testing.T) {
 	t.Parallel()
 
