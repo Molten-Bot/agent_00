@@ -139,28 +139,6 @@ func SaveRuntimeConfigAgentRuntime(path string, initCfg InitConfig, harness, com
 	return writeRuntimeConfigDoc(path, doc)
 }
 
-// SaveRuntimeConfigReviewSettings persists user-editable review automation
-// settings while omitting fields whose values match runtime defaults.
-func SaveRuntimeConfigReviewSettings(path string, initCfg InitConfig, reviewCfg ReviewWatchConfig) error {
-	runtimeConfigMu.Lock()
-	defer runtimeConfigMu.Unlock()
-	path = strings.TrimSpace(path)
-	if path == "" {
-		path = defaultRuntimeConfigPath()
-	}
-
-	doc, err := loadRuntimeConfigDoc(path, initCfg)
-	if err != nil {
-		return err
-	}
-	if err := applyReviewWatchSettingsToDoc(doc, reviewCfg); err != nil {
-		return err
-	}
-	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
-
-	return writeRuntimeConfigDoc(path, doc)
-}
-
 // SaveRuntimeConfigReviewAndDefaultLibrarySettings persists review automation
 // settings and the default-library-enabled flag in a single load/modify/write
 // cycle so a mid-save failure cannot leave one setting persisted without the

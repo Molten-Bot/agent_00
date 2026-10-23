@@ -39,7 +39,7 @@ func TestSaveLocalSettingsDiscardsRetiredCredentials(t *testing.T) {
 	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveRuntimeConfigReviewSettings(path, InitConfig{}, ReviewWatchConfig{ReviewLevel: "low"}); err != nil {
+	if err := SaveRuntimeConfigReviewAndDefaultLibrarySettings(path, InitConfig{}, ReviewWatchConfig{ReviewLevel: "low"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadRuntimeConfig(path)
