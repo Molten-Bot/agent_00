@@ -68,6 +68,19 @@ func TestRunCommandUnchecked_LeavesUnrelatedErrorsUntouched(t *testing.T) {
 	}
 }
 
+func TestRunCommandUnchecked_DoesNotClassifyNonGitQuotaErrors(t *testing.T) {
+	t.Parallel()
+	underlying := errors.New("exit status 1")
+	h := Harness{
+		Logf:   func(string, ...any) {},
+		Runner: diskFullRunner{res: execx.Result{Stderr: "disk quota exceeded for this billing plan"}, err: underlying},
+	}
+	_, err := h.runCommandUnchecked(context.Background(), "checks", execx.Command{Name: "gh", Dir: "/repo", Args: []string{"api", "repos/x/y"}})
+	if !errors.Is(err, underlying) || err != underlying {
+		t.Fatalf("error = %v, want untouched underlying error %v, not relabeled as disk exhaustion", err, underlying)
+	}
+}
+
 func TestEnsureWorkspaceSpaceForCommit(t *testing.T) {
 	t.Parallel()
 	repo := &repoWorkspace{URL: "https://example.com/org/repo.git", Dir: "/mnt/agent_00/tasks/x/repo"}

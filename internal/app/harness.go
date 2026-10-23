@@ -4695,12 +4695,18 @@ func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd exec
 	return res, err
 }
 
-// diskSpaceExhaustionError recognizes the handful of error phrases git and other
-// tools emit when the workspace filesystem fills up mid-run (shared tmpfs bases
-// can fill after the one-time startup check in workspace.CheckSpace passes) and
-// turns them into a diagnosis an operator can act on instead of a bare
-// "exit status 128" with the underlying tool's low-level wording.
+// diskSpaceExhaustionError recognizes the handful of error phrases git emits
+// when the workspace filesystem fills up mid-run (shared tmpfs bases can fill
+// after the one-time startup check in workspace.CheckSpace passes) and turns
+// them into a diagnosis an operator can act on instead of a bare
+// "exit status 128" with git's low-level wording. Scoped to git: other
+// commands the harness runs (notably `gh`, which talks to GitHub's API) can
+// fail with their own quota/rate-limit wording that would otherwise be
+// mislabeled as local disk exhaustion.
 func diskSpaceExhaustionError(cmd execx.Command, res execx.Result, err error) error {
+	if cmd.Name != "git" {
+		return nil
+	}
 	detail := strings.ToLower(res.Stdout + "\n" + res.Stderr)
 	signatures := []string{
 		"no space left on device",
