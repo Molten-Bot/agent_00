@@ -1104,6 +1104,17 @@ func TestPromptRequestsRepositoryChange(t *testing.T) {
 		{prompt: "test", want: false},
 		{prompt: "ping", want: false},
 		{prompt: "hello", want: false},
+		{
+			prompt: "You are performing a pull-request code review. This is a review-only task: " +
+				"do not edit files, do not commit changes, and do not rewrite the PR. " +
+				"Report only actionable issues that the PR author can fix. " +
+				"Remove everything else.",
+			want: false,
+		},
+		{
+			prompt: "This is a read-only task. Do not create or update any files, including docs/reviews artifacts.",
+			want:   false,
+		},
 	}
 
 	for _, tt := range tests {

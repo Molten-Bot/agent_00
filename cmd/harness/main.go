@@ -1538,6 +1538,10 @@ func promptRequestsRepositoryChange(prompt string) bool {
 		return false
 	}
 
+	if promptIsExplicitlyReviewOnly(promptPhraseText(text)) {
+		return false
+	}
+
 	if strings.Contains(text, "?") {
 		questionPrefixes := []string{"what ", "why ", "how ", "when ", "where ", "who "}
 		for _, prefix := range questionPrefixes {
@@ -1577,6 +1581,29 @@ func promptRequestsRepositoryChange(prompt string) bool {
 		return false
 	}
 	return true
+}
+
+// promptIsExplicitlyReviewOnly reports whether the prompt declares itself a
+// read-only review task that must not edit, commit, or push repository
+// changes. Phrases like "can fix" (describing what a PR author should do) or
+// "remove everything else" (describing comment formatting) otherwise trip the
+// plain change markers below, so an explicit review-only declaration must
+// take precedence over those incidental word matches.
+func promptIsExplicitlyReviewOnly(phraseText string) bool {
+	markers := []string{
+		"review only task",
+		"read only task",
+		"do not edit files",
+		"do not commit changes",
+		"do not rewrite the pr",
+		"do not create or update any files",
+	}
+	for _, marker := range markers {
+		if promptPhraseTextContains(phraseText, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // isPlaceholderPrompt reports whether text is a bare connectivity/smoke-test
