@@ -52,7 +52,11 @@ const bootDiagnosticTimeout = 10 * time.Second
 var runSingleHarness = func(ctx context.Context, cfg config.Config, logf func(string, ...any)) app.Result {
 	h := app.New(execx.OSRunner{})
 	h.Logf = logf
-	h.LoadSigning = signingSettings(localruntime.InitConfig{}, h.Runner).Snapshot
+	signing := signingSettings(localruntime.InitConfig{}, h.Runner)
+	if err := signing.ApplyEnvironment(ctx); err != nil {
+		return app.Result{ExitCode: app.ExitConfig, Err: err}
+	}
+	h.LoadSigning = signing.Snapshot
 	return h.Run(ctx, cfg)
 }
 
@@ -201,7 +205,12 @@ func runMultiplex(args []string) int {
 	mx := multiplex.New(execx.OSRunner{})
 	mx.MaxParallel = *parallel
 	mx.Logf = logger.Printf
-	mx.LoadSigning = signingSettings(localruntime.InitConfig{}, execx.OSRunner{}).Snapshot
+	signing := signingSettings(localruntime.InitConfig{}, execx.OSRunner{})
+	if err := signing.ApplyEnvironment(context.Background()); err != nil {
+		writeStderrLine(logger, fmt.Sprintf("signing configuration error: %v", err))
+		return app.ExitConfig
+	}
+	mx.LoadSigning = signing.Snapshot
 
 	result := mx.Run(context.Background(), configPaths)
 	for _, s := range result.Sessions {
@@ -274,6 +283,11 @@ func runServer(args []string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if err := signingSettings(cfg, runner).ApplyEnvironment(ctx); err != nil {
+		writeStderrLine(logger, fmt.Sprintf("signing configuration error: %v", err))
+		return app.ExitConfig
+	}
 
 	if runtimeErr == nil {
 		authGate = newAgentAuthGate(ctx, runner, runtimeCfg, cfg, daemonLogger)

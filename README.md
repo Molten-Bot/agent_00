@@ -200,6 +200,24 @@ its persistent volume so `config.json` and `signing/` survive recreation. The
 belong in task JSON. Git settings are applied to subprocesses without changing
 the host's global Git configuration.
 
+For unattended startup, set `HARNESS_COMMIT_SIGNING_ENABLED=true` in the
+container environment. It overrides the saved enabled flag, reuses the key
+already configured in Settings, and prevents Settings from disabling signing.
+Startup fails if the key, GitHub registration, or local signing check fails;
+tasks also recheck signing before running. Set it to `false` to force signing
+off, or leave it empty/unset to use the saved Settings preference.
+
+To provision a key at boot, also set `HARNESS_COMMIT_SIGNING_PRIVATE_KEY` to the
+literal multiline SSH private key, or `HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE`
+to a readable path **inside the container** (for example, a mounted secret).
+Use only one key source. Set `HARNESS_COMMIT_SIGNING_PASSPHRASE` when the supplied
+key is encrypted. The same Settings import, identity, and registration checks
+apply; register the public key on GitHub before starting with signing enabled.
+These variables work in `serve`, `run`, and `multiplex` and are read at startup.
+The key is copied into the managed signing directory; only metadata is written
+to runtime JSON, and the passphrase is never saved. With an environment enabled
+flag set, change that flag and restart to change the signing policy.
+
 ### Persistent Codex authentication
 
 Sign in once through the UI. Login and every Codex task use the same persistent

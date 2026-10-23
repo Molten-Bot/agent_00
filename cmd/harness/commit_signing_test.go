@@ -50,3 +50,25 @@ func TestSigningFailuresDoNotQueueCodingWork(t *testing.T) {
 		t.Fatal("signing failure queued rerun")
 	}
 }
+
+func TestSigningEnvironmentCLIRejectsInvalidPolicyAtStartup(t *testing.T) {
+	t.Setenv("HARNESS_COMMIT_SIGNING_ENABLED", "invalid")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", "")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE", "")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "")
+	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", filepath.Join(t.TempDir(), "runtime.json"))
+	result := runSingleHarness(context.Background(), config.Config{}, func(string, ...any) {})
+	if result.ExitCode != app.ExitConfig || !errors.Is(result.Err, gitsigning.ErrSetup) {
+		t.Fatalf("run accepted invalid signing policy: %+v", result)
+	}
+	path := filepath.Join(t.TempDir(), "task.json")
+	if err := os.WriteFile(path, []byte(`{"repoUrl":"https://github.com/example/repo","prompt":"test"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if code := runMultiplex([]string{"--config", path}); code != app.ExitConfig {
+		t.Fatalf("multiplex exit = %d, want %d", code, app.ExitConfig)
+	}
+	if code := runServer(nil); code != app.ExitConfig {
+		t.Fatalf("serve exit = %d, want %d", code, app.ExitConfig)
+	}
+}

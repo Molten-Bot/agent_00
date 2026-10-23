@@ -63,6 +63,18 @@ func (s SigningSettings) github() gitsigning.GitHub {
 }
 
 func (s SigningSettings) config() (gitsigning.Config, error) {
+	cfg, err := s.savedConfig()
+	if err != nil {
+		return cfg, err
+	}
+	enabled, err := commitSigningEnabledFromEnv()
+	if enabled != nil {
+		cfg.Enabled = *enabled
+	}
+	return cfg, err
+}
+
+func (s SigningSettings) savedConfig() (gitsigning.Config, error) {
 	data, err := os.ReadFile(s.path())
 	if errors.Is(err, os.ErrNotExist) {
 		return s.Initial.CommitSigning, nil
@@ -111,6 +123,11 @@ func (s SigningSettings) Configure(ctx context.Context, req CommitSigningRequest
 	current, err := s.config()
 	if err != nil {
 		return signingState(current), err
+	}
+	if enabled, err := commitSigningEnabledFromEnv(); err != nil {
+		return signingState(current), err
+	} else if enabled != nil && req.Enabled != *enabled {
+		return signingState(current), fmt.Errorf("%w: signing is controlled by %s; change it and restart", gitsigning.ErrSetup, commitSigningEnabledEnv)
 	}
 	cfg := current
 	importing := strings.TrimSpace(req.PrivateKey) != ""
