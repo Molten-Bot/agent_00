@@ -1,5 +1,9 @@
 {
+  // optional; defaults to "v1" when omitted
+  // "version": "v1",
   "repo": "git@github.com:Molten-Bot/agent_00.git",
+  // "repoUrl" is accepted as an alias for "repo":
+  // "repoUrl": "git@github.com:Molten-Bot/agent_00.git",
   "agentHarness": "codex",
   // optional override when executable name differs from harness default
   // "agentCommand": "codex",
@@ -7,24 +11,43 @@
   // "responseMode": "off",
   "githubHandle": "octocat",
   "prompt": "Add your prompt here."
+  // open the generated pull request as a draft instead of ready-for-review:
+  // "draft": true
+  // optional PR base branch; the harness creates a work branch from it and targets it in the PR
+  // omitted means the repository default branch
+  // "branch": "release/2026.04",
+  // optional, defaults to "."; scopes the run to a subdirectory of the repo
+  // "targetSubdir": ".",
+  // optional; the harness requires baseBranch to be set and non-default when true
+  // "requiresNonDefaultBranch": false,
+  // optional PR metadata; each defaults to a value derived from the prompt when omitted
+  // "commitMessage": "feat: add your change",
+  // "prTitle": "feat(agent_00): add your change",
+  // "prBody": "Describe the change for reviewers here.",
+  // "labels": ["automation"],
+  // optional; merged with githubHandle into the PR reviewer list
+  // "reviewers": ["octocat", "hubot"],
+  // optional prompt image attachments
+  // "images": [
+  //   { "name": "before.png", "mediaType": "image/png", "dataBase64": "<base64>" }
+  // ],
   // library task example:
   // "repos": [
   //   "git@github.com:acme/service-a.git",
   //   "git@github.com:acme/service-b.git"
   // ],
   // "libraryTaskName": "unit-test-coverage",
-  // optional for subdirectory-scoped runs:
-  // "targetSubdir": ".",
-  // optional PR base branch; the harness creates a work branch from it and targets it in the PR
-  // omitted means the repository default branch
-  // "branch": "release/2026.04",
+  // "libraryTaskDisplayName": "Unit Test Coverage",
   // code review example: provide either "branch" or "prNumber"
   // "prNumber": 123,
   // "review": {
   //   "prNumber": 123,
-  //   "trigger": "hub",
+  //   "trigger": "manual",
   //   "writeback": "summary-comment",
   //   "autoMerge": true,
   //   "mergeMethod": "squash"
   // }
+  // Recurring runs (re-run a library task on an interval) are not configured
+  // in this file; they are a dashboard/API feature. See
+  // library-schedule.example.json for that JSON contract.
 }

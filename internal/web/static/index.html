@@ -287,10 +287,13 @@
     "git@github.com:org/repo-two.git"
   ],
   "librarytaskname": "unit-test-coverage",
+  "basebranch": "main",
+  "targetsubdir": ".",
   "reviewers": [
     "octocat",
     "hubot"
-  ]
+  ],
+  "draft": true
 }'></textarea>
               </div>
               <div class="prompt-actions">
@@ -542,6 +545,13 @@
         <h3 id="library-schedule-task"></h3>
         <p id="library-schedule-repo" class="library-schedule-copy"></p>
         <p id="library-schedule-options" class="library-schedule-copy"></p>
+        <label id="library-schedule-draft-field" class="prompt-field prompt-field-draft-pr">
+          <span class="prompt-label">Draft</span>
+          <span class="prompt-draft-toggle" title="Draft PR">
+            <input id="library-schedule-draft" class="prompt-draft-toggle-input" type="checkbox" aria-label="Open pull request as a draft">
+            <i data-lucide="git-pull-request-draft" class="prompt-draft-toggle-icon" aria-hidden="true"></i>
+          </span>
+        </label>
         <label class="library-schedule-interval" for="library-schedule-hours">Repeat <output id="library-schedule-frequency" for="library-schedule-hours">every 24 hours</output></label>
         <input id="library-schedule-hours" type="range" min="1" max="168" step="1" value="24" aria-label="Repeat interval in hours">
         <div class="library-schedule-range"><span>1 hour</span><span>168 hours · 1 week</span></div>
