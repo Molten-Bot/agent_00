@@ -10,6 +10,8 @@ With no config file, the container starts `harness serve` on port 7777. Complete
 
 Local preferences include `agent_harness`, `agent_command`, `log_level`, `scheduler`, and `review_watch`. Existing `dispatcher` settings remain readable and become `scheduler` when settings are saved. Credentials saved during onboarding persist across restarts. Set `HARNESS_UI_LISTEN` to override the container listen address (default `:7777`).
 
-For a single task, copy `run.example.json` to `config.json` inside your config directory and edit it. For the dashboard, leave that file absent or use local runtime preferences. Outside Docker, local preferences use `.agent00/config.json`. For an existing directory, pass `serve --config /path/to/config.json` or set `HARNESS_RUNTIME_CONFIG_PATH`; old locations are no longer discovered automatically.
+For a single task, copy `run.example.json` to `config.json` inside your config directory and edit it. `run.example.json` documents every field a run config accepts, including `draft` to open the PR as a draft. For the dashboard, leave that file absent or use local runtime preferences. Outside Docker, local preferences use `.agent00/config.json`. For an existing directory, pass `serve --config /path/to/config.json` or set `HARNESS_RUNTIME_CONFIG_PATH`; old locations are no longer discovered automatically.
+
+To re-run a library task on a recurring interval instead of once, `PUT`/`DELETE` `/api/library/schedules` on a running `harness serve` instance (also reachable from the dashboard's "Schedules" button). See `library-schedule.example.json` for the request body shape, including `draft`.
 
 For manual bind mounts, use `--user "$(id -u):$(id -g)"` when your host user is not uid/gid 1000 to avoid write-permission failures.

@@ -4,6 +4,8 @@
   const editor = byID("editor");
   const list = byID("list");
   const slider = byID("hours");
+  const draftInput = byID("draft");
+  const draftToggle = draftInput.closest(".prompt-draft-toggle");
   const endpoint = "/api/library/schedules";
   let schedules = [];
   let editing = null;
@@ -111,6 +113,8 @@
     byID("task").textContent = titleFor(entry.libraryTaskName);
     byID("repo").textContent = displayRepoLabel(entry.repo);
     byID("options").textContent = `Branch: ${entry.baseBranch || "default"} · Directory: ${entry.targetSubdir || "."}` + (entry.reviewers?.length ? ` · Reviewers: ${entry.reviewers.join(", ")}` : "");
+    draftInput.checked = Boolean(entry.draft);
+    draftToggle?.classList.toggle("is-active", draftInput.checked);
     byID("delete").hidden = !entry.key;
     slider.value = String(entry.intervalHours || 24);
     updateInterval();
@@ -129,7 +133,7 @@
       const payload = libraryPayload(entry.name);
       await load();
       const existing = schedules.find((schedule) => schedule.libraryTaskName === entry.name && repoDedupeKey(schedule.repo) === repoDedupeKey(payload.repos[0]));
-      showEditor(existing || { libraryTaskName: entry.name, repo: payload.repos[0], baseBranch: payload.branch || "", targetSubdir: payload.targetsubdir || ".", reviewers: payload.reviewers || [], intervalHours: 24 });
+      showEditor(existing || { libraryTaskName: entry.name, repo: payload.repos[0], baseBranch: payload.branch || "", targetSubdir: payload.targetsubdir || ".", reviewers: payload.reviewers || [], draft: Boolean(payload.draft), intervalHours: 24 });
     } catch (error) { status(error.message, true); }
   }
   async function mutate(action, success) {
@@ -161,13 +165,15 @@
   modal.addEventListener("close", () => opener?.focus());
   modal.addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
   byID("back").addEventListener("click", () => { showList(); status(""); });
+  draftInput.addEventListener("change", () => draftToggle?.classList.toggle("is-active", draftInput.checked));
   byID("delete").addEventListener("click", () => { if (editing?.key) void remove(editing); });
   slider.addEventListener("input", () => updateInterval(true));
   editor.addEventListener("submit", (event) => {
     event.preventDefault();
     if (!editing) return;
     const { libraryTaskName, repo, baseBranch, targetSubdir, reviewers } = editing;
-    void mutate(() => request({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ libraryTaskName, repo, baseBranch, targetSubdir, reviewers, intervalHours: Number(slider.value) }) }), "Schedule saved. You can still use Run for a one-time task.");
+    const draft = byID("draft").checked;
+    void mutate(() => request({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ libraryTaskName, repo, baseBranch, targetSubdir, reviewers, draft, intervalHours: Number(slider.value) }) }), "Schedule saved. You can still use Run for a one-time task.");
   });
   document.addEventListener("change", refreshButtons);
   libraryRepoInput.addEventListener("input", refreshButtons);
