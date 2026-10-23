@@ -34,7 +34,25 @@ import (
 // even if it disregards the review skill's read-only instructions. Bash is
 // included because it can write files (or run git commands) just as easily
 // as the dedicated Edit/Write tools, leaving the same mutation vector open.
-var readOnlyReviewDisallowedTools = []string{"Edit", "Write", "NotebookEdit", "Bash"}
+//
+// Agent, Skill, and Workflow are blocked too: they can hand the review off to
+// a background sub-agent whose result arrives as a later, asynchronous
+// follow-up turn. The CLI is invoked with --print/--output-format text, which
+// only returns the single final assistant message, so once a background task
+// finishes after the agent already produced its review text, the captured
+// output becomes a short "stale follow-up" acknowledgment instead of the
+// required fenced JSON outcome, and parseReviewOutcome has nothing to parse.
+// A review pass must run synchronously in the invoking turn so its own final
+// message always carries the mandated verdict. This is blocked even for
+// read-only sub-agent use (e.g. Explore) because the harness cannot
+// distinguish a read-only dispatch from one that backgrounds itself; losing
+// that parallel-exploration capability during review is an accepted
+// trade-off against the alternative of silently dropping the verdict.
+// ReportFindings is blocked for the same reason: the bundled review skill
+// requires the verdict as fenced JSON in that final text message, not routed
+// through a separate structured-output tool call that parseReviewOutcome
+// never inspects.
+var readOnlyReviewDisallowedTools = []string{"Edit", "Write", "NotebookEdit", "Bash", "Agent", "Skill", "Workflow", "ReportFindings"}
 
 const (
 	ExitSuccess   = 0

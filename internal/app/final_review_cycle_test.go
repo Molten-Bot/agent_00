@@ -174,7 +174,7 @@ func TestRunFinalReviewCycleDisallowsMutatingToolsOnClaude(t *testing.T) {
 	if idx == -1 {
 		t.Fatalf("args %v did not include --disallowedTools", args)
 	}
-	wantTools := []string{"Edit", "Write", "NotebookEdit"}
+	wantTools := []string{"Edit", "Write", "NotebookEdit", "Bash", "Agent", "Skill", "Workflow", "ReportFindings"}
 	if got := args[idx+1 : idx+1+len(wantTools)]; !reflect.DeepEqual(got, wantTools) {
 		t.Fatalf("disallowed tools = %v, want %v", got, wantTools)
 	}
