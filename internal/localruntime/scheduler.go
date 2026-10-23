@@ -57,6 +57,7 @@ type resourceSampler interface {
 }
 
 type defaultResourceSampler struct {
+	mu           sync.Mutex
 	lastCPUTotal uint64
 	lastCPUIdle  uint64
 	lastDiskIO   uint64
@@ -457,6 +458,10 @@ func normalizeSchedulerConfig(cfg SchedulerConfig) SchedulerConfig {
 }
 
 func (s *defaultResourceSampler) Sample() (resourceSample, error) {
+	// Acquire and the sampling loop can run concurrently. Keep counter reads
+	// and baseline updates in one sample so deltas use a consistent snapshot.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	switch runtime.GOOS {
 	case "windows":
 		return s.sampleWindows()

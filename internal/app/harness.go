@@ -139,6 +139,7 @@ type repoWorkspace struct {
 	RelDir                      string
 	Branch                      string
 	PRURL                       string
+	RequireExistingPR           bool
 	PRHeadRef                   string
 	PRHeadOwner                 string
 	PRTargetRepo                string
@@ -228,6 +229,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	}
 	cfg.ApplyDefaults()
 	normalizeFailureFollowUpTargeting(&cfg)
+	if err := normalizeLibraryReviewTarget(&cfg); err != nil {
+		return h.fail(ExitConfig, "review", err, "")
+	}
 	requiresNonDefaultBranch, err := libraryTaskRequiresNonDefaultBranch(cfg)
 	if err != nil {
 		return h.fail(ExitConfig, "config", err, "")
@@ -308,6 +312,14 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	}
 	runCfg := cfg
 	reviewRun := runCfg.Review != nil
+	feedbackPRURL := ""
+	if isFreeTextPRFeedbackRun(runCfg) {
+		var err error
+		feedbackPRURL, err = h.preparePRFeedbackTarget(ctx, &runCfg)
+		if err != nil {
+			return h.fail(ExitPR, "review", errors.Join(ErrPRFeedbackTarget, err), runDir)
+		}
+	}
 	cloneBaseBranch := strings.TrimSpace(runCfg.BaseBranch)
 
 	repos := make([]repoWorkspace, 0, len(repoURLs))
@@ -316,6 +328,8 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		repoDir := filepath.Join(runDir, relDir)
 		repos = append(repos, repoWorkspace{
 			URL:                      repoURL,
+			PRURL:                    feedbackPRURL,
+			RequireExistingPR:        feedbackPRURL != "",
 			Dir:                      repoDir,
 			RelDir:                   relDir,
 			RequiresNonDefaultBranch: runCfg.RequiresNonDefaultBranch,
@@ -326,6 +340,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		})
 	}
 	if err := h.cloneRepositories(ctx, repos, cloneBaseBranch); err != nil {
+		if feedbackPRURL != "" {
+			err = errors.Join(ErrPRFeedbackTarget, err)
+		}
 		return h.fail(ExitClone, "clone", err, runDir)
 	}
 	if err := h.validateRequiredNonDefaultBranches(ctx, runCfg, repos); err != nil {
@@ -730,7 +747,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 	createWorkBranch := repo.CreateWorkBranch
 	headRef := repoPRHeadRef(*repo)
 	targetRepo := repoPRTargetRepo(*repo)
-	if !createWorkBranch {
+	if !createWorkBranch && !repo.RequireExistingPR {
 		prURL, err := h.lookupOpenPRURLByHead(ctx, *repo)
 		if err != nil {
 			if shouldTreatReusedBranchPRLookupFailureAsNonFatal(err) {
@@ -749,6 +766,9 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 	}
 
 	if repo.PRURL == "" {
+		if repo.RequireExistingPR {
+			return ExitPR, "pr", fmt.Errorf("PR feedback target is missing; refusing to create a new pull request")
+		}
 		prURL, err := h.createPullRequestURL(ctx, *repo, cfg, createWorkBranch, headRef, targetRepo)
 		if err != nil {
 			if errors.Is(err, errPRCreatePermissionDenied) {
@@ -2022,6 +2042,9 @@ func (h Harness) prepareForkFallbackPublishWorkflow(ctx context.Context, repo *r
 	if repo == nil {
 		return fmt.Errorf("repo workspace is required")
 	}
+	if repo.RequireExistingPR {
+		return fmt.Errorf("%w: cannot push to the requested PR branch; refusing fork fallback for PR feedback", ErrPRFeedbackTarget)
+	}
 	ref, ok := parseGitHubRepoRef(repo.URL)
 	if !ok {
 		return fmt.Errorf("cannot prepare fork fallback for non-GitHub repo %s", repo.URL)
@@ -2210,6 +2233,9 @@ func repoPRTargetRepo(repo repoWorkspace) string {
 func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspace, prompt string, requirePRURL bool) error {
 	promptPRURL := pullRequestURLFromPrompt(prompt)
 	for i := range repos {
+		if repos[i].RequireExistingPR && repos[i].PRURL != "" {
+			continue
+		}
 		prURL, err := h.lookupOpenPRURLByHead(ctx, repos[i])
 		if err != nil {
 			h.logf(
@@ -2897,7 +2923,7 @@ func (h Harness) cloneRepository(ctx context.Context, repo *repoWorkspace, branc
 		h.logf("stage=clone status=ok repo=%s repo_dir=%s", repoURL, repo.RelDir)
 		return nil
 	}
-	if repo.RequiresNonDefaultBranch {
+	if repo.RequiresNonDefaultBranch || repo.RequireExistingPR {
 		return fmt.Errorf(
 			"library task %q requires existing remote branch %q for repo %s; refusing default-branch fallback: %w",
 			repo.RequiredBranchTask,
@@ -3136,6 +3162,9 @@ func updateRepoBranchFromStatus(repo *repoWorkspace, statusStdout string) error 
 		return fmt.Errorf("repo workspace is required")
 	}
 	observedBranch := strings.TrimSpace(localBranchFromStatus(statusStdout))
+	if repo.RequireExistingPR && observedBranch != normalizeBranchRef(repo.RequiredBranch) {
+		return fmt.Errorf("%w: PR feedback requires branch %q to remain checked out; git status reported %q", ErrPRFeedbackTarget, repo.RequiredBranch, observedBranch)
+	}
 	if repo.RequiresNonDefaultBranch {
 		requiredBranch := normalizeBranchRef(repo.RequiredBranch)
 		if observedBranch == "" {
@@ -6975,7 +7004,7 @@ func isKnownDefaultBranchName(branch string) bool {
 // Existing-branch workflows update a branch that already backs a pull request.
 // All other runs isolate their changes on a generated branch rooted at BaseBranch.
 func shouldReuseExistingBranch(repo repoWorkspace) bool {
-	if repo.RequiresNonDefaultBranch {
+	if repo.RequiresNonDefaultBranch || repo.RequireExistingPR {
 		return true
 	}
 	taskName := strings.ToLower(strings.TrimSpace(repo.RequiredBranchTask))
