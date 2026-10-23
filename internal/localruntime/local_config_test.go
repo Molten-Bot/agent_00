@@ -72,14 +72,16 @@ func TestDefaultLibraryEnabledDefaultsTrueAndRoundTrips(t *testing.T) {
 		t.Fatal("default library should default to enabled before any config file exists")
 	}
 
-	if err := SaveRuntimeConfigReviewAndDefaultLibrarySettings(path, InitConfig{}, ReviewWatchConfig{}, false); err != nil {
+	disabled := false
+	if err := SaveRuntimeConfigReviewAndDefaultLibrarySettings(path, InitConfig{}, ReviewWatchConfig{}, &disabled); err != nil {
 		t.Fatal(err)
 	}
 	if ReadRuntimeConfigDefaultLibraryEnabled(path) {
 		t.Fatal("default library should be disabled after saving false")
 	}
 
-	if err := SaveRuntimeConfigReviewAndDefaultLibrarySettings(path, InitConfig{}, ReviewWatchConfig{}, true); err != nil {
+	enabled := true
+	if err := SaveRuntimeConfigReviewAndDefaultLibrarySettings(path, InitConfig{}, ReviewWatchConfig{}, &enabled); err != nil {
 		t.Fatal(err)
 	}
 	if !ReadRuntimeConfigDefaultLibraryEnabled(path) {

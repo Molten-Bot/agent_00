@@ -164,12 +164,15 @@ func SaveRuntimeConfigReviewSettings(path string, initCfg InitConfig, reviewCfg 
 // SaveRuntimeConfigReviewAndDefaultLibrarySettings persists review automation
 // settings and the default-library-enabled flag in a single load/modify/write
 // cycle so a mid-save failure cannot leave one setting persisted without the
-// other.
+// other. defaultLibraryEnabled is a pointer so callers that are not changing
+// the setting can pass nil; the current persisted value is then read from the
+// freshly loaded doc inside the same locked critical section, avoiding a
+// lost-update race with a concurrent save.
 func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 	path string,
 	initCfg InitConfig,
 	reviewCfg ReviewWatchConfig,
-	defaultLibraryEnabled bool,
+	defaultLibraryEnabled *bool,
 ) error {
 	runtimeConfigMu.Lock()
 	defer runtimeConfigMu.Unlock()
@@ -185,7 +188,11 @@ func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 	if err := applyReviewWatchSettingsToDoc(doc, reviewCfg); err != nil {
 		return err
 	}
-	applyDefaultLibraryEnabledToDoc(doc, defaultLibraryEnabled)
+	enabled := defaultLibraryEnabledFromDoc(doc)
+	if defaultLibraryEnabled != nil {
+		enabled = *defaultLibraryEnabled
+	}
+	applyDefaultLibraryEnabledToDoc(doc, enabled)
 	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
 
 	return writeRuntimeConfigDoc(path, doc)
@@ -300,6 +307,13 @@ func ReadRuntimeConfigDefaultLibraryEnabled(path string) bool {
 	if err != nil {
 		return true
 	}
+	return defaultLibraryEnabledFromDoc(doc)
+}
+
+// defaultLibraryEnabledFromDoc returns the default-library-enabled setting
+// from an already-loaded runtime config doc, defaulting to true (shown) when
+// unset.
+func defaultLibraryEnabledFromDoc(doc map[string]any) bool {
 	enabled, ok := doc["default_library_enabled"].(bool)
 	if !ok {
 		return true
