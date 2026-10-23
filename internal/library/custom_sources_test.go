@@ -104,3 +104,23 @@ func TestLoadCustomizedCatalogSkipsNameCollisionWithBuiltin(t *testing.T) {
 		t.Fatalf("Tasks = %+v, want exactly one task after collision skip", catalog.Tasks)
 	}
 }
+
+func TestLoadCustomLibraryCatalogExcludesBuiltIn(t *testing.T) {
+	t.Setenv(catalogDirEnv, "")
+	t.Setenv(agentsSeedEnv, "")
+
+	customRoot := t.TempDir()
+	t.Setenv(CustomSourcesDirEnv, customRoot)
+	writeGeneratedTask(t, filepath.Join(customRoot, "acme", "generated"), "acme--fix-bug", "Fix the bug.")
+
+	catalog, err := LoadCustomLibraryCatalog()
+	if err != nil {
+		t.Fatalf("LoadCustomLibraryCatalog() error: %v", err)
+	}
+	if len(catalog.Tasks) != 1 {
+		t.Fatalf("Tasks = %+v, want exactly the custom task with no built-in catalog", catalog.Tasks)
+	}
+	if task, ok := catalog.Task("acme--fix-bug"); !ok || task.Prompt != "Fix the bug." {
+		t.Fatalf("missing/incorrect custom task: ok=%v task=%+v", ok, task)
+	}
+}
