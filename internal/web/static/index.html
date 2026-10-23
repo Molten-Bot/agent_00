@@ -752,7 +752,6 @@
         </div>
 
         <form id="review-settings-form" class="stack review-settings-form" data-settings-panel="review">
-          <p id="settings-tab-caption" class="settings-tab-caption" role="status" aria-live="polite"></p>
           <fieldset id="settings-panel-automation" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-automation" hidden>
             <legend class="review-settings-section-title sr-only">Automation</legend>
             <label class="review-settings-toggle">
@@ -2017,7 +2016,6 @@
     const reviewSettingsMergeOptions = Array.from(document.querySelectorAll("[data-review-settings-merge-method]"));
     const reviewSettingsMergeSliderThumb = document.querySelector(".review-settings-merge-slider-thumb");
     const settingsTabButtons = Array.from(document.querySelectorAll("[data-settings-tab]"));
-    const settingsTabCaption = document.getElementById("settings-tab-caption");
     const settingsTabPanels = {
       automation: document.getElementById("settings-panel-automation"),
       review: document.getElementById("settings-panel-review"),
@@ -2626,14 +2624,11 @@
     function setSettingsTab(tab) {
       const normalized = Object.prototype.hasOwnProperty.call(settingsTabPanels, tab) ? tab : "review";
       state.settingsTab = normalized;
-      let activeLabel = "";
       settingsTabButtons.forEach((button) => {
         const selected = button.getAttribute("data-settings-tab") === normalized;
         button.classList.toggle("active", selected);
         button.setAttribute("aria-selected", selected ? "true" : "false");
-        if (selected) activeLabel = button.querySelector("span")?.textContent || "";
       });
-      if (settingsTabCaption) settingsTabCaption.textContent = activeLabel;
       Object.entries(settingsTabPanels).forEach(([key, panel]) => {
         if (panel) panel.hidden = key !== normalized;
       });

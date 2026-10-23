@@ -6894,15 +6894,6 @@ body.onboarding-modal-open {
   padding: 14px;
 }
 
-.settings-tab-caption {
-  grid-column: 1 / -1;
-  margin: 0;
-  padding: 0;
-  color: var(--text);
-  font-size: 0.86rem;
-  font-weight: 700;
-}
-
 .settings-tabbed-panel .review-settings-section {
   border: none;
   border-radius: 0;
