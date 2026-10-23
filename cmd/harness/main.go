@@ -675,7 +675,13 @@ func runServer(args []string) int {
 		uiServer.ConfiguredHarness = cfg.AgentHarness
 		uiServer.Logf = daemonLogger
 		uiServer.LoadLibraryTasks = func() ([]library.TaskSummary, error) {
-			catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
+			var catalog library.Catalog
+			var err error
+			if localruntime.ReadRuntimeConfigDefaultLibraryEnabled(cfg.RuntimeConfigPath) {
+				catalog, err = library.LoadCustomizedCatalog(library.DefaultDir)
+			} else {
+				catalog, err = library.LoadCustomLibraryCatalog()
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -2435,10 +2441,11 @@ func currentReviewSettingsState(cfg localruntime.InitConfig) web.ReviewSettingsS
 	}
 	activeCfg.ApplyDefaults()
 	return web.ReviewSettingsState{
-		AutoMerge:            activeCfg.ReviewWatch.AutoMergeEnabled(),
-		DeleteMergedBranches: activeCfg.ReviewWatch.DeleteMergedBranchesEnabled(),
-		MergeMethod:          activeCfg.ReviewWatch.MergeMethod,
-		ReviewLevel:          activeCfg.ReviewWatch.ReviewLevel,
+		AutoMerge:             activeCfg.ReviewWatch.AutoMergeEnabled(),
+		DeleteMergedBranches:  activeCfg.ReviewWatch.DeleteMergedBranchesEnabled(),
+		MergeMethod:           activeCfg.ReviewWatch.MergeMethod,
+		ReviewLevel:           activeCfg.ReviewWatch.ReviewLevel,
+		DefaultLibraryEnabled: localruntime.ReadRuntimeConfigDefaultLibraryEnabled(cfg.RuntimeConfigPath),
 	}
 }
 
@@ -2467,6 +2474,10 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		ReviewLevel:          reviewLevel,
 	}
 	if err := localruntime.SaveRuntimeConfigReviewSettings(cfg.RuntimeConfigPath, cfg, reviewCfg); err != nil {
+		state := currentReviewSettingsState(cfg)
+		return state, err
+	}
+	if err := localruntime.SaveRuntimeConfigDefaultLibraryEnabled(cfg.RuntimeConfigPath, cfg, req.DefaultLibraryEnabled); err != nil {
 		state := currentReviewSettingsState(cfg)
 		return state, err
 	}

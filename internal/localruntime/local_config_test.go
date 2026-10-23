@@ -63,3 +63,37 @@ func TestSaveLocalSettingsDiscardsRetiredCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultLibraryEnabledDefaultsTrueAndRoundTrips(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.json")
+
+	if !ReadRuntimeConfigDefaultLibraryEnabled(path) {
+		t.Fatal("default library should default to enabled before any config file exists")
+	}
+
+	if err := SaveRuntimeConfigDefaultLibraryEnabled(path, InitConfig{}, false); err != nil {
+		t.Fatal(err)
+	}
+	if ReadRuntimeConfigDefaultLibraryEnabled(path) {
+		t.Fatal("default library should be disabled after saving false")
+	}
+
+	if err := SaveRuntimeConfigDefaultLibraryEnabled(path, InitConfig{}, true); err != nil {
+		t.Fatal(err)
+	}
+	if !ReadRuntimeConfigDefaultLibraryEnabled(path) {
+		t.Fatal("default library should be enabled after saving true")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := doc["default_library_enabled"]; exists {
+		t.Error("saving the default (enabled) value should omit the key, keeping the file minimal")
+	}
+}

@@ -166,18 +166,20 @@ type gitHubRepoCache struct {
 }
 
 type ReviewSettingsState struct {
-	AutoMerge            bool   `json:"auto_merge"`
-	DeleteMergedBranches bool   `json:"delete_merged_branches"`
-	MergeMethod          string `json:"merge_method"`
-	ReviewLevel          string `json:"review_level"`
-	Message              string `json:"message,omitempty"`
+	AutoMerge             bool   `json:"auto_merge"`
+	DeleteMergedBranches  bool   `json:"delete_merged_branches"`
+	MergeMethod           string `json:"merge_method"`
+	ReviewLevel           string `json:"review_level"`
+	DefaultLibraryEnabled bool   `json:"default_library_enabled"`
+	Message               string `json:"message,omitempty"`
 }
 
 type ReviewSettingsRequest struct {
-	AutoMerge            bool   `json:"auto_merge"`
-	DeleteMergedBranches bool   `json:"delete_merged_branches"`
-	MergeMethod          string `json:"merge_method"`
-	ReviewLevel          string `json:"review_level"`
+	AutoMerge             bool   `json:"auto_merge"`
+	DeleteMergedBranches  bool   `json:"delete_merged_branches"`
+	MergeMethod           string `json:"merge_method"`
+	ReviewLevel           string `json:"review_level"`
+	DefaultLibraryEnabled bool   `json:"default_library_enabled"`
 }
 
 // NewServer returns a monitor HTTP server.
@@ -1471,7 +1473,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		state := ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off"}
+		state := ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true}
 		if s.ReviewSettingsStatus != nil {
 			next, err := s.ReviewSettingsStatus(r.Context())
 			if strings.TrimSpace(next.MergeMethod) == "" {
@@ -1499,7 +1501,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotImplemented, map[string]any{
 				"ok":       false,
 				"error":    "review settings are unavailable",
-				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off"},
+				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true},
 			})
 			return
 		}
@@ -1508,7 +1510,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"ok":       false,
 				"error":    fmt.Sprintf("read request body: %v", err),
-				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off"},
+				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true},
 			})
 			return
 		}
@@ -1517,7 +1519,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"ok":       false,
 				"error":    fmt.Sprintf("decode request body: %v", err),
-				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off"},
+				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true},
 			})
 			return
 		}

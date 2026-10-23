@@ -739,6 +739,67 @@ func TestConfigureReviewSettingsPersistsOnlyNonDefaults(t *testing.T) {
 	}
 }
 
+func TestConfigureReviewSettingsPersistsDefaultLibraryEnabled(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	initCfg := localruntime.InitConfig{RuntimeConfigPath: configPath, AgentHarness: "codex"}
+
+	if !currentReviewSettingsState(initCfg).DefaultLibraryEnabled {
+		t.Fatal("default library should start enabled before any config is saved")
+	}
+
+	state, err := configureReviewSettings(initCfg, web.ReviewSettingsRequest{
+		MergeMethod:           "squash",
+		ReviewLevel:           "off",
+		DefaultLibraryEnabled: false,
+	})
+	if err != nil {
+		t.Fatalf("configureReviewSettings() error = %v", err)
+	}
+	if state.DefaultLibraryEnabled {
+		t.Fatalf("state.DefaultLibraryEnabled = true, want false")
+	}
+	if currentReviewSettingsState(initCfg).DefaultLibraryEnabled {
+		t.Fatal("default library should read back disabled")
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	if got, ok := doc["default_library_enabled"].(bool); !ok || got {
+		t.Fatalf("default_library_enabled = %#v, want false", doc["default_library_enabled"])
+	}
+
+	state, err = configureReviewSettings(initCfg, web.ReviewSettingsRequest{
+		MergeMethod:           "squash",
+		ReviewLevel:           "off",
+		DefaultLibraryEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("configureReviewSettings(default) error = %v", err)
+	}
+	if !state.DefaultLibraryEnabled {
+		t.Fatalf("state.DefaultLibraryEnabled = false, want true")
+	}
+	data, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read default config: %v", err)
+	}
+	doc = map[string]any{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse default config: %v", err)
+	}
+	if _, ok := doc["default_library_enabled"]; ok {
+		t.Fatalf("default_library_enabled persisted for the default (enabled) value: %#v", doc["default_library_enabled"])
+	}
+}
+
 func TestConfigureReviewSettingsRejectsInvalidMergeMethod(t *testing.T) {
 	t.Parallel()
 

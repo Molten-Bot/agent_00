@@ -726,6 +726,16 @@
         </header>
 
         <div class="settings-tabbar" role="tablist" aria-label="Settings sections">
+          <button id="settings-tab-library" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="custom-library-section" data-settings-tab="library">
+            <svg class="custom-library-tab-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="13" height="3" rx="1"></rect>
+              <rect x="3" y="10.5" width="10" height="3" rx="1"></rect>
+              <rect x="3" y="17" width="13" height="3" rx="1"></rect>
+              <path d="M19.5 4.5a4 4 0 1 1-1.2-2.8"></path>
+              <path d="M19.5 1v3.5h-3.5"></path>
+            </svg>
+            <span>Library</span>
+          </button>
           <button id="settings-tab-automation" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-automation" data-settings-tab="automation">
             <i data-lucide="wand-sparkles" aria-hidden="true"></i><span>Automation</span>
           </button>
@@ -737,16 +747,6 @@
           </button>
           <button id="settings-tab-signing" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="commit-signing-section" data-settings-tab="signing">
             <i data-lucide="globe-lock" aria-hidden="true"></i><span>Commit Signing</span>
-          </button>
-          <button id="settings-tab-library" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="custom-library-section" data-settings-tab="library">
-            <svg class="custom-library-tab-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="3" y="4" width="13" height="3" rx="1"></rect>
-              <rect x="3" y="10.5" width="10" height="3" rx="1"></rect>
-              <rect x="3" y="17" width="13" height="3" rx="1"></rect>
-              <path d="M19.5 4.5a4 4 0 1 1-1.2-2.8"></path>
-              <path d="M19.5 1v3.5h-3.5"></path>
-            </svg>
-            <span>Company Library</span>
           </button>
         </div>
 
@@ -818,7 +818,11 @@
             </div>
           </div>
           <div class="review-settings-section custom-library-section" id="custom-library-section" role="tabpanel" aria-labelledby="settings-tab-library" hidden>
-            <h3 class="review-settings-section-title">Company library</h3>
+            <h3 class="review-settings-section-title">Library</h3>
+            <label class="review-settings-toggle">
+              <input id="review-settings-default-library" type="checkbox" checked>
+              <span>Show default library</span>
+            </label>
             <div class="stack custom-library-fields">
               <p>Pull library tasks from a private git repository your account can already access. Add the repo's SSH or HTTPS URL and a display name; this app clones <code>./prompt/*.md</code> from it once now, then refreshes hourly or whenever you reopen the app.</p>
               <label for="custom-library-name">Name</label>
@@ -1508,11 +1512,13 @@
       const settings = raw && typeof raw === "object" ? raw : {};
       const method = String(settings.merge_method || settings.mergeMethod || "squash").trim().toLowerCase();
       const level = String(settings.review_level || settings.reviewLevel || "off").trim().toLowerCase();
+      const defaultLibraryRaw = settings.default_library_enabled ?? settings.defaultLibraryEnabled;
       return {
         autoMerge: Boolean(settings.auto_merge || settings.autoMerge),
         deleteMergedBranches: Boolean(settings.delete_merged_branches || settings.deleteMergedBranches),
         mergeMethod: ["merge", "squash", "rebase"].includes(method) ? method : "squash",
         reviewLevel: ["off", "low", "medium", "high"].includes(level) ? level : "off",
+        defaultLibraryEnabled: defaultLibraryRaw === undefined ? true : Boolean(defaultLibraryRaw),
         message: String(settings.message || "").trim(),
       };
     }
@@ -2001,6 +2007,7 @@
     const reviewSettingsForm = document.getElementById("review-settings-form");
     const reviewSettingsAutoMerge = document.getElementById("review-settings-auto-merge");
     const reviewSettingsDeleteMergedBranches = document.getElementById("review-settings-delete-merged-branches");
+    const reviewSettingsDefaultLibrary = document.getElementById("review-settings-default-library");
     const reviewSettingsMergeMethod = document.getElementById("review-settings-merge-method");
     const reviewSettingsMergeOptions = Array.from(document.querySelectorAll("[data-review-settings-merge-method]"));
     const reviewSettingsMergeSliderThumb = document.querySelector(".review-settings-merge-slider-thumb");
@@ -2647,6 +2654,9 @@
       if (reviewSettingsDeleteMergedBranches instanceof HTMLInputElement) {
         reviewSettingsDeleteMergedBranches.checked = state.reviewSettings.deleteMergedBranches;
       }
+      if (reviewSettingsDefaultLibrary instanceof HTMLInputElement) {
+        reviewSettingsDefaultLibrary.checked = state.reviewSettings.defaultLibraryEnabled;
+      }
       setReviewSettingsMergeMethod(state.reviewSettings.mergeMethod);
       setReviewSettingsLevel(state.reviewSettings.reviewLevel);
       if (state.reviewSettings.message) {
@@ -2693,6 +2703,7 @@
         delete_merged_branches: Boolean(reviewSettingsDeleteMergedBranches?.checked),
         merge_method: String(reviewSettingsMergeMethod?.value || "squash").trim().toLowerCase() || "squash",
         review_level: String(reviewSettingsLevel?.value || "off").trim().toLowerCase() || "off",
+        default_library_enabled: reviewSettingsDefaultLibrary instanceof HTMLInputElement ? reviewSettingsDefaultLibrary.checked : true,
       };
     }
 
@@ -2720,11 +2731,13 @@
         }
         applyReviewSettingsState(body?.settings);
         setReviewSettingsStatus("ok", body?.settings?.message || "Review settings saved.");
+        void loadLibraryTasks();
         trackAnalyticsEvent("review_settings_saved", {
           auto_merge: payload.auto_merge,
           delete_merged_branches: payload.delete_merged_branches,
           merge_method: payload.merge_method,
           review_level: payload.review_level,
+          default_library_enabled: payload.default_library_enabled,
         });
         setSettingsOpen(false);
       } catch (err) {

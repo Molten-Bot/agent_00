@@ -24,8 +24,19 @@ var runtimeConfigMu sync.Mutex
 type RuntimeConfig struct {
 	InitConfig
 
-	LibraryTaskUsage map[string]int             `json:"library_task_usage,omitempty"`
-	LibrarySchedules map[string]LibrarySchedule `json:"library_schedules,omitempty"`
+	LibraryTaskUsage      map[string]int             `json:"library_task_usage,omitempty"`
+	LibrarySchedules      map[string]LibrarySchedule `json:"library_schedules,omitempty"`
+	DefaultLibraryEnabled *bool                      `json:"default_library_enabled,omitempty"`
+}
+
+// DefaultLibraryEnabledValue returns the effective default-library setting.
+// The built-in library catalog is shown by default so the task picker is
+// never empty before any custom library source is configured.
+func (c RuntimeConfig) DefaultLibraryEnabledValue() bool {
+	if c.DefaultLibraryEnabled == nil {
+		return true
+	}
+	return *c.DefaultLibraryEnabled
 }
 
 // ApplyDefaults normalizes a persisted runtime config.
@@ -242,6 +253,52 @@ func runtimeConfigReviewDocOnlyDefaults(doc map[string]any) bool {
 		}
 	}
 	return true
+}
+
+// SaveRuntimeConfigDefaultLibraryEnabled persists whether the built-in
+// library catalog should appear in the task picker alongside configured
+// custom library sources. Already-scheduled recurring tasks that reference a
+// default library task name keep resolving regardless of this setting.
+func SaveRuntimeConfigDefaultLibraryEnabled(path string, initCfg InitConfig, enabled bool) error {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = defaultRuntimeConfigPath()
+	}
+
+	doc, err := loadRuntimeConfigDoc(path, initCfg)
+	if err != nil {
+		return err
+	}
+
+	if enabled {
+		delete(doc, "default_library_enabled")
+	} else {
+		doc["default_library_enabled"] = false
+	}
+	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
+
+	return writeRuntimeConfigDoc(path, doc)
+}
+
+// ReadRuntimeConfigDefaultLibraryEnabled returns the persisted default
+// library setting, defaulting to true (shown) when unset or unreadable.
+func ReadRuntimeConfigDefaultLibraryEnabled(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return true
+	}
+
+	doc, err := readRuntimeConfigDoc(path)
+	if err != nil {
+		return true
+	}
+	enabled, ok := doc["default_library_enabled"].(bool)
+	if !ok {
+		return true
+	}
+	return enabled
 }
 
 // ReadRuntimeConfigString returns the first non-empty string for the provided
