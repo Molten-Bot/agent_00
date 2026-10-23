@@ -701,9 +701,17 @@ func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 		BaseBranch: "main",
 	}
 	mergeConflict := execx.Result{Stdout: "CONFLICT (content): Merge conflict in file.go\nAutomatic merge failed; fix conflicts and then commit the result."}
+	resolvePrompt := baseSyncConflictPrompt(
+		"Build API",
+		repo.RelDir,
+		repo.URL,
+		repo.Branch,
+		repo.BaseBranch,
+		mergeConflict,
+	)
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{cmd: codexCommand(repoDir, "resolve conflict")},
+		{cmd: codexCommand(repoDir, resolvePrompt)},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
 	}}
 
@@ -734,9 +742,17 @@ func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing
 		Branch: "agent00-build-api",
 	}
 	mergeConflict := execx.Result{Stdout: "CONFLICT (content): Merge conflict in file.go\nAutomatic merge failed; fix conflicts and then commit the result."}
+	resolvePrompt := remoteBranchSyncConflictPrompt(
+		"Build API",
+		repo.RelDir,
+		repo.URL,
+		repo.Branch,
+		publishRemoteOrigin,
+		mergeConflict,
+	)
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{cmd: codexCommand(repoDir, "resolve conflict")},
+		{cmd: codexCommand(repoDir, resolvePrompt)},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
 	}}
 
