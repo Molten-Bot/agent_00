@@ -110,7 +110,8 @@
     byID("title").textContent = entry.key ? "Edit schedule" : "Schedule task";
     byID("task").textContent = titleFor(entry.libraryTaskName);
     byID("repo").textContent = displayRepoLabel(entry.repo);
-    byID("options").textContent = `Branch: ${entry.baseBranch || "default"} · Directory: ${entry.targetSubdir || "."}` + (entry.reviewers?.length ? ` · Reviewers: ${entry.reviewers.join(", ")}` : "") + (entry.draft ? " · Draft PR" : "");
+    byID("options").textContent = `Branch: ${entry.baseBranch || "default"} · Directory: ${entry.targetSubdir || "."}` + (entry.reviewers?.length ? ` · Reviewers: ${entry.reviewers.join(", ")}` : "");
+    byID("draft").checked = Boolean(entry.draft);
     byID("delete").hidden = !entry.key;
     slider.value = String(entry.intervalHours || 24);
     updateInterval();
@@ -166,8 +167,9 @@
   editor.addEventListener("submit", (event) => {
     event.preventDefault();
     if (!editing) return;
-    const { libraryTaskName, repo, baseBranch, targetSubdir, reviewers, draft } = editing;
-    void mutate(() => request({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ libraryTaskName, repo, baseBranch, targetSubdir, reviewers, draft: Boolean(draft), intervalHours: Number(slider.value) }) }), "Schedule saved. You can still use Run for a one-time task.");
+    const { libraryTaskName, repo, baseBranch, targetSubdir, reviewers } = editing;
+    const draft = byID("draft").checked;
+    void mutate(() => request({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ libraryTaskName, repo, baseBranch, targetSubdir, reviewers, draft, intervalHours: Number(slider.value) }) }), "Schedule saved. You can still use Run for a one-time task.");
   });
   document.addEventListener("change", refreshButtons);
   libraryRepoInput.addEventListener("input", refreshButtons);

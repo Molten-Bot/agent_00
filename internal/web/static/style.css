@@ -8625,6 +8625,7 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 .library-schedule-row button { flex-shrink: 0; }
 .library-schedule-modal h3 { margin: 12px 0 6px; font-size: 1rem; }
 .library-schedule-interval { margin-top: 24px; font-weight: 600; font-size: .9rem; }
+#library-schedule-draft-field { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0 0; }
 #library-schedule-hours { display: block; width: 100%; margin: 16px 0 8px; accent-color: var(--accent); }
 .library-schedule-range { color: var(--muted); font-size: .72rem; }
 .library-schedule-actions { margin-top: 24px; flex-wrap: wrap; justify-content: flex-end; }
