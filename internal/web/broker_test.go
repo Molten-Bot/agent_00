@@ -520,6 +520,8 @@ func TestBrokerTracksStoppedAndPausedTasksSeparatelyFromFailed(t *testing.T) {
 	b.RecordTaskRunConfig("req-running", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"keep running"}`))
 	b.IngestLog("task status=start request_id=req-running repo=git@github.com:acme/repo.git")
 
+	b.RecordTaskRunConfig("req-pending", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"queue me"}`))
+
 	snap := b.Snapshot()
 	if got, want := snap.Stats.StoppedTasks, 1; got != want {
 		t.Fatalf("Stats.StoppedTasks = %d, want %d", got, want)
@@ -533,7 +535,10 @@ func TestBrokerTracksStoppedAndPausedTasksSeparatelyFromFailed(t *testing.T) {
 	if got, want := snap.Stats.RunningTasks, 1; got != want {
 		t.Fatalf("Stats.RunningTasks = %d, want %d", got, want)
 	}
-	if got, want := snap.Stats.ActiveTasks, 2; got != want {
+	if got, want := snap.Stats.PendingTasks, 1; got != want {
+		t.Fatalf("Stats.PendingTasks = %d, want %d", got, want)
+	}
+	if got, want := snap.Stats.ActiveTasks, 3; got != want {
 		t.Fatalf("Stats.ActiveTasks = %d, want %d", got, want)
 	}
 }

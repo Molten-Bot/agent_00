@@ -127,6 +127,7 @@
   --surface-auth-verify-text: #ffffff;
   --dashboard-chart-running: #5aa7f2;
   --dashboard-chart-paused: #f0b355;
+  --dashboard-chart-pending: #c98bf2;
   --dashboard-chart-stopped: #9aa6bd;
   --dashboard-chart-completed: #63c892;
   --dashboard-chart-failed: #f07c78;
@@ -7690,6 +7691,7 @@ html.dark {
   --surface-auth-verify-hover-shadow: 0 18px 34px rgba(10, 132, 255, 0.3);
   --dashboard-chart-running: #69aaf0;
   --dashboard-chart-paused: #e0b464;
+  --dashboard-chart-pending: #c998e8;
   --dashboard-chart-stopped: #90a0bd;
   --dashboard-chart-completed: #74c99a;
   --dashboard-chart-failed: #eb8a86;
@@ -7848,6 +7850,7 @@ html.night {
   --surface-auth-verify-hover-shadow: 0 18px 34px rgba(10, 132, 255, 0.3);
   --dashboard-chart-running: #5f9ce6;
   --dashboard-chart-paused: #d9ab5e;
+  --dashboard-chart-pending: #bd8ddc;
   --dashboard-chart-stopped: #8696b2;
   --dashboard-chart-completed: #6fbd91;
   --dashboard-chart-failed: #df817e;
@@ -8038,6 +8041,7 @@ html.pink {
   --glass-icon-border: rgba(244, 114, 182, 0.28);
   --dashboard-chart-running: #f09ac6;
   --dashboard-chart-paused: #f0c478;
+  --dashboard-chart-pending: #d9a0e8;
   --dashboard-chart-stopped: #b98fb0;
   --dashboard-chart-completed: #b58be7;
   --dashboard-chart-failed: #e9788d;
