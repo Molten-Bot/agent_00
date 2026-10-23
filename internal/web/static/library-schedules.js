@@ -7,6 +7,28 @@
   const draftInput = byID("draft");
   const draftToggle = draftInput.closest(".prompt-draft-toggle");
   const endpoint = "/api/library/schedules";
+  // Snap points: single hours, then widening steps (4h/6h/12h) so the slider
+  // offers fewer, rounder choices the further out the repeat interval goes.
+  const ALL_HOUR_STEPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 16, 20, 24, 30, 36, 42, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156, 168];
+  let hourSteps = ALL_HOUR_STEPS;
+  function hoursForIndex(index) { return hourSteps[Number(index)] ?? hourSteps[0]; }
+  function indexForHours(hours) {
+    let closest = 0;
+    let closestDiff = Infinity;
+    hourSteps.forEach((value, index) => {
+      const diff = Math.abs(value - Number(hours));
+      if (diff < closestDiff) { closestDiff = diff; closest = index; }
+    });
+    return closest;
+  }
+  function applyHourSteps() {
+    slider.min = "0";
+    slider.max = String(hourSteps.length - 1);
+    byID("range-min").textContent = `${hourSteps[0]} hour${hourSteps[0] === 1 ? "" : "s"}`;
+    const max = hourSteps[hourSteps.length - 1];
+    byID("range-max").textContent = max >= 168 ? `${max} hours · 1 week` : `${max} hours`;
+  }
+  applyHourSteps();
   let schedules = [];
   let editing = null;
   let busy = false;
@@ -46,7 +68,8 @@
   async function load() {
     const body = await request();
     schedules = body.schedules || [];
-    slider.max = String(body.maxIntervalHours || 168);
+    hourSteps = ALL_HOUR_STEPS.filter((hours) => hours <= (body.maxIntervalHours || 168));
+    applyHourSteps();
     refreshButtons();
   }
   function iconButton(icon, label, action) {
@@ -98,10 +121,11 @@
     replaceLucideIcons(list);
   }
   function updateInterval(changed = false) {
-    byID("frequency").textContent = frequency(slider.value);
-    slider.setAttribute("aria-valuetext", frequency(slider.value));
+    const hours = hoursForIndex(slider.value);
+    byID("frequency").textContent = frequency(hours);
+    slider.setAttribute("aria-valuetext", frequency(hours));
     byID("next").textContent = changed || !editing?.nextRunAt
-      ? `First run ${Number(slider.value)} ${Number(slider.value) === 1 ? "hour" : "hours"} after saving. Saving resets the next run time.`
+      ? `First run ${hours} ${hours === 1 ? "hour" : "hours"} after saving. Saving resets the next run time.`
       : nextText(editing);
   }
   function showEditor(entry) {
@@ -116,7 +140,7 @@
     draftInput.checked = Boolean(entry.draft);
     draftToggle?.classList.toggle("is-active", draftInput.checked);
     byID("delete").hidden = !entry.key;
-    slider.value = String(entry.intervalHours || 24);
+    slider.value = String(indexForHours(entry.intervalHours || 24));
     updateInterval();
     slider.focus();
   }
@@ -173,7 +197,7 @@
     if (!editing) return;
     const { libraryTaskName, repo, baseBranch, targetSubdir, reviewers } = editing;
     const draft = byID("draft").checked;
-    void mutate(() => request({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ libraryTaskName, repo, baseBranch, targetSubdir, reviewers, draft, intervalHours: Number(slider.value) }) }), "Schedule saved. You can still use Run for a one-time task.");
+    void mutate(() => request({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ libraryTaskName, repo, baseBranch, targetSubdir, reviewers, draft, intervalHours: hoursForIndex(slider.value) }) }), "Schedule saved. You can still use Run for a one-time task.");
   });
   document.addEventListener("change", refreshButtons);
   libraryRepoInput.addEventListener("input", refreshButtons);
