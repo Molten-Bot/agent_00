@@ -1,0 +1,9 @@
+{
+  "libraryTaskName": "unit-test-coverage",
+  "repo": "git@github.com:acme/service-a.git",
+  "intervalHours": 24,
+  "baseBranch": "main",
+  "targetSubdir": ".",
+  "reviewers": ["octocat", "hubot"],
+  "draft": true
+}

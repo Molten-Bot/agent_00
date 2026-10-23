@@ -285,6 +285,52 @@ func TestLibrarySchedulesRunLogsRunDueErrors(t *testing.T) {
 	}
 }
 
+func TestLibraryScheduleInputRunConfigIncludesDraft(t *testing.T) {
+	t.Parallel()
+	input := scheduleTestInput()
+	input.Draft = true
+	cfg, err := input.RunConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Draft {
+		t.Fatalf("expected draft to carry into run config: %+v", cfg)
+	}
+}
+
+func TestLibrarySchedulesPersistDraft(t *testing.T) {
+	t.Parallel()
+	s := newScheduleTestStore(t)
+	input := scheduleTestInput()
+	input.Draft = true
+	saved, err := s.Save(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.Draft {
+		t.Fatalf("expected saved schedule to keep draft=true: %+v", saved)
+	}
+	restarted := &LibrarySchedules{Path: s.Path, Init: s.Init}
+	entries, err := restarted.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !entries[0].Draft {
+		t.Fatalf("draft not persisted: %+v", entries)
+	}
+	s.Submit = func(_ context.Context, cfg config.Config) (string, error) {
+		if !cfg.Draft {
+			t.Fatalf("expected scheduled run to submit as draft: %+v", cfg)
+		}
+		return "req-1", nil
+	}
+	now := s.now().Add(25 * time.Hour)
+	s.Now = func() time.Time { return now }
+	if err := s.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLibrarySchedulesValidation(t *testing.T) {
 	t.Parallel()
 	for _, change := range []func(*LibraryScheduleInput){
