@@ -701,8 +701,9 @@ func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 		BaseBranch: "main",
 	}
 	mergeConflict := execx.Result{Stdout: "CONFLICT (content): Merge conflict in file.go\nAutomatic merge failed; fix conflicts and then commit the result."}
+	codexBasePrompt := withBackpressurePrompt("Build API", nil)
 	resolvePrompt := baseSyncConflictPrompt(
-		"Build API",
+		codexBasePrompt,
 		repo.RelDir,
 		repo.URL,
 		repo.Branch,
@@ -718,7 +719,7 @@ func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 	h := New(fake)
 	exitCode, stage, err := h.resolveBaseSyncConflictWithAgent(
 		context.Background(), repo, agentruntime.Default(), repoDir, codexRunOptions{},
-		"Build API", "", "", ".", "codex", mergeConflict, 1,
+		codexBasePrompt, "", "", ".", "codex", mergeConflict, 1,
 	)
 	if err == nil || !strings.Contains(err.Error(), "still has unmerged paths after remediation") {
 		t.Fatalf("resolveBaseSyncConflictWithAgent() err = %v, want unmerged-paths fatal error", err)
@@ -742,8 +743,9 @@ func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing
 		Branch: "agent00-build-api",
 	}
 	mergeConflict := execx.Result{Stdout: "CONFLICT (content): Merge conflict in file.go\nAutomatic merge failed; fix conflicts and then commit the result."}
+	codexBasePrompt := withBackpressurePrompt("Build API", nil)
 	resolvePrompt := remoteBranchSyncConflictPrompt(
-		"Build API",
+		codexBasePrompt,
 		repo.RelDir,
 		repo.URL,
 		repo.Branch,
@@ -759,7 +761,7 @@ func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing
 	h := New(fake)
 	exitCode, stage, err := h.resolveRemoteBranchSyncConflictWithAgent(
 		context.Background(), repo, agentruntime.Default(), repoDir, codexRunOptions{},
-		"Build API", "", "", ".", "codex", publishRemoteOrigin, mergeConflict, 1,
+		codexBasePrompt, "", "", ".", "codex", publishRemoteOrigin, mergeConflict, 1,
 	)
 	if err == nil || !strings.Contains(err.Error(), "still has unmerged paths after remediation") {
 		t.Fatalf("resolveRemoteBranchSyncConflictWithAgent() err = %v, want unmerged-paths fatal error", err)
