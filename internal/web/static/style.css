@@ -6874,9 +6874,7 @@ body.onboarding-modal-open {
 }
 
 .settings-tab:hover span,
-.settings-tab:focus-visible span,
-.settings-tab.active span,
-.settings-tab[aria-selected="true"] span {
+.settings-tab:focus-visible span {
   max-width: 200px;
   margin-left: 8px;
   opacity: 1;
@@ -6895,6 +6893,15 @@ body.onboarding-modal-open {
   grid-template-columns: minmax(0, 1fr);
   gap: 14px 16px;
   padding: 14px;
+}
+
+.settings-tab-caption {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0;
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 700;
 }
 
 .settings-tabbed-panel .review-settings-section {
