@@ -1604,6 +1604,9 @@ func promptAllowsSuccessfulNoOp(text string) bool {
 	if promptExplicitlyAllowsNoChanges(phraseText) {
 		return true
 	}
+	if promptDeclaresNoChangeScope(phraseText) {
+		return true
+	}
 
 	strongChangeMarkers := []string{
 		"fix", "implement", "add", "remove", "create", "replace", "rename",
@@ -1637,6 +1640,39 @@ func promptAllowsSuccessfulNoOp(text string) bool {
 		return false
 	}
 	for _, marker := range consistencyMarkers {
+		if promptPhraseTextContains(phraseText, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// promptDeclaresNoChangeScope reports whether the prompt unconditionally
+// scopes the task to read-only work (e.g. a PR review) rather than a
+// conditional no-op escape hatch. Such prompts correctly produce no file
+// changes and no pull request, so that outcome must not be treated as an
+// unexpected no-op worth a follow-up task.
+func promptDeclaresNoChangeScope(phraseText string) bool {
+	markers := []string{
+		"review-only task",
+		"review only task",
+		"read-only task",
+		"read only task",
+		"investigation-only task",
+		"investigation only task",
+		"analysis-only task",
+		"analysis only task",
+		"do not edit files",
+		"do not edit any files",
+		"do not modify files",
+		"do not modify any files",
+		"do not make any changes",
+		"do not make changes",
+		"do not change any files",
+		"do not create or update any files",
+		"do not write any files",
+	}
+	for _, marker := range markers {
 		if promptPhraseTextContains(phraseText, marker) {
 			return true
 		}
