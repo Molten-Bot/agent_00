@@ -66,10 +66,24 @@ test('selecting a different settings tab does not shift later sibling tabs', asy
   // non-hovered selection state rather than the transient hover reveal that
   // test 1 already covers.
   await page.mouse.move(0, 0);
-  // The label reveal animates over 0.2s (max-width/margin-left) - wait for
-  // the transition to finish so the measurement reflects the settled layout,
-  // not a mid-animation frame that hasn't shifted yet.
-  await page.waitForTimeout(300);
+  // The label reveal animates max-width/margin-left over 0.2s and opacity
+  // over 0.15s - wait for the layout-affecting (max-width/margin-left)
+  // transitionend instead of a fixed sleep, so the measurement reflects the
+  // settled layout without flaking under CI scheduling jitter. Opacity ends
+  // first and doesn't affect layout, so it's ignored here.
+  await page.evaluate(() => new Promise(resolve => {
+    const span = document.querySelector('#settings-tab-automation span');
+    if (!span) { resolve(); return; }
+    let done = false;
+    const finish = event => {
+      if (done || (event && event.propertyName === 'opacity')) return;
+      done = true;
+      span.removeEventListener('transitionend', finish);
+      resolve();
+    };
+    span.addEventListener('transitionend', finish);
+    setTimeout(finish, 1000);
+  }));
   const after = await signingTab.boundingBox();
 
   assert.ok(before && after, 'expected the signing tab to be rendered before and after switching tabs');
