@@ -135,8 +135,11 @@ type ResourceMetrics struct {
 type DashboardStats struct {
 	TotalTasks             int               `json:"total_tasks"`
 	ActiveTasks            int               `json:"active_tasks"`
+	RunningTasks           int               `json:"running_tasks"`
+	PausedTasks            int               `json:"paused_tasks"`
 	CompletedTasks         int               `json:"completed_tasks"`
 	FailedTasks            int               `json:"failed_tasks"`
+	StoppedTasks           int               `json:"stopped_tasks"`
 	MaxConcurrentTasks     int               `json:"max_concurrent_tasks"`
 	SessionRuntimeSeconds  float64           `json:"session_runtime_seconds"`
 	TotalSavedSeconds      float64           `json:"total_saved_seconds"`
@@ -766,6 +769,8 @@ func (b *Broker) RecordRejectedPromptSubmissionWithSource(runConfigJSON []byte, 
 
 func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) DashboardStats {
 	active := 0
+	running := 0
+	paused := 0
 	seen := map[string]taskAttemptState{}
 	for _, t := range tasks {
 		if t == nil {
@@ -773,6 +778,11 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 		}
 		if isActiveTaskStatus(t.Status) {
 			active++
+			if isPausedTaskStatus(t.Status) {
+				paused++
+			} else {
+				running++
+			}
 		}
 		if strings.TrimSpace(t.RequestID) == "" {
 			continue
@@ -806,6 +816,8 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 	stats := DashboardStats{
 		TotalTasks:            len(seen),
 		ActiveTasks:           active,
+		RunningTasks:          running,
+		PausedTasks:           paused,
 		MaxConcurrentTasks:    b.maxConcurrentTasks,
 		SessionRuntimeSeconds: taskDuration(b.sessionStartedAt, time.Time{}, now, "").Seconds(),
 		UpdatedAt:             now.UTC().Format(time.RFC3339Nano),
@@ -844,6 +856,8 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 			successfulTerminals++
 		} else if isFailedTaskStatus(status) {
 			stats.FailedTasks++
+		} else if isStoppedTaskStatus(status) {
+			stats.StoppedTasks++
 		}
 		reviewAttempt := isReviewTaskAttempt(attempt)
 		if reviewAttempt {
@@ -925,6 +939,14 @@ func isFailedTaskStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func isPausedTaskStatus(status string) bool {
+	return normalizeTaskTerminalStatus(status) == "paused"
+}
+
+func isStoppedTaskStatus(status string) bool {
+	return normalizeTaskTerminalStatus(status) == "stopped"
 }
 
 func isReviewTaskAttempt(attempt taskAttemptState) bool {

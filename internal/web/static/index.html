@@ -4116,11 +4116,13 @@
     }
 
     const DASHBOARD_TASK_COLOR_VARS = [
-      "--dashboard-chart-active",
+      "--dashboard-chart-running",
+      "--dashboard-chart-paused",
+      "--dashboard-chart-stopped",
       "--dashboard-chart-completed",
       "--dashboard-chart-failed",
     ];
-    const DASHBOARD_TASK_COLOR_FALLBACKS = ["#5aa7f2", "#63c892", "#f07c78"];
+    const DASHBOARD_TASK_COLOR_FALLBACKS = ["#5aa7f2", "#f0b355", "#9aa6bd", "#63c892", "#f07c78"];
     const DASHBOARD_SOURCE_COLOR_VARS = {
       chat: "--dashboard-chart-chat",
       json: "--dashboard-chart-json",
@@ -4184,7 +4186,12 @@
     function dashboardTaskIconName(label) {
       switch (String(label || "").trim().toLowerCase()) {
         case "active":
+        case "running":
           return "activity";
+        case "paused":
+          return "pause";
+        case "stopped":
+          return "octagon";
         case "completed":
           return "circle-check";
         case "failed":
@@ -4444,8 +4451,11 @@
     function renderDashboardStats(snapshot) {
       const stats = snapshot && typeof snapshot.stats === "object" && snapshot.stats !== null ? snapshot.stats : {};
       const active = Number(stats.active_tasks || 0);
+      const running = Number(stats.running_tasks || 0);
+      const paused = Number(stats.paused_tasks || 0);
       const completed = Number(stats.completed_tasks || 0);
       const failed = Number(stats.failed_tasks || 0);
+      const stopped = Number(stats.stopped_tasks || 0);
       const totalTasks = Number(stats.total_tasks || 0);
       const maxConcurrent = Number(stats.max_concurrent_tasks || 0);
       const totalSavedSeconds = Number(stats.total_saved_seconds || 0);
@@ -4503,9 +4513,11 @@
       renderDashboardTimeList(dashboardAgentTimes, stats.agent_times);
       renderDashboardSourceMix(stats);
       const rows = [
-        { label: "Active", value: active, color: dashboardTaskColors()[0] },
-        { label: "Completed", value: completed, color: dashboardTaskColors()[1] },
-        { label: "Failed", value: failed, color: dashboardTaskColors()[2] },
+        { label: "Running", value: running, color: dashboardTaskColors()[0] },
+        { label: "Paused", value: paused, color: dashboardTaskColors()[1] },
+        { label: "Stopped", value: stopped, color: dashboardTaskColors()[2] },
+        { label: "Completed", value: completed, color: dashboardTaskColors()[3] },
+        { label: "Failed", value: failed, color: dashboardTaskColors()[4] },
       ];
       renderDashboardD3Donut(dashboardTaskChart, rows, {
         centerLabel: "tasks",
