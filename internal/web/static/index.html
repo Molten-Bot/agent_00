@@ -553,8 +553,8 @@
           </span>
         </label>
         <label class="library-schedule-interval" for="library-schedule-hours">Repeat <output id="library-schedule-frequency" for="library-schedule-hours">every 24 hours</output></label>
-        <input id="library-schedule-hours" type="range" min="0" max="26" step="1" value="12" aria-label="Repeat interval in hours">
-        <div class="library-schedule-range"><span>1 hour</span><span>168 hours · 1 week</span></div>
+        <input id="library-schedule-hours" type="range" min="0" max="0" step="1" value="0" aria-label="Repeat interval in hours">
+        <div class="library-schedule-range"><span id="library-schedule-range-min"></span><span id="library-schedule-range-max"></span></div>
         <p id="library-schedule-next" class="library-schedule-copy"></p>
         <div class="library-schedule-actions">
           <button id="library-schedule-delete" class="prompt-action-button" type="button" title="Delete this recurring schedule" hidden><i data-lucide="trash-2" aria-hidden="true"></i><span>Delete</span></button>

@@ -21,6 +21,14 @@
     });
     return closest;
   }
+  function applyHourSteps() {
+    slider.min = "0";
+    slider.max = String(hourSteps.length - 1);
+    byID("range-min").textContent = `${hourSteps[0]} hour${hourSteps[0] === 1 ? "" : "s"}`;
+    const max = hourSteps[hourSteps.length - 1];
+    byID("range-max").textContent = max >= 168 ? `${max} hours · 1 week` : `${max} hours`;
+  }
+  applyHourSteps();
   let schedules = [];
   let editing = null;
   let busy = false;
@@ -61,8 +69,7 @@
     const body = await request();
     schedules = body.schedules || [];
     hourSteps = ALL_HOUR_STEPS.filter((hours) => hours <= (body.maxIntervalHours || 168));
-    slider.min = "0";
-    slider.max = String(hourSteps.length - 1);
+    applyHourSteps();
     refreshButtons();
   }
   function iconButton(icon, label, action) {
