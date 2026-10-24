@@ -160,6 +160,34 @@ func TestParseRunConfigJSONExpandsLibraryTaskPayload(t *testing.T) {
 	}
 }
 
+func TestParseRunConfigJSONAppendsLibraryTaskPromptContext(t *testing.T) {
+	// This test resolves the on-disk library catalog and must not race tests that
+	// temporarily change process working directory.
+
+	cfg, err := ParseRunConfigJSON([]byte(`{
+		"repo": "git@github.com:acme/repo.git",
+		"libraryTaskName": "root-cause-bug-fix",
+		"promptContext": "Clicking save on the settings page throws a 500."
+	}`))
+	if err != nil {
+		t.Fatalf("ParseRunConfigJSON() error = %v", err)
+	}
+	if got, want := cfg.Prompt, "Additional context from requester:\nClicking save on the settings page throws a 500."; !strings.Contains(got, want) {
+		t.Fatalf("Prompt = %q, want to contain %q", got, want)
+	}
+
+	cfgNoContext, err := ParseRunConfigJSON([]byte(`{
+		"repo": "git@github.com:acme/repo.git",
+		"libraryTaskName": "root-cause-bug-fix"
+	}`))
+	if err != nil {
+		t.Fatalf("ParseRunConfigJSON() error = %v", err)
+	}
+	if strings.Contains(cfgNoContext.Prompt, "Additional context from requester:") {
+		t.Fatalf("Prompt = %q, want no appended context when promptContext is omitted", cfgNoContext.Prompt)
+	}
+}
+
 func TestParseRunConfigJSONRequiresBranchForMergeMainLibraryTask(t *testing.T) {
 	// This test resolves the on-disk library catalog and must not race tests that
 	// temporarily change process working directory.

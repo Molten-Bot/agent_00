@@ -110,6 +110,7 @@ func normalizeRunConfigAliases(m map[string]any) error {
 	copyRunConfigAlias(m, "targetSubdir", "targetsubdir")
 	copyRunConfigAlias(m, "responseMode", "responsemode")
 	copyRunConfigAlias(m, "libraryTaskName", "librarytaskname")
+	copyRunConfigAlias(m, "promptContext", "promptcontext")
 	copyRunConfigAlias(m, "requiresNonDefaultBranch", "requiresnondefaultbranch")
 	copyRunConfigAlias(m, "prNumber", "prnumber")
 	copyRunConfigAlias(m, "prUrl", "prurl")
@@ -276,7 +277,8 @@ func expandLibraryTaskRunConfig(m map[string]any, taskName string) (map[string]a
 	if err != nil {
 		return nil, fmt.Errorf("load library catalog: %w", err)
 	}
-	cfg, err := catalog.ExpandRunConfig(taskName, repo, firstNonEmpty(stringAt(m, "baseBranch"), stringAt(m, "branch")))
+	promptContext := stringAt(m, "promptContext")
+	cfg, err := catalog.ExpandRunConfigWithContext(taskName, repo, firstNonEmpty(stringAt(m, "baseBranch"), stringAt(m, "branch")), promptContext)
 	if err != nil {
 		return nil, err
 	}
@@ -284,6 +286,7 @@ func expandLibraryTaskRunConfig(m map[string]any, taskName string) (map[string]a
 	if err != nil {
 		return nil, err
 	}
+	delete(m, "promptContext")
 	for key, value := range m {
 		if isTrustedLibraryExpansionField(key) {
 			continue

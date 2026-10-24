@@ -26,6 +26,7 @@ type LibraryScheduleInput struct {
 	TargetSubdir    string   `json:"targetSubdir,omitempty"`
 	Reviewers       []string `json:"reviewers,omitempty"`
 	Draft           bool     `json:"draft,omitempty"`
+	PromptContext   string   `json:"promptContext,omitempty"`
 }
 
 type LibrarySchedule struct {
@@ -70,7 +71,7 @@ func LibraryScheduleKey(name, repo string) (string, error) {
 }
 
 func (s LibraryScheduleInput) RunConfig() (config.Config, error) {
-	payload, err := json.Marshal(map[string]any{"libraryTaskName": s.LibraryTaskName, "repos": []string{s.Repo}, "baseBranch": s.BaseBranch, "targetSubdir": s.TargetSubdir, "reviewers": s.Reviewers, "draft": s.Draft})
+	payload, err := json.Marshal(map[string]any{"libraryTaskName": s.LibraryTaskName, "repos": []string{s.Repo}, "baseBranch": s.BaseBranch, "targetSubdir": s.TargetSubdir, "reviewers": s.Reviewers, "draft": s.Draft, "promptContext": s.PromptContext})
 	if err != nil {
 		return config.Config{}, err
 	}

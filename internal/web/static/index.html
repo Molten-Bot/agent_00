@@ -263,7 +263,7 @@
                   </label>
                 </div>
                 <p class="prompt-field-copy">Library tasks provide a preset prompt, but they still run against the repository, branch, directory, and reviewers you choose here.</p>
-                <div class="prompt-field">
+                <div class="prompt-field prompt-field-task-list">
                   <div class="library-schedule-toolbar">
                     <span class="prompt-label">Task Library</span>
                     <button id="library-schedules-open" class="prompt-action-button" type="button" title="View and manage recurring library tasks">
@@ -273,6 +273,14 @@
                   <div id="library-type-tabs" class="library-type-tabs" role="tablist" aria-label="Library task types"></div>
                   <div id="library-task-list" class="library-task-list"></div>
                 </div>
+                <label id="library-prompt-context-field" class="prompt-field prompt-field-prompt-context hidden">
+                  <span class="prompt-label" id="library-prompt-context-label">Additional context</span>
+                  <textarea
+                    id="library-prompt-context-input"
+                    class="prompt-text prompt-control"
+                    rows="3"
+                    spellcheck="false"></textarea>
+                </label>
               </div>
 
               <div id="prompt-raw-panel" class="prompt-panel hidden">
@@ -545,6 +553,14 @@
         <h3 id="library-schedule-task"></h3>
         <p id="library-schedule-repo" class="library-schedule-copy"></p>
         <p id="library-schedule-options" class="library-schedule-copy"></p>
+        <label id="library-schedule-context-field" class="prompt-field prompt-field-prompt-context hidden">
+          <span class="prompt-label" id="library-schedule-context-label">Additional context</span>
+          <textarea
+            id="library-schedule-context-input"
+            class="prompt-text prompt-control"
+            rows="3"
+            spellcheck="false"></textarea>
+        </label>
         <label id="library-schedule-draft-field" class="prompt-field prompt-field-draft-pr">
           <span class="prompt-label">Draft</span>
           <span class="prompt-draft-toggle" title="Draft PR">
@@ -2003,6 +2019,9 @@
     const libraryReviewerInput = document.getElementById("library-reviewer-input");
     const libraryTypeTabs = document.getElementById("library-type-tabs");
     const libraryTaskList = document.getElementById("library-task-list");
+    const libraryPromptContextField = document.getElementById("library-prompt-context-field");
+    const libraryPromptContextLabel = document.getElementById("library-prompt-context-label");
+    const libraryPromptContextInput = document.getElementById("library-prompt-context-input");
     const rightCol = document.querySelector(".right-col");
     const promptWrap = document.querySelector(".prompt-wrap");
     const promptVisibilityToggle = document.getElementById("prompt-visibility-toggle");
@@ -5470,6 +5489,20 @@
       return String(task.icon || "").trim() || "book-open";
     }
 
+    function libraryTaskPromptContextLabel(task) {
+      if (!task || typeof task !== "object") return "";
+      return String(task.promptContextLabel || "").trim();
+    }
+
+    function libraryTaskPromptContextPlaceholder(task) {
+      if (!task || typeof task !== "object") return "";
+      return String(task.promptContextPlaceholder || "").trim();
+    }
+
+    function libraryTaskPromptContextRequired(task) {
+      return Boolean(task && typeof task === "object" && task.promptContextRequired);
+    }
+
     function normalizeLibraryTaskType(task) {
       if (!task || typeof task !== "object") return "other";
       const sourceName = String(task.sourceName || "").trim();
@@ -5780,6 +5813,9 @@
           icon: libraryTaskIcon(task),
           description: libraryTaskDescription(task),
           prompt: String(task.prompt || "").trim(),
+          promptContextLabel: libraryTaskPromptContextLabel(task),
+          promptContextPlaceholder: libraryTaskPromptContextPlaceholder(task),
+          promptContextRequired: libraryTaskPromptContextRequired(task),
         });
       }
 
@@ -5801,6 +5837,7 @@
       }
       state.selectedLibraryTask = selected;
       state.selectedLibraryType = activeType;
+      renderLibraryPromptContextField(activeEntry);
       renderLibraryTypeTabs(types, activeType);
 
       libraryTaskList.replaceChildren();
@@ -5897,6 +5934,25 @@
       replaceLucideIcons(libraryTaskList);
       updateLibraryScheduleTrigger(activeEntry);
       window.LibrarySchedulesUI?.refreshButtons();
+    }
+
+    function renderLibraryPromptContextField(entry) {
+      if (!libraryPromptContextField || !libraryPromptContextInput) return;
+      const label = entry ? entry.promptContextLabel : "";
+      if (!label) {
+        libraryPromptContextField.classList.add("hidden");
+        libraryPromptContextInput.value = "";
+        delete libraryPromptContextField.dataset.taskName;
+        return;
+      }
+      if (libraryPromptContextField.dataset.taskName !== entry.name) {
+        libraryPromptContextInput.value = "";
+        libraryPromptContextField.dataset.taskName = entry.name;
+      }
+      libraryPromptContextField.classList.remove("hidden");
+      libraryPromptContextLabel.textContent = entry.promptContextRequired ? `${label} (required)` : `${label} (optional)`;
+      libraryPromptContextInput.placeholder = entry.promptContextPlaceholder || "";
+      libraryPromptContextInput.required = Boolean(entry.promptContextRequired);
     }
 
     function updateLibraryScheduleTrigger(entry) {
@@ -6144,6 +6200,10 @@
       if (selectedTask?.requiresNonDefaultBranch && !branch) {
         throw new Error("Non-default branch is required for this library task.");
       }
+      const promptContext = String(libraryPromptContextInput?.value || "").trim();
+      if (libraryTaskPromptContextRequired(selectedTask) && !promptContext) {
+        throw new Error(`${libraryTaskPromptContextLabel(selectedTask) || "Additional context"} is required for this library task.`);
+      }
       const payload = {
         repos: [repo],
         targetsubdir: String(libraryTargetSubdir.value || "").trim() || ".",
@@ -6152,6 +6212,9 @@
       };
       if (branch) {
         payload.branch = branch;
+      }
+      if (promptContext) {
+        payload.promptcontext = promptContext;
       }
       const reviewers = reviewerListFromValue(libraryReviewerInput.value);
       if (reviewers.length) {
@@ -6208,6 +6271,9 @@
       renderRepoHistoryOptions();
       renderReviewerHistoryOptions();
       renderLibraryTaskOptions();
+      if (libraryPromptContextInput && !libraryPromptContextField.classList.contains("hidden")) {
+        libraryPromptContextInput.value = String(payload.promptcontext || payload.promptContext || "").trim();
+      }
     }
 
     function currentPromptPayload() {

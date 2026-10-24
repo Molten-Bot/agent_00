@@ -107,6 +107,45 @@ func TestTaskFromMarkdownEmptyPromptRejected(t *testing.T) {
 	}
 }
 
+func TestTaskFromMarkdownPromptContextRequiredWithoutLabelRejected(t *testing.T) {
+	t.Parallel()
+
+	content := "---\nname: needs-context\npromptContextRequired: true\n---\nDo the thing.\n"
+	_, err := taskFromMarkdown("acme", "needs-context", content)
+	if err == nil {
+		t.Fatalf("taskFromMarkdown() = nil error, want error for promptContextRequired without promptContextLabel")
+	}
+}
+
+func TestTaskFromMarkdownPromptContextPlaceholderWithoutLabelRejected(t *testing.T) {
+	t.Parallel()
+
+	content := "---\nname: needs-label\npromptContextPlaceholder: e.g. repro steps\n---\nDo the thing.\n"
+	_, err := taskFromMarkdown("acme", "needs-label", content)
+	if err == nil {
+		t.Fatalf("taskFromMarkdown() = nil error, want error for promptContextPlaceholder without promptContextLabel")
+	}
+}
+
+func TestTaskFromMarkdownPromptContextFieldsAccepted(t *testing.T) {
+	t.Parallel()
+
+	content := "---\nname: with-context\npromptContextLabel: Repro steps\npromptContextPlaceholder: e.g. steps to reproduce\npromptContextRequired: true\n---\nDo the thing.\n"
+	task, err := taskFromMarkdown("acme", "with-context", content)
+	if err != nil {
+		t.Fatalf("taskFromMarkdown() error: %v", err)
+	}
+	if task.PromptContextLabel != "Repro steps" {
+		t.Fatalf("PromptContextLabel = %q", task.PromptContextLabel)
+	}
+	if task.PromptContextPlaceholder != "e.g. steps to reproduce" {
+		t.Fatalf("PromptContextPlaceholder = %q", task.PromptContextPlaceholder)
+	}
+	if !task.PromptContextRequired {
+		t.Fatalf("PromptContextRequired = false, want true")
+	}
+}
+
 func TestLoadPromptMarkdownNamespacesAndSorts(t *testing.T) {
 	t.Parallel()
 

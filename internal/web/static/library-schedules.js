@@ -6,6 +6,9 @@
   const slider = byID("hours");
   const draftInput = byID("draft");
   const draftToggle = draftInput.closest(".prompt-draft-toggle");
+  const contextField = byID("context-field");
+  const contextLabel = byID("context-label");
+  const contextInput = byID("context-input");
   const endpoint = "/api/library/schedules";
   // Snap points: single hours, then widening steps (4h/6h/12h) so the slider
   // offers fewer, rounder choices the further out the repeat interval goes.
@@ -38,8 +41,11 @@
     byID("status").textContent = message;
     byID("status").classList.toggle("is-error", error);
   }
+  function taskFor(name) {
+    return (state.libraryTasks || []).find((task) => task.name === name);
+  }
   function titleFor(name) {
-    const task = (state.libraryTasks || []).find((task) => task.name === name);
+    const task = taskFor(name);
     return task ? libraryTaskDisplayName(task) : name;
   }
   function frequency(hours) { return `every ${hours} ${Number(hours) === 1 ? "hour" : "hours"}`; }
@@ -137,6 +143,19 @@
     byID("task").textContent = titleFor(entry.libraryTaskName);
     byID("repo").textContent = displayRepoLabel(entry.repo);
     byID("options").textContent = `Branch: ${entry.baseBranch || "default"} · Directory: ${entry.targetSubdir || "."}` + (entry.reviewers?.length ? ` · Reviewers: ${entry.reviewers.join(", ")}` : "");
+    const task = taskFor(entry.libraryTaskName);
+    const contextLabelText = String(task?.promptContextLabel || "").trim();
+    if (contextLabelText) {
+      contextField.classList.remove("hidden");
+      contextLabel.textContent = task.promptContextRequired ? `${contextLabelText} (required)` : `${contextLabelText} (optional)`;
+      contextInput.placeholder = task.promptContextPlaceholder || "";
+      contextInput.required = Boolean(task.promptContextRequired);
+      contextInput.value = entry.promptContext || "";
+    } else {
+      contextField.classList.add("hidden");
+      contextInput.required = false;
+      contextInput.value = "";
+    }
     draftInput.checked = Boolean(entry.draft);
     draftToggle?.classList.toggle("is-active", draftInput.checked);
     byID("delete").hidden = !entry.key;
@@ -157,7 +176,7 @@
       const payload = libraryPayload(entry.name);
       await load();
       const existing = schedules.find((schedule) => schedule.libraryTaskName === entry.name && repoDedupeKey(schedule.repo) === repoDedupeKey(payload.repos[0]));
-      showEditor(existing || { libraryTaskName: entry.name, repo: payload.repos[0], baseBranch: payload.branch || "", targetSubdir: payload.targetsubdir || ".", reviewers: payload.reviewers || [], draft: Boolean(payload.draft), intervalHours: 24 });
+      showEditor(existing || { libraryTaskName: entry.name, repo: payload.repos[0], baseBranch: payload.branch || "", targetSubdir: payload.targetsubdir || ".", reviewers: payload.reviewers || [], draft: Boolean(payload.draft), promptContext: payload.promptcontext || "", intervalHours: 24 });
     } catch (error) { status(error.message, true); }
   }
   async function mutate(action, success) {
@@ -197,7 +216,12 @@
     if (!editing) return;
     const { libraryTaskName, repo, baseBranch, targetSubdir, reviewers } = editing;
     const draft = byID("draft").checked;
-    void mutate(() => request({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ libraryTaskName, repo, baseBranch, targetSubdir, reviewers, draft, intervalHours: hoursForIndex(slider.value) }) }), "Schedule saved. You can still use Run for a one-time task.");
+    const promptContext = contextInput.value.trim();
+    if (contextInput.required && !promptContext) {
+      status(`${contextLabel.textContent || "Additional context"} is required for this task.`, true);
+      return;
+    }
+    void mutate(() => request({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ libraryTaskName, repo, baseBranch, targetSubdir, reviewers, draft, promptContext, intervalHours: hoursForIndex(slider.value) }) }), "Schedule saved. You can still use Run for a one-time task.");
   });
   document.addEventListener("change", refreshButtons);
   libraryRepoInput.addEventListener("input", refreshButtons);
