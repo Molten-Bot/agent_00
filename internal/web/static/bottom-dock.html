@@ -8,6 +8,7 @@
       <span class="prompt-mode-link-line prompt-mode-link-line-top" aria-hidden="true"></span>
       <span class="prompt-mode-link-line prompt-mode-link-line-bottom" aria-hidden="true"></span>
       <span class="prompt-mode-link-tooltip" aria-hidden="true">Chat</span>
+      <span class="prompt-mode-mobile-label" aria-hidden="true">Chat</span>
       <span class="sr-only">Chat</span>
     </a>
     <a id="prompt-mode-builder" class="prompt-mode-link active" href="#studio-builder" aria-selected="true" title="Prompt">
@@ -18,6 +19,7 @@
       <span class="prompt-mode-link-line prompt-mode-link-line-top" aria-hidden="true"></span>
       <span class="prompt-mode-link-line prompt-mode-link-line-bottom" aria-hidden="true"></span>
       <span class="prompt-mode-link-tooltip" aria-hidden="true">Prompt</span>
+      <span class="prompt-mode-mobile-label" aria-hidden="true">Prompt</span>
       <span class="sr-only">Prompt</span>
     </a>
     <a id="prompt-mode-library" class="prompt-mode-link" href="#studio-library" aria-selected="false" title="Library">
@@ -28,19 +30,9 @@
       <span class="prompt-mode-link-line prompt-mode-link-line-top" aria-hidden="true"></span>
       <span class="prompt-mode-link-line prompt-mode-link-line-bottom" aria-hidden="true"></span>
       <span class="prompt-mode-link-tooltip" aria-hidden="true">Library</span>
+      <span class="prompt-mode-mobile-label" aria-hidden="true">Library</span>
       <span class="sr-only">Library</span>
     </a>
-    <a id="prompt-mode-json" class="prompt-mode-link" href="#studio-json" aria-selected="false" title="JSON">
-      <span class="prompt-mode-link-shell" aria-hidden="true"></span>
-      <span class="prompt-mode-link-icon" aria-hidden="true">
-        <i data-lucide="braces" aria-hidden="true"></i>
-      </span>
-      <span class="prompt-mode-link-line prompt-mode-link-line-top" aria-hidden="true"></span>
-      <span class="prompt-mode-link-line prompt-mode-link-line-bottom" aria-hidden="true"></span>
-      <span class="prompt-mode-link-tooltip" aria-hidden="true">JSON</span>
-      <span class="sr-only">JSON</span>
-    </a>
-    <span class="prompt-mode-divider" aria-hidden="true"></span>
     <a id="task-view-dock-link" class="prompt-mode-link site-dock-link" href="#current-work" data-app-display="work" aria-label="Current Work" title="Current Work">
       <span class="prompt-mode-link-shell" aria-hidden="true"></span>
       <span class="prompt-mode-link-icon" aria-hidden="true">
@@ -50,52 +42,73 @@
       <span class="prompt-mode-link-line prompt-mode-link-line-top" aria-hidden="true"></span>
       <span class="prompt-mode-link-line prompt-mode-link-line-bottom" aria-hidden="true"></span>
       <span class="prompt-mode-link-tooltip" aria-hidden="true">Current Work</span>
+      <span class="prompt-mode-mobile-label" aria-hidden="true">Work</span>
       <span class="sr-only">Current Work</span>
     </a>
-    <a class="prompt-mode-link site-dock-link" href="#dashboard" data-app-display="dashboard" aria-label="Dashboard" title="Dashboard">
-      <span class="prompt-mode-link-shell" aria-hidden="true"></span>
-      <span class="prompt-mode-link-icon" aria-hidden="true">
-        <i data-lucide="layout-dashboard" aria-hidden="true"></i>
-      </span>
-      <span class="prompt-mode-link-line prompt-mode-link-line-top" aria-hidden="true"></span>
-      <span class="prompt-mode-link-line prompt-mode-link-line-bottom" aria-hidden="true"></span>
-      <span class="prompt-mode-link-tooltip" aria-hidden="true">Dashboard</span>
-      <span class="sr-only">Dashboard</span>
-    </a>
-    <span class="prompt-mode-divider" aria-hidden="true"></span>
-    <a
-      id="github-profile-link"
-      class="prompt-mode-link prompt-mode-link-logo"
-      href="https://github.com/settings/profile"
-      target="_blank"
-      rel="noreferrer noopener"
-      aria-label="Open your GitHub profile in a new window"
-      title="Open your GitHub profile in a new window">
-      <span class="prompt-mode-link-shell" aria-hidden="true"></span>
-      <span class="prompt-mode-link-icon" aria-hidden="true">
-        <img src="/static/logos/github.svg" alt="" aria-hidden="true">
-      </span>
-      <span class="prompt-mode-link-line prompt-mode-link-line-top" aria-hidden="true"></span>
-      <span class="prompt-mode-link-line prompt-mode-link-line-bottom" aria-hidden="true"></span>
-      <span class="prompt-mode-link-tooltip" aria-hidden="true">GitHub</span>
-      <span class="sr-only">GitHub</span>
-    </a>
-    <a id="settings-open" class="prompt-mode-link site-dock-link" href="/#settings" aria-label="Settings" title="Settings">
-      <span class="prompt-mode-link-shell" aria-hidden="true"></span>
-      <span class="prompt-mode-link-icon" aria-hidden="true"><i data-lucide="settings"></i></span>
-      <span class="prompt-mode-link-tooltip" aria-hidden="true">Settings</span>
-      <span class="sr-only">Settings</span>
-    </a>
-    <span class="prompt-mode-divider" aria-hidden="true"></span>
-    <button id="theme-toggle" class="prompt-mode-link theme-toggle theme-toggle-dock" type="button" aria-label="Switch theme. Currently: Light" title="Light">
-      <span class="prompt-mode-link-shell" aria-hidden="true"></span>
-      <span class="theme-toggle-icon" id="theme-toggle-icon" aria-hidden="true"><i data-lucide="sun" class="theme-toggle-icon-glyph" aria-hidden="true"></i></span>
-      <span class="prompt-mode-link-line prompt-mode-link-line-top" aria-hidden="true"></span>
-      <span class="prompt-mode-link-line prompt-mode-link-line-bottom" aria-hidden="true"></span>
-      <span class="prompt-mode-mobile-label" aria-hidden="true">Theme</span>
-      <span class="prompt-mode-link-tooltip" id="theme-toggle-tooltip" aria-hidden="true">Light</span>
-      <span id="theme-toggle-label">Light</span>
+    <button id="mobile-dock-more" class="prompt-mode-link mobile-dock-more" type="button" aria-expanded="false" aria-controls="mobile-dock-secondary" aria-label="More navigation">
+      <span class="prompt-mode-link-icon" aria-hidden="true"><i data-lucide="ellipsis"></i></span>
+      <span class="prompt-mode-mobile-label" aria-hidden="true">More</span>
     </button>
+    <div id="mobile-dock-secondary" class="mobile-dock-secondary" aria-label="More navigation">
+      <a id="prompt-mode-json" class="prompt-mode-link" href="#studio-json" aria-selected="false" title="JSON">
+        <span class="prompt-mode-link-shell" aria-hidden="true"></span>
+        <span class="prompt-mode-link-icon" aria-hidden="true">
+          <i data-lucide="braces" aria-hidden="true"></i>
+        </span>
+        <span class="prompt-mode-link-line prompt-mode-link-line-top" aria-hidden="true"></span>
+        <span class="prompt-mode-link-line prompt-mode-link-line-bottom" aria-hidden="true"></span>
+        <span class="prompt-mode-link-tooltip" aria-hidden="true">JSON</span>
+        <span class="prompt-mode-mobile-label" aria-hidden="true">JSON</span>
+        <span class="sr-only">JSON</span>
+      </a>
+      <a class="prompt-mode-link site-dock-link" href="#dashboard" data-app-display="dashboard" aria-label="Dashboard" title="Dashboard">
+        <span class="prompt-mode-link-shell" aria-hidden="true"></span>
+        <span class="prompt-mode-link-icon" aria-hidden="true">
+          <i data-lucide="layout-dashboard" aria-hidden="true"></i>
+        </span>
+        <span class="prompt-mode-link-line prompt-mode-link-line-top" aria-hidden="true"></span>
+        <span class="prompt-mode-link-line prompt-mode-link-line-bottom" aria-hidden="true"></span>
+        <span class="prompt-mode-link-tooltip" aria-hidden="true">Dashboard</span>
+        <span class="prompt-mode-mobile-label" aria-hidden="true">Dashboard</span>
+        <span class="sr-only">Dashboard</span>
+      </a>
+      <span class="prompt-mode-divider" aria-hidden="true"></span>
+      <a
+        id="github-profile-link"
+        class="prompt-mode-link prompt-mode-link-logo"
+        href="https://github.com/settings/profile"
+        target="_blank"
+        rel="noreferrer noopener"
+        aria-label="Open your GitHub profile in a new window"
+        title="Open your GitHub profile in a new window">
+        <span class="prompt-mode-link-shell" aria-hidden="true"></span>
+        <span class="prompt-mode-link-icon" aria-hidden="true">
+          <img src="/static/logos/github.svg" alt="" aria-hidden="true">
+        </span>
+        <span class="prompt-mode-link-line prompt-mode-link-line-top" aria-hidden="true"></span>
+        <span class="prompt-mode-link-line prompt-mode-link-line-bottom" aria-hidden="true"></span>
+        <span class="prompt-mode-link-tooltip" aria-hidden="true">GitHub</span>
+        <span class="prompt-mode-mobile-label" aria-hidden="true">GitHub</span>
+        <span class="sr-only">GitHub</span>
+      </a>
+      <a id="settings-open" class="prompt-mode-link site-dock-link" href="/#settings" aria-label="Settings" title="Settings">
+        <span class="prompt-mode-link-shell" aria-hidden="true"></span>
+        <span class="prompt-mode-link-icon" aria-hidden="true"><i data-lucide="settings"></i></span>
+        <span class="prompt-mode-link-tooltip" aria-hidden="true">Settings</span>
+        <span class="prompt-mode-mobile-label" aria-hidden="true">Settings</span>
+        <span class="sr-only">Settings</span>
+      </a>
+      <span class="prompt-mode-divider" aria-hidden="true"></span>
+      <button id="theme-toggle" class="prompt-mode-link theme-toggle theme-toggle-dock" type="button" aria-label="Switch theme. Currently: Light" title="Light">
+        <span class="prompt-mode-link-shell" aria-hidden="true"></span>
+        <span class="theme-toggle-icon" id="theme-toggle-icon" aria-hidden="true"><i data-lucide="sun" class="theme-toggle-icon-glyph" aria-hidden="true"></i></span>
+        <span class="prompt-mode-link-line prompt-mode-link-line-top" aria-hidden="true"></span>
+        <span class="prompt-mode-link-line prompt-mode-link-line-bottom" aria-hidden="true"></span>
+        <span class="prompt-mode-mobile-label" aria-hidden="true">Theme</span>
+        <span class="prompt-mode-link-tooltip" id="theme-toggle-tooltip" aria-hidden="true">Light</span>
+        <span id="theme-toggle-label">Light</span>
+      </button>
+    </div>
   </div>
 </div>
 <script src="/static/bottom-dock.js"></script>

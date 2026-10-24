@@ -1309,7 +1309,7 @@ func TestStudioStylesKeepPromptActionsVisible(t *testing.T) {
 	if strings.Contains(css, ".prompt-image-chip {") {
 		t.Fatalf("expected stacked screenshot chip styles to be removed")
 	}
-	if !strings.Contains(css, "@media (max-width: 700px) {\n  :root {\n    --hub-floating-bottom: 0px;\n    --hub-floating-stack-height: calc(68px + env(safe-area-inset-bottom));\n    --hub-studio-dock-gap: 12px;\n  }\n\n  .page-bottom-dock {\n    left: 0;\n    right: 0;\n    bottom: 0;\n    width: 100%;\n    max-width: none;\n    transform: none;\n  }") {
+	if !strings.Contains(css, "@media (max-width: 700px), (max-width: 1100px) and (max-height: 500px) and (pointer: coarse) {\n  :root {\n    --hub-floating-bottom: 0px;\n    --hub-floating-stack-height: calc(68px + env(safe-area-inset-bottom));\n    --hub-studio-dock-gap: 12px;\n  }\n\n  .page-bottom-dock {\n    left: 0;\n    right: 0;\n    bottom: 0;\n    width: 100%;\n    max-width: none;\n    transform: none;\n  }") {
 		t.Fatalf("expected mobile layout to snap the bottom dock to the viewport edge")
 	}
 	if !strings.Contains(css, ".prompt-mode-tabs-dock {\n    width: 100%;\n    max-width: none;\n    overflow: visible;\n  }\n\n  .prompt-mode-tabs {\n    width: 100%;\n    justify-content: space-around;\n    gap: 4px;\n    padding: 8px 8px calc(env(safe-area-inset-bottom) + 8px);\n    border: 0;\n    border-top: 1px solid var(--glass-border);\n    border-radius: 0;\n    box-shadow: 0 -2px 14px rgba(0, 0, 0, 0.18);\n  }") {

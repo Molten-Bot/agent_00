@@ -8106,7 +8106,7 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   box-shadow: none !important;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 700px), (max-width: 1100px) and (max-height: 500px) and (pointer: coarse) {
   :root {
     --hub-floating-bottom: 0px;
     --hub-floating-stack-height: calc(68px + env(safe-area-inset-bottom));
@@ -8705,4 +8705,208 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   .settings-shell { padding: 12px; }
   .settings-header-slim { padding-inline: 16px; }
   #custom-library-list { margin-top: 32px; }
+}
+
+/* Keep the desktop dock flat; phones use four destinations and a More sheet. */
+.mobile-dock-secondary { display: contents; }
+.mobile-dock-more { display: none; }
+
+@media (max-width: 700px), (max-width: 1100px) and (max-height: 500px) and (pointer: coarse) {
+  :root {
+    --hub-floating-stack-height: calc(76px + env(safe-area-inset-bottom));
+    --hub-content-bottom-padding: calc(var(--hub-floating-stack-height) + 16px);
+  }
+
+  /* Keep the header tooltip inside the screen even while it is transparent. */
+  .status-item-compact .status-tooltip,
+  .status-item-compact-expandable:hover .status-tooltip,
+  .status-item-compact-expandable:focus-visible .status-tooltip,
+  .status-item-compact-expandable:focus-within .status-tooltip {
+    left: auto;
+    right: 0;
+    transform: none;
+    max-width: calc(100vw - 24px);
+    white-space: normal;
+  }
+
+  .app.dashboard-app {
+    padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) var(--hub-content-bottom-padding) max(12px, env(safe-area-inset-left));
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .page-bottom-dock { width: 100%; min-width: 0; }
+  .page-bottom-dock .prompt-mode-tabs-dock {
+    min-width: 0;
+    max-width: 100%;
+    gap: 4px;
+    padding: 8px max(8px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  }
+  .page-bottom-dock .prompt-mode-link {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: none;
+    height: 60px;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 2px;
+  }
+  .page-bottom-dock .prompt-mode-mobile-label {
+    display: block;
+    font-size: 11px;
+    line-height: 1.2;
+    font-weight: 600;
+  }
+  .page-bottom-dock .prompt-mode-link-icon,
+  .page-bottom-dock .theme-toggle-icon { width: 24px; height: 24px; }
+  .page-bottom-dock .prompt-mode-link-icon svg,
+  .page-bottom-dock .prompt-mode-link-icon img,
+  .page-bottom-dock .theme-toggle-icon svg { width: 22px; height: 22px; }
+  .mobile-dock-more { display: inline-flex; }
+  .page-bottom-dock:has(.mobile-dock-secondary .active) .mobile-dock-more {
+    color: var(--running);
+    background: var(--glass-icon-bg);
+  }
+  .mobile-dock-secondary { display: none; }
+  .mobile-dock-open .mobile-dock-secondary {
+    position: absolute;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
+    bottom: calc(100% + 8px);
+    padding: 12px;
+    max-height: calc(100dvh - var(--hub-floating-stack-height) - 32px);
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-lg);
+  }
+  .mobile-dock-secondary .prompt-mode-link { width: 100%; }
+
+  /* Studio has one page scroll, so repository fields cannot squeeze out entries. */
+  body[data-app-display="studio"] .app.dashboard-app {
+    height: auto;
+    min-height: 100dvh;
+    grid-template-rows: auto 1fr;
+  }
+  body[data-app-display="studio"] .layout,
+  body[data-app-display="studio"] .right-col,
+  body[data-app-display="studio"] .prompt-wrap.panel:not(.prompt-collapsed),
+  body[data-app-display="studio"] .prompt-wrap.panel:not(.prompt-collapsed) .prompt-compose-stack {
+    height: auto;
+    overflow: visible;
+  }
+  body[data-app-display="studio"] .prompt-wrap.panel:not(.prompt-collapsed) .prompt-form,
+  body[data-app-display="studio"] .prompt-wrap.panel:not(.prompt-collapsed) .prompt-compose-stack,
+  body[data-app-display="studio"][data-prompt-mode="builder"] #prompt-builder-panel,
+  body[data-app-display="studio"][data-prompt-mode="library"] #prompt-library-panel,
+  body[data-app-display="studio"][data-prompt-mode="library"] #prompt-library-panel > .prompt-field-task-list {
+    grid-template-rows: none;
+    grid-auto-rows: auto;
+    overflow: visible;
+  }
+  body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+  }
+  body[data-app-display="studio"][data-prompt-mode="builder"] #builder-prompt-input,
+  body[data-app-display="studio"][data-prompt-mode="json"] #local-prompt-input {
+    min-height: 240px;
+  }
+  .prompt-wrap > .prompt-titlebar {
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    flex-shrink: 0;
+  }
+  .prompt-titlebar-actions { width: auto; flex: 0 0 auto; }
+  .prompt-grid { gap: 12px; }
+  .prompt-grid > .prompt-field { flex: 1 1 calc(50% - 12px); }
+  .prompt-grid > .prompt-field-repo-history,
+  .prompt-grid > .prompt-field-repository { flex-basis: 100%; }
+  .prompt-control, .prompt-text, .prompt-form input, .prompt-form select,
+  .prompt-form textarea, .settings-shell input, .settings-shell textarea,
+  .settings-shell select, .chat-repo-search { font-size: 16px; }
+  .prompt-control { min-height: 44px; }
+  .prompt-actions { gap: 10px; }
+  .prompt-actions-start { max-width: none; }
+  .submit-status-inline { white-space: normal; overflow-wrap: anywhere; }
+  body[data-app-display="studio"][data-prompt-mode="library"] .prompt-actions {
+    position: sticky;
+    bottom: var(--hub-floating-stack-height);
+    z-index: 4;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    background: var(--bg-elevated);
+  }
+  .prompt-actions-end { flex-wrap: wrap; }
+  .prompt-action-button, .library-type-tab,
+  .library-task-option-link, .prompt-history-delete { min-height: 44px; min-width: 44px; }
+
+  /* Repository entries scroll independently; search and pagination stay reachable. */
+  .chat-head, .chat-controls, .chat-repo-pagination { flex-shrink: 0; }
+  .chat-repo-grid {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    align-content: start;
+    grid-template-rows: none;
+    grid-auto-rows: max-content;
+  }
+  .chat-repo-grid-active-repo .chat-repo-card[aria-expanded="true"],
+  .chat-repo-grid-active-repo .chat-repo-card[aria-expanded="true"] .chat-repo-panel {
+    grid-template-rows: none;
+    grid-auto-rows: auto;
+  }
+  .chat-repo-grid-active-repo .chat-repo-log:not([hidden]) {
+    min-height: 120px;
+    max-height: min(40dvh, 320px);
+  }
+  .chat-controls { flex-wrap: wrap; }
+  .chat-search-input, .chat-repo-prompt { font-size: 16px; }
+  .chat-repo-page-button, .chat-repo-tab, .chat-repo-card-close { min-height: 44px; }
+  .chat-repo-pagination { padding-top: 10px; gap: 6px; }
+
+  /* Keep task scrolling within the available viewport, below a stable toolbar. */
+  #task-panel > .panel-header { flex-shrink: 0; flex-wrap: wrap; padding: 10px; }
+  .task-panel-actions { gap: 4px; margin-left: auto; }
+  .task-panel-actions > button,
+  .prompt-visibility-toggle,
+  .task .task-icon-button,
+  .task .task-close,
+  .task .task-copy-link {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    flex-shrink: 0;
+  }
+  .task-scroll { overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; }
+  .task-list { padding: 8px; }
+  .task-top { grid-template-columns: minmax(0, 1fr); }
+  .task-id { white-space: normal; overflow-wrap: anywhere; line-height: 1.5; font-size: 0.875rem; }
+  .task-top-actions { flex-wrap: wrap; }
+  .task-meta { overflow-wrap: anywhere; max-width: 100%; }
+  .task:hover { transform: none; }
+  .task-fullscreen-close { width: 44px; height: 44px; min-height: 44px; }
+  .task-fullscreen-body {
+    padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  }
+  .task-fullscreen .panel-header,
+  .task-fullscreen .task-head { padding-right: 64px; min-height: 64px; }
+}
+
+/* Leave room for entries when a phone is rotated or its keyboard is open. */
+@media (max-width: 1100px) and (max-height: 500px) and (pointer: coarse) {
+  .app.dashboard-app { padding-top: max(6px, env(safe-area-inset-top)); gap: 6px; }
+  .site-header-subtitle { display: none; }
+  .site-header-title { font-size: 18px; }
+  .brand-logo, .brand-logo-group { width: 32px; height: 32px; }
+  .chat-shell { padding: 10px; }
+  .chat-head { padding-bottom: 6px; }
+  .chat-controls, .chat-repo-grid, .chat-repo-pagination { padding-top: 6px; }
 }

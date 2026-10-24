@@ -2,7 +2,7 @@
 <html lang="en" class="light">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Molten AI: Agent_00</title>
   <meta property="og:image" content="https://app.molten.bot/logo.svg">
   <meta name="twitter:image" content="https://app.molten.bot/logo.svg">
@@ -10944,6 +10944,11 @@
         handler(event);
       };
       button.addEventListener("pointerdown", (event) => {
+        // Touch and pen actions wait for click so a scrolling gesture can cancel them.
+        if (event.pointerType !== "mouse") {
+          handledPointerDown = false;
+          return;
+        }
         if (typeof event.button === "number" && event.button !== 0) {
           return;
         }

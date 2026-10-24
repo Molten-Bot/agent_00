@@ -290,12 +290,50 @@
     });
   }
 
+  function initMobileNavigation(root) {
+    const trigger = root.querySelector("#mobile-dock-more");
+    const panel = root.querySelector("#mobile-dock-secondary");
+    if (!trigger || !panel) return;
+    const mobile = window.matchMedia("(max-width: 700px), (max-width: 1100px) and (max-height: 500px) and (pointer: coarse)");
+    function setOpen(open, restoreFocus = false) {
+      root.classList.toggle("mobile-dock-open", open);
+      trigger.setAttribute("aria-expanded", String(open));
+      panel.inert = mobile.matches && !open;
+      if (restoreFocus) trigger.focus();
+    }
+    trigger.addEventListener("click", () => {
+      const open = trigger.getAttribute("aria-expanded") !== "true";
+      setOpen(open);
+      if (open) panel.querySelector("a, button")?.focus();
+    });
+    root.addEventListener("click", event => {
+      if (event.target.closest("a, button") !== trigger && !trigger.contains(event.target)) {
+        setOpen(false, panel.contains(document.activeElement));
+      }
+    });
+    document.addEventListener("click", event => {
+      if (!root.contains(event.target)) setOpen(false);
+    });
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape" && trigger.getAttribute("aria-expanded") === "true") {
+        setOpen(false, true);
+      }
+    });
+    root.addEventListener("focusout", event => {
+      if (event.relatedTarget && !root.contains(event.relatedTarget)) setOpen(false);
+    });
+    mobile.addEventListener("change", () => setOpen(false));
+    window.addEventListener("hashchange", () => setOpen(false));
+    setOpen(false);
+  }
+
   function init() {
     const root = document.querySelector(".page-bottom-dock");
     if (!root || root.dataset.bottomDockReady === "true") {
       return;
     }
     root.dataset.bottomDockReady = "true";
+    initMobileNavigation(root);
     replaceLucideIcons(root);
     syncPageNavLinks(root);
     window.addEventListener("hashchange", () => syncPageNavLinks(root));
