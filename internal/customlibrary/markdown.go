@@ -60,9 +60,10 @@ func loadPromptMarkdown(dir, sourceName string) ([]library.TaskDefinition, error
 // "---" delimited frontmatter block using the same flat key/value fields as
 // library.TaskDefinition's JSON (name, displayName, type, icon, description,
 // targetSubdir, commitMessage, prTitle, prBody, labels, githubHandle,
-// reviewers, requiresNonDefaultBranch); everything after the closing "---"
-// is the task prompt. A file with no frontmatter is treated as prompt text
-// in full, with the task name derived from the filename.
+// reviewers, requiresNonDefaultBranch, promptContextLabel,
+// promptContextPlaceholder, promptContextRequired); everything after the
+// closing "---" is the task prompt. A file with no frontmatter is treated as
+// prompt text in full, with the task name derived from the filename.
 func taskFromMarkdown(sourceName, fileBaseName, content string) (library.TaskDefinition, error) {
 	frontmatter, body, hasFrontmatter := splitFrontmatter(content)
 
@@ -101,6 +102,9 @@ func taskFromMarkdown(sourceName, fileBaseName, content string) (library.TaskDef
 		GitHubHandle:             strings.TrimSpace(scalars["githubHandle"]),
 		Reviewers:                arrays["reviewers"],
 		RequiresNonDefaultBranch: strings.EqualFold(strings.TrimSpace(scalars["requiresNonDefaultBranch"]), "true"),
+		PromptContextLabel:       strings.TrimSpace(scalars["promptContextLabel"]),
+		PromptContextPlaceholder: strings.TrimSpace(scalars["promptContextPlaceholder"]),
+		PromptContextRequired:    strings.EqualFold(strings.TrimSpace(scalars["promptContextRequired"]), "true"),
 	}
 	if task.Prompt == "" {
 		return library.TaskDefinition{}, fmt.Errorf("prompt body is required")

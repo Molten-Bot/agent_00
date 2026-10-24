@@ -65,8 +65,17 @@ func TestDefaultLibraryJSONFilesHaveCanonicalShape(t *testing.T) {
 		wantFields := append([]string(nil), requiredFields...)
 		if _, ok := fields["requiresNonDefaultBranch"]; ok {
 			wantFields = append(wantFields, "requiresNonDefaultBranch")
-			sort.Strings(wantFields)
 		}
+		if _, ok := fields["promptContextLabel"]; ok {
+			wantFields = append(wantFields, "promptContextLabel")
+			if _, ok := fields["promptContextPlaceholder"]; ok {
+				wantFields = append(wantFields, "promptContextPlaceholder")
+			}
+			if _, ok := fields["promptContextRequired"]; ok {
+				wantFields = append(wantFields, "promptContextRequired")
+			}
+		}
+		sort.Strings(wantFields)
 		if gotFields := sortedKeys(fields); !reflect.DeepEqual(gotFields, wantFields) {
 			t.Errorf("%s: task fields = %v, want %v", path, gotFields, wantFields)
 			continue
@@ -88,6 +97,22 @@ func TestDefaultLibraryJSONFilesHaveCanonicalShape(t *testing.T) {
 				t.Errorf("%s: requiresNonDefaultBranch must be a boolean: %v", path, err)
 			} else if !requiresNonDefaultBranch {
 				t.Errorf("%s: requiresNonDefaultBranch should be omitted when false", path)
+			}
+		}
+		if rawPromptContextLabel, ok := fields["promptContextLabel"]; ok {
+			var promptContextLabel string
+			if err := json.Unmarshal(rawPromptContextLabel, &promptContextLabel); err != nil {
+				t.Errorf("%s: promptContextLabel must be a string: %v", path, err)
+			} else if strings.TrimSpace(promptContextLabel) == "" {
+				t.Errorf("%s: promptContextLabel must not be empty", path)
+			}
+		}
+		if rawPromptContextRequired, ok := fields["promptContextRequired"]; ok {
+			var promptContextRequired bool
+			if err := json.Unmarshal(rawPromptContextRequired, &promptContextRequired); err != nil {
+				t.Errorf("%s: promptContextRequired must be a boolean: %v", path, err)
+			} else if !promptContextRequired {
+				t.Errorf("%s: promptContextRequired should be omitted when false", path)
 			}
 		}
 

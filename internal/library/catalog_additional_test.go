@@ -70,6 +70,87 @@ func TestExpandRunConfigRequiresConfiguredBaseBranch(t *testing.T) {
 	}
 }
 
+func TestExpandRunConfigWithContextAppendsPromptContext(t *testing.T) {
+	t.Parallel()
+
+	catalog := Catalog{
+		byName: map[string]TaskDefinition{
+			"root-cause-bug-fix": {Name: "root-cause-bug-fix", Prompt: "Fix the bug.", PromptContextLabel: "Bug details"},
+		},
+	}
+
+	cfg, err := catalog.ExpandRunConfigWithContext("root-cause-bug-fix", "git@github.com:acme/repo.git", "main", "  Login throws a 500.  ")
+	if err != nil {
+		t.Fatalf("ExpandRunConfigWithContext() error = %v", err)
+	}
+	if want := "Fix the bug.\n\nAdditional context from requester:\nLogin throws a 500."; cfg.Prompt != want {
+		t.Fatalf("Prompt = %q, want %q", cfg.Prompt, want)
+	}
+
+	cfg, err = catalog.ExpandRunConfigWithContext("root-cause-bug-fix", "git@github.com:acme/repo.git", "main", "")
+	if err != nil {
+		t.Fatalf("ExpandRunConfigWithContext(empty context) error = %v", err)
+	}
+	if cfg.Prompt != "Fix the bug." {
+		t.Fatalf("Prompt = %q, want unchanged task prompt", cfg.Prompt)
+	}
+}
+
+func TestExpandRunConfigWithContextRequiresContextWhenTaskDemandsIt(t *testing.T) {
+	t.Parallel()
+
+	catalog := Catalog{
+		byName: map[string]TaskDefinition{
+			"needs-context": {
+				Name:                  "needs-context",
+				Prompt:                "Do the thing.",
+				PromptContextLabel:    "Target URL",
+				PromptContextRequired: true,
+			},
+		},
+	}
+
+	if _, err := catalog.ExpandRunConfigWithContext("needs-context", "git@github.com:acme/repo.git", "main", "  "); err == nil {
+		t.Fatal("ExpandRunConfigWithContext(blank context) error = nil, want non-nil")
+	} else if !strings.Contains(err.Error(), `library task "needs-context" requires additional prompt context`) {
+		t.Fatalf("ExpandRunConfigWithContext(blank context) error = %v", err)
+	}
+
+	cfg, err := catalog.ExpandRunConfigWithContext("needs-context", "git@github.com:acme/repo.git", "main", "https://example.com")
+	if err != nil {
+		t.Fatalf("ExpandRunConfigWithContext(with context) error = %v", err)
+	}
+	if !strings.Contains(cfg.Prompt, "https://example.com") {
+		t.Fatalf("Prompt = %q, want to contain supplied context", cfg.Prompt)
+	}
+}
+
+func TestDecodeTaskDefinitionValidatesPromptContextFields(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "task.json")
+
+	if _, err := decodeTaskDefinition(path, "", []byte(`{"name":"x","prompt":"p","promptContextRequired":true}`)); err == nil {
+		t.Fatal("decodeTaskDefinition(required without label) error = nil, want non-nil")
+	} else if !strings.Contains(err.Error(), "promptContextLabel is required when promptContextRequired is true") {
+		t.Fatalf("decodeTaskDefinition(required without label) error = %v", err)
+	}
+
+	if _, err := decodeTaskDefinition(path, "", []byte(`{"name":"x","prompt":"p","promptContextPlaceholder":"e.g. a URL"}`)); err == nil {
+		t.Fatal("decodeTaskDefinition(placeholder without label) error = nil, want non-nil")
+	} else if !strings.Contains(err.Error(), "promptContextPlaceholder requires promptContextLabel") {
+		t.Fatalf("decodeTaskDefinition(placeholder without label) error = %v", err)
+	}
+
+	task, err := decodeTaskDefinition(path, "", []byte(`{"name":"x","prompt":"p","promptContextLabel":"Details","promptContextPlaceholder":"e.g. a URL","promptContextRequired":true}`))
+	if err != nil {
+		t.Fatalf("decodeTaskDefinition(valid) error = %v", err)
+	}
+	if task.PromptContextLabel != "Details" || task.PromptContextPlaceholder != "e.g. a URL" || !task.PromptContextRequired {
+		t.Fatalf("decoded task = %+v, want promptContext fields preserved", task)
+	}
+}
+
 func TestLoadTaskDefinitionsRejectsEmptyFileObject(t *testing.T) {
 	t.Parallel()
 
