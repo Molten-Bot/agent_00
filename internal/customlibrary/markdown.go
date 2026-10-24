@@ -109,6 +109,12 @@ func taskFromMarkdown(sourceName, fileBaseName, content string) (library.TaskDef
 	if task.Prompt == "" {
 		return library.TaskDefinition{}, fmt.Errorf("prompt body is required")
 	}
+	if task.PromptContextRequired && task.PromptContextLabel == "" {
+		return library.TaskDefinition{}, fmt.Errorf("promptContextLabel is required when promptContextRequired is true")
+	}
+	if task.PromptContextPlaceholder != "" && task.PromptContextLabel == "" {
+		return library.TaskDefinition{}, fmt.Errorf("promptContextPlaceholder requires promptContextLabel")
+	}
 	return task, nil
 }
 
