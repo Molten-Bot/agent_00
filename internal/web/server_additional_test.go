@@ -1357,7 +1357,7 @@ func TestLibraryTaskListUsesDesktopTwoColumnAndMobileSingleColumnLayout(t *testi
 	if !strings.Contains(css, ".library-task-option-content {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) 34px;\n  align-items: start;\n  gap: 8px;\n  min-height: auto;") {
 		t.Fatalf("expected library task cards to size to title and subtitle copy")
 	}
-	if !strings.Contains(css, "body[data-app-display=\"studio\"][data-prompt-mode=\"library\"] #prompt-library-panel {\n  grid-template-rows: auto auto auto minmax(0, 1fr);\n}") ||
+	if !strings.Contains(css, "body[data-app-display=\"studio\"][data-prompt-mode=\"library\"] #prompt-library-panel {\n  grid-template-rows: auto auto minmax(0, 1fr) auto;\n}") ||
 		!strings.Contains(css, "body[data-app-display=\"studio\"][data-prompt-mode=\"library\"] .library-task-list {\n  max-height: none;\n  min-height: 0;\n  height: 100%;\n}") {
 		t.Fatalf("expected library Studio to fill available view space after Current Work moved to its own view")
 	}

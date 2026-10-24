@@ -88,6 +88,15 @@ type TaskDefinition struct {
 	GitHubHandle             string   `json:"githubHandle"`
 	Reviewers                []string `json:"reviewers"`
 	RequiresNonDefaultBranch bool     `json:"requiresNonDefaultBranch"`
+	// PromptContextLabel, when non-empty, tells the UI to show a free-text
+	// box (labeled with this text) so the requester can add run-specific
+	// detail. The submitted text is appended to Prompt when the task is
+	// expanded into a run config, so the same library task stays
+	// deterministic while still accepting per-run detail (e.g. a bug repro,
+	// a target URL, a feature name).
+	PromptContextLabel       string `json:"promptContextLabel"`
+	PromptContextPlaceholder string `json:"promptContextPlaceholder"`
+	PromptContextRequired    bool   `json:"promptContextRequired"`
 }
 
 // UnmarshalJSON supports canonical camelCase keys.
@@ -122,6 +131,9 @@ type TaskSummary struct {
 	Description              string `json:"description,omitempty"`
 	Prompt                   string `json:"prompt,omitempty"`
 	RequiresNonDefaultBranch bool   `json:"requiresNonDefaultBranch,omitempty"`
+	PromptContextLabel       string `json:"promptContextLabel,omitempty"`
+	PromptContextPlaceholder string `json:"promptContextPlaceholder,omitempty"`
+	PromptContextRequired    bool   `json:"promptContextRequired,omitempty"`
 }
 
 // Catalog contains all loaded library task definitions.
@@ -145,6 +157,9 @@ var taskDefinitionFieldNames = map[string]struct{}{
 	"githubHandle":             {},
 	"reviewers":                {},
 	"requiresNonDefaultBranch": {},
+	"promptContextLabel":       {},
+	"promptContextPlaceholder": {},
+	"promptContextRequired":    {},
 }
 
 // LoadCatalog loads and validates library tasks from ./library/*.json.
@@ -206,6 +221,9 @@ func (c Catalog) Summaries() []TaskSummary {
 			Description:              task.Description,
 			Prompt:                   task.Prompt,
 			RequiresNonDefaultBranch: task.RequiresNonDefaultBranch,
+			PromptContextLabel:       task.PromptContextLabel,
+			PromptContextPlaceholder: task.PromptContextPlaceholder,
+			PromptContextRequired:    task.PromptContextRequired,
 		})
 	}
 	return out
@@ -232,6 +250,16 @@ func (c Catalog) Task(name string) (TaskDefinition, bool) {
 
 // ExpandRunConfig resolves one library task name into a standard harness run config.
 func (c Catalog) ExpandRunConfig(taskName, repo, branch string) (config.Config, error) {
+	return c.ExpandRunConfigWithContext(taskName, repo, branch, "")
+}
+
+// ExpandRunConfigWithContext resolves one library task name into a standard
+// harness run config, appending promptContext (free text supplied by the
+// requester at submit time) to the task's own prompt. This lets one library
+// task stay a single, reviewable, deterministic prompt while still absorbing
+// per-run detail the task can't predict in advance (a bug repro, a target
+// URL, a feature name).
+func (c Catalog) ExpandRunConfigWithContext(taskName, repo, branch, promptContext string) (config.Config, error) {
 	taskName = strings.TrimSpace(taskName)
 	task, ok := c.byName[taskName]
 	if !ok {
@@ -246,6 +274,10 @@ func (c Catalog) ExpandRunConfig(taskName, repo, branch string) (config.Config, 
 	if task.RequiresNonDefaultBranch && branch == "" {
 		return config.Config{}, fmt.Errorf("library task %q requires a non-default base branch", taskName)
 	}
+	promptContext = strings.TrimSpace(promptContext)
+	if task.PromptContextRequired && promptContext == "" {
+		return config.Config{}, fmt.Errorf("library task %q requires additional prompt context", taskName)
+	}
 
 	cfg := config.Config{
 		RepoURL:                  repo,
@@ -254,7 +286,7 @@ func (c Catalog) ExpandRunConfig(taskName, repo, branch string) (config.Config, 
 		RequiresNonDefaultBranch: task.RequiresNonDefaultBranch,
 		BaseBranch:               branch,
 		TargetSubdir:             task.TargetSubdir,
-		Prompt:                   task.Prompt,
+		Prompt:                   composeLibraryPrompt(task.Prompt, promptContext),
 		CommitMessage:            task.CommitMessage,
 		PRTitle:                  task.PRTitle,
 		PRBody:                   task.PRBody,
@@ -267,6 +299,17 @@ func (c Catalog) ExpandRunConfig(taskName, repo, branch string) (config.Config, 
 		return config.Config{}, fmt.Errorf("library task %q: %w", taskName, err)
 	}
 	return cfg, nil
+}
+
+// composeLibraryPrompt appends requester-supplied context to a library
+// task's prompt so the catalog stays the single source of prompt text that
+// gets run through the workflow.
+func composeLibraryPrompt(prompt, promptContext string) string {
+	promptContext = strings.TrimSpace(promptContext)
+	if promptContext == "" {
+		return prompt
+	}
+	return prompt + "\n\nAdditional context from requester:\n" + promptContext
 }
 
 // OrderSummariesByUsage reorders library tasks by descending local usage count.
@@ -359,6 +402,8 @@ func decodeTaskDefinition(path, key string, data []byte) (TaskDefinition, error)
 	task.PRTitle = strings.TrimSpace(task.PRTitle)
 	task.PRBody = strings.TrimSpace(task.PRBody)
 	task.GitHubHandle = strings.TrimSpace(task.GitHubHandle)
+	task.PromptContextLabel = strings.TrimSpace(task.PromptContextLabel)
+	task.PromptContextPlaceholder = strings.TrimSpace(task.PromptContextPlaceholder)
 
 	if key != "" {
 		key = strings.TrimSpace(key)
@@ -380,6 +425,18 @@ func decodeTaskDefinition(path, key string, data []byte) (TaskDefinition, error)
 	}
 	if task.TargetSubdir == "" {
 		task.TargetSubdir = "."
+	}
+	if task.PromptContextRequired && task.PromptContextLabel == "" {
+		if key != "" {
+			return TaskDefinition{}, fmt.Errorf("library task %s key %q: promptContextLabel is required when promptContextRequired is true", path, key)
+		}
+		return TaskDefinition{}, fmt.Errorf("library task %s: promptContextLabel is required when promptContextRequired is true", path)
+	}
+	if task.PromptContextPlaceholder != "" && task.PromptContextLabel == "" {
+		if key != "" {
+			return TaskDefinition{}, fmt.Errorf("library task %s key %q: promptContextPlaceholder requires promptContextLabel", path, key)
+		}
+		return TaskDefinition{}, fmt.Errorf("library task %s: promptContextPlaceholder requires promptContextLabel", path)
 	}
 	task.PRTitle = libraryTaskPRTitle(task)
 
