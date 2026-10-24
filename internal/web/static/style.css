@@ -1239,7 +1239,7 @@ body[data-app-display="studio"][data-prompt-mode="library"] #prompt-library-pane
   grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
-body[data-app-display="studio"][data-prompt-mode="library"] #prompt-library-panel > .prompt-field:last-child {
+body[data-app-display="studio"][data-prompt-mode="library"] #prompt-library-panel > .prompt-field-task-list {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   min-height: 0;
 }

@@ -331,6 +331,77 @@ func TestLibrarySchedulesPersistDraft(t *testing.T) {
 	}
 }
 
+func TestLibraryScheduleInputRunConfigCarriesPromptContext(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HARNESS_LIBRARY_DIR", tmp)
+	if err := os.WriteFile(filepath.Join(tmp, "task.json"), []byte(`{
+  "name": "needs-context",
+  "description": "Needs context.",
+  "prompt": "Do the thing.",
+  "promptContextLabel": "Details",
+  "promptContextRequired": true
+}`), 0o644); err != nil {
+		t.Fatalf("write library task: %v", err)
+	}
+
+	input := scheduleTestInput()
+	input.LibraryTaskName = "needs-context"
+
+	if _, err := input.RunConfig(); err == nil {
+		t.Fatal("expected error when promptContext is required but missing")
+	}
+
+	input.PromptContext = "Repro steps here."
+	cfg, err := input.RunConfig()
+	if err != nil {
+		t.Fatalf("RunConfig() error = %v", err)
+	}
+	if !strings.Contains(cfg.Prompt, "Repro steps here.") {
+		t.Fatalf("cfg.Prompt = %q, want it to include promptContext", cfg.Prompt)
+	}
+}
+
+func TestLibrarySchedulesRunDueSubmitsPromptContext(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HARNESS_LIBRARY_DIR", tmp)
+	if err := os.WriteFile(filepath.Join(tmp, "task.json"), []byte(`{
+  "name": "needs-context",
+  "description": "Needs context.",
+  "prompt": "Do the thing.",
+  "promptContextLabel": "Details",
+  "promptContextRequired": true
+}`), 0o644); err != nil {
+		t.Fatalf("write library task: %v", err)
+	}
+
+	s := newScheduleTestStore(t)
+	input := scheduleTestInput()
+	input.LibraryTaskName = "needs-context"
+	input.PromptContext = "Repro steps here."
+	if _, err := s.Save(input); err != nil {
+		t.Fatal(err)
+	}
+
+	var submitted config.Config
+	calls := 0
+	s.Submit = func(_ context.Context, cfg config.Config) (string, error) {
+		calls++
+		submitted = cfg
+		return "req-1", nil
+	}
+	now := s.now().Add(25 * time.Hour)
+	s.Now = func() time.Time { return now }
+	if err := s.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1 (promptContextRequired task should be runnable, not error every occurrence)", calls)
+	}
+	if !strings.Contains(submitted.Prompt, "Repro steps here.") {
+		t.Fatalf("submitted.Prompt = %q, want it to include promptContext", submitted.Prompt)
+	}
+}
+
 func TestLibrarySchedulesValidation(t *testing.T) {
 	t.Parallel()
 	for _, change := range []func(*LibraryScheduleInput){
