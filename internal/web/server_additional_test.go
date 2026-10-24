@@ -671,25 +671,9 @@ func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
 		}
 	}
 
-	// The active/selected tab must not grow its label in-flow either: unlike
-	// the transient hover/focus reveal, an activated tab stays expanded
-	// indefinitely, so if it shared the hover rule's max-width growth every
-	// selection change would permanently shift sibling tabs. Selection is
-	// still communicated via the border/background styling below.
-	activeLabelSelectors := []string{".settings-tab.active span", `.settings-tab[aria-selected="true"] span`}
-	for _, selector := range activeLabelSelectors {
-		idx := strings.Index(normalized, selector+" {")
-		if idx == -1 {
-			continue
-		}
-		ruleEnd := strings.Index(normalized[idx:], "}")
-		if ruleEnd == -1 {
-			t.Fatalf("embedded style.css %q rule missing closing brace", selector)
-		}
-		rule := normalized[idx : idx+ruleEnd]
-		if strings.Contains(rule, "max-width: 200px") || strings.Contains(rule, "margin-left: 8px") {
-			t.Fatalf("embedded style.css %q must not expand the label in-flow on selection, it would shift sibling tabs every time the active tab changes, got %q", selector, rule)
-		}
+	// Selected labels stay visible so the active section is named even without hover.
+	if !strings.Contains(normalized, `.settings-tab[aria-selected="true"] span { max-width: 200px; margin-left: 8px; opacity: 1; }`) {
+		t.Fatal("selected settings labels must remain expanded")
 	}
 	spanIdx := strings.Index(css, ".settings-tab span {")
 	if spanIdx == -1 {
@@ -738,23 +722,7 @@ func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
 	if !strings.Contains(narrowHoverRule, "max-width: 96px;") {
 		t.Fatalf("embedded style.css narrow viewport hover tab span rule should cap max-width at 96px, got %q", narrowHoverRule)
 	}
-	// Same as the base rule: active/selected tabs must not get their own
-	// in-flow expansion at narrow widths either, or switching tabs would
-	// shift siblings there too.
-	for _, selector := range []string{".settings-tab.active span", `.settings-tab[aria-selected="true"] span`} {
-		idx := strings.Index(narrowMedia, selector+" {")
-		if idx == -1 {
-			continue
-		}
-		ruleEnd := strings.Index(narrowMedia[idx:], "}")
-		if ruleEnd == -1 {
-			t.Fatalf("embedded style.css narrow viewport %q rule missing closing brace", selector)
-		}
-		rule := narrowMedia[idx : idx+ruleEnd]
-		if strings.Contains(rule, "max-width: 96px") {
-			t.Fatalf("embedded style.css narrow viewport %q must not expand the label in-flow on selection, got %q", selector, rule)
-		}
-	}
+
 }
 
 // normalizeCSSWhitespace collapses all whitespace runs to single spaces so
@@ -764,14 +732,10 @@ func normalizeCSSWhitespace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// TestSettingsTabbarRenderedLayoutMatchesPlaywrightSpec renders the real
-// settings tabbar in a headless browser and measures it, unlike the
-// string-matching tests above which only see the CSS source text and can't
-// tell whether a rule actually prevents clipping or sibling shift once the
-// browser applies cascade, inheritance, and layout. ci.yml provisions Node
-// and Playwright so this runs for real in CI; it only skips (rather than
-// fails) in local/dev environments that lack them, where the asserted
-// behavior still has coverage from the string-based tests above.
+// TestSettingsTabbarRenderedLayoutMatchesPlaywrightSpec exercises the embedded
+// settings modal in Chromium, including themes, autosave failures, and signing.
+// CI provisions Node and Playwright; local environments without them skip this
+// browser suite while retaining the HTTP and embedded-asset checks above.
 func TestSettingsTabbarRenderedLayoutMatchesPlaywrightSpec(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not available, skipping rendered-layout check")
@@ -786,11 +750,11 @@ func TestSettingsTabbarRenderedLayoutMatchesPlaywrightSpec(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "node", "--test", "tests/settings_tabs.cjs")
+	cmd := exec.CommandContext(ctx, "node", "--test", "tests/settings_tabs.cjs", "tests/commit_signing.cjs")
 	cmd.Env = append(os.Environ(), "HARNESS_TEST_URL="+ts.URL)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("rendered settings tabbar layout check failed:\n%s", out)
+		t.Fatalf("rendered settings modal checks failed:\n%s", out)
 	}
 }
 

@@ -49,7 +49,7 @@ func TestLocalReviewSettingsRemainAccessible(t *testing.T) {
 	t.Parallel()
 	response := httptest.NewRecorder()
 	NewServer("", NewBroker()).Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
-	for _, expected := range []string{`id="settings-open"`, `id="settings-gate"`, `id="review-settings-form"`, `id="review-settings-save"`} {
+	for _, expected := range []string{`id="settings-open"`, `id="settings-gate"`, `id="review-settings-form"`, `id="review-settings-close"`, `id="review-settings-slider"`} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Errorf("dashboard missing %s", expected)
 		}

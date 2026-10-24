@@ -8,23 +8,28 @@
   const status = element('status');
   let configured = false;
   let busy = false;
+  let modalBusy = false;
+  let savedEnabled = false;
+  let loadPromise = null;
   function clearSecrets() { privateKey.value = ''; passphrase.value = ''; }
   function setBusy(value) {
     busy = value;
-    for (const name of ['save', 'private-key', 'passphrase']) element(name).disabled = value;
-    enabled.disabled = value || !configured;
+    const blocked = busy || modalBusy;
+    for (const name of ['save', 'private-key', 'passphrase']) element(name).disabled = blocked;
+    enabled.disabled = blocked || !configured;
     element('enabled-help').textContent = value
       ? 'Please wait while signing settings are being processed.'
       : configured
-        ? 'After registering the public key on GitHub, select this checkbox and click Save signing settings.'
-        : 'Save an SSH private key below to unlock this checkbox.';
-    element('verify').disabled = value || !configured;
-    element('copy').disabled = value || !publicKey.value;
+        ? 'After registering the public key on GitHub, select this option and close settings to save.'
+        : 'Save an SSH private key above to enable commit signing.';
+    element('verify').disabled = blocked || !configured;
+    element('copy').disabled = blocked || !publicKey.value;
   }
   function render(settings) {
     if (!settings) return;
     configured = Boolean(settings.configured);
-    enabled.checked = Boolean(settings.enabled);
+    savedEnabled = Boolean(settings.enabled);
+    enabled.checked = savedEnabled;
     publicKey.value = settings.public_key || '';
     element('account').textContent = settings.account ? `GitHub account: ${settings.account}` : '';
     element('fingerprint').textContent = settings.fingerprint ? `Fingerprint: ${settings.fingerprint}` : '';
@@ -39,7 +44,7 @@
     element('registration').textContent = labels[settings.registration] || labels.unchecked;
     setBusy(busy);
   }
-  async function request(path, payload) {
+  async function request(path, payload, preserveDraftOnError = false) {
     const response = await fetch(`/api/commit-signing${path}`, {
       method: payload === undefined ? 'GET' : 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -47,21 +52,44 @@
       ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
     });
     const body = await response.json();
-    render(body.settings);
+    if (response.ok || !preserveDraftOnError) render(body.settings);
     if (!response.ok) throw new Error(body.error || 'Unable to update commit signing.');
     return body.settings;
   }
-  async function load() {
-    if (busy) return;
+  function load() {
+    if (loadPromise) return loadPromise;
+    if (busy) return Promise.resolve();
     clearSecrets();
     setBusy(true);
     status.textContent = '';
-    try { await request(''); }
-    catch (error) { status.textContent = error.message || 'Unable to load commit signing.'; }
-    finally { setBusy(false); }
+    loadPromise = (async () => {
+      try { await request(''); }
+      catch (error) { status.textContent = error.message || 'Unable to load commit signing.'; }
+      finally { setBusy(false); loadPromise = null; }
+    })();
+    return loadPromise;
   }
+  // The modal saves the enable/disable choice on close. Importing a key remains
+  // an explicit setup action; private material is never submitted by closing.
+  window.CommitSigningSettings = {
+    setModalBusy(value) { modalBusy = value; setBusy(busy); },
+    async saveOnClose() {
+      if (loadPromise) await loadPromise;
+      if (busy) throw new Error('Wait for commit signing setup to finish before closing.');
+      if (!configured || enabled.checked === savedEnabled) return;
+      const nextEnabled = enabled.checked;
+      setBusy(true);
+      try {
+        await request('', { enabled: nextEnabled }, true);
+        status.textContent = 'Commit signing settings saved.';
+      } catch (error) {
+        status.textContent = error.message || 'Unable to save commit signing.';
+        throw error;
+      } finally { setBusy(false); }
+    },
+  };
   element('save').addEventListener('click', async () => {
-    if (busy) return;
+    if (busy || modalBusy) return;
     setBusy(true);
     status.textContent = 'Saving signing settings…';
     try {
@@ -76,7 +104,7 @@
     if (event.key === 'Enter') { event.preventDefault(); element('save').click(); }
   });
   element('verify').addEventListener('click', async () => {
-    if (busy) return;
+    if (busy || modalBusy) return;
     setBusy(true);
     status.textContent = 'Checking registration and local signing…';
     try { const settings = await request('/verify', {}); status.textContent = settings.message; }

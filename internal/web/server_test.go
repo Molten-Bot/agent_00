@@ -509,9 +509,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `Auto-merge clean reviews`) ||
 		!strings.Contains(markup, `Delete merged branches`) ||
 		!strings.Contains(markup, `id="review-settings-level" type="hidden" value="off"`) ||
-		!strings.Contains(markup, `data-review-settings-level="low"><span>Low</span><small>1 review</small></button>`) ||
-		!strings.Contains(markup, `data-review-settings-level="medium"><span>Medium</span><small>3 reviews</small></button>`) ||
-		!strings.Contains(markup, `data-review-settings-level="high"><span>High</span><small>6 reviews</small></button>`) ||
+		!strings.Contains(markup, `id="review-settings-slider" type="range" min="0" max="3" step="1"`) ||
+		!strings.Contains(markup, `id="review-selected-text">Off · 0 reviews</span>`) ||
+		!strings.Contains(markup, `href="#review-high"`) ||
 		!strings.Contains(markup, `id="review-settings-delete-merged-branches" type="checkbox"`) ||
 		!strings.Contains(markup, `id="review-settings-merge-method" type="hidden" value="squash"`) ||
 		!strings.Contains(markup, `role="radiogroup" aria-labelledby="review-settings-merge-method-label"`) ||
@@ -3517,8 +3517,8 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	if strings.Contains(css, ".chat-repo-message-copy") {
 		t.Fatalf("expected stylesheet to omit chat message copy button styles")
 	}
-	if strings.Count(css, "cursor:") != 3 {
-		t.Fatalf("expected stylesheet to avoid unrelated custom cursor styles")
+	if strings.Contains(css, "cursor: url(") {
+		t.Fatalf("expected stylesheet to avoid custom cursor images")
 	}
 	if strings.Contains(css, "cursor-not-allowed") {
 		t.Fatalf("expected stylesheet to avoid cursor utility classes")

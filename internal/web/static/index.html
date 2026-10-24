@@ -24,6 +24,13 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+      <!-- Lucide review intensity icons. -->
+      <symbol id="review-off" viewBox="0 0 24 24"><path d="m2 2 20 20"/><path d="M8.35 2.69A10 10 0 0 1 21.3 15.65"/><path d="M19.08 19.08A10 10 0 1 1 4.92 4.92"/></symbol>
+      <symbol id="review-low" viewBox="0 0 24 24"><path d="M2 20h.01"/><path d="M7 20v-4"/></symbol>
+      <symbol id="review-medium" viewBox="0 0 24 24"><path d="M2 20h.01"/><path d="M7 20v-4"/><path d="M12 20v-8"/></symbol>
+      <symbol id="review-high" viewBox="0 0 24 24"><path d="M2 20h.01"/><path d="M7 20v-4"/><path d="M12 20v-8"/><path d="M17 20V8"/></symbol>
+  </defs></svg>
   <div class="site-bg" aria-hidden="true">
     <canvas id="snowfall-canvas" class="snowfall-canvas"></canvas>
     <div class="glow glow-a"></div>
@@ -720,14 +727,17 @@
       <div class="onboarding-modal-shell">
         <header class="onboarding-modal-sidebar settings-header-slim">
           <div class="onboarding-modal-header">
-            <h2 id="settings-title">Settings</h2>
-            <p id="settings-message" class="sr-only">Configure reviews and commit signing.</p>
+            <h2 id="settings-title"><i data-lucide="settings" aria-hidden="true"></i><span>Settings</span></h2>
+            <p id="settings-message" class="sr-only">Configure library, automation, reviews, merging, and commit signing.</p>
           </div>
+          <button id="review-settings-close" class="settings-modal-close onboarding-modal-close" type="button" aria-label="Close settings" title="Close">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
         </header>
 
         <div class="settings-tabbed-panel">
         <div class="settings-tabbar" role="tablist" aria-label="Settings sections">
-          <button id="settings-tab-library" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="custom-library-section" data-settings-tab="library">
+          <button id="settings-tab-library" class="settings-tab active" type="button" role="tab" aria-selected="true" aria-controls="custom-library-section" data-settings-tab="library">
             <svg class="custom-library-tab-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <rect x="3" y="4" width="13" height="3" rx="1"></rect>
               <rect x="3" y="10.5" width="10" height="3" rx="1"></rect>
@@ -740,7 +750,7 @@
           <button id="settings-tab-automation" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-automation" data-settings-tab="automation">
             <i data-lucide="wand-sparkles" aria-hidden="true"></i><span>Automation</span>
           </button>
-          <button id="settings-tab-review" class="settings-tab active" type="button" role="tab" aria-selected="true" aria-controls="settings-panel-review" data-settings-tab="review">
+          <button id="settings-tab-review" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-review" data-settings-tab="review">
             <i data-lucide="message-circle-code" aria-hidden="true"></i><span>Post-task Review</span>
           </button>
           <button id="settings-tab-merge" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-merge" data-settings-tab="merge">
@@ -754,23 +764,29 @@
         <form id="review-settings-form" class="stack review-settings-form" data-settings-panel="review">
           <fieldset id="settings-panel-automation" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-automation" hidden>
             <legend class="review-settings-section-title sr-only">Automation</legend>
-            <label class="review-settings-toggle">
-              <input id="review-settings-auto-merge" type="checkbox">
+            <label class="selectable-option">
+              <input class="sr-only" id="review-settings-auto-merge" type="checkbox">
+              <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="robot-arm"><path d="M12 21 7.5 8.322"/><path d="m14 7 1.75-3.767a.5.5 0 0 1 .662-.172L20 5.005"/><path d="m20 8.998-3.588 1.944a.5.5 0 0 1-.662-.172L14 7H8"/><path d="M3.486 21h10"/><path d="M5 21V8.732"/><circle cx="6" cy="7" r="2"/></svg>
               <span>Auto-merge clean reviews</span>
             </label>
-            <label class="review-settings-toggle">
-              <input id="review-settings-delete-merged-branches" type="checkbox">
+            <label class="selectable-option">
+              <input class="sr-only" id="review-settings-delete-merged-branches" type="checkbox">
+              <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="git-branch-minus"><path d="M15 6a9 9 0 0 0-9 9V3"/><path d="M21 18h-6"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></svg>
               <span>Delete merged branches</span>
             </label>
           </fieldset>
-          <div id="settings-panel-review" class="review-settings-section review-settings-level" role="tabpanel" aria-labelledby="settings-tab-review">
-            <span id="review-settings-level-label" class="sr-only">Post-task Review</span>
+          <div id="settings-panel-review" class="review-settings-section review-settings-level" role="tabpanel" aria-labelledby="settings-tab-review" hidden>
             <input id="review-settings-level" type="hidden" value="off">
-            <div class="review-settings-merge-options review-settings-level-options" role="radiogroup" aria-labelledby="review-settings-level-label">
-              <button class="review-settings-merge-option review-settings-level-option active" type="button" role="radio" aria-checked="true" data-review-settings-level="off"><span>Off</span><small>0 reviews</small></button>
-              <button class="review-settings-merge-option review-settings-level-option" type="button" role="radio" aria-checked="false" data-review-settings-level="low"><span>Low</span><small>1 review</small></button>
-              <button class="review-settings-merge-option review-settings-level-option" type="button" role="radio" aria-checked="false" data-review-settings-level="medium"><span>Medium</span><small>3 reviews</small></button>
-              <button class="review-settings-merge-option review-settings-level-option" type="button" role="radio" aria-checked="false" data-review-settings-level="high"><span>High</span><small>6 reviews</small></button>
+            <div class="review-slider">
+              <label class="sr-only" for="review-settings-slider">Number of post-task reviews</label>
+              <output class="review-slider-value" id="review-slider-value" for="review-settings-slider"><svg aria-hidden="true"><use id="review-selected-icon" href="#review-off"/></svg><span id="review-selected-text">Off · 0 reviews</span></output>
+              <input id="review-settings-slider" type="range" min="0" max="3" step="1" value="0" aria-valuetext="Off, 0 reviews">
+              <div class="review-slider-stops" aria-hidden="true">
+                <span class="review-slider-stop" data-current="true" title="Off · 0 reviews"><svg><use href="#review-off"/></svg></span>
+                <span class="review-slider-stop" title="Low · 1 review"><svg><use href="#review-low"/></svg></span>
+                <span class="review-slider-stop" title="Medium · 3 reviews"><svg><use href="#review-medium"/></svg></span>
+                <span class="review-slider-stop" title="High · 6 reviews"><svg><use href="#review-high"/></svg></span>
+              </div>
             </div>
           </div>
           <div id="settings-panel-merge" class="review-settings-section review-settings-merge-method" role="tabpanel" aria-labelledby="settings-tab-merge" hidden>
@@ -792,9 +808,7 @@
           <div class="review-settings-section commit-signing-section" id="commit-signing-section" role="tabpanel" aria-labelledby="settings-tab-signing" hidden>
             <h3 class="review-settings-section-title sr-only">Commit signing</h3>
             <div class="stack commit-signing-fields">
-              <label class="review-settings-toggle"><input id="commit-signing-enabled" type="checkbox" disabled aria-describedby="commit-signing-enabled-help"><span>Sign commits for all tasks</span></label>
-              <p id="commit-signing-enabled-help">Save an SSH private key below to unlock this checkbox.</p>
-              <p>1. Paste your SSH private key and click Save signing settings. 2. Copy the public key shown below and add it to GitHub as a Signing Key. 3. Check registration, select the checkbox, and save again. Changes apply to tasks that start after saving.</p>
+              <p>1. Paste your SSH private key and click Save signing settings. 2. Copy the public key shown below and add it to GitHub as a Signing Key. 3. Check registration, enable “Sign commits for all tasks”, and close settings to save. Changes apply to tasks that start after saving.</p>
               <label for="commit-signing-private-key">SSH private key</label>
               <textarea id="commit-signing-private-key" class="prompt-text agent-auth-secret-input" rows="4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="commit-signing-private-key-help" placeholder="Paste the full SSH private key, including BEGIN and END lines"></textarea>
               <p id="commit-signing-private-key-help">Signing requires the private key. A public key alone cannot sign commits.</p>
@@ -816,16 +830,21 @@
                 <button id="commit-signing-save" type="button" class="prompt-action-button prompt-submit">Save signing settings</button>
               </div>
               <p id="commit-signing-status" role="status" aria-live="polite"></p>
+              <label class="selectable-option">
+                <input class="sr-only" id="commit-signing-enabled" type="checkbox" disabled aria-describedby="commit-signing-enabled-help">
+                <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="earth-lock"><path d="M7 3.34V5a3 3 0 0 0 3 3"/><path d="M11 21.95V18a2 2 0 0 0-2-2 2 2 0 0 1-2-2v-1a2 2 0 0 0-2-2H2.05"/><path d="M21.54 15H17a2 2 0 0 0-2 2v4.54"/><path d="M12 2a10 10 0 1 0 9.54 13"/><path d="M20 6V4a2 2 0 1 0-4 0v2"/><rect width="8" height="5" x="14" y="6" rx="1"/></svg>
+                <span>Sign commits for all tasks</span>
+              </label>
+              <p id="commit-signing-enabled-help">Save an SSH private key above to enable commit signing.</p>
             </div>
           </div>
-          <div class="review-settings-section custom-library-section" id="custom-library-section" role="tabpanel" aria-labelledby="settings-tab-library" hidden>
+          <div class="review-settings-section custom-library-section" id="custom-library-section" role="tabpanel" aria-labelledby="settings-tab-library">
             <h3 class="review-settings-section-title sr-only">Library</h3>
-            <label class="review-settings-toggle review-settings-toggle-switch">
-              <span class="review-settings-switch">
-                <input id="review-settings-default-library" type="checkbox" checked role="switch">
-              </span>
-              <span>Show default library</span>
-            </label>
+            <label class="selectable-option">
+          <input class="sr-only" id="review-settings-default-library" type="checkbox" checked>
+          <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="library-big"><rect width="8" height="18" x="3" y="3" rx="1"/><path d="M7 3v18"/><path d="M20.4 18.9c.2.5-.1 1.1-.6 1.3l-1.9.7c-.5.2-1.1-.1-1.3-.6L11.1 5.1c-.2-.5.1-1.1.6-1.3l1.9-.7c.5-.2 1.1.1 1.3.6Z"/></svg>
+          <span>Show default library</span>
+        </label>
             <div class="stack custom-library-fields">
               <p>Pull library tasks from a private git repository your account can already access. Add the repo's SSH or HTTPS URL and a display name; this app clones <code>./prompt/*.md</code> from it once now, then refreshes hourly or whenever you reopen the app.</p>
               <label for="custom-library-name">Name</label>
@@ -839,17 +858,9 @@
               <div id="custom-library-list"></div>
             </div>
           </div>
-          <div class="onboarding-form-actions settings-footer">
-            <p id="review-settings-status" class="settings-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
-            <div class="settings-actions">
-              <button id="review-settings-close" class="settings-modal-close onboarding-modal-close" type="button" aria-label="Close settings" title="Close">
-                <i data-lucide="x" aria-hidden="true"></i>
-              </button>
-              <button id="review-settings-save" class="prompt-action-button prompt-submit" type="submit">Save</button>
-            </div>
-          </div>
         </form>
         </div>
+        <p id="review-settings-status" class="settings-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
 
       </div>
     </section>
@@ -1750,7 +1761,7 @@
       ui: stateUI,
       agentAuth: normalizeAgentAuth({ required: true, ready: false, state: "checking", message: "Checking agent authorization…" }),
       reviewSettings: normalizeReviewSettings({}),
-      settingsTab: "review",
+      settingsTab: "library",
       customLibraryGeneration: null,
       snapshot: null,
       selectedTaskId: "",
@@ -2024,10 +2035,9 @@
       library: document.getElementById("custom-library-section"),
     };
     const reviewSettingsLevel = document.getElementById("review-settings-level");
-    const reviewSettingsLevelOptions = Array.from(document.querySelectorAll("[data-review-settings-level]"));
+    const reviewSettingsSlider = document.getElementById("review-settings-slider");
     const reviewSettingsStatus = document.getElementById("review-settings-status");
     const reviewSettingsClose = document.getElementById("review-settings-close");
-    const reviewSettingsSave = document.getElementById("review-settings-save");
     const agentAuthTitle = document.getElementById("agent-auth-title");
     const agentAuthMessage = document.getElementById("agent-auth-message");
     const agentAuthHarnessPicker = document.getElementById("agent-auth-harness-picker");
@@ -2622,29 +2632,37 @@
     }
 
     function setSettingsTab(tab) {
-      const normalized = Object.prototype.hasOwnProperty.call(settingsTabPanels, tab) ? tab : "review";
+      const normalized = Object.prototype.hasOwnProperty.call(settingsTabPanels, tab) ? tab : "library";
       state.settingsTab = normalized;
       settingsTabButtons.forEach((button) => {
         const selected = button.getAttribute("data-settings-tab") === normalized;
         button.classList.toggle("active", selected);
         button.setAttribute("aria-selected", selected ? "true" : "false");
+        button.tabIndex = selected ? 0 : -1;
       });
       Object.entries(settingsTabPanels).forEach(([key, panel]) => {
         if (panel) panel.hidden = key !== normalized;
       });
     }
 
+    const REVIEW_SETTINGS_LEVELS = [
+      { value: "off", label: "Off", count: 0 },
+      { value: "low", label: "Low", count: 1 },
+      { value: "medium", label: "Medium", count: 3 },
+      { value: "high", label: "High", count: 6 },
+    ];
     function setReviewSettingsLevel(level) {
-      const normalized = ["off", "low", "medium", "high"].includes(String(level || "").trim().toLowerCase())
-        ? String(level || "").trim().toLowerCase()
-        : "off";
-      if (reviewSettingsLevel instanceof HTMLInputElement) {
-        reviewSettingsLevel.value = normalized;
-      }
-      reviewSettingsLevelOptions.forEach((button) => {
-        const selected = button.getAttribute("data-review-settings-level") === normalized;
-        button.classList.toggle("active", selected);
-        button.setAttribute("aria-checked", selected ? "true" : "false");
+      const normalized = String(level || "").trim().toLowerCase();
+      const index = Math.max(0, REVIEW_SETTINGS_LEVELS.findIndex(entry => entry.value === normalized));
+      const selected = REVIEW_SETTINGS_LEVELS[index];
+      reviewSettingsLevel.value = selected.value;
+      reviewSettingsSlider.value = String(index);
+      const reviews = `${selected.count} ${selected.count === 1 ? "review" : "reviews"}`;
+      reviewSettingsSlider.setAttribute("aria-valuetext", `${selected.label}, ${reviews}`);
+      document.getElementById("review-selected-text").textContent = `${selected.label} · ${reviews}`;
+      document.getElementById("review-selected-icon").setAttribute("href", `#review-${selected.value}`);
+      document.querySelectorAll(".review-slider-stop").forEach((stop, position) => {
+        stop.dataset.current = String(position === index);
       });
     }
 
@@ -2675,7 +2693,12 @@
       }
     }
 
-    async function loadReviewSettings() {
+    let reviewSettingsLoad = null;
+    function loadReviewSettings() {
+      if (reviewSettingsLoad) return reviewSettingsLoad;
+      state.settingsLoaded = false;
+      setSettingsBusy(true);
+      reviewSettingsLoad = (async () => {
       try {
         const response = await fetch("/api/review-settings", {
           method: "GET",
@@ -2688,17 +2711,21 @@
         } catch (_parseError) {
           body = null;
         }
-        if (body?.settings) {
-          applyReviewSettingsState(body.settings);
-        }
-        if (!response.ok) {
+        if (!response.ok || !body?.settings) {
           const detail = String(body?.error || `review settings failed with ${response.status}`).trim();
           throw new Error(detail);
         }
+        applyReviewSettingsState(body.settings);
+        state.settingsLoaded = true;
       } catch (error) {
         const detail = error instanceof Error ? error.message : "Unable to load review settings.";
         setReviewSettingsStatus("error", detail);
+      } finally {
+        setSettingsBusy(false);
+        reviewSettingsLoad = null;
       }
+      })();
+      return reviewSettingsLoad;
     }
 
     function currentReviewSettingsPayload() {
@@ -2715,10 +2742,14 @@
       if (event && typeof event.preventDefault === "function") {
         event.preventDefault();
       }
+      if (state.settingsBusy || !state.settingsOpen) return;
       const payload = currentReviewSettingsPayload();
       setSettingsBusy(true);
       setReviewSettingsStatus("ok", "Saving review settings...");
       try {
+        await window.CommitSigningSettings?.saveOnClose();
+        // A failed initial read must never replace saved settings with defaults.
+        if (!state.settingsLoaded) { setSettingsOpen(false); return; }
         const response = await fetch("/api/review-settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -12628,45 +12659,65 @@
         void loadReviewSettings();
         window.dispatchEvent(new Event("commit-signing-open"));
         window.dispatchEvent(new Event("custom-library-sources-open"));
-        window.requestAnimationFrame(() => reviewSettingsAutoMerge?.focus());
+        setReviewSettingsStatus("", "");
+        window.requestAnimationFrame(() => settingsTabButtons.find(button => button.getAttribute("aria-selected") === "true")?.focus());
       }
     }
     function setSettingsBusy(busy) {
       state.settingsBusy = Boolean(busy);
-      reviewSettingsSave.disabled = Boolean(busy);
+      window.CommitSigningSettings?.setModalBusy(Boolean(busy));
       reviewSettingsClose.disabled = Boolean(busy);
+      for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches,
+        reviewSettingsDefaultLibrary, reviewSettingsSlider, ...reviewSettingsMergeOptions]) {
+        if (control) control.disabled = Boolean(busy) || !state.settingsLoaded;
+      }
+      reviewSettingsForm.setAttribute("aria-busy", String(Boolean(busy)));
     }
     document.getElementById("settings-open")?.addEventListener("click", (event) => {
       event.preventDefault();
       setSettingsOpen(true);
     });
     settingsGate.addEventListener("click", (event) => {
-      if (event.target === settingsGate && !state.settingsBusy) setSettingsOpen(false);
+      if (event.target === settingsGate && !state.settingsBusy) void submitReviewSettings();
     });
     if (window.location.hash === "#settings") setSettingsOpen(true);
 
     if (reviewSettingsForm) {
       reviewSettingsForm.addEventListener("submit", submitReviewSettings);
     }
+    for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches, reviewSettingsDefaultLibrary]) {
+      control.addEventListener("change", () => setReviewSettingsStatus("", "Changes will be saved on close."));
+    }
     reviewSettingsMergeOptions.forEach((button) => {
       button.addEventListener("click", () => {
         setReviewSettingsMergeMethod(button.getAttribute("data-review-settings-merge-method"));
+        setReviewSettingsStatus("", "Changes will be saved on close.");
       });
     });
-    reviewSettingsLevelOptions.forEach((button) => {
-      button.addEventListener("click", () => {
-        setReviewSettingsLevel(button.getAttribute("data-review-settings-level"));
-      });
+    reviewSettingsSlider.addEventListener("input", () => {
+      setReviewSettingsLevel(REVIEW_SETTINGS_LEVELS[Number(reviewSettingsSlider.value)].value);
+      setReviewSettingsStatus("", "Changes will be saved on close.");
     });
     settingsTabButtons.forEach((button) => {
       button.addEventListener("click", () => {
         setSettingsTab(button.getAttribute("data-settings-tab"));
       });
     });
+    document.querySelector(".settings-tabbar").addEventListener("keydown", event => {
+      const current = settingsTabButtons.indexOf(document.activeElement);
+      if (current < 0) return;
+      const index = event.key === "ArrowRight" ? (current + 1) % settingsTabButtons.length
+        : event.key === "ArrowLeft" ? (current - 1 + settingsTabButtons.length) % settingsTabButtons.length
+        : event.key === "Home" ? 0 : event.key === "End" ? settingsTabButtons.length - 1 : -1;
+      if (index < 0) return;
+      event.preventDefault();
+      setSettingsTab(settingsTabButtons[index].dataset.settingsTab);
+      settingsTabButtons[index].focus();
+    });
     setSettingsTab(state.settingsTab);
     if (reviewSettingsClose) {
       reviewSettingsClose.addEventListener("click", () => {
-        setSettingsOpen(false);
+        void submitReviewSettings();
       });
     }
     window.__agentAuthVerifyClick = (event) => {
@@ -12797,7 +12848,10 @@
         trackAnalyticsEvent("task_fullscreen_toggled", { open: false, source: "escape_key" });
         return;
       }
-      if (event.key === "Escape" && state.settingsOpen && !state.settingsBusy) setSettingsOpen(false);
+      if (event.key === "Escape" && state.settingsOpen) {
+        event.preventDefault();
+        if (!state.settingsBusy) void submitReviewSettings();
+      }
     });
     document.addEventListener("selectionchange", flushDeferredSelectionRenders);
 

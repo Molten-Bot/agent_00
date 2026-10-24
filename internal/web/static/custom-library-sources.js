@@ -19,7 +19,7 @@
 
   function setStatus(message, isError) {
     status.textContent = message || "";
-    status.style.color = isError ? "#ef4444" : "";
+    status.style.color = isError ? "var(--surface-danger)" : "";
   }
 
   function formatStatusLine(entry) {
@@ -82,12 +82,16 @@
     return payload;
   }
 
+  async function refreshEntries() {
+    const payload = await request("GET", "");
+    render(payload.sources || []);
+  }
+
   async function load() {
     if (busy) return;
     setBusy(true);
     try {
-      const payload = await request("GET", "");
-      render(payload.sources || []);
+      await refreshEntries();
     } catch (error) {
       setStatus(error.message || "Unable to load company library repos.", true);
     } finally {
@@ -111,7 +115,7 @@
       repoInput.value = "";
       const count = Number(payload.source?.taskCount || 0);
       setStatus(`Added ${payload.source.name} (${count} task${count === 1 ? "" : "s"}).`);
-      await load();
+      await refreshEntries();
     } catch (error) {
       setStatus(error.message || "Unable to add this library repo.", true);
     } finally {
@@ -126,7 +130,7 @@
     try {
       await request("DELETE", `?name=${encodeURIComponent(name)}`);
       setStatus(`Removed ${name}.`);
-      await load();
+      await refreshEntries();
     } catch (error) {
       setStatus(error.message || "Unable to remove this library repo.", true);
     } finally {
@@ -143,4 +147,5 @@
   });
 
   window.addEventListener("custom-library-sources-open", load);
+  if (!document.getElementById("settings-gate").classList.contains("hidden")) void load();
 })();

@@ -46,7 +46,7 @@ test('import, register, enable, reload and disable without returning private mat
     return route.fulfill({ json: { ok: true, settings } });
   });
   assert.equal(await page.locator('#commit-signing-enabled').isDisabled(), true);
-  assert.match(await page.locator('#commit-signing-enabled-help').textContent(), /Save an SSH private key below to unlock/);
+  assert.match(await page.locator('#commit-signing-enabled-help').textContent(), /Save an SSH private key above to enable/);
   assert.equal(await page.locator('#commit-signing-public-key').isEditable(), false);
   assert.match(await page.locator('#commit-signing-public-key-help').textContent(), /Generated from your saved private key/);
   await page.locator('#commit-signing-private-key').fill('test-private-key');
@@ -61,7 +61,7 @@ test('import, register, enable, reload and disable without returning private mat
   assert.match(await page.locator('#commit-signing-account').textContent(), /test-bot/);
   await page.locator('#commit-signing-verify').click();
   await page.waitForFunction(() => document.getElementById('commit-signing-registration').textContent.startsWith('Registered'));
-  await page.locator('#commit-signing-enabled').check();
+  await page.locator('label:has(#commit-signing-enabled)').click();
   await page.locator('#commit-signing-save').click();
   await page.waitForFunction(() => document.getElementById('commit-signing-status').textContent === 'Commit signing settings saved.');
   assert.equal(settings.enabled, true);
@@ -69,7 +69,7 @@ test('import, register, enable, reload and disable without returning private mat
   await page.locator('#settings-tab-signing').click();
   await page.waitForFunction(() => document.getElementById('commit-signing-enabled').checked);
   assert.equal(await page.locator('#commit-signing-private-key').inputValue(), '');
-  await page.locator('#commit-signing-enabled').uncheck();
+  await page.locator('label:has(#commit-signing-enabled)').click();
   await page.locator('#commit-signing-save').click();
   await page.waitForFunction(() => document.getElementById('commit-signing-status').textContent === 'Commit signing settings saved.');
   assert.equal(settings.enabled, false);
@@ -93,5 +93,41 @@ test('failed imports clear secrets, preserve saved state, and fit a narrow viewp
   assert.equal(overflow, false, 'settings do not overflow horizontally');
   await page.locator('#commit-signing-private-key').fill('unsaved-secret');
   await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.getElementById('settings-gate').classList.contains('hidden'));
   assert.equal(await page.locator('#commit-signing-private-key').inputValue(), '');
+});
+
+test('closing saves the signing toggle without submitting a draft key', async t => {
+  let settings = { ...saved };
+  const writes = [];
+  const page = await openSettings(t, route => {
+    if (route.request().method() === 'POST') {
+      const payload = route.request().postDataJSON(); writes.push(payload);
+      settings = { ...settings, enabled: payload.enabled };
+    }
+    return route.fulfill({ json: { ok: true, settings } });
+  });
+  await page.locator('label:has(#commit-signing-enabled)').click();
+  await page.locator('#commit-signing-private-key').fill('unsaved-test-key');
+  await page.locator('#review-settings-close').click();
+  await page.waitForFunction(() => document.getElementById('settings-gate').classList.contains('hidden'));
+  assert.deepEqual(writes, [{ enabled: true }]);
+  assert.equal(await page.locator('#commit-signing-private-key').inputValue(), '');
+  await page.reload(); await page.locator('#settings-tab-signing').click();
+  await page.waitForFunction(() => document.getElementById('commit-signing-enabled').checked);
+});
+
+test('failed close-time signing save keeps the selected option and allows retry', async t => {
+  let fail = true;
+  const page = await openSettings(t, route => route.request().method() === 'POST'
+    ? route.fulfill(fail ? { status: 500, json: { error: 'Signing save failed.', settings: saved } } : { json: { ok: true, settings: { ...saved, enabled: true } } })
+    : route.fulfill({ json: { ok: true, settings: saved } }));
+  await page.locator('label:has(#commit-signing-enabled)').click();
+  await page.locator('#review-settings-close').click();
+  await page.waitForFunction(() => document.getElementById('review-settings-status').textContent.includes('Signing save failed'));
+  assert.equal(await page.locator('#settings-gate').isVisible(), true);
+  assert.equal(await page.locator('#commit-signing-enabled').isChecked(), true);
+  fail = false;
+  await page.locator('#review-settings-close').click();
+  await page.waitForFunction(() => document.getElementById('settings-gate').classList.contains('hidden'));
 });

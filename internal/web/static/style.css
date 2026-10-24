@@ -6927,98 +6927,6 @@ body.onboarding-modal-open {
   font-weight: 700;
 }
 
-.review-settings-toggle {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  color: var(--text);
-  font-size: 0.94rem;
-  font-weight: 700;
-}
-
-.review-settings-toggle input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  accent-color: var(--running);
-}
-
-.review-settings-switch {
-  position: relative;
-  display: inline-flex;
-  flex: none;
-  width: 40px;
-  height: 22px;
-}
-
-.review-settings-switch input[type="checkbox"] {
-  appearance: none;
-  -webkit-appearance: none;
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  border: 1px solid var(--surface-control-border);
-  border-radius: 999px;
-  background: var(--surface-control-bg);
-  transition: background 0.2s ease, border-color 0.2s ease;
-}
-
-.review-settings-switch input[type="checkbox"]::before {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--text-soft);
-  transition: transform 0.2s ease, background 0.2s ease;
-}
-
-.review-settings-switch input[type="checkbox"]:checked {
-  background: var(--running);
-  border-color: var(--running);
-}
-
-.review-settings-switch input[type="checkbox"]:checked::before {
-  transform: translateX(18px);
-  background: var(--surface-control-bg-strong);
-}
-
-.review-settings-merge-options {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  padding: 4px;
-  border: 1px solid var(--surface-control-border);
-  border-radius: var(--radius-card);
-  background: var(--surface-control-bg);
-}
-
-.review-settings-level-options {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.review-settings-level-option {
-  display: grid;
-  gap: 2px;
-  align-content: center;
-}
-
-.review-settings-level-option small {
-  color: var(--text-muted);
-  font-size: 0.7rem;
-  font-weight: 650;
-  line-height: 1.2;
-}
-
-.review-settings-level-option.active small,
-.review-settings-level-option[aria-checked="true"] small {
-  color: var(--text-soft);
-}
-
 .review-settings-merge-option {
   min-height: 44px;
   padding: 8px 12px;
@@ -7174,7 +7082,7 @@ body.onboarding-modal-open {
   grid-area: profile;
 }
 
-.onboarding-modal input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]),
+.onboarding-modal input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]):not([type="range"]),
 .onboarding-modal textarea,
 .onboarding-modal select {
   width: 100%;
@@ -7428,14 +7336,6 @@ body.onboarding-modal-open {
   .settings-tab:hover span,
   .settings-tab:focus-visible span {
     max-width: 96px;
-  }
-
-  .review-settings-merge-options {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .review-settings-level-options {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .onboarding-profile-grid,
@@ -8712,3 +8612,97 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 .commit-signing-fields input[type="password"] { min-height: 42px; height: 42px; padding: 10px 12px; }
 .commit-signing-fields textarea { min-height: 88px; }
 .commit-signing-fields p { font-weight: 400; line-height: 1.45; }
+
+/* Settings design: selected options and review intensity follow the active theme. */
+.review-settings-automation { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.selectable-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 12px;
+  border: 1px solid var(--surface-control-border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.selectable-option svg { flex: none; stroke-width: 2; }
+.selectable-option:hover { color: var(--text); border-color: var(--running); }
+.selectable-option:has(input:checked) {
+  border-color: color-mix(in srgb, var(--running) 44%, var(--surface-control-border));
+  background: var(--surface-control-bg-strong);
+  color: var(--text);
+  box-shadow: var(--surface-control-shadow);
+}
+.selectable-option:has(input:checked) svg,
+.review-settings-merge-option[aria-checked="true"] svg { color: var(--running); }
+.selectable-option:has(input:focus-visible) { outline: 2px solid var(--running); outline-offset: 3px; }
+@media (max-width: 640px) {
+  .review-settings-automation { grid-template-columns: minmax(0, 1fr); }
+  .selectable-option { justify-content: flex-start; }
+}
+
+.review-slider { padding: 8px 10px 20px; }
+.review-slider-value { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; color: var(--text); font-size: 15px; }
+.review-slider svg { flex: none; stroke-width: 2; }
+.review-slider-value svg,
+.review-slider-stop[data-current="true"] svg { color: var(--running); }
+.review-slider input[type="range"] { display: block; width: 100%; height: 32px; margin: 0; accent-color: var(--running); cursor: pointer; }
+.review-slider-stops { display: flex; justify-content: space-between; margin: 8px 10px 0; }
+.review-slider-stop { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 0; color: var(--muted); }
+.review-slider-stop[data-current="true"] { color: var(--text); }
+
+
+.settings-icon-definitions { position: absolute; width: 0; height: 0; overflow: hidden; }
+.settings-header-slim { align-items: center; }
+.settings-header-slim #settings-title { display: flex; align-items: center; gap: 12px; }
+.settings-header-slim #settings-title svg { width: 30px; height: 30px; flex: none; }
+.settings-tab[aria-selected="true"] span { max-width: 200px; margin-left: 8px; opacity: 1; }
+.settings-tab:hover span, .settings-tab:focus-visible span { max-width: 200px; }
+.selectable-option:has(input:disabled) { opacity: .5; cursor: not-allowed; }
+.selectable-option:has(input:disabled):hover { color: var(--text-soft); border-color: var(--surface-control-border); }
+#custom-library-section:has(#review-settings-default-library:not(:checked)) .custom-library-fields { display: none; }
+.settings-shell #review-settings-status:empty { display: none; }
+#settings-panel-automation .selectable-option { margin: 0; }
+.settings-shell input[type="range"]:focus-visible { outline: 2px solid var(--running); outline-offset: 3px; }
+.settings-shell .selectable-option span { min-width: 0; }
+@media (max-width: 820px) {
+  .settings-tab:not([aria-selected="true"]):hover span,
+  .settings-tab:not([aria-selected="true"]):focus-visible span { max-width: 96px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-tab span, .review-settings-merge-slider-thumb { transition: none; }
+}
+
+.selectable-option svg, .review-slider svg {
+  width: 20px; height: 20px; fill: none; stroke: currentColor;
+  stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; flex: none;
+}
+/* Match the approved mock's spacing without importing its fixed dark colors. */
+.settings-shell { font: 600 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: .1px; }
+.settings-header-slim { min-height: 75px; padding: 13px 22px; }
+.settings-header-slim #settings-title { font-size: 30px; line-height: 1.2; font-weight: 750; }
+.settings-shell .review-settings-section { font-size: 14px; font-weight: 600; }
+.settings-shell .review-slider input[type="range"] {
+  min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none;
+}
+.settings-shell #custom-library-section { display: block; }
+.settings-shell .custom-library-fields > p:first-child { margin: 28px 0 14px; line-height: 20px; }
+.settings-shell .custom-library-fields .prompt-text { font-size: 14px; }
+#custom-library-status:empty { display: none; }
+#custom-library-list { margin-top: 56px; }
+#custom-library-list .library-schedule-row { align-items: flex-start; padding: 0 0 14px; }
+#custom-library-list .library-schedule-row:last-child { border-bottom: 0; }
+#custom-library-list .library-schedule-row + .library-schedule-row { padding-top: 14px; }
+.settings-shell .commit-signing-fields textarea { min-height: 88px; height: auto; }
+.settings-shell .commit-signing-fields p:empty { display: none; }
+.settings-shell input:focus-visible, .settings-shell textarea:focus-visible, .settings-shell button:focus-visible { outline-color: var(--running); }
+@media (max-width: 520px) {
+  .settings-shell { padding: 12px; }
+  .settings-header-slim { padding-inline: 16px; }
+  #custom-library-list { margin-top: 32px; }
+}
