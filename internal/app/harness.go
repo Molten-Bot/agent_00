@@ -669,6 +669,9 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 	}
 
 	h.logf("stage=git status=start action=commit repo=%s repo_dir=%s", repo.URL, repo.RelDir)
+	if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
+		return ExitGit, "git", err
+	}
 	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
 		return ExitGit, "git", err
 	}
@@ -1138,6 +1141,9 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		}
 
 		h.logf("stage=git status=start action=repair_commit attempt=%d repo=%s repo_dir=%s", attempt+1, repo.URL, repo.RelDir)
+		if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
+			return ExitGit, "git", err
+		}
 		if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
 			return ExitGit, "git", err
 		}
@@ -1445,6 +1451,9 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 	}
 
 	h.logf("stage=git status=start action=sync_base_commit repo=%s repo_dir=%s baseBranch=%s", repo.URL, repo.RelDir, baseBranch)
+	if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
+		return ExitGit, "git", err
+	}
 	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
 		return ExitGit, "git", err
 	}
@@ -1532,6 +1541,9 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 	}
 
 	h.logf("stage=git status=start action=sync_remote_branch_commit repo=%s repo_dir=%s branch=%s remote=%s", repo.URL, repo.RelDir, branch, remote)
+	if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
+		return ExitGit, "git", err
+	}
 	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
 		return ExitGit, "git", err
 	}
@@ -4651,6 +4663,8 @@ func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd exec
 		h.logf("cmd phase=%s name=%s stream=%s b64=%s", phase, cmd.Name, stream, encodeLogLine(line))
 	}
 
+	var res execx.Result
+	var err error
 	if streamRunner, ok := h.Runner.(execx.StreamRunner); ok {
 		var stdoutBuf strings.Builder
 		var stderrBuf strings.Builder
@@ -4665,15 +4679,55 @@ func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd exec
 				stderrBuf.WriteByte('\n')
 			}
 		}
-		res, err := streamRunner.RunStream(ctx, cmd, streamOnLine)
+		res, err = streamRunner.RunStream(ctx, cmd, streamOnLine)
 		res.Stdout = mergeStreamedOutput(res.Stdout, stdoutBuf.String())
 		res.Stderr = mergeStreamedOutput(res.Stderr, stderrBuf.String())
-		return res, err
+	} else {
+		res, err = h.Runner.Run(ctx, cmd)
+		emitBufferedOutput(res, onLine)
 	}
 
-	res, err := h.Runner.Run(ctx, cmd)
-	emitBufferedOutput(res, onLine)
+	if err != nil {
+		if diskErr := diskSpaceExhaustionError(cmd, res, err); diskErr != nil {
+			return res, diskErr
+		}
+	}
 	return res, err
+}
+
+// diskSpaceExhaustionError recognizes the handful of error phrases git emits
+// when the workspace filesystem fills up mid-run (shared tmpfs bases can fill
+// after the one-time startup check in workspace.CheckSpace passes) and turns
+// them into a diagnosis an operator can act on instead of a bare
+// "exit status 128" with git's low-level wording. Scoped to git: other
+// commands the harness runs (notably `gh`, which talks to GitHub's API) can
+// fail with their own quota/rate-limit wording that would otherwise be
+// mislabeled as local disk exhaustion.
+func diskSpaceExhaustionError(cmd execx.Command, res execx.Result, err error) error {
+	if cmd.Name != "git" {
+		return nil
+	}
+	detail := strings.ToLower(res.Stdout + "\n" + res.Stderr)
+	signatures := []string{
+		"no space left on device",
+		"out of diskspace",
+		"disk quota exceeded",
+		"enospc",
+	}
+	matched := false
+	for _, sig := range signatures {
+		if strings.Contains(detail, sig) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return nil
+	}
+	return fmt.Errorf(
+		"workspace storage ran out of space running %s %s in %s; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem or free up space: %w",
+		cmd.Name, strings.Join(cmd.Args, " "), cmd.Dir, err,
+	)
 }
 
 func (h Harness) runPRChecksWatch(ctx context.Context, repoDir, prURL string) (execx.Result, error) {
@@ -7261,6 +7315,22 @@ func hasAheadCommitsInStatus(stdout string) bool {
 
 func addCommand(repoDir string) execx.Command {
 	return gitCommand(repoDir, "add", "-A")
+}
+
+// ensureWorkspaceSpaceForCommit re-checks free space on repo.Dir's filesystem right
+// before staging changes. workspace.Manager.CheckSpace only runs once, when the run
+// directory is created; a shared tmpfs RAM base can still fill up later in a long
+// run (cloning, dependency installs, agent output) before `git add -A` walks the
+// whole worktree, so this catches that case with the same actionable message
+// instead of a bare git "write error" at commit time.
+func (h Harness) ensureWorkspaceSpaceForCommit(repo *repoWorkspace) error {
+	if h.Workspace.CheckSpace == nil {
+		return nil
+	}
+	if err := h.Workspace.CheckSpace(repo.Dir); err != nil {
+		return fmt.Errorf("workspace storage ran low before staging changes for repo %s: %w", repo.URL, err)
+	}
+	return nil
 }
 
 func addPRCommentScreenshotsCommand(repoDir string, files []string) execx.Command {
