@@ -2660,7 +2660,9 @@
         button.tabIndex = selected ? 0 : -1;
       });
       Object.entries(settingsTabPanels).forEach(([key, panel]) => {
-        if (panel) panel.hidden = key !== normalized;
+        if (!panel) return;
+        panel.hidden = key !== normalized;
+        panel.inert = key !== normalized;
       });
     }
 

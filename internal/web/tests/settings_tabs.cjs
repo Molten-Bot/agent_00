@@ -205,3 +205,34 @@ test('a failed initial read cannot overwrite saved settings with defaults', asyn
   await close(page);
   assert.equal(posts, 0);
 });
+
+for (const viewport of [{ width: 1280, height: 1100 }, { width: 430, height: 932 }, { width: 430, height: 500 }]) {
+  test(`settings keep their height and header position across tabs at ${viewport.width}×${viewport.height}`, async t => {
+    const { page } = await openSettings(t, { viewport });
+    const geometry = () => page.locator('.settings-shell').evaluate(node => {
+      const shell = node.getBoundingClientRect();
+      const header = node.querySelector('.settings-header-slim').getBoundingClientRect();
+      const tabs = node.querySelector('.settings-tabbar').getBoundingClientRect();
+      return { top: shell.top, height: shell.height, headerTop: header.top, tabsTop: tabs.top, bottom: shell.bottom };
+    });
+    const initial = await geometry();
+    assert.ok(initial.top >= 0 && initial.bottom <= viewport.height, 'dialog fits the screen');
+    for (const name of ['signing', 'automation', 'review', 'merge', 'library']) {
+      await select(page, name);
+      const current = await geometry();
+      for (const key of ['top', 'height', 'headerTop', 'tabsTop']) {
+        assert.ok(Math.abs(current[key] - initial[key]) < 1, `${name}: ${key} stays fixed`);
+      }
+      assert.equal(await page.locator('#review-settings-form [role=tabpanel][hidden]').evaluateAll(nodes => nodes.every(node => node.inert)), true);
+    }
+    await select(page, 'signing');
+    await page.locator('#commit-signing-enabled-help').scrollIntoViewIfNeeded();
+    const scrolled = await geometry();
+    assert.equal(scrolled.headerTop, initial.headerTop, 'scrolling long content keeps Close reachable');
+    assert.equal(scrolled.tabsTop, initial.tabsTop, 'scrolling long content keeps tabs reachable');
+    assert.ok(await page.locator('#commit-signing-section').evaluate(node => node.scrollTop > 0), 'long panels scroll internally');
+    await select(page, 'review');
+    assert.equal(await page.locator('#review-settings-slider').isVisible(), true);
+    await close(page);
+  });
+}

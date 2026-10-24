@@ -6786,6 +6786,9 @@ body.onboarding-modal-open {
 }
 
 .settings-tabbed-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
   border: 1px solid var(--surface-control-border);
   border-radius: var(--radius-card);
   background: var(--surface-control-bg);
@@ -6890,8 +6893,31 @@ body.onboarding-modal-open {
 .review-settings-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
   gap: 14px 16px;
   padding: 14px;
+}
+
+/* Overlap panels so the tallest sets the dialog size, independent of the active tab.
+   Inactive panels retain their layout but stay invisible and inert. Each panel
+   scrolls inside the viewport limit, keeping the header and tabs in place. */
+.settings-shell .review-settings-form > [role="tabpanel"] {
+  grid-area: 1 / 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.settings-shell .review-settings-form > [role="tabpanel"][hidden] {
+  display: grid !important;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.settings-shell #custom-library-section[hidden] {
+  display: block !important;
 }
 
 .settings-tabbed-panel .review-settings-section {
@@ -8683,7 +8709,18 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; flex: none;
 }
 /* Match the approved mock's spacing without importing its fixed dark colors. */
-.settings-shell { font: 600 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: .1px; }
+.settings-shell {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  max-height: min(880px, calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+  overflow: clip;
+  font: 600 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: .1px;
+}
+.settings-shell > .onboarding-modal-shell {
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
 .settings-header-slim { min-height: 75px; padding: 13px 22px; }
 .settings-header-slim #settings-title { font-size: 30px; line-height: 1.2; font-weight: 750; }
 .settings-shell .review-settings-section { font-size: 14px; font-weight: 600; }
