@@ -259,6 +259,7 @@ type Broker struct {
 	repoIndex     map[string]int
 	attempts      map[string][]taskAttemptState
 	attemptRoots  map[string]string
+	attemptSeq    uint64
 	rejectedSeq   uint64
 	subs          map[chan struct{}]struct{}
 
@@ -328,6 +329,7 @@ type taskAttemptState struct {
 	Error     string
 	StartedAt time.Time
 	UpdatedAt time.Time
+	Seq       uint64
 }
 
 // NewBroker returns a monitor state broker with safe defaults.
@@ -1629,19 +1631,31 @@ func (b *Broker) closeTaskLocked(requestID string) error {
 	return nil
 }
 
-// forgetTaskAttemptsLocked removes requestID's entire attempt chain (the
-// original run plus any reruns) so a deleted task is no longer counted in
-// dashboard metrics.
+// forgetTaskAttemptsLocked removes requestID's attempt chain (the original
+// run plus any reruns) so a deleted task is no longer counted in dashboard
+// metrics. A sibling attempt that is still live (queued/running/paused) is
+// kept so forgetting one attempt in a chain does not erase the bookkeeping
+// for a rerun that is still in flight.
 func (b *Broker) forgetTaskAttemptsLocked(requestID string) {
 	root := strings.TrimSpace(b.attemptRoots[requestID])
 	if root == "" {
 		root = requestID
 	}
-	for _, attempt := range b.attempts[root] {
+	attempts := b.attempts[root]
+	kept := make([]taskAttemptState, 0, len(attempts))
+	for _, attempt := range attempts {
+		if task, ok := b.tasks[attempt.RequestID]; ok && task != nil && isActiveTaskStatus(task.Status) {
+			kept = append(kept, attempt)
+			continue
+		}
 		delete(b.attemptRoots, attempt.RequestID)
 	}
-	delete(b.attemptRoots, root)
-	delete(b.attempts, root)
+	if len(kept) == 0 {
+		delete(b.attemptRoots, root)
+		delete(b.attempts, root)
+		return
+	}
+	b.attempts[root] = kept
 }
 
 func (b *Broker) pruneExpiredTasksLocked(now time.Time) {
@@ -1958,6 +1972,11 @@ func (b *Broker) collapseAttemptsByRootLocked(seen map[string]taskAttemptState) 
 	return collapsed
 }
 
+// attemptIsNewer reports whether candidate should replace current as the
+// representative attempt for a root. Ties on timestamp (for example when a
+// test clock does not advance between attempts) fall back to attempt append
+// order (Seq) instead of map iteration order, which Go does not guarantee to
+// be stable across runs.
 func attemptIsNewer(candidate, current taskAttemptState) bool {
 	candidateAt := candidate.UpdatedAt
 	if candidateAt.IsZero() {
@@ -1967,7 +1986,13 @@ func attemptIsNewer(candidate, current taskAttemptState) bool {
 	if currentAt.IsZero() {
 		currentAt = current.StartedAt
 	}
-	return candidateAt.After(currentAt)
+	if candidateAt.After(currentAt) {
+		return true
+	}
+	if candidateAt.Equal(currentAt) {
+		return candidate.Seq > current.Seq
+	}
+	return false
 }
 
 func (b *Broker) taskAttemptRootLocked(requestID string) string {
@@ -2042,6 +2067,7 @@ func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errTe
 		b.attempts[root] = attempts
 		return
 	}
+	b.attemptSeq++
 	b.attempts[root] = append(attempts, taskAttemptState{
 		RequestID: requestID,
 		RerunOf:   rerunOf,
@@ -2054,6 +2080,7 @@ func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errTe
 		Error:     errText,
 		StartedAt: now,
 		UpdatedAt: now,
+		Seq:       b.attemptSeq,
 	})
 }
 
