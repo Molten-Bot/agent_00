@@ -5337,19 +5337,29 @@
       };
     }
 
-    function clipboardPngFiles(event) {
-      return Array.from(event?.clipboardData?.items || [])
+    function capImageFiles(candidates, existingCount = 0) {
+      const room = Math.max(0, MAX_PROMPT_IMAGE_COUNT - existingCount);
+      const withinSize = (candidates || []).filter((file) => file && file.size <= MAX_PROMPT_IMAGE_BYTES);
+      const files = withinSize.slice(0, room);
+      return { files, droppedCount: (candidates || []).length - files.length };
+    }
+
+    function screenshotLimitMessage(droppedCount) {
+      const maxMB = MAX_PROMPT_IMAGE_BYTES / (1024 * 1024);
+      return `Skipped ${droppedCount} screenshot${droppedCount === 1 ? "" : "s"}: limit is ${MAX_PROMPT_IMAGE_COUNT} images up to ${maxMB}MB each.`;
+    }
+
+    function clipboardPngFiles(event, existingCount = 0) {
+      const candidates = Array.from(event?.clipboardData?.items || [])
         .filter((item) => item && item.kind === "file")
         .map((item) => item.getAsFile())
         .filter((file) => file && /^image\/png$/i.test(String(file.type || "")));
+      return capImageFiles(candidates, existingCount);
     }
 
     function pickedImageFiles(fileList, existingCount = 0) {
-      const room = Math.max(0, MAX_PROMPT_IMAGE_COUNT - existingCount);
-      return Array.from(fileList || [])
-        .filter((file) => file && /^image\//i.test(String(file.type || "")))
-        .filter((file) => file.size <= MAX_PROMPT_IMAGE_BYTES)
-        .slice(0, room);
+      const candidates = Array.from(fileList || []).filter((file) => file && /^image\//i.test(String(file.type || "")));
+      return capImageFiles(candidates, existingCount);
     }
 
     function promptImagesFromFiles(files, startIndex = 0) {
@@ -5371,19 +5381,24 @@
     }
 
     async function handlePromptImagePaste(event) {
-      const files = clipboardPngFiles(event);
-      if (!files.length) {
+      const { files, droppedCount } = clipboardPngFiles(event, state.promptImages.length);
+      if (!files.length && !droppedCount) {
         return;
       }
 
       event.preventDefault();
+      if (!files.length) {
+        setLocalPromptStatus("warn", screenshotLimitMessage(droppedCount));
+        return;
+      }
       try {
         const count = await appendPromptImages(files);
         trackAnalyticsEvent("prompt_screenshots_attached", {
           prompt_mode: state.promptMode,
           image_count: count,
         });
-        setLocalPromptStatus("ok", `Attached ${count} screenshot${count === 1 ? "" : "s"}.`);
+        const suffix = droppedCount > 0 ? ` ${screenshotLimitMessage(droppedCount)}` : "";
+        setLocalPromptStatus("ok", `Attached ${count} screenshot${count === 1 ? "" : "s"}.${suffix}`);
       } catch (err) {
         trackAnalyticsEvent("prompt_screenshots_failed", { prompt_mode: state.promptMode });
         setLocalPromptStatus("error", `Screenshot paste failed: ${err.message}`);
@@ -5394,15 +5409,21 @@
       if (builderImageFileInput) builderImageFileInput.click();
     }
 
-    async function handleBuilderImageFiles(files) {
-      if (!files.length) return;
+    async function handleBuilderImageFiles(files, droppedCount = 0) {
+      if (!files.length) {
+        if (droppedCount > 0) {
+          setLocalPromptStatus("warn", screenshotLimitMessage(droppedCount));
+        }
+        return;
+      }
       try {
         const count = await appendPromptImages(files);
         trackAnalyticsEvent("prompt_screenshots_attached", {
           prompt_mode: state.promptMode,
           image_count: count,
         });
-        setLocalPromptStatus("ok", `Attached ${count} screenshot${count === 1 ? "" : "s"}.`);
+        const suffix = droppedCount > 0 ? ` ${screenshotLimitMessage(droppedCount)}` : "";
+        setLocalPromptStatus("ok", `Attached ${count} screenshot${count === 1 ? "" : "s"}.${suffix}`);
       } catch (err) {
         trackAnalyticsEvent("prompt_screenshots_failed", { prompt_mode: state.promptMode });
         setLocalPromptStatus("error", `Screenshot add failed: ${err.message}`);
@@ -6800,8 +6821,15 @@
       const imageActions = document.createElement("span");
       imageActions.className = "chat-repo-image-actions";
 
-      const applyChatRepoImageFiles = async (files) => {
-        if (!files.length) return;
+      const applyChatRepoImageFiles = async (files, droppedCount = 0) => {
+        if (!files.length) {
+          if (droppedCount > 0) {
+            submitStatus.removeAttribute("title");
+            submitStatus.textContent = screenshotLimitMessage(droppedCount);
+            submitStatus.dataset.tone = "warn";
+          }
+          return;
+        }
         try {
           const next = await promptImagesFromFiles(files, promptImages.length);
           promptImages = normalizePromptImages([...promptImages, ...next]);
@@ -6810,8 +6838,9 @@
             image_count: next.length,
             repo_visibility: repo?.private ? "private" : "public",
           });
+          const suffix = droppedCount > 0 ? ` ${screenshotLimitMessage(droppedCount)}` : "";
           submitStatus.removeAttribute("title");
-          submitStatus.textContent = `Attached ${next.length} screenshot${next.length === 1 ? "" : "s"}.`;
+          submitStatus.textContent = `Attached ${next.length} screenshot${next.length === 1 ? "" : "s"}.${suffix}`;
           submitStatus.dataset.tone = "ok";
         } catch (err) {
           trackAnalyticsEvent("chat_repo_screenshots_failed", { repo_visibility: repo?.private ? "private" : "public" });
@@ -6822,18 +6851,18 @@
       };
 
       const handleChatRepoImagePaste = async (event) => {
-        const files = clipboardPngFiles(event);
-        if (!files.length) return;
+        const { files, droppedCount } = clipboardPngFiles(event, promptImages.length);
+        if (!files.length && !droppedCount) return;
         event.preventDefault();
         event.stopPropagation();
-        await applyChatRepoImageFiles(files);
+        await applyChatRepoImageFiles(files, droppedCount);
       };
 
       imageFileInput.addEventListener("click", (event) => event.stopPropagation());
       imageFileInput.addEventListener("change", async () => {
-        const files = pickedImageFiles(imageFileInput.files, promptImages.length);
+        const { files, droppedCount } = pickedImageFiles(imageFileInput.files, promptImages.length);
         imageFileInput.value = "";
-        await applyChatRepoImageFiles(files);
+        await applyChatRepoImageFiles(files, droppedCount);
       });
 
       prompt.addEventListener("keydown", (event) => {
@@ -12675,9 +12704,9 @@
     });
     if (builderImageFileInput) {
       builderImageFileInput.addEventListener("change", async () => {
-        const files = pickedImageFiles(builderImageFileInput.files, state.promptImages.length);
+        const { files, droppedCount } = pickedImageFiles(builderImageFileInput.files, state.promptImages.length);
         builderImageFileInput.value = "";
-        await handleBuilderImageFiles(files);
+        await handleBuilderImageFiles(files, droppedCount);
       });
     }
     builderImagesClear.addEventListener("click", clearBuilderPromptDraft);

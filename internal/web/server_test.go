@@ -2115,7 +2115,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "function handlePromptImagePaste(") {
 		t.Fatalf("expected index html to include screenshot paste handler")
 	}
-	if !strings.Contains(markup, "function clipboardPngFiles(event)") ||
+	if !strings.Contains(markup, "function clipboardPngFiles(event, existingCount = 0)") ||
 		!strings.Contains(markup, "prompt.addEventListener(\"paste\", handleChatRepoImagePaste);") ||
 		!strings.Contains(markup, `chatIcon.className = "chat-repo-card-chat-icon";`) ||
 		!strings.Contains(markup, "chatIcon.innerHTML = `<i data-lucide=\"${hasPendingRelease ? \"lightbulb\" : \"message-circle\"}\" aria-hidden=\"true\"></i>`;") ||
