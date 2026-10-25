@@ -2482,6 +2482,7 @@ func currentReviewSettingsState(cfg localruntime.InitConfig) web.ReviewSettingsS
 		MergeMethod:           activeCfg.ReviewWatch.MergeMethod,
 		ReviewLevel:           activeCfg.ReviewWatch.ReviewLevel,
 		DefaultLibraryEnabled: localruntime.ReadRuntimeConfigDefaultLibraryEnabled(cfg.RuntimeConfigPath),
+		ChatEnabled:           localruntime.ReadRuntimeConfigChatEnabled(cfg.RuntimeConfigPath),
 	}
 }
 
@@ -2509,7 +2510,7 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		MergeMethod:          method,
 		ReviewLevel:          reviewLevel,
 	}
-	if err := localruntime.SaveRuntimeConfigReviewAndDefaultLibrarySettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled); err != nil {
+	if err := localruntime.SaveRuntimeConfigReviewAndDefaultLibrarySettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled); err != nil {
 		state := currentReviewSettingsState(cfg)
 		return state, err
 	}

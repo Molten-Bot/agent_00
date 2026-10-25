@@ -790,6 +790,11 @@
               <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="git-branch-minus"><path d="M15 6a9 9 0 0 0-9 9V3"/><path d="M21 18h-6"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></svg>
               <span>Delete merged branches</span>
             </label>
+            <label class="selectable-option">
+              <input class="sr-only" id="review-settings-chat-enabled" type="checkbox" checked>
+              <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="message-circle"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/></svg>
+              <span>Chat (experimental)</span>
+            </label>
           </fieldset>
           <div id="settings-panel-review" class="review-settings-section review-settings-level" role="tabpanel" aria-labelledby="settings-tab-review" hidden>
             <input id="review-settings-level" type="hidden" value="off">
@@ -1544,12 +1549,14 @@
       const method = String(settings.merge_method || settings.mergeMethod || "squash").trim().toLowerCase();
       const level = String(settings.review_level || settings.reviewLevel || "off").trim().toLowerCase();
       const defaultLibraryRaw = settings.default_library_enabled ?? settings.defaultLibraryEnabled;
+      const chatEnabledRaw = settings.chat_enabled ?? settings.chatEnabled;
       return {
         autoMerge: Boolean(settings.auto_merge || settings.autoMerge),
         deleteMergedBranches: Boolean(settings.delete_merged_branches || settings.deleteMergedBranches),
         mergeMethod: ["merge", "squash", "rebase"].includes(method) ? method : "squash",
         reviewLevel: ["off", "low", "medium", "high"].includes(level) ? level : "off",
         defaultLibraryEnabled: defaultLibraryRaw === undefined ? true : Boolean(defaultLibraryRaw),
+        chatEnabled: chatEnabledRaw === undefined ? true : Boolean(chatEnabledRaw),
         message: String(settings.message || "").trim(),
       };
     }
@@ -2042,6 +2049,7 @@
     const reviewSettingsAutoMerge = document.getElementById("review-settings-auto-merge");
     const reviewSettingsDeleteMergedBranches = document.getElementById("review-settings-delete-merged-branches");
     const reviewSettingsDefaultLibrary = document.getElementById("review-settings-default-library");
+    const reviewSettingsChatEnabled = document.getElementById("review-settings-chat-enabled");
     const reviewSettingsMergeMethod = document.getElementById("review-settings-merge-method");
     const reviewSettingsMergeOptions = Array.from(document.querySelectorAll("[data-review-settings-merge-method]"));
     const reviewSettingsMergeSliderThumb = document.querySelector(".review-settings-merge-slider-thumb");
@@ -2115,11 +2123,16 @@
       githubProfileLink.href = normalized;
     }
 
+    function chatFeatureEnabled() {
+      return state.reviewSettings?.chatEnabled !== false;
+    }
+
     function syncChatDockLinkAvailability() {
       if (!chatDockLink) {
         return;
       }
-      const available = Boolean(state.githubReposReady);
+      const chatEnabled = chatFeatureEnabled();
+      const available = chatEnabled && Boolean(state.githubReposReady);
       chatDockLink.classList.toggle("is-disabled", !available);
       chatDockLink.setAttribute("aria-disabled", String(!available));
       chatDockLink.tabIndex = available ? 0 : -1;
@@ -2128,7 +2141,9 @@
       } else {
         chatDockLink.removeAttribute("href");
       }
-      chatDockLink.title = available ? "Chat" : (state.githubReposLoadError || "Chat unavailable until repositories load");
+      chatDockLink.title = !chatEnabled
+        ? "Chat is turned off in Settings → Automation"
+        : (available ? "Chat" : (state.githubReposLoadError || "Chat unavailable until repositories load"));
     }
 
     function dashboardHasStartedTask(snapshot) {
@@ -2700,6 +2715,13 @@
       if (reviewSettingsDefaultLibrary instanceof HTMLInputElement) {
         reviewSettingsDefaultLibrary.checked = state.reviewSettings.defaultLibraryEnabled;
       }
+      if (reviewSettingsChatEnabled instanceof HTMLInputElement) {
+        reviewSettingsChatEnabled.checked = state.reviewSettings.chatEnabled;
+      }
+      syncChatDockLinkAvailability();
+      if (!state.reviewSettings.chatEnabled && state.appDisplay === "chat") {
+        setAppDisplay("studio");
+      }
       setReviewSettingsMergeMethod(state.reviewSettings.mergeMethod);
       setReviewSettingsLevel(state.reviewSettings.reviewLevel);
       if (state.reviewSettings.message) {
@@ -2756,6 +2778,7 @@
         merge_method: String(reviewSettingsMergeMethod?.value || "squash").trim().toLowerCase() || "squash",
         review_level: String(reviewSettingsLevel?.value || "off").trim().toLowerCase() || "off",
         default_library_enabled: reviewSettingsDefaultLibrary instanceof HTMLInputElement ? reviewSettingsDefaultLibrary.checked : true,
+        chat_enabled: reviewSettingsChatEnabled instanceof HTMLInputElement ? reviewSettingsChatEnabled.checked : true,
       };
     }
 
@@ -2794,6 +2817,7 @@
           merge_method: payload.merge_method,
           review_level: payload.review_level,
           default_library_enabled: payload.default_library_enabled,
+          chat_enabled: payload.chat_enabled,
         });
         setSettingsOpen(false);
       } catch (err) {
@@ -8209,6 +8233,9 @@
       if (mode === "work" && !taskViewAvailable(state.snapshot)) {
         mode = "studio";
       }
+      if (mode === "chat" && !chatFeatureEnabled()) {
+        mode = "studio";
+      }
       if (mode === "chat" && !state.githubReposReady) {
         void loadGitHubReposForChat().then(() => {
           if (state.githubReposReady && appDisplayFromHash() === "chat") {
@@ -12741,7 +12768,7 @@
       window.CommitSigningSettings?.setModalBusy(Boolean(busy));
       reviewSettingsClose.disabled = Boolean(busy);
       for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches,
-        reviewSettingsDefaultLibrary, reviewSettingsSlider, ...reviewSettingsMergeOptions]) {
+        reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsSlider, ...reviewSettingsMergeOptions]) {
         if (control) control.disabled = Boolean(busy) || !state.settingsLoaded;
       }
       reviewSettingsForm.setAttribute("aria-busy", String(Boolean(busy)));
@@ -12758,9 +12785,16 @@
     if (reviewSettingsForm) {
       reviewSettingsForm.addEventListener("submit", submitReviewSettings);
     }
-    for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches, reviewSettingsDefaultLibrary]) {
+    for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches, reviewSettingsDefaultLibrary, reviewSettingsChatEnabled]) {
       control.addEventListener("change", () => setReviewSettingsStatus("", "Changes will be saved on close."));
     }
+    reviewSettingsChatEnabled?.addEventListener("change", () => {
+      state.reviewSettings = { ...state.reviewSettings, chatEnabled: Boolean(reviewSettingsChatEnabled.checked) };
+      syncChatDockLinkAvailability();
+      if (!state.reviewSettings.chatEnabled && state.appDisplay === "chat") {
+        setAppDisplay("studio");
+      }
+    });
     reviewSettingsMergeOptions.forEach((button) => {
       button.addEventListener("click", () => {
         setReviewSettingsMergeMethod(button.getAttribute("data-review-settings-merge-method"));

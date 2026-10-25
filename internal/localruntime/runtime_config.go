@@ -140,17 +140,19 @@ func SaveRuntimeConfigAgentRuntime(path string, initCfg InitConfig, harness, com
 }
 
 // SaveRuntimeConfigReviewAndDefaultLibrarySettings persists review automation
-// settings and the default-library-enabled flag in a single load/modify/write
-// cycle so a mid-save failure cannot leave one setting persisted without the
-// other. defaultLibraryEnabled is a pointer so callers that are not changing
-// the setting can pass nil; the current persisted value is then read from the
-// freshly loaded doc inside the same locked critical section, avoiding a
-// lost-update race with a concurrent save.
+// settings, the default-library-enabled flag, and the chat-enabled flag in a
+// single load/modify/write cycle so a mid-save failure cannot leave one
+// setting persisted without the others. defaultLibraryEnabled and chatEnabled
+// are pointers so callers that are not changing a given setting can pass nil;
+// the current persisted value is then read from the freshly loaded doc inside
+// the same locked critical section, avoiding a lost-update race with a
+// concurrent save.
 func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 	path string,
 	initCfg InitConfig,
 	reviewCfg ReviewWatchConfig,
 	defaultLibraryEnabled *bool,
+	chatEnabled *bool,
 ) error {
 	runtimeConfigMu.Lock()
 	defer runtimeConfigMu.Unlock()
@@ -171,6 +173,13 @@ func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 		enabled = *defaultLibraryEnabled
 	}
 	applyDefaultLibraryEnabledToDoc(doc, enabled)
+
+	chatEnabledValue := chatEnabledFromDoc(doc)
+	if chatEnabled != nil {
+		chatEnabledValue = *chatEnabled
+	}
+	applyChatEnabledToDoc(doc, chatEnabledValue)
+
 	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
 
 	return writeRuntimeConfigDoc(path, doc)
@@ -293,6 +302,40 @@ func ReadRuntimeConfigDefaultLibraryEnabled(path string) bool {
 // unset.
 func defaultLibraryEnabledFromDoc(doc map[string]any) bool {
 	enabled, ok := doc["default_library_enabled"].(bool)
+	if !ok {
+		return true
+	}
+	return enabled
+}
+
+func applyChatEnabledToDoc(doc map[string]any, enabled bool) {
+	if enabled {
+		delete(doc, "chat_enabled")
+	} else {
+		doc["chat_enabled"] = false
+	}
+}
+
+// ReadRuntimeConfigChatEnabled returns the persisted chat-interface setting,
+// defaulting to true (enabled) when unset or unreadable. The chat interface
+// is experimental and can be turned off from settings.
+func ReadRuntimeConfigChatEnabled(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return true
+	}
+
+	doc, err := readRuntimeConfigDoc(path)
+	if err != nil {
+		return true
+	}
+	return chatEnabledFromDoc(doc)
+}
+
+// chatEnabledFromDoc returns the chat-enabled setting from an already-loaded
+// runtime config doc, defaulting to true (enabled) when unset.
+func chatEnabledFromDoc(doc map[string]any) bool {
+	enabled, ok := doc["chat_enabled"].(bool)
 	if !ok {
 		return true
 	}

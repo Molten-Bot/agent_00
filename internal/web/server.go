@@ -171,6 +171,7 @@ type ReviewSettingsState struct {
 	MergeMethod           string `json:"merge_method"`
 	ReviewLevel           string `json:"review_level"`
 	DefaultLibraryEnabled bool   `json:"default_library_enabled"`
+	ChatEnabled           bool   `json:"chat_enabled"`
 	Message               string `json:"message,omitempty"`
 }
 
@@ -182,6 +183,8 @@ type ReviewSettingsRequest struct {
 	// DefaultLibraryEnabled is a pointer so a POST body that omits the field
 	// is distinguishable from an explicit false (the bool zero value).
 	DefaultLibraryEnabled *bool `json:"default_library_enabled,omitempty"`
+	// ChatEnabled is a pointer for the same reason as DefaultLibraryEnabled.
+	ChatEnabled *bool `json:"chat_enabled,omitempty"`
 }
 
 // NewServer returns a monitor HTTP server.
@@ -1475,7 +1478,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		state := ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true}
+		state := ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true, ChatEnabled: true}
 		if s.ReviewSettingsStatus != nil {
 			next, err := s.ReviewSettingsStatus(r.Context())
 			if strings.TrimSpace(next.MergeMethod) == "" {
@@ -1503,7 +1506,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotImplemented, map[string]any{
 				"ok":       false,
 				"error":    "review settings are unavailable",
-				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true},
+				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true, ChatEnabled: true},
 			})
 			return
 		}
@@ -1512,7 +1515,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"ok":       false,
 				"error":    fmt.Sprintf("read request body: %v", err),
-				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true},
+				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true, ChatEnabled: true},
 			})
 			return
 		}
@@ -1521,7 +1524,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"ok":       false,
 				"error":    fmt.Sprintf("decode request body: %v", err),
-				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true},
+				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true, ChatEnabled: true},
 			})
 			return
 		}

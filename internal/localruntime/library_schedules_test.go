@@ -53,7 +53,7 @@ func TestLibrarySchedulesIdentityAndPersistence(t *testing.T) {
 	if err := IncrementRuntimeConfigLibraryTaskUsage(s.Path, s.Init, "unit-test-coverage"); err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveRuntimeConfigReviewAndDefaultLibrarySettings(s.Path, s.Init, ReviewWatchConfig{ReviewLevel: "low"}, nil); err != nil {
+	if err := SaveRuntimeConfigReviewAndDefaultLibrarySettings(s.Path, s.Init, ReviewWatchConfig{ReviewLevel: "low"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	entries, err = restarted.List()
