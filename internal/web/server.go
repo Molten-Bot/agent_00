@@ -2419,7 +2419,7 @@ func (s Server) handleTaskClose(w http.ResponseWriter, r *http.Request, requestI
 		return
 	}
 
-	if err := s.Broker.CloseTask(requestID); err != nil {
+	if err := s.Broker.ForgetTask(requestID); err != nil {
 		switch {
 		case errors.Is(err, ErrTaskNotFound):
 			writeJSON(w, http.StatusNotFound, map[string]any{

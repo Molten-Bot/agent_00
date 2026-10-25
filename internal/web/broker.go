@@ -813,6 +813,7 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 			seen[requestID] = attempt
 		}
 	}
+	seen = b.collapseAttemptsByRootLocked(seen)
 	if active > b.maxConcurrentTasks {
 		b.maxConcurrentTasks = active
 	}
@@ -1585,6 +1586,36 @@ func (b *Broker) CloseTask(requestID string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if err := b.closeTaskLocked(requestID); err != nil {
+		return err
+	}
+	b.notifySubscribersLocked()
+	return nil
+}
+
+// ForgetTask closes a terminal task like CloseTask, and also drops its attempt
+// history so a deleted task stops contributing to dashboard metrics.
+func (b *Broker) ForgetTask(requestID string) error {
+	if b == nil {
+		return ErrTaskNotFound
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return ErrTaskNotFound
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if err := b.closeTaskLocked(requestID); err != nil {
+		return err
+	}
+	b.forgetTaskAttemptsLocked(requestID)
+	b.notifySubscribersLocked()
+	return nil
+}
+
+func (b *Broker) closeTaskLocked(requestID string) error {
 	task, ok := b.tasks[requestID]
 	if !ok {
 		return ErrTaskNotFound
@@ -1595,8 +1626,22 @@ func (b *Broker) CloseTask(requestID string) error {
 
 	delete(b.tasks, requestID)
 	b.closedTasks[requestID] = b.now().UTC()
-	b.notifySubscribersLocked()
 	return nil
+}
+
+// forgetTaskAttemptsLocked removes requestID's entire attempt chain (the
+// original run plus any reruns) so a deleted task is no longer counted in
+// dashboard metrics.
+func (b *Broker) forgetTaskAttemptsLocked(requestID string) {
+	root := strings.TrimSpace(b.attemptRoots[requestID])
+	if root == "" {
+		root = requestID
+	}
+	for _, attempt := range b.attempts[root] {
+		delete(b.attemptRoots, attempt.RequestID)
+	}
+	delete(b.attemptRoots, root)
+	delete(b.attempts, root)
 }
 
 func (b *Broker) pruneExpiredTasksLocked(now time.Time) {
@@ -1893,6 +1938,36 @@ func isDuplicateTaskLifecycleLine(fields map[string]string) bool {
 
 func (b *Broker) appendTaskLogLocked(t *taskState, line TaskLog) {
 	t.Logs = appendCappedTaskLog(t.Logs, b.maxTaskLog, line)
+}
+
+// collapseAttemptsByRootLocked reduces one or more attempts for the same root
+// task (an original run plus any reruns after a failure) down to a single
+// entry so dashboard metrics track the running/final state once per task
+// instead of counting every restarted attempt separately.
+func (b *Broker) collapseAttemptsByRootLocked(seen map[string]taskAttemptState) map[string]taskAttemptState {
+	collapsed := make(map[string]taskAttemptState, len(seen))
+	for requestID, attempt := range seen {
+		root := strings.TrimSpace(b.attemptRoots[requestID])
+		if root == "" {
+			root = requestID
+		}
+		if current, ok := collapsed[root]; !ok || attemptIsNewer(attempt, current) {
+			collapsed[root] = attempt
+		}
+	}
+	return collapsed
+}
+
+func attemptIsNewer(candidate, current taskAttemptState) bool {
+	candidateAt := candidate.UpdatedAt
+	if candidateAt.IsZero() {
+		candidateAt = candidate.StartedAt
+	}
+	currentAt := current.UpdatedAt
+	if currentAt.IsZero() {
+		currentAt = current.StartedAt
+	}
+	return candidateAt.After(currentAt)
 }
 
 func (b *Broker) taskAttemptRootLocked(requestID string) string {
