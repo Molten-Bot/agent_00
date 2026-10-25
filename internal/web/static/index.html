@@ -317,13 +317,19 @@
                     id="builder-image-paste-target"
                     class="prompt-control prompt-action-paste"
                     role="button"
-                    tabindex="0">Paste screenshots.</div>
+                    tabindex="0">Paste or click to add screenshots.</div>
+                  <input
+                    id="builder-image-file-input"
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    class="hidden" />
                 </div>
                 <span
                   id="local-prompt-status"
                   class="submit-status submit-status-inline is-visible"
-                  data-default-text="Prompt with plain language, paste screenshots directly into the prompt when visual context matters."
-                  aria-live="polite">Prompt with plain language, paste screenshots directly into the prompt when visual context matters.</span>
+                  data-default-text="Prompt with plain language, paste or click to add screenshots when visual context matters."
+                  aria-live="polite">Prompt with plain language, paste or click to add screenshots when visual context matters.</span>
                 <div class="prompt-actions-end">
                   <button
                     id="prompt-speech-toggle"
@@ -2013,6 +2019,7 @@
     const builderPromptInput = document.getElementById("builder-prompt-input");
     const builderImagePasteTarget = document.getElementById("builder-image-paste-target");
     const builderImagePasteTargetWrap = builderImagePasteTarget ? builderImagePasteTarget.parentElement : null;
+    const builderImageFileInput = document.getElementById("builder-image-file-input");
     const builderImagesClear = document.getElementById("builder-images-clear");
     const libraryRepoSelect = document.getElementById("library-repo-select");
     const libraryRepoDelete = document.getElementById("library-repo-delete");
@@ -4750,7 +4757,7 @@
         .map((image, index) => promptImageName(image, index))
         .filter((name) => name !== "");
       if (!names.length) {
-        return "Paste screenshots.";
+        return "Paste or click to add screenshots.";
       }
       return names.join(" | ");
     }
@@ -4762,8 +4769,8 @@
       const imageCount = state.promptImages.length;
       const pasteWidth = Math.min(50, 25 + Math.max(0, imageCount-1) * 6.25);
       builderImagePasteTarget.textContent = summary;
-      builderImagePasteTarget.title = hasImages ? summary : "Paste screenshots.";
-      builderImagePasteTarget.setAttribute("aria-label", hasImages ? `Attached screenshots: ${summary}` : "Paste screenshots.");
+      builderImagePasteTarget.title = hasImages ? summary : "Paste or click to add screenshots.";
+      builderImagePasteTarget.setAttribute("aria-label", hasImages ? `Attached screenshots: ${summary}` : "Paste or click to add screenshots.");
       builderImagePasteTarget.dataset.empty = hasImages ? "false" : "true";
       if (builderImagePasteTargetWrap) {
         builderImagePasteTargetWrap.style.setProperty("--prompt-paste-width", `${pasteWidth}%`);
@@ -5335,6 +5342,10 @@
         .filter((file) => file && /^image\/png$/i.test(String(file.type || "")));
     }
 
+    function pickedImageFiles(fileList) {
+      return Array.from(fileList || []).filter((file) => file && /^image\//i.test(String(file.type || "")));
+    }
+
     function promptImagesFromFiles(files, startIndex = 0) {
       return Promise.all((files || []).map((file, index) => promptImageFromFile(file, startIndex + index)));
     }
@@ -5373,14 +5384,33 @@
       }
     }
 
+    function openBuilderImagePicker() {
+      if (builderImageFileInput) builderImageFileInput.click();
+    }
+
+    async function handleBuilderImageFiles(files) {
+      if (!files.length) return;
+      try {
+        const count = await appendPromptImages(files);
+        trackAnalyticsEvent("prompt_screenshots_attached", {
+          prompt_mode: state.promptMode,
+          image_count: count,
+        });
+        setLocalPromptStatus("ok", `Attached ${count} screenshot${count === 1 ? "" : "s"}.`);
+      } catch (err) {
+        trackAnalyticsEvent("prompt_screenshots_failed", { prompt_mode: state.promptMode });
+        setLocalPromptStatus("error", `Screenshot add failed: ${err.message}`);
+      }
+    }
+
     function renderChatRepoImages(target, images) {
       if (!target) return;
       const normalized = normalizePromptImages(images);
       const summary = promptImageSummary(normalized);
       const hasImages = normalized.length > 0;
       target.textContent = summary;
-      target.title = hasImages ? summary : "Paste screenshots.";
-      target.setAttribute("aria-label", hasImages ? `Attached screenshots: ${summary}` : "Paste screenshots.");
+      target.title = hasImages ? summary : "Paste or click to add screenshots.";
+      target.setAttribute("aria-label", hasImages ? `Attached screenshots: ${summary}` : "Paste or click to add screenshots.");
       target.dataset.empty = hasImages ? "false" : "true";
     }
 
@@ -6750,6 +6780,12 @@
       pasteTarget.tabIndex = 0;
       renderChatRepoImages(pasteTarget, promptImages);
 
+      const imageFileInput = document.createElement("input");
+      imageFileInput.type = "file";
+      imageFileInput.accept = "image/*";
+      imageFileInput.multiple = true;
+      imageFileInput.className = "hidden";
+
       const submitStatus = document.createElement("span");
       submitStatus.className = "chat-repo-submit-status";
       submitStatus.setAttribute("aria-live", "polite");
@@ -6758,11 +6794,8 @@
       const imageActions = document.createElement("span");
       imageActions.className = "chat-repo-image-actions";
 
-      const handleChatRepoImagePaste = async (event) => {
-        const files = clipboardPngFiles(event);
+      const applyChatRepoImageFiles = async (files) => {
         if (!files.length) return;
-        event.preventDefault();
-        event.stopPropagation();
         try {
           const next = await promptImagesFromFiles(files, promptImages.length);
           promptImages = normalizePromptImages([...promptImages, ...next]);
@@ -6777,10 +6810,25 @@
         } catch (err) {
           trackAnalyticsEvent("chat_repo_screenshots_failed", { repo_visibility: repo?.private ? "private" : "public" });
           submitStatus.removeAttribute("title");
-          submitStatus.textContent = `Screenshot paste failed: ${err.message}`;
+          submitStatus.textContent = `Screenshot add failed: ${err.message}`;
           submitStatus.dataset.tone = "error";
         }
       };
+
+      const handleChatRepoImagePaste = async (event) => {
+        const files = clipboardPngFiles(event);
+        if (!files.length) return;
+        event.preventDefault();
+        event.stopPropagation();
+        await applyChatRepoImageFiles(files);
+      };
+
+      imageFileInput.addEventListener("click", (event) => event.stopPropagation());
+      imageFileInput.addEventListener("change", async () => {
+        const files = pickedImageFiles(imageFileInput.files);
+        imageFileInput.value = "";
+        await applyChatRepoImageFiles(files);
+      });
 
       prompt.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" || event.shiftKey) return;
@@ -6839,11 +6887,18 @@
       pasteTarget.addEventListener("click", (event) => {
         event.stopPropagation();
         pasteTarget.focus();
+        imageFileInput.click();
+      });
+      pasteTarget.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        event.stopPropagation();
+        imageFileInput.click();
       });
       pasteTarget.addEventListener("pointerdown", (event) => {
         event.stopPropagation();
       });
-      imageActions.append(pasteTarget, submitStatus, speechToggle);
+      imageActions.append(pasteTarget, imageFileInput, submitStatus, speechToggle);
       panel.append(promptLog, promptWrap, imageActions);
       card.appendChild(panel);
       syncSpeechToggleButton(
@@ -12606,6 +12661,19 @@
     });
     builderPromptInput.addEventListener("paste", handlePromptImagePaste);
     builderImagePasteTarget.addEventListener("paste", handlePromptImagePaste);
+    builderImagePasteTarget.addEventListener("click", openBuilderImagePicker);
+    builderImagePasteTarget.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openBuilderImagePicker();
+    });
+    if (builderImageFileInput) {
+      builderImageFileInput.addEventListener("change", async () => {
+        const files = pickedImageFiles(builderImageFileInput.files);
+        builderImageFileInput.value = "";
+        await handleBuilderImageFiles(files);
+      });
+    }
     builderImagesClear.addEventListener("click", clearBuilderPromptDraft);
     localPromptInput.addEventListener("input", () => handlePromptTextInput(localPromptInput));
     watchPromptTextareaManualResize(localPromptInput);

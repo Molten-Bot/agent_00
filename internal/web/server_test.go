@@ -1752,11 +1752,20 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `class="prompt-control prompt-action-paste"`) {
 		t.Fatalf("expected index html to render screenshot paste target in the action row style")
 	}
-	if !strings.Contains(markup, ">Paste screenshots.<") {
+	if !strings.Contains(markup, ">Paste or click to add screenshots.<") {
 		t.Fatalf("expected index html to render concise screenshot paste copy")
 	}
 	if strings.Contains(markup, ">Paste screenshots here.<") {
 		t.Fatalf("expected index html to remove old screenshot paste copy")
+	}
+	if !strings.Contains(markup, `id="builder-image-file-input"`) {
+		t.Fatalf("expected index html to include a hidden file input for click-to-add screenshots")
+	}
+	if !strings.Contains(markup, `type="file"`) || !strings.Contains(markup, `accept="image/*"`) {
+		t.Fatalf("expected index html file input to accept image files for screenshot upload")
+	}
+	if !strings.Contains(markup, `builderImagePasteTarget.addEventListener("click", openBuilderImagePicker)`) {
+		t.Fatalf("expected index script to open the file picker when the screenshot control is clicked")
 	}
 	if !strings.Contains(markup, `function promptImageSummary(images)`) {
 		t.Fatalf("expected index html to summarize screenshot names inline in the prompt action row")
@@ -2115,8 +2124,13 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `card.setAttribute("aria-expanded", "true");`) ||
 		!strings.Contains(markup, "pasteTarget.className = \"prompt-control prompt-action-paste chat-repo-image-paste\"") ||
 		!strings.Contains(markup, "imageActions.className = \"chat-repo-image-actions\"") ||
-		!strings.Contains(markup, "imageActions.append(pasteTarget, submitStatus, speechToggle);") {
+		!strings.Contains(markup, "imageActions.append(pasteTarget, imageFileInput, submitStatus, speechToggle);") {
 		t.Fatalf("expected chat repository prompts to open from card/icon and accept pasted screenshots")
+	}
+	if !strings.Contains(markup, `imageFileInput.type = "file";`) ||
+		!strings.Contains(markup, `imageFileInput.accept = "image/*";`) ||
+		!strings.Contains(markup, "imageFileInput.click();") {
+		t.Fatalf("expected chat repository prompts to open a file picker for click-to-add screenshots")
 	}
 	if !strings.Contains(markup, "images: promptImages,") ||
 		!strings.Contains(markup, "setImages([]);") {
