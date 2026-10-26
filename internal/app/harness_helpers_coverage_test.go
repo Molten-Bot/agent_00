@@ -191,6 +191,9 @@ func TestHarnessRuntimeAndCheckSnapshotHelpers(t *testing.T) {
 	if !isRequiredStatusChecksNotConfigured(execx.Result{Stderr: "HTTP 404: Branch not protected"}, errors.New("not found")) {
 		t.Fatal("isRequiredStatusChecksNotConfigured(branch not protected) = false, want true")
 	}
+	if !isRequiredStatusChecksNotConfigured(execx.Result{Stderr: "gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)"}, errors.New("exit status 1")) {
+		t.Fatal("isRequiredStatusChecksNotConfigured(github pro required) = false, want true")
+	}
 	if got := requiredStatusChecksRepo(repoWorkspace{URL: "git@github.com:acme/repo.git"}); got != "acme/repo" {
 		t.Fatalf("requiredStatusChecksRepo(url) = %q, want acme/repo", got)
 	}

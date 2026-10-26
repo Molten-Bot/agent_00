@@ -8239,7 +8239,8 @@ func isRequiredStatusChecksNotConfigured(res execx.Result, err error) bool {
 	text := strings.ToLower(strings.Join([]string{res.Stdout, res.Stderr, err.Error()}, "\n"))
 	if strings.Contains(text, "branch not protected") ||
 		strings.Contains(text, "required status checks are not enabled") ||
-		strings.Contains(text, "required_status_checks not found") {
+		strings.Contains(text, "required_status_checks not found") ||
+		strings.Contains(text, "upgrade to github pro") {
 		return true
 	}
 	return strings.Contains(text, "http 404") && strings.Contains(text, "required_status_checks")
