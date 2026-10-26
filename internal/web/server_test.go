@@ -946,8 +946,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "taskPanelTitle.textContent = \"Current Work\";") || !strings.Contains(markup, "taskFullscreenPanelTitle.textContent = \"Current Work\";") {
 		t.Fatalf("expected index html to keep task panel labels anchored to Current Work across view states")
 	}
-	if !strings.Contains(markup, `<html lang="en" class="light">`) {
-		t.Fatalf("expected index html to default to light theme class")
+	if !strings.Contains(markup, `<html lang="en" class="dark">`) {
+		t.Fatalf("expected index html to default to dark theme class")
 	}
 	if strings.Contains(markup, `max-w-[1500px]`) {
 		t.Fatalf("expected index page width to be owned by the global app stylesheet")
