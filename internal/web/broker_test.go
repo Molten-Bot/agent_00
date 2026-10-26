@@ -1281,6 +1281,98 @@ func TestBrokerTracksTaskAttemptsAcrossRerunsAndFailures(t *testing.T) {
 	if len(rerunAttempts) != len(attempts) {
 		t.Fatalf("len(rerun attempts) = %d, want %d", len(rerunAttempts), len(attempts))
 	}
+
+	snap := b.Snapshot()
+	if got, want := snap.Stats.TotalTasks, 1; got != want {
+		t.Fatalf("stats.total_tasks = %d, want %d (restart should collapse to one task)", got, want)
+	}
+	if got, want := snap.Stats.CompletedTasks, 1; got != want {
+		t.Fatalf("stats.completed_tasks = %d, want %d (final state after restart)", got, want)
+	}
+	if got, want := snap.Stats.FailedTasks, 0; got != want {
+		t.Fatalf("stats.failed_tasks = %d, want %d (original failure should not also be counted)", got, want)
+	}
+}
+
+func TestBrokerForgetTaskRemovesAttemptsFromDashboardStats(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	b.RecordTaskRunConfig("req-forget", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"forget me"}`))
+	b.IngestLog("task status=start request_id=req-forget")
+	b.IngestLog("task status=completed request_id=req-forget workspace=/tmp/run branch=agent00-forget")
+
+	if got, want := b.Snapshot().Stats.TotalTasks, 1; got != want {
+		t.Fatalf("stats.total_tasks before forget = %d, want %d", got, want)
+	}
+
+	if err := b.ForgetTask("req-forget"); err != nil {
+		t.Fatalf("ForgetTask() error = %v", err)
+	}
+
+	snap := b.Snapshot()
+	if len(snap.Tasks) != 0 {
+		t.Fatalf("len(tasks) after ForgetTask = %d, want 0", len(snap.Tasks))
+	}
+	if got, want := snap.Stats.TotalTasks, 0; got != want {
+		t.Fatalf("stats.total_tasks after ForgetTask = %d, want %d (deleted task must drop out of metrics)", got, want)
+	}
+	if len(b.TaskAttempts("req-forget")) != 0 {
+		t.Fatalf("TaskAttempts(req-forget) after ForgetTask = %#v, want empty", b.TaskAttempts("req-forget"))
+	}
+	if _, ok := b.TaskRunConfig("req-forget"); !ok {
+		t.Fatal("TaskRunConfig() found = false after ForgetTask(), want true (run config retained)")
+	}
+}
+
+func TestBrokerForgetTaskPreservesLiveRerunSibling(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	b.IngestLog("task status=start request_id=req-chain")
+	b.IngestLog(`task status=error request_id=req-chain exit_code=1 err="first failure"`)
+	b.RecordTaskRerunAttempt("req-chain", "req-chain-rerun")
+	b.IngestLog("task status=start request_id=req-chain-rerun")
+
+	if err := b.ForgetTask("req-chain"); err != nil {
+		t.Fatalf("ForgetTask(original) error = %v", err)
+	}
+
+	if attempts := b.TaskAttempts("req-chain-rerun"); len(attempts) == 0 {
+		t.Fatalf("TaskAttempts(req-chain-rerun) after forgetting original = empty, want still-live rerun retained")
+	}
+
+	snap := b.Snapshot()
+	if got, want := snap.Stats.ActiveTasks, 1; got != want {
+		t.Fatalf("stats.active_tasks after forgetting original = %d, want %d (rerun still running)", got, want)
+	}
+
+	b.IngestLog("task status=completed request_id=req-chain-rerun workspace=/tmp/run branch=agent00-chain")
+
+	snap = b.Snapshot()
+	if got, want := snap.Stats.TotalTasks, 1; got != want {
+		t.Fatalf("stats.total_tasks after rerun completes = %d, want %d", got, want)
+	}
+	if got, want := snap.Stats.CompletedTasks, 1; got != want {
+		t.Fatalf("stats.completed_tasks after rerun completes = %d, want %d", got, want)
+	}
+	if got, want := snap.Stats.FailedTasks, 0; got != want {
+		t.Fatalf("stats.failed_tasks after rerun completes = %d, want %d (forgotten failure must not resurface)", got, want)
+	}
+}
+
+func TestBrokerForgetTaskRejectsIncompleteTask(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	b.IngestLog("task status=start request_id=req-forget-running")
+
+	if err := b.ForgetTask("req-forget-running"); !errors.Is(err, ErrTaskNotCompleted) {
+		t.Fatalf("ForgetTask() error = %v, want %v", err, ErrTaskNotCompleted)
+	}
+	if got, want := b.Snapshot().Stats.TotalTasks, 1; got != want {
+		t.Fatalf("stats.total_tasks = %d, want %d (rejected forget must not touch metrics)", got, want)
+	}
 }
 
 func TestBrokerRemovesCompletedTasksAfterTimeout(t *testing.T) {
