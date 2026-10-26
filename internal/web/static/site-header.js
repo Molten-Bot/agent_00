@@ -1,7 +1,7 @@
 (function initAgentHeader() {
   const THEME_KEY = "hubui.theme";
   const THEME_MODES = ["light", "dark", "night", "pink"];
-  const DEFAULT_THEME_MODE = "light";
+  const DEFAULT_THEME_MODE = "dark";
   const LOGO_ROTATION_INTERVAL_MS = 8_000;
   const AGENT_LOGO_URLS = Object.freeze({
     codex: "/static/logos/codex-cli.svg",
