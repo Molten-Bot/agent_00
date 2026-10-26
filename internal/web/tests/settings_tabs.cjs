@@ -7,7 +7,7 @@ const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
 let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
-const defaults = { auto_merge: false, delete_merged_branches: false, merge_method: 'squash', review_level: 'off', default_library_enabled: true, chat_enabled: true };
+const defaults = { auto_merge: false, delete_merged_branches: false, merge_method: 'squash', review_level: 'off', default_library_enabled: true, chat_enabled: true, json_enabled: false };
 async function openSettings(t, { viewport = { width: 1280, height: 900 }, theme = 'dark', configurePage } = {}) {
   const page = await browser.newPage({ viewport });
   t.after(() => page.close());
@@ -71,7 +71,7 @@ test('all settings save on close and survive reopening; no main Save button', as
   assert.equal(await page.locator('#custom-library-name').inputValue(), 'kept draft');
   await toggle(page, 'review-settings-default-library');
   await close(page);
-  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true });
+  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false });
   await page.reload();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   assert.equal(await page.locator('#review-settings-auto-merge').isChecked(), true);
@@ -105,6 +105,25 @@ test('chat toggle marks the experimental chat tab unavailable immediately and pe
   await close(page);
   await page.locator('[data-app-display=chat]').click();
   await page.waitForFunction(() => document.body.dataset.appDisplay === 'chat');
+});
+
+test('json toggle marks the experimental JSON tab unavailable immediately and persists on reload', async t => {
+  const { page, writes } = await openSettings(t);
+  assert.equal(await page.locator('#review-settings-json-enabled').isChecked(), false);
+  assert.equal(await page.locator('#prompt-mode-json').getAttribute('aria-disabled'), 'true');
+  await select(page, 'automation');
+  await toggle(page, 'review-settings-json-enabled');
+  assert.equal(await page.locator('#prompt-mode-json').getAttribute('aria-disabled'), 'false');
+  assert.equal(await page.locator('#prompt-mode-json').getAttribute('href'), '#studio-json');
+  await close(page);
+  assert.equal(writes.at(-1).json_enabled, true);
+  await page.reload();
+  await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
+  assert.equal(await page.locator('#review-settings-json-enabled').isChecked(), true);
+  assert.equal(await page.locator('#prompt-mode-json').getAttribute('aria-disabled'), 'false');
+  await close(page);
+  await page.locator('#prompt-mode-json').click();
+  await page.waitForFunction(() => document.body.dataset.promptMode === 'json');
 });
 
 for (const method of ['escape', 'backdrop']) test(`${method} saves settings before closing`, async t => {

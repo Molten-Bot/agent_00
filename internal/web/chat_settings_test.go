@@ -24,7 +24,7 @@ func TestChatSettingsGatePageAndSubmissions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewServer("", NewBroker())
 			s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) {
-				return ReviewSettingsState{ChatEnabled: tc.enabled}, tc.err
+				return ReviewSettingsState{ChatEnabled: tc.enabled, JSONEnabled: true}, tc.err
 			}
 			submitted := 0
 			s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) { submitted++; return "req-chat", nil }
