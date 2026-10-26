@@ -379,12 +379,42 @@ func (s Server) injectBottomDockComponent(ctx context.Context, data []byte) []by
 		s.logf("localruntime.ui status=warn event=load_bottom_dock_component err=%q", err)
 		return data
 	}
+	if enabled, settingsErr := s.chatEnabled(ctx); settingsErr != nil || !enabled {
+		dock = bytes.Replace(dock,
+			[]byte(`class="prompt-mode-link site-dock-link" href="#chat" data-app-display="chat" data-page-nav-link="/chat" aria-label="Chat" title="Chat"`),
+			[]byte(`class="prompt-mode-link site-dock-link is-disabled" data-app-display="chat" data-page-nav-link="/chat" aria-label="Chat" aria-disabled="true" tabindex="-1" title="Chat is turned off in Settings → Automation"`), 1)
+	}
 	return bytes.Replace(data, []byte(bottomDockPlaceholder), bytes.TrimSpace(dock), 1)
+}
+
+func (s Server) chatEnabled(ctx context.Context) (bool, error) {
+	if s.ReviewSettingsStatus == nil {
+		return true, nil
+	}
+	settings, err := s.ReviewSettingsStatus(ctx)
+	return settings.ChatEnabled, err
+}
+
+func (s Server) requireChatEnabled(w http.ResponseWriter, r *http.Request) bool {
+	enabled, err := s.chatEnabled(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "chat settings are unavailable"})
+		return false
+	}
+	if !enabled {
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "chat is disabled in settings"})
+		return false
+	}
+	return true
 }
 
 func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/chat" {
 		http.NotFound(w, r)
+		return
+	}
+
+	if !s.requireChatEnabled(w, r) {
 		return
 	}
 
@@ -2135,6 +2165,9 @@ func (s Server) handlePromptSubmit(
 	}
 
 	source := taskSourceFromPromptSubmit(r, body, defaultSource)
+	if source == "chat" && !s.requireChatEnabled(w, r) {
+		return
+	}
 	requestID, err := submit(r.Context(), body)
 	if err != nil {
 		if duplicateRequestID, duplicateState, ok := duplicateSubmissionDetails(err); ok {

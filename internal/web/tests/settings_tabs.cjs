@@ -81,10 +81,12 @@ test('all settings save on close and survive reopening; no main Save button', as
 });
 
 test('chat toggle marks the experimental chat tab unavailable immediately and persists on reload', async t => {
-  const { page, writes } = await openSettings(t);
+  const { page, writes } = await openSettings(t, { configurePage: async page => {
+    await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [] } }));
+  } });
+  await page.waitForFunction(() => document.querySelector('[data-app-display=chat]').getAttribute('aria-disabled') === 'false');
   assert.equal(await page.locator('#review-settings-chat-enabled').isChecked(), true);
-  // No GitHub repos are mocked in this harness, so the tab starts disabled for that reason instead.
-  assert.equal(await page.locator('[data-app-display=chat]').getAttribute('aria-disabled'), 'true');
+  assert.equal(await page.locator('[data-app-display=chat]').getAttribute('aria-disabled'), 'false');
   assert.notEqual(await page.locator('[data-app-display=chat]').getAttribute('title'), 'Chat is turned off in Settings → Automation');
   await select(page, 'automation');
   await toggle(page, 'review-settings-chat-enabled');
@@ -96,6 +98,13 @@ test('chat toggle marks the experimental chat tab unavailable immediately and pe
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   assert.equal(await page.locator('#review-settings-chat-enabled').isChecked(), false);
   assert.equal(await page.locator('[data-app-display=chat]').getAttribute('title'), 'Chat is turned off in Settings → Automation');
+  await select(page, 'automation');
+  await toggle(page, 'review-settings-chat-enabled');
+  assert.equal(await page.locator('[data-app-display=chat]').getAttribute('aria-disabled'), 'false');
+  assert.equal(await page.locator('[data-app-display=chat]').getAttribute('href'), '#chat');
+  await close(page);
+  await page.locator('[data-app-display=chat]').click();
+  await page.waitForFunction(() => document.body.dataset.appDisplay === 'chat');
 });
 
 for (const method of ['escape', 'backdrop']) test(`${method} saves settings before closing`, async t => {
