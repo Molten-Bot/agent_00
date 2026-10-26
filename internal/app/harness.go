@@ -3651,7 +3651,7 @@ func (h Harness) runFinalReviewCycle(
 		}
 
 		fixCfg := cfg
-		fixCfg.CommitMessage = fmt.Sprintf("fix: address review findings (pass %d)", pass)
+		fixCfg.CommitMessage = reviewFixCommitMessage(cfg.CommitMessage, pass)
 		h.logf(
 			"stage=review_checks status=start action=verify review_mode=%s pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",
 			reviewMode,
@@ -3704,7 +3704,7 @@ func finalReviewMode(passes int) string {
 
 func finalReviewPrompt(originalPrompt, preparedContext string, pass, total int) string {
 	return strings.TrimSpace(fmt.Sprintf(
-		"%s\n\nPost-task review pass %d/%d. Review the current pull request independently. Follow the bundled review skill as the controlling review standard and return its structured outcome.\n\nOriginal task prompt:\n%s\n\n%s",
+		"%s\n\nPost-task review pass %d/%d. Review the current pull request independently. Follow the bundled review skill as the controlling review standard and return its structured outcome.\n\nScope note: this cycle reviews code changes on the existing pull request branch and commit history the harness already established. Branch selection, PR creation/target, and commit-message/co-author mechanics from the original task prompt are one-time setup steps managed by the harness, not something a fix pass can alter (it is explicitly restricted to updating the existing branch without new commits or branch changes). Do not report branch target, commit metadata, or PR-creation instructions as blocking findings; focus findings on code correctness, tests, and task completeness.\n\nOriginal task prompt:\n%s\n\n%s",
 		codeReviewLibraryPrompt(),
 		pass,
 		total,
@@ -8271,4 +8271,12 @@ func remediationCommitMessage(base string, attempt int) string {
 		base = "chore: automated update"
 	}
 	return fmt.Sprintf("%s (ci remediation %d)", base, attempt)
+}
+
+func reviewFixCommitMessage(base string, pass int) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = "fix: address review findings"
+	}
+	return fmt.Sprintf("%s (review fix pass %d)", base, pass)
 }
