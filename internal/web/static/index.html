@@ -797,9 +797,14 @@
               <span>Delete merged branches</span>
             </label>
             <label class="selectable-option">
-              <input class="sr-only" id="review-settings-chat-enabled" type="checkbox" checked>
+              <input class="sr-only" id="review-settings-chat-enabled" type="checkbox">
               <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="message-circle"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/></svg>
               <span>Chat (experimental)</span>
+            </label>
+            <label class="selectable-option">
+              <input class="sr-only" id="review-settings-json-enabled" type="checkbox">
+              <i data-lucide="braces" aria-hidden="true"></i>
+              <span>JSON input (experimental)</span>
             </label>
           </fieldset>
           <div id="settings-panel-review" class="review-settings-section review-settings-level" role="tabpanel" aria-labelledby="settings-tab-review" hidden>
@@ -1558,13 +1563,15 @@
       const level = String(settings.review_level || settings.reviewLevel || "off").trim().toLowerCase();
       const defaultLibraryRaw = settings.default_library_enabled ?? settings.defaultLibraryEnabled;
       const chatEnabledRaw = settings.chat_enabled ?? settings.chatEnabled;
+      const jsonEnabledRaw = settings.json_enabled ?? settings.jsonEnabled;
       return {
         autoMerge: Boolean(settings.auto_merge || settings.autoMerge),
         deleteMergedBranches: Boolean(settings.delete_merged_branches || settings.deleteMergedBranches),
         mergeMethod: ["merge", "squash", "rebase"].includes(method) ? method : "squash",
         reviewLevel: ["off", "low", "medium", "high"].includes(level) ? level : "off",
         defaultLibraryEnabled: defaultLibraryRaw === undefined ? true : Boolean(defaultLibraryRaw),
-        chatEnabled: chatEnabledRaw === undefined ? true : Boolean(chatEnabledRaw),
+        chatEnabled: chatEnabledRaw === undefined ? false : Boolean(chatEnabledRaw),
+        jsonEnabled: jsonEnabledRaw === undefined ? false : Boolean(jsonEnabledRaw),
         message: String(settings.message || "").trim(),
       };
     }
@@ -2059,6 +2066,7 @@
     const reviewSettingsDeleteMergedBranches = document.getElementById("review-settings-delete-merged-branches");
     const reviewSettingsDefaultLibrary = document.getElementById("review-settings-default-library");
     const reviewSettingsChatEnabled = document.getElementById("review-settings-chat-enabled");
+    const reviewSettingsJSONEnabled = document.getElementById("review-settings-json-enabled");
     const reviewSettingsMergeMethod = document.getElementById("review-settings-merge-method");
     const reviewSettingsMergeOptions = Array.from(document.querySelectorAll("[data-review-settings-merge-method]"));
     const reviewSettingsMergeSliderThumb = document.querySelector(".review-settings-merge-slider-thumb");
@@ -2133,7 +2141,27 @@
     }
 
     function chatFeatureEnabled() {
-      return state.reviewSettings?.chatEnabled !== false;
+      return state.reviewSettings?.chatEnabled === true;
+    }
+
+    function jsonFeatureEnabled() {
+      return state.reviewSettings?.jsonEnabled === true;
+    }
+
+    function syncJSONModeLinkAvailability() {
+      if (!promptModeJSON) {
+        return;
+      }
+      const available = jsonFeatureEnabled();
+      promptModeJSON.classList.toggle("is-disabled", !available);
+      promptModeJSON.setAttribute("aria-disabled", String(!available));
+      promptModeJSON.tabIndex = available ? 0 : -1;
+      if (available) {
+        promptModeJSON.href = "#studio-json";
+      } else {
+        promptModeJSON.removeAttribute("href");
+      }
+      promptModeJSON.title = available ? "JSON" : "JSON input is turned off in Settings → Automation";
     }
 
     function syncChatDockLinkAvailability() {
@@ -2727,9 +2755,16 @@
       if (reviewSettingsChatEnabled instanceof HTMLInputElement) {
         reviewSettingsChatEnabled.checked = state.reviewSettings.chatEnabled;
       }
+      if (reviewSettingsJSONEnabled instanceof HTMLInputElement) {
+        reviewSettingsJSONEnabled.checked = state.reviewSettings.jsonEnabled;
+      }
       syncChatDockLinkAvailability();
+      syncJSONModeLinkAvailability();
       if (!state.reviewSettings.chatEnabled && state.appDisplay === "chat") {
         setAppDisplay("studio");
+      }
+      if (!state.reviewSettings.jsonEnabled && state.promptMode === "json") {
+        setPromptMode("builder");
       }
       setReviewSettingsMergeMethod(state.reviewSettings.mergeMethod);
       setReviewSettingsLevel(state.reviewSettings.reviewLevel);
@@ -2787,7 +2822,8 @@
         merge_method: String(reviewSettingsMergeMethod?.value || "squash").trim().toLowerCase() || "squash",
         review_level: String(reviewSettingsLevel?.value || "off").trim().toLowerCase() || "off",
         default_library_enabled: reviewSettingsDefaultLibrary instanceof HTMLInputElement ? reviewSettingsDefaultLibrary.checked : true,
-        chat_enabled: reviewSettingsChatEnabled instanceof HTMLInputElement ? reviewSettingsChatEnabled.checked : true,
+        chat_enabled: reviewSettingsChatEnabled instanceof HTMLInputElement ? reviewSettingsChatEnabled.checked : false,
+        json_enabled: reviewSettingsJSONEnabled instanceof HTMLInputElement ? reviewSettingsJSONEnabled.checked : false,
       };
     }
 
@@ -8401,6 +8437,9 @@
       if (mode !== "builder" && mode !== "library" && mode !== "json") {
         mode = "builder";
       }
+      if (mode === "json" && !jsonFeatureEnabled()) {
+        mode = "builder";
+      }
       const previousMode = state.promptMode;
       state.promptMode = mode;
       persistPromptMode();
@@ -12358,6 +12397,9 @@
         } else if (initialDisplay === "work") {
           setAppDisplay("work");
         }
+        if (promptModeFromHash() === "json" && state.promptMode !== "json" && jsonFeatureEnabled()) {
+          setPromptMode("json");
+        }
         void githubReposPromise.then(() => {
           if (initialDisplay === "chat" && appDisplayFromHash() === "chat") {
             setAppDisplay("chat");
@@ -12863,7 +12905,7 @@
       window.CommitSigningSettings?.setModalBusy(Boolean(busy));
       reviewSettingsClose.disabled = Boolean(busy);
       for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches,
-        reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsSlider, ...reviewSettingsMergeOptions]) {
+        reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsSlider, ...reviewSettingsMergeOptions]) {
         if (control) control.disabled = Boolean(busy) || !state.settingsLoaded;
       }
       reviewSettingsForm.setAttribute("aria-busy", String(Boolean(busy)));
@@ -12880,7 +12922,7 @@
     if (reviewSettingsForm) {
       reviewSettingsForm.addEventListener("submit", submitReviewSettings);
     }
-    for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches, reviewSettingsDefaultLibrary, reviewSettingsChatEnabled]) {
+    for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches, reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled]) {
       control.addEventListener("change", () => setReviewSettingsStatus("", "Changes will be saved on close."));
     }
     reviewSettingsChatEnabled?.addEventListener("change", () => {
@@ -12888,6 +12930,13 @@
       syncChatDockLinkAvailability();
       if (!state.reviewSettings.chatEnabled && state.appDisplay === "chat") {
         setAppDisplay("studio");
+      }
+    });
+    reviewSettingsJSONEnabled?.addEventListener("change", () => {
+      state.reviewSettings = { ...state.reviewSettings, jsonEnabled: Boolean(reviewSettingsJSONEnabled.checked) };
+      syncJSONModeLinkAvailability();
+      if (!state.reviewSettings.jsonEnabled && state.promptMode === "json") {
+        setPromptMode("builder");
       }
     });
     reviewSettingsMergeOptions.forEach((button) => {
@@ -13146,6 +13195,7 @@
     renderPromptImages();
     replaceLucideIcons(document.body);
     syncChatDockLinkAvailability();
+    syncJSONModeLinkAvailability();
     syncDashboardDockLinkAvailability();
     syncBaseBranchClearState();
     syncBuilderDraftClearState();

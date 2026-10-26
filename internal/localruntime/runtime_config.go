@@ -140,19 +140,20 @@ func SaveRuntimeConfigAgentRuntime(path string, initCfg InitConfig, harness, com
 }
 
 // SaveRuntimeConfigReviewAndDefaultLibrarySettings persists review automation
-// settings, the default-library-enabled flag, and the chat-enabled flag in a
-// single load/modify/write cycle so a mid-save failure cannot leave one
-// setting persisted without the others. defaultLibraryEnabled and chatEnabled
-// are pointers so callers that are not changing a given setting can pass nil;
-// the current persisted value is then read from the freshly loaded doc inside
-// the same locked critical section, avoiding a lost-update race with a
-// concurrent save.
+// settings, the default-library-enabled flag, the chat-enabled flag, and the
+// json-enabled flag in a single load/modify/write cycle so a mid-save failure
+// cannot leave one setting persisted without the others.
+// defaultLibraryEnabled, chatEnabled, and jsonEnabled are pointers so callers
+// that are not changing a given setting can pass nil; the current persisted
+// value is then read from the freshly loaded doc inside the same locked
+// critical section, avoiding a lost-update race with a concurrent save.
 func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 	path string,
 	initCfg InitConfig,
 	reviewCfg ReviewWatchConfig,
 	defaultLibraryEnabled *bool,
 	chatEnabled *bool,
+	jsonEnabled *bool,
 ) error {
 	runtimeConfigMu.Lock()
 	defer runtimeConfigMu.Unlock()
@@ -179,6 +180,12 @@ func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 		chatEnabledValue = *chatEnabled
 	}
 	applyChatEnabledToDoc(doc, chatEnabledValue)
+
+	jsonEnabledValue := jsonEnabledFromDoc(doc)
+	if jsonEnabled != nil {
+		jsonEnabledValue = *jsonEnabled
+	}
+	applyJSONEnabledToDoc(doc, jsonEnabledValue)
 
 	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
 
@@ -310,34 +317,68 @@ func defaultLibraryEnabledFromDoc(doc map[string]any) bool {
 
 func applyChatEnabledToDoc(doc map[string]any, enabled bool) {
 	if enabled {
-		delete(doc, "chat_enabled")
+		doc["chat_enabled"] = true
 	} else {
-		doc["chat_enabled"] = false
+		delete(doc, "chat_enabled")
 	}
 }
 
 // ReadRuntimeConfigChatEnabled returns the persisted chat-interface setting,
-// defaulting to true (enabled) when unset or unreadable. The chat interface
-// is experimental and can be turned off from settings.
+// defaulting to false (off) when unset or unreadable. The chat interface is
+// experimental and must be turned on from settings.
 func ReadRuntimeConfigChatEnabled(path string) bool {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return true
+		return false
 	}
 
 	doc, err := readRuntimeConfigDoc(path)
 	if err != nil {
-		return true
+		return false
 	}
 	return chatEnabledFromDoc(doc)
 }
 
 // chatEnabledFromDoc returns the chat-enabled setting from an already-loaded
-// runtime config doc, defaulting to true (enabled) when unset.
+// runtime config doc, defaulting to false (off) when unset.
 func chatEnabledFromDoc(doc map[string]any) bool {
 	enabled, ok := doc["chat_enabled"].(bool)
 	if !ok {
-		return true
+		return false
+	}
+	return enabled
+}
+
+func applyJSONEnabledToDoc(doc map[string]any, enabled bool) {
+	if enabled {
+		doc["json_enabled"] = true
+	} else {
+		delete(doc, "json_enabled")
+	}
+}
+
+// ReadRuntimeConfigJSONEnabled returns the persisted JSON-prompt-input
+// setting, defaulting to false (off) when unset or unreadable. The JSON
+// input is experimental and must be turned on from settings.
+func ReadRuntimeConfigJSONEnabled(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+
+	doc, err := readRuntimeConfigDoc(path)
+	if err != nil {
+		return false
+	}
+	return jsonEnabledFromDoc(doc)
+}
+
+// jsonEnabledFromDoc returns the json-enabled setting from an already-loaded
+// runtime config doc, defaulting to false (off) when unset.
+func jsonEnabledFromDoc(doc map[string]any) bool {
+	enabled, ok := doc["json_enabled"].(bool)
+	if !ok {
+		return false
 	}
 	return enabled
 }

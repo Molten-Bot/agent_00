@@ -172,6 +172,7 @@ type ReviewSettingsState struct {
 	ReviewLevel           string `json:"review_level"`
 	DefaultLibraryEnabled bool   `json:"default_library_enabled"`
 	ChatEnabled           bool   `json:"chat_enabled"`
+	JSONEnabled           bool   `json:"json_enabled"`
 	Message               string `json:"message,omitempty"`
 }
 
@@ -185,6 +186,8 @@ type ReviewSettingsRequest struct {
 	DefaultLibraryEnabled *bool `json:"default_library_enabled,omitempty"`
 	// ChatEnabled is a pointer for the same reason as DefaultLibraryEnabled.
 	ChatEnabled *bool `json:"chat_enabled,omitempty"`
+	// JSONEnabled is a pointer for the same reason as DefaultLibraryEnabled.
+	JSONEnabled *bool `json:"json_enabled,omitempty"`
 }
 
 // NewServer returns a monitor HTTP server.
@@ -384,6 +387,11 @@ func (s Server) injectBottomDockComponent(ctx context.Context, data []byte) []by
 			[]byte(`class="prompt-mode-link site-dock-link" href="#chat" data-app-display="chat" data-page-nav-link="/chat" aria-label="Chat" title="Chat"`),
 			[]byte(`class="prompt-mode-link site-dock-link is-disabled" data-app-display="chat" data-page-nav-link="/chat" aria-label="Chat" aria-disabled="true" tabindex="-1" title="Chat is turned off in Settings → Automation"`), 1)
 	}
+	if enabled, settingsErr := s.jsonEnabled(ctx); settingsErr != nil || !enabled {
+		dock = bytes.Replace(dock,
+			[]byte(`id="prompt-mode-json" class="prompt-mode-link" href="#studio-json" aria-selected="false" title="JSON"`),
+			[]byte(`id="prompt-mode-json" class="prompt-mode-link is-disabled" aria-selected="false" aria-disabled="true" tabindex="-1" title="JSON input is turned off in Settings → Automation"`), 1)
+	}
 	return bytes.Replace(data, []byte(bottomDockPlaceholder), bytes.TrimSpace(dock), 1)
 }
 
@@ -403,6 +411,27 @@ func (s Server) requireChatEnabled(w http.ResponseWriter, r *http.Request) bool 
 	}
 	if !enabled {
 		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "chat is disabled in settings"})
+		return false
+	}
+	return true
+}
+
+func (s Server) jsonEnabled(ctx context.Context) (bool, error) {
+	if s.ReviewSettingsStatus == nil {
+		return true, nil
+	}
+	settings, err := s.ReviewSettingsStatus(ctx)
+	return settings.JSONEnabled, err
+}
+
+func (s Server) requireJSONEnabled(w http.ResponseWriter, r *http.Request) bool {
+	enabled, err := s.jsonEnabled(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "json input settings are unavailable"})
+		return false
+	}
+	if !enabled {
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "json input is disabled in settings"})
 		return false
 	}
 	return true
@@ -1508,7 +1537,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		state := ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true, ChatEnabled: true}
+		state := ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true, ChatEnabled: false, JSONEnabled: false}
 		if s.ReviewSettingsStatus != nil {
 			next, err := s.ReviewSettingsStatus(r.Context())
 			if strings.TrimSpace(next.MergeMethod) == "" {
@@ -1536,7 +1565,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotImplemented, map[string]any{
 				"ok":       false,
 				"error":    "review settings are unavailable",
-				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true, ChatEnabled: true},
+				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true, ChatEnabled: false, JSONEnabled: false},
 			})
 			return
 		}
@@ -1545,7 +1574,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"ok":       false,
 				"error":    fmt.Sprintf("read request body: %v", err),
-				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true, ChatEnabled: true},
+				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true, ChatEnabled: false, JSONEnabled: false},
 			})
 			return
 		}
@@ -1554,7 +1583,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"ok":       false,
 				"error":    fmt.Sprintf("decode request body: %v", err),
-				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true, ChatEnabled: true},
+				"settings": ReviewSettingsState{MergeMethod: "squash", ReviewLevel: "off", DefaultLibraryEnabled: true, ChatEnabled: false, JSONEnabled: false},
 			})
 			return
 		}
@@ -2166,6 +2195,9 @@ func (s Server) handlePromptSubmit(
 
 	source := taskSourceFromPromptSubmit(r, body, defaultSource)
 	if source == "chat" && !s.requireChatEnabled(w, r) {
+		return
+	}
+	if source == "json" && !s.requireJSONEnabled(w, r) {
 		return
 	}
 	requestID, err := submit(r.Context(), body)
