@@ -2661,6 +2661,9 @@ func TestHandlerServesChatView(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
+	if !strings.Contains(markup, `<html lang="en" class="dark">`) {
+		t.Fatalf("expected chat page to default to dark theme class")
+	}
 	required := []string{
 		`<title>agent_00 Chat</title>`,
 		`src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"`,
