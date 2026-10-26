@@ -641,6 +641,39 @@ func SaveRuntimeConfigClaudeOAuthToken(path string, initCfg InitConfig, oauthTok
 	return writeRuntimeConfigDoc(path, doc)
 }
 
+// ClearRuntimeConfigClaudeOAuthToken removes token overrides when switching to
+// a Claude-managed login, preserving the rest of the runtime configuration.
+func ClearRuntimeConfigClaudeOAuthToken(path string) error {
+	runtimeConfigMu.Lock()
+	defer runtimeConfigMu.Unlock()
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read runtime config: %w", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("parse runtime config: %w", err)
+	}
+	changed := false
+	for _, key := range []string{"claude_code_oauth_token", "claudeCodeOauthToken", "CLAUDE_CODE_OAUTH_TOKEN"} {
+		if _, exists := doc[key]; exists {
+			delete(doc, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return writeRuntimeConfigDoc(path, doc)
+}
+
 func runtimeConfigBaseDoc(initCfg InitConfig) (map[string]any, error) {
 	explicitHarness := strings.TrimSpace(initCfg.AgentHarness)
 	explicitCommand := strings.TrimSpace(initCfg.AgentCommand)

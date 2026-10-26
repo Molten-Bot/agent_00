@@ -348,24 +348,16 @@ func TestClaudeAuthGateConfigureAcceptsCredentialsJSONInConfigureState(t *testin
 	if !status.Ready {
 		t.Fatalf("status = %+v, want ready", status)
 	}
-	if got, want := os.Getenv(claudeOAuthTokenEnv), claudeOAuthToken; got != want {
-		t.Fatalf("%s = %q, want %q", claudeOAuthTokenEnv, got, want)
+	if os.Getenv(claudeOAuthTokenEnv) != "" {
+		t.Fatal("credentials JSON must not become an environment token override")
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	var doc map[string]any
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatalf("Unmarshal() error = %v", err)
-	}
-	if got, want := doc["claude_code_oauth_token"], claudeOAuthToken; got != want {
-		t.Fatalf("claude_code_oauth_token = %#v, want %q", got, want)
+	if token, _ := firstConfiguredClaudeOAuthToken(path); token != "" {
+		t.Fatal("credentials JSON must not become a persisted token override")
 	}
 
 	credentialsPath := filepath.Join(claudeConfigDir, ".credentials.json")
-	data, err = os.ReadFile(credentialsPath)
+	data, err := os.ReadFile(credentialsPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", credentialsPath, err)
 	}

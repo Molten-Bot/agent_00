@@ -1,12 +1,64 @@
 package localruntime
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestClearRuntimeConfigClaudeOAuthToken(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"all aliases", `{"claude_code_oauth_token":"old","claudeCodeOauthToken":"old","CLAUDE_CODE_OAUTH_TOKEN":"old","agent_harness":"claude","github_token":"github-test-only","custom":{"enabled":true}}`, false},
+		{"no token", `{"agent_harness":"claude","github_token":"github-test-only","custom":{"enabled":true}}`, false},
+		{"malformed", `{"claude_code_oauth_token":`, true},
+		{"missing", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "config.json")
+			if tc.input != "" {
+				if err := os.WriteFile(path, []byte(tc.input), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := ClearRuntimeConfigClaudeOAuthToken(path)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("clear error = %v, want error=%v", err, tc.wantErr)
+			}
+			data, readErr := os.ReadFile(path)
+			if tc.input == "" {
+				if !errors.Is(readErr, os.ErrNotExist) {
+					t.Fatal("clear created a missing config")
+				}
+				return
+			}
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if tc.wantErr {
+				if string(data) != tc.input {
+					t.Fatal("clear modified invalid config")
+				}
+				return
+			}
+			var doc map[string]any
+			if err := json.Unmarshal(data, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if len(doc) != 3 || doc["agent_harness"] != "claude" || doc["github_token"] != "github-test-only" || doc["custom"].(map[string]any)["enabled"] != true {
+				t.Fatal("clear did not preserve unrelated settings or left a token alias")
+			}
+		})
+	}
+}
 
 func TestLoadRuntimeConfigMissingFile(t *testing.T) {
 	t.Parallel()

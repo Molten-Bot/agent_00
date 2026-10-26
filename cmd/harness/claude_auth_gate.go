@@ -1012,6 +1012,17 @@ func (g *claudeAuthGate) waitLogin(cmd *exec.Cmd, tempDir string, readerWG *sync
 	}
 
 	if err == nil {
+		// A successful browser login writes a refreshable session. An older
+		// environment/config token would otherwise keep overriding that session,
+		// including the credential fingerprint rejected by the failed task.
+		if err := clearClaudeOAuthTokenOverride(g.runtimeConfigPath); err != nil {
+			g.ready = false
+			g.state = "error"
+			g.message = fmt.Sprintf("activate Claude browser login: %v", err)
+			g.updatedAt = time.Now().UTC()
+			g.mu.Unlock()
+			return
+		}
 		ready, probeMessage := g.probeClaude()
 		if ready {
 			g.ready = true
@@ -1253,20 +1264,14 @@ func (g *claudeAuthGate) completeWithClaudeCredentialsJSON(raw string) error {
 	if err != nil {
 		return err
 	}
-	if token := extractClaudeOAuthTokenFromInput(raw); token != "" {
-		if err := setClaudeOAuthTokenEnvironment(token); err != nil {
-			g.logf("localruntime.auth status=warn harness=claude action=save_oauth_token err=%q", err)
-		} else {
-			g.mu.Lock()
-			runtimeConfigPath := g.runtimeConfigPath
-			initCfg := g.initCfg
-			g.mu.Unlock()
-			if runtimeConfigPath != "" {
-				if err := localruntime.SaveRuntimeConfigClaudeOAuthToken(runtimeConfigPath, initCfg, token); err != nil {
-					g.logf("localruntime.auth status=warn harness=claude action=persist_oauth_token err=%q", err)
-				}
-			}
-		}
+	// Keep access and refresh tokens together under Claude's credential manager.
+	// Promoting the short-lived access token to CLAUDE_CODE_OAUTH_TOKEN prevents
+	// subsequent processes from using the refreshed session.
+	g.mu.Lock()
+	runtimeConfigPath := g.runtimeConfigPath
+	g.mu.Unlock()
+	if err := clearClaudeOAuthTokenOverride(runtimeConfigPath); err != nil {
+		return fmt.Errorf("activate Claude credentials file: %w", err)
 	}
 
 	var (
@@ -1365,6 +1370,13 @@ func setClaudeOAuthTokenEnvironment(token string) error {
 		return fmt.Errorf("claude oauth token is required")
 	}
 	return os.Setenv(claudeOAuthTokenEnv, token)
+}
+
+func clearClaudeOAuthTokenOverride(runtimeConfigPath string) error {
+	if err := localruntime.ClearRuntimeConfigClaudeOAuthToken(runtimeConfigPath); err != nil {
+		return err
+	}
+	return os.Unsetenv(claudeOAuthTokenEnv)
 }
 
 func saveClaudeCredentialsJSON(raw string) (string, error) {
