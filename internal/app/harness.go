@@ -8278,5 +8278,10 @@ func reviewFixCommitMessage(base string, pass int) string {
 	if base == "" {
 		base = "fix: address review findings"
 	}
-	return fmt.Sprintf("%s (review fix pass %d)", base, pass)
+	subject, rest, hasRest := strings.Cut(base, "\n")
+	subject = fmt.Sprintf("%s (review fix pass %d)", subject, pass)
+	if !hasRest {
+		return subject
+	}
+	return subject + "\n" + rest
 }

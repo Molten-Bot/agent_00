@@ -169,6 +169,17 @@ func TestHarnessRuntimeAndCheckSnapshotHelpers(t *testing.T) {
 	if got := remediationCommitMessage("", 1); got != "chore: automated update (ci remediation 1)" {
 		t.Fatalf("remediationCommitMessage(empty) = %q", got)
 	}
+	if got := reviewFixCommitMessage("  fix: thing  ", 2); got != "fix: thing (review fix pass 2)" {
+		t.Fatalf("reviewFixCommitMessage() = %q", got)
+	}
+	if got := reviewFixCommitMessage("", 1); got != "fix: address review findings (review fix pass 1)" {
+		t.Fatalf("reviewFixCommitMessage(empty) = %q", got)
+	}
+	multiLineBase := "fix: thing\n\nCo-Authored-By: Claude <noreply@anthropic.com>"
+	wantMultiLine := "fix: thing (review fix pass 3)\n\nCo-Authored-By: Claude <noreply@anthropic.com>"
+	if got := reviewFixCommitMessage(multiLineBase, 3); got != wantMultiLine {
+		t.Fatalf("reviewFixCommitMessage(multi-line) = %q, want %q", got, wantMultiLine)
+	}
 	if got := workflowDispatchConclusionBucket("completed", "success"); got != "pass" {
 		t.Fatalf("workflowDispatchConclusionBucket(success) = %q, want pass", got)
 	}
