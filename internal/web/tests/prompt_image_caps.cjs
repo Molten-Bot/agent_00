@@ -9,7 +9,6 @@
 const { before, after, test } = require('node:test');
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
-const { expect } = require('@playwright/test');
 const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
 let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
@@ -23,7 +22,7 @@ async function openPage(t) {
   t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
   await page.route('**/*', route => new URL(route.request().url()).origin === new URL(baseURL).origin ? route.continue() : route.abort());
   await page.goto(baseURL);
-  await expect(page.locator('#builder-image-file-input')).toBeAttached();
+  await page.waitForSelector('#builder-image-file-input', { state: 'attached' });
   return page;
 }
 
@@ -43,18 +42,18 @@ async function attachedNames(page) {
 test('click-to-pick caps total attached screenshots at the configured limit', async t => {
   const page = await openPage(t);
   await page.locator('#builder-image-file-input').setInputFiles(pngFiles(14));
-  await expect(page.locator('#local-prompt-status')).toContainText('Skipped 2 screenshot');
+  await page.waitForFunction(text => document.getElementById('local-prompt-status').textContent.includes(text), 'Skipped 2 screenshot');
   assert.equal((await attachedNames(page)).length, 12, 'only MAX_PROMPT_IMAGE_COUNT files are attached');
 });
 
 test('click-to-pick caps remaining room against already-attached screenshots', async t => {
   const page = await openPage(t);
   await page.locator('#builder-image-file-input').setInputFiles(pngFiles(5, { prefix: 'first' }));
-  await expect(page.locator('#local-prompt-status')).toContainText('Attached 5 screenshot');
+  await page.waitForFunction(text => document.getElementById('local-prompt-status').textContent.includes(text), 'Attached 5 screenshot');
   assert.equal((await attachedNames(page)).length, 5);
 
   await page.locator('#builder-image-file-input').setInputFiles(pngFiles(10, { prefix: 'second' }));
-  await expect(page.locator('#local-prompt-status')).toContainText('Skipped 3 screenshot');
+  await page.waitForFunction(text => document.getElementById('local-prompt-status').textContent.includes(text), 'Skipped 3 screenshot');
   assert.equal((await attachedNames(page)).length, 12, 'room for only 7 more files was available');
 });
 
@@ -62,7 +61,7 @@ test('click-to-pick drops oversized files and reports the skip', async t => {
   const page = await openPage(t);
   const files = pngFiles(2).concat(pngFiles(1, { prefix: 'huge', sizeBytes: 8 * 1024 * 1024 + 1 }));
   await page.locator('#builder-image-file-input').setInputFiles(files);
-  await expect(page.locator('#local-prompt-status')).toContainText('Skipped 1 screenshot');
+  await page.waitForFunction(text => document.getElementById('local-prompt-status').textContent.includes(text), 'Skipped 1 screenshot');
   const names = await attachedNames(page);
   assert.equal(names.length, 2, 'the oversized file is dropped');
   assert.ok(!names.some(name => name.startsWith('huge')), 'oversized file name is not attached');
@@ -71,7 +70,7 @@ test('click-to-pick drops oversized files and reports the skip', async t => {
 test('pasting screenshots enforces the same count/size caps as the picker', async t => {
   const page = await openPage(t);
   await page.locator('#builder-image-file-input').setInputFiles(pngFiles(11, { prefix: 'first' }));
-  await expect(page.locator('#local-prompt-status')).toContainText('Attached 11 screenshot');
+  await page.waitForFunction(text => document.getElementById('local-prompt-status').textContent.includes(text), 'Attached 11 screenshot');
 
   await page.evaluate(() => {
     const dt = new DataTransfer();
@@ -83,7 +82,7 @@ test('pasting screenshots enforces the same count/size caps as the picker', asyn
     target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
   });
 
-  await expect(page.locator('#local-prompt-status')).toContainText('Skipped 1 screenshot');
+  await page.waitForFunction(text => document.getElementById('local-prompt-status').textContent.includes(text), 'Skipped 1 screenshot');
   const names = await attachedNames(page);
   assert.equal(names.length, 12, 'paste respects the remaining room (1 slot) and the per-file size cap');
   assert.ok(names.includes('pasted-small.png'), 'the in-budget pasted file is attached');
