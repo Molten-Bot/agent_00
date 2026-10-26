@@ -14,3 +14,4 @@ moltenhub/
 bin/*
 prompt-images/*
 *.out
+/harness

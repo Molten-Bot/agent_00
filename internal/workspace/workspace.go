@@ -27,6 +27,18 @@ const (
 
 var baseAllowsExecCache sync.Map
 
+// procSelfMountInfoPath and procMountsPath are overridden in tests so the
+// mount-option fallback chain in mountOptionsForPath can be exercised with
+// fake mount data instead of the real /proc files.
+var (
+	procSelfMountInfoPath = "/proc/self/mountinfo"
+	procMountsPath        = "/proc/mounts"
+)
+
+// osExecutable is overridden in tests to exercise the resolveAgentsSeedPath
+// fallback that searches upward from the running executable's directory.
+var osExecutable = os.Executable
+
 // Manager creates isolated run directories.
 type Manager struct {
 	PathExists func(string) bool
@@ -231,10 +243,10 @@ func mountOptionsForPath(targetPath string) (map[string]struct{}, bool) {
 	if targetPath == "" {
 		return nil, false
 	}
-	if opts, ok := mountOptionsFromMountInfo("/proc/self/mountinfo", targetPath); ok {
+	if opts, ok := mountOptionsFromMountInfo(procSelfMountInfoPath, targetPath); ok {
 		return opts, true
 	}
-	if opts, ok := mountOptionsFromProcMounts("/proc/mounts", targetPath); ok {
+	if opts, ok := mountOptionsFromProcMounts(procMountsPath, targetPath); ok {
 		return opts, true
 	}
 	return nil, false
@@ -400,7 +412,7 @@ func resolveAgentsSeedPath() string {
 			return path
 		}
 	}
-	if exePath, err := os.Executable(); err == nil {
+	if exePath, err := osExecutable(); err == nil {
 		if path, ok := findPathUpward(filepath.Dir(exePath), agentsSeedPath); ok {
 			return path
 		}
