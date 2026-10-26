@@ -9523,7 +9523,7 @@
       render(state.snapshot);
 
       try {
-        const response = await fetch(`/api/tasks/${encodeURIComponent(requestID)}/close`, {
+        const response = await fetch(`/api/tasks/${encodeURIComponent(requestID)}/delete`, {
           method: "POST",
         });
         let body = null;
@@ -9532,17 +9532,18 @@
         } catch (_err) {
           body = null;
         }
-        if (!response.ok) {
+        // Browser history can outlive the server session that recorded the task.
+        if (!response.ok && response.status !== 404) {
           throw new Error(body?.error || `close http ${response.status}`);
         }
 
-        setLocalPromptStatus("ok", `Closed task ${requestID}`);
+        setLocalPromptStatus("ok", `Deleted task ${requestID}`);
         completeTaskDismissal(requestID);
         trackAnalyticsEvent("task_close_succeeded", { request_id: requestID });
         render(state.snapshot);
       } catch (err) {
         trackAnalyticsEvent("task_close_failed", { request_id: requestID });
-        setLocalPromptStatus("error", `Close failed: ${err.message}`);
+        setLocalPromptStatus("error", `Delete failed: ${err.message}`);
       } finally {
         state.closeInFlight.delete(requestID);
         render(state.snapshot);
@@ -9558,25 +9559,16 @@
         return null;
       }
 
-      const historyOnly = Boolean(task?.history_only);
-      const closePending = !historyOnly && isTaskClosePending(requestID);
+      const closePending = isTaskClosePending(requestID);
       const close = document.createElement("button");
       close.type = "button";
       close.className = "task-close";
       close.textContent = "X";
-      close.title = historyOnly ? "Remove task from history view" : "Close finished task";
-      close.setAttribute("aria-label", historyOnly ? "Remove task from history" : "Close task");
+      close.title = "Delete finished task and remove it from metrics";
+      close.setAttribute("aria-label", "Delete task");
       close.hidden = closePending;
       close.disabled = closePending;
       bindTaskActionButton(close, () => {
-        if (historyOnly) {
-          trackAnalyticsEvent("task_history_removed", { request_id: requestID });
-          state.dismissedTaskIDs.add(requestID);
-          persistDismissedTaskIDs();
-          setLocalPromptStatus("ok", `Removed task ${requestID} from history`);
-          render(state.snapshot);
-          return;
-        }
         dismissTask(requestID);
       });
       return close;

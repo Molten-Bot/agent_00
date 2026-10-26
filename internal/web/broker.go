@@ -1595,8 +1595,8 @@ func (b *Broker) CloseTask(requestID string) error {
 	return nil
 }
 
-// ForgetTask closes a terminal task like CloseTask, and also drops its attempt
-// history so a deleted task stops contributing to dashboard metrics.
+// ForgetTask deletes a terminal task (including closed history) and its completed
+// attempt chain from dashboard metrics. Active sibling attempts are retained.
 func (b *Broker) ForgetTask(requestID string) error {
 	if b == nil {
 		return ErrTaskNotFound
@@ -1609,8 +1609,12 @@ func (b *Broker) ForgetTask(requestID string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if err := b.closeTaskLocked(requestID); err != nil {
-		return err
+	if task, ok := b.tasks[requestID]; ok {
+		if task == nil || !isCompletedTaskStatus(task.Status) {
+			return ErrTaskNotCompleted
+		}
+	} else if _, ok := b.attemptRoots[requestID]; !ok {
+		return ErrTaskNotFound
 	}
 	b.forgetTaskAttemptsLocked(requestID)
 	b.notifySubscribersLocked()
@@ -1648,6 +1652,8 @@ func (b *Broker) forgetTaskAttemptsLocked(requestID string) {
 			kept = append(kept, attempt)
 			continue
 		}
+		delete(b.tasks, attempt.RequestID)
+		b.closedTasks[attempt.RequestID] = b.now().UTC()
 		delete(b.attemptRoots, attempt.RequestID)
 	}
 	if len(kept) == 0 {
@@ -1972,12 +1978,13 @@ func (b *Broker) collapseAttemptsByRootLocked(seen map[string]taskAttemptState) 
 	return collapsed
 }
 
-// attemptIsNewer reports whether candidate should replace current as the
-// representative attempt for a root. Ties on timestamp (for example when a
-// test clock does not advance between attempts) fall back to attempt append
-// order (Seq) instead of map iteration order, which Go does not guarantee to
-// be stable across runs.
+// attemptIsNewer selects the most recently created attempt, even when older
+// attempts receive late log updates. Timestamps are a fallback for legacy state.
 func attemptIsNewer(candidate, current taskAttemptState) bool {
+	// A late log update from an older attempt must not replace its rerun.
+	if candidate.Seq != current.Seq {
+		return candidate.Seq > current.Seq
+	}
 	candidateAt := candidate.UpdatedAt
 	if candidateAt.IsZero() {
 		candidateAt = candidate.StartedAt
