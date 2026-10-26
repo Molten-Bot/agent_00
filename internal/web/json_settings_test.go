@@ -50,7 +50,7 @@ func TestJSONSettingsGateSubmissionsAndDock(t *testing.T) {
 				t.Fatalf("submitted = %d, want %d", submitted, wantSubmitted)
 			}
 			dock := string(s.injectBottomDockComponent(context.Background(), []byte(bottomDockPlaceholder)))
-			disabled := strings.Contains(dock, `id="prompt-mode-json" class="prompt-mode-link is-disabled"`)
+			disabled := strings.Contains(dock, `id="prompt-mode-json" class="prompt-mode-link is-disabled hidden"`)
 			if disabled != (tc.status != http.StatusOK) {
 				t.Fatalf("json dock link disabled = %v", disabled)
 			}

@@ -385,12 +385,12 @@ func (s Server) injectBottomDockComponent(ctx context.Context, data []byte) []by
 	if enabled, settingsErr := s.chatEnabled(ctx); settingsErr != nil || !enabled {
 		dock = bytes.Replace(dock,
 			[]byte(`class="prompt-mode-link site-dock-link" href="#chat" data-app-display="chat" data-page-nav-link="/chat" aria-label="Chat" title="Chat"`),
-			[]byte(`class="prompt-mode-link site-dock-link is-disabled" data-app-display="chat" data-page-nav-link="/chat" aria-label="Chat" aria-disabled="true" tabindex="-1" title="Chat is turned off in Settings → Automation"`), 1)
+			[]byte(`class="prompt-mode-link site-dock-link is-disabled hidden" data-app-display="chat" data-page-nav-link="/chat" aria-label="Chat" aria-disabled="true" tabindex="-1" title="Chat is turned off in Settings → Automation"`), 1)
 	}
 	if enabled, settingsErr := s.jsonEnabled(ctx); settingsErr != nil || !enabled {
 		dock = bytes.Replace(dock,
 			[]byte(`id="prompt-mode-json" class="prompt-mode-link" href="#studio-json" aria-selected="false" title="JSON"`),
-			[]byte(`id="prompt-mode-json" class="prompt-mode-link is-disabled" aria-selected="false" aria-disabled="true" tabindex="-1" title="JSON input is turned off in Settings → Automation"`), 1)
+			[]byte(`id="prompt-mode-json" class="prompt-mode-link is-disabled hidden" aria-selected="false" aria-disabled="true" tabindex="-1" title="JSON input is turned off in Settings → Automation"`), 1)
 	}
 	return bytes.Replace(data, []byte(bottomDockPlaceholder), bytes.TrimSpace(dock), 1)
 }

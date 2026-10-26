@@ -2154,6 +2154,7 @@
       }
       const available = jsonFeatureEnabled();
       promptModeJSON.classList.toggle("is-disabled", !available);
+      promptModeJSON.classList.toggle("hidden", !available);
       promptModeJSON.setAttribute("aria-disabled", String(!available));
       promptModeJSON.tabIndex = available ? 0 : -1;
       if (available) {
@@ -2171,6 +2172,7 @@
       const chatEnabled = chatFeatureEnabled();
       const available = chatEnabled && Boolean(state.githubReposReady);
       chatDockLink.classList.toggle("is-disabled", !available);
+      chatDockLink.classList.toggle("hidden", !chatEnabled);
       chatDockLink.setAttribute("aria-disabled", String(!available));
       chatDockLink.tabIndex = available ? 0 : -1;
       if (available) {
