@@ -2152,6 +2152,11 @@
       if (!promptModeJSON) {
         return;
       }
+      if (!state.settingsLoaded) {
+        // Settings have not resolved yet; keep the server-rendered state instead of
+        // forcing the link to the disabled default while loadReviewSettings() is in flight.
+        return;
+      }
       const available = jsonFeatureEnabled();
       promptModeJSON.classList.toggle("is-disabled", !available);
       promptModeJSON.classList.toggle("hidden", !available);
@@ -2167,6 +2172,11 @@
 
     function syncChatDockLinkAvailability() {
       if (!chatDockLink) {
+        return;
+      }
+      if (!state.settingsLoaded) {
+        // Settings have not resolved yet; keep the server-rendered state instead of
+        // forcing the link to the disabled default while loadReviewSettings() is in flight.
         return;
       }
       const chatEnabled = chatFeatureEnabled();
@@ -2804,8 +2814,8 @@
           const detail = String(body?.error || `review settings failed with ${response.status}`).trim();
           throw new Error(detail);
         }
-        applyReviewSettingsState(body.settings);
         state.settingsLoaded = true;
+        applyReviewSettingsState(body.settings);
       } catch (error) {
         const detail = error instanceof Error ? error.message : "Unable to load review settings.";
         setReviewSettingsStatus("error", detail);
