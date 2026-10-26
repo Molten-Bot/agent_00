@@ -10,6 +10,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
 type expectedRun struct {
@@ -592,11 +593,11 @@ func TestHelpersCoverBoundaryValues(t *testing.T) {
 	if got := reviewDedupeKey("", 42, "abc"); got != "" {
 		t.Fatalf("reviewDedupeKey(empty repo) = %q, want empty", got)
 	}
-	if got := firstNonEmpty(" ", "\t", " value "); got != "value" {
-		t.Fatalf("firstNonEmpty() = %q, want trimmed value", got)
+	if got := stringsx.FirstNonEmpty(" ", "\t", " value "); got != "value" {
+		t.Fatalf("stringsx.FirstNonEmpty() = %q, want trimmed value", got)
 	}
-	if got := firstNonEmpty(" ", "\t"); got != "" {
-		t.Fatalf("firstNonEmpty(empty values) = %q, want empty", got)
+	if got := stringsx.FirstNonEmpty(" ", "\t"); got != "" {
+		t.Fatalf("stringsx.FirstNonEmpty(empty values) = %q, want empty", got)
 	}
 	if _, _, ok := pullRequestRefFromAPIURL(":// bad"); ok {
 		t.Fatal("pullRequestRefFromAPIURL(malformed) ok = true, want false")

@@ -93,7 +93,7 @@ func TestClaudeAuthGateRequiresClaudeCredentialsAfterValidatedGITHUBTOKEN(t *tes
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "github_token_ready")
 
-	runner := &sharedAuthGateRunnerStub{
+	runner := &authGateRunnerStub{
 		run: func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 			if got, want := cmd.Name, "gh"; got != want {
 				t.Fatalf("command = %q, want %q", got, want)

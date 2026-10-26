@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -19,6 +18,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
@@ -149,7 +149,7 @@ func (g *claudeAuthGate) Status(_ context.Context) (web.AgentAuthState, error) {
 				g.state = "needs_browser_login"
 			}
 			if g.state == "needs_browser_login" || strings.TrimSpace(g.message) == "" {
-				g.message = firstNonEmptyString(
+				g.message = stringsx.FirstNonEmpty(
 					probeMessage,
 					claudeCredentialsConfigureMessage(),
 				)
@@ -889,8 +889,8 @@ func (g *claudeAuthGate) probeClaudeAuthStatus() (bool, string) {
 		}
 		return true, fmt.Sprintf(
 			"Claude Code and GitHub token are ready (%s/%s).",
-			firstNonEmptyString(provider, "firstParty"),
-			firstNonEmptyString(method, "session"),
+			stringsx.FirstNonEmpty(provider, "firstParty"),
+			stringsx.FirstNonEmpty(method, "session"),
 		)
 	}
 
@@ -901,13 +901,7 @@ func (g *claudeAuthGate) probeClaudeAuthStatus() (bool, string) {
 }
 
 func (g *claudeAuthGate) readLoginStream(r io.ReadCloser) {
-	defer r.Close()
-
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		g.ingestLoginLine(scanner.Text())
-	}
+	scanProcessLines(r, g.ingestLoginLine)
 }
 
 func (g *claudeAuthGate) ingestLoginLine(line string) {
@@ -1032,7 +1026,7 @@ func (g *claudeAuthGate) waitLogin(cmd *exec.Cmd, tempDir string, readerWG *sync
 		} else {
 			g.ready = false
 			g.state = "needs_browser_login"
-			g.message = firstNonEmptyString(
+			g.message = stringsx.FirstNonEmpty(
 				probeMessage,
 				"Claude login process ended before authorization was detected. Click Done to retry.",
 			)

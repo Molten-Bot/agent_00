@@ -13,6 +13,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
 const defaultPRMergePollInterval = 10 * time.Second
@@ -327,7 +328,7 @@ func (s prViewState) HeadRepositoryNameWithOwner() string {
 	if repo := strings.TrimSpace(s.HeadRepository.NameWithOwner); repo != "" {
 		return repo
 	}
-	owner := strings.TrimSpace(firstNonEmpty(s.HeadRepository.Owner.Login, s.HeadRepoOwner.Login))
+	owner := strings.TrimSpace(stringsx.FirstNonEmpty(s.HeadRepository.Owner.Login, s.HeadRepoOwner.Login))
 	name := strings.TrimSpace(s.HeadRepository.Name)
 	if owner == "" || name == "" {
 		return ""
@@ -470,7 +471,7 @@ func shouldMonitorTaskReviewFeedback(task Task) bool {
 
 func actionablePRReviewFeedback(task Task, state prViewState) PRReviewFeedback {
 	feedback := PRReviewFeedback{
-		PRURL:          firstNonEmpty(state.URL, task.PRURL),
+		PRURL:          stringsx.FirstNonEmpty(state.URL, task.PRURL),
 		PRNumber:       state.Number,
 		Title:          strings.TrimSpace(state.Title),
 		HeadBranch:     strings.TrimSpace(state.HeadRefName),
@@ -509,7 +510,7 @@ func actionablePRReviewFeedback(task Task, state prViewState) PRReviewFeedback {
 			Kind:      "comment",
 			ID:        strings.TrimSpace(comment.ID),
 			Author:    strings.TrimSpace(comment.Author.Login),
-			CreatedAt: firstNonEmpty(comment.UpdatedAt, comment.CreatedAt),
+			CreatedAt: stringsx.FirstNonEmpty(comment.UpdatedAt, comment.CreatedAt),
 			Body:      body,
 		})
 	}
@@ -528,7 +529,7 @@ func actionablePRReviewFeedback(task Task, state prViewState) PRReviewFeedback {
 			Kind:      "review_comment",
 			ID:        fmt.Sprint(comment.ID),
 			Author:    strings.TrimSpace(comment.User.Login),
-			CreatedAt: firstNonEmpty(comment.UpdatedAt, comment.CreatedAt),
+			CreatedAt: stringsx.FirstNonEmpty(comment.UpdatedAt, comment.CreatedAt),
 			Body:      body,
 		})
 	}
