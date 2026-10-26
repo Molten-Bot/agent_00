@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
 const (
@@ -491,21 +493,15 @@ func analyzeSpeechPCM(cfg speechConfig, pcm []byte) speechAudioStats {
 }
 
 func firstNonEmptyEnv(keys ...string) string {
-	for _, key := range keys {
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-			return value
-		}
+	values := make([]string, len(keys))
+	for i, key := range keys {
+		values[i] = os.Getenv(key)
 	}
-	return ""
+	return stringsx.FirstNonEmpty(values...)
 }
 
 func envBool(key string) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
-	case "1", "t", "true", "y", "yes", "on":
-		return true
-	default:
-		return false
-	}
+	return parseTruthyQueryParam(os.Getenv(key))
 }
 
 func envDuration(key string, fallback time.Duration) time.Duration {

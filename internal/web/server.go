@@ -23,6 +23,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
 //go:embed static/*
@@ -1729,7 +1730,7 @@ func (s Server) handleAgentAuthConfigure(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	sessionAuth := firstNonEmptyString(
+	sessionAuth := stringsx.FirstNonEmpty(
 		req.SessionAuth,
 		req.SessionAuthAlias,
 		req.GitHubToken,
@@ -2236,7 +2237,7 @@ func taskSourceFromPromptSubmit(r *http.Request, body []byte, fallback string) s
 	if r != nil {
 		source = r.Header.Get(taskSourceHeader)
 	}
-	return firstNonEmpty(normalizeTaskSource(source), sourceFromRunConfigJSON(body), normalizeTaskSource(fallback))
+	return stringsx.FirstNonEmpty(normalizeTaskSource(source), sourceFromRunConfigJSON(body), normalizeTaskSource(fallback))
 }
 
 func (s Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
@@ -2768,14 +2769,4 @@ func parseTruthyQueryParam(raw string) bool {
 	default:
 		return false
 	}
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/library"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
 const (
@@ -277,7 +278,7 @@ func (w *Watcher) pullRequestDetails(ctx context.Context, ownerRepo string, prNu
 
 func (w *Watcher) runConfigForReview(candidate reviewCandidate, ownerRepo string, prNumber int, details pullRequestDetails, viewer string) (config.Config, error) {
 	options := w.optionsSnapshot()
-	repoURL := firstNonEmpty(
+	repoURL := stringsx.FirstNonEmpty(
 		candidate.NotificationCloneURL,
 		details.Base.Repo.CloneURL,
 		fmt.Sprintf("https://github.com/%s.git", ownerRepo),
@@ -292,18 +293,18 @@ func (w *Watcher) runConfigForReview(candidate reviewCandidate, ownerRepo string
 	if err != nil {
 		return config.Config{}, err
 	}
-	runCfg.ResponseMode = firstNonEmpty(options.ResponseMode, "off")
+	runCfg.ResponseMode = stringsx.FirstNonEmpty(options.ResponseMode, "off")
 	runCfg.Review = &config.ReviewConfig{
 		PRNumber:                 prNumber,
-		PRURL:                    firstNonEmpty(candidate.PRURL, details.HTMLURL, fmt.Sprintf("https://github.com/%s/pull/%d", ownerRepo, prNumber)),
+		PRURL:                    stringsx.FirstNonEmpty(candidate.PRURL, details.HTMLURL, fmt.Sprintf("https://github.com/%s/pull/%d", ownerRepo, prNumber)),
 		HeadBranch:               strings.TrimSpace(details.Head.Ref),
 		Trigger:                  "github-notification",
 		NotificationThreadID:     strings.TrimSpace(candidate.NotificationThreadID),
 		RequestedReviewer:        strings.TrimSpace(viewer),
 		RequireRequestedReviewer: true,
-		Writeback:                firstNonEmpty(options.Writeback, "summary-comment"),
+		Writeback:                stringsx.FirstNonEmpty(options.Writeback, "summary-comment"),
 		AutoMerge:                options.AutoMerge,
-		MergeMethod:              firstNonEmpty(options.MergeMethod, "squash"),
+		MergeMethod:              stringsx.FirstNonEmpty(options.MergeMethod, "squash"),
 	}
 	runCfg.ApplyDefaults()
 	if err := runCfg.Validate(); err != nil {
@@ -470,13 +471,4 @@ func reviewDedupeKey(ownerRepo string, prNumber int, headSHA string) string {
 		headSHA = "unknown"
 	}
 	return fmt.Sprintf("%s#%d@%s", ownerRepo, prNumber, headSHA)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }

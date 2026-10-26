@@ -29,6 +29,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/multiplex"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 	"github.com/Molten-Bot/agent_00/internal/web"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
@@ -315,7 +316,7 @@ func runServer(args []string) int {
 			if authState.Required && !authState.Ready {
 				return "", fmt.Errorf(
 					"agent auth required: %s",
-					firstNonEmptyString(authState.Message, "complete agent authorization in the UI"),
+					stringsx.FirstNonEmpty(authState.Message, "complete agent authorization in the UI"),
 				)
 			}
 		}
@@ -834,7 +835,7 @@ func runServer(args []string) int {
 			if err != nil {
 				return err
 			}
-			daemonLogger("task status=stopped request_id=%s err=%q", firstNonEmptyString(canonical, requestID), errTaskStoppedByOperator)
+			daemonLogger("task status=stopped request_id=%s err=%q", stringsx.FirstNonEmpty(canonical, requestID), errTaskStoppedByOperator)
 			return nil
 		}
 		go func() {
@@ -2036,7 +2037,7 @@ func taskWorkspaceDirFromLogContent(content, requestID string) string {
 			continue
 		}
 
-		workspaceDir := strings.TrimSpace(firstNonEmptyString(fields["workspace"], fields["workspace_dir"]))
+		workspaceDir := strings.TrimSpace(stringsx.FirstNonEmpty(fields["workspace"], fields["workspace_dir"]))
 		if workspaceDir == "" {
 			continue
 		}
@@ -2381,14 +2382,14 @@ func maybeStartAgentAuth(ctx context.Context, runtime agentruntime.Runtime, gate
 			"localruntime.auth status=warn harness=%s action=start_device_auth err=%q detail=%q",
 			runtime.Harness,
 			startErr,
-			firstNonEmptyString(started.Message, status.Message),
+			stringsx.FirstNonEmpty(started.Message, status.Message),
 		)
 		return
 	}
 	logf(
 		"localruntime.auth status=start harness=%s action=start_device_auth state=%s",
 		runtime.Harness,
-		firstNonEmptyString(started.State, "pending_browser_login"),
+		stringsx.FirstNonEmpty(started.State, "pending_browser_login"),
 	)
 }
 

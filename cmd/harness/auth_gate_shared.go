@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -15,8 +17,32 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+
+func stripANSI(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return text
+	}
+	return ansiEscapePattern.ReplaceAllString(text, "")
+}
+
+// scanProcessLines reads r line by line, closing it once the scan ends, and
+// calls ingest for each line. It is shared by the auth gates' device-auth and
+// login output readers, which need the same oversized line buffer to handle
+// long single-line JSON status payloads some agent CLIs emit.
+func scanProcessLines(r io.ReadCloser, ingest func(string)) {
+	defer r.Close()
+
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		ingest(scanner.Text())
+	}
+}
 
 const githubTokenPasteConfigureMessage = "GitHub token is required."
 const githubTokenValidationTimeout = 12 * time.Second
@@ -170,7 +196,7 @@ func (s *configurableAgentAuthState) snapshot(harness string) web.AgentAuthState
 }
 
 func githubTokenNeedsConfigureState(harness, message string) web.AgentAuthState {
-	message = firstNonEmptyString(
+	message = stringsx.FirstNonEmpty(
 		message,
 		"GitHub token is required.",
 	)
@@ -310,7 +336,7 @@ func configureGitHubToken(
 	rawInput, requiredMessage string,
 ) (string, web.AgentAuthState, error) {
 	token := strings.TrimSpace(rawInput)
-	requiredMessage = firstNonEmptyString(requiredMessage, githubTokenPasteConfigureMessage)
+	requiredMessage = stringsx.FirstNonEmpty(requiredMessage, githubTokenPasteConfigureMessage)
 	if token == "" {
 		state := githubTokenNeedsConfigureState(harness, requiredMessage)
 		return "", state, fmt.Errorf("github token is required")
@@ -491,16 +517,6 @@ func withTemporaryGitHubTokenEnvironment(token string, run func() error) error {
 		return fmt.Errorf("restore github token env: %w", restoreErr)
 	}
 	return nil
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, value := range values {
-		trimmed := strings.TrimSpace(value)
-		if trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }
 
 func decodeJSONStrict(raw string, dst any) error {

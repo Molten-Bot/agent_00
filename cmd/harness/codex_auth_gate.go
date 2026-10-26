@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
@@ -23,7 +23,6 @@ const codexAuthProbeTimeout = 12 * time.Second
 const codexAuthAutoStartRetryInterval = 3 * time.Second
 
 var (
-	ansiEscapePattern     = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 	deviceAuthURLPattern  = regexp.MustCompile(`https://auth\.openai\.com/[^\s]+`)
 	deviceAuthCodePattern = regexp.MustCompile(`\b[A-Z0-9]{4,}-[A-Z0-9]{4,}\b`)
 )
@@ -188,7 +187,7 @@ func (g *codexAuthGate) Status(ctx context.Context) (web.AgentAuthState, error) 
 		} else {
 			g.ready = false
 			g.state = "needs_device_auth"
-			g.message = firstNonEmptyString(probeMessage, "Codex is not logged in. Device authorization is required.")
+			g.message = stringsx.FirstNonEmpty(probeMessage, "Codex is not logged in. Device authorization is required.")
 			g.updatedAt = time.Now().UTC()
 		}
 		g.mu.Unlock()
@@ -432,13 +431,7 @@ func (g *codexAuthGate) Configure(ctx context.Context, rawInput string) (web.Age
 }
 
 func (g *codexAuthGate) readDeviceAuthStream(r io.ReadCloser) {
-	defer r.Close()
-
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		g.ingestDeviceAuthLine(scanner.Text())
-	}
+	scanProcessLines(r, g.ingestDeviceAuthLine)
 }
 
 func (g *codexAuthGate) ingestDeviceAuthLine(line string) {
@@ -581,7 +574,7 @@ func (g *codexAuthGate) probe(ctx context.Context) (bool, string, error) {
 	if strings.Contains(fullLower, "api key") {
 		return true, normalizeCodexStatusMessage(combined), nil
 	}
-	return false, firstNonEmptyString(combined, "Unable to verify Codex authorization status."), nil
+	return false, stringsx.FirstNonEmpty(combined, "Unable to verify Codex authorization status."), nil
 }
 
 // Re-read the shared failure marker even when the cached login status is ready.
@@ -643,13 +636,6 @@ func (g *codexAuthGate) githubTokenRequirementState() (bool, web.AgentAuthState)
 	g.mu.Unlock()
 
 	return githubTokenRequirementState(baseCtx, runner, agentruntime.HarnessCodex, runtimeConfigPath, initCfg)
-}
-
-func stripANSI(text string) string {
-	if strings.TrimSpace(text) == "" {
-		return text
-	}
-	return ansiEscapePattern.ReplaceAllString(text, "")
 }
 
 func normalizeCodexStatusMessage(raw string) string {

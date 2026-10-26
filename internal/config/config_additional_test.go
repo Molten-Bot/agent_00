@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
 func TestUnmarshalRejectsNonCanonicalGuardFieldCasing(t *testing.T) {
@@ -145,8 +147,8 @@ func TestSummarizeAndFirstNonEmptyTrimmed(t *testing.T) {
 		t.Fatalf("summarize(trailing punctuation) = %q, want %q", got, "value")
 	}
 
-	if got := firstNonEmptyTrimmed(" ", "\n", " value "); got != "value" {
-		t.Fatalf("firstNonEmptyTrimmed() = %q, want %q", got, "value")
+	if got := stringsx.FirstNonEmpty(" ", "\n", " value "); got != "value" {
+		t.Fatalf("stringsx.FirstNonEmpty() = %q, want %q", got, "value")
 	}
 }
 

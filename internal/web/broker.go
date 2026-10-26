@@ -15,6 +15,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/library"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
 const (
@@ -561,7 +562,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 	reviewers := reviewersFromRunConfigJSON(cfgCopy)
 	workflow := workflowFromRunConfigJSON(cfgCopy)
 	agentHarness := agentHarnessFromRunConfigJSON(cfgCopy)
-	source = firstNonEmpty(
+	source = stringsx.FirstNonEmpty(
 		normalizeTaskSource(source),
 		sourceFromRunConfigJSON(cfgCopy),
 		defaultTaskSourceForRequestID(requestID),
@@ -738,7 +739,7 @@ func (b *Broker) RecordRejectedPromptSubmissionWithSource(runConfigJSON []byte, 
 	requestID := fmt.Sprintf("local-rejected-%d-%06d", now.Unix(), b.rejectedSeq)
 	t := &taskState{
 		RequestID:         requestID,
-		Source:            firstNonEmpty(normalizeTaskSource(source), sourceFromRunConfigJSON(runConfigJSON), defaultTaskSourceForRequestID(requestID)),
+		Source:            stringsx.FirstNonEmpty(normalizeTaskSource(source), sourceFromRunConfigJSON(runConfigJSON), defaultTaskSourceForRequestID(requestID)),
 		Prompt:            prompt,
 		PromptIsUserInput: promptIsUserInputForTask(requestID, prompt),
 		Images:            append([]PromptImage(nil), images...),
@@ -1069,8 +1070,8 @@ func (b *Broker) repositoriesSnapshotLocked() []Repository {
 	}
 	repos := append([]Repository(nil), b.repositories...)
 	sort.SliceStable(repos, func(i, j int) bool {
-		left := strings.ToLower(firstNonEmpty(repos[i].FullName, repos[i].HTMLURL, repos[i].Key))
-		right := strings.ToLower(firstNonEmpty(repos[j].FullName, repos[j].HTMLURL, repos[j].Key))
+		left := strings.ToLower(stringsx.FirstNonEmpty(repos[i].FullName, repos[i].HTMLURL, repos[i].Key))
+		right := strings.ToLower(stringsx.FirstNonEmpty(repos[j].FullName, repos[j].HTMLURL, repos[j].Key))
 		return left < right
 	})
 	for i := range repos {
@@ -1115,7 +1116,7 @@ func (b *Broker) registerRepositoriesLocked(values []string, githubRepos []GitHu
 		changed = true
 	}
 	for _, repo := range githubRepos {
-		key := repositoryKey(firstNonEmpty(repo.FullName, repo.HTMLURL, repo.Name))
+		key := repositoryKey(stringsx.FirstNonEmpty(repo.FullName, repo.HTMLURL, repo.Name))
 		if key == "" {
 			continue
 		}
@@ -1188,14 +1189,14 @@ func taskWorkflow(t *taskState) string {
 	if t == nil {
 		return ""
 	}
-	return firstNonEmpty(t.Workflow, t.Skill)
+	return stringsx.FirstNonEmpty(t.Workflow, t.Skill)
 }
 
 func taskAgentHarness(t *taskState) string {
 	if t == nil {
 		return ""
 	}
-	return firstNonEmpty(t.AgentHarness, agentHarnessFromStage(t.Stage))
+	return stringsx.FirstNonEmpty(t.AgentHarness, agentHarnessFromStage(t.Stage))
 }
 
 func workflowStatsGroupName(name string) string {
@@ -1744,7 +1745,7 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 			existing.Reviewers = reviewersFromRunConfigJSON(b.runConfigs[requestID])
 		}
 		if existing.Source == "" {
-			existing.Source = firstNonEmpty(sourceFromRunConfigJSON(b.runConfigs[requestID]), defaultTaskSourceForRequestID(requestID))
+			existing.Source = stringsx.FirstNonEmpty(sourceFromRunConfigJSON(b.runConfigs[requestID]), defaultTaskSourceForRequestID(requestID))
 		}
 		if existing.BaseBranch == "" {
 			existing.BaseBranch = b.taskBaseBranchLocked(requestID)
@@ -1761,7 +1762,7 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 	images := imagesFromRunConfigJSON(b.runConfigs[requestID])
 	t := &taskState{
 		RequestID:         requestID,
-		Source:            firstNonEmpty(sourceFromRunConfigJSON(b.runConfigs[requestID]), defaultTaskSourceForRequestID(requestID)),
+		Source:            stringsx.FirstNonEmpty(sourceFromRunConfigJSON(b.runConfigs[requestID]), defaultTaskSourceForRequestID(requestID)),
 		Prompt:            prompt,
 		PromptIsUserInput: promptIsUserInputForTask(requestID, prompt),
 		Images:            images,
@@ -1791,57 +1792,57 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 	}()
 
 	t.UpdatedAt = now
-	t.LiveAppURL = firstNonEmpty(taskLiveAppURLFromFields(fields), t.LiveAppURL)
+	t.LiveAppURL = stringsx.FirstNonEmpty(taskLiveAppURLFromFields(fields), t.LiveAppURL)
 
 	if strings.HasPrefix(line, "task status=start") {
 		t.Status = "running"
-		t.Source = firstNonEmpty(t.Source, normalizeTaskSource(fields["source"]), defaultTaskSourceForRequestID(t.RequestID))
-		t.Skill = firstNonEmpty(t.Skill, fields["skill"])
-		t.Workflow = firstNonEmpty(t.Workflow, workflowFromFields(fields))
-		t.AgentHarness = firstNonEmpty(t.AgentHarness, agentHarnessFromFields(fields))
+		t.Source = stringsx.FirstNonEmpty(t.Source, normalizeTaskSource(fields["source"]), defaultTaskSourceForRequestID(t.RequestID))
+		t.Skill = stringsx.FirstNonEmpty(t.Skill, fields["skill"])
+		t.Workflow = stringsx.FirstNonEmpty(t.Workflow, workflowFromFields(fields))
+		t.AgentHarness = stringsx.FirstNonEmpty(t.AgentHarness, agentHarnessFromFields(fields))
 		repos := reposFromFields(fields)
 		t.Repos = appendNonEmptyUnique(t.Repos, repos...)
 		b.promptedRepos = appendNonEmptyUnique(b.promptedRepos, repos...)
 		if len(t.Repos) > 0 {
 			t.Repo = t.Repos[0]
 		} else {
-			t.Repo = firstNonEmpty(t.Repo, fields["repo"])
+			t.Repo = stringsx.FirstNonEmpty(t.Repo, fields["repo"])
 		}
 	}
 
 	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=completed") {
 		t.Status = "completed"
-		t.WorkspaceDir = firstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
-		t.Branch = firstNonEmpty(fields["branch"], t.Branch)
-		t.PRURL = firstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
+		t.WorkspaceDir = stringsx.FirstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
+		t.Branch = stringsx.FirstNonEmpty(fields["branch"], t.Branch)
+		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
 	}
 
 	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=ok") {
 		t.Status = "completed"
-		t.WorkspaceDir = firstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
-		t.Branch = firstNonEmpty(fields["branch"], t.Branch)
-		t.PRURL = firstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
+		t.WorkspaceDir = stringsx.FirstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
+		t.Branch = stringsx.FirstNonEmpty(fields["branch"], t.Branch)
+		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
 	}
 
 	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=no_changes") {
 		t.Status = "no_changes"
-		t.WorkspaceDir = firstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
-		t.Branch = firstNonEmpty(fields["branch"], t.Branch)
-		t.PRURL = firstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
+		t.WorkspaceDir = stringsx.FirstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
+		t.Branch = stringsx.FirstNonEmpty(fields["branch"], t.Branch)
+		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
 	}
 
 	if strings.HasPrefix(line, "task status=paused") {
 		t.Status = "paused"
-		t.Stage = firstNonEmpty(t.Stage, "task")
-		t.StageStatus = firstNonEmpty(fields["status"], "paused")
+		t.Stage = stringsx.FirstNonEmpty(t.Stage, "task")
+		t.StageStatus = stringsx.FirstNonEmpty(fields["status"], "paused")
 	}
 
 	if strings.HasPrefix(line, "task status=resumed") {
 		if t.Status == "" || t.Status == "paused" || t.Status == "pending" {
 			t.Status = "pending"
 		}
-		t.Stage = firstNonEmpty(t.Stage, "task")
-		t.StageStatus = firstNonEmpty(fields["status"], "resumed")
+		t.Stage = stringsx.FirstNonEmpty(t.Stage, "task")
+		t.StageStatus = stringsx.FirstNonEmpty(fields["status"], "resumed")
 	}
 
 	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=stopped") {
@@ -1849,10 +1850,10 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		if code, ok := parseIntField(fields["exit_code"]); ok {
 			t.ExitCode = code
 		}
-		t.WorkspaceDir = firstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
-		t.Branch = firstNonEmpty(fields["branch"], t.Branch)
-		t.PRURL = firstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
-		t.Error = firstNonEmpty(fields["err"], fields["error"], t.Error)
+		t.WorkspaceDir = stringsx.FirstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
+		t.Branch = stringsx.FirstNonEmpty(fields["branch"], t.Branch)
+		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
+		t.Error = stringsx.FirstNonEmpty(fields["err"], fields["error"], t.Error)
 		if strings.TrimSpace(t.Error) == "" {
 			t.Error = "task stopped by operator"
 		}
@@ -1863,23 +1864,23 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		if code, ok := parseIntField(fields["exit_code"]); ok {
 			t.ExitCode = code
 		}
-		t.WorkspaceDir = firstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
-		t.Branch = firstNonEmpty(fields["branch"], t.Branch)
-		t.PRURL = firstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
-		t.Error = firstNonEmpty(fields["err"], fields["error"], t.Error)
+		t.WorkspaceDir = stringsx.FirstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
+		t.Branch = stringsx.FirstNonEmpty(fields["branch"], t.Branch)
+		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
+		t.Error = stringsx.FirstNonEmpty(fields["err"], fields["error"], t.Error)
 	}
 
 	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=invalid") {
 		t.Status = "invalid"
-		t.Error = firstNonEmpty(fields["err"], fields["error"], t.Error)
+		t.Error = stringsx.FirstNonEmpty(fields["err"], fields["error"], t.Error)
 	}
 
 	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=duplicate") {
 		if t.Status == "" || t.Status == "pending" || t.Status == "duplicate" {
 			t.Status = "duplicate"
-			t.Stage = firstNonEmpty(t.Stage, "task")
-			t.StageStatus = firstNonEmpty(fields["state"], t.StageStatus)
-			t.Error = firstNonEmpty(fields["err"], fields["error"], t.Error)
+			t.Stage = stringsx.FirstNonEmpty(t.Stage, "task")
+			t.StageStatus = stringsx.FirstNonEmpty(fields["state"], t.StageStatus)
+			t.Error = stringsx.FirstNonEmpty(fields["err"], fields["error"], t.Error)
 			if t.Error == "" {
 				var details []string
 				if state := strings.TrimSpace(fields["state"]); state != "" {
@@ -1901,7 +1902,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		agentInvocationLine := isAgentInvocationWorkflowStatusFields(fields)
 		if stage := fields["stage"]; stage != "" {
 			t.Stage = stage
-			t.AgentHarness = firstNonEmpty(t.AgentHarness, agentHarnessFromStage(stage))
+			t.AgentHarness = stringsx.FirstNonEmpty(t.AgentHarness, agentHarnessFromStage(stage))
 		}
 		if stageStatus := fields["status"]; stageStatus != "" {
 			t.StageStatus = stageStatus
@@ -1909,10 +1910,10 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 				t.Status = "error"
 			}
 		}
-		t.Branch = firstNonEmpty(fields["branch"], t.Branch)
-		t.PRURL = firstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
+		t.Branch = stringsx.FirstNonEmpty(fields["branch"], t.Branch)
+		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
 		if !agentInvocationLine {
-			t.Error = firstNonEmpty(fields["err"], fields["error"], t.Error)
+			t.Error = stringsx.FirstNonEmpty(fields["err"], fields["error"], t.Error)
 		}
 	}
 
@@ -1934,7 +1935,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		}
 		b.appendTaskLogLocked(t, TaskLog{
 			Time:   now.Format(time.RFC3339Nano),
-			Stream: firstNonEmpty(fields["stream"], "stdout"),
+			Stream: stringsx.FirstNonEmpty(fields["stream"], "stdout"),
 			Text:   text,
 		})
 		return
@@ -2313,15 +2314,6 @@ func parseFloatField(v string) (float64, bool) {
 	return n, true
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if trimmed := strings.TrimSpace(v); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
 func repositoryFromGitHubRepo(key string, repo GitHubRepo) Repository {
 	ownerKind := repositoryOwnerKind(repo.OwnerType)
 	visibility := RepositoryVisibilityPublic
@@ -2350,16 +2342,16 @@ func repositoryFromGitHubRepo(key string, repo GitHubRepo) Repository {
 }
 
 func mergeRepository(current, next Repository) Repository {
-	next.Key = firstNonEmpty(next.Key, current.Key)
-	next.Name = firstNonEmpty(next.Name, current.Name)
-	next.FullName = firstNonEmpty(next.FullName, current.FullName)
-	next.Description = firstNonEmpty(next.Description, current.Description)
-	next.HTMLURL = firstNonEmpty(next.HTMLURL, current.HTMLURL)
-	next.OwnerAvatarURL = firstNonEmpty(next.OwnerAvatarURL, current.OwnerAvatarURL)
-	next.DefaultBranch = firstNonEmpty(next.DefaultBranch, current.DefaultBranch)
-	next.Language = firstNonEmpty(next.Language, current.Language)
-	next.UpdatedAt = firstNonEmpty(next.UpdatedAt, current.UpdatedAt)
-	next.PushedAt = firstNonEmpty(next.PushedAt, current.PushedAt)
+	next.Key = stringsx.FirstNonEmpty(next.Key, current.Key)
+	next.Name = stringsx.FirstNonEmpty(next.Name, current.Name)
+	next.FullName = stringsx.FirstNonEmpty(next.FullName, current.FullName)
+	next.Description = stringsx.FirstNonEmpty(next.Description, current.Description)
+	next.HTMLURL = stringsx.FirstNonEmpty(next.HTMLURL, current.HTMLURL)
+	next.OwnerAvatarURL = stringsx.FirstNonEmpty(next.OwnerAvatarURL, current.OwnerAvatarURL)
+	next.DefaultBranch = stringsx.FirstNonEmpty(next.DefaultBranch, current.DefaultBranch)
+	next.Language = stringsx.FirstNonEmpty(next.Language, current.Language)
+	next.UpdatedAt = stringsx.FirstNonEmpty(next.UpdatedAt, current.UpdatedAt)
+	next.PushedAt = stringsx.FirstNonEmpty(next.PushedAt, current.PushedAt)
 	if next.Visibility == "" || next.Visibility == RepositoryVisibilityUnknown {
 		next.Visibility = current.Visibility
 	}
@@ -2445,14 +2437,14 @@ func workflowFromFields(fields map[string]string) string {
 	if fields == nil {
 		return ""
 	}
-	return firstNonEmpty(fields["workflow"], fields["library_task"], fields["libraryTaskName"], fields["skill"])
+	return stringsx.FirstNonEmpty(fields["workflow"], fields["library_task"], fields["libraryTaskName"], fields["skill"])
 }
 
 func agentHarnessFromFields(fields map[string]string) string {
 	if fields == nil {
 		return ""
 	}
-	return firstNonEmpty(fields["agent_harness"], fields["agentHarness"], agentHarnessFromStage(fields["stage"]))
+	return stringsx.FirstNonEmpty(fields["agent_harness"], fields["agentHarness"], agentHarnessFromStage(fields["stage"]))
 }
 
 func agentHarnessFromStage(stage string) string {
@@ -2503,7 +2495,7 @@ func taskLiveAppURLFromFields(fields map[string]string) string {
 			return url
 		}
 	}
-	event := strings.ToLower(strings.TrimSpace(firstNonEmpty(fields["event"], fields["kind"], fields["type"])))
+	event := strings.ToLower(strings.TrimSpace(stringsx.FirstNonEmpty(fields["event"], fields["kind"], fields["type"])))
 	if strings.Contains(event, "live_app") || strings.Contains(event, "app_url") || strings.Contains(event, "preview") {
 		return normalizeHTTPURL(fields["url"])
 	}
@@ -2753,7 +2745,7 @@ func branchFromRunConfigJSON(runConfigJSON []byte) string {
 	if err := json.Unmarshal(runConfigJSON, &raw); err != nil {
 		return ""
 	}
-	return firstNonEmpty(raw.BaseBranch, raw.Branch)
+	return stringsx.FirstNonEmpty(raw.BaseBranch, raw.Branch)
 }
 
 func workflowFromRunConfigJSON(runConfigJSON []byte) string {
@@ -2768,7 +2760,7 @@ func workflowFromRunConfigJSON(runConfigJSON []byte) string {
 	if err := json.Unmarshal(runConfigJSON, &raw); err != nil {
 		return ""
 	}
-	return firstNonEmpty(raw.LibraryTaskName, raw.LibraryTaskNameLower, raw.Skill)
+	return stringsx.FirstNonEmpty(raw.LibraryTaskName, raw.LibraryTaskNameLower, raw.Skill)
 }
 
 func agentHarnessFromRunConfigJSON(runConfigJSON []byte) string {
@@ -2782,7 +2774,7 @@ func agentHarnessFromRunConfigJSON(runConfigJSON []byte) string {
 	if err := json.Unmarshal(runConfigJSON, &raw); err != nil {
 		return ""
 	}
-	return firstNonEmpty(raw.AgentHarness, raw.AgentHarnessSnake)
+	return stringsx.FirstNonEmpty(raw.AgentHarness, raw.AgentHarnessSnake)
 }
 
 func sourceFromRunConfigJSON(runConfigJSON []byte) string {
@@ -2801,7 +2793,7 @@ func sourceFromRunConfigJSON(runConfigJSON []byte) string {
 	if err := json.Unmarshal(runConfigJSON, &raw); err != nil {
 		return ""
 	}
-	return firstNonEmpty(
+	return stringsx.FirstNonEmpty(
 		normalizeTaskSource(raw.Source),
 		normalizeTaskSource(raw.StartSource),
 		normalizeTaskSource(raw.StartSourceSnake),

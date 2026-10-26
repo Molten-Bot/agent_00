@@ -6,6 +6,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/library"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
@@ -17,7 +18,7 @@ func prReviewFeedbackRunConfig(original config.Config, task web.Task, feedback w
 	if len(cfg.RepoList()) == 0 {
 		return config.Config{}, fmt.Errorf("original task has no repository")
 	}
-	headBranch := firstNonEmptyString(feedback.HeadBranch, task.Branch, cfg.BaseBranch)
+	headBranch := stringsx.FirstNonEmpty(feedback.HeadBranch, task.Branch, cfg.BaseBranch)
 	if strings.TrimSpace(headBranch) == "" {
 		return config.Config{}, fmt.Errorf("pull request head branch is required")
 	}
@@ -29,7 +30,7 @@ func prReviewFeedbackRunConfig(original config.Config, task web.Task, feedback w
 	cfg.Prompt = prReviewFeedbackPrompt(original.Prompt, task, feedback)
 	cfg.CommitMessage = prReviewFeedbackCommitMessage
 	if strings.TrimSpace(cfg.PRTitle) == "" {
-		cfg.PRTitle = firstNonEmptyString(feedback.Title, task.Prompt)
+		cfg.PRTitle = stringsx.FirstNonEmpty(feedback.Title, task.Prompt)
 	}
 	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
@@ -45,9 +46,9 @@ func prReviewFeedbackPrompt(originalPrompt string, task web.Task, feedback web.P
 	b.WriteString("Original task prompt:\n")
 	b.WriteString(nonEmptyIndented(originalPrompt, "(not available)"))
 	b.WriteString("\n\nPull request:\n")
-	writePromptField(&b, "URL", firstNonEmptyString(feedback.PRURL, task.PRURL))
+	writePromptField(&b, "URL", stringsx.FirstNonEmpty(feedback.PRURL, task.PRURL))
 	writePromptField(&b, "Title", feedback.Title)
-	writePromptField(&b, "Head branch to update", firstNonEmptyString(feedback.HeadBranch, task.Branch))
+	writePromptField(&b, "Head branch to update", stringsx.FirstNonEmpty(feedback.HeadBranch, task.Branch))
 	writePromptField(&b, "Base branch", feedback.BaseBranch)
 	writePromptField(&b, "Review decision", feedback.ReviewDecision)
 	b.WriteString("\nReview feedback to address:\n")

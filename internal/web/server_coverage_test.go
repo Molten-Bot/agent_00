@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
 type nonFlushingResponseWriter struct {
@@ -102,8 +104,8 @@ func TestRequestAndPathCompressionHelpersAndFirstNonEmptyString(t *testing.T) {
 		t.Fatal("isCompressiblePath(blank) = true, want false")
 	}
 
-	if got := firstNonEmptyString("", " ", "\t"); got != "" {
-		t.Fatalf("firstNonEmptyString(all blank) = %q, want empty", got)
+	if got := stringsx.FirstNonEmpty("", " ", "\t"); got != "" {
+		t.Fatalf("stringsx.FirstNonEmpty(all blank) = %q, want empty", got)
 	}
 }
 

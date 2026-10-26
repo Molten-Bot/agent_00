@@ -12,8 +12,8 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
-func selectableGitHubReadyRunner() *sharedAuthGateRunnerStub {
-	return &sharedAuthGateRunnerStub{
+func selectableGitHubReadyRunner() *authGateRunnerStub {
+	return &authGateRunnerStub{
 		run: func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 			if got, want := cmd.Name, "gh"; got != want {
 				return execx.Result{}, nil
@@ -109,7 +109,7 @@ func TestSelectableAgentAuthGateStatusRequiresHarnessSelectionAfterValidatedGITH
 	t.Setenv("GITHUB_TOKEN", "github_token_ready_token")
 
 	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
-	runner := &sharedAuthGateRunnerStub{
+	runner := &authGateRunnerStub{
 		run: func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 			if got, want := cmd.Name, "gh"; got != want {
 				t.Fatalf("command = %q, want %q", got, want)
@@ -143,7 +143,7 @@ func TestSelectableAgentAuthGateStatusAcceptsMalformedDockerComposeGitHubEnv(t *
 	t.Setenv("GITHUB_TOKEN:github_token_ready_token", "")
 
 	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
-	runner := &sharedAuthGateRunnerStub{
+	runner := &authGateRunnerStub{
 		run: func(_ context.Context, _ execx.Command) (execx.Result, error) {
 			if got, want := os.Getenv("GITHUB_TOKEN"), "github_token_ready_token"; got != want {
 				t.Fatalf("GITHUB_TOKEN = %q, want %q during validation", got, want)
