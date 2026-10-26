@@ -15,17 +15,6 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
-type sharedAuthGateRunnerStub struct {
-	run func(context.Context, execx.Command) (execx.Result, error)
-}
-
-func (s *sharedAuthGateRunnerStub) Run(ctx context.Context, cmd execx.Command) (execx.Result, error) {
-	if s.run == nil {
-		return execx.Result{}, nil
-	}
-	return s.run(ctx, cmd)
-}
-
 func fakeGitHubPAT(suffix string) string {
 	return "ghp_" + suffix
 }
@@ -294,7 +283,7 @@ func TestGitHubTokenRequirementStateAcceptsValidatedStartupToken(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 
-	runner := &sharedAuthGateRunnerStub{
+	runner := &authGateRunnerStub{
 		run: func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 			if got, want := cmd.Name, "gh"; got != want {
 				t.Fatalf("command = %q, want %q", got, want)
@@ -322,7 +311,7 @@ func TestGitHubTokenRequirementStateRejectsInvalidStartupToken(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 
-	runner := &sharedAuthGateRunnerStub{
+	runner := &authGateRunnerStub{
 		run: func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 			if got, want := strings.Join(cmd.Args, " "), gitHubTokenValidationArgsStringForTest(); got != want {
 				t.Fatalf("args = %q, want %q", got, want)
@@ -359,7 +348,7 @@ func TestValidateGitHubTokenUsesLegacyCompatibleStatusCommand(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 
 	var calls []string
-	runner := &sharedAuthGateRunnerStub{
+	runner := &authGateRunnerStub{
 		run: func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 			calls = append(calls, strings.Join(cmd.Args, " "))
 			if got, want := strings.Join(cmd.Args, " "), "auth status --hostname github.com"; got != want {
@@ -472,7 +461,7 @@ func TestGitHubTokenRequirementStatePrefersValidatedEnvironmentTokenOverInvalidP
 		t.Fatalf("WriteFile(config) error = %v", err)
 	}
 
-	runner := &sharedAuthGateRunnerStub{
+	runner := &authGateRunnerStub{
 		run: func(_ context.Context, _ execx.Command) (execx.Result, error) {
 			switch got := os.Getenv("GITHUB_TOKEN"); got {
 			case "github_token_env_valid":
@@ -499,7 +488,7 @@ func TestApplyGitHubTokenRequirementStateFallsBackToLaterValidCandidate(t *testi
 	t.Setenv("GH_TOKEN", "github_token_env_invalid")
 	t.Setenv("GITHUB_TOKEN", "")
 
-	runner := &sharedAuthGateRunnerStub{
+	runner := &authGateRunnerStub{
 		run: func(_ context.Context, _ execx.Command) (execx.Result, error) {
 			switch got := os.Getenv("GITHUB_TOKEN"); got {
 			case "github_token_env_invalid":
@@ -611,7 +600,7 @@ func TestConfigureGitHubTokenRejectsEmptyInput(t *testing.T) {
 func TestConfigureGitHubTokenRejectsInvalidatedToken(t *testing.T) {
 	t.Parallel()
 
-	runner := &sharedAuthGateRunnerStub{
+	runner := &authGateRunnerStub{
 		run: func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 			if !isGitHubTokenValidationCommandForTest(cmd) {
 				t.Fatalf("unexpected command = %+v", cmd)

@@ -15,6 +15,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
 type authGateRunnerStub struct {
@@ -542,11 +543,11 @@ func TestProbeClassificationAndHelpers(t *testing.T) {
 	if got, want := stripANSI("\x1b[31merror\x1b[0m"), "error"; got != want {
 		t.Fatalf("stripANSI() = %q, want %q", got, want)
 	}
-	if got, want := firstNonEmptyString("  ", "\n", "value"), "value"; got != want {
-		t.Fatalf("firstNonEmptyString() = %q, want %q", got, want)
+	if got, want := stringsx.FirstNonEmpty("  ", "\n", "value"), "value"; got != want {
+		t.Fatalf("stringsx.FirstNonEmpty() = %q, want %q", got, want)
 	}
-	if got := firstNonEmptyString(" ", "\t"); got != "" {
-		t.Fatalf("firstNonEmptyString(all empty) = %q, want empty", got)
+	if got := stringsx.FirstNonEmpty(" ", "\t"); got != "" {
+		t.Fatalf("stringsx.FirstNonEmpty(all empty) = %q, want empty", got)
 	}
 	if got, want := normalizeCodexStatusMessage("logged in using an API key"), "Logged in with OpenAI API key."; got != want {
 		t.Fatalf("normalizeCodexStatusMessage(api key) = %q, want %q", got, want)

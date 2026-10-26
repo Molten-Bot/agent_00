@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
 const (
@@ -174,7 +175,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	}
 
 	if strings.TrimSpace(c.BaseBranch) == "" {
-		c.BaseBranch = firstNonEmptyTrimmed(aliases.Branch)
+		c.BaseBranch = stringsx.FirstNonEmpty(aliases.Branch)
 	}
 
 	return nil
@@ -958,13 +959,4 @@ func normalizeReviewer(value string) string {
 		return ""
 	}
 	return value
-}
-
-func firstNonEmptyTrimmed(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }

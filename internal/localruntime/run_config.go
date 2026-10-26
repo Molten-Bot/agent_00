@@ -8,6 +8,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/library"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
 // ParseRunConfigJSON parses one inline run config JSON object into a validated config.
@@ -73,7 +74,7 @@ func normalizeRunConfigMap(v any) (map[string]any, error) {
 	if err := normalizeRunConfigAliases(parsed); err != nil {
 		return nil, err
 	}
-	if taskName := firstNonEmpty(stringAt(parsed, "libraryTaskName")); taskName != "" {
+	if taskName := stringsx.FirstNonEmpty(stringAt(parsed, "libraryTaskName")); taskName != "" {
 		return expandLibraryTaskRunConfig(parsed, taskName)
 	}
 	return parsed, nil
@@ -123,12 +124,12 @@ func normalizeRunConfigAliases(m map[string]any) error {
 	copyRunConfigAlias(m, "prBody", "prbody")
 	normalizeReviewRunConfigAliases(m)
 
-	if firstNonEmpty(stringAt(m, "baseBranch")) == "" {
-		if branch := firstNonEmpty(stringAt(m, "branch")); branch != "" {
+	if stringsx.FirstNonEmpty(stringAt(m, "baseBranch")) == "" {
+		if branch := stringsx.FirstNonEmpty(stringAt(m, "branch")); branch != "" {
 			m["baseBranch"] = branch
 		}
 	}
-	if firstNonEmpty(stringAt(m, "prompt")) != "" && firstNonEmpty(stringAt(m, "libraryTaskName")) != "" {
+	if stringsx.FirstNonEmpty(stringAt(m, "prompt")) != "" && stringsx.FirstNonEmpty(stringAt(m, "libraryTaskName")) != "" {
 		return fmt.Errorf("run config payload cannot include both prompt and librarytaskname")
 	}
 	if prNumber, ok := positiveIntValue(m["prNumber"]); ok {
@@ -137,13 +138,13 @@ func normalizeRunConfigAliases(m map[string]any) error {
 			review["prNumber"] = prNumber
 		}
 	}
-	if prURL := firstNonEmpty(stringAt(m, "prUrl")); prURL != "" {
+	if prURL := stringsx.FirstNonEmpty(stringAt(m, "prUrl")); prURL != "" {
 		review := ensureReviewMap(m)
 		if !runConfigAliasValueSet(review["prUrl"]) {
 			review["prUrl"] = prURL
 		}
 	}
-	if headBranch := firstNonEmpty(stringAt(m, "headBranch")); headBranch != "" {
+	if headBranch := stringsx.FirstNonEmpty(stringAt(m, "headBranch")); headBranch != "" {
 		review := ensureReviewMap(m)
 		if !runConfigAliasValueSet(review["headBranch"]) {
 			review["headBranch"] = headBranch
@@ -263,7 +264,7 @@ func positiveIntValue(v any) (int, bool) {
 }
 
 func expandLibraryTaskRunConfig(m map[string]any, taskName string) (map[string]any, error) {
-	repo := firstNonEmpty(stringAtAny(m, "repo", "repoUrl"))
+	repo := stringsx.FirstNonEmpty(stringAtAny(m, "repo", "repoUrl"))
 	repos := nonEmptyStringArray(m["repos"])
 	if repo == "" {
 		if len(repos) == 1 {
@@ -278,7 +279,7 @@ func expandLibraryTaskRunConfig(m map[string]any, taskName string) (map[string]a
 		return nil, fmt.Errorf("load library catalog: %w", err)
 	}
 	promptContext := stringAt(m, "promptContext")
-	cfg, err := catalog.ExpandRunConfigWithContext(taskName, repo, firstNonEmpty(stringAt(m, "baseBranch"), stringAt(m, "branch")), promptContext)
+	cfg, err := catalog.ExpandRunConfigWithContext(taskName, repo, stringsx.FirstNonEmpty(stringAt(m, "baseBranch"), stringAt(m, "branch")), promptContext)
 	if err != nil {
 		return nil, err
 	}
@@ -369,13 +370,4 @@ func nonEmptyStringArray(v any) []string {
 	default:
 		return nil
 	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }

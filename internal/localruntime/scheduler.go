@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
 var errSchedulerClosed = errors.New("task controller is closed")
@@ -154,7 +156,7 @@ func (c *AdaptiveScheduler) Acquire(ctx context.Context, requestID string) (func
 	if queued {
 		c.logf(
 			"task status=queued request_id=%s queue_depth=%d running=%d allowed=%d",
-			firstNonEmpty(waiter.requestID, fmt.Sprintf("queued-%d", waiter.id)),
+			stringsx.FirstNonEmpty(waiter.requestID, fmt.Sprintf("queued-%d", waiter.id)),
 			queueDepth,
 			running,
 			allowed,
@@ -236,7 +238,7 @@ func (c *AdaptiveScheduler) AcquireForce(ctx context.Context, requestID string) 
 
 	c.logf(
 		"task status=forced request_id=%s running=%d allowed=%d",
-		firstNonEmpty(requestID, "forced"),
+		stringsx.FirstNonEmpty(requestID, "forced"),
 		running,
 		allowed,
 	)
