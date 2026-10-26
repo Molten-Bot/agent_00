@@ -2214,8 +2214,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `const THEME_MODES = ["light", "dark", "night", "pink"];`) {
 		t.Fatalf("expected index html to include pink in the theme selector cycle")
 	}
-	if !strings.Contains(markup, `const DEFAULT_THEME_MODE = "light";`) {
-		t.Fatalf("expected index html to define light as the default theme mode")
+	if !strings.Contains(markup, `const DEFAULT_THEME_MODE = "dark";`) {
+		t.Fatalf("expected index html to define dark as the default theme mode")
 	}
 	if !strings.Contains(markup, `const GOOGLE_ANALYTICS_MEASUREMENT_ID = "G-BY33RFG2WB";`) {
 		t.Fatalf("expected index html to expose the google analytics measurement id constant to the usage tracker")
@@ -2279,16 +2279,16 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected index html to keep selected task history filter after a successful rerun")
 	}
 	if !strings.Contains(markup, `return THEME_MODES.includes(raw) ? raw : DEFAULT_THEME_MODE;`) {
-		t.Fatalf("expected index html theme loading to fall back to the default light theme")
+		t.Fatalf("expected index html theme loading to fall back to the default dark theme")
 	}
-	if !strings.Contains(markup, `<span class="theme-toggle-icon" id="theme-toggle-icon" aria-hidden="true"><i data-lucide="sun" class="theme-toggle-icon-glyph" aria-hidden="true"></i></span>`) {
+	if !strings.Contains(markup, `<span class="theme-toggle-icon" id="theme-toggle-icon" aria-hidden="true"><i data-lucide="moon" class="theme-toggle-icon-glyph" aria-hidden="true"></i></span>`) {
 		t.Fatalf("expected index html to render a dedicated theme toggle icon slot")
 	}
 	if !strings.Contains(markup, `<span class="prompt-mode-mobile-label" aria-hidden="true">Theme</span>`) {
 		t.Fatalf("expected index html to expose a mobile label for the nav theme selector")
 	}
-	if !strings.Contains(markup, `<span id="theme-toggle-label">Light</span>`) {
-		t.Fatalf("expected index html to render light as the initial theme toggle label")
+	if !strings.Contains(markup, `<span id="theme-toggle-label">Dark</span>`) {
+		t.Fatalf("expected index html to render dark as the initial theme toggle label")
 	}
 	if !strings.Contains(markup, `function syncThemeToggle(theme)`) ||
 		!strings.Contains(markup, `const iconName = THEME_ICON_NAMES[currentTheme] || THEME_ICON_NAMES[DEFAULT_THEME_MODE];`) ||
