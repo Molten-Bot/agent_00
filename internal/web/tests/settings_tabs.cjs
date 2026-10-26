@@ -8,7 +8,7 @@ let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
 const defaults = { auto_merge: false, delete_merged_branches: false, merge_method: 'squash', review_level: 'off', default_library_enabled: true, chat_enabled: true, json_enabled: false };
-async function openSettings(t, { viewport = { width: 1280, height: 900 }, theme = 'dark', configurePage } = {}) {
+async function openSettings(t, { viewport = { width: 1280, height: 900 }, theme = 'dark', configurePage, path = '#settings' } = {}) {
   const page = await browser.newPage({ viewport });
   t.after(() => page.close());
   const errors = [];
@@ -29,8 +29,8 @@ async function openSettings(t, { viewport = { width: 1280, height: 900 }, theme 
   await page.route('**/api/commit-signing**', route => route.fulfill({ json: { ok: true, settings: { configured: false, enabled: false } } }));
   await page.route('**/api/library/sources', route => route.fulfill({ json: { ok: true, sources: [] } }));
   if (configurePage) await configurePage(page);
-  await page.goto(`${baseURL}/#settings`);
-  await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
+  await page.goto(`${baseURL}/${path}`);
+  if (path === '#settings') await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   return { page, writes };
 }
 async function select(page, name) {
@@ -250,6 +250,26 @@ test('a failed initial read cannot overwrite saved settings with defaults', asyn
   assert.equal(await page.locator('#review-settings-auto-merge').isDisabled(), true);
   await close(page);
   assert.equal(posts, 0);
+});
+
+test('dock links fail safe to hidden when the initial settings read fails, then recover once a later read succeeds', async t => {
+  let fail = true;
+  const { page } = await openSettings(t, { path: '', configurePage: async page => {
+    await page.route('**/api/review-settings', route => {
+      if (fail) return route.fulfill({ status: 503, json: { error: 'Settings unavailable.' } });
+      return route.fulfill({ json: { ok: true, settings: { ...defaults, chat_enabled: true, json_enabled: true } } });
+    });
+  }});
+  await page.waitForFunction(() => document.getElementById('prompt-mode-json')?.getAttribute('aria-disabled') === 'true');
+  assert.equal(await page.locator('[data-app-display="chat"]').evaluate(el => el.classList.contains('hidden')), true);
+  assert.equal(await page.locator('#prompt-mode-json').evaluate(el => el.classList.contains('hidden')), true);
+
+  fail = false;
+  await page.locator('#settings-open').click();
+  await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
+  await page.waitForFunction(() => document.getElementById('prompt-mode-json')?.getAttribute('aria-disabled') === 'false');
+  assert.equal(await page.locator('[data-app-display="chat"]').evaluate(el => el.classList.contains('hidden')), false);
+  assert.equal(await page.locator('#prompt-mode-json').evaluate(el => el.classList.contains('hidden')), false);
 });
 
 for (const viewport of [{ width: 1280, height: 1100 }, { width: 430, height: 932 }, { width: 430, height: 500 }]) {

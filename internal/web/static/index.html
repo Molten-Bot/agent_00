@@ -2152,9 +2152,9 @@
       if (!promptModeJSON) {
         return;
       }
-      if (!state.settingsLoaded) {
-        // Settings have not resolved yet; keep the server-rendered state instead of
-        // forcing the link to the disabled default while loadReviewSettings() is in flight.
+      if (!state.settingsLoadAttempted) {
+        // The first settings read hasn't resolved yet; keep the server-rendered
+        // state instead of forcing the link to the disabled default mid-flight.
         return;
       }
       const available = jsonFeatureEnabled();
@@ -2174,9 +2174,9 @@
       if (!chatDockLink) {
         return;
       }
-      if (!state.settingsLoaded) {
-        // Settings have not resolved yet; keep the server-rendered state instead of
-        // forcing the link to the disabled default while loadReviewSettings() is in flight.
+      if (!state.settingsLoadAttempted) {
+        // The first settings read hasn't resolved yet; keep the server-rendered
+        // state instead of forcing the link to the disabled default mid-flight.
         return;
       }
       const chatEnabled = chatFeatureEnabled();
@@ -2815,10 +2815,17 @@
           throw new Error(detail);
         }
         state.settingsLoaded = true;
+        state.settingsLoadAttempted = true;
         applyReviewSettingsState(body.settings);
       } catch (error) {
         const detail = error instanceof Error ? error.message : "Unable to load review settings.";
         setReviewSettingsStatus("error", detail);
+        // settingsLoaded stays false so a failed read can never be saved over real
+        // settings, but settingsLoadAttempted unblocks the dock-link sync guards so
+        // they fail safe to hidden instead of freezing forever on a stale render.
+        state.settingsLoadAttempted = true;
+        syncChatDockLinkAvailability();
+        syncJSONModeLinkAvailability();
       } finally {
         setSettingsBusy(false);
         reviewSettingsLoad = null;
