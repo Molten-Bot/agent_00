@@ -2181,6 +2181,8 @@ func (s Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasSuffix(path, "/rerun"):
 		action = "rerun"
+	case strings.HasSuffix(path, "/delete"):
+		action = "delete"
 	case strings.HasSuffix(path, "/close"):
 		action = "close"
 	case strings.HasSuffix(path, "/pause"):
@@ -2216,6 +2218,8 @@ func (s Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
 	switch action {
 	case "rerun":
 		s.handleTaskRerun(w, r, decoded)
+	case "delete":
+		s.handleTaskDelete(w, r, decoded)
 	case "close":
 		s.handleTaskClose(w, r, decoded)
 	case "pause":
@@ -2411,6 +2415,14 @@ func (s Server) handleTaskRerun(w http.ResponseWriter, r *http.Request, requestI
 }
 
 func (s Server) handleTaskClose(w http.ResponseWriter, r *http.Request, requestID string) {
+	s.handleTaskRemoval(w, r, requestID, false)
+}
+
+func (s Server) handleTaskDelete(w http.ResponseWriter, r *http.Request, requestID string) {
+	s.handleTaskRemoval(w, r, requestID, true)
+}
+
+func (s Server) handleTaskRemoval(w http.ResponseWriter, r *http.Request, requestID string, forget bool) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -2419,7 +2431,11 @@ func (s Server) handleTaskClose(w http.ResponseWriter, r *http.Request, requestI
 		return
 	}
 
-	if err := s.Broker.CloseTask(requestID); err != nil {
+	remove := s.Broker.CloseTask
+	if forget {
+		remove = s.Broker.ForgetTask
+	}
+	if err := remove(requestID); err != nil {
 		switch {
 		case errors.Is(err, ErrTaskNotFound):
 			writeJSON(w, http.StatusNotFound, map[string]any{

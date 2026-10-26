@@ -259,6 +259,7 @@ type Broker struct {
 	repoIndex     map[string]int
 	attempts      map[string][]taskAttemptState
 	attemptRoots  map[string]string
+	attemptSeq    uint64
 	rejectedSeq   uint64
 	subs          map[chan struct{}]struct{}
 
@@ -328,6 +329,7 @@ type taskAttemptState struct {
 	Error     string
 	StartedAt time.Time
 	UpdatedAt time.Time
+	Seq       uint64
 }
 
 // NewBroker returns a monitor state broker with safe defaults.
@@ -813,6 +815,7 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 			seen[requestID] = attempt
 		}
 	}
+	seen = b.collapseAttemptsByRootLocked(seen)
 	if active > b.maxConcurrentTasks {
 		b.maxConcurrentTasks = active
 	}
@@ -1585,6 +1588,40 @@ func (b *Broker) CloseTask(requestID string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if err := b.closeTaskLocked(requestID); err != nil {
+		return err
+	}
+	b.notifySubscribersLocked()
+	return nil
+}
+
+// ForgetTask deletes a terminal task (including closed history) and its completed
+// attempt chain from dashboard metrics. Active sibling attempts are retained.
+func (b *Broker) ForgetTask(requestID string) error {
+	if b == nil {
+		return ErrTaskNotFound
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return ErrTaskNotFound
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if task, ok := b.tasks[requestID]; ok {
+		if task == nil || !isCompletedTaskStatus(task.Status) {
+			return ErrTaskNotCompleted
+		}
+	} else if _, ok := b.attemptRoots[requestID]; !ok {
+		return ErrTaskNotFound
+	}
+	b.forgetTaskAttemptsLocked(requestID)
+	b.notifySubscribersLocked()
+	return nil
+}
+
+func (b *Broker) closeTaskLocked(requestID string) error {
 	task, ok := b.tasks[requestID]
 	if !ok {
 		return ErrTaskNotFound
@@ -1595,8 +1632,36 @@ func (b *Broker) CloseTask(requestID string) error {
 
 	delete(b.tasks, requestID)
 	b.closedTasks[requestID] = b.now().UTC()
-	b.notifySubscribersLocked()
 	return nil
+}
+
+// forgetTaskAttemptsLocked removes requestID's attempt chain (the original
+// run plus any reruns) so a deleted task is no longer counted in dashboard
+// metrics. A sibling attempt that is still live (queued/running/paused) is
+// kept so forgetting one attempt in a chain does not erase the bookkeeping
+// for a rerun that is still in flight.
+func (b *Broker) forgetTaskAttemptsLocked(requestID string) {
+	root := strings.TrimSpace(b.attemptRoots[requestID])
+	if root == "" {
+		root = requestID
+	}
+	attempts := b.attempts[root]
+	kept := make([]taskAttemptState, 0, len(attempts))
+	for _, attempt := range attempts {
+		if task, ok := b.tasks[attempt.RequestID]; ok && task != nil && isActiveTaskStatus(task.Status) {
+			kept = append(kept, attempt)
+			continue
+		}
+		delete(b.tasks, attempt.RequestID)
+		b.closedTasks[attempt.RequestID] = b.now().UTC()
+		delete(b.attemptRoots, attempt.RequestID)
+	}
+	if len(kept) == 0 {
+		delete(b.attemptRoots, root)
+		delete(b.attempts, root)
+		return
+	}
+	b.attempts[root] = kept
 }
 
 func (b *Broker) pruneExpiredTasksLocked(now time.Time) {
@@ -1895,6 +1960,48 @@ func (b *Broker) appendTaskLogLocked(t *taskState, line TaskLog) {
 	t.Logs = appendCappedTaskLog(t.Logs, b.maxTaskLog, line)
 }
 
+// collapseAttemptsByRootLocked reduces one or more attempts for the same root
+// task (an original run plus any reruns after a failure) down to a single
+// entry so dashboard metrics track the running/final state once per task
+// instead of counting every restarted attempt separately.
+func (b *Broker) collapseAttemptsByRootLocked(seen map[string]taskAttemptState) map[string]taskAttemptState {
+	collapsed := make(map[string]taskAttemptState, len(seen))
+	for requestID, attempt := range seen {
+		root := strings.TrimSpace(b.attemptRoots[requestID])
+		if root == "" {
+			root = requestID
+		}
+		if current, ok := collapsed[root]; !ok || attemptIsNewer(attempt, current) {
+			collapsed[root] = attempt
+		}
+	}
+	return collapsed
+}
+
+// attemptIsNewer selects the most recently created attempt, even when older
+// attempts receive late log updates. Timestamps are a fallback for legacy state.
+func attemptIsNewer(candidate, current taskAttemptState) bool {
+	// A late log update from an older attempt must not replace its rerun.
+	if candidate.Seq != current.Seq {
+		return candidate.Seq > current.Seq
+	}
+	candidateAt := candidate.UpdatedAt
+	if candidateAt.IsZero() {
+		candidateAt = candidate.StartedAt
+	}
+	currentAt := current.UpdatedAt
+	if currentAt.IsZero() {
+		currentAt = current.StartedAt
+	}
+	if candidateAt.After(currentAt) {
+		return true
+	}
+	if candidateAt.Equal(currentAt) {
+		return candidate.Seq > current.Seq
+	}
+	return false
+}
+
 func (b *Broker) taskAttemptRootLocked(requestID string) string {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
@@ -1967,6 +2074,7 @@ func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errTe
 		b.attempts[root] = attempts
 		return
 	}
+	b.attemptSeq++
 	b.attempts[root] = append(attempts, taskAttemptState{
 		RequestID: requestID,
 		RerunOf:   rerunOf,
@@ -1979,6 +2087,7 @@ func (b *Broker) recordTaskAttemptLocked(root, requestID, rerunOf, status, errTe
 		Error:     errText,
 		StartedAt: now,
 		UpdatedAt: now,
+		Seq:       b.attemptSeq,
 	})
 }
 
