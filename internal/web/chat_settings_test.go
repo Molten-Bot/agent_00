@@ -55,9 +55,9 @@ func TestChatSettingsGatePageAndSubmissions(t *testing.T) {
 				t.Fatalf("submitted = %d, want %d", submitted, wantSubmitted)
 			}
 			dock := string(s.injectBottomDockComponent(context.Background(), []byte(bottomDockPlaceholder)))
-			disabled := strings.Contains(dock, `aria-disabled="true"`)
+			disabled := strings.Contains(dock, `class="prompt-mode-link site-dock-link is-disabled hidden" data-app-display="chat"`)
 			if disabled != (tc.status != http.StatusOK) {
-				t.Fatalf("dock disabled = %v", disabled)
+				t.Fatalf("chat dock link disabled = %v", disabled)
 			}
 		})
 	}
