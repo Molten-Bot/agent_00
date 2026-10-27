@@ -6815,6 +6815,24 @@ body.onboarding-modal-open {
   gap: 0;
 }
 
+.settings-auth-link {
+  justify-self: start;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.settings-auth-link:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 .settings-tabbed-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);

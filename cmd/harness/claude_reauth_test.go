@@ -37,8 +37,13 @@ printf '{"claudeAiOauth":{"accessToken":"fresh-session-test-only","refreshToken"
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	g := newClaudeAuthGateWithContextAndConfig(ctx, command, path, localruntime.InitConfig{}, nil)
-	g.RequireReauthentication()
-	if _, err := g.Verify(ctx); err != nil {
+	if state, err := g.Status(ctx); err != nil || !state.Ready {
+		t.Fatalf("stored token should initially appear ready: %+v, %v", state, err)
+	}
+	if state, err := g.Reauthenticate(ctx); err != nil || state.Ready {
+		t.Fatalf("reauthenticate: %+v, %v", state, err)
+	}
+	if _, err := g.Reauthenticate(ctx); err != nil {
 		t.Fatal(err)
 	}
 	waitForCondition(t, 5*time.Second, func() bool {

@@ -46,6 +46,10 @@ func (g *stubAgentAuthGate) Verify(context.Context) (web.AgentAuthState, error) 
 	return g.statusState, nil
 }
 
+func (g *stubAgentAuthGate) Reauthenticate(ctx context.Context) (web.AgentAuthState, error) {
+	return g.StartDeviceAuth(ctx)
+}
+
 func (g *stubAgentAuthGate) Configure(context.Context, string) (web.AgentAuthState, error) {
 	return g.statusState, nil
 }

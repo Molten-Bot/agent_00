@@ -733,6 +733,7 @@ func runServer(args []string) int {
 		if authGate != nil {
 			uiServer.AgentAuthStatus = authGate.Status
 			uiServer.StartAgentAuth = authGate.StartDeviceAuth
+			uiServer.ReauthenticateAgent = authGate.Reauthenticate
 			uiServer.VerifyAgentAuth = authGate.Verify
 			if shouldEnableAgentAuthConfigure(runtimeCfg.Harness) {
 				uiServer.ConfigureAgentAuth = authGate.Configure
