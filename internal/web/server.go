@@ -491,6 +491,11 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           const CHAT_REPOS_PER_PAGE = 15;
           const SPEECH_SAMPLE_RATE = 16000;
           const SPEECH_STATUS_REFRESH_MS = 30000;
+          const SPEECH_NATIVE_DICTATION_HINT = "The prompt is focused: use your keyboard's dictation key (microphone icon) to speak into it.";
+          // The hint above promises focus, which the fallback cannot take when
+          // no prompt is on screen or the remembered textarea has been
+          // re-rendered away.
+          const SPEECH_NATIVE_DICTATION_UNFOCUSED_HINT = "Tap the prompt box, then use your keyboard's dictation key (microphone icon) to speak into it.";
           const SPEECH_MIN_PEAK = 0.012;
           const SPEECH_MIN_RMS = 0.004;
           let repoPage = 1;
@@ -498,8 +503,11 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           let repoSearchQuery = "";
           const speech = {
             enabled: false,
+            statusResolved: false,
+            captureBlock: null,
             reachable: false,
             recording: false,
+            starting: false,
             submitting: false,
             chunks: [],
             mediaStream: null,
@@ -615,12 +623,116 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             return Boolean(control && control !== card);
           }
 
-          function browserSpeechCaptureSupported() {
-            return Boolean(
-              navigator.mediaDevices &&
-              typeof navigator.mediaDevices.getUserMedia === "function" &&
-              (window.AudioContext || window.webkitAudioContext)
-            );
+          function isIOSDevice() {
+            const ua = String(navigator.userAgent || "");
+            if (/iPad|iPhone|iPod/.test(ua)) return true;
+            return navigator.platform === "MacIntel" && Number(navigator.maxTouchPoints || 0) > 1;
+          }
+
+          function isNonSafariIOSBrowser() {
+            return isIOSDevice() && /FxiOS|CriOS|EdgiOS|OPiOS|GSA/i.test(String(navigator.userAgent || ""));
+          }
+
+          // The dictation key the fallback hands off to is a software-keyboard
+          // key: iOS puts a mic next to the spacebar and Android keyboards do
+          // the same. A desktop keyboard has none, so there is nothing to hand
+          // off to there.
+          function hasNativeDictationKey() {
+            return isIOSDevice() || /Android/i.test(String(navigator.userAgent || ""));
+          }
+
+          // The handoff sentence names a key only a software keyboard carries,
+          // so it is appended where one exists and dropped everywhere else: a
+          // desktop message states the blocker and stops there.
+          function withNativeDictationHint(detail) {
+            return hasNativeDictationKey() ? detail + " " + SPEECH_NATIVE_DICTATION_HINT : detail;
+          }
+
+          // A phone reaches this UI on a LAN origin, where "open localhost
+          // instead" is useless advice: only an HTTPS origin unlocks the
+          // microphone there.
+          function insecureContextAdvice() {
+            const host = String(window.location.hostname || "");
+            const localHost = host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+            if (localHost) {
+              return "Whisper dictation needs a secure page and this browser treats the current origin as insecure, so serve the UI over HTTPS to record.";
+            }
+            return "Whisper dictation needs a secure page: browsers share the microphone only over HTTPS or localhost, and this UI is served over plain http from " + (host || "this address") + ". Put it behind HTTPS (a tunnel or reverse proxy) to record from this device.";
+          }
+
+          // Only the static blockers are knowable up front: getUserMedia is
+          // missing outside secure contexts and on browsers without capture
+          // support. Whether an iOS browser other than Safari actually hands
+          // over the microphone is knowable only once getUserMedia is called,
+          // so speechCaptureDenial handles that runtime refusal.
+          function speechCaptureSupport() {
+            // A refusal shapes the button and its message until the next tap,
+            // which clears the memory and asks again: a dismissed permission
+            // prompt rejects exactly like a blocked one, and Chrome and Firefox
+            // re-prompt for it.
+            if (speech.captureBlock) return speech.captureBlock;
+            const hasCapture = Boolean(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function");
+            const hasAudioContext = Boolean(window.AudioContext || window.webkitAudioContext);
+            if (hasCapture && hasAudioContext) {
+              return { supported: true, reason: "", message: "" };
+            }
+            // The iOS check runs before the insecure-context one: a non-Safari
+            // iOS browser on a plain-http origin trips both blockers at once,
+            // and only this order lets the Safari advice reach it instead of
+            // being shadowed by the generic insecure-context message.
+            const insecure = window.isSecureContext === false;
+            if (isNonSafariIOSBrowser()) {
+              const detail = insecure
+                ? insecureContextAdvice()
+                : "This iOS browser is not exposing microphone capture to this page, so Whisper dictation cannot record here.";
+              return {
+                supported: false,
+                reason: insecure ? "ios_non_safari_insecure_context" : "ios_non_safari_browser",
+                message: withNativeDictationHint(detail + " Safari on iOS is the most reliable browser for Whisper dictation.")
+              };
+            }
+            if (insecure) {
+              return {
+                supported: false,
+                reason: "insecure_context",
+                message: withNativeDictationHint(insecureContextAdvice())
+              };
+            }
+            return {
+              supported: false,
+              reason: "unsupported_browser",
+              message: withNativeDictationHint("This browser cannot capture microphone audio for Whisper.")
+            };
+          }
+
+          // getUserMedia exists on iOS Firefox and Chrome, so the refusal only
+          // shows up when it rejects. Permission denials, missing inputs, and
+          // busy devices all land here and get the same native keyboard
+          // dictation handoff.
+          function speechCaptureDenial(err) {
+            const name = String(err && err.name ? err.name : "");
+            if (name === "NotAllowedError" || name === "SecurityError") {
+              const iosBrowser = isNonSafariIOSBrowser();
+              return {
+                supported: false,
+                reason: iosBrowser ? "ios_non_safari_denied" : "permission_denied",
+                message: withNativeDictationHint("This browser did not grant microphone access, so Whisper dictation cannot record."
+                  + (iosBrowser ? " On iOS, Safari is the most reliable browser for Whisper dictation." : ""))
+              };
+            }
+            if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") {
+              return {
+                supported: false,
+                reason: "no_microphone",
+                message: withNativeDictationHint("No microphone was available for Whisper dictation.")
+              };
+            }
+            const detail = String(err && err.message ? err.message : "").trim();
+            return {
+              supported: false,
+              reason: "capture_failed",
+              message: withNativeDictationHint("Whisper dictation could not start the microphone" + (detail ? ": " + detail : "") + ".")
+            };
           }
 
           function activeChatPromptInput() {
@@ -668,36 +780,143 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           }
 
           function setChatSpeechStatus(tone, message) {
+            retireChatNativeDictationHint();
             status.textContent = message;
             status.dataset.tone = tone || "";
           }
 
+          // The native-dictation hint is parked on the open card's status line,
+          // next to the prompt it talks about, while every other dictation
+          // message goes to the page-top status. So retire it from here:
+          // otherwise the card still reads "not reachable" once the next tap
+          // has started recording.
+          function retireChatNativeDictationHint() {
+            grid.querySelectorAll('.chat-repo-submit-status[data-dictation-hint="true"]').forEach((node) => {
+              node.textContent = "Press Enter to run.";
+              node.dataset.tone = "";
+              node.dataset.wrap = "";
+              delete node.dataset.dictationHint;
+            });
+          }
+
+          // A permission refusal flips the button into its keyboard-dictation
+          // state and keeps the explanation on screen. A missing or busy
+          // microphone can come back on its own, so those are not remembered.
+          function rememberSpeechCaptureBlock(denial) {
+            // Remembering is only useful where that keyboard state exists: on a
+            // desktop it would hide the mic button and strand the user with no
+            // way to ask for the microphone again.
+            if (!hasNativeDictationKey()) return denial;
+            if (denial && !denial.supported && (denial.reason === "permission_denied" || denial.reason === "ios_non_safari_denied")) {
+              speech.captureBlock = denial;
+            }
+            return denial;
+          }
+
+          // A dismissed permission prompt rejects as NotAllowedError just like
+          // a blocked one, and Chrome and Firefox ask again on the next user
+          // gesture. So a remembered refusal lasts only until the next tap,
+          // which drops it and retries capture instead of latching the fallback
+          // for the whole session.
+          function retrySpeechCaptureBlock() {
+            if (!speech.captureBlock) return false;
+            speech.captureBlock = null;
+            return true;
+          }
+
+          // Whisper capture needs the sidecar reachable; native keyboard
+          // dictation needs nothing, so keep the mic visible as a fallback
+          // affordance whenever this browser cannot record.
+          function chatSpeechAvailability() {
+            const support = speechCaptureSupport();
+            // Keyboard dictation needs no server, so a browser that cannot
+            // record keeps the fallback button until a status poll actually
+            // reports dictation off. The very first poll may have failed,
+            // leaving nothing to preserve.
+            const enabled = speech.enabled || (!speech.statusResolved && !support.supported);
+            if (!enabled) {
+              return { visible: false, nativeMessage: "", support: support };
+            }
+            if (!support.supported) {
+              // The fallback hands off to the software-keyboard dictation key,
+              // so a desktop browser that cannot record has nowhere to hand off
+              // to: keep the button hidden there instead of advertising a
+              // missing key.
+              if (!hasNativeDictationKey()) {
+                return { visible: false, nativeMessage: "", support: support };
+              }
+              return { visible: true, nativeMessage: support.message, support: support };
+            }
+            // Capture works but whisper has nowhere to send it. The default
+            // host is a Compose service name, so this is the normal state of
+            // every deployment without the sidecar: only offer the fallback
+            // where a software keyboard actually carries a dictation key, and
+            // keep the button hidden otherwise.
+            if (!speech.reachable) {
+              if (!hasNativeDictationKey()) {
+                return { visible: false, nativeMessage: "", support: support };
+              }
+              const unreachable = speechUnreachableFallback();
+              return { visible: true, nativeMessage: unreachable.message, support: unreachable };
+            }
+            return { visible: true, nativeMessage: "", support: support };
+          }
+
+          // Whisper needs its sidecar; the platform dictation key needs
+          // nothing, so an unreachable sidecar is a fallback case rather than a
+          // dead end.
+          function speechUnreachableFallback() {
+            return {
+              supported: false,
+              reason: "whisper_unreachable",
+              message: withNativeDictationHint("Whisper dictation is not reachable, so this browser cannot record to it.")
+            };
+          }
+
           function syncChatSpeechButton() {
             if (!speechToggle) return;
-            const visible = browserSpeechCaptureSupported() && Boolean(speech.enabled) && Boolean(speech.reachable);
+            const availability = chatSpeechAvailability();
+            const visible = availability.visible;
+            const native = Boolean(visible && availability.nativeMessage);
             const busy = Boolean(speech.recording || speech.submitting);
+            const idleLabel = native ? "Dictate chat prompt with the keyboard dictation key" : "Dictate chat prompt";
             speechToggle.classList.toggle("hidden", !visible);
-            speechToggle.disabled = !visible || Boolean(speech.submitting);
+            speechToggle.classList.toggle("speech-native", native);
+            speechToggle.disabled = !visible || speech.starting || (!native && Boolean(speech.submitting));
             speechToggle.classList.toggle("recording", Boolean(speech.recording));
             speechToggle.setAttribute("aria-hidden", visible ? "false" : "true");
-            speechToggle.setAttribute("aria-pressed", speech.recording ? "true" : "false");
-            speechToggle.setAttribute("aria-label", speech.recording ? "Stop dictation" : "Dictate chat prompt");
-            speechToggle.title = speech.recording ? "Stop dictation" : (busy ? "Transcribing" : "Dictate chat prompt");
-            speechToggle.innerHTML = speech.recording
-              ? '<i data-lucide="square" aria-hidden="true"></i><span class="sr-only">Stop dictation</span>'
-              : '<i data-lucide="mic" aria-hidden="true"></i><span class="sr-only">Dictate</span>';
+            // Only the whisper button toggles between record and stop. The
+            // native fallback focuses the prompt once per tap, so it carries no
+            // pressed state to announce.
+            if (native) {
+              speechToggle.removeAttribute("aria-pressed");
+            } else {
+              speechToggle.setAttribute("aria-pressed", speech.recording ? "true" : "false");
+            }
+            speechToggle.setAttribute("aria-label", speech.recording ? "Stop dictation" : idleLabel);
+            speechToggle.title = speech.recording
+              ? "Stop dictation"
+              : (native ? availability.nativeMessage : (busy ? "Transcribing" : idleLabel));
+            const icon = speech.recording ? "square" : (native ? "keyboard" : "mic");
+            const srText = speech.recording ? "Stop dictation" : "Dictate";
+            speechToggle.innerHTML = '<i data-lucide="' + icon + '" aria-hidden="true"></i><span class="sr-only">' + srText + '</span>';
             if (window.lucide && typeof window.lucide.createIcons === "function") {
               window.lucide.createIcons({ root: speechToggle });
             }
           }
 
           async function refreshChatSpeechStatus() {
+            // A poll that lands mid-recording must not retract the sidecar:
+            // dropping it here flips the live stop button back into its idle
+            // state and strands the capture that is already running.
+            const active = Boolean(speech.recording || speech.submitting);
             try {
               const response = await fetch("/api/speech/status", { cache: "no-store" });
               const body = await response.json().catch(() => null);
               const speechStatus = body && body.speech ? body.speech : {};
               speech.enabled = Boolean(speechStatus.enabled);
-              speech.reachable = Boolean(speechStatus.reachable);
+              speech.statusResolved = true;
+              speech.reachable = active && speech.reachable ? speech.reachable : Boolean(speechStatus.reachable);
               if (window.AgentHeader && typeof window.AgentHeader.updateSpeechConnection === "function") {
                 window.AgentHeader.updateSpeechConnection(
                   speech.enabled && speech.reachable,
@@ -705,8 +924,13 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
                 );
               }
             } catch (_err) {
-              speech.enabled = false;
-              speech.reachable = false;
+              // A failed poll only proves the sidecar status is unknown. Keep
+              // the last known enabled flag so the server-independent keyboard
+              // dictation fallback button survives a transient fetch error, and
+              // keep the sidecar flag while a capture is in flight.
+              if (!active) {
+                speech.reachable = false;
+              }
               if (window.AgentHeader && typeof window.AgentHeader.updateSpeechConnection === "function") {
                 window.AgentHeader.updateSpeechConnection(false, "Unavailable");
               }
@@ -719,11 +943,83 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           }
 
           async function toggleChatSpeechDictation() {
+            if (speech.starting || speech.submitting) return;
+            // Each tap is a fresh user gesture, so a remembered refusal is
+            // dropped here and capture is retried; only the static blockers
+            // stay unsupported.
+            let support = speechCaptureSupport();
+            if (!support.supported && retrySpeechCaptureBlock()) {
+              support = speechCaptureSupport();
+            }
+            if (!support.supported) {
+              startChatNativeDictation(support);
+              return;
+            }
             if (speech.recording) {
               await stopChatSpeechDictation();
               return;
             }
+            // iOS raises the keyboard only for a focus() that runs inside the
+            // tap gesture. getUserMedia is awaited next, so claim focus now: if
+            // capture is refused, the keyboard fallback is already usable.
+            focusChatPromptInput();
             await startChatSpeechDictation();
+          }
+
+          // Returns the prompt only when it actually took focus: a re-rendered
+          // card leaves a detached textarea behind, and focus() on it is a
+          // no-op.
+          function focusChatPromptInput() {
+            const input = activeChatPromptInput();
+            if (!input) return null;
+            input.focus();
+            const end = String(input.value || "").length;
+            input.selectionStart = end;
+            input.selectionEnd = end;
+            return document.activeElement === input ? input : null;
+          }
+
+          // The card's own status line, which sits next to the prompt the hint
+          // talks about. The page-top status is the repository counter and the
+          // next grid render overwrites anything parked there.
+          function activeChatPromptStatus() {
+            const input = activeChatPromptInput();
+            const panel = input ? input.closest(".chat-repo-panel") : null;
+            return panel ? panel.querySelector(".chat-repo-submit-status") : null;
+          }
+
+          // Whisper cannot record here, so hand the user to the platform
+          // dictation key by focusing the prompt and explaining the limitation.
+          function startChatNativeDictation(support) {
+            const input = activeChatPromptInput();
+            const focused = Boolean(focusChatPromptInput());
+            // Sync first either way: a remembered refusal has to reach the
+            // button even when no card is open to focus, or the mic keeps
+            // advertising a recording it cannot start.
+            syncChatSpeechButton();
+            if (!input) {
+              setChatSpeechStatus("error", "Open a repository prompt before dictating.");
+              return;
+            }
+            const message = support && support.message ? support.message : withNativeDictationHint("Microphone capture is unavailable in this browser.");
+            // The hint promises the prompt is focused, so swap in the "tap the
+            // prompt box" wording when the focus did not land.
+            const text = focused ? message : message.replace(SPEECH_NATIVE_DICTATION_HINT, SPEECH_NATIVE_DICTATION_UNFOCUSED_HINT);
+            const cardStatus = activeChatPromptStatus();
+            if (cardStatus) {
+              cardStatus.textContent = text;
+              cardStatus.dataset.tone = "warn";
+              // The hint names the key to press, so let it wrap instead of
+              // being ellipsized away by the single-line card status styling.
+              cardStatus.dataset.wrap = hasNativeDictationKey() ? "true" : "";
+              // Marks the parked hint so the next dictation message, which goes
+              // to the page-top status, can retire it instead of leaving it
+              // stale under the prompt.
+              cardStatus.dataset.dictationHint = "true";
+            } else {
+              setChatSpeechStatus("warn", text);
+            }
+            trackChatEvent("chat_speech_native_fallback", { reason: support && support.reason ? support.reason : "unsupported_browser" });
           }
 
           async function startChatSpeechDictation() {
@@ -733,33 +1029,44 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               return;
             }
             const stream = activeChatSpeechStream();
-            if (!browserSpeechCaptureSupported()) {
-              setChatSpeechStatus("error", "This browser does not support microphone capture.");
+            const support = speechCaptureSupport();
+            if (!support.supported) {
+              startChatNativeDictation(support);
               return;
             }
-            if (!speech.reachable) {
-              await refreshChatSpeechStatus();
-            }
-            if (!speech.reachable) {
-              setChatSpeechStatus("error", "Speech dictation is unavailable.");
-              return;
-            }
-
+            speech.starting = true;
             try {
+              // Unlock Web Audio within the tap, before status or microphone awaits
+              // lose user activation. Handle resume rejection while permission is pending.
               const AudioCtor = window.AudioContext || window.webkitAudioContext;
+              speech.audioContext = new AudioCtor();
+              const audioReady = (speech.audioContext.state !== "running"
+                ? speech.audioContext.resume() : Promise.resolve()).then(() => null, err => err);
+              syncChatSpeechButton();
+              if (!speech.reachable) {
+                await refreshChatSpeechStatus();
+              }
+              if (!speech.reachable) {
+                cleanupChatSpeechCapture();
+                startChatNativeDictation(speechUnreachableFallback());
+                return;
+              }
+
+              try {
+                speech.mediaStream = await navigator.mediaDevices.getUserMedia({
+                  audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+                });
+              } catch (err) {
+                cleanupChatSpeechCapture();
+                trackChatEvent("chat_speech_failed", { stage: "capture" });
+                startChatNativeDictation(rememberSpeechCaptureBlock(speechCaptureDenial(err)));
+                return;
+              }
+              const audioError = await audioReady;
+              if (audioError) throw audioError;
+
               speech.chunks = [];
               resetSpeechCaptureStats();
-              speech.mediaStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                  channelCount: 1,
-                  echoCancellation: true,
-                  noiseSuppression: true
-                }
-              });
-              speech.audioContext = new AudioCtor();
-              if (speech.audioContext.state === "suspended") {
-                await speech.audioContext.resume();
-              }
               speech.source = speech.audioContext.createMediaStreamSource(speech.mediaStream);
               speech.processor = speech.audioContext.createScriptProcessor(4096, 1, 1);
               speech.zeroGain = speech.audioContext.createGain();
@@ -778,13 +1085,25 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               speech.recording = true;
               syncChatSpeechButton();
               setSpeechStreamActive(stream, true);
-              input.focus();
+              // The focus taken inside the tap only exists to raise the
+              // software keyboard if capture is refused. Recording started, so
+              // drop it: the keyboard would otherwise cover the stop button.
+              // Desktop has no such keyboard, so the prompt keeps the focus
+              // recording has always given it.
+              if (!hasNativeDictationKey()) {
+                input.focus();
+              } else if (document.activeElement === input) {
+                input.blur();
+              }
               setChatSpeechStatus("warn", "Listening. Press the mic again to stop.");
               trackChatEvent("chat_speech_started");
             } catch (err) {
               cleanupChatSpeechCapture();
               setChatSpeechStatus("error", "Dictation failed: " + (err && err.message ? err.message : "capture failed"));
               trackChatEvent("chat_speech_failed", { stage: "capture" });
+            } finally {
+              speech.starting = false;
+              syncChatSpeechButton();
             }
           }
 
@@ -952,6 +1271,11 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
           async function submitRepoPrompt(repo, input, statusNode) {
             const prompt = String(input.value || "").trim();
+            // A dictation hint may have left the status wrapping; submit
+            // messages are single-line again, and they own the line from here
+            // so the hint must not be retired out from under them later.
+            statusNode.dataset.wrap = "";
+            delete statusNode.dataset.dictationHint;
             if (!prompt) {
               statusNode.textContent = "Prompt is required.";
               statusNode.dataset.tone = "error";

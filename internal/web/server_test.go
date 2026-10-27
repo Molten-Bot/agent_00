@@ -1397,9 +1397,62 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `state.speech.enabled && state.speech.reachable`) {
 		t.Fatalf("expected index html to show whisper connection only when speech sidecar is reachable")
 	}
-	if !strings.Contains(markup, `const available = supported && Boolean(state.speech.enabled) && Boolean(state.speech.reachable);`) ||
-		!strings.Contains(markup, `browserSpeechCaptureSupported() && Boolean(state.speech.enabled) && Boolean(state.speech.reachable),`) {
-		t.Fatalf("expected index html to hide speech dictation buttons when speech is unavailable")
+	if !strings.Contains(markup, `const unreachable = speechUnreachableFallback();
+        return { visible: true, nativeMessage: unreachable.message, support: unreachable };`) ||
+		!strings.Contains(markup, `startNativeDictation(target, speechUnreachableFallback());`) ||
+		!strings.Contains(markup, `const chatSpeechAvailability = speechToggleAvailability();`) {
+		t.Fatalf("expected index html to keep a native dictation fallback button when the whisper sidecar is unreachable")
+	}
+	if !strings.Contains(markup, `const enabled = state.speech.enabled || (!state.speech.statusResolved && !support.supported);`) ||
+		!strings.Contains(markup, `return { visible: true, nativeMessage: support.message, support };`) {
+		t.Fatalf("expected index html to keep a native dictation fallback button when microphone capture is unsupported")
+	}
+	if !strings.Contains(markup, `reason: insecure ? "ios_non_safari_insecure_context" : "ios_non_safari_browser",`) {
+		t.Fatalf("expected index html to check the iOS browser before the insecure-context branch so the Safari advice stays reachable")
+	}
+	if !strings.Contains(markup, `return document.activeElement === input;`) ||
+		!strings.Contains(markup, `message.replace(SPEECH_NATIVE_DICTATION_HINT, SPEECH_NATIVE_DICTATION_UNFOCUSED_HINT)`) {
+		t.Fatalf("expected index html to drop the focus claim when the native fallback could not focus a prompt")
+	}
+	if !strings.Contains(markup, `startNativeDictation(target, rememberSpeechCaptureBlock(speechCaptureDenial(err)));`) ||
+		!strings.Contains(markup, `if (state.speech.captureBlock) return state.speech.captureBlock;`) {
+		t.Fatalf("expected index html to hand a refused getUserMedia call to native keyboard dictation and remember the refusal")
+	}
+	if !strings.Contains(markup, `focusSpeechInput(target);
+      await startPromptSpeechDictation(target);`) {
+		t.Fatalf("expected index html to focus the prompt inside the tap gesture, before awaiting getUserMedia")
+	}
+	if !strings.Contains(markup, `if (!support.supported && retrySpeechCaptureBlock()) {`) ||
+		!strings.Contains(markup, `state.speech.captureBlock = null;`) {
+		t.Fatalf("expected index html to retry a remembered microphone refusal on the next tap")
+	}
+	if !strings.Contains(markup, `releaseSpeechInputFocus(target);`) ||
+		!strings.Contains(markup, `if (!hasNativeDictationKey()) {
+        input.focus();
+        return;
+      }`) {
+		t.Fatalf("expected index html to release the prompt focus for the software keyboard but keep it on desktop")
+	}
+	// Both fallbacks hand off to a software-keyboard dictation key, so both have
+	// to stay hidden on a desktop that has none.
+	if got := strings.Count(markup, `if (!hasNativeDictationKey()) {
+          return { visible: false, nativeMessage: "", support };
+        }`); got != 2 {
+		t.Fatalf("index html native dictation gates = %d, want 2 (unsupported capture and unreachable sidecar)", got)
+	}
+	if !strings.Contains(markup, `function withNativeDictationHint(detail) {`) ||
+		!strings.Contains(markup, `message: withNativeDictationHint(insecureContextAdvice()),`) {
+		t.Fatalf("expected index html to drop the keyboard dictation hint where no dictation key exists")
+	}
+	if !strings.Contains(markup, `if (!hasNativeDictationKey()) return denial;`) {
+		t.Fatalf("expected index html to keep the mic retryable where no keyboard fallback can replace it")
+	}
+	if !strings.Contains(markup, `if (native) {
+        button.removeAttribute("aria-pressed");
+      } else {
+        button.setAttribute("aria-pressed", recording ? "true" : "false");
+      }`) {
+		t.Fatalf("expected index html to drop aria-pressed from the one-shot native dictation button")
 	}
 	if !strings.Contains(markup, `body?.code === "speech_unavailable" || body?.code === "speech_disabled"`) ||
 		!strings.Contains(markup, `state.speech.reachable = false;`) {
@@ -2685,7 +2738,27 @@ func TestHandlerServesChatView(t *testing.T) {
 		`function activeChatPromptInput()`,
 		`function refreshChatSpeechStatus()`,
 		`fetch("/api/speech/status", { cache: "no-store" })`,
-		`const visible = browserSpeechCaptureSupported() && Boolean(speech.enabled) && Boolean(speech.reachable);`,
+		`function chatSpeechAvailability()`,
+		`function speechUnreachableFallback()`,
+		"const unreachable = speechUnreachableFallback();\n              return { visible: true, nativeMessage: unreachable.message, support: unreachable };",
+		`startChatNativeDictation(speechUnreachableFallback());`,
+		`reason: insecure ? "ios_non_safari_insecure_context" : "ios_non_safari_browser",`,
+		`const active = Boolean(speech.recording || speech.submitting);`,
+		"if (!active) {\n                speech.reachable = false;\n              }",
+		"speech.reachable = active && speech.reachable ? speech.reachable : Boolean(speechStatus.reachable);",
+		`function startChatNativeDictation(support)`,
+		`startChatNativeDictation(rememberSpeechCaptureBlock(speechCaptureDenial(err)));`,
+		`function focusChatPromptInput()`,
+		"focusChatPromptInput();\n            await startChatSpeechDictation();",
+		`const enabled = speech.enabled || (!speech.statusResolved && !support.supported);`,
+		`if (speech.captureBlock) return speech.captureBlock;`,
+		`if (!support.supported && retrySpeechCaptureBlock()) {`,
+		"syncChatSpeechButton();\n            if (!input) {",
+		"if (!hasNativeDictationKey()) {\n                input.focus();\n              } else if (document.activeElement === input) {\n                input.blur();\n              }",
+		"if (!hasNativeDictationKey()) {\n                return { visible: false, nativeMessage: \"\", support: support };\n              }",
+		`function activeChatPromptStatus()`,
+		`return document.activeElement === input ? input : null;`,
+		`cardStatus.dataset.wrap = hasNativeDictationKey() ? "true" : "";`,
 		`function toggleChatSpeechDictation()`,
 		`function startChatSpeechDictation()`,
 		`function stopChatSpeechDictation()`,
@@ -2733,11 +2806,24 @@ func TestHandlerServesChatView(t *testing.T) {
 		`trackChatEvent("chat_repo_prompt_succeeded"`,
 		`trackChatEvent("chat_repo_search_changed"`,
 		`window.AgentHeader.startConnectionStatus();`,
+		`function withNativeDictationHint(detail)`,
+		`message: withNativeDictationHint(insecureContextAdvice())`,
+		`if (!hasNativeDictationKey()) return denial;`,
+		`speechToggle.removeAttribute("aria-pressed");`,
+		`function retireChatNativeDictationHint()`,
+		"retireChatNativeDictationHint();\n            status.textContent = message;",
+		`cardStatus.dataset.dictationHint = "true";`,
+		`delete statusNode.dataset.dictationHint;`,
 	}
 	for _, needle := range required {
 		if !strings.Contains(markup, needle) {
 			t.Fatalf("expected chat html to include %q", needle)
 		}
+	}
+	// Both fallbacks hand off to a software-keyboard dictation key, so both have
+	// to stay hidden on a desktop that has none.
+	if got := strings.Count(markup, "if (!hasNativeDictationKey()) {\n                return { visible: false, nativeMessage: \"\", support: support };\n              }"); got != 2 {
+		t.Fatalf("chat native dictation gates = %d, want 2 (unsupported capture and unreachable sidecar)", got)
 	}
 	if strings.Contains(markup, `Loading repositories...`) {
 		t.Fatalf("expected chat html to avoid showing repository loading text before repositories are ready")
@@ -3128,6 +3214,17 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		!strings.Contains(css, ".chat-repo-prompt {\n  width: 100%;\n  min-height: 88px;\n  resize: vertical;\n  padding: 10px 12px;") ||
 		!strings.Contains(css, ".chat-speech-toggle.recording {") {
 		t.Fatalf("expected stylesheet to place the chat transcribe button in the bottom action row outside the text box")
+	}
+	// The keyboard dictation fallback message names the key to press, so the
+	// status surfaces that carry it must wrap instead of ellipsizing. In a chat
+	// repository card only that message wraps, so the shared action-row status
+	// keeps its single-line height for everything else.
+	normalizedCSS := normalizeCSSWhitespace(css)
+	if !strings.Contains(normalizedCSS, ".chat-repo-submit-status { flex: 1 1 auto; min-width: 0; min-height: 1.2em; color: var(--muted); font-size: 0.8rem; font-weight: 800; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }") ||
+		!strings.Contains(normalizedCSS, ".chat-repo-submit-status[data-wrap=\"true\"] { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }") ||
+		!strings.Contains(normalizedCSS, "#local-prompt-status { color: var(--muted); font-size: 0.74rem; line-height: 1.3; min-height: 1.3em; }") ||
+		!strings.Contains(normalizedCSS, "#local-prompt-status[data-wrap=\"true\"] { white-space: normal; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; }") {
+		t.Fatalf("expected dictation status surfaces to wrap long keyboard dictation messages instead of clipping them")
 	}
 	if !strings.Contains(css, ".chat-repo-message[data-tone=\"success\"] {") ||
 		!strings.Contains(css, ".chat-repo-message[data-tone=\"failure\"] {") ||

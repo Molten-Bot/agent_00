@@ -786,6 +786,35 @@ func TestPromptImageCapsEnforcedInBrowser(t *testing.T) {
 	}
 }
 
+// TestSpeechDictationFallbackInBrowser exercises speechCaptureSupport and
+// speechToggleAvailability in static/index.html, plus the duplicate copy the
+// /chat page carries in this file. All are unexported closures with no
+// Go-reachable equivalent, so this drives the real mic button in a headless
+// browser with microphone capture removed the way an insecure origin or a
+// non-Safari iOS browser removes it, confirming the button stays visible, hands
+// off to the platform dictation key, and takes focus inside the tap gesture.
+func TestSpeechDictationFallbackInBrowser(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not available, skipping speech dictation fallback check")
+	}
+	if err := exec.Command("node", "-e", "require.resolve('playwright')").Run(); err != nil {
+		t.Skip("playwright module not available, skipping speech dictation fallback check")
+	}
+
+	srv := NewServer("", nil)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "node", "--test", "tests/speech_dictation.cjs")
+	cmd.Env = append(os.Environ(), "HARNESS_TEST_URL="+ts.URL)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("speech dictation fallback checks failed:\n%s", out)
+	}
+}
+
 func TestDashboardSourceLegendStylesLiveInGlobalStylesheet(t *testing.T) {
 	t.Parallel()
 

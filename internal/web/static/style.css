@@ -2116,6 +2116,17 @@ select.prompt-control {
   min-height: 1.3em;
 }
 
+/* Same rule as .chat-repo-submit-status[data-wrap="true"]: only the multi-line
+   keyboard dictation hint wraps, because it must stay readable instead of being
+   ellipsized. Every other status keeps the single line the action row is sized
+   for. */
+#local-prompt-status[data-wrap="true"] {
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+
 .submit-status-inline.is-visible {
   opacity: 1;
 }
@@ -2389,6 +2400,14 @@ select.prompt-control {
   border-color: rgba(255, 59, 48, 0.28);
   color: var(--bad);
   background: rgba(255, 59, 48, 0.08);
+}
+
+/* Microphone capture is unavailable (insecure origin or iOS non-Safari
+   browser); the button hands off to the platform dictation key instead. */
+.prompt-speech-toggle.speech-native,
+.chat-speech-toggle.speech-native {
+  border-style: dashed;
+  color: var(--text-soft);
 }
 
 .prompt-submit {
@@ -4080,6 +4099,16 @@ select.prompt-control {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Dictation fallback messages explain which key to press, so only they wrap
+   rather than ellipsize away their instruction; every other status stays on one
+   line so the card action row keeps its height. */
+.chat-repo-submit-status[data-wrap="true"] {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .chat-repo-submit-status[data-tone="ok"] {

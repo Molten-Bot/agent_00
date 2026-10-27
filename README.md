@@ -37,6 +37,33 @@ The bundled sidecar defaults to the `base-int8` model and English language
 hints for more reliable short-form dictation; set both `WHISPER_LANG=auto` and
 `WHISPER_SPEECH_LANGUAGE=auto` to use Whisper language detection.
 
+#### Microphone requirements
+
+Whisper dictation records through `navigator.mediaDevices.getUserMedia`, which
+browsers expose only to secure contexts. Reaching the UI over plain `http://`
+on a LAN address (for example `http://192.168.1.10:7777`) disables microphone
+capture in every browser, including Safari, Chrome, and Firefox. Put the UI
+behind HTTPS (a tunnel or reverse proxy) to record from a phone; on the machine
+running the harness, `http://localhost:<port>` is already a secure context.
+
+Browsers that do expose `getUserMedia` can still refuse it when the button is
+tapped - permission blocked, no usable input, or an iOS browser that does not
+hand WKWebView the microphone. Third-party iOS browsers vary by version, so the
+UI does not assume the outcome: it tries to record, and only falls back when the
+request is actually refused. Safari on iOS remains the most reliable option for
+Whisper.
+
+On iOS and Android, when capture is unavailable - up front or after a refusal -
+the microphone button stays usable and points at native dictation: it focuses
+the prompt and explains the limitation so the keyboard's dictation key
+(microphone icon) can be used to speak into the prompt instead. A refusal is
+not final: dismissing a permission prompt looks the same as blocking it, so the
+next tap asks for the microphone again. The same fallback covers an unreachable
+whisper sidecar on phones and tablets, where native dictation needs no server
+and the software keyboard carries a dictation key; a desktop keyboard has no
+such key, so there the button disappears with the sidecar as before. Set
+`WHISPER_SPEECH_DISABLED` to hide the button entirely.
+
 ### Library settings
 
 Open **Settings → Library** to add a private library repository and choose its
@@ -333,7 +360,8 @@ Useful environment variables:
   `en`. Set to `auto` to use Whisper language detection.
 - `WHISPER_SPEECH_TIMEOUT_SECONDS`: optional speech transcription timeout in
   seconds; defaults to `120`.
-- `WHISPER_SPEECH_DISABLED`: set to `true` to hide prompt dictation.
+- `WHISPER_SPEECH_DISABLED`: set to `true` to hide prompt dictation, including
+  the native keyboard dictation fallback button.
 
 ## Response Modes
 
