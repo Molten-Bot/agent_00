@@ -656,17 +656,20 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           // reports outranks the pointer: UA-CH answers it directly where it
           // exists, and the user agent string names the desktop operating
           // systems everywhere else. Windows and ChromeOS are the exception:
-          // both also ship keyboard-less tablets under the token a laptop uses,
-          // so there the pointer breaks the tie. Macintosh and X11 have no such
-          // tablet, so their token stands alone.
+          // both ship keyboard-less tablets that their browsers describe
+          // exactly as laptops, naming the laptop token in the user agent
+          // string and reporting mobile:false in UA-CH alike, so the pointer
+          // has to break that tie before either platform answer is trusted.
+          // Macintosh and X11 have no such tablet, so their token stands alone.
           function reportsDesktopPlatform() {
             const uaData = navigator.userAgentData;
-            if (uaData && typeof uaData.mobile === "boolean") {
-              return !uaData.mobile;
-            }
+            const platform = uaData && typeof uaData.platform === "string" ? uaData.platform : "";
             const ua = String(navigator.userAgent || "");
-            if (/Windows NT|CrOS/i.test(ua)) {
+            if (/Windows|CrOS|Chrome\s?OS/i.test(platform) || (!platform && /Windows NT|CrOS/i.test(ua))) {
               return !hasOnlyTouchPointer();
+            }
+            if (typeof uaData?.mobile === "boolean") {
+              return !uaData.mobile;
             }
             return /Macintosh|X11|Linux/i.test(ua);
           }

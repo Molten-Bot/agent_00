@@ -1976,12 +1976,13 @@ func TestHandlerIndexServesHTML(t *testing.T) {
     }`) ||
 		!strings.Contains(markup, `function reportsDesktopPlatform() {
       const uaData = navigator.userAgentData;
-      if (uaData && typeof uaData.mobile === "boolean") {
-        return !uaData.mobile;
-      }
+      const platform = uaData && typeof uaData.platform === "string" ? uaData.platform : "";
       const ua = String(navigator.userAgent || "");
-      if (/Windows NT|CrOS/i.test(ua)) {
+      if (/Windows|CrOS|Chrome\s?OS/i.test(platform) || (!platform && /Windows NT|CrOS/i.test(ua))) {
         return !hasOnlyTouchPointer();
+      }
+      if (typeof uaData?.mobile === "boolean") {
+        return !uaData.mobile;
       }
       return /Macintosh|X11|Linux/i.test(ua);
     }`) {
@@ -2919,12 +2920,13 @@ func TestHandlerServesChatView(t *testing.T) {
           }`) ||
 		!strings.Contains(markup, `function reportsDesktopPlatform() {
             const uaData = navigator.userAgentData;
-            if (uaData && typeof uaData.mobile === "boolean") {
-              return !uaData.mobile;
-            }
+            const platform = uaData && typeof uaData.platform === "string" ? uaData.platform : "";
             const ua = String(navigator.userAgent || "");
-            if (/Windows NT|CrOS/i.test(ua)) {
+            if (/Windows|CrOS|Chrome\s?OS/i.test(platform) || (!platform && /Windows NT|CrOS/i.test(ua))) {
               return !hasOnlyTouchPointer();
+            }
+            if (typeof uaData?.mobile === "boolean") {
+              return !uaData.mobile;
             }
             return /Macintosh|X11|Linux/i.test(ua);
           }`) {
@@ -2941,6 +2943,81 @@ func TestHandlerServesChatView(t *testing.T) {
 	if strings.Contains(markup, bottomDockPlaceholder) {
 		t.Fatalf("expected chat page bottom dock placeholder to be replaced")
 	}
+}
+
+// The index page and the chat page each carry their own copy of the predicates
+// that decide whether Enter submits, so a fix landed in one of them has to land
+// in the other: a drift between the two is how the same device starts getting a
+// different Enter key on each page, and the per-page assertions above pin the
+// text of each copy without ever comparing them.
+func TestSoftwareKeyboardPredicatesAgreeAcrossPages(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	pages := map[string]string{}
+	for _, route := range []string{"/", "/chat"} {
+		resp := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(resp, httptest.NewRequest(http.MethodGet, route, nil))
+		if resp.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d", route, resp.Code)
+		}
+		pages[route] = resp.Body.String()
+	}
+
+	for _, name := range []string{
+		"isIOSDevice",
+		"isNonSafariIOSBrowser",
+		"hasNativeDictationKey",
+		"hasOnlyTouchPointer",
+		"reportsDesktopPlatform",
+		"usesSoftwareKeyboard",
+	} {
+		index, ok := normalizedJSFunction(pages["/"], name)
+		if !ok {
+			t.Fatalf("index html does not define %s()", name)
+		}
+		chat, ok := normalizedJSFunction(pages["/chat"], name)
+		if !ok {
+			t.Fatalf("chat html does not define %s()", name)
+		}
+		if index != chat {
+			t.Fatalf("%s() differs between index and chat\nindex:\n%s\n\nchat:\n%s", name, index, chat)
+		}
+	}
+}
+
+// normalizedJSFunction returns the source of the named zero-argument JavaScript
+// function with every line's leading indentation stripped, so the same function
+// rendered at the index page's depth and at the chat page's deeper depth
+// compares equal. Braces are matched naively, which is enough for the predicate
+// bodies this compares: none of them carries a brace inside a string or regex.
+func normalizedJSFunction(markup, name string) (string, bool) {
+	header := "function " + name + "() {"
+	start := strings.Index(markup, header)
+	if start < 0 {
+		return "", false
+	}
+	depth := 0
+	end := -1
+	for i := start + len(header) - 1; i < len(markup) && end < 0; i++ {
+		switch markup[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				end = i + 1
+			}
+		}
+	}
+	if end < 0 {
+		return "", false
+	}
+	lines := strings.Split(markup[start:end], "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimSpace(line)
+	}
+	return strings.Join(lines, "\n"), true
 }
 
 func TestHandlerGitHubReposUsesOverride(t *testing.T) {
