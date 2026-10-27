@@ -5977,7 +5977,10 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
     min-width: 0;
   }
 
-  .prompt-action-button {
+  /* Labelled actions share the row evenly. An icon-only button keeps the square
+     footprint it is sized for, so it cannot stretch and squeeze the status text
+     sitting next to it. */
+  .prompt-action-button:not(.prompt-action-icon-only) {
     flex: 1 1 0;
     min-inline-size: 0;
   }

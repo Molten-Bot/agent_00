@@ -13,8 +13,9 @@
 // software keyboard can type and a Run button takes over; a touch-only
 // desktop, which matches every pointer test a phone does while a hardware
 // keyboard is still plugged in and therefore has to keep Enter-to-submit; and
-// the tablets that reach the user agent string branch, including the Windows
-// and ChromeOS ones that report the same token their laptops do.
+// the Windows and ChromeOS tablets, which report the same token their laptops
+// do on the user agent string branch and mobile:false on the UA-CH one, so
+// both branches are exercised for them.
 const { before, after, test } = require('node:test');
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
@@ -27,6 +28,10 @@ const TABLET_UA = 'Mozilla/5.0 (Tablet; rv:130.0) Gecko/20100101 Firefox/130.0';
 // Windows ships keyboard-less tablets and laptops under one token, and so does
 // ChromeOS; a browser without UA-CH gives the page nothing else to go on.
 const WINDOWS_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0';
+// The browsers those two platforms actually ship with answer UA-CH, so these
+// pair a Chromium user agent with the platform the client hint reports.
+const WINDOWS_CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
+const CROS_CHROME_UA = 'Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 const REPOS = [{ full_name: 'octo/demo', name: 'demo', private: false, description: 'Example repository.' }];
 
 let browser;
@@ -43,10 +48,14 @@ after(async () => { await browser?.close(); });
 // away, which is the only way to reach the user agent string branch of
 // reportsDesktopPlatform() in Chromium: it answers UA-CH itself and always
 // reports a desktop there, so Firefox and Safari are simulated this way.
+// clientHintsPlatform keeps UA-CH present and answers it the way Chrome and
+// Edge actually do on a named device: a Windows or ChromeOS tablet reports the
+// platform its laptops report, alongside mobile:false.
 // runDelayMs holds the run response open so a second tap lands while the first
 // request is still in flight.
 async function openPage(t, {
-  path = '/', userAgent = '', mobileViewport, coarsePointer = false, uaClientHints = true, runDelayMs = 0,
+  path = '/', userAgent = '', mobileViewport, coarsePointer = false, uaClientHints = true,
+  clientHintsPlatform = '', runDelayMs = 0,
 } = {}) {
   const mobile = mobileViewport === undefined ? Boolean(userAgent) : mobileViewport;
   const page = await browser.newPage({
@@ -63,6 +72,17 @@ async function openPage(t, {
     await page.addInitScript(() => {
       Object.defineProperty(navigator, 'userAgentData', { value: undefined, configurable: true });
     });
+  } else if (clientHintsPlatform) {
+    await page.addInitScript(platform => {
+      Object.defineProperty(navigator, 'userAgentData', {
+        value: {
+          brands: [], mobile: false, platform,
+          getHighEntropyValues: () => Promise.resolve({ platform }),
+          toJSON: () => ({ brands: [], mobile: false, platform }),
+        },
+        configurable: true,
+      });
+    }, clientHintsPlatform);
   }
   if (coarsePointer) {
     await page.addInitScript(() => {
@@ -145,6 +165,29 @@ test('phone: Enter types a newline in the builder prompt and never runs it', asy
   await assertNoRun(page, runs);
   const status = page.locator('#local-prompt-status');
   assert.equal(await status.textContent(), await status.getAttribute('data-default-text'), 'nothing ran, so the status stays at its default');
+});
+
+// Enter no longer starts the run on a phone, so the idle status has to name the
+// control that does, the way the chat card's "Tap Run to start" does.
+test('builder: the idle status names the key or button that starts the run', async t => {
+  const desktop = await openPage(t);
+  assert.match(await desktop.page.locator('#local-prompt-status').textContent(), /Press Enter to run\./);
+  const phone = await openPage(t, { userAgent: ANDROID_UA });
+  assert.match(await phone.page.locator('#local-prompt-status').textContent(), /Tap Run to start\./);
+});
+
+// A phone keeps Enter as a newline, so the Run button is the only way left to
+// start a builder run: press it on the multi-line prompt Enter just typed.
+test('phone: the builder Run button starts the prompt Enter would not', async t => {
+  const { page, runs } = await openPage(t, { userAgent: ANDROID_UA });
+  await page.locator('#builder-repo-input').fill('git@github.com:octo/demo.git');
+  await page.locator('#builder-prompt-input').fill('First line');
+  await page.locator('#builder-prompt-input').press('Enter');
+  await page.keyboard.type('Second line');
+  await assertNoRun(page, runs);
+  await page.locator('#local-prompt-submit').click();
+  await waitForRuns(runs, 1);
+  assert.match(runs[0], /First line\\nSecond line/);
 });
 
 // The prompt textarea is not the only field in the run form: a form with a
@@ -243,6 +286,44 @@ test('Windows laptop without UA-CH: Enter still runs the builder prompt', async 
   assert.match(runs[0], /Ship the fix/);
 });
 
+// Chrome and Edge are the browsers these tablets actually ship with, and they
+// answer UA-CH rather than leaving it absent: the platform is the laptop one
+// and mobile is false, so taking UA-CH at its word would submit on Enter with
+// no keyboard to type Shift+Enter on. The pointer has to break the tie here
+// exactly as it does on the user agent string branch above.
+for (const [device, platform, deviceUA] of [
+  ['Windows', 'Windows', WINDOWS_CHROME_UA],
+  ['ChromeOS', 'Chrome OS', CROS_CHROME_UA],
+]) {
+  test(`${device} tablet with UA-CH: Enter stays a newline in the builder prompt`, async t => {
+    const { page, runs } = await openPage(t, {
+      userAgent: deviceUA, mobileViewport: false, coarsePointer: true, clientHintsPlatform: platform,
+    });
+    assert.deepEqual(
+      await page.evaluate(() => [navigator.userAgentData.platform, navigator.userAgentData.mobile]),
+      [platform, false],
+      'the tablet has to reach the page as a non-mobile laptop platform',
+    );
+    await page.locator('#builder-repo-input').fill('git@github.com:octo/demo.git');
+    await page.locator('#builder-prompt-input').fill('First line');
+    await page.locator('#builder-prompt-input').press('Enter');
+    await page.keyboard.type('Second line');
+    assert.equal(await page.locator('#builder-prompt-input').inputValue(), 'First line\nSecond line');
+    await assertNoRun(page, runs, `a keyboard-less ${device} tablet must keep Enter as a newline`);
+  });
+
+  test(`${device} laptop with UA-CH: Enter still runs the builder prompt`, async t => {
+    const { page, runs } = await openPage(t, {
+      userAgent: deviceUA, mobileViewport: false, clientHintsPlatform: platform,
+    });
+    await page.locator('#builder-repo-input').fill('git@github.com:octo/demo.git');
+    await page.locator('#builder-prompt-input').fill('Ship the fix');
+    await page.locator('#builder-prompt-input').press('Enter');
+    await waitForRuns(runs, 1);
+    assert.match(runs[0], /Ship the fix/);
+  });
+}
+
 for (const path of ['/#chat', '/chat']) {
   test(`${path}: a desktop runs a repository prompt on Enter and needs no Run button`, async t => {
     const { page, runs } = await openPage(t, { path });
@@ -261,6 +342,13 @@ for (const path of ['/#chat', '/chat']) {
     const run = page.locator('.chat-repo-submit:visible').first();
     await run.waitFor();
     assert.match(await page.locator('.chat-repo-submit-status').first().textContent(), /Tap Run to start/);
+    // The phone stylesheet stretches labelled prompt actions across the row; an
+    // icon-only Run button that joined in would eat the status text beside it.
+    assert.equal(
+      await run.evaluate(node => getComputedStyle(node).flexGrow),
+      '0',
+      'the icon-only Run button must keep its square footprint',
+    );
     await prompt.fill('First line');
     await prompt.press('Enter');
     await page.keyboard.type('Second line');
