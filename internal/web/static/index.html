@@ -5058,16 +5058,31 @@
       return isIOSDevice() || /Android/i.test(String(navigator.userAgent || ""));
     }
 
+    // A touch slab reports a pointer that is coarse and cannot hover; a mouse
+    // or a trackpad reports the opposite on both counts.
+    function hasOnlyTouchPointer() {
+      return typeof window.matchMedia === "function" &&
+        window.matchMedia("(any-pointer: coarse)").matches &&
+        window.matchMedia("(any-hover: none)").matches;
+    }
+
     // A touch-only desktop matches every pointer test a phone does while a
     // hardware keyboard is plugged into it, so the platform the browser reports
     // outranks the pointer: UA-CH answers it directly where it exists, and the
     // user agent string names the desktop operating systems everywhere else.
+    // Windows and ChromeOS are the exception: both also ship keyboard-less
+    // tablets under the token a laptop uses, so there the pointer breaks the
+    // tie. Macintosh and X11 have no such tablet, so their token stands alone.
     function reportsDesktopPlatform() {
       const uaData = navigator.userAgentData;
       if (uaData && typeof uaData.mobile === "boolean") {
         return !uaData.mobile;
       }
-      return /Windows NT|Macintosh|CrOS|X11|Linux/i.test(String(navigator.userAgent || ""));
+      const ua = String(navigator.userAgent || "");
+      if (/Windows NT|CrOS/i.test(ua)) {
+        return !hasOnlyTouchPointer();
+      }
+      return /Macintosh|X11|Linux/i.test(ua);
     }
 
     // A software keyboard carries no Shift+Enter, so Enter is the only newline a
@@ -5082,9 +5097,7 @@
       if (reportsDesktopPlatform()) {
         return false;
       }
-      return typeof window.matchMedia === "function" &&
-        window.matchMedia("(any-pointer: coarse)").matches &&
-        window.matchMedia("(any-hover: none)").matches;
+      return hasOnlyTouchPointer();
     }
 
     // The handoff sentence names a key only a software keyboard carries, so it
@@ -7297,11 +7310,23 @@
         await applyChatRepoImageFiles(files, droppedCount);
       });
 
-      const runChatRepoPrompt = () => {
-        void submitChatRepoPrompt(repo, prompt, submitStatus, promptImages, promptLog, (images) => {
-          promptImages = normalizePromptImages(images);
-          renderChatRepoImages(pasteTarget, promptImages);
-        });
+      // A held Enter repeats and a tap can land twice, so the run in flight
+      // owns the card until it settles: without this a double tap gets no
+      // feedback and leans on the duplicate check alone.
+      let runPending = false;
+      const runChatRepoPrompt = async () => {
+        if (runPending) return;
+        runPending = true;
+        submitButton.disabled = true;
+        try {
+          await submitChatRepoPrompt(repo, prompt, submitStatus, promptImages, promptLog, (images) => {
+            promptImages = normalizePromptImages(images);
+            renderChatRepoImages(pasteTarget, promptImages);
+          });
+        } finally {
+          runPending = false;
+          submitButton.disabled = false;
+        }
       };
 
       prompt.addEventListener("keydown", (event) => {
@@ -7311,12 +7336,12 @@
         if (usesSoftwareKeyboard()) return;
         event.preventDefault();
         event.stopPropagation();
-        runChatRepoPrompt();
+        void runChatRepoPrompt();
       });
       submitButton.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        runChatRepoPrompt();
+        void runChatRepoPrompt();
       });
       submitButton.addEventListener("keydown", (event) => {
         event.stopPropagation();
@@ -12970,25 +12995,32 @@
       localPromptSubmit?.click();
     }
 
-    // Enter in any single-line field of a form that has a submit button runs
-    // the form, so the repository, branch, reviewer, and directory inputs would
-    // start a task from a phone keyboard that cannot type Shift+Enter. The
-    // prompt textarea decides for itself above; block the implicit submission
-    // everywhere else a software keyboard is in use.
-    const IMPLICIT_SUBMIT_INPUT_TYPES = new Set([
-      "text", "search", "url", "tel", "email", "password", "number",
-      "date", "month", "week", "time", "datetime-local",
-    ]);
+    // Enter in a form that has a submit button runs the form from its
+    // single-line inputs and from its selects alike, so the repository,
+    // branch, reviewer, directory, and history fields would all start a task
+    // from a phone keyboard that cannot type Shift+Enter. The prompt textarea
+    // decides for itself above; block the implicit submission everywhere else
+    // a software keyboard is in use.
+    //
+    // Enter on a button, including the one a file input opens its picker with,
+    // is an activation the user asked for, so those keep the key.
+    const ENTER_ACTIVATES_INPUT_TYPES = new Set(["submit", "reset", "button", "image", "file"]);
+
+    function implicitlySubmitsOnEnter(target) {
+      if (target instanceof HTMLSelectElement) {
+        return true;
+      }
+      if (!(target instanceof HTMLInputElement)) {
+        return false;
+      }
+      return !ENTER_ACTIVATES_INPUT_TYPES.has(String(target.type || "").toLowerCase());
+    }
 
     function blockImplicitSubmitOnEnter(event) {
       if (event.defaultPrevented || event.key !== "Enter" || event.isComposing) {
         return;
       }
-      const target = event.target;
-      if (!(target instanceof HTMLInputElement)) {
-        return;
-      }
-      if (!IMPLICIT_SUBMIT_INPUT_TYPES.has(String(target.type || "").toLowerCase())) {
+      if (!implicitlySubmitsOnEnter(event.target)) {
         return;
       }
       if (!usesSoftwareKeyboard()) {

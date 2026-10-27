@@ -8,6 +8,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
+)
+
+// A wedged headless Chromium would otherwise hang until the package-level test
+// timeout and take every other test in internal/web down with it, so both the
+// probe and the suite run under a deadline the way the sibling wrappers do.
+// The suite opens a browser context per device case, so it gets more room than
+// the single-case 60s the others use.
+const (
+	promptEnterProbeTimeout = 60 * time.Second
+	promptEnterSuiteTimeout = 180 * time.Second
 )
 
 // promptEnterSuiteRoot is the module root relative to this package, which is where the
@@ -48,11 +59,16 @@ func TestPromptEnterSubmitBrowserSuite(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	cmd := exec.Command(node, "--test", promptEnterSuitePath)
+	ctx, cancel := context.WithTimeout(context.Background(), promptEnterSuiteTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node, "--test", promptEnterSuitePath)
 	cmd.Dir = promptEnterSuiteRoot
 	cmd.Env = append(os.Environ(), "HARNESS_TEST_URL="+ts.URL)
 	output, err := cmd.CombinedOutput()
 	t.Logf("node --test %s output:\n%s", promptEnterSuitePath, output)
+	if ctx.Err() != nil {
+		t.Fatalf("node --test %s timed out after %s:\n%s", promptEnterSuitePath, promptEnterSuiteTimeout, output)
+	}
 	if err != nil {
 		t.Fatalf("node --test %s: %v", promptEnterSuitePath, err)
 	}
@@ -71,11 +87,16 @@ func missingPromptEnterBrowserRuntime(t *testing.T, node string) string {
 } catch (err) {
   process.exit(3);
 }`
-	cmd := exec.Command(node, "-e", probe)
+	ctx, cancel := context.WithTimeout(context.Background(), promptEnterProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node, "-e", probe)
 	cmd.Dir = promptEnterSuiteRoot
 	output, err := cmd.CombinedOutput()
 	if err == nil {
 		return ""
+	}
+	if ctx.Err() != nil {
+		return "playwright probe timed out after " + promptEnterProbeTimeout.String()
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {

@@ -643,17 +643,32 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             return isIOSDevice() || /Android/i.test(String(navigator.userAgent || ""));
           }
 
+          // A touch slab reports a pointer that is coarse and cannot hover; a
+          // mouse or a trackpad reports the opposite on both counts.
+          function hasOnlyTouchPointer() {
+            return typeof window.matchMedia === "function" &&
+              window.matchMedia("(any-pointer: coarse)").matches &&
+              window.matchMedia("(any-hover: none)").matches;
+          }
+
           // A touch-only desktop matches every pointer test a phone does while
           // a hardware keyboard is plugged into it, so the platform the browser
           // reports outranks the pointer: UA-CH answers it directly where it
           // exists, and the user agent string names the desktop operating
-          // systems everywhere else.
+          // systems everywhere else. Windows and ChromeOS are the exception:
+          // both also ship keyboard-less tablets under the token a laptop uses,
+          // so there the pointer breaks the tie. Macintosh and X11 have no such
+          // tablet, so their token stands alone.
           function reportsDesktopPlatform() {
             const uaData = navigator.userAgentData;
             if (uaData && typeof uaData.mobile === "boolean") {
               return !uaData.mobile;
             }
-            return /Windows NT|Macintosh|CrOS|X11|Linux/i.test(String(navigator.userAgent || ""));
+            const ua = String(navigator.userAgent || "");
+            if (/Windows NT|CrOS/i.test(ua)) {
+              return !hasOnlyTouchPointer();
+            }
+            return /Macintosh|X11|Linux/i.test(ua);
           }
 
           // A software keyboard carries no Shift+Enter, so Enter is the only
@@ -669,9 +684,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             if (reportsDesktopPlatform()) {
               return false;
             }
-            return typeof window.matchMedia === "function" &&
-              window.matchMedia("(any-pointer: coarse)").matches &&
-              window.matchMedia("(any-hover: none)").matches;
+            return hasOnlyTouchPointer();
           }
 
           // The card status line names the gesture that starts a run, so the

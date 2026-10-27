@@ -1961,41 +1961,57 @@ func TestHandlerIndexServesHTML(t *testing.T) {
       if (reportsDesktopPlatform()) {
         return false;
       }
-      return typeof window.matchMedia === "function" &&
-        window.matchMedia("(any-pointer: coarse)").matches &&
-        window.matchMedia("(any-hover: none)").matches;
+      return hasOnlyTouchPointer();
     }`) {
 		t.Fatalf("expected index html to detect software keyboards from the platform first and the pointer second")
 	}
 	// A touch screen alone is not a phone: a desktop with one still has a
 	// hardware keyboard, so the reported platform decides before the pointer.
-	if !strings.Contains(markup, `function reportsDesktopPlatform() {
+	// Windows and ChromeOS are the exception, because both also ship
+	// keyboard-less tablets under the token their laptops report.
+	if !strings.Contains(markup, `function hasOnlyTouchPointer() {
+      return typeof window.matchMedia === "function" &&
+        window.matchMedia("(any-pointer: coarse)").matches &&
+        window.matchMedia("(any-hover: none)").matches;
+    }`) ||
+		!strings.Contains(markup, `function reportsDesktopPlatform() {
       const uaData = navigator.userAgentData;
       if (uaData && typeof uaData.mobile === "boolean") {
         return !uaData.mobile;
       }
-      return /Windows NT|Macintosh|CrOS|X11|Linux/i.test(String(navigator.userAgent || ""));
+      const ua = String(navigator.userAgent || "");
+      if (/Windows NT|CrOS/i.test(ua)) {
+        return !hasOnlyTouchPointer();
+      }
+      return /Macintosh|X11|Linux/i.test(ua);
     }`) {
-		t.Fatalf("expected index html to keep Enter-to-submit on a touch-only desktop")
+		t.Fatalf("expected index html to keep Enter-to-submit on a touch-only desktop but not on a keyboard-less Windows or ChromeOS tablet")
 	}
 	if got := strings.Count(markup, "if (usesSoftwareKeyboard()) {\n        return;\n      }"); got != 1 {
 		t.Fatalf("index html builder Enter guards = %d, want 1", got)
 	}
 	// The prompt textarea is not the only field in the run form: a form with a
-	// submit button also runs from Enter in any of its single-line inputs, and a
-	// software keyboard reaches those with the same key it uses for a newline.
+	// submit button also runs from Enter in any of its single-line inputs and in
+	// its selects, and a software keyboard reaches those with the same key it
+	// uses for a newline.
 	if !strings.Contains(markup, "function blockImplicitSubmitOnEnter(event)") ||
-		!strings.Contains(markup, "const IMPLICIT_SUBMIT_INPUT_TYPES = new Set([") ||
-		!strings.Contains(markup, "if (!IMPLICIT_SUBMIT_INPUT_TYPES.has(String(target.type || \"\").toLowerCase())) {") ||
+		!strings.Contains(markup, "const ENTER_ACTIVATES_INPUT_TYPES = new Set([\"submit\", \"reset\", \"button\", \"image\", \"file\"]);") ||
+		!strings.Contains(markup, "if (target instanceof HTMLSelectElement) {\n        return true;\n      }") ||
+		!strings.Contains(markup, "return !ENTER_ACTIVATES_INPUT_TYPES.has(String(target.type || \"\").toLowerCase());") ||
 		!strings.Contains(markup, "localPromptForm.addEventListener(\"keydown\", blockImplicitSubmitOnEnter);") {
-		t.Fatalf("expected index html to block implicit form submission from single-line fields on a software keyboard")
+		t.Fatalf("expected index html to block implicit form submission from single-line fields, selects, and checkboxes on a software keyboard")
 	}
 	if !strings.Contains(markup, `submitStatus.textContent = usesSoftwareKeyboard() ? "Tap Run to start." : "Press Enter to run.";`) ||
 		!strings.Contains(markup, `submitButton.className = "prompt-action-button prompt-action-icon-only chat-repo-submit";`) ||
 		!strings.Contains(markup, `submitButton.setAttribute("aria-label", "Run prompt");`) ||
 		!strings.Contains(markup, `submitButton.classList.toggle("hidden", !usesSoftwareKeyboard());`) ||
-		!strings.Contains(markup, "if (usesSoftwareKeyboard()) return;\n        event.preventDefault();\n        event.stopPropagation();\n        runChatRepoPrompt();") {
+		!strings.Contains(markup, "if (usesSoftwareKeyboard()) return;\n        event.preventDefault();\n        event.stopPropagation();\n        void runChatRepoPrompt();") {
 		t.Fatalf("expected index chat repository prompts to keep Enter as a newline on a software keyboard and run from a visible button instead")
+	}
+	// A second tap while a run is in flight must not queue a second task, and
+	// the disabled button is the only feedback the tap gets.
+	if !strings.Contains(markup, "if (runPending) return;\n        runPending = true;\n        submitButton.disabled = true;") {
+		t.Fatalf("expected index chat repository Run button to disable itself while a run is in flight")
 	}
 	if !strings.Contains(markup, "function hasReviewerDraftToClear(") ||
 		!strings.Contains(markup, "function hasBuilderDraftToClear(") ||
@@ -2884,7 +2900,9 @@ func TestHandlerServesChatView(t *testing.T) {
 	}
 	// Enter is the only newline a software keyboard can type, so the chat card
 	// keeps it as one there and exposes a Run button instead; a touch-only
-	// desktop still reports a desktop platform and keeps Enter-to-submit.
+	// desktop still reports a desktop platform and keeps Enter-to-submit, while
+	// Windows and ChromeOS defer to the pointer because both also ship
+	// keyboard-less tablets under the token their laptops report.
 	if !strings.Contains(markup, `function usesSoftwareKeyboard() {
             if (hasNativeDictationKey()) {
               return true;
@@ -2892,6 +2910,9 @@ func TestHandlerServesChatView(t *testing.T) {
             if (reportsDesktopPlatform()) {
               return false;
             }
+            return hasOnlyTouchPointer();
+          }`) ||
+		!strings.Contains(markup, `function hasOnlyTouchPointer() {
             return typeof window.matchMedia === "function" &&
               window.matchMedia("(any-pointer: coarse)").matches &&
               window.matchMedia("(any-hover: none)").matches;
@@ -2901,7 +2922,11 @@ func TestHandlerServesChatView(t *testing.T) {
             if (uaData && typeof uaData.mobile === "boolean") {
               return !uaData.mobile;
             }
-            return /Windows NT|Macintosh|CrOS|X11|Linux/i.test(String(navigator.userAgent || ""));
+            const ua = String(navigator.userAgent || "");
+            if (/Windows NT|CrOS/i.test(ua)) {
+              return !hasOnlyTouchPointer();
+            }
+            return /Macintosh|X11|Linux/i.test(ua);
           }`) {
 		t.Fatalf("expected chat html to detect software keyboards from the platform first and the pointer second")
 	}
