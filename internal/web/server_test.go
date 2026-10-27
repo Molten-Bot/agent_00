@@ -1433,10 +1433,26 @@ func TestHandlerIndexServesHTML(t *testing.T) {
       }`) {
 		t.Fatalf("expected index html to release the prompt focus for the software keyboard but keep it on desktop")
 	}
-	if !strings.Contains(markup, `if (!hasNativeDictationKey()) {
+	// Both fallbacks hand off to a software-keyboard dictation key, so both have
+	// to stay hidden on a desktop that has none.
+	if got := strings.Count(markup, `if (!hasNativeDictationKey()) {
           return { visible: false, nativeMessage: "", support };
-        }`) {
-		t.Fatalf("expected index html to hide the unreachable-sidecar fallback where no keyboard dictation key exists")
+        }`); got != 2 {
+		t.Fatalf("index html native dictation gates = %d, want 2 (unsupported capture and unreachable sidecar)", got)
+	}
+	if !strings.Contains(markup, `function withNativeDictationHint(detail) {`) ||
+		!strings.Contains(markup, `message: withNativeDictationHint(insecureContextAdvice()),`) {
+		t.Fatalf("expected index html to drop the keyboard dictation hint where no dictation key exists")
+	}
+	if !strings.Contains(markup, `if (!hasNativeDictationKey()) return denial;`) {
+		t.Fatalf("expected index html to keep the mic retryable where no keyboard fallback can replace it")
+	}
+	if !strings.Contains(markup, `if (native) {
+        button.removeAttribute("aria-pressed");
+      } else {
+        button.setAttribute("aria-pressed", recording ? "true" : "false");
+      }`) {
+		t.Fatalf("expected index html to drop aria-pressed from the one-shot native dictation button")
 	}
 	if !strings.Contains(markup, `body?.code === "speech_unavailable" || body?.code === "speech_disabled"`) ||
 		!strings.Contains(markup, `state.speech.reachable = false;`) {
@@ -2790,11 +2806,24 @@ func TestHandlerServesChatView(t *testing.T) {
 		`trackChatEvent("chat_repo_prompt_succeeded"`,
 		`trackChatEvent("chat_repo_search_changed"`,
 		`window.AgentHeader.startConnectionStatus();`,
+		`function withNativeDictationHint(detail)`,
+		`message: withNativeDictationHint(insecureContextAdvice())`,
+		`if (!hasNativeDictationKey()) return denial;`,
+		`speechToggle.removeAttribute("aria-pressed");`,
+		`function retireChatNativeDictationHint()`,
+		"retireChatNativeDictationHint();\n            status.textContent = message;",
+		`cardStatus.dataset.dictationHint = "true";`,
+		`delete statusNode.dataset.dictationHint;`,
 	}
 	for _, needle := range required {
 		if !strings.Contains(markup, needle) {
 			t.Fatalf("expected chat html to include %q", needle)
 		}
+	}
+	// Both fallbacks hand off to a software-keyboard dictation key, so both have
+	// to stay hidden on a desktop that has none.
+	if got := strings.Count(markup, "if (!hasNativeDictationKey()) {\n                return { visible: false, nativeMessage: \"\", support: support };\n              }"); got != 2 {
+		t.Fatalf("chat native dictation gates = %d, want 2 (unsupported capture and unreachable sidecar)", got)
 	}
 	if strings.Contains(markup, `Loading repositories...`) {
 		t.Fatalf("expected chat html to avoid showing repository loading text before repositories are ready")

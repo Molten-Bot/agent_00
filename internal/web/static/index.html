@@ -5016,6 +5016,13 @@
       return isIOSDevice() || /Android/i.test(String(navigator.userAgent || ""));
     }
 
+    // The handoff sentence names a key only a software keyboard carries, so it
+    // is appended where one exists and dropped everywhere else: a desktop
+    // message states the blocker and stops there.
+    function withNativeDictationHint(detail) {
+      return hasNativeDictationKey() ? `${detail} ${SPEECH_NATIVE_DICTATION_HINT}` : detail;
+    }
+
     // A phone reaches this UI on a LAN origin, where "open localhost instead"
     // is useless advice: only an HTTPS origin unlocks the microphone there.
     function insecureContextAdvice() {
@@ -5054,20 +5061,20 @@
         return {
           supported: false,
           reason: insecure ? "ios_non_safari_insecure_context" : "ios_non_safari_browser",
-          message: `${detail} Safari on iOS is the most reliable browser for Whisper dictation. ${SPEECH_NATIVE_DICTATION_HINT}`,
+          message: withNativeDictationHint(`${detail} Safari on iOS is the most reliable browser for Whisper dictation.`),
         };
       }
       if (insecure) {
         return {
           supported: false,
           reason: "insecure_context",
-          message: `${insecureContextAdvice()} ${SPEECH_NATIVE_DICTATION_HINT}`,
+          message: withNativeDictationHint(insecureContextAdvice()),
         };
       }
       return {
         supported: false,
         reason: "unsupported_browser",
-        message: `This browser cannot capture microphone audio for Whisper. ${SPEECH_NATIVE_DICTATION_HINT}`,
+        message: withNativeDictationHint("This browser cannot capture microphone audio for Whisper."),
       };
     }
 
@@ -5081,28 +5088,31 @@
         return {
           supported: false,
           reason: isNonSafariIOSBrowser() ? "ios_non_safari_denied" : "permission_denied",
-          message: `This browser did not grant microphone access, so Whisper dictation cannot record.${iosHint} ${SPEECH_NATIVE_DICTATION_HINT}`,
+          message: withNativeDictationHint(`This browser did not grant microphone access, so Whisper dictation cannot record.${iosHint}`),
         };
       }
       if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") {
         return {
           supported: false,
           reason: "no_microphone",
-          message: `No microphone was available for Whisper dictation. ${SPEECH_NATIVE_DICTATION_HINT}`,
+          message: withNativeDictationHint("No microphone was available for Whisper dictation."),
         };
       }
       const detail = String(err?.message || "").trim();
       return {
         supported: false,
         reason: "capture_failed",
-        message: `Whisper dictation could not start the microphone${detail ? `: ${detail}` : ""}. ${SPEECH_NATIVE_DICTATION_HINT}`,
+        message: withNativeDictationHint(`Whisper dictation could not start the microphone${detail ? `: ${detail}` : ""}.`),
       };
     }
 
     // A permission refusal flips the button into its keyboard-dictation state
     // and keeps the explanation on screen. A missing or busy microphone can
-    // come back on its own, so those are not remembered at all.
+    // come back on its own, so those are not remembered at all. Remembering is
+    // only useful where that keyboard state exists: on a desktop it would hide
+    // the mic button and strand the user with no way to ask again.
     function rememberSpeechCaptureBlock(denial) {
+      if (!hasNativeDictationKey()) return denial;
       if (denial && !denial.supported && (denial.reason === "permission_denied" || denial.reason === "ios_non_safari_denied")) {
         state.speech.captureBlock = denial;
       }
@@ -5133,6 +5143,12 @@
         return { visible: false, nativeMessage: "", support };
       }
       if (!support.supported) {
+        // The fallback hands off to the software-keyboard dictation key, so a
+        // desktop browser that cannot record has nowhere to hand off to: keep
+        // the button hidden there instead of advertising a missing key.
+        if (!hasNativeDictationKey()) {
+          return { visible: false, nativeMessage: "", support };
+        }
         return { visible: true, nativeMessage: support.message, support };
       }
       // Capture works but whisper has nowhere to send it. The default host is a
@@ -5155,7 +5171,7 @@
       return {
         supported: false,
         reason: "whisper_unreachable",
-        message: `Whisper dictation is not reachable, so this browser cannot record to it. ${SPEECH_NATIVE_DICTATION_HINT}`,
+        message: withNativeDictationHint("Whisper dictation is not reachable, so this browser cannot record to it."),
       };
     }
 
@@ -5169,7 +5185,14 @@
       button.disabled = !visible || (!native && (Boolean(submitting) || Boolean(locked)));
       button.classList.toggle("recording", Boolean(recording));
       button.setAttribute("aria-hidden", visible ? "false" : "true");
-      button.setAttribute("aria-pressed", recording ? "true" : "false");
+      // Only the whisper button toggles between record and stop. The native
+      // fallback focuses the prompt once per tap, so it carries no pressed
+      // state to announce.
+      if (native) {
+        button.removeAttribute("aria-pressed");
+      } else {
+        button.setAttribute("aria-pressed", recording ? "true" : "false");
+      }
       button.setAttribute("aria-label", recording ? "Stop dictation" : idleLabel);
       button.title = recording ? "Stop dictation" : (native ? nativeMessage : (busy ? "Transcribing" : idleLabel));
       const iconClass = button.classList.contains("prompt-action-button") ? ' class="prompt-action-icon"' : "";
@@ -5377,7 +5400,7 @@
       const status = typeof target?.setStatus === "function" ? target.setStatus : setLocalPromptStatus;
       const focused = focusSpeechInput(target);
       syncPromptSpeechButton();
-      const message = support?.message || `Microphone capture is unavailable in this browser. ${SPEECH_NATIVE_DICTATION_HINT}`;
+      const message = support?.message || withNativeDictationHint("Microphone capture is unavailable in this browser.");
       // The hint names the key to press, so ask the status element to wrap it
       // instead of ellipsizing the instruction away. It also promises the
       // prompt is focused, so swap in the "tap the prompt box" wording when the

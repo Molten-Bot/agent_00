@@ -638,6 +638,13 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             return isIOSDevice() || /Android/i.test(String(navigator.userAgent || ""));
           }
 
+          // The handoff sentence names a key only a software keyboard carries,
+          // so it is appended where one exists and dropped everywhere else: a
+          // desktop message states the blocker and stops there.
+          function withNativeDictationHint(detail) {
+            return hasNativeDictationKey() ? detail + " " + SPEECH_NATIVE_DICTATION_HINT : detail;
+          }
+
           // A phone reaches this UI on a LAN origin, where "open localhost
           // instead" is useless advice: only an HTTPS origin unlocks the
           // microphone there.
@@ -678,20 +685,20 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               return {
                 supported: false,
                 reason: insecure ? "ios_non_safari_insecure_context" : "ios_non_safari_browser",
-                message: detail + " Safari on iOS is the most reliable browser for Whisper dictation. " + SPEECH_NATIVE_DICTATION_HINT
+                message: withNativeDictationHint(detail + " Safari on iOS is the most reliable browser for Whisper dictation.")
               };
             }
             if (insecure) {
               return {
                 supported: false,
                 reason: "insecure_context",
-                message: insecureContextAdvice() + " " + SPEECH_NATIVE_DICTATION_HINT
+                message: withNativeDictationHint(insecureContextAdvice())
               };
             }
             return {
               supported: false,
               reason: "unsupported_browser",
-              message: "This browser cannot capture microphone audio for Whisper. " + SPEECH_NATIVE_DICTATION_HINT
+              message: withNativeDictationHint("This browser cannot capture microphone audio for Whisper.")
             };
           }
 
@@ -706,23 +713,22 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               return {
                 supported: false,
                 reason: iosBrowser ? "ios_non_safari_denied" : "permission_denied",
-                message: "This browser did not grant microphone access, so Whisper dictation cannot record."
-                  + (iosBrowser ? " On iOS, Safari is the most reliable browser for Whisper dictation." : "")
-                  + " " + SPEECH_NATIVE_DICTATION_HINT
+                message: withNativeDictationHint("This browser did not grant microphone access, so Whisper dictation cannot record."
+                  + (iosBrowser ? " On iOS, Safari is the most reliable browser for Whisper dictation." : ""))
               };
             }
             if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") {
               return {
                 supported: false,
                 reason: "no_microphone",
-                message: "No microphone was available for Whisper dictation. " + SPEECH_NATIVE_DICTATION_HINT
+                message: withNativeDictationHint("No microphone was available for Whisper dictation.")
               };
             }
             const detail = String(err && err.message ? err.message : "").trim();
             return {
               supported: false,
               reason: "capture_failed",
-              message: "Whisper dictation could not start the microphone" + (detail ? ": " + detail : "") + ". " + SPEECH_NATIVE_DICTATION_HINT
+              message: withNativeDictationHint("Whisper dictation could not start the microphone" + (detail ? ": " + detail : "") + ".")
             };
           }
 
@@ -771,14 +777,33 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           }
 
           function setChatSpeechStatus(tone, message) {
+            retireChatNativeDictationHint();
             status.textContent = message;
             status.dataset.tone = tone || "";
+          }
+
+          // The native-dictation hint is parked on the open card's status line,
+          // next to the prompt it talks about, while every other dictation
+          // message goes to the page-top status. So retire it from here:
+          // otherwise the card still reads "not reachable" once the next tap
+          // has started recording.
+          function retireChatNativeDictationHint() {
+            grid.querySelectorAll('.chat-repo-submit-status[data-dictation-hint="true"]').forEach((node) => {
+              node.textContent = "Press Enter to run.";
+              node.dataset.tone = "";
+              node.dataset.wrap = "";
+              delete node.dataset.dictationHint;
+            });
           }
 
           // A permission refusal flips the button into its keyboard-dictation
           // state and keeps the explanation on screen. A missing or busy
           // microphone can come back on its own, so those are not remembered.
           function rememberSpeechCaptureBlock(denial) {
+            // Remembering is only useful where that keyboard state exists: on a
+            // desktop it would hide the mic button and strand the user with no
+            // way to ask for the microphone again.
+            if (!hasNativeDictationKey()) return denial;
             if (denial && !denial.supported && (denial.reason === "permission_denied" || denial.reason === "ios_non_safari_denied")) {
               speech.captureBlock = denial;
             }
@@ -810,6 +835,13 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               return { visible: false, nativeMessage: "", support: support };
             }
             if (!support.supported) {
+              // The fallback hands off to the software-keyboard dictation key,
+              // so a desktop browser that cannot record has nowhere to hand off
+              // to: keep the button hidden there instead of advertising a
+              // missing key.
+              if (!hasNativeDictationKey()) {
+                return { visible: false, nativeMessage: "", support: support };
+              }
               return { visible: true, nativeMessage: support.message, support: support };
             }
             // Capture works but whisper has nowhere to send it. The default
@@ -834,7 +866,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             return {
               supported: false,
               reason: "whisper_unreachable",
-              message: "Whisper dictation is not reachable, so this browser cannot record to it. " + SPEECH_NATIVE_DICTATION_HINT
+              message: withNativeDictationHint("Whisper dictation is not reachable, so this browser cannot record to it.")
             };
           }
 
@@ -850,7 +882,14 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             speechToggle.disabled = !visible || (!native && Boolean(speech.submitting));
             speechToggle.classList.toggle("recording", Boolean(speech.recording));
             speechToggle.setAttribute("aria-hidden", visible ? "false" : "true");
-            speechToggle.setAttribute("aria-pressed", speech.recording ? "true" : "false");
+            // Only the whisper button toggles between record and stop. The
+            // native fallback focuses the prompt once per tap, so it carries no
+            // pressed state to announce.
+            if (native) {
+              speechToggle.removeAttribute("aria-pressed");
+            } else {
+              speechToggle.setAttribute("aria-pressed", speech.recording ? "true" : "false");
+            }
             speechToggle.setAttribute("aria-label", speech.recording ? "Stop dictation" : idleLabel);
             speechToggle.title = speech.recording
               ? "Stop dictation"
@@ -969,6 +1008,10 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               // The hint names the key to press, so let it wrap instead of
               // being ellipsized away by the single-line card status styling.
               cardStatus.dataset.wrap = "true";
+              // Marks the parked hint so the next dictation message, which goes
+              // to the page-top status, can retire it instead of leaving it
+              // stale under the prompt.
+              cardStatus.dataset.dictationHint = "true";
             } else {
               setChatSpeechStatus("warn", text);
             }
@@ -1223,8 +1266,10 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           async function submitRepoPrompt(repo, input, statusNode) {
             const prompt = String(input.value || "").trim();
             // A dictation hint may have left the status wrapping; submit
-            // messages are single-line again.
+            // messages are single-line again, and they own the line from here
+            // so the hint must not be retired out from under them later.
             statusNode.dataset.wrap = "";
+            delete statusNode.dataset.dictationHint;
             if (!prompt) {
               statusNode.textContent = "Prompt is required.";
               statusNode.dataset.tone = "error";
