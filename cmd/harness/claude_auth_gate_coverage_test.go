@@ -201,8 +201,8 @@ func TestProbeClaudeAuthStatusClassifiesOutputVariants(t *testing.T) {
 	t.Run("logged-in-false", func(t *testing.T) {
 		g := &claudeAuthGate{command: writeProbeScript(t, `echo '{"loggedIn":false}'`)}
 		ready, msg := g.probeClaudeAuthStatus()
-		if ready || msg != "" {
-			t.Fatalf("probeClaudeAuthStatus(loggedIn=false) = (%v, %q), want (false, \"\")", ready, msg)
+		if ready || msg != claudeBrowserLoginRequiredMessage() {
+			t.Fatalf("probeClaudeAuthStatus(loggedIn=false) = (%v, %q), want login guidance", ready, msg)
 		}
 	})
 

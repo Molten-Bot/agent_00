@@ -6760,13 +6760,12 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 	homeDir := filepath.Join(root, "home")
 	tmpDir := filepath.Join(root, "tmp")
 	configDir := filepath.Join(root, "config")
-	claudeConfigDir := filepath.Join(configDir, "claude")
 	sandboxConfigDir := filepath.Join(configDir, "sandbox")
 	cacheDir := filepath.Join(root, "cache")
 	stateDir := filepath.Join(root, "state")
 	logDir := filepath.Join(root, "log")
 	runtimeDir := filepath.Join(root, "runtime")
-	for _, dir := range []string{homeDir, tmpDir, configDir, claudeConfigDir, sandboxConfigDir, cacheDir, stateDir, logDir, runtimeDir} {
+	for _, dir := range []string{homeDir, tmpDir, configDir, sandboxConfigDir, cacheDir, stateDir, logDir, runtimeDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("prepare agent io dir %s: %w", dir, err)
 		}
@@ -6781,8 +6780,11 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := seedAgentConfigDir(agentConfigSource(environ, "CLAUDE_CONFIG_DIR", filepath.Join(".claude")), claudeConfigDir); err != nil {
-		return nil, fmt.Errorf("seed claude config dir: %w", err)
+	// Claude rotates refresh tokens too. Copies in task worktrees race to use
+	// the same refresh token and leave the operator's session permanently stale.
+	claudeConfigDir, err := filepath.Abs(agentConfigSource(environ, "CLAUDE_CONFIG_DIR", ".claude"))
+	if err != nil {
+		return nil, fmt.Errorf("resolve persistent Claude config dir: %w", err)
 	}
 	overrides := []string{
 		"AGENT00_AGENT_IO_DIR=" + root,

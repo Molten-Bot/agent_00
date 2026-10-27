@@ -732,6 +732,11 @@ func runServer(args []string) int {
 		}
 		if authGate != nil {
 			uiServer.AgentAuthStatus = authGate.Status
+			if diagnostics, ok := authGate.(interface {
+				Diagnostics(context.Context) (web.AgentAuthDiagnostics, error)
+			}); ok {
+				uiServer.AgentAuthDiagnostics = diagnostics.Diagnostics
+			}
 			uiServer.StartAgentAuth = authGate.StartDeviceAuth
 			uiServer.ReauthenticateAgent = authGate.Reauthenticate
 			uiServer.VerifyAgentAuth = authGate.Verify

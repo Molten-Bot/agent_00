@@ -104,6 +104,7 @@ type Server struct {
 	CustomLibrarySources    *localruntime.CustomLibrarySources
 	LoadLibraryTasks        func() ([]library.TaskSummary, error)
 	AgentAuthStatus         func(context.Context) (AgentAuthState, error)
+	AgentAuthDiagnostics    func(context.Context) (AgentAuthDiagnostics, error)
 	StartAgentAuth          func(context.Context) (AgentAuthState, error)
 	ReauthenticateAgent     func(context.Context) (AgentAuthState, error)
 	VerifyAgentAuth         func(context.Context) (AgentAuthState, error)
@@ -288,6 +289,7 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/commit-signing", s.handleCommitSigning)
 	mux.HandleFunc("/api/commit-signing/verify", s.handleCommitSigning)
 	mux.HandleFunc("/api/agent-auth", s.handleAgentAuthStatus)
+	mux.HandleFunc("/api/agent-auth/diagnostics", s.handleAgentAuthDiagnostics)
 	mux.HandleFunc("/api/agent-auth/start-device", s.handleAgentAuthStart)
 	mux.HandleFunc("/api/agent-auth/reauthenticate", s.handleAgentReauthenticate)
 	mux.HandleFunc("/api/agent-auth/verify", s.handleAgentAuthVerify)

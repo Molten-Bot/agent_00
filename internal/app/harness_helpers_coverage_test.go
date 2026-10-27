@@ -408,7 +408,7 @@ func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 	}
 
 	wantRoot := filepath.Join(runDir, ".agent00-agent-io")
-	for _, rel := range []string{"home", "tmp", "config", filepath.Join("config", "claude"), "cache", "state", "log", "runtime"} {
+	for _, rel := range []string{"home", "tmp", "config", "cache", "state", "log", "runtime"} {
 		if st, err := os.Stat(filepath.Join(wantRoot, rel)); err != nil || !st.IsDir() {
 			t.Fatalf("agent io dir %s stat = (%v, %v), want directory", rel, st, err)
 		}
@@ -431,7 +431,7 @@ func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 	if got := countEnvKey(env, "CODEX_HOME"); got != 1 {
 		t.Fatalf("CODEX_HOME entries = %d, want 1", got)
 	}
-	if got, want := envValue(env, "CLAUDE_CONFIG_DIR"), filepath.Join(wantRoot, "config", "claude"); got != want {
+	if got, want := envValue(env, "CLAUDE_CONFIG_DIR"), claudeConfigDir; got != want {
 		t.Fatalf("CLAUDE_CONFIG_DIR = %q, want %q", got, want)
 	}
 	if got := countEnvKey(env, "CLAUDE_CONFIG_DIR"); got != 1 {
@@ -440,8 +440,8 @@ func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(wantRoot, "config", "codex", "auth.json")); !os.IsNotExist(err) {
 		t.Fatalf("Codex credentials must not be copied into the task tree: %v", err)
 	}
-	if got, err := os.ReadFile(filepath.Join(wantRoot, "config", "claude", ".credentials.json")); err != nil || string(got) != `{"claude":"ok"}` {
-		t.Fatalf("copied claude auth = (%q, %v), want seeded auth", string(got), err)
+	if _, err := os.Stat(filepath.Join(wantRoot, "config", "claude", ".credentials.json")); !os.IsNotExist(err) {
+		t.Fatalf("Claude credentials must not be copied into the task tree: %v", err)
 	}
 	if got, want := envValue(env, "AGENT00_AGENT_IO_DIR"), wantRoot; got != want {
 		t.Fatalf("AGENT00_AGENT_IO_DIR = %q, want %q", got, want)

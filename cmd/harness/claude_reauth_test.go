@@ -181,3 +181,65 @@ func TestClaudeAuthenticationFailureDoesNotQueueCodeRepair(t *testing.T) {
 		t.Fatalf("follow-up = %v, %q; want sign-in required", queue, reason)
 	}
 }
+
+func TestClaudeExpiredImportPreservesBrowserLogin(t *testing.T) {
+	clearClaudeCredentialSignals(t)
+	t.Setenv("GH_TOKEN", "github_token_ready")
+	g := newClaudeAuthGate(context.Background(), filepath.Join(t.TempDir(), "missing-claude"), nil)
+	input := &recordingWriteCloser{}
+	g.procRunning = true
+	g.procInput = input
+	g.state = "pending_browser_login"
+	g.authURL = "https://claude.com/cai/oauth/authorize?state=test-state"
+	for _, raw := range []string{
+		`{"claudeAiOauth":{"accessToken":"test-only","expiresAt":0}}`,
+		fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"test-only","expiresAt":%d}}`, time.Now().Add(-time.Hour).UnixMilli()),
+		`{"claudeAiOauth":{"accessToken":"","expiresAt":0}}`,
+		`{"claudeAiOauth":{"refreshToken":"test-only"}}`,
+	} {
+		state, err := g.Configure(context.Background(), raw)
+		if err == nil || state.Ready || !strings.Contains(state.Message, "browser code") {
+			t.Fatalf("expired import: ready=%v, message=%q, err=%v", state.Ready, state.Message, err)
+		}
+		if !g.procRunning || g.procInput != input || state.AuthURL == "" {
+			t.Fatal("invalid import interrupted browser sign-in")
+		}
+		if claudeCredentialsPath() != "" {
+			t.Fatal("expired credentials were persisted")
+		}
+	}
+}
+
+func TestClaudeLoggedOutStatusOverridesExistingCredentials(t *testing.T) {
+	for _, exitCode := range []int{0, 1} {
+		t.Run(fmt.Sprint(exitCode), func(t *testing.T) {
+			clearClaudeCredentialSignals(t)
+			t.Setenv("GH_TOKEN", "github_token_ready")
+			if _, err := saveClaudeCredentialsJSON(`{"claudeAiOauth":{"accessToken":"test-only"}}`); err != nil {
+				t.Fatal(err)
+			}
+			command := filepath.Join(t.TempDir(), "claude-status.sh")
+			if err := os.WriteFile(command, []byte(fmt.Sprintf("#!/bin/sh\necho '{\"loggedIn\":false}'; exit %d\n", exitCode)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			g := newClaudeAuthGate(context.Background(), command, nil)
+			state, err := g.Status(context.Background())
+			if err != nil || state.Ready || state.State != "needs_browser_login" {
+				t.Fatalf("logged-out status: ready=%v, state=%s, err=%v", state.Ready, state.State, err)
+			}
+		})
+	}
+}
+
+func TestClaudeExpiredCredentialsDoNotPassFallbackProbe(t *testing.T) {
+	clearClaudeCredentialSignals(t)
+	t.Setenv("GH_TOKEN", "github_token_ready")
+	if _, err := saveClaudeCredentialsJSON(`{"claudeAiOauth":{"accessToken":"test-only","expiresAt":0}}`); err != nil {
+		t.Fatal(err)
+	}
+	g := newClaudeAuthGate(context.Background(), filepath.Join(t.TempDir(), "missing-claude"), nil)
+	state, err := g.Status(context.Background())
+	if err != nil || state.Ready {
+		t.Fatalf("expired credentials: ready=%v, err=%v", state.Ready, err)
+	}
+}

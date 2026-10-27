@@ -62,6 +62,8 @@ type claudeAuthGate struct {
 	lastBrowserSubmit     time.Time
 	browserSubmitAttempts int
 	awaitingOAuthToken    bool
+	lastLoginErrorCode    string
+	lastLoginExitCode     *int
 }
 
 func newClaudeAuthGate(ctx context.Context, command string, logf func(string, ...any)) *claudeAuthGate {
@@ -140,6 +142,7 @@ func (g *claudeAuthGate) Status(_ context.Context) (web.AgentAuthState, error) {
 		ready, probeMessage := g.probeClaude()
 		if ready {
 			g.ready = true
+			g.lastLoginErrorCode = ""
 			g.state = "ready"
 			g.message = "Claude Code and GitHub token are ready."
 			g.authURL = ""
@@ -242,6 +245,8 @@ func (g *claudeAuthGate) StartDeviceAuth(_ context.Context) (web.AgentAuthState,
 	g.required = true
 	g.ready = false
 	g.procRunning = true
+	g.lastLoginErrorCode = ""
+	g.lastLoginExitCode = nil
 	g.procCancel = cancel
 	g.procInput = stdinPipe
 	g.lastPromptAdvance = time.Now().UTC()
@@ -466,6 +471,19 @@ func normalizeClaudeCredentialsJSON(raw string) (string, bool, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return "", true, fmt.Errorf("credentials payload must contain only one JSON object")
 	}
+	if oauth, ok := parsed["claudeAiOauth"].(map[string]any); ok {
+		accessToken, _ := oauth["accessToken"].(string)
+		if strings.TrimSpace(accessToken) == "" {
+			return "", true, fmt.Errorf("Claude credentials contain no access token; open the Claude login link and paste the new browser code")
+		}
+		refreshToken, _ := oauth["refreshToken"].(string)
+		if expiry, ok := oauth["expiresAt"].(json.Number); ok && strings.TrimSpace(refreshToken) == "" {
+			expiresAt, err := expiry.Int64()
+			if err != nil || expiresAt <= time.Now().UnixMilli() {
+				return "", true, fmt.Errorf("Claude credentials have expired and cannot refresh; open the Claude login link and paste the new browser code")
+			}
+		}
+	}
 	return trimmed, true, nil
 }
 
@@ -617,6 +635,7 @@ func (g *claudeAuthGate) completePendingBrowserLoginIfReady() (web.AgentAuthStat
 	cancel = g.procCancel
 	input = g.procInput
 	g.ready = true
+	g.lastLoginErrorCode = ""
 	g.state = "ready"
 	g.message = "Claude Code and GitHub token are ready."
 	g.authURL = ""
@@ -827,10 +846,15 @@ func (g *claudeAuthGate) probeClaude() (bool, string) {
 	if strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")) != "" {
 		return true, "Claude Code is configured via ANTHROPIC_API_KEY."
 	}
-	if loggedIn, statusMessage := g.probeClaudeAuthStatus(); loggedIn {
-		return true, statusMessage
+	if loggedIn, statusMessage := g.probeClaudeAuthStatus(); loggedIn || statusMessage != "" {
+		return loggedIn, statusMessage
 	}
 	if path := claudeCredentialsPath(); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			if _, _, err := normalizeClaudeCredentialsJSON(string(data)); err != nil {
+				return false, claudeBrowserLoginRequiredMessage()
+			}
+		}
 		return true, fmt.Sprintf("Claude Code credentials were found at %s.", path)
 	}
 
@@ -877,9 +901,6 @@ func (g *claudeAuthGate) probeClaudeAuthStatus() (bool, string) {
 	defer cancel()
 
 	res, err := exec.CommandContext(ctx, command, "auth", "status").CombinedOutput()
-	if err != nil {
-		return false, ""
-	}
 
 	trimmed := strings.TrimSpace(string(res))
 	if trimmed == "" {
@@ -887,12 +908,17 @@ func (g *claudeAuthGate) probeClaudeAuthStatus() (bool, string) {
 	}
 
 	var payload struct {
-		LoggedIn    bool   `json:"loggedIn"`
+		LoggedIn    *bool  `json:"loggedIn"`
 		AuthMethod  string `json:"authMethod"`
 		APIProvider string `json:"apiProvider"`
 	}
-	if err := json.Unmarshal([]byte(trimmed), &payload); err == nil {
-		if !payload.LoggedIn {
+	// Claude exits nonzero when logged out, but still returns a valid status.
+	// That explicit result must take precedence over a leftover credentials file.
+	if jsonErr := json.Unmarshal([]byte(trimmed), &payload); jsonErr == nil && payload.LoggedIn != nil {
+		if !*payload.LoggedIn {
+			return false, claudeBrowserLoginRequiredMessage()
+		}
+		if err != nil {
 			return false, ""
 		}
 		method := strings.TrimSpace(payload.AuthMethod)
@@ -905,6 +931,9 @@ func (g *claudeAuthGate) probeClaudeAuthStatus() (bool, string) {
 			stringsx.FirstNonEmpty(provider, "firstParty"),
 			stringsx.FirstNonEmpty(method, "session"),
 		)
+	}
+	if err != nil {
+		return false, ""
 	}
 
 	if strings.Contains(strings.ToLower(trimmed), `"loggedin": true`) {
@@ -940,6 +969,11 @@ func (g *claudeAuthGate) ingestLoginLine(line string) {
 	var token string
 
 	g.mu.Lock()
+	if strings.Contains(strings.ToLower(line), "invalid code") {
+		g.lastLoginErrorCode = "CLAUDE_BROWSER_CODE_INVALID"
+		g.message = "Claude rejected the browser code. Paste the complete code from the current login link."
+		update = true
+	}
 	if authURL != "" {
 		g.authURL = authURL
 		if !g.ready {
@@ -998,6 +1032,13 @@ func (g *claudeAuthGate) waitLogin(cmd *exec.Cmd, tempDir string, readerWG *sync
 	_ = os.RemoveAll(strings.TrimSpace(tempDir))
 
 	g.mu.Lock()
+	if cmd.ProcessState != nil {
+		exitCode := cmd.ProcessState.ExitCode()
+		g.lastLoginExitCode = &exitCode
+	}
+	if err != nil && !g.ready && g.lastLoginErrorCode == "" {
+		g.lastLoginErrorCode = "CLAUDE_LOGIN_PROCESS_FAILED"
+	}
 	procInput := g.procInput
 	g.procRunning = false
 	g.procCancel = nil
@@ -1033,6 +1074,7 @@ func (g *claudeAuthGate) waitLogin(cmd *exec.Cmd, tempDir string, readerWG *sync
 		ready, probeMessage := g.probeClaude()
 		if ready {
 			g.ready = true
+			g.lastLoginErrorCode = ""
 			g.state = "ready"
 			g.message = "Claude Code and GitHub token are ready."
 			g.authURL = ""
@@ -1235,6 +1277,7 @@ func (g *claudeAuthGate) completeWithClaudeOAuthToken(token string) {
 	cancel = g.procCancel
 	input = g.procInput
 	g.ready = true
+	g.lastLoginErrorCode = ""
 	g.state = "ready"
 	g.message = "Claude Code and GitHub token are ready."
 	g.authURL = ""
@@ -1289,6 +1332,7 @@ func (g *claudeAuthGate) completeWithClaudeCredentialsJSON(raw string) error {
 	cancel = g.procCancel
 	input = g.procInput
 	g.ready = true
+	g.lastLoginErrorCode = ""
 	g.state = "ready"
 	g.message = "Claude Code and GitHub token are ready."
 	g.authURL = ""

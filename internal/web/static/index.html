@@ -2985,6 +2985,7 @@
             return;
           }
           claudePostSubmitVerifyAttempts += 1;
+          claudePostSubmitVerifyInFlight = false;
           scheduleClaudePostSubmitVerifyPolling();
         } catch (err) {
           const message = err && err.message ? err.message : "device auth verify failed";

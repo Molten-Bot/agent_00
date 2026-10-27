@@ -271,6 +271,38 @@ A fresh login clears the blocked credential generation. Existing already-used
 refresh tokens need this one-time recovery after upgrading; persistence cannot
 restore a token that the provider has invalidated.
 
+### Claude authentication diagnostics
+
+Claude login and tasks share the persistent `CLAUDE_CONFIG_DIR` (default
+`$HOME/.claude`). Tasks keep their own temporary home and caches, but do not
+copy Claude credentials: a refresh in one task must be visible to the next.
+The Docker configuration volume retains the shared session across restarts.
+
+The local UI exposes these debugging endpoints:
+
+- `GET /healthz`: service health.
+- `GET /api/agent-auth`: current login state and interactive sign-in challenge.
+- `GET /api/agent-auth/diagnostics`: read-only Claude diagnostics, including
+  `checks[].code`, severity (`status`), description, suggested next action,
+  CLI login status and exit code, login-process state, and credential expiry.
+  It excludes tokens, browser codes, login URLs, account identity, and raw CLI
+  output, and sends `Cache-Control: no-store`.
+- `GET /api/state`: task statuses, exit codes, errors, and `tasks[].logs[].text`.
+
+For example, with the default local port:
+
+```bash
+curl -s http://127.0.0.1:7777/api/agent-auth/diagnostics
+```
+
+Diagnostic codes include `CLAUDE_AUTH_REJECTED`, `CLAUDE_CREDENTIALS_EMPTY`,
+`CLAUDE_ACCESS_TOKEN_EXPIRED`, `CLAUDE_BROWSER_CODE_INVALID`,
+`CLAUDE_LOGIN_PROCESS_FAILED`, and `CLAUDE_STATUS_UNAVAILABLE`.
+A successful HTTP response means diagnostics were collected, not that login
+is healthy. Inspect the checks. `cli.logged_in` means Claude has a stored login;
+it does not prove a refresh or inference request will succeed. An expired access
+token with a refresh token is a warning until Claude attempts refresh.
+
 ### Local Build
 
 Requires Go `1.26.5` or newer plus `git`, `gh`, and the Codex CLI. Claude tasks
