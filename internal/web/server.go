@@ -643,6 +643,37 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             return isIOSDevice() || /Android/i.test(String(navigator.userAgent || ""));
           }
 
+          // A touch-only desktop matches every pointer test a phone does while
+          // a hardware keyboard is plugged into it, so the platform the browser
+          // reports outranks the pointer: UA-CH answers it directly where it
+          // exists, and the user agent string names the desktop operating
+          // systems everywhere else.
+          function reportsDesktopPlatform() {
+            const uaData = navigator.userAgentData;
+            if (uaData && typeof uaData.mobile === "boolean") {
+              return !uaData.mobile;
+            }
+            return /Windows NT|Macintosh|CrOS|X11|Linux/i.test(String(navigator.userAgent || ""));
+          }
+
+          // A software keyboard carries no Shift+Enter, so Enter is the only
+          // newline a phone or tablet can type: submitting on it would strand
+          // mobile prompts at a single line. iOS and Android are checked first
+          // because their desktop tokens ("Macintosh" on an iPad, "Linux" on
+          // Android) would otherwise read as a desktop, and a coarse pointer
+          // that cannot hover catches the rest.
+          function usesSoftwareKeyboard() {
+            if (hasNativeDictationKey()) {
+              return true;
+            }
+            if (reportsDesktopPlatform()) {
+              return false;
+            }
+            return typeof window.matchMedia === "function" &&
+              window.matchMedia("(any-pointer: coarse)").matches &&
+              window.matchMedia("(any-hover: none)").matches;
+          }
+
           // The handoff sentence names a key only a software keyboard carries,
           // so it is appended where one exists and dropped everywhere else: a
           // desktop message states the blocker and stops there.
@@ -1400,10 +1431,24 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             const panelStatus = document.createElement("span");
             panelStatus.className = "chat-repo-submit-status";
             panelStatus.setAttribute("aria-live", "polite");
-            panelStatus.textContent = "Press Enter to run.";
+            panelStatus.textContent = usesSoftwareKeyboard() ? "Tap Run to start." : "Press Enter to run.";
+
+            // Enter stays a newline on a software keyboard, so that is the only
+            // place the card needs a visible run control; a desktop keeps the
+            // panel as it was.
+            const submitButton = document.createElement("button");
+            submitButton.className = "prompt-action-button prompt-action-icon-only chat-repo-submit";
+            submitButton.type = "button";
+            submitButton.title = "Run prompt";
+            submitButton.setAttribute("aria-label", "Run prompt");
+            submitButton.innerHTML = '<i data-lucide="play" class="prompt-action-icon" aria-hidden="true"></i><span class="sr-only">Run</span>';
+            submitButton.classList.toggle("hidden", !usesSoftwareKeyboard());
 
             input.addEventListener("keydown", (event) => {
               if (event.key !== "Enter" || event.shiftKey) return;
+              // Desktop runs on Enter; a software keyboard keeps it as a
+              // newline and runs from the Run button instead.
+              if (usesSoftwareKeyboard()) return;
               event.preventDefault();
               event.stopPropagation();
               void submitRepoPrompt(repo, input, panelStatus);
@@ -1414,7 +1459,18 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             input.addEventListener("pointerdown", (event) => {
               event.stopPropagation();
             });
-            panel.append(inputWrap, panelStatus);
+            submitButton.addEventListener("click", (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void submitRepoPrompt(repo, input, panelStatus);
+            });
+            submitButton.addEventListener("keydown", (event) => {
+              event.stopPropagation();
+            });
+            submitButton.addEventListener("pointerdown", (event) => {
+              event.stopPropagation();
+            });
+            panel.append(inputWrap, panelStatus, submitButton);
             card.appendChild(panel);
 
             const openPrompt = () => {

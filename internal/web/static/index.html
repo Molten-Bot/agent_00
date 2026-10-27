@@ -5058,6 +5058,35 @@
       return isIOSDevice() || /Android/i.test(String(navigator.userAgent || ""));
     }
 
+    // A touch-only desktop matches every pointer test a phone does while a
+    // hardware keyboard is plugged into it, so the platform the browser reports
+    // outranks the pointer: UA-CH answers it directly where it exists, and the
+    // user agent string names the desktop operating systems everywhere else.
+    function reportsDesktopPlatform() {
+      const uaData = navigator.userAgentData;
+      if (uaData && typeof uaData.mobile === "boolean") {
+        return !uaData.mobile;
+      }
+      return /Windows NT|Macintosh|CrOS|X11|Linux/i.test(String(navigator.userAgent || ""));
+    }
+
+    // A software keyboard carries no Shift+Enter, so Enter is the only newline a
+    // phone or tablet can type: submitting on it would strand mobile prompts at
+    // a single line. iOS and Android are checked first because their desktop
+    // tokens ("Macintosh" on an iPad, "Linux" on Android) would otherwise read
+    // as a desktop, and a coarse pointer that cannot hover catches the rest.
+    function usesSoftwareKeyboard() {
+      if (hasNativeDictationKey()) {
+        return true;
+      }
+      if (reportsDesktopPlatform()) {
+        return false;
+      }
+      return typeof window.matchMedia === "function" &&
+        window.matchMedia("(any-pointer: coarse)").matches &&
+        window.matchMedia("(any-hover: none)").matches;
+    }
+
     // The handoff sentence names a key only a software keyboard carries, so it
     // is appended where one exists and dropped everywhere else: a desktop
     // message states the blocker and stops there.
@@ -7206,7 +7235,17 @@
       const submitStatus = document.createElement("span");
       submitStatus.className = "chat-repo-submit-status";
       submitStatus.setAttribute("aria-live", "polite");
-      submitStatus.textContent = "Press Enter to run.";
+      submitStatus.textContent = usesSoftwareKeyboard() ? "Tap Run to start." : "Press Enter to run.";
+
+      // Enter stays a newline on a software keyboard, so that is the only place
+      // the card needs a visible run control; a desktop keeps the row as it was.
+      const submitButton = document.createElement("button");
+      submitButton.className = "prompt-action-button prompt-action-icon-only chat-repo-submit";
+      submitButton.type = "button";
+      submitButton.title = "Run prompt";
+      submitButton.setAttribute("aria-label", "Run prompt");
+      submitButton.innerHTML = '<i data-lucide="play" class="prompt-action-icon" aria-hidden="true"></i><span class="sr-only">Run</span>';
+      submitButton.classList.toggle("hidden", !usesSoftwareKeyboard());
 
       // Only the multi-line dictation hint wraps; every other status in the
       // shared action row stays on one line so the card keeps its height.
@@ -7258,14 +7297,32 @@
         await applyChatRepoImageFiles(files, droppedCount);
       });
 
-      prompt.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" || event.shiftKey) return;
-        event.preventDefault();
-        event.stopPropagation();
+      const runChatRepoPrompt = () => {
         void submitChatRepoPrompt(repo, prompt, submitStatus, promptImages, promptLog, (images) => {
           promptImages = normalizePromptImages(images);
           renderChatRepoImages(pasteTarget, promptImages);
         });
+      };
+
+      prompt.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || event.shiftKey) return;
+        // Desktop runs on Enter; a software keyboard keeps it as a newline and
+        // runs from the Run button instead.
+        if (usesSoftwareKeyboard()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        runChatRepoPrompt();
+      });
+      submitButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        runChatRepoPrompt();
+      });
+      submitButton.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+      });
+      submitButton.addEventListener("pointerdown", (event) => {
+        event.stopPropagation();
       });
       prompt.addEventListener("paste", handleChatRepoImagePaste);
       prompt.addEventListener("input", () => {
@@ -7321,7 +7378,7 @@
       pasteTarget.addEventListener("pointerdown", (event) => {
         event.stopPropagation();
       });
-      imageActions.append(pasteTarget, imageFileInput, submitStatus, speechToggle);
+      imageActions.append(pasteTarget, imageFileInput, submitStatus, speechToggle, submitButton);
       panel.append(promptLog, promptWrap, imageActions);
       card.appendChild(panel);
       const chatSpeechAvailability = speechToggleAvailability();
@@ -12892,19 +12949,6 @@
       } finally {
         localPromptSubmit.disabled = state.agentAuthBusy || (state.agentAuth.required && !state.agentAuth.ready);
       }
-    }
-
-    // A software keyboard carries no Shift+Enter, so Enter is the only newline a
-    // phone or tablet can type: submitting on it would strand mobile prompts at
-    // a single line. A coarse pointer that cannot hover is the touch-only case,
-    // and the iOS/Android check covers tablets paired with a trackpad.
-    function usesSoftwareKeyboard() {
-      if (typeof window.matchMedia === "function" &&
-        window.matchMedia("(any-pointer: coarse)").matches &&
-        window.matchMedia("(any-hover: none)").matches) {
-        return true;
-      }
-      return hasNativeDictationKey();
     }
 
     function submitBuilderPromptOnEnter(event) {

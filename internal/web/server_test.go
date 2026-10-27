@@ -1952,6 +1952,42 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, "builderPromptInput.addEventListener(\"keydown\", submitBuilderPromptOnEnter);") {
 		t.Fatalf("expected index html to submit builder prompts on Enter while preserving Shift+Enter multiline input")
 	}
+	// Enter is the only newline a software keyboard can type, so it stays a
+	// newline there while every hardware keyboard keeps Enter-to-submit.
+	if !strings.Contains(markup, `function usesSoftwareKeyboard() {
+      if (hasNativeDictationKey()) {
+        return true;
+      }
+      if (reportsDesktopPlatform()) {
+        return false;
+      }
+      return typeof window.matchMedia === "function" &&
+        window.matchMedia("(any-pointer: coarse)").matches &&
+        window.matchMedia("(any-hover: none)").matches;
+    }`) {
+		t.Fatalf("expected index html to detect software keyboards from the platform first and the pointer second")
+	}
+	// A touch screen alone is not a phone: a desktop with one still has a
+	// hardware keyboard, so the reported platform decides before the pointer.
+	if !strings.Contains(markup, `function reportsDesktopPlatform() {
+      const uaData = navigator.userAgentData;
+      if (uaData && typeof uaData.mobile === "boolean") {
+        return !uaData.mobile;
+      }
+      return /Windows NT|Macintosh|CrOS|X11|Linux/i.test(String(navigator.userAgent || ""));
+    }`) {
+		t.Fatalf("expected index html to keep Enter-to-submit on a touch-only desktop")
+	}
+	if got := strings.Count(markup, "if (usesSoftwareKeyboard()) {\n        return;\n      }"); got != 1 {
+		t.Fatalf("index html builder Enter guards = %d, want 1", got)
+	}
+	if !strings.Contains(markup, `submitStatus.textContent = usesSoftwareKeyboard() ? "Tap Run to start." : "Press Enter to run.";`) ||
+		!strings.Contains(markup, `submitButton.className = "prompt-action-button prompt-action-icon-only chat-repo-submit";`) ||
+		!strings.Contains(markup, `submitButton.setAttribute("aria-label", "Run prompt");`) ||
+		!strings.Contains(markup, `submitButton.classList.toggle("hidden", !usesSoftwareKeyboard());`) ||
+		!strings.Contains(markup, "if (usesSoftwareKeyboard()) return;\n        event.preventDefault();\n        event.stopPropagation();\n        runChatRepoPrompt();") {
+		t.Fatalf("expected index chat repository prompts to keep Enter as a newline on a software keyboard and run from a visible button instead")
+	}
 	if !strings.Contains(markup, "function hasReviewerDraftToClear(") ||
 		!strings.Contains(markup, "function hasBuilderDraftToClear(") ||
 		!strings.Contains(markup, "const promptDirty = String(builderPromptInput?.value || \"\").trim() !== \"\";") ||
@@ -2176,7 +2212,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `card.setAttribute("aria-expanded", "true");`) ||
 		!strings.Contains(markup, "pasteTarget.className = \"prompt-control prompt-action-paste chat-repo-image-paste\"") ||
 		!strings.Contains(markup, "imageActions.className = \"chat-repo-image-actions\"") ||
-		!strings.Contains(markup, "imageActions.append(pasteTarget, imageFileInput, submitStatus, speechToggle);") {
+		!strings.Contains(markup, "imageActions.append(pasteTarget, imageFileInput, submitStatus, speechToggle, submitButton);") {
 		t.Fatalf("expected chat repository prompts to open from card/icon and accept pasted screenshots")
 	}
 	if !strings.Contains(markup, `imageFileInput.type = "file";`) ||
@@ -2814,11 +2850,40 @@ func TestHandlerServesChatView(t *testing.T) {
 		"retireChatNativeDictationHint();\n            status.textContent = message;",
 		`cardStatus.dataset.dictationHint = "true";`,
 		`delete statusNode.dataset.dictationHint;`,
+		`panelStatus.textContent = usesSoftwareKeyboard() ? "Tap Run to start." : "Press Enter to run.";`,
+		`submitButton.className = "prompt-action-button prompt-action-icon-only chat-repo-submit";`,
+		`submitButton.setAttribute("aria-label", "Run prompt");`,
+		`submitButton.classList.toggle("hidden", !usesSoftwareKeyboard());`,
+		`panel.append(inputWrap, panelStatus, submitButton);`,
+		"if (usesSoftwareKeyboard()) return;\n              event.preventDefault();\n              event.stopPropagation();\n              void submitRepoPrompt(repo, input, panelStatus);",
 	}
 	for _, needle := range required {
 		if !strings.Contains(markup, needle) {
 			t.Fatalf("expected chat html to include %q", needle)
 		}
+	}
+	// Enter is the only newline a software keyboard can type, so the chat card
+	// keeps it as one there and exposes a Run button instead; a touch-only
+	// desktop still reports a desktop platform and keeps Enter-to-submit.
+	if !strings.Contains(markup, `function usesSoftwareKeyboard() {
+            if (hasNativeDictationKey()) {
+              return true;
+            }
+            if (reportsDesktopPlatform()) {
+              return false;
+            }
+            return typeof window.matchMedia === "function" &&
+              window.matchMedia("(any-pointer: coarse)").matches &&
+              window.matchMedia("(any-hover: none)").matches;
+          }`) ||
+		!strings.Contains(markup, `function reportsDesktopPlatform() {
+            const uaData = navigator.userAgentData;
+            if (uaData && typeof uaData.mobile === "boolean") {
+              return !uaData.mobile;
+            }
+            return /Windows NT|Macintosh|CrOS|X11|Linux/i.test(String(navigator.userAgent || ""));
+          }`) {
+		t.Fatalf("expected chat html to detect software keyboards from the platform first and the pointer second")
 	}
 	// Both fallbacks hand off to a software-keyboard dictation key, so both have
 	// to stay hidden on a desktop that has none.
