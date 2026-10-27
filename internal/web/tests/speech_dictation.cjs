@@ -117,6 +117,16 @@ function micButton(page) {
   return page.locator('#prompt-speech-toggle');
 }
 
+// Node-side polling: page.waitForFunction polls inside the page, which a fake
+// clock can stall, so tests that install one wait from out here instead.
+async function waitUntil(check, message) {
+  for (let i = 0; i < 200; i += 1) {
+    if (await check()) return;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.fail(message);
+}
+
 test('a reachable whisper sidecar shows the recording mic button', async t => {
   const page = await openPage(t);
   await micButton(page).waitFor({ state: 'visible' });
@@ -124,9 +134,65 @@ test('a reachable whisper sidecar shows the recording mic button', async t => {
   assert.equal(await micButton(page).getAttribute('aria-label'), 'Dictate prompt');
 });
 
-test('an unreachable whisper sidecar hides the mic button', async t => {
+// Capture works here, so hiding the button would remove the only dictation
+// affordance on the page over a sidecar the platform dictation key never needs.
+test('an unreachable whisper sidecar keeps the mic button as a keyboard fallback', async t => {
   const page = await openPage(t, { speech: { enabled: true, reachable: false } });
-  await micButton(page).waitFor({ state: 'hidden' });
+  await micButton(page).waitFor({ state: 'visible' });
+  assert.equal(await micButton(page).evaluate(node => node.classList.contains('speech-native')), true);
+  assert.equal(await micButton(page).isEnabled(), true, 'the fallback button stays clickable');
+  assert.match(await micButton(page).getAttribute('title'), /not reachable/);
+
+  await micButton(page).click();
+  await page.waitForFunction(text => document.getElementById('local-prompt-status').textContent.includes(text), 'dictation key');
+  assert.match(await page.textContent('#local-prompt-status'), /not reachable/);
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'builder-prompt-input', 'the prompt is focused for keyboard dictation');
+});
+
+// The /chat page carries its own availability copy, so an unreachable sidecar
+// has to leave the same fallback there.
+test('the chat mic stays usable when the whisper sidecar is unreachable', async t => {
+  const page = await openPage(t, {
+    path: '/chat',
+    speech: { enabled: true, reachable: false },
+    repos: [{ full_name: 'octo/demo', name: 'demo', private: false, description: 'Demo repository' }],
+  });
+  const chatMic = page.locator('#chat-speech-toggle');
+  await page.locator('.chat-repo-card').first().click();
+  await chatMic.waitFor({ state: 'visible' });
+  assert.equal(await chatMic.evaluate(node => node.classList.contains('speech-native')), true);
+
+  await chatMic.click();
+  await page.waitForFunction(text => document.getElementById('chat-status').textContent.includes(text), 'not reachable');
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.classList.contains('chat-repo-prompt')),
+    true,
+    'the chat prompt is focused for keyboard dictation',
+  );
+});
+
+// A non-Safari iOS browser on a plain-http origin trips both blockers at once.
+// The HTTPS advice is the fix, and the Safari note has to survive alongside it.
+test('an insecure iOS browser gets both the HTTPS fix and the Safari advice', async t => {
+  const page = await openPage(t, { stripCapture: true, insecure: true, userAgent: IOS_FIREFOX_UA });
+  await micButton(page).waitFor({ state: 'visible' });
+  const title = await micButton(page).getAttribute('title');
+  assert.match(title, /HTTPS/, 'the insecure origin is still named as the blocker');
+  assert.match(title, /Safari/, 'the iOS browser advice is not shadowed by the insecure-context message');
+});
+
+// The fallback hint promises the prompt is focused. When the textarea is gone,
+// that promise is false and the message has to ask for a tap instead.
+test('the keyboard fallback does not claim a focus it could not take', async t => {
+  const page = await openPage(t, { stripCapture: true, insecure: true });
+  await micButton(page).waitFor({ state: 'visible' });
+  await page.evaluate(() => document.getElementById('builder-prompt-input').remove());
+
+  await micButton(page).click();
+  await page.waitForFunction(text => document.getElementById('local-prompt-status').textContent.includes(text), 'dictation key');
+  const status = await page.textContent('#local-prompt-status');
+  assert.match(status, /Tap the prompt box/);
+  assert.doesNotMatch(status, /The prompt is focused/);
 });
 
 test('disabled dictation hides the mic button even without microphone capture', async t => {
@@ -311,6 +377,52 @@ test('the chat page hands a refused microphone to keyboard dictation', async t =
   await page.waitForFunction(() => window.__micCalls > 1, null, { timeout: 5000 });
   await page.evaluate(() => window.__releaseMic());
   assert.equal(await page.evaluate(() => window.__micCalls), 2, 'the second tap asks for the microphone again');
+});
+
+// A status poll that lands mid-recording must not retract the sidecar: the live
+// stop button is the only way to finish a capture that is already running.
+test('a status poll during chat recording keeps the live stop button', async t => {
+  const page = await openPage(t, {
+    path: '/chat',
+    grantCapture: true,
+    clock: true,
+    repos: [{ full_name: 'octo/demo', name: 'demo', private: false, description: 'Demo repository' }],
+  });
+  const chatMic = page.locator('#chat-speech-toggle');
+  await page.locator('.chat-repo-card').first().click();
+  await chatMic.waitFor({ state: 'visible' });
+
+  await chatMic.click();
+  await waitUntil(
+    () => page.evaluate(() => document.getElementById('chat-status').textContent.includes('Listening')),
+    'the chat page never started recording',
+  );
+
+  await page.route('**/api/speech/status', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, speech: { enabled: true, reachable: false } }),
+  }));
+  // Counted on the response, not the request: the page only applies the new
+  // sidecar state once the fetch resolves.
+  let polls = 0;
+  page.on('response', response => {
+    if (response.url().includes('/api/speech/status')) polls += 1;
+  });
+  await page.clock.runFor(31_000); // one chat status poll interval
+  await waitUntil(() => polls > 0, 'the status poll never ran while recording');
+  await new Promise(resolve => setTimeout(resolve, 250)); // let the poll apply
+  assert.equal(
+    await page.evaluate(() => document.getElementById('chat-speech-toggle').getAttribute('aria-pressed')),
+    'true',
+    'the stop button state was dropped by the status poll',
+  );
+  assert.equal(await chatMic.isVisible(), true, 'the stop button is still on screen');
+  assert.equal(
+    await chatMic.evaluate(node => node.classList.contains('speech-native')),
+    false,
+    'an in-flight recording is not flipped into the keyboard fallback',
+  );
 });
 
 // Tapping the chat mic with no prompt open is the one path that cannot focus

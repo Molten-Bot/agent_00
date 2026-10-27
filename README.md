@@ -58,7 +58,9 @@ button stays usable and points at native dictation: it focuses the prompt and
 explains the limitation so the platform's own dictation key, the microphone next
 to the iOS spacebar, can be used to speak into the prompt instead. A refusal is
 not final: dismissing a permission prompt looks the same as blocking it, so the
-next tap asks for the microphone again. Set `WHISPER_SPEECH_DISABLED` to hide
+next tap asks for the microphone again. The same fallback covers an unreachable
+whisper sidecar: native dictation needs no server, so the button stays rather
+than disappearing with the sidecar. Set `WHISPER_SPEECH_DISABLED` to hide
 the button entirely.
 
 ### Library settings

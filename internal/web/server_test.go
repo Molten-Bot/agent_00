@@ -1397,13 +1397,22 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `state.speech.enabled && state.speech.reachable`) {
 		t.Fatalf("expected index html to show whisper connection only when speech sidecar is reachable")
 	}
-	if !strings.Contains(markup, `return { visible: Boolean(state.speech.reachable), nativeMessage: "", support };`) ||
+	if !strings.Contains(markup, `const unreachable = speechUnreachableFallback();
+        return { visible: true, nativeMessage: unreachable.message, support: unreachable };`) ||
+		!strings.Contains(markup, `startNativeDictation(target, speechUnreachableFallback());`) ||
 		!strings.Contains(markup, `const chatSpeechAvailability = speechToggleAvailability();`) {
-		t.Fatalf("expected index html to hide speech dictation buttons when the whisper sidecar is unreachable")
+		t.Fatalf("expected index html to keep a native dictation fallback button when the whisper sidecar is unreachable")
 	}
 	if !strings.Contains(markup, `const enabled = state.speech.enabled || (!state.speech.statusResolved && !support.supported);`) ||
 		!strings.Contains(markup, `return { visible: true, nativeMessage: support.message, support };`) {
 		t.Fatalf("expected index html to keep a native dictation fallback button when microphone capture is unsupported")
+	}
+	if !strings.Contains(markup, `reason: insecure ? "ios_non_safari_insecure_context" : "ios_non_safari_browser",`) {
+		t.Fatalf("expected index html to check the iOS browser before the insecure-context branch so the Safari advice stays reachable")
+	}
+	if !strings.Contains(markup, `return document.activeElement === input;`) ||
+		!strings.Contains(markup, `message.replace(SPEECH_NATIVE_DICTATION_HINT, SPEECH_NATIVE_DICTATION_UNFOCUSED_HINT)`) {
+		t.Fatalf("expected index html to drop the focus claim when the native fallback could not focus a prompt")
 	}
 	if !strings.Contains(markup, `startNativeDictation(target, rememberSpeechCaptureBlock(speechCaptureDenial(err)));`) ||
 		!strings.Contains(markup, `if (state.speech.captureBlock) return state.speech.captureBlock;`) {
@@ -2705,7 +2714,13 @@ func TestHandlerServesChatView(t *testing.T) {
 		`function refreshChatSpeechStatus()`,
 		`fetch("/api/speech/status", { cache: "no-store" })`,
 		`function chatSpeechAvailability()`,
-		`return { visible: Boolean(speech.reachable), nativeMessage: "", support: support };`,
+		`function speechUnreachableFallback()`,
+		"const unreachable = speechUnreachableFallback();\n              return { visible: true, nativeMessage: unreachable.message, support: unreachable };",
+		`startChatNativeDictation(speechUnreachableFallback());`,
+		`reason: insecure ? "ios_non_safari_insecure_context" : "ios_non_safari_browser",`,
+		`const active = Boolean(speech.recording || speech.submitting);`,
+		"if (!active) {\n                speech.reachable = false;\n              }",
+		"speech.reachable = active && speech.reachable ? speech.reachable : Boolean(speechStatus.reachable);",
 		`function startChatNativeDictation(support)`,
 		`startChatNativeDictation(rememberSpeechCaptureBlock(speechCaptureDenial(err)));`,
 		`function focusChatPromptInput()`,

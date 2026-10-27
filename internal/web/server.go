@@ -654,18 +654,26 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             if (hasCapture && hasAudioContext) {
               return { supported: true, reason: "", message: "" };
             }
-            if (window.isSecureContext === false) {
+            // The iOS check runs before the insecure-context one: a non-Safari
+            // iOS browser on a plain-http origin trips both blockers at once,
+            // and only this order lets the Safari advice reach it instead of
+            // being shadowed by the generic insecure-context message.
+            const insecure = window.isSecureContext === false;
+            if (isNonSafariIOSBrowser()) {
+              const detail = insecure
+                ? insecureContextAdvice()
+                : "This iOS browser is not exposing microphone capture to this page, so Whisper dictation cannot record here.";
+              return {
+                supported: false,
+                reason: insecure ? "ios_non_safari_insecure_context" : "ios_non_safari_browser",
+                message: detail + " Safari on iOS is the most reliable browser for Whisper dictation. " + SPEECH_NATIVE_DICTATION_HINT
+              };
+            }
+            if (insecure) {
               return {
                 supported: false,
                 reason: "insecure_context",
                 message: insecureContextAdvice() + " " + SPEECH_NATIVE_DICTATION_HINT
-              };
-            }
-            if (isNonSafariIOSBrowser()) {
-              return {
-                supported: false,
-                reason: "ios_non_safari_browser",
-                message: "This iOS browser is not exposing microphone capture to this page, so Whisper dictation cannot record here. Safari on iOS is the most reliable option. " + SPEECH_NATIVE_DICTATION_HINT
               };
             }
             return {
@@ -792,7 +800,25 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             if (!support.supported) {
               return { visible: true, nativeMessage: support.message, support: support };
             }
-            return { visible: Boolean(speech.reachable), nativeMessage: "", support: support };
+            // Capture works but whisper has nowhere to send it. Keyboard
+            // dictation still does, so keep the button as that fallback instead
+            // of removing the only dictation affordance on the page.
+            if (!speech.reachable) {
+              const unreachable = speechUnreachableFallback();
+              return { visible: true, nativeMessage: unreachable.message, support: unreachable };
+            }
+            return { visible: true, nativeMessage: "", support: support };
+          }
+
+          // Whisper needs its sidecar; the platform dictation key needs
+          // nothing, so an unreachable sidecar is a fallback case rather than a
+          // dead end.
+          function speechUnreachableFallback() {
+            return {
+              supported: false,
+              reason: "whisper_unreachable",
+              message: "Whisper dictation is not reachable, so this browser cannot record to it. " + SPEECH_NATIVE_DICTATION_HINT
+            };
           }
 
           function syncChatSpeechButton() {
@@ -821,13 +847,17 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           }
 
           async function refreshChatSpeechStatus() {
+            // A poll that lands mid-recording must not retract the sidecar:
+            // dropping it here flips the live stop button back into its idle
+            // state and strands the capture that is already running.
+            const active = Boolean(speech.recording || speech.submitting);
             try {
               const response = await fetch("/api/speech/status", { cache: "no-store" });
               const body = await response.json().catch(() => null);
               const speechStatus = body && body.speech ? body.speech : {};
               speech.enabled = Boolean(speechStatus.enabled);
               speech.statusResolved = true;
-              speech.reachable = Boolean(speechStatus.reachable);
+              speech.reachable = active && speech.reachable ? speech.reachable : Boolean(speechStatus.reachable);
               if (window.AgentHeader && typeof window.AgentHeader.updateSpeechConnection === "function") {
                 window.AgentHeader.updateSpeechConnection(
                   speech.enabled && speech.reachable,
@@ -837,8 +867,11 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             } catch (_err) {
               // A failed poll only proves the sidecar status is unknown. Keep
               // the last known enabled flag so the server-independent keyboard
-              // dictation fallback button survives a transient fetch error.
-              speech.reachable = false;
+              // dictation fallback button survives a transient fetch error, and
+              // keep the sidecar flag while a capture is in flight.
+              if (!active) {
+                speech.reachable = false;
+              }
               if (window.AgentHeader && typeof window.AgentHeader.updateSpeechConnection === "function") {
                 window.AgentHeader.updateSpeechConnection(false, "Unavailable");
               }
@@ -915,7 +948,9 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               await refreshChatSpeechStatus();
             }
             if (!speech.reachable) {
-              setChatSpeechStatus("error", "Speech dictation is unavailable.");
+              // Whisper cannot take the audio, but the keyboard dictation key
+              // can.
+              startChatNativeDictation(speechUnreachableFallback());
               return;
             }
 
