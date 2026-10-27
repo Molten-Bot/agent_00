@@ -1981,6 +1981,15 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if got := strings.Count(markup, "if (usesSoftwareKeyboard()) {\n        return;\n      }"); got != 1 {
 		t.Fatalf("index html builder Enter guards = %d, want 1", got)
 	}
+	// The prompt textarea is not the only field in the run form: a form with a
+	// submit button also runs from Enter in any of its single-line inputs, and a
+	// software keyboard reaches those with the same key it uses for a newline.
+	if !strings.Contains(markup, "function blockImplicitSubmitOnEnter(event)") ||
+		!strings.Contains(markup, "const IMPLICIT_SUBMIT_INPUT_TYPES = new Set([") ||
+		!strings.Contains(markup, "if (!IMPLICIT_SUBMIT_INPUT_TYPES.has(String(target.type || \"\").toLowerCase())) {") ||
+		!strings.Contains(markup, "localPromptForm.addEventListener(\"keydown\", blockImplicitSubmitOnEnter);") {
+		t.Fatalf("expected index html to block implicit form submission from single-line fields on a software keyboard")
+	}
 	if !strings.Contains(markup, `submitStatus.textContent = usesSoftwareKeyboard() ? "Tap Run to start." : "Press Enter to run.";`) ||
 		!strings.Contains(markup, `submitButton.className = "prompt-action-button prompt-action-icon-only chat-repo-submit";`) ||
 		!strings.Contains(markup, `submitButton.setAttribute("aria-label", "Run prompt");`) ||
@@ -2850,12 +2859,23 @@ func TestHandlerServesChatView(t *testing.T) {
 		"retireChatNativeDictationHint();\n            status.textContent = message;",
 		`cardStatus.dataset.dictationHint = "true";`,
 		`delete statusNode.dataset.dictationHint;`,
-		`panelStatus.textContent = usesSoftwareKeyboard() ? "Tap Run to start." : "Press Enter to run.";`,
+		`function promptRunHintText()`,
+		`return usesSoftwareKeyboard() ? "Tap Run to start." : "Press Enter to run.";`,
+		`panelStatus.textContent = promptRunHintText();`,
+		// Retiring a parked dictation hint restores the idle text, which names
+		// the gesture this device actually has rather than always Enter.
+		`node.textContent = promptRunHintText();`,
 		`submitButton.className = "prompt-action-button prompt-action-icon-only chat-repo-submit";`,
 		`submitButton.setAttribute("aria-label", "Run prompt");`,
 		`submitButton.classList.toggle("hidden", !usesSoftwareKeyboard());`,
-		`panel.append(inputWrap, panelStatus, submitButton);`,
-		"if (usesSoftwareKeyboard()) return;\n              event.preventDefault();\n              event.stopPropagation();\n              void submitRepoPrompt(repo, input, panelStatus);",
+		// The status and Run button share one action row; the panel grid would
+		// otherwise give the button a full-width row of its own.
+		`panelActions.className = "chat-repo-image-actions";`,
+		`panelActions.append(panelStatus, submitButton);`,
+		`panel.append(inputWrap, panelActions);`,
+		// A second tap while a run is in flight must not queue a second task.
+		"if (runPending) return;\n              runPending = true;\n              submitButton.disabled = true;",
+		"if (usesSoftwareKeyboard()) return;\n              event.preventDefault();\n              event.stopPropagation();\n              void runRepoPrompt();",
 	}
 	for _, needle := range required {
 		if !strings.Contains(markup, needle) {

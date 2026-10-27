@@ -12970,6 +12970,33 @@
       localPromptSubmit?.click();
     }
 
+    // Enter in any single-line field of a form that has a submit button runs
+    // the form, so the repository, branch, reviewer, and directory inputs would
+    // start a task from a phone keyboard that cannot type Shift+Enter. The
+    // prompt textarea decides for itself above; block the implicit submission
+    // everywhere else a software keyboard is in use.
+    const IMPLICIT_SUBMIT_INPUT_TYPES = new Set([
+      "text", "search", "url", "tel", "email", "password", "number",
+      "date", "month", "week", "time", "datetime-local",
+    ]);
+
+    function blockImplicitSubmitOnEnter(event) {
+      if (event.defaultPrevented || event.key !== "Enter" || event.isComposing) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement)) {
+        return;
+      }
+      if (!IMPLICIT_SUBMIT_INPUT_TYPES.has(String(target.type || "").toLowerCase())) {
+        return;
+      }
+      if (!usesSoftwareKeyboard()) {
+        return;
+      }
+      event.preventDefault();
+    }
+
     builderRepoSelect.addEventListener("change", () => {
       const value = normalizeRepoValue(builderRepoSelect.value);
       const previousRepo = normalizeRepoValue(builderRepoInput.value);
@@ -13581,6 +13608,7 @@
       syncPromptInputSizes();
     }, { passive: true });
 
+    localPromptForm.addEventListener("keydown", blockImplicitSubmitOnEnter);
     localPromptForm.addEventListener("submit", submitLocalPrompt);
     libraryRepoInput.value = builderRepoInput.value;
     libraryBaseBranch.value = builderBaseBranch.value;

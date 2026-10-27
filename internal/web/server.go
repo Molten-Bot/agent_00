@@ -674,6 +674,13 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               window.matchMedia("(any-hover: none)").matches;
           }
 
+          // The card status line names the gesture that starts a run, so the
+          // idle text follows the keyboard the device actually has. Both the
+          // first render and the retired dictation hint read it from here.
+          function promptRunHintText() {
+            return usesSoftwareKeyboard() ? "Tap Run to start." : "Press Enter to run.";
+          }
+
           // The handoff sentence names a key only a software keyboard carries,
           // so it is appended where one exists and dropped everywhere else: a
           // desktop message states the blocker and stops there.
@@ -825,7 +832,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           // has started recording.
           function retireChatNativeDictationHint() {
             grid.querySelectorAll('.chat-repo-submit-status[data-dictation-hint="true"]').forEach((node) => {
-              node.textContent = "Press Enter to run.";
+              node.textContent = promptRunHintText();
               node.dataset.tone = "";
               node.dataset.wrap = "";
               delete node.dataset.dictationHint;
@@ -1431,7 +1438,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             const panelStatus = document.createElement("span");
             panelStatus.className = "chat-repo-submit-status";
             panelStatus.setAttribute("aria-live", "polite");
-            panelStatus.textContent = usesSoftwareKeyboard() ? "Tap Run to start." : "Press Enter to run.";
+            panelStatus.textContent = promptRunHintText();
 
             // Enter stays a newline on a software keyboard, so that is the only
             // place the card needs a visible run control; a desktop keeps the
@@ -1444,6 +1451,22 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             submitButton.innerHTML = '<i data-lucide="play" class="prompt-action-icon" aria-hidden="true"></i><span class="sr-only">Run</span>';
             submitButton.classList.toggle("hidden", !usesSoftwareKeyboard());
 
+            // A held Enter repeats and a tap can land twice, so the run in
+            // flight owns the card until it settles: without this a double tap
+            // queues the same prompt as two tasks.
+            let runPending = false;
+            const runRepoPrompt = async () => {
+              if (runPending) return;
+              runPending = true;
+              submitButton.disabled = true;
+              try {
+                await submitRepoPrompt(repo, input, panelStatus);
+              } finally {
+                runPending = false;
+                submitButton.disabled = false;
+              }
+            };
+
             input.addEventListener("keydown", (event) => {
               if (event.key !== "Enter" || event.shiftKey) return;
               // Desktop runs on Enter; a software keyboard keeps it as a
@@ -1451,7 +1474,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               if (usesSoftwareKeyboard()) return;
               event.preventDefault();
               event.stopPropagation();
-              void submitRepoPrompt(repo, input, panelStatus);
+              void runRepoPrompt();
             });
             input.addEventListener("click", (event) => {
               event.stopPropagation();
@@ -1462,7 +1485,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             submitButton.addEventListener("click", (event) => {
               event.preventDefault();
               event.stopPropagation();
-              void submitRepoPrompt(repo, input, panelStatus);
+              void runRepoPrompt();
             });
             submitButton.addEventListener("keydown", (event) => {
               event.stopPropagation();
@@ -1470,7 +1493,14 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             submitButton.addEventListener("pointerdown", (event) => {
               event.stopPropagation();
             });
-            panel.append(inputWrap, panelStatus, submitButton);
+            // The status and the Run button share the card's action row, the
+            // same way the studio card lays them out. Dropping them straight
+            // into the panel grid would give the button a full-width row of
+            // its own and push the status onto another line.
+            const panelActions = document.createElement("span");
+            panelActions.className = "chat-repo-image-actions";
+            panelActions.append(panelStatus, submitButton);
+            panel.append(inputWrap, panelActions);
             card.appendChild(panel);
 
             const openPrompt = () => {

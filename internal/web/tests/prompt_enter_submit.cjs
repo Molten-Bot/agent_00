@@ -1,4 +1,7 @@
-// Run against a local harness: HARNESS_TEST_URL=http://127.0.0.1:7777 node --test internal/web/tests/prompt_enter_submit.cjs
+// Run through its Go wrapper, which boots the UI and points this suite at it:
+// go test ./internal/web -run TestPromptEnterSubmitBrowserSuite
+// Or against an already running harness:
+// HARNESS_TEST_URL=http://127.0.0.1:7777 node --test internal/web/tests/prompt_enter_submit.cjs
 // Requires Playwright and Chromium (both are included in the runtime Docker image).
 //
 // usesSoftwareKeyboard() in static/index.html, and the copy the /chat page
@@ -26,8 +29,9 @@ after(async () => { await browser?.close(); });
 // requests, so a test can tell "Enter submitted" from "Enter typed a newline".
 // coarsePointer forces the touch-only screen a desktop kiosk reports without
 // touching the user agent, which is the case the pointer media queries alone
-// would misread as a phone.
-async function openPage(t, { path = '/', userAgent = '', coarsePointer = false } = {}) {
+// would misread as a phone. runDelayMs holds the run response open so a second
+// tap lands while the first request is still in flight.
+async function openPage(t, { path = '/', userAgent = '', coarsePointer = false, runDelayMs = 0 } = {}) {
   const mobile = Boolean(userAgent);
   const page = await browser.newPage({
     viewport: mobile ? { width: 430, height: 932 } : { width: 1280, height: 900 },
@@ -56,7 +60,9 @@ async function openPage(t, { path = '/', userAgent = '', coarsePointer = false }
     if (!url.pathname.startsWith('/api/')) return route.continue();
     if (url.pathname === '/api/local-prompt' && route.request().method() === 'POST') {
       runs.push(route.request().postData() || '');
-      return route.fulfill({ json: { ok: true, request_id: 'req-enter-1' } });
+      const fulfill = () => route.fulfill({ json: { ok: true, request_id: 'req-enter-1' } });
+      if (!runDelayMs) return fulfill();
+      return new Promise(resolve => setTimeout(() => resolve(fulfill()), runDelayMs));
     }
     if (url.pathname === '/api/stream') return route.fulfill({ contentType: 'text/event-stream', body: '' });
     let json = { ok: true };
@@ -84,9 +90,9 @@ async function waitForRuns(runs, count) {
 
 // Nothing may be submitted: give the page the same budget a real submit would
 // have taken before declaring the prompt stayed put.
-async function assertNoRun(page, runs) {
+async function assertNoRun(page, runs, message = 'a software keyboard must keep Enter as a newline') {
   await page.waitForTimeout(250);
-  assert.deepEqual(runs, [], 'a software keyboard must keep Enter as a newline');
+  assert.deepEqual(runs, [], message);
 }
 
 async function openRepoCard(page) {
@@ -117,6 +123,26 @@ test('phone: Enter types a newline in the builder prompt and never runs it', asy
   await assertNoRun(page, runs);
   const status = page.locator('#local-prompt-status');
   assert.equal(await status.textContent(), await status.getAttribute('data-default-text'), 'nothing ran, so the status stays at its default');
+});
+
+// The prompt textarea is not the only field in the run form: a form with a
+// submit button also runs from Enter in any of its single-line inputs, which a
+// phone keyboard reaches with the same key it uses for a newline.
+test('phone: Enter in the repository field never runs the builder prompt', async t => {
+  const { page, runs } = await openPage(t, { userAgent: ANDROID_UA });
+  await page.locator('#builder-repo-input').fill('git@github.com:octo/demo.git');
+  await page.locator('#builder-prompt-input').fill('Ship the fix');
+  await page.locator('#builder-repo-input').press('Enter');
+  await assertNoRun(page, runs, 'a software keyboard must not submit the form from a single-line field');
+});
+
+test('desktop: Enter in the repository field still runs the builder prompt', async t => {
+  const { page, runs } = await openPage(t);
+  await page.locator('#builder-repo-input').fill('git@github.com:octo/demo.git');
+  await page.locator('#builder-prompt-input').fill('Ship the fix');
+  await page.locator('#builder-repo-input').press('Enter');
+  await waitForRuns(runs, 1);
+  assert.match(runs[0], /Ship the fix/);
 });
 
 // A kiosk or touch laptop reports a coarse pointer that cannot hover, exactly
@@ -160,5 +186,19 @@ for (const path of ['/#chat', '/chat']) {
     await run.click();
     await waitForRuns(runs, 1);
     assert.match(runs[0], /First line\\nSecond line/);
+  });
+
+  // A tap on a phone double-fires easily, and the run request stays open long
+  // enough here that the second tap lands while the first is still in flight.
+  test(`${path}: a phone double tap on Run queues a single request`, async t => {
+    const { page, runs } = await openPage(t, { path, userAgent: ANDROID_UA, runDelayMs: 750 });
+    const prompt = await openRepoCard(page);
+    const run = page.locator('.chat-repo-submit:visible').first();
+    await run.waitFor();
+    await prompt.fill('Run this once');
+    await run.dblclick();
+    await waitForRuns(runs, 1);
+    await page.waitForTimeout(250);
+    assert.equal(runs.length, 1, 'the run already in flight must swallow the second tap');
   });
 }
