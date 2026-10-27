@@ -5009,6 +5009,13 @@
       return isIOSDevice() && /FxiOS|CriOS|EdgiOS|OPiOS|GSA/i.test(String(navigator.userAgent || ""));
     }
 
+    // The dictation key the fallback hands off to is a software-keyboard key:
+    // iOS puts a mic next to the spacebar and Android keyboards do the same. A
+    // desktop keyboard has none, so there is nothing to hand off to there.
+    function hasNativeDictationKey() {
+      return isIOSDevice() || /Android/i.test(String(navigator.userAgent || ""));
+    }
+
     // A phone reaches this UI on a LAN origin, where "open localhost instead"
     // is useless advice: only an HTTPS origin unlocks the microphone there.
     function insecureContextAdvice() {
@@ -5128,10 +5135,14 @@
       if (!support.supported) {
         return { visible: true, nativeMessage: support.message, support };
       }
-      // Capture works but whisper has nowhere to send it. Keyboard dictation
-      // still does, so keep the button as that fallback instead of removing the
-      // only dictation affordance on the page.
+      // Capture works but whisper has nowhere to send it. The default host is a
+      // Compose service name, so this is the normal state of every deployment
+      // without the sidecar: only offer the fallback where a software keyboard
+      // actually carries a dictation key, and keep the button hidden otherwise.
       if (!state.speech.reachable) {
+        if (!hasNativeDictationKey()) {
+          return { visible: false, nativeMessage: "", support };
+        }
         const unreachable = speechUnreachableFallback();
         return { visible: true, nativeMessage: unreachable.message, support: unreachable };
       }
@@ -5345,11 +5356,18 @@
     }
 
     // The focus taken inside the tap is only there to raise the iOS keyboard if
-    // capture is refused. Once whisper is recording the keyboard would cover the
-    // stop button, so drop the focus this flow took and leave other focus alone.
-    function blurSpeechInput(target) {
+    // capture is refused. Once whisper is recording the software keyboard would
+    // cover the stop button, so drop the focus this flow took and leave other
+    // focus alone. Desktop has no such keyboard, so the prompt keeps the focus
+    // recording has always given it.
+    function releaseSpeechInputFocus(target) {
       const input = speechInputElement(target);
-      if (!input || document.activeElement !== input) return;
+      if (!input) return;
+      if (!hasNativeDictationKey()) {
+        input.focus();
+        return;
+      }
+      if (document.activeElement !== input) return;
       input.blur();
     }
 
@@ -5431,7 +5449,7 @@
         state.speech.recording = true;
         syncPromptSpeechButton();
         setSpeechStreamActive(state.speech.stream, true);
-        blurSpeechInput(target);
+        releaseSpeechInputFocus(target);
         status("warn", "Listening. Press the mic again to stop.");
         trackAnalyticsEvent("prompt_speech_started", target?.analytics || { prompt_mode: state.promptMode });
       } catch (err) {
@@ -8763,6 +8781,7 @@
       }
       localPromptStatus.className = "submit-status submit-status-inline is-visible";
       localPromptStatus.classList.remove("is-fading");
+      localPromptStatus.dataset.wrap = "";
       localPromptStatus.textContent = localPromptStatusDefaultText;
     }
 
@@ -9221,7 +9240,9 @@
       return normalized.replace(/[^a-z_]/g, "");
     }
 
-    function setLocalPromptStatus(kind, text) {
+    // wrap opts this status out of the single-line action-row styling; only the
+    // multi-line dictation hint needs it.
+    function setLocalPromptStatus(kind, text, wrap = false) {
       clearLocalPromptStatusTimer();
       const trimmedText = String(text || "").trim();
       if (!trimmedText) {
@@ -9229,6 +9250,7 @@
         return;
       }
       localPromptStatus.className = kind ? `submit-status submit-status-inline ${kind}` : "submit-status submit-status-inline";
+      localPromptStatus.dataset.wrap = wrap ? "true" : "";
       localPromptStatus.textContent = trimmedText;
       localPromptStatus.classList.toggle("is-visible", true);
       localPromptStatus.classList.remove("is-fading");

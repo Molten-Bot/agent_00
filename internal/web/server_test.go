@@ -1426,8 +1426,17 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `state.speech.captureBlock = null;`) {
 		t.Fatalf("expected index html to retry a remembered microphone refusal on the next tap")
 	}
-	if !strings.Contains(markup, `blurSpeechInput(target);`) {
-		t.Fatalf("expected index html to release the prompt focus once whisper is recording")
+	if !strings.Contains(markup, `releaseSpeechInputFocus(target);`) ||
+		!strings.Contains(markup, `if (!hasNativeDictationKey()) {
+        input.focus();
+        return;
+      }`) {
+		t.Fatalf("expected index html to release the prompt focus for the software keyboard but keep it on desktop")
+	}
+	if !strings.Contains(markup, `if (!hasNativeDictationKey()) {
+          return { visible: false, nativeMessage: "", support };
+        }`) {
+		t.Fatalf("expected index html to hide the unreachable-sidecar fallback where no keyboard dictation key exists")
 	}
 	if !strings.Contains(markup, `body?.code === "speech_unavailable" || body?.code === "speech_disabled"`) ||
 		!strings.Contains(markup, `state.speech.reachable = false;`) {
@@ -2729,7 +2738,11 @@ func TestHandlerServesChatView(t *testing.T) {
 		`if (speech.captureBlock) return speech.captureBlock;`,
 		`if (!support.supported && retrySpeechCaptureBlock()) {`,
 		"syncChatSpeechButton();\n            if (!input) {",
-		`if (document.activeElement === input) input.blur();`,
+		"if (!hasNativeDictationKey()) {\n                input.focus();\n              } else if (document.activeElement === input) {\n                input.blur();\n              }",
+		"if (!hasNativeDictationKey()) {\n                return { visible: false, nativeMessage: \"\", support: support };\n              }",
+		`function activeChatPromptStatus()`,
+		`return document.activeElement === input ? input : null;`,
+		`cardStatus.dataset.wrap = "true";`,
 		`function toggleChatSpeechDictation()`,
 		`function startChatSpeechDictation()`,
 		`function stopChatSpeechDictation()`,
@@ -3180,7 +3193,8 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	normalizedCSS := normalizeCSSWhitespace(css)
 	if !strings.Contains(normalizedCSS, ".chat-repo-submit-status { flex: 1 1 auto; min-width: 0; min-height: 1.2em; color: var(--muted); font-size: 0.8rem; font-weight: 800; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }") ||
 		!strings.Contains(normalizedCSS, ".chat-repo-submit-status[data-wrap=\"true\"] { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }") ||
-		!strings.Contains(normalizedCSS, "#local-prompt-status { color: var(--muted); font-size: 0.74rem; line-height: 1.3; min-height: 1.3em; white-space: normal; overflow-wrap: anywhere; text-overflow: clip; }") {
+		!strings.Contains(normalizedCSS, "#local-prompt-status { color: var(--muted); font-size: 0.74rem; line-height: 1.3; min-height: 1.3em; }") ||
+		!strings.Contains(normalizedCSS, "#local-prompt-status[data-wrap=\"true\"] { white-space: normal; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; }") {
 		t.Fatalf("expected dictation status surfaces to wrap long keyboard dictation messages instead of clipping them")
 	}
 	if !strings.Contains(css, ".chat-repo-message[data-tone=\"success\"] {") ||

@@ -135,9 +135,10 @@ test('a reachable whisper sidecar shows the recording mic button', async t => {
 });
 
 // Capture works here, so hiding the button would remove the only dictation
-// affordance on the page over a sidecar the platform dictation key never needs.
+// affordance on the device over a sidecar the platform dictation key never
+// needs. The software keyboard carries that key, so this is a mobile fallback.
 test('an unreachable whisper sidecar keeps the mic button as a keyboard fallback', async t => {
-  const page = await openPage(t, { speech: { enabled: true, reachable: false } });
+  const page = await openPage(t, { speech: { enabled: true, reachable: false }, userAgent: IOS_FIREFOX_UA });
   await micButton(page).waitFor({ state: 'visible' });
   assert.equal(await micButton(page).evaluate(node => node.classList.contains('speech-native')), true);
   assert.equal(await micButton(page).isEnabled(), true, 'the fallback button stays clickable');
@@ -149,12 +150,22 @@ test('an unreachable whisper sidecar keeps the mic button as a keyboard fallback
   assert.equal(await page.evaluate(() => document.activeElement?.id), 'builder-prompt-input', 'the prompt is focused for keyboard dictation');
 });
 
+// The whisper host defaults to a Compose service name, so an unreachable
+// sidecar is the normal state of every deployment without it. A desktop
+// keyboard has no dictation key to hand off to, so the button stays hidden
+// there instead of advertising a key that does not exist.
+test('an unreachable whisper sidecar hides the mic button on desktop', async t => {
+  const page = await openPage(t, { speech: { enabled: true, reachable: false } });
+  await micButton(page).waitFor({ state: 'hidden' });
+});
+
 // The /chat page carries its own availability copy, so an unreachable sidecar
-// has to leave the same fallback there.
+// has to leave the same fallback there, and hide the button on desktop too.
 test('the chat mic stays usable when the whisper sidecar is unreachable', async t => {
   const page = await openPage(t, {
     path: '/chat',
     speech: { enabled: true, reachable: false },
+    userAgent: IOS_FIREFOX_UA,
     repos: [{ full_name: 'octo/demo', name: 'demo', private: false, description: 'Demo repository' }],
   });
   const chatMic = page.locator('#chat-speech-toggle');
@@ -163,12 +174,71 @@ test('the chat mic stays usable when the whisper sidecar is unreachable', async 
   assert.equal(await chatMic.evaluate(node => node.classList.contains('speech-native')), true);
 
   await chatMic.click();
-  await page.waitForFunction(text => document.getElementById('chat-status').textContent.includes(text), 'not reachable');
+  // The hint belongs next to the prompt it talks about: the page-top status is
+  // the repository counter and the next grid render overwrites it.
+  await page.waitForFunction(text => document.querySelector('.chat-repo-submit-status')?.textContent.includes(text), 'not reachable');
   assert.equal(
     await page.evaluate(() => document.activeElement?.classList.contains('chat-repo-prompt')),
     true,
     'the chat prompt is focused for keyboard dictation',
   );
+});
+
+test('the chat mic is hidden on desktop when the whisper sidecar is unreachable', async t => {
+  const page = await openPage(t, {
+    path: '/chat',
+    speech: { enabled: true, reachable: false },
+    repos: [{ full_name: 'octo/demo', name: 'demo', private: false, description: 'Demo repository' }],
+  });
+  await page.locator('.chat-repo-card').first().click();
+  await page.locator('#chat-speech-toggle').waitFor({ state: 'hidden' });
+});
+
+// A repository grid re-render rewrites the page-top status, so a dictation hint
+// parked there disappears while the user is still reading it.
+test('a chat dictation hint survives a repository grid re-render', async t => {
+  const page = await openPage(t, {
+    path: '/chat',
+    stripCapture: true,
+    insecure: true,
+    repos: [
+      { full_name: 'octo/demo', name: 'demo', private: false, description: 'Demo repository' },
+      { full_name: 'octo/other', name: 'other', private: false, description: 'Other repository' },
+    ],
+  });
+  const chatMic = page.locator('#chat-speech-toggle');
+  await page.locator('.chat-repo-card').first().click();
+  await chatMic.waitFor({ state: 'visible' });
+
+  await chatMic.click();
+  const cardStatus = page.locator('.chat-repo-card').first().locator('.chat-repo-submit-status');
+  await page.waitForFunction(text => document.querySelector('.chat-repo-submit-status')?.textContent.includes(text), 'dictation key');
+  await page.fill('#chat-repo-search', 'demo'); // re-renders the grid and the page-top status
+  await page.waitForFunction(() => document.getElementById('chat-status').textContent.includes('repositor'));
+  assert.match(await cardStatus.textContent(), /dictation key/, 'the hint outlives the grid render');
+});
+
+// The hint promises the prompt is focused. A prompt that cannot take focus
+// makes that promise false, so the chat copy has to check, not assume.
+test('the chat fallback does not claim a focus it could not take', async t => {
+  const page = await openPage(t, {
+    path: '/chat',
+    stripCapture: true,
+    insecure: true,
+    repos: [{ full_name: 'octo/demo', name: 'demo', private: false, description: 'Demo repository' }],
+  });
+  const chatMic = page.locator('#chat-speech-toggle');
+  await page.locator('.chat-repo-card').first().click();
+  await chatMic.waitFor({ state: 'visible' });
+  // A disabled textarea is still the open card's prompt, but focus() on it is a
+  // no-op, the same way a detached one is.
+  await page.evaluate(() => { document.querySelector('.chat-repo-prompt').disabled = true; });
+
+  await chatMic.click();
+  await page.waitForFunction(text => document.querySelector('.chat-repo-submit-status')?.textContent.includes(text), 'dictation key');
+  const status = await page.textContent('.chat-repo-submit-status');
+  assert.match(status, /Tap the prompt box/);
+  assert.doesNotMatch(status, /The prompt is focused/);
 });
 
 // A non-Safari iOS browser on a plain-http origin trips both blockers at once.
@@ -344,6 +414,21 @@ test('a recording microphone releases the prompt focus that raised the keyboard'
   assert.equal(await micButton(page).getAttribute('aria-pressed'), 'true', 'the button is in its stop state');
 });
 
+// Desktop has no software keyboard to cover the stop button, so recording keeps
+// the prompt focused the way it did before the keyboard fallback existed.
+test('a recording microphone keeps the prompt focused on desktop', async t => {
+  const page = await openPage(t, { grantCapture: true });
+  await micButton(page).waitFor({ state: 'visible' });
+
+  await micButton(page).click();
+  await page.waitForFunction(() => document.getElementById('local-prompt-status').textContent.includes('Listening'), null, { timeout: 5000 });
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.id),
+    'builder-prompt-input',
+    'the prompt still holds focus while recording',
+  );
+});
+
 // The /chat page carries its own copy of the dictation code, so it needs the
 // same coverage: an in-gesture focus, a readable fallback message, and a tap
 // that asks again after the microphone is refused.
@@ -369,8 +454,8 @@ test('the chat page hands a refused microphone to keyboard dictation', async t =
   );
 
   await page.evaluate(() => window.__releaseMic());
-  await page.waitForFunction(text => document.getElementById('chat-status').textContent.includes(text), 'dictation key');
-  assert.match(await page.textContent('#chat-status'), /Safari/);
+  await page.waitForFunction(text => document.querySelector('.chat-repo-submit-status')?.textContent.includes(text), 'dictation key');
+  assert.match(await page.textContent('.chat-repo-submit-status'), /Safari/);
   assert.equal(await chatMic.evaluate(node => node.classList.contains('speech-native')), true);
 
   await chatMic.click();
@@ -478,6 +563,13 @@ test('only the dictation hint wraps in a repository card status', async t => {
 test('the keyboard dictation message is not clipped to one line', async t => {
   const page = await openPage(t, { stripCapture: true, insecure: true });
   await micButton(page).waitFor({ state: 'visible' });
+  // Only the hint wraps: the default status shares the prompt action row and
+  // has to keep it one line tall.
+  assert.equal(
+    await page.evaluate(() => window.getComputedStyle(document.getElementById('local-prompt-status')).whiteSpace),
+    'nowrap',
+    'the default prompt status stays on one line',
+  );
   await micButton(page).click();
   await page.waitForFunction(text => document.getElementById('local-prompt-status').textContent.includes(text), 'dictation key');
 

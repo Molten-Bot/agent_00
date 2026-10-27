@@ -490,6 +490,10 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           const SPEECH_SAMPLE_RATE = 16000;
           const SPEECH_STATUS_REFRESH_MS = 30000;
           const SPEECH_NATIVE_DICTATION_HINT = "The prompt is focused: use the dictation key on your keyboard (the mic next to the spacebar on iOS) to speak into it.";
+          // The hint above promises focus, which the fallback cannot take when
+          // no prompt is on screen or the remembered textarea has been
+          // re-rendered away.
+          const SPEECH_NATIVE_DICTATION_UNFOCUSED_HINT = "Tap the prompt box, then use the dictation key on your keyboard (the mic next to the spacebar on iOS) to speak into it.";
           const SPEECH_MIN_PEAK = 0.012;
           const SPEECH_MIN_RMS = 0.004;
           let repoPage = 1;
@@ -624,6 +628,14 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
           function isNonSafariIOSBrowser() {
             return isIOSDevice() && /FxiOS|CriOS|EdgiOS|OPiOS|GSA/i.test(String(navigator.userAgent || ""));
+          }
+
+          // The dictation key the fallback hands off to is a software-keyboard
+          // key: iOS puts a mic next to the spacebar and Android keyboards do
+          // the same. A desktop keyboard has none, so there is nothing to hand
+          // off to there.
+          function hasNativeDictationKey() {
+            return isIOSDevice() || /Android/i.test(String(navigator.userAgent || ""));
           }
 
           // A phone reaches this UI on a LAN origin, where "open localhost
@@ -800,10 +812,15 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             if (!support.supported) {
               return { visible: true, nativeMessage: support.message, support: support };
             }
-            // Capture works but whisper has nowhere to send it. Keyboard
-            // dictation still does, so keep the button as that fallback instead
-            // of removing the only dictation affordance on the page.
+            // Capture works but whisper has nowhere to send it. The default
+            // host is a Compose service name, so this is the normal state of
+            // every deployment without the sidecar: only offer the fallback
+            // where a software keyboard actually carries a dictation key, and
+            // keep the button hidden otherwise.
             if (!speech.reachable) {
+              if (!hasNativeDictationKey()) {
+                return { visible: false, nativeMessage: "", support: support };
+              }
               const unreachable = speechUnreachableFallback();
               return { visible: true, nativeMessage: unreachable.message, support: unreachable };
             }
@@ -906,6 +923,9 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             await startChatSpeechDictation();
           }
 
+          // Returns the prompt only when it actually took focus: a re-rendered
+          // card leaves a detached textarea behind, and focus() on it is a
+          // no-op.
           function focusChatPromptInput() {
             const input = activeChatPromptInput();
             if (!input) return null;
@@ -913,13 +933,23 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             const end = String(input.value || "").length;
             input.selectionStart = end;
             input.selectionEnd = end;
-            return input;
+            return document.activeElement === input ? input : null;
+          }
+
+          // The card's own status line, which sits next to the prompt the hint
+          // talks about. The page-top status is the repository counter and the
+          // next grid render overwrites anything parked there.
+          function activeChatPromptStatus() {
+            const input = activeChatPromptInput();
+            const panel = input ? input.closest(".chat-repo-panel") : null;
+            return panel ? panel.querySelector(".chat-repo-submit-status") : null;
           }
 
           // Whisper cannot record here, so hand the user to the platform
           // dictation key by focusing the prompt and explaining the limitation.
           function startChatNativeDictation(support) {
-            const input = focusChatPromptInput();
+            const input = activeChatPromptInput();
+            const focused = Boolean(focusChatPromptInput());
             // Sync first either way: a remembered refusal has to reach the
             // button even when no card is open to focus, or the mic keeps
             // advertising a recording it cannot start.
@@ -928,7 +958,20 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               setChatSpeechStatus("error", "Open a repository prompt before dictating.");
               return;
             }
-            setChatSpeechStatus("warn", support && support.message ? support.message : "Microphone capture is unavailable in this browser. " + SPEECH_NATIVE_DICTATION_HINT);
+            const message = support && support.message ? support.message : "Microphone capture is unavailable in this browser. " + SPEECH_NATIVE_DICTATION_HINT;
+            // The hint promises the prompt is focused, so swap in the "tap the
+            // prompt box" wording when the focus did not land.
+            const text = focused ? message : message.replace(SPEECH_NATIVE_DICTATION_HINT, SPEECH_NATIVE_DICTATION_UNFOCUSED_HINT);
+            const cardStatus = activeChatPromptStatus();
+            if (cardStatus) {
+              cardStatus.textContent = text;
+              cardStatus.dataset.tone = "warn";
+              // The hint names the key to press, so let it wrap instead of
+              // being ellipsized away by the single-line card status styling.
+              cardStatus.dataset.wrap = "true";
+            } else {
+              setChatSpeechStatus("warn", text);
+            }
             trackChatEvent("chat_speech_native_fallback", { reason: support && support.reason ? support.reason : "unsupported_browser" });
           }
 
@@ -996,10 +1039,16 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               speech.recording = true;
               syncChatSpeechButton();
               setSpeechStreamActive(stream, true);
-              // The focus taken inside the tap only exists to raise the iOS
-              // keyboard if capture is refused. Recording started, so drop it:
-              // the keyboard would otherwise cover the stop button.
-              if (document.activeElement === input) input.blur();
+              // The focus taken inside the tap only exists to raise the
+              // software keyboard if capture is refused. Recording started, so
+              // drop it: the keyboard would otherwise cover the stop button.
+              // Desktop has no such keyboard, so the prompt keeps the focus
+              // recording has always given it.
+              if (!hasNativeDictationKey()) {
+                input.focus();
+              } else if (document.activeElement === input) {
+                input.blur();
+              }
               setChatSpeechStatus("warn", "Listening. Press the mic again to stop.");
               trackChatEvent("chat_speech_started");
             } catch (err) {
@@ -1173,6 +1222,9 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
           async function submitRepoPrompt(repo, input, statusNode) {
             const prompt = String(input.value || "").trim();
+            // A dictation hint may have left the status wrapping; submit
+            // messages are single-line again.
+            statusNode.dataset.wrap = "";
             if (!prompt) {
               statusNode.textContent = "Prompt is required.";
               statusNode.dataset.tone = "error";

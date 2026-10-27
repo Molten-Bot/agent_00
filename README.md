@@ -59,9 +59,10 @@ explains the limitation so the platform's own dictation key, the microphone next
 to the iOS spacebar, can be used to speak into the prompt instead. A refusal is
 not final: dismissing a permission prompt looks the same as blocking it, so the
 next tap asks for the microphone again. The same fallback covers an unreachable
-whisper sidecar: native dictation needs no server, so the button stays rather
-than disappearing with the sidecar. Set `WHISPER_SPEECH_DISABLED` to hide
-the button entirely.
+whisper sidecar on phones and tablets, where native dictation needs no server
+and the software keyboard carries a dictation key; a desktop keyboard has no
+such key, so there the button disappears with the sidecar as before. Set
+`WHISPER_SPEECH_DISABLED` to hide the button entirely.
 
 ### Library settings
 

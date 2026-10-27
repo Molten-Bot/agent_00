@@ -2109,14 +2109,20 @@ select.prompt-control {
   transition: opacity 220ms ease;
 }
 
-/* Same reason as .chat-repo-submit-status: the keyboard dictation hint is
-   longer than one line and must stay readable instead of being ellipsized. */
 #local-prompt-status {
   color: var(--muted);
   font-size: 0.74rem;
   line-height: 1.3;
   min-height: 1.3em;
+}
+
+/* Same rule as .chat-repo-submit-status[data-wrap="true"]: only the multi-line
+   keyboard dictation hint wraps, because it must stay readable instead of being
+   ellipsized. Every other status keeps the single line the action row is sized
+   for. */
+#local-prompt-status[data-wrap="true"] {
   white-space: normal;
+  overflow: visible;
   overflow-wrap: anywhere;
   text-overflow: clip;
 }
