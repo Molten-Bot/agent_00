@@ -42,16 +42,22 @@ hints for more reliable short-form dictation; set both `WHISPER_LANG=auto` and
 Whisper dictation records through `navigator.mediaDevices.getUserMedia`, which
 browsers expose only to secure contexts. Reaching the UI over plain `http://`
 on a LAN address (for example `http://192.168.1.10:7777`) disables microphone
-capture in every browser, including Safari, Chrome, and Firefox. Open the UI at
-`http://localhost:<port>` or put it behind HTTPS to record. iOS additionally
-reserves microphone access for Safari, so Firefox, Chrome, and Edge on iOS
-cannot record for Whisper at all.
+capture in every browser, including Safari, Chrome, and Firefox. Put the UI
+behind HTTPS (a tunnel or reverse proxy) to record from a phone; on the machine
+running the harness, `http://localhost:<port>` is already a secure context.
 
-When capture is unavailable the microphone button stays visible and switches to
-a keyboard icon. Tapping it focuses the prompt and explains the limitation so
-the platform's own dictation key - the microphone next to the iOS spacebar -
-can be used to speak into the prompt instead. Set `WHISPER_SPEECH_DISABLED` to
-hide the button entirely.
+Browsers that do expose `getUserMedia` can still refuse it when the button is
+tapped - permission blocked, no usable input, or an iOS browser that does not
+hand WKWebView the microphone. Third-party iOS browsers vary by version, so the
+UI does not assume the outcome: it tries to record, and only falls back when the
+request is actually refused. Safari on iOS remains the most reliable option for
+Whisper.
+
+Whenever capture is unavailable - up front or after a refusal - the microphone
+button stays usable and points at native dictation: it focuses the prompt and
+explains the limitation so the platform's own dictation key, the microphone next
+to the iOS spacebar, can be used to speak into the prompt instead. Set
+`WHISPER_SPEECH_DISABLED` to hide the button entirely.
 
 ### Library settings
 

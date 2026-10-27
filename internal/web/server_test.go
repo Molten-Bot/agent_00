@@ -1405,6 +1405,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `return { visible: true, nativeMessage: support.message, support };`) {
 		t.Fatalf("expected index html to keep a native dictation fallback button when microphone capture is unsupported")
 	}
+	if !strings.Contains(markup, `startNativeDictation(target, speechCaptureDenial(err));`) {
+		t.Fatalf("expected index html to hand a refused getUserMedia call to native keyboard dictation")
+	}
 	if !strings.Contains(markup, `body?.code === "speech_unavailable" || body?.code === "speech_disabled"`) ||
 		!strings.Contains(markup, `state.speech.reachable = false;`) {
 		t.Fatalf("expected index html to hide speech dictation buttons after unavailable transcribe responses")
@@ -2692,6 +2695,7 @@ func TestHandlerServesChatView(t *testing.T) {
 		`function chatSpeechAvailability()`,
 		`return { visible: Boolean(speech.reachable), nativeMessage: "", support: support };`,
 		`function startChatNativeDictation(support)`,
+		`startChatNativeDictation(speechCaptureDenial(err));`,
 		`function toggleChatSpeechDictation()`,
 		`function startChatSpeechDictation()`,
 		`function stopChatSpeechDictation()`,

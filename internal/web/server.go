@@ -624,10 +624,23 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             return isIOSDevice() && /FxiOS|CriOS|EdgiOS|OPiOS|GSA/i.test(String(navigator.userAgent || ""));
           }
 
-          // Browsers expose getUserMedia only in secure contexts, and iOS
-          // reserves microphone access for Safari, so Firefox/Chrome on iOS and
-          // any plain-http LAN origin cannot record for Whisper. Report why so
-          // the mic button can offer the native keyboard dictation path.
+          // A phone reaches this UI on a LAN origin, where "open localhost
+          // instead" is useless advice: only an HTTPS origin unlocks the
+          // microphone there.
+          function insecureContextAdvice() {
+            const host = String(window.location.hostname || "");
+            const localHost = host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+            if (localHost) {
+              return "Whisper dictation needs a secure page and this browser treats the current origin as insecure, so serve the UI over HTTPS to record.";
+            }
+            return "Whisper dictation needs a secure page: browsers share the microphone only over HTTPS or localhost, and this UI is served over plain http from " + (host || "this address") + ". Put it behind HTTPS (a tunnel or reverse proxy) to record from this device.";
+          }
+
+          // Only the static blockers are knowable up front: getUserMedia is
+          // missing outside secure contexts and on browsers without capture
+          // support. Whether an iOS browser other than Safari actually hands
+          // over the microphone is knowable only once getUserMedia is called,
+          // so speechCaptureDenial handles that runtime refusal.
           function speechCaptureSupport() {
             const hasCapture = Boolean(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function");
             const hasAudioContext = Boolean(window.AudioContext || window.webkitAudioContext);
@@ -635,24 +648,54 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               return { supported: true, reason: "", message: "" };
             }
             if (window.isSecureContext === false) {
-              const port = window.location.port ? ":" + window.location.port : "";
               return {
                 supported: false,
                 reason: "insecure_context",
-                message: "Whisper dictation needs a secure page: browsers only share the microphone over HTTPS or localhost. Reach this UI at http://localhost" + port + " or behind HTTPS. " + SPEECH_NATIVE_DICTATION_HINT
+                message: insecureContextAdvice() + " " + SPEECH_NATIVE_DICTATION_HINT
               };
             }
             if (isNonSafariIOSBrowser()) {
               return {
                 supported: false,
                 reason: "ios_non_safari_browser",
-                message: "iOS grants microphone access to Safari only, so Whisper dictation cannot record here. Open this UI in Safari for Whisper. " + SPEECH_NATIVE_DICTATION_HINT
+                message: "This iOS browser does not expose microphone capture to web pages, so Whisper dictation cannot record here. Safari on iOS usually can. " + SPEECH_NATIVE_DICTATION_HINT
               };
             }
             return {
               supported: false,
               reason: "unsupported_browser",
               message: "This browser cannot capture microphone audio for Whisper. " + SPEECH_NATIVE_DICTATION_HINT
+            };
+          }
+
+          // getUserMedia exists on iOS Firefox and Chrome, so the refusal only
+          // shows up when it rejects. Permission denials, missing inputs, and
+          // busy devices all land here and get the same native keyboard
+          // dictation handoff.
+          function speechCaptureDenial(err) {
+            const name = String(err && err.name ? err.name : "");
+            if (name === "NotAllowedError" || name === "SecurityError") {
+              const iosBrowser = isNonSafariIOSBrowser();
+              return {
+                supported: false,
+                reason: iosBrowser ? "ios_non_safari_denied" : "permission_denied",
+                message: "This browser did not grant microphone access, so Whisper dictation cannot record."
+                  + (iosBrowser ? " On iOS, Safari is the most reliable browser for Whisper dictation." : "")
+                  + " " + SPEECH_NATIVE_DICTATION_HINT
+              };
+            }
+            if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") {
+              return {
+                supported: false,
+                reason: "no_microphone",
+                message: "No microphone was available for Whisper dictation. " + SPEECH_NATIVE_DICTATION_HINT
+              };
+            }
+            const detail = String(err && err.message ? err.message : "").trim();
+            return {
+              supported: false,
+              reason: "capture_failed",
+              message: "Whisper dictation could not start the microphone" + (detail ? ": " + detail : "") + ". " + SPEECH_NATIVE_DICTATION_HINT
             };
           }
 
@@ -758,7 +801,9 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
                 );
               }
             } catch (_err) {
-              speech.enabled = false;
+              // A failed poll only proves the sidecar status is unknown. Keep
+              // the last known enabled flag so the server-independent keyboard
+              // dictation fallback button survives a transient fetch error.
               speech.reachable = false;
               if (window.AgentHeader && typeof window.AgentHeader.updateSpeechConnection === "function") {
                 window.AgentHeader.updateSpeechConnection(false, "Unavailable");
@@ -820,17 +865,26 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               return;
             }
 
+            let mediaStream = null;
             try {
-              const AudioCtor = window.AudioContext || window.webkitAudioContext;
-              speech.chunks = [];
-              resetSpeechCaptureStats();
-              speech.mediaStream = await navigator.mediaDevices.getUserMedia({
+              mediaStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                   channelCount: 1,
                   echoCancellation: true,
                   noiseSuppression: true
                 }
               });
+            } catch (err) {
+              trackChatEvent("chat_speech_failed", { stage: "capture" });
+              startChatNativeDictation(speechCaptureDenial(err));
+              return;
+            }
+
+            try {
+              const AudioCtor = window.AudioContext || window.webkitAudioContext;
+              speech.chunks = [];
+              resetSpeechCaptureStats();
+              speech.mediaStream = mediaStream;
               speech.audioContext = new AudioCtor();
               if (speech.audioContext.state === "suspended") {
                 await speech.audioContext.resume();
