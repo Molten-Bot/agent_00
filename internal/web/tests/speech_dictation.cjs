@@ -29,7 +29,7 @@ after(async () => { await browser?.close(); });
 // can be shown to stop re-asking.
 // grantCapture hands back a real but silent MediaStream, so the recording path
 // can run end to end in a headless browser that has no microphone.
-async function openPage(t, { speech = { enabled: true, reachable: true }, blockStatus = false, stripCapture = false, rejectCapture = '', gateCapture = false, grantCapture = false, insecure = false, userAgent = '', clock = false, path = '/', repos = null } = {}) {
+async function openPage(t, { speech = { enabled: true, reachable: true }, blockStatus = false, stripCapture = false, rejectCapture = '', gateCapture = false, grantCapture = false, insecure = false, userAgent = '', clock = false, path = '/', repos = null, audioScenario = '' } = {}) {
   const page = await browser.newPage(userAgent ? { userAgent } : {});
   if (clock) await page.clock.install();
   t.after(() => page.close());
@@ -106,12 +106,113 @@ async function openPage(t, { speech = { enabled: true, reachable: true }, blockS
       Object.defineProperty(window, 'isSecureContext', { value: false, configurable: true });
     });
   }
+  if (audioScenario) {
+    await page.addInitScript(scenario => {
+      localStorage.setItem('hubui.taskSoundMuted', 'true');
+      window.__audioSessions = [];
+      window.__micCalls = 0;
+      window.__trackStopped = false;
+      let inClick = false;
+      document.addEventListener('click', () => { inClick = true; }, true);
+      window.addEventListener('click', () => { inClick = false; });
+      const node = () => ({ connect() {}, disconnect() {}, gain: { value: 0 } });
+      class GestureAudioContext {
+        constructor() {
+          this.state = 'suspended';
+          this.createdInClick = inClick;
+          this.sampleRate = 16000;
+          this.destination = node();
+          window.__audioSessions.push(this);
+        }
+        resume() {
+          this.resumedInClick = inClick;
+          if (!inClick || scenario === 'resume-failure') return Promise.reject(new Error('Audio startup rejected'));
+          this.state = 'running';
+          return Promise.resolve();
+        }
+        close() { this.state = 'closed'; return Promise.resolve(); }
+        createMediaStreamSource() { this.capturing = true; return node(); }
+        createScriptProcessor() { return node(); }
+        createGain() { return node(); }
+      }
+      window.AudioContext = GestureAudioContext;
+      Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+        getUserMedia() {
+          window.__micCalls++;
+          return new Promise((resolve, reject) => {
+            window.__releaseMic = () => scenario === 'capture-failure'
+              ? reject(new DOMException('Permission denied', 'NotAllowedError'))
+              : resolve({ getTracks: () => [{ stop() { window.__trackStopped = true; } }] });
+          });
+        },
+      } });
+    }, audioScenario);
+  }
   await page.goto(new URL(path, baseURL).toString());
   await page.waitForSelector(path === '/chat' ? '#chat-repo-grid' : '#builder-prompt-input', { state: 'attached' });
   return page;
 }
 
 const IOS_FIREFOX_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/127.0 Mobile/15E148 Safari/605.1.15';
+const ANDROID_UA = 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36';
+
+for (const path of ['/', '/chat']) {
+  for (const scenario of ['record', 'capture-failure', 'resume-failure', 'offline']) {
+    test(`${path}: gesture-bound audio startup and cleanup (${scenario})`, async t => {
+      const page = await openPage(t, {
+        path, audioScenario: scenario, userAgent: IOS_FIREFOX_UA,
+        speech: { enabled: true, reachable: scenario !== 'offline' },
+        repos: path === '/chat' ? [{ full_name: 'octo/demo', name: 'demo', private: false }] : null,
+      });
+      if (path === '/chat') await page.locator('.chat-repo-card').first().click();
+      const mic = page.locator(path === '/chat' ? '#chat-speech-toggle' : '#prompt-speech-toggle');
+      await mic.waitFor({ state: 'visible' });
+      await mic.click();
+      if (scenario !== 'offline') {
+        await page.waitForFunction(() => window.__micCalls === 1);
+        assert.equal(await mic.isDisabled(), true, 'pending startup cannot launch another microphone request');
+      }
+      const session = await page.evaluate(() => window.__audioSessions.map(s => ({ created: s.createdInClick, resumed: s.resumedInClick })));
+      assert.deepEqual(session, [{ created: true, resumed: true }], 'audio is created and resumed within the original tap');
+      if (scenario !== 'offline') await page.evaluate(() => window.__releaseMic());
+      if (scenario === 'record') {
+        await page.waitForFunction(selector => document.querySelector(selector).getAttribute('aria-pressed') === 'true', path === '/chat' ? '#chat-speech-toggle' : '#prompt-speech-toggle');
+        assert.equal(await page.evaluate(() => window.__audioSessions[0].capturing), true);
+        await mic.click();
+      }
+      await page.waitForFunction(() => window.__audioSessions[0].state === 'closed');
+      assert.equal(await mic.isEnabled(), true, 'failed or stopped capture can be retried');
+      assert.equal(await page.evaluate(() => window.__trackStopped), scenario === 'record' || scenario === 'resume-failure');
+      assert.equal(await page.evaluate(() => window.__micCalls), scenario === 'offline' ? 0 : 1);
+    });
+  }
+
+  test(`${path}: Android fallback uses platform-neutral keyboard instructions`, async t => {
+    const page = await openPage(t, {
+      path, stripCapture: true, userAgent: ANDROID_UA,
+      repos: path === '/chat' ? [{ full_name: 'octo/demo', name: 'demo', private: false }] : null,
+    });
+    if (path === '/chat') await page.locator('.chat-repo-card').first().click();
+    await page.locator(path === '/chat' ? '#chat-speech-toggle' : '#prompt-speech-toggle').click();
+    const status = page.locator(path === '/chat' ? '.chat-repo-submit-status' : '#local-prompt-status');
+    assert.match(await status.textContent(), /dictation key \(microphone icon\)/);
+    assert.doesNotMatch(await status.textContent(), /iOS|spacebar/);
+    assert.equal(await status.getAttribute('data-wrap'), 'true');
+  });
+
+  test(`${path}: desktop microphone errors keep their single-line status`, async t => {
+    const page = await openPage(t, {
+      path, rejectCapture: 'NotAllowedError',
+      repos: path === '/chat' ? [{ full_name: 'octo/demo', name: 'demo', private: false }] : null,
+    });
+    if (path === '/chat') await page.locator('.chat-repo-card').first().click();
+    await page.locator(path === '/chat' ? '#chat-speech-toggle' : '#prompt-speech-toggle').click();
+    const selector = path === '/chat' ? '.chat-repo-submit-status' : '#local-prompt-status';
+    await page.waitForFunction(selector => document.querySelector(selector).textContent.includes('did not grant microphone access'), selector);
+    assert.notEqual(await page.locator(selector).getAttribute('data-wrap'), 'true');
+    assert.equal(await page.locator(selector).evaluate(el => getComputedStyle(el).whiteSpace), 'nowrap');
+  });
+}
 
 function micButton(page) {
   return page.locator('#prompt-speech-toggle');

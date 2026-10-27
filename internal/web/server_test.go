@@ -2758,7 +2758,7 @@ func TestHandlerServesChatView(t *testing.T) {
 		"if (!hasNativeDictationKey()) {\n                return { visible: false, nativeMessage: \"\", support: support };\n              }",
 		`function activeChatPromptStatus()`,
 		`return document.activeElement === input ? input : null;`,
-		`cardStatus.dataset.wrap = "true";`,
+		`cardStatus.dataset.wrap = hasNativeDictationKey() ? "true" : "";`,
 		`function toggleChatSpeechDictation()`,
 		`function startChatSpeechDictation()`,
 		`function stopChatSpeechDictation()`,

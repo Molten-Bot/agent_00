@@ -53,10 +53,10 @@ UI does not assume the outcome: it tries to record, and only falls back when the
 request is actually refused. Safari on iOS remains the most reliable option for
 Whisper.
 
-Whenever capture is unavailable - up front or after a refusal - the microphone
-button stays usable and points at native dictation: it focuses the prompt and
-explains the limitation so the platform's own dictation key, the microphone next
-to the iOS spacebar, can be used to speak into the prompt instead. A refusal is
+On iOS and Android, when capture is unavailable - up front or after a refusal -
+the microphone button stays usable and points at native dictation: it focuses
+the prompt and explains the limitation so the keyboard's dictation key
+(microphone icon) can be used to speak into the prompt instead. A refusal is
 not final: dismissing a permission prompt looks the same as blocking it, so the
 next tap asks for the microphone again. The same fallback covers an unreachable
 whisper sidecar on phones and tablets, where native dictation needs no server

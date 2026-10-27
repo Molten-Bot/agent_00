@@ -489,11 +489,11 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           const CHAT_REPOS_PER_PAGE = 15;
           const SPEECH_SAMPLE_RATE = 16000;
           const SPEECH_STATUS_REFRESH_MS = 30000;
-          const SPEECH_NATIVE_DICTATION_HINT = "The prompt is focused: use the dictation key on your keyboard (the mic next to the spacebar on iOS) to speak into it.";
+          const SPEECH_NATIVE_DICTATION_HINT = "The prompt is focused: use your keyboard's dictation key (microphone icon) to speak into it.";
           // The hint above promises focus, which the fallback cannot take when
           // no prompt is on screen or the remembered textarea has been
           // re-rendered away.
-          const SPEECH_NATIVE_DICTATION_UNFOCUSED_HINT = "Tap the prompt box, then use the dictation key on your keyboard (the mic next to the spacebar on iOS) to speak into it.";
+          const SPEECH_NATIVE_DICTATION_UNFOCUSED_HINT = "Tap the prompt box, then use your keyboard's dictation key (microphone icon) to speak into it.";
           const SPEECH_MIN_PEAK = 0.012;
           const SPEECH_MIN_RMS = 0.004;
           let repoPage = 1;
@@ -505,6 +505,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             captureBlock: null,
             reachable: false,
             recording: false,
+            starting: false,
             submitting: false,
             chunks: [],
             mediaStream: null,
@@ -879,7 +880,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             const idleLabel = native ? "Dictate chat prompt with the keyboard dictation key" : "Dictate chat prompt";
             speechToggle.classList.toggle("hidden", !visible);
             speechToggle.classList.toggle("speech-native", native);
-            speechToggle.disabled = !visible || (!native && Boolean(speech.submitting));
+            speechToggle.disabled = !visible || speech.starting || (!native && Boolean(speech.submitting));
             speechToggle.classList.toggle("recording", Boolean(speech.recording));
             speechToggle.setAttribute("aria-hidden", visible ? "false" : "true");
             // Only the whisper button toggles between record and stop. The
@@ -940,6 +941,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           }
 
           async function toggleChatSpeechDictation() {
+            if (speech.starting || speech.submitting) return;
             // Each tap is a fresh user gesture, so a remembered refusal is
             // dropped here and capture is retried; only the static blockers
             // stay unsupported.
@@ -997,7 +999,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               setChatSpeechStatus("error", "Open a repository prompt before dictating.");
               return;
             }
-            const message = support && support.message ? support.message : "Microphone capture is unavailable in this browser. " + SPEECH_NATIVE_DICTATION_HINT;
+            const message = support && support.message ? support.message : withNativeDictationHint("Microphone capture is unavailable in this browser.");
             // The hint promises the prompt is focused, so swap in the "tap the
             // prompt box" wording when the focus did not land.
             const text = focused ? message : message.replace(SPEECH_NATIVE_DICTATION_HINT, SPEECH_NATIVE_DICTATION_UNFOCUSED_HINT);
@@ -1007,7 +1009,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               cardStatus.dataset.tone = "warn";
               // The hint names the key to press, so let it wrap instead of
               // being ellipsized away by the single-line card status styling.
-              cardStatus.dataset.wrap = "true";
+              cardStatus.dataset.wrap = hasNativeDictationKey() ? "true" : "";
               // Marks the parked hint so the next dictation message, which goes
               // to the page-top status, can retire it instead of leaving it
               // stale under the prompt.
@@ -1030,40 +1032,39 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               startChatNativeDictation(support);
               return;
             }
-            if (!speech.reachable) {
-              await refreshChatSpeechStatus();
-            }
-            if (!speech.reachable) {
-              // Whisper cannot take the audio, but the keyboard dictation key
-              // can.
-              startChatNativeDictation(speechUnreachableFallback());
-              return;
-            }
-
-            let mediaStream = null;
+            speech.starting = true;
             try {
-              mediaStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                  channelCount: 1,
-                  echoCancellation: true,
-                  noiseSuppression: true
-                }
-              });
-            } catch (err) {
-              trackChatEvent("chat_speech_failed", { stage: "capture" });
-              startChatNativeDictation(rememberSpeechCaptureBlock(speechCaptureDenial(err)));
-              return;
-            }
-
-            try {
+              // Unlock Web Audio within the tap, before status or microphone awaits
+              // lose user activation. Handle resume rejection while permission is pending.
               const AudioCtor = window.AudioContext || window.webkitAudioContext;
+              speech.audioContext = new AudioCtor();
+              const audioReady = (speech.audioContext.state !== "running"
+                ? speech.audioContext.resume() : Promise.resolve()).then(() => null, err => err);
+              syncChatSpeechButton();
+              if (!speech.reachable) {
+                await refreshChatSpeechStatus();
+              }
+              if (!speech.reachable) {
+                cleanupChatSpeechCapture();
+                startChatNativeDictation(speechUnreachableFallback());
+                return;
+              }
+
+              try {
+                speech.mediaStream = await navigator.mediaDevices.getUserMedia({
+                  audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+                });
+              } catch (err) {
+                cleanupChatSpeechCapture();
+                trackChatEvent("chat_speech_failed", { stage: "capture" });
+                startChatNativeDictation(rememberSpeechCaptureBlock(speechCaptureDenial(err)));
+                return;
+              }
+              const audioError = await audioReady;
+              if (audioError) throw audioError;
+
               speech.chunks = [];
               resetSpeechCaptureStats();
-              speech.mediaStream = mediaStream;
-              speech.audioContext = new AudioCtor();
-              if (speech.audioContext.state === "suspended") {
-                await speech.audioContext.resume();
-              }
               speech.source = speech.audioContext.createMediaStreamSource(speech.mediaStream);
               speech.processor = speech.audioContext.createScriptProcessor(4096, 1, 1);
               speech.zeroGain = speech.audioContext.createGain();
@@ -1098,6 +1099,9 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               cleanupChatSpeechCapture();
               setChatSpeechStatus("error", "Dictation failed: " + (err && err.message ? err.message : "capture failed"));
               trackChatEvent("chat_speech_failed", { stage: "capture" });
+            } finally {
+              speech.starting = false;
+              syncChatSpeechButton();
             }
           }
 

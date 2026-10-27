@@ -1032,10 +1032,10 @@
     const CLAUDE_POST_SUBMIT_VERIFY_INTERVAL_MS = 1200;
     const CLAUDE_POST_SUBMIT_VERIFY_MAX_ATTEMPTS = 25;
     const SPEECH_SAMPLE_RATE = 16000;
-    const SPEECH_NATIVE_DICTATION_HINT = "The prompt is focused: use the dictation key on your keyboard (the mic next to the spacebar on iOS) to speak into it.";
+    const SPEECH_NATIVE_DICTATION_HINT = "The prompt is focused: use your keyboard's dictation key (microphone icon) to speak into it.";
     // The hint above promises focus, which the fallback cannot take when no
     // prompt is on screen or the remembered textarea has been re-rendered away.
-    const SPEECH_NATIVE_DICTATION_UNFOCUSED_HINT = "Tap the prompt box, then use the dictation key on your keyboard (the mic next to the spacebar on iOS) to speak into it.";
+    const SPEECH_NATIVE_DICTATION_UNFOCUSED_HINT = "Tap the prompt box, then use your keyboard's dictation key (microphone icon) to speak into it.";
     const SPEECH_STATUS_REFRESH_MS = 10000;
     const SPEECH_MIN_PEAK = 0.01;
     const SPEECH_MIN_RMS = 0.0025;
@@ -1859,6 +1859,7 @@
         captureBlock: null,
         reachable: false,
         recording: false,
+        starting: false,
         submitting: false,
         chunks: [],
         mediaStream: null,
@@ -5182,7 +5183,7 @@
       const idleLabel = native ? `${label || "Dictate prompt"} with the keyboard dictation key` : (label || "Dictate prompt");
       button.classList.toggle("hidden", !visible);
       button.classList.toggle("speech-native", native);
-      button.disabled = !visible || (!native && (Boolean(submitting) || Boolean(locked)));
+      button.disabled = !visible || state.speech.starting || (!native && (Boolean(submitting) || Boolean(locked)));
       button.classList.toggle("recording", Boolean(recording));
       button.setAttribute("aria-hidden", visible ? "false" : "true");
       // Only the whisper button toggles between record and stop. The native
@@ -5337,6 +5338,7 @@
     }
 
     async function toggleSpeechDictation(target) {
+      if (state.speech.starting) return;
       // Each tap is a fresh user gesture, so a remembered refusal is dropped
       // here and capture is retried; only the static blockers stay unsupported.
       let support = speechCaptureSupport();
@@ -5405,7 +5407,7 @@
       // instead of ellipsizing the instruction away. It also promises the
       // prompt is focused, so swap in the "tap the prompt box" wording when the
       // focus did not land.
-      status("warn", focused ? message : message.replace(SPEECH_NATIVE_DICTATION_HINT, SPEECH_NATIVE_DICTATION_UNFOCUSED_HINT), true);
+      status("warn", focused ? message : message.replace(SPEECH_NATIVE_DICTATION_HINT, SPEECH_NATIVE_DICTATION_UNFOCUSED_HINT), hasNativeDictationKey());
       trackAnalyticsEvent("prompt_speech_native_fallback", {
         ...(target?.analytics || {}),
         reason: support?.reason || "unsupported_browser",
@@ -5419,41 +5421,41 @@
         startNativeDictation(target, support);
         return;
       }
-      if (!state.speech.reachable) {
-        await refreshSpeechStatus();
-      }
-      if (!state.speech.reachable) {
-        // Whisper cannot take the audio, but the keyboard dictation key can.
-        startNativeDictation(target, speechUnreachableFallback());
-        return;
-      }
-
-      let mediaStream = null;
+      state.speech.starting = true;
       try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-          },
-        });
-      } catch (err) {
-        trackAnalyticsEvent("prompt_speech_failed", { ...(target?.analytics || {}), stage: "capture" });
-        startNativeDictation(target, rememberSpeechCaptureBlock(speechCaptureDenial(err)));
-        return;
-      }
-
-      try {
+        // Unlock Web Audio within the tap, before status or microphone awaits
+        // lose user activation. Handle resume rejection while permission is pending.
         const AudioCtor = window.AudioContext || window.webkitAudioContext;
+        state.speech.audioContext = new AudioCtor();
+        const audioReady = (state.speech.audioContext.state !== "running"
+          ? state.speech.audioContext.resume() : Promise.resolve()).then(() => null, err => err);
+        syncPromptSpeechButton();
+        if (!state.speech.reachable) {
+          await refreshSpeechStatus();
+        }
+        if (!state.speech.reachable) {
+          cleanupPromptSpeechCapture();
+          startNativeDictation(target, speechUnreachableFallback());
+          return;
+        }
+
+        try {
+          state.speech.mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+          });
+        } catch (err) {
+          cleanupPromptSpeechCapture();
+          trackAnalyticsEvent("prompt_speech_failed", { ...(target?.analytics || {}), stage: "capture" });
+          startNativeDictation(target, rememberSpeechCaptureBlock(speechCaptureDenial(err)));
+          return;
+        }
+        const audioError = await audioReady;
+        if (audioError) throw audioError;
+
         state.speech.chunks = [];
         state.speech.target = target || null;
         state.speech.stream = target?.stream || null;
         resetSpeechCaptureStats();
-        state.speech.mediaStream = mediaStream;
-        state.speech.audioContext = new AudioCtor();
-        if (state.speech.audioContext.state === "suspended") {
-          await state.speech.audioContext.resume();
-        }
         state.speech.source = state.speech.audioContext.createMediaStreamSource(state.speech.mediaStream);
         state.speech.processor = state.speech.audioContext.createScriptProcessor(4096, 1, 1);
         state.speech.zeroGain = state.speech.audioContext.createGain();
@@ -5479,6 +5481,9 @@
         cleanupPromptSpeechCapture();
         status("error", `Dictation failed: ${err.message}`);
         trackAnalyticsEvent("prompt_speech_failed", { ...(target?.analytics || {}), stage: "capture" });
+      } finally {
+        state.speech.starting = false;
+        syncPromptSpeechButton();
       }
     }
 
