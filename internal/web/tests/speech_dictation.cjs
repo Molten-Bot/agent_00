@@ -27,7 +27,9 @@ after(async () => { await browser?.close(); });
 // is how a test can inspect the page while the permission prompt is still
 // pending. window.__micCalls counts getUserMedia calls so a remembered refusal
 // can be shown to stop re-asking.
-async function openPage(t, { speech = { enabled: true, reachable: true }, blockStatus = false, stripCapture = false, rejectCapture = '', gateCapture = false, insecure = false, userAgent = '', clock = false, path = '/', repos = null } = {}) {
+// grantCapture hands back a real but silent MediaStream, so the recording path
+// can run end to end in a headless browser that has no microphone.
+async function openPage(t, { speech = { enabled: true, reachable: true }, blockStatus = false, stripCapture = false, rejectCapture = '', gateCapture = false, grantCapture = false, insecure = false, userAgent = '', clock = false, path = '/', repos = null } = {}) {
   const page = await browser.newPage(userAgent ? { userAgent } : {});
   if (clock) await page.clock.install();
   t.after(() => page.close());
@@ -43,11 +45,25 @@ async function openPage(t, { speech = { enabled: true, reachable: true }, blockS
     body: JSON.stringify({ ok: true, speech }),
   }));
   if (repos) {
-    await page.route('**/api/github/repos', route => route.fulfill({
+    await page.route('**/api/github/repos**', route => route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ ok: true, repos }),
     }));
+    // The repository cards on the main app only render once the dashboard
+    // snapshot lands and the chat feature is switched on, neither of which the
+    // bare server under test reports.
+    await page.route('**/api/status', route => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, tasks: [], events: [], repositories: [], stats: {}, resources: {} }),
+    }));
+    await page.route('**/api/review-settings', route => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, settings: { review_level: 'off', chat_enabled: true, default_library_enabled: true } }),
+    }));
+    await page.route('**/api/stream', route => route.fulfill({ contentType: 'text/event-stream', body: '' }));
   }
   if (stripCapture) {
     await page.addInitScript(() => {
@@ -70,6 +86,20 @@ async function openPage(t, { speech = { enabled: true, reachable: true }, blockS
         configurable: true,
       });
     }, { name: rejectCapture, gated: Boolean(gateCapture) });
+  }
+  if (grantCapture) {
+    await page.addInitScript(() => {
+      window.__micCalls = 0;
+      const getUserMedia = () => {
+        window.__micCalls += 1;
+        const Ctor = window.AudioContext || window.webkitAudioContext;
+        return Promise.resolve(new Ctor().createMediaStreamDestination().stream);
+      };
+      Object.defineProperty(navigator, 'mediaDevices', {
+        value: { getUserMedia, enumerateDevices: () => Promise.resolve([]) },
+        configurable: true,
+      });
+    });
   }
   if (insecure) {
     await page.addInitScript(() => {
@@ -191,9 +221,10 @@ test('the prompt takes focus inside the tap, before getUserMedia settles', async
   await page.waitForFunction(text => document.getElementById('local-prompt-status').textContent.includes(text), 'dictation key');
 });
 
-// A denied microphone stays denied until the browser setting changes, so the
-// button has to advertise keyboard dictation and stop re-asking.
-test('a denied microphone leaves the button in its keyboard dictation state', async t => {
+// A refusal advertises keyboard dictation, but it is not the end of the story:
+// a dismissed permission prompt rejects the same way and Chrome and Firefox ask
+// again on the next gesture, so the next tap has to retry capture.
+test('a denied microphone shows keyboard dictation and still retries on the next tap', async t => {
   const page = await openPage(t, { rejectCapture: 'NotAllowedError', userAgent: IOS_FIREFOX_UA });
   await micButton(page).waitFor({ state: 'visible' });
 
@@ -203,13 +234,53 @@ test('a denied microphone leaves the button in its keyboard dictation state', as
   assert.equal(await page.evaluate(() => window.__micCalls), 1);
 
   await micButton(page).click();
+  await page.waitForFunction(() => window.__micCalls > 1, null, { timeout: 5000 });
   await page.waitForFunction(text => document.getElementById('local-prompt-status').textContent.includes(text), 'dictation key');
-  assert.equal(await page.evaluate(() => window.__micCalls), 1, 'the second tap does not re-trigger the denied getUserMedia');
+  assert.equal(await page.evaluate(() => window.__micCalls), 2, 'the second tap asks for the microphone again');
+  assert.equal(await micButton(page).evaluate(node => node.classList.contains('speech-native')), true, 'a second refusal keeps the keyboard dictation state');
+});
+
+// A dismissed prompt is the common case on a first tap: the retry has to reach
+// a working microphone, not stay stuck on the remembered refusal.
+test('a retry after a dismissed permission prompt starts recording', async t => {
+  const page = await openPage(t, { rejectCapture: 'NotAllowedError' });
+  await micButton(page).waitFor({ state: 'visible' });
+  await micButton(page).click();
+  await page.waitForFunction(text => document.getElementById('local-prompt-status').textContent.includes(text), 'dictation key');
+
+  // The user grants the permission the second prompt asks for.
+  await page.evaluate(() => {
+    navigator.mediaDevices.getUserMedia = () => {
+      window.__micCalls += 1;
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      return Promise.resolve(new Ctor().createMediaStreamDestination().stream);
+    };
+  });
+  await micButton(page).click();
+  await page.waitForFunction(() => document.getElementById('local-prompt-status').textContent.includes('Listening'), null, { timeout: 5000 });
+  assert.equal(await micButton(page).evaluate(node => node.classList.contains('speech-native')), false, 'the granted retry leaves the fallback state');
+});
+
+// While whisper records, the stop button is the only control that matters. On
+// iOS the software keyboard would cover it, so the focus taken inside the tap
+// is dropped once capture actually starts.
+test('a recording microphone releases the prompt focus that raised the keyboard', async t => {
+  const page = await openPage(t, { grantCapture: true, userAgent: IOS_FIREFOX_UA });
+  await micButton(page).waitFor({ state: 'visible' });
+
+  await micButton(page).click();
+  await page.waitForFunction(() => document.getElementById('local-prompt-status').textContent.includes('Listening'), null, { timeout: 5000 });
+  assert.notEqual(
+    await page.evaluate(() => document.activeElement?.id || ''),
+    'builder-prompt-input',
+    'the prompt no longer holds focus while recording',
+  );
+  assert.equal(await micButton(page).getAttribute('aria-pressed'), 'true', 'the button is in its stop state');
 });
 
 // The /chat page carries its own copy of the dictation code, so it needs the
-// same coverage: an in-gesture focus, a readable fallback message, and a button
-// that stops re-asking once the microphone is refused.
+// same coverage: an in-gesture focus, a readable fallback message, and a tap
+// that asks again after the microphone is refused.
 test('the chat page hands a refused microphone to keyboard dictation', async t => {
   const page = await openPage(t, {
     path: '/chat',
@@ -237,7 +308,57 @@ test('the chat page hands a refused microphone to keyboard dictation', async t =
   assert.equal(await chatMic.evaluate(node => node.classList.contains('speech-native')), true);
 
   await chatMic.click();
-  assert.equal(await page.evaluate(() => window.__micCalls), 1, 'the second tap does not re-trigger the denied getUserMedia');
+  await page.waitForFunction(() => window.__micCalls > 1, null, { timeout: 5000 });
+  await page.evaluate(() => window.__releaseMic());
+  assert.equal(await page.evaluate(() => window.__micCalls), 2, 'the second tap asks for the microphone again');
+});
+
+// Tapping the chat mic with no prompt open is the one path that cannot focus
+// anything, so the button state still has to be synced before bailing out.
+test('the chat mic keeps its keyboard dictation state with no prompt open', async t => {
+  const page = await openPage(t, {
+    path: '/chat',
+    stripCapture: true,
+    insecure: true,
+    repos: [{ full_name: 'octo/demo', name: 'demo', private: false, description: 'Demo repository' }],
+  });
+  const chatMic = page.locator('#chat-speech-toggle');
+  await chatMic.waitFor({ state: 'visible' });
+
+  await chatMic.click();
+  await page.waitForFunction(() => document.getElementById('chat-status').textContent.includes('Open a repository prompt'));
+  assert.equal(await chatMic.evaluate(node => node.classList.contains('speech-native')), true, 'the button still advertises keyboard dictation');
+  assert.equal(await chatMic.isEnabled(), true, 'the fallback button stays clickable');
+});
+
+// The repository cards share one status line with the submit flow, so only the
+// dictation hint is allowed to wrap: everything else stays single-line to keep
+// the card action row from growing.
+test('only the dictation hint wraps in a repository card status', async t => {
+  const page = await openPage(t, {
+    path: '/#chat',
+    stripCapture: true,
+    insecure: true,
+    repos: [{ full_name: 'octo/demo', name: 'demo', private: false, description: 'Demo repository' }],
+  });
+  const card = page.locator('.chat-repo-card').first();
+  await card.waitFor({ state: 'visible' });
+  await card.click();
+  const status = card.locator('.chat-repo-submit-status');
+  await status.waitFor({ state: 'visible' });
+  assert.equal(await status.evaluate(node => window.getComputedStyle(node).whiteSpace), 'nowrap', 'the default status stays on one line');
+  const idleHeight = await status.evaluate(node => node.getBoundingClientRect().height);
+
+  await card.locator('.chat-speech-toggle').first().click();
+  await page.waitForFunction(text => document.querySelector('.chat-repo-submit-status')?.textContent.includes(text), 'dictation key');
+  const wrapped = await status.evaluate(node => ({
+    whiteSpace: window.getComputedStyle(node).whiteSpace,
+    overflowing: node.scrollWidth > node.clientWidth + 1,
+    height: node.getBoundingClientRect().height,
+  }));
+  assert.equal(wrapped.whiteSpace, 'normal', 'the dictation hint wraps instead of being ellipsized');
+  assert.equal(wrapped.overflowing, false, 'the whole hint fits inside the status element');
+  assert.ok(wrapped.height > idleHeight, 'the hint is rendered over several lines');
 });
 
 // The fallback message names the key to press, so it must wrap instead of being

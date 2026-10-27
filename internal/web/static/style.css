@@ -4082,8 +4082,6 @@ select.prompt-control {
   font-size: 0.86rem;
 }
 
-/* Dictation fallback messages explain which key to press, so they must wrap
-   rather than ellipsize away their instruction. */
 .chat-repo-submit-status {
   flex: 1 1 auto;
   min-width: 0;
@@ -4092,6 +4090,17 @@ select.prompt-control {
   font-size: 0.8rem;
   font-weight: 800;
   line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Dictation fallback messages explain which key to press, so only they wrap
+   rather than ellipsize away their instruction; every other status stays on one
+   line so the card action row keeps its height. */
+.chat-repo-submit-status[data-wrap="true"] {
+  overflow: visible;
+  text-overflow: clip;
   white-space: normal;
   overflow-wrap: anywhere;
 }

@@ -5023,9 +5023,9 @@
     // knowable only once getUserMedia is called, so speechCaptureDenial handles
     // that runtime refusal.
     function speechCaptureSupport() {
-      // A refused microphone permission stays refused until the user changes a
-      // browser setting, so replay the remembered refusal instead of calling a
-      // getUserMedia that is already known to be denied.
+      // A refusal shapes the button and its message until the next tap, which
+      // clears the memory and asks again: a dismissed permission prompt rejects
+      // exactly like a blocked one, and Chrome and Firefox re-prompt for it.
       if (state.speech.captureBlock) return state.speech.captureBlock;
       const hasCapture = Boolean(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function");
       const hasAudioContext = Boolean(window.AudioContext || window.webkitAudioContext);
@@ -5043,7 +5043,7 @@
         return {
           supported: false,
           reason: "ios_non_safari_browser",
-          message: `This iOS browser does not expose microphone capture to web pages, so Whisper dictation cannot record here. Safari on iOS usually can. ${SPEECH_NATIVE_DICTATION_HINT}`,
+          message: `This iOS browser is not exposing microphone capture to this page, so Whisper dictation cannot record here. Safari on iOS is the most reliable option. ${SPEECH_NATIVE_DICTATION_HINT}`,
         };
       }
       return {
@@ -5081,15 +5081,24 @@
       };
     }
 
-    // Only a permission refusal is durable: a missing or busy microphone can
-    // come back, so those keep re-asking. Remembering the denial flips the
-    // button into its keyboard-dictation state and stops the next tap from
-    // re-triggering the same refusal.
+    // A permission refusal flips the button into its keyboard-dictation state
+    // and keeps the explanation on screen. A missing or busy microphone can
+    // come back on its own, so those are not remembered at all.
     function rememberSpeechCaptureBlock(denial) {
       if (denial && !denial.supported && (denial.reason === "permission_denied" || denial.reason === "ios_non_safari_denied")) {
         state.speech.captureBlock = denial;
       }
       return denial;
+    }
+
+    // A dismissed permission prompt rejects as NotAllowedError just like a
+    // blocked one, and Chrome and Firefox ask again on the next user gesture.
+    // So a remembered refusal lasts only until the next tap, which drops it and
+    // retries capture instead of latching the fallback for the whole session.
+    function retrySpeechCaptureBlock() {
+      if (!state.speech.captureBlock) return false;
+      state.speech.captureBlock = null;
+      return true;
     }
 
     // Whisper capture needs the sidecar reachable; native keyboard dictation
@@ -5266,7 +5275,12 @@
     }
 
     async function toggleSpeechDictation(target) {
-      const support = speechCaptureSupport();
+      // Each tap is a fresh user gesture, so a remembered refusal is dropped
+      // here and capture is retried; only the static blockers stay unsupported.
+      let support = speechCaptureSupport();
+      if (!support.supported && retrySpeechCaptureBlock()) {
+        support = speechCaptureSupport();
+      }
       if (!support.supported) {
         startNativeDictation(target, support);
         return;
@@ -5285,13 +5299,27 @@
       await startPromptSpeechDictation(target);
     }
 
-    function focusSpeechInput(target) {
+    function speechInputElement(target) {
       const input = target?.input instanceof HTMLTextAreaElement ? target.input : builderPromptInput;
-      if (!(input instanceof HTMLTextAreaElement)) return;
+      return input instanceof HTMLTextAreaElement ? input : null;
+    }
+
+    function focusSpeechInput(target) {
+      const input = speechInputElement(target);
+      if (!input) return;
       input.focus();
       const end = String(input.value || "").length;
       input.selectionStart = end;
       input.selectionEnd = end;
+    }
+
+    // The focus taken inside the tap is only there to raise the iOS keyboard if
+    // capture is refused. Once whisper is recording the keyboard would cover the
+    // stop button, so drop the focus this flow took and leave other focus alone.
+    function blurSpeechInput(target) {
+      const input = speechInputElement(target);
+      if (!input || document.activeElement !== input) return;
+      input.blur();
     }
 
     // Whisper cannot record here, so hand the user to the platform dictation
@@ -5300,7 +5328,9 @@
       const status = typeof target?.setStatus === "function" ? target.setStatus : setLocalPromptStatus;
       focusSpeechInput(target);
       syncPromptSpeechButton();
-      status("warn", support?.message || `Microphone capture is unavailable in this browser. ${SPEECH_NATIVE_DICTATION_HINT}`);
+      // The hint names the key to press, so ask the status element to wrap it
+      // instead of ellipsizing the instruction away.
+      status("warn", support?.message || `Microphone capture is unavailable in this browser. ${SPEECH_NATIVE_DICTATION_HINT}`, true);
       trackAnalyticsEvent("prompt_speech_native_fallback", {
         ...(target?.analytics || {}),
         reason: support?.reason || "unsupported_browser",
@@ -5366,6 +5396,7 @@
         state.speech.recording = true;
         syncPromptSpeechButton();
         setSpeechStreamActive(state.speech.stream, true);
+        blurSpeechInput(target);
         status("warn", "Listening. Press the mic again to stop.");
         trackAnalyticsEvent("prompt_speech_started", target?.analytics || { prompt_mode: state.promptMode });
       } catch (err) {
@@ -7055,15 +7086,22 @@
       submitStatus.setAttribute("aria-live", "polite");
       submitStatus.textContent = "Press Enter to run.";
 
+      // Only the multi-line dictation hint wraps; every other status in the
+      // shared action row stays on one line so the card keeps its height.
+      const setChatStatus = (kind, text, wrap = false) => {
+        submitStatus.removeAttribute("title");
+        submitStatus.textContent = text;
+        submitStatus.dataset.tone = kind === "error" ? "error" : kind === "ok" ? "ok" : "warn";
+        submitStatus.dataset.wrap = wrap ? "true" : "";
+      };
+
       const imageActions = document.createElement("span");
       imageActions.className = "chat-repo-image-actions";
 
       const applyChatRepoImageFiles = async (files, droppedCount = 0) => {
         if (!files.length) {
           if (droppedCount > 0) {
-            submitStatus.removeAttribute("title");
-            submitStatus.textContent = screenshotLimitMessage(droppedCount);
-            submitStatus.dataset.tone = "warn";
+            setChatStatus("warn", screenshotLimitMessage(droppedCount));
           }
           return;
         }
@@ -7076,14 +7114,10 @@
             repo_visibility: repo?.private ? "private" : "public",
           });
           const suffix = droppedCount > 0 ? ` ${screenshotLimitMessage(droppedCount)}` : "";
-          submitStatus.removeAttribute("title");
-          submitStatus.textContent = `Attached ${next.length} screenshot${next.length === 1 ? "" : "s"}.${suffix}`;
-          submitStatus.dataset.tone = "ok";
+          setChatStatus("ok", `Attached ${next.length} screenshot${next.length === 1 ? "" : "s"}.${suffix}`);
         } catch (err) {
           trackAnalyticsEvent("chat_repo_screenshots_failed", { repo_visibility: repo?.private ? "private" : "public" });
-          submitStatus.removeAttribute("title");
-          submitStatus.textContent = `Screenshot add failed: ${err.message}`;
-          submitStatus.dataset.tone = "error";
+          setChatStatus("error", `Screenshot add failed: ${err.message}`);
         }
       };
 
@@ -7135,11 +7169,6 @@
       speechToggle.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        const setChatStatus = (kind, text) => {
-          submitStatus.removeAttribute("title");
-          submitStatus.textContent = text;
-          submitStatus.dataset.tone = kind === "error" ? "error" : kind === "ok" ? "ok" : "warn";
-        };
         void toggleSpeechDictation({
           mode: "chat",
           input: prompt,
@@ -8317,6 +8346,9 @@
       const prompt = String(input?.value || "").trim();
       const promptImages = normalizePromptImages(images);
       statusNode.removeAttribute("title");
+      // A dictation hint may have left the status wrapping; submit messages are
+      // single-line again.
+      statusNode.dataset.wrap = "";
       if (!repoValue) {
         statusNode.textContent = "Repository is unavailable.";
         statusNode.dataset.tone = "error";

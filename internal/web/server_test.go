@@ -1413,6 +1413,13 @@ func TestHandlerIndexServesHTML(t *testing.T) {
       await startPromptSpeechDictation(target);`) {
 		t.Fatalf("expected index html to focus the prompt inside the tap gesture, before awaiting getUserMedia")
 	}
+	if !strings.Contains(markup, `if (!support.supported && retrySpeechCaptureBlock()) {`) ||
+		!strings.Contains(markup, `state.speech.captureBlock = null;`) {
+		t.Fatalf("expected index html to retry a remembered microphone refusal on the next tap")
+	}
+	if !strings.Contains(markup, `blurSpeechInput(target);`) {
+		t.Fatalf("expected index html to release the prompt focus once whisper is recording")
+	}
 	if !strings.Contains(markup, `body?.code === "speech_unavailable" || body?.code === "speech_disabled"`) ||
 		!strings.Contains(markup, `state.speech.reachable = false;`) {
 		t.Fatalf("expected index html to hide speech dictation buttons after unavailable transcribe responses")
@@ -2705,6 +2712,9 @@ func TestHandlerServesChatView(t *testing.T) {
 		"focusChatPromptInput();\n            await startChatSpeechDictation();",
 		`const enabled = speech.enabled || (!speech.statusResolved && !support.supported);`,
 		`if (speech.captureBlock) return speech.captureBlock;`,
+		`if (!support.supported && retrySpeechCaptureBlock()) {`,
+		"syncChatSpeechButton();\n            if (!input) {",
+		`if (document.activeElement === input) input.blur();`,
 		`function toggleChatSpeechDictation()`,
 		`function startChatSpeechDictation()`,
 		`function stopChatSpeechDictation()`,
@@ -3149,9 +3159,12 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		t.Fatalf("expected stylesheet to place the chat transcribe button in the bottom action row outside the text box")
 	}
 	// The keyboard dictation fallback message names the key to press, so the
-	// status surfaces that carry it must wrap instead of ellipsizing.
+	// status surfaces that carry it must wrap instead of ellipsizing. In a chat
+	// repository card only that message wraps, so the shared action-row status
+	// keeps its single-line height for everything else.
 	normalizedCSS := normalizeCSSWhitespace(css)
-	if !strings.Contains(normalizedCSS, ".chat-repo-submit-status { flex: 1 1 auto; min-width: 0; min-height: 1.2em; color: var(--muted); font-size: 0.8rem; font-weight: 800; line-height: 1.35; white-space: normal; overflow-wrap: anywhere; }") ||
+	if !strings.Contains(normalizedCSS, ".chat-repo-submit-status { flex: 1 1 auto; min-width: 0; min-height: 1.2em; color: var(--muted); font-size: 0.8rem; font-weight: 800; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }") ||
+		!strings.Contains(normalizedCSS, ".chat-repo-submit-status[data-wrap=\"true\"] { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }") ||
 		!strings.Contains(normalizedCSS, "#local-prompt-status { color: var(--muted); font-size: 0.74rem; line-height: 1.3; min-height: 1.3em; white-space: normal; overflow-wrap: anywhere; text-overflow: clip; }") {
 		t.Fatalf("expected dictation status surfaces to wrap long keyboard dictation messages instead of clipping them")
 	}

@@ -644,9 +644,10 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           // over the microphone is knowable only once getUserMedia is called,
           // so speechCaptureDenial handles that runtime refusal.
           function speechCaptureSupport() {
-            // A refused microphone permission stays refused until the user
-            // changes a browser setting, so replay the remembered refusal
-            // instead of calling a getUserMedia that is already denied.
+            // A refusal shapes the button and its message until the next tap,
+            // which clears the memory and asks again: a dismissed permission
+            // prompt rejects exactly like a blocked one, and Chrome and Firefox
+            // re-prompt for it.
             if (speech.captureBlock) return speech.captureBlock;
             const hasCapture = Boolean(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function");
             const hasAudioContext = Boolean(window.AudioContext || window.webkitAudioContext);
@@ -664,7 +665,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               return {
                 supported: false,
                 reason: "ios_non_safari_browser",
-                message: "This iOS browser does not expose microphone capture to web pages, so Whisper dictation cannot record here. Safari on iOS usually can. " + SPEECH_NATIVE_DICTATION_HINT
+                message: "This iOS browser is not exposing microphone capture to this page, so Whisper dictation cannot record here. Safari on iOS is the most reliable option. " + SPEECH_NATIVE_DICTATION_HINT
               };
             }
             return {
@@ -754,15 +755,25 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             status.dataset.tone = tone || "";
           }
 
-          // Only a permission refusal is durable: a missing or busy microphone
-          // can come back, so those keep re-asking. Remembering the denial
-          // flips the button into its keyboard-dictation state and stops the
-          // next tap from re-triggering the same refusal.
+          // A permission refusal flips the button into its keyboard-dictation
+          // state and keeps the explanation on screen. A missing or busy
+          // microphone can come back on its own, so those are not remembered.
           function rememberSpeechCaptureBlock(denial) {
             if (denial && !denial.supported && (denial.reason === "permission_denied" || denial.reason === "ios_non_safari_denied")) {
               speech.captureBlock = denial;
             }
             return denial;
+          }
+
+          // A dismissed permission prompt rejects as NotAllowedError just like
+          // a blocked one, and Chrome and Firefox ask again on the next user
+          // gesture. So a remembered refusal lasts only until the next tap,
+          // which drops it and retries capture instead of latching the fallback
+          // for the whole session.
+          function retrySpeechCaptureBlock() {
+            if (!speech.captureBlock) return false;
+            speech.captureBlock = null;
+            return true;
           }
 
           // Whisper capture needs the sidecar reachable; native keyboard
@@ -840,7 +851,13 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           }
 
           async function toggleChatSpeechDictation() {
-            const support = speechCaptureSupport();
+            // Each tap is a fresh user gesture, so a remembered refusal is
+            // dropped here and capture is retried; only the static blockers
+            // stay unsupported.
+            let support = speechCaptureSupport();
+            if (!support.supported && retrySpeechCaptureBlock()) {
+              support = speechCaptureSupport();
+            }
             if (!support.supported) {
               startChatNativeDictation(support);
               return;
@@ -870,11 +887,14 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           // dictation key by focusing the prompt and explaining the limitation.
           function startChatNativeDictation(support) {
             const input = focusChatPromptInput();
+            // Sync first either way: a remembered refusal has to reach the
+            // button even when no card is open to focus, or the mic keeps
+            // advertising a recording it cannot start.
+            syncChatSpeechButton();
             if (!input) {
               setChatSpeechStatus("error", "Open a repository prompt before dictating.");
               return;
             }
-            syncChatSpeechButton();
             setChatSpeechStatus("warn", support && support.message ? support.message : "Microphone capture is unavailable in this browser. " + SPEECH_NATIVE_DICTATION_HINT);
             trackChatEvent("chat_speech_native_fallback", { reason: support && support.reason ? support.reason : "unsupported_browser" });
           }
@@ -941,7 +961,10 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               speech.recording = true;
               syncChatSpeechButton();
               setSpeechStreamActive(stream, true);
-              input.focus();
+              // The focus taken inside the tap only exists to raise the iOS
+              // keyboard if capture is refused. Recording started, so drop it:
+              // the keyboard would otherwise cover the stop button.
+              if (document.activeElement === input) input.blur();
               setChatSpeechStatus("warn", "Listening. Press the mic again to stop.");
               trackChatEvent("chat_speech_started");
             } catch (err) {

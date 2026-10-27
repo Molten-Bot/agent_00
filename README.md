@@ -56,8 +56,10 @@ Whisper.
 Whenever capture is unavailable - up front or after a refusal - the microphone
 button stays usable and points at native dictation: it focuses the prompt and
 explains the limitation so the platform's own dictation key, the microphone next
-to the iOS spacebar, can be used to speak into the prompt instead. Set
-`WHISPER_SPEECH_DISABLED` to hide the button entirely.
+to the iOS spacebar, can be used to speak into the prompt instead. A refusal is
+not final: dismissing a permission prompt looks the same as blocking it, so the
+next tap asks for the microphone again. Set `WHISPER_SPEECH_DISABLED` to hide
+the button entirely.
 
 ### Library settings
 
