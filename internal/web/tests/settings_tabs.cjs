@@ -46,6 +46,107 @@ async function close(page, method = 'button') {
   await page.waitForFunction(() => document.getElementById('settings-gate').classList.contains('hidden'));
 }
 
+for (const harness of ['claude', 'codex']) test(`settings reopen ${harness} sign-in and recover after completion`, async t => {
+  let auth = { harness, required: true, ready: true, state: 'ready' };
+  let starts = 0;
+  const { page, writes } = await openSettings(t, { configurePage: async page => {
+    await page.route('**/api/agent-auth**', route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith('/reauthenticate')) {
+        assert.equal(route.request().method(), 'POST');
+        starts++;
+        auth = { harness, required: true, ready: false,
+          state: harness === 'claude' ? 'pending_browser_login' : 'pending_device_auth',
+          auth_url: harness === 'claude' ? 'https://claude.com/cai/oauth/authorize?code=true&state=test' : 'https://auth.openai.com/device',
+          accepts_browser_code: harness === 'claude', device_code: harness === 'codex' ? 'ABCD-EFGH' : '',
+        };
+      } else if (path.endsWith('/configure') || path.endsWith('/verify')) {
+        auth = { harness, required: true, ready: true, state: 'ready' };
+      }
+      return route.fulfill({ json: { ok: true, auth } });
+    });
+  }});
+  const link = page.locator('#settings-agent-reauthenticate');
+  assert.equal(await link.textContent(), `Sign in to ${harness === 'claude' ? 'Claude Code' : 'Codex'} again`);
+  await select(page, 'automation');
+  await toggle(page, 'review-settings-auto-merge');
+  await link.click();
+  await page.waitForFunction(() => document.getElementById('settings-gate').classList.contains('hidden') && !document.getElementById('agent-auth-url').classList.contains('hidden'));
+  assert.equal(starts, 1);
+  assert.equal(writes.at(-1).auto_merge, true, 'pending settings saved before sign-in');
+  assert.equal(await page.locator('#local-prompt-submit').isDisabled(), true);
+  if (harness === 'claude') await page.locator('#agent-auth-browser-code-input').fill('browser-code#test-state');
+  else await page.locator('#agent-auth-verify').click();
+  await page.waitForFunction(() => document.getElementById('agent-auth-gate').classList.contains('hidden'));
+  assert.equal(await page.locator('#local-prompt-submit').isEnabled(), true);
+  await page.reload();
+  await page.waitForFunction(() => document.getElementById('agent-auth-gate').classList.contains('hidden'));
+  assert.equal(starts, 1, 'reload uses refreshed auth without starting another login');
+});
+
+test('reauthentication preserves settings when saving fails', async t => {
+  let starts = 0;
+  const { page } = await openSettings(t, { configurePage: async page => {
+    await page.route('**/api/agent-auth/reauthenticate', route => { starts++; return route.abort(); });
+    await page.route('**/api/review-settings', route => route.fulfill(route.request().method() === 'POST'
+      ? { status: 500, json: { error: 'Unable to save settings' } }
+      : { json: { ok: true, settings: defaults } }));
+  }});
+  await page.locator('#settings-agent-reauthenticate').click();
+  await page.waitForFunction(() => document.getElementById('review-settings-status').textContent.includes('Unable to save settings'));
+  assert.equal(await page.locator('#settings-gate').isVisible(), true);
+  assert.equal(starts, 0);
+});
+
+test('a stale ready status cannot dismiss a newly opened sign-in dialog', async t => {
+  const ready = { harness: 'claude', required: true, ready: true, state: 'ready' };
+  let auth = ready;
+  let statusReads = 0;
+  let releaseStatus;
+  const { page } = await openSettings(t, { configurePage: async page => {
+    await page.route('**/api/agent-auth**', async route => {
+      if (route.request().url().endsWith('/reauthenticate')) {
+        auth = { harness: 'claude', required: true, ready: false, state: 'needs_browser_login' };
+      } else if (++statusReads === 2) {
+        await new Promise(resolve => { releaseStatus = resolve; });
+        return route.fulfill({ json: { ok: true, auth: ready } });
+      }
+      return route.fulfill({ json: { ok: true, auth } });
+    });
+  }});
+  // Wait for the normal background poll, keeping its old ready response in flight.
+  const deadline = Date.now() + 10000;
+  while (!releaseStatus && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(releaseStatus, 'background auth poll started');
+  await page.locator('#settings-agent-reauthenticate').click();
+  await page.waitForFunction(() => document.getElementById('agent-auth-verify').textContent === 'Sign in to Claude');
+  const staleResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/agent-auth');
+  releaseStatus();
+  await (await staleResponse).finished();
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await page.locator('#agent-auth-gate').isVisible(), true);
+  assert.equal(await page.locator('#local-prompt-submit').isDisabled(), true);
+});
+
+test('reauthentication start errors are visible and later status recovers', async t => {
+  let auth = { harness: 'claude', required: true, ready: true, state: 'ready' };
+  const { page } = await openSettings(t, { configurePage: async page => {
+    await page.route('**/api/agent-auth**', route => {
+      if (route.request().url().endsWith('/reauthenticate')) {
+        auth = { harness: 'claude', required: true, ready: false, state: 'needs_browser_login', message: 'Login unavailable' };
+        return route.fulfill({ status: 400, json: { error: 'Login unavailable', auth } });
+      }
+      return route.fulfill({ json: { ok: true, auth } });
+    });
+  }});
+  await page.locator('#settings-agent-reauthenticate').click();
+  await page.waitForFunction(() => document.getElementById('agent-auth-message').textContent.includes('Login unavailable'));
+  assert.equal(await page.locator('#agent-auth-gate').isVisible(), true);
+  assert.equal(await page.locator('#local-prompt-submit').isDisabled(), true);
+  auth = { harness: 'claude', required: true, ready: true, state: 'ready' };
+  await page.waitForFunction(() => document.getElementById('agent-auth-gate').classList.contains('hidden'));
+});
+
 test('all settings save on close and survive reopening; no main Save button', async t => {
   const { page, writes } = await openSettings(t);
   assert.equal(await page.locator('#review-settings-save').count(), 0);

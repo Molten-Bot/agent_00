@@ -12,6 +12,7 @@ import (
 type agentAuthGate interface {
 	Status(context.Context) (web.AgentAuthState, error)
 	StartDeviceAuth(context.Context) (web.AgentAuthState, error)
+	Reauthenticate(context.Context) (web.AgentAuthState, error)
 	Verify(context.Context) (web.AgentAuthState, error)
 	Configure(context.Context, string) (web.AgentAuthState, error)
 }

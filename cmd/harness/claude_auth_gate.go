@@ -272,6 +272,19 @@ func (g *claudeAuthGate) StartDeviceAuth(_ context.Context) (web.AgentAuthState,
 	return snap, nil
 }
 
+func (g *claudeAuthGate) Reauthenticate(ctx context.Context) (web.AgentAuthState, error) {
+	if g == nil {
+		return readyAgentAuthState(), nil
+	}
+	g.mu.Lock()
+	running := g.procRunning
+	g.mu.Unlock()
+	if !running {
+		g.RequireReauthentication()
+	}
+	return g.StartDeviceAuth(ctx)
+}
+
 func (g *claudeAuthGate) Verify(ctx context.Context) (web.AgentAuthState, error) {
 	if g == nil {
 		return readyAgentAuthState(), nil

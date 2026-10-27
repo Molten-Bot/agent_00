@@ -84,7 +84,7 @@ test('GitHub setup and agent selection continue into Claude browser authorizatio
   await page.locator('#agent-auth-verify').click();
   await expect(page.locator('#agent-auth-url')).toBeVisible();
   await page.locator('#agent-auth-browser-code-input').fill('browser-code#test-state');
-  await page.locator('#agent-auth-verify').click();
+  // Pasting the code submits it automatically; the dialog may close before a click.
   await expect(page.locator('#agent-auth-gate')).toBeHidden();
   await expect(page.locator('#local-prompt-submit')).toBeEnabled();
   await page.reload();

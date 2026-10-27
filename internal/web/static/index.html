@@ -750,6 +750,7 @@
         <header class="onboarding-modal-sidebar settings-header-slim">
           <div class="onboarding-modal-header">
             <h2 id="settings-title"><i data-lucide="settings" aria-hidden="true"></i><span>Settings</span></h2>
+            <button id="settings-agent-reauthenticate" class="settings-auth-link hidden" type="button">Sign in again</button>
             <p id="settings-message" class="sr-only">Configure library, automation, reviews, merging, and commit signing.</p>
           </div>
           <button id="review-settings-close" class="settings-modal-close onboarding-modal-close" type="button" aria-label="Close settings" title="Close">
@@ -1873,6 +1874,7 @@
       taskFullscreenOpen: false,
       appDisplay: "studio",
       agentAuthBusy: false,
+      agentAuthGeneration: 0,
       agentAuthInteracted: false,
       agentAuthVerifyPending: false,
       agentAuthChallengeKey: "",
@@ -2082,6 +2084,7 @@
     const reviewSettingsSlider = document.getElementById("review-settings-slider");
     const reviewSettingsStatus = document.getElementById("review-settings-status");
     const reviewSettingsClose = document.getElementById("review-settings-close");
+    const settingsAgentReauthenticate = document.getElementById("settings-agent-reauthenticate");
     const agentAuthTitle = document.getElementById("agent-auth-title");
     const agentAuthMessage = document.getElementById("agent-auth-message");
     const agentAuthHarnessPicker = document.getElementById("agent-auth-harness-picker");
@@ -3027,7 +3030,9 @@
 
     function setAgentAuthBusy(busy) {
       state.agentAuthBusy = Boolean(busy);
+      updateSettingsAgentAuth();
       if (state.agentAuthBusy) {
+        state.agentAuthGeneration++;
         clearAgentAuthAutoSubmitTimer();
       }
       if (agentAuthCopy) {
@@ -3335,8 +3340,36 @@
       updateAgentAuthDoneVisibility();
     }
 
+    function updateSettingsAgentAuth() {
+      const harness = authHarness(state.agentAuth);
+      settingsAgentReauthenticate.classList.toggle("hidden", !isSupportedHarnessSelectionValue(harness));
+      settingsAgentReauthenticate.textContent = `Sign in to ${agentAuthLabel(harness)} again`;
+      settingsAgentReauthenticate.disabled = state.agentAuthBusy || state.settingsBusy;
+    }
+
+    async function reauthenticateAgent() {
+      if (state.agentAuthBusy || state.settingsBusy) return;
+      setAgentAuthBusy(true);
+      try {
+        await submitReviewSettings();
+        if (state.settingsOpen) return; // Keep edits visible if saving failed.
+        const harness = authHarness(state.agentAuth);
+        applyAgentAuthGate({ harness, required: true, ready: false, state: "checking", message: "Starting sign-in…" });
+        try {
+          const auth = await requestAgentAuth("/api/agent-auth/reauthenticate", "POST");
+          applyAgentAuthGate(auth);
+        } catch (err) {
+          applyAgentAuthGate({ harness, required: true, ready: false, state: "error", message: `Sign-in failed: ${err.message}` });
+        }
+      } finally {
+        setAgentAuthBusy(false);
+        scheduleAgentAuthRefresh();
+      }
+    }
+
     function applyAgentAuthGate(auth) {
       state.agentAuth = normalizeAgentAuth(auth);
+      updateSettingsAgentAuth();
       renderConfiguredAgent();
       const gateVisible = state.agentAuth.required && !state.agentAuth.ready;
       const selectionOptionsKey = state.agentAuth.configureOptions
@@ -3696,10 +3729,17 @@
     }
 
     async function loadAgentAuthStatus() {
+      if (state.agentAuthBusy) {
+        scheduleAgentAuthRefresh();
+        return;
+      }
+      const generation = state.agentAuthGeneration;
       try {
         const auth = await requestAgentAuth("/api/agent-auth", "GET");
+        if (state.agentAuthBusy || generation !== state.agentAuthGeneration) return;
         applyAgentAuthGate(auth);
       } catch (err) {
+        if (state.agentAuthBusy || generation !== state.agentAuthGeneration) return;
         applyAgentAuthGate({
           required: true,
           ready: false,
@@ -12921,6 +12961,7 @@
     }
     function setSettingsBusy(busy) {
       state.settingsBusy = Boolean(busy);
+      updateSettingsAgentAuth();
       window.CommitSigningSettings?.setModalBusy(Boolean(busy));
       reviewSettingsClose.disabled = Boolean(busy);
       for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches,
@@ -12933,6 +12974,7 @@
       event.preventDefault();
       setSettingsOpen(true);
     });
+    settingsAgentReauthenticate.addEventListener("click", () => void reauthenticateAgent());
     settingsGate.addEventListener("click", (event) => {
       if (event.target === settingsGate && !state.settingsBusy) void submitReviewSettings();
     });

@@ -20,6 +20,7 @@ func TestClaudeInvocationAuthenticationFailure(t *testing.T) {
 	}{
 		{"stdout", execx.Result{Stdout: diagnostic}, errors.New("exit status 1"), true},
 		{"stderr", execx.Result{Stderr: diagnostic}, errors.New("exit status 1"), true},
+		{"expired OAuth session", execx.Result{Stderr: "Failed to authenticate: OAuth session expired and could not be refreshed"}, errors.New("exit status 1"), true},
 		{"successful recovery", execx.Result{Stdout: diagnostic}, nil, false},
 		{"tool failure", execx.Result{Stderr: "curl: HTTP 401 Unauthorized"}, errors.New("exit status 1"), false},
 		{"quoted prompt", execx.Result{Stdout: "Investigate: " + diagnostic}, errors.New("exit status 1"), false},

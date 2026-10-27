@@ -105,6 +105,7 @@ type Server struct {
 	LoadLibraryTasks        func() ([]library.TaskSummary, error)
 	AgentAuthStatus         func(context.Context) (AgentAuthState, error)
 	StartAgentAuth          func(context.Context) (AgentAuthState, error)
+	ReauthenticateAgent     func(context.Context) (AgentAuthState, error)
 	VerifyAgentAuth         func(context.Context) (AgentAuthState, error)
 	ConfigureAgentAuth      func(context.Context, string) (AgentAuthState, error)
 	ReviewSettingsStatus    func(context.Context) (ReviewSettingsState, error)
@@ -288,6 +289,7 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/commit-signing/verify", s.handleCommitSigning)
 	mux.HandleFunc("/api/agent-auth", s.handleAgentAuthStatus)
 	mux.HandleFunc("/api/agent-auth/start-device", s.handleAgentAuthStart)
+	mux.HandleFunc("/api/agent-auth/reauthenticate", s.handleAgentReauthenticate)
 	mux.HandleFunc("/api/agent-auth/verify", s.handleAgentAuthVerify)
 	mux.HandleFunc("/api/agent-auth/configure", s.handleAgentAuthConfigure)
 	mux.HandleFunc("/api/tasks/", s.handleTaskAction)
@@ -1654,6 +1656,26 @@ func (s Server) handleAgentAuthStart(w http.ResponseWriter, r *http.Request) {
 		"ok":   true,
 		"auth": state,
 	})
+}
+
+func (s Server) handleAgentReauthenticate(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if s.ReauthenticateAgent == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]any{
+			"ok": false, "error": "agent reauthentication is unavailable", "auth": defaultAgentAuthState(),
+		})
+		return
+	}
+	state, err := s.ReauthenticateAgent(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"ok": false, "error": err.Error(), "auth": state,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "auth": state})
 }
 
 func (s Server) handleAgentAuthVerify(w http.ResponseWriter, r *http.Request) {

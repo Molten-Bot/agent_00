@@ -16,6 +16,7 @@ func TestClaudeAuthenticationFailureRecognizesProviderDiagnostics(t *testing.T) 
 
 	for _, message := range []string{
 		"Failed to authenticate. Please run /login again.",
+		"Failed to authenticate: OAuth session expired and could not be refreshed",
 		"  FAILED TO AUTHENTICATE.  ",
 		"API error: 401 Unauthorized",
 		"intro line\napi error: 401\nmore context",

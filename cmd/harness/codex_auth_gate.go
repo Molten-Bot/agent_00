@@ -220,6 +220,14 @@ func (g *codexAuthGate) Status(ctx context.Context) (web.AgentAuthState, error) 
 }
 
 func (g *codexAuthGate) StartDeviceAuth(ctx context.Context) (web.AgentAuthState, error) {
+	return g.startDeviceAuth(ctx, false)
+}
+
+func (g *codexAuthGate) Reauthenticate(ctx context.Context) (web.AgentAuthState, error) {
+	return g.startDeviceAuth(ctx, true)
+}
+
+func (g *codexAuthGate) startDeviceAuth(ctx context.Context, reauthenticate bool) (web.AgentAuthState, error) {
 	if g == nil {
 		return readyAgentAuthState(), nil
 	}
@@ -235,12 +243,12 @@ func (g *codexAuthGate) StartDeviceAuth(ctx context.Context) (web.AgentAuthState
 		return web.AgentAuthState{}, err
 	}
 	g.mu.Lock()
-	if g.ready {
+	if g.ready && !reauthenticate {
 		snap := g.snapshotLocked()
 		g.mu.Unlock()
 		return snap, nil
 	}
-	if g.state == "error" {
+	if g.state == "error" && !reauthenticate {
 		snap := g.snapshotLocked()
 		err := fmt.Errorf("cannot start codex device auth: %s", strings.TrimSpace(g.message))
 		g.mu.Unlock()
@@ -280,6 +288,21 @@ func (g *codexAuthGate) StartDeviceAuth(ctx context.Context) (web.AgentAuthState
 			release.Release()
 		}
 	}()
+
+	if reauthenticate {
+		// Keep cached login-status probes from accepting the old credentials.
+		// The marker is cleared by successful login (or a fresh auth.json).
+		if err := agentruntime.MarkCodexAuthenticationRequired(home); err != nil {
+			return web.AgentAuthState{}, err
+		}
+		g.mu.Lock()
+		g.ready = false
+		g.authBlocked = true
+		g.state = "needs_device_auth"
+		g.authURL = ""
+		g.deviceCode = ""
+		g.mu.Unlock()
+	}
 
 	tmpDir, err := os.MkdirTemp("", "agent_00-codex-auth-*")
 	if err != nil {
