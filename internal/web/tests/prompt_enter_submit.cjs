@@ -210,23 +210,47 @@ test('desktop: Enter in the repository field still runs the builder prompt', asy
   assert.match(runs[0], /Ship the fix/);
 });
 
-// A select runs the form from Enter the same way a single-line input does, and
-// the reviewer dropdown sits in the run form next to them.
+// Whether Enter in a select reaches implicit submission is the browser's call
+// and not the page's: Blink submits from one on Windows, Gecko and WebKit
+// never do, and Blink on macOS hands the key to the popup instead. So the
+// select pair pins the only half this page owns - the guard cancels Enter on a
+// software keyboard and keeps its hands off it on a hardware one - by watching
+// the key event rather than a run request that only some engines would send.
+// The listener sits on window so it runs after the form guard has had its say.
+async function pressEnterAndReportBlocked(page, selector) {
+  await page.evaluate(() => {
+    window.__enterBlocked = null;
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && window.__enterBlocked === null) {
+        window.__enterBlocked = event.defaultPrevented;
+      }
+    });
+  });
+  await page.locator(selector).press('Enter');
+  return page.evaluate(() => window.__enterBlocked);
+}
+
 test('phone: Enter in the reviewer select never runs the builder prompt', async t => {
   const { page, runs } = await openPage(t, { userAgent: ANDROID_UA });
   await page.locator('#builder-repo-input').fill('git@github.com:octo/demo.git');
   await page.locator('#builder-prompt-input').fill('Ship the fix');
-  await page.locator('#builder-reviewer-select').press('Enter');
+  assert.equal(
+    await pressEnterAndReportBlocked(page, '#builder-reviewer-select'),
+    true,
+    'a software keyboard must have Enter cancelled before a select can submit the form',
+  );
   await assertNoRun(page, runs, 'a software keyboard must not submit the form from a select');
 });
 
-test('desktop: Enter in the reviewer select still runs the builder prompt', async t => {
-  const { page, runs } = await openPage(t);
+test('desktop: Enter in the reviewer select is left to the browser', async t => {
+  const { page } = await openPage(t);
   await page.locator('#builder-repo-input').fill('git@github.com:octo/demo.git');
   await page.locator('#builder-prompt-input').fill('Ship the fix');
-  await page.locator('#builder-reviewer-select').press('Enter');
-  await waitForRuns(runs, 1);
-  assert.match(runs[0], /Ship the fix/);
+  assert.equal(
+    await pressEnterAndReportBlocked(page, '#builder-reviewer-select'),
+    false,
+    'a hardware keyboard must keep Enter in a select, whatever the engine then does with it',
+  );
 });
 
 // A kiosk or touch laptop reports a coarse pointer that cannot hover, exactly
