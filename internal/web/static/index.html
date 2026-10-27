@@ -12894,11 +12894,28 @@
       }
     }
 
+    // A software keyboard carries no Shift+Enter, so Enter is the only newline a
+    // phone or tablet can type: submitting on it would strand mobile prompts at
+    // a single line. A coarse pointer that cannot hover is the touch-only case,
+    // and the iOS/Android check covers tablets paired with a trackpad.
+    function usesSoftwareKeyboard() {
+      if (typeof window.matchMedia === "function" &&
+        window.matchMedia("(any-pointer: coarse)").matches &&
+        window.matchMedia("(any-hover: none)").matches) {
+        return true;
+      }
+      return hasNativeDictationKey();
+    }
+
     function submitBuilderPromptOnEnter(event) {
       if (event.defaultPrevented || event.key !== "Enter") {
         return;
       }
       if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) {
+        return;
+      }
+      // Desktop submits on Enter; mobile keeps it as a newline.
+      if (usesSoftwareKeyboard()) {
         return;
       }
       event.preventDefault();
