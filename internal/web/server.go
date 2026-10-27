@@ -489,6 +489,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           const CHAT_REPOS_PER_PAGE = 15;
           const SPEECH_SAMPLE_RATE = 16000;
           const SPEECH_STATUS_REFRESH_MS = 30000;
+          const SPEECH_NATIVE_DICTATION_HINT = "The prompt is focused: use the dictation key on your keyboard (the mic next to the spacebar on iOS) to speak into it.";
           const SPEECH_MIN_PEAK = 0.012;
           const SPEECH_MIN_RMS = 0.004;
           let repoPage = 1;
@@ -613,12 +614,46 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             return Boolean(control && control !== card);
           }
 
-          function browserSpeechCaptureSupported() {
-            return Boolean(
-              navigator.mediaDevices &&
-              typeof navigator.mediaDevices.getUserMedia === "function" &&
-              (window.AudioContext || window.webkitAudioContext)
-            );
+          function isIOSDevice() {
+            const ua = String(navigator.userAgent || "");
+            if (/iPad|iPhone|iPod/.test(ua)) return true;
+            return navigator.platform === "MacIntel" && Number(navigator.maxTouchPoints || 0) > 1;
+          }
+
+          function isNonSafariIOSBrowser() {
+            return isIOSDevice() && /FxiOS|CriOS|EdgiOS|OPiOS|GSA/i.test(String(navigator.userAgent || ""));
+          }
+
+          // Browsers expose getUserMedia only in secure contexts, and iOS
+          // reserves microphone access for Safari, so Firefox/Chrome on iOS and
+          // any plain-http LAN origin cannot record for Whisper. Report why so
+          // the mic button can offer the native keyboard dictation path.
+          function speechCaptureSupport() {
+            const hasCapture = Boolean(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function");
+            const hasAudioContext = Boolean(window.AudioContext || window.webkitAudioContext);
+            if (hasCapture && hasAudioContext) {
+              return { supported: true, reason: "", message: "" };
+            }
+            if (window.isSecureContext === false) {
+              const port = window.location.port ? ":" + window.location.port : "";
+              return {
+                supported: false,
+                reason: "insecure_context",
+                message: "Whisper dictation needs a secure page: browsers only share the microphone over HTTPS or localhost. Reach this UI at http://localhost" + port + " or behind HTTPS. " + SPEECH_NATIVE_DICTATION_HINT
+              };
+            }
+            if (isNonSafariIOSBrowser()) {
+              return {
+                supported: false,
+                reason: "ios_non_safari_browser",
+                message: "iOS grants microphone access to Safari only, so Whisper dictation cannot record here. Open this UI in Safari for Whisper. " + SPEECH_NATIVE_DICTATION_HINT
+              };
+            }
+            return {
+              supported: false,
+              reason: "unsupported_browser",
+              message: "This browser cannot capture microphone audio for Whisper. " + SPEECH_NATIVE_DICTATION_HINT
+            };
           }
 
           function activeChatPromptInput() {
@@ -670,20 +705,40 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             status.dataset.tone = tone || "";
           }
 
+          // Whisper capture needs the sidecar reachable; native keyboard
+          // dictation needs nothing, so keep the mic visible as a fallback
+          // affordance whenever this browser cannot record.
+          function chatSpeechAvailability() {
+            const support = speechCaptureSupport();
+            if (!speech.enabled) {
+              return { visible: false, nativeMessage: "", support: support };
+            }
+            if (!support.supported) {
+              return { visible: true, nativeMessage: support.message, support: support };
+            }
+            return { visible: Boolean(speech.reachable), nativeMessage: "", support: support };
+          }
+
           function syncChatSpeechButton() {
             if (!speechToggle) return;
-            const visible = browserSpeechCaptureSupported() && Boolean(speech.enabled) && Boolean(speech.reachable);
+            const availability = chatSpeechAvailability();
+            const visible = availability.visible;
+            const native = Boolean(visible && availability.nativeMessage);
             const busy = Boolean(speech.recording || speech.submitting);
+            const idleLabel = native ? "Dictate chat prompt with the keyboard dictation key" : "Dictate chat prompt";
             speechToggle.classList.toggle("hidden", !visible);
-            speechToggle.disabled = !visible || Boolean(speech.submitting);
+            speechToggle.classList.toggle("speech-native", native);
+            speechToggle.disabled = !visible || (!native && Boolean(speech.submitting));
             speechToggle.classList.toggle("recording", Boolean(speech.recording));
             speechToggle.setAttribute("aria-hidden", visible ? "false" : "true");
             speechToggle.setAttribute("aria-pressed", speech.recording ? "true" : "false");
-            speechToggle.setAttribute("aria-label", speech.recording ? "Stop dictation" : "Dictate chat prompt");
-            speechToggle.title = speech.recording ? "Stop dictation" : (busy ? "Transcribing" : "Dictate chat prompt");
-            speechToggle.innerHTML = speech.recording
-              ? '<i data-lucide="square" aria-hidden="true"></i><span class="sr-only">Stop dictation</span>'
-              : '<i data-lucide="mic" aria-hidden="true"></i><span class="sr-only">Dictate</span>';
+            speechToggle.setAttribute("aria-label", speech.recording ? "Stop dictation" : idleLabel);
+            speechToggle.title = speech.recording
+              ? "Stop dictation"
+              : (native ? availability.nativeMessage : (busy ? "Transcribing" : idleLabel));
+            const icon = speech.recording ? "square" : (native ? "keyboard" : "mic");
+            const srText = speech.recording ? "Stop dictation" : "Dictate";
+            speechToggle.innerHTML = '<i data-lucide="' + icon + '" aria-hidden="true"></i><span class="sr-only">' + srText + '</span>';
             if (window.lucide && typeof window.lucide.createIcons === "function") {
               window.lucide.createIcons({ root: speechToggle });
             }
@@ -717,11 +772,32 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           }
 
           async function toggleChatSpeechDictation() {
+            const support = speechCaptureSupport();
+            if (!support.supported) {
+              startChatNativeDictation(support);
+              return;
+            }
             if (speech.recording) {
               await stopChatSpeechDictation();
               return;
             }
             await startChatSpeechDictation();
+          }
+
+          // Whisper cannot record here, so hand the user to the platform
+          // dictation key by focusing the prompt and explaining the limitation.
+          function startChatNativeDictation(support) {
+            const input = activeChatPromptInput();
+            if (!input) {
+              setChatSpeechStatus("error", "Open a repository prompt before dictating.");
+              return;
+            }
+            input.focus();
+            const end = String(input.value || "").length;
+            input.selectionStart = end;
+            input.selectionEnd = end;
+            setChatSpeechStatus("warn", support && support.message ? support.message : "Microphone capture is unavailable in this browser. " + SPEECH_NATIVE_DICTATION_HINT);
+            trackChatEvent("chat_speech_native_fallback", { reason: support && support.reason ? support.reason : "unsupported_browser" });
           }
 
           async function startChatSpeechDictation() {
@@ -731,8 +807,9 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               return;
             }
             const stream = activeChatSpeechStream();
-            if (!browserSpeechCaptureSupported()) {
-              setChatSpeechStatus("error", "This browser does not support microphone capture.");
+            const support = speechCaptureSupport();
+            if (!support.supported) {
+              startChatNativeDictation(support);
               return;
             }
             if (!speech.reachable) {

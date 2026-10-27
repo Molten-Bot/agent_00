@@ -2391,6 +2391,14 @@ select.prompt-control {
   background: rgba(255, 59, 48, 0.08);
 }
 
+/* Microphone capture is unavailable (insecure origin or iOS non-Safari
+   browser); the button hands off to the platform dictation key instead. */
+.prompt-speech-toggle.speech-native,
+.chat-speech-toggle.speech-native {
+  border-style: dashed;
+  color: var(--text-soft);
+}
+
 .prompt-submit {
   border: 0;
   background: var(--brand-gradient);

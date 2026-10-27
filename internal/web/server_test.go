@@ -1397,9 +1397,13 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `state.speech.enabled && state.speech.reachable`) {
 		t.Fatalf("expected index html to show whisper connection only when speech sidecar is reachable")
 	}
-	if !strings.Contains(markup, `const available = supported && Boolean(state.speech.enabled) && Boolean(state.speech.reachable);`) ||
-		!strings.Contains(markup, `browserSpeechCaptureSupported() && Boolean(state.speech.enabled) && Boolean(state.speech.reachable),`) {
-		t.Fatalf("expected index html to hide speech dictation buttons when speech is unavailable")
+	if !strings.Contains(markup, `return { visible: Boolean(state.speech.reachable), nativeMessage: "", support };`) ||
+		!strings.Contains(markup, `const chatSpeechAvailability = speechToggleAvailability();`) {
+		t.Fatalf("expected index html to hide speech dictation buttons when the whisper sidecar is unreachable")
+	}
+	if !strings.Contains(markup, `if (!state.speech.enabled) {`) ||
+		!strings.Contains(markup, `return { visible: true, nativeMessage: support.message, support };`) {
+		t.Fatalf("expected index html to keep a native dictation fallback button when microphone capture is unsupported")
 	}
 	if !strings.Contains(markup, `body?.code === "speech_unavailable" || body?.code === "speech_disabled"`) ||
 		!strings.Contains(markup, `state.speech.reachable = false;`) {
@@ -2685,7 +2689,9 @@ func TestHandlerServesChatView(t *testing.T) {
 		`function activeChatPromptInput()`,
 		`function refreshChatSpeechStatus()`,
 		`fetch("/api/speech/status", { cache: "no-store" })`,
-		`const visible = browserSpeechCaptureSupported() && Boolean(speech.enabled) && Boolean(speech.reachable);`,
+		`function chatSpeechAvailability()`,
+		`return { visible: Boolean(speech.reachable), nativeMessage: "", support: support };`,
+		`function startChatNativeDictation(support)`,
 		`function toggleChatSpeechDictation()`,
 		`function startChatSpeechDictation()`,
 		`function stopChatSpeechDictation()`,
