@@ -497,6 +497,8 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           let repoSearchQuery = "";
           const speech = {
             enabled: false,
+            statusResolved: false,
+            captureBlock: null,
             reachable: false,
             recording: false,
             submitting: false,
@@ -642,6 +644,10 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           // over the microphone is knowable only once getUserMedia is called,
           // so speechCaptureDenial handles that runtime refusal.
           function speechCaptureSupport() {
+            // A refused microphone permission stays refused until the user
+            // changes a browser setting, so replay the remembered refusal
+            // instead of calling a getUserMedia that is already denied.
+            if (speech.captureBlock) return speech.captureBlock;
             const hasCapture = Boolean(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function");
             const hasAudioContext = Boolean(window.AudioContext || window.webkitAudioContext);
             if (hasCapture && hasAudioContext) {
@@ -748,12 +754,28 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             status.dataset.tone = tone || "";
           }
 
+          // Only a permission refusal is durable: a missing or busy microphone
+          // can come back, so those keep re-asking. Remembering the denial
+          // flips the button into its keyboard-dictation state and stops the
+          // next tap from re-triggering the same refusal.
+          function rememberSpeechCaptureBlock(denial) {
+            if (denial && !denial.supported && (denial.reason === "permission_denied" || denial.reason === "ios_non_safari_denied")) {
+              speech.captureBlock = denial;
+            }
+            return denial;
+          }
+
           // Whisper capture needs the sidecar reachable; native keyboard
           // dictation needs nothing, so keep the mic visible as a fallback
           // affordance whenever this browser cannot record.
           function chatSpeechAvailability() {
             const support = speechCaptureSupport();
-            if (!speech.enabled) {
+            // Keyboard dictation needs no server, so a browser that cannot
+            // record keeps the fallback button until a status poll actually
+            // reports dictation off. The very first poll may have failed,
+            // leaving nothing to preserve.
+            const enabled = speech.enabled || (!speech.statusResolved && !support.supported);
+            if (!enabled) {
               return { visible: false, nativeMessage: "", support: support };
             }
             if (!support.supported) {
@@ -793,6 +815,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               const body = await response.json().catch(() => null);
               const speechStatus = body && body.speech ? body.speech : {};
               speech.enabled = Boolean(speechStatus.enabled);
+              speech.statusResolved = true;
               speech.reachable = Boolean(speechStatus.reachable);
               if (window.AgentHeader && typeof window.AgentHeader.updateSpeechConnection === "function") {
                 window.AgentHeader.updateSpeechConnection(
@@ -826,21 +849,32 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               await stopChatSpeechDictation();
               return;
             }
+            // iOS raises the keyboard only for a focus() that runs inside the
+            // tap gesture. getUserMedia is awaited next, so claim focus now: if
+            // capture is refused, the keyboard fallback is already usable.
+            focusChatPromptInput();
             await startChatSpeechDictation();
+          }
+
+          function focusChatPromptInput() {
+            const input = activeChatPromptInput();
+            if (!input) return null;
+            input.focus();
+            const end = String(input.value || "").length;
+            input.selectionStart = end;
+            input.selectionEnd = end;
+            return input;
           }
 
           // Whisper cannot record here, so hand the user to the platform
           // dictation key by focusing the prompt and explaining the limitation.
           function startChatNativeDictation(support) {
-            const input = activeChatPromptInput();
+            const input = focusChatPromptInput();
             if (!input) {
               setChatSpeechStatus("error", "Open a repository prompt before dictating.");
               return;
             }
-            input.focus();
-            const end = String(input.value || "").length;
-            input.selectionStart = end;
-            input.selectionEnd = end;
+            syncChatSpeechButton();
             setChatSpeechStatus("warn", support && support.message ? support.message : "Microphone capture is unavailable in this browser. " + SPEECH_NATIVE_DICTATION_HINT);
             trackChatEvent("chat_speech_native_fallback", { reason: support && support.reason ? support.reason : "unsupported_browser" });
           }
@@ -876,7 +910,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               });
             } catch (err) {
               trackChatEvent("chat_speech_failed", { stage: "capture" });
-              startChatNativeDictation(speechCaptureDenial(err));
+              startChatNativeDictation(rememberSpeechCaptureBlock(speechCaptureDenial(err)));
               return;
             }
 

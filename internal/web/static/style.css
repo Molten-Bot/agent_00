@@ -2109,11 +2109,16 @@ select.prompt-control {
   transition: opacity 220ms ease;
 }
 
+/* Same reason as .chat-repo-submit-status: the keyboard dictation hint is
+   longer than one line and must stay readable instead of being ellipsized. */
 #local-prompt-status {
   color: var(--muted);
   font-size: 0.74rem;
   line-height: 1.3;
   min-height: 1.3em;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
 }
 
 .submit-status-inline.is-visible {
@@ -4077,6 +4082,8 @@ select.prompt-control {
   font-size: 0.86rem;
 }
 
+/* Dictation fallback messages explain which key to press, so they must wrap
+   rather than ellipsize away their instruction. */
 .chat-repo-submit-status {
   flex: 1 1 auto;
   min-width: 0;
@@ -4085,9 +4092,8 @@ select.prompt-control {
   font-size: 0.8rem;
   font-weight: 800;
   line-height: 1.35;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .chat-repo-submit-status[data-tone="ok"] {

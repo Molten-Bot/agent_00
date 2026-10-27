@@ -1401,12 +1401,17 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `const chatSpeechAvailability = speechToggleAvailability();`) {
 		t.Fatalf("expected index html to hide speech dictation buttons when the whisper sidecar is unreachable")
 	}
-	if !strings.Contains(markup, `if (!state.speech.enabled) {`) ||
+	if !strings.Contains(markup, `const enabled = state.speech.enabled || (!state.speech.statusResolved && !support.supported);`) ||
 		!strings.Contains(markup, `return { visible: true, nativeMessage: support.message, support };`) {
 		t.Fatalf("expected index html to keep a native dictation fallback button when microphone capture is unsupported")
 	}
-	if !strings.Contains(markup, `startNativeDictation(target, speechCaptureDenial(err));`) {
-		t.Fatalf("expected index html to hand a refused getUserMedia call to native keyboard dictation")
+	if !strings.Contains(markup, `startNativeDictation(target, rememberSpeechCaptureBlock(speechCaptureDenial(err)));`) ||
+		!strings.Contains(markup, `if (state.speech.captureBlock) return state.speech.captureBlock;`) {
+		t.Fatalf("expected index html to hand a refused getUserMedia call to native keyboard dictation and remember the refusal")
+	}
+	if !strings.Contains(markup, `focusSpeechInput(target);
+      await startPromptSpeechDictation(target);`) {
+		t.Fatalf("expected index html to focus the prompt inside the tap gesture, before awaiting getUserMedia")
 	}
 	if !strings.Contains(markup, `body?.code === "speech_unavailable" || body?.code === "speech_disabled"`) ||
 		!strings.Contains(markup, `state.speech.reachable = false;`) {
@@ -2695,7 +2700,11 @@ func TestHandlerServesChatView(t *testing.T) {
 		`function chatSpeechAvailability()`,
 		`return { visible: Boolean(speech.reachable), nativeMessage: "", support: support };`,
 		`function startChatNativeDictation(support)`,
-		`startChatNativeDictation(speechCaptureDenial(err));`,
+		`startChatNativeDictation(rememberSpeechCaptureBlock(speechCaptureDenial(err)));`,
+		`function focusChatPromptInput()`,
+		"focusChatPromptInput();\n            await startChatSpeechDictation();",
+		`const enabled = speech.enabled || (!speech.statusResolved && !support.supported);`,
+		`if (speech.captureBlock) return speech.captureBlock;`,
 		`function toggleChatSpeechDictation()`,
 		`function startChatSpeechDictation()`,
 		`function stopChatSpeechDictation()`,
@@ -3138,6 +3147,13 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 		!strings.Contains(css, ".chat-repo-prompt {\n  width: 100%;\n  min-height: 88px;\n  resize: vertical;\n  padding: 10px 12px;") ||
 		!strings.Contains(css, ".chat-speech-toggle.recording {") {
 		t.Fatalf("expected stylesheet to place the chat transcribe button in the bottom action row outside the text box")
+	}
+	// The keyboard dictation fallback message names the key to press, so the
+	// status surfaces that carry it must wrap instead of ellipsizing.
+	normalizedCSS := normalizeCSSWhitespace(css)
+	if !strings.Contains(normalizedCSS, ".chat-repo-submit-status { flex: 1 1 auto; min-width: 0; min-height: 1.2em; color: var(--muted); font-size: 0.8rem; font-weight: 800; line-height: 1.35; white-space: normal; overflow-wrap: anywhere; }") ||
+		!strings.Contains(normalizedCSS, "#local-prompt-status { color: var(--muted); font-size: 0.74rem; line-height: 1.3; min-height: 1.3em; white-space: normal; overflow-wrap: anywhere; text-overflow: clip; }") {
+		t.Fatalf("expected dictation status surfaces to wrap long keyboard dictation messages instead of clipping them")
 	}
 	if !strings.Contains(css, ".chat-repo-message[data-tone=\"success\"] {") ||
 		!strings.Contains(css, ".chat-repo-message[data-tone=\"failure\"] {") ||

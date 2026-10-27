@@ -787,11 +787,12 @@ func TestPromptImageCapsEnforcedInBrowser(t *testing.T) {
 }
 
 // TestSpeechDictationFallbackInBrowser exercises speechCaptureSupport and
-// speechToggleAvailability in static/index.html. Both are unexported closures
-// with no Go-reachable equivalent, so this drives the real mic button in a
-// headless browser with microphone capture removed the way an insecure origin
-// or a non-Safari iOS browser removes it, confirming the button stays visible
-// and hands off to the platform dictation key.
+// speechToggleAvailability in static/index.html, plus the duplicate copy the
+// /chat page carries in this file. All are unexported closures with no
+// Go-reachable equivalent, so this drives the real mic button in a headless
+// browser with microphone capture removed the way an insecure origin or a
+// non-Safari iOS browser removes it, confirming the button stays visible, hands
+// off to the platform dictation key, and takes focus inside the tap gesture.
 func TestSpeechDictationFallbackInBrowser(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not available, skipping speech dictation fallback check")
