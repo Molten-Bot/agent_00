@@ -189,13 +189,6 @@ func TestClaudeConfigDirMustBeBounded(t *testing.T) {
 			wantErr:   "is a home directory",
 		},
 		{
-			name:      "missing directory",
-			configDir: filepath.Join(home, "absent"),
-			workspace: workspace,
-			target:    repo,
-			wantErr:   "inspect Claude configuration directory",
-		},
-		{
 			name:      "regular file",
 			configDir: writeClaudeConfigProbeFile(t, filepath.Join(home, "config-file")),
 			workspace: workspace,
@@ -235,6 +228,83 @@ func writeClaudeConfigProbeFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// The CLI creates $CLAUDE_CONFIG_DIR on first use, so the harness must still
+// grant it. Requiring the directory to exist turned a first run on a fresh
+// machine into a hard BuildCommand failure before the agent ever started -
+// the same loss of local validation the writable root exists to prevent.
+func TestClaudeConfigDirIsGrantedBeforeItExists(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Never created: the CLI writes it on demand inside the sandbox.
+	configDir := filepath.Join(t.TempDir(), ".claude")
+
+	rt, err := Resolve(HarnessClaude, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := rt.BuildCommand(repo, "fix it", RunOptions{
+		WorkspaceDir: root,
+		Env:          []string{"CLAUDE_CONFIG_DIR=" + configDir},
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand() error = %v, want a writable grant for the not-yet-created config dir", err)
+	}
+
+	resolvedParent, err := filepath.EvalSymlinks(filepath.Dir(configDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedConfig := filepath.Join(resolvedParent, filepath.Base(configDir))
+	found := false
+	for _, arg := range cmd.Args {
+		if strings.HasPrefix(arg, "sandbox_workspace_write.writable_roots=") && strings.Contains(arg, resolvedConfig) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Claude sandbox did not keep %q writable: %v", resolvedConfig, cmd.Args)
+	}
+}
+
+// A configuration directory the harness cannot inspect is still refused: only
+// a genuinely absent path is treated as create-on-demand.
+func TestClaudeConfigDirRejectsUnreadableParent(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	configDir := filepath.Join(blocked, ".claude")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blocked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o700) })
+
+	rt, err := Resolve(HarnessClaude, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = rt.BuildCommand(repo, "fix it", RunOptions{
+		WorkspaceDir: root,
+		Env:          []string{"CLAUDE_CONFIG_DIR=" + configDir},
+	})
+	if err == nil {
+		t.Fatal("BuildCommand() error = nil, want the unreadable configuration directory refused")
+	}
 }
 
 func TestBuildCommandRejectsDirectoriesOutsideTask(t *testing.T) {

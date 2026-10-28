@@ -369,12 +369,18 @@ func claudeConfigDirInsideWorkspace(configDir string, opts RunOptions) bool {
 // the filesystem the agent may write: "/" or "$HOME" would silently widen the
 // grant from one configuration directory to everything the operator owns.
 func validateClaudeConfigDir(configDir, targetDir string, opts RunOptions) error {
-	info, err := os.Stat(configDir)
-	if err != nil {
-		return fmt.Errorf("inspect Claude configuration directory %q: %w", configDir, err)
-	}
-	if !info.IsDir() {
+	// The CLI creates its configuration directory on demand, so a path that
+	// does not exist yet is granted like any other: refusing it would fail
+	// every Claude invocation on a machine whose configuration directory has
+	// not been written yet, which is the same outage this writable root
+	// exists to prevent. resolveSandboxPath already rejected a dangling
+	// symlink and resolved every existing ancestor, so what remains to check
+	// is that anything already at the path is a directory.
+	switch info, err := os.Stat(configDir); {
+	case err == nil && !info.IsDir():
 		return fmt.Errorf("resolved CLAUDE_CONFIG_DIR %q is not a directory", configDir)
+	case err != nil && !os.IsNotExist(err):
+		return fmt.Errorf("inspect Claude configuration directory %q: %w", configDir, err)
 	}
 	if filepath.Dir(configDir) == configDir {
 		return fmt.Errorf("resolved CLAUDE_CONFIG_DIR %q is a filesystem root", configDir)
