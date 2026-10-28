@@ -16,12 +16,15 @@ import (
 )
 
 // cleanReviewCycleRunner answers every review pass with a clean verdict unless
-// reviewStdout replaces that payload.
+// reviewStdout replaces that payload. Repair passes are counted separately so a
+// test can tell a review invocation from the fix invocation it triggered.
 type cleanReviewCycleRunner struct {
 	t            *testing.T
 	reviewStdout string
 	mu           sync.Mutex
 	reviews      int
+	fixes        int
+	fixPrompt    string
 	comments     int
 	checks       int
 	released     int
@@ -36,6 +39,11 @@ func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (exec
 
 	switch cmd.Name {
 	case "codex":
+		if strings.Contains(cmd.Stdin, "Automated review repair pass") {
+			r.fixes++
+			r.fixPrompt = cmd.Stdin
+			return execx.Result{Stdout: "Reviewed the findings; no change was warranted."}, nil
+		}
 		r.reviews++
 		r.prompts = append(r.prompts, cmd.Stdin)
 		r.argv = append(r.argv, append([]string(nil), cmd.Args...))
@@ -150,9 +158,11 @@ func TestBlockingReviewFindingsSplitsAdvisoryFromBlockingSeverities(t *testing.T
 	}
 }
 
-// A review cycle that only turns up advisory nitpicks has nothing left for a
-// fix pass to repair. It must finish successfully so the pull request leaves
-// draft, with the nitpicks reported in the review comment for a human.
+// A review cycle that only turns up advisory nitpicks must never fail the run:
+// the nitpicks are reported in the review comment for a human and the pull
+// request still leaves draft. The cycle may spend one otherwise-unused fix pass
+// trying to repair them, and when that pass declines to change anything the
+// cycle finishes successfully instead of reporting exhausted passes.
 func TestRunFinalReviewCycleReleasesWhenOnlyAdvisoryFindingsRemain(t *testing.T) {
 	runner := &cleanReviewCycleRunner{
 		t:            t,
@@ -191,13 +201,12 @@ func TestRunFinalReviewCycleReleasesWhenOnlyAdvisoryFindingsRemain(t *testing.T)
 	if err != nil || exitCode != ExitSuccess || stage != "" {
 		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
 	}
-	if runner.reviews != 1 || runner.comments != 1 {
-		t.Fatalf("review/comment counts = %d/%d, want 1/1", runner.reviews, runner.comments)
+	if runner.reviews != 1 || runner.fixes != 1 || runner.comments != 1 {
+		t.Fatalf("review/fix/comment counts = %d/%d/%d, want 1/1/1", runner.reviews, runner.fixes, runner.comments)
 	}
-	for _, prompt := range runner.prompts {
-		if strings.Contains(prompt, "Automated review repair pass") {
-			t.Fatal("advisory-only findings must not start a repair pass")
-		}
+	// The single advisory pass has to be handed the nitpick it exists to repair.
+	if !strings.Contains(runner.fixPrompt, "[Low] main.go:12 - Rename the local variable") {
+		t.Fatalf("advisory repair pass did not carry the advisory finding:\n%s", runner.fixPrompt)
 	}
 }
 
@@ -320,16 +329,21 @@ func TestRunFinalReviewCycleUsesReadOnlySandboxOnCodex(t *testing.T) {
 	}
 }
 
+// finalFindingReviewCycleRunner answers review passes with one finding whose
+// findingSeverity defaults to Medium, which blocks the pull request. Setting an
+// advisory severity instead drives the non-blocking path through the same
+// command script.
 type finalFindingReviewCycleRunner struct {
-	t            *testing.T
-	findingsPass int
-	neverClean   bool
-	reviews      int
-	fixes        int
-	statusCalls  int
-	comments     int
-	checks       int
-	fixPrompt    string
+	t               *testing.T
+	findingSeverity string
+	findingsPass    int
+	neverClean      bool
+	reviews         int
+	fixes           int
+	statusCalls     int
+	comments        int
+	checks          int
+	fixPrompt       string
 }
 
 func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, error) {
@@ -343,7 +357,11 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 		}
 		r.reviews++
 		if r.neverClean || r.reviews == r.findingsPass {
-			return execx.Result{Stdout: "**Positive**\n- Scoped change.\n\n**Negative**\n- [Medium] main.go:12 - Handle the error.\n\n```json\n{\"status\":\"findings\",\"mergeReady\":false,\"summary\":\"fix needed\",\"positives\":[\"Scoped change.\"],\"findings\":[{\"severity\":\"Medium\",\"path\":\"main.go\",\"line\":12,\"title\":\"Handle the error\"}]}\n```"}, nil
+			severity := r.findingSeverity
+			if severity == "" {
+				severity = "Medium"
+			}
+			return execx.Result{Stdout: fmt.Sprintf("**Positive**\n- Scoped change.\n\n**Negative**\n- [%s] main.go:12 - Handle the error.\n\n```json\n{\"status\":\"findings\",\"mergeReady\":false,\"summary\":\"fix needed\",\"positives\":[\"Scoped change.\"],\"findings\":[{\"severity\":%q,\"path\":\"main.go\",\"line\":12,\"title\":\"Handle the error\"}]}\n```", severity, severity)}, nil
 		}
 		return execx.Result{Stdout: "**Positive**\n- Scoped change.\n\n**Negative**\n- No material issues found.\n\n```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"clean\",\"positives\":[\"Scoped change.\"],\"findings\":[]}\n```"}, nil
 	case "git":
@@ -522,6 +540,55 @@ func TestRunFinalReviewCycleContinuesAfterFixUntilClean(t *testing.T) {
 	}
 	if runner.reviews != 2 || runner.fixes != 1 || runner.comments != 2 || runner.checks != 1 {
 		t.Fatalf("reviews/fixes/comments/checks = %d/%d/%d/%d, want 2/1/2/1", runner.reviews, runner.fixes, runner.comments, runner.checks)
+	}
+}
+
+// The advisory fix pass is offered at most once per cycle. A review that keeps
+// reporting the same nitpick after that pass landed must release the pull
+// request rather than spending the rest of the budget on cosmetic churn.
+func TestRunFinalReviewCycleSpendsAtMostOneAdvisoryFixPass(t *testing.T) {
+	runner := &finalFindingReviewCycleRunner{t: t, neverClean: true, findingSeverity: "Low"}
+	h := New(runner)
+	h.FinalReviewPasses = 3
+	h.PRChecksWatchTimeout = -1
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:                "https://github.com/acme/repo.git",
+		Dir:                repoDir,
+		RelDir:             "repo",
+		Branch:             "feature",
+		BaseBranch:         "main",
+		PRURL:              "https://github.com/acme/repo/pull/7",
+		Changed:            true,
+		WriteAccessChecked: true,
+		WriteAccessAllowed: true,
+		PushRemote:         publishRemoteOrigin,
+	}
+
+	exitCode, stage, err := h.runFinalReviewCycle(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "fix review"},
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	// Advisory findings never block, so the second pass releases the pull
+	// request instead of failing it the way surviving blocking findings do.
+	if err != nil || exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
+	}
+	if runner.reviews != 2 || runner.fixes != 1 {
+		t.Fatalf("review/fix calls = %d/%d, want 2/1 (the advisory budget is spent once)", runner.reviews, runner.fixes)
 	}
 }
 

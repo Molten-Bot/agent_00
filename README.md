@@ -346,9 +346,13 @@ request leaves draft.
 
 Severity decides what blocks. Critical, High, Medium, and unlabeled findings
 drive a repair pass, and the run fails with the pull request left in draft when
-they survive every configured pass. Low-severity nitpicks are posted in the
-review comment for a human but never start a repair pass or hold the pull
-request in draft, so a cycle that re-reviews its own fixes cannot spend its
+they survive every configured pass. Low-severity nitpicks never hold the pull
+request in draft. They are posted in the review comment for a human, they ride
+along in the repair prompt whenever a blocking pass is already running, and a
+cycle that finds nothing blocking may spend one otherwise-unused pass on them.
+That advisory pass is offered at most once per cycle and never on the final
+confirmation pass, and a pass that declines to change anything still releases
+the pull request, so a cycle that re-reviews its own fixes cannot spend its
 whole budget on cosmetic churn.
 
 ### Go Module
