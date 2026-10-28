@@ -26,6 +26,12 @@ func commitSigningEnabledFromEnv() (*bool, error) {
 	return &enabled, nil
 }
 
+// commitSigningEnvEnforced reports whether the environment pins the signing
+// policy. Settings cannot change it, so messages point at the variable instead.
+func commitSigningEnvEnforced() bool {
+	return strings.TrimSpace(os.Getenv(commitSigningEnabledEnv)) != ""
+}
+
 // ApplyEnvironment provisions signing at startup through the same validation
 // and private key store as Settings. Secrets never enter the runtime JSON.
 // Enabled signing must be ready before the server starts accepting tasks.

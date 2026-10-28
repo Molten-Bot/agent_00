@@ -6,6 +6,7 @@
   const passphrase = element('passphrase');
   const publicKey = element('public-key');
   const status = element('status');
+  const setupRequired = element('setup-required');
   let configured = false;
   let busy = false;
   let modalBusy = false;
@@ -42,7 +43,21 @@
       registered: 'Registered with GitHub. Local signing works.',
     };
     element('registration').textContent = labels[settings.registration] || labels.unchecked;
+    applySetupRequirement(settings);
     setBusy(busy);
+  }
+  // Signing can be required before a key exists, which blocks every task. Say so
+  // here, next to the key field, and tell the app so it can hold submissions.
+  function applySetupRequirement(settings) {
+    const required = Boolean(settings.setup_required);
+    const message = required
+      ? settings.message || 'Commit signing is required, but no signing key is saved yet.'
+      : '';
+    setupRequired.textContent = message;
+    setupRequired.hidden = !required;
+    window.dispatchEvent(new CustomEvent('commit-signing-required', {
+      detail: { required, message, envEnforced: Boolean(settings.env_enforced) },
+    }));
   }
   async function request(path, payload, preserveDraftOnError = false) {
     const response = await fetch(`/api/commit-signing${path}`, {
@@ -117,5 +132,7 @@
   });
   window.addEventListener('commit-signing-open', load);
   window.addEventListener('commit-signing-close', clearSecrets);
-  if (!document.getElementById('settings-gate').classList.contains('hidden')) void load();
+  // Load on boot even when settings are closed: a required key that is missing
+  // has to surface before the operator queues work that cannot run.
+  void load();
 })();

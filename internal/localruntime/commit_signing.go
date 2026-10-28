@@ -30,7 +30,11 @@ type CommitSigningState struct {
 	Account      string `json:"account,omitempty"`
 	Registered   bool   `json:"registered"`
 	Registration string `json:"registration"`
-	Message      string `json:"message,omitempty"`
+	// SetupRequired holds tasks until a signing key exists. EnvEnforced marks
+	// the policy as pinned by the environment, which Settings cannot turn off.
+	SetupRequired bool   `json:"setup_required"`
+	EnvEnforced   bool   `json:"env_enforced"`
+	Message       string `json:"message,omitempty"`
 }
 
 // SigningSettings shares the same store and resolver across UI and CLI tasks.
@@ -101,6 +105,39 @@ func signingState(cfg gitsigning.Config) CommitSigningState {
 func (s SigningSettings) Status(context.Context) (CommitSigningState, error) {
 	cfg, err := s.config()
 	return signingState(cfg), err
+}
+
+// SetupRequirement reports why commit signing cannot sign task commits yet. It
+// is a local check with no GitHub calls, so callers can hold tasks and point
+// the operator at Settings → Commit signing instead of failing mid-run.
+// It returns nil when signing is off or a key is saved.
+func (s SigningSettings) SetupRequirement() error {
+	cfg, err := s.config()
+	if err != nil {
+		return err
+	}
+	if !cfg.Enabled || cfg.KeyID != "" {
+		return nil
+	}
+	if commitSigningEnvEnforced() {
+		return fmt.Errorf("%w: %s requires a signing key; save one in Settings → Commit signing before running tasks", gitsigning.ErrSetup, commitSigningEnabledEnv)
+	}
+	return fmt.Errorf("%w: save a signing key first", gitsigning.ErrSetup)
+}
+
+// ApplySetupRequirement annotates a state for the UI so Settings can explain
+// the hold and keep the signing section in front of the operator.
+func (s SigningSettings) ApplySetupRequirement(state CommitSigningState) CommitSigningState {
+	state.EnvEnforced = commitSigningEnvEnforced()
+	requirement := s.SetupRequirement()
+	if requirement == nil {
+		return state
+	}
+	state.SetupRequired = true
+	if strings.TrimSpace(state.Message) == "" {
+		state.Message = requirement.Error()
+	}
+	return state
 }
 
 func (s SigningSettings) save(cfg gitsigning.Config) error {

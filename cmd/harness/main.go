@@ -286,8 +286,14 @@ func runServer(args []string) int {
 	defer stop()
 
 	if err := signingSettings(cfg, runner).ApplyEnvironment(ctx); err != nil {
-		writeStderrLine(logger, fmt.Sprintf("signing configuration error: %v", err))
-		return app.ExitConfig
+		if !errors.Is(err, gitsigning.ErrSetup) {
+			writeStderrLine(logger, fmt.Sprintf("signing configuration error: %v", err))
+			return app.ExitConfig
+		}
+		// Exiting here would leave the operator with an unreachable UI and no
+		// way to supply the key. Serve instead: the browser lands on
+		// Settings → Commit signing and tasks stay blocked until setup passes.
+		daemonLogger("commit_signing status=error event=setup_required err=%q", err)
 	}
 
 	if runtimeErr == nil {
@@ -308,6 +314,11 @@ func runServer(args []string) int {
 	var queueEscalatedNoChangesFollowUp func(requestID string, result app.Result, runCfg config.Config)
 	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error)
 	enqueueLocalRun = func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error) {
+		// Re-read on every submission so saving a key in Settings releases
+		// queued work without restarting the server.
+		if err := signingSettings(cfg, runner).SetupRequirement(); err != nil {
+			return "", err
+		}
 		if authGate != nil {
 			authState, authErr := authGate.Status(reqCtx)
 			if authErr != nil {

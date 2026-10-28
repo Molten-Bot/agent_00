@@ -150,6 +150,56 @@ func TestSigningEnvironmentInvalidInput(t *testing.T) {
 	}
 }
 
+func TestSigningSetupRequirementHoldsTasksUntilKeyExists(t *testing.T) {
+	clearSigningEnvironment(t)
+	path := filepath.Join(t.TempDir(), "config.json")
+	store := SigningSettings{Path: path, GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: "://invalid"} }}
+
+	if err := store.SetupRequirement(); err != nil {
+		t.Fatalf("signing off should not hold tasks: %v", err)
+	}
+
+	// The reported failure: required by environment, no key saved anywhere.
+	t.Setenv(commitSigningEnabledEnv, "true")
+	err := store.SetupRequirement()
+	if !errors.Is(err, gitsigning.ErrSetup) {
+		t.Fatalf("expected a setup hold: %v", err)
+	}
+	if !strings.Contains(err.Error(), commitSigningEnabledEnv) {
+		t.Fatalf("hold should name the environment variable: %v", err)
+	}
+	state := store.ApplySetupRequirement(CommitSigningState{})
+	if !state.SetupRequired || !state.EnvEnforced || state.Message != err.Error() {
+		t.Fatalf("ui state should carry the hold: %+v", state)
+	}
+
+	// A saved enabled flag without a key holds tasks too, without blaming the
+	// environment it did not come from.
+	t.Setenv(commitSigningEnabledEnv, "")
+	if err := store.save(gitsigning.Config{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	err = store.SetupRequirement()
+	if !errors.Is(err, gitsigning.ErrSetup) {
+		t.Fatalf("expected a setup hold for the saved preference: %v", err)
+	}
+	if strings.Contains(err.Error(), commitSigningEnabledEnv) {
+		t.Fatalf("saved preference should not blame the environment: %v", err)
+	}
+
+	// Saving a key releases the hold without a restart.
+	if _, err := store.Configure(context.Background(), CommitSigningRequest{PrivateKey: signingTestPrivateKey(t), Passphrase: "test-passphrase"}); !errors.Is(err, gitsigning.ErrSetup) {
+		t.Fatalf("offline identity lookup should still import the key: %v", err)
+	}
+	t.Setenv(commitSigningEnabledEnv, "true")
+	if err := store.SetupRequirement(); err != nil {
+		t.Fatalf("saved key should release the hold: %v", err)
+	}
+	if state := store.ApplySetupRequirement(CommitSigningState{}); state.SetupRequired {
+		t.Fatalf("ui state should clear the hold: %+v", state)
+	}
+}
+
 func TestSigningEnvironmentUnsetPreservesSettings(t *testing.T) {
 	clearSigningEnvironment(t)
 	store := SigningSettings{Path: filepath.Join(t.TempDir(), "config.json")}

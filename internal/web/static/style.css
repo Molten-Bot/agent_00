@@ -8995,3 +8995,15 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   .chat-head { padding-bottom: 6px; }
   .chat-controls, .chat-repo-grid, .chat-repo-pagination { padding-top: 6px; }
 }
+
+/* Commit signing holds every task until a key is saved: keep the reason in
+   front of the key field, and readable in each theme. */
+.commit-signing-required {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border-left: 3px solid #e5484d;
+  background: rgba(229, 72, 77, 0.14);
+  font-weight: 600;
+}
+.commit-signing-required[hidden] { display: none; }
