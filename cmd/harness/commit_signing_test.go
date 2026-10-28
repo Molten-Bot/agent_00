@@ -51,6 +51,21 @@ func TestSigningFailuresDoNotQueueCodingWork(t *testing.T) {
 	}
 }
 
+func TestSigningSetupRequiredOnlyForEnabledMissingKey(t *testing.T) {
+	t.Setenv("HARNESS_COMMIT_SIGNING_ENABLED", "true")
+	store := signingSettings(localruntime.InitConfig{RuntimeConfigPath: filepath.Join(t.TempDir(), "runtime.json")}, execx.OSRunner{})
+	err := store.ApplyEnvironment(context.Background())
+	if !signingSetupRequired(context.Background(), store, err) {
+		t.Fatalf("missing required key was not recognized as UI-recoverable: %v", err)
+	}
+
+	t.Setenv("HARNESS_COMMIT_SIGNING_ENABLED", "invalid")
+	err = store.ApplyEnvironment(context.Background())
+	if signingSetupRequired(context.Background(), store, err) {
+		t.Fatalf("invalid signing policy was treated as UI-recoverable: %v", err)
+	}
+}
+
 func TestSigningEnvironmentCLIRejectsInvalidPolicyAtStartup(t *testing.T) {
 	t.Setenv("HARNESS_COMMIT_SIGNING_ENABLED", "invalid")
 	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", "")

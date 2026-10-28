@@ -9,7 +9,7 @@ let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
 
-async function openSettings(t, handler, viewport = { width: 1280, height: 900 }) {
+async function openSettings(t, handler, viewport = { width: 1280, height: 900 }, selectSigning = true) {
   const page = await browser.newPage({ viewport });
   t.after(() => page.close());
   const errors = [];
@@ -20,13 +20,20 @@ async function openSettings(t, handler, viewport = { width: 1280, height: 900 })
   await page.route('**/api/review-settings', route => route.fulfill({ json: { ok: true, settings: { merge_method: 'squash', review_level: 'off' } } }));
   await page.route('**/api/commit-signing**', handler);
   await page.goto(`${baseURL}/#settings`);
-  await page.locator('#settings-tab-signing').click();
+  if (selectSigning) await page.locator('#settings-tab-signing').click();
   await page.waitForFunction(() => !document.getElementById('commit-signing-save').disabled);
   return page;
 }
 
 const empty = { enabled: false, configured: false, registration: 'not_configured' };
 const saved = { ...empty, configured: true, public_key: 'ssh-ed25519 TEST_PUBLIC_KEY', fingerprint: 'SHA256:test', account: 'test-bot', registration: 'not_registered' };
+
+test('required signing opens settings on signing tab and explains task block', async t => {
+  const page = await openSettings(t, route => route.fulfill({ json: { ok: true, settings: { ...empty, enabled: true } } }), undefined, false);
+  assert.equal(await page.locator('#settings-gate').isVisible(), true);
+  assert.equal(await page.locator('#settings-tab-signing').getAttribute('aria-selected'), 'true');
+  assert.match(await page.locator('#commit-signing-status').textContent(), /Tasks cannot run until you save a signing key/);
+});
 
 test('import, register, enable, reload and disable without returning private material', async t => {
   let settings = { ...empty };

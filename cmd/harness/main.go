@@ -285,9 +285,13 @@ func runServer(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := signingSettings(cfg, runner).ApplyEnvironment(ctx); err != nil {
-		writeStderrLine(logger, fmt.Sprintf("signing configuration error: %v", err))
-		return app.ExitConfig
+	signing := signingSettings(cfg, runner)
+	if err := signing.ApplyEnvironment(ctx); err != nil {
+		if !signingSetupRequired(ctx, signing, err) {
+			writeStderrLine(logger, fmt.Sprintf("signing configuration error: %v", err))
+			return app.ExitConfig
+		}
+		daemonLogger("signing status=required err=%q; web UI remains available for setup", err)
 	}
 
 	if runtimeErr == nil {
@@ -308,6 +312,9 @@ func runServer(args []string) int {
 	var queueEscalatedNoChangesFollowUp func(requestID string, result app.Result, runCfg config.Config)
 	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error)
 	enqueueLocalRun = func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error) {
+		if _, err := signing.Snapshot(reqCtx); err != nil {
+			return "", fmt.Errorf("tasks blocked until commit signing is configured in Settings → Commit signing: %w", err)
+		}
 		if authGate != nil {
 			authState, authErr := authGate.Status(reqCtx)
 			if authErr != nil {
@@ -744,7 +751,6 @@ func runServer(args []string) int {
 				uiServer.ConfigureAgentAuth = authGate.Configure
 			}
 		}
-		signing := signingSettings(cfg, runner)
 		uiServer.CommitSigning = &signing
 		uiServer.ReviewSettingsStatus = func(context.Context) (web.ReviewSettingsState, error) {
 			return currentReviewSettingsState(cfg), nil

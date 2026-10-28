@@ -13257,6 +13257,10 @@
       if (event.target === settingsGate && !state.settingsBusy) void submitReviewSettings();
     });
     if (window.location.hash === "#settings") setSettingsOpen(true);
+    window.addEventListener("commit-signing-required", () => {
+      setSettingsTab("signing");
+      setSettingsOpen(true);
+    });
 
     if (reviewSettingsForm) {
       reviewSettingsForm.addEventListener("submit", submitReviewSettings);

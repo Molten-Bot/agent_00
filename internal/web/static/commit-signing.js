@@ -42,6 +42,10 @@
       registered: 'Registered with GitHub. Local signing works.',
     };
     element('registration').textContent = labels[settings.registration] || labels.unchecked;
+    if (settings.enabled && !configured) {
+      status.textContent = 'Commit signing is required. Tasks cannot run until you save a signing key.';
+      window.dispatchEvent(new CustomEvent('commit-signing-required'));
+    }
     setBusy(busy);
   }
   async function request(path, payload, preserveDraftOnError = false) {
@@ -117,5 +121,5 @@
   });
   window.addEventListener('commit-signing-open', load);
   window.addEventListener('commit-signing-close', clearSecrets);
-  if (!document.getElementById('settings-gate').classList.contains('hidden')) void load();
+  void load();
 })();
