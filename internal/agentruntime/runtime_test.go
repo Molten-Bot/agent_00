@@ -143,6 +143,100 @@ func TestClaudeReviewSandboxDoesNotWidenForConfigDir(t *testing.T) {
 	}
 }
 
+// CLAUDE_CONFIG_DIR is the only writable root granted outside the task
+// workspace, and it comes from the ambient invocation environment. An
+// unvalidated value turns that deliberate exemption into a filesystem-wide
+// write grant, so the broad ones have to be rejected outright.
+func TestClaudeConfigDirMustBeBounded(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	nested := t.TempDir()
+	workspace := filepath.Join(nested, "task")
+	repo := filepath.Join(workspace, "repo")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name      string
+		configDir string
+		workspace string
+		target    string
+		env       []string
+		wantErr   string
+	}{
+		{
+			name:      "filesystem root",
+			configDir: string(filepath.Separator),
+			workspace: workspace,
+			target:    repo,
+			wantErr:   "filesystem root",
+		},
+		{
+			name:      "contains the task workspace",
+			configDir: nested,
+			workspace: workspace,
+			target:    repo,
+			wantErr:   "contains task directory",
+		},
+		{
+			name:      "home directory",
+			configDir: home,
+			workspace: workspace,
+			target:    repo,
+			env:       []string{"HOME=" + home},
+			wantErr:   "is a home directory",
+		},
+		{
+			name:      "missing directory",
+			configDir: filepath.Join(home, "absent"),
+			workspace: workspace,
+			target:    repo,
+			wantErr:   "inspect Claude configuration directory",
+		},
+		{
+			name:      "regular file",
+			configDir: writeClaudeConfigProbeFile(t, filepath.Join(home, "config-file")),
+			workspace: workspace,
+			target:    repo,
+			wantErr:   "is not a directory",
+		},
+	}
+
+	rt, err := Resolve(HarnessClaude, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := append([]string(nil), tc.env...)
+			env = append(env, "CLAUDE_CONFIG_DIR="+tc.configDir)
+			_, err := rt.BuildCommand(tc.target, "fix it", RunOptions{
+				WorkspaceDir: tc.workspace,
+				Env:          env,
+			})
+			if err == nil {
+				t.Fatalf("BuildCommand(%q) error = nil, want %q", tc.configDir, tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("BuildCommand(%q) error = %v, want %q", tc.configDir, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func writeClaudeConfigProbeFile(t *testing.T, path string) string {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestBuildCommandRejectsDirectoriesOutsideTask(t *testing.T) {
 	t.Parallel()
 	for _, harness := range []string{HarnessCodex, HarnessClaude} {

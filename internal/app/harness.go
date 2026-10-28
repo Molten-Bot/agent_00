@@ -3470,6 +3470,11 @@ func (h Harness) runFinalReviewCycle(
 	// FinalReviewPasses (either a clean confirmation or the exhausted-passes
 	// error); a redundant bound would leave an unreachable statement after
 	// the loop for Go's terminating-statement check to flag.
+	//
+	// advisoryPassSpent caps the cycle at a single advisory-only fix pass, so
+	// non-blocking findings get one repair attempt out of an otherwise unused
+	// budget without letting the cycle churn on cosmetics indefinitely.
+	advisoryPassSpent := false
 	for pass := 1; ; pass++ {
 		reviewMode := finalReviewMode(h.FinalReviewPasses)
 		// The confirmation pass (pass == FinalReviewPasses+1) has no fix-pass
@@ -3593,22 +3598,33 @@ func (h Harness) runFinalReviewCycle(
 			repo.RelDir,
 			repo.PRURL,
 		)
-		blockingFindings := blockingReviewFindings(outcome.Findings)
+		blockingFindings, advisoryFindings := splitReviewFindings(outcome.Findings)
 		if len(outcome.Findings) > 0 {
 			h.logf(
 				"stage=review status=ok action=triage review_mode=%s pass=%d blocking=%d advisory=%d repo=%s repo_dir=%s pr_url=%s",
 				reviewMode,
 				pass,
 				len(blockingFindings),
-				len(outcome.Findings)-len(blockingFindings),
+				len(advisoryFindings),
 				repo.URL,
 				repo.RelDir,
 				repo.PRURL,
 			)
 		}
-		if len(blockingFindings) == 0 {
-			return ExitSuccess, "", nil
+		// Advisory findings never block the pull request, but discarding them
+		// while fix passes go unspent means they are never repaired at all.
+		// Spend one otherwise-unused pass on them; the confirmation pass has no
+		// budget of its own, so it still returns clean.
+		advisoryOnly := len(blockingFindings) == 0
+		if advisoryOnly {
+			if !advisoryFixPassAllowed(advisoryFindings, advisoryPassSpent, pass, h.FinalReviewPasses) {
+				return ExitSuccess, "", nil
+			}
+			advisoryPassSpent = true
 		}
+		// A blocking pass is already paying for an agent invocation, so hand it
+		// the advisory findings too instead of dropping them.
+		fixFindings := append(append([]reviewFinding(nil), blockingFindings...), advisoryFindings...)
 		if pass > h.FinalReviewPasses {
 			h.logf(
 				"stage=review status=error action=exhausted review_mode=%s pass=%d blocking=%d repo=%s repo_dir=%s pr_url=%s blocking_findings=%q",
@@ -3624,10 +3640,11 @@ func (h Harness) runFinalReviewCycle(
 		}
 
 		h.logf(
-			"stage=review_fix status=start action=agent review_mode=%s pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",
+			"stage=review_fix status=start action=agent review_mode=%s pass=%d total=%d advisory_only=%t repo=%s repo_dir=%s pr_url=%s",
 			reviewMode,
 			pass,
 			h.FinalReviewPasses,
+			advisoryOnly,
 			repo.URL,
 			repo.RelDir,
 			repo.PRURL,
@@ -3636,7 +3653,7 @@ func (h Harness) runFinalReviewCycle(
 		if err != nil {
 			return ExitGit, "git", err
 		}
-		fixPrompt := finalReviewFixPrompt(cfg.Prompt, *repo, blockingFindings, pass, h.FinalReviewPasses)
+		fixPrompt := finalReviewFixPrompt(cfg.Prompt, *repo, fixFindings, pass, h.FinalReviewPasses)
 		fixInvocation := newAgentInvocationLogMetadata(runtime, "review_fix", pass, repo.RelDir, repo.RelDir, repo.RelDir)
 		if _, err := h.runCodexCapture(
 			ctx,
@@ -3670,6 +3687,20 @@ func (h Harness) runFinalReviewCycle(
 			hasRealFixDiff = hasRealFixDiff || strings.TrimSpace(fixDiff.Stdout) != ""
 		}
 		if !hasRealFixDiff {
+			if advisoryOnly {
+				// Nothing blocked the pull request before this pass and the
+				// agent judged the advisory findings not worth changing, so the
+				// cycle is finished rather than failed.
+				h.logf(
+					"stage=review_fix status=ok action=advisory_declined review_mode=%s pass=%d repo=%s repo_dir=%s pr_url=%s",
+					reviewMode,
+					pass,
+					repo.URL,
+					repo.RelDir,
+					repo.PRURL,
+				)
+				return ExitSuccess, "", nil
+			}
 			return ExitCodex, "review_fix", fmt.Errorf("review fix pass %d produced no repository changes", pass)
 		}
 
@@ -4491,13 +4522,11 @@ func reviewOutcomeAllowsAutoMerge(outcome reviewOutcome) bool {
 	default:
 		return false
 	}
-	for _, finding := range outcome.Findings {
-		switch strings.ToLower(strings.TrimSpace(finding.Severity)) {
-		case "critical", "high", "medium":
-			return false
-		}
-	}
-	return true
+	// Share one severity classifier with the review cycle. Listing blocking
+	// severities here instead let anything the list did not name - an empty
+	// severity, "major", "blocker" - auto-merge while blockingReviewFindings
+	// treated the same finding as blocking.
+	return len(blockingReviewFindings(outcome.Findings)) == 0
 }
 
 // advisoryReviewSeverities are the severities a review pass can report that
@@ -4518,8 +4547,9 @@ var advisoryReviewSeverities = map[string]struct{}{
 	"note":          {},
 }
 
-// blockingReviewFindings returns the findings that must be repaired before the
-// pull request can leave draft, preserving the order the review reported.
+// splitReviewFindings separates the findings that must be repaired before the
+// pull request can leave draft from the advisory ones, preserving the order
+// the review reported in both slices.
 //
 // The post-task cycle re-reviews its own fix passes, so every pass adds fresh
 // code for the next pass to comment on. Treating advisory nitpicks as blocking
@@ -4527,16 +4557,34 @@ var advisoryReviewSeverities = map[string]struct{}{
 // fail the run, even when the defects the task was asked to fix were already
 // resolved. Unlabeled or unrecognized severities stay blocking: a finding the
 // harness cannot classify is not safe to wave through. reviewOutcomeAllowsAutoMerge
-// applies the same split from the opposite side for the auto-merge path.
-func blockingReviewFindings(findings []reviewFinding) []reviewFinding {
-	blocking := make([]reviewFinding, 0, len(findings))
+// calls through here too, so the auto-merge path and the review cycle cannot
+// disagree about which severities block.
+func splitReviewFindings(findings []reviewFinding) (blocking, advisory []reviewFinding) {
+	blocking = make([]reviewFinding, 0, len(findings))
+	advisory = make([]reviewFinding, 0, len(findings))
 	for _, finding := range findings {
-		if _, advisory := advisoryReviewSeverities[strings.ToLower(strings.TrimSpace(finding.Severity))]; advisory {
+		if _, ok := advisoryReviewSeverities[strings.ToLower(strings.TrimSpace(finding.Severity))]; ok {
+			advisory = append(advisory, finding)
 			continue
 		}
 		blocking = append(blocking, finding)
 	}
+	return blocking, advisory
+}
+
+// blockingReviewFindings returns only the findings that block the pull request.
+func blockingReviewFindings(findings []reviewFinding) []reviewFinding {
+	blocking, _ := splitReviewFindings(findings)
 	return blocking
+}
+
+// advisoryFixPassAllowed reports whether a review cycle with nothing blocking
+// should still spend a fix pass repairing advisory findings. The budget exists
+// for this cycle and is otherwise discarded, but only one pass is offered so
+// the cycle cannot keep re-reviewing its own cosmetic edits, and the
+// confirmation pass (pass > totalPasses) has no budget to spend.
+func advisoryFixPassAllowed(advisory []reviewFinding, advisoryPassSpent bool, pass, totalPasses int) bool {
+	return len(advisory) > 0 && !advisoryPassSpent && pass <= totalPasses
 }
 
 // summarizeReviewFindings renders findings as one log-safe line so an
@@ -4548,8 +4596,11 @@ func summarizeReviewFindings(findings []reviewFinding, limit int) string {
 		return "no finding details were returned"
 	}
 	summary := strings.Join(points, "; ")
-	if len(findings) > limit {
-		summary = fmt.Sprintf("%s; +%d more", summary, len(findings)-limit)
+	// Count against the points actually rendered, not against the limit:
+	// reviewFindingPoints also drops findings whose title is empty, so a
+	// limit-based subtraction under-reports how many findings went unnamed.
+	if remaining := len(findings) - len(points); remaining > 0 {
+		summary = fmt.Sprintf("%s; +%d more", summary, remaining)
 	}
 	return summary
 }

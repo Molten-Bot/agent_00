@@ -247,11 +247,31 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 			// copy, so it sits outside the task workspace: leaving it read-only
 			// fails every shell command with EROFS and silently costs the agent
 			// its local lint/test/build validation.
+			//
+			// This is the one writable root validateWorkspaceDirs cannot vet,
+			// because the whole point of the grant is that it sits outside the
+			// task workspace. validateClaudeConfigDir bounds it instead: the
+			// value arrives from the ambient invocation environment, so an
+			// unchecked "/" or "$HOME" would hand the agent a writable root far
+			// wider than the task itself. Keeping the root tight is the only
+			// containment available here - Codex grants whole roots with no
+			// per-file exclusion, and Claude runs with
+			// --dangerously-skip-permissions, so anything writable by the CLI
+			// (including the credential file it rotates) is also writable by
+			// the model-issued commands sharing that process. Point
+			// CLAUDE_CONFIG_DIR at a configuration directory dedicated to the
+			// agent rather than at an operator home that holds unrelated state.
 			configDir, err := claudeConfigDirFromEnv(opts.Env)
 			if err != nil {
 				return execx.Command{}, err
 			}
-			if configDir != "" {
+			// A configuration directory already inside the task workspace needs
+			// no exemption at all: the workspace root covers it, and the CLI is
+			// free to create it on demand.
+			if configDir != "" && !claudeConfigDirInsideWorkspace(configDir, opts) {
+				if err := validateClaudeConfigDir(configDir, targetDir, opts); err != nil {
+					return execx.Command{}, err
+				}
 				opts.WritableDirs = append(opts.WritableDirs, configDir)
 			}
 			args = append(args, workspaceSandboxArgs(opts)...)
@@ -327,6 +347,93 @@ func claudeConfigDirFromEnv(environ []string) (string, error) {
 	return resolved, nil
 }
 
+// claudeConfigDirInsideWorkspace reports whether the configuration directory
+// is already covered by the task workspace writable root.
+func claudeConfigDirInsideWorkspace(configDir string, opts RunOptions) bool {
+	root := strings.TrimSpace(opts.WorkspaceDir)
+	if root == "" {
+		return false
+	}
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	return pathWithin(configDir, absolute)
+}
+
+// validateClaudeConfigDir bounds the only writable sandbox root that is
+// allowed outside the task workspace. Every other directory goes through
+// validateWorkspaceDirs, which refuses anything above the task root; the
+// Claude configuration directory is exempt by design, so it needs its own
+// limits. Without them, whatever set CLAUDE_CONFIG_DIR decides how much of
+// the filesystem the agent may write: "/" or "$HOME" would silently widen the
+// grant from one configuration directory to everything the operator owns.
+func validateClaudeConfigDir(configDir, targetDir string, opts RunOptions) error {
+	info, err := os.Stat(configDir)
+	if err != nil {
+		return fmt.Errorf("inspect Claude configuration directory %q: %w", configDir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("resolved CLAUDE_CONFIG_DIR %q is not a directory", configDir)
+	}
+	if filepath.Dir(configDir) == configDir {
+		return fmt.Errorf("resolved CLAUDE_CONFIG_DIR %q is a filesystem root", configDir)
+	}
+	for _, home := range homeDirCandidates(opts.Env) {
+		if home == configDir {
+			return fmt.Errorf("resolved CLAUDE_CONFIG_DIR %q is a home directory; point it at a directory dedicated to the agent", configDir)
+		}
+	}
+	// A configuration directory that contains the task workspace would make
+	// the workspace boundary meaningless: the exemption would grant write
+	// access to the task root's parents too.
+	for _, dir := range append([]string{targetDir, opts.WorkspaceDir}, opts.WritableDirs...) {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		path, err := filepath.Abs(dir)
+		if err != nil {
+			return fmt.Errorf("resolve agent directory: %w", err)
+		}
+		if pathWithin(path, configDir) {
+			return fmt.Errorf("resolved CLAUDE_CONFIG_DIR %q contains task directory %q", configDir, dir)
+		}
+	}
+	return nil
+}
+
+// homeDirCandidates returns the home directories this invocation could mean,
+// preferring the environment handed to the child over the harness's own.
+func homeDirCandidates(environ []string) []string {
+	candidates := make([]string, 0, 2)
+	add := func(value string) {
+		if value = strings.TrimSpace(value); value == "" {
+			return
+		}
+		if resolved, err := resolveSandboxPath(value); err == nil {
+			candidates = append(candidates, resolved)
+		}
+	}
+	for _, entry := range environ {
+		if name, value, ok := strings.Cut(entry, "="); ok && name == "HOME" {
+			add(value)
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		add(home)
+	}
+	return candidates
+}
+
+// pathWithin reports whether path is root or lives underneath it.
+func pathWithin(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func workspaceSandboxArgs(opts RunOptions) []string {
 	roots := make([]string, 0, len(opts.WritableDirs)+1)
 	if root := strings.TrimSpace(opts.WorkspaceDir); root != "" {
@@ -369,8 +476,7 @@ func validateWorkspaceDirs(targetDir string, opts RunOptions) error {
 		if err != nil {
 			return fmt.Errorf("resolve agent directory: %w", err)
 		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if !pathWithin(path, root) {
 			return fmt.Errorf("agent directory %q is outside task workspace %q", dir, root)
 		}
 	}
