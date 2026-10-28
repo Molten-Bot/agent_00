@@ -748,13 +748,18 @@ func TestSettingsTabbarRenderedLayoutMatchesPlaywrightSpec(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// This runs the full settings and signing suites, including real auth polling
+	// and layout transitions. Their combined runtime can exceed a minute in CI.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "node", "--test", "tests/settings_tabs.cjs", "tests/commit_signing.cjs")
 	cmd.Env = append(os.Environ(), "HARNESS_TEST_URL="+ts.URL)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("rendered settings modal checks failed:\n%s", out)
+		if ctx.Err() != nil {
+			t.Fatalf("rendered settings modal checks timed out: %v\n%s", ctx.Err(), out)
+		}
+		t.Fatalf("rendered settings modal checks failed: %v\n%s", err, out)
 	}
 }
 
