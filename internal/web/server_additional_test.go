@@ -12,8 +12,6 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -737,12 +735,7 @@ func normalizeCSSWhitespace(s string) string {
 // CI provisions Node and Playwright; local environments without them skip this
 // browser suite while retaining the HTTP and embedded-asset checks above.
 func TestSettingsTabbarRenderedLayoutMatchesPlaywrightSpec(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node not available, skipping rendered-layout check")
-	}
-	if err := exec.Command("node", "-e", "require.resolve('playwright')").Run(); err != nil {
-		t.Skip("playwright module not available, skipping rendered-layout check")
-	}
+	requireBrowserTooling(t, "rendered-layout check")
 
 	srv := NewServer("", nil)
 	ts := httptest.NewServer(srv.Handler())
@@ -750,17 +743,8 @@ func TestSettingsTabbarRenderedLayoutMatchesPlaywrightSpec(t *testing.T) {
 
 	// This runs the full settings and signing suites, including real auth polling
 	// and layout transitions. Their combined runtime can exceed a minute in CI.
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "node", "--test", "tests/settings_tabs.cjs", "tests/commit_signing.cjs")
-	cmd.Env = append(os.Environ(), "HARNESS_TEST_URL="+ts.URL)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		if ctx.Err() != nil {
-			t.Fatalf("rendered settings modal checks timed out: %v\n%s", ctx.Err(), out)
-		}
-		t.Fatalf("rendered settings modal checks failed: %v\n%s", err, out)
-	}
+	runBrowserSuite(t, ts.URL, 3*time.Minute, "rendered settings modal checks",
+		"tests/settings_tabs.cjs", "tests/commit_signing.cjs")
 }
 
 // TestPromptImageCapsEnforcedInBrowser exercises the MAX_PROMPT_IMAGE_COUNT and
@@ -770,25 +754,13 @@ func TestSettingsTabbarRenderedLayoutMatchesPlaywrightSpec(t *testing.T) {
 // in a headless browser to confirm both entry points share the same caps and
 // surface a "Skipped N screenshot(s)" message when files are dropped.
 func TestPromptImageCapsEnforcedInBrowser(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node not available, skipping prompt image cap check")
-	}
-	if err := exec.Command("node", "-e", "require.resolve('playwright')").Run(); err != nil {
-		t.Skip("playwright module not available, skipping prompt image cap check")
-	}
+	requireBrowserTooling(t, "prompt image cap check")
 
 	srv := NewServer("", nil)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "node", "--test", "tests/prompt_image_caps.cjs")
-	cmd.Env = append(os.Environ(), "HARNESS_TEST_URL="+ts.URL)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("prompt image cap checks failed:\n%s", out)
-	}
+	runBrowserSuite(t, ts.URL, 60*time.Second, "prompt image cap checks", "tests/prompt_image_caps.cjs")
 }
 
 // TestSpeechDictationFallbackInBrowser exercises speechCaptureSupport and
@@ -799,25 +771,13 @@ func TestPromptImageCapsEnforcedInBrowser(t *testing.T) {
 // non-Safari iOS browser removes it, confirming the button stays visible, hands
 // off to the platform dictation key, and takes focus inside the tap gesture.
 func TestSpeechDictationFallbackInBrowser(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node not available, skipping speech dictation fallback check")
-	}
-	if err := exec.Command("node", "-e", "require.resolve('playwright')").Run(); err != nil {
-		t.Skip("playwright module not available, skipping speech dictation fallback check")
-	}
+	requireBrowserTooling(t, "speech dictation fallback check")
 
 	srv := NewServer("", nil)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "node", "--test", "tests/speech_dictation.cjs")
-	cmd.Env = append(os.Environ(), "HARNESS_TEST_URL="+ts.URL)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("speech dictation fallback checks failed:\n%s", out)
-	}
+	runBrowserSuite(t, ts.URL, 60*time.Second, "speech dictation fallback checks", "tests/speech_dictation.cjs")
 }
 
 func TestDashboardSourceLegendStylesLiveInGlobalStylesheet(t *testing.T) {

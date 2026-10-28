@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
@@ -68,8 +69,18 @@ func TestSigningEnvironmentCLIRejectsInvalidPolicyAtStartup(t *testing.T) {
 	if code := runMultiplex([]string{"--config", path}); code != app.ExitConfig {
 		t.Fatalf("multiplex exit = %d, want %d", code, app.ExitConfig)
 	}
-	if code := runServer(nil); code != app.ExitConfig {
-		t.Fatalf("serve exit = %d, want %d", code, app.ExitConfig)
+	// serve must reject the policy before it binds a listener and waits for a
+	// shutdown signal. A fall-through would block forever, so bound the wait:
+	// otherwise the whole package only fails when go test hits its deadline.
+	serve := make(chan int, 1)
+	go func() { serve <- runServer(nil) }()
+	select {
+	case code := <-serve:
+		if code != app.ExitConfig {
+			t.Fatalf("serve exit = %d, want %d", code, app.ExitConfig)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("serve did not reject the invalid signing policy and kept running")
 	}
 }
 
