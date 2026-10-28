@@ -23,14 +23,22 @@ func clearSigningEnvironment(t *testing.T) {
 	}
 }
 
-func TestSigningEnvironmentStartup(t *testing.T) {
-	clearSigningEnvironment(t)
-	raw := signingTestPrivateKey(t)
+// signingTestKeyPair returns the shared test private key and its public half.
+func signingTestKeyPair(t *testing.T) (raw string, public string) {
+	t.Helper()
+	raw = signingTestPrivateKey(t)
 	signer, err := ssh.ParsePrivateKeyWithPassphrase([]byte(raw), []byte("test-passphrase"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	public := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+	return raw, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+}
+
+// signingTestGitHub answers the identity and signing-key lookups gitsigning
+// makes. The returned flag toggles whether the account lists public as a
+// signing key, which is how a previously good key stops validating.
+func signingTestGitHub(t *testing.T, public string) (*httptest.Server, *atomic.Bool) {
+	t.Helper()
 	var registered atomic.Bool
 	registered.Store(true)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -42,7 +50,14 @@ func TestSigningEnvironmentStartup(t *testing.T) {
 			json.NewEncoder(w).Encode([]any{})
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
+	return server, &registered
+}
+
+func TestSigningEnvironmentStartup(t *testing.T) {
+	clearSigningEnvironment(t)
+	raw, public := signingTestKeyPair(t)
+	server, registered := signingTestGitHub(t, public)
 	for _, source := range []string{"inline", "file"} {
 		t.Run(source, func(t *testing.T) {
 			clearSigningEnvironment(t)
@@ -197,6 +212,72 @@ func TestSigningSetupRequirementHoldsTasksUntilKeyExists(t *testing.T) {
 	}
 	if state := store.ApplySetupRequirement(CommitSigningState{}); state.SetupRequired {
 		t.Fatalf("ui state should clear the hold: %+v", state)
+	}
+}
+
+// A key saved by an earlier boot can stop working: revoked on GitHub, or a
+// local signing toolchain that broke. ApplyEnvironment keeps the UI reachable
+// so the operator can fix it, so the hold has to outlive that call. Otherwise
+// SetupRequirement sees a saved key, reports nothing, and serve admits tasks
+// signed by a key this boot already rejected.
+func TestSigningBootFailureHoldsTasksUntilSettingsValidate(t *testing.T) {
+	clearSigningEnvironment(t)
+	raw, public := signingTestKeyPair(t)
+	server, registered := signingTestGitHub(t, public)
+	path := filepath.Join(t.TempDir(), "config.json")
+	store := SigningSettings{Path: path, GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()} }}
+	ctx := context.Background()
+
+	t.Setenv(commitSigningEnabledEnv, "true")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", raw)
+	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "test-passphrase")
+	if err := store.ApplyEnvironment(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetupRequirement(); err != nil {
+		t.Fatalf("a key that validated at boot should not hold tasks: %v", err)
+	}
+
+	// Reboot on the saved key alone, after GitHub stopped listing it.
+	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", "")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "")
+	registered.Store(false)
+	bootErr := store.ApplyEnvironment(ctx)
+	if !errors.Is(bootErr, ErrSigningSetupRequired) {
+		t.Fatalf("serve should hold the UI open instead of exiting: %v", bootErr)
+	}
+	held := store.SetupRequirement()
+	if !errors.Is(held, ErrSigningSetupRequired) {
+		t.Fatalf("a saved key that failed boot must keep holding tasks: %v", held)
+	}
+	state := store.ApplySetupRequirement(CommitSigningState{})
+	if !state.SetupRequired || !state.EnvEnforced || state.Message != held.Error() {
+		t.Fatalf("ui state should explain the hold: %+v", state)
+	}
+
+	// Registering the key on GitHub and checking it releases the hold without a
+	// restart. Signing is already enabled here, so the operator has nothing new
+	// to save and Check registration is the only way out.
+	registered.Store(true)
+	if _, err := store.Verify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetupRequirement(); err != nil {
+		t.Fatalf("a verified key should release the hold: %v", err)
+	}
+
+	// Saving settings clears the hold too, which is the path taken when the
+	// operator replaces the key instead of registering the old one.
+	registered.Store(false)
+	if err := store.ApplyEnvironment(ctx); !errors.Is(err, ErrSigningSetupRequired) {
+		t.Fatalf("a second failed boot should hold again: %v", err)
+	}
+	registered.Store(true)
+	if _, err := store.Configure(ctx, CommitSigningRequest{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetupRequirement(); err != nil {
+		t.Fatalf("revalidated settings should release the hold: %v", err)
 	}
 }
 

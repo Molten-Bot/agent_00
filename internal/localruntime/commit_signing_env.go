@@ -69,11 +69,18 @@ func (s SigningSettings) ApplyEnvironment(ctx context.Context) error {
 	if strings.TrimSpace(raw) == "" {
 		// Policy only: whatever is wrong is fixable in Settings → Commit signing,
 		// so report a setup hold and let callers that can serve a UI start up.
+		// This call revalidates the saved key, so drop a hold an earlier call
+		// left behind instead of reporting it in place of today's result.
+		s.releaseBootHold()
 		if err := s.SetupRequirement(); err != nil {
 			return err
 		}
+		// A key saved by an earlier boot still has to pass identity, signing,
+		// and registration checks now. Record the failure as a startup hold so
+		// SetupRequirement keeps refusing submissions; a saved key alone would
+		// otherwise release the gate and sign with a key this boot rejected.
 		if _, err := s.Configure(ctx, CommitSigningRequest{Enabled: cfg.Enabled}); err != nil {
-			return markSetupRequired(err)
+			return s.holdBoot(err)
 		}
 		return nil
 	}

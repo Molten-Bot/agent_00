@@ -299,7 +299,8 @@ func runServer(args []string) int {
 		}
 		// Exiting here would leave the operator with an unreachable UI and no
 		// way to supply the key. Serve instead: the browser lands on
-		// Settings → Commit signing and tasks stay blocked until setup passes.
+		// Settings → Commit signing, and signingSubmissionGate refuses task
+		// submissions for as long as SetupRequirement reports the hold.
 		daemonLogger("commit_signing status=error event=setup_required err=%q", err)
 	}
 

@@ -9,7 +9,9 @@ let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
 
-async function openSettings(t, handler, viewport = { width: 1280, height: 900 }) {
+// newStubbedPage blocks external requests and stubs the settings APIs, so a
+// suite drives the real UI without touching saved settings or keys.
+async function newStubbedPage(t, handler, viewport = { width: 1280, height: 900 }) {
   const page = await browser.newPage({ viewport });
   t.after(() => page.close());
   const errors = [];
@@ -19,6 +21,11 @@ async function openSettings(t, handler, viewport = { width: 1280, height: 900 })
   await page.route('**/api/agent-auth**', route => route.fulfill({ json: { ok: true, auth: { required: true, ready: true, harness: 'claude', state: 'ready' } } }));
   await page.route('**/api/review-settings', route => route.fulfill({ json: { ok: true, settings: { merge_method: 'squash', review_level: 'off' } } }));
   await page.route('**/api/commit-signing**', handler);
+  return page;
+}
+
+async function openSettings(t, handler, viewport = { width: 1280, height: 900 }) {
+  const page = await newStubbedPage(t, handler, viewport);
   await page.goto(`${baseURL}/#settings`);
   await page.locator('#settings-tab-signing').click();
   await page.waitForFunction(() => !document.getElementById('commit-signing-save').disabled);
@@ -27,6 +34,14 @@ async function openSettings(t, handler, viewport = { width: 1280, height: 900 })
 
 const empty = { enabled: false, configured: false, registration: 'not_configured' };
 const saved = { ...empty, configured: true, public_key: 'ssh-ed25519 TEST_PUBLIC_KEY', fingerprint: 'SHA256:test', account: 'test-bot', registration: 'not_registered' };
+// What the server sends when signing is required but cannot sign yet.
+const held = {
+  ...empty,
+  enabled: true,
+  setup_required: true,
+  env_enforced: true,
+  message: 'commit signing setup: HARNESS_COMMIT_SIGNING_ENABLED requires a signing key; save one in Settings → Commit signing before running tasks',
+};
 
 test('import, register, enable, reload and disable without returning private material', async t => {
   let settings = { ...empty };
@@ -130,4 +145,33 @@ test('failed close-time signing save keeps the selected option and allows retry'
   fail = false;
   await page.locator('#review-settings-close').click();
   await page.waitForFunction(() => document.getElementById('settings-gate').classList.contains('hidden'));
+});
+
+test('a required signing hold opens the signing tab, shows the banner, and blocks submissions', async t => {
+  const submissions = [];
+  const page = await newStubbedPage(t, route => route.fulfill({ json: { ok: true, settings: held } }));
+  await page.route('**/api/local-prompt', route => {
+    submissions.push(route.request().postDataJSON());
+    return route.fulfill({ json: { ok: true, request_id: 'must-not-queue' } });
+  });
+
+  // No #settings hash: the hold alone has to put the operator on the signing tab.
+  await page.goto(baseURL);
+  await page.waitForFunction(() => !document.getElementById('settings-gate').classList.contains('hidden'));
+  assert.equal(await page.locator('#settings-tab-signing').getAttribute('aria-selected'), 'true');
+  const banner = page.locator('#commit-signing-setup-required');
+  await banner.waitFor({ state: 'visible' });
+  assert.match(await banner.textContent(), /HARNESS_COMMIT_SIGNING_ENABLED/);
+
+  // The capture-phase listener has to beat submitLocalPrompt, which would set
+  // "Submitting..." and POST before anything later could stop it. A dispatched
+  // submit reaches both listeners without depending on form validation.
+  const cancelled = await page.evaluate(() => document.getElementById('local-prompt-form')
+    .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) === false);
+  assert.equal(cancelled, true, 'the held submit was not cancelled');
+  await page.waitForFunction(() => document.getElementById('local-prompt-status').textContent.includes('HARNESS_COMMIT_SIGNING_ENABLED'));
+  // submitLocalPrompt awaits only microtasks before its fetch, so anything that
+  // slipped past the hold has posted by now.
+  await page.waitForTimeout(250);
+  assert.deepEqual(submissions, [], 'a held task reached the server');
 });

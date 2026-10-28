@@ -38,6 +38,35 @@ func markSetupRequired(err error) error {
 	return setupRequiredError{err: err}
 }
 
+// signingBootHolds records a saved key that failed this process's startup
+// checks, keyed by runtime configuration path so independent stores never
+// observe each other's holds. A saved key alone satisfies SetupRequirement, so
+// without this a server that stays up to collect a working key would admit
+// tasks signed by a key the boot already rejected.
+var signingBootHolds sync.Map
+
+// holdBoot records err as a startup hold and returns it tagged as fixable in
+// Settings → Commit signing.
+func (s SigningSettings) holdBoot(err error) error {
+	if err == nil {
+		return nil
+	}
+	held := markSetupRequired(err)
+	signingBootHolds.Store(s.path(), held)
+	return held
+}
+
+// releaseBootHold clears the startup hold once settings validate again.
+func (s SigningSettings) releaseBootHold() { signingBootHolds.Delete(s.path()) }
+
+func (s SigningSettings) bootHold() error {
+	held, ok := signingBootHolds.Load(s.path())
+	if !ok {
+		return nil
+	}
+	return held.(error)
+}
+
 type CommitSigningRequest struct {
 	Enabled    bool   `json:"enabled"`
 	PrivateKey string `json:"private_key,omitempty"`
@@ -132,13 +161,23 @@ func (s SigningSettings) Status(context.Context) (CommitSigningState, error) {
 // SetupRequirement reports why commit signing cannot sign task commits yet. It
 // is a local check with no GitHub calls, so callers can hold tasks and point
 // the operator at Settings → Commit signing instead of failing mid-run.
-// It returns nil when signing is off or a key is saved.
+// It returns nil when signing is off, or when a key is saved and nothing this
+// process checked at startup rejected it.
 func (s SigningSettings) SetupRequirement() error {
 	cfg, err := s.config()
 	if err != nil {
 		return err
 	}
-	if !cfg.Enabled || cfg.KeyID != "" {
+	if !cfg.Enabled {
+		return nil
+	}
+	// A key saved by an earlier boot still has to pass this boot's identity,
+	// signing, and registration checks. The hold outlives ApplyEnvironment so
+	// submissions cannot slip past a failure the operator has not fixed yet.
+	if held := s.bootHold(); held != nil {
+		return held
+	}
+	if cfg.KeyID != "" {
 		return nil
 	}
 	if commitSigningEnvEnforced() {
@@ -230,6 +269,9 @@ func (s SigningSettings) Configure(ctx context.Context, req CommitSigningRequest
 	if err := s.save(cfg); err != nil {
 		return signingState(current), err
 	}
+	// These settings just passed the same checks a boot runs, or turned signing
+	// off, so a startup hold no longer applies and queued work can proceed.
+	s.releaseBootHold()
 	state := signingState(cfg)
 	if importing || req.Enabled {
 		state.Registered = registered
@@ -258,6 +300,10 @@ func (s SigningSettings) Verify(ctx context.Context) (CommitSigningState, error)
 		state.Registration = "not_ready"
 		return state, err
 	}
+	// check covers everything a boot checks, so an operator who fixed the key on
+	// GitHub releases the startup hold from Check registration, without having
+	// to re-save settings or restart the server.
+	s.releaseBootHold()
 	state.Registered, state.Registration, state.Message = true, "registered", "Key is registered and local signing works."
 	return state, nil
 }

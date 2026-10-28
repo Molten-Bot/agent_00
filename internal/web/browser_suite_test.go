@@ -3,8 +3,10 @@ package web
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -38,6 +40,15 @@ var nodeSupportsForceExit = sync.OnceValue(func() bool {
 	return err == nil && bytes.Contains(out, []byte("--test-force-exit"))
 })
 
+// prepareBrowserSuiteCmd points cmd at baseURL and applies the WaitDelay that
+// stops a killed suite's leaked children from holding go test open. Tests use
+// it so they exercise the delay the suite command actually ships.
+func prepareBrowserSuiteCmd(cmd *exec.Cmd, baseURL string) *exec.Cmd {
+	cmd.Env = append(os.Environ(), "HARNESS_TEST_URL="+baseURL)
+	cmd.WaitDelay = browserSuiteWaitDelay
+	return cmd
+}
+
 // browserSuiteCommand builds the node:test invocation for files. --test-force-exit
 // keeps a finished suite from waiting on a browser handle Playwright left open,
 // and WaitDelay keeps a killed suite from holding go test open.
@@ -46,10 +57,7 @@ func browserSuiteCommand(ctx context.Context, baseURL string, files ...string) *
 	if nodeSupportsForceExit() {
 		args = append(args, "--test-force-exit")
 	}
-	cmd := exec.CommandContext(ctx, "node", append(args, files...)...)
-	cmd.Env = append(os.Environ(), "HARNESS_TEST_URL="+baseURL)
-	cmd.WaitDelay = browserSuiteWaitDelay
-	return cmd
+	return prepareBrowserSuiteCmd(exec.CommandContext(ctx, "node", append(args, files...)...), baseURL)
 }
 
 // runBrowserSuite runs files against baseURL and reports the suite output on
@@ -90,7 +98,9 @@ func TestBrowserSuiteCommandCarriesTestURLAndWaitDelay(t *testing.T) {
 // A browser suite that stalls must fail, not hang. Chromium outlives the node
 // process and holds its inherited pipes, so without WaitDelay the Go driver
 // waits past its own context and only stops when go test panics on the package
-// deadline, hiding the suite output that explains the stall.
+// deadline, hiding the suite output that explains the stall. This drives the
+// WaitDelay the suite command ships rather than a value local to this test,
+// because only the shipped one protects a real run.
 func TestBrowserSuiteCommandStopsReadingAfterWaitDelay(t *testing.T) {
 	t.Parallel()
 
@@ -101,18 +111,38 @@ func TestBrowserSuiteCommandStopsReadingAfterWaitDelay(t *testing.T) {
 		t.Skip("sh not available, skipping leaked-child check")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// The backgrounded loop stands in for a leaked browser: it inherits stdout
+	// and holds it open until this file disappears, so only WaitDelay can end
+	// the read. Removing the file on cleanup keeps the stand-in from outliving
+	// the test the way a bare `sleep 30 &` would.
+	hold := filepath.Join(t.TempDir(), "hold")
+	if err := os.WriteFile(hold, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(hold) })
+
+	// A second is long enough for a loaded CI machine to fork the stand-in
+	// before the kill, and short enough to keep this test near the WaitDelay.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	// The backgrounded sleep keeps the inherited stdout pipe open after the
-	// context kills the command itself, standing in for a leaked browser.
-	cmd := exec.CommandContext(ctx, "sh", "-c", "sleep 30 & exec sleep 30")
-	cmd.WaitDelay = 200 * time.Millisecond
+	script := fmt.Sprintf("while [ -f '%s' ]; do sleep 1; done & exec sleep 300", hold)
+	cmd := prepareBrowserSuiteCmd(exec.CommandContext(ctx, "sh", "-c", script), "http://127.0.0.1:1234")
 
 	start := time.Now()
-	if _, err := cmd.CombinedOutput(); err == nil {
-		t.Fatal("killed suite reported success")
-	}
-	if elapsed := time.Since(start); elapsed > 10*time.Second {
-		t.Fatalf("killed suite blocked for %s; a leaked browser would stall go test", elapsed)
+	done := make(chan error, 1)
+	go func() {
+		_, err := cmd.CombinedOutput()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("killed suite reported success")
+		}
+		if elapsed := time.Since(start); elapsed < browserSuiteWaitDelay {
+			t.Fatalf("killed suite returned after %s, short of the %s WaitDelay; the stand-in child never held the pipe, so this proved nothing", elapsed, browserSuiteWaitDelay)
+		}
+	case <-time.After(browserSuiteWaitDelay + 30*time.Second):
+		t.Fatalf("killed suite still reading well past its %s WaitDelay; a leaked browser would stall go test", browserSuiteWaitDelay)
 	}
 }

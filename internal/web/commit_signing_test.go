@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -84,6 +85,51 @@ func TestCommitSigningAPIReportsSetupRequirement(t *testing.T) {
 		}
 		if !strings.Contains(response.Settings.Message, "HARNESS_COMMIT_SIGNING_ENABLED") {
 			t.Fatalf("%s %s: unhelpful hold message: %q", test.method, test.path, response.Settings.Message)
+		}
+	}
+}
+
+// The hold crosses three layers: the Go state publishes setup_required,
+// commit-signing.js turns it into the banner and the commit-signing-required
+// event, and index.html listens for that event to block submissions. Renaming
+// any one side silently unblocks tasks, and the browser suite that drives the
+// whole flow is skipped wherever node is missing, so pin the contract here.
+func TestCommitSigningHoldContractAcrossEmbeddedAssets(t *testing.T) {
+	t.Parallel()
+	wire, err := json.Marshal(localruntime.CommitSigningState{SetupRequired: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"setup_required":true`) {
+		t.Fatalf("signing state no longer publishes the hold the browser reads: %s", wire)
+	}
+
+	srv := NewServer("", NewBroker())
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	assets := map[string]string{}
+	for _, path := range []string{"/", "/static/commit-signing.js"} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: %d %v", path, resp.StatusCode, err)
+		}
+		assets[path] = string(body)
+	}
+	for _, test := range []struct{ path, marker, why string }{
+		{"/static/commit-signing.js", "settings.setup_required", "the browser stops reading the hold from the API"},
+		{"/static/commit-signing.js", "'setup-required'", "the banner element is no longer filled in"},
+		{"/static/commit-signing.js", "commit-signing-required", "the hold is never announced to the app"},
+		{"/", `id="commit-signing-setup-required"`, "the settings banner that explains the hold is gone"},
+		{"/", `window.addEventListener("commit-signing-required"`, "the app stops listening for the hold"},
+		{"/", "state.commitSigningSetupRequired", "prompt submissions no longer check the hold"},
+	} {
+		if !strings.Contains(assets[test.path], test.marker) {
+			t.Fatalf("%s no longer contains %q: %s", test.path, test.marker, test.why)
 		}
 	}
 }
