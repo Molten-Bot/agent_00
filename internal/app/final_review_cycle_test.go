@@ -15,15 +15,18 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
 
+// cleanReviewCycleRunner answers every review pass with a clean verdict unless
+// reviewStdout replaces that payload.
 type cleanReviewCycleRunner struct {
-	t        *testing.T
-	mu       sync.Mutex
-	reviews  int
-	comments int
-	checks   int
-	released int
-	prompts  []string
-	argv     [][]string
+	t            *testing.T
+	reviewStdout string
+	mu           sync.Mutex
+	reviews      int
+	comments     int
+	checks       int
+	released     int
+	prompts      []string
+	argv         [][]string
 }
 
 func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, error) {
@@ -36,6 +39,9 @@ func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (exec
 		r.reviews++
 		r.prompts = append(r.prompts, cmd.Stdin)
 		r.argv = append(r.argv, append([]string(nil), cmd.Args...))
+		if r.reviewStdout != "" {
+			return execx.Result{Stdout: r.reviewStdout}, nil
+		}
 		return execx.Result{Stdout: "**Positive**\n- Scoped change.\n\n**Negative**\n- No material issues found.\n\n```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"clean\",\"positives\":[\"Scoped change.\"],\"findings\":[]}\n```"}, nil
 	case "git":
 		if len(cmd.Args) == 0 {
@@ -116,6 +122,81 @@ func TestRunFinalReviewCycleStopsAfterCleanPass(t *testing.T) {
 	for i, prompt := range runner.prompts {
 		if !strings.Contains(prompt, "The bundled review skill is mandatory") || !strings.Contains(prompt, fmt.Sprintf("Post-task review pass %d/3", i+1)) {
 			t.Fatalf("review prompt %d did not include skill and pass context", i+1)
+		}
+	}
+}
+
+func TestBlockingReviewFindingsSplitsAdvisoryFromBlockingSeverities(t *testing.T) {
+	t.Parallel()
+
+	findings := []reviewFinding{
+		{Severity: "Critical", Title: "Data loss"},
+		{Severity: "low", Title: "Rename the local variable"},
+		{Severity: " Nit ", Title: "Spacing"},
+		{Severity: "", Title: "Unlabeled severity"},
+		{Severity: "Medium", Title: "Missing error check"},
+		{Severity: "Info", Title: "Consider a comment"},
+	}
+
+	got := make([]string, 0, len(findings))
+	for _, finding := range blockingReviewFindings(findings) {
+		got = append(got, finding.Title)
+	}
+	// An unlabeled severity stays blocking: a finding the harness cannot
+	// classify must not be waved through as a nitpick.
+	want := []string{"Data loss", "Unlabeled severity", "Missing error check"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("blockingReviewFindings() titles = %v, want %v", got, want)
+	}
+}
+
+// A review cycle that only turns up advisory nitpicks has nothing left for a
+// fix pass to repair. It must finish successfully so the pull request leaves
+// draft, with the nitpicks reported in the review comment for a human.
+func TestRunFinalReviewCycleReleasesWhenOnlyAdvisoryFindingsRemain(t *testing.T) {
+	runner := &cleanReviewCycleRunner{
+		t:            t,
+		reviewStdout: "**Positive**\n- Scoped change.\n\n**Negative**\n- [Low] main.go:12 - Rename the local variable.\n\n```json\n{\"status\":\"findings\",\"mergeReady\":false,\"summary\":\"nitpick only\",\"positives\":[\"Scoped change.\"],\"findings\":[{\"severity\":\"Low\",\"path\":\"main.go\",\"line\":12,\"title\":\"Rename the local variable\"}]}\n```",
+	}
+	h := New(runner)
+	h.FinalReviewPasses = 3
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:        "https://github.com/acme/repo.git",
+		Dir:        repoDir,
+		RelDir:     "repo",
+		Branch:     "feature",
+		BaseBranch: "main",
+		PRURL:      "https://github.com/acme/repo/pull/7",
+		Changed:    true,
+	}
+
+	exitCode, stage, err := h.runFinalReviewCycle(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior."},
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err != nil || exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
+	}
+	if runner.reviews != 1 || runner.comments != 1 {
+		t.Fatalf("review/comment counts = %d/%d, want 1/1", runner.reviews, runner.comments)
+	}
+	for _, prompt := range runner.prompts {
+		if strings.Contains(prompt, "Automated review repair pass") {
+			t.Fatal("advisory-only findings must not start a repair pass")
 		}
 	}
 }

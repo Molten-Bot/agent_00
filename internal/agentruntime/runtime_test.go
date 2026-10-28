@@ -56,6 +56,93 @@ func TestTaskWorkspaceIsOnlyWritableRoot(t *testing.T) {
 	}
 }
 
+// Claude runs entirely inside the sandbox, so its configuration directory
+// must stay writable even though it lives outside the task workspace. A
+// read-only config dir fails the CLI's per-session scratch state with EROFS
+// and takes the Bash tool (and all local validation) down with it.
+func TestClaudeSandboxKeepsConfigDirWritable(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	configDir := filepath.Join(t.TempDir(), ".claude")
+	for _, dir := range []string{repo, configDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rt, err := Resolve(HarnessClaude, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := rt.BuildCommand(repo, "fix it", RunOptions{
+		WorkspaceDir: root,
+		Env:          []string{"CLAUDE_CONFIG_DIR=" + configDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedConfig, err := filepath.EvalSymlinks(configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, arg := range cmd.Args {
+		if !strings.HasPrefix(arg, "sandbox_workspace_write.writable_roots=") {
+			continue
+		}
+		if strings.Contains(arg, resolvedRoot) && strings.Contains(arg, resolvedConfig) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Claude sandbox did not keep %q writable: %v", resolvedConfig, cmd.Args)
+	}
+}
+
+// A read-only review pass keeps its deliberately narrow filesystem policy:
+// only the harness-owned IO directory is writable, never the operator config.
+func TestClaudeReviewSandboxDoesNotWidenForConfigDir(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	configDir := filepath.Join(t.TempDir(), ".claude")
+	for _, dir := range []string{repo, configDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rt, err := Resolve(HarnessClaude, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := rt.BuildCommand(repo, "review", RunOptions{
+		WorkspaceDir:    root,
+		DisallowedTools: []string{"Write"},
+		Env:             []string{"CLAUDE_CONFIG_DIR=" + configDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedConfig, err := filepath.EvalSymlinks(configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range cmd.Args {
+		if strings.Contains(arg, resolvedConfig) {
+			t.Fatalf("read-only review pass granted write access to %q: %v", resolvedConfig, cmd.Args)
+		}
+	}
+}
+
 func TestBuildCommandRejectsDirectoriesOutsideTask(t *testing.T) {
 	t.Parallel()
 	for _, harness := range []string{HarnessCodex, HarnessClaude} {

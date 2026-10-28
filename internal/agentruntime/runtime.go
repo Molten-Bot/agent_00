@@ -238,6 +238,22 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 			)
 		} else {
 			args = append(args, "-c", `sandbox_mode="workspace-write"`)
+			// Claude's whole process runs inside this sandbox, so its own
+			// configuration directory has to stay writable. The CLI creates
+			// per-session scratch state under $CLAUDE_CONFIG_DIR (for example
+			// session-env) before the Bash tool can run, and it rotates its
+			// refresh token in the same place. That directory deliberately
+			// points at the persistent operator config instead of a task-local
+			// copy, so it sits outside the task workspace: leaving it read-only
+			// fails every shell command with EROFS and silently costs the agent
+			// its local lint/test/build validation.
+			configDir, err := claudeConfigDirFromEnv(opts.Env)
+			if err != nil {
+				return execx.Command{}, err
+			}
+			if configDir != "" {
+				opts.WritableDirs = append(opts.WritableDirs, configDir)
+			}
 			args = append(args, workspaceSandboxArgs(opts)...)
 			args = append(args, "-c", "sandbox_workspace_write.network_access=true")
 		}
@@ -288,6 +304,27 @@ func resolveSandboxPath(dir string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(resolved, filepath.Base(path)), nil
+}
+
+// claudeConfigDirFromEnv resolves CLAUDE_CONFIG_DIR from the invocation
+// environment. Only the explicit variable is honored: the harness always sets
+// it, and falling back to the ambient process environment would grant a
+// directory the caller never selected write access inside the sandbox.
+func claudeConfigDirFromEnv(environ []string) (string, error) {
+	value := ""
+	for _, entry := range environ {
+		if name, entryValue, ok := strings.Cut(entry, "="); ok && name == "CLAUDE_CONFIG_DIR" {
+			value = strings.TrimSpace(entryValue)
+		}
+	}
+	if value == "" {
+		return "", nil
+	}
+	resolved, err := resolveSandboxPath(value)
+	if err != nil {
+		return "", fmt.Errorf("resolve Claude configuration directory: %w", err)
+	}
+	return resolved, nil
 }
 
 func workspaceSandboxArgs(opts RunOptions) []string {

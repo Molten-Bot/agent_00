@@ -3593,10 +3593,33 @@ func (h Harness) runFinalReviewCycle(
 			repo.RelDir,
 			repo.PRURL,
 		)
-		if len(outcome.Findings) == 0 {
+		blockingFindings := blockingReviewFindings(outcome.Findings)
+		if len(outcome.Findings) > 0 {
+			h.logf(
+				"stage=review status=ok action=triage review_mode=%s pass=%d blocking=%d advisory=%d repo=%s repo_dir=%s pr_url=%s",
+				reviewMode,
+				pass,
+				len(blockingFindings),
+				len(outcome.Findings)-len(blockingFindings),
+				repo.URL,
+				repo.RelDir,
+				repo.PRURL,
+			)
+		}
+		if len(blockingFindings) == 0 {
 			return ExitSuccess, "", nil
 		}
 		if pass > h.FinalReviewPasses {
+			h.logf(
+				"stage=review status=error action=exhausted review_mode=%s pass=%d blocking=%d repo=%s repo_dir=%s pr_url=%s blocking_findings=%q",
+				reviewMode,
+				pass,
+				len(blockingFindings),
+				repo.URL,
+				repo.RelDir,
+				repo.PRURL,
+				summarizeReviewFindings(blockingFindings, 6),
+			)
 			return ExitCodex, "review", fmt.Errorf("post-task review cycle still reported findings after exhausting %d fix pass(es); leaving pull request in draft for human review", h.FinalReviewPasses)
 		}
 
@@ -3613,7 +3636,7 @@ func (h Harness) runFinalReviewCycle(
 		if err != nil {
 			return ExitGit, "git", err
 		}
-		fixPrompt := finalReviewFixPrompt(cfg.Prompt, *repo, outcome.Findings, pass, h.FinalReviewPasses)
+		fixPrompt := finalReviewFixPrompt(cfg.Prompt, *repo, blockingFindings, pass, h.FinalReviewPasses)
 		fixInvocation := newAgentInvocationLogMetadata(runtime, "review_fix", pass, repo.RelDir, repo.RelDir, repo.RelDir)
 		if _, err := h.runCodexCapture(
 			ctx,
@@ -4475,6 +4498,60 @@ func reviewOutcomeAllowsAutoMerge(outcome reviewOutcome) bool {
 		}
 	}
 	return true
+}
+
+// advisoryReviewSeverities are the severities a review pass can report that
+// are worth telling a human about but must not block the pull request. The
+// bundled review skill orders findings Critical, High, Medium, then Low; the
+// synonyms are tolerated because agents occasionally label that bottom tier
+// "nit" or "info" instead.
+var advisoryReviewSeverities = map[string]struct{}{
+	"low":           {},
+	"minor":         {},
+	"nit":           {},
+	"nitpick":       {},
+	"info":          {},
+	"informational": {},
+	"trivial":       {},
+	"style":         {},
+	"suggestion":    {},
+	"note":          {},
+}
+
+// blockingReviewFindings returns the findings that must be repaired before the
+// pull request can leave draft, preserving the order the review reported.
+//
+// The post-task cycle re-reviews its own fix passes, so every pass adds fresh
+// code for the next pass to comment on. Treating advisory nitpicks as blocking
+// let a finished task spend its whole fix budget on cosmetic churn and then
+// fail the run, even when the defects the task was asked to fix were already
+// resolved. Unlabeled or unrecognized severities stay blocking: a finding the
+// harness cannot classify is not safe to wave through. reviewOutcomeAllowsAutoMerge
+// applies the same split from the opposite side for the auto-merge path.
+func blockingReviewFindings(findings []reviewFinding) []reviewFinding {
+	blocking := make([]reviewFinding, 0, len(findings))
+	for _, finding := range findings {
+		if _, advisory := advisoryReviewSeverities[strings.ToLower(strings.TrimSpace(finding.Severity))]; advisory {
+			continue
+		}
+		blocking = append(blocking, finding)
+	}
+	return blocking
+}
+
+// summarizeReviewFindings renders findings as one log-safe line so an
+// exhausted review cycle names what is still blocking instead of reporting
+// only that findings remain.
+func summarizeReviewFindings(findings []reviewFinding, limit int) string {
+	points := reviewFindingPoints(findings, limit)
+	if len(points) == 0 {
+		return "no finding details were returned"
+	}
+	summary := strings.Join(points, "; ")
+	if len(findings) > limit {
+		summary = fmt.Sprintf("%s; +%d more", summary, len(findings)-limit)
+	}
+	return summary
 }
 
 func repoWorkspaceDirName(repoURL string, index, total int) string {

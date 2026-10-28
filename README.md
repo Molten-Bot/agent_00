@@ -132,6 +132,14 @@ CLIs are included in the Docker image. Missing or failed sandbox tooling stops
 the run. The trusted Codex CLI still saves login rotation and session state to
 the persistent `CODEX_HOME`; model-issued commands cannot write there.
 
+Claude's own process is inside the sandbox, so its persistent
+`CLAUDE_CONFIG_DIR` is a writable root alongside the task directory. The CLI
+writes per-session scratch state there before any shell command runs and
+rotates its refresh token in the same place; a read-only config directory
+fails those writes with `EROFS` and takes the agent's local lint, test, and
+build validation down with it. Read-only review passes keep the narrower
+policy: only the harness-owned `.agent00-agent-io` directory is writable.
+
 Keep the bundled helper in this image: Debian trixie's `bubblewrap` 0.12.0 fails
 to mount `/proc` under Docker's masked proc paths in our container smoke check,
 while Codex 0.147.0's bundled helper succeeds with the security options above.
@@ -331,9 +339,17 @@ harness reports the targeting error instead of opening a replacement PR.
 Post-task PR review cycles are also off by default. Configure
 `review_watch.review_level` as `off`, `low`, `medium`, or `high` to run 0 or up
 to 1, 3, or 6 review passes after a task creates its pull request and
-initial checks finish. A pass with no negative findings ends the cycle early.
-Actionable findings are repaired and checked before the next pass; final-pass
-findings are repaired and checked without an extra pass.
+initial checks finish. A pass with no blocking findings ends the cycle early.
+Blocking findings are repaired and checked before the next pass; a fix applied
+on the final configured pass is confirmed by one extra review before the pull
+request leaves draft.
+
+Severity decides what blocks. Critical, High, Medium, and unlabeled findings
+drive a repair pass, and the run fails with the pull request left in draft when
+they survive every configured pass. Low-severity nitpicks are posted in the
+review comment for a human but never start a repair pass or hold the pull
+request in draft, so a cycle that re-reviews its own fixes cannot spend its
+whole budget on cosmetic churn.
 
 ### Go Module
 
