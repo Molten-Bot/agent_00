@@ -66,6 +66,20 @@ func (s SigningSettings) ApplyEnvironment(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(raw) == "" {
+		// Policy only: whatever is wrong is fixable in Settings → Commit signing,
+		// so report a setup hold and let callers that can serve a UI start up.
+		if err := s.SetupRequirement(); err != nil {
+			return err
+		}
+		if _, err := s.Configure(ctx, CommitSigningRequest{Enabled: cfg.Enabled}); err != nil {
+			return markSetupRequired(err)
+		}
+		return nil
+	}
+	// A supplied key must import, verify, and register before this process
+	// accepts work. Continuing would silently sign commits with a stale saved
+	// key that this boot never validated.
 	_, err = s.Configure(ctx, CommitSigningRequest{Enabled: cfg.Enabled, PrivateKey: raw, Passphrase: passphrase})
 	return err
 }

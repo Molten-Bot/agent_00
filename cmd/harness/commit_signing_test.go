@@ -72,3 +72,66 @@ func TestSigningEnvironmentCLIRejectsInvalidPolicyAtStartup(t *testing.T) {
 		t.Fatalf("serve exit = %d, want %d", code, app.ExitConfig)
 	}
 }
+
+func TestSigningSubmissionGateHoldsTasksUntilKeyIsSaved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", path)
+	t.Setenv("HARNESS_COMMIT_SIGNING_ENABLED", "")
+	if err := os.WriteFile(path, []byte(`{"commit_signing":{"enabled":true}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err := signingSubmissionGate(localruntime.InitConfig{}, execx.OSRunner{})
+	if err == nil || !errors.Is(err, gitsigning.ErrSetup) || !errors.Is(err, localruntime.ErrSigningSetupRequired) {
+		t.Fatalf("submission accepted while signing was unconfigured: %v", err)
+	}
+
+	// Saving a key releases queued work without restarting the server.
+	if err := os.WriteFile(path, []byte(`{"commit_signing":{"enabled":true,"key_id":"abc123"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := signingSubmissionGate(localruntime.InitConfig{}, execx.OSRunner{}); err != nil {
+		t.Fatalf("submission still blocked after saving a key: %v", err)
+	}
+
+	// Signing off leaves submissions unblocked.
+	if err := os.WriteFile(path, []byte(`{"commit_signing":{"enabled":false}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := signingSubmissionGate(localruntime.InitConfig{}, execx.OSRunner{}); err != nil {
+		t.Fatalf("submission blocked with signing disabled: %v", err)
+	}
+}
+
+func TestSigningEnvironmentWithoutKeyHoldsSetupInsteadOfFailingStartup(t *testing.T) {
+	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", filepath.Join(t.TempDir(), "config.json"))
+	t.Setenv("HARNESS_COMMIT_SIGNING_ENABLED", "true")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", "")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE", "")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "")
+
+	err := signingSettings(localruntime.InitConfig{}, execx.OSRunner{}).ApplyEnvironment(context.Background())
+	if err == nil || !errors.Is(err, localruntime.ErrSigningSetupRequired) {
+		t.Fatalf("required signing without a key = %v, want a setup hold serve can boot through", err)
+	}
+}
+
+func TestSigningEnvironmentRejectsUnusableProvidedKeyAtStartup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", path)
+	t.Setenv("HARNESS_COMMIT_SIGNING_ENABLED", "true")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", "not-a-private-key")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE", "")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "")
+	// A previously saved key must not quietly take over for the supplied one.
+	if err := os.WriteFile(path, []byte(`{"commit_signing":{"enabled":true,"key_id":"abc123"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := signingSettings(localruntime.InitConfig{}, execx.OSRunner{}).ApplyEnvironment(context.Background())
+	if err == nil || !errors.Is(err, gitsigning.ErrSetup) {
+		t.Fatalf("unusable environment key = %v, want a signing setup error", err)
+	}
+	if errors.Is(err, localruntime.ErrSigningSetupRequired) {
+		t.Fatalf("unusable environment key was held instead of stopping startup: %v", err)
+	}
+}

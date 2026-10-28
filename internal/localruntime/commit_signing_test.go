@@ -178,6 +178,53 @@ func TestSigningSettingsImportSurvivesIdentityFailure(t *testing.T) {
 	}
 }
 
+// signingTestRunner stands in for git so signing checks stay hermetic.
+type signingTestRunner struct{}
+
+func (signingTestRunner) Run(context.Context, execx.Command) (execx.Result, error) {
+	return execx.Result{}, nil
+}
+
+func TestSigningSettingsFailedEnableKeepsTasksHeld(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/user" {
+			json.NewEncoder(w).Encode(map[string]any{"login": "test-bot", "id": 123, "name": "Test Bot"})
+			return
+		}
+		// No registered signing key, so enabling must fail after the import.
+		json.NewEncoder(w).Encode([]map[string]string{})
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "config.json")
+	store := SigningSettings{
+		Path:   path,
+		Runner: signingTestRunner{},
+		GitHub: func() gitsigning.GitHub {
+			return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()}
+		},
+	}
+	if err := store.save(gitsigning.Config{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	req := CommitSigningRequest{Enabled: true, PrivateKey: signingTestPrivateKey(t), Passphrase: "test-passphrase"}
+	if _, err := store.Configure(ctx, req); !errors.Is(err, gitsigning.ErrSetup) {
+		t.Fatalf("unregistered key accepted: %v", err)
+	}
+	state, err := store.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Enabled {
+		t.Fatal("failed enable turned signing off; tasks would run unsigned")
+	}
+	if !state.Configured {
+		t.Fatal("imported key was not retained")
+	}
+}
+
 func TestSigningSettingsMissingKeyFailsClosed(t *testing.T) {
 	t.Parallel()
 	store := SigningSettings{Path: filepath.Join(t.TempDir(), "config.json")}

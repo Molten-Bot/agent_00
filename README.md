@@ -236,10 +236,13 @@ Settings preference.
 When signing is required but setup is incomplete, `serve` still starts and the
 local UI stays reachable. The browser opens on **Settings → Commit signing**,
 that section states why signing is blocked, and task submissions are refused
-until a signing key is saved; no restart is needed once it is. A signing
-configuration error that is not a setup problem still stops startup. Tasks also
-recheck signing before running, so a key that is saved but unregistered or
-unusable still stops the task rather than producing unsigned commits.
+until a signing key is saved; no restart is needed once it is. Startup still
+stops on signing configuration that the UI cannot fix, such as an invalid
+`HARNESS_COMMIT_SIGNING_ENABLED` value, an unreadable runtime configuration, or
+an environment-supplied private key that fails the import, identity, or
+registration checks. Tasks also recheck signing before running, so a key that is
+saved but unregistered or unusable still stops the task rather than producing
+unsigned commits.
 
 To provision a key at boot, also set `HARNESS_COMMIT_SIGNING_PRIVATE_KEY` to the
 literal multiline SSH private key, or `HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE`

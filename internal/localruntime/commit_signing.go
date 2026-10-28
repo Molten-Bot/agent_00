@@ -16,6 +16,28 @@ import (
 
 var signingSettingsMu sync.Mutex
 
+// ErrSigningSetupRequired marks the one signing failure a server can serve
+// through: the policy requires signing but Settings cannot sign yet. Callers
+// that can hold tasks keep the UI reachable so the operator can save a key;
+// every other signing failure stays a fatal configuration error. It always
+// accompanies gitsigning.ErrSetup, so existing setup handling is unaffected.
+var ErrSigningSetupRequired = errors.New("commit signing setup required")
+
+type setupRequiredError struct{ err error }
+
+func (e setupRequiredError) Error() string { return e.err.Error() }
+func (e setupRequiredError) Unwrap() error { return e.err }
+func (e setupRequiredError) Is(target error) bool { return target == ErrSigningSetupRequired }
+
+// markSetupRequired tags a signing failure as fixable in Settings → Commit
+// signing rather than fatal at startup.
+func markSetupRequired(err error) error {
+	if err == nil {
+		return nil
+	}
+	return setupRequiredError{err: err}
+}
+
 type CommitSigningRequest struct {
 	Enabled    bool   `json:"enabled"`
 	PrivateKey string `json:"private_key,omitempty"`
@@ -120,9 +142,9 @@ func (s SigningSettings) SetupRequirement() error {
 		return nil
 	}
 	if commitSigningEnvEnforced() {
-		return fmt.Errorf("%w: %s requires a signing key; save one in Settings → Commit signing before running tasks", gitsigning.ErrSetup, commitSigningEnabledEnv)
+		return markSetupRequired(fmt.Errorf("%w: %s requires a signing key; save one in Settings → Commit signing before running tasks", gitsigning.ErrSetup, commitSigningEnabledEnv))
 	}
-	return fmt.Errorf("%w: save a signing key first", gitsigning.ErrSetup)
+	return markSetupRequired(fmt.Errorf("%w: save a signing key first", gitsigning.ErrSetup))
 }
 
 // ApplySetupRequirement annotates a state for the UI so Settings can explain
@@ -173,6 +195,10 @@ func (s SigningSettings) Configure(ctx context.Context, req CommitSigningRequest
 		if err != nil {
 			return signingState(current), err
 		}
+		// Import returns fresh metadata with signing off. Keep the policy that is
+		// already in effect so a failed enable below cannot silently disable
+		// signing and let tasks run unsigned.
+		cfg.Enabled = current.Enabled
 		// Persist the new key's public material now so it stays visible to copy and
 		// register on GitHub even if the identity/registration checks below fail.
 		if err := s.save(cfg); err != nil {

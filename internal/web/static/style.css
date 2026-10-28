@@ -9002,8 +9002,9 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   margin: 0;
   padding: 10px 12px;
   border-radius: 8px;
-  border-left: 3px solid #e5484d;
-  background: rgba(229, 72, 77, 0.14);
+  border-left: 3px solid var(--bad);
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+  color: var(--text);
   font-weight: 600;
 }
 .commit-signing-required[hidden] { display: none; }
