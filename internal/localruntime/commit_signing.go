@@ -314,6 +314,13 @@ func (s SigningSettings) save(cfg gitsigning.Config) error {
 func (s SigningSettings) Configure(ctx context.Context, req CommitSigningRequest) (CommitSigningState, error) {
 	signingSettingsMu.Lock()
 	defer signingSettingsMu.Unlock()
+	// Hold the submission gate as well. The checks below end in a hold write,
+	// and a recheck that only takes the gate could finish afterwards and publish
+	// its older verdict over this one, reopening submissions against settings
+	// that just failed.
+	gate := s.recheckGate()
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
 	current, err := s.config()
 	if err != nil {
 		return signingState(current), err
@@ -397,14 +404,19 @@ func (s SigningSettings) Verify(ctx context.Context) (CommitSigningState, error)
 	}
 	// Share the submission gate so this check and its verdict cannot interleave
 	// with a held submission's recheck and release a hold the other one just
-	// re-recorded, or the other way round.
+	// re-recorded, or the other way round. The interval is deliberately not
+	// stamped: it throttles bursts of held submissions, and borrowing it for an
+	// operator-driven check would make the next submission wait it out instead
+	// of revalidating a key the operator may have fixed in between.
 	gate := s.recheckGate()
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
-	gate.checked = s.now()
 	if err = s.check(ctx, cfg); err != nil {
 		state.Registration = "not_ready"
-		return state, err
+		// A key that stops working after a clean boot has no hold yet. Record one
+		// so SetupRequirement keeps holding tasks instead of queuing work that
+		// can only fail when it tries to sign a commit.
+		return state, s.holdUnvalidated(cfg, err)
 	}
 	// check covers everything a boot checks, so an operator who fixed the key on
 	// GitHub releases the startup hold from Check registration, without having

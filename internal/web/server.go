@@ -1329,6 +1329,15 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             statusNode.dataset.wrap = "";
             delete statusNode.dataset.dictationHint;
             if (signingHold.required) {
+              // The hold can be cleared elsewhere, by saving a key in Settings
+              // or in another tab, so re-read it before refusing. Without this
+              // the last loaded state sticks and this tab keeps rejecting
+              // prompts the server would now accept, until a reload.
+              statusNode.textContent = "Checking commit signing...";
+              statusNode.dataset.tone = "warn";
+              await refreshCommitSigningHold();
+            }
+            if (signingHold.required) {
               statusNode.textContent = commitSigningHoldMessage();
               statusNode.dataset.tone = "error";
               renderCommitSigningHold();

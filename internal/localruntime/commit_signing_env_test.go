@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -306,7 +307,24 @@ func TestSigningSubmissionRequirementRechecksTransientHold(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	path := filepath.Join(t.TempDir(), "config.json")
-	store := SigningSettings{Path: path, GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()} }}
+	// The recheck is rate limited, so drive its clock instead of waiting out the
+	// interval in real time.
+	var clock sync.Mutex
+	now := time.Now()
+	store := SigningSettings{
+		Path:   path,
+		GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()} },
+		Now: func() time.Time {
+			clock.Lock()
+			defer clock.Unlock()
+			return now
+		},
+	}
+	advance := func(d time.Duration) {
+		clock.Lock()
+		defer clock.Unlock()
+		now = now.Add(d)
+	}
 	ctx := context.Background()
 	t.Setenv(commitSigningEnabledEnv, "true")
 	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", raw)
@@ -328,6 +346,12 @@ func TestSigningSubmissionRequirementRechecksTransientHold(t *testing.T) {
 	}
 
 	unavailable.Store(false)
+	// Still inside the interval, so this submission reports the recorded hold
+	// rather than paying for a second round of GitHub checks.
+	if err := store.SubmissionRequirement(ctx); !errors.Is(err, ErrSigningSetupRequired) {
+		t.Fatalf("recheck ran again inside the interval: %v", err)
+	}
+	advance(signingRecheckInterval)
 	if err := store.SubmissionRequirement(ctx); err != nil {
 		t.Fatalf("hold outlived the failure that caused it: %v", err)
 	}
