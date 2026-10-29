@@ -3,7 +3,7 @@
 const { before, after, test } = require('node:test');
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
-const { expect } = require('@playwright/test');
+const { expect } = require('playwright/test');
 const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
 let browser;
 before(async () => {
