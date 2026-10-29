@@ -230,9 +230,19 @@ the host's global Git configuration.
 For unattended startup, set `HARNESS_COMMIT_SIGNING_ENABLED=true` in the
 container environment. It overrides the saved enabled flag, reuses the key
 already configured in Settings, and prevents Settings from disabling signing.
-Startup fails if the key, GitHub registration, or local signing check fails;
-tasks also recheck signing before running. Set it to `false` to force signing
-off, or leave it empty/unset to use the saved Settings preference.
+Set it to `false` to force signing off, or leave it empty/unset to use the saved
+Settings preference.
+
+When signing is required but setup is incomplete, `serve` still starts and the
+local UI stays reachable. The browser opens on **Settings → Commit signing**,
+that section states why signing is blocked, and task submissions are refused
+until a signing key is saved; no restart is needed once it is. Startup still
+stops on signing configuration that the UI cannot fix, such as an invalid
+`HARNESS_COMMIT_SIGNING_ENABLED` value, an unreadable runtime configuration, or
+an environment-supplied private key that fails the import, identity, or
+registration checks. Tasks also recheck signing before running, so a key that is
+saved but unregistered or unusable still stops the task rather than producing
+unsigned commits.
 
 To provision a key at boot, also set `HARNESS_COMMIT_SIGNING_PRIVATE_KEY` to the
 literal multiline SSH private key, or `HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE`

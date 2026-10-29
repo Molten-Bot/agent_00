@@ -6127,12 +6127,26 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   box-shadow: var(--surface-auth-panel-shadow);
 }
 
+.agent-auth-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 #agent-auth-title {
   margin: 0;
   color: var(--text);
   font-size: 2rem;
   font-weight: 600;
   line-height: 1.25;
+}
+
+.agent-auth-title-logo {
+  display: block;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  filter: var(--agent-logo-filter);
 }
 
 #agent-auth-message {
@@ -6370,31 +6384,6 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   text-decoration-line: underline;
   text-decoration-style: dotted;
   text-underline-offset: 2px;
-}
-
-.agent-auth-url-logo-link {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  width: fit-content;
-  text-decoration: none;
-}
-
-.agent-auth-url-logo {
-  display: block;
-  width: 58px;
-  height: 58px;
-  padding: 9px;
-  border: 0;
-  border-radius: var(--radius-card);
-  background: transparent;
-  box-shadow: none;
-  filter: var(--agent-logo-filter);
-}
-
-.agent-auth-url-logo-link:hover .agent-auth-url-logo,
-.agent-auth-url-logo-link:focus-visible .agent-auth-url-logo {
-  opacity: 0.85;
 }
 
 .agent-auth-browser-code-hint {
@@ -8995,3 +8984,16 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   .chat-head { padding-bottom: 6px; }
   .chat-controls, .chat-repo-grid, .chat-repo-pagination { padding-top: 6px; }
 }
+
+/* Commit signing holds every task until a key is saved: keep the reason in
+   front of the key field, and readable in each theme. */
+.commit-signing-required {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border-left: 3px solid var(--bad);
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+  color: var(--text);
+  font-weight: 600;
+}
+.commit-signing-required[hidden] { display: none; }

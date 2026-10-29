@@ -26,6 +26,12 @@ func commitSigningEnabledFromEnv() (*bool, error) {
 	return &enabled, nil
 }
 
+// commitSigningEnvEnforced reports whether the environment pins the signing
+// policy. Settings cannot change it, so messages point at the variable instead.
+func commitSigningEnvEnforced() bool {
+	return strings.TrimSpace(os.Getenv(commitSigningEnabledEnv)) != ""
+}
+
 // ApplyEnvironment provisions signing at startup through the same validation
 // and private key store as Settings. Secrets never enter the runtime JSON.
 // Enabled signing must be ready before the server starts accepting tasks.
@@ -60,6 +66,28 @@ func (s SigningSettings) ApplyEnvironment(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(raw) == "" {
+		// Policy only: whatever is wrong is fixable in Settings → Commit signing,
+		// so report a setup hold and let callers that can serve a UI start up.
+		// This call revalidates the saved key, so skip a hold an earlier call
+		// left behind instead of reporting it in place of today's result. The
+		// hold itself stays in place until Configure below clears it, so a
+		// submission that lands mid-check still meets the gate.
+		if err := s.setupRequirement(false); err != nil {
+			return err
+		}
+		// A key saved by an earlier boot still has to pass identity, signing,
+		// and registration checks now. Record the failure as a startup hold so
+		// SetupRequirement keeps refusing submissions; a saved key alone would
+		// otherwise release the gate and sign with a key this boot rejected.
+		if _, err := s.Configure(ctx, CommitSigningRequest{Enabled: cfg.Enabled}); err != nil {
+			return s.holdBoot(err)
+		}
+		return nil
+	}
+	// A supplied key must import, verify, and register before this process
+	// accepts work. Continuing would silently sign commits with a stale saved
+	// key that this boot never validated.
 	_, err = s.Configure(ctx, CommitSigningRequest{Enabled: cfg.Enabled, PrivateKey: raw, Passphrase: passphrase})
 	return err
 }

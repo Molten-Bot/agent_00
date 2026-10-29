@@ -639,7 +639,10 @@
 
   <div id="agent-auth-gate" class="agent-auth-gate hidden" aria-live="polite">
     <div id="agent-auth-shell" class="agent-auth-shell">
-      <h2 id="agent-auth-title">Authorize Agent to get started</h2>
+      <div class="agent-auth-title-row">
+        <img id="agent-auth-title-logo" class="agent-auth-title-logo hidden" src="/static/logos/claude-code.svg" alt="">
+        <h2 id="agent-auth-title">Authorize Agent to get started</h2>
+      </div>
       <p id="agent-auth-message"></p>
 
       <div id="agent-auth-harness-picker" class="hidden">
@@ -659,16 +662,11 @@
             <span class="sr-only">Copy device code</span>
           </button>
         </div>
-        <a id="agent-auth-url" class="agent-auth-url" href="" target="_blank" rel="noopener noreferrer">
-          <img
-            id="agent-auth-url-logo"
-            class="agent-auth-url-logo hidden"
-            src="/static/logos/claude-code.svg"
-            alt="Open Claude login">
+        <a id="agent-auth-url" class="agent-auth-url hidden" href="" target="_blank" rel="noopener noreferrer">
           <span id="agent-auth-url-text"></span>
         </a>
         <div id="agent-auth-browser-code" class="hidden">
-          <p>Open the Claude login link above, sign in, then paste the code here.</p>
+          <p>Complete Claude sign-in in the browser, then paste the code here.</p>
           <details id="agent-auth-browser-commands">
             <summary>Use existing Claude credentials instead</summary>
             <div class="agent-auth-command-box agent-auth-command-box-inline">
@@ -841,6 +839,7 @@
           <div class="review-settings-section commit-signing-section" id="commit-signing-section" role="tabpanel" aria-labelledby="settings-tab-signing" hidden>
             <h3 class="review-settings-section-title sr-only">Commit signing</h3>
             <div class="stack commit-signing-fields">
+              <p id="commit-signing-setup-required" class="commit-signing-required" role="alert" hidden></p>
               <p>1. Paste your SSH private key and click Save signing settings. 2. Copy the public key shown below and add it to GitHub as a Signing Key. 3. Check registration, enable “Sign commits for all tasks”, and close settings to save. Changes apply to tasks that start after saving.</p>
               <label for="commit-signing-private-key">SSH private key</label>
               <textarea id="commit-signing-private-key" class="prompt-text agent-auth-secret-input" rows="4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="commit-signing-private-key-help" placeholder="Paste the full SSH private key, including BEGIN and END lines"></textarea>
@@ -989,7 +988,6 @@
     );
     const APP_LOGO_URL = "/static/logo.svg";
     const GITHUB_LOGO_URL = "/static/logos/github.svg";
-    const CLAUDE_AUTH_LOGO_URL = "/static/logos/claude-code.svg";
     const TASK_ACTION_ICON_NAMES = Object.freeze({
       output: "terminal-square",
       terminal: "terminal-square",
@@ -1887,7 +1885,6 @@
       agentAuthChallengeKey: "",
       agentAuthBrowserCode: "",
       agentAuthLastAutoSubmittedCode: "",
-      agentAuthURLLogoBroken: false,
       agentHarnessSelectionPending: "",
       libraryPromptModalOpen: false,
       taskPromptModalOpen: false,
@@ -1900,6 +1897,8 @@
         disk: false,
       },
       chatReposLoaded: false,
+      commitSigningSetupRequired: false,
+      commitSigningHoldMessage: "",
     };
     if (pruneTaskHistory()) {
       persistTaskHistory();
@@ -2097,8 +2096,8 @@
     const agentAuthHarnessPicker = document.getElementById("agent-auth-harness-picker");
     const agentAuthHarnessGrid = document.getElementById("agent-auth-harness-grid");
     const agentAuthDetails = document.getElementById("agent-auth-details");
+    const agentAuthTitleLogo = document.getElementById("agent-auth-title-logo");
     const agentAuthURL = document.getElementById("agent-auth-url");
-    const agentAuthURLLogo = document.getElementById("agent-auth-url-logo");
     const agentAuthURLText = document.getElementById("agent-auth-url-text");
     const agentAuthDeviceCodeRow = document.getElementById("agent-auth-device-code-row");
     const agentAuthCode = document.getElementById("agent-auth-code");
@@ -3456,6 +3455,12 @@
           agentAuthTitle.textContent = `Authorize ${currentAgentLabel()} to get started`;
         }
       }
+      if (agentAuthTitleLogo) {
+        const showClaudeTitleLogo = authHarness(state.agentAuth) === "claude" &&
+          !needsHarnessSelection &&
+          !needsClaudeGitHubConfigure;
+        agentAuthTitleLogo.classList.toggle("hidden", !showClaudeTitleLogo);
+      }
       if (agentAuthMessage) {
         const message = state.agentAuth.message || (needsHarnessSelection ? "Choose one logo to bind this runtime." : "");
         agentAuthMessage.textContent = message;
@@ -3471,30 +3476,10 @@
       }
       if (agentAuthURL) {
         const authURL = state.agentAuth.authURL || "";
-        const useClaudeLogoLink = authHarness(state.agentAuth) === "claude" && authURL !== "";
-        const showClaudeLogoLink = useClaudeLogoLink && !state.agentAuthURLLogoBroken;
-        agentAuthURL.href = state.agentAuth.authURL || "#";
-        agentAuthURL.classList.toggle("pointer-events-none", !authURL);
-        agentAuthURL.classList.toggle("hidden", !authURL);
-        agentAuthURL.classList.toggle("agent-auth-url-logo-link", showClaudeLogoLink);
-        if (agentAuthURLLogo) {
-          if (agentAuthURLLogo.getAttribute("src") !== CLAUDE_AUTH_LOGO_URL) {
-            agentAuthURLLogo.src = CLAUDE_AUTH_LOGO_URL;
-          }
-          agentAuthURLLogo.classList.toggle("hidden", !showClaudeLogoLink);
-        }
-        if (agentAuthURLText) {
-          if (!authURL) {
-            agentAuthURLText.textContent = "";
-            agentAuthURLText.classList.add("hidden");
-          } else if (useClaudeLogoLink) {
-            agentAuthURLText.textContent = "Open Claude login";
-            agentAuthURLText.classList.remove("hidden");
-          } else {
-            agentAuthURLText.textContent = authURL;
-            agentAuthURLText.classList.remove("hidden");
-          }
-        }
+        const showAuthURL = authURL !== "" && authHarness(state.agentAuth) !== "claude";
+        agentAuthURL.href = showAuthURL ? authURL : "#";
+        agentAuthURL.classList.toggle("hidden", !showAuthURL);
+        if (agentAuthURLText) agentAuthURLText.textContent = showAuthURL ? authURL : "";
       }
       if (agentAuthCode) {
         agentAuthCode.textContent = state.agentAuth.deviceCode || "";
@@ -13182,18 +13167,6 @@
         }, 0);
       });
     }
-    if (agentAuthURLLogo) {
-      agentAuthURLLogo.addEventListener("load", () => {
-        if (!state.agentAuthURLLogoBroken) return;
-        state.agentAuthURLLogoBroken = false;
-        applyAgentAuthGate(state.agentAuth);
-      });
-      agentAuthURLLogo.addEventListener("error", () => {
-        if (state.agentAuthURLLogoBroken) return;
-        state.agentAuthURLLogoBroken = true;
-        applyAgentAuthGate(state.agentAuth);
-      });
-    }
     if (githubProfileLink) {
       githubProfileLink.addEventListener("click", () => {
         trackAnalyticsEvent("github_profile_opened", { source: "dock" });
@@ -13257,6 +13230,32 @@
       if (event.target === settingsGate && !state.settingsBusy) void submitReviewSettings();
     });
     if (window.location.hash === "#settings") setSettingsOpen(true);
+
+    function commitSigningHoldMessage() {
+      return state.commitSigningHoldMessage
+        || "Commit signing is required, but no signing key is saved. Save one in Settings → Commit signing to run tasks.";
+    }
+    function openCommitSigningSettings() {
+      setSettingsTab("signing");
+      if (!state.settingsOpen) setSettingsOpen(true);
+    }
+    // Required signing without a saved key blocks every task on the server, so
+    // put the operator on the signing settings instead of an empty Studio.
+    window.addEventListener("commit-signing-required", (event) => {
+      const required = Boolean(event.detail?.required);
+      state.commitSigningSetupRequired = required;
+      state.commitSigningHoldMessage = required ? String(event.detail?.message || "").trim() : "";
+      if (required) openCommitSigningSettings();
+    });
+    // Capture runs before the submit handler below, so the run never leaves the
+    // browser while setup is incomplete.
+    localPromptForm.addEventListener("submit", (event) => {
+      if (!state.commitSigningSetupRequired) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setLocalPromptStatus("error", commitSigningHoldMessage());
+      openCommitSigningSettings();
+    }, true);
 
     if (reviewSettingsForm) {
       reviewSettingsForm.addEventListener("submit", submitReviewSettings);

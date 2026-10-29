@@ -47,6 +47,9 @@ func (s Server) handleCommitSigning(w http.ResponseWriter, r *http.Request) {
 		}
 		state, err = s.CommitSigning.Configure(r.Context(), req)
 	}
+	// Every response carries the current hold so the browser never unblocks
+	// tasks on a reply that only reports a failed setup attempt.
+	state = s.CommitSigning.ApplySetupRequirement(state)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error(), "settings": state})
 		return
