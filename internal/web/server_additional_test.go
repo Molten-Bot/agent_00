@@ -1531,8 +1531,14 @@ func TestAuthGateVerifyButtonHidesWhileVerificationIsPending(t *testing.T) {
 		!strings.Contains(html, `setAgentAuthConfigureError(requiresManualConfigure ? githubTokenStartupError(state.agentAuth) : "");`) {
 		t.Fatalf("expected invalid startup GitHub config to render in the configuration dialog error")
 	}
-	if !strings.Contains(html, "id=\"agent-auth-url-logo\"") {
-		t.Fatalf("expected auth gate to include Claude logo link element")
+	if !strings.Contains(html, "id=\"agent-auth-title-logo\"") {
+		t.Fatalf("expected auth gate to include Claude title logo")
+	}
+	if !strings.Contains(html, "id=\"agent-auth-url\"") || strings.Contains(html, "Open Claude login") {
+		t.Fatalf("expected auth gate to retain generic OAuth link without nonfunctional Claude login link")
+	}
+	if !strings.Contains(html, `const showAuthURL = authURL !== "" && authHarness(state.agentAuth) !== "claude";`) {
+		t.Fatalf("expected auth gate to hide OAuth link for Claude only")
 	}
 	if !strings.Contains(html, "id=\"agent-auth-browser-code-input\"") {
 		t.Fatalf("expected auth gate to include Claude browser-code input")

@@ -3,7 +3,7 @@
 const { before, after, test } = require('node:test');
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
-const { expect } = require('@playwright/test');
+const { expect } = require('playwright/test');
 const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
 let browser;
 before(async () => {
@@ -33,7 +33,7 @@ const pending = {
 };
 const reply = (route, auth) => route.fulfill({ json: { ok: true, auth } });
 
-test('first load checks auth before enabling submission and displays the Claude link', async t => {
+test('first load checks auth before enabling submission and displays Claude setup', async t => {
   let release;
   const waiting = new Promise(resolve => { release = resolve; });
   let requests = 0;
@@ -46,10 +46,22 @@ test('first load checks auth before enabling submission and displays the Claude 
   await expect(page.locator('#agent-auth-message')).toHaveText('Checking agent authorization…');
   release();
   await expect(page.locator('#agent-auth-title')).toHaveText('Setup Claude');
-  await expect(page.locator('#agent-auth-url')).toBeVisible();
-  await expect(page.locator('#agent-auth-url')).toHaveText('Open Claude login');
+  await expect(page.locator('#agent-auth-title-logo')).toBeVisible();
+  await expect(page.locator('#agent-auth-url')).toBeHidden();
   await expect(page.locator('#agent-auth-browser-code-input')).toBeVisible();
   assert.ok(requests > 0, 'initial auth status was requested');
+});
+
+test('Codex device authorization keeps its OAuth link', async t => {
+  const authURL = 'https://auth.openai.com/device';
+  const page = await openPage(t, route => reply(route, {
+    harness: 'codex', required: true, ready: false, state: 'pending_device_auth',
+    auth_url: authURL, device_code: 'CODEX-TEST',
+  }));
+  await expect(page.locator('#agent-auth-url')).toBeVisible();
+  await expect(page.locator('#agent-auth-url')).toHaveAttribute('href', authURL);
+  await expect(page.locator('#agent-auth-url')).toHaveText(authURL);
+  await expect(page.locator('#agent-auth-title-logo')).toBeHidden();
 });
 
 test('GitHub setup and agent selection continue into Claude browser authorization', async t => {
@@ -82,7 +94,7 @@ test('GitHub setup and agent selection continue into Claude browser authorizatio
   await page.locator('[data-agent-harness="claude"]').click();
   await expect(page.locator('#agent-auth-verify')).toHaveText('Sign in to Claude');
   await page.locator('#agent-auth-verify').click();
-  await expect(page.locator('#agent-auth-url')).toBeVisible();
+  await expect(page.locator('#agent-auth-title-logo')).toBeVisible();
   await page.locator('#agent-auth-browser-code-input').fill('browser-code#test-state');
   // Pasting the code submits it automatically; the dialog may close before a click.
   await expect(page.locator('#agent-auth-gate')).toBeHidden();
@@ -147,8 +159,8 @@ test('live container exposes the installed Claude CLI browser challenge', {
   await expect(page.locator('#agent-auth-title')).toHaveText('Setup Claude');
   const signIn = page.getByRole('button', { name: 'Sign in to Claude', exact: true });
   if (await signIn.isVisible()) await signIn.click();
-  await expect(page.locator('#agent-auth-url')).toBeVisible({ timeout: 15000 });
-  await expect(page.locator('#agent-auth-url')).toHaveAttribute('href', /^https:\/\/claude\.(com|ai)\//);
+  await expect(page.locator('#agent-auth-title-logo')).toBeVisible({ timeout: 15000 });
+  await expect(page.locator('#agent-auth-url')).toBeHidden();
   await expect(page.locator('#agent-auth-browser-code-input')).toBeVisible();
   await expect(page.locator('#local-prompt-submit')).toBeDisabled();
 });

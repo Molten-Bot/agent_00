@@ -71,7 +71,11 @@ for (const harness of ['claude', 'codex']) test(`settings reopen ${harness} sign
   await select(page, 'automation');
   await toggle(page, 'review-settings-auto-merge');
   await link.click();
-  await page.waitForFunction(() => document.getElementById('settings-gate').classList.contains('hidden') && !document.getElementById('agent-auth-url').classList.contains('hidden'));
+  await page.waitForFunction(harness => {
+    if (!document.getElementById('settings-gate').classList.contains('hidden')) return false;
+    const selector = harness === 'claude' ? '#agent-auth-browser-code-input' : '#agent-auth-device-code-row';
+    return !document.querySelector(selector).classList.contains('hidden');
+  }, harness);
   assert.equal(starts, 1);
   assert.equal(writes.at(-1).auto_merge, true, 'pending settings saved before sign-in');
   assert.equal(await page.locator('#local-prompt-submit').isDisabled(), true);
