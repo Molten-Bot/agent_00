@@ -662,6 +662,9 @@
             <span class="sr-only">Copy device code</span>
           </button>
         </div>
+        <a id="agent-auth-url" class="agent-auth-url hidden" href="" target="_blank" rel="noopener noreferrer">
+          <span id="agent-auth-url-text"></span>
+        </a>
         <div id="agent-auth-browser-code" class="hidden">
           <p>Complete Claude sign-in in the browser, then paste the code here.</p>
           <details id="agent-auth-browser-commands">
@@ -2091,6 +2094,8 @@
     const agentAuthHarnessGrid = document.getElementById("agent-auth-harness-grid");
     const agentAuthDetails = document.getElementById("agent-auth-details");
     const agentAuthTitleLogo = document.getElementById("agent-auth-title-logo");
+    const agentAuthURL = document.getElementById("agent-auth-url");
+    const agentAuthURLText = document.getElementById("agent-auth-url-text");
     const agentAuthDeviceCodeRow = document.getElementById("agent-auth-device-code-row");
     const agentAuthCode = document.getElementById("agent-auth-code");
     const agentAuthCopy = document.getElementById("agent-auth-copy");
@@ -3465,6 +3470,13 @@
         !needsHarnessSelection;
       if (agentAuthDetails) {
         agentAuthDetails.classList.toggle("hidden", !hasChallenge);
+      }
+      if (agentAuthURL) {
+        const authURL = state.agentAuth.authURL || "";
+        const showAuthURL = authURL !== "" && authHarness(state.agentAuth) !== "claude";
+        agentAuthURL.href = showAuthURL ? authURL : "#";
+        agentAuthURL.classList.toggle("hidden", !showAuthURL);
+        if (agentAuthURLText) agentAuthURLText.textContent = showAuthURL ? authURL : "";
       }
       if (agentAuthCode) {
         agentAuthCode.textContent = state.agentAuth.deviceCode || "";
@@ -13080,6 +13092,12 @@
     builderImagesClear.addEventListener("click", clearBuilderPromptDraft);
     localPromptInput.addEventListener("input", () => handlePromptTextInput(localPromptInput));
     watchPromptTextareaManualResize(localPromptInput);
+    if (agentAuthURL) {
+      agentAuthURL.addEventListener("click", () => {
+        markAgentAuthInteraction();
+        trackAnalyticsEvent("agent_auth_link_opened", agentAuthAnalyticsParams());
+      });
+    }
     if (agentAuthCopy) {
       agentAuthCopy.addEventListener("click", copyAgentAuthCode);
     }

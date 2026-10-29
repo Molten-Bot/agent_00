@@ -2565,8 +2565,10 @@ func TestHandlerIndexIncludesClaudeBrowserCodeFlow(t *testing.T) {
 	markup := resp.Body.String()
 	required := []string{
 		`id="agent-auth-title-logo"`,
+		`id="agent-auth-url"`,
 		`src="/static/logos/claude-code.svg"`,
 		`agentAuthTitleLogo.classList.toggle("hidden", !showClaudeTitleLogo);`,
+		`const showAuthURL = authURL !== "" && authHarness(state.agentAuth) !== "claude";`,
 		`function authHarness(auth) {`,
 		`return configuredHarnessName();`,
 		`function isClaudeBrowserCodeAwaitingSubmission(auth) {`,

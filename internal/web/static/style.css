@@ -6376,6 +6376,16 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.12);
 }
 
+.agent-auth-url {
+  display: block;
+  word-break: break-all;
+  color: var(--surface-auth-link);
+  font-size: 1.05rem;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
 .agent-auth-browser-code-hint {
   color: rgb(var(--hub-text-rgb) / 0.8);
   font-size: 0.875rem;

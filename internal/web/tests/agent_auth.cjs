@@ -47,9 +47,21 @@ test('first load checks auth before enabling submission and displays Claude setu
   release();
   await expect(page.locator('#agent-auth-title')).toHaveText('Setup Claude');
   await expect(page.locator('#agent-auth-title-logo')).toBeVisible();
-  await expect(page.locator('#agent-auth-url')).toHaveCount(0);
+  await expect(page.locator('#agent-auth-url')).toBeHidden();
   await expect(page.locator('#agent-auth-browser-code-input')).toBeVisible();
   assert.ok(requests > 0, 'initial auth status was requested');
+});
+
+test('Codex device authorization keeps its OAuth link', async t => {
+  const authURL = 'https://auth.openai.com/device';
+  const page = await openPage(t, route => reply(route, {
+    harness: 'codex', required: true, ready: false, state: 'pending_device_auth',
+    auth_url: authURL, device_code: 'CODEX-TEST',
+  }));
+  await expect(page.locator('#agent-auth-url')).toBeVisible();
+  await expect(page.locator('#agent-auth-url')).toHaveAttribute('href', authURL);
+  await expect(page.locator('#agent-auth-url')).toHaveText(authURL);
+  await expect(page.locator('#agent-auth-title-logo')).toBeHidden();
 });
 
 test('GitHub setup and agent selection continue into Claude browser authorization', async t => {
@@ -148,7 +160,7 @@ test('live container exposes the installed Claude CLI browser challenge', {
   const signIn = page.getByRole('button', { name: 'Sign in to Claude', exact: true });
   if (await signIn.isVisible()) await signIn.click();
   await expect(page.locator('#agent-auth-title-logo')).toBeVisible({ timeout: 15000 });
-  await expect(page.locator('#agent-auth-url')).toHaveCount(0);
+  await expect(page.locator('#agent-auth-url')).toBeHidden();
   await expect(page.locator('#agent-auth-browser-code-input')).toBeVisible();
   await expect(page.locator('#local-prompt-submit')).toBeDisabled();
 });
