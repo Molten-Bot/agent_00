@@ -470,6 +470,10 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           </div>
           <p id="chat-status" class="chat-status" aria-live="polite"></p>
         </div>
+        <p id="chat-commit-signing-required" class="commit-signing-required hidden" role="alert" hidden>
+          <span id="chat-commit-signing-required-message"></span>
+          <a href="/#settings">Open Settings → Commit signing</a>
+        </p>
         <div class="chat-controls">
           <label class="chat-search-field hidden">
             <i data-lucide="search" aria-hidden="true"></i>
@@ -490,6 +494,8 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           const search = document.getElementById("chat-repo-search");
           const pagination = document.getElementById("chat-repo-pagination");
           const speechToggle = document.getElementById("chat-speech-toggle");
+          const signingBanner = document.getElementById("chat-commit-signing-required");
+          const signingBannerMessage = document.getElementById("chat-commit-signing-required-message");
           const CHAT_REPOS_PER_PAGE = 15;
           const SPEECH_SAMPLE_RATE = 16000;
           const SPEECH_STATUS_REFRESH_MS = 30000;
@@ -503,6 +509,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           let repoPage = 1;
           let allRepos = [];
           let repoSearchQuery = "";
+          const signingHold = { required: false, message: "" };
           const speech = {
             enabled: false,
             statusResolved: false,
@@ -1271,6 +1278,49 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             return output;
           }
 
+          // This page posts to the same /api/local-prompt gate the dashboard
+          // uses, and the server refuses every task while commit signing is
+          // required without a saved key. Mirror that hold here: the dashboard
+          // banner and its signing tab live in index.html, which this page does
+          // not load, so without this a prompt here fails with a raw API error.
+          function commitSigningHoldMessage() {
+            return signingHold.message
+              || "Commit signing is required, but no signing key is saved. Save one in Settings → Commit signing to run tasks.";
+          }
+
+          function renderCommitSigningHold() {
+            if (!signingBanner || !signingBannerMessage) return;
+            // The attribute and the shared .hidden class are kept in step so a
+            // style rule on either one cannot leave an empty banner on screen.
+            signingBanner.hidden = !signingHold.required;
+            signingBanner.classList.toggle("hidden", !signingHold.required);
+            if (!signingHold.required) {
+              signingBannerMessage.textContent = "";
+              return;
+            }
+            // role="alert" announces content that changes while the element is
+            // rendered, so reveal it before filling it in.
+            signingBannerMessage.textContent = commitSigningHoldMessage();
+          }
+
+          async function refreshCommitSigningHold() {
+            try {
+              const response = await fetch("/api/commit-signing", {
+                cache: "no-store",
+                headers: { Accept: "application/json" }
+              });
+              const body = await response.json();
+              const settings = body && body.settings ? body.settings : null;
+              if (!response.ok || !settings) return;
+              signingHold.required = Boolean(settings.setup_required);
+              signingHold.message = signingHold.required ? String(settings.message || "").trim() : "";
+              renderCommitSigningHold();
+            } catch (_err) {
+              // Keep the last known hold: a submit attempt still fails closed on
+              // the server, which re-checks and reports the reason.
+            }
+          }
+
           async function submitRepoPrompt(repo, input, statusNode) {
             const prompt = String(input.value || "").trim();
             // A dictation hint may have left the status wrapping; submit
@@ -1278,6 +1328,13 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             // so the hint must not be retired out from under them later.
             statusNode.dataset.wrap = "";
             delete statusNode.dataset.dictationHint;
+            if (signingHold.required) {
+              statusNode.textContent = commitSigningHoldMessage();
+              statusNode.dataset.tone = "error";
+              renderCommitSigningHold();
+              trackChatEvent("chat_repo_prompt_validation_failed", repoAnalyticsParams(repo, { validation_error: "commit_signing_setup_required" }));
+              return;
+            }
             if (!prompt) {
               statusNode.textContent = "Prompt is required.";
               statusNode.dataset.tone = "error";
@@ -1322,6 +1379,9 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
               statusNode.textContent = "Submit failed: " + (err && err.message ? err.message : "unknown error");
               statusNode.dataset.tone = "error";
               trackChatEvent("chat_repo_prompt_failed", repoAnalyticsParams(repo));
+              // A rejection can be the signing hold appearing between loads, so
+              // surface the banner instead of leaving only the API message.
+              void refreshCommitSigningHold();
             }
           }
 
@@ -1627,6 +1687,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           }
 
           void loadRepos();
+          void refreshCommitSigningHold();
           void refreshChatSpeechStatus();
         })();
       </script>`),

@@ -13,7 +13,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/gitsigning"
@@ -232,6 +234,84 @@ func TestSigningSettingsFailedEnableKeepsTasksHeld(t *testing.T) {
 	}
 	if annotated := store.ApplySetupRequirement(CommitSigningState{}); !annotated.SetupRequired {
 		t.Fatalf("ui state should carry the hold: %+v", annotated)
+	}
+}
+
+// A held submission revalidates the saved key against GitHub, so a queue of
+// them must share one check per interval and must never let a concurrent
+// recheck publish its verdict over a newer failing one.
+func TestSigningSubmissionRequirementThrottlesRechecks(t *testing.T) {
+	t.Parallel()
+	var checks atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		checks.Add(1)
+		// A different account than the saved one, so every check fails and the
+		// hold stays in place for the whole test.
+		json.NewEncoder(w).Encode(map[string]any{"login": "test-bot", "id": 123, "name": "Test Bot"})
+	}))
+	defer server.Close()
+
+	var clock sync.Mutex
+	now := time.Now()
+	store := SigningSettings{
+		Path:   filepath.Join(t.TempDir(), "config.json"),
+		Runner: signingTestRunner{},
+		GitHub: func() gitsigning.GitHub {
+			return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()}
+		},
+		Now: func() time.Time {
+			clock.Lock()
+			defer clock.Unlock()
+			return now
+		},
+	}
+	if err := store.save(gitsigning.Config{Enabled: true, KeyID: "abc123"}); err != nil {
+		t.Fatal(err)
+	}
+	// The state a held submission starts from: a saved key this boot rejected.
+	store.holdBoot(errors.New("startup signing check failed"))
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := store.SubmissionRequirement(ctx); err == nil {
+				t.Error("submission admitted while the saved key still fails its checks")
+			}
+		}()
+	}
+	wg.Wait()
+	if got := checks.Load(); got != 1 {
+		t.Fatalf("held submissions ran %d GitHub checks, want 1 within the recheck interval", got)
+	}
+
+	clock.Lock()
+	now = now.Add(signingRecheckInterval)
+	clock.Unlock()
+	if err := store.SubmissionRequirement(ctx); err == nil {
+		t.Fatal("submission admitted after the interval while the key still fails")
+	}
+	if got := checks.Load(); got != 2 {
+		t.Fatalf("checks after the recheck interval = %d, want 2", got)
+	}
+}
+
+// A runtime configuration that cannot be read or parsed is not something the
+// signing form can fix, so it must not be reported as the saved-key hold.
+func TestApplySetupRequirementSeparatesConfigErrorsFromTheHold(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"commit_signing":`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state := SigningSettings{Path: path}.ApplySetupRequirement(CommitSigningState{})
+	if state.SetupRequired {
+		t.Fatalf("unreadable configuration reported as a missing-key hold: %+v", state)
+	}
+	if !strings.Contains(state.Message, "invalid runtime configuration") {
+		t.Fatalf("configuration failure not explained: %+v", state)
 	}
 }
 

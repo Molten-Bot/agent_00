@@ -59,11 +59,15 @@
     const message = required
       ? settings.message || 'Commit signing is required, but no signing key is saved yet.'
       : '';
-    setupRequired.textContent = message;
+    // role="alert" announces text that changes while the element is rendered,
+    // so reveal the banner first, let the app open the settings dialog it sits
+    // in, and only then fill it in. Setting the text while either is hidden
+    // leaves the hold silent for assistive technology.
     setupRequired.hidden = !required;
     window.dispatchEvent(new CustomEvent('commit-signing-required', {
       detail: { required, message, envEnforced },
     }));
+    setupRequired.textContent = message;
   }
   async function request(path, payload, preserveDraftOnError = false) {
     const response = await fetch(`/api/commit-signing${path}`, {

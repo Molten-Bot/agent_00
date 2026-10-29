@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -72,8 +73,15 @@ func TestSigningEnvironmentCLIRejectsInvalidPolicyAtStartup(t *testing.T) {
 	// serve must reject the policy before it binds a listener and waits for a
 	// shutdown signal. A fall-through would block forever, so bound the wait:
 	// otherwise the whole package only fails when go test hits its deadline.
+	// Point serve at a port this test already holds so a regression fails to
+	// bind and returns instead of leaving a live server behind after t.Fatal.
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
 	serve := make(chan int, 1)
-	go func() { serve <- runServer(nil) }()
+	go func() { serve <- runServer([]string{"--ui-listen", occupied.Addr().String()}) }()
 	select {
 	case code := <-serve:
 		if code != app.ExitConfig {

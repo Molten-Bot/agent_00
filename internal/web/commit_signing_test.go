@@ -108,7 +108,7 @@ func TestCommitSigningHoldContractAcrossEmbeddedAssets(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 	assets := map[string]string{}
-	for _, path := range []string{"/", "/static/commit-signing.js"} {
+	for _, path := range []string{"/", "/chat", "/static/commit-signing.js"} {
 		resp, err := http.Get(ts.URL + path)
 		if err != nil {
 			t.Fatal(err)
@@ -127,6 +127,13 @@ func TestCommitSigningHoldContractAcrossEmbeddedAssets(t *testing.T) {
 		{"/", `id="commit-signing-setup-required"`, "the settings banner that explains the hold is gone"},
 		{"/", `window.addEventListener("commit-signing-required"`, "the app stops listening for the hold"},
 		{"/", "state.commitSigningSetupRequired", "prompt submissions no longer check the hold"},
+		// /chat posts to the same /api/local-prompt gate but does not load
+		// index.html or commit-signing.js, so it carries its own copy of the
+		// banner, the hold check, and the hand-off to the signing settings.
+		{"/chat", `id="chat-commit-signing-required"`, "chat has no banner for the hold"},
+		{"/chat", "settings.setup_required", "chat stops reading the hold from the API"},
+		{"/chat", "signingHold.required", "chat submits prompts the server will refuse"},
+		{"/chat", `href="/#settings"`, "chat cannot hand the operator to the signing settings"},
 	} {
 		if !strings.Contains(assets[test.path], test.marker) {
 			t.Fatalf("%s no longer contains %q: %s", test.path, test.marker, test.why)

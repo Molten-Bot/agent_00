@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/gitsigning"
@@ -72,6 +73,34 @@ func (s SigningSettings) holdUnvalidated(cfg gitsigning.Config, err error) error
 // releaseBootHold clears the startup hold once settings validate again.
 func (s SigningSettings) releaseBootHold() { signingBootHolds.Delete(s.path()) }
 
+// signingRecheckInterval bounds how often a held submission revalidates the
+// saved key. The revalidation costs two GitHub calls plus a test signature, so
+// without a floor a queue of held submissions re-runs it once per task.
+const signingRecheckInterval = 30 * time.Second
+
+// signingRecheckGate serializes revalidation per runtime configuration path and
+// records when the last one ran. Serializing matters as much as the interval:
+// two concurrent rechecks that interleave can write their verdicts out of
+// order and leave the gate open against the failing one.
+type signingRecheckGate struct {
+	mu      sync.Mutex
+	checked time.Time
+}
+
+var signingRecheckGates sync.Map
+
+func (s SigningSettings) recheckGate() *signingRecheckGate {
+	gate, _ := signingRecheckGates.LoadOrStore(s.path(), &signingRecheckGate{})
+	return gate.(*signingRecheckGate)
+}
+
+func (s SigningSettings) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
 func (s SigningSettings) bootHold() error {
 	held, ok := signingBootHolds.Load(s.path())
 	if !ok {
@@ -108,6 +137,9 @@ type SigningSettings struct {
 	Initial InitConfig
 	Runner  execx.Runner
 	GitHub  func() gitsigning.GitHub
+	// Now is the clock the submission recheck interval is measured against.
+	// It defaults to time.Now; tests inject one to drive the interval.
+	Now func() time.Time
 }
 
 func (s SigningSettings) path() string {
@@ -181,9 +213,9 @@ func (s SigningSettings) SetupRequirement() error { return s.setupRequirement(tr
 // SubmissionRequirement reports the same hold for a task submission, with one
 // revalidation attempt against GitHub. A hold can come from a failure that has
 // since passed, such as GitHub being unreachable at startup, and without this
-// it would stick until the operator pressed Check registration. Revalidating
-// here costs nothing while signing is healthy, because a submission only gets
-// this far when a hold is already in place.
+// it would stick until the operator pressed Check registration. The attempt is
+// serialized and rate limited by signingRecheckInterval, so a burst of held
+// submissions revalidates once instead of once per task.
 func (s SigningSettings) SubmissionRequirement(ctx context.Context) error {
 	requirement := s.SetupRequirement()
 	if requirement == nil || s.bootHold() == nil {
@@ -195,6 +227,20 @@ func (s SigningSettings) SubmissionRequirement(ctx context.Context) error {
 	if err != nil {
 		return requirement
 	}
+	gate := s.recheckGate()
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	// Re-read the hold under the lock. A recheck that finished while this
+	// submission waited may have cleared or replaced it, and reporting the
+	// state this call started with would answer against a stale verdict.
+	held := s.bootHold()
+	if held == nil {
+		return s.SetupRequirement()
+	}
+	if s.now().Sub(gate.checked) < signingRecheckInterval {
+		return held
+	}
+	gate.checked = s.now()
 	if err := s.check(ctx, cfg); err != nil {
 		// Replace the stale startup error so the operator sees why signing is
 		// still not ready rather than a failure that already passed.
@@ -238,9 +284,15 @@ func (s SigningSettings) ApplySetupRequirement(state CommitSigningState) CommitS
 	if requirement == nil {
 		return state
 	}
-	state.SetupRequired = true
 	if strings.TrimSpace(state.Message) == "" {
 		state.Message = requirement.Error()
+	}
+	// SetupRequired sends the operator to the key field and holds submissions
+	// behind saving a key. An unreadable or malformed runtime configuration is
+	// not something that form can fix, so report it as a message only rather
+	// than pointing at a remedy that cannot work.
+	if errors.Is(requirement, ErrSigningSetupRequired) {
+		state.SetupRequired = true
 	}
 	return state
 }
@@ -343,6 +395,13 @@ func (s SigningSettings) Verify(ctx context.Context) (CommitSigningState, error)
 	if err != nil {
 		return state, err
 	}
+	// Share the submission gate so this check and its verdict cannot interleave
+	// with a held submission's recheck and release a hold the other one just
+	// re-recorded, or the other way round.
+	gate := s.recheckGate()
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	gate.checked = s.now()
 	if err = s.check(ctx, cfg); err != nil {
 		state.Registration = "not_ready"
 		return state, err
