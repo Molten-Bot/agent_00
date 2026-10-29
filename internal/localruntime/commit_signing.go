@@ -26,8 +26,8 @@ var ErrSigningSetupRequired = errors.New("commit signing setup required")
 
 type setupRequiredError struct{ err error }
 
-func (e setupRequiredError) Error() string { return e.err.Error() }
-func (e setupRequiredError) Unwrap() error { return e.err }
+func (e setupRequiredError) Error() string        { return e.err.Error() }
+func (e setupRequiredError) Unwrap() error        { return e.err }
 func (e setupRequiredError) Is(target error) bool { return target == ErrSigningSetupRequired }
 
 // markSetupRequired tags a signing failure as fixable in Settings → Commit
@@ -217,6 +217,10 @@ func (s SigningSettings) SetupRequirement() error { return s.setupRequirement(tr
 // serialized and rate limited by signingRecheckInterval, so a burst of held
 // submissions revalidates once instead of once per task.
 func (s SigningSettings) SubmissionRequirement(ctx context.Context) error {
+	// Read settings only after pending changes and their validation finish.
+	gate := s.recheckGate()
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
 	requirement := s.SetupRequirement()
 	if requirement == nil || s.bootHold() == nil {
 		// No hold means nothing a recheck can clear: the key itself is missing,
@@ -227,9 +231,6 @@ func (s SigningSettings) SubmissionRequirement(ctx context.Context) error {
 	if err != nil {
 		return requirement
 	}
-	gate := s.recheckGate()
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
 	// Re-read the hold under the lock. A recheck that finished while this
 	// submission waited may have cleared or replaced it, and reporting the
 	// state this call started with would answer against a stale verdict.
@@ -356,6 +357,14 @@ func (s SigningSettings) Configure(ctx context.Context, req CommitSigningRequest
 		if err != nil {
 			return signingState(cfg), s.holdUnvalidated(cfg, err)
 		}
+		// Keep the account alongside an imported key even when registration is
+		// still pending, so Check registration can finish setup after the user
+		// adds the public key on GitHub without importing the private key again.
+		if importing {
+			if err := s.save(cfg); err != nil {
+				return signingState(cfg), s.holdUnvalidated(cfg, err)
+			}
+		}
 		snapshot, loadErr := gitsigning.Load(s.keyDir(), cfg)
 		if loadErr != nil {
 			return signingState(cfg), s.holdUnvalidated(cfg, loadErr)
@@ -397,11 +406,6 @@ func (s SigningSettings) Configure(ctx context.Context, req CommitSigningRequest
 }
 
 func (s SigningSettings) Verify(ctx context.Context) (CommitSigningState, error) {
-	cfg, err := s.config()
-	state := signingState(cfg)
-	if err != nil {
-		return state, err
-	}
 	// Share the submission gate so this check and its verdict cannot interleave
 	// with a held submission's recheck and release a hold the other one just
 	// re-recorded, or the other way round. The interval is deliberately not
@@ -411,6 +415,11 @@ func (s SigningSettings) Verify(ctx context.Context) (CommitSigningState, error)
 	gate := s.recheckGate()
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
+	cfg, err := s.config()
+	state := signingState(cfg)
+	if err != nil {
+		return state, err
+	}
 	if err = s.check(ctx, cfg); err != nil {
 		state.Registration = "not_ready"
 		// A key that stops working after a clean boot has no hold yet. Record one

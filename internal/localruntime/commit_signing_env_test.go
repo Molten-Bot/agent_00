@@ -138,6 +138,39 @@ func TestSigningEnvironmentStartup(t *testing.T) {
 	}
 }
 
+func TestRequiredSigningCanRegisterImportedKeyWithoutResaving(t *testing.T) {
+	clearSigningEnvironment(t)
+	t.Setenv(commitSigningEnabledEnv, "true")
+	raw, public := signingTestKeyPair(t)
+	server, registered := signingTestGitHub(t, public)
+	registered.Store(false)
+	store := SigningSettings{
+		Path: filepath.Join(t.TempDir(), "config.json"), Runner: signingTestRunner{},
+		GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()} },
+	}
+	ctx := context.Background()
+	if err := store.ApplyEnvironment(ctx); !errors.Is(err, ErrSigningSetupRequired) {
+		t.Fatalf("startup = %v, want setup hold", err)
+	}
+	if _, err := store.Configure(ctx, CommitSigningRequest{Enabled: true, PrivateKey: raw, Passphrase: "test-passphrase"}); !errors.Is(err, gitsigning.ErrSetup) {
+		t.Fatalf("unregistered import = %v, want registration error", err)
+	}
+	if err := store.SetupRequirement(); !errors.Is(err, ErrSigningSetupRequired) {
+		t.Fatalf("unregistered key released tasks: %v", err)
+	}
+	registered.Store(true)
+	state, err := store.Verify(ctx)
+	if err != nil || !state.Registered || !state.Enabled {
+		t.Fatalf("registration check could not finish setup: %+v %v", state, err)
+	}
+	if err := store.SubmissionRequirement(ctx); err != nil {
+		t.Fatalf("registered key did not release tasks: %v", err)
+	}
+	if snapshot, err := store.Snapshot(ctx); err != nil || snapshot == nil {
+		t.Fatalf("registered key cannot sign: %v", err)
+	}
+}
+
 func TestSigningEnvironmentInvalidInput(t *testing.T) {
 	for _, tc := range []struct {
 		name string

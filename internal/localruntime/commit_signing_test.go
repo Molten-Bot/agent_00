@@ -237,6 +237,69 @@ func TestSigningSettingsFailedEnableKeepsTasksHeld(t *testing.T) {
 	}
 }
 
+func TestSigningSubmissionWaitsForReplacementValidation(t *testing.T) {
+	t.Parallel()
+	raw, public := signingTestKeyPair(t)
+	replacement := signingTestPrivateKey(t)
+	var block atomic.Bool
+	reached, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/user" {
+			if block.CompareAndSwap(true, false) {
+				close(reached)
+				<-release
+			}
+			json.NewEncoder(w).Encode(map[string]any{"login": "test-bot", "id": 123})
+			return
+		}
+		// Only the original key is registered; replacement must keep tasks held.
+		json.NewEncoder(w).Encode([]map[string]string{{"key": public}})
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(unblock)
+	store := SigningSettings{
+		Path: filepath.Join(t.TempDir(), "config.json"), Runner: signingTestRunner{},
+		GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()} },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := store.Configure(ctx, CommitSigningRequest{Enabled: true, PrivateKey: raw, Passphrase: "test-passphrase"}); err != nil {
+		t.Fatal(err)
+	}
+	block.Store(true)
+	configured := make(chan error, 1)
+	go func() {
+		_, err := store.Configure(ctx, CommitSigningRequest{Enabled: true, PrivateKey: replacement, Passphrase: "test-passphrase"})
+		configured <- err
+	}()
+	select {
+	case <-reached:
+	case <-ctx.Done():
+		t.Fatal("replacement never reached validation")
+	}
+	submitted := make(chan error, 1)
+	go func() { submitted <- store.SubmissionRequirement(ctx) }()
+	select {
+	case err := <-submitted:
+		t.Fatalf("submission returned before replacement validation finished: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	unblock()
+	if err := <-configured; !errors.Is(err, gitsigning.ErrSetup) {
+		t.Fatalf("unregistered replacement = %v, want setup error", err)
+	}
+	select {
+	case err := <-submitted:
+		if !errors.Is(err, ErrSigningSetupRequired) {
+			t.Fatalf("unregistered replacement admitted task: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("submission did not finish after replacement validation")
+	}
+}
+
 // A held submission revalidates the saved key against GitHub, so a queue of
 // them must share one check per interval and must never let a concurrent
 // recheck publish its verdict over a newer failing one.
