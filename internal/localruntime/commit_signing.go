@@ -56,6 +56,19 @@ func (s SigningSettings) holdBoot(err error) error {
 	return held
 }
 
+// holdUnvalidated records a hold when a saved key could not be validated while
+// the stored policy still requires signing. err comes back unchanged so the
+// caller keeps its own classification; the hold exists because a saved key
+// alone satisfies SetupRequirement, and an imported key that never passed the
+// identity, signing, and registration checks must not reopen task submissions.
+func (s SigningSettings) holdUnvalidated(cfg gitsigning.Config, err error) error {
+	if err == nil || !cfg.Enabled || cfg.KeyID == "" {
+		return err
+	}
+	s.holdBoot(err)
+	return err
+}
+
 // releaseBootHold clears the startup hold once settings validate again.
 func (s SigningSettings) releaseBootHold() { signingBootHolds.Delete(s.path()) }
 
@@ -162,8 +175,39 @@ func (s SigningSettings) Status(context.Context) (CommitSigningState, error) {
 // is a local check with no GitHub calls, so callers can hold tasks and point
 // the operator at Settings → Commit signing instead of failing mid-run.
 // It returns nil when signing is off, or when a key is saved and nothing this
-// process checked at startup rejected it.
-func (s SigningSettings) SetupRequirement() error {
+// process checked rejected it.
+func (s SigningSettings) SetupRequirement() error { return s.setupRequirement(true) }
+
+// SubmissionRequirement reports the same hold for a task submission, with one
+// revalidation attempt against GitHub. A hold can come from a failure that has
+// since passed, such as GitHub being unreachable at startup, and without this
+// it would stick until the operator pressed Check registration. Revalidating
+// here costs nothing while signing is healthy, because a submission only gets
+// this far when a hold is already in place.
+func (s SigningSettings) SubmissionRequirement(ctx context.Context) error {
+	requirement := s.SetupRequirement()
+	if requirement == nil || s.bootHold() == nil {
+		// No hold means nothing a recheck can clear: the key itself is missing,
+		// or settings cannot be read.
+		return requirement
+	}
+	cfg, err := s.config()
+	if err != nil {
+		return requirement
+	}
+	if err := s.check(ctx, cfg); err != nil {
+		// Replace the stale startup error so the operator sees why signing is
+		// still not ready rather than a failure that already passed.
+		return s.holdBoot(err)
+	}
+	s.releaseBootHold()
+	return nil
+}
+
+// setupRequirement reports the local requirement. Callers that are about to
+// revalidate the saved key pass includeHold=false so a hold from an earlier
+// call does not stand in for the result they are about to produce.
+func (s SigningSettings) setupRequirement(includeHold bool) error {
 	cfg, err := s.config()
 	if err != nil {
 		return err
@@ -174,7 +218,7 @@ func (s SigningSettings) SetupRequirement() error {
 	// A key saved by an earlier boot still has to pass this boot's identity,
 	// signing, and registration checks. The hold outlives ApplyEnvironment so
 	// submissions cannot slip past a failure the operator has not fixed yet.
-	if held := s.bootHold(); held != nil {
+	if held := s.bootHold(); includeHold && held != nil {
 		return held
 	}
 	if cfg.KeyID != "" {
@@ -246,23 +290,26 @@ func (s SigningSettings) Configure(ctx context.Context, req CommitSigningRequest
 	}
 	registered := false
 	if importing || req.Enabled {
+		// Every failure below leaves a key saved under a policy that still
+		// requires signing, so each one records a hold: otherwise the saved key
+		// alone would satisfy SetupRequirement and reopen task submissions.
 		cfg, err = s.github().Identity(ctx, cfg)
 		if err != nil {
-			return signingState(cfg), err
+			return signingState(cfg), s.holdUnvalidated(cfg, err)
 		}
 		snapshot, loadErr := gitsigning.Load(s.keyDir(), cfg)
 		if loadErr != nil {
-			return signingState(cfg), loadErr
+			return signingState(cfg), s.holdUnvalidated(cfg, loadErr)
 		}
 		if testErr := snapshot.Test(ctx, s.runner()); testErr != nil {
-			return signingState(cfg), testErr
+			return signingState(cfg), s.holdUnvalidated(cfg, testErr)
 		}
 		registered, err = s.github().Registered(ctx, cfg)
 		if req.Enabled && (err != nil || !registered) {
 			if err == nil {
 				err = fmt.Errorf("%w: add the public key to this GitHub account as a Signing Key before enabling", gitsigning.ErrSetup)
 			}
-			return signingState(cfg), err
+			return signingState(cfg), s.holdUnvalidated(cfg, err)
 		}
 	}
 	cfg.Enabled = req.Enabled

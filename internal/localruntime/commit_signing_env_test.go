@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 	"golang.org/x/crypto/ssh"
@@ -202,16 +203,18 @@ func TestSigningSetupRequirementHoldsTasksUntilKeyExists(t *testing.T) {
 		t.Fatalf("saved preference should not blame the environment: %v", err)
 	}
 
-	// Saving a key releases the hold without a restart.
+	// A key that imports but cannot be validated keeps the hold: it is saved,
+	// yet nothing has shown it can sign a task commit for this account.
 	if _, err := store.Configure(context.Background(), CommitSigningRequest{PrivateKey: signingTestPrivateKey(t), Passphrase: "test-passphrase"}); !errors.Is(err, gitsigning.ErrSetup) {
 		t.Fatalf("offline identity lookup should still import the key: %v", err)
 	}
 	t.Setenv(commitSigningEnabledEnv, "true")
-	if err := store.SetupRequirement(); err != nil {
-		t.Fatalf("saved key should release the hold: %v", err)
+	held := store.SetupRequirement()
+	if !errors.Is(held, ErrSigningSetupRequired) {
+		t.Fatalf("an unvalidated key released the hold: %v", held)
 	}
-	if state := store.ApplySetupRequirement(CommitSigningState{}); state.SetupRequired {
-		t.Fatalf("ui state should clear the hold: %+v", state)
+	if state := store.ApplySetupRequirement(CommitSigningState{}); !state.SetupRequired || state.Message != held.Error() {
+		t.Fatalf("ui state should explain the hold: %+v", state)
 	}
 }
 
@@ -278,6 +281,131 @@ func TestSigningBootFailureHoldsTasksUntilSettingsValidate(t *testing.T) {
 	}
 	if err := store.SetupRequirement(); err != nil {
 		t.Fatalf("revalidated settings should release the hold: %v", err)
+	}
+}
+
+// A boot hold can record a failure that has nothing to do with the key, such
+// as GitHub being unreachable. Holding submissions is right while it lasts, but
+// the hold must not outlive it: the next submission rechecks and clears it
+// without the operator pressing Check registration.
+func TestSigningSubmissionRequirementRechecksTransientHold(t *testing.T) {
+	clearSigningEnvironment(t)
+	raw, public := signingTestKeyPair(t)
+	var unavailable atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if unavailable.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if r.URL.Path == "/user" {
+			json.NewEncoder(w).Encode(map[string]any{"login": "test-bot", "id": 123})
+			return
+		}
+		json.NewEncoder(w).Encode([]map[string]string{{"key": public}})
+	}))
+	t.Cleanup(server.Close)
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	store := SigningSettings{Path: path, GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()} }}
+	ctx := context.Background()
+	t.Setenv(commitSigningEnabledEnv, "true")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", raw)
+	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "test-passphrase")
+	if err := store.ApplyEnvironment(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reboot on the saved key while GitHub is down. The key is fine; the lookup
+	// is not, so the boot still has to hold submissions.
+	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", "")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "")
+	unavailable.Store(true)
+	if err := store.ApplyEnvironment(ctx); !errors.Is(err, ErrSigningSetupRequired) {
+		t.Fatalf("an unreachable GitHub should hold the UI open: %v", err)
+	}
+	if err := store.SubmissionRequirement(ctx); !errors.Is(err, ErrSigningSetupRequired) {
+		t.Fatalf("submission accepted while signing could not be checked: %v", err)
+	}
+
+	unavailable.Store(false)
+	if err := store.SubmissionRequirement(ctx); err != nil {
+		t.Fatalf("hold outlived the failure that caused it: %v", err)
+	}
+	if err := store.SetupRequirement(); err != nil {
+		t.Fatalf("recheck did not release the hold: %v", err)
+	}
+}
+
+// ApplyEnvironment revalidates the saved key, which must not clear the existing
+// hold up front: a submission that lands while the checks are still running
+// would find nothing holding it back.
+func TestSigningBootRevalidationKeepsHoldUntilItPasses(t *testing.T) {
+	clearSigningEnvironment(t)
+	raw, public := signingTestKeyPair(t)
+	var registered, blocking, released atomic.Bool
+	registered.Store(true)
+	reached := make(chan struct{}, 1)
+	release := make(chan struct{})
+	// A failed assertion must not leave the handler parked, or closing the
+	// server would wait on it forever. Cleanups run last-registered-first, so
+	// this one unblocks the handler before server.Close runs.
+	unblock := func() {
+		if released.CompareAndSwap(false, true) {
+			close(release)
+		}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if blocking.CompareAndSwap(true, false) {
+			reached <- struct{}{}
+			<-release
+		}
+		if r.URL.Path == "/user" {
+			json.NewEncoder(w).Encode(map[string]any{"login": "test-bot", "id": 123})
+			return
+		}
+		if registered.Load() {
+			json.NewEncoder(w).Encode([]map[string]string{{"key": public}})
+			return
+		}
+		json.NewEncoder(w).Encode([]any{})
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(unblock)
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	store := SigningSettings{Path: path, GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()} }}
+	ctx := context.Background()
+	t.Setenv(commitSigningEnabledEnv, "true")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", raw)
+	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "test-passphrase")
+	if err := store.ApplyEnvironment(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", "")
+	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "")
+	registered.Store(false)
+	if err := store.ApplyEnvironment(ctx); !errors.Is(err, ErrSigningSetupRequired) {
+		t.Fatalf("an unregistered key should hold the UI open: %v", err)
+	}
+
+	registered.Store(true)
+	blocking.Store(true)
+	done := make(chan error, 1)
+	go func() { done <- store.ApplyEnvironment(ctx) }()
+	select {
+	case <-reached:
+	case <-time.After(30 * time.Second):
+		t.Fatal("boot revalidation never reached GitHub")
+	}
+	if err := store.SetupRequirement(); !errors.Is(err, ErrSigningSetupRequired) {
+		t.Errorf("hold was cleared before the key revalidated: %v", err)
+	}
+	unblock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetupRequirement(); err != nil {
+		t.Fatalf("a revalidated key should release the hold: %v", err)
 	}
 }
 

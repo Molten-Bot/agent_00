@@ -63,9 +63,10 @@ var runSingleHarness = func(ctx context.Context, cfg config.Config, logf func(st
 
 // signingSubmissionGate refuses task submissions while signing is required but
 // unconfigured. Settings are re-read on every submission so saving a key
-// releases queued work without restarting the server.
-func signingSubmissionGate(cfg localruntime.InitConfig, runner execx.Runner) error {
-	return signingSettings(cfg, runner).SetupRequirement()
+// releases queued work without restarting the server, and a startup hold left
+// by a failure that has since passed is rechecked here instead of outliving it.
+func signingSubmissionGate(ctx context.Context, cfg localruntime.InitConfig, runner execx.Runner) error {
+	return signingSettings(cfg, runner).SubmissionRequirement(ctx)
 }
 
 func main() {
@@ -322,7 +323,7 @@ func runServer(args []string) int {
 	var queueEscalatedNoChangesFollowUp func(requestID string, result app.Result, runCfg config.Config)
 	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error)
 	enqueueLocalRun = func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error) {
-		if err := signingSubmissionGate(cfg, runner); err != nil {
+		if err := signingSubmissionGate(reqCtx, cfg, runner); err != nil {
 			return "", err
 		}
 		if authGate != nil {

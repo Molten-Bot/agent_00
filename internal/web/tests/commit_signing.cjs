@@ -147,6 +147,23 @@ test('failed close-time signing save keeps the selected option and allows retry'
   await page.waitForFunction(() => document.getElementById('settings-gate').classList.contains('hidden'));
 });
 
+// The server refuses a policy change while HARNESS_COMMIT_SIGNING_ENABLED is
+// set, so the toggle must not offer one.
+test('an environment-pinned policy leaves the signing toggle read-only', async t => {
+  const pinned = { ...saved, enabled: true, env_enforced: true, registration: 'registered' };
+  const writes = [];
+  const page = await openSettings(t, route => {
+    if (route.request().method() === 'POST') writes.push(route.request().postDataJSON());
+    return route.fulfill({ json: { ok: true, settings: pinned } });
+  });
+  assert.equal(await page.locator('#commit-signing-enabled').isChecked(), true);
+  assert.equal(await page.locator('#commit-signing-enabled').isDisabled(), true);
+  assert.match(await page.locator('#commit-signing-enabled-help').textContent(), /cannot be changed here/);
+  await page.locator('#review-settings-close').click();
+  await page.waitForFunction(() => document.getElementById('settings-gate').classList.contains('hidden'));
+  assert.deepEqual(writes, [], 'closing settings posted a policy change the server would reject');
+});
+
 test('a required signing hold opens the signing tab, shows the banner, and blocks submissions', async t => {
   const submissions = [];
   const page = await newStubbedPage(t, route => route.fulfill({ json: { ok: true, settings: held } }));

@@ -11,18 +11,23 @@
   let busy = false;
   let modalBusy = false;
   let savedEnabled = false;
+  let envEnforced = false;
   let loadPromise = null;
   function clearSecrets() { privateKey.value = ''; passphrase.value = ''; }
   function setBusy(value) {
     busy = value;
     const blocked = busy || modalBusy;
     for (const name of ['save', 'private-key', 'passphrase']) element(name).disabled = blocked;
-    enabled.disabled = blocked || !configured;
+    // The server rejects a policy change while the environment pins signing, so
+    // the toggle stays read-only instead of offering a save that cannot apply.
+    enabled.disabled = blocked || !configured || envEnforced;
     element('enabled-help').textContent = value
       ? 'Please wait while signing settings are being processed.'
-      : configured
-        ? 'After registering the public key on GitHub, select this option and close settings to save.'
-        : 'Save an SSH private key above to enable commit signing.';
+      : envEnforced
+        ? 'Commit signing is set by this server environment and cannot be changed here.'
+        : configured
+          ? 'After registering the public key on GitHub, select this option and close settings to save.'
+          : 'Save an SSH private key above to enable commit signing.';
     element('verify').disabled = blocked || !configured;
     element('copy').disabled = blocked || !publicKey.value;
   }
@@ -49,6 +54,7 @@
   // Signing can be required before a key exists, which blocks every task. Say so
   // here, next to the key field, and tell the app so it can hold submissions.
   function applySetupRequirement(settings) {
+    envEnforced = Boolean(settings.env_enforced);
     const required = Boolean(settings.setup_required);
     const message = required
       ? settings.message || 'Commit signing is required, but no signing key is saved yet.'
@@ -56,7 +62,7 @@
     setupRequired.textContent = message;
     setupRequired.hidden = !required;
     window.dispatchEvent(new CustomEvent('commit-signing-required', {
-      detail: { required, message, envEnforced: Boolean(settings.env_enforced) },
+      detail: { required, message, envEnforced },
     }));
   }
   async function request(path, payload, preserveDraftOnError = false) {
@@ -91,7 +97,7 @@
     async saveOnClose() {
       if (loadPromise) await loadPromise;
       if (busy) throw new Error('Wait for commit signing setup to finish before closing.');
-      if (!configured || enabled.checked === savedEnabled) return;
+      if (!configured || envEnforced || enabled.checked === savedEnabled) return;
       const nextEnabled = enabled.checked;
       setBusy(true);
       try {

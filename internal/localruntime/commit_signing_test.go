@@ -223,6 +223,16 @@ func TestSigningSettingsFailedEnableKeepsTasksHeld(t *testing.T) {
 	if !state.Configured {
 		t.Fatal("imported key was not retained")
 	}
+	// The key is saved but GitHub does not list it, so it cannot sign a task
+	// commit. A saved key alone satisfies the local check, so the failed enable
+	// has to keep holding submissions instead of reopening them.
+	held := store.SetupRequirement()
+	if !errors.Is(held, ErrSigningSetupRequired) {
+		t.Fatalf("an imported but unregistered key reopened submissions: %v", held)
+	}
+	if annotated := store.ApplySetupRequirement(CommitSigningState{}); !annotated.SetupRequired {
+		t.Fatalf("ui state should carry the hold: %+v", annotated)
+	}
 }
 
 func TestSigningSettingsMissingKeyFailsClosed(t *testing.T) {

@@ -91,7 +91,8 @@ func TestSigningSubmissionGateHoldsTasksUntilKeyIsSaved(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"commit_signing":{"enabled":true}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	err := signingSubmissionGate(localruntime.InitConfig{}, execx.OSRunner{})
+	ctx := context.Background()
+	err := signingSubmissionGate(ctx, localruntime.InitConfig{}, execx.OSRunner{})
 	if err == nil || !errors.Is(err, gitsigning.ErrSetup) || !errors.Is(err, localruntime.ErrSigningSetupRequired) {
 		t.Fatalf("submission accepted while signing was unconfigured: %v", err)
 	}
@@ -100,7 +101,7 @@ func TestSigningSubmissionGateHoldsTasksUntilKeyIsSaved(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"commit_signing":{"enabled":true,"key_id":"abc123"}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := signingSubmissionGate(localruntime.InitConfig{}, execx.OSRunner{}); err != nil {
+	if err := signingSubmissionGate(ctx, localruntime.InitConfig{}, execx.OSRunner{}); err != nil {
 		t.Fatalf("submission still blocked after saving a key: %v", err)
 	}
 
@@ -108,7 +109,7 @@ func TestSigningSubmissionGateHoldsTasksUntilKeyIsSaved(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"commit_signing":{"enabled":false}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := signingSubmissionGate(localruntime.InitConfig{}, execx.OSRunner{}); err != nil {
+	if err := signingSubmissionGate(ctx, localruntime.InitConfig{}, execx.OSRunner{}); err != nil {
 		t.Fatalf("submission blocked with signing disabled: %v", err)
 	}
 }
