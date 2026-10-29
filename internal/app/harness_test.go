@@ -7670,6 +7670,26 @@ func TestRunCodexAllowsGoValidationBlockedByRestrictedDependencyDownload(t *test
 	}
 }
 
+func TestRestrictedDependencyDownloadMustBeAValidationGap(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, detail string
+		want         bool
+	}{
+		{"go validation", "Failure: Full Go test blocked by restricted network. Error details: go test ./internal/web could not download a module; network operation prohibited.", true},
+		{"npm validation", "Failure: npm test unavailable. Error details: dependency download failed because network access prohibited.", true},
+		{"product download", "Failure: could not download the requested assets because of restricted network access.", false},
+		{"test assertion", "Failure: go test ./internal/web failed. Error details: expected status 200, got 500.", false},
+		{"ordinary dependency error", "Failure: go test failed. Error details: could not download module: unknown revision.", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isNonFatalValidationToolingFailure(tc.detail, execx.Result{}); got != tc.want {
+				t.Fatalf("validation gap = %v, want %v: %s", got, tc.want, tc.detail)
+			}
+		})
+	}
+}
+
 func TestRunCodexAllowsRecoveredTransientRegistryLookupFailure(t *testing.T) {
 	t.Parallel()
 
