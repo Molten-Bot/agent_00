@@ -639,7 +639,10 @@
 
   <div id="agent-auth-gate" class="agent-auth-gate hidden" aria-live="polite">
     <div id="agent-auth-shell" class="agent-auth-shell">
-      <h2 id="agent-auth-title">Authorize Agent to get started</h2>
+      <div class="agent-auth-title-row">
+        <img id="agent-auth-title-logo" class="agent-auth-title-logo hidden" src="/static/logos/claude-code.svg" alt="">
+        <h2 id="agent-auth-title">Authorize Agent to get started</h2>
+      </div>
       <p id="agent-auth-message"></p>
 
       <div id="agent-auth-harness-picker" class="hidden">
@@ -659,16 +662,8 @@
             <span class="sr-only">Copy device code</span>
           </button>
         </div>
-        <a id="agent-auth-url" class="agent-auth-url" href="" target="_blank" rel="noopener noreferrer">
-          <img
-            id="agent-auth-url-logo"
-            class="agent-auth-url-logo hidden"
-            src="/static/logos/claude-code.svg"
-            alt="Open Claude login">
-          <span id="agent-auth-url-text"></span>
-        </a>
         <div id="agent-auth-browser-code" class="hidden">
-          <p>Open the Claude login link above, sign in, then paste the code here.</p>
+          <p>Complete Claude sign-in in the browser, then paste the code here.</p>
           <details id="agent-auth-browser-commands">
             <summary>Use existing Claude credentials instead</summary>
             <div class="agent-auth-command-box agent-auth-command-box-inline">
@@ -989,7 +984,6 @@
     );
     const APP_LOGO_URL = "/static/logo.svg";
     const GITHUB_LOGO_URL = "/static/logos/github.svg";
-    const CLAUDE_AUTH_LOGO_URL = "/static/logos/claude-code.svg";
     const TASK_ACTION_ICON_NAMES = Object.freeze({
       output: "terminal-square",
       terminal: "terminal-square",
@@ -1887,7 +1881,6 @@
       agentAuthChallengeKey: "",
       agentAuthBrowserCode: "",
       agentAuthLastAutoSubmittedCode: "",
-      agentAuthURLLogoBroken: false,
       agentHarnessSelectionPending: "",
       libraryPromptModalOpen: false,
       taskPromptModalOpen: false,
@@ -2097,9 +2090,7 @@
     const agentAuthHarnessPicker = document.getElementById("agent-auth-harness-picker");
     const agentAuthHarnessGrid = document.getElementById("agent-auth-harness-grid");
     const agentAuthDetails = document.getElementById("agent-auth-details");
-    const agentAuthURL = document.getElementById("agent-auth-url");
-    const agentAuthURLLogo = document.getElementById("agent-auth-url-logo");
-    const agentAuthURLText = document.getElementById("agent-auth-url-text");
+    const agentAuthTitleLogo = document.getElementById("agent-auth-title-logo");
     const agentAuthDeviceCodeRow = document.getElementById("agent-auth-device-code-row");
     const agentAuthCode = document.getElementById("agent-auth-code");
     const agentAuthCopy = document.getElementById("agent-auth-copy");
@@ -3456,6 +3447,12 @@
           agentAuthTitle.textContent = `Authorize ${currentAgentLabel()} to get started`;
         }
       }
+      if (agentAuthTitleLogo) {
+        const showClaudeTitleLogo = authHarness(state.agentAuth) === "claude" &&
+          !needsHarnessSelection &&
+          !needsClaudeGitHubConfigure;
+        agentAuthTitleLogo.classList.toggle("hidden", !showClaudeTitleLogo);
+      }
       if (agentAuthMessage) {
         const message = state.agentAuth.message || (needsHarnessSelection ? "Choose one logo to bind this runtime." : "");
         agentAuthMessage.textContent = message;
@@ -3468,33 +3465,6 @@
         !needsHarnessSelection;
       if (agentAuthDetails) {
         agentAuthDetails.classList.toggle("hidden", !hasChallenge);
-      }
-      if (agentAuthURL) {
-        const authURL = state.agentAuth.authURL || "";
-        const useClaudeLogoLink = authHarness(state.agentAuth) === "claude" && authURL !== "";
-        const showClaudeLogoLink = useClaudeLogoLink && !state.agentAuthURLLogoBroken;
-        agentAuthURL.href = state.agentAuth.authURL || "#";
-        agentAuthURL.classList.toggle("pointer-events-none", !authURL);
-        agentAuthURL.classList.toggle("hidden", !authURL);
-        agentAuthURL.classList.toggle("agent-auth-url-logo-link", showClaudeLogoLink);
-        if (agentAuthURLLogo) {
-          if (agentAuthURLLogo.getAttribute("src") !== CLAUDE_AUTH_LOGO_URL) {
-            agentAuthURLLogo.src = CLAUDE_AUTH_LOGO_URL;
-          }
-          agentAuthURLLogo.classList.toggle("hidden", !showClaudeLogoLink);
-        }
-        if (agentAuthURLText) {
-          if (!authURL) {
-            agentAuthURLText.textContent = "";
-            agentAuthURLText.classList.add("hidden");
-          } else if (useClaudeLogoLink) {
-            agentAuthURLText.textContent = "Open Claude login";
-            agentAuthURLText.classList.remove("hidden");
-          } else {
-            agentAuthURLText.textContent = authURL;
-            agentAuthURLText.classList.remove("hidden");
-          }
-        }
       }
       if (agentAuthCode) {
         agentAuthCode.textContent = state.agentAuth.deviceCode || "";
@@ -13110,12 +13080,6 @@
     builderImagesClear.addEventListener("click", clearBuilderPromptDraft);
     localPromptInput.addEventListener("input", () => handlePromptTextInput(localPromptInput));
     watchPromptTextareaManualResize(localPromptInput);
-    if (agentAuthURL) {
-      agentAuthURL.addEventListener("click", () => {
-        markAgentAuthInteraction();
-        trackAnalyticsEvent("agent_auth_link_opened", agentAuthAnalyticsParams());
-      });
-    }
     if (agentAuthCopy) {
       agentAuthCopy.addEventListener("click", copyAgentAuthCode);
     }
@@ -13180,18 +13144,6 @@
           updateAgentAuthDoneVisibility();
           scheduleClaudeBrowserCodeAutoSubmit();
         }, 0);
-      });
-    }
-    if (agentAuthURLLogo) {
-      agentAuthURLLogo.addEventListener("load", () => {
-        if (!state.agentAuthURLLogoBroken) return;
-        state.agentAuthURLLogoBroken = false;
-        applyAgentAuthGate(state.agentAuth);
-      });
-      agentAuthURLLogo.addEventListener("error", () => {
-        if (state.agentAuthURLLogoBroken) return;
-        state.agentAuthURLLogoBroken = true;
-        applyAgentAuthGate(state.agentAuth);
       });
     }
     if (githubProfileLink) {

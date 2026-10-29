@@ -2564,10 +2564,9 @@ func TestHandlerIndexIncludesClaudeBrowserCodeFlow(t *testing.T) {
 
 	markup := resp.Body.String()
 	required := []string{
-		`id="agent-auth-url-logo"`,
+		`id="agent-auth-title-logo"`,
 		`src="/static/logos/claude-code.svg"`,
-		`agentAuthURLLogo.addEventListener("error", () => {`,
-		`state.agentAuthURLLogoBroken = true;`,
+		`agentAuthTitleLogo.classList.toggle("hidden", !showClaudeTitleLogo);`,
 		`function authHarness(auth) {`,
 		`return configuredHarnessName();`,
 		`function isClaudeBrowserCodeAwaitingSubmission(auth) {`,
@@ -3603,8 +3602,8 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	if !strings.Contains(css, ".configured-agent-logo {\n  padding: 0;\n  border: 0;\n  border-radius: 0;\n  background: transparent;\n  box-shadow: none;\n  filter: var(--agent-logo-filter);") {
 		t.Fatalf("expected stylesheet to keep rotating configured-agent logos transparent and theme-tinted")
 	}
-	if !strings.Contains(css, ".agent-auth-url-logo {\n  display: block;\n  width: 58px;\n  height: 58px;\n  padding: 9px;\n  border: 0;\n  border-radius: var(--radius-card);\n  background: transparent;\n  box-shadow: none;\n  filter: var(--agent-logo-filter);") {
-		t.Fatalf("expected stylesheet to tint auth-gate agent logos based on active theme")
+	if !strings.Contains(css, ".agent-auth-title-logo {\n  display: block;\n  width: 2rem;\n  height: 2rem;") {
+		t.Fatalf("expected stylesheet to position auth-gate title logo")
 	}
 	if !strings.Contains(css, ".rotating-brand-logo") || !strings.Contains(css, ".brand-logo-visible") {
 		t.Fatalf("expected stylesheet to include rotating brand logo cross-fade styles")
