@@ -1,13 +1,10 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,24 +63,12 @@ func TestLibraryScheduleAPI(t *testing.T) {
 // is the only coverage for the slider's single-digit -> 4h/6h/12h+ widening snap
 // table and for an off-grid saved interval snapping back to its nearest step.
 func TestLibraryScheduleSliderSnapsToStepsInBrowser(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node not available, skipping browser-driven slider snapping check")
-	}
-	if err := exec.Command("node", "-e", "require.resolve('playwright')").Run(); err != nil {
-		t.Skip("playwright module not available, skipping browser-driven slider snapping check")
-	}
+	requireBrowserTooling(t, "browser-driven slider snapping check")
 
 	server := NewServer("", NewBroker())
 	server.LibrarySchedules = &localruntime.LibrarySchedules{Path: filepath.Join(t.TempDir(), "config.json"), Init: localruntime.InitConfig{Version: "v1"}}
 	ts := httptest.NewServer(server.Handler())
 	defer ts.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "node", "--test", "tests/library_schedules.cjs")
-	cmd.Env = append(os.Environ(), "HARNESS_TEST_URL="+ts.URL)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("library schedule slider snapping check failed:\n%s", out)
-	}
+	runBrowserSuite(t, ts.URL, 60*time.Second, "library schedule slider snapping check", "tests/library_schedules.cjs")
 }

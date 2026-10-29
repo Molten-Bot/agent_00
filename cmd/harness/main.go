@@ -61,6 +61,14 @@ var runSingleHarness = func(ctx context.Context, cfg config.Config, logf func(st
 	return h.Run(ctx, cfg)
 }
 
+// signingSubmissionGate refuses task submissions while signing is required but
+// unconfigured. Settings are re-read on every submission so saving a key
+// releases queued work without restarting the server, and a startup hold left
+// by a failure that has since passed is rechecked here instead of outliving it.
+func signingSubmissionGate(ctx context.Context, cfg localruntime.InitConfig, runner execx.Runner) error {
+	return signingSettings(cfg, runner).SubmissionRequirement(ctx)
+}
+
 func main() {
 	os.Exit(run())
 }
@@ -286,8 +294,15 @@ func runServer(args []string) int {
 	defer stop()
 
 	if err := signingSettings(cfg, runner).ApplyEnvironment(ctx); err != nil {
-		writeStderrLine(logger, fmt.Sprintf("signing configuration error: %v", err))
-		return app.ExitConfig
+		if !errors.Is(err, localruntime.ErrSigningSetupRequired) {
+			writeStderrLine(logger, fmt.Sprintf("signing configuration error: %v", err))
+			return app.ExitConfig
+		}
+		// Exiting here would leave the operator with an unreachable UI and no
+		// way to supply the key. Serve instead: the browser lands on
+		// Settings → Commit signing, and signingSubmissionGate refuses task
+		// submissions for as long as SetupRequirement reports the hold.
+		daemonLogger("commit_signing status=error event=setup_required err=%q", err)
 	}
 
 	if runtimeErr == nil {
@@ -308,6 +323,9 @@ func runServer(args []string) int {
 	var queueEscalatedNoChangesFollowUp func(requestID string, result app.Result, runCfg config.Config)
 	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error)
 	enqueueLocalRun = func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error) {
+		if err := signingSubmissionGate(reqCtx, cfg, runner); err != nil {
+			return "", err
+		}
 		if authGate != nil {
 			authState, authErr := authGate.Status(reqCtx)
 			if authErr != nil {

@@ -841,6 +841,7 @@
           <div class="review-settings-section commit-signing-section" id="commit-signing-section" role="tabpanel" aria-labelledby="settings-tab-signing" hidden>
             <h3 class="review-settings-section-title sr-only">Commit signing</h3>
             <div class="stack commit-signing-fields">
+              <p id="commit-signing-setup-required" class="commit-signing-required" role="alert" hidden></p>
               <p>1. Paste your SSH private key and click Save signing settings. 2. Copy the public key shown below and add it to GitHub as a Signing Key. 3. Check registration, enable “Sign commits for all tasks”, and close settings to save. Changes apply to tasks that start after saving.</p>
               <label for="commit-signing-private-key">SSH private key</label>
               <textarea id="commit-signing-private-key" class="prompt-text agent-auth-secret-input" rows="4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="commit-signing-private-key-help" placeholder="Paste the full SSH private key, including BEGIN and END lines"></textarea>
@@ -1900,6 +1901,8 @@
         disk: false,
       },
       chatReposLoaded: false,
+      commitSigningSetupRequired: false,
+      commitSigningHoldMessage: "",
     };
     if (pruneTaskHistory()) {
       persistTaskHistory();
@@ -13257,6 +13260,32 @@
       if (event.target === settingsGate && !state.settingsBusy) void submitReviewSettings();
     });
     if (window.location.hash === "#settings") setSettingsOpen(true);
+
+    function commitSigningHoldMessage() {
+      return state.commitSigningHoldMessage
+        || "Commit signing is required, but no signing key is saved. Save one in Settings → Commit signing to run tasks.";
+    }
+    function openCommitSigningSettings() {
+      setSettingsTab("signing");
+      if (!state.settingsOpen) setSettingsOpen(true);
+    }
+    // Required signing without a saved key blocks every task on the server, so
+    // put the operator on the signing settings instead of an empty Studio.
+    window.addEventListener("commit-signing-required", (event) => {
+      const required = Boolean(event.detail?.required);
+      state.commitSigningSetupRequired = required;
+      state.commitSigningHoldMessage = required ? String(event.detail?.message || "").trim() : "";
+      if (required) openCommitSigningSettings();
+    });
+    // Capture runs before the submit handler below, so the run never leaves the
+    // browser while setup is incomplete.
+    localPromptForm.addEventListener("submit", (event) => {
+      if (!state.commitSigningSetupRequired) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setLocalPromptStatus("error", commitSigningHoldMessage());
+      openCommitSigningSettings();
+    }, true);
 
     if (reviewSettingsForm) {
       reviewSettingsForm.addEventListener("submit", submitReviewSettings);
