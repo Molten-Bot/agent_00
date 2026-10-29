@@ -6129,7 +6129,17 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		strings.Contains(text, "`uv` missing") ||
 		strings.Contains(text, "uv missing") ||
 		strings.Contains(text, "node_modules missing")
-	if !missingTooling {
+	restrictedDependencyDownload := containsAny(text, []string{
+		"restricted network",
+		"network operation prohibited",
+		"network access prohibited",
+	}) && containsAny(text, []string{
+		"could not download",
+		"failed to download",
+		"dependency download",
+		"module download",
+	})
+	if !missingTooling && !restrictedDependencyDownload {
 		return false
 	}
 	if strings.Contains(text, "smoke command") {
@@ -6171,6 +6181,9 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"dependency",
 		"node modules",
 		"node_modules",
+		"restricted network",
+		"network operation prohibited",
+		"network access prohibited",
 	}
 	hasValidationCommand := containsAny(text, validationCommandMarkers)
 	hasValidationContext := containsAny(text, validationContextMarkers)
