@@ -37,6 +37,7 @@ func expectedCodexArgs(roots []string, extra ...string) []string {
 		"-c", "sandbox_workspace_write.writable_roots=" + string(encoded),
 		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
 		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+		"-c", "sandbox_workspace_write.network_access=true",
 	}
 	return append(args, extra...)
 }

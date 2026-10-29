@@ -239,7 +239,6 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 		} else {
 			args = append(args, "-c", `sandbox_mode="workspace-write"`)
 			args = append(args, workspaceSandboxArgs(opts)...)
-			args = append(args, "-c", "sandbox_workspace_write.network_access=true")
 		}
 		args = append(args, "--", cmd.Name)
 		cmd.Args = append(args, cmd.Args...)
@@ -313,6 +312,8 @@ func workspaceSandboxArgs(opts RunOptions) []string {
 		"-c", "sandbox_workspace_write.writable_roots=" + string(encoded),
 		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
 		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+		// Both runtimes need network access for dependency downloads and tests.
+		"-c", "sandbox_workspace_write.network_access=true",
 	}
 }
 

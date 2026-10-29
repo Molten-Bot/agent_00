@@ -34,6 +34,7 @@ func TestTaskWorkspaceIsOnlyWritableRoot(t *testing.T) {
 				`sandbox_workspace_write.writable_roots=["/tasks/current"]`,
 				"sandbox_workspace_write.exclude_slash_tmp=true",
 				"sandbox_workspace_write.exclude_tmpdir_env_var=true",
+				"sandbox_workspace_write.network_access=true",
 			} {
 				if !slices.Contains(cmd.Args, required) {
 					t.Fatalf("missing sandbox restriction %q in %v", required, cmd.Args)
@@ -310,6 +311,7 @@ func TestBuildCommandCodex(t *testing.T) {
 		"-c", `sandbox_workspace_write.writable_roots=["/tmp/run"]`,
 		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
 		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+		"-c", "sandbox_workspace_write.network_access=true",
 		"--skip-git-repo-check", "--add-dir", "/tmp/run", "--image", "a.png", "--image", "b.png",
 	}
 	if !reflect.DeepEqual(cmd.Args, wantArgs) {
