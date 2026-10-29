@@ -58,10 +58,10 @@ func TestCommitSigningAPI(t *testing.T) {
 // Required signing with no saved key must reach the browser on every response,
 // including the failed save attempt, so Settings can hold task submissions.
 func TestCommitSigningAPIReportsSetupRequirement(t *testing.T) {
-	t.Setenv("HARNESS_COMMIT_SIGNING_ENABLED", "true")
 	s := NewServer("", NewBroker())
 	s.CommitSigning = &localruntime.SigningSettings{
-		Path: filepath.Join(t.TempDir(), "config.json"),
+		Path:    filepath.Join(t.TempDir(), "config.json"),
+		Initial: localruntime.InitConfig{CommitSigning: gitsigning.Config{Enabled: true}},
 		// Keep the failed save local: an unreachable transport is a setup error too.
 		GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: "://invalid"} },
 	}
@@ -80,10 +80,10 @@ func TestCommitSigningAPIReportsSetupRequirement(t *testing.T) {
 		if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
 			t.Fatal(err)
 		}
-		if !response.Settings.SetupRequired || !response.Settings.EnvEnforced {
+		if !response.Settings.SetupRequired {
 			t.Fatalf("%s %s: missing setup hold: %+v", test.method, test.path, response.Settings)
 		}
-		if !strings.Contains(response.Settings.Message, "HARNESS_COMMIT_SIGNING_ENABLED") {
+		if !strings.Contains(response.Settings.Message, "save a signing key first") {
 			t.Fatalf("%s %s: unhelpful hold message: %q", test.method, test.path, response.Settings.Message)
 		}
 	}

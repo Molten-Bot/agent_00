@@ -123,10 +123,8 @@ type CommitSigningState struct {
 	Account      string `json:"account,omitempty"`
 	Registered   bool   `json:"registered"`
 	Registration string `json:"registration"`
-	// SetupRequired holds tasks until a signing key exists. EnvEnforced marks
-	// the policy as pinned by the environment, which Settings cannot turn off.
+	// SetupRequired holds tasks until the saved signing configuration is ready.
 	SetupRequired bool   `json:"setup_required"`
-	EnvEnforced   bool   `json:"env_enforced"`
 	Message       string `json:"message,omitempty"`
 }
 
@@ -163,15 +161,7 @@ func (s SigningSettings) github() gitsigning.GitHub {
 }
 
 func (s SigningSettings) config() (gitsigning.Config, error) {
-	cfg, err := s.savedConfig()
-	if err != nil {
-		return cfg, err
-	}
-	enabled, err := commitSigningEnabledFromEnv()
-	if enabled != nil {
-		cfg.Enabled = *enabled
-	}
-	return cfg, err
+	return s.savedConfig()
 }
 
 func (s SigningSettings) savedConfig() (gitsigning.Config, error) {
@@ -271,16 +261,12 @@ func (s SigningSettings) setupRequirement(includeHold bool) error {
 	if cfg.KeyID != "" {
 		return nil
 	}
-	if commitSigningEnvEnforced() {
-		return markSetupRequired(fmt.Errorf("%w: %s requires a signing key; save one in Settings → Commit signing before running tasks", gitsigning.ErrSetup, commitSigningEnabledEnv))
-	}
 	return markSetupRequired(fmt.Errorf("%w: save a signing key first", gitsigning.ErrSetup))
 }
 
 // ApplySetupRequirement annotates a state for the UI so Settings can explain
 // the hold and keep the signing section in front of the operator.
 func (s SigningSettings) ApplySetupRequirement(state CommitSigningState) CommitSigningState {
-	state.EnvEnforced = commitSigningEnvEnforced()
 	requirement := s.SetupRequirement()
 	if requirement == nil {
 		return state
@@ -325,11 +311,6 @@ func (s SigningSettings) Configure(ctx context.Context, req CommitSigningRequest
 	current, err := s.config()
 	if err != nil {
 		return signingState(current), err
-	}
-	if enabled, err := commitSigningEnabledFromEnv(); err != nil {
-		return signingState(current), err
-	} else if enabled != nil && req.Enabled != *enabled {
-		return signingState(current), fmt.Errorf("%w: signing is controlled by %s; change it and restart", gitsigning.ErrSetup, commitSigningEnabledEnv)
 	}
 	cfg := current
 	importing := strings.TrimSpace(req.PrivateKey) != ""

@@ -53,15 +53,14 @@ func TestSigningFailuresDoNotQueueCodingWork(t *testing.T) {
 	}
 }
 
-func TestSigningEnvironmentCLIRejectsInvalidPolicyAtStartup(t *testing.T) {
-	t.Setenv("HARNESS_COMMIT_SIGNING_ENABLED", "invalid")
-	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", "")
+func TestSigningEnvironmentCLIRejectsInvalidPrivateKeyAtStartup(t *testing.T) {
+	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", "not-a-private-key")
 	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE", "")
 	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "")
 	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", filepath.Join(t.TempDir(), "runtime.json"))
 	result := runSingleHarness(context.Background(), config.Config{}, func(string, ...any) {})
 	if result.ExitCode != app.ExitConfig || !errors.Is(result.Err, gitsigning.ErrSetup) {
-		t.Fatalf("run accepted invalid signing policy: %+v", result)
+		t.Fatalf("run accepted invalid signing key: %+v", result)
 	}
 	path := filepath.Join(t.TempDir(), "task.json")
 	if err := os.WriteFile(path, []byte(`{"repoUrl":"https://github.com/example/repo","prompt":"test"}`), 0600); err != nil {
@@ -70,7 +69,7 @@ func TestSigningEnvironmentCLIRejectsInvalidPolicyAtStartup(t *testing.T) {
 	if code := runMultiplex([]string{"--config", path}); code != app.ExitConfig {
 		t.Fatalf("multiplex exit = %d, want %d", code, app.ExitConfig)
 	}
-	// serve must reject the policy before it binds a listener and waits for a
+	// serve must reject the key before it binds a listener and waits for a
 	// shutdown signal. A fall-through would block forever, so bound the wait:
 	// otherwise the whole package only fails when go test hits its deadline.
 	// Point serve at a port this test already holds so a regression fails to
@@ -88,14 +87,13 @@ func TestSigningEnvironmentCLIRejectsInvalidPolicyAtStartup(t *testing.T) {
 			t.Fatalf("serve exit = %d, want %d", code, app.ExitConfig)
 		}
 	case <-time.After(30 * time.Second):
-		t.Fatal("serve did not reject the invalid signing policy and kept running")
+		t.Fatal("serve did not reject the invalid signing key and kept running")
 	}
 }
 
 func TestSigningSubmissionGateHoldsTasksUntilKeyIsSaved(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", path)
-	t.Setenv("HARNESS_COMMIT_SIGNING_ENABLED", "")
 	if err := os.WriteFile(path, []byte(`{"commit_signing":{"enabled":true}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -122,9 +120,12 @@ func TestSigningSubmissionGateHoldsTasksUntilKeyIsSaved(t *testing.T) {
 	}
 }
 
-func TestSigningEnvironmentWithoutKeyHoldsSetupInsteadOfFailingStartup(t *testing.T) {
-	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", filepath.Join(t.TempDir(), "config.json"))
-	t.Setenv("HARNESS_COMMIT_SIGNING_ENABLED", "true")
+func TestSavedSigningWithoutKeyHoldsSetupInsteadOfFailingStartup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", path)
+	if err := os.WriteFile(path, []byte(`{"commit_signing":{"enabled":true}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", "")
 	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE", "")
 	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "")
@@ -138,7 +139,6 @@ func TestSigningEnvironmentWithoutKeyHoldsSetupInsteadOfFailingStartup(t *testin
 func TestSigningEnvironmentRejectsUnusableProvidedKeyAtStartup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", path)
-	t.Setenv("HARNESS_COMMIT_SIGNING_ENABLED", "true")
 	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", "not-a-private-key")
 	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE", "")
 	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "")

@@ -227,19 +227,17 @@ its persistent volume so `config.json` and `signing/` survive recreation. The
 belong in task JSON. Git settings are applied to subprocesses without changing
 the host's global Git configuration.
 
-For unattended startup, set `HARNESS_COMMIT_SIGNING_ENABLED=true` in the
-container environment. It overrides the saved enabled flag, reuses the key
-already configured in Settings, and prevents Settings from disabling signing.
-Set it to `false` to force signing off, or leave it empty/unset to use the saved
-Settings preference.
+Enable or disable signing in **Settings → Commit signing**. The saved preference
+applies across restarts and to `serve`, `run`, and `multiplex`.
+`HARNESS_COMMIT_SIGNING_ENABLED` is no longer used; remove it from existing
+Compose configurations and manage signing in the app.
 
 When signing is required but setup is incomplete, `serve` still starts and the
 local UI stays reachable. The browser opens on **Settings → Commit signing**,
 that section states why signing is blocked, and task submissions are refused
 until a signing key is saved; no restart is needed once it is. Startup still
-stops on signing configuration that the UI cannot fix, such as an invalid
-`HARNESS_COMMIT_SIGNING_ENABLED` value, an unreadable runtime configuration, or
-an environment-supplied private key that fails the import, identity, or
+stops on signing configuration that the UI cannot fix, such as an unreadable
+runtime configuration or an environment-supplied private key that fails the import, identity, or
 registration checks. Tasks also recheck signing before running, so a key that is
 saved but unregistered or unusable still stops the task rather than producing
 unsigned commits.
@@ -252,8 +250,8 @@ key is encrypted. The same Settings import, identity, and registration checks
 apply; register the public key on GitHub before starting with signing enabled.
 These variables work in `serve`, `run`, and `multiplex` and are read at startup.
 The key is copied into the managed signing directory; only metadata is written
-to runtime JSON, and the passphrase is never saved. With an environment enabled
-flag set, change that flag and restart to change the signing policy.
+to runtime JSON, and the passphrase is never saved. Provisioning a private key
+does not enable signing; the saved Settings preference still controls it.
 
 ### Persistent Codex authentication
 

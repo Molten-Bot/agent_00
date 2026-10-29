@@ -20,7 +20,7 @@ import (
 
 func clearSigningEnvironment(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{commitSigningEnabledEnv, "HARNESS_COMMIT_SIGNING_PRIVATE_KEY", "HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE", "HARNESS_COMMIT_SIGNING_PASSPHRASE"} {
+	for _, name := range []string{"HARNESS_COMMIT_SIGNING_PRIVATE_KEY", "HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE", "HARNESS_COMMIT_SIGNING_PASSPHRASE"} {
 		t.Setenv(name, "")
 	}
 }
@@ -64,11 +64,10 @@ func TestSigningEnvironmentStartup(t *testing.T) {
 		t.Run(source, func(t *testing.T) {
 			clearSigningEnvironment(t)
 			path := filepath.Join(t.TempDir(), "config.json")
-			if err := os.WriteFile(path, []byte(`{"github_token":"test-token","commit_signing":{"enabled":false}}`), 0600); err != nil {
+			if err := os.WriteFile(path, []byte(`{"github_token":"test-token","commit_signing":{"enabled":true}}`), 0600); err != nil {
 				t.Fatal(err)
 			}
 			store := SigningSettings{Path: path, GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()} }}
-			t.Setenv(commitSigningEnabledEnv, "true")
 			t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "test-passphrase")
 			if source == "inline" {
 				t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", raw)
@@ -97,27 +96,12 @@ func TestSigningEnvironmentStartup(t *testing.T) {
 			if ReadRuntimeConfigString(path, "github_token") != "test-token" {
 				t.Fatal("unrelated config lost")
 			}
-			if _, err := store.Configure(ctx, CommitSigningRequest{Enabled: false}); !errors.Is(err, gitsigning.ErrSetup) {
-				t.Fatalf("UI disabled environment policy: %v", err)
-			}
-			// Reboot with only the enabled flag reuses the managed key.
+			// Reboot reuses the managed key and saved signing preference.
 			t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", "")
 			t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE", "")
 			t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "")
 			if err := store.ApplyEnvironment(ctx); err != nil {
 				t.Fatal(err)
-			}
-			// A saved disabled flag cannot defeat the environment requirement.
-			cfg, err := store.savedConfig()
-			if err != nil {
-				t.Fatal(err)
-			}
-			cfg.Enabled = false
-			if err := store.save(cfg); err != nil {
-				t.Fatal(err)
-			}
-			if snapshot, err := store.Snapshot(ctx); err != nil || snapshot == nil {
-				t.Fatalf("disabled saved flag overrode env: %v", err)
 			}
 			registered.Store(false)
 			if err := store.ApplyEnvironment(ctx); !errors.Is(err, gitsigning.ErrSetup) {
@@ -127,12 +111,14 @@ func TestSigningEnvironmentStartup(t *testing.T) {
 				t.Fatalf("failed startup fell back to unsigned: %v", err)
 			}
 			registered.Store(true)
-			t.Setenv(commitSigningEnabledEnv, "false")
+			if _, err := store.Configure(ctx, CommitSigningRequest{Enabled: false}); err != nil {
+				t.Fatal(err)
+			}
 			if err := store.ApplyEnvironment(ctx); err != nil {
 				t.Fatal(err)
 			}
 			if snapshot, err := store.Snapshot(ctx); err != nil || snapshot != nil {
-				t.Fatalf("explicit false ignored: %v", err)
+				t.Fatalf("saved disabled preference ignored: %v", err)
 			}
 		})
 	}
@@ -140,13 +126,15 @@ func TestSigningEnvironmentStartup(t *testing.T) {
 
 func TestRequiredSigningCanRegisterImportedKeyWithoutResaving(t *testing.T) {
 	clearSigningEnvironment(t)
-	t.Setenv(commitSigningEnabledEnv, "true")
 	raw, public := signingTestKeyPair(t)
 	server, registered := signingTestGitHub(t, public)
 	registered.Store(false)
 	store := SigningSettings{
 		Path: filepath.Join(t.TempDir(), "config.json"), Runner: signingTestRunner{},
 		GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()} },
+	}
+	if err := store.save(gitsigning.Config{Enabled: true}); err != nil {
+		t.Fatal(err)
 	}
 	ctx := context.Background()
 	if err := store.ApplyEnvironment(ctx); !errors.Is(err, ErrSigningSetupRequired) {
@@ -176,12 +164,10 @@ func TestSigningEnvironmentInvalidInput(t *testing.T) {
 		name string
 		env  map[string]string
 	}{
-		{"invalid bool", map[string]string{commitSigningEnabledEnv: "secret-invalid-bool"}},
 		{"invalid key", map[string]string{"HARNESS_COMMIT_SIGNING_PRIVATE_KEY": "secret-invalid-key"}},
 		{"conflicting sources", map[string]string{"HARNESS_COMMIT_SIGNING_PRIVATE_KEY": "secret-key", "HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE": "secret-path"}},
 		{"missing file", map[string]string{"HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE": "/missing/secret-path"}},
 		{"passphrase without key", map[string]string{"HARNESS_COMMIT_SIGNING_PASSPHRASE": "secret-passphrase"}},
-		{"enabled without key", map[string]string{commitSigningEnabledEnv: "true"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			clearSigningEnvironment(t)
@@ -209,32 +195,16 @@ func TestSigningSetupRequirementHoldsTasksUntilKeyExists(t *testing.T) {
 		t.Fatalf("signing off should not hold tasks: %v", err)
 	}
 
-	// The reported failure: required by environment, no key saved anywhere.
-	t.Setenv(commitSigningEnabledEnv, "true")
-	err := store.SetupRequirement()
-	if !errors.Is(err, gitsigning.ErrSetup) {
-		t.Fatalf("expected a setup hold: %v", err)
-	}
-	if !strings.Contains(err.Error(), commitSigningEnabledEnv) {
-		t.Fatalf("hold should name the environment variable: %v", err)
-	}
-	state := store.ApplySetupRequirement(CommitSigningState{})
-	if !state.SetupRequired || !state.EnvEnforced || state.Message != err.Error() {
-		t.Fatalf("ui state should carry the hold: %+v", state)
-	}
-
-	// A saved enabled flag without a key holds tasks too, without blaming the
-	// environment it did not come from.
-	t.Setenv(commitSigningEnabledEnv, "")
 	if err := store.save(gitsigning.Config{Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	err = store.SetupRequirement()
-	if !errors.Is(err, gitsigning.ErrSetup) {
-		t.Fatalf("expected a setup hold for the saved preference: %v", err)
+	err := store.SetupRequirement()
+	if !errors.Is(err, ErrSigningSetupRequired) {
+		t.Fatalf("expected a setup hold for saved signing preference: %v", err)
 	}
-	if strings.Contains(err.Error(), commitSigningEnabledEnv) {
-		t.Fatalf("saved preference should not blame the environment: %v", err)
+	state := store.ApplySetupRequirement(CommitSigningState{})
+	if !state.SetupRequired || state.Message != err.Error() {
+		t.Fatalf("ui state should carry the hold: %+v", state)
 	}
 
 	// A key that imports but cannot be validated keeps the hold: it is saved,
@@ -242,7 +212,6 @@ func TestSigningSetupRequirementHoldsTasksUntilKeyExists(t *testing.T) {
 	if _, err := store.Configure(context.Background(), CommitSigningRequest{PrivateKey: signingTestPrivateKey(t), Passphrase: "test-passphrase"}); !errors.Is(err, gitsigning.ErrSetup) {
 		t.Fatalf("offline identity lookup should still import the key: %v", err)
 	}
-	t.Setenv(commitSigningEnabledEnv, "true")
 	held := store.SetupRequirement()
 	if !errors.Is(held, ErrSigningSetupRequired) {
 		t.Fatalf("an unvalidated key released the hold: %v", held)
@@ -265,7 +234,9 @@ func TestSigningBootFailureHoldsTasksUntilSettingsValidate(t *testing.T) {
 	store := SigningSettings{Path: path, GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()} }}
 	ctx := context.Background()
 
-	t.Setenv(commitSigningEnabledEnv, "true")
+	if err := store.save(gitsigning.Config{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", raw)
 	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "test-passphrase")
 	if err := store.ApplyEnvironment(ctx); err != nil {
@@ -288,7 +259,7 @@ func TestSigningBootFailureHoldsTasksUntilSettingsValidate(t *testing.T) {
 		t.Fatalf("a saved key that failed boot must keep holding tasks: %v", held)
 	}
 	state := store.ApplySetupRequirement(CommitSigningState{})
-	if !state.SetupRequired || !state.EnvEnforced || state.Message != held.Error() {
+	if !state.SetupRequired || state.Message != held.Error() {
 		t.Fatalf("ui state should explain the hold: %+v", state)
 	}
 
@@ -359,7 +330,9 @@ func TestSigningSubmissionRequirementRechecksTransientHold(t *testing.T) {
 		now = now.Add(d)
 	}
 	ctx := context.Background()
-	t.Setenv(commitSigningEnabledEnv, "true")
+	if err := store.save(gitsigning.Config{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", raw)
 	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "test-passphrase")
 	if err := store.ApplyEnvironment(ctx); err != nil {
@@ -432,7 +405,9 @@ func TestSigningBootRevalidationKeepsHoldUntilItPasses(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	store := SigningSettings{Path: path, GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()} }}
 	ctx := context.Background()
-	t.Setenv(commitSigningEnabledEnv, "true")
+	if err := store.save(gitsigning.Config{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY", raw)
 	t.Setenv("HARNESS_COMMIT_SIGNING_PASSPHRASE", "test-passphrase")
 	if err := store.ApplyEnvironment(ctx); err != nil {
@@ -480,12 +455,56 @@ func TestSigningEnvironmentUnsetPreservesSettings(t *testing.T) {
 		if err := store.save(gitsigning.Config{Enabled: enabled}); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.ApplyEnvironment(ctx); err != nil {
+		err := store.ApplyEnvironment(ctx)
+		if enabled && !errors.Is(err, ErrSigningSetupRequired) {
+			t.Fatalf("enabled signing without a key should hold setup: %v", err)
+		}
+		if !enabled && err != nil {
 			t.Fatal(err)
 		}
 		state, err := store.Status(ctx)
 		if err != nil || state.Enabled != enabled {
 			t.Fatalf("saved preference changed: %+v %v", state, err)
 		}
+	}
+}
+
+func TestSigningSettingsIgnoreRemovedEnvironmentFlag(t *testing.T) {
+	clearSigningEnvironment(t)
+	raw, public := signingTestKeyPair(t)
+	server, _ := signingTestGitHub(t, public)
+	for _, value := range []string{"true", "false", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("HARNESS_COMMIT_SIGNING_ENABLED", value)
+			store := SigningSettings{
+				Path: filepath.Join(t.TempDir(), "config.json"), Runner: signingTestRunner{},
+				GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()} },
+			}
+			ctx := context.Background()
+			if err := store.ApplyEnvironment(ctx); err != nil {
+				t.Fatalf("legacy variable blocked default startup: %v", err)
+			}
+			if err := store.SetupRequirement(); err != nil {
+				t.Fatalf("legacy variable required signing: %v", err)
+			}
+			if _, err := store.Configure(ctx, CommitSigningRequest{Enabled: true, PrivateKey: raw, Passphrase: "test-passphrase"}); err != nil {
+				t.Fatalf("cannot enable signing in Settings: %v", err)
+			}
+			if err := store.ApplyEnvironment(ctx); err != nil {
+				t.Fatalf("saved signing failed at restart: %v", err)
+			}
+			if snapshot, err := store.Snapshot(ctx); err != nil || snapshot == nil {
+				t.Fatalf("saved enabled preference ignored: %v", err)
+			}
+			if _, err := store.Configure(ctx, CommitSigningRequest{}); err != nil {
+				t.Fatalf("cannot disable signing in Settings: %v", err)
+			}
+			if err := store.ApplyEnvironment(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if snapshot, err := store.Snapshot(ctx); err != nil || snapshot != nil {
+				t.Fatalf("saved disabled preference ignored: %v", err)
+			}
+		})
 	}
 }

@@ -11,7 +11,6 @@ import (
 // not leak into the suite.
 func TestMain(m *testing.M) {
 	for _, key := range []string{
-		"HARNESS_COMMIT_SIGNING_ENABLED",
 		"HARNESS_COMMIT_SIGNING_PRIVATE_KEY",
 		"HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE",
 		"HARNESS_COMMIT_SIGNING_PASSPHRASE",

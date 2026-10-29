@@ -4,42 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 )
 
-const commitSigningEnabledEnv = "HARNESS_COMMIT_SIGNING_ENABLED"
-
-// An explicit environment value overrides saved settings. Empty values leave
-// Settings in control, matching optional Compose environment variables.
-func commitSigningEnabledFromEnv() (*bool, error) {
-	raw := strings.TrimSpace(os.Getenv(commitSigningEnabledEnv))
-	if raw == "" {
-		return nil, nil
-	}
-	enabled, err := strconv.ParseBool(raw)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s must be true or false", gitsigning.ErrSetup, commitSigningEnabledEnv)
-	}
-	return &enabled, nil
-}
-
-// commitSigningEnvEnforced reports whether the environment pins the signing
-// policy. Settings cannot change it, so messages point at the variable instead.
-func commitSigningEnvEnforced() bool {
-	return strings.TrimSpace(os.Getenv(commitSigningEnabledEnv)) != ""
-}
-
-// ApplyEnvironment provisions signing at startup through the same validation
-// and private key store as Settings. Secrets never enter the runtime JSON.
+// ApplyEnvironment validates saved signing settings at startup and optionally
+// provisions a private key. The enabled preference is controlled by Settings.
+// Secrets never enter the runtime JSON.
 // Enabled signing must be ready before the server starts accepting tasks.
 func (s SigningSettings) ApplyEnvironment(ctx context.Context) error {
-	enabled, err := commitSigningEnabledFromEnv()
-	if err != nil {
-		return err
-	}
 	raw := os.Getenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY")
 	path := strings.TrimSpace(os.Getenv("HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE"))
 	passphrase := os.Getenv("HARNESS_COMMIT_SIGNING_PASSPHRASE")
@@ -56,9 +30,6 @@ func (s SigningSettings) ApplyEnvironment(ctx context.Context) error {
 			return fmt.Errorf("%w: HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE is empty", gitsigning.ErrSetup)
 		}
 	}
-	if enabled == nil && strings.TrimSpace(raw) == "" && passphrase == "" {
-		return nil
-	}
 	if passphrase != "" && strings.TrimSpace(raw) == "" {
 		return fmt.Errorf("%w: HARNESS_COMMIT_SIGNING_PASSPHRASE requires a private key", gitsigning.ErrSetup)
 	}
@@ -67,11 +38,15 @@ func (s SigningSettings) ApplyEnvironment(ctx context.Context) error {
 		return err
 	}
 	if strings.TrimSpace(raw) == "" {
-		// Policy only: whatever is wrong is fixable in Settings → Commit signing,
+		if !cfg.Enabled {
+			s.releaseBootHold()
+			return nil
+		}
+		// Saved policy only: whatever is wrong is fixable in Settings → Commit signing,
 		// so report a setup hold and let callers that can serve a UI start up.
 		// This call revalidates the saved key, so skip a hold an earlier call
 		// left behind instead of reporting it in place of today's result. The
-		// hold itself stays in place until Configure below clears it, so a
+		// hold itself stays in place until Verify below clears it, so a
 		// submission that lands mid-check still meets the gate.
 		if err := s.setupRequirement(false); err != nil {
 			return err
@@ -80,7 +55,7 @@ func (s SigningSettings) ApplyEnvironment(ctx context.Context) error {
 		// and registration checks now. Record the failure as a startup hold so
 		// SetupRequirement keeps refusing submissions; a saved key alone would
 		// otherwise release the gate and sign with a key this boot rejected.
-		if _, err := s.Configure(ctx, CommitSigningRequest{Enabled: cfg.Enabled}); err != nil {
+		if _, err := s.Verify(ctx); err != nil {
 			return s.holdBoot(err)
 		}
 		return nil

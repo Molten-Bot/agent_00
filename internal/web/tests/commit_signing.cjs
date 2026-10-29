@@ -39,8 +39,7 @@ const held = {
   ...empty,
   enabled: true,
   setup_required: true,
-  env_enforced: true,
-  message: 'commit signing setup: HARNESS_COMMIT_SIGNING_ENABLED requires a signing key; save one in Settings → Commit signing before running tasks',
+  message: 'Commit signing is enabled. Save a signing key in Settings → Commit signing before running tasks.',
 };
 
 test('import, register, enable, reload and disable without returning private material', async t => {
@@ -147,21 +146,26 @@ test('failed close-time signing save keeps the selected option and allows retry'
   await page.waitForFunction(() => document.getElementById('settings-gate').classList.contains('hidden'));
 });
 
-// The server refuses a policy change while HARNESS_COMMIT_SIGNING_ENABLED is
-// set, so the toggle must not offer one.
-test('an environment-pinned policy leaves the signing toggle read-only', async t => {
-  const pinned = { ...saved, enabled: true, env_enforced: true, registration: 'registered' };
+test('saved signing can be disabled in Settings even when its key is missing', async t => {
+  let settings = { ...held };
   const writes = [];
   const page = await openSettings(t, route => {
-    if (route.request().method() === 'POST') writes.push(route.request().postDataJSON());
-    return route.fulfill({ json: { ok: true, settings: pinned } });
+    if (route.request().method() === 'POST') {
+      const payload = route.request().postDataJSON();
+      writes.push(payload);
+      settings = { ...empty };
+    }
+    return route.fulfill({ json: { ok: true, settings } });
   });
-  assert.equal(await page.locator('#commit-signing-enabled').isChecked(), true);
-  assert.equal(await page.locator('#commit-signing-enabled').isDisabled(), true);
-  assert.match(await page.locator('#commit-signing-enabled-help').textContent(), /cannot be changed here/);
+  assert.equal(await page.locator('#commit-signing-enabled').isEnabled(), true);
+  await page.locator('label:has(#commit-signing-enabled)').click();
   await page.locator('#review-settings-close').click();
   await page.waitForFunction(() => document.getElementById('settings-gate').classList.contains('hidden'));
-  assert.deepEqual(writes, [], 'closing settings posted a policy change the server would reject');
+  assert.deepEqual(writes, [{ enabled: false }]);
+  await page.goto(baseURL);
+  await page.waitForFunction(() => !document.getElementById('commit-signing-save').disabled);
+  assert.equal(await page.locator('#settings-gate').isVisible(), false);
+  assert.equal(await page.locator('#commit-signing-enabled').isChecked(), false);
 });
 
 test('a required signing hold opens the signing tab, shows the banner, and blocks submissions', async t => {
@@ -178,7 +182,7 @@ test('a required signing hold opens the signing tab, shows the banner, and block
   assert.equal(await page.locator('#settings-tab-signing').getAttribute('aria-selected'), 'true');
   const banner = page.locator('#commit-signing-setup-required');
   await banner.waitFor({ state: 'visible' });
-  assert.match(await banner.textContent(), /HARNESS_COMMIT_SIGNING_ENABLED/);
+  assert.match(await banner.textContent(), /Save a signing key/);
 
   // The capture-phase listener has to beat submitLocalPrompt, which would set
   // "Submitting..." and POST before anything later could stop it. A dispatched
@@ -186,7 +190,7 @@ test('a required signing hold opens the signing tab, shows the banner, and block
   const cancelled = await page.evaluate(() => document.getElementById('local-prompt-form')
     .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) === false);
   assert.equal(cancelled, true, 'the held submit was not cancelled');
-  await page.waitForFunction(() => document.getElementById('local-prompt-status').textContent.includes('HARNESS_COMMIT_SIGNING_ENABLED'));
+  await page.waitForFunction(() => document.getElementById('local-prompt-status').textContent.includes('Save a signing key'));
   // submitLocalPrompt awaits only microtasks before its fetch, so anything that
   // slipped past the hold has posted by now.
   await page.waitForTimeout(250);

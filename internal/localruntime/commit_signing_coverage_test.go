@@ -104,13 +104,15 @@ func TestSigningSettingsSaveWriteError(t *testing.T) {
 	}
 }
 
-func TestSigningSettingsConfigureConfigErrorFromBadEnv(t *testing.T) {
+func TestSigningSettingsConfigureConfigErrorFromInvalidSettings(t *testing.T) {
 	clearSigningEnvironment(t)
-	t.Setenv(commitSigningEnabledEnv, "not-a-bool")
 	store := SigningSettings{Path: filepath.Join(t.TempDir(), "config.json")}
+	if err := os.WriteFile(store.Path, []byte(`{"commit_signing":`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	_, err := store.Configure(context.Background(), CommitSigningRequest{})
 	if !errors.Is(err, gitsigning.ErrSetup) {
-		t.Fatalf("Configure(bad env) error = %v, want wrapped ErrSetup", err)
+		t.Fatalf("Configure(invalid settings) error = %v, want wrapped ErrSetup", err)
 	}
 }
 
@@ -263,11 +265,13 @@ func TestSigningSettingsConfigureRegisteredCheckUnavailable(t *testing.T) {
 
 func TestSigningSettingsVerifyConfigError(t *testing.T) {
 	clearSigningEnvironment(t)
-	t.Setenv(commitSigningEnabledEnv, "not-a-bool")
 	store := SigningSettings{Path: filepath.Join(t.TempDir(), "config.json")}
+	if err := os.WriteFile(store.Path, []byte(`{"commit_signing":`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	_, err := store.Verify(context.Background())
 	if !errors.Is(err, gitsigning.ErrSetup) {
-		t.Fatalf("Verify(bad env) error = %v, want wrapped ErrSetup", err)
+		t.Fatalf("Verify(invalid settings) error = %v, want wrapped ErrSetup", err)
 	}
 }
 
@@ -289,11 +293,13 @@ func TestSigningSettingsVerifyCheckError(t *testing.T) {
 
 func TestSigningSettingsSnapshotConfigError(t *testing.T) {
 	clearSigningEnvironment(t)
-	t.Setenv(commitSigningEnabledEnv, "not-a-bool")
 	store := SigningSettings{Path: filepath.Join(t.TempDir(), "config.json")}
+	if err := os.WriteFile(store.Path, []byte(`{"commit_signing":`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	_, err := store.Snapshot(context.Background())
 	if !errors.Is(err, gitsigning.ErrSetup) {
-		t.Fatalf("Snapshot(bad env) error = %v, want wrapped ErrSetup", err)
+		t.Fatalf("Snapshot(invalid settings) error = %v, want wrapped ErrSetup", err)
 	}
 }
 
