@@ -61,6 +61,9 @@ func TestWithExecutionContractIncludesValidationToolingInstruction(t *testing.T)
 	if !strings.Contains(got, "do not use `Failure:` solely for that validation gap") {
 		t.Fatalf("WithExecutionContract() missing validation-gap failure guidance: %q", got)
 	}
+	if !strings.Contains(got, "restricted network access blocking dependency downloads") {
+		t.Fatalf("WithExecutionContract() missing restricted-network validation guidance: %q", got)
+	}
 }
 
 func TestWithExecutionContractIncludesActivityPrivacyInstruction(t *testing.T) {
