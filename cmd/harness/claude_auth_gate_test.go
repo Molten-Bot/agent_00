@@ -186,7 +186,7 @@ func TestClaudeAuthGateRecognizesCredentialFile(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
 	t.Setenv("GH_TOKEN", "github_token_ready")
 
-	g := newClaudeAuthGate(context.Background(), "", nil)
+	g := newClaudeAuthGate(context.Background(), missingClaudeCommand(t), nil)
 	status, err := g.Status(context.Background())
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
@@ -213,7 +213,7 @@ func TestClaudeAuthGateRecognizesCredentialFileFromHomeConfigDirectory(t *testin
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("GH_TOKEN", "github_token_ready")
 
-	g := newClaudeAuthGate(context.Background(), "", nil)
+	g := newClaudeAuthGate(context.Background(), missingClaudeCommand(t), nil)
 	status, err := g.Status(context.Background())
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
@@ -326,6 +326,7 @@ func TestClaudeAuthGateConfigureAcceptsCredentialsJSONInConfigureState(t *testin
 	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
 	g := &claudeAuthGate{
 		baseCtx:           context.Background(),
+		command:           missingClaudeCommand(t),
 		required:          true,
 		state:             "needs_configure",
 		message:           "auth pending",
@@ -376,6 +377,7 @@ func TestClaudeAuthGateConfigureAcceptsUnknownCredentialsJSONSchemaInConfigureSt
 
 	g := &claudeAuthGate{
 		baseCtx:  context.Background(),
+		command:  missingClaudeCommand(t),
 		required: true,
 		state:    "needs_configure",
 		message:  "auth pending",
@@ -408,6 +410,11 @@ func TestClaudeAuthGateConfigureAcceptsUnknownCredentialsJSONSchemaInConfigureSt
 	if got, want := strings.TrimSpace(string(data)), raw; got != want {
 		t.Fatalf("credentials json = %q, want %q", got, want)
 	}
+}
+
+func missingClaudeCommand(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "missing-claude")
 }
 
 func TestClaudeAuthGateConfigureRejectsInvalidCredentialsJSONInConfigureState(t *testing.T) {
