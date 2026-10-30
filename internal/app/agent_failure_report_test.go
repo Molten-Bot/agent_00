@@ -64,6 +64,39 @@ func TestCodexReportedFailureReadsTheValueAfterTheFailureHeading(t *testing.T) {
 	}
 }
 
+// stripMarkdownEmphasis must unwrap emphasis, not every character that can
+// precede a heading. The harness states its own contract as "Use explicit
+// `Failure:` and `Error details:` fields" and the library prompts spell the
+// required shape as a "`Failure:` <summary>" line, while Codex echoes the
+// prompt it was handed back on stderr. Unwrapping inline code or a block quote
+// would turn the harness's own instructions - or any output quoting them -
+// into an agent-reported failure and abort a healthy run.
+func TestCodexReportedFailureIgnoresInlineCodeAndQuotedFailureHeadings(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		line       string
+		wantFailed bool
+	}{
+		{name: "inline code contract line", line: "`Failure:` <short failure summary>", wantFailed: false},
+		{name: "inline code with a real value", line: "`Failure:` could not run the tests", wantFailed: false},
+		{name: "block quoted report", line: "> **Failure:** could not run the tests", wantFailed: false},
+		{name: "bold heading stays fatal", line: "**Failure:** could not run the tests", wantFailed: true},
+		{name: "atx heading stays fatal", line: "## Failure: could not run the tests", wantFailed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			res := execx.Result{Stdout: "Done.\n" + tc.line + "\n"}
+			failed, detail := codexReportedFailure(res)
+			if failed != tc.wantFailed {
+				t.Fatalf("codexReportedFailure(%q) = (%t, %q), want failed=%t", tc.line, failed, detail, tc.wantFailed)
+			}
+		})
+	}
+}
+
 // `gh pr checks --watch` re-renders the whole table every refresh, so identical
 // rows must collapse. Two checks that merely share a display name are distinct
 // checks with their own job URLs, and collapsing those would drop a failing row

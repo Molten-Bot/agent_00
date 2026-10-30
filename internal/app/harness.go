@@ -6010,10 +6010,19 @@ func codexReportedCompactPlainFailure(output string) (bool, string) {
 // List bullets are deliberately left alone: an emphasis run hugs the word it
 // marks, while "- Failure: none" and "* Failure: none" are list items whose
 // existing (non-fatal) reading must not change.
+//
+// Inline code and block quotes are left alone for the same reason, and they
+// matter more here than the markup they resemble. The harness states its own
+// contract as "Use explicit `Failure:` and `Error details:` fields" and the
+// library prompts spell the required shape as a "`Failure:` <summary>" line
+// (see failurefollowup.FailureResponseInstruction); Codex echoes the prompt it
+// was given back on stderr. Unwrapping those backticks would turn the harness's
+// own instructions into an agent-reported failure, and unwrapping "> " would do
+// the same for any output that quotes them back.
 func stripMarkdownEmphasis(line string) string {
 	line = strings.TrimSpace(line)
-	line = strings.TrimLeft(line, "#> \t")
-	if trimmed := strings.TrimLeft(line, "*_`"); trimmed != line && trimmed != "" && !strings.HasPrefix(trimmed, " ") {
+	line = strings.TrimLeft(line, "# \t")
+	if trimmed := strings.TrimLeft(line, "*_"); trimmed != line && trimmed != "" && !strings.HasPrefix(trimmed, " ") {
 		line = trimmed
 	}
 	line = strings.ReplaceAll(line, "**", "")
@@ -6892,9 +6901,20 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 	// the same refresh token and leave the operator's session permanently stale.
 	// The agent sandbox grants this directory write access explicitly; see
 	// agentruntime.BuildCommand.
-	claudeConfigDir, err := filepath.Abs(agentConfigSource(environ, "CLAUDE_CONFIG_DIR", ".claude"))
-	if err != nil {
-		return nil, fmt.Errorf("resolve persistent Claude config dir: %w", err)
+	//
+	// An unresolvable source stays unset rather than being exported anyway:
+	// agentConfigSource returns "" when neither CLAUDE_CONFIG_DIR nor HOME is
+	// present, and filepath.Abs("") resolves to the harness working directory.
+	// Exporting that handed the sandbox an unrelated writable root, and now
+	// that agentruntime validates the grant it fails the whole invocation
+	// whenever the task workspace happens to sit under that directory.
+	claudeConfigDir := ""
+	if source := agentConfigSource(environ, "CLAUDE_CONFIG_DIR", ".claude"); source != "" {
+		resolved, err := filepath.Abs(source)
+		if err != nil {
+			return nil, fmt.Errorf("resolve persistent Claude config dir: %w", err)
+		}
+		claudeConfigDir = resolved
 	}
 	overrides := []string{
 		"AGENT00_AGENT_IO_DIR=" + root,
@@ -6907,7 +6927,6 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 		"XDG_STATE_HOME=" + stateDir,
 		"XDG_RUNTIME_DIR=" + runtimeDir,
 		"CODEX_HOME=" + codexConfigDir,
-		"CLAUDE_CONFIG_DIR=" + claudeConfigDir,
 		"npm_config_cache=" + filepath.Join(cacheDir, "npm"),
 		"YARN_CACHE_FOLDER=" + filepath.Join(cacheDir, "yarn"),
 		"PNPM_HOME=" + filepath.Join(cacheDir, "pnpm"),
@@ -6918,6 +6937,9 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 		"CARGO_HOME=" + filepath.Join(cacheDir, "cargo"),
 		"GRADLE_USER_HOME=" + filepath.Join(cacheDir, "gradle"),
 		"LOGDIR=" + logDir,
+	}
+	if claudeConfigDir != "" {
+		overrides = append(overrides, "CLAUDE_CONFIG_DIR="+claudeConfigDir)
 	}
 	// Keep an image- or operator-provided browser location. Replacing it with an
 	// empty per-run cache makes an already installed Playwright browser disappear.

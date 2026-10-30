@@ -74,3 +74,39 @@ func TestPrepareAgentIOEnvGrantsPersistentClaudeConfigDirInSandbox(t *testing.T)
 		}
 	}
 }
+
+// agentConfigSource returns "" when neither CLAUDE_CONFIG_DIR nor HOME is
+// available, and filepath.Abs("") resolves to the harness working directory.
+// Exporting that as CLAUDE_CONFIG_DIR now hands the sandbox an unrelated
+// writable root, and fails the invocation outright whenever the task workspace
+// sits under it, so the variable has to stay unset instead.
+func TestPrepareAgentIOEnvOmitsUnresolvableClaudeConfigDir(t *testing.T) {
+	t.Parallel()
+
+	runDir := t.TempDir()
+	env, err := prepareAgentIOEnv(runDir, []string{"CODEX_HOME=" + filepath.Join(t.TempDir(), "codex")})
+	if err != nil {
+		t.Fatalf("prepareAgentIOEnv() error = %v", err)
+	}
+	if value, ok := environValue(env, "CLAUDE_CONFIG_DIR"); ok {
+		t.Fatalf("CLAUDE_CONFIG_DIR = %q, want it left unset when neither it nor HOME is available", value)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := agentruntime.Resolve(agentruntime.HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := rt.BuildCommand(runDir, "fix it", agentruntime.RunOptions{WorkspaceDir: runDir, Env: env})
+	if err != nil {
+		t.Fatalf("BuildCommand() error = %v", err)
+	}
+	for _, arg := range cmd.Args {
+		if strings.HasPrefix(arg, "sandbox_workspace_write.writable_roots=") && strings.Contains(arg, cwd) {
+			t.Fatalf("sandbox granted the harness working directory %q as a writable root: %q", cwd, arg)
+		}
+	}
+}
