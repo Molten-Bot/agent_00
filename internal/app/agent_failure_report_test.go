@@ -97,3 +97,37 @@ func TestCondenseRepeatedCheckRowsKeepsDistinctSameNamedChecks(t *testing.T) {
 		t.Fatalf("summarizeCheckOutput() dropped the failing check: %q", summary)
 	}
 }
+
+// gh pads every check row to the same column count, so a row whose last column
+// is empty ends in a tab. Trimming that padding off the final row rewrote the
+// table that the remediation prompt and the "required PR checks failed" error
+// carry, so the summary stopped matching gh's own output.
+func TestSummarizeCheckOutputPreservesTrailingColumnPadding(t *testing.T) {
+	t.Parallel()
+
+	row := func(name, bucket, url string) string {
+		return name + "\t" + bucket + "\t3s\t" + url + "\t"
+	}
+
+	// Condensed path: the surviving row keeps its padding, including when gh
+	// terminates the watch output with a newline.
+	watched := strings.Join([]string{
+		row("Build and test", "pending", "https://example.com/job/1"),
+		row("Build and test", "fail", "https://example.com/job/1"),
+	}, "\n")
+	want := row("Build and test", "fail", "https://example.com/job/1")
+	if got := summarizeCheckOutput(execx.Result{Stdout: watched + "\n"}); got != want {
+		t.Fatalf("summarizeCheckOutput(watched) = %q, want %q", got, want)
+	}
+
+	// Single-render path: the row comes back byte for byte.
+	single := row("Lint", "fail", "https://example.com/job/2")
+	if got := summarizeCheckOutput(execx.Result{Stdout: single + "\n"}); got != single {
+		t.Fatalf("summarizeCheckOutput(single) = %q, want %q", got, single)
+	}
+
+	// Whitespace-only output still counts as no output at all.
+	if got := summarizeCheckOutput(execx.Result{Stdout: " \n\t\n"}); got != "No check output was provided by gh." {
+		t.Fatalf("summarizeCheckOutput(blank) = %q", got)
+	}
+}

@@ -8011,8 +8011,14 @@ func mergeMainLibraryPrompt() string {
 }
 
 func summarizeCheckOutput(res execx.Result) string {
-	text := strings.TrimSpace(strings.Join([]string{res.Stdout, res.Stderr}, "\n"))
-	if text == "" {
+	// Trim line separators only - the ones joining stdout to stderr and the
+	// trailing newline gh emits. `gh pr checks` pads every row to the same
+	// column count, so a row whose last column is empty ends in a tab;
+	// strings.TrimSpace would eat that tab off the final row and rewrite its
+	// shape, leaving the remediation prompt and the "required PR checks
+	// failed" error carrying a table that no longer matches gh's own output.
+	text := strings.Trim(strings.Join([]string{res.Stdout, res.Stderr}, "\n"), "\r\n")
+	if strings.TrimSpace(text) == "" {
 		return "No check output was provided by gh."
 	}
 	if condensed := condenseRepeatedCheckRows(text); condensed != "" {
@@ -8069,7 +8075,10 @@ func condenseRepeatedCheckRows(text string) string {
 		condensed = append(condensed, latestByKey[key])
 	}
 	condensed = append(condensed, out...)
-	return strings.TrimSpace(strings.Join(condensed, "\n"))
+	// Rows keep their own trailing-tab padding; only the join's separators
+	// are trimmed, so a condensed table stays byte-identical to the rows gh
+	// printed.
+	return strings.Trim(strings.Join(condensed, "\n"), "\r\n")
 }
 
 // checkRowKey identifies one check within `gh pr checks` output. Display names
