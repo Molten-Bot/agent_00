@@ -273,6 +273,11 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 			return h.fail(ExitAuth, "auth", err, "")
 		}
 	}
+	if runtime.Harness == agentruntime.HarnessClaude {
+		if err := h.repairClaudeConfiguration(os.Environ()); err != nil {
+			return h.fail(ExitAuth, "auth", err, "")
+		}
+	}
 	agentStage := runtimeLogStage(runtime)
 
 	h.logf("stage=preflight status=start")
@@ -5833,6 +5838,13 @@ func (h Harness) runCodexWithHeartbeat(
 	for {
 		select {
 		case run := <-done:
+			// A missing configuration file stops the CLI before it reads any
+			// credential, so classify it ahead of the authentication check:
+			// re-authenticating does not fix it, restoring the file does.
+			if runtime.Harness == agentruntime.HarnessClaude && run.err != nil &&
+				(agentruntime.ClaudeConfigurationFailure(run.res.Stdout) || agentruntime.ClaudeConfigurationFailure(run.res.Stderr)) {
+				return run.res, errors.Join(agentruntime.ErrClaudeConfigMissing, run.err)
+			}
 			if runtime.Harness == agentruntime.HarnessClaude && run.err != nil &&
 				(agentruntime.ClaudeAuthenticationFailure(run.res.Stdout) || agentruntime.ClaudeAuthenticationFailure(run.res.Stderr)) {
 				return run.res, agentruntime.ErrClaudeAuthRequired
@@ -6761,6 +6773,28 @@ func commandWithoutGitHubTokenEnv(cmd execx.Command) execx.Command {
 
 func githubTokenSanitizedEnv() []string {
 	return environWithoutKeys(os.Environ(), "GH_TOKEN", "GITHUB_TOKEN")
+}
+
+// repairClaudeConfiguration restores a Claude configuration file that was
+// removed while Claude's backups survived. The CLI refuses to start without
+// it, so checking before the clone/branch/push stages turns a late, opaque
+// agent-stage failure into an early authentication error. An unresolvable
+// config directory is not a task failure: the CLI falls back to its own
+// defaults, so only log it.
+func (h Harness) repairClaudeConfiguration(environ []string) error {
+	home, err := agentruntime.ClaudeHome(environ)
+	if err != nil {
+		h.logf("stage=auth status=warn harness=claude action=resolve_config_dir err=%q", err)
+		return nil
+	}
+	restored, err := agentruntime.RepairClaudeConfig(home)
+	if err != nil {
+		return err
+	}
+	if restored != "" {
+		h.logf("stage=auth status=warn harness=claude action=restore_config backup=%s", restored)
+	}
+	return nil
 }
 
 func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {

@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
@@ -53,6 +55,21 @@ func (g *claudeAuthGate) Diagnostics(ctx context.Context) (web.AgentAuthDiagnost
 	g.rejectedMu.Unlock()
 	if rejected {
 		add("CLAUDE_AUTH_REJECTED", "error", "A task rejected the currently configured Claude credentials.", "Complete a fresh browser sign-in, then rerun the failed task.")
+	}
+	// Diagnostics stay read-only: report the broken configuration file without
+	// restoring it. The auth gate and the task path perform the repair.
+	if configDir, err := agentruntime.ClaudeHome(os.Environ()); err == nil {
+		switch restorable, backup, stateErr := agentruntime.ClaudeConfigRestorable(configDir); {
+		case stateErr != nil:
+			add("CLAUDE_CONFIG_FILE_UNREADABLE", "error", "The Claude configuration backups could not be inspected.", "Check the runtime user's permissions on the Claude configuration directory.")
+		case restorable:
+			add(
+				"CLAUDE_CONFIG_FILE_MISSING",
+				"error",
+				"The Claude configuration file is missing while Claude backups are present, so the CLI refuses to start.",
+				fmt.Sprintf("Restore it with: cp %q %q", backup, agentruntime.ClaudeConfigPath(configDir)),
+			)
+		}
 	}
 	credentials := &web.AuthCredentialDiagnostics{}
 	result.Credentials = credentials

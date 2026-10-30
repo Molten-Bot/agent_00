@@ -286,6 +286,16 @@ Claude login and tasks share the persistent `CLAUDE_CONFIG_DIR` (default
 copy Claude credentials: a refresh in one task must be visible to the next.
 The Docker configuration volume retains the shared session across restarts.
 
+The Claude CLI refuses to start when `.claude.json` is missing from that
+directory, whatever credentials are configured. When Claude's own
+`backups/.claude.json.backup.*` copies are still present, the harness restores
+the newest readable backup before running a task and when reporting auth
+status; it never overwrites an existing configuration file, and a first run
+with no file and no backups is left to the CLI. If the file cannot be restored
+(for example a read-only configuration volume), the task stops at the
+authentication stage with the `cp` command to run, instead of failing later
+with an opaque agent exit status.
+
 The local UI exposes these debugging endpoints:
 
 - `GET /healthz`: service health.
@@ -305,7 +315,8 @@ curl -s http://127.0.0.1:7777/api/agent-auth/diagnostics
 
 Diagnostic codes include `CLAUDE_AUTH_REJECTED`, `CLAUDE_CREDENTIALS_EMPTY`,
 `CLAUDE_ACCESS_TOKEN_EXPIRED`, `CLAUDE_BROWSER_CODE_INVALID`,
-`CLAUDE_LOGIN_PROCESS_FAILED`, and `CLAUDE_STATUS_UNAVAILABLE`.
+`CLAUDE_CONFIG_FILE_MISSING`, `CLAUDE_LOGIN_PROCESS_FAILED`, and
+`CLAUDE_STATUS_UNAVAILABLE`.
 A successful HTTP response means diagnostics were collected, not that login
 is healthy. Inspect the checks. `cli.logged_in` means Claude has a stored login;
 it does not prove a refresh or inference request will succeed. An expired access
