@@ -292,11 +292,12 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 // what broke. Credential refresh fails the same way.
 //
 // Only an explicit CLAUDE_CONFIG_DIR in the invocation's own environment is
-// honored, and only when it already resolves to a directory. The process
-// environment is not consulted: a writable root must be a deliberate decision
-// by the caller that prepared the agent environment, never an artifact of
-// whoever happened to launch the harness. Review runs get the same grant, with
-// everything else still read-only.
+// honored, and it is created when absent so the first Bash tool call does not
+// race a directory nobody else makes. The process environment is not
+// consulted: a writable root must be a deliberate decision by the caller that
+// prepared the agent environment, never an artifact of whoever happened to
+// launch the harness. Review runs get the same grant, with everything else
+// still read-only.
 func claudeSandboxConfigRoot(environ []string, workspaceDir string) (string, error) {
 	if len(environ) == 0 {
 		return "", nil
@@ -312,13 +313,31 @@ func claudeSandboxConfigRoot(environ []string, workspaceDir string) (string, err
 	}
 	resolved, err := resolveSandboxPath(configDir)
 	if err != nil {
-		return "", nil
-	}
-	if info, err := os.Stat(resolved); err != nil || !info.IsDir() {
-		return "", nil
+		// A CLAUDE_CONFIG_DIR that cannot be resolved is a misconfigured
+		// environment, not an absent grant. Swallowing it into "no writable
+		// root" reproduces the silent EROFS this function exists to prevent,
+		// so the caller fails the run with the reason instead.
+		return "", fmt.Errorf("resolve CLAUDE_CONFIG_DIR %q: %w", configDir, err)
 	}
 	if err := validateSandboxConfigRoot(resolved, workspaceDir); err != nil {
 		return "", err
+	}
+	info, statErr := os.Stat(resolved)
+	switch {
+	case statErr == nil && !info.IsDir():
+		return "", fmt.Errorf("CLAUDE_CONFIG_DIR %q is not a directory", resolved)
+	case os.IsNotExist(statErr):
+		// Nothing else creates this directory. The caller only exports the
+		// path, and the CLI first writes there from inside the sandbox, where
+		// a missing root is merely read-only - so skipping the grant here
+		// leaves the agent with the same dead shell on a first run as having
+		// no grant at all. Create it before granting, with owner-only
+		// permissions because rotated credentials land in it.
+		if err := os.MkdirAll(resolved, 0o700); err != nil {
+			return "", fmt.Errorf("create CLAUDE_CONFIG_DIR %q: %w", resolved, err)
+		}
+	case statErr != nil:
+		return "", fmt.Errorf("stat CLAUDE_CONFIG_DIR %q: %w", resolved, statErr)
 	}
 	return resolved, nil
 }
@@ -326,16 +345,33 @@ func claudeSandboxConfigRoot(environ []string, workspaceDir string) (string, err
 // validateSandboxConfigRoot bounds the one writable root that deliberately sits
 // outside the task workspace. validateWorkspaceDirs cannot vet it - it rejects
 // exactly the directories that escape the workspace - so the breadth checks
-// live here. A filesystem root, a home directory, or any ancestor of the task
-// workspace would quietly hand the agent write access to operator state and to
-// other tasks' worktrees, which is the opposite of what this grant exists for.
+// live here. A filesystem root, a shared top-level directory, a home directory
+// or any of its ancestors, or any ancestor of the task workspace would quietly
+// hand the agent write access to operator state and to other tasks' worktrees,
+// which is the opposite of what this grant exists for.
 func validateSandboxConfigRoot(resolved, workspaceDir string) error {
 	if resolved == filepath.Dir(resolved) {
 		return fmt.Errorf("CLAUDE_CONFIG_DIR %q is a filesystem root and would widen the agent sandbox", resolved)
 	}
+	// A directory one level below the filesystem root - /home, /mnt, /tmp,
+	// /Users - is a shared parent: other operators' home directories and
+	// other tasks' workspaces live directly under it, so it is never a
+	// configuration directory and always a far wider grant than intended.
+	if sandboxPathDepth(resolved) < 2 {
+		return fmt.Errorf("CLAUDE_CONFIG_DIR %q is a shared top-level directory and would widen the agent sandbox", resolved)
+	}
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		if resolvedHome, err := resolveSandboxPath(home); err == nil && resolvedHome == resolved {
-			return fmt.Errorf("CLAUDE_CONFIG_DIR %q is the home directory and would widen the agent sandbox", resolved)
+		if resolvedHome, err := resolveSandboxPath(home); err == nil {
+			if resolvedHome == resolved {
+				return fmt.Errorf("CLAUDE_CONFIG_DIR %q is the home directory and would widen the agent sandbox", resolved)
+			}
+			if sandboxPathContains(resolved, resolvedHome) {
+				return fmt.Errorf(
+					"CLAUDE_CONFIG_DIR %q contains the home directory %q and would widen the agent sandbox",
+					resolved,
+					resolvedHome,
+				)
+			}
 		}
 	}
 	if strings.TrimSpace(workspaceDir) == "" {
@@ -345,11 +381,7 @@ func validateSandboxConfigRoot(resolved, workspaceDir string) error {
 	if err != nil {
 		return fmt.Errorf("resolve agent workspace: %w", err)
 	}
-	rel, err := filepath.Rel(resolved, workspace)
-	if err != nil {
-		return nil
-	}
-	if rel == "." || (!filepath.IsAbs(rel) && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+	if sandboxPathContains(resolved, workspace) {
 		return fmt.Errorf(
 			"CLAUDE_CONFIG_DIR %q contains the task workspace %q and would widen the agent sandbox",
 			resolved,
@@ -357,6 +389,31 @@ func validateSandboxConfigRoot(resolved, workspaceDir string) error {
 		)
 	}
 	return nil
+}
+
+// sandboxPathContains reports whether parent is child or one of its ancestors.
+func sandboxPathContains(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!filepath.IsAbs(rel) && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// sandboxPathDepth counts the path elements below the filesystem root, so
+// "/mnt" is 1 and "/home/agent/.claude" is 3.
+func sandboxPathDepth(path string) int {
+	depth := 0
+	for {
+		parent := filepath.Dir(path)
+		if parent == path {
+			return depth
+		}
+		if base := filepath.Base(path); base != "." && base != string(filepath.Separator) {
+			depth++
+		}
+		path = parent
+	}
 }
 
 // Resolve existing symlinks even when a descendant will be created later.

@@ -6561,22 +6561,27 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 // be read before the run is aborted.
 //
 // Only an explicit no-failure sentinel clears the line; any other wording stays
-// fatal. A trailing clause is dropped only when a dash or semicolon separates
-// it ("None - all checks passed"), which keeps a genuine report that merely
-// starts with the word ("none of the tests could run") fatal.
+// fatal. A trailing clause is dropped when a dash, semicolon, sentence period,
+// comma or parenthesis separates it ("None. All checks passed.", "None - all
+// checks passed"), because agents close a healthy run with ordinary prose and
+// not just a dash. The separator must still be followed by a new clause, which
+// keeps a genuine report that merely starts with the word ("none of the tests
+// could run") fatal.
 func isNoFailureReportLine(marked string) bool {
 	const heading = "failure:"
 	if len(marked) < len(heading) || !strings.EqualFold(marked[:len(heading)], heading) {
 		return false
 	}
 	value := strings.ToLower(strings.TrimSpace(marked[len(heading):]))
-	for _, separator := range []string{" — ", " – ", " - ", "; "} {
-		if head, _, ok := strings.Cut(value, separator); ok {
-			value = head
-			break
+	// Cut at the earliest separator present rather than the first one listed:
+	// "None. All good - details" has to end at the period, not at the dash.
+	cut := len(value)
+	for _, separator := range []string{" — ", " – ", " - ", "; ", ". ", ", ", " ("} {
+		if index := strings.Index(value, separator); index >= 0 && index < cut {
+			cut = index
 		}
 	}
-	switch strings.Trim(value, " \t`*_\"'.!,;:") {
+	switch strings.Trim(value[:cut], " \t`*_\"'.!,;:()") {
 	case "none", "no", "n/a", "na", "nil", "nothing", "no failure", "no failures", "not applicable":
 		return true
 	}
@@ -8057,27 +8062,32 @@ func summarizeCheckOutput(res execx.Result) string {
 // so a run that watched N times repeats every check N times. That raw text is
 // what the remediation prompt and the final "required PR checks failed" error
 // carry, which buries the handful of failing rows in identical duplicates.
-// Only the last row for a check is kept, because that is the newest state, and
-// non-tabular lines (gh notices, usage text) follow the rows in first-seen
-// order.
+// Only the last row for a check is kept, because that is the newest state.
+//
+// Non-tabular lines (gh notices, the "N failing, M pending" status line, usage
+// text) are kept only from the final render. Every earlier render restates a
+// status that the kept rows have already superseded, so carrying those copies
+// forward would pin stale counts next to final rows. Within the final render
+// the notices keep gh's own placement: what gh printed above its table stays
+// above the condensed rows, and a trailing notice stays below them.
 //
 // Output without repeats is returned unchanged (empty string), so single-render
 // `gh pr checks` output keeps its exact original formatting.
 func condenseRepeatedCheckRows(text string) string {
 	lines := splitOutputLines(text)
 	latestByKey := make(map[string]string, len(lines))
+	lastRowIndexByKey := make(map[string]int, len(lines))
+	rowKeyByIndex := make(map[int]string, len(lines))
+	noticeIndexes := make([]int, 0, len(lines))
 	order := make([]string, 0, len(lines))
-	seen := make(map[string]bool, len(lines))
 	rows := 0
-	out := make([]string, 0, len(lines))
 
-	for _, line := range lines {
+	for index, line := range lines {
 		fields := strings.Split(line, "\t")
 		name := strings.TrimSpace(fields[0])
 		if len(fields) < 2 || name == "" || strings.TrimSpace(fields[1]) == "" {
-			if trimmed := strings.TrimSpace(line); trimmed != "" && !seen[trimmed] {
-				seen[trimmed] = true
-				out = append(out, line)
+			if strings.TrimSpace(line) != "" {
+				noticeIndexes = append(noticeIndexes, index)
 			}
 			continue
 		}
@@ -8087,16 +8097,53 @@ func condenseRepeatedCheckRows(text string) string {
 			order = append(order, key)
 		}
 		latestByKey[key] = line
+		lastRowIndexByKey[key] = index
+		rowKeyByIndex[index] = key
 	}
 	if rows == 0 || rows == len(order) {
 		return ""
 	}
 
-	condensed := make([]string, 0, len(order)+len(out))
+	// The final render begins after the last row a later refresh replaced, and
+	// its table begins at the first surviving row from there on.
+	finalRenderStart := 0
+	for index, key := range rowKeyByIndex {
+		if lastRowIndexByKey[key] != index && index+1 > finalRenderStart {
+			finalRenderStart = index + 1
+		}
+	}
+	firstFinalRow := len(lines)
+	for _, index := range lastRowIndexByKey {
+		if index >= finalRenderStart && index < firstFinalRow {
+			firstFinalRow = index
+		}
+	}
+
+	before := make([]string, 0, len(noticeIndexes))
+	after := make([]string, 0, len(noticeIndexes))
+	seen := make(map[string]bool, len(noticeIndexes))
+	for _, index := range noticeIndexes {
+		if index < finalRenderStart {
+			continue
+		}
+		trimmed := strings.TrimSpace(lines[index])
+		if seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		if index < firstFinalRow {
+			before = append(before, lines[index])
+		} else {
+			after = append(after, lines[index])
+		}
+	}
+
+	condensed := make([]string, 0, len(before)+len(order)+len(after))
+	condensed = append(condensed, before...)
 	for _, key := range order {
 		condensed = append(condensed, latestByKey[key])
 	}
-	condensed = append(condensed, out...)
+	condensed = append(condensed, after...)
 	// Rows keep their own trailing-tab padding; only the join's separators
 	// are trimmed, so a condensed table stays byte-identical to the rows gh
 	// printed.
