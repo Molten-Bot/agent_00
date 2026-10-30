@@ -10,9 +10,13 @@
   const contextLabel = byID("context-label");
   const contextInput = byID("context-input");
   const endpoint = "/api/library/schedules";
-  // Snap points: single hours, then widening steps (4h/6h/12h) so the slider
-  // offers fewer, rounder choices the further out the repeat interval goes.
-  const ALL_HOUR_STEPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 16, 20, 24, 30, 36, 42, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156, 168];
+  // Increase granularity from hours to days to weeks as slider moves right.
+  const ALL_HOUR_STEPS = [
+    ...Array.from({ length: 23 }, (_, index) => index + 1),
+    ...Array.from({ length: 6 }, (_, index) => (index + 1) * 24),
+    7 * 24,
+    14 * 24,
+  ];
   let hourSteps = ALL_HOUR_STEPS;
   function hoursForIndex(index) { return hourSteps[Number(index)] ?? hourSteps[0]; }
   function indexForHours(hours) {
@@ -27,9 +31,9 @@
   function applyHourSteps() {
     slider.min = "0";
     slider.max = String(hourSteps.length - 1);
-    byID("range-min").textContent = `${hourSteps[0]} hour${hourSteps[0] === 1 ? "" : "s"}`;
+    byID("range-min").textContent = formatInterval(hourSteps[0]);
     const max = hourSteps[hourSteps.length - 1];
-    byID("range-max").textContent = max >= 168 ? `${max} hours · 1 week` : `${max} hours`;
+    byID("range-max").textContent = formatInterval(max);
   }
   applyHourSteps();
   let schedules = [];
@@ -48,7 +52,13 @@
     const task = taskFor(name);
     return task ? libraryTaskDisplayName(task) : name;
   }
-  function frequency(hours) { return `every ${hours} ${Number(hours) === 1 ? "hour" : "hours"}`; }
+  function formatInterval(hours) {
+    hours = Number(hours);
+    if (hours % 168 === 0) return `${hours / 168} ${hours === 168 ? "week" : "weeks"}`;
+    if (hours >= 24 && hours % 24 === 0) return `${hours / 24} ${hours === 24 ? "day" : "days"}`;
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  function frequency(hours) { return `every ${formatInterval(hours)}`; }
   function nextText(entry) {
     const next = new Date(entry.nextRunAt);
     return next <= new Date() ? "Due · waiting for the next available run" : `Next run ${next.toLocaleString()}`;
@@ -131,7 +141,7 @@
     byID("frequency").textContent = frequency(hours);
     slider.setAttribute("aria-valuetext", frequency(hours));
     byID("next").textContent = changed || !editing?.nextRunAt
-      ? `First run ${hours} ${hours === 1 ? "hour" : "hours"} after saving. Saving resets the next run time.`
+      ? `First run ${formatInterval(hours)} after saving. Saving resets the next run time.`
       : nextText(editing);
   }
   function showEditor(entry) {
@@ -158,6 +168,7 @@
     }
     draftInput.checked = Boolean(entry.draft);
     draftToggle?.classList.toggle("is-active", draftInput.checked);
+    byID("run-now").checked = false;
     byID("delete").hidden = !entry.key;
     slider.value = String(indexForHours(entry.intervalHours || 24));
     updateInterval();
@@ -221,7 +232,18 @@
       status(`${contextLabel.textContent || "Additional context"} is required for this task.`, true);
       return;
     }
-    void mutate(() => request({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ libraryTaskName, repo, baseBranch, targetSubdir, reviewers, draft, promptContext, intervalHours: hoursForIndex(slider.value) }) }), "Schedule saved. You can still use Run for a one-time task.");
+    const runNow = byID("run-now").checked;
+    void mutate(async () => {
+      await request({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ libraryTaskName, repo, baseBranch, targetSubdir, reviewers, draft, promptContext, intervalHours: hoursForIndex(slider.value) }) });
+      if (!runNow) return;
+      const response = await fetch("/api/library/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ libraryTaskName, repos: [repo], baseBranch, targetSubdir, reviewers, draft, promptContext }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(`Schedule saved, but task could not start: ${body.error || `submit http ${response.status}`}`);
+    }, runNow ? "Schedule saved and task queued." : "Schedule saved. You can still use Run for a one-time task.");
   });
   document.addEventListener("change", refreshButtons);
   libraryRepoInput.addEventListener("input", refreshButtons);

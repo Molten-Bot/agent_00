@@ -14,7 +14,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/config"
 )
 
-const MaxLibraryScheduleHours = 168
+const MaxLibraryScheduleHours = 14 * 24
 
 // LibraryScheduleInput stores selection options, not an expanded library prompt.
 // Resolve the current library definition for each occurrence.

@@ -405,7 +405,7 @@ func TestLibrarySchedulesRunDueSubmitsPromptContext(t *testing.T) {
 func TestLibrarySchedulesValidation(t *testing.T) {
 	t.Parallel()
 	for _, change := range []func(*LibraryScheduleInput){
-		func(i *LibraryScheduleInput) { i.IntervalHours = 0 }, func(i *LibraryScheduleInput) { i.IntervalHours = 169 },
+		func(i *LibraryScheduleInput) { i.IntervalHours = 0 }, func(i *LibraryScheduleInput) { i.IntervalHours = MaxLibraryScheduleHours + 1 },
 		func(i *LibraryScheduleInput) { i.LibraryTaskName = "missing-task" }, func(i *LibraryScheduleInput) { i.LibraryTaskName = "../task" },
 		func(i *LibraryScheduleInput) { i.Repo = "https://example.com/acme/repo" }, func(i *LibraryScheduleInput) { i.Repo = "https://token@github.com/acme/repo" },
 		func(i *LibraryScheduleInput) { i.Repo = "acme/repo/extra" }, func(i *LibraryScheduleInput) { i.Repo = "https://github.com/acme/repo?token=x" },

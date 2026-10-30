@@ -60,8 +60,8 @@ func TestLibraryScheduleAPI(t *testing.T) {
 // static/library-schedules.js in a headless browser, unlike TestLibraryScheduleAPI
 // above which only exercises the Go-side interval validation. hoursForIndex and
 // indexForHours are unexported closures with no Go-reachable equivalent, so this
-// is the only coverage for the slider's single-digit -> 4h/6h/12h+ widening snap
-// table and for an off-grid saved interval snapping back to its nearest step.
+// is the only coverage for the slider's hours -> days -> weeks snap table and for
+// an off-grid saved interval snapping back to its nearest step.
 func TestLibraryScheduleSliderSnapsToStepsInBrowser(t *testing.T) {
 	requireBrowserTooling(t, "browser-driven slider snapping check")
 
