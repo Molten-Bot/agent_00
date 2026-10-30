@@ -5825,12 +5825,18 @@ func (h Harness) runCodexWithHeartbeat(
 	go func() {
 		// The select below waits on done, a heartbeat ticker and runCtx, and
 		// runCtx carries no deadline unless AgentStageTimeout is configured.
-		// A runner that leaves without producing a result - a panic, or a
-		// runtime.Goexit from a test helper's t.Fatalf - would therefore
-		// strand this stage forever: the heartbeat keeps logging and nothing
-		// else ever fires. The runCtx.Done() path waits on done as well, so it
-		// cannot recover either. Report the missing result instead, so a dead
-		// runner fails the run with a reason rather than hanging it.
+		// A runner that leaves without producing a result - a runtime.Goexit
+		// from a test helper's t.Fatalf, say - would therefore strand this
+		// stage forever: the heartbeat keeps logging and nothing else ever
+		// fires. The runCtx.Done() path waits on done as well, so it cannot
+		// recover either. Report the missing result instead, so a dead runner
+		// fails the run with a reason rather than hanging it.
+		//
+		// A panicking runner is deliberately not covered: the send below does
+		// run while the panic unwinds, but the panic keeps going and takes the
+		// process with it, which is the intended fail-fast for a harness bug.
+		// Recovering it here would turn a crash with a stack trace into a plain
+		// stage error and hide where the harness broke.
 		delivered := false
 		defer func() {
 			if !delivered {
@@ -5996,14 +6002,19 @@ func codexReportedCompactPlainFailure(output string) (bool, string) {
 	if len(nonEmpty) == 0 || len(nonEmpty) > 8 {
 		return false, ""
 	}
-	for _, line := range nonEmpty {
+	for i, line := range nonEmpty {
 		marked := stripMarkdownEmphasis(line)
 		lower := strings.ToLower(marked)
 		if strings.HasPrefix(lower, "failure:") {
-			if isNoFailureReportLine(marked) {
+			// stderr carries the same report shape as stdout, bare
+			// "**Failure:**" heading included, so it needs the same value
+			// lookup: without it a healthy "**Failure:**" / "None" pair on
+			// stderr still aborts the run.
+			fatal, detail := resolveFailureReportLine(marked, nonEmpty, i)
+			if !fatal {
 				continue
 			}
-			return true, marked
+			return true, detail
 		}
 		if strings.HasPrefix(lower, "task failed") {
 			return true, marked
@@ -6541,24 +6552,11 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 		marked := stripMarkdownEmphasis(trimmed)
 		lower := strings.ToLower(marked)
 		if strings.HasPrefix(lower, "failure:") {
-			if isNoFailureReportLine(marked) {
+			fatal, detail := resolveFailureReportLine(marked, nonEmpty, start+i)
+			if !fatal {
 				continue
 			}
-			if isBareFailureHeading(marked) {
-				// A heading on its own line carries its value on the next one
-				// ("**Failure:**" then "None - all checks passed"), the same
-				// shape codexExtractErrorDetail already reads for "Error
-				// details:". Read that value before aborting, so a healthy run
-				// does not die on the heading alone just because no earlier
-				// line happened to match a completion marker.
-				if value, ok := failureHeadingValueLine(nonEmpty, start+i); ok && isNoFailureReportLine("Failure: "+value) {
-					continue
-				}
-				if isBareFailureHeadingAfterCompletion(marked, nonEmpty[:start+i]) {
-					continue
-				}
-			}
-			return true, marked
+			return true, detail
 		}
 		if isNoImplementationTargetLine(lower) {
 			return true, "Failure: agent did not identify an implementation target."
@@ -6674,6 +6672,37 @@ func trimFailureReportWord(word string) string {
 	return strings.Trim(word, " \t`*_\"'.!,;:()")
 }
 
+// resolveFailureReportLine decides whether the "Failure:" line at index aborts
+// the run, and what detail it reports. Both the stdout and the stderr scan need
+// the same answer, and both need it for the same two reasons.
+//
+// A heading on its own line carries its value on the next one ("**Failure:**"
+// then "None - all checks passed"), the same shape codexExtractErrorDetail
+// already reads for "Error details:". Reading that value keeps a healthy run
+// alive when no earlier line happened to match a completion marker - and when
+// the value is a real report, it is the only detail the agent gave, so
+// returning the bare heading would hand the operator "Failure:" and drop the
+// reason along with it.
+func resolveFailureReportLine(marked string, lines []string, index int) (bool, string) {
+	if isNoFailureReportLine(marked) {
+		return false, ""
+	}
+	if !isBareFailureHeading(marked) {
+		return true, marked
+	}
+	value, ok := failureHeadingValueLine(lines, index)
+	if ok && isNoFailureReportLine("Failure: "+value) {
+		return false, ""
+	}
+	if isBareFailureHeadingAfterCompletion(marked, lines[:index]) {
+		return false, ""
+	}
+	if ok {
+		return true, "Failure: " + value
+	}
+	return true, marked
+}
+
 // isBareFailureHeading reports whether the line is a "Failure:" heading with no
 // value of its own, so the value lives on a following line.
 func isBareFailureHeading(line string) bool {
@@ -6681,11 +6710,21 @@ func isBareFailureHeading(line string) bool {
 }
 
 // failureHeadingValueLine returns the line that carries a bare heading's value.
+// Agents routinely write that value as a list item under the heading
+// ("**Failure:**" then "- None"); the bullet is markup around the value, not
+// part of it, so it is stripped here rather than in stripMarkdownEmphasis,
+// which must keep leaving bullets on the heading line alone.
 func failureHeadingValueLine(lines []string, index int) (string, bool) {
 	if index < 0 || index+1 >= len(lines) {
 		return "", false
 	}
 	value := strings.TrimSpace(stripMarkdownEmphasis(lines[index+1]))
+	for _, bullet := range []string{"- ", "* ", "+ ", "• "} {
+		if strings.HasPrefix(value, bullet) {
+			value = strings.TrimSpace(stripMarkdownEmphasis(strings.TrimPrefix(value, bullet)))
+			break
+		}
+	}
 	if value == "" {
 		return "", false
 	}

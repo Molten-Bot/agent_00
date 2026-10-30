@@ -92,3 +92,35 @@ func TestClaudeSandboxConfigRootRejectsAncestorOfTaskWorkspace(t *testing.T) {
 		t.Fatalf("claudeSandboxConfigRoot() error = %v, want task workspace rejection", err)
 	}
 }
+
+func TestClaudeSandboxConfigRootRejectsDirectoryInsideTaskWorkspace(t *testing.T) {
+	t.Parallel()
+
+	workspace, err := resolveSandboxPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A review run keeps the whole task workspace read-only, so a config grant
+	// pointed inside it hands back exactly the writes that contract withholds.
+	configDir := filepath.Join(workspace, "repo", ".claude")
+
+	if _, _, err := claudeSandboxConfigRoot([]string{"CLAUDE_CONFIG_DIR=" + configDir}, workspace); err == nil ||
+		!strings.Contains(err.Error(), "is inside the task workspace") {
+		t.Fatalf("claudeSandboxConfigRoot() error = %v, want inside-workspace rejection", err)
+	}
+
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.BuildCommand(workspace, "review pr", RunOptions{
+		WorkspaceDir:    workspace,
+		DisallowedTools: []string{"Edit", "Write"},
+		Env:             []string{"CLAUDE_CONFIG_DIR=" + configDir},
+	}); err == nil || !strings.Contains(err.Error(), "is inside the task workspace") {
+		t.Fatalf("BuildCommand() error = %v, want inside-workspace rejection", err)
+	}
+	if _, statErr := os.Stat(configDir); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected CLAUDE_CONFIG_DIR was created anyway: stat error = %v", statErr)
+	}
+}

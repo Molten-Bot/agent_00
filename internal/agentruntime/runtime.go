@@ -366,6 +366,12 @@ func claudeSandboxConfigRoot(environ []string, workspaceDir string) (string, boo
 // hand the agent write access to operator state and to other tasks' worktrees,
 // which is the opposite of what this grant exists for.
 //
+// A directory inside the task workspace is refused from the other side. The
+// grant exists for the one directory that sits outside the workspace, and a
+// review run keeps the whole workspace read-only on purpose, so a
+// CLAUDE_CONFIG_DIR pointed at the repository - or anywhere else under the task
+// root - would punch a writable hole straight through the review contract.
+//
 // The home-directory check reads the process home (os.UserHomeDir, so $HOME)
 // on purpose: it is the operator state this guard protects. That is the one
 // place the process environment is consulted, and it can only narrow the
@@ -399,13 +405,23 @@ func validateSandboxConfigRoot(resolved, workspaceDir string) error {
 	if strings.TrimSpace(workspaceDir) == "" {
 		return nil
 	}
-	workspace, err := filepath.Abs(workspaceDir)
+	// Resolve the workspace the same way the config directory was resolved, or
+	// a symlinked workspace path compares unequal to its own real descendants
+	// and both containment checks below silently pass.
+	workspace, err := resolveSandboxPath(workspaceDir)
 	if err != nil {
 		return fmt.Errorf("resolve agent workspace: %w", err)
 	}
 	if sandboxPathContains(resolved, workspace) {
 		return fmt.Errorf(
 			"CLAUDE_CONFIG_DIR %q contains the task workspace %q and would widen the agent sandbox",
+			resolved,
+			workspace,
+		)
+	}
+	if sandboxPathContains(workspace, resolved) {
+		return fmt.Errorf(
+			"CLAUDE_CONFIG_DIR %q is inside the task workspace %q and would widen the agent sandbox",
 			resolved,
 			workspace,
 		)

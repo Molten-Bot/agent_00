@@ -16,10 +16,14 @@ func TestClaudeReviewSandboxNetworkAndReadOnly(t *testing.T) {
 	if os.Getenv("HARNESS_TEST_CODEX_SANDBOX") != "1" {
 		t.Skip("set HARNESS_TEST_CODEX_SANDBOX=1 to exercise the installed sandbox")
 	}
-	root := t.TempDir()
+	base := t.TempDir()
+	root := filepath.Join(base, "task")
 	repo := filepath.Join(root, "repo")
 	home := filepath.Join(root, ".agent00-agent-io", "config", "sandbox")
 	tmp := filepath.Join(root, ".agent00-agent-io", "tmp")
+	// Deliberately left uncreated: BuildCommand owns creating the grant, and the
+	// probe then proves the sandbox really lets Claude write there.
+	configDir := filepath.Join(base, "claude-config")
 	for _, dir := range []string{repo, home, tmp} {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			t.Fatal(err)
@@ -35,7 +39,11 @@ import errno, os, urllib.request
 assert urllib.request.urlopen(os.environ["PROBE_URL"], timeout=5).read() == b"network-ok"
 with open(os.environ["TMPDIR"] + "/tmp-write", "w") as f:
     f.write("allowed runtime IO")
-for path in ["repo-write", ".git/config", os.environ["TEST_ROOT"] + "/outside-write", "/tmp/agent00-review-write"]:
+# Claude writes session state and rotated credentials here on every Bash call.
+# A read-only review keeps this one grant; without it the agent's shell dies.
+with open(os.environ["CLAUDE_CONFIG_DIR"] + "/session-env", "w") as f:
+    f.write("allowed config write")
+for path in ["repo-write", ".git/config", os.environ["TEST_ROOT"] + "/outside-write", os.environ["TEST_BASE"] + "/outside-write", "/tmp/agent00-review-write"]:
     try:
         with open(path, "w") as f:
             f.write("unexpected write")
@@ -56,7 +64,10 @@ for path in ["repo-write", ".git/config", os.environ["TEST_ROOT"] + "/outside-wr
 	}
 	cmd, err := rt.BuildCommand(repo, "review", RunOptions{
 		WorkspaceDir: root, DisallowedTools: []string{"Edit", "Write", "NotebookEdit", "Bash"},
-		Env: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "TMPDIR=" + tmp, "TEST_ROOT=" + root, "PROBE_URL=" + server.URL},
+		Env: []string{
+			"PATH=" + os.Getenv("PATH"), "HOME=" + root, "TMPDIR=" + tmp, "TEST_ROOT=" + root,
+			"TEST_BASE=" + base, "CLAUDE_CONFIG_DIR=" + configDir, "PROBE_URL=" + server.URL,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +77,19 @@ for path in ["repo-write", ".git/config", os.environ["TEST_ROOT"] + "/outside-wr
 	res, err := (execx.OSRunner{}).Run(ctx, cmd)
 	if err != nil {
 		t.Fatalf("review sandbox probe failed: %v\n%s\n%s", err, res.Stdout, res.Stderr)
+	}
+	if _, err := os.Stat(filepath.Join(configDir, "session-env")); err != nil {
+		t.Fatalf("review sandbox denied the CLAUDE_CONFIG_DIR grant: %v", err)
+	}
+	// The grant covers that one directory and nothing around it.
+	for _, path := range []string{
+		filepath.Join(repo, "repo-write"),
+		filepath.Join(root, "outside-write"),
+		filepath.Join(base, "outside-write"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("review sandbox allowed a write it must deny: %s (%v)", path, err)
+		}
 	}
 }
 

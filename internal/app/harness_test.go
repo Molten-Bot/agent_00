@@ -8032,6 +8032,80 @@ func TestCodexReportedFailureKeepsBareFailureHeadingFatalWithoutCompletion(t *te
 	}
 }
 
+func TestCodexReportedFailureKeepsBareHeadingValueInDetail(t *testing.T) {
+	t.Parallel()
+
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Failure:",
+			"Repository clone could not be prepared.",
+			"Error details: git exited with status 128.",
+		}, "\n"),
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(bare stdout heading) = false, want true")
+	}
+	if !strings.Contains(detail, "Repository clone could not be prepared.") {
+		t.Fatalf("codexReportedFailure(bare stdout heading) detail = %q, want the heading value reported", detail)
+	}
+}
+
+func TestCodexReportedFailureIgnoresBulletedNoneUnderBareHeading(t *testing.T) {
+	t.Parallel()
+
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Implemented the requested change and ran the focused tests.",
+			"**Failure:**",
+			"- None",
+			"**Error details:**",
+			"- N/A",
+		}, "\n"),
+	}
+
+	if failed, detail := codexReportedFailure(res); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(bulleted none report) = (%v, %q), want (false, \"\")", failed, detail)
+	}
+}
+
+func TestCodexReportedFailureIgnoresBareFailureHeadingWithNoneOnStderr(t *testing.T) {
+	t.Parallel()
+
+	res := execx.Result{
+		Stderr: strings.Join([]string{
+			"**Failure:**",
+			"None",
+			"**Error details:**",
+			"None - all checks passed.",
+		}, "\n"),
+	}
+
+	if failed, detail := codexReportedFailure(res); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(stderr none report) = (%v, %q), want (false, \"\")", failed, detail)
+	}
+}
+
+func TestCodexReportedFailureKeepsBareStderrHeadingFatalWithItsValue(t *testing.T) {
+	t.Parallel()
+
+	res := execx.Result{
+		Stderr: strings.Join([]string{
+			"**Failure:**",
+			"Could not write repository files.",
+		}, "\n"),
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(bare stderr heading) = false, want true")
+	}
+	if !strings.Contains(detail, "Could not write repository files.") {
+		t.Fatalf("codexReportedFailure(bare stderr heading) detail = %q, want the heading value reported", detail)
+	}
+}
+
 func TestCodexReportedFailureIgnoresNarrativeTaskFailedPhrasing(t *testing.T) {
 	t.Parallel()
 
