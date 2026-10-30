@@ -237,8 +237,12 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 				"-c", "permissions.agent00_review={filesystem={"+filesystem+"},network={enabled=true}}",
 			)
 		} else {
+			sandboxOpts := opts
+			if configDir := claudeSandboxConfigRoot(opts.Env); configDir != "" {
+				sandboxOpts.WritableDirs = append(append([]string(nil), opts.WritableDirs...), configDir)
+			}
 			args = append(args, "-c", `sandbox_mode="workspace-write"`)
-			args = append(args, workspaceSandboxArgs(opts)...)
+			args = append(args, workspaceSandboxArgs(sandboxOpts)...)
 		}
 		args = append(args, "--", cmd.Name)
 		cmd.Args = append(args, cmd.Args...)
@@ -259,6 +263,48 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 		}
 	}
 	return cmd, nil
+}
+
+// claudeSandboxConfigRoot returns the one directory outside the task workspace
+// that an implementation run must still be able to write: the caller-supplied
+// CLAUDE_CONFIG_DIR.
+//
+// Claude writes there on every Bash tool call - its `session-env` directory,
+// project state, and the rotated credentials that the harness deliberately
+// keeps persistent and shared across tasks instead of copying per run. With
+// the task workspace as the only writable root, those writes fail with
+// "EROFS: read-only file system". The CLI itself keeps running, so the failure
+// is silent and total: the agent loses the shell for the whole task - no
+// tests, linters, git or gh - and a CI remediation round can only guess at
+// what broke. Credential refresh fails the same way.
+//
+// Only an explicit CLAUDE_CONFIG_DIR in the invocation's own environment is
+// honored, and only when it already resolves to a directory. The process
+// environment is not consulted: a writable root must be a deliberate decision
+// by the caller that prepared the agent environment, never an artifact of
+// whoever happened to launch the harness. Review runs never reach this path;
+// they stay read-only with their own narrow IO grant.
+func claudeSandboxConfigRoot(environ []string) string {
+	if len(environ) == 0 {
+		return ""
+	}
+	configDir := ""
+	for _, entry := range environ {
+		if key, value, ok := strings.Cut(entry, "="); ok && key == "CLAUDE_CONFIG_DIR" {
+			configDir = strings.TrimSpace(value)
+		}
+	}
+	if configDir == "" {
+		return ""
+	}
+	resolved, err := resolveSandboxPath(configDir)
+	if err != nil {
+		return ""
+	}
+	if info, err := os.Stat(resolved); err != nil || !info.IsDir() {
+		return ""
+	}
+	return resolved
 }
 
 // Resolve existing symlinks even when a descendant will be created later.

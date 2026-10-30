@@ -5982,15 +5982,36 @@ func codexReportedCompactPlainFailure(output string) (bool, string) {
 		return false, ""
 	}
 	for _, line := range nonEmpty {
-		lower := strings.ToLower(line)
+		marked := stripMarkdownEmphasis(line)
+		lower := strings.ToLower(marked)
 		if strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
-			return true, line
+			return true, marked
 		}
 		if isNoImplementationTargetLine(lower) {
 			return true, "Failure: agent did not identify an implementation target."
 		}
 	}
 	return false, ""
+}
+
+// stripMarkdownEmphasis removes the heading markers and bold/italic runs that
+// agents wrap around the mandated "Failure:" and "Error details:" headings.
+// Final agent messages are Markdown, so "**Failure:** ..." is by far the common
+// spelling of the contract; matching only the bare "Failure:" prefix silently
+// discarded those reports and let the harness keep spending remediation rounds
+// on an agent that had already declared the task blocked.
+//
+// List bullets are deliberately left alone: an emphasis run hugs the word it
+// marks, while "- Failure: none" and "* Failure: none" are list items whose
+// existing (non-fatal) reading must not change.
+func stripMarkdownEmphasis(line string) string {
+	line = strings.TrimSpace(line)
+	line = strings.TrimLeft(line, "#> \t")
+	if trimmed := strings.TrimLeft(line, "*_`"); trimmed != line && trimmed != "" && !strings.HasPrefix(trimmed, " ") {
+		line = trimmed
+	}
+	line = strings.ReplaceAll(line, "**", "")
+	return strings.TrimSpace(line)
 }
 
 func isNoImplementationTargetLine(lowerLine string) bool {
@@ -6403,9 +6424,10 @@ func codexExtractErrorDetail(output string) string {
 	}
 
 	for i, line := range nonEmpty {
-		lower := strings.ToLower(line)
+		marked := stripMarkdownEmphasis(line)
+		lower := strings.ToLower(marked)
 		if strings.HasPrefix(lower, "error details:") {
-			suffix := strings.TrimSpace(line[len("error details:"):])
+			suffix := strings.TrimSpace(marked[len("error details:"):])
 			if suffix != "" {
 				return "Error details: " + suffix
 			}
@@ -6437,7 +6459,7 @@ func codexJoinErrorDetailLines(lines []string) string {
 		if trimmed == "" {
 			continue
 		}
-		lower := strings.ToLower(trimmed)
+		lower := strings.ToLower(stripMarkdownEmphasis(trimmed))
 		if strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
 			continue
 		}
@@ -6486,12 +6508,13 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 	var structuredTaskFailureLine string
 	var structuredErrorLine string
 	for i, trimmed := range nonEmpty[start:] {
-		lower := strings.ToLower(trimmed)
+		marked := stripMarkdownEmphasis(trimmed)
+		lower := strings.ToLower(marked)
 		if strings.HasPrefix(lower, "failure:") {
-			if isBareFailureHeadingAfterCompletion(trimmed, nonEmpty[:start+i]) {
+			if isBareFailureHeadingAfterCompletion(marked, nonEmpty[:start+i]) {
 				continue
 			}
-			return true, trimmed
+			return true, marked
 		}
 		if isNoImplementationTargetLine(lower) {
 			return true, "Failure: agent did not identify an implementation target."
@@ -6514,12 +6537,12 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 }
 
 func isBareFailureHeadingAfterCompletion(line string, previous []string) bool {
-	trimmed := strings.TrimSpace(line)
+	trimmed := stripMarkdownEmphasis(line)
 	if !strings.EqualFold(trimmed, "failure:") {
 		return false
 	}
 	for _, prev := range previous {
-		switch strings.ToLower(strings.TrimSpace(prev)) {
+		switch strings.ToLower(stripMarkdownEmphasis(prev)) {
 		case "done.", "success:", "changed:", "verification:", "verified:":
 			return true
 		}
@@ -6829,6 +6852,8 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 	}
 	// Claude rotates refresh tokens too. Copies in task worktrees race to use
 	// the same refresh token and leave the operator's session permanently stale.
+	// The agent sandbox grants this directory write access explicitly; see
+	// agentruntime.BuildCommand.
 	claudeConfigDir, err := filepath.Abs(agentConfigSource(environ, "CLAUDE_CONFIG_DIR", ".claude"))
 	if err != nil {
 		return nil, fmt.Errorf("resolve persistent Claude config dir: %w", err)
@@ -7952,10 +7977,60 @@ func summarizeCheckOutput(res execx.Result) string {
 	if text == "" {
 		return "No check output was provided by gh."
 	}
+	if condensed := condenseRepeatedCheckRows(text); condensed != "" {
+		text = condensed
+	}
 	if len(text) <= maxCheckSummaryChars {
 		return text
 	}
 	return strings.TrimSpace(text[:maxCheckSummaryChars]) + "...(truncated)"
+}
+
+// condenseRepeatedCheckRows collapses `gh pr checks --watch` output to one row
+// per check. Watch mode re-renders the whole table on every refresh interval,
+// so a run that watched N times repeats every check N times. That raw text is
+// what the remediation prompt and the final "required PR checks failed" error
+// carry, which buries the handful of failing rows in identical duplicates.
+// Only the last row for a name is kept, because that is the newest state, and
+// non-tabular lines (gh notices, usage text) follow the rows in first-seen
+// order.
+//
+// Output without repeats is returned unchanged (empty string), so single-render
+// `gh pr checks` output keeps its exact original formatting.
+func condenseRepeatedCheckRows(text string) string {
+	lines := splitOutputLines(text)
+	latestByName := make(map[string]string, len(lines))
+	order := make([]string, 0, len(lines))
+	seen := make(map[string]bool, len(lines))
+	rows := 0
+	out := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		fields := strings.Split(line, "\t")
+		name := strings.TrimSpace(fields[0])
+		if len(fields) < 2 || name == "" || strings.TrimSpace(fields[1]) == "" {
+			if trimmed := strings.TrimSpace(line); trimmed != "" && !seen[trimmed] {
+				seen[trimmed] = true
+				out = append(out, line)
+			}
+			continue
+		}
+		rows++
+		if _, exists := latestByName[name]; !exists {
+			order = append(order, name)
+		}
+		latestByName[name] = line
+	}
+	if rows == 0 || rows == len(order) {
+		return ""
+	}
+
+	condensed := make([]string, 0, len(order)+len(out))
+	for _, name := range order {
+		condensed = append(condensed, latestByName[name])
+	}
+	condensed = append(condensed, out...)
+	return strings.TrimSpace(strings.Join(condensed, "\n"))
 }
 
 type ghPRCheck struct {
