@@ -585,6 +585,13 @@
         <input id="library-schedule-hours" type="range" min="0" max="0" step="1" value="0" aria-label="Repeat interval in hours">
         <div class="library-schedule-range"><span id="library-schedule-range-min"></span><span id="library-schedule-range-max"></span></div>
         <p id="library-schedule-next" class="library-schedule-copy"></p>
+        <label id="library-schedule-run-now-field" class="prompt-field prompt-field-draft-pr">
+          <span><strong>Run Now</strong><small>Start one run when schedule is saved</small></span>
+          <span class="prompt-draft-toggle">
+            <input id="library-schedule-run-now" class="prompt-draft-toggle-input" type="checkbox" aria-label="Run task now after saving schedule">
+            <span class="prompt-draft-toggle-track" aria-hidden="true"><span class="prompt-draft-toggle-thumb"></span></span>
+          </span>
+        </label>
         <div class="library-schedule-actions">
           <button id="library-schedule-delete" class="prompt-action-button" type="button" title="Delete this recurring schedule" hidden><i data-lucide="trash-2" aria-hidden="true"></i><span>Delete</span></button>
           <button id="library-schedule-back" class="prompt-action-button" type="button" title="Return to all schedules"><i data-lucide="arrow-left" aria-hidden="true"></i><span>Back</span></button>
