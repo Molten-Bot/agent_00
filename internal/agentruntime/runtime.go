@@ -219,6 +219,10 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 		// Reviews need network access with a genuinely read-only filesystem:
 		// workspace-write implicitly permits cwd even with writable_roots=[].
 		readOnly := len(nonEmptyStrings(opts.DisallowedTools)) > 0
+		configDir, err := claudeSandboxConfigRoot(opts.Env, opts.WorkspaceDir)
+		if err != nil {
+			return execx.Command{}, err
+		}
 		args := []string{"sandbox"}
 		if readOnly {
 			filesystem := `":root"="read"`
@@ -232,13 +236,22 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 				}
 				filesystem += fmt.Sprintf(",%q=\"write\"", ioDir)
 			}
+			if configDir != "" {
+				// A review run writes session state and rotates credentials in
+				// CLAUDE_CONFIG_DIR exactly like an implementation run, and it
+				// fails with the same silent EROFS when that directory is
+				// read-only. The grant covers only that one directory, so the
+				// repository and the task root stay read-only as the review
+				// contract requires.
+				filesystem += fmt.Sprintf(",%q=\"write\"", configDir)
+			}
 			args = append(args,
 				"-P", "agent00_review",
 				"-c", "permissions.agent00_review={filesystem={"+filesystem+"},network={enabled=true}}",
 			)
 		} else {
 			sandboxOpts := opts
-			if configDir := claudeSandboxConfigRoot(opts.Env); configDir != "" {
+			if configDir != "" {
 				sandboxOpts.WritableDirs = append(append([]string(nil), opts.WritableDirs...), configDir)
 			}
 			args = append(args, "-c", `sandbox_mode="workspace-write"`)
@@ -282,11 +295,11 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 // honored, and only when it already resolves to a directory. The process
 // environment is not consulted: a writable root must be a deliberate decision
 // by the caller that prepared the agent environment, never an artifact of
-// whoever happened to launch the harness. Review runs never reach this path;
-// they stay read-only with their own narrow IO grant.
-func claudeSandboxConfigRoot(environ []string) string {
+// whoever happened to launch the harness. Review runs get the same grant, with
+// everything else still read-only.
+func claudeSandboxConfigRoot(environ []string, workspaceDir string) (string, error) {
 	if len(environ) == 0 {
-		return ""
+		return "", nil
 	}
 	configDir := ""
 	for _, entry := range environ {
@@ -295,16 +308,55 @@ func claudeSandboxConfigRoot(environ []string) string {
 		}
 	}
 	if configDir == "" {
-		return ""
+		return "", nil
 	}
 	resolved, err := resolveSandboxPath(configDir)
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	if info, err := os.Stat(resolved); err != nil || !info.IsDir() {
-		return ""
+		return "", nil
 	}
-	return resolved
+	if err := validateSandboxConfigRoot(resolved, workspaceDir); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+// validateSandboxConfigRoot bounds the one writable root that deliberately sits
+// outside the task workspace. validateWorkspaceDirs cannot vet it - it rejects
+// exactly the directories that escape the workspace - so the breadth checks
+// live here. A filesystem root, a home directory, or any ancestor of the task
+// workspace would quietly hand the agent write access to operator state and to
+// other tasks' worktrees, which is the opposite of what this grant exists for.
+func validateSandboxConfigRoot(resolved, workspaceDir string) error {
+	if resolved == filepath.Dir(resolved) {
+		return fmt.Errorf("CLAUDE_CONFIG_DIR %q is a filesystem root and would widen the agent sandbox", resolved)
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		if resolvedHome, err := resolveSandboxPath(home); err == nil && resolvedHome == resolved {
+			return fmt.Errorf("CLAUDE_CONFIG_DIR %q is the home directory and would widen the agent sandbox", resolved)
+		}
+	}
+	if strings.TrimSpace(workspaceDir) == "" {
+		return nil
+	}
+	workspace, err := filepath.Abs(workspaceDir)
+	if err != nil {
+		return fmt.Errorf("resolve agent workspace: %w", err)
+	}
+	rel, err := filepath.Rel(resolved, workspace)
+	if err != nil {
+		return nil
+	}
+	if rel == "." || (!filepath.IsAbs(rel) && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		return fmt.Errorf(
+			"CLAUDE_CONFIG_DIR %q contains the task workspace %q and would widen the agent sandbox",
+			resolved,
+			workspace,
+		)
+	}
+	return nil
 }
 
 // Resolve existing symlinks even when a descendant will be created later.

@@ -5984,7 +5984,13 @@ func codexReportedCompactPlainFailure(output string) (bool, string) {
 	for _, line := range nonEmpty {
 		marked := stripMarkdownEmphasis(line)
 		lower := strings.ToLower(marked)
-		if strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
+		if strings.HasPrefix(lower, "failure:") {
+			if isNoFailureReportLine(marked) {
+				continue
+			}
+			return true, marked
+		}
+		if strings.HasPrefix(lower, "task failed") {
 			return true, marked
 		}
 		if isNoImplementationTargetLine(lower) {
@@ -6511,6 +6517,9 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 		marked := stripMarkdownEmphasis(trimmed)
 		lower := strings.ToLower(marked)
 		if strings.HasPrefix(lower, "failure:") {
+			if isNoFailureReportLine(marked) {
+				continue
+			}
 			if isBareFailureHeadingAfterCompletion(marked, nonEmpty[:start+i]) {
 				continue
 			}
@@ -6534,6 +6543,35 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 		return true, structuredTaskFailureLine + " " + structuredErrorLine
 	}
 	return false, ""
+}
+
+// isNoFailureReportLine reports whether a "Failure:" line explicitly states
+// that nothing failed. Agents close a healthy run with "**Failure:** None",
+// and stripMarkdownEmphasis now folds that spelling onto the same bare
+// "Failure:" prefix a fatal report uses, so the value after the heading has to
+// be read before the run is aborted.
+//
+// Only an explicit no-failure sentinel clears the line; any other wording stays
+// fatal. A trailing clause is dropped only when a dash or semicolon separates
+// it ("None - all checks passed"), which keeps a genuine report that merely
+// starts with the word ("none of the tests could run") fatal.
+func isNoFailureReportLine(marked string) bool {
+	const heading = "failure:"
+	if len(marked) < len(heading) || !strings.EqualFold(marked[:len(heading)], heading) {
+		return false
+	}
+	value := strings.ToLower(strings.TrimSpace(marked[len(heading):]))
+	for _, separator := range []string{" — ", " – ", " - ", "; "} {
+		if head, _, ok := strings.Cut(value, separator); ok {
+			value = head
+			break
+		}
+	}
+	switch strings.Trim(value, " \t`*_\"'.!,;:") {
+	case "none", "no", "n/a", "na", "nil", "nothing", "no failure", "no failures", "not applicable":
+		return true
+	}
+	return false
 }
 
 func isBareFailureHeadingAfterCompletion(line string, previous []string) bool {
@@ -7991,7 +8029,7 @@ func summarizeCheckOutput(res execx.Result) string {
 // so a run that watched N times repeats every check N times. That raw text is
 // what the remediation prompt and the final "required PR checks failed" error
 // carry, which buries the handful of failing rows in identical duplicates.
-// Only the last row for a name is kept, because that is the newest state, and
+// Only the last row for a check is kept, because that is the newest state, and
 // non-tabular lines (gh notices, usage text) follow the rows in first-seen
 // order.
 //
@@ -7999,7 +8037,7 @@ func summarizeCheckOutput(res execx.Result) string {
 // `gh pr checks` output keeps its exact original formatting.
 func condenseRepeatedCheckRows(text string) string {
 	lines := splitOutputLines(text)
-	latestByName := make(map[string]string, len(lines))
+	latestByKey := make(map[string]string, len(lines))
 	order := make([]string, 0, len(lines))
 	seen := make(map[string]bool, len(lines))
 	rows := 0
@@ -8016,21 +8054,38 @@ func condenseRepeatedCheckRows(text string) string {
 			continue
 		}
 		rows++
-		if _, exists := latestByName[name]; !exists {
-			order = append(order, name)
+		key := checkRowKey(name, fields)
+		if _, exists := latestByKey[key]; !exists {
+			order = append(order, key)
 		}
-		latestByName[name] = line
+		latestByKey[key] = line
 	}
 	if rows == 0 || rows == len(order) {
 		return ""
 	}
 
 	condensed := make([]string, 0, len(order)+len(out))
-	for _, name := range order {
-		condensed = append(condensed, latestByName[name])
+	for _, key := range order {
+		condensed = append(condensed, latestByKey[key])
 	}
 	condensed = append(condensed, out...)
 	return strings.TrimSpace(strings.Join(condensed, "\n"))
+}
+
+// checkRowKey identifies one check within `gh pr checks` output. Display names
+// are not unique - matrix legs and same-named jobs in separate workflows share
+// one - while each row carries its own job URL, which watch mode repeats
+// verbatim on every re-render. Keying on name alone would therefore collapse
+// two distinct checks into one and drop a failing row from the remediation
+// summary. Rows with no URL fall back to the name, the only identity they have.
+func checkRowKey(name string, fields []string) string {
+	for _, field := range fields[1:] {
+		field = strings.TrimSpace(field)
+		if strings.HasPrefix(field, "https://") || strings.HasPrefix(field, "http://") {
+			return name + "\t" + field
+		}
+	}
+	return name
 }
 
 type ghPRCheck struct {
