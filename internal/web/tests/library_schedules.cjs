@@ -89,8 +89,16 @@ test('Run Now saves schedule and submits one immediate library run', async t => 
   await page.waitForFunction(() => Boolean(window.LibrarySchedulesUI));
   await page.locator('#library-schedules-open').click();
   await page.locator('.library-schedule-row').filter({ hasText: 'acme/run-now' }).locator('button[title^="Edit schedule"]').click();
+  const thumb = page.locator('#library-schedule-run-now-field .prompt-draft-toggle-thumb');
+  const uncheckedTransform = await thumb.evaluate(element => getComputedStyle(element).transform);
   await page.locator('#library-schedule-run-now-field').click();
   assert.equal(await page.locator('#library-schedule-run-now').isChecked(), true);
+  await page.waitForFunction(
+    previous => getComputedStyle(document.querySelector('#library-schedule-run-now-field .prompt-draft-toggle-thumb')).transform !== previous,
+    uncheckedTransform,
+  );
+  const checkedTransform = await thumb.evaluate(element => getComputedStyle(element).transform);
+  assert.notEqual(checkedTransform, uncheckedTransform, 'Run Now toggle should visibly change when selected');
   await page.locator('#library-schedule-save').click();
   await page.waitForFunction(() => document.getElementById('library-schedule-status').textContent === 'Schedule saved and task queued.');
 
