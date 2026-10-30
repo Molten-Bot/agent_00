@@ -819,8 +819,15 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "const TASK_PROGRESS_VISIBLE = true;") {
 		t.Fatalf("expected index html to keep task progress bar rendering enabled")
 	}
-	if !strings.Contains(markup, "if (!TASK_PROGRESS_VISIBLE || !task || isCompletedTask(task)) {") {
-		t.Fatalf("expected index html to guard task progress bar rendering by visibility and task status")
+	if !strings.Contains(markup, "if (!TASK_PROGRESS_VISIBLE || !task) {") {
+		t.Fatalf("expected index html to guard task progress bar rendering by visibility and task presence")
+	}
+	if strings.Contains(markup, "if (!TASK_PROGRESS_VISIBLE || !task || isCompletedTask(task)) {") {
+		t.Fatalf("expected completed tasks to retain their workflow progress bar")
+	}
+	if !strings.Contains(markup, `if (status === "merged" && taskAutoMergeStepEnabled()) {`) ||
+		!strings.Contains(markup, `if (status === "completed" || status === "no_changes" || status === "merged") {`) {
+		t.Fatalf("expected merged tasks to advance through auto-merge and other successful terminal tasks to finalize")
 	}
 	if !strings.Contains(markup, "taskViewToggle.addEventListener(\"click\", () => {") {
 		t.Fatalf("expected index html to wire task view toggle interactions")

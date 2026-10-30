@@ -1759,6 +1759,8 @@ func TestTaskProgressIncludesAutoMergeStepWhenEnabled(t *testing.T) {
 		`renderFullscreenTasks(state.snapshot);`,
 		`if (taskAutoMergeStepEnabled() && status !== "no_changes") {`,
 		`stepIDs.push("auto_merge");`,
+		`if (status === "merged" && taskAutoMergeStepEnabled()) {`,
+		`return "auto_merge";`,
 		`autoMergeStep: taskAutoMergeStepEnabled(),`,
 		`taskAutoMergeStepEnabled() ? "auto_merge" : "",`,
 		`if (action === "auto_merge") {`,
