@@ -558,6 +558,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 	prompt := promptFromRunConfigJSON(cfgCopy)
 	images := imagesFromRunConfigJSON(cfgCopy)
 	baseBranch := branchFromRunConfigJSON(cfgCopy)
+	prURL := prURLFromRunConfigJSON(cfgCopy)
 	repos := reposFromRunConfigJSON(cfgCopy)
 	reviewers := reviewersFromRunConfigJSON(cfgCopy)
 	workflow := workflowFromRunConfigJSON(cfgCopy)
@@ -601,6 +602,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 			Reviewers:         append([]string(nil), reviewers...),
 			BaseBranch:        baseBranch,
 			Branch:            baseBranch,
+			PRURL:             prURL,
 			Status:            "pending",
 			Stage:             "task",
 			StageStatus:       "queued",
@@ -614,6 +616,10 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 	if source != "" && t != nil && t.Source != source {
 		t.Source = source
 		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, t.Repos, t.PRURL, now)
+		changed = true
+	}
+	if prURL != "" && t != nil && t.PRURL != prURL {
+		t.PRURL = prURL
 		changed = true
 	}
 	if prompt != "" {
@@ -1753,6 +1759,9 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 		if existing.Branch == "" {
 			existing.Branch = b.taskInitialBranchLocked(requestID)
 		}
+		if existing.PRURL == "" {
+			existing.PRURL = prURLFromRunConfigJSON(b.runConfigs[requestID])
+		}
 		existing.UpdatedAt = now
 		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", existing.Status, existing.Error, existing.Workflow, existing.AgentHarness, existing.Source, existing.Repos, existing.PRURL, now)
 		return existing
@@ -1771,6 +1780,7 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 		Reviewers:         reviewersFromRunConfigJSON(b.runConfigs[requestID]),
 		BaseBranch:        b.taskBaseBranchLocked(requestID),
 		Branch:            b.taskInitialBranchLocked(requestID),
+		PRURL:             prURLFromRunConfigJSON(b.runConfigs[requestID]),
 		Status:            "pending",
 		StartedAt:         now,
 		UpdatedAt:         now,
@@ -2746,6 +2756,25 @@ func branchFromRunConfigJSON(runConfigJSON []byte) string {
 		return ""
 	}
 	return stringsx.FirstNonEmpty(raw.BaseBranch, raw.Branch)
+}
+
+func prURLFromRunConfigJSON(runConfigJSON []byte) string {
+	if len(runConfigJSON) == 0 {
+		return ""
+	}
+	var raw struct {
+		PRURL  string `json:"prUrl"`
+		Review *struct {
+			PRURL string `json:"prUrl"`
+		} `json:"review"`
+	}
+	if err := json.Unmarshal(runConfigJSON, &raw); err != nil {
+		return ""
+	}
+	if raw.Review != nil {
+		return stringsx.FirstNonEmpty(raw.PRURL, raw.Review.PRURL)
+	}
+	return strings.TrimSpace(raw.PRURL)
 }
 
 func workflowFromRunConfigJSON(runConfigJSON []byte) string {

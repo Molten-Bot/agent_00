@@ -638,6 +638,21 @@ func TestBrokerCapturesPRURLFromStageLine(t *testing.T) {
 	}
 }
 
+func TestBrokerCapturesReviewPRURLFromRunConfig(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	b.RecordTaskRunConfig("req-review", []byte(`{"repoUrl":"https://github.com/acme/repo.git","baseBranch":"main","review":{"prUrl":"https://github.com/acme/repo/pull/42"}}`))
+
+	task, ok := b.Task("req-review")
+	if !ok {
+		t.Fatal("Task(req-review) ok = false, want true")
+	}
+	if got, want := task.PRURL, "https://github.com/acme/repo/pull/42"; got != want {
+		t.Fatalf("task.PRURL = %q, want %q", got, want)
+	}
+}
+
 func TestBrokerCapturesFirstPRURLFromCompletedPRURLsField(t *testing.T) {
 	t.Parallel()
 

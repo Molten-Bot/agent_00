@@ -1296,6 +1296,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, "return prURL;") {
 		t.Fatalf("expected index html to prefer pull-request links as soon as a PR URL is available")
 	}
+	if !strings.Contains(markup, "if (repoURL && branch) {") ||
+		!strings.Contains(markup, "`${repoURL}/tree/${branch.split(\"/\").map(encodeURIComponent).join(\"/\")}`") {
+		t.Fatalf("expected index html to use branch links when no pull-request URL is available")
+	}
 	if !strings.Contains(markup, "function renderTaskPullRequestAction(task)") ||
 		!strings.Contains(markup, `link.className = "task-github-link";`) ||
 		!strings.Contains(markup, `link.href = prURL;`) ||

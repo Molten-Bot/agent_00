@@ -9080,7 +9080,12 @@
       if (prURL) {
         return prURL;
       }
-      return taskRepoRootURL(task);
+      const repoURL = taskRepoRootURL(task);
+      const branch = String(task?.branch || "").trim();
+      if (repoURL && branch) {
+        return `${repoURL}/tree/${branch.split("/").map(encodeURIComponent).join("/")}`;
+      }
+      return repoURL;
     }
 
     function taskPullRequestURL(task) {
