@@ -1715,6 +1715,45 @@ body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
   border-radius: 4px;
 }
 
+.prompt-draft-toggle-track {
+  display: inline-flex;
+  align-items: center;
+  width: 32px;
+  height: 18px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--surface-control-border);
+  box-sizing: border-box;
+  transition: background 0.15s ease;
+}
+
+.prompt-draft-toggle-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 28%);
+  transform: translateX(0);
+  transition: transform 0.15s ease;
+}
+
+.prompt-draft-toggle-input:checked ~ .prompt-draft-toggle-track {
+  background: var(--accent);
+}
+
+.prompt-draft-toggle-input:checked ~ .prompt-draft-toggle-track .prompt-draft-toggle-thumb {
+  transform: translateX(14px);
+}
+
+.prompt-draft-toggle-input:focus-visible ~ .prompt-draft-toggle-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.prompt-draft-toggle-input:disabled ~ .prompt-draft-toggle-track {
+  opacity: 0.55;
+}
+
 .prompt-grid > .prompt-field {
   min-width: 0;
   max-width: none;
