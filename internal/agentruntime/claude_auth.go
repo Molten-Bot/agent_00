@@ -16,7 +16,13 @@ func ClaudeAuthenticationFailure(output string) bool {
 			strings.HasPrefix(line, "failed to authenticate:") ||
 			strings.HasPrefix(line, "api error: 401") ||
 			strings.HasPrefix(line, "oauth access token has expired") ||
-			strings.HasPrefix(line, "invalid api key · please run /login") {
+			strings.HasPrefix(line, "invalid api key · please run /login") ||
+			// The CLI reports a logged-out session as its final stdout line
+			// ("Not logged in · Please run /login"). Without these markers the
+			// harness reported a generic agent failure and never asked the
+			// operator to sign in again, matching CodexAuthenticationFailure.
+			strings.HasPrefix(line, "not logged in") ||
+			strings.HasPrefix(line, "please run /login") {
 			return true
 		}
 	}

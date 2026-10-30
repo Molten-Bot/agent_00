@@ -826,6 +826,19 @@ func (g *claudeAuthGate) probeClaude() (bool, string) {
 		return false, agentruntime.ErrClaudeAuthRequired.Error()
 	}
 
+	// The CLI refuses to start when its configuration file is missing, whatever
+	// credentials are configured. Repairing it from Claude's own backup here
+	// keeps a deleted config from reporting "ready" and then failing every task.
+	if configDir, err := agentruntime.ClaudeHome(os.Environ()); err == nil {
+		restored, repairErr := agentruntime.RepairClaudeConfig(configDir)
+		if repairErr != nil {
+			return false, repairErr.Error()
+		}
+		if restored != "" && g.logf != nil {
+			g.logf("localruntime.auth status=warn harness=claude action=restore_config backup=%q", restored)
+		}
+	}
+
 	if oauthToken, source := firstConfiguredClaudeOAuthToken(runtimeConfigPath); strings.TrimSpace(oauthToken) != "" {
 		if err := setClaudeOAuthTokenEnvironment(oauthToken); err == nil {
 			if strings.TrimSpace(source) == "" {
