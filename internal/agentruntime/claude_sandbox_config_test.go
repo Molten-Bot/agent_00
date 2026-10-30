@@ -53,14 +53,10 @@ func TestClaudeSandboxGrantsPersistentConfigDirWriteAccess(t *testing.T) {
 	}
 }
 
-func TestClaudeSandboxIgnoresUnusableConfigDir(t *testing.T) {
+func TestClaudeSandboxIgnoresUnsetConfigDir(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	file := filepath.Join(root, "not-a-dir")
-	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	rt, err := Resolve(HarnessClaude, "")
 	if err != nil {
 		t.Fatal(err)
@@ -72,12 +68,11 @@ func TestClaudeSandboxIgnoresUnusableConfigDir(t *testing.T) {
 	onlyWorkspace := `sandbox_workspace_write.writable_roots=["` + resolvedRoot + `"]`
 
 	for name, env := range map[string][]string{
-		// The process environment is never consulted: a writable root outside
-		// the task workspace must be a deliberate caller decision.
-		"absent":       {"TMPDIR=/global/tmp"},
-		"empty":        {"CLAUDE_CONFIG_DIR=  "},
-		"missing path": {"CLAUDE_CONFIG_DIR=" + filepath.Join(root, "absent")},
-		"regular file": {"CLAUDE_CONFIG_DIR=" + file},
+		// The grant never comes from the harness process environment: a
+		// writable root outside the task workspace must be a deliberate
+		// caller decision.
+		"absent": {"TMPDIR=/global/tmp"},
+		"empty":  {"CLAUDE_CONFIG_DIR=  "},
 	} {
 		cmd, err := rt.BuildCommand(root, "fix it", RunOptions{WorkspaceDir: root, Env: env})
 		if err != nil {
@@ -86,6 +81,95 @@ func TestClaudeSandboxIgnoresUnusableConfigDir(t *testing.T) {
 		if !slices.Contains(cmd.Args, onlyWorkspace) {
 			t.Fatalf("%s: writable roots widened beyond the task workspace: %v", name, cmd.Args)
 		}
+	}
+}
+
+// A configured CLAUDE_CONFIG_DIR that does not exist yet is created before it
+// is granted. Nothing else makes it: creating the directory needs write access
+// to its parent, which the sandbox never grants, so an ungranted first run
+// leaves every Bash tool call failing with "EROFS: read-only file system".
+func TestClaudeSandboxCreatesMissingConfigDir(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configDir := filepath.Join(t.TempDir(), "claude-config")
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd, err := rt.BuildCommand(root, "fix it", RunOptions{
+		WorkspaceDir: root,
+		Env:          []string{"CLAUDE_CONFIG_DIR=" + configDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(configDir)
+	if err != nil {
+		t.Fatalf("CLAUDE_CONFIG_DIR was not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("CLAUDE_CONFIG_DIR %q is not a directory", configDir)
+	}
+	// Rotated credentials land in it, so it stays owner-only.
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("CLAUDE_CONFIG_DIR mode = %v, want 0700", perm)
+	}
+
+	resolvedRoot, err := resolveSandboxPath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedConfigDir, err := resolveSandboxPath(configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `sandbox_workspace_write.writable_roots=["` + resolvedRoot + `","` + resolvedConfigDir + `"]`
+	if !slices.Contains(cmd.Args, want) {
+		t.Fatalf("missing writable root %q in %v", want, cmd.Args)
+	}
+}
+
+// A CLAUDE_CONFIG_DIR that cannot be used - a regular file, or a path whose
+// parent does not exist - fails the build with the reason. Dropping the grant
+// silently would hand the agent the same dead shell this grant exists to
+// prevent, and materializing a whole missing tree would hide the typo.
+func TestClaudeSandboxRejectsUnusableConfigDir(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	file := filepath.Join(root, "not-a-dir")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	missingParent := filepath.Join(t.TempDir(), "absent", "claude-config")
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, tc := range map[string]struct {
+		configDir string
+		wantErr   string
+	}{
+		"regular file":   {configDir: file, wantErr: "is not a directory"},
+		"missing parent": {configDir: missingParent, wantErr: "create CLAUDE_CONFIG_DIR"},
+	} {
+		_, err := rt.BuildCommand(root, "fix it", RunOptions{
+			WorkspaceDir: root,
+			Env:          []string{"CLAUDE_CONFIG_DIR=" + tc.configDir},
+		})
+		if err == nil {
+			t.Fatalf("%s: build accepted an unusable CLAUDE_CONFIG_DIR %q", name, tc.configDir)
+		}
+		if !strings.Contains(err.Error(), tc.wantErr) {
+			t.Fatalf("%s: error %v does not mention %q", name, err, tc.wantErr)
+		}
+	}
+	if _, err := os.Stat(filepath.Dir(missingParent)); !os.IsNotExist(err) {
+		t.Fatalf("a missing CLAUDE_CONFIG_DIR parent was materialized: %v", err)
 	}
 }
 

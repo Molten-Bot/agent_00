@@ -6529,8 +6529,19 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 			if isNoFailureReportLine(marked) {
 				continue
 			}
-			if isBareFailureHeadingAfterCompletion(marked, nonEmpty[:start+i]) {
-				continue
+			if isBareFailureHeading(marked) {
+				// A heading on its own line carries its value on the next one
+				// ("**Failure:**" then "None - all checks passed"), the same
+				// shape codexExtractErrorDetail already reads for "Error
+				// details:". Read that value before aborting, so a healthy run
+				// does not die on the heading alone just because no earlier
+				// line happened to match a completion marker.
+				if value, ok := failureHeadingValueLine(nonEmpty, start+i); ok && isNoFailureReportLine("Failure: "+value) {
+					continue
+				}
+				if isBareFailureHeadingAfterCompletion(marked, nonEmpty[:start+i]) {
+					continue
+				}
 			}
 			return true, marked
 		}
@@ -6567,6 +6578,12 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 // not just a dash. The separator must still be followed by a new clause, which
 // keeps a genuine report that merely starts with the word ("none of the tests
 // could run") fatal.
+//
+// The sentinel is a negation word optionally followed by the stock qualifiers
+// agents pair with it - "None found", "No issues", "No known blockers". Every
+// remaining word has to be one of those qualifiers, so the wording that reads
+// like the start of a real report ("none of the tests could run", "no tests
+// were executed") still aborts the run.
 func isNoFailureReportLine(marked string) bool {
 	const heading = "failure:"
 	if len(marked) < len(heading) || !strings.EqualFold(marked[:len(heading)], heading) {
@@ -6581,16 +6598,87 @@ func isNoFailureReportLine(marked string) bool {
 			cut = index
 		}
 	}
-	switch strings.Trim(value[:cut], " \t`*_\"'.!,;:()") {
-	case "none", "no", "n/a", "na", "nil", "nothing", "no failure", "no failures", "not applicable":
-		return true
+	words := strings.Fields(strings.Trim(value[:cut], " \t`*_\"'.!,;:()"))
+	if len(words) == 0 {
+		return false
 	}
-	return false
+	if !noFailureSentinelWords[trimFailureReportWord(words[0])] {
+		return false
+	}
+	for _, word := range words[1:] {
+		if !noFailureQualifierWords[trimFailureReportWord(word)] {
+			return false
+		}
+	}
+	return true
+}
+
+// noFailureSentinelWords opens a no-failure report ("None", "N/A", "Nothing").
+var noFailureSentinelWords = map[string]bool{
+	"none":    true,
+	"no":      true,
+	"n/a":     true,
+	"na":      true,
+	"nil":     true,
+	"nothing": true,
+	"not":     true,
+}
+
+// noFailureQualifierWords may follow the sentinel without making the line a
+// report ("None found", "No issues", "No known blockers", "Not applicable").
+// Anything outside this set keeps the line fatal.
+var noFailureQualifierWords = map[string]bool{
+	"applicable":  true,
+	"blocker":     true,
+	"blockers":    true,
+	"blocking":    true,
+	"detected":    true,
+	"encountered": true,
+	"error":       true,
+	"errors":      true,
+	"failure":     true,
+	"failures":    true,
+	"found":       true,
+	"identified":  true,
+	"issue":       true,
+	"issues":      true,
+	"known":       true,
+	"new":         true,
+	"noted":       true,
+	"observed":    true,
+	"outstanding": true,
+	"problem":     true,
+	"problems":    true,
+	"remaining":   true,
+	"report":      true,
+	"reported":    true,
+	"to":          true,
+}
+
+func trimFailureReportWord(word string) string {
+	return strings.Trim(word, " \t`*_\"'.!,;:()")
+}
+
+// isBareFailureHeading reports whether the line is a "Failure:" heading with no
+// value of its own, so the value lives on a following line.
+func isBareFailureHeading(line string) bool {
+	return strings.EqualFold(strings.TrimSpace(stripMarkdownEmphasis(line)), "failure:")
+}
+
+// failureHeadingValueLine returns the line that carries a bare heading's value.
+func failureHeadingValueLine(lines []string, index int) (string, bool) {
+	if index < 0 || index+1 >= len(lines) {
+		return "", false
+	}
+	value := strings.TrimSpace(stripMarkdownEmphasis(lines[index+1]))
+	if value == "" {
+		return "", false
+	}
+	return value, true
 }
 
 func isBareFailureHeadingAfterCompletion(line string, previous []string) bool {
-	trimmed := stripMarkdownEmphasis(line)
-	if !strings.EqualFold(trimmed, "failure:") {
+	if !isBareFailureHeading(line) {
 		return false
 	}
 	for _, prev := range previous {

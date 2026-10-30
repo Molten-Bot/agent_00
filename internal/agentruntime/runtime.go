@@ -219,7 +219,7 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 		// Reviews need network access with a genuinely read-only filesystem:
 		// workspace-write implicitly permits cwd even with writable_roots=[].
 		readOnly := len(nonEmptyStrings(opts.DisallowedTools)) > 0
-		configDir, err := claudeSandboxConfigRoot(opts.Env, opts.WorkspaceDir)
+		configDir, createConfigDir, err := claudeSandboxConfigRoot(opts.Env, opts.WorkspaceDir)
 		if err != nil {
 			return execx.Command{}, err
 		}
@@ -274,6 +274,23 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 			}
 			cmd.Env = append(cmd.Env, "CODEX_HOME="+filepath.Join(opts.WorkspaceDir, ".agent00-agent-io", "config", "sandbox"))
 		}
+		if createConfigDir {
+			// The one filesystem effect of building a command, kept last so a
+			// command that fails to build leaves nothing behind. It creates the
+			// caller's configured directory and nothing else: a missing parent
+			// is a misconfigured path, not a directory tree to materialize.
+			// Owner-only, because rotated credentials land in it.
+			if err := os.Mkdir(configDir, 0o700); err != nil {
+				if !os.IsExist(err) {
+					return execx.Command{}, fmt.Errorf("create CLAUDE_CONFIG_DIR %q: %w", configDir, err)
+				}
+				// Lost the race with a concurrent run; the grant still has to
+				// point at a directory.
+				if info, statErr := os.Stat(configDir); statErr != nil || !info.IsDir() {
+					return execx.Command{}, fmt.Errorf("CLAUDE_CONFIG_DIR %q is not a directory", configDir)
+				}
+			}
+		}
 	}
 	return cmd, nil
 }
@@ -292,15 +309,22 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 // what broke. Credential refresh fails the same way.
 //
 // Only an explicit CLAUDE_CONFIG_DIR in the invocation's own environment is
-// honored, and it is created when absent so the first Bash tool call does not
-// race a directory nobody else makes. The process environment is not
-// consulted: a writable root must be a deliberate decision by the caller that
-// prepared the agent environment, never an artifact of whoever happened to
-// launch the harness. Review runs get the same grant, with everything else
-// still read-only.
-func claudeSandboxConfigRoot(environ []string, workspaceDir string) (string, error) {
+// honored. The grant never comes from the harness process environment: a
+// writable root must be a deliberate decision by the caller that prepared the
+// agent environment, never an artifact of whoever happened to launch the
+// harness. (validateSandboxConfigRoot does read the process home directory,
+// but only to refuse an overly broad grant, never to create one.) Review runs
+// get the same grant, with everything else still read-only.
+//
+// The second return value reports that the directory is missing and has to be
+// created before the command runs. Nothing else creates it - the caller only
+// exports the path, and the CLI first writes there from inside the sandbox,
+// where a missing root is merely read-only, so an ungranted first run leaves
+// the agent with the same dead shell as no grant at all. BuildCommand creates
+// it once everything else has validated.
+func claudeSandboxConfigRoot(environ []string, workspaceDir string) (string, bool, error) {
 	if len(environ) == 0 {
-		return "", nil
+		return "", false, nil
 	}
 	configDir := ""
 	for _, entry := range environ {
@@ -309,7 +333,7 @@ func claudeSandboxConfigRoot(environ []string, workspaceDir string) (string, err
 		}
 	}
 	if configDir == "" {
-		return "", nil
+		return "", false, nil
 	}
 	resolved, err := resolveSandboxPath(configDir)
 	if err != nil {
@@ -317,29 +341,21 @@ func claudeSandboxConfigRoot(environ []string, workspaceDir string) (string, err
 		// environment, not an absent grant. Swallowing it into "no writable
 		// root" reproduces the silent EROFS this function exists to prevent,
 		// so the caller fails the run with the reason instead.
-		return "", fmt.Errorf("resolve CLAUDE_CONFIG_DIR %q: %w", configDir, err)
+		return "", false, fmt.Errorf("resolve CLAUDE_CONFIG_DIR %q: %w", configDir, err)
 	}
 	if err := validateSandboxConfigRoot(resolved, workspaceDir); err != nil {
-		return "", err
+		return "", false, err
 	}
 	info, statErr := os.Stat(resolved)
 	switch {
 	case statErr == nil && !info.IsDir():
-		return "", fmt.Errorf("CLAUDE_CONFIG_DIR %q is not a directory", resolved)
+		return "", false, fmt.Errorf("CLAUDE_CONFIG_DIR %q is not a directory", resolved)
 	case os.IsNotExist(statErr):
-		// Nothing else creates this directory. The caller only exports the
-		// path, and the CLI first writes there from inside the sandbox, where
-		// a missing root is merely read-only - so skipping the grant here
-		// leaves the agent with the same dead shell on a first run as having
-		// no grant at all. Create it before granting, with owner-only
-		// permissions because rotated credentials land in it.
-		if err := os.MkdirAll(resolved, 0o700); err != nil {
-			return "", fmt.Errorf("create CLAUDE_CONFIG_DIR %q: %w", resolved, err)
-		}
+		return resolved, true, nil
 	case statErr != nil:
-		return "", fmt.Errorf("stat CLAUDE_CONFIG_DIR %q: %w", resolved, statErr)
+		return "", false, fmt.Errorf("stat CLAUDE_CONFIG_DIR %q: %w", resolved, statErr)
 	}
-	return resolved, nil
+	return resolved, false, nil
 }
 
 // validateSandboxConfigRoot bounds the one writable root that deliberately sits
@@ -349,6 +365,12 @@ func claudeSandboxConfigRoot(environ []string, workspaceDir string) (string, err
 // or any of its ancestors, or any ancestor of the task workspace would quietly
 // hand the agent write access to operator state and to other tasks' worktrees,
 // which is the opposite of what this grant exists for.
+//
+// The home-directory check reads the process home (os.UserHomeDir, so $HOME)
+// on purpose: it is the operator state this guard protects. That is the one
+// place the process environment is consulted, and it can only narrow the
+// grant - a caller's CLAUDE_CONFIG_DIR is still the only thing that can widen
+// it, and an unset or unreadable home just skips this check.
 func validateSandboxConfigRoot(resolved, workspaceDir string) error {
 	if resolved == filepath.Dir(resolved) {
 		return fmt.Errorf("CLAUDE_CONFIG_DIR %q is a filesystem root and would widen the agent sandbox", resolved)
