@@ -9,6 +9,33 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 )
 
+// agentRunOptionsForRun mirrors the agent options Harness.Run builds, for tests
+// that assert the exact command the harness issues.
+//
+// The Claude sandbox derives one writable root from Env - the persistent
+// CLAUDE_CONFIG_DIR - and that root lands in the command's arguments. An
+// expectation built with no Env therefore describes a command the harness never
+// issues: the run passes the prepared environment, the grant appears, and the
+// argument lists differ by that one root. The mismatch is invisible on a machine
+// where the directory is absent only if the grant is also skipped, which is why
+// deriving the path here - exactly as prepareAgentIOEnv does - keeps the
+// expectation correct whether or not the directory already exists.
+func agentRunOptionsForRun(t *testing.T, runDir string) codexRunOptions {
+	t.Helper()
+
+	opts := codexRunOptions{WorkspaceDir: runDir}
+	source := agentConfigSource(os.Environ(), "CLAUDE_CONFIG_DIR", ".claude")
+	if strings.TrimSpace(source) == "" {
+		return opts
+	}
+	configDir, err := filepath.Abs(source)
+	if err != nil {
+		t.Fatalf("resolve persistent Claude config dir: %v", err)
+	}
+	opts.Env = []string{"CLAUDE_CONFIG_DIR=" + configDir}
+	return opts
+}
+
 // prepareAgentIOEnv is what actually produces RunOptions.Env for a real run, so
 // the sandbox grant has to be asserted against its output. Asserting against a
 // hand-written CLAUDE_CONFIG_DIR only proves the sandbox honors the variable;

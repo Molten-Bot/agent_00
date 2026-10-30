@@ -5823,7 +5823,22 @@ func (h Harness) runCodexWithHeartbeat(
 	}
 	done := make(chan codexRunResult, 1)
 	go func() {
+		// The select below waits on done, a heartbeat ticker and runCtx, and
+		// runCtx carries no deadline unless AgentStageTimeout is configured.
+		// A runner that leaves without producing a result - a panic, or a
+		// runtime.Goexit from a test helper's t.Fatalf - would therefore
+		// strand this stage forever: the heartbeat keeps logging and nothing
+		// else ever fires. The runCtx.Done() path waits on done as well, so it
+		// cannot recover either. Report the missing result instead, so a dead
+		// runner fails the run with a reason rather than hanging it.
+		delivered := false
+		defer func() {
+			if !delivered {
+				done <- codexRunResult{err: fmt.Errorf("%s runner exited without returning a result", agentStage)}
+			}
+		}()
 		runRes, runErr := h.runCommand(runCtx, agentStage, cmd)
+		delivered = true
 		done <- codexRunResult{res: runRes, err: runErr}
 	}()
 

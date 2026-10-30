@@ -6279,7 +6279,7 @@ func TestRunUsesConfiguredRuntimeCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("withResponseModePrompt() error = %v", err)
 	}
-	runtimeCmd, err := agentCommandWithOptions(runtime, targetDir, runtimePrompt, codexRunOptions{WorkspaceDir: runDir})
+	runtimeCmd, err := agentCommandWithOptions(runtime, targetDir, runtimePrompt, agentRunOptionsForRun(t, runDir))
 	if err != nil {
 		t.Fatalf("agentCommandWithOptions() error = %v", err)
 	}
@@ -6629,7 +6629,7 @@ func TestRunAppliesResponseModeAcrossNonCodexRuntimes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("withResponseModePrompt() error = %v", err)
 			}
-			runtimeCmd, err := agentCommandWithOptions(runtime, targetDir, runtimePrompt, codexRunOptions{WorkspaceDir: runDir})
+			runtimeCmd, err := agentCommandWithOptions(runtime, targetDir, runtimePrompt, agentRunOptionsForRun(t, runDir))
 			if err != nil {
 				t.Fatalf("agentCommandWithOptions() error = %v", err)
 			}
