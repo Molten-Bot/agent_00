@@ -11097,6 +11097,9 @@
 
     function taskProgressCurrentStepID(task, signals) {
       const status = normalizedTaskStatus(task?.status);
+      if (status === "merged" && taskAutoMergeStepEnabled()) {
+        return "auto_merge";
+      }
       if (status === "completed" || status === "no_changes" || status === "merged") {
         return "finalize";
       }
