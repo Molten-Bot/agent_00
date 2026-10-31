@@ -125,7 +125,7 @@ below. Temporary files, home directories, and build caches live under
 writable roots, excludes global `/tmp` and implicit `$TMPDIR` access, and sets
 approvals to `never` so commands cannot escalate outside the task. Existing
 operator config cannot add extra writable roots. Multi-repository tasks share
-their own task parent; other tasks remain read-only.
+their own task parent; other task directories remain read-only.
 
 Claude runs through `codex sandbox` with the same task boundary, including its
 child processes. This requires the Codex CLI even when selecting Claude; both
@@ -134,15 +134,19 @@ the run. The trusted Codex CLI still saves login rotation and session state to
 the persistent `CODEX_HOME`; model-issued commands cannot write there.
 
 The only writes an implementation run gets outside its task directory are
-Claude's own per-invocation state directories under the persistent
-`CLAUDE_CONFIG_DIR`: `session-env`, `shell-snapshots`, `projects`, `todos`, and
-`statsig`. The CLI creates its shell integration state there before it will run
-a shell command, so with those directories read-only every Bash call fails with
-`EROFS` and the agent cannot build, test, or smoke-check its own change. The
-configuration directory itself is not writable, so model-issued commands cannot
-rewrite the operator's `.credentials.json`, `settings.json`, or hooks.
-Read-only review passes do not get this access: they must not run shell
-commands at all.
+Claude's own shell integration state directories under the persistent
+`CLAUDE_CONFIG_DIR`: `session-env` and `shell-snapshots`. The CLI creates that
+state before it will run a shell command, so with those directories read-only
+every Bash call fails with `EROFS` and the agent cannot build, test, or
+smoke-check its own change. Each granted path must be a real directory inside
+`CLAUDE_CONFIG_DIR`; a symlinked one is rejected instead of granting whatever
+it points at. The configuration directory itself is not writable, so
+model-issued commands cannot rewrite the operator's `.credentials.json`,
+`settings.json`, or hooks, and Claude's transcript, todo, and telemetry trees
+(`projects`, `todos`, `statsig`) stay read-only as well, so concurrent tasks
+sharing one `CLAUDE_CONFIG_DIR` cannot overwrite each other's state. Read-only
+review passes do not get even the shell integration access: they must not run
+shell commands at all.
 
 Keep the bundled helper in this image: Debian trixie's `bubblewrap` 0.12.0 fails
 to mount `/proc` under Docker's masked proc paths in our container smoke check,

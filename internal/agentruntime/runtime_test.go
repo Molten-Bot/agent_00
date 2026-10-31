@@ -371,9 +371,21 @@ func sandboxWritableRoots(t *testing.T, args []string) []string {
 	return nil
 }
 
+// An implementation pass needs Claude's shell integration state to be
+// writable: the CLI creates it under CLAUDE_CONFIG_DIR before it runs any
+// shell command, and without it every Bash call fails with EROFS for the whole
+// run. That directory deliberately lives outside the task workspace, so this
+// also covers those roots being the one exception the workspace containment
+// check lets through, while the configuration directory itself - holding the
+// operator's credentials and settings - stays read-only.
 func TestClaudeSandboxGrantsOnlyClaudeStateDirs(t *testing.T) {
 	t.Parallel()
 
+	workspace := t.TempDir()
+	resolvedWorkspace, err := resolveSandboxPath(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
 	configDir := filepath.Join(t.TempDir(), ".claude")
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -390,14 +402,18 @@ func TestClaudeSandboxGrantsOnlyClaudeStateDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	cmd, err := rt.BuildCommand("/tmp/repo", "fix bug", RunOptions{
-		Env: []string{"CLAUDE_CONFIG_DIR=" + configDir},
+	cmd, err := rt.BuildCommand(workspace, "fix bug", RunOptions{
+		WorkspaceDir: workspace,
+		Env:          []string{"CLAUDE_CONFIG_DIR=" + configDir},
 	})
 	if err != nil {
 		t.Fatalf("BuildCommand() error = %v", err)
 	}
 
 	roots := sandboxWritableRoots(t, cmd.Args)
+	if !slices.Contains(roots, resolvedWorkspace) {
+		t.Fatalf("writable roots %v must still contain the task workspace %q", roots, resolvedWorkspace)
+	}
 	for _, name := range claudeStateSubdirs {
 		dir := filepath.Join(resolvedConfigDir, name)
 		if !slices.Contains(roots, dir) {

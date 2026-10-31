@@ -1,7 +1,6 @@
 package agentruntime
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,38 +8,14 @@ import (
 	"testing"
 )
 
-func claudeWritableRoots(t *testing.T, args []string) []string {
-	t.Helper()
-	const prefix = "sandbox_workspace_write.writable_roots="
-	for _, arg := range args {
-		if !strings.HasPrefix(arg, prefix) {
-			continue
-		}
-		var roots []string
-		if err := json.Unmarshal([]byte(strings.TrimPrefix(arg, prefix)), &roots); err != nil {
-			t.Fatalf("decode writable roots from %q: %v", arg, err)
-		}
-		return roots
-	}
-	t.Fatalf("no writable roots argument in %v", args)
-	return nil
-}
-
-// An implementation pass needs Claude's per-invocation state directories to be
-// writable: the CLI creates session state under CLAUDE_CONFIG_DIR before it
-// runs any shell command, and without it every Bash call fails with EROFS for
-// the whole run. That directory deliberately lives outside the task workspace,
-// so this also covers the workspace containment check letting those roots
-// through while still refusing the configuration directory itself, which holds
-// the operator's credentials and settings.
-func TestClaudeImplementationSandboxWritesToClaudeConfigDir(t *testing.T) {
+// Claude's transcript, todo and telemetry trees are shared by every task that
+// uses the same persistent CLAUDE_CONFIG_DIR, so granting them would let one
+// run's commands overwrite another run's state. Only the shell integration
+// state Bash needs may become writable.
+func TestClaudeSandboxKeepsSharedClaudeStateTreesReadOnly(t *testing.T) {
 	t.Parallel()
-	workspace := t.TempDir()
+
 	configDir := t.TempDir()
-	resolvedWorkspace, err := resolveSandboxPath(workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
 	resolvedConfigDir, err := resolveSandboxPath(configDir)
 	if err != nil {
 		t.Fatal(err)
@@ -50,39 +25,31 @@ func TestClaudeImplementationSandboxWritesToClaudeConfigDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd, err := rt.BuildCommand(workspace, "fix it", RunOptions{
-		WorkspaceDir: workspace,
-		Env:          []string{"CLAUDE_CONFIG_DIR=" + configDir},
+	cmd, err := rt.BuildCommand("/tmp/repo", "fix bug", RunOptions{
+		Env: []string{"CLAUDE_CONFIG_DIR=" + configDir},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	roots := claudeWritableRoots(t, cmd.Args)
-	if !slices.Contains(roots, resolvedWorkspace) {
-		t.Fatalf("writable roots %v must still contain the task workspace %q", roots, resolvedWorkspace)
-	}
-	for _, name := range claudeStateSubdirs {
+	roots := sandboxWritableRoots(t, cmd.Args)
+	for _, name := range []string{"projects", "todos", "statsig"} {
 		dir := filepath.Join(resolvedConfigDir, name)
-		if !slices.Contains(roots, dir) {
-			t.Fatalf("writable roots %v must contain the Claude state directory %q", roots, dir)
+		if slices.Contains(roots, dir) {
+			t.Fatalf("writable roots %v expose the cross-task Claude state tree %q", roots, dir)
 		}
-		if _, statErr := os.Stat(dir); statErr != nil {
-			t.Fatalf("Claude state directory %q was not created: %v", dir, statErr)
-		}
-	}
-	if slices.Contains(roots, resolvedConfigDir) || slices.Contains(roots, configDir) {
-		t.Fatalf("writable roots %v expose the whole Claude configuration directory", roots)
 	}
 }
 
-// Without an explicit CLAUDE_CONFIG_DIR the agent home is already task-local,
-// so nothing outside the workspace may be added.
-func TestClaudeSandboxKeepsWorkspaceOnlyWithoutClaudeConfigDir(t *testing.T) {
+// Claude's state directories are the one grant that leaves the task workspace,
+// so they are confined to CLAUDE_CONFIG_DIR here instead. A symlinked state
+// directory would otherwise make its target writable for the whole run.
+func TestClaudeSandboxRejectsSymlinkedClaudeStateDir(t *testing.T) {
 	t.Parallel()
-	workspace := t.TempDir()
-	resolvedWorkspace, err := resolveSandboxPath(workspace)
-	if err != nil {
+
+	configDir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(configDir, claudeStateSubdirs[0])); err != nil {
 		t.Fatal(err)
 	}
 
@@ -90,24 +57,20 @@ func TestClaudeSandboxKeepsWorkspaceOnlyWithoutClaudeConfigDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd, err := rt.BuildCommand(workspace, "fix it", RunOptions{
-		WorkspaceDir: workspace,
-		Env:          []string{"TMPDIR=" + filepath.Join(workspace, "tmp")},
+	_, err = rt.BuildCommand("/tmp/repo", "fix bug", RunOptions{
+		Env: []string{"CLAUDE_CONFIG_DIR=" + configDir},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	roots := claudeWritableRoots(t, cmd.Args)
-	if len(roots) != 1 || roots[0] != resolvedWorkspace {
-		t.Fatalf("writable roots = %v, want only %q", roots, resolvedWorkspace)
+	if err == nil || !strings.Contains(err.Error(), "must stay inside") {
+		t.Fatalf("BuildCommand() error = %v, want redirected Claude state directory rejection", err)
 	}
 }
 
 // A read-only review pass must not run shell commands at all, so it keeps the
-// read-only root profile and never gains write access to the config dir.
+// read-only root profile and never gains write access to the config dir, even
+// when one is set in the agent environment.
 func TestClaudeReviewSandboxKeepsClaudeConfigDirReadOnly(t *testing.T) {
 	t.Parallel()
+
 	workspace := t.TempDir()
 	configDir := t.TempDir()
 	resolvedConfigDir, err := resolveSandboxPath(configDir)

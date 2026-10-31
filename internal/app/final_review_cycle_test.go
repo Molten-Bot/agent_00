@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/config"
@@ -16,7 +17,12 @@ import (
 )
 
 type cleanReviewCycleRunner struct {
-	t        *testing.T
+	t *testing.T
+
+	// reviewStdout replaces the default clean verdict when set, so cases that
+	// only differ in the review outcome can reuse this fake.
+	reviewStdout string
+
 	mu       sync.Mutex
 	reviews  int
 	comments int
@@ -36,6 +42,9 @@ func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (exec
 		r.reviews++
 		r.prompts = append(r.prompts, cmd.Stdin)
 		r.argv = append(r.argv, append([]string(nil), cmd.Args...))
+		if r.reviewStdout != "" {
+			return execx.Result{Stdout: r.reviewStdout}, nil
+		}
 		return execx.Result{Stdout: "**Positive**\n- Scoped change.\n\n**Negative**\n- No material issues found.\n\n```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"clean\",\"positives\":[\"Scoped change.\"],\"findings\":[]}\n```"}, nil
 	case "git":
 		if len(cmd.Args) == 0 {
@@ -117,6 +126,71 @@ func TestRunFinalReviewCycleStopsAfterCleanPass(t *testing.T) {
 		if !strings.Contains(prompt, "The bundled review skill is mandatory") || !strings.Contains(prompt, fmt.Sprintf("Post-task review pass %d/3", i+1)) {
 			t.Fatalf("review prompt %d did not include skill and pass context", i+1)
 		}
+	}
+}
+
+// A review that reports only low-severity findings has nothing blocking left,
+// so the cycle must end successfully without starting a fix pass.
+func TestRunFinalReviewCycleEndsSuccessfullyOnLowSeverityOnlyFindings(t *testing.T) {
+	runner := &cleanReviewCycleRunner{t: t, reviewStdout: "Only polish left.\n\n```json\n" +
+		`{"status":"findings","mergeReady":false,"summary":"Only polish left.","findings":[{"severity":"Low","path":"internal/app/harness.go","line":1,"title":"Tighten a comment"}]}` +
+		"\n```"}
+
+	var logs []string
+	h := New(runner)
+	h.FinalReviewPasses = 3
+	// Keep the heartbeat quiet so the log assertions below stay deterministic.
+	h.AgentHeartbeatInterval = time.Hour
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	claudeRuntime, err := agentruntime.Resolve(agentruntime.HarnessClaude, "")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:        "https://github.com/acme/repo.git",
+		Dir:        repoDir,
+		RelDir:     "repo",
+		Branch:     "feature",
+		BaseBranch: "main",
+		PRURL:      "https://github.com/acme/repo/pull/7",
+		Changed:    true,
+	}
+
+	exitCode, stage, err := h.runFinalReviewCycle(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior."},
+		repo,
+		claudeRuntime,
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err != nil || exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success when only low-severity findings remain", exitCode, stage, err)
+	}
+	// A low-only outcome ends the cycle: no fix pass, and therefore no second
+	// review pass, may run.
+	if runner.reviews != 1 {
+		t.Fatalf("agent invocations = %d, want 1 (no fix pass for low-severity findings)", runner.reviews)
+	}
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "action=severity") || !strings.Contains(joined, "findings=1 blocking=0") {
+		t.Fatalf("logs missing low-only severity accounting:\n%s", joined)
+	}
+	if strings.Contains(joined, "stage=review_fix") {
+		t.Fatalf("low-only findings started a fix pass:\n%s", joined)
 	}
 }
 
