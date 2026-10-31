@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -25,9 +26,13 @@ func claudeWritableRoots(t *testing.T, args []string) []string {
 	return nil
 }
 
-// An implementation pass needs Claude's persistent configuration directory to
-// be writable: the CLI creates session state there before it runs any shell
-// command, and without it every Bash call fails with EROFS for the whole run.
+// An implementation pass needs Claude's per-invocation state directories to be
+// writable: the CLI creates session state under CLAUDE_CONFIG_DIR before it
+// runs any shell command, and without it every Bash call fails with EROFS for
+// the whole run. That directory deliberately lives outside the task workspace,
+// so this also covers the workspace containment check letting those roots
+// through while still refusing the configuration directory itself, which holds
+// the operator's credentials and settings.
 func TestClaudeImplementationSandboxWritesToClaudeConfigDir(t *testing.T) {
 	t.Parallel()
 	workspace := t.TempDir()
@@ -57,8 +62,17 @@ func TestClaudeImplementationSandboxWritesToClaudeConfigDir(t *testing.T) {
 	if !slices.Contains(roots, resolvedWorkspace) {
 		t.Fatalf("writable roots %v must still contain the task workspace %q", roots, resolvedWorkspace)
 	}
-	if !slices.Contains(roots, resolvedConfigDir) {
-		t.Fatalf("writable roots %v must contain the Claude config dir %q", roots, resolvedConfigDir)
+	for _, name := range claudeStateSubdirs {
+		dir := filepath.Join(resolvedConfigDir, name)
+		if !slices.Contains(roots, dir) {
+			t.Fatalf("writable roots %v must contain the Claude state directory %q", roots, dir)
+		}
+		if _, statErr := os.Stat(dir); statErr != nil {
+			t.Fatalf("Claude state directory %q was not created: %v", dir, statErr)
+		}
+	}
+	if slices.Contains(roots, resolvedConfigDir) || slices.Contains(roots, configDir) {
+		t.Fatalf("writable roots %v expose the whole Claude configuration directory", roots)
 	}
 }
 
