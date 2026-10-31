@@ -3559,7 +3559,7 @@ func (h Harness) runFinalReviewCycle(
 		case "blocked":
 			return ExitCodex, "review", fmt.Errorf("post-task review pass %d was blocked: %s", pass, strings.TrimSpace(outcome.Summary))
 		case "clean":
-			if len(outcome.Findings) != 0 || !outcome.MergeReady {
+			if len(blockingReviewFindings(outcome.Findings)) != 0 || !outcome.MergeReady {
 				return ExitCodex, "review", fmt.Errorf("post-task review pass %d returned an inconsistent clean outcome", pass)
 			}
 		case "findings":
@@ -3598,7 +3598,20 @@ func (h Harness) runFinalReviewCycle(
 			repo.RelDir,
 			repo.PRURL,
 		)
-		if len(outcome.Findings) == 0 {
+		blockingFindings := blockingReviewFindings(outcome.Findings)
+		if len(outcome.Findings) > 0 {
+			h.logf(
+				"stage=review status=ok action=severity review_mode=%s pass=%d findings=%d blocking=%d repo=%s repo_dir=%s pr_url=%s",
+				reviewMode,
+				pass,
+				len(outcome.Findings),
+				len(blockingFindings),
+				repo.URL,
+				repo.RelDir,
+				repo.PRURL,
+			)
+		}
+		if len(blockingFindings) == 0 {
 			return ExitSuccess, "", nil
 		}
 		if pass > h.FinalReviewPasses {
@@ -3618,7 +3631,7 @@ func (h Harness) runFinalReviewCycle(
 		if err != nil {
 			return ExitGit, "git", err
 		}
-		fixPrompt := finalReviewFixPrompt(cfg.Prompt, *repo, outcome.Findings, pass, h.FinalReviewPasses)
+		fixPrompt := finalReviewFixPrompt(cfg.Prompt, *repo, blockingFindings, pass, h.FinalReviewPasses)
 		fixInvocation := newAgentInvocationLogMetadata(runtime, "review_fix", pass, repo.RelDir, repo.RelDir, repo.RelDir)
 		if _, err := h.runCodexCapture(
 			ctx,
@@ -4480,6 +4493,32 @@ func reviewOutcomeAllowsAutoMerge(outcome reviewOutcome) bool {
 		}
 	}
 	return true
+}
+
+// reviewFindingIsBlocking reports whether a finding has to be fixed before the
+// post-task review cycle may release its pull request from draft. It keeps
+// reviewOutcomeAllowsAutoMerge's line between blocking severity and polish:
+// low/nit/informational findings are reported on the pull request only. Gating
+// the cycle on every finding spends all fix passes on polish that the next
+// pass replaces with different polish, and fails a run whose own review says
+// there is no blocking correctness issue. An unrecognized or missing severity
+// fails closed and keeps gating.
+func reviewFindingIsBlocking(finding reviewFinding) bool {
+	switch strings.ToLower(strings.TrimSpace(finding.Severity)) {
+	case "low", "nit", "nitpick", "minor", "info", "informational", "suggestion", "polish", "trivial":
+		return false
+	}
+	return true
+}
+
+func blockingReviewFindings(findings []reviewFinding) []reviewFinding {
+	out := make([]reviewFinding, 0, len(findings))
+	for _, finding := range findings {
+		if reviewFindingIsBlocking(finding) {
+			out = append(out, finding)
+		}
+	}
+	return out
 }
 
 func repoWorkspaceDirName(repoURL string, index, total int) string {

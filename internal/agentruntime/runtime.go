@@ -238,7 +238,7 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 			)
 		} else {
 			args = append(args, "-c", `sandbox_mode="workspace-write"`)
-			args = append(args, workspaceSandboxArgs(opts)...)
+			args = append(args, workspaceSandboxArgs(withClaudeConfigWritableDir(opts))...)
 		}
 		args = append(args, "--", cmd.Name)
 		cmd.Args = append(args, cmd.Args...)
@@ -287,6 +287,42 @@ func resolveSandboxPath(dir string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(resolved, filepath.Base(path)), nil
+}
+
+// withClaudeConfigWritableDir adds Claude's persistent configuration directory
+// to the sandbox's writable roots. That directory stays outside the task
+// workspace on purpose - copying it would race the operator's refresh token -
+// but Claude Code creates per-invocation state inside it (session env, shell
+// snapshots) before it will run a shell command. Without write access there
+// every Bash call fails with EROFS for the whole run, so the agent cannot
+// build, test or smoke-check the change it just made, and the post-task review
+// cycle has nothing but static reading to work from. Read-only review passes
+// deliberately do not get this: they must not run shell commands at all.
+func withClaudeConfigWritableDir(opts RunOptions) RunOptions {
+	environ := opts.Env
+	if len(environ) == 0 {
+		environ = os.Environ()
+	}
+	configDir := ""
+	for _, entry := range environ {
+		if name, value, ok := strings.Cut(entry, "="); ok && name == "CLAUDE_CONFIG_DIR" {
+			configDir = strings.TrimSpace(value)
+		}
+	}
+	if configDir == "" {
+		return opts
+	}
+	resolved, err := resolveSandboxPath(configDir)
+	if err != nil {
+		return opts
+	}
+	for _, dir := range opts.WritableDirs {
+		if strings.TrimSpace(dir) == resolved {
+			return opts
+		}
+	}
+	opts.WritableDirs = append(append([]string(nil), opts.WritableDirs...), resolved)
+	return opts
 }
 
 func workspaceSandboxArgs(opts RunOptions) []string {

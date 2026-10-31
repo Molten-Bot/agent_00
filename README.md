@@ -132,6 +132,13 @@ CLIs are included in the Docker image. Missing or failed sandbox tooling stops
 the run. The trusted Codex CLI still saves login rotation and session state to
 the persistent `CODEX_HOME`; model-issued commands cannot write there.
 
+Claude's persistent `CLAUDE_CONFIG_DIR` is the one directory outside the task
+that an implementation run can write to. The CLI creates per-invocation state
+there (session environment, shell snapshots) before it will run a shell
+command, so with that directory read-only every Bash call fails with `EROFS`
+and the agent cannot build, test, or smoke-check its own change. Read-only
+review passes do not get this access: they must not run shell commands at all.
+
 Keep the bundled helper in this image: Debian trixie's `bubblewrap` 0.12.0 fails
 to mount `/proc` under Docker's masked proc paths in our container smoke check,
 while Codex 0.147.0's bundled helper succeeds with the security options above.
