@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -350,6 +351,102 @@ func TestBuildCommandClaude(t *testing.T) {
 	}
 	if cmd.Stdin != "fix bug" {
 		t.Fatalf("Stdin = %q, want prompt", cmd.Stdin)
+	}
+}
+
+func sandboxWritableRoots(t *testing.T, args []string) []string {
+	t.Helper()
+	const prefix = "sandbox_workspace_write.writable_roots="
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, prefix) {
+			continue
+		}
+		var roots []string
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(arg, prefix)), &roots); err != nil {
+			t.Fatalf("decode writable roots %q: %v", arg, err)
+		}
+		return roots
+	}
+	t.Fatalf("sandbox args missing writable roots: %v", args)
+	return nil
+}
+
+func TestClaudeSandboxGrantsOnlyClaudeStateDirs(t *testing.T) {
+	t.Parallel()
+
+	configDir := filepath.Join(t.TempDir(), ".claude")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, ".credentials.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolvedConfigDir, err := filepath.EvalSymlinks(configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	cmd, err := rt.BuildCommand("/tmp/repo", "fix bug", RunOptions{
+		Env: []string{"CLAUDE_CONFIG_DIR=" + configDir},
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand() error = %v", err)
+	}
+
+	roots := sandboxWritableRoots(t, cmd.Args)
+	for _, name := range claudeStateSubdirs {
+		dir := filepath.Join(resolvedConfigDir, name)
+		if !slices.Contains(roots, dir) {
+			t.Fatalf("writable roots %v missing Claude state directory %q", roots, dir)
+		}
+		if _, statErr := os.Stat(dir); statErr != nil {
+			t.Fatalf("Claude state directory %q was not created: %v", dir, statErr)
+		}
+	}
+	// The operator's credentials and settings live in the config directory
+	// itself; granting it would hand them to model-issued commands.
+	if slices.Contains(roots, resolvedConfigDir) || slices.Contains(roots, configDir) {
+		t.Fatalf("writable roots %v expose the whole Claude configuration directory", roots)
+	}
+}
+
+func TestClaudeSandboxIgnoresProcessClaudeConfigDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), "operator-claude"))
+
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	cmd, err := rt.BuildCommand("/tmp/repo", "fix bug", RunOptions{WritableDirs: []string{"/tmp/run"}})
+	if err != nil {
+		t.Fatalf("BuildCommand() error = %v", err)
+	}
+	if got, want := sandboxWritableRoots(t, cmd.Args), []string{"/tmp/run"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("writable roots = %v, want %v", got, want)
+	}
+}
+
+func TestClaudeSandboxReportsUnusableClaudeStateDir(t *testing.T) {
+	t.Parallel()
+
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	_, err = rt.BuildCommand("/tmp/repo", "fix bug", RunOptions{
+		Env: []string{"CLAUDE_CONFIG_DIR=" + blocker},
+	})
+	if err == nil || !strings.Contains(err.Error(), "Claude state directory") {
+		t.Fatalf("BuildCommand() error = %v, want Claude state directory failure", err)
 	}
 }
 

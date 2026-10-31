@@ -4487,8 +4487,10 @@ func reviewOutcomeAllowsAutoMerge(outcome reviewOutcome) bool {
 		return false
 	}
 	for _, finding := range outcome.Findings {
-		switch strings.ToLower(strings.TrimSpace(finding.Severity)) {
-		case "critical", "high", "medium":
+		// Share reviewFindingIsBlocking's severity line so an unrecognized or
+		// missing severity fails closed in both gates instead of blocking the
+		// review cycle here and auto-merging there.
+		if reviewFindingIsBlocking(finding) {
 			return false
 		}
 	}
@@ -4496,7 +4498,7 @@ func reviewOutcomeAllowsAutoMerge(outcome reviewOutcome) bool {
 }
 
 // reviewFindingIsBlocking reports whether a finding has to be fixed before the
-// post-task review cycle may release its pull request from draft. It keeps
+// post-task review cycle may release its pull request from draft. It is also
 // reviewOutcomeAllowsAutoMerge's line between blocking severity and polish:
 // low/nit/informational findings are reported on the pull request only. Gating
 // the cycle on every finding spends all fix passes on polish that the next

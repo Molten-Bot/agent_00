@@ -237,8 +237,12 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 				"-c", "permissions.agent00_review={filesystem={"+filesystem+"},network={enabled=true}}",
 			)
 		} else {
+			sandboxOpts, err := withClaudeStateWritableDirs(opts)
+			if err != nil {
+				return execx.Command{}, err
+			}
 			args = append(args, "-c", `sandbox_mode="workspace-write"`)
-			args = append(args, workspaceSandboxArgs(withClaudeConfigWritableDir(opts))...)
+			args = append(args, workspaceSandboxArgs(sandboxOpts)...)
 		}
 		args = append(args, "--", cmd.Name)
 		cmd.Args = append(args, cmd.Args...)
@@ -289,40 +293,70 @@ func resolveSandboxPath(dir string) (string, error) {
 	return filepath.Join(resolved, filepath.Base(path)), nil
 }
 
-// withClaudeConfigWritableDir adds Claude's persistent configuration directory
-// to the sandbox's writable roots. That directory stays outside the task
-// workspace on purpose - copying it would race the operator's refresh token -
-// but Claude Code creates per-invocation state inside it (session env, shell
-// snapshots) before it will run a shell command. Without write access there
-// every Bash call fails with EROFS for the whole run, so the agent cannot
-// build, test or smoke-check the change it just made, and the post-task review
-// cycle has nothing but static reading to work from. Read-only review passes
-// deliberately do not get this: they must not run shell commands at all.
-func withClaudeConfigWritableDir(opts RunOptions) RunOptions {
-	environ := opts.Env
-	if len(environ) == 0 {
-		environ = os.Environ()
-	}
+// claudeStateSubdirs are the per-invocation state directories Claude Code
+// writes inside CLAUDE_CONFIG_DIR while it runs a task: the shell integration
+// state it creates before the first Bash call, and the transcript/telemetry
+// state it appends to during one. Only these become sandbox-writable. The
+// configuration directory itself stays read-only, so model-issued commands
+// cannot rewrite the operator's `.credentials.json`, `settings.json`, or hooks.
+var claudeStateSubdirs = []string{
+	"session-env",
+	"shell-snapshots",
+	"projects",
+	"todos",
+	"statsig",
+}
+
+// withClaudeStateWritableDirs adds Claude's per-invocation state directories to
+// the sandbox's writable roots. They live under the persistent
+// CLAUDE_CONFIG_DIR, which stays outside the task workspace on purpose -
+// copying it would race the operator's refresh token - and Claude Code creates
+// its shell integration state there (session env, shell snapshots) before it
+// will run a shell command. Without write access every Bash call fails with
+// EROFS for the whole run, so the agent cannot build, test or smoke-check the
+// change it just made, and the post-task review cycle has nothing but static
+// reading to work from. Read-only review passes deliberately do not get this:
+// they must not run shell commands at all.
+//
+// Only opts.Env is consulted. The harness always resolves CLAUDE_CONFIG_DIR
+// into the agent environment it passes here, so falling back to the harness's
+// own os.Environ would only let an operator-exported value leak into runs (and
+// tests) that never asked for it.
+func withClaudeStateWritableDirs(opts RunOptions) (RunOptions, error) {
 	configDir := ""
-	for _, entry := range environ {
+	for _, entry := range opts.Env {
 		if name, value, ok := strings.Cut(entry, "="); ok && name == "CLAUDE_CONFIG_DIR" {
 			configDir = strings.TrimSpace(value)
 		}
 	}
 	if configDir == "" {
-		return opts
+		return opts, nil
 	}
-	resolved, err := resolveSandboxPath(configDir)
-	if err != nil {
-		return opts
+
+	writable := append([]string(nil), opts.WritableDirs...)
+	seen := make(map[string]bool, len(writable)+len(claudeStateSubdirs))
+	for _, dir := range writable {
+		seen[strings.TrimSpace(dir)] = true
 	}
-	for _, dir := range opts.WritableDirs {
-		if strings.TrimSpace(dir) == resolved {
-			return opts
+	for _, name := range claudeStateSubdirs {
+		dir := filepath.Join(configDir, name)
+		// A writable root has to exist before the sandbox starts: Claude cannot
+		// create it from inside a sandbox that does not yet grant it.
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return RunOptions{}, fmt.Errorf("prepare Claude state directory %q: %w", dir, err)
 		}
+		resolved, err := resolveSandboxPath(dir)
+		if err != nil {
+			return RunOptions{}, fmt.Errorf("resolve Claude state directory %q: %w", dir, err)
+		}
+		if seen[resolved] {
+			continue
+		}
+		seen[resolved] = true
+		writable = append(writable, resolved)
 	}
-	opts.WritableDirs = append(append([]string(nil), opts.WritableDirs...), resolved)
-	return opts
+	opts.WritableDirs = writable
+	return opts, nil
 }
 
 func workspaceSandboxArgs(opts RunOptions) []string {

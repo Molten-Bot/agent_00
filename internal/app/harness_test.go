@@ -6211,6 +6211,105 @@ func TestMarkPullRequestReadyForReviewNoOpWithoutPRURL(t *testing.T) {
 	}
 }
 
+// reviewCycleRunner answers the git and gh reads runFinalReviewCycle issues and
+// replays one scripted agent review outcome, so the cycle can be exercised end
+// to end without a real git, gh, or agent CLI.
+type reviewCycleRunner struct {
+	metadataJSON string
+	reviewOutput string
+	agentRuns    int
+}
+
+func (r *reviewCycleRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, error) {
+	switch cmd.Name {
+	case "git":
+		if len(cmd.Args) > 0 && cmd.Args[0] == "status" {
+			return execx.Result{Stdout: "## agent00-review-cycle\n"}, nil
+		}
+		// Every other git read in the cycle (HEAD lookups, ref fetches, diffs)
+		// only needs a stable non-empty answer.
+		return execx.Result{Stdout: "1111111111111111111111111111111111111111\n"}, nil
+	case "gh":
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "view" {
+			return execx.Result{Stdout: r.metadataJSON}, nil
+		}
+		return execx.Result{}, nil
+	default:
+		r.agentRuns++
+		return execx.Result{Stdout: r.reviewOutput}, nil
+	}
+}
+
+func TestRunFinalReviewCycleEndsSuccessfullyOnLowSeverityOnlyFindings(t *testing.T) {
+	t.Parallel()
+
+	runDir := t.TempDir()
+	repoDir := filepath.Join(runDir, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	runner := &reviewCycleRunner{
+		metadataJSON: `{"number":42,"url":"https://github.com/acme/repo/pull/42","state":"OPEN","baseRefName":"main","headRefName":"agent00-review-cycle"}`,
+		reviewOutput: "Only polish left.\n\n```json\n" +
+			`{"status":"findings","mergeReady":false,"summary":"Only polish left.","findings":[{"severity":"Low","path":"internal/app/harness.go","line":1,"title":"Tighten a comment"}]}` +
+			"\n```",
+	}
+
+	var logs []string
+	h := New(runner)
+	h.FinalReviewPasses = 3
+	// Keep the heartbeat quiet so the log assertions below stay deterministic.
+	h.AgentHeartbeatInterval = time.Hour
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	runtime, err := agentruntime.Resolve(agentruntime.HarnessClaude, "")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	repo := repoWorkspace{
+		URL:    "git@github.com:acme/repo.git",
+		Dir:    repoDir,
+		RelDir: "repo",
+		Branch: "agent00-review-cycle",
+		PRURL:  "https://github.com/acme/repo/pull/42",
+	}
+
+	exitCode, stage, err := h.runFinalReviewCycle(
+		context.Background(),
+		config.Config{Prompt: "Build API"},
+		&repo,
+		runtime,
+		repoDir,
+		codexRunOptions{},
+		"Build API",
+		"",
+		".",
+		"claude",
+		false,
+	)
+	if err != nil {
+		t.Fatalf("runFinalReviewCycle() err = %v, want nil when only low-severity findings remain", err)
+	}
+	if exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("runFinalReviewCycle() = (%d, %q), want (%d, \"\")", exitCode, stage, ExitSuccess)
+	}
+	// A low-only outcome ends the cycle: no fix pass, and therefore no second
+	// review pass, may run.
+	if runner.agentRuns != 1 {
+		t.Fatalf("agent invocations = %d, want 1 (no fix pass for low-severity findings)", runner.agentRuns)
+	}
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "action=severity") || !strings.Contains(joined, "findings=1 blocking=0") {
+		t.Fatalf("logs missing low-only severity accounting:\n%s", joined)
+	}
+	if strings.Contains(joined, "stage=review_fix") {
+		t.Fatalf("low-only findings started a fix pass:\n%s", joined)
+	}
+}
+
 func TestAgentCommandWithOptionsUsesConfiguredRuntime(t *testing.T) {
 	t.Parallel()
 

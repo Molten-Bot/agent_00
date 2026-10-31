@@ -119,12 +119,13 @@ nested namespaces and mounts instead. Host user namespace support is still
 required.
 
 Agent work can write only inside its allocated task directory (the parent of
-that task's cloned repositories). Temporary files, home directories, and build
-caches live under `.agent00-agent-io` inside that directory. The harness
-overrides Codex's writable roots, excludes global `/tmp` and implicit `$TMPDIR`
-access, and sets approvals to `never` so commands cannot escalate outside the
-task. Existing operator config cannot add extra writable roots. Multi-repository
-tasks share their own task parent; other tasks remain read-only.
+that task's cloned repositories), plus the Claude state directories described
+below. Temporary files, home directories, and build caches live under
+`.agent00-agent-io` inside that directory. The harness overrides Codex's
+writable roots, excludes global `/tmp` and implicit `$TMPDIR` access, and sets
+approvals to `never` so commands cannot escalate outside the task. Existing
+operator config cannot add extra writable roots. Multi-repository tasks share
+their own task parent; other tasks remain read-only.
 
 Claude runs through `codex sandbox` with the same task boundary, including its
 child processes. This requires the Codex CLI even when selecting Claude; both
@@ -132,12 +133,16 @@ CLIs are included in the Docker image. Missing or failed sandbox tooling stops
 the run. The trusted Codex CLI still saves login rotation and session state to
 the persistent `CODEX_HOME`; model-issued commands cannot write there.
 
-Claude's persistent `CLAUDE_CONFIG_DIR` is the one directory outside the task
-that an implementation run can write to. The CLI creates per-invocation state
-there (session environment, shell snapshots) before it will run a shell
-command, so with that directory read-only every Bash call fails with `EROFS`
-and the agent cannot build, test, or smoke-check its own change. Read-only
-review passes do not get this access: they must not run shell commands at all.
+The only writes an implementation run gets outside its task directory are
+Claude's own per-invocation state directories under the persistent
+`CLAUDE_CONFIG_DIR`: `session-env`, `shell-snapshots`, `projects`, `todos`, and
+`statsig`. The CLI creates its shell integration state there before it will run
+a shell command, so with those directories read-only every Bash call fails with
+`EROFS` and the agent cannot build, test, or smoke-check its own change. The
+configuration directory itself is not writable, so model-issued commands cannot
+rewrite the operator's `.credentials.json`, `settings.json`, or hooks.
+Read-only review passes do not get this access: they must not run shell
+commands at all.
 
 Keep the bundled helper in this image: Debian trixie's `bubblewrap` 0.12.0 fails
 to mount `/proc` under Docker's masked proc paths in our container smoke check,
