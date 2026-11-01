@@ -1,12 +1,12 @@
 package agentruntime
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
@@ -237,8 +237,7 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 				"-c", "permissions.agent00_review={filesystem={"+filesystem+"},network={enabled=true}}",
 			)
 		} else {
-			args = append(args, "-c", `sandbox_mode="workspace-write"`)
-			args = append(args, workspaceSandboxArgs(opts)...)
+			args = append(args, "-P", "agent00_implementation", "-c", implementationPermissionProfile(targetDir, opts))
 		}
 		args = append(args, "--", cmd.Name)
 		cmd.Args = append(args, cmd.Args...)
@@ -289,32 +288,30 @@ func resolveSandboxPath(dir string) (string, error) {
 	return filepath.Join(resolved, filepath.Base(path)), nil
 }
 
-func workspaceSandboxArgs(opts RunOptions) []string {
-	roots := make([]string, 0, len(opts.WritableDirs)+1)
+func implementationPermissionProfile(targetDir string, opts RunOptions) string {
+	roots := make([]string, 0, len(opts.WritableDirs)+2)
 	if root := strings.TrimSpace(opts.WorkspaceDir); root != "" {
 		roots = append(roots, root)
+	} else if targetDir = strings.TrimSpace(targetDir); targetDir != "" {
+		// Preserve workspace-write's implicit writable cwd for direct callers
+		// that do not provide a containing task workspace.
+		roots = append(roots, targetDir)
 	}
-	for _, dir := range opts.WritableDirs {
-		if dir = strings.TrimSpace(dir); dir != "" {
-			roots = append(roots, dir)
-		}
-	}
-	unique := roots[:0]
-	seen := make(map[string]bool, len(roots))
+	roots = append(roots, opts.WritableDirs...)
+	unique := make(map[string]bool, len(roots))
+	writable := make([]string, 0, len(roots))
 	for _, root := range roots {
-		if !seen[root] {
-			seen[root] = true
-			unique = append(unique, root)
+		if root = strings.TrimSpace(root); root != "" && !unique[root] {
+			unique[root] = true
+			writable = append(writable, root)
 		}
 	}
-	encoded, _ := json.Marshal(unique)
-	return []string{
-		"-c", "sandbox_workspace_write.writable_roots=" + string(encoded),
-		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
-		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-		// Both runtimes need network access for dependency downloads and tests.
-		"-c", "sandbox_workspace_write.network_access=true",
+	sort.Strings(writable)
+	filesystem := []string{`":root"="read"`}
+	for _, root := range writable {
+		filesystem = append(filesystem, strconv.Quote(root)+`="write"`)
 	}
+	return "permissions.agent00_implementation={filesystem={" + strings.Join(filesystem, ",") + "},network={enabled=true}}"
 }
 
 func validateWorkspaceDirs(targetDir string, opts RunOptions) error {
@@ -357,14 +354,21 @@ func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command
 	// workspace-write, so the CLI cannot write anywhere regardless of which
 	// tool it tries to use.
 	readOnly := len(nonEmptyStrings(opts.DisallowedTools)) > 0
-	sandboxMode := "workspace-write"
+	args := []string{"exec"}
 	if readOnly {
-		sandboxMode = "read-only"
+		args = append(args, "--sandbox", "read-only")
+	} else {
+		// Codex's legacy workspace-write policy deliberately makes .git
+		// read-only, even below an explicitly writable root. Agent tasks need
+		// normal local Git operations such as fetch, merge, and add.
+		// Use an equivalent task-scoped permission profile so Git metadata is
+		// writable without granting access to sibling tasks or persistent auth.
+		args = append(args,
+			"-c", `default_permissions="agent00_implementation"`,
+			"-c", implementationPermissionProfile(targetDir, opts),
+		)
 	}
-	args := []string{"exec", "--sandbox", sandboxMode, "-c", `approval_policy="never"`}
-	if !readOnly {
-		args = append(args, workspaceSandboxArgs(opts)...)
-	}
+	args = append(args, "-c", `approval_policy="never"`)
 	if opts.SkipGitRepoCheck {
 		args = append(args, "--skip-git-repo-check")
 	}

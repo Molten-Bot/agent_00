@@ -1,8 +1,9 @@
 package app
 
 import (
-	"encoding/json"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
@@ -31,13 +32,15 @@ func expectedCodexArgs(roots []string, extra ...string) []string {
 	if roots == nil {
 		roots = []string{}
 	}
-	encoded, _ := json.Marshal(roots)
+	sort.Strings(roots)
+	filesystem := []string{`":root"="read"`}
+	for _, root := range roots {
+		filesystem = append(filesystem, strconv.Quote(root)+`="write"`)
+	}
 	args := []string{
-		"exec", "--sandbox", "workspace-write", "-c", `approval_policy="never"`,
-		"-c", "sandbox_workspace_write.writable_roots=" + string(encoded),
-		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
-		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-		"-c", "sandbox_workspace_write.network_access=true",
+		"exec", "-c", `default_permissions="agent00_implementation"`,
+		"-c", "permissions.agent00_implementation={filesystem={" + strings.Join(filesystem, ",") + "},network={enabled=true}}",
+		"-c", `approval_policy="never"`,
 	}
 	return append(args, extra...)
 }

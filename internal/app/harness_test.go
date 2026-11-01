@@ -5558,14 +5558,14 @@ func TestCommandBuilders(t *testing.T) {
 	}
 
 	codex := codexCommand(targetDir, prompt)
-	if codex.Name != "codex" || codex.Dir != targetDir || !reflect.DeepEqual(codex.Args, expectedCodexArgs(nil)) {
+	if codex.Name != "codex" || codex.Dir != targetDir || !reflect.DeepEqual(codex.Args, expectedCodexArgs([]string{targetDir})) {
 		t.Fatalf("codex command unexpected: %+v", codex)
 	}
 	if got, want := codex.Stdin, withCompletionGatePrompt(prompt); got != want {
 		t.Fatalf("codex stdin = %q, want %q", got, want)
 	}
 	codexWorkspace := codexCommandWithOptions(targetDir, prompt, codexRunOptions{SkipGitRepoCheck: true})
-	if codexWorkspace.Name != "codex" || codexWorkspace.Dir != targetDir || !reflect.DeepEqual(codexWorkspace.Args, expectedCodexArgs(nil, "--skip-git-repo-check")) {
+	if codexWorkspace.Name != "codex" || codexWorkspace.Dir != targetDir || !reflect.DeepEqual(codexWorkspace.Args, expectedCodexArgs([]string{targetDir}, "--skip-git-repo-check")) {
 		t.Fatalf("codex workspace command unexpected: %+v", codexWorkspace)
 	}
 	if got, want := codexWorkspace.Stdin, withCompletionGatePrompt(prompt); got != want {
@@ -5576,7 +5576,7 @@ func TestCommandBuilders(t *testing.T) {
 		ImagePaths:       []string{"/tmp/run/prompt-images/01-shot.png", "/tmp/run/prompt-images/02-shot.png"},
 		WritableDirs:     []string{"/tmp/run"},
 	})
-	if codexWithImages.Name != "codex" || codexWithImages.Dir != targetDir || !reflect.DeepEqual(codexWithImages.Args, expectedCodexArgs([]string{"/tmp/run"},
+	if codexWithImages.Name != "codex" || codexWithImages.Dir != targetDir || !reflect.DeepEqual(codexWithImages.Args, expectedCodexArgs([]string{"/tmp/run", targetDir},
 		"--skip-git-repo-check",
 		"--add-dir", "/tmp/run",
 		"--image", "/tmp/run/prompt-images/01-shot.png",
@@ -6831,7 +6831,7 @@ func TestRunCodexStagesAgentsPromptWithinTargetDir(t *testing.T) {
 	if runner.cmd.Name != "codex" || runner.cmd.Dir != targetDir {
 		t.Fatalf("unexpected codex command: %+v", runner.cmd)
 	}
-	if !reflect.DeepEqual(runner.cmd.Args, expectedCodexArgs(nil)) {
+	if !reflect.DeepEqual(runner.cmd.Args, expectedCodexArgs([]string{targetDir})) {
 		t.Fatalf("captured.Args = %v, want restricted sandbox", runner.cmd.Args)
 	}
 	prompt := runner.cmd.Stdin

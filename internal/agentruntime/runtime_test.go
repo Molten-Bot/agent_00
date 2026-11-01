@@ -30,12 +30,17 @@ func TestTaskWorkspaceIsOnlyWritableRoot(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, required := range []string{
-				`sandbox_workspace_write.writable_roots=["/tasks/current"]`,
-				"sandbox_workspace_write.exclude_slash_tmp=true",
-				"sandbox_workspace_write.exclude_tmpdir_env_var=true",
-				"sandbox_workspace_write.network_access=true",
-			} {
+			requiredArgs := []string{
+				"agent00_implementation",
+				`permissions.agent00_implementation={filesystem={":root"="read","/tasks/current"="write"},network={enabled=true}}`,
+			}
+			if harness == HarnessCodex {
+				requiredArgs = []string{
+					`default_permissions="agent00_implementation"`,
+					`permissions.agent00_implementation={filesystem={":root"="read","/tasks/current"="write"},network={enabled=true}}`,
+				}
+			}
+			for _, required := range requiredArgs {
 				if !slices.Contains(cmd.Args, required) {
 					t.Fatalf("missing sandbox restriction %q in %v", required, cmd.Args)
 				}
@@ -307,11 +312,9 @@ func TestBuildCommandCodex(t *testing.T) {
 		t.Fatalf("Stdin = %q, want %q", got, want)
 	}
 	wantArgs := []string{
-		"exec", "--sandbox", "workspace-write", "-c", `approval_policy="never"`,
-		"-c", `sandbox_workspace_write.writable_roots=["/tmp/run"]`,
-		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
-		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-		"-c", "sandbox_workspace_write.network_access=true",
+		"exec", "-c", `default_permissions="agent00_implementation"`,
+		"-c", `permissions.agent00_implementation={filesystem={":root"="read","/tmp/run"="write","/tmp/work"="write"},network={enabled=true}}`,
+		"-c", `approval_policy="never"`,
 		"--skip-git-repo-check", "--add-dir", "/tmp/run", "--image", "a.png", "--image", "b.png",
 	}
 	if !reflect.DeepEqual(cmd.Args, wantArgs) {
@@ -338,11 +341,9 @@ func TestBuildCommandClaude(t *testing.T) {
 		t.Fatalf("BuildCommand() error = %v", err)
 	}
 	wantArgs := []string{
-		"sandbox", "-c", `sandbox_mode="workspace-write"`,
-		"-c", `sandbox_workspace_write.writable_roots=["/tmp/run"]`,
-		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
-		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-		"-c", "sandbox_workspace_write.network_access=true", "--", "claude",
+		"sandbox", "-P", "agent00_implementation",
+		"-c", `permissions.agent00_implementation={filesystem={":root"="read","/tmp/repo"="write","/tmp/run"="write"},network={enabled=true}}`,
+		"--", "claude",
 		"--print", "--output-format", "text", "--dangerously-skip-permissions", "--add-dir", "/tmp/run", "--",
 	}
 	if cmd.Name != "codex" || cmd.Dir != "/tmp/repo" || !reflect.DeepEqual(cmd.Args, wantArgs) {
