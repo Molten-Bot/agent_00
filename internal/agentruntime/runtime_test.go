@@ -325,6 +325,41 @@ func TestBuildCommandCodex(t *testing.T) {
 	}
 }
 
+func TestImplementationPermissionProfile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		targetDir string
+		opts      RunOptions
+		want      string
+	}{
+		{
+			name:      "task workspace includes git metadata",
+			targetDir: "/tasks/current/repo",
+			opts: RunOptions{
+				WorkspaceDir: "/tasks/current",
+				WritableDirs: []string{"/tasks/current/output", "/tasks/current", "  "},
+			},
+			want: `permissions.agent00_implementation={filesystem={":root"="read","/tasks/current"="write","/tasks/current/output"="write"},network={enabled=true}}`,
+		},
+		{
+			name:      "target fallback and TOML escaping",
+			targetDir: `/tasks/current/repo "quoted"`,
+			opts:      RunOptions{},
+			want:      `permissions.agent00_implementation={filesystem={":root"="read","/tasks/current/repo \"quoted\""="write"},network={enabled=true}}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := implementationPermissionProfile(tt.targetDir, tt.opts); got != tt.want {
+				t.Fatalf("implementationPermissionProfile() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildCommandClaude(t *testing.T) {
 	t.Parallel()
 
