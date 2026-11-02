@@ -343,7 +343,8 @@ func TestBuildCommandClaude(t *testing.T) {
 		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
 		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
 		"-c", "sandbox_workspace_write.network_access=true", "--", "claude",
-		"--print", "--output-format", "text", "--dangerously-skip-permissions", "--add-dir", "/tmp/run", "--",
+		"--print", "--output-format", "text", "--prompt-suggestions", "false",
+		"--no-session-persistence", "--dangerously-skip-permissions", "--add-dir", "/tmp/run", "--",
 	}
 	if cmd.Name != "codex" || cmd.Dir != "/tmp/repo" || !reflect.DeepEqual(cmd.Args, wantArgs) {
 		t.Fatalf("unexpected claude command: %+v", cmd)
@@ -371,7 +372,8 @@ func TestBuildCommandClaudeDisallowedTools(t *testing.T) {
 		"sandbox", "-P", "agent00_review",
 		"-c", `permissions.agent00_review={filesystem={":root"="read"},network={enabled=true}}`,
 		"--", "claude",
-		"--print", "--output-format", "text", "--dangerously-skip-permissions",
+		"--print", "--output-format", "text", "--prompt-suggestions", "false",
+		"--no-session-persistence", "--dangerously-skip-permissions",
 		"--disallowedTools", "Edit", "Write", "NotebookEdit", "--",
 	}
 	if cmd.Name != "codex" || cmd.Dir != "/tmp/repo" || !reflect.DeepEqual(cmd.Args, wantArgs) {

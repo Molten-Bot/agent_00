@@ -397,6 +397,12 @@ func buildClaudeCommand(targetDir, prompt string, opts RunOptions) (execx.Comman
 	args := []string{
 		"--print",
 		"--output-format", "text",
+		// Every harness invocation is a one-shot task. Do not spend model work
+		// generating a suggested next prompt that the harness cannot consume.
+		"--prompt-suggestions", "false",
+		// The harness never resumes a Claude session, so avoid persisting session
+		// state after each task.
+		"--no-session-persistence",
 		"--dangerously-skip-permissions",
 	}
 	for _, dir := range opts.WritableDirs {
