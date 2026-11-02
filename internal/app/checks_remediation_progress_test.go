@@ -12,6 +12,41 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
 
+// agentPromptIsRemediation reports whether an agent invocation carried the CI
+// remediation prompt for the given attempt. Every agent harness passes the
+// prompt in execx.Command.Stdin (never argv), and commandsEqual compares only
+// Name/Dir/Args, so command equality alone cannot tell a remediation
+// invocation apart from the initial task invocation: both run the same binary,
+// in the same directory, with the same arguments.
+func agentPromptIsRemediation(cmd execx.Command, attempt int) bool {
+	marker := fmt.Sprintf("Remediation round %d/%d.", attempt, maxPRCheckRemediationAttempts)
+	return strings.Contains(cmd.Stdin, marker)
+}
+
+// Guards the trap above: a remediation invocation must stay distinguishable
+// from the initial task invocation even though the two commands are equal.
+func TestAgentPromptIsRemediationDistinguishesInvocationsCommandEqualityCannot(t *testing.T) {
+	t.Parallel()
+
+	basePrompt := "Build API"
+	initial := execx.Command{Name: "codex", Dir: "/repo", Args: []string{"exec"}, Stdin: basePrompt}
+	repair := initial
+	repair.Stdin = remediationPrompt(basePrompt, "https://github.com/acme/repo/pull/42", "X unit-tests failing", 1)
+
+	if !commandsEqual(initial, repair) {
+		t.Fatal("commandsEqual(initial, remediation) = false, want true (the prompt lives in Stdin, not Args)")
+	}
+	if agentPromptIsRemediation(initial, 1) {
+		t.Fatal("agentPromptIsRemediation(initial invocation) = true, want false")
+	}
+	if !agentPromptIsRemediation(repair, 1) {
+		t.Fatal("agentPromptIsRemediation(remediation attempt 1) = false, want true")
+	}
+	if agentPromptIsRemediation(repair, 2) {
+		t.Fatal("agentPromptIsRemediation(remediation attempt 1, asked for attempt 2) = true, want false")
+	}
+}
+
 // `git status --porcelain --branch` always prints a "## <branch>" header, so a
 // remediation round that changed nothing still produces non-empty output. The
 // run must recognize that as "no remediation changes" and stop on the first
@@ -79,7 +114,7 @@ func TestRunRemediationBranchHeaderOnlyStatusStopsOnFirstAttempt(t *testing.T) {
 
 	remediationCalls := 0
 	for _, call := range fake.calls {
-		if commandsEqual(call, codexCommand(targetDir, remediationPromptText)) {
+		if agentPromptIsRemediation(call, 1) {
 			remediationCalls++
 		}
 	}

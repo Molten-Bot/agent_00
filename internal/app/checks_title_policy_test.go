@@ -204,9 +204,8 @@ func TestRunTitleOnlyCheckFailureStopsBeforeRemediation(t *testing.T) {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
 	}
 
-	remediationPromptText := remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkOutput, 1)
 	for _, call := range fake.calls {
-		if commandsEqual(call, codexCommand(targetDir, remediationPromptText)) {
+		if agentPromptIsRemediation(call, 1) {
 			t.Fatal("remediation agent was invoked for a title-only check failure")
 		}
 	}
