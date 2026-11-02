@@ -429,9 +429,13 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		WorkspaceDir:     runDir,
 		SkipGitRepoCheck: len(repos) > 1,
 		ImagePaths:       imageArgs,
+		// Make each checkout an explicit writable root. Nested Codex sandboxes
+		// can otherwise retain write access to the task parent while mounting a
+		// repository's .git metadata read-only, which blocks fetch and merge.
+		WritableDirs: repositoryWritableDirs(repos),
 	}
 	if len(imageArgs) > 0 {
-		codexOpts.WritableDirs = []string{runDir}
+		codexOpts.WritableDirs = append(codexOpts.WritableDirs, runDir)
 	}
 	codexBasePrompt := workspaceCodexPrompt(cfg.Prompt, cfg.TargetSubdir, repos)
 	codexBasePrompt = withPromptImagePaths(codexBasePrompt, imageArgs)
@@ -4487,6 +4491,16 @@ func repoWorkspaceDirName(repoURL string, index, total int) string {
 		return "repo"
 	}
 	return fmt.Sprintf("repo-%02d-%s", index+1, repoDirSlug(repoURL))
+}
+
+func repositoryWritableDirs(repos []repoWorkspace) []string {
+	dirs := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		if dir := strings.TrimSpace(repo.Dir); dir != "" {
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs
 }
 
 func reviewSelector(reviewCfg config.ReviewConfig) string {

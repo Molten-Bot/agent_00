@@ -18,7 +18,14 @@ func codexCommand(targetDir, prompt string) execx.Command {
 func codexCommandWithOptions(targetDir, prompt string, opts codexRunOptions) execx.Command {
 	rel, err := filepath.Rel(testRunDir(""), targetDir)
 	if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../") {
-		opts.WorkspaceDir = testRunDir(strings.Split(rel, string(filepath.Separator))[0])
+		parts := strings.Split(rel, string(filepath.Separator))
+		workspaceDir := testRunDir(parts[0])
+		opts.WorkspaceDir = workspaceDir
+		if len(parts) > 1 {
+			// Harness passes every checkout as an explicit root so nested sandboxes
+			// retain write access to its Git metadata.
+			opts.WritableDirs = append([]string{filepath.Join(workspaceDir, "repo")}, opts.WritableDirs...)
+		}
 	}
 	cmd, err := agentCommandWithOptions(agentruntime.Default(), targetDir, prompt, opts)
 	if err != nil {

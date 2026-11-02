@@ -4457,7 +4457,7 @@ func TestRunMultiRepoCreatesPRsForEachChangedRepo(t *testing.T) {
 		{cmd: branchCommand(repoDirB, branch)},
 		{cmd: pushDryRunCommand(repoDirA, branch)},
 		{cmd: pushDryRunCommand(repoDirB, branch)},
-		{cmd: codexCommandWithOptions(runDir, codexPrompt, codexRunOptions{SkipGitRepoCheck: true})},
+		{cmd: codexCommandWithOptions(runDir, codexPrompt, codexRunOptions{SkipGitRepoCheck: true, WritableDirs: []string{repoDirA, repoDirB}})},
 		{cmd: statusCommand(repoDirA), res: execx.Result{Stdout: " M file-a.go\n"}},
 		{cmd: statusCommand(repoDirB), res: execx.Result{Stdout: " M file-b.go\n"}},
 		{cmd: addCommand(repoDirA)},
@@ -4546,7 +4546,7 @@ func TestRunMultiRepoMixedDirectAndForkFallbackResolvesBeforeAgent(t *testing.T)
 		{cmd: gitRemoteSetURLCommand(repoDirB, publishRemoteFork, "git@github.com:octocat/repo-b.git"), res: execx.Result{Stderr: "error: No such remote 'fork'\n"}, err: errors.New("exit status 2")},
 		{cmd: gitRemoteAddCommand(repoDirB, publishRemoteFork, "git@github.com:octocat/repo-b.git")},
 		{cmd: pushDryRunToRemoteCommand(repoDirB, publishRemoteFork, branch)},
-		{cmd: codexCommandWithOptions(runDir, codexPrompt, codexRunOptions{SkipGitRepoCheck: true})},
+		{cmd: codexCommandWithOptions(runDir, codexPrompt, codexRunOptions{SkipGitRepoCheck: true, WritableDirs: []string{repoDirA, repoDirB}})},
 		{cmd: statusCommand(repoDirA), res: execx.Result{Stdout: " M file-a.go\n"}},
 		{cmd: statusCommand(repoDirB), res: execx.Result{Stdout: " M file-b.go\n"}},
 		{cmd: addCommand(repoDirA)},
@@ -4692,7 +4692,7 @@ func TestRunMultiRepoRemediationUsesWorkspaceCodexOptions(t *testing.T) {
 		{cmd: branchCommand(repoDirB, branch)},
 		{cmd: pushDryRunCommand(repoDirA, branch)},
 		{cmd: pushDryRunCommand(repoDirB, branch)},
-		{cmd: codexCommandWithOptions(runDir, codexPrompt, codexRunOptions{SkipGitRepoCheck: true})},
+		{cmd: codexCommandWithOptions(runDir, codexPrompt, codexRunOptions{SkipGitRepoCheck: true, WritableDirs: []string{repoDirA, repoDirB}})},
 		{cmd: statusCommand(repoDirA), res: execx.Result{Stdout: " M file-a.go\n"}},
 		{cmd: statusCommand(repoDirB), res: execx.Result{Stdout: "\n"}},
 		{cmd: addCommand(repoDirA)},
@@ -4700,7 +4700,7 @@ func TestRunMultiRepoRemediationUsesWorkspaceCodexOptions(t *testing.T) {
 		{cmd: pushCommand(repoDirA, branch)},
 		{cmd: prCreateCommand(repoDirA, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDirA, prURL), res: execx.Result{Stdout: checkSummary + "\n"}, err: errors.New("checks failed")},
-		{cmd: codexCommandWithOptions(runDir, repairPrompt, codexRunOptions{SkipGitRepoCheck: true})},
+		{cmd: codexCommandWithOptions(runDir, repairPrompt, codexRunOptions{SkipGitRepoCheck: true, WritableDirs: []string{repoDirA, repoDirB}})},
 		{cmd: statusCommand(repoDirA), res: execx.Result{Stdout: " M file-a.go\n"}},
 		{cmd: addCommand(repoDirA)},
 		{cmd: commitCommand(repoDirA, remediationCommitMessage(cfg.CommitMessage, 1))},
@@ -5416,7 +5416,7 @@ func TestRunRepoNotFoundCloneFallsBackToKnownOwner(t *testing.T) {
 		{cmd: branchCommand(repoDirB, branch)},
 		{cmd: pushDryRunCommand(repoDirA, branch)},
 		{cmd: pushDryRunCommand(repoDirB, branch)},
-		{cmd: codexCommandWithOptions(runDir, codexPrompt, codexRunOptions{SkipGitRepoCheck: true})},
+		{cmd: codexCommandWithOptions(runDir, codexPrompt, codexRunOptions{SkipGitRepoCheck: true, WritableDirs: []string{repoDirA, repoDirB}})},
 		{cmd: statusCommand(repoDirA), res: execx.Result{Stdout: " M file-a.go\n"}},
 		{cmd: statusCommand(repoDirB), res: execx.Result{Stdout: " M file-b.go\n"}},
 		{cmd: addCommand(repoDirA)},
@@ -6846,6 +6846,18 @@ func TestRunCodexStagesAgentsPromptWithinTargetDir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(targetDir, "AGENTS.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("target AGENTS.md still exists after codex run: err=%v", err)
+	}
+}
+
+func TestRepositoryWritableDirsUsesCheckoutRoots(t *testing.T) {
+	t.Parallel()
+	repos := []repoWorkspace{
+		{Dir: " /task/repo-a "},
+		{Dir: ""},
+		{Dir: "/task/repo-b"},
+	}
+	if got, want := repositoryWritableDirs(repos), []string{"/task/repo-a", "/task/repo-b"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("repositoryWritableDirs() = %q, want %q", got, want)
 	}
 }
 
