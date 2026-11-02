@@ -1162,7 +1162,15 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		if err != nil {
 			return ExitGit, "git", err
 		}
-		if strings.TrimSpace(statusRes.Stdout) == "" {
+		// statusCommand runs `git status --porcelain --branch`, which always
+		// prints a "## <branch>" header, so an empty-output check can never
+		// fire. Decide "the remediation agent changed nothing" from tracked
+		// worktree entries or new local commits, the same way the base- and
+		// remote-sync paths above do. Without this, a no-op remediation round
+		// falls through to add/commit/push, logs reason=already_committed with
+		// nothing to push, and burns every remaining attempt re-running an
+		// agent that has nothing to change.
+		if !hasTrackedWorktreeChanges(statusRes.Stdout) && !hasAheadCommitsInStatus(statusRes.Stdout) {
 			if agentOutputClaimsFileChanges(agentRes) {
 				return ExitCodex, agentStage, fmt.Errorf("%s reported remediation file changes, but git detected no worktree or branch changes for repo %s", agentStage, repo.URL)
 			}
@@ -8116,7 +8124,7 @@ func latestCheckSnapshotFromText(raw string) (latestChecksSnapshot, error) {
 		}
 		name := strings.TrimSpace(fields[0])
 		bucket := strings.ToLower(strings.TrimSpace(fields[1]))
-		if name == "" || bucket == "" || strings.Contains(name, "refreshing checks status") {
+		if name == "" || bucket == "" || strings.Contains(strings.ToLower(name), "refreshing checks status") {
 			continue
 		}
 		latestByName[name] = latestCheckState{
