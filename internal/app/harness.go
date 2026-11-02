@@ -1087,7 +1087,31 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 			}
 		}
 
-		h.logf("stage=checks status=failed repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
+		h.logf(
+			"stage=checks status=failed repo=%s repo_dir=%s pr_url=%s attempt=%d%s",
+			repo.URL,
+			repo.RelDir,
+			repo.PRURL,
+			attempt+1,
+			failingChecksLogField(checkSummary),
+		)
+		if titleChecks := pullRequestTitleCheckFailuresOnly(checkSummary); len(titleChecks) > 0 {
+			h.logf(
+				"stage=checks status=error reason=pull_request_title_policy repo=%s repo_dir=%s pr_url=%s attempt=%d checks=%q",
+				repo.URL,
+				repo.RelDir,
+				repo.PRURL,
+				attempt+1,
+				strings.Join(titleChecks, ", "),
+			)
+			return ExitPR, "checks", fmt.Errorf(
+				"required PR check(s) %s validate the pull request title for repo %s; no repository change can fix a title-policy check, so update the pull request title on %s instead of running remediation: %s",
+				strings.Join(titleChecks, ", "),
+				repo.URL,
+				repo.PRURL,
+				checkSummary,
+			)
+		}
 		if attempt >= maxPRCheckRemediationAttempts {
 			return ExitPR, "checks", fmt.Errorf(
 				"required PR checks failed for repo %s after %d remediation attempt(s): %s",
@@ -8030,7 +8054,11 @@ func (h Harness) latestChecks(ctx context.Context, repo repoWorkspace, requiredO
 type latestChecksSnapshot struct {
 	AllPassing  bool
 	HasFailures bool
-	Summary     string
+	// FailingNames lists the checks whose latest reported state is a failure,
+	// sorted by name. Callers use it to describe what actually failed instead
+	// of echoing every pass/skip line back to the operator.
+	FailingNames []string
+	Summary      string
 }
 
 func latestCheckSnapshot(raw string) (latestChecksSnapshot, error) {
@@ -8112,6 +8140,7 @@ func latestCheckSnapshotFromStates(latestByName map[string]latestCheckState) lat
 	lines := make([]string, 0, len(names))
 	allPassing := true
 	hasFailures := false
+	var failingNames []string
 	for _, name := range names {
 		state := latestByName[name]
 		lines = append(lines, fmt.Sprintf("%s\t%s", name, state.Bucket))
@@ -8120,15 +8149,83 @@ func latestCheckSnapshotFromStates(latestByName map[string]latestCheckState) lat
 		case "fail", "cancel", "cancelled", "timed_out", "action_required":
 			allPassing = false
 			hasFailures = true
+			failingNames = append(failingNames, name)
 		default:
 			allPassing = false
 		}
 	}
 	return latestChecksSnapshot{
-		AllPassing:  allPassing,
-		HasFailures: hasFailures,
-		Summary:     strings.Join(lines, "\n"),
+		AllPassing:   allPassing,
+		HasFailures:  hasFailures,
+		FailingNames: failingNames,
+		Summary:      strings.Join(lines, "\n"),
 	}
+}
+
+// failingCheckNames reports which checks are failing in a gh check summary.
+// It accepts both the deduplicated "name\tbucket" snapshot summary and raw
+// `gh pr checks --watch` output, which repeats a check once per refresh and
+// adds elapsed/URL columns; the latest reported state per check wins, so a
+// check that failed and then passed is not reported as failing. Summaries
+// with no tab-separated check rows (for example "No check output was
+// provided by gh.") yield no names.
+func failingCheckNames(summary string) []string {
+	snapshot, err := latestCheckSnapshotFromText(summary)
+	if err != nil {
+		return nil
+	}
+	return snapshot.FailingNames
+}
+
+func failingChecksLogField(summary string) string {
+	names := failingCheckNames(summary)
+	if len(names) == 0 {
+		return ""
+	}
+	return " failing=" + strconv.Quote(strings.Join(names, ", "))
+}
+
+// pullRequestTitleCheckFailuresOnly returns the failing checks when every one
+// of them validates the pull-request title (conventional-commit / semantic-PR
+// gates). Those checks read pull-request metadata, not repository content, so
+// no agent worktree diff can turn them green. Running the remediation loop
+// against them only burns agent attempts and pushes unrelated commits before
+// the run fails anyway, so the caller stops immediately and reports the one
+// fix that works: retitling the pull request. A mixed failure set still goes
+// through remediation, because the other checks remain repository-fixable.
+func pullRequestTitleCheckFailuresOnly(summary string) []string {
+	names := failingCheckNames(summary)
+	if len(names) == 0 {
+		return nil
+	}
+	for _, name := range names {
+		if !isPullRequestTitleCheckName(name) {
+			return nil
+		}
+	}
+	return names
+}
+
+func isPullRequestTitleCheckName(name string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if normalized == "" {
+		return false
+	}
+	// amannn/action-semantic-pull-request and its forks are the common
+	// title gate and are not always named after "title".
+	if containsAny(normalized, []string{"semantic-pull-request", "semantic pull request", "semantic-pr"}) {
+		return true
+	}
+	// Match "title" as a whole word so names that merely contain the letters
+	// (for example "entitlements") are not misclassified.
+	for _, field := range strings.FieldsFunc(normalized, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
+	}) {
+		if field == "title" || field == "titles" {
+			return true
+		}
+	}
+	return false
 }
 
 func checkSnapshotTime(check ghPRCheck) time.Time {
