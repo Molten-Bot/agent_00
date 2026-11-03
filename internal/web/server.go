@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
+	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
@@ -113,6 +114,7 @@ type Server struct {
 	ConfigureReviewSettings func(context.Context, ReviewSettingsRequest) (ReviewSettingsState, error)
 	ResolveGitHubProfileURL func(context.Context) (string, error)
 	ResolveGitHubRepos      func(context.Context) ([]GitHubRepo, error)
+	GitHubIssueRunner       execx.Runner
 	gitHubRepos             *gitHubRepoCache
 	Ready                   chan<- error
 }
@@ -176,6 +178,7 @@ type ReviewSettingsState struct {
 	DefaultLibraryEnabled bool   `json:"default_library_enabled"`
 	ChatEnabled           bool   `json:"chat_enabled"`
 	JSONEnabled           bool   `json:"json_enabled"`
+	GitHubIssuesEnabled   bool   `json:"github_issues_enabled"`
 	Message               string `json:"message,omitempty"`
 }
 
@@ -190,7 +193,8 @@ type ReviewSettingsRequest struct {
 	// ChatEnabled is a pointer for the same reason as DefaultLibraryEnabled.
 	ChatEnabled *bool `json:"chat_enabled,omitempty"`
 	// JSONEnabled is a pointer for the same reason as DefaultLibraryEnabled.
-	JSONEnabled *bool `json:"json_enabled,omitempty"`
+	JSONEnabled         *bool `json:"json_enabled,omitempty"`
+	GitHubIssuesEnabled *bool `json:"github_issues_enabled,omitempty"`
 }
 
 // NewServer returns a monitor HTTP server.
@@ -272,6 +276,7 @@ func (s Server) Handler() http.Handler {
 	}
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/chat", s.handleChat)
+	mux.HandleFunc("/issues", s.handleGitHubIssuesPage)
 	mux.HandleFunc("/game", s.handleGame)
 	mux.HandleFunc("/api/state", s.handleState)
 	mux.HandleFunc("/api/status", s.handleState)
@@ -285,6 +290,8 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/speech/transcribe", s.handleSpeechTranscribe)
 	mux.HandleFunc("/api/github/profile", s.handleGitHubProfile)
 	mux.HandleFunc("/api/github/repos", s.handleGitHubRepos)
+	mux.HandleFunc("/api/github/issues", s.handleGitHubIssues)
+	mux.HandleFunc("/api/github/issues/", s.handleGitHubIssues)
 	mux.HandleFunc("/api/review-settings", s.handleReviewSettings)
 	mux.HandleFunc("/api/commit-signing", s.handleCommitSigning)
 	mux.HandleFunc("/api/commit-signing/verify", s.handleCommitSigning)
@@ -397,7 +404,20 @@ func (s Server) injectBottomDockComponent(ctx context.Context, data []byte) []by
 			[]byte(`id="prompt-mode-json" class="prompt-mode-link" href="#studio-json" aria-selected="false" title="JSON"`),
 			[]byte(`id="prompt-mode-json" class="prompt-mode-link is-disabled hidden" aria-selected="false" aria-disabled="true" tabindex="-1" title="JSON input is turned off in Settings → Automation"`), 1)
 	}
+	if enabled, settingsErr := s.githubIssuesEnabled(ctx); settingsErr != nil || !enabled {
+		dock = bytes.Replace(dock,
+			[]byte(`id="github-issues-dock-link" class="prompt-mode-link site-dock-link" href="/issues" aria-label="GitHub Issues" title="GitHub Issues"`),
+			[]byte(`id="github-issues-dock-link" class="prompt-mode-link site-dock-link is-disabled hidden" aria-label="GitHub Issues" aria-disabled="true" tabindex="-1" title="GitHub Issues is turned off in Settings"`), 1)
+	}
 	return bytes.Replace(data, []byte(bottomDockPlaceholder), bytes.TrimSpace(dock), 1)
+}
+
+func (s Server) githubIssuesEnabled(ctx context.Context) (bool, error) {
+	if s.ReviewSettingsStatus == nil {
+		return false, nil
+	}
+	settings, err := s.ReviewSettingsStatus(ctx)
+	return settings.GitHubIssuesEnabled, err
 }
 
 func (s Server) chatEnabled(ctx context.Context) (bool, error) {

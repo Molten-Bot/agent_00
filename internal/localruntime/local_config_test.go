@@ -136,6 +136,41 @@ func TestChatEnabledDefaultsFalseAndRoundTrips(t *testing.T) {
 	}
 }
 
+func TestGitHubIssuesEnabledDefaultsFalseAndRoundTrips(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.json")
+	if ReadRuntimeConfigGitHubIssuesEnabled(path) {
+		t.Fatal("GitHub Issues should default to disabled")
+	}
+
+	enabled := true
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, &enabled); err != nil {
+		t.Fatalf("save enabled setting: %v", err)
+	}
+	if !ReadRuntimeConfigGitHubIssuesEnabled(path) {
+		t.Fatal("GitHub Issues should be enabled after saving true")
+	}
+
+	disabled := false
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, &disabled); err != nil {
+		t.Fatalf("save disabled setting: %v", err)
+	}
+	if ReadRuntimeConfigGitHubIssuesEnabled(path) {
+		t.Fatal("GitHub Issues should be disabled after saving false")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := doc["github_issues_enabled"]; exists {
+		t.Fatalf("disabled default should be omitted from config: %#v", doc["github_issues_enabled"])
+	}
+}
+
 func TestJSONEnabledDefaultsFalseAndRoundTrips(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "config.json")

@@ -33,29 +33,43 @@ const prBodyPromptHeading = "Original task prompt:"
 
 // Config is the v1 public contract for a harness run.
 type Config struct {
-	Version                  string        `json:"version"`
-	RepoURL                  string        `json:"repoUrl"`
-	Repo                     string        `json:"repo"`
-	Repos                    []string      `json:"repos"`
-	LibraryTaskName          string        `json:"libraryTaskName,omitempty"`
-	LibraryTaskDisplayName   string        `json:"libraryTaskDisplayName,omitempty"`
-	RequiresNonDefaultBranch bool          `json:"requiresNonDefaultBranch,omitempty"`
-	ResponseMode             string        `json:"responseMode,omitempty"`
-	AgentHarness             string        `json:"agentHarness,omitempty"`
-	AgentCommand             string        `json:"agentCommand,omitempty"`
-	BaseBranch               string        `json:"baseBranch"`
-	TargetSubdir             string        `json:"targetSubdir"`
-	Prompt                   string        `json:"prompt"`
-	Images                   []PromptImage `json:"images,omitempty"`
-	CommitMessage            string        `json:"commitMessage"`
-	PRTitle                  string        `json:"prTitle"`
-	PRBody                   string        `json:"prBody"`
-	Labels                   []string      `json:"labels"`
-	GitHubHandle             string        `json:"githubHandle"`
-	Reviewers                []string      `json:"reviewers"`
-	Draft                    bool          `json:"draft,omitempty"`
-	Review                   *ReviewConfig `json:"review,omitempty"`
+	Version                  string             `json:"version"`
+	RepoURL                  string             `json:"repoUrl"`
+	Repo                     string             `json:"repo"`
+	Repos                    []string           `json:"repos"`
+	LibraryTaskName          string             `json:"libraryTaskName,omitempty"`
+	LibraryTaskDisplayName   string             `json:"libraryTaskDisplayName,omitempty"`
+	RequiresNonDefaultBranch bool               `json:"requiresNonDefaultBranch,omitempty"`
+	ResponseMode             string             `json:"responseMode,omitempty"`
+	AgentHarness             string             `json:"agentHarness,omitempty"`
+	AgentCommand             string             `json:"agentCommand,omitempty"`
+	BaseBranch               string             `json:"baseBranch"`
+	TargetSubdir             string             `json:"targetSubdir"`
+	Prompt                   string             `json:"prompt"`
+	Images                   []PromptImage      `json:"images,omitempty"`
+	CommitMessage            string             `json:"commitMessage"`
+	PRTitle                  string             `json:"prTitle"`
+	PRBody                   string             `json:"prBody"`
+	Labels                   []string           `json:"labels"`
+	GitHubHandle             string             `json:"githubHandle"`
+	Reviewers                []string           `json:"reviewers"`
+	Draft                    bool               `json:"draft,omitempty"`
+	Review                   *ReviewConfig      `json:"review,omitempty"`
+	GitHubIssue              *GitHubIssueConfig `json:"githubIssue,omitempty"`
 }
+
+// GitHubIssueConfig preserves the GitHub issue that originated a run.
+type GitHubIssueConfig struct {
+	Repository string `json:"repository"`
+	Number     int    `json:"number"`
+	URL        string `json:"url"`
+	LinkMode   string `json:"linkMode,omitempty"`
+}
+
+const (
+	GitHubIssueLinkReference = "reference"
+	GitHubIssueLinkClose     = "close"
+)
 
 // PromptImage captures one prompt image attachment.
 type PromptImage struct {
@@ -192,6 +206,7 @@ func rejectSnakeCaseRunConfigFields(raw map[string]json.RawMessage) error {
 		"pr_title":                    "prTitle",
 		"pr_body":                     "prBody",
 		"github_handle":               "githubHandle",
+		"github_issue":                "githubIssue",
 		"library_task_name":           "libraryTaskName",
 		"library_task_display_name":   "libraryTaskDisplayName",
 		"response_mode":               "responseMode",
@@ -202,7 +217,24 @@ func rejectSnakeCaseRunConfigFields(raw map[string]json.RawMessage) error {
 			return fmt.Errorf("json: unsupported field %q; use %q", legacy, canonical)
 		}
 	}
-	return rejectSnakeCaseImageFields(raw["images"])
+	if err := rejectSnakeCaseImageFields(raw["images"]); err != nil {
+		return err
+	}
+	return rejectSnakeCaseGitHubIssueFields(raw["githubIssue"])
+}
+
+func rejectSnakeCaseGitHubIssueFields(rawIssue json.RawMessage) error {
+	if len(rawIssue) == 0 {
+		return nil
+	}
+	var issue map[string]json.RawMessage
+	if err := json.Unmarshal(rawIssue, &issue); err != nil {
+		return nil
+	}
+	if _, ok := issue["link_mode"]; ok {
+		return fmt.Errorf("json: unsupported field %q; use %q", "githubIssue.link_mode", "githubIssue.linkMode")
+	}
+	return nil
 }
 
 func rejectNonCanonicalGuardFields(raw map[string]json.RawMessage) error {
@@ -350,6 +382,9 @@ func (c Config) Validate() error {
 	if err := validateReviewConfig(c.Review, repos); err != nil {
 		return err
 	}
+	if err := validateGitHubIssueConfig(c.GitHubIssue); err != nil {
+		return err
+	}
 	if _, ok := normalizeResponseMode(c.ResponseMode); !ok {
 		return fmt.Errorf(
 			"unsupported responseMode %q; supported values: %s",
@@ -375,6 +410,45 @@ func (c Config) Validate() error {
 		return fmt.Errorf("prBody is required")
 	}
 	return nil
+}
+
+func validateGitHubIssueConfig(issue *GitHubIssueConfig) error {
+	if issue == nil {
+		return nil
+	}
+	repository := strings.TrimSpace(issue.Repository)
+	parts := strings.Split(repository, "/")
+	if len(parts) != 2 || !validGitHubIssuePathPart(parts[0]) || !validGitHubIssuePathPart(parts[1]) {
+		return fmt.Errorf("githubIssue.repository must be OWNER/REPO")
+	}
+	if issue.Number <= 0 {
+		return fmt.Errorf("githubIssue.number must be positive")
+	}
+	parsedURL, err := url.Parse(strings.TrimSpace(issue.URL))
+	if err != nil || parsedURL.Scheme != "https" || parsedURL.Host == "" || parsedURL.User != nil {
+		return fmt.Errorf("githubIssue.url must be an absolute HTTPS issue URL")
+	}
+	urlParts := strings.Split(strings.Trim(parsedURL.Path, "/"), "/")
+	if len(urlParts) != 4 || urlParts[0] != parts[0] || urlParts[1] != parts[1] || urlParts[2] != "issues" || urlParts[3] != fmt.Sprint(issue.Number) {
+		return fmt.Errorf("githubIssue.url must identify githubIssue.repository and githubIssue.number")
+	}
+	mode := strings.ToLower(strings.TrimSpace(issue.LinkMode))
+	if mode != "" && mode != GitHubIssueLinkReference && mode != GitHubIssueLinkClose {
+		return fmt.Errorf("githubIssue.linkMode must be reference or close")
+	}
+	return nil
+}
+
+func validGitHubIssuePathPart(value string) bool {
+	if value == "" || value == "." || value == ".." {
+		return false
+	}
+	for _, char := range value {
+		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '-' || char == '_' || char == '.') {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeRequiredNonDefaultBranch(branch string) string {
@@ -732,6 +806,26 @@ func defaultPRBody(prompt string) string {
 // NormalizePRBody enforces the standardized pull-request body format.
 func NormalizePRBody(body, prompt string) string {
 	return ensurePRBodyPromptAndFooter(body, prompt)
+}
+
+// NormalizePRBodyForGitHubIssue adds an issue reference to the normalized PR
+// body while keeping the standard footer at the end.
+func NormalizePRBodyForGitHubIssue(body, prompt string, issue *GitHubIssueConfig) string {
+	normalized := NormalizePRBody(body, prompt)
+	if issue == nil || issue.Number <= 0 {
+		return normalized
+	}
+	line := fmt.Sprintf("Related to #%d", issue.Number)
+	if strings.EqualFold(strings.TrimSpace(issue.LinkMode), GitHubIssueLinkClose) {
+		line = fmt.Sprintf("Closes #%d", issue.Number)
+	}
+	if strings.Contains("\n"+normalized+"\n", "\n"+line+"\n") {
+		return normalized
+	}
+	if footerAt := strings.LastIndex(normalized, prBodyFooter); footerAt >= 0 {
+		return normalized[:footerAt] + line + "\n\n" + normalized[footerAt:]
+	}
+	return strings.TrimRight(normalized, "\n") + "\n\n" + line
 }
 
 var wsRE = regexp.MustCompile(`\s+`)

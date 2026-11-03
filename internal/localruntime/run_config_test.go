@@ -31,6 +31,38 @@ func TestParseRunConfigJSON(t *testing.T) {
 	}
 }
 
+func TestParseRunConfigPreservesGitHubIssueMetadata(t *testing.T) {
+	t.Parallel()
+	cfg, err := ParseRunConfigJSON([]byte(`{
+		"repo": "https://github.com/acme/repo",
+		"prompt": "Implement issue #17",
+		"githubIssue": {
+			"repository": "acme/repo",
+			"number": 17,
+			"url": "https://github.com/acme/repo/issues/17",
+			"linkMode": "close"
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("ParseRunConfigJSON() error = %v", err)
+	}
+	if cfg.GitHubIssue == nil || cfg.GitHubIssue.Repository != "acme/repo" || cfg.GitHubIssue.Number != 17 || cfg.GitHubIssue.LinkMode != "close" {
+		t.Fatalf("GitHubIssue = %#v, want issue metadata preserved", cfg.GitHubIssue)
+	}
+}
+
+func TestParseRunConfigRejectsSnakeCaseGitHubIssueFields(t *testing.T) {
+	t.Parallel()
+	for _, payload := range []string{
+		`{"repo":"https://github.com/acme/repo","prompt":"work","github_issue":{"repository":"acme/repo","number":17,"url":"https://github.com/acme/repo/issues/17"}}`,
+		`{"repo":"https://github.com/acme/repo","prompt":"work","githubIssue":{"repository":"acme/repo","number":17,"url":"https://github.com/acme/repo/issues/17","link_mode":"close"}}`,
+	} {
+		if _, err := ParseRunConfigJSON([]byte(payload)); err == nil || !strings.Contains(err.Error(), "unsupported field") {
+			t.Errorf("ParseRunConfigJSON(%s) error = %v, want snake-case field rejection", payload, err)
+		}
+	}
+}
+
 func TestParseRunConfigJSONRejectsSnakeCaseAliases(t *testing.T) {
 	t.Parallel()
 

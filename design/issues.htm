@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GitHub Issues · Agent Hub UI mock</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #12223f;
+      --muted: #71809b;
+      --soft: #f4f7fc;
+      --line: #e5eaf2;
+      --blue: #1977e8;
+      --purple: #7657e8;
+      --green: #199467;
+      --shadow: 0 20px 60px rgba(36, 62, 105, .11);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: radial-gradient(ellipse at 68% -18%, #e4f2ff 0, transparent 38%), #f5f8fc; min-width: 320px; }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 218px minmax(0, 1fr); }
+    .rail { padding: 22px 14px; border-right: 1px solid rgba(30, 56, 95, .09); background: rgba(255,255,255,.74); display: flex; flex-direction: column; }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 30px; font-weight: 750; letter-spacing: -.03em; }
+    .brand-mark { display:grid; place-items:center; width:30px; height:30px; color:white; border-radius:10px; background:linear-gradient(140deg,#35c7ef,#1678e8 58%,#7d5ce9); box-shadow:0 5px 14px #2688d64c; font-size:15px; }
+    .workspace-label { padding: 0 10px 9px; color: #8b98ad; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .nav { display:grid; gap:4px; }
+    .nav a { text-decoration:none; color:#64748c; display:flex; align-items:center; gap:11px; padding:10px 11px; border-radius:9px; font-size:13px; font-weight:600; }
+    .nav a.active { color:#176dd0; background:#eaf3ff; }
+    .nav .icon { width:17px; text-align:center; font-size:15px; opacity:.83; }
+    .nav .pill { margin-left:auto; font-size:10px; color:#7184a0; background:#f0f3f8; padding:2px 7px; border-radius:10px; }
+    .rail-bottom { margin-top:auto; }
+    .profile { margin-top:22px; border-top:1px solid var(--line); padding:18px 7px 0; display:flex; align-items:center; gap:10px; color:#53627a; font-size:12px; }
+    .avatar { display:grid; place-items:center; flex:none; width:32px; height:32px; color:#385781; background:linear-gradient(135deg,#d8e9ff,#d8d7ff); border-radius:50%; font-size:11px; font-weight:800; }
+    .main { min-width:0; }
+    .topbar { height:66px; padding:0 30px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid rgba(30,56,95,.08); background:rgba(255,255,255,.54); backdrop-filter:blur(12px); }
+    .crumb { color:#8794a9; font-size:12px; }.crumb strong { color:#53637c; font-weight:650; }
+    .top-actions { display:flex; gap:9px; align-items:center; }
+    .icon-btn { border:1px solid var(--line); border-radius:9px; background:white; width:35px; height:35px; color:#63718a; font-size:15px; }
+    .settings-btn { border:1px solid #dce4ef; border-radius:9px; background:white; color:#465775; font-size:12px; font-weight:650; padding:9px 12px; box-shadow:0 2px 5px #20385c08; }
+    .content { max-width:1480px; margin:auto; padding:30px 32px 50px; }
+    .page-heading { display:flex; justify-content:space-between; align-items:flex-end; gap:20px; margin-bottom:23px; }
+    .eyebrow { color:#6c7d98; text-transform:uppercase; letter-spacing:.11em; font-size:10px; font-weight:800; margin-bottom:7px; }
+    h1 { font-size:25px; letter-spacing:-.045em; margin:0; font-weight:740; }
+    .subhead { color:var(--muted); font-size:12px; margin:7px 0 0; }
+    .repo-select { background:white; color:#384966; border:1px solid #dfe6f0; border-radius:9px; padding:10px 12px; min-width:202px; font-size:12px; font-weight:650; box-shadow:0 3px 10px #1c38600a; }
+    .board { display:grid; grid-template-columns:minmax(300px, 390px) minmax(0, 1fr); gap:17px; align-items:start; }
+    .panel { background:rgba(255,255,255,.91); border:1px solid rgba(30,56,95,.10); border-radius:13px; box-shadow:0 6px 24px rgba(38,67,110,.045); overflow:hidden; }
+    .list-panel { min-height:700px; }
+    .filter-row { padding:14px; display:flex; gap:8px; border-bottom:1px solid var(--line); }
+    .searchbox { flex:1; min-width:0; position:relative; }
+    .searchbox span { position:absolute; left:11px; top:8px; color:#9aa6b8; }
+    .searchbox input { width:100%; padding:9px 10px 9px 31px; border:1px solid #e3e8f0; border-radius:8px; outline:none; color:#34455f; font-size:11px; background:#fbfcfe; }
+    select.filter { border:1px solid #e3e8f0; border-radius:8px; color:#50617a; background:white; font-size:11px; padding:0 8px; max-width:105px; }
+    .list-summary { display:flex; align-items:center; justify-content:space-between; padding:13px 16px 9px; color:#8b97a9; font-size:10px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
+    .issue-card { display:block; width:100%; text-align:left; border:0; border-top:1px solid #eef1f6; background:transparent; padding:15px 16px 14px; color:inherit; }
+    .issue-card:hover { background:#fafcff; }
+    .issue-card.selected { background:linear-gradient(90deg,#edf5ff,#f8fbff); box-shadow:inset 3px 0 #2482e8; }
+    .issue-title { display:flex; align-items:flex-start; gap:8px; font-size:12px; line-height:1.45; font-weight:680; letter-spacing:-.01em; }
+    .open-dot { color:#1a9b6d; font-size:15px; line-height:1.1; }
+    .issue-meta { margin:8px 0 0 22px; color:#8a97aa; font-size:10px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .label { border-radius:10px; padding:3px 7px; color:#576c8c; background:#edf2f8; font-size:9px; font-weight:650; }
+    .label.blue { background:#e7f2ff; color:#3178c6; }.label.purple { background:#f0ebff; color:#735ac4; }.label.green { background:#e8f6ef; color:#24865d; }.label.orange { background:#fff2df; color:#a87929; }
+    .detail { min-height:700px; }
+    .detail-head { padding:23px 26px 19px; border-bottom:1px solid var(--line); }
+    .detail-topline { display:flex; align-items:center; gap:8px; color:#7a8aa1; font-size:11px; }
+    .state-chip { color:#16895d; background:#e9f7f0; padding:4px 8px; border-radius:14px; font-size:10px; font-weight:700; }
+    .detail h2 { margin:13px 0 12px; font-size:21px; line-height:1.35; letter-spacing:-.035em; font-weight:710; }
+    .detail-labels { display:flex; gap:6px; flex-wrap:wrap; }
+    .detail-body { padding:19px 26px 23px; }
+    .author-row { display:flex; align-items:center; gap:9px; color:#64738a; font-size:11px; margin-bottom:17px; }
+    .avatar.small { width:25px; height:25px; font-size:9px; }
+    .markdown { color:#394b66; font-size:12px; line-height:1.72; max-width:760px; }
+    .markdown p { margin:0 0 12px; }
+    .markdown h3 { color:#233752; font-size:13px; margin:19px 0 7px; }
+    .markdown ul { padding-left:19px; margin:6px 0 14px; }
+    code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; padding:2px 5px; border-radius:4px; background:#f0f3f8; color:#4b5e79; }
+    .info-row { border-top:1px solid #edf0f5; border-bottom:1px solid #edf0f5; margin-top:20px; padding:12px 0; display:flex; gap:28px; color:#8390a4; font-size:10px; }
+    .info-row strong { display:block; color:#53647e; margin-top:5px; font-size:11px; font-weight:630; }
+    .comments-head { color:#65758d; font-size:11px; font-weight:700; margin:21px 0 11px; }
+    .comment { border:1px solid #e9edf4; border-radius:9px; padding:12px 14px; margin-bottom:9px; background:#fff; }
+    .comment-top { display:flex; align-items:center; gap:7px; font-size:10px; color:#71809a; margin-bottom:7px; }
+    .comment-top strong { color:#41526c; }.comment p { margin:0; font-size:11px; line-height:1.6; color:#52637c; }
+    .task-box { margin:18px 0 0; padding:15px; border:1px solid #dce8fb; background:linear-gradient(135deg,#f7fbff,#f7f6ff); border-radius:10px; }
+    .task-head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:11px; }
+    .task-head strong { font-size:11px; color:#344963; }.task-head span { color:#8492a8; font-size:10px; }
+    .link-modes { display:flex; gap:8px; margin-bottom:12px; }
+    .mode { flex:1; display:flex; align-items:flex-start; gap:8px; padding:9px 10px; border:1px solid #dfe7f1; background:white; border-radius:8px; cursor:pointer; }
+    .mode:has(input:checked) { border-color:#83b9f1; box-shadow:0 0 0 2px #1977e812; }
+    .mode input { accent-color:#1977e8; margin:1px 0 0; }
+    .mode strong { display:block; color:#435570; font-size:10px; }.mode small { display:block; color:#8794a8; font-size:9px; margin-top:3px; line-height:1.35; }
+    .task-actions { display:flex; justify-content:flex-end; gap:8px; }
+    .btn { border:1px solid #d9e2ee; background:white; color:#50617b; border-radius:8px; padding:9px 12px; font-size:10px; font-weight:700; }
+    .btn.primary { border-color:transparent; color:white; background:linear-gradient(110deg,#1887e9,#6f5ee8); box-shadow:0 4px 10px #257de52b; }
+    .prompt-editor { display:none; margin-top:12px; }.prompt-editor.show { display:block; }
+    .prompt-editor label { display:block; color:#65758e; font-size:10px; font-weight:700; margin-bottom:6px; }
+    .prompt-editor textarea { width:100%; min-height:85px; resize:vertical; border:1px solid #dce4ef; border-radius:7px; padding:9px; color:#42536d; background:white; font-size:10px; line-height:1.5; }
+    .toast { position:fixed; bottom:23px; left:50%; transform:translate(-50%,15px); opacity:0; pointer-events:none; background:#1f304a; color:white; padding:10px 15px; border-radius:9px; font-size:11px; box-shadow:var(--shadow); transition:.2s; z-index:20; }
+    .toast.show { opacity:1; transform:translate(-50%,0); }
+    .overlay { position:fixed; inset:0; z-index:10; background:rgba(19,31,51,.32); backdrop-filter:blur(3px); display:none; align-items:center; justify-content:center; padding:22px; }
+    .overlay.open { display:flex; }
+    .settings { width:min(760px,100%); min-height:490px; display:grid; grid-template-columns:205px minmax(0,1fr); overflow:hidden; border:1px solid #e0e6ef; border-radius:15px; background:#fff; box-shadow:0 26px 80px rgba(20,39,71,.24); animation:rise .18s ease-out; }
+    @keyframes rise { from { opacity:.5; transform:translateY(8px) scale(.99); } to { opacity:1; transform:translateY(0) scale(1); } }
+    .settings-nav { padding:23px 13px; background:#f8faff; border-right:1px solid #e9edf4; }
+    .settings-title { padding:0 10px 20px; display:flex; align-items:center; justify-content:space-between; font-size:14px; font-weight:750; letter-spacing:-.02em; }
+    .close { border:0; background:transparent; color:#8995a8; font-size:19px; padding:0 4px; }
+    .settings-link { padding:9px 10px; margin:2px 0; color:#67768e; font-size:11px; border-radius:7px; display:flex; justify-content:space-between; }
+    .settings-link.active { color:#216fc4; background:#e9f2ff; font-weight:700; }
+    .settings-link .check { color:#95a4b8; font-size:10px; }
+    .settings-main { padding:29px 31px; }
+    .settings-main h2 { font-size:18px; margin:0; letter-spacing:-.03em; }.settings-main > p { margin:7px 0 22px; color:#8190a6; font-size:11px; }
+    .setting-card { border:1px solid #e6ebf2; border-radius:10px; padding:16px; margin-bottom:12px; }
+    .setting-row { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+    .setting-copy strong { display:block; color:#384b66; font-size:11px; }.setting-copy small { display:block; color:#8390a4; font-size:10px; line-height:1.55; margin-top:5px; max-width:390px; }
+    .switch { position:relative; flex:none; width:38px; height:22px; }.switch input { opacity:0; width:0; height:0; }.slider { position:absolute; cursor:pointer; inset:0; border-radius:14px; background:#c9d1df; transition:.18s; }.slider:before { content:""; position:absolute; width:16px; height:16px; left:3px; top:3px; border-radius:50%; background:white; box-shadow:0 1px 3px #0002; transition:.18s; }.switch input:checked + .slider { background:#2283e8; }.switch input:checked + .slider:before { transform:translateX(16px); }
+    .setting-note { display:flex; gap:9px; padding:12px; background:#f6f9fd; border-radius:8px; color:#71819b; font-size:10px; line-height:1.5; margin-top:16px; }
+    .setting-note b { color:#4788cd; font-size:13px; }
+    .settings-footer { display:flex; align-items:center; justify-content:space-between; border-top:1px solid #edf0f5; margin-top:22px; padding-top:15px; color:#9aa5b5; font-size:10px; }
+    .save-btn { border:0; background:#1977e8; color:white; padding:8px 14px; border-radius:7px; font-size:10px; font-weight:700; }
+    @media (max-width:950px) { .app { grid-template-columns:66px minmax(0,1fr); }.rail { padding:18px 9px; align-items:center; }.brand { padding:0 0 28px; }.brand-name,.workspace-label,.nav a span:not(.icon),.profile .profile-name { display:none; }.nav a { justify-content:center; width:46px; padding:11px 0; }.nav .icon { font-size:17px; }.profile { padding:15px 0 0; }.content { padding:24px 18px 40px; }.board { grid-template-columns:minmax(260px,340px) minmax(0,1fr); gap:12px; }.detail-head,.detail-body { padding-left:19px; padding-right:19px; } }
+    @media (max-width:700px) { .app { display:block; }.rail { display:none; }.topbar { height:55px; padding:0 15px; }.content { padding:20px 13px 35px; }.page-heading { align-items:flex-start; flex-direction:column; margin-bottom:16px; }.repo-select { width:100%; }.board { display:flex; flex-direction:column; }.list-panel,.detail { width:100%; min-height:0; }.list-panel { max-height:365px; overflow:auto; }.detail h2 { font-size:18px; }.info-row { gap:17px; flex-wrap:wrap; }.task-actions { flex-wrap:wrap; }.task-actions .btn { flex:1; }.overlay { padding:10px; align-items:flex-start; overflow:auto; }.settings { margin:auto 0; grid-template-columns:135px minmax(0,1fr); min-height:0; }.settings-nav { padding:17px 8px; }.settings-title { padding:0 7px 16px; font-size:13px; }.settings-link { padding:9px 7px; font-size:10px; }.settings-main { padding:22px 17px; }.settings-main h2 { font-size:16px; }.settings-main > p { line-height:1.5; }.setting-card { padding:12px; }.setting-row { align-items:flex-start; }.setting-copy small { max-width:190px; }.settings-footer { align-items:flex-end; gap:8px; }.settings-footer span { max-width:145px; line-height:1.45; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="rail">
+      <div class="brand"><div class="brand-mark">A</div><span class="brand-name">Agent Hub</span></div>
+      <div class="workspace-label">Workspace</div>
+      <nav class="nav" aria-label="Main navigation">
+        <a href="#"><span class="icon">▦</span><span>Runs</span></a>
+        <a href="#"><span class="icon">✦</span><span>Task library</span></a>
+        <a href="#"><span class="icon">⌘</span><span>Multiplex</span></a>
+        <a class="active issues-nav" href="#"><span class="icon">◉</span><span>GitHub Issues</span><span class="pill">12</span></a>
+      </nav>
+      <div class="rail-bottom"><div class="profile"><div class="avatar">JD</div><span class="profile-name">Jordan D. · Admin</span></div></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div class="crumb">Workspace&nbsp; / &nbsp;<strong>GitHub Issues</strong></div><div class="top-actions"><button class="icon-btn" aria-label="Help">?</button><button class="settings-btn" id="open-settings">⚙ &nbsp;Settings</button></div></header>
+      <div class="content">
+        <div class="page-heading">
+          <div><div class="eyebrow">Issue inbox</div><h1>GitHub Issues</h1><p class="subhead">Browse work, then send an issue into a PR-producing task.</p></div>
+          <select class="repo-select" aria-label="Repository"><option>◉ &nbsp; Molten-Bot / agent_00</option><option>◉ &nbsp; Molten-Bot / dashboard</option></select>
+        </div>
+        <section class="board">
+          <div class="panel list-panel">
+            <div class="filter-row"><label class="searchbox"><span>⌕</span><input id="search" placeholder="Search issues…" aria-label="Search issues"></label><select class="filter" aria-label="Issue state"><option>Open</option><option>Closed</option><option>All states</option></select></div>
+            <div class="list-summary"><span>12 open issues</span><span>↕ Updated</span></div>
+            <button class="issue-card selected" data-title="Add retry handling to GitHub API calls">
+              <div class="issue-title"><span class="open-dot">●</span><span>Add retry handling to GitHub API calls</span></div><div class="issue-meta"><span>#1284</span><span>·</span><span>updated 2 hours ago</span><span class="label blue">enhancement</span></div>
+            </button>
+            <button class="issue-card" data-title="Allow selecting a response mode per run">
+              <div class="issue-title"><span class="open-dot">●</span><span>Allow selecting a response mode per run</span></div><div class="issue-meta"><span>#1279</span><span>·</span><span>updated yesterday</span><span class="label purple">feature</span></div>
+            </button>
+            <button class="issue-card" data-title="Settings dialog overflows on smaller screens">
+              <div class="issue-title"><span class="open-dot">●</span><span>Settings dialog overflows on smaller screens</span></div><div class="issue-meta"><span>#1272</span><span>·</span><span>updated 2 days ago</span><span class="label orange">bug</span></div>
+            </button>
+            <button class="issue-card" data-title="Add support for project-level instructions">
+              <div class="issue-title"><span class="open-dot">●</span><span>Add support for project-level instructions</span></div><div class="issue-meta"><span>#1266</span><span>·</span><span>updated 3 days ago</span><span class="label green">good first issue</span></div>
+            </button>
+            <button class="issue-card" data-title="Document local runner configuration">
+              <div class="issue-title"><span class="open-dot">●</span><span>Document local runner configuration</span></div><div class="issue-meta"><span>#1261</span><span>·</span><span>updated 4 days ago</span><span class="label">documentation</span></div>
+            </button>
+            <button class="issue-card" data-title="Expose run duration in the history view">
+              <div class="issue-title"><span class="open-dot">●</span><span>Expose run duration in the history view</span></div><div class="issue-meta"><span>#1254</span><span>·</span><span>updated 1 week ago</span><span class="label purple">feature</span></div>
+            </button>
+          </div>
+          <article class="panel detail">
+            <div class="detail-head"><div class="detail-topline"><span class="state-chip">● Open</span><span>Molten-Bot / agent_00</span><span>·</span><span>#1284</span></div><h2 id="detail-title">Add retry handling to GitHub API calls</h2><div class="detail-labels"><span class="label blue">enhancement</span><span class="label">area: integrations</span></div></div>
+            <div class="detail-body">
+              <div class="author-row"><div class="avatar small">MC</div><strong style="color:#485a74">mchen</strong><span>opened this issue 5 days ago</span></div>
+              <div class="markdown"><p>Some GitHub API requests fail transiently when we hit rate limits or intermittent network errors. The issue list and repository picker currently fail immediately, even when retrying would recover.</p><h3>Expected behavior</h3><ul><li>Retry transient failures with a short exponential backoff.</li><li>Respect the API's retry-after guidance when it's available.</li><li>Show a useful error after the retry limit is reached.</li></ul><p>Keep the retry count small so the local UI stays responsive.</p></div>
+              <div class="info-row"><div>Assignees<strong>—</strong></div><div>Created<strong>Oct 29, 2026</strong></div><div>Updated<strong>2 hours ago</strong></div></div>
+              <div class="comments-head">💬 &nbsp;Comments <span style="color:#97a3b5;font-weight:500">2</span></div>
+              <div class="comment"><div class="comment-top"><div class="avatar small">JD</div><strong>jordan-dev</strong><span>·</span><span>yesterday</span></div><p>We should also make sure we don't retry auth failures or invalid requests. Those should still surface right away.</p></div>
+              <div class="comment"><div class="comment-top"><div class="avatar small">MC</div><strong>mchen</strong><span>·</span><span>3 hours ago</span></div><p>Agreed. Rate limits and 5xx/network errors are the main cases I had in mind.</p></div>
+              <div class="task-box">
+                <div class="task-head"><strong>Start a task from this issue</strong><span>Issue and comments included as context</span></div>
+                <div class="link-modes" role="radiogroup" aria-label="Pull request issue linking">
+                  <label class="mode"><input type="radio" name="link-mode" value="related" checked><span><strong>Reference issue</strong><small>PR says “Related to #1284”</small></span></label>
+                  <label class="mode"><input type="radio" name="link-mode" value="closes"><span><strong>Close on merge</strong><small>PR says “Closes #1284”</small></span></label>
+                </div>
+                <div class="task-actions"><button class="btn" id="edit-prompt">Edit prompt first</button><button class="btn primary" id="start-task">↗ &nbsp;Start task</button></div>
+                <div class="prompt-editor" id="prompt-editor"><label for="prompt">Task prompt · review and edit before launch</label><textarea id="prompt">Implement the requested retry handling from GitHub issue #1284. Include its discussion context, respect retry-after guidance, and avoid retrying authentication or invalid-request failures. Add focused tests.</textarea><div class="task-actions" style="margin-top:8px"><button class="btn primary" id="launch-edited">Start with this prompt</button></div></div>
+              </div>
+            </div>
+          </article>
+        </section>
+      </div>
+    </main>
+  </div>
+  <div class="overlay" id="settings-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-heading">
+    <div class="settings">
+      <aside class="settings-nav">
+        <div class="settings-title"><span>Settings</span><button class="close" id="close-settings" aria-label="Close settings">×</button></div>
+        <div class="settings-link">General</div><div class="settings-link">Task defaults</div><div class="settings-link">GitHub</div><div class="settings-link active"><span>GitHub Issues</span><span class="check">●</span></div><div class="settings-link">Post-task review</div><div class="settings-link">Merge method</div><div class="settings-link">Commit signing</div>
+      </aside>
+      <section class="settings-main">
+        <h2 id="settings-heading">GitHub Issues</h2><p>Choose whether issue browsing is available in this workspace.</p>
+        <div class="setting-card"><div class="setting-row"><div class="setting-copy"><strong>Enable GitHub Issues</strong><small>Browse and search issues in the selected repository. Issue details and comments can be added to a new task's context.</small></div><label class="switch" aria-label="Enable GitHub Issues"><input id="issues-toggle" type="checkbox" checked><span class="slider"></span></label></div></div>
+        <div class="setting-card"><div class="setting-copy"><strong>Repository source</strong><small>Uses the repository selected in the existing GitHub repository picker. Switch repositories from the GitHub Issues page.</small></div></div>
+        <div class="setting-note"><b>ⓘ</b><span>Starting an issue task creates a normal harness run. Existing review cycles and automatic merge settings still apply.</span></div>
+        <div class="settings-footer"><span>Settings save when you close this dialog.</span><button class="save-btn" id="done-settings">Done</button></div>
+      </section>
+    </div>
+  </div>
+  <div class="toast" id="toast" role="status">Task queued from issue #1284</div>
+  <script>
+    const overlay = document.getElementById('settings-overlay');
+    const openSettings = () => overlay.classList.add('open');
+    const closeSettings = () => overlay.classList.remove('open');
+    document.getElementById('open-settings').addEventListener('click', openSettings);
+    document.getElementById('close-settings').addEventListener('click', closeSettings);
+    document.getElementById('done-settings').addEventListener('click', closeSettings);
+    overlay.addEventListener('click', event => { if (event.target === overlay) closeSettings(); });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') closeSettings(); });
+    document.getElementById('issues-toggle').addEventListener('change', event => {
+      document.querySelector('.issues-nav').style.display = event.target.checked ? 'flex' : 'none';
+      document.querySelector('.toast').textContent = event.target.checked ? 'GitHub Issues enabled' : 'GitHub Issues hidden';
+      showToast();
+    });
+    document.querySelectorAll('.issue-card').forEach(card => card.addEventListener('click', () => {
+      document.querySelectorAll('.issue-card').forEach(item => item.classList.remove('selected'));
+      card.classList.add('selected'); document.getElementById('detail-title').textContent = card.dataset.title;
+    }));
+    document.getElementById('search').addEventListener('input', event => {
+      const term = event.target.value.toLowerCase();
+      document.querySelectorAll('.issue-card').forEach(card => { card.style.display = card.dataset.title.toLowerCase().includes(term) ? 'block' : 'none'; });
+    });
+    document.getElementById('edit-prompt').addEventListener('click', () => {
+      const editor = document.getElementById('prompt-editor'); editor.classList.toggle('show');
+      if (editor.classList.contains('show')) document.getElementById('prompt').focus();
+    });
+    function showToast() { const toast = document.getElementById('toast'); toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2200); }
+    document.getElementById('start-task').addEventListener('click', showToast);
+    document.getElementById('launch-edited').addEventListener('click', showToast);
+  </script>
+</body>
+</html>

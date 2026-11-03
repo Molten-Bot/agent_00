@@ -6056,6 +6056,33 @@ func TestPRCreateCommandsEnforceStandardBodyFormat(t *testing.T) {
 	}
 }
 
+func TestPRCreateCommandsIncludeGitHubIssueLinkMode(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		mode string
+		want string
+	}{
+		{config.GitHubIssueLinkReference, "Related to #17"},
+		{config.GitHubIssueLinkClose, "Closes #17"},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			cfg := sampleConfig()
+			cfg.GitHubIssue = &config.GitHubIssueConfig{
+				Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17", LinkMode: test.mode,
+			}
+			for _, command := range []execx.Command{
+				prCreateCommand("/tmp/repo", cfg, "topic-branch"),
+				prCreateWithoutBaseCommand("/tmp/repo", cfg, "topic-branch"),
+			} {
+				body, ok := flagValue(command.Args, "--body")
+				if !ok || !strings.Contains(body, test.want) {
+					t.Fatalf("PR create body = %q, want %q", body, test.want)
+				}
+			}
+		})
+	}
+}
+
 func TestPRCreateCommandsIncludeDraftFlagWhenRequested(t *testing.T) {
 	t.Parallel()
 
@@ -6084,7 +6111,10 @@ func TestAutoDraftForReviewCycle(t *testing.T) {
 	h := New(nil)
 	h.FinalReviewPasses = 2
 
-	if h.autoDraftForReviewCycle(config.Config{}) != true {
+	issueRun := config.Config{GitHubIssue: &config.GitHubIssueConfig{
+		Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17",
+	}}
+	if h.autoDraftForReviewCycle(issueRun) != true {
 		t.Fatalf("autoDraftForReviewCycle() = false, want true when a final review cycle will run")
 	}
 	if h.autoDraftForReviewCycle(config.Config{Review: &config.ReviewConfig{PRURL: "https://github.com/acme/repo/pull/1"}}) {

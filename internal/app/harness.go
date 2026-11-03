@@ -7645,7 +7645,7 @@ func prCreateCommand(repoDir string, cfg config.Config, branch string) execx.Com
 }
 
 func prCreateWithOptionsCommand(repoDir string, cfg config.Config, baseBranch, headRef, repo string) execx.Command {
-	normalizedPRBody := config.NormalizePRBody(cfg.PRBody, cfg.Prompt)
+	normalizedPRBody := config.NormalizePRBodyForGitHubIssue(cfg.PRBody, cfg.Prompt, cfg.GitHubIssue)
 	args := []string{
 		"pr", "create",
 		"--base", baseBranch,
@@ -7674,7 +7674,7 @@ func prCreateWithoutBaseCommand(repoDir string, cfg config.Config, branch string
 }
 
 func prCreateWithoutBaseWithOptionsCommand(repoDir string, cfg config.Config, headRef, repo string) execx.Command {
-	normalizedPRBody := config.NormalizePRBody(cfg.PRBody, cfg.Prompt)
+	normalizedPRBody := config.NormalizePRBodyForGitHubIssue(cfg.PRBody, cfg.Prompt, cfg.GitHubIssue)
 	args := []string{
 		"pr", "create",
 		"--head", headRef,

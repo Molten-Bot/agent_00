@@ -778,6 +778,9 @@
           <button id="settings-tab-automation" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-automation" data-settings-tab="automation">
             <i data-lucide="wand-sparkles" aria-hidden="true"></i><span>Automation</span>
           </button>
+          <button id="settings-tab-github-issues" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-github-issues" data-settings-tab="github-issues">
+            <i data-lucide="circle-dot" aria-hidden="true"></i><span>GitHub Issues</span>
+          </button>
           <button id="settings-tab-review" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-review" data-settings-tab="review">
             <i data-lucide="message-circle-code" aria-hidden="true"></i><span>Post-task Review</span>
           </button>
@@ -812,6 +815,15 @@
               <i data-lucide="braces" aria-hidden="true"></i>
               <span>JSON input (experimental)</span>
             </label>
+          </fieldset>
+          <fieldset id="settings-panel-github-issues" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-github-issues" hidden>
+            <legend class="review-settings-section-title sr-only">GitHub Issues</legend>
+            <label class="selectable-option">
+              <input class="sr-only" id="review-settings-github-issues-enabled" type="checkbox">
+              <i data-lucide="circle-dot" aria-hidden="true"></i>
+              <span>Enable GitHub Issues workflow</span>
+            </label>
+            <p>Browse issues from a repository and start a task with its full description and comments. The task follows the normal pull request, review, and merge workflow.</p>
           </fieldset>
           <div id="settings-panel-review" class="review-settings-section review-settings-level" role="tabpanel" aria-labelledby="settings-tab-review" hidden>
             <input id="review-settings-level" type="hidden" value="off">
@@ -1574,6 +1586,7 @@
       const defaultLibraryRaw = settings.default_library_enabled ?? settings.defaultLibraryEnabled;
       const chatEnabledRaw = settings.chat_enabled ?? settings.chatEnabled;
       const jsonEnabledRaw = settings.json_enabled ?? settings.jsonEnabled;
+      const githubIssuesEnabledRaw = settings.github_issues_enabled ?? settings.githubIssuesEnabled;
       return {
         autoMerge: Boolean(settings.auto_merge || settings.autoMerge),
         deleteMergedBranches: Boolean(settings.delete_merged_branches || settings.deleteMergedBranches),
@@ -1582,6 +1595,7 @@
         defaultLibraryEnabled: defaultLibraryRaw === undefined ? true : Boolean(defaultLibraryRaw),
         chatEnabled: chatEnabledRaw === undefined ? false : Boolean(chatEnabledRaw),
         jsonEnabled: jsonEnabledRaw === undefined ? false : Boolean(jsonEnabledRaw),
+        githubIssuesEnabled: githubIssuesEnabledRaw === undefined ? false : Boolean(githubIssuesEnabledRaw),
         message: String(settings.message || "").trim(),
       };
     }
@@ -2082,12 +2096,14 @@
     const reviewSettingsDefaultLibrary = document.getElementById("review-settings-default-library");
     const reviewSettingsChatEnabled = document.getElementById("review-settings-chat-enabled");
     const reviewSettingsJSONEnabled = document.getElementById("review-settings-json-enabled");
+    const reviewSettingsGitHubIssuesEnabled = document.getElementById("review-settings-github-issues-enabled");
     const reviewSettingsMergeMethod = document.getElementById("review-settings-merge-method");
     const reviewSettingsMergeOptions = Array.from(document.querySelectorAll("[data-review-settings-merge-method]"));
     const reviewSettingsMergeSliderThumb = document.querySelector(".review-settings-merge-slider-thumb");
     const settingsTabButtons = Array.from(document.querySelectorAll("[data-settings-tab]"));
     const settingsTabPanels = {
       automation: document.getElementById("settings-panel-automation"),
+      "github-issues": document.getElementById("settings-panel-github-issues"),
       review: document.getElementById("settings-panel-review"),
       merge: document.getElementById("settings-panel-merge"),
       signing: document.getElementById("commit-signing-section"),
@@ -2162,6 +2178,27 @@
 
     function jsonFeatureEnabled() {
       return state.reviewSettings?.jsonEnabled === true;
+    }
+
+    function githubIssuesFeatureEnabled() {
+      return state.reviewSettings?.githubIssuesEnabled === true;
+    }
+
+    function syncGitHubIssuesDockLinkAvailability() {
+      const link = document.getElementById("github-issues-dock-link");
+      if (!link || !state.settingsLoadAttempted) return;
+      const available = githubIssuesFeatureEnabled();
+      link.classList.toggle("hidden", !available);
+      link.classList.toggle("is-disabled", !available);
+      link.setAttribute("aria-disabled", String(!available));
+      link.tabIndex = available ? 0 : -1;
+      if (available) {
+        link.href = "/issues";
+        link.title = "GitHub Issues";
+      } else {
+        link.removeAttribute("href");
+        link.title = "GitHub Issues is turned off in Settings";
+      }
     }
 
     function syncJSONModeLinkAvailability() {
@@ -2786,6 +2823,10 @@
       if (reviewSettingsJSONEnabled instanceof HTMLInputElement) {
         reviewSettingsJSONEnabled.checked = state.reviewSettings.jsonEnabled;
       }
+      if (reviewSettingsGitHubIssuesEnabled instanceof HTMLInputElement) {
+        reviewSettingsGitHubIssuesEnabled.checked = state.reviewSettings.githubIssuesEnabled;
+      }
+      syncGitHubIssuesDockLinkAvailability();
       syncChatDockLinkAvailability();
       syncJSONModeLinkAvailability();
       if (!state.reviewSettings.chatEnabled && state.appDisplay === "chat") {
@@ -2842,6 +2883,7 @@
         state.settingsLoadAttempted = true;
         syncChatDockLinkAvailability();
         syncJSONModeLinkAvailability();
+        syncGitHubIssuesDockLinkAvailability();
       } finally {
         setSettingsBusy(false);
         reviewSettingsLoad = null;
@@ -2859,6 +2901,7 @@
         default_library_enabled: reviewSettingsDefaultLibrary instanceof HTMLInputElement ? reviewSettingsDefaultLibrary.checked : true,
         chat_enabled: reviewSettingsChatEnabled instanceof HTMLInputElement ? reviewSettingsChatEnabled.checked : false,
         json_enabled: reviewSettingsJSONEnabled instanceof HTMLInputElement ? reviewSettingsJSONEnabled.checked : false,
+        github_issues_enabled: reviewSettingsGitHubIssuesEnabled instanceof HTMLInputElement ? reviewSettingsGitHubIssuesEnabled.checked : false,
       };
     }
 
@@ -13231,7 +13274,7 @@
       window.CommitSigningSettings?.setModalBusy(Boolean(busy));
       reviewSettingsClose.disabled = Boolean(busy);
       for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches,
-        reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsSlider, ...reviewSettingsMergeOptions]) {
+        reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsGitHubIssuesEnabled, reviewSettingsSlider, ...reviewSettingsMergeOptions]) {
         if (control) control.disabled = Boolean(busy) || !state.settingsLoaded;
       }
       reviewSettingsForm.setAttribute("aria-busy", String(Boolean(busy)));
@@ -13275,9 +13318,12 @@
     if (reviewSettingsForm) {
       reviewSettingsForm.addEventListener("submit", submitReviewSettings);
     }
-    for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches, reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled]) {
+    for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches, reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsGitHubIssuesEnabled]) {
       control.addEventListener("change", () => setReviewSettingsStatus("", "Changes will be saved on close."));
     }
+    reviewSettingsGitHubIssuesEnabled?.addEventListener("change", () => {
+      state.reviewSettings = { ...state.reviewSettings, githubIssuesEnabled: Boolean(reviewSettingsGitHubIssuesEnabled.checked) };
+    });
     reviewSettingsChatEnabled?.addEventListener("change", () => {
       state.reviewSettings = { ...state.reviewSettings, chatEnabled: Boolean(reviewSettingsChatEnabled.checked) };
       syncChatDockLinkAvailability();

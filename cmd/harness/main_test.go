@@ -802,6 +802,43 @@ func TestConfigureReviewSettingsPersistsDefaultLibraryEnabled(t *testing.T) {
 	}
 }
 
+func TestConfigureReviewSettingsPersistsGitHubIssuesToggle(t *testing.T) {
+	t.Parallel()
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	initCfg := localruntime.InitConfig{RuntimeConfigPath: configPath, AgentHarness: "codex"}
+	if currentReviewSettingsState(initCfg).GitHubIssuesEnabled {
+		t.Fatal("GitHub Issues should default to disabled")
+	}
+	enabled := true
+	state, err := configureReviewSettings(initCfg, web.ReviewSettingsRequest{
+		MergeMethod: "squash", ReviewLevel: "off", GitHubIssuesEnabled: &enabled,
+	})
+	if err != nil {
+		t.Fatalf("enable GitHub Issues: %v", err)
+	}
+	if !state.GitHubIssuesEnabled {
+		t.Fatal("returned settings should report GitHub Issues enabled")
+	}
+	if _, err := configureReviewSettings(initCfg, web.ReviewSettingsRequest{
+		MergeMethod: "squash", ReviewLevel: "off",
+	}); err != nil {
+		t.Fatalf("save unrelated settings: %v", err)
+	}
+	if !currentReviewSettingsState(initCfg).GitHubIssuesEnabled {
+		t.Fatal("omitted github_issues_enabled should preserve the saved setting")
+	}
+	disabled := false
+	state, err = configureReviewSettings(initCfg, web.ReviewSettingsRequest{
+		MergeMethod: "squash", ReviewLevel: "off", GitHubIssuesEnabled: &disabled,
+	})
+	if err != nil {
+		t.Fatalf("disable GitHub Issues: %v", err)
+	}
+	if state.GitHubIssuesEnabled || currentReviewSettingsState(initCfg).GitHubIssuesEnabled {
+		t.Fatal("GitHub Issues should be disabled after saving false")
+	}
+}
+
 func TestConfigureReviewSettingsOmittedDefaultLibraryEnabledKeepsCurrentValue(t *testing.T) {
 	t.Parallel()
 

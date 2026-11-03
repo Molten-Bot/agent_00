@@ -155,6 +155,22 @@ func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 	chatEnabled *bool,
 	jsonEnabled *bool,
 ) error {
+	return SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
+		path, initCfg, reviewCfg, defaultLibraryEnabled, chatEnabled, jsonEnabled, nil,
+	)
+}
+
+// SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings persists review
+// automation, library, chat, JSON, and GitHub Issues settings in one update.
+func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
+	path string,
+	initCfg InitConfig,
+	reviewCfg ReviewWatchConfig,
+	defaultLibraryEnabled *bool,
+	chatEnabled *bool,
+	jsonEnabled *bool,
+	githubIssuesEnabled *bool,
+) error {
 	runtimeConfigMu.Lock()
 	defer runtimeConfigMu.Unlock()
 	path = strings.TrimSpace(path)
@@ -186,6 +202,11 @@ func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 		jsonEnabledValue = *jsonEnabled
 	}
 	applyJSONEnabledToDoc(doc, jsonEnabledValue)
+	githubIssuesEnabledValue := githubIssuesEnabledFromDoc(doc)
+	if githubIssuesEnabled != nil {
+		githubIssuesEnabledValue = *githubIssuesEnabled
+	}
+	applyGitHubIssuesEnabledToDoc(doc, githubIssuesEnabledValue)
 
 	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
 
@@ -381,6 +402,33 @@ func jsonEnabledFromDoc(doc map[string]any) bool {
 		return false
 	}
 	return enabled
+}
+
+func applyGitHubIssuesEnabledToDoc(doc map[string]any, enabled bool) {
+	if enabled {
+		doc["github_issues_enabled"] = true
+	} else {
+		delete(doc, "github_issues_enabled")
+	}
+}
+
+// ReadRuntimeConfigGitHubIssuesEnabled reports whether issue browsing is
+// enabled, defaulting to off for existing and unreadable runtime configs.
+func ReadRuntimeConfigGitHubIssuesEnabled(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	doc, err := readRuntimeConfigDoc(path)
+	if err != nil {
+		return false
+	}
+	return githubIssuesEnabledFromDoc(doc)
+}
+
+func githubIssuesEnabledFromDoc(doc map[string]any) bool {
+	enabled, ok := doc["github_issues_enabled"].(bool)
+	return ok && enabled
 }
 
 // ReadRuntimeConfigString returns the first non-empty string for the provided

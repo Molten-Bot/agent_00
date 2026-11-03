@@ -706,6 +706,7 @@ func runServer(args []string) int {
 		uiServer.Ready = uiReady
 		uiServer.AutomaticMode = *uiAutomatic
 		uiServer.ConfiguredHarness = cfg.AgentHarness
+		uiServer.GitHubIssueRunner = runner
 		uiServer.Logf = daemonLogger
 		uiServer.LoadLibraryTasks = func() ([]library.TaskSummary, error) {
 			var catalog library.Catalog
@@ -2509,6 +2510,7 @@ func currentReviewSettingsState(cfg localruntime.InitConfig) web.ReviewSettingsS
 		DefaultLibraryEnabled: localruntime.ReadRuntimeConfigDefaultLibraryEnabled(cfg.RuntimeConfigPath),
 		ChatEnabled:           localruntime.ReadRuntimeConfigChatEnabled(cfg.RuntimeConfigPath),
 		JSONEnabled:           localruntime.ReadRuntimeConfigJSONEnabled(cfg.RuntimeConfigPath),
+		GitHubIssuesEnabled:   localruntime.ReadRuntimeConfigGitHubIssuesEnabled(cfg.RuntimeConfigPath),
 	}
 }
 
@@ -2536,7 +2538,7 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		MergeMethod:          method,
 		ReviewLevel:          reviewLevel,
 	}
-	if err := localruntime.SaveRuntimeConfigReviewAndDefaultLibrarySettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled); err != nil {
+	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled); err != nil {
 		state := currentReviewSettingsState(cfg)
 		return state, err
 	}

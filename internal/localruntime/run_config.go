@@ -122,6 +122,7 @@ func normalizeRunConfigAliases(m map[string]any) error {
 	copyRunConfigAlias(m, "commitMessage", "commitmessage")
 	copyRunConfigAlias(m, "prTitle", "prtitle")
 	copyRunConfigAlias(m, "prBody", "prbody")
+	copyRunConfigAlias(m, "githubIssue", "githubissue")
 	normalizeReviewRunConfigAliases(m)
 
 	if stringsx.FirstNonEmpty(stringAt(m, "baseBranch")) == "" {
