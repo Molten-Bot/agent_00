@@ -270,7 +270,7 @@ test('GitHub Issues page renders issue conversation and launches with the select
       await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
         { full_name: 'Molten-Bot/agent_00', html_url: 'https://github.com/Molten-Bot/agent_00', default_branch: 'main' },
       ] } }));
-      await page.route('**/api/github/issues*', route => {
+      await page.route('**/api/github/issues**', route => {
         const path = new URL(route.request().url()).pathname;
         const issue = { number: 17, title: 'Add issue browser', state: 'OPEN', url: issueURL,
           author: { login: 'octocat' }, labels: [{ name: 'feature' }], assignees: [{ login: 'hubot' }],
