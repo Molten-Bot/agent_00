@@ -8351,6 +8351,9 @@ func TestWithCompletionGatePromptIncludesAgentRuntimeGuidance(t *testing.T) {
 	got := withCompletionGatePrompt("Build API")
 	wantSnippets := []string{
 		"Agent input:\nBuild API",
+		"When a task or review requires a test, coverage, lint, or quality target, first make underlying code or test changes and run the measurement.",
+		"Add or raise the required gate only after the target passes.",
+		"Keep an existing required gate; do not remove it merely to make validation pass.",
 		"Treat non-empty product, bug, feature, or review text in it as the implementation target.",
 		"Do not answer that no implementation task was given when the agent input includes a requested repository change.",
 		"When failures occur, send a response back to the calling agent that clearly states failure and includes the error details. Use explicit `Failure:` and `Error details:` fields.",
@@ -9141,11 +9144,10 @@ func TestFinalReviewFixPromptRequiresMeasuredQualityTargets(t *testing.T) {
 	)
 
 	for _, want := range []string{
-		"A stricter test, coverage, lint, or quality threshold is not evidence that its target is met.",
-		"Do not add, raise, or retain such a gate unless the relevant measurement passes at that target.",
-		"make underlying code or test changes first, then run the measurement.",
-		"Do not remove a gate solely to make validation pass.",
-		"report Failure and Error details instead of oscillating between incompatible gate-only changes.",
+		"When a task or review requires a test, coverage, lint, or quality target, first make underlying code or test changes and run the measurement.",
+		"Add or raise the required gate only after the target passes.",
+		"Keep an existing required gate; do not remove it merely to make validation pass.",
+		"If the target cannot be met safely in this pass, report Failure and Error details instead of making gate-only changes.",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("finalReviewFixPrompt() missing %q:\n%s", want, prompt)

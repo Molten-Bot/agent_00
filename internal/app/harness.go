@@ -92,6 +92,7 @@ const (
 	maxReviewCommentsChars           = 16000
 	maxReviewDiffStatChars           = 12000
 	maxReviewDiffPatchChars          = 30000
+	measuredQualityTargetInstruction = "When a task or review requires a test, coverage, lint, or quality target, first make underlying code or test changes and run the measurement. Add or raise the required gate only after the target passes. Keep an existing required gate; do not remove it merely to make validation pass. If the target cannot be met safely in this pass, report Failure and Error details instead of making gate-only changes."
 	bootstrapGitUserName             = "agent_00"
 	bootstrapGitUserEmail            = "bot@molten.bot"
 	bootstrapMainCommitMessage       = "chore: initialize main branch"
@@ -3737,7 +3738,7 @@ func finalReviewFixPrompt(originalPrompt string, repo repoWorkspace, findings []
 	b.WriteString("For this automated pass, the isolated findings below are the complete repair input. Do not independently collect, act on, or broaden the change to other PR comments or earlier pass findings.\n")
 	b.WriteString("Update the existing pull request branch; do not create a new pull request or change branches.\n")
 	b.WriteString("Do not commit or push; leave the verified changes for the harness.\n\n")
-	b.WriteString("A stricter test, coverage, lint, or quality threshold is not evidence that its target is met. Do not add, raise, or retain such a gate unless the relevant measurement passes at that target. When a finding concerns an unmet measured target, make underlying code or test changes first, then run the measurement. Do not remove a gate solely to make validation pass. If the target cannot be met safely in this pass, report Failure and Error details instead of oscillating between incompatible gate-only changes.\n\n")
+	b.WriteString(measuredQualityTargetInstruction + "\n\n")
 	b.WriteString("Original task prompt:\n")
 	b.WriteString(indentedPromptBlock(originalPrompt, "(not available)"))
 	b.WriteString("\n\nPull request:\n")
@@ -7822,6 +7823,9 @@ func withCompletionGatePrompt(prompt string) string {
 		base = "Improve this repository in a minimal, production-ready way."
 	}
 
+	if !strings.Contains(base, measuredQualityTargetInstruction) {
+		base += "\n\n" + measuredQualityTargetInstruction
+	}
 	return failurefollowup.WithExecutionContract(withImplementationTargetGuard(base))
 }
 
