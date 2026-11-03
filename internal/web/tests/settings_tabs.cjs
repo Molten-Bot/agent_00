@@ -335,6 +335,13 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   }), [2, 3, 5]);
   assert.equal(await page.locator('#github-issues-dock-link + .prompt-mode-divider').count(), 1);
   assert.equal(await page.locator('#prompt-visibility-toggle').count(), 0);
+  const title = page.locator('#prompt-panel-title .prompt-title-mode.active');
+  const titleWidth = await title.evaluate(node => node.getBoundingClientRect().width);
+  assert.equal(await title.evaluate(node => getComputedStyle(node).whiteSpace), 'nowrap');
+  assert.equal(await page.locator('#prompt-panel-title').evaluate(node => getComputedStyle(node).flexShrink), '0');
+  await page.setViewportSize({ width: 360, height: 900 });
+  assert.ok(await title.evaluate((node, width) => node.getBoundingClientRect().width >= width - 1, titleWidth), 'shared title should keep its width when the viewport narrows');
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.locator('#github-issues-repo').selectOption('Molten-Bot/agent_00');
   await page.locator('.github-issue-list-item').waitFor();
   await page.waitForFunction(() => document.getElementById('github-issues-status').textContent === '');
