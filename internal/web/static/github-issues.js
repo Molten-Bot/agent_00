@@ -97,6 +97,8 @@
   let repositories = [];
   let currentIssues = [];
   let selectedIssue = null;
+  let selectedIssueNumber = null;
+  let loadingIssueNumber = null;
   let githubIssueLinkMode = "reference";
   let requestGeneration = 0;
 
@@ -206,13 +208,38 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "github-issue-list-item";
-      button.setAttribute("aria-current", String(selectedIssue?.number === issue.number));
+      const selected = selectedIssueNumber === issue.number;
+      button.setAttribute("aria-current", String(selected));
+      button.setAttribute("aria-busy", String(loadingIssueNumber === issue.number));
       button.dataset.issueNumber = String(issue.number || "");
       button.dataset.title = String(issue.title || "");
       const title = addText(button, "strong", "github-issue-list-title", "");
       const isClosed = String(issue.state || "").toLowerCase() === "closed";
       addText(title, "span", isClosed ? "github-issue-closed-dot" : "github-issue-open-dot", isClosed ? "○" : "●");
       addText(title, "span", "", issue.title || "Untitled issue");
+      if (loadingIssueNumber === issue.number) {
+        const loading = addText(title, "span", "github-issue-loading task-icons-breathe", "");
+        loading.setAttribute("role", "status");
+        loading.setAttribute("aria-label", "Loading issue details");
+        const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        icon.classList.add("task-action-glyph-loader");
+        icon.setAttribute("viewBox", "0 0 24 24");
+        icon.setAttribute("fill", "none");
+        icon.setAttribute("stroke", "currentColor");
+        icon.setAttribute("stroke-width", "2");
+        icon.setAttribute("stroke-linecap", "round");
+        icon.setAttribute("stroke-linejoin", "round");
+        icon.setAttribute("aria-hidden", "true");
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("cx", "12");
+        circle.setAttribute("cy", "12");
+        circle.setAttribute("r", "10");
+        icon.appendChild(circle);
+        const arc = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        arc.setAttribute("d", "M12 2a10 10 0 0 1 10 10");
+        icon.appendChild(arc);
+        loading.appendChild(icon);
+      }
       const meta = addText(button, "span", "github-issue-list-meta", "");
       addText(meta, "span", "", `#${issue.number}`);
       addText(meta, "span", "", "·");
@@ -367,22 +394,32 @@
     const repo = selectedRepository();
     if (!repo) return;
     const generation = ++requestGeneration;
+    selectedIssueNumber = number;
+    loadingIssueNumber = number;
+    renderIssueList(currentIssues);
     setStatus(`Loading issue #${number}…`);
     try {
       const query = new URLSearchParams({ repo: repo.full_name });
       const body = await requestJSON(`/api/github/issues/${encodeURIComponent(number)}?${query}`, { cache: "no-store" });
       if (generation !== requestGeneration) return;
+      loadingIssueNumber = null;
       renderIssueDetail(body.issue);
       renderIssueList(currentIssues);
       setStatus("");
     } catch (error) {
-      if (generation === requestGeneration) setStatus(error.message || "Unable to load issue.", "error");
+      if (generation === requestGeneration) {
+        loadingIssueNumber = null;
+        renderIssueList(currentIssues);
+        setStatus(error.message || "Unable to load issue.", "error");
+      }
     }
   }
 
   async function loadIssues() {
     const repo = selectedRepository();
     selectedIssue = null;
+    selectedIssueNumber = null;
+    loadingIssueNumber = null;
     currentIssues = [];
     detail.replaceChildren();
     issueList.replaceChildren();

@@ -273,6 +273,26 @@
   background: var(--accent-soft);
 }
 
+.github-issue-list-item[aria-busy="true"] .github-issue-list-title {
+  color: var(--text);
+}
+
+.github-issue-loading {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  color: var(--running);
+}
+
+.github-issue-loading .task-action-glyph-loader {
+  width: 15px;
+  height: 15px;
+}
+
 .github-issue-list-title {
   display: flex;
   align-items: flex-start;

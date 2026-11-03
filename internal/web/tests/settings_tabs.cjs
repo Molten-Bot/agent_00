@@ -377,6 +377,39 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   assert.match(submitted.prompt, /Please include retry coverage/);
 });
 
+test('selecting an issue highlights its row and breathes a loader while details load', async t => {
+  let releaseDetails;
+  const detailsPending = new Promise(resolve => { releaseDetails = resolve; });
+  const issue = { number: 17, title: 'Add issue browser', state: 'OPEN', url: 'https://github.com/Molten-Bot/agent_00/issues/17', author: { login: 'octocat' }, labels: [], assignees: [] };
+  const { page } = await openSettings(t, {
+    path: '/#studio-issues',
+    initialSettings: { ...defaults, github_issues_enabled: true },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+        { full_name: 'Molten-Bot/agent_00', html_url: 'https://github.com/Molten-Bot/agent_00', default_branch: 'main' },
+      ] } }));
+      await page.route('**/api/github/issues**', async route => {
+        if (new URL(route.request().url()).pathname.endsWith('/17')) {
+          await detailsPending;
+          return route.fulfill({ json: { ok: true, issue: { ...issue, body: 'Description', comments: [] } } });
+        }
+        return route.fulfill({ json: { ok: true, issues: [issue] } });
+      });
+    },
+  });
+  await page.locator('#github-issues-repo').selectOption('Molten-Bot/agent_00');
+  const row = page.locator('.github-issue-list-item[data-issue-number="17"]');
+  await row.waitFor();
+  await row.click();
+  assert.equal(await row.getAttribute('aria-current'), 'true');
+  assert.equal(await row.getAttribute('aria-busy'), 'true');
+  assert.equal(await row.locator('.github-issue-loading').getAttribute('aria-label'), 'Loading issue details');
+  assert.equal(await row.locator('.github-issue-loading svg').evaluate(icon => getComputedStyle(icon).animationName), 'taskIconBreathe');
+  releaseDetails();
+  await page.waitForFunction(() => document.querySelector('.github-issue-list-item[data-issue-number="17"]')?.getAttribute('aria-busy') === 'false');
+  assert.equal(await row.locator('.github-issue-loading').count(), 0);
+});
+
 for (const method of ['escape', 'backdrop']) test(`${method} saves settings before closing`, async t => {
   const { page, writes } = await openSettings(t);
   await select(page, 'automation'); await toggle(page, 'review-settings-auto-merge');
