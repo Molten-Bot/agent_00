@@ -173,6 +173,18 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	if count := strings.Count(page, `data-lucide="folder-kanban"`); count < 4 {
 		t.Errorf("folder-kanban icon appears %d times, want panel title, bottom dock, and settings controls", count)
 	}
+	libraryDockAt := strings.Index(page, `id="prompt-mode-library"`)
+	issuesDockAt := strings.Index(page, `id="github-issues-dock-link"`)
+	issuesDividerAt := -1
+	if issuesDockAt >= 0 {
+		if dividerOffset := strings.Index(page[issuesDockAt:], `class="prompt-mode-divider"`); dividerOffset >= 0 {
+			issuesDividerAt = issuesDockAt + dividerOffset
+		}
+	}
+	currentWorkDockAt := strings.Index(page, `id="task-view-dock-link"`)
+	if libraryDockAt < 0 || issuesDockAt < libraryDockAt || issuesDividerAt < issuesDockAt || currentWorkDockAt < issuesDividerAt {
+		t.Error("GitHub Issues should sit next to Library, before the divider and Current Work")
+	}
 	filtersAt := strings.Index(page, `id="github-issues-filters"`)
 	repositoryAt := strings.Index(page, `id="github-issues-repo"`)
 	if filtersAt < 0 || repositoryAt < filtersAt {

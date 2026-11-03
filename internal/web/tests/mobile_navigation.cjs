@@ -31,7 +31,9 @@ async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile 
     let json = { ok: true };
     if (url.pathname === '/api/status') json = { tasks, events: [], repositories: [], stats: {}, resources: {} };
     if (url.pathname === '/api/agent-auth') json.auth = { required: false, ready: true, harness: 'codex', state: 'ready' };
-    if (url.pathname === '/api/review-settings') json.settings = { review_level: 'off', default_library_enabled: true };
+    if (url.pathname === '/api/review-settings') json.settings = {
+      review_level: 'off', default_library_enabled: true, json_enabled: true, chat_enabled: true, github_issues_enabled: true,
+    };
     if (url.pathname === '/api/github/repos') json.repos = Array.from({ length: 40 }, (_, i) => ({
       name: `project-${i + 1}`, full_name: `example/project-${i + 1}`, description: 'An example repository for mobile navigation.', private: false,
     }));
@@ -63,6 +65,8 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 430, height: 932 }
   test(`phone ${viewport.width}×${viewport.height}: navigate, scroll to the last library entry, and keep Run accessible`, async t => {
     const { page } = await openPage(t, 'studio-library', viewport);
     await page.locator('.library-task-option').last().waitFor();
+    assert.equal(await page.locator('#github-issues-dock-link').isVisible(), true, 'GitHub Issues is a primary mobile destination');
+    assert.equal(await page.locator('#github-issues-dock-link').evaluate(node => node.parentElement.id), '');
     await assertFits(page);
     const last = page.locator('.library-task-option-toggle').last();
     await last.scrollIntoViewIfNeeded();

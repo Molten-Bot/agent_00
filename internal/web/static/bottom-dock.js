@@ -152,6 +152,7 @@
     const links = [
       root.querySelector("#prompt-mode-builder"),
       root.querySelector("#prompt-mode-library"),
+      root.querySelector("#github-issues-dock-link"),
       root.querySelector("#prompt-mode-json"),
     ];
     for (const link of links) {

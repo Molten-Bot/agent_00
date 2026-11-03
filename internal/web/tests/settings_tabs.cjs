@@ -321,6 +321,13 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   );
   assert.equal(await page.locator('#github-issues-state').count(), 0);
   assert.equal(await page.locator('#github-issues-dock-link [data-lucide="folder-kanban"]').count(), 1);
+  assert.equal(await page.locator('#github-issues-dock-link').isVisible(), true);
+  assert.deepEqual(await page.evaluate(() => {
+    const root = document.querySelector('.prompt-mode-tabs-dock');
+    const ids = ['prompt-mode-library', 'github-issues-dock-link', 'task-view-dock-link'];
+    return ids.map(id => Array.from(root.children).findIndex(node => node.id === id));
+  }), [2, 3, 5]);
+  assert.equal(await page.locator('#github-issues-dock-link + .prompt-mode-divider').count(), 1);
   assert.equal(await page.locator('#prompt-visibility-toggle').count(), 0);
   await page.locator('#github-issues-repo').selectOption('Molten-Bot/agent_00');
   await page.locator('.github-issue-list-item').waitFor();
