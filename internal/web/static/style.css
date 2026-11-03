@@ -1096,8 +1096,6 @@ body .right-col.prompt-collapsed.task-list-hidden {
   justify-self: start;
   min-width: 0;
   white-space: nowrap;
-  font-size: 0.78rem;
-  letter-spacing: 0.02em;
 }
 
 .prompt-title-mode {

@@ -304,6 +304,10 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   assert.equal(await page.locator('.prompt-wrap').isVisible(), true);
   assert.equal(await page.locator('.prompt-title-mode[data-prompt-title-mode="issues"]').isVisible(), true);
   assert.match(await page.locator('.prompt-title-mode[data-prompt-title-mode="issues"]').textContent(), /GitHub Issues/);
+  assert.equal(
+    await page.locator('#prompt-panel-title').evaluate(title => getComputedStyle(title).fontSize),
+    await page.locator('.prompt-titlebar').evaluate(header => getComputedStyle(header).fontSize),
+  );
   assert.equal(await page.locator('#github-issues-title').count(), 0);
   assert.equal(await page.locator('#github-issues-repo').evaluate(select => select.closest('#github-issues-filters') !== null), true);
   assert.equal(await page.locator('#github-issues-state').count(), 0);
