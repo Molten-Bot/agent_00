@@ -238,6 +238,8 @@ test('GitHub Issues toggle exposes and hides the dock link and persists on reloa
   await select(page, 'github-issues');
   await toggle(page, 'review-settings-github-issues-enabled');
   assert.equal(await page.locator('#review-settings-github-issues-link-mode').isVisible(), true);
+  assert.equal(await page.locator('#settings-tab-github-issues [data-lucide="folder-kanban"]').count(), 1);
+  assert.equal(await page.locator('#review-settings-github-issues-enabled').locator('xpath=..').locator('[data-lucide="folder-kanban"]').count(), 1);
   assert.equal(await page.locator('#review-settings-github-issues-link-reference').isChecked(), true);
   await page.locator('#review-settings-github-issues-link-close').check();
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'false');
@@ -297,6 +299,11 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   assert.equal(await page.locator('#github-issues-panel').isVisible(), true);
   assert.equal(await page.locator('#local-prompt-form').evaluate(form => form.classList.contains('hidden')), true);
   assert.equal(await page.locator('.prompt-wrap').isVisible(), true);
+  assert.equal(await page.locator('.prompt-title-mode[data-prompt-title-mode="issues"]').isVisible(), true);
+  assert.match(await page.locator('.prompt-title-mode[data-prompt-title-mode="issues"]').textContent(), /GitHub Issues/);
+  assert.equal(await page.locator('#github-issues-title').count(), 0);
+  assert.equal(await page.locator('#github-issues-repo').evaluate(select => select.closest('#github-issues-filters') !== null), true);
+  assert.equal(await page.locator('#github-issues-dock-link [data-lucide="folder-kanban"]').count(), 1);
   assert.equal(await page.locator('#prompt-visibility-toggle').count(), 0);
   await page.locator('#github-issues-repo').selectOption('Molten-Bot/agent_00');
   await page.locator('.github-issue-list-item').waitFor();

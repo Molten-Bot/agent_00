@@ -118,9 +118,9 @@
                   <i data-lucide="braces" class="prompt-title-icon" aria-hidden="true"></i>
                   <span>Studio</span>
                 </span>
-                <span class="prompt-title-mode" data-prompt-title-mode="issues" data-prompt-title-label="GitHub Issues Studio" aria-label="GitHub Issues Studio" hidden aria-hidden="true">
-                  <i data-lucide="circle-dot" class="prompt-title-icon" aria-hidden="true"></i>
-                  <span>Studio</span>
+                <span class="prompt-title-mode" data-prompt-title-mode="issues" data-prompt-title-label="GitHub Issues" aria-label="GitHub Issues" hidden aria-hidden="true">
+                  <i data-lucide="folder-kanban" class="prompt-title-icon" aria-hidden="true"></i>
+                  <span>GitHub Issues</span>
                 </span>
               </span>
               <p id="prompt-panel-copy" class="panel-section-copy">Compose a repository run, start from a library task, or edit the raw JSON payload.</p>
@@ -374,18 +374,11 @@
             </div>
           </form>
           <section id="github-issues-panel" class="github-issues-panel hidden" aria-label="GitHub Issues" aria-hidden="true">
-            <header class="github-issues-workspace-head">
-              <div class="github-issues-heading">
-                <p class="github-issues-eyebrow">Issue inbox</p>
-                <h1 id="github-issues-title">GitHub Issues</h1>
-                <p>Browse an issue and start a repository task that produces a pull request.</p>
-              </div>
-              <label class="github-issues-repository">Repository<select id="github-issues-repo" required><option value="">Loading repositories…</option></select></label>
-            </header>
             <p id="github-issues-status" class="github-issues-status" role="status" aria-live="polite">Loading GitHub Issues settings…</p>
             <div id="github-issues-disabled" class="github-issues-disabled" hidden>Turn on GitHub Issues in <a href="/#settings">Settings</a> to browse issues.</div>
             <div id="github-issues-browser" class="github-issues-browser" hidden>
               <form id="github-issues-filters" class="github-issues-filters">
+                <label class="github-issues-repository">Repository<select id="github-issues-repo" required><option value="">Loading repositories…</option></select></label>
                 <label>State<select id="github-issues-state"><option value="open">Open</option><option value="closed">Closed</option><option value="all">All</option></select></label>
                 <label class="github-issues-search">Search<input id="github-issues-search" type="search" maxlength="256" placeholder="Search this repository" autocomplete="off"></label>
                 <button type="submit">Search</button>
@@ -813,7 +806,7 @@
             <i data-lucide="wand-sparkles" aria-hidden="true"></i><span>Automation</span>
           </button>
           <button id="settings-tab-github-issues" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-github-issues" data-settings-tab="github-issues">
-            <i data-lucide="circle-dot" aria-hidden="true"></i><span>GitHub Issues</span>
+            <i data-lucide="folder-kanban" aria-hidden="true"></i><span>GitHub Issues</span>
           </button>
           <button id="settings-tab-review" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-review" data-settings-tab="review">
             <i data-lucide="message-circle-code" aria-hidden="true"></i><span>Post-task Review</span>
@@ -854,7 +847,7 @@
             <legend class="review-settings-section-title sr-only">GitHub Issues</legend>
             <label class="selectable-option">
               <input class="sr-only" id="review-settings-github-issues-enabled" type="checkbox">
-              <i data-lucide="circle-dot" aria-hidden="true"></i>
+              <i data-lucide="folder-kanban" aria-hidden="true"></i>
               <span>Enable GitHub Issues workflow</span>
             </label>
             <p class="github-issues-settings-description">Browse issues from a repository and start a task with its full description and comments. The task follows the normal pull request, review, and merge workflow.</p>
