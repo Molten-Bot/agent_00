@@ -6865,7 +6865,7 @@ func TestRunCodexStagesAgentsPromptWithinTargetDir(t *testing.T) {
 		t.Fatalf("captured.Args = %v, want restricted sandbox", runner.cmd.Args)
 	}
 	prompt := runner.cmd.Stdin
-	re := regexp.MustCompile(`Use (.+) as your primary implementation instructions`)
+	re := regexp.MustCompile(`read and follow the shared implementation guide at (.+)\. Also`)
 	matches := re.FindStringSubmatch(prompt)
 	if len(matches) != 2 {
 		t.Fatalf("staged agents prompt path missing from prompt: %q", prompt)
@@ -6900,8 +6900,11 @@ func TestRunCodexUsesExistingTargetAgentsPromptFile(t *testing.T) {
 		t.Fatalf("runCodex() error = %v", err)
 	}
 
-	if !strings.Contains(runner.cmd.Stdin, "Use ./AGENTS.md as your primary implementation instructions before making any changes.") {
+	if !strings.Contains(runner.cmd.Stdin, "repository-specific instructions at ./AGENTS.md") {
 		t.Fatalf("captured prompt missing target AGENTS directive: %q", runner.cmd.Stdin)
+	}
+	if !strings.Contains(runner.cmd.Stdin, "shared implementation guide at ") {
+		t.Fatalf("captured prompt missing shared AGENTS directive: %q", runner.cmd.Stdin)
 	}
 	if !strings.Contains(runner.cmd.Stdin, agentsCredentialGuardInstruction) {
 		t.Fatalf("captured prompt missing credential guard instruction: %q", runner.cmd.Stdin)
@@ -7891,6 +7894,11 @@ func TestCodexReportedFailure(t *testing.T) {
 	}); failed || detail != "" {
 		t.Fatalf("codexReportedFailure(success text) = (%v, %q), want (false, \"\")", failed, detail)
 	}
+
+	modelDiagnostic := "ERROR: The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account."
+	if failed, detail := codexReportedFailure(execx.Result{Stderr: modelDiagnostic}); !failed || detail != modelDiagnostic {
+		t.Fatalf("codexReportedFailure(unsupported model diagnostic) = (%v, %q), want (true, %q)", failed, detail, modelDiagnostic)
+	}
 }
 
 func TestCodexReportedFailureDetectsNoImplementationTaskGiven(t *testing.T) {
@@ -8413,7 +8421,7 @@ func TestWithCompletionGatePromptPreservesTerseImplementationTarget(t *testing.T
 	got := withCompletionGatePrompt(withAgentsPrompt(prompt, "./AGENTS.md"))
 	wantSnippets := []string{
 		"Agent input:",
-		"Use ./AGENTS.md as your primary implementation instructions before making any changes.",
+		"read and follow the shared implementation guide at ./AGENTS.md",
 		"in git chat",
 		"in the repo listing with long text -> truncate and put an elipsis (...) when the text is over -> 100 chars",
 		"Task packet handling:",

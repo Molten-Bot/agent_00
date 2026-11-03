@@ -1064,6 +1064,7 @@ body .right-col.prompt-collapsed.task-list-hidden {
   align-items: center;
   gap: 12px;
   justify-content: space-between;
+  flex: 0 0 auto;
   min-height: 52px;
 }
 

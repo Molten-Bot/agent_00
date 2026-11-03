@@ -115,8 +115,12 @@ func TestHarnessFilesystemAndPromptHelpers(t *testing.T) {
 		t.Fatalf("promptPathForCodex(outside target) = %q", got)
 	}
 	withAgents := withAgentsPrompt("ship fix", "/tmp/repo/AGENTS.md")
-	if !strings.Contains(withAgents, "Use /tmp/repo/AGENTS.md as your primary implementation instructions before making any changes.") {
+	if !strings.Contains(withAgents, "read and follow the shared implementation guide at /tmp/repo/AGENTS.md") {
 		t.Fatalf("withAgentsPrompt(path) missing AGENTS directive: %q", withAgents)
+	}
+	withBothAgents := withAgentsPrompt("ship fix", "/run/shared/AGENTS.md", "./AGENTS.md")
+	if !strings.Contains(withBothAgents, "/run/shared/AGENTS.md") || !strings.Contains(withBothAgents, "repository-specific instructions at ./AGENTS.md") {
+		t.Fatalf("withAgentsPrompt() missing shared or repository instructions: %q", withBothAgents)
 	}
 	if !strings.Contains(withAgents, agentsCredentialGuardInstruction) {
 		t.Fatalf("withAgentsPrompt(path) missing credential guard instruction: %q", withAgents)

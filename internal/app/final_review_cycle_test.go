@@ -16,14 +16,15 @@ import (
 )
 
 type cleanReviewCycleRunner struct {
-	t        *testing.T
-	mu       sync.Mutex
-	reviews  int
-	comments int
-	checks   int
-	released int
-	prompts  []string
-	argv     [][]string
+	t            *testing.T
+	mu           sync.Mutex
+	reviews      int
+	comments     int
+	checks       int
+	released     int
+	prompts      []string
+	argv         [][]string
+	emptyNetDiff bool
 }
 
 func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, error) {
@@ -49,6 +50,14 @@ func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (exec
 		case "fetch", "merge", "add", "commit", "push":
 			return execx.Result{}, nil
 		case "diff":
+			for _, arg := range cmd.Args {
+				if arg == "--name-only" {
+					if r.emptyNetDiff {
+						return execx.Result{}, nil
+					}
+					return execx.Result{Stdout: "main.go\n"}, nil
+				}
+			}
 			return execx.Result{Stdout: "diff --git a/main.go b/main.go\n"}, nil
 		}
 	case "gh":
@@ -494,6 +503,50 @@ func TestProcessChangedRepoReleasesPRFromDraftAfterCleanFinalReviewCycle(t *test
 	}
 	if runner.released != 1 {
 		t.Fatalf("released count = %d, want 1 (PR must be released once the final review cycle is clean)", runner.released)
+	}
+}
+
+func TestProcessChangedRepoRejectsEmptyNetDiffAfterReviewCycle(t *testing.T) {
+	runner := &cleanReviewCycleRunner{t: t, emptyNetDiff: true}
+	h := New(runner)
+	h.FinalReviewPasses = 1
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:                "https://github.com/acme/repo.git",
+		Dir:                repoDir,
+		RelDir:             "repo",
+		Branch:             "feature",
+		BaseBranch:         "main",
+		PRURL:              "https://github.com/acme/repo/pull/7",
+		Changed:            true,
+		CreateWorkBranch:   true,
+		WriteAccessChecked: true,
+		WriteAccessAllowed: true,
+		PushRemote:         publishRemoteOrigin,
+	}
+
+	exitCode, stage, err := h.processChangedRepo(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "do the work"},
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err == nil || exitCode != ExitPR || stage != "review" || !strings.Contains(err.Error(), "no net changes against the base branch") {
+		t.Fatalf("processChangedRepo() = (%d, %q, %v), want empty-net-diff failure", exitCode, stage, err)
+	}
+	if runner.released != 0 {
+		t.Fatalf("released count = %d, want 0 for an empty net diff", runner.released)
 	}
 }
 

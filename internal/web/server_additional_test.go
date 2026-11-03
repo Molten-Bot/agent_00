@@ -1233,8 +1233,8 @@ func TestStudioStylesKeepPromptActionsVisible(t *testing.T) {
 	if !strings.Contains(css, ".prompt-wrap .panel-header {\n  border-bottom-color: var(--surface-header-border);\n  background: var(--surface-header);\n  color: var(--surface-label);\n  letter-spacing: 0.11em;\n  justify-content: space-between;\n}") {
 		t.Fatalf("expected Studio title bar to keep theme-aware styling while separating the section title from minimize controls")
 	}
-	if !strings.Contains(css, ".prompt-titlebar {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n  justify-content: space-between;\n  min-height: 52px;\n}") {
-		t.Fatalf("expected Studio title bar to keep a compact header while exposing both the section label and minimize control")
+	if !strings.Contains(css, ".prompt-titlebar {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n  justify-content: space-between;\n  flex: 0 0 auto;\n  min-height: 52px;\n}") {
+		t.Fatalf("expected Studio title bar to retain its full content height while exposing the section label and minimize control")
 	}
 	if !strings.Contains(css, ".page-bottom-dock {\n  position: fixed;\n  left: 50%;\n  bottom: max(16px, env(safe-area-inset-bottom));\n  z-index: 61;\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  justify-content: center;\n  width: min-content;\n  max-width: calc(100vw - 28px);\n  transform: translateX(-50%);\n}") {
 		t.Fatalf("expected Studio mode tabs to dock at the absolute bottom center of the page")

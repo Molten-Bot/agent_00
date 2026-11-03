@@ -618,6 +618,15 @@ func (h Harness) processChangedRepo(
 	if err != nil {
 		return exitCode, stage, err
 	}
+	if repo.CreateWorkBranch {
+		hasNetDiff, diffErr := h.repoHasEffectivePullRequestDiff(ctx, *repo)
+		if diffErr != nil {
+			return ExitGit, "git", diffErr
+		}
+		if !hasNetDiff {
+			return ExitPR, "review", fmt.Errorf("post-task review cycle left no net changes against the base branch; pull request remains in draft for correction")
+		}
+	}
 	if !cfg.Draft {
 		if releaseErr := h.markPullRequestReadyForReview(ctx, *repo); releaseErr != nil {
 			return ExitPR, "review", releaseErr
@@ -3278,6 +3287,23 @@ func (h Harness) repoHasPullRequestDelta(ctx context.Context, repo repoWorkspace
 	return commitsAhead > 0, nil
 }
 
+func (h Harness) repoHasEffectivePullRequestDiff(ctx context.Context, repo repoWorkspace) (bool, error) {
+	baseRef := remoteBaseComparisonRef(normalizeBranchRef(repo.BaseBranch))
+	if baseRef == "" {
+		return false, fmt.Errorf("base branch is required to verify the pull request diff for repo %s", repo.URL)
+	}
+	res, err := h.runCommand(ctx, "git", gitCommand(repo.Dir, "diff", "--name-only", fmt.Sprintf("%s...HEAD", baseRef)))
+	if err != nil {
+		return false, commandErrorWithDetails(
+			fmt.Sprintf("verify pull request diff against %s for repo %s", baseRef, repo.URL),
+			err,
+			res,
+			maxGitErrorDetailChars,
+		)
+	}
+	return strings.TrimSpace(res.Stdout) != "", nil
+}
+
 func (h Harness) repoHeadChangedSinceBaseline(ctx context.Context, repo repoWorkspace) (bool, error) {
 	baseline := strings.TrimSpace(repo.BaselineHead)
 	if baseline == "" {
@@ -3763,20 +3789,27 @@ func indentedPromptBlock(value, fallback string) string {
 	return strings.Join(lines, "\n")
 }
 
-func withAgentsPrompt(prompt, agentsPath string) string {
+func withAgentsPrompt(prompt, standardAgentsPath string, repositoryAgentsPaths ...string) string {
 	base := strings.TrimSpace(prompt)
-	agentsPath = strings.TrimSpace(agentsPath)
+	standardAgentsPath = strings.TrimSpace(standardAgentsPath)
 
-	location := "./AGENTS.md"
-	if agentsPath != "" {
-		location = agentsPath
+	standardLocation := "./AGENTS.md"
+	if standardAgentsPath != "" {
+		standardLocation = standardAgentsPath
 	}
 
 	directive := fmt.Sprintf(
-		"Use %s as your primary implementation instructions before making any changes.\n%s",
-		location,
+		"Before editing, read and follow the shared implementation guide at %s. Also read any repository-specific AGENTS.md instructions that apply to the files you inspect or change; follow the repository's conventions together with the shared guide.\n%s",
+		standardLocation,
 		agentsCredentialGuardInstruction,
 	)
+	for _, repositoryAgentsPath := range repositoryAgentsPaths {
+		repositoryAgentsPath = strings.TrimSpace(repositoryAgentsPath)
+		if repositoryAgentsPath == "" || filepath.Clean(repositoryAgentsPath) == filepath.Clean(standardLocation) {
+			continue
+		}
+		directive += fmt.Sprintf("\nRead the repository-specific instructions at %s as well.", repositoryAgentsPath)
+	}
 	if base == "" {
 		return directive
 	}
@@ -5308,7 +5341,8 @@ func (h Harness) runCodexCapture(
 			stagedCleanup = func() error { return nil }
 		}
 
-		promptAgentsPath := stagedAgentsPath
+		standardAgentsPath := promptPathForCodex(targetDir, stagedAgentsPath)
+		repositoryAgentsPath := ""
 		targetAgentsPath, targetAgentsCleanup, ensureErr := selectAgentsPromptFile(targetDir, stagedAgentsPath)
 		if ensureErr != nil {
 			h.logf(
@@ -5318,11 +5352,11 @@ func (h Harness) runCodexCapture(
 				ensureErr,
 			)
 			targetAgentsCleanup = func() error { return nil }
-		} else {
-			promptAgentsPath = promptPathForCodex(targetDir, targetAgentsPath)
+		} else if filepath.Clean(targetAgentsPath) != filepath.Clean(stagedAgentsPath) {
+			repositoryAgentsPath = promptPathForCodex(targetDir, targetAgentsPath)
 		}
 
-		finalPrompt = withAgentsPrompt(finalPrompt, promptAgentsPath)
+		finalPrompt = withAgentsPrompt(finalPrompt, standardAgentsPath, repositoryAgentsPath)
 		cleanup = combineCleanupFns(stagedCleanup, targetAgentsCleanup)
 	}
 	if promptWithResponseMode, err := withResponseModePrompt(finalPrompt, responseMode); err != nil {
@@ -5948,6 +5982,18 @@ func (h Harness) agentStageTimeout() time.Duration {
 }
 
 func codexReportedFailure(res execx.Result) (bool, string) {
+	// Some Codex CLI/account model mismatches are printed as diagnostics while
+	// the process exits successfully. Surface this invocation failure instead
+	// of treating the resulting empty worktree as an agent no-op.
+	for _, output := range []string{res.Stdout, res.Stderr} {
+		for _, line := range splitOutputLines(output) {
+			trimmed := strings.TrimSpace(line)
+			lower := strings.ToLower(trimmed)
+			if strings.Contains(lower, "model is not supported when using codex with a chatgpt account") {
+				return true, trimmed
+			}
+		}
+	}
 	if failed, detail := codexReportedFailureInOutput(res.Stdout, true); failed {
 		return true, detail
 	}
