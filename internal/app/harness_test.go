@@ -9128,3 +9128,27 @@ func TestRunCodexDoesNotSuppressRetiredServiceBuildFailure(t *testing.T) {
 		t.Fatalf("reported repository failure suppressed: %v", err)
 	}
 }
+
+func TestFinalReviewFixPromptRequiresMeasuredQualityTargets(t *testing.T) {
+	t.Parallel()
+
+	prompt := finalReviewFixPrompt(
+		"Raise UBE unit-test coverage to 90%.",
+		repoWorkspace{PRURL: "https://example.test/org/repo/pull/1", Branch: "agent00-coverage"},
+		[]reviewFinding{{Severity: "high", Path: "apps/ube/vitest.config.ts", Line: 29, Title: "90% threshold is unsupported by current coverage"}},
+		1,
+		6,
+	)
+
+	for _, want := range []string{
+		"A stricter test, coverage, lint, or quality threshold is not evidence that its target is met.",
+		"Do not add, raise, or retain such a gate unless the relevant measurement passes at that target.",
+		"make underlying code or test changes first, then run the measurement.",
+		"Do not remove a gate solely to make validation pass.",
+		"report Failure and Error details instead of oscillating between incompatible gate-only changes.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("finalReviewFixPrompt() missing %q:\n%s", want, prompt)
+		}
+	}
+}
