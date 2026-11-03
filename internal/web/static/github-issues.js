@@ -400,7 +400,7 @@
       const issues = Array.isArray(body.issues) ? body.issues : [];
       currentIssues = issues;
       renderIssueList(issues);
-      setStatus(`${issues.length}${issues.length === 100 ? "+" : ""} issues`);
+      setStatus("");
     } catch (error) {
       if (generation === requestGeneration) setStatus(error.message || "Unable to load issues.", "error");
     }

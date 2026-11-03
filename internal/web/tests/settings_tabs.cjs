@@ -315,8 +315,10 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   assert.equal(await page.locator('#prompt-visibility-toggle').count(), 0);
   await page.locator('#github-issues-repo').selectOption('Molten-Bot/agent_00');
   await page.locator('.github-issue-list-item').waitFor();
+  await page.waitForFunction(() => document.getElementById('github-issues-status').textContent === '');
   assert.equal(issueQueryState, 'open');
   assert.match(await page.locator('#github-issues-count').textContent(), /open issues/);
+  assert.equal(await page.locator('#github-issues-status').textContent(), '');
   assert.match(await page.locator('.github-issue-list-title').textContent(), /Add issue browser/);
   const resizeHandle = page.locator('#github-issues-resize-handle');
   await resizeHandle.focus();
