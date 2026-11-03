@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,6 +44,13 @@ type GitHubIssueComment struct {
 	Body      string          `json:"body"`
 	CreatedAt string          `json:"createdAt,omitempty"`
 	URL       string          `json:"url,omitempty"`
+}
+
+type githubIssueCommentResponse struct {
+	User      GitHubIssueUser `json:"user"`
+	Body      string          `json:"body"`
+	CreatedAt string          `json:"created_at"`
+	HTMLURL   string          `json:"html_url"`
 }
 
 func (s Server) handleGitHubIssues(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +154,7 @@ func (s Server) handleGitHubIssueDetail(w http.ResponseWriter, r *http.Request, 
 	}
 	commentResult, err := s.GitHubIssueRunner.Run(r.Context(), execx.Command{
 		Name: "gh",
-		Args: []string{"api", "--paginate", "--slurp", fmt.Sprintf("repos/%s/issues/%d/comments", repository, number)},
+		Args: []string{"api", "--paginate", fmt.Sprintf("repos/%s/issues/%d/comments", repository, number)},
 	})
 	if err != nil {
 		s.logf("localruntime.ui status=warn endpoint=github_issue_comments repo=%s issue=%d err=%q", repository, number, err)
@@ -168,26 +176,45 @@ func decodePaginatedGitHubIssueComments(raw string, issue *GitHubIssue) error {
 		issue.Comments = []GitHubIssueComment{}
 		return nil
 	}
-	var pages [][]struct {
-		User      GitHubIssueUser `json:"user"`
-		Body      string          `json:"body"`
-		CreatedAt string          `json:"created_at"`
-		HTMLURL   string          `json:"html_url"`
-	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &pages); err != nil {
-		return err
-	}
-	for _, page := range pages {
-		for _, comment := range page {
-			issue.Comments = append(issue.Comments, GitHubIssueComment{
-				Author: comment.User, Body: comment.Body, CreatedAt: comment.CreatedAt, URL: comment.HTMLURL,
-			})
+	trimmed := strings.TrimSpace(raw)
+	var pages [][]githubIssueCommentResponse
+	if err := json.Unmarshal([]byte(trimmed), &pages); err == nil {
+		for _, page := range pages {
+			appendGitHubIssueComments(issue, page)
 		}
+		if issue.Comments == nil {
+			issue.Comments = []GitHubIssueComment{}
+		}
+		return nil
+	}
+
+	// gh versions without --slurp print each paginated JSON response as its own
+	// top-level array. Decode the JSON stream page by page to support those
+	// versions as well as the slurped array format above.
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	for {
+		var page []githubIssueCommentResponse
+		err := decoder.Decode(&page)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		appendGitHubIssueComments(issue, page)
 	}
 	if issue.Comments == nil {
 		issue.Comments = []GitHubIssueComment{}
 	}
 	return nil
+}
+
+func appendGitHubIssueComments(issue *GitHubIssue, comments []githubIssueCommentResponse) {
+	for _, comment := range comments {
+		issue.Comments = append(issue.Comments, GitHubIssueComment{
+			Author: comment.User, Body: comment.Body, CreatedAt: comment.CreatedAt, URL: comment.HTMLURL,
+		})
+	}
 }
 
 func validGitHubRepository(value string) (string, bool) {

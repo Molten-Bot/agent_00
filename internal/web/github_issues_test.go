@@ -80,7 +80,8 @@ func TestGitHubIssueDetailIncludesComments(t *testing.T) {
 		if cmd.Name == "gh" && len(cmd.Args) > 1 && cmd.Args[0] == "issue" {
 			return execx.Result{Stdout: `{"number":17,"title":"Add issue browser","body":"Description","state":"OPEN","url":"https://github.com/acme/repo/issues/17","author":{"login":"octocat"},"labels":[{"name":"feature"}],"assignees":[{"login":"octocat"}]}`}, nil
 		}
-		return execx.Result{Stdout: `[[{"user":{"login":"hubot"},"body":"Please add tests","created_at":"2026-01-01T00:00:00Z"}],[{"user":{"login":"octocat"},"body":"Second page comment","created_at":"2026-01-02T00:00:00Z"}]]`}, nil
+		return execx.Result{Stdout: `[{"user":{"login":"hubot"},"body":"Please add tests","created_at":"2026-01-01T00:00:00Z"}]
+[{"user":{"login":"octocat"},"body":"Second page comment","created_at":"2026-01-02T00:00:00Z"}]`}, nil
 	}), true)
 	response := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/issues/17?repo=acme/repo", nil))
@@ -89,7 +90,7 @@ func TestGitHubIssueDetailIncludesComments(t *testing.T) {
 	}
 	wantCommands := [][]string{
 		{"issue", "view", "17", "--repo", "acme/repo", "--json", "number,title,body,state,url,author,labels,assignees,createdAt,updatedAt"},
-		{"api", "--paginate", "--slurp", "repos/acme/repo/issues/17/comments"},
+		{"api", "--paginate", "repos/acme/repo/issues/17/comments"},
 	}
 	if len(got) != len(wantCommands) {
 		t.Fatalf("command count = %d, want %d: %#v", len(got), len(wantCommands), got)
@@ -101,6 +102,31 @@ func TestGitHubIssueDetailIncludesComments(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `"body":"Please add tests"`) || !strings.Contains(response.Body.String(), `"body":"Second page comment"`) {
 		t.Fatalf("response omitted paginated issue comments: %s", response.Body.String())
+	}
+}
+
+func TestDecodePaginatedGitHubIssueCommentsAcceptsSlurpedAndEmptyResponses(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want int
+	}{
+		{name: "slurped pages", raw: `[[{"user":{"login":"hubot"},"body":"first"}],[{"user":{"login":"octocat"},"body":"second"}]]`, want: 2},
+		{name: "no comments", raw: `[]`, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			issue := GitHubIssue{}
+			if err := decodePaginatedGitHubIssueComments(tc.raw, &issue); err != nil {
+				t.Fatalf("decodePaginatedGitHubIssueComments() error = %v", err)
+			}
+			if len(issue.Comments) != tc.want {
+				t.Fatalf("comments count = %d, want %d", len(issue.Comments), tc.want)
+			}
+			if issue.Comments == nil {
+				t.Fatal("comments is nil, want an empty or populated slice")
+			}
+		})
 	}
 }
 
