@@ -8351,6 +8351,9 @@ func TestWithCompletionGatePromptIncludesAgentRuntimeGuidance(t *testing.T) {
 	got := withCompletionGatePrompt("Build API")
 	wantSnippets := []string{
 		"Agent input:\nBuild API",
+		"When a task or review requires a test, coverage, lint, or quality target, first make underlying code or test changes and run the measurement.",
+		"Add or raise the required gate only after the target passes.",
+		"Keep an existing required gate; do not remove it merely to make validation pass.",
 		"Treat non-empty product, bug, feature, or review text in it as the implementation target.",
 		"Do not answer that no implementation task was given when the agent input includes a requested repository change.",
 		"When failures occur, send a response back to the calling agent that clearly states failure and includes the error details. Use explicit `Failure:` and `Error details:` fields.",
@@ -8366,6 +8369,36 @@ func TestWithCompletionGatePromptIncludesAgentRuntimeGuidance(t *testing.T) {
 		if !strings.Contains(got, snippet) {
 			t.Fatalf("withCompletionGatePrompt() missing snippet %q", snippet)
 		}
+	}
+}
+
+func TestAgentCommandWithOptionsOmitsQualityTargetForReadOnlyReview(t *testing.T) {
+	t.Parallel()
+
+	readOnly, err := agentCommandWithOptions(
+		agentruntime.Default(),
+		"/tmp/repo",
+		"Perform a read-only pull request review.",
+		codexRunOptions{DisallowedTools: readOnlyReviewDisallowedTools},
+	)
+	if err != nil {
+		t.Fatalf("agentCommandWithOptions(read-only) error = %v", err)
+	}
+	if strings.Contains(readOnly.Stdin, measuredQualityTargetInstruction) {
+		t.Fatalf("read-only review prompt unexpectedly requires quality-target changes: %q", readOnly.Stdin)
+	}
+
+	implementation, err := agentCommandWithOptions(
+		agentruntime.Default(),
+		"/tmp/repo",
+		"Implement requested behavior.",
+		codexRunOptions{},
+	)
+	if err != nil {
+		t.Fatalf("agentCommandWithOptions(implementation) error = %v", err)
+	}
+	if !strings.Contains(implementation.Stdin, measuredQualityTargetInstruction) {
+		t.Fatalf("implementation prompt missing quality-target guidance: %q", implementation.Stdin)
 	}
 }
 
@@ -9126,5 +9159,28 @@ func TestRunCodexDoesNotSuppressRetiredServiceBuildFailure(t *testing.T) {
 	err := New(fake).runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
 	if err == nil || !strings.Contains(err.Error(), "reported failure") {
 		t.Fatalf("reported repository failure suppressed: %v", err)
+	}
+}
+
+func TestFinalReviewFixPromptRequiresMeasuredQualityTargets(t *testing.T) {
+	t.Parallel()
+
+	prompt := finalReviewFixPrompt(
+		"Raise UBE unit-test coverage to 90%.",
+		repoWorkspace{PRURL: "https://example.test/org/repo/pull/1", Branch: "agent00-coverage"},
+		[]reviewFinding{{Severity: "high", Path: "apps/ube/vitest.config.ts", Line: 29, Title: "90% threshold is unsupported by current coverage"}},
+		1,
+		6,
+	)
+
+	for _, want := range []string{
+		"When a task or review requires a test, coverage, lint, or quality target, first make underlying code or test changes and run the measurement.",
+		"Add or raise the required gate only after the target passes.",
+		"Keep an existing required gate; do not remove it merely to make validation pass.",
+		"If the target cannot be met safely in this pass, report Failure and Error details instead of making gate-only changes.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("finalReviewFixPrompt() missing %q:\n%s", want, prompt)
+		}
 	}
 }
