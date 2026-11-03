@@ -126,7 +126,6 @@
               <p id="prompt-panel-copy" class="panel-section-copy">Compose a repository run, start from a library task, or edit the raw JSON payload.</p>
             </div>
             <div class="prompt-titlebar-actions">
-              <button id="prompt-visibility-toggle" class="prompt-visibility-toggle" type="button" aria-pressed="true" aria-label="Minimize Studio panel" title="Minimize Studio panel">▾</button>
             </div>
           </div>
           <form id="local-prompt-form" class="prompt-form">
@@ -972,7 +971,6 @@
     const REPO_HISTORY_KEY = "hubui.repoHistory.v1";
     const REVIEWER_HISTORY_KEY = "hubui.reviewerHistory.v1";
     const PROMPT_MODE_KEY = "hubui.localPromptMode";
-    const PROMPT_VISIBILITY_KEY = "hubui.localPromptVisible";
     const TASK_VISIBILITY_KEY = "hubui.taskPanelVisible";
     const TASK_PANEL_VIEW_KEY = "hubui.taskPanelView";
     const TASK_STATUS_FILTER_KEY = "hubui.taskStatusFilter";
@@ -1708,14 +1706,6 @@
       }
     }
 
-    function loadPromptVisibility() {
-      try {
-        return localStorage.getItem(PROMPT_VISIBILITY_KEY) !== "hidden";
-      } catch (_err) {
-        return true;
-      }
-    }
-
     function loadTaskVisibility() {
       try {
         return localStorage.getItem(TASK_VISIBILITY_KEY) !== "hidden";
@@ -1885,7 +1875,6 @@
       promptMode: loadPromptMode(),
       selectedLibraryType: "",
       selectedLibraryTask: "",
-      promptVisible: loadPromptVisibility(),
       taskVisible: loadTaskVisibility(),
       taskPanelView: loadTaskPanelView(),
       taskStatusFilter: loadTaskStatusFilter(),
@@ -2139,7 +2128,6 @@
     const libraryPromptContextInput = document.getElementById("library-prompt-context-input");
     const rightCol = document.querySelector(".right-col");
     const promptWrap = document.querySelector(".prompt-wrap");
-    const promptVisibilityToggle = document.getElementById("prompt-visibility-toggle");
     const agentAuthGate = document.getElementById("agent-auth-gate");
     const agentAuthShell = document.getElementById("agent-auth-shell");
     const reviewSettingsForm = document.getElementById("review-settings-form");
@@ -6729,14 +6717,6 @@
       }
     }
 
-    function persistPromptVisibility() {
-      try {
-        localStorage.setItem(PROMPT_VISIBILITY_KEY, state.promptVisible ? "visible" : "hidden");
-      } catch (_err) {
-        // Ignore localStorage failures.
-      }
-    }
-
     function persistTaskVisibility() {
       try {
         localStorage.setItem(TASK_VISIBILITY_KEY, state.taskVisible ? "visible" : "hidden");
@@ -8924,11 +8904,6 @@
       if (!isIssues) queuePromptInputSizeSync(isJSON ? localPromptInput : builderPromptInput);
       syncPromptSpeechButton();
       if (isIssues) void window.initGitHubIssuesPanel?.();
-      if (!state.promptVisible && !Boolean(state.ui?.automaticMode)) {
-        state.promptVisible = true;
-        persistPromptVisibility();
-        applyPromptVisibility();
-      }
       if (previousMode !== mode) {
         trackAnalyticsEvent("prompt_mode_changed", { prompt_mode: mode });
       }
@@ -8936,7 +8911,7 @@
 
     function activatePromptMode(mode) {
       const nextMode = mode === "library" || mode === "json" || mode === "issues" ? mode : "builder";
-      if (state.appDisplay === "studio" && state.promptMode === nextMode && state.promptVisible) return;
+      if (state.appDisplay === "studio" && state.promptMode === nextMode && !Boolean(state.ui?.automaticMode)) return;
       const wasStudio = state.appDisplay === "studio";
       const promptModeChanged = state.promptMode !== nextMode;
       if (nextMode === "json") {
@@ -8986,7 +8961,7 @@
 
     function applyPromptVisibility() {
       const automatic = Boolean(state.ui?.automaticMode);
-      const visible = !automatic && state.promptVisible;
+      const visible = !automatic;
       const issueMode = state.promptMode === "issues";
       if (promptWrap) {
         promptWrap.classList.toggle("prompt-collapsed", !visible);
@@ -9001,28 +8976,9 @@
       if (rightCol) {
         rightCol.classList.toggle("prompt-collapsed", !visible);
       }
-      if (promptVisibilityToggle) {
-        promptVisibilityToggle.disabled = automatic;
-        promptVisibilityToggle.hidden = automatic;
-        promptVisibilityToggle.setAttribute("aria-hidden", automatic ? "true" : "false");
-        promptVisibilityToggle.textContent = visible ? "▾" : "▸";
-        promptVisibilityToggle.setAttribute("aria-label", visible ? "Minimize Studio panel" : "Expand Studio panel");
-        promptVisibilityToggle.title = visible ? "Minimize Studio panel" : "Expand Studio panel";
-        promptVisibilityToggle.setAttribute("aria-pressed", visible ? "true" : "false");
-      }
       if (automatic) {
         setLocalPromptStatus("warn", "Automatic mode enabled; Studio is hidden.");
       }
-    }
-
-    function togglePromptVisibility() {
-      if (Boolean(state.ui?.automaticMode)) {
-        return;
-      }
-      state.promptVisible = !state.promptVisible;
-      persistPromptVisibility();
-      applyPromptVisibility();
-      trackAnalyticsEvent("prompt_visibility_changed", { visible: state.promptVisible });
     }
 
     function applyTaskVisibility() {
@@ -13486,7 +13442,6 @@
       void verifyAgentDeviceAuth();
       return false;
     };
-    promptVisibilityToggle.addEventListener("click", togglePromptVisibility);
     taskVisibilityToggle.addEventListener("click", toggleTaskVisibility);
     taskHistoryToggle.addEventListener("click", () => {
       const currentFilter = normalizeTaskStatusFilter(state.taskStatusFilter);

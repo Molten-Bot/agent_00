@@ -297,6 +297,7 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   assert.equal(await page.locator('#github-issues-panel').isVisible(), true);
   assert.equal(await page.locator('#local-prompt-form').evaluate(form => form.classList.contains('hidden')), true);
   assert.equal(await page.locator('.prompt-wrap').isVisible(), true);
+  assert.equal(await page.locator('#prompt-visibility-toggle').count(), 0);
   await page.locator('#github-issues-repo').selectOption('Molten-Bot/agent_00');
   await page.locator('.github-issue-list-item').waitFor();
   assert.match(await page.locator('.github-issue-list-title').textContent(), /Add issue browser/);

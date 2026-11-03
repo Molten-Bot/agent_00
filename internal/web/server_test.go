@@ -1013,11 +1013,11 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `taskVisibilityToggle.setAttribute("aria-hidden", fullscreenOpen ? "true" : "false");`) {
 		t.Fatalf("expected task minimize control to be unavailable while Current Work is expanded")
 	}
-	if !strings.Contains(markup, `promptVisibilityToggle.hidden = automatic;`) {
-		t.Fatalf("expected index html to keep the studio toggle available outside automatic mode")
+	if strings.Contains(markup, `id="prompt-visibility-toggle"`) {
+		t.Fatalf("expected the Studio panel collapse control to be removed")
 	}
-	if !strings.Contains(markup, `if (!state.promptVisible && !Boolean(state.ui?.automaticMode)) {`) {
-		t.Fatalf("expected index html to auto-expand studio when a mode tab is selected")
+	if !strings.Contains(markup, `const visible = !automatic;`) {
+		t.Fatalf("expected Studio to remain visible outside automatic mode")
 	}
 	if !strings.Contains(markup, `id="task-panel" class="panel brand-login-card-shell" aria-hidden="false"`) {
 		t.Fatalf("expected index html to render the task queue panel with globally owned shell styles")
@@ -2130,14 +2130,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "dropReposFromHistory(failedRepoAccessRepos);") {
 		t.Fatalf("expected index html to drop inaccessible repositories from history on repo access failures")
 	}
-	if !strings.Contains(markup, "function togglePromptVisibility(") {
-		t.Fatalf("expected index html to include prompt visibility toggle handler")
+	if strings.Contains(markup, "function togglePromptVisibility(") {
+		t.Fatalf("expected index html to remove prompt visibility toggle handler")
 	}
 	if !strings.Contains(markup, "function applyPromptVisibility(") {
 		t.Fatalf("expected index html to include prompt visibility renderer")
 	}
-	if !strings.Contains(markup, `promptVisibilityToggle.textContent = visible ? "▾" : "▸";`) {
-		t.Fatalf("expected index html to render studio toggle arrow icons for minimize/expand")
+	if strings.Contains(markup, "promptVisibilityToggle") {
+		t.Fatalf("expected index html to remove Studio panel toggle behavior")
 	}
 	if !strings.Contains(markup, `pauseRun.appendChild(createTaskActionIcon(canRun ? "play" : "pause"));`) {
 		t.Fatalf("expected index html to render task pause/run icon control from backend capabilities")
@@ -2168,8 +2168,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "syncTaskCompletionSparkles(previousSnapshot, snapshot);") {
 		t.Fatalf("expected index html to trigger sparklets when task status first becomes completed")
 	}
-	if !strings.Contains(markup, `const PROMPT_VISIBILITY_KEY = "hubui.localPromptVisible";`) {
-		t.Fatalf("expected index html to persist prompt visibility preference")
+	if strings.Contains(markup, `const PROMPT_VISIBILITY_KEY = "hubui.localPromptVisible";`) {
+		t.Fatalf("expected index html to remove the Studio visibility preference")
 	}
 	if !strings.Contains(markup, "function renderConfiguredAgent()") ||
 		!strings.Contains(markup, "window.AgentHeader.update({") {
