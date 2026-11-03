@@ -22,7 +22,6 @@
   <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
   <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/github-issues.css?v=5">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -373,24 +372,38 @@
               </div>
             </div>
           </form>
-          <section id="github-issues-panel" class="github-issues-panel hidden" aria-label="GitHub Issues" aria-hidden="true">
+          <section id="github-issues-panel" class="github-issues-panel prompt-form hidden" aria-label="GitHub Issues" aria-hidden="true">
             <p id="github-issues-status" class="github-issues-status" role="status" aria-live="polite">Loading GitHub Issues settings…</p>
             <div id="github-issues-disabled" class="github-issues-disabled" hidden>Turn on GitHub Issues in <a href="/#settings">Settings</a> to browse issues.</div>
             <div id="github-issues-browser" class="github-issues-browser" hidden>
-              <form id="github-issues-filters" class="github-issues-filters prompt-grid">
-                <label class="prompt-field prompt-field-repo-history github-issues-repository">
+              <form id="github-issues-filters" class="prompt-grid">
+                <label class="prompt-field prompt-field-repo-history">
                   <span class="prompt-label">Repository</span>
-                  <select id="github-issues-repo" class="prompt-control" required><option value="">Loading repositories…</option></select>
+                  <span class="prompt-select-action-wrap">
+                    <select id="github-issues-repo" class="prompt-control" required><option value="">Loading repositories…</option></select>
+                  </span>
                 </label>
-                <label class="prompt-field prompt-field-repository github-issues-search">
+                <label class="prompt-field prompt-field-repository">
                   <span class="prompt-label">Search</span>
                   <input id="github-issues-search" class="prompt-control prompt-input" type="search" maxlength="256" placeholder="Search this repository" autocomplete="off">
                 </label>
-                <button class="prompt-action-button" type="submit">Search</button>
               </form>
               <div class="github-issues-columns">
                 <section id="github-issues-list-panel" class="github-issues-list-panel" aria-labelledby="github-issues-list-title">
-                  <div class="github-issues-list-heading"><h2 id="github-issues-list-title">Issues</h2><span id="github-issues-count" class="github-issues-list-count">Choose a repository</span></div>
+                  <div class="github-issues-list-heading">
+                    <h2 id="github-issues-list-title">Issues</h2>
+                    <div class="github-issues-list-heading-actions">
+                      <button id="github-issues-assignee-filter" class="github-issues-assignee-filter" type="button" aria-pressed="false" aria-label="Show only issues assigned to me" title="Show only issues assigned to me">
+                        <svg class="lucide lucide-user-round-arrow-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <path d="m19 16-3 3"></path>
+                          <path d="M2 21a8 8 0 0 1 12.664-6.5"></path>
+                          <path d="M22 19h-6l3 3"></path>
+                          <circle cx="10" cy="8" r="5"></circle>
+                        </svg>
+                      </button>
+                      <span id="github-issues-count" class="github-issues-list-count">Choose a repository</span>
+                    </div>
+                  </div>
                   <ol id="github-issues-list" class="github-issues-list"></ol>
                 </section>
                 <div id="github-issues-resize-handle" class="github-issues-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize issue list" aria-valuemin="220" aria-valuemax="900" aria-valuenow="320" tabindex="0"></div>
@@ -13714,6 +13727,6 @@
   <script src="/static/library-schedules.js"></script>
   <script src="/static/commit-signing.js"></script>
   <script src="/static/custom-library-sources.js"></script>
-  <script src="/static/github-issues.js?v=5"></script>
+  <script src="/static/github-issues.js?v=8"></script>
 </body>
 </html>

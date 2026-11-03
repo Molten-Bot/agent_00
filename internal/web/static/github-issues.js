@@ -6,13 +6,14 @@
   const browser = document.getElementById("github-issues-browser");
   const repoSelect = document.getElementById("github-issues-repo");
   const searchInput = document.getElementById("github-issues-search");
+  const assigneeFilter = document.getElementById("github-issues-assignee-filter");
   const filters = document.getElementById("github-issues-filters");
   const issueList = document.getElementById("github-issues-list");
   const issueCount = document.getElementById("github-issues-count");
   const detail = document.getElementById("github-issue-detail");
   const columns = document.querySelector(".github-issues-columns");
   const resizeHandle = document.getElementById("github-issues-resize-handle");
-  if (!status || !disabled || !browser || !repoSelect || !filters || !issueList || !detail) return;
+  if (!status || !disabled || !browser || !repoSelect || !searchInput || !filters || !issueList || !detail) return;
 
   const layoutStorageKey = "hubui.githubIssuesLayout.v1";
   const repositoryStorageKey = "hubui.githubIssuesRepository.v1";
@@ -86,6 +87,8 @@
   let loadingIssueNumber = null;
   let githubIssueLinkMode = "reference";
   let requestGeneration = 0;
+  let searchTimer = null;
+  let assignedToMe = false;
 
   function setStatus(message, kind) {
     status.textContent = String(message || "");
@@ -456,6 +459,10 @@
   }
 
   async function loadIssues() {
+    if (searchTimer !== null) {
+      window.clearTimeout(searchTimer);
+      searchTimer = null;
+    }
     const repo = selectedRepository();
     selectedIssue = null;
     selectedIssueNumber = null;
@@ -474,6 +481,7 @@
     setStatus(`Loading issues for ${repo.full_name}…`);
     const query = new URLSearchParams({ repo: repo.full_name, state: "open" });
     if (searchInput.value.trim()) query.set("search", searchInput.value.trim());
+    if (assignedToMe) query.set("assignee", "me");
     try {
       const body = await requestJSON(`/api/github/issues?${query}`, { cache: "no-store" });
       if (generation !== requestGeneration) return;
@@ -543,6 +551,23 @@
       else localStorage.removeItem(repositoryStorageKey);
     } catch (_error) { /* Ignore unavailable storage. */ }
     void loadIssues();
+  });
+  if (assigneeFilter) {
+    assigneeFilter.addEventListener("click", () => {
+      assignedToMe = !assignedToMe;
+      const label = assignedToMe ? "Show all issues" : "Show only issues assigned to me";
+      assigneeFilter.setAttribute("aria-pressed", String(assignedToMe));
+      assigneeFilter.setAttribute("aria-label", label);
+      assigneeFilter.title = label;
+      void loadIssues();
+    });
+  }
+  searchInput.addEventListener("input", () => {
+    if (searchTimer !== null) window.clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(() => {
+      searchTimer = null;
+      void loadIssues();
+    }, 250);
   });
   filters.addEventListener("submit", (event) => {
     event.preventDefault();

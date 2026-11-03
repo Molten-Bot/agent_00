@@ -285,7 +285,7 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
   });
 
   assert.notEqual(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
-  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=5');
+  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=8');
   await page.waitForFunction(() => document.querySelector('.github-issue-empty-state h2')?.textContent === 'No repositories available');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No repositories available');
   await page.locator('#github-issues-dock-link').click();
@@ -293,6 +293,7 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
 });
 
 test('GitHub Issues remembers its repository and gives a useful empty state', async t => {
+  let lastSearch = '';
   const { page } = await openSettings(t, {
     path: '/',
     initialSettings: { ...defaults, github_issues_enabled: true },
@@ -301,7 +302,10 @@ test('GitHub Issues remembers its repository and gives a useful empty state', as
       await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
         { full_name: 'Molten-Bot/agent_00', default_branch: 'main' },
       ] } }));
-      await page.route('**/api/github/issues**', route => route.fulfill({ json: { ok: true, issues: [] } }));
+      await page.route('**/api/github/issues**', route => {
+        lastSearch = new URL(route.request().url()).searchParams.get('search') || '';
+        return route.fulfill({ json: { ok: true, issues: [] } });
+      });
     },
   });
 
@@ -312,12 +316,17 @@ test('GitHub Issues remembers its repository and gives a useful empty state', as
   await page.locator('#github-issues-dock-link').click();
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.body.scrollWidth), 390, 'mobile Issues view should not scroll horizontally');
-  assert.equal(await page.getByRole('button', { name: 'Search' }).isVisible(), true);
+  assert.equal(await page.locator('#github-issues-filters button').count(), 0, 'issue search should not need a Search button');
+  const automaticSearch = page.waitForResponse(response => new URL(response.url()).searchParams.get('search') === 'retry');
+  await page.locator('#github-issues-search').fill('retry');
+  await automaticSearch;
+  assert.equal(lastSearch, 'retry', 'typing should automatically search issues');
 });
 
 test('GitHub Issues renders inside Studio and uses the configured link mode', async t => {
   let submitted;
   let issueQueryState;
+  let issueAssigneeFilter;
   const issueURL = 'https://github.com/Molten-Bot/agent_00/issues/17';
   const { page } = await openSettings(t, {
     path: '/#studio-issues',
@@ -329,7 +338,10 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
       await page.route('**/api/github/issues**', route => {
         const issueRequest = new URL(route.request().url());
         const path = issueRequest.pathname;
-        if (path === '/api/github/issues') issueQueryState = issueRequest.searchParams.get('state');
+        if (path === '/api/github/issues') {
+          issueQueryState = issueRequest.searchParams.get('state');
+          issueAssigneeFilter = issueRequest.searchParams.get('assignee') || '';
+        }
         const issue = { number: 17, title: 'Add issue browser', state: 'OPEN', url: issueURL,
           author: { login: 'octocat' }, labels: [{ name: 'feature' }], assignees: [{ login: 'hubot' }],
           createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' };
@@ -346,12 +358,20 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
 
   assert.equal(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
   assert.equal(await page.locator('#github-issues-panel').isVisible(), true);
-  assert.equal(await page.locator('link[href^="/static/github-issues.css"]').getAttribute('href'), '/static/github-issues.css?v=5');
-  assert.equal(await page.locator('#github-issues-panel').evaluate(panel => getComputedStyle(panel).padding), '0px');
   assert.equal(
-    Math.round((await page.locator('#github-issues-filters').boundingBox()).x),
-    Math.round((await page.locator('#github-issues-panel').boundingBox()).x),
-    'issue filters should fill the panel width without an outer inset',
+    await page.locator('#github-issues-panel').evaluate(panel => getComputedStyle(panel).padding),
+    await page.locator('#local-prompt-form').evaluate(form => getComputedStyle(form).padding),
+    'GitHub Issues should use the prompt form padding',
+  );
+  assert.equal(
+    await page.locator('#github-issues-filters').evaluate(filters => getComputedStyle(filters).gap),
+    await page.locator('#prompt-builder-panel .prompt-grid').evaluate(grid => getComputedStyle(grid).gap),
+    'issue filters should use the shared prompt grid spacing',
+  );
+  assert.equal(
+    Math.round((await page.locator('#github-issues-filters').boundingBox()).x - (await page.locator('#github-issues-panel').boundingBox()).x),
+    Number.parseFloat(await page.locator('#github-issues-panel').evaluate(panel => getComputedStyle(panel).paddingLeft)),
+    'issue filters should use the prompt form inset',
   );
   assert.equal(await page.locator('#local-prompt-form').evaluate(form => form.classList.contains('hidden')), true);
   assert.equal(await page.locator('.prompt-wrap').isVisible(), true);
@@ -364,6 +384,7 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   assert.equal(await page.locator('#github-issues-title').count(), 0);
   assert.equal(await page.locator('#github-issues-repo').evaluate(select => select.closest('#github-issues-filters') !== null), true);
   assert.equal(await page.locator('#github-issues-repo').evaluate(select => select.classList.contains('prompt-control')), true);
+  assert.equal(await page.locator('#github-issues-repo').evaluate(select => select.parentElement.classList.contains('prompt-select-action-wrap')), true);
   assert.equal(
     await page.locator('#github-issues-repo').evaluate(select => getComputedStyle(select).borderRadius),
     await page.locator('#builder-repo-select').evaluate(select => getComputedStyle(select).borderRadius),
@@ -393,6 +414,18 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   await page.locator('.github-issue-list-item').waitFor();
   await page.waitForFunction(() => document.getElementById('github-issues-status').textContent === '');
   assert.equal(issueQueryState, 'open');
+  const assigneeFilter = page.getByRole('button', { name: 'Show only issues assigned to me' });
+  assert.equal(await assigneeFilter.innerText(), '', 'assignee filter should be icon-only');
+  assert.equal(await assigneeFilter.locator('svg.lucide-user-round-arrow-left').count(), 1);
+  const assignedIssuesResponse = page.waitForResponse(response => new URL(response.url()).searchParams.get('assignee') === 'me');
+  await assigneeFilter.click();
+  await assignedIssuesResponse;
+  assert.equal(issueAssigneeFilter, 'me');
+  assert.equal(await page.getByRole('button', { name: 'Show all issues' }).getAttribute('aria-pressed'), 'true');
+  const allIssuesResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/github/issues' && !new URL(response.url()).searchParams.has('assignee'));
+  await page.getByRole('button', { name: 'Show all issues' }).click();
+  await allIssuesResponse;
+  assert.equal(issueAssigneeFilter, '');
   assert.match(await page.locator('#github-issues-count').textContent(), /open issues/);
   assert.equal(await page.locator('#github-issues-status').textContent(), '');
   assert.match(await page.locator('.github-issue-list-title').textContent(), /Add issue browser/);
