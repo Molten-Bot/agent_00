@@ -406,7 +406,7 @@ func (s Server) injectBottomDockComponent(ctx context.Context, data []byte) []by
 	}
 	if enabled, settingsErr := s.githubIssuesEnabled(ctx); settingsErr != nil || !enabled {
 		dock = bytes.Replace(dock,
-			[]byte(`id="github-issues-dock-link" class="prompt-mode-link site-dock-link" href="/issues" data-page-nav-link="/issues" aria-label="GitHub Issues" title="GitHub Issues"`),
+			[]byte(`id="github-issues-dock-link" class="prompt-mode-link" href="#studio-issues" aria-selected="false" title="GitHub Issues"`),
 			[]byte(`id="github-issues-dock-link" class="prompt-mode-link site-dock-link is-disabled hidden" aria-label="GitHub Issues" aria-disabled="true" tabindex="-1" title="GitHub Issues is turned off in Settings"`), 1)
 	}
 	return bytes.Replace(data, []byte(bottomDockPlaceholder), bytes.TrimSpace(dock), 1)

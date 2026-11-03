@@ -3,7 +3,6 @@ package web
 import (
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"io"
 	"net/http"
 	"strconv"
@@ -243,31 +242,5 @@ func (s Server) handleGitHubIssuesPage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	content := `<link rel="stylesheet" href="/static/github-issues.css">
-<section class="github-issues-page" aria-labelledby="github-issues-title">
-  <header class="github-issues-header">
-    <div class="github-issues-heading"><p class="github-issues-eyebrow">Issue inbox</p><h1 id="github-issues-title">GitHub Issues</h1><p>Browse an issue and start a repository task that produces a pull request.</p></div>
-    <label class="github-issues-repository">Repository<select id="github-issues-repo" required><option value="">Loading repositories…</option></select></label>
-  </header>
-  <p id="github-issues-status" class="github-issues-status" role="status" aria-live="polite">Loading GitHub Issues settings…</p>
-  <div id="github-issues-disabled" class="github-issues-disabled" hidden>Turn on GitHub Issues in <a href="/#settings">Settings</a> to browse issues.</div>
-  <div id="github-issues-browser" hidden>
-    <form id="github-issues-filters" class="github-issues-filters">
-      <label>State<select id="github-issues-state"><option value="open">Open</option><option value="closed">Closed</option><option value="all">All</option></select></label>
-      <label class="github-issues-search">Search<input id="github-issues-search" type="search" maxlength="256" placeholder="Search this repository" autocomplete="off"></label>
-      <button type="submit">Search</button>
-    </form>
-    <div class="github-issues-columns">
-      <section class="github-issues-list-panel" aria-labelledby="github-issues-list-title">
-        <div class="github-issues-list-heading"><h2 id="github-issues-list-title">Issues</h2><span id="github-issues-count" class="github-issues-list-count">Choose a repository</span></div>
-        <ol id="github-issues-list" class="github-issues-list"></ol>
-      </section>
-      <article id="github-issue-detail" class="github-issue-detail" aria-live="polite"><p>Select an issue to see its details and conversation.</p></article>
-    </div>
-  </div>
-</section>
-<script src="/static/github-issues.js" defer></script>`
-	s.renderSitePage(r.Context(), w, sitePageData{
-		Title: "GitHub Issues · agent_00", BodyClass: "github-issues-body", PageClass: "github-issues-page-shell", MainClass: "github-issues-main", Heading: "GitHub Issues", Content: template.HTML(content),
-	})
+	http.Redirect(w, r, "/#studio-issues", http.StatusFound)
 }

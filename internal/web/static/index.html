@@ -22,6 +22,7 @@
   <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/github-issues.css">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -115,6 +116,10 @@
                 </span>
                 <span class="prompt-title-mode" data-prompt-title-mode="json" data-prompt-title-label="JSON Studio" aria-label="JSON Studio" hidden aria-hidden="true">
                   <i data-lucide="braces" class="prompt-title-icon" aria-hidden="true"></i>
+                  <span>Studio</span>
+                </span>
+                <span class="prompt-title-mode" data-prompt-title-mode="issues" data-prompt-title-label="GitHub Issues Studio" aria-label="GitHub Issues Studio" hidden aria-hidden="true">
+                  <i data-lucide="circle-dot" class="prompt-title-icon" aria-hidden="true"></i>
                   <span>Studio</span>
                 </span>
               </span>
@@ -369,6 +374,32 @@
               </div>
             </div>
           </form>
+          <section id="github-issues-panel" class="github-issues-panel hidden" aria-label="GitHub Issues" aria-hidden="true">
+            <header class="github-issues-workspace-head">
+              <div class="github-issues-heading">
+                <p class="github-issues-eyebrow">Issue inbox</p>
+                <h1 id="github-issues-title">GitHub Issues</h1>
+                <p>Browse an issue and start a repository task that produces a pull request.</p>
+              </div>
+              <label class="github-issues-repository">Repository<select id="github-issues-repo" required><option value="">Loading repositories…</option></select></label>
+            </header>
+            <p id="github-issues-status" class="github-issues-status" role="status" aria-live="polite">Loading GitHub Issues settings…</p>
+            <div id="github-issues-disabled" class="github-issues-disabled" hidden>Turn on GitHub Issues in <a href="/#settings">Settings</a> to browse issues.</div>
+            <div id="github-issues-browser" class="github-issues-browser" hidden>
+              <form id="github-issues-filters" class="github-issues-filters">
+                <label>State<select id="github-issues-state"><option value="open">Open</option><option value="closed">Closed</option><option value="all">All</option></select></label>
+                <label class="github-issues-search">Search<input id="github-issues-search" type="search" maxlength="256" placeholder="Search this repository" autocomplete="off"></label>
+                <button type="submit">Search</button>
+              </form>
+              <div class="github-issues-columns">
+                <section class="github-issues-list-panel" aria-labelledby="github-issues-list-title">
+                  <div class="github-issues-list-heading"><h2 id="github-issues-list-title">Issues</h2><span id="github-issues-count" class="github-issues-list-count">Choose a repository</span></div>
+                  <ol id="github-issues-list" class="github-issues-list"></ol>
+                </section>
+                <article id="github-issue-detail" class="github-issue-detail" aria-live="polite"><p>Select an issue to see its details and conversation.</p></article>
+              </div>
+            </div>
+          </section>
         </section>
 
         <section id="dashboard-display" class="dashboard-display hidden" aria-labelledby="dashboard-title" aria-hidden="true">
@@ -2007,6 +2038,7 @@
     const promptModeBuilder = document.getElementById("prompt-mode-builder");
     const promptModeLibrary = document.getElementById("prompt-mode-library");
     const promptModeJSON = document.getElementById("prompt-mode-json");
+    const promptModeIssues = document.getElementById("github-issues-dock-link");
     const promptTitleModes = Array.from(document.querySelectorAll("[data-prompt-title-mode]"));
     const appLayout = document.querySelector(".layout");
     const dashboardDisplay = document.getElementById("dashboard-display");
@@ -2046,6 +2078,7 @@
     const promptBuilderPanel = document.getElementById("prompt-builder-panel");
     const promptLibraryPanel = document.getElementById("prompt-library-panel");
     const promptRawPanel = document.getElementById("prompt-raw-panel");
+    const githubIssuesPanel = document.getElementById("github-issues-panel");
     const builderRepoSelect = document.getElementById("builder-repo-select");
     const builderRepoDelete = document.getElementById("builder-repo-delete");
     const builderRepoHistoryField = document.getElementById("builder-repo-history-field");
@@ -2193,7 +2226,7 @@
       link.setAttribute("aria-disabled", String(!available));
       link.tabIndex = available ? 0 : -1;
       if (available) {
-        link.href = "/issues";
+        link.href = "#studio-issues";
         link.title = "GitHub Issues";
       } else {
         link.removeAttribute("href");
@@ -2831,6 +2864,9 @@
       syncJSONModeLinkAvailability();
       if (!state.reviewSettings.chatEnabled && state.appDisplay === "chat") {
         setAppDisplay("studio");
+      }
+      if (!state.reviewSettings.githubIssuesEnabled && state.promptMode === "issues") {
+        setPromptMode("builder");
       }
       if (!state.reviewSettings.jsonEnabled && state.promptMode === "json") {
         setPromptMode("builder");
@@ -6970,6 +7006,8 @@
 
     function promptModeDescription(mode) {
       switch (mode) {
+        case "issues":
+          return "Browse GitHub issues, review their context, and turn one into a repository task.";
         case "library":
           return "Start from a saved task recipe, then apply it to the repository, branch, directory, and reviewers above.";
         case "json":
@@ -8659,6 +8697,8 @@
     function promptModeFromHash() {
       const hash = String(window.location.hash || "").replace(/^#/, "").trim().toLowerCase();
       switch (hash) {
+        case "studio-issues":
+          return "issues";
         case "studio-library":
           return "library";
         case "studio-json":
@@ -8676,6 +8716,8 @@
           return "#studio-library";
         case "json":
           return "#studio-json";
+        case "issues":
+          return "#studio-issues";
         default:
           return "#studio-builder";
       }
@@ -8686,12 +8728,15 @@
       const isBuilder = state.promptMode === "builder";
       const isLibrary = state.promptMode === "library";
       const isJSON = state.promptMode === "json";
+      const isIssues = state.promptMode === "issues";
       promptModeBuilder.classList.toggle("active", studioActive && isBuilder);
       promptModeLibrary.classList.toggle("active", studioActive && isLibrary);
       promptModeJSON.classList.toggle("active", studioActive && isJSON);
+      promptModeIssues?.classList.toggle("active", studioActive && isIssues);
       promptModeBuilder.setAttribute("aria-selected", String(studioActive && isBuilder));
       promptModeLibrary.setAttribute("aria-selected", String(studioActive && isLibrary));
       promptModeJSON.setAttribute("aria-selected", String(studioActive && isJSON));
+      promptModeIssues?.setAttribute("aria-selected", String(studioActive && isIssues));
     }
 
     function syncPromptTitleModes() {
@@ -8802,10 +8847,13 @@
     }
 
     function setPromptMode(mode) {
-      if (mode !== "builder" && mode !== "library" && mode !== "json") {
+      if (mode !== "builder" && mode !== "library" && mode !== "json" && mode !== "issues") {
         mode = "builder";
       }
       if (mode === "json" && !jsonFeatureEnabled()) {
+        mode = "builder";
+      }
+      if (mode === "issues" && state.settingsLoadAttempted && !githubIssuesFeatureEnabled()) {
         mode = "builder";
       }
       const previousMode = state.promptMode;
@@ -8815,6 +8863,7 @@
       const isBuilder = state.promptMode === "builder";
       const isLibrary = state.promptMode === "library";
       const isJSON = state.promptMode === "json";
+      const isIssues = state.promptMode === "issues";
       document.body.dataset.promptMode = state.promptMode;
       syncPromptModeLinks();
       syncPromptTitleModes();
@@ -8824,11 +8873,17 @@
       promptBuilderPanel.classList.toggle("hidden", !isBuilder);
       promptLibraryPanel.classList.toggle("hidden", !isLibrary);
       promptRawPanel.classList.toggle("hidden", !isJSON);
+      localPromptForm.classList.toggle("hidden", isIssues);
+      if (githubIssuesPanel) {
+        githubIssuesPanel.classList.toggle("hidden", !isIssues);
+        githubIssuesPanel.setAttribute("aria-hidden", String(!isIssues));
+      }
       builderImagePasteTarget.classList.toggle("hidden", isLibrary);
       builderImagesClear.classList.toggle("hidden", isLibrary);
       renderLibraryTaskOptions();
-      queuePromptInputSizeSync(isJSON ? localPromptInput : builderPromptInput);
+      if (!isIssues) queuePromptInputSizeSync(isJSON ? localPromptInput : builderPromptInput);
       syncPromptSpeechButton();
+      if (isIssues) void window.initGitHubIssuesPanel?.();
       if (!state.promptVisible && !Boolean(state.ui?.automaticMode)) {
         state.promptVisible = true;
         persistPromptVisibility();
@@ -8840,7 +8895,7 @@
     }
 
     function activatePromptMode(mode) {
-      const nextMode = mode === "library" || mode === "json" ? mode : "builder";
+      const nextMode = mode === "library" || mode === "json" || mode === "issues" ? mode : "builder";
       if (state.appDisplay === "studio" && state.promptMode === nextMode && state.promptVisible) return;
       const wasStudio = state.appDisplay === "studio";
       const promptModeChanged = state.promptMode !== nextMode;
@@ -8892,11 +8947,16 @@
     function applyPromptVisibility() {
       const automatic = Boolean(state.ui?.automaticMode);
       const visible = !automatic && state.promptVisible;
+      const issueMode = state.promptMode === "issues";
       if (promptWrap) {
         promptWrap.classList.toggle("prompt-collapsed", !visible);
       }
       if (localPromptForm) {
-        localPromptForm.classList.toggle("hidden", !visible);
+        localPromptForm.classList.toggle("hidden", !visible || issueMode);
+      }
+      if (githubIssuesPanel) {
+        githubIssuesPanel.classList.toggle("hidden", !visible || !issueMode);
+        githubIssuesPanel.setAttribute("aria-hidden", String(!visible || !issueMode));
       }
       if (rightCol) {
         rightCol.classList.toggle("prompt-collapsed", !visible);
@@ -13324,6 +13384,9 @@
     reviewSettingsGitHubIssuesEnabled?.addEventListener("change", () => {
       state.reviewSettings = { ...state.reviewSettings, githubIssuesEnabled: Boolean(reviewSettingsGitHubIssuesEnabled.checked) };
       syncGitHubIssuesDockLinkAvailability();
+      if (!state.reviewSettings.githubIssuesEnabled && state.promptMode === "issues") {
+        setPromptMode("builder");
+      }
     });
     reviewSettingsChatEnabled?.addEventListener("change", () => {
       state.reviewSettings = { ...state.reviewSettings, chatEnabled: Boolean(reviewSettingsChatEnabled.checked) };
@@ -13521,6 +13584,12 @@
       activatePromptMode("json");
     });
 
+    promptModeIssues?.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (appDisplayLinkDisabled(promptModeIssues)) return;
+      activatePromptMode("issues");
+    });
+
     for (const link of appDisplayLinks) {
       link.addEventListener("click", (event) => {
         if (event.defaultPrevented) {
@@ -13627,5 +13696,6 @@
   <script src="/static/library-schedules.js"></script>
   <script src="/static/commit-signing.js"></script>
   <script src="/static/custom-library-sources.js"></script>
+  <script src="/static/github-issues.js"></script>
 </body>
 </html>

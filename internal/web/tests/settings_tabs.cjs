@@ -238,11 +238,11 @@ test('GitHub Issues toggle exposes and hides the dock link and persists on reloa
   await select(page, 'github-issues');
   await toggle(page, 'review-settings-github-issues-enabled');
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'false');
-  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), '/issues');
+  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), '#studio-issues');
   await close(page);
   assert.equal(writes.at(-1).github_issues_enabled, true);
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'false');
-  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), '/issues');
+  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), '#studio-issues');
   await page.reload();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   await select(page, 'github-issues');
@@ -260,11 +260,11 @@ test('GitHub Issues toggle exposes and hides the dock link and persists on reloa
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
 });
 
-test('GitHub Issues page renders issue conversation and launches with the selected link mode', async t => {
+test('GitHub Issues renders inside Studio and launches with the selected link mode', async t => {
   let submitted;
   const issueURL = 'https://github.com/Molten-Bot/agent_00/issues/17';
   const { page } = await openSettings(t, {
-    path: '/issues',
+    path: '/#studio-issues',
     initialSettings: { ...defaults, github_issues_enabled: true },
     configurePage: async page => {
       await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
@@ -286,6 +286,10 @@ test('GitHub Issues page renders issue conversation and launches with the select
     },
   });
 
+  assert.equal(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
+  assert.equal(await page.locator('#github-issues-panel').isVisible(), true);
+  assert.equal(await page.locator('#local-prompt-form').evaluate(form => form.classList.contains('hidden')), true);
+  assert.equal(await page.locator('.prompt-wrap').isVisible(), true);
   await page.locator('#github-issues-repo').selectOption('Molten-Bot/agent_00');
   await page.locator('.github-issue-list-item').waitFor();
   assert.match(await page.locator('.github-issue-list-title').textContent(), /Add issue browser/);

@@ -376,5 +376,12 @@
     event.preventDefault();
     void loadIssues();
   });
-  void initialize();
+  let initialization = null;
+  window.initGitHubIssuesPanel = function initGitHubIssuesPanel() {
+    if (!initialization) initialization = initialize();
+    return initialization;
+  };
+  if (document.body.dataset.promptMode === "issues") {
+    void window.initGitHubIssuesPanel();
+  }
 })();

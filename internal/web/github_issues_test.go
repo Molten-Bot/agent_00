@@ -150,21 +150,27 @@ func TestGitHubIssueEndpointRejectsDisabledAndReportsGhErrors(t *testing.T) {
 	}
 }
 
-func TestGitHubIssuesPageRendersWorkflowControls(t *testing.T) {
+func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	t.Parallel()
 	srv := githubIssueTestServer(nil, true)
 	response := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/issues", nil))
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
-	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `data-page-nav-link="/issues"`, "github-issues-repo", "github-issues-state", "github-issues-search", "github-issues-count", "github-issues.js"} {
-		if !strings.Contains(response.Body.String(), want) {
+	page := response.Body.String()
+	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `href="#studio-issues"`, `data-prompt-title-mode="issues"`, `id="github-issues-panel"`, "github-issues-repo", "github-issues-state", "github-issues-search", "github-issues-count", "github-issues.css", "github-issues.js"} {
+		if !strings.Contains(page, want) {
 			t.Errorf("page is missing %q", want)
 		}
 	}
-	if strings.Contains(response.Body.String(), "github-issues-back") {
-		t.Error("page should use the shared app header and dock without an extra back header")
+	if !strings.Contains(page, `class="panel prompt-wrap brand-login-card-shell"`) || strings.Contains(page, `class="github-issues-page-shell"`) {
+		t.Error("issues should render inside the shared Studio panel, not a separate page shell")
+	}
+	legacy := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(legacy, httptest.NewRequest(http.MethodGet, "/issues", nil))
+	if legacy.Code != http.StatusFound || legacy.Header().Get("Location") != "/#studio-issues" {
+		t.Fatalf("legacy /issues route = %d %q, want redirect to Studio issue mode", legacy.Code, legacy.Header().Get("Location"))
 	}
 	asset := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
@@ -178,13 +184,13 @@ func TestGitHubIssuesDockLinkFollowsSetting(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		srv := githubIssueTestServer(nil, enabled)
 		response := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/issues", nil))
+		srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
 		if response.Code != http.StatusOK {
-			t.Fatalf("GET /issues enabled=%t status = %d", enabled, response.Code)
+			t.Fatalf("GET / enabled=%t status = %d", enabled, response.Code)
 		}
 		page := response.Body.String()
 		if enabled {
-			if !strings.Contains(page, `id="github-issues-dock-link" class="prompt-mode-link site-dock-link" href="/issues" data-page-nav-link="/issues"`) {
+			if !strings.Contains(page, `id="github-issues-dock-link" class="prompt-mode-link" href="#studio-issues" aria-selected="false"`) {
 				t.Fatalf("enabled dock link missing or disabled: %s", page)
 			}
 		} else if !strings.Contains(page, `id="github-issues-dock-link" class="prompt-mode-link site-dock-link is-disabled hidden"`) {
