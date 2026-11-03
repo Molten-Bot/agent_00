@@ -7146,7 +7146,7 @@ func agentCommandWithOptions(
 	targetDir, prompt string,
 	opts codexRunOptions,
 ) (execx.Command, error) {
-	return runtime.BuildCommand(targetDir, withCompletionGatePrompt(prompt), opts)
+	return runtime.BuildCommand(targetDir, withCompletionGatePromptForMode(prompt, len(opts.DisallowedTools) == 0), opts)
 }
 
 func runtimeLogStage(runtime agentruntime.Runtime) string {
@@ -7818,12 +7818,19 @@ func requiredStatusChecksCommand(repoDir, repoNameWithOwner, branch string) exec
 }
 
 func withCompletionGatePrompt(prompt string) string {
+	return withCompletionGatePromptForMode(prompt, true)
+}
+
+// withCompletionGatePromptForMode adds implementation-only quality guidance.
+// Read-only reviews cannot make code or test changes, so requiring them to meet
+// quality targets would make their prompt internally contradictory.
+func withCompletionGatePromptForMode(prompt string, implementation bool) string {
 	base := strings.TrimSpace(prompt)
 	if base == "" {
 		base = "Improve this repository in a minimal, production-ready way."
 	}
 
-	if !strings.Contains(base, measuredQualityTargetInstruction) {
+	if implementation && !strings.Contains(base, measuredQualityTargetInstruction) {
 		base += "\n\n" + measuredQualityTargetInstruction
 	}
 	return failurefollowup.WithExecutionContract(withImplementationTargetGuard(base))

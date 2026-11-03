@@ -8372,6 +8372,36 @@ func TestWithCompletionGatePromptIncludesAgentRuntimeGuidance(t *testing.T) {
 	}
 }
 
+func TestAgentCommandWithOptionsOmitsQualityTargetForReadOnlyReview(t *testing.T) {
+	t.Parallel()
+
+	readOnly, err := agentCommandWithOptions(
+		agentruntime.Default(),
+		"/tmp/repo",
+		"Perform a read-only pull request review.",
+		codexRunOptions{DisallowedTools: readOnlyReviewDisallowedTools},
+	)
+	if err != nil {
+		t.Fatalf("agentCommandWithOptions(read-only) error = %v", err)
+	}
+	if strings.Contains(readOnly.Stdin, measuredQualityTargetInstruction) {
+		t.Fatalf("read-only review prompt unexpectedly requires quality-target changes: %q", readOnly.Stdin)
+	}
+
+	implementation, err := agentCommandWithOptions(
+		agentruntime.Default(),
+		"/tmp/repo",
+		"Implement requested behavior.",
+		codexRunOptions{},
+	)
+	if err != nil {
+		t.Fatalf("agentCommandWithOptions(implementation) error = %v", err)
+	}
+	if !strings.Contains(implementation.Stdin, measuredQualityTargetInstruction) {
+		t.Fatalf("implementation prompt missing quality-target guidance: %q", implementation.Stdin)
+	}
+}
+
 func TestWithCompletionGatePromptPreservesTerseImplementationTarget(t *testing.T) {
 	t.Parallel()
 
