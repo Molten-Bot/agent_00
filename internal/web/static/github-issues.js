@@ -11,8 +11,6 @@
   const issueCount = document.getElementById("github-issues-count");
   const detail = document.getElementById("github-issue-detail");
   const columns = document.querySelector(".github-issues-columns");
-  const listPanel = document.getElementById("github-issues-list-panel");
-  const listToggle = document.getElementById("github-issues-list-toggle");
   const resizeHandle = document.getElementById("github-issues-resize-handle");
   if (!status || !disabled || !browser || !repoSelect || !filters || !issueList || !detail) return;
 
@@ -20,19 +18,10 @@
   let savedLayout = {};
   try { savedLayout = JSON.parse(localStorage.getItem(layoutStorageKey) || "{}"); } catch (_error) { savedLayout = {}; }
 
-  function setListCollapsed(collapsed, persist) {
-    if (!columns || !listToggle) return;
-    columns.classList.toggle("is-list-collapsed", collapsed);
-    listToggle.setAttribute("aria-expanded", String(!collapsed));
-    listToggle.textContent = collapsed ? "Show issue list" : "Hide issue list";
-    listPanel?.setAttribute("aria-hidden", String(collapsed));
-    if (persist) saveLayout();
-  }
-
   function saveLayout() {
     try {
       const width = columns ? parseFloat(getComputedStyle(columns).getPropertyValue("--github-issues-list-width")) : NaN;
-      localStorage.setItem(layoutStorageKey, JSON.stringify({ width: Number.isFinite(width) ? width : null, collapsed: Boolean(columns?.classList.contains("is-list-collapsed")) }));
+      localStorage.setItem(layoutStorageKey, JSON.stringify({ width: Number.isFinite(width) ? width : null }));
     } catch (_error) { /* Storage can be unavailable in private or embedded contexts. */ }
   }
 
@@ -48,11 +37,6 @@
   }
 
   if (columns) setListWidth(Number.isFinite(Number(savedLayout.width)) ? Number(savedLayout.width) : Math.max(220, columns.clientWidth * 0.32));
-  setListCollapsed(Boolean(savedLayout.collapsed), false);
-
-  listToggle?.addEventListener("click", () => {
-    setListCollapsed(!columns?.classList.contains("is-list-collapsed"), true);
-  });
 
   if (columns && resizeHandle) {
     let dragStartX = 0;

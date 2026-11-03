@@ -249,6 +249,9 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	if strings.Contains(page, `id="github-issues-state"`) {
 		t.Error("GitHub Issues should not render a state filter")
 	}
+	if strings.Contains(page, `id="github-issues-list-toggle"`) || strings.Contains(page, "Hide issue list") {
+		t.Error("GitHub Issues should use the former list-toggle space for the issue display area")
+	}
 	if strings.Contains(page, `id="github-issues-title"`) || !strings.Contains(page, `data-prompt-title-label="GitHub Issues"`) {
 		t.Error("GitHub Issues should use the shared Studio title without a duplicate issue heading")
 	}
