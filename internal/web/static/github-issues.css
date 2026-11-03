@@ -103,27 +103,6 @@
   flex: 1 1 240px;
 }
 
-.github-issue-task-actions button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-height: 38px;
-  padding: 8px 13px;
-  color: var(--text);
-  border: 1px solid var(--surface-control-border);
-  border-radius: 9px;
-  background: var(--surface-button-bg);
-  box-shadow: var(--surface-button-shadow);
-  font-size: .76rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.github-issue-task-actions button:hover {
-  border-color: var(--border-strong);
-}
-
 .github-issues-board-toolbar {
   display: flex;
   justify-content: flex-end;
@@ -574,18 +553,7 @@
 .github-issue-task-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-}
-
-.github-issue-task-actions .github-issue-start {
-  color: white;
-  border-color: transparent;
-  background: var(--brand-gradient);
-}
-
-.github-issue-task-actions button:disabled {
-  opacity: .55;
-  cursor: wait;
+  gap: 10px;
 }
 
 .github-issue-task-status {

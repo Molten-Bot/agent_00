@@ -369,7 +369,18 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('github-issue-link-mode-updated', { detail: { mode: 'reference' } })));
   assert.match(await page.locator('.github-issue-task-heading').textContent(), /reference #17/);
 
-  await page.getByRole('button', { name: 'Start task' }).click();
+  const issueEditButton = page.getByRole('button', { name: 'Edit prompt first' });
+  const issueStartButton = page.getByRole('button', { name: 'Start task' });
+  assert.equal(await issueEditButton.evaluate(button => button.classList.contains('prompt-action-button')), true);
+  assert.equal(await issueStartButton.evaluate(button => button.classList.contains('prompt-submit')), true);
+  assert.equal(await issueStartButton.locator('.prompt-action-icon').count(), 1);
+  const readPromptButtonStyle = button => button.evaluate(node => {
+    const style = getComputedStyle(node);
+    return { minHeight: style.minHeight, borderRadius: style.borderRadius, fontSize: style.fontSize, backgroundImage: style.backgroundImage };
+  });
+  assert.deepEqual(await readPromptButtonStyle(issueStartButton), await readPromptButtonStyle(page.locator('#local-prompt-submit')));
+
+  await issueStartButton.click();
   await page.waitForFunction(() => document.querySelector('.github-issue-task-status').textContent.includes('Task queued'));
   assert.equal(submitted.githubIssue.repository, 'Molten-Bot/agent_00');
   assert.equal(submitted.githubIssue.number, 17);

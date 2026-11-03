@@ -129,6 +129,25 @@
     return node;
   }
 
+  function setStartButtonContent(button, label) {
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.classList.add("prompt-action-icon");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("fill", "none");
+    icon.setAttribute("stroke", "currentColor");
+    icon.setAttribute("stroke-width", "2");
+    icon.setAttribute("stroke-linecap", "round");
+    icon.setAttribute("stroke-linejoin", "round");
+    icon.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "m5 5 14 7-14 7V5");
+    icon.appendChild(path);
+    const text = document.createElement("span");
+    text.className = "prompt-action-label";
+    text.textContent = label;
+    button.append(icon, text);
+  }
+
   function formatPeople(people) {
     return (Array.isArray(people) ? people : []).map((person) => person?.login).filter(Boolean).join(", ") || "None";
   }
@@ -327,9 +346,10 @@
     editor.hidden = true;
     task.appendChild(editor);
     const actions = document.createElement("div");
-    actions.className = "github-issue-task-actions";
+    actions.className = "prompt-actions-end github-issue-task-actions";
     const edit = document.createElement("button");
     edit.type = "button";
+    edit.className = "prompt-action-button";
     edit.textContent = "Edit prompt first";
     edit.addEventListener("click", () => {
       editor.hidden = false;
@@ -338,13 +358,13 @@
     });
     const start = document.createElement("button");
     start.type = "button";
-    start.className = "github-issue-start";
-    start.textContent = "Start task";
+    start.className = "prompt-action-button prompt-submit github-issue-start";
+    setStartButtonContent(start, "Start task");
     start.addEventListener("click", () => void submitTask(issue, repo, buildTaskPrompt(issue, repo)));
     const submitEdited = document.createElement("button");
     submitEdited.type = "button";
-    submitEdited.className = "github-issue-start";
-    submitEdited.textContent = "Start with this prompt";
+    submitEdited.className = "prompt-action-button prompt-submit github-issue-start";
+    setStartButtonContent(submitEdited, "Start with this prompt");
     submitEdited.hidden = true;
     submitEdited.addEventListener("click", () => void submitTask(issue, repo, editor.value));
     actions.append(edit, start, submitEdited);
