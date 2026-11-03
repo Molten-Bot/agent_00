@@ -15,6 +15,7 @@
   if (!status || !disabled || !browser || !repoSelect || !filters || !issueList || !detail) return;
 
   const layoutStorageKey = "hubui.githubIssuesLayout.v1";
+  const repositoryStorageKey = "hubui.githubIssuesRepository.v1";
   let savedLayout = {};
   try { savedLayout = JSON.parse(localStorage.getItem(layoutStorageKey) || "{}"); } catch (_error) { savedLayout = {}; }
 
@@ -201,9 +202,16 @@
 
   function renderIssueList(issues) {
     issueList.replaceChildren();
-    if (issueCount) issueCount.textContent = `${issues.length}${issues.length === 100 ? "+" : ""} open issues`;
+    if (issueCount) issueCount.textContent = selectedRepository()
+      ? `${issues.length}${issues.length === 100 ? "+" : ""} open issues`
+      : "Choose a repository";
     if (!issues.length) {
-      addText(issueList, "li", "github-issues-empty", "No issues found for these filters.");
+      const emptyText = !repositories.length
+        ? "No repositories are available for this account."
+        : selectedRepository()
+          ? "No open issues match this search."
+          : "Choose a repository to see its open issues.";
+      addText(issueList, "li", "github-issues-empty", emptyText);
       return;
     }
     for (const issue of issues) {
@@ -360,6 +368,34 @@
     detail.appendChild(detailBody);
   }
 
+  function renderEmptyDetail(title, description) {
+    detail.replaceChildren();
+    const empty = document.createElement("div");
+    empty.className = "github-issue-empty-state";
+    const icon = document.createElement("span");
+    icon.className = "github-issue-empty-icon";
+    icon.setAttribute("aria-hidden", "true");
+    const glyph = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    glyph.setAttribute("viewBox", "0 0 24 24");
+    glyph.setAttribute("fill", "none");
+    glyph.setAttribute("stroke", "currentColor");
+    glyph.setAttribute("stroke-width", "1.8");
+    glyph.setAttribute("stroke-linecap", "round");
+    glyph.setAttribute("stroke-linejoin", "round");
+    const ring = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    ring.setAttribute("cx", "12");
+    ring.setAttribute("cy", "12");
+    ring.setAttribute("r", "9");
+    const mark = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    mark.setAttribute("d", "M8 12h8");
+    glyph.append(ring, mark);
+    icon.appendChild(glyph);
+    empty.appendChild(icon);
+    addText(empty, "h2", "", title);
+    addText(empty, "p", "", description);
+    detail.appendChild(empty);
+  }
+
   async function submitTask(issue, repo, prompt) {
     const submitButtons = Array.from(detail.querySelectorAll(".github-issue-task-actions button"));
     const taskStatus = detail.querySelector(".github-issue-task-status");
@@ -428,9 +464,12 @@
     detail.replaceChildren();
     issueList.replaceChildren();
     if (!repo) {
-      setStatus("Select a repository to browse its issues.");
+      renderIssueList([]);
+      renderEmptyDetail("Choose a repository", "Select a repository above to browse its open issues.");
+      setStatus("");
       return;
     }
+    renderEmptyDetail("Choose an issue", "Select an issue to review its description, comments, and task options.");
     const generation = ++requestGeneration;
     setStatus(`Loading issues for ${repo.full_name}…`);
     const query = new URLSearchParams({ repo: repo.full_name, state: "open" });
@@ -473,13 +512,38 @@
         option.textContent = String(repo.full_name || repo.name || "");
         repoSelect.appendChild(option);
       }
-      setStatus(repositories.length ? "Select a repository to browse its issues." : "No repositories are available for this GitHub account.");
+      if (!repositories.length) {
+        renderIssueList([]);
+        renderEmptyDetail("No repositories available", "This GitHub account has no repositories you can browse.");
+        setStatus("");
+        return;
+      }
+      const promptRepository = document.getElementById("builder-repo-select")?.value || "";
+      let rememberedRepository = "";
+      try { rememberedRepository = localStorage.getItem(repositoryStorageKey) || ""; } catch (_error) { /* Ignore unavailable storage. */ }
+      const preferred = repositories.find((repo) => repo.full_name === promptRepository)
+        || repositories.find((repo) => repo.full_name === rememberedRepository);
+      if (preferred) {
+        repoSelect.value = preferred.full_name;
+        try { localStorage.setItem(repositoryStorageKey, preferred.full_name); } catch (_error) { /* Ignore unavailable storage. */ }
+        void loadIssues();
+      } else {
+        renderIssueList([]);
+        renderEmptyDetail("Choose a repository", "Select a repository above to browse its open issues.");
+        setStatus("");
+      }
     } catch (error) {
       setStatus(error.message || "Unable to initialize the GitHub Issues browser.", "error");
     }
   }
 
-  repoSelect.addEventListener("change", () => void loadIssues());
+  repoSelect.addEventListener("change", () => {
+    try {
+      if (repoSelect.value) localStorage.setItem(repositoryStorageKey, repoSelect.value);
+      else localStorage.removeItem(repositoryStorageKey);
+    } catch (_error) { /* Ignore unavailable storage. */ }
+    void loadIssues();
+  });
   filters.addEventListener("submit", (event) => {
     event.preventDefault();
     void loadIssues();

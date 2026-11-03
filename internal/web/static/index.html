@@ -22,7 +22,7 @@
   <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
   <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/github-issues.css?v=2">
+  <link rel="stylesheet" href="/static/github-issues.css?v=5">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -394,7 +394,13 @@
                   <ol id="github-issues-list" class="github-issues-list"></ol>
                 </section>
                 <div id="github-issues-resize-handle" class="github-issues-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize issue list" aria-valuemin="220" aria-valuemax="900" aria-valuenow="320" tabindex="0"></div>
-                <article id="github-issue-detail" class="github-issue-detail" aria-live="polite"><p>Select an issue to see its details and conversation.</p></article>
+                <article id="github-issue-detail" class="github-issue-detail" aria-live="polite">
+                  <div class="github-issue-empty-state">
+                    <span class="github-issue-empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M8 12h8"></path></svg></span>
+                    <h2>Choose an issue</h2>
+                    <p>Select an issue to review its description, comments, and task options.</p>
+                  </div>
+                </article>
               </div>
             </div>
           </section>
@@ -13708,6 +13714,6 @@
   <script src="/static/library-schedules.js"></script>
   <script src="/static/commit-signing.js"></script>
   <script src="/static/custom-library-sources.js"></script>
-  <script src="/static/github-issues.js?v=2"></script>
+  <script src="/static/github-issues.js?v=5"></script>
 </body>
 </html>

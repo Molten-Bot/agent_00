@@ -285,10 +285,34 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
   });
 
   assert.notEqual(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
-  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=2');
-  await page.waitForFunction(() => document.getElementById('github-issues-status').textContent === 'No repositories are available for this GitHub account.');
+  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=5');
+  await page.waitForFunction(() => document.querySelector('.github-issue-empty-state h2')?.textContent === 'No repositories available');
+  assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No repositories available');
   await page.locator('#github-issues-dock-link').click();
-  assert.equal(await page.locator('#github-issues-status').textContent(), 'No repositories are available for this GitHub account.');
+  assert.equal(await page.locator('#github-issues-status').textContent(), '');
+});
+
+test('GitHub Issues remembers its repository and gives a useful empty state', async t => {
+  const { page } = await openSettings(t, {
+    path: '/',
+    initialSettings: { ...defaults, github_issues_enabled: true },
+    configurePage: async page => {
+      await page.addInitScript(() => localStorage.setItem('hubui.githubIssuesRepository.v1', 'Molten-Bot/agent_00'));
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+        { full_name: 'Molten-Bot/agent_00', default_branch: 'main' },
+      ] } }));
+      await page.route('**/api/github/issues**', route => route.fulfill({ json: { ok: true, issues: [] } }));
+    },
+  });
+
+  await page.waitForFunction(() => document.getElementById('github-issues-repo').value === 'Molten-Bot/agent_00');
+  await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '0 open issues');
+  assert.equal(await page.locator('.github-issues-empty').textContent(), 'No open issues match this search.');
+  assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'Choose an issue');
+  await page.locator('#github-issues-dock-link').click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.body.scrollWidth), 390, 'mobile Issues view should not scroll horizontally');
+  assert.equal(await page.getByRole('button', { name: 'Search' }).isVisible(), true);
 });
 
 test('GitHub Issues renders inside Studio and uses the configured link mode', async t => {
@@ -322,7 +346,7 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
 
   assert.equal(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
   assert.equal(await page.locator('#github-issues-panel').isVisible(), true);
-  assert.equal(await page.locator('link[href^="/static/github-issues.css"]').getAttribute('href'), '/static/github-issues.css?v=2');
+  assert.equal(await page.locator('link[href^="/static/github-issues.css"]').getAttribute('href'), '/static/github-issues.css?v=5');
   assert.equal(await page.locator('#github-issues-panel').evaluate(panel => getComputedStyle(panel).padding), '0px');
   assert.equal(
     Math.round((await page.locator('#github-issues-filters').boundingBox()).x),
