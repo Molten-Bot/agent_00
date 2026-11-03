@@ -809,15 +809,22 @@ func TestConfigureReviewSettingsPersistsGitHubIssuesToggle(t *testing.T) {
 	if currentReviewSettingsState(initCfg).GitHubIssuesEnabled {
 		t.Fatal("GitHub Issues should default to disabled")
 	}
+	if got := currentReviewSettingsState(initCfg).GitHubIssueLinkMode; got != localruntime.GitHubIssueLinkModeReference {
+		t.Fatalf("default GitHub issue link mode = %q, want reference", got)
+	}
 	enabled := true
+	linkMode := localruntime.GitHubIssueLinkModeClose
 	state, err := configureReviewSettings(initCfg, web.ReviewSettingsRequest{
-		MergeMethod: "squash", ReviewLevel: "off", GitHubIssuesEnabled: &enabled,
+		MergeMethod: "squash", ReviewLevel: "off", GitHubIssuesEnabled: &enabled, GitHubIssueLinkMode: &linkMode,
 	})
 	if err != nil {
 		t.Fatalf("enable GitHub Issues: %v", err)
 	}
 	if !state.GitHubIssuesEnabled {
 		t.Fatal("returned settings should report GitHub Issues enabled")
+	}
+	if state.GitHubIssueLinkMode != localruntime.GitHubIssueLinkModeClose {
+		t.Fatalf("returned GitHub issue link mode = %q, want close", state.GitHubIssueLinkMode)
 	}
 	if _, err := configureReviewSettings(initCfg, web.ReviewSettingsRequest{
 		MergeMethod: "squash", ReviewLevel: "off",
@@ -826,6 +833,9 @@ func TestConfigureReviewSettingsPersistsGitHubIssuesToggle(t *testing.T) {
 	}
 	if !currentReviewSettingsState(initCfg).GitHubIssuesEnabled {
 		t.Fatal("omitted github_issues_enabled should preserve the saved setting")
+	}
+	if got := currentReviewSettingsState(initCfg).GitHubIssueLinkMode; got != localruntime.GitHubIssueLinkModeClose {
+		t.Fatalf("omitted github_issue_link_mode changed saved mode to %q", got)
 	}
 	disabled := false
 	state, err = configureReviewSettings(initCfg, web.ReviewSettingsRequest{
@@ -836,6 +846,15 @@ func TestConfigureReviewSettingsPersistsGitHubIssuesToggle(t *testing.T) {
 	}
 	if state.GitHubIssuesEnabled || currentReviewSettingsState(initCfg).GitHubIssuesEnabled {
 		t.Fatal("GitHub Issues should be disabled after saving false")
+	}
+	if got := state.GitHubIssueLinkMode; got != localruntime.GitHubIssueLinkModeClose {
+		t.Fatalf("disabling GitHub Issues reset the saved link mode to %q", got)
+	}
+	invalid := "delete"
+	if _, err := configureReviewSettings(initCfg, web.ReviewSettingsRequest{
+		MergeMethod: "squash", ReviewLevel: "off", GitHubIssueLinkMode: &invalid,
+	}); err == nil {
+		t.Fatal("unsupported GitHub issue link mode should be rejected")
 	}
 }
 

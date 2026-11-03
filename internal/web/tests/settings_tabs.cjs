@@ -7,7 +7,7 @@ const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
 let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
-const defaults = { auto_merge: false, delete_merged_branches: false, merge_method: 'squash', review_level: 'off', default_library_enabled: true, chat_enabled: true, json_enabled: false, github_issues_enabled: false };
+const defaults = { auto_merge: false, delete_merged_branches: false, merge_method: 'squash', review_level: 'off', default_library_enabled: true, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference' };
 async function openSettings(t, { viewport = { width: 1280, height: 900 }, theme = 'dark', configurePage, initialSettings = defaults, path = '#settings' } = {}) {
   const page = await browser.newPage({ viewport });
   t.after(() => page.close());
@@ -176,7 +176,7 @@ test('all settings save on close and survive reopening; no main Save button', as
   assert.equal(await page.locator('#custom-library-name').inputValue(), 'kept draft');
   await toggle(page, 'review-settings-default-library');
   await close(page);
-  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false });
+  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference' });
   await page.reload();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   assert.equal(await page.locator('#review-settings-auto-merge').isChecked(), true);
@@ -237,22 +237,29 @@ test('GitHub Issues toggle exposes and hides the dock link and persists on reloa
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
   await select(page, 'github-issues');
   await toggle(page, 'review-settings-github-issues-enabled');
+  assert.equal(await page.locator('#review-settings-github-issues-link-mode').isVisible(), true);
+  assert.equal(await page.locator('#review-settings-github-issues-link-reference').isChecked(), true);
+  await page.locator('#review-settings-github-issues-link-close').check();
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'false');
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), '#studio-issues');
   await close(page);
   assert.equal(writes.at(-1).github_issues_enabled, true);
+  assert.equal(writes.at(-1).github_issue_link_mode, 'close');
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'false');
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), '#studio-issues');
   await page.reload();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   await select(page, 'github-issues');
   assert.equal(await page.locator('#review-settings-github-issues-enabled').isChecked(), true);
+  assert.equal(await page.locator('#review-settings-github-issues-link-close').isChecked(), true);
   await toggle(page, 'review-settings-github-issues-enabled');
+  assert.equal(await page.locator('#review-settings-github-issues-link-mode').isVisible(), false);
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), null);
   assert.equal(await page.locator('#github-issues-dock-link').evaluate(link => link.classList.contains('hidden')), true);
   await close(page);
   assert.equal(writes.at(-1).github_issues_enabled, false);
+  assert.equal(writes.at(-1).github_issue_link_mode, 'close');
   await page.reload();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   await select(page, 'github-issues');
@@ -260,12 +267,12 @@ test('GitHub Issues toggle exposes and hides the dock link and persists on reloa
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
 });
 
-test('GitHub Issues renders inside Studio and launches with the selected link mode', async t => {
+test('GitHub Issues renders inside Studio and uses the configured link mode', async t => {
   let submitted;
   const issueURL = 'https://github.com/Molten-Bot/agent_00/issues/17';
   const { page } = await openSettings(t, {
     path: '/#studio-issues',
-    initialSettings: { ...defaults, github_issues_enabled: true },
+    initialSettings: { ...defaults, github_issues_enabled: true, github_issue_link_mode: 'close' },
     configurePage: async page => {
       await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
         { full_name: 'Molten-Bot/agent_00', html_url: 'https://github.com/Molten-Bot/agent_00', default_branch: 'main' },
@@ -297,9 +304,9 @@ test('GitHub Issues renders inside Studio and launches with the selected link mo
   await page.getByRole('heading', { name: 'Add issue browser' }).waitFor();
   assert.match(await page.locator('.github-issue-body').textContent(), /Implement this issue/);
   assert.match(await page.locator('.github-issue-comment-body').textContent(), /retry coverage/);
-  assert.equal(await page.locator('.github-issue-link-option').count(), 2);
+  assert.equal(await page.locator('.github-issue-task .github-issue-link-options').count(), 0);
+  assert.match(await page.locator('.github-issue-task-heading').textContent(), /close #17 on merge/);
 
-  await page.locator('.github-issue-link-option input[value="close"]').check();
   await page.getByRole('button', { name: 'Start task' }).click();
   await page.waitForFunction(() => document.querySelector('.github-issue-task-status').textContent.includes('Task queued'));
   assert.equal(submitted.githubIssue.repository, 'Molten-Bot/agent_00');

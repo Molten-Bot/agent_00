@@ -144,7 +144,7 @@ func TestGitHubIssuesEnabledDefaultsFalseAndRoundTrips(t *testing.T) {
 	}
 
 	enabled := true
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, &enabled); err != nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, &enabled, nil); err != nil {
 		t.Fatalf("save enabled setting: %v", err)
 	}
 	if !ReadRuntimeConfigGitHubIssuesEnabled(path) {
@@ -152,7 +152,7 @@ func TestGitHubIssuesEnabledDefaultsFalseAndRoundTrips(t *testing.T) {
 	}
 
 	disabled := false
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, &disabled); err != nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, &disabled, nil); err != nil {
 		t.Fatalf("save disabled setting: %v", err)
 	}
 	if ReadRuntimeConfigGitHubIssuesEnabled(path) {
@@ -168,6 +168,46 @@ func TestGitHubIssuesEnabledDefaultsFalseAndRoundTrips(t *testing.T) {
 	}
 	if _, exists := doc["github_issues_enabled"]; exists {
 		t.Fatalf("disabled default should be omitted from config: %#v", doc["github_issues_enabled"])
+	}
+}
+
+func TestGitHubIssueLinkModeDefaultsToReferenceAndRoundTrips(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.json")
+	if got := ReadRuntimeConfigGitHubIssueLinkMode(path); got != GitHubIssueLinkModeReference {
+		t.Fatalf("default issue-link mode = %q, want %q", got, GitHubIssueLinkModeReference)
+	}
+
+	mode := GitHubIssueLinkModeClose
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode); err != nil {
+		t.Fatalf("save close-on-merge setting: %v", err)
+	}
+	if got := ReadRuntimeConfigGitHubIssueLinkMode(path); got != GitHubIssueLinkModeClose {
+		t.Fatalf("saved issue-link mode = %q, want %q", got, GitHubIssueLinkModeClose)
+	}
+
+	mode = GitHubIssueLinkModeReference
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode); err != nil {
+		t.Fatalf("save reference setting: %v", err)
+	}
+	if got := ReadRuntimeConfigGitHubIssueLinkMode(path); got != GitHubIssueLinkModeReference {
+		t.Fatalf("restored issue-link mode = %q, want %q", got, GitHubIssueLinkModeReference)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := doc["github_issue_link_mode"]; exists {
+		t.Fatalf("default reference mode should be omitted from config: %#v", doc["github_issue_link_mode"])
+	}
+
+	mode = "unexpected"
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode); err == nil {
+		t.Fatal("save should reject an unsupported issue-link mode")
 	}
 }
 

@@ -208,17 +208,21 @@ func TestGitHubIssuesSettingRoundTripsThroughSettingsAPI(t *testing.T) {
 		if req.GitHubIssuesEnabled == nil {
 			return settings, errors.New("github_issues_enabled was omitted")
 		}
+		if req.GitHubIssueLinkMode == nil {
+			return settings, errors.New("github_issue_link_mode was omitted")
+		}
 		settings.GitHubIssuesEnabled = *req.GitHubIssuesEnabled
+		settings.GitHubIssueLinkMode = *req.GitHubIssueLinkMode
 		return settings, nil
 	}
 	response := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/review-settings", strings.NewReader(`{"auto_merge":false,"delete_merged_branches":false,"merge_method":"squash","review_level":"off","github_issues_enabled":true}`)))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"github_issues_enabled":true`) {
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/review-settings", strings.NewReader(`{"auto_merge":false,"delete_merged_branches":false,"merge_method":"squash","review_level":"off","github_issues_enabled":true,"github_issue_link_mode":"close"}`)))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"github_issues_enabled":true`) || !strings.Contains(response.Body.String(), `"github_issue_link_mode":"close"`) {
 		t.Fatalf("POST settings response = %d %s", response.Code, response.Body.String())
 	}
 	response = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/review-settings", nil))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"github_issues_enabled":true`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"github_issues_enabled":true`) || !strings.Contains(response.Body.String(), `"github_issue_link_mode":"close"`) {
 		t.Fatalf("GET settings response = %d %s", response.Code, response.Body.String())
 	}
 }

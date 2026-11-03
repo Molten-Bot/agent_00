@@ -16,7 +16,7 @@
   let repositories = [];
   let currentIssues = [];
   let selectedIssue = null;
-  let activeLinkMode = "reference";
+  let githubIssueLinkMode = "reference";
   let requestGeneration = 0;
 
   function setStatus(message, kind) {
@@ -139,7 +139,6 @@
 
   function renderIssueDetail(issue) {
     selectedIssue = issue;
-    activeLinkMode = "reference";
     detail.replaceChildren();
     const repo = selectedRepository();
     const detailHeader = document.createElement("header");
@@ -205,28 +204,10 @@
     task.className = "github-issue-task";
     const taskHeading = addText(task, "div", "github-issue-task-heading", "");
     addText(taskHeading, "strong", "", "Start a task from this issue");
-    addText(taskHeading, "span", "", "Issue and comments included as context");
-    const linkOptions = addText(task, "div", "github-issue-link-options", "");
-    linkOptions.setAttribute("role", "radiogroup");
-    linkOptions.setAttribute("aria-label", "Pull request issue link behavior");
-    for (const [value, label, description] of [
-      ["reference", "Reference issue", `PR says “Related to #${issue.number}”`],
-      ["close", "Close on merge", `PR says “Closes #${issue.number}”`],
-    ]) {
-      const optionLabel = document.createElement("label");
-      optionLabel.className = "github-issue-link-option";
-      const input = document.createElement("input");
-      input.type = "radio";
-      input.name = "github-issue-link-mode";
-      input.value = value;
-      input.checked = value === activeLinkMode;
-      input.addEventListener("change", () => { activeLinkMode = input.value; });
-      const copy = document.createElement("span");
-      addText(copy, "strong", "", label);
-      addText(copy, "small", "", description);
-      optionLabel.append(input, copy);
-      linkOptions.appendChild(optionLabel);
-    }
+    const behavior = githubIssueLinkMode === "close"
+      ? `Issue and comments included as context · PR will close #${issue.number} on merge`
+      : `Issue and comments included as context · PR will reference #${issue.number}`;
+    addText(taskHeading, "span", "", behavior);
     const editor = document.createElement("textarea");
     editor.className = "github-issue-prompt";
     editor.rows = 7;
@@ -287,7 +268,7 @@
             repository: repoName,
             number: issue.number,
             url: issue.url,
-            linkMode: activeLinkMode,
+            linkMode: githubIssueLinkMode,
           },
         }),
       });
@@ -344,7 +325,10 @@
   async function initialize() {
     try {
       const settings = await requestJSON("/api/review-settings", { cache: "no-store" });
-      const enabled = Boolean(settings.settings?.github_issues_enabled ?? settings.settings?.githubIssuesEnabled);
+      const values = settings.settings || {};
+      const enabled = Boolean(values.github_issues_enabled ?? values.githubIssuesEnabled);
+      const linkMode = String(values.github_issue_link_mode ?? values.githubIssueLinkMode ?? "reference").trim().toLowerCase();
+      githubIssueLinkMode = linkMode === "close" ? "close" : "reference";
       if (!enabled) {
         disabled.hidden = false;
         setStatus("");

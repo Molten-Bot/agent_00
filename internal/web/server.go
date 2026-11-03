@@ -179,6 +179,7 @@ type ReviewSettingsState struct {
 	ChatEnabled           bool   `json:"chat_enabled"`
 	JSONEnabled           bool   `json:"json_enabled"`
 	GitHubIssuesEnabled   bool   `json:"github_issues_enabled"`
+	GitHubIssueLinkMode   string `json:"github_issue_link_mode"`
 	Message               string `json:"message,omitempty"`
 }
 
@@ -195,6 +196,7 @@ type ReviewSettingsRequest struct {
 	// JSONEnabled is a pointer for the same reason as DefaultLibraryEnabled.
 	JSONEnabled         *bool `json:"json_enabled,omitempty"`
 	GitHubIssuesEnabled *bool `json:"github_issues_enabled,omitempty"`
+	GitHubIssueLinkMode *string `json:"github_issue_link_mode,omitempty"`
 }
 
 // NewServer returns a monitor HTTP server.

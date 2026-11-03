@@ -2511,6 +2511,7 @@ func currentReviewSettingsState(cfg localruntime.InitConfig) web.ReviewSettingsS
 		ChatEnabled:           localruntime.ReadRuntimeConfigChatEnabled(cfg.RuntimeConfigPath),
 		JSONEnabled:           localruntime.ReadRuntimeConfigJSONEnabled(cfg.RuntimeConfigPath),
 		GitHubIssuesEnabled:   localruntime.ReadRuntimeConfigGitHubIssuesEnabled(cfg.RuntimeConfigPath),
+		GitHubIssueLinkMode:   localruntime.ReadRuntimeConfigGitHubIssueLinkMode(cfg.RuntimeConfigPath),
 	}
 }
 
@@ -2529,6 +2530,10 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		state := currentReviewSettingsState(cfg)
 		return state, fmt.Errorf("review level must be off, low, medium, or high")
 	}
+	if req.GitHubIssueLinkMode != nil && localruntime.NormalizeGitHubIssueLinkMode(*req.GitHubIssueLinkMode) == "" {
+		state := currentReviewSettingsState(cfg)
+		return state, fmt.Errorf("GitHub issue link mode must be reference or close")
+	}
 
 	autoMerge := req.AutoMerge
 	deleteMergedBranches := req.DeleteMergedBranches
@@ -2538,7 +2543,7 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		MergeMethod:          method,
 		ReviewLevel:          reviewLevel,
 	}
-	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled); err != nil {
+	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled, req.GitHubIssueLinkMode); err != nil {
 		state := currentReviewSettingsState(cfg)
 		return state, err
 	}

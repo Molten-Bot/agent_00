@@ -854,7 +854,20 @@
               <i data-lucide="circle-dot" aria-hidden="true"></i>
               <span>Enable GitHub Issues workflow</span>
             </label>
-            <p>Browse issues from a repository and start a task with its full description and comments. The task follows the normal pull request, review, and merge workflow.</p>
+            <p class="github-issues-settings-description">Browse issues from a repository and start a task with its full description and comments. The task follows the normal pull request, review, and merge workflow.</p>
+            <div id="review-settings-github-issues-link-mode" class="github-issues-settings-link-mode" hidden>
+              <span id="review-settings-github-issues-link-mode-label" class="github-issues-settings-heading">Pull request issue linking</span>
+              <div class="github-issue-link-options github-issues-settings-options" role="radiogroup" aria-labelledby="review-settings-github-issues-link-mode-label">
+                <label class="github-issue-link-option">
+                  <input id="review-settings-github-issues-link-reference" type="radio" name="github-issue-link-mode" value="reference">
+                  <span><strong>Reference issue</strong><small>Keep it open and add “Related to #N” to the pull request.</small></span>
+                </label>
+                <label class="github-issue-link-option">
+                  <input id="review-settings-github-issues-link-close" type="radio" name="github-issue-link-mode" value="close">
+                  <span><strong>Close on merge</strong><small>Close it when the pull request merges with “Closes #N”.</small></span>
+                </label>
+              </div>
+            </div>
           </fieldset>
           <div id="settings-panel-review" class="review-settings-section review-settings-level" role="tabpanel" aria-labelledby="settings-tab-review" hidden>
             <input id="review-settings-level" type="hidden" value="off">
@@ -1618,6 +1631,7 @@
       const chatEnabledRaw = settings.chat_enabled ?? settings.chatEnabled;
       const jsonEnabledRaw = settings.json_enabled ?? settings.jsonEnabled;
       const githubIssuesEnabledRaw = settings.github_issues_enabled ?? settings.githubIssuesEnabled;
+      const githubIssueLinkModeRaw = String(settings.github_issue_link_mode ?? settings.githubIssueLinkMode ?? "reference").trim().toLowerCase();
       return {
         autoMerge: Boolean(settings.auto_merge || settings.autoMerge),
         deleteMergedBranches: Boolean(settings.delete_merged_branches || settings.deleteMergedBranches),
@@ -1627,6 +1641,7 @@
         chatEnabled: chatEnabledRaw === undefined ? false : Boolean(chatEnabledRaw),
         jsonEnabled: jsonEnabledRaw === undefined ? false : Boolean(jsonEnabledRaw),
         githubIssuesEnabled: githubIssuesEnabledRaw === undefined ? false : Boolean(githubIssuesEnabledRaw),
+        githubIssueLinkMode: ["reference", "close"].includes(githubIssueLinkModeRaw) ? githubIssueLinkModeRaw : "reference",
         message: String(settings.message || "").trim(),
       };
     }
@@ -2130,6 +2145,10 @@
     const reviewSettingsChatEnabled = document.getElementById("review-settings-chat-enabled");
     const reviewSettingsJSONEnabled = document.getElementById("review-settings-json-enabled");
     const reviewSettingsGitHubIssuesEnabled = document.getElementById("review-settings-github-issues-enabled");
+    const reviewSettingsGitHubIssuesLinkMode = document.getElementById("review-settings-github-issues-link-mode");
+    const reviewSettingsGitHubIssuesLinkReference = document.getElementById("review-settings-github-issues-link-reference");
+    const reviewSettingsGitHubIssuesLinkClose = document.getElementById("review-settings-github-issues-link-close");
+    const reviewSettingsGitHubIssuesLinkModeOptions = [reviewSettingsGitHubIssuesLinkReference, reviewSettingsGitHubIssuesLinkClose].filter(Boolean);
     const reviewSettingsMergeMethod = document.getElementById("review-settings-merge-method");
     const reviewSettingsMergeOptions = Array.from(document.querySelectorAll("[data-review-settings-merge-method]"));
     const reviewSettingsMergeSliderThumb = document.querySelector(".review-settings-merge-slider-thumb");
@@ -2231,6 +2250,12 @@
       } else {
         link.removeAttribute("href");
         link.title = "GitHub Issues is turned off in Settings";
+      }
+    }
+
+    function syncGitHubIssuesLinkModeSetting() {
+      if (reviewSettingsGitHubIssuesLinkMode) {
+        reviewSettingsGitHubIssuesLinkMode.hidden = !githubIssuesFeatureEnabled();
       }
     }
 
@@ -2859,7 +2884,14 @@
       if (reviewSettingsGitHubIssuesEnabled instanceof HTMLInputElement) {
         reviewSettingsGitHubIssuesEnabled.checked = state.reviewSettings.githubIssuesEnabled;
       }
+      if (reviewSettingsGitHubIssuesLinkReference instanceof HTMLInputElement) {
+        reviewSettingsGitHubIssuesLinkReference.checked = state.reviewSettings.githubIssueLinkMode === "reference";
+      }
+      if (reviewSettingsGitHubIssuesLinkClose instanceof HTMLInputElement) {
+        reviewSettingsGitHubIssuesLinkClose.checked = state.reviewSettings.githubIssueLinkMode === "close";
+      }
       syncGitHubIssuesDockLinkAvailability();
+      syncGitHubIssuesLinkModeSetting();
       syncChatDockLinkAvailability();
       syncJSONModeLinkAvailability();
       if (!state.reviewSettings.chatEnabled && state.appDisplay === "chat") {
@@ -2938,6 +2970,7 @@
         chat_enabled: reviewSettingsChatEnabled instanceof HTMLInputElement ? reviewSettingsChatEnabled.checked : false,
         json_enabled: reviewSettingsJSONEnabled instanceof HTMLInputElement ? reviewSettingsJSONEnabled.checked : false,
         github_issues_enabled: reviewSettingsGitHubIssuesEnabled instanceof HTMLInputElement ? reviewSettingsGitHubIssuesEnabled.checked : false,
+        github_issue_link_mode: reviewSettingsGitHubIssuesLinkClose instanceof HTMLInputElement && reviewSettingsGitHubIssuesLinkClose.checked ? "close" : "reference",
       };
     }
 
@@ -13378,12 +13411,13 @@
     if (reviewSettingsForm) {
       reviewSettingsForm.addEventListener("submit", submitReviewSettings);
     }
-    for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches, reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsGitHubIssuesEnabled]) {
+    for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches, reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsGitHubIssuesEnabled, ...reviewSettingsGitHubIssuesLinkModeOptions]) {
       control.addEventListener("change", () => setReviewSettingsStatus("", "Changes will be saved on close."));
     }
     reviewSettingsGitHubIssuesEnabled?.addEventListener("change", () => {
       state.reviewSettings = { ...state.reviewSettings, githubIssuesEnabled: Boolean(reviewSettingsGitHubIssuesEnabled.checked) };
       syncGitHubIssuesDockLinkAvailability();
+      syncGitHubIssuesLinkModeSetting();
       if (!state.reviewSettings.githubIssuesEnabled && state.promptMode === "issues") {
         setPromptMode("builder");
       }

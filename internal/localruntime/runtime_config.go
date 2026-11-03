@@ -15,6 +15,8 @@ import (
 const (
 	runtimeConfigPath    = "./.agent00/config.json"
 	runtimeConfigPathEnv = "HARNESS_RUNTIME_CONFIG_PATH"
+	GitHubIssueLinkModeReference = "reference"
+	GitHubIssueLinkModeClose     = "close"
 )
 
 // Serialize read/modify/write operations across settings and recurring runs.
@@ -156,7 +158,7 @@ func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 	jsonEnabled *bool,
 ) error {
 	return SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
-		path, initCfg, reviewCfg, defaultLibraryEnabled, chatEnabled, jsonEnabled, nil,
+		path, initCfg, reviewCfg, defaultLibraryEnabled, chatEnabled, jsonEnabled, nil, nil,
 	)
 }
 
@@ -170,6 +172,7 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 	chatEnabled *bool,
 	jsonEnabled *bool,
 	githubIssuesEnabled *bool,
+	githubIssueLinkMode *string,
 ) error {
 	runtimeConfigMu.Lock()
 	defer runtimeConfigMu.Unlock()
@@ -207,6 +210,14 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 		githubIssuesEnabledValue = *githubIssuesEnabled
 	}
 	applyGitHubIssuesEnabledToDoc(doc, githubIssuesEnabledValue)
+	githubIssueLinkModeValue := githubIssueLinkModeFromDoc(doc)
+	if githubIssueLinkMode != nil {
+		githubIssueLinkModeValue = NormalizeGitHubIssueLinkMode(*githubIssueLinkMode)
+		if githubIssueLinkModeValue == "" {
+			return fmt.Errorf("github_issue_link_mode must be %q or %q", GitHubIssueLinkModeReference, GitHubIssueLinkModeClose)
+		}
+	}
+	applyGitHubIssueLinkModeToDoc(doc, githubIssueLinkModeValue)
 
 	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
 
@@ -410,6 +421,49 @@ func applyGitHubIssuesEnabledToDoc(doc map[string]any, enabled bool) {
 	} else {
 		delete(doc, "github_issues_enabled")
 	}
+}
+
+// NormalizeGitHubIssueLinkMode returns the supported PR issue-link behavior,
+// or an empty string when value is not supported.
+func NormalizeGitHubIssueLinkMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case GitHubIssueLinkModeReference:
+		return GitHubIssueLinkModeReference
+	case GitHubIssueLinkModeClose:
+		return GitHubIssueLinkModeClose
+	default:
+		return ""
+	}
+}
+
+func applyGitHubIssueLinkModeToDoc(doc map[string]any, mode string) {
+	if mode == GitHubIssueLinkModeClose {
+		doc["github_issue_link_mode"] = GitHubIssueLinkModeClose
+	} else {
+		delete(doc, "github_issue_link_mode")
+	}
+}
+
+// ReadRuntimeConfigGitHubIssueLinkMode reads the PR issue-link behavior,
+// defaulting to reference so existing runtime configs keep issues open.
+func ReadRuntimeConfigGitHubIssueLinkMode(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return GitHubIssueLinkModeReference
+	}
+	doc, err := readRuntimeConfigDoc(path)
+	if err != nil {
+		return GitHubIssueLinkModeReference
+	}
+	return githubIssueLinkModeFromDoc(doc)
+}
+
+func githubIssueLinkModeFromDoc(doc map[string]any) string {
+	mode, _ := doc["github_issue_link_mode"].(string)
+	if normalized := NormalizeGitHubIssueLinkMode(mode); normalized != "" {
+		return normalized
+	}
+	return GitHubIssueLinkModeReference
 }
 
 // ReadRuntimeConfigGitHubIssuesEnabled reports whether issue browsing is

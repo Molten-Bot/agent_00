@@ -100,6 +100,42 @@
   color: var(--text-soft);
 }
 
+.github-issues-settings-description {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-soft);
+  font-size: .8rem;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.github-issues-settings-link-mode {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.github-issues-settings-heading {
+  color: var(--text);
+  font-size: .82rem;
+  font-weight: 750;
+}
+
+.github-issues-settings-options .github-issue-link-option {
+  align-items: center;
+  min-height: 58px;
+}
+
+.github-issues-settings-options .github-issue-link-option strong {
+  font-size: .72rem;
+}
+
+.github-issues-settings-options .github-issue-link-option small {
+  font-size: .65rem;
+}
+
 .github-issues-filters {
   display: flex;
   align-items: center;
