@@ -306,12 +306,14 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   assert.match(await page.locator('.github-issue-comment-body').textContent(), /retry coverage/);
   assert.equal(await page.locator('.github-issue-task .github-issue-link-options').count(), 0);
   assert.match(await page.locator('.github-issue-task-heading').textContent(), /close #17 on merge/);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('github-issue-link-mode-updated', { detail: { mode: 'reference' } })));
+  assert.match(await page.locator('.github-issue-task-heading').textContent(), /reference #17/);
 
   await page.getByRole('button', { name: 'Start task' }).click();
   await page.waitForFunction(() => document.querySelector('.github-issue-task-status').textContent.includes('Task queued'));
   assert.equal(submitted.githubIssue.repository, 'Molten-Bot/agent_00');
   assert.equal(submitted.githubIssue.number, 17);
-  assert.equal(submitted.githubIssue.linkMode, 'close');
+  assert.equal(submitted.githubIssue.linkMode, 'reference');
   assert.match(submitted.prompt, /Please include retry coverage/);
 });
 

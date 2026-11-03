@@ -54,6 +54,12 @@
     return (Array.isArray(labels) ? labels : []).map((label) => label?.name).filter(Boolean).join(", ") || "None";
   }
 
+  function taskLinkModeDescription(issue) {
+    return githubIssueLinkMode === "close"
+      ? `Issue and comments included as context · PR will close #${issue.number} on merge`
+      : `Issue and comments included as context · PR will reference #${issue.number}`;
+  }
+
   function formatRelativeTime(value) {
     const timestamp = Date.parse(String(value || ""));
     if (!Number.isFinite(timestamp)) return String(value || "Unknown");
@@ -204,10 +210,7 @@
     task.className = "github-issue-task";
     const taskHeading = addText(task, "div", "github-issue-task-heading", "");
     addText(taskHeading, "strong", "", "Start a task from this issue");
-    const behavior = githubIssueLinkMode === "close"
-      ? `Issue and comments included as context · PR will close #${issue.number} on merge`
-      : `Issue and comments included as context · PR will reference #${issue.number}`;
-    addText(taskHeading, "span", "", behavior);
+    addText(taskHeading, "span", "github-issue-link-mode-note", taskLinkModeDescription(issue));
     const editor = document.createElement("textarea");
     editor.className = "github-issue-prompt";
     editor.rows = 7;
@@ -359,6 +362,14 @@
   filters.addEventListener("submit", (event) => {
     event.preventDefault();
     void loadIssues();
+  });
+  window.addEventListener("github-issue-link-mode-updated", (event) => {
+    const mode = String(event.detail?.mode || "reference").trim().toLowerCase();
+    githubIssueLinkMode = mode === "close" ? "close" : "reference";
+    if (selectedIssue) {
+      const note = detail.querySelector(".github-issue-link-mode-note");
+      if (note) note.textContent = taskLinkModeDescription(selectedIssue);
+    }
   });
   let initialization = null;
   window.initGitHubIssuesPanel = function initGitHubIssuesPanel() {

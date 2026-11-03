@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	runtimeConfigPath    = "./.agent00/config.json"
-	runtimeConfigPathEnv = "HARNESS_RUNTIME_CONFIG_PATH"
+	runtimeConfigPath            = "./.agent00/config.json"
+	runtimeConfigPathEnv         = "HARNESS_RUNTIME_CONFIG_PATH"
 	GitHubIssueLinkModeReference = "reference"
 	GitHubIssueLinkModeClose     = "close"
 )
@@ -164,6 +164,7 @@ func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 
 // SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings persists review
 // automation, library, chat, JSON, and GitHub Issues settings in one update.
+// githubIssueLinkMode is optional; when omitted, the existing behavior remains.
 func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 	path string,
 	initCfg InitConfig,

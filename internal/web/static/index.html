@@ -2890,6 +2890,9 @@
       if (reviewSettingsGitHubIssuesLinkClose instanceof HTMLInputElement) {
         reviewSettingsGitHubIssuesLinkClose.checked = state.reviewSettings.githubIssueLinkMode === "close";
       }
+      window.dispatchEvent(new CustomEvent("github-issue-link-mode-updated", {
+        detail: { mode: state.reviewSettings.githubIssueLinkMode },
+      }));
       syncGitHubIssuesDockLinkAvailability();
       syncGitHubIssuesLinkModeSetting();
       syncChatDockLinkAvailability();

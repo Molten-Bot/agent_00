@@ -159,7 +159,7 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
 	page := response.Body.String()
-	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `href="#studio-issues"`, `data-prompt-title-mode="issues"`, `id="github-issues-panel"`, "github-issues-repo", "github-issues-state", "github-issues-search", "github-issues-count", "github-issues.css", "github-issues.js"} {
+	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `href="#studio-issues"`, `data-prompt-title-mode="issues"`, `id="github-issues-panel"`, "github-issues-repo", "github-issues-state", "github-issues-search", "github-issues-count", "review-settings-github-issues-link-mode", "review-settings-github-issues-link-close", "github-issues.css", "github-issues.js"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page is missing %q", want)
 		}
@@ -174,7 +174,7 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	}
 	asset := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
-	if asset.Code != http.StatusOK || !strings.Contains(asset.Body.String(), "Edit prompt first") || !strings.Contains(asset.Body.String(), "Start task") || !strings.Contains(asset.Body.String(), "Start with this prompt") || !strings.Contains(asset.Body.String(), "github-issue-link-options") || !strings.Contains(asset.Body.String(), "githubIssue:") {
+	if asset.Code != http.StatusOK || !strings.Contains(asset.Body.String(), "Edit prompt first") || !strings.Contains(asset.Body.String(), "Start task") || !strings.Contains(asset.Body.String(), "Start with this prompt") || !strings.Contains(asset.Body.String(), "linkMode: githubIssueLinkMode") || !strings.Contains(asset.Body.String(), "githubIssue:") {
 		t.Fatalf("issue browser asset response = %d, expected both task launch modes", asset.Code)
 	}
 }
