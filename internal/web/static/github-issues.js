@@ -11,7 +11,89 @@
   const issueList = document.getElementById("github-issues-list");
   const issueCount = document.getElementById("github-issues-count");
   const detail = document.getElementById("github-issue-detail");
+  const columns = document.querySelector(".github-issues-columns");
+  const listPanel = document.getElementById("github-issues-list-panel");
+  const listToggle = document.getElementById("github-issues-list-toggle");
+  const resizeHandle = document.getElementById("github-issues-resize-handle");
   if (!status || !disabled || !browser || !repoSelect || !filters || !issueList || !detail) return;
+
+  const layoutStorageKey = "hubui.githubIssuesLayout.v1";
+  let savedLayout = {};
+  try { savedLayout = JSON.parse(localStorage.getItem(layoutStorageKey) || "{}"); } catch (_error) { savedLayout = {}; }
+
+  function setListCollapsed(collapsed, persist) {
+    if (!columns || !listToggle) return;
+    columns.classList.toggle("is-list-collapsed", collapsed);
+    listToggle.setAttribute("aria-expanded", String(!collapsed));
+    listToggle.textContent = collapsed ? "Show issue list" : "Hide issue list";
+    listPanel?.setAttribute("aria-hidden", String(collapsed));
+    if (persist) saveLayout();
+  }
+
+  function saveLayout() {
+    try {
+      const width = columns ? parseFloat(getComputedStyle(columns).getPropertyValue("--github-issues-list-width")) : NaN;
+      localStorage.setItem(layoutStorageKey, JSON.stringify({ width: Number.isFinite(width) ? width : null, collapsed: Boolean(columns?.classList.contains("is-list-collapsed")) }));
+    } catch (_error) { /* Storage can be unavailable in private or embedded contexts. */ }
+  }
+
+  function setListWidth(width) {
+    if (!columns || !resizeHandle) return;
+    const bounds = columns.getBoundingClientRect();
+    const minimum = 220;
+    const maximum = Math.max(minimum, Math.min(bounds.width * 0.6, bounds.width - 320));
+    const next = Math.round(Math.max(minimum, Math.min(maximum, width)));
+    columns.style.setProperty("--github-issues-list-width", `${next}px`);
+    resizeHandle.setAttribute("aria-valuemax", String(Math.round(maximum)));
+    resizeHandle.setAttribute("aria-valuenow", String(next));
+  }
+
+  if (columns) setListWidth(Number.isFinite(Number(savedLayout.width)) ? Number(savedLayout.width) : Math.max(220, columns.clientWidth * 0.32));
+  setListCollapsed(Boolean(savedLayout.collapsed), false);
+
+  listToggle?.addEventListener("click", () => {
+    setListCollapsed(!columns?.classList.contains("is-list-collapsed"), true);
+  });
+
+  if (columns && resizeHandle) {
+    let dragStartX = 0;
+    let dragStartWidth = 0;
+    resizeHandle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || window.matchMedia("(max-width: 680px)").matches) return;
+      event.preventDefault();
+      dragStartX = event.clientX;
+      dragStartWidth = resizeHandle.getBoundingClientRect().left - columns.getBoundingClientRect().left;
+      columns.classList.add("is-resizing");
+      resizeHandle.setPointerCapture(event.pointerId);
+    });
+    resizeHandle.addEventListener("pointermove", (event) => {
+      if (!columns.classList.contains("is-resizing")) return;
+      setListWidth(dragStartWidth + event.clientX - dragStartX);
+    });
+    const stopResize = () => {
+      if (!columns.classList.contains("is-resizing")) return;
+      columns.classList.remove("is-resizing");
+      saveLayout();
+    };
+    resizeHandle.addEventListener("pointerup", stopResize);
+    resizeHandle.addEventListener("pointercancel", stopResize);
+    resizeHandle.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        const current = parseFloat(getComputedStyle(columns).getPropertyValue("--github-issues-list-width")) || columns.clientWidth * 0.32;
+        setListWidth(current + (event.key === "ArrowRight" ? 24 : -24));
+        saveLayout();
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        setListWidth(220);
+        saveLayout();
+      } else if (event.key === "End") {
+        event.preventDefault();
+        setListWidth(columns.clientWidth * 0.6);
+        saveLayout();
+      }
+    });
+  }
 
   let repositories = [];
   let currentIssues = [];

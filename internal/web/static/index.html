@@ -391,11 +391,15 @@
                 <label class="github-issues-search">Search<input id="github-issues-search" type="search" maxlength="256" placeholder="Search this repository" autocomplete="off"></label>
                 <button type="submit">Search</button>
               </form>
+              <div class="github-issues-board-toolbar">
+                <button id="github-issues-list-toggle" type="button" aria-expanded="true" aria-controls="github-issues-list-panel">Hide issue list</button>
+              </div>
               <div class="github-issues-columns">
-                <section class="github-issues-list-panel" aria-labelledby="github-issues-list-title">
+                <section id="github-issues-list-panel" class="github-issues-list-panel" aria-labelledby="github-issues-list-title">
                   <div class="github-issues-list-heading"><h2 id="github-issues-list-title">Issues</h2><span id="github-issues-count" class="github-issues-list-count">Choose a repository</span></div>
                   <ol id="github-issues-list" class="github-issues-list"></ol>
                 </section>
+                <div id="github-issues-resize-handle" class="github-issues-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize issue list" aria-valuemin="220" aria-valuemax="900" aria-valuenow="320" tabindex="0"></div>
                 <article id="github-issue-detail" class="github-issue-detail" aria-live="polite"><p>Select an issue to see its details and conversation.</p></article>
               </div>
             </div>

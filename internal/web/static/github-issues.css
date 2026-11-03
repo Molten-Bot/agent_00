@@ -218,13 +218,77 @@
   border-color: var(--border-strong);
 }
 
+.github-issues-board-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.github-issues-board-toolbar button {
+  padding: 3px 8px;
+  color: var(--muted);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-size: .68rem;
+  cursor: pointer;
+}
+
+.github-issues-board-toolbar button:hover {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
 .github-issues-columns {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: minmax(280px, .72fr) minmax(0, 1.8fr);
-  gap: 14px;
+  grid-template-columns: minmax(220px, var(--github-issues-list-width, 32%)) 14px minmax(0, 1fr);
   align-items: stretch;
   min-height: 0;
+}
+
+.github-issues-columns.is-list-collapsed {
+  grid-template-columns: 0 0 minmax(0, 1fr);
+}
+
+.github-issues-columns.is-list-collapsed .github-issues-list-panel {
+  display: none;
+}
+
+.github-issues-columns.is-list-collapsed .github-issues-resize-handle {
+  display: none;
+}
+
+.github-issues-resize-handle {
+  position: relative;
+  min-width: 14px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.github-issues-resize-handle::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 36px;
+  border-radius: 3px;
+  background: var(--border-strong);
+  content: "";
+  transform: translate(-50%, -50%);
+  transition: height .12s ease, background .12s ease;
+}
+
+.github-issues-resize-handle:hover::after,
+.github-issues-resize-handle:focus-visible::after,
+.github-issues-columns.is-resizing .github-issues-resize-handle::after {
+  height: 58px;
+  background: var(--running);
+}
+
+.github-issues-resize-handle:focus-visible {
+  outline: none;
 }
 
 .github-issues-list-panel,
@@ -607,8 +671,7 @@
 
 @media (max-width: 850px) {
   .github-issues-columns {
-    grid-template-columns: minmax(230px, .75fr) minmax(0, 1.35fr);
-    gap: 10px;
+    grid-template-columns: minmax(200px, var(--github-issues-list-width, 32%)) 14px minmax(0, 1fr);
   }
 
   .github-issue-detail-header,
@@ -653,6 +716,10 @@
 
   .github-issues-columns {
     grid-template-columns: 1fr;
+  }
+
+  .github-issues-resize-handle {
+    display: none;
   }
 
   .github-issues-list-panel {
