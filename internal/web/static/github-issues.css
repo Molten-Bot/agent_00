@@ -9,28 +9,6 @@
   overflow: hidden;
 }
 
-.github-issues-repository {
-  display: grid;
-  gap: 5px;
-  width: min(280px, 34%);
-  color: var(--muted);
-  font-size: .75rem;
-  font-weight: 700;
-}
-
-.github-issues-repository select,
-.github-issues-filters select,
-.github-issues-filters input {
-  min-width: 0;
-  min-height: 40px;
-  padding: 8px 11px;
-  color: var(--text);
-  border: 1px solid var(--surface-control-border);
-  border-radius: 9px;
-  background: var(--surface-control-bg-strong);
-  box-shadow: var(--surface-control-shadow);
-}
-
 .github-issues-status {
   flex: 0 0 auto;
   min-height: 1.1em;
@@ -108,65 +86,15 @@
 }
 
 .github-issues-filters {
-  display: flex;
-  align-items: center;
-  gap: 9px;
   padding: 12px;
   margin: 0;
   flex: 0 0 auto;
-}
-
-.github-issues-filters > label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 38px;
-  padding: 0 10px;
-  color: var(--meta);
-  border: 1px solid var(--surface-control-border);
-  border-radius: 9px;
-  background: var(--surface-control-bg-strong);
-  box-shadow: var(--surface-control-shadow);
-  font-size: .9rem;
-}
-
-.github-issues-filters > label input {
-  min-height: 0;
-  width: 100%;
-  padding: 0;
-  border: 0;
-  outline: none;
-  background: transparent;
-  box-shadow: none;
-}
-
-.github-issues-filters > label input::placeholder {
-  color: var(--muted);
 }
 
 .github-issues-filters .github-issues-search {
   flex: 1 1 240px;
 }
 
-.github-issues-filters > label:not(.github-issues-search) {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 8px;
-  color: var(--muted);
-  font-size: .68rem;
-  font-weight: 700;
-}
-
-.github-issues-filters select {
-  min-height: 34px;
-  padding: 5px 8px;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  font-size: .78rem;
-}
-
-.github-issues-filters button,
 .github-issue-task-actions button {
   display: inline-flex;
   align-items: center;
@@ -184,7 +112,6 @@
   cursor: pointer;
 }
 
-.github-issues-filters button:hover,
 .github-issue-task-actions button:hover {
   border-color: var(--border-strong);
 }
@@ -656,23 +583,6 @@
   .github-issues-panel {
     min-height: 480px;
     overflow: visible;
-  }
-
-  .github-issues-repository {
-    width: 100%;
-  }
-
-  .github-issues-filters {
-    flex-wrap: wrap;
-  }
-
-  .github-issues-filters > label:not(.github-issues-search) {
-    flex: 1 1 130px;
-  }
-
-  .github-issues-filters .github-issues-search {
-    flex-basis: 100%;
-    order: -1;
   }
 
   .github-issues-filters button {

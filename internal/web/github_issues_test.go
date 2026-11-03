@@ -173,8 +173,8 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	if count := strings.Count(page, `data-lucide="folder-kanban"`); count < 4 {
 		t.Errorf("folder-kanban icon appears %d times, want panel title, bottom dock, and settings controls", count)
 	}
-	filtersAt := strings.Index(page, `id="github-issues-filters" class="github-issues-filters"`)
-	repositoryAt := strings.Index(page, `id="github-issues-repo" required`)
+	filtersAt := strings.Index(page, `id="github-issues-filters"`)
+	repositoryAt := strings.Index(page, `id="github-issues-repo"`)
 	if filtersAt < 0 || repositoryAt < filtersAt {
 		t.Error("repository picker should remain in the issue filter row after removing the duplicate heading")
 	}

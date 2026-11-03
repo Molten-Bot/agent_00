@@ -310,6 +310,15 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   );
   assert.equal(await page.locator('#github-issues-title').count(), 0);
   assert.equal(await page.locator('#github-issues-repo').evaluate(select => select.closest('#github-issues-filters') !== null), true);
+  assert.equal(await page.locator('#github-issues-repo').evaluate(select => select.classList.contains('prompt-control')), true);
+  assert.equal(
+    await page.locator('#github-issues-repo').evaluate(select => getComputedStyle(select).borderRadius),
+    await page.locator('#builder-repo-select').evaluate(select => getComputedStyle(select).borderRadius),
+  );
+  assert.equal(
+    await page.locator('#github-issues-search').evaluate(input => getComputedStyle(input).minHeight),
+    await page.locator('#builder-base-branch').evaluate(input => getComputedStyle(input).minHeight),
+  );
   assert.equal(await page.locator('#github-issues-state').count(), 0);
   assert.equal(await page.locator('#github-issues-dock-link [data-lucide="folder-kanban"]').count(), 1);
   assert.equal(await page.locator('#prompt-visibility-toggle').count(), 0);

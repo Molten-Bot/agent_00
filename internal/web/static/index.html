@@ -377,10 +377,16 @@
             <p id="github-issues-status" class="github-issues-status" role="status" aria-live="polite">Loading GitHub Issues settings…</p>
             <div id="github-issues-disabled" class="github-issues-disabled" hidden>Turn on GitHub Issues in <a href="/#settings">Settings</a> to browse issues.</div>
             <div id="github-issues-browser" class="github-issues-browser" hidden>
-              <form id="github-issues-filters" class="github-issues-filters">
-                <label class="github-issues-repository">Repository<select id="github-issues-repo" required><option value="">Loading repositories…</option></select></label>
-                <label class="github-issues-search">Search<input id="github-issues-search" type="search" maxlength="256" placeholder="Search this repository" autocomplete="off"></label>
-                <button type="submit">Search</button>
+              <form id="github-issues-filters" class="github-issues-filters prompt-grid">
+                <label class="prompt-field prompt-field-repo-history github-issues-repository">
+                  <span class="prompt-label">Repository</span>
+                  <select id="github-issues-repo" class="prompt-control" required><option value="">Loading repositories…</option></select>
+                </label>
+                <label class="prompt-field prompt-field-repository github-issues-search">
+                  <span class="prompt-label">Search</span>
+                  <input id="github-issues-search" class="prompt-control prompt-input" type="search" maxlength="256" placeholder="Search this repository" autocomplete="off">
+                </label>
+                <button class="prompt-action-button" type="submit">Search</button>
               </form>
               <div class="github-issues-board-toolbar">
                 <button id="github-issues-list-toggle" type="button" aria-expanded="true" aria-controls="github-issues-list-panel">Hide issue list</button>
