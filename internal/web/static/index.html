@@ -13323,6 +13323,7 @@
     }
     reviewSettingsGitHubIssuesEnabled?.addEventListener("change", () => {
       state.reviewSettings = { ...state.reviewSettings, githubIssuesEnabled: Boolean(reviewSettingsGitHubIssuesEnabled.checked) };
+      syncGitHubIssuesDockLinkAvailability();
     });
     reviewSettingsChatEnabled?.addEventListener("change", () => {
       state.reviewSettings = { ...state.reviewSettings, chatEnabled: Boolean(reviewSettingsChatEnabled.checked) };

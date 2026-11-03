@@ -9,6 +9,7 @@
   const searchInput = document.getElementById("github-issues-search");
   const filters = document.getElementById("github-issues-filters");
   const issueList = document.getElementById("github-issues-list");
+  const issueCount = document.getElementById("github-issues-count");
   const detail = document.getElementById("github-issue-detail");
   if (!status || !disabled || !browser || !repoSelect || !filters || !issueList || !detail) return;
 
@@ -37,10 +38,6 @@
     return repositories.find((repo) => repo.full_name === repoSelect.value) || null;
   }
 
-  function issueTitle(issue) {
-    return `#${issue.number} ${issue.title || "Untitled issue"}`;
-  }
-
   function addText(parent, tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -55,6 +52,34 @@
 
   function formatLabels(labels) {
     return (Array.isArray(labels) ? labels : []).map((label) => label?.name).filter(Boolean).join(", ") || "None";
+  }
+
+  function formatRelativeTime(value) {
+    const timestamp = Date.parse(String(value || ""));
+    if (!Number.isFinite(timestamp)) return String(value || "Unknown");
+    const delta = Math.max(0, Date.now() - timestamp);
+    const minutes = Math.floor(delta / 60000);
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days} day${days === 1 ? "" : "s"} ago`;
+    return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(timestamp);
+  }
+
+  function addIssueLabels(parent, labels) {
+    for (const label of Array.isArray(labels) ? labels : []) {
+      const name = String(label?.name || "").trim();
+      if (name) addText(parent, "span", "github-issue-label", name);
+    }
+  }
+
+  function addAvatar(parent, login) {
+    const name = String(login || "?").trim();
+    const initials = name.split(/[-_\s]+/).filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join("") || "?";
+    const avatar = addText(parent, "span", "github-issue-avatar", initials);
+    avatar.setAttribute("aria-hidden", "true");
   }
 
   function buildTaskPrompt(issue, repo) {
@@ -84,6 +109,7 @@
 
   function renderIssueList(issues) {
     issueList.replaceChildren();
+    if (issueCount) issueCount.textContent = `${issues.length}${issues.length === 100 ? "+" : ""} ${stateSelect.value} issues`;
     if (!issues.length) {
       addText(issueList, "li", "github-issues-empty", "No issues found for these filters.");
       return;
@@ -96,10 +122,15 @@
       button.setAttribute("aria-current", String(selectedIssue?.number === issue.number));
       button.dataset.issueNumber = String(issue.number || "");
       button.dataset.title = String(issue.title || "");
-      addText(button, "strong", "github-issue-list-title", issueTitle(issue));
-      const summary = [issue.state, issue.author?.login ? `by ${issue.author.login}` : "", formatLabels(issue.labels)]
-        .filter((part) => part && part !== "None").join(" · ");
-      addText(button, "span", "github-issue-list-summary", summary);
+      const title = addText(button, "strong", "github-issue-list-title", "");
+      const isClosed = String(issue.state || "").toLowerCase() === "closed";
+      addText(title, "span", isClosed ? "github-issue-closed-dot" : "github-issue-open-dot", isClosed ? "○" : "●");
+      addText(title, "span", "", issue.title || "Untitled issue");
+      const meta = addText(button, "span", "github-issue-list-meta", "");
+      addText(meta, "span", "", `#${issue.number}`);
+      addText(meta, "span", "", "·");
+      addText(meta, "span", "", `updated ${formatRelativeTime(issue.updatedAt)}`);
+      addIssueLabels(meta, issue.labels);
       button.addEventListener("click", () => void loadIssue(issue.number));
       item.appendChild(button);
       issueList.appendChild(item);
@@ -111,97 +142,126 @@
     activeLinkMode = "reference";
     detail.replaceChildren();
     const repo = selectedRepository();
-    addText(detail, "p", "github-issue-number", `${issue.state || "Issue"} · #${issue.number}`);
-    addText(detail, "h2", "github-issue-title", issue.title || "Untitled issue");
+    const detailHeader = document.createElement("header");
+    detailHeader.className = "github-issue-detail-header";
+    const headingMeta = addText(detailHeader, "div", "github-issue-heading-meta", "");
+    const state = String(issue.state || "open").toLowerCase();
+    addText(headingMeta, "span", "github-issue-state", `● ${state === "closed" ? "Closed" : "Open"}`);
+    addText(headingMeta, "span", "", repo?.full_name || "Repository");
+    addText(headingMeta, "span", "", "·");
+    addText(headingMeta, "span", "", `#${issue.number}`);
+    addText(detailHeader, "h2", "github-issue-detail-title", issue.title || "Untitled issue");
+    const labels = addText(detailHeader, "div", "github-issue-labels", "");
+    addIssueLabels(labels, issue.labels);
     if (issue.url) {
       const link = document.createElement("a");
+      link.className = "github-issue-link";
       link.href = issue.url;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.textContent = "Open on GitHub";
-      detail.appendChild(link);
+      detailHeader.appendChild(link);
     }
+    detail.appendChild(detailHeader);
+
+    const detailBody = document.createElement("div");
+    detailBody.className = "github-issue-detail-body";
+    const author = addText(detailBody, "div", "github-issue-author", "");
+    addAvatar(author, issue.author?.login);
+    addText(author, "strong", "", issue.author?.login || "Unknown");
+    addText(author, "span", "", `opened this issue ${formatRelativeTime(issue.createdAt)}`);
+    addText(detailBody, "pre", "github-issue-body", issue.body || "No description provided.");
     const metadata = document.createElement("dl");
     metadata.className = "github-issue-metadata";
     for (const [label, value] of [
-      ["Author", issue.author?.login || "Unknown"],
       ["Assignees", formatPeople(issue.assignees)],
-      ["Labels", formatLabels(issue.labels)],
-      ["Updated", issue.updatedAt || "Unknown"],
+      ["Created", formatRelativeTime(issue.createdAt)],
+      ["Updated", formatRelativeTime(issue.updatedAt)],
     ]) {
-      addText(metadata, "dt", "", label);
-      addText(metadata, "dd", "", value);
+      const group = document.createElement("div");
+      addText(group, "dt", "", label);
+      addText(group, "dd", "", value);
+      metadata.appendChild(group);
     }
-    detail.appendChild(metadata);
-    addText(detail, "h3", "", "Description");
-    addText(detail, "pre", "github-issue-body", issue.body || "No description provided.");
-    addText(detail, "h3", "", `Conversation (${(issue.comments || []).length})`);
+    detailBody.appendChild(metadata);
+    addText(detailBody, "h3", "github-issue-comments-heading", `Comments (${(issue.comments || []).length})`);
     const comments = document.createElement("div");
     comments.className = "github-issue-comments";
-    if (!issue.comments?.length) addText(comments, "p", "", "No comments yet.");
+    if (!issue.comments?.length) addText(comments, "p", "github-issue-comment-body", "No comments yet.");
     for (const comment of issue.comments || []) {
       const card = document.createElement("section");
       card.className = "github-issue-comment";
-      addText(card, "p", "github-issue-comment-meta", `${comment.author?.login || "Unknown"} · ${comment.createdAt || ""}`);
+      const commentMeta = addText(card, "div", "github-issue-comment-meta", "");
+      addAvatar(commentMeta, comment.author?.login);
+      addText(commentMeta, "strong", "", comment.author?.login || "Unknown");
+      addText(commentMeta, "span", "", "·");
+      addText(commentMeta, "span", "", formatRelativeTime(comment.createdAt));
       addText(card, "pre", "github-issue-comment-body", comment.body || "");
       comments.appendChild(card);
     }
-    detail.appendChild(comments);
+    detailBody.appendChild(comments);
 
     const task = document.createElement("section");
     task.className = "github-issue-task";
-    addText(task, "h3", "", "Start a task");
-    addText(task, "p", "", "The issue context goes to the agent. The run then follows your regular pull request, review, and merge settings.");
-    const linkLabel = document.createElement("label");
-    linkLabel.className = "github-issue-link-mode";
-    linkLabel.appendChild(document.createTextNode("PR issue link "));
-    const linkMode = document.createElement("select");
-    linkMode.setAttribute("aria-label", "PR issue link behavior");
-    for (const [value, label] of [["reference", "Link only"], ["close", "Close issue when merged"]]) {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = label;
-      option.selected = value === activeLinkMode;
-      linkMode.appendChild(option);
+    const taskHeading = addText(task, "div", "github-issue-task-heading", "");
+    addText(taskHeading, "strong", "", "Start a task from this issue");
+    addText(taskHeading, "span", "", "Issue and comments included as context");
+    const linkOptions = addText(task, "div", "github-issue-link-options", "");
+    linkOptions.setAttribute("role", "radiogroup");
+    linkOptions.setAttribute("aria-label", "Pull request issue link behavior");
+    for (const [value, label, description] of [
+      ["reference", "Reference issue", `PR says “Related to #${issue.number}”`],
+      ["close", "Close on merge", `PR says “Closes #${issue.number}”`],
+    ]) {
+      const optionLabel = document.createElement("label");
+      optionLabel.className = "github-issue-link-option";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "github-issue-link-mode";
+      input.value = value;
+      input.checked = value === activeLinkMode;
+      input.addEventListener("change", () => { activeLinkMode = input.value; });
+      const copy = document.createElement("span");
+      addText(copy, "strong", "", label);
+      addText(copy, "small", "", description);
+      optionLabel.append(input, copy);
+      linkOptions.appendChild(optionLabel);
     }
-    linkMode.addEventListener("change", () => { activeLinkMode = linkMode.value; });
-    linkLabel.appendChild(linkMode);
-    task.appendChild(linkLabel);
     const editor = document.createElement("textarea");
     editor.className = "github-issue-prompt";
-    editor.rows = 12;
+    editor.rows = 7;
     editor.setAttribute("aria-label", "Issue task prompt");
     editor.value = buildTaskPrompt(issue, repo);
     editor.hidden = true;
     task.appendChild(editor);
     const actions = document.createElement("div");
     actions.className = "github-issue-task-actions";
-    const start = document.createElement("button");
-    start.type = "button";
-    start.className = "github-issue-start";
-    start.textContent = "Start task";
-    start.addEventListener("click", () => void submitTask(issue, repo, buildTaskPrompt(issue, repo)));
     const edit = document.createElement("button");
     edit.type = "button";
     edit.textContent = "Edit prompt first";
     edit.addEventListener("click", () => {
       editor.hidden = false;
-      edit.hidden = true;
       submitEdited.hidden = false;
       editor.focus();
     });
+    const start = document.createElement("button");
+    start.type = "button";
+    start.className = "github-issue-start";
+    start.textContent = "Start task";
+    start.addEventListener("click", () => void submitTask(issue, repo, buildTaskPrompt(issue, repo)));
     const submitEdited = document.createElement("button");
     submitEdited.type = "button";
     submitEdited.className = "github-issue-start";
-    submitEdited.textContent = "Start edited task";
+    submitEdited.textContent = "Start with this prompt";
     submitEdited.hidden = true;
     submitEdited.addEventListener("click", () => void submitTask(issue, repo, editor.value));
-    actions.append(start, edit, submitEdited);
+    actions.append(edit, start, submitEdited);
     task.appendChild(actions);
     const taskStatus = addText(task, "p", "github-issue-task-status", "");
     taskStatus.setAttribute("role", "status");
     taskStatus.setAttribute("aria-live", "polite");
-    detail.appendChild(task);
+    detailBody.appendChild(task);
+    detail.appendChild(detailBody);
   }
 
   async function submitTask(issue, repo, prompt) {

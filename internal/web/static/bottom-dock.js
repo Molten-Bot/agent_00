@@ -174,6 +174,7 @@
 
   function syncPageNavLinks(root) {
     const hashDisplay = String(window.location.hash || "").replace(/^#/, "").trim();
+    const currentPath = normalizePath(window.location.pathname);
     const hashAppDisplay = hashDisplay === "dashboard" || hashDisplay === "chat" || hashDisplay === "work"
       ? hashDisplay
       : hashDisplay === "current-work"
@@ -183,13 +184,17 @@
       || (normalizePath(window.location.pathname) === "/chat"
         ? "chat"
         : "studio");
-    const links = root.querySelectorAll("[data-app-display]");
+    const links = root.querySelectorAll("[data-app-display], [data-page-nav-link]");
     links.forEach((link) => {
+      const pagePathValue = String(link.getAttribute("data-page-nav-link") || "").trim();
+      const pagePath = pagePathValue ? normalizePath(pagePathValue) : "";
       const linkDisplay = String(link.getAttribute("data-app-display") || "").trim() || "dashboard";
-      const active = linkDisplay === currentDisplay && !dockLinkDisabled(link);
+      const pageActive = Boolean(pagePath) && currentPath === pagePath;
+      const appActive = link.hasAttribute("data-app-display") && (currentPath === "/" || !pagePath) && linkDisplay === currentDisplay;
+      const active = (pageActive || appActive) && !dockLinkDisabled(link);
       link.classList.toggle("active", active);
       if (active) {
-        link.setAttribute("aria-current", "true");
+        link.setAttribute("aria-current", pageActive ? "page" : "true");
       } else {
         link.removeAttribute("aria-current");
       }

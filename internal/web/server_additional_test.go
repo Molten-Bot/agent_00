@@ -91,7 +91,8 @@ func TestBottomDockNavigationGuards(t *testing.T) {
 	}
 	script := string(data)
 
-	if !strings.Contains(script, `const active = linkDisplay === currentDisplay && !dockLinkDisabled(link);`) ||
+	if !strings.Contains(script, `const active = (pageActive || appActive) && !dockLinkDisabled(link);`) ||
+		!strings.Contains(script, `const pageActive = Boolean(pagePath) && currentPath === pagePath;`) ||
 		!strings.Contains(script, `event.stopImmediatePropagation();`) {
 		t.Fatalf("expected shared dock script to keep disabled-link navigation guards")
 	}

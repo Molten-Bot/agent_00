@@ -8,7 +8,7 @@ let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
 const defaults = { auto_merge: false, delete_merged_branches: false, merge_method: 'squash', review_level: 'off', default_library_enabled: true, chat_enabled: true, json_enabled: false, github_issues_enabled: false };
-async function openSettings(t, { viewport = { width: 1280, height: 900 }, theme = 'dark', configurePage, path = '#settings' } = {}) {
+async function openSettings(t, { viewport = { width: 1280, height: 900 }, theme = 'dark', configurePage, initialSettings = defaults, path = '#settings' } = {}) {
   const page = await browser.newPage({ viewport });
   t.after(() => page.close());
   const errors = [];
@@ -17,7 +17,7 @@ async function openSettings(t, { viewport = { width: 1280, height: 900 }, theme 
   await page.addInitScript(theme => localStorage.setItem('hubui.theme', theme), theme);
   await page.route('**/*', route => new URL(route.request().url()).origin === new URL(baseURL).origin ? route.continue() : route.abort());
   await page.route('**/api/agent-auth**', route => route.fulfill({ json: { ok: true, auth: { required: true, ready: true, harness: 'claude', state: 'ready' } } }));
-  let settings = { ...defaults };
+  let settings = { ...initialSettings };
   const writes = [];
   await page.route('**/api/review-settings', route => {
     if (route.request().method() === 'POST') {
@@ -29,7 +29,7 @@ async function openSettings(t, { viewport = { width: 1280, height: 900 }, theme 
   await page.route('**/api/commit-signing**', route => route.fulfill({ json: { ok: true, settings: { configured: false, enabled: false } } }));
   await page.route('**/api/library/sources', route => route.fulfill({ json: { ok: true, sources: [] } }));
   if (configurePage) await configurePage(page);
-  await page.goto(`${baseURL}/${path}`);
+  await page.goto(path.startsWith('/') ? `${baseURL}${path}` : `${baseURL}/${path}`);
   if (path === '#settings') await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   return { page, writes };
 }
@@ -231,12 +231,14 @@ test('json toggle marks the experimental JSON tab unavailable immediately and pe
   await page.waitForFunction(() => document.body.dataset.promptMode === 'json');
 });
 
-test('GitHub Issues toggle exposes the browser and persists on reload', async t => {
+test('GitHub Issues toggle exposes and hides the dock link and persists on reload', async t => {
   const { page, writes } = await openSettings(t);
   assert.equal(await page.locator('#review-settings-github-issues-enabled').isChecked(), false);
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
   await select(page, 'github-issues');
   await toggle(page, 'review-settings-github-issues-enabled');
+  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'false');
+  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), '/issues');
   await close(page);
   assert.equal(writes.at(-1).github_issues_enabled, true);
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'false');
@@ -245,6 +247,61 @@ test('GitHub Issues toggle exposes the browser and persists on reload', async t 
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   await select(page, 'github-issues');
   assert.equal(await page.locator('#review-settings-github-issues-enabled').isChecked(), true);
+  await toggle(page, 'review-settings-github-issues-enabled');
+  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
+  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), null);
+  assert.equal(await page.locator('#github-issues-dock-link').evaluate(link => link.classList.contains('hidden')), true);
+  await close(page);
+  assert.equal(writes.at(-1).github_issues_enabled, false);
+  await page.reload();
+  await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
+  await select(page, 'github-issues');
+  assert.equal(await page.locator('#review-settings-github-issues-enabled').isChecked(), false);
+  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
+});
+
+test('GitHub Issues page renders issue conversation and launches with the selected link mode', async t => {
+  let submitted;
+  const issueURL = 'https://github.com/Molten-Bot/agent_00/issues/17';
+  const { page } = await openSettings(t, {
+    path: '/issues',
+    initialSettings: { ...defaults, github_issues_enabled: true },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+        { full_name: 'Molten-Bot/agent_00', html_url: 'https://github.com/Molten-Bot/agent_00', default_branch: 'main' },
+      ] } }));
+      await page.route('**/api/github/issues*', route => {
+        const path = new URL(route.request().url()).pathname;
+        const issue = { number: 17, title: 'Add issue browser', state: 'OPEN', url: issueURL,
+          author: { login: 'octocat' }, labels: [{ name: 'feature' }], assignees: [{ login: 'hubot' }],
+          createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' };
+        return route.fulfill({ json: path.endsWith('/17')
+          ? { ok: true, issue: { ...issue, body: 'Implement this issue.', comments: [{ author: { login: 'hubot' }, body: 'Please include retry coverage.', createdAt: '2026-01-03T00:00:00Z' }] } }
+          : { ok: true, issues: [issue] } });
+      });
+      await page.route('**/api/local-prompt', route => {
+        submitted = route.request().postDataJSON();
+        return route.fulfill({ json: { ok: true, request_id: 'issue-task-17' } });
+      });
+    },
+  });
+
+  await page.locator('#github-issues-repo').selectOption('Molten-Bot/agent_00');
+  await page.locator('.github-issue-list-item').waitFor();
+  assert.match(await page.locator('.github-issue-list-title').textContent(), /Add issue browser/);
+  await page.locator('.github-issue-list-item').click();
+  await page.getByRole('heading', { name: 'Add issue browser' }).waitFor();
+  assert.match(await page.locator('.github-issue-body').textContent(), /Implement this issue/);
+  assert.match(await page.locator('.github-issue-comment-body').textContent(), /retry coverage/);
+  assert.equal(await page.locator('.github-issue-link-option').count(), 2);
+
+  await page.locator('.github-issue-link-option input[value="close"]').check();
+  await page.getByRole('button', { name: 'Start task' }).click();
+  await page.waitForFunction(() => document.querySelector('.github-issue-task-status').textContent.includes('Task queued'));
+  assert.equal(submitted.githubIssue.repository, 'Molten-Bot/agent_00');
+  assert.equal(submitted.githubIssue.number, 17);
+  assert.equal(submitted.githubIssue.linkMode, 'close');
+  assert.match(submitted.prompt, /Please include retry coverage/);
 });
 
 for (const method of ['escape', 'backdrop']) test(`${method} saves settings before closing`, async t => {

@@ -132,15 +132,38 @@ func TestGitHubIssuesPageRendersWorkflowControls(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
-	for _, want := range []string{"GitHub Issues", "github-issues-repo", "github-issues-state", "github-issues-search", "github-issues.js"} {
+	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `data-page-nav-link="/issues"`, "github-issues-repo", "github-issues-state", "github-issues-search", "github-issues-count", "github-issues.js"} {
 		if !strings.Contains(response.Body.String(), want) {
 			t.Errorf("page is missing %q", want)
 		}
 	}
+	if strings.Contains(response.Body.String(), "github-issues-back") {
+		t.Error("page should use the shared app header and dock without an extra back header")
+	}
 	asset := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
-	if asset.Code != http.StatusOK || !strings.Contains(asset.Body.String(), "Edit prompt first") || !strings.Contains(asset.Body.String(), "Start task") || !strings.Contains(asset.Body.String(), "Start edited task") || !strings.Contains(asset.Body.String(), "githubIssue:") {
+	if asset.Code != http.StatusOK || !strings.Contains(asset.Body.String(), "Edit prompt first") || !strings.Contains(asset.Body.String(), "Start task") || !strings.Contains(asset.Body.String(), "Start with this prompt") || !strings.Contains(asset.Body.String(), "github-issue-link-options") || !strings.Contains(asset.Body.String(), "githubIssue:") {
 		t.Fatalf("issue browser asset response = %d, expected both task launch modes", asset.Code)
+	}
+}
+
+func TestGitHubIssuesDockLinkFollowsSetting(t *testing.T) {
+	t.Parallel()
+	for _, enabled := range []bool{false, true} {
+		srv := githubIssueTestServer(nil, enabled)
+		response := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/issues", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET /issues enabled=%t status = %d", enabled, response.Code)
+		}
+		page := response.Body.String()
+		if enabled {
+			if !strings.Contains(page, `id="github-issues-dock-link" class="prompt-mode-link site-dock-link" href="/issues" data-page-nav-link="/issues"`) {
+				t.Fatalf("enabled dock link missing or disabled: %s", page)
+			}
+		} else if !strings.Contains(page, `id="github-issues-dock-link" class="prompt-mode-link site-dock-link is-disabled hidden"`) {
+			t.Fatalf("disabled dock link is not hidden: %s", page)
+		}
 	}
 }
 
