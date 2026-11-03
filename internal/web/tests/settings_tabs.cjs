@@ -275,6 +275,22 @@ test('GitHub Issues toggle exposes and hides the dock link and persists on reloa
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
 });
 
+test('GitHub Issues settings initialize even when Studio opens in another prompt mode', async t => {
+  const { page } = await openSettings(t, {
+    path: '/',
+    initialSettings: { ...defaults, github_issues_enabled: true },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [] } }));
+    },
+  });
+
+  assert.notEqual(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
+  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=2');
+  await page.waitForFunction(() => document.getElementById('github-issues-status').textContent === 'No repositories are available for this GitHub account.');
+  await page.locator('#github-issues-dock-link').click();
+  assert.equal(await page.locator('#github-issues-status').textContent(), 'No repositories are available for this GitHub account.');
+});
+
 test('GitHub Issues renders inside Studio and uses the configured link mode', async t => {
   let submitted;
   let issueQueryState;
