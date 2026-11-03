@@ -5,7 +5,6 @@
   const disabled = document.getElementById("github-issues-disabled");
   const browser = document.getElementById("github-issues-browser");
   const repoSelect = document.getElementById("github-issues-repo");
-  const stateSelect = document.getElementById("github-issues-state");
   const searchInput = document.getElementById("github-issues-search");
   const filters = document.getElementById("github-issues-filters");
   const issueList = document.getElementById("github-issues-list");
@@ -197,7 +196,7 @@
 
   function renderIssueList(issues) {
     issueList.replaceChildren();
-    if (issueCount) issueCount.textContent = `${issues.length}${issues.length === 100 ? "+" : ""} ${stateSelect.value} issues`;
+    if (issueCount) issueCount.textContent = `${issues.length}${issues.length === 100 ? "+" : ""} open issues`;
     if (!issues.length) {
       addText(issueList, "li", "github-issues-empty", "No issues found for these filters.");
       return;
@@ -393,7 +392,7 @@
     }
     const generation = ++requestGeneration;
     setStatus(`Loading issues for ${repo.full_name}…`);
-    const query = new URLSearchParams({ repo: repo.full_name, state: stateSelect.value });
+    const query = new URLSearchParams({ repo: repo.full_name, state: "open" });
     if (searchInput.value.trim()) query.set("search", searchInput.value.trim());
     try {
       const body = await requestJSON(`/api/github/issues?${query}`, { cache: "no-store" });
@@ -440,7 +439,6 @@
   }
 
   repoSelect.addEventListener("change", () => void loadIssues());
-  stateSelect.addEventListener("change", () => void loadIssues());
   filters.addEventListener("submit", (event) => {
     event.preventDefault();
     void loadIssues();

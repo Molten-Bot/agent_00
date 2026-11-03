@@ -271,6 +271,7 @@ test('GitHub Issues toggle exposes and hides the dock link and persists on reloa
 
 test('GitHub Issues renders inside Studio and uses the configured link mode', async t => {
   let submitted;
+  let issueQueryState;
   const issueURL = 'https://github.com/Molten-Bot/agent_00/issues/17';
   const { page } = await openSettings(t, {
     path: '/#studio-issues',
@@ -280,7 +281,9 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
         { full_name: 'Molten-Bot/agent_00', html_url: 'https://github.com/Molten-Bot/agent_00', default_branch: 'main' },
       ] } }));
       await page.route('**/api/github/issues**', route => {
-        const path = new URL(route.request().url()).pathname;
+        const issueRequest = new URL(route.request().url());
+        const path = issueRequest.pathname;
+        if (path === '/api/github/issues') issueQueryState = issueRequest.searchParams.get('state');
         const issue = { number: 17, title: 'Add issue browser', state: 'OPEN', url: issueURL,
           author: { login: 'octocat' }, labels: [{ name: 'feature' }], assignees: [{ login: 'hubot' }],
           createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' };
@@ -303,10 +306,13 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   assert.match(await page.locator('.prompt-title-mode[data-prompt-title-mode="issues"]').textContent(), /GitHub Issues/);
   assert.equal(await page.locator('#github-issues-title').count(), 0);
   assert.equal(await page.locator('#github-issues-repo').evaluate(select => select.closest('#github-issues-filters') !== null), true);
+  assert.equal(await page.locator('#github-issues-state').count(), 0);
   assert.equal(await page.locator('#github-issues-dock-link [data-lucide="folder-kanban"]').count(), 1);
   assert.equal(await page.locator('#prompt-visibility-toggle').count(), 0);
   await page.locator('#github-issues-repo').selectOption('Molten-Bot/agent_00');
   await page.locator('.github-issue-list-item').waitFor();
+  assert.equal(issueQueryState, 'open');
+  assert.match(await page.locator('#github-issues-count').textContent(), /open issues/);
   assert.match(await page.locator('.github-issue-list-title').textContent(), /Add issue browser/);
   const resizeHandle = page.locator('#github-issues-resize-handle');
   await resizeHandle.focus();
