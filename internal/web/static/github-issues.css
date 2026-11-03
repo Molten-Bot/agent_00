@@ -58,6 +58,14 @@
   line-height: 1.5;
 }
 
+.github-issues-auto-start {
+	grid-column: 1 / -1;
+	display: grid;
+	gap: 8px;
+	padding-top: 8px;
+	border-top: 1px solid var(--border);
+}
+
 .github-issues-settings-link-mode {
   display: grid;
   grid-column: 1 / -1;

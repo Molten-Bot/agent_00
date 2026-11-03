@@ -144,7 +144,7 @@ func TestGitHubIssuesEnabledDefaultsFalseAndRoundTrips(t *testing.T) {
 	}
 
 	enabled := true
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, &enabled, nil); err != nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, &enabled, nil, nil); err != nil {
 		t.Fatalf("save enabled setting: %v", err)
 	}
 	if !ReadRuntimeConfigGitHubIssuesEnabled(path) {
@@ -152,7 +152,7 @@ func TestGitHubIssuesEnabledDefaultsFalseAndRoundTrips(t *testing.T) {
 	}
 
 	disabled := false
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, &disabled, nil); err != nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, &disabled, nil, nil); err != nil {
 		t.Fatalf("save disabled setting: %v", err)
 	}
 	if ReadRuntimeConfigGitHubIssuesEnabled(path) {
@@ -179,7 +179,7 @@ func TestGitHubIssueLinkModeDefaultsToReferenceAndRoundTrips(t *testing.T) {
 	}
 
 	mode := GitHubIssueLinkModeClose
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode); err != nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode, nil); err != nil {
 		t.Fatalf("save close-on-merge setting: %v", err)
 	}
 	if got := ReadRuntimeConfigGitHubIssueLinkMode(path); got != GitHubIssueLinkModeClose {
@@ -187,7 +187,7 @@ func TestGitHubIssueLinkModeDefaultsToReferenceAndRoundTrips(t *testing.T) {
 	}
 
 	mode = GitHubIssueLinkModeReference
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode); err != nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode, nil); err != nil {
 		t.Fatalf("save reference setting: %v", err)
 	}
 	if got := ReadRuntimeConfigGitHubIssueLinkMode(path); got != GitHubIssueLinkModeReference {
@@ -206,8 +206,41 @@ func TestGitHubIssueLinkModeDefaultsToReferenceAndRoundTrips(t *testing.T) {
 	}
 
 	mode = "unexpected"
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode); err == nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode, nil); err == nil {
 		t.Fatal("save should reject an unsupported issue-link mode")
+	}
+}
+
+func TestGitHubIssueAutoStartAssignedDefaultsOffAndRoundTrips(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "runtime.json")
+	if ReadRuntimeConfigGitHubIssueAutoStartAssigned(path) {
+		t.Fatal("auto-start assigned issues should default to off")
+	}
+	enabled := true
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, nil, &enabled); err != nil {
+		t.Fatalf("save enabled auto-start setting: %v", err)
+	}
+	if !ReadRuntimeConfigGitHubIssueAutoStartAssigned(path) {
+		t.Fatal("saved auto-start setting is false")
+	}
+	disabled := false
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, nil, &disabled); err != nil {
+		t.Fatalf("save disabled auto-start setting: %v", err)
+	}
+	if ReadRuntimeConfigGitHubIssueAutoStartAssigned(path) {
+		t.Fatal("saved disabled auto-start setting is true")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := doc["github_issue_auto_start_assigned"]; exists {
+		t.Fatalf("disabled default should be omitted from config: %#v", doc["github_issue_auto_start_assigned"])
 	}
 }
 

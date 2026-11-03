@@ -7,7 +7,7 @@ const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
 let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
-const defaults = { auto_merge: false, delete_merged_branches: false, merge_method: 'squash', review_level: 'off', default_library_enabled: true, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference' };
+const defaults = { auto_merge: false, delete_merged_branches: false, merge_method: 'squash', review_level: 'off', default_library_enabled: true, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false };
 async function openSettings(t, { viewport = { width: 1280, height: 900 }, theme = 'dark', configurePage, initialSettings = defaults, path = '#settings' } = {}) {
   const page = await browser.newPage({ viewport });
   t.after(() => page.close());
@@ -176,7 +176,7 @@ test('all settings save on close and survive reopening; no main Save button', as
   assert.equal(await page.locator('#custom-library-name').inputValue(), 'kept draft');
   await toggle(page, 'review-settings-default-library');
   await close(page);
-  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference' });
+  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false });
   await page.reload();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   assert.equal(await page.locator('#review-settings-auto-merge').isChecked(), true);
@@ -237,6 +237,8 @@ test('GitHub Issues toggle exposes and hides the dock link and persists on reloa
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
   await select(page, 'github-issues');
   await toggle(page, 'review-settings-github-issues-enabled');
+  assert.equal(await page.locator('#review-settings-github-issues-auto-start').isVisible(), true);
+  await toggle(page, 'review-settings-github-issues-auto-start-assigned');
   assert.equal(await page.locator('#review-settings-github-issues-link-mode').isVisible(), true);
   assert.equal(await page.locator('#settings-tab-github-issues [data-lucide="folder-kanban"]').count(), 1);
   assert.equal(await page.locator('#review-settings-github-issues-enabled').locator('xpath=..').locator('[data-lucide="folder-kanban"]').count(), 1);
@@ -247,6 +249,7 @@ test('GitHub Issues toggle exposes and hides the dock link and persists on reloa
   await close(page);
   assert.equal(writes.at(-1).github_issues_enabled, true);
   assert.equal(writes.at(-1).github_issue_link_mode, 'close');
+  assert.equal(writes.at(-1).github_issue_auto_start_assigned, true);
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'false');
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), '#studio-issues');
   await page.reload();
@@ -254,14 +257,17 @@ test('GitHub Issues toggle exposes and hides the dock link and persists on reloa
   await select(page, 'github-issues');
   assert.equal(await page.locator('#review-settings-github-issues-enabled').isChecked(), true);
   assert.equal(await page.locator('#review-settings-github-issues-link-close').isChecked(), true);
+  assert.equal(await page.locator('#review-settings-github-issues-auto-start-assigned').isChecked(), true);
   await toggle(page, 'review-settings-github-issues-enabled');
   assert.equal(await page.locator('#review-settings-github-issues-link-mode').isVisible(), false);
+  assert.equal(await page.locator('#review-settings-github-issues-auto-start').isVisible(), false);
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), null);
   assert.equal(await page.locator('#github-issues-dock-link').evaluate(link => link.classList.contains('hidden')), true);
   await close(page);
   assert.equal(writes.at(-1).github_issues_enabled, false);
   assert.equal(writes.at(-1).github_issue_link_mode, 'close');
+  assert.equal(writes.at(-1).github_issue_auto_start_assigned, true);
   await page.reload();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   await select(page, 'github-issues');

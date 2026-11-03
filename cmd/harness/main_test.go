@@ -812,10 +812,14 @@ func TestConfigureReviewSettingsPersistsGitHubIssuesToggle(t *testing.T) {
 	if got := currentReviewSettingsState(initCfg).GitHubIssueLinkMode; got != localruntime.GitHubIssueLinkModeReference {
 		t.Fatalf("default GitHub issue link mode = %q, want reference", got)
 	}
+	if currentReviewSettingsState(initCfg).GitHubIssueAutoStartAssigned {
+		t.Fatal("auto-start assigned issues should default to disabled")
+	}
 	enabled := true
+	autoStartAssigned := true
 	linkMode := localruntime.GitHubIssueLinkModeClose
 	state, err := configureReviewSettings(initCfg, web.ReviewSettingsRequest{
-		MergeMethod: "squash", ReviewLevel: "off", GitHubIssuesEnabled: &enabled, GitHubIssueLinkMode: &linkMode,
+		MergeMethod: "squash", ReviewLevel: "off", GitHubIssuesEnabled: &enabled, GitHubIssueLinkMode: &linkMode, GitHubIssueAutoStartAssigned: &autoStartAssigned,
 	})
 	if err != nil {
 		t.Fatalf("enable GitHub Issues: %v", err)
@@ -825,6 +829,9 @@ func TestConfigureReviewSettingsPersistsGitHubIssuesToggle(t *testing.T) {
 	}
 	if state.GitHubIssueLinkMode != localruntime.GitHubIssueLinkModeClose {
 		t.Fatalf("returned GitHub issue link mode = %q, want close", state.GitHubIssueLinkMode)
+	}
+	if !state.GitHubIssueAutoStartAssigned {
+		t.Fatal("returned settings should report auto-start enabled")
 	}
 	if _, err := configureReviewSettings(initCfg, web.ReviewSettingsRequest{
 		MergeMethod: "squash", ReviewLevel: "off",
@@ -836,6 +843,9 @@ func TestConfigureReviewSettingsPersistsGitHubIssuesToggle(t *testing.T) {
 	}
 	if got := currentReviewSettingsState(initCfg).GitHubIssueLinkMode; got != localruntime.GitHubIssueLinkModeClose {
 		t.Fatalf("omitted github_issue_link_mode changed saved mode to %q", got)
+	}
+	if !currentReviewSettingsState(initCfg).GitHubIssueAutoStartAssigned {
+		t.Fatal("omitted auto-start setting should preserve saved value")
 	}
 	disabled := false
 	state, err = configureReviewSettings(initCfg, web.ReviewSettingsRequest{

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -106,6 +107,21 @@ func (s Server) handleGitHubIssueList(w http.ResponseWriter, r *http.Request, re
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "search must be 256 characters or fewer"})
 		return
 	}
+	assignee := strings.TrimSpace(r.URL.Query().Get("assignee"))
+	if assignee != "" && assignee != "me" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "assignee must be me"})
+		return
+	}
+	issues, err := s.listGitHubIssues(r.Context(), repository, state, search, assignee)
+	if err != nil {
+		s.logf("localruntime.ui status=warn endpoint=github_issues_list repo=%s err=%q", repository, err)
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("list GitHub issues: %v", err)})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "issues": issues})
+}
+
+func (s Server) listGitHubIssues(ctx context.Context, repository, state, search, assignee string) ([]GitHubIssue, error) {
 	args := []string{
 		"issue", "list", "--repo", repository, "--state", state,
 		"--limit", strconv.Itoa(githubIssueListLimit),
@@ -114,57 +130,59 @@ func (s Server) handleGitHubIssueList(w http.ResponseWriter, r *http.Request, re
 	if search != "" {
 		args = append(args, "--search", search)
 	}
-	result, err := s.GitHubIssueRunner.Run(r.Context(), execx.Command{Name: "gh", Args: args})
+	if assignee == "me" {
+		args = append(args, "--assignee", "@me")
+	}
+	result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: args})
 	if err != nil {
-		s.logf("localruntime.ui status=warn endpoint=github_issues_list repo=%s err=%q", repository, err)
-		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("list GitHub issues: %v", err)})
-		return
+		return nil, err
 	}
 	var issues []GitHubIssue
 	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &issues); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("decode GitHub issues: %v", err)})
-		return
+		return nil, fmt.Errorf("decode GitHub issues: %w", err)
 	}
 	if issues == nil {
 		issues = []GitHubIssue{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "issues": issues})
+	return issues, nil
 }
 
 func (s Server) handleGitHubIssueDetail(w http.ResponseWriter, r *http.Request, repository string, number int) {
+	issue, err := s.fetchGitHubIssue(r.Context(), repository, number)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "issue": issue})
+}
+
+func (s Server) fetchGitHubIssue(ctx context.Context, repository string, number int) (GitHubIssue, error) {
 	args := []string{
 		"issue", "view", strconv.Itoa(number), "--repo", repository,
 		"--json", "number,title,body,state,url,author,labels,assignees,createdAt,updatedAt",
 	}
-	result, err := s.GitHubIssueRunner.Run(r.Context(), execx.Command{Name: "gh", Args: args})
+	result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: args})
 	if err != nil {
-		s.logf("localruntime.ui status=warn endpoint=github_issue repo=%s issue=%d err=%q", repository, number, err)
-		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("view GitHub issue: %v", err)})
-		return
+		return GitHubIssue{}, fmt.Errorf("view GitHub issue: %w", err)
 	}
 	var issue GitHubIssue
 	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &issue); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("decode GitHub issue: %v", err)})
-		return
+		return GitHubIssue{}, fmt.Errorf("decode GitHub issue: %w", err)
 	}
 	if issue.Number != number {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "GitHub returned a different issue number"})
-		return
+		return GitHubIssue{}, fmt.Errorf("GitHub returned a different issue number")
 	}
-	commentResult, err := s.GitHubIssueRunner.Run(r.Context(), execx.Command{
+	commentResult, err := s.GitHubIssueRunner.Run(ctx, execx.Command{
 		Name: "gh",
 		Args: []string{"api", "--paginate", fmt.Sprintf("repos/%s/issues/%d/comments", repository, number)},
 	})
 	if err != nil {
-		s.logf("localruntime.ui status=warn endpoint=github_issue_comments repo=%s issue=%d err=%q", repository, number, err)
-		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("load GitHub issue comments: %v", err)})
-		return
+		return GitHubIssue{}, fmt.Errorf("load GitHub issue comments: %w", err)
 	}
 	if err := decodePaginatedGitHubIssueComments(commentResult.Stdout, &issue); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("decode GitHub issue comments: %v", err)})
-		return
+		return GitHubIssue{}, fmt.Errorf("decode GitHub issue comments: %w", err)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "issue": issue})
+	return issue, nil
 }
 
 func decodePaginatedGitHubIssueComments(raw string, issue *GitHubIssue) error {

@@ -158,7 +158,7 @@ func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 	jsonEnabled *bool,
 ) error {
 	return SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
-		path, initCfg, reviewCfg, defaultLibraryEnabled, chatEnabled, jsonEnabled, nil, nil,
+		path, initCfg, reviewCfg, defaultLibraryEnabled, chatEnabled, jsonEnabled, nil, nil, nil,
 	)
 }
 
@@ -174,6 +174,7 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 	jsonEnabled *bool,
 	githubIssuesEnabled *bool,
 	githubIssueLinkMode *string,
+	githubIssueAutoStartAssigned *bool,
 ) error {
 	runtimeConfigMu.Lock()
 	defer runtimeConfigMu.Unlock()
@@ -219,6 +220,11 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 		}
 	}
 	applyGitHubIssueLinkModeToDoc(doc, githubIssueLinkModeValue)
+	autoStartAssigned := githubIssueAutoStartAssignedFromDoc(doc)
+	if githubIssueAutoStartAssigned != nil {
+		autoStartAssigned = *githubIssueAutoStartAssigned
+	}
+	applyGitHubIssueAutoStartAssignedToDoc(doc, autoStartAssigned)
 
 	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
 
@@ -479,6 +485,33 @@ func ReadRuntimeConfigGitHubIssuesEnabled(path string) bool {
 		return false
 	}
 	return githubIssuesEnabledFromDoc(doc)
+}
+
+// ReadRuntimeConfigGitHubIssueAutoStartAssigned reports whether newly assigned
+// GitHub issues should be queued automatically by the local UI service.
+func ReadRuntimeConfigGitHubIssueAutoStartAssigned(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	doc, err := readRuntimeConfigDoc(path)
+	if err != nil {
+		return false
+	}
+	return githubIssueAutoStartAssignedFromDoc(doc)
+}
+
+func githubIssueAutoStartAssignedFromDoc(doc map[string]any) bool {
+	enabled, ok := doc["github_issue_auto_start_assigned"].(bool)
+	return ok && enabled
+}
+
+func applyGitHubIssueAutoStartAssignedToDoc(doc map[string]any, enabled bool) {
+	if enabled {
+		doc["github_issue_auto_start_assigned"] = true
+		return
+	}
+	delete(doc, "github_issue_auto_start_assigned")
 }
 
 func githubIssuesEnabledFromDoc(doc map[string]any) bool {

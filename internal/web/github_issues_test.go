@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
 
@@ -49,6 +51,85 @@ func TestGitHubIssueListUsesGhFiltersAndDecodesIssues(t *testing.T) {
 	}
 }
 
+func TestGitHubIssueListCanFilterAssignedToMe(t *testing.T) {
+	t.Parallel()
+	var got execx.Command
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		got = cmd
+		return execx.Result{Stdout: `[]`}, nil
+	}), true)
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/issues?repo=acme/repo&assignee=me", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	want := []string{"issue", "list", "--repo", "acme/repo", "--state", "open", "--limit", "100", "--json", "number,title,state,url,author,labels,assignees,createdAt,updatedAt", "--assignee", "@me"}
+	if !reflect.DeepEqual(got.Args, want) {
+		t.Fatalf("args = %v, want %v", got.Args, want)
+	}
+}
+
+func TestAssignedIssueAutoStartBaselinesAndSubmitsNewIssueOnce(t *testing.T) {
+	t.Parallel()
+	var submitted [][]byte
+	listCalls := 0
+	assigned := false
+	srv := NewServer("", NewBroker())
+	srv.GitHubIssueRunner = githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "issue" && cmd.Args[1] == "list" {
+			listCalls++
+			if !assigned {
+				return execx.Result{Stdout: `[{"number":22,"title":"Already assigned","state":"OPEN","url":"https://github.com/acme/repo/issues/22","author":{"login":"octocat"}}]`}, nil
+			}
+			return execx.Result{Stdout: `[{"number":22,"title":"Already assigned","state":"OPEN","url":"https://github.com/acme/repo/issues/22","author":{"login":"octocat"}},{"number":23,"title":"Add assigned automation","state":"OPEN","url":"https://github.com/acme/repo/issues/23","author":{"login":"octocat"}}]`}, nil
+		}
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "issue" && cmd.Args[1] == "view" {
+			return execx.Result{Stdout: `{"number":23,"title":"Add assigned automation","body":"Build it","state":"OPEN","url":"https://github.com/acme/repo/issues/23","author":{"login":"octocat"},"labels":[{"name":"feature"}]}`}, nil
+		}
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "api" {
+			return execx.Result{Stdout: `[{"user":{"login":"reviewer"},"body":"Include a test.","created_at":"2026-02-01T00:00:00Z"}]`}, nil
+		}
+		t.Fatalf("unexpected gh command: %#v", cmd)
+		return execx.Result{}, nil
+	})
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{{FullName: "acme/repo", HTMLURL: "https://github.com/acme/repo", DefaultBranch: "main"}}, nil
+	}
+	srv.SubmitLocalPrompt = func(_ context.Context, body []byte) (string, error) {
+		submitted = append(submitted, append([]byte(nil), body...))
+		return "request-1", nil
+	}
+	seen := make(map[string]bool)
+	if err := srv.scanAssignedGitHubIssues(context.Background(), true, seen, config.GitHubIssueLinkClose); err != nil {
+		t.Fatalf("baseline scan error: %v", err)
+	}
+	if len(submitted) != 0 || !seen["acme/repo#22"] {
+		t.Fatalf("baseline submitted %d tasks, seen=%v", len(submitted), seen)
+	}
+	assigned = true
+	if err := srv.scanAssignedGitHubIssues(context.Background(), false, seen, config.GitHubIssueLinkClose); err != nil {
+		t.Fatalf("new issue scan error: %v", err)
+	}
+	if err := srv.scanAssignedGitHubIssues(context.Background(), false, seen, config.GitHubIssueLinkClose); err != nil {
+		t.Fatalf("repeat issue scan error: %v", err)
+	}
+	if len(submitted) != 1 || listCalls != 3 {
+		t.Fatalf("submitted tasks/list calls = %d/%d, want 1/3", len(submitted), listCalls)
+	}
+	var run struct {
+		RepoURL     string                   `json:"repoUrl"`
+		BaseBranch  string                   `json:"baseBranch"`
+		Prompt      string                   `json:"prompt"`
+		GitHubIssue config.GitHubIssueConfig `json:"githubIssue"`
+	}
+	if err := json.Unmarshal(submitted[0], &run); err != nil {
+		t.Fatalf("decode submitted run: %v", err)
+	}
+	if run.RepoURL != "https://github.com/acme/repo" || run.BaseBranch != "main" || run.GitHubIssue.Number != 23 || run.GitHubIssue.LinkMode != config.GitHubIssueLinkClose || !strings.Contains(run.Prompt, "Build it") || !strings.Contains(run.Prompt, "Include a test.") {
+		t.Fatalf("submitted run omitted issue context or metadata: %#v", run)
+	}
+}
+
 func TestGitHubIssueListRejectsInvalidFiltersBeforeCallingGh(t *testing.T) {
 	t.Parallel()
 	calls := 0
@@ -60,6 +141,7 @@ func TestGitHubIssueListRejectsInvalidFiltersBeforeCallingGh(t *testing.T) {
 		"/api/github/issues?repo=acme/repo&state=unexpected",
 		"/api/github/issues?repo=../repo",
 		"/api/github/issues?repo=acme/repo&search=" + strings.Repeat("x", 257),
+		"/api/github/issues?repo=acme/repo&assignee=someone-else",
 	} {
 		response := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
@@ -237,18 +319,22 @@ func TestGitHubIssuesSettingRoundTripsThroughSettingsAPI(t *testing.T) {
 		if req.GitHubIssueLinkMode == nil {
 			return settings, errors.New("github_issue_link_mode was omitted")
 		}
+		if req.GitHubIssueAutoStartAssigned == nil {
+			return settings, errors.New("github_issue_auto_start_assigned was omitted")
+		}
 		settings.GitHubIssuesEnabled = *req.GitHubIssuesEnabled
 		settings.GitHubIssueLinkMode = *req.GitHubIssueLinkMode
+		settings.GitHubIssueAutoStartAssigned = *req.GitHubIssueAutoStartAssigned
 		return settings, nil
 	}
 	response := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/review-settings", strings.NewReader(`{"auto_merge":false,"delete_merged_branches":false,"merge_method":"squash","review_level":"off","github_issues_enabled":true,"github_issue_link_mode":"close"}`)))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"github_issues_enabled":true`) || !strings.Contains(response.Body.String(), `"github_issue_link_mode":"close"`) {
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/review-settings", strings.NewReader(`{"auto_merge":false,"delete_merged_branches":false,"merge_method":"squash","review_level":"off","github_issues_enabled":true,"github_issue_link_mode":"close","github_issue_auto_start_assigned":true}`)))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"github_issues_enabled":true`) || !strings.Contains(response.Body.String(), `"github_issue_link_mode":"close"`) || !strings.Contains(response.Body.String(), `"github_issue_auto_start_assigned":true`) {
 		t.Fatalf("POST settings response = %d %s", response.Code, response.Body.String())
 	}
 	response = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/review-settings", nil))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"github_issues_enabled":true`) || !strings.Contains(response.Body.String(), `"github_issue_link_mode":"close"`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"github_issues_enabled":true`) || !strings.Contains(response.Body.String(), `"github_issue_link_mode":"close"`) || !strings.Contains(response.Body.String(), `"github_issue_auto_start_assigned":true`) {
 		t.Fatalf("GET settings response = %d %s", response.Code, response.Body.String())
 	}
 }

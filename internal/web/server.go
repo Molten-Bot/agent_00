@@ -171,16 +171,17 @@ type gitHubRepoCache struct {
 }
 
 type ReviewSettingsState struct {
-	AutoMerge             bool   `json:"auto_merge"`
-	DeleteMergedBranches  bool   `json:"delete_merged_branches"`
-	MergeMethod           string `json:"merge_method"`
-	ReviewLevel           string `json:"review_level"`
-	DefaultLibraryEnabled bool   `json:"default_library_enabled"`
-	ChatEnabled           bool   `json:"chat_enabled"`
-	JSONEnabled           bool   `json:"json_enabled"`
-	GitHubIssuesEnabled   bool   `json:"github_issues_enabled"`
-	GitHubIssueLinkMode   string `json:"github_issue_link_mode"`
-	Message               string `json:"message,omitempty"`
+	AutoMerge                    bool   `json:"auto_merge"`
+	DeleteMergedBranches         bool   `json:"delete_merged_branches"`
+	MergeMethod                  string `json:"merge_method"`
+	ReviewLevel                  string `json:"review_level"`
+	DefaultLibraryEnabled        bool   `json:"default_library_enabled"`
+	ChatEnabled                  bool   `json:"chat_enabled"`
+	JSONEnabled                  bool   `json:"json_enabled"`
+	GitHubIssuesEnabled          bool   `json:"github_issues_enabled"`
+	GitHubIssueLinkMode          string `json:"github_issue_link_mode"`
+	GitHubIssueAutoStartAssigned bool   `json:"github_issue_auto_start_assigned"`
+	Message                      string `json:"message,omitempty"`
 }
 
 type ReviewSettingsRequest struct {
@@ -194,9 +195,10 @@ type ReviewSettingsRequest struct {
 	// ChatEnabled is a pointer for the same reason as DefaultLibraryEnabled.
 	ChatEnabled *bool `json:"chat_enabled,omitempty"`
 	// JSONEnabled is a pointer for the same reason as DefaultLibraryEnabled.
-	JSONEnabled         *bool   `json:"json_enabled,omitempty"`
-	GitHubIssuesEnabled *bool   `json:"github_issues_enabled,omitempty"`
-	GitHubIssueLinkMode *string `json:"github_issue_link_mode,omitempty"`
+	JSONEnabled                  *bool   `json:"json_enabled,omitempty"`
+	GitHubIssuesEnabled          *bool   `json:"github_issues_enabled,omitempty"`
+	GitHubIssueLinkMode          *string `json:"github_issue_link_mode,omitempty"`
+	GitHubIssueAutoStartAssigned *bool   `json:"github_issue_auto_start_assigned,omitempty"`
 }
 
 // NewServer returns a monitor HTTP server.
@@ -239,6 +241,9 @@ func (s Server) Run(ctx context.Context) error {
 		return err
 	}
 	notifyServerReady(s.Ready, nil)
+	if s.GitHubIssueRunner != nil && s.SubmitLocalPrompt != nil && s.ReviewSettingsStatus != nil {
+		go s.runGitHubIssueAutoStart(ctx)
+	}
 
 	go func() {
 		<-ctx.Done()
