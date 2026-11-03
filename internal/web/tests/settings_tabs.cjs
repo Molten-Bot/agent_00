@@ -322,6 +322,13 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
 
   assert.equal(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
   assert.equal(await page.locator('#github-issues-panel').isVisible(), true);
+  assert.equal(await page.locator('link[href^="/static/github-issues.css"]').getAttribute('href'), '/static/github-issues.css?v=2');
+  assert.equal(await page.locator('#github-issues-panel').evaluate(panel => getComputedStyle(panel).padding), '0px');
+  assert.equal(
+    Math.round((await page.locator('#github-issues-filters').boundingBox()).x),
+    Math.round((await page.locator('#github-issues-panel').boundingBox()).x),
+    'issue filters should fill the panel width without an outer inset',
+  );
   assert.equal(await page.locator('#local-prompt-form').evaluate(form => form.classList.contains('hidden')), true);
   assert.equal(await page.locator('.prompt-wrap').isVisible(), true);
   assert.equal(await page.locator('.prompt-title-mode[data-prompt-title-mode="issues"]').isVisible(), true);
