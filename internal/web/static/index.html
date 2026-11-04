@@ -4492,7 +4492,7 @@
     }
 
     function dashboardSourceIconName(label) {
-      switch (String(label || "").trim().toLowerCase()) {
+      switch (dashboardSourceKey(label)) {
         case "dialogue":
         case "chat":
           return "message-circle";
