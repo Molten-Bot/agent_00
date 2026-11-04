@@ -285,7 +285,7 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
   });
 
   assert.notEqual(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
-  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=8');
+  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=9');
   await page.waitForFunction(() => document.querySelector('.github-issue-empty-state h2')?.textContent === 'No repositories available');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No repositories available');
   await page.locator('#github-issues-dock-link').click();
@@ -412,7 +412,7 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.locator('#github-issues-repo').selectOption('Molten-Bot/agent_00');
   await page.locator('.github-issue-list-item').waitFor();
-  await page.waitForFunction(() => document.getElementById('github-issues-status').textContent === '');
+  await page.waitForFunction(() => document.getElementById('github-issues-status').textContent === 'Select an issue to start a task from it.');
   assert.equal(issueQueryState, 'open');
   const assigneeFilter = page.getByRole('button', { name: 'Show only issues assigned to me' });
   assert.equal(await assigneeFilter.innerText(), '', 'assignee filter should be icon-only');
@@ -427,7 +427,7 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   await allIssuesResponse;
   assert.equal(issueAssigneeFilter, '');
   assert.match(await page.locator('#github-issues-count').textContent(), /open issues/);
-  assert.equal(await page.locator('#github-issues-status').textContent(), '');
+  assert.equal(await page.locator('#github-issues-status').textContent(), 'Select an issue to start a task from it.');
   assert.match(await page.locator('.github-issue-list-title').textContent(), /Add issue browser/);
   const resizeHandle = page.locator('#github-issues-resize-handle');
   await resizeHandle.focus();
@@ -453,12 +453,12 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   await page.getByRole('heading', { name: 'Add issue browser' }).waitFor();
   assert.match(await page.locator('.github-issue-body').textContent(), /Implement this issue/);
   assert.match(await page.locator('.github-issue-comment-body').textContent(), /retry coverage/);
-  assert.equal(await page.locator('.github-issue-task .github-issue-link-options').count(), 0);
-  assert.match(await page.locator('.github-issue-task-heading').textContent(), /close #17 on merge/);
+  assert.equal(await page.locator('#github-issues-panel .github-issue-link-options').count(), 0);
+  assert.match(await page.locator('#github-issues-status').textContent(), /close #17 on merge/);
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('github-issue-link-mode-updated', { detail: { mode: 'reference' } })));
-  assert.match(await page.locator('.github-issue-task-heading').textContent(), /reference #17/);
+  assert.match(await page.locator('#github-issues-status').textContent(), /reference #17/);
 
-  const issueEditButton = page.getByRole('button', { name: 'Edit prompt first' });
+  const issueEditButton = page.getByRole('button', { name: 'Edit prompt' });
   const issueStartButton = page.getByRole('button', { name: 'Start task' });
   assert.equal(await issueEditButton.evaluate(button => button.classList.contains('prompt-action-button')), true);
   assert.equal(await issueStartButton.evaluate(button => button.classList.contains('prompt-submit')), true);
@@ -469,8 +469,23 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   });
   assert.deepEqual(await readPromptButtonStyle(issueStartButton), await readPromptButtonStyle(page.locator('#local-prompt-submit')));
 
+  // The prompt editor and its action row dock under the issue columns, the same
+  // bottom-of-panel arrangement Prompt Studio uses.
+  const issuePromptField = page.locator('#github-issue-prompt-field');
+  assert.equal(await issuePromptField.isVisible(), false, 'the issue prompt stays collapsed until it is edited');
+  assert.equal(await issueEditButton.getAttribute('aria-expanded'), 'false');
+  await issueEditButton.click();
+  assert.equal(await issuePromptField.isVisible(), true);
+  assert.equal(await issueEditButton.getAttribute('aria-expanded'), 'true');
+  assert.match(await page.locator('#github-issue-prompt').inputValue(), /Please include retry coverage/);
+  const issuePanelBox = await page.locator('#github-issues-panel').boundingBox();
+  const issueColumnsBox = await page.locator('.github-issues-columns').boundingBox();
+  const issueActionsBox = await page.locator('#github-issues-actions').boundingBox();
+  assert.ok(issueActionsBox.y >= issueColumnsBox.y + issueColumnsBox.height - 1, 'task actions sit below the issue columns');
+  assert.ok(issueActionsBox.y + issueActionsBox.height <= issuePanelBox.y + issuePanelBox.height + 1, 'task actions stay inside the panel');
+
   await issueStartButton.click();
-  await page.waitForFunction(() => document.querySelector('.github-issue-task-status').textContent.includes('Task queued'));
+  await page.waitForFunction(() => document.getElementById('github-issues-status').textContent.includes('Task queued'));
   assert.equal(submitted.githubIssue.repository, 'Molten-Bot/agent_00');
   assert.equal(submitted.githubIssue.number, 17);
   assert.equal(submitted.githubIssue.linkMode, 'reference');
