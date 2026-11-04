@@ -17,6 +17,8 @@
 
   const layoutStorageKey = "hubui.githubIssuesLayout.v1";
   const repositoryStorageKey = "hubui.githubIssuesRepository.v1";
+  const assigneeStorageKey = "hubui.githubIssuesAssignee.v1";
+  const assigneeFilterLabel = "Show only issues assigned to me";
   let savedLayout = {};
   try { savedLayout = JSON.parse(localStorage.getItem(layoutStorageKey) || "{}"); } catch (_error) { savedLayout = {}; }
 
@@ -88,12 +90,32 @@
   let githubIssueLinkMode = "reference";
   let requestGeneration = 0;
   let searchTimer = null;
-  let assignedToMe = false;
+  // Issues assigned to the signed-in account are the default view; the filter
+  // button turns it off to browse every open issue in the repository.
+  let assignedToMe = true;
+  try {
+    const rememberedAssignee = localStorage.getItem(assigneeStorageKey);
+    if (rememberedAssignee !== null) assignedToMe = rememberedAssignee === "true";
+  } catch (_error) { /* Storage can be unavailable in private or embedded contexts. */ }
 
   function setStatus(message, kind) {
     status.textContent = String(message || "");
     status.dataset.tone = kind || "";
   }
+
+  function syncAssigneeFilter() {
+    // Search runs inside the assignee filter, so the placeholder names the scope it searches.
+    searchInput.placeholder = assignedToMe ? "Search issues assigned to you" : "Search this repository";
+    if (!assigneeFilter) return;
+    assigneeFilter.setAttribute("aria-pressed", String(assignedToMe));
+    assigneeFilter.setAttribute("aria-label", assigneeFilterLabel);
+    assigneeFilter.title = assigneeFilterLabel;
+  }
+
+  // Reconcile the server-rendered defaults with the stored preference now, while
+  // #github-issues-browser is still hidden, so the button and the search placeholder
+  // are never shown contradicting the filter that is actually applied.
+  syncAssigneeFilter();
 
   async function requestJSON(url, options) {
     const response = await fetch(url, options || { cache: "no-store" });
@@ -195,18 +217,37 @@
     return context.join("\n").trim();
   }
 
+  function emptyIssueListHeading() {
+    if (!repositories.length) return "No repositories available";
+    if (!selectedRepository()) return "Choose a repository";
+    if (searchInput.value.trim()) return "No matching issues";
+    return assignedToMe ? "No assigned issues" : "No open issues";
+  }
+
+  function emptyIssueListText() {
+    const searching = Boolean(searchInput.value.trim());
+    if (!repositories.length) return "No repositories are available for this account.";
+    if (!selectedRepository()) return "Choose a repository to see its open issues.";
+    if (assignedToMe) {
+      return searching
+        ? "No open issues assigned to you match this search. Use the filter button to search every open issue."
+        : "No open issues are assigned to you. Use the filter button to show every open issue.";
+    }
+    return searching ? "No open issues match this search." : "This repository has no open issues.";
+  }
+
   function renderIssueList(issues) {
     issueList.replaceChildren();
-    if (issueCount) issueCount.textContent = selectedRepository()
-      ? `${issues.length}${issues.length === 100 ? "+" : ""} open issues`
-      : "Choose a repository";
+    const total = `${issues.length}${issues.length === 100 ? "+" : ""}`;
+    // 100 is the page limit, so a "100+" count is always plural.
+    const noun = issues.length === 1 ? "open issue" : "open issues";
+    if (issueCount) issueCount.textContent = !selectedRepository()
+      ? "Choose a repository"
+      : assignedToMe
+        ? `${total} ${noun} assigned to you`
+        : `${total} ${noun}`;
     if (!issues.length) {
-      const emptyText = !repositories.length
-        ? "No repositories are available for this account."
-        : selectedRepository()
-          ? "No open issues match this search."
-          : "Choose a repository to see its open issues.";
-      addText(issueList, "li", "github-issues-empty", emptyText);
+      addText(issueList, "li", "github-issues-empty", emptyIssueListText());
       return;
     }
     for (const issue of issues) {
@@ -458,6 +499,9 @@
       const issues = Array.isArray(body.issues) ? body.issues : [];
       currentIssues = issues;
       renderIssueList(issues);
+      // There is nothing to choose when the list came back empty, so the detail
+      // pane repeats the list's reason instead of inviting a selection.
+      if (!issues.length) renderEmptyDetail(emptyIssueListHeading(), emptyIssueListText());
       setStatus("");
     } catch (error) {
       if (generation === requestGeneration) setStatus(error.message || "Unable to load issues.", "error");
@@ -525,10 +569,8 @@
   if (assigneeFilter) {
     assigneeFilter.addEventListener("click", () => {
       assignedToMe = !assignedToMe;
-      const label = assignedToMe ? "Show all issues" : "Show only issues assigned to me";
-      assigneeFilter.setAttribute("aria-pressed", String(assignedToMe));
-      assigneeFilter.setAttribute("aria-label", label);
-      assigneeFilter.title = label;
+      try { localStorage.setItem(assigneeStorageKey, String(assignedToMe)); } catch (_error) { /* Ignore unavailable storage. */ }
+      syncAssigneeFilter();
       void loadIssues();
     });
   }

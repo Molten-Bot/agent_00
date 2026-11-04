@@ -69,6 +69,26 @@ func TestGitHubIssueListCanFilterAssignedToMe(t *testing.T) {
 	}
 }
 
+// Searching is scoped to the assignee filter in the browser, and that filter is on by
+// default, so the combined query is the common path rather than an edge case.
+func TestGitHubIssueListSearchesWithinIssuesAssignedToMe(t *testing.T) {
+	t.Parallel()
+	var got execx.Command
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		got = cmd
+		return execx.Result{Stdout: `[]`}, nil
+	}), true)
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/issues?repo=acme/repo&search=browser&assignee=me", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	want := []string{"issue", "list", "--repo", "acme/repo", "--state", "open", "--limit", "100", "--json", "number,title,state,url,author,labels,assignees,createdAt,updatedAt", "--search", "browser", "--assignee", "@me"}
+	if got.Name != "gh" || !reflect.DeepEqual(got.Args, want) {
+		t.Fatalf("command = %s %v, want gh %v", got.Name, got.Args, want)
+	}
+}
+
 func TestAssignedIssueAutoStartBaselinesAndSubmitsNewIssueOnce(t *testing.T) {
 	t.Parallel()
 	var submitted [][]byte
@@ -291,6 +311,50 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	if asset.Code != http.StatusOK || strings.Contains(asset.Body.String(), "Edit prompt first") || strings.Contains(asset.Body.String(), "Start with this prompt") || !strings.Contains(asset.Body.String(), "Start task") || !strings.Contains(asset.Body.String(), `state: "open"`) || !strings.Contains(asset.Body.String(), "open issues") || !strings.Contains(asset.Body.String(), "linkMode: githubIssueLinkMode") || !strings.Contains(asset.Body.String(), "githubIssue:") || !strings.Contains(asset.Body.String(), "loadingIssueNumber") || !strings.Contains(asset.Body.String(), "task-icons-breathe") || !strings.Contains(asset.Body.String(), `"X-Agent-Task-Source": "github_issues"`) {
 		t.Fatalf("issue browser asset response = %d, expected issue-only task launch", asset.Code)
 	}
+}
+
+// openingTagWithID returns the opening tag that carries id="<id>" so assertions can check
+// attributes individually instead of pinning the order the markup happens to list them in.
+func openingTagWithID(page, id string) (string, bool) {
+	at := strings.Index(page, `id="`+id+`"`)
+	if at < 0 {
+		return "", false
+	}
+	start := strings.LastIndex(page[:at], "<")
+	end := strings.Index(page[at:], ">")
+	if start < 0 || end < 0 {
+		return "", false
+	}
+	return page[start : at+end+1], true
+}
+
+func TestGitHubIssueBrowserDefaultsToIssuesAssignedToMe(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(nil, true)
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	page := response.Body.String()
+	filterTag, ok := openingTagWithID(page, "github-issues-assignee-filter")
+	if !ok {
+		t.Fatal("page is missing the assignee filter button")
+	}
+	for _, want := range []string{`class="github-issues-assignee-filter"`, `type="button"`, `aria-pressed="true"`, `aria-label="Show only issues assigned to me"`} {
+		if !strings.Contains(filterTag, want) {
+			t.Errorf("assignee filter tag %q is missing %q, so assigned issues do not show pressed by default", filterTag, want)
+		}
+	}
+	if strings.Contains(page, `aria-label="Show all issues"`) {
+		t.Error("the toggle name should describe the filter, not contradict aria-pressed")
+	}
+	if !strings.Contains(page, `placeholder="Search issues assigned to you"`) {
+		t.Error("search placeholder should name the assignee scope it searches by default")
+	}
+	// The browser-side half of this default — the assignee query parameter, the count and
+	// empty-state wording, and remembering the filter choice — is asserted through the real UI
+	// in internal/web/tests/settings_tabs.cjs rather than by matching github-issues.js source.
 }
 
 func TestGitHubIssuesDockLinkFollowsSetting(t *testing.T) {
