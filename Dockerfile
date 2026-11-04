@@ -23,6 +23,7 @@ FROM node:26.5.0-trixie-slim AS runtime
 ARG CODEX_VERSION=0.147.0
 ARG CLAUDE_CODE_VERSION=2.1.224
 ARG RAILSMITH_VERSION=0.1.2
+ARG BUN_VERSION=1.4.4
 ARG PLAYWRIGHT_VERSION=1.62.1
 ARG OPENAI_PYTHON_VERSION=2.53.0
 ENV GIT_TERMINAL_PROMPT=0 \
@@ -56,12 +57,14 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && ln -sf /usr/bin/python3 /usr/local/bin/python \
     && ln -sf /usr/bin/pip3 /usr/local/bin/pip \
     && python3 -m pip install --no-cache-dir --break-system-packages --root-user-action=ignore --upgrade "openai==${OPENAI_PYTHON_VERSION}" \
-    && npm install --global --no-audit --no-fund \
+    && npm install --global --no-audit --no-fund --allow-scripts=bun \
       "@openai/codex@${CODEX_VERSION}" \
       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
       "@moltenbot/railsmith@${RAILSMITH_VERSION}" \
+      "bun@${BUN_VERSION}" \
       "playwright@${PLAYWRIGHT_VERSION}" \
       "@playwright/test@${PLAYWRIGHT_VERSION}" \
+    && bun --version \
     && playwright install --with-deps chromium \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/* /tmp/* \
