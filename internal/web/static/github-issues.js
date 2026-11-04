@@ -112,6 +112,11 @@
     assigneeFilter.title = assigneeFilterLabel;
   }
 
+  // Reconcile the server-rendered defaults with the stored preference now, while
+  // #github-issues-browser is still hidden, so the button and the search placeholder
+  // are never shown contradicting the filter that is actually applied.
+  syncAssigneeFilter();
+
   async function requestJSON(url, options) {
     const response = await fetch(url, options || { cache: "no-store" });
     let body = null;
@@ -579,7 +584,6 @@
     } catch (_error) { /* Ignore unavailable storage. */ }
     void loadIssues();
   });
-  syncAssigneeFilter();
   if (assigneeFilter) {
     assigneeFilter.addEventListener("click", () => {
       assignedToMe = !assignedToMe;

@@ -311,46 +311,9 @@ func TestGitHubIssueBrowserDefaultsToIssuesAssignedToMe(t *testing.T) {
 	if !strings.Contains(page, `placeholder="Search issues assigned to you"`) {
 		t.Error("search placeholder should name the assignee scope it searches by default")
 	}
-	asset := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
-	script := asset.Body.String()
-	if asset.Code != http.StatusOK {
-		t.Fatalf("issue browser asset status = %d, want 200", asset.Code)
-	}
-	for _, want := range []string{"let assignedToMe = true;", `query.set("assignee", "me")`, "syncAssigneeFilter()", "No open issues are assigned to you."} {
-		if !strings.Contains(script, want) {
-			t.Errorf("issue browser asset is missing %q", want)
-		}
-	}
-	if strings.Contains(script, "let assignedToMe = false") {
-		t.Error("issue browser should not start with the assignee filter turned off")
-	}
-}
-
-func TestGitHubIssueBrowserKeepsAssigneeFilterContextVisible(t *testing.T) {
-	t.Parallel()
-	srv := githubIssueTestServer(nil, true)
-	asset := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
-	if asset.Code != http.StatusOK {
-		t.Fatalf("issue browser asset status = %d, want 200", asset.Code)
-	}
-	script := asset.Body.String()
-	for _, want := range []string{
-		// The count and the empty state both have to name the assignee filter instead of blaming the search.
-		"${total} open issues assigned to you",
-		"No open issues assigned to you match this search. Use the filter button to search every open issue.",
-		"This repository has no open issues.",
-		`"Search issues assigned to you"`,
-		// The filter choice is remembered the same way the repository selection is.
-		`const assigneeStorageKey = "hubui.githubIssuesAssignee.v1";`,
-		"localStorage.getItem(assigneeStorageKey)",
-		"localStorage.setItem(assigneeStorageKey, String(assignedToMe))",
-	} {
-		if !strings.Contains(script, want) {
-			t.Errorf("issue browser asset is missing %q", want)
-		}
-	}
+	// The browser-side half of this default — the assignee query parameter, the count and
+	// empty-state wording, and remembering the filter choice — is asserted through the real UI
+	// in internal/web/tests/settings_tabs.cjs rather than by matching github-issues.js source.
 }
 
 func TestGitHubIssuesDockLinkFollowsSetting(t *testing.T) {
