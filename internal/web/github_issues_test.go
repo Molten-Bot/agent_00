@@ -302,8 +302,14 @@ func TestGitHubIssueBrowserDefaultsToIssuesAssignedToMe(t *testing.T) {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
 	page := response.Body.String()
-	if !strings.Contains(page, `id="github-issues-assignee-filter" class="github-issues-assignee-filter" type="button" aria-pressed="true" aria-label="Show all issues"`) {
+	if !strings.Contains(page, `id="github-issues-assignee-filter" class="github-issues-assignee-filter" type="button" aria-pressed="true" aria-label="Show only issues assigned to me"`) {
 		t.Error("assignee filter should render pressed so assigned issues show by default")
+	}
+	if strings.Contains(page, `aria-label="Show all issues"`) {
+		t.Error("the toggle name should describe the filter, not contradict aria-pressed")
+	}
+	if !strings.Contains(page, `placeholder="Search issues assigned to you"`) {
+		t.Error("search placeholder should name the assignee scope it searches by default")
 	}
 	asset := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
@@ -318,6 +324,32 @@ func TestGitHubIssueBrowserDefaultsToIssuesAssignedToMe(t *testing.T) {
 	}
 	if strings.Contains(script, "let assignedToMe = false") {
 		t.Error("issue browser should not start with the assignee filter turned off")
+	}
+}
+
+func TestGitHubIssueBrowserKeepsAssigneeFilterContextVisible(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(nil, true)
+	asset := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
+	if asset.Code != http.StatusOK {
+		t.Fatalf("issue browser asset status = %d, want 200", asset.Code)
+	}
+	script := asset.Body.String()
+	for _, want := range []string{
+		// The count and the empty state both have to name the assignee filter instead of blaming the search.
+		"${total} open issues assigned to you",
+		"No open issues assigned to you match this search. Use the filter button to search every open issue.",
+		"This repository has no open issues.",
+		`"Search issues assigned to you"`,
+		// The filter choice is remembered the same way the repository selection is.
+		`const assigneeStorageKey = "hubui.githubIssuesAssignee.v1";`,
+		"localStorage.getItem(assigneeStorageKey)",
+		"localStorage.setItem(assigneeStorageKey, String(assignedToMe))",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("issue browser asset is missing %q", want)
+		}
 	}
 }
 

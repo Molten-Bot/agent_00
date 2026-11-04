@@ -17,6 +17,8 @@
 
   const layoutStorageKey = "hubui.githubIssuesLayout.v1";
   const repositoryStorageKey = "hubui.githubIssuesRepository.v1";
+  const assigneeStorageKey = "hubui.githubIssuesAssignee.v1";
+  const assigneeFilterLabel = "Show only issues assigned to me";
   let savedLayout = {};
   try { savedLayout = JSON.parse(localStorage.getItem(layoutStorageKey) || "{}"); } catch (_error) { savedLayout = {}; }
 
@@ -91,6 +93,10 @@
   // Issues assigned to the signed-in account are the default view; the filter
   // button turns it off to browse every open issue in the repository.
   let assignedToMe = true;
+  try {
+    const rememberedAssignee = localStorage.getItem(assigneeStorageKey);
+    if (rememberedAssignee !== null) assignedToMe = rememberedAssignee === "true";
+  } catch (_error) { /* Storage can be unavailable in private or embedded contexts. */ }
 
   function setStatus(message, kind) {
     status.textContent = String(message || "");
@@ -98,11 +104,12 @@
   }
 
   function syncAssigneeFilter() {
+    // Search runs inside the assignee filter, so the placeholder names the scope it searches.
+    searchInput.placeholder = assignedToMe ? "Search issues assigned to you" : "Search this repository";
     if (!assigneeFilter) return;
-    const label = assignedToMe ? "Show all issues" : "Show only issues assigned to me";
     assigneeFilter.setAttribute("aria-pressed", String(assignedToMe));
-    assigneeFilter.setAttribute("aria-label", label);
-    assigneeFilter.title = label;
+    assigneeFilter.setAttribute("aria-label", assigneeFilterLabel);
+    assigneeFilter.title = assigneeFilterLabel;
   }
 
   async function requestJSON(url, options) {
@@ -215,17 +222,25 @@
 
   function renderIssueList(issues) {
     issueList.replaceChildren();
-    if (issueCount) issueCount.textContent = selectedRepository()
-      ? `${issues.length}${issues.length === 100 ? "+" : ""} open issues`
-      : "Choose a repository";
+    const total = `${issues.length}${issues.length === 100 ? "+" : ""}`;
+    if (issueCount) issueCount.textContent = !selectedRepository()
+      ? "Choose a repository"
+      : assignedToMe
+        ? `${total} open issues assigned to you`
+        : `${total} open issues`;
     if (!issues.length) {
+      const searching = Boolean(searchInput.value.trim());
       const emptyText = !repositories.length
         ? "No repositories are available for this account."
         : !selectedRepository()
           ? "Choose a repository to see its open issues."
-          : assignedToMe && !searchInput.value.trim()
-            ? "No open issues are assigned to you. Use the filter button to show every open issue."
-            : "No open issues match this search.";
+          : assignedToMe
+            ? searching
+              ? "No open issues assigned to you match this search. Use the filter button to search every open issue."
+              : "No open issues are assigned to you. Use the filter button to show every open issue."
+            : searching
+              ? "No open issues match this search."
+              : "This repository has no open issues.";
       addText(issueList, "li", "github-issues-empty", emptyText);
       return;
     }
@@ -568,6 +583,7 @@
   if (assigneeFilter) {
     assigneeFilter.addEventListener("click", () => {
       assignedToMe = !assignedToMe;
+      try { localStorage.setItem(assigneeStorageKey, String(assignedToMe)); } catch (_error) { /* Ignore unavailable storage. */ }
       syncAssigneeFilter();
       void loadIssues();
     });
