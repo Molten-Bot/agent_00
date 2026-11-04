@@ -308,8 +308,8 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	}
 	asset := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
-	if asset.Code != http.StatusOK || !strings.Contains(asset.Body.String(), "Edit prompt first") || !strings.Contains(asset.Body.String(), "Start task") || !strings.Contains(asset.Body.String(), "Start with this prompt") || !strings.Contains(asset.Body.String(), `state: "open"`) || !strings.Contains(asset.Body.String(), "open issues") || !strings.Contains(asset.Body.String(), "linkMode: githubIssueLinkMode") || !strings.Contains(asset.Body.String(), "githubIssue:") || !strings.Contains(asset.Body.String(), "loadingIssueNumber") || !strings.Contains(asset.Body.String(), "task-icons-breathe") || !strings.Contains(asset.Body.String(), `"X-Agent-Task-Source": "github_issues"`) {
-		t.Fatalf("issue browser asset response = %d, expected both task launch modes", asset.Code)
+	if asset.Code != http.StatusOK || strings.Contains(asset.Body.String(), "Edit prompt first") || strings.Contains(asset.Body.String(), "Start with this prompt") || !strings.Contains(asset.Body.String(), "Start task") || !strings.Contains(asset.Body.String(), `state: "open"`) || !strings.Contains(asset.Body.String(), "open issues") || !strings.Contains(asset.Body.String(), "linkMode: githubIssueLinkMode") || !strings.Contains(asset.Body.String(), "githubIssue:") || !strings.Contains(asset.Body.String(), "loadingIssueNumber") || !strings.Contains(asset.Body.String(), "task-icons-breathe") || !strings.Contains(asset.Body.String(), `"X-Agent-Task-Source": "github_issues"`) {
+		t.Fatalf("issue browser asset response = %d, expected issue-only task launch", asset.Code)
 	}
 }
 

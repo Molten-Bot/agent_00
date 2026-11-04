@@ -200,22 +200,14 @@
     avatar.setAttribute("aria-hidden", "true");
   }
 
-  function buildTaskPrompt(issue, repo) {
-    const repository = String(repo?.full_name || "").trim();
+  function buildTaskPrompt(issue) {
     const comments = Array.isArray(issue.comments) ? issue.comments : [];
     const context = [
-      `Implement GitHub issue #${issue.number} in ${repository}. Work in the repository, inspect the existing code, implement the requested change, and produce a pull request. Treat the issue description and conversation below as the complete issue context.`,
-      `Issue: ${issue.title || "Untitled issue"}`,
-      `Issue URL: ${issue.url || ""}`,
-      `State: ${issue.state || "unknown"}`,
-      `Author: ${issue.author?.login || "unknown"}`,
-      `Labels: ${formatLabels(issue.labels)}`,
-      `Assignees: ${formatPeople(issue.assignees)}`,
+      `#${issue.number}: ${issue.title || "Untitled issue"}`,
       "",
-      "Issue description:",
       String(issue.body || "(No description provided.)"),
       "",
-      "Issue conversation:",
+      "Comments:",
     ];
     if (!comments.length) context.push("(No comments.)");
     for (const comment of comments) {
@@ -374,36 +366,14 @@
     const taskHeading = addText(task, "div", "github-issue-task-heading", "");
     addText(taskHeading, "strong", "", "Start a task from this issue");
     addText(taskHeading, "span", "github-issue-link-mode-note", taskLinkModeDescription(issue));
-    const editor = document.createElement("textarea");
-    editor.className = "github-issue-prompt";
-    editor.rows = 7;
-    editor.setAttribute("aria-label", "Issue task prompt");
-    editor.value = buildTaskPrompt(issue, repo);
-    editor.hidden = true;
-    task.appendChild(editor);
     const actions = document.createElement("div");
     actions.className = "prompt-actions-end github-issue-task-actions";
-    const edit = document.createElement("button");
-    edit.type = "button";
-    edit.className = "prompt-action-button";
-    edit.textContent = "Edit prompt first";
-    edit.addEventListener("click", () => {
-      editor.hidden = false;
-      submitEdited.hidden = false;
-      editor.focus();
-    });
     const start = document.createElement("button");
     start.type = "button";
     start.className = "prompt-action-button prompt-submit github-issue-start";
     setStartButtonContent(start, "Start task");
-    start.addEventListener("click", () => void submitTask(issue, repo, buildTaskPrompt(issue, repo)));
-    const submitEdited = document.createElement("button");
-    submitEdited.type = "button";
-    submitEdited.className = "prompt-action-button prompt-submit github-issue-start";
-    setStartButtonContent(submitEdited, "Start with this prompt");
-    submitEdited.hidden = true;
-    submitEdited.addEventListener("click", () => void submitTask(issue, repo, editor.value));
-    actions.append(edit, start, submitEdited);
+    start.addEventListener("click", () => void submitTask(issue, repo, buildTaskPrompt(issue)));
+    actions.append(start);
     task.appendChild(actions);
     const taskStatus = addText(task, "p", "github-issue-task-status", "");
     taskStatus.setAttribute("role", "status");

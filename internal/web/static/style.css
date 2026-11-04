@@ -9649,18 +9649,6 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   line-height: 1.35;
 }
 
-.github-issue-prompt {
-  width: 100%;
-  min-height: 150px;
-  padding: 10px;
-  color: var(--text);
-  border: 1px solid var(--surface-control-border);
-  border-radius: 9px;
-  background: var(--surface-control-bg-strong);
-  resize: vertical;
-  font-size: .75rem;
-}
-
 .github-issue-task-actions {
   display: flex;
   justify-content: flex-end;
