@@ -5475,7 +5475,7 @@ func agentOutputCitesAgent00NoChangeEvidence(res execx.Result) bool {
 	evidenceMarkers := []string{
 		"internal/", "cmd/", "library/",
 	}
-	return containsAnySubstring(text, evidenceMarkers)
+	return containsAnySubstring(text, evidenceMarkers) || agentOutputHasGitRevisionEvidence(text)
 }
 
 func agentOutputCitesGeneralNoChangeEvidence(res execx.Result) bool {
@@ -5483,7 +5483,9 @@ func agentOutputCitesGeneralNoChangeEvidence(res execx.Result) bool {
 	if !agentOutputHasNoChangeClaim(text) {
 		return false
 	}
-	return agentOutputHasConcreteFileEvidence(text) || agentOutputHasConcreteBehaviorEvidence(text)
+	return agentOutputHasConcreteFileEvidence(text) ||
+		agentOutputHasConcreteBehaviorEvidence(text) ||
+		agentOutputHasGitRevisionEvidence(text)
 }
 
 func agentOutputHasConcreteBehaviorEvidence(text string) bool {
@@ -5514,6 +5516,7 @@ func agentOutputHasConcreteBehaviorEvidence(text string) bool {
 // follow-up run.
 var agentNoChangeClaimPattern = regexp.MustCompile(
 	`no\s+(?:[a-z][a-z/_.-]{0,30}\s+)?changes?\s+(?:is\s+|are\s+|were\s+)?(?:needed|required|made|necessary|warranted)` +
+		`|\bno\s+(?:code\s+)?diff\b` +
 		`|\bdiff\s*:?\s*(?:is\s+)?(?:none|empty|clean)\b` +
 		`|\b(?:tree|repo|repository|working tree)\s+(?:is\s+|was\s+)?already\s+clean\b` +
 		`|\bzero\s+\S+\s+diff\b`,
@@ -5569,6 +5572,14 @@ func agentOutputHasConcreteFileEvidence(text string) bool {
 		}
 	}
 	return false
+}
+
+// agentOutputHasGitRevisionEvidence accepts a checked revision as concrete
+// repository evidence for a no-op. Agents commonly report that the requested
+// behavior is already present at HEAD without repeating customer file paths in
+// their final response.
+func agentOutputHasGitRevisionEvidence(text string) bool {
+	return regexp.MustCompile(`\b(?:head|commit|revision)\b[^\n]{0,80}\b[0-9a-f]{7,40}\b`).MatchString(text)
 }
 
 func containsAnySubstring(text string, markers []string) bool {

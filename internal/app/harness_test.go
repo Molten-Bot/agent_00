@@ -6572,6 +6572,11 @@ func TestAgentOutputCitesGeneralNoChangeEvidenceForNaturalPhrasing(t *testing.T)
 			want:   true,
 		},
 		{
+			name:   "no code diff with head revision evidence",
+			output: "No code diff. HEAD already contains requested behavior in 1234abcde.",
+			want:   true,
+		},
+		{
 			name:   "read only investigation with auxiliary verb",
 			output: "No changes are required for this investigation. Verified directly from `go.mod` (lines 1–3), which already declares the module path and Go version as requested.",
 			want:   true,
@@ -6635,6 +6640,11 @@ func TestAgentOutputCitesAgent00NoChangeEvidenceForRetrospectivePhrasing(t *test
 		{
 			name:   "singular no change made with evidence marker",
 			output: "No change made; `internal/config` already validates the required field.",
+			want:   true,
+		},
+		{
+			name:   "head revision with no code diff",
+			output: "No code diff. HEAD already contains the requested behavior in 1234abcde.",
 			want:   true,
 		},
 		{
