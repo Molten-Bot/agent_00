@@ -328,19 +328,23 @@ func TestGitHubIssuesSettingRoundTripsThroughSettingsAPI(t *testing.T) {
 		if req.GitHubIssueAutoStartAssigned == nil {
 			return settings, errors.New("github_issue_auto_start_assigned was omitted")
 		}
+		if req.AssignCreator == nil {
+			return settings, errors.New("assign_creator was omitted")
+		}
 		settings.GitHubIssuesEnabled = *req.GitHubIssuesEnabled
 		settings.GitHubIssueLinkMode = *req.GitHubIssueLinkMode
 		settings.GitHubIssueAutoStartAssigned = *req.GitHubIssueAutoStartAssigned
+		settings.AssignCreator = *req.AssignCreator
 		return settings, nil
 	}
 	response := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/review-settings", strings.NewReader(`{"auto_merge":false,"delete_merged_branches":false,"merge_method":"squash","review_level":"off","github_issues_enabled":true,"github_issue_link_mode":"close","github_issue_auto_start_assigned":true}`)))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"github_issues_enabled":true`) || !strings.Contains(response.Body.String(), `"github_issue_link_mode":"close"`) || !strings.Contains(response.Body.String(), `"github_issue_auto_start_assigned":true`) {
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/review-settings", strings.NewReader(`{"auto_merge":false,"delete_merged_branches":false,"merge_method":"squash","review_level":"off","github_issues_enabled":true,"github_issue_link_mode":"close","github_issue_auto_start_assigned":true,"assign_creator":false}`)))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"github_issues_enabled":true`) || !strings.Contains(response.Body.String(), `"github_issue_link_mode":"close"`) || !strings.Contains(response.Body.String(), `"github_issue_auto_start_assigned":true`) || !strings.Contains(response.Body.String(), `"assign_creator":false`) {
 		t.Fatalf("POST settings response = %d %s", response.Code, response.Body.String())
 	}
 	response = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/review-settings", nil))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"github_issues_enabled":true`) || !strings.Contains(response.Body.String(), `"github_issue_link_mode":"close"`) || !strings.Contains(response.Body.String(), `"github_issue_auto_start_assigned":true`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"github_issues_enabled":true`) || !strings.Contains(response.Body.String(), `"github_issue_link_mode":"close"`) || !strings.Contains(response.Body.String(), `"github_issue_auto_start_assigned":true`) || !strings.Contains(response.Body.String(), `"assign_creator":false`) {
 		t.Fatalf("GET settings response = %d %s", response.Code, response.Body.String())
 	}
 }

@@ -158,7 +158,7 @@ func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 	jsonEnabled *bool,
 ) error {
 	return SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
-		path, initCfg, reviewCfg, defaultLibraryEnabled, chatEnabled, jsonEnabled, nil, nil, nil,
+		path, initCfg, reviewCfg, defaultLibraryEnabled, chatEnabled, jsonEnabled, nil, nil, nil, nil,
 	)
 }
 
@@ -175,6 +175,7 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 	githubIssuesEnabled *bool,
 	githubIssueLinkMode *string,
 	githubIssueAutoStartAssigned *bool,
+	assignCreator *bool,
 ) error {
 	runtimeConfigMu.Lock()
 	defer runtimeConfigMu.Unlock()
@@ -225,6 +226,11 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 		autoStartAssigned = *githubIssueAutoStartAssigned
 	}
 	applyGitHubIssueAutoStartAssignedToDoc(doc, autoStartAssigned)
+	assignCreatorValue := assignCreatorFromDoc(doc)
+	if assignCreator != nil {
+		assignCreatorValue = *assignCreator
+	}
+	applyAssignCreatorToDoc(doc, assignCreatorValue)
 
 	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
 
@@ -512,6 +518,33 @@ func applyGitHubIssueAutoStartAssignedToDoc(doc map[string]any, enabled bool) {
 		return
 	}
 	delete(doc, "github_issue_auto_start_assigned")
+}
+
+// ReadRuntimeConfigAssignCreator reports whether created PRs and worked issues
+// are assigned to the authenticated GitHub user. It defaults on.
+func ReadRuntimeConfigAssignCreator(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return true
+	}
+	doc, err := readRuntimeConfigDoc(path)
+	if err != nil {
+		return true
+	}
+	return assignCreatorFromDoc(doc)
+}
+
+func assignCreatorFromDoc(doc map[string]any) bool {
+	enabled, ok := doc["assign_creator"].(bool)
+	return !ok || enabled
+}
+
+func applyAssignCreatorToDoc(doc map[string]any, enabled bool) {
+	if enabled {
+		delete(doc, "assign_creator")
+		return
+	}
+	doc["assign_creator"] = false
 }
 
 func githubIssuesEnabledFromDoc(doc map[string]any) bool {

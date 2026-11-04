@@ -790,6 +790,11 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		prURL, err := h.createPullRequestURL(ctx, *repo, cfg, createWorkBranch, headRef, targetRepo)
 		if err != nil {
 			if errors.Is(err, errPRCreatePermissionDenied) {
+				if cfg.AssignCreatorEnabled() {
+					if err := h.assignGitHubIssueCreator(ctx, *repo, cfg.GitHubIssue); err != nil {
+						return ExitPR, "pr", err
+					}
+				}
 				h.logf(
 					"stage=pr status=warn action=manual_create_required reason=create_pull_request_permission_denied repo=%s repo_dir=%s branch=%s head=%s target_repo=%s err=%q",
 					repo.URL,
@@ -804,6 +809,11 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 			return ExitPR, "pr", err
 		}
 		repo.PRURL = prURL
+	}
+	if cfg.AssignCreatorEnabled() {
+		if err := h.assignGitHubIssueCreator(ctx, *repo, cfg.GitHubIssue); err != nil {
+			return ExitPR, "pr", err
+		}
 	}
 	h.logf("stage=pr status=ok repo=%s repo_dir=%s pr_url=%s", repo.URL, repo.RelDir, repo.PRURL)
 	if err := h.commentPRScreenshots(ctx, *repo, repo.PRCommentScreenshotFiles); err != nil {
@@ -7728,6 +7738,9 @@ func prCreateWithOptionsCommand(repoDir string, cfg config.Config, baseBranch, h
 	if cfg.Draft {
 		args = append(args, "--draft")
 	}
+	if cfg.AssignCreatorEnabled() {
+		args = append(args, "--assignee", "@me")
+	}
 	for _, label := range cfg.Labels {
 		if strings.TrimSpace(label) == "" {
 			continue
@@ -7756,6 +7769,9 @@ func prCreateWithoutBaseWithOptionsCommand(repoDir string, cfg config.Config, he
 	if cfg.Draft {
 		args = append(args, "--draft")
 	}
+	if cfg.AssignCreatorEnabled() {
+		args = append(args, "--assignee", "@me")
+	}
 	for _, label := range cfg.Labels {
 		if strings.TrimSpace(label) == "" {
 			continue
@@ -7764,6 +7780,21 @@ func prCreateWithoutBaseWithOptionsCommand(repoDir string, cfg config.Config, he
 	}
 	args = appendPRReviewers(args, cfg.Reviewers)
 	return ghCommand(repoDir, args...)
+}
+
+func (h Harness) assignGitHubIssueCreator(ctx context.Context, repo repoWorkspace, issue *config.GitHubIssueConfig) error {
+	if issue == nil {
+		return nil
+	}
+	issueRepo := strings.TrimSpace(issue.Repository)
+	if issueRepo == "" || issue.Number <= 0 {
+		return nil
+	}
+	if _, err := h.runCommand(ctx, "issue", ghCommand(repo.Dir, "issue", "edit", strconv.Itoa(issue.Number), "--repo", issueRepo, "--add-assignee", "@me")); err != nil {
+		return fmt.Errorf("assign GitHub issue %s#%d to creator: %w", issueRepo, issue.Number, err)
+	}
+	h.logf("stage=issue status=ok action=assign_creator repository=%s issue=%d", issueRepo, issue.Number)
+	return nil
 }
 
 func remoteBranchExistsOnOriginCommand(repoDir, branch string) execx.Command {

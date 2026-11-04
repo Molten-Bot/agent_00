@@ -144,7 +144,7 @@ func TestGitHubIssuesEnabledDefaultsFalseAndRoundTrips(t *testing.T) {
 	}
 
 	enabled := true
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, &enabled, nil, nil); err != nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, &enabled, nil, nil, nil); err != nil {
 		t.Fatalf("save enabled setting: %v", err)
 	}
 	if !ReadRuntimeConfigGitHubIssuesEnabled(path) {
@@ -152,7 +152,7 @@ func TestGitHubIssuesEnabledDefaultsFalseAndRoundTrips(t *testing.T) {
 	}
 
 	disabled := false
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, &disabled, nil, nil); err != nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, &disabled, nil, nil, nil); err != nil {
 		t.Fatalf("save disabled setting: %v", err)
 	}
 	if ReadRuntimeConfigGitHubIssuesEnabled(path) {
@@ -179,7 +179,7 @@ func TestGitHubIssueLinkModeDefaultsToReferenceAndRoundTrips(t *testing.T) {
 	}
 
 	mode := GitHubIssueLinkModeClose
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode, nil); err != nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode, nil, nil); err != nil {
 		t.Fatalf("save close-on-merge setting: %v", err)
 	}
 	if got := ReadRuntimeConfigGitHubIssueLinkMode(path); got != GitHubIssueLinkModeClose {
@@ -187,7 +187,7 @@ func TestGitHubIssueLinkModeDefaultsToReferenceAndRoundTrips(t *testing.T) {
 	}
 
 	mode = GitHubIssueLinkModeReference
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode, nil); err != nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode, nil, nil); err != nil {
 		t.Fatalf("save reference setting: %v", err)
 	}
 	if got := ReadRuntimeConfigGitHubIssueLinkMode(path); got != GitHubIssueLinkModeReference {
@@ -206,7 +206,7 @@ func TestGitHubIssueLinkModeDefaultsToReferenceAndRoundTrips(t *testing.T) {
 	}
 
 	mode = "unexpected"
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode, nil); err == nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, &mode, nil, nil); err == nil {
 		t.Fatal("save should reject an unsupported issue-link mode")
 	}
 }
@@ -218,14 +218,14 @@ func TestGitHubIssueAutoStartAssignedDefaultsOffAndRoundTrips(t *testing.T) {
 		t.Fatal("auto-start assigned issues should default to off")
 	}
 	enabled := true
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, nil, &enabled); err != nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, nil, &enabled, nil); err != nil {
 		t.Fatalf("save enabled auto-start setting: %v", err)
 	}
 	if !ReadRuntimeConfigGitHubIssueAutoStartAssigned(path) {
 		t.Fatal("saved auto-start setting is false")
 	}
 	disabled := false
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, nil, &disabled); err != nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, nil, &disabled, nil); err != nil {
 		t.Fatalf("save disabled auto-start setting: %v", err)
 	}
 	if ReadRuntimeConfigGitHubIssueAutoStartAssigned(path) {
@@ -241,6 +241,28 @@ func TestGitHubIssueAutoStartAssignedDefaultsOffAndRoundTrips(t *testing.T) {
 	}
 	if _, exists := doc["github_issue_auto_start_assigned"]; exists {
 		t.Fatalf("disabled default should be omitted from config: %#v", doc["github_issue_auto_start_assigned"])
+	}
+}
+
+func TestAssignCreatorDefaultsOnAndRoundTrips(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "runtime.json")
+	if !ReadRuntimeConfigAssignCreator(path) {
+		t.Fatal("assign creator should default to on")
+	}
+	disabled := false
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, nil, nil, &disabled); err != nil {
+		t.Fatalf("save disabled assign creator setting: %v", err)
+	}
+	if ReadRuntimeConfigAssignCreator(path) {
+		t.Fatal("assign creator should be disabled after saving false")
+	}
+	enabled := true
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, nil, nil, &enabled); err != nil {
+		t.Fatalf("save enabled assign creator setting: %v", err)
+	}
+	if !ReadRuntimeConfigAssignCreator(path) {
+		t.Fatal("assign creator should be enabled after saving true")
 	}
 }
 
