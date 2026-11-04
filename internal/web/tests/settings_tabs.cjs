@@ -290,7 +290,7 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
   });
 
   assert.notEqual(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
-  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=10');
+  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=11');
   await page.waitForFunction(() => document.querySelector('.github-issue-empty-state h2')?.textContent === 'No repositories available');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No repositories available');
   await page.locator('#github-issues-dock-link').click();
@@ -517,6 +517,35 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   const issueStartButton = page.getByRole('button', { name: 'Start task' });
   assert.equal(await page.getByRole('button', { name: 'Edit prompt first' }).count(), 0);
   assert.equal(await page.locator('.github-issue-prompt').count(), 0);
+  assert.equal(await page.locator('.github-issue-task-actions').evaluate(actions => actions.classList.contains('prompt-actions')), true);
+  assert.equal(await page.locator('.github-issue-task-status').evaluate(status => status.classList.contains('submit-status-inline')), true);
+  assert.equal(
+    Math.round(await page.locator('.github-issue-task-status').evaluate(status => status.getBoundingClientRect().left + status.getBoundingClientRect().width / 2)),
+    Math.round(await page.locator('.github-issue-task-actions').evaluate(actions => actions.getBoundingClientRect().left + actions.getBoundingClientRect().width / 2)),
+    'issue task status should stay centered in the shared action row',
+  );
+  await page.locator('.github-issue-task-status').evaluate(status => {
+    status.textContent = `Could not start task: ${'task submission failed because repository access was denied while validating the requested branch. '.repeat(4)}`;
+  });
+  const errorLayout = await page.locator('.github-issue-task-actions').evaluate(actions => {
+      const actionsBox = actions.getBoundingClientRect();
+      const statusBox = actions.querySelector('.github-issue-task-status').getBoundingClientRect();
+      const statusStyle = getComputedStyle(actions.querySelector('.github-issue-task-status'));
+      return {
+        contained: statusBox.top >= actionsBox.top && statusBox.bottom <= actionsBox.bottom,
+        expandsRow: statusBox.height > 38 && actionsBox.height >= statusBox.height,
+        whiteSpace: statusStyle.whiteSpace,
+        overflowWrap: statusStyle.overflowWrap,
+      };
+    });
+  assert.equal(errorLayout.contained, true, 'multi-line task-start errors should stay within the action row');
+  assert.equal(errorLayout.expandsRow, true, 'multi-line task-start errors should expand the action row instead of being clipped');
+  assert.equal(errorLayout.whiteSpace, 'normal');
+  assert.equal(errorLayout.overflowWrap, 'anywhere');
+  assert.ok(
+    (await issueStartButton.boundingBox()).y > (await page.locator('.github-issue-comments').boundingBox()).y,
+    'issue task button should float below issue information',
+  );
   assert.equal(await issueStartButton.evaluate(button => button.classList.contains('prompt-submit')), true);
   assert.equal(await issueStartButton.locator('.prompt-action-icon').count(), 1);
   const readPromptButtonStyle = button => button.evaluate(node => {
