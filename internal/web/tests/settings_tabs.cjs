@@ -285,7 +285,7 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
   });
 
   assert.notEqual(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
-  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=9');
+  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=10');
   await page.waitForFunction(() => document.querySelector('.github-issue-empty-state h2')?.textContent === 'No repositories available');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No repositories available');
   await page.locator('#github-issues-dock-link').click();
@@ -311,7 +311,7 @@ test('GitHub Issues remembers its repository and gives a useful empty state', as
 
   await page.waitForFunction(() => document.getElementById('github-issues-repo').value === 'Molten-Bot/agent_00');
   await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '0 open issues');
-  assert.equal(await page.locator('.github-issues-empty').textContent(), 'No open issues match this search.');
+  assert.equal(await page.locator('.github-issues-empty').textContent(), 'No open issues are assigned to you. Use the filter button to show every open issue.');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'Choose an issue');
   await page.locator('#github-issues-dock-link').click();
   await page.setViewportSize({ width: 390, height: 844 });
@@ -321,6 +321,7 @@ test('GitHub Issues remembers its repository and gives a useful empty state', as
   await page.locator('#github-issues-search').fill('retry');
   await automaticSearch;
   assert.equal(lastSearch, 'retry', 'typing should automatically search issues');
+  await page.waitForFunction(() => document.querySelector('.github-issues-empty')?.textContent === 'No open issues match this search.');
 });
 
 test('GitHub Issues renders inside Studio and uses the configured link mode', async t => {
@@ -414,18 +415,22 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   await page.locator('.github-issue-list-item').waitFor();
   await page.waitForFunction(() => document.getElementById('github-issues-status').textContent === '');
   assert.equal(issueQueryState, 'open');
-  const assigneeFilter = page.getByRole('button', { name: 'Show only issues assigned to me' });
+  assert.equal(issueAssigneeFilter, 'me', 'issues assigned to the signed-in account load by default');
+  const assigneeFilter = page.getByRole('button', { name: 'Show all issues' });
   assert.equal(await assigneeFilter.innerText(), '', 'assignee filter should be icon-only');
   assert.equal(await assigneeFilter.locator('svg.lucide-user-round-arrow-left').count(), 1);
-  const assignedIssuesResponse = page.waitForResponse(response => new URL(response.url()).searchParams.get('assignee') === 'me');
+  assert.equal(await assigneeFilter.getAttribute('aria-pressed'), 'true', 'the assignee filter starts pressed');
+  const allIssuesResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/github/issues' && !new URL(response.url()).searchParams.has('assignee'));
   await assigneeFilter.click();
+  await allIssuesResponse;
+  assert.equal(issueAssigneeFilter, '');
+  const assignedFilter = page.getByRole('button', { name: 'Show only issues assigned to me' });
+  assert.equal(await assignedFilter.getAttribute('aria-pressed'), 'false');
+  const assignedIssuesResponse = page.waitForResponse(response => new URL(response.url()).searchParams.get('assignee') === 'me');
+  await assignedFilter.click();
   await assignedIssuesResponse;
   assert.equal(issueAssigneeFilter, 'me');
   assert.equal(await page.getByRole('button', { name: 'Show all issues' }).getAttribute('aria-pressed'), 'true');
-  const allIssuesResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/github/issues' && !new URL(response.url()).searchParams.has('assignee'));
-  await page.getByRole('button', { name: 'Show all issues' }).click();
-  await allIssuesResponse;
-  assert.equal(issueAssigneeFilter, '');
   assert.match(await page.locator('#github-issues-count').textContent(), /open issues/);
   assert.equal(await page.locator('#github-issues-status').textContent(), '');
   assert.match(await page.locator('.github-issue-list-title').textContent(), /Add issue browser/);
