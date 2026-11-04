@@ -69,6 +69,8 @@ var nonRemediableRepoAccessMarkers = []string{
 
 const githubSSHPermissionDeniedReason = "permission to repository denied"
 
+const unreachableCoverageTargetReason = "coverage target cannot be met safely"
+
 var nonRemediableFailureMarkers = []string{
 	"no space left on device",
 	"no permissions to create a new namespace",
@@ -376,10 +378,24 @@ func NonRemediableFailureReason(err error) string {
 	if agentruntime.CodexAuthenticationFailure(text) {
 		return "codex authentication required"
 	}
+	if isUnreachableCoverageTargetFailure(text) {
+		return unreachableCoverageTargetReason
+	}
 	for _, marker := range nonRemediableFailureMarkers {
 		if strings.Contains(text, marker) {
 			return marker
 		}
 	}
 	return NonRemediableRepoAccessReason(err)
+}
+
+// isUnreachableCoverageTargetFailure recognizes a measured customer-repository
+// coverage shortfall. A follow-up runs against agent_00, so it cannot add the
+// customer tests needed to satisfy this target.
+func isUnreachableCoverageTargetFailure(text string) bool {
+	if strings.Contains(text, "cannot safely meet coverage target") {
+		return true
+	}
+	return strings.Contains(text, "covered lines") &&
+		(strings.Contains(text, "target not met") || strings.Contains(text, "would fail ci"))
 }

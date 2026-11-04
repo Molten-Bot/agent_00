@@ -81,6 +81,9 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: Concept build stopped before planning. Error details: source belongs to a municipal site. Engine supports only medical, dental, law businesses. Source outside active scope.")); got != "source outside active scope" {
 		t.Fatalf("NonRemediableFailureReason(source outside active scope) = %q, want %q", got, "source outside active scope")
 	}
+	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: issue target not met. Error details: current code needs 4232 more covered lines for 90%. Setting gate to 90 now would fail CI.")); got != unreachableCoverageTargetReason {
+		t.Fatalf("NonRemediableFailureReason(unreachable coverage target) = %q, want %q", got, unreachableCoverageTargetReason)
+	}
 }
 
 func TestInfrastructureFailureDoesNotSpawnAnotherCodingTask(t *testing.T) {
