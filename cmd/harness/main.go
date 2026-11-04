@@ -344,6 +344,8 @@ func runServer(args []string) int {
 			return "", fmt.Errorf("load runtime config: %w", err)
 		}
 		runCfg = applyDefaultAgentRuntimeConfig(runCfg, activeCfg)
+		assignCreator := localruntime.ReadRuntimeConfigAssignCreator(cfg.RuntimeConfigPath)
+		runCfg.AssignCreator = &assignCreator
 		runCfg, err = localruntime.ApplyBoundAgentRuntime(runCfg, activeCfg)
 		if err != nil {
 			return "", err
@@ -2487,6 +2489,7 @@ func currentReviewSettingsState(cfg localruntime.InitConfig) web.ReviewSettingsS
 		GitHubIssuesEnabled:          localruntime.ReadRuntimeConfigGitHubIssuesEnabled(cfg.RuntimeConfigPath),
 		GitHubIssueLinkMode:          localruntime.ReadRuntimeConfigGitHubIssueLinkMode(cfg.RuntimeConfigPath),
 		GitHubIssueAutoStartAssigned: localruntime.ReadRuntimeConfigGitHubIssueAutoStartAssigned(cfg.RuntimeConfigPath),
+		AssignCreator:                localruntime.ReadRuntimeConfigAssignCreator(cfg.RuntimeConfigPath),
 	}
 }
 
@@ -2518,7 +2521,7 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		MergeMethod:          method,
 		ReviewLevel:          reviewLevel,
 	}
-	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled, req.GitHubIssueLinkMode, req.GitHubIssueAutoStartAssigned); err != nil {
+	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled, req.GitHubIssueLinkMode, req.GitHubIssueAutoStartAssigned, req.AssignCreator); err != nil {
 		state := currentReviewSettingsState(cfg)
 		return state, err
 	}

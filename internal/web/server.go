@@ -181,6 +181,7 @@ type ReviewSettingsState struct {
 	GitHubIssuesEnabled          bool   `json:"github_issues_enabled"`
 	GitHubIssueLinkMode          string `json:"github_issue_link_mode"`
 	GitHubIssueAutoStartAssigned bool   `json:"github_issue_auto_start_assigned"`
+	AssignCreator                bool   `json:"assign_creator"`
 	Message                      string `json:"message,omitempty"`
 }
 
@@ -199,6 +200,7 @@ type ReviewSettingsRequest struct {
 	GitHubIssuesEnabled          *bool   `json:"github_issues_enabled,omitempty"`
 	GitHubIssueLinkMode          *string `json:"github_issue_link_mode,omitempty"`
 	GitHubIssueAutoStartAssigned *bool   `json:"github_issue_auto_start_assigned,omitempty"`
+	AssignCreator                *bool   `json:"assign_creator,omitempty"`
 }
 
 // NewServer returns a monitor HTTP server.

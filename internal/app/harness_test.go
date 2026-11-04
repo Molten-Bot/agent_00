@@ -6083,6 +6083,41 @@ func TestPRCreateCommandsIncludeGitHubIssueLinkMode(t *testing.T) {
 	}
 }
 
+func TestPRCreateCommandsAssignCreatorByDefault(t *testing.T) {
+	t.Parallel()
+	cfg := sampleConfig()
+	for _, command := range []execx.Command{
+		prCreateCommand("/tmp/repo", cfg, "topic-branch"),
+		prCreateWithoutBaseCommand("/tmp/repo", cfg, "topic-branch"),
+	} {
+		if got, ok := flagValue(command.Args, "--assignee"); !ok || got != "@me" {
+			t.Fatalf("PR create assignee = %q, present=%t; want @me", got, ok)
+		}
+	}
+	disabled := false
+	cfg.AssignCreator = &disabled
+	if _, ok := flagValue(prCreateCommand("/tmp/repo", cfg, "topic-branch").Args, "--assignee"); ok {
+		t.Fatal("PR create included creator assignee when disabled")
+	}
+}
+
+func TestAssignGitHubIssueCreatorUsesAuthenticatedUser(t *testing.T) {
+	t.Parallel()
+	runner := &captureRunner{}
+	h := New(runner)
+	err := h.assignGitHubIssueCreator(context.Background(), repoWorkspace{Dir: "/tmp/repo"}, &config.GitHubIssueConfig{
+		Repository: "acme/repo",
+		Number:     17,
+	})
+	if err != nil {
+		t.Fatalf("assign GitHub issue creator: %v", err)
+	}
+	want := execx.Command{Name: "gh", Dir: "/tmp/repo", Args: []string{"issue", "edit", "17", "--repo", "acme/repo", "--add-assignee", "@me"}}
+	if !commandsEqual(runner.cmd, want) {
+		t.Fatalf("issue assignment command = %+v, want %+v", runner.cmd, want)
+	}
+}
+
 func TestPRCreateCommandsIncludeDraftFlagWhenRequested(t *testing.T) {
 	t.Parallel()
 

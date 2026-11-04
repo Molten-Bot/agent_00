@@ -54,8 +54,16 @@ type Config struct {
 	GitHubHandle             string             `json:"githubHandle"`
 	Reviewers                []string           `json:"reviewers"`
 	Draft                    bool               `json:"draft,omitempty"`
+	AssignCreator            *bool              `json:"assignCreator,omitempty"`
 	Review                   *ReviewConfig      `json:"review,omitempty"`
 	GitHubIssue              *GitHubIssueConfig `json:"githubIssue,omitempty"`
+}
+
+// AssignCreatorEnabled reports whether newly created pull requests and worked
+// GitHub issues should be assigned to the authenticated GitHub user. It is on
+// by default so existing run configs retain the default behavior.
+func (c Config) AssignCreatorEnabled() bool {
+	return c.AssignCreator == nil || *c.AssignCreator
 }
 
 // GitHubIssueConfig preserves the GitHub issue that originated a run.

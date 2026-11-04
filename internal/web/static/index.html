@@ -872,6 +872,11 @@
               <span>Enable GitHub Issues workflow</span>
             </label>
             <p class="github-issues-settings-description">Browse issues from a repository and start a task with its full description and comments. The task follows the normal pull request, review, and merge workflow.</p>
+            <label class="selectable-option">
+              <input class="sr-only" id="review-settings-assign-creator" type="checkbox">
+              <i data-lucide="user-check" aria-hidden="true"></i>
+              <span>Assign created pull requests and worked issues to me</span>
+            </label>
             <div id="review-settings-github-issues-auto-start" class="github-issues-auto-start" hidden>
               <label class="selectable-option">
                 <input class="sr-only" id="review-settings-github-issues-auto-start-assigned" type="checkbox">
@@ -1657,6 +1662,7 @@
       const githubIssuesEnabledRaw = settings.github_issues_enabled ?? settings.githubIssuesEnabled;
       const githubIssueLinkModeRaw = String(settings.github_issue_link_mode ?? settings.githubIssueLinkMode ?? "reference").trim().toLowerCase();
       const githubIssueAutoStartAssignedRaw = settings.github_issue_auto_start_assigned ?? settings.githubIssueAutoStartAssigned;
+      const assignCreatorRaw = settings.assign_creator ?? settings.assignCreator;
       return {
         autoMerge: Boolean(settings.auto_merge || settings.autoMerge),
         deleteMergedBranches: Boolean(settings.delete_merged_branches || settings.deleteMergedBranches),
@@ -1668,6 +1674,7 @@
         githubIssuesEnabled: githubIssuesEnabledRaw === undefined ? false : Boolean(githubIssuesEnabledRaw),
         githubIssueLinkMode: ["reference", "close"].includes(githubIssueLinkModeRaw) ? githubIssueLinkModeRaw : "reference",
         githubIssueAutoStartAssigned: Boolean(githubIssueAutoStartAssignedRaw),
+        assignCreator: assignCreatorRaw === undefined ? true : Boolean(assignCreatorRaw),
         message: String(settings.message || "").trim(),
       };
     }
@@ -2163,6 +2170,7 @@
     const reviewSettingsGitHubIssuesEnabled = document.getElementById("review-settings-github-issues-enabled");
     const reviewSettingsGitHubIssuesAutoStart = document.getElementById("review-settings-github-issues-auto-start");
     const reviewSettingsGitHubIssuesAutoStartAssigned = document.getElementById("review-settings-github-issues-auto-start-assigned");
+    const reviewSettingsAssignCreator = document.getElementById("review-settings-assign-creator");
     const reviewSettingsGitHubIssuesLinkMode = document.getElementById("review-settings-github-issues-link-mode");
     const reviewSettingsGitHubIssuesLinkReference = document.getElementById("review-settings-github-issues-link-reference");
     const reviewSettingsGitHubIssuesLinkClose = document.getElementById("review-settings-github-issues-link-close");
@@ -2908,6 +2916,9 @@
       if (reviewSettingsGitHubIssuesAutoStartAssigned instanceof HTMLInputElement) {
         reviewSettingsGitHubIssuesAutoStartAssigned.checked = state.reviewSettings.githubIssueAutoStartAssigned;
       }
+      if (reviewSettingsAssignCreator instanceof HTMLInputElement) {
+        reviewSettingsAssignCreator.checked = state.reviewSettings.assignCreator;
+      }
       if (reviewSettingsGitHubIssuesLinkReference instanceof HTMLInputElement) {
         reviewSettingsGitHubIssuesLinkReference.checked = state.reviewSettings.githubIssueLinkMode === "reference";
       }
@@ -2999,6 +3010,7 @@
         github_issues_enabled: reviewSettingsGitHubIssuesEnabled instanceof HTMLInputElement ? reviewSettingsGitHubIssuesEnabled.checked : false,
         github_issue_link_mode: reviewSettingsGitHubIssuesLinkClose instanceof HTMLInputElement && reviewSettingsGitHubIssuesLinkClose.checked ? "close" : "reference",
         github_issue_auto_start_assigned: reviewSettingsGitHubIssuesAutoStartAssigned instanceof HTMLInputElement ? reviewSettingsGitHubIssuesAutoStartAssigned.checked : false,
+        assign_creator: reviewSettingsAssignCreator instanceof HTMLInputElement ? reviewSettingsAssignCreator.checked : true,
       };
     }
 
@@ -13369,7 +13381,7 @@
       reviewSettingsClose.disabled = Boolean(busy);
       for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches,
         reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsGitHubIssuesEnabled,
-        reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsSlider, ...reviewSettingsMergeOptions]) {
+        reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsAssignCreator, reviewSettingsSlider, ...reviewSettingsMergeOptions]) {
         if (control) control.disabled = Boolean(busy) || !state.settingsLoaded;
       }
       reviewSettingsForm.setAttribute("aria-busy", String(Boolean(busy)));
@@ -13414,7 +13426,7 @@
       reviewSettingsForm.addEventListener("submit", submitReviewSettings);
     }
     for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches, reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled,
-      reviewSettingsGitHubIssuesEnabled, reviewSettingsGitHubIssuesAutoStartAssigned, ...reviewSettingsGitHubIssuesLinkModeOptions]) {
+      reviewSettingsGitHubIssuesEnabled, reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsAssignCreator, ...reviewSettingsGitHubIssuesLinkModeOptions]) {
       control.addEventListener("change", () => setReviewSettingsStatus("", "Changes will be saved on close."));
     }
     reviewSettingsGitHubIssuesEnabled?.addEventListener("change", () => {
