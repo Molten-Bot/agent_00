@@ -187,6 +187,93 @@ func TestRedactedTaskPromptNoticeBarsCopyingLogDetailsIntoAgent00Output(t *testi
 	}
 }
 
+func TestRedactFailureDetailReplacesCustomerIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		detail string
+		want   string
+	}{
+		{"empty", "", ""},
+		{"whitespace", "   \n\t ", ""},
+		{
+			"ssh remote",
+			"clone git@github.com:acme/private-repo.git failed",
+			"clone " + RedactedURLPlaceholder + " failed",
+		},
+		{
+			"owner-less ssh remote",
+			"clone git@git.acme.example:private-repo.git failed",
+			"clone " + RedactedURLPlaceholder + " failed",
+		},
+		{
+			"https remote",
+			"fetch https://github.com/acme/private-repo.git returned error: 403",
+			"fetch " + RedactedURLPlaceholder + " returned error: 403",
+		},
+		{
+			"pull request url",
+			"pr create: https://github.com/acme/private-repo/pull/17 already exists",
+			"pr create: " + RedactedURLPlaceholder + " already exists",
+		},
+		{
+			"workspace path",
+			"agent exited in /home/developer/git/acme/private-repo",
+			"agent exited in " + RedactedPathPlaceholder,
+		},
+		{
+			"bare repo reference",
+			"remote: Permission to acme/private-repo.git denied to someone.",
+			"remote: Permission to " + RedactedURLPlaceholder + " denied to someone.",
+		},
+		{
+			"prompt derived branch",
+			"push rejected for agent00-rename-the-billing-widget",
+			"push rejected for " + RedactedBranchPlaceholder,
+		},
+		{
+			"diagnostic wording survives",
+			"exit status 1: fatal: could not read from remote repository",
+			"exit status 1: fatal: could not read from remote repository",
+		},
+		{
+			"relative agent_00 path survives",
+			"build failed in cmd/harness/main.go",
+			"build failed in cmd/harness/main.go",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := RedactFailureDetail(tc.detail); got != tc.want {
+				t.Fatalf("RedactFailureDetail(%q) = %q, want %q", tc.detail, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRedactFailureDetailRedactsEveryIdentifierInACompositeError(t *testing.T) {
+	t.Parallel()
+
+	got := RedactFailureDetail(
+		"clone git@github.com:acme/private-repo.git into /home/developer/git/acme/private-repo " +
+			"failed on branch agent00-fix-the-billing-widget: see https://github.com/acme/private-repo/pull/17",
+	)
+
+	for _, unwanted := range []string{"acme", "private-repo", "developer", "billing-widget", "github.com"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("RedactFailureDetail kept %q: %q", unwanted, got)
+		}
+	}
+	want := "clone " + RedactedURLPlaceholder +
+		" into " + RedactedPathPlaceholder +
+		" failed on branch " + RedactedBranchPlaceholder +
+		": see " + RedactedURLPlaceholder
+	if got != want {
+		t.Fatalf("RedactFailureDetail() = %q, want %q", got, want)
+	}
+}
+
 func TestComposePromptUsesFallbackPathsAndContract(t *testing.T) {
 	t.Parallel()
 

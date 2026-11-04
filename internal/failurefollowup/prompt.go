@@ -3,6 +3,7 @@ package failurefollowup
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
@@ -133,6 +134,53 @@ func RedactTaskPrompt(prompt string) string {
 		return ""
 	}
 	return RedactedTaskPromptNotice
+}
+
+// Placeholders substituted for customer-derived identifiers by
+// RedactFailureDetail.
+const (
+	RedactedURLPlaceholder    = "[redacted-url]"
+	RedactedPathPlaceholder   = "[redacted-path]"
+	RedactedBranchPlaceholder = "[redacted-branch]"
+)
+
+var (
+	// Clone, remote, and pull request links.
+	schemeURLPattern = regexp.MustCompile(`(?i)\b(?:https?|ssh|git|file)://[^\s"'<>]+`)
+
+	// SCP-style git remotes such as git@github.com:acme/repo.git, including the
+	// owner-less git@host:repo.git form.
+	scpRemotePattern = regexp.MustCompile(`[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._/-]+`)
+
+	// Workspace, clone, and log directories. The leading group keeps relative
+	// agent_00 paths such as cmd/harness/main.go intact.
+	absolutePathPattern = regexp.MustCompile(`(\A|[^A-Za-z0-9._@%+-])((?:/[A-Za-z0-9._@%+-]+){2,}/?)`)
+
+	// Bare owner/repo references left by git errors such as
+	// "Permission to acme/repo.git denied to someone".
+	repoReferencePattern = regexp.MustCompile(`(?i)\b[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git\b`)
+
+	// Prompt-derived branch slugs; see slug.BranchName.
+	branchSlugPattern = regexp.MustCompile(`(?i)\bagent00-[A-Za-z0-9._-]+`)
+)
+
+// RedactFailureDetail strips customer-derived identifiers out of a failed run's
+// error text so a follow-up that executes against agent_00 can quote it.
+// Repository URLs, pull request URLs, absolute filesystem paths, and
+// prompt-derived branch slugs all name the customer's repository or task, so
+// each is replaced with a placeholder while the surrounding diagnostic wording
+// is preserved.
+func RedactFailureDetail(detail string) string {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return ""
+	}
+	detail = schemeURLPattern.ReplaceAllString(detail, RedactedURLPlaceholder)
+	detail = scpRemotePattern.ReplaceAllString(detail, RedactedURLPlaceholder)
+	detail = absolutePathPattern.ReplaceAllString(detail, "${1}"+RedactedPathPlaceholder)
+	detail = repoReferencePattern.ReplaceAllString(detail, RedactedURLPlaceholder)
+	detail = branchSlugPattern.ReplaceAllString(detail, RedactedBranchPlaceholder)
+	return strings.TrimSpace(detail)
 }
 
 func ComposePrompt(requiredPrompt string, logPaths, fallbackLogPaths []string, noPathGuidance, contextBlock string) string {

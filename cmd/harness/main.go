@@ -1788,14 +1788,18 @@ func failureFollowUpPrompt(logPaths []string, failedResult app.Result, failedRun
 // executes against agent_00. The failed run's workspace path, branch slug,
 // repository URLs, pull request URL, and target subdirectory are all derived
 // from the customer's task and repository, so none of them may appear here or
-// in the pull request body this prompt becomes.
+// in the pull request body this prompt becomes. The failure error is kept for
+// diagnosis but commonly embeds those same identifiers, so it is routed
+// through failurefollowup.RedactFailureDetail first.
 func failureFollowUpFailureContext(failedResult app.Result, failedRunCfg config.Config) string {
 	lines := []string{
 		"Observed failure context:",
 		fmt.Sprintf("- exit_code=%d", failedResult.ExitCode),
 	}
 	if failedResult.Err != nil {
-		lines = append(lines, fmt.Sprintf("- error=%q", failedResult.Err.Error()))
+		if detail := failurefollowup.RedactFailureDetail(failedResult.Err.Error()); detail != "" {
+			lines = append(lines, fmt.Sprintf("- error=%q", detail))
+		}
 	}
 	if notice := failurefollowup.RedactTaskPrompt(failedRunCfg.Prompt); notice != "" {
 		lines = append(lines, "", notice)
