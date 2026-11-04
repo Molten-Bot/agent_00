@@ -225,28 +225,37 @@
     return context.join("\n").trim();
   }
 
+  function emptyIssueListHeading() {
+    if (!repositories.length) return "No repositories available";
+    if (!selectedRepository()) return "Choose a repository";
+    if (searchInput.value.trim()) return "No matching issues";
+    return assignedToMe ? "No assigned issues" : "No open issues";
+  }
+
+  function emptyIssueListText() {
+    const searching = Boolean(searchInput.value.trim());
+    if (!repositories.length) return "No repositories are available for this account.";
+    if (!selectedRepository()) return "Choose a repository to see its open issues.";
+    if (assignedToMe) {
+      return searching
+        ? "No open issues assigned to you match this search. Use the filter button to search every open issue."
+        : "No open issues are assigned to you. Use the filter button to show every open issue.";
+    }
+    return searching ? "No open issues match this search." : "This repository has no open issues.";
+  }
+
   function renderIssueList(issues) {
     issueList.replaceChildren();
     const total = `${issues.length}${issues.length === 100 ? "+" : ""}`;
+    // 100 is the page limit, so a "100+" count is always plural.
+    const noun = issues.length === 1 ? "open issue" : "open issues";
     if (issueCount) issueCount.textContent = !selectedRepository()
       ? "Choose a repository"
       : assignedToMe
-        ? `${total} open issues assigned to you`
-        : `${total} open issues`;
+        ? `${total} ${noun} assigned to you`
+        : `${total} ${noun}`;
     if (!issues.length) {
-      const searching = Boolean(searchInput.value.trim());
-      const emptyText = !repositories.length
-        ? "No repositories are available for this account."
-        : !selectedRepository()
-          ? "Choose a repository to see its open issues."
-          : assignedToMe
-            ? searching
-              ? "No open issues assigned to you match this search. Use the filter button to search every open issue."
-              : "No open issues are assigned to you. Use the filter button to show every open issue."
-            : searching
-              ? "No open issues match this search."
-              : "This repository has no open issues.";
-      addText(issueList, "li", "github-issues-empty", emptyText);
+      addText(issueList, "li", "github-issues-empty", emptyIssueListText());
       return;
     }
     for (const issue of issues) {
@@ -520,6 +529,9 @@
       const issues = Array.isArray(body.issues) ? body.issues : [];
       currentIssues = issues;
       renderIssueList(issues);
+      // There is nothing to choose when the list came back empty, so the detail
+      // pane repeats the list's reason instead of inviting a selection.
+      if (!issues.length) renderEmptyDetail(emptyIssueListHeading(), emptyIssueListText());
       setStatus("");
     } catch (error) {
       if (generation === requestGeneration) setStatus(error.message || "Unable to load issues.", "error");

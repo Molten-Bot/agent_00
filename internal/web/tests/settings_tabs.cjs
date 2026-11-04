@@ -313,7 +313,8 @@ test('GitHub Issues remembers its repository and gives a useful empty state', as
   await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '0 open issues assigned to you');
   assert.equal(await page.locator('.github-issues-empty').textContent(), 'No open issues are assigned to you. Use the filter button to show every open issue.');
   assert.equal(await page.locator('#github-issues-search').getAttribute('placeholder'), 'Search issues assigned to you');
-  assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'Choose an issue');
+  assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No assigned issues', 'an empty list must not invite choosing an issue');
+  assert.equal(await page.locator('.github-issue-empty-state p').textContent(), 'No open issues are assigned to you. Use the filter button to show every open issue.');
   await page.locator('#github-issues-dock-link').click();
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.body.scrollWidth), 390, 'mobile Issues view should not scroll horizontally');
@@ -323,6 +324,7 @@ test('GitHub Issues remembers its repository and gives a useful empty state', as
   await automaticSearch;
   assert.equal(lastSearch, 'retry', 'typing should automatically search issues');
   await page.waitForFunction(() => document.querySelector('.github-issues-empty')?.textContent === 'No open issues assigned to you match this search. Use the filter button to search every open issue.');
+  assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No matching issues');
 });
 
 test('GitHub Issues honours a stored assignee filter choice before the browser is shown', async t => {
@@ -352,6 +354,7 @@ test('GitHub Issues honours a stored assignee filter choice before the browser i
   assert.equal(await page.locator('#github-issues-search').getAttribute('placeholder'), 'Search this repository');
   await page.waitForFunction(() => document.querySelector('.github-issues-empty')?.textContent === 'This repository has no open issues.');
   assert.equal(await page.locator('#github-issues-count').textContent(), '0 open issues');
+  assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No open issues');
   assert.equal(issueAssigneeFilter, '');
   const assignedIssuesResponse = page.waitForResponse(response => new URL(response.url()).searchParams.get('assignee') === 'me');
   await assigneeFilter.click();
@@ -461,7 +464,7 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   assert.equal(await assigneeFilter.locator('svg.lucide-user-round-arrow-left').count(), 1);
   assert.equal(await assigneeFilter.getAttribute('aria-pressed'), 'true', 'the assignee filter starts pressed');
   assert.equal(await page.locator('#github-issues-search').getAttribute('placeholder'), 'Search issues assigned to you');
-  await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '1 open issues assigned to you');
+  await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '1 open issue assigned to you');
   const allIssuesResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/github/issues' && !new URL(response.url()).searchParams.has('assignee'));
   await assigneeFilter.click();
   await allIssuesResponse;
@@ -474,7 +477,7 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   await assignedIssuesResponse;
   assert.equal(issueAssigneeFilter, 'me');
   assert.equal(await assigneeFilter.getAttribute('aria-pressed'), 'true');
-  await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '1 open issues assigned to you');
+  await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '1 open issue assigned to you');
   assert.equal(await page.locator('#github-issues-status').textContent(), '');
   assert.match(await page.locator('.github-issue-list-title').textContent(), /Add issue browser/);
   const resizeHandle = page.locator('#github-issues-resize-handle');
