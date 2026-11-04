@@ -112,11 +112,26 @@ func TestRequiredPromptScopesFailureFollowUpToAgent00(t *testing.T) {
 
 	for _, want := range []string{
 		"fix the underlying agent_00 application issues in this repository",
-		"Treat the original task prompt as failure context only",
-		"do not implement that requested product change here unless it is required to fix agent_00 failure handling",
+		"The failed run's original task prompt is withheld and is not supplied here",
+		"do not reconstruct it, ask for it, or implement the product change it requested unless that change is required to fix agent_00 failure handling",
 	} {
 		if !strings.Contains(RequiredPrompt, want) {
 			t.Fatalf("RequiredPrompt missing %q: %q", want, RequiredPrompt)
+		}
+	}
+}
+
+func TestRequiredPromptDoesNotTreatTheWithheldPromptAsSuppliedContext(t *testing.T) {
+	t.Parallel()
+
+	// The failed run's prompt is redacted before it reaches a follow-up, so the
+	// instruction must not tell the agent to read it as context.
+	for _, unwanted := range []string{
+		"Treat the original task prompt as failure context",
+		"as failure context only",
+	} {
+		if strings.Contains(RequiredPrompt, unwanted) {
+			t.Fatalf("RequiredPrompt still points at the withheld prompt %q: %q", unwanted, RequiredPrompt)
 		}
 	}
 }
@@ -152,6 +167,22 @@ func TestRedactedTaskPromptNoticeExplainsWithheldPrompt(t *testing.T) {
 	} {
 		if !strings.Contains(RedactedTaskPromptNotice, want) {
 			t.Fatalf("RedactedTaskPromptNotice missing %q: %q", want, RedactedTaskPromptNotice)
+		}
+	}
+}
+
+func TestRedactedTaskPromptNoticeBarsCopyingLogDetailsIntoAgent00Output(t *testing.T) {
+	t.Parallel()
+
+	// The notice sends the agent to the failed run's logs, which carry the same
+	// customer details the prompt redaction withholds.
+	for _, want := range []string{
+		"Those logs can contain the same private details",
+		"never copy customer repository names, URLs, branch names, file paths, personnel, or source snippets from them",
+		"commit messages, pull request titles or bodies, or comments",
+	} {
+		if !strings.Contains(RedactedTaskPromptNotice, want) {
+			t.Fatalf("RedactedTaskPromptNotice missing log-detail guardrail %q: %q", want, RedactedTaskPromptNotice)
 		}
 	}
 }

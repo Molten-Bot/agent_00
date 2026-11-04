@@ -9,13 +9,15 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/config"
 )
 
-const RequiredPrompt = "Review the failing log paths first, identify every root cause behind the failed task, fix the underlying agent_00 application issues in this repository, validate locally where possible, and summarize the verified results. Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix agent_00 failure handling."
+const RequiredPrompt = "Review the failing log paths first, identify every root cause behind the failed task, fix the underlying agent_00 application issues in this repository, validate locally where possible, and summarize the verified results. The failed run's original task prompt is withheld and is not supplied here; do not reconstruct it, ask for it, or implement the product change it requested unless that change is required to fix agent_00 failure handling."
 
 // RedactedTaskPromptNotice stands in for the failed run's task prompt inside
 // follow-up context blocks. Follow-up runs execute against the agent_00
 // repository, so prompt text that can name a customer's repositories, people,
-// or source code must never be copied into them.
-const RedactedTaskPromptNotice = "Task prompt: redacted by the harness. Follow-up runs execute against the agent_00 repository, so the failed run's prompt text is withheld because it can contain private repository, personnel, or source details. Diagnose from the failure context and the failing log paths above."
+// or source code must never be copied into them. The failing logs the notice
+// points at can still carry those details, so it also bars copying them into
+// anything this run leaves behind.
+const RedactedTaskPromptNotice = "Task prompt: redacted by the harness. Follow-up runs execute against the agent_00 repository, so the failed run's prompt text is withheld because it can contain private repository, personnel, or source details. Diagnose from the failure context and the failing log paths above. Those logs can contain the same private details: use them only for diagnosis, and never copy customer repository names, URLs, branch names, file paths, personnel, or source snippets from them into agent_00 code, tests, docs, commit messages, pull request titles or bodies, or comments."
 
 const FollowUpRepositoryURL = config.DefaultRepositoryURL
 

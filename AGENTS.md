@@ -53,6 +53,7 @@
 - Use generic names, account handles, service names, and home-directory paths in checked-in examples and test fixtures. Keep operator-specific identifiers out of public repository content.
 - Never print, commit, or include in docs: `GITHUB_TOKEN`, `GH_TOKEN`, `OPENAI_API_KEY`, GitHub PATs or agent auth credentials.
 - Failure and no-change follow-up runs execute against the agent_00 repository, so never copy the failed run's task prompt into their prompts or PR bodies. Route it through `failurefollowup.RedactTaskPrompt`, which substitutes `failurefollowup.RedactedTaskPromptNotice`.
+- The same rule covers the failed run's other customer-derived identifiers. Keep its workspace path, prompt-derived branch slug, repository URLs, pull request URL, and target subdirectory out of follow-up prompts and PR bodies; the follow-up context in `cmd/harness` carries only the exit code, the error, and the agent_00-local request id.
 - Before sharing repository or PR links in runtime activity, preserve the existing private-repo check using `gh repo view OWNER/REPO --json isPrivate,nameWithOwner`.
 
 ## Release

@@ -525,16 +525,91 @@ func TestFailureFollowUpRunConfigForcesRemoteDefaultBranchAndRootTarget(t *testi
 	if cfg.TargetSubdir != "." {
 		t.Fatalf("TargetSubdir = %q, want %q", cfg.TargetSubdir, ".")
 	}
-	for _, want := range []string{
-		"- target_subdir=internal/web",
-		failurefollowup.RedactedTaskPromptNotice,
-	} {
-		if !strings.Contains(cfg.Prompt, want) {
-			t.Fatalf("Prompt missing %q: %q", want, cfg.Prompt)
-		}
+	if !strings.Contains(cfg.Prompt, failurefollowup.RedactedTaskPromptNotice) {
+		t.Fatalf("Prompt missing %q: %q", failurefollowup.RedactedTaskPromptNotice, cfg.Prompt)
 	}
 	if strings.Contains(cfg.Prompt, "add slight padding between prompt and lower items") {
 		t.Fatalf("Prompt leaked the original task prompt: %q", cfg.Prompt)
+	}
+}
+
+func TestFailureFollowUpRunConfigKeepsFailedRunIdentifiersOutOfThePrompt(t *testing.T) {
+	t.Parallel()
+
+	logRoot := filepath.Join(t.TempDir(), ".log")
+	failedResult := app.Result{
+		Err:          fmt.Errorf("checks failed"),
+		WorkspaceDir: "/workspace/tasks/acme-billing-widget/repo",
+		Branch:       "agent00-rename-the-acmecorp-billing-widget",
+		PRURL:        "https://github.com/acme/billing/pull/42",
+		RepoResults:  []app.RepoResult{{RepoURL: "git@github.com:acme/billing.git"}},
+	}
+	failedRunCfg := config.Config{
+		Repos:        []string{"git@github.com:acme/billing.git"},
+		TargetSubdir: "services/acme-billing",
+		Prompt:       "rename the AcmeCorp billing widget owned by Dana Example",
+	}
+
+	cfg := failureFollowUpRunConfig("local-1712345678-000001", failedResult, failedRunCfg, logRoot)
+	assertFollowUpPromptHidesCustomerDetails(t, cfg.Prompt)
+	if !strings.Contains(cfg.Prompt, "- exit_code=") {
+		t.Fatalf("Prompt dropped the agent_00-safe failure context: %q", cfg.Prompt)
+	}
+}
+
+func TestNoChangesFollowUpPromptsKeepPriorRunIdentifiersOutOfThePrompt(t *testing.T) {
+	t.Parallel()
+
+	logRoot := filepath.Join(t.TempDir(), ".log")
+	result := app.Result{
+		NoChanges:    true,
+		WorkspaceDir: "/workspace/tasks/acme-billing-widget/repo",
+		Branch:       "agent00-rename-the-acmecorp-billing-widget",
+	}
+	runCfg := config.Config{
+		Repos:        []string{"git@github.com:acme/billing.git"},
+		TargetSubdir: "services/acme-billing",
+		Prompt:       "rename the AcmeCorp billing widget owned by Dana Example",
+	}
+
+	for name, cfg := range map[string]config.Config{
+		"follow_up":  unexpectedNoChangesFollowUpRunConfig("local-1712345678-000002", result, runCfg, logRoot),
+		"escalation": escalatedNoChangesFollowUpRunConfig("local-1712345678-000003", result, runCfg, logRoot),
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertFollowUpPromptHidesCustomerDetails(t, cfg.Prompt)
+			if !strings.Contains(cfg.Prompt, "- request_id=local-1712345678-0000") {
+				t.Fatalf("Prompt dropped the agent_00-local request id: %q", cfg.Prompt)
+			}
+		})
+	}
+}
+
+// assertFollowUpPromptHidesCustomerDetails checks that a follow-up prompt, which
+// also becomes the agent_00 pull request body, carries none of the failed run's
+// customer-derived identifiers.
+func assertFollowUpPromptHidesCustomerDetails(t *testing.T, prompt string) {
+	t.Helper()
+
+	for _, unwanted := range []string{
+		"/workspace/tasks/acme-billing-widget/repo",
+		"agent00-rename-the-acmecorp-billing-widget",
+		"git@github.com:acme/billing.git",
+		"https://github.com/acme/billing/pull/42",
+		"services/acme-billing",
+		"rename the AcmeCorp billing widget owned by Dana Example",
+		"workspace_dir=",
+		"branch=",
+		"pr_url=",
+		"repos=",
+		"target_subdir=",
+	} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("Prompt leaked %q: %q", unwanted, prompt)
+		}
+	}
+	if !strings.Contains(prompt, failurefollowup.RedactedTaskPromptNotice) {
+		t.Fatalf("Prompt missing the redaction notice: %q", prompt)
 	}
 }
 
