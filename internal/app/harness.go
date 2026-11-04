@@ -5985,13 +5985,15 @@ func codexReportedFailure(res execx.Result) (bool, string) {
 	// Some Codex CLI/account model mismatches are printed as diagnostics while
 	// the process exits successfully. Surface this invocation failure instead
 	// of treating the resulting empty worktree as an agent no-op.
-	for _, output := range []string{res.Stdout, res.Stderr} {
-		for _, line := range splitOutputLines(output) {
-			trimmed := strings.TrimSpace(line)
-			lower := strings.ToLower(trimmed)
-			if strings.Contains(lower, "model is not supported when using codex with a chatgpt account") {
-				return true, trimmed
-			}
+	// Codex echoes prompts and tool output. Limit this check to its provider
+	// diagnostic shape on stderr, so source snippets that quote this message do
+	// not turn a successful agent run into a failure.
+	for _, line := range splitOutputLines(res.Stderr) {
+		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
+		if strings.HasPrefix(lower, "error:") &&
+			strings.Contains(lower, "model is not supported when using codex with a chatgpt account") {
+			return true, trimmed
 		}
 	}
 	if failed, detail := codexReportedFailureInOutput(res.Stdout, true); failed {
@@ -6126,6 +6128,12 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		}, "\n")))
 	}
 	if text == "" {
+		return false
+	}
+	// Missing validation tooling is non-fatal only when it is the sole
+	// problem. Do not suppress an agent's explicit statement that it cannot
+	// complete the requested work.
+	if strings.Contains(text, "cannot safely meet") {
 		return false
 	}
 
