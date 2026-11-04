@@ -1649,6 +1649,12 @@ func TestTaskStartSourceForSubmissionTable(t *testing.T) {
 			runCfg: config.Config{LibraryTaskName: "   "},
 			want:   "prompt",
 		},
+		{
+			name:   "GitHub issue metadata takes priority",
+			source: libraryScheduleSource,
+			runCfg: config.Config{GitHubIssue: &config.GitHubIssueConfig{}},
+			want:   "github_issues",
+		},
 		{name: "unknown source", source: "something_else", runCfg: config.Config{}, want: ""},
 		{name: "empty source", source: "", runCfg: config.Config{}, want: ""},
 		{

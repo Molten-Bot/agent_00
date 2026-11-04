@@ -1336,6 +1336,8 @@ func sourceGroupName(source string) string {
 		return "Library"
 	case "review":
 		return "Review"
+	case "github_issues":
+		return "GitHub Issues"
 	case "prompt":
 		return "Prompt"
 	default:
@@ -2857,6 +2859,8 @@ func normalizeTaskSource(source string) string {
 		return "review"
 	case "json", "raw":
 		return "json"
+	case "github_issues", "github_issue", "githubissues", "issue", "issues":
+		return "github_issues"
 	default:
 		return ""
 	}

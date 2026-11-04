@@ -2148,6 +2148,9 @@ func marshalRunConfigJSON(cfg config.Config) ([]byte, bool) {
 }
 
 func taskStartSourceForSubmission(source string, runCfg config.Config) string {
+	if runCfg.GitHubIssue != nil {
+		return "github_issues"
+	}
 	switch strings.TrimSpace(source) {
 	case reviewWatchSource, prReviewFeedbackSource:
 		return "review"

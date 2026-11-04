@@ -817,6 +817,7 @@ func TestDashboardSourceLegendStylesLiveInGlobalStylesheet(t *testing.T) {
 		".dashboard-source-legend-item-library .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-library);\n}",
 		".dashboard-source-legend-item-prompt .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-prompt);\n}",
 		".dashboard-source-legend-item-review .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-review);\n}",
+		".dashboard-source-legend-item-github_issues .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-github-issues);\n}",
 		".dashboard-d3-legend-icon-foreign {\n  color: var(--dashboard-chart-other);\n  overflow: visible;\n  pointer-events: none;\n}",
 		".dashboard-source-legend[hidden] {\n  display: none;\n}",
 	} {
