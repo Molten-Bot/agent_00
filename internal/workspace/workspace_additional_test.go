@@ -101,6 +101,16 @@ func TestManagerIsManagedRunDir(t *testing.T) {
 	if !m.IsManagedRunDir(filepath.Join(ramRun, "repo")) {
 		t.Fatalf("IsManagedRunDir(%q) = false, want true", filepath.Join(ramRun, "repo"))
 	}
+	fullRAM := m
+	fullRAM.CheckSpace = func(path string) error {
+		if path == "/ram-base" {
+			return os.ErrPermission
+		}
+		return nil
+	}
+	if !fullRAM.IsManagedRunDir(ramRun) {
+		t.Fatalf("IsManagedRunDir(%q) = false when RAM base is full, want true", ramRun)
+	}
 	if m.IsManagedRunDir(filepath.Join("/ram-base", "tasks-root")) {
 		t.Fatalf("IsManagedRunDir(%q) = true, want false", filepath.Join("/ram-base", "tasks-root"))
 	}
@@ -113,8 +123,8 @@ func TestManagerIsManagedRunDir(t *testing.T) {
 	if m.IsManagedRunDir(" ") {
 		t.Fatal("IsManagedRunDir(blank) = true, want false")
 	}
-	if IsManagedRunDir(ramRun) {
-		t.Fatalf("package IsManagedRunDir(%q) = true with default roots, want false", ramRun)
+	if !IsManagedRunDir(ramRun) {
+		t.Fatalf("package IsManagedRunDir(%q) = false with configured roots, want true", ramRun)
 	}
 	if looksLikeRunGUID("0123456789abcdef0123456789abcdeg") {
 		t.Fatal("looksLikeRunGUID(non-hex) = true, want false")

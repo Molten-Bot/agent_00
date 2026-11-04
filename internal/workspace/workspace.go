@@ -500,7 +500,13 @@ func (m Manager) IsManagedRunDir(path string) bool {
 		return false
 	}
 
-	for _, rootDir := range m.rootCandidates() {
+	// Check both configured roots instead of rootCandidates. The latter picks
+	// roots based on current free space; that decision can change after a run
+	// directory was created, which must not make an existing directory unmanaged.
+	for _, rootDir := range []string{
+		workspaceRootForBase(configuredRAMBase()),
+		workspaceRootForBase(configuredDiskBase()),
+	} {
 		rootDir = filepath.Clean(strings.TrimSpace(rootDir))
 		if rootDir == "" {
 			continue
