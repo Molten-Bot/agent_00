@@ -1473,24 +1473,16 @@ func unexpectedNoChangesFollowUpRepos(runCfg config.Config) []string {
 	return failureFollowUpRepos(app.Result{}, runCfg)
 }
 
-func unexpectedNoChangesFollowUpPrompt(logPaths []string, requestID string, result app.Result, runCfg config.Config) string {
-	const requiredPrompt = "Review the previous local task logs first. The prior run completed with no file changes and no pull request, which is unexpected for this task. Identify every root cause behind the no-change result, fix the underlying agent_00 application issue in this repository, validate locally where possible, and summarize the verified results. Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix agent_00 failure handling. Only return a no-op if you can cite concrete repository evidence that no agent_00 change is required; otherwise produce the smallest correct diff or return an explicit failure with blocker details."
+// unexpectedNoChangesFollowUpPrompt runs against agent_00, so it carries only
+// the agent_00-local request id. The prior run's workspace path, branch slug,
+// repository URLs, and target subdirectory describe the customer's task and
+// repository and stay out of the prompt and the pull request body.
+func unexpectedNoChangesFollowUpPrompt(logPaths []string, requestID string, _ app.Result, runCfg config.Config) string {
+	const requiredPrompt = "Review the previous local task logs first. The prior run completed with no file changes and no pull request, which is unexpected for this task. Identify every root cause behind the no-change result, fix the underlying agent_00 application issue in this repository, validate locally where possible, and summarize the verified results. The original task prompt is withheld and is not supplied here; do not reconstruct it, ask for it, or implement the product change it requested unless that change is required to fix agent_00 failure handling. Only return a no-op if you can cite concrete repository evidence that no agent_00 change is required; otherwise produce the smallest correct diff or return an explicit failure with blocker details."
 
 	var contextLines []string
 	if requestID = strings.TrimSpace(requestID); requestID != "" {
 		contextLines = append(contextLines, fmt.Sprintf("- request_id=%s", requestID))
-	}
-	if workspaceDir := strings.TrimSpace(result.WorkspaceDir); workspaceDir != "" {
-		contextLines = append(contextLines, fmt.Sprintf("- workspace_dir=%s", workspaceDir))
-	}
-	if branch := strings.TrimSpace(result.Branch); branch != "" {
-		contextLines = append(contextLines, fmt.Sprintf("- branch=%s", branch))
-	}
-	if repo := strings.Join(runCfg.RepoList(), ","); strings.TrimSpace(repo) != "" {
-		contextLines = append(contextLines, fmt.Sprintf("- repos=%s", repo))
-	}
-	if targetSubdir := strings.TrimSpace(runCfg.TargetSubdir); targetSubdir != "" {
-		contextLines = append(contextLines, fmt.Sprintf("- target_subdir=%s", targetSubdir))
 	}
 
 	var contextBlock strings.Builder
@@ -1498,12 +1490,11 @@ func unexpectedNoChangesFollowUpPrompt(logPaths []string, requestID string, resu
 		contextBlock.WriteString("Observed no-change context:\n")
 		contextBlock.WriteString(strings.Join(contextLines, "\n"))
 	}
-	if prompt := strings.TrimSpace(runCfg.Prompt); prompt != "" {
+	if notice := failurefollowup.RedactTaskPrompt(runCfg.Prompt); notice != "" {
 		if contextBlock.Len() > 0 {
 			contextBlock.WriteString("\n\n")
 		}
-		contextBlock.WriteString("Original task prompt:\n")
-		contextBlock.WriteString(prompt)
+		contextBlock.WriteString(notice)
 	}
 
 	return failurefollowup.ComposePrompt(
@@ -1536,24 +1527,15 @@ func escalatedNoChangesFollowUpRunConfig(
 	}
 }
 
-func escalatedNoChangesFollowUpPrompt(logPaths []string, requestID string, result app.Result, runCfg config.Config) string {
-	const requiredPrompt = "Review the previous local task logs first. The original task and the no-changes follow-up both completed without file changes or a pull request. For this escalation, fix the underlying agent_00 application issue in this repository. Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix agent_00 failure handling. Do not return another no-op unless you can cite exact file paths and concrete repository evidence proving no agent_00 change is required. If a real diff is blocked, return an explicit failure with the precise blocker details instead of another ambiguous no-op."
+// escalatedNoChangesFollowUpPrompt runs against agent_00 and follows the same
+// rule as unexpectedNoChangesFollowUpPrompt: only the agent_00-local request id
+// may describe the prior run.
+func escalatedNoChangesFollowUpPrompt(logPaths []string, requestID string, _ app.Result, runCfg config.Config) string {
+	const requiredPrompt = "Review the previous local task logs first. The original task and the no-changes follow-up both completed without file changes or a pull request. For this escalation, fix the underlying agent_00 application issue in this repository. The original task prompt is withheld and is not supplied here; do not reconstruct it, ask for it, or implement the product change it requested unless that change is required to fix agent_00 failure handling. Do not return another no-op unless you can cite exact file paths and concrete repository evidence proving no agent_00 change is required. If a real diff is blocked, return an explicit failure with the precise blocker details instead of another ambiguous no-op."
 
 	var contextLines []string
 	if requestID = strings.TrimSpace(requestID); requestID != "" {
 		contextLines = append(contextLines, fmt.Sprintf("- request_id=%s", requestID))
-	}
-	if workspaceDir := strings.TrimSpace(result.WorkspaceDir); workspaceDir != "" {
-		contextLines = append(contextLines, fmt.Sprintf("- workspace_dir=%s", workspaceDir))
-	}
-	if branch := strings.TrimSpace(result.Branch); branch != "" {
-		contextLines = append(contextLines, fmt.Sprintf("- branch=%s", branch))
-	}
-	if repo := strings.Join(runCfg.RepoList(), ","); strings.TrimSpace(repo) != "" {
-		contextLines = append(contextLines, fmt.Sprintf("- repos=%s", repo))
-	}
-	if targetSubdir := strings.TrimSpace(runCfg.TargetSubdir); targetSubdir != "" {
-		contextLines = append(contextLines, fmt.Sprintf("- target_subdir=%s", targetSubdir))
 	}
 
 	var contextBlock strings.Builder
@@ -1561,12 +1543,11 @@ func escalatedNoChangesFollowUpPrompt(logPaths []string, requestID string, resul
 		contextBlock.WriteString("Observed repeated no-change context:\n")
 		contextBlock.WriteString(strings.Join(contextLines, "\n"))
 	}
-	if prompt := strings.TrimSpace(runCfg.Prompt); prompt != "" {
+	if notice := failurefollowup.RedactTaskPrompt(runCfg.Prompt); notice != "" {
 		if contextBlock.Len() > 0 {
 			contextBlock.WriteString("\n\n")
 		}
-		contextBlock.WriteString("Original task prompt:\n")
-		contextBlock.WriteString(prompt)
+		contextBlock.WriteString(notice)
 	}
 
 	return failurefollowup.ComposePrompt(
@@ -1803,60 +1784,30 @@ func failureFollowUpPrompt(logPaths []string, failedResult app.Result, failedRun
 	)
 }
 
+// failureFollowUpFailureContext describes the failed run to a follow-up that
+// executes against agent_00. The failed run's workspace path, branch slug,
+// repository URLs, pull request URL, and target subdirectory are all derived
+// from the customer's task and repository, so none of them may appear here or
+// in the pull request body this prompt becomes. The failure error is kept for
+// diagnosis but commonly embeds those same identifiers, so it is routed
+// through failurefollowup.RedactFailureDetail first.
 func failureFollowUpFailureContext(failedResult app.Result, failedRunCfg config.Config) string {
 	lines := []string{
 		"Observed failure context:",
 		fmt.Sprintf("- exit_code=%d", failedResult.ExitCode),
 	}
 	if failedResult.Err != nil {
-		lines = append(lines, fmt.Sprintf("- error=%q", failedResult.Err.Error()))
+		if detail := failurefollowup.RedactFailureDetail(failedResult.Err.Error()); detail != "" {
+			lines = append(lines, fmt.Sprintf("- error=%q", detail))
+		}
 	}
-	if workspaceDir := strings.TrimSpace(failedResult.WorkspaceDir); workspaceDir != "" {
-		lines = append(lines, fmt.Sprintf("- workspace_dir=%s", workspaceDir))
-	}
-	if branch := strings.TrimSpace(failedResult.Branch); branch != "" {
-		lines = append(lines, fmt.Sprintf("- branch=%s", branch))
-	}
-	if prURL := strings.TrimSpace(failedResult.PRURL); prURL != "" {
-		lines = append(lines, fmt.Sprintf("- pr_url=%s", prURL))
-	}
-	if repos := failureFollowUpContextRepos(failedResult, failedRunCfg); len(repos) > 0 {
-		lines = append(lines, fmt.Sprintf("- repos=%s", strings.Join(repos, ",")))
-	}
-	if targetSubdir := strings.TrimSpace(failedRunCfg.TargetSubdir); targetSubdir != "" {
-		lines = append(lines, fmt.Sprintf("- target_subdir=%s", targetSubdir))
-	}
-	if prompt := strings.TrimSpace(failedRunCfg.Prompt); prompt != "" {
-		lines = append(lines, "Original task prompt:")
-		lines = append(lines, prompt)
+	if notice := failurefollowup.RedactTaskPrompt(failedRunCfg.Prompt); notice != "" {
+		lines = append(lines, "", notice)
 	}
 	if len(lines) == 1 {
 		return ""
 	}
 	return strings.Join(lines, "\n")
-}
-
-func failureFollowUpContextRepos(failedResult app.Result, failedRunCfg config.Config) []string {
-	var repos []string
-	seen := make(map[string]struct{})
-	appendRepo := func(repo string) {
-		repo = strings.TrimSpace(repo)
-		if repo == "" {
-			return
-		}
-		if _, ok := seen[repo]; ok {
-			return
-		}
-		seen[repo] = struct{}{}
-		repos = append(repos, repo)
-	}
-	for _, repo := range failedRunCfg.RepoList() {
-		appendRepo(repo)
-	}
-	for _, repoResult := range failedResult.RepoResults {
-		appendRepo(repoResult.RepoURL)
-	}
-	return repos
 }
 
 func existingPaths(paths []string) []string {

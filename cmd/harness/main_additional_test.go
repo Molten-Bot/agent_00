@@ -16,6 +16,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
@@ -432,7 +433,7 @@ func TestFailureFollowUpPromptDefaultWhenNoPaths(t *testing.T) {
 	if !strings.Contains(got, `"repos":["git@github.com:Molten-Bot/agent_00.git"],"targetSubdir":".","prompt":"`+failureFollowUpRequiredPrompt+`"`) {
 		t.Fatalf("prompt missing follow-up payload shape: %q", got)
 	}
-	if !strings.Contains(got, "Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix agent_00 failure handling.") {
+	if !strings.Contains(got, "The failed run's original task prompt is withheld and is not supplied here; do not reconstruct it, ask for it, or implement the product change it requested unless that change is required to fix agent_00 failure handling.") {
 		t.Fatalf("prompt missing failure follow-up scope boundary: %q", got)
 	}
 	if !strings.Contains(got, "Only return a no-op when the task is genuinely review/investigation-only") {
@@ -464,10 +465,60 @@ func TestFailureFollowUpPromptIncludesFailureContext(t *testing.T) {
 		"Observed failure context:",
 		"- exit_code=40",
 		`- error="clone: repository not found"`,
-		"- workspace_dir=/tmp/run-123",
-		"- branch=agent00-fix-clone",
-		"- pr_url=https://github.com/acme/repo/pull/17",
-		"- repos=git@github.com:acme/repo-a.git,git@github.com:acme/repo-b.git",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt missing %q: %q", want, got)
+		}
+	}
+
+	// The follow-up runs against agent_00, so everything derived from the
+	// failed run's own task and repository has to stay out of the prompt.
+	for _, unwanted := range []string{
+		"workspace_dir",
+		"pr_url",
+		"target_subdir",
+		"- repos=",
+		"/tmp/run-123",
+		"agent00-fix-clone",
+		"https://github.com/acme/repo/pull/17",
+		"git@github.com:acme/repo-a.git",
+		"git@github.com:acme/repo-b.git",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("prompt leaked failed-run context %q: %q", unwanted, got)
+		}
+	}
+}
+
+func TestFailureFollowUpPromptRedactsIdentifiersInsideFailureError(t *testing.T) {
+	t.Parallel()
+
+	got := failureFollowUpPrompt(
+		nil,
+		app.Result{
+			ExitCode: app.ExitClone,
+			Err: errors.New(
+				"clone git@github.com:acme/private-repo.git into /home/developer/git/acme/private-repo failed on branch agent00-fix-the-billing-widget: see https://github.com/acme/private-repo/pull/17",
+			),
+		},
+		config.Config{},
+	)
+
+	for _, unwanted := range []string{
+		"git@github.com:acme/private-repo.git",
+		"/home/developer/git/acme/private-repo",
+		"agent00-fix-the-billing-widget",
+		"https://github.com/acme/private-repo/pull/17",
+		"acme",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("prompt leaked %q from the failure error: %q", unwanted, got)
+		}
+	}
+	// The diagnostic wording around the identifiers still has to survive.
+	for _, want := range []string{
+		"- exit_code=40",
+		`- error="clone [redacted-url] into [redacted-path] failed on branch [redacted-branch]: see [redacted-url]"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prompt missing %q: %q", want, got)
@@ -922,21 +973,34 @@ func TestUnexpectedNoChangesFollowUpRunConfigTargetsHarnessAndAddsContext(t *tes
 	for _, want := range []string{
 		"Review the previous local task logs first.",
 		"fix the underlying agent_00 application issue in this repository",
-		"Treat the original task prompt as failure context only",
+		"The original task prompt is withheld and is not supplied here; do not reconstruct it, ask for it, or implement the product change it requested",
 		"Only return a no-op if you can cite concrete repository evidence",
 		expectedLogDir,
 		filepath.Join(expectedLogDir, logFileName),
 		"Observed no-change context:",
 		"- request_id=local-1712345678-000001",
-		"- workspace_dir=/tmp/run-123",
-		"- branch=release/2026.04-hotfix",
-		"- repos=git@github.com:acme/repo.git",
-		"- target_subdir=cmd/harness",
-		"Original task prompt:",
-		"fix the broken local no changes task handling",
+		failurefollowup.RedactedTaskPromptNotice,
 	} {
 		if !strings.Contains(cfg.Prompt, want) {
 			t.Fatalf("Prompt missing %q: %q", want, cfg.Prompt)
+		}
+	}
+	if strings.Contains(cfg.Prompt, "fix the broken local no changes task handling") {
+		t.Fatalf("Prompt leaked the original task prompt: %q", cfg.Prompt)
+	}
+	// The follow-up runs against agent_00, so the prior run's customer-derived
+	// context stays out of the prompt and the pull request body it becomes.
+	for _, unwanted := range []string{
+		"workspace_dir",
+		"- repos=",
+		"target_subdir",
+		"/tmp/run-123",
+		"release/2026.04-hotfix",
+		"git@github.com:acme/repo.git",
+		"cmd/harness",
+	} {
+		if strings.Contains(cfg.Prompt, unwanted) {
+			t.Fatalf("Prompt leaked prior-run context %q: %q", unwanted, cfg.Prompt)
 		}
 	}
 	if strings.Contains(cfg.Prompt, filepath.Join(logRoot, logFileName)) {
@@ -965,7 +1029,7 @@ func TestUnexpectedNoChangesFollowUpRunConfigForcesRemoteDefaultBranch(t *testin
 	}
 }
 
-func TestUnexpectedNoChangesFollowUpRunConfigUsesHarnessRepoAndKeepsOriginalReposInPrompt(t *testing.T) {
+func TestUnexpectedNoChangesFollowUpRunConfigUsesHarnessRepoAndOmitsOriginalReposFromPrompt(t *testing.T) {
 	t.Parallel()
 
 	runCfg := config.Config{
@@ -985,13 +1049,13 @@ func TestUnexpectedNoChangesFollowUpRunConfigUsesHarnessRepoAndKeepsOriginalRepo
 	if got, want := cfg.Repos, []string{config.DefaultRepositoryURL}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Repos = %v, want %v", got, want)
 	}
-	for _, want := range []string{
+	for _, unwanted := range []string{
 		"- repos=",
 		"git@github.com:acme/repo-a.git",
 		"git@github.com:acme/repo-b.git",
 	} {
-		if !strings.Contains(cfg.Prompt, want) {
-			t.Fatalf("Prompt missing original repo context %q: %q", want, cfg.Prompt)
+		if strings.Contains(cfg.Prompt, unwanted) {
+			t.Fatalf("Prompt leaked the original repository %q: %q", unwanted, cfg.Prompt)
 		}
 	}
 }
@@ -1069,16 +1133,85 @@ func TestEscalatedNoChangesFollowUpRunConfigAddsStricterPrompt(t *testing.T) {
 	for _, want := range []string{
 		"The original task and the no-changes follow-up both completed without file changes or a pull request.",
 		"fix the underlying agent_00 application issue in this repository",
-		"do not implement that requested product change here unless it is required to fix agent_00 failure handling",
+		"do not reconstruct it, ask for it, or implement the product change it requested unless that change is required to fix agent_00 failure handling",
 		"Do not return another no-op unless you can cite exact file paths",
 		"Observed repeated no-change context:",
-		"- target_subdir=internal/web",
-		"Original task prompt:",
-		"change the website to pink",
+		"- request_id=local-1712345678-000001",
+		failurefollowup.RedactedTaskPromptNotice,
 	} {
 		if !strings.Contains(cfg.Prompt, want) {
 			t.Fatalf("Prompt missing %q: %q", want, cfg.Prompt)
 		}
+	}
+	if strings.Contains(cfg.Prompt, "change the website to pink") {
+		t.Fatalf("Prompt leaked the original task prompt: %q", cfg.Prompt)
+	}
+	for _, unwanted := range []string{
+		"target_subdir",
+		"internal/web",
+		"- repos=",
+		"git@github.com:acme/repo.git",
+	} {
+		if strings.Contains(cfg.Prompt, unwanted) {
+			t.Fatalf("Prompt leaked prior-run context %q: %q", unwanted, cfg.Prompt)
+		}
+	}
+}
+
+func TestFollowUpPromptsRedactOriginalTaskPrompt(t *testing.T) {
+	t.Parallel()
+
+	const originalPrompt = "rename the AcmeCorp billing widget owned by Dana Example"
+	runCfg := config.Config{
+		Repos:        []string{"git@github.com:acme/repo.git"},
+		TargetSubdir: "internal/web",
+		Prompt:       originalPrompt,
+	}
+	result := app.Result{NoChanges: true, Branch: "agent00-rename-the-acmecorp-billing-widget"}
+
+	for _, tc := range []struct {
+		name   string
+		prompt string
+	}{
+		{"failure follow-up", failureFollowUpPrompt(nil, app.Result{Err: errors.New("boom")}, runCfg)},
+		{"no-changes follow-up", unexpectedNoChangesFollowUpPrompt(nil, "local-1712345678-000001", result, runCfg)},
+		{"no-changes escalation", escalatedNoChangesFollowUpPrompt(nil, "local-1712345678-000001", result, runCfg)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if strings.Contains(tc.prompt, originalPrompt) {
+				t.Fatalf("prompt leaked the original task prompt: %q", tc.prompt)
+			}
+			if !strings.Contains(tc.prompt, failurefollowup.RedactedTaskPromptNotice) {
+				t.Fatalf("prompt missing redaction notice: %q", tc.prompt)
+			}
+			if !promptRequestsRepositoryChange(tc.prompt) {
+				t.Fatalf("redacted follow-up prompt classified as read-only: %q", tc.prompt)
+			}
+		})
+	}
+}
+
+func TestFollowUpPromptsOmitRedactionNoticeWithoutOriginalPrompt(t *testing.T) {
+	t.Parallel()
+
+	runCfg := config.Config{Repos: []string{"git@github.com:acme/repo.git"}}
+	result := app.Result{NoChanges: true}
+
+	for _, tc := range []struct {
+		name   string
+		prompt string
+	}{
+		{"failure follow-up", failureFollowUpPrompt(nil, app.Result{Err: errors.New("boom")}, runCfg)},
+		{"no-changes follow-up", unexpectedNoChangesFollowUpPrompt(nil, "local-1712345678-000001", result, runCfg)},
+		{"no-changes escalation", escalatedNoChangesFollowUpPrompt(nil, "local-1712345678-000001", result, runCfg)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if strings.Contains(tc.prompt, failurefollowup.RedactedTaskPromptNotice) {
+				t.Fatalf("prompt added a redaction notice without an original prompt: %q", tc.prompt)
+			}
+		})
 	}
 }
 

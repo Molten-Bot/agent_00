@@ -112,12 +112,165 @@ func TestRequiredPromptScopesFailureFollowUpToAgent00(t *testing.T) {
 
 	for _, want := range []string{
 		"fix the underlying agent_00 application issues in this repository",
-		"Treat the original task prompt as failure context only",
-		"do not implement that requested product change here unless it is required to fix agent_00 failure handling",
+		"The failed run's original task prompt is withheld and is not supplied here",
+		"do not reconstruct it, ask for it, or implement the product change it requested unless that change is required to fix agent_00 failure handling",
 	} {
 		if !strings.Contains(RequiredPrompt, want) {
 			t.Fatalf("RequiredPrompt missing %q: %q", want, RequiredPrompt)
 		}
+	}
+}
+
+func TestRequiredPromptDoesNotTreatTheWithheldPromptAsSuppliedContext(t *testing.T) {
+	t.Parallel()
+
+	// The failed run's prompt is redacted before it reaches a follow-up, so the
+	// instruction must not tell the agent to read it as context.
+	for _, unwanted := range []string{
+		"Treat the original task prompt as failure context",
+		"as failure context only",
+	} {
+		if strings.Contains(RequiredPrompt, unwanted) {
+			t.Fatalf("RequiredPrompt still points at the withheld prompt %q: %q", unwanted, RequiredPrompt)
+		}
+	}
+}
+
+func TestRedactTaskPromptNeverReturnsTheOriginalPrompt(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		prompt string
+		want   string
+	}{
+		{"empty", "", ""},
+		{"whitespace", "   \n\t ", ""},
+		{"customer prompt", "rename the AcmeCorp billing widget owned by Dana Example", RedactedTaskPromptNotice},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := RedactTaskPrompt(tc.prompt); got != tc.want {
+				t.Fatalf("RedactTaskPrompt(%q) = %q, want %q", tc.prompt, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRedactedTaskPromptNoticeExplainsWithheldPrompt(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []string{
+		"redacted by the harness",
+		"execute against the agent_00 repository",
+		"private repository, personnel, or source details",
+	} {
+		if !strings.Contains(RedactedTaskPromptNotice, want) {
+			t.Fatalf("RedactedTaskPromptNotice missing %q: %q", want, RedactedTaskPromptNotice)
+		}
+	}
+}
+
+func TestRedactedTaskPromptNoticeBarsCopyingLogDetailsIntoAgent00Output(t *testing.T) {
+	t.Parallel()
+
+	// The notice sends the agent to the failed run's logs, which carry the same
+	// customer details the prompt redaction withholds.
+	for _, want := range []string{
+		"Those logs can contain the same private details",
+		"never copy customer repository names, URLs, branch names, file paths, personnel, or source snippets from them",
+		"commit messages, pull request titles or bodies, or comments",
+	} {
+		if !strings.Contains(RedactedTaskPromptNotice, want) {
+			t.Fatalf("RedactedTaskPromptNotice missing log-detail guardrail %q: %q", want, RedactedTaskPromptNotice)
+		}
+	}
+}
+
+func TestRedactFailureDetailReplacesCustomerIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		detail string
+		want   string
+	}{
+		{"empty", "", ""},
+		{"whitespace", "   \n\t ", ""},
+		{
+			"ssh remote",
+			"clone git@github.com:acme/private-repo.git failed",
+			"clone " + RedactedURLPlaceholder + " failed",
+		},
+		{
+			"owner-less ssh remote",
+			"clone git@git.acme.example:private-repo.git failed",
+			"clone " + RedactedURLPlaceholder + " failed",
+		},
+		{
+			"https remote",
+			"fetch https://github.com/acme/private-repo.git returned error: 403",
+			"fetch " + RedactedURLPlaceholder + " returned error: 403",
+		},
+		{
+			"pull request url",
+			"pr create: https://github.com/acme/private-repo/pull/17 already exists",
+			"pr create: " + RedactedURLPlaceholder + " already exists",
+		},
+		{
+			"workspace path",
+			"agent exited in /home/developer/git/acme/private-repo",
+			"agent exited in " + RedactedPathPlaceholder,
+		},
+		{
+			"bare repo reference",
+			"remote: Permission to acme/private-repo.git denied to someone.",
+			"remote: Permission to " + RedactedURLPlaceholder + " denied to someone.",
+		},
+		{
+			"prompt derived branch",
+			"push rejected for agent00-rename-the-billing-widget",
+			"push rejected for " + RedactedBranchPlaceholder,
+		},
+		{
+			"diagnostic wording survives",
+			"exit status 1: fatal: could not read from remote repository",
+			"exit status 1: fatal: could not read from remote repository",
+		},
+		{
+			"relative agent_00 path survives",
+			"build failed in cmd/harness/main.go",
+			"build failed in cmd/harness/main.go",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := RedactFailureDetail(tc.detail); got != tc.want {
+				t.Fatalf("RedactFailureDetail(%q) = %q, want %q", tc.detail, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRedactFailureDetailRedactsEveryIdentifierInACompositeError(t *testing.T) {
+	t.Parallel()
+
+	got := RedactFailureDetail(
+		"clone git@github.com:acme/private-repo.git into /home/developer/git/acme/private-repo " +
+			"failed on branch agent00-fix-the-billing-widget: see https://github.com/acme/private-repo/pull/17",
+	)
+
+	for _, unwanted := range []string{"acme", "private-repo", "developer", "billing-widget", "github.com"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("RedactFailureDetail kept %q: %q", unwanted, got)
+		}
+	}
+	want := "clone " + RedactedURLPlaceholder +
+		" into " + RedactedPathPlaceholder +
+		" failed on branch " + RedactedBranchPlaceholder +
+		": see " + RedactedURLPlaceholder
+	if got != want {
+		t.Fatalf("RedactFailureDetail() = %q, want %q", got, want)
 	}
 }
 

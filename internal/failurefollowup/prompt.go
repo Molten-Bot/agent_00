@@ -3,13 +3,22 @@ package failurefollowup
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/config"
 )
 
-const RequiredPrompt = "Review the failing log paths first, identify every root cause behind the failed task, fix the underlying agent_00 application issues in this repository, validate locally where possible, and summarize the verified results. Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix agent_00 failure handling."
+const RequiredPrompt = "Review the failing log paths first, identify every root cause behind the failed task, fix the underlying agent_00 application issues in this repository, validate locally where possible, and summarize the verified results. The failed run's original task prompt is withheld and is not supplied here; do not reconstruct it, ask for it, or implement the product change it requested unless that change is required to fix agent_00 failure handling."
+
+// RedactedTaskPromptNotice stands in for the failed run's task prompt inside
+// follow-up context blocks. Follow-up runs execute against the agent_00
+// repository, so prompt text that can name a customer's repositories, people,
+// or source code must never be copied into them. The failing logs the notice
+// points at can still carry those details, so it also bars copying them into
+// anything this run leaves behind.
+const RedactedTaskPromptNotice = "Task prompt: redacted by the harness. Follow-up runs execute against the agent_00 repository, so the failed run's prompt text is withheld because it can contain private repository, personnel, or source details. Diagnose from the failure context and the failing log paths above. Those logs can contain the same private details: use them only for diagnosis, and never copy customer repository names, URLs, branch names, file paths, personnel, or source snippets from them into agent_00 code, tests, docs, commit messages, pull request titles or bodies, or comments."
 
 const FollowUpRepositoryURL = config.DefaultRepositoryURL
 
@@ -116,6 +125,62 @@ func WithFollowUpContract(base string) string {
 {"repos":["%s"],"targetSubdir":".","prompt":"%s"}`, FollowUpRepositoryURL, RequiredPrompt)
 	}
 	return WithExecutionContract(base)
+}
+
+// RedactTaskPrompt returns the notice that replaces a failed run's task prompt
+// in follow-up context, or an empty string when that run carried no prompt.
+func RedactTaskPrompt(prompt string) string {
+	if strings.TrimSpace(prompt) == "" {
+		return ""
+	}
+	return RedactedTaskPromptNotice
+}
+
+// Placeholders substituted for customer-derived identifiers by
+// RedactFailureDetail.
+const (
+	RedactedURLPlaceholder    = "[redacted-url]"
+	RedactedPathPlaceholder   = "[redacted-path]"
+	RedactedBranchPlaceholder = "[redacted-branch]"
+)
+
+var (
+	// Clone, remote, and pull request links.
+	schemeURLPattern = regexp.MustCompile(`(?i)\b(?:https?|ssh|git|file)://[^\s"'<>]+`)
+
+	// SCP-style git remotes such as git@github.com:acme/repo.git, including the
+	// owner-less git@host:repo.git form.
+	scpRemotePattern = regexp.MustCompile(`[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._/-]+`)
+
+	// Workspace, clone, and log directories. The leading group keeps relative
+	// agent_00 paths such as cmd/harness/main.go intact.
+	absolutePathPattern = regexp.MustCompile(`(\A|[^A-Za-z0-9._@%+-])((?:/[A-Za-z0-9._@%+-]+){2,}/?)`)
+
+	// Bare owner/repo references left by git errors such as
+	// "Permission to acme/repo.git denied to someone".
+	repoReferencePattern = regexp.MustCompile(`(?i)\b[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git\b`)
+
+	// Prompt-derived branch slugs; see slug.BranchName.
+	branchSlugPattern = regexp.MustCompile(`(?i)\bagent00-[A-Za-z0-9._-]+`)
+)
+
+// RedactFailureDetail strips customer-derived identifiers out of a failed run's
+// error text so a follow-up that executes against agent_00 can quote it.
+// Repository URLs, pull request URLs, absolute filesystem paths, and
+// prompt-derived branch slugs all name the customer's repository or task, so
+// each is replaced with a placeholder while the surrounding diagnostic wording
+// is preserved.
+func RedactFailureDetail(detail string) string {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return ""
+	}
+	detail = schemeURLPattern.ReplaceAllString(detail, RedactedURLPlaceholder)
+	detail = scpRemotePattern.ReplaceAllString(detail, RedactedURLPlaceholder)
+	detail = absolutePathPattern.ReplaceAllString(detail, "${1}"+RedactedPathPlaceholder)
+	detail = repoReferencePattern.ReplaceAllString(detail, RedactedURLPlaceholder)
+	detail = branchSlugPattern.ReplaceAllString(detail, RedactedBranchPlaceholder)
+	return strings.TrimSpace(detail)
 }
 
 func ComposePrompt(requiredPrompt string, logPaths, fallbackLogPaths []string, noPathGuidance, contextBlock string) string {
