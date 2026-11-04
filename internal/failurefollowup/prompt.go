@@ -11,6 +11,12 @@ import (
 
 const RequiredPrompt = "Review the failing log paths first, identify every root cause behind the failed task, fix the underlying agent_00 application issues in this repository, validate locally where possible, and summarize the verified results. Treat the original task prompt as failure context only; do not implement that requested product change here unless it is required to fix agent_00 failure handling."
 
+// RedactedTaskPromptNotice stands in for the failed run's task prompt inside
+// follow-up context blocks. Follow-up runs execute against the agent_00
+// repository, so prompt text that can name a customer's repositories, people,
+// or source code must never be copied into them.
+const RedactedTaskPromptNotice = "Task prompt: redacted by the harness. Follow-up runs execute against the agent_00 repository, so the failed run's prompt text is withheld because it can contain private repository, personnel, or source details. Diagnose from the failure context and the failing log paths above."
+
 const FollowUpRepositoryURL = config.DefaultRepositoryURL
 
 const FailureResponseInstruction = "When failures occur, send a response back to the calling agent that clearly states failure and includes the error details. Use explicit `Failure:` and `Error details:` fields."
@@ -116,6 +122,15 @@ func WithFollowUpContract(base string) string {
 {"repos":["%s"],"targetSubdir":".","prompt":"%s"}`, FollowUpRepositoryURL, RequiredPrompt)
 	}
 	return WithExecutionContract(base)
+}
+
+// RedactTaskPrompt returns the notice that replaces a failed run's task prompt
+// in follow-up context, or an empty string when that run carried no prompt.
+func RedactTaskPrompt(prompt string) string {
+	if strings.TrimSpace(prompt) == "" {
+		return ""
+	}
+	return RedactedTaskPromptNotice
 }
 
 func ComposePrompt(requiredPrompt string, logPaths, fallbackLogPaths []string, noPathGuidance, contextBlock string) string {

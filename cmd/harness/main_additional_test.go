@@ -16,6 +16,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
@@ -932,12 +933,14 @@ func TestUnexpectedNoChangesFollowUpRunConfigTargetsHarnessAndAddsContext(t *tes
 		"- branch=release/2026.04-hotfix",
 		"- repos=git@github.com:acme/repo.git",
 		"- target_subdir=cmd/harness",
-		"Original task prompt:",
-		"fix the broken local no changes task handling",
+		failurefollowup.RedactedTaskPromptNotice,
 	} {
 		if !strings.Contains(cfg.Prompt, want) {
 			t.Fatalf("Prompt missing %q: %q", want, cfg.Prompt)
 		}
+	}
+	if strings.Contains(cfg.Prompt, "fix the broken local no changes task handling") {
+		t.Fatalf("Prompt leaked the original task prompt: %q", cfg.Prompt)
 	}
 	if strings.Contains(cfg.Prompt, filepath.Join(logRoot, logFileName)) {
 		t.Fatalf("Prompt should exclude aggregate terminal log path to avoid recursive follow-up reads: %q", cfg.Prompt)
@@ -1073,12 +1076,71 @@ func TestEscalatedNoChangesFollowUpRunConfigAddsStricterPrompt(t *testing.T) {
 		"Do not return another no-op unless you can cite exact file paths",
 		"Observed repeated no-change context:",
 		"- target_subdir=internal/web",
-		"Original task prompt:",
-		"change the website to pink",
+		failurefollowup.RedactedTaskPromptNotice,
 	} {
 		if !strings.Contains(cfg.Prompt, want) {
 			t.Fatalf("Prompt missing %q: %q", want, cfg.Prompt)
 		}
+	}
+	if strings.Contains(cfg.Prompt, "change the website to pink") {
+		t.Fatalf("Prompt leaked the original task prompt: %q", cfg.Prompt)
+	}
+}
+
+func TestFollowUpPromptsRedactOriginalTaskPrompt(t *testing.T) {
+	t.Parallel()
+
+	const originalPrompt = "rename the AcmeCorp billing widget owned by Dana Example"
+	runCfg := config.Config{
+		Repos:        []string{"git@github.com:acme/repo.git"},
+		TargetSubdir: "internal/web",
+		Prompt:       originalPrompt,
+	}
+	result := app.Result{NoChanges: true, Branch: "agent00-rename-the-acmecorp-billing-widget"}
+
+	for _, tc := range []struct {
+		name   string
+		prompt string
+	}{
+		{"failure follow-up", failureFollowUpPrompt(nil, app.Result{Err: errors.New("boom")}, runCfg)},
+		{"no-changes follow-up", unexpectedNoChangesFollowUpPrompt(nil, "local-1712345678-000001", result, runCfg)},
+		{"no-changes escalation", escalatedNoChangesFollowUpPrompt(nil, "local-1712345678-000001", result, runCfg)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if strings.Contains(tc.prompt, originalPrompt) {
+				t.Fatalf("prompt leaked the original task prompt: %q", tc.prompt)
+			}
+			if !strings.Contains(tc.prompt, failurefollowup.RedactedTaskPromptNotice) {
+				t.Fatalf("prompt missing redaction notice: %q", tc.prompt)
+			}
+			if !promptRequestsRepositoryChange(tc.prompt) {
+				t.Fatalf("redacted follow-up prompt classified as read-only: %q", tc.prompt)
+			}
+		})
+	}
+}
+
+func TestFollowUpPromptsOmitRedactionNoticeWithoutOriginalPrompt(t *testing.T) {
+	t.Parallel()
+
+	runCfg := config.Config{Repos: []string{"git@github.com:acme/repo.git"}}
+	result := app.Result{NoChanges: true}
+
+	for _, tc := range []struct {
+		name   string
+		prompt string
+	}{
+		{"failure follow-up", failureFollowUpPrompt(nil, app.Result{Err: errors.New("boom")}, runCfg)},
+		{"no-changes follow-up", unexpectedNoChangesFollowUpPrompt(nil, "local-1712345678-000001", result, runCfg)},
+		{"no-changes escalation", escalatedNoChangesFollowUpPrompt(nil, "local-1712345678-000001", result, runCfg)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if strings.Contains(tc.prompt, failurefollowup.RedactedTaskPromptNotice) {
+				t.Fatalf("prompt added a redaction notice without an original prompt: %q", tc.prompt)
+			}
+		})
 	}
 }
 

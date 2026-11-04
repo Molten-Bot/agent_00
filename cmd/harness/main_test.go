@@ -15,6 +15,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
@@ -526,12 +527,14 @@ func TestFailureFollowUpRunConfigForcesRemoteDefaultBranchAndRootTarget(t *testi
 	}
 	for _, want := range []string{
 		"- target_subdir=internal/web",
-		"Original task prompt:",
-		"add slight padding between prompt and lower items",
+		failurefollowup.RedactedTaskPromptNotice,
 	} {
 		if !strings.Contains(cfg.Prompt, want) {
 			t.Fatalf("Prompt missing %q: %q", want, cfg.Prompt)
 		}
+	}
+	if strings.Contains(cfg.Prompt, "add slight padding between prompt and lower items") {
+		t.Fatalf("Prompt leaked the original task prompt: %q", cfg.Prompt)
 	}
 }
 

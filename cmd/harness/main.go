@@ -1498,12 +1498,11 @@ func unexpectedNoChangesFollowUpPrompt(logPaths []string, requestID string, resu
 		contextBlock.WriteString("Observed no-change context:\n")
 		contextBlock.WriteString(strings.Join(contextLines, "\n"))
 	}
-	if prompt := strings.TrimSpace(runCfg.Prompt); prompt != "" {
+	if notice := failurefollowup.RedactTaskPrompt(runCfg.Prompt); notice != "" {
 		if contextBlock.Len() > 0 {
 			contextBlock.WriteString("\n\n")
 		}
-		contextBlock.WriteString("Original task prompt:\n")
-		contextBlock.WriteString(prompt)
+		contextBlock.WriteString(notice)
 	}
 
 	return failurefollowup.ComposePrompt(
@@ -1561,12 +1560,11 @@ func escalatedNoChangesFollowUpPrompt(logPaths []string, requestID string, resul
 		contextBlock.WriteString("Observed repeated no-change context:\n")
 		contextBlock.WriteString(strings.Join(contextLines, "\n"))
 	}
-	if prompt := strings.TrimSpace(runCfg.Prompt); prompt != "" {
+	if notice := failurefollowup.RedactTaskPrompt(runCfg.Prompt); notice != "" {
 		if contextBlock.Len() > 0 {
 			contextBlock.WriteString("\n\n")
 		}
-		contextBlock.WriteString("Original task prompt:\n")
-		contextBlock.WriteString(prompt)
+		contextBlock.WriteString(notice)
 	}
 
 	return failurefollowup.ComposePrompt(
@@ -1826,9 +1824,8 @@ func failureFollowUpFailureContext(failedResult app.Result, failedRunCfg config.
 	if targetSubdir := strings.TrimSpace(failedRunCfg.TargetSubdir); targetSubdir != "" {
 		lines = append(lines, fmt.Sprintf("- target_subdir=%s", targetSubdir))
 	}
-	if prompt := strings.TrimSpace(failedRunCfg.Prompt); prompt != "" {
-		lines = append(lines, "Original task prompt:")
-		lines = append(lines, prompt)
+	if notice := failurefollowup.RedactTaskPrompt(failedRunCfg.Prompt); notice != "" {
+		lines = append(lines, "", notice)
 	}
 	if len(lines) == 1 {
 		return ""

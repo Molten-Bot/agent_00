@@ -121,6 +121,41 @@ func TestRequiredPromptScopesFailureFollowUpToAgent00(t *testing.T) {
 	}
 }
 
+func TestRedactTaskPromptNeverReturnsTheOriginalPrompt(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		prompt string
+		want   string
+	}{
+		{"empty", "", ""},
+		{"whitespace", "   \n\t ", ""},
+		{"customer prompt", "rename the AcmeCorp billing widget owned by Dana Example", RedactedTaskPromptNotice},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := RedactTaskPrompt(tc.prompt); got != tc.want {
+				t.Fatalf("RedactTaskPrompt(%q) = %q, want %q", tc.prompt, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRedactedTaskPromptNoticeExplainsWithheldPrompt(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []string{
+		"redacted by the harness",
+		"execute against the agent_00 repository",
+		"private repository, personnel, or source details",
+	} {
+		if !strings.Contains(RedactedTaskPromptNotice, want) {
+			t.Fatalf("RedactedTaskPromptNotice missing %q: %q", want, RedactedTaskPromptNotice)
+		}
+	}
+}
+
 func TestComposePromptUsesFallbackPathsAndContract(t *testing.T) {
 	t.Parallel()
 
