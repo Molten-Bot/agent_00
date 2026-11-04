@@ -9193,6 +9193,7 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 .github-issues-list-panel,
 .github-issue-detail {
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 

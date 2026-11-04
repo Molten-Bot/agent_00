@@ -1321,6 +1321,9 @@ func TestStudioStylesKeepPromptActionsVisible(t *testing.T) {
 	if !strings.Contains(css, ".prompt-actions-end {\n  display: flex;\n  align-items: center;\n  justify-content: flex-end;\n  gap: 10px;\n  margin-left: auto;\n  flex: 0 0 auto;\n}") {
 		t.Fatalf("expected prompt actions to right-align Clear and Run")
 	}
+	if !strings.Contains(css, ".github-issues-list-panel,\n.github-issue-detail {\n  min-width: 0;\n  min-height: 0;\n  overflow: hidden;\n}") {
+		t.Fatalf("expected issue panels to shrink inside the shared Studio grid so the task controls stay at the detail bottom")
+	}
 	if !strings.Contains(css, ".prompt-action-paste {\n  display: flex;\n  align-items: center;\n  flex: 1 1 auto;\n  width: 100%;\n  max-width: 100%;") {
 		t.Fatalf("expected screenshot paste target to fill the left action group")
 	}
