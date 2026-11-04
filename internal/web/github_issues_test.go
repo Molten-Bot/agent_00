@@ -90,6 +90,31 @@ func TestGitHubLabelsListsUniqueLabelsAcrossAccessibleRepositories(t *testing.T)
 	}
 }
 
+func TestGitHubLabelsReportsFailedRepositoryQuery(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if strings.Contains(strings.Join(cmd.Args, " "), "acme/failing") {
+			return execx.Result{}, errors.New("GitHub API unavailable")
+		}
+		return execx.Result{Stdout: `[{"name":"bug"}]`}, nil
+	}), true)
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{{FullName: "acme/working"}, {FullName: "acme/failing"}}, nil
+	}
+
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/labels", nil))
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"ok":false`) || !strings.Contains(response.Body.String(), "list GitHub labels for acme/failing: GitHub API unavailable") {
+		t.Fatalf("response = %s, want failed repository query error", response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), `"labels"`) {
+		t.Fatalf("response = %s, must not return partial labels", response.Body.String())
+	}
+}
+
 func TestGitHubIssueAutoStartRequiresEverySelectedLabel(t *testing.T) {
 	t.Parallel()
 	issue := GitHubIssue{Labels: []GitHubIssueLabel{{Name: "bug"}, {Name: "priority"}}}

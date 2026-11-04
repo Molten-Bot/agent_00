@@ -68,11 +68,13 @@ func (s Server) handleGitHubLabels(w http.ResponseWriter, r *http.Request) {
 		}
 		result, err := s.GitHubIssueRunner.Run(r.Context(), execx.Command{Name: "gh", Args: []string{"label", "list", "--repo", name, "--limit", "1000", "--json", "name"}})
 		if err != nil {
-			continue
+			writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("list GitHub labels for %s: %v", name, err)})
+			return
 		}
 		var entries []GitHubIssueLabel
-		if json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &entries) != nil {
-			continue
+		if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &entries); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("decode GitHub labels for %s: %v", name, err)})
+			return
 		}
 		for _, entry := range entries {
 			label := strings.TrimSpace(entry.Name)
