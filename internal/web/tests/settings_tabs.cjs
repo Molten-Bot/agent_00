@@ -285,7 +285,7 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
   });
 
   assert.notEqual(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
-  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=9');
+  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=10');
   await page.waitForFunction(() => document.querySelector('.github-issue-empty-state h2')?.textContent === 'No repositories available');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No repositories available');
   await page.locator('#github-issues-dock-link').click();
@@ -458,9 +458,9 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('github-issue-link-mode-updated', { detail: { mode: 'reference' } })));
   assert.match(await page.locator('.github-issue-task-heading').textContent(), /reference #17/);
 
-  const issueEditButton = page.getByRole('button', { name: 'Edit prompt first' });
   const issueStartButton = page.getByRole('button', { name: 'Start task' });
-  assert.equal(await issueEditButton.evaluate(button => button.classList.contains('prompt-action-button')), true);
+  assert.equal(await page.getByRole('button', { name: 'Edit prompt first' }).count(), 0);
+  assert.equal(await page.locator('.github-issue-prompt').count(), 0);
   assert.equal(await issueStartButton.evaluate(button => button.classList.contains('prompt-submit')), true);
   assert.equal(await issueStartButton.locator('.prompt-action-icon').count(), 1);
   const readPromptButtonStyle = button => button.evaluate(node => {
@@ -474,7 +474,10 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   assert.equal(submitted.githubIssue.repository, 'Molten-Bot/agent_00');
   assert.equal(submitted.githubIssue.number, 17);
   assert.equal(submitted.githubIssue.linkMode, 'reference');
+  assert.match(submitted.prompt, /#17: Add issue browser/);
+  assert.match(submitted.prompt, /Implement this issue/);
   assert.match(submitted.prompt, /Please include retry coverage/);
+  assert.doesNotMatch(submitted.prompt, /Implement GitHub issue/);
 });
 
 test('selecting an issue highlights its row and breathes a loader while details load', async t => {
