@@ -589,8 +589,8 @@
     const mode = String(event.detail?.mode || "reference").trim().toLowerCase();
     githubIssueLinkMode = mode === "close" ? "close" : "reference";
     if (selectedIssue) {
-      const note = detail.querySelector(".github-issue-link-mode-note");
-      if (note) note.textContent = taskLinkModeDescription(selectedIssue);
+      const status = detail.querySelector(".github-issue-task-status");
+      if (status) status.textContent = taskLinkModeDescription(selectedIssue);
     }
   });
   let initialization = null;
