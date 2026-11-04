@@ -561,6 +561,7 @@ func runServer(args []string) int {
 					}
 				case "completed":
 				}
+				cleanupTaskWorkspaceOnCompletion(requestID, outcome.Result, daemonLogger)
 				return
 			}
 		}(requestID, runCfg, activeCfg, dedupeKey, source, allowFailureFollowUp, runCtx, cancelRun, taskHandle)
@@ -1284,6 +1285,25 @@ func runLocalTask(
 		countChangedRepos(res.RepoResults),
 	)
 	return localTaskOutcome{State: "completed", Result: res}
+}
+
+// cleanupTaskWorkspaceOnCompletion releases managed task workspaces after the
+// task and any failure-follow-up submissions have reached a terminal result.
+// Task logs are stored separately and remain available for diagnosis/reruns.
+func cleanupTaskWorkspaceOnCompletion(requestID string, result app.Result, logf func(string, ...any)) {
+	workspaceDir := strings.TrimSpace(result.WorkspaceDir)
+	if workspaceDir == "" {
+		return
+	}
+	removed, err := removeManagedWorkspaceDir(workspaceDir)
+	switch {
+	case err != nil:
+		logf("task status=warn action=task_completion_workspace_cleanup request_id=%s workspace_dir=%s err=%q", requestID, workspaceDir, err)
+	case removed:
+		logf("task status=ok action=task_completion_workspace_cleanup request_id=%s workspace_dir=%s", requestID, workspaceDir)
+	default:
+		logf("task status=warn action=skip_unmanaged_workspace_cleanup request_id=%s workspace_dir=%s", requestID, workspaceDir)
+	}
 }
 
 func failureFollowUpRunConfig(
