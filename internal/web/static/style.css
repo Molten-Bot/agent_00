@@ -9647,20 +9647,24 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 }
 
 .github-issue-task-actions {
-  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   min-height: 38px;
 }
 
 .github-issue-task-status {
   margin: 0;
-  position: absolute;
-  inset: 0;
+  grid-area: 1 / 1;
+  align-self: center;
   padding-inline: 92px;
   pointer-events: none;
+  text-align: center;
 }
 
 .github-issue-task-actions .prompt-actions-end {
-  position: relative;
+  grid-area: 1 / 1;
+  align-self: center;
+  justify-self: end;
   z-index: 1;
 }
 
