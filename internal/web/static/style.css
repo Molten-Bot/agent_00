@@ -9581,10 +9581,7 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 .github-issue-task {
   display: grid;
   gap: 10px;
-  padding: 13px;
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  background: linear-gradient(130deg, var(--accent-soft), transparent 120%);
+  padding-top: 4px;
 }
 
 .github-issue-task-heading {
@@ -9650,16 +9647,21 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 }
 
 .github-issue-task-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
+  position: relative;
+  min-height: 38px;
 }
 
 .github-issue-task-status {
-  min-height: 1.2em;
   margin: 0;
-  color: var(--muted);
-  font-size: .68rem;
+  position: absolute;
+  inset: 0;
+  padding-inline: 92px;
+  pointer-events: none;
+}
+
+.github-issue-task-actions .prompt-actions-end {
+  position: relative;
+  z-index: 1;
 }
 
 @media (max-width: 850px) {
@@ -9703,8 +9705,7 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
     gap: 4px;
   }
 
-  .github-issue-task-actions {
-    flex-direction: column;
-    align-items: stretch;
+  .github-issue-task-status {
+    padding-inline: 76px;
   }
 }
