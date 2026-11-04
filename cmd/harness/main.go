@@ -2479,17 +2479,19 @@ func currentReviewSettingsState(cfg localruntime.InitConfig) web.ReviewSettingsS
 	}
 	activeCfg.ApplyDefaults()
 	return web.ReviewSettingsState{
-		AutoMerge:                    activeCfg.ReviewWatch.AutoMergeEnabled(),
-		DeleteMergedBranches:         activeCfg.ReviewWatch.DeleteMergedBranchesEnabled(),
-		MergeMethod:                  activeCfg.ReviewWatch.MergeMethod,
-		ReviewLevel:                  activeCfg.ReviewWatch.ReviewLevel,
-		DefaultLibraryEnabled:        localruntime.ReadRuntimeConfigDefaultLibraryEnabled(cfg.RuntimeConfigPath),
-		ChatEnabled:                  localruntime.ReadRuntimeConfigChatEnabled(cfg.RuntimeConfigPath),
-		JSONEnabled:                  localruntime.ReadRuntimeConfigJSONEnabled(cfg.RuntimeConfigPath),
-		GitHubIssuesEnabled:          localruntime.ReadRuntimeConfigGitHubIssuesEnabled(cfg.RuntimeConfigPath),
-		GitHubIssueLinkMode:          localruntime.ReadRuntimeConfigGitHubIssueLinkMode(cfg.RuntimeConfigPath),
-		GitHubIssueAutoStartAssigned: localruntime.ReadRuntimeConfigGitHubIssueAutoStartAssigned(cfg.RuntimeConfigPath),
-		AssignCreator:                localruntime.ReadRuntimeConfigAssignCreator(cfg.RuntimeConfigPath),
+		AutoMerge:                        activeCfg.ReviewWatch.AutoMergeEnabled(),
+		DeleteMergedBranches:             activeCfg.ReviewWatch.DeleteMergedBranchesEnabled(),
+		MergeMethod:                      activeCfg.ReviewWatch.MergeMethod,
+		ReviewLevel:                      activeCfg.ReviewWatch.ReviewLevel,
+		DefaultLibraryEnabled:            localruntime.ReadRuntimeConfigDefaultLibraryEnabled(cfg.RuntimeConfigPath),
+		ChatEnabled:                      localruntime.ReadRuntimeConfigChatEnabled(cfg.RuntimeConfigPath),
+		JSONEnabled:                      localruntime.ReadRuntimeConfigJSONEnabled(cfg.RuntimeConfigPath),
+		GitHubIssuesEnabled:              localruntime.ReadRuntimeConfigGitHubIssuesEnabled(cfg.RuntimeConfigPath),
+		GitHubIssueLinkMode:              localruntime.ReadRuntimeConfigGitHubIssueLinkMode(cfg.RuntimeConfigPath),
+		GitHubIssueAutoStartAssigned:     localruntime.ReadRuntimeConfigGitHubIssueAutoStartAssigned(cfg.RuntimeConfigPath),
+		GitHubIssueAutoStartOnlyAssigned: localruntime.ReadRuntimeConfigGitHubIssueAutoStartOnlyAssigned(cfg.RuntimeConfigPath),
+		GitHubIssueAutoStartLabels:       localruntime.ReadRuntimeConfigGitHubIssueAutoStartLabels(cfg.RuntimeConfigPath),
+		AssignCreator:                    localruntime.ReadRuntimeConfigAssignCreator(cfg.RuntimeConfigPath),
 	}
 }
 
@@ -2521,7 +2523,7 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		MergeMethod:          method,
 		ReviewLevel:          reviewLevel,
 	}
-	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled, req.GitHubIssueLinkMode, req.GitHubIssueAutoStartAssigned, req.AssignCreator); err != nil {
+	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled, req.GitHubIssueLinkMode, req.GitHubIssueAutoStartAssigned, req.AssignCreator, localruntime.GitHubIssueAutoStartSettings{OnlyAssigned: req.GitHubIssueAutoStartOnlyAssigned, Labels: req.GitHubIssueAutoStartLabels}); err != nil {
 		state := currentReviewSettingsState(cfg)
 		return state, err
 	}

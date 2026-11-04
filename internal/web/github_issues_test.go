@@ -69,6 +69,63 @@ func TestGitHubIssueListCanFilterAssignedToMe(t *testing.T) {
 	}
 }
 
+func TestGitHubLabelsListsUniqueLabelsAcrossAccessibleRepositories(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if !reflect.DeepEqual(cmd.Args[:2], []string{"label", "list"}) {
+			t.Fatalf("command = %v, want label list", cmd.Args)
+		}
+		if strings.Contains(strings.Join(cmd.Args, " "), "acme/one") {
+			return execx.Result{Stdout: `[{"name":"bug"},{"name":"priority"}]`}, nil
+		}
+		return execx.Result{Stdout: `[{"name":"priority"},{"name":"feature"}]`}, nil
+	}), true)
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{{FullName: "acme/one"}, {FullName: "acme/two"}}, nil
+	}
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/labels", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"labels":["bug","feature","priority"]`) {
+		t.Fatalf("labels response = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestGitHubLabelsReportsFailedRepositoryQuery(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if strings.Contains(strings.Join(cmd.Args, " "), "acme/failing") {
+			return execx.Result{}, errors.New("GitHub API unavailable")
+		}
+		return execx.Result{Stdout: `[{"name":"bug"}]`}, nil
+	}), true)
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{{FullName: "acme/working"}, {FullName: "acme/failing"}}, nil
+	}
+
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/labels", nil))
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"ok":false`) || !strings.Contains(response.Body.String(), "list GitHub labels for acme/failing: GitHub API unavailable") {
+		t.Fatalf("response = %s, want failed repository query error", response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), `"labels"`) {
+		t.Fatalf("response = %s, must not return partial labels", response.Body.String())
+	}
+}
+
+func TestGitHubIssueAutoStartRequiresEverySelectedLabel(t *testing.T) {
+	t.Parallel()
+	issue := GitHubIssue{Labels: []GitHubIssueLabel{{Name: "bug"}, {Name: "priority"}}}
+	if !githubIssueHasAllLabels(issue, []string{"BUG", "priority"}) {
+		t.Fatal("matching labels should pass case-insensitively")
+	}
+	if githubIssueHasAllLabels(issue, []string{"bug", "feature"}) {
+		t.Fatal("issue missing one required label should not pass")
+	}
+}
+
 // Searching is scoped to the assignee filter in the browser, and that filter is on by
 // default, so the combined query is the common path rather than an edge case.
 func TestGitHubIssueListSearchesWithinIssuesAssignedToMe(t *testing.T) {
@@ -147,6 +204,47 @@ func TestAssignedIssueAutoStartBaselinesAndSubmitsNewIssueOnce(t *testing.T) {
 	}
 	if run.RepoURL != "https://github.com/acme/repo" || run.BaseBranch != "main" || run.GitHubIssue.Number != 23 || run.GitHubIssue.LinkMode != config.GitHubIssueLinkClose || !strings.Contains(run.Prompt, "Build it") || !strings.Contains(run.Prompt, "Include a test.") {
 		t.Fatalf("submitted run omitted issue context or metadata: %#v", run)
+	}
+}
+
+func TestGitHubIssueAutoStartBaselinesWhenFiltersChange(t *testing.T) {
+	t.Parallel()
+	var submitted [][]byte
+	labels := []string{"bug"}
+	srv := NewServer("", NewBroker())
+	srv.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) {
+		return ReviewSettingsState{
+			GitHubIssuesEnabled:              true,
+			GitHubIssueAutoStartAssigned:     true,
+			GitHubIssueAutoStartOnlyAssigned: false,
+			GitHubIssueAutoStartLabels:       labels,
+		}, nil
+	}
+	srv.GitHubIssueRunner = githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "issue" && cmd.Args[1] == "list" {
+			return execx.Result{Stdout: `[{"number":22,"title":"Existing bug","state":"OPEN","labels":[{"name":"bug"}]},{"number":23,"title":"Existing feature","state":"OPEN","labels":[{"name":"feature"}]}]`}, nil
+		}
+		t.Fatalf("unexpected gh command: %#v", cmd)
+		return execx.Result{}, nil
+	})
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{{FullName: "acme/repo"}}, nil
+	}
+	srv.SubmitLocalPrompt = func(_ context.Context, body []byte) (string, error) {
+		submitted = append(submitted, append([]byte(nil), body...))
+		return "request-1", nil
+	}
+	seen := make(map[string]bool)
+	baseline := true
+	filters := ""
+	srv.pollGitHubIssueAutoStart(context.Background(), seen, &baseline, &filters)
+	labels = []string{"feature"}
+	srv.pollGitHubIssueAutoStart(context.Background(), seen, &baseline, &filters)
+	if len(submitted) != 0 {
+		t.Fatalf("filter change submitted %d tasks, want 0", len(submitted))
+	}
+	if !seen["acme/repo#22"] || !seen["acme/repo#23"] {
+		t.Fatalf("filter baseline missed existing issues: %v", seen)
 	}
 }
 

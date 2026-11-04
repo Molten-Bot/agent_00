@@ -7,7 +7,7 @@ const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
 let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
-const defaults = { auto_merge: false, delete_merged_branches: false, merge_method: 'squash', review_level: 'off', default_library_enabled: true, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, assign_creator: true };
+const defaults = { auto_merge: false, delete_merged_branches: false, merge_method: 'squash', review_level: 'off', default_library_enabled: true, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], assign_creator: true };
 async function openSettings(t, { viewport = { width: 1280, height: 900 }, theme = 'dark', configurePage, initialSettings = defaults, path = '#settings' } = {}) {
   const page = await browser.newPage({ viewport });
   t.after(() => page.close());
@@ -179,7 +179,7 @@ test('all settings save on close and survive reopening; no main Save button', as
   assert.equal(await page.locator('#custom-library-name').inputValue(), 'kept draft');
   await toggle(page, 'review-settings-default-library');
   await close(page);
-  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, assign_creator: false });
+  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], assign_creator: false });
   await page.reload();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   assert.equal(await page.locator('#review-settings-auto-merge').isChecked(), true);

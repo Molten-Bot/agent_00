@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -241,6 +242,18 @@ func TestGitHubIssueAutoStartAssignedDefaultsOffAndRoundTrips(t *testing.T) {
 	}
 	if _, exists := doc["github_issue_auto_start_assigned"]; exists {
 		t.Fatalf("disabled default should be omitted from config: %#v", doc["github_issue_auto_start_assigned"])
+	}
+}
+
+func TestGitHubIssueAutoStartLabelsRoundTrip(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "runtime.json")
+	labels := []string{"priority", "bug", "BUG", " "}
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, nil, nil, nil, GitHubIssueAutoStartSettings{Labels: &labels}); err != nil {
+		t.Fatalf("save labels: %v", err)
+	}
+	if got, want := ReadRuntimeConfigGitHubIssueAutoStartLabels(path), []string{"bug", "priority"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("labels = %v, want %v", got, want)
 	}
 }
 
