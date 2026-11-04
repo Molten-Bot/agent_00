@@ -367,17 +367,20 @@
     addText(taskHeading, "strong", "", "Start a task from this issue");
     addText(taskHeading, "span", "github-issue-link-mode-note", taskLinkModeDescription(issue));
     const actions = document.createElement("div");
-    actions.className = "prompt-actions-end github-issue-task-actions";
+    actions.className = "prompt-actions github-issue-task-actions";
+    const taskStatus = addText(actions, "p", "submit-status submit-status-inline is-visible github-issue-task-status", "");
+    taskStatus.setAttribute("role", "status");
+    taskStatus.setAttribute("aria-live", "polite");
+    const actionEnd = document.createElement("div");
+    actionEnd.className = "prompt-actions-end";
     const start = document.createElement("button");
     start.type = "button";
     start.className = "prompt-action-button prompt-submit github-issue-start";
     setStartButtonContent(start, "Start task");
     start.addEventListener("click", () => void submitTask(issue, repo, buildTaskPrompt(issue)));
-    actions.append(start);
+    actionEnd.append(start);
+    actions.append(actionEnd);
     task.appendChild(actions);
-    const taskStatus = addText(task, "p", "github-issue-task-status", "");
-    taskStatus.setAttribute("role", "status");
-    taskStatus.setAttribute("aria-live", "polite");
     detailBody.appendChild(task);
     detail.appendChild(detailBody);
   }
