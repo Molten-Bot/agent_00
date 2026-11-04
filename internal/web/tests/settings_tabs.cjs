@@ -525,17 +525,23 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
     'issue task status should stay centered in the shared action row',
   );
   await page.locator('.github-issue-task-status').evaluate(status => {
-    status.textContent = 'Could not start task: task submission failed because repository access was denied while validating the requested branch.';
+    status.textContent = `Could not start task: ${'task submission failed because repository access was denied while validating the requested branch. '.repeat(4)}`;
   });
-  assert.equal(
-    await page.locator('.github-issue-task-actions').evaluate(actions => {
+  const errorLayout = await page.locator('.github-issue-task-actions').evaluate(actions => {
       const actionsBox = actions.getBoundingClientRect();
       const statusBox = actions.querySelector('.github-issue-task-status').getBoundingClientRect();
-      return statusBox.top >= actionsBox.top && statusBox.bottom <= actionsBox.bottom;
-    }),
-    true,
-    'multi-line task-start errors should expand the action row instead of being clipped',
-  );
+      const statusStyle = getComputedStyle(actions.querySelector('.github-issue-task-status'));
+      return {
+        contained: statusBox.top >= actionsBox.top && statusBox.bottom <= actionsBox.bottom,
+        expandsRow: statusBox.height > 38 && actionsBox.height >= statusBox.height,
+        whiteSpace: statusStyle.whiteSpace,
+        overflowWrap: statusStyle.overflowWrap,
+      };
+    });
+  assert.equal(errorLayout.contained, true, 'multi-line task-start errors should stay within the action row');
+  assert.equal(errorLayout.expandsRow, true, 'multi-line task-start errors should expand the action row instead of being clipped');
+  assert.equal(errorLayout.whiteSpace, 'normal');
+  assert.equal(errorLayout.overflowWrap, 'anywhere');
   assert.ok(
     (await issueStartButton.boundingBox()).y > (await page.locator('.github-issue-comments').boundingBox()).y,
     'issue task button should float below issue information',

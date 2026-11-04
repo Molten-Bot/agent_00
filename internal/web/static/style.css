@@ -9656,9 +9656,14 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   margin: 0;
   grid-area: 1 / 1;
   align-self: center;
+  min-width: 0;
   padding-inline: 92px;
   pointer-events: none;
   text-align: center;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
 }
 
 .github-issue-task-actions .prompt-actions-end {
