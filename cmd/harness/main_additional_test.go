@@ -1390,6 +1390,13 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	}
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		Err: errors.New("codex: codex reported failure: Failure: issue target not met. Error details: current code needs 4232 more covered lines for 90%. Setting gate to 90 now would fail CI."),
+	})
+	if ok || !strings.Contains(reason, "coverage target cannot be met safely") {
+		t.Fatalf("shouldQueueFailureFollowUp(unreachable coverage target) = (%v, %q), want non-remediable coverage-target skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
 		Err: errors.New("clone: run git [clone --single-branch git@github.com:Molten-Bot/forum.git /workspace/repo]: exit status 128 (fatal: unable to access 'https://github.com/Molten-Bot/forum.git/': Could not resolve host: github.com)"),
 	})
 	if ok || !strings.Contains(reason, "could not resolve host") {
