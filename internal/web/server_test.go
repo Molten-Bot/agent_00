@@ -3147,6 +3147,13 @@ func TestHandlerIndexPreloadsGitHubReposOnce(t *testing.T) {
 	}
 }
 
+// normalizeCSSWhitespace collapses every whitespace run in a stylesheet to a
+// single space so declaration-level assertions stay readable on one line and do
+// not break when a rule is reindented or reflowed.
+func normalizeCSSWhitespace(css string) string {
+	return strings.Join(strings.Fields(css), " ")
+}
+
 func TestHandlerServesStaticCSS(t *testing.T) {
 	t.Parallel()
 

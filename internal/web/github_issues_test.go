@@ -288,8 +288,55 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	}
 	asset := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
-	if asset.Code != http.StatusOK || !strings.Contains(asset.Body.String(), "Edit prompt first") || !strings.Contains(asset.Body.String(), "Start task") || !strings.Contains(asset.Body.String(), "Start with this prompt") || !strings.Contains(asset.Body.String(), `state: "open"`) || !strings.Contains(asset.Body.String(), "open issues") || !strings.Contains(asset.Body.String(), "linkMode: githubIssueLinkMode") || !strings.Contains(asset.Body.String(), "githubIssue:") || !strings.Contains(asset.Body.String(), "loadingIssueNumber") || !strings.Contains(asset.Body.String(), "task-icons-breathe") {
-		t.Fatalf("issue browser asset response = %d, expected both task launch modes", asset.Code)
+	if asset.Code != http.StatusOK {
+		t.Fatalf("issue browser asset response = %d, want 200", asset.Code)
+	}
+	// Both task launch modes are rendered by the shared action row in index.html,
+	// so the script only has to wire them up and submit the issue task.
+	script := asset.Body.String()
+	for _, want := range []string{"github-issue-edit-prompt", "github-issue-start", "enableTaskActions", "resetTaskActions", "submitTask", `state: "open"`, "open issues", "linkMode: githubIssueLinkMode", "githubIssue:", "loadingIssueNumber", "task-icons-breathe"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("issue browser script is missing %q", want)
+		}
+	}
+}
+
+func TestGitHubIssuesTaskActionsReuseSharedPromptStyles(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(nil, true)
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	page := response.Body.String()
+	for _, want := range []string{
+		`id="github-issues-actions" class="prompt-actions"`,
+		`<div class="prompt-actions-end">`,
+		`id="github-issue-edit-prompt" class="prompt-action-button" type="button" aria-expanded="false" disabled`,
+		`id="github-issue-start" class="prompt-action-button prompt-submit" type="button" disabled`,
+		`<span class="prompt-action-label">Edit prompt</span>`,
+		`<span class="prompt-action-label">Start task</span>`,
+		`id="github-issue-prompt-field" class="prompt-field"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("issue task actions are missing %q", want)
+		}
+	}
+	browserAt := strings.Index(page, `id="github-issues-browser"`)
+	promptAt := strings.Index(page, `id="github-issue-prompt-field"`)
+	actionsAt := strings.Index(page, `id="github-issues-actions"`)
+	editAt := strings.Index(page, `id="github-issue-edit-prompt"`)
+	startAt := strings.Index(page, `id="github-issue-start"`)
+	if browserAt < 0 || promptAt < browserAt || actionsAt < promptAt || editAt < actionsAt || startAt < editAt {
+		t.Error("issue task buttons should sit in a trailing action row below the issue browser, edit before start")
+	}
+	stylesheet, err := staticFiles.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatalf("read style.css: %v", err)
+	}
+	if !strings.Contains(normalizeCSSWhitespace(string(stylesheet)), ".github-issues-panel > .prompt-field, .github-issues-panel > .prompt-actions { flex: 0 0 auto; }") {
+		t.Error("expected the issue prompt and action row to dock at the bottom through the shared prompt layout")
 	}
 }
 
