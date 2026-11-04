@@ -88,11 +88,21 @@
   let githubIssueLinkMode = "reference";
   let requestGeneration = 0;
   let searchTimer = null;
-  let assignedToMe = false;
+  // Issues assigned to the signed-in account are the default view; the filter
+  // button turns it off to browse every open issue in the repository.
+  let assignedToMe = true;
 
   function setStatus(message, kind) {
     status.textContent = String(message || "");
     status.dataset.tone = kind || "";
+  }
+
+  function syncAssigneeFilter() {
+    if (!assigneeFilter) return;
+    const label = assignedToMe ? "Show all issues" : "Show only issues assigned to me";
+    assigneeFilter.setAttribute("aria-pressed", String(assignedToMe));
+    assigneeFilter.setAttribute("aria-label", label);
+    assigneeFilter.title = label;
   }
 
   async function requestJSON(url, options) {
@@ -211,9 +221,11 @@
     if (!issues.length) {
       const emptyText = !repositories.length
         ? "No repositories are available for this account."
-        : selectedRepository()
-          ? "No open issues match this search."
-          : "Choose a repository to see its open issues.";
+        : !selectedRepository()
+          ? "Choose a repository to see its open issues."
+          : assignedToMe && !searchInput.value.trim()
+            ? "No open issues are assigned to you. Use the filter button to show every open issue."
+            : "No open issues match this search.";
       addText(issueList, "li", "github-issues-empty", emptyText);
       return;
     }
@@ -552,13 +564,11 @@
     } catch (_error) { /* Ignore unavailable storage. */ }
     void loadIssues();
   });
+  syncAssigneeFilter();
   if (assigneeFilter) {
     assigneeFilter.addEventListener("click", () => {
       assignedToMe = !assignedToMe;
-      const label = assignedToMe ? "Show all issues" : "Show only issues assigned to me";
-      assigneeFilter.setAttribute("aria-pressed", String(assignedToMe));
-      assigneeFilter.setAttribute("aria-label", label);
-      assigneeFilter.title = label;
+      syncAssigneeFilter();
       void loadIssues();
     });
   }

@@ -293,6 +293,34 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	}
 }
 
+func TestGitHubIssueBrowserDefaultsToIssuesAssignedToMe(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(nil, true)
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	page := response.Body.String()
+	if !strings.Contains(page, `id="github-issues-assignee-filter" class="github-issues-assignee-filter" type="button" aria-pressed="true" aria-label="Show all issues"`) {
+		t.Error("assignee filter should render pressed so assigned issues show by default")
+	}
+	asset := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
+	script := asset.Body.String()
+	if asset.Code != http.StatusOK {
+		t.Fatalf("issue browser asset status = %d, want 200", asset.Code)
+	}
+	for _, want := range []string{"let assignedToMe = true;", `query.set("assignee", "me")`, "syncAssigneeFilter()", "No open issues are assigned to you."} {
+		if !strings.Contains(script, want) {
+			t.Errorf("issue browser asset is missing %q", want)
+		}
+	}
+	if strings.Contains(script, "let assignedToMe = false") {
+		t.Error("issue browser should not start with the assignee filter turned off")
+	}
+}
+
 func TestGitHubIssuesDockLinkFollowsSetting(t *testing.T) {
 	t.Parallel()
 	for _, enabled := range []bool{false, true} {
