@@ -367,6 +367,7 @@ func TestRunPRCreatePermissionDeniedAfterPushCompletesWithBranch(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
+	cfg.GitHubIssue = &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17"}
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 	guid := "abcdef123456"
 	runDir := testRunDir(guid)
@@ -390,6 +391,7 @@ func TestRunPRCreatePermissionDeniedAfterPushCompletesWithBranch(t *testing.T) {
 		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
 		{cmd: pushCommand(repoDir, branch)},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stderr: prCreateStderr}, err: errors.New("pr create failed")},
+		{cmd: ghCommand(repoDir, "issue", "edit", "17", "--repo", "acme/repo", "--add-assignee", "@me")},
 	}}
 
 	var logs []string

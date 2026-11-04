@@ -790,6 +790,11 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		prURL, err := h.createPullRequestURL(ctx, *repo, cfg, createWorkBranch, headRef, targetRepo)
 		if err != nil {
 			if errors.Is(err, errPRCreatePermissionDenied) {
+				if cfg.AssignCreatorEnabled() {
+					if err := h.assignGitHubIssueCreator(ctx, *repo, cfg.GitHubIssue); err != nil {
+						return ExitPR, "pr", err
+					}
+				}
 				h.logf(
 					"stage=pr status=warn action=manual_create_required reason=create_pull_request_permission_denied repo=%s repo_dir=%s branch=%s head=%s target_repo=%s err=%q",
 					repo.URL,
