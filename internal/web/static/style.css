@@ -2159,11 +2159,11 @@ select.prompt-control {
   min-height: 1.3em;
 }
 
-/* Same rule as .chat-repo-submit-status[data-wrap="true"]: only the multi-line
-   keyboard dictation hint wraps, because it must stay readable instead of being
-   ellipsized. Every other status keeps the single line the action row is sized
-   for. */
-#local-prompt-status[data-wrap="true"] {
+/* Same rule as .chat-repo-submit-status[data-wrap="true"]: statuses that must
+   stay readable - the multi-line keyboard dictation hint, and panels whose
+   action row is their only error channel - opt out of ellipsizing. Every other
+   status keeps the single line the action row is sized for. */
+.submit-status-inline[data-wrap="true"] {
   white-space: normal;
   overflow: visible;
   overflow-wrap: anywhere;

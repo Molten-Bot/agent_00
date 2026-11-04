@@ -421,8 +421,7 @@
                 id="github-issue-prompt"
                 class="prompt-text prompt-control"
                 rows="6"
-                spellcheck="false"
-                aria-label="Issue task prompt"></textarea>
+                spellcheck="false"></textarea>
             </label>
             <div id="github-issues-actions" class="prompt-actions">
               <span
@@ -431,7 +430,7 @@
                 role="status"
                 aria-live="polite">Loading GitHub Issues settings…</span>
               <div class="prompt-actions-end">
-                <button id="github-issue-edit-prompt" class="prompt-action-button" type="button" aria-expanded="false" disabled>
+                <button id="github-issue-edit-prompt" class="prompt-action-button" type="button" aria-controls="github-issue-prompt-field" aria-expanded="false" disabled>
                   <i data-lucide="pencil" class="prompt-action-icon" aria-hidden="true"></i>
                   <span class="prompt-action-label">Edit prompt</span>
                 </button>

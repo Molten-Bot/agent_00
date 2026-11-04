@@ -95,10 +95,15 @@
   let requestGeneration = 0;
   let searchTimer = null;
   let assignedToMe = false;
+  let disabledRunFinished = false;
 
   function setStatus(message, kind) {
     status.textContent = String(message || "");
     status.dataset.tone = kind || "";
+    // The action row is the panel's only status channel, so errors wrap instead
+    // of being ellipsized away; every other status keeps its single line.
+    if (kind === "error") status.dataset.wrap = "true";
+    else delete status.dataset.wrap;
   }
 
   async function requestJSON(url, options) {
@@ -324,6 +329,12 @@
     editPromptButton.setAttribute("aria-expanded", "false");
   }
 
+  function openPromptEditor() {
+    promptField.hidden = false;
+    editPromptButton.setAttribute("aria-expanded", "true");
+    promptEditor.focus();
+  }
+
   function resetTaskActions() {
     closePromptEditor();
     promptEditor.value = "";
@@ -473,13 +484,16 @@
       const enabled = Boolean(values.github_issues_enabled ?? values.githubIssuesEnabled);
       const linkMode = String(values.github_issue_link_mode ?? values.githubIssueLinkMode ?? "reference").trim().toLowerCase();
       githubIssueLinkMode = linkMode === "close" ? "close" : "reference";
+      // Both states are applied unconditionally so a later run restores the
+      // action row instead of leaving it hidden from a disabled first pass.
+      disabled.hidden = enabled;
+      taskActions.hidden = !enabled;
+      browser.hidden = !enabled;
       if (!enabled) {
-        disabled.hidden = false;
-        taskActions.hidden = true;
+        disabledRunFinished = true;
         setStatus("");
         return;
       }
-      browser.hidden = false;
       const response = await requestJSON("/api/github/repos", { cache: "no-store" });
       repositories = Array.isArray(response.repos) ? response.repos : [];
       repoSelect.replaceChildren();
@@ -548,9 +562,8 @@
   });
   editPromptButton.addEventListener("click", () => {
     if (!selectedIssue) return;
-    promptField.hidden = false;
-    editPromptButton.setAttribute("aria-expanded", "true");
-    promptEditor.focus();
+    if (editPromptButton.getAttribute("aria-expanded") === "true") closePromptEditor();
+    else openPromptEditor();
   });
   startButton.addEventListener("click", () => {
     if (!selectedIssue) return;
@@ -563,7 +576,12 @@
   });
   let initialization = null;
   window.initGitHubIssuesPanel = function initGitHubIssuesPanel() {
-    if (!initialization) initialization = initialize();
+    // A finished pass that read the setting as off leaves nothing to reuse, so
+    // reopening the panel re-reads settings instead of staying disabled.
+    if (!initialization || disabledRunFinished) {
+      disabledRunFinished = false;
+      initialization = initialize();
+    }
     return initialization;
   };
   void window.initGitHubIssuesPanel();

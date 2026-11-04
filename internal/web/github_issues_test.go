@@ -313,7 +313,7 @@ func TestGitHubIssuesTaskActionsReuseSharedPromptStyles(t *testing.T) {
 	for _, want := range []string{
 		`id="github-issues-actions" class="prompt-actions"`,
 		`<div class="prompt-actions-end">`,
-		`id="github-issue-edit-prompt" class="prompt-action-button" type="button" aria-expanded="false" disabled`,
+		`id="github-issue-edit-prompt" class="prompt-action-button" type="button" aria-controls="github-issue-prompt-field" aria-expanded="false" disabled`,
 		`id="github-issue-start" class="prompt-action-button prompt-submit" type="button" disabled`,
 		`<span class="prompt-action-label">Edit prompt</span>`,
 		`<span class="prompt-action-label">Start task</span>`,
@@ -337,6 +337,57 @@ func TestGitHubIssuesTaskActionsReuseSharedPromptStyles(t *testing.T) {
 	}
 	if !strings.Contains(normalizeCSSWhitespace(string(stylesheet)), ".github-issues-panel > .prompt-field, .github-issues-panel > .prompt-actions { flex: 0 0 auto; }") {
 		t.Error("expected the issue prompt and action row to dock at the bottom through the shared prompt layout")
+	}
+}
+
+func TestGitHubIssuesPromptEditorAndStatusFollowSharedPromptBehavior(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(nil, true)
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	page := response.Body.String()
+	if !strings.Contains(page, `aria-controls="github-issue-prompt-field"`) {
+		t.Error("the edit prompt disclosure should name the field it expands")
+	}
+	if strings.Contains(page, `aria-label="Issue task prompt"`) {
+		t.Error("the issue prompt textarea should keep the visible Prompt label instead of overriding it, like #builder-prompt-input")
+	}
+
+	stylesheet, err := staticFiles.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatalf("read style.css: %v", err)
+	}
+	css := string(stylesheet)
+	if !strings.Contains(css, `.submit-status-inline[data-wrap="true"] {`) {
+		t.Error("inline statuses should share one wrap opt-out so panel errors are readable instead of ellipsized")
+	}
+	if strings.Contains(css, `#local-prompt-status[data-wrap="true"] {`) {
+		t.Error("the per-id wrap rule should be replaced by the shared .submit-status-inline rule")
+	}
+
+	asset := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
+	if asset.Code != http.StatusOK {
+		t.Fatalf("issue browser asset response = %d, want 200", asset.Code)
+	}
+	script := asset.Body.String()
+	for _, want := range []string{
+		// The disclosure collapses as well as expands, so aria-expanded stays truthful.
+		"function openPromptEditor()",
+		`if (editPromptButton.getAttribute("aria-expanded") === "true") closePromptEditor();`,
+		"else openPromptEditor();",
+		// Errors opt into wrapping because the action row is the panel's only status channel.
+		`if (kind === "error") status.dataset.wrap = "true";`,
+		// Turning the setting on mid-session restores the action row.
+		"taskActions.hidden = !enabled;",
+		"disabledRunFinished",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("issue browser script is missing %q", want)
+		}
 	}
 }
 
