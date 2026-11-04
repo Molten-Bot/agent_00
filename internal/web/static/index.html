@@ -373,7 +373,6 @@
             </div>
           </form>
           <section id="github-issues-panel" class="github-issues-panel prompt-form hidden" aria-label="GitHub Issues" aria-hidden="true">
-            <p id="github-issues-status" class="github-issues-status" role="status" aria-live="polite">Loading GitHub Issues settings…</p>
             <div id="github-issues-disabled" class="github-issues-disabled" hidden>Turn on GitHub Issues in <a href="/#settings">Settings</a> to browse issues.</div>
             <div id="github-issues-browser" class="github-issues-browser" hidden>
               <form id="github-issues-filters" class="prompt-grid">
@@ -414,6 +413,32 @@
                     <p>Select an issue to review its description, comments, and task options.</p>
                   </div>
                 </article>
+              </div>
+            </div>
+            <label id="github-issue-prompt-field" class="prompt-field" hidden>
+              <span class="prompt-label">Prompt</span>
+              <textarea
+                id="github-issue-prompt"
+                class="prompt-text prompt-control"
+                rows="6"
+                spellcheck="false"
+                aria-label="Issue task prompt"></textarea>
+            </label>
+            <div id="github-issues-actions" class="prompt-actions">
+              <span
+                id="github-issues-status"
+                class="submit-status submit-status-inline is-visible"
+                role="status"
+                aria-live="polite">Loading GitHub Issues settings…</span>
+              <div class="prompt-actions-end">
+                <button id="github-issue-edit-prompt" class="prompt-action-button" type="button" aria-expanded="false" disabled>
+                  <i data-lucide="pencil" class="prompt-action-icon" aria-hidden="true"></i>
+                  <span class="prompt-action-label">Edit prompt</span>
+                </button>
+                <button id="github-issue-start" class="prompt-action-button prompt-submit" type="button" disabled>
+                  <i data-lucide="play" class="prompt-action-icon" aria-hidden="true"></i>
+                  <span class="prompt-action-label">Start task</span>
+                </button>
               </div>
             </div>
           </section>
@@ -13727,6 +13752,6 @@
   <script src="/static/library-schedules.js"></script>
   <script src="/static/commit-signing.js"></script>
   <script src="/static/custom-library-sources.js"></script>
-  <script src="/static/github-issues.js?v=8"></script>
+  <script src="/static/github-issues.js?v=9"></script>
 </body>
 </html>

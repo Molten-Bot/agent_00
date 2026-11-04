@@ -13,7 +13,13 @@
   const detail = document.getElementById("github-issue-detail");
   const columns = document.querySelector(".github-issues-columns");
   const resizeHandle = document.getElementById("github-issues-resize-handle");
+  const taskActions = document.getElementById("github-issues-actions");
+  const promptField = document.getElementById("github-issue-prompt-field");
+  const promptEditor = document.getElementById("github-issue-prompt");
+  const editPromptButton = document.getElementById("github-issue-edit-prompt");
+  const startButton = document.getElementById("github-issue-start");
   if (!status || !disabled || !browser || !repoSelect || !searchInput || !filters || !issueList || !detail) return;
+  if (!taskActions || !promptField || !promptEditor || !editPromptButton || !startButton) return;
 
   const layoutStorageKey = "hubui.githubIssuesLayout.v1";
   const repositoryStorageKey = "hubui.githubIssuesRepository.v1";
@@ -115,25 +121,6 @@
     node.textContent = String(text || "");
     parent.appendChild(node);
     return node;
-  }
-
-  function setStartButtonContent(button, label) {
-    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    icon.classList.add("prompt-action-icon");
-    icon.setAttribute("viewBox", "0 0 24 24");
-    icon.setAttribute("fill", "none");
-    icon.setAttribute("stroke", "currentColor");
-    icon.setAttribute("stroke-width", "2");
-    icon.setAttribute("stroke-linecap", "round");
-    icon.setAttribute("stroke-linejoin", "round");
-    icon.setAttribute("aria-hidden", "true");
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "m5 5 14 7-14 7V5");
-    icon.appendChild(path);
-    const text = document.createElement("span");
-    text.className = "prompt-action-label";
-    text.textContent = label;
-    button.append(icon, text);
   }
 
   function formatPeople(people) {
@@ -328,47 +315,28 @@
     }
     detailBody.appendChild(comments);
 
-    const task = document.createElement("section");
-    task.className = "github-issue-task";
-    const taskHeading = addText(task, "div", "github-issue-task-heading", "");
-    addText(taskHeading, "strong", "", "Start a task from this issue");
-    addText(taskHeading, "span", "github-issue-link-mode-note", taskLinkModeDescription(issue));
-    const editor = document.createElement("textarea");
-    editor.className = "github-issue-prompt";
-    editor.rows = 7;
-    editor.setAttribute("aria-label", "Issue task prompt");
-    editor.value = buildTaskPrompt(issue, repo);
-    editor.hidden = true;
-    task.appendChild(editor);
-    const actions = document.createElement("div");
-    actions.className = "prompt-actions-end github-issue-task-actions";
-    const edit = document.createElement("button");
-    edit.type = "button";
-    edit.className = "prompt-action-button";
-    edit.textContent = "Edit prompt first";
-    edit.addEventListener("click", () => {
-      editor.hidden = false;
-      submitEdited.hidden = false;
-      editor.focus();
-    });
-    const start = document.createElement("button");
-    start.type = "button";
-    start.className = "prompt-action-button prompt-submit github-issue-start";
-    setStartButtonContent(start, "Start task");
-    start.addEventListener("click", () => void submitTask(issue, repo, buildTaskPrompt(issue, repo)));
-    const submitEdited = document.createElement("button");
-    submitEdited.type = "button";
-    submitEdited.className = "prompt-action-button prompt-submit github-issue-start";
-    setStartButtonContent(submitEdited, "Start with this prompt");
-    submitEdited.hidden = true;
-    submitEdited.addEventListener("click", () => void submitTask(issue, repo, editor.value));
-    actions.append(edit, start, submitEdited);
-    task.appendChild(actions);
-    const taskStatus = addText(task, "p", "github-issue-task-status", "");
-    taskStatus.setAttribute("role", "status");
-    taskStatus.setAttribute("aria-live", "polite");
-    detailBody.appendChild(task);
     detail.appendChild(detailBody);
+    enableTaskActions(issue, repo);
+  }
+
+  function closePromptEditor() {
+    promptField.hidden = true;
+    editPromptButton.setAttribute("aria-expanded", "false");
+  }
+
+  function resetTaskActions() {
+    closePromptEditor();
+    promptEditor.value = "";
+    editPromptButton.disabled = true;
+    startButton.disabled = true;
+  }
+
+  function enableTaskActions(issue, repo) {
+    closePromptEditor();
+    promptEditor.value = buildTaskPrompt(issue, repo);
+    editPromptButton.disabled = false;
+    startButton.disabled = false;
+    setStatus(taskLinkModeDescription(issue));
   }
 
   function renderEmptyDetail(title, description) {
@@ -400,16 +368,15 @@
   }
 
   async function submitTask(issue, repo, prompt) {
-    const submitButtons = Array.from(detail.querySelectorAll(".github-issue-task-actions button"));
-    const taskStatus = detail.querySelector(".github-issue-task-status");
     const repoName = String(repo?.full_name || "").trim();
     const repoURL = String(repo?.html_url || (repoName ? `https://github.com/${repoName}` : "")).trim();
     if (!repoName || !repoURL || !String(prompt || "").trim()) {
-      if (taskStatus) taskStatus.textContent = "Repository and task prompt are required.";
+      setStatus("Repository and task prompt are required.", "error");
       return;
     }
-    submitButtons.forEach((button) => { button.disabled = true; });
-    if (taskStatus) taskStatus.textContent = "Submitting task…";
+    editPromptButton.disabled = true;
+    startButton.disabled = true;
+    setStatus("Submitting task…");
     try {
       const body = await requestJSON("/api/local-prompt", {
         method: "POST",
@@ -426,10 +393,11 @@
           },
         }),
       });
-      if (taskStatus) taskStatus.textContent = `Task queued (${body.request_id || "request accepted"}).`;
+      setStatus(`Task queued (${body.request_id || "request accepted"}).`);
     } catch (error) {
-      if (taskStatus) taskStatus.textContent = `Could not start task: ${error.message || "request failed"}`;
-      submitButtons.forEach((button) => { button.disabled = false; });
+      setStatus(`Could not start task: ${error.message || "request failed"}`, "error");
+      editPromptButton.disabled = false;
+      startButton.disabled = false;
     }
   }
 
@@ -437,8 +405,10 @@
     const repo = selectedRepository();
     if (!repo) return;
     const generation = ++requestGeneration;
+    selectedIssue = null;
     selectedIssueNumber = number;
     loadingIssueNumber = number;
+    resetTaskActions();
     renderIssueList(currentIssues);
     setStatus(`Loading issue #${number}…`);
     try {
@@ -446,9 +416,10 @@
       const body = await requestJSON(`/api/github/issues/${encodeURIComponent(number)}?${query}`, { cache: "no-store" });
       if (generation !== requestGeneration) return;
       loadingIssueNumber = null;
+      // renderIssueDetail hands the action row its own status line, so the
+      // "Loading issue" message is replaced rather than cleared here.
       renderIssueDetail(body.issue);
       renderIssueList(currentIssues);
-      setStatus("");
     } catch (error) {
       if (generation === requestGeneration) {
         loadingIssueNumber = null;
@@ -468,6 +439,7 @@
     selectedIssueNumber = null;
     loadingIssueNumber = null;
     currentIssues = [];
+    resetTaskActions();
     detail.replaceChildren();
     issueList.replaceChildren();
     if (!repo) {
@@ -488,7 +460,7 @@
       const issues = Array.isArray(body.issues) ? body.issues : [];
       currentIssues = issues;
       renderIssueList(issues);
-      setStatus("");
+      setStatus(issues.length ? "Select an issue to start a task from it." : "");
     } catch (error) {
       if (generation === requestGeneration) setStatus(error.message || "Unable to load issues.", "error");
     }
@@ -503,6 +475,7 @@
       githubIssueLinkMode = linkMode === "close" ? "close" : "reference";
       if (!enabled) {
         disabled.hidden = false;
+        taskActions.hidden = true;
         setStatus("");
         return;
       }
@@ -573,13 +546,20 @@
     event.preventDefault();
     void loadIssues();
   });
+  editPromptButton.addEventListener("click", () => {
+    if (!selectedIssue) return;
+    promptField.hidden = false;
+    editPromptButton.setAttribute("aria-expanded", "true");
+    promptEditor.focus();
+  });
+  startButton.addEventListener("click", () => {
+    if (!selectedIssue) return;
+    void submitTask(selectedIssue, selectedRepository(), promptEditor.value);
+  });
   window.addEventListener("github-issue-link-mode-updated", (event) => {
     const mode = String(event.detail?.mode || "reference").trim().toLowerCase();
     githubIssueLinkMode = mode === "close" ? "close" : "reference";
-    if (selectedIssue) {
-      const note = detail.querySelector(".github-issue-link-mode-note");
-      if (note) note.textContent = taskLinkModeDescription(selectedIssue);
-    }
+    if (selectedIssue) setStatus(taskLinkModeDescription(selectedIssue));
   });
   let initialization = null;
   window.initGitHubIssuesPanel = function initGitHubIssuesPanel() {

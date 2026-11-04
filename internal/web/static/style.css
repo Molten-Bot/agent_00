@@ -9055,20 +9055,14 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   overflow: hidden;
 }
 
-.github-issues-status {
+/* The prompt field and action row dock below the scrolling issue columns, the
+   same bottom-of-panel layout Prompt Studio uses. */
+.github-issues-panel > .prompt-field,
+.github-issues-panel > .prompt-actions {
   flex: 0 0 auto;
-  min-height: 1.1em;
-  margin: 0;
-  color: var(--muted);
-  font-size: .76rem;
-  line-height: 1.4;
 }
 
-.github-issues-status:empty {
-  display: none;
-}
-
-.github-issues-status[data-tone="error"] {
+#github-issues-status[data-tone="error"] {
   color: var(--bad);
 }
 
@@ -9570,31 +9564,6 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   font-size: .69rem;
 }
 
-.github-issue-task {
-  display: grid;
-  gap: 10px;
-  padding: 13px;
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  background: linear-gradient(130deg, var(--accent-soft), transparent 120%);
-}
-
-.github-issue-task-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  color: var(--text-soft);
-  font-size: .7rem;
-  font-weight: 750;
-}
-
-.github-issue-task-heading span {
-  color: var(--muted);
-  font-size: .62rem;
-  font-weight: 500;
-}
-
 .github-issue-link-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -9641,31 +9610,6 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   line-height: 1.35;
 }
 
-.github-issue-prompt {
-  width: 100%;
-  min-height: 150px;
-  padding: 10px;
-  color: var(--text);
-  border: 1px solid var(--surface-control-border);
-  border-radius: 9px;
-  background: var(--surface-control-bg-strong);
-  resize: vertical;
-  font-size: .75rem;
-}
-
-.github-issue-task-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
-.github-issue-task-status {
-  min-height: 1.2em;
-  margin: 0;
-  color: var(--muted);
-  font-size: .68rem;
-}
-
 @media (max-width: 850px) {
   .github-issues-columns {
     grid-template-columns: minmax(200px, var(--github-issues-list-width, 32%)) 14px minmax(0, 1fr);
@@ -9699,16 +9643,5 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 
   .github-issue-link-options {
     grid-template-columns: 1fr;
-  }
-
-  .github-issue-task-heading {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .github-issue-task-actions {
-    flex-direction: column;
-    align-items: stretch;
   }
 }
