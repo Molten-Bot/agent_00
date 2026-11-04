@@ -69,6 +69,38 @@ func TestGitHubIssueListCanFilterAssignedToMe(t *testing.T) {
 	}
 }
 
+func TestGitHubLabelsListsUniqueLabelsAcrossAccessibleRepositories(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if !reflect.DeepEqual(cmd.Args[:2], []string{"label", "list"}) {
+			t.Fatalf("command = %v, want label list", cmd.Args)
+		}
+		if strings.Contains(strings.Join(cmd.Args, " "), "acme/one") {
+			return execx.Result{Stdout: `[{"name":"bug"},{"name":"priority"}]`}, nil
+		}
+		return execx.Result{Stdout: `[{"name":"priority"},{"name":"feature"}]`}, nil
+	}), true)
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{{FullName: "acme/one"}, {FullName: "acme/two"}}, nil
+	}
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/labels", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"labels":["bug","feature","priority"]`) {
+		t.Fatalf("labels response = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestGitHubIssueAutoStartRequiresEverySelectedLabel(t *testing.T) {
+	t.Parallel()
+	issue := GitHubIssue{Labels: []GitHubIssueLabel{{Name: "bug"}, {Name: "priority"}}}
+	if !githubIssueHasAllLabels(issue, []string{"BUG", "priority"}) {
+		t.Fatal("matching labels should pass case-insensitively")
+	}
+	if githubIssueHasAllLabels(issue, []string{"bug", "feature"}) {
+		t.Fatal("issue missing one required label should not pass")
+	}
+}
+
 // Searching is scoped to the assignee filter in the browser, and that filter is on by
 // default, so the combined query is the common path rather than an edge case.
 func TestGitHubIssueListSearchesWithinIssuesAssignedToMe(t *testing.T) {

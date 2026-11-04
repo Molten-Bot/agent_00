@@ -38,7 +38,7 @@ func (s Server) runGitHubIssueAutoStart(ctx context.Context) {
 		} else if !state.GitHubIssuesEnabled || !state.GitHubIssueAutoStartAssigned {
 			baseline = true
 		} else {
-			if err := s.scanAssignedGitHubIssues(ctx, baseline, seen, state.GitHubIssueLinkMode); err != nil {
+			if err := s.scanGitHubIssuesForAutoStart(ctx, baseline, seen, state.GitHubIssueLinkMode, state.GitHubIssueAutoStartOnlyAssigned, state.GitHubIssueAutoStartLabels); err != nil {
 				s.logf("localruntime.ui status=warn event=github_issue_auto_start_scan err=%q", err)
 			} else {
 				baseline = false
@@ -53,6 +53,10 @@ func (s Server) runGitHubIssueAutoStart(ctx context.Context) {
 }
 
 func (s Server) scanAssignedGitHubIssues(ctx context.Context, baseline bool, seen map[string]bool, linkMode string) error {
+	return s.scanGitHubIssuesForAutoStart(ctx, baseline, seen, linkMode, true, nil)
+}
+
+func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool, seen map[string]bool, linkMode string, onlyAssigned bool, requiredLabels []string) error {
 	repos, err := s.resolveGitHubRepos(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve GitHub repositories: %w", err)
@@ -63,12 +67,15 @@ func (s Server) scanAssignedGitHubIssues(ctx context.Context, baseline bool, see
 		if !ok {
 			continue
 		}
-		issues, err := s.listAssignedGitHubIssues(ctx, fullName)
+		issues, err := s.listGitHubIssuesForAutoStart(ctx, fullName, onlyAssigned)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("list assigned issues in %s: %v", fullName, err))
+			errs = append(errs, fmt.Sprintf("list issues in %s: %v", fullName, err))
 			continue
 		}
 		for _, issue := range issues {
+			if !githubIssueHasAllLabels(issue, requiredLabels) {
+				continue
+			}
 			key := fullName + "#" + fmt.Sprint(issue.Number)
 			if seen[key] {
 				continue
@@ -125,7 +132,15 @@ func (s Server) scanAssignedGitHubIssues(ctx context.Context, baseline bool, see
 }
 
 func (s Server) listAssignedGitHubIssues(ctx context.Context, repository string) ([]GitHubIssue, error) {
-	result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: assignedIssueListArgs(repository)})
+	return s.listGitHubIssuesForAutoStart(ctx, repository, true)
+}
+
+func (s Server) listGitHubIssuesForAutoStart(ctx context.Context, repository string, onlyAssigned bool) ([]GitHubIssue, error) {
+	args := assignedIssueListArgs(repository)
+	if !onlyAssigned {
+		args = []string{"issue", "list", "--repo", repository, "--state", "open", "--limit", "1000", "--json", "number,title,state,url,author,labels,assignees,createdAt,updatedAt"}
+	}
+	result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: args})
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +149,22 @@ func (s Server) listAssignedGitHubIssues(ctx context.Context, repository string)
 		return nil, fmt.Errorf("decode GitHub issues: %w", err)
 	}
 	return issues, nil
+}
+
+func githubIssueHasAllLabels(issue GitHubIssue, required []string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	have := make(map[string]struct{}, len(issue.Labels))
+	for _, label := range issue.Labels {
+		have[strings.ToLower(strings.TrimSpace(label.Name))] = struct{}{}
+	}
+	for _, label := range required {
+		if _, ok := have[strings.ToLower(strings.TrimSpace(label))]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func buildGitHubIssueAutoStartPrompt(repository string, issue GitHubIssue) string {

@@ -9124,6 +9124,25 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 	border-top: 1px solid var(--border);
 }
 
+.github-issues-auto-start-labels {
+  display: grid;
+  gap: 6px;
+  color: var(--text);
+  font-size: .82rem;
+  font-weight: 700;
+}
+
+.github-issues-auto-start-labels small {
+  color: var(--text-soft);
+  font-size: .72rem;
+  font-weight: 500;
+}
+
+.github-issues-auto-start-labels select {
+  width: 100%;
+  min-height: 104px;
+}
+
 .github-issues-settings-link-mode {
   display: grid;
   grid-column: 1 / -1;

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -165,6 +166,11 @@ func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 // SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings persists review
 // automation, library, chat, JSON, and GitHub Issues settings in one update.
 // githubIssueLinkMode is optional; when omitted, the existing behavior remains.
+type GitHubIssueAutoStartSettings struct {
+	OnlyAssigned *bool
+	Labels       *[]string
+}
+
 func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 	path string,
 	initCfg InitConfig,
@@ -176,6 +182,7 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 	githubIssueLinkMode *string,
 	githubIssueAutoStartAssigned *bool,
 	assignCreator *bool,
+	githubIssueAutoStartSettings ...GitHubIssueAutoStartSettings,
 ) error {
 	runtimeConfigMu.Lock()
 	defer runtimeConfigMu.Unlock()
@@ -226,6 +233,20 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 		autoStartAssigned = *githubIssueAutoStartAssigned
 	}
 	applyGitHubIssueAutoStartAssignedToDoc(doc, autoStartAssigned)
+	onlyAssigned := githubIssueAutoStartOnlyAssignedFromDoc(doc)
+	var githubIssueAutoStartLabels *[]string
+	for _, setting := range githubIssueAutoStartSettings {
+		if setting.OnlyAssigned != nil {
+			onlyAssigned = *setting.OnlyAssigned
+		}
+		if setting.Labels != nil {
+			githubIssueAutoStartLabels = setting.Labels
+		}
+	}
+	applyGitHubIssueAutoStartOnlyAssignedToDoc(doc, onlyAssigned)
+	if githubIssueAutoStartLabels != nil {
+		applyGitHubIssueAutoStartLabelsToDoc(doc, *githubIssueAutoStartLabels)
+	}
 	assignCreatorValue := assignCreatorFromDoc(doc)
 	if assignCreator != nil {
 		assignCreatorValue = *assignCreator
@@ -235,6 +256,86 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
 
 	return writeRuntimeConfigDoc(path, doc)
+}
+
+func ReadRuntimeConfigGitHubIssueAutoStartOnlyAssigned(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return true
+	}
+	doc, err := readRuntimeConfigDoc(path)
+	if err != nil {
+		return true
+	}
+	return githubIssueAutoStartOnlyAssignedFromDoc(doc)
+}
+
+func githubIssueAutoStartOnlyAssignedFromDoc(doc map[string]any) bool {
+	enabled, ok := doc["github_issue_auto_start_only_assigned"].(bool)
+	return !ok || enabled
+}
+
+func applyGitHubIssueAutoStartOnlyAssignedToDoc(doc map[string]any, enabled bool) {
+	if enabled {
+		delete(doc, "github_issue_auto_start_only_assigned")
+		return
+	}
+	doc["github_issue_auto_start_only_assigned"] = false
+}
+
+// ReadRuntimeConfigGitHubIssueAutoStartLabels returns labels that every
+// automatically started issue must have.
+func ReadRuntimeConfigGitHubIssueAutoStartLabels(path string) []string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	doc, err := readRuntimeConfigDoc(path)
+	if err != nil {
+		return nil
+	}
+	return githubIssueAutoStartLabelsFromDoc(doc)
+}
+
+func githubIssueAutoStartLabelsFromDoc(doc map[string]any) []string {
+	raw, ok := doc["github_issue_auto_start_labels"].([]any)
+	if !ok {
+		return nil
+	}
+	return normalizeGitHubIssueAutoStartLabels(raw)
+}
+
+func normalizeGitHubIssueAutoStartLabels(values []any) []string {
+	seen := make(map[string]struct{}, len(values))
+	labels := make([]string, 0, len(values))
+	for _, raw := range values {
+		label, ok := raw.(string)
+		label = strings.TrimSpace(label)
+		if !ok || label == "" {
+			continue
+		}
+		key := strings.ToLower(label)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	return labels
+}
+
+func applyGitHubIssueAutoStartLabelsToDoc(doc map[string]any, labels []string) {
+	raw := make([]any, len(labels))
+	for i, label := range labels {
+		raw[i] = label
+	}
+	normalized := normalizeGitHubIssueAutoStartLabels(raw)
+	if len(normalized) == 0 {
+		delete(doc, "github_issue_auto_start_labels")
+		return
+	}
+	doc["github_issue_auto_start_labels"] = normalized
 }
 
 func applyReviewWatchSettingsToDoc(doc map[string]any, reviewCfg ReviewWatchConfig) error {

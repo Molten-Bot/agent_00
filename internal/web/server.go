@@ -171,18 +171,21 @@ type gitHubRepoCache struct {
 }
 
 type ReviewSettingsState struct {
-	AutoMerge                    bool   `json:"auto_merge"`
-	DeleteMergedBranches         bool   `json:"delete_merged_branches"`
-	MergeMethod                  string `json:"merge_method"`
-	ReviewLevel                  string `json:"review_level"`
-	DefaultLibraryEnabled        bool   `json:"default_library_enabled"`
-	ChatEnabled                  bool   `json:"chat_enabled"`
-	JSONEnabled                  bool   `json:"json_enabled"`
-	GitHubIssuesEnabled          bool   `json:"github_issues_enabled"`
-	GitHubIssueLinkMode          string `json:"github_issue_link_mode"`
-	GitHubIssueAutoStartAssigned bool   `json:"github_issue_auto_start_assigned"`
-	AssignCreator                bool   `json:"assign_creator"`
-	Message                      string `json:"message,omitempty"`
+	AutoMerge                        bool     `json:"auto_merge"`
+	DeleteMergedBranches             bool     `json:"delete_merged_branches"`
+	MergeMethod                      string   `json:"merge_method"`
+	ReviewLevel                      string   `json:"review_level"`
+	DefaultLibraryEnabled            bool     `json:"default_library_enabled"`
+	ChatEnabled                      bool     `json:"chat_enabled"`
+	JSONEnabled                      bool     `json:"json_enabled"`
+	GitHubIssuesEnabled              bool     `json:"github_issues_enabled"`
+	GitHubIssueLinkMode              string   `json:"github_issue_link_mode"`
+	GitHubIssueAutoStartEnabled      bool     `json:"github_issue_auto_start_enabled"`
+	GitHubIssueAutoStartAssigned     bool     `json:"github_issue_auto_start_assigned"`
+	GitHubIssueAutoStartOnlyAssigned bool     `json:"github_issue_auto_start_only_assigned"`
+	GitHubIssueAutoStartLabels       []string `json:"github_issue_auto_start_labels"`
+	AssignCreator                    bool     `json:"assign_creator"`
+	Message                          string   `json:"message,omitempty"`
 }
 
 type ReviewSettingsRequest struct {
@@ -196,11 +199,14 @@ type ReviewSettingsRequest struct {
 	// ChatEnabled is a pointer for the same reason as DefaultLibraryEnabled.
 	ChatEnabled *bool `json:"chat_enabled,omitempty"`
 	// JSONEnabled is a pointer for the same reason as DefaultLibraryEnabled.
-	JSONEnabled                  *bool   `json:"json_enabled,omitempty"`
-	GitHubIssuesEnabled          *bool   `json:"github_issues_enabled,omitempty"`
-	GitHubIssueLinkMode          *string `json:"github_issue_link_mode,omitempty"`
-	GitHubIssueAutoStartAssigned *bool   `json:"github_issue_auto_start_assigned,omitempty"`
-	AssignCreator                *bool   `json:"assign_creator,omitempty"`
+	JSONEnabled                      *bool     `json:"json_enabled,omitempty"`
+	GitHubIssuesEnabled              *bool     `json:"github_issues_enabled,omitempty"`
+	GitHubIssueLinkMode              *string   `json:"github_issue_link_mode,omitempty"`
+	GitHubIssueAutoStartEnabled      *bool     `json:"github_issue_auto_start_enabled,omitempty"`
+	GitHubIssueAutoStartAssigned     *bool     `json:"github_issue_auto_start_assigned,omitempty"`
+	GitHubIssueAutoStartOnlyAssigned *bool     `json:"github_issue_auto_start_only_assigned,omitempty"`
+	GitHubIssueAutoStartLabels       *[]string `json:"github_issue_auto_start_labels,omitempty"`
+	AssignCreator                    *bool     `json:"assign_creator,omitempty"`
 }
 
 // NewServer returns a monitor HTTP server.
@@ -301,6 +307,7 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/github/repos", s.handleGitHubRepos)
 	mux.HandleFunc("/api/github/issues", s.handleGitHubIssues)
 	mux.HandleFunc("/api/github/issues/", s.handleGitHubIssues)
+	mux.HandleFunc("/api/github/labels", s.handleGitHubLabels)
 	mux.HandleFunc("/api/review-settings", s.handleReviewSettings)
 	mux.HandleFunc("/api/commit-signing", s.handleCommitSigning)
 	mux.HandleFunc("/api/commit-signing/verify", s.handleCommitSigning)
