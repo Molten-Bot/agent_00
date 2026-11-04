@@ -207,6 +207,47 @@ func TestAssignedIssueAutoStartBaselinesAndSubmitsNewIssueOnce(t *testing.T) {
 	}
 }
 
+func TestGitHubIssueAutoStartBaselinesWhenFiltersChange(t *testing.T) {
+	t.Parallel()
+	var submitted [][]byte
+	labels := []string{"bug"}
+	srv := NewServer("", NewBroker())
+	srv.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) {
+		return ReviewSettingsState{
+			GitHubIssuesEnabled:              true,
+			GitHubIssueAutoStartAssigned:     true,
+			GitHubIssueAutoStartOnlyAssigned: false,
+			GitHubIssueAutoStartLabels:       labels,
+		}, nil
+	}
+	srv.GitHubIssueRunner = githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "issue" && cmd.Args[1] == "list" {
+			return execx.Result{Stdout: `[{"number":22,"title":"Existing bug","state":"OPEN","labels":[{"name":"bug"}]},{"number":23,"title":"Existing feature","state":"OPEN","labels":[{"name":"feature"}]}]`}, nil
+		}
+		t.Fatalf("unexpected gh command: %#v", cmd)
+		return execx.Result{}, nil
+	})
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{{FullName: "acme/repo"}}, nil
+	}
+	srv.SubmitLocalPrompt = func(_ context.Context, body []byte) (string, error) {
+		submitted = append(submitted, append([]byte(nil), body...))
+		return "request-1", nil
+	}
+	seen := make(map[string]bool)
+	baseline := true
+	filters := ""
+	srv.pollGitHubIssueAutoStart(context.Background(), seen, &baseline, &filters)
+	labels = []string{"feature"}
+	srv.pollGitHubIssueAutoStart(context.Background(), seen, &baseline, &filters)
+	if len(submitted) != 0 {
+		t.Fatalf("filter change submitted %d tasks, want 0", len(submitted))
+	}
+	if !seen["acme/repo#22"] || !seen["acme/repo#23"] {
+		t.Fatalf("filter baseline missed existing issues: %v", seen)
+	}
+}
+
 func TestGitHubIssueListRejectsInvalidFiltersBeforeCallingGh(t *testing.T) {
 	t.Parallel()
 	calls := 0

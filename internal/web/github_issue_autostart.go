@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,9 +21,9 @@ type githubIssueAutoStartRunConfig struct {
 	GitHubIssue *config.GitHubIssueConfig `json:"githubIssue"`
 }
 
-// runGitHubIssueAutoStart checks for new open issues assigned to the current
-// GitHub user while the local UI service is running. The first scan after
-// enabling the setting establishes a baseline and does not launch old issues.
+// runGitHubIssueAutoStart checks for new matching open issues while the local
+// UI service is running. The first scan after enabling or changing filters
+// establishes a baseline and does not launch old issues.
 func (s Server) runGitHubIssueAutoStart(ctx context.Context) {
 	if s.GitHubIssueRunner == nil || s.SubmitLocalPrompt == nil || s.ReviewSettingsStatus == nil {
 		return
@@ -31,25 +32,55 @@ func (s Server) runGitHubIssueAutoStart(ctx context.Context) {
 	defer ticker.Stop()
 	seen := make(map[string]bool)
 	baseline := true
+	filters := ""
 	for {
-		state, err := s.ReviewSettingsStatus(ctx)
-		if err != nil {
-			s.logf("localruntime.ui status=warn event=github_issue_auto_start_settings err=%q", err)
-		} else if !state.GitHubIssuesEnabled || !state.GitHubIssueAutoStartAssigned {
-			baseline = true
-		} else {
-			if err := s.scanGitHubIssuesForAutoStart(ctx, baseline, seen, state.GitHubIssueLinkMode, state.GitHubIssueAutoStartOnlyAssigned, state.GitHubIssueAutoStartLabels); err != nil {
-				s.logf("localruntime.ui status=warn event=github_issue_auto_start_scan err=%q", err)
-			} else {
-				baseline = false
-			}
-		}
+		s.pollGitHubIssueAutoStart(ctx, seen, &baseline, &filters)
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s Server) pollGitHubIssueAutoStart(ctx context.Context, seen map[string]bool, baseline *bool, filters *string) {
+	state, err := s.ReviewSettingsStatus(ctx)
+	if err != nil {
+		s.logf("localruntime.ui status=warn event=github_issue_auto_start_settings err=%q", err)
+		return
+	}
+	if !state.GitHubIssuesEnabled || !state.GitHubIssueAutoStartAssigned {
+		*baseline = true
+		*filters = ""
+		return
+	}
+	nextFilters := githubIssueAutoStartFilterKey(state.GitHubIssueAutoStartOnlyAssigned, state.GitHubIssueAutoStartLabels)
+	if nextFilters != *filters {
+		*baseline = true
+		*filters = nextFilters
+	}
+	if err := s.scanGitHubIssuesForAutoStart(ctx, *baseline, seen, state.GitHubIssueLinkMode, state.GitHubIssueAutoStartOnlyAssigned, state.GitHubIssueAutoStartLabels); err != nil {
+		s.logf("localruntime.ui status=warn event=github_issue_auto_start_scan err=%q", err)
+		return
+	}
+	*baseline = false
+}
+
+func githubIssueAutoStartFilterKey(onlyAssigned bool, labels []string) string {
+	unique := make(map[string]struct{}, len(labels))
+	for _, label := range labels {
+		label = strings.ToLower(strings.TrimSpace(label))
+		if label != "" {
+			unique[label] = struct{}{}
+		}
+	}
+	normalized := make([]string, 0, len(unique))
+	for label := range unique {
+		normalized = append(normalized, label)
+	}
+	sort.Strings(normalized)
+	encoded, _ := json.Marshal(normalized)
+	return fmt.Sprintf("%t:%s", onlyAssigned, encoded)
 }
 
 func (s Server) scanAssignedGitHubIssues(ctx context.Context, baseline bool, seen map[string]bool, linkMode string) error {
