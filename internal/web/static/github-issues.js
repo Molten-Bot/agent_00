@@ -413,7 +413,7 @@
     try {
       const body = await requestJSON("/api/local-prompt", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Agent-Task-Source": "prompt" },
+        headers: { "Content-Type": "application/json", "X-Agent-Task-Source": "github_issues" },
         body: JSON.stringify({
           repo: repoURL,
           baseBranch: String(repo.default_branch || "").trim(),

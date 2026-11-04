@@ -4452,6 +4452,7 @@
       library: "--dashboard-chart-library",
       prompt: "--dashboard-chart-prompt",
       review: "--dashboard-chart-review",
+      github_issues: "--dashboard-chart-github-issues",
       other: "--dashboard-chart-other",
     };
     const DASHBOARD_SOURCE_COLOR_FALLBACKS = {
@@ -4460,6 +4461,7 @@
       library: "#6fb0f4",
       prompt: "#7bc99a",
       review: "#f08fb2",
+      github_issues: "#7bc99a",
       other: "#8ca0bd",
     };
 
@@ -4485,11 +4487,12 @@
     function dashboardSourceKey(label) {
       const key = String(label || "").trim().toLowerCase();
       if (key === "dialogue") return "chat";
+      if (key === "github issues" || key === "github_issue" || key === "github_issues") return "github_issues";
       return DASHBOARD_SOURCE_COLOR_VARS[key] ? key : "other";
     }
 
     function dashboardSourceIconName(label) {
-      switch (String(label || "").trim().toLowerCase()) {
+      switch (dashboardSourceKey(label)) {
         case "dialogue":
         case "chat":
           return "message-circle";
@@ -4499,6 +4502,8 @@
           return "book-open";
         case "review":
           return "git-pull-request";
+        case "github_issues":
+          return "folder-kanban";
         case "prompt":
           return "pencil";
         default:
@@ -13727,6 +13732,6 @@
   <script src="/static/library-schedules.js"></script>
   <script src="/static/commit-signing.js"></script>
   <script src="/static/custom-library-sources.js"></script>
-  <script src="/static/github-issues.js?v=8"></script>
+  <script src="/static/github-issues.js?v=9"></script>
 </body>
 </html>

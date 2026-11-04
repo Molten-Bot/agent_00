@@ -795,6 +795,10 @@ func TestDashboardSourceLegendStylesLiveInGlobalStylesheet(t *testing.T) {
 	if !strings.Contains(html, "dashboard-source-legend-item-${dashboardSourceKey(label)}") {
 		t.Fatalf("expected dashboard source legend to choose source-specific global classes")
 	}
+	if !strings.Contains(html, "function dashboardSourceIconName(label) {\n      switch (dashboardSourceKey(label))") ||
+		!strings.Contains(html, "case \"github_issues\":\n          return \"folder-kanban\";") {
+		t.Fatalf("expected GitHub Issues dashboard sources to use the folder-kanban icon")
+	}
 	if !strings.Contains(html, `clearDashboardSourceLegend();`) ||
 		!strings.Contains(html, `legendIconName: dashboardSourceIconName,`) {
 		t.Fatalf("expected dashboard source chart to hide the duplicate external legend and render icons inside the chart legend")
@@ -817,6 +821,7 @@ func TestDashboardSourceLegendStylesLiveInGlobalStylesheet(t *testing.T) {
 		".dashboard-source-legend-item-library .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-library);\n}",
 		".dashboard-source-legend-item-prompt .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-prompt);\n}",
 		".dashboard-source-legend-item-review .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-review);\n}",
+		".dashboard-source-legend-item-github_issues .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-github-issues);\n}",
 		".dashboard-d3-legend-icon-foreign {\n  color: var(--dashboard-chart-other);\n  overflow: visible;\n  pointer-events: none;\n}",
 		".dashboard-source-legend[hidden] {\n  display: none;\n}",
 	} {

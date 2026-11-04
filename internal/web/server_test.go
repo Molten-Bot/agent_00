@@ -4003,18 +4003,19 @@ func TestHandlerDashboardStatsIncludeTaskSourcesFromSubmitPaths(t *testing.T) {
 	post("/api/local-prompt", `{"repo":"git@github.com:acme/repo.git","prompt":"from prompt"}`, "")
 	post("/api/local-prompt", `{"repo":"git@github.com:acme/repo.git","prompt":"from json","source":"json"}`, "")
 	post("/api/local-prompt", `{"repo":"git@github.com:acme/repo.git","prompt":"from chat"}`, "chat")
+	post("/api/local-prompt", `{"repo":"git@github.com:acme/repo.git","prompt":"from GitHub Issues"}`, "github_issues")
 	post("/api/library/run", `{"repo":"git@github.com:acme/repo.git","libraryTaskName":"unit-test-coverage"}`, "")
 	b.RecordTaskRunConfigWithSource("req-hub-source", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"from hub"}`), "hub")
 
 	snap := b.Snapshot()
-	if got, want := snap.Stats.TotalTasks, 5; got != want {
+	if got, want := snap.Stats.TotalTasks, 6; got != want {
 		t.Fatalf("stats.total_tasks = %d, want %d", got, want)
 	}
 	got := map[string]int{}
 	for _, group := range snap.Stats.SourceMix {
 		got[group.Name] = group.Tasks
 	}
-	for _, name := range []string{"Chat", "Other", "JSON", "Library", "Prompt"} {
+	for _, name := range []string{"Chat", "GitHub Issues", "Other", "JSON", "Library", "Prompt"} {
 		if got[name] != 1 {
 			t.Fatalf("source_mix[%q] = %d, want 1 (all groups: %#v)", name, got[name], snap.Stats.SourceMix)
 		}
