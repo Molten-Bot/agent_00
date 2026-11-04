@@ -4770,6 +4770,16 @@ func diskSpaceExhaustionError(cmd execx.Command, res execx.Result, err error) er
 	)
 }
 
+func agentWorkspaceStorageExhausted(res execx.Result) bool {
+	detail := strings.ToLower(res.Stdout + "\n" + res.Stderr)
+	return containsAny(detail, []string{
+		"no space left on device",
+		"out of diskspace",
+		"disk quota exceeded",
+		"enospc",
+	})
+}
+
 func (h Harness) runPRChecksWatch(ctx context.Context, repoDir, prURL string) (execx.Result, error) {
 	return h.runPRChecksWatchCommand(ctx, prChecksCommand(repoDir, prURL))
 }
@@ -5892,6 +5902,9 @@ func (h Harness) runCodexWithHeartbeat(
 			}
 			if failed, detail := codexReportedFailure(run.res); failed {
 				detail = codexFailureDetailWithErrorDetails(run.res, detail)
+				if agentWorkspaceStorageExhausted(run.res) {
+					return run.res, fmt.Errorf("%s reported failure: workspace storage ran out of space while the agent was running; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem or free up space: %s", agentStage, detail)
+				}
 				if isImplementationTargetFailure(detail) {
 					return run.res, fmt.Errorf("%s reported failure: %s", agentStage, detail)
 				}

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
@@ -78,6 +79,35 @@ func TestRunCommandUnchecked_DoesNotClassifyNonGitQuotaErrors(t *testing.T) {
 	_, err := h.runCommandUnchecked(context.Background(), "checks", execx.Command{Name: "gh", Dir: "/repo", Args: []string{"api", "repos/x/y"}})
 	if !errors.Is(err, underlying) || err != underlying {
 		t.Fatalf("error = %v, want untouched underlying error %v, not relabeled as disk exhaustion", err, underlying)
+	}
+}
+
+func TestRunCodexRejectsAgentDiskSpaceExhaustionBeforeValidationGap(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "improve API test coverage to 90%"
+	firstCmd := codexCommand(targetDir, prompt)
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: firstCmd,
+			res: execx.Result{
+				Stdout: "Failure: Cannot safely meet coverage target in current runtime.\nError details: `bun run test:unit:coverage` failed: `vitest: command not found`.",
+				Stderr: "ENOSPC: failed copying files from cache to destination for package vitest",
+			},
+		},
+	}}
+
+	h := New(fake)
+	err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil {
+		t.Fatal("runCodex() error = nil, want workspace storage exhaustion")
+	}
+	if !strings.Contains(err.Error(), "workspace storage ran out of space") {
+		t.Fatalf("runCodex() error = %q, want workspace storage diagnosis", err)
+	}
+	if !strings.Contains(err.Error(), "HARNESS_WORKSPACE_DISK_BASE") {
+		t.Fatalf("runCodex() error = %q, want storage remediation hint", err)
 	}
 }
 
