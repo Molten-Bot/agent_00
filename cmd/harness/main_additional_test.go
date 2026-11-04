@@ -1771,3 +1771,52 @@ func TestRemoveManagedWorkspaceDir(t *testing.T) {
 		t.Fatalf("unmanaged dir stat error = %v, want present", err)
 	}
 }
+
+func TestCleanupTaskWorkspaceOnCompletionRemovesManagedWorkspace(t *testing.T) {
+	ramBase := filepath.Join(t.TempDir(), "ram-base")
+	diskBase := filepath.Join(t.TempDir(), "disk-base")
+	t.Setenv("HARNESS_WORKSPACE_RAM_BASE", ramBase)
+	t.Setenv("HARNESS_WORKSPACE_DISK_BASE", diskBase)
+	t.Setenv("HARNESS_WORKSPACE_ROOT_NAME", "tasks-root")
+
+	workspaceDir := filepath.Join(ramBase, "tasks-root", "0123456789abcdef0123456789abcdef")
+	if err := os.MkdirAll(filepath.Join(workspaceDir, "repo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceDir, "repo", "source.txt"), []byte("task workspace"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs []string
+	cleanupTaskWorkspaceOnCompletion("req-completed", app.Result{WorkspaceDir: workspaceDir}, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+
+	if _, err := os.Stat(workspaceDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("workspace still exists after task completion cleanup: %v", err)
+	}
+	assertLogContains(t, logs, "action=task_completion_workspace_cleanup request_id=req-completed")
+}
+
+func TestCleanupTaskWorkspaceOnCompletionSkipsUnmanagedWorkspace(t *testing.T) {
+	ramBase := filepath.Join(t.TempDir(), "ram-base")
+	diskBase := filepath.Join(t.TempDir(), "disk-base")
+	t.Setenv("HARNESS_WORKSPACE_RAM_BASE", ramBase)
+	t.Setenv("HARNESS_WORKSPACE_DISK_BASE", diskBase)
+	t.Setenv("HARNESS_WORKSPACE_ROOT_NAME", "tasks-root")
+
+	workspaceDir := filepath.Join(t.TempDir(), "unmanaged")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs []string
+	cleanupTaskWorkspaceOnCompletion("req-unmanaged", app.Result{WorkspaceDir: workspaceDir}, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+
+	if _, err := os.Stat(workspaceDir); err != nil {
+		t.Fatalf("unmanaged workspace was removed: %v", err)
+	}
+	assertLogContains(t, logs, "action=skip_unmanaged_workspace_cleanup request_id=req-unmanaged")
+}
