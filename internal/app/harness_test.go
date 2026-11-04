@@ -7579,6 +7579,32 @@ func TestRunCodexAllowsFullSuiteValidationUnavailableWithMissingDeps(t *testing.
 	}
 }
 
+func TestRunCodexDoesNotDowngradeTaskBlockerToValidationGap(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "increase API coverage to 90%"
+	firstCmd := codexCommand(targetDir, prompt)
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: firstCmd,
+			res: execx.Result{Stdout: strings.Join([]string{
+				"Failure: Cannot safely meet coverage target in current runtime.",
+				"Error details: `vitest: command not found`.",
+			}, "\n")},
+		},
+	}}
+
+	err := New(fake).runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil {
+		t.Fatal("runCodex() error = nil, want task blocker failure")
+	}
+	if !strings.Contains(err.Error(), "Cannot safely meet coverage target") {
+		t.Fatalf("runCodex() error = %v, want task blocker detail", err)
+	}
+}
+
 func TestRunCodexAllowsNPMCheckMissingNodeModulesPluginResolution(t *testing.T) {
 	t.Parallel()
 
@@ -7898,6 +7924,11 @@ func TestCodexReportedFailure(t *testing.T) {
 	modelDiagnostic := "ERROR: The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account."
 	if failed, detail := codexReportedFailure(execx.Result{Stderr: modelDiagnostic}); !failed || detail != modelDiagnostic {
 		t.Fatalf("codexReportedFailure(unsupported model diagnostic) = (%v, %q), want (true, %q)", failed, detail, modelDiagnostic)
+	}
+
+	quotedDiagnostic := "internal/app/harness_test.go:7898:\tmodelDiagnostic := \"" + modelDiagnostic + "\""
+	if failed, detail := codexReportedFailure(execx.Result{Stderr: quotedDiagnostic}); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(quoted unsupported model diagnostic) = (%v, %q), want (false, \"\")", failed, detail)
 	}
 }
 
