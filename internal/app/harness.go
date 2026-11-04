@@ -531,7 +531,11 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 				runDir,
 			)
 		}
-		if requiresConcreteNoChangeEvidence(cfg.Prompt) && !agentOutputCitesAgent00NoChangeEvidence(agentRes) {
+		noChangeEvidence, err := h.agentOutputCitesVerifiedConcreteNoChangeEvidence(ctx, repos, agentRes, cfg.Prompt)
+		if err != nil {
+			return h.failWithRepos(ExitGit, "git", err, runDir, repos)
+		}
+		if requiresConcreteNoChangeEvidence(cfg.Prompt) && !noChangeEvidence {
 			return h.fail(
 				ExitCodex,
 				agentStage,
@@ -544,7 +548,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		}
 		h.logf("stage=git status=no_changes")
 		res := buildResult(runDir, repos, true)
-		res.NoChangeEvidence = agentOutputCitesConcreteNoChangeEvidence(agentRes, cfg.Prompt)
+		res.NoChangeEvidence = noChangeEvidence
 		res.ExitCode = ExitSuccess
 		return res
 	}
@@ -5466,6 +5470,30 @@ func agentOutputCitesConcreteNoChangeEvidence(res execx.Result, prompt string) b
 	return agentOutputCitesGeneralNoChangeEvidence(res)
 }
 
+// agentOutputCitesVerifiedConcreteNoChangeEvidence verifies a revision cited as
+// no-op evidence against the repository's current HEAD. A revision-shaped
+// string supplied only by an agent is not proof that it inspected this repo.
+func (h Harness) agentOutputCitesVerifiedConcreteNoChangeEvidence(ctx context.Context, repos []repoWorkspace, res execx.Result, prompt string) (bool, error) {
+	if agentOutputCitesConcreteNoChangeEvidence(res, prompt) {
+		return true, nil
+	}
+	output := strings.ToLower(strings.TrimSpace(res.Stdout))
+	if !agentOutputHasNoChangeClaim(output) || !agentOutputHasGitRevisionEvidence(output) {
+		return false, nil
+	}
+
+	for _, repo := range repos {
+		head, err := h.currentHead(ctx, repo)
+		if err != nil {
+			return false, err
+		}
+		if agentOutputHasGitRevisionEvidenceForRevision(res.Stdout, head) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func agentOutputCitesAgent00NoChangeEvidence(res execx.Result) bool {
 	text := strings.ToLower(strings.TrimSpace(res.Stdout))
 	if !agentOutputHasNoChangeClaim(text) {
@@ -5483,7 +5511,8 @@ func agentOutputCitesGeneralNoChangeEvidence(res execx.Result) bool {
 	if !agentOutputHasNoChangeClaim(text) {
 		return false
 	}
-	return agentOutputHasConcreteFileEvidence(text) || agentOutputHasConcreteBehaviorEvidence(text)
+	return agentOutputHasConcreteFileEvidence(text) ||
+		agentOutputHasConcreteBehaviorEvidence(text)
 }
 
 func agentOutputHasConcreteBehaviorEvidence(text string) bool {
@@ -5514,6 +5543,7 @@ func agentOutputHasConcreteBehaviorEvidence(text string) bool {
 // follow-up run.
 var agentNoChangeClaimPattern = regexp.MustCompile(
 	`no\s+(?:[a-z][a-z/_.-]{0,30}\s+)?changes?\s+(?:is\s+|are\s+|were\s+)?(?:needed|required|made|necessary|warranted)` +
+		`|\bno\s+(?:code\s+)?diff\b` +
 		`|\bdiff\s*:?\s*(?:is\s+)?(?:none|empty|clean)\b` +
 		`|\b(?:tree|repo|repository|working tree)\s+(?:is\s+|was\s+)?already\s+clean\b` +
 		`|\bzero\s+\S+\s+diff\b`,
@@ -5565,6 +5595,28 @@ func agentOutputHasConcreteFileEvidence(text string) bool {
 	}
 	for _, pattern := range evidencePatterns {
 		if pattern.MatchString(text) {
+			return true
+		}
+	}
+	return false
+}
+
+// agentOutputHasGitRevisionEvidence reports whether output cites a revision.
+// Callers must verify that revision against a repository before treating it as
+// no-op evidence.
+var agentGitRevisionEvidencePattern = regexp.MustCompile(`\b(?:head|commit|revision)\b[^\n]{0,80}?\b([0-9a-f]{7,40})\b`)
+
+func agentOutputHasGitRevisionEvidence(text string) bool {
+	return agentGitRevisionEvidencePattern.MatchString(text)
+}
+
+func agentOutputHasGitRevisionEvidenceForRevision(text, revision string) bool {
+	revision = strings.ToLower(strings.TrimSpace(revision))
+	if len(revision) < 7 || !regexp.MustCompile(`^[0-9a-f]{7,40}$`).MatchString(revision) {
+		return false
+	}
+	for _, match := range agentGitRevisionEvidencePattern.FindAllStringSubmatch(strings.ToLower(text), -1) {
+		if strings.HasPrefix(revision, match[1]) {
 			return true
 		}
 	}
