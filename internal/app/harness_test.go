@@ -6574,7 +6574,7 @@ func TestAgentOutputCitesGeneralNoChangeEvidenceForNaturalPhrasing(t *testing.T)
 		{
 			name:   "no code diff with head revision evidence",
 			output: "No code diff. HEAD already contains requested behavior in 1234abcde.",
-			want:   true,
+			want:   false,
 		},
 		{
 			name:   "read only investigation with auxiliary verb",
@@ -6645,7 +6645,7 @@ func TestAgentOutputCitesAgent00NoChangeEvidenceForRetrospectivePhrasing(t *test
 		{
 			name:   "head revision with no code diff",
 			output: "No code diff. HEAD already contains the requested behavior in 1234abcde.",
-			want:   true,
+			want:   false,
 		},
 		{
 			name:   "no change claim without agent00 evidence marker",
@@ -6666,6 +6666,77 @@ func TestAgentOutputCitesAgent00NoChangeEvidenceForRetrospectivePhrasing(t *test
 				t.Fatalf("agentOutputCitesAgent00NoChangeEvidence() = %t, want %t", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAgentOutputHasGitRevisionEvidenceForRevision(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		output   string
+		revision string
+		want     bool
+	}{
+		{
+			name:     "matching abbreviated head",
+			output:   "No code diff. HEAD already contains requested behavior in 1234abcde.",
+			revision: "1234abcde5678f9012345678901234567890abcd",
+			want:     true,
+		},
+		{
+			name:     "unrelated revision does not qualify",
+			output:   "No code diff. HEAD already contains requested behavior in deadbeef.",
+			revision: "1234abcde5678f9012345678901234567890abcd",
+			want:     false,
+		},
+		{
+			name:     "matching hash unrelated to revision claim does not qualify",
+			output:   "No code diff. HEAD already contains requested behavior in deadbeef; tracked issue 1234abcde.",
+			revision: "1234abcde5678f9012345678901234567890abcd",
+			want:     false,
+		},
+		{
+			name:     "invalid checked revision does not qualify",
+			output:   "No code diff. HEAD already contains requested behavior in 1234abcde.",
+			revision: "not-a-sha",
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := agentOutputHasGitRevisionEvidenceForRevision(tt.output, tt.revision); got != tt.want {
+				t.Fatalf("agentOutputHasGitRevisionEvidenceForRevision() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHarnessVerifiesRevisionBeforeRecordingNoChangeEvidence(t *testing.T) {
+	t.Parallel()
+
+	const (
+		repoDir = "/work/repo"
+		head    = "1234abcde5678f9012345678901234567890abcd"
+	)
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: head + "\n"}},
+	}}
+	h := New(fake)
+	got, err := h.agentOutputCitesVerifiedConcreteNoChangeEvidence(
+		context.Background(),
+		[]repoWorkspace{{Dir: repoDir}},
+		execx.Result{Stdout: "No code diff. HEAD already contains requested behavior in 1234abcde."},
+		"investigate requested behavior",
+	)
+	if err != nil {
+		t.Fatalf("agentOutputCitesVerifiedConcreteNoChangeEvidence() error = %v", err)
+	}
+	if !got {
+		t.Fatal("agentOutputCitesVerifiedConcreteNoChangeEvidence() = false, want true")
 	}
 }
 
