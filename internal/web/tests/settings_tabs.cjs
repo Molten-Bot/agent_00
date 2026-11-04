@@ -290,7 +290,7 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
   });
 
   assert.notEqual(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
-  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=10');
+  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=11');
   await page.waitForFunction(() => document.querySelector('.github-issue-empty-state h2')?.textContent === 'No repositories available');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No repositories available');
   await page.locator('#github-issues-dock-link').click();
@@ -510,9 +510,15 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   assert.match(await page.locator('.github-issue-body').textContent(), /Implement this issue/);
   assert.match(await page.locator('.github-issue-comment-body').textContent(), /retry coverage/);
   assert.equal(await page.locator('.github-issue-task .github-issue-link-options').count(), 0);
-  assert.match(await page.locator('.github-issue-task-heading').textContent(), /close #17 on merge/);
+  assert.equal(await page.locator('.github-issue-task').evaluate(task => task.parentElement.id), 'github-issue-detail');
+  assert.equal(await page.locator('.github-issue-task').evaluate(task => task.classList.contains('prompt-actions')), true);
+  assert.equal(await page.locator('.github-issue-task-heading').evaluate(heading => heading.classList.contains('prompt-actions-start')), true);
+  assert.match(await page.locator('.github-issue-task-status').textContent(), /close #17 on merge/);
+  assert.equal(await page.locator('.github-issue-task-status').evaluate(status => getComputedStyle(status).textAlign), 'center');
+  const taskBox = await page.locator('.github-issue-task').boundingBox();
+  assert.ok(Math.abs(taskBox.y + taskBox.height - detailBox.y - detailBox.height) < 1, 'task controls float at the bottom of issue detail');
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('github-issue-link-mode-updated', { detail: { mode: 'reference' } })));
-  assert.match(await page.locator('.github-issue-task-heading').textContent(), /reference #17/);
+  assert.match(await page.locator('.github-issue-task-status').textContent(), /reference #17/);
 
   const issueStartButton = page.getByRole('button', { name: 'Start task' });
   assert.equal(await page.getByRole('button', { name: 'Edit prompt first' }).count(), 0);

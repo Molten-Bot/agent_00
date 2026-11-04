@@ -361,11 +361,15 @@
     }
     detailBody.appendChild(comments);
 
+    detail.appendChild(detailBody);
+
     const task = document.createElement("section");
-    task.className = "github-issue-task";
-    const taskHeading = addText(task, "div", "github-issue-task-heading", "");
+    task.className = "github-issue-task prompt-actions";
+    const taskHeading = addText(task, "div", "prompt-actions-start github-issue-task-heading", "");
     addText(taskHeading, "strong", "", "Start a task from this issue");
-    addText(taskHeading, "span", "github-issue-link-mode-note", taskLinkModeDescription(issue));
+    const taskStatus = addText(task, "p", "submit-status submit-status-inline github-issue-task-status is-visible", taskLinkModeDescription(issue));
+    taskStatus.setAttribute("role", "status");
+    taskStatus.setAttribute("aria-live", "polite");
     const actions = document.createElement("div");
     actions.className = "prompt-actions-end github-issue-task-actions";
     const start = document.createElement("button");
@@ -375,11 +379,7 @@
     start.addEventListener("click", () => void submitTask(issue, repo, buildTaskPrompt(issue)));
     actions.append(start);
     task.appendChild(actions);
-    const taskStatus = addText(task, "p", "github-issue-task-status", "");
-    taskStatus.setAttribute("role", "status");
-    taskStatus.setAttribute("aria-live", "polite");
-    detailBody.appendChild(task);
-    detail.appendChild(detailBody);
+    detail.appendChild(task);
   }
 
   function renderEmptyDetail(title, description) {

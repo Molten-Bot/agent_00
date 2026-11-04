@@ -9444,7 +9444,9 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 }
 
 .github-issue-detail {
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden;
 }
 
 .github-issue-detail-header {
@@ -9485,7 +9487,11 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 }
 
 .github-issue-detail-body {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 17px 22px 21px;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 .github-issue-author {
@@ -9579,28 +9585,22 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 }
 
 .github-issue-task {
-  display: grid;
-  gap: 10px;
-  padding: 13px;
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  background: linear-gradient(130deg, var(--accent-soft), transparent 120%);
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  flex: 0 0 auto;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border-strong);
+  background: var(--bg-panel-strong);
+  box-shadow: 0 -10px 24px color-mix(in srgb, var(--bg-panel-strong) 78%, transparent);
 }
 
 .github-issue-task-heading {
-  display: flex;
-  justify-content: space-between;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
   color: var(--text-soft);
   font-size: .7rem;
   font-weight: 750;
-}
-
-.github-issue-task-heading span {
-  color: var(--muted);
-  font-size: .62rem;
-  font-weight: 500;
 }
 
 .github-issue-link-options {
@@ -9650,13 +9650,10 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 }
 
 .github-issue-task-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
+  flex: 0 0 auto;
 }
 
 .github-issue-task-status {
-  min-height: 1.2em;
   margin: 0;
   color: var(--muted);
   font-size: .68rem;
@@ -9697,14 +9694,7 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
     grid-template-columns: 1fr;
   }
 
-  .github-issue-task-heading {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 4px;
-  }
-
   .github-issue-task-actions {
-    flex-direction: column;
-    align-items: stretch;
+    justify-content: flex-end;
   }
 }
