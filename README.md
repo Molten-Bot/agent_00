@@ -148,10 +148,11 @@ would otherwise run the task agent and every review fix pass without the tools
 that need it. Those passes could still read and edit files, but their shell
 commands would fail, so the run would produce changes nothing could build or
 test and then fail on review convergence instead. A review-only run is logged
-rather than failed, because its single pass already runs with the editing and
-shell tools disallowed and so never reaches them. The CLI fixes this path, so
-concurrent tasks and review passes sharing a configuration directory share that
-one scratch directory.
+rather than failed while its single pass is still denied every tool that could
+run a shell command; the harness checks that denial list instead of assuming it,
+and fails the run like any other once a shell tool is reachable again. The CLI
+fixes this path, so concurrent tasks and review passes sharing a configuration
+directory share that one scratch directory.
 
 Keep the bundled helper in this image: Debian trixie's `bubblewrap` 0.12.0 fails
 to mount `/proc` under Docker's masked proc paths in our container smoke check,

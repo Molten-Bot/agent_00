@@ -292,6 +292,11 @@ func ClaudeSessionScratchDir(environ []string) string {
 // is changing reproduces that wording without having lost a single tool, so the
 // path has to be this invocation's. An empty scratchDir leaves nothing to match
 // against, so nothing is reported.
+//
+// The path test cannot reject one case: a run diagnosing an earlier failure on
+// the same host quotes a refusal naming the directory this invocation resolves
+// too. ClaudeShellToolRan supplies the counter-evidence for that one, so
+// callers consult both.
 func ClaudeSessionScratchFailure(output, scratchDir string) bool {
 	scratchDir = strings.ToLower(strings.TrimSpace(scratchDir))
 	if scratchDir == "" {
@@ -309,6 +314,106 @@ func ClaudeSessionScratchFailure(output, scratchDir string) bool {
 			if strings.Contains(line, marker) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// claudeShellCommandMarkers name commands an agent can only have run through a
+// shell tool. The list stays narrow on purpose: a command it does not cover
+// leaves the scratch report as the only evidence, which is exactly where
+// ClaudeSessionScratchFailure already stands on its own.
+var claudeShellCommandMarkers = []string{
+	"go test",
+	"go build",
+	"go vet",
+	"gofmt",
+	"golangci-lint",
+	"npm test",
+	"npm run",
+	"npx ",
+	"pnpm ",
+	"yarn ",
+	"pytest",
+	"cargo test",
+	"cargo build",
+	"vitest",
+	"eslint",
+	"playwright",
+	"git status",
+	"git diff",
+}
+
+// claudeShellCommandCompletedMarkers name the ways an agent reports that such a
+// command actually finished.
+var claudeShellCommandCompletedMarkers = []string{
+	"passed",
+	"passes",
+	"passing",
+	"succeeded",
+	"succeeds",
+	"exit code 0",
+	"exit status 0",
+	"exited 0",
+	"no failures",
+}
+
+// claudeShellCommandNotRunMarkers name the opposite report: a command named
+// precisely because the invocation could not run it. That is how an invocation
+// which lost its shell tools describes the validation it owed.
+var claudeShellCommandNotRunMarkers = []string{
+	"could not",
+	"couldn't",
+	"cannot",
+	"can't",
+	"unable",
+	"did not",
+	"didn't",
+	"was not",
+	"wasn't",
+	"not run",
+	"never ran",
+	"no shell",
+	"unavailable",
+	"skipped",
+	"would have",
+}
+
+// ClaudeShellToolRan reports whether output states that this invocation ran a
+// command to completion through one of the tools that need the session scratch
+// directory. An invocation that lost that directory cannot: every shell tool
+// call fails for it, so it reports what it was unable to run instead.
+//
+// This is the counter-evidence ClaudeSessionScratchFailure cannot supply. Its
+// path test rejects another installation's scratch directory, but a follow-up
+// run diagnosing an earlier failure on the same host quotes a refusal naming
+// this invocation's own directory, and the two are identical as text. A command
+// that finished tells them apart: the tools the refusal would have taken away
+// are the ones that produce one.
+//
+// Evidence has to sit on a single line, for the same reason a scratch report
+// does: a command named in one place and a success claimed in another describe
+// two different things.
+func ClaudeShellToolRan(output string) bool {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.ToLower(strings.TrimSpace(line))
+		if line == "" || !claudeOutputContainsAny(line, claudeShellCommandMarkers) {
+			continue
+		}
+		if claudeOutputContainsAny(line, claudeShellCommandNotRunMarkers) {
+			continue
+		}
+		if claudeOutputContainsAny(line, claudeShellCommandCompletedMarkers) {
+			return true
+		}
+	}
+	return false
+}
+
+func claudeOutputContainsAny(lowerText string, markers []string) bool {
+	for _, marker := range markers {
+		if strings.Contains(lowerText, marker) {
+			return true
 		}
 	}
 	return false

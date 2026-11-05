@@ -5975,16 +5975,31 @@ func (h Harness) runCodexWithHeartbeat(
 			// successful run that merely quotes a refusal naming some other
 			// installation's scratch directory has lost no tool and must not be
 			// failed for it.
+			//
+			// A run diagnosing an earlier failure on the same host quotes a
+			// refusal naming this invocation's directory, which that path test
+			// cannot reject. A command it reports having run to completion can:
+			// an invocation without shell tools has none to report. Prefer that
+			// counter-evidence over the report and log the near miss.
 			if runtime.Harness == agentruntime.HarnessClaude {
 				scratchDir := agentruntime.ClaudeSessionScratchDir(cmd.Env)
 				if agentruntime.ClaudeSessionScratchFailure(run.res.Stdout, scratchDir) ||
 					agentruntime.ClaudeSessionScratchFailure(run.res.Stderr, scratchDir) {
-					return run.res, fmt.Errorf(
-						"%w: the %s invocation reported that it could not create %s, so its shell tools could not run a build or a test",
-						agentruntime.ErrClaudeSessionScratch,
-						agentStage,
-						scratchDir,
-					)
+					if agentruntime.ClaudeShellToolRan(run.res.Stdout) || agentruntime.ClaudeShellToolRan(run.res.Stderr) {
+						h.logf(
+							"stage=%s status=warn action=session_scratch_report_quoted dir=%s%s",
+							agentStage,
+							scratchDir,
+							invocation.logFieldsSuffix(),
+						)
+					} else {
+						return run.res, fmt.Errorf(
+							"%w: the %s invocation reported that it could not create %s, so its shell tools could not run a build or a test",
+							agentruntime.ErrClaudeSessionScratch,
+							agentStage,
+							scratchDir,
+						)
+					}
 				}
 			}
 			if runtime.Harness == agentruntime.HarnessCodex && codexInvocationAuthenticationFailed(run.res, run.err) {
@@ -7069,17 +7084,48 @@ func (h Harness) repairClaudeConfiguration(environ []string) error {
 	return nil
 }
 
+// claudeShellCapableReviewTools name the tools a review invocation could use to
+// run a shell command, either itself or by handing the work to a sub-agent that
+// can. They are the ones readOnlyReviewDisallowedTools has to block for the
+// review-only exemption below to hold.
+var claudeShellCapableReviewTools = []string{"Bash", "Agent", "Skill", "Workflow"}
+
+// readOnlyReviewBlocksShellTools checks that assumption against the list a
+// review invocation is actually given, rather than restating it. Dropping a
+// tool from readOnlyReviewDisallowedTools would otherwise leave the exemption
+// silently wrong, and the run it exempts is the one that cannot report the
+// fault: its pass keeps editing and reading while every shell command fails.
+func readOnlyReviewBlocksShellTools() bool {
+	return blocksShellCapableReviewTools(readOnlyReviewDisallowedTools)
+}
+
+func blocksShellCapableReviewTools(disallowedTools []string) bool {
+	blocked := make(map[string]struct{}, len(disallowedTools))
+	for _, tool := range disallowedTools {
+		blocked[strings.TrimSpace(tool)] = struct{}{}
+	}
+	for _, tool := range claudeShellCapableReviewTools {
+		if _, ok := blocked[tool]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // runNeedsClaudeShellTools reports whether any Claude invocation this run makes
 // can reach the tools that need the CLI's session scratch directory. A
 // review-only run makes exactly one invocation, with
 // readOnlyReviewDisallowedTools, and returns before the review fix passes and
-// the post-task review cycle, so Bash is already blocked everywhere in it.
-// Every other run invokes the agent, and any review fix pass, with the full
-// tool set. The classification is final by this point: Run calls
-// normalizeLibraryReviewTarget, which resolves every review-only run to a
-// review target, before the first Claude check.
+// the post-task review cycle, so it reaches no shell tool as long as that list
+// still blocks every one of them. Every other run invokes the agent, and any
+// review fix pass, with the full tool set. The classification is final by this
+// point: Run calls normalizeLibraryReviewTarget, which resolves every
+// review-only run to a review target, before the first Claude check.
 func runNeedsClaudeShellTools(cfg config.Config) bool {
-	return !isReviewOnlyRun(cfg)
+	if !isReviewOnlyRun(cfg) {
+		return true
+	}
+	return !readOnlyReviewBlocksShellTools()
 }
 
 // checkClaudeSessionScratch stops a run whose Claude configuration directory

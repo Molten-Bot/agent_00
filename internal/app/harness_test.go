@@ -274,6 +274,67 @@ func TestRunCodexWithHeartbeatAllowsQuotedForeignSessionScratchFailure(t *testin
 	}
 }
 
+// A run diagnosing an earlier failure on the same host quotes a refusal naming
+// the scratch directory it resolves itself, so the foreign-path test above
+// cannot reject it. It still ran its own validation, which an invocation that
+// had lost its shell tools could not have done, so the run must survive.
+func TestRunCodexWithHeartbeatAllowsQuotedOwnSessionScratchFailure(t *testing.T) {
+	t.Parallel()
+	opts, scratchDir := claudeScratchRunOptions(t)
+	quoted := "Diagnosed the failing log, which ends with `EROFS: read-only file system, " +
+		"mkdir '" + scratchDir + "'`. Fixed the handler and `go test ./...` passed."
+	runner := &streamCaptureRunner{res: execx.Result{Stdout: quoted}}
+	h := New(runner)
+
+	res, err := h.runCodexWithHeartbeat(
+		context.Background(),
+		agentruntime.Runtime{Harness: agentruntime.HarnessClaude, Command: "claude"},
+		t.TempDir(),
+		"Build API",
+		opts,
+		agentInvocationLogMetadata{},
+	)
+	if err != nil {
+		t.Fatalf("runCodexWithHeartbeat() error = %v, want nil for a quoted same-host scratch failure", err)
+	}
+	if !strings.Contains(res.Stdout, scratchDir) {
+		t.Fatalf("fixture must name this invocation's scratch directory %q", scratchDir)
+	}
+}
+
+// The review-only exemption from the session-scratch check is only safe while a
+// review pass is denied every tool that could run a shell command. It must be
+// derived from that list rather than assumed, so dropping one of those tools
+// turns the exemption off instead of leaving it silently wrong.
+func TestRunNeedsClaudeShellToolsTracksReviewDisallowedTools(t *testing.T) {
+	t.Parallel()
+	if !runNeedsClaudeShellTools(config.Config{}) {
+		t.Fatal("runNeedsClaudeShellTools(implementation run) = false, want true")
+	}
+	reviewCfg := config.Config{Review: &config.ReviewConfig{PRNumber: 1}}
+	if runNeedsClaudeShellTools(reviewCfg) {
+		t.Fatal("runNeedsClaudeShellTools(review-only run) = true, want false while shell tools are blocked")
+	}
+	if !blocksShellCapableReviewTools(readOnlyReviewDisallowedTools) {
+		t.Fatalf("readOnlyReviewDisallowedTools %v does not block every shell-capable tool %v",
+			readOnlyReviewDisallowedTools, claudeShellCapableReviewTools)
+	}
+
+	// Dropping any one of them must turn the exemption off rather than leave it
+	// asserting something the list no longer guarantees.
+	for _, tool := range claudeShellCapableReviewTools {
+		kept := make([]string, 0, len(readOnlyReviewDisallowedTools))
+		for _, blocked := range readOnlyReviewDisallowedTools {
+			if blocked != tool {
+				kept = append(kept, blocked)
+			}
+		}
+		if blocksShellCapableReviewTools(kept) {
+			t.Fatalf("blocksShellCapableReviewTools(%v) = true after dropping %q, want false", kept, tool)
+		}
+	}
+}
+
 func sampleConfig() config.Config {
 	return config.Config{
 		Version:       "v1",

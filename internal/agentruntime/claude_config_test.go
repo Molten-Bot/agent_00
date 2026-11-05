@@ -375,6 +375,55 @@ func TestClaudeSessionScratchFailureDetection(t *testing.T) {
 	}
 }
 
+func TestClaudeShellToolRanSeparatesFinishedCommandsFromUnrunnableOnes(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{
+			// The report a same-host follow-up produces: it quotes the refusal it
+			// was asked to diagnose and still ran its own validation.
+			name: "quoted refusal alongside a finished command",
+			output: "Diagnosed the failing log, which ends with `EROFS: read-only file system, " +
+				"mkdir '/some-other-config-dir/" + claudeScratchDirName + "'`. Fixed the handler and `go test ./...` passed.",
+			want: true,
+		},
+		{
+			name:   "finished build",
+			output: "`npm run build` succeeded and `eslint .` reported no failures.",
+			want:   true,
+		},
+		{
+			// The report an invocation that lost its shell tools produces: it
+			// names the command precisely because it could not run it.
+			name: "command named as unrunnable",
+			output: "Validation note: no shell execution was available in this runtime, " +
+				"so `go test ./...` could not be run.",
+			want: false,
+		},
+		{name: "command unavailable", output: "go test is unavailable in this runtime.", want: false},
+		{name: "command skipped", output: "`npm test` skipped; node_modules missing.", want: false},
+		{
+			// Split across lines, the command and the success describe two
+			// different things, so neither corroborates the other.
+			name:   "command and success on separate lines",
+			output: "Planned `go test ./...`.\nThe review pass passed its own checks.",
+			want:   false,
+		},
+		{name: "no command named", output: "Everything passed.", want: false},
+		{name: "empty", output: "", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ClaudeShellToolRan(tc.output); got != tc.want {
+				t.Fatalf("ClaudeShellToolRan(%q) = %v, want %v", tc.output, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestClaudeSessionScratchDirResolution(t *testing.T) {
 	t.Parallel()
 	configDir := t.TempDir()
