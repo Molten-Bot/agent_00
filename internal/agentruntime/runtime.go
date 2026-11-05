@@ -238,7 +238,12 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 			)
 		} else {
 			args = append(args, "-c", `sandbox_mode="workspace-write"`)
-			args = append(args, workspaceSandboxArgs(opts)...)
+			// Claude keeps per-session scratch state next to its persistent
+			// configuration and writes rotated credentials there between tasks.
+			// That directory sits outside the task workspace on purpose, so
+			// without this root the CLI hits a read-only filesystem the first
+			// time it uses a tool and runs the rest of the task without it.
+			args = append(args, workspaceSandboxArgs(opts, claudeConfigSandboxRoot(opts.Env))...)
 		}
 		args = append(args, "--", cmd.Name)
 		cmd.Args = append(args, cmd.Args...)
@@ -289,12 +294,21 @@ func resolveSandboxPath(dir string) (string, error) {
 	return filepath.Join(resolved, filepath.Base(path)), nil
 }
 
-func workspaceSandboxArgs(opts RunOptions) []string {
-	roots := make([]string, 0, len(opts.WritableDirs)+1)
+// workspaceSandboxArgs builds the sandbox restrictions for one invocation.
+// extraRoots carries harness-owned directories outside the task workspace that
+// the CLI itself must keep writing to; they bypass validateWorkspaceDirs
+// because they never come from task configuration.
+func workspaceSandboxArgs(opts RunOptions, extraRoots ...string) []string {
+	roots := make([]string, 0, len(opts.WritableDirs)+len(extraRoots)+1)
 	if root := strings.TrimSpace(opts.WorkspaceDir); root != "" {
 		roots = append(roots, root)
 	}
 	for _, dir := range opts.WritableDirs {
+		if dir = strings.TrimSpace(dir); dir != "" {
+			roots = append(roots, dir)
+		}
+	}
+	for _, dir := range extraRoots {
 		if dir = strings.TrimSpace(dir); dir != "" {
 			roots = append(roots, dir)
 		}
@@ -315,6 +329,26 @@ func workspaceSandboxArgs(opts RunOptions) []string {
 		// Both runtimes need network access for dependency downloads and tests.
 		"-c", "sandbox_workspace_write.network_access=true",
 	}
+}
+
+// claudeConfigSandboxRoot resolves the persistent Claude configuration
+// directory the CLI must keep writing to from inside the sandbox. It returns
+// an empty string when the invocation environment does not describe one: the
+// CLI cannot resolve a directory the environment omits either, so there is
+// nothing to grant.
+func claudeConfigSandboxRoot(env []string) string {
+	if len(env) == 0 {
+		return ""
+	}
+	home, err := ClaudeHome(env)
+	if err != nil {
+		return ""
+	}
+	resolved, err := resolveSandboxPath(home)
+	if err != nil {
+		return ""
+	}
+	return resolved
 }
 
 func validateWorkspaceDirs(targetDir string, opts RunOptions) error {

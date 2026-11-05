@@ -6107,11 +6107,11 @@ func codexReportedCompactPlainFailure(output string) (bool, string) {
 		return false, ""
 	}
 	for _, line := range nonEmpty {
-		lower := strings.ToLower(line)
-		if strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
-			return true, line
+		field := agentFailureFieldLine(line)
+		if lower := strings.ToLower(field); strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
+			return true, field
 		}
-		if isNoImplementationTargetLine(lower) {
+		if isNoImplementationTargetLine(strings.ToLower(line)) {
 			return true, "Failure: agent did not identify an implementation target."
 		}
 	}
@@ -6534,9 +6534,10 @@ func codexExtractErrorDetail(output string) string {
 	}
 
 	for i, line := range nonEmpty {
-		lower := strings.ToLower(line)
+		field := agentFailureFieldLine(line)
+		lower := strings.ToLower(field)
 		if strings.HasPrefix(lower, "error details:") {
-			suffix := strings.TrimSpace(line[len("error details:"):])
+			suffix := strings.TrimSpace(field[len("error details:"):])
 			if suffix != "" {
 				return "Error details: " + suffix
 			}
@@ -6568,7 +6569,12 @@ func codexJoinErrorDetailLines(lines []string) string {
 		if trimmed == "" {
 			continue
 		}
-		lower := strings.ToLower(trimmed)
+		// A Markdown code fence carries no diagnostic text of its own, and
+		// agents routinely wrap the reported error in one.
+		if strings.Trim(trimmed, "`") == "" {
+			continue
+		}
+		lower := strings.ToLower(agentFailureFieldLine(trimmed))
 		if strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
 			continue
 		}
@@ -6585,6 +6591,55 @@ func codexJoinErrorDetailLines(lines []string) string {
 		return joined
 	}
 	return strings.TrimSpace(joined[:maxDetailChars-3]) + "..."
+}
+
+// agentFailureFieldLine strips the Markdown decoration agents wrap around the
+// `Failure:` and `Error details:` fields the harness asks them to report.
+// Reports arrive as "**Failure:** ...", "- **Error details:**" or "## Failure",
+// which no plain prefix check matches, so an explicitly failed run was logged
+// as a successful agent stage and surfaced later only as a generic no-change
+// error.
+func agentFailureFieldLine(raw string) string {
+	line := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(raw), "#>-+ \t"))
+	for _, marker := range []string{"***", "**", "*", "___", "__", "_"} {
+		if strings.HasPrefix(line, marker) {
+			line = strings.TrimSpace(strings.TrimPrefix(line, marker))
+			break
+		}
+	}
+	label, rest, ok := strings.Cut(line, ":")
+	if !ok {
+		return line
+	}
+	label = strings.TrimRight(strings.TrimSpace(label), "*_")
+	rest = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(rest), "*_"))
+	if rest == "" {
+		return label + ":"
+	}
+	return label + ": " + rest
+}
+
+// agentReportedFailureFields reports a failure stated through both mandated
+// fields anywhere in the output. A Markdown report leads with its summary, so
+// the pair usually sits above the terminal window that guards against stale
+// mid-run "Failure:" progress lines; requiring the accompanying error details
+// keeps those progress lines from failing a successful run.
+func agentReportedFailureFields(nonEmpty []string) (bool, string) {
+	failure := ""
+	for _, raw := range nonEmpty {
+		field := agentFailureFieldLine(raw)
+		lower := strings.ToLower(field)
+		if failure == "" {
+			if strings.HasPrefix(lower, "failure:") && strings.TrimSpace(field[len("failure:"):]) != "" {
+				failure = field
+			}
+			continue
+		}
+		if strings.HasPrefix(lower, "error details:") {
+			return true, failure
+		}
+	}
+	return false, ""
 }
 
 func codexReportedFailureInOutput(output string, allowStructured bool) (bool, string) {
@@ -6618,11 +6673,11 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 	var structuredErrorLine string
 	for i, trimmed := range nonEmpty[start:] {
 		lower := strings.ToLower(trimmed)
-		if strings.HasPrefix(lower, "failure:") {
-			if isBareFailureHeadingAfterCompletion(trimmed, nonEmpty[:start+i]) {
+		if field := agentFailureFieldLine(trimmed); strings.HasPrefix(strings.ToLower(field), "failure:") {
+			if isBareFailureHeadingAfterCompletion(field, nonEmpty[:start+i]) {
 				continue
 			}
-			return true, trimmed
+			return true, field
 		}
 		if isNoImplementationTargetLine(lower) {
 			return true, "Failure: agent did not identify an implementation target."
@@ -6641,6 +6696,9 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 	if structuredTaskFailureLine != "" && structuredErrorLine != "" {
 		return true, structuredTaskFailureLine + " " + structuredErrorLine
 	}
+	if failed, detail := agentReportedFailureFields(nonEmpty); failed {
+		return true, detail
+	}
 	return false, ""
 }
 
@@ -6650,7 +6708,7 @@ func isBareFailureHeadingAfterCompletion(line string, previous []string) bool {
 		return false
 	}
 	for _, prev := range previous {
-		switch strings.ToLower(strings.TrimSpace(prev)) {
+		switch strings.ToLower(agentFailureFieldLine(prev)) {
 		case "done.", "success:", "changed:", "verification:", "verified:":
 			return true
 		}

@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -139,6 +140,59 @@ func TestClaudeReviewRejectsRedirectedIO(t *testing.T) {
 	_, err := rt.BuildCommand(repo, "review", RunOptions{WorkspaceDir: root, DisallowedTools: []string{"Write"}})
 	if err == nil {
 		t.Fatal("review must not grant repository writes through an IO symlink")
+	}
+}
+
+func TestClaudeSandboxGrantsPersistentConfigDir(t *testing.T) {
+	t.Parallel()
+	configDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := rt.BuildCommand("/tasks/current/repo", "fix it", RunOptions{
+		WorkspaceDir: "/tasks/current",
+		Env: []string{
+			"HOME=/tasks/current/.agent00-agent-io/home",
+			"CLAUDE_CONFIG_DIR=" + configDir,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal([]string{"/tasks/current", configDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "sandbox_workspace_write.writable_roots=" + string(encoded)
+	if !slices.Contains(cmd.Args, want) {
+		t.Fatalf("missing Claude configuration root %q in %v", want, cmd.Args)
+	}
+}
+
+func TestClaudeReviewDoesNotGrantPersistentConfigDir(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	configDir := t.TempDir()
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := rt.BuildCommand(root, "review", RunOptions{
+		WorkspaceDir:    root,
+		DisallowedTools: []string{"Write"},
+		Env:             []string{"CLAUDE_CONFIG_DIR=" + configDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range cmd.Args {
+		if strings.Contains(arg, configDir) {
+			t.Fatalf("read-only review granted Claude configuration writes: %v", cmd.Args)
+		}
 	}
 }
 

@@ -119,7 +119,8 @@ nested namespaces and mounts instead. Host user namespace support is still
 required.
 
 Agent work can write only inside its allocated task directory (the parent of
-that task's cloned repositories). Temporary files, home directories, and build
+that task's cloned repositories) and, for Claude, the persistent configuration
+directory described below. Temporary files, home directories, and build
 caches live under `.agent00-agent-io` inside that directory. The harness
 overrides Codex's writable roots, excludes global `/tmp` and implicit `$TMPDIR`
 access, and sets approvals to `never` so commands cannot escalate outside the
@@ -131,6 +132,12 @@ child processes. This requires the Codex CLI even when selecting Claude; both
 CLIs are included in the Docker image. Missing or failed sandbox tooling stops
 the run. The trusted Codex CLI still saves login rotation and session state to
 the persistent `CODEX_HOME`; model-issued commands cannot write there.
+
+Claude coding tasks also get the persistent `CLAUDE_CONFIG_DIR` as a writable
+root. The CLI keeps per-session scratch state there and writes rotated
+credentials back to it, so a read-only configuration directory makes the CLI
+fail the first time it uses a tool and run the rest of the task without it.
+Read-only review passes do not get that root.
 
 Keep the bundled helper in this image: Debian trixie's `bubblewrap` 0.12.0 fails
 to mount `/proc` under Docker's masked proc paths in our container smoke check,
