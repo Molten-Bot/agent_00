@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -62,6 +63,73 @@ func TestClaudeSandboxScratchDirSkipsUncreatableConfigDir(t *testing.T) {
 	if err != nil || got != "" {
 		t.Fatalf("claudeSandboxScratchDir(uncreatable) = (%q, %v), want no grant and no error", got, err)
 	}
+}
+
+func TestCheckClaudeSessionScratchReportsUnwritableConfigDir(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions do not block creation here")
+	}
+	configDir := t.TempDir()
+	if err := os.Chmod(configDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(configDir, 0o700) })
+
+	// The configuration directory exists, so the CLI resolves it and tries to
+	// create the scratch directory there on its first tool call. The harness
+	// cannot create it either, so the whole run would otherwise execute without
+	// tools.
+	err := CheckClaudeSessionScratch(configDir)
+	if !errors.Is(err, ErrClaudeSessionScratchUnwritable) {
+		t.Fatalf("CheckClaudeSessionScratch(unwritable) = %v, want ErrClaudeSessionScratchUnwritable", err)
+	}
+	if want := filepath.Join(configDir, claudeScratchDirName); !strings.Contains(err.Error(), want) {
+		t.Fatalf("CheckClaudeSessionScratch(unwritable) = %q, want it to name %q", err, want)
+	}
+}
+
+func TestCheckClaudeSessionScratchAllowsResolvableConfigDirs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("blank", func(t *testing.T) {
+		t.Parallel()
+		// No configuration directory is described, so there is nothing to check.
+		if err := CheckClaudeSessionScratch("  "); err != nil {
+			t.Fatalf("CheckClaudeSessionScratch(blank) = %v, want nil", err)
+		}
+	})
+
+	t.Run("writable", func(t *testing.T) {
+		t.Parallel()
+		// The common case: the scratch directory is created and the run proceeds.
+		configDir := t.TempDir()
+		if err := CheckClaudeSessionScratch(configDir); err != nil {
+			t.Fatalf("CheckClaudeSessionScratch(writable) = %v, want nil", err)
+		}
+		if info, err := os.Stat(filepath.Join(configDir, claudeScratchDirName)); err != nil || !info.IsDir() {
+			t.Fatalf("scratch directory was not created: %v", err)
+		}
+	})
+
+	t.Run("uncreatable", func(t *testing.T) {
+		t.Parallel()
+		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+			t.Skip("directory permissions do not block creation here")
+		}
+		parent := t.TempDir()
+		if err := os.Chmod(parent, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+
+		// The CLI resolves its own default location when the configuration
+		// directory it was pointed at does not exist and cannot be created, so
+		// this is not the fault being reported.
+		if err := CheckClaudeSessionScratch(filepath.Join(parent, ".claude")); err != nil {
+			t.Fatalf("CheckClaudeSessionScratch(uncreatable) = %v, want nil", err)
+		}
+	})
 }
 
 func TestClaudeHomeResolution(t *testing.T) {

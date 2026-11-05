@@ -142,10 +142,13 @@ stored credentials and Claude's own configuration backups stay unwritable.
 Read-only review passes get the same single grant, because a review boots the
 same CLI tool runtime. The harness creates that directory before starting the
 agent, since the sandbox cannot create it inside an otherwise read-only
-configuration directory; a configuration directory the harness itself cannot
-write to drops the grant instead of failing the run. The CLI fixes this path,
-so concurrent tasks and review passes sharing a configuration directory share
-that one scratch directory.
+configuration directory. A configuration directory the harness itself cannot
+extend fails the run at the auth stage, naming the directory to repair: the CLI
+would otherwise run the task agent, every review fix pass, and every review pass
+with no tool execution at all, so the run would produce changes nothing could
+build or test and then fail on review convergence instead. The CLI fixes this
+path, so concurrent tasks and review passes sharing a configuration directory
+share that one scratch directory.
 
 Keep the bundled helper in this image: Debian trixie's `bubblewrap` 0.12.0 fails
 to mount `/proc` under Docker's masked proc paths in our container smoke check,

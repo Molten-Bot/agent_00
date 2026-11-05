@@ -18,6 +18,20 @@ import (
 // configuration error the operator can act on.
 var ErrClaudeConfigMissing = errors.New("Claude configuration file is missing; restore it from a Claude backup, then rerun the failed task")
 
+// ErrClaudeSessionScratchUnwritable reports a persistent Claude configuration
+// directory that exists but cannot be extended with the CLI's per-session
+// scratch directory. The CLI creates that directory the first time a task uses
+// a tool, so without it every Claude invocation runs with no tool execution at
+// all: the agent still reads its prompt and answers from it, but it cannot edit
+// a file, run a build, or run a test.
+//
+// Nothing downstream can tell that apart from an agent that simply chose not to
+// run anything, so the run spends its whole review budget confirming changes no
+// pass was able to validate and then fails on review convergence instead of on
+// the configuration fault that caused it. This is that fault, reported where an
+// operator can act on it.
+var ErrClaudeSessionScratchUnwritable = errors.New("Claude session scratch directory cannot be created; make the Claude configuration directory writable, then rerun the failed task")
+
 const (
 	claudeConfigFileName      = ".claude.json"
 	claudeConfigBackupDirName = "backups"
@@ -39,28 +53,61 @@ const (
 //
 // A configuration directory the harness cannot extend yields an empty path
 // rather than an error. The CLI cannot write there either, so there is no grant
-// to make, and failing the whole invocation would stop a task that otherwise
-// runs. That covers a directory the harness may not write into and a
-// configuration directory it may not create in the first place. Anything else,
-// including a file where the configuration directory belongs, is still
-// reported.
+// to make, and a grant is not the place to report it: CheckClaudeSessionScratch
+// runs before the first agent stage and fails the run there instead. That
+// covers a directory the harness may not write into and a configuration
+// directory it may not create in the first place. Anything else, including a
+// file where the configuration directory belongs, is still reported.
 func claudeSandboxScratchDir(configDir string) (string, error) {
+	dir, _, err := claudeSandboxScratchDirState(configDir)
+	return dir, err
+}
+
+// claudeSandboxScratchDirState additionally reports the one case the grant is
+// dropped even though the CLI will still resolve this configuration directory
+// and try to create the scratch directory in it: the directory exists and the
+// harness may not extend it. CheckClaudeSessionScratch turns that into an
+// operator-facing error; the sandbox grant itself stays best-effort, because a
+// policy entry cannot make a read-only directory writable.
+func claudeSandboxScratchDirState(configDir string) (string, bool, error) {
 	configDir = strings.TrimSpace(configDir)
 	if configDir == "" {
-		return "", nil
+		return "", false, nil
 	}
 	dir := filepath.Join(configDir, claudeScratchDirName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		info, statErr := os.Stat(configDir)
 		switch {
 		case statErr == nil && info.IsDir():
-			return "", nil
+			return "", true, nil
 		case errors.Is(statErr, os.ErrNotExist):
-			return "", nil
+			return "", false, nil
 		}
-		return "", fmt.Errorf("create Claude session scratch directory: %w", err)
+		return "", false, fmt.Errorf("create Claude session scratch directory: %w", err)
 	}
-	return dir, nil
+	return dir, false, nil
+}
+
+// CheckClaudeSessionScratch reports a configuration directory the CLI resolves
+// but cannot write its session scratch directory into, so the harness can stop
+// before an agent stage that would run without tools.
+//
+// A configuration directory that is absent, or that cannot be created in the
+// first place, is left alone: the CLI resolves its own default location in that
+// case, exactly as it does today without this check.
+func CheckClaudeSessionScratch(configDir string) error {
+	_, unwritable, err := claudeSandboxScratchDirState(configDir)
+	if err != nil {
+		return err
+	}
+	if !unwritable {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: %s",
+		ErrClaudeSessionScratchUnwritable,
+		filepath.Join(strings.TrimSpace(configDir), claudeScratchDirName),
+	)
 }
 
 // ClaudeHome resolves the operator's persistent Claude configuration directory

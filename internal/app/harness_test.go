@@ -9012,6 +9012,47 @@ func TestShouldCreateWorkBranch(t *testing.T) {
 	}
 }
 
+func TestRunFailsAuthWhenClaudeSessionScratchIsUnusable(t *testing.T) {
+	// A Claude configuration directory that cannot hold the CLI's session
+	// scratch directory leaves every agent invocation of the run without tool
+	// execution, so the run must stop at the auth stage instead of producing
+	// changes no pass can build or test and then failing on review convergence.
+	configPath := filepath.Join(t.TempDir(), "claude-config")
+	if err := os.WriteFile(configPath, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", configPath)
+
+	cfg := sampleConfig()
+	cfg.AgentHarness = agentruntime.HarnessClaude
+
+	runner := &fakeRunner{t: t}
+	res := New(runner).Run(context.Background(), cfg)
+	if res.ExitCode != ExitAuth {
+		t.Fatalf("exit code = %d, want %d (err: %v)", res.ExitCode, ExitAuth, res.Err)
+	}
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "Claude session scratch directory") {
+		t.Fatalf("err = %v, want the unusable Claude session scratch directory failure", res.Err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("ran %d commands before failing: %+v", len(runner.calls), runner.calls)
+	}
+}
+
+func TestRunKeepsClaudeRunsWithAWritableSessionScratchDir(t *testing.T) {
+	// The check must not reject the ordinary case, where the harness creates the
+	// scratch directory it later grants the sandbox.
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+
+	if err := (Harness{Logf: func(string, ...any) {}}).checkClaudeSessionScratch(os.Environ()); err != nil {
+		t.Fatalf("checkClaudeSessionScratch(writable) = %v, want nil", err)
+	}
+	if info, err := os.Stat(filepath.Join(configDir, "session-env")); err != nil || !info.IsDir() {
+		t.Fatalf("session scratch directory was not created: %v", err)
+	}
+}
+
 func TestShouldReuseExistingBranch(t *testing.T) {
 	t.Parallel()
 
