@@ -7048,10 +7048,11 @@ func (h Harness) repairClaudeConfiguration(environ []string) error {
 // readOnlyReviewDisallowedTools, and returns before the review fix passes and
 // the post-task review cycle, so Bash is already blocked everywhere in it.
 // Every other run invokes the agent, and any review fix pass, with the full
-// tool set. cfg.Review is final by this point: normalizeLibraryReviewTarget is
-// the only place that sets it, and it runs before the first Claude check.
+// tool set. The classification is final by this point: Run calls
+// normalizeLibraryReviewTarget, which resolves every review-only run to a
+// review target, before the first Claude check.
 func runNeedsClaudeShellTools(cfg config.Config) bool {
-	return cfg.Review == nil
+	return !isReviewOnlyRun(cfg)
 }
 
 // checkClaudeSessionScratch stops a run whose Claude configuration directory

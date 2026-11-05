@@ -158,25 +158,34 @@ func TestCheckClaudeSessionScratchAllowsResolvableConfigDirs(t *testing.T) {
 			t.Fatalf("scratch directory was not created: %v", err)
 		}
 	})
+}
 
-	t.Run("uncreatable", func(t *testing.T) {
-		t.Parallel()
-		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-			t.Skip("directory permissions do not block creation here")
-		}
-		parent := t.TempDir()
-		if err := os.Chmod(parent, 0o500); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+func TestCheckClaudeSessionScratchReportsUncreatableConfigDir(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions do not block creation here")
+	}
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
 
-		// The CLI resolves its own default location when the configuration
-		// directory it was pointed at does not exist and cannot be created, so
-		// this is not the fault being reported.
-		if err := CheckClaudeSessionScratch(filepath.Join(parent, ".claude")); err != nil {
-			t.Fatalf("CheckClaudeSessionScratch(uncreatable) = %v, want nil", err)
-		}
-	})
+	// A read-only HOME leaves the CLI no default location to fall back to: it
+	// derives the same configuration directory and cannot create it either, so
+	// the run must stop here instead of executing every invocation without the
+	// tools that need the scratch directory.
+	configDir := filepath.Join(parent, ".claude")
+	err := CheckClaudeSessionScratch(configDir)
+	if !errors.Is(err, ErrClaudeSessionScratchUnwritable) {
+		t.Fatalf("CheckClaudeSessionScratch(uncreatable) = %v, want ErrClaudeSessionScratchUnwritable", err)
+	}
+	if !errors.Is(err, ErrClaudeSessionScratch) {
+		t.Fatalf("CheckClaudeSessionScratch(uncreatable) = %v, want it in the ErrClaudeSessionScratch class", err)
+	}
+	if want := filepath.Join(configDir, claudeScratchDirName); !strings.Contains(err.Error(), want) {
+		t.Fatalf("CheckClaudeSessionScratch(uncreatable) = %q, want it to name %q", err, want)
+	}
 }
 
 func TestClaudeHomeResolution(t *testing.T) {

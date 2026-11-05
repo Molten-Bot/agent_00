@@ -19,11 +19,13 @@ import (
 var ErrClaudeConfigMissing = errors.New("Claude configuration file is missing; restore it from a Claude backup, then rerun the failed task")
 
 // ErrClaudeSessionScratchUnwritable reports a persistent Claude configuration
-// directory that exists but cannot be extended with the CLI's per-session
-// scratch directory. The CLI creates that directory the first time a task uses
-// a tool, so without it every Claude invocation loses the tools that depend on
-// it: the agent still reads its prompt, and can still edit files, but its shell
-// commands fail, so it cannot run a build or a test.
+// directory the CLI still resolves but that cannot be extended with the CLI's
+// per-session scratch directory, whether it exists and rejects writes or is
+// absent under a HOME the harness may not write into. The CLI creates that
+// directory the first time a task uses a tool, so without it every Claude
+// invocation loses the tools that depend on it: the agent still reads its
+// prompt, and can still edit files, but its shell commands fail, so it cannot
+// run a build or a test.
 //
 // Nothing downstream can tell that apart from an agent that simply chose not to
 // validate anything, so the run spends its whole review budget on changes no
@@ -95,11 +97,12 @@ type claudeScratchDirState struct {
 	// Dir is the scratch directory to grant, empty when there is none.
 	Dir string
 	// ExtendErr is why the scratch directory could not be created under a
-	// configuration directory that exists. The CLI still resolves that
-	// directory and still tries to create the scratch directory in it, so the
-	// sandbox grant is dropped rather than failed - a policy entry cannot
-	// create a directory the harness itself may not create - and
-	// CheckClaudeSessionScratch reports it before the first agent stage.
+	// configuration directory the CLI still resolves: one that exists and
+	// rejects writes, and one that is absent and cannot be created. The CLI
+	// still tries to create the scratch directory there, so the sandbox grant
+	// is dropped rather than failed - a policy entry cannot create a directory
+	// the harness itself may not create - and CheckClaudeSessionScratch reports
+	// it before the first agent stage.
 	ExtendErr error
 }
 
@@ -113,11 +116,8 @@ func claudeSandboxScratchDirState(configDir string) (claudeScratchDirState, erro
 	dir := filepath.Join(configDir, claudeScratchDirName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		info, statErr := os.Stat(configDir)
-		switch {
-		case statErr == nil && info.IsDir():
+		if (statErr == nil && info.IsDir()) || errors.Is(statErr, os.ErrNotExist) {
 			return claudeScratchDirState{ExtendErr: err}, nil
-		case errors.Is(statErr, os.ErrNotExist):
-			return claudeScratchDirState{}, nil
 		}
 		return claudeScratchDirState{}, markSessionScratchFailure(fmt.Errorf("create Claude session scratch directory: %w", err))
 	}
@@ -144,9 +144,11 @@ func claudeConfigDirAcceptsWrites(configDir string) bool {
 // but cannot write its session scratch directory into, so the harness can stop
 // before an agent stage whose tools would fail.
 //
-// A configuration directory that is absent, or that cannot be created in the
-// first place, is left alone: the CLI resolves its own default location in that
-// case, exactly as it does today without this check.
+// Both shapes of that fault are reported: a directory that exists and rejects
+// writes, and one that is absent and cannot be created. The CLI derives the
+// same path from the same environment, so it fails on the same directory; a
+// HOME the harness may not write into leaves the CLI no default location to
+// fall back to either.
 //
 // Only a directory that actually rejects writes carries the "make it writable"
 // remediation. When the directory still takes writes, that remediation would

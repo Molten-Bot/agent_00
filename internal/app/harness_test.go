@@ -9095,7 +9095,7 @@ func TestRunKeepsClaudeRunsWithAWritableSessionScratchDir(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
 
-	if err := (Harness{Logf: func(string, ...any) {}}).checkClaudeSessionScratch(os.Environ()); err != nil {
+	if err := (Harness{Logf: func(string, ...any) {}}).checkClaudeSessionScratch(os.Environ(), true); err != nil {
 		t.Fatalf("checkClaudeSessionScratch(writable) = %v, want nil", err)
 	}
 	if info, err := os.Stat(filepath.Join(configDir, "session-env")); err != nil || !info.IsDir() {
