@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
+	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
 
@@ -131,6 +133,53 @@ func TestRepairClaudeConfigurationBeforeRun(t *testing.T) {
 			t.Fatalf("repairClaudeConfiguration: %v", err)
 		}
 	})
+}
+
+func TestRunNeedsClaudeShellTools(t *testing.T) {
+	t.Parallel()
+
+	if !runNeedsClaudeShellTools(sampleConfig()) {
+		t.Fatal("runNeedsClaudeShellTools(implementation run) = false, want true")
+	}
+
+	// A review-only run gets readOnlyReviewDisallowedTools, which blocks Bash,
+	// and returns before any review fix pass can run with the full tool set.
+	reviewCfg := sampleConfig()
+	reviewCfg.Review = &config.ReviewConfig{PRURL: "https://github.com/acme/repo/pull/1"}
+	if runNeedsClaudeShellTools(reviewCfg) {
+		t.Fatal("runNeedsClaudeShellTools(review-only run) = true, want false")
+	}
+}
+
+func TestCheckClaudeSessionScratchFailsOnlyRunsThatNeedShellTools(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions do not block creation here")
+	}
+	configDir := t.TempDir()
+	if err := os.Chmod(configDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(configDir, 0o700) })
+
+	h := New(sessionRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+		return execx.Result{}, nil
+	}))
+	environ := []string{"CLAUDE_CONFIG_DIR=" + configDir}
+
+	// The task agent and every review fix pass would run without the tools that
+	// need the scratch directory, so the run stops here instead of on review
+	// convergence.
+	err := h.checkClaudeSessionScratch(environ, true)
+	if !errors.Is(err, agentruntime.ErrClaudeSessionScratch) {
+		t.Fatalf("checkClaudeSessionScratch(needs shell tools) = %v, want ErrClaudeSessionScratch", err)
+	}
+
+	// A review-only run never reaches those tools, so the missing scratch
+	// directory costs it nothing and must not fail it.
+	if err := h.checkClaudeSessionScratch(environ, false); err != nil {
+		t.Fatalf("checkClaudeSessionScratch(review-only run) = %v, want nil", err)
+	}
 }
 
 func TestClaudeTasksShareRefreshedCredentials(t *testing.T) {

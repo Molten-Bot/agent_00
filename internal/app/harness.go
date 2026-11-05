@@ -278,7 +278,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		if err := h.repairClaudeConfiguration(os.Environ()); err != nil {
 			return h.fail(ExitAuth, "auth", err, "")
 		}
-		if err := h.checkClaudeSessionScratch(os.Environ()); err != nil {
+		if err := h.checkClaudeSessionScratch(os.Environ(), runNeedsClaudeShellTools(cfg)); err != nil {
 			return h.fail(ExitAuth, "auth", err, "")
 		}
 	}
@@ -7042,12 +7042,24 @@ func (h Harness) repairClaudeConfiguration(environ []string) error {
 	return nil
 }
 
+// runNeedsClaudeShellTools reports whether any Claude invocation this run makes
+// can reach the tools that need the CLI's session scratch directory. A
+// review-only run makes exactly one invocation, with
+// readOnlyReviewDisallowedTools, and returns before the review fix passes and
+// the post-task review cycle, so Bash is already blocked everywhere in it.
+// Every other run invokes the agent, and any review fix pass, with the full
+// tool set. cfg.Review is final by this point: normalizeLibraryReviewTarget is
+// the only place that sets it, and it runs before the first Claude check.
+func runNeedsClaudeShellTools(cfg config.Config) bool {
+	return cfg.Review == nil
+}
+
 // checkClaudeSessionScratch stops a run whose Claude configuration directory
 // cannot host the CLI's per-session scratch directory. The CLI creates that
 // directory on its first tool call, so an unwritable configuration directory
-// costs every invocation of the run the tools that depend on it: the task
-// agent, each review fix pass, and each review pass can still read and edit
-// files, but their shell commands fail, so none of them can build or test.
+// costs every invocation of the run the tools that depend on it: the task agent
+// and each review fix pass can still read and edit files, but their shell
+// commands fail, so neither can build or test.
 //
 // The harness cannot distinguish that from an agent that chose to validate
 // nothing, so the run instead produces changes no pass could build or test,
@@ -7056,16 +7068,23 @@ func (h Harness) repairClaudeConfiguration(environ []string) error {
 // costs one check instead of the entire review cycle, and names the directory
 // to repair.
 //
-// An unresolvable configuration directory is left alone for the same reason
-// repairClaudeConfiguration leaves it alone: the CLI falls back to its own
-// defaults, and there is no directory to report.
-func (h Harness) checkClaudeSessionScratch(environ []string) error {
+// A run that never reaches those tools loses nothing to the missing directory,
+// so needsShellTools is false for it and the directory is logged instead of
+// failed. An unresolvable configuration directory is left alone for the same
+// reason repairClaudeConfiguration leaves it alone: the CLI falls back to its
+// own defaults, and there is no directory to report.
+func (h Harness) checkClaudeSessionScratch(environ []string, needsShellTools bool) error {
 	home, err := agentruntime.ClaudeHome(environ)
 	if err != nil {
 		h.logf("stage=auth status=warn harness=claude action=resolve_config_dir err=%q", err)
 		return nil
 	}
-	return agentruntime.CheckClaudeSessionScratch(home)
+	scratchErr := agentruntime.CheckClaudeSessionScratch(home)
+	if scratchErr == nil || needsShellTools {
+		return scratchErr
+	}
+	h.logf("stage=auth status=warn harness=claude action=session_scratch err=%q", scratchErr)
+	return nil
 }
 
 func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {

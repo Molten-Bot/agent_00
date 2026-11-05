@@ -6746,7 +6746,11 @@ func TestHarnessVerifiesRevisionBeforeRecordingNoChangeEvidence(t *testing.T) {
 }
 
 func TestRunAppliesResponseModeAcrossNonCodexRuntimes(t *testing.T) {
-	t.Parallel()
+	// Run resolves the persistent Claude configuration directory from the
+	// process environment, and both the auth-stage scratch check and the
+	// sandbox grant create a directory inside it. Point it at a temporary
+	// directory so the test never writes into the operator's real one; that
+	// mutates the process environment, so this test cannot run in parallel.
 
 	tests := []struct {
 		name    string
@@ -6758,7 +6762,7 @@ func TestRunAppliesResponseModeAcrossNonCodexRuntimes(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 
 			cfg := sampleConfig()
 			cfg.AgentHarness = tt.harness
