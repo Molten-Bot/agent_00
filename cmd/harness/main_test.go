@@ -457,6 +457,35 @@ func TestShouldQueueFailureFollowUpSkipsUnwritableClaudeSessionScratch(t *testin
 	}
 }
 
+func TestShouldQueueFailureFollowUpSkipsOtherClaudeSessionScratchFailures(t *testing.T) {
+	t.Parallel()
+
+	// A writable configuration directory with a file in the scratch path fails
+	// creation without the "make it writable" sentinel. The follow-up still
+	// boots the same agent against the same directory and stops at the same
+	// stage, so it repairs nothing.
+	configDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(configDir, "session-env"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scratchErr := agentruntime.CheckClaudeSessionScratch(configDir)
+	if scratchErr == nil {
+		t.Fatal("CheckClaudeSessionScratch(blocked scratch path) = nil, want creation failure")
+	}
+	if errors.Is(scratchErr, agentruntime.ErrClaudeSessionScratchUnwritable) {
+		t.Fatalf("scratch error = %v, want a non-sentinel creation failure", scratchErr)
+	}
+
+	failedResult := app.Result{ExitCode: app.ExitAuth, Err: fmt.Errorf("auth: %w", scratchErr)}
+	queue, reason := shouldQueueFailureFollowUp(localSubmitSource, failedResult)
+	if queue {
+		t.Fatalf("shouldQueueFailureFollowUp() = true, want false (reason: %q)", reason)
+	}
+	if !strings.Contains(reason, "scratch") {
+		t.Fatalf("reason = %q, want it to name the session scratch directory", reason)
+	}
+}
+
 func TestFailureFollowUpRunConfigIncludesNonLocalRequestLogPaths(t *testing.T) {
 	t.Parallel()
 

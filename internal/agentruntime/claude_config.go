@@ -32,6 +32,32 @@ var ErrClaudeConfigMissing = errors.New("Claude configuration file is missing; r
 // where an operator can act on it.
 var ErrClaudeSessionScratchUnwritable = errors.New("Claude session scratch directory cannot be created; make the Claude configuration directory writable, then rerun the failed task")
 
+// ErrClaudeSessionScratch marks every failure to prepare that scratch
+// directory, including the ones an operator cannot fix by changing permissions,
+// such as a file occupying the scratch path. Each of them stops the same CLI at
+// the same stage against the same configuration directory, so a follow-up run
+// re-fails there before it can change anything. Callers recognize the whole
+// class through this sentinel instead of matching message text.
+var ErrClaudeSessionScratch = errors.New("Claude session scratch directory could not be prepared")
+
+// sessionScratchFailure marks a scratch preparation failure as part of that
+// class while leaving the message, and any more specific sentinel it wraps,
+// exactly as reported.
+type sessionScratchFailure struct{ err error }
+
+func (f sessionScratchFailure) Error() string { return f.err.Error() }
+
+func (f sessionScratchFailure) Unwrap() error { return f.err }
+
+func (sessionScratchFailure) Is(target error) bool { return target == ErrClaudeSessionScratch }
+
+func markSessionScratchFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	return sessionScratchFailure{err: err}
+}
+
 const (
 	claudeConfigFileName      = ".claude.json"
 	claudeConfigBackupDirName = "backups"
@@ -93,7 +119,7 @@ func claudeSandboxScratchDirState(configDir string) (claudeScratchDirState, erro
 		case errors.Is(statErr, os.ErrNotExist):
 			return claudeScratchDirState{}, nil
 		}
-		return claudeScratchDirState{}, fmt.Errorf("create Claude session scratch directory: %w", err)
+		return claudeScratchDirState{}, markSessionScratchFailure(fmt.Errorf("create Claude session scratch directory: %w", err))
 	}
 	return claudeScratchDirState{Dir: dir}, nil
 }
@@ -137,9 +163,9 @@ func CheckClaudeSessionScratch(configDir string) error {
 	configDir = strings.TrimSpace(configDir)
 	scratchDir := filepath.Join(configDir, claudeScratchDirName)
 	if claudeConfigDirAcceptsWrites(configDir) {
-		return fmt.Errorf("create Claude session scratch directory %s: %w", scratchDir, state.ExtendErr)
+		return markSessionScratchFailure(fmt.Errorf("create Claude session scratch directory %s: %w", scratchDir, state.ExtendErr))
 	}
-	return fmt.Errorf("%w: %s", ErrClaudeSessionScratchUnwritable, scratchDir)
+	return markSessionScratchFailure(fmt.Errorf("%w: %s", ErrClaudeSessionScratchUnwritable, scratchDir))
 }
 
 // ClaudeHome resolves the operator's persistent Claude configuration directory

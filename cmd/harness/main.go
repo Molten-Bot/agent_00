@@ -1366,6 +1366,11 @@ func shouldQueueFailureFollowUp(source string, failedResult app.Result) (bool, s
 	if errors.Is(failedResult.Err, agentruntime.ErrClaudeSessionScratchUnwritable) {
 		return false, "agent configuration directory must be made writable"
 	}
+	// Every other scratch failure, such as a file occupying the scratch path,
+	// stops that same follow-up at that same stage and also needs an operator.
+	if errors.Is(failedResult.Err, agentruntime.ErrClaudeSessionScratch) {
+		return false, "agent session scratch directory must be repaired"
+	}
 	if failedResult.Err == nil {
 		return false, "failed task did not include an error"
 	}

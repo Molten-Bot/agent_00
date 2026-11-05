@@ -84,6 +84,9 @@ func TestCheckClaudeSessionScratchReportsUnwritableConfigDir(t *testing.T) {
 	if !errors.Is(err, ErrClaudeSessionScratchUnwritable) {
 		t.Fatalf("CheckClaudeSessionScratch(unwritable) = %v, want ErrClaudeSessionScratchUnwritable", err)
 	}
+	if !errors.Is(err, ErrClaudeSessionScratch) {
+		t.Fatalf("CheckClaudeSessionScratch(unwritable) = %v, want it in the ErrClaudeSessionScratch class", err)
+	}
 	if want := filepath.Join(configDir, claudeScratchDirName); !strings.Contains(err.Error(), want) {
 		t.Fatalf("CheckClaudeSessionScratch(unwritable) = %q, want it to name %q", err, want)
 	}
@@ -105,6 +108,31 @@ func TestCheckClaudeSessionScratchReportsNonPermissionFailuresAsThemselves(t *te
 	}
 	if errors.Is(err, ErrClaudeSessionScratchUnwritable) {
 		t.Fatalf("CheckClaudeSessionScratch(blocked scratch path) = %v, want the creation failure itself", err)
+	}
+	// A follow-up run boots the same CLI against the same configuration
+	// directory, so it stops here too. Callers must be able to recognize that
+	// without matching the message.
+	if !errors.Is(err, ErrClaudeSessionScratch) {
+		t.Fatalf("CheckClaudeSessionScratch(blocked scratch path) = %v, want it in the ErrClaudeSessionScratch class", err)
+	}
+	if !strings.Contains(err.Error(), filepath.Join(configDir, claudeScratchDirName)) {
+		t.Fatalf("CheckClaudeSessionScratch(blocked scratch path) = %q, want it to name the scratch path", err)
+	}
+}
+
+func TestClaudeSandboxScratchDirMarksCreationFailures(t *testing.T) {
+	t.Parallel()
+
+	// A file where the configuration directory belongs fails creation outright,
+	// and that failure reaches the harness through BuildCommand instead of
+	// CheckClaudeSessionScratch. It belongs to the same class.
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := claudeSandboxScratchDir(blocker)
+	if !errors.Is(err, ErrClaudeSessionScratch) {
+		t.Fatalf("claudeSandboxScratchDir(file) = %v, want it in the ErrClaudeSessionScratch class", err)
 	}
 }
 
