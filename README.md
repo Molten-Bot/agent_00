@@ -145,8 +145,9 @@ agent, since the sandbox cannot create it inside an otherwise read-only
 configuration directory. A configuration directory the harness itself cannot
 extend fails the run at the auth stage, naming the directory to repair: the CLI
 would otherwise run the task agent, every review fix pass, and every review pass
-with no tool execution at all, so the run would produce changes nothing could
-build or test and then fail on review convergence instead. The CLI fixes this
+without the tools that need it. Those passes could still read and edit files,
+but their shell commands would fail, so the run would produce changes nothing
+could build or test and then fail on review convergence instead. The CLI fixes this
 path, so concurrent tasks and review passes sharing a configuration directory
 share that one scratch directory.
 

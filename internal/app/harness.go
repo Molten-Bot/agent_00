@@ -7045,14 +7045,16 @@ func (h Harness) repairClaudeConfiguration(environ []string) error {
 // checkClaudeSessionScratch stops a run whose Claude configuration directory
 // cannot host the CLI's per-session scratch directory. The CLI creates that
 // directory on its first tool call, so an unwritable configuration directory
-// leaves every invocation of the run without tool execution at all: the task
-// agent, each review fix pass, and each review pass.
+// costs every invocation of the run the tools that depend on it: the task
+// agent, each review fix pass, and each review pass can still read and edit
+// files, but their shell commands fail, so none of them can build or test.
 //
-// The harness cannot distinguish that from an agent that chose to run nothing,
-// so the run instead produces changes no pass could build or test, spends its
-// whole review budget on them, and finally fails on review convergence: an
-// error that names neither the cause nor the fix. Failing here costs one check
-// instead of the entire review cycle, and names the directory to repair.
+// The harness cannot distinguish that from an agent that chose to validate
+// nothing, so the run instead produces changes no pass could build or test,
+// spends its whole review budget on them, and finally fails on review
+// convergence: an error that names neither the cause nor the fix. Failing here
+// costs one check instead of the entire review cycle, and names the directory
+// to repair.
 //
 // An unresolvable configuration directory is left alone for the same reason
 // repairClaudeConfiguration leaves it alone: the CLI falls back to its own

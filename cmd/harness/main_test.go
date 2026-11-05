@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
@@ -436,6 +437,23 @@ func TestLocalTaskLogDir(t *testing.T) {
 
 	if _, ok := localTaskLogDir(root, "req-abc"); ok {
 		t.Fatal("localTaskLogDir(non-local request) ok = true, want false")
+	}
+}
+
+func TestShouldQueueFailureFollowUpSkipsUnwritableClaudeSessionScratch(t *testing.T) {
+	t.Parallel()
+
+	failedErr := fmt.Errorf("auth: %w: /config/.claude/session-env", agentruntime.ErrClaudeSessionScratchUnwritable)
+	failedResult := app.Result{ExitCode: app.ExitAuth, Err: failedErr}
+
+	// The follow-up would run the same agent against the same configuration
+	// directory and stop at the same auth stage, so it can never repair this.
+	queue, reason := shouldQueueFailureFollowUp(localSubmitSource, failedResult)
+	if queue {
+		t.Fatalf("shouldQueueFailureFollowUp() = true, want false (reason: %q)", reason)
+	}
+	if !strings.Contains(reason, "writable") {
+		t.Fatalf("reason = %q, want it to name the unwritable configuration directory", reason)
 	}
 }
 

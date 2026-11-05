@@ -6325,7 +6325,12 @@ func TestValidateRuntimePromptImagesAcceptsClaude(t *testing.T) {
 }
 
 func TestRunUsesConfiguredRuntimeCommand(t *testing.T) {
-	t.Parallel()
+	// A Claude run creates the CLI's session scratch directory inside the
+	// persistent configuration directory, so point that at a temporary one
+	// instead of the developer's own $HOME/.claude, which the test must not
+	// write into and which may be read-only. Mutating the environment rules out
+	// t.Parallel().
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 
 	cfg := sampleConfig()
 	cfg.AgentHarness = "claude"
@@ -9014,9 +9019,11 @@ func TestShouldCreateWorkBranch(t *testing.T) {
 
 func TestRunFailsAuthWhenClaudeSessionScratchIsUnusable(t *testing.T) {
 	// A Claude configuration directory that cannot hold the CLI's session
-	// scratch directory leaves every agent invocation of the run without tool
-	// execution, so the run must stop at the auth stage instead of producing
+	// scratch directory costs every agent invocation of the run the tools that
+	// depend on it, so the run must stop at the auth stage instead of producing
 	// changes no pass can build or test and then failing on review convergence.
+	// A file where the directory belongs cannot be made writable, so the run
+	// reports the creation failure itself rather than that remediation.
 	configPath := filepath.Join(t.TempDir(), "claude-config")
 	if err := os.WriteFile(configPath, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
@@ -9033,6 +9040,45 @@ func TestRunFailsAuthWhenClaudeSessionScratchIsUnusable(t *testing.T) {
 	}
 	if res.Err == nil || !strings.Contains(res.Err.Error(), "Claude session scratch directory") {
 		t.Fatalf("err = %v, want the unusable Claude session scratch directory failure", res.Err)
+	}
+	if errors.Is(res.Err, agentruntime.ErrClaudeSessionScratchUnwritable) {
+		t.Fatalf("err = %v, want the creation failure rather than the writable-directory remediation", res.Err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("ran %d commands before failing: %+v", len(runner.calls), runner.calls)
+	}
+}
+
+func TestRunFailsAuthWhenClaudeConfigDirRejectsSessionScratch(t *testing.T) {
+	// The read-only configuration directory this check exists for: it resolves,
+	// so the CLI keeps using it, but neither the CLI nor the harness can create
+	// the session scratch directory inside it.
+	configDir := t.TempDir()
+	if err := os.Chmod(configDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(configDir, 0o700) })
+	if probe, err := os.CreateTemp(configDir, ".probe-*"); err == nil {
+		path := probe.Name()
+		_ = probe.Close()
+		_ = os.Remove(path)
+		t.Skip("directory permissions do not block creation here")
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+
+	cfg := sampleConfig()
+	cfg.AgentHarness = agentruntime.HarnessClaude
+
+	runner := &fakeRunner{t: t}
+	res := New(runner).Run(context.Background(), cfg)
+	if res.ExitCode != ExitAuth {
+		t.Fatalf("exit code = %d, want %d (err: %v)", res.ExitCode, ExitAuth, res.Err)
+	}
+	if !errors.Is(res.Err, agentruntime.ErrClaudeSessionScratchUnwritable) {
+		t.Fatalf("err = %v, want ErrClaudeSessionScratchUnwritable", res.Err)
+	}
+	if want := filepath.Join(configDir, "session-env"); !strings.Contains(res.Err.Error(), want) {
+		t.Fatalf("err = %v, want it to name %q", res.Err, want)
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("ran %d commands before failing: %+v", len(runner.calls), runner.calls)

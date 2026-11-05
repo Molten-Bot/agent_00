@@ -21,15 +21,15 @@ var ErrClaudeConfigMissing = errors.New("Claude configuration file is missing; r
 // ErrClaudeSessionScratchUnwritable reports a persistent Claude configuration
 // directory that exists but cannot be extended with the CLI's per-session
 // scratch directory. The CLI creates that directory the first time a task uses
-// a tool, so without it every Claude invocation runs with no tool execution at
-// all: the agent still reads its prompt and answers from it, but it cannot edit
-// a file, run a build, or run a test.
+// a tool, so without it every Claude invocation loses the tools that depend on
+// it: the agent still reads its prompt, and can still edit files, but its shell
+// commands fail, so it cannot run a build or a test.
 //
 // Nothing downstream can tell that apart from an agent that simply chose not to
-// run anything, so the run spends its whole review budget confirming changes no
-// pass was able to validate and then fails on review convergence instead of on
-// the configuration fault that caused it. This is that fault, reported where an
-// operator can act on it.
+// validate anything, so the run spends its whole review budget on changes no
+// pass was able to build or test and then fails on review convergence instead
+// of on the configuration fault that caused it. This is that fault, reported
+// where an operator can act on it.
 var ErrClaudeSessionScratchUnwritable = errors.New("Claude session scratch directory cannot be created; make the Claude configuration directory writable, then rerun the failed task")
 
 const (
@@ -59,55 +59,87 @@ const (
 // directory it may not create in the first place. Anything else, including a
 // file where the configuration directory belongs, is still reported.
 func claudeSandboxScratchDir(configDir string) (string, error) {
-	dir, _, err := claudeSandboxScratchDirState(configDir)
-	return dir, err
+	state, err := claudeSandboxScratchDirState(configDir)
+	return state.Dir, err
 }
 
-// claudeSandboxScratchDirState additionally reports the one case the grant is
-// dropped even though the CLI will still resolve this configuration directory
-// and try to create the scratch directory in it: the directory exists and the
-// harness may not extend it. CheckClaudeSessionScratch turns that into an
-// operator-facing error; the sandbox grant itself stays best-effort, because a
-// policy entry cannot make a read-only directory writable.
-func claudeSandboxScratchDirState(configDir string) (string, bool, error) {
+// claudeScratchDirState records what creating the CLI's session scratch
+// directory under a configuration directory produced.
+type claudeScratchDirState struct {
+	// Dir is the scratch directory to grant, empty when there is none.
+	Dir string
+	// ExtendErr is why the scratch directory could not be created under a
+	// configuration directory that exists. The CLI still resolves that
+	// directory and still tries to create the scratch directory in it, so the
+	// sandbox grant is dropped rather than failed - a policy entry cannot
+	// create a directory the harness itself may not create - and
+	// CheckClaudeSessionScratch reports it before the first agent stage.
+	ExtendErr error
+}
+
+// claudeSandboxScratchDirState creates the scratch directory and classifies the
+// failure modes its two callers treat differently.
+func claudeSandboxScratchDirState(configDir string) (claudeScratchDirState, error) {
 	configDir = strings.TrimSpace(configDir)
 	if configDir == "" {
-		return "", false, nil
+		return claudeScratchDirState{}, nil
 	}
 	dir := filepath.Join(configDir, claudeScratchDirName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		info, statErr := os.Stat(configDir)
 		switch {
 		case statErr == nil && info.IsDir():
-			return "", true, nil
+			return claudeScratchDirState{ExtendErr: err}, nil
 		case errors.Is(statErr, os.ErrNotExist):
-			return "", false, nil
+			return claudeScratchDirState{}, nil
 		}
-		return "", false, fmt.Errorf("create Claude session scratch directory: %w", err)
+		return claudeScratchDirState{}, fmt.Errorf("create Claude session scratch directory: %w", err)
 	}
-	return dir, false, nil
+	return claudeScratchDirState{Dir: dir}, nil
+}
+
+// claudeConfigDirAcceptsWrites reports whether the harness can still create an
+// entry inside configDir, which is what the remediation carried by
+// ErrClaudeSessionScratchUnwritable asks an operator to restore. It is only
+// consulted once creating the scratch directory has already failed, so it never
+// writes into a configuration directory that is working normally.
+func claudeConfigDirAcceptsWrites(configDir string) bool {
+	probe, err := os.CreateTemp(configDir, ".agent00-scratch-probe-*")
+	if err != nil {
+		return false
+	}
+	path := probe.Name()
+	_ = probe.Close()
+	_ = os.Remove(path)
+	return true
 }
 
 // CheckClaudeSessionScratch reports a configuration directory the CLI resolves
 // but cannot write its session scratch directory into, so the harness can stop
-// before an agent stage that would run without tools.
+// before an agent stage whose tools would fail.
 //
 // A configuration directory that is absent, or that cannot be created in the
 // first place, is left alone: the CLI resolves its own default location in that
 // case, exactly as it does today without this check.
+//
+// Only a directory that actually rejects writes carries the "make it writable"
+// remediation. When the directory still takes writes, that remediation would
+// change nothing - something else, such as a file occupying the scratch path,
+// is in the way - so the creation failure is reported as itself.
 func CheckClaudeSessionScratch(configDir string) error {
-	_, unwritable, err := claudeSandboxScratchDirState(configDir)
+	state, err := claudeSandboxScratchDirState(configDir)
 	if err != nil {
 		return err
 	}
-	if !unwritable {
+	if state.ExtendErr == nil {
 		return nil
 	}
-	return fmt.Errorf(
-		"%w: %s",
-		ErrClaudeSessionScratchUnwritable,
-		filepath.Join(strings.TrimSpace(configDir), claudeScratchDirName),
-	)
+	configDir = strings.TrimSpace(configDir)
+	scratchDir := filepath.Join(configDir, claudeScratchDirName)
+	if claudeConfigDirAcceptsWrites(configDir) {
+		return fmt.Errorf("create Claude session scratch directory %s: %w", scratchDir, state.ExtendErr)
+	}
+	return fmt.Errorf("%w: %s", ErrClaudeSessionScratchUnwritable, scratchDir)
 }
 
 // ClaudeHome resolves the operator's persistent Claude configuration directory

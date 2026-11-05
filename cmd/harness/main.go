@@ -1360,6 +1360,12 @@ func shouldQueueFailureFollowUp(source string, failedResult app.Result) (bool, s
 	if errors.Is(failedResult.Err, agentruntime.ErrClaudeAuthRequired) {
 		return false, "agent authentication requires user sign-in"
 	}
+	// A follow-up runs the same agent against the same configuration directory,
+	// so it stops at the same auth stage before it can change anything. Only an
+	// operator can make that directory writable.
+	if errors.Is(failedResult.Err, agentruntime.ErrClaudeSessionScratchUnwritable) {
+		return false, "agent configuration directory must be made writable"
+	}
 	if failedResult.Err == nil {
 		return false, "failed task did not include an error"
 	}

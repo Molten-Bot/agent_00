@@ -89,6 +89,25 @@ func TestCheckClaudeSessionScratchReportsUnwritableConfigDir(t *testing.T) {
 	}
 }
 
+func TestCheckClaudeSessionScratchReportsNonPermissionFailuresAsThemselves(t *testing.T) {
+	t.Parallel()
+	configDir := t.TempDir()
+	// The configuration directory is writable, so "make it writable" is advice
+	// that cannot fix anything here. A file occupying the scratch path has to be
+	// reported as the creation failure it is.
+	if err := os.WriteFile(filepath.Join(configDir, claudeScratchDirName), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := CheckClaudeSessionScratch(configDir)
+	if err == nil {
+		t.Fatal("CheckClaudeSessionScratch(blocked scratch path) = nil, want creation failure")
+	}
+	if errors.Is(err, ErrClaudeSessionScratchUnwritable) {
+		t.Fatalf("CheckClaudeSessionScratch(blocked scratch path) = %v, want the creation failure itself", err)
+	}
+}
+
 func TestCheckClaudeSessionScratchAllowsResolvableConfigDirs(t *testing.T) {
 	t.Parallel()
 
