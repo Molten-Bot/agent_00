@@ -174,6 +174,61 @@ func (r *deadlineCaptureRunner) Run(ctx context.Context, _ execx.Command) (execx
 	return execx.Result{}, nil
 }
 
+// A Claude invocation that cannot create its session scratch directory loses
+// its shell tools and still exits successfully, so the agent stage has to
+// recognize that report. Otherwise the run accepts changes no pass could build
+// or test and only fails much later, on review convergence.
+func TestRunCodexWithHeartbeatReportsClaudeSessionScratchFailure(t *testing.T) {
+	t.Parallel()
+	runner := &streamCaptureRunner{
+		res: execx.Result{
+			Stdout: "Validation note: no shell execution was available in this runtime " +
+				"(the only exec path failed with `EROFS: read-only file system, " +
+				"mkdir '/operator/home/.claude/session-env'`), so `go test` could not be run.",
+		},
+	}
+	h := New(runner)
+
+	_, err := h.runCodexWithHeartbeat(
+		context.Background(),
+		agentruntime.Runtime{Harness: agentruntime.HarnessClaude, Command: "claude"},
+		t.TempDir(),
+		"Build API",
+		codexRunOptions{},
+		agentInvocationLogMetadata{},
+	)
+	if !errors.Is(err, agentruntime.ErrClaudeSessionScratch) {
+		t.Fatalf("runCodexWithHeartbeat() error = %v, want ErrClaudeSessionScratch", err)
+	}
+}
+
+// An ordinary run must stay unaffected: the same wording about a build failing
+// is routine agent output when it does not name the scratch directory.
+func TestRunCodexWithHeartbeatAllowsUnrelatedReadOnlyFilesystemReports(t *testing.T) {
+	t.Parallel()
+	runner := &streamCaptureRunner{
+		res: execx.Result{
+			Stdout: "Updated the build output path after `EROFS: read-only file system, mkdir '/srv/app/dist'`.",
+		},
+	}
+	h := New(runner)
+
+	res, err := h.runCodexWithHeartbeat(
+		context.Background(),
+		agentruntime.Runtime{Harness: agentruntime.HarnessClaude, Command: "claude"},
+		t.TempDir(),
+		"Build API",
+		codexRunOptions{},
+		agentInvocationLogMetadata{},
+	)
+	if err != nil {
+		t.Fatalf("runCodexWithHeartbeat() error = %v, want nil", err)
+	}
+	if !strings.Contains(res.Stdout, "/srv/app/dist") {
+		t.Fatalf("runCodexWithHeartbeat() stdout = %q, want the agent output preserved", res.Stdout)
+	}
+}
+
 func sampleConfig() config.Config {
 	return config.Config{
 		Version:       "v1",

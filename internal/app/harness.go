@@ -5960,6 +5960,23 @@ func (h Harness) runCodexWithHeartbeat(
 				(agentruntime.ClaudeAuthenticationFailure(run.res.Stdout) || agentruntime.ClaudeAuthenticationFailure(run.res.Stderr)) {
 				return run.res, agentruntime.ErrClaudeAuthRequired
 			}
+			// The CLI creates its session scratch directory on its first tool
+			// call, inside the sandbox rather than in this process, so
+			// checkClaudeSessionScratch can pass while the invocation still
+			// loses every tool that needs it. An invocation that reports that
+			// exits successfully with no shell, so codexReportedFailure below
+			// sees a run that merely could not validate anything and
+			// isNonFatalValidationToolingFailure waves it through. Report the
+			// configuration fault here instead, before the run spends its
+			// review budget on changes no pass can build or test.
+			if runtime.Harness == agentruntime.HarnessClaude &&
+				(agentruntime.ClaudeSessionScratchFailure(run.res.Stdout) || agentruntime.ClaudeSessionScratchFailure(run.res.Stderr)) {
+				return run.res, fmt.Errorf(
+					"%w: the %s invocation reported that it could not create it, so its shell tools could not run a build or a test",
+					agentruntime.ErrClaudeSessionScratch,
+					agentStage,
+				)
+			}
 			if runtime.Harness == agentruntime.HarnessCodex && codexInvocationAuthenticationFailed(run.res, run.err) {
 				home, _ := agentruntime.CodexHome(cmd.Env)
 				stateErr := agentruntime.MarkCodexAuthenticationRequired(home)

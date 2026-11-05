@@ -249,6 +249,58 @@ func TestClaudeConfigurationFailureDetection(t *testing.T) {
 	}
 }
 
+func TestClaudeSessionScratchFailureDetection(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{
+			name: "agent relays its own tool failure",
+			output: "Validation note: no shell execution was available in this runtime " +
+				"(the only exec path failed with `EROFS: read-only file system, " +
+				"mkdir '/operator/home/.claude/session-env'`), so `go build` could not be run.",
+			want: true,
+		},
+		{
+			name:   "cli reports a denied write",
+			output: "Error: EACCES: permission denied, mkdir '/operator/home/.claude/session-env'",
+			want:   true,
+		},
+		{
+			name:   "creation wording without mkdir",
+			output: "failed to create /operator/home/.claude/session-env: operation not permitted",
+			want:   true,
+		},
+		{
+			name:   "refusal for an unrelated directory",
+			output: "EROFS: read-only file system, mkdir '/srv/app/dist'",
+			want:   false,
+		},
+		{
+			name:   "scratch directory named without a refusal",
+			output: "The CLI creates /operator/home/.claude/session-env on its first tool call.",
+			want:   false,
+		},
+		{
+			// A refusal somewhere in a transcript is not evidence about this
+			// directory; the sandbox denies plenty of unrelated writes.
+			name:   "refusal and scratch path on separate lines",
+			output: "EROFS: read-only file system, mkdir '/srv/app/dist'\nScratch lives in /operator/home/.claude/session-env.",
+			want:   false,
+		},
+		{name: "empty", output: "", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ClaudeSessionScratchFailure(tc.output); got != tc.want {
+				t.Fatalf("ClaudeSessionScratchFailure(%q) = %v, want %v", tc.output, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestClaudeAuthenticationFailureRecognizesLoggedOutCLI(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

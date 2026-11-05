@@ -211,6 +211,58 @@ func ClaudeConfigurationFailure(output string) bool {
 	return false
 }
 
+// claudeSessionScratchRefusalMarkers name the operating-system refusals the CLI
+// reports when it cannot create its session scratch directory. The sandbox the
+// harness wraps every Claude invocation in reports a denied write as a
+// read-only filesystem, so that wording covers the sandbox-policy case as well
+// as a genuinely read-only mount.
+var claudeSessionScratchRefusalMarkers = []string{
+	"read-only file system",
+	"read only file system",
+	"erofs",
+	"permission denied",
+	"eacces",
+	"eperm",
+	"operation not permitted",
+}
+
+// ClaudeSessionScratchFailure recognizes an invocation reporting that the CLI's
+// session scratch directory could not be created, either from the CLI itself or
+// from an agent relaying the tool failure it hit.
+//
+// CheckClaudeSessionScratch already covers the directory the harness process
+// resolves, but the agent runs inside a sandbox with its own filesystem policy.
+// When that policy does not reach the scratch directory, the harness check
+// passes and the invocation still loses every tool that needs it: the agent
+// reads its prompt and edits files, and its shell commands fail, so it cannot
+// run a build or a test. Nothing downstream can tell that apart from an agent
+// that simply chose not to validate anything, so the run goes on to spend its
+// whole review budget on changes no pass was able to build or test and then
+// fails on review convergence instead of on this fault.
+//
+// A match needs the refusal, the creation attempt and the scratch path itself
+// on one line. The directory name alone appears in ordinary prose, and a
+// refusal alone belongs to whatever the agent was building, so neither is
+// evidence on its own.
+func ClaudeSessionScratchFailure(output string) bool {
+	scratchPath := "/" + claudeScratchDirName
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.ToLower(line)
+		if !strings.Contains(line, scratchPath) {
+			continue
+		}
+		if !strings.Contains(line, "mkdir") && !strings.Contains(line, "create") {
+			continue
+		}
+		for _, marker := range claudeSessionScratchRefusalMarkers {
+			if strings.Contains(line, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ClaudeConfigRestorable reports, without writing anything, whether configDir
 // is in the broken state the CLI complains about: no usable configuration
 // file, but at least one Claude backup to restore from. A first run has
