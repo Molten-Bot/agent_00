@@ -6629,11 +6629,14 @@ func agentFailureFieldLine(raw string) string {
 			line = trimmed
 			continue
 		}
-		// A list marker is decoration only when whitespace follows it. Agents
-		// routinely quote patches, and "+Failure: ..." or "-Failure: ..." is a
-		// diff line reporting what a file says, not a field reporting the run.
-		if len(line) > 1 && strings.IndexByte("-+", line[0]) >= 0 && (line[1] == ' ' || line[1] == '\t') {
-			line = line[1:]
+		// A list marker is decoration only when a single space separates it from
+		// the text. Agents routinely quote patches, and "+Failure: ...",
+		// "-Failure: ..." or "+  Failure: ..." is a diff line reporting what a
+		// file says, not a field reporting the run: a hunk line keeps the file's
+		// own indentation after its marker, while a Markdown list item does not.
+		if len(line) > 2 && strings.IndexByte("-+", line[0]) >= 0 &&
+			line[1] == ' ' && line[2] != ' ' && line[2] != '\t' {
+			line = line[2:]
 			continue
 		}
 		break
@@ -6664,31 +6667,47 @@ func agentFailureFieldLine(raw string) string {
 // narration of the work so far, and the whole report that follows is not
 // evidence that the run ended badly.
 func agentReportedFailureFields(nonEmpty []string) (bool, string) {
-	// Both fields plus one line of lead-in narration. A Markdown heading such
-	// as "## Failure" is decoration rather than narration, so it does not spend
-	// that budget: a report that both leads in and heads its fields otherwise
-	// pushes "Error details:" out of the header and goes unreported. Widening
-	// the window instead would swallow the mid-run pair this guard exists for.
+	// Both fields plus one line of lead-in narration. A Markdown heading is
+	// decoration rather than narration, so it spends none of that budget and
+	// starts it over: a sectioned report narrates under its own headings and
+	// otherwise pushes "Error details:" out of the header, while the mid-run
+	// pair this guard exists for arrives as plain progress lines with no
+	// section structure at all. Widening the window itself would swallow that
+	// pair, so the scan still gives up after a bounded prefix rather than
+	// following headings into the middle of the run.
+	//
+	// A heading that carries a field, as in "## Failure: ...", is the field
+	// itself and spends the budget like any other field line. The terminal
+	// window already reads it that way, so skipping it here would report the
+	// same line as a failure or not depending only on how far it sits from the
+	// end of the output.
 	const reportHeaderLines = 3
+	const maxHeaderScanLines = 12
 	remaining := reportHeaderLines
 	failure := ""
-	for _, raw := range nonEmpty {
-		if strings.HasPrefix(strings.TrimSpace(raw), "#") {
+	for i, raw := range nonEmpty {
+		if i >= maxHeaderScanLines {
+			break
+		}
+		field := agentFailureFieldLine(raw)
+		lower := strings.ToLower(field)
+		isFailure := strings.HasPrefix(lower, "failure:") && strings.TrimSpace(field[len("failure:"):]) != ""
+		isDetails := strings.HasPrefix(lower, "error details:")
+		if !isFailure && !isDetails && strings.HasPrefix(strings.TrimSpace(raw), "#") {
+			remaining = reportHeaderLines
 			continue
 		}
 		if remaining == 0 {
 			break
 		}
 		remaining--
-		field := agentFailureFieldLine(raw)
-		lower := strings.ToLower(field)
 		if failure == "" {
-			if strings.HasPrefix(lower, "failure:") && strings.TrimSpace(field[len("failure:"):]) != "" {
+			if isFailure {
 				failure = field
 			}
 			continue
 		}
-		if strings.HasPrefix(lower, "error details:") {
+		if isDetails {
 			return true, failure
 		}
 	}

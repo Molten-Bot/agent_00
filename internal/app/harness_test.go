@@ -8290,6 +8290,91 @@ func TestCodexReportedFailureIgnoresQuotedDiffFailureLine(t *testing.T) {
 	}
 }
 
+func TestCodexReportedFailureDetectsSectionedMarkdownReportFields(t *testing.T) {
+	t.Parallel()
+
+	// A sectioned Markdown report narrates under its own headings before the
+	// two mandated fields, and the context that follows pushes the pair out of
+	// the terminal failure window.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Here is the report.",
+			"## Summary",
+			"The migration could not be completed.",
+			"## Failure",
+			"**Failure:** could not run the database migration.",
+			"**Error details:** `psql` exited with status 2.",
+			"## Context",
+			"- Cloned the repository.",
+			"- Installed dependencies.",
+			"- Applied the schema patch.",
+			"- Re-ran the migration twice.",
+			"- Collected the migration log.",
+			"Stopping here.",
+		}, "\n"),
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(sectioned markdown report) = false, want true")
+	}
+	if want := "Failure: could not run the database migration."; detail != want {
+		t.Fatalf("codexReportedFailure(sectioned markdown report) detail = %q, want %q", detail, want)
+	}
+}
+
+func TestCodexReportedFailureDetectsHeadedReportFieldsBelowLeadIn(t *testing.T) {
+	t.Parallel()
+
+	// The mandated fields can arrive as headings themselves. The terminal
+	// window reads those as fields, so the report header must agree.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Here is the report.",
+			"## Failure: could not run the database migration.",
+			"## Error details: `psql` exited with status 2.",
+			"Context:",
+			"- Cloned the repository.",
+			"- Installed dependencies.",
+			"- Applied the schema patch.",
+			"- Re-ran the migration twice.",
+			"- Collected the migration log.",
+			"Stopping here.",
+		}, "\n"),
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(headed report fields) = false, want true")
+	}
+	if want := "Failure: could not run the database migration."; detail != want {
+		t.Fatalf("codexReportedFailure(headed report fields) detail = %q, want %q", detail, want)
+	}
+}
+
+func TestCodexReportedFailureIgnoresIndentedQuotedDiffFailureLine(t *testing.T) {
+	t.Parallel()
+
+	// A quoted patch keeps the file's own indentation after the hunk marker,
+	// so the reporting contract it adds is still what a file says rather than
+	// what the run did.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Added the reporting contract to the prompt builder.",
+			"diff --git a/prompt.go b/prompt.go",
+			"--- a/prompt.go",
+			"+++ b/prompt.go",
+			"+  Failure: <short failure summary>",
+			"+  Error details: <failing command or blocker>",
+			"`go test ./internal/app` passed.",
+		}, "\n"),
+	}
+
+	if failed, detail := codexReportedFailure(res); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(indented quoted diff hunk) = (%v, %q), want (false, \"\")", failed, detail)
+	}
+}
+
 func TestCodexReportedFailureIgnoresNarrativeTaskFailedPhrasing(t *testing.T) {
 	t.Parallel()
 
