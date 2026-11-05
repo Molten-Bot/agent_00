@@ -40,8 +40,10 @@ const (
 // A configuration directory the harness cannot extend yields an empty path
 // rather than an error. The CLI cannot write there either, so there is no grant
 // to make, and failing the whole invocation would stop a task that otherwise
-// runs. Anything else, including a file where the configuration directory
-// belongs, is still reported.
+// runs. That covers a directory the harness may not write into and a
+// configuration directory it may not create in the first place. Anything else,
+// including a file where the configuration directory belongs, is still
+// reported.
 func claudeSandboxScratchDir(configDir string) (string, error) {
 	configDir = strings.TrimSpace(configDir)
 	if configDir == "" {
@@ -49,7 +51,11 @@ func claudeSandboxScratchDir(configDir string) (string, error) {
 	}
 	dir := filepath.Join(configDir, claudeScratchDirName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		if info, statErr := os.Stat(configDir); statErr == nil && info.IsDir() {
+		info, statErr := os.Stat(configDir)
+		switch {
+		case statErr == nil && info.IsDir():
+			return "", nil
+		case errors.Is(statErr, os.ErrNotExist):
 			return "", nil
 		}
 		return "", fmt.Errorf("create Claude session scratch directory: %w", err)

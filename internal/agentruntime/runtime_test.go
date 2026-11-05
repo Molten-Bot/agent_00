@@ -218,6 +218,39 @@ func TestClaudeReviewGrantsOnlyClaudeScratchDir(t *testing.T) {
 	}
 }
 
+func TestClaudeSandboxGrantsScratchDirFromProcessEnvironWhenEnvIsEmpty(t *testing.T) {
+	// Mutates the process environment the invocation inherits; cannot run in parallel.
+	configDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An invocation without an explicit environment hands the CLI this process
+	// environment, so the CLI resolves a real configuration directory from it.
+	// The scratch grant has to be read from the same place or the CLI hits a
+	// read-only filesystem on its first tool call.
+	cmd, err := rt.BuildCommand("/tasks/current/repo", "fix it", RunOptions{WorkspaceDir: "/tasks/current"})
+	if err != nil {
+		t.Fatalf("BuildCommand() error = %v", err)
+	}
+	scratch := filepath.Join(configDir, claudeScratchDirName)
+	if info, statErr := os.Stat(scratch); statErr != nil || !info.IsDir() {
+		t.Fatalf("scratch directory was not created: %v", statErr)
+	}
+	encoded, err := json.Marshal([]string{"/tasks/current", scratch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "sandbox_workspace_write.writable_roots=" + string(encoded); !slices.Contains(cmd.Args, want) {
+		t.Fatalf("missing Claude scratch root %q in %v", want, cmd.Args)
+	}
+}
+
 func TestClaudeSandboxReportsUnusableConfigDir(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

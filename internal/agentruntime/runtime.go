@@ -220,7 +220,7 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 		// outside the task workspace on purpose, so without this grant the CLI
 		// hits a read-only filesystem on its first tool call and runs the rest
 		// of the task without it.
-		scratchDir, scratchErr := claudeConfigSandboxRoot(opts.Env)
+		scratchDir, scratchErr := claudeConfigSandboxRoot(claudeSandboxEnv(opts))
 		if scratchErr != nil {
 			return execx.Command{}, fmt.Errorf("prepare Claude sandbox scratch directory: %w", scratchErr)
 		}
@@ -366,6 +366,22 @@ func claudeConfigSandboxRoot(env []string) (string, error) {
 		return "", err
 	}
 	return resolveSandboxPath(scratch)
+}
+
+// claudeSandboxEnv returns the environment the CLI actually resolves its
+// configuration directory from. buildClaudeCommand passes opts.Env through
+// verbatim, so an invocation that carries no environment inherits the harness
+// process environment instead. Reading opts.Env alone in that case drops the
+// grant while the CLI still resolves a real configuration directory, which puts
+// it back on a read-only filesystem for its first tool call.
+//
+// An invocation without a task workspace is not sandboxed into one, so it has
+// no scratch grant to make and keeps reading opts.Env as given.
+func claudeSandboxEnv(opts RunOptions) []string {
+	if len(opts.Env) > 0 || strings.TrimSpace(opts.WorkspaceDir) == "" {
+		return opts.Env
+	}
+	return os.Environ()
 }
 
 // describesClaudeConfigDir reports whether env names a persistent Claude

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -40,6 +41,26 @@ func TestClaudeSandboxScratchDir(t *testing.T) {
 	}
 	if _, err := claudeSandboxScratchDir(blocker); err == nil {
 		t.Fatal("claudeSandboxScratchDir(file) error = nil, want creation failure")
+	}
+}
+
+func TestClaudeSandboxScratchDirSkipsUncreatableConfigDir(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions do not block creation here")
+	}
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+
+	// The configuration directory is absent and cannot be created, so the CLI
+	// cannot write there either: there is no grant to make, and the invocation
+	// must still run.
+	got, err := claudeSandboxScratchDir(filepath.Join(parent, ".claude"))
+	if err != nil || got != "" {
+		t.Fatalf("claudeSandboxScratchDir(uncreatable) = (%q, %v), want no grant and no error", got, err)
 	}
 }
 
