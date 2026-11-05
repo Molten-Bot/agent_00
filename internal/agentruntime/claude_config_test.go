@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestclaudeSandboxScratchDir(t *testing.T) {
+func TestClaudeSandboxScratchDir(t *testing.T) {
 	t.Parallel()
 
 	if got, err := claudeSandboxScratchDir("  "); err != nil || got != "" {

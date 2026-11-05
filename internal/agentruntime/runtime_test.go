@@ -238,6 +238,34 @@ func TestClaudeSandboxReportsUnusableConfigDir(t *testing.T) {
 	}
 }
 
+func TestClaudeSandboxSkipsScratchGrantWithoutConfigDirInEnv(t *testing.T) {
+	t.Parallel()
+
+	// An entry with a blank value, or with no key/value separator at all, names
+	// no configuration directory. ClaudeHome rejects that environment, so the
+	// grant has to be skipped rather than turned into a build failure.
+	environ := []string{"CLAUDE_CONFIG_DIR", "HOME=   ", "PATH=/usr/bin"}
+	if describesClaudeConfigDir(environ) {
+		t.Fatalf("describesClaudeConfigDir(%v) = true, want false", environ)
+	}
+
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := rt.BuildCommand("/tasks/current/repo", "fix it", RunOptions{
+		WorkspaceDir: "/tasks/current",
+		Env:          environ,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `sandbox_workspace_write.writable_roots=["/tasks/current"]`
+	if !slices.Contains(cmd.Args, want) {
+		t.Fatalf("missing sandbox restriction %q in %v", want, cmd.Args)
+	}
+}
+
 func TestResolveDefaultsToCodex(t *testing.T) {
 	t.Parallel()
 
