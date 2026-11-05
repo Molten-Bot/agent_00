@@ -8375,6 +8375,109 @@ func TestCodexReportedFailureIgnoresIndentedQuotedDiffFailureLine(t *testing.T) 
 	}
 }
 
+func TestCodexReportedFailureIgnoresSingleSpaceQuotedDiffFailureLine(t *testing.T) {
+	t.Parallel()
+
+	// A hunk line whose file indents by a single space wears the same marker
+	// and spacing as a Markdown list item, so only the diff header above it
+	// says the line reports what a file says rather than what the run did.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Added the reporting contract to the prompt builder.",
+			"diff --git a/prompt.go b/prompt.go",
+			"--- a/prompt.go",
+			"+++ b/prompt.go",
+			"+ Failure: <short failure summary>",
+			"+ Error details: <failing command or blocker>",
+			"`go test ./internal/app` passed.",
+		}, "\n"),
+	}
+
+	if failed, detail := codexReportedFailure(res); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(single-space quoted diff hunk) = (%v, %q), want (false, \"\")", failed, detail)
+	}
+}
+
+func TestCodexReportedFailureDetectsWidelyIndentedBulletedReportFields(t *testing.T) {
+	t.Parallel()
+
+	// A list marker stays decoration however much whitespace follows it.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"-  **Failure:** could not reach the staging API.",
+			"-\t**Error details:** `curl` exited with status 7.",
+		}, "\n"),
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(widely indented bulleted fields) = false, want true")
+	}
+	if want := "Failure: could not reach the staging API."; detail != want {
+		t.Fatalf("codexReportedFailure(widely indented bulleted fields) detail = %q, want %q", detail, want)
+	}
+}
+
+func TestCodexReportedFailureIgnoresMidRunFailurePairBelowHeading(t *testing.T) {
+	t.Parallel()
+
+	// A heading restarts the report-header budget only while that budget still
+	// has room. Once the header's narration allowance is spent the run is past
+	// its report header, so a heading printed mid-run cannot carry the progress
+	// pair below it into the result.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Starting the migration task.",
+			"Read the harness configuration.",
+			"Checked the existing tests.",
+			"## Attempt 1",
+			"Failure: could not reach the package registry.",
+			"Error details: npm ERR! network timeout.",
+			"## Attempt 2",
+			"Retried through the proxy and the install succeeded.",
+			"Ran the focused tests.",
+			"Ran the build.",
+			"Ran the linter.",
+			"Ran go vet.",
+			"Updated the changelog.",
+			"Done. All checks pass.",
+		}, "\n"),
+	}
+
+	if failed, detail := codexReportedFailure(res); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(mid-run pair below heading) = (%v, %q), want (false, \"\")", failed, detail)
+	}
+}
+
+func TestCodexReportedFailureIgnoresMidRunFailurePairBelowShellComment(t *testing.T) {
+	t.Parallel()
+
+	// A shell transcript's "#" comment is not a Markdown heading, so it spends
+	// the report-header budget like the narration it is instead of restarting
+	// it for the mid-run pair below.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Scanning the repository.",
+			"Ran the setup script:",
+			"#!/usr/bin/env bash",
+			"Failure: the setup script exited non-zero.",
+			"Error details: bash exited with status 127.",
+			"Installed the missing dependency.",
+			"Re-ran the setup script and it completed.",
+			"Ran the focused tests.",
+			"Ran the build.",
+			"Ran the linter.",
+			"Ran go vet.",
+			"Updated the changelog.",
+			"Done. All checks pass.",
+		}, "\n"),
+	}
+
+	if failed, detail := codexReportedFailure(res); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(mid-run pair below shell comment) = (%v, %q), want (false, \"\")", failed, detail)
+	}
+}
+
 func TestCodexReportedFailureIgnoresNarrativeTaskFailedPhrasing(t *testing.T) {
 	t.Parallel()
 

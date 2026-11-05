@@ -6533,7 +6533,12 @@ func codexExtractErrorDetail(output string) string {
 		return ""
 	}
 
+	inDiff := quotedDiffHunkLines(nonEmpty)
 	for i, line := range nonEmpty {
+		// A quoted patch states what a file says, not how the run ended.
+		if inDiff[i] {
+			continue
+		}
 		field := agentFailureFieldLine(line)
 		lower := strings.ToLower(field)
 		if strings.HasPrefix(lower, "error details:") {
@@ -6629,14 +6634,16 @@ func agentFailureFieldLine(raw string) string {
 			line = trimmed
 			continue
 		}
-		// A list marker is decoration only when a single space separates it from
-		// the text. Agents routinely quote patches, and "+Failure: ...",
-		// "-Failure: ..." or "+  Failure: ..." is a diff line reporting what a
-		// file says, not a field reporting the run: a hunk line keeps the file's
-		// own indentation after its marker, while a Markdown list item does not.
-		if len(line) > 2 && strings.IndexByte("-+", line[0]) >= 0 &&
-			line[1] == ' ' && line[2] != ' ' && line[2] != '\t' {
-			line = line[2:]
+		// A list marker is decoration once whitespace separates it from the text,
+		// however much of it: agents indent nested bullets and write "-\t" as
+		// readily as "- ". Quoted patches wear the same markers, and a hunk line
+		// keeps the file's own indentation after its marker, so "+ Failure: ..."
+		// reports what a file says rather than what the run did. No amount of
+		// spacing tells the two apart, so quotedDiffHunkLines separates them by
+		// the diff header above them and this strip only has to read list items.
+		if len(line) > 1 && strings.IndexByte("-+", line[0]) >= 0 &&
+			(line[1] == ' ' || line[1] == '\t') {
+			line = strings.TrimLeft(line[1:], " \t")
 			continue
 		}
 		break
@@ -6672,9 +6679,14 @@ func agentReportedFailureFields(nonEmpty []string) (bool, string) {
 	// starts it over: a sectioned report narrates under its own headings and
 	// otherwise pushes "Error details:" out of the header, while the mid-run
 	// pair this guard exists for arrives as plain progress lines with no
-	// section structure at all. Widening the window itself would swallow that
-	// pair, so the scan still gives up after a bounded prefix rather than
-	// following headings into the middle of the run.
+	// section structure at all.
+	//
+	// The restart only applies while the budget still has room. A heading that
+	// arrives after the header's narration allowance is spent is a section of
+	// the run, not of the report, so it ends the scan like any other line.
+	// Restarting there would let a mid-run pair ride any heading printed above
+	// it into the result, which is the false report this guard exists to
+	// prevent, and the scan still gives up after a bounded prefix either way.
 	//
 	// A heading that carries a field, as in "## Failure: ...", is the field
 	// itself and spends the budget like any other field line. The terminal
@@ -6683,6 +6695,7 @@ func agentReportedFailureFields(nonEmpty []string) (bool, string) {
 	// end of the output.
 	const reportHeaderLines = 3
 	const maxHeaderScanLines = 12
+	inDiff := quotedDiffHunkLines(nonEmpty)
 	remaining := reportHeaderLines
 	failure := ""
 	for i, raw := range nonEmpty {
@@ -6691,9 +6704,10 @@ func agentReportedFailureFields(nonEmpty []string) (bool, string) {
 		}
 		field := agentFailureFieldLine(raw)
 		lower := strings.ToLower(field)
-		isFailure := strings.HasPrefix(lower, "failure:") && strings.TrimSpace(field[len("failure:"):]) != ""
-		isDetails := strings.HasPrefix(lower, "error details:")
-		if !isFailure && !isDetails && strings.HasPrefix(strings.TrimSpace(raw), "#") {
+		isFailure := !inDiff[i] && strings.HasPrefix(lower, "failure:") &&
+			strings.TrimSpace(field[len("failure:"):]) != ""
+		isDetails := !inDiff[i] && strings.HasPrefix(lower, "error details:")
+		if !isFailure && !isDetails && remaining > 0 && isMarkdownHeading(raw) {
 			remaining = reportHeaderLines
 			continue
 		}
@@ -6712,6 +6726,67 @@ func agentReportedFailureFields(nonEmpty []string) (bool, string) {
 		}
 	}
 	return false, ""
+}
+
+// isMarkdownHeading reports whether a line is an ATX heading, which is one to
+// six "#" marks followed by whitespace or nothing at all. Requiring that
+// separator keeps the "#" lines a shell transcript prints, such as
+// "#!/bin/sh", "#include <stdio.h>" or a stack frame's "#3", narration rather
+// than report structure.
+func isMarkdownHeading(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	hashes := 0
+	for hashes < len(trimmed) && trimmed[hashes] == '#' {
+		hashes++
+	}
+	if hashes == 0 || hashes > 6 {
+		return false
+	}
+	if hashes == len(trimmed) {
+		return true
+	}
+	return trimmed[hashes] == ' ' || trimmed[hashes] == '\t'
+}
+
+// quotedDiffHunkLines marks the entries of nonEmpty that belong to a quoted
+// patch. A hunk line keeps the file's own text after its "+" or "-" marker, so
+// "+ Failure: ..." reports what a file says, while "- Failure: ..." under a
+// Markdown bullet is the field itself. The markers are identical, so only the
+// diff header above them separates the two.
+func quotedDiffHunkLines(nonEmpty []string) []bool {
+	inDiff := make([]bool, len(nonEmpty))
+	active := false
+	for i, raw := range nonEmpty {
+		line := strings.TrimSpace(raw)
+		switch {
+		case strings.HasPrefix(line, "diff --git "),
+			strings.HasPrefix(line, "@@ "),
+			isQuotedDiffFileHeader(line):
+			active = true
+		case active && !strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "-") &&
+			!strings.HasPrefix(line, `\ No newline`):
+			active = false
+		}
+		inDiff[i] = active
+	}
+	return inDiff
+}
+
+// isQuotedDiffFileHeader reports whether a line is a patch's "--- a/path" or
+// "+++ b/path" file header. Requiring a path-shaped first field keeps a prose
+// divider such as "--- Summary ---" from opening a diff block.
+func isQuotedDiffFileHeader(line string) bool {
+	var rest string
+	switch {
+	case strings.HasPrefix(line, "--- "):
+		rest = line[len("--- "):]
+	case strings.HasPrefix(line, "+++ "):
+		rest = line[len("+++ "):]
+	default:
+		return false
+	}
+	fields := strings.Fields(rest)
+	return len(fields) > 0 && strings.Contains(fields[0], "/")
 }
 
 func codexReportedFailureInOutput(output string, allowStructured bool) (bool, string) {
@@ -6741,9 +6816,14 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 		start = len(nonEmpty) - terminalFailureWindow
 	}
 
+	inDiff := quotedDiffHunkLines(nonEmpty)
 	var structuredTaskFailureLine string
 	var structuredErrorLine string
 	for i, trimmed := range nonEmpty[start:] {
+		// A quoted patch states what a file says, not how the run ended.
+		if inDiff[start+i] {
+			continue
+		}
 		lower := strings.ToLower(trimmed)
 		if field := agentFailureFieldLine(trimmed); strings.HasPrefix(strings.ToLower(field), "failure:") {
 			if isBareFailureHeadingAfterCompletion(field, nonEmpty[:start+i]) {
