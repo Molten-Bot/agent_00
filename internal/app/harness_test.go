@@ -8487,6 +8487,120 @@ func TestCodexReportedFailureIgnoresMidRunFailurePairBelowRepeatedHeadings(t *te
 	}
 }
 
+func TestCodexReportedFailureDetectsTitledSectionedMarkdownReportFields(t *testing.T) {
+	t.Parallel()
+
+	// A Markdown report can open with a document title above its summary and
+	// failure sections, so its header spans three headings before the two
+	// mandated fields.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"# Task Report",
+			"## Summary",
+			"The migration could not be completed.",
+			"## Failure",
+			"**Failure:** could not run the database migration.",
+			"**Error details:** `psql` exited with status 2.",
+			"## Context",
+			"- Cloned the repository.",
+			"- Installed dependencies.",
+			"- Applied the schema patch.",
+			"- Re-ran the migration twice.",
+			"- Collected the migration log.",
+			"Stopping here.",
+		}, "\n"),
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(titled sectioned report) = false, want true")
+	}
+	if want := "Failure: could not run the database migration."; detail != want {
+		t.Fatalf("codexReportedFailure(titled sectioned report) detail = %q, want %q", detail, want)
+	}
+}
+
+func TestCodexReportedFailureDetectsBulletedReportBelowUnseparatedQuotedDiff(t *testing.T) {
+	t.Parallel()
+
+	// A hunk header declares how many lines the hunk spans. Without reading it
+	// the bulleted report written directly below the last hunk line, with no
+	// blank line between them, stayed inside the quote and the run's own
+	// failure went unreported.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Reviewed the reporting contract.",
+			"diff --git a/prompt.md b/prompt.md",
+			"--- a/prompt.md",
+			"+++ b/prompt.md",
+			"@@ -4 +4,2 @@ Report the outcome with these fields:",
+			" Report the outcome with these fields:",
+			"+ Failure: <short failure summary>",
+			"- **Failure:** the focused tests failed.",
+			"- **Error details:** `go test ./internal/app` exited with status 1.",
+		}, "\n"),
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(bulleted report below unseparated quoted diff) = false, want true")
+	}
+	if want := "Failure: the focused tests failed."; detail != want {
+		t.Fatalf("codexReportedFailure(bulleted report below unseparated quoted diff) detail = %q, want %q", detail, want)
+	}
+}
+
+func TestCodexReportedFailureDetectsReportBelowProseDiffMarkers(t *testing.T) {
+	t.Parallel()
+
+	// Prose that names a path after "---" or opens with "@@" is not a patch.
+	// Reading either as a diff header opened a quote with no "diff --git"
+	// header above it and swallowed the report that followed.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Reviewed the reporting contract.",
+			"--- a/prompt.md is the only file I inspected.",
+			"@@ note that the hunk above is unchanged.",
+			"- **Failure:** the focused tests failed.",
+			"- **Error details:** `go test ./internal/app` exited with status 1.",
+		}, "\n"),
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(report below prose diff markers) = false, want true")
+	}
+	if want := "Failure: the focused tests failed."; detail != want {
+		t.Fatalf("codexReportedFailure(report below prose diff markers) detail = %q, want %q", detail, want)
+	}
+}
+
+func TestCodexReportedFailureKeepsBareFailureHeadingFatalBelowQuotedCompletionMarkers(t *testing.T) {
+	t.Parallel()
+
+	// The completion markers that turn a bare "Failure:" into a section heading
+	// must come from the run's own narration. A quoted patch adding them to a
+	// prompt template states what a file says, not that this run finished.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"diff --git a/prompt.md b/prompt.md",
+			"--- a/prompt.md",
+			"+++ b/prompt.md",
+			"@@ -1 +1,3 @@ Report the outcome:",
+			" Report the outcome:",
+			"+ Done.",
+			"+ Verification:",
+			"",
+			"Failure:",
+			"Error details: could not write repository files.",
+		}, "\n"),
+	}
+
+	if failed, detail := codexReportedFailure(res); !failed || !strings.HasPrefix(detail, "Failure:") {
+		t.Fatalf("codexReportedFailure(bare heading below quoted completion markers) = (%v, %q), want (true, \"Failure:...\")", failed, detail)
+	}
+}
+
 func TestCodexExtractErrorDetailSkipsQuotedDiffLines(t *testing.T) {
 	t.Parallel()
 

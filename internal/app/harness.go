@@ -6685,10 +6685,10 @@ func agentReportedFailureFields(nonEmpty []string, inDiff []bool) (bool, string)
 	// The restarts are capped as well, because a run that narrates under a
 	// heading per step keeps the budget topped up for as long as it keeps
 	// printing headings, and the mid-run pair below the last of them was then
-	// reported as the run's outcome. A report header is at most two sections
-	// deep before the fields, a summary and the failure section, so two
-	// restarts carry every report shape while heading-dense narration runs the
-	// budget out and ends the scan.
+	// reported as the run's outcome. A report header is at most three headings
+	// deep before the fields, a document title, a summary section and the
+	// failure section, so three restarts carry every report shape while
+	// heading-dense narration runs the budget out and ends the scan.
 	//
 	// A heading that carries a field, as in "## Failure: ...", is the field
 	// itself and spends the budget like any other field line. The terminal
@@ -6697,7 +6697,7 @@ func agentReportedFailureFields(nonEmpty []string, inDiff []bool) (bool, string)
 	// end of the output.
 	const reportHeaderLines = 3
 	const maxHeaderScanLines = 12
-	const maxHeadingRestarts = 2
+	const maxHeadingRestarts = 3
 	remaining := reportHeaderLines
 	restarts := 0
 	failure := ""
@@ -6784,24 +6784,120 @@ func splitNonEmptyOutputLines(output string) ([]string, []bool) {
 // "+ Failure: ..." reports what a file says, while "- Failure: ..." under a
 // Markdown bullet is the field itself. The markers are identical, so only the
 // diff header above them separates the two.
+//
+// A hunk header states how many lines the hunk spans, so the quote also ends
+// where that budget runs out. Without it a bulleted report written directly
+// below the last hunk line, with no blank line between them, kept the quote
+// open and the run's own failure went unreported.
 func quotedDiffHunkLines(lines []string) []bool {
 	inDiff := make([]bool, len(lines))
 	indent := ""
 	active := false
+	// counted marks a block opened by a hunk header, which declares its own
+	// length. A "diff --git" or file header opens a block that only the first
+	// line without a hunk marker closes.
+	counted := false
+	oldLeft, newLeft := 0, 0
 	for i, raw := range lines {
 		line := strings.TrimSpace(raw)
-		switch {
-		case strings.HasPrefix(line, "diff --git "),
-			strings.HasPrefix(line, "@@ "),
-			isQuotedDiffFileHeader(line):
-			active = true
-			indent = raw[:len(raw)-len(strings.TrimLeft(raw, " \t"))]
-		case active && !isQuotedDiffBodyLine(raw, indent):
-			active = false
+		if oldCount, newCount, ok := quotedDiffHunkHeader(line); ok {
+			active, counted = true, true
+			oldLeft, newLeft = oldCount, newCount
+			indent = quotedDiffIndent(raw)
+			inDiff[i] = true
+			continue
 		}
-		inDiff[i] = active
+		if strings.HasPrefix(line, "diff --git ") || isQuotedDiffFileHeaderPair(lines, i) {
+			active, counted = true, false
+			indent = quotedDiffIndent(raw)
+			inDiff[i] = true
+			continue
+		}
+		if !active || !isQuotedDiffBodyLine(raw, indent) {
+			active = false
+			continue
+		}
+		body := raw[len(indent):]
+		if counted && oldLeft <= 0 && newLeft <= 0 {
+			// The header already accounted for every line of the hunk, so the
+			// only one left that still belongs to it is the no-newline note.
+			if !strings.HasPrefix(body, `\ No newline`) {
+				active = false
+				continue
+			}
+			inDiff[i] = true
+			continue
+		}
+		inDiff[i] = true
+		if !counted {
+			continue
+		}
+		switch body[0] {
+		case '+':
+			newLeft--
+		case '-':
+			oldLeft--
+		case ' ':
+			oldLeft--
+			newLeft--
+		}
 	}
 	return inDiff
+}
+
+// quotedDiffIndent returns the leading whitespace a quoted patch is indented
+// by, which every line of that patch repeats before its own hunk marker.
+func quotedDiffIndent(raw string) string {
+	return raw[:len(raw)-len(strings.TrimLeft(raw, " \t"))]
+}
+
+// quotedDiffHunkHeader parses a unified hunk header and returns the line counts
+// its two ranges declare. Requiring the full "@@ -l,s +l,s @@" shape keeps a
+// prose line that merely opens with "@@" from opening a diff block, which it
+// did with no "diff --git" header anywhere above it.
+func quotedDiffHunkHeader(line string) (int, int, bool) {
+	rest, ok := strings.CutPrefix(line, "@@ ")
+	if !ok {
+		return 0, 0, false
+	}
+	end := strings.Index(rest, " @@")
+	if end < 0 {
+		return 0, 0, false
+	}
+	ranges := strings.Fields(rest[:end])
+	if len(ranges) != 2 {
+		return 0, 0, false
+	}
+	oldCount, ok := quotedDiffRangeCount(ranges[0], "-")
+	if !ok {
+		return 0, 0, false
+	}
+	newCount, ok := quotedDiffRangeCount(ranges[1], "+")
+	if !ok {
+		return 0, 0, false
+	}
+	return oldCount, newCount, true
+}
+
+// quotedDiffRangeCount reads one side of a hunk header's range pair, such as
+// "-4,6". A range that omits its length covers a single line.
+func quotedDiffRangeCount(field, marker string) (int, bool) {
+	digits, ok := strings.CutPrefix(field, marker)
+	if !ok {
+		return 0, false
+	}
+	start, count, hasCount := strings.Cut(digits, ",")
+	if _, err := strconv.Atoi(start); err != nil {
+		return 0, false
+	}
+	if !hasCount {
+		return 1, true
+	}
+	parsed, err := strconv.Atoi(count)
+	if err != nil || parsed < 0 {
+		return 0, false
+	}
+	return parsed, true
 }
 
 // isQuotedDiffBodyLine reports whether raw continues the hunk opened by a
@@ -6843,6 +6939,26 @@ func isQuotedDiffFileHeader(line string) bool {
 	return len(fields) > 0 && strings.Contains(fields[0], "/")
 }
 
+// isQuotedDiffFileHeaderPair reports whether lines[i] is one half of a patch's
+// "--- a/path" plus "+++ b/path" header pair. A file header never appears
+// alone, so requiring its partner on the adjacent line keeps a prose line that
+// happens to name a path, as in "--- a/prompt.md is the file I inspected",
+// from opening a diff block with no "diff --git" header anywhere above it.
+func isQuotedDiffFileHeaderPair(lines []string, i int) bool {
+	line := strings.TrimSpace(lines[i])
+	if !isQuotedDiffFileHeader(line) {
+		return false
+	}
+	if strings.HasPrefix(line, "--- ") {
+		return i+1 < len(lines) &&
+			strings.HasPrefix(strings.TrimSpace(lines[i+1]), "+++ ") &&
+			isQuotedDiffFileHeader(strings.TrimSpace(lines[i+1]))
+	}
+	return i > 0 &&
+		strings.HasPrefix(strings.TrimSpace(lines[i-1]), "--- ") &&
+		isQuotedDiffFileHeader(strings.TrimSpace(lines[i-1]))
+}
+
 func codexReportedFailureInOutput(output string, allowStructured bool) (bool, string) {
 	output = strings.TrimSpace(output)
 	if output == "" {
@@ -6871,7 +6987,8 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 		}
 		lower := strings.ToLower(trimmed)
 		if field := agentFailureFieldLine(trimmed); strings.HasPrefix(strings.ToLower(field), "failure:") {
-			if isBareFailureHeadingAfterCompletion(field, nonEmpty[:start+i]) {
+			narration := outputNarrationLines(nonEmpty[:start+i], inDiff[:start+i])
+			if isBareFailureHeadingAfterCompletion(field, narration) {
 				continue
 			}
 			return true, field
@@ -6897,6 +7014,24 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 		return true, detail
 	}
 	return false, ""
+}
+
+// isBareFailureHeadingAfterCompletion reports whether a bare "Failure:" line is
+// a section heading inside a summary that already stated the run completed.
+// previous must carry the run's own narration only: a quoted patch states what
+// a file says, so a "Done." or "Verification:" line inside one is no evidence
+// that this run finished its work.
+// outputNarrationLines drops the entries of lines that belong to a quoted
+// patch, leaving the run's own narration.
+func outputNarrationLines(lines []string, inDiff []bool) []string {
+	narration := make([]string, 0, len(lines))
+	for i, line := range lines {
+		if i < len(inDiff) && inDiff[i] {
+			continue
+		}
+		narration = append(narration, line)
+	}
+	return narration
 }
 
 func isBareFailureHeadingAfterCompletion(line string, previous []string) bool {
