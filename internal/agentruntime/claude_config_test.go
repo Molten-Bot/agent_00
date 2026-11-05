@@ -7,6 +7,42 @@ import (
 	"testing"
 )
 
+func TestclaudeSandboxScratchDir(t *testing.T) {
+	t.Parallel()
+
+	if got, err := claudeSandboxScratchDir("  "); err != nil || got != "" {
+		t.Fatalf("claudeSandboxScratchDir(blank) = (%q, %v), want empty", got, err)
+	}
+
+	configDir := t.TempDir()
+	got, err := claudeSandboxScratchDir(configDir)
+	if err != nil {
+		t.Fatalf("claudeSandboxScratchDir() error = %v", err)
+	}
+	if want := filepath.Join(configDir, claudeScratchDirName); got != want {
+		t.Fatalf("claudeSandboxScratchDir() = %q, want %q", got, want)
+	}
+	info, statErr := os.Stat(got)
+	if statErr != nil || !info.IsDir() {
+		t.Fatalf("scratch directory was not created: %v", statErr)
+	}
+	// The scratch directory must stay separate from the credential file and
+	// the backups the harness restores from.
+	for _, protected := range []string{claudeConfigFileName, claudeConfigBackupDirName} {
+		if filepath.Base(got) == protected {
+			t.Fatalf("scratch directory %q collides with protected entry %q", got, protected)
+		}
+	}
+
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := claudeSandboxScratchDir(blocker); err == nil {
+		t.Fatal("claudeSandboxScratchDir(file) error = nil, want creation failure")
+	}
+}
+
 func TestClaudeHomeResolution(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()

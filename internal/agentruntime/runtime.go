@@ -215,6 +215,15 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 		return execx.Command{}, fmt.Errorf("runtime command is required")
 	}
 	if normalizeHarness(r.Harness) == HarnessClaude {
+		// Claude creates per-session scratch state next to its persistent
+		// configuration the first time a task uses a tool. That directory sits
+		// outside the task workspace on purpose, so without this grant the CLI
+		// hits a read-only filesystem on its first tool call and runs the rest
+		// of the task without it.
+		scratchDir, scratchErr := claudeConfigSandboxRoot(opts.Env)
+		if scratchErr != nil {
+			return execx.Command{}, fmt.Errorf("prepare Claude sandbox scratch directory: %w", scratchErr)
+		}
 		// Sandbox Claude's whole process, including its provider requests.
 		// Reviews need network access with a genuinely read-only filesystem:
 		// workspace-write implicitly permits cwd even with writable_roots=[].
@@ -232,18 +241,18 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 				}
 				filesystem += fmt.Sprintf(",%q=\"write\"", ioDir)
 			}
+			if scratchDir != "" {
+				// A review boots the same CLI tool runtime a task run does, so
+				// it fails on the same unwritable scratch directory without this.
+				filesystem += fmt.Sprintf(",%q=\"write\"", scratchDir)
+			}
 			args = append(args,
 				"-P", "agent00_review",
 				"-c", "permissions.agent00_review={filesystem={"+filesystem+"},network={enabled=true}}",
 			)
 		} else {
 			args = append(args, "-c", `sandbox_mode="workspace-write"`)
-			// Claude keeps per-session scratch state next to its persistent
-			// configuration and writes rotated credentials there between tasks.
-			// That directory sits outside the task workspace on purpose, so
-			// without this root the CLI hits a read-only filesystem the first
-			// time it uses a tool and runs the rest of the task without it.
-			args = append(args, workspaceSandboxArgs(opts, claudeConfigSandboxRoot(opts.Env))...)
+			args = append(args, workspaceSandboxArgs(opts, scratchDir)...)
 		}
 		args = append(args, "--", cmd.Name)
 		cmd.Args = append(args, cmd.Args...)
@@ -331,24 +340,45 @@ func workspaceSandboxArgs(opts RunOptions, extraRoots ...string) []string {
 	}
 }
 
-// claudeConfigSandboxRoot resolves the persistent Claude configuration
-// directory the CLI must keep writing to from inside the sandbox. It returns
-// an empty string when the invocation environment does not describe one: the
-// CLI cannot resolve a directory the environment omits either, so there is
-// nothing to grant.
-func claudeConfigSandboxRoot(env []string) string {
-	if len(env) == 0 {
-		return ""
+// claudeConfigSandboxRoot resolves the one directory inside the persistent
+// Claude configuration directory the CLI must keep writing to from inside the
+// sandbox. Granting that directory instead of the whole configuration
+// directory keeps the stored credentials and Claude's own configuration
+// backups out of reach of model-issued commands.
+//
+// It returns an empty string when the invocation environment does not describe
+// a configuration directory: the CLI cannot resolve one the environment omits
+// either, so there is nothing to grant. Every other failure is returned
+// instead of dropped, because a silently missing grant puts the CLI back on a
+// read-only filesystem and the task then finishes without touching a file.
+func claudeConfigSandboxRoot(env []string) (string, error) {
+	if len(env) == 0 || !describesClaudeConfigDir(env) {
+		return "", nil
 	}
 	home, err := ClaudeHome(env)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	resolved, err := resolveSandboxPath(home)
+	scratch, err := claudeSandboxScratchDir(home)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return resolved
+	return resolveSandboxPath(scratch)
+}
+
+// describesClaudeConfigDir reports whether env names a persistent Claude
+// configuration directory at all, mirroring what ClaudeHome reads.
+func describesClaudeConfigDir(env []string) bool {
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || strings.TrimSpace(value) == "" {
+			continue
+		}
+		if key == "CLAUDE_CONFIG_DIR" || key == "HOME" {
+			return true
+		}
+	}
+	return false
 }
 
 func validateWorkspaceDirs(targetDir string, opts RunOptions) error {

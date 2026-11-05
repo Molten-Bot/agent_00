@@ -75,6 +75,67 @@ func TestCodexReportedFailureIgnoresFailureFieldWithoutErrorDetails(t *testing.T
 	}
 }
 
+// The terminal-window guard keeps a mid-run "Failure:" progress update from
+// failing a run that went on to finish. Reading both mandated fields out of
+// the report header must not reach around that guard.
+func TestCodexReportedFailureIgnoresFailureFieldsBelowReportHeader(t *testing.T) {
+	t.Parallel()
+
+	output := strings.Join([]string{
+		"Reviewed the failing job and reproduced it locally.",
+		"Patched the duplicated helper.",
+		"Failure: focused tests failed on compile.",
+		"Error details: duplicate helper declaration.",
+		"apply patch",
+		"patch: completed",
+		"go build ./...",
+		"go test ./internal/app",
+		"ok  \tgithub.com/example/project/internal/app",
+		"go test ./...",
+		"ok  \tgithub.com/example/project/internal/web",
+		"Refactor complete. Tests pass.",
+	}, "\n")
+
+	if failed, detail := codexReportedFailure(execx.Result{Stdout: output}); failed {
+		t.Fatalf("codexReportedFailure() = true (%q), want false for a mid-run progress marker", detail)
+	}
+}
+
+func TestCodexExtractErrorDetailDropsFencesWithInfoString(t *testing.T) {
+	t.Parallel()
+
+	output := strings.Join([]string{
+		"**Failure:** could not apply the migration.",
+		"**Error details:**",
+		"```json",
+		`{"code":"EROFS","message":"read-only file system"}`,
+		"```",
+	}, "\n")
+
+	detail := codexExtractErrorDetail(output)
+	if !strings.Contains(detail, `"code":"EROFS"`) {
+		t.Fatalf("codexExtractErrorDetail() = %q, want the fenced payload", detail)
+	}
+	if strings.Contains(detail, "```") {
+		t.Fatalf("codexExtractErrorDetail() = %q, want Markdown code fences dropped", detail)
+	}
+}
+
+func TestIsMarkdownCodeFence(t *testing.T) {
+	t.Parallel()
+
+	for _, line := range []string{"```", "~~~", "```json", "~~~go", "`"} {
+		if !isMarkdownCodeFence(line) {
+			t.Fatalf("isMarkdownCodeFence(%q) = false, want true", line)
+		}
+	}
+	for _, line := range []string{"", "```go test ./... failed", "`npm run build` failed", "EROFS: read-only"} {
+		if isMarkdownCodeFence(line) {
+			t.Fatalf("isMarkdownCodeFence(%q) = true, want false", line)
+		}
+	}
+}
+
 func TestAgentFailureFieldLineStripsMarkdownDecoration(t *testing.T) {
 	t.Parallel()
 

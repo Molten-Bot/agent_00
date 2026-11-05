@@ -22,7 +22,25 @@ const (
 	claudeConfigFileName      = ".claude.json"
 	claudeConfigBackupDirName = "backups"
 	claudeConfigBackupPrefix  = ".claude.json.backup."
+	claudeScratchDirName      = "session-env"
 )
+
+// claudeSandboxScratchDir returns the per-session scratch directory inside
+// configDir that the Claude CLI writes to while a task runs, creating it when
+// it is missing. The CLI creates it itself the first time a task uses a tool,
+// which it can no longer do once only this directory, and not the whole
+// configuration directory, is writable from inside the agent sandbox.
+func claudeSandboxScratchDir(configDir string) (string, error) {
+	configDir = strings.TrimSpace(configDir)
+	if configDir == "" {
+		return "", nil
+	}
+	dir := filepath.Join(configDir, claudeScratchDirName)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create Claude session scratch directory: %w", err)
+	}
+	return dir, nil
+}
 
 // ClaudeHome resolves the operator's persistent Claude configuration directory
 // before task HOME isolation, mirroring CodexHome.

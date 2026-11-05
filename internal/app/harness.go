@@ -6571,7 +6571,7 @@ func codexJoinErrorDetailLines(lines []string) string {
 		}
 		// A Markdown code fence carries no diagnostic text of its own, and
 		// agents routinely wrap the reported error in one.
-		if strings.Trim(trimmed, "`") == "" {
+		if isMarkdownCodeFence(trimmed) {
 			continue
 		}
 		lower := strings.ToLower(agentFailureFieldLine(trimmed))
@@ -6591,6 +6591,29 @@ func codexJoinErrorDetailLines(lines []string) string {
 		return joined
 	}
 	return strings.TrimSpace(joined[:maxDetailChars-3]) + "..."
+}
+
+// isMarkdownCodeFence reports whether a line is only a code fence. An opening
+// fence often carries an info string naming the language, as in ```json, which
+// is still decoration rather than part of the reported error.
+func isMarkdownCodeFence(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	if strings.Trim(trimmed, "`~") == "" {
+		return true
+	}
+	for _, fence := range []string{"```", "~~~"} {
+		if !strings.HasPrefix(trimmed, fence) {
+			continue
+		}
+		info := strings.TrimLeft(trimmed, fence[:1])
+		// An info string is a single word. A sentence that merely opens with a
+		// fence is ordinary diagnostic text.
+		return info != "" && !strings.ContainsAny(info, " \t")
+	}
+	return false
 }
 
 // agentFailureFieldLine strips the Markdown decoration agents wrap around the
@@ -6620,11 +6643,19 @@ func agentFailureFieldLine(raw string) string {
 }
 
 // agentReportedFailureFields reports a failure stated through both mandated
-// fields anywhere in the output. A Markdown report leads with its summary, so
-// the pair usually sits above the terminal window that guards against stale
-// mid-run "Failure:" progress lines; requiring the accompanying error details
-// keeps those progress lines from failing a successful run.
+// fields in the report header. A Markdown report leads with its summary, so
+// the pair sits above the terminal window that guards against stale mid-run
+// "Failure:" progress lines. Scanning only the header keeps that guard in
+// force: a progress line the agent prints while it is still working trails its
+// narration of the work so far, and the whole report that follows is not
+// evidence that the run ended badly.
 func agentReportedFailureFields(nonEmpty []string) (bool, string) {
+	// Both fields plus the optional heading that can precede them, such as
+	// "## Failure".
+	const reportHeaderLines = 3
+	if len(nonEmpty) > reportHeaderLines {
+		nonEmpty = nonEmpty[:reportHeaderLines]
+	}
 	failure := ""
 	for _, raw := range nonEmpty {
 		field := agentFailureFieldLine(raw)
