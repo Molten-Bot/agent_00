@@ -6671,12 +6671,16 @@ func agentFailureFieldLine(raw string) string {
 // narration of the work so far, and the whole report that follows is not
 // evidence that the run ended badly.
 func agentReportedFailureFields(nonEmpty []string, inDiff []bool) (bool, string) {
-	// Both fields plus one line of lead-in narration. A Markdown heading is
-	// decoration rather than narration, so it restarts that budget instead of
-	// spending it: a sectioned report narrates under its own headings and
-	// otherwise pushes "Error details:" out of the header, while the mid-run
-	// pair this guard exists for arrives as plain progress lines with no
-	// section structure at all.
+	// Both fields plus one line of lead-in narration. A heading that names the
+	// report or one of its sections is decoration rather than narration, so it
+	// restarts that budget instead of spending it: a sectioned report narrates
+	// under its own headings and otherwise pushes "Error details:" out of the
+	// header.
+	//
+	// A heading that names a step of the work, such as "## Step 1", narrates
+	// like the line above it and spends the budget accordingly. Restarting on
+	// every heading let a run that printed one line of narration and a step
+	// heading carry the mid-run progress pair below it into the result.
 	//
 	// A section of a report header carries its heading and that one lead-in
 	// line, so the restart applies only to a heading whose own section stayed
@@ -6717,7 +6721,7 @@ func agentReportedFailureFields(nonEmpty []string, inDiff []bool) (bool, string)
 		isDetails := !inDiff[i] && strings.HasPrefix(lower, "error details:")
 		if !isFailure && !isDetails && restarts < maxHeadingRestarts &&
 			remaining >= reportHeaderLines-maxSectionLeadInLines &&
-			isMarkdownHeading(raw) {
+			isReportSectionHeading(raw) {
 			remaining = reportHeaderLines
 			restarts++
 			continue
@@ -6759,6 +6763,34 @@ func isMarkdownHeading(line string) bool {
 	return trimmed[hashes] == ' ' || trimmed[hashes] == '\t'
 }
 
+// isReportSectionHeading reports whether a Markdown heading opens a report or
+// one of its sections rather than a step of the run's own narration. Only a
+// report heading restarts the report-header budget, because a run that prints
+// "## Step 1" or "## Attempt 2" after a line of narration is still narrating
+// and the "Failure:" pair below such a heading is progress rather than the
+// run's outcome.
+func isReportSectionHeading(line string) bool {
+	if !isMarkdownHeading(line) {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#")))
+	for _, section := range []string{
+		"report",
+		"summary",
+		"failure",
+		"error",
+		"outcome",
+		"result",
+		"conclusion",
+		"blocker",
+	} {
+		if strings.Contains(text, section) {
+			return true
+		}
+	}
+	return false
+}
+
 // splitNonEmptyOutputLines returns the agent output's non-blank lines, each
 // trimmed of surrounding whitespace, alongside a parallel slice marking the
 // ones that belong to a quoted patch.
@@ -6796,27 +6828,21 @@ func splitNonEmptyOutputLines(output string) ([]string, []bool) {
 // below the last hunk line, with no blank line between them, kept the quote
 // open and the run's own failure went unreported.
 //
-// A patch quoted without a hunk header declares no length, so it spends a fixed
-// allowance instead of running to the first line without a hunk marker, which a
-// bulleted report is not. A "diff --git" line gets no allowance at all: it names
+// A declared length only bounds a quote that was pasted in full, and a patch
+// quoted without a hunk header declares no length at all, so the report's own
+// bullets close the block as well. A "diff --git" line gets no body: it names
 // the file but quotes none of it, and the file headers or hunk header below it
 // open the block that does. Reading a body after it swallowed the report an
 // agent wrote directly under the header it had just quoted.
 func quotedDiffHunkLines(lines []string) []bool {
-	// Enough for the short headerless hunks agents paste under a file header,
-	// few enough that a report below one is still read as the report it is.
-	const maxUncountedQuoteLines = 8
-
 	inDiff := make([]bool, len(lines))
 	indent := ""
 	active := false
 	// counted marks a block opened by a hunk header, which declares its own
-	// length. A file header opens an uncounted block, which spends the fixed
-	// allowance above and is closed by the first line without a hunk marker
-	// either way.
+	// length. A file header opens an uncounted block, which runs until a line
+	// stops continuing it.
 	counted := false
 	oldLeft, newLeft := 0, 0
-	uncountedLeft := 0
 	for i, raw := range lines {
 		line := strings.TrimSpace(raw)
 		if oldCount, newCount, ok := quotedDiffHunkHeader(line); ok {
@@ -6828,7 +6854,6 @@ func quotedDiffHunkLines(lines []string) []bool {
 		}
 		if isQuotedDiffFileHeaderPair(lines, i) {
 			active, counted = true, false
-			uncountedLeft = maxUncountedQuoteLines
 			indent = quotedDiffIndent(raw)
 			inDiff[i] = true
 			continue
@@ -6843,6 +6868,10 @@ func quotedDiffHunkLines(lines []string) []bool {
 			continue
 		}
 		body := raw[len(indent):]
+		if isQuotedDiffReportFieldBullet(body) {
+			active = false
+			continue
+		}
 		if counted && oldLeft <= 0 && newLeft <= 0 {
 			// The header already accounted for every line of the hunk, so the
 			// only one left that still belongs to it is the no-newline note.
@@ -6853,16 +6882,10 @@ func quotedDiffHunkLines(lines []string) []bool {
 			inDiff[i] = true
 			continue
 		}
+		inDiff[i] = true
 		if !counted {
-			if uncountedLeft <= 0 {
-				active = false
-				continue
-			}
-			uncountedLeft--
-			inDiff[i] = true
 			continue
 		}
-		inDiff[i] = true
 		switch body[0] {
 		case '+':
 			newLeft--
@@ -6874,6 +6897,27 @@ func quotedDiffHunkLines(lines []string) []bool {
 		}
 	}
 	return inDiff
+}
+
+// isQuotedDiffReportFieldBullet reports whether a hunk body line is instead the
+// Markdown bullet of a mandated report field. A removal marker and a list
+// marker are the same character, so a hunk header that declares more lines than
+// the agent actually pasted, or a patch quoted with no hunk header at all, ran
+// the quote on across the bulleted report written directly below it and the
+// run's own failure went unreported.
+//
+// A patch that deletes a reporting-contract line wears the same shape, and no
+// marker or spacing tells the two apart, so the quote gives way to the report:
+// a hidden failure costs the run its result, while a quoted deletion read as a
+// report only repeats what the agent wrote anyway. A deletion that keeps the
+// file's own text directly after the marker, as in "-Failure: <summary>", is
+// not a list item and stays inside the quote.
+func isQuotedDiffReportFieldBullet(body string) bool {
+	if len(body) < 2 || body[0] != '-' || (body[1] != ' ' && body[1] != '\t') {
+		return false
+	}
+	field := strings.ToLower(agentFailureFieldLine(body))
+	return strings.HasPrefix(field, "failure:") || strings.HasPrefix(field, "error details:")
 }
 
 // quotedDiffIndent returns the leading whitespace a quoted patch is indented
@@ -6935,13 +6979,16 @@ func quotedDiffRangeCount(field, marker string) (int, bool) {
 // header indented by indent. Every hunk line carries its marker directly after
 // that indentation: "+" or "-" for a change, a space for context, or "\" for
 // the no-newline note. A blank line carries no marker, which is how a quote
-// ends before the report that follows it.
+// ends before the report that follows it. A line of nothing but whitespace is
+// the same blank separator, written by an agent or a terminal that kept the
+// trailing spaces, so reading its first space as a context marker kept the
+// quote open across the report below it.
 func isQuotedDiffBodyLine(raw, indent string) bool {
 	if !strings.HasPrefix(raw, indent) {
 		return false
 	}
 	body := raw[len(indent):]
-	if body == "" {
+	if strings.TrimSpace(body) == "" {
 		return false
 	}
 	switch body[0] {

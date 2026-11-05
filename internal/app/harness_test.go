@@ -8550,6 +8550,36 @@ func TestCodexReportedFailureDetectsBulletedReportBelowUnseparatedQuotedDiff(t *
 	}
 }
 
+func TestCodexReportedFailureDetectsBulletedReportBelowOverlongHunkCounts(t *testing.T) {
+	t.Parallel()
+
+	// A hunk header declares how many lines the hunk spans, but an agent pastes
+	// only the part it wants to show. Trusting the declared length kept the
+	// quote open across the bulleted report written directly below the last
+	// pasted line, so the run's own failure went unreported.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Reviewed the reporting contract.",
+			"diff --git a/prompt.md b/prompt.md",
+			"--- a/prompt.md",
+			"+++ b/prompt.md",
+			"@@ -4,20 +4,24 @@ Report the outcome with these fields:",
+			" Report the outcome with these fields:",
+			"+ Failure: <short failure summary>",
+			"- **Failure:** the focused tests failed.",
+			"- **Error details:** `go test ./internal/app` exited with status 1.",
+		}, "\n"),
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(bulleted report below overlong hunk counts) = false, want true")
+	}
+	if want := "Failure: the focused tests failed."; detail != want {
+		t.Fatalf("codexReportedFailure(bulleted report below overlong hunk counts) detail = %q, want %q", detail, want)
+	}
+}
+
 func TestCodexReportedFailureDetectsBulletedReportBelowDiffGitHeader(t *testing.T) {
 	t.Parallel()
 
@@ -8577,10 +8607,10 @@ func TestCodexReportedFailureDetectsBulletedReportBelowDiffGitHeader(t *testing.
 func TestCodexReportedFailureDetectsBulletedReportBelowHeaderlessQuotedDiff(t *testing.T) {
 	t.Parallel()
 
-	// A patch quoted without a hunk header declares no length, so it spends a
-	// fixed allowance. Without one the quote ran to the first line without a
-	// hunk marker, which a bulleted report written below it is not, and the
-	// run's own failure went unreported.
+	// A patch quoted without a hunk header declares no length, so the report's
+	// own field bullets close it. Without that the quote ran to the first line
+	// without a hunk marker, which a bulleted report written below it is not,
+	// and the run's own failure went unreported.
 	res := execx.Result{
 		Stdout: strings.Join([]string{
 			"Reviewed the reporting contract.",
@@ -8605,6 +8635,37 @@ func TestCodexReportedFailureDetectsBulletedReportBelowHeaderlessQuotedDiff(t *t
 	}
 	if want := "Failure: the focused tests failed."; detail != want {
 		t.Fatalf("codexReportedFailure(bulleted report below headerless quoted diff) detail = %q, want %q", detail, want)
+	}
+}
+
+func TestCodexReportedFailureIgnoresLongHeaderlessQuotedDiffFailureLine(t *testing.T) {
+	t.Parallel()
+
+	// A patch quoted without a hunk header declares no length, so a fixed line
+	// allowance ended the quote part way through it and the reporting contract
+	// the patch adds below that point reported what the file says as the run's
+	// outcome. The quote now runs until a line stops continuing it.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Reviewed the reporting contract.",
+			"--- a/prompt.md",
+			"+++ b/prompt.md",
+			"+Report the outcome with these fields:",
+			"+Keep the summary short.",
+			"+Name the failing command.",
+			"+Name the blocker.",
+			"+Name the validation gap.",
+			"+Stop after the report.",
+			"+Do not repeat the prompt.",
+			"+Use these fields:",
+			"+ Failure: <short failure summary>",
+			"+ Error details: <failing command or blocker>",
+			"`go test ./internal/app` passed.",
+		}, "\n"),
+	}
+
+	if failed, detail := codexReportedFailure(res); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(long headerless quoted diff) = (%v, %q), want (false, \"\")", failed, detail)
 	}
 }
 
@@ -8656,6 +8717,34 @@ func TestCodexReportedFailureKeepsBareFailureHeadingFatalBelowQuotedCompletionMa
 
 	if failed, detail := codexReportedFailure(res); !failed || !strings.HasPrefix(detail, "Failure:") {
 		t.Fatalf("codexReportedFailure(bare heading below quoted completion markers) = (%v, %q), want (true, \"Failure:...\")", failed, detail)
+	}
+}
+
+func TestCodexReportedFailureIgnoresBareFailureHeadingBelowWhitespaceClosedQuote(t *testing.T) {
+	t.Parallel()
+
+	// A line of nothing but whitespace is the blank line that closes a quoted
+	// patch. Reading its first space as a context marker kept the quote open
+	// across the summary below it, so the completion markers that turn a bare
+	// "Failure:" into a section heading were discarded as quoted text and the
+	// completed run was reported as failed.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"diff --git a/prompt.md b/prompt.md",
+			"--- a/prompt.md",
+			"+++ b/prompt.md",
+			"@@ -1,2 +1,6 @@ Report the outcome:",
+			" Report the outcome:",
+			"   ",
+			"- Done.",
+			"- Verification: `go test ./internal/app` passed.",
+			"Failure:",
+			"- `npm test` failed a pre-existing expectation.",
+		}, "\n"),
+	}
+
+	if failed, detail := codexReportedFailure(res); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(bare heading below whitespace-closed quote) = (%v, %q), want (false, \"\")", failed, detail)
 	}
 }
 
@@ -8733,11 +8822,11 @@ func TestCodexReportedFailureIgnoresMidRunFailurePairBelowHeading(t *testing.T) 
 func TestCodexReportedFailureIgnoresMidRunFailurePairBelowNarratedSection(t *testing.T) {
 	t.Parallel()
 
-	// A heading restarts the report-header budget only for a section that
-	// narrated no more than its own lead-in line. A run that narrates several
-	// lines of work under a heading is past its report header, so the headings
-	// it keeps printing cannot carry the progress pair below them into the
-	// result while the budget still has room.
+	// A heading restarts the report-header budget only when it names the report
+	// or one of its sections, and only for a section that narrated no more than
+	// its own lead-in line. A heading that names a step of the work narrates
+	// like the line above it, so it cannot carry the progress pair below it
+	// into the result however early in the run it is printed.
 	tail := []string{
 		"## Step 9",
 		"Retried through the proxy and the install succeeded.",
@@ -8756,6 +8845,13 @@ func TestCodexReportedFailureIgnoresMidRunFailurePairBelowNarratedSection(t *tes
 		name string
 		head []string
 	}{
+		{
+			name: "single lead-in line",
+			head: []string{
+				"Starting the migration task.",
+				"## Step 1",
+			},
+		},
 		{
 			name: "one heading",
 			head: []string{
