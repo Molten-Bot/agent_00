@@ -6623,7 +6623,21 @@ func isMarkdownCodeFence(line string) bool {
 // as a successful agent stage and surfaced later only as a generic no-change
 // error.
 func agentFailureFieldLine(raw string) string {
-	line := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(raw), "#>-+ \t"))
+	line := strings.TrimSpace(raw)
+	for {
+		if trimmed := strings.TrimLeft(line, "#> \t"); trimmed != line {
+			line = trimmed
+			continue
+		}
+		// A list marker is decoration only when whitespace follows it. Agents
+		// routinely quote patches, and "+Failure: ..." or "-Failure: ..." is a
+		// diff line reporting what a file says, not a field reporting the run.
+		if len(line) > 1 && strings.IndexByte("-+", line[0]) >= 0 && (line[1] == ' ' || line[1] == '\t') {
+			line = line[1:]
+			continue
+		}
+		break
+	}
 	for _, marker := range []string{"***", "**", "*", "___", "__", "_"} {
 		if strings.HasPrefix(line, marker) {
 			line = strings.TrimSpace(strings.TrimPrefix(line, marker))
@@ -6650,14 +6664,22 @@ func agentFailureFieldLine(raw string) string {
 // narration of the work so far, and the whole report that follows is not
 // evidence that the run ended badly.
 func agentReportedFailureFields(nonEmpty []string) (bool, string) {
-	// Both fields plus the optional heading that can precede them, such as
-	// "## Failure".
+	// Both fields plus one line of lead-in narration. A Markdown heading such
+	// as "## Failure" is decoration rather than narration, so it does not spend
+	// that budget: a report that both leads in and heads its fields otherwise
+	// pushes "Error details:" out of the header and goes unreported. Widening
+	// the window instead would swallow the mid-run pair this guard exists for.
 	const reportHeaderLines = 3
-	if len(nonEmpty) > reportHeaderLines {
-		nonEmpty = nonEmpty[:reportHeaderLines]
-	}
+	remaining := reportHeaderLines
 	failure := ""
 	for _, raw := range nonEmpty {
+		if strings.HasPrefix(strings.TrimSpace(raw), "#") {
+			continue
+		}
+		if remaining == 0 {
+			break
+		}
+		remaining--
 		field := agentFailureFieldLine(raw)
 		lower := strings.ToLower(field)
 		if failure == "" {

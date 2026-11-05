@@ -30,6 +30,18 @@ const (
 // it is missing. The CLI creates it itself the first time a task uses a tool,
 // which it can no longer do once only this directory, and not the whole
 // configuration directory, is writable from inside the agent sandbox.
+//
+// The CLI fixes this location, so every task and every review pass that shares
+// a configuration directory also shares this directory; per-task isolation is
+// not available for it. Only the CLI's own session scratch lives here: the
+// stored credentials and Claude's configuration backups sit beside it and stay
+// unwritable from inside the sandbox.
+//
+// A configuration directory the harness cannot extend yields an empty path
+// rather than an error. The CLI cannot write there either, so there is no grant
+// to make, and failing the whole invocation would stop a task that otherwise
+// runs. Anything else, including a file where the configuration directory
+// belongs, is still reported.
 func claudeSandboxScratchDir(configDir string) (string, error) {
 	configDir = strings.TrimSpace(configDir)
 	if configDir == "" {
@@ -37,6 +49,9 @@ func claudeSandboxScratchDir(configDir string) (string, error) {
 	}
 	dir := filepath.Join(configDir, claudeScratchDirName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		if info, statErr := os.Stat(configDir); statErr == nil && info.IsDir() {
+			return "", nil
+		}
 		return "", fmt.Errorf("create Claude session scratch directory: %w", err)
 	}
 	return dir, nil

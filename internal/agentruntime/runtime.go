@@ -346,11 +346,13 @@ func workspaceSandboxArgs(opts RunOptions, extraRoots ...string) []string {
 // directory keeps the stored credentials and Claude's own configuration
 // backups out of reach of model-issued commands.
 //
-// It returns an empty string when the invocation environment does not describe
-// a configuration directory: the CLI cannot resolve one the environment omits
-// either, so there is nothing to grant. Every other failure is returned
-// instead of dropped, because a silently missing grant puts the CLI back on a
-// read-only filesystem and the task then finishes without touching a file.
+// It returns an empty string when there is nothing to grant: when the
+// invocation environment does not describe a configuration directory, because
+// the CLI cannot resolve one the environment omits either, and when the
+// configuration directory cannot be extended, because the CLI cannot write
+// there either. Every other failure is returned instead of dropped, because a
+// silently missing grant puts the CLI back on a read-only filesystem and the
+// task then finishes without touching a file.
 func claudeConfigSandboxRoot(env []string) (string, error) {
 	if len(env) == 0 || !describesClaudeConfigDir(env) {
 		return "", nil
@@ -360,7 +362,7 @@ func claudeConfigSandboxRoot(env []string) (string, error) {
 		return "", err
 	}
 	scratch, err := claudeSandboxScratchDir(home)
-	if err != nil {
+	if err != nil || strings.TrimSpace(scratch) == "" {
 		return "", err
 	}
 	return resolveSandboxPath(scratch)

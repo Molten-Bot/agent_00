@@ -238,6 +238,64 @@ func TestClaudeSandboxReportsUnusableConfigDir(t *testing.T) {
 	}
 }
 
+func TestClaudeSandboxSkipsScratchGrantWhenConfigDirCannotBeExtended(t *testing.T) {
+	t.Parallel()
+
+	// The CLI cannot write into a configuration directory the harness cannot
+	// extend either, so there is no grant to make and the task must still run.
+	build := func(t *testing.T, configDir string) {
+		t.Helper()
+		rt, err := Resolve(HarnessClaude, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd, err := rt.BuildCommand("/tasks/current/repo", "fix it", RunOptions{
+			WorkspaceDir: "/tasks/current",
+			Env:          []string{"CLAUDE_CONFIG_DIR=" + configDir},
+		})
+		if err != nil {
+			t.Fatalf("BuildCommand() error = %v, want the grant dropped instead of a build failure", err)
+		}
+		want := `sandbox_workspace_write.writable_roots=["/tasks/current"]`
+		if !slices.Contains(cmd.Args, want) {
+			t.Fatalf("missing sandbox restriction %q in %v", want, cmd.Args)
+		}
+		for _, arg := range cmd.Args {
+			if strings.Contains(arg, configDir) {
+				t.Fatalf("unwritable configuration directory reached the sandbox grant: %v", cmd.Args)
+			}
+		}
+	}
+
+	t.Run("scratch path blocked by a file", func(t *testing.T) {
+		t.Parallel()
+		configDir, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(configDir, claudeScratchDirName), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		build(t, configDir)
+	})
+
+	t.Run("read-only configuration directory", func(t *testing.T) {
+		t.Parallel()
+		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+			t.Skip("directory permissions do not block creation here")
+		}
+		configDir, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(configDir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(configDir, 0o700) })
+		build(t, configDir)
+	})
+}
+
 func TestClaudeSandboxSkipsScratchGrantWithoutConfigDirInEnv(t *testing.T) {
 	t.Parallel()
 
