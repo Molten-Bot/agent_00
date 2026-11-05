@@ -6703,22 +6703,32 @@ func agentReportedFailureFields(nonEmpty []string, inDiff []bool) (bool, string)
 	// window already reads it that way, so skipping it here would report the
 	// same line as a failure or not depending only on how far it sits from the
 	// end of the output.
+	//
+	// A quoted patch is neither the run's narration nor a field of its report,
+	// so it spends neither budget. Counting its lines let a pasted patch run the
+	// header out before the sectioned report written below it, and the run's own
+	// failure went unreported.
 	const reportHeaderLines = 3
 	const maxHeaderScanLines = 12
 	const maxHeadingRestarts = 3
 	const maxSectionLeadInLines = 1
 	remaining := reportHeaderLines
 	restarts := 0
+	scanned := 0
 	failure := ""
 	for i, raw := range nonEmpty {
-		if i >= maxHeaderScanLines {
+		if inDiff[i] {
+			continue
+		}
+		if scanned >= maxHeaderScanLines {
 			break
 		}
+		scanned++
 		field := agentFailureFieldLine(raw)
 		lower := strings.ToLower(field)
-		isFailure := !inDiff[i] && strings.HasPrefix(lower, "failure:") &&
+		isFailure := strings.HasPrefix(lower, "failure:") &&
 			strings.TrimSpace(field[len("failure:"):]) != ""
-		isDetails := !inDiff[i] && strings.HasPrefix(lower, "error details:")
+		isDetails := strings.HasPrefix(lower, "error details:")
 		if !isFailure && !isDetails && restarts < maxHeadingRestarts &&
 			remaining >= reportHeaderLines-maxSectionLeadInLines &&
 			isReportSectionHeading(raw) {
@@ -6769,23 +6779,41 @@ func isMarkdownHeading(line string) bool {
 // "## Step 1" or "## Attempt 2" after a line of narration is still narrating
 // and the "Failure:" pair below such a heading is progress rather than the
 // run's outcome.
+//
+// The heading has to name a section rather than merely contain its letters.
+// Matching a substring let "## Reporting progress" and "## Resulting state"
+// restart the budget, so the mid-run pair below them read as the run's outcome.
+// The match is on whole words, with the plural of each section name.
+//
+// A section heading is a label rather than a sentence, so a long heading is
+// narration whichever word it happens to carry: "## Summary of every file I
+// touched while installing" describes the step the run is on, not the report
+// it is about to write.
 func isReportSectionHeading(line string) bool {
 	if !isMarkdownHeading(line) {
 		return false
 	}
+	const maxSectionHeadingWords = 4
 	text := strings.ToLower(strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#")))
-	for _, section := range []string{
-		"report",
-		"summary",
-		"failure",
-		"error",
-		"outcome",
-		"result",
-		"conclusion",
-		"blocker",
-	} {
-		if strings.Contains(text, section) {
-			return true
+	words := strings.Fields(text)
+	if len(words) == 0 || len(words) > maxSectionHeadingWords {
+		return false
+	}
+	for _, word := range words {
+		word = strings.Trim(word, "*_`'\"().,:;!?[]{}")
+		for _, section := range []string{
+			"report",
+			"summary",
+			"failure",
+			"error",
+			"outcome",
+			"result",
+			"conclusion",
+			"blocker",
+		} {
+			if word == section || word == section+"s" {
+				return true
+			}
 		}
 	}
 	return false
@@ -6863,6 +6891,12 @@ func quotedDiffHunkLines(lines []string) []bool {
 			inDiff[i] = true
 			continue
 		}
+		if active && isEmptyQuotedDiffContextLine(raw, counted, oldLeft, newLeft) {
+			inDiff[i] = true
+			oldLeft--
+			newLeft--
+			continue
+		}
 		if !active || !isQuotedDiffBodyLine(raw, indent) {
 			active = false
 			continue
@@ -6912,12 +6946,35 @@ func quotedDiffHunkLines(lines []string) []bool {
 // report only repeats what the agent wrote anyway. A deletion that keeps the
 // file's own text directly after the marker, as in "-Failure: <summary>", is
 // not a list item and stays inside the quote.
+//
+// What the field states settles the rest. A contract line names a placeholder
+// where a report names an outcome, so a deletion of an indented contract line,
+// which keeps that indentation after its marker and so reads as a list item,
+// stays inside the quote. Letting it out reported "<short failure summary>" as
+// what went wrong with the run.
 func isQuotedDiffReportFieldBullet(body string) bool {
 	if len(body) < 2 || body[0] != '-' || (body[1] != ' ' && body[1] != '\t') {
 		return false
 	}
-	field := strings.ToLower(agentFailureFieldLine(body))
-	return strings.HasPrefix(field, "failure:") || strings.HasPrefix(field, "error details:")
+	field := agentFailureFieldLine(body)
+	lower := strings.ToLower(field)
+	if !strings.HasPrefix(lower, "failure:") && !strings.HasPrefix(lower, "error details:") {
+		return false
+	}
+	return !isReportFieldPlaceholderValue(field)
+}
+
+// isReportFieldPlaceholderValue reports whether a mandated report field states
+// a placeholder rather than an outcome, as in "Failure: <short failure
+// summary>". The reporting contract writes its fields that way, so a line
+// carrying one quotes the contract instead of reporting this run's result.
+func isReportFieldPlaceholderValue(field string) bool {
+	_, value, ok := strings.Cut(field, ":")
+	if !ok {
+		return false
+	}
+	value = strings.TrimSpace(value)
+	return strings.HasPrefix(value, "<") && strings.HasSuffix(value, ">")
 }
 
 // quotedDiffIndent returns the leading whitespace a quoted patch is indented
@@ -6973,6 +7030,25 @@ func quotedDiffRangeCount(field, marker string) (int, bool) {
 		return 0, false
 	}
 	return parsed, true
+}
+
+// isEmptyQuotedDiffContextLine reports whether raw is a hunk's empty context
+// line rather than the blank line that closes the quote. An empty context line
+// is nothing but its space marker, which trailing-whitespace stripping leaves
+// as an empty line, so the line that ended the quote was the very line the hunk
+// header still had to account for and the rest of the quoted patch reported
+// what the file says as the run's outcome.
+//
+// Only a hunk header separates the two, because it declares how many lines the
+// hunk spans: a blank line once that budget is spent, or in a patch quoted with
+// no header at all, is the separator it looks like. A blank line that kept its
+// whitespace is a separator as well, since the stripped marker would have left
+// none behind.
+func isEmptyQuotedDiffContextLine(raw string, counted bool, oldLeft, newLeft int) bool {
+	if !counted || (oldLeft <= 0 && newLeft <= 0) {
+		return false
+	}
+	return strings.Trim(raw, "\r") == ""
 }
 
 // isQuotedDiffBodyLine reports whether raw continues the hunk opened by a

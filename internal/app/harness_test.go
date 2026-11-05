@@ -8398,6 +8398,139 @@ func TestCodexReportedFailureIgnoresSingleSpaceQuotedDiffFailureLine(t *testing.
 	}
 }
 
+func TestCodexReportedFailureIgnoresQuotedDiffDeletionOfIndentedContractLine(t *testing.T) {
+	t.Parallel()
+
+	// A deletion keeps the file's own indentation after its "-" marker, which
+	// is the shape of a Markdown list item. Reading it as a report bullet let
+	// it out of the quote and reported the contract's own placeholder as what
+	// went wrong with the run.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Reviewed the reporting contract.",
+			"diff --git a/prompt.md b/prompt.md",
+			"--- a/prompt.md",
+			"+++ b/prompt.md",
+			"@@ -4,6 +4,4 @@ Report the outcome with these fields:",
+			" Report the outcome with these fields:",
+			"-  Failure: <short failure summary>",
+			"-  Error details: <failing command or blocker>",
+			" Keep the summary short.",
+			"`go test ./internal/app` passed.",
+		}, "\n"),
+	}
+
+	if failed, detail := codexReportedFailure(res); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(quoted deletion of indented contract line) = (%v, %q), want (false, \"\")", failed, detail)
+	}
+}
+
+func TestCodexReportedFailureIgnoresQuotedDiffFailureLineBelowEmptyContextLine(t *testing.T) {
+	t.Parallel()
+
+	// A hunk's empty context line is nothing but its space marker, which
+	// trailing-whitespace stripping leaves as an empty line. Closing the quote
+	// there let the rest of the hunk the header still had to account for report
+	// what the file says as the run's outcome.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Reviewed the reporting contract.",
+			"diff --git a/prompt.md b/prompt.md",
+			"--- a/prompt.md",
+			"+++ b/prompt.md",
+			"@@ -4,7 +4,9 @@ Report the outcome with these fields:",
+			" Report the outcome with these fields:",
+			"",
+			"+ Failure: <short failure summary>",
+			"+ Error details: <failing command or blocker>",
+			" Keep the summary short.",
+			"`go test ./internal/app` passed.",
+		}, "\n"),
+	}
+
+	if failed, detail := codexReportedFailure(res); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(quoted diff hunk with empty context line) = (%v, %q), want (false, \"\")", failed, detail)
+	}
+}
+
+func TestCodexReportedFailureDetectsSectionedReportBelowQuotedDiff(t *testing.T) {
+	t.Parallel()
+
+	// A quoted patch is neither the run's narration nor a field of its report.
+	// Spending the report-header budget on it ran the header out before the
+	// sectioned report written below the patch, so the run's own failure went
+	// unreported.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Reviewed the reporting contract.",
+			"diff --git a/prompt.md b/prompt.md",
+			"--- a/prompt.md",
+			"+++ b/prompt.md",
+			"@@ -4,2 +4,3 @@ Report the outcome with these fields:",
+			" Report the outcome with these fields:",
+			"+Failure: <short failure summary>",
+			"",
+			"## Failure",
+			"**Failure:** the focused tests failed.",
+			"**Error details:** `go test ./internal/app` exited with status 1.",
+			"Context:",
+			"- Cloned the repository.",
+			"- Installed dependencies.",
+			"- Applied the schema patch.",
+			"- Re-ran the migration twice.",
+			"- Collected the migration log.",
+			"Stopping here.",
+		}, "\n"),
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(sectioned report below quoted diff) = false, want true")
+	}
+	if want := "Failure: the focused tests failed."; detail != want {
+		t.Fatalf("codexReportedFailure(sectioned report below quoted diff) detail = %q, want %q", detail, want)
+	}
+}
+
+func TestCodexReportedFailureIgnoresMidRunFailurePairBelowNarrationHeading(t *testing.T) {
+	t.Parallel()
+
+	// A heading restarts the report-header budget only when it names the report
+	// or one of its sections. Matching a section name as a substring, or inside
+	// a heading long enough to be a sentence, let ordinary narration restart the
+	// budget and carry the mid-run progress pair below it into the result.
+	tail := []string{
+		"Retried through the proxy and the install succeeded.",
+		"Ran the focused tests.",
+		"Ran the build.",
+		"Ran the linter.",
+		"Ran go vet.",
+		"Updated the changelog.",
+		"Done. All checks pass.",
+	}
+	pair := []string{
+		"Failure: could not reach the package registry.",
+		"Error details: npm ERR! network timeout.",
+	}
+	for _, tc := range []struct {
+		name    string
+		heading string
+	}{
+		{name: "section name as substring", heading: "## Reporting progress"},
+		{name: "section name inside a sentence", heading: "## Summary of every file I touched while installing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			lines := append(append([]string{"Starting the migration task.", tc.heading}, pair...), tail...)
+			res := execx.Result{Stdout: strings.Join(lines, "\n")}
+			if failed, detail := codexReportedFailure(res); failed || detail != "" {
+				t.Fatalf("codexReportedFailure(mid-run pair below %s) = (%v, %q), want (false, \"\")", tc.name, failed, detail)
+			}
+		})
+	}
+}
+
 func TestCodexReportedFailureIgnoresQuotedDiffFailureLineBelowContextLine(t *testing.T) {
 	t.Parallel()
 
