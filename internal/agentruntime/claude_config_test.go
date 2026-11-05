@@ -4,8 +4,65 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+func TestClaudeSandboxScratchDir(t *testing.T) {
+	t.Parallel()
+
+	if got, err := claudeSandboxScratchDir("  "); err != nil || got != "" {
+		t.Fatalf("claudeSandboxScratchDir(blank) = (%q, %v), want empty", got, err)
+	}
+
+	configDir := t.TempDir()
+	got, err := claudeSandboxScratchDir(configDir)
+	if err != nil {
+		t.Fatalf("claudeSandboxScratchDir() error = %v", err)
+	}
+	if want := filepath.Join(configDir, claudeScratchDirName); got != want {
+		t.Fatalf("claudeSandboxScratchDir() = %q, want %q", got, want)
+	}
+	info, statErr := os.Stat(got)
+	if statErr != nil || !info.IsDir() {
+		t.Fatalf("scratch directory was not created: %v", statErr)
+	}
+	// The scratch directory must stay separate from the credential file and
+	// the backups the harness restores from.
+	for _, protected := range []string{claudeConfigFileName, claudeConfigBackupDirName} {
+		if filepath.Base(got) == protected {
+			t.Fatalf("scratch directory %q collides with protected entry %q", got, protected)
+		}
+	}
+
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := claudeSandboxScratchDir(blocker); err == nil {
+		t.Fatal("claudeSandboxScratchDir(file) error = nil, want creation failure")
+	}
+}
+
+func TestClaudeSandboxScratchDirSkipsUncreatableConfigDir(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions do not block creation here")
+	}
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+
+	// The configuration directory is absent and cannot be created, so the CLI
+	// cannot write there either: there is no grant to make, and the invocation
+	// must still run.
+	got, err := claudeSandboxScratchDir(filepath.Join(parent, ".claude"))
+	if err != nil || got != "" {
+		t.Fatalf("claudeSandboxScratchDir(uncreatable) = (%q, %v), want no grant and no error", got, err)
+	}
+}
 
 func TestClaudeHomeResolution(t *testing.T) {
 	t.Parallel()

@@ -2,7 +2,9 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -139,6 +141,219 @@ func TestClaudeReviewRejectsRedirectedIO(t *testing.T) {
 	_, err := rt.BuildCommand(repo, "review", RunOptions{WorkspaceDir: root, DisallowedTools: []string{"Write"}})
 	if err == nil {
 		t.Fatal("review must not grant repository writes through an IO symlink")
+	}
+}
+
+func TestClaudeSandboxGrantsOnlyClaudeScratchDir(t *testing.T) {
+	t.Parallel()
+	configDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Claude's credential backups live beside the scratch directory and must
+	// stay unwritable from inside the sandbox.
+	if err := os.MkdirAll(filepath.Join(configDir, claudeConfigBackupDirName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := rt.BuildCommand("/tasks/current/repo", "fix it", RunOptions{
+		WorkspaceDir: "/tasks/current",
+		Env: []string{
+			"HOME=/tasks/current/.agent00-agent-io/home",
+			"CLAUDE_CONFIG_DIR=" + configDir,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratch := filepath.Join(configDir, claudeScratchDirName)
+	if info, statErr := os.Stat(scratch); statErr != nil || !info.IsDir() {
+		t.Fatalf("scratch directory was not created: %v", statErr)
+	}
+	encoded, err := json.Marshal([]string{"/tasks/current", scratch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "sandbox_workspace_write.writable_roots=" + string(encoded)
+	if !slices.Contains(cmd.Args, want) {
+		t.Fatalf("missing Claude scratch root %q in %v", want, cmd.Args)
+	}
+}
+
+func TestClaudeReviewGrantsOnlyClaudeScratchDir(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	configDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := rt.BuildCommand(root, "review", RunOptions{
+		WorkspaceDir:    root,
+		DisallowedTools: []string{"Write"},
+		Env:             []string{"CLAUDE_CONFIG_DIR=" + configDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantScratch := fmt.Sprintf("%q=\"write\"", filepath.Join(configDir, claudeScratchDirName))
+	unwantedConfig := fmt.Sprintf("%q=\"write\"", configDir)
+	granted := false
+	for _, arg := range cmd.Args {
+		if strings.Contains(arg, unwantedConfig) {
+			t.Fatalf("read-only review granted the whole Claude configuration directory: %v", cmd.Args)
+		}
+		if strings.Contains(arg, wantScratch) {
+			granted = true
+		}
+	}
+	if !granted {
+		t.Fatalf("read-only review missing Claude scratch write %q: %v", wantScratch, cmd.Args)
+	}
+}
+
+func TestClaudeSandboxGrantsScratchDirFromProcessEnvironWhenEnvIsEmpty(t *testing.T) {
+	// Mutates the process environment the invocation inherits; cannot run in parallel.
+	configDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An invocation without an explicit environment hands the CLI this process
+	// environment, so the CLI resolves a real configuration directory from it.
+	// The scratch grant has to be read from the same place or the CLI hits a
+	// read-only filesystem on its first tool call.
+	cmd, err := rt.BuildCommand("/tasks/current/repo", "fix it", RunOptions{WorkspaceDir: "/tasks/current"})
+	if err != nil {
+		t.Fatalf("BuildCommand() error = %v", err)
+	}
+	scratch := filepath.Join(configDir, claudeScratchDirName)
+	if info, statErr := os.Stat(scratch); statErr != nil || !info.IsDir() {
+		t.Fatalf("scratch directory was not created: %v", statErr)
+	}
+	encoded, err := json.Marshal([]string{"/tasks/current", scratch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "sandbox_workspace_write.writable_roots=" + string(encoded); !slices.Contains(cmd.Args, want) {
+		t.Fatalf("missing Claude scratch root %q in %v", want, cmd.Args)
+	}
+}
+
+func TestClaudeSandboxReportsUnusableConfigDir(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	blocker := filepath.Join(root, "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = rt.BuildCommand("/tasks/current/repo", "fix it", RunOptions{
+		WorkspaceDir: "/tasks/current",
+		Env:          []string{"CLAUDE_CONFIG_DIR=" + blocker},
+	})
+	if err == nil || !strings.Contains(err.Error(), "prepare Claude sandbox scratch directory") {
+		t.Fatalf("BuildCommand() error = %v, want an unusable configuration directory failure", err)
+	}
+}
+
+func TestClaudeSandboxSkipsScratchGrantWhenConfigDirCannotBeExtended(t *testing.T) {
+	t.Parallel()
+
+	// The CLI cannot write into a configuration directory the harness cannot
+	// extend either, so there is no grant to make and the task must still run.
+	build := func(t *testing.T, configDir string) {
+		t.Helper()
+		rt, err := Resolve(HarnessClaude, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd, err := rt.BuildCommand("/tasks/current/repo", "fix it", RunOptions{
+			WorkspaceDir: "/tasks/current",
+			Env:          []string{"CLAUDE_CONFIG_DIR=" + configDir},
+		})
+		if err != nil {
+			t.Fatalf("BuildCommand() error = %v, want the grant dropped instead of a build failure", err)
+		}
+		want := `sandbox_workspace_write.writable_roots=["/tasks/current"]`
+		if !slices.Contains(cmd.Args, want) {
+			t.Fatalf("missing sandbox restriction %q in %v", want, cmd.Args)
+		}
+		for _, arg := range cmd.Args {
+			if strings.Contains(arg, configDir) {
+				t.Fatalf("unwritable configuration directory reached the sandbox grant: %v", cmd.Args)
+			}
+		}
+	}
+
+	t.Run("scratch path blocked by a file", func(t *testing.T) {
+		t.Parallel()
+		configDir, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(configDir, claudeScratchDirName), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		build(t, configDir)
+	})
+
+	t.Run("read-only configuration directory", func(t *testing.T) {
+		t.Parallel()
+		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+			t.Skip("directory permissions do not block creation here")
+		}
+		configDir, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(configDir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(configDir, 0o700) })
+		build(t, configDir)
+	})
+}
+
+func TestClaudeSandboxSkipsScratchGrantWithoutConfigDirInEnv(t *testing.T) {
+	t.Parallel()
+
+	// An entry with a blank value, or with no key/value separator at all, names
+	// no configuration directory. ClaudeHome rejects that environment, so the
+	// grant has to be skipped rather than turned into a build failure.
+	environ := []string{"CLAUDE_CONFIG_DIR", "HOME=   ", "PATH=/usr/bin"}
+	if describesClaudeConfigDir(environ) {
+		t.Fatalf("describesClaudeConfigDir(%v) = true, want false", environ)
+	}
+
+	rt, err := Resolve(HarnessClaude, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := rt.BuildCommand("/tasks/current/repo", "fix it", RunOptions{
+		WorkspaceDir: "/tasks/current",
+		Env:          environ,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `sandbox_workspace_write.writable_roots=["/tasks/current"]`
+	if !slices.Contains(cmd.Args, want) {
+		t.Fatalf("missing sandbox restriction %q in %v", want, cmd.Args)
 	}
 }
 

@@ -215,6 +215,15 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 		return execx.Command{}, fmt.Errorf("runtime command is required")
 	}
 	if normalizeHarness(r.Harness) == HarnessClaude {
+		// Claude creates per-session scratch state next to its persistent
+		// configuration the first time a task uses a tool. That directory sits
+		// outside the task workspace on purpose, so without this grant the CLI
+		// hits a read-only filesystem on its first tool call and runs the rest
+		// of the task without it.
+		scratchDir, scratchErr := claudeConfigSandboxRoot(claudeSandboxEnv(opts))
+		if scratchErr != nil {
+			return execx.Command{}, fmt.Errorf("prepare Claude sandbox scratch directory: %w", scratchErr)
+		}
 		// Sandbox Claude's whole process, including its provider requests.
 		// Reviews need network access with a genuinely read-only filesystem:
 		// workspace-write implicitly permits cwd even with writable_roots=[].
@@ -232,13 +241,18 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 				}
 				filesystem += fmt.Sprintf(",%q=\"write\"", ioDir)
 			}
+			if scratchDir != "" {
+				// A review boots the same CLI tool runtime a task run does, so
+				// it fails on the same unwritable scratch directory without this.
+				filesystem += fmt.Sprintf(",%q=\"write\"", scratchDir)
+			}
 			args = append(args,
 				"-P", "agent00_review",
 				"-c", "permissions.agent00_review={filesystem={"+filesystem+"},network={enabled=true}}",
 			)
 		} else {
 			args = append(args, "-c", `sandbox_mode="workspace-write"`)
-			args = append(args, workspaceSandboxArgs(opts)...)
+			args = append(args, workspaceSandboxArgs(opts, scratchDir)...)
 		}
 		args = append(args, "--", cmd.Name)
 		cmd.Args = append(args, cmd.Args...)
@@ -289,12 +303,21 @@ func resolveSandboxPath(dir string) (string, error) {
 	return filepath.Join(resolved, filepath.Base(path)), nil
 }
 
-func workspaceSandboxArgs(opts RunOptions) []string {
-	roots := make([]string, 0, len(opts.WritableDirs)+1)
+// workspaceSandboxArgs builds the sandbox restrictions for one invocation.
+// extraRoots carries harness-owned directories outside the task workspace that
+// the CLI itself must keep writing to; they bypass validateWorkspaceDirs
+// because they never come from task configuration.
+func workspaceSandboxArgs(opts RunOptions, extraRoots ...string) []string {
+	roots := make([]string, 0, len(opts.WritableDirs)+len(extraRoots)+1)
 	if root := strings.TrimSpace(opts.WorkspaceDir); root != "" {
 		roots = append(roots, root)
 	}
 	for _, dir := range opts.WritableDirs {
+		if dir = strings.TrimSpace(dir); dir != "" {
+			roots = append(roots, dir)
+		}
+	}
+	for _, dir := range extraRoots {
 		if dir = strings.TrimSpace(dir); dir != "" {
 			roots = append(roots, dir)
 		}
@@ -315,6 +338,65 @@ func workspaceSandboxArgs(opts RunOptions) []string {
 		// Both runtimes need network access for dependency downloads and tests.
 		"-c", "sandbox_workspace_write.network_access=true",
 	}
+}
+
+// claudeConfigSandboxRoot resolves the one directory inside the persistent
+// Claude configuration directory the CLI must keep writing to from inside the
+// sandbox. Granting that directory instead of the whole configuration
+// directory keeps the stored credentials and Claude's own configuration
+// backups out of reach of model-issued commands.
+//
+// It returns an empty string when there is nothing to grant: when the
+// invocation environment does not describe a configuration directory, because
+// the CLI cannot resolve one the environment omits either, and when the
+// configuration directory cannot be extended, because the CLI cannot write
+// there either. Every other failure is returned instead of dropped, because a
+// silently missing grant puts the CLI back on a read-only filesystem and the
+// task then finishes without touching a file.
+func claudeConfigSandboxRoot(env []string) (string, error) {
+	if len(env) == 0 || !describesClaudeConfigDir(env) {
+		return "", nil
+	}
+	home, err := ClaudeHome(env)
+	if err != nil {
+		return "", err
+	}
+	scratch, err := claudeSandboxScratchDir(home)
+	if err != nil || strings.TrimSpace(scratch) == "" {
+		return "", err
+	}
+	return resolveSandboxPath(scratch)
+}
+
+// claudeSandboxEnv returns the environment the CLI actually resolves its
+// configuration directory from. buildClaudeCommand passes opts.Env through
+// verbatim, so an invocation that carries no environment inherits the harness
+// process environment instead. Reading opts.Env alone in that case drops the
+// grant while the CLI still resolves a real configuration directory, which puts
+// it back on a read-only filesystem for its first tool call.
+//
+// An invocation without a task workspace is not sandboxed into one, so it has
+// no scratch grant to make and keeps reading opts.Env as given.
+func claudeSandboxEnv(opts RunOptions) []string {
+	if len(opts.Env) > 0 || strings.TrimSpace(opts.WorkspaceDir) == "" {
+		return opts.Env
+	}
+	return os.Environ()
+}
+
+// describesClaudeConfigDir reports whether env names a persistent Claude
+// configuration directory at all, mirroring what ClaudeHome reads.
+func describesClaudeConfigDir(env []string) bool {
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || strings.TrimSpace(value) == "" {
+			continue
+		}
+		if key == "CLAUDE_CONFIG_DIR" || key == "HOME" {
+			return true
+		}
+	}
+	return false
 }
 
 func validateWorkspaceDirs(targetDir string, opts RunOptions) error {

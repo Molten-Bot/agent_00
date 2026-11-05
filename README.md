@@ -119,18 +119,33 @@ nested namespaces and mounts instead. Host user namespace support is still
 required.
 
 Agent work can write only inside its allocated task directory (the parent of
-that task's cloned repositories). Temporary files, home directories, and build
-caches live under `.agent00-agent-io` inside that directory. The harness
-overrides Codex's writable roots, excludes global `/tmp` and implicit `$TMPDIR`
-access, and sets approvals to `never` so commands cannot escalate outside the
-task. Existing operator config cannot add extra writable roots. Multi-repository
-tasks share their own task parent; other tasks remain read-only.
+that task's cloned repositories) and, for Claude, the one scratch directory
+inside the persistent configuration directory described below. Temporary files,
+home directories, and build caches live under `.agent00-agent-io` inside that
+directory. The harness overrides Codex's writable roots, excludes global `/tmp`
+and implicit `$TMPDIR` access, and sets approvals to `never` so commands cannot
+escalate outside the task. Existing operator config cannot add extra writable
+roots. Multi-repository tasks share their own task parent; other tasks remain
+read-only.
 
 Claude runs through `codex sandbox` with the same task boundary, including its
 child processes. This requires the Codex CLI even when selecting Claude; both
 CLIs are included in the Docker image. Missing or failed sandbox tooling stops
 the run. The trusted Codex CLI still saves login rotation and session state to
 the persistent `CODEX_HOME`; model-issued commands cannot write there.
+
+Claude runs also get one directory inside the persistent `CLAUDE_CONFIG_DIR` as
+a writable root: `session-env`, the per-session scratch directory the CLI writes
+to the first time it uses a tool. Without that grant the CLI hits a read-only
+filesystem on its first tool call and runs the rest of the task without it. The
+stored credentials and Claude's own configuration backups stay unwritable.
+Read-only review passes get the same single grant, because a review boots the
+same CLI tool runtime. The harness creates that directory before starting the
+agent, since the sandbox cannot create it inside an otherwise read-only
+configuration directory; a configuration directory the harness itself cannot
+write to drops the grant instead of failing the run. The CLI fixes this path,
+so concurrent tasks and review passes sharing a configuration directory share
+that one scratch directory.
 
 Keep the bundled helper in this image: Debian trixie's `bubblewrap` 0.12.0 fails
 to mount `/proc` under Docker's masked proc paths in our container smoke check,

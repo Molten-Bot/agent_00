@@ -22,7 +22,46 @@ const (
 	claudeConfigFileName      = ".claude.json"
 	claudeConfigBackupDirName = "backups"
 	claudeConfigBackupPrefix  = ".claude.json.backup."
+	claudeScratchDirName      = "session-env"
 )
+
+// claudeSandboxScratchDir returns the per-session scratch directory inside
+// configDir that the Claude CLI writes to while a task runs, creating it when
+// it is missing. The CLI creates it itself the first time a task uses a tool,
+// which it can no longer do once only this directory, and not the whole
+// configuration directory, is writable from inside the agent sandbox.
+//
+// The CLI fixes this location, so every task and every review pass that shares
+// a configuration directory also shares this directory; per-task isolation is
+// not available for it. Only the CLI's own session scratch lives here: the
+// stored credentials and Claude's configuration backups sit beside it and stay
+// unwritable from inside the sandbox.
+//
+// A configuration directory the harness cannot extend yields an empty path
+// rather than an error. The CLI cannot write there either, so there is no grant
+// to make, and failing the whole invocation would stop a task that otherwise
+// runs. That covers a directory the harness may not write into and a
+// configuration directory it may not create in the first place. Anything else,
+// including a file where the configuration directory belongs, is still
+// reported.
+func claudeSandboxScratchDir(configDir string) (string, error) {
+	configDir = strings.TrimSpace(configDir)
+	if configDir == "" {
+		return "", nil
+	}
+	dir := filepath.Join(configDir, claudeScratchDirName)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		info, statErr := os.Stat(configDir)
+		switch {
+		case statErr == nil && info.IsDir():
+			return "", nil
+		case errors.Is(statErr, os.ErrNotExist):
+			return "", nil
+		}
+		return "", fmt.Errorf("create Claude session scratch directory: %w", err)
+	}
+	return dir, nil
+}
 
 // ClaudeHome resolves the operator's persistent Claude configuration directory
 // before task HOME isolation, mirroring CodexHome.
