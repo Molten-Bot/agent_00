@@ -5969,13 +5969,23 @@ func (h Harness) runCodexWithHeartbeat(
 			// isNonFatalValidationToolingFailure waves it through. Report the
 			// configuration fault here instead, before the run spends its
 			// review budget on changes no pass can build or test.
-			if runtime.Harness == agentruntime.HarnessClaude &&
-				(agentruntime.ClaudeSessionScratchFailure(run.res.Stdout) || agentruntime.ClaudeSessionScratchFailure(run.res.Stderr)) {
-				return run.res, fmt.Errorf(
-					"%w: the %s invocation reported that it could not create it, so its shell tools could not run a build or a test",
-					agentruntime.ErrClaudeSessionScratch,
-					agentStage,
-				)
+			//
+			// The report is matched against the directory this invocation's own
+			// environment resolves, which is the one the CLI derives too. A
+			// successful run that merely quotes a refusal naming some other
+			// installation's scratch directory has lost no tool and must not be
+			// failed for it.
+			if runtime.Harness == agentruntime.HarnessClaude {
+				scratchDir := agentruntime.ClaudeSessionScratchDir(cmd.Env)
+				if agentruntime.ClaudeSessionScratchFailure(run.res.Stdout, scratchDir) ||
+					agentruntime.ClaudeSessionScratchFailure(run.res.Stderr, scratchDir) {
+					return run.res, fmt.Errorf(
+						"%w: the %s invocation reported that it could not create %s, so its shell tools could not run a build or a test",
+						agentruntime.ErrClaudeSessionScratch,
+						agentStage,
+						scratchDir,
+					)
+				}
 			}
 			if runtime.Harness == agentruntime.HarnessCodex && codexInvocationAuthenticationFailed(run.res, run.err) {
 				home, _ := agentruntime.CodexHome(cmd.Env)

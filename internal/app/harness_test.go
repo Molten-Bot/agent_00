@@ -174,17 +174,28 @@ func (r *deadlineCaptureRunner) Run(ctx context.Context, _ execx.Command) (execx
 	return execx.Result{}, nil
 }
 
+// claudeScratchRunOptions points an invocation at a private Claude
+// configuration directory and returns the session scratch path the CLI derives
+// from it, so scratch-failure reports can be matched against this invocation's
+// own directory instead of a hard-coded one.
+func claudeScratchRunOptions(t *testing.T) (codexRunOptions, string) {
+	t.Helper()
+	configDir := t.TempDir()
+	return codexRunOptions{Env: []string{"CLAUDE_CONFIG_DIR=" + configDir}}, filepath.Join(configDir, "session-env")
+}
+
 // A Claude invocation that cannot create its session scratch directory loses
 // its shell tools and still exits successfully, so the agent stage has to
 // recognize that report. Otherwise the run accepts changes no pass could build
 // or test and only fails much later, on review convergence.
 func TestRunCodexWithHeartbeatReportsClaudeSessionScratchFailure(t *testing.T) {
 	t.Parallel()
+	opts, scratchDir := claudeScratchRunOptions(t)
 	runner := &streamCaptureRunner{
 		res: execx.Result{
 			Stdout: "Validation note: no shell execution was available in this runtime " +
 				"(the only exec path failed with `EROFS: read-only file system, " +
-				"mkdir '/operator/home/.claude/session-env'`), so `go test` could not be run.",
+				"mkdir '" + scratchDir + "'`), so `go test` could not be run.",
 		},
 	}
 	h := New(runner)
@@ -194,11 +205,14 @@ func TestRunCodexWithHeartbeatReportsClaudeSessionScratchFailure(t *testing.T) {
 		agentruntime.Runtime{Harness: agentruntime.HarnessClaude, Command: "claude"},
 		t.TempDir(),
 		"Build API",
-		codexRunOptions{},
+		opts,
 		agentInvocationLogMetadata{},
 	)
 	if !errors.Is(err, agentruntime.ErrClaudeSessionScratch) {
 		t.Fatalf("runCodexWithHeartbeat() error = %v, want ErrClaudeSessionScratch", err)
+	}
+	if !strings.Contains(err.Error(), scratchDir) {
+		t.Fatalf("runCodexWithHeartbeat() error = %v, want it to name %q", err, scratchDir)
 	}
 }
 
@@ -206,6 +220,7 @@ func TestRunCodexWithHeartbeatReportsClaudeSessionScratchFailure(t *testing.T) {
 // is routine agent output when it does not name the scratch directory.
 func TestRunCodexWithHeartbeatAllowsUnrelatedReadOnlyFilesystemReports(t *testing.T) {
 	t.Parallel()
+	opts, _ := claudeScratchRunOptions(t)
 	runner := &streamCaptureRunner{
 		res: execx.Result{
 			Stdout: "Updated the build output path after `EROFS: read-only file system, mkdir '/srv/app/dist'`.",
@@ -218,7 +233,7 @@ func TestRunCodexWithHeartbeatAllowsUnrelatedReadOnlyFilesystemReports(t *testin
 		agentruntime.Runtime{Harness: agentruntime.HarnessClaude, Command: "claude"},
 		t.TempDir(),
 		"Build API",
-		codexRunOptions{},
+		opts,
 		agentInvocationLogMetadata{},
 	)
 	if err != nil {
@@ -226,6 +241,36 @@ func TestRunCodexWithHeartbeatAllowsUnrelatedReadOnlyFilesystemReports(t *testin
 	}
 	if !strings.Contains(res.Stdout, "/srv/app/dist") {
 		t.Fatalf("runCodexWithHeartbeat() stdout = %q, want the agent output preserved", res.Stdout)
+	}
+}
+
+// A successful run that quotes a scratch-directory refusal from somewhere else
+// - a failing log it was asked to diagnose, a fixture, source it is changing -
+// lost no tool of its own, so the agent stage must leave it alone.
+func TestRunCodexWithHeartbeatAllowsQuotedForeignSessionScratchFailure(t *testing.T) {
+	t.Parallel()
+	opts, scratchDir := claudeScratchRunOptions(t)
+	quoted := "Diagnosed the failing log, which ends with `EROFS: read-only file system, " +
+		"mkdir '/some-other-config-dir/session-env'`. Fixed the handler and `go test ./...` passed."
+	runner := &streamCaptureRunner{res: execx.Result{Stdout: quoted}}
+	h := New(runner)
+
+	res, err := h.runCodexWithHeartbeat(
+		context.Background(),
+		agentruntime.Runtime{Harness: agentruntime.HarnessClaude, Command: "claude"},
+		t.TempDir(),
+		"Build API",
+		opts,
+		agentInvocationLogMetadata{},
+	)
+	if err != nil {
+		t.Fatalf("runCodexWithHeartbeat() error = %v, want nil for a quoted foreign scratch failure", err)
+	}
+	if !strings.Contains(res.Stdout, "/some-other-config-dir/session-env") {
+		t.Fatalf("runCodexWithHeartbeat() stdout = %q, want the agent output preserved", res.Stdout)
+	}
+	if strings.Contains(res.Stdout, scratchDir) {
+		t.Fatalf("fixture unexpectedly names this invocation's scratch directory %q", scratchDir)
 	}
 }
 

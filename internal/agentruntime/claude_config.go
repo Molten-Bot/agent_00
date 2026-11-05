@@ -124,20 +124,47 @@ func claudeSandboxScratchDirState(configDir string) (claudeScratchDirState, erro
 	return claudeScratchDirState{Dir: dir}, nil
 }
 
-// claudeConfigDirAcceptsWrites reports whether the harness can still create an
-// entry inside configDir, which is what the remediation carried by
+// claudeConfigDirRefusesWrites reports whether configDir is refusing the writes
+// the CLI needs, which is what the remediation carried by
 // ErrClaudeSessionScratchUnwritable asks an operator to restore. It is only
 // consulted once creating the scratch directory has already failed, so it never
 // writes into a configuration directory that is working normally.
-func claudeConfigDirAcceptsWrites(configDir string) bool {
+//
+// Only an actual refusal counts. A probe that fails for an unrelated reason -
+// no space left on the device, no file descriptors left - would not be fixed by
+// changing permissions, so reporting it as an unwritable directory would send
+// an operator after the wrong thing; the creation failure is reported as itself
+// instead.
+func claudeConfigDirRefusesWrites(configDir string) bool {
 	probe, err := os.CreateTemp(configDir, ".agent00-scratch-probe-*")
 	if err != nil {
-		return false
+		return isWriteRefusal(err)
 	}
 	path := probe.Name()
 	_ = probe.Close()
 	_ = os.Remove(path)
-	return true
+	return false
+}
+
+// isWriteRefusal reports whether err is the filesystem refusing the write: a
+// denied permission, a read-only mount or sandbox policy, or a directory that
+// is absent and cannot be created. Those are the failures an operator fixes by
+// making the Claude configuration directory writable; every other failure is
+// about the machine rather than the directory.
+func isWriteRefusal(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrPermission) || errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range claudeSessionScratchRefusalMarkers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // CheckClaudeSessionScratch reports a configuration directory the CLI resolves
@@ -150,10 +177,10 @@ func claudeConfigDirAcceptsWrites(configDir string) bool {
 // HOME the harness may not write into leaves the CLI no default location to
 // fall back to either.
 //
-// Only a directory that actually rejects writes carries the "make it writable"
-// remediation. When the directory still takes writes, that remediation would
-// change nothing - something else, such as a file occupying the scratch path,
-// is in the way - so the creation failure is reported as itself.
+// Only a directory that actually refuses writes carries the "make it writable"
+// remediation. When it does not, that remediation would change nothing -
+// something else, such as a file occupying the scratch path or a full disk, is
+// in the way - so the creation failure is reported as itself.
 func CheckClaudeSessionScratch(configDir string) error {
 	state, err := claudeSandboxScratchDirState(configDir)
 	if err != nil {
@@ -164,7 +191,7 @@ func CheckClaudeSessionScratch(configDir string) error {
 	}
 	configDir = strings.TrimSpace(configDir)
 	scratchDir := filepath.Join(configDir, claudeScratchDirName)
-	if claudeConfigDirAcceptsWrites(configDir) {
+	if !claudeConfigDirRefusesWrites(configDir) {
 		return markSessionScratchFailure(fmt.Errorf("create Claude session scratch directory %s: %w", scratchDir, state.ExtendErr))
 	}
 	return markSessionScratchFailure(fmt.Errorf("%w: %s", ErrClaudeSessionScratchUnwritable, scratchDir))
@@ -226,9 +253,26 @@ var claudeSessionScratchRefusalMarkers = []string{
 	"operation not permitted",
 }
 
-// ClaudeSessionScratchFailure recognizes an invocation reporting that the CLI's
-// session scratch directory could not be created, either from the CLI itself or
-// from an agent relaying the tool failure it hit.
+// ClaudeSessionScratchDir returns the session scratch directory the CLI
+// resolves from environ, or an empty string when environ, and the harness
+// process environment it falls back to, describe no configuration directory to
+// derive one from. It only computes the path; CheckClaudeSessionScratch creates
+// it.
+func ClaudeSessionScratchDir(environ []string) string {
+	home, err := ClaudeHome(environ)
+	if err != nil {
+		return ""
+	}
+	if home = strings.TrimSpace(home); home == "" {
+		return ""
+	}
+	return filepath.Join(home, claudeScratchDirName)
+}
+
+// ClaudeSessionScratchFailure recognizes an invocation reporting that it could
+// not create scratchDir, the session scratch directory this invocation's own
+// configuration directory resolves to, either from the CLI itself or from an
+// agent relaying the tool failure it hit.
 //
 // CheckClaudeSessionScratch already covers the directory the harness process
 // resolves, but the agent runs inside a sandbox with its own filesystem policy.
@@ -240,15 +284,22 @@ var claudeSessionScratchRefusalMarkers = []string{
 // whole review budget on changes no pass was able to build or test and then
 // fails on review convergence instead of on this fault.
 //
-// A match needs the refusal, the creation attempt and the scratch path itself
-// on one line. The directory name alone appears in ordinary prose, and a
-// refusal alone belongs to whatever the agent was building, so neither is
-// evidence on its own.
-func ClaudeSessionScratchFailure(output string) bool {
-	scratchPath := "/" + claudeScratchDirName
+// A match needs the refusal, the creation attempt and this invocation's own
+// scratch path on one line. The directory name alone appears in ordinary prose,
+// and a refusal alone belongs to whatever the agent was building, so neither is
+// evidence on its own. Matching some other installation's scratch path is not
+// evidence either: an agent quoting a failing log, a test fixture, or source it
+// is changing reproduces that wording without having lost a single tool, so the
+// path has to be this invocation's. An empty scratchDir leaves nothing to match
+// against, so nothing is reported.
+func ClaudeSessionScratchFailure(output, scratchDir string) bool {
+	scratchDir = strings.ToLower(strings.TrimSpace(scratchDir))
+	if scratchDir == "" {
+		return false
+	}
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.ToLower(line)
-		if !strings.Contains(line, scratchPath) {
+		if !strings.Contains(line, scratchDir) {
 			continue
 		}
 		if !strings.Contains(line, "mkdir") && !strings.Contains(line, "create") {

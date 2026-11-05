@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -117,6 +118,52 @@ func TestCheckClaudeSessionScratchReportsNonPermissionFailuresAsThemselves(t *te
 	}
 	if !strings.Contains(err.Error(), filepath.Join(configDir, claudeScratchDirName)) {
 		t.Fatalf("CheckClaudeSessionScratch(blocked scratch path) = %q, want it to name the scratch path", err)
+	}
+}
+
+func TestWriteRefusalDistinguishesDirectoryFromMachineFailures(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "none", err: nil, want: false},
+		{
+			name: "denied permission",
+			err:  &fs.PathError{Op: "open", Path: "/config/probe", Err: fs.ErrPermission},
+			want: true,
+		},
+		{
+			name: "absent directory",
+			err:  &fs.PathError{Op: "open", Path: "/config/probe", Err: fs.ErrNotExist},
+			want: true,
+		},
+		{
+			name: "read-only filesystem",
+			err:  errors.New("open /config/probe: read-only file system"),
+			want: true,
+		},
+		{
+			// The directory is fine; the machine is not. Making the directory
+			// writable fixes neither, so these must keep reaching an operator as
+			// the creation failures they are.
+			name: "exhausted disk",
+			err:  errors.New("open /config/probe: no space left on device"),
+			want: false,
+		},
+		{
+			name: "exhausted file descriptors",
+			err:  errors.New("open /config/probe: too many open files"),
+			want: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isWriteRefusal(tc.err); got != tc.want {
+				t.Fatalf("isWriteRefusal(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -251,26 +298,33 @@ func TestClaudeConfigurationFailureDetection(t *testing.T) {
 
 func TestClaudeSessionScratchFailureDetection(t *testing.T) {
 	t.Parallel()
+	// The scratch directory the invocation under test resolves. Every fixture
+	// below is written against this path rather than a literal one, so none of
+	// them is a report about a configuration directory that could exist on a
+	// machine running these tests: an agent reading this file into a transcript
+	// cannot make its own run look like it lost its tools.
+	scratchDir := filepath.Join(t.TempDir(), claudeScratchDirName)
 	for _, tc := range []struct {
-		name   string
-		output string
-		want   bool
+		name       string
+		output     string
+		scratchDir string
+		want       bool
 	}{
 		{
 			name: "agent relays its own tool failure",
 			output: "Validation note: no shell execution was available in this runtime " +
 				"(the only exec path failed with `EROFS: read-only file system, " +
-				"mkdir '/operator/home/.claude/session-env'`), so `go build` could not be run.",
+				"mkdir '" + scratchDir + "'`), so `go build` could not be run.",
 			want: true,
 		},
 		{
 			name:   "cli reports a denied write",
-			output: "Error: EACCES: permission denied, mkdir '/operator/home/.claude/session-env'",
+			output: "Error: EACCES: permission denied, mkdir '" + scratchDir + "'",
 			want:   true,
 		},
 		{
 			name:   "creation wording without mkdir",
-			output: "failed to create /operator/home/.claude/session-env: operation not permitted",
+			output: "failed to create " + scratchDir + ": operation not permitted",
 			want:   true,
 		},
 		{
@@ -279,25 +333,62 @@ func TestClaudeSessionScratchFailureDetection(t *testing.T) {
 			want:   false,
 		},
 		{
+			// Another installation's scratch directory says nothing about this
+			// invocation. Agents quote failing logs, fixtures and source they
+			// are changing, and none of that costs the run a tool.
+			name:   "refusal for another installation's scratch directory",
+			output: "EROFS: read-only file system, mkdir '/some-other-config-dir/" + claudeScratchDirName + "'",
+			want:   false,
+		},
+		{
 			name:   "scratch directory named without a refusal",
-			output: "The CLI creates /operator/home/.claude/session-env on its first tool call.",
+			output: "The CLI creates " + scratchDir + " on its first tool call.",
 			want:   false,
 		},
 		{
 			// A refusal somewhere in a transcript is not evidence about this
 			// directory; the sandbox denies plenty of unrelated writes.
 			name:   "refusal and scratch path on separate lines",
-			output: "EROFS: read-only file system, mkdir '/srv/app/dist'\nScratch lives in /operator/home/.claude/session-env.",
+			output: "EROFS: read-only file system, mkdir '/srv/app/dist'\nScratch lives in " + scratchDir + ".",
 			want:   false,
+		},
+		{
+			// Without a resolved configuration directory there is no path to
+			// match, so no report can be attributed to this invocation.
+			name:       "unresolved scratch directory",
+			output:     "EROFS: read-only file system, mkdir '" + scratchDir + "'",
+			scratchDir: "  ",
+			want:       false,
 		},
 		{name: "empty", output: "", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := ClaudeSessionScratchFailure(tc.output); got != tc.want {
-				t.Fatalf("ClaudeSessionScratchFailure(%q) = %v, want %v", tc.output, got, tc.want)
+			dir := tc.scratchDir
+			if dir == "" {
+				dir = scratchDir
+			}
+			if got := ClaudeSessionScratchFailure(tc.output, dir); got != tc.want {
+				t.Fatalf("ClaudeSessionScratchFailure(%q, %q) = %v, want %v", tc.output, dir, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestClaudeSessionScratchDirResolution(t *testing.T) {
+	t.Parallel()
+	configDir := t.TempDir()
+	if got, want := ClaudeSessionScratchDir([]string{"CLAUDE_CONFIG_DIR=" + configDir}), filepath.Join(configDir, claudeScratchDirName); got != want {
+		t.Fatalf("ClaudeSessionScratchDir(config dir) = %q, want %q", got, want)
+	}
+	home := t.TempDir()
+	if got, want := ClaudeSessionScratchDir([]string{"HOME=" + home}), filepath.Join(home, ".claude", claudeScratchDirName); got != want {
+		t.Fatalf("ClaudeSessionScratchDir(home) = %q, want %q", got, want)
+	}
+	// Neither variable is set, so the CLI has no configuration directory to
+	// derive a scratch path from and there is nothing to match reports against.
+	if got := ClaudeSessionScratchDir([]string{"PATH=/usr/bin"}); got != "" {
+		t.Fatalf("ClaudeSessionScratchDir(no config dir) = %q, want empty", got)
 	}
 }
 
