@@ -6629,15 +6629,18 @@ func agentFailureFieldLine(raw string) string {
 			continue
 		}
 		// A list marker is decoration once whitespace separates it from the text,
-		// however much of it: agents indent nested bullets and write "-\t" as
-		// readily as "- ". Quoted patches wear the same markers, and a hunk line
-		// keeps the file's own indentation after its marker, so "+ Failure: ..."
-		// reports what a file says rather than what the run did. No amount of
-		// spacing tells the two apart, so quotedDiffHunkLines separates them by
-		// the diff header above them and this strip only has to read list items.
+		// whichever whitespace that is: agents write "-\t" as readily as "- ".
+		// The marker alone is dropped here because the TrimLeft above removes
+		// the spacing on the next pass, which is also how a nested bullet is
+		// stripped one marker at a time. Quoted patches wear the same markers,
+		// and a hunk line keeps the file's own indentation after its marker, so
+		// "+ Failure: ..." reports what a file says rather than what the run
+		// did. No amount of spacing tells the two apart, so quotedDiffHunkLines
+		// separates them by the diff header above them and this strip only has
+		// to read list items.
 		if len(line) > 1 && strings.IndexByte("-+", line[0]) >= 0 &&
 			(line[1] == ' ' || line[1] == '\t') {
-			line = strings.TrimLeft(line[1:], " \t")
+			line = line[1:]
 			continue
 		}
 		break
@@ -6669,23 +6672,24 @@ func agentFailureFieldLine(raw string) string {
 // evidence that the run ended badly.
 func agentReportedFailureFields(nonEmpty []string, inDiff []bool) (bool, string) {
 	// Both fields plus one line of lead-in narration. A Markdown heading is
-	// decoration rather than narration, so it spends none of that budget and
-	// starts it over: a sectioned report narrates under its own headings and
+	// decoration rather than narration, so it restarts that budget instead of
+	// spending it: a sectioned report narrates under its own headings and
 	// otherwise pushes "Error details:" out of the header, while the mid-run
 	// pair this guard exists for arrives as plain progress lines with no
 	// section structure at all.
 	//
-	// The restart only applies while the budget still has room. A heading that
-	// arrives after the header's narration allowance is spent is a section of
-	// the run, not of the report, so it ends the scan like any other line.
-	// Restarting there would let a mid-run pair ride any heading printed above
-	// it into the result, which is the false report this guard exists to
-	// prevent, and the scan still gives up after a bounded prefix either way.
+	// A section of a report header carries its heading and that one lead-in
+	// line, so the restart applies only to a heading whose own section stayed
+	// within that allowance. Because the budget counts down from
+	// reportHeaderLines since the last heading, the lines a section has spent
+	// are what it has taken off that budget. A run that narrates several lines
+	// of work under a heading is past its report header, and restarting there
+	// let the progress pair below the next heading read as the run's outcome,
+	// which is the false report this guard exists to prevent.
 	//
-	// The restarts are capped as well, because a run that narrates under a
-	// heading per step keeps the budget topped up for as long as it keeps
-	// printing headings, and the mid-run pair below the last of them was then
-	// reported as the run's outcome. A report header is at most three headings
+	// The restarts are capped as well, because a run that narrates a single
+	// line under a heading per step keeps the budget topped up for as long as
+	// it keeps printing headings. A report header is at most three headings
 	// deep before the fields, a document title, a summary section and the
 	// failure section, so three restarts carry every report shape while
 	// heading-dense narration runs the budget out and ends the scan.
@@ -6698,6 +6702,7 @@ func agentReportedFailureFields(nonEmpty []string, inDiff []bool) (bool, string)
 	const reportHeaderLines = 3
 	const maxHeaderScanLines = 12
 	const maxHeadingRestarts = 3
+	const maxSectionLeadInLines = 1
 	remaining := reportHeaderLines
 	restarts := 0
 	failure := ""
@@ -6710,7 +6715,8 @@ func agentReportedFailureFields(nonEmpty []string, inDiff []bool) (bool, string)
 		isFailure := !inDiff[i] && strings.HasPrefix(lower, "failure:") &&
 			strings.TrimSpace(field[len("failure:"):]) != ""
 		isDetails := !inDiff[i] && strings.HasPrefix(lower, "error details:")
-		if !isFailure && !isDetails && remaining > 0 && restarts < maxHeadingRestarts &&
+		if !isFailure && !isDetails && restarts < maxHeadingRestarts &&
+			remaining >= reportHeaderLines-maxSectionLeadInLines &&
 			isMarkdownHeading(raw) {
 			remaining = reportHeaderLines
 			restarts++
@@ -6789,15 +6795,28 @@ func splitNonEmptyOutputLines(output string) ([]string, []bool) {
 // where that budget runs out. Without it a bulleted report written directly
 // below the last hunk line, with no blank line between them, kept the quote
 // open and the run's own failure went unreported.
+//
+// A patch quoted without a hunk header declares no length, so it spends a fixed
+// allowance instead of running to the first line without a hunk marker, which a
+// bulleted report is not. A "diff --git" line gets no allowance at all: it names
+// the file but quotes none of it, and the file headers or hunk header below it
+// open the block that does. Reading a body after it swallowed the report an
+// agent wrote directly under the header it had just quoted.
 func quotedDiffHunkLines(lines []string) []bool {
+	// Enough for the short headerless hunks agents paste under a file header,
+	// few enough that a report below one is still read as the report it is.
+	const maxUncountedQuoteLines = 8
+
 	inDiff := make([]bool, len(lines))
 	indent := ""
 	active := false
 	// counted marks a block opened by a hunk header, which declares its own
-	// length. A "diff --git" or file header opens a block that only the first
-	// line without a hunk marker closes.
+	// length. A file header opens an uncounted block, which spends the fixed
+	// allowance above and is closed by the first line without a hunk marker
+	// either way.
 	counted := false
 	oldLeft, newLeft := 0, 0
+	uncountedLeft := 0
 	for i, raw := range lines {
 		line := strings.TrimSpace(raw)
 		if oldCount, newCount, ok := quotedDiffHunkHeader(line); ok {
@@ -6807,9 +6826,15 @@ func quotedDiffHunkLines(lines []string) []bool {
 			inDiff[i] = true
 			continue
 		}
-		if strings.HasPrefix(line, "diff --git ") || isQuotedDiffFileHeaderPair(lines, i) {
+		if isQuotedDiffFileHeaderPair(lines, i) {
 			active, counted = true, false
+			uncountedLeft = maxUncountedQuoteLines
 			indent = quotedDiffIndent(raw)
+			inDiff[i] = true
+			continue
+		}
+		if strings.HasPrefix(line, "diff --git ") {
+			active = false
 			inDiff[i] = true
 			continue
 		}
@@ -6828,10 +6853,16 @@ func quotedDiffHunkLines(lines []string) []bool {
 			inDiff[i] = true
 			continue
 		}
-		inDiff[i] = true
 		if !counted {
+			if uncountedLeft <= 0 {
+				active = false
+				continue
+			}
+			uncountedLeft--
+			inDiff[i] = true
 			continue
 		}
+		inDiff[i] = true
 		switch body[0] {
 		case '+':
 			newLeft--
@@ -7016,11 +7047,6 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 	return false, ""
 }
 
-// isBareFailureHeadingAfterCompletion reports whether a bare "Failure:" line is
-// a section heading inside a summary that already stated the run completed.
-// previous must carry the run's own narration only: a quoted patch states what
-// a file says, so a "Done." or "Verification:" line inside one is no evidence
-// that this run finished its work.
 // outputNarrationLines drops the entries of lines that belong to a quoted
 // patch, leaving the run's own narration.
 func outputNarrationLines(lines []string, inDiff []bool) []string {
@@ -7034,6 +7060,11 @@ func outputNarrationLines(lines []string, inDiff []bool) []string {
 	return narration
 }
 
+// isBareFailureHeadingAfterCompletion reports whether a bare "Failure:" line is
+// a section heading inside a summary that already stated the run completed.
+// previous must carry the run's own narration only: a quoted patch states what
+// a file says, so a "Done." or "Verification:" line inside one is no evidence
+// that this run finished its work.
 func isBareFailureHeadingAfterCompletion(line string, previous []string) bool {
 	trimmed := strings.TrimSpace(line)
 	if !strings.EqualFold(trimmed, "failure:") {

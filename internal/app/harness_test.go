@@ -8550,6 +8550,64 @@ func TestCodexReportedFailureDetectsBulletedReportBelowUnseparatedQuotedDiff(t *
 	}
 }
 
+func TestCodexReportedFailureDetectsBulletedReportBelowDiffGitHeader(t *testing.T) {
+	t.Parallel()
+
+	// A "diff --git" header names the file but quotes none of it. Reading a
+	// hunk body straight after it swallowed the bulleted report an agent wrote
+	// directly under the header, so the run's own failure went unreported.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Reviewed the reporting contract.",
+			"diff --git a/prompt.md b/prompt.md",
+			"- **Failure:** the focused tests failed.",
+			"- **Error details:** `go test ./internal/app` exited with status 1.",
+		}, "\n"),
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(bulleted report below diff --git header) = false, want true")
+	}
+	if want := "Failure: the focused tests failed."; detail != want {
+		t.Fatalf("codexReportedFailure(bulleted report below diff --git header) detail = %q, want %q", detail, want)
+	}
+}
+
+func TestCodexReportedFailureDetectsBulletedReportBelowHeaderlessQuotedDiff(t *testing.T) {
+	t.Parallel()
+
+	// A patch quoted without a hunk header declares no length, so it spends a
+	// fixed allowance. Without one the quote ran to the first line without a
+	// hunk marker, which a bulleted report written below it is not, and the
+	// run's own failure went unreported.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Reviewed the reporting contract.",
+			"--- a/prompt.md",
+			"+++ b/prompt.md",
+			"+Report the outcome with these fields:",
+			"+ Failure: <short failure summary>",
+			"+ Error details: <failing command or blocker>",
+			"+Keep the summary short.",
+			"+Name the failing command.",
+			"+Name the blocker.",
+			"+Stop after the report.",
+			"+Do not repeat the prompt.",
+			"- **Failure:** the focused tests failed.",
+			"- **Error details:** `go test ./internal/app` exited with status 1.",
+		}, "\n"),
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(bulleted report below headerless quoted diff) = false, want true")
+	}
+	if want := "Failure: the focused tests failed."; detail != want {
+		t.Fatalf("codexReportedFailure(bulleted report below headerless quoted diff) detail = %q, want %q", detail, want)
+	}
+}
+
 func TestCodexReportedFailureDetectsReportBelowProseDiffMarkers(t *testing.T) {
 	t.Parallel()
 
@@ -8620,23 +8678,24 @@ func TestCodexExtractErrorDetailSkipsQuotedDiffLines(t *testing.T) {
 	}
 }
 
-func TestCodexReportedFailureDetectsWidelyIndentedBulletedReportFields(t *testing.T) {
+func TestCodexReportedFailureDetectsNestedAndTabbedBulletedReportFields(t *testing.T) {
 	t.Parallel()
 
-	// A list marker stays decoration however much whitespace follows it.
+	// A list marker stays decoration whichever whitespace separates it from the
+	// field, and a nested bullet wears more than one of them.
 	res := execx.Result{
 		Stdout: strings.Join([]string{
-			"-  **Failure:** could not reach the staging API.",
+			"- - **Failure:** could not reach the staging API.",
 			"-\t**Error details:** `curl` exited with status 7.",
 		}, "\n"),
 	}
 
 	failed, detail := codexReportedFailure(res)
 	if !failed {
-		t.Fatal("codexReportedFailure(widely indented bulleted fields) = false, want true")
+		t.Fatal("codexReportedFailure(nested and tabbed bulleted fields) = false, want true")
 	}
 	if want := "Failure: could not reach the staging API."; detail != want {
-		t.Fatalf("codexReportedFailure(widely indented bulleted fields) detail = %q, want %q", detail, want)
+		t.Fatalf("codexReportedFailure(nested and tabbed bulleted fields) detail = %q, want %q", detail, want)
 	}
 }
 
@@ -8668,6 +8727,63 @@ func TestCodexReportedFailureIgnoresMidRunFailurePairBelowHeading(t *testing.T) 
 
 	if failed, detail := codexReportedFailure(res); failed || detail != "" {
 		t.Fatalf("codexReportedFailure(mid-run pair below heading) = (%v, %q), want (false, \"\")", failed, detail)
+	}
+}
+
+func TestCodexReportedFailureIgnoresMidRunFailurePairBelowNarratedSection(t *testing.T) {
+	t.Parallel()
+
+	// A heading restarts the report-header budget only for a section that
+	// narrated no more than its own lead-in line. A run that narrates several
+	// lines of work under a heading is past its report header, so the headings
+	// it keeps printing cannot carry the progress pair below them into the
+	// result while the budget still has room.
+	tail := []string{
+		"## Step 9",
+		"Retried through the proxy and the install succeeded.",
+		"Ran the focused tests.",
+		"Ran the build.",
+		"Ran the linter.",
+		"Ran go vet.",
+		"Updated the changelog.",
+		"Done. All checks pass.",
+	}
+	pair := []string{
+		"Failure: could not reach the package registry.",
+		"Error details: npm ERR! network timeout.",
+	}
+	for _, tc := range []struct {
+		name string
+		head []string
+	}{
+		{
+			name: "one heading",
+			head: []string{
+				"Starting the migration task.",
+				"Read the harness configuration.",
+				"## Step 1",
+			},
+		},
+		{
+			name: "two headings",
+			head: []string{
+				"Starting the migration task.",
+				"## Step 1",
+				"Read the harness configuration.",
+				"Checked the existing tests.",
+				"## Step 2",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			lines := append(append(append([]string{}, tc.head...), pair...), tail...)
+			res := execx.Result{Stdout: strings.Join(lines, "\n")}
+			if failed, detail := codexReportedFailure(res); failed || detail != "" {
+				t.Fatalf("codexReportedFailure(mid-run pair below %s) = (%v, %q), want (false, \"\")", tc.name, failed, detail)
+			}
+		})
 	}
 }
 
