@@ -6516,24 +6516,11 @@ func isNonFatalRemoteDeploymentAuthFailure(detail string, res execx.Result) bool
 }
 
 func codexExtractErrorDetail(output string) string {
-	lines := splitOutputLines(output)
-	if len(lines) == 0 {
-		return ""
-	}
-
-	nonEmpty := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		nonEmpty = append(nonEmpty, trimmed)
-	}
+	nonEmpty, inDiff := splitNonEmptyOutputLines(output)
 	if len(nonEmpty) == 0 {
 		return ""
 	}
 
-	inDiff := quotedDiffHunkLines(nonEmpty)
 	for i, line := range nonEmpty {
 		// A quoted patch states what a file says, not how the run ended.
 		if inDiff[i] {
@@ -6546,7 +6533,7 @@ func codexExtractErrorDetail(output string) string {
 			if suffix != "" {
 				return "Error details: " + suffix
 			}
-			extra := codexJoinErrorDetailLines(nonEmpty[i+1:])
+			extra := codexJoinErrorDetailLines(nonEmpty[i+1:], inDiff[i+1:])
 			if extra != "" {
 				return "Error details: " + extra
 			}
@@ -6557,21 +6544,28 @@ func codexExtractErrorDetail(output string) string {
 		}
 	}
 
-	fallback := codexJoinErrorDetailLines(nonEmpty)
+	fallback := codexJoinErrorDetailLines(nonEmpty, inDiff)
 	if fallback == "" {
 		return ""
 	}
 	return "Error details: " + fallback
 }
 
-func codexJoinErrorDetailLines(lines []string) string {
+// codexJoinErrorDetailLines joins the first few diagnostic lines into one
+// detail string. inDiff marks the entries of lines that belong to a quoted
+// patch and is skipped for the same reason the field scan skips it: a hunk
+// quotes a file rather than describing how the run ended.
+func codexJoinErrorDetailLines(lines []string, inDiff []bool) string {
 	const maxDetailsLines = 3
 	const maxDetailChars = 320
 
 	details := make([]string, 0, maxDetailsLines)
-	for _, line := range lines {
+	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
+			continue
+		}
+		if i < len(inDiff) && inDiff[i] {
 			continue
 		}
 		// A Markdown code fence carries no diagnostic text of its own, and
@@ -6673,7 +6667,7 @@ func agentFailureFieldLine(raw string) string {
 // force: a progress line the agent prints while it is still working trails its
 // narration of the work so far, and the whole report that follows is not
 // evidence that the run ended badly.
-func agentReportedFailureFields(nonEmpty []string) (bool, string) {
+func agentReportedFailureFields(nonEmpty []string, inDiff []bool) (bool, string) {
 	// Both fields plus one line of lead-in narration. A Markdown heading is
 	// decoration rather than narration, so it spends none of that budget and
 	// starts it over: a sectioned report narrates under its own headings and
@@ -6688,6 +6682,14 @@ func agentReportedFailureFields(nonEmpty []string) (bool, string) {
 	// it into the result, which is the false report this guard exists to
 	// prevent, and the scan still gives up after a bounded prefix either way.
 	//
+	// The restarts are capped as well, because a run that narrates under a
+	// heading per step keeps the budget topped up for as long as it keeps
+	// printing headings, and the mid-run pair below the last of them was then
+	// reported as the run's outcome. A report header is at most two sections
+	// deep before the fields, a summary and the failure section, so two
+	// restarts carry every report shape while heading-dense narration runs the
+	// budget out and ends the scan.
+	//
 	// A heading that carries a field, as in "## Failure: ...", is the field
 	// itself and spends the budget like any other field line. The terminal
 	// window already reads it that way, so skipping it here would report the
@@ -6695,8 +6697,9 @@ func agentReportedFailureFields(nonEmpty []string) (bool, string) {
 	// end of the output.
 	const reportHeaderLines = 3
 	const maxHeaderScanLines = 12
-	inDiff := quotedDiffHunkLines(nonEmpty)
+	const maxHeadingRestarts = 2
 	remaining := reportHeaderLines
+	restarts := 0
 	failure := ""
 	for i, raw := range nonEmpty {
 		if i >= maxHeaderScanLines {
@@ -6707,8 +6710,10 @@ func agentReportedFailureFields(nonEmpty []string) (bool, string) {
 		isFailure := !inDiff[i] && strings.HasPrefix(lower, "failure:") &&
 			strings.TrimSpace(field[len("failure:"):]) != ""
 		isDetails := !inDiff[i] && strings.HasPrefix(lower, "error details:")
-		if !isFailure && !isDetails && remaining > 0 && isMarkdownHeading(raw) {
+		if !isFailure && !isDetails && remaining > 0 && restarts < maxHeadingRestarts &&
+			isMarkdownHeading(raw) {
 			remaining = reportHeaderLines
+			restarts++
 			continue
 		}
 		if remaining == 0 {
@@ -6748,28 +6753,77 @@ func isMarkdownHeading(line string) bool {
 	return trimmed[hashes] == ' ' || trimmed[hashes] == '\t'
 }
 
-// quotedDiffHunkLines marks the entries of nonEmpty that belong to a quoted
-// patch. A hunk line keeps the file's own text after its "+" or "-" marker, so
+// splitNonEmptyOutputLines returns the agent output's non-blank lines, each
+// trimmed of surrounding whitespace, alongside a parallel slice marking the
+// ones that belong to a quoted patch.
+//
+// The patch scan reads the raw lines because the markers it needs are
+// whitespace. A hunk's context line is a leading space that trimming removes,
+// which ended the quote early and let the rest of the hunk report a failure,
+// and the blank line that closes a quote disappears from the trimmed set
+// altogether, which ran the quote on into the bulleted report below it and
+// dropped a real failure.
+func splitNonEmptyOutputLines(output string) ([]string, []bool) {
+	lines := splitOutputLines(output)
+	diffLines := quotedDiffHunkLines(lines)
+	nonEmpty := make([]string, 0, len(lines))
+	inDiff := make([]bool, 0, len(lines))
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		nonEmpty = append(nonEmpty, trimmed)
+		inDiff = append(inDiff, diffLines[i])
+	}
+	return nonEmpty, inDiff
+}
+
+// quotedDiffHunkLines marks the raw lines that belong to a quoted patch. A hunk
+// line keeps the file's own text after its "+" or "-" marker, so
 // "+ Failure: ..." reports what a file says, while "- Failure: ..." under a
 // Markdown bullet is the field itself. The markers are identical, so only the
 // diff header above them separates the two.
-func quotedDiffHunkLines(nonEmpty []string) []bool {
-	inDiff := make([]bool, len(nonEmpty))
+func quotedDiffHunkLines(lines []string) []bool {
+	inDiff := make([]bool, len(lines))
+	indent := ""
 	active := false
-	for i, raw := range nonEmpty {
+	for i, raw := range lines {
 		line := strings.TrimSpace(raw)
 		switch {
 		case strings.HasPrefix(line, "diff --git "),
 			strings.HasPrefix(line, "@@ "),
 			isQuotedDiffFileHeader(line):
 			active = true
-		case active && !strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "-") &&
-			!strings.HasPrefix(line, `\ No newline`):
+			indent = raw[:len(raw)-len(strings.TrimLeft(raw, " \t"))]
+		case active && !isQuotedDiffBodyLine(raw, indent):
 			active = false
 		}
 		inDiff[i] = active
 	}
 	return inDiff
+}
+
+// isQuotedDiffBodyLine reports whether raw continues the hunk opened by a
+// header indented by indent. Every hunk line carries its marker directly after
+// that indentation: "+" or "-" for a change, a space for context, or "\" for
+// the no-newline note. A blank line carries no marker, which is how a quote
+// ends before the report that follows it.
+func isQuotedDiffBodyLine(raw, indent string) bool {
+	if !strings.HasPrefix(raw, indent) {
+		return false
+	}
+	body := raw[len(indent):]
+	if body == "" {
+		return false
+	}
+	switch body[0] {
+	case '+', '-', ' ':
+		return true
+	case '\\':
+		return strings.HasPrefix(body, `\ No newline`)
+	}
+	return false
 }
 
 // isQuotedDiffFileHeader reports whether a line is a patch's "--- a/path" or
@@ -6794,15 +6848,7 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 	if output == "" {
 		return false, ""
 	}
-	lines := splitOutputLines(output)
-	nonEmpty := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		nonEmpty = append(nonEmpty, trimmed)
-	}
+	nonEmpty, inDiff := splitNonEmptyOutputLines(output)
 	if len(nonEmpty) == 0 {
 		return false, ""
 	}
@@ -6816,7 +6862,6 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 		start = len(nonEmpty) - terminalFailureWindow
 	}
 
-	inDiff := quotedDiffHunkLines(nonEmpty)
 	var structuredTaskFailureLine string
 	var structuredErrorLine string
 	for i, trimmed := range nonEmpty[start:] {
@@ -6848,7 +6893,7 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 	if structuredTaskFailureLine != "" && structuredErrorLine != "" {
 		return true, structuredTaskFailureLine + " " + structuredErrorLine
 	}
-	if failed, detail := agentReportedFailureFields(nonEmpty); failed {
+	if failed, detail := agentReportedFailureFields(nonEmpty, inDiff); failed {
 		return true, detail
 	}
 	return false, ""

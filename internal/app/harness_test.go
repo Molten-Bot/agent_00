@@ -8398,6 +8398,114 @@ func TestCodexReportedFailureIgnoresSingleSpaceQuotedDiffFailureLine(t *testing.
 	}
 }
 
+func TestCodexReportedFailureIgnoresQuotedDiffFailureLineBelowContextLine(t *testing.T) {
+	t.Parallel()
+
+	// A hunk's context line carries a leading space rather than a change
+	// marker. Reading the trimmed line ended the quote there and let the rest
+	// of the same hunk report what the file says as the run's outcome.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Added the reporting contract to the prompt builder.",
+			"diff --git a/prompt.md b/prompt.md",
+			"--- a/prompt.md",
+			"+++ b/prompt.md",
+			"@@ -4,6 +4,8 @@ Report the outcome with these fields:",
+			" When failures occur, report them:",
+			"+ Failure: <short failure summary>",
+			"+ Error details: <failing command or blocker>",
+			" Keep the summary short.",
+			"`go test ./internal/app` passed.",
+		}, "\n"),
+	}
+
+	if failed, detail := codexReportedFailure(res); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(quoted diff hunk with context line) = (%v, %q), want (false, \"\")", failed, detail)
+	}
+}
+
+func TestCodexReportedFailureDetectsBulletedReportBelowQuotedDiff(t *testing.T) {
+	t.Parallel()
+
+	// A blank line closes the quoted patch. Dropping it before the scan left
+	// the quote open across the bulleted report below it, so the run's own
+	// failure went unreported.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Reviewed the reporting contract.",
+			"diff --git a/prompt.md b/prompt.md",
+			"--- a/prompt.md",
+			"+++ b/prompt.md",
+			"@@ -4,5 +4,6 @@ Report the outcome with these fields:",
+			"+ Failure: <short failure summary>",
+			"",
+			"- **Failure:** the focused tests failed.",
+			"- **Error details:** `go test ./internal/app` exited with status 1.",
+		}, "\n"),
+	}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed {
+		t.Fatal("codexReportedFailure(bulleted report below quoted diff) = false, want true")
+	}
+	if want := "Failure: the focused tests failed."; detail != want {
+		t.Fatalf("codexReportedFailure(bulleted report below quoted diff) detail = %q, want %q", detail, want)
+	}
+}
+
+func TestCodexReportedFailureIgnoresMidRunFailurePairBelowRepeatedHeadings(t *testing.T) {
+	t.Parallel()
+
+	// A heading restarts the report-header budget a bounded number of times, so
+	// a run that narrates under a heading per step cannot keep the budget
+	// topped up until the progress pair below it reads as the run's outcome.
+	res := execx.Result{
+		Stdout: strings.Join([]string{
+			"Starting the migration task.",
+			"## Step 1",
+			"Read the harness configuration.",
+			"## Step 2",
+			"Checked the existing tests.",
+			"## Step 3",
+			"Ran the dependency install.",
+			"## Step 4",
+			"Failure: could not reach the package registry.",
+			"Error details: npm ERR! network timeout.",
+			"## Step 5",
+			"Retried through the proxy and the install succeeded.",
+			"Ran the focused tests.",
+			"Ran the build.",
+			"Ran the linter.",
+			"Ran go vet.",
+			"Updated the changelog.",
+			"Done. All checks pass.",
+		}, "\n"),
+	}
+
+	if failed, detail := codexReportedFailure(res); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(mid-run pair below repeated headings) = (%v, %q), want (false, \"\")", failed, detail)
+	}
+}
+
+func TestCodexExtractErrorDetailSkipsQuotedDiffLines(t *testing.T) {
+	t.Parallel()
+
+	// The fallback join reports the run's own diagnostics, so it must skip the
+	// quoted patch lines the field scan above it already skips.
+	output := strings.Join([]string{
+		"diff --git a/prompt.md b/prompt.md",
+		"@@ -4,5 +4,6 @@ Report the outcome with these fields:",
+		"+ Error details: <failing command or blocker>",
+		"",
+		"The focused tests failed on the second attempt.",
+	}, "\n")
+
+	got := codexExtractErrorDetail(output)
+	if want := "Error details: The focused tests failed on the second attempt."; got != want {
+		t.Fatalf("codexExtractErrorDetail(quoted diff) = %q, want %q", got, want)
+	}
+}
+
 func TestCodexReportedFailureDetectsWidelyIndentedBulletedReportFields(t *testing.T) {
 	t.Parallel()
 
