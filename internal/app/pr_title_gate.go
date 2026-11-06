@@ -89,13 +89,16 @@ func isPRTitleGateCheckName(name string) bool {
 // prTitleGateOnlyFailure reports whether the observed check results have
 // failures and every failing check is a title gate.
 //
-// Both the raw watch output and the summary are scanned. The summary can carry
-// a snapshot taken after the watch output was captured, so every non-gate check
-// resolves to the freshest state reported for it and a stale red row cannot
-// veto the repair on its own. That summary is truncated at maxCheckSummaryChars,
-// so a row it drops, or cuts down to an unrecognized bucket, keeps the state the
-// watch captured. A gate failure seen in any source still counts, because the
-// watch can be the only source that observed the gate run.
+// Both the raw watch output and the summary are scanned, and neither is
+// reliably the fresher source: the summary can be a snapshot taken after the
+// watch output was captured, and it can equally be a snapshot kept from an
+// earlier no-report retry while the watch output was refreshed. So a non-gate
+// check only takes a later source's state when that state is conclusive. A
+// `pending` row says a run exists, not that a failure another source reported
+// cleared, and a row maxCheckSummaryChars truncation cut down to an
+// unrecognized bucket says nothing at all. A gate failure seen in any source
+// still counts, because the watch can be the only source that observed the
+// gate run.
 func prTitleGateOnlyFailure(res execx.Result, summary string) bool {
 	titleGateFailed := false
 	others := make(map[string]string)
@@ -105,7 +108,7 @@ func prTitleGateOnlyFailure(res execx.Result, summary string) bool {
 				titleGateFailed = titleGateFailed || isFailedCheckBucket(state.Bucket)
 				continue
 			}
-			if _, seen := others[name]; seen && !isKnownCheckBucket(state.Bucket) {
+			if _, seen := others[name]; seen && !isConclusiveCheckBucket(state.Bucket) {
 				continue
 			}
 			others[name] = state.Bucket
@@ -126,12 +129,17 @@ func prTitleGateOnlyFailure(res execx.Result, summary string) bool {
 //
 // Only a pull request the harness owns is eligible; a pre-existing or
 // PR-feedback target belongs to its author.
+//
+// A non-nil planned repair is one a snapshot veto already resolved earlier in
+// this checks attempt. Reusing it spends one `gh pr view` per attempt instead
+// of two; nothing edits the title in between, so the rewrite still holds.
 func (h Harness) repairPRTitleGateFailure(
 	ctx context.Context,
 	repo repoWorkspace,
 	issue *config.GitHubIssueConfig,
 	checkRes execx.Result,
 	checkSummary string,
+	planned *prTitleGateRepair,
 ) (bool, error) {
 	if !harnessCanRetitlePR(repo) {
 		return false, nil
@@ -139,9 +147,15 @@ func (h Harness) repairPRTitleGateFailure(
 	if !prTitleGateOnlyFailure(checkRes, checkSummary) {
 		return false, nil
 	}
-	plan, repairable, err := h.planPRTitleGateRepair(ctx, repo, issue)
-	if err != nil || !repairable {
-		return false, err
+	var plan prTitleGateRepair
+	if planned != nil {
+		plan = *planned
+	} else {
+		resolved, repairable, err := h.planPRTitleGateRepair(ctx, repo, issue)
+		if err != nil || !repairable {
+			return false, err
+		}
+		plan = resolved
 	}
 
 	if _, err := h.runPRTitleGateCommand(ctx, prEditTitleCommand(repo.Dir, repo.PRURL, plan.Title), "retitle"); err != nil {
@@ -212,12 +226,20 @@ func (h Harness) runPRTitleGateCommand(ctx context.Context, cmd execx.Command, a
 		if isPRTitleGateNotPermitted(res, err) {
 			return res, fmt.Errorf("%w: %v", errPRTitleGateNotPermitted, err)
 		}
-		if !shouldRetryPRCreate(res, err) || attempt >= maxPRTitleGateCommandAttempts {
+		reason := ""
+		switch {
+		case isGitHubRateLimited(res, err):
+			reason = "github_rate_limited"
+		case shouldRetryPRCreate(res, err):
+			reason = "transient_github_error"
+		}
+		if reason == "" || attempt >= maxPRTitleGateCommandAttempts {
 			return res, err
 		}
 		h.logf(
-			"stage=pr status=retry action=%s reason=transient_github_error retry=%d/%d err=%q",
+			"stage=pr status=retry action=%s reason=%s retry=%d/%d err=%q",
 			action,
+			reason,
 			attempt,
 			maxPRTitleGateCommandAttempts-1,
 			err,
@@ -229,21 +251,43 @@ func (h Harness) runPRTitleGateCommand(ctx context.Context, cmd execx.Command, a
 }
 
 // isPRTitleGateNotPermitted reports whether a gh failure means the credentials
-// in use may not read or edit the pull request.
+// in use may not read or edit the pull request. A denial releases the run
+// without the repair, so only a refusal that retrying can never clear counts.
 //
-// Only phrasing GitHub itself emits counts. The wrapped error repeats the gh
-// arguments, which carry the pull-request title, so a loose marker such as
-// "forbidden" would let an ordinary title talk the harness out of a repair.
+// GitHub reports both its primary and its secondary rate limit as HTTP 403, and
+// a throttled request succeeds once the limit resets, so a rate-limited failure
+// is never read as a denial.
+//
+// Only phrasing GitHub itself emits, in gh's own output, counts. The wrapped
+// error repeats the gh arguments, which carry the pull-request title, so
+// matching it would let a title that merely mentions "HTTP 403" talk the
+// harness out of a repair.
 func isPRTitleGateNotPermitted(res execx.Result, err error) bool {
 	if err == nil {
+		return false
+	}
+	if isGitHubRateLimited(res, err) {
 		return false
 	}
 	if isGitHubAuthFailure(res, err) {
 		return true
 	}
-	text := strings.ToLower(strings.Join([]string{res.Stdout, res.Stderr, err.Error()}, "\n"))
+	text := strings.ToLower(strings.Join([]string{res.Stdout, res.Stderr}, "\n"))
 	return strings.Contains(text, "resource not accessible by integration") ||
 		strings.Contains(text, "http 403")
+}
+
+// isGitHubRateLimited reports whether a gh failure is GitHub throttling the
+// request rather than refusing it. Like the permission markers, it reads only
+// gh's own output so the pull-request title cannot trigger it.
+func isGitHubRateLimited(res execx.Result, err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(strings.Join([]string{res.Stdout, res.Stderr}, "\n"))
+	return strings.Contains(text, "rate limit") ||
+		strings.Contains(text, "rate-limit") ||
+		strings.Contains(text, "abuse detection")
 }
 
 // harnessCanRetitlePR reports whether the harness may rewrite the title of the

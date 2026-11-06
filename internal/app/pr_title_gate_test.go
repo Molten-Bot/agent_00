@@ -24,7 +24,7 @@ on:
   pull_request:
     types: [opened, edited, reopened]
 jobs:
-  check-title:
+  pr-title:
     runs-on: ubuntu-latest
     steps:
       - name: Validate title
@@ -34,7 +34,7 @@ jobs:
             feat
             chore
             fix
-            hotfix
+            release
             refactor
           requireScope: true
           scopes: |
@@ -47,7 +47,7 @@ jobs:
 // titleGateLiteralScopeWorkflow requires a scope the harness can never
 // synthesize, so a rejected title has no repair it can derive.
 const titleGateLiteralScopeWorkflow = titleGateOnEdited + `jobs:
-  check-title:
+  pr-title:
     runs-on: ubuntu-latest
     steps:
       - uses: amannn/action-semantic-pull-request@v5
@@ -64,7 +64,7 @@ func writeTitleGateWorkflow(t *testing.T, content string) string {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("create workflow dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "pr-title-check.yaml"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "semantic-pr-title.yml"), []byte(content), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
 	return repoDir
@@ -78,13 +78,13 @@ func TestDetectPRTitleGate(t *testing.T) {
 	if !found {
 		t.Fatal("expected a title gate to be detected")
 	}
-	if gate.WorkflowPath != ".github/workflows/pr-title-check.yaml" {
+	if gate.WorkflowPath != ".github/workflows/semantic-pr-title.yml" {
 		t.Fatalf("workflow path = %q", gate.WorkflowPath)
 	}
 	if !gate.RequireScope {
 		t.Fatal("requireScope was not parsed")
 	}
-	if want := []string{"feat", "chore", "fix", "hotfix", "refactor"}; !reflect.DeepEqual(gate.Types, want) {
+	if want := []string{"feat", "chore", "fix", "release", "refactor"}; !reflect.DeepEqual(gate.Types, want) {
 		t.Fatalf("types = %v, want %v", gate.Types, want)
 	}
 	if want := []string{`#\d+`, `ABC-\d+`, "deps", "deps-dev"}; !reflect.DeepEqual(gate.Scopes, want) {
@@ -246,7 +246,7 @@ func TestDetectPRTitleGateMissingWorkflowsDir(t *testing.T) {
 func TestConformingPRTitle(t *testing.T) {
 	t.Parallel()
 	strictGate := prTitleGate{
-		Types:        []string{"feat", "chore", "fix", "hotfix", "refactor"},
+		Types:        []string{"feat", "chore", "fix", "release", "refactor"},
 		Scopes:       []string{`#\d+`, `ABC-\d+`, "deps", "deps-dev"},
 		RequireScope: true,
 	}
@@ -418,37 +418,50 @@ func TestPRTitleGateOnlyFailure(t *testing.T) {
 	}{
 		{
 			name:    "truncated summary hides another failure visible in raw output",
-			res:     execx.Result{Stdout: "check-title\tfail\t6s\t\nType Check\tfail\t1m\t"},
-			summary: "check-title\tfail\t6s\t\nType Check\tfa",
+			res:     execx.Result{Stdout: "pr-title\tfail\t6s\t\nType Check\tfail\t1m\t"},
+			summary: "pr-title\tfail\t6s\t\nType Check\tfa",
 		},
 		{
 			name:    "fresher summary clears a check the watch saw red",
-			res:     execx.Result{Stdout: "check-title\tfail\t6s\t\nType Check\tfail\t1m\t"},
-			summary: "Type Check\tpass\t2m\t\ncheck-title\tfail\t6s\t",
+			res:     execx.Result{Stdout: "pr-title\tfail\t6s\t\nType Check\tfail\t1m\t"},
+			summary: "Type Check\tpass\t2m\t\npr-title\tfail\t6s\t",
 			want:    true,
 		},
 		{
+			// The summary can be a snapshot kept from an earlier no-report
+			// retry while the watch output was refreshed, so a pending row
+			// never clears a failure another source reported.
+			name:    "pending summary row does not clear a failure the watch saw",
+			res:     execx.Result{Stdout: "pr-title\tfail\t6s\t\nType Check\tfail\t1m\t"},
+			summary: "pr-title\tfail\t6s\t\nType Check\tpending\t0\t",
+		},
+		{
+			name:    "a later conclusive row still resolves a pending check",
+			res:     execx.Result{Stdout: "pr-title\tfail\t6s\t\nType Check\tpending\t0\t"},
+			summary: "pr-title\tfail\t6s\t\nType Check\tfail\t1m\t",
+		},
+		{
 			name:    "failure only in the summary still blocks",
-			res:     execx.Result{Stdout: "check-title\tfail\t6s\t"},
+			res:     execx.Result{Stdout: "pr-title\tfail\t6s\t"},
 			summary: "Type Check\tfail\t1m\t",
 		},
 		{
 			name: "raw output only",
-			res:  execx.Result{Stderr: "check-title\tfail\t6s\t"},
+			res:  execx.Result{Stderr: "pr-title\tfail\t6s\t"},
 			want: true,
 		},
 		{
 			name:    "only the title gate is red",
-			summary: "check-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\thttps://example.com/lint\nAI PR QA\tskipping\t0\t",
+			summary: "pr-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\thttps://example.com/lint\nAI PR QA\tskipping\t0\t",
 			want:    true,
 		},
 		{
 			name:    "another check is also red",
-			summary: "check-title\tfail\t6s\t\nType Check\tfail\t1m\t",
+			summary: "pr-title\tfail\t6s\t\nType Check\tfail\t1m\t",
 		},
 		{
 			name:    "title gate recovered in a later row",
-			summary: "check-title\tfail\t6s\t\ncheck-title\tpass\t6s\t",
+			summary: "pr-title\tfail\t6s\t\npr-title\tpass\t6s\t",
 		},
 		{
 			name:    "nothing is red",
@@ -469,7 +482,7 @@ func TestPRTitleGateOnlyFailure(t *testing.T) {
 		},
 		{
 			name:    "a red commit title linter blocks the repair",
-			summary: "check-title\tfail\t6s\t\nLint commit titles\tfail\t4s\t",
+			summary: "pr-title\tfail\t6s\t\nLint commit titles\tfail\t4s\t",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -488,11 +501,11 @@ func TestCapturedChecksHaveTitleGateFailures(t *testing.T) {
 		res  execx.Result
 		want bool
 	}{
-		{name: "failing title gate in stdout", res: execx.Result{Stdout: "check-title\tfail\t6s\t"}, want: true},
-		{name: "failing title gate in stderr", res: execx.Result{Stderr: "check-title\ttimed_out\t6s\t"}, want: true},
+		{name: "failing title gate in stdout", res: execx.Result{Stdout: "pr-title\tfail\t6s\t"}, want: true},
+		{name: "failing title gate in stderr", res: execx.Result{Stderr: "pr-title\ttimed_out\t6s\t"}, want: true},
 		{name: "other check failing keeps the fallback", res: execx.Result{Stdout: "Type Check\tfail\t1m\t"}},
 		{name: "all passing", res: execx.Result{Stdout: "Lint\tpass\t1s\t"}},
-		{name: "pending only", res: execx.Result{Stdout: "check-title\tpending\t0\t"}},
+		{name: "pending only", res: execx.Result{Stdout: "pr-title\tpending\t0\t"}},
 		{name: "no table", res: execx.Result{Stderr: "no required checks reported on the 'topic' branch"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -509,7 +522,7 @@ func TestTitleGateBlocksChecksSuccess(t *testing.T) {
 	gateDir := writeTitleGateWorkflow(t, titleGateWorkflow)
 	literalScopeDir := writeTitleGateWorkflow(t, titleGateLiteralScopeWorkflow)
 	prURL := "https://github.com/acme/repo/pull/42"
-	redGate := execx.Result{Stdout: "check-title\tfail\t6s\t"}
+	redGate := execx.Result{Stdout: "pr-title\tfail\t6s\t"}
 	rejectedTitle := execx.Result{Stdout: `{"title":"ci(automation): tighten release checks"}`}
 	for _, tc := range []struct {
 		name string
@@ -559,7 +572,7 @@ func TestTitleGateBlocksChecksSuccess(t *testing.T) {
 		{
 			name: "green gate keeps the passing snapshot",
 			repo: repoWorkspace{Dir: gateDir, PRURL: prURL, PRCreatedThisRun: true},
-			res:  execx.Result{Stdout: "check-title\tpass\t6s\t"},
+			res:  execx.Result{Stdout: "pr-title\tpass\t6s\t"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -567,9 +580,12 @@ func TestTitleGateBlocksChecksSuccess(t *testing.T) {
 			fake := &fakeRunner{t: t, exps: tc.exps}
 			h := New(fake)
 			h.Logf = func(string, ...any) {}
-			got := h.titleGateBlocksChecksSuccess(context.Background(), tc.repo, nil, tc.res, "watch_timeout_snapshot", 1)
+			got, plan := h.titleGateBlocksChecksSuccess(context.Background(), tc.repo, nil, tc.res, "watch_timeout_snapshot", 1)
 			if got != tc.want {
 				t.Fatalf("titleGateBlocksChecksSuccess = %v, want %v", got, tc.want)
+			}
+			if got != (plan != nil) {
+				t.Fatalf("plan = %+v, want one only when the gate blocks", plan)
 			}
 			if len(fake.exps) != 0 {
 				t.Fatalf("unused expectations: %+v", fake.exps)
@@ -650,7 +666,8 @@ func TestRepairPRTitleGateFailureScopesTheOriginatingIssue(t *testing.T) {
 		repo,
 		&config.GitHubIssueConfig{Repository: "acme/repo", Number: 17},
 		execx.Result{},
-		"check-title\tfail\t6s\t",
+		"pr-title\tfail\t6s\t",
+		nil,
 	)
 	if err != nil || !repaired {
 		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (true, nil)", repaired, err)
@@ -684,7 +701,8 @@ func TestRepairPRTitleGateFailureRetitlesPullRequest(t *testing.T) {
 		repo,
 		nil,
 		execx.Result{},
-		"check-title\tfail\t6s\thttps://example.com/job\nLint\tpass\t1s\t",
+		"pr-title\tfail\t6s\thttps://example.com/job\nLint\tpass\t1s\t",
+		nil,
 	)
 	if err != nil || !repaired {
 		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (true, nil)", repaired, err)
@@ -717,7 +735,7 @@ func TestRepairPRTitleGateFailureRetitlesPullRequestReusedOnHarnessBranch(t *tes
 	h := New(fake)
 	h.Logf = func(string, ...any) {}
 
-	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "check-title\tfail\t6s\t")
+	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "pr-title\tfail\t6s\t", nil)
 	if err != nil || !repaired {
 		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (true, nil)", repaired, err)
 	}
@@ -738,37 +756,37 @@ func TestRepairPRTitleGateFailureSkipsWhenNotApplicable(t *testing.T) {
 		{
 			name:    "no pull request",
 			repo:    repoWorkspace{Dir: gateDir, PRCreatedThisRun: true},
-			summary: "check-title\tfail\t6s\t",
+			summary: "pr-title\tfail\t6s\t",
 		},
 		{
 			name:    "pull request was not created by this run",
 			repo:    repoWorkspace{Dir: gateDir, PRURL: prURL},
-			summary: "check-title\tfail\t6s\t",
+			summary: "pr-title\tfail\t6s\t",
 		},
 		{
 			name:    "branch the harness did not name",
 			repo:    repoWorkspace{Dir: gateDir, PRURL: prURL, Branch: "feature/login"},
-			summary: "check-title\tfail\t6s\t",
+			summary: "pr-title\tfail\t6s\t",
 		},
 		{
 			name:    "pr feedback target",
 			repo:    repoWorkspace{Dir: gateDir, PRURL: prURL, PRCreatedThisRun: true, RequireExistingPR: true},
-			summary: "check-title\tfail\t6s\t",
+			summary: "pr-title\tfail\t6s\t",
 		},
 		{
 			name:    "other checks also failing",
 			repo:    repoWorkspace{Dir: gateDir, PRURL: prURL, PRCreatedThisRun: true},
-			summary: "check-title\tfail\t6s\t\nType Check\tfail\t1m\t",
+			summary: "pr-title\tfail\t6s\t\nType Check\tfail\t1m\t",
 		},
 		{
 			name:    "no title gate in the repository",
 			repo:    repoWorkspace{Dir: t.TempDir(), PRURL: prURL, PRCreatedThisRun: true},
-			summary: "check-title\tfail\t6s\t",
+			summary: "pr-title\tfail\t6s\t",
 		},
 		{
 			name:    "gate does not re-run on a title edit",
 			repo:    repoWorkspace{Dir: writeTitleGateWorkflow(t, strings.Replace(titleGateWorkflow, ", edited", "", 1)), PRURL: prURL, PRCreatedThisRun: true},
-			summary: "check-title\tfail\t6s\t",
+			summary: "pr-title\tfail\t6s\t",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -776,7 +794,7 @@ func TestRepairPRTitleGateFailureSkipsWhenNotApplicable(t *testing.T) {
 			fake := &fakeRunner{t: t}
 			h := New(fake)
 			h.Logf = func(string, ...any) {}
-			repaired, err := h.repairPRTitleGateFailure(context.Background(), tc.repo, nil, execx.Result{}, tc.summary)
+			repaired, err := h.repairPRTitleGateFailure(context.Background(), tc.repo, nil, execx.Result{}, tc.summary, nil)
 			if repaired || err != nil {
 				t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (false, nil)", repaired, err)
 			}
@@ -797,7 +815,7 @@ func TestRepairPRTitleGateFailurePropagatesTitleLookupError(t *testing.T) {
 	h := New(fake)
 	h.Logf = func(string, ...any) {}
 
-	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "check-title\tfail\t6s\t")
+	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "pr-title\tfail\t6s\t", nil)
 	if repaired || err == nil {
 		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (false, error)", repaired, err)
 	}
@@ -816,7 +834,7 @@ func TestRepairPRTitleGateFailureKeepsTitleWhenLookupIsEmpty(t *testing.T) {
 	h := New(fake)
 	h.Logf = func(string, ...any) {}
 
-	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "check-title\tfail\t6s\t")
+	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "pr-title\tfail\t6s\t", nil)
 	if err != nil || repaired {
 		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (false, nil)", repaired, err)
 	}
@@ -848,7 +866,7 @@ func TestRepairPRTitleGateFailureRetriesTransientEditFailures(t *testing.T) {
 		return nil
 	}
 
-	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "check-title\tfail\t6s\t")
+	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "pr-title\tfail\t6s\t", nil)
 	if err != nil || !repaired {
 		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (true, nil)", repaired, err)
 	}
@@ -862,6 +880,73 @@ func TestRepairPRTitleGateFailureRetriesTransientEditFailures(t *testing.T) {
 		if d != prTitleGateCommandRetryDelay {
 			t.Fatalf("retry delay = %s, want %s", d, prTitleGateCommandRetryDelay)
 		}
+	}
+}
+
+func TestRepairPRTitleGateFailureRetriesRateLimitedEdits(t *testing.T) {
+	t.Parallel()
+	// GitHub reports rate limiting with the same HTTP 403 it denies with, so a
+	// throttled edit must be retried instead of releasing the run with a red
+	// gate nothing else can clear.
+	repo := repoWorkspace{
+		Dir:              writeTitleGateWorkflow(t, titleGateWorkflow),
+		PRURL:            "https://github.com/acme/repo/pull/42",
+		PRCreatedThisRun: true,
+	}
+	want := "chore(#42): tighten release checks"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: prTitleViewCommand(repo.Dir, repo.PRURL), res: execx.Result{Stdout: `{"title":"ci(automation): tighten release checks"}`}},
+		{
+			cmd: prEditTitleCommand(repo.Dir, repo.PRURL, want),
+			res: execx.Result{Stderr: "HTTP 403: You have exceeded a secondary rate limit."},
+			err: errors.New("exit status 1"),
+		},
+		{cmd: prEditTitleCommand(repo.Dir, repo.PRURL, want), res: execx.Result{}},
+	}}
+
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+	h.Sleep = func(context.Context, time.Duration) error { return nil }
+
+	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "pr-title\tfail\t6s\t", nil)
+	if err != nil || !repaired {
+		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (true, nil)", repaired, err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unused expectations: %+v", fake.exps)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "status=retry action=retitle reason=github_rate_limited") {
+		t.Fatalf("missing rate-limit retry log: %v", logs)
+	}
+}
+
+func TestRepairPRTitleGateFailureReusesPlannedRepair(t *testing.T) {
+	t.Parallel()
+	// The snapshot veto already resolved the rewrite from the live title, so
+	// the repair edits straight away instead of spending a second gh pr view.
+	repo := repoWorkspace{
+		Dir:              writeTitleGateWorkflow(t, titleGateWorkflow),
+		PRURL:            "https://github.com/acme/repo/pull/42",
+		PRCreatedThisRun: true,
+	}
+	planned := prTitleGateRepair{
+		Title: "chore(#42): tighten release checks",
+		Gate:  prTitleGate{WorkflowPath: ".github/workflows/semantic-pr-title.yml"},
+	}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: prEditTitleCommand(repo.Dir, repo.PRURL, planned.Title), res: execx.Result{}},
+	}}
+
+	h := New(fake)
+	h.Logf = func(string, ...any) {}
+
+	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "pr-title\tfail\t6s\t", &planned)
+	if err != nil || !repaired {
+		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (true, nil)", repaired, err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unused expectations: %+v", fake.exps)
 	}
 }
 
@@ -885,7 +970,7 @@ func TestRepairPRTitleGateFailureReportsForbiddenEdits(t *testing.T) {
 	h.Logf = func(string, ...any) {}
 	h.Sleep = func(context.Context, time.Duration) error { return nil }
 
-	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "check-title\tfail\t6s\t")
+	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "pr-title\tfail\t6s\t", nil)
 	if repaired || !errors.Is(err, errPRTitleGateNotPermitted) {
 		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (false, errPRTitleGateNotPermitted)", repaired, err)
 	}
@@ -913,15 +998,15 @@ func TestRunRetitlesPullRequestWhenOnlyTitleGateFails(t *testing.T) {
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
 		t.Fatalf("create workflow dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workflowDir, "pr-title-check.yaml"), []byte(titleGateWorkflow), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workflowDir, "semantic-pr-title.yml"), []byte(titleGateWorkflow), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
 
 	// The gate is red while everything else is green, which is what the watch
 	// prints before it exits nonzero.
-	checksTable := "check-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\thttps://example.com/lint"
+	checksTable := "pr-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\thttps://example.com/lint"
 	redChecks := execx.Result{Stdout: checksTable}
-	checksJSON := `[{"name":"check-title","bucket":"fail"},{"name":"Lint & Format","bucket":"pass"}]`
+	checksJSON := `[{"name":"pr-title","bucket":"fail"},{"name":"Lint & Format","bucket":"pass"}]`
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -941,7 +1026,7 @@ func TestRunRetitlesPullRequestWhenOnlyTitleGateFails(t *testing.T) {
 		{cmd: prChecksJSONCommand(repoDir, prURL, false), res: execx.Result{Stdout: checksJSON}},
 		{cmd: prTitleViewCommand(repoDir, prURL), res: execx.Result{Stdout: `{"title":"` + cfg.PRTitle + `"}`}},
 		{cmd: prEditTitleCommand(repoDir, prURL, repairedTitle)},
-		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: "check-title\tpass\t6s\t\nLint & Format\tpass\t35s\t"}},
+		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: "pr-title\tpass\t6s\t\nLint & Format\tpass\t35s\t"}},
 	}}
 
 	var logs []string
@@ -991,12 +1076,12 @@ func TestRunStopsWithoutRemediationWhenTheRetitleFails(t *testing.T) {
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
 		t.Fatalf("create workflow dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workflowDir, "pr-title-check.yaml"), []byte(titleGateWorkflow), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workflowDir, "semantic-pr-title.yml"), []byte(titleGateWorkflow), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
 
-	redChecks := execx.Result{Stdout: "check-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\t"}
-	checksJSON := `[{"name":"check-title","bucket":"fail"},{"name":"Lint & Format","bucket":"pass"}]`
+	redChecks := execx.Result{Stdout: "pr-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\t"}
+	checksJSON := `[{"name":"pr-title","bucket":"fail"},{"name":"Lint & Format","bucket":"pass"}]`
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -1065,13 +1150,13 @@ func TestRunWaitsForTitleGateRerunAfterRetitle(t *testing.T) {
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
 		t.Fatalf("create workflow dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workflowDir, "pr-title-check.yaml"), []byte(titleGateWorkflow), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workflowDir, "semantic-pr-title.yml"), []byte(titleGateWorkflow), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
 
-	checksTable := "check-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\thttps://example.com/lint"
+	checksTable := "pr-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\thttps://example.com/lint"
 	redChecks := execx.Result{Stdout: checksTable}
-	checksJSON := `[{"name":"check-title","bucket":"fail"},{"name":"Lint & Format","bucket":"pass"}]`
+	checksJSON := `[{"name":"pr-title","bucket":"fail"},{"name":"Lint & Format","bucket":"pass"}]`
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -1094,7 +1179,7 @@ func TestRunWaitsForTitleGateRerunAfterRetitle(t *testing.T) {
 		// The edited-title run has not replaced the stale red one yet.
 		{cmd: prChecksCommand(repoDir, prURL), res: redChecks, err: errors.New("exit status 1")},
 		{cmd: prChecksJSONCommand(repoDir, prURL, false), res: execx.Result{Stdout: checksJSON}},
-		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: "check-title\tpass\t6s\t\nLint & Format\tpass\t35s\t"}},
+		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: "pr-title\tpass\t6s\t\nLint & Format\tpass\t35s\t"}},
 	}}
 
 	var logs []string
@@ -1145,13 +1230,13 @@ func TestRunRepairsTitleGateAgainForARecreatedPullRequest(t *testing.T) {
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
 		t.Fatalf("create workflow dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workflowDir, "pr-title-check.yaml"), []byte(titleGateWorkflow), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workflowDir, "semantic-pr-title.yml"), []byte(titleGateWorkflow), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
 
-	redChecks := execx.Result{Stdout: "check-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\thttps://example.com/lint"}
-	checksJSON := `[{"name":"check-title","bucket":"fail"},{"name":"Lint & Format","bucket":"pass"}]`
-	greenChecks := execx.Result{Stdout: "check-title\tpass\t6s\t\nLint & Format\tpass\t35s\t"}
+	redChecks := execx.Result{Stdout: "pr-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\thttps://example.com/lint"}
+	checksJSON := `[{"name":"pr-title","bucket":"fail"},{"name":"Lint & Format","bucket":"pass"}]`
+	greenChecks := execx.Result{Stdout: "pr-title\tpass\t6s\t\nLint & Format\tpass\t35s\t"}
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -1229,15 +1314,15 @@ func TestRunRepairsTitleGateMissedByRequiredOnlySnapshot(t *testing.T) {
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
 		t.Fatalf("create workflow dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workflowDir, "pr-title-check.yaml"), []byte(titleGateWorkflow), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workflowDir, "semantic-pr-title.yml"), []byte(titleGateWorkflow), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
 
 	// The watch times out with the red gate already streamed, while the
 	// required-only snapshot is green because the gate is not a required check.
-	timedOutChecks := execx.Result{Stdout: "check-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\thttps://example.com/lint"}
+	timedOutChecks := execx.Result{Stdout: "pr-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\thttps://example.com/lint"}
 	requiredJSON := `[{"name":"Lint & Format","bucket":"pass"}]`
-	anyJSON := `[{"name":"check-title","bucket":"fail"},{"name":"Lint & Format","bucket":"pass"}]`
+	anyJSON := `[{"name":"pr-title","bucket":"fail"},{"name":"Lint & Format","bucket":"pass"}]`
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -1256,12 +1341,12 @@ func TestRunRepairsTitleGateMissedByRequiredOnlySnapshot(t *testing.T) {
 		{cmd: prChecksCommand(repoDir, prURL), res: timedOutChecks, err: errPRChecksWatchTimeout},
 		{cmd: prChecksJSONCommand(repoDir, prURL, true), res: execx.Result{Stdout: requiredJSON}},
 		// The snapshot veto proves a repair exists before it rejects the green
-		// required-only snapshot.
+		// required-only snapshot, and the repair reuses that plan instead of
+		// looking the title up a second time.
 		{cmd: prTitleViewCommand(repoDir, prURL), res: execx.Result{Stdout: `{"title":"` + cfg.PRTitle + `"}`}},
 		{cmd: prChecksJSONCommand(repoDir, prURL, false), res: execx.Result{Stdout: anyJSON}},
-		{cmd: prTitleViewCommand(repoDir, prURL), res: execx.Result{Stdout: `{"title":"` + cfg.PRTitle + `"}`}},
 		{cmd: prEditTitleCommand(repoDir, prURL, repairedTitle)},
-		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: "check-title\tpass\t6s\t\nLint & Format\tpass\t35s\t"}},
+		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: "pr-title\tpass\t6s\t\nLint & Format\tpass\t35s\t"}},
 	}}
 
 	var logs []string
@@ -1317,11 +1402,11 @@ func TestRunKeepsGreenChecksWhenTheTitleGateIsUnrepairable(t *testing.T) {
 	}
 	// The gate demands a scope from a literal allowlist, which the harness
 	// never guesses, so no rewrite can clear it.
-	if err := os.WriteFile(filepath.Join(workflowDir, "pr-title-check.yaml"), []byte(titleGateLiteralScopeWorkflow), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workflowDir, "semantic-pr-title.yml"), []byte(titleGateLiteralScopeWorkflow), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
 
-	timedOutChecks := execx.Result{Stdout: "check-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\thttps://example.com/lint"}
+	timedOutChecks := execx.Result{Stdout: "pr-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\thttps://example.com/lint"}
 	requiredJSON := `[{"name":"Lint & Format","bucket":"pass"}]`
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
@@ -1390,12 +1475,12 @@ func TestRunKeepsGreenChecksWhenTheRetitleIsForbidden(t *testing.T) {
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
 		t.Fatalf("create workflow dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workflowDir, "pr-title-check.yaml"), []byte(titleGateWorkflow), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workflowDir, "semantic-pr-title.yml"), []byte(titleGateWorkflow), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
 
-	redChecks := execx.Result{Stdout: "check-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\t"}
-	checksJSON := `[{"name":"check-title","bucket":"fail"},{"name":"Lint & Format","bucket":"pass"}]`
+	redChecks := execx.Result{Stdout: "pr-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\t"}
+	checksJSON := `[{"name":"pr-title","bucket":"fail"},{"name":"Lint & Format","bucket":"pass"}]`
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -1473,6 +1558,21 @@ func TestIsPRTitleGateNotPermitted(t *testing.T) {
 			err:  errors.New("exit status 1"),
 		},
 		{
+			name: "primary rate limit is throttling, not a denial",
+			res:  execx.Result{Stderr: "HTTP 403: API rate limit exceeded for user ID 1 (https://api.github.com/repos/acme/repo/pulls/42)"},
+			err:  errors.New("exit status 1"),
+		},
+		{
+			name: "secondary rate limit is throttling, not a denial",
+			res:  execx.Result{Stderr: "HTTP 403: You have exceeded a secondary rate limit. Please wait a few minutes before you try again."},
+			err:  errors.New("exit status 1"),
+		},
+		{
+			name: "a 403 reported only by the wrapped error never counts",
+			// The wrapped error repeats the gh arguments, title included.
+			err: errors.New(`run gh [pr edit 42 --title chore(#42): surface HTTP 403 responses]: exit status 1`),
+		},
+		{
 			name: "a title word never counts as a denial",
 			// The wrapped error repeats the gh arguments, title included.
 			err: errors.New(`run gh [pr edit 42 --title chore(#42): reject forbidden imports]: exit status 1`),
@@ -1490,7 +1590,7 @@ func TestIsPRTitleGateNotPermitted(t *testing.T) {
 func TestIsPRTitleGateCheckName(t *testing.T) {
 	t.Parallel()
 	for name, want := range map[string]bool{
-		"check-title":                          true,
+		"title-check":                          true,
 		"PR Title":                             true,
 		"Validate PR title":                    true,
 		"Semantic Pull Request Title":          true,

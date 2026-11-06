@@ -850,9 +850,12 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 	titleGateRechecks := 0
 	for attempt := 0; ; attempt++ {
 		var (
-			checkRes     execx.Result
-			checkErr     error
-			checkSummary string
+			checkRes execx.Result
+			checkErr error
+			// checkSummary and plannedTitleRepair are scoped to one attempt:
+			// the next attempt re-reads both the checks and the live title.
+			checkSummary       string
+			plannedTitleRepair *prTitleGateRepair
 		)
 		for noReportRetry := 0; ; noReportRetry++ {
 			requiredChecksOnly := false
@@ -896,9 +899,15 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 					// The required-only snapshot omits an optional title gate,
 					// so captured watch output decides whether a gate the
 					// harness repairs itself is still red.
-					if timedOutChecksPassing && !h.titleGateBlocksChecksSuccess(ctx, *repo, cfg.GitHubIssue, checkRes, "watch_timeout_snapshot", attempt+1) {
-						h.logf("stage=checks status=ok reason=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
-						return ExitSuccess, "", nil
+					if timedOutChecksPassing {
+						blocked, plan := h.titleGateBlocksChecksSuccess(ctx, *repo, cfg.GitHubIssue, checkRes, "watch_timeout_snapshot", attempt+1)
+						if plan != nil {
+							plannedTitleRepair = plan
+						}
+						if !blocked {
+							h.logf("stage=checks status=ok reason=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
+							return ExitSuccess, "", nil
+						}
 					}
 					checkErr = errors.New("checks failed after watch timeout")
 				}
@@ -1140,7 +1149,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		// remediation agent cannot clear them. The harness supplied the title,
 		// so it repairs the title and lets the gate re-run on the edit event.
 		if !prTitleRepaired {
-			repaired, repairErr := h.repairPRTitleGateFailure(ctx, *repo, cfg.GitHubIssue, checkRes, checkSummary)
+			repaired, repairErr := h.repairPRTitleGateFailure(ctx, *repo, cfg.GitHubIssue, checkRes, checkSummary, plannedTitleRepair)
 			if repairErr != nil {
 				h.logf(
 					"stage=pr status=warn action=retitle reason=failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
@@ -8316,11 +8325,22 @@ func isKnownCheckBucket(bucket string) bool {
 	return isFailedCheckBucket(bucket)
 }
 
+// isConclusiveCheckBucket reports whether a bucket states an outcome for a
+// check. Only a conclusive bucket may supersede the state another source
+// reported for the same check: "pending" says a run exists, not that an
+// earlier failure cleared.
+func isConclusiveCheckBucket(bucket string) bool {
+	return isKnownCheckBucket(bucket) && strings.ToLower(strings.TrimSpace(bucket)) != "pending"
+}
+
 // titleGateBlocksChecksSuccess reports whether captured check output shows a
 // red pull-request title gate the harness can still repair, which stops a
 // snapshot fallback from declaring the run green. The harness repairs those
 // gates itself, and a required-only snapshot can omit an optional gate
 // entirely.
+//
+// When it blocks, it also returns the repair it resolved so the caller can hand
+// it to repairPRTitleGateFailure instead of paying for a second title lookup.
 func (h Harness) titleGateBlocksChecksSuccess(
 	ctx context.Context,
 	repo repoWorkspace,
@@ -8328,14 +8348,14 @@ func (h Harness) titleGateBlocksChecksSuccess(
 	res execx.Result,
 	action string,
 	attempt int,
-) bool {
+) (bool, *prTitleGateRepair) {
 	// Only a gate the harness will actually repair may block success. On a
 	// pull request whose title the harness does not own, such as a PR-feedback
 	// target, or in a repository without a gate that re-runs on a title edit,
 	// the red gate never clears, so vetoing the snapshot would just fail a run
 	// whose required checks are green.
 	if !harnessCanRetitlePR(repo) || !capturedChecksHaveTitleGateFailures(res) {
-		return false
+		return false, nil
 	}
 	// A detected gate is not enough: a title whose subject the gate rejects, or
 	// whose required scope the harness cannot derive, has no repair to wait
@@ -8352,10 +8372,10 @@ func (h Harness) titleGateBlocksChecksSuccess(
 			attempt,
 			err,
 		)
-		return false
+		return false, nil
 	}
 	if !repairable {
-		return false
+		return false, nil
 	}
 	h.logf(
 		"stage=checks status=warn action=%s reason=title_gate_failed repo=%s repo_dir=%s pr_url=%s workflow=%s attempt=%d",
@@ -8366,7 +8386,7 @@ func (h Harness) titleGateBlocksChecksSuccess(
 		plan.Gate.WorkflowPath,
 		attempt,
 	)
-	return true
+	return true, &plan
 }
 
 // capturedChecksHaveTitleGateFailures reports whether check output already in
