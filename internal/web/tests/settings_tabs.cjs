@@ -161,7 +161,7 @@ test('all settings save on close and survive reopening; no main Save button', as
   await select(page, 'github-issues');
   assert.equal(await page.locator('#review-settings-assign-creator').isChecked(), true);
   await toggle(page, 'review-settings-assign-creator');
-  await select(page, 'review');
+  await select(page, 'automation');
   await page.locator('#review-settings-slider').focus();
   for (const [key, level, text] of [['ArrowRight', 'low', 'Low · 1 review'], ['ArrowRight', 'medium', 'Medium · 3 reviews'], ['ArrowRight', 'high', 'High · 6 reviews']]) {
     await page.keyboard.press(key);
@@ -188,6 +188,28 @@ test('all settings save on close and survive reopening; no main Save button', as
   assert.equal(await page.locator('#review-settings-merge-method').inputValue(), 'rebase');
   await select(page, 'github-issues');
   assert.equal(await page.locator('#review-settings-assign-creator').isChecked(), false);
+});
+
+test('post-task review rides in the Automation tab instead of a tab of its own', async t => {
+  const { page, writes } = await openSettings(t);
+  assert.equal(await page.locator('#settings-tab-review').count(), 0, 'the Post-task Review tab is gone');
+  await select(page, 'automation');
+  assert.equal(await page.locator('#settings-panel-automation #settings-panel-review').count(), 1, 'the review slider lives in the Automation panel');
+  assert.equal(await page.locator('#review-settings-slider').isVisible(), true);
+  // The Automation options are a two-column grid; the slider stops stay readable
+  // only while the review section spans both columns.
+  const widths = await page.evaluate(() => ({
+    level: document.getElementById('settings-panel-review').getBoundingClientRect().width,
+    option: document.querySelector('label:has(#review-settings-auto-merge)').getBoundingClientRect().width,
+  }));
+  assert.ok(widths.level > widths.option + 1, `review section spans both automation columns, got ${widths.level} vs ${widths.option}`);
+  await page.locator('#review-settings-slider').focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.locator('#review-settings-level').inputValue(), 'low');
+  await select(page, 'merge');
+  assert.equal(await page.locator('#review-settings-slider').isVisible(), false, 'the slider hides with its Automation panel');
+  await close(page);
+  assert.equal(writes.at(-1).review_level, 'low');
 });
 
 test('chat toggle marks the experimental chat tab unavailable immediately and persists on reload', async t => {
@@ -633,7 +655,7 @@ test('failed save preserves the open dialog and edits; repeated close is single 
 
 test('selected labels remain visible; hover and keyboard navigation reveal reachable tabs', async t => {
   const { page } = await openSettings(t);
-  for (const name of ['library', 'automation', 'review', 'merge', 'signing']) {
+  for (const name of ['library', 'automation', 'github-issues', 'merge', 'signing']) {
     await select(page, name); await page.mouse.move(0, 0);
     await page.waitForFunction(name => getComputedStyle(document.querySelector(`#settings-tab-${name} span`)).opacity === '1', name);
     assert.equal(await page.locator(`#settings-tab-${name} span`).evaluate(el => el.scrollWidth <= el.clientWidth + 1), true);
@@ -643,8 +665,8 @@ test('selected labels remain visible; hover and keyboard navigation reveal reach
   await page.keyboard.press('ArrowRight');
   assert.equal(await page.locator('#settings-tab-automation').getAttribute('aria-selected'), 'true');
   await page.locator('.settings-tabbar').evaluate(async el => { await Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {}))); });
-  await page.locator('#settings-tab-review').hover();
-  await page.waitForFunction(() => getComputedStyle(document.querySelector('#settings-tab-review span')).opacity === '1');
+  await page.locator('#settings-tab-merge').hover();
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('#settings-tab-merge span')).opacity === '1');
   assert.equal(await page.locator('.settings-tabbar').evaluate(el => el.scrollHeight <= el.clientHeight + 1), true);
 });
 
@@ -652,7 +674,7 @@ for (const theme of ['light', 'dark', 'night', 'pink']) test(`${theme} theme: se
   const { page } = await openSettings(t, { theme });
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const name of ['library', 'automation', 'review', 'merge', 'signing']) {
+    for (const name of ['library', 'automation', 'github-issues', 'merge', 'signing']) {
       await select(page, name); await page.mouse.move(0, 0);
       assert.equal(await page.locator('.settings-shell').evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, `${theme}/${width}/${name} fits`);
     }
@@ -665,7 +687,7 @@ for (const theme of ['light', 'dark', 'night', 'pink']) test(`${theme} theme: se
     });
     assert.equal(colors.icon, colors.highlight);
     assert.notEqual(colors.surface, 'none');
-    await select(page, 'review');
+    // The review slider shares the Automation panel, so it is already on screen.
     assert.equal(await page.locator('#review-slider-value svg').evaluate(el => getComputedStyle(el).color), colors.highlight);
     assert.equal(await page.locator('.review-slider-stop[data-current=true] svg').evaluate(el => getComputedStyle(el).color), colors.highlight);
     assert.equal(await page.locator('.review-slider-stop strong').count(), 0);
@@ -755,7 +777,7 @@ for (const viewport of [{ width: 1280, height: 1100 }, { width: 430, height: 932
     });
     const initial = await geometry();
     assert.ok(initial.top >= 0 && initial.bottom <= viewport.height, 'dialog fits the screen');
-    for (const name of ['signing', 'automation', 'review', 'merge', 'library']) {
+    for (const name of ['signing', 'automation', 'github-issues', 'merge', 'library']) {
       await select(page, name);
       const current = await geometry();
       for (const key of ['top', 'height', 'headerTop', 'tabsTop']) {
@@ -769,7 +791,7 @@ for (const viewport of [{ width: 1280, height: 1100 }, { width: 430, height: 932
     assert.equal(scrolled.headerTop, initial.headerTop, 'scrolling long content keeps Close reachable');
     assert.equal(scrolled.tabsTop, initial.tabsTop, 'scrolling long content keeps tabs reachable');
     assert.ok(await page.locator('#commit-signing-section').evaluate(node => node.scrollTop > 0), 'long panels scroll internally');
-    await select(page, 'review');
+    await select(page, 'automation');
     assert.equal(await page.locator('#review-settings-slider').isVisible(), true);
     await close(page);
   });

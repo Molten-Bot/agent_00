@@ -724,6 +724,59 @@ func TestEmbeddedSettingsTabbarStaysScrollableOnNarrowViewports(t *testing.T) {
 
 }
 
+// TestPostTaskReviewSliderLivesInsideAutomationPanel pins the slider to the
+// Automation tab. It used to own a settings tab of its own, so the markup must
+// keep the control inside the automation fieldset and keep the retired tab
+// button out; the browser suite below covers the rendered behavior.
+func TestPostTaskReviewSliderLivesInsideAutomationPanel(t *testing.T) {
+	t.Parallel()
+
+	data, err := fs.ReadFile(staticFiles, "static/index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	markup := string(data)
+
+	for _, retired := range []string{`id="settings-tab-review"`, `data-settings-tab="review"`, `aria-controls="settings-panel-review"`} {
+		if strings.Contains(markup, retired) {
+			t.Fatalf("embedded index.html still exposes the retired Post-task Review tab via %q", retired)
+		}
+	}
+
+	automationIdx := strings.Index(markup, `<fieldset id="settings-panel-automation"`)
+	if automationIdx == -1 {
+		t.Fatal("embedded index.html missing the automation settings panel")
+	}
+	automationEnd := strings.Index(markup[automationIdx:], "</fieldset>")
+	if automationEnd == -1 {
+		t.Fatal("embedded index.html automation settings panel missing its closing tag")
+	}
+	automation := markup[automationIdx : automationIdx+automationEnd]
+	for _, want := range []string{`id="settings-panel-review"`, `id="review-settings-slider"`, `>Post-task review</span>`} {
+		if !strings.Contains(automation, want) {
+			t.Fatalf("embedded index.html automation panel missing %q, the review slider must render with the automation options", want)
+		}
+	}
+	// A leftover role would make the moved block a second visible tabpanel
+	// inside a tab's own panel, which breaks the one-panel-per-tab contract.
+	reviewIdx := strings.Index(automation, `id="settings-panel-review"`)
+	reviewEnd := strings.Index(automation[reviewIdx:], ">")
+	if reviewEnd == -1 {
+		t.Fatal("embedded index.html review settings section missing its tag end")
+	}
+	if reviewTag := automation[reviewIdx : reviewIdx+reviewEnd]; strings.Contains(reviewTag, "role=") || strings.Contains(reviewTag, "hidden") {
+		t.Fatalf("embedded index.html review settings section must no longer be a hidden tabpanel, got %q", reviewTag)
+	}
+
+	css, err := fs.ReadFile(staticFiles, "static/style.css")
+	if err != nil {
+		t.Fatalf("read embedded style.css: %v", err)
+	}
+	if !strings.Contains(normalizeCSSWhitespace(string(css)), "#settings-panel-automation .review-settings-level { grid-column: 1 / -1; }") {
+		t.Fatal("embedded style.css must span the review slider across the automation grid, a single column squeezes its stops")
+	}
+}
+
 // normalizeCSSWhitespace collapses all whitespace runs to single spaces so
 // assertions survive harmless reformatting (indentation, line wrapping)
 // without caring about exact selector punctuation placement.
