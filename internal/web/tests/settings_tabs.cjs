@@ -226,6 +226,34 @@ test('repository selections hide dropdown options and manual entry enables them 
   assert.deepEqual(writes.at(-1).disabled_repositories, []);
 });
 
+test('disabled default repository cannot be submitted implicitly', async t => {
+  const repoURL = 'https://github.com/acme/widget';
+  let submissions = 0;
+  const { page } = await openSettings(t, {
+    initialSettings: { ...defaults, disabled_repositories: [repoURL] },
+    configurePage: async page => {
+      await page.route(`${baseURL}/`, async route => {
+        const response = await route.fetch();
+        const body = (await response.text()).replace('"defaultRepository":""', `"defaultRepository":"${repoURL}"`);
+        return route.fulfill({ response, body });
+      });
+      await page.route('**/api/github/repos**', route => route.fulfill({
+        json: { ok: true, repos: [{ name: 'widget', full_name: 'acme/widget', html_url: repoURL }] },
+      }));
+      await page.route('**/api/local-prompt', route => {
+        submissions++;
+        return route.fulfill({ json: { ok: true, request_id: 'unexpected' } });
+      });
+    },
+  });
+  await close(page);
+  assert.equal(await page.locator('#builder-repo-input').inputValue(), '');
+  await page.locator('#builder-prompt-input').fill('Do work');
+  await page.locator('#local-prompt-submit').click();
+  await page.waitForFunction(() => document.getElementById('local-prompt-status').textContent.includes('Repository is required.'));
+  assert.equal(submissions, 0);
+});
+
 test('chat toggle marks the experimental chat tab unavailable immediately and persists on reload', async t => {
   const { page, writes } = await openSettings(t, { configurePage: async page => {
     await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [] } }));

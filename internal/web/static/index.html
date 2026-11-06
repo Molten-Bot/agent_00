@@ -1289,6 +1289,11 @@
       return normalizeRepoValue(state.ui.defaultRepository || "");
     }
 
+    function enabledDefaultRepository() {
+      const repo = defaultRepository();
+      return repositoryDisabled(repo) ? "" : repo;
+    }
+
     function configuredAgentLogoURL() {
       const harness = configuredHarnessName();
       if (AGENT_LOGO_URLS[harness]) {
@@ -6830,7 +6835,7 @@
     }
 
     function builderPayload() {
-      const repo = normalizeRepoValue(builderRepoInput.value) || defaultRepository();
+      const repo = normalizeRepoValue(builderRepoInput.value) || enabledDefaultRepository();
       if (!repo) {
         throw new Error("Repository is required.");
       }
@@ -6860,7 +6865,7 @@
     }
 
     function libraryPayload(taskName = selectedLibraryTaskName()) {
-      const repo = normalizeRepoValue(libraryRepoInput.value) || defaultRepository();
+      const repo = normalizeRepoValue(libraryRepoInput.value) || enabledDefaultRepository();
       if (!repo) {
         throw new Error("Repository is required.");
       }
@@ -7001,8 +7006,7 @@
       if (state.repoHistory.length > 0 && unique.length > 0) {
         return unique[0];
       }
-      const fallback = defaultRepository();
-      return repositoryDisabled(fallback) ? "" : fallback;
+      return enabledDefaultRepository();
     }
 
     function githubRepoSelectValue(repo) {

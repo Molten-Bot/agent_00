@@ -2050,7 +2050,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "if (state.repoHistory.length > 0 && unique.length > 0)") {
 		t.Fatalf("expected index html to default repo selection to saved history when available")
 	}
-	if !strings.Contains(markup, `return repositoryDisabled(fallback) ? "" : fallback;`) {
+	if !strings.Contains(markup, "function enabledDefaultRepository()") ||
+		!strings.Contains(markup, `return repositoryDisabled(repo) ? "" : repo;`) ||
+		!strings.Contains(markup, "return enabledDefaultRepository();") {
 		t.Fatalf("expected index html to fall back only when a default repository is configured")
 	}
 	if !strings.Contains(markup, "const keepManualSelection = manualSelected && select.dataset.manual === \"true\";") ||
@@ -2089,9 +2091,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `"reviewers": [`) || !strings.Contains(markup, `"octocat"`) || !strings.Contains(markup, `"hubot"`) {
 		t.Fatalf("expected index html JSON example to include reviewers")
 	}
-	if !strings.Contains(markup, "const repo = normalizeRepoValue(builderRepoInput.value) || defaultRepository();") ||
-		!strings.Contains(markup, "const repo = normalizeRepoValue(libraryRepoInput.value) || defaultRepository();") {
-		t.Fatalf("expected index html payload builders to require a repository unless a default is configured")
+	if !strings.Contains(markup, "const repo = normalizeRepoValue(builderRepoInput.value) || enabledDefaultRepository();") ||
+		!strings.Contains(markup, "const repo = normalizeRepoValue(libraryRepoInput.value) || enabledDefaultRepository();") {
+		t.Fatalf("expected index html payload builders to require a repository unless an enabled default is configured")
 	}
 	if !strings.Contains(markup, "const payload = {\n        repos: [repo],\n        targetsubdir:") ||
 		!strings.Contains(markup, "if (branch) {\n        payload.branch = branch;\n      }") {
