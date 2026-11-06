@@ -7171,6 +7171,7 @@
         icon.setAttribute("aria-hidden", "true");
         const text = document.createElement("span");
         text.textContent = displayRepoLabel(repo);
+        label.title = text.textContent;
         label.append(input, icon, text);
         return label;
       }));
@@ -7196,7 +7197,9 @@
         button.addEventListener("click", () => {
           const ownerRepos = repositoryOwnerRepos(key);
           const disabled = state.reviewSettings.disabledRepositories || [];
-          if (ownerRepos.some(repositoryDisabled)) {
+          // Clearing is the primary action, so a partly selected owner clears in
+          // one click; only a fully cleared owner re-selects everything it owns.
+          if (ownerRepos.length > 0 && ownerRepos.every(repositoryDisabled)) {
             const ownerKeys = new Set(ownerRepos.map(repoDedupeKey));
             applyDisabledRepositories(disabled.filter(repo => !ownerKeys.has(repoDedupeKey(repo))));
             return;

@@ -2,6 +2,8 @@
 !/templates/*.example.json
 .*
 .log/
+# Agent handoff scratch: screenshots and logs are read from disk, never committed.
+.agent00/
 # Keep retired local data out of source control.
 moltenhub/
 !.github/

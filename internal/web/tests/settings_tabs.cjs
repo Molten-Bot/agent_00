@@ -233,6 +233,7 @@ test('owner avatars clear and restore every repository they own', async t => {
     { name: 'widget', full_name: 'acme/widget', html_url: 'https://github.com/acme/widget', owner_type: 'Organization', owner_avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4' },
     { name: 'gadget', full_name: 'acme/gadget', html_url: 'https://github.com/acme/gadget', owner_type: 'Organization', owner_avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4' },
     { name: 'notes', full_name: 'octocat/notes', html_url: 'https://github.com/octocat/notes', owner_type: 'User' },
+    { name: 'ledger', full_name: 'globex/ledger', html_url: 'https://github.com/globex/ledger', owner_type: 'Organization', owner_avatar_url: 'https://avatars.githubusercontent.com/u/404?v=4' },
   ];
   const avatarProbes = [];
   const { page, writes } = await openSettings(t, { configurePage: async page => {
@@ -241,6 +242,7 @@ test('owner avatars clear and restore every repository they own', async t => {
       contentType: 'image/png',
       body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'),
     }));
+    await page.route('https://avatars.githubusercontent.com/u/404**', route => route.abort());
     page.on('request', request => {
       if (/^https:\/\/github\.com\/.*\.png/.test(request.url())) avatarProbes.push(request.url());
     });
@@ -261,6 +263,14 @@ test('owner avatars clear and restore every repository they own', async t => {
   // probing the public GitHub avatar route.
   await octocat.locator('svg.lucide-user').waitFor();
   assert.deepEqual(avatarProbes, [], 'owners without API metadata never request github.com avatars');
+  // An avatar that fails to load drops the broken image and falls back to the
+  // same lucide icon an owner without metadata would get.
+  const globex = page.locator('#review-settings-owners [data-repo-owner="globex"]');
+  await globex.locator('svg.lucide-building-2').waitFor();
+  assert.equal(await globex.locator('img.repository-settings-owner-avatar').count(), 0, 'a broken avatar image is removed');
+
+  const widgetRow = page.locator('#review-settings-repositories label:has(input[value="https://github.com/acme/widget"])');
+  assert.equal(await widgetRow.getAttribute('title'), 'acme/widget', 'ellipsized repository rows expose the full name as a tooltip');
 
   await acme.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'false');
@@ -274,8 +284,11 @@ test('owner avatars clear and restore every repository they own', async t => {
 
   await page.locator('#settings-open').click();
   await select(page, 'automation');
-  await page.locator('#review-settings-repositories label:has(input[value="https://github.com/acme/widget"])').click();
+  await widgetRow.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'mixed', 'a partly enabled owner reports a mixed selection');
+  await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'false', 'a partly selected owner clears in a single click');
+  assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/acme/widget"]').isChecked(), false);
   await acme.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'true');
   assert.deepEqual(avatarProbes, [], 'later renders stay free of github.com avatar requests');

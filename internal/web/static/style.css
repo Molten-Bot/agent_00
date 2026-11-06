@@ -8552,7 +8552,7 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   cursor: pointer;
 }
 .selectable-option svg { flex: none; stroke-width: 2; }
-.selectable-option:hover { color: var(--text); border-color: var(--running); }
+.selectable-option:not(:disabled):hover { color: var(--text); border-color: var(--running); }
 .selectable-option:has(input:checked) {
   border-color: color-mix(in srgb, var(--running) 44%, var(--surface-control-border));
   background: var(--surface-control-bg-strong);
