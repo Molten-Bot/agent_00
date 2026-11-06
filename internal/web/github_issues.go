@@ -55,7 +55,7 @@ func (s Server) handleGitHubLabels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "GitHub issue runner is unavailable"})
 		return
 	}
-	repos, err := s.resolveGitHubRepos(r.Context())
+	repos, err := s.enabledGitHubRepos(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("list GitHub repositories: %v", err)})
 		return

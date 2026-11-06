@@ -185,6 +185,7 @@ type ReviewSettingsState struct {
 	GitHubIssueAutoStartOnlyAssigned bool     `json:"github_issue_auto_start_only_assigned"`
 	GitHubIssueAutoStartLabels       []string `json:"github_issue_auto_start_labels"`
 	AssignCreator                    bool     `json:"assign_creator"`
+	DisabledRepositories             []string `json:"disabled_repositories"`
 	Message                          string   `json:"message,omitempty"`
 }
 
@@ -207,6 +208,7 @@ type ReviewSettingsRequest struct {
 	GitHubIssueAutoStartOnlyAssigned *bool     `json:"github_issue_auto_start_only_assigned,omitempty"`
 	GitHubIssueAutoStartLabels       *[]string `json:"github_issue_auto_start_labels,omitempty"`
 	AssignCreator                    *bool     `json:"assign_creator,omitempty"`
+	DisabledRepositories             *[]string `json:"disabled_repositories,omitempty"`
 }
 
 // NewServer returns a monitor HTTP server.
@@ -345,11 +347,31 @@ func (s Server) handleGitHubProfile(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":         true,
 		"profileUrl": profileURL,
 	})
+}
+
+func filterDisabledGitHubRepos(repos []GitHubRepo, disabled []string) []GitHubRepo {
+	blocked := make(map[string]struct{}, len(disabled))
+	for _, value := range disabled {
+		if key := repositoryKey(value); key != "" {
+			blocked[key] = struct{}{}
+		}
+	}
+	if len(blocked) == 0 {
+		return repos
+	}
+	filtered := make([]GitHubRepo, 0, len(repos))
+	for _, repo := range repos {
+		key := repositoryKey(stringsx.FirstNonEmpty(repo.FullName, repo.HTMLURL, repo.Name))
+		if _, disabled := blocked[key]; disabled {
+			continue
+		}
+		filtered = append(filtered, repo)
+	}
+	return filtered
 }
 
 func (s Server) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
@@ -374,6 +396,9 @@ func (s Server) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
 			"repos": []GitHubRepo{},
 		})
 		return
+	}
+	if !gitHubReposIncludeDisabledRequested(r) {
+		repos = s.filterConfiguredGitHubRepos(r.Context(), repos)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -2310,6 +2335,25 @@ func (s Server) resolveGitHubRepos(ctx context.Context) ([]GitHubRepo, error) {
 	return s.loadGitHubRepos(ctx)
 }
 
+func (s Server) enabledGitHubRepos(ctx context.Context) ([]GitHubRepo, error) {
+	repos, err := s.resolveGitHubRepos(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.filterConfiguredGitHubRepos(ctx, repos), nil
+}
+
+func (s Server) filterConfiguredGitHubRepos(ctx context.Context, repos []GitHubRepo) []GitHubRepo {
+	if s.ReviewSettingsStatus == nil {
+		return repos
+	}
+	settings, err := s.ReviewSettingsStatus(ctx)
+	if err != nil {
+		return repos
+	}
+	return filterDisabledGitHubRepos(repos, settings.DisabledRepositories)
+}
+
 func (s Server) refreshGitHubRepos(ctx context.Context) ([]GitHubRepo, error) {
 	if s.gitHubRepos == nil {
 		return s.loadGitHubRepos(ctx)
@@ -2334,6 +2378,18 @@ func gitHubReposRefreshRequested(r *http.Request) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("refresh"))) {
+	case "1", "true", "yes", "y":
+		return true
+	default:
+		return false
+	}
+}
+
+func gitHubReposIncludeDisabledRequested(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("include_disabled"))) {
 	case "1", "true", "yes", "y":
 		return true
 	default:

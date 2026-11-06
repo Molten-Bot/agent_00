@@ -2493,6 +2493,7 @@ func currentReviewSettingsState(cfg localruntime.InitConfig) web.ReviewSettingsS
 		GitHubIssueAutoStartOnlyAssigned: ui.GitHubIssueAutoStartOnlyAssigned,
 		GitHubIssueAutoStartLabels:       ui.GitHubIssueAutoStartLabels,
 		AssignCreator:                    ui.AssignCreator,
+		DisabledRepositories:             ui.DisabledRepositories,
 	}
 }
 
@@ -2524,7 +2525,7 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		MergeMethod:          method,
 		ReviewLevel:          reviewLevel,
 	}
-	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled, req.GitHubIssueLinkMode, req.GitHubIssueAutoStartAssigned, req.AssignCreator, localruntime.GitHubIssueAutoStartSettings{OnlyAssigned: req.GitHubIssueAutoStartOnlyAssigned, Labels: req.GitHubIssueAutoStartLabels}); err != nil {
+	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled, req.GitHubIssueLinkMode, req.GitHubIssueAutoStartAssigned, req.AssignCreator, localruntime.RuntimeConfigUISettingsUpdate{OnlyAssigned: req.GitHubIssueAutoStartOnlyAssigned, Labels: req.GitHubIssueAutoStartLabels, DisabledRepositories: req.DisabledRepositories}); err != nil {
 		state := currentReviewSettingsState(cfg)
 		return state, err
 	}

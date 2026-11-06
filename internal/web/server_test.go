@@ -1633,7 +1633,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `function loadGitHubReposForChat(options = {})`) ||
 		!strings.Contains(markup, `const forceNewRequest = force && refresh;`) ||
 		!strings.Contains(markup, `if (loadSequence !== githubReposLoadSequence)`) ||
-		!strings.Contains(markup, `const response = await fetch(refresh ? "/api/github/repos?refresh=1" : "/api/github/repos", { cache: "no-store" });`) ||
+		!strings.Contains(markup, `const response = await fetch(refresh ? "/api/github/repos?refresh=1&include_disabled=1" : "/api/github/repos?include_disabled=1", { cache: "no-store" });`) ||
 		!strings.Contains(markup, `state.githubRepos = Array.isArray(body.repos) ? body.repos : [];`) ||
 		!strings.Contains(markup, `renderRepoHistoryOptions();`) ||
 		!strings.Contains(markup, `loadGitHubReposForChat({ force: true, refresh: true, keepExisting: true })`) ||
@@ -2038,10 +2038,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected index html to include repo history default selection helper")
 	}
 	if !strings.Contains(markup, "function githubRepoSelectValue(repo)") ||
+		!strings.Contains(markup, "function allGitHubRepoSelectValues()") ||
 		!strings.Contains(markup, "function githubRepoSelectValues()") ||
-		!strings.Contains(markup, "function repoSelectValues(currentValue = \"\")") ||
-		!strings.Contains(markup, "return dedupeRepoValues([currentValue, ...state.repoHistory, ...githubRepoSelectValues()]);") {
+		!strings.Contains(markup, "function repoSelectValues(currentValue = \"\", includeCurrent = false)") ||
+		!strings.Contains(markup, ".filter(repo => !repositoryDisabled(repo));") {
 		t.Fatalf("expected repository dropdown to include GitHub repositories loaded for chat")
+	}
+	if strings.Contains(markup, "includeCurrent && repoDedupeKey(repo) === repoDedupeKey(currentValue)") {
+		t.Fatalf("expected repository dropdown to exclude a disabled current manual value")
 	}
 	if !strings.Contains(markup, `"defaultRepository":""`) {
 		t.Fatalf("expected index html to leave the default repository empty")
@@ -2049,7 +2053,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "if (state.repoHistory.length > 0 && unique.length > 0)") {
 		t.Fatalf("expected index html to default repo selection to saved history when available")
 	}
-	if !strings.Contains(markup, "return defaultRepository();") {
+	if !strings.Contains(markup, "function enabledDefaultRepository()") ||
+		!strings.Contains(markup, `return repositoryDisabled(repo) ? "" : repo;`) ||
+		!strings.Contains(markup, "return enabledDefaultRepository();") {
 		t.Fatalf("expected index html to fall back only when a default repository is configured")
 	}
 	if !strings.Contains(markup, "const keepManualSelection = manualSelected && select.dataset.manual === \"true\";") ||
@@ -2088,9 +2094,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `"reviewers": [`) || !strings.Contains(markup, `"octocat"`) || !strings.Contains(markup, `"hubot"`) {
 		t.Fatalf("expected index html JSON example to include reviewers")
 	}
-	if !strings.Contains(markup, "const repo = normalizeRepoValue(builderRepoInput.value) || defaultRepository();") ||
-		!strings.Contains(markup, "const repo = normalizeRepoValue(libraryRepoInput.value) || defaultRepository();") {
-		t.Fatalf("expected index html payload builders to require a repository unless a default is configured")
+	if !strings.Contains(markup, "const repo = normalizeRepoValue(builderRepoInput.value) || enabledDefaultRepository();") ||
+		!strings.Contains(markup, "const repo = normalizeRepoValue(libraryRepoInput.value) || enabledDefaultRepository();") {
+		t.Fatalf("expected index html payload builders to require a repository unless an enabled default is configured")
 	}
 	if !strings.Contains(markup, "const payload = {\n        repos: [repo],\n        targetsubdir:") ||
 		!strings.Contains(markup, "if (branch) {\n        payload.branch = branch;\n      }") {
@@ -2380,6 +2386,51 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if strings.Contains(markup, `id="hover-select"`) || strings.Contains(markup, ">Hover<") {
 		t.Fatalf("expected index html to remove the docked hover selector")
+	}
+}
+
+func TestFilterDisabledGitHubRepos(t *testing.T) {
+	t.Parallel()
+	repos := []GitHubRepo{
+		{FullName: "acme/one", HTMLURL: "https://github.com/acme/one"},
+		{FullName: "acme/two", HTMLURL: "https://github.com/acme/two"},
+	}
+	got := filterDisabledGitHubRepos(repos, []string{"git@github.com:acme/one.git"})
+	if len(got) != 1 || got[0].FullName != "acme/two" {
+		t.Fatalf("filtered repositories = %#v, want only acme/two", got)
+	}
+	if got := filterDisabledGitHubRepos(repos, nil); len(got) != 2 {
+		t.Fatalf("default repositories = %#v, want all selected", got)
+	}
+}
+
+func TestHandlerGitHubReposCanIncludeDisabledForSettings(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{
+			{FullName: "acme/one", HTMLURL: "https://github.com/acme/one"},
+			{FullName: "acme/two", HTMLURL: "https://github.com/acme/two"},
+		}, nil
+	}
+	srv.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) {
+		return ReviewSettingsState{DisabledRepositories: []string{"acme/one"}}, nil
+	}
+	handler := srv.Handler()
+
+	filtered := httptest.NewRecorder()
+	handler.ServeHTTP(filtered, httptest.NewRequest(http.MethodGet, "/api/github/repos", nil))
+	if strings.Contains(filtered.Body.String(), `"full_name":"acme/one"`) ||
+		!strings.Contains(filtered.Body.String(), `"full_name":"acme/two"`) {
+		t.Fatalf("filtered github repos response = %q", filtered.Body.String())
+	}
+
+	unfiltered := httptest.NewRecorder()
+	handler.ServeHTTP(unfiltered, httptest.NewRequest(http.MethodGet, "/api/github/repos?include_disabled=1", nil))
+	if !strings.Contains(unfiltered.Body.String(), `"full_name":"acme/one"`) ||
+		!strings.Contains(unfiltered.Body.String(), `"full_name":"acme/two"`) {
+		t.Fatalf("github repos response including disabled = %q", unfiltered.Body.String())
 	}
 }
 

@@ -166,9 +166,10 @@ func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 // SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings persists review
 // automation, library, chat, JSON, and GitHub Issues settings in one update.
 // githubIssueLinkMode is optional; when omitted, the existing behavior remains.
-type GitHubIssueAutoStartSettings struct {
-	OnlyAssigned *bool
-	Labels       *[]string
+type RuntimeConfigUISettingsUpdate struct {
+	OnlyAssigned         *bool
+	Labels               *[]string
+	DisabledRepositories *[]string
 }
 
 func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
@@ -182,7 +183,7 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 	githubIssueLinkMode *string,
 	githubIssueAutoStartAssigned *bool,
 	assignCreator *bool,
-	githubIssueAutoStartSettings ...GitHubIssueAutoStartSettings,
+	settingsUpdates ...RuntimeConfigUISettingsUpdate,
 ) error {
 	runtimeConfigMu.Lock()
 	defer runtimeConfigMu.Unlock()
@@ -235,7 +236,7 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 	applyGitHubIssueAutoStartAssignedToDoc(doc, autoStartAssigned)
 	onlyAssigned := githubIssueAutoStartOnlyAssignedFromDoc(doc)
 	var githubIssueAutoStartLabels *[]string
-	for _, setting := range githubIssueAutoStartSettings {
+	for _, setting := range settingsUpdates {
 		if setting.OnlyAssigned != nil {
 			onlyAssigned = *setting.OnlyAssigned
 		}
@@ -252,6 +253,11 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 		assignCreatorValue = *assignCreator
 	}
 	applyAssignCreatorToDoc(doc, assignCreatorValue)
+	for _, setting := range settingsUpdates {
+		if setting.DisabledRepositories != nil {
+			applyDisabledRepositoriesToDoc(doc, *setting.DisabledRepositories)
+		}
+	}
 
 	ensureRuntimeConfigLogLevel(doc, initCfg.LogLevel)
 
@@ -447,6 +453,7 @@ type RuntimeConfigUISettings struct {
 	GitHubIssueAutoStartOnlyAssigned bool
 	GitHubIssueAutoStartLabels       []string
 	AssignCreator                    bool
+	DisabledRepositories             []string
 }
 
 // ReadRuntimeConfigUISettings reads the runtime config once and returns every
@@ -467,7 +474,70 @@ func ReadRuntimeConfigUISettings(path string) RuntimeConfigUISettings {
 		GitHubIssueAutoStartOnlyAssigned: githubIssueAutoStartOnlyAssignedFromDoc(doc),
 		GitHubIssueAutoStartLabels:       githubIssueAutoStartLabelsFromDoc(doc),
 		AssignCreator:                    assignCreatorFromDoc(doc),
+		DisabledRepositories:             disabledRepositoriesFromDoc(doc),
 	}
+}
+
+func disabledRepositoriesFromDoc(doc map[string]any) []string {
+	values, _ := doc["disabled_repositories"].([]any)
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		repo, ok := value.(string)
+		if !ok {
+			continue
+		}
+		repo = strings.TrimSpace(repo)
+		key := strings.ToLower(repo)
+		if repo == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, repo)
+	}
+	return result
+}
+
+// ReadRuntimeConfigDisabledRepositories returns repositories hidden from UI
+// selectors. An absent or unreadable setting means every repository is enabled.
+func ReadRuntimeConfigDisabledRepositories(path string) []string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	doc, err := readRuntimeConfigDoc(path)
+	if err != nil {
+		return nil
+	}
+	return disabledRepositoriesFromDoc(doc)
+}
+
+func applyDisabledRepositoriesToDoc(doc map[string]any, repos []string) {
+	values := make([]any, 0, len(repos))
+	seen := map[string]struct{}{}
+	for _, repo := range repos {
+		repo = strings.TrimSpace(repo)
+		key := strings.ToLower(repo)
+		if repo == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		values = append(values, repo)
+	}
+	if len(values) == 0 {
+		delete(doc, "disabled_repositories")
+		return
+	}
+	doc["disabled_repositories"] = values
 }
 
 // ReadRuntimeConfigDefaultLibraryEnabled returns the persisted default

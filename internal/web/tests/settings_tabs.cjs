@@ -179,7 +179,7 @@ test('all settings save on close and survive reopening; no main Save button', as
   assert.equal(await page.locator('#custom-library-name').inputValue(), 'kept draft');
   await toggle(page, 'review-settings-default-library');
   await close(page);
-  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], assign_creator: false });
+  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], assign_creator: false, disabled_repositories: [] });
   await page.reload();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   assert.equal(await page.locator('#review-settings-auto-merge').isChecked(), true);
@@ -188,6 +188,98 @@ test('all settings save on close and survive reopening; no main Save button', as
   assert.equal(await page.locator('#review-settings-merge-method').inputValue(), 'rebase');
   await select(page, 'github-issues');
   assert.equal(await page.locator('#review-settings-assign-creator').isChecked(), false);
+});
+
+test('repository selections hide dropdown options and manual entry enables them again', async t => {
+  const repo = { name: 'widget', full_name: 'acme/widget', html_url: 'https://github.com/acme/widget' };
+  const { page, writes } = await openSettings(t, { configurePage: async page => {
+    await page.route('**/api/github/repos**', route => {
+      const includeDisabled = new URL(route.request().url()).searchParams.get('include_disabled') === '1';
+      return route.fulfill({ json: { ok: true, repos: includeDisabled ? [repo] : [] } });
+    });
+  }});
+  await select(page, 'automation');
+  const option = page.locator('#review-settings-repositories input[value="https://github.com/acme/widget"]');
+  await option.waitFor();
+  assert.equal(await option.isChecked(), true, 'repositories default enabled');
+  await option.uncheck();
+  await close(page);
+  assert.deepEqual(writes.at(-1).disabled_repositories, ['https://github.com/acme/widget']);
+  assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 0);
+
+  await page.locator('#settings-open').click();
+  await select(page, 'automation');
+  assert.equal(await option.isChecked(), false, 'disabled repository remains available in settings');
+  await option.check();
+  await close(page);
+  assert.deepEqual(writes.at(-1).disabled_repositories, []);
+  assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 1);
+
+  await page.locator('#settings-open').click();
+  await select(page, 'automation');
+  await option.uncheck();
+  await close(page);
+
+  await page.locator('#builder-repo-input').fill('https://github.com/acme/widget');
+  await page.locator('#builder-repo-input').blur();
+  await page.waitForFunction(() => document.querySelector('#builder-repo-select option[value="https://github.com/acme/widget"]'));
+  assert.deepEqual(writes.at(-1).disabled_repositories, []);
+});
+
+test('JSON submission enables manually added repositories', async t => {
+  const repoURL = 'https://github.com/acme/widget';
+  let submitted;
+  const { page, writes } = await openSettings(t, {
+    path: '/#studio-json',
+    initialSettings: { ...defaults, json_enabled: true, disabled_repositories: [repoURL] },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+        { name: 'widget', full_name: 'acme/widget', html_url: repoURL },
+      ] } }));
+      await page.route('**/api/local-prompt', route => {
+        submitted = route.request().postDataJSON();
+        return route.fulfill({ json: { ok: true, request_id: 'json-task' } });
+      });
+    },
+  });
+  await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
+  await page.locator('#prompt-mode-json').click();
+  await page.locator('#local-prompt-input').waitFor({ state: 'visible' });
+  await page.locator('#local-prompt-input').fill(JSON.stringify({ repos: [repoURL], prompt: 'Do work' }));
+  await page.locator('#local-prompt-submit').click();
+  await page.waitForFunction(() => document.getElementById('local-prompt-status').textContent.includes('Queued request json-task'));
+  await page.waitForFunction(() => document.querySelector('#builder-repo-select option[value="https://github.com/acme/widget"]'));
+
+  assert.deepEqual(submitted.repos, [repoURL]);
+  assert.deepEqual(writes.at(-1).disabled_repositories, []);
+});
+
+test('disabled default repository cannot be submitted implicitly', async t => {
+  const repoURL = 'https://github.com/acme/widget';
+  let submissions = 0;
+  const { page } = await openSettings(t, {
+    initialSettings: { ...defaults, disabled_repositories: [repoURL] },
+    configurePage: async page => {
+      await page.route(`${baseURL}/`, async route => {
+        const response = await route.fetch();
+        const body = (await response.text()).replace('"defaultRepository":""', `"defaultRepository":"${repoURL}"`);
+        return route.fulfill({ response, body });
+      });
+      await page.route('**/api/github/repos**', route => route.fulfill({
+        json: { ok: true, repos: [{ name: 'widget', full_name: 'acme/widget', html_url: repoURL }] },
+      }));
+      await page.route('**/api/local-prompt', route => {
+        submissions++;
+        return route.fulfill({ json: { ok: true, request_id: 'unexpected' } });
+      });
+    },
+  });
+  await close(page);
+  assert.equal(await page.locator('#builder-repo-input').inputValue(), '');
+  await page.locator('#builder-prompt-input').fill('Do work');
+  await page.locator('#local-prompt-submit').click();
+  await page.waitForFunction(() => document.getElementById('local-prompt-status').textContent.includes('Repository is required.'));
+  assert.equal(submissions, 0);
 });
 
 test('chat toggle marks the experimental chat tab unavailable immediately and persists on reload', async t => {

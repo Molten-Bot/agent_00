@@ -84,7 +84,7 @@ func githubIssueAutoStartFilterKey(onlyAssigned bool, labels []string) string {
 }
 
 func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool, seen map[string]bool, linkMode string, onlyAssigned bool, requiredLabels []string) error {
-	repos, err := s.resolveGitHubRepos(ctx)
+	repos, err := s.enabledGitHubRepos(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve GitHub repositories: %w", err)
 	}
