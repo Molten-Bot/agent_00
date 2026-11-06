@@ -2245,16 +2245,6 @@
     const themeToggleTooltip = document.getElementById("theme-toggle-tooltip");
     const hoverSelect = document.getElementById("hover-select");
 
-    function eventIncludesNode(event, node) {
-      if (!(node instanceof Node)) {
-        return false;
-      }
-      if (typeof event.composedPath === "function") {
-        return event.composedPath().some((entry) => entry === node || (entry instanceof Node && node.contains(entry)));
-      }
-      return event.target instanceof Node && node.contains(event.target);
-    }
-
     function applyGitHubProfileLink(profileURL) {
       if (!githubProfileLink) {
         return;
@@ -3450,10 +3440,6 @@
       return message.includes("authentication code received");
     }
 
-    function isClaudeBrowserCodeAwaitingSubmission(auth) {
-      return isClaudeBrowserCodeState(auth) && !hasClaudeBrowserCodeBeenAccepted(auth);
-    }
-
     function normalizeClaudeBrowserCode(raw) {
       return String(raw || "").trim();
     }
@@ -4589,29 +4575,6 @@
         default:
           return "circle";
       }
-    }
-
-    function renderDashboardSourceLegend(labels = []) {
-      if (!dashboardSourceLegend) return;
-      dashboardSourceLegend.hidden = false;
-      const entries = labels.length > 0 ? labels : ["No prompts"];
-      dashboardSourceLegend.replaceChildren(...entries.map((label) => {
-        const item = document.createElement("span");
-        item.className = `dashboard-source-legend-item dashboard-source-legend-item-${dashboardSourceKey(label)}`;
-
-        const iconWrap = document.createElement("span");
-        iconWrap.className = "dashboard-source-legend-icon";
-        iconWrap.setAttribute("aria-hidden", "true");
-        const icon = document.createElement("i");
-        icon.setAttribute("data-lucide", dashboardSourceIconName(label));
-        iconWrap.appendChild(icon);
-
-        const text = document.createElement("span");
-        text.textContent = String(label || "Other");
-        item.append(iconWrap, text);
-        return item;
-      }));
-      replaceLucideIcons(dashboardSourceLegend);
     }
 
     function clearDashboardSourceLegend() {
@@ -8241,10 +8204,6 @@
         }
       }
       return keys;
-    }
-
-    function chatRepoMatchesTab(repo, tab) {
-      return chatRepoKey(chatRepoRunValue(repo)) === tab.key;
     }
 
     function chatRepoActivitySignature(task) {

@@ -792,9 +792,6 @@ func TestDashboardSourceLegendStylesLiveInGlobalStylesheet(t *testing.T) {
 	if strings.Contains(html, "item.style.setProperty(\"--dashboard-source-legend-color\"") {
 		t.Fatalf("expected dashboard source legend color styling to live in static/style.css")
 	}
-	if !strings.Contains(html, "dashboard-source-legend-item-${dashboardSourceKey(label)}") {
-		t.Fatalf("expected dashboard source legend to choose source-specific global classes")
-	}
 	if !strings.Contains(html, "function dashboardSourceIconName(label) {\n      switch (dashboardSourceKey(label))") ||
 		!strings.Contains(html, "case \"github_issues\":\n          return \"folder-kanban\";") {
 		t.Fatalf("expected GitHub Issues dashboard sources to use the folder-kanban icon")

@@ -2582,7 +2582,6 @@ func TestHandlerIndexIncludesClaudeBrowserCodeFlow(t *testing.T) {
 		`const showAuthURL = authURL !== "" && authHarness(state.agentAuth) !== "claude";`,
 		`function authHarness(auth) {`,
 		`return configuredHarnessName();`,
-		`function isClaudeBrowserCodeAwaitingSubmission(auth) {`,
 		`const showBrowserCode = isClaudePendingBrowserLoginState();`,
 		`id="agent-auth-device-code-row" class="agent-auth-command-box agent-auth-command-box-inline hidden"`,
 		`const agentAuthDeviceCodeRow = document.getElementById("agent-auth-device-code-row");`,

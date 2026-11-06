@@ -457,14 +457,6 @@
     });
   }
 
-  async function loadResourceMetrics() {
-    const response = await fetch("/api/status", { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error(`status http ${response.status}`);
-    }
-    updateResourceMetrics(await response.json());
-  }
-
   function updateLocalConnection(online, text) {
     document.querySelectorAll("agent-00-header").forEach((header) => {
       if (typeof header.updateLocalConnection === "function") {
