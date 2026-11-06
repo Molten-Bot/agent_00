@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
@@ -409,6 +410,68 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	if asset.Code != http.StatusOK || strings.Contains(asset.Body.String(), "Edit prompt first") || strings.Contains(asset.Body.String(), "Start with this prompt") || !strings.Contains(asset.Body.String(), "Start task") || !strings.Contains(asset.Body.String(), `state: "open"`) || !strings.Contains(asset.Body.String(), "open issues") || !strings.Contains(asset.Body.String(), "linkMode: githubIssueLinkMode") || !strings.Contains(asset.Body.String(), "githubIssue:") || !strings.Contains(asset.Body.String(), "loadingIssueNumber") || !strings.Contains(asset.Body.String(), "task-icons-breathe") || !strings.Contains(asset.Body.String(), `"X-Agent-Task-Source": "github_issues"`) {
 		t.Fatalf("issue browser asset response = %d, expected issue-only task launch", asset.Code)
 	}
+}
+
+// TestGitHubIssueHeaderAssetsCarryAssigneeAndTimeAffordances keeps the pieces the
+// browser suite below proves at the DOM level from silently disappearing in
+// environments without Node: the header metadata, the Unassigned fallback, the
+// focus-revealed assignee name, and the <time> elements. It also pins the
+// script's cache-busting query, because a stale cached github-issues.js would
+// keep shipping the old header long after the file changed.
+func TestGitHubIssueHeaderAssetsCarryAssigneeAndTimeAffordances(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(nil, true)
+	fetch := func(path string) string {
+		t.Helper()
+		response := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200", path, response.Code)
+		}
+		return response.Body.String()
+	}
+
+	script := fetch("/static/github-issues.js")
+	for _, want := range []string{"addAssignees", `"Unassigned"`, "detailHeader.appendChild(metadata)", "addTimestamp(", `node.dateTime = new Date(timestamp).toISOString()`, "avatar.dataset.label = label", "avatar.tabIndex = 0", `addTimestamp(addText(meta, "span", "", "updated ")`} {
+		if !strings.Contains(script, want) {
+			t.Errorf("github-issues.js is missing %q", want)
+		}
+	}
+	if strings.Contains(script, "opened this issue ${formatRelativeTime") {
+		t.Error("the byline repeats the Created timestamp the header already shows")
+	}
+	if strings.Contains(script, "avatar.title = label") {
+		t.Error("assignee icons must not rely on a title tooltip touch users cannot open")
+	}
+
+	css := normalizeCSSWhitespace(fetch("/static/style.css"))
+	for _, want := range []string{
+		".github-issue-assignees .github-issue-avatar::after { content: attr(data-label);",
+		".github-issue-assignees .github-issue-avatar:focus::after {",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("style.css is missing %q, so a tapped assignee icon never names itself", want)
+		}
+	}
+
+	page := fetch("/")
+	if !strings.Contains(page, `src="/static/github-issues.js?v=12"`) {
+		t.Error("github-issues.js changed, so its cache-busting version must advance past v=11")
+	}
+}
+
+// TestGitHubIssueHeaderRendersInBrowser drives the real static/github-issues.js
+// in Chromium. renderIssueDetail, addAssignees, and addTimestamp are unexported
+// closures with no Go-reachable equivalent, so the header's placement, the
+// assignee icons and their focus-revealed names, the Unassigned fallback, and
+// the viewer-local timestamps are only observable through the rendered DOM.
+func TestGitHubIssueHeaderRendersInBrowser(t *testing.T) {
+	requireBrowserTooling(t, "GitHub issue header check")
+
+	ts := httptest.NewServer(githubIssueTestServer(nil, true).Handler())
+	defer ts.Close()
+
+	runBrowserSuite(t, ts.URL, 90*time.Second, "GitHub issue header checks", "tests/github_issues.cjs")
 }
 
 // openingTagWithID returns the opening tag that carries id="<id>" so assertions can check

@@ -206,6 +206,9 @@
 
   // Pass a label when the avatar is the only mention of the person; without one
   // the login is already written next to it and the initials are decorative.
+  // A native title tooltip never opens on touch, so the label rides on
+  // data-label and the chip takes focus: style.css reveals it on hover, on
+  // keyboard focus, and on the focus a tap leaves behind.
   function addAvatar(parent, login, label) {
     const name = String(login || "?").trim();
     const initials = name.split(/[-_\s]+/).filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join("") || "?";
@@ -213,7 +216,8 @@
     if (label) {
       avatar.setAttribute("role", "img");
       avatar.setAttribute("aria-label", label);
-      avatar.title = label;
+      avatar.dataset.label = label;
+      avatar.tabIndex = 0;
     } else {
       avatar.setAttribute("aria-hidden", "true");
     }
@@ -323,7 +327,7 @@
       const meta = addText(button, "span", "github-issue-list-meta", "");
       addText(meta, "span", "", `#${issue.number}`);
       addText(meta, "span", "", "·");
-      addText(meta, "span", "", `updated ${formatRelativeTime(issue.updatedAt)}`);
+      addTimestamp(addText(meta, "span", "", "updated "), issue.updatedAt);
       addIssueLabels(meta, issue.labels);
       button.addEventListener("click", () => void loadIssue(issue.number));
       item.appendChild(button);
@@ -377,7 +381,8 @@
     const author = addText(detailBody, "div", "github-issue-author", "");
     addAvatar(author, issue.author?.login);
     addText(author, "strong", "", issue.author?.login || "Unknown");
-    addText(author, "span", "", `opened this issue ${formatRelativeTime(issue.createdAt)}`);
+    // The header already carries Created, so the byline does not repeat it.
+    addText(author, "span", "", "opened this issue");
     addText(detailBody, "pre", "github-issue-body", issue.body || "No description provided.");
     addText(detailBody, "h3", "github-issue-comments-heading", `Comments (${(issue.comments || []).length})`);
     const comments = document.createElement("div");

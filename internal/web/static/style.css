@@ -9306,10 +9306,45 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 }
 
 .github-issue-assignees .github-issue-avatar {
+  position: relative;
   flex: 0 0 22px;
   width: 22px;
   height: 22px;
   font-size: .55rem;
+  cursor: default;
+}
+
+/* Initials alone do not name the assignee. A title tooltip never opens on
+   touch, so the name is drawn here and revealed on hover, on keyboard focus,
+   and on the focus a tap leaves on the chip. */
+.github-issue-assignees .github-issue-avatar::after {
+  content: attr(data-label);
+  position: absolute;
+  /* Anchored below and to the chip's left edge: the first chip sits against the
+     pane's left padding, so a centred tooltip would hang off the panel. */
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  padding: 2px 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--glass-icon-shadow);
+  color: var(--foreground);
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  font-size: var(--text-label);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .2s ease;
+}
+
+/* :focus, not :focus-visible: a tap focuses the chip without matching
+   :focus-visible, and touch is the case the name has to survive. */
+.github-issue-assignees .github-issue-avatar:hover::after,
+.github-issue-assignees .github-issue-avatar:focus::after {
+  opacity: 1;
 }
 
 .github-issue-assignee-empty {
