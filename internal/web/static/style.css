@@ -9253,6 +9253,25 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   font-weight: 800;
 }
 
+/* The picture and the initials share one cell so the picture covers them.
+   Stacking beats swapping because the initials are the fallback: an avatar
+   that fails to load is simply removed and the letters are already there.
+   Not overflow: hidden, which would clip the name the chip reveals below
+   itself; the image rounds itself off instead. */
+.github-issue-avatar > * {
+  grid-area: 1 / 1;
+}
+
+.github-issue-avatar-image {
+  /* Grid items take z-index without being positioned, and this one needs it:
+     sharing a cell is not enough to paint the picture over the letters. */
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
 .github-issue-author strong,
 .github-issue-comment-meta strong {
   color: var(--text-soft);
@@ -9295,6 +9314,16 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   font-size: .68rem;
   font-weight: 650;
   overflow-wrap: anywhere;
+}
+
+/* The clock time behind "3 days ago". It is the tooltip too, but a tooltip
+   never opens on touch, so in the header it is simply written out. */
+.github-issue-exact-time {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: .6rem;
+  font-weight: 600;
 }
 
 .github-issue-assignees {

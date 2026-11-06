@@ -30,13 +30,21 @@ const crowdedIssue = {
   ],
 };
 
+// A 1x1 PNG stands in for the avatar github.com serves, so the icon path is
+// exercised without the suite reaching the network.
+const avatarPixel = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64');
+
 let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
 
 // openIssue loads the Studio issues panel in a known timezone and opens issue,
 // so every rendered timestamp is the viewer's local time for a fixed instant.
-async function openIssue(t, issue, { timezoneId = 'Asia/Tokyo', touch = false } = {}) {
+// Avatars are the one request that leaves the app's origin: serving them is
+// the normal case, aborting them is the offline case the initials cover.
+async function openIssue(t, issue, { timezoneId = 'Asia/Tokyo', touch = false, avatars = false } = {}) {
   const viewport = touch ? { width: 430, height: 932 } : { width: 1280, height: 900 };
   const page = await browser.newPage({ viewport, timezoneId, locale: 'en-US', isMobile: touch, hasTouch: touch });
   page.setDefaultTimeout(10000);
@@ -46,6 +54,9 @@ async function openIssue(t, issue, { timezoneId = 'Asia/Tokyo', touch = false } 
   t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
+    if (url.hostname === 'github.com' && url.pathname.endsWith('.png')) {
+      return avatars ? route.fulfill({ contentType: 'image/png', body: avatarPixel }) : route.abort();
+    }
     if (url.origin !== new URL(baseURL).origin) return route.abort();
     if (!url.pathname.startsWith('/api/')) return route.continue();
     let json = { ok: true };
@@ -85,6 +96,33 @@ test('assignees and timestamps lead the issue header instead of trailing the des
   assert.deepEqual(await chips.evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))),
     ['mona-octocat (Mona Octocat)', 'hubot']);
   assert.equal(await page.locator('.github-issue-assignee-empty').count(), 0);
+});
+
+test('assignee icons are the GitHub avatars, with initials only as the fallback', async t => {
+  const page = await openIssue(t, assignedIssue, { avatars: true });
+  const images = page.locator('.github-issue-assignees .github-issue-avatar img');
+  await images.nth(1).waitFor();
+  assert.deepEqual(await images.evaluateAll(nodes => nodes.map(node => node.src)),
+    ['https://github.com/mona-octocat.png?size=80', 'https://github.com/hubot.png?size=80']);
+  assert.deepEqual(await images.evaluateAll(nodes => nodes.map(node => node.alt)), ['', ''],
+    'the chip already names the person, so its picture is decorative');
+  // Two logins can share initials, which is why the picture has to be what is
+  // actually drawn: it covers the chip rather than sitting beside the letters.
+  const covered = await page.locator('.github-issue-assignees .github-issue-avatar').first().evaluate(chip => {
+    const chipBox = chip.getBoundingClientRect();
+    const imageBox = chip.querySelector('img').getBoundingClientRect();
+    return imageBox.width >= chipBox.width && imageBox.height >= chipBox.height
+      && Math.abs(imageBox.left - chipBox.left) < 1 && Math.abs(imageBox.top - chipBox.top) < 1;
+  });
+  assert.equal(covered, true, 'the avatar does not fill its chip, so the initials still show through');
+});
+
+test('an avatar that cannot be loaded falls back to the initials', async t => {
+  const page = await openIssue(t, assignedIssue);
+  await page.waitForFunction(
+    () => document.querySelectorAll('.github-issue-assignees .github-issue-avatar img').length === 0,
+    null, { timeout: 10000 });
+  assert.deepEqual(await page.locator('.github-issue-assignees .github-issue-avatar').allInnerTexts(), ['MO', 'H']);
 });
 
 // tooltipShown waits for the chip's revealed name, which fades in over a
@@ -238,26 +276,32 @@ test('header, list, and byline times read in the viewer timezone', async t => {
   assert.deepEqual(await headerTimes.evaluateAll(nodes => nodes.map(node => node.dateTime)),
     ['2024-03-04T05:06:07.000Z', '2024-05-06T07:08:09.000Z']);
   // The header reads in the same relative form as the rest of the issue view,
-  // which is the form this panel already used, and with nothing hidden in a
-  // tooltip behind it. Only the viewer's timezone decides the calendar day.
+  // which is the form this panel already used. Only the viewer's timezone
+  // decides the calendar day.
   assert.deepEqual(await headerTimes.allInnerTexts(), ['Mar 4, 2024', 'May 6, 2024']);
-  assert.deepEqual(await headerTimes.evaluateAll(nodes => nodes.map(node => node.title)), ['', '']);
+  // 05:06 UTC is 14:06 in Tokyo, and the clock time is written out rather than
+  // left in the datetime attribute, because a tooltip never opens on touch.
+  const exact = tokyo.locator('.github-issue-metadata .github-issue-exact-time');
+  assert.equal(await exact.count(), 2, 'each header timestamp spells out its clock time');
+  assert.match((await exact.allInnerTexts()).join(' | '), /Mar 4, 2024, 2:06\sPM \| May 6, 2024, 4:08\sPM/);
+  assert.deepEqual(await headerTimes.evaluateAll(nodes => nodes.map(node => node.title)),
+    await exact.allInnerTexts(), 'the tooltip says the same thing for a pointer user');
 
   // The list's "updated" line is the same instant and carries the same
-  // treatment.
+  // treatment, minus the written-out form the cramped row has no space for.
   const listTime = tokyo.locator('.github-issue-list-meta time').first();
   assert.equal(await listTime.evaluate(node => node.dateTime), '2024-05-06T07:08:09.000Z');
-  assert.equal(await listTime.evaluate(node => node.title), '');
+  assert.match(await listTime.evaluate(node => node.title), /May 6, 2024, 4:08\sPM/);
   assert.match(await tokyo.locator('.github-issue-list-meta').first().innerText(), /updated May 6, 2024/);
 
   // Comment times are the same kind of value, so they carry the same treatment.
   const commentTime = tokyo.locator('.github-issue-comment-meta time');
   assert.equal(await commentTime.count(), 1, 'each comment timestamp is a <time>');
   assert.equal(await commentTime.evaluate(node => node.dateTime), '2024-04-05T06:07:08.000Z');
-  assert.equal(await commentTime.evaluate(node => node.title), '');
+  assert.match(await commentTime.evaluate(node => node.title), /Apr 5, 2024, 3:07\sPM/);
 
   // The byline would otherwise repeat the Created value already in the header.
-  assert.equal((await tokyo.locator('.github-issue-author span:not(.github-issue-avatar)').innerText()).trim(), 'opened this issue');
+  assert.equal((await tokyo.locator('.github-issue-author > span:not(.github-issue-avatar)').innerText()).trim(), 'opened this issue');
   assert.equal(await tokyo.locator('.github-issue-author time').count(), 0);
 
   const losAngeles = await openIssue(t, assignedIssue, { timezoneId: 'America/Los_Angeles' });
@@ -271,5 +315,7 @@ test('a timestamp the browser cannot parse stays out of <time>, which needs a ma
   assert.equal((await updated.locator('dt').innerText()).trim(), 'Updated');
   assert.equal((await updated.locator('dd').innerText()).trim(), 'sometime last week');
   assert.equal(await updated.locator('time').count(), 0, 'an empty datetime would be invalid markup');
+  assert.equal(await updated.locator('.github-issue-exact-time').count(), 0,
+    'there is no clock time to spell out for a value the browser cannot parse');
   assert.equal(await page.locator('.github-issue-metadata time').count(), 1, 'the parsable Created value is still a <time>');
 });

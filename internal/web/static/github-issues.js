@@ -184,17 +184,28 @@
     return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(timestamp);
   }
 
+  // The viewer's own clock time for an instant, down to the minute, in their
+  // locale and timezone.
+  function formatExactTime(timestamp) {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(timestamp);
+  }
+
   // Renders a timestamp as a <time> carrying the machine-readable instant.
   // Header, list, and comments all read relative, which is the form the issue
-  // view already used and what a reader scanning it is after; the datetime
-  // attribute keeps the exact instant available to anything that needs it.
-  function addTimestamp(parent, value) {
+  // view already used and what a reader scanning it is after. The exact instant
+  // is not left to the datetime attribute alone: it is the tooltip everywhere,
+  // and where the layout has room for it, pass exact to draw it as well, since
+  // a tooltip never opens on touch.
+  function addTimestamp(parent, value, options) {
     const timestamp = Date.parse(String(value || ""));
     // A <time> without a machine-readable datetime is invalid markup, so an
     // unparsable value degrades to a plain span rather than lying about itself.
     if (!Number.isFinite(timestamp)) return addText(parent, "span", "", formatRelativeTime(value));
     const node = addText(parent, "time", "", formatRelativeTime(value));
     node.dateTime = new Date(timestamp).toISOString();
+    const exact = formatExactTime(timestamp);
+    node.title = exact;
+    if (options?.exact) addText(parent, "span", "github-issue-exact-time", exact);
     return node;
   }
 
@@ -213,7 +224,9 @@
   function addAvatar(parent, login, label) {
     const name = String(login || "?").trim();
     const initials = name.split(/[-_\s]+/).filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join("") || "?";
-    const avatar = addText(parent, "span", "github-issue-avatar", initials);
+    const avatar = addText(parent, "span", "github-issue-avatar", "");
+    addText(avatar, "span", "github-issue-avatar-initials", initials);
+    addAvatarImage(avatar, name);
     if (label) {
       avatar.setAttribute("role", "img");
       avatar.setAttribute("aria-label", label);
@@ -231,6 +244,26 @@
       avatar.setAttribute("aria-hidden", "true");
     }
     return avatar;
+  }
+
+  // GitHub publishes every account's picture at github.com/<login>.png, so the
+  // chip can show the real icon even though the issue JSON carries no avatar
+  // URL. It is drawn over the initials rather than instead of them: two people
+  // whose logins start alike are indistinguishable as initials, and the picture
+  // is what tells them apart, so the initials are only what is left when the
+  // request fails, the browser is offline, or the account has no picture.
+  function addAvatarImage(avatar, login) {
+    if (!login || login === "?") return;
+    const image = document.createElement("img");
+    image.className = "github-issue-avatar-image";
+    // Decorative: the chip itself carries the name for assistive tech.
+    image.alt = "";
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.referrerPolicy = "no-referrer";
+    image.src = `https://github.com/${encodeURIComponent(login)}.png?size=80`;
+    image.addEventListener("error", () => image.remove(), { once: true });
+    avatar.appendChild(image);
   }
 
   function addAssignees(parent, assignees) {
@@ -379,7 +412,7 @@
     for (const [label, value] of [["Created", issue.createdAt], ["Updated", issue.updatedAt]]) {
       const group = document.createElement("div");
       addText(group, "dt", "", label);
-      addTimestamp(addText(group, "dd", "", ""), value);
+      addTimestamp(addText(group, "dd", "", ""), value, { exact: true });
       metadata.appendChild(group);
     }
     detailHeader.appendChild(metadata);
