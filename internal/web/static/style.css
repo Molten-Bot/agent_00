@@ -9261,12 +9261,172 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 .github-issue-body,
 .github-issue-comment-body {
   margin: 0;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--text-soft);
   font: inherit;
   font-size: .76rem;
   line-height: 1.65;
+}
+
+/* Bodies hold the raw markdown until marked.js renders them, so the plain text
+   keeps its line breaks while it waits. */
+.markdown-body-pending {
+  white-space: pre-wrap;
+}
+
+.github-issue-body > :first-child,
+.github-issue-comment-body > :first-child {
+  margin-top: 0;
+}
+
+.github-issue-body > :last-child,
+.github-issue-comment-body > :last-child {
+  margin-bottom: 0;
+}
+
+.github-issue-body p,
+.github-issue-comment-body p {
+  margin: 0 0 .8em;
+}
+
+.github-issue-body h1,
+.github-issue-body h2,
+.github-issue-body h3,
+.github-issue-body h4,
+.github-issue-body h5,
+.github-issue-body h6,
+.github-issue-comment-body h1,
+.github-issue-comment-body h2,
+.github-issue-comment-body h3,
+.github-issue-comment-body h4,
+.github-issue-comment-body h5,
+.github-issue-comment-body h6 {
+  margin: 1.1em 0 .5em;
+  color: var(--text);
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.github-issue-body h1,
+.github-issue-comment-body h1 {
+  font-size: 1.1em;
+}
+
+.github-issue-body h2,
+.github-issue-comment-body h2 {
+  font-size: 1.05em;
+}
+
+.github-issue-body h3,
+.github-issue-body h4,
+.github-issue-body h5,
+.github-issue-body h6,
+.github-issue-comment-body h3,
+.github-issue-comment-body h4,
+.github-issue-comment-body h5,
+.github-issue-comment-body h6 {
+  font-size: 1em;
+}
+
+.github-issue-body ul,
+.github-issue-body ol,
+.github-issue-comment-body ul,
+.github-issue-comment-body ol {
+  margin: 0 0 .8em;
+  padding-left: 1.3rem;
+}
+
+.github-issue-body li + li,
+.github-issue-comment-body li + li {
+  margin-top: .25em;
+}
+
+/* Task list items carry their own checkbox, so they drop the list bullet the
+   way GitHub renders them. */
+.github-issue-body li:has(> input[type="checkbox"]),
+.github-issue-comment-body li:has(> input[type="checkbox"]) {
+  margin-left: -1.1rem;
+  list-style: none;
+}
+
+.github-issue-body li input[type="checkbox"],
+.github-issue-comment-body li input[type="checkbox"] {
+  margin-right: .4em;
+  vertical-align: baseline;
+}
+
+.github-issue-body blockquote,
+.github-issue-comment-body blockquote {
+  margin: 0 0 .8em;
+  padding: .1em 0 .1em .8em;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.github-issue-body code,
+.github-issue-comment-body code {
+  border-radius: 4px;
+  padding: .1em .3em;
+  background: rgba(113, 136, 177, .14);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: .9em;
+}
+
+.github-issue-body pre,
+.github-issue-comment-body pre {
+  margin: 0 0 .9em;
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.github-issue-body pre code,
+.github-issue-comment-body pre code {
+  display: block;
+  padding: 10px 12px;
+  background: transparent;
+  white-space: pre;
+}
+
+.github-issue-body table,
+.github-issue-comment-body table {
+  display: block;
+  margin: 0 0 .9em;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+  font-size: .95em;
+}
+
+.github-issue-body th,
+.github-issue-body td,
+.github-issue-comment-body th,
+.github-issue-comment-body td {
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.github-issue-body th,
+.github-issue-comment-body th {
+  color: var(--text);
+  font-weight: 750;
+}
+
+.github-issue-body img,
+.github-issue-comment-body img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+
+.github-issue-body hr,
+.github-issue-comment-body hr {
+  margin: 1em 0;
+  border: 0;
+  border-top: 1px solid var(--border);
 }
 
 .github-issue-metadata {

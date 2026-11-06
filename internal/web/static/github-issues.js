@@ -139,6 +139,24 @@
     return node;
   }
 
+  // GitHub stores issue and comment bodies as markdown, so the detail pane renders
+  // them through the shared sanitizing renderer instead of showing the raw source.
+  function addMarkdown(parent, className, text, placeholder) {
+    const node = addText(parent, "div", className, "");
+    const source = String(text || "").trim();
+    if (!source) {
+      node.textContent = placeholder;
+      return node;
+    }
+    if (window.MarkdownView?.render) {
+      void window.MarkdownView.render(node, source);
+    } else {
+      node.classList.add("markdown-body-pending");
+      node.textContent = source;
+    }
+    return node;
+  }
+
   function setStartButtonContent(button, label) {
     const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     icon.classList.add("prompt-action-icon");
@@ -330,7 +348,7 @@
     addAvatar(author, issue.author?.login);
     addText(author, "strong", "", issue.author?.login || "Unknown");
     addText(author, "span", "", `opened this issue ${formatRelativeTime(issue.createdAt)}`);
-    addText(detailBody, "pre", "github-issue-body", issue.body || "No description provided.");
+    addMarkdown(detailBody, "github-issue-body", issue.body, "No description provided.");
     const metadata = document.createElement("dl");
     metadata.className = "github-issue-metadata";
     for (const [label, value] of [
@@ -356,7 +374,7 @@
       addText(commentMeta, "strong", "", comment.author?.login || "Unknown");
       addText(commentMeta, "span", "", "·");
       addText(commentMeta, "span", "", formatRelativeTime(comment.createdAt));
-      addText(card, "pre", "github-issue-comment-body", comment.body || "");
+      addMarkdown(card, "github-issue-comment-body", comment.body, "No comment text.");
       comments.appendChild(card);
     }
     detailBody.appendChild(comments);

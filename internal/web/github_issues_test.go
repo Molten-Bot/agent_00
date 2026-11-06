@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
@@ -509,4 +510,64 @@ func TestGitHubIssuesSettingRoundTripsThroughSettingsAPI(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"github_issues_enabled":true`) || !strings.Contains(response.Body.String(), `"github_issue_link_mode":"close"`) || !strings.Contains(response.Body.String(), `"github_issue_auto_start_assigned":true`) || !strings.Contains(response.Body.String(), `"assign_creator":false`) {
 		t.Fatalf("GET settings response = %d %s", response.Code, response.Body.String())
 	}
+}
+
+// TestGitHubIssueBodiesRenderThroughVendoredMarked pins the wiring the issue
+// detail pane needs: the vendored marked bundle and the sanitizing renderer are
+// published, the page loads the renderer, and the panel renders bodies through
+// it instead of dumping raw markdown into a <pre>.
+func TestGitHubIssueBodiesRenderThroughVendoredMarked(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(nil, true)
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{path: "/static/marked.umd.js", want: "marked v"},
+		{path: "/static/marked-LICENSE.txt", want: "Permission is hereby granted"},
+		{path: "/static/markdown.js", want: "global.MarkdownView = { render, sanitize };"},
+	} {
+		response := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), tc.want) {
+			t.Fatalf("%s response = %d, missing %q", tc.path, response.Code, tc.want)
+		}
+	}
+
+	page := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/", nil))
+	if !strings.Contains(page.Body.String(), `<script src="/static/markdown.js"></script>`) {
+		t.Error("page should load the markdown renderer alongside the issue browser")
+	}
+	// marked itself stays off the critical path; markdown.js fetches it the
+	// first time an issue body is rendered.
+	if strings.Contains(page.Body.String(), `<script src="/static/marked.umd.js"`) {
+		t.Error("marked should load on demand instead of blocking the index page")
+	}
+
+	asset := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
+	script := asset.Body.String()
+	if !strings.Contains(script, `addMarkdown(detailBody, "github-issue-body", issue.body`) ||
+		!strings.Contains(script, `addMarkdown(card, "github-issue-comment-body", comment.body`) ||
+		!strings.Contains(script, "window.MarkdownView?.render") {
+		t.Error("issue and comment bodies should render through the markdown renderer")
+	}
+	if strings.Contains(script, `"pre", "github-issue-body"`) || strings.Contains(script, `"pre", "github-issue-comment-body"`) {
+		t.Error("issue bodies should no longer render as preformatted markdown source")
+	}
+}
+
+// TestGitHubIssueMarkdownRendersInBrowser drives the real panel in Chromium.
+// The renderer only exists in static/markdown.js, so this is the only coverage
+// for the rendered output and for the sanitizing that keeps issue text from
+// executing in the operator's browser.
+func TestGitHubIssueMarkdownRendersInBrowser(t *testing.T) {
+	requireBrowserTooling(t, "issue markdown rendering check")
+
+	srv := NewServer("", NewBroker())
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	runBrowserSuite(t, ts.URL, 60*time.Second, "issue markdown rendering checks", "tests/github_issue_markdown.cjs")
 }
