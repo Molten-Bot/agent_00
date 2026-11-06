@@ -9316,16 +9316,6 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   overflow-wrap: anywhere;
 }
 
-/* The clock time behind "3 days ago". It is the tooltip too, but a tooltip
-   never opens on touch, so in the header it is simply written out. */
-.github-issue-exact-time {
-  display: block;
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: .6rem;
-  font-weight: 600;
-}
-
 .github-issue-assignees {
   /* The anchor for the revealed names below, not just a row of chips. */
   position: relative;
@@ -9373,6 +9363,14 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
      running off the right edge on a phone. */
   width: max-content;
   max-width: 14rem;
+  /* Never narrower than the row, because the row is anchoring it: a short name
+     left at the row's left edge would sit nowhere near the chip that opened
+     it, and a pointer moving down off that chip would land on nothing and lose
+     the name. Spanning the row puts the name directly beneath every chip in
+     it, so moving straight down always reaches it, which is what WCAG 1.4.13
+     hoverable asks for. The row sits inside the pane by construction, so
+     widening to it clips no more than the cap above does. */
+  min-width: 100%;
   overflow-wrap: anywhere;
   /* A focused chip holds its name open until the focus moves, and on touch
      that outlives the tap. Inert by default, the strip cannot swallow the taps

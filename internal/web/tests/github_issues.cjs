@@ -19,9 +19,10 @@ const assignedIssue = {
   createdAt, updatedAt,
 };
 const unassignedIssue = { ...assignedIssue, number: 8, title: 'Nobody owns this yet', assignees: [] };
-// A long name on the last of a row of chips: the case the revealed name has to
-// survive, because the pane clips horizontally and a name hung off a chip this
-// far right would be cut in half on a phone.
+// Seven assignees, six of them short logins: the row the revealed names have
+// the hardest time with. The long name on the last chip has to stay inside the
+// pane, which clips horizontally, and the short ones have to reach back under
+// the chips that opened them.
 const crowdedIssue = {
   ...assignedIssue, number: 10,
   assignees: [
@@ -115,6 +116,13 @@ test('assignee icons are the GitHub avatars, with initials only as the fallback'
       && Math.abs(imageBox.left - chipBox.left) < 1 && Math.abs(imageBox.top - chipBox.top) < 1;
   });
   assert.equal(covered, true, 'the avatar does not fill its chip, so the initials still show through');
+
+  // The assignee icons are the ask, and they are the only place an icon stands
+  // in for a name. The byline and the comments spell the login out beside
+  // their initials, so fetching a picture there would tell github.com who is
+  // reading the issue and show nothing the reader did not already have.
+  assert.equal(await page.locator('.github-issue-author img, .github-issue-comment-meta img').count(), 0,
+    'only the assignee chips should reach github.com for a picture');
 });
 
 test('an avatar that cannot be loaded falls back to the initials', async t => {
@@ -189,18 +197,33 @@ test('hovering an assignee icon names it without clipping against the pane edge'
     `the second chip's name spans ${lastBox.nameLeft}-${lastBox.nameRight} but the pane spans ${lastBox.paneLeft}-${lastBox.paneRight}`);
 });
 
-test('the revealed name stays up while the pointer rests on it', async t => {
-  const page = await openIssue(t, assignedIssue);
-  await page.locator('.github-issue-assignees .github-issue-avatar').first().hover();
-  const box = await tooltipShown(page);
-  // WCAG 1.4.13 hoverable: content a hover reveals must survive the pointer
-  // moving onto it, which rules out a gap to cross or pointer-events: none.
-  await page.mouse.move((box.nameLeft + box.nameRight) / 2, (box.nameTop + box.nameBottom) / 2);
-  // Longer than the .2s fade, so a name that starts disappearing is caught.
-  await page.waitForTimeout(400);
-  assert.equal(await page.locator('.github-issue-assignees .github-issue-avatar').first()
-    .evaluate(node => getComputedStyle(node, '::after').opacity), '1',
-    'the name vanishes as soon as the pointer reaches it');
+// Every chip, not just the first: the names share the row's anchor, so a short
+// one on a chip further right is the case that can end up with nothing under
+// the chip for the pointer to move onto. crowdedIssue carries exactly that,
+// six short logins and one long one.
+test('the revealed name stays up while the pointer rests on it, for every icon', async t => {
+  const page = await openIssue(t, crowdedIssue);
+  const chips = page.locator('.github-issue-assignees .github-issue-avatar');
+  const count = await chips.count();
+  assert.equal(count, 7, 'the crowded issue should render every assignee');
+  for (let index = 0; index < count; index++) {
+    const chip = chips.nth(index);
+    await chip.hover();
+    const box = await tooltipShown(page, index);
+    // WCAG 1.4.13 hoverable: content a hover reveals must survive the pointer
+    // moving onto it, which rules out a gap to cross or pointer-events: none.
+    // Straight down out of the chip is the path a pointer actually takes, and
+    // the one a name that does not reach the chip fails.
+    const chipBox = await chip.boundingBox();
+    const x = chipBox.x + chipBox.width / 2;
+    assert.ok(x > box.nameLeft && x < box.nameRight,
+      `chip ${index} sits at ${x}, outside the ${box.nameLeft}-${box.nameRight} its name occupies`);
+    await page.mouse.move(x, (box.nameTop + box.nameBottom) / 2);
+    // Longer than the .2s fade, so a name that starts disappearing is caught.
+    await page.waitForTimeout(400);
+    assert.equal(await chip.evaluate(node => getComputedStyle(node, '::after').opacity), '1',
+      `the name for icon ${index} vanishes as soon as the pointer reaches it`);
+  }
 });
 
 test('hovering one icon while another holds focus draws a single name', async t => {
@@ -254,11 +277,21 @@ test('Escape dismisses the name a focused assignee icon is holding open', async 
   // without moving the pointer (WCAG 1.4.13), so the chip is a tab stop.
   await chips.first().focus();
   await tooltipShown(page);
+  // The page closes its menus and modals from a document-level Escape handler,
+  // so the chip must let the key through rather than stop it at itself.
+  await page.evaluate(() => {
+    window.escapesSeenByDocument = 0;
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') window.escapesSeenByDocument++;
+    });
+  });
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => {
     const node = document.querySelector('.github-issue-assignees .github-issue-avatar');
     return getComputedStyle(node, '::after').opacity === '0' && document.activeElement !== node;
   });
+  assert.equal(await page.evaluate(() => window.escapesSeenByDocument), 1,
+    'the chip swallows Escape, so whatever the page has open stays open');
   // Escape only drops the chip's own focus; it must not close the panel.
   assert.equal(await page.locator('.github-issue-detail-header .github-issue-metadata').count(), 1);
   assert.deepEqual(await chips.evaluateAll(nodes => nodes.map(node => node.tabIndex)), [0, 0]);
@@ -279,16 +312,13 @@ test('header, list, and byline times read in the viewer timezone', async t => {
   // which is the form this panel already used. Only the viewer's timezone
   // decides the calendar day.
   assert.deepEqual(await headerTimes.allInnerTexts(), ['Mar 4, 2024', 'May 6, 2024']);
-  // 05:06 UTC is 14:06 in Tokyo, and the clock time is written out rather than
-  // left in the datetime attribute, because a tooltip never opens on touch.
-  const exact = tokyo.locator('.github-issue-metadata .github-issue-exact-time');
-  assert.equal(await exact.count(), 2, 'each header timestamp spells out its clock time');
-  assert.match((await exact.allInnerTexts()).join(' | '), /Mar 4, 2024, 2:06\sPM \| May 6, 2024, 4:08\sPM/);
-  assert.deepEqual(await headerTimes.evaluateAll(nodes => nodes.map(node => node.title)),
-    await exact.allInnerTexts(), 'the tooltip says the same thing for a pointer user');
+  // 05:06 UTC is 14:06 in Tokyo, and the clock time behind the relative one
+  // stays in the tooltip rather than taking a line of its own.
+  assert.match((await headerTimes.evaluateAll(nodes => nodes.map(node => node.title))).join(' | '),
+    /Mar 4, 2024, 2:06\sPM \| May 6, 2024, 4:08\sPM/);
 
   // The list's "updated" line is the same instant and carries the same
-  // treatment, minus the written-out form the cramped row has no space for.
+  // treatment.
   const listTime = tokyo.locator('.github-issue-list-meta time').first();
   assert.equal(await listTime.evaluate(node => node.dateTime), '2024-05-06T07:08:09.000Z');
   assert.match(await listTime.evaluate(node => node.title), /May 6, 2024, 4:08\sPM/);
@@ -315,7 +345,5 @@ test('a timestamp the browser cannot parse stays out of <time>, which needs a ma
   assert.equal((await updated.locator('dt').innerText()).trim(), 'Updated');
   assert.equal((await updated.locator('dd').innerText()).trim(), 'sometime last week');
   assert.equal(await updated.locator('time').count(), 0, 'an empty datetime would be invalid markup');
-  assert.equal(await updated.locator('.github-issue-exact-time').count(), 0,
-    'there is no clock time to spell out for a value the browser cannot parse');
   assert.equal(await page.locator('.github-issue-metadata time').count(), 1, 'the parsable Created value is still a <time>');
 });

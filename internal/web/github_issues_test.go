@@ -442,7 +442,10 @@ func TestGitHubIssueHeaderRendersInBrowser(t *testing.T) {
 	ts := httptest.NewServer(githubIssueTestServer(nil, true).Handler())
 	defer ts.Close()
 
-	runBrowserSuite(t, ts.URL, 90*time.Second, "GitHub issue header checks", "tests/github_issues.cjs")
+	// Same budget as the settings-modal suite, the other multi-case Chromium
+	// run in this package: a dozen cases each launching a page is well past
+	// what a one-case suite's 60s is sized for.
+	runBrowserSuite(t, ts.URL, 3*time.Minute, "GitHub issue header checks", "tests/github_issues.cjs")
 }
 
 // openingTagWithID returns the opening tag that carries id="<id>" so assertions can check
