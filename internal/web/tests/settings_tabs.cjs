@@ -226,6 +226,34 @@ test('repository selections hide dropdown options and manual entry enables them 
   assert.deepEqual(writes.at(-1).disabled_repositories, []);
 });
 
+test('JSON submission enables manually added repositories', async t => {
+  const repoURL = 'https://github.com/acme/widget';
+  let submitted;
+  const { page, writes } = await openSettings(t, {
+    path: '/#studio-json',
+    initialSettings: { ...defaults, json_enabled: true, disabled_repositories: [repoURL] },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+        { name: 'widget', full_name: 'acme/widget', html_url: repoURL },
+      ] } }));
+      await page.route('**/api/local-prompt', route => {
+        submitted = route.request().postDataJSON();
+        return route.fulfill({ json: { ok: true, request_id: 'json-task' } });
+      });
+    },
+  });
+  await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
+  await page.locator('#prompt-mode-json').click();
+  await page.locator('#local-prompt-input').waitFor({ state: 'visible' });
+  await page.locator('#local-prompt-input').fill(JSON.stringify({ repos: [repoURL], prompt: 'Do work' }));
+  await page.locator('#local-prompt-submit').click();
+  await page.waitForFunction(() => document.getElementById('local-prompt-status').textContent.includes('Queued request json-task'));
+  await page.waitForFunction(() => document.querySelector('#builder-repo-select option[value="https://github.com/acme/widget"]'));
+
+  assert.deepEqual(submitted.repos, [repoURL]);
+  assert.deepEqual(writes.at(-1).disabled_repositories, []);
+});
+
 test('disabled default repository cannot be submitted implicitly', async t => {
   const repoURL = 'https://github.com/acme/widget';
   let submissions = 0;

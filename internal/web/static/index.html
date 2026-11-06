@@ -6084,18 +6084,20 @@
       return true;
     }
 
-    function rememberManualRepoEntry(value) {
-      const repo = normalizeRepoValue(value);
-      if (!repo) {
+    function rememberManualRepoEntries(values) {
+      const repos = dedupeRepoValues(values);
+      if (!repos.length) {
         return;
       }
-      if (repositoryDisabled(repo)) {
+      const enabledKeys = new Set(repos.map(repoDedupeKey));
+      if (repos.some(repositoryDisabled)) {
         const previous = [...state.reviewSettings.disabledRepositories];
         state.reviewSettings = {
           ...state.reviewSettings,
-          disabledRepositories: previous.filter(value => repoDedupeKey(value) !== repoDedupeKey(repo)),
+          disabledRepositories: previous.filter(value => !enabledKeys.has(repoDedupeKey(value))),
         };
         renderRepositorySettings();
+        renderRepoHistoryOptions();
         if (state.settingsLoaded) {
           void fetch("/api/review-settings", {
             method: "POST",
@@ -6112,7 +6114,11 @@
           });
         }
       }
-      rememberRepos([repo]);
+      rememberRepos(repos);
+    }
+
+    function rememberManualRepoEntry(value) {
+      rememberManualRepoEntries([value]);
     }
 
     function dropReviewersFromHistory(reviewers) {
@@ -13158,7 +13164,7 @@
         const requestID = body?.request_id || "(unknown)";
         try {
           const parsed = JSON.parse(normalized.compact);
-          rememberRepos(dedupeRepoValues([...(Array.isArray(parsed?.repos) ? parsed.repos : []), parsed?.repo, parsed?.repoUrl, parsed?.repourl]));
+          rememberManualRepoEntries([...(Array.isArray(parsed?.repos) ? parsed.repos : []), parsed?.repo, parsed?.repoUrl, parsed?.repourl]);
           const reviewers = dedupeReviewerValues([...(Array.isArray(parsed?.reviewers) ? parsed.reviewers : []), parsed?.githubHandle, parsed?.githubhandle]);
           rememberReviewers(reviewers);
           selectSubmittedReviewer(reviewers);
