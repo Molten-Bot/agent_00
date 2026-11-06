@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,9 +38,20 @@ type prTitleGate struct {
 	RequireScope   bool
 }
 
+// errPRTitleGateNotPermitted marks a title-gate repair GitHub refuses to let
+// the harness perform, such as a token without pull-request write access.
+// Retrying never clears it.
+var errPRTitleGateNotPermitted = errors.New("pull request title edit not permitted")
+
 // preferredPRTitleTypes orders the conventional-commit types the harness picks
 // from when the current title type is rejected by the gate.
 var preferredPRTitleTypes = []string{"chore", "fix", "feat", "refactor", "build", "ci", "docs", "perf", "style", "test"}
+
+// defaultSemanticPRTitleTypes is the type list the semantic-pull-request action
+// enforces when a workflow declares no `types:` input. It is the
+// conventional-commit-types set the action ships with, so a gate without that
+// input still rejects a type outside this list.
+var defaultSemanticPRTitleTypes = []string{"build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test"}
 
 var conventionalPRTitleRE = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_-]*)(?:\(([^()]*)\))?!?:\s*(.+)$`)
 
@@ -127,26 +139,12 @@ func (h Harness) repairPRTitleGateFailure(
 	if !prTitleGateOnlyFailure(checkRes, checkSummary) {
 		return false, nil
 	}
-	gate, found := detectPRTitleGate(repo.Dir)
-	if !found {
-		return false, nil
-	}
-
-	current, err := h.pullRequestTitle(ctx, repo)
-	if err != nil {
+	plan, repairable, err := h.planPRTitleGateRepair(ctx, repo, issue)
+	if err != nil || !repairable {
 		return false, err
 	}
-	if current == "" {
-		// Without the live title there is nothing to conform; a configured
-		// title may belong to a different pull request on this branch.
-		return false, nil
-	}
-	rewritten, ok := conformingPRTitle(current, gate, prTitleScopeNumbers(repo.PRURL, issue))
-	if !ok {
-		return false, nil
-	}
 
-	if _, err := h.runCommand(ctx, "pr", prEditTitleCommand(repo.Dir, repo.PRURL, rewritten)); err != nil {
+	if _, err := h.runPRTitleGateCommand(ctx, prEditTitleCommand(repo.Dir, repo.PRURL, plan.Title), "retitle"); err != nil {
 		return false, err
 	}
 	h.logf(
@@ -154,9 +152,98 @@ func (h Harness) repairPRTitleGateFailure(
 		repo.URL,
 		repo.RelDir,
 		repo.PRURL,
-		gate.WorkflowPath,
+		plan.Gate.WorkflowPath,
 	)
 	return true, nil
+}
+
+// prTitleGateRepair is the rewrite that would clear a detected title gate.
+type prTitleGateRepair struct {
+	Title string
+	Gate  prTitleGate
+}
+
+// planPRTitleGateRepair resolves the title the harness would set to clear the
+// repository's gate. It reports false when no gate is detected, the live title
+// is unavailable, or no conforming title can be derived without guessing a
+// repository-specific scope.
+//
+// Callers use it both to perform the repair and to prove one is possible before
+// a red gate is allowed to veto an otherwise green run.
+func (h Harness) planPRTitleGateRepair(
+	ctx context.Context,
+	repo repoWorkspace,
+	issue *config.GitHubIssueConfig,
+) (prTitleGateRepair, bool, error) {
+	gate, found := detectPRTitleGate(repo.Dir)
+	if !found {
+		return prTitleGateRepair{}, false, nil
+	}
+	current, err := h.pullRequestTitle(ctx, repo)
+	if err != nil {
+		return prTitleGateRepair{}, false, err
+	}
+	if current == "" {
+		// Without the live title there is nothing to conform; a configured
+		// title may belong to a different pull request on this branch.
+		return prTitleGateRepair{}, false, nil
+	}
+	rewritten, ok := conformingPRTitle(current, gate, prTitleScopeNumbers(repo.PRURL, issue))
+	if !ok {
+		return prTitleGateRepair{}, false, nil
+	}
+	return prTitleGateRepair{Title: rewritten, Gate: gate}, true, nil
+}
+
+// runPRTitleGateCommand runs one gh command of the title-gate repair. A
+// transient GitHub failure is retried, and a failure proving the harness may
+// not read or edit this pull request is wrapped in errPRTitleGateNotPermitted
+// so the caller can abandon the repair instead of failing a run over metadata
+// it is not allowed to change.
+func (h Harness) runPRTitleGateCommand(ctx context.Context, cmd execx.Command, action string) (execx.Result, error) {
+	for attempt := 1; ; attempt++ {
+		res, err := h.runCommand(ctx, "pr", cmd)
+		if err == nil {
+			return res, nil
+		}
+		if ctx.Err() != nil {
+			return res, err
+		}
+		if isPRTitleGateNotPermitted(res, err) {
+			return res, fmt.Errorf("%w: %v", errPRTitleGateNotPermitted, err)
+		}
+		if !shouldRetryPRCreate(res, err) || attempt >= maxPRTitleGateCommandAttempts {
+			return res, err
+		}
+		h.logf(
+			"stage=pr status=retry action=%s reason=transient_github_error retry=%d/%d err=%q",
+			action,
+			attempt,
+			maxPRTitleGateCommandAttempts-1,
+			err,
+		)
+		if sleepErr := h.Sleep(ctx, prTitleGateCommandRetryDelay); sleepErr != nil {
+			return res, sleepErr
+		}
+	}
+}
+
+// isPRTitleGateNotPermitted reports whether a gh failure means the credentials
+// in use may not read or edit the pull request.
+//
+// Only phrasing GitHub itself emits counts. The wrapped error repeats the gh
+// arguments, which carry the pull-request title, so a loose marker such as
+// "forbidden" would let an ordinary title talk the harness out of a repair.
+func isPRTitleGateNotPermitted(res execx.Result, err error) bool {
+	if err == nil {
+		return false
+	}
+	if isGitHubAuthFailure(res, err) {
+		return true
+	}
+	text := strings.ToLower(strings.Join([]string{res.Stdout, res.Stderr, err.Error()}, "\n"))
+	return strings.Contains(text, "resource not accessible by integration") ||
+		strings.Contains(text, "http 403")
 }
 
 // harnessCanRetitlePR reports whether the harness may rewrite the title of the
@@ -204,7 +291,7 @@ func harnessOwnsPRTitle(repo repoWorkspace) bool {
 }
 
 func (h Harness) pullRequestTitle(ctx context.Context, repo repoWorkspace) (string, error) {
-	res, err := h.runCommand(ctx, "pr", prTitleViewCommand(repo.Dir, repo.PRURL))
+	res, err := h.runPRTitleGateCommand(ctx, prTitleViewCommand(repo.Dir, repo.PRURL), "title_lookup")
 	if err != nil {
 		return "", err
 	}
@@ -454,7 +541,7 @@ func parseWorkflowScalarList(lines []string, keyLine, keyIndent int, rest string
 	rest = strings.TrimSpace(rest)
 	if rest != "" && !isBlockScalarMarker(rest) {
 		if strings.HasPrefix(rest, "[") {
-			return splitWorkflowScalars(strings.Split(strings.Trim(rest, "[]"), ","))
+			return splitWorkflowFlowSequence(lines, keyLine, keyIndent, rest)
 		}
 		return splitWorkflowScalars([]string{rest})
 	}
@@ -470,6 +557,33 @@ func parseWorkflowScalarList(lines []string, keyLine, keyIndent int, rest string
 		raw = append(raw, strings.TrimPrefix(strings.TrimSpace(lines[j]), "- "))
 	}
 	return splitWorkflowScalars(raw)
+}
+
+// splitWorkflowFlowSequence reads an inline flow sequence, following it onto
+// the lines nested under the key when the closing bracket sits on a later line.
+// Leaving that bracket in place would otherwise land it on the last value.
+func splitWorkflowFlowSequence(lines []string, keyLine, keyIndent int, rest string) []string {
+	joined := stripWorkflowInlineComment(rest)
+	if !strings.Contains(joined, "]") {
+		for j := keyLine + 1; j < len(lines); j++ {
+			if strings.TrimSpace(lines[j]) == "" {
+				continue
+			}
+			if lineIndent(lines[j]) <= keyIndent {
+				break
+			}
+			item := strings.TrimSpace(stripWorkflowInlineComment(lines[j]))
+			joined += " " + item
+			if strings.Contains(item, "]") {
+				break
+			}
+		}
+	}
+	joined = strings.TrimPrefix(strings.TrimSpace(joined), "[")
+	if end := strings.LastIndex(joined, "]"); end >= 0 {
+		joined = joined[:end]
+	}
+	return splitWorkflowScalars(strings.Split(joined, ","))
 }
 
 // parseWorkflowScalar reads a single scalar input, following a block scalar
@@ -498,7 +612,7 @@ func unquoteWorkflowScalar(value string) string {
 func splitWorkflowScalars(raw []string) []string {
 	values := make([]string, 0, len(raw))
 	for _, item := range raw {
-		item = strings.TrimSpace(item)
+		item = strings.TrimSpace(stripWorkflowInlineComment(item))
 		// Drop whole-line YAML comments. Issue-style scope patterns such as
 		// `#\d+` start with `#` too, so only a `# ` prefix counts as a comment.
 		if item == "" || item == "#" || strings.HasPrefix(item, "# ") {
@@ -513,6 +627,33 @@ func splitWorkflowScalars(raw []string) []string {
 	return values
 }
 
+// stripWorkflowInlineComment removes a trailing YAML comment from a line or
+// flow-sequence item. A `#` only opens a comment when it follows whitespace
+// outside quotes, so an issue-style scope value such as `#\d+` survives.
+func stripWorkflowInlineComment(value string) string {
+	inSingle, inDouble := false, false
+	for i := 0; i < len(value); i++ {
+		switch value[i] {
+		case '\'':
+			if !inDouble {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle {
+				inDouble = !inDouble
+			}
+		case '#':
+			if inSingle || inDouble || i == 0 {
+				continue
+			}
+			if prev := value[i-1]; prev == ' ' || prev == '\t' {
+				return value[:i]
+			}
+		}
+	}
+	return value
+}
+
 func isBlockScalarMarker(rest string) bool {
 	switch strings.TrimSpace(rest) {
 	case "|", "|-", "|+", ">", ">-", ">+":
@@ -522,6 +663,7 @@ func isBlockScalarMarker(rest string) bool {
 }
 
 func isTruthyWorkflowValue(value string) bool {
+	value = stripWorkflowInlineComment(value)
 	switch strings.ToLower(strings.Trim(strings.TrimSpace(value), `"'`)) {
 	case "true", "yes", "on":
 		return true
@@ -550,10 +692,7 @@ func conformingPRTitle(title string, gate prTitleGate, scopeNumbers []int) (stri
 		return "", false
 	}
 
-	newType, ok := conformingPRTitleType(currentType, gate.Types)
-	if !ok {
-		return "", false
-	}
+	newType := conformingPRTitleType(currentType, gate.Types)
 	newScope, ok := conformingPRTitleScope(currentScope, gate, scopeNumbers)
 	if !ok {
 		return "", false
@@ -579,26 +718,27 @@ func splitConventionalPRTitle(title string) (typ, scope, subject string) {
 	return match[1], strings.TrimSpace(match[2]), strings.TrimSpace(match[3])
 }
 
-func conformingPRTitleType(current string, allowed []string) (string, bool) {
+// conformingPRTitleType returns the type the gate accepts, keeping the current
+// one when it is already allowed. A gate that declares no `types:` still
+// enforces the action's default list, so the rejected type must be replaced
+// there too rather than echoed back.
+func conformingPRTitleType(current string, allowed []string) string {
 	if len(allowed) == 0 {
-		if current != "" {
-			return current, true
-		}
-		return preferredPRTitleTypes[0], true
+		allowed = defaultSemanticPRTitleTypes
 	}
 	for _, candidate := range allowed {
 		if strings.EqualFold(candidate, current) {
-			return candidate, true
+			return candidate
 		}
 	}
 	for _, preferred := range preferredPRTitleTypes {
 		for _, candidate := range allowed {
 			if strings.EqualFold(candidate, preferred) {
-				return candidate, true
+				return candidate
 			}
 		}
 	}
-	return allowed[0], true
+	return allowed[0]
 }
 
 func conformingPRTitleScope(current string, gate prTitleGate, scopeNumbers []int) (string, bool) {
