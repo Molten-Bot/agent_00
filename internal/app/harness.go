@@ -831,6 +831,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		)
 	}
 
+	prTitleRepaired := false
 	for attempt := 0; ; attempt++ {
 		var (
 			checkRes     execx.Result
@@ -891,7 +892,18 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 					repo.PRURL,
 					attempt+1,
 				)
-				if noRequired, noRequiredSummary, requiredErr := h.reconcileNoChecksWithRequiredStatusChecks(ctx, *repo); requiredErr == nil {
+				// A branch without required status checks only counts as a pass
+				// when nothing already reported red. The captured watch output
+				// is authoritative here; ignoring it hides failing checks.
+				if capturedChecksHaveFailures(checkRes) {
+					h.logf(
+						"stage=checks status=warn action=required_status_checks reason=observed_failures repo=%s repo_dir=%s pr_url=%s attempt=%d",
+						repo.URL,
+						repo.RelDir,
+						repo.PRURL,
+						attempt+1,
+					)
+				} else if noRequired, noRequiredSummary, requiredErr := h.reconcileNoChecksWithRequiredStatusChecks(ctx, *repo); requiredErr == nil {
 					if noRequired {
 						if noRequiredSummary != "" {
 							checkSummary = noRequiredSummary
@@ -1109,6 +1121,31 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 			)
 			if err := h.Sleep(ctx, prChecksNoReportRetryDelay); err != nil {
 				return ExitPR, "checks", err
+			}
+		}
+
+		// Title gates grade pull-request metadata, not repository files, so a
+		// remediation agent cannot clear them. The harness supplied the title,
+		// so it repairs the title and lets the gate re-run on the edit event.
+		if !prTitleRepaired {
+			repaired, repairErr := h.repairPRTitleGateFailure(ctx, *repo, cfg, checkSummary)
+			if repairErr != nil {
+				h.logf(
+					"stage=pr status=warn action=retitle reason=failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
+					repo.URL,
+					repo.RelDir,
+					repo.PRURL,
+					attempt+1,
+					repairErr,
+				)
+			}
+			if repaired {
+				prTitleRepaired = true
+				if err := h.Sleep(ctx, prChecksNoReportRetryDelay); err != nil {
+					return ExitPR, "checks", err
+				}
+				attempt--
+				continue
 			}
 		}
 
@@ -8169,20 +8206,29 @@ func isUnsupportedPRChecksJSON(res execx.Result, err error) bool {
 }
 
 func latestCheckSnapshotFromText(raw string) (latestChecksSnapshot, error) {
-	lines := splitOutputLines(raw)
-	if len(lines) == 0 {
+	if len(splitOutputLines(raw)) == 0 {
 		return latestChecksSnapshot{}, fmt.Errorf("parse checks text snapshot: no check output")
 	}
 
+	latestByName := checkStatesFromText(raw)
+	if len(latestByName) == 0 {
+		return latestChecksSnapshot{}, fmt.Errorf("parse checks text snapshot: no tabular checks found")
+	}
+	return latestCheckSnapshotFromStates(latestByName), nil
+}
+
+// checkStatesFromText parses the tab-separated rows gh prints for PR checks,
+// keeping the last reported bucket for each check name.
+func checkStatesFromText(raw string) map[string]latestCheckState {
 	latestByName := make(map[string]latestCheckState)
-	for i, line := range lines {
+	for i, line := range splitOutputLines(raw) {
 		fields := strings.Split(line, "\t")
 		if len(fields) < 2 {
 			continue
 		}
 		name := strings.TrimSpace(fields[0])
 		bucket := strings.ToLower(strings.TrimSpace(fields[1]))
-		if name == "" || bucket == "" || strings.Contains(name, "refreshing checks status") {
+		if name == "" || bucket == "" || strings.Contains(strings.ToLower(name), "refreshing checks status") {
 			continue
 		}
 		latestByName[name] = latestCheckState{
@@ -8190,10 +8236,29 @@ func latestCheckSnapshotFromText(raw string) (latestChecksSnapshot, error) {
 			Index:  i,
 		}
 	}
-	if len(latestByName) == 0 {
-		return latestChecksSnapshot{}, fmt.Errorf("parse checks text snapshot: no tabular checks found")
+	return latestByName
+}
+
+func isFailedCheckBucket(bucket string) bool {
+	switch strings.ToLower(strings.TrimSpace(bucket)) {
+	case "fail", "cancel", "cancelled", "timed_out", "action_required":
+		return true
 	}
-	return latestCheckSnapshotFromStates(latestByName), nil
+	return false
+}
+
+// capturedChecksHaveFailures reports whether check output already in hand shows
+// a failing check. Fallbacks that would otherwise declare success must not run
+// while a red check is visible in the captured output.
+func capturedChecksHaveFailures(res execx.Result) bool {
+	for _, raw := range []string{res.Stdout, res.Stderr} {
+		for _, state := range checkStatesFromText(raw) {
+			if isFailedCheckBucket(state.Bucket) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func latestCheckSnapshotFromStates(latestByName map[string]latestCheckState) latestChecksSnapshot {
@@ -8209,9 +8274,9 @@ func latestCheckSnapshotFromStates(latestByName map[string]latestCheckState) lat
 	for _, name := range names {
 		state := latestByName[name]
 		lines = append(lines, fmt.Sprintf("%s\t%s", name, state.Bucket))
-		switch state.Bucket {
-		case "pass", "skipping":
-		case "fail", "cancel", "cancelled", "timed_out", "action_required":
+		switch {
+		case state.Bucket == "pass" || state.Bucket == "skipping":
+		case isFailedCheckBucket(state.Bucket):
 			allPassing = false
 			hasFailures = true
 		default:

@@ -21,6 +21,16 @@ func PullRequestSelector(raw string) string {
 	return strconv.Itoa(parts.number)
 }
 
+// PullRequestNumber extracts the numeric pull-request id from a GitHub PR URL.
+// Non-PR selectors return zero.
+func PullRequestNumber(raw string) int {
+	parts, ok := githubPullRequestURLParts(raw)
+	if !ok {
+		return 0
+	}
+	return parts.number
+}
+
 // PullRequestRepository extracts OWNER/REPO from a GitHub PR URL.
 // Non-PR selectors return an empty string.
 func PullRequestRepository(raw string) string {

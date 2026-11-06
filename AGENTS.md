@@ -28,6 +28,7 @@
 
 - Keep CLI argument parsing and terminal concerns in `cmd/harness`; keep reusable orchestration in `internal/app`, local runtime configuration and scheduling in `internal/localruntime`, and agent-specific command construction in `internal/agentruntime`.
 - The main harness flow is preflight/auth/workspace/clone, agent runtime execution, git commit/push, PR creation, and optional CI remediation. Preserve that staged logging style when extending the flow.
+- Failing checks that grade pull-request metadata rather than repository files are repaired by the harness, not by a remediation agent. `internal/app/pr_title_gate.go` detects a semantic-pull-request title gate in the target repository's workflows and rewrites the PR title once per run before any remediation agent is started.
 - Prefer dependency injection over process globals for behavior that tests need to control. Existing patterns include injectable runners, clocks, sleep functions, filesystem callbacks, and HTTP test servers.
 - Use `internal/execx.Runner` or `StreamRunner` for subprocess work in higher-level packages instead of direct `os/exec` calls.
 - Keep package boundaries small and explicit. Avoid introducing cross-package cycles or broad utility packages when an existing focused package already owns the behavior.

@@ -1,0 +1,525 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/execx"
+)
+
+const titleGateWorkflow = `name: PR Title
+on:
+  pull_request:
+    types: [opened, edited, reopened]
+jobs:
+  check-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate title
+        uses: amannn/action-semantic-pull-request@v5
+        with:
+          types: |
+            feat
+            chore
+            fix
+            hotfix
+            refactor
+          requireScope: true
+          scopes: |
+            #\d+
+            ABC-\d+
+            deps
+            deps-dev
+`
+
+func writeTitleGateWorkflow(t *testing.T, content string) string {
+	t.Helper()
+	repoDir := t.TempDir()
+	dir := filepath.Join(repoDir, ".github", "workflows")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create workflow dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pr-title-check.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	return repoDir
+}
+
+func TestDetectPRTitleGate(t *testing.T) {
+	t.Parallel()
+	repoDir := writeTitleGateWorkflow(t, titleGateWorkflow)
+
+	gate, found := detectPRTitleGate(repoDir)
+	if !found {
+		t.Fatal("expected a title gate to be detected")
+	}
+	if gate.WorkflowPath != ".github/workflows/pr-title-check.yaml" {
+		t.Fatalf("workflow path = %q", gate.WorkflowPath)
+	}
+	if !gate.RequireScope {
+		t.Fatal("requireScope was not parsed")
+	}
+	if want := []string{"feat", "chore", "fix", "hotfix", "refactor"}; !reflect.DeepEqual(gate.Types, want) {
+		t.Fatalf("types = %v, want %v", gate.Types, want)
+	}
+	if want := []string{`#\d+`, `ABC-\d+`, "deps", "deps-dev"}; !reflect.DeepEqual(gate.Scopes, want) {
+		t.Fatalf("scopes = %v, want %v", gate.Scopes, want)
+	}
+}
+
+func TestDetectPRTitleGateVariants(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		workflow string
+		found    bool
+		gate     prTitleGate
+	}{
+		{
+			name: "inline flow sequence",
+			workflow: "jobs:\n  title:\n    steps:\n" +
+				"      - uses: amannn/action-semantic-pull-request@v5\n" +
+				"        with:\n" +
+				"          types: [feat, chore]\n" +
+				"          requireScope: 'false'\n",
+			found: true,
+			gate:  prTitleGate{Types: []string{"feat", "chore"}},
+		},
+		{
+			name: "dash list with comment",
+			workflow: "jobs:\n  title:\n    steps:\n" +
+				"      - uses: amannn/action-semantic-pull-request@v5\n" +
+				"        with:\n" +
+				"          types:\n" +
+				"            # allowed release types\n" +
+				"            - feat\n" +
+				"            - fix\n",
+			found: true,
+			gate:  prTitleGate{Types: []string{"feat", "fix"}},
+		},
+		{
+			name: "step without inputs still gates",
+			workflow: "jobs:\n  title:\n    steps:\n" +
+				"      - uses: amannn/action-semantic-pull-request@v5\n" +
+				"  other:\n    steps: []\n",
+			found: true,
+		},
+		{
+			name:     "unrelated workflow",
+			workflow: "jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gate, found := detectPRTitleGate(writeTitleGateWorkflow(t, tc.workflow))
+			if found != tc.found {
+				t.Fatalf("found = %v, want %v", found, tc.found)
+			}
+			if !found {
+				return
+			}
+			gate.WorkflowPath = ""
+			if !reflect.DeepEqual(gate, tc.gate) {
+				t.Fatalf("gate = %+v, want %+v", gate, tc.gate)
+			}
+		})
+	}
+}
+
+func TestDetectPRTitleGateMissingWorkflowsDir(t *testing.T) {
+	t.Parallel()
+	if _, found := detectPRTitleGate(t.TempDir()); found {
+		t.Fatal("expected no gate without a workflows directory")
+	}
+	if _, found := detectPRTitleGate(""); found {
+		t.Fatal("expected no gate for an empty repo dir")
+	}
+}
+
+func TestConformingPRTitle(t *testing.T) {
+	t.Parallel()
+	strictGate := prTitleGate{
+		Types:        []string{"feat", "chore", "fix", "hotfix", "refactor"},
+		Scopes:       []string{`#\d+`, `ABC-\d+`, "deps", "deps-dev"},
+		RequireScope: true,
+	}
+	for _, tc := range []struct {
+		name  string
+		gate  prTitleGate
+		title string
+		pr    int
+		want  string
+		ok    bool
+	}{
+		{
+			name:  "rejected type and scope",
+			gate:  strictGate,
+			title: "ci(automation): tighten release checks",
+			pr:    42,
+			want:  "chore(#42): tighten release checks",
+			ok:    true,
+		},
+		{
+			name:  "missing scope only",
+			gate:  strictGate,
+			title: "fix: restore nightly job",
+			pr:    12,
+			want:  "fix(#12): restore nightly job",
+			ok:    true,
+		},
+		{
+			name:  "no conventional prefix",
+			gate:  strictGate,
+			title: "Harden CI validation checks",
+			pr:    7,
+			want:  "chore(#7): Harden CI validation checks",
+			ok:    true,
+		},
+		{
+			name:  "already conforming",
+			gate:  strictGate,
+			title: "chore(deps): bump toolchain",
+			pr:    9,
+		},
+		{
+			name:  "scope required but underivable",
+			gate:  prTitleGate{Types: []string{"chore"}, Scopes: []string{`ABC-\d+`}, RequireScope: true},
+			title: "ci: tighten checks",
+		},
+		{
+			name:  "optional scope is dropped when rejected",
+			gate:  prTitleGate{Types: []string{"chore"}, Scopes: []string{"api"}},
+			title: "chore(automation): tighten checks",
+			want:  "chore: tighten checks",
+			ok:    true,
+		},
+		{
+			name:  "literal scope allowlist without pr number",
+			gate:  prTitleGate{Types: []string{"chore"}, Scopes: []string{"api", "web"}, RequireScope: true},
+			title: "ci: tighten checks",
+			want:  "chore(api): tighten checks",
+			ok:    true,
+		},
+		{
+			name:  "gate without inputs keeps the title",
+			title: "ci(automation): tighten checks",
+		},
+		{
+			name:  "empty subject",
+			gate:  strictGate,
+			title: "   ",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := conformingPRTitle(tc.title, tc.gate, tc.pr)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("conformingPRTitle(%q) = (%q, %v), want (%q, %v)", tc.title, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+func TestCheckSummaryBlocksOnPRTitleGateOnly(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		summary string
+		want    bool
+	}{
+		{
+			name:    "only the title gate is red",
+			summary: "check-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\thttps://example.com/lint\nAI PR QA\tskipping\t0\t",
+			want:    true,
+		},
+		{
+			name:    "another check is also red",
+			summary: "check-title\tfail\t6s\t\nType Check\tfail\t1m\t",
+		},
+		{
+			name:    "title gate recovered in a later row",
+			summary: "check-title\tfail\t6s\t\ncheck-title\tpass\t6s\t",
+		},
+		{
+			name:    "nothing is red",
+			summary: "Lint & Format\tpass\t35s\t",
+		},
+		{
+			name:    "non tabular output",
+			summary: "no checks reported on the branch",
+		},
+		{
+			name:    "pr title gate named by the action",
+			summary: "Semantic Pull Request Title\tfail\t3s\t\nUnit tests\tpass\t1m\t",
+			want:    true,
+		},
+		{
+			name:    "title-like check that is not a gate",
+			summary: "title\tfail\t3s\t",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := checkSummaryBlocksOnPRTitleGateOnly(tc.summary); got != tc.want {
+				t.Fatalf("checkSummaryBlocksOnPRTitleGateOnly = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCapturedChecksHaveFailures(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		res  execx.Result
+		want bool
+	}{
+		{name: "failing row in stdout", res: execx.Result{Stdout: "check-title\tfail\t6s\t"}, want: true},
+		{name: "failing row in stderr", res: execx.Result{Stderr: "check-title\ttimed_out\t6s\t"}, want: true},
+		{name: "all passing", res: execx.Result{Stdout: "Lint\tpass\t1s\t"}},
+		{name: "pending only", res: execx.Result{Stdout: "Lint\tpending\t0\t"}},
+		{name: "no table", res: execx.Result{Stderr: "no required checks reported on the 'topic' branch"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := capturedChecksHaveFailures(tc.res); got != tc.want {
+				t.Fatalf("capturedChecksHaveFailures = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRepairPRTitleGateFailureRetitlesPullRequest(t *testing.T) {
+	t.Parallel()
+	repo := repoWorkspace{
+		URL:    "https://github.com/acme/repo",
+		Dir:    writeTitleGateWorkflow(t, titleGateWorkflow),
+		RelDir: "repo",
+		PRURL:  "https://github.com/acme/repo/pull/42",
+	}
+	want := "chore(#42): tighten release checks"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: prTitleViewCommand(repo.Dir, repo.PRURL), res: execx.Result{Stdout: `{"title":"ci(automation): tighten release checks"}`}},
+		{cmd: prEditTitleCommand(repo.Dir, repo.PRURL, want), res: execx.Result{}},
+	}}
+
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+
+	repaired, err := h.repairPRTitleGateFailure(
+		context.Background(),
+		repo,
+		config.Config{PRTitle: "ci(automation): tighten release checks"},
+		"check-title\tfail\t6s\thttps://example.com/job\nLint\tpass\t1s\t",
+	)
+	if err != nil || !repaired {
+		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (true, nil)", repaired, err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unused expectations: %+v", fake.exps)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "stage=pr status=ok action=retitle reason=title_gate") {
+		t.Fatalf("missing retitle log: %v", logs)
+	}
+}
+
+func TestRepairPRTitleGateFailureSkipsWhenNotApplicable(t *testing.T) {
+	t.Parallel()
+	gateDir := writeTitleGateWorkflow(t, titleGateWorkflow)
+	prURL := "https://github.com/acme/repo/pull/42"
+	for _, tc := range []struct {
+		name    string
+		repo    repoWorkspace
+		summary string
+	}{
+		{
+			name:    "no pull request",
+			repo:    repoWorkspace{Dir: gateDir},
+			summary: "check-title\tfail\t6s\t",
+		},
+		{
+			name:    "other checks also failing",
+			repo:    repoWorkspace{Dir: gateDir, PRURL: prURL},
+			summary: "check-title\tfail\t6s\t\nType Check\tfail\t1m\t",
+		},
+		{
+			name:    "no title gate in the repository",
+			repo:    repoWorkspace{Dir: t.TempDir(), PRURL: prURL},
+			summary: "check-title\tfail\t6s\t",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fake := &fakeRunner{t: t}
+			h := New(fake)
+			h.Logf = func(string, ...any) {}
+			repaired, err := h.repairPRTitleGateFailure(context.Background(), tc.repo, config.Config{}, tc.summary)
+			if repaired || err != nil {
+				t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (false, nil)", repaired, err)
+			}
+		})
+	}
+}
+
+func TestRepairPRTitleGateFailurePropagatesTitleLookupError(t *testing.T) {
+	t.Parallel()
+	repo := repoWorkspace{
+		Dir:   writeTitleGateWorkflow(t, titleGateWorkflow),
+		PRURL: "https://github.com/acme/repo/pull/42",
+	}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: prTitleViewCommand(repo.Dir, repo.PRURL), err: errors.New("exit status 1")},
+	}}
+	h := New(fake)
+	h.Logf = func(string, ...any) {}
+
+	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, config.Config{}, "check-title\tfail\t6s\t")
+	if repaired || err == nil {
+		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (false, error)", repaired, err)
+	}
+}
+
+func TestRepairPRTitleGateFailureFallsBackToConfiguredTitle(t *testing.T) {
+	t.Parallel()
+	repo := repoWorkspace{
+		Dir:   writeTitleGateWorkflow(t, titleGateWorkflow),
+		PRURL: "https://github.com/acme/repo/pull/42",
+	}
+	want := "chore(#42): harden CI validation checks"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: prTitleViewCommand(repo.Dir, repo.PRURL), res: execx.Result{Stdout: `{"title":""}`}},
+		{cmd: prEditTitleCommand(repo.Dir, repo.PRURL, want), res: execx.Result{}},
+	}}
+	h := New(fake)
+	h.Logf = func(string, ...any) {}
+
+	repaired, err := h.repairPRTitleGateFailure(
+		context.Background(),
+		repo,
+		config.Config{PRTitle: "ci: harden CI validation checks"},
+		"check-title\tfail\t6s\t",
+	)
+	if err != nil || !repaired {
+		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (true, nil)", repaired, err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unused expectations: %+v", fake.exps)
+	}
+}
+
+func TestRunRetitlesPullRequestWhenOnlyTitleGateFails(t *testing.T) {
+	t.Parallel()
+
+	cfg := sampleConfig()
+	cfg.PRTitle = "ci(automation): harden CI validation checks"
+	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
+	guid := "titlegate0001"
+	runDir := testRunDir(guid)
+	agentsPath := filepath.Join(runDir, "AGENTS.md")
+	repoDir := filepath.Join(runDir, "repo")
+	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
+	branch := "agent00-build-api"
+	prURL := "https://github.com/acme/repo/pull/42"
+	repairedTitle := "chore(#42): harden CI validation checks"
+
+	workflowDir := filepath.Join(repoDir, ".github", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatalf("create workflow dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "pr-title-check.yaml"), []byte(titleGateWorkflow), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	// The gate is red while everything else is green, and gh reports that the
+	// base branch has no required checks at all.
+	checksTable := "check-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\thttps://example.com/lint"
+	noRequired := "no required checks reported on the '" + branch + "' branch"
+	redChecks := execx.Result{Stdout: checksTable, Stderr: noRequired}
+	checksJSON := `[{"name":"check-title","bucket":"fail"},{"name":"Lint & Format","bucket":"pass"}]`
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "codex", Args: []string{"--help"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"auth", "status"}}},
+		{cmd: cloneCommand(cfg, repoDir)},
+		{cmd: branchCommand(repoDir, branch)},
+		{cmd: pushDryRunCommand(repoDir, branch)},
+		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: " M file.go\n"}},
+		{cmd: addCommand(repoDir)},
+		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
+		{cmd: pushCommand(repoDir, branch)},
+		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
+		{cmd: prChecksCommand(repoDir, prURL), res: redChecks, err: errors.New("exit status 1")},
+		{cmd: prChecksAnyCommand(repoDir, prURL), res: redChecks, err: errors.New("exit status 1")},
+		{cmd: prChecksJSONCommand(repoDir, prURL, false), res: execx.Result{Stdout: checksJSON}},
+		{cmd: prTitleViewCommand(repoDir, prURL), res: execx.Result{Stdout: `{"title":"` + cfg.PRTitle + `"}`}},
+		{cmd: prEditTitleCommand(repoDir, prURL, repairedTitle)},
+		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: "check-title\tpass\t6s\t\nLint & Format\tpass\t35s\t"}},
+	}}
+
+	var logs []string
+	h := New(fake)
+	h.Now = func() time.Time { return now }
+	h.Workspace = testWorkspaceManager(guid)
+	h.TargetDirOK = func(path string) bool { return path == targetDir }
+	h.Sleep = func(context.Context, time.Duration) error { return nil }
+	h.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+
+	res := h.Run(context.Background(), cfg)
+	if res.Err != nil || res.ExitCode != ExitSuccess {
+		t.Fatalf("Run() = (exit %d, %v), want (%d, nil)", res.ExitCode, res.Err, ExitSuccess)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unused expectations: %+v", fake.exps)
+	}
+
+	joined := strings.Join(logs, "\n")
+	for _, want := range []string{
+		"stage=checks status=warn action=required_status_checks reason=observed_failures",
+		"stage=pr status=ok action=retitle reason=title_gate repo=" + cfg.RepoURL,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing log %q in:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "reason=no_required_status_checks") {
+		t.Fatalf("checks were declared green while a check was red:\n%s", joined)
+	}
+	if strings.Contains(joined, "mode=remediation") {
+		t.Fatalf("a remediation agent ran for a pull-request title gate:\n%s", joined)
+	}
+}
+
+func TestIsPRTitleGateCheckName(t *testing.T) {
+	t.Parallel()
+	for name, want := range map[string]bool{
+		"check-title":                 true,
+		"PR Title":                    true,
+		"Validate PR title":           true,
+		"Semantic Pull Request Title": true,
+		"lint_pr_titles":              true,
+		"conventional-title":          true,
+		"Title":                       false,
+		"Sprint title sync":           false,
+		"Type Check":                  false,
+		"":                            false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := isPRTitleGateCheckName(name); got != want {
+				t.Fatalf("isPRTitleGateCheckName(%q) = %v, want %v", name, got, want)
+			}
+		})
+	}
+}
