@@ -2478,20 +2478,21 @@ func currentReviewSettingsState(cfg localruntime.InitConfig) web.ReviewSettingsS
 		activeCfg = cfg
 	}
 	activeCfg.ApplyDefaults()
+	ui := localruntime.ReadRuntimeConfigUISettings(cfg.RuntimeConfigPath)
 	return web.ReviewSettingsState{
 		AutoMerge:                        activeCfg.ReviewWatch.AutoMergeEnabled(),
 		DeleteMergedBranches:             activeCfg.ReviewWatch.DeleteMergedBranchesEnabled(),
 		MergeMethod:                      activeCfg.ReviewWatch.MergeMethod,
 		ReviewLevel:                      activeCfg.ReviewWatch.ReviewLevel,
-		DefaultLibraryEnabled:            localruntime.ReadRuntimeConfigDefaultLibraryEnabled(cfg.RuntimeConfigPath),
-		ChatEnabled:                      localruntime.ReadRuntimeConfigChatEnabled(cfg.RuntimeConfigPath),
-		JSONEnabled:                      localruntime.ReadRuntimeConfigJSONEnabled(cfg.RuntimeConfigPath),
-		GitHubIssuesEnabled:              localruntime.ReadRuntimeConfigGitHubIssuesEnabled(cfg.RuntimeConfigPath),
-		GitHubIssueLinkMode:              localruntime.ReadRuntimeConfigGitHubIssueLinkMode(cfg.RuntimeConfigPath),
-		GitHubIssueAutoStartAssigned:     localruntime.ReadRuntimeConfigGitHubIssueAutoStartAssigned(cfg.RuntimeConfigPath),
-		GitHubIssueAutoStartOnlyAssigned: localruntime.ReadRuntimeConfigGitHubIssueAutoStartOnlyAssigned(cfg.RuntimeConfigPath),
-		GitHubIssueAutoStartLabels:       localruntime.ReadRuntimeConfigGitHubIssueAutoStartLabels(cfg.RuntimeConfigPath),
-		AssignCreator:                    localruntime.ReadRuntimeConfigAssignCreator(cfg.RuntimeConfigPath),
+		DefaultLibraryEnabled:            ui.DefaultLibraryEnabled,
+		ChatEnabled:                      ui.ChatEnabled,
+		JSONEnabled:                      ui.JSONEnabled,
+		GitHubIssuesEnabled:              ui.GitHubIssuesEnabled,
+		GitHubIssueLinkMode:              ui.GitHubIssueLinkMode,
+		GitHubIssueAutoStartAssigned:     ui.GitHubIssueAutoStartAssigned,
+		GitHubIssueAutoStartOnlyAssigned: ui.GitHubIssueAutoStartOnlyAssigned,
+		GitHubIssueAutoStartLabels:       ui.GitHubIssueAutoStartLabels,
+		AssignCreator:                    ui.AssignCreator,
 	}
 }
 

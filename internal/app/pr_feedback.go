@@ -60,7 +60,7 @@ func (h Harness) preparePRFeedbackTarget(ctx context.Context, cfg *config.Config
 		return "", fmt.Errorf("PR feedback requires a GitHub repository")
 	}
 	repoName := ref.owner + "/" + ref.name
-	urls := regexp.MustCompile(`https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+`).FindAllString(cfg.Prompt, -1)
+	urls := githubPullRequestURLPattern.FindAllString(cfg.Prompt, -1)
 	selector := normalizeBranchRef(cfg.BaseBranch)
 	if len(urls) > 0 {
 		selector = urls[0]

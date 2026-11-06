@@ -5455,12 +5455,10 @@ func requiresVerifiedNoChangePRURL(prompt string) bool {
 	return strings.Contains(text, "pull request:") && strings.Contains(text, "head branch")
 }
 
+var githubPullRequestURLPattern = regexp.MustCompile(`https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+`)
+
 func pullRequestURLFromPrompt(prompt string) string {
-	matches := regexp.MustCompile(`https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+`).FindAllString(prompt, -1)
-	if len(matches) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(matches[0])
+	return strings.TrimSpace(githubPullRequestURLPattern.FindString(prompt))
 }
 
 func agentOutputCitesConcreteNoChangeEvidence(res execx.Result, prompt string) bool {
@@ -5586,14 +5584,15 @@ func agentOutputHasNoChangeClaim(text string) bool {
 	return containsAnySubstring(text, noOpMarkers)
 }
 
+var agentConcreteFileEvidencePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`\[[^\]\n]+\]\([^)]+:[0-9]+\)`),
+	regexp.MustCompile("`[^`\\n]+\\.[a-z0-9]+`"),
+	regexp.MustCompile(`(^|[\s(/])(?:src|app|pages|routes|components|styles|public|worker|internal|cmd|library|testdata)/[^\s)]+`),
+	regexp.MustCompile(`(^|[\s(/])(?:package\.json|go\.mod|vite\.config\.[jt]s|next\.config\.[jt]s|tsconfig\.json|index\.html)(:[0-9]+)?`),
+}
+
 func agentOutputHasConcreteFileEvidence(text string) bool {
-	evidencePatterns := []*regexp.Regexp{
-		regexp.MustCompile(`\[[^\]\n]+\]\([^)]+:[0-9]+\)`),
-		regexp.MustCompile("`[^`\\n]+\\.[a-z0-9]+`"),
-		regexp.MustCompile(`(^|[\s(/])(?:src|app|pages|routes|components|styles|public|worker|internal|cmd|library|testdata)/[^\s)]+`),
-		regexp.MustCompile(`(^|[\s(/])(?:package\.json|go\.mod|vite\.config\.[jt]s|next\.config\.[jt]s|tsconfig\.json|index\.html)(:[0-9]+)?`),
-	}
-	for _, pattern := range evidencePatterns {
+	for _, pattern := range agentConcreteFileEvidencePatterns {
 		if pattern.MatchString(text) {
 			return true
 		}
@@ -5610,9 +5609,11 @@ func agentOutputHasGitRevisionEvidence(text string) bool {
 	return agentGitRevisionEvidencePattern.MatchString(text)
 }
 
+var gitRevisionPattern = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
 func agentOutputHasGitRevisionEvidenceForRevision(text, revision string) bool {
 	revision = strings.ToLower(strings.TrimSpace(revision))
-	if len(revision) < 7 || !regexp.MustCompile(`^[0-9a-f]{7,40}$`).MatchString(revision) {
+	if len(revision) < 7 || !gitRevisionPattern.MatchString(revision) {
 		return false
 	}
 	for _, match := range agentGitRevisionEvidencePattern.FindAllStringSubmatch(strings.ToLower(text), -1) {

@@ -435,6 +435,41 @@ func applyDefaultLibraryEnabledToDoc(doc map[string]any, enabled bool) {
 	}
 }
 
+// RuntimeConfigUISettings holds the persisted UI and automation toggles read
+// from one runtime config file.
+type RuntimeConfigUISettings struct {
+	DefaultLibraryEnabled            bool
+	ChatEnabled                      bool
+	JSONEnabled                      bool
+	GitHubIssuesEnabled              bool
+	GitHubIssueLinkMode              string
+	GitHubIssueAutoStartAssigned     bool
+	GitHubIssueAutoStartOnlyAssigned bool
+	GitHubIssueAutoStartLabels       []string
+	AssignCreator                    bool
+}
+
+// ReadRuntimeConfigUISettings reads the runtime config once and returns every
+// UI toggle. Each field matches its ReadRuntimeConfig* counterpart, including
+// defaults when the path is empty or the file is unreadable.
+func ReadRuntimeConfigUISettings(path string) RuntimeConfigUISettings {
+	var doc map[string]any
+	if path = strings.TrimSpace(path); path != "" {
+		doc, _ = readRuntimeConfigDoc(path)
+	}
+	return RuntimeConfigUISettings{
+		DefaultLibraryEnabled:            defaultLibraryEnabledFromDoc(doc),
+		ChatEnabled:                      chatEnabledFromDoc(doc),
+		JSONEnabled:                      jsonEnabledFromDoc(doc),
+		GitHubIssuesEnabled:              githubIssuesEnabledFromDoc(doc),
+		GitHubIssueLinkMode:              githubIssueLinkModeFromDoc(doc),
+		GitHubIssueAutoStartAssigned:     githubIssueAutoStartAssignedFromDoc(doc),
+		GitHubIssueAutoStartOnlyAssigned: githubIssueAutoStartOnlyAssignedFromDoc(doc),
+		GitHubIssueAutoStartLabels:       githubIssueAutoStartLabelsFromDoc(doc),
+		AssignCreator:                    assignCreatorFromDoc(doc),
+	}
+}
+
 // ReadRuntimeConfigDefaultLibraryEnabled returns the persisted default
 // library setting, defaulting to true (shown) when unset or unreadable.
 func ReadRuntimeConfigDefaultLibraryEnabled(path string) bool {
