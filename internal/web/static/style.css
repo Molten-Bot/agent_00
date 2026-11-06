@@ -9334,7 +9334,12 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   backdrop-filter: blur(20px);
   font-size: var(--text-label);
   font-weight: var(--font-weight-medium);
-  white-space: nowrap;
+  /* Sized to the name, but capped well inside the detail pane's narrowest
+     layout (320px minus its 22px padding) so a long login wraps instead of
+     running off the right edge on a phone. */
+  width: max-content;
+  max-width: 14rem;
+  overflow-wrap: anywhere;
   pointer-events: none;
   opacity: 0;
   transition: opacity .2s ease;

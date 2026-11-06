@@ -188,8 +188,10 @@
 
   function addTimestamp(parent, value) {
     const timestamp = Date.parse(String(value || ""));
+    // A <time> without a machine-readable datetime is invalid markup, so an
+    // unparsable value degrades to a plain span rather than lying about itself.
+    if (!Number.isFinite(timestamp)) return addText(parent, "span", "", formatRelativeTime(value));
     const node = addText(parent, "time", "", formatRelativeTime(value));
-    if (!Number.isFinite(timestamp)) return node;
     node.dateTime = new Date(timestamp).toISOString();
     // The relative text loses precision past a few days, so the tooltip spells
     // out the same instant in the viewer's local time.
@@ -217,7 +219,15 @@
       avatar.setAttribute("role", "img");
       avatar.setAttribute("aria-label", label);
       avatar.dataset.label = label;
+      // The name only exists while the chip is hovered or focused, so WCAG
+      // 1.4.13 requires it to be reachable by keyboard and dismissable without
+      // moving the pointer: the tab stop supplies the first, Escape the second.
       avatar.tabIndex = 0;
+      avatar.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        event.stopPropagation();
+        avatar.blur();
+      });
     } else {
       avatar.setAttribute("aria-hidden", "true");
     }
@@ -395,7 +405,7 @@
       addAvatar(commentMeta, comment.author?.login);
       addText(commentMeta, "strong", "", comment.author?.login || "Unknown");
       addText(commentMeta, "span", "", "·");
-      addText(commentMeta, "span", "", formatRelativeTime(comment.createdAt));
+      addTimestamp(commentMeta, comment.createdAt);
       addText(card, "pre", "github-issue-comment-body", comment.body || "");
       comments.appendChild(card);
     }

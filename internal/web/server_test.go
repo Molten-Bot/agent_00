@@ -226,8 +226,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `href="/static/style.css"`) {
-		t.Fatalf("expected index html to include external stylesheet link")
+	if !strings.Contains(markup, `href="/static/style.css?v=`) {
+		t.Fatalf("expected index html to include a cache-busted external stylesheet link")
 	}
 	if strings.Contains(markup, `tailwind`) || strings.Contains(markup, `cdn.tailwindcss.com`) {
 		t.Fatalf("expected index html styling to be owned by the global stylesheet instead of the Tailwind runtime")

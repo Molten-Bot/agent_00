@@ -360,7 +360,7 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
 	page := response.Body.String()
-	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `href="#studio-issues"`, `data-prompt-title-mode="issues"`, `id="github-issues-panel"`, "github-issues-repo", "github-issues-search", "github-issues-count", "github-issues-assignee-filter", "user-round-arrow-left", "review-settings-github-issues-link-mode", "review-settings-github-issues-link-close", `href="/static/style.css"`, "github-issues.js"} {
+	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `href="#studio-issues"`, `data-prompt-title-mode="issues"`, `id="github-issues-panel"`, "github-issues-repo", "github-issues-search", "github-issues-count", "github-issues-assignee-filter", "user-round-arrow-left", "review-settings-github-issues-link-mode", "review-settings-github-issues-link-close", `href="/static/style.css?v=`, "github-issues.js"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page is missing %q", want)
 		}
@@ -432,7 +432,7 @@ func TestGitHubIssueHeaderAssetsCarryAssigneeAndTimeAffordances(t *testing.T) {
 	}
 
 	script := fetch("/static/github-issues.js")
-	for _, want := range []string{"addAssignees", `"Unassigned"`, "detailHeader.appendChild(metadata)", "addTimestamp(", `node.dateTime = new Date(timestamp).toISOString()`, "avatar.dataset.label = label", "avatar.tabIndex = 0", `addTimestamp(addText(meta, "span", "", "updated ")`} {
+	for _, want := range []string{"addAssignees", `"Unassigned"`, "detailHeader.appendChild(metadata)", "addTimestamp(", `node.dateTime = new Date(timestamp).toISOString()`, "avatar.dataset.label = label", "avatar.tabIndex = 0", `if (event.key !== "Escape") return;`, "addTimestamp(commentMeta, comment.createdAt)", `addTimestamp(addText(meta, "span", "", "updated ")`} {
 		if !strings.Contains(script, want) {
 			t.Errorf("github-issues.js is missing %q", want)
 		}
@@ -448,6 +448,8 @@ func TestGitHubIssueHeaderAssetsCarryAssigneeAndTimeAffordances(t *testing.T) {
 	for _, want := range []string{
 		".github-issue-assignees .github-issue-avatar::after { content: attr(data-label);",
 		".github-issue-assignees .github-issue-avatar:focus::after {",
+		// Without a cap the one-line name runs off a phone's right edge.
+		"width: max-content; max-width: 14rem; overflow-wrap: anywhere;",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("style.css is missing %q, so a tapped assignee icon never names itself", want)
@@ -455,8 +457,14 @@ func TestGitHubIssueHeaderAssetsCarryAssigneeAndTimeAffordances(t *testing.T) {
 	}
 
 	page := fetch("/")
-	if !strings.Contains(page, `src="/static/github-issues.js?v=12"`) {
-		t.Error("github-issues.js changed, so its cache-busting version must advance past v=11")
+	if !strings.Contains(page, `src="/static/github-issues.js?v=13"`) {
+		t.Error("github-issues.js changed, so its cache-busting version must advance past v=12")
+	}
+	// The revealed assignee name lives entirely in style.css, which /static/
+	// serves as public, max-age=3600. Without a version query an hour of cached
+	// CSS would pair the new markup with the old rules.
+	if !strings.Contains(page, `href="/static/style.css?v=`) {
+		t.Error("style.css carries behavior now, so its link needs a cache-busting version query")
 	}
 }
 
