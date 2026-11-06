@@ -234,12 +234,16 @@ test('owner avatars clear and restore every repository they own', async t => {
     { name: 'gadget', full_name: 'acme/gadget', html_url: 'https://github.com/acme/gadget', owner_type: 'Organization', owner_avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4' },
     { name: 'notes', full_name: 'octocat/notes', html_url: 'https://github.com/octocat/notes', owner_type: 'User' },
   ];
+  const avatarProbes = [];
   const { page, writes } = await openSettings(t, { configurePage: async page => {
     await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos } }));
     await page.route('https://avatars.githubusercontent.com/**', route => route.fulfill({
       contentType: 'image/png',
       body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'),
     }));
+    page.on('request', request => {
+      if (/^https:\/\/github\.com\/.*\.png/.test(request.url())) avatarProbes.push(request.url());
+    });
   }});
   await select(page, 'automation');
   const acme = page.locator('#review-settings-owners [data-repo-owner="acme"]');
@@ -253,9 +257,10 @@ test('owner avatars clear and restore every repository they own', async t => {
   assert.ok(Math.abs(columns.owners - columns.repositories) <= 1, 'owners and repositories split the tab evenly');
   assert.equal(await acme.getAttribute('aria-pressed'), 'true');
   assert.equal(await acme.locator('img.repository-settings-owner-avatar').count(), 1, 'organizations use their GitHub avatar');
-  // The suite blocks third-party requests, so the public GitHub avatar route
-  // used for owners without API metadata fails and reveals the lucide fallback.
+  // Owners without API metadata render the lucide icon directly instead of
+  // probing the public GitHub avatar route.
   await octocat.locator('svg.lucide-user').waitFor();
+  assert.deepEqual(avatarProbes, [], 'owners without API metadata never request github.com avatars');
 
   await acme.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'false');
@@ -273,6 +278,7 @@ test('owner avatars clear and restore every repository they own', async t => {
   assert.equal(await acme.getAttribute('aria-pressed'), 'mixed', 'a partly enabled owner reports a mixed selection');
   await acme.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(avatarProbes, [], 'later renders stay free of github.com avatar requests');
   await close(page);
   assert.deepEqual(writes.at(-1).disabled_repositories, []);
 });

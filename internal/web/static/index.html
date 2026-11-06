@@ -7101,29 +7101,28 @@
       setReviewSettingsStatus("", "Changes will be saved on close.");
     }
 
+    function repositorySettingsRepoValues() {
+      return Array.from(reviewSettingsRepositories?.querySelectorAll("input[type=checkbox]") || [], input => input.value);
+    }
+
     function syncRepositorySettingsSelection() {
+      // Group the rendered repositories once so each owner button is a map
+      // lookup instead of another pass over every checkbox.
+      const groups = repositoryOwnerGroups(repositorySettingsRepoValues());
       for (const input of reviewSettingsRepositories?.querySelectorAll("input[type=checkbox]") || []) {
         input.checked = !repositoryDisabled(input.value);
       }
       for (const button of reviewSettingsOwners?.querySelectorAll("[data-repo-owner]") || []) {
-        const repos = repositoryOwnerRepos(button.dataset.repoOwner);
-        button.setAttribute("aria-pressed", repositoryOwnerPressedValue(repos));
+        button.setAttribute("aria-pressed", repositoryOwnerPressedValue(groups.get(button.dataset.repoOwner)?.repos || []));
       }
     }
 
     function repositoryOwnerRepos(ownerKey) {
-      const key = String(ownerKey || "").toLowerCase();
-      return Array.from(reviewSettingsRepositories?.querySelectorAll("input[type=checkbox]") || [], input => input.value)
-        .filter(repo => repositoryOwnerKey(repo) === key);
+      return repositoryOwnerGroups(repositorySettingsRepoValues()).get(String(ownerKey || "").toLowerCase())?.repos || [];
     }
 
-    function repositoryOwnerAvatarURL(login, details) {
-      if (details.avatar) return details.avatar;
-      // Owners known only from repository history carry no API metadata, so fall
-      // back to the public GitHub avatar route and let onerror pick the icon.
-      return /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(login) ? `https://github.com/${login}.png?size=64` : "";
-    }
-
+    // Owners known only from repository history carry no API avatar, so they
+    // render the lucide icon instead of probing github.com on every render.
     function renderRepositoryOwnerIcon(button, avatarURL, details) {
       const icon = document.createElement("i");
       icon.setAttribute("data-lucide", chatRepoOwnerIconName({ owner_type: details.type }));
@@ -7193,7 +7192,7 @@
         const count = document.createElement("small");
         count.textContent = String(group.repos.length);
         button.append(text, count);
-        renderRepositoryOwnerIcon(button, repositoryOwnerAvatarURL(group.login, details), details);
+        renderRepositoryOwnerIcon(button, details.avatar, details);
         button.addEventListener("click", () => {
           const ownerRepos = repositoryOwnerRepos(key);
           const disabled = state.reviewSettings.disabledRepositories || [];
