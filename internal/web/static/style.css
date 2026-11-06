@@ -6987,7 +6987,8 @@ body.onboarding-modal-open {
   object-fit: cover;
 }
 
-.repository-settings-owner[aria-pressed="false"] .repository-settings-owner-avatar {
+.repository-settings-owner[aria-pressed="false"] .repository-settings-owner-avatar,
+.repository-settings-owner[aria-pressed="false"] svg {
   filter: grayscale(1);
   opacity: 0.55;
 }

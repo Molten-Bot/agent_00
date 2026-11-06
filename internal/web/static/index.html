@@ -7121,6 +7121,10 @@
       return repositoryOwnerGroups(repositorySettingsRepoValues()).get(String(ownerKey || "").toLowerCase())?.repos || [];
     }
 
+    // Repositories a user had already deselected before an owner was cleared,
+    // keyed by owner, so re-selecting the owner does not silently re-enable them.
+    const repositoryOwnerKeptDisabled = new Map();
+
     // Owners known only from repository history carry no API avatar, so they
     // render the lucide icon instead of probing github.com on every render.
     function renderRepositoryOwnerIcon(button, avatarURL, details) {
@@ -7187,7 +7191,11 @@
         button.dataset.repoOwner = key;
         button.disabled = controlsDisabled;
         button.setAttribute("aria-pressed", repositoryOwnerPressedValue(group.repos));
-        button.title = `${group.login} · ${group.repos.length} ${group.repos.length === 1 ? "repository" : "repositories"}`;
+        const countLabel = `${group.repos.length} ${group.repos.length === 1 ? "repository" : "repositories"}`;
+        button.title = `${group.login} · ${countLabel}`;
+        // A button with text content ignores title for its accessible name, so
+        // the count reaches assistive tech through an explicit label.
+        button.setAttribute("aria-label", `${group.login}, ${countLabel}`);
         const text = document.createElement("span");
         text.textContent = group.login;
         const count = document.createElement("small");
@@ -7198,12 +7206,16 @@
           const ownerRepos = repositoryOwnerRepos(key);
           const disabled = state.reviewSettings.disabledRepositories || [];
           // Clearing is the primary action, so a partly selected owner clears in
-          // one click; only a fully cleared owner re-selects everything it owns.
+          // one click; only a fully cleared owner re-selects what it owns, minus
+          // the repositories the user had deselected one by one beforehand.
           if (ownerRepos.length > 0 && ownerRepos.every(repositoryDisabled)) {
+            const kept = repositoryOwnerKeptDisabled.get(key) || new Set();
+            repositoryOwnerKeptDisabled.delete(key);
             const ownerKeys = new Set(ownerRepos.map(repoDedupeKey));
-            applyDisabledRepositories(disabled.filter(repo => !ownerKeys.has(repoDedupeKey(repo))));
+            applyDisabledRepositories(disabled.filter(repo => !ownerKeys.has(repoDedupeKey(repo)) || kept.has(repoDedupeKey(repo))));
             return;
           }
+          repositoryOwnerKeptDisabled.set(key, new Set(ownerRepos.filter(repositoryDisabled).map(repoDedupeKey)));
           applyDisabledRepositories([...disabled, ...ownerRepos]);
         });
         return button;

@@ -258,6 +258,8 @@ test('owner avatars clear and restore every repository they own', async t => {
   assert.equal(columns.ownersLeft, true, 'owners sit left of repositories');
   assert.ok(Math.abs(columns.owners - columns.repositories) <= 1, 'owners and repositories split the tab evenly');
   assert.equal(await acme.getAttribute('aria-pressed'), 'true');
+  assert.equal(await acme.getAttribute('aria-label'), 'acme, 2 repositories', 'owner buttons name their repository count');
+  assert.equal(await octocat.getAttribute('aria-label'), 'octocat, 1 repository', 'a single repository owner reads as singular');
   assert.equal(await acme.locator('img.repository-settings-owner-avatar').count(), 1, 'organizations use their GitHub avatar');
   // Owners without API metadata render the lucide icon directly instead of
   // probing the public GitHub avatar route.
@@ -270,7 +272,18 @@ test('owner avatars clear and restore every repository they own', async t => {
   assert.equal(await globex.locator('img.repository-settings-owner-avatar').count(), 0, 'a broken avatar image is removed');
 
   const widgetRow = page.locator('#review-settings-repositories label:has(input[value="https://github.com/acme/widget"])');
+  const gadgetRow = page.locator('#review-settings-repositories label:has(input[value="https://github.com/acme/gadget"])');
   assert.equal(await widgetRow.getAttribute('title'), 'acme/widget', 'ellipsized repository rows expose the full name as a tooltip');
+
+  await octocat.click();
+  assert.equal(await octocat.getAttribute('aria-pressed'), 'false');
+  // Owners that fall back to the lucide icon dim it just like an avatar.
+  assert.ok(
+    await octocat.locator('svg').evaluate(node => Number(getComputedStyle(node).opacity) < 1),
+    'a deselected owner without an avatar dims its lucide icon',
+  );
+  await octocat.click();
+  assert.equal(await octocat.getAttribute('aria-pressed'), 'true');
 
   await acme.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'false');
@@ -290,6 +303,10 @@ test('owner avatars clear and restore every repository they own', async t => {
   assert.equal(await acme.getAttribute('aria-pressed'), 'false', 'a partly selected owner clears in a single click');
   assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/acme/widget"]').isChecked(), false);
   await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'mixed', 're-selecting an owner keeps the repositories deselected before the clear');
+  assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/acme/gadget"]').isChecked(), false, 'the individually deselected repository stays off');
+  assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/acme/widget"]').isChecked(), true, 'the rest of the owner comes back');
+  await gadgetRow.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'true');
   assert.deepEqual(avatarProbes, [], 'later renders stay free of github.com avatar requests');
   await close(page);
