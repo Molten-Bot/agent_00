@@ -256,9 +256,6 @@ type Broker struct {
 	tasks         map[string]*taskState
 	closedTasks   map[string]time.Time
 	runConfigs    map[string][]byte
-	// runConfigFieldCache memoizes fields decoded from runConfigs so log
-	// ingestion does not re-decode the same payload on every line.
-	runConfigFieldCache map[string]runConfigFields
 	promptedRepos []string
 	repositories  []Repository
 	repoIndex     map[string]int
@@ -273,6 +270,10 @@ type Broker struct {
 	sessionStartedAt   time.Time
 
 	customLibraryGeneration int64
+
+	// runConfigFieldCache memoizes fields decoded from runConfigs so log
+	// ingestion does not re-decode the same payload on every line.
+	runConfigFieldCache map[string]runConfigFields
 }
 
 type taskState struct {
@@ -1320,7 +1321,6 @@ func libraryTaskDisplayNames() map[string]string {
 	}
 	return names
 }
-
 
 func addTimeStatsGroup(groups map[string]*TimeStatsGroup, name, status string, duration time.Duration) {
 	savedDuration := time.Duration(0)
