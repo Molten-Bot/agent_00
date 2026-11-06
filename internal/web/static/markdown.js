@@ -59,6 +59,9 @@
   // data, so its own hosts carry no new disclosure; every other host is left as
   // a link the reader opens deliberately.
   const AUTO_LOADED_IMAGE_HOSTS = ["github.com", "githubusercontent.com"];
+  // Where a link's fragment is held once its href points at the page the
+  // markdown came from.
+  const FRAGMENT_ATTRIBUTE = "data-markdown-fragment";
 
   let markedScriptPromise = null;
 
@@ -76,44 +79,32 @@
     }
 
     markedScriptPromise = new Promise((resolve, reject) => {
-      const finish = (node) => {
+      // A load event fires once, so waiting on a script element that already
+      // finished would leave this promise pending forever. Any leftover element
+      // is replaced instead: marked is undefined here, so a usable load never
+      // produced that element, and a load still in flight is reached through
+      // this promise rather than through the document.
+      global.document.querySelector('script[data-marked-script="true"]')?.remove();
+      const script = global.document.createElement("script");
+      script.src = MARKED_SCRIPT_URL;
+      script.async = true;
+      script.setAttribute("data-marked-script", "true");
+      script.addEventListener("load", () => {
         const marked = markedGlobal();
         if (marked) {
-          // Only a script that actually defined marked is worth reusing, so the
-          // state is recorded here rather than on the load event.
-          node?.setAttribute("data-marked-script-state", "loaded");
           resolve(marked);
           return;
         }
         // A script that ran without defining marked is not a usable load, and
         // leaving it in the document would make every later render fail against
         // it. Dropping it lets the next render fetch the bundle again.
-        node?.remove();
+        script.remove();
         reject(new Error("marked script loaded without defining marked"));
-      };
-      const settle = (node) => {
-        node.addEventListener("load", () => finish(node), { once: true });
-        node.addEventListener("error", () => {
-          node.remove();
-          reject(new Error("marked script failed to load"));
-        }, { once: true });
-      };
-      // A load event fires once, so waiting on a script element that already
-      // finished would leave this promise pending forever. A node that recorded
-      // its load settles from that state instead, and a leftover node of unknown
-      // state is replaced: a load still in flight is reached through this
-      // promise, so it is never the node found here.
-      const existing = global.document.querySelector('script[data-marked-script="true"]');
-      if (existing?.getAttribute("data-marked-script-state") === "loaded") {
-        finish(existing);
-        return;
-      }
-      existing?.remove();
-      const script = global.document.createElement("script");
-      script.src = MARKED_SCRIPT_URL;
-      script.async = true;
-      script.setAttribute("data-marked-script", "true");
-      settle(script);
+      }, { once: true });
+      script.addEventListener("error", () => {
+        script.remove();
+        reject(new Error("marked script failed to load"));
+      }, { once: true });
       global.document.head.appendChild(script);
     }).catch((error) => {
       // A failed load must not be cached, or every later body would stay plain
@@ -163,13 +154,18 @@
     return String(text || "").trim().toLowerCase().replace(/[^\w\- ]+/g, "").replace(/\s+/g, "-");
   }
 
-  // A fragment addresses the document it was written in, so it stays one. The
-  // click is handled here because letting it reach the location bar would hand
-  // issue text control of the application's own hash routing.
+  // A fragment addresses the document it was written in, so a plain click stays
+  // in this body. The click is handled here because letting it reach the
+  // location bar would hand issue text control of the application's own hash
+  // routing.
   function scrollToFragment(event) {
+    // A modifier or middle click asks for a new tab or window, which this body
+    // cannot be. The href is the author's own page, so the browser is left to
+    // follow it there instead of scrolling here.
+    if ((event.button ?? 0) !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     const anchor = event.currentTarget;
-    const raw = String(anchor.getAttribute("href") || "").slice(1);
+    const raw = String(anchor.getAttribute(FRAGMENT_ATTRIBUTE) || "");
     if (!raw) return;
     let wanted = raw;
     try {
@@ -186,15 +182,21 @@
   }
 
   function copyAttributes(source, target, tag, baseURL) {
-    let fragmentLink = false;
+    let fragment = null;
     for (const name of ALLOWED_ELEMENTS.get(tag) || []) {
       if (!source.hasAttribute(name)) continue;
       const value = source.getAttribute(name);
       if (tag === "A" && name === "href") {
         const raw = String(value || "").trim();
         if (raw.startsWith("#")) {
-          fragmentLink = true;
-          target.setAttribute("href", raw);
+          // The fragment is kept apart from the href so the scroll target stays
+          // the author's own anchor name. The href resolves against the page the
+          // markdown came from, which is where a new-tab click belongs; leaving
+          // the bare fragment there would point it at the application's own hash
+          // route. Without a base there is no such page, so there is no href.
+          fragment = raw.slice(1);
+          const resolved = safeURL(raw, SAFE_LINK_SCHEMES, baseURL);
+          if (resolved) target.setAttribute("href", resolved);
           continue;
         }
         const href = safeURL(value, SAFE_LINK_SCHEMES, baseURL);
@@ -217,7 +219,9 @@
       }
       target.setAttribute(name, value);
     }
-    if (tag === "A" && fragmentLink) {
+    if (tag === "A" && fragment !== null) {
+      target.setAttribute(FRAGMENT_ATTRIBUTE, fragment);
+      target.rel = "noopener noreferrer";
       target.addEventListener("click", scrollToFragment);
     } else if (tag === "A") {
       target.target = "_blank";

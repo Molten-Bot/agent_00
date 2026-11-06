@@ -189,7 +189,7 @@ test('a script that loads without defining marked is not kept as a usable load',
 
   const first = await renderOnce();
   assert.equal(first.rendered, false, 'a bundle without marked is reported as a failed render');
-  assert.equal(first.scripts, 0, 'the unusable script element is dropped instead of being tagged loaded');
+  assert.equal(first.scripts, 0, 'the unusable script element is dropped instead of being left in the document');
 
   const second = await renderOnce();
   assert.equal(second.rendered, true, 'the next render fetches again instead of failing against the stale element');
@@ -211,8 +211,8 @@ test('relative links resolve against the repository and collapsible sections sta
   assert.deepEqual(await body.locator('a').evaluateAll(nodes => nodes.map(node => node.getAttribute('href'))), [
     'https://github.com/acme/repo/docs/guide.md',
     'https://github.com/acme/repo/pull/3',
-    '#contract',
-  ], 'relative hrefs point at GitHub, and a fragment stays in this document');
+    'https://github.com/acme/repo/#contract',
+  ], 'relative hrefs point at GitHub, and so does a fragment opened on its own');
   assert.deepEqual(await body.locator('a').evaluateAll(nodes => nodes.map(node => node.target)), ['_blank', '_blank', ''],
     'only the links that leave the page open a new tab');
 });
@@ -230,14 +230,71 @@ test('a fragment link scrolls inside the body instead of driving the app hash', 
     const before = location.hash;
     const scrolled = [];
     host.querySelector('h2').scrollIntoView = () => scrolled.push('connector-contract');
-    host.querySelectorAll('a').forEach(node => node.click());
-    const result = { hash: location.hash, unchanged: location.hash === before, scrolled };
+    // Whether the body's own handler cancelled the click is read after it ran;
+    // the guard then keeps any click the handler left alone from navigating the
+    // test page away.
+    const cancelled = [];
+    const guard = (event) => { cancelled.push(event.defaultPrevented); event.preventDefault(); };
+    document.addEventListener('click', guard);
+    const anchors = Array.from(host.querySelectorAll('a'));
+    anchors.forEach(node => node.click());
+    const plainScrolled = scrolled.slice();
+    // A modifier click asks for a new tab, which this body cannot be, so the
+    // browser is left to follow the href instead.
+    anchors[0].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+    document.removeEventListener('click', guard);
+    const result = {
+      hash: location.hash,
+      unchanged: location.hash === before,
+      scrolled: plainScrolled,
+      scrolledAfterModifier: scrolled.length,
+      cancelled,
+      hrefs: anchors.map(node => node.getAttribute('href')),
+      fragments: anchors.map(node => node.getAttribute('data-markdown-fragment')),
+      rels: anchors.map(node => node.rel),
+    };
     host.remove();
     return result;
   });
 
   assert.ok(result.unchanged, `clicking a fragment link must not rewrite the app hash, got ${result.hash}`);
   assert.deepEqual(result.scrolled, ['connector-contract'], 'the heading the fragment names is scrolled to, a missing one is a no-op');
+  assert.deepEqual(result.cancelled, [true, true, false], 'plain clicks are handled here, a modifier click is left to the browser');
+  assert.equal(result.scrolledAfterModifier, 1, 'a modifier click does not also scroll this body');
+  assert.deepEqual(result.hrefs, ['https://github.com/acme/repo/#connector-contract', 'https://github.com/acme/repo/#missing'],
+    'a new-tab click lands on the page the markdown came from, never the app hash route');
+  assert.deepEqual(result.fragments, ['connector-contract', 'missing'], 'the anchor the author named is kept for scrolling');
+  assert.deepEqual(result.rels, ['noopener noreferrer', 'noopener noreferrer'], 'a new tab gets no handle on this page');
+});
+
+test('a fragment link without a base page carries no href to follow', async t => {
+  const page = await openIssue(t);
+  const result = await page.evaluate(() => {
+    const host = document.createElement('div');
+    host.className = 'markdown-body';
+    host.appendChild(window.MarkdownView.sanitize('<h2>Scope</h2><a href="#scope">jump</a>'));
+    document.body.appendChild(host);
+    const anchor = host.querySelector('a');
+    const scrolled = [];
+    host.querySelector('h2').scrollIntoView = () => scrolled.push('scope');
+    const before = location.hash;
+    anchor.click();
+    const result = {
+      href: anchor.getAttribute('href'),
+      fragment: anchor.getAttribute('data-markdown-fragment'),
+      unchanged: location.hash === before,
+      scrolled,
+      underlined: getComputedStyle(anchor).textDecorationLine,
+    };
+    host.remove();
+    return result;
+  });
+
+  assert.equal(result.href, null, 'with no base page there is no safe target, and never the app hash route');
+  assert.equal(result.fragment, 'scope');
+  assert.ok(result.unchanged, 'the app hash is left alone');
+  assert.deepEqual(result.scrolled, ['scope'], 'the fragment still scrolls inside the body');
+  assert.equal(result.underlined, 'underline', 'the link still reads as a link without an href');
 });
 
 test('images load only from GitHub hosts and others stay links', async t => {

@@ -9330,6 +9330,13 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   font-weight: 750;
 }
 
+/* A fragment scrolls inside this body, so it stays a link to read and click
+   even where no base page gave it an href to open on its own. */
+.markdown-body a[data-markdown-fragment]:not([href]) {
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 .markdown-body img {
   max-width: 100%;
   height: auto;
