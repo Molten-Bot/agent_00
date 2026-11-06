@@ -101,6 +101,36 @@ func TestDefaultLibraryEnabledDefaultsTrueAndRoundTrips(t *testing.T) {
 	}
 }
 
+func TestDisabledRepositoriesDefaultEnabledAndRoundTrip(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.json")
+	if got := ReadRuntimeConfigUISettings(path).DisabledRepositories; len(got) != 0 {
+		t.Fatalf("disabled repositories default = %v, want none", got)
+	}
+
+	disabled := []string{" https://github.com/acme/one ", "https://github.com/acme/one", "acme/two"}
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
+		path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, nil, nil, nil,
+		RuntimeConfigUISettingsUpdate{DisabledRepositories: &disabled},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := ReadRuntimeConfigUISettings(path).DisabledRepositories, []string{"https://github.com/acme/one", "acme/two"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("disabled repositories = %v, want %v", got, want)
+	}
+
+	enabled := []string{}
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
+		path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, nil, nil, nil,
+		RuntimeConfigUISettingsUpdate{DisabledRepositories: &enabled},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadRuntimeConfigUISettings(path).DisabledRepositories; len(got) != 0 {
+		t.Fatalf("disabled repositories after enabling all = %v, want none", got)
+	}
+}
+
 func TestChatEnabledDefaultsFalseAndRoundTrips(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "config.json")
@@ -249,7 +279,7 @@ func TestGitHubIssueAutoStartLabelsRoundTrip(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "runtime.json")
 	labels := []string{"priority", "bug", "BUG", " "}
-	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, nil, nil, nil, GitHubIssueAutoStartSettings{Labels: &labels}); err != nil {
+	if err := SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{}, nil, nil, nil, nil, nil, nil, nil, RuntimeConfigUISettingsUpdate{Labels: &labels}); err != nil {
 		t.Fatalf("save labels: %v", err)
 	}
 	if got, want := ReadRuntimeConfigGitHubIssueAutoStartLabels(path), []string{"bug", "priority"}; !reflect.DeepEqual(got, want) {

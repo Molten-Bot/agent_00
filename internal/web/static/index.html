@@ -863,6 +863,14 @@
               <i data-lucide="braces" aria-hidden="true"></i>
               <span>JSON input (experimental)</span>
             </label>
+            <div class="repository-settings">
+              <div class="repository-settings-heading">
+                <strong>Repositories</strong>
+                <small>Deselect repositories to hide them from repository menus.</small>
+              </div>
+              <div id="review-settings-repositories" class="repository-settings-list" aria-label="Enabled repositories"></div>
+              <p id="review-settings-repositories-empty" class="github-issues-settings-description">No repositories loaded.</p>
+            </div>
           </fieldset>
           <fieldset id="settings-panel-github-issues" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-github-issues" hidden>
             <legend class="review-settings-section-title sr-only">GitHub Issues</legend>
@@ -1674,6 +1682,7 @@
       const githubIssueAutoStartOnlyAssignedRaw = settings.github_issue_auto_start_only_assigned ?? settings.githubIssueAutoStartOnlyAssigned;
       const githubIssueAutoStartLabelsRaw = settings.github_issue_auto_start_labels ?? settings.githubIssueAutoStartLabels;
       const assignCreatorRaw = settings.assign_creator ?? settings.assignCreator;
+      const disabledRepositoriesRaw = settings.disabled_repositories ?? settings.disabledRepositories;
       return {
         autoMerge: Boolean(settings.auto_merge || settings.autoMerge),
         deleteMergedBranches: Boolean(settings.delete_merged_branches || settings.deleteMergedBranches),
@@ -1688,6 +1697,7 @@
         githubIssueAutoStartOnlyAssigned: githubIssueAutoStartOnlyAssignedRaw === undefined ? true : Boolean(githubIssueAutoStartOnlyAssignedRaw),
         githubIssueAutoStartLabels: Array.isArray(githubIssueAutoStartLabelsRaw) ? githubIssueAutoStartLabelsRaw.map(label => String(label || "").trim()).filter(Boolean) : [],
         assignCreator: assignCreatorRaw === undefined ? true : Boolean(assignCreatorRaw),
+        disabledRepositories: dedupeRepoValues(Array.isArray(disabledRepositoriesRaw) ? disabledRepositoriesRaw : []),
         message: String(settings.message || "").trim(),
       };
     }
@@ -2180,6 +2190,8 @@
     const reviewSettingsDefaultLibrary = document.getElementById("review-settings-default-library");
     const reviewSettingsChatEnabled = document.getElementById("review-settings-chat-enabled");
     const reviewSettingsJSONEnabled = document.getElementById("review-settings-json-enabled");
+    const reviewSettingsRepositories = document.getElementById("review-settings-repositories");
+    const reviewSettingsRepositoriesEmpty = document.getElementById("review-settings-repositories-empty");
     const reviewSettingsGitHubIssuesEnabled = document.getElementById("review-settings-github-issues-enabled");
     const reviewSettingsGitHubIssuesAutoStart = document.getElementById("review-settings-github-issues-auto-start");
     const reviewSettingsGitHubIssuesAutoStartAssigned = document.getElementById("review-settings-github-issues-auto-start-assigned");
@@ -2513,6 +2525,7 @@
           state.chatReposLoaded = false;
           pruneRepoHistoryToLoadedGitHubRepos();
           renderRepoHistoryOptions();
+          renderRepositorySettings();
           trackAnalyticsEvent("chat_repos_loaded", { repo_count: state.githubRepos.length });
         } catch (err) {
           if (loadSequence !== githubReposLoadSequence) {
@@ -2915,6 +2928,8 @@
       if (reviewSettingsJSONEnabled instanceof HTMLInputElement) {
         reviewSettingsJSONEnabled.checked = state.reviewSettings.jsonEnabled;
       }
+      renderRepositorySettings();
+      renderRepoHistoryOptions();
       if (reviewSettingsGitHubIssuesEnabled instanceof HTMLInputElement) {
         reviewSettingsGitHubIssuesEnabled.checked = state.reviewSettings.githubIssuesEnabled;
       }
@@ -3047,6 +3062,7 @@
         github_issue_auto_start_only_assigned: reviewSettingsGitHubIssuesAutoStartOnlyAssigned instanceof HTMLInputElement ? reviewSettingsGitHubIssuesAutoStartOnlyAssigned.checked : true,
         github_issue_auto_start_labels: reviewSettingsGitHubIssuesAutoStartLabels instanceof HTMLSelectElement ? Array.from(reviewSettingsGitHubIssuesAutoStartLabels.selectedOptions, option => option.value) : [],
         assign_creator: reviewSettingsAssignCreator instanceof HTMLInputElement ? reviewSettingsAssignCreator.checked : true,
+        disabled_repositories: Array.from(reviewSettingsRepositories?.querySelectorAll("input[type=checkbox]:not(:checked)") || [], input => input.value),
       };
     }
 
@@ -6068,6 +6084,29 @@
       if (!repo) {
         return;
       }
+      if (repositoryDisabled(repo)) {
+        const previous = [...state.reviewSettings.disabledRepositories];
+        state.reviewSettings = {
+          ...state.reviewSettings,
+          disabledRepositories: previous.filter(value => repoDedupeKey(value) !== repoDedupeKey(repo)),
+        };
+        renderRepositorySettings();
+        if (state.settingsLoaded) {
+          void fetch("/api/review-settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(currentReviewSettingsPayload()),
+          }).then(async response => {
+            const body = await response.json().catch(() => null);
+            if (!response.ok) throw new Error(body?.error || `review settings http ${response.status}`);
+            applyReviewSettingsState(body?.settings);
+          }).catch(() => {
+            state.reviewSettings = { ...state.reviewSettings, disabledRepositories: previous };
+            renderRepositorySettings();
+            renderRepoHistoryOptions();
+          });
+        }
+      }
       rememberRepos([repo]);
     }
 
@@ -6962,7 +7001,8 @@
       if (state.repoHistory.length > 0 && unique.length > 0) {
         return unique[0];
       }
-      return defaultRepository();
+      const fallback = defaultRepository();
+      return repositoryDisabled(fallback) ? "" : fallback;
     }
 
     function githubRepoSelectValue(repo) {
@@ -6976,13 +7016,53 @@
       return String(repo.name || "").trim();
     }
 
-    function githubRepoSelectValues() {
+    function repositoryDisabled(value) {
+      const key = repoDedupeKey(value);
+      return key !== "" && (state.reviewSettings.disabledRepositories || []).some(repo => repoDedupeKey(repo) === key);
+    }
+
+    function allGitHubRepoSelectValues() {
       const repos = Array.isArray(state.githubRepos) ? state.githubRepos : [];
       return repos.map(githubRepoSelectValue).filter(Boolean);
     }
 
-    function repoSelectValues(currentValue = "") {
-      return dedupeRepoValues([currentValue, ...state.repoHistory, ...githubRepoSelectValues()]);
+    function githubRepoSelectValues() {
+      return allGitHubRepoSelectValues().filter(repo => !repositoryDisabled(repo));
+    }
+
+    function repoSelectValues(currentValue = "", includeCurrent = false) {
+      return dedupeRepoValues([...(includeCurrent ? [currentValue] : []), ...state.repoHistory, ...githubRepoSelectValues()])
+        .filter(repo => !repositoryDisabled(repo) || (includeCurrent && repoDedupeKey(repo) === repoDedupeKey(currentValue)));
+    }
+
+    function renderRepositorySettings() {
+      if (!reviewSettingsRepositories || !reviewSettingsRepositoriesEmpty) return;
+      const repos = dedupeRepoValues([
+        ...allGitHubRepoSelectValues(),
+        ...state.repoHistory,
+        ...(state.reviewSettings.disabledRepositories || []),
+      ]);
+      reviewSettingsRepositories.replaceChildren(...repos.map(repo => {
+        const label = document.createElement("label");
+        label.className = "repository-settings-option";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = repo;
+        input.checked = !repositoryDisabled(repo);
+        input.disabled = state.settingsBusy || !state.settingsLoaded;
+        input.addEventListener("change", () => {
+          const disabled = Array.from(reviewSettingsRepositories.querySelectorAll("input[type=checkbox]:not(:checked)"), node => node.value);
+          state.reviewSettings = { ...state.reviewSettings, disabledRepositories: dedupeRepoValues(disabled) };
+          renderRepoHistoryOptions();
+          renderChatRepos();
+          setReviewSettingsStatus("", "Changes will be saved on close.");
+        });
+        const text = document.createElement("span");
+        text.textContent = displayRepoLabel(repo);
+        label.append(input, text);
+        return label;
+      }));
+      reviewSettingsRepositoriesEmpty.classList.toggle("hidden", repos.length > 0);
     }
 
     function renderRepoHistorySelect(historyField, select, input) {
@@ -6993,7 +7073,7 @@
       const currentValue = normalizeRepoValue(input.value);
       const selectedValue = normalizeRepoValue(select.value);
       const manualSelected = selectedValue === "";
-      const unique = repoSelectValues(currentValue);
+      const unique = repoSelectValues(currentValue, manualSelected);
       const hasRepoChoices = unique.length > 0;
 
       historyField.classList.toggle("hidden", !hasRepoChoices);
@@ -7019,6 +7099,8 @@
       select.value = nextValue;
       if (nextValue) {
         input.value = nextValue;
+      } else if (!manualSelected && repositoryDisabled(currentValue)) {
+        input.value = "";
       }
 
       syncRepositoryFieldVisibility();
@@ -8462,9 +8544,10 @@
       const tabs = chatPromptedRepoTabs();
       const selectedTab = tabs.find((tab) => tab.key === state.chatActiveRepoTab);
       const allRepos = Array.isArray(state.githubRepos) ? state.githubRepos : [];
-      const unfilteredRepoCount = allRepos.length;
-      const repos = filterChatRepos(allRepos, state.chatRepoSearchQuery);
-      const reposForSelection = selectedTab ? allRepos : repos;
+      const enabledRepos = allRepos.filter(repo => !repositoryDisabled(githubRepoSelectValue(repo)));
+      const unfilteredRepoCount = enabledRepos.length;
+      const repos = filterChatRepos(enabledRepos, state.chatRepoSearchQuery);
+      const reposForSelection = selectedTab ? enabledRepos : repos;
       syncChatOpenRepoKey(reposForSelection, selectedTab, restoreFocusKey);
       const openRepo = selectedChatRepo(reposForSelection, selectedTab);
       const openRepoKey = openRepo ? chatRepoKey(chatRepoRunValue(openRepo)) : "";
@@ -13428,7 +13511,8 @@
       reviewSettingsClose.disabled = Boolean(busy);
       for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches,
         reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsGitHubIssuesEnabled,
-        reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsGitHubIssuesAutoStartOnlyAssigned, reviewSettingsGitHubIssuesAutoStartLabels, reviewSettingsAssignCreator, reviewSettingsSlider, ...reviewSettingsMergeOptions]) {
+        reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsGitHubIssuesAutoStartOnlyAssigned, reviewSettingsGitHubIssuesAutoStartLabels, reviewSettingsAssignCreator, reviewSettingsSlider, ...reviewSettingsMergeOptions,
+        ...Array.from(reviewSettingsRepositories?.querySelectorAll("input") || [])]) {
         if (control) control.disabled = Boolean(busy) || !state.settingsLoaded;
       }
       reviewSettingsForm.setAttribute("aria-busy", String(Boolean(busy)));

@@ -2038,9 +2038,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected index html to include repo history default selection helper")
 	}
 	if !strings.Contains(markup, "function githubRepoSelectValue(repo)") ||
+		!strings.Contains(markup, "function allGitHubRepoSelectValues()") ||
 		!strings.Contains(markup, "function githubRepoSelectValues()") ||
-		!strings.Contains(markup, "function repoSelectValues(currentValue = \"\")") ||
-		!strings.Contains(markup, "return dedupeRepoValues([currentValue, ...state.repoHistory, ...githubRepoSelectValues()]);") {
+		!strings.Contains(markup, "function repoSelectValues(currentValue = \"\", includeCurrent = false)") ||
+		!strings.Contains(markup, ".filter(repo => !repositoryDisabled(repo)") {
 		t.Fatalf("expected repository dropdown to include GitHub repositories loaded for chat")
 	}
 	if !strings.Contains(markup, `"defaultRepository":""`) {
@@ -2049,7 +2050,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "if (state.repoHistory.length > 0 && unique.length > 0)") {
 		t.Fatalf("expected index html to default repo selection to saved history when available")
 	}
-	if !strings.Contains(markup, "return defaultRepository();") {
+	if !strings.Contains(markup, `return repositoryDisabled(fallback) ? "" : fallback;`) {
 		t.Fatalf("expected index html to fall back only when a default repository is configured")
 	}
 	if !strings.Contains(markup, "const keepManualSelection = manualSelected && select.dataset.manual === \"true\";") ||
@@ -2380,6 +2381,21 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if strings.Contains(markup, `id="hover-select"`) || strings.Contains(markup, ">Hover<") {
 		t.Fatalf("expected index html to remove the docked hover selector")
+	}
+}
+
+func TestFilterDisabledGitHubRepos(t *testing.T) {
+	t.Parallel()
+	repos := []GitHubRepo{
+		{FullName: "acme/one", HTMLURL: "https://github.com/acme/one"},
+		{FullName: "acme/two", HTMLURL: "https://github.com/acme/two"},
+	}
+	got := filterDisabledGitHubRepos(repos, []string{"git@github.com:acme/one.git"})
+	if len(got) != 1 || got[0].FullName != "acme/two" {
+		t.Fatalf("filtered repositories = %#v, want only acme/two", got)
+	}
+	if got := filterDisabledGitHubRepos(repos, nil); len(got) != 2 {
+		t.Fatalf("default repositories = %#v, want all selected", got)
 	}
 }
 

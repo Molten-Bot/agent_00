@@ -179,7 +179,7 @@ test('all settings save on close and survive reopening; no main Save button', as
   assert.equal(await page.locator('#custom-library-name').inputValue(), 'kept draft');
   await toggle(page, 'review-settings-default-library');
   await close(page);
-  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], assign_creator: false });
+  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], assign_creator: false, disabled_repositories: [] });
   await page.reload();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   assert.equal(await page.locator('#review-settings-auto-merge').isChecked(), true);
@@ -188,6 +188,26 @@ test('all settings save on close and survive reopening; no main Save button', as
   assert.equal(await page.locator('#review-settings-merge-method').inputValue(), 'rebase');
   await select(page, 'github-issues');
   assert.equal(await page.locator('#review-settings-assign-creator').isChecked(), false);
+});
+
+test('repository selections hide dropdown options and manual entry enables them again', async t => {
+  const repo = { name: 'widget', full_name: 'acme/widget', html_url: 'https://github.com/acme/widget' };
+  const { page, writes } = await openSettings(t, { configurePage: async page => {
+    await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [repo] } }));
+  }});
+  await select(page, 'automation');
+  const option = page.locator('#review-settings-repositories input[value="https://github.com/acme/widget"]');
+  await option.waitFor();
+  assert.equal(await option.isChecked(), true, 'repositories default enabled');
+  await option.uncheck();
+  await close(page);
+  assert.deepEqual(writes.at(-1).disabled_repositories, ['https://github.com/acme/widget']);
+  assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 0);
+
+  await page.locator('#builder-repo-input').fill('https://github.com/acme/widget');
+  await page.locator('#builder-repo-input').blur();
+  await page.waitForFunction(() => document.querySelector('#builder-repo-select option[value="https://github.com/acme/widget"]'));
+  assert.deepEqual(writes.at(-1).disabled_repositories, []);
 });
 
 test('chat toggle marks the experimental chat tab unavailable immediately and persists on reload', async t => {

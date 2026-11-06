@@ -34,6 +34,7 @@ func TestReadRuntimeConfigUISettingsMatchesIndividualReaders(t *testing.T) {
 			"github_issue_auto_start_only_assigned": false,
 			"github_issue_auto_start_labels": ["bug", " agent ", "bug"],
 			"assign_creator": false
+			,"disabled_repositories": ["https://github.com/acme/one", " acme/two ", "https://github.com/acme/one"]
 		}`),
 	}
 	for name, path := range paths {
@@ -47,6 +48,7 @@ func TestReadRuntimeConfigUISettingsMatchesIndividualReaders(t *testing.T) {
 			GitHubIssueAutoStartOnlyAssigned: ReadRuntimeConfigGitHubIssueAutoStartOnlyAssigned(path),
 			GitHubIssueAutoStartLabels:       ReadRuntimeConfigGitHubIssueAutoStartLabels(path),
 			AssignCreator:                    ReadRuntimeConfigAssignCreator(path),
+			DisabledRepositories:             ReadRuntimeConfigDisabledRepositories(path),
 		}
 		if got := ReadRuntimeConfigUISettings(path); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: ReadRuntimeConfigUISettings() = %+v, want %+v", name, got, want)
