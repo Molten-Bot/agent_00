@@ -30,7 +30,7 @@ const prompt = [
   '- [ ] open item',
 ].join('\n');
 
-test('task prompt modal renders markdown through MarkdownView', async t => {
+async function openWorkPage(t, { delayMarkedMs = 0 } = {}) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   t.after(() => page.close());
   const errors = [];
@@ -39,6 +39,12 @@ test('task prompt modal renders markdown through MarkdownView', async t => {
   // not what this test watches for.
   page.on('console', m => { if (m.type() === 'error' && !/net::ERR_FAILED|status of 50\d/.test(m.text())) errors.push(`console: ${m.text()}`); });
   await page.route('**/*', route => new URL(route.request().url()).origin === new URL(baseURL).origin ? route.continue() : route.abort());
+  if (delayMarkedMs) {
+    await page.route('**/static/marked.umd.js', async route => {
+      await new Promise(resolve => setTimeout(resolve, delayMarkedMs));
+      return route.continue();
+    });
+  }
   await page.route('**/api/status', route => route.fulfill({
     json: {
       ok: true,
@@ -58,6 +64,11 @@ test('task prompt modal renders markdown through MarkdownView', async t => {
   await page.route('**/api/stream', route => route.abort());
   await page.goto(baseURL + '#work');
   await page.waitForSelector('.task-prompt-toggle', { state: 'attached', timeout: 15000 });
+  return { page, errors };
+}
+
+test('task prompt modal renders markdown through MarkdownView', async t => {
+  const { page, errors } = await openWorkPage(t);
   await page.locator('.task-prompt-toggle').first().click({ force: true });
   await page.waitForSelector('#task-prompt-modal:not(.hidden)');
   await page.waitForSelector('#task-prompt-modal-body.markdown-body:not(.markdown-body-pending)');
@@ -82,6 +93,36 @@ test('task prompt modal renders markdown through MarkdownView', async t => {
   await page.locator('#task-prompt-modal-markdown').click();
   await page.waitForSelector('#task-prompt-modal-body.markdown-body:not(.markdown-body-pending)');
   assert.equal(await body.locator('h1').innerText(), 'Heading one');
+
+  assert.deepEqual(errors, []);
+});
+
+test('switching to Plain while marked is still loading keeps the plain view', async t => {
+  const { page, errors } = await openWorkPage(t, { delayMarkedMs: 1500 });
+  const loaded = page.waitForResponse(response => response.url().includes('/static/marked.umd.js'));
+
+  await page.locator('.task-prompt-toggle').first().click({ force: true });
+  await page.waitForSelector('#task-prompt-modal:not(.hidden)');
+  // The modal opens on the markdown tab, so this lands while the first marked
+  // fetch is still in flight.
+  await page.locator('#task-prompt-modal-plain').click();
+
+  const body = page.locator('#task-prompt-modal-body');
+  assert.ok((await body.innerText()).includes('**bold**'), 'the plain tab shows raw markdown right away');
+
+  await loaded;
+  await page.waitForFunction(() => Boolean(window.marked));
+  // marked is in place, so the render the modal started has resolved and either
+  // restored the plain view or clobbered it.
+  await page.waitForTimeout(250);
+
+  assert.ok((await body.innerText()).includes('**bold**'), 'the finished render does not overwrite the plain view');
+  assert.equal(await body.locator('h1').count(), 0, 'no rendered markdown is left behind');
+  assert.equal(await page.locator('#task-prompt-modal-plain').getAttribute('aria-selected'), 'true');
+
+  await page.locator('#task-prompt-modal-markdown').click();
+  await page.waitForSelector('#task-prompt-modal-body.markdown-body:not(.markdown-body-pending)');
+  assert.equal(await body.locator('h1').innerText(), 'Heading one', 'the markdown tab still renders afterwards');
 
   assert.deepEqual(errors, []);
 });

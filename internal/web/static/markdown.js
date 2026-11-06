@@ -54,6 +54,11 @@
   const SAFE_IMAGE_SCHEMES = new Set(["http:", "https:"]);
   // A caller's base only means something as an absolute web page address.
   const SAFE_BASE_SCHEMES = new Set(["http:", "https:"]);
+  // Fetching an image tells its host the operator's IP address and user agent
+  // before anyone chose to trust the author. GitHub already serves this page's
+  // data, so its own hosts carry no new disclosure; every other host is left as
+  // a link the reader opens deliberately.
+  const AUTO_LOADED_IMAGE_HOSTS = ["github.com", "githubusercontent.com"];
 
   let markedScriptPromise = null;
 
@@ -71,16 +76,23 @@
     }
 
     markedScriptPromise = new Promise((resolve, reject) => {
-      const finish = () => {
+      const finish = (node) => {
         const marked = markedGlobal();
-        if (marked) resolve(marked);
-        else reject(new Error("marked script loaded without defining marked"));
+        if (marked) {
+          // Only a script that actually defined marked is worth reusing, so the
+          // state is recorded here rather than on the load event.
+          node?.setAttribute("data-marked-script-state", "loaded");
+          resolve(marked);
+          return;
+        }
+        // A script that ran without defining marked is not a usable load, and
+        // leaving it in the document would make every later render fail against
+        // it. Dropping it lets the next render fetch the bundle again.
+        node?.remove();
+        reject(new Error("marked script loaded without defining marked"));
       };
       const settle = (node) => {
-        node.addEventListener("load", () => {
-          node.setAttribute("data-marked-script-state", "loaded");
-          finish();
-        }, { once: true });
+        node.addEventListener("load", () => finish(node), { once: true });
         node.addEventListener("error", () => {
           node.remove();
           reject(new Error("marked script failed to load"));
@@ -93,7 +105,7 @@
       // promise, so it is never the node found here.
       const existing = global.document.querySelector('script[data-marked-script="true"]');
       if (existing?.getAttribute("data-marked-script-state") === "loaded") {
-        finish();
+        finish(existing);
         return;
       }
       existing?.remove();
@@ -134,11 +146,57 @@
     }
   }
 
+  function autoLoadableImage(url) {
+    try {
+      const host = new URL(url).hostname.toLowerCase();
+      return AUTO_LOADED_IMAGE_HOSTS.some((trusted) => host === trusted || host.endsWith(`.${trusted}`));
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  // GitHub turns a heading into an anchor by slugging its text, which is how a
+  // fragment an author wrote resolves to a heading here as well. Headings carry
+  // no id of their own: an id taken from author text would collide with the
+  // application's own elements.
+  function headingSlug(text) {
+    return String(text || "").trim().toLowerCase().replace(/[^\w\- ]+/g, "").replace(/\s+/g, "-");
+  }
+
+  // A fragment addresses the document it was written in, so it stays one. The
+  // click is handled here because letting it reach the location bar would hand
+  // issue text control of the application's own hash routing.
+  function scrollToFragment(event) {
+    event.preventDefault();
+    const anchor = event.currentTarget;
+    const raw = String(anchor.getAttribute("href") || "").slice(1);
+    if (!raw) return;
+    let wanted = raw;
+    try {
+      wanted = decodeURIComponent(raw);
+    } catch (_error) {
+      // A malformed escape is matched as written.
+    }
+    wanted = headingSlug(wanted);
+    const root = anchor.closest(".markdown-body") || anchor.parentNode;
+    const headings = root?.querySelectorAll?.("h1, h2, h3, h4, h5, h6") || [];
+    Array.from(headings)
+      .find((heading) => headingSlug(heading.textContent) === wanted)
+      ?.scrollIntoView({ block: "start" });
+  }
+
   function copyAttributes(source, target, tag, baseURL) {
+    let fragmentLink = false;
     for (const name of ALLOWED_ELEMENTS.get(tag) || []) {
       if (!source.hasAttribute(name)) continue;
       const value = source.getAttribute(name);
       if (tag === "A" && name === "href") {
+        const raw = String(value || "").trim();
+        if (raw.startsWith("#")) {
+          fragmentLink = true;
+          target.setAttribute("href", raw);
+          continue;
+        }
         const href = safeURL(value, SAFE_LINK_SCHEMES, baseURL);
         if (href) target.setAttribute("href", href);
         continue;
@@ -148,7 +206,7 @@
         // the branch it was committed on, which this cannot reconstruct, so a
         // resolved guess would only render as a broken image.
         const src = safeURL(value, SAFE_IMAGE_SCHEMES);
-        if (src) target.setAttribute("src", src);
+        if (src && autoLoadableImage(src)) target.setAttribute("src", src);
         continue;
       }
       if (name === "class") {
@@ -159,7 +217,9 @@
       }
       target.setAttribute(name, value);
     }
-    if (tag === "A") {
+    if (tag === "A" && fragmentLink) {
+      target.addEventListener("click", scrollToFragment);
+    } else if (tag === "A") {
       target.target = "_blank";
       target.rel = "noopener noreferrer";
     }
@@ -191,8 +251,21 @@
     const clean = doc.createElement(tag.toLowerCase());
     if (copyAttributes(node, clean, tag, baseURL) === false) return;
     if (tag === "IMG" && !clean.hasAttribute("src")) {
-      // The source was rejected, but the alt text is author prose worth keeping.
       const alt = String(node.getAttribute("alt") || "").trim();
+      const held = safeURL(node.getAttribute("src"), SAFE_IMAGE_SCHEMES);
+      if (held) {
+        // The address is fetchable but off GitHub, so it becomes a link rather
+        // than a request the operator never asked to make.
+        const link = doc.createElement("a");
+        link.setAttribute("href", held);
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.className = "markdown-remote-image";
+        link.textContent = alt || held;
+        target.appendChild(link);
+        return;
+      }
+      // The source was rejected, but the alt text is author prose worth keeping.
       if (alt) target.appendChild(doc.createTextNode(alt));
       return;
     }

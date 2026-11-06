@@ -9336,6 +9336,17 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   border-radius: 6px;
 }
 
+/* An image hosted away from GitHub is never fetched on sight, so it arrives as
+   a link and needs to read as one. */
+.markdown-body .markdown-remote-image {
+  overflow-wrap: anywhere;
+}
+
+.markdown-body .markdown-remote-image::before {
+  content: "image: ";
+  opacity: .7;
+}
+
 .markdown-body hr {
   margin: 1em 0;
   border: 0;

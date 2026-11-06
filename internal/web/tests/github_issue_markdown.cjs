@@ -160,6 +160,42 @@ test('a failed marked load warns, falls back to plain text, and retries next ren
   assert.ok(!second.pending);
 });
 
+test('a script that loads without defining marked is not kept as a usable load', async t => {
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  let serveEmpty = true;
+  await page.route('**/*', route => new URL(route.request().url()).origin === new URL(baseURL).origin ? route.continue() : route.abort());
+  await page.route('**/static/marked.umd.js', route => {
+    if (!serveEmpty) return route.continue();
+    serveEmpty = false;
+    // A 200 that never defines marked: a proxy or an error page served in place
+    // of the bundle fires load, not error.
+    return route.fulfill({ contentType: 'text/javascript', body: '/* not marked */' });
+  });
+  await page.goto(baseURL);
+  await page.waitForFunction(() => Boolean(window.MarkdownView));
+
+  const renderOnce = () => page.evaluate(async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const rendered = await Promise.race([
+      window.MarkdownView.render(host, 'keep **this**'),
+      new Promise(resolve => { setTimeout(() => resolve('pending'), 5000); }),
+    ]);
+    const result = { rendered, html: host.innerHTML, scripts: document.querySelectorAll('script[data-marked-script="true"]').length };
+    host.remove();
+    return result;
+  });
+
+  const first = await renderOnce();
+  assert.equal(first.rendered, false, 'a bundle without marked is reported as a failed render');
+  assert.equal(first.scripts, 0, 'the unusable script element is dropped instead of being tagged loaded');
+
+  const second = await renderOnce();
+  assert.equal(second.rendered, true, 'the next render fetches again instead of failing against the stale element');
+  assert.ok(second.html.includes('<strong>this</strong>'), `expected rendered markdown, got ${second.html}`);
+});
+
 test('relative links resolve against the repository and collapsible sections stay collapsible', async t => {
   const page = await openIssue(t, { body: repositoryBody });
   const body = page.locator('.github-issue-body');
@@ -175,8 +211,60 @@ test('relative links resolve against the repository and collapsible sections sta
   assert.deepEqual(await body.locator('a').evaluateAll(nodes => nodes.map(node => node.getAttribute('href'))), [
     'https://github.com/acme/repo/docs/guide.md',
     'https://github.com/acme/repo/pull/3',
-    'https://github.com/acme/repo/#contract',
-  ], 'relative hrefs point at GitHub instead of the harness origin');
+    '#contract',
+  ], 'relative hrefs point at GitHub, and a fragment stays in this document');
+  assert.deepEqual(await body.locator('a').evaluateAll(nodes => nodes.map(node => node.target)), ['_blank', '_blank', ''],
+    'only the links that leave the page open a new tab');
+});
+
+test('a fragment link scrolls inside the body instead of driving the app hash', async t => {
+  const page = await openIssue(t);
+  const result = await page.evaluate(async () => {
+    const host = document.createElement('div');
+    host.className = 'markdown-body';
+    host.appendChild(window.MarkdownView.sanitize(
+      '<h2>Connector contract</h2><a href="#connector-contract">jump</a><a href="#missing">nowhere</a>',
+      null, { baseURL: 'https://github.com/acme/repo/' },
+    ));
+    document.body.appendChild(host);
+    const before = location.hash;
+    const scrolled = [];
+    host.querySelector('h2').scrollIntoView = () => scrolled.push('connector-contract');
+    host.querySelectorAll('a').forEach(node => node.click());
+    const result = { hash: location.hash, unchanged: location.hash === before, scrolled };
+    host.remove();
+    return result;
+  });
+
+  assert.ok(result.unchanged, `clicking a fragment link must not rewrite the app hash, got ${result.hash}`);
+  assert.deepEqual(result.scrolled, ['connector-contract'], 'the heading the fragment names is scrolled to, a missing one is a no-op');
+});
+
+test('images load only from GitHub hosts and others stay links', async t => {
+  const page = await openIssue(t, {
+    body: [
+      '![screenshot](https://user-images.githubusercontent.com/1/shot.png)',
+      '',
+      '![badge](https://tracker.example.com/pixel.png)',
+      '',
+      '![](https://tracker.example.com/bare.png)',
+    ].join('\n'),
+  });
+  const body = page.locator('.github-issue-body');
+
+  assert.deepEqual(await body.locator('img').evaluateAll(nodes => nodes.map(node => node.getAttribute('src'))),
+    ['https://user-images.githubusercontent.com/1/shot.png'], 'only GitHub-hosted images are fetched');
+  assert.deepEqual(await body.locator('a.markdown-remote-image').evaluateAll(nodes => nodes.map(node => ({
+    href: node.getAttribute('href'), text: node.textContent, target: node.target, rel: node.rel,
+  }))), [
+    { href: 'https://tracker.example.com/pixel.png', text: 'badge', target: '_blank', rel: 'noopener noreferrer' },
+    { href: 'https://tracker.example.com/bare.png', text: 'https://tracker.example.com/bare.png', target: '_blank', rel: 'noopener noreferrer' },
+  ], 'a third-party image becomes a link the reader opens deliberately');
+  // Page routing aborts every off-origin request, so a leaked fetch would show
+  // up here as a request that was attempted at all.
+  assert.deepEqual(await page.evaluate(() => performance.getEntriesByType('resource')
+    .map(entry => entry.name).filter(name => name.includes('tracker.example.com'))), [],
+  'nothing is requested from the third-party host');
 });
 
 test('relative hrefs need a usable base, and images never take one', async t => {
@@ -274,6 +362,7 @@ test('markdown renderer keeps safe elements and drops the rest', async t => {
       tags: Array.from(host.querySelectorAll('*')).map(node => node.tagName.toLowerCase()),
       link: { href: link.getAttribute('href'), title: link.getAttribute('title'), target: link.target, rel: link.rel },
       images: Array.from(host.querySelectorAll('img')).map(node => node.getAttribute('src')),
+      remoteImages: Array.from(host.querySelectorAll('a.markdown-remote-image')).map(node => node.getAttribute('href')),
       inputs: Array.from(host.querySelectorAll('input')).length,
       checkbox: { type: checkbox.type, checked: checkbox.checked, disabled: checkbox.disabled },
       codeClasses: Array.from(host.querySelectorAll('code')).map(node => node.getAttribute('class')),
@@ -284,7 +373,8 @@ test('markdown renderer keeps safe elements and drops the rest', async t => {
   assert.deepEqual(result.link, { href: 'https://example.com', title: 't', target: '_blank', rel: 'noopener noreferrer' });
   assert.ok(!result.tags.includes('style') && !result.text.includes('display:none'), 'style blocks are dropped with their contents');
   assert.ok(!result.tags.includes('button') && !result.html.includes('onclick'), 'buttons are dropped with their handlers');
-  assert.deepEqual(result.images, ['https://example.com/a.png'], 'only absolute http(s) image sources survive');
+  assert.deepEqual(result.images, [], 'no image is fetched from a host outside GitHub');
+  assert.deepEqual(result.remoteImages, ['https://example.com/a.png'], 'an absolute http(s) image is offered as a link');
   assert.ok(result.text.includes('relative alt text'), 'a dropped image leaves its alt text behind');
   assert.equal(result.inputs, 1, 'only the task list checkbox survives');
   assert.deepEqual(result.checkbox, { type: 'checkbox', checked: true, disabled: true }, 'task list checkboxes stay read-only');

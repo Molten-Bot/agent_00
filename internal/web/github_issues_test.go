@@ -512,10 +512,11 @@ func TestGitHubIssuesSettingRoundTripsThroughSettingsAPI(t *testing.T) {
 	}
 }
 
-// TestGitHubIssueBodiesRenderThroughVendoredMarked pins the wiring the issue
-// detail pane needs: the vendored marked bundle and the sanitizing renderer are
-// published, the page loads the renderer, and the panel renders bodies through
-// it instead of dumping raw markdown into a <pre>.
+// TestGitHubIssueBodiesRenderThroughVendoredMarked covers what only the server
+// decides: the vendored marked bundle, its license, and the sanitizing renderer
+// are published, and the page pulls in the renderer without putting marked on
+// the critical path. What the renderer then produces is behavior, and
+// tests/github_issue_markdown.cjs drives it in a real browser.
 func TestGitHubIssueBodiesRenderThroughVendoredMarked(t *testing.T) {
 	t.Parallel()
 	srv := githubIssueTestServer(nil, true)
@@ -525,7 +526,7 @@ func TestGitHubIssueBodiesRenderThroughVendoredMarked(t *testing.T) {
 	}{
 		{path: "/static/marked.umd.js", want: "marked v"},
 		{path: "/static/marked-LICENSE.txt", want: "Permission is hereby granted"},
-		{path: "/static/markdown.js", want: "global.MarkdownView = { render, sanitize };"},
+		{path: "/static/markdown.js", want: "MarkdownView"},
 	} {
 		response := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, tc.path, nil))
@@ -544,24 +545,13 @@ func TestGitHubIssueBodiesRenderThroughVendoredMarked(t *testing.T) {
 	if strings.Contains(page.Body.String(), `<script src="/static/marked.umd.js"`) {
 		t.Error("marked should load on demand instead of blocking the index page")
 	}
-
-	asset := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
-	script := asset.Body.String()
-	if !strings.Contains(script, `addMarkdown(detailBody, "github-issue-body", issue.body`) ||
-		!strings.Contains(script, `addMarkdown(card, "github-issue-comment-body", comment.body`) ||
-		!strings.Contains(script, "window.MarkdownView?.render") {
-		t.Error("issue and comment bodies should render through the markdown renderer")
-	}
-	if strings.Contains(script, `"pre", "github-issue-body"`) || strings.Contains(script, `"pre", "github-issue-comment-body"`) {
-		t.Error("issue bodies should no longer render as preformatted markdown source")
-	}
 }
 
 // TestTaskPromptModalUsesSharedMarkdownRenderer keeps the task prompt modal on
 // the same sanitizing renderer as the issue pane. The modal used to build HTML
 // with its own regex pass, which parsed a different markdown subset and applied
-// different escaping.
+// different escaping, so the helpers it used must stay gone. The rendering the
+// modal gained instead is checked in tests/task_prompt_markdown.cjs.
 func TestTaskPromptModalUsesSharedMarkdownRenderer(t *testing.T) {
 	t.Parallel()
 	srv := githubIssueTestServer(nil, true)
@@ -572,18 +562,6 @@ func TestTaskPromptModalUsesSharedMarkdownRenderer(t *testing.T) {
 		if strings.Contains(body, gone) {
 			t.Errorf("hand-rolled markdown helper %s should be gone", gone)
 		}
-	}
-	if !strings.Contains(body, "window.MarkdownView.render(taskPromptModalBody") {
-		t.Error("the task prompt modal should render through MarkdownView")
-	}
-
-	style := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(style, httptest.NewRequest(http.MethodGet, "/static/style.css", nil))
-	css := style.Body.String()
-	// Table cells only fall back to left alignment when the markdown gave no
-	// column alignment of its own.
-	if !strings.Contains(css, ".markdown-body th:not([align]),\n.markdown-body td:not([align]) {\n  text-align: left;\n}") {
-		t.Error("markdown table cells should keep the alignment marked emitted")
 	}
 }
 
