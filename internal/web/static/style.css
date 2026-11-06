@@ -9337,6 +9337,14 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   text-decoration: underline;
 }
 
+/* Such a link is reachable by keyboard through its tabindex, so it shows the
+   same focus ring the application's own controls use. */
+.markdown-body a[data-markdown-fragment]:not([href]):focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .markdown-body img {
   max-width: 100%;
   height: auto;

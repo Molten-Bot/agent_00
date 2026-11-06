@@ -5,8 +5,8 @@
 
   // Issue and comment bodies are author-controlled text from GitHub, so the HTML
   // marked produces is filtered through an allow list before it reaches the DOM.
-  // Anything outside the list is unwrapped to its text, and the tags that can
-  // execute or load code are dropped with their contents.
+  // Anything outside the list is unwrapped to its text, and only the tags whose
+  // contents are code or an embedded resource are dropped with those contents.
   const ALLOWED_ELEMENTS = new Map([
     ["A", ["href", "title"]],
     ["BLOCKQUOTE", []],
@@ -45,9 +45,15 @@
     ["UL", []],
   ]);
 
+  // Dropping one of these with its contents is the only way to keep stylesheet
+  // or script source out of the page as text. Interactive containers such as
+  // form, button, select, and textarea are deliberately absent: their markup
+  // means nothing here, but the words inside them are the author's, and this
+  // pane offers no raw view to read them in instead, so they are unwrapped like
+  // any other unknown tag.
   const DROPPED_ELEMENTS = new Set([
-    "AUDIO", "BUTTON", "CANVAS", "EMBED", "FORM", "IFRAME", "LINK", "MATH", "META",
-    "NOSCRIPT", "OBJECT", "SCRIPT", "SELECT", "STYLE", "SVG", "TEMPLATE", "TEXTAREA", "VIDEO",
+    "AUDIO", "CANVAS", "EMBED", "IFRAME", "LINK", "MATH", "META",
+    "OBJECT", "SCRIPT", "STYLE", "SVG", "TEMPLATE", "VIDEO",
   ]);
 
   const SAFE_LINK_SCHEMES = new Set(["http:", "https:", "mailto:"]);
@@ -181,6 +187,15 @@
       ?.scrollIntoView({ block: "start" });
   }
 
+  // A fragment link that never got an href is not a link to the browser: it
+  // answers no key press, so the keys that activate a link are routed to the
+  // same scroll a click takes.
+  function activateFragment(event) {
+    if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    scrollToFragment(event);
+  }
+
   function copyAttributes(source, target, tag, baseURL) {
     let fragment = null;
     for (const name of ALLOWED_ELEMENTS.get(tag) || []) {
@@ -223,6 +238,14 @@
       target.setAttribute(FRAGMENT_ATTRIBUTE, fragment);
       target.rel = "noopener noreferrer";
       target.addEventListener("click", scrollToFragment);
+      if (!target.hasAttribute("href")) {
+        // Focus order and the link role both come from the href, so an anchor
+        // left without one is given them here rather than being reachable by
+        // pointer alone.
+        target.setAttribute("role", "link");
+        target.setAttribute("tabindex", "0");
+        target.addEventListener("keydown", activateFragment);
+      }
     } else if (tag === "A") {
       target.target = "_blank";
       target.rel = "noopener noreferrer";
@@ -240,6 +263,31 @@
     return true;
   }
 
+  // An image left unfetched still has author text behind it, and its address is
+  // worth offering as a link the reader opens deliberately.
+  function appendUnloadedImage(target, node, doc) {
+    const alt = String(node.getAttribute("alt") || "").trim();
+    const held = safeURL(node.getAttribute("src"), SAFE_IMAGE_SCHEMES);
+    // Inside a link the author already chose where a click goes. A nested
+    // anchor is invalid HTML and would take that click to the image host
+    // instead, so the image stays part of the surrounding link's own text.
+    if (held && !target.closest?.("a")) {
+      // The address is fetchable but off GitHub, so it becomes a link rather
+      // than a request the operator never asked to make.
+      const link = doc.createElement("a");
+      link.setAttribute("href", held);
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.className = "markdown-remote-image";
+      link.textContent = alt || held;
+      target.appendChild(link);
+      return;
+    }
+    // Whatever is left of the image, its alt text is author prose worth keeping.
+    const text = alt || held;
+    if (text) target.appendChild(doc.createTextNode(text));
+  }
+
   function appendSanitized(target, node, doc, baseURL) {
     if (node.nodeType === 3) {
       target.appendChild(doc.createTextNode(node.nodeValue));
@@ -255,26 +303,13 @@
     const clean = doc.createElement(tag.toLowerCase());
     if (copyAttributes(node, clean, tag, baseURL) === false) return;
     if (tag === "IMG" && !clean.hasAttribute("src")) {
-      const alt = String(node.getAttribute("alt") || "").trim();
-      const held = safeURL(node.getAttribute("src"), SAFE_IMAGE_SCHEMES);
-      if (held) {
-        // The address is fetchable but off GitHub, so it becomes a link rather
-        // than a request the operator never asked to make.
-        const link = doc.createElement("a");
-        link.setAttribute("href", held);
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.className = "markdown-remote-image";
-        link.textContent = alt || held;
-        target.appendChild(link);
-        return;
-      }
-      // The source was rejected, but the alt text is author prose worth keeping.
-      if (alt) target.appendChild(doc.createTextNode(alt));
+      appendUnloadedImage(target, node, doc);
       return;
     }
-    for (const child of Array.from(node.childNodes)) appendSanitized(clean, child, doc, baseURL);
+    // The element joins the tree before its children are filled in, so a child
+    // can tell what it is nested inside.
     target.appendChild(clean);
+    for (const child of Array.from(node.childNodes)) appendSanitized(clean, child, doc, baseURL);
   }
 
   // options.baseURL is the page the markdown was written on, for example the

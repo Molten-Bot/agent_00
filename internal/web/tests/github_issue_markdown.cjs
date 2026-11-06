@@ -297,6 +297,91 @@ test('a fragment link without a base page carries no href to follow', async t =>
   assert.equal(result.underlined, 'underline', 'the link still reads as a link without an href');
 });
 
+test('a fragment link without a base page is reachable and activated by keyboard', async t => {
+  const page = await openIssue(t);
+  const result = await page.evaluate(async () => {
+    const host = document.createElement('div');
+    host.className = 'markdown-body';
+    host.appendChild(window.MarkdownView.sanitize('<h2>Scope</h2><a href="#scope">jump</a>'));
+    document.body.appendChild(host);
+    const anchor = host.querySelector('a');
+    const scrolled = [];
+    host.querySelector('h2').scrollIntoView = () => scrolled.push('scope');
+    anchor.focus();
+    const focused = document.activeElement === anchor;
+    const press = (key) => {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      anchor.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    const result = {
+      // The tabIndex property reads 0 on an anchor the browser will not focus,
+      // so the attribute is what says the anchor joined the focus order.
+      tabIndex: anchor.getAttribute('tabindex'),
+      role: anchor.getAttribute('role'),
+      focused,
+      enter: press('Enter'),
+      space: press(' '),
+      ignored: press('a'),
+      scrolled,
+    };
+    host.remove();
+    return result;
+  });
+
+  assert.ok(result.focused, 'an anchor with no href only takes focus through an explicit tabindex');
+  assert.equal(result.tabIndex, '0', 'the anchor joins the normal focus order');
+  assert.equal(result.role, 'link', 'assistive technology is told it is still a link');
+  assert.deepEqual([result.enter, result.space], [true, true], 'Enter and Space activate the link instead of scrolling the pane');
+  assert.equal(result.ignored, false, 'other keys are left alone');
+  assert.deepEqual(result.scrolled, ['scope', 'scope'], 'each activation scrolls to the heading the fragment names');
+});
+
+test('an image inside a link keeps the link the author wrote', async t => {
+  const page = await openIssue(t, {
+    body: [
+      '[![badge](https://tracker.example.com/pixel.png)](https://example.com/build)',
+      '',
+      '[![](https://tracker.example.com/bare.png)](https://example.com/bare)',
+      '',
+      '[![shot](https://user-images.githubusercontent.com/1/shot.png)](https://example.com/shot)',
+    ].join('\n'),
+  });
+  const body = page.locator('.github-issue-body');
+
+  assert.equal(await body.locator('a a').count(), 0, 'a nested anchor would steal the click from the author\'s link');
+  assert.deepEqual(await body.locator('a').evaluateAll(nodes => nodes.map(node => ({
+    href: node.getAttribute('href'), text: node.textContent, images: node.querySelectorAll('img').length,
+  }))), [
+    { href: 'https://example.com/build', text: 'badge', images: 0 },
+    { href: 'https://example.com/bare', text: 'https://tracker.example.com/bare.png', images: 0 },
+    { href: 'https://example.com/shot', text: '', images: 1 },
+  ], 'an unfetched image becomes the link text, and a GitHub-hosted one stays an image inside the link');
+  assert.deepEqual(await page.evaluate(() => performance.getEntriesByType('resource')
+    .map(entry => entry.name).filter(name => name.includes('tracker.example.com'))), [],
+  'nothing is requested from the third-party host');
+});
+
+test('interactive container tags are unwrapped so no author text is lost', async t => {
+  const page = await openIssue(t, {
+    body: [
+      '<form><label>Ship date</label><select><option>Friday</option></select>',
+      '<textarea>draft note</textarea><button onclick="window.__xss = 1">go</button></form>',
+      '',
+      '<noscript>Enable JavaScript to see the chart.</noscript>',
+    ].join('\n'),
+  });
+  const body = page.locator('.github-issue-body');
+  const text = await body.innerText();
+
+  for (const kept of ['Ship date', 'Friday', 'draft note', 'go', 'Enable JavaScript to see the chart.']) {
+    assert.ok(text.includes(kept), `expected the body to keep ${JSON.stringify(kept)}, got ${JSON.stringify(text)}`);
+  }
+  assert.equal(await body.locator('form, select, textarea, button, noscript').count(), 0, 'the markup itself is still dropped');
+  assert.equal(await body.locator('[onclick]').count(), 0, 'no handler survives the unwrapping');
+  assert.equal(await page.evaluate(() => window.__xss || ''), '');
+});
+
 test('images load only from GitHub hosts and others stay links', async t => {
   const page = await openIssue(t, {
     body: [
@@ -430,6 +515,7 @@ test('markdown renderer keeps safe elements and drops the rest', async t => {
   assert.deepEqual(result.link, { href: 'https://example.com', title: 't', target: '_blank', rel: 'noopener noreferrer' });
   assert.ok(!result.tags.includes('style') && !result.text.includes('display:none'), 'style blocks are dropped with their contents');
   assert.ok(!result.tags.includes('button') && !result.html.includes('onclick'), 'buttons are dropped with their handlers');
+  assert.ok(result.text.includes('go'), 'the words inside a dropped container are still the author\'s');
   assert.deepEqual(result.images, [], 'no image is fetched from a host outside GitHub');
   assert.deepEqual(result.remoteImages, ['https://example.com/a.png'], 'an absolute http(s) image is offered as a link');
   assert.ok(result.text.includes('relative alt text'), 'a dropped image leaves its alt text behind');
