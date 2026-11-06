@@ -1633,7 +1633,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `function loadGitHubReposForChat(options = {})`) ||
 		!strings.Contains(markup, `const forceNewRequest = force && refresh;`) ||
 		!strings.Contains(markup, `if (loadSequence !== githubReposLoadSequence)`) ||
-		!strings.Contains(markup, `const response = await fetch(refresh ? "/api/github/repos?refresh=1" : "/api/github/repos", { cache: "no-store" });`) ||
+		!strings.Contains(markup, `const response = await fetch(refresh ? "/api/github/repos?refresh=1&include_disabled=1" : "/api/github/repos?include_disabled=1", { cache: "no-store" });`) ||
 		!strings.Contains(markup, `state.githubRepos = Array.isArray(body.repos) ? body.repos : [];`) ||
 		!strings.Contains(markup, `renderRepoHistoryOptions();`) ||
 		!strings.Contains(markup, `loadGitHubReposForChat({ force: true, refresh: true, keepExisting: true })`) ||
@@ -2396,6 +2396,36 @@ func TestFilterDisabledGitHubRepos(t *testing.T) {
 	}
 	if got := filterDisabledGitHubRepos(repos, nil); len(got) != 2 {
 		t.Fatalf("default repositories = %#v, want all selected", got)
+	}
+}
+
+func TestHandlerGitHubReposCanIncludeDisabledForSettings(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer("", NewBroker())
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{
+			{FullName: "acme/one", HTMLURL: "https://github.com/acme/one"},
+			{FullName: "acme/two", HTMLURL: "https://github.com/acme/two"},
+		}, nil
+	}
+	srv.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) {
+		return ReviewSettingsState{DisabledRepositories: []string{"acme/one"}}, nil
+	}
+	handler := srv.Handler()
+
+	filtered := httptest.NewRecorder()
+	handler.ServeHTTP(filtered, httptest.NewRequest(http.MethodGet, "/api/github/repos", nil))
+	if strings.Contains(filtered.Body.String(), `"full_name":"acme/one"`) ||
+		!strings.Contains(filtered.Body.String(), `"full_name":"acme/two"`) {
+		t.Fatalf("filtered github repos response = %q", filtered.Body.String())
+	}
+
+	unfiltered := httptest.NewRecorder()
+	handler.ServeHTTP(unfiltered, httptest.NewRequest(http.MethodGet, "/api/github/repos?include_disabled=1", nil))
+	if !strings.Contains(unfiltered.Body.String(), `"full_name":"acme/one"`) ||
+		!strings.Contains(unfiltered.Body.String(), `"full_name":"acme/two"`) {
+		t.Fatalf("github repos response including disabled = %q", unfiltered.Body.String())
 	}
 }
 

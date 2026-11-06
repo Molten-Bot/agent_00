@@ -193,7 +193,10 @@ test('all settings save on close and survive reopening; no main Save button', as
 test('repository selections hide dropdown options and manual entry enables them again', async t => {
   const repo = { name: 'widget', full_name: 'acme/widget', html_url: 'https://github.com/acme/widget' };
   const { page, writes } = await openSettings(t, { configurePage: async page => {
-    await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [repo] } }));
+    await page.route('**/api/github/repos**', route => {
+      const includeDisabled = new URL(route.request().url()).searchParams.get('include_disabled') === '1';
+      return route.fulfill({ json: { ok: true, repos: includeDisabled ? [repo] : [] } });
+    });
   }});
   await select(page, 'automation');
   const option = page.locator('#review-settings-repositories input[value="https://github.com/acme/widget"]');
@@ -203,6 +206,19 @@ test('repository selections hide dropdown options and manual entry enables them 
   await close(page);
   assert.deepEqual(writes.at(-1).disabled_repositories, ['https://github.com/acme/widget']);
   assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 0);
+
+  await page.locator('#settings-open').click();
+  await select(page, 'automation');
+  assert.equal(await option.isChecked(), false, 'disabled repository remains available in settings');
+  await option.check();
+  await close(page);
+  assert.deepEqual(writes.at(-1).disabled_repositories, []);
+  assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 1);
+
+  await page.locator('#settings-open').click();
+  await select(page, 'automation');
+  await option.uncheck();
+  await close(page);
 
   await page.locator('#builder-repo-input').fill('https://github.com/acme/widget');
   await page.locator('#builder-repo-input').blur();

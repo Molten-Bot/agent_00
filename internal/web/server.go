@@ -397,7 +397,9 @@ func (s Server) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	repos = s.filterConfiguredGitHubRepos(r.Context(), repos)
+	if !gitHubReposIncludeDisabledRequested(r) {
+		repos = s.filterConfiguredGitHubRepos(r.Context(), repos)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":    true,
@@ -2376,6 +2378,18 @@ func gitHubReposRefreshRequested(r *http.Request) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("refresh"))) {
+	case "1", "true", "yes", "y":
+		return true
+	default:
+		return false
+	}
+}
+
+func gitHubReposIncludeDisabledRequested(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("include_disabled"))) {
 	case "1", "true", "yes", "y":
 		return true
 	default:

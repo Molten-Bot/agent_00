@@ -2507,7 +2507,7 @@
       }
       githubReposLoadPromise = (async () => {
         try {
-          const response = await fetch(refresh ? "/api/github/repos?refresh=1" : "/api/github/repos", { cache: "no-store" });
+          const response = await fetch(refresh ? "/api/github/repos?refresh=1&include_disabled=1" : "/api/github/repos?include_disabled=1", { cache: "no-store" });
           let body = null;
           try {
             body = await response.json();
