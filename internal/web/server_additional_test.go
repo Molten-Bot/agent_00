@@ -737,7 +737,7 @@ func TestPostTaskReviewSliderLivesInsideAutomationPanel(t *testing.T) {
 	}
 	markup := string(data)
 
-	for _, retired := range []string{`id="settings-tab-review"`, `data-settings-tab="review"`, `aria-controls="settings-panel-review"`} {
+	for _, retired := range []string{`id="settings-tab-review"`, `data-settings-tab="review"`, `aria-controls="settings-panel-review"`, `data-settings-panel="review"`} {
 		if strings.Contains(markup, retired) {
 			t.Fatalf("embedded index.html still exposes the retired Post-task Review tab via %q", retired)
 		}
@@ -759,12 +759,18 @@ func TestPostTaskReviewSliderLivesInsideAutomationPanel(t *testing.T) {
 	}
 	// A leftover role would make the moved block a second visible tabpanel
 	// inside a tab's own panel, which breaks the one-panel-per-tab contract.
+	// Scan the whole opening tag, not just the part after id, so attributes
+	// written ahead of id still count.
 	reviewIdx := strings.Index(automation, `id="settings-panel-review"`)
-	reviewEnd := strings.Index(automation[reviewIdx:], ">")
+	tagStart := strings.LastIndex(automation[:reviewIdx], "<")
+	if tagStart == -1 {
+		t.Fatal("embedded index.html review settings section missing its tag start")
+	}
+	reviewEnd := strings.Index(automation[tagStart:], ">")
 	if reviewEnd == -1 {
 		t.Fatal("embedded index.html review settings section missing its tag end")
 	}
-	if reviewTag := automation[reviewIdx : reviewIdx+reviewEnd]; strings.Contains(reviewTag, "role=") || strings.Contains(reviewTag, "hidden") {
+	if reviewTag := automation[tagStart : tagStart+reviewEnd]; strings.Contains(reviewTag, "role=") || strings.Contains(reviewTag, "hidden") {
 		t.Fatalf("embedded index.html review settings section must no longer be a hidden tabpanel, got %q", reviewTag)
 	}
 
