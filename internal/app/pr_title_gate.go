@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
@@ -28,10 +29,12 @@ const (
 // prTitleGate describes a pull-request title policy declared by a repository
 // workflow step that runs the semantic-pull-request action.
 type prTitleGate struct {
-	WorkflowPath string
-	Types        []string
-	Scopes       []string
-	RequireScope bool
+	WorkflowPath   string
+	Types          []string
+	Scopes         []string
+	DisallowScopes []string
+	SubjectPattern string
+	RequireScope   bool
 }
 
 // preferredPRTitleTypes orders the conventional-commit types the harness picks
@@ -72,21 +75,33 @@ func isPRTitleGateCheckName(name string) bool {
 }
 
 // prTitleGateOnlyFailure reports whether the observed check results have
-// failures and every failing check is a title gate. Both the raw watch output
-// and the summary are scanned: the summary handed to remediation is truncated
-// at maxCheckSummaryChars and can cut a failing row short, so a failure seen in
-// any source blocks the repair.
+// failures and every failing check is a title gate.
+//
+// Both the raw watch output and the summary are scanned. The summary can carry
+// a snapshot taken after the watch output was captured, so every non-gate check
+// resolves to the freshest state reported for it and a stale red row cannot
+// veto the repair on its own. That summary is truncated at maxCheckSummaryChars,
+// so a row it drops, or cuts down to an unrecognized bucket, keeps the state the
+// watch captured. A gate failure seen in any source still counts, because the
+// watch can be the only source that observed the gate run.
 func prTitleGateOnlyFailure(res execx.Result, summary string) bool {
 	titleGateFailed := false
+	others := make(map[string]string)
 	for _, raw := range []string{res.Stdout, res.Stderr, summary} {
 		for name, state := range checkStatesFromText(raw) {
-			if !isFailedCheckBucket(state.Bucket) {
+			if isPRTitleGateCheckName(name) {
+				titleGateFailed = titleGateFailed || isFailedCheckBucket(state.Bucket)
 				continue
 			}
-			if !isPRTitleGateCheckName(name) {
-				return false
+			if _, seen := others[name]; seen && !isKnownCheckBucket(state.Bucket) {
+				continue
 			}
-			titleGateFailed = true
+			others[name] = state.Bucket
+		}
+	}
+	for _, bucket := range others {
+		if isFailedCheckBucket(bucket) {
+			return false
 		}
 	}
 	return titleGateFailed
@@ -99,8 +114,14 @@ func prTitleGateOnlyFailure(res execx.Result, summary string) bool {
 //
 // Only a pull request the harness owns is eligible; a pre-existing or
 // PR-feedback target belongs to its author.
-func (h Harness) repairPRTitleGateFailure(ctx context.Context, repo repoWorkspace, checkRes execx.Result, checkSummary string) (bool, error) {
-	if strings.TrimSpace(repo.PRURL) == "" || !harnessOwnsPRTitle(repo) {
+func (h Harness) repairPRTitleGateFailure(
+	ctx context.Context,
+	repo repoWorkspace,
+	issue *config.GitHubIssueConfig,
+	checkRes execx.Result,
+	checkSummary string,
+) (bool, error) {
+	if !harnessCanRetitlePR(repo) {
 		return false, nil
 	}
 	if !prTitleGateOnlyFailure(checkRes, checkSummary) {
@@ -120,7 +141,7 @@ func (h Harness) repairPRTitleGateFailure(ctx context.Context, repo repoWorkspac
 		// title may belong to a different pull request on this branch.
 		return false, nil
 	}
-	rewritten, ok := conformingPRTitle(current, gate, githubutil.PullRequestNumber(repo.PRURL))
+	rewritten, ok := conformingPRTitle(current, gate, prTitleScopeNumbers(repo.PRURL, issue))
 	if !ok {
 		return false, nil
 	}
@@ -136,6 +157,38 @@ func (h Harness) repairPRTitleGateFailure(ctx context.Context, repo repoWorkspac
 		gate.WorkflowPath,
 	)
 	return true, nil
+}
+
+// harnessCanRetitlePR reports whether the harness may rewrite the title of the
+// pull request it is looking at. Callers that would otherwise punish a red
+// title gate must consult it first: a gate on a pull request the harness does
+// not own is never repaired, so treating it as repairable only fails a run.
+func harnessCanRetitlePR(repo repoWorkspace) bool {
+	return strings.TrimSpace(repo.PRURL) != "" && harnessOwnsPRTitle(repo)
+}
+
+// prTitleScopeNumbers returns the issue-style scope numbers the harness can
+// state as fact, most specific first. A run started from a GitHub issue in the
+// same repository scopes the title to that issue; the pull-request number is a
+// self-referential fallback used only when no issue backs the run.
+func prTitleScopeNumbers(prURL string, issue *config.GitHubIssueConfig) []int {
+	var numbers []int
+	if issue != nil && issue.Number > 0 && issueBelongsToPullRequestRepo(issue.Repository, prURL) {
+		numbers = append(numbers, issue.Number)
+	}
+	if prNumber := githubutil.PullRequestNumber(prURL); prNumber > 0 {
+		numbers = append(numbers, prNumber)
+	}
+	return numbers
+}
+
+// issueBelongsToPullRequestRepo reports whether an OWNER/REPO issue repository
+// is the repository the pull request lives in. A `#<number>` scope resolves
+// against that repository, so a foreign issue number must never be stamped.
+func issueBelongsToPullRequestRepo(issueRepo, prURL string) bool {
+	issueRepo = strings.TrimSpace(issueRepo)
+	prRepo := githubutil.PullRequestRepository(prURL)
+	return issueRepo != "" && prRepo != "" && strings.EqualFold(issueRepo, prRepo)
 }
 
 // harnessOwnsPRTitle reports whether the harness supplied the pull-request
@@ -384,6 +437,10 @@ func parsePRTitleGateInputs(lines []string, start, keyIndent int) prTitleGate {
 			gate.Types = parseWorkflowScalarList(lines, j, indent, rest)
 		case "scopes":
 			gate.Scopes = parseWorkflowScalarList(lines, j, indent, rest)
+		case "disallowScopes":
+			gate.DisallowScopes = parseWorkflowScalarList(lines, j, indent, rest)
+		case "subjectPattern":
+			gate.SubjectPattern = parseWorkflowScalar(lines, j, indent, rest)
 		case "requireScope":
 			gate.RequireScope = isTruthyWorkflowValue(rest)
 		}
@@ -413,6 +470,29 @@ func parseWorkflowScalarList(lines []string, keyLine, keyIndent int, rest string
 		raw = append(raw, strings.TrimPrefix(strings.TrimSpace(lines[j]), "- "))
 	}
 	return splitWorkflowScalars(raw)
+}
+
+// parseWorkflowScalar reads a single scalar input, following a block scalar
+// onto the line nested under the key. Unlike parseWorkflowScalarList it never
+// splits the value: a regex input may start with `[` or contain commas.
+func parseWorkflowScalar(lines []string, keyLine, keyIndent int, rest string) string {
+	if rest = strings.TrimSpace(rest); rest != "" && !isBlockScalarMarker(rest) {
+		return unquoteWorkflowScalar(rest)
+	}
+	for j := keyLine + 1; j < len(lines); j++ {
+		if strings.TrimSpace(lines[j]) == "" {
+			continue
+		}
+		if lineIndent(lines[j]) <= keyIndent {
+			break
+		}
+		return unquoteWorkflowScalar(strings.TrimSpace(lines[j]))
+	}
+	return ""
+}
+
+func unquoteWorkflowScalar(value string) string {
+	return strings.TrimSpace(strings.Trim(strings.TrimSpace(value), `"'`))
 }
 
 func splitWorkflowScalars(raw []string) []string {
@@ -453,13 +533,20 @@ func lineIndent(line string) int {
 	return len(line) - len(strings.TrimLeft(line, " \t"))
 }
 
-// conformingPRTitle rewrites title so it satisfies gate. It reports false when
-// the title already conforms or no conforming title can be derived without
-// guessing a repository-specific scope.
-func conformingPRTitle(title string, gate prTitleGate, prNumber int) (string, bool) {
+// conformingPRTitle rewrites title so it satisfies gate, drawing a synthesized
+// scope from scopeNumbers in order. It reports false when the title already
+// conforms or no conforming title can be derived without guessing a
+// repository-specific scope or rewording the subject.
+func conformingPRTitle(title string, gate prTitleGate, scopeNumbers []int) (string, bool) {
 	current := strings.TrimSpace(title)
 	currentType, currentScope, subject := splitConventionalPRTitle(current)
 	if subject == "" {
+		return "", false
+	}
+	if !subjectMatchesGatePattern(subject, gate.SubjectPattern) {
+		// The gate also grades the subject, which is the operator's wording.
+		// Rewriting only the type and scope would leave the gate red while the
+		// harness reported the title repaired, so leave the title alone.
 		return "", false
 	}
 
@@ -467,7 +554,7 @@ func conformingPRTitle(title string, gate prTitleGate, prNumber int) (string, bo
 	if !ok {
 		return "", false
 	}
-	newScope, ok := conformingPRTitleScope(currentScope, gate, prNumber)
+	newScope, ok := conformingPRTitleScope(currentScope, gate, scopeNumbers)
 	if !ok {
 		return "", false
 	}
@@ -514,8 +601,8 @@ func conformingPRTitleType(current string, allowed []string) (string, bool) {
 	return allowed[0], true
 }
 
-func conformingPRTitleScope(current string, gate prTitleGate, prNumber int) (string, bool) {
-	if current != "" && matchesGateScope(current, gate.Scopes) {
+func conformingPRTitleScope(current string, gate prTitleGate, scopeNumbers []int) (string, bool) {
+	if current != "" && gateAllowsScope(current, gate) {
 		return current, true
 	}
 	if !gate.RequireScope {
@@ -524,25 +611,51 @@ func conformingPRTitleScope(current string, gate prTitleGate, prNumber int) (str
 		return "", true
 	}
 
-	// The pull-request number is the only scope the harness can state as fact.
+	// An issue-style number is the only scope the harness can state as fact.
 	// Any other value from the allowlist, such as `deps`, labels the pull
 	// request for release and auto-merge automation that reads the scope, so an
 	// underivable scope leaves the title alone instead.
-	if prNumber > 0 {
-		if candidate := "#" + strconv.Itoa(prNumber); matchesGateScope(candidate, gate.Scopes) {
+	for _, number := range scopeNumbers {
+		if candidate := "#" + strconv.Itoa(number); gateAllowsScope(candidate, gate) {
 			return candidate, true
 		}
 	}
 	return "", false
 }
 
-func matchesGateScope(scope string, patterns []string) bool {
+// gateAllowsScope reports whether scope satisfies the gate's scope policy. An
+// empty allowlist accepts any scope, while disallowScopes always rejects.
+func gateAllowsScope(scope string, gate prTitleGate) bool {
+	if strings.TrimSpace(scope) == "" {
+		return false
+	}
+	if matchesScopePattern(scope, gate.DisallowScopes) {
+		return false
+	}
+	return len(gate.Scopes) == 0 || matchesScopePattern(scope, gate.Scopes)
+}
+
+// subjectMatchesGatePattern reports whether subject satisfies the gate's
+// subjectPattern, which the action requires to match the subject end to end.
+// The action evaluates JavaScript regexes, so a pattern Go cannot compile, such
+// as one using a lookahead, is treated as satisfied rather than blocking every
+// rewrite.
+func subjectMatchesGatePattern(subject, pattern string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return true
+	}
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return true
+	}
+	return compiled.FindString(subject) == subject
+}
+
+func matchesScopePattern(scope string, patterns []string) bool {
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
 		return false
-	}
-	if len(patterns) == 0 {
-		return true
 	}
 	for _, pattern := range patterns {
 		pattern = strings.TrimSpace(pattern)

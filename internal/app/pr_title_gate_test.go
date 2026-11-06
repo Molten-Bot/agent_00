@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
 
@@ -109,6 +110,31 @@ func TestDetectPRTitleGateVariants(t *testing.T) {
 			gate:  prTitleGate{Types: []string{"feat", "fix"}},
 		},
 		{
+			name: "subject pattern and disallowed scopes",
+			workflow: titleGateOnEdited + "jobs:\n  title:\n    steps:\n" +
+				"      - uses: amannn/action-semantic-pull-request@v5\n" +
+				"        with:\n" +
+				"          types: [feat]\n" +
+				"          subjectPattern: '^[a-z].*[^.]$'\n" +
+				"          disallowScopes: [release, deps]\n",
+			found: true,
+			gate: prTitleGate{
+				Types:          []string{"feat"},
+				DisallowScopes: []string{"release", "deps"},
+				SubjectPattern: `^[a-z].*[^.]$`,
+			},
+		},
+		{
+			name: "block scalar subject pattern starting with a character class",
+			workflow: titleGateOnEdited + "jobs:\n  title:\n    steps:\n" +
+				"      - uses: amannn/action-semantic-pull-request@v5\n" +
+				"        with:\n" +
+				"          subjectPattern: |\n" +
+				"            [a-z].*, and more\n",
+			found: true,
+			gate:  prTitleGate{SubjectPattern: "[a-z].*, and more"},
+		},
+		{
 			name: "step without inputs still gates",
 			workflow: titleGateOnEdited + "jobs:\n  title:\n    steps:\n" +
 				"      - uses: amannn/action-semantic-pull-request@v5\n" +
@@ -186,42 +212,94 @@ func TestConformingPRTitle(t *testing.T) {
 		RequireScope: true,
 	}
 	for _, tc := range []struct {
-		name  string
-		gate  prTitleGate
-		title string
-		pr    int
-		want  string
-		ok    bool
+		name    string
+		gate    prTitleGate
+		title   string
+		numbers []int
+		want    string
+		ok      bool
 	}{
 		{
-			name:  "rejected type and scope",
-			gate:  strictGate,
-			title: "ci(automation): tighten release checks",
-			pr:    42,
-			want:  "chore(#42): tighten release checks",
-			ok:    true,
+			name:    "rejected type and scope",
+			gate:    strictGate,
+			title:   "ci(automation): tighten release checks",
+			numbers: []int{42},
+			want:    "chore(#42): tighten release checks",
+			ok:      true,
 		},
 		{
-			name:  "missing scope only",
-			gate:  strictGate,
-			title: "fix: restore nightly job",
-			pr:    12,
-			want:  "fix(#12): restore nightly job",
-			ok:    true,
+			name:    "missing scope only",
+			gate:    strictGate,
+			title:   "fix: restore nightly job",
+			numbers: []int{12},
+			want:    "fix(#12): restore nightly job",
+			ok:      true,
 		},
 		{
-			name:  "no conventional prefix",
-			gate:  strictGate,
-			title: "Harden CI validation checks",
-			pr:    7,
-			want:  "chore(#7): Harden CI validation checks",
-			ok:    true,
+			name:    "no conventional prefix",
+			gate:    strictGate,
+			title:   "Harden CI validation checks",
+			numbers: []int{7},
+			want:    "chore(#7): Harden CI validation checks",
+			ok:      true,
 		},
 		{
-			name:  "already conforming",
-			gate:  strictGate,
-			title: "chore(deps): bump toolchain",
-			pr:    9,
+			name:    "already conforming",
+			gate:    strictGate,
+			title:   "chore(deps): bump toolchain",
+			numbers: []int{9},
+		},
+		{
+			name:    "originating issue number wins over the pull request number",
+			gate:    strictGate,
+			title:   "ci: tighten release checks",
+			numbers: []int{17, 42},
+			want:    "chore(#17): tighten release checks",
+			ok:      true,
+		},
+		{
+			name:    "rejected issue number falls back to the pull request number",
+			gate:    prTitleGate{Types: []string{"chore"}, Scopes: []string{`#4\d`}, RequireScope: true},
+			title:   "ci: tighten release checks",
+			numbers: []int{17, 42},
+			want:    "chore(#42): tighten release checks",
+			ok:      true,
+		},
+		{
+			name:    "disallowed scope is replaced",
+			gate:    prTitleGate{Types: []string{"chore"}, DisallowScopes: []string{"deps", "release"}, RequireScope: true},
+			title:   "chore(release): tighten release checks",
+			numbers: []int{42},
+			want:    "chore(#42): tighten release checks",
+			ok:      true,
+		},
+		{
+			name:    "every candidate scope is disallowed",
+			gate:    prTitleGate{Types: []string{"chore"}, DisallowScopes: []string{`#\d+`, "release"}, RequireScope: true},
+			title:   "ci(release): tighten release checks",
+			numbers: []int{42},
+		},
+		{
+			name:    "subject the gate rejects keeps the title",
+			gate:    prTitleGate{Types: []string{"chore"}, SubjectPattern: `^[a-z].*[^.]$`},
+			title:   "ci: Tighten release checks",
+			numbers: []int{42},
+		},
+		{
+			name:    "subject the gate accepts is rewritten",
+			gate:    prTitleGate{Types: []string{"chore"}, SubjectPattern: `^[a-z].*[^.]$`},
+			title:   "ci: tighten release checks",
+			numbers: []int{42},
+			want:    "chore: tighten release checks",
+			ok:      true,
+		},
+		{
+			name:    "subject pattern go cannot compile is not enforced",
+			gate:    prTitleGate{Types: []string{"chore"}, SubjectPattern: `^(?![A-Z]).+$`},
+			title:   "ci: Tighten release checks",
+			numbers: []int{42},
+			want:    "chore: Tighten release checks",
+			ok:      true,
 		},
 		{
 			name:  "scope required but underivable",
@@ -236,10 +314,10 @@ func TestConformingPRTitle(t *testing.T) {
 			ok:    true,
 		},
 		{
-			name:  "literal scope allowlist is never guessed",
-			gate:  prTitleGate{Types: []string{"chore"}, Scopes: []string{"api", "web"}, RequireScope: true},
-			title: "ci: tighten checks",
-			pr:    42,
+			name:    "literal scope allowlist is never guessed",
+			gate:    prTitleGate{Types: []string{"chore"}, Scopes: []string{"api", "web"}, RequireScope: true},
+			title:   "ci: tighten checks",
+			numbers: []int{42},
 		},
 		{
 			name:  "deps is never guessed",
@@ -252,12 +330,12 @@ func TestConformingPRTitle(t *testing.T) {
 			title: "ci: tighten checks",
 		},
 		{
-			name:  "required scope with an open allowlist uses the pr number",
-			gate:  prTitleGate{Types: []string{"chore"}, RequireScope: true},
-			title: "ci: tighten checks",
-			pr:    42,
-			want:  "chore(#42): tighten checks",
-			ok:    true,
+			name:    "required scope with an open allowlist uses the pr number",
+			gate:    prTitleGate{Types: []string{"chore"}, RequireScope: true},
+			title:   "ci: tighten checks",
+			numbers: []int{42},
+			want:    "chore(#42): tighten checks",
+			ok:      true,
 		},
 		{
 			name:  "gate without inputs keeps the title",
@@ -271,7 +349,7 @@ func TestConformingPRTitle(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, ok := conformingPRTitle(tc.title, tc.gate, tc.pr)
+			got, ok := conformingPRTitle(tc.title, tc.gate, tc.numbers)
 			if ok != tc.ok || got != tc.want {
 				t.Fatalf("conformingPRTitle(%q) = (%q, %v), want (%q, %v)", tc.title, got, ok, tc.want, tc.ok)
 			}
@@ -291,6 +369,12 @@ func TestPRTitleGateOnlyFailure(t *testing.T) {
 			name:    "truncated summary hides another failure visible in raw output",
 			res:     execx.Result{Stdout: "check-title\tfail\t6s\t\nType Check\tfail\t1m\t"},
 			summary: "check-title\tfail\t6s\t\nType Check\tfa",
+		},
+		{
+			name:    "fresher summary clears a check the watch saw red",
+			res:     execx.Result{Stdout: "check-title\tfail\t6s\t\nType Check\tfail\t1m\t"},
+			summary: "Type Check\tpass\t2m\t\ncheck-title\tfail\t6s\t",
+			want:    true,
 		},
 		{
 			name:    "failure only in the summary still blocks",
@@ -369,6 +453,141 @@ func TestCapturedChecksHaveTitleGateFailures(t *testing.T) {
 	}
 }
 
+func TestTitleGateBlocksChecksSuccess(t *testing.T) {
+	t.Parallel()
+	gateDir := writeTitleGateWorkflow(t, titleGateWorkflow)
+	prURL := "https://github.com/acme/repo/pull/42"
+	redGate := execx.Result{Stdout: "check-title\tfail\t6s\t"}
+	for _, tc := range []struct {
+		name string
+		repo repoWorkspace
+		res  execx.Result
+		want bool
+	}{
+		{
+			name: "gate the harness repairs blocks the snapshot",
+			repo: repoWorkspace{Dir: gateDir, PRURL: prURL, PRCreatedThisRun: true},
+			res:  redGate,
+			want: true,
+		},
+		{
+			name: "pr feedback target keeps the passing snapshot",
+			repo: repoWorkspace{Dir: gateDir, PRURL: prURL, PRCreatedThisRun: true, RequireExistingPR: true},
+			res:  redGate,
+		},
+		{
+			name: "branch the harness did not name keeps the passing snapshot",
+			repo: repoWorkspace{Dir: gateDir, PRURL: prURL, Branch: "feature/login"},
+			res:  redGate,
+		},
+		{
+			name: "gate the harness cannot re-run keeps the passing snapshot",
+			repo: repoWorkspace{
+				Dir:              writeTitleGateWorkflow(t, strings.Replace(titleGateWorkflow, ", edited", "", 1)),
+				PRURL:            prURL,
+				PRCreatedThisRun: true,
+			},
+			res: redGate,
+		},
+		{
+			name: "green gate keeps the passing snapshot",
+			repo: repoWorkspace{Dir: gateDir, PRURL: prURL, PRCreatedThisRun: true},
+			res:  execx.Result{Stdout: "check-title\tpass\t6s\t"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := New(&fakeRunner{t: t})
+			h.Logf = func(string, ...any) {}
+			if got := h.titleGateBlocksChecksSuccess(tc.repo, tc.res, "watch_timeout_snapshot", 1); got != tc.want {
+				t.Fatalf("titleGateBlocksChecksSuccess = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPRTitleScopeNumbers(t *testing.T) {
+	t.Parallel()
+	prURL := "https://github.com/acme/repo/pull/42"
+	for _, tc := range []struct {
+		name  string
+		prURL string
+		issue *config.GitHubIssueConfig
+		want  []int
+	}{
+		{name: "no issue", prURL: prURL, want: []int{42}},
+		{
+			name:  "issue in the same repository leads",
+			prURL: prURL,
+			issue: &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17},
+			want:  []int{17, 42},
+		},
+		{
+			name:  "repository match ignores case",
+			prURL: prURL,
+			issue: &config.GitHubIssueConfig{Repository: "Acme/Repo", Number: 17},
+			want:  []int{17, 42},
+		},
+		{
+			name:  "issue in another repository is dropped",
+			prURL: prURL,
+			issue: &config.GitHubIssueConfig{Repository: "acme/other", Number: 17},
+			want:  []int{42},
+		},
+		{
+			name:  "issue without a number is dropped",
+			prURL: prURL,
+			issue: &config.GitHubIssueConfig{Repository: "acme/repo"},
+			want:  []int{42},
+		},
+		{
+			name:  "pull request url that carries no number",
+			prURL: "42",
+			issue: &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := prTitleScopeNumbers(tc.prURL, tc.issue); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("prTitleScopeNumbers = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRepairPRTitleGateFailureScopesTheOriginatingIssue(t *testing.T) {
+	t.Parallel()
+	repo := repoWorkspace{
+		URL:              "https://github.com/acme/repo",
+		Dir:              writeTitleGateWorkflow(t, titleGateWorkflow),
+		RelDir:           "repo",
+		PRURL:            "https://github.com/acme/repo/pull/42",
+		PRCreatedThisRun: true,
+	}
+	want := "chore(#17): tighten release checks"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: prTitleViewCommand(repo.Dir, repo.PRURL), res: execx.Result{Stdout: `{"title":"ci(automation): tighten release checks"}`}},
+		{cmd: prEditTitleCommand(repo.Dir, repo.PRURL, want), res: execx.Result{}},
+	}}
+
+	h := New(fake)
+	h.Logf = func(string, ...any) {}
+
+	repaired, err := h.repairPRTitleGateFailure(
+		context.Background(),
+		repo,
+		&config.GitHubIssueConfig{Repository: "acme/repo", Number: 17},
+		execx.Result{},
+		"check-title\tfail\t6s\t",
+	)
+	if err != nil || !repaired {
+		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (true, nil)", repaired, err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unused expectations: %+v", fake.exps)
+	}
+}
+
 func TestRepairPRTitleGateFailureRetitlesPullRequest(t *testing.T) {
 	t.Parallel()
 	repo := repoWorkspace{
@@ -391,6 +610,7 @@ func TestRepairPRTitleGateFailureRetitlesPullRequest(t *testing.T) {
 	repaired, err := h.repairPRTitleGateFailure(
 		context.Background(),
 		repo,
+		nil,
 		execx.Result{},
 		"check-title\tfail\t6s\thttps://example.com/job\nLint\tpass\t1s\t",
 	)
@@ -425,7 +645,7 @@ func TestRepairPRTitleGateFailureRetitlesPullRequestReusedOnHarnessBranch(t *tes
 	h := New(fake)
 	h.Logf = func(string, ...any) {}
 
-	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, execx.Result{}, "check-title\tfail\t6s\t")
+	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "check-title\tfail\t6s\t")
 	if err != nil || !repaired {
 		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (true, nil)", repaired, err)
 	}
@@ -484,7 +704,7 @@ func TestRepairPRTitleGateFailureSkipsWhenNotApplicable(t *testing.T) {
 			fake := &fakeRunner{t: t}
 			h := New(fake)
 			h.Logf = func(string, ...any) {}
-			repaired, err := h.repairPRTitleGateFailure(context.Background(), tc.repo, execx.Result{}, tc.summary)
+			repaired, err := h.repairPRTitleGateFailure(context.Background(), tc.repo, nil, execx.Result{}, tc.summary)
 			if repaired || err != nil {
 				t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (false, nil)", repaired, err)
 			}
@@ -505,7 +725,7 @@ func TestRepairPRTitleGateFailurePropagatesTitleLookupError(t *testing.T) {
 	h := New(fake)
 	h.Logf = func(string, ...any) {}
 
-	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, execx.Result{}, "check-title\tfail\t6s\t")
+	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "check-title\tfail\t6s\t")
 	if repaired || err == nil {
 		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (false, error)", repaired, err)
 	}
@@ -524,7 +744,7 @@ func TestRepairPRTitleGateFailureKeepsTitleWhenLookupIsEmpty(t *testing.T) {
 	h := New(fake)
 	h.Logf = func(string, ...any) {}
 
-	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, execx.Result{}, "check-title\tfail\t6s\t")
+	repaired, err := h.repairPRTitleGateFailure(context.Background(), repo, nil, execx.Result{}, "check-title\tfail\t6s\t")
 	if err != nil || repaired {
 		t.Fatalf("repairPRTitleGateFailure = (%v, %v), want (false, nil)", repaired, err)
 	}
@@ -605,6 +825,80 @@ func TestRunRetitlesPullRequestWhenOnlyTitleGateFails(t *testing.T) {
 	}
 	if strings.Contains(joined, "reason=latest_snapshot") {
 		t.Fatalf("checks were declared green while a check was red:\n%s", joined)
+	}
+	if strings.Contains(joined, "mode=remediation") {
+		t.Fatalf("a remediation agent ran for a pull-request title gate:\n%s", joined)
+	}
+}
+
+func TestRunStopsWithoutRemediationWhenTheRetitleFails(t *testing.T) {
+	t.Parallel()
+
+	cfg := sampleConfig()
+	cfg.PRTitle = "ci(automation): harden CI validation checks"
+	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
+	guid := "titlegate0005"
+	runDir := testRunDir(guid)
+	agentsPath := filepath.Join(runDir, "AGENTS.md")
+	repoDir := filepath.Join(runDir, "repo")
+	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
+	branch := "agent00-build-api"
+	prURL := "https://github.com/acme/repo/pull/42"
+	repairedTitle := "chore(#42): harden CI validation checks"
+
+	workflowDir := filepath.Join(repoDir, ".github", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatalf("create workflow dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "pr-title-check.yaml"), []byte(titleGateWorkflow), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	redChecks := execx.Result{Stdout: "check-title\tfail\t6s\thttps://example.com/job\nLint & Format\tpass\t35s\t"}
+	checksJSON := `[{"name":"check-title","bucket":"fail"},{"name":"Lint & Format","bucket":"pass"}]`
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "codex", Args: []string{"--help"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"auth", "status"}}},
+		{cmd: cloneCommand(cfg, repoDir)},
+		{cmd: branchCommand(repoDir, branch)},
+		{cmd: pushDryRunCommand(repoDir, branch)},
+		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: " M file.go\n"}},
+		{cmd: addCommand(repoDir)},
+		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
+		{cmd: pushCommand(repoDir, branch)},
+		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
+		{cmd: prChecksCommand(repoDir, prURL), res: redChecks, err: errors.New("exit status 1")},
+		{cmd: prChecksJSONCommand(repoDir, prURL, false), res: execx.Result{Stdout: checksJSON}},
+		{cmd: prTitleViewCommand(repoDir, prURL), res: execx.Result{Stdout: `{"title":"` + cfg.PRTitle + `"}`}},
+		{cmd: prEditTitleCommand(repoDir, prURL, repairedTitle), err: errors.New("exit status 1")},
+	}}
+
+	var logs []string
+	h := New(fake)
+	h.Now = func() time.Time { return now }
+	h.Workspace = testWorkspaceManager(guid)
+	h.TargetDirOK = func(path string) bool { return path == targetDir }
+	h.Sleep = func(context.Context, time.Duration) error { return nil }
+	h.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+
+	res := h.Run(context.Background(), cfg)
+	if res.ExitCode != ExitPR || res.Err == nil {
+		t.Fatalf("Run() = (exit %d, %v), want (%d, error)", res.ExitCode, res.Err, ExitPR)
+	}
+	if !strings.Contains(res.Err.Error(), "pull request title gate repair failed") {
+		t.Fatalf("error = %v, want the title gate repair failure", res.Err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unused expectations: %+v", fake.exps)
+	}
+
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "stage=pr status=warn action=retitle reason=failed") {
+		t.Fatalf("missing retitle failure log:\n%s", joined)
 	}
 	if strings.Contains(joined, "mode=remediation") {
 		t.Fatalf("a remediation agent ran for a pull-request title gate:\n%s", joined)

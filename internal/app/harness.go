@@ -1134,7 +1134,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		// remediation agent cannot clear them. The harness supplied the title,
 		// so it repairs the title and lets the gate re-run on the edit event.
 		if !prTitleRepaired {
-			repaired, repairErr := h.repairPRTitleGateFailure(ctx, *repo, checkRes, checkSummary)
+			repaired, repairErr := h.repairPRTitleGateFailure(ctx, *repo, cfg.GitHubIssue, checkRes, checkSummary)
 			if repairErr != nil {
 				h.logf(
 					"stage=pr status=warn action=retitle reason=failed repo=%s repo_dir=%s pr_url=%s attempt=%d err=%q",
@@ -1144,6 +1144,11 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 					attempt+1,
 					repairErr,
 				)
+				// The repair only runs once a title gate is the sole failure,
+				// and no remediation agent can clear a check that grades
+				// pull-request metadata. Report the repair error instead of
+				// spending an agent run that cannot change the outcome.
+				return ExitPR, "checks", fmt.Errorf("pull request title gate repair failed: %w", repairErr)
 			}
 			if repaired {
 				prTitleRepaired = true
@@ -8279,12 +8284,31 @@ func isFailedCheckBucket(bucket string) bool {
 	return false
 }
 
+// isKnownCheckBucket reports whether a bucket is one gh actually reports. A
+// truncated check row can leave a fragment such as "fa" behind, which must not
+// be read as a state that supersedes what another source reported.
+func isKnownCheckBucket(bucket string) bool {
+	switch strings.ToLower(strings.TrimSpace(bucket)) {
+	case "pass", "pending", "skipping":
+		return true
+	}
+	return isFailedCheckBucket(bucket)
+}
+
 // titleGateBlocksChecksSuccess reports whether captured check output shows a
 // red pull-request title gate, which stops a snapshot fallback from declaring
 // the run green. The harness repairs those gates itself, and a required-only
 // snapshot can omit an optional gate entirely.
 func (h Harness) titleGateBlocksChecksSuccess(repo repoWorkspace, res execx.Result, action string, attempt int) bool {
-	if !capturedChecksHaveTitleGateFailures(res) {
+	// Only a gate the harness will actually repair may block success. On a
+	// pull request whose title the harness does not own, such as a PR-feedback
+	// target, or in a repository without a gate that re-runs on a title edit,
+	// the red gate never clears, so vetoing the snapshot would just fail a run
+	// whose required checks are green.
+	if !harnessCanRetitlePR(repo) || !capturedChecksHaveTitleGateFailures(res) {
+		return false
+	}
+	if _, found := detectPRTitleGate(repo.Dir); !found {
 		return false
 	}
 	h.logf(
