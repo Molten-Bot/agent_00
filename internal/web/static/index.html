@@ -830,9 +830,6 @@
           <button id="settings-tab-github-issues" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-github-issues" data-settings-tab="github-issues">
             <i data-lucide="folder-kanban" aria-hidden="true"></i><span>GitHub Issues</span>
           </button>
-          <button id="settings-tab-review" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-review" data-settings-tab="review">
-            <i data-lucide="message-circle-code" aria-hidden="true"></i><span>Post-task Review</span>
-          </button>
           <button id="settings-tab-merge" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-merge" data-settings-tab="merge">
             <i data-lucide="merge" aria-hidden="true"></i><span>Merge Method</span>
           </button>
@@ -844,6 +841,21 @@
         <form id="review-settings-form" class="stack review-settings-form" data-settings-panel="review">
           <fieldset id="settings-panel-automation" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-automation" hidden>
             <legend class="review-settings-section-title sr-only">Automation</legend>
+            <div id="settings-panel-review" class="review-settings-section review-settings-level">
+              <span class="review-settings-section-title">Post-task review</span>
+              <input id="review-settings-level" type="hidden" value="off">
+              <div class="review-slider">
+                <label class="sr-only" for="review-settings-slider">Number of post-task reviews</label>
+                <output class="review-slider-value" id="review-slider-value" for="review-settings-slider"><svg aria-hidden="true"><use id="review-selected-icon" href="#review-off"/></svg><span id="review-selected-text">Off · 0 reviews</span></output>
+                <input id="review-settings-slider" type="range" min="0" max="3" step="1" value="0" aria-valuetext="Off, 0 reviews">
+                <div class="review-slider-stops" aria-hidden="true">
+                  <span class="review-slider-stop" data-current="true" title="Off · 0 reviews"><svg><use href="#review-off"/></svg></span>
+                  <span class="review-slider-stop" title="Low · 1 review"><svg><use href="#review-low"/></svg></span>
+                  <span class="review-slider-stop" title="Medium · 3 reviews"><svg><use href="#review-medium"/></svg></span>
+                  <span class="review-slider-stop" title="High · 6 reviews"><svg><use href="#review-high"/></svg></span>
+                </div>
+              </div>
+            </div>
             <label class="selectable-option">
               <input class="sr-only" id="review-settings-auto-merge" type="checkbox">
               <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="robot-arm"><path d="M12 21 7.5 8.322"/><path d="m14 7 1.75-3.767a.5.5 0 0 1 .662-.172L20 5.005"/><path d="m20 8.998-3.588 1.944a.5.5 0 0 1-.662-.172L14 7H8"/><path d="M3.486 21h10"/><path d="M5 21V8.732"/><circle cx="6" cy="7" r="2"/></svg>
@@ -909,20 +921,6 @@
               </div>
             </div>
           </fieldset>
-          <div id="settings-panel-review" class="review-settings-section review-settings-level" role="tabpanel" aria-labelledby="settings-tab-review" hidden>
-            <input id="review-settings-level" type="hidden" value="off">
-            <div class="review-slider">
-              <label class="sr-only" for="review-settings-slider">Number of post-task reviews</label>
-              <output class="review-slider-value" id="review-slider-value" for="review-settings-slider"><svg aria-hidden="true"><use id="review-selected-icon" href="#review-off"/></svg><span id="review-selected-text">Off · 0 reviews</span></output>
-              <input id="review-settings-slider" type="range" min="0" max="3" step="1" value="0" aria-valuetext="Off, 0 reviews">
-              <div class="review-slider-stops" aria-hidden="true">
-                <span class="review-slider-stop" data-current="true" title="Off · 0 reviews"><svg><use href="#review-off"/></svg></span>
-                <span class="review-slider-stop" title="Low · 1 review"><svg><use href="#review-low"/></svg></span>
-                <span class="review-slider-stop" title="Medium · 3 reviews"><svg><use href="#review-medium"/></svg></span>
-                <span class="review-slider-stop" title="High · 6 reviews"><svg><use href="#review-high"/></svg></span>
-              </div>
-            </div>
-          </div>
           <div id="settings-panel-merge" class="review-settings-section review-settings-merge-method" role="tabpanel" aria-labelledby="settings-tab-merge" hidden>
             <span id="review-settings-merge-method-label" class="sr-only">Merge Method</span>
             <input id="review-settings-merge-method" type="hidden" value="squash">
@@ -2198,7 +2196,6 @@
     const settingsTabPanels = {
       automation: document.getElementById("settings-panel-automation"),
       "github-issues": document.getElementById("settings-panel-github-issues"),
-      review: document.getElementById("settings-panel-review"),
       merge: document.getElementById("settings-panel-merge"),
       signing: document.getElementById("commit-signing-section"),
       library: document.getElementById("custom-library-section"),

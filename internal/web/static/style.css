@@ -8772,6 +8772,9 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 .review-slider-stops { display: flex; justify-content: space-between; margin: 8px 10px 0; }
 .review-slider-stop { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 0; color: var(--muted); }
 .review-slider-stop[data-current="true"] { color: var(--text); }
+/* The review level sits in the Automation tab, whose options are a two-column
+   grid: keep the slider across the full width so its stops stay readable. */
+#settings-panel-automation .review-settings-level { grid-column: 1 / -1; }
 
 
 .settings-icon-definitions { position: absolute; width: 0; height: 0; overflow: hidden; }
