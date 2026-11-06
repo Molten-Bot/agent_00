@@ -201,19 +201,3 @@ func TestValidateGitHubTokenSkipsValidationWithNilRunner(t *testing.T) {
 		t.Fatalf("validateGitHubToken(nil runner) error = %v, want nil", err)
 	}
 }
-
-func TestDecodeJSONStrictRejectsTrailingData(t *testing.T) {
-	t.Parallel()
-
-	var payload struct {
-		Value string `json:"value"`
-	}
-
-	if err := decodeJSONStrict(`{"value":"ok"} garbage`, &payload); err == nil {
-		t.Fatal("decodeJSONStrict(trailing garbage) error = nil, want syntax error")
-	}
-
-	if err := decodeJSONStrict(`{"value":"ok"} {"value":"again"}`, &payload); err == nil || !strings.Contains(err.Error(), "unexpected trailing JSON data") {
-		t.Fatalf("decodeJSONStrict(trailing valid JSON) error = %v, want unexpected trailing JSON data", err)
-	}
-}

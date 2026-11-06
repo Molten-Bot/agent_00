@@ -12,7 +12,6 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
-	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
 func fakeGitHubPAT(suffix string) string {
@@ -164,121 +163,6 @@ func TestSetGitHubTokenEnvironmentTrimsAndRejectsEmpty(t *testing.T) {
 	}
 }
 
-func TestIsLikelyGitHubTokenRecognizesSupportedPrefixes(t *testing.T) {
-	t.Parallel()
-
-	for _, token := range []string{
-		"ghp_example",
-		"gho_example",
-		"ghu_example",
-		"ghs_example",
-		"ghr_example",
-		"github_pat_example",
-		"  ghp_trimmed  ",
-	} {
-		token := token
-		t.Run(token, func(t *testing.T) {
-			t.Parallel()
-			if !isLikelyGitHubToken(token) {
-				t.Fatalf("isLikelyGitHubToken(%q) = false, want true", token)
-			}
-		})
-	}
-
-	for _, token := range []string{"", "github_token_plain", "pat_github", "xghp_prefix"} {
-		token := token
-		t.Run("reject_"+token, func(t *testing.T) {
-			t.Parallel()
-			if isLikelyGitHubToken(token) {
-				t.Fatalf("isLikelyGitHubToken(%q) = true, want false", token)
-			}
-		})
-	}
-}
-
-func TestConfigurableAgentAuthStateSharedTransitions(t *testing.T) {
-	var state configurableAgentAuthState
-	options := []web.AgentAuthOption{{Value: "OPENAI_API_KEY", Label: "OpenAI"}}
-
-	state.setError(" failed ")
-	if !state.required || state.ready || state.state != "error" || state.message != "failed" {
-		t.Fatalf("setError() state = %+v", state)
-	}
-
-	state.setConfigureUI(" paste token ", " command ", " placeholder ", options)
-	options[0].Label = "mutated"
-	if !state.required || state.ready || state.state != "needs_configure" {
-		t.Fatalf("setConfigureUI() state = %+v", state)
-	}
-	if state.message != "paste token" || state.configureCommand != "command" || state.configurePlaceholder != "placeholder" {
-		t.Fatalf("setConfigureUI() config fields = %+v", state)
-	}
-	if got := state.configureOptions[0].Label; got != "OpenAI" {
-		t.Fatalf("setConfigureUI() option label = %q, want copied OpenAI", got)
-	}
-
-	state.setReady(" ready ")
-	if !state.required || !state.ready || state.state != "ready" || state.message != "ready" {
-		t.Fatalf("setReady() state = %+v", state)
-	}
-	if state.configureCommand != "" || state.configurePlaceholder != "" || state.configureOptions != nil {
-		t.Fatalf("setReady() configure fields = %+v", state)
-	}
-}
-
-func TestConfigurableAgentAuthGateBaseSnapshotAndNilConfigure(t *testing.T) {
-	t.Parallel()
-
-	var nilGate *configurableAgentAuthGateBase
-	state, err := nilGate.configureGitHubTokenAndRefresh(context.Background(), "codex", "ignored", nil)
-	if err != nil {
-		t.Fatalf("configureGitHubTokenAndRefresh(nil) error = %v", err)
-	}
-	if !state.Ready || state.Required || state.State != "ready" {
-		t.Fatalf("configureGitHubTokenAndRefresh(nil) state = %+v, want ready", state)
-	}
-
-	gate := &configurableAgentAuthGateBase{}
-	gate.authState.setConfigureUI(
-		" paste ",
-		" configure ",
-		" token ",
-		[]web.AgentAuthOption{{Value: "one", Label: "One"}},
-	)
-	snapshot := gate.snapshotLocked("claude")
-	if got, want := snapshot.Harness, "claude"; got != want {
-		t.Fatalf("Harness = %q, want %q", got, want)
-	}
-	if got, want := snapshot.Message, "paste"; got != want {
-		t.Fatalf("Message = %q, want %q", got, want)
-	}
-	if got, want := snapshot.ConfigureCommand, "configure"; got != want {
-		t.Fatalf("ConfigureCommand = %q, want %q", got, want)
-	}
-	snapshot.ConfigureOptions[0].Label = "mutated"
-	if got, want := gate.authState.configureOptions[0].Label, "One"; got != want {
-		t.Fatalf("snapshot options alias state: got %q, want %q", got, want)
-	}
-}
-
-func TestApplyGitHubTokenRequirementStateConfiguresPromptWhenMissing(t *testing.T) {
-	t.Setenv("GH_TOKEN", "")
-	t.Setenv("GITHUB_TOKEN", "")
-
-	var state configurableAgentAuthState
-	token, blocked := applyGitHubTokenRequirementState(context.Background(), nil, &state, "test", filepath.Join(t.TempDir(), "missing.json"), localruntime.InitConfig{})
-	if token != "" || !blocked {
-		t.Fatalf("applyGitHubTokenRequirementState() = token %q blocked %v, want empty true", token, blocked)
-	}
-	snapshot := state.snapshot("test")
-	if snapshot.Ready || snapshot.State != "needs_configure" {
-		t.Fatalf("snapshot = %+v", snapshot)
-	}
-	if got, want := snapshot.ConfigureCommand, claudeGitHubConfigureCommand; got != want {
-		t.Fatalf("ConfigureCommand = %q, want %q", got, want)
-	}
-}
-
 func TestGitHubTokenRequirementStateAcceptsValidatedStartupToken(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
@@ -304,42 +188,6 @@ func TestGitHubTokenRequirementStateAcceptsValidatedStartupToken(t *testing.T) {
 	}
 	if got, want := os.Getenv("GITHUB_TOKEN"), "github_token_valid"; got != want {
 		t.Fatalf("GITHUB_TOKEN = %q, want %q", got, want)
-	}
-}
-
-func TestGitHubTokenRequirementStateRejectsInvalidStartupToken(t *testing.T) {
-	t.Setenv("GH_TOKEN", "")
-	t.Setenv("GITHUB_TOKEN", "")
-
-	runner := &authGateRunnerStub{
-		run: func(_ context.Context, cmd execx.Command) (execx.Result, error) {
-			if got, want := strings.Join(cmd.Args, " "), gitHubTokenValidationArgsStringForTest(); got != want {
-				t.Fatalf("args = %q, want %q", got, want)
-			}
-			return execx.Result{Stderr: "bad credentials"}, errors.New("token invalid")
-		},
-	}
-
-	var state configurableAgentAuthState
-	token, blocked := applyGitHubTokenRequirementState(context.Background(), runner, &state, "test", filepath.Join(t.TempDir(), "missing.json"), localruntime.InitConfig{GitHubToken: "github_token_invalid"})
-	if token != "" || !blocked {
-		t.Fatalf("applyGitHubTokenRequirementState() = token %q blocked %v, want empty true", token, blocked)
-	}
-	snapshot := state.snapshot("test")
-	if snapshot.Ready || snapshot.State != "needs_configure" {
-		t.Fatalf("snapshot = %+v", snapshot)
-	}
-	if !strings.Contains(snapshot.Message, "validate github token") {
-		t.Fatalf("message = %q, want validation failure", snapshot.Message)
-	}
-	if !strings.Contains(snapshot.Message, "init config GitHub token is invalid") {
-		t.Fatalf("message = %q, want invalid init config source", snapshot.Message)
-	}
-	if got := os.Getenv("GH_TOKEN"); got != "" {
-		t.Fatalf("GH_TOKEN = %q, want empty", got)
-	}
-	if got := os.Getenv("GITHUB_TOKEN"); got != "" {
-		t.Fatalf("GITHUB_TOKEN = %q, want empty", got)
 	}
 }
 
@@ -484,75 +332,6 @@ func TestGitHubTokenRequirementStatePrefersValidatedEnvironmentTokenOverInvalidP
 	}
 }
 
-func TestApplyGitHubTokenRequirementStateFallsBackToLaterValidCandidate(t *testing.T) {
-	t.Setenv("GH_TOKEN", "github_token_env_invalid")
-	t.Setenv("GITHUB_TOKEN", "")
-
-	runner := &authGateRunnerStub{
-		run: func(_ context.Context, _ execx.Command) (execx.Result, error) {
-			switch got := os.Getenv("GITHUB_TOKEN"); got {
-			case "github_token_env_invalid":
-				return execx.Result{Stderr: "bad credentials"}, errors.New("token invalid")
-			case "github_token_init_valid":
-				return execx.Result{Stdout: "github.com logged in"}, nil
-			default:
-				t.Fatalf("validator saw unexpected token %q", got)
-				return execx.Result{}, nil
-			}
-		},
-	}
-
-	var state configurableAgentAuthState
-	token, blocked := applyGitHubTokenRequirementState(
-		context.Background(),
-		runner,
-		&state,
-		"test",
-		filepath.Join(t.TempDir(), "missing.json"),
-		localruntime.InitConfig{GitHubToken: "github_token_init_valid"},
-	)
-	if blocked {
-		t.Fatalf("applyGitHubTokenRequirementState() blocked = true, state = %+v", state.snapshot("test"))
-	}
-	if got, want := token, "github_token_init_valid"; got != want {
-		t.Fatalf("token = %q, want %q", got, want)
-	}
-	if got, want := os.Getenv("GH_TOKEN"), "github_token_init_valid"; got != want {
-		t.Fatalf("GH_TOKEN = %q, want %q", got, want)
-	}
-	if got, want := os.Getenv("GITHUB_TOKEN"), "github_token_init_valid"; got != want {
-		t.Fatalf("GITHUB_TOKEN = %q, want %q", got, want)
-	}
-}
-
-func TestDecodeJSONStrictOrWrappedString(t *testing.T) {
-	var payload struct {
-		Value string `json:"value"`
-	}
-	if err := decodeJSONStrictOrWrappedString(`"{\"value\":\"ok\"}"`, &payload); err != nil {
-		t.Fatalf("decodeJSONStrictOrWrappedString(wrapped) error = %v", err)
-	}
-	if payload.Value != "ok" {
-		t.Fatalf("decodeJSONStrictOrWrappedString(wrapped) value = %q, want ok", payload.Value)
-	}
-
-	if err := decodeJSONStrictOrWrappedString(`{"value":"ok","extra":true}`, &payload); err == nil {
-		t.Fatal("decodeJSONStrictOrWrappedString(unknown field) error = nil, want non-nil")
-	}
-}
-
-func TestDecodeJSONOrWrappedString(t *testing.T) {
-	var decoded struct {
-		Value string `json:"value"`
-	}
-	if err := decodeJSONOrWrappedString(`"{\"value\":\"ok\"}"`, &decoded); err != nil {
-		t.Fatalf("decodeJSONOrWrappedString() error = %v", err)
-	}
-	if got, want := decoded.Value, "ok"; got != want {
-		t.Fatalf("Value = %q, want %q", got, want)
-	}
-}
-
 func TestFirstConfiguredGitHubTokenFallsBackToInitConfig(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
@@ -651,62 +430,91 @@ func TestConfigureGitHubTokenRejectsSaveFailureAfterStarSucceeds(t *testing.T) {
 	}
 }
 
-func TestConfigurableAgentAuthGateBaseConfigureGitHubTokenAndRefreshSucceeds(t *testing.T) {
+func TestGitHubTokenRequirementConfiguresPromptWhenMissing(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 
-	useSuccessfulGitHubStarTestServer(t)
-
-	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
-	gate := &configurableAgentAuthGateBase{
-		runtimeConfigPath: path,
+	token, snapshot, blocked := githubTokenRequirement(context.Background(), nil, "test", filepath.Join(t.TempDir(), "missing.json"), localruntime.InitConfig{})
+	if token != "" || !blocked {
+		t.Fatalf("githubTokenRequirement() = token %q blocked %v, want empty true", token, blocked)
 	}
-
-	refreshCalled := false
-	githubToken := fakeGitHubPAT("refresh_success")
-	state, err := gate.configureGitHubTokenAndRefresh(context.Background(), "codex", githubToken, func() {
-		refreshCalled = true
-	})
-	if err != nil {
-		t.Fatalf("configureGitHubTokenAndRefresh() error = %v", err)
+	if snapshot.Ready || snapshot.State != "needs_configure" {
+		t.Fatalf("snapshot = %+v", snapshot)
 	}
-	if !refreshCalled {
-		t.Fatal("configureGitHubTokenAndRefresh() did not invoke refreshLocked on success")
-	}
-	if got, want := gate.initCfg.GitHubToken, githubToken; got != want {
-		t.Fatalf("gate.initCfg.GitHubToken = %q, want %q", got, want)
-	}
-	if got, want := state.Harness, "codex"; got != want {
-		t.Fatalf("state.Harness = %q, want %q", got, want)
-	}
-	if got, want := os.Getenv("GH_TOKEN"), githubToken; got != want {
-		t.Fatalf("GH_TOKEN = %q, want %q", got, want)
+	if got, want := snapshot.ConfigureCommand, claudeGitHubConfigureCommand; got != want {
+		t.Fatalf("ConfigureCommand = %q, want %q", got, want)
 	}
 }
 
-func TestConfigurableAgentAuthGateBaseConfigureGitHubTokenAndRefreshFailureSkipsRefresh(t *testing.T) {
+func TestGitHubTokenRequirementStateRejectsInvalidStartupToken(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 
-	path := filepath.Join(t.TempDir(), ".agent00", "config.json")
-	gate := &configurableAgentAuthGateBase{
-		runtimeConfigPath: path,
+	runner := &authGateRunnerStub{
+		run: func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+			if got, want := strings.Join(cmd.Args, " "), gitHubTokenValidationArgsStringForTest(); got != want {
+				t.Fatalf("args = %q, want %q", got, want)
+			}
+			return execx.Result{Stderr: "bad credentials"}, errors.New("token invalid")
+		},
 	}
 
-	refreshCalled := false
-	state, err := gate.configureGitHubTokenAndRefresh(context.Background(), "codex", "   ", func() {
-		refreshCalled = true
-	})
-	if err == nil {
-		t.Fatal("configureGitHubTokenAndRefresh(empty) error = nil, want required")
+	token, snapshot, blocked := githubTokenRequirement(context.Background(), runner, "test", filepath.Join(t.TempDir(), "missing.json"), localruntime.InitConfig{GitHubToken: "github_token_invalid"})
+	if token != "" || !blocked {
+		t.Fatalf("githubTokenRequirement() = token %q blocked %v, want empty true", token, blocked)
 	}
-	if refreshCalled {
-		t.Fatal("configureGitHubTokenAndRefresh(empty) invoked refreshLocked on failure, want skipped")
+	if snapshot.Ready || snapshot.State != "needs_configure" {
+		t.Fatalf("snapshot = %+v", snapshot)
 	}
-	if state.State != "needs_configure" {
-		t.Fatalf("state = %+v, want needs_configure", state)
+	if !strings.Contains(snapshot.Message, "validate github token") {
+		t.Fatalf("message = %q, want validation failure", snapshot.Message)
 	}
-	if gate.initCfg.GitHubToken != "" {
-		t.Fatalf("gate.initCfg.GitHubToken = %q, want unchanged empty", gate.initCfg.GitHubToken)
+	if !strings.Contains(snapshot.Message, "init config GitHub token is invalid") {
+		t.Fatalf("message = %q, want invalid init config source", snapshot.Message)
+	}
+	if got := os.Getenv("GH_TOKEN"); got != "" {
+		t.Fatalf("GH_TOKEN = %q, want empty", got)
+	}
+	if got := os.Getenv("GITHUB_TOKEN"); got != "" {
+		t.Fatalf("GITHUB_TOKEN = %q, want empty", got)
+	}
+}
+
+func TestGitHubTokenRequirementFallsBackToLaterValidCandidate(t *testing.T) {
+	t.Setenv("GH_TOKEN", "github_token_env_invalid")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	runner := &authGateRunnerStub{
+		run: func(_ context.Context, _ execx.Command) (execx.Result, error) {
+			switch got := os.Getenv("GITHUB_TOKEN"); got {
+			case "github_token_env_invalid":
+				return execx.Result{Stderr: "bad credentials"}, errors.New("token invalid")
+			case "github_token_init_valid":
+				return execx.Result{Stdout: "github.com logged in"}, nil
+			default:
+				t.Fatalf("validator saw unexpected token %q", got)
+				return execx.Result{}, nil
+			}
+		},
+	}
+
+	token, snapshot, blocked := githubTokenRequirement(
+		context.Background(),
+		runner,
+		"test",
+		filepath.Join(t.TempDir(), "missing.json"),
+		localruntime.InitConfig{GitHubToken: "github_token_init_valid"},
+	)
+	if blocked {
+		t.Fatalf("githubTokenRequirement() blocked = true, state = %+v", snapshot)
+	}
+	if got, want := token, "github_token_init_valid"; got != want {
+		t.Fatalf("token = %q, want %q", got, want)
+	}
+	if got, want := os.Getenv("GH_TOKEN"), "github_token_init_valid"; got != want {
+		t.Fatalf("GH_TOKEN = %q, want %q", got, want)
+	}
+	if got, want := os.Getenv("GITHUB_TOKEN"), "github_token_init_valid"; got != want {
+		t.Fatalf("GITHUB_TOKEN = %q, want %q", got, want)
 	}
 }

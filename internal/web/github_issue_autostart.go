@@ -83,10 +83,6 @@ func githubIssueAutoStartFilterKey(onlyAssigned bool, labels []string) string {
 	return fmt.Sprintf("%t:%s", onlyAssigned, encoded)
 }
 
-func (s Server) scanAssignedGitHubIssues(ctx context.Context, baseline bool, seen map[string]bool, linkMode string) error {
-	return s.scanGitHubIssuesForAutoStart(ctx, baseline, seen, linkMode, true, nil)
-}
-
 func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool, seen map[string]bool, linkMode string, onlyAssigned bool, requiredLabels []string) error {
 	repos, err := s.resolveGitHubRepos(ctx)
 	if err != nil {
@@ -160,10 +156,6 @@ func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool,
 		return fmt.Errorf("%s", strings.Join(errs, "; "))
 	}
 	return nil
-}
-
-func (s Server) listAssignedGitHubIssues(ctx context.Context, repository string) ([]GitHubIssue, error) {
-	return s.listGitHubIssuesForAutoStart(ctx, repository, true)
 }
 
 func (s Server) listGitHubIssuesForAutoStart(ctx context.Context, repository string, onlyAssigned bool) ([]GitHubIssue, error) {

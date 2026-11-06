@@ -229,19 +229,6 @@ func (c Catalog) Summaries() []TaskSummary {
 	return out
 }
 
-// Names returns the ordered list of callable library task names.
-func (c Catalog) Names() []string {
-	summaries := c.Summaries()
-	if len(summaries) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(summaries))
-	for _, task := range summaries {
-		out = append(out, task.Name)
-	}
-	return out
-}
-
 // Task returns one task definition by name.
 func (c Catalog) Task(name string) (TaskDefinition, bool) {
 	task, ok := c.byName[strings.TrimSpace(name)]

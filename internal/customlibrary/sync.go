@@ -55,10 +55,6 @@ func (s Syncer) generatedDir(name string) string {
 }
 func (s Syncer) promptDir(name string) string { return filepath.Join(s.repoDir(name), "prompt") }
 
-// GeneratedDir is the catalog directory produced for name once Sync has
-// succeeded at least once.
-func (s Syncer) GeneratedDir(name string) string { return s.generatedDir(name) }
-
 // RemoveSource deletes every cached/generated file for a removed source.
 func (s Syncer) RemoveSource(name string) error {
 	name = strings.ToLower(strings.TrimSpace(name))

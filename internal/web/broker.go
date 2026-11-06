@@ -1322,14 +1322,6 @@ func libraryTaskDisplayNames() map[string]string {
 	return names
 }
 
-func addTimeStatsGroup(groups map[string]*TimeStatsGroup, name, status string, duration time.Duration) {
-	savedDuration := time.Duration(0)
-	if isSuccessfulTaskStatus(status) {
-		savedDuration = duration
-	}
-	addTimeStatsGroupWithSavedDuration(groups, name, status, duration, savedDuration)
-}
-
 func addTimeStatsGroupWithSavedDuration(groups map[string]*TimeStatsGroup, name, status string, duration, savedDuration time.Duration) {
 	if groups == nil {
 		return
@@ -2389,18 +2381,6 @@ func appendCappedTaskLog(logs []TaskLog, max int, entry TaskLog) []TaskLog {
 	copy(logs, logs[1:])
 	logs[len(logs)-1] = entry
 	return logs
-}
-
-func parseFieldValue(line, key string) string {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return ""
-	}
-	fields := parseKVFields(line)
-	if len(fields) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(fields[key])
 }
 
 func parseQuotedToken(text string) (string, bool) {

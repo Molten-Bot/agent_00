@@ -634,7 +634,10 @@ func TestBuildCommandRejectsImagesForUnsupportedHarnesses(t *testing.T) {
 		t.Run(harness, func(t *testing.T) {
 			t.Parallel()
 
-			err := validatePromptImageSupport(harness, []string{"img.png"})
+			if SupportsPromptImages(harness) {
+				t.Fatalf("SupportsPromptImages(%q) = true, want false", harness)
+			}
+			err := UnsupportedPromptImagesError(harness)
 			if err == nil {
 				t.Fatal("BuildCommand() error = nil, want image support error")
 			}

@@ -79,11 +79,3 @@ func TestSupportedPromptImageHarnessLabelsFormatsMultiple(t *testing.T) {
 		t.Fatalf("supportedPromptImageHarnessLabels() = %q, want two-item list", got)
 	}
 }
-
-func TestValidatePromptImageSupportAllowsSupportedHarness(t *testing.T) {
-	t.Parallel()
-
-	if err := validatePromptImageSupport(HarnessCodex, []string{"screenshot.png"}); err != nil {
-		t.Fatalf("validatePromptImageSupport() error = %v, want nil", err)
-	}
-}

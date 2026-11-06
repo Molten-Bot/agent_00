@@ -57,15 +57,6 @@ type codexAuthGate struct {
 	lastAutoStartAttempt time.Time
 }
 
-func newCodexAuthGate(
-	ctx context.Context,
-	runner execx.Runner,
-	command string,
-	logf func(string, ...any),
-) *codexAuthGate {
-	return newCodexAuthGateWithConfig(ctx, runner, command, "", localruntime.InitConfig{}, false, logf)
-}
-
 func newCodexAuthGateWithConfig(
 	ctx context.Context,
 	runner execx.Runner,

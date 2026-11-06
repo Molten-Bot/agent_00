@@ -5834,40 +5834,6 @@ func TestCommitCommandAddsMoltenbotCoAuthorTrailer(t *testing.T) {
 	}
 }
 
-func TestPRCommentScreenshotFilesFindsImagesInHandoffDirectory(t *testing.T) {
-	t.Parallel()
-
-	repoDir := t.TempDir()
-	root := filepath.Join(repoDir, prCommentScreenshotsRelDir)
-	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	for _, rel := range []string{
-		"after.png",
-		"before.JPG",
-		filepath.Join("nested", "app.jpeg"),
-		"notes.txt",
-	} {
-		path := filepath.Join(root, rel)
-		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
-			t.Fatalf("WriteFile(%s) error = %v", rel, err)
-		}
-	}
-
-	files, err := prCommentScreenshotFiles(repoDir)
-	if err != nil {
-		t.Fatalf("prCommentScreenshotFiles() error = %v", err)
-	}
-	want := []string{
-		".agent00/pr-comment-screenshots/after.png",
-		".agent00/pr-comment-screenshots/before.JPG",
-		".agent00/pr-comment-screenshots/nested/app.jpeg",
-	}
-	if !reflect.DeepEqual(files, want) {
-		t.Fatalf("files = %#v, want %#v", files, want)
-	}
-}
-
 func TestRepoHasPendingChangesTreatsScreenshotHandoffAsChange(t *testing.T) {
 	t.Parallel()
 
@@ -9243,39 +9209,6 @@ func TestLibraryTaskRequiresNonDefaultBranchUsesCatalogMetadata(t *testing.T) {
 				t.Fatalf("libraryTaskRequiresNonDefaultBranch() = %t, want %t", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestValidateEnforcedNonDefaultBranchCheckoutsRejectsAnyRepoDrift(t *testing.T) {
-	repos := []repoWorkspace{
-		{
-			URL:                      "git@github.com:acme/repo-a.git",
-			Dir:                      "/tmp/repo-a",
-			Branch:                   "feature/conflicted",
-			RequiresNonDefaultBranch: true,
-			RequiredBranch:           "feature/conflicted",
-			RequiredBranchTask:       mergeMainLibraryTaskName,
-		},
-		{
-			URL:                      "git@github.com:acme/repo-b.git",
-			Dir:                      "/tmp/repo-b",
-			Branch:                   "feature/conflicted",
-			RequiresNonDefaultBranch: true,
-			RequiredBranch:           "feature/conflicted",
-			RequiredBranchTask:       mergeMainLibraryTaskName,
-		},
-	}
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{cmd: currentBranchCommand(repos[0].Dir), res: execx.Result{Stdout: "feature/conflicted\n"}},
-		{cmd: currentBranchCommand(repos[1].Dir), res: execx.Result{Stdout: "main\n"}},
-	}}
-
-	err := New(fake).validateEnforcedNonDefaultBranchCheckouts(context.Background(), repos)
-	if err == nil || !strings.Contains(err.Error(), `current branch is "main"`) || !strings.Contains(err.Error(), repos[1].URL) {
-		t.Fatalf("validateEnforcedNonDefaultBranchCheckouts() error = %v, want second-repo drift", err)
-	}
-	if len(fake.exps) != 0 {
-		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
 	}
 }
 

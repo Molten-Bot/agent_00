@@ -22,7 +22,6 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
-const claudeAuthDocsURL = "https://code.claude.com/docs/en/authentication"
 const claudeGitHubConfigureCommand = "gh auth token"
 const claudeGitHubConfigurePlaceholder = "ghp_xxx"
 const claudeCredentialsConfigureCommand = "cat ~/.claude/.credentials.json"
@@ -64,23 +63,6 @@ type claudeAuthGate struct {
 	awaitingOAuthToken    bool
 	lastLoginErrorCode    string
 	lastLoginExitCode     *int
-}
-
-func newClaudeAuthGate(ctx context.Context, command string, logf func(string, ...any)) *claudeAuthGate {
-	return newClaudeAuthGateWithContextAndConfigAndRunner(ctx, nil, command, "", localruntime.InitConfig{}, logf)
-}
-
-func newClaudeAuthGateWithConfig(command, runtimeConfigPath string, initCfg localruntime.InitConfig) *claudeAuthGate {
-	return newClaudeAuthGateWithContextAndConfigAndRunner(context.Background(), nil, command, runtimeConfigPath, initCfg, nil)
-}
-
-func newClaudeAuthGateWithContextAndConfig(
-	ctx context.Context,
-	command, runtimeConfigPath string,
-	initCfg localruntime.InitConfig,
-	logf func(string, ...any),
-) *claudeAuthGate {
-	return newClaudeAuthGateWithContextAndConfigAndRunner(ctx, nil, command, runtimeConfigPath, initCfg, logf)
 }
 
 func newClaudeAuthGateWithContextAndConfigAndRunner(

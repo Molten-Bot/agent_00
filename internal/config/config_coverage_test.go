@@ -508,12 +508,6 @@ func TestDefaultMetadataAndStringHelpers(t *testing.T) {
 	if got := defaultPRTitle(""); got != "Automated update" {
 		t.Fatalf("defaultPRTitle(empty) = %q", got)
 	}
-	if got := defaultPRBody(""); !strings.Contains(got, prBodyFooter) {
-		t.Fatalf("defaultPRBody(empty) = %q, want footer", got)
-	}
-	if got := defaultPRBody("run the full regression suite"); !strings.Contains(got, "Original task prompt:\n```text\nrun the full regression suite\n```") {
-		t.Fatalf("defaultPRBody(prompt) = %q, want original prompt block", got)
-	}
 	if got := normalizePRTitle("agent00-existing-title"); got != "existing-title" {
 		t.Fatalf("normalizePRTitle(existing prefix) = %q", got)
 	}

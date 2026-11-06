@@ -807,10 +807,6 @@ func defaultPRTitle(prompt string) string {
 	return normalizePRTitle(summary)
 }
 
-func defaultPRBody(prompt string) string {
-	return NormalizePRBody("", prompt)
-}
-
 // NormalizePRBody enforces the standardized pull-request body format.
 func NormalizePRBody(body, prompt string) string {
 	return ensurePRBodyPromptAndFooter(body, prompt)

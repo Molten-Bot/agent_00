@@ -177,17 +177,17 @@ func TestAssignedIssueAutoStartBaselinesAndSubmitsNewIssueOnce(t *testing.T) {
 		return "request-1", nil
 	}
 	seen := make(map[string]bool)
-	if err := srv.scanAssignedGitHubIssues(context.Background(), true, seen, config.GitHubIssueLinkClose); err != nil {
+	if err := srv.scanGitHubIssuesForAutoStart(context.Background(), true, seen, config.GitHubIssueLinkClose, true, nil); err != nil {
 		t.Fatalf("baseline scan error: %v", err)
 	}
 	if len(submitted) != 0 || !seen["acme/repo#22"] {
 		t.Fatalf("baseline submitted %d tasks, seen=%v", len(submitted), seen)
 	}
 	assigned = true
-	if err := srv.scanAssignedGitHubIssues(context.Background(), false, seen, config.GitHubIssueLinkClose); err != nil {
+	if err := srv.scanGitHubIssuesForAutoStart(context.Background(), false, seen, config.GitHubIssueLinkClose, true, nil); err != nil {
 		t.Fatalf("new issue scan error: %v", err)
 	}
-	if err := srv.scanAssignedGitHubIssues(context.Background(), false, seen, config.GitHubIssueLinkClose); err != nil {
+	if err := srv.scanGitHubIssuesForAutoStart(context.Background(), false, seen, config.GitHubIssueLinkClose, true, nil); err != nil {
 		t.Fatalf("repeat issue scan error: %v", err)
 	}
 	if len(submitted) != 1 || listCalls != 3 {

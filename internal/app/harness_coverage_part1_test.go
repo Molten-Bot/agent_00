@@ -1019,32 +1019,6 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 
 // ---- validateEnforcedNonDefaultBranchCheckouts / Checkout ----
 
-func TestH1CovValidateEnforcedNonDefaultBranchCheckouts(t *testing.T) {
-	t.Parallel()
-
-	t.Run("not required across repos is a no-op", func(t *testing.T) {
-		t.Parallel()
-		repos := []repoWorkspace{{Dir: "/repo-a"}, {Dir: "/repo-b"}}
-		h := New(&fakeRunner{t: t})
-		if err := h.validateEnforcedNonDefaultBranchCheckouts(context.Background(), repos); err != nil {
-			t.Fatalf("validateEnforcedNonDefaultBranchCheckouts() err = %v, want nil", err)
-		}
-	})
-
-	t.Run("second repo failure stops the batch", func(t *testing.T) {
-		t.Parallel()
-		repos := []repoWorkspace{
-			{Dir: "/repo-a"},
-			{Dir: "/repo-b", RequiresNonDefaultBranch: true, RequiredBranch: "main", RequiredBranchTask: "feature-task", Branch: "main"},
-		}
-		h := New(&fakeRunner{t: t})
-		err := h.validateEnforcedNonDefaultBranchCheckouts(context.Background(), repos)
-		if err == nil || !strings.Contains(err.Error(), "protected default branch name") {
-			t.Fatalf("validateEnforcedNonDefaultBranchCheckouts() err = %v, want protected branch error", err)
-		}
-	})
-}
-
 func TestH1CovValidateEnforcedNonDefaultBranchCheckout(t *testing.T) {
 	t.Parallel()
 

@@ -86,7 +86,7 @@ func TestSyncerSyncClonesAndGeneratesCatalog(t *testing.T) {
 	}
 	task, ok := catalog.Task("acme--fix-bug")
 	if !ok {
-		t.Fatalf("catalog missing task acme--fix-bug; got %v", catalog.Names())
+		t.Fatalf("catalog missing task acme--fix-bug; got %v", catalog.Summaries())
 	}
 	if task.DisplayName != "Fix Bug" || task.Prompt != "Find and fix the bug." {
 		t.Fatalf("unexpected task %+v", task)

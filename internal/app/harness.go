@@ -1928,10 +1928,6 @@ type remoteWriteAccessProbe struct {
 	NonFastForward bool
 }
 
-func (h Harness) verifyRemoteWriteAccess(ctx context.Context, repo repoWorkspace) error {
-	return h.verifyRemoteWriteAccessOnRemote(ctx, repo, publishRemoteOrigin, "git")
-}
-
 func (h Harness) verifyRemoteWriteAccessOnRemote(ctx context.Context, repo repoWorkspace, remote, stage string) error {
 	_, err := h.probeRemoteWriteAccessOnRemote(ctx, repo, remote, stage)
 	return err
@@ -2618,15 +2614,6 @@ func (h Harness) validateRequiredNonDefaultBranches(ctx context.Context, cfg con
 func (h Harness) validateEnforcedNonDefaultBranches(ctx context.Context, repos []repoWorkspace) error {
 	for _, repo := range repos {
 		if err := h.validateEnforcedNonDefaultBranch(ctx, repo); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (h Harness) validateEnforcedNonDefaultBranchCheckouts(ctx context.Context, repos []repoWorkspace) error {
-	for _, repo := range repos {
-		if err := h.validateEnforcedNonDefaultBranchCheckout(ctx, repo); err != nil {
 			return err
 		}
 	}
@@ -5326,19 +5313,6 @@ func shouldFallbackCloneToDefaultBranch(baseBranch string, res execx.Result, err
 	return isMissingRemoteBranchCloneError(err, res)
 }
 
-func (h Harness) runCodex(
-	ctx context.Context,
-	runtime agentruntime.Runtime,
-	targetDir string,
-	prompt string,
-	opts codexRunOptions,
-	agentsPath string,
-	responseMode string,
-) error {
-	_, err := h.runCodexCapture(ctx, runtime, targetDir, prompt, opts, agentsPath, responseMode, agentInvocationLogMetadata{})
-	return err
-}
-
 func (h Harness) runCodexCapture(
 	ctx context.Context,
 	runtime agentruntime.Runtime,
@@ -6930,10 +6904,6 @@ func hasRemoteBranch(res execx.Result) bool {
 	return strings.TrimSpace(res.Stdout) != ""
 }
 
-func preflightCommands() []execx.Command {
-	return preflightCommandsWithRuntime(agentruntime.Default())
-}
-
 func preflightCommandsWithRuntime(runtime agentruntime.Runtime) []execx.Command {
 	return []execx.Command{
 		gitCommand("", "--version"),
@@ -7139,73 +7109,6 @@ func agentConfigSource(environ []string, configEnvKey, homeRel string) string {
 	return ""
 }
 
-func seedAgentConfigDir(sourcePath, targetDir string) error {
-	sourcePath = strings.TrimSpace(sourcePath)
-	targetDir = strings.TrimSpace(targetDir)
-	if sourcePath == "" || targetDir == "" || pathContains(targetDir, sourcePath) || pathContains(sourcePath, targetDir) {
-		return nil
-	}
-
-	info, err := os.Lstat(sourcePath)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return nil
-	}
-	if !info.IsDir() {
-		return copyFile(sourcePath, filepath.Join(targetDir, filepath.Base(sourcePath)), info.Mode().Perm())
-	}
-
-	entries, err := os.ReadDir(sourcePath)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if entry.Type()&os.ModeSymlink != 0 {
-			continue
-		}
-		if entry.IsDir() || !entry.Type().IsRegular() {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if err := copyFile(filepath.Join(sourcePath, entry.Name()), filepath.Join(targetDir, entry.Name()), info.Mode().Perm()); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func copyFile(sourcePath, targetPath string, mode os.FileMode) error {
-	content, err := os.ReadFile(sourcePath)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(targetPath, content, mode)
-}
-
-func pathContains(parent, child string) bool {
-	parent = filepath.Clean(strings.TrimSpace(parent))
-	child = filepath.Clean(strings.TrimSpace(child))
-	if parent == "" || child == "" {
-		return false
-	}
-	rel, err := filepath.Rel(parent, child)
-	if err != nil {
-		return false
-	}
-	return rel == "." || (!filepath.IsAbs(rel) && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
-}
-
 func environValue(environ []string, key string) (string, bool) {
 	var (
 		found bool
@@ -7284,13 +7187,6 @@ func shouldSetupGitHubAuthForRepos(repoURLs []string) bool {
 		}
 	}
 	return false
-}
-
-func cloneCommand(cfg config.Config, repoDir string) execx.Command {
-	if strings.TrimSpace(cfg.BaseBranch) == "" {
-		return cloneRepoDefaultBranchCommand(cfg.RepoURL, repoDir)
-	}
-	return cloneRepoCommand(cfg.RepoURL, cfg.BaseBranch, repoDir)
 }
 
 func cloneRepoCommand(repoURL, baseBranch, repoDir string) execx.Command {
@@ -7657,10 +7553,6 @@ func pushToRemoteCommand(repoDir, remote, branch string) execx.Command {
 	return gitCommand(repoDir, "push", "-u", remote, branch)
 }
 
-func pushDryRunCommand(repoDir, branch string) execx.Command {
-	return pushDryRunToRemoteCommand(repoDir, publishRemoteOrigin, branch)
-}
-
 func pushDryRunToRemoteCommand(repoDir, remote, branch string) execx.Command {
 	remote = normalizeGitRemoteName(remote)
 	return gitCommand(repoDir, "push", "--dry-run", remote, fmt.Sprintf("HEAD:refs/heads/%s", normalizeBranchRef(branch)))
@@ -7745,19 +7637,6 @@ func (h Harness) commentPRScreenshots(ctx context.Context, repo repoWorkspace, f
 
 	_, err = h.runCommand(ctx, "pr", prCommentCommand(repo.Dir, repo.PRURL, body))
 	return err
-}
-
-func prCommentScreenshotFiles(repoDir string) ([]string, error) {
-	snapshot, err := prCommentScreenshotSnapshot(repoDir)
-	if err != nil {
-		return nil, err
-	}
-	files := make([]string, 0, len(snapshot))
-	for file := range snapshot {
-		files = append(files, file)
-	}
-	sort.Strings(files)
-	return files, nil
 }
 
 func changedPRCommentScreenshotFiles(repoDir string, baseline map[string]string) ([]string, error) {
@@ -7883,10 +7762,6 @@ func prCommentCommand(repoDir, prURL, body string) execx.Command {
 	return ghCommand(repoDir, "pr", "comment", prURL, "--body", body)
 }
 
-func prCreateCommand(repoDir string, cfg config.Config, branch string) execx.Command {
-	return prCreateWithOptionsCommand(repoDir, cfg, cfg.BaseBranch, branch, "")
-}
-
 func prCreateWithOptionsCommand(repoDir string, cfg config.Config, baseBranch, headRef, repo string) execx.Command {
 	normalizedPRBody := config.NormalizePRBodyForGitHubIssue(cfg.PRBody, cfg.Prompt, cfg.GitHubIssue)
 	args := []string{
@@ -7913,10 +7788,6 @@ func prCreateWithOptionsCommand(repoDir string, cfg config.Config, baseBranch, h
 	}
 	args = appendPRReviewers(args, cfg.Reviewers)
 	return ghCommand(repoDir, args...)
-}
-
-func prCreateWithoutBaseCommand(repoDir string, cfg config.Config, branch string) execx.Command {
-	return prCreateWithoutBaseWithOptionsCommand(repoDir, cfg, branch, "")
 }
 
 func prCreateWithoutBaseWithOptionsCommand(repoDir string, cfg config.Config, headRef, repo string) execx.Command {
@@ -7970,20 +7841,12 @@ func remoteBranchExistsOnRemoteCommand(repoDir, remote, branch string) execx.Com
 	return gitCommand(repoDir, "ls-remote", "--heads", remote, normalizeBranchRef(branch))
 }
 
-func prLookupByHeadCommand(repoDir, branch string) execx.Command {
-	return prLookupByHeadWithRepoCommand(repoDir, branch, "")
-}
-
 func prLookupByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Command {
 	args := []string{"pr", "list", "--state", "open", "--head", headRef, "--json", "url", "--limit", "1"}
 	if strings.TrimSpace(repo) != "" {
 		args = append(args, "--repo", strings.TrimSpace(repo))
 	}
 	return ghCommand(repoDir, args...)
-}
-
-func prLookupAnyByHeadCommand(repoDir, branch string) execx.Command {
-	return prLookupAnyByHeadWithRepoCommand(repoDir, branch, "")
 }
 
 func prLookupAnyByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Command {
@@ -8077,10 +7940,6 @@ func requiredStatusChecksCommand(repoDir, repoNameWithOwner, branch string) exec
 		url.PathEscape(branch),
 	)
 	return ghCommand(repoDir, "api", route)
-}
-
-func withCompletionGatePrompt(prompt string) string {
-	return withCompletionGatePromptForMode(prompt, true)
 }
 
 // withCompletionGatePromptForMode adds implementation-only quality guidance.

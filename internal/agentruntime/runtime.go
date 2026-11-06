@@ -514,26 +514,6 @@ func nonEmptyStrings(values []string) []string {
 	return out
 }
 
-func countNonEmptyStrings(values []string) int {
-	count := 0
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			count++
-		}
-	}
-	return count
-}
-
-func validatePromptImageSupport(harness string, imagePaths []string) error {
-	if countNonEmptyStrings(imagePaths) == 0 {
-		return nil
-	}
-	if SupportsPromptImages(harness) {
-		return nil
-	}
-	return UnsupportedPromptImagesError(harness)
-}
-
 func supportedPromptImageHarnessLabels() string {
 	labels := make([]string, 0, len(promptImageHarnesses))
 	seen := make(map[string]struct{}, len(promptImageHarnesses))

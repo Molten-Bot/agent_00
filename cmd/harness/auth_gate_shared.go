@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -60,138 +59,6 @@ func readyAgentAuthState() web.AgentAuthState {
 		Ready:    true,
 		State:    "ready",
 		Message:  "Agent auth is ready.",
-	}
-}
-
-type configurableAgentAuthState struct {
-	required             bool
-	ready                bool
-	state                string
-	message              string
-	configureCommand     string
-	configurePlaceholder string
-	configureOptions     []web.AgentAuthOption
-	updatedAt            time.Time
-}
-
-type configurableAgentAuthGateBase struct {
-	mu sync.Mutex
-
-	runner execx.Runner
-
-	runtimeConfigPath string
-	initCfg           localruntime.InitConfig
-
-	authState configurableAgentAuthState
-}
-
-func (g *configurableAgentAuthGateBase) snapshotLocked(harness string) web.AgentAuthState {
-	return g.authState.snapshot(harness)
-}
-
-func (g *configurableAgentAuthGateBase) configureGitHubTokenAndRefresh(
-	ctx context.Context,
-	harness string,
-	rawInput string,
-	refreshLocked func(),
-) (web.AgentAuthState, error) {
-	if g == nil {
-		return readyAgentAuthState(), nil
-	}
-
-	g.mu.Lock()
-	runtimeConfigPath := g.runtimeConfigPath
-	initCfg := g.initCfg
-	runner := g.runner
-	g.mu.Unlock()
-
-	return configureGitHubTokenAndApply(
-		ctx,
-		harness,
-		runtimeConfigPath,
-		initCfg,
-		runner,
-		rawInput,
-		func(state web.AgentAuthState, err error) (web.AgentAuthState, error) {
-			g.mu.Lock()
-			g.authState.applySnapshot(state)
-			snap := g.snapshotLocked(harness)
-			g.mu.Unlock()
-			return snap, err
-		},
-		func(token string) (web.AgentAuthState, error) {
-			g.mu.Lock()
-			g.initCfg.GitHubToken = token
-			if refreshLocked != nil {
-				refreshLocked()
-			}
-			snap := g.snapshotLocked(harness)
-			g.mu.Unlock()
-			return snap, nil
-		},
-	)
-}
-
-func (s *configurableAgentAuthState) touch() {
-	s.updatedAt = time.Now().UTC()
-}
-
-func (s *configurableAgentAuthState) setNeedsConfigure(message string) {
-	s.required = true
-	s.ready = false
-	s.state = "needs_configure"
-	s.message = strings.TrimSpace(message)
-	s.touch()
-}
-
-func (s *configurableAgentAuthState) setError(message string) {
-	s.required = true
-	s.ready = false
-	s.state = "error"
-	s.message = strings.TrimSpace(message)
-	s.touch()
-}
-
-func (s *configurableAgentAuthState) setConfigureUI(message, command, placeholder string, options []web.AgentAuthOption) {
-	s.setNeedsConfigure(message)
-	s.configureCommand = strings.TrimSpace(command)
-	s.configurePlaceholder = strings.TrimSpace(placeholder)
-	s.configureOptions = append([]web.AgentAuthOption(nil), options...)
-}
-
-func (s *configurableAgentAuthState) setReady(message string) {
-	s.required = true
-	s.ready = true
-	s.state = "ready"
-	s.message = strings.TrimSpace(message)
-	s.configureCommand = ""
-	s.configurePlaceholder = ""
-	s.configureOptions = nil
-	s.touch()
-}
-
-func (s *configurableAgentAuthState) applySnapshot(snapshot web.AgentAuthState) {
-	s.required = snapshot.Required
-	s.ready = snapshot.Ready
-	s.state = strings.TrimSpace(snapshot.State)
-	s.message = strings.TrimSpace(snapshot.Message)
-	s.configureCommand = strings.TrimSpace(snapshot.ConfigureCommand)
-	s.configurePlaceholder = strings.TrimSpace(snapshot.ConfigurePlaceholder)
-	s.configureOptions = append([]web.AgentAuthOption(nil), snapshot.ConfigureOptions...)
-	s.touch()
-}
-
-func (s *configurableAgentAuthState) snapshot(harness string) web.AgentAuthState {
-	return web.AgentAuthState{
-		Harness:              harness,
-		Required:             s.required,
-		Ready:                s.ready,
-		State:                strings.TrimSpace(s.state),
-		Message:              strings.TrimSpace(s.message),
-		ConfigureCommand:     strings.TrimSpace(s.configureCommand),
-		ConfigurePlaceholder: strings.TrimSpace(s.configurePlaceholder),
-		ConfigureOptions:     append([]web.AgentAuthOption(nil), s.configureOptions...),
-		UpdatedAt:            s.updatedAt.UTC().Format(time.RFC3339Nano),
 	}
 }
 
@@ -287,28 +154,9 @@ func setGitHubTokenEnvironment(token string) error {
 	return nil
 }
 
-func isLikelyGitHubToken(value string) bool {
-	value = strings.TrimSpace(value)
-	for _, prefix := range []string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"} {
-		if strings.HasPrefix(value, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
 func githubTokenRequirementState(ctx context.Context, runner execx.Runner, harness, runtimeConfigPath string, initCfg localruntime.InitConfig) (bool, web.AgentAuthState) {
 	_, state, blocked := githubTokenRequirement(ctx, runner, harness, runtimeConfigPath, initCfg)
 	return blocked, state
-}
-
-func applyGitHubTokenRequirementState(ctx context.Context, runner execx.Runner, state *configurableAgentAuthState, harness, runtimeConfigPath string, initCfg localruntime.InitConfig) (string, bool) {
-	githubToken, snapshot, blocked := githubTokenRequirement(ctx, runner, harness, runtimeConfigPath, initCfg)
-	if blocked {
-		state.applySnapshot(snapshot)
-		return "", true
-	}
-	return githubToken, false
 }
 
 func githubTokenRequirement(ctx context.Context, runner execx.Runner, harness, runtimeConfigPath string, initCfg localruntime.InitConfig) (string, web.AgentAuthState, bool) {
@@ -517,40 +365,4 @@ func withTemporaryGitHubTokenEnvironment(token string, run func() error) error {
 		return fmt.Errorf("restore github token env: %w", restoreErr)
 	}
 	return nil
-}
-
-func decodeJSONStrict(raw string, dst any) error {
-	dec := json.NewDecoder(strings.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
-		return err
-	}
-	var trailing any
-	if err := dec.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return fmt.Errorf("unexpected trailing JSON data")
-		}
-		return err
-	}
-	return nil
-}
-
-func decodeJSONStrictOrWrappedString(raw string, dst any) error {
-	raw = strings.TrimSpace(raw)
-	if err := decodeJSONStrict(raw, dst); err == nil {
-		return nil
-	}
-
-	var wrapped string
-	if err := decodeJSONStrict(raw, &wrapped); err != nil {
-		return err
-	}
-	if strings.TrimSpace(wrapped) == raw {
-		return fmt.Errorf("wrapped JSON did not unwrap")
-	}
-	return decodeJSONStrictOrWrappedString(wrapped, dst)
-}
-
-func decodeJSONOrWrappedString(raw string, dst any) error {
-	return decodeJSONStrictOrWrappedString(raw, dst)
 }

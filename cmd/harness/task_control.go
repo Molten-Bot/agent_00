@@ -13,9 +13,8 @@ import (
 var errTaskStoppedByOperator = errors.New("task was stopped by operator")
 
 type localTaskController struct {
-	mu      sync.RWMutex
-	tasks   map[string]*localTaskHandle
-	aliases map[string]string
+	mu    sync.RWMutex
+	tasks map[string]*localTaskHandle
 }
 
 type localTaskHandle struct {
@@ -32,8 +31,7 @@ type localTaskHandle struct {
 
 func newLocalTaskController() *localTaskController {
 	return &localTaskController{
-		tasks:   map[string]*localTaskHandle{},
-		aliases: map[string]string{},
+		tasks: map[string]*localTaskHandle{},
 	}
 }
 
@@ -52,36 +50,8 @@ func (c *localTaskController) Register(requestID string, cancel context.CancelCa
 		c.tasks = map[string]*localTaskHandle{}
 	}
 	c.tasks[requestID] = handle
-	delete(c.aliases, requestID)
 	c.mu.Unlock()
 	return handle
-}
-
-func (c *localTaskController) RegisterAliases(requestID string, aliases ...string) {
-	if c == nil {
-		return
-	}
-	requestID = strings.TrimSpace(requestID)
-	if requestID == "" {
-		return
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	requestID = c.canonicalRequestIDLocked(requestID)
-	if _, ok := c.tasks[requestID]; !ok {
-		return
-	}
-	if c.aliases == nil {
-		c.aliases = map[string]string{}
-	}
-	for _, alias := range aliases {
-		alias = strings.TrimSpace(alias)
-		if alias == "" || alias == requestID {
-			continue
-		}
-		c.aliases[alias] = requestID
-	}
 }
 
 func (c *localTaskController) Complete(requestID string) {
@@ -94,13 +64,7 @@ func (c *localTaskController) Complete(requestID string) {
 	}
 
 	c.mu.Lock()
-	canonical := c.canonicalRequestIDLocked(requestID)
-	delete(c.tasks, canonical)
-	for alias, target := range c.aliases {
-		if alias == requestID || alias == canonical || target == requestID || target == canonical {
-			delete(c.aliases, alias)
-		}
-	}
+	delete(c.tasks, requestID)
 	c.mu.Unlock()
 }
 
@@ -119,28 +83,12 @@ func (c *localTaskController) handleForWithCanonical(requestID string) (string, 
 	}
 
 	c.mu.RLock()
-	canonical := c.canonicalRequestIDLocked(requestID)
-	handle, ok := c.tasks[canonical]
+	handle, ok := c.tasks[requestID]
 	c.mu.RUnlock()
 	if !ok || handle == nil {
-		return canonical, nil, web.ErrTaskNotFound
+		return requestID, nil, web.ErrTaskNotFound
 	}
-	return canonical, handle, nil
-}
-
-func (c *localTaskController) canonicalRequestIDLocked(requestID string) string {
-	requestID = strings.TrimSpace(requestID)
-	if requestID == "" || c == nil {
-		return requestID
-	}
-	for i := 0; i < 4; i++ {
-		canonical := strings.TrimSpace(c.aliases[requestID])
-		if canonical == "" || canonical == requestID {
-			return requestID
-		}
-		requestID = canonical
-	}
-	return requestID
+	return requestID, handle, nil
 }
 
 func (c *localTaskController) Pause(requestID string) error {

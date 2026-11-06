@@ -305,13 +305,6 @@ func TestValidateWorkspaceDirsSkipsBlankDirectoryEntries(t *testing.T) {
 	}
 }
 
-func TestValidatePromptImageSupportSkipsCheckWhenNoImages(t *testing.T) {
-	t.Parallel()
-	if err := validatePromptImageSupport("totally-unsupported-harness", []string{"  ", ""}); err != nil {
-		t.Fatalf("validatePromptImageSupport() error = %v, want nil when no images are attached", err)
-	}
-}
-
 func TestSupportedPromptImageHarnessLabelsJoinsThreeOrMore(t *testing.T) {
 	originalNames := harnessDisplayNames
 	originalHarnesses := promptImageHarnesses
