@@ -200,9 +200,11 @@ test('repository selections hide dropdown options and manual entry enables them 
   }});
   await select(page, 'automation');
   const option = page.locator('#review-settings-repositories input[value="https://github.com/acme/widget"]');
-  await option.waitFor();
+  const row = page.locator('#review-settings-repositories label:has(input[value="https://github.com/acme/widget"])');
+  await option.waitFor({ state: 'attached' });
   assert.equal(await option.isChecked(), true, 'repositories default enabled');
-  await option.uncheck();
+  assert.equal(await row.locator('svg.lucide-folder-git-2').count(), 1, 'repositories use the lucide git repository icon');
+  await row.click();
   await close(page);
   assert.deepEqual(writes.at(-1).disabled_repositories, ['https://github.com/acme/widget']);
   assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 0);
@@ -210,19 +212,68 @@ test('repository selections hide dropdown options and manual entry enables them 
   await page.locator('#settings-open').click();
   await select(page, 'automation');
   assert.equal(await option.isChecked(), false, 'disabled repository remains available in settings');
-  await option.check();
+  await row.click();
   await close(page);
   assert.deepEqual(writes.at(-1).disabled_repositories, []);
   assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 1);
 
   await page.locator('#settings-open').click();
   await select(page, 'automation');
-  await option.uncheck();
+  await row.click();
   await close(page);
 
   await page.locator('#builder-repo-input').fill('https://github.com/acme/widget');
   await page.locator('#builder-repo-input').blur();
   await page.waitForFunction(() => document.querySelector('#builder-repo-select option[value="https://github.com/acme/widget"]'));
+  assert.deepEqual(writes.at(-1).disabled_repositories, []);
+});
+
+test('owner avatars clear and restore every repository they own', async t => {
+  const repos = [
+    { name: 'widget', full_name: 'acme/widget', html_url: 'https://github.com/acme/widget', owner_type: 'Organization', owner_avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4' },
+    { name: 'gadget', full_name: 'acme/gadget', html_url: 'https://github.com/acme/gadget', owner_type: 'Organization', owner_avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4' },
+    { name: 'notes', full_name: 'octocat/notes', html_url: 'https://github.com/octocat/notes', owner_type: 'User' },
+  ];
+  const { page, writes } = await openSettings(t, { configurePage: async page => {
+    await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos } }));
+    await page.route('https://avatars.githubusercontent.com/**', route => route.fulfill({
+      contentType: 'image/png',
+      body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'),
+    }));
+  }});
+  await select(page, 'automation');
+  const acme = page.locator('#review-settings-owners [data-repo-owner="acme"]');
+  const octocat = page.locator('#review-settings-owners [data-repo-owner="octocat"]');
+  await acme.waitFor();
+  const columns = await page.locator('.repository-settings-columns').evaluate(node => {
+    const [owners, repositories] = Array.from(node.children, child => child.getBoundingClientRect());
+    return { owners: Math.round(owners.width), repositories: Math.round(repositories.width), ownersLeft: owners.left < repositories.left };
+  });
+  assert.equal(columns.ownersLeft, true, 'owners sit left of repositories');
+  assert.ok(Math.abs(columns.owners - columns.repositories) <= 1, 'owners and repositories split the tab evenly');
+  assert.equal(await acme.getAttribute('aria-pressed'), 'true');
+  assert.equal(await acme.locator('img.repository-settings-owner-avatar').count(), 1, 'organizations use their GitHub avatar');
+  // The suite blocks third-party requests, so the public GitHub avatar route
+  // used for owners without API metadata fails and reveals the lucide fallback.
+  await octocat.locator('svg.lucide-user').waitFor();
+
+  await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'false');
+  for (const repo of ['widget', 'gadget']) {
+    assert.equal(await page.locator(`#review-settings-repositories input[value="https://github.com/acme/${repo}"]`).isChecked(), false);
+  }
+  assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/octocat/notes"]').isChecked(), true, 'other owners keep their repositories');
+  await close(page);
+  assert.deepEqual(writes.at(-1).disabled_repositories, ['https://github.com/acme/widget', 'https://github.com/acme/gadget']);
+  assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 0);
+
+  await page.locator('#settings-open').click();
+  await select(page, 'automation');
+  await page.locator('#review-settings-repositories label:has(input[value="https://github.com/acme/widget"])').click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'mixed', 'a partly enabled owner reports a mixed selection');
+  await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'true');
+  await close(page);
   assert.deepEqual(writes.at(-1).disabled_repositories, []);
 });
 
@@ -291,6 +342,7 @@ test('chat toggle marks the experimental chat tab unavailable immediately and pe
   assert.equal(await page.locator('[data-app-display=chat]').getAttribute('aria-disabled'), 'false');
   assert.notEqual(await page.locator('[data-app-display=chat]').getAttribute('title'), 'Chat is turned off in Settings → Automation');
   await select(page, 'automation');
+  assert.equal(await page.locator('#review-settings-owners-column').evaluate(column => column.classList.contains('hidden')), true, 'the owners column stays hidden while no GitHub owner is known');
   await toggle(page, 'review-settings-chat-enabled');
   assert.equal(await page.locator('[data-app-display=chat]').getAttribute('aria-disabled'), 'true');
   assert.equal(await page.locator('[data-app-display=chat]').getAttribute('title'), 'Chat is turned off in Settings → Automation');

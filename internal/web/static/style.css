@@ -6886,6 +6886,7 @@ body.onboarding-modal-open {
 .repository-settings {
   display: grid;
   gap: 10px;
+  grid-column: 1 / -1;
   margin-top: 8px;
   padding-top: 14px;
   border-top: 1px solid var(--border-subtle, rgba(127, 127, 127, 0.25));
@@ -6900,29 +6901,103 @@ body.onboarding-modal-open {
   color: var(--text-muted);
 }
 
+.repository-settings-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.repository-settings-column {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.repository-settings-column-title {
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
 .repository-settings-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
   gap: 8px;
-  max-height: 240px;
+  max-height: 320px;
   overflow-y: auto;
 }
 
-.repository-settings-option {
-  display: flex;
-  align-items: center;
+.repository-settings-list .repository-settings-option,
+.repository-settings-list .repository-settings-owner {
+  justify-content: flex-start;
   gap: 9px;
+  min-height: 44px;
   min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid var(--border-subtle, rgba(127, 127, 127, 0.25));
-  border-radius: 9px;
-  cursor: pointer;
+  padding: 8px 10px;
+  text-align: left;
 }
 
-.repository-settings-option span {
+.repository-settings-option span,
+.repository-settings-owner span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.repository-settings-owner small {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.repository-settings-owner[aria-pressed="true"],
+.repository-settings-owner[aria-pressed="mixed"] {
+  border-color: color-mix(in srgb, var(--running) 44%, var(--surface-control-border));
+  background: var(--surface-control-bg-strong);
+  color: var(--text);
+  box-shadow: var(--surface-control-shadow);
+}
+
+.repository-settings-owner[aria-pressed="true"] svg,
+.repository-settings-owner[aria-pressed="mixed"] svg {
+  color: var(--running);
+}
+
+.repository-settings-owner[aria-pressed="mixed"] {
+  border-style: dashed;
+}
+
+.repository-settings-owner:focus-visible {
+  outline: 2px solid var(--running);
+  outline-offset: 3px;
+}
+
+.repository-settings-owner:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.repository-settings-owner-avatar {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.repository-settings-owner[aria-pressed="false"] .repository-settings-owner-avatar {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+
+.repository-settings-columns:has(> .repository-settings-column.hidden) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (max-width: 640px) {
+  .repository-settings-columns { grid-template-columns: minmax(0, 1fr); }
 }
 
 .review-settings-merge-option {
