@@ -2041,8 +2041,11 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, "function allGitHubRepoSelectValues()") ||
 		!strings.Contains(markup, "function githubRepoSelectValues()") ||
 		!strings.Contains(markup, "function repoSelectValues(currentValue = \"\", includeCurrent = false)") ||
-		!strings.Contains(markup, ".filter(repo => !repositoryDisabled(repo)") {
+		!strings.Contains(markup, ".filter(repo => !repositoryDisabled(repo));") {
 		t.Fatalf("expected repository dropdown to include GitHub repositories loaded for chat")
+	}
+	if strings.Contains(markup, "includeCurrent && repoDedupeKey(repo) === repoDedupeKey(currentValue)") {
+		t.Fatalf("expected repository dropdown to exclude a disabled current manual value")
 	}
 	if !strings.Contains(markup, `"defaultRepository":""`) {
 		t.Fatalf("expected index html to leave the default repository empty")

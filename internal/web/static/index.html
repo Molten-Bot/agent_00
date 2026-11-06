@@ -7042,7 +7042,7 @@
 
     function repoSelectValues(currentValue = "", includeCurrent = false) {
       return dedupeRepoValues([...(includeCurrent ? [currentValue] : []), ...state.repoHistory, ...githubRepoSelectValues()])
-        .filter(repo => !repositoryDisabled(repo) || (includeCurrent && repoDedupeKey(repo) === repoDedupeKey(currentValue)));
+        .filter(repo => !repositoryDisabled(repo));
     }
 
     function renderRepositorySettings() {
@@ -7109,7 +7109,7 @@
       select.value = nextValue;
       if (nextValue) {
         input.value = nextValue;
-      } else if (!manualSelected && repositoryDisabled(currentValue)) {
+      } else if (!keepManualSelection && repositoryDisabled(currentValue)) {
         input.value = "";
       }
 
