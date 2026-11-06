@@ -14,6 +14,7 @@
     ["CODE", ["class"]],
     ["DEL", []],
     ["DD", []],
+    ["DETAILS", ["open"]],
     ["DL", []],
     ["DT", []],
     ["EM", []],
@@ -33,6 +34,7 @@
     ["PRE", []],
     ["STRONG", []],
     ["SUB", []],
+    ["SUMMARY", []],
     ["SUP", []],
     ["TABLE", []],
     ["TBODY", []],
@@ -50,30 +52,51 @@
 
   const SAFE_LINK_SCHEMES = new Set(["http:", "https:", "mailto:"]);
   const SAFE_IMAGE_SCHEMES = new Set(["http:", "https:"]);
+  // A caller's base only means something as an absolute web page address.
+  const SAFE_BASE_SCHEMES = new Set(["http:", "https:"]);
 
   let markedScriptPromise = null;
 
+  function markedGlobal() {
+    return global.marked && typeof global.marked.parse === "function" ? global.marked : null;
+  }
+
   function loadMarked() {
-    if (global.marked && typeof global.marked.parse === "function") {
-      return Promise.resolve(global.marked);
+    const loaded = markedGlobal();
+    if (loaded) {
+      return Promise.resolve(loaded);
     }
     if (markedScriptPromise) {
       return markedScriptPromise;
     }
 
     markedScriptPromise = new Promise((resolve, reject) => {
+      const finish = () => {
+        const marked = markedGlobal();
+        if (marked) resolve(marked);
+        else reject(new Error("marked script loaded without defining marked"));
+      };
       const settle = (node) => {
-        node.addEventListener("load", () => resolve(global.marked), { once: true });
+        node.addEventListener("load", () => {
+          node.setAttribute("data-marked-script-state", "loaded");
+          finish();
+        }, { once: true });
         node.addEventListener("error", () => {
           node.remove();
           reject(new Error("marked script failed to load"));
         }, { once: true });
       };
+      // A load event fires once, so waiting on a script element that already
+      // finished would leave this promise pending forever. A node that recorded
+      // its load settles from that state instead, and a leftover node of unknown
+      // state is replaced: a load still in flight is reached through this
+      // promise, so it is never the node found here.
       const existing = global.document.querySelector('script[data-marked-script="true"]');
-      if (existing) {
-        settle(existing);
+      if (existing?.getAttribute("data-marked-script-state") === "loaded") {
+        finish();
         return;
       }
+      existing?.remove();
       const script = global.document.createElement("script");
       script.src = MARKED_SCRIPT_URL;
       script.async = true;
@@ -93,28 +116,38 @@
   // safeURL resolves the scheme the browser would actually use. Whitespace and
   // control characters are stripped first because browsers ignore them, so
   // "java\nscript:" would otherwise slip past a plain scheme test. Schemeless
-  // values are relative, which is safe for a link but never a real image, so
-  // requireScheme refuses them.
-  function safeURL(value, schemes, requireScheme) {
+  // values are relative to wherever the markdown came from, so they resolve
+  // against baseURL; without one they would silently point at the harness
+  // origin, which is never what the author wrote.
+  function safeURL(value, schemes, baseURL) {
     const raw = String(value || "").trim();
     const collapsed = raw.replace(/[\u0000-\u0020\u007f]/g, "");
     if (!collapsed) return "";
     const scheme = collapsed.match(/^([a-z][a-z0-9+.-]*):/i);
-    if (!scheme) return requireScheme ? "" : raw;
-    return schemes.has(`${scheme[1].toLowerCase()}:`) ? raw : "";
+    if (scheme) return schemes.has(`${scheme[1].toLowerCase()}:`) ? raw : "";
+    if (!baseURL) return "";
+    try {
+      const resolved = new URL(raw, baseURL);
+      return schemes.has(resolved.protocol) ? resolved.href : "";
+    } catch (_error) {
+      return "";
+    }
   }
 
-  function copyAttributes(source, target, tag) {
+  function copyAttributes(source, target, tag, baseURL) {
     for (const name of ALLOWED_ELEMENTS.get(tag) || []) {
       if (!source.hasAttribute(name)) continue;
       const value = source.getAttribute(name);
       if (tag === "A" && name === "href") {
-        const href = safeURL(value, SAFE_LINK_SCHEMES);
+        const href = safeURL(value, SAFE_LINK_SCHEMES, baseURL);
         if (href) target.setAttribute("href", href);
         continue;
       }
       if (tag === "IMG" && name === "src") {
-        const src = safeURL(value, SAFE_IMAGE_SCHEMES, true);
+        // No base for images: GitHub serves a relative image from a raw path of
+        // the branch it was committed on, which this cannot reconstruct, so a
+        // resolved guess would only render as a broken image.
+        const src = safeURL(value, SAFE_IMAGE_SCHEMES);
         if (src) target.setAttribute("src", src);
         continue;
       }
@@ -143,7 +176,7 @@
     return true;
   }
 
-  function appendSanitized(target, node, doc) {
+  function appendSanitized(target, node, doc, baseURL) {
     if (node.nodeType === 3) {
       target.appendChild(doc.createTextNode(node.nodeValue));
       return;
@@ -152,26 +185,29 @@
     const tag = node.tagName.toUpperCase();
     if (DROPPED_ELEMENTS.has(tag)) return;
     if (!ALLOWED_ELEMENTS.has(tag)) {
-      for (const child of Array.from(node.childNodes)) appendSanitized(target, child, doc);
+      for (const child of Array.from(node.childNodes)) appendSanitized(target, child, doc, baseURL);
       return;
     }
     const clean = doc.createElement(tag.toLowerCase());
-    if (copyAttributes(node, clean, tag) === false) return;
+    if (copyAttributes(node, clean, tag, baseURL) === false) return;
     if (tag === "IMG" && !clean.hasAttribute("src")) {
       // The source was rejected, but the alt text is author prose worth keeping.
       const alt = String(node.getAttribute("alt") || "").trim();
       if (alt) target.appendChild(doc.createTextNode(alt));
       return;
     }
-    for (const child of Array.from(node.childNodes)) appendSanitized(clean, child, doc);
+    for (const child of Array.from(node.childNodes)) appendSanitized(clean, child, doc, baseURL);
     target.appendChild(clean);
   }
 
-  function sanitize(html, ownerDocument) {
+  // options.baseURL is the page the markdown was written on, for example the
+  // repository an issue belongs to, and relative links resolve against it.
+  function sanitize(html, ownerDocument, options) {
     const doc = ownerDocument || global.document;
+    const baseURL = safeURL(options?.baseURL, SAFE_BASE_SCHEMES);
     const parsed = new DOMParser().parseFromString(String(html || ""), "text/html");
     const fragment = doc.createDocumentFragment();
-    for (const child of Array.from(parsed.body.childNodes)) appendSanitized(fragment, child, doc);
+    for (const child of Array.from(parsed.body.childNodes)) appendSanitized(fragment, child, doc, baseURL);
     return fragment;
   }
 
@@ -181,7 +217,7 @@
 
   // render fills element with text as plain text first so the body is readable
   // even if marked never loads, then swaps in the rendered markdown.
-  function render(element, text) {
+  function render(element, text, options) {
     if (!element) return Promise.resolve(false);
     const source = String(text || "");
     element.textContent = source;
@@ -189,7 +225,7 @@
     return loadMarked()
       .then(() => {
         const doc = element.ownerDocument || global.document;
-        element.replaceChildren(sanitize(toHTML(source), doc));
+        element.replaceChildren(sanitize(toHTML(source), doc, options));
         element.classList.remove("markdown-body-pending");
         return true;
       })

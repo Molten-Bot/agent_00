@@ -139,9 +139,17 @@
     return node;
   }
 
+  // Relative links in an issue body are written against the repository on GitHub,
+  // not against this harness, so rendering passes that base along.
+  function repositoryBaseURL(repo) {
+    const url = String(repo?.html_url || "").trim()
+      || (repo?.full_name ? `https://github.com/${repo.full_name}` : "");
+    return url ? `${url.replace(/\/+$/, "")}/` : "";
+  }
+
   // GitHub stores issue and comment bodies as markdown, so the detail pane renders
   // them through the shared sanitizing renderer instead of showing the raw source.
-  function addMarkdown(parent, className, text, placeholder) {
+  function addMarkdown(parent, className, text, placeholder, baseURL) {
     const node = addText(parent, "div", className, "");
     const source = String(text || "").trim();
     if (!source) {
@@ -149,7 +157,7 @@
       return node;
     }
     if (window.MarkdownView?.render) {
-      void window.MarkdownView.render(node, source);
+      void window.MarkdownView.render(node, source, { baseURL });
     } else {
       node.classList.add("markdown-body-pending");
       node.textContent = source;
@@ -348,7 +356,8 @@
     addAvatar(author, issue.author?.login);
     addText(author, "strong", "", issue.author?.login || "Unknown");
     addText(author, "span", "", `opened this issue ${formatRelativeTime(issue.createdAt)}`);
-    addMarkdown(detailBody, "github-issue-body", issue.body, "No description provided.");
+    const markdownBase = repositoryBaseURL(repo);
+    addMarkdown(detailBody, "github-issue-body", issue.body, "No description provided.", markdownBase);
     const metadata = document.createElement("dl");
     metadata.className = "github-issue-metadata";
     for (const [label, value] of [
@@ -374,7 +383,7 @@
       addText(commentMeta, "strong", "", comment.author?.login || "Unknown");
       addText(commentMeta, "span", "", "·");
       addText(commentMeta, "span", "", formatRelativeTime(comment.createdAt));
-      addMarkdown(card, "github-issue-comment-body", comment.body, "No comment text.");
+      addMarkdown(card, "github-issue-comment-body", comment.body, "No comment text.", markdownBase);
       comments.appendChild(card);
     }
     detailBody.appendChild(comments);

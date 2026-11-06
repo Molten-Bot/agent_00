@@ -39,6 +39,18 @@ const hostileBody = [
   'Trailing **text** survives.',
 ].join('\n');
 
+// GitHub resolves these against the repository the issue lives in, and the
+// collapsible section is raw HTML that markdown passes straight through.
+const repositoryBody = [
+  '<details><summary>Build log</summary>',
+  '',
+  'Collapsed **detail** text.',
+  '',
+  '</details>',
+  '',
+  'See [the guide](docs/guide.md), [the pull request](/acme/repo/pull/3), and [the anchor](#contract).',
+].join('\n');
+
 async function openIssue(t, { body = issueBody, comments = [] } = {}) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   t.after(() => page.close());
@@ -146,6 +158,83 @@ test('a failed marked load warns, falls back to plain text, and retries next ren
   assert.equal(second.rendered, true, 'a later render retries the script instead of reusing the failure');
   assert.ok(second.html.includes('<strong>this</strong>'), `expected rendered markdown, got ${second.html}`);
   assert.ok(!second.pending);
+});
+
+test('relative links resolve against the repository and collapsible sections stay collapsible', async t => {
+  const page = await openIssue(t, { body: repositoryBody });
+  const body = page.locator('.github-issue-body');
+
+  const details = body.locator('details');
+  assert.equal(await details.count(), 1, 'the collapsible section survives sanitizing');
+  assert.equal(await details.locator('summary').innerText(), 'Build log');
+  assert.equal(await details.evaluate(node => node.open), false, 'a closed section starts closed');
+  await details.locator('summary').click();
+  assert.equal(await details.evaluate(node => node.open), true, 'the section opens on click');
+  assert.equal(await details.locator('strong').innerText(), 'detail', 'the collapsed body is rendered markdown');
+
+  assert.deepEqual(await body.locator('a').evaluateAll(nodes => nodes.map(node => node.getAttribute('href'))), [
+    'https://github.com/acme/repo/docs/guide.md',
+    'https://github.com/acme/repo/pull/3',
+    'https://github.com/acme/repo/#contract',
+  ], 'relative hrefs point at GitHub instead of the harness origin');
+});
+
+test('relative hrefs need a usable base, and images never take one', async t => {
+  const page = await openIssue(t);
+  const result = await page.evaluate(() => {
+    const render = (options) => {
+      const host = document.createElement('div');
+      host.appendChild(window.MarkdownView.sanitize(
+        '<a href="docs/guide.md">guide</a><img src="assets/shot.png" alt="shot">', null, options,
+      ));
+      return { href: host.querySelector('a').getAttribute('href'), src: host.querySelector('img')?.getAttribute('src') || null };
+    };
+    return {
+      none: render(undefined),
+      relativeBase: render({ baseURL: 'docs/' }),
+      unsafeBase: render({ baseURL: 'javascript:alert(1)' }),
+      repository: render({ baseURL: 'https://github.com/acme/repo/' }),
+    };
+  });
+
+  assert.deepEqual(result.none, { href: null, src: null }, 'without a base a relative URL has no safe target');
+  assert.deepEqual(result.relativeBase, { href: null, src: null }, 'a relative base is not a base');
+  assert.deepEqual(result.unsafeBase, { href: null, src: null }, 'an unsafe base is rejected before resolving');
+  assert.deepEqual(result.repository, { href: 'https://github.com/acme/repo/docs/guide.md', src: null },
+    'a relative image stays dropped because GitHub serves it from a raw branch path this cannot know');
+});
+
+test('a marked script element that already loaded does not leave rendering pending', async t => {
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  await page.route('**/*', route => new URL(route.request().url()).origin === new URL(baseURL).origin ? route.continue() : route.abort());
+  await page.goto(baseURL);
+  await page.waitForFunction(() => Boolean(window.MarkdownView));
+
+  const result = await page.evaluate(async () => {
+    // A marked script element that finished loading before any body asked for
+    // it: its load event has already fired and will never fire again.
+    await new Promise((resolve, reject) => {
+      const node = document.createElement('script');
+      node.src = URL.createObjectURL(new Blob(['/* no marked here */'], { type: 'text/javascript' }));
+      node.setAttribute('data-marked-script', 'true');
+      node.addEventListener('load', resolve, { once: true });
+      node.addEventListener('error', reject, { once: true });
+      document.head.appendChild(node);
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const rendered = await Promise.race([
+      window.MarkdownView.render(host, 'keep **this**'),
+      new Promise(resolve => { setTimeout(() => resolve('pending'), 5000); }),
+    ]);
+    return { rendered, html: host.innerHTML, pending: host.classList.contains('markdown-body-pending') };
+  });
+
+  assert.notEqual(result.rendered, 'pending', 'rendering settles instead of waiting on a load event that already fired');
+  assert.equal(result.rendered, true);
+  assert.ok(result.html.includes('<strong>this</strong>'), `expected rendered markdown, got ${result.html}`);
+  assert.ok(!result.pending);
 });
 
 test('markdown HTML cannot execute script or keep javascript: links', async t => {
