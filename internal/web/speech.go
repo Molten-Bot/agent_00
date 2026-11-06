@@ -273,7 +273,7 @@ func speechStatusFromConfig(cfg speechConfig) speechStatus {
 }
 
 func canReachSpeechServer(ctx context.Context, cfg speechConfig) bool {
-	ctx, cancel := context.WithTimeout(ctx, minDuration(cfg.Timeout, 750*time.Millisecond))
+	ctx, cancel := context.WithTimeout(ctx, min(cfg.Timeout, 750*time.Millisecond))
 	defer cancel()
 
 	var dialer net.Dialer
@@ -523,13 +523,6 @@ func isDisabledSpeechHost(host string) bool {
 	default:
 		return false
 	}
-}
-
-func minDuration(a, b time.Duration) time.Duration {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func normalizeSpeechLanguage(language string) string {

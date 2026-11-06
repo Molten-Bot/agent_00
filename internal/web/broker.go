@@ -657,7 +657,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 		b.runConfigs[requestID] = cfgCopy
 		changed = true
 	}
-	if next := appendNonEmptyUnique(b.promptedRepos, repos...); !sameStringSlice(b.promptedRepos, next) {
+	if next := appendNonEmptyUnique(b.promptedRepos, repos...); !slices.Equal(b.promptedRepos, next) {
 		b.promptedRepos = next
 		changed = true
 	}
@@ -674,7 +674,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 			Images:            append([]PromptImage(nil), images...),
 			Workflow:          workflow,
 			AgentHarness:      agentHarness,
-			Repo:              firstRepo(repos),
+			Repo:              stringsx.FirstNonEmpty(repos...),
 			Repos:             append([]string(nil), repos...),
 			Reviewers:         append([]string(nil), reviewers...),
 			BaseBranch:        baseBranch,
@@ -712,7 +712,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 			}
 		}
 	}
-	if t != nil && !samePromptImages(t.Images, images) {
+	if t != nil && !slices.Equal(t.Images, images) {
 		t.Images = append([]PromptImage(nil), images...)
 		changed = true
 	}
@@ -725,16 +725,16 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 		changed = true
 	}
 	if len(repos) > 0 && t != nil {
-		if !sameStringSlice(t.Repos, repos) {
+		if !slices.Equal(t.Repos, repos) {
 			t.Repos = append([]string(nil), repos...)
 			changed = true
 		}
-		if repo := firstRepo(repos); repo != "" && t.Repo != repo {
+		if repo := stringsx.FirstNonEmpty(repos...); repo != "" && t.Repo != repo {
 			t.Repo = repo
 			changed = true
 		}
 	}
-	if t != nil && !sameStringSlice(t.Reviewers, reviewers) {
+	if t != nil && !slices.Equal(t.Reviewers, reviewers) {
 		t.Reviewers = append([]string(nil), reviewers...)
 		changed = true
 	}
@@ -828,7 +828,7 @@ func (b *Broker) RecordRejectedPromptSubmissionWithSource(runConfigJSON []byte, 
 		Images:            append([]PromptImage(nil), images...),
 		Workflow:          workflow,
 		AgentHarness:      agentHarness,
-		Repo:              firstRepo(repos),
+		Repo:              stringsx.FirstNonEmpty(repos...),
 		Repos:             append([]string(nil), repos...),
 		Reviewers:         append([]string(nil), reviewers...),
 		BaseBranch:        baseBranch,
@@ -2671,18 +2671,6 @@ func appendNonEmptyUnique(dst []string, values ...string) []string {
 	return out
 }
 
-func sameStringSlice(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func promptFromRunConfigJSON(runConfigJSON []byte) string {
 	if len(runConfigJSON) == 0 {
 		return ""
@@ -2751,18 +2739,6 @@ func imagesFromRunConfigJSON(runConfigJSON []byte) []PromptImage {
 		return nil
 	}
 	return out
-}
-
-func samePromptImages(a, b []PromptImage) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func libraryTaskDisplayText(task library.TaskSummary) string {
@@ -2965,16 +2941,6 @@ func normalizeTaskSource(source string) string {
 	default:
 		return ""
 	}
-}
-
-func firstRepo(repos []string) string {
-	for _, repo := range repos {
-		repo = strings.TrimSpace(repo)
-		if repo != "" {
-			return repo
-		}
-	}
-	return ""
 }
 
 func errorText(err error) string {

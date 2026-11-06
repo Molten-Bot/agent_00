@@ -12,6 +12,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
 type transientCloneRunner struct{}
@@ -35,11 +36,11 @@ func TestHarnessStringAndCheckHelpers(t *testing.T) {
 	if got := truncateForPrompt("abcdef", 3); !strings.Contains(got, "...(truncated)") {
 		t.Fatalf("truncateForPrompt() = %q, want truncation marker", got)
 	}
-	if got := nonEmptyOrDefault(" value ", "fallback"); got != "value" {
-		t.Fatalf("nonEmptyOrDefault() = %q, want value", got)
+	if got := stringsx.FirstNonEmpty(" value ", "fallback"); got != "value" {
+		t.Fatalf("stringsx.FirstNonEmpty() = %q, want value", got)
 	}
-	if got := pickFirstNonEmpty(" ", "\n", " value "); got != "value" {
-		t.Fatalf("pickFirstNonEmpty() = %q, want value", got)
+	if got := stringsx.FirstNonEmpty(" ", "\n", " value "); got != "value" {
+		t.Fatalf("stringsx.FirstNonEmpty() = %q, want value", got)
 	}
 	if !isNoChecksReported(execx.Result{Stdout: "no checks reported"}, errors.New("boom")) {
 		t.Fatal("isNoChecksReported() = false, want true")
@@ -259,11 +260,11 @@ func TestHarnessAdditionalHelperBranches(t *testing.T) {
 		t.Fatal("isNothingToCommitResult(nothing added marker) = false, want true")
 	}
 
-	if got := nonEmptyOrDefault(" \n ", " fallback "); got != "fallback" {
-		t.Fatalf("nonEmptyOrDefault(fallback) = %q, want fallback", got)
+	if got := stringsx.FirstNonEmpty(" \n ", " fallback "); got != "fallback" {
+		t.Fatalf("stringsx.FirstNonEmpty(fallback) = %q, want fallback", got)
 	}
-	if got := pickFirstNonEmpty(" ", "\n"); got != "" {
-		t.Fatalf("pickFirstNonEmpty(all empty) = %q, want empty", got)
+	if got := stringsx.FirstNonEmpty(" ", "\n"); got != "" {
+		t.Fatalf("stringsx.FirstNonEmpty(all empty) = %q, want empty", got)
 	}
 	if got := truncateForPrompt("hello", 0); got != "hello" {
 		t.Fatalf("truncateForPrompt(no limit) = %q, want hello", got)

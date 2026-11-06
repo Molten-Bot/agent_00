@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -954,7 +955,7 @@ func TestBrokerTaskRunConfigExposesReviewers(t *testing.T) {
 		t.Fatal("Task() found = false, want true")
 	}
 	want := []string{"OctoCat", "hubot"}
-	if !sameStringSlice(task.Reviewers, want) {
+	if !slices.Equal(task.Reviewers, want) {
 		t.Fatalf("Task.Reviewers = %#v, want %#v", task.Reviewers, want)
 	}
 }

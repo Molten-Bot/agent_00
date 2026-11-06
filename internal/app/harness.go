@@ -26,6 +26,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/slug"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
@@ -2335,7 +2336,7 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 					)
 				}
 			} else {
-				prURL = pickFirstNonEmpty(state.URL, promptPRURL)
+				prURL = stringsx.FirstNonEmpty(state.URL, promptPRURL)
 			}
 		}
 		if prURL == "" {
@@ -3214,7 +3215,7 @@ func updateRepoBranchFromStatus(repo *repoWorkspace, statusStdout string) error 
 		}
 		repo.Branch = requiredBranch
 	} else {
-		repo.Branch = pickFirstNonEmpty(observedBranch, repo.Branch)
+		repo.Branch = stringsx.FirstNonEmpty(observedBranch, repo.Branch)
 	}
 	syncRepoPublishHeadRef(repo)
 	return nil
@@ -3907,9 +3908,9 @@ func (h Harness) buildReviewPromptContext(
 	b.WriteString("Prepared pull-request review context (collected before you started):\n")
 	b.WriteString(fmt.Sprintf("- Repository remote: %s\n", repo.URL))
 	b.WriteString(fmt.Sprintf("- Pull request: #%d\n", metadata.Number))
-	b.WriteString(fmt.Sprintf("- Pull request URL: %s\n", pickFirstNonEmpty(metadata.URL, reviewCfg.PRURL)))
+	b.WriteString(fmt.Sprintf("- Pull request URL: %s\n", stringsx.FirstNonEmpty(metadata.URL, reviewCfg.PRURL)))
 	b.WriteString(fmt.Sprintf("- Base branch: %s\n", metadata.BaseRefName))
-	b.WriteString(fmt.Sprintf("- Head branch: %s\n", pickFirstNonEmpty(metadata.HeadRefName, reviewCfg.HeadBranch)))
+	b.WriteString(fmt.Sprintf("- Head branch: %s\n", stringsx.FirstNonEmpty(metadata.HeadRefName, reviewCfg.HeadBranch)))
 	if trigger := strings.TrimSpace(reviewCfg.Trigger); trigger != "" {
 		b.WriteString(fmt.Sprintf("- Review trigger: %s\n", trigger))
 	}
@@ -3923,13 +3924,13 @@ func (h Harness) buildReviewPromptContext(
 	b.WriteString(truncateForPrompt(string(metadataJSON), maxReviewMetadataChars))
 	b.WriteString("\n```\n\n")
 	b.WriteString("Existing pull request discussion:\n```text\n")
-	b.WriteString(truncateForPrompt(nonEmptyOrDefault(discussionText, "No pull-request discussion was returned by GitHub."), maxReviewCommentsChars))
+	b.WriteString(truncateForPrompt(stringsx.FirstNonEmpty(discussionText, "No pull-request discussion was returned by GitHub."), maxReviewCommentsChars))
 	b.WriteString("\n```\n\n")
 	b.WriteString("Local git diff summary:\n```text\n")
-	b.WriteString(truncateForPrompt(nonEmptyOrDefault(joinCommandOutput(diffStatRes), "No diff summary output was returned by git diff --stat --summary."), maxReviewDiffStatChars))
+	b.WriteString(truncateForPrompt(stringsx.FirstNonEmpty(joinCommandOutput(diffStatRes), "No diff summary output was returned by git diff --stat --summary."), maxReviewDiffStatChars))
 	b.WriteString("\n```\n\n")
 	b.WriteString("Local git diff patch:\n```diff\n")
-	b.WriteString(truncateForPrompt(nonEmptyOrDefault(diffPatchRes.Stdout, "No diff patch output was returned by git diff."), maxReviewDiffPatchChars))
+	b.WriteString(truncateForPrompt(stringsx.FirstNonEmpty(diffPatchRes.Stdout, "No diff patch output was returned by git diff."), maxReviewDiffPatchChars))
 	b.WriteString("\n```")
 	return &preparedReviewContext{
 		Selector:                selector,
@@ -3968,7 +3969,7 @@ func (h Harness) loadPullRequestDiscussion(ctx context.Context, repoDir string, 
 			b.WriteString(err.Error())
 			continue
 		}
-		b.WriteString(nonEmptyOrDefault(strings.TrimSpace(res.Stdout), "[]"))
+		b.WriteString(stringsx.FirstNonEmpty(strings.TrimSpace(res.Stdout), "[]"))
 	}
 	return strings.TrimSpace(b.String())
 }
@@ -4006,14 +4007,14 @@ func (h Harness) completeReviewRun(
 	selector := reviewSelector(*cfg.Review)
 	var metadata reviewPRMetadata
 	if reviewContext != nil {
-		selector = pickFirstNonEmpty(reviewContext.Selector, selector)
+		selector = stringsx.FirstNonEmpty(reviewContext.Selector, selector)
 		metadata = reviewContext.Metadata
 	}
 	if selector == "" {
 		return fmt.Errorf("review selector is required")
 	}
 
-	prURL := pickFirstNonEmpty(metadata.URL, cfg.Review.PRURL)
+	prURL := stringsx.FirstNonEmpty(metadata.URL, cfg.Review.PRURL)
 	repo.PRURL = prURL
 	if head := strings.TrimSpace(metadata.HeadRefName); head != "" {
 		if repo.RequiresNonDefaultBranch && head != normalizeBranchRef(repo.RequiredBranch) {
@@ -4060,7 +4061,7 @@ func (h Harness) completeReviewRun(
 }
 
 func reviewWritebackTarget(metadata reviewPRMetadata, reviewCfg config.ReviewConfig, fallbackSelector string) (string, string) {
-	prURL := pickFirstNonEmpty(metadata.URL, reviewCfg.PRURL)
+	prURL := stringsx.FirstNonEmpty(metadata.URL, reviewCfg.PRURL)
 	selector := strings.TrimSpace(fallbackSelector)
 	if metadata.Number > 0 {
 		selector = strconv.Itoa(metadata.Number)
@@ -4870,22 +4871,6 @@ func truncateForPrompt(text string, max int) string {
 	return strings.TrimSpace(text[:max]) + "\n...(truncated)"
 }
 
-func nonEmptyOrDefault(value, fallback string) string {
-	if trimmed := strings.TrimSpace(value); trimmed != "" {
-		return trimmed
-	}
-	return strings.TrimSpace(fallback)
-}
-
-func pickFirstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
 func encodeLogLine(line string) string {
 	return base64.StdEncoding.EncodeToString([]byte(line))
 }
@@ -5475,7 +5460,7 @@ func agentOutputCitesAgent00NoChangeEvidence(res execx.Result) bool {
 	evidenceMarkers := []string{
 		"internal/", "cmd/", "library/",
 	}
-	return containsAnySubstring(text, evidenceMarkers)
+	return containsAny(text, evidenceMarkers)
 }
 
 func agentOutputCitesGeneralNoChangeEvidence(res execx.Result) bool {
@@ -5500,7 +5485,7 @@ func agentOutputHasConcreteBehaviorEvidence(text string) bool {
 		"tests passed",
 	}
 	for _, line := range splitOutputLines(text) {
-		if strings.Contains(line, "`") && containsAnySubstring(line, validationMarkers) {
+		if strings.Contains(line, "`") && containsAny(line, validationMarkers) {
 			return true
 		}
 	}
@@ -5555,7 +5540,7 @@ func agentOutputHasNoChangeClaim(text string) bool {
 		"already satisfied",
 		"requested state already",
 	}
-	return containsAnySubstring(text, noOpMarkers)
+	return containsAny(text, noOpMarkers)
 }
 
 var agentConcreteFileEvidencePatterns = []*regexp.Regexp{
@@ -5598,15 +5583,6 @@ func agentOutputHasGitRevisionEvidenceForRevision(text, revision string) bool {
 	return false
 }
 
-func containsAnySubstring(text string, markers []string) bool {
-	for _, marker := range markers {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
-}
-
 func newAgentInvocationLogMetadata(
 	runtime agentruntime.Runtime,
 	mode string,
@@ -5621,7 +5597,7 @@ func newAgentInvocationLogMetadata(
 		Harness: strings.TrimSpace(runtime.Harness),
 		Mode:    mode,
 		Attempt: attempt,
-		Repo:    pickFirstNonEmpty(strings.TrimSpace(repo), strings.TrimSpace(repoDir)),
+		Repo:    stringsx.FirstNonEmpty(strings.TrimSpace(repo), strings.TrimSpace(repoDir)),
 		RepoDir: strings.TrimSpace(repoDir),
 		Target:  strings.TrimSpace(target),
 	}
@@ -5640,7 +5616,7 @@ func initialAgentInvocationRepoMetadata(repos []repoWorkspace) (string, string) 
 }
 
 func agentInvocationRunID(mode, repoDir string, attempt int) string {
-	mode = sanitizeAgentInvocationIDPart(pickFirstNonEmpty(mode, "implementation"))
+	mode = sanitizeAgentInvocationIDPart(stringsx.FirstNonEmpty(mode, "implementation"))
 	repoDir = sanitizeAgentInvocationIDPart(repoDir)
 	parts := []string{"agent", mode}
 	if repoDir != "" && mode != "implementation" {
@@ -7763,14 +7739,22 @@ func prCommentCommand(repoDir, prURL, body string) execx.Command {
 }
 
 func prCreateWithOptionsCommand(repoDir string, cfg config.Config, baseBranch, headRef, repo string) execx.Command {
+	return prCreateCommandWithBase(repoDir, cfg, true, baseBranch, headRef, repo)
+}
+
+// prCreateCommandWithBase builds `gh pr create`; includeBase controls whether
+// --base is passed (gh otherwise targets the repository default branch).
+func prCreateCommandWithBase(repoDir string, cfg config.Config, includeBase bool, baseBranch, headRef, repo string) execx.Command {
 	normalizedPRBody := config.NormalizePRBodyForGitHubIssue(cfg.PRBody, cfg.Prompt, cfg.GitHubIssue)
-	args := []string{
-		"pr", "create",
-		"--base", baseBranch,
+	args := []string{"pr", "create"}
+	if includeBase {
+		args = append(args, "--base", baseBranch)
+	}
+	args = append(args,
 		"--head", headRef,
 		"--title", cfg.PRTitle,
 		"--body", normalizedPRBody,
-	}
+	)
 	if strings.TrimSpace(repo) != "" {
 		args = append(args, "--repo", strings.TrimSpace(repo))
 	}
@@ -7791,30 +7775,7 @@ func prCreateWithOptionsCommand(repoDir string, cfg config.Config, baseBranch, h
 }
 
 func prCreateWithoutBaseWithOptionsCommand(repoDir string, cfg config.Config, headRef, repo string) execx.Command {
-	normalizedPRBody := config.NormalizePRBodyForGitHubIssue(cfg.PRBody, cfg.Prompt, cfg.GitHubIssue)
-	args := []string{
-		"pr", "create",
-		"--head", headRef,
-		"--title", cfg.PRTitle,
-		"--body", normalizedPRBody,
-	}
-	if strings.TrimSpace(repo) != "" {
-		args = append(args, "--repo", strings.TrimSpace(repo))
-	}
-	if cfg.Draft {
-		args = append(args, "--draft")
-	}
-	if cfg.AssignCreatorEnabled() {
-		args = append(args, "--assignee", "@me")
-	}
-	for _, label := range cfg.Labels {
-		if strings.TrimSpace(label) == "" {
-			continue
-		}
-		args = append(args, "--label", label)
-	}
-	args = appendPRReviewers(args, cfg.Reviewers)
-	return ghCommand(repoDir, args...)
+	return prCreateCommandWithBase(repoDir, cfg, false, "", headRef, repo)
 }
 
 func (h Harness) assignGitHubIssueCreator(ctx context.Context, repo repoWorkspace, issue *config.GitHubIssueConfig) error {
@@ -7842,7 +7803,11 @@ func remoteBranchExistsOnRemoteCommand(repoDir, remote, branch string) execx.Com
 }
 
 func prLookupByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Command {
-	args := []string{"pr", "list", "--state", "open", "--head", headRef, "--json", "url", "--limit", "1"}
+	return prLookupByHeadStateCommand(repoDir, "open", headRef, repo)
+}
+
+func prLookupByHeadStateCommand(repoDir, state, headRef, repo string) execx.Command {
+	args := []string{"pr", "list", "--state", state, "--head", headRef, "--json", "url", "--limit", "1"}
 	if strings.TrimSpace(repo) != "" {
 		args = append(args, "--repo", strings.TrimSpace(repo))
 	}
@@ -7850,11 +7815,7 @@ func prLookupByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Command 
 }
 
 func prLookupAnyByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Command {
-	args := []string{"pr", "list", "--state", "all", "--head", headRef, "--json", "url", "--limit", "1"}
-	if strings.TrimSpace(repo) != "" {
-		args = append(args, "--repo", strings.TrimSpace(repo))
-	}
-	return ghCommand(repoDir, args...)
+	return prLookupByHeadStateCommand(repoDir, "all", headRef, repo)
 }
 
 func prStateViewCommand(repoDir, prURL string) execx.Command {
@@ -8298,7 +8259,7 @@ func (h Harness) reconcileNoChecksWithRequiredStatusChecks(ctx context.Context, 
 	if targetRepo == "" {
 		return false, "", nil
 	}
-	baseBranch := pickFirstNonEmpty(repo.BaseBranch, repo.Branch)
+	baseBranch := stringsx.FirstNonEmpty(repo.BaseBranch, repo.Branch)
 	if baseBranch == "" {
 		return false, "", nil
 	}
@@ -8357,7 +8318,7 @@ func (h Harness) reconcileNoChecksWithWorkflowDispatch(ctx context.Context, repo
 		return false, "", nil
 	}
 
-	workflowName := pickFirstNonEmpty(matching.DisplayTitle, matching.WorkflowName, defaultCIWorkflowPath)
+	workflowName := stringsx.FirstNonEmpty(matching.DisplayTitle, matching.WorkflowName, defaultCIWorkflowPath)
 	bucket := workflowDispatchConclusionBucket(
 		strings.ToLower(strings.TrimSpace(matching.Status)),
 		strings.ToLower(strings.TrimSpace(matching.Conclusion)),

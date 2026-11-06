@@ -367,17 +367,6 @@ func TestSpeechcovIsDisabledSpeechHostRecognizesAllDisabledSpellings(t *testing.
 	}
 }
 
-func TestSpeechcovMinDuration(t *testing.T) {
-	t.Parallel()
-
-	if got := minDuration(100*time.Millisecond, 750*time.Millisecond); got != 100*time.Millisecond {
-		t.Fatalf("minDuration(smaller, larger) = %s, want 100ms", got)
-	}
-	if got := minDuration(900*time.Millisecond, 750*time.Millisecond); got != 750*time.Millisecond {
-		t.Fatalf("minDuration(larger, smaller) = %s, want 750ms", got)
-	}
-}
-
 func TestSpeechcovNormalizeSpeechLanguageRejectsOverlongAndInvalidValues(t *testing.T) {
 	t.Parallel()
 

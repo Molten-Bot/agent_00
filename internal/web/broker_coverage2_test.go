@@ -603,62 +603,6 @@ func TestErrorTextHandlesNilError(t *testing.T) {
 	}
 }
 
-func TestFirstRepoSkipsBlankEntries(t *testing.T) {
-	t.Parallel()
-
-	if got := firstRepo(nil); got != "" {
-		t.Fatalf("firstRepo(nil) = %q, want empty", got)
-	}
-	if got := firstRepo([]string{"  ", ""}); got != "" {
-		t.Fatalf("firstRepo(all blank) = %q, want empty", got)
-	}
-	if got := firstRepo([]string{"", " ", "acme/repo"}); got != "acme/repo" {
-		t.Fatalf("firstRepo() = %q, want %q", got, "acme/repo")
-	}
-}
-
-func TestSameStringSliceComparesElementwise(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		a, b []string
-		want bool
-	}{
-		{"equal", []string{"a", "b"}, []string{"a", "b"}, true},
-		{"different length", []string{"a"}, []string{"a", "b"}, false},
-		{"same length different values", []string{"a", "b"}, []string{"a", "c"}, false},
-		{"both nil", nil, nil, true},
-	}
-	for _, tt := range tests {
-		if got := sameStringSlice(tt.a, tt.b); got != tt.want {
-			t.Fatalf("%s: sameStringSlice(%v, %v) = %t, want %t", tt.name, tt.a, tt.b, got, tt.want)
-		}
-	}
-}
-
-func TestSamePromptImagesComparesElementwise(t *testing.T) {
-	t.Parallel()
-
-	imgA := PromptImage{Name: "a.png", MediaType: "image/png", DataBase64: "AAAA"}
-	imgB := PromptImage{Name: "b.png", MediaType: "image/png", DataBase64: "BBBB"}
-
-	tests := []struct {
-		name string
-		a, b []PromptImage
-		want bool
-	}{
-		{"equal", []PromptImage{imgA}, []PromptImage{imgA}, true},
-		{"different length", []PromptImage{imgA}, []PromptImage{imgA, imgB}, false},
-		{"same length different values", []PromptImage{imgA}, []PromptImage{imgB}, false},
-	}
-	for _, tt := range tests {
-		if got := samePromptImages(tt.a, tt.b); got != tt.want {
-			t.Fatalf("%s: samePromptImages() = %t, want %t", tt.name, got, tt.want)
-		}
-	}
-}
-
 func TestNormalizeHTTPURLRejectsNonHTTPSchemes(t *testing.T) {
 	t.Parallel()
 
