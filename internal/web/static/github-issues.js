@@ -158,10 +158,6 @@
     button.append(icon, text);
   }
 
-  function formatPeople(people) {
-    return (Array.isArray(people) ? people : []).map((person) => person?.login).filter(Boolean).join(", ") || "None";
-  }
-
   function formatLabels(labels) {
     return (Array.isArray(labels) ? labels : []).map((label) => label?.name).filter(Boolean).join(", ") || "None";
   }
@@ -171,6 +167,10 @@
       ? `Issue and comments included as context · PR will close #${issue.number} on merge`
       : `Issue and comments included as context · PR will reference #${issue.number}`;
   }
+
+  // GitHub returns UTC timestamps; both formatters resolve them against the
+  // browser's clock and timezone so every time reads in the viewer's terms.
+  const absoluteTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
   function formatRelativeTime(value) {
     const timestamp = Date.parse(String(value || ""));
@@ -186,6 +186,17 @@
     return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(timestamp);
   }
 
+  function addTimestamp(parent, value) {
+    const timestamp = Date.parse(String(value || ""));
+    const node = addText(parent, "time", "", formatRelativeTime(value));
+    if (!Number.isFinite(timestamp)) return node;
+    node.dateTime = new Date(timestamp).toISOString();
+    // The relative text loses precision past a few days, so the tooltip spells
+    // out the same instant in the viewer's local time.
+    node.title = absoluteTimeFormat.format(timestamp);
+    return node;
+  }
+
   function addIssueLabels(parent, labels) {
     for (const label of Array.isArray(labels) ? labels : []) {
       const name = String(label?.name || "").trim();
@@ -193,11 +204,33 @@
     }
   }
 
-  function addAvatar(parent, login) {
+  // Pass a label when the avatar is the only mention of the person; without one
+  // the login is already written next to it and the initials are decorative.
+  function addAvatar(parent, login, label) {
     const name = String(login || "?").trim();
     const initials = name.split(/[-_\s]+/).filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join("") || "?";
     const avatar = addText(parent, "span", "github-issue-avatar", initials);
-    avatar.setAttribute("aria-hidden", "true");
+    if (label) {
+      avatar.setAttribute("role", "img");
+      avatar.setAttribute("aria-label", label);
+      avatar.title = label;
+    } else {
+      avatar.setAttribute("aria-hidden", "true");
+    }
+    return avatar;
+  }
+
+  function addAssignees(parent, assignees) {
+    const people = (Array.isArray(assignees) ? assignees : []).filter((person) => person?.login);
+    if (!people.length) {
+      addText(parent, "span", "github-issue-assignee-empty", "Unassigned");
+      return;
+    }
+    for (const person of people) {
+      const login = String(person.login);
+      const name = String(person.name || "").trim();
+      addAvatar(parent, login, name ? `${login} (${name})` : login);
+    }
   }
 
   function buildTaskPrompt(issue) {
@@ -322,6 +355,21 @@
       link.textContent = "Open on GitHub";
       detailHeader.appendChild(link);
     }
+    // Assignees and timestamps answer "who owns this and is it still moving",
+    // so they close the header instead of waiting below the description.
+    const metadata = document.createElement("dl");
+    metadata.className = "github-issue-metadata";
+    const assigneeGroup = document.createElement("div");
+    addText(assigneeGroup, "dt", "", "Assignees");
+    addAssignees(addText(assigneeGroup, "dd", "github-issue-assignees", ""), issue.assignees);
+    metadata.appendChild(assigneeGroup);
+    for (const [label, value] of [["Created", issue.createdAt], ["Updated", issue.updatedAt]]) {
+      const group = document.createElement("div");
+      addText(group, "dt", "", label);
+      addTimestamp(addText(group, "dd", "", ""), value);
+      metadata.appendChild(group);
+    }
+    detailHeader.appendChild(metadata);
     detail.appendChild(detailHeader);
 
     const detailBody = document.createElement("div");
@@ -331,19 +379,6 @@
     addText(author, "strong", "", issue.author?.login || "Unknown");
     addText(author, "span", "", `opened this issue ${formatRelativeTime(issue.createdAt)}`);
     addText(detailBody, "pre", "github-issue-body", issue.body || "No description provided.");
-    const metadata = document.createElement("dl");
-    metadata.className = "github-issue-metadata";
-    for (const [label, value] of [
-      ["Assignees", formatPeople(issue.assignees)],
-      ["Created", formatRelativeTime(issue.createdAt)],
-      ["Updated", formatRelativeTime(issue.updatedAt)],
-    ]) {
-      const group = document.createElement("div");
-      addText(group, "dt", "", label);
-      addText(group, "dd", "", value);
-      metadata.appendChild(group);
-    }
-    detailBody.appendChild(metadata);
     addText(detailBody, "h3", "github-issue-comments-heading", `Comments (${(issue.comments || []).length})`);
     const comments = document.createElement("div");
     comments.className = "github-issue-comments";

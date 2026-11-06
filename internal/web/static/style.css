@@ -9271,12 +9271,12 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 
 .github-issue-metadata {
   display: flex;
+  align-items: flex-start;
   gap: 26px;
   flex-wrap: wrap;
-  padding: 11px 0;
-  margin: 15px 0 0;
+  padding: 11px 0 0;
+  margin: 14px 0 0;
   border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
   color: var(--muted);
   font-size: .62rem;
 }
@@ -9295,6 +9295,26 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   font-size: .68rem;
   font-weight: 650;
   overflow-wrap: anywhere;
+}
+
+.github-issue-assignees {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-height: 22px;
+}
+
+.github-issue-assignees .github-issue-avatar {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  font-size: .55rem;
+}
+
+.github-issue-assignee-empty {
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .github-issue-comments-heading {
