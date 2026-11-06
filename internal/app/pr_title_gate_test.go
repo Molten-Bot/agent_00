@@ -393,6 +393,32 @@ func TestConformingPRTitle(t *testing.T) {
 			ok:    true,
 		},
 		{
+			name:    "breaking change marker survives the rewrite",
+			gate:    strictGate,
+			title:   "ci(automation)!: drop the legacy endpoint",
+			numbers: []int{42},
+			want:    "chore(#42)!: drop the legacy endpoint",
+			ok:      true,
+		},
+		{
+			name:  "breaking change marker survives a type-only rewrite",
+			gate:  prTitleGate{Types: []string{"chore"}},
+			title: "ci!: drop the legacy endpoint",
+			want:  "chore!: drop the legacy endpoint",
+			ok:    true,
+		},
+		{
+			name:  "breaking change marker alone is not a rewrite",
+			gate:  prTitleGate{Types: []string{"chore"}},
+			title: "chore!: drop the legacy endpoint",
+		},
+		{
+			name:    "type outside the known release meanings is never stamped",
+			gate:    prTitleGate{Types: []string{"release", "major"}, RequireScope: true},
+			title:   "ci(automation): tighten release checks",
+			numbers: []int{42},
+		},
+		{
 			name:  "empty subject",
 			gate:  strictGate,
 			title: "   ",
@@ -1210,6 +1236,85 @@ func TestRunWaitsForTitleGateRerunAfterRetitle(t *testing.T) {
 	}
 }
 
+func TestRunStopsWithoutRemediationWhenTheTitleGateRecheckBudgetRunsOut(t *testing.T) {
+	t.Parallel()
+
+	cfg := sampleConfig()
+	cfg.PRTitle = "ci(automation): harden CI validation checks"
+	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
+	guid := "titlegate0008"
+	runDir := testRunDir(guid)
+	agentsPath := filepath.Join(runDir, "AGENTS.md")
+	repoDir := filepath.Join(runDir, "repo")
+	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
+	branch := "agent00-build-api"
+	prURL := "https://github.com/acme/repo/pull/42"
+	repairedTitle := "chore(#42): harden CI validation checks"
+
+	workflowDir := filepath.Join(repoDir, ".github", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatalf("create workflow dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "semantic-pr-title.yml"), []byte(titleGateWorkflow), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	// Only the gate is red, so no snapshot reconciliation runs between rounds.
+	redChecks := execx.Result{Stdout: "pr-title\tfail\t6s\thttps://example.com/job"}
+
+	exps := []expectedRun{
+		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "codex", Args: []string{"--help"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"auth", "status"}}},
+		{cmd: cloneCommand(cfg, repoDir)},
+		{cmd: branchCommand(repoDir, branch)},
+		{cmd: pushDryRunCommand(repoDir, branch)},
+		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: " M file.go\n"}},
+		{cmd: addCommand(repoDir)},
+		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
+		{cmd: pushCommand(repoDir, branch)},
+		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
+		{cmd: prChecksCommand(repoDir, prURL), res: redChecks, err: errors.New("exit status 1")},
+		{cmd: prTitleViewCommand(repoDir, prURL), res: execx.Result{Stdout: `{"title":"` + cfg.PRTitle + `"}`}},
+		{cmd: prEditTitleCommand(repoDir, prURL, repairedTitle)},
+	}
+	// The regenerated gate run stays red through every recheck, plus the round
+	// that finds the budget spent.
+	for i := 0; i <= maxPRTitleGateRechecks; i++ {
+		exps = append(exps, expectedRun{cmd: prChecksCommand(repoDir, prURL), res: redChecks, err: errors.New("exit status 1")})
+	}
+	fake := &fakeRunner{t: t, exps: exps}
+
+	var logs []string
+	h := New(fake)
+	h.Now = func() time.Time { return now }
+	h.Workspace = testWorkspaceManager(guid)
+	h.TargetDirOK = func(path string) bool { return path == targetDir }
+	h.Sleep = func(context.Context, time.Duration) error { return nil }
+	h.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+
+	res := h.Run(context.Background(), cfg)
+	if res.ExitCode != ExitPR || res.Err == nil {
+		t.Fatalf("Run() = (exit %d, %v), want (%d, error)", res.ExitCode, res.Err, ExitPR)
+	}
+	if !strings.Contains(res.Err.Error(), "pull request title gate still failing") {
+		t.Fatalf("error = %v, want the unresolved title gate failure", res.Err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unused expectations: %+v", fake.exps)
+	}
+
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "stage=checks status=failed reason=title_gate_unresolved") {
+		t.Fatalf("missing unresolved title gate log:\n%s", joined)
+	}
+	if strings.Contains(joined, "mode=remediation") {
+		t.Fatalf("a remediation agent ran for a pull-request title gate:\n%s", joined)
+	}
+}
+
 func TestRunRepairsTitleGateAgainForARecreatedPullRequest(t *testing.T) {
 	t.Parallel()
 
@@ -1576,6 +1681,11 @@ func TestIsPRTitleGateNotPermitted(t *testing.T) {
 			name: "a title word never counts as a denial",
 			// The wrapped error repeats the gh arguments, title included.
 			err: errors.New(`run gh [pr edit 42 --title chore(#42): reject forbidden imports]: exit status 1`),
+		},
+		{
+			name: "an auth phrase reported only by the wrapped error never counts",
+			// The wrapped error repeats the gh arguments, title included.
+			err: errors.New(`run gh [pr edit 42 --title chore(#42): retry on bad credentials and HTTP 401]: exit status 1`),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

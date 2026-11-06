@@ -53,7 +53,7 @@ var preferredPRTitleTypes = []string{"chore", "fix", "feat", "refactor", "build"
 // input still rejects a type outside this list.
 var defaultSemanticPRTitleTypes = []string{"build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test"}
 
-var conventionalPRTitleRE = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_-]*)(?:\(([^()]*)\))?!?:\s*(.+)$`)
+var conventionalPRTitleRE = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_-]*)(?:\(([^()]*)\))?(!?):\s*(.+)$`)
 
 var regexMetaRE = regexp.MustCompile(`[\\^$.|?*+()\[\]{}]`)
 
@@ -260,8 +260,10 @@ func (h Harness) runPRTitleGateCommand(ctx context.Context, cmd execx.Command, a
 //
 // Only phrasing GitHub itself emits, in gh's own output, counts. The wrapped
 // error repeats the gh arguments, which carry the pull-request title, so
-// matching it would let a title that merely mentions "HTTP 403" talk the
-// harness out of a repair.
+// matching it would let a title that merely mentions "HTTP 403" or "bad
+// credentials" talk the harness out of a repair. That holds for the
+// authentication markers too, which is why the output-only matcher is used
+// instead of isGitHubAuthFailure.
 func isPRTitleGateNotPermitted(res execx.Result, err error) bool {
 	if err == nil {
 		return false
@@ -269,10 +271,10 @@ func isPRTitleGateNotPermitted(res execx.Result, err error) bool {
 	if isGitHubRateLimited(res, err) {
 		return false
 	}
-	if isGitHubAuthFailure(res, err) {
+	text := strings.ToLower(strings.Join([]string{res.Stdout, res.Stderr}, "\n"))
+	if hasGitHubAuthFailureMarker(text) {
 		return true
 	}
-	text := strings.ToLower(strings.Join([]string{res.Stdout, res.Stderr}, "\n"))
 	return strings.Contains(text, "resource not accessible by integration") ||
 		strings.Contains(text, "http 403")
 }
@@ -725,7 +727,7 @@ func lineIndent(line string) int {
 // repository-specific scope or rewording the subject.
 func conformingPRTitle(title string, gate prTitleGate, scopeNumbers []int) (string, bool) {
 	current := strings.TrimSpace(title)
-	currentType, currentScope, subject := splitConventionalPRTitle(current)
+	currentType, currentScope, breaking, subject := splitConventionalPRTitle(current)
 	if subject == "" {
 		return "", false
 	}
@@ -736,7 +738,10 @@ func conformingPRTitle(title string, gate prTitleGate, scopeNumbers []int) (stri
 		return "", false
 	}
 
-	newType := conformingPRTitleType(currentType, gate.Types)
+	newType, ok := conformingPRTitleType(currentType, gate.Types)
+	if !ok {
+		return "", false
+	}
 	newScope, ok := conformingPRTitleScope(currentScope, gate, scopeNumbers)
 	if !ok {
 		return "", false
@@ -746,43 +751,52 @@ func conformingPRTitle(title string, gate prTitleGate, scopeNumbers []int) (stri
 	if newScope != "" {
 		rewritten += "(" + newScope + ")"
 	}
-	rewritten += ": " + subject
+	// The `!` marker declares a breaking change, which downstream release
+	// automation reads. Carry it through rather than silently downgrading the
+	// release semantics the title already stated.
+	rewritten += breaking + ": " + subject
 	if rewritten == current {
 		return "", false
 	}
 	return rewritten, true
 }
 
-func splitConventionalPRTitle(title string) (typ, scope, subject string) {
+func splitConventionalPRTitle(title string) (typ, scope, breaking, subject string) {
 	title = strings.TrimSpace(title)
 	match := conventionalPRTitleRE.FindStringSubmatch(title)
 	if match == nil {
-		return "", "", title
+		return "", "", "", title
 	}
-	return match[1], strings.TrimSpace(match[2]), strings.TrimSpace(match[3])
+	return match[1], strings.TrimSpace(match[2]), match[3], strings.TrimSpace(match[4])
 }
 
 // conformingPRTitleType returns the type the gate accepts, keeping the current
 // one when it is already allowed. A gate that declares no `types:` still
 // enforces the action's default list, so the rejected type must be replaced
 // there too rather than echoed back.
-func conformingPRTitleType(current string, allowed []string) string {
+//
+// It reports false when the gate's list shares no type with
+// preferredPRTitleTypes. Those are the types whose release meaning the harness
+// knows; an unrecognized one such as `release` or `major` can drive version
+// bumps and publishing automation, so an underivable type leaves the title
+// alone the way an underivable scope does.
+func conformingPRTitleType(current string, allowed []string) (string, bool) {
 	if len(allowed) == 0 {
 		allowed = defaultSemanticPRTitleTypes
 	}
 	for _, candidate := range allowed {
 		if strings.EqualFold(candidate, current) {
-			return candidate
+			return candidate, true
 		}
 	}
 	for _, preferred := range preferredPRTitleTypes {
 		for _, candidate := range allowed {
 			if strings.EqualFold(candidate, preferred) {
-				return candidate
+				return candidate, true
 			}
 		}
 	}
-	return allowed[0]
+	return "", false
 }
 
 func conformingPRTitleScope(current string, gate prTitleGate, scopeNumbers []int) (string, bool) {

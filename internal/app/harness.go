@@ -1188,13 +1188,34 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 				attempt--
 				continue
 			}
-		} else if prTitleGateOnlyFailure(checkRes, checkSummary) && titleGateRechecks < maxPRTitleGateRechecks {
-			// The edited-title run can still be queued, or the stale red run
-			// can still be the latest one gh reports. Wait for the regenerated
-			// gate run instead of starting remediation it cannot satisfy.
-			titleGateRechecks++
+		} else if prTitleGateOnlyFailure(checkRes, checkSummary) {
+			if titleGateRechecks < maxPRTitleGateRechecks {
+				// The edited-title run can still be queued, or the stale red
+				// run can still be the latest one gh reports. Wait for the
+				// regenerated gate run instead of starting remediation it
+				// cannot satisfy.
+				titleGateRechecks++
+				h.logf(
+					"stage=checks status=waiting reason=title_gate_rerun repo=%s repo_dir=%s pr_url=%s attempt=%d retry=%d/%d",
+					repo.URL,
+					repo.RelDir,
+					repo.PRURL,
+					attempt+1,
+					titleGateRechecks,
+					maxPRTitleGateRechecks,
+				)
+				if err := h.Sleep(ctx, prTitleGateRecheckDelay); err != nil {
+					return ExitPR, "checks", err
+				}
+				attempt--
+				continue
+			}
+			// The repaired title's gate run never turned green within the
+			// recheck budget. A remediation agent still cannot clear a check
+			// that grades pull-request metadata, so report the gate instead of
+			// spending agent runs that cannot change the outcome.
 			h.logf(
-				"stage=checks status=waiting reason=title_gate_rerun repo=%s repo_dir=%s pr_url=%s attempt=%d retry=%d/%d",
+				"stage=checks status=failed reason=title_gate_unresolved repo=%s repo_dir=%s pr_url=%s attempt=%d retry=%d/%d",
 				repo.URL,
 				repo.RelDir,
 				repo.PRURL,
@@ -1202,11 +1223,12 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 				titleGateRechecks,
 				maxPRTitleGateRechecks,
 			)
-			if err := h.Sleep(ctx, prTitleGateRecheckDelay); err != nil {
-				return ExitPR, "checks", err
-			}
-			attempt--
-			continue
+			return ExitPR, "checks", fmt.Errorf(
+				"pull request title gate still failing for repo %s after the title repair and %d recheck(s): %s",
+				repo.URL,
+				maxPRTitleGateRechecks,
+				checkSummary,
+			)
 		}
 
 		h.logf("stage=checks status=failed repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
@@ -5036,7 +5058,15 @@ func isGitHubAuthFailure(res execx.Result, err error) bool {
 	if err == nil {
 		return false
 	}
-	text := strings.ToLower(strings.Join([]string{res.Stdout, res.Stderr, err.Error()}, "\n"))
+	return hasGitHubAuthFailureMarker(strings.Join([]string{res.Stdout, res.Stderr, err.Error()}, "\n"))
+}
+
+// hasGitHubAuthFailureMarker reports whether text carries phrasing gh or the
+// GitHub API emits for credentials GitHub will not accept. Callers that must
+// not read attacker- or operator-controlled arguments, such as a pull-request
+// title echoed back by the wrapped exec error, pass gh's own output alone.
+func hasGitHubAuthFailureMarker(text string) bool {
+	text = strings.ToLower(text)
 	return strings.Contains(text, "requires authentication") ||
 		strings.Contains(text, "try authenticating with") ||
 		strings.Contains(text, "gh auth login") ||
