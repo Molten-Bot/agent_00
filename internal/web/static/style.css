@@ -9298,6 +9298,8 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 }
 
 .github-issue-assignees {
+  /* The anchor for the revealed names below, not just a row of chips. */
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -9306,7 +9308,6 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 }
 
 .github-issue-assignees .github-issue-avatar {
-  position: relative;
   flex: 0 0 22px;
   width: 22px;
   height: 22px;
@@ -9320,9 +9321,13 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 .github-issue-assignees .github-issue-avatar::after {
   content: attr(data-label);
   position: absolute;
-  /* Anchored below and to the chip's left edge: the first chip sits against the
-     pane's left padding, so a centred tooltip would hang off the panel. */
-  top: calc(100% + 6px);
+  /* Anchored to the row rather than to the chip that owns it. The detail pane
+     clips horizontally (overflow: hidden), so a name hanging off the third
+     chip, or off any chip once the column is dragged narrow, would be cut in
+     half. The row always starts at the pane's left padding, so a name that
+     fits the pane fits from here whichever chip is showing it. Flush under the
+     row, because a gap is a place the pointer can lose the chip. */
+  top: 100%;
   left: 0;
   z-index: 20;
   padding: 2px 8px;
@@ -9340,6 +9345,7 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   width: max-content;
   max-width: 14rem;
   overflow-wrap: anywhere;
+  /* Hidden it must not swallow clicks aimed at the description underneath. */
   pointer-events: none;
   opacity: 0;
   transition: opacity .2s ease;
@@ -9350,6 +9356,9 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 .github-issue-assignees .github-issue-avatar:hover::after,
 .github-issue-assignees .github-issue-avatar:focus::after {
   opacity: 1;
+  /* Shown it takes the pointer, so hovering the name itself keeps the chip
+     hovered and the name on screen, as WCAG 1.4.13 hoverable requires. */
+  pointer-events: auto;
 }
 
 .github-issue-assignee-empty {

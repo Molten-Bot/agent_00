@@ -420,6 +420,7 @@ func (s Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	data = s.injectIndexConfig(data)
 	data = s.injectBottomDockComponent(r.Context(), data)
+	data = withStaticAssetVersions(data)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -1798,6 +1799,7 @@ func (s Server) handleGame(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "game ui is unavailable", http.StatusInternalServerError)
 		return
 	}
+	data = withStaticAssetVersions(data)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -1812,7 +1814,7 @@ func (s Server) renderSitePage(ctx context.Context, w http.ResponseWriter, data 
 		http.Error(w, "page is unavailable", http.StatusInternalServerError)
 		return
 	}
-	rendered := s.injectBottomDockComponent(ctx, page.Bytes())
+	rendered := withStaticAssetVersions(s.injectBottomDockComponent(ctx, page.Bytes()))
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

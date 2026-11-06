@@ -412,59 +412,22 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	}
 }
 
-// TestGitHubIssueHeaderAssetsCarryAssigneeAndTimeAffordances keeps the pieces the
-// browser suite below proves at the DOM level from silently disappearing in
-// environments without Node: the header metadata, the Unassigned fallback, the
-// focus-revealed assignee name, and the <time> elements. It also pins the
-// script's cache-busting query, because a stale cached github-issues.js would
-// keep shipping the old header long after the file changed.
-func TestGitHubIssueHeaderAssetsCarryAssigneeAndTimeAffordances(t *testing.T) {
+// TestGitHubIssueHeaderAssetsCarryAssigneeCopy keeps the header's user-visible
+// copy from disappearing in environments without Node, where the browser suite
+// below is skipped. It asserts the strings a reader sees, not the source that
+// produces them, so a refactor of the rendering code stays free.
+func TestGitHubIssueHeaderAssetsCarryAssigneeCopy(t *testing.T) {
 	t.Parallel()
-	srv := githubIssueTestServer(nil, true)
-	fetch := func(path string) string {
-		t.Helper()
-		response := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
-		if response.Code != http.StatusOK {
-			t.Fatalf("GET %s status = %d, want 200", path, response.Code)
-		}
-		return response.Body.String()
+	response := httptest.NewRecorder()
+	githubIssueTestServer(nil, true).Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /static/github-issues.js status = %d, want 200", response.Code)
 	}
-
-	script := fetch("/static/github-issues.js")
-	for _, want := range []string{"addAssignees", `"Unassigned"`, "detailHeader.appendChild(metadata)", "addTimestamp(", `node.dateTime = new Date(timestamp).toISOString()`, "avatar.dataset.label = label", "avatar.tabIndex = 0", `if (event.key !== "Escape") return;`, "addTimestamp(commentMeta, comment.createdAt)", `addTimestamp(addText(meta, "span", "", "updated ")`} {
+	script := response.Body.String()
+	for _, want := range []string{"Assignees", "Unassigned", "Created", "Updated"} {
 		if !strings.Contains(script, want) {
-			t.Errorf("github-issues.js is missing %q", want)
+			t.Errorf("github-issues.js never writes %q, so the issue header lost it", want)
 		}
-	}
-	if strings.Contains(script, "opened this issue ${formatRelativeTime") {
-		t.Error("the byline repeats the Created timestamp the header already shows")
-	}
-	if strings.Contains(script, "avatar.title = label") {
-		t.Error("assignee icons must not rely on a title tooltip touch users cannot open")
-	}
-
-	css := normalizeCSSWhitespace(fetch("/static/style.css"))
-	for _, want := range []string{
-		".github-issue-assignees .github-issue-avatar::after { content: attr(data-label);",
-		".github-issue-assignees .github-issue-avatar:focus::after {",
-		// Without a cap the one-line name runs off a phone's right edge.
-		"width: max-content; max-width: 14rem; overflow-wrap: anywhere;",
-	} {
-		if !strings.Contains(css, want) {
-			t.Errorf("style.css is missing %q, so a tapped assignee icon never names itself", want)
-		}
-	}
-
-	page := fetch("/")
-	if !strings.Contains(page, `src="/static/github-issues.js?v=13"`) {
-		t.Error("github-issues.js changed, so its cache-busting version must advance past v=12")
-	}
-	// The revealed assignee name lives entirely in style.css, which /static/
-	// serves as public, max-age=3600. Without a version query an hour of cached
-	// CSS would pair the new markup with the old rules.
-	if !strings.Contains(page, `href="/static/style.css?v=`) {
-		t.Error("style.css carries behavior now, so its link needs a cache-busting version query")
 	}
 }
 

@@ -8,10 +8,56 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
+
+// staticAssetRefPattern matches the src/href attributes of the embedded scripts
+// and stylesheets a page pulls in, with or without a query already attached.
+// Those are the files whose cached copy has to match the markup that shipped
+// with them; a stale image is just an old picture.
+var staticAssetRefPattern = regexp.MustCompile(`(src|href)="/static/([^"?#]+\.(?:css|js))(?:\?[^"#]*)?"`)
+
+// staticAssetVersions caches each embedded asset's cache-busting token. The
+// embedded bytes cannot change while the process runs, so one hash per file is
+// enough.
+var staticAssetVersions sync.Map // name -> string
+
+// withStaticAssetVersions stamps every /static/ reference in an HTML page with
+// a query derived from that file's bytes. Static assets are served with
+// public, max-age=3600, so without it a browser can pair fresh markup with an
+// hour-old stylesheet or script. A hand-written ?v=N only closes that window
+// when somebody remembers to bump it; deriving the query from the content
+// makes the bump automatic and leaves unchanged files cacheable.
+func withStaticAssetVersions(page []byte) []byte {
+	return staticAssetRefPattern.ReplaceAllFunc(page, func(match []byte) []byte {
+		groups := staticAssetRefPattern.FindSubmatch(match)
+		version := staticAssetVersion(string(groups[2]))
+		if version == "" {
+			return match
+		}
+		return []byte(string(groups[1]) + `="/static/` + string(groups[2]) + `?v=` + version + `"`)
+	})
+}
+
+// staticAssetVersion returns a short content hash for a path under static/, or
+// an empty string when it names no embedded file. The hash shares its prefix
+// with the ETag the static handler serves, because both hash the same bytes.
+func staticAssetVersion(name string) string {
+	if cached, ok := staticAssetVersions.Load(name); ok {
+		return cached.(string)
+	}
+	version := ""
+	// The leading slash keeps a ".." segment from climbing out of static/.
+	if data, err := fs.ReadFile(staticFiles, path.Join("static", path.Clean("/"+name))); err == nil {
+		sum := sha256.Sum256(data)
+		version = hex.EncodeToString(sum[:6])
+	}
+	cached, _ := staticAssetVersions.LoadOrStore(name, version)
+	return cached.(string)
+}
 
 // staticAsset is an embedded file prepared once for repeated serving: a
 // content-hash ETag for revalidation and, for compressible types, a gzip

@@ -23,11 +23,15 @@ const assignedIssue = {
   createdAt, updatedAt,
 };
 const unassignedIssue = { ...assignedIssue, number: 8, title: 'Nobody owns this yet', assignees: [] };
-// A name long enough that an unwrapped tooltip would run past the pane's right
-// edge on a phone, which is the case the revealed name has to survive.
-const longNameIssue = {
+// A long name on the last of a row of chips: the case the revealed name has to
+// survive, because the pane clips horizontally and a name hung off a chip this
+// far right would be cut in half on a phone.
+const crowdedIssue = {
   ...assignedIssue, number: 10,
-  assignees: [{ login: 'mariafernanda', name: 'Maria-Fernanda Gonzalez de la Vega Rodriguez Hernandez San Martin' }],
+  assignees: [
+    { login: 'ana' }, { login: 'bo' }, { login: 'cy' }, { login: 'di' }, { login: 'ed' }, { login: 'fi' },
+    { login: 'mariafernanda', name: 'Maria-Fernanda Gonzalez de la Vega Rodriguez Hernandez San Martin' },
+  ],
 };
 
 let browser;
@@ -89,20 +93,38 @@ test('assignees and timestamps lead the issue header instead of trailing the des
 
 // tooltipShown waits for the chip's revealed name, which fades in over a
 // transition, and reports where it landed so a clipped tooltip still fails.
-async function tooltipShown(page) {
-  await page.waitForFunction(() => {
-    const node = document.querySelector('.github-issue-assignees .github-issue-avatar');
+async function tooltipShown(page, index = 0) {
+  await page.waitForFunction(i => {
+    const node = document.querySelectorAll('.github-issue-assignees .github-issue-avatar')[i];
     return getComputedStyle(node, '::after').opacity === '1';
-  });
-  return page.evaluate(() => {
+  }, index);
+  return page.evaluate(i => {
     const pane = document.querySelector('.github-issue-detail').getBoundingClientRect();
-    const chip = document.querySelector('.github-issue-assignees .github-issue-avatar');
-    const box = chip.getBoundingClientRect();
-    // The name is a ::after anchored at the chip's left edge, so it has no
-    // rect of its own; its width plus that edge is where it actually ends.
-    const width = parseFloat(getComputedStyle(chip, '::after').width);
-    return { paneLeft: pane.left, paneRight: pane.right, chipLeft: box.left, nameRight: box.left + width };
-  });
+    const chip = document.querySelectorAll('.github-issue-assignees .github-issue-avatar')[i];
+    const style = getComputedStyle(chip, '::after');
+    const px = value => parseFloat(value) || 0;
+    // The name is a ::after with no rect of its own, so measure it the way the
+    // browser places it: against whichever ancestor is its containing block,
+    // which is the nearest positioned one. Deriving that here instead of
+    // assuming it keeps this honest if the anchor ever moves back to the chip.
+    let anchor = chip;
+    while (anchor && getComputedStyle(anchor).position === 'static') anchor = anchor.parentElement;
+    const base = (anchor || document.documentElement).getBoundingClientRect();
+    // box-sizing does not reach generated content, so the painted size is the
+    // content size plus padding and border.
+    const width = px(style.width) + px(style.paddingLeft) + px(style.paddingRight)
+      + px(style.borderLeftWidth) + px(style.borderRightWidth);
+    const height = px(style.height) + px(style.paddingTop) + px(style.paddingBottom)
+      + px(style.borderTopWidth) + px(style.borderBottomWidth);
+    const left = base.left + px(style.left);
+    const top = base.top + px(style.top);
+    return {
+      paneLeft: pane.left, paneRight: pane.right,
+      chipLeft: chip.getBoundingClientRect().left,
+      nameLeft: left, nameRight: left + width,
+      nameTop: top, nameBottom: top + height,
+    };
+  }, index);
 }
 
 test('tapping an assignee icon names it, which a title tooltip never does on touch', async t => {
@@ -123,12 +145,36 @@ test('hovering an assignee icon names it without clipping against the pane edge'
   await chip.hover();
   const box = await tooltipShown(page);
   assert.ok(box.nameRight <= box.paneRight, 'the name fits inside the issue pane');
+
+  // The pane clips horizontally, so a name hung off a later chip would be cut
+  // in half. Every chip's name is anchored to the row for that reason.
+  const last = page.locator('.github-issue-assignees .github-issue-avatar').last();
+  await last.hover();
+  const lastBox = await tooltipShown(page, 1);
+  assert.ok(lastBox.nameLeft >= lastBox.paneLeft && lastBox.nameRight <= lastBox.paneRight,
+    `the second chip's name spans ${lastBox.nameLeft}-${lastBox.nameRight} but the pane spans ${lastBox.paneLeft}-${lastBox.paneRight}`);
 });
 
-test('a long assignee name wraps inside the pane instead of running off a phone screen', async t => {
-  const page = await openIssue(t, longNameIssue, { touch: true });
-  await page.locator('.github-issue-assignees .github-issue-avatar').first().tap();
+test('the revealed name stays up while the pointer rests on it', async t => {
+  const page = await openIssue(t, assignedIssue);
+  await page.locator('.github-issue-assignees .github-issue-avatar').first().hover();
   const box = await tooltipShown(page);
+  // WCAG 1.4.13 hoverable: content a hover reveals must survive the pointer
+  // moving onto it, which rules out a gap to cross or pointer-events: none.
+  await page.mouse.move((box.nameLeft + box.nameRight) / 2, (box.nameTop + box.nameBottom) / 2);
+  // Longer than the .2s fade, so a name that starts disappearing is caught.
+  await page.waitForTimeout(400);
+  assert.equal(await page.locator('.github-issue-assignees .github-issue-avatar').first()
+    .evaluate(node => getComputedStyle(node, '::after').opacity), '1',
+    'the name vanishes as soon as the pointer reaches it');
+});
+
+test('a long name on the last chip stays inside the pane on a phone screen', async t => {
+  const page = await openIssue(t, crowdedIssue, { touch: true });
+  const chips = page.locator('.github-issue-assignees .github-issue-avatar');
+  const last = await chips.count() - 1;
+  await chips.nth(last).tap();
+  const box = await tooltipShown(page, last);
   assert.ok(box.chipLeft >= box.paneLeft, 'the named chip stays inside the issue pane');
   assert.ok(box.nameRight <= box.paneRight,
     `the name ends at ${box.nameRight} but the pane ends at ${box.paneRight}`);
@@ -162,27 +208,33 @@ test('header, list, and byline times read in the viewer timezone', async t => {
   const headerTimes = tokyo.locator('.github-issue-metadata time');
   assert.deepEqual(await headerTimes.evaluateAll(nodes => nodes.map(node => node.dateTime)),
     ['2024-03-04T05:06:07.000Z', '2024-05-06T07:08:09.000Z']);
-  assert.deepEqual((await headerTimes.evaluateAll(nodes => nodes.map(node => node.title))).map(plainSpaces),
+  // The header states the exact local moment on screen. A title tooltip
+  // holding it would never open for a touch user, which is the same reason
+  // the assignee chips do not use one.
+  assert.deepEqual((await headerTimes.allInnerTexts()).map(plainSpaces),
     ['Mar 4, 2024, 2:06 PM', 'May 6, 2024, 4:08 PM']);
+  assert.deepEqual(await headerTimes.evaluateAll(nodes => nodes.map(node => node.title)), ['', '']);
 
-  // The list's "updated" line is the same instant and needs the same treatment.
+  // The list's "updated" line is the same instant, kept relative because that
+  // is what a reader scanning the list wants, and with nothing hidden in a
+  // tooltip behind it.
   const listTime = tokyo.locator('.github-issue-list-meta time').first();
   assert.equal(await listTime.evaluate(node => node.dateTime), '2024-05-06T07:08:09.000Z');
-  assert.equal(plainSpaces(await listTime.evaluate(node => node.title)), 'May 6, 2024, 4:08 PM');
+  assert.equal(await listTime.evaluate(node => node.title), '');
   assert.match(await tokyo.locator('.github-issue-list-meta').first().innerText(), /updated May 6, 2024/);
 
   // Comment times are the same kind of value, so they carry the same treatment.
   const commentTime = tokyo.locator('.github-issue-comment-meta time');
   assert.equal(await commentTime.count(), 1, 'each comment timestamp is a <time>');
   assert.equal(await commentTime.evaluate(node => node.dateTime), '2024-04-05T06:07:08.000Z');
-  assert.equal(plainSpaces(await commentTime.evaluate(node => node.title)), 'Apr 5, 2024, 3:07 PM');
+  assert.equal(await commentTime.evaluate(node => node.title), '');
 
   // The byline would otherwise repeat the Created value already in the header.
   assert.equal((await tokyo.locator('.github-issue-author span:not(.github-issue-avatar)').innerText()).trim(), 'opened this issue');
   assert.equal(await tokyo.locator('.github-issue-author time').count(), 0);
 
   const losAngeles = await openIssue(t, assignedIssue, { timezoneId: 'America/Los_Angeles' });
-  assert.deepEqual((await losAngeles.locator('.github-issue-metadata time').evaluateAll(nodes => nodes.map(node => node.title))).map(plainSpaces),
+  assert.deepEqual((await losAngeles.locator('.github-issue-metadata time').allInnerTexts()).map(plainSpaces),
     ['Mar 3, 2024, 9:06 PM', 'May 6, 2024, 12:08 AM']);
 });
 

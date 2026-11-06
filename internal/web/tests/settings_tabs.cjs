@@ -382,7 +382,10 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
   });
 
   assert.notEqual(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
-  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=13');
+  // The version is the script's content hash, stamped by the server, so this
+  // checks the cache-busting query is there rather than what it happens to be.
+  assert.match(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'),
+    /^\/static\/github-issues\.js\?v=[0-9a-f]+$/);
   await page.waitForFunction(() => document.querySelector('.github-issue-empty-state h2')?.textContent === 'No repositories available');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No repositories available');
   await page.locator('#github-issues-dock-link').click();

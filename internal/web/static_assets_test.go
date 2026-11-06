@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -89,6 +90,84 @@ func TestStaticAssetsServeCachedGzipWithETag(t *testing.T) {
 		if res.Code != http.StatusNotModified {
 			t.Fatalf("If-None-Match %s status = %d, want 304", tc.etag, res.Code)
 		}
+	}
+}
+
+// versionedStaticRef matches a /static/ reference that carries a cache-busting
+// query, so the unversioned refs this test rejects are the ones left over.
+var versionedStaticRef = regexp.MustCompile(`(?:src|href)="/static/([^"?#]+)\?v=([0-9a-f]+)"`)
+
+// TestPagesStampStaticAssetsWithContentVersions covers the cache-busting query
+// on every /static/ reference a served page carries. The point is that nobody
+// maintains these by hand: the query comes from the file's bytes, so a
+// CSS-only or JS-only edit cannot ship behind the hour of caching /static/
+// asks for, and an unchanged file keeps its old query and stays cached. The
+// ETag the static handler computes over the same bytes is the cross-check a
+// hand-written ?v=N could not satisfy.
+func TestPagesStampStaticAssetsWithContentVersions(t *testing.T) {
+	t.Parallel()
+
+	handler := NewServer("", nil).Handler()
+	seen := map[string]string{}
+	for _, page := range []string{"/", "/game"} {
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, page, nil))
+		if res.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200", page, res.Code)
+		}
+		body := res.Body.String()
+
+		refs := versionedStaticRef.FindAllStringSubmatch(body, -1)
+		if len(refs) == 0 {
+			t.Fatalf("%s references no versioned static asset", page)
+		}
+		for _, all := range staticAssetRefPattern.FindAllString(body, -1) {
+			if !versionedStaticRef.MatchString(all) {
+				t.Errorf("%s serves %s without a cache-busting version, so an edit to it can stay cached for an hour", page, all)
+			}
+		}
+
+		for _, ref := range refs {
+			name, version := ref[1], ref[2]
+			seen[name] = version
+			asset := httptest.NewRecorder()
+			handler.ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/static/"+name, nil))
+			if asset.Code != http.StatusOK {
+				t.Errorf("%s references /static/%s, which serves %d", page, name, asset.Code)
+				continue
+			}
+			if etag := asset.Header().Get("ETag"); !strings.HasPrefix(etag, `"`+version) {
+				t.Errorf("/static/%s is served as %s but referenced as ?v=%s; the version does not track the file's content", name, etag, version)
+			}
+		}
+	}
+
+	// The stylesheet and the issues script are the two files this UI edits most
+	// and the two whose staleness is visible, so name them rather than trusting
+	// whatever the page happened to contain.
+	for _, name := range []string{"style.css", "github-issues.js"} {
+		if seen[name] == "" {
+			t.Errorf("no page stamped /static/%s with a content version", name)
+		}
+	}
+	if seen["style.css"] == seen["github-issues.js"] {
+		t.Error("two different files share a version, so the query is not derived from their content")
+	}
+}
+
+func TestStaticAssetVersionsIgnoreUnknownFiles(t *testing.T) {
+	t.Parallel()
+
+	page := []byte(`<link rel="stylesheet" href="/static/style.css"><script src="/static/not-embedded.js"></script>`)
+	stamped := string(withStaticAssetVersions(page))
+	if !strings.Contains(stamped, `href="/static/style.css?v=`+staticAssetVersion("style.css")+`"`) {
+		t.Fatalf("stamped page = %q, want the stylesheet carrying its content version", stamped)
+	}
+	if !strings.Contains(stamped, `src="/static/not-embedded.js"`) {
+		t.Fatalf("stamped page = %q, want a reference to a missing file left alone", stamped)
+	}
+	if got := staticAssetVersion("../server.go"); got != "" {
+		t.Fatalf("staticAssetVersion(%q) = %q, want no version for a path outside static/", "../server.go", got)
 	}
 }
 

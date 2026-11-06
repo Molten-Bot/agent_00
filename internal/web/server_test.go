@@ -240,7 +240,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		strings.Contains(markup, `probe.style.left = "-9999px";`) {
 		t.Fatalf("expected clipboard fallback positioning to be owned by the global stylesheet")
 	}
-	if strings.Contains(markup, `src="/static/emoji-picker.js"`) {
+	if strings.Contains(markup, `src="/static/emoji-picker.js`) {
 		t.Fatalf("expected index html to use the inline dispatch-style emoji picker instead of the external picker script")
 	}
 	if !strings.Contains(markup, `src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"`) {
@@ -432,7 +432,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, `id="configured-agent-subtitle"`) || strings.Contains(markup, "Configured agent: Codex") {
 		t.Fatalf("expected index html to remove the configured agent subtitle copy")
 	}
-	if !strings.Contains(markup, `src="/static/site-header.js"`) {
+	if !strings.Contains(markup, `src="/static/site-header.js`) {
 		t.Fatalf("expected index html to load the shared site header component")
 	}
 	if !strings.Contains(markup, `<agent-00-header agent-harness="codex" agent-label="Codex"></agent-00-header>`) {
@@ -1078,7 +1078,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, "function renderPromptHistory(") {
 		t.Fatalf("expected index html to remove prompt history renderer")
 	}
-	if strings.Contains(markup, `src="/static/xterm.js"`) {
+	if strings.Contains(markup, `src="/static/xterm.js`) {
 		t.Fatalf("expected xterm.js to load lazily instead of blocking the index page")
 	}
 	if !strings.Contains(markup, `script.src = "/static/xterm.js";`) ||
@@ -2474,7 +2474,7 @@ func TestHandlerGameServesZooCatch(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `id="game-board"`) || !strings.Contains(markup, `src="/static/game.js"`) {
+	if !strings.Contains(markup, `id="game-board"`) || !strings.Contains(markup, `src="/static/game.js`) {
 		t.Fatalf("expected game markup to include board and script")
 	}
 	if !strings.Contains(markup, `src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"`) ||
@@ -2686,7 +2686,7 @@ func TestHandlerOmitsReleasesIndexDisplay(t *testing.T) {
 	markup := resp.Body.String()
 	if !strings.Contains(markup, `class="page-bottom-dock"`) ||
 		!strings.Contains(markup, `class="prompt-mode-tabs prompt-mode-tabs-dock"`) ||
-		!strings.Contains(markup, `src="/static/bottom-dock.js"`) ||
+		!strings.Contains(markup, `src="/static/bottom-dock.js`) ||
 		strings.Contains(markup, `<!-- bottom-dock -->`) {
 		t.Fatalf("expected index html to render shared dock component")
 	}
@@ -2783,7 +2783,7 @@ func TestHandlerServesChatView(t *testing.T) {
 		`<title>agent_00 Chat</title>`,
 		`src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"`,
 		`window.gtag("config", "G-BY33RFG2WB");`,
-		`src="/static/site-header.js"`,
+		`src="/static/site-header.js`,
 		`<agent-00-header agent-harness="codex" agent-label="Codex"></agent-00-header>`,
 		`class="page-bottom-dock"`,
 		`data-app-display="chat"`,
