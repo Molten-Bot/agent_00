@@ -14,11 +14,13 @@ import (
 	"time"
 )
 
-// staticAssetRefPattern matches the src/href attributes of the embedded scripts
-// and stylesheets a page pulls in, with or without a query already attached.
-// Those are the files whose cached copy has to match the markup that shipped
-// with them; a stale image is just an old picture.
-var staticAssetRefPattern = regexp.MustCompile(`(src|href)="/static/([^"?#]+\.(?:css|js))(?:\?[^"#]*)?"`)
+// staticAssetRefPattern matches a quoted reference to an embedded script or
+// stylesheet, with or without a query already attached. Those are the files
+// whose cached copy has to match the markup that shipped with them; a stale
+// image is just an old picture. The quotes, rather than a src/href attribute,
+// are what it anchors on: index.html loads xterm.js by assigning script.src in
+// an inline script, and that reference needs the same stamp as a <script> tag.
+var staticAssetRefPattern = regexp.MustCompile(`"/static/([^"?#]+\.(?:css|js))(?:\?[^"#]*)?"`)
 
 // staticAssetVersions caches each embedded asset's cache-busting token. The
 // embedded bytes cannot change while the process runs, so one hash per file is
@@ -31,15 +33,44 @@ var staticAssetVersions sync.Map // name -> string
 // hour-old stylesheet or script. A hand-written ?v=N only closes that window
 // when somebody remembers to bump it; deriving the query from the content
 // makes the bump automatic and leaves unchanged files cacheable.
+//
+// Pages are stamped once, not per request: callers go through
+// embeddedVersionedPage or stamp a template's source at parse time, because
+// index.html alone is ~580 KB of bytes that cannot change while the process
+// runs.
 func withStaticAssetVersions(page []byte) []byte {
 	return staticAssetRefPattern.ReplaceAllFunc(page, func(match []byte) []byte {
-		groups := staticAssetRefPattern.FindSubmatch(match)
-		version := staticAssetVersion(string(groups[2]))
+		name := string(staticAssetRefPattern.FindSubmatch(match)[1])
+		version := staticAssetVersion(name)
 		if version == "" {
 			return match
 		}
-		return []byte(string(groups[1]) + `="/static/` + string(groups[2]) + `?v=` + version + `"`)
+		return []byte(`"/static/` + name + `?v=` + version + `"`)
 	})
+}
+
+// versionedPages caches the stamped form of each embedded HTML page.
+var versionedPages sync.Map // name -> []byte
+
+// embeddedVersionedPage returns an embedded HTML page with its /static/
+// references stamped, rewriting each page once rather than on every request.
+// Callers must treat the returned slice as read-only.
+func embeddedVersionedPage(name string) ([]byte, error) {
+	if cached, ok := versionedPages.Load(name); ok {
+		return cached.([]byte), nil
+	}
+	data, err := embeddedStaticFile(name)
+	if err != nil {
+		return nil, err
+	}
+	cached, _ := versionedPages.LoadOrStore(name, withStaticAssetVersions(data))
+	return cached.([]byte), nil
+}
+
+// stampStaticAssetVersions is withStaticAssetVersions for a page held as a Go
+// string, so a template's source can be stamped once where it is parsed.
+func stampStaticAssetVersions(page string) string {
+	return string(withStaticAssetVersions([]byte(page)))
 }
 
 // staticAssetVersion returns a short content hash for a path under static/, or

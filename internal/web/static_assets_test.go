@@ -95,7 +95,7 @@ func TestStaticAssetsServeCachedGzipWithETag(t *testing.T) {
 
 // versionedStaticRef matches a /static/ reference that carries a cache-busting
 // query, so the unversioned refs this test rejects are the ones left over.
-var versionedStaticRef = regexp.MustCompile(`(?:src|href)="/static/([^"?#]+)\?v=([0-9a-f]+)"`)
+var versionedStaticRef = regexp.MustCompile(`"/static/([^"?#]+)\?v=([0-9a-f]+)"`)
 
 // TestPagesStampStaticAssetsWithContentVersions covers the cache-busting query
 // on every /static/ reference a served page carries. The point is that nobody
@@ -143,15 +143,39 @@ func TestPagesStampStaticAssetsWithContentVersions(t *testing.T) {
 	}
 
 	// The stylesheet and the issues script are the two files this UI edits most
-	// and the two whose staleness is visible, so name them rather than trusting
-	// whatever the page happened to contain.
-	for _, name := range []string{"style.css", "github-issues.js"} {
+	// and the two whose staleness is visible. xterm.js is named because it is
+	// the one asset the page loads by assigning script.src from an inline
+	// script, which an attribute-only rewrite would walk straight past.
+	for _, name := range []string{"style.css", "github-issues.js", "xterm.js"} {
 		if seen[name] == "" {
 			t.Errorf("no page stamped /static/%s with a content version", name)
 		}
 	}
 	if seen["style.css"] == seen["github-issues.js"] {
 		t.Error("two different files share a version, so the query is not derived from their content")
+	}
+}
+
+// TestEmbeddedVersionedPageStampsOnce guards the cost of the stamp. The
+// embedded bytes cannot change while the process runs, so rewriting ~580 KB of
+// index.html on every page view would buy nothing; the handler must serve a
+// page that was rewritten once.
+func TestEmbeddedVersionedPageStampsOnce(t *testing.T) {
+	t.Parallel()
+
+	first, err := embeddedVersionedPage("static/index.html")
+	if err != nil {
+		t.Fatalf("embeddedVersionedPage: %v", err)
+	}
+	second, err := embeddedVersionedPage("static/index.html")
+	if err != nil {
+		t.Fatalf("embeddedVersionedPage: %v", err)
+	}
+	if len(first) == 0 || &first[0] != &second[0] {
+		t.Fatal("index.html is re-stamped on every call instead of once")
+	}
+	if _, err := embeddedVersionedPage("static/not-a-page.html"); err == nil {
+		t.Fatal("embeddedVersionedPage reported a page that is not embedded")
 	}
 }
 

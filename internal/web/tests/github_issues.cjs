@@ -12,10 +12,6 @@ const commentedAt = '2024-04-05T06:07:08Z';
 const updatedAt = '2024-05-06T07:08:09Z';
 const comment = { author: { login: 'hubot' }, createdAt: commentedAt, body: 'Looks right to me.' };
 
-// Which space en-US puts before AM/PM is an ICU build detail: ICU 72 switched
-// it to U+202F and later Chromium builds went back to U+0020. The assertions
-// below fold both to a plain space so they hold on either Chromium.
-const plainSpaces = value => String(value ?? '').replace(/[\u202f\u00a0\u2009]/g, ' ');
 const assignedIssue = {
   number: 7, title: 'Move assignees and timestamps into the header', state: 'OPEN',
   url: 'https://github.com/example/project/issues/7', author: { login: 'octocat' },
@@ -169,6 +165,39 @@ test('the revealed name stays up while the pointer rests on it', async t => {
     'the name vanishes as soon as the pointer reaches it');
 });
 
+test('hovering one icon while another holds focus draws a single name', async t => {
+  const page = await openIssue(t, assignedIssue);
+  const chips = page.locator('.github-issue-assignees .github-issue-avatar');
+  // Every name is anchored to the row, so two shown at once would land on the
+  // same spot and read as one unparsable line.
+  await chips.nth(1).focus();
+  await tooltipShown(page, 1);
+  await chips.first().hover();
+  await tooltipShown(page, 0);
+  await page.waitForFunction(() => {
+    const nodes = document.querySelectorAll('.github-issue-assignees .github-issue-avatar');
+    return getComputedStyle(nodes[1], '::after').opacity === '0';
+  });
+  assert.equal(await chips.nth(1).evaluate(node => node === document.activeElement), true,
+    'the focus itself stays put; only the name it was holding open gives way');
+});
+
+test('a name a tap left open does not swallow taps on the issue below it', async t => {
+  const page = await openIssue(t, assignedIssue, { touch: true });
+  const chip = page.locator('.github-issue-assignees .github-issue-avatar').first();
+  await chip.tap();
+  const box = await tooltipShown(page);
+  // A tap focuses the chip and the name stays up until that focus moves, so
+  // the strip it paints sits over the header and description. Whatever is
+  // underneath has to keep receiving the taps aimed at it.
+  const hit = await page.evaluate(point => {
+    const node = document.elementFromPoint(point.x, point.y);
+    const chip = document.querySelector('.github-issue-assignees .github-issue-avatar');
+    return { isChip: node === chip, tag: node?.tagName || 'none' };
+  }, { x: (box.nameLeft + box.nameRight) / 2, y: (box.nameTop + box.nameBottom) / 2 });
+  assert.equal(hit.isChip, false, `the name intercepts taps meant for the ${hit.tag} under it`);
+});
+
 test('a long name on the last chip stays inside the pane on a phone screen', async t => {
   const page = await openIssue(t, crowdedIssue, { touch: true });
   const chips = page.locator('.github-issue-assignees .github-issue-avatar');
@@ -208,16 +237,14 @@ test('header, list, and byline times read in the viewer timezone', async t => {
   const headerTimes = tokyo.locator('.github-issue-metadata time');
   assert.deepEqual(await headerTimes.evaluateAll(nodes => nodes.map(node => node.dateTime)),
     ['2024-03-04T05:06:07.000Z', '2024-05-06T07:08:09.000Z']);
-  // The header states the exact local moment on screen. A title tooltip
-  // holding it would never open for a touch user, which is the same reason
-  // the assignee chips do not use one.
-  assert.deepEqual((await headerTimes.allInnerTexts()).map(plainSpaces),
-    ['Mar 4, 2024, 2:06 PM', 'May 6, 2024, 4:08 PM']);
+  // The header reads in the same relative form as the rest of the issue view,
+  // which is the form this panel already used, and with nothing hidden in a
+  // tooltip behind it. Only the viewer's timezone decides the calendar day.
+  assert.deepEqual(await headerTimes.allInnerTexts(), ['Mar 4, 2024', 'May 6, 2024']);
   assert.deepEqual(await headerTimes.evaluateAll(nodes => nodes.map(node => node.title)), ['', '']);
 
-  // The list's "updated" line is the same instant, kept relative because that
-  // is what a reader scanning the list wants, and with nothing hidden in a
-  // tooltip behind it.
+  // The list's "updated" line is the same instant and carries the same
+  // treatment.
   const listTime = tokyo.locator('.github-issue-list-meta time').first();
   assert.equal(await listTime.evaluate(node => node.dateTime), '2024-05-06T07:08:09.000Z');
   assert.equal(await listTime.evaluate(node => node.title), '');
@@ -234,8 +261,8 @@ test('header, list, and byline times read in the viewer timezone', async t => {
   assert.equal(await tokyo.locator('.github-issue-author time').count(), 0);
 
   const losAngeles = await openIssue(t, assignedIssue, { timezoneId: 'America/Los_Angeles' });
-  assert.deepEqual((await losAngeles.locator('.github-issue-metadata time').allInnerTexts()).map(plainSpaces),
-    ['Mar 3, 2024, 9:06 PM', 'May 6, 2024, 12:08 AM']);
+  assert.deepEqual(await losAngeles.locator('.github-issue-metadata time').allInnerTexts(),
+    ['Mar 3, 2024', 'May 6, 2024']);
 });
 
 test('a timestamp the browser cannot parse stays out of <time>, which needs a machine-readable value', async t => {

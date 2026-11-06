@@ -9345,7 +9345,9 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   width: max-content;
   max-width: 14rem;
   overflow-wrap: anywhere;
-  /* Hidden it must not swallow clicks aimed at the description underneath. */
+  /* A focused chip holds its name open until the focus moves, and on touch
+     that outlives the tap. Inert by default, the strip cannot swallow the taps
+     and clicks aimed at the description underneath it. */
   pointer-events: none;
   opacity: 0;
   transition: opacity .2s ease;
@@ -9356,9 +9358,26 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 .github-issue-assignees .github-issue-avatar:hover::after,
 .github-issue-assignees .github-issue-avatar:focus::after {
   opacity: 1;
-  /* Shown it takes the pointer, so hovering the name itself keeps the chip
-     hovered and the name on screen, as WCAG 1.4.13 hoverable requires. */
-  pointer-events: auto;
+}
+
+/* Every chip's name shares the row's anchor, so a chip left focused by an
+   earlier tap or tab would stack its name under the one being hovered now.
+   The pointer settles it: while it is on a chip, that chip's name is the only
+   one drawn. Browsers without :has drop this rule and keep the overlap. */
+.github-issue-assignees:has(.github-issue-avatar:hover) .github-issue-avatar:focus:not(:hover)::after {
+  opacity: 0;
+}
+
+/* Only a hovered name takes the pointer, so moving onto the name itself keeps
+   the chip hovered and the name on screen, as WCAG 1.4.13 hoverable requires.
+   That is a real pointer's problem only, and the media query is what keeps it
+   from becoming a touch user's: a tap leaves the chip both focused and
+   stickily hovered, so an unguarded rule would park a live strip over the
+   issue for as long as the name stayed up. */
+@media (hover: hover) and (pointer: fine) {
+  .github-issue-assignees .github-issue-avatar:hover::after {
+    pointer-events: auto;
+  }
 }
 
 .github-issue-assignee-empty {

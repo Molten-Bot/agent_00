@@ -38,7 +38,9 @@ const maxStreamTaskLogs = 500
 const bottomDockPlaceholder = "<!-- bottom-dock -->"
 const taskSourceHeader = "X-Agent-Task-Source"
 
-var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype html>
+// The template's /static/ references are stamped here, at parse time, so the
+// per-request render does not rewrite them again for every page view.
+var sitePageTemplate = template.Must(template.New("site-page").Parse(stampStaticAssetVersions(`<!doctype html>
 <html lang="en" class="dark">
 <head>
   <meta charset="utf-8">
@@ -73,7 +75,7 @@ var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype 
     }
   </script>
 </body>
-</html>`))
+</html>`)))
 
 type sitePageData struct {
 	Title      string
@@ -413,14 +415,13 @@ func (s Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := embeddedStaticFile("static/index.html")
+	data, err := embeddedVersionedPage("static/index.html")
 	if err != nil {
 		http.Error(w, "monitor ui is unavailable", http.StatusInternalServerError)
 		return
 	}
 	data = s.injectIndexConfig(data)
 	data = s.injectBottomDockComponent(r.Context(), data)
-	data = withStaticAssetVersions(data)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -431,7 +432,7 @@ func (s Server) injectBottomDockComponent(ctx context.Context, data []byte) []by
 	if !bytes.Contains(data, []byte(bottomDockPlaceholder)) {
 		return data
 	}
-	dock, err := embeddedStaticFile("static/bottom-dock.html")
+	dock, err := embeddedVersionedPage("static/bottom-dock.html")
 	if err != nil {
 		s.logf("localruntime.ui status=warn event=load_bottom_dock_component err=%q", err)
 		return data
@@ -1794,12 +1795,11 @@ func (s Server) handleGame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := embeddedStaticFile("static/game.html")
+	data, err := embeddedVersionedPage("static/game.html")
 	if err != nil {
 		http.Error(w, "game ui is unavailable", http.StatusInternalServerError)
 		return
 	}
-	data = withStaticAssetVersions(data)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -1814,7 +1814,7 @@ func (s Server) renderSitePage(ctx context.Context, w http.ResponseWriter, data 
 		http.Error(w, "page is unavailable", http.StatusInternalServerError)
 		return
 	}
-	rendered := withStaticAssetVersions(s.injectBottomDockComponent(ctx, page.Bytes()))
+	rendered := s.injectBottomDockComponent(ctx, page.Bytes())
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

@@ -168,10 +168,8 @@
       : `Issue and comments included as context · PR will reference #${issue.number}`;
   }
 
-  // GitHub returns UTC timestamps; both formatters resolve them against the
-  // browser's clock and timezone so every time reads in the viewer's terms.
-  const absoluteTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
-
+  // GitHub returns UTC timestamps; this resolves them against the browser's
+  // clock and timezone so every time reads in the viewer's terms.
   function formatRelativeTime(value) {
     const timestamp = Date.parse(String(value || ""));
     if (!Number.isFinite(timestamp)) return String(value || "Unknown");
@@ -187,16 +185,15 @@
   }
 
   // Renders a timestamp as a <time> carrying the machine-readable instant.
-  // Pass absolute where the exact moment matters: the header states it in full
-  // because precision has to stay on screen, and a title tooltip spelling it
-  // out would never open for a touch user. Lists and comments stay relative,
-  // which is what a reader scanning them is after.
-  function addTimestamp(parent, value, { absolute = false } = {}) {
+  // Header, list, and comments all read relative, which is the form the issue
+  // view already used and what a reader scanning it is after; the datetime
+  // attribute keeps the exact instant available to anything that needs it.
+  function addTimestamp(parent, value) {
     const timestamp = Date.parse(String(value || ""));
     // A <time> without a machine-readable datetime is invalid markup, so an
     // unparsable value degrades to a plain span rather than lying about itself.
     if (!Number.isFinite(timestamp)) return addText(parent, "span", "", formatRelativeTime(value));
-    const node = addText(parent, "time", "", absolute ? absoluteTimeFormat.format(timestamp) : formatRelativeTime(value));
+    const node = addText(parent, "time", "", formatRelativeTime(value));
     node.dateTime = new Date(timestamp).toISOString();
     return node;
   }
@@ -382,7 +379,7 @@
     for (const [label, value] of [["Created", issue.createdAt], ["Updated", issue.updatedAt]]) {
       const group = document.createElement("div");
       addText(group, "dt", "", label);
-      addTimestamp(addText(group, "dd", "", ""), value, { absolute: true });
+      addTimestamp(addText(group, "dd", "", ""), value);
       metadata.appendChild(group);
     }
     detailHeader.appendChild(metadata);

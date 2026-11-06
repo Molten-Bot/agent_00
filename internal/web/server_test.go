@@ -1081,8 +1081,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, `src="/static/xterm.js`) {
 		t.Fatalf("expected xterm.js to load lazily instead of blocking the index page")
 	}
-	if !strings.Contains(markup, `script.src = "/static/xterm.js";`) ||
-		!strings.Contains(markup, `stylesheet.href = "/static/xterm.css";`) ||
+	if !strings.Contains(markup, `script.src = "/static/xterm.js?v=`) ||
+		!strings.Contains(markup, `stylesheet.href = "/static/xterm.css?v=`) ||
 		!strings.Contains(markup, `const TASK_XTERM_VERSION = "6.0.0";`) ||
 		!strings.Contains(markup, `new window.Terminal({`) ||
 		!strings.Contains(markup, `disableStdin: true,`) ||
