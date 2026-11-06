@@ -286,7 +286,7 @@ func (s Server) Handler() http.Handler {
 	if err != nil {
 		s.logf("localruntime.ui status=warn event=load_static_files err=%q", err)
 	} else {
-		staticHandler := http.StripPrefix("/static/", http.FileServer(http.FS(staticFS)))
+		staticHandler := http.StripPrefix("/static/", newEmbeddedStaticHandler(staticFS))
 		mux.Handle("/static/", withCacheControl(staticHandler, "public, max-age=3600"))
 	}
 	mux.HandleFunc("/", s.handleIndex)
@@ -3126,7 +3126,8 @@ func withGzip(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !requestWantsGzip(r) || !isCompressiblePath(r.URL.Path) || strings.HasPrefix(r.URL.Path, "/api/stream") {
+		// /static/ assets carry their own cached gzip encoding.
+		if !requestWantsGzip(r) || !isCompressiblePath(r.URL.Path) || strings.HasPrefix(r.URL.Path, "/api/stream") || strings.HasPrefix(r.URL.Path, "/static/") {
 			next.ServeHTTP(w, r)
 			return
 		}
