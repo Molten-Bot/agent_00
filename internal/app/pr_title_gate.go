@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
@@ -62,32 +61,39 @@ func isPRTitleGateCheckName(name string) bool {
 	return title && gate
 }
 
-// checkSummaryBlocksOnPRTitleGateOnly reports whether the captured check output
-// has failing checks and every one of them is a title gate.
-func checkSummaryBlocksOnPRTitleGateOnly(summary string) bool {
-	states := checkStatesFromText(summary)
-	if len(states) == 0 {
-		return false
-	}
+// prTitleGateOnlyFailure reports whether the observed check results have
+// failures and every failing check is a title gate. Both the raw watch output
+// and the summary are scanned: the summary handed to remediation is truncated
+// at maxCheckSummaryChars and can cut a failing row short, so a failure seen in
+// any source blocks the repair.
+func prTitleGateOnlyFailure(res execx.Result, summary string) bool {
 	titleGateFailed := false
-	for name, state := range states {
-		if !isFailedCheckBucket(state.Bucket) {
-			continue
+	for _, raw := range []string{res.Stdout, res.Stderr, summary} {
+		for name, state := range checkStatesFromText(raw) {
+			if !isFailedCheckBucket(state.Bucket) {
+				continue
+			}
+			if !isPRTitleGateCheckName(name) {
+				return false
+			}
+			titleGateFailed = true
 		}
-		if !isPRTitleGateCheckName(name) {
-			return false
-		}
-		titleGateFailed = true
 	}
 	return titleGateFailed
 }
 
 // repairPRTitleGateFailure rewrites the pull-request title when the only
 // failing checks are title gates. It reports whether the title was changed;
-// editing the title re-runs the gate because those workflows trigger on the
+// editing the title re-runs the gate because those workflows subscribe to the
 // pull_request `edited` event, which a plain push does not raise.
-func (h Harness) repairPRTitleGateFailure(ctx context.Context, repo repoWorkspace, cfg config.Config, checkSummary string) (bool, error) {
-	if strings.TrimSpace(repo.PRURL) == "" || !checkSummaryBlocksOnPRTitleGateOnly(checkSummary) {
+//
+// Only a pull request this run created is eligible. The harness owns that
+// title, while a pre-existing or PR-feedback target belongs to its author.
+func (h Harness) repairPRTitleGateFailure(ctx context.Context, repo repoWorkspace, checkRes execx.Result, checkSummary string) (bool, error) {
+	if strings.TrimSpace(repo.PRURL) == "" || repo.RequireExistingPR || !repo.PRCreatedThisRun {
+		return false, nil
+	}
+	if !prTitleGateOnlyFailure(checkRes, checkSummary) {
 		return false, nil
 	}
 	gate, found := detectPRTitleGate(repo.Dir)
@@ -100,7 +106,9 @@ func (h Harness) repairPRTitleGateFailure(ctx context.Context, repo repoWorkspac
 		return false, err
 	}
 	if current == "" {
-		current = strings.TrimSpace(cfg.PRTitle)
+		// Without the live title there is nothing to conform; a configured
+		// title may belong to a different pull request on this branch.
+		return false, nil
 	}
 	rewritten, ok := conformingPRTitle(current, gate, githubutil.PullRequestNumber(repo.PRURL))
 	if !ok {
@@ -197,8 +205,14 @@ func detectPRTitleGate(repoDir string) (prTitleGate, bool) {
 // parsePRTitleGate scans workflow text for a semantic-pull-request step and
 // reads its `with:` inputs. The scan is indentation aware rather than a full
 // YAML parse because only this one action shape has to be understood.
+//
+// A workflow that does not subscribe to the pull_request `edited` event is not
+// reported: retitling would never re-run it, so the gate would stay red.
 func parsePRTitleGate(content string) (prTitleGate, bool) {
 	lines := strings.Split(content, "\n")
+	if !workflowRerunsOnTitleEdit(lines) {
+		return prTitleGate{}, false
+	}
 	for i, line := range lines {
 		usesAt := semanticPullRequestUsesIndent(line)
 		if usesAt < 0 {
@@ -213,6 +227,86 @@ func parsePRTitleGate(content string) (prTitleGate, bool) {
 		return gate, true
 	}
 	return prTitleGate{}, false
+}
+
+// workflowRerunsOnTitleEdit reports whether the workflow asks for the
+// pull_request (or pull_request_target) `edited` event. GitHub's default event
+// types are opened, synchronize, and reopened, so a workflow that omits
+// `edited` never re-runs when only the title changes.
+func workflowRerunsOnTitleEdit(lines []string) bool {
+	for i, line := range lines {
+		if lineIndent(line) != 0 || isWorkflowCommentLine(line) {
+			continue
+		}
+		key, rest, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok || strings.Trim(strings.TrimSpace(key), `"'`) != "on" {
+			continue
+		}
+		if strings.TrimSpace(rest) != "" {
+			// `on: pull_request` and `on: [pull_request]` keep the default
+			// event types, which exclude `edited`.
+			return false
+		}
+		return pullRequestTriggerIncludesEdited(lines, i+1)
+	}
+	return false
+}
+
+// pullRequestTriggerIncludesEdited scans the mapping under a workflow `on:` key
+// for a pull_request trigger whose `types` list names `edited`.
+func pullRequestTriggerIncludesEdited(lines []string, start int) bool {
+	for j := start; j < len(lines); j++ {
+		if strings.TrimSpace(lines[j]) == "" || isWorkflowCommentLine(lines[j]) {
+			continue
+		}
+		indent := lineIndent(lines[j])
+		if indent == 0 {
+			return false
+		}
+		key, rest, ok := strings.Cut(strings.TrimSpace(lines[j]), ":")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "pull_request", "pull_request_target":
+		default:
+			continue
+		}
+		if strings.TrimSpace(rest) != "" {
+			continue
+		}
+		if eventTypesIncludeEdited(lines, j+1, indent) {
+			return true
+		}
+	}
+	return false
+}
+
+func eventTypesIncludeEdited(lines []string, start, eventIndent int) bool {
+	for j := start; j < len(lines); j++ {
+		if strings.TrimSpace(lines[j]) == "" || isWorkflowCommentLine(lines[j]) {
+			continue
+		}
+		indent := lineIndent(lines[j])
+		if indent <= eventIndent {
+			return false
+		}
+		key, rest, ok := strings.Cut(strings.TrimSpace(lines[j]), ":")
+		if !ok || strings.TrimSpace(key) != "types" {
+			continue
+		}
+		for _, eventType := range parseWorkflowScalarList(lines, j, indent, rest) {
+			if strings.EqualFold(eventType, "edited") {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+func isWorkflowCommentLine(line string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), "#")
 }
 
 // semanticPullRequestUsesIndent returns the column of the `uses:` key when the
