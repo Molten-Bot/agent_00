@@ -98,6 +98,9 @@ const (
 	maxReviewDiffStatChars           = 12000
 	maxReviewDiffPatchChars          = 30000
 	measuredQualityTargetInstruction = "When a task or review requires a test, coverage, lint, or quality target, first make underlying code or test changes and run the measurement. Add or raise the required gate only after the target passes. Keep an existing required gate; do not remove it merely to make validation pass. If the target cannot be met safely in this pass, report Failure and Error details instead of making gate-only changes."
+	// harnessBranchPrefix is the prefix slug.BranchName gives every branch the
+	// harness creates for its own work.
+	harnessBranchPrefix              = "agent00-"
 	bootstrapGitUserName             = "agent_00"
 	bootstrapGitUserEmail            = "bot@molten.bot"
 	bootstrapMainCommitMessage       = "chore: initialize main branch"
@@ -884,7 +887,10 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 					if timedOutChecksSummary != "" {
 						checkSummary = timedOutChecksSummary
 					}
-					if timedOutChecksPassing {
+					// The required-only snapshot omits an optional title gate,
+					// so captured watch output decides whether a gate the
+					// harness repairs itself is still red.
+					if timedOutChecksPassing && !h.titleGateBlocksChecksSuccess(*repo, checkRes, "watch_timeout_snapshot", attempt+1) {
 						h.logf("stage=checks status=ok reason=watch_timeout repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 						return ExitSuccess, "", nil
 					}
@@ -899,18 +905,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 					repo.PRURL,
 					attempt+1,
 				)
-				// A failing title gate is repairable by the harness, so the
-				// no-required-checks pass must not short-circuit it. Other red
-				// checks keep the long-standing fallback behavior.
-				if capturedChecksHaveTitleGateFailures(checkRes) {
-					h.logf(
-						"stage=checks status=warn action=required_status_checks reason=title_gate_failed repo=%s repo_dir=%s pr_url=%s attempt=%d",
-						repo.URL,
-						repo.RelDir,
-						repo.PRURL,
-						attempt+1,
-					)
-				} else if noRequired, noRequiredSummary, requiredErr := h.reconcileNoChecksWithRequiredStatusChecks(ctx, *repo); requiredErr == nil {
+				if noRequired, noRequiredSummary, requiredErr := h.reconcileNoChecksWithRequiredStatusChecks(ctx, *repo); requiredErr == nil {
 					if noRequired {
 						if noRequiredSummary != "" {
 							checkSummary = noRequiredSummary
@@ -1029,6 +1024,10 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 					return ExitPR, "pr", recreateErr
 				}
 				if recreated {
+					// The replacement pull request carries the configured
+					// title again, so the gate repair budget starts over.
+					prTitleRepaired = false
+					titleGateRechecks = 0
 					noReportRetry = -1
 					continue
 				}
@@ -5356,7 +5355,7 @@ func shouldFallbackCloneToDefaultBranch(baseBranch string, res execx.Result, err
 		return false
 	}
 	normalized := cloneFallbackBranchName(baseBranch)
-	if !strings.HasPrefix(normalized, "agent00-") && !isKnownDefaultBranchName(normalized) {
+	if !isHarnessGeneratedBranch(normalized) && !isKnownDefaultBranchName(normalized) {
 		return false
 	}
 	return isMissingRemoteBranchCloneError(err, res)
@@ -7274,6 +7273,12 @@ func shouldCreateWorkBranch(baseBranch string) bool {
 	return normalizeBranchRef(baseBranch) != ""
 }
 
+// isHarnessGeneratedBranch reports whether a branch name carries the prefix
+// slug.BranchName gives every branch the harness creates.
+func isHarnessGeneratedBranch(branch string) bool {
+	return strings.HasPrefix(normalizeBranchRef(branch), harnessBranchPrefix)
+}
+
 func isKnownDefaultBranchName(branch string) bool {
 	switch normalizeBranchRef(branch) {
 	case "main", "master":
@@ -8272,6 +8277,25 @@ func isFailedCheckBucket(bucket string) bool {
 		return true
 	}
 	return false
+}
+
+// titleGateBlocksChecksSuccess reports whether captured check output shows a
+// red pull-request title gate, which stops a snapshot fallback from declaring
+// the run green. The harness repairs those gates itself, and a required-only
+// snapshot can omit an optional gate entirely.
+func (h Harness) titleGateBlocksChecksSuccess(repo repoWorkspace, res execx.Result, action string, attempt int) bool {
+	if !capturedChecksHaveTitleGateFailures(res) {
+		return false
+	}
+	h.logf(
+		"stage=checks status=warn action=%s reason=title_gate_failed repo=%s repo_dir=%s pr_url=%s attempt=%d",
+		action,
+		repo.URL,
+		repo.RelDir,
+		repo.PRURL,
+		attempt,
+	)
+	return true
 }
 
 // capturedChecksHaveTitleGateFailures reports whether check output already in

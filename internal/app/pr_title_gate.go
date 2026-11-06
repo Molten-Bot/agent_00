@@ -48,15 +48,25 @@ var checkNameWordRE = regexp.MustCompile(`[a-z0-9]+`)
 // pull-request title gate. A name must carry a "title" word plus a gate word,
 // matched on word boundaries so checks such as "Sprint title sync" or a bare
 // "Title" are not mistaken for pull-request metadata gates.
+//
+// A commit word without a pull-request word rules the name out: a commit-title
+// linter grades commit messages, which retitling the pull request cannot fix.
 func isPRTitleGateCheckName(name string) bool {
-	title, gate := false, false
+	title, gate, pullRequest, commit := false, false, false, false
 	for _, word := range checkNameWordRE.FindAllString(strings.ToLower(name), -1) {
 		switch word {
 		case "title", "titles":
 			title = true
-		case "pr", "prs", "pull", "check", "checks", "lint", "semantic", "conventional", "validate", "verify":
+		case "pr", "prs", "pull":
+			pullRequest, gate = true, true
+		case "check", "checks", "lint", "semantic", "conventional", "validate", "verify":
 			gate = true
+		case "commit", "commits":
+			commit = true
 		}
+	}
+	if commit && !pullRequest {
+		return false
 	}
 	return title && gate
 }
@@ -87,10 +97,10 @@ func prTitleGateOnlyFailure(res execx.Result, summary string) bool {
 // editing the title re-runs the gate because those workflows subscribe to the
 // pull_request `edited` event, which a plain push does not raise.
 //
-// Only a pull request this run created is eligible. The harness owns that
-// title, while a pre-existing or PR-feedback target belongs to its author.
+// Only a pull request the harness owns is eligible; a pre-existing or
+// PR-feedback target belongs to its author.
 func (h Harness) repairPRTitleGateFailure(ctx context.Context, repo repoWorkspace, checkRes execx.Result, checkSummary string) (bool, error) {
-	if strings.TrimSpace(repo.PRURL) == "" || repo.RequireExistingPR || !repo.PRCreatedThisRun {
+	if strings.TrimSpace(repo.PRURL) == "" || !harnessOwnsPRTitle(repo) {
 		return false, nil
 	}
 	if !prTitleGateOnlyFailure(checkRes, checkSummary) {
@@ -126,6 +136,18 @@ func (h Harness) repairPRTitleGateFailure(ctx context.Context, repo repoWorkspac
 		gate.WorkflowPath,
 	)
 	return true, nil
+}
+
+// harnessOwnsPRTitle reports whether the harness supplied the pull-request
+// title it is about to rewrite. That covers a pull request this run created
+// and one an earlier run opened for the same harness-generated branch, which
+// a re-run adopts through lookupOpenPRURLByHead. A PR-feedback target is never
+// owned, and neither is a pull request on a branch the harness did not name.
+func harnessOwnsPRTitle(repo repoWorkspace) bool {
+	if repo.RequireExistingPR {
+		return false
+	}
+	return repo.PRCreatedThisRun || isHarnessGeneratedBranch(repo.Branch)
 }
 
 func (h Harness) pullRequestTitle(ctx context.Context, repo repoWorkspace) (string, error) {
@@ -502,18 +524,12 @@ func conformingPRTitleScope(current string, gate prTitleGate, prNumber int) (str
 		return "", true
 	}
 
-	var candidates []string
+	// The pull-request number is the only scope the harness can state as fact.
+	// Any other value from the allowlist, such as `deps`, labels the pull
+	// request for release and auto-merge automation that reads the scope, so an
+	// underivable scope leaves the title alone instead.
 	if prNumber > 0 {
-		candidates = append(candidates, "#"+strconv.Itoa(prNumber))
-	}
-	candidates = append(candidates, "deps")
-	for _, scope := range gate.Scopes {
-		if !regexMetaRE.MatchString(scope) {
-			candidates = append(candidates, scope)
-		}
-	}
-	for _, candidate := range candidates {
-		if matchesGateScope(candidate, gate.Scopes) {
+		if candidate := "#" + strconv.Itoa(prNumber); matchesGateScope(candidate, gate.Scopes) {
 			return candidate, true
 		}
 	}
