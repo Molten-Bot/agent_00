@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -255,6 +256,9 @@ type Broker struct {
 	tasks         map[string]*taskState
 	closedTasks   map[string]time.Time
 	runConfigs    map[string][]byte
+	// runConfigFieldCache memoizes fields decoded from runConfigs so log
+	// ingestion does not re-decode the same payload on every line.
+	runConfigFieldCache map[string]runConfigFields
 	promptedRepos []string
 	repositories  []Repository
 	repoIndex     map[string]int
@@ -352,15 +356,23 @@ func NewBroker() *Broker {
 }
 
 // IngestLog consumes one daemon log line and updates monitor state.
+// legacyLogPrefixRenames maps log prefixes written by older harness versions to
+// their current form. The prefixes are mutually exclusive, so order is free.
+var legacyLogPrefixRenames = [...][2]string{
+	{"dispatch ", "task "},
+	{"dispatcher ", "scheduler "},
+	{"debug dispatcher ", "debug scheduler "},
+}
+
 func (b *Broker) IngestLog(line string) {
 	if b == nil {
 		return
 	}
 	line = strings.TrimSpace(line)
 	// Normalize persisted logs from older harness versions at the input boundary.
-	for old, current := range map[string]string{"dispatch ": "task ", "dispatcher ": "scheduler ", "debug dispatcher ": "debug scheduler "} {
-		if strings.HasPrefix(line, old) {
-			line = current + strings.TrimPrefix(line, old)
+	for _, rename := range legacyLogPrefixRenames {
+		if rest, ok := strings.CutPrefix(line, rename[0]); ok {
+			line = rename[1] + rest
 			break
 		}
 	}
@@ -400,8 +412,40 @@ func (b *Broker) IngestLog(line string) {
 	b.notifySubscribersLocked()
 }
 
+// snapshotLogMode selects how task logs are copied into a snapshot.
+type snapshotLogMode int
+
+const (
+	snapshotLogsFull snapshotLogMode = iota
+	snapshotLogsStream
+	snapshotLogsNone
+)
+
+type snapshotOptions struct {
+	events     bool
+	logs       snapshotLogMode
+	aggregates bool
+}
+
 // Snapshot returns a deep copy of current monitor state.
 func (b *Broker) Snapshot() Snapshot {
+	return b.snapshot(snapshotOptions{events: true, logs: snapshotLogsFull, aggregates: true})
+}
+
+// StreamSnapshot returns the compact state sent to /api/stream clients: no
+// event history and task logs capped to the stream tail. It is equivalent to
+// compactStreamSnapshot(b.Snapshot()) without copying data it would discard.
+func (b *Broker) StreamSnapshot() Snapshot {
+	return b.snapshot(snapshotOptions{logs: snapshotLogsStream, aggregates: true})
+}
+
+// TaskList returns the current tasks, ordered as in Snapshot, without task
+// logs, events, releases, stats, or repositories.
+func (b *Broker) TaskList() []Task {
+	return b.snapshot(snapshotOptions{logs: snapshotLogsNone}).Tasks
+}
+
+func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 	if b == nil {
 		return Snapshot{}
 	}
@@ -416,8 +460,10 @@ func (b *Broker) Snapshot() Snapshot {
 	snapshot := Snapshot{
 		GeneratedAt:   now.Format(time.RFC3339Nano),
 		Resources:     b.resources,
-		Events:        append([]Event(nil), b.events...),
 		PromptedRepos: append([]string(nil), b.promptedRepos...),
+	}
+	if opts.events {
+		snapshot.Events = append([]Event(nil), b.events...)
 	}
 
 	tasks := make([]*taskState, 0, len(b.tasks))
@@ -461,8 +507,12 @@ func (b *Broker) Snapshot() Snapshot {
 			UpdatedAt:         t.UpdatedAt.UTC().Format(time.RFC3339Nano),
 			DurationSeconds:   taskDuration(t.StartedAt, t.UpdatedAt, now, status).Seconds(),
 			CanRerun:          canRerun,
-			Logs:              append([]TaskLog(nil), t.Logs...),
+			Logs:              snapshotTaskLogs(t.Logs, opts.logs),
 		})
+	}
+	if !opts.aggregates {
+		b.trackMaxConcurrentTasksLocked(tasks)
+		return snapshot
 	}
 	snapshot.Releases = b.releasesSnapshotLocked()
 	snapshot.Stats = b.dashboardStatsLocked(now, tasks)
@@ -470,6 +520,32 @@ func (b *Broker) Snapshot() Snapshot {
 	snapshot.CustomLibraryGeneration = b.customLibraryGeneration
 
 	return snapshot
+}
+
+func snapshotTaskLogs(logs []TaskLog, mode snapshotLogMode) []TaskLog {
+	switch mode {
+	case snapshotLogsNone:
+		return nil
+	case snapshotLogsStream:
+		if len(logs) > maxStreamTaskLogs {
+			return compactStreamTaskLogs(logs)
+		}
+	}
+	return append([]TaskLog(nil), logs...)
+}
+
+// trackMaxConcurrentTasksLocked keeps the dashboard's peak-concurrency mark
+// current for snapshots that skip dashboardStatsLocked.
+func (b *Broker) trackMaxConcurrentTasksLocked(tasks []*taskState) {
+	active := 0
+	for _, t := range tasks {
+		if t != nil && isActiveTaskStatus(t.Status) {
+			active++
+		}
+	}
+	if active > b.maxConcurrentTasks {
+		b.maxConcurrentTasks = active
+	}
 }
 
 // NotifyCustomLibraryUpdated bumps the custom library generation counter and
@@ -842,6 +918,7 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 	durationCount := 0
 	successfulTerminals := 0
 	workflowGroups := map[string]*TimeStatsGroup{}
+	var workflowNamer workflowStatsGroupNamer
 	agentGroups := map[string]*TimeStatsGroup{}
 	sourceGroups := map[string]*CountStatsGroup{}
 	repoAttempts := b.updateRepositoryStatsLocked(now, seen)
@@ -898,7 +975,7 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 		if reviewAttempt {
 			stats.ReviewSavedSeconds += savedDuration.Seconds()
 		}
-		addTimeStatsGroupWithSavedDuration(workflowGroups, workflowStatsGroupName(attempt.Workflow), status, duration, savedDuration)
+		addTimeStatsGroupWithSavedDuration(workflowGroups, workflowNamer.name(attempt.Workflow), status, duration, savedDuration)
 		addTimeStatsGroupWithSavedDuration(agentGroups, normalizedGroupName(attempt.Agent, "Unknown Agent"), status, duration, savedDuration)
 		addCountStatsGroup(sourceGroups, sourceGroupName(attempt.Source), status)
 	}
@@ -1205,31 +1282,45 @@ func taskAgentHarness(t *taskState) string {
 	return stringsx.FirstNonEmpty(t.AgentHarness, agentHarnessFromStage(t.Stage))
 }
 
-func workflowStatsGroupName(name string) string {
-	name = normalizedGroupName(name, "Ad Hoc Prompt")
-	if displayName := libraryTaskDisplayNameByName(name); displayName != "" {
-		return displayName
-	}
-	return name
+// workflowStatsGroupNamer maps workflow names to their stats group label. It
+// loads the library catalog at most once, on first use, so a dashboard pass
+// over many attempts does not re-read the catalog from disk per attempt.
+type workflowStatsGroupNamer struct {
+	loaded       bool
+	displayNames map[string]string
 }
 
-func libraryTaskDisplayNameByName(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return ""
+func (n *workflowStatsGroupNamer) name(workflow string) string {
+	workflow = normalizedGroupName(workflow, "Ad Hoc Prompt")
+	if !n.loaded {
+		n.loaded = true
+		n.displayNames = libraryTaskDisplayNames()
 	}
+	if displayName := n.displayNames[strings.TrimSpace(workflow)]; displayName != "" {
+		return displayName
+	}
+	return workflow
+}
+
+// libraryTaskDisplayNames returns trimmed task name -> trimmed display name for
+// the customized library catalog. The first matching task name wins.
+func libraryTaskDisplayNames() map[string]string {
 	catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 	if err != nil {
-		return ""
+		return nil
 	}
-	for _, task := range catalog.Summaries() {
-		if strings.TrimSpace(task.Name) != name {
+	summaries := catalog.Summaries()
+	names := make(map[string]string, len(summaries))
+	for _, task := range summaries {
+		name := strings.TrimSpace(task.Name)
+		if _, exists := names[name]; exists {
 			continue
 		}
-		return strings.TrimSpace(task.DisplayName)
+		names[name] = strings.TrimSpace(task.DisplayName)
 	}
-	return ""
+	return names
 }
+
 
 func addTimeStatsGroup(groups map[string]*TimeStatsGroup, name, status string, duration time.Duration) {
 	savedDuration := time.Duration(0)
@@ -1353,19 +1444,45 @@ func normalizedGroupName(name, fallback string) string {
 	return fallback
 }
 
-func (b *Broker) taskBaseBranchLocked(requestID string) string {
-	if b == nil {
-		return ""
-	}
-	return branchFromRunConfigJSON(b.runConfigs[requestID])
+// runConfigFields holds the values ensureTaskLocked derives from a stored run
+// config payload. Every field is a pure function of the payload bytes.
+type runConfigFields struct {
+	raw          []byte
+	images       []PromptImage
+	workflow     string
+	agentHarness string
+	reviewers    []string
+	source       string
+	branch       string
+	prURL        string
 }
 
-func (b *Broker) taskInitialBranchLocked(requestID string) string {
-	baseBranch := b.taskBaseBranchLocked(requestID)
-	if baseBranch != "" {
-		return baseBranch
+// runConfigFieldsLocked returns the decoded fields for requestID's stored run
+// config, decoding at most once per stored payload. Callers must clone the
+// returned slices before handing them out.
+func (b *Broker) runConfigFieldsLocked(requestID string) runConfigFields {
+	raw := b.runConfigs[requestID]
+	if len(raw) == 0 {
+		return runConfigFields{}
 	}
-	return ""
+	if cached, ok := b.runConfigFieldCache[requestID]; ok && len(cached.raw) == len(raw) && &cached.raw[0] == &raw[0] {
+		return cached
+	}
+	fields := runConfigFields{
+		raw:          raw,
+		images:       imagesFromRunConfigJSON(raw),
+		workflow:     workflowFromRunConfigJSON(raw),
+		agentHarness: agentHarnessFromRunConfigJSON(raw),
+		reviewers:    reviewersFromRunConfigJSON(raw),
+		source:       sourceFromRunConfigJSON(raw),
+		branch:       branchFromRunConfigJSON(raw),
+		prURL:        prURLFromRunConfigJSON(raw),
+	}
+	if b.runConfigFieldCache == nil {
+		b.runConfigFieldCache = map[string]runConfigFields{}
+	}
+	b.runConfigFieldCache[requestID] = fields
+	return fields
 }
 
 func (b *Broker) taskPromptLocked(requestID string) string {
@@ -1409,6 +1526,7 @@ func (b *Broker) DropTaskRunConfig(requestID string) {
 	defer b.mu.Unlock()
 
 	delete(b.runConfigs, requestID)
+	delete(b.runConfigFieldCache, requestID)
 }
 
 // RecordReleaseFromTask stores a release entry for a merged pull request.
@@ -1693,6 +1811,7 @@ func (b *Broker) pruneExpiredTasksLocked(now time.Time) {
 		}
 		delete(b.closedTasks, requestID)
 		delete(b.runConfigs, requestID)
+		delete(b.runConfigFieldCache, requestID)
 	}
 }
 
@@ -1704,6 +1823,7 @@ func (b *Broker) isClosedTaskLocked(requestID string, now time.Time) bool {
 	if now.Sub(closedAt) >= defaultClosedTaskRetention {
 		delete(b.closedTasks, requestID)
 		delete(b.runConfigs, requestID)
+		delete(b.runConfigFieldCache, requestID)
 		return false
 	}
 	return true
@@ -1740,29 +1860,30 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 			existing.Prompt = b.taskPromptLocked(requestID)
 			existing.PromptIsUserInput = promptIsUserInputForTask(requestID, existing.Prompt)
 		}
+		fields := b.runConfigFieldsLocked(requestID)
 		if len(existing.Images) == 0 {
-			existing.Images = imagesFromRunConfigJSON(b.runConfigs[requestID])
+			existing.Images = slices.Clone(fields.images)
 		}
 		if existing.Workflow == "" {
-			existing.Workflow = workflowFromRunConfigJSON(b.runConfigs[requestID])
+			existing.Workflow = fields.workflow
 		}
 		if existing.AgentHarness == "" {
-			existing.AgentHarness = agentHarnessFromRunConfigJSON(b.runConfigs[requestID])
+			existing.AgentHarness = fields.agentHarness
 		}
 		if len(existing.Reviewers) == 0 {
-			existing.Reviewers = reviewersFromRunConfigJSON(b.runConfigs[requestID])
+			existing.Reviewers = slices.Clone(fields.reviewers)
 		}
 		if existing.Source == "" {
-			existing.Source = stringsx.FirstNonEmpty(sourceFromRunConfigJSON(b.runConfigs[requestID]), defaultTaskSourceForRequestID(requestID))
+			existing.Source = stringsx.FirstNonEmpty(fields.source, defaultTaskSourceForRequestID(requestID))
 		}
 		if existing.BaseBranch == "" {
-			existing.BaseBranch = b.taskBaseBranchLocked(requestID)
+			existing.BaseBranch = fields.branch
 		}
 		if existing.Branch == "" {
-			existing.Branch = b.taskInitialBranchLocked(requestID)
+			existing.Branch = fields.branch
 		}
 		if existing.PRURL == "" {
-			existing.PRURL = prURLFromRunConfigJSON(b.runConfigs[requestID])
+			existing.PRURL = fields.prURL
 		}
 		existing.UpdatedAt = now
 		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", existing.Status, existing.Error, existing.Workflow, existing.AgentHarness, existing.Source, existing.Repos, existing.PRURL, now)
@@ -1770,19 +1891,19 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 	}
 
 	prompt := b.taskPromptLocked(requestID)
-	images := imagesFromRunConfigJSON(b.runConfigs[requestID])
+	fields := b.runConfigFieldsLocked(requestID)
 	t := &taskState{
 		RequestID:         requestID,
-		Source:            stringsx.FirstNonEmpty(sourceFromRunConfigJSON(b.runConfigs[requestID]), defaultTaskSourceForRequestID(requestID)),
+		Source:            stringsx.FirstNonEmpty(fields.source, defaultTaskSourceForRequestID(requestID)),
 		Prompt:            prompt,
 		PromptIsUserInput: promptIsUserInputForTask(requestID, prompt),
-		Images:            images,
-		Workflow:          workflowFromRunConfigJSON(b.runConfigs[requestID]),
-		AgentHarness:      agentHarnessFromRunConfigJSON(b.runConfigs[requestID]),
-		Reviewers:         reviewersFromRunConfigJSON(b.runConfigs[requestID]),
-		BaseBranch:        b.taskBaseBranchLocked(requestID),
-		Branch:            b.taskInitialBranchLocked(requestID),
-		PRURL:             prURLFromRunConfigJSON(b.runConfigs[requestID]),
+		Images:            slices.Clone(fields.images),
+		Workflow:          fields.workflow,
+		AgentHarness:      fields.agentHarness,
+		Reviewers:         slices.Clone(fields.reviewers),
+		BaseBranch:        fields.branch,
+		Branch:            fields.branch,
+		PRURL:             fields.prURL,
 		Status:            "pending",
 		StartedAt:         now,
 		UpdatedAt:         now,

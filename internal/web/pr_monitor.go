@@ -136,10 +136,10 @@ func (m *PRMergeMonitor) Run(ctx context.Context) error {
 }
 
 func (m *PRMergeMonitor) pollOnce(ctx context.Context) {
-	snapshot := m.Broker.Snapshot()
-	active := make(map[string]struct{}, len(snapshot.Tasks))
-	activePRs := make(map[string]struct{}, len(snapshot.Tasks))
-	for _, task := range snapshot.Tasks {
+	tasks := m.Broker.TaskList()
+	active := make(map[string]struct{}, len(tasks))
+	activePRs := make(map[string]struct{}, len(tasks))
+	for _, task := range tasks {
 		active[task.RequestID] = struct{}{}
 		if !shouldMonitorTaskPR(task) {
 			continue

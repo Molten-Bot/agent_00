@@ -388,7 +388,7 @@ func (s Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := fs.ReadFile(staticFiles, "static/index.html")
+	data, err := embeddedStaticFile("static/index.html")
 	if err != nil {
 		http.Error(w, "monitor ui is unavailable", http.StatusInternalServerError)
 		return
@@ -405,27 +405,50 @@ func (s Server) injectBottomDockComponent(ctx context.Context, data []byte) []by
 	if !bytes.Contains(data, []byte(bottomDockPlaceholder)) {
 		return data
 	}
-	dock, err := fs.ReadFile(staticFiles, "static/bottom-dock.html")
+	dock, err := embeddedStaticFile("static/bottom-dock.html")
 	if err != nil {
 		s.logf("localruntime.ui status=warn event=load_bottom_dock_component err=%q", err)
 		return data
 	}
-	if enabled, settingsErr := s.chatEnabled(ctx); settingsErr != nil || !enabled {
+	chatEnabled, jsonEnabled, githubIssuesEnabled := true, true, false
+	if s.ReviewSettingsStatus != nil {
+		settings, settingsErr := s.ReviewSettingsStatus(ctx)
+		chatEnabled = settingsErr == nil && settings.ChatEnabled
+		jsonEnabled = settingsErr == nil && settings.JSONEnabled
+		githubIssuesEnabled = settingsErr == nil && settings.GitHubIssuesEnabled
+	}
+	if !chatEnabled {
 		dock = bytes.Replace(dock,
 			[]byte(`class="prompt-mode-link site-dock-link" href="#chat" data-app-display="chat" data-page-nav-link="/chat" aria-label="Chat" title="Chat"`),
 			[]byte(`class="prompt-mode-link site-dock-link is-disabled hidden" data-app-display="chat" data-page-nav-link="/chat" aria-label="Chat" aria-disabled="true" tabindex="-1" title="Chat is turned off in Settings → Automation"`), 1)
 	}
-	if enabled, settingsErr := s.jsonEnabled(ctx); settingsErr != nil || !enabled {
+	if !jsonEnabled {
 		dock = bytes.Replace(dock,
 			[]byte(`id="prompt-mode-json" class="prompt-mode-link" href="#studio-json" aria-selected="false" title="JSON"`),
 			[]byte(`id="prompt-mode-json" class="prompt-mode-link is-disabled hidden" aria-selected="false" aria-disabled="true" tabindex="-1" title="JSON input is turned off in Settings → Automation"`), 1)
 	}
-	if enabled, settingsErr := s.githubIssuesEnabled(ctx); settingsErr != nil || !enabled {
+	if !githubIssuesEnabled {
 		dock = bytes.Replace(dock,
 			[]byte(`id="github-issues-dock-link" class="prompt-mode-link" href="#studio-issues" aria-selected="false" title="GitHub Issues"`),
 			[]byte(`id="github-issues-dock-link" class="prompt-mode-link site-dock-link is-disabled hidden" aria-label="GitHub Issues" aria-disabled="true" tabindex="-1" title="GitHub Issues is turned off in Settings"`), 1)
 	}
 	return bytes.Replace(data, []byte(bottomDockPlaceholder), bytes.TrimSpace(dock), 1)
+}
+
+// embeddedStaticCache holds embedded page bytes read once from staticFiles.
+// Callers must treat the returned slice as read-only.
+var embeddedStaticCache sync.Map
+
+func embeddedStaticFile(name string) ([]byte, error) {
+	if cached, ok := embeddedStaticCache.Load(name); ok {
+		return cached.([]byte), nil
+	}
+	data, err := fs.ReadFile(staticFiles, name)
+	if err != nil {
+		return nil, err
+	}
+	actual, _ := embeddedStaticCache.LoadOrStore(name, data)
+	return actual.([]byte), nil
 }
 
 func (s Server) githubIssuesEnabled(ctx context.Context) (bool, error) {
@@ -1745,7 +1768,7 @@ func (s Server) handleGame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := fs.ReadFile(staticFiles, "static/game.html")
+	data, err := embeddedStaticFile("static/game.html")
 	if err != nil {
 		http.Error(w, "game ui is unavailable", http.StatusInternalServerError)
 		return
@@ -1874,7 +1897,7 @@ func (s Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	var snapshotTimerCh <-chan time.Time
 
 	writeSSESnapshot := func() bool {
-		payload, err := json.Marshal(compactStreamSnapshot(s.snapshot()))
+		payload, err := json.Marshal(s.streamSnapshot())
 		if err != nil {
 			s.logf("localruntime.ui status=warn event=marshal_snapshot err=%q", err)
 			return true
@@ -1950,8 +1973,17 @@ func (s Server) snapshot() Snapshot {
 	if s.Broker == nil {
 		return Snapshot{}
 	}
+	return s.withTaskControls(s.Broker.Snapshot())
+}
 
-	snapshot := s.Broker.Snapshot()
+func (s Server) streamSnapshot() Snapshot {
+	if s.Broker == nil {
+		return Snapshot{}
+	}
+	return s.withTaskControls(s.Broker.StreamSnapshot())
+}
+
+func (s Server) withTaskControls(snapshot Snapshot) Snapshot {
 	if s.ResolveTaskControls == nil {
 		return snapshot
 	}
@@ -3034,18 +3066,6 @@ func decodeStrictJSON[T any](w http.ResponseWriter, r *http.Request, limit int64
 		return v, errors.New(trailingMsg)
 	}
 	return v, nil
-}
-
-func compactStreamSnapshot(snapshot Snapshot) Snapshot {
-	snapshot.Events = nil
-	for i := range snapshot.Tasks {
-		logs := snapshot.Tasks[i].Logs
-		if len(logs) <= maxStreamTaskLogs {
-			continue
-		}
-		snapshot.Tasks[i].Logs = compactStreamTaskLogs(logs)
-	}
-	return snapshot
 }
 
 func compactStreamTaskLogs(logs []TaskLog) []TaskLog {

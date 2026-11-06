@@ -68,12 +68,6 @@ func TestBrokerNilReceiverGuardsAreSafeNoOps(t *testing.T) {
 	}
 	cancel() // must not panic
 
-	if got := nilBroker.taskBaseBranchLocked("req-1"); got != "" {
-		t.Fatalf("nil Broker.taskBaseBranchLocked() = %q, want empty", got)
-	}
-	if got := nilBroker.taskInitialBranchLocked("req-1"); got != "" {
-		t.Fatalf("nil Broker.taskInitialBranchLocked() = %q, want empty", got)
-	}
 	if got := nilBroker.taskPromptLocked("req-1"); got != "" {
 		t.Fatalf("nil Broker.taskPromptLocked() = %q, want empty", got)
 	}
@@ -539,11 +533,12 @@ func TestTaskWorkflowAndTaskAgentHarnessHandleNilAndFallbacks(t *testing.T) {
 	}
 }
 
-func TestLibraryTaskDisplayNameByNameReturnsEmptyForBlankName(t *testing.T) {
+func TestWorkflowStatsGroupNamerFallsBackForBlankName(t *testing.T) {
 	t.Parallel()
 
-	if got := libraryTaskDisplayNameByName("   "); got != "" {
-		t.Fatalf("libraryTaskDisplayNameByName(blank) = %q, want empty", got)
+	var namer workflowStatsGroupNamer
+	if got := namer.name("   "); got != "Ad Hoc Prompt" {
+		t.Fatalf("workflowStatsGroupNamer.name(blank) = %q, want %q", got, "Ad Hoc Prompt")
 	}
 }
 

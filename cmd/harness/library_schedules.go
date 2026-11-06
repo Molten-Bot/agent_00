@@ -11,7 +11,7 @@ import (
 // Include manual runs and queued/paused work even when their branch or current
 // library prompt differs from the saved schedule.
 func libraryScheduleActive(broker *web.Broker, schedule localruntime.LibrarySchedule) bool {
-	for _, task := range broker.Snapshot().Tasks {
+	for _, task := range broker.TaskList() {
 		switch task.Status {
 		case "pending", "running", "paused":
 		default:
