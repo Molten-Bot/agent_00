@@ -16,9 +16,9 @@ const issueBody = [
   '- Fleet overview',
   '- Connection detail',
   '',
-  '| Metric | Definition |',
-  '| --- | --- |',
-  '| Freshness | Time since lastSuccessAt |',
+  '| Metric | Definition | Window | Count |',
+  '| --- | :--- | :---: | ---: |',
+  '| Freshness | Time since lastSuccessAt | 24h | 3 |',
   '',
   '```go',
   'func run() error { return nil }',
@@ -102,6 +102,52 @@ test('issue bodies render as markdown instead of raw source', async t => {
   assert.equal(await comment.locator('strong').innerText(), 'docs');
 });
 
+test('GFM table column alignment survives sanitizing and styling', async t => {
+  const page = await openIssue(t);
+  const columns = await page.$$eval('.github-issue-body table th', nodes => nodes.map(node => ({
+    align: node.getAttribute('align'),
+    // Chromium reports the align attribute's keyword with a -webkit- prefix.
+    textAlign: getComputedStyle(node).textAlign.replace('-webkit-', ''),
+  })));
+
+  assert.deepEqual(columns.map(column => column.align), [null, 'left', 'center', 'right'], 'align attributes are preserved');
+  assert.deepEqual(columns.map(column => column.textAlign), ['left', 'left', 'center', 'right'], 'stylesheet defaults to left without overriding the alignment');
+});
+
+test('a failed marked load warns, falls back to plain text, and retries next render', async t => {
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  const warnings = [];
+  page.on('console', message => { if (message.type() === 'warning') warnings.push(message.text()); });
+  let failMarked = true;
+  await page.route('**/*', route => new URL(route.request().url()).origin === new URL(baseURL).origin ? route.continue() : route.abort());
+  await page.route('**/static/marked.umd.js', route => {
+    if (!failMarked) return route.continue();
+    failMarked = false;
+    return route.abort();
+  });
+  await page.goto(baseURL);
+  await page.waitForFunction(() => Boolean(window.MarkdownView));
+
+  const renderOnce = () => page.evaluate(async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const rendered = await window.MarkdownView.render(host, 'keep **this**');
+    return { rendered, text: host.textContent, html: host.innerHTML, pending: host.classList.contains('markdown-body-pending') };
+  });
+
+  const first = await renderOnce();
+  assert.equal(first.rendered, false, 'the failed load is reported to the caller');
+  assert.equal(first.text, 'keep **this**', 'the body stays readable as plain text');
+  assert.ok(first.pending, 'the plain-text fallback keeps its line breaks');
+  assert.ok(warnings.some(warning => warning.includes('markdown render failed')), `expected a console warning, got ${JSON.stringify(warnings)}`);
+
+  const second = await renderOnce();
+  assert.equal(second.rendered, true, 'a later render retries the script instead of reusing the failure');
+  assert.ok(second.html.includes('<strong>this</strong>'), `expected rendered markdown, got ${second.html}`);
+  assert.ok(!second.pending);
+});
+
 test('markdown HTML cannot execute script or keep javascript: links', async t => {
   const page = await openIssue(t, { body: hostileBody });
   const body = page.locator('.github-issue-body');
@@ -126,7 +172,8 @@ test('markdown renderer keeps safe elements and drops the rest', async t => {
       + '<form><button onclick="window.__xss=1">go</button></form>'
       + '<img src="https://example.com/a.png" alt="a">'
       + '<img src="data:image/svg+xml,<svg onload=alert(1)>" alt="b">'
-      + '<img src="relative.png" alt="c">'
+      + '<img src="relative.png" alt="relative alt text">'
+      + '<img src="relative.png">'
       + '<ul><li><input type="checkbox" checked><input type="text" value="x"> task</li></ul>'
       + '<code class="language-go">go</code><code class="prompt-submit">styled</code>',
     ));
@@ -149,6 +196,7 @@ test('markdown renderer keeps safe elements and drops the rest', async t => {
   assert.ok(!result.tags.includes('style') && !result.text.includes('display:none'), 'style blocks are dropped with their contents');
   assert.ok(!result.tags.includes('button') && !result.html.includes('onclick'), 'buttons are dropped with their handlers');
   assert.deepEqual(result.images, ['https://example.com/a.png'], 'only absolute http(s) image sources survive');
+  assert.ok(result.text.includes('relative alt text'), 'a dropped image leaves its alt text behind');
   assert.equal(result.inputs, 1, 'only the task list checkbox survives');
   assert.deepEqual(result.checkbox, { type: 'checkbox', checked: true, disabled: true }, 'task list checkboxes stay read-only');
   assert.deepEqual(result.codeClasses, ['language-go', null], 'application classes cannot be borrowed by issue text');

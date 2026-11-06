@@ -64,7 +64,10 @@
     markedScriptPromise = new Promise((resolve, reject) => {
       const settle = (node) => {
         node.addEventListener("load", () => resolve(global.marked), { once: true });
-        node.addEventListener("error", () => reject(new Error("marked script failed to load")), { once: true });
+        node.addEventListener("error", () => {
+          node.remove();
+          reject(new Error("marked script failed to load"));
+        }, { once: true });
       };
       const existing = global.document.querySelector('script[data-marked-script="true"]');
       if (existing) {
@@ -77,6 +80,11 @@
       script.setAttribute("data-marked-script", "true");
       settle(script);
       global.document.head.appendChild(script);
+    }).catch((error) => {
+      // A failed load must not be cached, or every later body would stay plain
+      // text for the lifetime of the page.
+      markedScriptPromise = null;
+      throw error;
     });
 
     return markedScriptPromise;
@@ -149,7 +157,12 @@
     }
     const clean = doc.createElement(tag.toLowerCase());
     if (copyAttributes(node, clean, tag) === false) return;
-    if (tag === "IMG" && !clean.hasAttribute("src")) return;
+    if (tag === "IMG" && !clean.hasAttribute("src")) {
+      // The source was rejected, but the alt text is author prose worth keeping.
+      const alt = String(node.getAttribute("alt") || "").trim();
+      if (alt) target.appendChild(doc.createTextNode(alt));
+      return;
+    }
     for (const child of Array.from(node.childNodes)) appendSanitized(clean, child, doc);
     target.appendChild(clean);
   }
@@ -172,7 +185,7 @@
     if (!element) return Promise.resolve(false);
     const source = String(text || "");
     element.textContent = source;
-    element.classList.add("markdown-body-pending");
+    element.classList.add("markdown-body", "markdown-body-pending");
     return loadMarked()
       .then(() => {
         const doc = element.ownerDocument || global.document;
@@ -180,7 +193,10 @@
         element.classList.remove("markdown-body-pending");
         return true;
       })
-      .catch(() => false);
+      .catch((error) => {
+        global.console?.warn?.("markdown render failed, showing plain text", error);
+        return false;
+      });
   }
 
   global.MarkdownView = { render, sanitize };

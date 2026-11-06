@@ -558,6 +558,35 @@ func TestGitHubIssueBodiesRenderThroughVendoredMarked(t *testing.T) {
 	}
 }
 
+// TestTaskPromptModalUsesSharedMarkdownRenderer keeps the task prompt modal on
+// the same sanitizing renderer as the issue pane. The modal used to build HTML
+// with its own regex pass, which parsed a different markdown subset and applied
+// different escaping.
+func TestTaskPromptModalUsesSharedMarkdownRenderer(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(nil, true)
+	page := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/", nil))
+	body := page.Body.String()
+	for _, gone := range []string{"renderTaskPromptMarkdown", "renderInlineMarkdown"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("hand-rolled markdown helper %s should be gone", gone)
+		}
+	}
+	if !strings.Contains(body, "window.MarkdownView.render(taskPromptModalBody") {
+		t.Error("the task prompt modal should render through MarkdownView")
+	}
+
+	style := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(style, httptest.NewRequest(http.MethodGet, "/static/style.css", nil))
+	css := style.Body.String()
+	// Table cells only fall back to left alignment when the markdown gave no
+	// column alignment of its own.
+	if !strings.Contains(css, ".markdown-body th:not([align]),\n.markdown-body td:not([align]) {\n  text-align: left;\n}") {
+		t.Error("markdown table cells should keep the alignment marked emitted")
+	}
+}
+
 // TestGitHubIssueMarkdownRendersInBrowser drives the real panel in Chromium.
 // The renderer only exists in static/markdown.js, so this is the only coverage
 // for the rendered output and for the sanitizing that keeps issue text from
@@ -570,4 +599,17 @@ func TestGitHubIssueMarkdownRendersInBrowser(t *testing.T) {
 	defer ts.Close()
 
 	runBrowserSuite(t, ts.URL, 60*time.Second, "issue markdown rendering checks", "tests/github_issue_markdown.cjs")
+}
+
+// TestTaskPromptModalMarkdownRendersInBrowser drives the task prompt modal in
+// Chromium. It covers the element types the modal only gained once it moved to
+// the shared renderer: tables, blockquotes, task lists, and safe links.
+func TestTaskPromptModalMarkdownRendersInBrowser(t *testing.T) {
+	requireBrowserTooling(t, "task prompt markdown rendering check")
+
+	srv := NewServer("", NewBroker())
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	runBrowserSuite(t, ts.URL, 60*time.Second, "task prompt markdown rendering checks", "tests/task_prompt_markdown.cjs")
 }
