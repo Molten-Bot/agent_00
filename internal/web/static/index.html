@@ -1031,6 +1031,7 @@
     const TASK_HISTORY_UNSEEN_KEY = "hubui.taskHistoryUnseen.v1";
     const TASK_SOUND_MUTED_KEY = "hubui.taskSoundMuted";
     const CHAT_CLOSED_REPOS_KEY = "hubui.chatClosedRepoKeys.v1";
+    const REPOSITORY_OWNER_KEPT_DISABLED_KEY = "hubui.repositoryOwnerKeptDisabled.v1";
     const THEME_KEY = "hubui.theme";
     const HOVER_MODE_KEY = "hubui.hoverMode";
     const THEME_MODES = ["light", "dark", "night", "pink"];
@@ -1900,6 +1901,29 @@
       }
     }
 
+    // Repositories a user had already deselected before an owner was cleared,
+    // keyed by owner, so re-selecting the owner does not silently re-enable them.
+    // Persisted because the disabled list the server stores cannot tell an
+    // owner-wide clear apart from the single repositories deselected before it.
+    function loadRepositoryOwnerKeptDisabled() {
+      try {
+        const raw = localStorage.getItem(REPOSITORY_OWNER_KEPT_DISABLED_KEY);
+        if (!raw) return new Map();
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return new Map();
+        const kept = new Map();
+        for (const [owner, values] of Object.entries(parsed)) {
+          const key = String(owner || "").trim().toLowerCase();
+          if (!key || !Array.isArray(values)) continue;
+          const repoKeys = new Set(values.map(value => String(value || "").trim()).filter(Boolean));
+          if (repoKeys.size) kept.set(key, repoKeys);
+        }
+        return kept;
+      } catch (_err) {
+        return new Map();
+      }
+    }
+
     function loadTaskSoundMuted() {
       try {
         return localStorage.getItem(TASK_SOUND_MUTED_KEY) === "true";
@@ -1974,6 +1998,7 @@
       chatOpenRepoKey: "",
       chatPromptedRepos: [],
       chatClosedRepoKeys: loadChatClosedRepoKeys(),
+      repositoryOwnerKeptDisabled: loadRepositoryOwnerKeptDisabled(),
       chatRepoActivityKeys: new Set(),
       chatRepoActivityTones: new Map(),
       chatActiveRepoTab: "repos",
@@ -6051,6 +6076,20 @@
       }
     }
 
+    function persistRepositoryOwnerKeptDisabled() {
+      try {
+        const entries = Array.from(state.repositoryOwnerKeptDisabled, ([owner, repoKeys]) => [owner, Array.from(repoKeys)])
+          .filter(([, repoKeys]) => repoKeys.length > 0);
+        if (!entries.length) {
+          localStorage.removeItem(REPOSITORY_OWNER_KEPT_DISABLED_KEY);
+          return;
+        }
+        localStorage.setItem(REPOSITORY_OWNER_KEPT_DISABLED_KEY, JSON.stringify(Object.fromEntries(entries)));
+      } catch (_err) {
+        // Ignore localStorage failures.
+      }
+    }
+
     function rememberRepos(repos) {
       const unique = dedupeRepoValues([...(repos || []), ...state.repoHistory]);
       if (unique.length === state.repoHistory.length && unique.every((value, index) => value === state.repoHistory[index])) {
@@ -7037,9 +7076,25 @@
       return String(repo.name || "").trim();
     }
 
+    // Every toggle asks repositoryDisabled once per rendered checkbox and once
+    // per owner repository, so the disabled list is parsed into dedupe keys once
+    // per list identity instead of re-parsing every URL on each lookup. Each
+    // write to disabledRepositories replaces the array, so identity is the
+    // invalidation signal.
+    const NO_DISABLED_REPOSITORIES = [];
+    let disabledRepositoryKeyCache = { source: null, keys: new Set() };
+
+    function disabledRepositoryKeys() {
+      const source = state.reviewSettings.disabledRepositories || NO_DISABLED_REPOSITORIES;
+      if (disabledRepositoryKeyCache.source !== source) {
+        disabledRepositoryKeyCache = { source, keys: new Set(source.map(repoDedupeKey).filter(Boolean)) };
+      }
+      return disabledRepositoryKeyCache.keys;
+    }
+
     function repositoryDisabled(value) {
       const key = repoDedupeKey(value);
-      return key !== "" && (state.reviewSettings.disabledRepositories || []).some(repo => repoDedupeKey(repo) === key);
+      return key !== "" && disabledRepositoryKeys().has(key);
     }
 
     function allGitHubRepoSelectValues() {
@@ -7121,15 +7176,18 @@
       return repositoryOwnerGroups(repositorySettingsRepoValues()).get(String(ownerKey || "").toLowerCase())?.repos || [];
     }
 
-    // Repositories a user had already deselected before an owner was cleared,
-    // keyed by owner, so re-selecting the owner does not silently re-enable them.
-    const repositoryOwnerKeptDisabled = new Map();
+    // Only the GitHub API reports whether an owner is a person or an
+    // organization, so owners known only from repository history stay on a
+    // neutral handle icon rather than being drawn as a person.
+    function repositoryOwnerIconName(type) {
+      return type ? chatRepoOwnerIconName({ owner_type: type }) : "at-sign";
+    }
 
     // Owners known only from repository history carry no API avatar, so they
     // render the lucide icon instead of probing github.com on every render.
     function renderRepositoryOwnerIcon(button, avatarURL, details) {
       const icon = document.createElement("i");
-      icon.setAttribute("data-lucide", chatRepoOwnerIconName({ owner_type: details.type }));
+      icon.setAttribute("data-lucide", repositoryOwnerIconName(details.type));
       icon.setAttribute("aria-hidden", "true");
       const fallback = () => {
         button.prepend(icon);
@@ -7209,13 +7267,15 @@
           // one click; only a fully cleared owner re-selects what it owns, minus
           // the repositories the user had deselected one by one beforehand.
           if (ownerRepos.length > 0 && ownerRepos.every(repositoryDisabled)) {
-            const kept = repositoryOwnerKeptDisabled.get(key) || new Set();
-            repositoryOwnerKeptDisabled.delete(key);
+            const kept = state.repositoryOwnerKeptDisabled.get(key) || new Set();
+            state.repositoryOwnerKeptDisabled.delete(key);
+            persistRepositoryOwnerKeptDisabled();
             const ownerKeys = new Set(ownerRepos.map(repoDedupeKey));
             applyDisabledRepositories(disabled.filter(repo => !ownerKeys.has(repoDedupeKey(repo)) || kept.has(repoDedupeKey(repo))));
             return;
           }
-          repositoryOwnerKeptDisabled.set(key, new Set(ownerRepos.filter(repositoryDisabled).map(repoDedupeKey)));
+          state.repositoryOwnerKeptDisabled.set(key, new Set(ownerRepos.filter(repositoryDisabled).map(repoDedupeKey)));
+          persistRepositoryOwnerKeptDisabled();
           applyDisabledRepositories([...disabled, ...ownerRepos]);
         });
         return button;
