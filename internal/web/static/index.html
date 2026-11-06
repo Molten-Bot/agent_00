@@ -18,8 +18,7 @@
     window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};
   </script>
   <script src="/static/lucide.min.js"></script>
-  <script src="/static/xterm.js" data-xterm-version="6.0.0"></script>
-  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+  <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -4752,6 +4751,12 @@
 
     function refreshDashboardChartTheme() {
       renderDashboardStats(state.snapshot);
+    }
+
+    // d3 is deferred so it does not block first paint; draw the charts once it
+    // arrives (deferred scripts run after this inline script has executed).
+    if (!window.d3) {
+      document.getElementById("d3-script")?.addEventListener("load", refreshDashboardChartTheme, { once: true });
     }
 
     function renderDashboardSourceMix(stats) {
@@ -12408,8 +12413,44 @@
       }
     }
 
+    let taskFullscreenXtermLoad = null;
+
+    // xterm.js is only needed for the fullscreen console, so it is fetched the
+    // first time that view renders instead of blocking every page load. Until
+    // it arrives the console falls back to plain log rendering.
+    function loadTaskFullscreenXterm() {
+      if (taskFullscreenXtermLoad) {
+        return taskFullscreenXtermLoad;
+      }
+      taskFullscreenXtermLoad = new Promise((resolve, reject) => {
+        const stylesheet = document.createElement("link");
+        stylesheet.rel = "stylesheet";
+        stylesheet.href = "/static/xterm.css";
+        document.head.appendChild(stylesheet);
+        const script = document.createElement("script");
+        script.src = "/static/xterm.js";
+        script.dataset.xtermVersion = TASK_XTERM_VERSION;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error("xterm.js failed to load"));
+        document.head.appendChild(script);
+      });
+      taskFullscreenXtermLoad.then(() => {
+        if (taskFullscreenTerminal) {
+          taskFullscreenTerminal.dataset.renderSig = "";
+        }
+        renderFullscreenTerminal(state.snapshot);
+      }, () => {
+        // Keep the plain-text console when xterm.js is unavailable.
+      });
+      return taskFullscreenXtermLoad;
+    }
+
     function taskFullscreenXtermAvailable() {
-      return typeof window.Terminal === "function";
+      if (typeof window.Terminal === "function") {
+        return true;
+      }
+      void loadTaskFullscreenXterm();
+      return false;
     }
 
     function taskFullscreenXtermTheme() {

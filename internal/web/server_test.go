@@ -256,7 +256,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `<meta name="twitter:image" content="https://app.molten.bot/logo.svg">`) {
 		t.Fatalf("expected index html to use the agent logo for social previews")
 	}
-	if !strings.Contains(markup, `src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"`) {
+	if !strings.Contains(markup, `defer src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"`) {
 		t.Fatalf("expected index html to load D3.js for dashboard stats")
 	}
 	if !strings.Contains(markup, `id="dashboard-display"`) ||
@@ -1078,10 +1078,11 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, "function renderPromptHistory(") {
 		t.Fatalf("expected index html to remove prompt history renderer")
 	}
-	if strings.Contains(markup, `href="/static/xterm.css"`) {
-		t.Fatalf("expected xterm stylesheet to be loaded through the global stylesheet instead of the index page")
+	if strings.Contains(markup, `src="/static/xterm.js"`) {
+		t.Fatalf("expected xterm.js to load lazily instead of blocking the index page")
 	}
-	if !strings.Contains(markup, `src="/static/xterm.js" data-xterm-version="6.0.0"`) ||
+	if !strings.Contains(markup, `script.src = "/static/xterm.js";`) ||
+		!strings.Contains(markup, `stylesheet.href = "/static/xterm.css";`) ||
 		!strings.Contains(markup, `const TASK_XTERM_VERSION = "6.0.0";`) ||
 		!strings.Contains(markup, `new window.Terminal({`) ||
 		!strings.Contains(markup, `disableStdin: true,`) ||
@@ -1092,8 +1093,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read style.css: %v", err)
 	}
-	if !strings.Contains(string(xtermStylesheet), `@import url("/static/xterm.css");`) {
-		t.Fatalf("expected global stylesheet to import xterm stylesheet")
+	if strings.Contains(string(xtermStylesheet), `@import url("/static/xterm.css");`) {
+		t.Fatalf("expected xterm stylesheet to load with xterm.js instead of through the global stylesheet")
 	}
 	if !strings.Contains(markup, "function sortTasksByStartTime(") ||
 		!strings.Contains(markup, "const startedDiff = parseTaskTimestamp(b?.started_at) - parseTaskTimestamp(a?.started_at);") ||

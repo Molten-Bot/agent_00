@@ -1,5 +1,3 @@
-@import url("/static/xterm.css");
-
 :root {
   color-scheme: light;
   --hub-floating-bottom: max(16px, env(safe-area-inset-bottom));
