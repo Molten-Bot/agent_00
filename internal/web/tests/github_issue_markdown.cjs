@@ -206,7 +206,7 @@ test('a script that loads without defining marked is not kept as a usable load',
   assert.ok(second.html.includes('<strong>this</strong>'), `expected rendered markdown, got ${second.html}`);
 });
 
-test('relative links resolve against the issue and relative images use authenticated content', async t => {
+test('relative links resolve against the repository and relative images use authenticated content', async t => {
   const page = await openIssue(t, { body: repositoryBody });
   const body = page.locator('.github-issue-body');
 
@@ -219,10 +219,10 @@ test('relative links resolve against the issue and relative images use authentic
   assert.equal(await details.locator('strong').innerText(), 'detail', 'the collapsed body is rendered markdown');
 
   assert.deepEqual(await body.locator('a').evaluateAll(nodes => nodes.map(node => node.getAttribute('href'))), [
-    'https://github.com/acme/repo/issues/docs/guide.md',
+    'https://github.com/acme/repo/docs/guide.md',
     'https://github.com/acme/repo/pull/3',
-    'https://github.com/acme/repo/issues/7#contract',
-  ], 'relative hrefs use the issue URL, and so does a fragment opened on its own');
+    'https://github.com/acme/repo/#contract',
+  ], 'relative hrefs use the repository URL, and so does a fragment opened on its own');
   assert.deepEqual(await body.locator('a').evaluateAll(nodes => nodes.map(node => node.target)), ['_blank', '_blank', ''],
     'only the links that leave the page open a new tab');
   const imageURL = new URL(await body.locator('img').getAttribute('src'));
@@ -233,7 +233,7 @@ test('relative links resolve against the issue and relative images use authentic
   assert.equal(page.imageRequests.length, 1, 'the browser requests the authenticated same-origin image');
 });
 
-test('issue and comment links each resolve against their source URL', async t => {
+test('issue and comment links resolve against the repository URL', async t => {
   const page = await openIssue(t, {
     body: '[issue guide](docs/issue.md)',
     comments: [{
@@ -245,9 +245,17 @@ test('issue and comment links each resolve against their source URL', async t =>
   await page.waitForSelector('.github-issue-comment-body:not(.markdown-body-pending)');
 
   assert.equal(await page.locator('.github-issue-body a').getAttribute('href'),
-    'https://github.com/acme/repo/issues/docs/issue.md');
+    'https://github.com/acme/repo/docs/issue.md');
   assert.equal(await page.locator('.github-issue-comment-body a').getAttribute('href'),
-    'https://github.com/acme/repo/issues/docs/comment.md');
+    'https://github.com/acme/repo/docs/comment.md');
+});
+
+test('leading indentation remains an indented code block', async t => {
+  const page = await openIssue(t, { body: '    first line\n    second line\n' });
+  const body = page.locator('.github-issue-body');
+
+  assert.equal(await body.locator('pre code').innerText(), 'first line\nsecond line\n');
+  assert.equal(await body.locator('p').count(), 0, 'leading spaces are not trimmed into paragraph text');
 });
 
 test('a heading fragment scrolls inside the body while other fragments remain normal links', async t => {

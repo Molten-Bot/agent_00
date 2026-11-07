@@ -254,11 +254,25 @@ func (s Server) handleGitHubContent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("load GitHub repository content: %v", err)})
 		return
 	}
+	contentType := http.DetectContentType([]byte(result.Stdout))
+	if !safeGitHubImageContentType(contentType) {
+		writeJSON(w, http.StatusUnsupportedMediaType, map[string]any{"ok": false, "error": "repository content must be a supported raster image"})
+		return
+	}
 	w.Header().Set("Cache-Control", "private, no-store")
-	w.Header().Set("Content-Type", http.DetectContentType([]byte(result.Stdout)))
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, result.Stdout)
+}
+
+func safeGitHubImageContentType(value string) bool {
+	switch value {
+	case "image/gif", "image/jpeg", "image/png", "image/webp":
+		return true
+	default:
+		return false
+	}
 }
 
 func validGitHubContentPath(value string) (string, bool) {

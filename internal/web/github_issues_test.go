@@ -332,6 +332,33 @@ func TestGitHubContentUsesAuthenticatedRawAPI(t *testing.T) {
 	}
 }
 
+func TestGitHubContentRejectsActiveRepositoryContent(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "HTML", body: "<!doctype html><script>alert(1)</script>"},
+		{name: "SVG", body: `<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := githubIssueTestServer(githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+				return execx.Result{Stdout: tc.body}, nil
+			}), true)
+			response := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+				"/api/github/content?repo=acme/repo&ref=main&path=active", nil))
+
+			if response.Code != http.StatusUnsupportedMediaType {
+				t.Fatalf("status = %d, want 415: %s", response.Code, response.Body.String())
+			}
+			if got := response.Header().Get("Content-Type"); got != "application/json" {
+				t.Fatalf("Content-Type = %q, want application/json", got)
+			}
+		})
+	}
+}
+
 func TestGitHubContentRejectsUnsafeInputBeforeCallingGh(t *testing.T) {
 	t.Parallel()
 	calls := 0
