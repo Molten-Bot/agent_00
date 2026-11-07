@@ -434,8 +434,8 @@ func TestGitHubIssueHeaderAssetsCarryAssigneeCopy(t *testing.T) {
 // TestGitHubIssueHeaderRendersInBrowser drives the real static/github-issues.js
 // in Chromium. renderIssueDetail, addAssignees, and addTimestamp are unexported
 // closures with no Go-reachable equivalent, so the header's placement, the
-// assignee icons and their focus-revealed names, the Unassigned fallback, and
-// the viewer-local timestamps are only observable through the rendered DOM.
+// assignee icons and their hover/focus-revealed names, the Unassigned fallback,
+// and the viewer-local timestamps are only observable through the rendered DOM.
 func TestGitHubIssueHeaderRendersInBrowser(t *testing.T) {
 	requireBrowserTooling(t, "GitHub issue header check")
 

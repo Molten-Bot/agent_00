@@ -284,9 +284,15 @@
       const text = name ? `${login} (${name})` : login;
       const avatar = addAvatar(parent, login, text);
       avatar.setAttribute("aria-expanded", "false");
+      avatar.addEventListener("mouseenter", () => showLabel(avatar, text));
+      avatar.addEventListener("mouseleave", () => {
+        if (activeAvatar === avatar && avatar !== document.activeElement) hideLabel();
+      });
       avatar.addEventListener("focus", () => showLabel(avatar, text));
       avatar.addEventListener("click", () => showLabel(avatar, text));
-      avatar.addEventListener("blur", hideLabel);
+      avatar.addEventListener("blur", () => {
+        if (activeAvatar === avatar && !avatar.matches(":hover")) hideLabel();
+      });
       avatar.addEventListener("keydown", (event) => {
         // Keep focus at its current tab position. Let Escape bubble so page-
         // level menus or dialogs can respond to the same key.

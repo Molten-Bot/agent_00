@@ -145,6 +145,19 @@ test('assignee icons are buttons and tapping one reveals its name on touch', asy
   assert.equal(await chip.getAttribute('aria-expanded'), 'true');
 });
 
+test('hovering an assignee icon reveals its name', async t => {
+  const page = await openIssue(t, assignedIssue);
+  const chip = page.locator('.github-issue-assignees .github-issue-avatar').first();
+  const label = page.locator('.github-issue-assignee-label');
+  assert.equal(await label.isHidden(), true);
+  await chip.hover();
+  assert.equal(await label.innerText(), 'mona-octocat (Mona Octocat)');
+  assert.equal(await chip.getAttribute('aria-expanded'), 'true');
+  await page.locator('.github-issue-detail-title').hover();
+  assert.equal(await label.isHidden(), true);
+  assert.equal(await chip.getAttribute('aria-expanded'), 'false');
+});
+
 test('wrapped assignee icons reveal one in-flow name inside a narrow pane', async t => {
   const page = await openIssue(t, crowdedIssue, { touch: true });
   const chips = page.locator('.github-issue-assignees .github-issue-avatar');
