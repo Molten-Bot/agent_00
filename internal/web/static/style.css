@@ -9329,6 +9329,25 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   font-weight: 800;
 }
 
+/* The picture and the initials share one cell so the picture covers them.
+   Stacking beats swapping because the initials are the fallback: an avatar
+   that fails to load is simply removed and the letters are already there.
+   Not overflow: hidden, which would clip the name the chip reveals below
+   itself; the image rounds itself off instead. */
+.github-issue-avatar > * {
+  grid-area: 1 / 1;
+}
+
+.github-issue-avatar-image {
+  /* Grid items take z-index without being positioned, and this one needs it:
+     sharing a cell is not enough to paint the picture over the letters. */
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
 .github-issue-author strong,
 .github-issue-comment-meta strong {
   color: var(--text-soft);
@@ -9347,12 +9366,12 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 
 .github-issue-metadata {
   display: flex;
+  align-items: flex-start;
   gap: 26px;
   flex-wrap: wrap;
-  padding: 11px 0;
-  margin: 15px 0 0;
+  padding: 11px 0 0;
+  margin: 14px 0 0;
   border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
   color: var(--muted);
   font-size: .62rem;
 }
@@ -9371,6 +9390,46 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   font-size: .68rem;
   font-weight: 650;
   overflow-wrap: anywhere;
+}
+
+.github-issue-assignees {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-height: 22px;
+}
+
+.github-issue-assignees .github-issue-avatar {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  font-size: .55rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.github-issue-assignees .github-issue-avatar:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Icon buttons remain compact; activating or focusing one reveals its name
+   below the complete icon row. In-flow text cannot clip when icons wrap and
+   never leaves an overlay intercepting the issue beneath it. */
+.github-issue-assignee-label {
+  flex: 1 0 100%;
+  color: var(--text-soft);
+  font-size: var(--text-label);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.github-issue-assignee-empty {
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .github-issue-comments-heading {
