@@ -278,6 +278,9 @@
       label.textContent = text;
       label.hidden = false;
     };
+    parent.addEventListener("mouseleave", () => {
+      if (activeAvatar !== document.activeElement) hideLabel();
+    });
     for (const person of people) {
       const login = String(person.login);
       const name = String(person.name || "").trim();
@@ -286,9 +289,6 @@
       avatar.setAttribute("aria-expanded", "false");
       avatar.addEventListener("mouseenter", () => {
         if (activeAvatar !== document.activeElement) showLabel(avatar, text);
-      });
-      avatar.addEventListener("mouseleave", () => {
-        if (activeAvatar === avatar && avatar !== document.activeElement) hideLabel();
       });
       avatar.addEventListener("focus", () => showLabel(avatar, text));
       avatar.addEventListener("click", () => showLabel(avatar, text));

@@ -153,6 +153,10 @@ test('hovering an assignee icon reveals its name', async t => {
   await chip.hover();
   assert.equal(await label.innerText(), 'mona-octocat (Mona Octocat)');
   assert.equal(await chip.getAttribute('aria-expanded'), 'true');
+  await label.hover();
+  assert.equal(await label.innerText(), 'mona-octocat (Mona Octocat)',
+    'moving from the icon onto its revealed name must keep the name visible');
+  assert.equal(await chip.getAttribute('aria-expanded'), 'true');
   await page.locator('.github-issue-detail-title').hover();
   assert.equal(await label.isHidden(), true);
   assert.equal(await chip.getAttribute('aria-expanded'), 'false');
