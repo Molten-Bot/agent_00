@@ -337,13 +337,30 @@ test('owner avatars clear and restore every repository they own', async t => {
     assert.equal(await page.locator(`#review-settings-repositories input[value="https://github.com/acme/${repo}"]`).isChecked(), false);
   }
   assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/octocat/notes"]').isChecked(), true, 'other owners keep their repositories');
+  // Re-clearing a partly restored owner must not treat repositories left off by
+  // the owner action as individual deselections.
+  await toggleRepositoryRow(page, 'https://github.com/acme/widget');
+  assert.equal(await acme.getAttribute('aria-pressed'), 'mixed');
+  await acme.click();
+  await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'true', 'mixed re-clear remains fully undoable');
+  // Enabling every row directly ends the prior owner-clear operation and drops
+  // its persisted provenance before a later, unrelated owner action.
+  await acme.click();
+  await toggleRepositoryRow(page, 'https://github.com/acme/widget');
+  await toggleRepositoryRow(page, 'https://github.com/acme/gadget');
+  assert.equal(await acme.getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem(key) || '{}').acme, 'hubui.repositoryOwnerKeptDisabled.v1'), undefined, 'fully enabling rows prunes stale owner state');
+  await acme.click();
   await close(page);
   assert.deepEqual(writes.at(-1).disabled_repositories, ['https://github.com/acme/widget', 'https://github.com/acme/gadget']);
   assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 0);
 
   await page.locator('#settings-open').click();
   await select(page, 'automation');
-  await toggleRepositoryRow(page, 'https://github.com/acme/widget');
+  await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'true', 'a fully cleared owner restores all repositories when none were individually deselected');
+  await toggleRepositoryRow(page, 'https://github.com/acme/gadget');
   assert.equal(await acme.getAttribute('aria-pressed'), 'mixed', 'a partly enabled owner reports a mixed selection');
   await acme.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'false', 'a partly selected owner clears in a single click');
@@ -453,7 +470,8 @@ test('chat toggle marks the experimental chat tab unavailable immediately and pe
   assert.equal(await page.locator('[data-app-display=chat]').getAttribute('aria-disabled'), 'false');
   assert.notEqual(await page.locator('[data-app-display=chat]').getAttribute('title'), 'Chat is turned off in Settings → Automation');
   await select(page, 'automation');
-  assert.equal(await page.locator('#review-settings-owners-column').evaluate(column => column.classList.contains('hidden')), true, 'the owners column stays hidden while no GitHub owner is known');
+  assert.equal(await page.locator('#review-settings-repository-columns').evaluate(columns => columns.classList.contains('hidden')), true, 'empty repository state hides both duplicate column headings and lists');
+  assert.equal(await page.locator('#review-settings-repositories-empty').isVisible(), true, 'empty repository state keeps its single message');
   await toggle(page, 'review-settings-chat-enabled');
   assert.equal(await page.locator('[data-app-display=chat]').getAttribute('aria-disabled'), 'true');
   assert.equal(await page.locator('[data-app-display=chat]').getAttribute('title'), 'Chat is turned off in Settings → Automation');

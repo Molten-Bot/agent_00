@@ -868,7 +868,7 @@
                 <strong>Repositories</strong>
                 <small>Deselect an owner to hide every repository it owns, or deselect single repositories.</small>
               </div>
-              <div class="repository-settings-columns">
+              <div class="repository-settings-columns" id="review-settings-repository-columns">
                 <div class="repository-settings-column" id="review-settings-owners-column">
                   <small class="repository-settings-column-title" id="review-settings-owners-title">Organizations &amp; people</small>
                   <div id="review-settings-owners" class="repository-settings-list" role="group" aria-labelledby="review-settings-owners-title"></div>
@@ -1916,7 +1916,7 @@
           const key = String(owner || "").trim().toLowerCase();
           if (!key || !Array.isArray(values)) continue;
           const repoKeys = new Set(values.map(value => String(value || "").trim()).filter(Boolean));
-          if (repoKeys.size) kept.set(key, repoKeys);
+          kept.set(key, repoKeys);
         }
         return kept;
       } catch (_err) {
@@ -2232,6 +2232,7 @@
     const reviewSettingsRepositories = document.getElementById("review-settings-repositories");
     const reviewSettingsOwners = document.getElementById("review-settings-owners");
     const reviewSettingsOwnersColumn = document.getElementById("review-settings-owners-column");
+    const reviewSettingsRepositoryColumns = document.getElementById("review-settings-repository-columns");
     const reviewSettingsRepositoriesEmpty = document.getElementById("review-settings-repositories-empty");
     const reviewSettingsGitHubIssuesEnabled = document.getElementById("review-settings-github-issues-enabled");
     const reviewSettingsGitHubIssuesAutoStart = document.getElementById("review-settings-github-issues-auto-start");
@@ -6078,8 +6079,7 @@
 
     function persistRepositoryOwnerKeptDisabled() {
       try {
-        const entries = Array.from(state.repositoryOwnerKeptDisabled, ([owner, repoKeys]) => [owner, Array.from(repoKeys)])
-          .filter(([, repoKeys]) => repoKeys.length > 0);
+        const entries = Array.from(state.repositoryOwnerKeptDisabled, ([owner, repoKeys]) => [owner, Array.from(repoKeys)]);
         if (!entries.length) {
           localStorage.removeItem(REPOSITORY_OWNER_KEPT_DISABLED_KEY);
           return;
@@ -7148,8 +7148,31 @@
       return enabled === repos.length ? "true" : "mixed";
     }
 
+    function reconcileRepositoryOwnerKeptDisabled() {
+      if (!state.settingsLoaded) return;
+      const groups = repositoryOwnerGroups(repositorySettingsRepoValues());
+      const disabledKeys = disabledRepositoryKeys();
+      let changed = false;
+      for (const [owner, kept] of state.repositoryOwnerKeptDisabled) {
+        const ownerRepos = groups.get(owner)?.repos || [];
+        const ownerKeys = new Set(ownerRepos.map(repoDedupeKey));
+        for (const key of kept) {
+          if (!ownerKeys.has(key) || !disabledKeys.has(key)) {
+            kept.delete(key);
+            changed = true;
+          }
+        }
+        if (!ownerRepos.some(repo => disabledKeys.has(repoDedupeKey(repo)))) {
+          state.repositoryOwnerKeptDisabled.delete(owner);
+          changed = true;
+        }
+      }
+      if (changed) persistRepositoryOwnerKeptDisabled();
+    }
+
     function applyDisabledRepositories(values) {
       state.reviewSettings = { ...state.reviewSettings, disabledRepositories: dedupeRepoValues(values) };
+      reconcileRepositoryOwnerKeptDisabled();
       syncRepositorySettingsSelection();
       renderRepoHistoryOptions();
       renderChatRepos();
@@ -7226,6 +7249,11 @@
         input.checked = !repositoryDisabled(repo);
         input.disabled = controlsDisabled;
         input.addEventListener("change", () => {
+          const owner = repositoryOwnerKey(input.value);
+          if (!input.checked && state.repositoryOwnerKeptDisabled.has(owner)) {
+            state.repositoryOwnerKeptDisabled.get(owner).add(repoDedupeKey(input.value));
+            persistRepositoryOwnerKeptDisabled();
+          }
           applyDisabledRepositories(Array.from(reviewSettingsRepositories.querySelectorAll("input[type=checkbox]:not(:checked)"), node => node.value));
         });
         const icon = document.createElement("i");
@@ -7238,6 +7266,7 @@
         return label;
       }));
       replaceLucideIcons(reviewSettingsRepositories);
+      reconcileRepositoryOwnerKeptDisabled();
 
       const owners = repositoryOwnerDetails();
       const groups = repositoryOwnerGroups(repos);
@@ -7274,13 +7303,16 @@
             applyDisabledRepositories(disabled.filter(repo => !ownerKeys.has(repoDedupeKey(repo)) || kept.has(repoDedupeKey(repo))));
             return;
           }
-          state.repositoryOwnerKeptDisabled.set(key, new Set(ownerRepos.filter(repositoryDisabled).map(repoDedupeKey)));
+          if (!state.repositoryOwnerKeptDisabled.has(key)) {
+            state.repositoryOwnerKeptDisabled.set(key, new Set(ownerRepos.filter(repositoryDisabled).map(repoDedupeKey)));
+          }
           persistRepositoryOwnerKeptDisabled();
           applyDisabledRepositories([...disabled, ...ownerRepos]);
         });
         return button;
       }));
       reviewSettingsOwnersColumn?.classList.toggle("hidden", groups.size === 0);
+      reviewSettingsRepositoryColumns?.classList.toggle("hidden", repos.length === 0);
       reviewSettingsRepositoriesEmpty.classList.toggle("hidden", repos.length > 0);
     }
 
