@@ -9,8 +9,10 @@
   // contents are code or an embedded resource are dropped with those contents.
   const ALLOWED_ELEMENTS = new Map([
     ["A", ["href", "title"]],
+    ["B", []],
     ["BLOCKQUOTE", []],
     ["BR", []],
+    ["CAPTION", []],
     ["CODE", ["class"]],
     ["DEL", []],
     ["DD", []],
@@ -25,6 +27,7 @@
     ["H5", []],
     ["H6", []],
     ["HR", []],
+    ["I", []],
     ["IMG", ["alt", "src", "title"]],
     ["INPUT", ["checked", "disabled", "type"]],
     ["KBD", []],
@@ -32,6 +35,8 @@
     ["OL", ["start"]],
     ["P", []],
     ["PRE", []],
+    ["S", []],
+    ["SPAN", []],
     ["STRONG", []],
     ["SUB", []],
     ["SUMMARY", []],
@@ -41,7 +46,9 @@
     ["TD", ["align"]],
     ["TH", ["align"]],
     ["THEAD", []],
+    ["TFOOT", []],
     ["TR", []],
+    ["U", []],
     ["UL", []],
   ]);
 
@@ -157,7 +164,9 @@
   // no id of their own: an id taken from author text would collide with the
   // application's own elements.
   function headingSlug(text) {
-    return String(text || "").trim().toLowerCase().replace(/[^\w\- ]+/g, "").replace(/\s+/g, "-");
+    return String(text || "").trim().toLowerCase()
+      .replace(/[^\p{L}\p{M}\p{N}_\-\s]+/gu, "")
+      .replace(/\s+/g, "-");
   }
 
   // A fragment addresses the document it was written in, so a plain click stays
@@ -169,7 +178,6 @@
     // cannot be. The href is the author's own page, so the browser is left to
     // follow it there instead of scrolling here.
     if ((event.button ?? 0) !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
     const anchor = event.currentTarget;
     const raw = String(anchor.getAttribute(FRAGMENT_ATTRIBUTE) || "");
     if (!raw) return;
@@ -182,9 +190,14 @@
     wanted = headingSlug(wanted);
     const root = anchor.closest(".markdown-body") || anchor.parentNode;
     const headings = root?.querySelectorAll?.("h1, h2, h3, h4, h5, h6") || [];
-    Array.from(headings)
-      .find((heading) => headingSlug(heading.textContent) === wanted)
-      ?.scrollIntoView({ block: "start" });
+    const heading = Array.from(headings)
+      .find((candidate) => headingSlug(candidate.textContent) === wanted);
+    // A fragment can name something other than a heading on the source page.
+    // Only intercept links this body can satisfy; otherwise its normal href is
+    // still useful and must remain clickable.
+    if (!heading) return;
+    event.preventDefault();
+    heading.scrollIntoView({ block: "start" });
   }
 
   // A fragment link that never got an href is not a link to the browser: it
@@ -196,7 +209,7 @@
     scrollToFragment(event);
   }
 
-  function copyAttributes(source, target, tag, baseURL) {
+  function copyAttributes(source, target, tag, baseURL, imageBaseURL) {
     let fragment = null;
     for (const name of ALLOWED_ELEMENTS.get(tag) || []) {
       if (!source.hasAttribute(name)) continue;
@@ -219,10 +232,9 @@
         continue;
       }
       if (tag === "IMG" && name === "src") {
-        // No base for images: GitHub serves a relative image from a raw path of
-        // the branch it was committed on, which this cannot reconstruct, so a
-        // resolved guess would only render as a broken image.
-        const src = safeURL(value, SAFE_IMAGE_SCHEMES);
+        // Relative repository images use a separate raw-content base. Resolving
+        // them against the GitHub page URL would return HTML, not image bytes.
+        const src = safeURL(value, SAFE_IMAGE_SCHEMES, imageBaseURL);
         if (src && autoLoadableImage(src)) target.setAttribute("src", src);
         continue;
       }
@@ -288,7 +300,7 @@
     if (text) target.appendChild(doc.createTextNode(text));
   }
 
-  function appendSanitized(target, node, doc, baseURL) {
+  function appendSanitized(target, node, doc, baseURL, imageBaseURL) {
     if (node.nodeType === 3) {
       target.appendChild(doc.createTextNode(node.nodeValue));
       return;
@@ -297,11 +309,11 @@
     const tag = node.tagName.toUpperCase();
     if (DROPPED_ELEMENTS.has(tag)) return;
     if (!ALLOWED_ELEMENTS.has(tag)) {
-      for (const child of Array.from(node.childNodes)) appendSanitized(target, child, doc, baseURL);
+      for (const child of Array.from(node.childNodes)) appendSanitized(target, child, doc, baseURL, imageBaseURL);
       return;
     }
     const clean = doc.createElement(tag.toLowerCase());
-    if (copyAttributes(node, clean, tag, baseURL) === false) return;
+    if (copyAttributes(node, clean, tag, baseURL, imageBaseURL) === false) return;
     if (tag === "IMG" && !clean.hasAttribute("src")) {
       appendUnloadedImage(target, node, doc);
       return;
@@ -309,17 +321,21 @@
     // The element joins the tree before its children are filled in, so a child
     // can tell what it is nested inside.
     target.appendChild(clean);
-    for (const child of Array.from(node.childNodes)) appendSanitized(clean, child, doc, baseURL);
+    for (const child of Array.from(node.childNodes)) appendSanitized(clean, child, doc, baseURL, imageBaseURL);
   }
 
-  // options.baseURL is the page the markdown was written on, for example the
-  // repository an issue belongs to, and relative links resolve against it.
+  // options.baseURL is the page the markdown was written on, while imageBaseURL
+  // is its raw repository branch. Relative links and images resolve against the
+  // corresponding base.
   function sanitize(html, ownerDocument, options) {
     const doc = ownerDocument || global.document;
     const baseURL = safeURL(options?.baseURL, SAFE_BASE_SCHEMES);
+    const imageBaseURL = safeURL(options?.imageBaseURL, SAFE_BASE_SCHEMES);
     const parsed = new DOMParser().parseFromString(String(html || ""), "text/html");
     const fragment = doc.createDocumentFragment();
-    for (const child of Array.from(parsed.body.childNodes)) appendSanitized(fragment, child, doc, baseURL);
+    for (const child of Array.from(parsed.body.childNodes)) {
+      appendSanitized(fragment, child, doc, baseURL, imageBaseURL);
+    }
     return fragment;
   }
 

@@ -49,6 +49,8 @@ const repositoryBody = [
   '</details>',
   '',
   'See [the guide](docs/guide.md), [the pull request](/acme/repo/pull/3), and [the anchor](#contract).',
+  '',
+  '![architecture](docs/architecture.png)',
 ].join('\n');
 
 async function openIssue(t, { body = issueBody, comments = [] } = {}) {
@@ -60,7 +62,9 @@ async function openIssue(t, { body = issueBody, comments = [] } = {}) {
   await page.route('**/*', route => new URL(route.request().url()).origin === new URL(baseURL).origin ? route.continue() : route.abort());
   await page.route('**/api/agent-auth**', route => route.fulfill({ json: { ok: true, auth: { required: true, ready: true, harness: 'claude', state: 'ready' } } }));
   await page.route('**/api/review-settings', route => route.fulfill({ json: { ok: true, settings: { merge_method: 'squash', review_level: 'off', github_issues_enabled: true, github_issue_link_mode: 'reference' } } }));
-  await page.route('**/api/github/repos', route => route.fulfill({ json: { ok: true, repos: [{ full_name: 'acme/repo', name: 'repo' }] } }));
+  await page.route('**/api/github/repos', route => route.fulfill({
+    json: { ok: true, repos: [{ full_name: 'acme/repo', name: 'repo', html_url: 'https://github.com/acme/repo', default_branch: 'main' }] },
+  }));
   await page.route('**/api/github/issues?**', route => route.fulfill({
     json: { ok: true, issues: [{ number: 7, title: 'Ingestion connectors', state: 'open', updatedAt: '2026-01-02T03:04:05Z', labels: [] }] },
   }));
@@ -215,9 +219,12 @@ test('relative links resolve against the repository and collapsible sections sta
   ], 'relative hrefs point at GitHub, and so does a fragment opened on its own');
   assert.deepEqual(await body.locator('a').evaluateAll(nodes => nodes.map(node => node.target)), ['_blank', '_blank', ''],
     'only the links that leave the page open a new tab');
+  assert.equal(await body.locator('img').getAttribute('src'),
+    'https://raw.githubusercontent.com/acme/repo/main/docs/architecture.png',
+    'a relative image uses repository default branch raw bytes');
 });
 
-test('a fragment link scrolls inside the body instead of driving the app hash', async t => {
+test('a heading fragment scrolls inside the body while other fragments remain normal links', async t => {
   const page = await openIssue(t);
   const result = await page.evaluate(async () => {
     const host = document.createElement('div');
@@ -259,12 +266,34 @@ test('a fragment link scrolls inside the body instead of driving the app hash', 
 
   assert.ok(result.unchanged, `clicking a fragment link must not rewrite the app hash, got ${result.hash}`);
   assert.deepEqual(result.scrolled, ['connector-contract'], 'the heading the fragment names is scrolled to, a missing one is a no-op');
-  assert.deepEqual(result.cancelled, [true, true, false], 'plain clicks are handled here, a modifier click is left to the browser');
+  assert.deepEqual(result.cancelled, [true, false, false], 'only a matching heading click is handled here; other and modifier clicks are left to the browser');
   assert.equal(result.scrolledAfterModifier, 1, 'a modifier click does not also scroll this body');
   assert.deepEqual(result.hrefs, ['https://github.com/acme/repo/#connector-contract', 'https://github.com/acme/repo/#missing'],
     'a new-tab click lands on the page the markdown came from, never the app hash route');
   assert.deepEqual(result.fragments, ['connector-contract', 'missing'], 'the anchor the author named is kept for scrolling');
   assert.deepEqual(result.rels, ['noopener noreferrer', 'noopener noreferrer'], 'a new tab gets no handle on this page');
+});
+
+test('non-Latin heading fragments scroll to their matching heading', async t => {
+  const page = await openIssue(t);
+  const result = await page.evaluate(() => {
+    const host = document.createElement('div');
+    host.className = 'markdown-body';
+    host.appendChild(window.MarkdownView.sanitize(
+      '<h2>部署 概要</h2><a href="#%E9%83%A8%E7%BD%B2-%E6%A6%82%E8%A6%81">jump</a>',
+      null, { baseURL: 'https://github.com/acme/repo/' },
+    ));
+    document.body.appendChild(host);
+    const scrolled = [];
+    host.querySelector('h2').scrollIntoView = () => scrolled.push('部署-概要');
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true });
+    host.querySelector('a').dispatchEvent(event);
+    host.remove();
+    return { cancelled: event.defaultPrevented, scrolled };
+  });
+
+  assert.ok(result.cancelled, 'a matching Unicode heading is handled inside the body');
+  assert.deepEqual(result.scrolled, ['部署-概要']);
 });
 
 test('a fragment link without a base page carries no href to follow', async t => {
@@ -409,7 +438,7 @@ test('images load only from GitHub hosts and others stay links', async t => {
   'nothing is requested from the third-party host');
 });
 
-test('relative hrefs need a usable base, and images never take one', async t => {
+test('relative links and images use their distinct repository bases', async t => {
   const page = await openIssue(t);
   const result = await page.evaluate(() => {
     const render = (options) => {
@@ -417,21 +446,34 @@ test('relative hrefs need a usable base, and images never take one', async t => 
       host.appendChild(window.MarkdownView.sanitize(
         '<a href="docs/guide.md">guide</a><img src="assets/shot.png" alt="shot">', null, options,
       ));
-      return { href: host.querySelector('a').getAttribute('href'), src: host.querySelector('img')?.getAttribute('src') || null };
+      return {
+        href: host.querySelector('a').getAttribute('href'),
+        src: host.querySelector('img')?.getAttribute('src') || null,
+        text: host.textContent,
+      };
     };
     return {
       none: render(undefined),
       relativeBase: render({ baseURL: 'docs/' }),
       unsafeBase: render({ baseURL: 'javascript:alert(1)' }),
       repository: render({ baseURL: 'https://github.com/acme/repo/' }),
+      repositoryWithImages: render({
+        baseURL: 'https://github.com/acme/repo/',
+        imageBaseURL: 'https://raw.githubusercontent.com/acme/repo/main/',
+      }),
     };
   });
 
-  assert.deepEqual(result.none, { href: null, src: null }, 'without a base a relative URL has no safe target');
-  assert.deepEqual(result.relativeBase, { href: null, src: null }, 'a relative base is not a base');
-  assert.deepEqual(result.unsafeBase, { href: null, src: null }, 'an unsafe base is rejected before resolving');
-  assert.deepEqual(result.repository, { href: 'https://github.com/acme/repo/docs/guide.md', src: null },
-    'a relative image stays dropped because GitHub serves it from a raw branch path this cannot know');
+  assert.deepEqual(result.none, { href: null, src: null, text: 'guideshot' }, 'without a base a relative URL has no safe target');
+  assert.deepEqual(result.relativeBase, { href: null, src: null, text: 'guideshot' }, 'a relative base is not a base');
+  assert.deepEqual(result.unsafeBase, { href: null, src: null, text: 'guideshot' }, 'an unsafe base is rejected before resolving');
+  assert.deepEqual(result.repository, { href: 'https://github.com/acme/repo/docs/guide.md', src: null, text: 'guideshot' },
+    'a repository page base resolves links but does not guess an image branch');
+  assert.deepEqual(result.repositoryWithImages, {
+    href: 'https://github.com/acme/repo/docs/guide.md',
+    src: 'https://raw.githubusercontent.com/acme/repo/main/assets/shot.png',
+    text: 'guide',
+  }, 'a raw default-branch base resolves relative repository images');
 });
 
 test('a marked script element that already loaded does not leave rendering pending', async t => {
@@ -474,7 +516,9 @@ test('markdown HTML cannot execute script or keep javascript: links', async t =>
   assert.equal(await page.evaluate(() => window.__xss || ''), '');
   assert.equal(await body.locator('script').count(), 0);
   assert.equal(await body.locator('iframe').count(), 0);
-  assert.equal(await body.locator('img').count(), 0, 'an image whose only payload is an event handler is dropped with it');
+  assert.deepEqual(await body.locator('img').evaluateAll(nodes => nodes.map(node => node.getAttribute('src'))),
+    ['https://raw.githubusercontent.com/acme/repo/main/x'],
+    'a relative image keeps only its safe raw-repository URL');
   assert.equal(await body.locator('[onerror]').count(), 0);
   assert.equal(await body.locator('a').getAttribute('href'), null, 'javascript: hrefs are stripped from the link');
   assert.equal(await body.locator('strong').innerText(), 'text');
@@ -486,7 +530,9 @@ test('markdown renderer keeps safe elements and drops the rest', async t => {
   const result = await page.evaluate(() => {
     const host = document.createElement('div');
     host.appendChild(window.MarkdownView.sanitize(
-      '<p>keep <b>unwrapped</b> <a href="https://example.com" title="t">link</a></p>'
+      '<p>keep <b>bold</b> <i>italic</i> <s>strike</s> <u>underline</u> <span>span</span> '
+      + '<a href="https://example.com" title="t">link</a></p>'
+      + '<table><caption>caption</caption><tfoot><tr><td>footer</td></tr></tfoot></table>'
       + '<style>body{display:none}</style>'
       + '<form><button onclick="window.__xss=1">go</button></form>'
       + '<img src="https://example.com/a.png" alt="a">'
@@ -511,7 +557,9 @@ test('markdown renderer keeps safe elements and drops the rest', async t => {
     };
   });
 
-  assert.ok(result.text.includes('keep unwrapped'), 'unknown tags keep their text');
+  for (const tag of ['b', 'i', 's', 'u', 'span', 'caption', 'tfoot']) {
+    assert.ok(result.tags.includes(tag), `safe raw-HTML tag ${tag} survives sanitizing`);
+  }
   assert.deepEqual(result.link, { href: 'https://example.com', title: 't', target: '_blank', rel: 'noopener noreferrer' });
   assert.ok(!result.tags.includes('style') && !result.text.includes('display:none'), 'style blocks are dropped with their contents');
   assert.ok(!result.tags.includes('button') && !result.html.includes('onclick'), 'buttons are dropped with their handlers');
