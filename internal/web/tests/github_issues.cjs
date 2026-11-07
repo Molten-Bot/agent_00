@@ -158,6 +158,17 @@ test('hovering an assignee icon reveals its name', async t => {
   assert.equal(await chip.getAttribute('aria-expanded'), 'false');
 });
 
+test('hovering another assignee does not replace the focused assignee name', async t => {
+  const page = await openIssue(t, assignedIssue);
+  const chips = page.locator('.github-issue-assignees .github-issue-avatar');
+  const label = page.locator('.github-issue-assignee-label');
+  await chips.first().focus();
+  await chips.nth(1).hover();
+  assert.equal(await label.innerText(), 'mona-octocat (Mona Octocat)');
+  assert.deepEqual(await chips.evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-expanded'))),
+    ['true', 'false']);
+});
+
 test('wrapped assignee icons reveal one in-flow name inside a narrow pane', async t => {
   const page = await openIssue(t, crowdedIssue, { touch: true });
   const chips = page.locator('.github-issue-assignees .github-issue-avatar');

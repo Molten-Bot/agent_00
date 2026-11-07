@@ -284,7 +284,9 @@
       const text = name ? `${login} (${name})` : login;
       const avatar = addAvatar(parent, login, text);
       avatar.setAttribute("aria-expanded", "false");
-      avatar.addEventListener("mouseenter", () => showLabel(avatar, text));
+      avatar.addEventListener("mouseenter", () => {
+        if (activeAvatar !== document.activeElement) showLabel(avatar, text);
+      });
       avatar.addEventListener("mouseleave", () => {
         if (activeAvatar === avatar && avatar !== document.activeElement) hideLabel();
       });
