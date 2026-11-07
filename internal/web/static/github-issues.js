@@ -139,21 +139,27 @@
     return node;
   }
 
-  // Relative links point at the repository page, while relative images need raw
-  // bytes from its default branch. Keep those bases separate so an image never
-  // loads a GitHub HTML page as its source.
-  function repositoryMarkdownOptions(repo) {
-    const url = String(repo?.html_url || "").trim()
+  // Relative links belong to the issue or comment where they were written.
+  // Relative images use authenticated repository content from the default branch.
+  function repositoryMarkdownOptions(repo, sourceURL) {
+    const repositoryURL = String(repo?.html_url || "").trim()
       || (repo?.full_name ? `https://github.com/${repo.full_name}` : "");
+    const source = String(sourceURL || "").trim();
     const fullName = String(repo?.full_name || "").trim();
     const branch = String(repo?.default_branch || "").trim();
     const parts = fullName.split("/");
     const rawPath = parts.length === 2 && parts.every(Boolean) && branch
       ? [...parts, ...branch.split("/")].map(encodeURIComponent).join("/")
       : "";
+    const imageProxy = fullName && branch ? new URL("/api/github/content", window.location.origin) : null;
+    if (imageProxy) {
+      imageProxy.searchParams.set("repo", fullName);
+      imageProxy.searchParams.set("ref", branch);
+    }
     return {
-      baseURL: url ? `${url.replace(/\/+$/, "")}/` : "",
+      baseURL: source || (repositoryURL ? `${repositoryURL.replace(/\/+$/, "")}/` : ""),
       imageBaseURL: rawPath ? `https://raw.githubusercontent.com/${rawPath}/` : "",
+      imageProxyURL: imageProxy?.href || "",
     };
   }
 
@@ -366,8 +372,7 @@
     addAvatar(author, issue.author?.login);
     addText(author, "strong", "", issue.author?.login || "Unknown");
     addText(author, "span", "", `opened this issue ${formatRelativeTime(issue.createdAt)}`);
-    const markdownOptions = repositoryMarkdownOptions(repo);
-    addMarkdown(detailBody, "github-issue-body", issue.body, "No description provided.", markdownOptions);
+    addMarkdown(detailBody, "github-issue-body", issue.body, "No description provided.", repositoryMarkdownOptions(repo, issue.url));
     const metadata = document.createElement("dl");
     metadata.className = "github-issue-metadata";
     for (const [label, value] of [
@@ -393,7 +398,7 @@
       addText(commentMeta, "strong", "", comment.author?.login || "Unknown");
       addText(commentMeta, "span", "", "·");
       addText(commentMeta, "span", "", formatRelativeTime(comment.createdAt));
-      addMarkdown(card, "github-issue-comment-body", comment.body, "No comment text.", markdownOptions);
+      addMarkdown(card, "github-issue-comment-body", comment.body, "No comment text.", repositoryMarkdownOptions(repo, comment.url));
       comments.appendChild(card);
     }
     detailBody.appendChild(comments);

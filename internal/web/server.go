@@ -309,6 +309,7 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/github/repos", s.handleGitHubRepos)
 	mux.HandleFunc("/api/github/issues", s.handleGitHubIssues)
 	mux.HandleFunc("/api/github/issues/", s.handleGitHubIssues)
+	mux.HandleFunc("/api/github/content", s.handleGitHubContent)
 	mux.HandleFunc("/api/github/labels", s.handleGitHubLabels)
 	mux.HandleFunc("/api/review-settings", s.handleReviewSettings)
 	mux.HandleFunc("/api/commit-signing", s.handleCommitSigning)

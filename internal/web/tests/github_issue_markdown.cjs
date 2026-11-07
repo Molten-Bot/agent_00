@@ -57,6 +57,8 @@ async function openIssue(t, { body = issueBody, comments = [] } = {}) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   t.after(() => page.close());
   const errors = [];
+  const imageRequests = [];
+  page.imageRequests = imageRequests;
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
   await page.route('**/*', route => new URL(route.request().url()).origin === new URL(baseURL).origin ? route.continue() : route.abort());
@@ -75,7 +77,7 @@ async function openIssue(t, { body = issueBody, comments = [] } = {}) {
         number: 7,
         title: 'Ingestion connectors',
         state: 'open',
-        url: 'https://example.com/acme/repo/issues/7',
+        url: 'https://github.com/acme/repo/issues/7',
         author: { login: 'octocat' },
         createdAt: '2026-01-01T00:00:00Z',
         updatedAt: '2026-01-02T03:04:05Z',
@@ -86,6 +88,10 @@ async function openIssue(t, { body = issueBody, comments = [] } = {}) {
       },
     },
   }));
+  await page.route('**/api/github/content?**', route => {
+    imageRequests.push(route.request().url());
+    return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL9WQAAAABJRU5ErkJggg==', 'base64') });
+  });
   await page.goto(`${baseURL}/#studio-issues`);
   await page.waitForFunction(() => Boolean(document.querySelector('#github-issues-repo option[value="acme/repo"]')));
   await page.selectOption('#github-issues-repo', 'acme/repo');
@@ -200,7 +206,7 @@ test('a script that loads without defining marked is not kept as a usable load',
   assert.ok(second.html.includes('<strong>this</strong>'), `expected rendered markdown, got ${second.html}`);
 });
 
-test('relative links resolve against the repository and collapsible sections stay collapsible', async t => {
+test('relative links resolve against the issue and relative images use authenticated content', async t => {
   const page = await openIssue(t, { body: repositoryBody });
   const body = page.locator('.github-issue-body');
 
@@ -213,15 +219,35 @@ test('relative links resolve against the repository and collapsible sections sta
   assert.equal(await details.locator('strong').innerText(), 'detail', 'the collapsed body is rendered markdown');
 
   assert.deepEqual(await body.locator('a').evaluateAll(nodes => nodes.map(node => node.getAttribute('href'))), [
-    'https://github.com/acme/repo/docs/guide.md',
+    'https://github.com/acme/repo/issues/docs/guide.md',
     'https://github.com/acme/repo/pull/3',
-    'https://github.com/acme/repo/#contract',
-  ], 'relative hrefs point at GitHub, and so does a fragment opened on its own');
+    'https://github.com/acme/repo/issues/7#contract',
+  ], 'relative hrefs use the issue URL, and so does a fragment opened on its own');
   assert.deepEqual(await body.locator('a').evaluateAll(nodes => nodes.map(node => node.target)), ['_blank', '_blank', ''],
     'only the links that leave the page open a new tab');
-  assert.equal(await body.locator('img').getAttribute('src'),
-    'https://raw.githubusercontent.com/acme/repo/main/docs/architecture.png',
-    'a relative image uses repository default branch raw bytes');
+  const imageURL = new URL(await body.locator('img').getAttribute('src'));
+  assert.equal(imageURL.pathname, '/api/github/content');
+  assert.deepEqual(Object.fromEntries(imageURL.searchParams), { repo: 'acme/repo', ref: 'main', path: 'docs/architecture.png' },
+    'a relative image uses the authenticated content endpoint');
+  await page.waitForFunction(() => document.querySelector('.github-issue-body img')?.complete);
+  assert.equal(page.imageRequests.length, 1, 'the browser requests the authenticated same-origin image');
+});
+
+test('issue and comment links each resolve against their source URL', async t => {
+  const page = await openIssue(t, {
+    body: '[issue guide](docs/issue.md)',
+    comments: [{
+      author: { login: 'hubot' }, createdAt: '2026-01-02T00:00:00Z',
+      url: 'https://github.com/acme/repo/issues/7#issuecomment-99',
+      body: '[comment guide](docs/comment.md)',
+    }],
+  });
+  await page.waitForSelector('.github-issue-comment-body:not(.markdown-body-pending)');
+
+  assert.equal(await page.locator('.github-issue-body a').getAttribute('href'),
+    'https://github.com/acme/repo/issues/docs/issue.md');
+  assert.equal(await page.locator('.github-issue-comment-body a').getAttribute('href'),
+    'https://github.com/acme/repo/issues/docs/comment.md');
 });
 
 test('a heading fragment scrolls inside the body while other fragments remain normal links', async t => {
@@ -294,6 +320,29 @@ test('non-Latin heading fragments scroll to their matching heading', async t => 
 
   assert.ok(result.cancelled, 'a matching Unicode heading is handled inside the body');
   assert.deepEqual(result.scrolled, ['部署-概要']);
+});
+
+test('duplicate heading fragments reach each numbered heading', async t => {
+  const page = await openIssue(t);
+  const result = await page.evaluate(() => {
+    const host = document.createElement('div');
+    host.className = 'markdown-body';
+    host.appendChild(window.MarkdownView.sanitize(
+      '<h2>Scope</h2><h2>Scope-1</h2><h2>Scope</h2>'
+      + '<a href="#scope">first</a><a href="#scope-1">second</a><a href="#scope-2">third</a>',
+      null, { baseURL: 'https://github.com/acme/repo/issues/7' },
+    ));
+    document.body.appendChild(host);
+    const scrolled = [];
+    Array.from(host.querySelectorAll('h2')).forEach((heading, index) => {
+      heading.scrollIntoView = () => scrolled.push(index);
+    });
+    Array.from(host.querySelectorAll('a')).forEach(anchor => anchor.click());
+    host.remove();
+    return scrolled;
+  });
+
+  assert.deepEqual(result, [0, 1, 2], 'GitHub-style suffixes stay unique and select later headings');
 });
 
 test('a fragment link without a base page carries no href to follow', async t => {
@@ -517,8 +566,8 @@ test('markdown HTML cannot execute script or keep javascript: links', async t =>
   assert.equal(await body.locator('script').count(), 0);
   assert.equal(await body.locator('iframe').count(), 0);
   assert.deepEqual(await body.locator('img').evaluateAll(nodes => nodes.map(node => node.getAttribute('src'))),
-    ['https://raw.githubusercontent.com/acme/repo/main/x'],
-    'a relative image keeps only its safe raw-repository URL');
+    [`${baseURL}/api/github/content?repo=acme%2Frepo&ref=main&path=x`],
+    'a relative image keeps only its authenticated repository URL');
   assert.equal(await body.locator('[onerror]').count(), 0);
   assert.equal(await body.locator('a').getAttribute('href'), null, 'javascript: hrefs are stripped from the link');
   assert.equal(await body.locator('strong').innerText(), 'text');

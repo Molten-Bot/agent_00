@@ -190,8 +190,15 @@
     wanted = headingSlug(wanted);
     const root = anchor.closest(".markdown-body") || anchor.parentNode;
     const headings = root?.querySelectorAll?.("h1, h2, h3, h4, h5, h6") || [];
-    const heading = Array.from(headings)
-      .find((candidate) => headingSlug(candidate.textContent) === wanted);
+    const usedSlugs = new Set();
+    const heading = Array.from(headings).find((candidate) => {
+      const base = headingSlug(candidate.textContent);
+      let slug = base;
+      let suffix = 0;
+      while (usedSlugs.has(slug)) slug = `${base}-${++suffix}`;
+      usedSlugs.add(slug);
+      return slug === wanted;
+    });
     // A fragment can name something other than a heading on the source page.
     // Only intercept links this body can satisfy; otherwise its normal href is
     // still useful and must remain clickable.
@@ -209,7 +216,22 @@
     scrollToFragment(event);
   }
 
-  function copyAttributes(source, target, tag, baseURL, imageBaseURL) {
+  function proxiedImageURL(value, imageProxyURL) {
+    const raw = String(value || "").trim();
+    if (!raw || /^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("//")) return "";
+    try {
+      const proxy = new URL(imageProxyURL);
+      if (!global.location?.origin || proxy.origin !== global.location.origin) return "";
+      const repositoryPath = new URL(raw, "https://repository.invalid/").pathname.replace(/^\/+/, "");
+      if (!repositoryPath) return "";
+      proxy.searchParams.set("path", decodeURIComponent(repositoryPath));
+      return proxy.href;
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function copyAttributes(source, target, tag, baseURL, imageBaseURL, imageProxyURL) {
     let fragment = null;
     for (const name of ALLOWED_ELEMENTS.get(tag) || []) {
       if (!source.hasAttribute(name)) continue;
@@ -232,10 +254,11 @@
         continue;
       }
       if (tag === "IMG" && name === "src") {
-        // Relative repository images use a separate raw-content base. Resolving
-        // them against the GitHub page URL would return HTML, not image bytes.
-        const src = safeURL(value, SAFE_IMAGE_SCHEMES, imageBaseURL);
-        if (src && autoLoadableImage(src)) target.setAttribute("src", src);
+        // Relative repository images use authenticated content when available.
+        // Resolving them against the page URL would return HTML, not image bytes.
+        const proxied = proxiedImageURL(value, imageProxyURL);
+        const src = proxied || safeURL(value, SAFE_IMAGE_SCHEMES, imageBaseURL);
+        if (src && (proxied || autoLoadableImage(src))) target.setAttribute("src", src);
         continue;
       }
       if (name === "class") {
@@ -300,7 +323,7 @@
     if (text) target.appendChild(doc.createTextNode(text));
   }
 
-  function appendSanitized(target, node, doc, baseURL, imageBaseURL) {
+  function appendSanitized(target, node, doc, baseURL, imageBaseURL, imageProxyURL) {
     if (node.nodeType === 3) {
       target.appendChild(doc.createTextNode(node.nodeValue));
       return;
@@ -309,11 +332,11 @@
     const tag = node.tagName.toUpperCase();
     if (DROPPED_ELEMENTS.has(tag)) return;
     if (!ALLOWED_ELEMENTS.has(tag)) {
-      for (const child of Array.from(node.childNodes)) appendSanitized(target, child, doc, baseURL, imageBaseURL);
+      for (const child of Array.from(node.childNodes)) appendSanitized(target, child, doc, baseURL, imageBaseURL, imageProxyURL);
       return;
     }
     const clean = doc.createElement(tag.toLowerCase());
-    if (copyAttributes(node, clean, tag, baseURL, imageBaseURL) === false) return;
+    if (copyAttributes(node, clean, tag, baseURL, imageBaseURL, imageProxyURL) === false) return;
     if (tag === "IMG" && !clean.hasAttribute("src")) {
       appendUnloadedImage(target, node, doc);
       return;
@@ -321,20 +344,20 @@
     // The element joins the tree before its children are filled in, so a child
     // can tell what it is nested inside.
     target.appendChild(clean);
-    for (const child of Array.from(node.childNodes)) appendSanitized(clean, child, doc, baseURL, imageBaseURL);
+    for (const child of Array.from(node.childNodes)) appendSanitized(clean, child, doc, baseURL, imageBaseURL, imageProxyURL);
   }
 
-  // options.baseURL is the page the markdown was written on, while imageBaseURL
-  // is its raw repository branch. Relative links and images resolve against the
-  // corresponding base.
+  // options.baseURL is the page the markdown was written on. Relative images
+  // prefer the authenticated same-origin proxy and fall back to imageBaseURL.
   function sanitize(html, ownerDocument, options) {
     const doc = ownerDocument || global.document;
     const baseURL = safeURL(options?.baseURL, SAFE_BASE_SCHEMES);
     const imageBaseURL = safeURL(options?.imageBaseURL, SAFE_BASE_SCHEMES);
+    const imageProxyURL = safeURL(options?.imageProxyURL, SAFE_BASE_SCHEMES);
     const parsed = new DOMParser().parseFromString(String(html || ""), "text/html");
     const fragment = doc.createDocumentFragment();
     for (const child of Array.from(parsed.body.childNodes)) {
-      appendSanitized(fragment, child, doc, baseURL, imageBaseURL);
+      appendSanitized(fragment, child, doc, baseURL, imageBaseURL, imageProxyURL);
     }
     return fragment;
   }

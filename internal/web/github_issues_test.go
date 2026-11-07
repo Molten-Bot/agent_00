@@ -306,6 +306,56 @@ func TestGitHubIssueDetailIncludesComments(t *testing.T) {
 	}
 }
 
+func TestGitHubContentUsesAuthenticatedRawAPI(t *testing.T) {
+	t.Parallel()
+	var got execx.Command
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		got = cmd
+		return execx.Result{Stdout: "\x89PNG\r\n\x1a\nimage"}, nil
+	}), true)
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/api/github/content?repo=acme/repo&ref=feature%2Fimages&path=docs%2Fdiagram.png", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	wantArgs := []string{"api", "repos/acme/repo/contents/docs/diagram.png?ref=feature%2Fimages", "-H", "Accept: application/vnd.github.raw+json"}
+	if got.Name != "gh" || !reflect.DeepEqual(got.Args, wantArgs) {
+		t.Fatalf("command = %s %v, want gh %v", got.Name, got.Args, wantArgs)
+	}
+	if got := response.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("Cache-Control = %q, want private, no-store", got)
+	}
+	if got := response.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("Content-Type = %q, want image/png", got)
+	}
+}
+
+func TestGitHubContentRejectsUnsafeInputBeforeCallingGh(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+		calls++
+		return execx.Result{}, nil
+	}), true)
+	for _, requestPath := range []string{
+		"/api/github/content?repo=../repo&ref=main&path=shot.png",
+		"/api/github/content?repo=acme/repo&ref=&path=shot.png",
+		"/api/github/content?repo=acme/repo&ref=main&path=..%2Fsecret.png",
+		"/api/github/content?repo=acme/repo&ref=main&path=%2Fetc%2Fpasswd",
+	} {
+		response := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, requestPath, nil))
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("GET %s status = %d, want 400", requestPath, response.Code)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("gh calls = %d, want zero", calls)
+	}
+}
+
 func TestDecodePaginatedGitHubIssueCommentsAcceptsSlurpedAndEmptyResponses(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
