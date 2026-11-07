@@ -3,6 +3,7 @@ package execx
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,7 +24,12 @@ type Command struct {
 	InheritedFiles []*os.File
 	// Stdin is optional input piped to the command's stdin.
 	Stdin string
+	// MaxStdoutBytes limits captured stdout. Zero means unlimited.
+	MaxStdoutBytes int64
 }
+
+// ErrStdoutLimitExceeded reports that a command produced more stdout than allowed.
+var ErrStdoutLimitExceeded = errors.New("command stdout limit exceeded")
 
 // Result is subprocess output.
 type Result struct {
@@ -76,7 +82,7 @@ func runWithStream(ctx context.Context, cmd Command, handler StreamLineHandler) 
 		c.Stdin = strings.NewReader(cmd.Stdin)
 	}
 
-	var stdout bytes.Buffer
+	stdout := limitedBuffer{limit: cmd.MaxStdoutBytes}
 	var stderr bytes.Buffer
 	stdoutEmitter := lineEmitter{stream: "stdout", handler: handler}
 	stderrEmitter := lineEmitter{stream: "stderr", handler: handler}
@@ -111,6 +117,26 @@ func runWithStream(ctx context.Context, cmd Command, handler StreamLineHandler) 
 		return res, fmt.Errorf("run %s %v: %w", cmd.Name, cmd.Args, err)
 	}
 	return res, nil
+}
+
+type limitedBuffer struct {
+	bytes.Buffer
+	limit int64
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if b.limit <= 0 {
+		return b.Buffer.Write(p)
+	}
+	remaining := b.limit - int64(b.Len())
+	if remaining <= 0 {
+		return 0, ErrStdoutLimitExceeded
+	}
+	if int64(len(p)) <= remaining {
+		return b.Buffer.Write(p)
+	}
+	n, _ := b.Buffer.Write(p[:remaining])
+	return n, ErrStdoutLimitExceeded
 }
 
 func commandFailureDetail(res Result) string {

@@ -2,6 +2,7 @@ package execx
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -37,6 +38,22 @@ func TestOSRunnerRunPipesStdin(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if got, want := res.Stdout, "hello-from-stdin"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestOSRunnerRunLimitsCapturedStdout(t *testing.T) {
+	t.Parallel()
+
+	res, err := (OSRunner{}).Run(context.Background(), Command{
+		Name:           "sh",
+		Args:           []string{"-lc", "printf 123456"},
+		MaxStdoutBytes: 5,
+	})
+	if !errors.Is(err, ErrStdoutLimitExceeded) {
+		t.Fatalf("Run() error = %v, want ErrStdoutLimitExceeded", err)
+	}
+	if got, want := res.Stdout, "12345"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 }

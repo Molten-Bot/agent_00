@@ -52,6 +52,85 @@ func TestGitHubIssueListUsesGhFiltersAndDecodesIssues(t *testing.T) {
 	}
 }
 
+func TestGitHubContentAllowsSafeRasterFormats(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		body        string
+		contentType string
+	}{
+		{name: "BMP", body: "BM" + strings.Repeat("\x00", 510), contentType: "image/bmp"},
+		{name: "ICO", body: "\x00\x00\x01\x00" + strings.Repeat("\x00", 508), contentType: "image/x-icon"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := githubIssueTestServer(githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+				return execx.Result{Stdout: tc.body}, nil
+			}), true)
+			response := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+				"/api/github/content?repo=acme/repo&ref=main&path=image", nil))
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+			}
+			if got := response.Header().Get("Content-Type"); got != tc.contentType {
+				t.Fatalf("Content-Type = %q, want %q", got, tc.contentType)
+			}
+		})
+	}
+}
+
+func TestGitHubContentRejectsOversizedImage(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+		return execx.Result{Stdout: strings.Repeat("x", githubContentMaxBytes+1)}, nil
+	}), true)
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/api/github/content?repo=acme/repo&ref=main&path=image.png", nil))
+
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestGitHubContentLimitsConcurrentFetches(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{}, githubContentConcurrencyLimit)
+	release := make(chan struct{})
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+		started <- struct{}{}
+		<-release
+		return execx.Result{Stdout: "\x89PNG\r\n\x1a\nimage"}, nil
+	}), true)
+	handler := srv.Handler()
+	done := make(chan int, githubContentConcurrencyLimit)
+	for range githubContentConcurrencyLimit {
+		go func() {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+				"/api/github/content?repo=acme/repo&ref=main&path=image.png", nil))
+			done <- response.Code
+		}()
+	}
+	for range githubContentConcurrencyLimit {
+		<-started
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/api/github/content?repo=acme/repo&ref=main&path=extra.png", nil))
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429: %s", response.Code, response.Body.String())
+	}
+	close(release)
+	for range githubContentConcurrencyLimit {
+		if code := <-done; code != http.StatusOK {
+			t.Errorf("in-flight request status = %d, want 200", code)
+		}
+	}
+}
+
 func TestGitHubIssueListCanFilterAssignedToMe(t *testing.T) {
 	t.Parallel()
 	var got execx.Command
@@ -323,6 +402,9 @@ func TestGitHubContentUsesAuthenticatedRawAPI(t *testing.T) {
 	wantArgs := []string{"api", "repos/acme/repo/contents/docs/diagram.png?ref=feature%2Fimages", "-H", "Accept: application/vnd.github.raw+json"}
 	if got.Name != "gh" || !reflect.DeepEqual(got.Args, wantArgs) {
 		t.Fatalf("command = %s %v, want gh %v", got.Name, got.Args, wantArgs)
+	}
+	if got.MaxStdoutBytes != githubContentMaxBytes {
+		t.Fatalf("MaxStdoutBytes = %d, want %d", got.MaxStdoutBytes, githubContentMaxBytes)
 	}
 	if got := response.Header().Get("Cache-Control"); got != "private, no-store" {
 		t.Fatalf("Cache-Control = %q, want private, no-store", got)

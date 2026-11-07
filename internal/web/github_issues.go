@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,7 +16,11 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
 
-const githubIssueListLimit = 100
+const (
+	githubIssueListLimit          = 100
+	githubContentMaxBytes         = 10 << 20
+	githubContentConcurrencyLimit = 4
+)
 
 // GitHubIssue is the issue data shown by the local issue browser.
 type GitHubIssue struct {
@@ -213,7 +218,7 @@ func (s Server) handleGitHubIssueDetail(w http.ResponseWriter, r *http.Request, 
 // handleGitHubContent serves repository images through gh so private repository
 // content uses the operator's existing authentication without exposing it to the
 // browser or relying on an unauthenticated raw.githubusercontent.com request.
-func (s Server) handleGitHubContent(w http.ResponseWriter, r *http.Request) {
+func (s Server) handleGitHubContent(w http.ResponseWriter, r *http.Request, slots chan struct{}) {
 	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -241,20 +246,40 @@ func (s Server) handleGitHubContent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "path must name a repository file"})
 		return
 	}
+	select {
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
+	default:
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"ok": false, "error": "too many concurrent GitHub image requests"})
+		return
+	}
 	escapedParts := strings.Split(contentPath, "/")
 	for i := range escapedParts {
 		escapedParts[i] = url.PathEscape(escapedParts[i])
 	}
 	endpoint := fmt.Sprintf("repos/%s/contents/%s?ref=%s", repository, strings.Join(escapedParts, "/"), url.QueryEscape(ref))
 	result, err := s.GitHubIssueRunner.Run(r.Context(), execx.Command{
-		Name: "gh",
-		Args: []string{"api", endpoint, "-H", "Accept: application/vnd.github.raw+json"},
+		Name:           "gh",
+		Args:           []string{"api", endpoint, "-H", "Accept: application/vnd.github.raw+json"},
+		MaxStdoutBytes: githubContentMaxBytes,
 	})
 	if err != nil {
+		if errors.Is(err, execx.ErrStdoutLimitExceeded) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"ok": false, "error": "repository image exceeds size limit"})
+			return
+		}
 		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("load GitHub repository content: %v", err)})
 		return
 	}
-	contentType := http.DetectContentType([]byte(result.Stdout))
+	if len(result.Stdout) > githubContentMaxBytes {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"ok": false, "error": "repository image exceeds size limit"})
+		return
+	}
+	contentSample := result.Stdout
+	if len(contentSample) > 512 {
+		contentSample = contentSample[:512]
+	}
+	contentType := http.DetectContentType([]byte(contentSample))
 	if !safeGitHubImageContentType(contentType) {
 		writeJSON(w, http.StatusUnsupportedMediaType, map[string]any{"ok": false, "error": "repository content must be a supported raster image"})
 		return
@@ -268,7 +293,7 @@ func (s Server) handleGitHubContent(w http.ResponseWriter, r *http.Request) {
 
 func safeGitHubImageContentType(value string) bool {
 	switch value {
-	case "image/gif", "image/jpeg", "image/png", "image/webp":
+	case "image/bmp", "image/gif", "image/jpeg", "image/png", "image/vnd.microsoft.icon", "image/webp", "image/x-icon":
 		return true
 	default:
 		return false
