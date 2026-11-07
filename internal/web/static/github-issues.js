@@ -214,28 +214,15 @@
 
   // Pass a label when the avatar is the only mention of the person; without one
   // the login is already written next to it and the initials are decorative.
-  // A native title tooltip never opens on touch, so the label rides on
-  // data-label and the chip takes focus: style.css reveals it on hover, on
-  // keyboard focus, and on the focus a tap leaves behind.
   function addAvatar(parent, login, label) {
     const name = String(login || "?").trim();
     const initials = name.split(/[-_\s]+/).filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join("") || "?";
-    const avatar = addText(parent, "span", "github-issue-avatar", "");
+    const avatar = addText(parent, label ? "button" : "span", "github-issue-avatar", "");
     addText(avatar, "span", "github-issue-avatar-initials", initials);
     if (label) {
       addAvatarImage(avatar, name);
-      avatar.setAttribute("role", "img");
+      avatar.type = "button";
       avatar.setAttribute("aria-label", label);
-      avatar.dataset.label = label;
-      // The name only exists while the chip is hovered or focused, so WCAG
-      // 1.4.13 requires it to be reachable by keyboard and dismissable without
-      // moving the pointer: the tab stop supplies the first, Escape the second.
-      avatar.tabIndex = 0;
-      avatar.addEventListener("keydown", (event) => {
-        // Not stopped from propagating: Escape also closes whatever the page
-        // has open around the chip, and a focused chip must not hold that shut.
-        if (event.key === "Escape") avatar.blur();
-      });
     } else {
       avatar.setAttribute("aria-hidden", "true");
     }
@@ -272,11 +259,41 @@
       addText(parent, "span", "github-issue-assignee-empty", "Unassigned");
       return;
     }
+    // Names appear in normal flow, below even a wrapped row of icons. This
+    // works on touch and avoids a floating tooltip obscuring issue content.
+    const label = document.createElement("span");
+    label.className = "github-issue-assignee-label";
+    label.hidden = true;
+    let activeAvatar = null;
+    const hideLabel = () => {
+      if (activeAvatar) activeAvatar.setAttribute("aria-expanded", "false");
+      activeAvatar = null;
+      label.hidden = true;
+      label.textContent = "";
+    };
+    const showLabel = (avatar, text) => {
+      if (activeAvatar && activeAvatar !== avatar) activeAvatar.setAttribute("aria-expanded", "false");
+      activeAvatar = avatar;
+      avatar.setAttribute("aria-expanded", "true");
+      label.textContent = text;
+      label.hidden = false;
+    };
     for (const person of people) {
       const login = String(person.login);
       const name = String(person.name || "").trim();
-      addAvatar(parent, login, name ? `${login} (${name})` : login);
+      const text = name ? `${login} (${name})` : login;
+      const avatar = addAvatar(parent, login, text);
+      avatar.setAttribute("aria-expanded", "false");
+      avatar.addEventListener("focus", () => showLabel(avatar, text));
+      avatar.addEventListener("click", () => showLabel(avatar, text));
+      avatar.addEventListener("blur", hideLabel);
+      avatar.addEventListener("keydown", (event) => {
+        // Keep focus at its current tab position. Let Escape bubble so page-
+        // level menus or dialogs can respond to the same key.
+        if (event.key === "Escape") hideLabel();
+      });
     }
+    parent.appendChild(label);
   }
 
   function buildTaskPrompt(issue) {

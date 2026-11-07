@@ -9317,8 +9317,6 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 }
 
 .github-issue-assignees {
-  /* The anchor for the revealed names below, not just a row of chips. */
-  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -9330,81 +9328,27 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   flex: 0 0 22px;
   width: 22px;
   height: 22px;
+  padding: 0;
+  border: 0;
   font-size: .55rem;
-  cursor: default;
+  font-family: inherit;
+  cursor: pointer;
 }
 
-/* Initials alone do not name the assignee. A title tooltip never opens on
-   touch, so the name is drawn here and revealed on hover, on keyboard focus,
-   and on the focus a tap leaves on the chip. */
-.github-issue-assignees .github-issue-avatar::after {
-  content: attr(data-label);
-  position: absolute;
-  /* Anchored to the row rather than to the chip that owns it. The detail pane
-     clips horizontally (overflow: hidden), so a name hanging off the third
-     chip, or off any chip once the column is dragged narrow, would be cut in
-     half. The row always starts at the pane's left padding, so a name that
-     fits the pane fits from here whichever chip is showing it. Flush under the
-     row, because a gap is a place the pointer can lose the chip. */
-  top: 100%;
-  left: 0;
-  z-index: 20;
-  padding: 2px 8px;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--glass-icon-shadow);
-  color: var(--foreground);
-  background: var(--glass-bg);
-  backdrop-filter: blur(20px);
+.github-issue-assignees .github-issue-avatar:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Icon buttons remain compact; activating or focusing one reveals its name
+   below the complete icon row. In-flow text cannot clip when icons wrap and
+   never leaves an overlay intercepting the issue beneath it. */
+.github-issue-assignee-label {
+  flex: 1 0 100%;
+  color: var(--text-soft);
   font-size: var(--text-label);
   font-weight: var(--font-weight-medium);
-  /* Sized to the name, but capped well inside the detail pane's narrowest
-     layout (320px minus its 22px padding) so a long login wraps instead of
-     running off the right edge on a phone. */
-  width: max-content;
-  max-width: 14rem;
-  /* Never narrower than the row, because the row is anchoring it: a short name
-     left at the row's left edge would sit nowhere near the chip that opened
-     it, and a pointer moving down off that chip would land on nothing and lose
-     the name. Spanning the row puts the name directly beneath every chip in
-     it, so moving straight down always reaches it, which is what WCAG 1.4.13
-     hoverable asks for. The row sits inside the pane by construction, so
-     widening to it clips no more than the cap above does. */
-  min-width: 100%;
   overflow-wrap: anywhere;
-  /* A focused chip holds its name open until the focus moves, and on touch
-     that outlives the tap. Inert by default, the strip cannot swallow the taps
-     and clicks aimed at the description underneath it. */
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity .2s ease;
-}
-
-/* :focus, not :focus-visible: a tap focuses the chip without matching
-   :focus-visible, and touch is the case the name has to survive. */
-.github-issue-assignees .github-issue-avatar:hover::after,
-.github-issue-assignees .github-issue-avatar:focus::after {
-  opacity: 1;
-}
-
-/* Every chip's name shares the row's anchor, so a chip left focused by an
-   earlier tap or tab would stack its name under the one being hovered now.
-   The pointer settles it: while it is on a chip, that chip's name is the only
-   one drawn. Browsers without :has drop this rule and keep the overlap. */
-.github-issue-assignees:has(.github-issue-avatar:hover) .github-issue-avatar:focus:not(:hover)::after {
-  opacity: 0;
-}
-
-/* Only a hovered name takes the pointer, so moving onto the name itself keeps
-   the chip hovered and the name on screen, as WCAG 1.4.13 hoverable requires.
-   That is a real pointer's problem only, and the media query is what keeps it
-   from becoming a touch user's: a tap leaves the chip both focused and
-   stickily hovered, so an unguarded rule would park a live strip over the
-   issue for as long as the name stayed up. */
-@media (hover: hover) and (pointer: fine) {
-  .github-issue-assignees .github-issue-avatar:hover::after {
-    pointer-events: auto;
-  }
 }
 
 .github-issue-assignee-empty {
