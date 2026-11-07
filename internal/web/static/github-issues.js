@@ -139,6 +139,47 @@
     return node;
   }
 
+  // Relative links belong to the repository, while relative images use
+  // authenticated repository content from the default branch.
+  function repositoryMarkdownOptions(repo) {
+    const repositoryURL = String(repo?.html_url || "").trim()
+      || (repo?.full_name ? `https://github.com/${repo.full_name}` : "");
+    const fullName = String(repo?.full_name || "").trim();
+    const branch = String(repo?.default_branch || "").trim();
+    const parts = fullName.split("/");
+    const rawPath = parts.length === 2 && parts.every(Boolean) && branch
+      ? [...parts, ...branch.split("/")].map(encodeURIComponent).join("/")
+      : "";
+    const imageProxy = fullName && branch ? new URL("/api/github/content", window.location.origin) : null;
+    if (imageProxy) {
+      imageProxy.searchParams.set("repo", fullName);
+      imageProxy.searchParams.set("ref", branch);
+    }
+    return {
+      baseURL: repositoryURL ? `${repositoryURL.replace(/\/+$/, "")}/` : "",
+      imageBaseURL: rawPath ? `https://raw.githubusercontent.com/${rawPath}/` : "",
+      imageProxyURL: imageProxy?.href || "",
+    };
+  }
+
+  // GitHub stores issue and comment bodies as markdown, so the detail pane renders
+  // them through the shared sanitizing renderer instead of showing the raw source.
+  function addMarkdown(parent, className, text, placeholder, options) {
+    const node = addText(parent, "div", className, "");
+    const source = String(text || "");
+    if (!source.trim()) {
+      node.textContent = placeholder;
+      return node;
+    }
+    if (window.MarkdownView?.render) {
+      void window.MarkdownView.render(node, source, options);
+    } else {
+      node.classList.add("markdown-body-pending");
+      node.textContent = source;
+    }
+    return node;
+  }
+
   function setStartButtonContent(button, label) {
     const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     icon.classList.add("prompt-action-icon");
@@ -330,7 +371,7 @@
     addAvatar(author, issue.author?.login);
     addText(author, "strong", "", issue.author?.login || "Unknown");
     addText(author, "span", "", `opened this issue ${formatRelativeTime(issue.createdAt)}`);
-    addText(detailBody, "pre", "github-issue-body", issue.body || "No description provided.");
+    addMarkdown(detailBody, "github-issue-body", issue.body, "No description provided.", repositoryMarkdownOptions(repo));
     const metadata = document.createElement("dl");
     metadata.className = "github-issue-metadata";
     for (const [label, value] of [
@@ -356,7 +397,7 @@
       addText(commentMeta, "strong", "", comment.author?.login || "Unknown");
       addText(commentMeta, "span", "", "·");
       addText(commentMeta, "span", "", formatRelativeTime(comment.createdAt));
-      addText(card, "pre", "github-issue-comment-body", comment.body || "");
+      addMarkdown(card, "github-issue-comment-body", comment.body, "No comment text.", repositoryMarkdownOptions(repo));
       comments.appendChild(card);
     }
     detailBody.appendChild(comments);

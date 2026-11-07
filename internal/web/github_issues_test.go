@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
@@ -48,6 +49,85 @@ func TestGitHubIssueListUsesGhFiltersAndDecodesIssues(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `"title":"Add issue browser"`) || !strings.Contains(response.Body.String(), `"login":"octocat"`) {
 		t.Fatalf("response did not include issue data: %s", response.Body.String())
+	}
+}
+
+func TestGitHubContentAllowsSafeRasterFormats(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		body        string
+		contentType string
+	}{
+		{name: "BMP", body: "BM" + strings.Repeat("\x00", 510), contentType: "image/bmp"},
+		{name: "ICO", body: "\x00\x00\x01\x00" + strings.Repeat("\x00", 508), contentType: "image/x-icon"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := githubIssueTestServer(githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+				return execx.Result{Stdout: tc.body}, nil
+			}), true)
+			response := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+				"/api/github/content?repo=acme/repo&ref=main&path=image", nil))
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+			}
+			if got := response.Header().Get("Content-Type"); got != tc.contentType {
+				t.Fatalf("Content-Type = %q, want %q", got, tc.contentType)
+			}
+		})
+	}
+}
+
+func TestGitHubContentRejectsOversizedImage(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+		return execx.Result{Stdout: strings.Repeat("x", githubContentMaxBytes+1)}, nil
+	}), true)
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/api/github/content?repo=acme/repo&ref=main&path=image.png", nil))
+
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestGitHubContentLimitsConcurrentFetches(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{}, githubContentConcurrencyLimit)
+	release := make(chan struct{})
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+		started <- struct{}{}
+		<-release
+		return execx.Result{Stdout: "\x89PNG\r\n\x1a\nimage"}, nil
+	}), true)
+	handler := srv.Handler()
+	done := make(chan int, githubContentConcurrencyLimit)
+	for range githubContentConcurrencyLimit {
+		go func() {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+				"/api/github/content?repo=acme/repo&ref=main&path=image.png", nil))
+			done <- response.Code
+		}()
+	}
+	for range githubContentConcurrencyLimit {
+		<-started
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/api/github/content?repo=acme/repo&ref=main&path=extra.png", nil))
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429: %s", response.Code, response.Body.String())
+	}
+	close(release)
+	for range githubContentConcurrencyLimit {
+		if code := <-done; code != http.StatusOK {
+			t.Errorf("in-flight request status = %d, want 200", code)
+		}
 	}
 }
 
@@ -305,6 +385,86 @@ func TestGitHubIssueDetailIncludesComments(t *testing.T) {
 	}
 }
 
+func TestGitHubContentUsesAuthenticatedRawAPI(t *testing.T) {
+	t.Parallel()
+	var got execx.Command
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		got = cmd
+		return execx.Result{Stdout: "\x89PNG\r\n\x1a\nimage"}, nil
+	}), true)
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/api/github/content?repo=acme/repo&ref=feature%2Fimages&path=docs%2Fdiagram.png", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	wantArgs := []string{"api", "repos/acme/repo/contents/docs/diagram.png?ref=feature%2Fimages", "-H", "Accept: application/vnd.github.raw+json"}
+	if got.Name != "gh" || !reflect.DeepEqual(got.Args, wantArgs) {
+		t.Fatalf("command = %s %v, want gh %v", got.Name, got.Args, wantArgs)
+	}
+	if got.MaxStdoutBytes != githubContentMaxBytes {
+		t.Fatalf("MaxStdoutBytes = %d, want %d", got.MaxStdoutBytes, githubContentMaxBytes)
+	}
+	if got := response.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("Cache-Control = %q, want private, no-store", got)
+	}
+	if got := response.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("Content-Type = %q, want image/png", got)
+	}
+}
+
+func TestGitHubContentRejectsActiveRepositoryContent(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "HTML", body: "<!doctype html><script>alert(1)</script>"},
+		{name: "SVG", body: `<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := githubIssueTestServer(githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+				return execx.Result{Stdout: tc.body}, nil
+			}), true)
+			response := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+				"/api/github/content?repo=acme/repo&ref=main&path=active", nil))
+
+			if response.Code != http.StatusUnsupportedMediaType {
+				t.Fatalf("status = %d, want 415: %s", response.Code, response.Body.String())
+			}
+			if got := response.Header().Get("Content-Type"); got != "application/json" {
+				t.Fatalf("Content-Type = %q, want application/json", got)
+			}
+		})
+	}
+}
+
+func TestGitHubContentRejectsUnsafeInputBeforeCallingGh(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+		calls++
+		return execx.Result{}, nil
+	}), true)
+	for _, requestPath := range []string{
+		"/api/github/content?repo=../repo&ref=main&path=shot.png",
+		"/api/github/content?repo=acme/repo&ref=&path=shot.png",
+		"/api/github/content?repo=acme/repo&ref=main&path=..%2Fsecret.png",
+		"/api/github/content?repo=acme/repo&ref=main&path=%2Fetc%2Fpasswd",
+	} {
+		response := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, requestPath, nil))
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("GET %s status = %d, want 400", requestPath, response.Code)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("gh calls = %d, want zero", calls)
+	}
+}
+
 func TestDecodePaginatedGitHubIssueCommentsAcceptsSlurpedAndEmptyResponses(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -509,4 +669,84 @@ func TestGitHubIssuesSettingRoundTripsThroughSettingsAPI(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"github_issues_enabled":true`) || !strings.Contains(response.Body.String(), `"github_issue_link_mode":"close"`) || !strings.Contains(response.Body.String(), `"github_issue_auto_start_assigned":true`) || !strings.Contains(response.Body.String(), `"assign_creator":false`) {
 		t.Fatalf("GET settings response = %d %s", response.Code, response.Body.String())
 	}
+}
+
+// TestGitHubIssueBodiesRenderThroughVendoredMarked covers what only the server
+// decides: the vendored marked bundle, its license, and the sanitizing renderer
+// are published, and the page pulls in the renderer without putting marked on
+// the critical path. What the renderer then produces is behavior, and
+// tests/github_issue_markdown.cjs drives it in a real browser.
+func TestGitHubIssueBodiesRenderThroughVendoredMarked(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(nil, true)
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{path: "/static/marked.umd.js", want: "marked v"},
+		{path: "/static/marked-LICENSE.txt", want: "Permission is hereby granted"},
+		{path: "/static/markdown.js", want: "MarkdownView"},
+	} {
+		response := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), tc.want) {
+			t.Fatalf("%s response = %d, missing %q", tc.path, response.Code, tc.want)
+		}
+	}
+
+	page := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/", nil))
+	if !strings.Contains(page.Body.String(), `<script src="/static/markdown.js"></script>`) {
+		t.Error("page should load the markdown renderer alongside the issue browser")
+	}
+	// marked itself stays off the critical path; markdown.js fetches it the
+	// first time an issue body is rendered.
+	if strings.Contains(page.Body.String(), `<script src="/static/marked.umd.js"`) {
+		t.Error("marked should load on demand instead of blocking the index page")
+	}
+}
+
+// TestTaskPromptModalUsesSharedMarkdownRenderer keeps the task prompt modal on
+// the same sanitizing renderer as the issue pane. The modal used to build HTML
+// with its own regex pass, which parsed a different markdown subset and applied
+// different escaping, so the helpers it used must stay gone. The rendering the
+// modal gained instead is checked in tests/task_prompt_markdown.cjs.
+func TestTaskPromptModalUsesSharedMarkdownRenderer(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(nil, true)
+	page := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/", nil))
+	body := page.Body.String()
+	for _, gone := range []string{"renderTaskPromptMarkdown", "renderInlineMarkdown"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("hand-rolled markdown helper %s should be gone", gone)
+		}
+	}
+}
+
+// TestGitHubIssueMarkdownRendersInBrowser drives the real panel in Chromium.
+// The renderer only exists in static/markdown.js, so this is the only coverage
+// for the rendered output and for the sanitizing that keeps issue text from
+// executing in the operator's browser.
+func TestGitHubIssueMarkdownRendersInBrowser(t *testing.T) {
+	requireBrowserTooling(t, "issue markdown rendering check")
+
+	srv := NewServer("", NewBroker())
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	runBrowserSuite(t, ts.URL, 60*time.Second, "issue markdown rendering checks", "tests/github_issue_markdown.cjs")
+}
+
+// TestTaskPromptModalMarkdownRendersInBrowser drives the task prompt modal in
+// Chromium. It covers the element types the modal only gained once it moved to
+// the shared renderer: tables, blockquotes, task lists, and safe links.
+func TestTaskPromptModalMarkdownRendersInBrowser(t *testing.T) {
+	requireBrowserTooling(t, "task prompt markdown rendering check")
+
+	srv := NewServer("", NewBroker())
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	runBrowserSuite(t, ts.URL, 60*time.Second, "task prompt markdown rendering checks", "tests/task_prompt_markdown.cjs")
 }

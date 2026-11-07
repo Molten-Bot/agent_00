@@ -3,9 +3,12 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,7 +16,11 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
 
-const githubIssueListLimit = 100
+const (
+	githubIssueListLimit          = 100
+	githubContentMaxBytes         = 10 << 20
+	githubContentConcurrencyLimit = 4
+)
 
 // GitHubIssue is the issue data shown by the local issue browser.
 type GitHubIssue struct {
@@ -206,6 +213,103 @@ func (s Server) handleGitHubIssueDetail(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "issue": issue})
+}
+
+// handleGitHubContent serves repository images through gh so private repository
+// content uses the operator's existing authentication without exposing it to the
+// browser or relying on an unauthenticated raw.githubusercontent.com request.
+func (s Server) handleGitHubContent(w http.ResponseWriter, r *http.Request, slots chan struct{}) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+	enabled, err := s.githubIssuesEnabled(r.Context())
+	if err != nil || !enabled {
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "GitHub Issues integration is turned off in Settings"})
+		return
+	}
+	if s.GitHubIssueRunner == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "GitHub issue runner is unavailable"})
+		return
+	}
+	repository, ok := validGitHubRepository(r.URL.Query().Get("repo"))
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "repo must be OWNER/REPO"})
+		return
+	}
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	contentPath, ok := validGitHubContentPath(r.URL.Query().Get("path"))
+	if ref == "" || len(ref) > 255 || strings.ContainsAny(ref, "\x00\r\n") {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "ref must be a valid branch or commit name"})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "path must name a repository file"})
+		return
+	}
+	select {
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
+	default:
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"ok": false, "error": "too many concurrent GitHub image requests"})
+		return
+	}
+	escapedParts := strings.Split(contentPath, "/")
+	for i := range escapedParts {
+		escapedParts[i] = url.PathEscape(escapedParts[i])
+	}
+	endpoint := fmt.Sprintf("repos/%s/contents/%s?ref=%s", repository, strings.Join(escapedParts, "/"), url.QueryEscape(ref))
+	result, err := s.GitHubIssueRunner.Run(r.Context(), execx.Command{
+		Name:           "gh",
+		Args:           []string{"api", endpoint, "-H", "Accept: application/vnd.github.raw+json"},
+		MaxStdoutBytes: githubContentMaxBytes,
+	})
+	if err != nil {
+		if errors.Is(err, execx.ErrStdoutLimitExceeded) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"ok": false, "error": "repository image exceeds size limit"})
+			return
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("load GitHub repository content: %v", err)})
+		return
+	}
+	if len(result.Stdout) > githubContentMaxBytes {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"ok": false, "error": "repository image exceeds size limit"})
+		return
+	}
+	contentSample := result.Stdout
+	if len(contentSample) > 512 {
+		contentSample = contentSample[:512]
+	}
+	contentType := http.DetectContentType([]byte(contentSample))
+	if !safeGitHubImageContentType(contentType) {
+		writeJSON(w, http.StatusUnsupportedMediaType, map[string]any{"ok": false, "error": "repository content must be a supported raster image"})
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, result.Stdout)
+}
+
+func safeGitHubImageContentType(value string) bool {
+	switch value {
+	case "image/bmp", "image/gif", "image/jpeg", "image/png", "image/vnd.microsoft.icon", "image/webp", "image/x-icon":
+		return true
+	default:
+		return false
+	}
+}
+
+func validGitHubContentPath(value string) (string, bool) {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	if value == "" || len(value) > 4096 || strings.ContainsAny(value, "\x00\r\n") || strings.HasPrefix(value, "/") {
+		return "", false
+	}
+	cleaned := path.Clean(value)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", false
+	}
+	return cleaned, true
 }
 
 func (s Server) fetchGitHubIssue(ctx context.Context, repository string, number int) (GitHubIssue, error) {

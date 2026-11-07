@@ -284,6 +284,7 @@ func notifyServerReady(ready chan<- error, err error) {
 // Handler returns the HTTP handler for the monitor UI/API.
 func (s Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	githubContentSlots := make(chan struct{}, githubContentConcurrencyLimit)
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		s.logf("localruntime.ui status=warn event=load_static_files err=%q", err)
@@ -309,6 +310,9 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/github/repos", s.handleGitHubRepos)
 	mux.HandleFunc("/api/github/issues", s.handleGitHubIssues)
 	mux.HandleFunc("/api/github/issues/", s.handleGitHubIssues)
+	mux.HandleFunc("/api/github/content", func(w http.ResponseWriter, r *http.Request) {
+		s.handleGitHubContent(w, r, githubContentSlots)
+	})
 	mux.HandleFunc("/api/github/labels", s.handleGitHubLabels)
 	mux.HandleFunc("/api/review-settings", s.handleReviewSettings)
 	mux.HandleFunc("/api/commit-signing", s.handleCommitSigning)
