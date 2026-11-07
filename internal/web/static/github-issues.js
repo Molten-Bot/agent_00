@@ -158,10 +158,6 @@
     button.append(icon, text);
   }
 
-  function formatPeople(people) {
-    return (Array.isArray(people) ? people : []).map((person) => person?.login).filter(Boolean).join(", ") || "None";
-  }
-
   function formatLabels(labels) {
     return (Array.isArray(labels) ? labels : []).map((label) => label?.name).filter(Boolean).join(", ") || "None";
   }
@@ -172,6 +168,8 @@
       : `Issue and comments included as context · PR will reference #${issue.number}`;
   }
 
+  // GitHub returns UTC timestamps; this resolves them against the browser's
+  // clock and timezone so every time reads in the viewer's terms.
   function formatRelativeTime(value) {
     const timestamp = Date.parse(String(value || ""));
     if (!Number.isFinite(timestamp)) return String(value || "Unknown");
@@ -186,6 +184,27 @@
     return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(timestamp);
   }
 
+  // The viewer's own clock time for an instant, down to the minute, in their
+  // locale and timezone.
+  function formatExactTime(timestamp) {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(timestamp);
+  }
+
+  // Renders a timestamp as a <time> carrying the machine-readable instant.
+  // Header, list, and comments all read relative, which is the form the issue
+  // view already used and what a reader scanning it is after; the clock time
+  // behind it stays in the tooltip and the datetime attribute.
+  function addTimestamp(parent, value) {
+    const timestamp = Date.parse(String(value || ""));
+    // A <time> without a machine-readable datetime is invalid markup, so an
+    // unparsable value degrades to a plain span rather than lying about itself.
+    if (!Number.isFinite(timestamp)) return addText(parent, "span", "", formatRelativeTime(value));
+    const node = addText(parent, "time", "", formatRelativeTime(value));
+    node.dateTime = new Date(timestamp).toISOString();
+    node.title = formatExactTime(timestamp);
+    return node;
+  }
+
   function addIssueLabels(parent, labels) {
     for (const label of Array.isArray(labels) ? labels : []) {
       const name = String(label?.name || "").trim();
@@ -193,11 +212,96 @@
     }
   }
 
-  function addAvatar(parent, login) {
+  // Pass a label when the avatar is the only mention of the person; without one
+  // the login is already written next to it and the initials are decorative.
+  function addAvatar(parent, login, label) {
     const name = String(login || "?").trim();
     const initials = name.split(/[-_\s]+/).filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join("") || "?";
-    const avatar = addText(parent, "span", "github-issue-avatar", initials);
-    avatar.setAttribute("aria-hidden", "true");
+    const avatar = addText(parent, label ? "button" : "span", "github-issue-avatar", "");
+    addText(avatar, "span", "github-issue-avatar-initials", initials);
+    if (label) {
+      addAvatarImage(avatar, name);
+      avatar.type = "button";
+      avatar.setAttribute("aria-label", label);
+    } else {
+      avatar.setAttribute("aria-hidden", "true");
+    }
+    return avatar;
+  }
+
+  // GitHub publishes every account's picture at github.com/<login>.png, so an
+  // assignee chip can show the real icon even though the issue JSON carries no
+  // avatar URL. It is drawn over the initials rather than instead of them: two
+  // people whose logins start alike are indistinguishable as initials, and the
+  // picture is what tells them apart, so the initials are only what is left
+  // when the request fails, the browser is offline, or the account has no
+  // picture. Only the assignee chips fetch one, because they are the only
+  // place a face is the whole identification; the author byline and the
+  // comments write the login out beside their initials, so a request to
+  // github.com there would buy nothing and tell it who is reading.
+  function addAvatarImage(avatar, login) {
+    if (!login || login === "?") return;
+    const image = document.createElement("img");
+    image.className = "github-issue-avatar-image";
+    // Decorative: the chip itself carries the name for assistive tech.
+    image.alt = "";
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.referrerPolicy = "no-referrer";
+    image.src = `https://github.com/${encodeURIComponent(login)}.png?size=80`;
+    image.addEventListener("error", () => image.remove(), { once: true });
+    avatar.appendChild(image);
+  }
+
+  function addAssignees(parent, assignees) {
+    const people = (Array.isArray(assignees) ? assignees : []).filter((person) => person?.login);
+    if (!people.length) {
+      addText(parent, "span", "github-issue-assignee-empty", "Unassigned");
+      return;
+    }
+    // Names appear in normal flow, below even a wrapped row of icons. This
+    // works on touch and avoids a floating tooltip obscuring issue content.
+    const label = document.createElement("span");
+    label.className = "github-issue-assignee-label";
+    label.hidden = true;
+    let activeAvatar = null;
+    const hideLabel = () => {
+      if (activeAvatar) activeAvatar.setAttribute("aria-expanded", "false");
+      activeAvatar = null;
+      label.hidden = true;
+      label.textContent = "";
+    };
+    const showLabel = (avatar, text) => {
+      if (activeAvatar && activeAvatar !== avatar) activeAvatar.setAttribute("aria-expanded", "false");
+      activeAvatar = avatar;
+      avatar.setAttribute("aria-expanded", "true");
+      label.textContent = text;
+      label.hidden = false;
+    };
+    parent.addEventListener("mouseleave", () => {
+      if (activeAvatar !== document.activeElement) hideLabel();
+    });
+    for (const person of people) {
+      const login = String(person.login);
+      const name = String(person.name || "").trim();
+      const text = name ? `${login} (${name})` : login;
+      const avatar = addAvatar(parent, login, text);
+      avatar.setAttribute("aria-expanded", "false");
+      avatar.addEventListener("mouseenter", () => {
+        if (activeAvatar !== document.activeElement) showLabel(avatar, text);
+      });
+      avatar.addEventListener("focus", () => showLabel(avatar, text));
+      avatar.addEventListener("click", () => showLabel(avatar, text));
+      avatar.addEventListener("blur", () => {
+        if (activeAvatar === avatar && !avatar.matches(":hover")) hideLabel();
+      });
+      avatar.addEventListener("keydown", (event) => {
+        // Keep focus at its current tab position. Let Escape bubble so page-
+        // level menus or dialogs can respond to the same key.
+        if (event.key === "Escape") hideLabel();
+      });
+    }
+    parent.appendChild(label);
   }
 
   function buildTaskPrompt(issue) {
@@ -290,7 +394,7 @@
       const meta = addText(button, "span", "github-issue-list-meta", "");
       addText(meta, "span", "", `#${issue.number}`);
       addText(meta, "span", "", "·");
-      addText(meta, "span", "", `updated ${formatRelativeTime(issue.updatedAt)}`);
+      addTimestamp(addText(meta, "span", "", "updated "), issue.updatedAt);
       addIssueLabels(meta, issue.labels);
       button.addEventListener("click", () => void loadIssue(issue.number));
       item.appendChild(button);
@@ -322,6 +426,21 @@
       link.textContent = "Open on GitHub";
       detailHeader.appendChild(link);
     }
+    // Assignees and timestamps answer "who owns this and is it still moving",
+    // so they close the header instead of waiting below the description.
+    const metadata = document.createElement("dl");
+    metadata.className = "github-issue-metadata";
+    const assigneeGroup = document.createElement("div");
+    addText(assigneeGroup, "dt", "", "Assignees");
+    addAssignees(addText(assigneeGroup, "dd", "github-issue-assignees", ""), issue.assignees);
+    metadata.appendChild(assigneeGroup);
+    for (const [label, value] of [["Created", issue.createdAt], ["Updated", issue.updatedAt]]) {
+      const group = document.createElement("div");
+      addText(group, "dt", "", label);
+      addTimestamp(addText(group, "dd", "", ""), value);
+      metadata.appendChild(group);
+    }
+    detailHeader.appendChild(metadata);
     detail.appendChild(detailHeader);
 
     const detailBody = document.createElement("div");
@@ -329,21 +448,9 @@
     const author = addText(detailBody, "div", "github-issue-author", "");
     addAvatar(author, issue.author?.login);
     addText(author, "strong", "", issue.author?.login || "Unknown");
-    addText(author, "span", "", `opened this issue ${formatRelativeTime(issue.createdAt)}`);
+    // The header already carries Created, so the byline does not repeat it.
+    addText(author, "span", "", "opened this issue");
     addText(detailBody, "pre", "github-issue-body", issue.body || "No description provided.");
-    const metadata = document.createElement("dl");
-    metadata.className = "github-issue-metadata";
-    for (const [label, value] of [
-      ["Assignees", formatPeople(issue.assignees)],
-      ["Created", formatRelativeTime(issue.createdAt)],
-      ["Updated", formatRelativeTime(issue.updatedAt)],
-    ]) {
-      const group = document.createElement("div");
-      addText(group, "dt", "", label);
-      addText(group, "dd", "", value);
-      metadata.appendChild(group);
-    }
-    detailBody.appendChild(metadata);
     addText(detailBody, "h3", "github-issue-comments-heading", `Comments (${(issue.comments || []).length})`);
     const comments = document.createElement("div");
     comments.className = "github-issue-comments";
@@ -355,7 +462,7 @@
       addAvatar(commentMeta, comment.author?.login);
       addText(commentMeta, "strong", "", comment.author?.login || "Unknown");
       addText(commentMeta, "span", "", "·");
-      addText(commentMeta, "span", "", formatRelativeTime(comment.createdAt));
+      addTimestamp(commentMeta, comment.createdAt);
       addText(card, "pre", "github-issue-comment-body", comment.body || "");
       comments.appendChild(card);
     }
