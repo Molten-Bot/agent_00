@@ -145,6 +145,10 @@
     "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "UL",
   ]);
   const markdownDangerousTags = new Set(["BUTTON", "EMBED", "FORM", "IFRAME", "LINK", "META", "OBJECT", "SCRIPT", "SELECT", "STYLE", "TEXTAREA"]);
+  const markdownImageHosts = new Set([
+    "avatars.githubusercontent.com", "camo.githubusercontent.com", "github.com", "private-user-images.githubusercontent.com",
+    "raw.githubusercontent.com", "user-images.githubusercontent.com",
+  ]);
 
   function safeMarkdownURL(value, baseURL, protocols) {
     try {
@@ -153,6 +157,12 @@
     } catch (_error) {
       return "";
     }
+  }
+
+  function safeMarkdownImageURL(value, baseURL) {
+    const src = safeMarkdownURL(value, baseURL, new Set(["https:"]));
+    if (!src) return "";
+    return markdownImageHosts.has(new URL(src).hostname.toLowerCase()) ? src : "";
   }
 
   // Marked deliberately leaves sanitizing to its caller. Issue bodies are
@@ -178,7 +188,7 @@
         }
         if (attributes.title) node.title = attributes.title;
       } else if (node.tagName === "IMG") {
-        const src = safeMarkdownURL(attributes.src, baseURL, new Set(["http:", "https:"]));
+        const src = safeMarkdownImageURL(attributes.src, baseURL);
         if (!src) {
           node.replaceWith(document.createTextNode(attributes.alt || ""));
           continue;

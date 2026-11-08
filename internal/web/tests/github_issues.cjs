@@ -45,7 +45,7 @@ after(async () => { await browser?.close(); });
 // so every rendered timestamp is the viewer's local time for a fixed instant.
 // Avatars are the one request that leaves the app's origin: serving them is
 // the normal case, aborting them is the offline case the initials cover.
-async function openIssue(t, issue, { timezoneId = 'Asia/Tokyo', touch = false, avatars = false } = {}) {
+async function openIssue(t, issue, { timezoneId = 'Asia/Tokyo', touch = false, avatars = false, onRequest = () => {} } = {}) {
   const viewport = touch ? { width: 430, height: 932 } : { width: 1280, height: 900 };
   const page = await browser.newPage({ viewport, timezoneId, locale: 'en-US', isMobile: touch, hasTouch: touch });
   page.setDefaultTimeout(10000);
@@ -55,6 +55,7 @@ async function openIssue(t, issue, { timezoneId = 'Asia/Tokyo', touch = false, a
   t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
+    onRequest(url);
     if (url.hostname === 'github.com' && url.pathname.endsWith('.png')) {
       return avatars ? route.fulfill({ contentType: 'image/png', body: avatarPixel }) : route.abort();
     }
@@ -106,6 +107,7 @@ test('assignees and timestamps lead the issue header instead of trailing the des
 });
 
 test('issue descriptions and comments render sanitized GitHub-flavored Markdown', async t => {
+  let untrustedImageRequests = 0;
   const markdownIssue = {
     ...assignedIssue,
     number: 11,
@@ -123,10 +125,16 @@ test('issue descriptions and comments render sanitized GitHub-flavored Markdown'
       '[unsafe link](javascript:window.__issueXSS=true)',
       '<script>window.__issueXSS = true</script>',
       '<img src="javascript:window.__issueXSS=true" alt="unsafe image">',
+      '',
+      '![external image](https://attacker.example/tracking.png)',
+      '',
+      '![GitHub attachment](https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc)',
     ].join('\n'),
     comments: [{ ...comment, body: 'Comment with *emphasis* and ~~deletion~~.' }],
   };
-  const page = await openIssue(t, markdownIssue);
+  const page = await openIssue(t, markdownIssue, {
+    onRequest: url => { if (url.hostname === 'attacker.example') untrustedImageRequests++; },
+  });
   const body = page.locator('.github-issue-body');
   assert.equal(await body.locator('h2').innerText(), 'Rendered heading');
   assert.deepEqual(await body.locator('li').allInnerTexts(), ['bold item', 'inline code']);
@@ -136,7 +144,12 @@ test('issue descriptions and comments render sanitized GitHub-flavored Markdown'
   assert.equal(await body.getByText('safe link', { exact: true }).getAttribute('href'), 'https://marked.js.org/');
   assert.equal(await body.getByText('safe link', { exact: true }).getAttribute('rel'), 'noopener noreferrer');
   assert.equal(await body.getByText('unsafe link', { exact: true }).getAttribute('href'), null);
-  assert.equal(await body.locator('script, img').count(), 0);
+  assert.equal(await body.locator('script').count(), 0);
+  assert.equal(await body.getByAltText('external image').count(), 0);
+  assert.match(await body.innerText(), /external image/);
+  assert.equal(untrustedImageRequests, 0, 'untrusted Markdown images must not trigger browser requests');
+  assert.equal(await body.getByAltText('GitHub attachment').getAttribute('src'),
+    'https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc');
   assert.equal(await page.evaluate(() => window.__issueXSS), undefined);
 
   const renderedComment = page.locator('.github-issue-comment-body');
