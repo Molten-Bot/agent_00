@@ -96,7 +96,7 @@ func TestStaticAssetsStillServeAllPublishedURLs(t *testing.T) {
 	t.Parallel()
 
 	handler := NewServer("", nil).Handler()
-	for _, path := range []string{"/static/xterm.js", "/static/xterm.css", "/static/emoji-picker.js", "/static/logo.svg", "/static/emoji-mart-data.json"} {
+	for _, path := range []string{"/static/xterm.js", "/static/xterm.css", "/static/emoji-picker.js", "/static/logo.svg", "/static/emoji-mart-data.json", "/static/marked.umd.js", "/static/marked-LICENSE.txt"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
 			req := httptest.NewRequest(method, path, nil)
 			req.Header.Set("Accept-Encoding", "gzip")
