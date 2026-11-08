@@ -20,7 +20,7 @@
   <script src="/static/lucide.min.js"></script>
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=2">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -866,9 +866,18 @@
             <div class="repository-settings">
               <div class="repository-settings-heading">
                 <strong>Repositories</strong>
-                <small>Deselect repositories to hide them from repository menus.</small>
+                <small>Deselect an owner to hide every repository it owns, or deselect single repositories.</small>
               </div>
-              <div id="review-settings-repositories" class="repository-settings-list" aria-label="Enabled repositories"></div>
+              <div class="repository-settings-columns" id="review-settings-repository-columns">
+                <div class="repository-settings-column" id="review-settings-owners-column">
+                  <small class="repository-settings-column-title" id="review-settings-owners-title">Organizations &amp; people</small>
+                  <div id="review-settings-owners" class="repository-settings-list" role="group" aria-labelledby="review-settings-owners-title"></div>
+                </div>
+                <div class="repository-settings-column">
+                  <small class="repository-settings-column-title" id="review-settings-repositories-title">Repositories</small>
+                  <div id="review-settings-repositories" class="repository-settings-list" role="group" aria-labelledby="review-settings-repositories-title"></div>
+                </div>
+              </div>
               <p id="review-settings-repositories-empty" class="github-issues-settings-description">No repositories loaded.</p>
             </div>
           </fieldset>
@@ -1022,6 +1031,7 @@
     const TASK_HISTORY_UNSEEN_KEY = "hubui.taskHistoryUnseen.v1";
     const TASK_SOUND_MUTED_KEY = "hubui.taskSoundMuted";
     const CHAT_CLOSED_REPOS_KEY = "hubui.chatClosedRepoKeys.v1";
+    const REPOSITORY_OWNER_KEPT_DISABLED_KEY = "hubui.repositoryOwnerKeptDisabled.v1";
     const THEME_KEY = "hubui.theme";
     const HOVER_MODE_KEY = "hubui.hoverMode";
     const THEME_MODES = ["light", "dark", "night", "pink"];
@@ -1891,6 +1901,29 @@
       }
     }
 
+    // Repositories a user had already deselected before an owner was cleared,
+    // keyed by owner, so re-selecting the owner does not silently re-enable them.
+    // Persisted because the disabled list the server stores cannot tell an
+    // owner-wide clear apart from the single repositories deselected before it.
+    function loadRepositoryOwnerKeptDisabled() {
+      try {
+        const raw = localStorage.getItem(REPOSITORY_OWNER_KEPT_DISABLED_KEY);
+        if (!raw) return new Map();
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return new Map();
+        const kept = new Map();
+        for (const [owner, values] of Object.entries(parsed)) {
+          const key = String(owner || "").trim().toLowerCase();
+          if (!key || !Array.isArray(values)) continue;
+          const repoKeys = new Set(values.map(value => String(value || "").trim()).filter(Boolean));
+          kept.set(key, repoKeys);
+        }
+        return kept;
+      } catch (_err) {
+        return new Map();
+      }
+    }
+
     function loadTaskSoundMuted() {
       try {
         return localStorage.getItem(TASK_SOUND_MUTED_KEY) === "true";
@@ -1965,6 +1998,7 @@
       chatOpenRepoKey: "",
       chatPromptedRepos: [],
       chatClosedRepoKeys: loadChatClosedRepoKeys(),
+      repositoryOwnerKeptDisabled: loadRepositoryOwnerKeptDisabled(),
       chatRepoActivityKeys: new Set(),
       chatRepoActivityTones: new Map(),
       chatActiveRepoTab: "repos",
@@ -2196,6 +2230,9 @@
     const reviewSettingsChatEnabled = document.getElementById("review-settings-chat-enabled");
     const reviewSettingsJSONEnabled = document.getElementById("review-settings-json-enabled");
     const reviewSettingsRepositories = document.getElementById("review-settings-repositories");
+    const reviewSettingsOwners = document.getElementById("review-settings-owners");
+    const reviewSettingsOwnersColumn = document.getElementById("review-settings-owners-column");
+    const reviewSettingsRepositoryColumns = document.getElementById("review-settings-repository-columns");
     const reviewSettingsRepositoriesEmpty = document.getElementById("review-settings-repositories-empty");
     const reviewSettingsGitHubIssuesEnabled = document.getElementById("review-settings-github-issues-enabled");
     const reviewSettingsGitHubIssuesAutoStart = document.getElementById("review-settings-github-issues-auto-start");
@@ -6040,6 +6077,19 @@
       }
     }
 
+    function persistRepositoryOwnerKeptDisabled() {
+      try {
+        const entries = Array.from(state.repositoryOwnerKeptDisabled, ([owner, repoKeys]) => [owner, Array.from(repoKeys)]);
+        if (!entries.length) {
+          localStorage.removeItem(REPOSITORY_OWNER_KEPT_DISABLED_KEY);
+          return;
+        }
+        localStorage.setItem(REPOSITORY_OWNER_KEPT_DISABLED_KEY, JSON.stringify(Object.fromEntries(entries)));
+      } catch (_err) {
+        // Ignore localStorage failures.
+      }
+    }
+
     function rememberRepos(repos) {
       const unique = dedupeRepoValues([...(repos || []), ...state.repoHistory]);
       if (unique.length === state.repoHistory.length && unique.every((value, index) => value === state.repoHistory[index])) {
@@ -6941,9 +6991,25 @@
       return String(repo.name || "").trim();
     }
 
+    // Every toggle asks repositoryDisabled once per rendered checkbox and once
+    // per owner repository, so the disabled list is parsed into dedupe keys once
+    // per list identity instead of re-parsing every URL on each lookup. Each
+    // write to disabledRepositories replaces the array, so identity is the
+    // invalidation signal.
+    const NO_DISABLED_REPOSITORIES = [];
+    let disabledRepositoryKeyCache = { source: null, keys: new Set() };
+
+    function disabledRepositoryKeys() {
+      const source = state.reviewSettings.disabledRepositories || NO_DISABLED_REPOSITORIES;
+      if (disabledRepositoryKeyCache.source !== source) {
+        disabledRepositoryKeyCache = { source, keys: new Set(source.map(repoDedupeKey).filter(Boolean)) };
+      }
+      return disabledRepositoryKeyCache.keys;
+    }
+
     function repositoryDisabled(value) {
       const key = repoDedupeKey(value);
-      return key !== "" && (state.reviewSettings.disabledRepositories || []).some(repo => repoDedupeKey(repo) === key);
+      return key !== "" && disabledRepositoryKeys().has(key);
     }
 
     function allGitHubRepoSelectValues() {
@@ -6960,33 +7026,208 @@
         .filter(repo => !repositoryDisabled(repo));
     }
 
+    function repositoryOwnerKey(value) {
+      const githubPath = githubRepoPathFromValue(value);
+      if (!githubPath) return "";
+      return githubPath.split("/")[0].toLowerCase();
+    }
+
+    function repositoryOwnerDetails() {
+      const owners = new Map();
+      for (const repo of Array.isArray(state.githubRepos) ? state.githubRepos : []) {
+        const key = repositoryOwnerKey(githubRepoSelectValue(repo));
+        if (!key) continue;
+        const details = owners.get(key) || { avatar: "", type: "" };
+        if (!details.avatar) details.avatar = chatRepoOwnerAvatarURL(repo);
+        if (!details.type) details.type = chatRepoOwnerType(repo);
+        owners.set(key, details);
+      }
+      return owners;
+    }
+
+    function repositoryOwnerGroups(repos) {
+      const groups = new Map();
+      for (const repo of repos) {
+        const key = repositoryOwnerKey(repo);
+        if (!key) continue;
+        const group = groups.get(key) || { login: githubRepoPathFromValue(repo).split("/")[0], repos: [] };
+        group.repos.push(repo);
+        groups.set(key, group);
+      }
+      return groups;
+    }
+
+    function repositoryOwnerPressedValue(repos) {
+      const enabled = repos.filter(repo => !repositoryDisabled(repo)).length;
+      if (enabled === 0) return "false";
+      return enabled === repos.length ? "true" : "mixed";
+    }
+
+    function reconcileRepositoryOwnerKeptDisabled() {
+      if (!state.settingsLoaded) return;
+      const groups = repositoryOwnerGroups(repositorySettingsRepoValues());
+      const disabledKeys = disabledRepositoryKeys();
+      let changed = false;
+      for (const [owner, kept] of state.repositoryOwnerKeptDisabled) {
+        const ownerRepos = groups.get(owner)?.repos || [];
+        const ownerKeys = new Set(ownerRepos.map(repoDedupeKey));
+        for (const key of kept) {
+          if (!ownerKeys.has(key) || !disabledKeys.has(key)) {
+            kept.delete(key);
+            changed = true;
+          }
+        }
+        if (!ownerRepos.some(repo => disabledKeys.has(repoDedupeKey(repo)))) {
+          state.repositoryOwnerKeptDisabled.delete(owner);
+          changed = true;
+        }
+      }
+      if (changed) persistRepositoryOwnerKeptDisabled();
+    }
+
+    function applyDisabledRepositories(values) {
+      state.reviewSettings = { ...state.reviewSettings, disabledRepositories: dedupeRepoValues(values) };
+      reconcileRepositoryOwnerKeptDisabled();
+      syncRepositorySettingsSelection();
+      renderRepoHistoryOptions();
+      renderChatRepos();
+      setReviewSettingsStatus("", "Changes will be saved on close.");
+    }
+
+    function repositorySettingsRepoValues() {
+      return Array.from(reviewSettingsRepositories?.querySelectorAll("input[type=checkbox]") || [], input => input.value);
+    }
+
+    function syncRepositorySettingsSelection() {
+      // Group the rendered repositories once so each owner button is a map
+      // lookup instead of another pass over every checkbox.
+      const groups = repositoryOwnerGroups(repositorySettingsRepoValues());
+      for (const input of reviewSettingsRepositories?.querySelectorAll("input[type=checkbox]") || []) {
+        input.checked = !repositoryDisabled(input.value);
+      }
+      for (const button of reviewSettingsOwners?.querySelectorAll("[data-repo-owner]") || []) {
+        button.setAttribute("aria-pressed", repositoryOwnerPressedValue(groups.get(button.dataset.repoOwner)?.repos || []));
+      }
+    }
+
+    function repositoryOwnerRepos(ownerKey) {
+      return repositoryOwnerGroups(repositorySettingsRepoValues()).get(String(ownerKey || "").toLowerCase())?.repos || [];
+    }
+
+    // Only the GitHub API reports whether an owner is a person or an
+    // organization, so owners known only from repository history stay on a
+    // neutral handle icon rather than being drawn as a person.
+    function repositoryOwnerIconName(type) {
+      return type ? chatRepoOwnerIconName({ owner_type: type }) : "at-sign";
+    }
+
+    // Owners known only from repository history carry no API avatar, so they
+    // render the lucide icon instead of probing github.com on every render.
+    function renderRepositoryOwnerIcon(button, avatarURL, details) {
+      const icon = document.createElement("i");
+      icon.setAttribute("data-lucide", repositoryOwnerIconName(details.type));
+      icon.setAttribute("aria-hidden", "true");
+      const fallback = () => {
+        button.prepend(icon);
+        replaceLucideIcons(button);
+      };
+      if (!avatarURL) {
+        fallback();
+        return;
+      }
+      const avatar = document.createElement("img");
+      avatar.className = "repository-settings-owner-avatar";
+      avatar.alt = "";
+      avatar.loading = "lazy";
+      avatar.decoding = "async";
+      avatar.referrerPolicy = "no-referrer";
+      avatar.src = avatarURL;
+      avatar.addEventListener("error", () => { avatar.remove(); fallback(); }, { once: true });
+      button.prepend(avatar);
+    }
+
     function renderRepositorySettings() {
-      if (!reviewSettingsRepositories || !reviewSettingsRepositoriesEmpty) return;
+      if (!reviewSettingsRepositories || !reviewSettingsOwners || !reviewSettingsRepositoriesEmpty) return;
       const repos = dedupeRepoValues([
         ...allGitHubRepoSelectValues(),
         ...state.repoHistory,
         ...(state.reviewSettings.disabledRepositories || []),
       ]);
+      const controlsDisabled = state.settingsBusy || !state.settingsLoaded;
       reviewSettingsRepositories.replaceChildren(...repos.map(repo => {
         const label = document.createElement("label");
-        label.className = "repository-settings-option";
+        label.className = "selectable-option repository-settings-option";
         const input = document.createElement("input");
+        input.className = "sr-only";
         input.type = "checkbox";
         input.value = repo;
         input.checked = !repositoryDisabled(repo);
-        input.disabled = state.settingsBusy || !state.settingsLoaded;
+        input.disabled = controlsDisabled;
         input.addEventListener("change", () => {
-          const disabled = Array.from(reviewSettingsRepositories.querySelectorAll("input[type=checkbox]:not(:checked)"), node => node.value);
-          state.reviewSettings = { ...state.reviewSettings, disabledRepositories: dedupeRepoValues(disabled) };
-          renderRepoHistoryOptions();
-          renderChatRepos();
-          setReviewSettingsStatus("", "Changes will be saved on close.");
+          const owner = repositoryOwnerKey(input.value);
+          if (!input.checked && state.repositoryOwnerKeptDisabled.has(owner)) {
+            state.repositoryOwnerKeptDisabled.get(owner).add(repoDedupeKey(input.value));
+            persistRepositoryOwnerKeptDisabled();
+          }
+          applyDisabledRepositories(Array.from(reviewSettingsRepositories.querySelectorAll("input[type=checkbox]:not(:checked)"), node => node.value));
         });
+        const icon = document.createElement("i");
+        icon.setAttribute("data-lucide", "folder-git-2");
+        icon.setAttribute("aria-hidden", "true");
         const text = document.createElement("span");
         text.textContent = displayRepoLabel(repo);
-        label.append(input, text);
+        label.title = text.textContent;
+        label.append(input, icon, text);
         return label;
       }));
+      replaceLucideIcons(reviewSettingsRepositories);
+      reconcileRepositoryOwnerKeptDisabled();
+
+      const owners = repositoryOwnerDetails();
+      const groups = repositoryOwnerGroups(repos);
+      reviewSettingsOwners.replaceChildren(...Array.from(groups, ([key, group]) => {
+        const details = owners.get(key) || { avatar: "", type: "" };
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "selectable-option repository-settings-owner";
+        button.dataset.repoOwner = key;
+        button.disabled = controlsDisabled;
+        button.setAttribute("aria-pressed", repositoryOwnerPressedValue(group.repos));
+        const countLabel = `${group.repos.length} ${group.repos.length === 1 ? "repository" : "repositories"}`;
+        button.title = `${group.login} · ${countLabel}`;
+        // A button with text content ignores title for its accessible name, so
+        // the count reaches assistive tech through an explicit label.
+        button.setAttribute("aria-label", `${group.login}, ${countLabel}`);
+        const text = document.createElement("span");
+        text.textContent = group.login;
+        const count = document.createElement("small");
+        count.textContent = String(group.repos.length);
+        button.append(text, count);
+        renderRepositoryOwnerIcon(button, details.avatar, details);
+        button.addEventListener("click", () => {
+          const ownerRepos = repositoryOwnerRepos(key);
+          const disabled = state.reviewSettings.disabledRepositories || [];
+          // Clearing is the primary action, so a partly selected owner clears in
+          // one click; only a fully cleared owner re-selects what it owns, minus
+          // the repositories the user had deselected one by one beforehand.
+          if (ownerRepos.length > 0 && ownerRepos.every(repositoryDisabled)) {
+            const kept = state.repositoryOwnerKeptDisabled.get(key) || new Set();
+            state.repositoryOwnerKeptDisabled.delete(key);
+            persistRepositoryOwnerKeptDisabled();
+            const ownerKeys = new Set(ownerRepos.map(repoDedupeKey));
+            applyDisabledRepositories(disabled.filter(repo => !ownerKeys.has(repoDedupeKey(repo)) || kept.has(repoDedupeKey(repo))));
+            return;
+          }
+          if (!state.repositoryOwnerKeptDisabled.has(key)) {
+            state.repositoryOwnerKeptDisabled.set(key, new Set(ownerRepos.filter(repositoryDisabled).map(repoDedupeKey)));
+          }
+          persistRepositoryOwnerKeptDisabled();
+          applyDisabledRepositories([...disabled, ...ownerRepos]);
+        });
+        return button;
+      }));
+      reviewSettingsOwnersColumn?.classList.toggle("hidden", groups.size === 0);
+      reviewSettingsRepositoryColumns?.classList.toggle("hidden", repos.length === 0);
       reviewSettingsRepositoriesEmpty.classList.toggle("hidden", repos.length > 0);
     }
 
@@ -13437,7 +13678,8 @@
       for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches,
         reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsGitHubIssuesEnabled,
         reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsGitHubIssuesAutoStartOnlyAssigned, reviewSettingsGitHubIssuesAutoStartLabels, reviewSettingsAssignCreator, reviewSettingsSlider, ...reviewSettingsMergeOptions,
-        ...Array.from(reviewSettingsRepositories?.querySelectorAll("input") || [])]) {
+        ...Array.from(reviewSettingsRepositories?.querySelectorAll("input") || []),
+        ...Array.from(reviewSettingsOwners?.querySelectorAll("button") || [])]) {
         if (control) control.disabled = Boolean(busy) || !state.settingsLoaded;
       }
       reviewSettingsForm.setAttribute("aria-busy", String(Boolean(busy)));
@@ -13802,6 +14044,6 @@
   <script src="/static/commit-signing.js"></script>
   <script src="/static/custom-library-sources.js"></script>
   <script src="/static/markdown.js"></script>
-  <script src="/static/github-issues.js?v=12"></script>
+  <script src="/static/github-issues.js?v=15"></script>
 </body>
 </html>

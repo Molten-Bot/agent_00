@@ -519,7 +519,7 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
 	page := response.Body.String()
-	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `href="#studio-issues"`, `data-prompt-title-mode="issues"`, `id="github-issues-panel"`, "github-issues-repo", "github-issues-search", "github-issues-count", "github-issues-assignee-filter", "user-round-arrow-left", "review-settings-github-issues-link-mode", "review-settings-github-issues-link-close", `href="/static/style.css"`, "github-issues.js"} {
+	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `href="#studio-issues"`, `data-prompt-title-mode="issues"`, `id="github-issues-panel"`, "github-issues-repo", "github-issues-search", "github-issues-count", "github-issues-assignee-filter", "user-round-arrow-left", "review-settings-github-issues-link-mode", "review-settings-github-issues-link-close", `href="/static/style.css?v=2"`, "github-issues.js"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page is missing %q", want)
 		}
@@ -569,6 +569,42 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	if asset.Code != http.StatusOK || strings.Contains(asset.Body.String(), "Edit prompt first") || strings.Contains(asset.Body.String(), "Start with this prompt") || !strings.Contains(asset.Body.String(), "Start task") || !strings.Contains(asset.Body.String(), `state: "open"`) || !strings.Contains(asset.Body.String(), "open issues") || !strings.Contains(asset.Body.String(), "linkMode: githubIssueLinkMode") || !strings.Contains(asset.Body.String(), "githubIssue:") || !strings.Contains(asset.Body.String(), "loadingIssueNumber") || !strings.Contains(asset.Body.String(), "task-icons-breathe") || !strings.Contains(asset.Body.String(), `"X-Agent-Task-Source": "github_issues"`) {
 		t.Fatalf("issue browser asset response = %d, expected issue-only task launch", asset.Code)
 	}
+}
+
+// TestGitHubIssueHeaderAssetsCarryAssigneeCopy keeps the header's user-visible
+// copy from disappearing in environments without Node, where the browser suite
+// below is skipped. It asserts the strings a reader sees, not the source that
+// produces them, so a refactor of the rendering code stays free.
+func TestGitHubIssueHeaderAssetsCarryAssigneeCopy(t *testing.T) {
+	t.Parallel()
+	response := httptest.NewRecorder()
+	githubIssueTestServer(nil, true).Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/static/github-issues.js", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /static/github-issues.js status = %d, want 200", response.Code)
+	}
+	script := response.Body.String()
+	for _, want := range []string{"Assignees", "Unassigned", "Created", "Updated"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("github-issues.js never writes %q, so the issue header lost it", want)
+		}
+	}
+}
+
+// TestGitHubIssueHeaderRendersInBrowser drives the real static/github-issues.js
+// in Chromium. renderIssueDetail, addAssignees, and addTimestamp are unexported
+// closures with no Go-reachable equivalent, so the header's placement, the
+// assignee icons and their hover/focus-revealed names, the Unassigned fallback,
+// and the viewer-local timestamps are only observable through the rendered DOM.
+func TestGitHubIssueHeaderRendersInBrowser(t *testing.T) {
+	requireBrowserTooling(t, "GitHub issue header check")
+
+	ts := httptest.NewServer(githubIssueTestServer(nil, true).Handler())
+	defer ts.Close()
+
+	// Same budget as the settings-modal suite, the other multi-case Chromium
+	// run in this package: a dozen cases each launching a page is well past
+	// what a one-case suite's 60s is sized for.
+	runBrowserSuite(t, ts.URL, 3*time.Minute, "GitHub issue header checks", "tests/github_issues.cjs")
 }
 
 // openingTagWithID returns the opening tag that carries id="<id>" so assertions can check

@@ -39,6 +39,22 @@ async function select(page, name) {
   assert.equal(await page.locator('#review-settings-form [role=tabpanel]:visible').count(), 1);
 }
 async function toggle(page, id) { await page.locator(`label:has(#${id})`).click(); }
+// Repository rows hide their checkbox, so the visible label is the real user
+// target. Playwright never treats a label as disabled, so the hidden checkbox
+// supplies the enabled wait that the replaced check()/uncheck() calls provided,
+// and the checked flip proves the click was not swallowed while settings load.
+async function toggleRepositoryRow(page, value) {
+  await page.waitForFunction(repo => {
+    const input = Array.from(document.querySelectorAll('#review-settings-repositories input[type=checkbox]')).find(node => node.value === repo);
+    return Boolean(input) && !input.disabled;
+  }, value);
+  const before = await page.locator(`#review-settings-repositories input[value="${value}"]`).isChecked();
+  await page.locator(`#review-settings-repositories label:has(input[value="${value}"])`).click();
+  await page.waitForFunction(({ repo, checked }) => {
+    const input = Array.from(document.querySelectorAll('#review-settings-repositories input[type=checkbox]')).find(node => node.value === repo);
+    return Boolean(input) && input.checked !== checked;
+  }, { repo: value, checked: before });
+}
 async function close(page, method = 'button') {
   if (method === 'escape') await page.keyboard.press('Escape');
   else if (method === 'backdrop') await page.locator('#settings-gate').click({ position: { x: 2, y: 2 } });
@@ -200,9 +216,11 @@ test('repository selections hide dropdown options and manual entry enables them 
   }});
   await select(page, 'automation');
   const option = page.locator('#review-settings-repositories input[value="https://github.com/acme/widget"]');
-  await option.waitFor();
+  const row = page.locator('#review-settings-repositories label:has(input[value="https://github.com/acme/widget"])');
+  await option.waitFor({ state: 'attached' });
   assert.equal(await option.isChecked(), true, 'repositories default enabled');
-  await option.uncheck();
+  assert.equal(await row.locator('svg.lucide-folder-git-2').count(), 1, 'repositories use the lucide git repository icon');
+  await toggleRepositoryRow(page, 'https://github.com/acme/widget');
   await close(page);
   assert.deepEqual(writes.at(-1).disabled_repositories, ['https://github.com/acme/widget']);
   assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 0);
@@ -210,20 +228,181 @@ test('repository selections hide dropdown options and manual entry enables them 
   await page.locator('#settings-open').click();
   await select(page, 'automation');
   assert.equal(await option.isChecked(), false, 'disabled repository remains available in settings');
-  await option.check();
+  await toggleRepositoryRow(page, 'https://github.com/acme/widget');
   await close(page);
   assert.deepEqual(writes.at(-1).disabled_repositories, []);
   assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 1);
 
   await page.locator('#settings-open').click();
   await select(page, 'automation');
-  await option.uncheck();
+  await toggleRepositoryRow(page, 'https://github.com/acme/widget');
   await close(page);
 
   await page.locator('#builder-repo-input').fill('https://github.com/acme/widget');
   await page.locator('#builder-repo-input').blur();
   await page.waitForFunction(() => document.querySelector('#builder-repo-select option[value="https://github.com/acme/widget"]'));
   assert.deepEqual(writes.at(-1).disabled_repositories, []);
+});
+
+test('repository rows and owner buttons both look inert while settings load', async t => {
+  let release = () => {};
+  const loaded = new Promise(resolve => { release = resolve; });
+  // The repository checkbox is visually hidden, so the row itself has to carry
+  // the disabled affordance the owner button gets from :disabled.
+  const { page } = await openSettings(t, { path: '/#settings', configurePage: async page => {
+    await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+      { name: 'widget', full_name: 'acme/widget', html_url: 'https://github.com/acme/widget', owner_type: 'Organization' },
+    ] } }));
+    await page.route('**/api/review-settings', async route => {
+      if (route.request().method() === 'GET') await loaded;
+      return route.fallback();
+    });
+  }});
+  await select(page, 'automation');
+  const styleOf = node => ({ opacity: Number(getComputedStyle(node).opacity), cursor: getComputedStyle(node).cursor });
+  const row = page.locator('#review-settings-repositories label').first();
+  const owner = page.locator('#review-settings-owners [data-repo-owner="acme"]');
+  await row.waitFor();
+  assert.equal(await row.locator('input').isDisabled(), true, 'the hidden checkbox is disabled while settings load');
+  const loadingRow = await row.evaluate(styleOf);
+  const loadingOwner = await owner.evaluate(styleOf);
+  assert.ok(loadingRow.opacity < 1, 'a repository row dims while settings load');
+  assert.equal(loadingRow.cursor, 'not-allowed', 'a repository row refuses the pointer while settings load');
+  assert.deepEqual(loadingRow, loadingOwner, 'repository rows and owner buttons read as inert the same way');
+
+  release();
+  await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
+  assert.deepEqual(await row.evaluate(styleOf), { opacity: 1, cursor: 'pointer' }, 'a loaded repository row invites the pointer again');
+});
+
+test('owner avatars clear and restore every repository they own', async t => {
+  const repos = [
+    { name: 'widget', full_name: 'acme/widget', html_url: 'https://github.com/acme/widget', owner_type: 'Organization', owner_avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4' },
+    { name: 'gadget', full_name: 'acme/gadget', html_url: 'https://github.com/acme/gadget', owner_type: 'Organization', owner_avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4' },
+    { name: 'notes', full_name: 'octocat/notes', html_url: 'https://github.com/octocat/notes', owner_type: 'User' },
+    { name: 'ledger', full_name: 'globex/ledger', html_url: 'https://github.com/globex/ledger', owner_type: 'Organization', owner_avatar_url: 'https://avatars.githubusercontent.com/u/404?v=4' },
+  ];
+  const avatarProbes = [];
+  const { page, writes } = await openSettings(t, { configurePage: async page => {
+    await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos } }));
+    await page.route('https://avatars.githubusercontent.com/**', route => route.fulfill({
+      contentType: 'image/png',
+      body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'),
+    }));
+    await page.route('https://avatars.githubusercontent.com/u/404**', route => route.abort());
+    page.on('request', request => {
+      if (/^https:\/\/github\.com\/.*\.png/.test(request.url())) avatarProbes.push(request.url());
+    });
+  }});
+  await select(page, 'automation');
+  const acme = page.locator('#review-settings-owners [data-repo-owner="acme"]');
+  const octocat = page.locator('#review-settings-owners [data-repo-owner="octocat"]');
+  await acme.waitFor();
+  const columns = await page.locator('.repository-settings-columns').evaluate(node => {
+    const [owners, repositories] = Array.from(node.children, child => child.getBoundingClientRect());
+    return { owners: Math.round(owners.width), repositories: Math.round(repositories.width), ownersLeft: owners.left < repositories.left };
+  });
+  assert.equal(columns.ownersLeft, true, 'owners sit left of repositories');
+  assert.ok(Math.abs(columns.owners - columns.repositories) <= 1, 'owners and repositories split the tab evenly');
+  assert.equal(await acme.getAttribute('aria-pressed'), 'true');
+  assert.equal(await acme.getAttribute('aria-label'), 'acme, 2 repositories', 'owner buttons name their repository count');
+  assert.equal(await octocat.getAttribute('aria-label'), 'octocat, 1 repository', 'a single repository owner reads as singular');
+  assert.equal(await acme.locator('img.repository-settings-owner-avatar').count(), 1, 'organizations use their GitHub avatar');
+  // Owners without API metadata render the lucide icon directly instead of
+  // probing the public GitHub avatar route.
+  await octocat.locator('svg.lucide-user').waitFor();
+  assert.deepEqual(avatarProbes, [], 'owners without API metadata never request github.com avatars');
+  // An avatar that fails to load drops the broken image and falls back to the
+  // same lucide icon an owner without metadata would get.
+  const globex = page.locator('#review-settings-owners [data-repo-owner="globex"]');
+  await globex.locator('svg.lucide-building-2').waitFor();
+  assert.equal(await globex.locator('img.repository-settings-owner-avatar').count(), 0, 'a broken avatar image is removed');
+
+  const widgetRow = page.locator('#review-settings-repositories label:has(input[value="https://github.com/acme/widget"])');
+  assert.equal(await widgetRow.getAttribute('title'), 'acme/widget', 'ellipsized repository rows expose the full name as a tooltip');
+
+  await octocat.click();
+  assert.equal(await octocat.getAttribute('aria-pressed'), 'false');
+  // Owners that fall back to the lucide icon dim it just like an avatar.
+  assert.ok(
+    await octocat.locator('svg').evaluate(node => Number(getComputedStyle(node).opacity) < 1),
+    'a deselected owner without an avatar dims its lucide icon',
+  );
+  await octocat.click();
+  assert.equal(await octocat.getAttribute('aria-pressed'), 'true');
+
+  await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'false');
+  for (const repo of ['widget', 'gadget']) {
+    assert.equal(await page.locator(`#review-settings-repositories input[value="https://github.com/acme/${repo}"]`).isChecked(), false);
+  }
+  assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/octocat/notes"]').isChecked(), true, 'other owners keep their repositories');
+  // Re-clearing a partly restored owner must not treat repositories left off by
+  // the owner action as individual deselections.
+  await toggleRepositoryRow(page, 'https://github.com/acme/widget');
+  assert.equal(await acme.getAttribute('aria-pressed'), 'mixed');
+  await acme.click();
+  await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'true', 'mixed re-clear remains fully undoable');
+  // Enabling every row directly ends the prior owner-clear operation and drops
+  // its persisted provenance before a later, unrelated owner action.
+  await acme.click();
+  await toggleRepositoryRow(page, 'https://github.com/acme/widget');
+  await toggleRepositoryRow(page, 'https://github.com/acme/gadget');
+  assert.equal(await acme.getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem(key) || '{}').acme, 'hubui.repositoryOwnerKeptDisabled.v1'), undefined, 'fully enabling rows prunes stale owner state');
+  await acme.click();
+  await close(page);
+  assert.deepEqual(writes.at(-1).disabled_repositories, ['https://github.com/acme/widget', 'https://github.com/acme/gadget']);
+  assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 0);
+
+  await page.locator('#settings-open').click();
+  await select(page, 'automation');
+  await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'true', 'a fully cleared owner restores all repositories when none were individually deselected');
+  await toggleRepositoryRow(page, 'https://github.com/acme/gadget');
+  assert.equal(await acme.getAttribute('aria-pressed'), 'mixed', 'a partly enabled owner reports a mixed selection');
+  await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'false', 'a partly selected owner clears in a single click');
+  assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/acme/widget"]').isChecked(), false);
+  // A reload must not forget which repositories were already deselected before
+  // the owner-wide clear, or re-selecting the owner silently turns them back on.
+  await close(page);
+  assert.deepEqual([...writes.at(-1).disabled_repositories].sort(), ['https://github.com/acme/gadget', 'https://github.com/acme/widget']);
+  await page.goto(`${baseURL}/`);
+  await page.locator('#settings-open').click();
+  await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
+  await select(page, 'automation');
+  await acme.waitFor();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'false', 'the owner-wide clear survives a reload');
+  await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'mixed', 're-selecting an owner keeps the repositories deselected before the clear');
+  assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/acme/gadget"]').isChecked(), false, 'the individually deselected repository stays off');
+  assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/acme/widget"]').isChecked(), true, 'the rest of the owner comes back');
+  await toggleRepositoryRow(page, 'https://github.com/acme/gadget');
+  assert.equal(await acme.getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(avatarProbes, [], 'later renders stay free of github.com avatar requests');
+  await close(page);
+  assert.deepEqual(writes.at(-1).disabled_repositories, []);
+});
+
+test('an owner the GitHub API never described keeps a neutral icon', async t => {
+  // initech only reaches settings through the stored disabled list, so no API
+  // response ever says whether it is a person or an organization.
+  const { page } = await openSettings(t, {
+    initialSettings: { ...defaults, disabled_repositories: ['https://github.com/initech/payroll'] },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+        { name: 'widget', full_name: 'acme/widget', html_url: 'https://github.com/acme/widget', owner_type: 'Organization' },
+      ] } }));
+    },
+  });
+  await select(page, 'automation');
+  const initech = page.locator('#review-settings-owners [data-repo-owner="initech"]');
+  await initech.locator('svg.lucide-at-sign').waitFor();
+  assert.equal(await initech.locator('svg.lucide-user').count(), 0, 'an owner with no API metadata is never drawn as a person');
+  assert.equal(await initech.getAttribute('aria-pressed'), 'false', 'its only repository stays deselected');
+  await page.locator('#review-settings-owners [data-repo-owner="acme"] svg.lucide-building-2').waitFor();
 });
 
 test('JSON submission enables manually added repositories', async t => {
@@ -291,6 +470,8 @@ test('chat toggle marks the experimental chat tab unavailable immediately and pe
   assert.equal(await page.locator('[data-app-display=chat]').getAttribute('aria-disabled'), 'false');
   assert.notEqual(await page.locator('[data-app-display=chat]').getAttribute('title'), 'Chat is turned off in Settings → Automation');
   await select(page, 'automation');
+  assert.equal(await page.locator('#review-settings-repository-columns').evaluate(columns => columns.classList.contains('hidden')), true, 'empty repository state hides both duplicate column headings and lists');
+  assert.equal(await page.locator('#review-settings-repositories-empty').isVisible(), true, 'empty repository state keeps its single message');
   await toggle(page, 'review-settings-chat-enabled');
   assert.equal(await page.locator('[data-app-display=chat]').getAttribute('aria-disabled'), 'true');
   assert.equal(await page.locator('[data-app-display=chat]').getAttribute('title'), 'Chat is turned off in Settings → Automation');
@@ -382,7 +563,7 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
   });
 
   assert.notEqual(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
-  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=12');
+  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=15');
   await page.waitForFunction(() => document.querySelector('.github-issue-empty-state h2')?.textContent === 'No repositories available');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No repositories available');
   await page.locator('#github-issues-dock-link').click();
