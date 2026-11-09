@@ -3105,7 +3105,7 @@
         github_issue_auto_start_only_assigned: reviewSettingsGitHubIssuesAutoStartOnlyAssigned instanceof HTMLInputElement ? reviewSettingsGitHubIssuesAutoStartOnlyAssigned.checked : true,
         github_issue_auto_start_labels: reviewSettingsGitHubIssuesAutoStartLabels instanceof HTMLSelectElement ? Array.from(reviewSettingsGitHubIssuesAutoStartLabels.selectedOptions, option => option.value) : [],
         assign_creator: reviewSettingsAssignCreator instanceof HTMLInputElement ? reviewSettingsAssignCreator.checked : true,
-        disabled_repositories: Array.from(reviewSettingsRepositories?.querySelectorAll("input[type=checkbox]:not(:checked)") || [], input => input.value),
+        disabled_repositories: [...(state.reviewSettings.disabledRepositories || [])],
       };
     }
 
@@ -7178,26 +7178,18 @@
     function applyDisabledRepositories(values) {
       state.reviewSettings = { ...state.reviewSettings, disabledRepositories: dedupeRepoValues(values) };
       reconcileRepositoryOwnerKeptDisabled();
-      syncRepositorySettingsSelection();
+      renderRepositorySettings();
       renderRepoHistoryOptions();
       renderChatRepos();
       setReviewSettingsStatus("", "Changes will be saved on close.");
     }
 
     function repositorySettingsRepoValues() {
-      return Array.from(reviewSettingsRepositories?.querySelectorAll("input[type=checkbox]") || [], input => input.value);
-    }
-
-    function syncRepositorySettingsSelection() {
-      // Group the rendered repositories once so each owner button is a map
-      // lookup instead of another pass over every checkbox.
-      const groups = repositoryOwnerGroups(repositorySettingsRepoValues());
-      for (const input of reviewSettingsRepositories?.querySelectorAll("input[type=checkbox]") || []) {
-        input.checked = !repositoryDisabled(input.value);
-      }
-      for (const button of reviewSettingsOwners?.querySelectorAll("[data-repo-owner]") || []) {
-        button.setAttribute("aria-pressed", repositoryOwnerPressedValue(groups.get(button.dataset.repoOwner)?.repos || []));
-      }
+      return dedupeRepoValues([
+        ...allGitHubRepoSelectValues(),
+        ...state.repoHistory,
+        ...(state.reviewSettings.disabledRepositories || []),
+      ]);
     }
 
     function repositoryOwnerRepos(ownerKey) {
@@ -7238,13 +7230,16 @@
 
     function renderRepositorySettings() {
       if (!reviewSettingsRepositories || !reviewSettingsOwners || !reviewSettingsRepositoriesEmpty) return;
-      const repos = dedupeRepoValues([
-        ...allGitHubRepoSelectValues(),
-        ...state.repoHistory,
-        ...(state.reviewSettings.disabledRepositories || []),
-      ]);
+      const repos = repositorySettingsRepoValues();
+      const groups = repositoryOwnerGroups(repos);
+      const visibleRepos = repos.filter(repo => {
+        const owner = repositoryOwnerKey(repo);
+        if (!owner) return true;
+        const ownerRepos = groups.get(owner)?.repos || [];
+        return !ownerRepos.every(repositoryDisabled);
+      });
       const controlsDisabled = state.settingsBusy || !state.settingsLoaded;
-      reviewSettingsRepositories.replaceChildren(...repos.map(repo => {
+      reviewSettingsRepositories.replaceChildren(...visibleRepos.map(repo => {
         const label = document.createElement("label");
         label.className = "selectable-option repository-settings-option";
         const input = document.createElement("input");
@@ -7254,12 +7249,16 @@
         input.checked = !repositoryDisabled(repo);
         input.disabled = controlsDisabled;
         input.addEventListener("change", () => {
+          const disabled = state.reviewSettings.disabledRepositories || [];
+          const repoKey = repoDedupeKey(input.value);
           const owner = repositoryOwnerKey(input.value);
           if (!input.checked && state.repositoryOwnerKeptDisabled.has(owner)) {
-            state.repositoryOwnerKeptDisabled.get(owner).add(repoDedupeKey(input.value));
+            state.repositoryOwnerKeptDisabled.get(owner).add(repoKey);
             persistRepositoryOwnerKeptDisabled();
           }
-          applyDisabledRepositories(Array.from(reviewSettingsRepositories.querySelectorAll("input[type=checkbox]:not(:checked)"), node => node.value));
+          applyDisabledRepositories(input.checked
+            ? disabled.filter(value => repoDedupeKey(value) !== repoKey)
+            : [...disabled, input.value]);
         });
         const icon = document.createElement("i");
         icon.setAttribute("data-lucide", "folder-git-2");
@@ -7274,7 +7273,6 @@
       reconcileRepositoryOwnerKeptDisabled();
 
       const owners = repositoryOwnerDetails();
-      const groups = repositoryOwnerGroups(repos);
       reviewSettingsOwners.replaceChildren(...Array.from(groups, ([key, group]) => {
         const details = owners.get(key) || { avatar: "", type: "" };
         const button = document.createElement("button");
@@ -7318,7 +7316,7 @@
       }));
       reviewSettingsOwnersColumn?.classList.toggle("hidden", groups.size === 0);
       reviewSettingsRepositoryColumns?.classList.toggle("hidden", repos.length === 0);
-      reviewSettingsRepositoriesEmpty.classList.toggle("hidden", repos.length > 0);
+      reviewSettingsRepositoriesEmpty.classList.toggle("hidden", visibleRepos.length > 0);
     }
 
     function renderRepoHistorySelect(historyField, select, input) {

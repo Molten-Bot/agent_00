@@ -52,7 +52,7 @@ async function toggleRepositoryRow(page, value) {
   await page.locator(`#review-settings-repositories label:has(input[value="${value}"])`).click();
   await page.waitForFunction(({ repo, checked }) => {
     const input = Array.from(document.querySelectorAll('#review-settings-repositories input[type=checkbox]')).find(node => node.value === repo);
-    return Boolean(input) && input.checked !== checked;
+    return !input || input.checked !== checked;
   }, { repo: value, checked: before });
 }
 async function close(page, method = 'button') {
@@ -227,8 +227,8 @@ test('repository selections hide dropdown options and manual entry enables them 
 
   await page.locator('#settings-open').click();
   await select(page, 'automation');
-  assert.equal(await option.isChecked(), false, 'disabled repository remains available in settings');
-  await toggleRepositoryRow(page, 'https://github.com/acme/widget');
+  assert.equal(await option.count(), 0, 'a fully disabled owner has no repositories in the repository picker');
+  await page.locator('#review-settings-owners [data-repo-owner="acme"]').click();
   await close(page);
   assert.deepEqual(writes.at(-1).disabled_repositories, []);
   assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 1);
@@ -334,21 +334,23 @@ test('owner avatars clear and restore every repository they own', async t => {
   await acme.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'false');
   for (const repo of ['widget', 'gadget']) {
-    assert.equal(await page.locator(`#review-settings-repositories input[value="https://github.com/acme/${repo}"]`).isChecked(), false);
+    assert.equal(await page.locator(`#review-settings-repositories input[value="https://github.com/acme/${repo}"]`).count(), 0, 'cleared owner repositories leave the repository picker');
   }
   assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/octocat/notes"]').isChecked(), true, 'other owners keep their repositories');
-  // Re-clearing a partly restored owner must not treat repositories left off by
-  // the owner action as individual deselections.
+  await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'true');
+  // Re-clearing a partly selected owner remembers repositories deselected one
+  // by one, while hiding every repository until its owner is selected again.
   await toggleRepositoryRow(page, 'https://github.com/acme/widget');
   assert.equal(await acme.getAttribute('aria-pressed'), 'mixed');
   await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'false');
+  assert.equal(await page.locator('#review-settings-repositories input[value^="https://github.com/acme/"]').count(), 0);
   await acme.click();
-  assert.equal(await acme.getAttribute('aria-pressed'), 'true', 'mixed re-clear remains fully undoable');
+  assert.equal(await acme.getAttribute('aria-pressed'), 'mixed', 'reselecting owner preserves individually deselected repositories');
   // Enabling every row directly ends the prior owner-clear operation and drops
   // its persisted provenance before a later, unrelated owner action.
-  await acme.click();
   await toggleRepositoryRow(page, 'https://github.com/acme/widget');
-  await toggleRepositoryRow(page, 'https://github.com/acme/gadget');
   assert.equal(await acme.getAttribute('aria-pressed'), 'true');
   assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem(key) || '{}').acme, 'hubui.repositoryOwnerKeptDisabled.v1'), undefined, 'fully enabling rows prunes stale owner state');
   await acme.click();
@@ -364,7 +366,7 @@ test('owner avatars clear and restore every repository they own', async t => {
   assert.equal(await acme.getAttribute('aria-pressed'), 'mixed', 'a partly enabled owner reports a mixed selection');
   await acme.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'false', 'a partly selected owner clears in a single click');
-  assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/acme/widget"]').isChecked(), false);
+  assert.equal(await page.locator('#review-settings-repositories input[value^="https://github.com/acme/"]').count(), 0, 'cleared owner repositories stay hidden');
   // A reload must not forget which repositories were already deselected before
   // the owner-wide clear, or re-selecting the owner silently turns them back on.
   await close(page);
@@ -375,6 +377,7 @@ test('owner avatars clear and restore every repository they own', async t => {
   await select(page, 'automation');
   await acme.waitFor();
   assert.equal(await acme.getAttribute('aria-pressed'), 'false', 'the owner-wide clear survives a reload');
+  assert.equal(await page.locator('#review-settings-repositories input[value^="https://github.com/acme/"]').count(), 0, 'hidden owner repositories stay hidden after reload');
   await acme.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'mixed', 're-selecting an owner keeps the repositories deselected before the clear');
   assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/acme/gadget"]').isChecked(), false, 'the individually deselected repository stays off');
@@ -402,7 +405,24 @@ test('an owner the GitHub API never described keeps a neutral icon', async t => 
   await initech.locator('svg.lucide-at-sign').waitFor();
   assert.equal(await initech.locator('svg.lucide-user').count(), 0, 'an owner with no API metadata is never drawn as a person');
   assert.equal(await initech.getAttribute('aria-pressed'), 'false', 'its only repository stays deselected');
+  assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/initech/payroll"]').count(), 0, 'server-persisted owner clears hide repositories without local provenance');
   await page.locator('#review-settings-owners [data-repo-owner="acme"] svg.lucide-building-2').waitFor();
+});
+
+test('ownerless repository history stays visible when disabled', async t => {
+  const repo = 'https://gitlab.com/acme/widget';
+  const { page } = await openSettings(t, {
+    initialSettings: { ...defaults, disabled_repositories: [repo] },
+    configurePage: async page => {
+      await page.addInitScript(repo => localStorage.setItem('hubui.repoHistory.v1', JSON.stringify([repo])), repo);
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [] } }));
+    },
+  });
+  await select(page, 'automation');
+  const option = page.locator(`#review-settings-repositories input[value="${repo}"]`);
+  await option.waitFor();
+  assert.equal(await option.isChecked(), false, 'ownerless disabled history can still be selected directly');
+  assert.equal(await page.locator('#review-settings-owners button').count(), 0, 'ownerless history does not invent an owner control');
 });
 
 test('JSON submission enables manually added repositories', async t => {
