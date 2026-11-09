@@ -247,7 +247,10 @@
     open();
     editor.hidden = true;
     list.hidden = true;
-    try { await load(); showList(); status(""); } catch (error) { status(error.message, true); }
+    try { await load(); showList(); status(""); } catch (error) {
+      status(error.message, true);
+      track("library_schedules_load_failed", { source: "dialog" });
+    }
   });
   byID("close").addEventListener("click", () => modal.close());
   modal.addEventListener("close", () => opener?.focus());

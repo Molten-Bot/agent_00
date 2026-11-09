@@ -28,6 +28,7 @@ func TestSettingsAndIssueAssetsTrackMeaningfulEngagement(t *testing.T) {
 		{
 			asset: "static/custom-library-sources.js",
 			events: []string{
+				"custom_library_sources_load_failed",
 				"custom_library_source_validation_failed",
 				"custom_library_source_add_started",
 				"custom_library_source_add_succeeded",
@@ -42,6 +43,7 @@ func TestSettingsAndIssueAssetsTrackMeaningfulEngagement(t *testing.T) {
 			asset: "static/library-schedules.js",
 			events: []string{
 				"library_schedules_opened",
+				"library_schedules_load_failed",
 				"library_schedule_editor_opened",
 				"library_schedule_validation_failed",
 				"library_schedule_${operation}_started",
@@ -62,8 +64,10 @@ func TestSettingsAndIssueAssetsTrackMeaningfulEngagement(t *testing.T) {
 				"github_issue_task_succeeded",
 				"github_issue_task_failed",
 				"github_issue_selected",
+				"github_issue_load_failed",
 				"github_issues_loaded",
 				"github_issues_load_failed",
+				"github_issues_initialization_failed",
 				"github_issues_repo_selected",
 				"github_issues_assignee_filter_changed",
 			},

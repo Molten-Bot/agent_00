@@ -118,18 +118,19 @@
   };
   element('save').addEventListener('click', async () => {
     if (busy || modalBusy) return;
+    const nextEnabled = enabled.checked;
     setBusy(true);
     status.textContent = 'Saving signing settings…';
-    track('commit_signing_save_started', { enabled: enabled.checked, has_passphrase: Boolean(passphrase.value) });
+    track('commit_signing_save_started', { enabled: nextEnabled, has_passphrase: Boolean(passphrase.value) });
     try {
-      const pending = request('', { enabled: enabled.checked, private_key: privateKey.value, passphrase: passphrase.value });
+      const pending = request('', { enabled: nextEnabled, private_key: privateKey.value, passphrase: passphrase.value });
       clearSecrets();
       const settings = await pending;
       status.textContent = settings.message || 'Signing settings saved.';
       track('commit_signing_save_succeeded', { enabled: Boolean(settings.enabled) });
     } catch (error) {
       status.textContent = error.message || 'Unable to save signing settings.';
-      track('commit_signing_save_failed', { enabled: enabled.checked });
+      track('commit_signing_save_failed', { enabled: nextEnabled });
     }
     finally { clearSecrets(); setBusy(false); }
   });

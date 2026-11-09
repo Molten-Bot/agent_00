@@ -97,12 +97,18 @@ test('failed imports clear secrets, preserve saved state, and fit a narrow viewp
     : route.fulfill({ json: { ok: true, settings: saved } }), { width: 390, height: 844 });
   await page.locator('#commit-signing-private-key').fill('invalid-private-key');
   await page.locator('#commit-signing-passphrase').fill('wrong-passphrase');
+  await page.locator('label:has(#commit-signing-enabled)').click();
   await page.locator('#commit-signing-save').click();
   await page.waitForFunction(() => document.getElementById('commit-signing-status').textContent.includes('incorrect passphrase'));
   assert.equal(await page.locator('#commit-signing-private-key').inputValue(), '');
   assert.equal(await page.locator('#commit-signing-passphrase').inputValue(), '');
   assert.equal(await page.locator('#commit-signing-public-key').inputValue(), saved.public_key);
   assert.equal(await page.locator('#commit-signing-enabled').isChecked(), false);
+  const failedSave = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event' && args[1] === 'commit_signing_save_failed')
+    .at(-1));
+  assert.equal(failedSave[2].enabled, true, 'failure analytics records attempted enabled value');
   const overflow = await page.locator('.settings-shell').evaluate(el => el.scrollWidth > el.clientWidth + 1);
   assert.equal(overflow, false, 'settings do not overflow horizontally');
   await page.locator('#commit-signing-private-key').fill('unsaved-secret');

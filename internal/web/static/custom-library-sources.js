@@ -107,6 +107,7 @@
       await refreshEntries();
     } catch (error) {
       setStatus(error.message || "Unable to load company library repos.", true);
+      track("custom_library_sources_load_failed");
     } finally {
       setBusy(false);
     }

@@ -689,6 +689,7 @@
         loadingIssueNumber = null;
         renderIssueList(currentIssues);
         setStatus(error.message || "Unable to load issue.", "error");
+        track("github_issue_load_failed", issueAnalyticsParams(repo));
       }
     }
   }
@@ -744,6 +745,7 @@
   }
 
   async function initialize() {
+    let stage = "settings";
     try {
       const settings = await requestJSON("/api/review-settings", { cache: "no-store" });
       const values = settings.settings || {};
@@ -756,6 +758,7 @@
         return;
       }
       browser.hidden = false;
+      stage = "repositories";
       const response = await requestJSON("/api/github/repos", { cache: "no-store" });
       repositories = Array.isArray(response.repos) ? response.repos : [];
       repoSelect.replaceChildren();
@@ -791,6 +794,7 @@
       }
     } catch (error) {
       setStatus(error.message || "Unable to initialize the GitHub Issues browser.", "error");
+      track("github_issues_initialization_failed", { source: "github_issues", stage });
     }
   }
 
