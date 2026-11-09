@@ -7229,6 +7229,7 @@
       const groups = repositoryOwnerGroups(repos);
       const visibleRepos = repos.filter(repo => {
         const owner = repositoryOwnerKey(repo);
+        if (!owner) return true;
         const ownerRepos = groups.get(owner)?.repos || [];
         return !ownerRepos.every(repositoryDisabled);
       });

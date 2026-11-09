@@ -409,6 +409,22 @@ test('an owner the GitHub API never described keeps a neutral icon', async t => 
   await page.locator('#review-settings-owners [data-repo-owner="acme"] svg.lucide-building-2').waitFor();
 });
 
+test('ownerless repository history stays visible when disabled', async t => {
+  const repo = 'https://gitlab.com/acme/widget';
+  const { page } = await openSettings(t, {
+    initialSettings: { ...defaults, disabled_repositories: [repo] },
+    configurePage: async page => {
+      await page.addInitScript(repo => localStorage.setItem('hubui.repoHistory.v1', JSON.stringify([repo])), repo);
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [] } }));
+    },
+  });
+  await select(page, 'automation');
+  const option = page.locator(`#review-settings-repositories input[value="${repo}"]`);
+  await option.waitFor();
+  assert.equal(await option.isChecked(), false, 'ownerless disabled history can still be selected directly');
+  assert.equal(await page.locator('#review-settings-owners button').count(), 0, 'ownerless history does not invent an owner control');
+});
+
 test('JSON submission enables manually added repositories', async t => {
   const repoURL = 'https://github.com/acme/widget';
   let submitted;
