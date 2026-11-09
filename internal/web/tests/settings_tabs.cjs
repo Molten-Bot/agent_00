@@ -871,6 +871,110 @@ test('selecting an issue highlights its row and breathes a loader while details 
   assert.equal(await row.locator('.github-issue-loading').count(), 0);
 });
 
+test('duplicate GitHub issue task submission is tracked separately from failure', async t => {
+  const issue = { number: 17, title: 'Add issue browser', state: 'OPEN', url: 'https://github.com/example/project/issues/17', author: { login: 'octocat' }, labels: [], assignees: [] };
+  const { page } = await openSettings(t, {
+    path: '/#studio-issues',
+    initialSettings: { ...defaults, github_issues_enabled: true },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+        { full_name: 'example/project', html_url: 'https://github.com/example/project', default_branch: 'main', private: false },
+      ] } }));
+      await page.route('**/api/github/issues**', route => {
+        const path = new URL(route.request().url()).pathname;
+        return route.fulfill({ json: path.endsWith('/17')
+          ? { ok: true, issue: { ...issue, body: 'Description', comments: [] } }
+          : { ok: true, issues: [issue] } });
+      });
+      await page.route('**/api/local-prompt', route => route.fulfill({
+        status: 409,
+        json: { ok: false, duplicate: true, request_id: 'existing-17', state: 'in_flight', error: 'duplicate submission ignored' },
+      }));
+    },
+  });
+  await page.locator('#github-issues-repo').selectOption('example/project');
+  await page.locator('.github-issue-list-item').click();
+  const start = page.getByRole('button', { name: 'Start task' });
+  await start.click();
+  await page.waitForFunction(() => document.querySelector('.github-issue-task-status')?.textContent.includes('Duplicate ignored'));
+  assert.equal(await page.locator('.github-issue-task-status').textContent(), 'Duplicate ignored; existing request existing-17 (in flight).');
+  assert.equal(await start.isDisabled(), true);
+  const events = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event')
+    .map(args => args[1]));
+  assert.equal(events.includes('github_issue_task_duplicate'), true);
+  assert.equal(events.includes('github_issue_task_failed'), false);
+});
+
+test('GitHub issue task analytics keeps request-time link mode', async t => {
+  let releaseSubmission;
+  const submissionPending = new Promise(resolve => { releaseSubmission = resolve; });
+  const issue = { number: 17, title: 'Add issue browser', state: 'OPEN', url: 'https://github.com/example/project/issues/17', author: { login: 'octocat' }, labels: [], assignees: [] };
+  const { page } = await openSettings(t, {
+    path: '/#studio-issues',
+    initialSettings: { ...defaults, github_issues_enabled: true, github_issue_link_mode: 'reference' },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+        { full_name: 'example/project', html_url: 'https://github.com/example/project', default_branch: 'main', private: false },
+      ] } }));
+      await page.route('**/api/github/issues**', route => {
+        const path = new URL(route.request().url()).pathname;
+        return route.fulfill({ json: path.endsWith('/17')
+          ? { ok: true, issue: { ...issue, body: 'Description', comments: [] } }
+          : { ok: true, issues: [issue] } });
+      });
+      await page.route('**/api/local-prompt', async route => {
+        await submissionPending;
+        return route.fulfill({ json: { ok: true, request_id: 'queued-17' } });
+      });
+    },
+  });
+  await page.locator('#github-issues-repo').selectOption('example/project');
+  await page.locator('.github-issue-list-item').click();
+  await page.getByRole('button', { name: 'Start task' }).click();
+  await page.waitForFunction(() => window.dataLayer.some(args => args[0] === 'event' && args[1] === 'github_issue_task_started'));
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('github-issue-link-mode-updated', { detail: { mode: 'close' } })));
+  releaseSubmission();
+  await page.waitForFunction(() => window.dataLayer.some(args => args[0] === 'event' && args[1] === 'github_issue_task_succeeded'));
+
+  const events = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event' && ['github_issue_task_started', 'github_issue_task_succeeded'].includes(args[1])));
+  assert.deepEqual(events.map(args => args[2].link_mode), ['reference', 'reference']);
+});
+
+test('GitHub issue load analytics keeps request-time search context', async t => {
+  let releaseIssues;
+  const issuesPending = new Promise(resolve => { releaseIssues = resolve; });
+  const { page } = await openSettings(t, {
+    path: '/#studio-issues',
+    initialSettings: { ...defaults, github_issues_enabled: true },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+        { full_name: 'example/project', html_url: 'https://github.com/example/project', default_branch: 'main', private: false },
+      ] } }));
+      await page.route('**/api/github/issues**', async route => {
+        await issuesPending;
+        return route.fulfill({ json: { ok: true, issues: [] } });
+      });
+    },
+  });
+  const requestStarted = page.waitForRequest(request => new URL(request.url()).pathname === '/api/github/issues');
+  await page.locator('#github-issues-repo').selectOption('example/project');
+  await requestStarted;
+  await page.locator('#github-issues-search').evaluate(input => { input.value = 'changed while loading'; });
+  releaseIssues();
+  await page.waitForFunction(() => document.getElementById('github-issues-status').textContent === '');
+  const loaded = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event' && args[1] === 'github_issues_loaded')
+    .map(args => args[2]).at(-1));
+  assert.equal(loaded.has_query, false);
+  assert.equal(loaded.assigned_to_me, true);
+  assert.equal(loaded.result_count, 0);
+});
+
 for (const method of ['escape', 'backdrop']) test(`${method} saves settings before closing`, async t => {
   const { page, writes } = await openSettings(t);
   await select(page, 'automation'); await toggle(page, 'review-settings-auto-merge');
@@ -981,6 +1085,46 @@ test('library sources load on direct open and refresh after adding and removing'
   await page.getByRole('button', { name: 'Remove existing', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('#custom-library-list .library-schedule-row').length === 1);
   assert.equal(await page.locator('#custom-library-list strong').textContent(), 'new-library');
+  const analytics = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event')
+    .map(args => ({ name: args[1], params: args[2] })));
+  assert.deepEqual(
+    analytics.filter(event => event.name.startsWith('custom_library_source_')),
+    [
+      { name: 'custom_library_source_add_started', params: { send_to: 'G-BY33RFG2WB' } },
+      { name: 'custom_library_source_add_succeeded', params: { send_to: 'G-BY33RFG2WB', task_count: 2 } },
+      { name: 'custom_library_source_remove_started', params: { send_to: 'G-BY33RFG2WB' } },
+      { name: 'custom_library_source_remove_succeeded', params: { send_to: 'G-BY33RFG2WB' } },
+    ],
+  );
+});
+
+test('library source refresh failure does not report successful add as failed', async t => {
+  let failReads = false;
+  const { page } = await openSettings(t, { configurePage: async page => {
+    await page.route('**/api/library/sources**', route => {
+      if (route.request().method() === 'POST') {
+        failReads = true;
+        return route.fulfill({ json: { ok: true, source: { ...route.request().postDataJSON(), taskCount: 1 } } });
+      }
+      if (failReads) return route.fulfill({ status: 503, json: { error: 'List unavailable.' } });
+      return route.fulfill({ json: { ok: true, sources: [] } });
+    });
+  }});
+  await select(page, 'library');
+  await page.locator('#custom-library-name').fill('new-library');
+  await page.locator('#custom-library-repo').fill('git@example.com:team/new.git');
+  await page.locator('#custom-library-add').click();
+  await page.waitForFunction(() => document.getElementById('custom-library-status').textContent.includes('List unavailable.'));
+
+  const events = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event')
+    .map(args => args[1]));
+  assert.equal(events.includes('custom_library_source_add_succeeded'), true);
+  assert.equal(events.includes('custom_library_source_add_failed'), false);
+  assert.equal(events.includes('custom_library_sources_refresh_failed'), true);
 });
 
 test('a failed initial read cannot overwrite saved settings with defaults', async t => {

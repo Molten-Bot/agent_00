@@ -41,9 +41,19 @@
   let busy = false;
   let opener = null;
 
+  function track(name, params = {}) {
+    if (typeof window.trackAnalyticsEvent === "function") window.trackAnalyticsEvent(name, params);
+  }
+
   function status(message, error = false) {
     byID("status").textContent = message;
     byID("status").classList.toggle("is-error", error);
+  }
+  function duplicateNotice(body) {
+    const requestID = body?.request_id || "(unknown)";
+    const rawState = String(body?.state || "").trim();
+    if (!rawState) return `Duplicate ignored; existing request ${requestID}.`;
+    return `Duplicate ignored; existing request ${requestID} (${rawState.replace(/_/g, " ")}).`;
   }
   function taskFor(name) {
     return (state.libraryTasks || []).find((task) => task.name === name);
@@ -172,6 +182,7 @@
     byID("delete").hidden = !entry.key;
     slider.value = String(indexForHours(entry.intervalHours || 24));
     updateInterval();
+    track("library_schedule_editor_opened", { mode: entry.key ? "edit" : "create" });
     slider.focus();
   }
   function open() {
@@ -188,32 +199,72 @@
       await load();
       const existing = schedules.find((schedule) => schedule.libraryTaskName === entry.name && repoDedupeKey(schedule.repo) === repoDedupeKey(payload.repos[0]));
       showEditor(existing || { libraryTaskName: entry.name, repo: payload.repos[0], baseBranch: payload.branch || "", targetSubdir: payload.targetsubdir || ".", reviewers: payload.reviewers || [], draft: Boolean(payload.draft), promptContext: payload.promptcontext || "", intervalHours: 24 });
-    } catch (error) { status(error.message, true); }
+    } catch (error) {
+      status(error.message, true);
+      track("library_schedules_load_failed", { source: "task" });
+    }
   }
-  async function mutate(action, success) {
+  async function mutate(action, success, operation, params = {}, followUp) {
     if (busy) return;
     busy = true;
     for (const control of modal.querySelectorAll("button, input")) control.disabled = true;
     status("Saving…");
+    track(`library_schedule_${operation}_started`, params);
     try {
-      await action();
-      await load();
-      showList();
-      status(success);
-    } catch (error) { status(error.message, true); }
-    finally {
+      try {
+        await action();
+        track(`library_schedule_${operation}_succeeded`, params);
+      } catch (error) {
+        status(error.message, true);
+        track(`library_schedule_${operation}_failed`, params);
+        return;
+      }
+      let successIsError = false;
+      if (followUp) {
+        track("library_schedule_run_now_started", params);
+        try {
+          await followUp();
+          track("library_schedule_run_now_succeeded", params);
+        } catch (error) {
+          if (error.status === 409 && error.body?.duplicate) {
+            success = `Schedule saved. ${duplicateNotice(error.body)}`;
+            track("library_schedule_run_now_duplicate", params);
+          } else {
+            success = `Schedule saved, but task could not start: ${error.message || "request failed"}`;
+            successIsError = true;
+            track("library_schedule_run_now_failed", params);
+          }
+        }
+      }
+      try {
+        await load();
+        showList();
+        status(success, successIsError);
+      } catch (error) {
+        status(`${success} Unable to refresh schedules: ${error.message}`, true);
+        track("library_schedules_refresh_failed", { operation });
+      }
+    } finally {
       busy = false;
       for (const control of modal.querySelectorAll("button, input")) control.disabled = false;
     }
   }
   function remove(entry) {
-    return mutate(() => request({ method: "DELETE" }, `?key=${encodeURIComponent(entry.key)}`), "Schedule deleted. Any run already started will continue.");
+    return mutate(
+      () => request({ method: "DELETE" }, `?key=${encodeURIComponent(entry.key)}`),
+      "Schedule deleted. Any run already started will continue.",
+      "delete",
+    );
   }
   document.getElementById("library-schedules-open").addEventListener("click", async () => {
+    track("library_schedules_opened");
     open();
     editor.hidden = true;
     list.hidden = true;
-    try { await load(); showList(); status(""); } catch (error) { status(error.message, true); }
+    try { await load(); showList(); status(""); } catch (error) {
+      status(error.message, true);
+      track("library_schedules_load_failed", { source: "dialog" });
+    }
   });
   byID("close").addEventListener("click", () => modal.close());
   modal.addEventListener("close", () => opener?.focus());
@@ -230,20 +281,36 @@
     const promptContext = contextInput.value.trim();
     if (contextInput.required && !promptContext) {
       status(`${contextLabel.textContent || "Additional context"} is required for this task.`, true);
+      track("library_schedule_validation_failed", { validation_error: "missing_context" });
       return;
     }
     const runNow = byID("run-now").checked;
-    void mutate(async () => {
-      await request({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ libraryTaskName, repo, baseBranch, targetSubdir, reviewers, draft, promptContext, intervalHours: hoursForIndex(slider.value) }) });
-      if (!runNow) return;
-      const response = await fetch("/api/library/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ libraryTaskName, repos: [repo], baseBranch, targetSubdir, reviewers, draft, promptContext }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(`Schedule saved, but task could not start: ${body.error || `submit http ${response.status}`}`);
-    }, runNow ? "Schedule saved and task queued." : "Schedule saved. You can still use Run for a one-time task.");
+    const params = {
+      mode: editing.key ? "edit" : "create",
+      run_now: runNow,
+      draft,
+      interval_hours: hoursForIndex(slider.value),
+    };
+    void mutate(
+      () => request({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ libraryTaskName, repo, baseBranch, targetSubdir, reviewers, draft, promptContext, intervalHours: hoursForIndex(slider.value) }) }),
+      runNow ? "Schedule saved and task queued." : "Schedule saved. You can still use Run for a one-time task.",
+      "save",
+      params,
+      !runNow ? null : async () => {
+        const response = await fetch("/api/library/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ libraryTaskName, repos: [repo], baseBranch, targetSubdir, reviewers, draft, promptContext }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(body.error || `submit http ${response.status}`);
+          error.status = response.status;
+          error.body = body;
+          throw error;
+        }
+      },
+    );
   });
   document.addEventListener("change", refreshButtons);
   libraryRepoInput.addEventListener("input", refreshButtons);

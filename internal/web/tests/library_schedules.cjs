@@ -105,3 +105,129 @@ test('Run Now saves schedule and submits one immediate library run', async t => 
   assert.equal(submitted.libraryTaskName, 'unit-test-coverage');
   assert.deepEqual(submitted.repos, ['https://github.com/acme/run-now.git']);
 });
+
+test('Run Now failure reports failed run without misclassifying successful schedule save', async t => {
+  const page = await openPage(t);
+  await page.route('**/api/library/run', route => route.fulfill({
+    status: 503,
+    contentType: 'application/json',
+    body: JSON.stringify({ error: 'Queue unavailable.' }),
+  }));
+  const saved = await page.evaluate(async () => {
+    const response = await fetch('/api/library/schedules', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ libraryTaskName: 'unit-test-coverage', repo: 'acme/run-now-failure', intervalHours: 24 }),
+    });
+    return response.json();
+  });
+  assert.equal(saved.ok, true);
+
+  await page.goto(`${baseURL}/#studio-library`);
+  await page.waitForFunction(() => Boolean(window.LibrarySchedulesUI));
+  await page.locator('#library-schedules-open').click();
+  await page.locator('.library-schedule-row').filter({ hasText: 'acme/run-now-failure' }).locator('button[title^="Edit schedule"]').click();
+  await page.locator('#library-schedule-run-now-field').click();
+  await page.locator('#library-schedule-save').click();
+  await page.waitForFunction(() => document.getElementById('library-schedule-status').textContent === 'Schedule saved, but task could not start: Queue unavailable.');
+
+  const events = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event')
+    .map(args => args[1]));
+  assert.equal(events.includes('library_schedule_save_succeeded'), true);
+  assert.equal(events.includes('library_schedule_save_failed'), false);
+  assert.equal(events.includes('library_schedule_run_now_started'), true);
+  assert.equal(events.includes('library_schedule_run_now_failed'), true);
+  assert.equal(events.includes('library_schedule_run_now_succeeded'), false);
+});
+
+test('Run Now duplicate is tracked separately and preserves successful schedule save', async t => {
+  const page = await openPage(t);
+  await page.route('**/api/library/run', route => route.fulfill({
+    status: 409,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: false, duplicate: true, request_id: 'existing-run', state: 'in_flight', error: 'duplicate submission ignored' }),
+  }));
+  const saved = await page.evaluate(async () => {
+    const response = await fetch('/api/library/schedules', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ libraryTaskName: 'unit-test-coverage', repo: 'acme/run-now-duplicate', intervalHours: 24 }),
+    });
+    return response.json();
+  });
+  assert.equal(saved.ok, true);
+
+  await page.goto(`${baseURL}/#studio-library`);
+  await page.waitForFunction(() => Boolean(window.LibrarySchedulesUI));
+  await page.locator('#library-schedules-open').click();
+  await page.locator('.library-schedule-row').filter({ hasText: 'acme/run-now-duplicate' }).locator('button[title^="Edit schedule"]').click();
+  await page.locator('#library-schedule-run-now-field').click();
+  await page.locator('#library-schedule-save').click();
+  await page.waitForFunction(() => document.getElementById('library-schedule-status').textContent.includes('Duplicate ignored'));
+
+  assert.equal(await page.locator('#library-schedule-status').textContent(), 'Schedule saved. Duplicate ignored; existing request existing-run (in flight).');
+  assert.equal(await page.locator('#library-schedule-status').evaluate(node => node.classList.contains('is-error')), false);
+  const events = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event')
+    .map(args => args[1]));
+  assert.equal(events.includes('library_schedule_save_succeeded'), true);
+  assert.equal(events.includes('library_schedule_run_now_duplicate'), true);
+  assert.equal(events.includes('library_schedule_run_now_failed'), false);
+});
+
+test('Run Now network failure keeps successful schedule save in status', async t => {
+  const page = await openPage(t);
+  await page.route('**/api/library/run', route => route.abort('connectionfailed'));
+  const saved = await page.evaluate(async () => {
+    const response = await fetch('/api/library/schedules', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ libraryTaskName: 'unit-test-coverage', repo: 'acme/run-now-network', intervalHours: 24 }),
+    });
+    return response.json();
+  });
+  assert.equal(saved.ok, true);
+
+  await page.goto(`${baseURL}/#studio-library`);
+  await page.waitForFunction(() => Boolean(window.LibrarySchedulesUI));
+  await page.locator('#library-schedules-open').click();
+  await page.locator('.library-schedule-row').filter({ hasText: 'acme/run-now-network' }).locator('button[title^="Edit schedule"]').click();
+  await page.locator('#library-schedule-run-now-field').click();
+  await page.locator('#library-schedule-save').click();
+  await page.waitForFunction(() => document.getElementById('library-schedule-status').textContent.startsWith('Schedule saved, but task could not start:'));
+
+  assert.match(await page.locator('#library-schedule-status').textContent(), /^Schedule saved, but task could not start: /);
+  const events = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event')
+    .map(args => args[1]));
+  assert.equal(events.includes('library_schedule_save_succeeded'), true);
+  assert.equal(events.includes('library_schedule_run_now_failed'), true);
+});
+
+test('direct task schedule load failure is tracked', async t => {
+  const page = await openPage(t);
+  await page.evaluate(() => {
+    const input = document.getElementById('library-repo-input');
+    input.value = 'acme/repo';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.route('**/api/library/schedules', route => route.fulfill({
+    status: 503,
+    contentType: 'application/json',
+    body: JSON.stringify({ error: 'Schedules unavailable.' }),
+  }));
+  await page.evaluate(() => window.LibrarySchedulesUI.openFor({ name: 'unit-test-coverage' }));
+  await page.waitForFunction(() => window.dataLayer.some(args => args[0] === 'event'
+    && args[1] === 'library_schedules_load_failed'
+    && args[2]?.source === 'task'));
+  const failed = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event' && args[1] === 'library_schedules_load_failed')
+    .at(-1));
+  assert.equal(failed[2].source, 'task');
+  assert.equal(await page.locator('#library-schedule-status').textContent(), 'Schedules unavailable.');
+});

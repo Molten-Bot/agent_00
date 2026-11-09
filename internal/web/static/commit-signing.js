@@ -12,6 +12,9 @@
   let modalBusy = false;
   let savedEnabled = false;
   let loadPromise = null;
+  function track(name, params = {}) {
+    if (typeof window.trackAnalyticsEvent === 'function') window.trackAnalyticsEvent(name, params);
+  }
   function clearSecrets() { privateKey.value = ''; passphrase.value = ''; }
   function setBusy(value) {
     busy = value;
@@ -86,7 +89,10 @@
     status.textContent = '';
     loadPromise = (async () => {
       try { await request(''); }
-      catch (error) { status.textContent = error.message || 'Unable to load commit signing.'; }
+      catch (error) {
+        status.textContent = error.message || 'Unable to load commit signing.';
+        track('commit_signing_load_failed');
+      }
       finally { setBusy(false); loadPromise = null; }
     })();
     return loadPromise;
@@ -101,25 +107,34 @@
       if (enabled.checked === savedEnabled) return;
       const nextEnabled = enabled.checked;
       setBusy(true);
+      track('commit_signing_toggle_started', { enabled: nextEnabled });
       try {
         await request('', { enabled: nextEnabled }, true);
         status.textContent = 'Commit signing settings saved.';
+        track('commit_signing_toggle_succeeded', { enabled: nextEnabled });
       } catch (error) {
         status.textContent = error.message || 'Unable to save commit signing.';
+        track('commit_signing_toggle_failed', { enabled: nextEnabled });
         throw error;
       } finally { setBusy(false); }
     },
   };
   element('save').addEventListener('click', async () => {
     if (busy || modalBusy) return;
+    const nextEnabled = enabled.checked;
     setBusy(true);
     status.textContent = 'Saving signing settings…';
+    track('commit_signing_save_started', { enabled: nextEnabled, has_passphrase: Boolean(passphrase.value) });
     try {
-      const pending = request('', { enabled: enabled.checked, private_key: privateKey.value, passphrase: passphrase.value });
+      const pending = request('', { enabled: nextEnabled, private_key: privateKey.value, passphrase: passphrase.value });
       clearSecrets();
       const settings = await pending;
       status.textContent = settings.message || 'Signing settings saved.';
-    } catch (error) { status.textContent = error.message || 'Unable to save signing settings.'; }
+      track('commit_signing_save_succeeded', { enabled: Boolean(settings.enabled) });
+    } catch (error) {
+      status.textContent = error.message || 'Unable to save signing settings.';
+      track('commit_signing_save_failed', { enabled: nextEnabled });
+    }
     finally { clearSecrets(); setBusy(false); }
   });
   passphrase.addEventListener('keydown', event => {
@@ -129,13 +144,28 @@
     if (busy || modalBusy) return;
     setBusy(true);
     status.textContent = 'Checking registration and local signing…';
-    try { const settings = await request('/verify', {}); status.textContent = settings.message; }
-    catch (error) { status.textContent = error.message || 'Unable to verify signing.'; }
+    track('commit_signing_verify_started');
+    try {
+      const settings = await request('/verify', {});
+      status.textContent = settings.message;
+      track('commit_signing_verify_succeeded', { registration: settings.registration || 'unknown' });
+    }
+    catch (error) {
+      status.textContent = error.message || 'Unable to verify signing.';
+      track('commit_signing_verify_failed');
+    }
     finally { setBusy(false); }
   });
   element('copy').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(publicKey.value); status.textContent = 'Public key copied.'; }
-    catch (_) { publicKey.focus(); publicKey.select(); status.textContent = 'Select and copy the public key above.'; }
+    try {
+      await navigator.clipboard.writeText(publicKey.value);
+      status.textContent = 'Public key copied.';
+      track('commit_signing_public_key_copied', { result: 'copied' });
+    }
+    catch (_) {
+      publicKey.focus(); publicKey.select(); status.textContent = 'Select and copy the public key above.';
+      track('commit_signing_public_key_copy_failed', { fallback: 'manual_selection' });
+    }
   });
   window.addEventListener('commit-signing-open', load);
   window.addEventListener('commit-signing-close', clearSecrets);
