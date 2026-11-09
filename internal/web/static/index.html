@@ -13209,12 +13209,21 @@
       }
     }
 
+    function parseRFC3339Nano(value) {
+      const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/);
+      if (!match) return null;
+      const seconds = Date.parse(`${match[1]}${match[3]}`);
+      if (!Number.isFinite(seconds)) return null;
+      return { seconds, nanoseconds: (match[2] || "").padEnd(9, "0") };
+    }
+
     function snapshotIsOlder(candidate, current = state.snapshot) {
-      const candidateGeneratedAt = Date.parse(String(candidate?.generated_at || ""));
-      const currentGeneratedAt = Date.parse(String(current?.generated_at || ""));
-      return Number.isFinite(candidateGeneratedAt) &&
-        Number.isFinite(currentGeneratedAt) &&
-        candidateGeneratedAt < currentGeneratedAt;
+      const candidateGeneratedAt = parseRFC3339Nano(candidate?.generated_at);
+      const currentGeneratedAt = parseRFC3339Nano(current?.generated_at);
+      if (!candidateGeneratedAt || !currentGeneratedAt) return false;
+      return candidateGeneratedAt.seconds < currentGeneratedAt.seconds ||
+        (candidateGeneratedAt.seconds === currentGeneratedAt.seconds &&
+          candidateGeneratedAt.nanoseconds < currentGeneratedAt.nanoseconds);
     }
 
     function render(snapshot) {

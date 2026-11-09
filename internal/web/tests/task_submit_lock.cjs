@@ -65,7 +65,7 @@ test('Studio Run stays disabled until an in-progress task finishes', async t => 
   await expect(run).toHaveAttribute('title', '');
 });
 
-test('Studio Run ignores an older initial status after a newer stream snapshot', async t => {
+test('Studio Run ignores an initial status older by one nanosecond than the stream snapshot', async t => {
   const page = await browser.newPage();
   t.after(() => page.close());
   const errors = [];
@@ -81,7 +81,7 @@ test('Studio Run ignores an older initial status after a newer stream snapshot',
     if (url.pathname === '/api/status') {
       await initialStatusGate;
       return route.fulfill({ json: {
-        generated_at: '2026-11-09T20:00:00Z',
+        generated_at: '2026-11-09T20:00:00.123456788Z',
         tasks: [], events: [], repositories: [], stats: {}, resources: {},
       } });
     }
@@ -95,7 +95,7 @@ test('Studio Run ignores an older initial status after a newer stream snapshot',
     if (url.pathname === '/api/library') return route.fulfill({ json: { ok: true, tasks: [] } });
     if (url.pathname === '/api/stream') {
       const snapshot = {
-        generated_at: '2026-11-09T20:00:01Z',
+        generated_at: '2026-11-09T20:00:00.123456789Z',
         tasks: [{ request_id: 'github-actions-newer', source: 'github_actions', status: 'running' }],
         events: [], repositories: [], stats: {}, resources: {},
       };
