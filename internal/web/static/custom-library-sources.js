@@ -23,7 +23,7 @@
 
   function setStatus(message, isError) {
     status.textContent = message || "";
-    status.style.color = isError ? "var(--surface-danger)" : "";
+    status.classList.toggle("is-error", Boolean(isError));
   }
 
   function formatStatusLine(entry) {

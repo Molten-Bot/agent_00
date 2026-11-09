@@ -226,7 +226,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `href="/static/style.css?v=3"`) {
+	if !strings.Contains(markup, `href="/static/style.css?v=4"`) {
 		t.Fatalf("expected index html to include external stylesheet link")
 	}
 	if strings.Contains(markup, `tailwind`) || strings.Contains(markup, `cdn.tailwindcss.com`) {
@@ -2234,6 +2234,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "function resetPromptInputSize(input)") ||
 		!strings.Contains(markup, "input.style.removeProperty(\"height\");") ||
 		!strings.Contains(markup, "input.style.removeProperty(\"width\");") ||
+		!strings.Contains(markup, "input.style.removeProperty(\"--prompt-textarea-height\");") ||
 		!strings.Contains(markup, "input.classList.remove(\"prompt-textarea-manual-size\");") {
 		t.Fatalf("expected index html to include prompt textarea resize reset behavior")
 	}
@@ -2241,6 +2242,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, "input.classList.contains(\"prompt-textarea-manual-size\")") ||
 		!strings.Contains(markup, `input.classList.toggle("prompt-textarea-scroll", contentHeight > nextHeight + 1);`) ||
 		!strings.Contains(markup, "function watchPromptTextareaManualResize(input)") ||
+		!strings.Contains(markup, "input.style.setProperty(\"--prompt-textarea-height\", `${Math.ceil(currentRect.height)}px`);") ||
+		!strings.Contains(markup, "input.style.removeProperty(\"height\");\n            input.classList.add(\"prompt-textarea-manual-size\");\n            syncPromptInputSize(input);") ||
 		!strings.Contains(markup, "builderPromptInput.addEventListener(\"input\", () => handlePromptTextInput(builderPromptInput));") ||
 		!strings.Contains(markup, "watchPromptTextareaManualResize(builderPromptInput);") ||
 		!strings.Contains(markup, "localPromptInput.addEventListener(\"input\", () => handlePromptTextInput(localPromptInput));") ||

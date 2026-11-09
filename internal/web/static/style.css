@@ -1173,7 +1173,7 @@ body[data-app-display="studio"][data-prompt-mode="json"] #prompt-raw-panel {
 body[data-app-display="studio"][data-prompt-mode="builder"] #builder-prompt-input,
 body[data-app-display="studio"][data-prompt-mode="json"] #local-prompt-input {
   min-height: calc(var(--prompt-text-min-lines) * 1.4em + var(--prompt-text-padding-y));
-  height: auto;
+  height: var(--prompt-textarea-height, auto);
   max-width: 100%;
 }
 
@@ -1960,7 +1960,7 @@ select.prompt-control {
   line-height: 1.4;
   min-height: calc(var(--prompt-text-min-lines) * 1.4em + var(--prompt-text-padding-y));
   max-height: none;
-  height: auto;
+  height: var(--prompt-textarea-height, auto);
   overflow-y: auto;
 }
 
@@ -7051,6 +7051,14 @@ body.onboarding-modal-open {
   z-index: 0;
 }
 
+.review-settings-merge-slider-thumb.is-merge {
+  transform: translateX(calc(100% + 8px));
+}
+
+.review-settings-merge-slider-thumb.is-rebase {
+  transform: translateX(calc(2 * (100% + 8px)));
+}
+
 .review-settings-merge-slider .review-settings-merge-option {
   position: relative;
   z-index: 1;
@@ -8627,6 +8635,7 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 .settings-shell .custom-library-fields > p:first-child { margin: 28px 0 14px; line-height: 20px; }
 .settings-shell .custom-library-fields .prompt-text { font-size: 14px; }
 #custom-library-status:empty { display: none; }
+#custom-library-status.is-error { color: var(--surface-danger); }
 #custom-library-list { margin-top: 56px; }
 #custom-library-list .library-schedule-row { align-items: flex-start; padding: 0 0 14px; }
 #custom-library-list .library-schedule-row:last-child { border-bottom: 0; }

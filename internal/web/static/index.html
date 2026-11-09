@@ -20,7 +20,7 @@
   <script src="/static/lucide.min.js"></script>
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
-  <link rel="stylesheet" href="/static/style.css?v=3">
+  <link rel="stylesheet" href="/static/style.css?v=4">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -2910,7 +2910,8 @@
       });
       if (reviewSettingsMergeSliderThumb) {
         const index = Math.max(0, REVIEW_SETTINGS_MERGE_METHOD_ORDER.indexOf(normalized));
-        reviewSettingsMergeSliderThumb.style.transform = `translateX(calc(${index} * (100% + 8px)))`;
+        reviewSettingsMergeSliderThumb.classList.toggle("is-merge", index === 1);
+        reviewSettingsMergeSliderThumb.classList.toggle("is-rebase", index === 2);
       }
     }
 
@@ -5184,10 +5185,10 @@
       const previousHeight = input.classList.contains("prompt-textarea-manual-size")
         ? input.getBoundingClientRect().height
         : 0;
-      input.style.height = "auto";
+      input.style.setProperty("--prompt-textarea-height", "auto");
       const contentHeight = (input.scrollHeight || minHeight) + borderHeight;
       const nextHeight = Math.max(minHeight, previousHeight, Math.min(contentHeight, maxHeight));
-      input.style.height = `${Math.ceil(nextHeight)}px`;
+      input.style.setProperty("--prompt-textarea-height", `${Math.ceil(nextHeight)}px`);
       input.classList.toggle("prompt-textarea-scroll", contentHeight > nextHeight + 1);
     }
 
@@ -5221,7 +5222,10 @@
             Math.abs(Math.round(currentRect.height) - startHeight) > 1 ||
             Math.abs(Math.round(currentRect.width) - startWidth) > 1
           ) {
+            input.style.setProperty("--prompt-textarea-height", `${Math.ceil(currentRect.height)}px`);
+            input.style.removeProperty("height");
             input.classList.add("prompt-textarea-manual-size");
+            syncPromptInputSize(input);
           }
         }, { once: true });
       });
@@ -5233,6 +5237,7 @@
       }
       input.style.removeProperty("height");
       input.style.removeProperty("width");
+      input.style.removeProperty("--prompt-textarea-height");
       input.classList.remove("prompt-textarea-manual-size");
       input.classList.remove("prompt-textarea-scroll");
       syncPromptInputSize(input);
