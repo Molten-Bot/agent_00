@@ -334,21 +334,23 @@ test('owner avatars clear and restore every repository they own', async t => {
   await acme.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'false');
   for (const repo of ['widget', 'gadget']) {
-    assert.equal(await page.locator(`#review-settings-repositories input[value="https://github.com/acme/${repo}"]`).isChecked(), false);
+    assert.equal(await page.locator(`#review-settings-repositories input[value="https://github.com/acme/${repo}"]`).count(), 0, 'cleared owner repositories leave the repository picker');
   }
   assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/octocat/notes"]').isChecked(), true, 'other owners keep their repositories');
-  // Re-clearing a partly restored owner must not treat repositories left off by
-  // the owner action as individual deselections.
+  await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'true');
+  // Re-clearing a partly selected owner remembers repositories deselected one
+  // by one, while hiding every repository until its owner is selected again.
   await toggleRepositoryRow(page, 'https://github.com/acme/widget');
   assert.equal(await acme.getAttribute('aria-pressed'), 'mixed');
   await acme.click();
+  assert.equal(await acme.getAttribute('aria-pressed'), 'false');
+  assert.equal(await page.locator('#review-settings-repositories input[value^="https://github.com/acme/"]').count(), 0);
   await acme.click();
-  assert.equal(await acme.getAttribute('aria-pressed'), 'true', 'mixed re-clear remains fully undoable');
+  assert.equal(await acme.getAttribute('aria-pressed'), 'mixed', 'reselecting owner preserves individually deselected repositories');
   // Enabling every row directly ends the prior owner-clear operation and drops
   // its persisted provenance before a later, unrelated owner action.
-  await acme.click();
   await toggleRepositoryRow(page, 'https://github.com/acme/widget');
-  await toggleRepositoryRow(page, 'https://github.com/acme/gadget');
   assert.equal(await acme.getAttribute('aria-pressed'), 'true');
   assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem(key) || '{}').acme, 'hubui.repositoryOwnerKeptDisabled.v1'), undefined, 'fully enabling rows prunes stale owner state');
   await acme.click();
@@ -364,7 +366,7 @@ test('owner avatars clear and restore every repository they own', async t => {
   assert.equal(await acme.getAttribute('aria-pressed'), 'mixed', 'a partly enabled owner reports a mixed selection');
   await acme.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'false', 'a partly selected owner clears in a single click');
-  assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/acme/widget"]').isChecked(), false);
+  assert.equal(await page.locator('#review-settings-repositories input[value^="https://github.com/acme/"]').count(), 0, 'cleared owner repositories stay hidden');
   // A reload must not forget which repositories were already deselected before
   // the owner-wide clear, or re-selecting the owner silently turns them back on.
   await close(page);
@@ -375,6 +377,7 @@ test('owner avatars clear and restore every repository they own', async t => {
   await select(page, 'automation');
   await acme.waitFor();
   assert.equal(await acme.getAttribute('aria-pressed'), 'false', 'the owner-wide clear survives a reload');
+  assert.equal(await page.locator('#review-settings-repositories input[value^="https://github.com/acme/"]').count(), 0, 'hidden owner repositories stay hidden after reload');
   await acme.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'mixed', 're-selecting an owner keeps the repositories deselected before the clear');
   assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/acme/gadget"]').isChecked(), false, 'the individually deselected repository stays off');
