@@ -53,6 +53,7 @@ func TestSettingsAndIssueAssetsTrackMeaningfulEngagement(t *testing.T) {
 				"library_schedule_${operation}_failed",
 				"library_schedule_run_now_started",
 				"library_schedule_run_now_succeeded",
+				"library_schedule_run_now_duplicate",
 				"library_schedule_run_now_failed",
 				"library_schedules_refresh_failed",
 			},

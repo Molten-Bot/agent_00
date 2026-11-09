@@ -907,6 +907,43 @@ test('duplicate GitHub issue task submission is tracked separately from failure'
   assert.equal(events.includes('github_issue_task_failed'), false);
 });
 
+test('GitHub issue task analytics keeps request-time link mode', async t => {
+  let releaseSubmission;
+  const submissionPending = new Promise(resolve => { releaseSubmission = resolve; });
+  const issue = { number: 17, title: 'Add issue browser', state: 'OPEN', url: 'https://github.com/example/project/issues/17', author: { login: 'octocat' }, labels: [], assignees: [] };
+  const { page } = await openSettings(t, {
+    path: '/#studio-issues',
+    initialSettings: { ...defaults, github_issues_enabled: true, github_issue_link_mode: 'reference' },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+        { full_name: 'example/project', html_url: 'https://github.com/example/project', default_branch: 'main', private: false },
+      ] } }));
+      await page.route('**/api/github/issues**', route => {
+        const path = new URL(route.request().url()).pathname;
+        return route.fulfill({ json: path.endsWith('/17')
+          ? { ok: true, issue: { ...issue, body: 'Description', comments: [] } }
+          : { ok: true, issues: [issue] } });
+      });
+      await page.route('**/api/local-prompt', async route => {
+        await submissionPending;
+        return route.fulfill({ json: { ok: true, request_id: 'queued-17' } });
+      });
+    },
+  });
+  await page.locator('#github-issues-repo').selectOption('example/project');
+  await page.locator('.github-issue-list-item').click();
+  await page.getByRole('button', { name: 'Start task' }).click();
+  await page.waitForFunction(() => window.dataLayer.some(args => args[0] === 'event' && args[1] === 'github_issue_task_started'));
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('github-issue-link-mode-updated', { detail: { mode: 'close' } })));
+  releaseSubmission();
+  await page.waitForFunction(() => window.dataLayer.some(args => args[0] === 'event' && args[1] === 'github_issue_task_succeeded'));
+
+  const events = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event' && ['github_issue_task_started', 'github_issue_task_succeeded'].includes(args[1])));
+  assert.deepEqual(events.map(args => args[2].link_mode), ['reference', 'reference']);
+});
+
 test('GitHub issue load analytics keeps request-time search context', async t => {
   let releaseIssues;
   const issuesPending = new Promise(resolve => { releaseIssues = resolve; });

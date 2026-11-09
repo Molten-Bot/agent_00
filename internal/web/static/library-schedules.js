@@ -49,6 +49,12 @@
     byID("status").textContent = message;
     byID("status").classList.toggle("is-error", error);
   }
+  function duplicateNotice(body) {
+    const requestID = body?.request_id || "(unknown)";
+    const rawState = String(body?.state || "").trim();
+    if (!rawState) return `Duplicate ignored; existing request ${requestID}.`;
+    return `Duplicate ignored; existing request ${requestID} (${rawState.replace(/_/g, " ")}).`;
+  }
   function taskFor(name) {
     return (state.libraryTasks || []).find((task) => task.name === name);
   }
@@ -220,9 +226,14 @@
           await followUp();
           track("library_schedule_run_now_succeeded", params);
         } catch (error) {
-          success = error.message;
-          successIsError = true;
-          track("library_schedule_run_now_failed", params);
+          if (error.status === 409 && error.body?.duplicate) {
+            success = `Schedule saved. ${duplicateNotice(error.body)}`;
+            track("library_schedule_run_now_duplicate", params);
+          } else {
+            success = `Schedule saved, but task could not start: ${error.message || "request failed"}`;
+            successIsError = true;
+            track("library_schedule_run_now_failed", params);
+          }
         }
       }
       try {
@@ -292,7 +303,12 @@
           body: JSON.stringify({ libraryTaskName, repos: [repo], baseBranch, targetSubdir, reviewers, draft, promptContext }),
         });
         const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(`Schedule saved, but task could not start: ${body.error || `submit http ${response.status}`}`);
+        if (!response.ok) {
+          const error = new Error(body.error || `submit http ${response.status}`);
+          error.status = response.status;
+          error.body = body;
+          throw error;
+        }
       },
     );
   });

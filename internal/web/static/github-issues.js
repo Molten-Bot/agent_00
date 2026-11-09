@@ -651,7 +651,8 @@
     }
     submitButtons.forEach((button) => { button.disabled = true; });
     if (taskStatus) taskStatus.textContent = "Submitting task…";
-    track("github_issue_task_started", issueAnalyticsParams(repo));
+    const analyticsParams = issueAnalyticsParams(repo);
+    track("github_issue_task_started", analyticsParams);
     try {
       const body = await requestJSON("/api/local-prompt", {
         method: "POST",
@@ -669,15 +670,15 @@
         }),
       });
       if (taskStatus) taskStatus.textContent = `Task queued (${body.request_id || "request accepted"}).`;
-      track("github_issue_task_succeeded", issueAnalyticsParams(repo));
+      track("github_issue_task_succeeded", analyticsParams);
     } catch (error) {
       if (error.status === 409 && error.body?.duplicate) {
         if (taskStatus) taskStatus.textContent = duplicateNotice(error.body);
-        track("github_issue_task_duplicate", issueAnalyticsParams(repo));
+        track("github_issue_task_duplicate", analyticsParams);
         return;
       }
       if (taskStatus) taskStatus.textContent = `Could not start task: ${error.message || "request failed"}`;
-      track("github_issue_task_failed", issueAnalyticsParams(repo));
+      track("github_issue_task_failed", analyticsParams);
       submitButtons.forEach((button) => { button.disabled = false; });
     }
   }
