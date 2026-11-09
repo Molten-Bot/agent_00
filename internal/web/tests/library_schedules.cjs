@@ -141,3 +141,27 @@ test('Run Now failure reports failed run without misclassifying successful sched
   assert.equal(events.includes('library_schedule_run_now_failed'), true);
   assert.equal(events.includes('library_schedule_run_now_succeeded'), false);
 });
+
+test('direct task schedule load failure is tracked', async t => {
+  const page = await openPage(t);
+  await page.evaluate(() => {
+    const input = document.getElementById('library-repo-input');
+    input.value = 'acme/repo';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.route('**/api/library/schedules', route => route.fulfill({
+    status: 503,
+    contentType: 'application/json',
+    body: JSON.stringify({ error: 'Schedules unavailable.' }),
+  }));
+  await page.evaluate(() => window.LibrarySchedulesUI.openFor({ name: 'unit-test-coverage' }));
+  await page.waitForFunction(() => window.dataLayer.some(args => args[0] === 'event'
+    && args[1] === 'library_schedules_load_failed'
+    && args[2]?.source === 'task'));
+  const failed = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event' && args[1] === 'library_schedules_load_failed')
+    .at(-1));
+  assert.equal(failed[2].source, 'task');
+  assert.equal(await page.locator('#library-schedule-status').textContent(), 'Schedules unavailable.');
+});

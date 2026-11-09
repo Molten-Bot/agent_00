@@ -89,7 +89,10 @@
     status.textContent = '';
     loadPromise = (async () => {
       try { await request(''); }
-      catch (error) { status.textContent = error.message || 'Unable to load commit signing.'; }
+      catch (error) {
+        status.textContent = error.message || 'Unable to load commit signing.';
+        track('commit_signing_load_failed');
+      }
       finally { setBusy(false); loadPromise = null; }
     })();
     return loadPromise;
@@ -161,7 +164,7 @@
     }
     catch (_) {
       publicKey.focus(); publicKey.select(); status.textContent = 'Select and copy the public key above.';
-      track('commit_signing_public_key_copied', { result: 'manual_fallback' });
+      track('commit_signing_public_key_copy_failed', { fallback: 'manual_selection' });
     }
   });
   window.addEventListener('commit-signing-open', load);

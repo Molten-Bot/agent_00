@@ -42,6 +42,28 @@ const held = {
   message: 'Commit signing is enabled. Save a signing key in Settings → Commit signing before running tasks.',
 };
 
+test('load and clipboard failures emit failure events', async t => {
+  const failedLoadPage = await newStubbedPage(t, route => route.fulfill({
+    status: 503,
+    json: { error: 'Signing settings unavailable.' },
+  }));
+  await failedLoadPage.goto(baseURL);
+  await failedLoadPage.waitForFunction(() => window.dataLayer.some(args => args[0] === 'event' && args[1] === 'commit_signing_load_failed'));
+
+  const copyPage = await openSettings(t, route => route.fulfill({ json: { ok: true, settings: saved } }));
+  await copyPage.evaluate(() => Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: async () => { throw new Error('clipboard denied'); } },
+  }));
+  await copyPage.locator('#commit-signing-copy').click();
+  await copyPage.waitForFunction(() => document.getElementById('commit-signing-status').textContent.includes('Select and copy'));
+  const copyEvents = await copyPage.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event' && args[1].startsWith('commit_signing_public_key_copy')));
+  assert.deepEqual(copyEvents.map(event => event[1]), ['commit_signing_public_key_copy_failed']);
+  assert.equal(copyEvents[0][2].fallback, 'manual_selection');
+});
+
 test('import, register, enable, reload and disable without returning private material', async t => {
   let settings = { ...empty };
   const requests = [];

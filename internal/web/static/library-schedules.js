@@ -193,7 +193,10 @@
       await load();
       const existing = schedules.find((schedule) => schedule.libraryTaskName === entry.name && repoDedupeKey(schedule.repo) === repoDedupeKey(payload.repos[0]));
       showEditor(existing || { libraryTaskName: entry.name, repo: payload.repos[0], baseBranch: payload.branch || "", targetSubdir: payload.targetsubdir || ".", reviewers: payload.reviewers || [], draft: Boolean(payload.draft), promptContext: payload.promptcontext || "", intervalHours: 24 });
-    } catch (error) { status(error.message, true); }
+    } catch (error) {
+      status(error.message, true);
+      track("library_schedules_load_failed", { source: "task" });
+    }
   }
   async function mutate(action, success, operation, params = {}, followUp) {
     if (busy) return;

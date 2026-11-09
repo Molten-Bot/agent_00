@@ -16,6 +16,7 @@ func TestSettingsAndIssueAssetsTrackMeaningfulEngagement(t *testing.T) {
 		{
 			asset: "static/commit-signing.js",
 			events: []string{
+				"commit_signing_load_failed",
 				"commit_signing_save_started",
 				"commit_signing_save_succeeded",
 				"commit_signing_save_failed",
@@ -23,6 +24,7 @@ func TestSettingsAndIssueAssetsTrackMeaningfulEngagement(t *testing.T) {
 				"commit_signing_verify_succeeded",
 				"commit_signing_verify_failed",
 				"commit_signing_public_key_copied",
+				"commit_signing_public_key_copy_failed",
 			},
 		},
 		{
