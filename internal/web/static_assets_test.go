@@ -118,3 +118,39 @@ func TestStaticAssetsStillServeAllPublishedURLs(t *testing.T) {
 		t.Fatalf("missing asset status = %d, want 404", res.Code)
 	}
 }
+
+func TestPageStateStylesUseGlobalStylesheet(t *testing.T) {
+	t.Parallel()
+
+	read := func(name string) string {
+		t.Helper()
+		body, err := fs.ReadFile(staticFiles, name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		return string(body)
+	}
+
+	index := read("static/index.html")
+	customLibrary := read("static/custom-library-sources.js")
+	css := read("static/style.css")
+
+	for _, inlineStyle := range []string{"reviewSettingsMergeSliderThumb.style.transform", "input.style.height ="} {
+		if strings.Contains(index, inlineStyle) {
+			t.Fatalf("index page still defines %q inline", inlineStyle)
+		}
+	}
+	if strings.Contains(customLibrary, "status.style.color") {
+		t.Fatal("custom library page behavior still defines status color inline")
+	}
+	for _, globalRule := range []string{
+		"height: var(--prompt-textarea-height, auto);",
+		".review-settings-merge-slider-thumb.is-merge {",
+		".review-settings-merge-slider-thumb.is-rebase {",
+		"#custom-library-status.is-error { color: var(--surface-danger); }",
+	} {
+		if !strings.Contains(css, globalRule) {
+			t.Fatalf("global stylesheet missing %q", globalRule)
+		}
+	}
+}

@@ -226,7 +226,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `href="/static/style.css?v=3"`) {
+	if !strings.Contains(markup, `href="/static/style.css?v=4"`) {
 		t.Fatalf("expected index html to include external stylesheet link")
 	}
 	if strings.Contains(markup, `tailwind`) || strings.Contains(markup, `cdn.tailwindcss.com`) {
@@ -2234,6 +2234,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "function resetPromptInputSize(input)") ||
 		!strings.Contains(markup, "input.style.removeProperty(\"height\");") ||
 		!strings.Contains(markup, "input.style.removeProperty(\"width\");") ||
+		!strings.Contains(markup, "input.style.removeProperty(\"--prompt-textarea-height\");") ||
 		!strings.Contains(markup, "input.classList.remove(\"prompt-textarea-manual-size\");") {
 		t.Fatalf("expected index html to include prompt textarea resize reset behavior")
 	}

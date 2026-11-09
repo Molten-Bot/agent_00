@@ -1414,7 +1414,7 @@ func TestStudioStylesUseRefinedPanelAndInputTreatment(t *testing.T) {
 		t.Fatalf("expected studio controls to use theme-aware input tokens")
 	}
 	if !strings.Contains(css, "#builder-prompt-input,\n#local-prompt-input {\n  --prompt-text-min-lines: 3;") ||
-		!strings.Contains(css, "  max-height: none;\n  height: auto;\n  overflow-y: auto;\n}\n\n#builder-prompt-input {\n  --prompt-text-max-lines: 10;") ||
+		!strings.Contains(css, "  max-height: none;\n  height: var(--prompt-textarea-height, auto);\n  overflow-y: auto;\n}\n\n#builder-prompt-input {\n  --prompt-text-max-lines: 10;") ||
 		!strings.Contains(css, "#builder-prompt-input.prompt-textarea-scroll,\n#local-prompt-input.prompt-textarea-scroll {\n  overflow-y: auto;\n}") {
 		t.Fatalf("expected studio prompt textareas to allow native vertical resizing beyond their autosized height")
 	}
