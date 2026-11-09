@@ -52,7 +52,7 @@ async function toggleRepositoryRow(page, value) {
   await page.locator(`#review-settings-repositories label:has(input[value="${value}"])`).click();
   await page.waitForFunction(({ repo, checked }) => {
     const input = Array.from(document.querySelectorAll('#review-settings-repositories input[type=checkbox]')).find(node => node.value === repo);
-    return Boolean(input) && input.checked !== checked;
+    return !input || input.checked !== checked;
   }, { repo: value, checked: before });
 }
 async function close(page, method = 'button') {
@@ -227,8 +227,8 @@ test('repository selections hide dropdown options and manual entry enables them 
 
   await page.locator('#settings-open').click();
   await select(page, 'automation');
-  assert.equal(await option.isChecked(), false, 'disabled repository remains available in settings');
-  await toggleRepositoryRow(page, 'https://github.com/acme/widget');
+  assert.equal(await option.count(), 0, 'a fully disabled owner has no repositories in the repository picker');
+  await page.locator('#review-settings-owners [data-repo-owner="acme"]').click();
   await close(page);
   assert.deepEqual(writes.at(-1).disabled_repositories, []);
   assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 1);
@@ -405,6 +405,7 @@ test('an owner the GitHub API never described keeps a neutral icon', async t => 
   await initech.locator('svg.lucide-at-sign').waitFor();
   assert.equal(await initech.locator('svg.lucide-user').count(), 0, 'an owner with no API metadata is never drawn as a person');
   assert.equal(await initech.getAttribute('aria-pressed'), 'false', 'its only repository stays deselected');
+  assert.equal(await page.locator('#review-settings-repositories input[value="https://github.com/initech/payroll"]').count(), 0, 'server-persisted owner clears hide repositories without local provenance');
   await page.locator('#review-settings-owners [data-repo-owner="acme"] svg.lucide-building-2').waitFor();
 });
 

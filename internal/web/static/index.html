@@ -7230,7 +7230,7 @@
       const visibleRepos = repos.filter(repo => {
         const owner = repositoryOwnerKey(repo);
         const ownerRepos = groups.get(owner)?.repos || [];
-        return !state.repositoryOwnerKeptDisabled.has(owner) || !ownerRepos.every(repositoryDisabled);
+        return !ownerRepos.every(repositoryDisabled);
       });
       const controlsDisabled = state.settingsBusy || !state.settingsLoaded;
       reviewSettingsRepositories.replaceChildren(...visibleRepos.map(repo => {
