@@ -764,6 +764,16 @@ func TestPromptImageCapsEnforcedInBrowser(t *testing.T) {
 	runBrowserSuite(t, ts.URL, 60*time.Second, "prompt image cap checks", "tests/prompt_image_caps.cjs")
 }
 
+func TestStudioRunDisabledWhileTaskIsActiveInBrowser(t *testing.T) {
+	requireBrowserTooling(t, "active task submit lock check")
+
+	srv := NewServer("", nil)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	runBrowserSuite(t, ts.URL, 60*time.Second, "active task submit lock checks", "tests/task_submit_lock.cjs")
+}
+
 // TestSpeechDictationFallbackInBrowser exercises speechCaptureSupport and
 // speechToggleAvailability in static/index.html, plus the duplicate copy the
 // /chat page carries in this file. All are unexported closures with no

@@ -2333,7 +2333,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `localPromptInput.value = normalized.pretty;
       queuePromptInputSizeSync(localPromptInput);
 
-      localPromptSubmit.disabled = true;`) {
+      state.promptSubmitInFlight = true;
+      syncLocalPromptSubmitDisabled();`) {
 		t.Fatalf("expected index html to keep selected task history filter when Run starts")
 	}
 	if !strings.Contains(markup, `trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: state.promptMode });

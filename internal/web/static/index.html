@@ -2052,6 +2052,8 @@
       chatReposLoaded: false,
       commitSigningSetupRequired: false,
       commitSigningHoldMessage: "",
+      promptSubmitInFlight: false,
+      pendingSubmittedRequestID: "",
     };
     if (pruneTaskHistory()) {
       persistTaskHistory();
@@ -3321,9 +3323,7 @@
           button.classList.toggle("is-pending", String(button.getAttribute("data-agent-harness") || "").trim().toLowerCase() === state.agentHarnessSelectionPending);
         }
       }
-      if (localPromptSubmit) {
-        localPromptSubmit.disabled = state.agentAuthBusy || (state.agentAuth.required && !state.agentAuth.ready);
-      }
+      syncLocalPromptSubmitDisabled();
     }
 
     function isClaudeGitHubConfigureState(auth) {
@@ -3818,10 +3818,7 @@
         setAgentAuthVerifyPending(true);
         scheduleClaudePostSubmitVerifyPolling();
       }
-      if (localPromptSubmit) {
-        const submitDisabled = state.agentAuthBusy || (state.agentAuth.required && !state.agentAuth.ready);
-        localPromptSubmit.disabled = submitDisabled;
-      }
+      syncLocalPromptSubmitDisabled();
       scheduleAgentAuthRefresh();
     }
 
@@ -9853,6 +9850,18 @@
       return COMPLETED_STATUSES.has(normalizedTaskStatus(task.status));
     }
 
+    function hasActiveTask(snapshot = state.snapshot) {
+      return Array.isArray(snapshot?.tasks) && snapshot.tasks.some((task) => !isCompletedTask(task));
+    }
+
+    function syncLocalPromptSubmitDisabled() {
+      if (!localPromptSubmit) return;
+      const authBlocked = state.agentAuthBusy || (state.agentAuth.required && !state.agentAuth.ready);
+      const taskBlocked = state.promptSubmitInFlight || Boolean(state.pendingSubmittedRequestID) || hasActiveTask();
+      localPromptSubmit.disabled = authBlocked || taskBlocked;
+      localPromptSubmit.title = taskBlocked ? "Wait for the current task to finish" : "";
+    }
+
     function isSuccessfulTaskStatus(status) {
       const normalized = normalizedTaskStatus(status);
       return normalized === "completed" || normalized === "no_changes" || normalized === "merged";
@@ -13191,6 +13200,13 @@
       syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
       state.snapshot = snapshot;
+      if (
+        state.pendingSubmittedRequestID &&
+        (snapshot.tasks || []).some((task) => taskRequestID(task) === state.pendingSubmittedRequestID)
+      ) {
+        state.pendingSubmittedRequestID = "";
+      }
+      syncLocalPromptSubmitDisabled();
       syncTaskCompletionSounds(snapshot);
       syncTaskViewDockCompletion(previousSnapshot, snapshot);
       syncNewReviewTaskFocus(previousSnapshot, snapshot);
@@ -13358,6 +13374,11 @@
 
     async function submitLocalPrompt(event) {
       event.preventDefault();
+      if (hasActiveTask() || state.promptSubmitInFlight || state.pendingSubmittedRequestID) {
+        setLocalPromptStatus("warn", "Wait for the current task to finish before starting another.");
+        syncLocalPromptSubmitDisabled();
+        return;
+      }
       if (state.agentAuth.required && !state.agentAuth.ready) {
         trackAnalyticsEvent("prompt_submit_blocked_auth", { prompt_mode: state.promptMode });
         setLocalPromptStatus("error", `${currentAgentLabel()} auth is required. Complete the authorization screen first.`);
@@ -13374,7 +13395,8 @@
       localPromptInput.value = normalized.pretty;
       queuePromptInputSizeSync(localPromptInput);
 
-      localPromptSubmit.disabled = true;
+      state.promptSubmitInFlight = true;
+      syncLocalPromptSubmitDisabled();
       trackAnalyticsEvent("prompt_submit_started", {
         prompt_mode: state.promptMode,
         image_count: state.promptImages.length,
@@ -13406,6 +13428,7 @@
         }
 
         const requestID = body?.request_id || "(unknown)";
+        state.pendingSubmittedRequestID = requestID === "(unknown)" ? "" : requestID;
         try {
           const parsed = JSON.parse(normalized.compact);
           rememberManualRepoEntries([...(Array.isArray(parsed?.repos) ? parsed.repos : []), parsed?.repo, parsed?.repoUrl, parsed?.repourl]);
@@ -13419,11 +13442,13 @@
         trackAnalyticsEvent("prompt_submit_succeeded", { prompt_mode: state.promptMode, request_id: requestID });
         setLocalPromptStatus("ok", `Queued request ${requestID}`);
       } catch (err) {
+        state.pendingSubmittedRequestID = "";
         trackAnalyticsEvent("prompt_submit_failed", { prompt_mode: state.promptMode });
         setLocalPromptStatus("error", `Submit failed: ${err.message}`);
         await loadAgentAuthStatus();
       } finally {
-        localPromptSubmit.disabled = state.agentAuthBusy || (state.agentAuth.required && !state.agentAuth.ready);
+        state.promptSubmitInFlight = false;
+        syncLocalPromptSubmitDisabled();
       }
     }
 
