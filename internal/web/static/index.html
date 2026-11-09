@@ -13302,8 +13302,6 @@
           }
         });
       } catch (err) {
-        state.taskStatusResolved = true;
-        syncLocalPromptSubmitDisabled();
         setLocalConnection(false, `Unable to load state: ${err.message}`);
       }
     }
@@ -13432,6 +13430,11 @@
 
         if (!response.ok) {
           if (response.status === 409 && body?.duplicate) {
+            const duplicateRequestID = String(body?.request_id || "").trim();
+            if (body?.state === "in_flight" && duplicateRequestID) {
+              state.pendingSubmittedRequestID = duplicateRequestID;
+              clearObservedPendingSubmission();
+            }
             trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: state.promptMode });
             setLocalPromptStatus("warn", duplicateNotice(body));
             return;

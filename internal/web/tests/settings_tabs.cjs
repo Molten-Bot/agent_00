@@ -66,6 +66,9 @@ for (const harness of ['claude', 'codex']) test(`settings reopen ${harness} sign
   let auth = { harness, required: true, ready: true, state: 'ready' };
   let starts = 0;
   const { page, writes } = await openSettings(t, { configurePage: async page => {
+    await page.route('**/api/status', route => route.fulfill({
+      json: { tasks: [], events: [], repositories: [], stats: {}, resources: {} },
+    }));
     await page.route('**/api/agent-auth**', route => {
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith('/reauthenticate')) {
@@ -432,6 +435,9 @@ test('JSON submission enables manually added repositories', async t => {
     path: '/#studio-json',
     initialSettings: { ...defaults, json_enabled: true, disabled_repositories: [repoURL] },
     configurePage: async page => {
+      await page.route('**/api/status', route => route.fulfill({
+        json: { tasks: [], events: [], repositories: [], stats: {}, resources: {} },
+      }));
       await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
         { name: 'widget', full_name: 'acme/widget', html_url: repoURL },
       ] } }));
@@ -459,6 +465,9 @@ test('disabled default repository cannot be submitted implicitly', async t => {
   const { page } = await openSettings(t, {
     initialSettings: { ...defaults, disabled_repositories: [repoURL] },
     configurePage: async page => {
+      await page.route('**/api/status', route => route.fulfill({
+        json: { tasks: [], events: [], repositories: [], stats: {}, resources: {} },
+      }));
       await page.route(`${baseURL}/`, async route => {
         const response = await route.fetch();
         const body = (await response.text()).replace('"defaultRepository":""', `"defaultRepository":"${repoURL}"`);

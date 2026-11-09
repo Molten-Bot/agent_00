@@ -21,6 +21,9 @@ async function openPage(t, authHandler) {
     if (new URL(route.request().url()).origin !== new URL(baseURL).origin) return route.abort();
     return route.continue();
   });
+  await page.route('**/api/status', route => route.fulfill({
+    json: { tasks: [], events: [], repositories: [], stats: {}, resources: {} },
+  }));
   if (authHandler) await page.route('**/api/agent-auth**', authHandler);
   await page.goto(baseURL);
   return page;

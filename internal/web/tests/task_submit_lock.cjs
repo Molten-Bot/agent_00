@@ -65,6 +65,109 @@ test('Studio Run stays disabled until an in-progress task finishes', async t => 
   await expect(run).toHaveAttribute('title', '');
 });
 
+test('Studio Run stays disabled when initial status fails until a stream snapshot arrives', async t => {
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  const errors = [];
+  const writes = [];
+  let releaseStream;
+  const streamGate = new Promise(resolve => { releaseStream = resolve; });
+  page.on('pageerror', error => errors.push(error.message));
+  t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
+
+  await page.route('**/*', async route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== new URL(baseURL).origin) return route.abort();
+    if (!url.pathname.startsWith('/api/')) return route.continue();
+    if (route.request().method() !== 'GET') writes.push(url.pathname);
+    if (url.pathname === '/api/status') return route.fulfill({ status: 503, json: { error: 'unavailable' } });
+    if (url.pathname === '/api/agent-auth') {
+      return route.fulfill({ json: { ok: true, auth: { required: false, ready: true, state: 'ready' } } });
+    }
+    if (url.pathname === '/api/review-settings') {
+      return route.fulfill({ json: { ok: true, settings: { default_library_enabled: true } } });
+    }
+    if (url.pathname === '/api/github/repos') return route.fulfill({ json: { ok: true, repos: [] } });
+    if (url.pathname === '/api/library') return route.fulfill({ json: { ok: true, tasks: [] } });
+    if (url.pathname === '/api/stream') {
+      await streamGate;
+      const snapshot = { tasks: [], events: [], repositories: [], stats: {}, resources: {} };
+      return route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify(snapshot)}\n\n` });
+    }
+    return route.fulfill({ json: { ok: true } });
+  });
+
+  await page.goto(baseURL);
+  const run = page.locator('#local-prompt-submit');
+  await expect(run).toBeDisabled();
+  const cancelled = await page.evaluate(() => document.getElementById('local-prompt-form')
+    .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) === false);
+  assert.equal(cancelled, true);
+  assert.deepEqual(writes, [], 'unknown task state must block programmatic submission too');
+
+  releaseStream();
+  await expect(run).toBeEnabled();
+  await expect(run).toHaveAttribute('title', '');
+});
+
+test('Studio Run tracks an in-flight duplicate until snapshots observe it finishing', async t => {
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  const errors = [];
+  let submitCount = 0;
+  page.on('pageerror', error => errors.push(error.message));
+  t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
+
+  await page.route('**/*', route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== new URL(baseURL).origin) return route.abort();
+    if (!url.pathname.startsWith('/api/')) return route.continue();
+    if (url.pathname === '/api/status') {
+      return route.fulfill({ json: { tasks: [], events: [], repositories: [], stats: {}, resources: {} } });
+    }
+    if (url.pathname === '/api/agent-auth') {
+      return route.fulfill({ json: { ok: true, auth: { required: false, ready: true, state: 'ready' } } });
+    }
+    if (url.pathname === '/api/review-settings') {
+      return route.fulfill({ json: { ok: true, settings: { default_library_enabled: true } } });
+    }
+    if (url.pathname === '/api/github/repos') return route.fulfill({ json: { ok: true, repos: [] } });
+    if (url.pathname === '/api/library') return route.fulfill({ json: { ok: true, tasks: [] } });
+    if (url.pathname === '/api/stream') return route.fulfill({ contentType: 'text/event-stream', body: '' });
+    if (url.pathname === '/api/local-prompt' && route.request().method() === 'POST') {
+      submitCount++;
+      return route.fulfill({
+        status: 409,
+        json: { ok: false, duplicate: true, request_id: 'existing-task', state: 'in_flight' },
+      });
+    }
+    return route.fulfill({ json: { ok: true } });
+  });
+
+  await page.goto(baseURL);
+  const run = page.locator('#local-prompt-submit');
+  await expect(run).toBeEnabled();
+  await page.locator('#builder-repo-input').fill('acme/repo');
+  await page.locator('#builder-prompt-input').fill('Do work');
+  await run.click();
+  await expect(page.locator('#local-prompt-status')).toContainText('Duplicate ignored');
+  await expect(run).toBeDisabled();
+
+  await page.evaluate(() => render({ tasks: [], events: [], repositories: [], stats: {}, resources: {} }));
+  await expect(run).toBeDisabled();
+  await page.evaluate(() => render({
+    tasks: [{ request_id: 'existing-task', source: 'local_prompt', status: 'running' }],
+    events: [], repositories: [], stats: {}, resources: {},
+  }));
+  await expect(run).toBeDisabled();
+  await page.evaluate(() => render({
+    tasks: [{ request_id: 'existing-task', source: 'local_prompt', status: 'completed' }],
+    events: [], repositories: [], stats: {}, resources: {},
+  }));
+  await expect(run).toBeEnabled();
+  assert.equal(submitCount, 1);
+});
+
 test('Studio Run unlocks when completion arrives before submit response', async t => {
   const page = await browser.newPage();
   t.after(() => page.close());
