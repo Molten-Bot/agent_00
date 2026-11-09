@@ -135,9 +135,19 @@
     let body = null;
     try { body = await response.json(); } catch (_error) { body = null; }
     if (!response.ok || body?.ok === false) {
-      throw new Error(String(body?.error || `GitHub request failed (${response.status})`));
+      const error = new Error(String(body?.error || `GitHub request failed (${response.status})`));
+      error.status = response.status;
+      error.body = body;
+      throw error;
     }
     return body || {};
+  }
+
+  function duplicateNotice(body) {
+    const requestID = body?.request_id || "(unknown)";
+    const rawState = String(body?.state || "").trim();
+    if (!rawState) return `Duplicate ignored; existing request ${requestID}.`;
+    return `Duplicate ignored; existing request ${requestID} (${rawState.replace(/_/g, " ")}).`;
   }
 
   function selectedRepository() {
@@ -661,6 +671,11 @@
       if (taskStatus) taskStatus.textContent = `Task queued (${body.request_id || "request accepted"}).`;
       track("github_issue_task_succeeded", issueAnalyticsParams(repo));
     } catch (error) {
+      if (error.status === 409 && error.body?.duplicate) {
+        if (taskStatus) taskStatus.textContent = duplicateNotice(error.body);
+        track("github_issue_task_duplicate", issueAnalyticsParams(repo));
+        return;
+      }
       if (taskStatus) taskStatus.textContent = `Could not start task: ${error.message || "request failed"}`;
       track("github_issue_task_failed", issueAnalyticsParams(repo));
       submitButtons.forEach((button) => { button.disabled = false; });
@@ -716,19 +731,21 @@
     const generation = ++requestGeneration;
     setStatus(`Loading issues for ${repo.full_name}…`);
     const query = new URLSearchParams({ repo: repo.full_name, state: "open" });
-    if (searchInput.value.trim()) query.set("search", searchInput.value.trim());
-    if (assignedToMe) query.set("assignee", "me");
+    const searchQuery = searchInput.value.trim();
+    const requestAssignedToMe = assignedToMe;
+    if (searchQuery) query.set("search", searchQuery);
+    if (requestAssignedToMe) query.set("assignee", "me");
+    const analyticsParams = issueAnalyticsParams(repo, {
+      has_query: Boolean(searchQuery),
+      assigned_to_me: requestAssignedToMe,
+    });
     try {
       const body = await requestJSON(`/api/github/issues?${query}`, { cache: "no-store" });
       if (generation !== requestGeneration) return;
       const issues = Array.isArray(body.issues) ? body.issues : [];
       currentIssues = issues;
       renderIssueList(issues);
-      track("github_issues_loaded", issueAnalyticsParams(repo, {
-        has_query: Boolean(searchInput.value.trim()),
-        assigned_to_me: assignedToMe,
-        result_count: issues.length,
-      }));
+      track("github_issues_loaded", { ...analyticsParams, result_count: issues.length });
       // There is nothing to choose when the list came back empty, so the detail
       // pane repeats the list's reason instead of inviting a selection.
       if (!issues.length) renderEmptyDetail(emptyIssueListHeading(), emptyIssueListText());
@@ -736,10 +753,7 @@
     } catch (error) {
       if (generation === requestGeneration) {
         setStatus(error.message || "Unable to load issues.", "error");
-        track("github_issues_load_failed", issueAnalyticsParams(repo, {
-          has_query: Boolean(searchInput.value.trim()),
-          assigned_to_me: assignedToMe,
-        }));
+        track("github_issues_load_failed", analyticsParams);
       }
     }
   }

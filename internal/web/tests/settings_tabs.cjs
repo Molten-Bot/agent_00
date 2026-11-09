@@ -871,6 +871,73 @@ test('selecting an issue highlights its row and breathes a loader while details 
   assert.equal(await row.locator('.github-issue-loading').count(), 0);
 });
 
+test('duplicate GitHub issue task submission is tracked separately from failure', async t => {
+  const issue = { number: 17, title: 'Add issue browser', state: 'OPEN', url: 'https://github.com/example/project/issues/17', author: { login: 'octocat' }, labels: [], assignees: [] };
+  const { page } = await openSettings(t, {
+    path: '/#studio-issues',
+    initialSettings: { ...defaults, github_issues_enabled: true },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+        { full_name: 'example/project', html_url: 'https://github.com/example/project', default_branch: 'main', private: false },
+      ] } }));
+      await page.route('**/api/github/issues**', route => {
+        const path = new URL(route.request().url()).pathname;
+        return route.fulfill({ json: path.endsWith('/17')
+          ? { ok: true, issue: { ...issue, body: 'Description', comments: [] } }
+          : { ok: true, issues: [issue] } });
+      });
+      await page.route('**/api/local-prompt', route => route.fulfill({
+        status: 409,
+        json: { ok: false, duplicate: true, request_id: 'existing-17', state: 'in_flight', error: 'duplicate submission ignored' },
+      }));
+    },
+  });
+  await page.locator('#github-issues-repo').selectOption('example/project');
+  await page.locator('.github-issue-list-item').click();
+  const start = page.getByRole('button', { name: 'Start task' });
+  await start.click();
+  await page.waitForFunction(() => document.querySelector('.github-issue-task-status')?.textContent.includes('Duplicate ignored'));
+  assert.equal(await page.locator('.github-issue-task-status').textContent(), 'Duplicate ignored; existing request existing-17 (in flight).');
+  assert.equal(await start.isDisabled(), true);
+  const events = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event')
+    .map(args => args[1]));
+  assert.equal(events.includes('github_issue_task_duplicate'), true);
+  assert.equal(events.includes('github_issue_task_failed'), false);
+});
+
+test('GitHub issue load analytics keeps request-time search context', async t => {
+  let releaseIssues;
+  const issuesPending = new Promise(resolve => { releaseIssues = resolve; });
+  const { page } = await openSettings(t, {
+    path: '/#studio-issues',
+    initialSettings: { ...defaults, github_issues_enabled: true },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+        { full_name: 'example/project', html_url: 'https://github.com/example/project', default_branch: 'main', private: false },
+      ] } }));
+      await page.route('**/api/github/issues**', async route => {
+        await issuesPending;
+        return route.fulfill({ json: { ok: true, issues: [] } });
+      });
+    },
+  });
+  const requestStarted = page.waitForRequest(request => new URL(request.url()).pathname === '/api/github/issues');
+  await page.locator('#github-issues-repo').selectOption('example/project');
+  await requestStarted;
+  await page.locator('#github-issues-search').evaluate(input => { input.value = 'changed while loading'; });
+  releaseIssues();
+  await page.waitForFunction(() => document.getElementById('github-issues-status').textContent === '');
+  const loaded = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event' && args[1] === 'github_issues_loaded')
+    .map(args => args[2]).at(-1));
+  assert.equal(loaded.has_query, false);
+  assert.equal(loaded.assigned_to_me, true);
+  assert.equal(loaded.result_count, 0);
+});
+
 for (const method of ['escape', 'backdrop']) test(`${method} saves settings before closing`, async t => {
   const { page, writes } = await openSettings(t);
   await select(page, 'automation'); await toggle(page, 'review-settings-auto-merge');

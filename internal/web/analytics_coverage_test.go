@@ -64,6 +64,7 @@ func TestSettingsAndIssueAssetsTrackMeaningfulEngagement(t *testing.T) {
 				"github_issue_task_validation_failed",
 				"github_issue_task_started",
 				"github_issue_task_succeeded",
+				"github_issue_task_duplicate",
 				"github_issue_task_failed",
 				"github_issue_selected",
 				"github_issue_load_failed",
