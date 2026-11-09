@@ -451,10 +451,11 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 		return Snapshot{}
 	}
 
-	now := b.now().UTC()
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// Timestamp after locking so concurrent status and stream snapshots are
+	// ordered by when they copy broker state, not when their requests started.
+	now := b.now().UTC()
 
 	b.pruneExpiredTasksLocked(now)
 

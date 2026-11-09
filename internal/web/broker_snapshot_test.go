@@ -46,6 +46,25 @@ func TestStreamSnapshotMatchesCompactedSnapshot(t *testing.T) {
 	}
 }
 
+func TestSnapshotTimestampGeneratedWhileStateLocked(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	clockCalledOutsideLock := false
+	b.now = func() time.Time {
+		if b.mu.TryLock() {
+			clockCalledOutsideLock = true
+			b.mu.Unlock()
+		}
+		return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	}
+
+	b.Snapshot()
+	if clockCalledOutsideLock {
+		t.Fatal("Snapshot() generated timestamp before locking state")
+	}
+}
+
 func TestTaskListMatchesSnapshotTasksWithoutLogs(t *testing.T) {
 	t.Parallel()
 
