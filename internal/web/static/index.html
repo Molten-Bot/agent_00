@@ -2054,6 +2054,7 @@
       commitSigningHoldMessage: "",
       promptSubmitInFlight: false,
       pendingSubmittedRequestID: "",
+      taskStatusResolved: false,
     };
     if (pruneTaskHistory()) {
       persistTaskHistory();
@@ -9854,10 +9855,23 @@
       return Array.isArray(snapshot?.tasks) && snapshot.tasks.some((task) => !isCompletedTask(task));
     }
 
+    function taskStateBlocksSubmission(snapshot = state.snapshot) {
+      return !state.taskStatusResolved || hasActiveTask(snapshot);
+    }
+
+    function clearObservedPendingSubmission(snapshot = state.snapshot) {
+      if (
+        state.pendingSubmittedRequestID &&
+        (snapshot?.tasks || []).some((task) => taskRequestID(task) === state.pendingSubmittedRequestID)
+      ) {
+        state.pendingSubmittedRequestID = "";
+      }
+    }
+
     function syncLocalPromptSubmitDisabled() {
       if (!localPromptSubmit) return;
       const authBlocked = state.agentAuthBusy || (state.agentAuth.required && !state.agentAuth.ready);
-      const taskBlocked = state.promptSubmitInFlight || Boolean(state.pendingSubmittedRequestID) || hasActiveTask();
+      const taskBlocked = state.promptSubmitInFlight || Boolean(state.pendingSubmittedRequestID) || taskStateBlocksSubmission();
       localPromptSubmit.disabled = authBlocked || taskBlocked;
       localPromptSubmit.title = taskBlocked ? "Wait for the current task to finish" : "";
     }
@@ -13200,12 +13214,8 @@
       syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
       state.snapshot = snapshot;
-      if (
-        state.pendingSubmittedRequestID &&
-        (snapshot.tasks || []).some((task) => taskRequestID(task) === state.pendingSubmittedRequestID)
-      ) {
-        state.pendingSubmittedRequestID = "";
-      }
+      state.taskStatusResolved = true;
+      clearObservedPendingSubmission(snapshot);
       syncLocalPromptSubmitDisabled();
       syncTaskCompletionSounds(snapshot);
       syncTaskViewDockCompletion(previousSnapshot, snapshot);
@@ -13292,6 +13302,8 @@
           }
         });
       } catch (err) {
+        state.taskStatusResolved = true;
+        syncLocalPromptSubmitDisabled();
         setLocalConnection(false, `Unable to load state: ${err.message}`);
       }
     }
@@ -13374,7 +13386,7 @@
 
     async function submitLocalPrompt(event) {
       event.preventDefault();
-      if (hasActiveTask() || state.promptSubmitInFlight || state.pendingSubmittedRequestID) {
+      if (taskStateBlocksSubmission() || state.promptSubmitInFlight || state.pendingSubmittedRequestID) {
         setLocalPromptStatus("warn", "Wait for the current task to finish before starting another.");
         syncLocalPromptSubmitDisabled();
         return;
@@ -13429,6 +13441,7 @@
 
         const requestID = body?.request_id || "(unknown)";
         state.pendingSubmittedRequestID = requestID === "(unknown)" ? "" : requestID;
+        clearObservedPendingSubmission();
         try {
           const parsed = JSON.parse(normalized.compact);
           rememberManualRepoEntries([...(Array.isArray(parsed?.repos) ? parsed.repos : []), parsed?.repo, parsed?.repoUrl, parsed?.repourl]);

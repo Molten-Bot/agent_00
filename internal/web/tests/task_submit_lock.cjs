@@ -18,15 +18,18 @@ test('Studio Run stays disabled until an in-progress task finishes', async t => 
   const errors = [];
   const writes = [];
   let status = 'running';
+  let releaseInitialStatus;
+  const initialStatusGate = new Promise(resolve => { releaseInitialStatus = resolve; });
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
 
-  await page.route('**/*', route => {
+  await page.route('**/*', async route => {
     const url = new URL(route.request().url());
     if (url.origin !== new URL(baseURL).origin) return route.abort();
     if (!url.pathname.startsWith('/api/')) return route.continue();
     if (route.request().method() !== 'GET') writes.push(url.pathname);
     if (url.pathname === '/api/status') {
+      await initialStatusGate;
       return route.fulfill({ json: {
         tasks: [{ request_id: 'github-actions-1', source: 'github_actions', status }],
         events: [], repositories: [], stats: {}, resources: {},
@@ -46,6 +49,8 @@ test('Studio Run stays disabled until an in-progress task finishes', async t => 
 
   await page.goto(baseURL);
   const run = page.locator('#local-prompt-submit');
+  assert.equal(await run.isDisabled(), true, 'Run must stay disabled while initial status is unresolved');
+  releaseInitialStatus();
   await expect(run).toBeDisabled();
   await expect(run).toHaveAttribute('title', 'Wait for the current task to finish');
 
@@ -56,6 +61,50 @@ test('Studio Run stays disabled until an in-progress task finishes', async t => 
 
   status = 'completed';
   await page.reload();
+  await expect(run).toBeEnabled();
+  await expect(run).toHaveAttribute('title', '');
+});
+
+test('Studio Run unlocks when completion arrives before submit response', async t => {
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
+
+  await page.route('**/*', async route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== new URL(baseURL).origin) return route.abort();
+    if (!url.pathname.startsWith('/api/')) return route.continue();
+    if (url.pathname === '/api/status') {
+      return route.fulfill({ json: { tasks: [], events: [], repositories: [], stats: {}, resources: {} } });
+    }
+    if (url.pathname === '/api/agent-auth') {
+      return route.fulfill({ json: { ok: true, auth: { required: false, ready: true, state: 'ready' } } });
+    }
+    if (url.pathname === '/api/review-settings') {
+      return route.fulfill({ json: { ok: true, settings: { default_library_enabled: true } } });
+    }
+    if (url.pathname === '/api/github/repos') return route.fulfill({ json: { ok: true, repos: [] } });
+    if (url.pathname === '/api/library') return route.fulfill({ json: { ok: true, tasks: [] } });
+    if (url.pathname === '/api/stream') return route.fulfill({ contentType: 'text/event-stream', body: '' });
+    if (url.pathname === '/api/local-prompt' && route.request().method() === 'POST') {
+      await page.evaluate(() => render({
+        tasks: [{ request_id: 'fast-task', source: 'local_prompt', status: 'completed' }],
+        events: [], repositories: [], stats: {}, resources: {},
+      }));
+      return route.fulfill({ json: { ok: true, request_id: 'fast-task' } });
+    }
+    return route.fulfill({ json: { ok: true } });
+  });
+
+  await page.goto(baseURL);
+  const run = page.locator('#local-prompt-submit');
+  await expect(run).toBeEnabled();
+  await page.locator('#builder-repo-input').fill('acme/repo');
+  await page.locator('#builder-prompt-input').fill('Do work');
+  await run.click();
+  await expect(page.locator('#local-prompt-status')).toContainText('Queued request fast-task');
   await expect(run).toBeEnabled();
   await expect(run).toHaveAttribute('title', '');
 });
