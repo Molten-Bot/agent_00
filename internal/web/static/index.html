@@ -5222,7 +5222,10 @@
             Math.abs(Math.round(currentRect.height) - startHeight) > 1 ||
             Math.abs(Math.round(currentRect.width) - startWidth) > 1
           ) {
+            input.style.setProperty("--prompt-textarea-height", `${Math.ceil(currentRect.height)}px`);
+            input.style.removeProperty("height");
             input.classList.add("prompt-textarea-manual-size");
+            syncPromptInputSize(input);
           }
         }, { once: true });
       });

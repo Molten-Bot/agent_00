@@ -2242,6 +2242,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, "input.classList.contains(\"prompt-textarea-manual-size\")") ||
 		!strings.Contains(markup, `input.classList.toggle("prompt-textarea-scroll", contentHeight > nextHeight + 1);`) ||
 		!strings.Contains(markup, "function watchPromptTextareaManualResize(input)") ||
+		!strings.Contains(markup, "input.style.setProperty(\"--prompt-textarea-height\", `${Math.ceil(currentRect.height)}px`);") ||
+		!strings.Contains(markup, "input.style.removeProperty(\"height\");\n            input.classList.add(\"prompt-textarea-manual-size\");\n            syncPromptInputSize(input);") ||
 		!strings.Contains(markup, "builderPromptInput.addEventListener(\"input\", () => handlePromptTextInput(builderPromptInput));") ||
 		!strings.Contains(markup, "watchPromptTextareaManualResize(builderPromptInput);") ||
 		!strings.Contains(markup, "localPromptInput.addEventListener(\"input\", () => handlePromptTextInput(localPromptInput));") ||

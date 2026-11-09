@@ -1173,7 +1173,7 @@ body[data-app-display="studio"][data-prompt-mode="json"] #prompt-raw-panel {
 body[data-app-display="studio"][data-prompt-mode="builder"] #builder-prompt-input,
 body[data-app-display="studio"][data-prompt-mode="json"] #local-prompt-input {
   min-height: calc(var(--prompt-text-min-lines) * 1.4em + var(--prompt-text-padding-y));
-  height: auto;
+  height: var(--prompt-textarea-height, auto);
   max-width: 100%;
 }
 
