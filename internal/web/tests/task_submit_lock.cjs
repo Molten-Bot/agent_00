@@ -263,3 +263,58 @@ test('Studio Run unlocks when completion arrives before submit response', async 
   await expect(run).toBeEnabled();
   await expect(run).toHaveAttribute('title', '');
 });
+
+test('Studio Run unlocks when a newer snapshot has already pruned the submitted task', async t => {
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
+
+  await page.route('**/*', route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== new URL(baseURL).origin) return route.abort();
+    if (!url.pathname.startsWith('/api/')) return route.continue();
+    if (url.pathname === '/api/status') {
+      return route.fulfill({ json: {
+        generated_at: '2026-11-09T20:00:00.123456789Z',
+        tasks: [], events: [], repositories: [], stats: {}, resources: {},
+      } });
+    }
+    if (url.pathname === '/api/agent-auth') {
+      return route.fulfill({ json: { ok: true, auth: { required: false, ready: true, state: 'ready' } } });
+    }
+    if (url.pathname === '/api/review-settings') {
+      return route.fulfill({ json: { ok: true, settings: { default_library_enabled: true } } });
+    }
+    if (url.pathname === '/api/github/repos') return route.fulfill({ json: { ok: true, repos: [] } });
+    if (url.pathname === '/api/library') return route.fulfill({ json: { ok: true, tasks: [] } });
+    if (url.pathname === '/api/stream') return route.fulfill({ contentType: 'text/event-stream', body: '' });
+    if (url.pathname === '/api/local-prompt' && route.request().method() === 'POST') {
+      return route.fulfill({ json: { ok: true, request_id: 'pruned-task' } });
+    }
+    return route.fulfill({ json: { ok: true } });
+  });
+
+  await page.goto(baseURL);
+  const run = page.locator('#local-prompt-submit');
+  await expect(run).toBeEnabled();
+  await page.locator('#builder-repo-input').fill('acme/repo');
+  await page.locator('#builder-prompt-input').fill('Do work');
+  await run.click();
+  await expect(page.locator('#local-prompt-status')).toContainText('Queued request pruned-task');
+  await expect(run).toBeDisabled();
+
+  await page.evaluate(() => render({
+    generated_at: '2026-11-09T20:00:00.123456789Z',
+    tasks: [], events: [], repositories: [], stats: {}, resources: {},
+  }));
+  await expect(run).toBeDisabled();
+
+  await page.evaluate(() => render({
+    generated_at: '2026-11-09T20:00:00.123456790Z',
+    tasks: [], events: [], repositories: [], stats: {}, resources: {},
+  }));
+  await expect(run).toBeEnabled();
+  await expect(run).toHaveAttribute('title', '');
+});

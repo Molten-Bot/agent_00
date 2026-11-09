@@ -2054,6 +2054,7 @@
       commitSigningHoldMessage: "",
       promptSubmitInFlight: false,
       pendingSubmittedRequestID: "",
+      pendingSubmittedSnapshotGeneratedAt: "",
       taskStatusResolved: false,
     };
     if (pruneTaskHistory()) {
@@ -9860,11 +9861,15 @@
     }
 
     function clearObservedPendingSubmission(snapshot = state.snapshot) {
-      if (
-        state.pendingSubmittedRequestID &&
-        (snapshot?.tasks || []).some((task) => taskRequestID(task) === state.pendingSubmittedRequestID)
-      ) {
+      if (!state.pendingSubmittedRequestID) {
+        state.pendingSubmittedSnapshotGeneratedAt = "";
+        return;
+      }
+      const observed = (snapshot?.tasks || []).some((task) => taskRequestID(task) === state.pendingSubmittedRequestID);
+      const submittedSnapshot = { generated_at: state.pendingSubmittedSnapshotGeneratedAt };
+      if (observed || snapshotIsOlder(submittedSnapshot, snapshot)) {
         state.pendingSubmittedRequestID = "";
+        state.pendingSubmittedSnapshotGeneratedAt = "";
       }
     }
 
@@ -13450,6 +13455,7 @@
             const duplicateRequestID = String(body?.request_id || "").trim();
             if (body?.state === "in_flight" && duplicateRequestID) {
               state.pendingSubmittedRequestID = duplicateRequestID;
+              state.pendingSubmittedSnapshotGeneratedAt = String(state.snapshot?.generated_at || "");
               clearObservedPendingSubmission();
             }
             trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: state.promptMode });
@@ -13461,6 +13467,9 @@
 
         const requestID = body?.request_id || "(unknown)";
         state.pendingSubmittedRequestID = requestID === "(unknown)" ? "" : requestID;
+        state.pendingSubmittedSnapshotGeneratedAt = state.pendingSubmittedRequestID
+          ? String(state.snapshot?.generated_at || "")
+          : "";
         clearObservedPendingSubmission();
         try {
           const parsed = JSON.parse(normalized.compact);
@@ -13476,6 +13485,7 @@
         setLocalPromptStatus("ok", `Queued request ${requestID}`);
       } catch (err) {
         state.pendingSubmittedRequestID = "";
+        state.pendingSubmittedSnapshotGeneratedAt = "";
         trackAnalyticsEvent("prompt_submit_failed", { prompt_mode: state.promptMode });
         setLocalPromptStatus("error", `Submit failed: ${err.message}`);
         await loadAgentAuthStatus();
