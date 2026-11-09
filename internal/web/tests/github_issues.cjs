@@ -45,7 +45,7 @@ after(async () => { await browser?.close(); });
 // so every rendered timestamp is the viewer's local time for a fixed instant.
 // Avatars are the one request that leaves the app's origin: serving them is
 // the normal case, aborting them is the offline case the initials cover.
-async function openIssue(t, issue, { timezoneId = 'Asia/Tokyo', touch = false, avatars = false } = {}) {
+async function openIssue(t, issue, { timezoneId = 'Asia/Tokyo', touch = false, avatars = false, onRequest = () => {} } = {}) {
   const viewport = touch ? { width: 430, height: 932 } : { width: 1280, height: 900 };
   const page = await browser.newPage({ viewport, timezoneId, locale: 'en-US', isMobile: touch, hasTouch: touch });
   page.setDefaultTimeout(10000);
@@ -55,6 +55,7 @@ async function openIssue(t, issue, { timezoneId = 'Asia/Tokyo', touch = false, a
   t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
+    onRequest(url);
     if (url.hostname === 'github.com' && url.pathname.endsWith('.png')) {
       return avatars ? route.fulfill({ contentType: 'image/png', body: avatarPixel }) : route.abort();
     }
@@ -66,7 +67,13 @@ async function openIssue(t, issue, { timezoneId = 'Asia/Tokyo', touch = false, a
     if (url.pathname === '/api/review-settings') json.settings = { review_level: 'off', github_issues_enabled: true, github_issue_link_mode: 'reference' };
     if (url.pathname === '/api/github/repos') json.repos = [{ name: 'project', full_name: 'example/project', private: false, default_branch: 'main' }];
     if (url.pathname === '/api/github/issues') json.issues = [issue];
-    if (url.pathname === `/api/github/issues/${issue.number}`) json.issue = { ...issue, body: 'Example description.', comments: [comment] };
+    if (url.pathname === `/api/github/issues/${issue.number}`) {
+      json.issue = {
+        ...issue,
+        body: issue.body ?? 'Example description.',
+        comments: issue.comments ?? [comment],
+      };
+    }
     if (url.pathname === '/api/stream') return route.fulfill({ contentType: 'text/event-stream', body: '' });
     return route.fulfill({ json });
   });
@@ -97,6 +104,57 @@ test('assignees and timestamps lead the issue header instead of trailing the des
   assert.deepEqual(await chips.evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label'))),
     ['mona-octocat (Mona Octocat)', 'hubot']);
   assert.equal(await page.locator('.github-issue-assignee-empty').count(), 0);
+});
+
+test('issue descriptions and comments render sanitized GitHub-flavored Markdown', async t => {
+  let untrustedImageRequests = 0;
+  const markdownIssue = {
+    ...assignedIssue,
+    number: 11,
+    body: [
+      '## Rendered heading',
+      '',
+      '- **bold item**',
+      '- `inline code`',
+      '',
+      '| Name | Value |',
+      '| --- | --- |',
+      '| Marked | works |',
+      '',
+      '[safe link](https://marked.js.org/)',
+      '[unsafe link](javascript:window.__issueXSS=true)',
+      '<script>window.__issueXSS = true</script>',
+      '<img src="javascript:window.__issueXSS=true" alt="unsafe image">',
+      '',
+      '![external image](https://attacker.example/tracking.png)',
+      '',
+      '![GitHub attachment](https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc)',
+    ].join('\n'),
+    comments: [{ ...comment, body: 'Comment with *emphasis* and ~~deletion~~.' }],
+  };
+  const page = await openIssue(t, markdownIssue, {
+    onRequest: url => { if (url.hostname === 'attacker.example') untrustedImageRequests++; },
+  });
+  const body = page.locator('.github-issue-body');
+  assert.equal(await body.locator('h2').innerText(), 'Rendered heading');
+  assert.deepEqual(await body.locator('li').allInnerTexts(), ['bold item', 'inline code']);
+  assert.equal(await body.locator('strong').innerText(), 'bold item');
+  assert.equal(await body.locator('code').innerText(), 'inline code');
+  assert.deepEqual(await body.locator('table tbody td').allInnerTexts(), ['Marked', 'works']);
+  assert.equal(await body.getByText('safe link', { exact: true }).getAttribute('href'), 'https://marked.js.org/');
+  assert.equal(await body.getByText('safe link', { exact: true }).getAttribute('rel'), 'noopener noreferrer');
+  assert.equal(await body.getByText('unsafe link', { exact: true }).getAttribute('href'), null);
+  assert.equal(await body.locator('script').count(), 0);
+  assert.equal(await body.getByAltText('external image').count(), 0);
+  assert.match(await body.innerText(), /external image/);
+  assert.equal(untrustedImageRequests, 0, 'untrusted Markdown images must not trigger browser requests');
+  assert.equal(await body.getByAltText('GitHub attachment').getAttribute('src'),
+    'https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc');
+  assert.equal(await page.evaluate(() => window.__issueXSS), undefined);
+
+  const renderedComment = page.locator('.github-issue-comment-body');
+  assert.equal(await renderedComment.locator('em').innerText(), 'emphasis');
+  assert.equal(await renderedComment.locator('del').innerText(), 'deletion');
 });
 
 test('assignee icons are the GitHub avatars, with initials only as the fallback', async t => {

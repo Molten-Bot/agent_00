@@ -327,8 +327,10 @@ func TestRuntimeDockerfilePinsAgentCLIs(t *testing.T) {
 	for _, want := range []string{
 		"ARG CODEX_VERSION=0.147.0",
 		"ARG CLAUDE_CODE_VERSION=2.1.224",
+		"ARG MARKED_VERSION=18.1.3",
 		"\"@openai/codex@${CODEX_VERSION}\"",
 		"\"@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}\"",
+		"\"marked@${MARKED_VERSION}\"",
 		"npm install --global --no-audit --no-fund",
 	} {
 		if !strings.Contains(content, want) {

@@ -139,6 +139,101 @@
     return node;
   }
 
+  const markdownTags = new Set([
+    "A", "BLOCKQUOTE", "BR", "CODE", "DEL", "DETAILS", "DIV", "EM", "H1", "H2", "H3", "H4", "H5", "H6",
+    "HR", "IMG", "INPUT", "KBD", "LI", "MARK", "OL", "P", "PRE", "S", "STRONG", "SUB", "SUMMARY", "SUP",
+    "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "UL",
+  ]);
+  const markdownDangerousTags = new Set(["BUTTON", "EMBED", "FORM", "IFRAME", "LINK", "META", "OBJECT", "SCRIPT", "SELECT", "STYLE", "TEXTAREA"]);
+  const markdownImageHosts = new Set([
+    "avatars.githubusercontent.com", "camo.githubusercontent.com", "github.com", "private-user-images.githubusercontent.com",
+    "raw.githubusercontent.com", "user-images.githubusercontent.com",
+  ]);
+
+  function safeMarkdownURL(value, baseURL, protocols) {
+    try {
+      const parsed = new URL(String(value || ""), baseURL || window.location.href);
+      return protocols.has(parsed.protocol) ? parsed.href : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function safeMarkdownImageURL(value, baseURL) {
+    const src = safeMarkdownURL(value, baseURL, new Set(["https:"]));
+    if (!src) return "";
+    return markdownImageHosts.has(new URL(src).hostname.toLowerCase()) ? src : "";
+  }
+
+  // Marked deliberately leaves sanitizing to its caller. Issue bodies are
+  // untrusted repository content, so retain Markdown structure while dropping
+  // executable elements, event handlers, styles, and unsafe URL schemes.
+  function sanitizeMarkdown(html, baseURL) {
+    const template = document.createElement("template");
+    template.innerHTML = String(html || "");
+    for (const node of Array.from(template.content.querySelectorAll("*"))) {
+      if (!markdownTags.has(node.tagName)) {
+        if (markdownDangerousTags.has(node.tagName)) node.remove();
+        else node.replaceWith(...node.childNodes);
+        continue;
+      }
+      const attributes = Object.fromEntries(Array.from(node.attributes, (attribute) => [attribute.name.toLowerCase(), attribute.value]));
+      for (const attribute of Array.from(node.attributes)) node.removeAttribute(attribute.name);
+      if (node.tagName === "A") {
+        const href = attributes.href ? safeMarkdownURL(attributes.href, baseURL, new Set(["http:", "https:", "mailto:"])) : "";
+        if (href) {
+          node.href = href;
+          node.target = "_blank";
+          node.rel = "noopener noreferrer";
+        }
+        if (attributes.title) node.title = attributes.title;
+      } else if (node.tagName === "IMG") {
+        const src = safeMarkdownImageURL(attributes.src, baseURL);
+        if (!src) {
+          node.replaceWith(document.createTextNode(attributes.alt || ""));
+          continue;
+        }
+        node.src = src;
+        node.alt = attributes.alt || "";
+        if (attributes.title) node.title = attributes.title;
+        node.loading = "lazy";
+        node.decoding = "async";
+        node.referrerPolicy = "no-referrer";
+      } else if (node.tagName === "INPUT") {
+        if (String(attributes.type || "").toLowerCase() !== "checkbox") {
+          node.remove();
+          continue;
+        }
+        node.type = "checkbox";
+        node.disabled = true;
+        node.checked = Object.hasOwn(attributes, "checked");
+      } else if (node.tagName === "OL" && /^\d+$/.test(attributes.start || "")) {
+        node.start = Number(attributes.start);
+      } else if ((node.tagName === "TH" || node.tagName === "TD") && /^(left|center|right)$/.test(attributes.align || "")) {
+        node.setAttribute("align", attributes.align);
+      } else if (node.tagName === "DETAILS" && Object.hasOwn(attributes, "open")) {
+        node.open = true;
+      }
+      const safeClass = String(attributes.class || "").split(/\s+/).filter((name) => name === "contains-task-list" || name === "task-list-item");
+      if (safeClass.length) node.className = safeClass.join(" ");
+    }
+    return template.content;
+  }
+
+  function addMarkdown(parent, className, markdown, emptyText, baseURL) {
+    const node = document.createElement("div");
+    node.className = `${className} github-markdown`;
+    const source = String(markdown || "");
+    if (!source.trim() || typeof window.marked?.parse !== "function") {
+      node.classList.add("github-markdown-plain");
+      node.textContent = source || emptyText;
+    } else {
+      node.appendChild(sanitizeMarkdown(window.marked.parse(source, { gfm: true }), baseURL));
+    }
+    parent.appendChild(node);
+    return node;
+  }
+
   function setStartButtonContent(button, label) {
     const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     icon.classList.add("prompt-action-icon");
@@ -450,7 +545,7 @@
     addText(author, "strong", "", issue.author?.login || "Unknown");
     // The header already carries Created, so the byline does not repeat it.
     addText(author, "span", "", "opened this issue");
-    addText(detailBody, "pre", "github-issue-body", issue.body || "No description provided.");
+    addMarkdown(detailBody, "github-issue-body", issue.body, "No description provided.", issue.url);
     addText(detailBody, "h3", "github-issue-comments-heading", `Comments (${(issue.comments || []).length})`);
     const comments = document.createElement("div");
     comments.className = "github-issue-comments";
@@ -463,7 +558,7 @@
       addText(commentMeta, "strong", "", comment.author?.login || "Unknown");
       addText(commentMeta, "span", "", "·");
       addTimestamp(commentMeta, comment.createdAt);
-      addText(card, "pre", "github-issue-comment-body", comment.body || "");
+      addMarkdown(card, "github-issue-comment-body", comment.body, "", issue.url);
       comments.appendChild(card);
     }
     detailBody.appendChild(comments);

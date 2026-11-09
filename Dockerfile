@@ -26,6 +26,7 @@ ARG RAILSMITH_VERSION=0.1.2
 ARG BUN_VERSION=1.4.4
 ARG PLAYWRIGHT_VERSION=1.62.1
 ARG OPENAI_PYTHON_VERSION=2.53.0
+ARG MARKED_VERSION=18.1.3
 ENV GIT_TERMINAL_PROMPT=0 \
     HARNESS_AGENT_HARNESS="" \
     HARNESS_AGENT_COMMAND="" \
@@ -62,6 +63,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
       "@moltenbot/railsmith@${RAILSMITH_VERSION}" \
       "bun@${BUN_VERSION}" \
+      "marked@${MARKED_VERSION}" \
       "playwright@${PLAYWRIGHT_VERSION}" \
       "@playwright/test@${PLAYWRIGHT_VERSION}" \
     && bun --version \
