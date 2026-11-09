@@ -65,6 +65,58 @@ test('Studio Run stays disabled until an in-progress task finishes', async t => 
   await expect(run).toHaveAttribute('title', '');
 });
 
+test('Studio Run ignores an older initial status after a newer stream snapshot', async t => {
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  const errors = [];
+  let releaseInitialStatus;
+  const initialStatusGate = new Promise(resolve => { releaseInitialStatus = resolve; });
+  page.on('pageerror', error => errors.push(error.message));
+  t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
+
+  await page.route('**/*', async route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== new URL(baseURL).origin) return route.abort();
+    if (!url.pathname.startsWith('/api/')) return route.continue();
+    if (url.pathname === '/api/status') {
+      await initialStatusGate;
+      return route.fulfill({ json: {
+        generated_at: '2026-11-09T20:00:00Z',
+        tasks: [], events: [], repositories: [], stats: {}, resources: {},
+      } });
+    }
+    if (url.pathname === '/api/agent-auth') {
+      return route.fulfill({ json: { ok: true, auth: { required: false, ready: true, state: 'ready' } } });
+    }
+    if (url.pathname === '/api/review-settings') {
+      return route.fulfill({ json: { ok: true, settings: { default_library_enabled: true } } });
+    }
+    if (url.pathname === '/api/github/repos') return route.fulfill({ json: { ok: true, repos: [] } });
+    if (url.pathname === '/api/library') return route.fulfill({ json: { ok: true, tasks: [] } });
+    if (url.pathname === '/api/stream') {
+      const snapshot = {
+        generated_at: '2026-11-09T20:00:01Z',
+        tasks: [{ request_id: 'github-actions-newer', source: 'github_actions', status: 'running' }],
+        events: [], repositories: [], stats: {}, resources: {},
+      };
+      return route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify(snapshot)}\n\n` });
+    }
+    return route.fulfill({ json: { ok: true } });
+  });
+
+  await page.goto(baseURL);
+  await expect.poll(() => page.evaluate(() => state.snapshot?.tasks?.[0]?.request_id || ''))
+    .toBe('github-actions-newer');
+  const run = page.locator('#local-prompt-submit');
+  await expect(run).toBeDisabled();
+
+  releaseInitialStatus();
+  await expect.poll(() => page.evaluate(() => state.snapshot?.tasks?.[0]?.request_id || ''))
+    .toBe('github-actions-newer');
+  await expect(run).toBeDisabled();
+  await expect(run).toHaveAttribute('title', 'Wait for the current task to finish');
+});
+
 test('Studio Run stays disabled when initial status fails until a stream snapshot arrives', async t => {
   const page = await browser.newPage();
   t.after(() => page.close());

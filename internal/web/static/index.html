@@ -13209,8 +13209,16 @@
       }
     }
 
+    function snapshotIsOlder(candidate, current = state.snapshot) {
+      const candidateGeneratedAt = Date.parse(String(candidate?.generated_at || ""));
+      const currentGeneratedAt = Date.parse(String(current?.generated_at || ""));
+      return Number.isFinite(candidateGeneratedAt) &&
+        Number.isFinite(currentGeneratedAt) &&
+        candidateGeneratedAt < currentGeneratedAt;
+    }
+
     function render(snapshot) {
-      if (!snapshot) return;
+      if (!snapshot || snapshotIsOlder(snapshot)) return;
       syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
       state.snapshot = snapshot;
