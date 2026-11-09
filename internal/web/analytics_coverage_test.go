@@ -35,6 +35,7 @@ func TestSettingsAndIssueAssetsTrackMeaningfulEngagement(t *testing.T) {
 				"custom_library_source_remove_started",
 				"custom_library_source_remove_succeeded",
 				"custom_library_source_remove_failed",
+				"custom_library_sources_refresh_failed",
 			},
 		},
 		{
@@ -46,6 +47,10 @@ func TestSettingsAndIssueAssetsTrackMeaningfulEngagement(t *testing.T) {
 				"library_schedule_${operation}_started",
 				"library_schedule_${operation}_succeeded",
 				"library_schedule_${operation}_failed",
+				"library_schedule_run_now_started",
+				"library_schedule_run_now_succeeded",
+				"library_schedule_run_now_failed",
+				"library_schedules_refresh_failed",
 			},
 		},
 		{

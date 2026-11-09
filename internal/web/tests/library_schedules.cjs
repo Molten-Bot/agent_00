@@ -105,3 +105,39 @@ test('Run Now saves schedule and submits one immediate library run', async t => 
   assert.equal(submitted.libraryTaskName, 'unit-test-coverage');
   assert.deepEqual(submitted.repos, ['https://github.com/acme/run-now.git']);
 });
+
+test('Run Now failure reports failed run without misclassifying successful schedule save', async t => {
+  const page = await openPage(t);
+  await page.route('**/api/library/run', route => route.fulfill({
+    status: 503,
+    contentType: 'application/json',
+    body: JSON.stringify({ error: 'Queue unavailable.' }),
+  }));
+  const saved = await page.evaluate(async () => {
+    const response = await fetch('/api/library/schedules', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ libraryTaskName: 'unit-test-coverage', repo: 'acme/run-now-failure', intervalHours: 24 }),
+    });
+    return response.json();
+  });
+  assert.equal(saved.ok, true);
+
+  await page.goto(`${baseURL}/#studio-library`);
+  await page.waitForFunction(() => Boolean(window.LibrarySchedulesUI));
+  await page.locator('#library-schedules-open').click();
+  await page.locator('.library-schedule-row').filter({ hasText: 'acme/run-now-failure' }).locator('button[title^="Edit schedule"]').click();
+  await page.locator('#library-schedule-run-now-field').click();
+  await page.locator('#library-schedule-save').click();
+  await page.waitForFunction(() => document.getElementById('library-schedule-status').textContent === 'Schedule saved, but task could not start: Queue unavailable.');
+
+  const events = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event')
+    .map(args => args[1]));
+  assert.equal(events.includes('library_schedule_save_succeeded'), true);
+  assert.equal(events.includes('library_schedule_save_failed'), false);
+  assert.equal(events.includes('library_schedule_run_now_started'), true);
+  assert.equal(events.includes('library_schedule_run_now_failed'), true);
+  assert.equal(events.includes('library_schedule_run_now_succeeded'), false);
+});

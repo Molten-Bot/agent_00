@@ -996,6 +996,33 @@ test('library sources load on direct open and refresh after adding and removing'
   );
 });
 
+test('library source refresh failure does not report successful add as failed', async t => {
+  let failReads = false;
+  const { page } = await openSettings(t, { configurePage: async page => {
+    await page.route('**/api/library/sources**', route => {
+      if (route.request().method() === 'POST') {
+        failReads = true;
+        return route.fulfill({ json: { ok: true, source: { ...route.request().postDataJSON(), taskCount: 1 } } });
+      }
+      if (failReads) return route.fulfill({ status: 503, json: { error: 'List unavailable.' } });
+      return route.fulfill({ json: { ok: true, sources: [] } });
+    });
+  }});
+  await select(page, 'library');
+  await page.locator('#custom-library-name').fill('new-library');
+  await page.locator('#custom-library-repo').fill('git@example.com:team/new.git');
+  await page.locator('#custom-library-add').click();
+  await page.waitForFunction(() => document.getElementById('custom-library-status').textContent.includes('List unavailable.'));
+
+  const events = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event')
+    .map(args => args[1]));
+  assert.equal(events.includes('custom_library_source_add_succeeded'), true);
+  assert.equal(events.includes('custom_library_source_add_failed'), false);
+  assert.equal(events.includes('custom_library_sources_refresh_failed'), true);
+});
+
 test('a failed initial read cannot overwrite saved settings with defaults', async t => {
   let posts = 0;
   const { page } = await openSettings(t, { configurePage: async page => {

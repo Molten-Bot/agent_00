@@ -91,6 +91,15 @@
     render(payload.sources || []);
   }
 
+  async function refreshAfterMutation(successMessage, operation) {
+    try {
+      await refreshEntries();
+    } catch (error) {
+      setStatus(`${successMessage} Unable to refresh the list: ${error.message}`, true);
+      track("custom_library_sources_refresh_failed", { operation });
+    }
+  }
+
   async function load() {
     if (busy) return;
     setBusy(true);
@@ -120,9 +129,10 @@
       nameInput.value = "";
       repoInput.value = "";
       const count = Number(payload.source?.taskCount || 0);
-      setStatus(`Added ${payload.source.name} (${count} task${count === 1 ? "" : "s"}).`);
+      const successMessage = `Added ${payload.source.name} (${count} task${count === 1 ? "" : "s"}).`;
+      setStatus(successMessage);
       track("custom_library_source_add_succeeded", { task_count: count });
-      await refreshEntries();
+      await refreshAfterMutation(successMessage, "add");
     } catch (error) {
       setStatus(error.message || "Unable to add this library repo.", true);
       track("custom_library_source_add_failed");
@@ -138,9 +148,10 @@
     track("custom_library_source_remove_started");
     try {
       await request("DELETE", `?name=${encodeURIComponent(name)}`);
-      setStatus(`Removed ${name}.`);
+      const successMessage = `Removed ${name}.`;
+      setStatus(successMessage);
       track("custom_library_source_remove_succeeded");
-      await refreshEntries();
+      await refreshAfterMutation(successMessage, "remove");
     } catch (error) {
       setStatus(error.message || "Unable to remove this library repo.", true);
       track("custom_library_source_remove_failed");

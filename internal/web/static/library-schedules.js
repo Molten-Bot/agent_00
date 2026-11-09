@@ -195,23 +195,42 @@
       showEditor(existing || { libraryTaskName: entry.name, repo: payload.repos[0], baseBranch: payload.branch || "", targetSubdir: payload.targetsubdir || ".", reviewers: payload.reviewers || [], draft: Boolean(payload.draft), promptContext: payload.promptcontext || "", intervalHours: 24 });
     } catch (error) { status(error.message, true); }
   }
-  async function mutate(action, success, operation, params = {}) {
+  async function mutate(action, success, operation, params = {}, followUp) {
     if (busy) return;
     busy = true;
     for (const control of modal.querySelectorAll("button, input")) control.disabled = true;
     status("Saving…");
     track(`library_schedule_${operation}_started`, params);
     try {
-      await action();
-      await load();
-      showList();
-      status(success);
-      track(`library_schedule_${operation}_succeeded`, params);
-    } catch (error) {
-      status(error.message, true);
-      track(`library_schedule_${operation}_failed`, params);
-    }
-    finally {
+      try {
+        await action();
+        track(`library_schedule_${operation}_succeeded`, params);
+      } catch (error) {
+        status(error.message, true);
+        track(`library_schedule_${operation}_failed`, params);
+        return;
+      }
+      let successIsError = false;
+      if (followUp) {
+        track("library_schedule_run_now_started", params);
+        try {
+          await followUp();
+          track("library_schedule_run_now_succeeded", params);
+        } catch (error) {
+          success = error.message;
+          successIsError = true;
+          track("library_schedule_run_now_failed", params);
+        }
+      }
+      try {
+        await load();
+        showList();
+        status(success, successIsError);
+      } catch (error) {
+        status(`${success} Unable to refresh schedules: ${error.message}`, true);
+        track("library_schedules_refresh_failed", { operation });
+      }
+    } finally {
       busy = false;
       for (const control of modal.querySelectorAll("button, input")) control.disabled = false;
     }
@@ -249,22 +268,27 @@
       return;
     }
     const runNow = byID("run-now").checked;
-    void mutate(async () => {
-      await request({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ libraryTaskName, repo, baseBranch, targetSubdir, reviewers, draft, promptContext, intervalHours: hoursForIndex(slider.value) }) });
-      if (!runNow) return;
-      const response = await fetch("/api/library/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ libraryTaskName, repos: [repo], baseBranch, targetSubdir, reviewers, draft, promptContext }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(`Schedule saved, but task could not start: ${body.error || `submit http ${response.status}`}`);
-    }, runNow ? "Schedule saved and task queued." : "Schedule saved. You can still use Run for a one-time task.", "save", {
+    const params = {
       mode: editing.key ? "edit" : "create",
       run_now: runNow,
       draft,
       interval_hours: hoursForIndex(slider.value),
-    });
+    };
+    void mutate(
+      () => request({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ libraryTaskName, repo, baseBranch, targetSubdir, reviewers, draft, promptContext, intervalHours: hoursForIndex(slider.value) }) }),
+      runNow ? "Schedule saved and task queued." : "Schedule saved. You can still use Run for a one-time task.",
+      "save",
+      params,
+      !runNow ? null : async () => {
+        const response = await fetch("/api/library/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ libraryTaskName, repos: [repo], baseBranch, targetSubdir, reviewers, draft, promptContext }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(`Schedule saved, but task could not start: ${body.error || `submit http ${response.status}`}`);
+      },
+    );
   });
   document.addEventListener("change", refreshButtons);
   libraryRepoInput.addEventListener("input", refreshButtons);
