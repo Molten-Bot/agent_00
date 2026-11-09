@@ -41,6 +41,10 @@
   let busy = false;
   let opener = null;
 
+  function track(name, params = {}) {
+    if (typeof window.trackAnalyticsEvent === "function") window.trackAnalyticsEvent(name, params);
+  }
+
   function status(message, error = false) {
     byID("status").textContent = message;
     byID("status").classList.toggle("is-error", error);
@@ -172,6 +176,7 @@
     byID("delete").hidden = !entry.key;
     slider.value = String(indexForHours(entry.intervalHours || 24));
     updateInterval();
+    track("library_schedule_editor_opened", { mode: entry.key ? "edit" : "create" });
     slider.focus();
   }
   function open() {
@@ -190,26 +195,36 @@
       showEditor(existing || { libraryTaskName: entry.name, repo: payload.repos[0], baseBranch: payload.branch || "", targetSubdir: payload.targetsubdir || ".", reviewers: payload.reviewers || [], draft: Boolean(payload.draft), promptContext: payload.promptcontext || "", intervalHours: 24 });
     } catch (error) { status(error.message, true); }
   }
-  async function mutate(action, success) {
+  async function mutate(action, success, operation, params = {}) {
     if (busy) return;
     busy = true;
     for (const control of modal.querySelectorAll("button, input")) control.disabled = true;
     status("Saving…");
+    track(`library_schedule_${operation}_started`, params);
     try {
       await action();
       await load();
       showList();
       status(success);
-    } catch (error) { status(error.message, true); }
+      track(`library_schedule_${operation}_succeeded`, params);
+    } catch (error) {
+      status(error.message, true);
+      track(`library_schedule_${operation}_failed`, params);
+    }
     finally {
       busy = false;
       for (const control of modal.querySelectorAll("button, input")) control.disabled = false;
     }
   }
   function remove(entry) {
-    return mutate(() => request({ method: "DELETE" }, `?key=${encodeURIComponent(entry.key)}`), "Schedule deleted. Any run already started will continue.");
+    return mutate(
+      () => request({ method: "DELETE" }, `?key=${encodeURIComponent(entry.key)}`),
+      "Schedule deleted. Any run already started will continue.",
+      "delete",
+    );
   }
   document.getElementById("library-schedules-open").addEventListener("click", async () => {
+    track("library_schedules_opened");
     open();
     editor.hidden = true;
     list.hidden = true;
@@ -230,6 +245,7 @@
     const promptContext = contextInput.value.trim();
     if (contextInput.required && !promptContext) {
       status(`${contextLabel.textContent || "Additional context"} is required for this task.`, true);
+      track("library_schedule_validation_failed", { validation_error: "missing_context" });
       return;
     }
     const runNow = byID("run-now").checked;
@@ -243,7 +259,12 @@
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(`Schedule saved, but task could not start: ${body.error || `submit http ${response.status}`}`);
-    }, runNow ? "Schedule saved and task queued." : "Schedule saved. You can still use Run for a one-time task.");
+    }, runNow ? "Schedule saved and task queued." : "Schedule saved. You can still use Run for a one-time task.", "save", {
+      mode: editing.key ? "edit" : "create",
+      run_now: runNow,
+      draft,
+      interval_hours: hoursForIndex(slider.value),
+    });
   });
   document.addEventListener("change", refreshButtons);
   libraryRepoInput.addEventListener("input", refreshButtons);

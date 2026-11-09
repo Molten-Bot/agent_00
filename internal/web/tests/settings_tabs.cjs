@@ -981,6 +981,19 @@ test('library sources load on direct open and refresh after adding and removing'
   await page.getByRole('button', { name: 'Remove existing', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('#custom-library-list .library-schedule-row').length === 1);
   assert.equal(await page.locator('#custom-library-list strong').textContent(), 'new-library');
+  const analytics = await page.evaluate(() => window.dataLayer
+    .map(args => Array.from(args))
+    .filter(args => args[0] === 'event')
+    .map(args => ({ name: args[1], params: args[2] })));
+  assert.deepEqual(
+    analytics.filter(event => event.name.startsWith('custom_library_source_')),
+    [
+      { name: 'custom_library_source_add_started', params: { send_to: 'G-BY33RFG2WB' } },
+      { name: 'custom_library_source_add_succeeded', params: { send_to: 'G-BY33RFG2WB', task_count: 2 } },
+      { name: 'custom_library_source_remove_started', params: { send_to: 'G-BY33RFG2WB' } },
+      { name: 'custom_library_source_remove_succeeded', params: { send_to: 'G-BY33RFG2WB' } },
+    ],
+  );
 });
 
 test('a failed initial read cannot overwrite saved settings with defaults', async t => {

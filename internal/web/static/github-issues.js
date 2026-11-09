@@ -98,6 +98,19 @@
     if (rememberedAssignee !== null) assignedToMe = rememberedAssignee === "true";
   } catch (_error) { /* Storage can be unavailable in private or embedded contexts. */ }
 
+  function track(name, params = {}) {
+    if (typeof window.trackAnalyticsEvent === "function") window.trackAnalyticsEvent(name, params);
+  }
+
+  function issueAnalyticsParams(repo, extra = {}) {
+    return {
+      repo_visibility: repo?.private ? "private" : "public",
+      link_mode: githubIssueLinkMode,
+      source: "github_issues",
+      ...extra,
+    };
+  }
+
   function setStatus(message, kind) {
     status.textContent = String(message || "");
     status.dataset.tone = kind || "";
@@ -519,6 +532,7 @@
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.textContent = "Open on GitHub";
+      link.addEventListener("click", () => track("github_issue_opened_external", issueAnalyticsParams(repo)));
       detailHeader.appendChild(link);
     }
     // Assignees and timestamps answer "who owns this and is it still moving",
@@ -622,10 +636,12 @@
     const repoURL = String(repo?.html_url || (repoName ? `https://github.com/${repoName}` : "")).trim();
     if (!repoName || !repoURL || !String(prompt || "").trim()) {
       if (taskStatus) taskStatus.textContent = "Repository and task prompt are required.";
+      track("github_issue_task_validation_failed", issueAnalyticsParams(repo, { validation_error: "missing_input" }));
       return;
     }
     submitButtons.forEach((button) => { button.disabled = true; });
     if (taskStatus) taskStatus.textContent = "Submitting task…";
+    track("github_issue_task_started", issueAnalyticsParams(repo));
     try {
       const body = await requestJSON("/api/local-prompt", {
         method: "POST",
@@ -643,8 +659,10 @@
         }),
       });
       if (taskStatus) taskStatus.textContent = `Task queued (${body.request_id || "request accepted"}).`;
+      track("github_issue_task_succeeded", issueAnalyticsParams(repo));
     } catch (error) {
       if (taskStatus) taskStatus.textContent = `Could not start task: ${error.message || "request failed"}`;
+      track("github_issue_task_failed", issueAnalyticsParams(repo));
       submitButtons.forEach((button) => { button.disabled = false; });
     }
   }
@@ -657,6 +675,7 @@
     loadingIssueNumber = number;
     renderIssueList(currentIssues);
     setStatus(`Loading issue #${number}…`);
+    track("github_issue_selected", issueAnalyticsParams(repo));
     try {
       const query = new URLSearchParams({ repo: repo.full_name });
       const body = await requestJSON(`/api/github/issues/${encodeURIComponent(number)}?${query}`, { cache: "no-store" });
@@ -704,12 +723,23 @@
       const issues = Array.isArray(body.issues) ? body.issues : [];
       currentIssues = issues;
       renderIssueList(issues);
+      track("github_issues_loaded", issueAnalyticsParams(repo, {
+        has_query: Boolean(searchInput.value.trim()),
+        assigned_to_me: assignedToMe,
+        result_count: issues.length,
+      }));
       // There is nothing to choose when the list came back empty, so the detail
       // pane repeats the list's reason instead of inviting a selection.
       if (!issues.length) renderEmptyDetail(emptyIssueListHeading(), emptyIssueListText());
       setStatus("");
     } catch (error) {
-      if (generation === requestGeneration) setStatus(error.message || "Unable to load issues.", "error");
+      if (generation === requestGeneration) {
+        setStatus(error.message || "Unable to load issues.", "error");
+        track("github_issues_load_failed", issueAnalyticsParams(repo, {
+          has_query: Boolean(searchInput.value.trim()),
+          assigned_to_me: assignedToMe,
+        }));
+      }
     }
   }
 
@@ -769,6 +799,7 @@
       if (repoSelect.value) localStorage.setItem(repositoryStorageKey, repoSelect.value);
       else localStorage.removeItem(repositoryStorageKey);
     } catch (_error) { /* Ignore unavailable storage. */ }
+    track("github_issues_repo_selected", { has_repository: Boolean(repoSelect.value), source: "github_issues" });
     void loadIssues();
   });
   if (assigneeFilter) {
@@ -776,6 +807,7 @@
       assignedToMe = !assignedToMe;
       try { localStorage.setItem(assigneeStorageKey, String(assignedToMe)); } catch (_error) { /* Ignore unavailable storage. */ }
       syncAssigneeFilter();
+      track("github_issues_assignee_filter_changed", { assigned_to_me: assignedToMe, source: "github_issues" });
       void loadIssues();
     });
   }
