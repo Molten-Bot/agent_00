@@ -13243,13 +13243,15 @@
           candidateGeneratedAt.nanoseconds < currentGeneratedAt.nanoseconds);
     }
 
-    function render(snapshot) {
+    function render(snapshot, { resolveTaskStatus = false } = {}) {
       if (!snapshot || snapshotIsOlder(snapshot)) return;
       syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
       state.snapshot = snapshot;
       state.snapshotRevision += 1;
-      state.taskStatusResolved = true;
+      if (resolveTaskStatus) {
+        state.taskStatusResolved = true;
+      }
       clearObservedPendingSubmission(snapshot);
       syncLocalPromptSubmitDisabled();
       syncTaskCompletionSounds(snapshot);
@@ -13321,7 +13323,7 @@
         }
         const snapshot = await response.json();
         await reviewSettingsPromise;
-        render(snapshot);
+        render(snapshot, { resolveTaskStatus: true });
         const initialDisplay = appDisplayFromHash();
         if (initialDisplay === "dashboard") {
           setAppDisplay("dashboard");
@@ -13349,7 +13351,7 @@
       const snapshot = pendingStreamSnapshot;
       pendingStreamSnapshot = null;
       if (snapshot) {
-        render(snapshot);
+        render(snapshot, { resolveTaskStatus: true });
       }
     }
 
@@ -13486,6 +13488,9 @@
             if (body?.state === "in_flight" && duplicateRequestID) {
               state.pendingSubmittedRequestID = duplicateRequestID;
               state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
+              if (state.snapshotRevision > snapshotRevisionAtSubmit) {
+                clearObservedPendingSubmission();
+              }
             }
             trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: state.promptMode });
             setLocalPromptStatus("warn", duplicateNotice(body));

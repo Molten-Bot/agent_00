@@ -2356,6 +2356,16 @@ func TestHandlerIndexServesHTML(t *testing.T) {
         }`) {
 		t.Fatalf("expected index html to reconcile a task snapshot received while prompt submission is in flight")
 	}
+	if !strings.Contains(markup, `function render(snapshot, { resolveTaskStatus = false } = {}) {`) ||
+		!strings.Contains(markup, `if (resolveTaskStatus) {
+        state.taskStatusResolved = true;
+      }`) ||
+		!strings.Contains(markup, `const snapshot = pendingStreamSnapshot;
+      pendingStreamSnapshot = null;
+      if (snapshot) {
+        render(snapshot, { resolveTaskStatus: true });`) {
+		t.Fatalf("expected cached renders to preserve the task status stream disconnect lock")
+	}
 	if !strings.Contains(markup, `function discardPendingStreamSnapshots() {
       pendingStreamSnapshotText = "";
       pendingStreamSnapshot = null;`) ||
