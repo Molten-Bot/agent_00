@@ -2337,6 +2337,19 @@ func TestHandlerIndexServesHTML(t *testing.T) {
       syncLocalPromptSubmitDisabled();`) {
 		t.Fatalf("expected index html to keep selected task history filter when Run starts")
 	}
+	if !strings.Contains(markup, `if (!state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt) {
+        state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = String(snapshot?.generated_at || "");
+        return;
+      }
+      const postAcceptanceSnapshot = { generated_at: state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt };
+      if (snapshotIsOlder(postAcceptanceSnapshot, snapshot)) {`) ||
+		strings.Contains(markup, `state.pendingSubmittedSnapshotGeneratedAt`) {
+		t.Fatalf("expected index html to retain a pending submission until a snapshot newer than its first post-acceptance snapshot")
+	}
+	if strings.Contains(markup, `state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
+        clearObservedPendingSubmission();`) {
+		t.Fatalf("expected index html not to treat the snapshot rendered before submit acceptance as post-acceptance")
+	}
 	if !strings.Contains(markup, `trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: state.promptMode });
             setLocalPromptStatus("warn", duplicateNotice(body));`) {
 		t.Fatalf("expected index html to keep selected task history filter when a duplicate submit resolves to an active task")

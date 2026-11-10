@@ -2054,7 +2054,7 @@
       commitSigningHoldMessage: "",
       promptSubmitInFlight: false,
       pendingSubmittedRequestID: "",
-      pendingSubmittedSnapshotGeneratedAt: "",
+      pendingSubmittedPostAcceptanceSnapshotGeneratedAt: "",
       taskStatusResolved: false,
     };
     if (pruneTaskHistory()) {
@@ -9862,14 +9862,25 @@
 
     function clearObservedPendingSubmission(snapshot = state.snapshot) {
       if (!state.pendingSubmittedRequestID) {
-        state.pendingSubmittedSnapshotGeneratedAt = "";
+        state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
         return;
       }
       const observed = (snapshot?.tasks || []).some((task) => taskRequestID(task) === state.pendingSubmittedRequestID);
-      const submittedSnapshot = { generated_at: state.pendingSubmittedSnapshotGeneratedAt };
-      if (observed || snapshotIsOlder(submittedSnapshot, snapshot)) {
+      if (observed) {
         state.pendingSubmittedRequestID = "";
-        state.pendingSubmittedSnapshotGeneratedAt = "";
+        state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
+        return;
+      }
+      // A snapshot delivered after acceptance may still have been generated before it.
+      // Keep the first one as a watermark and wait for a newer snapshot.
+      if (!state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt) {
+        state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = String(snapshot?.generated_at || "");
+        return;
+      }
+      const postAcceptanceSnapshot = { generated_at: state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt };
+      if (snapshotIsOlder(postAcceptanceSnapshot, snapshot)) {
+        state.pendingSubmittedRequestID = "";
+        state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
       }
     }
 
@@ -13455,8 +13466,7 @@
             const duplicateRequestID = String(body?.request_id || "").trim();
             if (body?.state === "in_flight" && duplicateRequestID) {
               state.pendingSubmittedRequestID = duplicateRequestID;
-              state.pendingSubmittedSnapshotGeneratedAt = String(state.snapshot?.generated_at || "");
-              clearObservedPendingSubmission();
+              state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
             }
             trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: state.promptMode });
             setLocalPromptStatus("warn", duplicateNotice(body));
@@ -13467,10 +13477,7 @@
 
         const requestID = body?.request_id || "(unknown)";
         state.pendingSubmittedRequestID = requestID === "(unknown)" ? "" : requestID;
-        state.pendingSubmittedSnapshotGeneratedAt = state.pendingSubmittedRequestID
-          ? String(state.snapshot?.generated_at || "")
-          : "";
-        clearObservedPendingSubmission();
+        state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
         try {
           const parsed = JSON.parse(normalized.compact);
           rememberManualRepoEntries([...(Array.isArray(parsed?.repos) ? parsed.repos : []), parsed?.repo, parsed?.repoUrl, parsed?.repourl]);
@@ -13485,7 +13492,7 @@
         setLocalPromptStatus("ok", `Queued request ${requestID}`);
       } catch (err) {
         state.pendingSubmittedRequestID = "";
-        state.pendingSubmittedSnapshotGeneratedAt = "";
+        state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
         trackAnalyticsEvent("prompt_submit_failed", { prompt_mode: state.promptMode });
         setLocalPromptStatus("error", `Submit failed: ${err.message}`);
         await loadAgentAuthStatus();
