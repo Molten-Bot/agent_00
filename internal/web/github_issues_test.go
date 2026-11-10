@@ -406,6 +406,9 @@ func TestGitHubIssueListBranchFilterReportsCappedSearch(t *testing.T) {
 			}
 			return execx.Result{}, errors.New("issue list command has no limit")
 		}
+		if slices.Contains(cmd.Args, "search/issues") {
+			return execx.Result{Stdout: `{"total_count":1001,"incomplete_results":false}`}, nil
+		}
 		graphQLCalls++
 		response := githubLinkedBranchResponse{}
 		for _, arg := range cmd.Args {
@@ -441,6 +444,58 @@ func TestGitHubIssueListBranchFilterReportsCappedSearch(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "narrow the search") {
 		t.Fatalf("response = %s, want capped-search guidance", response.Body.String())
+	}
+}
+
+func TestGitHubIssueListBranchFilterAllowsExactSearchMaximum(t *testing.T) {
+	t.Parallel()
+	entries := make([]githubIssueListEntry, githubIssueSearchLimit)
+	for index := range entries {
+		entries[index] = githubIssueListEntry{
+			GitHubIssue: GitHubIssue{Number: index + 1, Title: "Issue"},
+			ID:          "I_" + strconv.Itoa(index+1),
+		}
+	}
+	var countArgs []string
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if len(cmd.Args) > 1 && cmd.Args[0] == "issue" && cmd.Args[1] == "list" {
+			limit, parseErr := strconv.Atoi(cmd.Args[slices.Index(cmd.Args, "--limit")+1])
+			if parseErr != nil {
+				return execx.Result{}, parseErr
+			}
+			encodedEntries, marshalErr := json.Marshal(entries[:min(limit, len(entries))])
+			return execx.Result{Stdout: string(encodedEntries)}, marshalErr
+		}
+		if slices.Contains(cmd.Args, "search/issues") {
+			countArgs = cmd.Args
+			return execx.Result{Stdout: `{"total_count":1000,"incomplete_results":false}`}, nil
+		}
+		response := githubLinkedBranchResponse{}
+		for _, arg := range cmd.Args {
+			id := strings.TrimPrefix(arg, "ids[]=")
+			if id != arg {
+				response.Data.Nodes = append(response.Data.Nodes, struct {
+					ID             string `json:"id"`
+					LinkedBranches struct {
+						TotalCount int `json:"totalCount"`
+					} `json:"linkedBranches"`
+				}{ID: id})
+			}
+		}
+		encodedResponse, marshalErr := json.Marshal(response)
+		return execx.Result{Stdout: string(encodedResponse)}, marshalErr
+	}), true)
+
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/issues?repo=acme/repo&branch=with&search=issue&assignee=me", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if !slices.Contains(countArgs, "q=issue repo:acme/repo is:issue state:open assignee:@me") {
+		t.Fatalf("count args = %v, want equivalent search query", countArgs)
+	}
+	if !strings.Contains(response.Body.String(), `"issues":[]`) {
+		t.Fatalf("response = %s, want successful empty filtered result", response.Body.String())
 	}
 }
 

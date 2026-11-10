@@ -63,6 +63,11 @@ type githubLinkedBranchResponse struct {
 	} `json:"errors"`
 }
 
+type githubIssueSearchCountResponse struct {
+	TotalCount        int  `json:"total_count"`
+	IncompleteResults bool `json:"incomplete_results"`
+}
+
 // handleGitHubLabels lists labels across repositories available to this user.
 // Labels are an automation filter, so return a stable de-duplicated list.
 func (s Server) handleGitHubLabels(w http.ResponseWriter, r *http.Request) {
@@ -263,7 +268,14 @@ func (s Server) listGitHubIssues(ctx context.Context, repository, state, search,
 			return issues, nil
 		}
 		if search != "" && limit == githubIssueSearchLimit {
-			return nil, fmt.Errorf("GitHub search returned its %d-issue maximum; narrow the search to filter by linked branch", githubIssueSearchLimit)
+			count, err := s.githubIssueSearchCount(ctx, repository, state, search, assignee)
+			if err != nil {
+				return nil, err
+			}
+			if count > githubIssueSearchLimit {
+				return nil, fmt.Errorf("GitHub search returned more than its %d-issue maximum; narrow the search to filter by linked branch", githubIssueSearchLimit)
+			}
+			return issues, nil
 		}
 		maxInt := int(^uint(0) >> 1)
 		if limit > maxInt/2 {
@@ -274,6 +286,31 @@ func (s Server) listGitHubIssues(ctx context.Context, repository, state, search,
 			limit = min(limit, githubIssueSearchLimit)
 		}
 	}
+}
+
+func (s Server) githubIssueSearchCount(ctx context.Context, repository, state, search, assignee string) (int, error) {
+	query := search + " repo:" + repository + " is:issue"
+	if state != "all" {
+		query += " state:" + state
+	}
+	if assignee == "me" {
+		query += " assignee:@me"
+	}
+	result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{
+		Name: "gh",
+		Args: []string{"api", "--method", "GET", "search/issues", "-f", "q=" + query, "-F", "per_page=1"},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("count searched GitHub issues: %w", err)
+	}
+	var response githubIssueSearchCountResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &response); err != nil {
+		return 0, fmt.Errorf("decode searched GitHub issue count: %w", err)
+	}
+	if response.IncompleteResults {
+		return 0, fmt.Errorf("count searched GitHub issues: GitHub returned incomplete results")
+	}
+	return response.TotalCount, nil
 }
 
 func (s Server) githubIssuesWithLinkedBranches(ctx context.Context, issues []githubIssueListEntry) (map[string]bool, error) {
