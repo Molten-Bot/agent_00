@@ -40,6 +40,25 @@ type GitHubIssueLabel struct {
 	Color string `json:"color,omitempty"`
 }
 
+type githubIssueListEntry struct {
+	GitHubIssue
+	ID string `json:"id"`
+}
+
+type githubLinkedBranchResponse struct {
+	Data struct {
+		Nodes []struct {
+			ID             string `json:"id"`
+			LinkedBranches struct {
+				TotalCount int `json:"totalCount"`
+			} `json:"linkedBranches"`
+		} `json:"nodes"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
 // handleGitHubLabels lists labels across repositories available to this user.
 // Labels are an automation filter, so return a stable de-duplicated list.
 func (s Server) handleGitHubLabels(w http.ResponseWriter, r *http.Request) {
@@ -164,7 +183,15 @@ func (s Server) handleGitHubIssueList(w http.ResponseWriter, r *http.Request, re
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "assignee must be me"})
 		return
 	}
-	issues, err := s.listGitHubIssues(r.Context(), repository, state, search, assignee)
+	branch := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("branch")))
+	if branch != "" && branch != "all" && branch != "with" && branch != "without" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "branch must be all, with, or without"})
+		return
+	}
+	if branch == "all" {
+		branch = ""
+	}
+	issues, err := s.listGitHubIssues(r.Context(), repository, state, search, assignee, branch)
 	if err != nil {
 		s.logf("localruntime.ui status=warn endpoint=github_issues_list repo=%s err=%q", repository, err)
 		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("list GitHub issues: %v", err)})
@@ -173,11 +200,15 @@ func (s Server) handleGitHubIssueList(w http.ResponseWriter, r *http.Request, re
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "issues": issues})
 }
 
-func (s Server) listGitHubIssues(ctx context.Context, repository, state, search, assignee string) ([]GitHubIssue, error) {
+func (s Server) listGitHubIssues(ctx context.Context, repository, state, search, assignee, branch string) ([]GitHubIssue, error) {
+	fields := "number,title,state,url,author,labels,assignees,createdAt,updatedAt"
+	if branch != "" {
+		fields = "id," + fields
+	}
 	args := []string{
 		"issue", "list", "--repo", repository, "--state", state,
 		"--limit", strconv.Itoa(githubIssueListLimit),
-		"--json", "number,title,state,url,author,labels,assignees,createdAt,updatedAt",
+		"--json", fields,
 	}
 	if search != "" {
 		args = append(args, "--search", search)
@@ -189,14 +220,59 @@ func (s Server) listGitHubIssues(ctx context.Context, repository, state, search,
 	if err != nil {
 		return nil, err
 	}
-	var issues []GitHubIssue
-	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &issues); err != nil {
+	var entries []githubIssueListEntry
+	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &entries); err != nil {
 		return nil, fmt.Errorf("decode GitHub issues: %w", err)
 	}
-	if issues == nil {
-		issues = []GitHubIssue{}
+	issues := make([]GitHubIssue, 0, len(entries))
+	if branch == "" || len(entries) == 0 {
+		for _, entry := range entries {
+			issues = append(issues, entry.GitHubIssue)
+		}
+		return issues, nil
+	}
+	hasLinkedBranch, err := s.githubIssuesWithLinkedBranches(ctx, entries)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if (branch == "with") == hasLinkedBranch[entry.ID] {
+			issues = append(issues, entry.GitHubIssue)
+		}
 	}
 	return issues, nil
+}
+
+func (s Server) githubIssuesWithLinkedBranches(ctx context.Context, issues []githubIssueListEntry) (map[string]bool, error) {
+	const query = `query($ids:[ID!]!){nodes(ids:$ids){... on Issue{id linkedBranches{totalCount}}}}`
+	args := []string{"api", "graphql", "-f", "query=" + query}
+	for _, issue := range issues {
+		if strings.TrimSpace(issue.ID) == "" {
+			return nil, fmt.Errorf("GitHub issue %d is missing its node ID", issue.Number)
+		}
+		args = append(args, "-F", "ids[]="+issue.ID)
+	}
+	result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: args})
+	if err != nil {
+		return nil, fmt.Errorf("list linked GitHub issue branches: %w", err)
+	}
+	var response githubLinkedBranchResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &response); err != nil {
+		return nil, fmt.Errorf("decode linked GitHub issue branches: %w", err)
+	}
+	if len(response.Errors) > 0 {
+		return nil, fmt.Errorf("list linked GitHub issue branches: %s", response.Errors[0].Message)
+	}
+	linked := make(map[string]bool, len(response.Data.Nodes))
+	for _, node := range response.Data.Nodes {
+		if node.ID != "" {
+			linked[node.ID] = node.LinkedBranches.TotalCount > 0
+		}
+	}
+	if len(linked) != len(issues) {
+		return nil, fmt.Errorf("GitHub returned linked branch data for %d of %d issues", len(linked), len(issues))
+	}
+	return linked, nil
 }
 
 func (s Server) handleGitHubIssueDetail(w http.ResponseWriter, r *http.Request, repository string, number int) {

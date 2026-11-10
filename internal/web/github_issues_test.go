@@ -261,6 +261,7 @@ func TestGitHubIssueListRejectsInvalidFiltersBeforeCallingGh(t *testing.T) {
 		"/api/github/issues?repo=../repo",
 		"/api/github/issues?repo=acme/repo&search=" + strings.Repeat("x", 257),
 		"/api/github/issues?repo=acme/repo&assignee=someone-else",
+		"/api/github/issues?repo=acme/repo&branch=sometimes",
 	} {
 		response := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
@@ -270,6 +271,41 @@ func TestGitHubIssueListRejectsInvalidFiltersBeforeCallingGh(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("gh calls = %d, want zero for invalid input", calls)
+	}
+}
+
+func TestGitHubIssueListFiltersByLinkedBranch(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		branch     string
+		wantNumber string
+		omitNumber string
+	}{
+		{branch: "with", wantNumber: `"number":17`, omitNumber: `"number":18`},
+		{branch: "without", wantNumber: `"number":18`, omitNumber: `"number":17`},
+	} {
+		t.Run(tc.branch, func(t *testing.T) {
+			t.Parallel()
+			var commands []execx.Command
+			srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+				commands = append(commands, cmd)
+				if len(cmd.Args) > 1 && cmd.Args[0] == "issue" && cmd.Args[1] == "list" {
+					return execx.Result{Stdout: `[{"id":"I_17","number":17,"title":"Started"},{"id":"I_18","number":18,"title":"Unstarted"}]`}, nil
+				}
+				return execx.Result{Stdout: `{"data":{"nodes":[{"id":"I_17","linkedBranches":{"totalCount":1}},{"id":"I_18","linkedBranches":{"totalCount":0}}]}}`}, nil
+			}), true)
+			response := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/issues?repo=acme/repo&branch="+tc.branch, nil))
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+			}
+			if len(commands) != 2 || !strings.Contains(strings.Join(commands[0].Args, " "), "--json id,number") || !reflect.DeepEqual(commands[1].Args[len(commands[1].Args)-4:], []string{"-F", "ids[]=I_17", "-F", "ids[]=I_18"}) {
+				t.Fatalf("commands = %#v, want issue IDs followed by batched linked-branch query", commands)
+			}
+			if !strings.Contains(response.Body.String(), tc.wantNumber) || strings.Contains(response.Body.String(), tc.omitNumber) {
+				t.Fatalf("response = %s, want %s and no %s", response.Body.String(), tc.wantNumber, tc.omitNumber)
+			}
+		})
 	}
 }
 
@@ -360,7 +396,7 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
 	page := response.Body.String()
-	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `href="#studio-issues"`, `data-prompt-title-mode="issues"`, `id="github-issues-panel"`, "github-issues-repo", "github-issues-search", "github-issues-count", "github-issues-assignee-filter", "user-round-arrow-left", "review-settings-github-issues-link-mode", "review-settings-github-issues-link-close", `href="/static/style.css?v=4"`, "github-issues.js"} {
+	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `href="#studio-issues"`, `data-prompt-title-mode="issues"`, `id="github-issues-panel"`, "github-issues-repo", "github-issues-search", "github-issues-branch-filter", "With branch", "Without branch", "github-issues-count", "github-issues-assignee-filter", "user-round-arrow-left", "review-settings-github-issues-link-mode", "review-settings-github-issues-link-close", `href="/static/style.css?v=4"`, "github-issues.js"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page is missing %q", want)
 		}
