@@ -7,6 +7,7 @@
   const repoSelect = document.getElementById("github-issues-repo");
   const searchInput = document.getElementById("github-issues-search");
   const branchFilter = document.getElementById("github-issues-branch-filter");
+  const branchFilterButtons = branchFilter ? Array.from(branchFilter.querySelectorAll("[data-branch-filter]")) : [];
   const assigneeFilter = document.getElementById("github-issues-assignee-filter");
   const filters = document.getElementById("github-issues-filters");
   const issueList = document.getElementById("github-issues-list");
@@ -21,6 +22,7 @@
   const assigneeStorageKey = "hubui.githubIssuesAssignee.v1";
   const branchStorageKey = "hubui.githubIssuesBranch.v1";
   const assigneeFilterLabel = "Show only issues assigned to me";
+  const branchFilterValues = new Set(["all", "with", "without"]);
   let savedLayout = {};
   try { savedLayout = JSON.parse(localStorage.getItem(layoutStorageKey) || "{}"); } catch (_error) { savedLayout = {}; }
 
@@ -99,10 +101,23 @@
     const rememberedAssignee = localStorage.getItem(assigneeStorageKey);
     if (rememberedAssignee !== null) assignedToMe = rememberedAssignee === "true";
   } catch (_error) { /* Storage can be unavailable in private or embedded contexts. */ }
+  function branchFilterValue() {
+    return branchFilterValues.has(branchFilter.dataset.value) ? branchFilter.dataset.value : "all";
+  }
+
+  function setBranchFilter(value) {
+    const next = branchFilterValues.has(value) ? value : "all";
+    branchFilter.dataset.value = next;
+    for (const button of branchFilterButtons) {
+      button.setAttribute("aria-pressed", String(button.dataset.branchFilter === next));
+    }
+  }
+
   try {
-    const rememberedBranch = localStorage.getItem(branchStorageKey) || "all";
-    if (["all", "with", "without"].includes(rememberedBranch)) branchFilter.value = rememberedBranch;
-  } catch (_error) { /* Storage can be unavailable in private or embedded contexts. */ }
+    setBranchFilter(localStorage.getItem(branchStorageKey) || "all");
+  } catch (_error) {
+    setBranchFilter("all");
+  }
 
   function track(name, params = {}) {
     if (typeof window.trackAnalyticsEvent === "function") window.trackAnalyticsEvent(name, params);
@@ -448,7 +463,7 @@
   function emptyIssueListHeading() {
     if (!repositories.length) return "No repositories available";
     if (!selectedRepository()) return "Choose a repository";
-    if (searchInput.value.trim() || branchFilter.value !== "all") return "No matching issues";
+    if (searchInput.value.trim() || branchFilterValue() !== "all") return "No matching issues";
     return assignedToMe ? "No assigned issues" : "No open issues";
   }
 
@@ -456,8 +471,8 @@
     const searching = Boolean(searchInput.value.trim());
     if (!repositories.length) return "No repositories are available for this account.";
     if (!selectedRepository()) return "Choose a repository to see its open issues.";
-    if (branchFilter.value !== "all") {
-      const association = branchFilter.value === "with" ? "with an associated branch" : "without an associated branch";
+    if (branchFilterValue() !== "all") {
+      const association = branchFilterValue() === "with" ? "with an associated branch" : "without an associated branch";
       return `No open issues ${association} match the current filters.`;
     }
     if (assignedToMe) {
@@ -471,13 +486,7 @@
   function renderIssueList(issues) {
     issueList.replaceChildren();
     const total = `${issues.length}${issues.length === 100 ? "+" : ""}`;
-    // 100 is the page limit, so a "100+" count is always plural.
-    const noun = issues.length === 1 ? "open issue" : "open issues";
-    if (issueCount) issueCount.textContent = !selectedRepository()
-      ? "Choose a repository"
-      : assignedToMe
-        ? `${total} ${noun} assigned to you`
-        : `${total} ${noun}`;
+    if (issueCount) issueCount.textContent = total;
     if (!issues.length) {
       addText(issueList, "li", "github-issues-empty", emptyIssueListText());
       return;
@@ -746,11 +755,11 @@
     const requestAssignedToMe = assignedToMe;
     if (searchQuery) query.set("search", searchQuery);
     if (requestAssignedToMe) query.set("assignee", "me");
-    query.set("branch", branchFilter.value);
+    query.set("branch", branchFilterValue());
     const analyticsParams = issueAnalyticsParams(repo, {
       has_query: Boolean(searchQuery),
       assigned_to_me: requestAssignedToMe,
-      branch_filter: branchFilter.value,
+      branch_filter: branchFilterValue(),
     });
     try {
       const body = await requestJSON(`/api/github/issues?${query}`, { cache: "no-store" });
@@ -849,11 +858,16 @@
       void loadIssues();
     }, 250);
   });
-  branchFilter.addEventListener("change", () => {
-    try { localStorage.setItem(branchStorageKey, branchFilter.value); } catch (_error) { /* Ignore unavailable storage. */ }
-    track("github_issues_branch_filter_changed", { branch_filter: branchFilter.value, source: "github_issues" });
-    void loadIssues();
-  });
+  for (const button of branchFilterButtons) {
+    button.addEventListener("click", () => {
+      const value = button.dataset.branchFilter;
+      if (!branchFilterValues.has(value) || value === branchFilterValue()) return;
+      setBranchFilter(value);
+      try { localStorage.setItem(branchStorageKey, value); } catch (_error) { /* Ignore unavailable storage. */ }
+      track("github_issues_branch_filter_changed", { branch_filter: value, source: "github_issues" });
+      void loadIssues();
+    });
+  }
   filters.addEventListener("submit", (event) => {
     event.preventDefault();
     void loadIssues();

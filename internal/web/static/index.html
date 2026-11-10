@@ -20,7 +20,7 @@
   <script src="/static/lucide.min.js"></script>
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
-  <link rel="stylesheet" href="/static/style.css?v=4">
+  <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -386,22 +386,23 @@
                   <span class="prompt-label">Search</span>
                   <input id="github-issues-search" class="prompt-control prompt-input" type="search" maxlength="256" placeholder="Search issues assigned to you" autocomplete="off">
                 </label>
-                <label class="prompt-field prompt-field-base-branch">
-                  <span class="prompt-label">Branch</span>
-                  <span class="prompt-select-action-wrap">
-                    <select id="github-issues-branch-filter" class="prompt-control">
-                      <option value="all">All</option>
-                      <option value="with">With branch</option>
-                      <option value="without">Without branch</option>
-                    </select>
-                  </span>
-                </label>
               </form>
               <div class="github-issues-columns">
                 <section id="github-issues-list-panel" class="github-issues-list-panel" aria-labelledby="github-issues-list-title">
                   <div class="github-issues-list-heading">
-                    <h2 id="github-issues-list-title">Issues</h2>
+                    <h2 id="github-issues-list-title">Issues (<span id="github-issues-count">0</span>):</h2>
                     <div class="github-issues-list-heading-actions">
+                      <div id="github-issues-branch-filter" class="github-issues-branch-filter" role="group" aria-label="Filter issues by branch" data-value="all">
+                        <button type="button" data-branch-filter="all" aria-pressed="true" aria-label="All" title="All">
+                          <i data-lucide="git-branch" aria-hidden="true"></i>
+                        </button>
+                        <button type="button" data-branch-filter="with" aria-pressed="false" aria-label="With branch" title="With branch">
+                          <i data-lucide="git-branch-plus" aria-hidden="true"></i>
+                        </button>
+                        <button type="button" data-branch-filter="without" aria-pressed="false" aria-label="Without branch" title="Without branch">
+                          <i data-lucide="git-branch-minus" aria-hidden="true"></i>
+                        </button>
+                      </div>
                       <!-- Assigned-to-me is the default; github-issues.js applies a stored preference before the browser is unhidden. -->
                       <button id="github-issues-assignee-filter" class="github-issues-assignee-filter" type="button" aria-pressed="true" aria-label="Show only issues assigned to me" title="Show only issues assigned to me">
                         <svg class="lucide lucide-user-round-arrow-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -411,7 +412,6 @@
                           <circle cx="10" cy="8" r="5"></circle>
                         </svg>
                       </button>
-                      <span id="github-issues-count" class="github-issues-list-count">Choose a repository</span>
                     </div>
                   </div>
                   <ol id="github-issues-list" class="github-issues-list"></ol>
@@ -14187,6 +14187,6 @@
   <script src="/static/commit-signing.js"></script>
   <script src="/static/custom-library-sources.js"></script>
   <script src="/static/marked.umd.js?v=18.1.3"></script>
-  <script src="/static/github-issues.js?v=16"></script>
+  <script src="/static/github-issues.js?v=17"></script>
 </body>
 </html>

@@ -586,10 +586,18 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
 	page := response.Body.String()
-	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `href="#studio-issues"`, `data-prompt-title-mode="issues"`, `id="github-issues-panel"`, "github-issues-repo", "github-issues-search", "github-issues-branch-filter", "With branch", "Without branch", "github-issues-count", "github-issues-assignee-filter", "user-round-arrow-left", "review-settings-github-issues-link-mode", "review-settings-github-issues-link-close", `href="/static/style.css?v=4"`, "github-issues.js"} {
+	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `href="#studio-issues"`, `data-prompt-title-mode="issues"`, `id="github-issues-panel"`, "github-issues-repo", "github-issues-search", "github-issues-branch-filter", `data-lucide="git-branch"`, `data-lucide="git-branch-plus"`, `data-lucide="git-branch-minus"`, "With branch", "Without branch", `Issues (<span id="github-issues-count">0</span>):`, "github-issues-assignee-filter", "user-round-arrow-left", "review-settings-github-issues-link-mode", "review-settings-github-issues-link-close", `href="/static/style.css?v=5"`, "github-issues.js"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page is missing %q", want)
 		}
+	}
+	branchFilterAt := strings.Index(page, `id="github-issues-branch-filter"`)
+	assigneeFilterAt := strings.Index(page, `id="github-issues-assignee-filter"`)
+	if branchFilterAt < 0 || assigneeFilterAt < branchFilterAt {
+		t.Error("branch icon filters should sit directly before the assigned-to-me filter")
+	}
+	if strings.Contains(page, `<select id="github-issues-branch-filter"`) {
+		t.Error("branch filter should use icon buttons, not a dropdown")
 	}
 	if strings.Contains(page, "github-issues.css") {
 		t.Error("GitHub Issues should share the common stylesheet")

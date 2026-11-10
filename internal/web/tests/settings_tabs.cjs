@@ -597,7 +597,7 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
   });
 
   assert.notEqual(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
-  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=16');
+  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=17');
   await page.waitForFunction(() => document.querySelector('.github-issue-empty-state h2')?.textContent === 'No repositories available');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No repositories available');
   await page.locator('#github-issues-dock-link').click();
@@ -622,7 +622,7 @@ test('GitHub Issues remembers its repository and gives a useful empty state', as
   });
 
   await page.waitForFunction(() => document.getElementById('github-issues-repo').value === 'Molten-Bot/agent_00');
-  await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '0 open issues assigned to you');
+  await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '0');
   assert.equal(await page.locator('.github-issues-empty').textContent(), 'No open issues are assigned to you. Use the filter button to show every open issue.');
   assert.equal(await page.locator('#github-issues-search').getAttribute('placeholder'), 'Search issues assigned to you');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No assigned issues', 'an empty list must not invite choosing an issue');
@@ -665,7 +665,7 @@ test('GitHub Issues honours a stored assignee filter choice before the browser i
   assert.equal(await assigneeFilter.getAttribute('aria-pressed'), 'false', 'a stored filter-off choice must win over the server-rendered default');
   assert.equal(await page.locator('#github-issues-search').getAttribute('placeholder'), 'Search this repository');
   await page.waitForFunction(() => document.querySelector('.github-issues-empty')?.textContent === 'This repository has no open issues.');
-  assert.equal(await page.locator('#github-issues-count').textContent(), '0 open issues');
+  assert.equal(await page.locator('#github-issues-list-title').textContent(), 'Issues (0):');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No open issues');
   assert.equal(issueAssigneeFilter, '');
   const assignedIssuesResponse = page.waitForResponse(response => new URL(response.url()).searchParams.get('assignee') === 'me');
@@ -696,18 +696,33 @@ test('GitHub Issues filters issues by linked branch and remembers the choice', a
     },
   });
 
-  await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '0 open issues assigned to you');
-  assert.equal(await page.locator('#github-issues-branch-filter').inputValue(), 'all');
+  await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '0');
+  assert.equal(await page.locator('#github-issues-branch-filter').getAttribute('data-value'), 'all');
+  assert.deepEqual(await page.locator('#github-issues-branch-filter button').evaluateAll(buttons => buttons.map(button => ({
+    value: button.dataset.branchFilter,
+    pressed: button.getAttribute('aria-pressed'),
+    icon: button.querySelector('svg')?.getAttribute('data-lucide'),
+  }))), [
+    { value: 'all', pressed: 'true', icon: 'git-branch' },
+    { value: 'with', pressed: 'false', icon: 'git-branch-plus' },
+    { value: 'without', pressed: 'false', icon: 'git-branch-minus' },
+  ]);
   assert.equal(issueBranchFilter, 'all');
   const filteredResponse = page.waitForResponse(response => new URL(response.url()).searchParams.get('branch') === 'with');
-  await page.locator('#github-issues-branch-filter').selectOption('with');
+  await page.getByRole('button', { name: 'With branch' }).click();
   await filteredResponse;
   assert.equal(issueBranchFilter, 'with');
   assert.equal(await page.locator('.github-issues-empty').textContent(), 'No open issues with an associated branch match the current filters.');
   assert.equal(await page.evaluate(() => localStorage.getItem('hubui.githubIssuesBranch.v1')), 'with');
+  const unlinkedResponse = page.waitForResponse(response => new URL(response.url()).searchParams.get('branch') === 'without');
+  await page.getByRole('button', { name: 'Without branch' }).click();
+  await unlinkedResponse;
+  assert.equal(issueBranchFilter, 'without');
+  assert.equal(await page.locator('.github-issues-empty').textContent(), 'No open issues without an associated branch match the current filters.');
+  assert.equal(await page.evaluate(() => localStorage.getItem('hubui.githubIssuesBranch.v1')), 'without');
   await page.reload();
-  await page.waitForFunction(() => document.getElementById('github-issues-branch-filter').value === 'with');
-  assert.equal(issueBranchFilter, 'with');
+  await page.waitForFunction(() => document.getElementById('github-issues-branch-filter').dataset.value === 'without');
+  assert.equal(issueBranchFilter, 'without');
 });
 
 test('GitHub Issues renders inside Studio and uses the configured link mode', async t => {
@@ -807,7 +822,7 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   assert.equal(await assigneeFilter.locator('svg.lucide-user-round-arrow-left').count(), 1);
   assert.equal(await assigneeFilter.getAttribute('aria-pressed'), 'true', 'the assignee filter starts pressed');
   assert.equal(await page.locator('#github-issues-search').getAttribute('placeholder'), 'Search issues assigned to you');
-  await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '1 open issue assigned to you');
+  await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '1');
   const allIssuesResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/github/issues' && !new URL(response.url()).searchParams.has('assignee'));
   await assigneeFilter.click();
   await allIssuesResponse;
@@ -820,7 +835,7 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
   await assignedIssuesResponse;
   assert.equal(issueAssigneeFilter, 'me');
   assert.equal(await assigneeFilter.getAttribute('aria-pressed'), 'true');
-  await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '1 open issue assigned to you');
+  await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '1');
   assert.equal(await page.locator('#github-issues-status').textContent(), '');
   assert.match(await page.locator('.github-issue-list-title').textContent(), /Add issue browser/);
   const resizeHandle = page.locator('#github-issues-resize-handle');
