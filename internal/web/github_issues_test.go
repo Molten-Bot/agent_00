@@ -299,7 +299,7 @@ func TestGitHubIssueListFiltersByLinkedBranch(t *testing.T) {
 			if response.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
 			}
-			if len(commands) != 2 || !strings.Contains(strings.Join(commands[0].Args, " "), "--json id,number") || !reflect.DeepEqual(commands[1].Args[len(commands[1].Args)-4:], []string{"-F", "ids[]=I_17", "-F", "ids[]=I_18"}) {
+			if len(commands) != 2 || !strings.Contains(strings.Join(commands[0].Args, " "), "--json id,number") || !strings.Contains(strings.Join(commands[1].Args, " "), "linkedBranches(first:1)") || !reflect.DeepEqual(commands[1].Args[len(commands[1].Args)-4:], []string{"-F", "ids[]=I_17", "-F", "ids[]=I_18"}) {
 				t.Fatalf("commands = %#v, want issue IDs followed by batched linked-branch query", commands)
 			}
 			if !strings.Contains(response.Body.String(), tc.wantNumber) || strings.Contains(response.Body.String(), tc.omitNumber) {

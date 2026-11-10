@@ -244,7 +244,7 @@ func (s Server) listGitHubIssues(ctx context.Context, repository, state, search,
 }
 
 func (s Server) githubIssuesWithLinkedBranches(ctx context.Context, issues []githubIssueListEntry) (map[string]bool, error) {
-	const query = `query($ids:[ID!]!){nodes(ids:$ids){... on Issue{id linkedBranches{totalCount}}}}`
+	const query = `query($ids:[ID!]!){nodes(ids:$ids){... on Issue{id linkedBranches(first:1){totalCount}}}}`
 	args := []string{"api", "graphql", "-f", "query=" + query}
 	for _, issue := range issues {
 		if strings.TrimSpace(issue.ID) == "" {
