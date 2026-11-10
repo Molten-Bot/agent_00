@@ -312,27 +312,30 @@ func TestGitHubIssueListFiltersByLinkedBranch(t *testing.T) {
 
 func TestGitHubIssueListBranchFilterChecksCandidatesPastResponseLimit(t *testing.T) {
 	t.Parallel()
-	entries := make([]githubIssueListEntry, githubIssueListLimit+1)
+	entries := make([]githubIssueListEntry, 1001)
 	for index := range entries {
 		entries[index] = githubIssueListEntry{
 			GitHubIssue: GitHubIssue{Number: index + 1, Title: "Issue"},
 			ID:          "I_" + strconv.Itoa(index+1),
 		}
 	}
-	encodedEntries, err := json.Marshal(entries)
-	if err != nil {
-		t.Fatal(err)
-	}
-	listLimit := ""
+	var listLimits []int
 	graphQLCalls := 0
 	srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 		if len(cmd.Args) > 1 && cmd.Args[0] == "issue" && cmd.Args[1] == "list" {
 			for index, arg := range cmd.Args {
 				if arg == "--limit" && index+1 < len(cmd.Args) {
-					listLimit = cmd.Args[index+1]
+					limit, parseErr := strconv.Atoi(cmd.Args[index+1])
+					if parseErr != nil {
+						return execx.Result{}, parseErr
+					}
+					listLimits = append(listLimits, limit)
+					end := min(limit, len(entries))
+					encodedEntries, marshalErr := json.Marshal(entries[:end])
+					return execx.Result{Stdout: string(encodedEntries)}, marshalErr
 				}
 			}
-			return execx.Result{Stdout: string(encodedEntries)}, nil
+			return execx.Result{}, errors.New("issue list command has no limit")
 		}
 		graphQLCalls++
 		response := githubLinkedBranchResponse{}
@@ -347,7 +350,7 @@ func TestGitHubIssueListBranchFilterChecksCandidatesPastResponseLimit(t *testing
 					TotalCount int `json:"totalCount"`
 				} `json:"linkedBranches"`
 			}{ID: id}
-			if id == "I_101" {
+			if id == "I_1001" {
 				node.LinkedBranches.TotalCount = 1
 			}
 			response.Data.Nodes = append(response.Data.Nodes, node)
@@ -361,14 +364,14 @@ func TestGitHubIssueListBranchFilterChecksCandidatesPastResponseLimit(t *testing
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
 	}
-	if listLimit != strconv.Itoa(githubIssueBranchFilterCandidateLimit) {
-		t.Fatalf("branch-filter candidate limit = %q, want %d", listLimit, githubIssueBranchFilterCandidateLimit)
+	if !reflect.DeepEqual(listLimits, []int{100, 200, 400, 800, 1600}) {
+		t.Fatalf("branch-filter candidate limits = %v, want progressively expanded search beyond 1000", listLimits)
 	}
-	if graphQLCalls != 2 {
-		t.Fatalf("linked-branch query count = %d, want 2 batches", graphQLCalls)
+	if graphQLCalls != 11 {
+		t.Fatalf("linked-branch query count = %d, want 11 cached batches", graphQLCalls)
 	}
-	if !strings.Contains(response.Body.String(), `"number":101`) || strings.Contains(response.Body.String(), `"number":1,`) {
-		t.Fatalf("response = %s, want matching issue beyond normal response limit only", response.Body.String())
+	if !strings.Contains(response.Body.String(), `"number":1001`) || strings.Contains(response.Body.String(), `"number":1,`) {
+		t.Fatalf("response = %s, want matching issue beyond former candidate limit only", response.Body.String())
 	}
 }
 

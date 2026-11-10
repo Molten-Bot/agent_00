@@ -14,9 +14,8 @@ import (
 )
 
 const (
-	githubIssueListLimit                  = 100
-	githubIssueBranchFilterCandidateLimit = 1000
-	githubIssueLinkedBranchBatchSize      = 100
+	githubIssueListLimit             = 100
+	githubIssueLinkedBranchBatchSize = 100
 )
 
 // GitHubIssue is the issue data shown by the local issue browser.
@@ -209,47 +208,65 @@ func (s Server) listGitHubIssues(ctx context.Context, repository, state, search,
 	limit := githubIssueListLimit
 	if branch != "" {
 		fields = "id," + fields
-		limit = githubIssueBranchFilterCandidateLimit
 	}
-	args := []string{
-		"issue", "list", "--repo", repository, "--state", state,
-		"--limit", strconv.Itoa(limit),
-		"--json", fields,
-	}
-	if search != "" {
-		args = append(args, "--search", search)
-	}
-	if assignee == "me" {
-		args = append(args, "--assignee", "@me")
-	}
-	result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: args})
-	if err != nil {
-		return nil, err
-	}
-	var entries []githubIssueListEntry
-	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &entries); err != nil {
-		return nil, fmt.Errorf("decode GitHub issues: %w", err)
-	}
-	issues := make([]GitHubIssue, 0, len(entries))
-	if branch == "" || len(entries) == 0 {
-		for _, entry := range entries {
-			issues = append(issues, entry.GitHubIssue)
+	linked := make(map[string]bool)
+	for {
+		args := []string{
+			"issue", "list", "--repo", repository, "--state", state,
+			"--limit", strconv.Itoa(limit),
+			"--json", fields,
 		}
-		return issues, nil
-	}
-	hasLinkedBranch, err := s.githubIssuesWithLinkedBranches(ctx, entries)
-	if err != nil {
-		return nil, err
-	}
-	for _, entry := range entries {
-		if (branch == "with") == hasLinkedBranch[entry.ID] {
-			issues = append(issues, entry.GitHubIssue)
-			if len(issues) == githubIssueListLimit {
-				break
+		if search != "" {
+			args = append(args, "--search", search)
+		}
+		if assignee == "me" {
+			args = append(args, "--assignee", "@me")
+		}
+		result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: args})
+		if err != nil {
+			return nil, err
+		}
+		var entries []githubIssueListEntry
+		if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &entries); err != nil {
+			return nil, fmt.Errorf("decode GitHub issues: %w", err)
+		}
+		issues := make([]GitHubIssue, 0, min(len(entries), githubIssueListLimit))
+		if branch == "" || len(entries) == 0 {
+			for _, entry := range entries {
+				issues = append(issues, entry.GitHubIssue)
+			}
+			return issues, nil
+		}
+		unchecked := make([]githubIssueListEntry, 0, len(entries))
+		for _, entry := range entries {
+			if _, ok := linked[entry.ID]; !ok {
+				unchecked = append(unchecked, entry)
 			}
 		}
+		newLinked, err := s.githubIssuesWithLinkedBranches(ctx, unchecked)
+		if err != nil {
+			return nil, err
+		}
+		for id, hasLinkedBranch := range newLinked {
+			linked[id] = hasLinkedBranch
+		}
+		for _, entry := range entries {
+			if (branch == "with") == linked[entry.ID] {
+				issues = append(issues, entry.GitHubIssue)
+				if len(issues) == githubIssueListLimit {
+					return issues, nil
+				}
+			}
+		}
+		if len(entries) < limit {
+			return issues, nil
+		}
+		maxInt := int(^uint(0) >> 1)
+		if limit > maxInt/2 {
+			return nil, fmt.Errorf("too many GitHub issues to filter by linked branch")
+		}
+		limit *= 2
 	}
-	return issues, nil
 }
 
 func (s Server) githubIssuesWithLinkedBranches(ctx context.Context, issues []githubIssueListEntry) (map[string]bool, error) {
