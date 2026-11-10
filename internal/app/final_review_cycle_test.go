@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -372,7 +373,7 @@ func TestRunFinalReviewCycleConfirmsFinalPassFixBeforeRelease(t *testing.T) {
 	}
 }
 
-func TestRunFinalReviewCycleFailsWhenFinalConfirmationStillHasFindings(t *testing.T) {
+func TestRunFinalReviewCycleReportsRemainingFindingsAfterFinalConfirmation(t *testing.T) {
 	runner := &finalFindingReviewCycleRunner{t: t, neverClean: true}
 	h := New(runner)
 	h.FinalReviewPasses = 1
@@ -408,10 +409,10 @@ func TestRunFinalReviewCycleFailsWhenFinalConfirmationStillHasFindings(t *testin
 		"codex",
 		false,
 	)
-	// The PR must never be released from draft when findings persist after
-	// every configured fix pass has been exhausted.
-	if err == nil || exitCode != ExitCodex || stage != "review" {
-		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want failure leaving PR in draft", exitCode, stage, err)
+	// Exhausting the repair budget is a controlled incomplete-review outcome,
+	// not an agent execution failure. The caller keeps the PR in draft.
+	if !errors.Is(err, errFinalReviewFindingsRemain) || exitCode != ExitSuccess || stage != "review" {
+		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want remaining-findings outcome", exitCode, stage, err)
 	}
 	if runner.reviews != 2 || runner.fixes != 1 {
 		t.Fatalf("review/fix calls = %d/%d, want 2/1", runner.reviews, runner.fixes)
@@ -550,15 +551,18 @@ func TestProcessChangedRepoRejectsEmptyNetDiffAfterReviewCycle(t *testing.T) {
 	}
 }
 
-// TestProcessChangedRepoLeavesPRInDraftWhenFinalReviewCycleFails exercises the
-// same wiring for the failure path: when the final review cycle cannot reach
-// a clean pass, processChangedRepo must surface the failure and must never
-// call through to release the PR from draft.
-func TestProcessChangedRepoLeavesPRInDraftWhenFinalReviewCycleFails(t *testing.T) {
+// TestProcessChangedRepoLeavesPRInDraftWhenFinalReviewFindingsRemain exercises
+// the bounded-review outcome: unresolved findings remain visible on the draft
+// PR without turning completed task work into an agent_00 failure follow-up.
+func TestProcessChangedRepoLeavesPRInDraftWhenFinalReviewFindingsRemain(t *testing.T) {
 	runner := &finalFindingReviewCycleRunner{t: t, neverClean: true}
 	h := New(runner)
 	h.FinalReviewPasses = 1
 	h.PRChecksWatchTimeout = -1
+	var logs []string
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
 
 	repoDir := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
@@ -593,10 +597,13 @@ func TestProcessChangedRepoLeavesPRInDraftWhenFinalReviewCycleFails(t *testing.T
 		"codex",
 		false,
 	)
-	if err == nil || exitCode != ExitCodex || stage != "review" {
-		t.Fatalf("processChangedRepo() = (%d, %q, %v), want final review cycle failure", exitCode, stage, err)
+	if err != nil || exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("processChangedRepo() = (%d, %q, %v), want successful draft handoff", exitCode, stage, err)
 	}
 	if runner.reviews != 2 || runner.fixes != 1 {
 		t.Fatalf("review/fix calls = %d/%d, want 2/1", runner.reviews, runner.fixes)
+	}
+	if joined := strings.Join(logs, "\n"); !strings.Contains(joined, "status=warn action=leave_draft reason=fix_passes_exhausted") {
+		t.Fatalf("logs missing exhausted-review warning: %s", joined)
 	}
 }

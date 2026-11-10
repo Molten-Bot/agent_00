@@ -113,6 +113,7 @@ var authSetupGitMu sync.Mutex
 var errPRCreatePermissionDenied = errors.New("pull request create permission denied")
 var errTransientPRLookup = errors.New("transient pull request lookup failure")
 var errPRChecksWatchTimeout = errors.New("pull request checks watch timed out")
+var errFinalReviewFindingsRemain = errors.New("post-task review findings remain")
 
 // Result captures run output and status.
 type Result struct {
@@ -620,6 +621,16 @@ func (h Harness) processChangedRepo(
 		ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt,
 		agentsPath, codexTargetLabel, agentStage, multiRepo,
 	)
+	if errors.Is(err, errFinalReviewFindingsRemain) {
+		h.logf(
+			"stage=review status=warn action=leave_draft reason=fix_passes_exhausted fix_passes=%d repo=%s repo_dir=%s pr_url=%s",
+			h.FinalReviewPasses,
+			repo.URL,
+			repo.RelDir,
+			repo.PRURL,
+		)
+		return ExitSuccess, "", nil
+	}
 	if err != nil {
 		return exitCode, stage, err
 	}
@@ -3631,7 +3642,7 @@ func (h Harness) runFinalReviewCycle(
 			return ExitSuccess, "", nil
 		}
 		if pass > h.FinalReviewPasses {
-			return ExitCodex, "review", fmt.Errorf("post-task review cycle still reported findings after exhausting %d fix pass(es); leaving pull request in draft for human review", h.FinalReviewPasses)
+			return ExitSuccess, "review", fmt.Errorf("%w after exhausting %d fix pass(es); leaving pull request in draft for human review", errFinalReviewFindingsRemain, h.FinalReviewPasses)
 		}
 
 		h.logf(
