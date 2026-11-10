@@ -6246,6 +6246,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"validation unavailable in runtime",
 		"validation tooling unavailable",
 		"local validation tooling unavailable in runtime",
+		"build validation unavailable",
 		"full build validation could not run",
 		"focused go validation unavailable in runtime",
 		"node_modules missing",
@@ -6275,6 +6276,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		strings.Contains(text, "executable missing") ||
 		strings.Contains(text, "binary missing") ||
 		strings.Contains(text, "command missing") ||
+		strings.Contains(text, "could not find task 'build' in project") ||
 		strings.Contains(text, "`uv` missing") ||
 		strings.Contains(text, "uv missing") ||
 		strings.Contains(text, "node_modules missing")

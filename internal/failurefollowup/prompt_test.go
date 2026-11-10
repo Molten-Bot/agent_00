@@ -64,6 +64,9 @@ func TestWithExecutionContractIncludesValidationToolingInstruction(t *testing.T)
 	if !strings.Contains(got, "restricted network access blocking dependency downloads") {
 		t.Fatalf("WithExecutionContract() missing restricted-network validation guidance: %q", got)
 	}
+	if !strings.Contains(got, "missing repository validation script or task") {
+		t.Fatalf("WithExecutionContract() missing absent-validation-task guidance: %q", got)
+	}
 }
 
 func TestWithExecutionContractIncludesActivityPrivacyInstruction(t *testing.T) {
