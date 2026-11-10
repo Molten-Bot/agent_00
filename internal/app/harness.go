@@ -113,6 +113,7 @@ var authSetupGitMu sync.Mutex
 var errPRCreatePermissionDenied = errors.New("pull request create permission denied")
 var errTransientPRLookup = errors.New("transient pull request lookup failure")
 var errPRChecksWatchTimeout = errors.New("pull request checks watch timed out")
+var errFinalReviewFindingsRemain = errors.New("post-task review findings remain")
 
 // Result captures run output and status.
 type Result struct {
@@ -620,7 +621,12 @@ func (h Harness) processChangedRepo(
 		ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt,
 		agentsPath, codexTargetLabel, agentStage, multiRepo,
 	)
-	if err != nil {
+	findingsRemain := errors.Is(err, errFinalReviewFindingsRemain)
+	if findingsRemain {
+		if draftErr := h.ensurePullRequestDraft(ctx, *repo); draftErr != nil {
+			return ExitPR, "review", draftErr
+		}
+	} else if err != nil {
 		return exitCode, stage, err
 	}
 	if repo.CreateWorkBranch {
@@ -631,6 +637,16 @@ func (h Harness) processChangedRepo(
 		if !hasNetDiff {
 			return ExitPR, "review", fmt.Errorf("post-task review cycle left no net changes against the base branch; pull request remains in draft for correction")
 		}
+	}
+	if findingsRemain {
+		h.logf(
+			"stage=review status=warn action=leave_draft reason=fix_passes_exhausted fix_passes=%d repo=%s repo_dir=%s pr_url=%s",
+			h.FinalReviewPasses,
+			repo.URL,
+			repo.RelDir,
+			repo.PRURL,
+		)
+		return ExitSuccess, "", nil
 	}
 	if !cfg.Draft {
 		if releaseErr := h.markPullRequestReadyForReview(ctx, *repo); releaseErr != nil {
@@ -3631,7 +3647,7 @@ func (h Harness) runFinalReviewCycle(
 			return ExitSuccess, "", nil
 		}
 		if pass > h.FinalReviewPasses {
-			return ExitCodex, "review", fmt.Errorf("post-task review cycle still reported findings after exhausting %d fix pass(es); leaving pull request in draft for human review", h.FinalReviewPasses)
+			return ExitSuccess, "review", fmt.Errorf("%w after exhausting %d fix pass(es); leaving pull request in draft for human review", errFinalReviewFindingsRemain, h.FinalReviewPasses)
 		}
 
 		h.logf(
@@ -4194,6 +4210,37 @@ func (h Harness) markPullRequestReadyForReview(ctx context.Context, repo repoWor
 	return nil
 }
 
+// ensurePullRequestDraft prevents unresolved post-task review findings from
+// remaining mergeable when the review cycle started against an existing PR.
+func (h Harness) ensurePullRequestDraft(ctx context.Context, repo repoWorkspace) error {
+	prURL := strings.TrimSpace(repo.PRURL)
+	if prURL == "" {
+		return nil
+	}
+	h.logf("stage=review status=start action=mark_draft pr_url=%s", prURL)
+	if _, err := h.runCommand(ctx, "review", prDraftCommand(repo.Dir, prURL)); err != nil {
+		if isPRAlreadyDraftError(err) {
+			h.logf("stage=review status=skip action=mark_draft reason=already_draft pr_url=%s", prURL)
+			return nil
+		}
+		if isPRClosedOrMergedError(err) {
+			h.logf("stage=review status=skip action=mark_draft reason=pr_not_open pr_url=%s", prURL)
+			return nil
+		}
+		return fmt.Errorf("mark pull request as draft: %w", err)
+	}
+	h.logf("stage=review status=ok action=mark_draft pr_url=%s", prURL)
+	return nil
+}
+
+func isPRAlreadyDraftError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "already a draft") || strings.Contains(message, "already in draft")
+}
+
 // isPRAlreadyReadyError recognizes the "already ready for review" message
 // from a failed `gh pr ready` invocation. Some gh builds exit 0 for this
 // case, in which case h.runCommand returns a nil error and the success path
@@ -4596,6 +4643,14 @@ func prReadyCommand(repoDir, prURL string) execx.Command {
 		Dir:  repoDir,
 		Name: "gh",
 		Args: []string{"pr", "ready", prURL},
+	}
+}
+
+func prDraftCommand(repoDir, prURL string) execx.Command {
+	return execx.Command{
+		Dir:  repoDir,
+		Name: "gh",
+		Args: []string{"pr", "ready", prURL, "--undo"},
 	}
 }
 
