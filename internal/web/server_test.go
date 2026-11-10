@@ -2350,6 +2350,17 @@ func TestHandlerIndexServesHTML(t *testing.T) {
         clearObservedPendingSubmission();`) {
 		t.Fatalf("expected index html not to treat the snapshot rendered before submit acceptance as post-acceptance")
 	}
+	if !strings.Contains(markup, `const snapshotRevisionAtSubmit = state.snapshotRevision;`) ||
+		!strings.Contains(markup, `if (state.snapshotRevision > snapshotRevisionAtSubmit) {
+          clearObservedPendingSubmission();
+        }`) {
+		t.Fatalf("expected index html to reconcile a task snapshot received while prompt submission is in flight")
+	}
+	if !strings.Contains(markup, `stream.onerror = () => {
+        state.taskStatusResolved = false;
+        syncLocalPromptSubmitDisabled();`) {
+		t.Fatalf("expected index html to block prompt submission when the task status stream disconnects")
+	}
 	if !strings.Contains(markup, `trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: state.promptMode });
             setLocalPromptStatus("warn", duplicateNotice(body));`) {
 		t.Fatalf("expected index html to keep selected task history filter when a duplicate submit resolves to an active task")

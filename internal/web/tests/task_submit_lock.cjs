@@ -162,6 +162,55 @@ test('Studio Run stays disabled when initial status fails until a stream snapsho
   await expect(run).toHaveAttribute('title', '');
 });
 
+test('Studio Run disables when the task stream disconnects until a fresh snapshot arrives', async t => {
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
+
+  await page.addInitScript(() => {
+    class ControlledEventSource {
+      constructor() {
+        window.testTaskStream = this;
+        queueMicrotask(() => this.onopen?.());
+      }
+    }
+    window.EventSource = ControlledEventSource;
+  });
+  await page.route('**/*', route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== new URL(baseURL).origin) return route.abort();
+    if (!url.pathname.startsWith('/api/')) return route.continue();
+    if (url.pathname === '/api/status') {
+      return route.fulfill({ json: { tasks: [], events: [], repositories: [], stats: {}, resources: {} } });
+    }
+    if (url.pathname === '/api/agent-auth') {
+      return route.fulfill({ json: { ok: true, auth: { required: false, ready: true, state: 'ready' } } });
+    }
+    if (url.pathname === '/api/review-settings') {
+      return route.fulfill({ json: { ok: true, settings: { default_library_enabled: true } } });
+    }
+    if (url.pathname === '/api/github/repos') return route.fulfill({ json: { ok: true, repos: [] } });
+    if (url.pathname === '/api/library') return route.fulfill({ json: { ok: true, tasks: [] } });
+    return route.fulfill({ json: { ok: true } });
+  });
+
+  await page.goto(baseURL);
+  const run = page.locator('#local-prompt-submit');
+  await expect(run).toBeEnabled();
+
+  await page.evaluate(() => window.testTaskStream.onerror());
+  await expect(run).toBeDisabled();
+  await expect(run).toHaveAttribute('title', 'Wait for the current task to finish');
+
+  await page.evaluate(() => window.testTaskStream.onmessage({ data: JSON.stringify({
+    tasks: [], events: [], repositories: [], stats: {}, resources: {},
+  }) }));
+  await expect(run).toBeEnabled();
+  await expect(run).toHaveAttribute('title', '');
+});
+
 test('Studio Run tracks an in-flight duplicate until snapshots observe it finishing', async t => {
   const page = await browser.newPage();
   t.after(() => page.close());

@@ -2055,6 +2055,7 @@
       promptSubmitInFlight: false,
       pendingSubmittedRequestID: "",
       pendingSubmittedPostAcceptanceSnapshotGeneratedAt: "",
+      snapshotRevision: 0,
       taskStatusResolved: false,
     };
     if (pruneTaskHistory()) {
@@ -13247,6 +13248,7 @@
       syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
       state.snapshot = snapshot;
+      state.snapshotRevision += 1;
       state.taskStatusResolved = true;
       clearObservedPendingSubmission(snapshot);
       syncLocalPromptSubmitDisabled();
@@ -13411,6 +13413,8 @@
       };
 
       stream.onerror = () => {
+        state.taskStatusResolved = false;
+        syncLocalPromptSubmitDisabled();
         setLocalConnection(false, "Reconnecting...");
       };
     }
@@ -13447,6 +13451,7 @@
       setLocalPromptStatus("warn", "Submitting...");
 
       try {
+        const snapshotRevisionAtSubmit = state.snapshotRevision;
         const submitEndpoint = state.promptMode === "library" ? "/api/library/run" : "/api/local-prompt";
         const response = await fetch(submitEndpoint, {
           method: "POST",
@@ -13478,6 +13483,9 @@
         const requestID = body?.request_id || "(unknown)";
         state.pendingSubmittedRequestID = requestID === "(unknown)" ? "" : requestID;
         state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
+        if (state.snapshotRevision > snapshotRevisionAtSubmit) {
+          clearObservedPendingSubmission();
+        }
         try {
           const parsed = JSON.parse(normalized.compact);
           rememberManualRepoEntries([...(Array.isArray(parsed?.repos) ? parsed.repos : []), parsed?.repo, parsed?.repoUrl, parsed?.repourl]);
