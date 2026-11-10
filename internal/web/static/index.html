@@ -13248,11 +13248,11 @@
       syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
       state.snapshot = snapshot;
-      state.snapshotRevision += 1;
       if (resolveTaskStatus) {
         state.taskStatusResolved = true;
+        state.snapshotRevision += 1;
+        clearObservedPendingSubmission(snapshot);
       }
-      clearObservedPendingSubmission(snapshot);
       syncLocalPromptSubmitDisabled();
       syncTaskCompletionSounds(snapshot);
       syncTaskViewDockCompletion(previousSnapshot, snapshot);

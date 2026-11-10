@@ -261,17 +261,26 @@ test('Studio Run tracks an in-flight duplicate until snapshots observe it finish
   await expect(page.locator('#local-prompt-status')).toContainText('Duplicate ignored');
   await expect(run).toBeDisabled();
 
-  await page.evaluate(() => render({ tasks: [], events: [], repositories: [], stats: {}, resources: {} }));
+  await page.evaluate(() => render(
+    { tasks: [], events: [], repositories: [], stats: {}, resources: {} },
+    { resolveTaskStatus: true },
+  ));
   await expect(run).toBeDisabled();
-  await page.evaluate(() => render({
-    tasks: [{ request_id: 'existing-task', source: 'local_prompt', status: 'running' }],
-    events: [], repositories: [], stats: {}, resources: {},
-  }));
+  await page.evaluate(() => render(
+    {
+      tasks: [{ request_id: 'existing-task', source: 'local_prompt', status: 'running' }],
+      events: [], repositories: [], stats: {}, resources: {},
+    },
+    { resolveTaskStatus: true },
+  ));
   await expect(run).toBeDisabled();
-  await page.evaluate(() => render({
-    tasks: [{ request_id: 'existing-task', source: 'local_prompt', status: 'completed' }],
-    events: [], repositories: [], stats: {}, resources: {},
-  }));
+  await page.evaluate(() => render(
+    {
+      tasks: [{ request_id: 'existing-task', source: 'local_prompt', status: 'completed' }],
+      events: [], repositories: [], stats: {}, resources: {},
+    },
+    { resolveTaskStatus: true },
+  ));
   await expect(run).toBeEnabled();
   assert.equal(submitCount, 1);
 });
@@ -300,10 +309,13 @@ test('Studio Run unlocks when duplicate completion arrives before submit respons
     if (url.pathname === '/api/library') return route.fulfill({ json: { ok: true, tasks: [] } });
     if (url.pathname === '/api/stream') return route.fulfill({ contentType: 'text/event-stream', body: '' });
     if (url.pathname === '/api/local-prompt' && route.request().method() === 'POST') {
-      await page.evaluate(() => render({
-        tasks: [{ request_id: 'existing-fast-task', source: 'local_prompt', status: 'completed' }],
-        events: [], repositories: [], stats: {}, resources: {},
-      }));
+      await page.evaluate(() => render(
+        {
+          tasks: [{ request_id: 'existing-fast-task', source: 'local_prompt', status: 'completed' }],
+          events: [], repositories: [], stats: {}, resources: {},
+        },
+        { resolveTaskStatus: true },
+      ));
       return route.fulfill({
         status: 409,
         json: { ok: false, duplicate: true, request_id: 'existing-fast-task', state: 'in_flight' },
@@ -347,10 +359,13 @@ test('Studio Run unlocks when completion arrives before submit response', async 
     if (url.pathname === '/api/library') return route.fulfill({ json: { ok: true, tasks: [] } });
     if (url.pathname === '/api/stream') return route.fulfill({ contentType: 'text/event-stream', body: '' });
     if (url.pathname === '/api/local-prompt' && route.request().method() === 'POST') {
-      await page.evaluate(() => render({
-        tasks: [{ request_id: 'fast-task', source: 'local_prompt', status: 'completed' }],
-        events: [], repositories: [], stats: {}, resources: {},
-      }));
+      await page.evaluate(() => render(
+        {
+          tasks: [{ request_id: 'fast-task', source: 'local_prompt', status: 'completed' }],
+          events: [], repositories: [], stats: {}, resources: {},
+        },
+        { resolveTaskStatus: true },
+      ));
       return route.fulfill({ json: { ok: true, request_id: 'fast-task' } });
     }
     return route.fulfill({ json: { ok: true } });
@@ -408,16 +423,19 @@ test('Studio Run unlocks when a newer snapshot has already pruned the submitted 
   await expect(page.locator('#local-prompt-status')).toContainText('Queued request pruned-task');
   await expect(run).toBeDisabled();
 
-  await page.evaluate(() => render({
-    generated_at: '2026-11-09T20:00:00.123456789Z',
-    tasks: [], events: [], repositories: [], stats: {}, resources: {},
-  }));
+  await page.evaluate(() => render(state.snapshot));
   await expect(run).toBeDisabled();
 
   await page.evaluate(() => render({
     generated_at: '2026-11-09T20:00:00.123456790Z',
     tasks: [], events: [], repositories: [], stats: {}, resources: {},
-  }));
+  }, { resolveTaskStatus: true }));
+  await expect(run).toBeDisabled();
+
+  await page.evaluate(() => render({
+    generated_at: '2026-11-09T20:00:00.123456791Z',
+    tasks: [], events: [], repositories: [], stats: {}, resources: {},
+  }, { resolveTaskStatus: true }));
   await expect(run).toBeEnabled();
   await expect(run).toHaveAttribute('title', '');
 });

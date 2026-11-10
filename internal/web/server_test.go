@@ -2359,12 +2359,16 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `function render(snapshot, { resolveTaskStatus = false } = {}) {`) ||
 		!strings.Contains(markup, `if (resolveTaskStatus) {
         state.taskStatusResolved = true;
+        state.snapshotRevision += 1;
+        clearObservedPendingSubmission(snapshot);
       }`) ||
+		strings.Contains(markup, `state.snapshot = snapshot;
+      state.snapshotRevision += 1;`) ||
 		!strings.Contains(markup, `const snapshot = pendingStreamSnapshot;
       pendingStreamSnapshot = null;
       if (snapshot) {
         render(snapshot, { resolveTaskStatus: true });`) {
-		t.Fatalf("expected cached renders to preserve the task status stream disconnect lock")
+		t.Fatalf("expected cached renders to preserve task status and pending submission locks")
 	}
 	if !strings.Contains(markup, `function discardPendingStreamSnapshots() {
       pendingStreamSnapshotText = "";
