@@ -2333,8 +2333,61 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `localPromptInput.value = normalized.pretty;
       queuePromptInputSizeSync(localPromptInput);
 
-      localPromptSubmit.disabled = true;`) {
+      state.promptSubmitInFlight = true;
+      syncLocalPromptSubmitDisabled();`) {
 		t.Fatalf("expected index html to keep selected task history filter when Run starts")
+	}
+	if !strings.Contains(markup, `if (!state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt) {
+        state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = String(snapshot?.generated_at || "");
+        return;
+      }
+      const postAcceptanceSnapshot = { generated_at: state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt };
+      if (snapshotIsOlder(postAcceptanceSnapshot, snapshot)) {`) ||
+		strings.Contains(markup, `state.pendingSubmittedSnapshotGeneratedAt`) {
+		t.Fatalf("expected index html to retain a pending submission until a snapshot newer than its first post-acceptance snapshot")
+	}
+	if strings.Contains(markup, `state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
+        clearObservedPendingSubmission();`) {
+		t.Fatalf("expected index html not to treat the snapshot rendered before submit acceptance as post-acceptance")
+	}
+	if !strings.Contains(markup, `const snapshotRevisionAtSubmit = state.snapshotRevision;`) ||
+		!strings.Contains(markup, `if (state.snapshotRevision > snapshotRevisionAtSubmit) {
+          clearObservedPendingSubmission();
+        }`) {
+		t.Fatalf("expected index html to reconcile a task snapshot received while prompt submission is in flight")
+	}
+	if !strings.Contains(markup, `function render(snapshot, { resolveTaskStatus = false } = {}) {`) ||
+		!strings.Contains(markup, `if (resolveTaskStatus) {
+        state.taskStatusResolved = true;
+        state.snapshotRevision += 1;
+        clearObservedPendingSubmission(snapshot);
+      }`) ||
+		strings.Contains(markup, `state.snapshot = snapshot;
+      state.snapshotRevision += 1;`) ||
+		!strings.Contains(markup, `const snapshot = pendingStreamSnapshot;
+      pendingStreamSnapshot = null;
+      if (snapshot) {
+        render(snapshot, { resolveTaskStatus: true });`) {
+		t.Fatalf("expected cached renders to preserve task status and pending submission locks")
+	}
+	if !strings.Contains(markup, `const taskStreamErrorRevisionAtRequest = taskStreamErrorRevision;`) ||
+		!strings.Contains(markup, `render(snapshot, { resolveTaskStatus: taskStreamErrorRevision === taskStreamErrorRevisionAtRequest });`) ||
+		!strings.Contains(markup, `discardPendingStreamSnapshots();
+        taskStreamErrorRevision += 1;
+        state.taskStatusResolved = false;`) {
+		t.Fatalf("expected delayed initial status responses not to resolve task status after a stream error")
+	}
+	if !strings.Contains(markup, `function discardPendingStreamSnapshots() {
+      pendingStreamSnapshotText = "";
+      pendingStreamSnapshot = null;`) ||
+		!strings.Contains(markup, `window.clearTimeout(streamRenderTimer);`) ||
+		!strings.Contains(markup, `window.cancelAnimationFrame(streamRenderFrame);`) ||
+		!strings.Contains(markup, `stream.onerror = () => {
+        discardPendingStreamSnapshots();
+        taskStreamErrorRevision += 1;
+        state.taskStatusResolved = false;
+        syncLocalPromptSubmitDisabled();`) {
+		t.Fatalf("expected index html to discard queued snapshots and block prompt submission when the task status stream disconnects")
 	}
 	if !strings.Contains(markup, `trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: state.promptMode });
             setLocalPromptStatus("warn", duplicateNotice(body));`) {

@@ -2062,6 +2062,11 @@
       chatReposLoaded: false,
       commitSigningSetupRequired: false,
       commitSigningHoldMessage: "",
+      promptSubmitInFlight: false,
+      pendingSubmittedRequestID: "",
+      pendingSubmittedPostAcceptanceSnapshotGeneratedAt: "",
+      snapshotRevision: 0,
+      taskStatusResolved: false,
     };
     if (pruneTaskHistory()) {
       persistTaskHistory();
@@ -2077,6 +2082,7 @@
     let streamRenderTimer = null;
     let streamRenderFrame = null;
     let pendingStreamSnapshot = null;
+    let taskStreamErrorRevision = 0;
     let taskHistoryPruneTimer = null;
     let taskTimingRefreshTimer = null;
     let deferredSelectionRenderTimer = null;
@@ -3331,9 +3337,7 @@
           button.classList.toggle("is-pending", String(button.getAttribute("data-agent-harness") || "").trim().toLowerCase() === state.agentHarnessSelectionPending);
         }
       }
-      if (localPromptSubmit) {
-        localPromptSubmit.disabled = state.agentAuthBusy || (state.agentAuth.required && !state.agentAuth.ready);
-      }
+      syncLocalPromptSubmitDisabled();
     }
 
     function isClaudeGitHubConfigureState(auth) {
@@ -3828,10 +3832,7 @@
         setAgentAuthVerifyPending(true);
         scheduleClaudePostSubmitVerifyPolling();
       }
-      if (localPromptSubmit) {
-        const submitDisabled = state.agentAuthBusy || (state.agentAuth.required && !state.agentAuth.ready);
-        localPromptSubmit.disabled = submitDisabled;
-      }
+      syncLocalPromptSubmitDisabled();
       scheduleAgentAuthRefresh();
     }
 
@@ -9863,6 +9864,46 @@
       return COMPLETED_STATUSES.has(normalizedTaskStatus(task.status));
     }
 
+    function hasActiveTask(snapshot = state.snapshot) {
+      return Array.isArray(snapshot?.tasks) && snapshot.tasks.some((task) => !isCompletedTask(task));
+    }
+
+    function taskStateBlocksSubmission(snapshot = state.snapshot) {
+      return !state.taskStatusResolved || hasActiveTask(snapshot);
+    }
+
+    function clearObservedPendingSubmission(snapshot = state.snapshot) {
+      if (!state.pendingSubmittedRequestID) {
+        state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
+        return;
+      }
+      const observed = (snapshot?.tasks || []).some((task) => taskRequestID(task) === state.pendingSubmittedRequestID);
+      if (observed) {
+        state.pendingSubmittedRequestID = "";
+        state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
+        return;
+      }
+      // A snapshot delivered after acceptance may still have been generated before it.
+      // Keep the first one as a watermark and wait for a newer snapshot.
+      if (!state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt) {
+        state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = String(snapshot?.generated_at || "");
+        return;
+      }
+      const postAcceptanceSnapshot = { generated_at: state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt };
+      if (snapshotIsOlder(postAcceptanceSnapshot, snapshot)) {
+        state.pendingSubmittedRequestID = "";
+        state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
+      }
+    }
+
+    function syncLocalPromptSubmitDisabled() {
+      if (!localPromptSubmit) return;
+      const authBlocked = state.agentAuthBusy || (state.agentAuth.required && !state.agentAuth.ready);
+      const taskBlocked = state.promptSubmitInFlight || Boolean(state.pendingSubmittedRequestID) || taskStateBlocksSubmission();
+      localPromptSubmit.disabled = authBlocked || taskBlocked;
+      localPromptSubmit.title = taskBlocked ? "Wait for the current task to finish" : "";
+    }
+
     function isSuccessfulTaskStatus(status) {
       const normalized = normalizedTaskStatus(status);
       return normalized === "completed" || normalized === "no_changes" || normalized === "merged";
@@ -13196,11 +13237,34 @@
       }
     }
 
-    function render(snapshot) {
-      if (!snapshot) return;
+    function parseRFC3339Nano(value) {
+      const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/);
+      if (!match) return null;
+      const seconds = Date.parse(`${match[1]}${match[3]}`);
+      if (!Number.isFinite(seconds)) return null;
+      return { seconds, nanoseconds: (match[2] || "").padEnd(9, "0") };
+    }
+
+    function snapshotIsOlder(candidate, current = state.snapshot) {
+      const candidateGeneratedAt = parseRFC3339Nano(candidate?.generated_at);
+      const currentGeneratedAt = parseRFC3339Nano(current?.generated_at);
+      if (!candidateGeneratedAt || !currentGeneratedAt) return false;
+      return candidateGeneratedAt.seconds < currentGeneratedAt.seconds ||
+        (candidateGeneratedAt.seconds === currentGeneratedAt.seconds &&
+          candidateGeneratedAt.nanoseconds < currentGeneratedAt.nanoseconds);
+    }
+
+    function render(snapshot, { resolveTaskStatus = false } = {}) {
+      if (!snapshot || snapshotIsOlder(snapshot)) return;
       syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
       state.snapshot = snapshot;
+      if (resolveTaskStatus) {
+        state.taskStatusResolved = true;
+        state.snapshotRevision += 1;
+        clearObservedPendingSubmission(snapshot);
+      }
+      syncLocalPromptSubmitDisabled();
       syncTaskCompletionSounds(snapshot);
       syncTaskViewDockCompletion(previousSnapshot, snapshot);
       syncNewReviewTaskFocus(previousSnapshot, snapshot);
@@ -13257,6 +13321,7 @@
     }
 
     async function loadInitial() {
+      const taskStreamErrorRevisionAtRequest = taskStreamErrorRevision;
       try {
         const githubReposPromise = state.githubReposReady
           ? loadGitHubReposForChat({ force: true, refresh: true, keepExisting: true })
@@ -13270,7 +13335,7 @@
         }
         const snapshot = await response.json();
         await reviewSettingsPromise;
-        render(snapshot);
+        render(snapshot, { resolveTaskStatus: taskStreamErrorRevision === taskStreamErrorRevisionAtRequest });
         const initialDisplay = appDisplayFromHash();
         if (initialDisplay === "dashboard") {
           setAppDisplay("dashboard");
@@ -13298,7 +13363,7 @@
       const snapshot = pendingStreamSnapshot;
       pendingStreamSnapshot = null;
       if (snapshot) {
-        render(snapshot);
+        render(snapshot, { resolveTaskStatus: true });
       }
     }
 
@@ -13335,6 +13400,19 @@
       streamRenderTimer = window.setTimeout(flushPendingStreamSnapshot, STREAM_RENDER_INTERVAL_MS);
     }
 
+    function discardPendingStreamSnapshots() {
+      pendingStreamSnapshotText = "";
+      pendingStreamSnapshot = null;
+      if (streamRenderTimer !== null) {
+        window.clearTimeout(streamRenderTimer);
+        streamRenderTimer = null;
+      }
+      if (streamRenderFrame !== null) {
+        window.cancelAnimationFrame(streamRenderFrame);
+        streamRenderFrame = null;
+      }
+    }
+
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         if (streamRenderFrame !== null) {
@@ -13362,12 +13440,21 @@
       };
 
       stream.onerror = () => {
+        discardPendingStreamSnapshots();
+        taskStreamErrorRevision += 1;
+        state.taskStatusResolved = false;
+        syncLocalPromptSubmitDisabled();
         setLocalConnection(false, "Reconnecting...");
       };
     }
 
     async function submitLocalPrompt(event) {
       event.preventDefault();
+      if (taskStateBlocksSubmission() || state.promptSubmitInFlight || state.pendingSubmittedRequestID) {
+        setLocalPromptStatus("warn", "Wait for the current task to finish before starting another.");
+        syncLocalPromptSubmitDisabled();
+        return;
+      }
       if (state.agentAuth.required && !state.agentAuth.ready) {
         trackAnalyticsEvent("prompt_submit_blocked_auth", { prompt_mode: state.promptMode });
         setLocalPromptStatus("error", `${currentAgentLabel()} auth is required. Complete the authorization screen first.`);
@@ -13384,7 +13471,8 @@
       localPromptInput.value = normalized.pretty;
       queuePromptInputSizeSync(localPromptInput);
 
-      localPromptSubmit.disabled = true;
+      state.promptSubmitInFlight = true;
+      syncLocalPromptSubmitDisabled();
       trackAnalyticsEvent("prompt_submit_started", {
         prompt_mode: state.promptMode,
         image_count: state.promptImages.length,
@@ -13392,6 +13480,7 @@
       setLocalPromptStatus("warn", "Submitting...");
 
       try {
+        const snapshotRevisionAtSubmit = state.snapshotRevision;
         const submitEndpoint = state.promptMode === "library" ? "/api/library/run" : "/api/local-prompt";
         const response = await fetch(submitEndpoint, {
           method: "POST",
@@ -13408,6 +13497,14 @@
 
         if (!response.ok) {
           if (response.status === 409 && body?.duplicate) {
+            const duplicateRequestID = String(body?.request_id || "").trim();
+            if (body?.state === "in_flight" && duplicateRequestID) {
+              state.pendingSubmittedRequestID = duplicateRequestID;
+              state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
+              if (state.snapshotRevision > snapshotRevisionAtSubmit) {
+                clearObservedPendingSubmission();
+              }
+            }
             trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: state.promptMode });
             setLocalPromptStatus("warn", duplicateNotice(body));
             return;
@@ -13416,6 +13513,11 @@
         }
 
         const requestID = body?.request_id || "(unknown)";
+        state.pendingSubmittedRequestID = requestID === "(unknown)" ? "" : requestID;
+        state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
+        if (state.snapshotRevision > snapshotRevisionAtSubmit) {
+          clearObservedPendingSubmission();
+        }
         try {
           const parsed = JSON.parse(normalized.compact);
           rememberManualRepoEntries([...(Array.isArray(parsed?.repos) ? parsed.repos : []), parsed?.repo, parsed?.repoUrl, parsed?.repourl]);
@@ -13429,11 +13531,14 @@
         trackAnalyticsEvent("prompt_submit_succeeded", { prompt_mode: state.promptMode, request_id: requestID });
         setLocalPromptStatus("ok", `Queued request ${requestID}`);
       } catch (err) {
+        state.pendingSubmittedRequestID = "";
+        state.pendingSubmittedPostAcceptanceSnapshotGeneratedAt = "";
         trackAnalyticsEvent("prompt_submit_failed", { prompt_mode: state.promptMode });
         setLocalPromptStatus("error", `Submit failed: ${err.message}`);
         await loadAgentAuthStatus();
       } finally {
-        localPromptSubmit.disabled = state.agentAuthBusy || (state.agentAuth.required && !state.agentAuth.ready);
+        state.promptSubmitInFlight = false;
+        syncLocalPromptSubmitDisabled();
       }
     }
 

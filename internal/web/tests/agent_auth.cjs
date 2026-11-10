@@ -17,10 +17,18 @@ async function openPage(t, authHandler) {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
+  await page.addInitScript(() => {
+    window.EventSource = class ConnectedEventSource {
+      constructor() { queueMicrotask(() => this.onopen?.()); }
+    };
+  });
   await page.route('**/*', route => {
     if (new URL(route.request().url()).origin !== new URL(baseURL).origin) return route.abort();
     return route.continue();
   });
+  await page.route('**/api/status', route => route.fulfill({
+    json: { tasks: [], events: [], repositories: [], stats: {}, resources: {} },
+  }));
   if (authHandler) await page.route('**/api/agent-auth**', authHandler);
   await page.goto(baseURL);
   return page;
