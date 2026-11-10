@@ -13,7 +13,11 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
 
-const githubIssueListLimit = 100
+const (
+	githubIssueListLimit                  = 100
+	githubIssueBranchFilterCandidateLimit = 1000
+	githubIssueLinkedBranchBatchSize      = 100
+)
 
 // GitHubIssue is the issue data shown by the local issue browser.
 type GitHubIssue struct {
@@ -202,12 +206,14 @@ func (s Server) handleGitHubIssueList(w http.ResponseWriter, r *http.Request, re
 
 func (s Server) listGitHubIssues(ctx context.Context, repository, state, search, assignee, branch string) ([]GitHubIssue, error) {
 	fields := "number,title,state,url,author,labels,assignees,createdAt,updatedAt"
+	limit := githubIssueListLimit
 	if branch != "" {
 		fields = "id," + fields
+		limit = githubIssueBranchFilterCandidateLimit
 	}
 	args := []string{
 		"issue", "list", "--repo", repository, "--state", state,
-		"--limit", strconv.Itoa(githubIssueListLimit),
+		"--limit", strconv.Itoa(limit),
 		"--json", fields,
 	}
 	if search != "" {
@@ -238,6 +244,9 @@ func (s Server) listGitHubIssues(ctx context.Context, repository, state, search,
 	for _, entry := range entries {
 		if (branch == "with") == hasLinkedBranch[entry.ID] {
 			issues = append(issues, entry.GitHubIssue)
+			if len(issues) == githubIssueListLimit {
+				break
+			}
 		}
 	}
 	return issues, nil
@@ -245,28 +254,33 @@ func (s Server) listGitHubIssues(ctx context.Context, repository, state, search,
 
 func (s Server) githubIssuesWithLinkedBranches(ctx context.Context, issues []githubIssueListEntry) (map[string]bool, error) {
 	const query = `query($ids:[ID!]!){nodes(ids:$ids){... on Issue{id linkedBranches(first:1){totalCount}}}}`
-	args := []string{"api", "graphql", "-f", "query=" + query}
 	for _, issue := range issues {
 		if strings.TrimSpace(issue.ID) == "" {
 			return nil, fmt.Errorf("GitHub issue %d is missing its node ID", issue.Number)
 		}
-		args = append(args, "-F", "ids[]="+issue.ID)
 	}
-	result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: args})
-	if err != nil {
-		return nil, fmt.Errorf("list linked GitHub issue branches: %w", err)
-	}
-	var response githubLinkedBranchResponse
-	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &response); err != nil {
-		return nil, fmt.Errorf("decode linked GitHub issue branches: %w", err)
-	}
-	if len(response.Errors) > 0 {
-		return nil, fmt.Errorf("list linked GitHub issue branches: %s", response.Errors[0].Message)
-	}
-	linked := make(map[string]bool, len(response.Data.Nodes))
-	for _, node := range response.Data.Nodes {
-		if node.ID != "" {
-			linked[node.ID] = node.LinkedBranches.TotalCount > 0
+	linked := make(map[string]bool, len(issues))
+	for start := 0; start < len(issues); start += githubIssueLinkedBranchBatchSize {
+		end := min(start+githubIssueLinkedBranchBatchSize, len(issues))
+		args := []string{"api", "graphql", "-f", "query=" + query}
+		for _, issue := range issues[start:end] {
+			args = append(args, "-F", "ids[]="+issue.ID)
+		}
+		result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: args})
+		if err != nil {
+			return nil, fmt.Errorf("list linked GitHub issue branches: %w", err)
+		}
+		var response githubLinkedBranchResponse
+		if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &response); err != nil {
+			return nil, fmt.Errorf("decode linked GitHub issue branches: %w", err)
+		}
+		if len(response.Errors) > 0 {
+			return nil, fmt.Errorf("list linked GitHub issue branches: %s", response.Errors[0].Message)
+		}
+		for _, node := range response.Data.Nodes {
+			if node.ID != "" {
+				linked[node.ID] = node.LinkedBranches.TotalCount > 0
+			}
 		}
 	}
 	if len(linked) != len(issues) {

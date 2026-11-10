@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -306,6 +307,68 @@ func TestGitHubIssueListFiltersByLinkedBranch(t *testing.T) {
 				t.Fatalf("response = %s, want %s and no %s", response.Body.String(), tc.wantNumber, tc.omitNumber)
 			}
 		})
+	}
+}
+
+func TestGitHubIssueListBranchFilterChecksCandidatesPastResponseLimit(t *testing.T) {
+	t.Parallel()
+	entries := make([]githubIssueListEntry, githubIssueListLimit+1)
+	for index := range entries {
+		entries[index] = githubIssueListEntry{
+			GitHubIssue: GitHubIssue{Number: index + 1, Title: "Issue"},
+			ID:          "I_" + strconv.Itoa(index+1),
+		}
+	}
+	encodedEntries, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listLimit := ""
+	graphQLCalls := 0
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if len(cmd.Args) > 1 && cmd.Args[0] == "issue" && cmd.Args[1] == "list" {
+			for index, arg := range cmd.Args {
+				if arg == "--limit" && index+1 < len(cmd.Args) {
+					listLimit = cmd.Args[index+1]
+				}
+			}
+			return execx.Result{Stdout: string(encodedEntries)}, nil
+		}
+		graphQLCalls++
+		response := githubLinkedBranchResponse{}
+		for _, arg := range cmd.Args {
+			id := strings.TrimPrefix(arg, "ids[]=")
+			if id == arg {
+				continue
+			}
+			node := struct {
+				ID             string `json:"id"`
+				LinkedBranches struct {
+					TotalCount int `json:"totalCount"`
+				} `json:"linkedBranches"`
+			}{ID: id}
+			if id == "I_101" {
+				node.LinkedBranches.TotalCount = 1
+			}
+			response.Data.Nodes = append(response.Data.Nodes, node)
+		}
+		encodedResponse, marshalErr := json.Marshal(response)
+		return execx.Result{Stdout: string(encodedResponse)}, marshalErr
+	}), true)
+
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/issues?repo=acme/repo&branch=with", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if listLimit != strconv.Itoa(githubIssueBranchFilterCandidateLimit) {
+		t.Fatalf("branch-filter candidate limit = %q, want %d", listLimit, githubIssueBranchFilterCandidateLimit)
+	}
+	if graphQLCalls != 2 {
+		t.Fatalf("linked-branch query count = %d, want 2 batches", graphQLCalls)
+	}
+	if !strings.Contains(response.Body.String(), `"number":101`) || strings.Contains(response.Body.String(), `"number":1,`) {
+		t.Fatalf("response = %s, want matching issue beyond normal response limit only", response.Body.String())
 	}
 }
 
