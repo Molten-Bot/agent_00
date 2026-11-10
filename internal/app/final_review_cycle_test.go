@@ -258,7 +258,9 @@ type finalFindingReviewCycleRunner struct {
 	statusCalls  int
 	comments     int
 	checks       int
+	drafted      int
 	fixPrompt    string
+	emptyNetDiff bool
 }
 
 func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, error) {
@@ -291,6 +293,11 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 		case "fetch", "merge", "add", "commit", "push":
 			return execx.Result{}, nil
 		case "diff":
+			for _, arg := range cmd.Args {
+				if arg == "--name-only" && r.emptyNetDiff {
+					return execx.Result{}, nil
+				}
+			}
 			return execx.Result{Stdout: "diff --git a/main.go b/main.go\n"}, nil
 		case "ls-remote":
 			return execx.Result{Stdout: "head-sha\trefs/heads/feature\n"}, nil
@@ -309,6 +316,13 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "checks" {
 			r.checks++
 			return execx.Result{Stdout: "tests\tpass\n"}, nil
+		}
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "ready" {
+			if len(cmd.Args) != 4 || cmd.Args[3] != "--undo" {
+				r.t.Fatalf("draft command args = %v, want pr ready <url> --undo", cmd.Args)
+			}
+			r.drafted++
+			return execx.Result{}, nil
 		}
 		if len(cmd.Args) >= 1 && cmd.Args[0] == "api" {
 			return execx.Result{Stdout: "[]"}, nil
@@ -603,7 +617,55 @@ func TestProcessChangedRepoLeavesPRInDraftWhenFinalReviewFindingsRemain(t *testi
 	if runner.reviews != 2 || runner.fixes != 1 {
 		t.Fatalf("review/fix calls = %d/%d, want 2/1", runner.reviews, runner.fixes)
 	}
+	if runner.drafted != 1 {
+		t.Fatalf("drafted count = %d, want 1 for unresolved findings", runner.drafted)
+	}
 	if joined := strings.Join(logs, "\n"); !strings.Contains(joined, "status=warn action=leave_draft reason=fix_passes_exhausted") {
 		t.Fatalf("logs missing exhausted-review warning: %s", joined)
+	}
+}
+
+func TestProcessChangedRepoRejectsEmptyNetDiffWhenFinalReviewFindingsRemain(t *testing.T) {
+	runner := &finalFindingReviewCycleRunner{t: t, neverClean: true, emptyNetDiff: true}
+	h := New(runner)
+	h.FinalReviewPasses = 1
+	h.PRChecksWatchTimeout = -1
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:                "https://github.com/acme/repo.git",
+		Dir:                repoDir,
+		RelDir:             "repo",
+		Branch:             "feature",
+		BaseBranch:         "main",
+		PRURL:              "https://github.com/acme/repo/pull/7",
+		Changed:            true,
+		CreateWorkBranch:   true,
+		WriteAccessChecked: true,
+		WriteAccessAllowed: true,
+		PushRemote:         publishRemoteOrigin,
+	}
+
+	exitCode, stage, err := h.processChangedRepo(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "do the work"},
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err == nil || exitCode != ExitPR || stage != "review" || !strings.Contains(err.Error(), "no net changes against the base branch") {
+		t.Fatalf("processChangedRepo() = (%d, %q, %v), want empty-net-diff failure", exitCode, stage, err)
+	}
+	if runner.drafted != 1 {
+		t.Fatalf("drafted count = %d, want 1 before rejecting empty net diff", runner.drafted)
 	}
 }
