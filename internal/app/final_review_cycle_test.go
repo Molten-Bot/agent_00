@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -257,7 +258,9 @@ type finalFindingReviewCycleRunner struct {
 	statusCalls  int
 	comments     int
 	checks       int
+	drafted      int
 	fixPrompt    string
+	emptyNetDiff bool
 }
 
 func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, error) {
@@ -290,6 +293,11 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 		case "fetch", "merge", "add", "commit", "push":
 			return execx.Result{}, nil
 		case "diff":
+			for _, arg := range cmd.Args {
+				if arg == "--name-only" && r.emptyNetDiff {
+					return execx.Result{}, nil
+				}
+			}
 			return execx.Result{Stdout: "diff --git a/main.go b/main.go\n"}, nil
 		case "ls-remote":
 			return execx.Result{Stdout: "head-sha\trefs/heads/feature\n"}, nil
@@ -308,6 +316,13 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "checks" {
 			r.checks++
 			return execx.Result{Stdout: "tests\tpass\n"}, nil
+		}
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "ready" {
+			if len(cmd.Args) != 4 || cmd.Args[3] != "--undo" {
+				r.t.Fatalf("draft command args = %v, want pr ready <url> --undo", cmd.Args)
+			}
+			r.drafted++
+			return execx.Result{}, nil
 		}
 		if len(cmd.Args) >= 1 && cmd.Args[0] == "api" {
 			return execx.Result{Stdout: "[]"}, nil
@@ -372,7 +387,7 @@ func TestRunFinalReviewCycleConfirmsFinalPassFixBeforeRelease(t *testing.T) {
 	}
 }
 
-func TestRunFinalReviewCycleFailsWhenFinalConfirmationStillHasFindings(t *testing.T) {
+func TestRunFinalReviewCycleReportsRemainingFindingsAfterFinalConfirmation(t *testing.T) {
 	runner := &finalFindingReviewCycleRunner{t: t, neverClean: true}
 	h := New(runner)
 	h.FinalReviewPasses = 1
@@ -408,10 +423,10 @@ func TestRunFinalReviewCycleFailsWhenFinalConfirmationStillHasFindings(t *testin
 		"codex",
 		false,
 	)
-	// The PR must never be released from draft when findings persist after
-	// every configured fix pass has been exhausted.
-	if err == nil || exitCode != ExitCodex || stage != "review" {
-		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want failure leaving PR in draft", exitCode, stage, err)
+	// Exhausting the repair budget is a controlled incomplete-review outcome,
+	// not an agent execution failure. The caller keeps the PR in draft.
+	if !errors.Is(err, errFinalReviewFindingsRemain) || exitCode != ExitSuccess || stage != "review" {
+		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want remaining-findings outcome", exitCode, stage, err)
 	}
 	if runner.reviews != 2 || runner.fixes != 1 {
 		t.Fatalf("review/fix calls = %d/%d, want 2/1", runner.reviews, runner.fixes)
@@ -550,15 +565,18 @@ func TestProcessChangedRepoRejectsEmptyNetDiffAfterReviewCycle(t *testing.T) {
 	}
 }
 
-// TestProcessChangedRepoLeavesPRInDraftWhenFinalReviewCycleFails exercises the
-// same wiring for the failure path: when the final review cycle cannot reach
-// a clean pass, processChangedRepo must surface the failure and must never
-// call through to release the PR from draft.
-func TestProcessChangedRepoLeavesPRInDraftWhenFinalReviewCycleFails(t *testing.T) {
+// TestProcessChangedRepoLeavesPRInDraftWhenFinalReviewFindingsRemain exercises
+// the bounded-review outcome: unresolved findings remain visible on the draft
+// PR without turning completed task work into an agent_00 failure follow-up.
+func TestProcessChangedRepoLeavesPRInDraftWhenFinalReviewFindingsRemain(t *testing.T) {
 	runner := &finalFindingReviewCycleRunner{t: t, neverClean: true}
 	h := New(runner)
 	h.FinalReviewPasses = 1
 	h.PRChecksWatchTimeout = -1
+	var logs []string
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
 
 	repoDir := filepath.Join(t.TempDir(), "repo")
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
@@ -593,10 +611,61 @@ func TestProcessChangedRepoLeavesPRInDraftWhenFinalReviewCycleFails(t *testing.T
 		"codex",
 		false,
 	)
-	if err == nil || exitCode != ExitCodex || stage != "review" {
-		t.Fatalf("processChangedRepo() = (%d, %q, %v), want final review cycle failure", exitCode, stage, err)
+	if err != nil || exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("processChangedRepo() = (%d, %q, %v), want successful draft handoff", exitCode, stage, err)
 	}
 	if runner.reviews != 2 || runner.fixes != 1 {
 		t.Fatalf("review/fix calls = %d/%d, want 2/1", runner.reviews, runner.fixes)
+	}
+	if runner.drafted != 1 {
+		t.Fatalf("drafted count = %d, want 1 for unresolved findings", runner.drafted)
+	}
+	if joined := strings.Join(logs, "\n"); !strings.Contains(joined, "status=warn action=leave_draft reason=fix_passes_exhausted") {
+		t.Fatalf("logs missing exhausted-review warning: %s", joined)
+	}
+}
+
+func TestProcessChangedRepoRejectsEmptyNetDiffWhenFinalReviewFindingsRemain(t *testing.T) {
+	runner := &finalFindingReviewCycleRunner{t: t, neverClean: true, emptyNetDiff: true}
+	h := New(runner)
+	h.FinalReviewPasses = 1
+	h.PRChecksWatchTimeout = -1
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:                "https://github.com/acme/repo.git",
+		Dir:                repoDir,
+		RelDir:             "repo",
+		Branch:             "feature",
+		BaseBranch:         "main",
+		PRURL:              "https://github.com/acme/repo/pull/7",
+		Changed:            true,
+		CreateWorkBranch:   true,
+		WriteAccessChecked: true,
+		WriteAccessAllowed: true,
+		PushRemote:         publishRemoteOrigin,
+	}
+
+	exitCode, stage, err := h.processChangedRepo(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "do the work"},
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err == nil || exitCode != ExitPR || stage != "review" || !strings.Contains(err.Error(), "no net changes against the base branch") {
+		t.Fatalf("processChangedRepo() = (%d, %q, %v), want empty-net-diff failure", exitCode, stage, err)
+	}
+	if runner.drafted != 1 {
+		t.Fatalf("drafted count = %d, want 1 before rejecting empty net diff", runner.drafted)
 	}
 }
