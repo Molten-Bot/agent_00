@@ -2072,6 +2072,7 @@
     let streamRenderTimer = null;
     let streamRenderFrame = null;
     let pendingStreamSnapshot = null;
+    let taskStreamErrorRevision = 0;
     let taskHistoryPruneTimer = null;
     let taskTimingRefreshTimer = null;
     let deferredSelectionRenderTimer = null;
@@ -13310,6 +13311,7 @@
     }
 
     async function loadInitial() {
+      const taskStreamErrorRevisionAtRequest = taskStreamErrorRevision;
       try {
         const githubReposPromise = state.githubReposReady
           ? loadGitHubReposForChat({ force: true, refresh: true, keepExisting: true })
@@ -13323,7 +13325,7 @@
         }
         const snapshot = await response.json();
         await reviewSettingsPromise;
-        render(snapshot, { resolveTaskStatus: true });
+        render(snapshot, { resolveTaskStatus: taskStreamErrorRevision === taskStreamErrorRevisionAtRequest });
         const initialDisplay = appDisplayFromHash();
         if (initialDisplay === "dashboard") {
           setAppDisplay("dashboard");
@@ -13429,6 +13431,7 @@
 
       stream.onerror = () => {
         discardPendingStreamSnapshots();
+        taskStreamErrorRevision += 1;
         state.taskStatusResolved = false;
         syncLocalPromptSubmitDisabled();
         setLocalConnection(false, "Reconnecting...");

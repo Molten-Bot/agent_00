@@ -15,6 +15,11 @@ async function openSettings(t, { viewport = { width: 1280, height: 900 }, theme 
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
   await page.addInitScript(theme => localStorage.setItem('hubui.theme', theme), theme);
+  await page.addInitScript(() => {
+    window.EventSource = class ConnectedEventSource {
+      constructor() { queueMicrotask(() => this.onopen?.()); }
+    };
+  });
   await page.route('**/*', route => new URL(route.request().url()).origin === new URL(baseURL).origin ? route.continue() : route.abort());
   await page.route('**/api/agent-auth**', route => route.fulfill({ json: { ok: true, auth: { required: true, ready: true, harness: 'claude', state: 'ready' } } }));
   let settings = { ...initialSettings };

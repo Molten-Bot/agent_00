@@ -34,6 +34,7 @@ test('Studio Run stays disabled until an in-progress task finishes', async t => 
   const initialStatusGate = new Promise(resolve => { releaseInitialStatus = resolve; });
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
+  await installControlledTaskStream(page);
 
   await page.route('**/*', async route => {
     const url = new URL(route.request().url());
@@ -168,6 +169,46 @@ test('Studio Run stays disabled when initial status fails until a stream snapsho
   await expect(run).toHaveAttribute('title', '');
 });
 
+test('Studio Run stays disabled when the task stream fails before initial status resolves', async t => {
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  const errors = [];
+  let releaseInitialStatus;
+  const initialStatusGate = new Promise(resolve => { releaseInitialStatus = resolve; });
+  page.on('pageerror', error => errors.push(error.message));
+  t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
+  await installControlledTaskStream(page);
+
+  await page.route('**/*', async route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== new URL(baseURL).origin) return route.abort();
+    if (!url.pathname.startsWith('/api/')) return route.continue();
+    if (url.pathname === '/api/status') {
+      await initialStatusGate;
+      return route.fulfill({ json: { tasks: [], events: [], repositories: [], stats: {}, resources: {} } });
+    }
+    if (url.pathname === '/api/agent-auth') {
+      return route.fulfill({ json: { ok: true, auth: { required: false, ready: true, state: 'ready' } } });
+    }
+    if (url.pathname === '/api/review-settings') {
+      return route.fulfill({ json: { ok: true, settings: { default_library_enabled: true } } });
+    }
+    if (url.pathname === '/api/github/repos') return route.fulfill({ json: { ok: true, repos: [] } });
+    if (url.pathname === '/api/library') return route.fulfill({ json: { ok: true, tasks: [] } });
+    return route.fulfill({ json: { ok: true } });
+  });
+
+  await page.goto(baseURL);
+  const run = page.locator('#local-prompt-submit');
+  await page.evaluate(() => window.testTaskStream.onerror());
+  await expect(run).toBeDisabled();
+
+  releaseInitialStatus();
+  await expect.poll(() => page.evaluate(() => state.snapshot !== null)).toBe(true);
+  await expect(run).toBeDisabled();
+  await expect(run).toHaveAttribute('title', 'Wait for the current task to finish');
+});
+
 test('Studio Run disables when the task stream disconnects until a fresh snapshot arrives', async t => {
   const page = await browser.newPage();
   t.after(() => page.close());
@@ -225,6 +266,7 @@ test('Studio Run tracks an in-flight duplicate until snapshots observe it finish
   let submitCount = 0;
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
+  await installControlledTaskStream(page);
 
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
@@ -291,6 +333,7 @@ test('Studio Run unlocks when duplicate completion arrives before submit respons
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
+  await installControlledTaskStream(page);
 
   await page.route('**/*', async route => {
     const url = new URL(route.request().url());
@@ -341,6 +384,7 @@ test('Studio Run unlocks when completion arrives before submit response', async 
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
+  await installControlledTaskStream(page);
 
   await page.route('**/*', async route => {
     const url = new URL(route.request().url());
@@ -388,6 +432,7 @@ test('Studio Run unlocks when a newer snapshot has already pruned the submitted 
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
+  await installControlledTaskStream(page);
 
   await page.route('**/*', route => {
     const url = new URL(route.request().url());

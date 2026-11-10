@@ -2370,6 +2370,13 @@ func TestHandlerIndexServesHTML(t *testing.T) {
         render(snapshot, { resolveTaskStatus: true });`) {
 		t.Fatalf("expected cached renders to preserve task status and pending submission locks")
 	}
+	if !strings.Contains(markup, `const taskStreamErrorRevisionAtRequest = taskStreamErrorRevision;`) ||
+		!strings.Contains(markup, `render(snapshot, { resolveTaskStatus: taskStreamErrorRevision === taskStreamErrorRevisionAtRequest });`) ||
+		!strings.Contains(markup, `discardPendingStreamSnapshots();
+        taskStreamErrorRevision += 1;
+        state.taskStatusResolved = false;`) {
+		t.Fatalf("expected delayed initial status responses not to resolve task status after a stream error")
+	}
 	if !strings.Contains(markup, `function discardPendingStreamSnapshots() {
       pendingStreamSnapshotText = "";
       pendingStreamSnapshot = null;`) ||
@@ -2377,6 +2384,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `window.cancelAnimationFrame(streamRenderFrame);`) ||
 		!strings.Contains(markup, `stream.onerror = () => {
         discardPendingStreamSnapshots();
+        taskStreamErrorRevision += 1;
         state.taskStatusResolved = false;
         syncLocalPromptSubmitDisabled();`) {
 		t.Fatalf("expected index html to discard queued snapshots and block prompt submission when the task status stream disconnects")
