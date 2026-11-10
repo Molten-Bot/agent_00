@@ -268,6 +268,7 @@ type Broker struct {
 	resources          ResourceMetrics
 	maxConcurrentTasks int
 	sessionStartedAt   time.Time
+	lastSnapshotAt     time.Time
 
 	customLibraryGeneration int64
 
@@ -456,11 +457,16 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 	// Timestamp after locking so concurrent status and stream snapshots are
 	// ordered by when they copy broker state, not when their requests started.
 	now := b.now().UTC()
+	generatedAt := now
+	if !generatedAt.After(b.lastSnapshotAt) {
+		generatedAt = b.lastSnapshotAt.Add(time.Nanosecond)
+	}
+	b.lastSnapshotAt = generatedAt
 
 	b.pruneExpiredTasksLocked(now)
 
 	snapshot := Snapshot{
-		GeneratedAt:   now.Format(time.RFC3339Nano),
+		GeneratedAt:   generatedAt.Format(time.RFC3339Nano),
 		Resources:     b.resources,
 		PromptedRepos: append([]string(nil), b.promptedRepos...),
 	}

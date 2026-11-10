@@ -39,10 +39,35 @@ func TestStreamSnapshotMatchesCompactedSnapshot(t *testing.T) {
 	t.Parallel()
 
 	b := newSnapshotTestBroker(t)
-	want := compactStreamSnapshot(b.Snapshot())
+	full := b.Snapshot()
+	want := compactStreamSnapshot(full)
 	got := b.StreamSnapshot()
+	want.GeneratedAt = got.GeneratedAt
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("StreamSnapshot() differs from compactStreamSnapshot(Snapshot())\ngot:  %+v\nwant: %+v", got, want)
+	}
+}
+
+func TestSnapshotTimestampsAreStrictlyIncreasing(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	b.now = func() time.Time {
+		return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	}
+
+	first := b.Snapshot()
+	second := b.StreamSnapshot()
+	firstGeneratedAt, err := time.Parse(time.RFC3339Nano, first.GeneratedAt)
+	if err != nil {
+		t.Fatalf("parse first generated_at: %v", err)
+	}
+	secondGeneratedAt, err := time.Parse(time.RFC3339Nano, second.GeneratedAt)
+	if err != nil {
+		t.Fatalf("parse second generated_at: %v", err)
+	}
+	if !secondGeneratedAt.After(firstGeneratedAt) {
+		t.Fatalf("second generated_at = %q, want after %q", second.GeneratedAt, first.GeneratedAt)
 	}
 }
 
