@@ -15,6 +15,7 @@ import (
 
 const (
 	githubIssueListLimit             = 100
+	githubIssueSearchLimit           = 1000
 	githubIssueLinkedBranchBatchSize = 100
 )
 
@@ -261,11 +262,17 @@ func (s Server) listGitHubIssues(ctx context.Context, repository, state, search,
 		if len(entries) < limit {
 			return issues, nil
 		}
+		if search != "" && limit == githubIssueSearchLimit {
+			return nil, fmt.Errorf("GitHub search returned its %d-issue maximum; narrow the search to filter by linked branch", githubIssueSearchLimit)
+		}
 		maxInt := int(^uint(0) >> 1)
 		if limit > maxInt/2 {
 			return nil, fmt.Errorf("too many GitHub issues to filter by linked branch")
 		}
 		limit *= 2
+		if search != "" {
+			limit = min(limit, githubIssueSearchLimit)
+		}
 	}
 }
 

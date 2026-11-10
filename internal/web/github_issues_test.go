@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -372,6 +373,74 @@ func TestGitHubIssueListBranchFilterChecksCandidatesPastResponseLimit(t *testing
 	}
 	if !strings.Contains(response.Body.String(), `"number":1001`) || strings.Contains(response.Body.String(), `"number":1,`) {
 		t.Fatalf("response = %s, want matching issue beyond former candidate limit only", response.Body.String())
+	}
+}
+
+func TestGitHubIssueListBranchFilterReportsCappedSearch(t *testing.T) {
+	t.Parallel()
+	entries := make([]githubIssueListEntry, githubIssueSearchLimit+1)
+	for index := range entries {
+		entries[index] = githubIssueListEntry{
+			GitHubIssue: GitHubIssue{Number: index + 1, Title: "Issue"},
+			ID:          "I_" + strconv.Itoa(index+1),
+		}
+	}
+	var listLimits []int
+	graphQLCalls := 0
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if len(cmd.Args) > 1 && cmd.Args[0] == "issue" && cmd.Args[1] == "list" {
+			if !slices.Contains(cmd.Args, "--search") {
+				return execx.Result{}, errors.New("issue list command has no search")
+			}
+			for index, arg := range cmd.Args {
+				if arg == "--limit" && index+1 < len(cmd.Args) {
+					limit, parseErr := strconv.Atoi(cmd.Args[index+1])
+					if parseErr != nil {
+						return execx.Result{}, parseErr
+					}
+					listLimits = append(listLimits, limit)
+					end := min(limit, githubIssueSearchLimit)
+					encodedEntries, marshalErr := json.Marshal(entries[:end])
+					return execx.Result{Stdout: string(encodedEntries)}, marshalErr
+				}
+			}
+			return execx.Result{}, errors.New("issue list command has no limit")
+		}
+		graphQLCalls++
+		response := githubLinkedBranchResponse{}
+		for _, arg := range cmd.Args {
+			id := strings.TrimPrefix(arg, "ids[]=")
+			if id == arg {
+				continue
+			}
+			node := struct {
+				ID             string `json:"id"`
+				LinkedBranches struct {
+					TotalCount int `json:"totalCount"`
+				} `json:"linkedBranches"`
+			}{ID: id}
+			if id == "I_1001" {
+				node.LinkedBranches.TotalCount = 1
+			}
+			response.Data.Nodes = append(response.Data.Nodes, node)
+		}
+		encodedResponse, marshalErr := json.Marshal(response)
+		return execx.Result{Stdout: string(encodedResponse)}, marshalErr
+	}), true)
+
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/issues?repo=acme/repo&branch=with&search=issue", nil))
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502: %s", response.Code, response.Body.String())
+	}
+	if !reflect.DeepEqual(listLimits, []int{100, 200, 400, 800, 1000}) {
+		t.Fatalf("branch-filter search limits = %v, want expansion through GitHub's cap", listLimits)
+	}
+	if graphQLCalls != 10 {
+		t.Fatalf("linked-branch query count = %d, want 10 cached batches", graphQLCalls)
+	}
+	if !strings.Contains(response.Body.String(), "narrow the search") {
+		t.Fatalf("response = %s, want capped-search guidance", response.Body.String())
 	}
 }
 
