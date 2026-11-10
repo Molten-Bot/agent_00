@@ -13,7 +13,11 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
 
-const githubIssueListLimit = 100
+const (
+	githubIssueListLimit             = 100
+	githubIssueSearchLimit           = 1000
+	githubIssueLinkedBranchBatchSize = 100
+)
 
 // GitHubIssue is the issue data shown by the local issue browser.
 type GitHubIssue struct {
@@ -38,6 +42,30 @@ type GitHubIssueUser struct {
 type GitHubIssueLabel struct {
 	Name  string `json:"name"`
 	Color string `json:"color,omitempty"`
+}
+
+type githubIssueListEntry struct {
+	GitHubIssue
+	ID string `json:"id"`
+}
+
+type githubLinkedBranchResponse struct {
+	Data struct {
+		Nodes []struct {
+			ID             string `json:"id"`
+			LinkedBranches struct {
+				TotalCount int `json:"totalCount"`
+			} `json:"linkedBranches"`
+		} `json:"nodes"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type githubIssueSearchCountResponse struct {
+	TotalCount        int  `json:"total_count"`
+	IncompleteResults bool `json:"incomplete_results"`
 }
 
 // handleGitHubLabels lists labels across repositories available to this user.
@@ -164,7 +192,15 @@ func (s Server) handleGitHubIssueList(w http.ResponseWriter, r *http.Request, re
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "assignee must be me"})
 		return
 	}
-	issues, err := s.listGitHubIssues(r.Context(), repository, state, search, assignee)
+	branch := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("branch")))
+	if branch != "" && branch != "all" && branch != "with" && branch != "without" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "branch must be all, with, or without"})
+		return
+	}
+	if branch == "all" {
+		branch = ""
+	}
+	issues, err := s.listGitHubIssues(r.Context(), repository, state, search, assignee, branch)
 	if err != nil {
 		s.logf("localruntime.ui status=warn endpoint=github_issues_list repo=%s err=%q", repository, err)
 		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("list GitHub issues: %v", err)})
@@ -173,30 +209,145 @@ func (s Server) handleGitHubIssueList(w http.ResponseWriter, r *http.Request, re
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "issues": issues})
 }
 
-func (s Server) listGitHubIssues(ctx context.Context, repository, state, search, assignee string) ([]GitHubIssue, error) {
-	args := []string{
-		"issue", "list", "--repo", repository, "--state", state,
-		"--limit", strconv.Itoa(githubIssueListLimit),
-		"--json", "number,title,state,url,author,labels,assignees,createdAt,updatedAt",
+func (s Server) listGitHubIssues(ctx context.Context, repository, state, search, assignee, branch string) ([]GitHubIssue, error) {
+	fields := "number,title,state,url,author,labels,assignees,createdAt,updatedAt"
+	limit := githubIssueListLimit
+	if branch != "" {
+		fields = "id," + fields
 	}
-	if search != "" {
-		args = append(args, "--search", search)
+	linked := make(map[string]bool)
+	for {
+		args := []string{
+			"issue", "list", "--repo", repository, "--state", state,
+			"--limit", strconv.Itoa(limit),
+			"--json", fields,
+		}
+		if search != "" {
+			args = append(args, "--search", search)
+		}
+		if assignee == "me" {
+			args = append(args, "--assignee", "@me")
+		}
+		result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: args})
+		if err != nil {
+			return nil, err
+		}
+		var entries []githubIssueListEntry
+		if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &entries); err != nil {
+			return nil, fmt.Errorf("decode GitHub issues: %w", err)
+		}
+		issues := make([]GitHubIssue, 0, min(len(entries), githubIssueListLimit))
+		if branch == "" || len(entries) == 0 {
+			for _, entry := range entries {
+				issues = append(issues, entry.GitHubIssue)
+			}
+			return issues, nil
+		}
+		unchecked := make([]githubIssueListEntry, 0, len(entries))
+		for _, entry := range entries {
+			if _, ok := linked[entry.ID]; !ok {
+				unchecked = append(unchecked, entry)
+			}
+		}
+		newLinked, err := s.githubIssuesWithLinkedBranches(ctx, unchecked)
+		if err != nil {
+			return nil, err
+		}
+		for id, hasLinkedBranch := range newLinked {
+			linked[id] = hasLinkedBranch
+		}
+		for _, entry := range entries {
+			if (branch == "with") == linked[entry.ID] {
+				issues = append(issues, entry.GitHubIssue)
+				if len(issues) == githubIssueListLimit {
+					return issues, nil
+				}
+			}
+		}
+		if len(entries) < limit {
+			return issues, nil
+		}
+		if search != "" && limit == githubIssueSearchLimit {
+			count, err := s.githubIssueSearchCount(ctx, repository, state, search, assignee)
+			if err != nil {
+				return nil, err
+			}
+			if count > githubIssueSearchLimit {
+				return nil, fmt.Errorf("GitHub search returned more than its %d-issue maximum; narrow the search to filter by linked branch", githubIssueSearchLimit)
+			}
+			return issues, nil
+		}
+		maxInt := int(^uint(0) >> 1)
+		if limit > maxInt/2 {
+			return nil, fmt.Errorf("too many GitHub issues to filter by linked branch")
+		}
+		limit *= 2
+		if search != "" {
+			limit = min(limit, githubIssueSearchLimit)
+		}
+	}
+}
+
+func (s Server) githubIssueSearchCount(ctx context.Context, repository, state, search, assignee string) (int, error) {
+	query := search + " repo:" + repository + " is:issue"
+	if state != "all" {
+		query += " state:" + state
 	}
 	if assignee == "me" {
-		args = append(args, "--assignee", "@me")
+		query += " assignee:@me"
 	}
-	result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: args})
+	result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{
+		Name: "gh",
+		Args: []string{"api", "--method", "GET", "search/issues", "-f", "q=" + query, "-F", "per_page=1"},
+	})
 	if err != nil {
-		return nil, err
+		return 0, fmt.Errorf("count searched GitHub issues: %w", err)
 	}
-	var issues []GitHubIssue
-	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &issues); err != nil {
-		return nil, fmt.Errorf("decode GitHub issues: %w", err)
+	var response githubIssueSearchCountResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &response); err != nil {
+		return 0, fmt.Errorf("decode searched GitHub issue count: %w", err)
 	}
-	if issues == nil {
-		issues = []GitHubIssue{}
+	if response.IncompleteResults {
+		return 0, fmt.Errorf("count searched GitHub issues: GitHub returned incomplete results")
 	}
-	return issues, nil
+	return response.TotalCount, nil
+}
+
+func (s Server) githubIssuesWithLinkedBranches(ctx context.Context, issues []githubIssueListEntry) (map[string]bool, error) {
+	const query = `query($ids:[ID!]!){nodes(ids:$ids){... on Issue{id linkedBranches(first:1){totalCount}}}}`
+	for _, issue := range issues {
+		if strings.TrimSpace(issue.ID) == "" {
+			return nil, fmt.Errorf("GitHub issue %d is missing its node ID", issue.Number)
+		}
+	}
+	linked := make(map[string]bool, len(issues))
+	for start := 0; start < len(issues); start += githubIssueLinkedBranchBatchSize {
+		end := min(start+githubIssueLinkedBranchBatchSize, len(issues))
+		args := []string{"api", "graphql", "-f", "query=" + query}
+		for _, issue := range issues[start:end] {
+			args = append(args, "-F", "ids[]="+issue.ID)
+		}
+		result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: args})
+		if err != nil {
+			return nil, fmt.Errorf("list linked GitHub issue branches: %w", err)
+		}
+		var response githubLinkedBranchResponse
+		if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &response); err != nil {
+			return nil, fmt.Errorf("decode linked GitHub issue branches: %w", err)
+		}
+		if len(response.Errors) > 0 {
+			return nil, fmt.Errorf("list linked GitHub issue branches: %s", response.Errors[0].Message)
+		}
+		for _, node := range response.Data.Nodes {
+			if node.ID != "" {
+				linked[node.ID] = node.LinkedBranches.TotalCount > 0
+			}
+		}
+	}
+	if len(linked) != len(issues) {
+		return nil, fmt.Errorf("GitHub returned linked branch data for %d of %d issues", len(linked), len(issues))
+	}
+	return linked, nil
 }
 
 func (s Server) handleGitHubIssueDetail(w http.ResponseWriter, r *http.Request, repository string, number int) {

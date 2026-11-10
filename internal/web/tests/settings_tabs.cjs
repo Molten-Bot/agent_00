@@ -583,7 +583,7 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
   });
 
   assert.notEqual(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
-  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=15');
+  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=16');
   await page.waitForFunction(() => document.querySelector('.github-issue-empty-state h2')?.textContent === 'No repositories available');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No repositories available');
   await page.locator('#github-issues-dock-link').click();
@@ -663,6 +663,37 @@ test('GitHub Issues honours a stored assignee filter choice before the browser i
   assert.equal(await assigneeFilter.getAttribute('aria-pressed'), 'true');
   assert.equal(await page.locator('#github-issues-search').getAttribute('placeholder'), 'Search issues assigned to you');
   assert.equal(issueAssigneeFilter, 'me');
+});
+
+test('GitHub Issues filters issues by linked branch and remembers the choice', async t => {
+  let issueBranchFilter;
+  const { page } = await openSettings(t, {
+    path: '/#studio-issues',
+    initialSettings: { ...defaults, github_issues_enabled: true },
+    configurePage: async page => {
+      await page.addInitScript(() => localStorage.setItem('hubui.githubIssuesRepository.v1', 'Molten-Bot/agent_00'));
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+        { full_name: 'Molten-Bot/agent_00', default_branch: 'main' },
+      ] } }));
+      await page.route('**/api/github/issues**', route => {
+        issueBranchFilter = new URL(route.request().url()).searchParams.get('branch') || '';
+        return route.fulfill({ json: { ok: true, issues: [] } });
+      });
+    },
+  });
+
+  await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '0 open issues assigned to you');
+  assert.equal(await page.locator('#github-issues-branch-filter').inputValue(), 'all');
+  assert.equal(issueBranchFilter, 'all');
+  const filteredResponse = page.waitForResponse(response => new URL(response.url()).searchParams.get('branch') === 'with');
+  await page.locator('#github-issues-branch-filter').selectOption('with');
+  await filteredResponse;
+  assert.equal(issueBranchFilter, 'with');
+  assert.equal(await page.locator('.github-issues-empty').textContent(), 'No open issues with an associated branch match the current filters.');
+  assert.equal(await page.evaluate(() => localStorage.getItem('hubui.githubIssuesBranch.v1')), 'with');
+  await page.reload();
+  await page.waitForFunction(() => document.getElementById('github-issues-branch-filter').value === 'with');
+  assert.equal(issueBranchFilter, 'with');
 });
 
 test('GitHub Issues renders inside Studio and uses the configured link mode', async t => {

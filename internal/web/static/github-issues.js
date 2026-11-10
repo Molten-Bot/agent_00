@@ -6,6 +6,7 @@
   const browser = document.getElementById("github-issues-browser");
   const repoSelect = document.getElementById("github-issues-repo");
   const searchInput = document.getElementById("github-issues-search");
+  const branchFilter = document.getElementById("github-issues-branch-filter");
   const assigneeFilter = document.getElementById("github-issues-assignee-filter");
   const filters = document.getElementById("github-issues-filters");
   const issueList = document.getElementById("github-issues-list");
@@ -13,11 +14,12 @@
   const detail = document.getElementById("github-issue-detail");
   const columns = document.querySelector(".github-issues-columns");
   const resizeHandle = document.getElementById("github-issues-resize-handle");
-  if (!status || !disabled || !browser || !repoSelect || !searchInput || !filters || !issueList || !detail) return;
+  if (!status || !disabled || !browser || !repoSelect || !searchInput || !branchFilter || !filters || !issueList || !detail) return;
 
   const layoutStorageKey = "hubui.githubIssuesLayout.v1";
   const repositoryStorageKey = "hubui.githubIssuesRepository.v1";
   const assigneeStorageKey = "hubui.githubIssuesAssignee.v1";
+  const branchStorageKey = "hubui.githubIssuesBranch.v1";
   const assigneeFilterLabel = "Show only issues assigned to me";
   let savedLayout = {};
   try { savedLayout = JSON.parse(localStorage.getItem(layoutStorageKey) || "{}"); } catch (_error) { savedLayout = {}; }
@@ -96,6 +98,10 @@
   try {
     const rememberedAssignee = localStorage.getItem(assigneeStorageKey);
     if (rememberedAssignee !== null) assignedToMe = rememberedAssignee === "true";
+  } catch (_error) { /* Storage can be unavailable in private or embedded contexts. */ }
+  try {
+    const rememberedBranch = localStorage.getItem(branchStorageKey) || "all";
+    if (["all", "with", "without"].includes(rememberedBranch)) branchFilter.value = rememberedBranch;
   } catch (_error) { /* Storage can be unavailable in private or embedded contexts. */ }
 
   function track(name, params = {}) {
@@ -442,7 +448,7 @@
   function emptyIssueListHeading() {
     if (!repositories.length) return "No repositories available";
     if (!selectedRepository()) return "Choose a repository";
-    if (searchInput.value.trim()) return "No matching issues";
+    if (searchInput.value.trim() || branchFilter.value !== "all") return "No matching issues";
     return assignedToMe ? "No assigned issues" : "No open issues";
   }
 
@@ -450,6 +456,10 @@
     const searching = Boolean(searchInput.value.trim());
     if (!repositories.length) return "No repositories are available for this account.";
     if (!selectedRepository()) return "Choose a repository to see its open issues.";
+    if (branchFilter.value !== "all") {
+      const association = branchFilter.value === "with" ? "with an associated branch" : "without an associated branch";
+      return `No open issues ${association} match the current filters.`;
+    }
     if (assignedToMe) {
       return searching
         ? "No open issues assigned to you match this search. Use the filter button to search every open issue."
@@ -736,9 +746,11 @@
     const requestAssignedToMe = assignedToMe;
     if (searchQuery) query.set("search", searchQuery);
     if (requestAssignedToMe) query.set("assignee", "me");
+    query.set("branch", branchFilter.value);
     const analyticsParams = issueAnalyticsParams(repo, {
       has_query: Boolean(searchQuery),
       assigned_to_me: requestAssignedToMe,
+      branch_filter: branchFilter.value,
     });
     try {
       const body = await requestJSON(`/api/github/issues?${query}`, { cache: "no-store" });
@@ -836,6 +848,11 @@
       searchTimer = null;
       void loadIssues();
     }, 250);
+  });
+  branchFilter.addEventListener("change", () => {
+    try { localStorage.setItem(branchStorageKey, branchFilter.value); } catch (_error) { /* Ignore unavailable storage. */ }
+    track("github_issues_branch_filter_changed", { branch_filter: branchFilter.value, source: "github_issues" });
+    void loadIssues();
   });
   filters.addEventListener("submit", (event) => {
     event.preventDefault();
