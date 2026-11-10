@@ -13386,6 +13386,19 @@
       streamRenderTimer = window.setTimeout(flushPendingStreamSnapshot, STREAM_RENDER_INTERVAL_MS);
     }
 
+    function discardPendingStreamSnapshots() {
+      pendingStreamSnapshotText = "";
+      pendingStreamSnapshot = null;
+      if (streamRenderTimer !== null) {
+        window.clearTimeout(streamRenderTimer);
+        streamRenderTimer = null;
+      }
+      if (streamRenderFrame !== null) {
+        window.cancelAnimationFrame(streamRenderFrame);
+        streamRenderFrame = null;
+      }
+    }
+
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         if (streamRenderFrame !== null) {
@@ -13413,6 +13426,7 @@
       };
 
       stream.onerror = () => {
+        discardPendingStreamSnapshots();
         state.taskStatusResolved = false;
         syncLocalPromptSubmitDisabled();
         setLocalConnection(false, "Reconnecting...");

@@ -2356,10 +2356,16 @@ func TestHandlerIndexServesHTML(t *testing.T) {
         }`) {
 		t.Fatalf("expected index html to reconcile a task snapshot received while prompt submission is in flight")
 	}
-	if !strings.Contains(markup, `stream.onerror = () => {
+	if !strings.Contains(markup, `function discardPendingStreamSnapshots() {
+      pendingStreamSnapshotText = "";
+      pendingStreamSnapshot = null;`) ||
+		!strings.Contains(markup, `window.clearTimeout(streamRenderTimer);`) ||
+		!strings.Contains(markup, `window.cancelAnimationFrame(streamRenderFrame);`) ||
+		!strings.Contains(markup, `stream.onerror = () => {
+        discardPendingStreamSnapshots();
         state.taskStatusResolved = false;
         syncLocalPromptSubmitDisabled();`) {
-		t.Fatalf("expected index html to block prompt submission when the task status stream disconnects")
+		t.Fatalf("expected index html to discard queued snapshots and block prompt submission when the task status stream disconnects")
 	}
 	if !strings.Contains(markup, `trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: state.promptMode });
             setLocalPromptStatus("warn", duplicateNotice(body));`) {
