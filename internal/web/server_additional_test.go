@@ -764,14 +764,14 @@ func TestPromptImageCapsEnforcedInBrowser(t *testing.T) {
 	runBrowserSuite(t, ts.URL, 60*time.Second, "prompt image cap checks", "tests/prompt_image_caps.cjs")
 }
 
-func TestStudioRunDisabledWhileTaskIsActiveInBrowser(t *testing.T) {
-	requireBrowserTooling(t, "active task submit lock check")
+func TestStudioRunQueuesWhileTasksAreActiveInBrowser(t *testing.T) {
+	requireBrowserTooling(t, "task queue submission checks")
 
 	srv := NewServer("", nil)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	runBrowserSuite(t, ts.URL, 60*time.Second, "active task submit lock checks", "tests/task_submit_lock.cjs")
+	runBrowserSuite(t, ts.URL, 60*time.Second, "task queue submission checks", "tests/task_submit_lock.cjs")
 }
 
 // TestSpeechDictationFallbackInBrowser exercises speechCaptureSupport and

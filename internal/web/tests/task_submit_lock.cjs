@@ -24,7 +24,7 @@ function installControlledTaskStream(page) {
   });
 }
 
-test('Studio Run stays disabled until an in-progress task finishes', async t => {
+test('Studio Run remains available with active tasks and unresolved status', async t => {
   const page = await browser.newPage();
   t.after(() => page.close());
   const errors = [];
@@ -62,15 +62,15 @@ test('Studio Run stays disabled until an in-progress task finishes', async t => 
 
   await page.goto(baseURL);
   const run = page.locator('#local-prompt-submit');
-  assert.equal(await run.isDisabled(), true, 'Run must stay disabled while initial status is unresolved');
+  await expect(run).toBeEnabled();
   releaseInitialStatus();
-  await expect(run).toBeDisabled();
-  await expect(run).toHaveAttribute('title', 'Wait for the current task to finish');
+  await expect(run).toBeEnabled();
+  await expect(run).toHaveAttribute('title', '');
 
   const cancelled = await page.evaluate(() => document.getElementById('local-prompt-form')
     .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) === false);
   assert.equal(cancelled, true);
-  assert.deepEqual(writes, [], 'active task must block programmatic submission too');
+  assert.deepEqual(writes, [], 'empty prompt must not submit');
 
   status = 'completed';
   await page.reload();
@@ -119,16 +119,16 @@ test('Studio Run ignores an initial status older by one nanosecond than the stre
   await expect.poll(() => page.evaluate(() => state.snapshot?.tasks?.[0]?.request_id || ''))
     .toBe('github-actions-newer');
   const run = page.locator('#local-prompt-submit');
-  await expect(run).toBeDisabled();
+  await expect(run).toBeEnabled();
 
   releaseInitialStatus();
   await expect.poll(() => page.evaluate(() => state.snapshot?.tasks?.[0]?.request_id || ''))
     .toBe('github-actions-newer');
-  await expect(run).toBeDisabled();
-  await expect(run).toHaveAttribute('title', 'Wait for the current task to finish');
+  await expect(run).toBeEnabled();
+  await expect(run).toHaveAttribute('title', '');
 });
 
-test('Studio Run stays disabled when initial status fails until a stream snapshot arrives', async t => {
+test('Studio Run remains available when initial status fails', async t => {
   const page = await browser.newPage();
   t.after(() => page.close());
   const errors = [];
@@ -156,11 +156,11 @@ test('Studio Run stays disabled when initial status fails until a stream snapsho
 
   await page.goto(baseURL);
   const run = page.locator('#local-prompt-submit');
-  await expect(run).toBeDisabled();
+  await expect(run).toBeEnabled();
   const cancelled = await page.evaluate(() => document.getElementById('local-prompt-form')
     .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) === false);
   assert.equal(cancelled, true);
-  assert.deepEqual(writes, [], 'unknown task state must block programmatic submission too');
+  assert.deepEqual(writes, [], 'empty prompt must not submit');
 
   await page.evaluate(() => window.testTaskStream.onmessage({ data: JSON.stringify({
     tasks: [], events: [], repositories: [], stats: {}, resources: {},
@@ -169,7 +169,7 @@ test('Studio Run stays disabled when initial status fails until a stream snapsho
   await expect(run).toHaveAttribute('title', '');
 });
 
-test('Studio Run stays disabled when the task stream fails before initial status resolves', async t => {
+test('Studio Run remains available when the task stream fails before initial status resolves', async t => {
   const page = await browser.newPage();
   t.after(() => page.close());
   const errors = [];
@@ -201,15 +201,15 @@ test('Studio Run stays disabled when the task stream fails before initial status
   await page.goto(baseURL);
   const run = page.locator('#local-prompt-submit');
   await page.evaluate(() => window.testTaskStream.onerror());
-  await expect(run).toBeDisabled();
+  await expect(run).toBeEnabled();
 
   releaseInitialStatus();
   await expect.poll(() => page.evaluate(() => state.snapshot !== null)).toBe(true);
-  await expect(run).toBeDisabled();
-  await expect(run).toHaveAttribute('title', 'Wait for the current task to finish');
+  await expect(run).toBeEnabled();
+  await expect(run).toHaveAttribute('title', '');
 });
 
-test('Studio Run disables when the task stream disconnects until a fresh snapshot arrives', async t => {
+test('Studio Run remains available when the task stream disconnects', async t => {
   const page = await browser.newPage();
   t.after(() => page.close());
   const errors = [];
@@ -245,12 +245,12 @@ test('Studio Run disables when the task stream disconnects until a fresh snapsho
     }) });
     window.testTaskStream.onerror();
   });
-  await expect(run).toBeDisabled();
-  await expect(run).toHaveAttribute('title', 'Wait for the current task to finish');
+  await expect(run).toBeEnabled();
+  await expect(run).toHaveAttribute('title', '');
   await page.evaluate(() => render(state.snapshot));
-  await expect(run).toBeDisabled();
+  await expect(run).toBeEnabled();
   await page.waitForTimeout(600);
-  await expect(run).toBeDisabled();
+  await expect(run).toBeEnabled();
 
   await page.evaluate(() => window.testTaskStream.onmessage({ data: JSON.stringify({
     tasks: [], events: [], repositories: [], stats: {}, resources: {},
@@ -259,7 +259,7 @@ test('Studio Run disables when the task stream disconnects until a fresh snapsho
   await expect(run).toHaveAttribute('title', '');
 });
 
-test('Studio Run tracks an in-flight duplicate until snapshots observe it finishing', async t => {
+test('Studio Run remains available after a duplicate response', async t => {
   const page = await browser.newPage();
   t.after(() => page.close());
   const errors = [];
@@ -301,13 +301,13 @@ test('Studio Run tracks an in-flight duplicate until snapshots observe it finish
   await page.locator('#builder-prompt-input').fill('Do work');
   await run.click();
   await expect(page.locator('#local-prompt-status')).toContainText('Duplicate ignored');
-  await expect(run).toBeDisabled();
+  await expect(run).toBeEnabled();
 
   await page.evaluate(() => render(
     { tasks: [], events: [], repositories: [], stats: {}, resources: {} },
     { resolveTaskStatus: true },
   ));
-  await expect(run).toBeDisabled();
+  await expect(run).toBeEnabled();
   await page.evaluate(() => render(
     {
       tasks: [{ request_id: 'existing-task', source: 'local_prompt', status: 'running' }],
@@ -315,7 +315,7 @@ test('Studio Run tracks an in-flight duplicate until snapshots observe it finish
     },
     { resolveTaskStatus: true },
   ));
-  await expect(run).toBeDisabled();
+  await expect(run).toBeEnabled();
   await page.evaluate(() => render(
     {
       tasks: [{ request_id: 'existing-task', source: 'local_prompt', status: 'completed' }],
@@ -327,7 +327,7 @@ test('Studio Run tracks an in-flight duplicate until snapshots observe it finish
   assert.equal(submitCount, 1);
 });
 
-test('Studio Run unlocks when duplicate completion arrives before submit response', async t => {
+test('Studio Run is available when duplicate completion arrives before submit response', async t => {
   const page = await browser.newPage();
   t.after(() => page.close());
   const errors = [];
@@ -378,7 +378,7 @@ test('Studio Run unlocks when duplicate completion arrives before submit respons
   await expect(run).toHaveAttribute('title', '');
 });
 
-test('Studio Run unlocks when completion arrives before submit response', async t => {
+test('Studio Run is available when completion arrives before submit response', async t => {
   const page = await browser.newPage();
   t.after(() => page.close());
   const errors = [];
@@ -426,7 +426,7 @@ test('Studio Run unlocks when completion arrives before submit response', async 
   await expect(run).toHaveAttribute('title', '');
 });
 
-test('Studio Run unlocks when a newer snapshot has already pruned the submitted task', async t => {
+test('Studio Run is available when a newer snapshot has already pruned the submitted task', async t => {
   const page = await browser.newPage();
   t.after(() => page.close());
   const errors = [];
@@ -466,16 +466,16 @@ test('Studio Run unlocks when a newer snapshot has already pruned the submitted 
   await page.locator('#builder-prompt-input').fill('Do work');
   await run.click();
   await expect(page.locator('#local-prompt-status')).toContainText('Queued request pruned-task');
-  await expect(run).toBeDisabled();
+  await expect(run).toBeEnabled();
 
   await page.evaluate(() => render(state.snapshot));
-  await expect(run).toBeDisabled();
+  await expect(run).toBeEnabled();
 
   await page.evaluate(() => render({
     generated_at: '2026-11-09T20:00:00.123456790Z',
     tasks: [], events: [], repositories: [], stats: {}, resources: {},
   }, { resolveTaskStatus: true }));
-  await expect(run).toBeDisabled();
+  await expect(run).toBeEnabled();
 
   await page.evaluate(() => render({
     generated_at: '2026-11-09T20:00:00.123456791Z',
@@ -484,3 +484,72 @@ test('Studio Run unlocks when a newer snapshot has already pruned the submitted 
   await expect(run).toBeEnabled();
   await expect(run).toHaveAttribute('title', '');
 });
+
+for (const mode of ['prompt', 'library']) {
+  test(`Studio queues multiple ${mode} tasks under resource pressure without waiting for snapshots`, async t => {
+    const page = await browser.newPage();
+    t.after(() => page.close());
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    t.after(() => assert.deepEqual(errors, []));
+    await installControlledTaskStream(page);
+    const writes = [];
+    let releaseSubmission;
+    await page.route('**/*', async route => {
+      const url = new URL(route.request().url());
+      if (url.origin !== new URL(baseURL).origin) return route.abort();
+      if (!url.pathname.startsWith('/api/')) return route.continue();
+      if (url.pathname === '/api/status') return route.fulfill({ json: {
+        tasks: [
+          { request_id: 'running', status: 'running', source: 'local_prompt' },
+          { request_id: 'waiting', status: 'queued', source: 'local_prompt' },
+        ],
+        events: [], repositories: [], stats: {},
+        resources: { cpu_percent: 99, memory_percent: 99 },
+      } });
+      if (url.pathname === '/api/agent-auth') return route.fulfill({ json: {
+        ok: true, auth: { required: false, ready: true, state: 'ready' },
+      } });
+      if (url.pathname === '/api/review-settings') return route.fulfill({ json: {
+        ok: true, settings: { default_library_enabled: true },
+      } });
+      if (url.pathname === '/api/library') return route.fulfill({ json: {
+        ok: true, tasks: [{ name: 'unit-test-coverage', title: 'Unit test coverage', prompt: 'Add tests', promptContextLabel: 'Additional context' }],
+      } });
+      if (url.pathname === '/api/github/repos') return route.fulfill({ json: { ok: true, repos: [] } });
+      if (route.request().method() === 'POST' &&
+          ['/api/local-prompt', '/api/library/run'].includes(url.pathname)) {
+        writes.push({ endpoint: url.pathname, body: route.request().postDataJSON() });
+        if (writes.length === 1) await new Promise(resolve => { releaseSubmission = resolve; });
+        return route.fulfill({ json: { ok: true, request_id: `queued-${writes.length}` } });
+      }
+      return route.fulfill({ json: { ok: true } });
+    });
+    await page.goto(baseURL + (mode === 'library' ? '/#studio-library' : ''));
+    const run = page.locator('#local-prompt-submit');
+    const fill = async text => {
+      if (mode === 'library') {
+        await page.locator('#library-repo-input').fill('acme/repo');
+        await expect(page.locator('.library-task-option-toggle').first()).toHaveAttribute('aria-pressed', 'true');
+        await page.locator('#library-prompt-context-input').fill(text);
+      } else {
+        await page.locator('#builder-repo-input').fill('acme/repo');
+        await page.locator('#builder-prompt-input').fill(text);
+      }
+    };
+    await fill('First task');
+    await run.click();
+    await expect.poll(() => writes.length).toBe(1);
+    await expect(run).toBeDisabled();
+    await page.evaluate(() => document.getElementById('local-prompt-form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    assert.equal(writes.length, 1, 'double submit cannot duplicate the HTTP request');
+    releaseSubmission();
+    await expect(run).toBeEnabled();
+    await fill('Second task');
+    await run.click();
+    await expect.poll(() => writes.length).toBe(2);
+    await expect(run).toBeEnabled();
+    assert.equal(writes[1].endpoint, mode === 'library' ? '/api/library/run' : '/api/local-prompt');
+  });
+}
