@@ -456,17 +456,19 @@ func runServer(args []string) int {
 					}
 				}
 
+				settings := signingSettings(activeCfg, runner)
+				forceAcquire := false
 				admission := prepareLocalTaskAdmission(
 					runCtx,
 					taskHandle,
-					signingSettings(activeCfg, runner).ValidatedSnapshot,
+					settings.ValidatedSnapshot,
+					settings.TryValidatedSnapshot,
 					func() (func(), error) {
 						acquireCtx, cancelAcquire := context.WithCancel(runCtx)
 						if taskHandle != nil {
 							taskHandle.SetAcquireCancel(cancelAcquire)
 						}
-						forceAcquire := false
-						if taskHandle != nil {
+						if taskHandle != nil && !forceAcquire {
 							forceAcquire = taskHandle.ConsumeForceAcquire()
 						}
 						acquire := scheduler.Acquire
@@ -1254,28 +1256,43 @@ func prepareLocalTaskAdmission(
 	ctx context.Context,
 	taskHandle *localTaskHandle,
 	loadSigning func(context.Context) (*gitsigning.Snapshot, error),
+	tryLoadSigning func(context.Context, *gitsigning.Snapshot) (*gitsigning.Snapshot, bool, error),
 	acquire func() (func(), error),
 ) localTaskAdmission {
-	snapshot, err := validatedSigningSnapshotForTask(ctx, taskHandle, loadSigning)
-	if err != nil {
-		return localTaskAdmission{SigningErr: err}
-	}
-	release, err := acquire()
-	if err != nil {
+	for {
+		snapshot, err := validatedSigningSnapshotForTask(ctx, taskHandle, loadSigning)
+		if err != nil {
+			return localTaskAdmission{SigningErr: err}
+		}
+		release, err := acquire()
+		if err != nil {
+			return localTaskAdmission{
+				SigningSnapshot: snapshot,
+				Release:         release,
+				AcquireErr:      err,
+			}
+		}
+		if taskHandle != nil && (taskHandle.IsPaused() || taskHandle.IsStopped()) {
+			release()
+			continue
+		}
+		snapshot, ready, err := tryLoadSigning(ctx, snapshot)
+		if err != nil {
+			release()
+			return localTaskAdmission{SigningErr: err}
+		}
+		if !ready {
+			release()
+			continue
+		}
+		if taskHandle != nil && (taskHandle.IsPaused() || taskHandle.IsStopped()) {
+			release()
+			continue
+		}
 		return localTaskAdmission{
 			SigningSnapshot: snapshot,
 			Release:         release,
-			AcquireErr:      err,
 		}
-	}
-	snapshot, err = validatedSigningSnapshotForTask(ctx, taskHandle, loadSigning)
-	if err != nil {
-		release()
-		return localTaskAdmission{SigningErr: err}
-	}
-	return localTaskAdmission{
-		SigningSnapshot: snapshot,
-		Release:         release,
 	}
 }
 

@@ -185,6 +185,9 @@ func TestSigningSubmissionRevalidatesBeforeValidatedSnapshot(t *testing.T) {
 	if got := requests.Load(); got != 0 {
 		t.Fatalf("ValidatedSnapshot() made %d GitHub requests, want 0", got)
 	}
+	if refreshed, ready, err := store.TryValidatedSnapshot(ctx, snapshot); err != nil || !ready || refreshed != snapshot {
+		t.Fatalf("TryValidatedSnapshot() = (%v, %t, %v), want current snapshot", refreshed, ready, err)
+	}
 
 	registered = nil
 	if err := store.SubmissionRequirement(ctx); !errors.Is(err, ErrSigningSetupRequired) {
@@ -364,6 +367,9 @@ func TestSigningSubmissionWaitsForReplacementValidation(t *testing.T) {
 	case err := <-snapshotLoaded:
 		t.Fatalf("snapshot loaded before replacement validation finished: %v", err)
 	case <-time.After(100 * time.Millisecond):
+	}
+	if snapshot, ready, err := store.TryValidatedSnapshot(ctx, nil); snapshot != nil || ready || err != nil {
+		t.Fatalf("TryValidatedSnapshot() during replacement = (%v, %t, %v), want unavailable", snapshot, ready, err)
 	}
 	canceledCtx, cancelSnapshot := context.WithCancel(ctx)
 	cancelSnapshot()

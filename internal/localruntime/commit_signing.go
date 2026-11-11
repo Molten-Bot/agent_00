@@ -109,6 +109,22 @@ func (g *signingRecheckGate) lock(ctx context.Context) error {
 	}
 }
 
+func (g *signingRecheckGate) tryLock(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	select {
+	case <-g.token:
+		if err := ctx.Err(); err != nil {
+			g.unlock()
+			return false, err
+		}
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
 func (g *signingRecheckGate) unlock() { g.token <- struct{}{} }
 
 func (s SigningSettings) now() time.Time {
@@ -488,6 +504,36 @@ func (s SigningSettings) ValidatedSnapshot(ctx context.Context) (*gitsigning.Sna
 		return nil, err
 	}
 	defer gate.unlock()
+	return s.validatedSnapshot()
+}
+
+// TryValidatedSnapshot confirms that snapshot still matches current settings
+// without waiting for validation or reloading key material. ready is false
+// when callers should release scarce resources and call ValidatedSnapshot.
+func (s SigningSettings) TryValidatedSnapshot(ctx context.Context, snapshot *gitsigning.Snapshot) (_ *gitsigning.Snapshot, ready bool, err error) {
+	gate := s.recheckGate()
+	locked, err := gate.tryLock(ctx)
+	if err != nil || !locked {
+		return nil, false, err
+	}
+	defer gate.unlock()
+	cfg, err := s.config()
+	if err != nil {
+		return nil, true, err
+	}
+	if !cfg.Enabled {
+		return nil, snapshot == nil, nil
+	}
+	if err := s.SetupRequirement(); err != nil {
+		return nil, true, err
+	}
+	if snapshot == nil || snapshot.Config != cfg {
+		return nil, false, nil
+	}
+	return snapshot, true, nil
+}
+
+func (s SigningSettings) validatedSnapshot() (*gitsigning.Snapshot, error) {
 	cfg, err := s.config()
 	if err != nil {
 		return nil, err

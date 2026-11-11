@@ -208,6 +208,10 @@ func TestPrepareLocalTaskAdmissionRefreshesSigningAfterAcquire(t *testing.T) {
 				}
 				return &gitsigning.Snapshot{KeyPath: "refreshed"}, nil
 			},
+			func(_ context.Context, _ *gitsigning.Snapshot) (*gitsigning.Snapshot, bool, error) {
+				loadCount++
+				return &gitsigning.Snapshot{KeyPath: "refreshed"}, true, nil
+			},
 			func() (func(), error) {
 				close(acquireCalled)
 				return func() {}, nil
@@ -253,10 +257,10 @@ func TestPrepareLocalTaskAdmissionReleasesAfterRefreshFailure(t *testing.T) {
 		nil,
 		func(context.Context) (*gitsigning.Snapshot, error) {
 			loadCount++
-			if loadCount == 2 {
-				return nil, wantErr
-			}
 			return &gitsigning.Snapshot{KeyPath: "initial"}, nil
+		},
+		func(_ context.Context, _ *gitsigning.Snapshot) (*gitsigning.Snapshot, bool, error) {
+			return nil, true, wantErr
 		},
 		func() (func(), error) {
 			return func() { released = true }, nil
@@ -271,6 +275,62 @@ func TestPrepareLocalTaskAdmissionReleasesAfterRefreshFailure(t *testing.T) {
 	}
 	if admission.Release != nil {
 		t.Fatal("prepareLocalTaskAdmission() returned release after already releasing slot")
+	}
+}
+
+func TestPrepareLocalTaskAdmissionReleasesBeforeWaitingForSigningRefresh(t *testing.T) {
+	t.Parallel()
+
+	waitingOutsideSlot := make(chan struct{})
+	resumeSigning := make(chan struct{})
+	admitted := make(chan localTaskAdmission, 1)
+	loadCount := 0
+	acquireCount := 0
+	releaseCount := 0
+	tryCount := 0
+	go func() {
+		admitted <- prepareLocalTaskAdmission(
+			context.Background(),
+			nil,
+			func(context.Context) (*gitsigning.Snapshot, error) {
+				loadCount++
+				if loadCount == 2 {
+					close(waitingOutsideSlot)
+					<-resumeSigning
+				}
+				return &gitsigning.Snapshot{KeyPath: "validated"}, nil
+			},
+			func(_ context.Context, snapshot *gitsigning.Snapshot) (*gitsigning.Snapshot, bool, error) {
+				tryCount++
+				return snapshot, tryCount > 1, nil
+			},
+			func() (func(), error) {
+				acquireCount++
+				return func() { releaseCount++ }, nil
+			},
+		)
+	}()
+
+	select {
+	case <-waitingOutsideSlot:
+		if acquireCount != 1 || releaseCount != 1 {
+			t.Fatalf("scheduler counts while signing waits = acquire %d, release %d; want 1, 1", acquireCount, releaseCount)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("signing refresh did not move outside scheduler slot")
+	}
+	close(resumeSigning)
+	select {
+	case admission := <-admitted:
+		if admission.SigningErr != nil || admission.AcquireErr != nil {
+			t.Fatalf("prepareLocalTaskAdmission() errors = (%v, %v)", admission.SigningErr, admission.AcquireErr)
+		}
+		if acquireCount != 2 || releaseCount != 1 {
+			t.Fatalf("final scheduler counts = acquire %d, release %d; want 2, 1", acquireCount, releaseCount)
+		}
+		admission.Release()
+	case <-time.After(time.Second):
+		t.Fatal("task was not admitted after signing refresh")
 	}
 }
 
