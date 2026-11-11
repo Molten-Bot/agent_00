@@ -3448,7 +3448,7 @@ func TestRunFailedChecksTriggersCodexRemediation(t *testing.T) {
 	}
 }
 
-func TestRunFailedTitleCheckAppliesAgentRequestedPRTitle(t *testing.T) {
+func TestRunFailedTitleCheckWaitsForUpdatedTitleWithoutConsumingRemediationAttempts(t *testing.T) {
 	t.Parallel()
 
 	cfg := sampleConfig()
@@ -3484,6 +3484,9 @@ func TestRunFailedTitleCheckAppliesAgentRequestedPRTitle(t *testing.T) {
 		},
 		{cmd: prEditTitleCommand(repoDir, prURL, replacementTitle)},
 		{cmd: statusCommand(repoDir)},
+		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: checkSummary + "\n"}, err: errors.New("checks still report old title")},
+		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: checkSummary + "\n"}, err: errors.New("checks still report old title")},
+		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: checkSummary + "\n"}, err: errors.New("checks still report old title")},
 		{cmd: prChecksCommand(repoDir, prURL)},
 	}}
 
@@ -3514,11 +3517,74 @@ func TestRunFailedTitleCheckAppliesAgentRequestedPRTitle(t *testing.T) {
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
 	}
-	if sleepCalls != 1 {
-		t.Fatalf("sleepCalls = %d, want 1", sleepCalls)
+	if sleepCalls != 4 {
+		t.Fatalf("sleepCalls = %d, want 4", sleepCalls)
 	}
 	if joined := strings.Join(logs, "\n"); !strings.Contains(joined, "stage=pr status=ok action=update_title") {
 		t.Fatalf("logs missing PR title update:\n%s", joined)
+	}
+}
+
+func TestRunFailedPRTitleEditDoesNotExposeRequestedTitle(t *testing.T) {
+	t.Parallel()
+
+	cfg := sampleConfig()
+	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
+	guid := "abcdef123456"
+	runDir := testRunDir(guid)
+	agentsPath := filepath.Join(runDir, "AGENTS.md")
+	repoDir := filepath.Join(runDir, "repo")
+	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
+	branch := "agent00-build-api"
+	prURL := "https://github.com/acme/repo/pull/42"
+	checkSummary := "check-title\tfail\t4s"
+	requestedTitle := "customer project confidential title"
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "codex", Args: []string{"--help"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"auth", "status"}}},
+		{cmd: cloneCommand(cfg, repoDir)},
+		{cmd: branchCommand(repoDir, branch)},
+		{cmd: pushDryRunCommand(repoDir, branch)},
+		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: " M file.go\n"}},
+		{cmd: addCommand(repoDir)},
+		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
+		{cmd: pushCommand(repoDir, branch)},
+		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
+		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: checkSummary + "\n"}, err: errors.New("checks failed")},
+		{
+			cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1)),
+			res: execx.Result{Stdout: prTitleRemediationPrefix + " " + requestedTitle + "\n"},
+		},
+		{
+			cmd: prEditTitleCommand(repoDir, prURL, requestedTitle),
+			err: fmt.Errorf("run gh [pr edit --title %s]: exit status 1", requestedTitle),
+		},
+	}}
+
+	h := New(fake)
+	h.Now = func() time.Time { return now }
+	h.Workspace = testWorkspaceManager(guid)
+	h.TargetDirOK = func(path string) bool { return path == targetDir }
+
+	res := h.Run(context.Background(), cfg)
+	if res.ExitCode != ExitPR {
+		t.Fatalf("ExitCode = %d, want %d", res.ExitCode, ExitPR)
+	}
+	if res.Err == nil {
+		t.Fatal("Run() error = nil, want title update failure")
+	}
+	if strings.Contains(res.Err.Error(), requestedTitle) {
+		t.Fatalf("Run() error exposed requested title: %q", res.Err)
+	}
+	if !strings.Contains(res.Err.Error(), "update pull request title") {
+		t.Fatalf("Run() error = %q, want title update context", res.Err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
 	}
 }
 

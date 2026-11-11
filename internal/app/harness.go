@@ -111,6 +111,8 @@ const (
 	publishStrategyForkFallback      = "fork-fallback"
 )
 
+const maxPRTitleUpdatePropagationRetries = 18
+
 type logFn func(string, ...any)
 
 var authSetupGitMu sync.Mutex
@@ -853,6 +855,8 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 	}
 
 	for attempt := 0; ; attempt++ {
+		remainingTitlePropagationRetries := 0
+	checkPR:
 		var (
 			checkRes     execx.Result
 			checkErr     error
@@ -1134,6 +1138,22 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		}
 
 		h.logf("stage=checks status=failed repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
+		if remainingTitlePropagationRetries > 0 {
+			remainingTitlePropagationRetries--
+			h.logf(
+				"stage=checks status=waiting reason=pr_title_propagating repo=%s repo_dir=%s pr_url=%s attempt=%d retry=%d/%d",
+				repo.URL,
+				repo.RelDir,
+				repo.PRURL,
+				attempt+1,
+				maxPRTitleUpdatePropagationRetries-remainingTitlePropagationRetries,
+				maxPRTitleUpdatePropagationRetries,
+			)
+			if err := h.Sleep(ctx, prTitleUpdatePropagationDelay); err != nil {
+				return ExitPR, "checks", err
+			}
+			goto checkPR
+		}
 		if attempt >= maxPRCheckRemediationAttempts {
 			return ExitPR, "checks", fmt.Errorf(
 				"required PR checks failed for repo %s after %d remediation attempt(s): %s",
@@ -1184,7 +1204,9 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		if titleRequested {
 			h.logf("stage=pr status=start action=update_title repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 			if _, err := h.runCommand(ctx, "pr", prEditTitleCommand(repo.Dir, repo.PRURL, requestedTitle)); err != nil {
-				return ExitPR, "pr", fmt.Errorf("update pull request title for repo %s: %w", repo.URL, err)
+				// Runner errors include command arguments, so wrapping err here would
+				// disclose the customer-derived title supplied after --title.
+				return ExitPR, "pr", fmt.Errorf("update pull request title for repo %s failed", repo.URL)
 			}
 			h.logf("stage=pr status=ok action=update_title repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 		}
@@ -1202,10 +1224,12 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 					repo.PRURL,
 					attempt+1,
 				)
+				remainingTitlePropagationRetries = maxPRTitleUpdatePropagationRetries - 1
 				if err := h.Sleep(ctx, prTitleUpdatePropagationDelay); err != nil {
 					return ExitPR, "checks", err
 				}
-				continue
+				attempt++
+				goto checkPR
 			}
 			if agentOutputClaimsFileChanges(agentRes) {
 				return ExitCodex, agentStage, fmt.Errorf("%s reported remediation file changes, but git detected no worktree or branch changes for repo %s", agentStage, repo.URL)
