@@ -4062,8 +4062,12 @@
           claude_auth_code: code,
         });
         applyAgentAuthGate(auth);
-        const verified = await requestAgentAuth("/api/agent-auth/verify", "POST");
-        applyAgentAuthGate(verified);
+        const verified = auth.ready
+          ? auth
+          : await requestAgentAuth("/api/agent-auth/verify", "POST");
+        if (verified !== auth) {
+          applyAgentAuthGate(verified);
+        }
         if (verified.ready) {
           setAgentAuthBrowserCodeError("");
           state.agentAuthBrowserCode = "";
