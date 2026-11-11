@@ -187,6 +187,53 @@ func TestValidatedSigningSnapshotForTaskRechecksPausedState(t *testing.T) {
 	}
 }
 
+func TestPrepareLocalTaskAdmissionValidatesSigningBeforeAcquire(t *testing.T) {
+	t.Parallel()
+
+	loadStarted := make(chan struct{})
+	finishLoad := make(chan struct{})
+	acquireCalled := make(chan struct{})
+	admitted := make(chan localTaskAdmission, 1)
+	go func() {
+		admitted <- prepareLocalTaskAdmission(
+			context.Background(),
+			nil,
+			func(context.Context) (*gitsigning.Snapshot, error) {
+				close(loadStarted)
+				<-finishLoad
+				return &gitsigning.Snapshot{KeyPath: "validated"}, nil
+			},
+			func() (func(), error) {
+				close(acquireCalled)
+				return func() {}, nil
+			},
+		)
+	}()
+
+	<-loadStarted
+	select {
+	case <-acquireCalled:
+		t.Fatal("scheduler slot acquired while signing snapshot was still loading")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(finishLoad)
+	select {
+	case admission := <-admitted:
+		if admission.SigningErr != nil || admission.AcquireErr != nil {
+			t.Fatalf("prepareLocalTaskAdmission() errors = (%v, %v)", admission.SigningErr, admission.AcquireErr)
+		}
+		if admission.SigningSnapshot == nil || admission.SigningSnapshot.KeyPath != "validated" {
+			t.Fatalf("prepareLocalTaskAdmission() snapshot = %+v", admission.SigningSnapshot)
+		}
+		if admission.Release == nil {
+			t.Fatal("prepareLocalTaskAdmission() returned nil release")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("task admission did not finish after signing snapshot loaded")
+	}
+}
+
 func TestLocalTaskHandleSetAcquireCancelCancelsWhenPaused(t *testing.T) {
 	t.Parallel()
 
