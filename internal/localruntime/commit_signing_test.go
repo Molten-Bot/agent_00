@@ -134,6 +134,78 @@ func TestSigningSettingsLifecycle(t *testing.T) {
 	}
 }
 
+func TestSigningSubmissionRevalidatesBeforeValidatedSnapshot(t *testing.T) {
+	t.Parallel()
+	var requests atomic.Int64
+	registered := []map[string]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.URL.Path == "/user" {
+			json.NewEncoder(w).Encode(map[string]any{"login": "test-bot", "id": 123, "name": "Test Bot"})
+			return
+		}
+		json.NewEncoder(w).Encode(registered)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "config.json")
+	store := SigningSettings{
+		Path:   path,
+		Runner: execx.OSRunner{},
+		GitHub: func() gitsigning.GitHub {
+			return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()}
+		},
+	}
+	state, err := store.Configure(ctx, CommitSigningRequest{
+		PrivateKey: signingTestPrivateKey(t),
+		Passphrase: "test-passphrase",
+	})
+	if err != nil {
+		t.Fatalf("Configure(import) error = %v", err)
+	}
+	registered = append(registered, map[string]string{"key": state.PublicKey})
+	if _, err := store.Configure(ctx, CommitSigningRequest{Enabled: true}); err != nil {
+		t.Fatalf("Configure(enable) error = %v", err)
+	}
+
+	requests.Store(0)
+	if err := store.SubmissionRequirement(ctx); err != nil {
+		t.Fatalf("SubmissionRequirement() error = %v", err)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("SubmissionRequirement() made %d GitHub requests, want 2", got)
+	}
+
+	requests.Store(0)
+	snapshot, err := store.ValidatedSnapshot(ctx)
+	if err != nil || snapshot == nil {
+		t.Fatalf("ValidatedSnapshot() = (%v, %v), want non-nil snapshot", snapshot, err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("ValidatedSnapshot() made %d GitHub requests, want 0", got)
+	}
+	if refreshed, ready, err := store.TryValidatedSnapshot(ctx, snapshot); err != nil || !ready || refreshed != snapshot {
+		t.Fatalf("TryValidatedSnapshot() = (%v, %t, %v), want current snapshot", refreshed, ready, err)
+	}
+
+	registered = nil
+	if err := store.SubmissionRequirement(ctx); !errors.Is(err, ErrSigningSetupRequired) {
+		t.Fatalf("SubmissionRequirement() accepted revoked key: %v", err)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("revoked-key submission made %d GitHub requests, want 2", got)
+	}
+
+	requests.Store(0)
+	if snapshot, err := store.ValidatedSnapshot(ctx); snapshot != nil || !errors.Is(err, ErrSigningSetupRequired) {
+		t.Fatalf("ValidatedSnapshot() after revocation = (%v, %v), want setup hold", snapshot, err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("held ValidatedSnapshot() made %d GitHub requests, want 0", got)
+	}
+}
+
 func TestSigningSettingsConcurrentUpdates(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "config.json")
@@ -281,10 +353,28 @@ func TestSigningSubmissionWaitsForReplacementValidation(t *testing.T) {
 	}
 	submitted := make(chan error, 1)
 	go func() { submitted <- store.SubmissionRequirement(ctx) }()
+	snapshotLoaded := make(chan error, 1)
+	go func() {
+		_, err := store.ValidatedSnapshot(ctx)
+		snapshotLoaded <- err
+	}()
 	select {
 	case err := <-submitted:
 		t.Fatalf("submission returned before replacement validation finished: %v", err)
 	case <-time.After(100 * time.Millisecond):
+	}
+	select {
+	case err := <-snapshotLoaded:
+		t.Fatalf("snapshot loaded before replacement validation finished: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if snapshot, ready, err := store.TryValidatedSnapshot(ctx, nil); snapshot != nil || ready || err != nil {
+		t.Fatalf("TryValidatedSnapshot() during replacement = (%v, %t, %v), want unavailable", snapshot, ready, err)
+	}
+	canceledCtx, cancelSnapshot := context.WithCancel(ctx)
+	cancelSnapshot()
+	if snapshot, err := store.ValidatedSnapshot(canceledCtx); snapshot != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled ValidatedSnapshot() = (%v, %v), want context cancellation", snapshot, err)
 	}
 	unblock()
 	if err := <-configured; !errors.Is(err, gitsigning.ErrSetup) {
@@ -297,6 +387,14 @@ func TestSigningSubmissionWaitsForReplacementValidation(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("submission did not finish after replacement validation")
+	}
+	select {
+	case err := <-snapshotLoaded:
+		if !errors.Is(err, ErrSigningSetupRequired) {
+			t.Fatalf("unregistered replacement loaded into snapshot: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("snapshot load did not finish after replacement validation")
 	}
 }
 

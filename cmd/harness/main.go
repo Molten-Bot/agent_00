@@ -456,24 +456,60 @@ func runServer(args []string) int {
 					}
 				}
 
-				acquireCtx, cancelAcquire := context.WithCancel(runCtx)
-				if taskHandle != nil {
-					taskHandle.SetAcquireCancel(cancelAcquire)
-				}
+				settings := signingSettings(activeCfg, runner)
 				forceAcquire := false
-				if taskHandle != nil {
-					forceAcquire = taskHandle.ConsumeForceAcquire()
-				}
-				acquire := scheduler.Acquire
-				if forceAcquire {
-					acquire = scheduler.AcquireForce
-				}
-				release, acquireErr := acquire(acquireCtx, requestID)
-				if taskHandle != nil {
-					taskHandle.ClearAcquireCancel(cancelAcquire)
-				}
-				cancelAcquire()
+				admission := prepareLocalTaskAdmission(
+					runCtx,
+					taskHandle,
+					settings.ValidatedSnapshot,
+					settings.TryValidatedSnapshot,
+					func() (func(), error) {
+						acquireCtx, cancelAcquire := context.WithCancel(runCtx)
+						if taskHandle != nil {
+							taskHandle.SetAcquireCancel(cancelAcquire)
+						}
+						if taskHandle != nil && !forceAcquire {
+							forceAcquire = taskHandle.ConsumeForceAcquire()
+						}
+						acquire := scheduler.Acquire
+						if forceAcquire {
+							acquire = scheduler.AcquireForce
+						}
+						release, err := acquire(acquireCtx, requestID)
+						if taskHandle != nil {
+							taskHandle.ClearAcquireCancel(cancelAcquire)
+						}
+						cancelAcquire()
+						return release, err
+					},
+				)
 
+				if signingErr := admission.SigningErr; signingErr != nil {
+					if taskHandle != nil && taskHandle.IsStopped() {
+						finalState = "stopped"
+						daemonLogger("task status=stopped request_id=%s err=%q", requestID, errTaskStoppedByOperator)
+						return
+					}
+					finalState = "error"
+					daemonLogger("task status=error request_id=%s err=%q", requestID, signingErr)
+					if !errors.Is(signingErr, context.Canceled) {
+						failedResult := app.Result{
+							ExitCode: app.ExitConfig,
+							Err:      fmt.Errorf("task signing: %w", signingErr),
+						}
+						if allowFailureFollowUp {
+							if queueFailureRerun != nil {
+								queueFailureRerun(requestID, failedResult, runCfg, source)
+							}
+							if queueFailureFollowUp != nil {
+								queueFailureFollowUp(requestID, failedResult, runCfg, source)
+							}
+						}
+					}
+					return
+				}
+
+				acquireErr := admission.AcquireErr
 				if acquireErr != nil {
 					if taskHandle != nil && taskHandle.IsStopped() {
 						finalState = "stopped"
@@ -505,6 +541,9 @@ func runServer(args []string) int {
 					return
 				}
 
+				signingSnapshot := admission.SigningSnapshot
+				release := admission.Release
+
 				if taskHandle != nil {
 					taskHandle.SetRunning(true)
 				}
@@ -517,7 +556,7 @@ func runServer(args []string) int {
 						return false
 					}
 					return taskHandle.IsStopped()
-				}, activeCfg)
+				}, signingSnapshot)
 				if taskHandle != nil {
 					taskHandle.SetRunning(false)
 				}
@@ -1206,6 +1245,87 @@ type localTaskOutcome struct {
 	Result app.Result
 }
 
+type localTaskAdmission struct {
+	SigningSnapshot *gitsigning.Snapshot
+	Release         func()
+	SigningErr      error
+	AcquireErr      error
+}
+
+func prepareLocalTaskAdmission(
+	ctx context.Context,
+	taskHandle *localTaskHandle,
+	loadSigning func(context.Context) (*gitsigning.Snapshot, error),
+	tryLoadSigning func(context.Context, *gitsigning.Snapshot) (*gitsigning.Snapshot, bool, error),
+	acquire func() (func(), error),
+) localTaskAdmission {
+	for {
+		snapshot, err := validatedSigningSnapshotForTask(ctx, taskHandle, loadSigning)
+		if err != nil {
+			return localTaskAdmission{SigningErr: err}
+		}
+		release, err := acquire()
+		if err != nil {
+			return localTaskAdmission{
+				SigningSnapshot: snapshot,
+				Release:         release,
+				AcquireErr:      err,
+			}
+		}
+		if taskHandle != nil && (taskHandle.IsPaused() || taskHandle.IsStopped()) {
+			release()
+			continue
+		}
+		snapshot, ready, err := tryLoadSigning(ctx, snapshot)
+		if err != nil {
+			release()
+			return localTaskAdmission{SigningErr: err}
+		}
+		if !ready {
+			release()
+			continue
+		}
+		if taskHandle != nil && (taskHandle.IsPaused() || taskHandle.IsStopped()) {
+			release()
+			continue
+		}
+		return localTaskAdmission{
+			SigningSnapshot: snapshot,
+			Release:         release,
+		}
+	}
+}
+
+func validatedSigningSnapshotForTask(
+	ctx context.Context,
+	taskHandle *localTaskHandle,
+	load func(context.Context) (*gitsigning.Snapshot, error),
+) (*gitsigning.Snapshot, error) {
+	for {
+		if taskHandle != nil {
+			if err := taskHandle.WaitUntilRunnable(ctx); err != nil {
+				return nil, err
+			}
+		}
+		snapshot, err := load(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if taskHandle == nil {
+			return snapshot, nil
+		}
+		if taskHandle.IsStopped() {
+			return nil, errTaskStoppedByOperator
+		}
+		if !taskHandle.IsPaused() {
+			return snapshot, nil
+		}
+		if err := taskHandle.WaitUntilRunnable(ctx); err != nil {
+			return nil, err
+		}
+	}
+}
+
 func runLocalTask(
 	ctx context.Context,
 	runner execx.Runner,
@@ -1215,7 +1335,7 @@ func runLocalTask(
 	runCfg config.Config,
 	finalReviewPasses int,
 	wasStopped func() bool,
-	signingConfigs ...localruntime.InitConfig,
+	signingSnapshot *gitsigning.Snapshot,
 ) localTaskOutcome {
 	logf(
 		"task status=start request_id=%s skill=%s repo=%s repos=%s",
@@ -1227,11 +1347,7 @@ func runLocalTask(
 
 	h := app.New(runner)
 	h.FinalReviewPasses = finalReviewPasses
-	var signingCfg localruntime.InitConfig
-	if len(signingConfigs) > 0 {
-		signingCfg = signingConfigs[0]
-	}
-	h.LoadSigning = signingSettings(signingCfg, runner).Snapshot
+	h.Signing = signingSnapshot
 	h.Logf = func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)
 		logf("task request_id=%s %s", requestID, line)

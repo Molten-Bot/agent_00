@@ -317,7 +317,7 @@ func (h *localTaskHandle) SetAcquireCancel(cancel context.CancelFunc) {
 
 	shouldCancel := false
 	h.mu.Lock()
-	if h.stopped {
+	if h.stopped || h.paused {
 		shouldCancel = true
 	} else {
 		h.acquireCancel = cancel
