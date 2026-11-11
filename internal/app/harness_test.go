@@ -3492,6 +3492,14 @@ func TestRunFailedTitleCheckAppliesAgentRequestedPRTitle(t *testing.T) {
 	h.Now = func() time.Time { return now }
 	h.Workspace = testWorkspaceManager(guid)
 	h.TargetDirOK = func(path string) bool { return path == targetDir }
+	sleepCalls := 0
+	h.Sleep = func(_ context.Context, d time.Duration) error {
+		sleepCalls++
+		if d != prTitleUpdatePropagationDelay {
+			t.Fatalf("sleep delay = %s, want %s", d, prTitleUpdatePropagationDelay)
+		}
+		return nil
+	}
 	h.Logf = func(format string, args ...any) {
 		logs = append(logs, fmt.Sprintf(format, args...))
 	}
@@ -3505,6 +3513,9 @@ func TestRunFailedTitleCheckAppliesAgentRequestedPRTitle(t *testing.T) {
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+	if sleepCalls != 1 {
+		t.Fatalf("sleepCalls = %d, want 1", sleepCalls)
 	}
 	if joined := strings.Join(logs, "\n"); !strings.Contains(joined, "stage=pr status=ok action=update_title") {
 		t.Fatalf("logs missing PR title update:\n%s", joined)
@@ -3877,10 +3888,8 @@ func TestRemediationPRTitleRequiresValidTerminalDirective(t *testing.T) {
 			ok:   true,
 		},
 		{
-			name: "stderr fallback",
+			name: "stderr prompt echo",
 			res:  execx.Result{Stderr: "PR title remediation: chore: repair CI\n"},
-			want: "chore: repair CI",
-			ok:   true,
 		},
 		{
 			name: "not terminal",

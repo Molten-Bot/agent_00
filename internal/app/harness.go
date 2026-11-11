@@ -76,6 +76,7 @@ const (
 	// Allow up to ~3 minutes for newly-created PR checks to appear before remediation.
 	maxPRChecksNoReportRetries       = 18
 	prChecksNoReportRetryDelay       = 10 * time.Second
+	prTitleUpdatePropagationDelay    = 10 * time.Second
 	maxCheckSummaryChars             = 4000
 	defaultCIWorkflowPath            = ".github/workflows/ci.yml"
 	ciFixLibraryTaskName             = "fix-pr-ci-tests"
@@ -1194,6 +1195,16 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		}
 		if strings.TrimSpace(statusRes.Stdout) == "" {
 			if titleRequested {
+				h.logf(
+					"stage=checks status=waiting reason=pr_title_updated repo=%s repo_dir=%s pr_url=%s attempt=%d",
+					repo.URL,
+					repo.RelDir,
+					repo.PRURL,
+					attempt+1,
+				)
+				if err := h.Sleep(ctx, prTitleUpdatePropagationDelay); err != nil {
+					return ExitPR, "checks", err
+				}
 				continue
 			}
 			if agentOutputClaimsFileChanges(agentRes) {
@@ -8040,26 +8051,25 @@ func remediationPromptForRepo(basePrompt, repoPath, repoURL, prURL, checkSummary
 	)
 }
 
-// remediationPRTitle accepts only a terminal, plain-text directive. Keeping
-// the protocol narrow avoids treating a quoted CI message or an intermediate
-// suggestion as authorization to mutate pull-request metadata.
+// remediationPRTitle accepts only a terminal, plain-text stdout directive.
+// Keeping the protocol narrow avoids treating a quoted CI message, prompt
+// echo on stderr, or an intermediate suggestion as authorization to mutate
+// pull-request metadata.
 func remediationPRTitle(res execx.Result) (string, bool) {
-	for _, output := range []string{res.Stdout, res.Stderr} {
-		lines := splitOutputLines(output)
-		for i := len(lines) - 1; i >= 0; i-- {
-			line := strings.TrimSpace(lines[i])
-			if line == "" {
-				continue
-			}
-			if !strings.HasPrefix(line, prTitleRemediationPrefix) {
-				break
-			}
-			title := strings.TrimSpace(strings.TrimPrefix(line, prTitleRemediationPrefix))
-			if title == "" || utf8.RuneCountInString(title) > maxPRTitleRunes || strings.ContainsAny(title, "\r\n\t") {
-				break
-			}
-			return title, true
+	lines := splitOutputLines(res.Stdout)
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
 		}
+		if !strings.HasPrefix(line, prTitleRemediationPrefix) {
+			break
+		}
+		title := strings.TrimSpace(strings.TrimPrefix(line, prTitleRemediationPrefix))
+		if title == "" || utf8.RuneCountInString(title) > maxPRTitleRunes || strings.ContainsAny(title, "\r\n\t") {
+			break
+		}
+		return title, true
 	}
 	return "", false
 }
