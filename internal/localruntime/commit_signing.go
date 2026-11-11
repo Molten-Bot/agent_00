@@ -451,3 +451,22 @@ func (s SigningSettings) Snapshot(ctx context.Context) (*gitsigning.Snapshot, er
 	}
 	return gitsigning.Load(s.keyDir(), cfg)
 }
+
+// ValidatedSnapshot loads signing material without repeating the remote GitHub
+// checks performed by ApplyEnvironment, Configure, or Verify. Long-lived
+// servers use this after their startup and submission gates have validated the
+// current settings; repeating those network calls after a task owns a scheduler
+// slot can leave the task visibly started but unable to reach its first stage.
+func (s SigningSettings) ValidatedSnapshot(context.Context) (*gitsigning.Snapshot, error) {
+	cfg, err := s.config()
+	if err != nil {
+		return nil, err
+	}
+	if !cfg.Enabled {
+		return nil, nil
+	}
+	if err := s.SetupRequirement(); err != nil {
+		return nil, err
+	}
+	return gitsigning.Load(s.keyDir(), cfg)
+}

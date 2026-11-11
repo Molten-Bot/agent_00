@@ -134,6 +134,51 @@ func TestSigningSettingsLifecycle(t *testing.T) {
 	}
 }
 
+func TestSigningSettingsValidatedSnapshotDoesNotRepeatGitHubChecks(t *testing.T) {
+	t.Parallel()
+	var requests atomic.Int64
+	registered := []map[string]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.URL.Path == "/user" {
+			json.NewEncoder(w).Encode(map[string]any{"login": "test-bot", "id": 123, "name": "Test Bot"})
+			return
+		}
+		json.NewEncoder(w).Encode(registered)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "config.json")
+	store := SigningSettings{
+		Path:   path,
+		Runner: execx.OSRunner{},
+		GitHub: func() gitsigning.GitHub {
+			return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()}
+		},
+	}
+	state, err := store.Configure(ctx, CommitSigningRequest{
+		PrivateKey: signingTestPrivateKey(t),
+		Passphrase: "test-passphrase",
+	})
+	if err != nil {
+		t.Fatalf("Configure(import) error = %v", err)
+	}
+	registered = append(registered, map[string]string{"key": state.PublicKey})
+	if _, err := store.Configure(ctx, CommitSigningRequest{Enabled: true}); err != nil {
+		t.Fatalf("Configure(enable) error = %v", err)
+	}
+
+	requests.Store(0)
+	snapshot, err := store.ValidatedSnapshot(ctx)
+	if err != nil || snapshot == nil {
+		t.Fatalf("ValidatedSnapshot() = (%v, %v), want non-nil snapshot", snapshot, err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("ValidatedSnapshot() made %d GitHub requests, want 0", got)
+	}
+}
+
 func TestSigningSettingsConcurrentUpdates(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "config.json")

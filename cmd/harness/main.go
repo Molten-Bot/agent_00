@@ -1231,7 +1231,10 @@ func runLocalTask(
 	if len(signingConfigs) > 0 {
 		signingCfg = signingConfigs[0]
 	}
-	h.LoadSigning = signingSettings(signingCfg, runner).Snapshot
+	// Server startup and every accepted submission already pass the signing
+	// validation gates. Load the validated local snapshot here so a task does
+	// not occupy a scheduler slot while repeating GitHub API checks.
+	h.LoadSigning = signingSettings(signingCfg, runner).ValidatedSnapshot
 	h.Logf = func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)
 		logf("task request_id=%s %s", requestID, line)
