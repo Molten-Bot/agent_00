@@ -91,7 +91,7 @@ func TestSigningEnvironmentCLIRejectsInvalidPrivateKeyAtStartup(t *testing.T) {
 	}
 }
 
-func TestSigningSubmissionGateHoldsTasksUntilKeyIsSaved(t *testing.T) {
+func TestSigningSubmissionGateFailsClosedUntilSigningReady(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv("HARNESS_RUNTIME_CONFIG_PATH", path)
 	if err := os.WriteFile(path, []byte(`{"commit_signing":{"enabled":true}}`), 0600); err != nil {
@@ -103,12 +103,13 @@ func TestSigningSubmissionGateHoldsTasksUntilKeyIsSaved(t *testing.T) {
 		t.Fatalf("submission accepted while signing was unconfigured: %v", err)
 	}
 
-	// Saving a key releases queued work without restarting the server.
+	// Saved metadata alone cannot release work. Admission must revalidate key
+	// ownership, registration, and local signing before accepting a task.
 	if err := os.WriteFile(path, []byte(`{"commit_signing":{"enabled":true,"key_id":"abc123"}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := signingSubmissionGate(ctx, localruntime.InitConfig{}, execx.OSRunner{}); err != nil {
-		t.Fatalf("submission still blocked after saving a key: %v", err)
+	if err := signingSubmissionGate(ctx, localruntime.InitConfig{}, execx.OSRunner{}); !errors.Is(err, gitsigning.ErrSetup) {
+		t.Fatalf("submission accepted without revalidating saved key: %v", err)
 	}
 
 	// Signing off leaves submissions unblocked.

@@ -200,10 +200,10 @@ func (s SigningSettings) Status(context.Context) (CommitSigningState, error) {
 // process checked rejected it.
 func (s SigningSettings) SetupRequirement() error { return s.setupRequirement(true) }
 
-// SubmissionRequirement reports the same hold for a task submission, with one
-// revalidation attempt against GitHub. A hold can come from a failure that has
-// since passed, such as GitHub being unreachable at startup, and without this
-// it would stick until the operator pressed Check registration. The attempt is
+// SubmissionRequirement validates signing before a task submission is
+// accepted. A hold can come from a failure that has since passed, such as
+// GitHub being unreachable at startup, and without a recheck it would stick
+// until the operator pressed Check registration. Rechecks of a held key are
 // serialized and rate limited by signingRecheckInterval, so a burst of held
 // submissions revalidates once instead of once per task.
 func (s SigningSettings) SubmissionRequirement(ctx context.Context) error {
@@ -212,23 +212,23 @@ func (s SigningSettings) SubmissionRequirement(ctx context.Context) error {
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
 	requirement := s.SetupRequirement()
-	if requirement == nil || s.bootHold() == nil {
-		// No hold means nothing a recheck can clear: the key itself is missing,
-		// or settings cannot be read.
+	if requirement != nil && s.bootHold() == nil {
+		// No saved-key hold means nothing a recheck can clear: the key itself is
+		// missing, or settings cannot be read.
 		return requirement
 	}
 	cfg, err := s.config()
 	if err != nil {
-		return requirement
+		return err
+	}
+	if !cfg.Enabled {
+		return nil
 	}
 	// Re-read the hold under the lock. A recheck that finished while this
 	// submission waited may have cleared or replaced it, and reporting the
 	// state this call started with would answer against a stale verdict.
 	held := s.bootHold()
-	if held == nil {
-		return s.SetupRequirement()
-	}
-	if s.now().Sub(gate.checked) < signingRecheckInterval {
+	if held != nil && s.now().Sub(gate.checked) < signingRecheckInterval {
 		return held
 	}
 	gate.checked = s.now()
@@ -458,6 +458,12 @@ func (s SigningSettings) Snapshot(ctx context.Context) (*gitsigning.Snapshot, er
 // current settings; repeating those network calls after a task owns a scheduler
 // slot can leave the task visibly started but unable to reach its first stage.
 func (s SigningSettings) ValidatedSnapshot(context.Context) (*gitsigning.Snapshot, error) {
+	// Configure replaces the key before its remote validation finishes. Share
+	// its gate so this fast path cannot load that replacement until Configure
+	// either validates it or records a hold.
+	gate := s.recheckGate()
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
 	cfg, err := s.config()
 	if err != nil {
 		return nil, err

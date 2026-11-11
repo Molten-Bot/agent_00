@@ -134,7 +134,7 @@ func TestSigningSettingsLifecycle(t *testing.T) {
 	}
 }
 
-func TestSigningSettingsValidatedSnapshotDoesNotRepeatGitHubChecks(t *testing.T) {
+func TestSigningSubmissionRevalidatesBeforeValidatedSnapshot(t *testing.T) {
 	t.Parallel()
 	var requests atomic.Int64
 	registered := []map[string]string{}
@@ -170,12 +170,36 @@ func TestSigningSettingsValidatedSnapshotDoesNotRepeatGitHubChecks(t *testing.T)
 	}
 
 	requests.Store(0)
+	if err := store.SubmissionRequirement(ctx); err != nil {
+		t.Fatalf("SubmissionRequirement() error = %v", err)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("SubmissionRequirement() made %d GitHub requests, want 2", got)
+	}
+
+	requests.Store(0)
 	snapshot, err := store.ValidatedSnapshot(ctx)
 	if err != nil || snapshot == nil {
 		t.Fatalf("ValidatedSnapshot() = (%v, %v), want non-nil snapshot", snapshot, err)
 	}
 	if got := requests.Load(); got != 0 {
 		t.Fatalf("ValidatedSnapshot() made %d GitHub requests, want 0", got)
+	}
+
+	registered = nil
+	if err := store.SubmissionRequirement(ctx); !errors.Is(err, ErrSigningSetupRequired) {
+		t.Fatalf("SubmissionRequirement() accepted revoked key: %v", err)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("revoked-key submission made %d GitHub requests, want 2", got)
+	}
+
+	requests.Store(0)
+	if snapshot, err := store.ValidatedSnapshot(ctx); snapshot != nil || !errors.Is(err, ErrSigningSetupRequired) {
+		t.Fatalf("ValidatedSnapshot() after revocation = (%v, %v), want setup hold", snapshot, err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("held ValidatedSnapshot() made %d GitHub requests, want 0", got)
 	}
 }
 
@@ -326,9 +350,19 @@ func TestSigningSubmissionWaitsForReplacementValidation(t *testing.T) {
 	}
 	submitted := make(chan error, 1)
 	go func() { submitted <- store.SubmissionRequirement(ctx) }()
+	snapshotLoaded := make(chan error, 1)
+	go func() {
+		_, err := store.ValidatedSnapshot(ctx)
+		snapshotLoaded <- err
+	}()
 	select {
 	case err := <-submitted:
 		t.Fatalf("submission returned before replacement validation finished: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	select {
+	case err := <-snapshotLoaded:
+		t.Fatalf("snapshot loaded before replacement validation finished: %v", err)
 	case <-time.After(100 * time.Millisecond):
 	}
 	unblock()
@@ -342,6 +376,14 @@ func TestSigningSubmissionWaitsForReplacementValidation(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("submission did not finish after replacement validation")
+	}
+	select {
+	case err := <-snapshotLoaded:
+		if !errors.Is(err, ErrSigningSetupRequired) {
+			t.Fatalf("unregistered replacement loaded into snapshot: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("snapshot load did not finish after replacement validation")
 	}
 }
 
