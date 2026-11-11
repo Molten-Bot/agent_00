@@ -9066,16 +9066,7 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   margin-left: auto;
 }
 
-.github-issues-branch-filter {
-  display: inline-flex;
-  overflow: hidden;
-  border: 1px solid var(--surface-control-border);
-  border-radius: var(--radius-card);
-  background: var(--surface-control-bg);
-  box-shadow: var(--surface-control-shadow);
-}
-
-.github-issues-branch-filter button,
+.github-issues-branch-filter,
 .github-issues-assignee-filter {
   display: inline-flex;
   flex: 0 0 30px;
@@ -9095,18 +9086,8 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   transition: color .15s ease, border-color .15s ease, background .15s ease;
 }
 
-.github-issues-branch-filter button {
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-}
-
-.github-issues-branch-filter button + button {
-  border-left: 1px solid var(--surface-control-border);
-}
-
-.github-issues-branch-filter button:hover,
-.github-issues-branch-filter button:focus-visible,
+.github-issues-branch-filter:hover,
+.github-issues-branch-filter:focus-visible,
 .github-issues-assignee-filter:hover,
 .github-issues-assignee-filter:focus-visible {
   border-color: var(--running);
@@ -9114,7 +9095,7 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   outline: none;
 }
 
-.github-issues-branch-filter button[aria-pressed="true"],
+.github-issues-branch-filter,
 .github-issues-assignee-filter[aria-pressed="true"] {
   border-color: color-mix(in srgb, var(--running) 48%, var(--surface-control-border));
   background: var(--accent-soft);
@@ -9125,6 +9106,10 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 .github-issues-assignee-filter svg {
   width: 16px;
   height: 16px;
+}
+
+.github-issues-branch-filter [hidden] {
+  display: none;
 }
 
 .github-issues-list {

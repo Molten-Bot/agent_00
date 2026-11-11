@@ -7,7 +7,7 @@
   const repoSelect = document.getElementById("github-issues-repo");
   const searchInput = document.getElementById("github-issues-search");
   const branchFilter = document.getElementById("github-issues-branch-filter");
-  const branchFilterButtons = branchFilter ? Array.from(branchFilter.querySelectorAll("[data-branch-filter]")) : [];
+  const branchFilterIcons = branchFilter ? Array.from(branchFilter.querySelectorAll("[data-branch-filter-icon]")) : [];
   const assigneeFilter = document.getElementById("github-issues-assignee-filter");
   const filters = document.getElementById("github-issues-filters");
   const issueList = document.getElementById("github-issues-list");
@@ -22,7 +22,12 @@
   const assigneeStorageKey = "hubui.githubIssuesAssignee.v1";
   const branchStorageKey = "hubui.githubIssuesBranch.v1";
   const assigneeFilterLabel = "Show only issues assigned to me";
-  const branchFilterValues = new Set(["all", "with", "without"]);
+  const branchFilterOptions = [
+    { value: "all", label: "All" },
+    { value: "with", label: "With branch" },
+    { value: "without", label: "Without branch" },
+  ];
+  const branchFilterValues = new Set(branchFilterOptions.map((option) => option.value));
   let savedLayout = {};
   try { savedLayout = JSON.parse(localStorage.getItem(layoutStorageKey) || "{}"); } catch (_error) { savedLayout = {}; }
 
@@ -107,9 +112,12 @@
 
   function setBranchFilter(value) {
     const next = branchFilterValues.has(value) ? value : "all";
+    const option = branchFilterOptions.find((candidate) => candidate.value === next) || branchFilterOptions[0];
     branchFilter.dataset.value = next;
-    for (const button of branchFilterButtons) {
-      button.setAttribute("aria-pressed", String(button.dataset.branchFilter === next));
+    branchFilter.setAttribute("aria-label", `Branch filter: ${option.label}`);
+    branchFilter.title = option.label;
+    for (const icon of branchFilterIcons) {
+      icon.hidden = icon.dataset.branchFilterIcon !== next;
     }
   }
 
@@ -858,16 +866,14 @@
       void loadIssues();
     }, 250);
   });
-  for (const button of branchFilterButtons) {
-    button.addEventListener("click", () => {
-      const value = button.dataset.branchFilter;
-      if (!branchFilterValues.has(value) || value === branchFilterValue()) return;
-      setBranchFilter(value);
-      try { localStorage.setItem(branchStorageKey, value); } catch (_error) { /* Ignore unavailable storage. */ }
-      track("github_issues_branch_filter_changed", { branch_filter: value, source: "github_issues" });
-      void loadIssues();
-    });
-  }
+  branchFilter.addEventListener("click", () => {
+    const currentIndex = branchFilterOptions.findIndex((option) => option.value === branchFilterValue());
+    const next = branchFilterOptions[(currentIndex + 1) % branchFilterOptions.length].value;
+    setBranchFilter(next);
+    try { localStorage.setItem(branchStorageKey, next); } catch (_error) { /* Ignore unavailable storage. */ }
+    track("github_issues_branch_filter_changed", { branch_filter: next, source: "github_issues" });
+    void loadIssues();
+  });
   filters.addEventListener("submit", (event) => {
     event.preventDefault();
     void loadIssues();

@@ -586,7 +586,7 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
 	page := response.Body.String()
-	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `href="#studio-issues"`, `data-prompt-title-mode="issues"`, `id="github-issues-panel"`, "github-issues-repo", "github-issues-search", "github-issues-branch-filter", `data-lucide="git-branch"`, `data-lucide="git-branch-plus"`, `data-lucide="git-branch-minus"`, "With branch", "Without branch", `Issues (<span id="github-issues-count">0</span>):`, "github-issues-assignee-filter", "user-round-arrow-left", "review-settings-github-issues-link-mode", "review-settings-github-issues-link-close", `href="/static/style.css?v=5"`, "github-issues.js"} {
+	for _, want := range []string{"GitHub Issues", "agent-00-header", "github-issues-dock-link", `href="#studio-issues"`, `data-prompt-title-mode="issues"`, `id="github-issues-panel"`, "github-issues-repo", "github-issues-search", "github-issues-branch-filter", `data-lucide="git-branch"`, `data-lucide="git-branch-plus"`, `data-lucide="git-branch-minus"`, `Issues (<span id="github-issues-count">0</span>):`, "github-issues-assignee-filter", "user-round-arrow-left", "review-settings-github-issues-link-mode", "review-settings-github-issues-link-close", `href="/static/style.css?v=6"`, `src="/static/github-issues.js?v=18"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page is missing %q", want)
 		}
@@ -598,6 +598,15 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	}
 	if strings.Contains(page, `<select id="github-issues-branch-filter"`) {
 		t.Error("branch filter should use icon buttons, not a dropdown")
+	}
+	branchFilterMarkup := page[branchFilterAt:assigneeFilterAt]
+	if count := strings.Count(branchFilterMarkup, `</button>`); count != 1 {
+		t.Errorf("branch filter renders %d buttons, want one cycling button", count)
+	}
+	for _, value := range []string{"all", "with", "without"} {
+		if !strings.Contains(branchFilterMarkup, `data-branch-filter-icon="`+value+`"`) {
+			t.Errorf("branch filter is missing %q cycle icon", value)
+		}
 	}
 	if strings.Contains(page, "github-issues.css") {
 		t.Error("GitHub Issues should share the common stylesheet")
