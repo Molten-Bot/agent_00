@@ -137,14 +137,27 @@ func TestValidatedSigningSnapshotForTaskRechecksPausedState(t *testing.T) {
 
 	loadStarted := make(chan struct{})
 	finishLoad := make(chan struct{})
-	loaded := make(chan error, 1)
+	loaded := make(chan *gitsigning.Snapshot, 1)
+	loadCount := 0
+	snapshots := []*gitsigning.Snapshot{
+		{KeyPath: "stale"},
+		{KeyPath: "refreshed"},
+	}
 	go func() {
-		_, err := validatedSigningSnapshotForTask(context.Background(), handle, func(context.Context) (*gitsigning.Snapshot, error) {
-			close(loadStarted)
-			<-finishLoad
-			return nil, nil
+		snapshot, err := validatedSigningSnapshotForTask(context.Background(), handle, func(context.Context) (*gitsigning.Snapshot, error) {
+			if loadCount == 0 {
+				close(loadStarted)
+				<-finishLoad
+			}
+			snapshot := snapshots[loadCount]
+			loadCount++
+			return snapshot, nil
 		})
-		loaded <- err
+		if err != nil {
+			loaded <- nil
+			return
+		}
+		loaded <- snapshot
 	}()
 
 	<-loadStarted
@@ -153,8 +166,8 @@ func TestValidatedSigningSnapshotForTaskRechecksPausedState(t *testing.T) {
 	}
 	close(finishLoad)
 	select {
-	case err := <-loaded:
-		t.Fatalf("snapshot returned while task paused: %v", err)
+	case snapshot := <-loaded:
+		t.Fatalf("snapshot returned while task paused: %+v", snapshot)
 	case <-time.After(20 * time.Millisecond):
 	}
 
@@ -162,9 +175,12 @@ func TestValidatedSigningSnapshotForTaskRechecksPausedState(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	select {
-	case err := <-loaded:
-		if err != nil {
-			t.Fatalf("validatedSigningSnapshotForTask() error = %v", err)
+	case snapshot := <-loaded:
+		if snapshot == nil {
+			t.Fatal("validatedSigningSnapshotForTask() returned nil snapshot")
+		}
+		if got, want := snapshot.KeyPath, "refreshed"; got != want {
+			t.Fatalf("snapshot.KeyPath = %q, want refreshed %q", got, want)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("snapshot did not return after Run()")

@@ -456,36 +456,6 @@ func runServer(args []string) int {
 					}
 				}
 
-				signingSnapshot, signingErr := validatedSigningSnapshotForTask(
-					runCtx,
-					taskHandle,
-					signingSettings(activeCfg, runner).ValidatedSnapshot,
-				)
-				if signingErr != nil {
-					if taskHandle != nil && taskHandle.IsStopped() {
-						finalState = "stopped"
-						daemonLogger("task status=stopped request_id=%s err=%q", requestID, errTaskStoppedByOperator)
-						return
-					}
-					finalState = "error"
-					daemonLogger("task status=error request_id=%s err=%q", requestID, signingErr)
-					if !errors.Is(signingErr, context.Canceled) {
-						failedResult := app.Result{
-							ExitCode: app.ExitConfig,
-							Err:      fmt.Errorf("task signing: %w", signingErr),
-						}
-						if allowFailureFollowUp {
-							if queueFailureRerun != nil {
-								queueFailureRerun(requestID, failedResult, runCfg, source)
-							}
-							if queueFailureFollowUp != nil {
-								queueFailureFollowUp(requestID, failedResult, runCfg, source)
-							}
-						}
-					}
-					return
-				}
-
 				acquireCtx, cancelAcquire := context.WithCancel(runCtx)
 				if taskHandle != nil {
 					taskHandle.SetAcquireCancel(cancelAcquire)
@@ -522,6 +492,37 @@ func runServer(args []string) int {
 						failedResult := app.Result{
 							ExitCode: app.ExitPreflight,
 							Err:      fmt.Errorf("task acquire: %w", acquireErr),
+						}
+						if allowFailureFollowUp {
+							if queueFailureRerun != nil {
+								queueFailureRerun(requestID, failedResult, runCfg, source)
+							}
+							if queueFailureFollowUp != nil {
+								queueFailureFollowUp(requestID, failedResult, runCfg, source)
+							}
+						}
+					}
+					return
+				}
+
+				signingSnapshot, signingErr := validatedSigningSnapshotForTask(
+					runCtx,
+					taskHandle,
+					signingSettings(activeCfg, runner).ValidatedSnapshot,
+				)
+				if signingErr != nil {
+					release()
+					if taskHandle != nil && taskHandle.IsStopped() {
+						finalState = "stopped"
+						daemonLogger("task status=stopped request_id=%s err=%q", requestID, errTaskStoppedByOperator)
+						return
+					}
+					finalState = "error"
+					daemonLogger("task status=error request_id=%s err=%q", requestID, signingErr)
+					if !errors.Is(signingErr, context.Canceled) {
+						failedResult := app.Result{
+							ExitCode: app.ExitConfig,
+							Err:      fmt.Errorf("task signing: %w", signingErr),
 						}
 						if allowFailureFollowUp {
 							if queueFailureRerun != nil {
@@ -1241,16 +1242,29 @@ func validatedSigningSnapshotForTask(
 	taskHandle *localTaskHandle,
 	load func(context.Context) (*gitsigning.Snapshot, error),
 ) (*gitsigning.Snapshot, error) {
-	snapshot, err := load(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if taskHandle != nil {
+	for {
+		if taskHandle != nil {
+			if err := taskHandle.WaitUntilRunnable(ctx); err != nil {
+				return nil, err
+			}
+		}
+		snapshot, err := load(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if taskHandle == nil {
+			return snapshot, nil
+		}
+		if taskHandle.IsStopped() {
+			return nil, errTaskStoppedByOperator
+		}
+		if !taskHandle.IsPaused() {
+			return snapshot, nil
+		}
 		if err := taskHandle.WaitUntilRunnable(ctx); err != nil {
 			return nil, err
 		}
 	}
-	return snapshot, nil
 }
 
 func runLocalTask(
