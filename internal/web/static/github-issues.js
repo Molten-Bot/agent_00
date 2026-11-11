@@ -183,6 +183,27 @@
     return node;
   }
 
+  function createLoadingIcon() {
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.classList.add("task-action-glyph-loader");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("fill", "none");
+    icon.setAttribute("stroke", "currentColor");
+    icon.setAttribute("stroke-width", "2");
+    icon.setAttribute("stroke-linecap", "round");
+    icon.setAttribute("stroke-linejoin", "round");
+    icon.setAttribute("aria-hidden", "true");
+    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    circle.setAttribute("cx", "12");
+    circle.setAttribute("cy", "12");
+    circle.setAttribute("r", "10");
+    icon.appendChild(circle);
+    const arc = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    arc.setAttribute("d", "M12 2a10 10 0 0 1 10 10");
+    icon.appendChild(arc);
+    return icon;
+  }
+
   const markdownTags = new Set([
     "A", "BLOCKQUOTE", "BR", "CODE", "DEL", "DETAILS", "DIV", "EM", "H1", "H2", "H3", "H4", "H5", "H6",
     "HR", "IMG", "INPUT", "KBD", "LI", "MARK", "OL", "P", "PRE", "S", "STRONG", "SUB", "SUMMARY", "SUP",
@@ -485,6 +506,7 @@
 
   function renderIssueList(issues) {
     issueList.replaceChildren();
+    issueList.setAttribute("aria-busy", "false");
     const total = `${issues.length}${issues.length === 100 ? "+" : ""}`;
     if (issueCount) issueCount.textContent = total;
     if (!issues.length) {
@@ -509,24 +531,7 @@
         const loading = addText(title, "span", "github-issue-loading task-icons-breathe", "");
         loading.setAttribute("role", "status");
         loading.setAttribute("aria-label", "Loading issue details");
-        const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        icon.classList.add("task-action-glyph-loader");
-        icon.setAttribute("viewBox", "0 0 24 24");
-        icon.setAttribute("fill", "none");
-        icon.setAttribute("stroke", "currentColor");
-        icon.setAttribute("stroke-width", "2");
-        icon.setAttribute("stroke-linecap", "round");
-        icon.setAttribute("stroke-linejoin", "round");
-        icon.setAttribute("aria-hidden", "true");
-        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-        circle.setAttribute("cx", "12");
-        circle.setAttribute("cy", "12");
-        circle.setAttribute("r", "10");
-        icon.appendChild(circle);
-        const arc = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        arc.setAttribute("d", "M12 2a10 10 0 0 1 10 10");
-        icon.appendChild(arc);
-        loading.appendChild(icon);
+        loading.appendChild(createLoadingIcon());
       }
       const meta = addText(button, "span", "github-issue-list-meta", "");
       addText(meta, "span", "", `#${issue.number}`);
@@ -537,6 +542,18 @@
       item.appendChild(button);
       issueList.appendChild(item);
     }
+  }
+
+  function renderIssueListLoading() {
+    issueList.replaceChildren();
+    issueList.setAttribute("aria-busy", "true");
+    if (issueCount) issueCount.textContent = "…";
+    const item = document.createElement("li");
+    item.className = "github-issues-loading task-icons-breathe";
+    item.setAttribute("role", "status");
+    item.setAttribute("aria-label", "Loading issues");
+    item.appendChild(createLoadingIcon());
+    issueList.appendChild(item);
   }
 
   function renderIssueDetail(issue) {
@@ -749,6 +766,7 @@
     }
     renderEmptyDetail("Choose an issue", "Select an issue to review its description, comments, and task options.");
     const generation = ++requestGeneration;
+    renderIssueListLoading();
     setStatus(`Loading issues for ${repo.full_name}…`);
     const query = new URLSearchParams({ repo: repo.full_name, state: "open" });
     const searchQuery = searchInput.value.trim();
@@ -774,6 +792,9 @@
       setStatus("");
     } catch (error) {
       if (generation === requestGeneration) {
+        issueList.replaceChildren();
+        issueList.setAttribute("aria-busy", "false");
+        if (issueCount) issueCount.textContent = "0";
         setStatus(error.message || "Unable to load issues.", "error");
         track("github_issues_load_failed", analyticsParams);
       }
