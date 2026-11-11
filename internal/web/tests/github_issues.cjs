@@ -282,6 +282,32 @@ test('an issue with nobody assigned says so instead of rendering an empty row', 
   assert.equal(await page.locator('.github-issue-assignee-empty').innerText(), 'Unassigned');
 });
 
+test('changing an issue filter shows a loading icon while results update', async t => {
+  const page = await openIssue(t, assignedIssue);
+  let releaseResponse;
+  let markRequestStarted;
+  const requestStarted = new Promise(resolve => { markRequestStarted = resolve; });
+  await page.route('**/api/github/issues?**', async route => {
+    markRequestStarted();
+    await new Promise(resolve => { releaseResponse = resolve; });
+    await route.fulfill({ json: { ok: true, issues: [] } });
+  });
+
+  await page.locator('[data-branch-filter="with"]').click();
+  await requestStarted;
+  const list = page.locator('#github-issues-list');
+  const loading = list.locator('.github-issues-loading');
+  assert.equal(await list.getAttribute('aria-busy'), 'true');
+  assert.equal(await loading.getAttribute('aria-label'), 'Loading issues');
+  assert.equal(await loading.locator('.task-action-glyph-loader').count(), 1);
+  assert.equal(await page.locator('#github-issues-count').innerText(), '…');
+
+  releaseResponse();
+  await page.waitForFunction(() => document.getElementById('github-issues-list').getAttribute('aria-busy') === 'false');
+  assert.equal(await loading.count(), 0);
+  assert.equal(await page.locator('#github-issues-count').innerText(), '0');
+});
+
 test('header, list, and byline times read in the viewer timezone', async t => {
   const tokyo = await openIssue(t, assignedIssue, { timezoneId: 'Asia/Tokyo' });
   const headerTimes = tokyo.locator('.github-issue-metadata time');
