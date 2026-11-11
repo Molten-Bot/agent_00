@@ -17,6 +17,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
+	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
@@ -1492,6 +1493,7 @@ func TestRunLocalTaskReportsErrorState(t *testing.T) {
 		},
 		0,
 		nil,
+		nil,
 	)
 
 	if outcome.State != "error" {
@@ -1519,6 +1521,7 @@ func TestRunLocalTaskReportsStoppedStateWithoutCancelCause(t *testing.T) {
 		},
 		0,
 		func() bool { return true },
+		nil,
 	)
 
 	if outcome.State != "stopped" {
@@ -1551,6 +1554,7 @@ func TestRunLocalTaskReportsStoppedStateWithCancelCause(t *testing.T) {
 		},
 		0,
 		func() bool { return true },
+		nil,
 	)
 
 	if outcome.State != "stopped" {
@@ -1560,7 +1564,7 @@ func TestRunLocalTaskReportsStoppedStateWithCancelCause(t *testing.T) {
 	assertLogContains(t, logs, customCause.Error())
 }
 
-func TestRunLocalTaskUsesProvidedSigningConfig(t *testing.T) {
+func TestRunLocalTaskReportsErrorWithSigningSnapshot(t *testing.T) {
 	t.Parallel()
 
 	var logs []string
@@ -1576,7 +1580,7 @@ func TestRunLocalTaskUsesProvidedSigningConfig(t *testing.T) {
 		},
 		0,
 		nil,
-		localruntime.InitConfig{AgentHarness: "claude"},
+		&gitsigning.Snapshot{},
 	)
 
 	if outcome.State != "error" {

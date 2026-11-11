@@ -83,16 +83,33 @@ const signingRecheckInterval = 30 * time.Second
 // two concurrent rechecks that interleave can write their verdicts out of
 // order and leave the gate open against the failing one.
 type signingRecheckGate struct {
-	mu      sync.Mutex
+	token   chan struct{}
 	checked time.Time
 }
 
 var signingRecheckGates sync.Map
 
 func (s SigningSettings) recheckGate() *signingRecheckGate {
-	gate, _ := signingRecheckGates.LoadOrStore(s.path(), &signingRecheckGate{})
+	newGate := &signingRecheckGate{token: make(chan struct{}, 1)}
+	newGate.token <- struct{}{}
+	gate, _ := signingRecheckGates.LoadOrStore(s.path(), newGate)
 	return gate.(*signingRecheckGate)
 }
+
+func (g *signingRecheckGate) lock(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-g.token:
+		if err := ctx.Err(); err != nil {
+			g.unlock()
+			return err
+		}
+		return nil
+	}
+}
+
+func (g *signingRecheckGate) unlock() { g.token <- struct{}{} }
 
 func (s SigningSettings) now() time.Time {
 	if s.Now != nil {
@@ -209,8 +226,10 @@ func (s SigningSettings) SetupRequirement() error { return s.setupRequirement(tr
 func (s SigningSettings) SubmissionRequirement(ctx context.Context) error {
 	// Read settings only after pending changes and their validation finish.
 	gate := s.recheckGate()
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
+	if err := gate.lock(ctx); err != nil {
+		return err
+	}
+	defer gate.unlock()
 	requirement := s.SetupRequirement()
 	if requirement != nil && s.bootHold() == nil {
 		// No saved-key hold means nothing a recheck can clear: the key itself is
@@ -306,8 +325,10 @@ func (s SigningSettings) Configure(ctx context.Context, req CommitSigningRequest
 	// its older verdict over this one, reopening submissions against settings
 	// that just failed.
 	gate := s.recheckGate()
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
+	if err := gate.lock(ctx); err != nil {
+		return CommitSigningState{}, err
+	}
+	defer gate.unlock()
 	current, err := s.config()
 	if err != nil {
 		return signingState(current), err
@@ -394,8 +415,10 @@ func (s SigningSettings) Verify(ctx context.Context) (CommitSigningState, error)
 	// operator-driven check would make the next submission wait it out instead
 	// of revalidating a key the operator may have fixed in between.
 	gate := s.recheckGate()
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
+	if err := gate.lock(ctx); err != nil {
+		return CommitSigningState{}, err
+	}
+	defer gate.unlock()
 	cfg, err := s.config()
 	state := signingState(cfg)
 	if err != nil {
@@ -454,16 +477,17 @@ func (s SigningSettings) Snapshot(ctx context.Context) (*gitsigning.Snapshot, er
 
 // ValidatedSnapshot loads signing material without repeating the remote GitHub
 // checks performed by ApplyEnvironment, Configure, or Verify. Long-lived
-// servers use this after their startup and submission gates have validated the
-// current settings; repeating those network calls after a task owns a scheduler
-// slot can leave the task visibly started but unable to reach its first stage.
-func (s SigningSettings) ValidatedSnapshot(context.Context) (*gitsigning.Snapshot, error) {
+// servers use this after their startup and submission gates validate current
+// settings, but before a task acquires a scheduler slot.
+func (s SigningSettings) ValidatedSnapshot(ctx context.Context) (*gitsigning.Snapshot, error) {
 	// Configure replaces the key before its remote validation finishes. Share
 	// its gate so this fast path cannot load that replacement until Configure
 	// either validates it or records a hold.
 	gate := s.recheckGate()
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
+	if err := gate.lock(ctx); err != nil {
+		return nil, err
+	}
+	defer gate.unlock()
 	cfg, err := s.config()
 	if err != nil {
 		return nil, err

@@ -456,6 +456,32 @@ func runServer(args []string) int {
 					}
 				}
 
+				signingSnapshot, signingErr := signingSettings(activeCfg, runner).ValidatedSnapshot(runCtx)
+				if signingErr != nil {
+					if taskHandle != nil && taskHandle.IsStopped() {
+						finalState = "stopped"
+						daemonLogger("task status=stopped request_id=%s err=%q", requestID, errTaskStoppedByOperator)
+						return
+					}
+					finalState = "error"
+					daemonLogger("task status=error request_id=%s err=%q", requestID, signingErr)
+					if !errors.Is(signingErr, context.Canceled) {
+						failedResult := app.Result{
+							ExitCode: app.ExitConfig,
+							Err:      fmt.Errorf("task signing: %w", signingErr),
+						}
+						if allowFailureFollowUp {
+							if queueFailureRerun != nil {
+								queueFailureRerun(requestID, failedResult, runCfg, source)
+							}
+							if queueFailureFollowUp != nil {
+								queueFailureFollowUp(requestID, failedResult, runCfg, source)
+							}
+						}
+					}
+					return
+				}
+
 				acquireCtx, cancelAcquire := context.WithCancel(runCtx)
 				if taskHandle != nil {
 					taskHandle.SetAcquireCancel(cancelAcquire)
@@ -517,7 +543,7 @@ func runServer(args []string) int {
 						return false
 					}
 					return taskHandle.IsStopped()
-				}, activeCfg)
+				}, signingSnapshot)
 				if taskHandle != nil {
 					taskHandle.SetRunning(false)
 				}
@@ -1215,7 +1241,7 @@ func runLocalTask(
 	runCfg config.Config,
 	finalReviewPasses int,
 	wasStopped func() bool,
-	signingConfigs ...localruntime.InitConfig,
+	signingSnapshot *gitsigning.Snapshot,
 ) localTaskOutcome {
 	logf(
 		"task status=start request_id=%s skill=%s repo=%s repos=%s",
@@ -1227,14 +1253,7 @@ func runLocalTask(
 
 	h := app.New(runner)
 	h.FinalReviewPasses = finalReviewPasses
-	var signingCfg localruntime.InitConfig
-	if len(signingConfigs) > 0 {
-		signingCfg = signingConfigs[0]
-	}
-	// Server startup and every accepted submission already pass the signing
-	// validation gates. Load the validated local snapshot here so a task does
-	// not occupy a scheduler slot while repeating GitHub API checks.
-	h.LoadSigning = signingSettings(signingCfg, runner).ValidatedSnapshot
+	h.Signing = signingSnapshot
 	h.Logf = func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)
 		logf("task request_id=%s %s", requestID, line)

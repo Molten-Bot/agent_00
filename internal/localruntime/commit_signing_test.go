@@ -365,6 +365,11 @@ func TestSigningSubmissionWaitsForReplacementValidation(t *testing.T) {
 		t.Fatalf("snapshot loaded before replacement validation finished: %v", err)
 	case <-time.After(100 * time.Millisecond):
 	}
+	canceledCtx, cancelSnapshot := context.WithCancel(ctx)
+	cancelSnapshot()
+	if snapshot, err := store.ValidatedSnapshot(canceledCtx); snapshot != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled ValidatedSnapshot() = (%v, %v), want context cancellation", snapshot, err)
+	}
 	unblock()
 	if err := <-configured; !errors.Is(err, gitsigning.ErrSetup) {
 		t.Fatalf("unregistered replacement = %v, want setup error", err)
