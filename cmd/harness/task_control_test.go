@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
 
@@ -120,6 +121,67 @@ func TestLocalTaskControllerPauseRunningTaskDefersUntilNextRunnableWait(t *testi
 	defer waitCancel()
 	if err := handle.WaitUntilRunnable(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("WaitUntilRunnable(paused) error = %v, want deadline exceeded", err)
+	}
+}
+
+func TestValidatedSigningSnapshotForTaskRechecksPausedState(t *testing.T) {
+	t.Parallel()
+
+	controller := newLocalTaskController()
+	_, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	handle := controller.Register("local-signing", cancel)
+	if handle == nil {
+		t.Fatal("Register() returned nil handle")
+	}
+
+	loadStarted := make(chan struct{})
+	finishLoad := make(chan struct{})
+	loaded := make(chan error, 1)
+	go func() {
+		_, err := validatedSigningSnapshotForTask(context.Background(), handle, func(context.Context) (*gitsigning.Snapshot, error) {
+			close(loadStarted)
+			<-finishLoad
+			return nil, nil
+		})
+		loaded <- err
+	}()
+
+	<-loadStarted
+	if err := controller.Pause("local-signing"); err != nil {
+		t.Fatalf("Pause() error = %v", err)
+	}
+	close(finishLoad)
+	select {
+	case err := <-loaded:
+		t.Fatalf("snapshot returned while task paused: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := controller.Run("local-signing"); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	select {
+	case err := <-loaded:
+		if err != nil {
+			t.Fatalf("validatedSigningSnapshotForTask() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("snapshot did not return after Run()")
+	}
+}
+
+func TestLocalTaskHandleSetAcquireCancelCancelsWhenPaused(t *testing.T) {
+	t.Parallel()
+
+	handle := &localTaskHandle{paused: true}
+	canceled := make(chan struct{})
+	handle.SetAcquireCancel(func() { close(canceled) })
+
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("SetAcquireCancel() did not cancel paused acquisition")
 	}
 }
 

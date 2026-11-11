@@ -456,7 +456,11 @@ func runServer(args []string) int {
 					}
 				}
 
-				signingSnapshot, signingErr := signingSettings(activeCfg, runner).ValidatedSnapshot(runCtx)
+				signingSnapshot, signingErr := validatedSigningSnapshotForTask(
+					runCtx,
+					taskHandle,
+					signingSettings(activeCfg, runner).ValidatedSnapshot,
+				)
 				if signingErr != nil {
 					if taskHandle != nil && taskHandle.IsStopped() {
 						finalState = "stopped"
@@ -1230,6 +1234,23 @@ func writeStderrLine(logger *terminalLogger, line string) {
 type localTaskOutcome struct {
 	State  string
 	Result app.Result
+}
+
+func validatedSigningSnapshotForTask(
+	ctx context.Context,
+	taskHandle *localTaskHandle,
+	load func(context.Context) (*gitsigning.Snapshot, error),
+) (*gitsigning.Snapshot, error) {
+	snapshot, err := load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if taskHandle != nil {
+		if err := taskHandle.WaitUntilRunnable(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return snapshot, nil
 }
 
 func runLocalTask(
