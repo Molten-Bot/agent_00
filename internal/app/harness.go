@@ -1203,10 +1203,8 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		requestedTitle, titleRequested := remediationPRTitle(agentRes)
 		if titleRequested {
 			h.logf("stage=pr status=start action=update_title repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
-			if _, err := h.runCommand(ctx, "pr", prEditTitleCommand(repo.Dir, repo.PRURL, requestedTitle)); err != nil {
-				// Runner errors include command arguments, so wrapping err here would
-				// disclose the customer-derived title supplied after --title.
-				return ExitPR, "pr", fmt.Errorf("update pull request title for repo %s failed", repo.URL)
+			if editRes, err := h.runCommand(ctx, "pr", prEditTitleCommand(repo.Dir, repo.PRURL, requestedTitle)); err != nil {
+				return ExitPR, "pr", prTitleEditError(repo.URL, requestedTitle, editRes)
 			}
 			h.logf("stage=pr status=ok action=update_title repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 		}
@@ -3226,6 +3224,20 @@ func commandErrorWithDetails(prefix string, err error, res execx.Result, maxChar
 		return fmt.Errorf("%s: %w", prefix, err)
 	}
 	return fmt.Errorf("%s: %w: %s", prefix, err, detail)
+}
+
+func prTitleEditError(repoURL, requestedTitle string, res execx.Result) error {
+	// Runner errors include command arguments, so they disclose the title passed
+	// after --title. Preserve gh's actionable output after redacting that value.
+	if requestedTitle != "" {
+		res.Stdout = strings.ReplaceAll(res.Stdout, requestedTitle, "[redacted pull request title]")
+		res.Stderr = strings.ReplaceAll(res.Stderr, requestedTitle, "[redacted pull request title]")
+	}
+	detail := summarizeCommandErrorDetail(res, maxGitErrorDetailChars)
+	if detail == "" {
+		return fmt.Errorf("update pull request title for repo %s failed", repoURL)
+	}
+	return fmt.Errorf("update pull request title for repo %s failed: %s", repoURL, detail)
 }
 
 func (h Harness) refreshRepoChangeStateAfterNoOpCommit(

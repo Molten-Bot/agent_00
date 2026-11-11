@@ -3561,6 +3561,7 @@ func TestRunFailedPRTitleEditDoesNotExposeRequestedTitle(t *testing.T) {
 		},
 		{
 			cmd: prEditTitleCommand(repoDir, prURL, requestedTitle),
+			res: execx.Result{Stderr: "GraphQL: could not update pull request " + requestedTitle + ": resource not accessible"},
 			err: fmt.Errorf("run gh [pr edit --title %s]: exit status 1", requestedTitle),
 		},
 	}}
@@ -3582,6 +3583,12 @@ func TestRunFailedPRTitleEditDoesNotExposeRequestedTitle(t *testing.T) {
 	}
 	if !strings.Contains(res.Err.Error(), "update pull request title") {
 		t.Fatalf("Run() error = %q, want title update context", res.Err)
+	}
+	if !strings.Contains(res.Err.Error(), "resource not accessible") {
+		t.Fatalf("Run() error = %q, want gh diagnostic", res.Err)
+	}
+	if !strings.Contains(res.Err.Error(), "[redacted pull request title]") {
+		t.Fatalf("Run() error = %q, want redacted title marker", res.Err)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
