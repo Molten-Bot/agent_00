@@ -22,11 +22,10 @@
   const assigneeStorageKey = "hubui.githubIssuesAssignee.v1";
   const branchStorageKey = "hubui.githubIssuesBranch.v1";
   const assigneeFilterLabel = "Show only issues assigned to me";
-  const branchFilterOptions = [
-    { value: "all", label: "All" },
-    { value: "with", label: "With branch" },
-    { value: "without", label: "Without branch" },
-  ];
+  const branchFilterOptions = branchFilterIcons.map((icon) => ({
+    value: icon.dataset.branchFilterIcon,
+    label: icon.dataset.branchFilterLabel,
+  }));
   const branchFilterValues = new Set(branchFilterOptions.map((option) => option.value));
   let savedLayout = {};
   try { savedLayout = JSON.parse(localStorage.getItem(layoutStorageKey) || "{}"); } catch (_error) { savedLayout = {}; }
@@ -114,6 +113,8 @@
     const next = branchFilterValues.has(value) ? value : "all";
     const option = branchFilterOptions.find((candidate) => candidate.value === next) || branchFilterOptions[0];
     branchFilter.dataset.value = next;
+    const optionIndex = branchFilterOptions.indexOf(option);
+    branchFilter.dataset.branchFilter = branchFilterOptions[(optionIndex + 1) % branchFilterOptions.length].value;
     branchFilter.setAttribute("aria-label", `Branch filter: ${option.label}`);
     branchFilter.title = option.label;
     for (const icon of branchFilterIcons) {

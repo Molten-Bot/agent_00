@@ -392,10 +392,10 @@
                   <div class="github-issues-list-heading">
                     <h2 id="github-issues-list-title">Issues (<span id="github-issues-count">0</span>):</h2>
                     <div class="github-issues-list-heading-actions">
-                      <button id="github-issues-branch-filter" class="github-issues-branch-filter" type="button" data-value="all" aria-label="Branch filter: All" title="All">
-                        <i data-branch-filter-icon="all" data-lucide="git-branch" aria-hidden="true"></i>
-                        <i data-branch-filter-icon="with" data-lucide="git-branch-plus" aria-hidden="true" hidden></i>
-                        <i data-branch-filter-icon="without" data-lucide="git-branch-minus" aria-hidden="true" hidden></i>
+                      <button id="github-issues-branch-filter" class="github-issues-branch-filter" type="button" data-value="all" data-branch-filter="with" aria-label="Branch filter: All" title="All">
+                        <i data-branch-filter-icon="all" data-branch-filter-label="All" data-lucide="git-branch" aria-hidden="true"></i>
+                        <i data-branch-filter-icon="with" data-branch-filter-label="With branch" data-lucide="git-branch-plus" aria-hidden="true" hidden></i>
+                        <i data-branch-filter-icon="without" data-branch-filter-label="Without branch" data-lucide="git-branch-minus" aria-hidden="true" hidden></i>
                       </button>
                       <!-- Assigned-to-me is the default; github-issues.js applies a stored preference before the browser is unhidden. -->
                       <button id="github-issues-assignee-filter" class="github-issues-assignee-filter" type="button" aria-pressed="true" aria-label="Show only issues assigned to me" title="Show only issues assigned to me">

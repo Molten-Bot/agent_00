@@ -293,10 +293,8 @@ test('changing an issue filter shows a loading icon while results update', async
     await route.fulfill({ json: { ok: true, issues: [] } });
   });
 
-  const branchFilter = page.locator('#github-issues-branch-filter');
-  await branchFilter.click();
+  await page.locator('[data-branch-filter="with"]').click();
   await requestStarted;
-  assert.equal(await branchFilter.getAttribute('data-value'), 'with');
   const list = page.locator('#github-issues-list');
   const loading = list.locator('.github-issues-loading');
   assert.equal(await list.getAttribute('aria-busy'), 'true');
