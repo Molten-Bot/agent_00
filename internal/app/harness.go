@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/config"
@@ -94,6 +95,9 @@ const (
 	maxReviewDiffStatChars           = 12000
 	maxReviewDiffPatchChars          = 30000
 	measuredQualityTargetInstruction = "When a task or review requires a test, coverage, lint, or quality target, first make underlying code or test changes and run the measurement. Add or raise the required gate only after the target passes. Keep an existing required gate; do not remove it merely to make validation pass. If the target cannot be met safely in this pass, report Failure and Error details instead of making gate-only changes."
+	prTitleRemediationInstruction    = "If the failing check can only be fixed by changing the pull-request title, do not mutate the PR or report Failure. Put this exact plain-text directive as the final line of your response: PR title remediation: <replacement title>. The harness will apply it."
+	prTitleRemediationPrefix         = "PR title remediation:"
+	maxPRTitleRunes                  = 256
 	bootstrapGitUserName             = "agent_00"
 	bootstrapGitUserEmail            = "bot@molten.bot"
 	bootstrapMainCommitMessage       = "chore: initialize main branch"
@@ -1175,11 +1179,23 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 			return ExitGit, "git", err
 		}
 
+		requestedTitle, titleRequested := remediationPRTitle(agentRes)
+		if titleRequested {
+			h.logf("stage=pr status=start action=update_title repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
+			if _, err := h.runCommand(ctx, "pr", prEditTitleCommand(repo.Dir, repo.PRURL, requestedTitle)); err != nil {
+				return ExitPR, "pr", fmt.Errorf("update pull request title for repo %s: %w", repo.URL, err)
+			}
+			h.logf("stage=pr status=ok action=update_title repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
+		}
+
 		statusRes, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
 		if err != nil {
 			return ExitGit, "git", err
 		}
 		if strings.TrimSpace(statusRes.Stdout) == "" {
+			if titleRequested {
+				continue
+			}
 			if agentOutputClaimsFileChanges(agentRes) {
 				return ExitCodex, agentStage, fmt.Errorf("%s reported remediation file changes, but git detected no worktree or branch changes for repo %s", agentStage, repo.URL)
 			}
@@ -7795,6 +7811,10 @@ func prCommentCommand(repoDir, prURL, body string) execx.Command {
 	return ghCommand(repoDir, "pr", "comment", prURL, "--body", body)
 }
 
+func prEditTitleCommand(repoDir, prURL, title string) execx.Command {
+	return ghCommand(repoDir, "pr", "edit", prURL, "--title", title)
+}
+
 func prCreateWithOptionsCommand(repoDir string, cfg config.Config, baseBranch, headRef, repo string) execx.Command {
 	return prCreateCommandWithBase(repoDir, cfg, true, baseBranch, headRef, repo)
 }
@@ -7990,8 +8010,9 @@ func withImplementationTargetGuard(prompt string) string {
 func remediationPrompt(basePrompt, prURL, checkSummary string, attempt int) string {
 	ciFixPrompt := ciFixLibraryPrompt()
 	return fmt.Sprintf(
-		"%s\n\nRemediation round %d/%d.\nAn open PR already exists: %s\n\nPR CI/CD checks are failing right now.\nLatest check output:\n%s\n\nOriginal task context:\n%s",
+		"%s\n\n%s\n\nRemediation round %d/%d.\nAn open PR already exists: %s\n\nPR CI/CD checks are failing right now.\nLatest check output:\n%s\n\nOriginal task context:\n%s",
 		ciFixPrompt,
+		prTitleRemediationInstruction,
 		attempt,
 		maxPRCheckRemediationAttempts,
 		prURL,
@@ -8006,8 +8027,9 @@ func remediationPromptForRepo(basePrompt, repoPath, repoURL, prURL, checkSummary
 	}
 	ciFixPrompt := ciFixLibraryPrompt()
 	return fmt.Sprintf(
-		"%s\n\nRemediation round %d/%d.\nTarget repository workspace path: %s\nTarget repository remote: %s\nAn open PR already exists for this repository: %s\n\nPR CI/CD checks are failing right now for this repository.\nLatest check output:\n%s\n\nFocus remediation changes on this repository. If you also change other repositories, ensure each changed repository has its own branch and PR.\n\nOriginal task context:\n%s",
+		"%s\n\n%s\n\nRemediation round %d/%d.\nTarget repository workspace path: %s\nTarget repository remote: %s\nAn open PR already exists for this repository: %s\n\nPR CI/CD checks are failing right now for this repository.\nLatest check output:\n%s\n\nFocus remediation changes on this repository. If you also change other repositories, ensure each changed repository has its own branch and PR.\n\nOriginal task context:\n%s",
 		ciFixPrompt,
+		prTitleRemediationInstruction,
 		attempt,
 		maxPRCheckRemediationAttempts,
 		repoPath,
@@ -8016,6 +8038,30 @@ func remediationPromptForRepo(basePrompt, repoPath, repoURL, prURL, checkSummary
 		checkSummary,
 		strings.TrimSpace(basePrompt),
 	)
+}
+
+// remediationPRTitle accepts only a terminal, plain-text directive. Keeping
+// the protocol narrow avoids treating a quoted CI message or an intermediate
+// suggestion as authorization to mutate pull-request metadata.
+func remediationPRTitle(res execx.Result) (string, bool) {
+	for _, output := range []string{res.Stdout, res.Stderr} {
+		lines := splitOutputLines(output)
+		for i := len(lines) - 1; i >= 0; i-- {
+			line := strings.TrimSpace(lines[i])
+			if line == "" {
+				continue
+			}
+			if !strings.HasPrefix(line, prTitleRemediationPrefix) {
+				break
+			}
+			title := strings.TrimSpace(strings.TrimPrefix(line, prTitleRemediationPrefix))
+			if title == "" || utf8.RuneCountInString(title) > maxPRTitleRunes || strings.ContainsAny(title, "\r\n\t") {
+				break
+			}
+			return title, true
+		}
+	}
+	return "", false
 }
 
 func baseSyncConflictPrompt(basePrompt, repoPath, repoURL, branch, baseBranch string, mergeRes execx.Result) string {

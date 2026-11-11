@@ -3448,6 +3448,69 @@ func TestRunFailedChecksTriggersCodexRemediation(t *testing.T) {
 	}
 }
 
+func TestRunFailedTitleCheckAppliesAgentRequestedPRTitle(t *testing.T) {
+	t.Parallel()
+
+	cfg := sampleConfig()
+	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
+	guid := "abcdef123456"
+	runDir := testRunDir(guid)
+	agentsPath := filepath.Join(runDir, "AGENTS.md")
+	repoDir := filepath.Join(runDir, "repo")
+	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
+	branch := "agent00-build-api"
+	prURL := "https://github.com/acme/repo/pull/42"
+	checkSummary := "check-title\tfail\t4s"
+	replacementTitle := "feat(#42): build API"
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "codex", Args: []string{"--help"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"auth", "status"}}},
+		{cmd: cloneCommand(cfg, repoDir)},
+		{cmd: branchCommand(repoDir, branch)},
+		{cmd: pushDryRunCommand(repoDir, branch)},
+		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: " M file.go\n"}},
+		{cmd: addCommand(repoDir)},
+		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
+		{cmd: pushCommand(repoDir, branch)},
+		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
+		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: checkSummary + "\n"}, err: errors.New("checks failed")},
+		{
+			cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1)),
+			res: execx.Result{Stdout: "Repository files need no changes.\n" + prTitleRemediationPrefix + " " + replacementTitle + "\n"},
+		},
+		{cmd: prEditTitleCommand(repoDir, prURL, replacementTitle)},
+		{cmd: statusCommand(repoDir)},
+		{cmd: prChecksCommand(repoDir, prURL)},
+	}}
+
+	var logs []string
+	h := New(fake)
+	h.Now = func() time.Time { return now }
+	h.Workspace = testWorkspaceManager(guid)
+	h.TargetDirOK = func(path string) bool { return path == targetDir }
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	res := h.Run(context.Background(), cfg)
+	if res.Err != nil {
+		t.Fatalf("Run() err = %v", res.Err)
+	}
+	if res.ExitCode != ExitSuccess {
+		t.Fatalf("ExitCode = %d, want %d", res.ExitCode, ExitSuccess)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+	if joined := strings.Join(logs, "\n"); !strings.Contains(joined, "stage=pr status=ok action=update_title") {
+		t.Fatalf("logs missing PR title update:\n%s", joined)
+	}
+}
+
 func TestRunTreatsChecksWatchTimeoutWithAllChecksPassingAsSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -3786,6 +3849,7 @@ func TestRemediationPromptUsesCIFixLibraryTask(t *testing.T) {
 	for _, want := range []string{
 		"You are a senior software engineer fixing pull-request CI failures.",
 		"Check PR CI status with gh.",
+		"PR title remediation: <replacement title>",
 		"Remediation round 1/3.",
 		"PR CI/CD checks are failing right now.",
 		"unit tests failed",
@@ -3794,6 +3858,56 @@ func TestRemediationPromptUsesCIFixLibraryTask(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("remediationPrompt() missing %q in:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestRemediationPRTitleRequiresValidTerminalDirective(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		res  execx.Result
+		want string
+		ok   bool
+	}{
+		{
+			name: "stdout",
+			res:  execx.Result{Stdout: "No repository diff needed.\nPR title remediation: fix(#17): repair CI\n"},
+			want: "fix(#17): repair CI",
+			ok:   true,
+		},
+		{
+			name: "stderr fallback",
+			res:  execx.Result{Stderr: "PR title remediation: chore: repair CI\n"},
+			want: "chore: repair CI",
+			ok:   true,
+		},
+		{
+			name: "not terminal",
+			res:  execx.Result{Stdout: "PR title remediation: fix: repair CI\nMore explanation.\n"},
+		},
+		{
+			name: "markdown wrapped",
+			res:  execx.Result{Stdout: "`PR title remediation: fix: repair CI`\n"},
+		},
+		{
+			name: "empty title",
+			res:  execx.Result{Stdout: "PR title remediation:\n"},
+		},
+		{
+			name: "title too long",
+			res:  execx.Result{Stdout: "PR title remediation: " + strings.Repeat("x", maxPRTitleRunes+1)},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := remediationPRTitle(tc.res)
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("remediationPRTitle() = (%q, %t), want (%q, %t)", got, ok, tc.want, tc.ok)
+			}
+		})
 	}
 }
 
@@ -5699,6 +5813,12 @@ func TestCommandBuilders(t *testing.T) {
 	wantChecks := []string{"pr", "checks", "42", "--watch", "--interval", "10"}
 	if checks.Name != "gh" || checks.Dir != repoDir || !reflect.DeepEqual(checks.Args, wantChecks) {
 		t.Fatalf("pr checks command unexpected: %+v", checks)
+	}
+
+	editTitle := prEditTitleCommand(repoDir, "https://github.com/acme/repo/pull/42", "fix: repair CI")
+	wantEditTitle := []string{"pr", "edit", "https://github.com/acme/repo/pull/42", "--title", "fix: repair CI"}
+	if editTitle.Name != "gh" || editTitle.Dir != repoDir || !reflect.DeepEqual(editTitle.Args, wantEditTitle) {
+		t.Fatalf("pr edit title command unexpected: %+v", editTitle)
 	}
 
 	allChecks := prChecksAnyCommand(repoDir, "https://github.com/acme/repo/pull/42")
