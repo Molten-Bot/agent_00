@@ -70,11 +70,12 @@ async function close(page, method = 'button') {
 for (const harness of ['claude', 'codex']) test(`settings reopen ${harness} sign-in and recover after completion`, async t => {
   let auth = { harness, required: true, ready: true, state: 'ready' };
   let starts = 0;
+  let verifies = 0;
   const { page, writes } = await openSettings(t, { configurePage: async page => {
     await page.route('**/api/status', route => route.fulfill({
       json: { tasks: [], events: [], repositories: [], stats: {}, resources: {} },
     }));
-    await page.route('**/api/agent-auth**', route => {
+    await page.route('**/api/agent-auth**', async route => {
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith('/reauthenticate')) {
         assert.equal(route.request().method(), 'POST');
@@ -84,7 +85,13 @@ for (const harness of ['claude', 'codex']) test(`settings reopen ${harness} sign
           auth_url: harness === 'claude' ? 'https://claude.com/cai/oauth/authorize?code=true&state=test' : 'https://auth.openai.com/device',
           accepts_browser_code: harness === 'claude', device_code: harness === 'codex' ? 'ABCD-EFGH' : '',
         };
-      } else if (path.endsWith('/configure') || path.endsWith('/verify')) {
+      } else if (path.endsWith('/configure')) {
+        auth = { harness, required: true, ready: true, state: 'ready' };
+      } else if (path.endsWith('/verify')) {
+        verifies++;
+        // A ready configure response is final. Delay exposes any redundant
+        // verification request that hides the gate while submit stays locked.
+        if (harness === 'claude') await new Promise(resolve => setTimeout(resolve, 500));
         auth = { harness, required: true, ready: true, state: 'ready' };
       }
       return route.fulfill({ json: { ok: true, auth } });
@@ -110,6 +117,7 @@ for (const harness of ['claude', 'codex']) test(`settings reopen ${harness} sign
   await page.reload();
   await page.waitForFunction(() => document.getElementById('agent-auth-gate').classList.contains('hidden'));
   assert.equal(starts, 1, 'reload uses refreshed auth without starting another login');
+  assert.equal(verifies, harness === 'claude' ? 0 : 1, 'ready configure response skips redundant verification');
 });
 
 test('reauthentication preserves settings when saving fails', async t => {

@@ -9226,8 +9226,28 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   text-align: center;
 }
 
+.github-issues-loading {
+  display: grid;
+  min-height: 100%;
+  place-content: center;
+  color: var(--running);
+}
+
+.github-issues-loading .task-action-glyph-loader {
+  width: 24px;
+  height: 24px;
+}
+
 .github-issues-list:has(.github-issues-empty) {
   display: flex;
+}
+
+.github-issues-list:has(.github-issues-loading) {
+  display: flex;
+}
+
+.github-issues-list:has(.github-issues-loading) .github-issues-loading {
+  flex: 1 1 auto;
 }
 
 .github-issues-list:has(.github-issues-empty) .github-issues-empty {
