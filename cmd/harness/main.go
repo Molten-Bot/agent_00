@@ -1261,10 +1261,21 @@ func prepareLocalTaskAdmission(
 		return localTaskAdmission{SigningErr: err}
 	}
 	release, err := acquire()
+	if err != nil {
+		return localTaskAdmission{
+			SigningSnapshot: snapshot,
+			Release:         release,
+			AcquireErr:      err,
+		}
+	}
+	snapshot, err = validatedSigningSnapshotForTask(ctx, taskHandle, loadSigning)
+	if err != nil {
+		release()
+		return localTaskAdmission{SigningErr: err}
+	}
 	return localTaskAdmission{
 		SigningSnapshot: snapshot,
 		Release:         release,
-		AcquireErr:      err,
 	}
 }
 

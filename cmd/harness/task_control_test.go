@@ -187,21 +187,26 @@ func TestValidatedSigningSnapshotForTaskRechecksPausedState(t *testing.T) {
 	}
 }
 
-func TestPrepareLocalTaskAdmissionValidatesSigningBeforeAcquire(t *testing.T) {
+func TestPrepareLocalTaskAdmissionRefreshesSigningAfterAcquire(t *testing.T) {
 	t.Parallel()
 
 	loadStarted := make(chan struct{})
 	finishLoad := make(chan struct{})
 	acquireCalled := make(chan struct{})
+	loadCount := 0
 	admitted := make(chan localTaskAdmission, 1)
 	go func() {
 		admitted <- prepareLocalTaskAdmission(
 			context.Background(),
 			nil,
 			func(context.Context) (*gitsigning.Snapshot, error) {
-				close(loadStarted)
-				<-finishLoad
-				return &gitsigning.Snapshot{KeyPath: "validated"}, nil
+				loadCount++
+				if loadCount == 1 {
+					close(loadStarted)
+					<-finishLoad
+					return &gitsigning.Snapshot{KeyPath: "initial"}, nil
+				}
+				return &gitsigning.Snapshot{KeyPath: "refreshed"}, nil
 			},
 			func() (func(), error) {
 				close(acquireCalled)
@@ -223,14 +228,49 @@ func TestPrepareLocalTaskAdmissionValidatesSigningBeforeAcquire(t *testing.T) {
 		if admission.SigningErr != nil || admission.AcquireErr != nil {
 			t.Fatalf("prepareLocalTaskAdmission() errors = (%v, %v)", admission.SigningErr, admission.AcquireErr)
 		}
-		if admission.SigningSnapshot == nil || admission.SigningSnapshot.KeyPath != "validated" {
+		if admission.SigningSnapshot == nil || admission.SigningSnapshot.KeyPath != "refreshed" {
 			t.Fatalf("prepareLocalTaskAdmission() snapshot = %+v", admission.SigningSnapshot)
+		}
+		if loadCount != 2 {
+			t.Fatalf("signing snapshot load count = %d, want 2", loadCount)
 		}
 		if admission.Release == nil {
 			t.Fatal("prepareLocalTaskAdmission() returned nil release")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("task admission did not finish after signing snapshot loaded")
+	}
+}
+
+func TestPrepareLocalTaskAdmissionReleasesAfterRefreshFailure(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("refresh signing")
+	loadCount := 0
+	released := false
+	admission := prepareLocalTaskAdmission(
+		context.Background(),
+		nil,
+		func(context.Context) (*gitsigning.Snapshot, error) {
+			loadCount++
+			if loadCount == 2 {
+				return nil, wantErr
+			}
+			return &gitsigning.Snapshot{KeyPath: "initial"}, nil
+		},
+		func() (func(), error) {
+			return func() { released = true }, nil
+		},
+	)
+
+	if !errors.Is(admission.SigningErr, wantErr) {
+		t.Fatalf("prepareLocalTaskAdmission() signing error = %v, want %v", admission.SigningErr, wantErr)
+	}
+	if !released {
+		t.Fatal("scheduler slot was not released after signing refresh failed")
+	}
+	if admission.Release != nil {
+		t.Fatal("prepareLocalTaskAdmission() returned release after already releasing slot")
 	}
 }
 
