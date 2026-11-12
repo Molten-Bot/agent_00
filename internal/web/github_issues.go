@@ -49,14 +49,19 @@ type githubIssueListEntry struct {
 	ID string `json:"id"`
 }
 
+type githubDevelopmentAssociationNode struct {
+	ID             string `json:"id"`
+	LinkedBranches struct {
+		TotalCount int `json:"totalCount"`
+	} `json:"linkedBranches"`
+	ClosedByPullRequestsReferences struct {
+		TotalCount int `json:"totalCount"`
+	} `json:"closedByPullRequestsReferences"`
+}
+
 type githubLinkedBranchResponse struct {
 	Data struct {
-		Nodes []struct {
-			ID             string `json:"id"`
-			LinkedBranches struct {
-				TotalCount int `json:"totalCount"`
-			} `json:"linkedBranches"`
-		} `json:"nodes"`
+		Nodes []githubDevelopmentAssociationNode `json:"nodes"`
 	} `json:"data"`
 	Errors []struct {
 		Message string `json:"message"`
@@ -314,7 +319,7 @@ func (s Server) githubIssueSearchCount(ctx context.Context, repository, state, s
 }
 
 func (s Server) githubIssuesWithLinkedBranches(ctx context.Context, issues []githubIssueListEntry) (map[string]bool, error) {
-	const query = `query($ids:[ID!]!){nodes(ids:$ids){... on Issue{id linkedBranches(first:1){totalCount}}}}`
+	const query = `query($ids:[ID!]!){nodes(ids:$ids){... on Issue{id linkedBranches(first:1){totalCount} closedByPullRequestsReferences(first:1,includeClosedPrs:true){totalCount}}}}`
 	for _, issue := range issues {
 		if strings.TrimSpace(issue.ID) == "" {
 			return nil, fmt.Errorf("GitHub issue %d is missing its node ID", issue.Number)
@@ -340,7 +345,7 @@ func (s Server) githubIssuesWithLinkedBranches(ctx context.Context, issues []git
 		}
 		for _, node := range response.Data.Nodes {
 			if node.ID != "" {
-				linked[node.ID] = node.LinkedBranches.TotalCount > 0
+				linked[node.ID] = node.LinkedBranches.TotalCount > 0 || node.ClosedByPullRequestsReferences.TotalCount > 0
 			}
 		}
 	}
