@@ -305,7 +305,7 @@ func TestGitHubIssueListFiltersByLinkedBranch(t *testing.T) {
 				t.Fatalf("commands = %#v, want issue list followed by Development-association query", commands)
 			}
 			graphqlArgs := strings.Join(commands[1].Args, " ")
-			if len(commands[1].Args) < 6 || !strings.Contains(strings.Join(commands[0].Args, " "), "--json id,number") || !strings.Contains(graphqlArgs, "linkedBranches(first:1)") || !strings.Contains(graphqlArgs, "closedByPullRequestsReferences(first:1)") || !reflect.DeepEqual(commands[1].Args[len(commands[1].Args)-6:], []string{"-F", "ids[]=I_17", "-F", "ids[]=I_18", "-F", "ids[]=I_19"}) {
+			if len(commands[1].Args) < 6 || !strings.Contains(strings.Join(commands[0].Args, " "), "--json id,number") || !strings.Contains(graphqlArgs, "linkedBranches(first:1)") || !strings.Contains(graphqlArgs, "closedByPullRequestsReferences(first:1,includeClosedPrs:true)") || !reflect.DeepEqual(commands[1].Args[len(commands[1].Args)-6:], []string{"-F", "ids[]=I_17", "-F", "ids[]=I_18", "-F", "ids[]=I_19"}) {
 				t.Fatalf("commands = %#v, want issue IDs followed by batched Development-association query", commands)
 			}
 			for _, wantNumber := range tc.wantNumbers {
