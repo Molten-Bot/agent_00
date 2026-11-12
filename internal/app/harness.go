@@ -3663,6 +3663,18 @@ func (h Harness) runFinalReviewCycle(
 		if !ok {
 			return ExitCodex, "review", fmt.Errorf("post-task review pass %d returned no valid structured outcome", pass)
 		}
+		outcome, ignoredHistoryFindings := normalizeFinalReviewOutcome(outcome)
+		if ignoredHistoryFindings > 0 {
+			h.logf(
+				"stage=review status=warn action=ignore_history_findings pass=%d total=%d findings=%d repo=%s repo_dir=%s pr_url=%s",
+				pass,
+				passLabelTotal,
+				ignoredHistoryFindings,
+				repo.URL,
+				repo.RelDir,
+				repo.PRURL,
+			)
+		}
 		switch outcome.Status {
 		case "blocked":
 			return ExitCodex, "review", fmt.Errorf("post-task review pass %d was blocked: %s", pass, strings.TrimSpace(outcome.Summary))
@@ -3817,7 +3829,7 @@ func finalReviewMode(passes int) string {
 
 func finalReviewPrompt(originalPrompt, preparedContext string, pass, total int) string {
 	return strings.TrimSpace(fmt.Sprintf(
-		"%s\n\nPost-task review pass %d/%d. Review the current pull request independently. Follow the bundled review skill as the controlling review standard and return its structured outcome.\n\nScope note: this cycle reviews code changes on the existing pull request branch and commit history the harness already established. Branch selection, PR creation/target, and commit-message/co-author mechanics from the original task prompt are one-time setup steps managed by the harness, not something a fix pass can alter (it is explicitly restricted to updating the existing branch without new commits or branch changes). Do not report branch target, commit metadata, or PR-creation instructions as blocking findings; focus findings on code correctness, tests, and task completeness.\n\nOriginal task prompt:\n%s\n\n%s",
+		"%s\n\nPost-task review pass %d/%d. Review the current pull request independently. Follow the bundled review skill as the controlling review standard and return its structured outcome.\n\nScope note: this cycle reviews file-content changes on the existing pull request branch. The harness exclusively owns branch selection, base synchronization, merges, rebases, cherry-picks, commits, pushes, PR creation/target, and commit-message/co-author mechanics. Never report ancestry, branch freshness, commit topology, or any other issue whose only repair requires changing Git metadata or history. Omit such issues instead of asking the repair agent to perform them. Focus findings on code correctness, tests, and task completeness that can be fixed by editing working-tree files. If a structured finding nevertheless requires a branch or history change, set `requiresBranchHistoryChange` to true so the harness will not send it to a file-repair pass.\n\nOriginal task prompt:\n%s\n\n%s",
 		codeReviewLibraryPrompt(),
 		pass,
 		total,
@@ -3844,6 +3856,7 @@ func finalReviewFixPrompt(originalPrompt string, repo repoWorkspace, findings []
 	b.WriteString(fmt.Sprintf("\n\nAutomated review repair pass %d/%d.\n", pass, total))
 	b.WriteString("For this automated pass, the isolated findings below are the complete repair input. Do not independently collect, act on, or broaden the change to other PR comments or earlier pass findings.\n")
 	b.WriteString("Update the existing pull request branch; do not create a new pull request or change branches.\n")
+	b.WriteString("The runtime exposes Git metadata read-only. Do not merge, rebase, cherry-pick, commit, stage, reset, switch branches, or run any other command that writes `.git`; only edit working-tree files.\n")
 	b.WriteString("Do not commit or push; leave the verified changes for the harness.\n\n")
 	b.WriteString(measuredQualityTargetInstruction + "\n\n")
 	b.WriteString("Original task prompt:\n")
@@ -4054,10 +4067,11 @@ func (h Harness) loadPullRequestDiscussion(ctx context.Context, repoDir string, 
 }
 
 type reviewFinding struct {
-	Severity string `json:"severity"`
-	Path     string `json:"path"`
-	Line     int    `json:"line"`
-	Title    string `json:"title"`
+	Severity                    string `json:"severity"`
+	Path                        string `json:"path"`
+	Line                        int    `json:"line"`
+	Title                       string `json:"title"`
+	RequiresBranchHistoryChange bool   `json:"requiresBranchHistoryChange,omitempty"`
 }
 
 type reviewOutcome struct {
@@ -4066,6 +4080,38 @@ type reviewOutcome struct {
 	Summary    string          `json:"summary"`
 	Positives  []string        `json:"positives"`
 	Findings   []reviewFinding `json:"findings"`
+}
+
+// normalizeFinalReviewOutcome keeps automated repair passes within their
+// writable boundary. The harness owns Git metadata and history, while review
+// fix agents can only edit working-tree files. A reviewer may still surface a
+// branch-history observation despite the prompt, so remove explicitly marked
+// findings before deciding whether to invoke a repair agent.
+func normalizeFinalReviewOutcome(outcome reviewOutcome) (reviewOutcome, int) {
+	if len(outcome.Findings) == 0 {
+		return outcome, 0
+	}
+
+	kept := make([]reviewFinding, 0, len(outcome.Findings))
+	ignored := 0
+	for _, finding := range outcome.Findings {
+		if finding.RequiresBranchHistoryChange {
+			ignored++
+			continue
+		}
+		kept = append(kept, finding)
+	}
+	if ignored == 0 {
+		return outcome, 0
+	}
+
+	outcome.Findings = kept
+	if len(kept) == 0 && outcome.Status == "findings" {
+		outcome.Status = "clean"
+		outcome.MergeReady = true
+		outcome.Summary = "No actionable file-content findings."
+	}
+	return outcome, ignored
 }
 
 func (h Harness) completeReviewRun(

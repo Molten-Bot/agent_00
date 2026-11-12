@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -297,6 +298,53 @@ func TestParseReviewOutcome(t *testing.T) {
 		}
 		if outcome.Summary != "second" {
 			t.Fatalf("outcome.Summary = %q, want %q (last valid block)", outcome.Summary, "second")
+		}
+	})
+}
+
+func TestNormalizeFinalReviewOutcome(t *testing.T) {
+	t.Parallel()
+
+	t.Run("drops history-only finding and marks outcome clean", func(t *testing.T) {
+		t.Parallel()
+		outcome, ignored := normalizeFinalReviewOutcome(reviewOutcome{
+			Status:     "findings",
+			MergeReady: false,
+			Summary:    "history update needed",
+			Findings: []reviewFinding{{
+				Title:                       "Merge the base branch",
+				RequiresBranchHistoryChange: true,
+			}},
+		})
+		if ignored != 1 || outcome.Status != "clean" || !outcome.MergeReady || len(outcome.Findings) != 0 {
+			t.Fatalf("normalizeFinalReviewOutcome() = (%+v, %d), want clean outcome with one ignored finding", outcome, ignored)
+		}
+	})
+
+	t.Run("retains file-edit finding", func(t *testing.T) {
+		t.Parallel()
+		want := reviewOutcome{
+			Status:     "findings",
+			MergeReady: false,
+			Findings:   []reviewFinding{{Title: "Handle the error"}},
+		}
+		got, ignored := normalizeFinalReviewOutcome(want)
+		if ignored != 0 || !reflect.DeepEqual(got, want) {
+			t.Fatalf("normalizeFinalReviewOutcome() = (%+v, %d), want unchanged %+v", got, ignored, want)
+		}
+	})
+
+	t.Run("keeps file-edit findings while dropping history-only findings", func(t *testing.T) {
+		t.Parallel()
+		outcome, ignored := normalizeFinalReviewOutcome(reviewOutcome{
+			Status: "findings",
+			Findings: []reviewFinding{
+				{Title: "Handle the error"},
+				{Title: "Rebase the branch", RequiresBranchHistoryChange: true},
+			},
+		})
+		if ignored != 1 || outcome.Status != "findings" || len(outcome.Findings) != 1 || outcome.Findings[0].Title != "Handle the error" {
+			t.Fatalf("normalizeFinalReviewOutcome() = (%+v, %d), want one retained file finding", outcome, ignored)
 		}
 	})
 }

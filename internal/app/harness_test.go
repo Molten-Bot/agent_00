@@ -9569,6 +9569,8 @@ func TestFinalReviewFixPromptRequiresMeasuredQualityTargets(t *testing.T) {
 	)
 
 	for _, want := range []string{
+		"The runtime exposes Git metadata read-only.",
+		"Do not merge, rebase, cherry-pick, commit, stage, reset, switch branches",
 		"When a task or review requires a test, coverage, lint, or quality target, first make underlying code or test changes and run the measurement.",
 		"Add or raise the required gate only after the target passes.",
 		"Keep an existing required gate; do not remove it merely to make validation pass.",
@@ -9576,6 +9578,21 @@ func TestFinalReviewFixPromptRequiresMeasuredQualityTargets(t *testing.T) {
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("finalReviewFixPrompt() missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestFinalReviewPromptExcludesBranchHistoryRepairs(t *testing.T) {
+	t.Parallel()
+
+	prompt := finalReviewPrompt("Implement the requested behavior.", "Prepared review context.", 1, 3)
+	for _, want := range []string{
+		"The harness exclusively owns branch selection, base synchronization, merges, rebases, cherry-picks, commits, pushes",
+		"Never report ancestry, branch freshness, commit topology",
+		"requiresBranchHistoryChange",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("finalReviewPrompt() missing %q:\n%s", want, prompt)
 		}
 	}
 }
