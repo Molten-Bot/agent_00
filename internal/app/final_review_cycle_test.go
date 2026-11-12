@@ -253,6 +253,7 @@ type finalFindingReviewCycleRunner struct {
 	t            *testing.T
 	findingsPass int
 	neverClean   bool
+	historyOnly  bool
 	reviews      int
 	fixes        int
 	statusCalls  int
@@ -274,6 +275,9 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 		}
 		r.reviews++
 		if r.neverClean || r.reviews == r.findingsPass {
+			if r.historyOnly {
+				return execx.Result{Stdout: "**Positive**\n- Scoped change.\n\n**Negative**\n- [High] main.go:12 - Merge the base branch.\n\n```json\n{\"status\":\"findings\",\"mergeReady\":false,\"summary\":\"history update needed\",\"positives\":[\"Scoped change.\"],\"findings\":[{\"severity\":\"High\",\"path\":\"main.go\",\"line\":12,\"title\":\"Merge the base branch\",\"requiresBranchHistoryChange\":true}]}\n```"}, nil
+			}
 			return execx.Result{Stdout: "**Positive**\n- Scoped change.\n\n**Negative**\n- [Medium] main.go:12 - Handle the error.\n\n```json\n{\"status\":\"findings\",\"mergeReady\":false,\"summary\":\"fix needed\",\"positives\":[\"Scoped change.\"],\"findings\":[{\"severity\":\"Medium\",\"path\":\"main.go\",\"line\":12,\"title\":\"Handle the error\"}]}\n```"}, nil
 		}
 		return execx.Result{Stdout: "**Positive**\n- Scoped change.\n\n**Negative**\n- No material issues found.\n\n```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"clean\",\"positives\":[\"Scoped change.\"],\"findings\":[]}\n```"}, nil
@@ -330,6 +334,49 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 	}
 	r.t.Fatalf("unexpected command: %+v", cmd)
 	return execx.Result{}, fmt.Errorf("unexpected command")
+}
+
+func TestRunFinalReviewCycleDoesNotSendBranchHistoryFindingToRepairAgent(t *testing.T) {
+	runner := &finalFindingReviewCycleRunner{t: t, findingsPass: 1, historyOnly: true}
+	h := New(runner)
+	h.FinalReviewPasses = 1
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:        "https://github.com/acme/repo.git",
+		Dir:        repoDir,
+		RelDir:     "repo",
+		Branch:     "feature",
+		BaseBranch: "main",
+		PRURL:      "https://github.com/acme/repo/pull/7",
+		Changed:    true,
+	}
+
+	exitCode, stage, err := h.runFinalReviewCycle(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior."},
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err != nil || exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
+	}
+	if runner.reviews != 1 || runner.fixes != 0 {
+		t.Fatalf("review/fix calls = %d/%d, want 1/0", runner.reviews, runner.fixes)
+	}
+	if runner.comments != 1 {
+		t.Fatalf("comments = %d, want 1", runner.comments)
+	}
 }
 
 func TestRunFinalReviewCycleConfirmsFinalPassFixBeforeRelease(t *testing.T) {
