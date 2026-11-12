@@ -9108,8 +9108,14 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   height: 16px;
 }
 
-.github-issues-branch-filter [hidden] {
+.github-issues-branch-filter [data-branch-filter-icon] {
   display: none;
+}
+
+.github-issues-branch-filter[data-value="all"] [data-branch-filter-icon="all"],
+.github-issues-branch-filter[data-value="with"] [data-branch-filter-icon="with"],
+.github-issues-branch-filter[data-value="without"] [data-branch-filter-icon="without"] {
+  display: block;
 }
 
 .github-issues-list {
