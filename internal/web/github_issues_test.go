@@ -279,12 +279,12 @@ func TestGitHubIssueListRejectsInvalidFiltersBeforeCallingGh(t *testing.T) {
 func TestGitHubIssueListFiltersByLinkedBranch(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		branch     string
-		wantNumber string
-		omitNumber string
+		branch      string
+		wantNumbers []string
+		omitNumbers []string
 	}{
-		{branch: "with", wantNumber: `"number":17`, omitNumber: `"number":18`},
-		{branch: "without", wantNumber: `"number":18`, omitNumber: `"number":17`},
+		{branch: "with", wantNumbers: []string{`"number":17`, `"number":19`}, omitNumbers: []string{`"number":18`}},
+		{branch: "without", wantNumbers: []string{`"number":18`}, omitNumbers: []string{`"number":17`, `"number":19`}},
 	} {
 		t.Run(tc.branch, func(t *testing.T) {
 			t.Parallel()
@@ -292,20 +292,31 @@ func TestGitHubIssueListFiltersByLinkedBranch(t *testing.T) {
 			srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 				commands = append(commands, cmd)
 				if len(cmd.Args) > 1 && cmd.Args[0] == "issue" && cmd.Args[1] == "list" {
-					return execx.Result{Stdout: `[{"id":"I_17","number":17,"title":"Started"},{"id":"I_18","number":18,"title":"Unstarted"}]`}, nil
+					return execx.Result{Stdout: `[{"id":"I_17","number":17,"title":"PR associated"},{"id":"I_18","number":18,"title":"Unstarted"},{"id":"I_19","number":19,"title":"Branch associated"}]`}, nil
 				}
-				return execx.Result{Stdout: `{"data":{"nodes":[{"id":"I_17","linkedBranches":{"totalCount":1}},{"id":"I_18","linkedBranches":{"totalCount":0}}]}}`}, nil
+				return execx.Result{Stdout: `{"data":{"nodes":[{"id":"I_17","linkedBranches":{"totalCount":0},"closedByPullRequestsReferences":{"totalCount":1}},{"id":"I_18","linkedBranches":{"totalCount":0},"closedByPullRequestsReferences":{"totalCount":0}},{"id":"I_19","linkedBranches":{"totalCount":1},"closedByPullRequestsReferences":{"totalCount":0}}]}}`}, nil
 			}), true)
 			response := httptest.NewRecorder()
 			srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/issues?repo=acme/repo&branch="+tc.branch, nil))
 			if response.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
 			}
-			if len(commands) != 2 || !strings.Contains(strings.Join(commands[0].Args, " "), "--json id,number") || !strings.Contains(strings.Join(commands[1].Args, " "), "linkedBranches(first:1)") || !reflect.DeepEqual(commands[1].Args[len(commands[1].Args)-4:], []string{"-F", "ids[]=I_17", "-F", "ids[]=I_18"}) {
-				t.Fatalf("commands = %#v, want issue IDs followed by batched linked-branch query", commands)
+			if len(commands) != 2 {
+				t.Fatalf("commands = %#v, want issue list followed by Development-association query", commands)
 			}
-			if !strings.Contains(response.Body.String(), tc.wantNumber) || strings.Contains(response.Body.String(), tc.omitNumber) {
-				t.Fatalf("response = %s, want %s and no %s", response.Body.String(), tc.wantNumber, tc.omitNumber)
+			graphqlArgs := strings.Join(commands[1].Args, " ")
+			if len(commands[1].Args) < 6 || !strings.Contains(strings.Join(commands[0].Args, " "), "--json id,number") || !strings.Contains(graphqlArgs, "linkedBranches(first:1)") || !strings.Contains(graphqlArgs, "closedByPullRequestsReferences(first:1)") || !reflect.DeepEqual(commands[1].Args[len(commands[1].Args)-6:], []string{"-F", "ids[]=I_17", "-F", "ids[]=I_18", "-F", "ids[]=I_19"}) {
+				t.Fatalf("commands = %#v, want issue IDs followed by batched Development-association query", commands)
+			}
+			for _, wantNumber := range tc.wantNumbers {
+				if !strings.Contains(response.Body.String(), wantNumber) {
+					t.Fatalf("response = %s, want %s", response.Body.String(), wantNumber)
+				}
+			}
+			for _, omitNumber := range tc.omitNumbers {
+				if strings.Contains(response.Body.String(), omitNumber) {
+					t.Fatalf("response = %s, want no %s", response.Body.String(), omitNumber)
+				}
 			}
 		})
 	}
@@ -345,12 +356,7 @@ func TestGitHubIssueListBranchFilterChecksCandidatesPastResponseLimit(t *testing
 			if id == arg {
 				continue
 			}
-			node := struct {
-				ID             string `json:"id"`
-				LinkedBranches struct {
-					TotalCount int `json:"totalCount"`
-				} `json:"linkedBranches"`
-			}{ID: id}
+			node := githubDevelopmentAssociationNode{ID: id}
 			if id == "I_1001" {
 				node.LinkedBranches.TotalCount = 1
 			}
@@ -416,12 +422,7 @@ func TestGitHubIssueListBranchFilterReportsCappedSearch(t *testing.T) {
 			if id == arg {
 				continue
 			}
-			node := struct {
-				ID             string `json:"id"`
-				LinkedBranches struct {
-					TotalCount int `json:"totalCount"`
-				} `json:"linkedBranches"`
-			}{ID: id}
+			node := githubDevelopmentAssociationNode{ID: id}
 			if id == "I_1001" {
 				node.LinkedBranches.TotalCount = 1
 			}
@@ -474,12 +475,7 @@ func TestGitHubIssueListBranchFilterAllowsExactSearchMaximum(t *testing.T) {
 		for _, arg := range cmd.Args {
 			id := strings.TrimPrefix(arg, "ids[]=")
 			if id != arg {
-				response.Data.Nodes = append(response.Data.Nodes, struct {
-					ID             string `json:"id"`
-					LinkedBranches struct {
-						TotalCount int `json:"totalCount"`
-					} `json:"linkedBranches"`
-				}{ID: id})
+				response.Data.Nodes = append(response.Data.Nodes, githubDevelopmentAssociationNode{ID: id})
 			}
 		}
 		encodedResponse, marshalErr := json.Marshal(response)
