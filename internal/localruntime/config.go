@@ -74,11 +74,11 @@ func (c ReviewWatchConfig) AutoMergeEnabled() bool {
 func (c ReviewWatchConfig) ReviewCount() int {
 	switch NormalizeReviewLevel(c.ReviewLevel) {
 	case "low":
-		return 1
+		return 2
 	case "medium":
-		return 3
+		return 5
 	case "high":
-		return 6
+		return 10
 	default:
 		return 0
 	}

@@ -47,7 +47,7 @@ func TestSaveLocalSettingsDiscardsRetiredCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GitHubToken != "preserved" || cfg.AgentHarness != "codex" || cfg.ReviewWatch.ReviewCount() != 1 || cfg.LibraryTaskUsage["code-review"] != 2 {
+	if cfg.GitHubToken != "preserved" || cfg.AgentHarness != "codex" || cfg.ReviewWatch.ReviewCount() != 2 || cfg.LibraryTaskUsage["code-review"] != 2 {
 		t.Fatal("local settings were lost during save")
 	}
 	data, err := os.ReadFile(path)

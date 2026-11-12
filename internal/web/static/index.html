@@ -937,9 +937,9 @@
               <input id="review-settings-slider" type="range" min="0" max="3" step="1" value="0" aria-valuetext="Off, 0 reviews">
               <div class="review-slider-stops" aria-hidden="true">
                 <span class="review-slider-stop" data-current="true" title="Off · 0 reviews"><svg><use href="#review-off"/></svg></span>
-                <span class="review-slider-stop" title="Low · 1 review"><svg><use href="#review-low"/></svg></span>
-                <span class="review-slider-stop" title="Medium · 3 reviews"><svg><use href="#review-medium"/></svg></span>
-                <span class="review-slider-stop" title="High · 6 reviews"><svg><use href="#review-high"/></svg></span>
+                <span class="review-slider-stop" title="Low · 2 reviews"><svg><use href="#review-low"/></svg></span>
+                <span class="review-slider-stop" title="Medium · 5 reviews"><svg><use href="#review-medium"/></svg></span>
+                <span class="review-slider-stop" title="High · 10 reviews"><svg><use href="#review-high"/></svg></span>
               </div>
             </div>
           </div>
@@ -1399,7 +1399,7 @@
       if (status === "stopped") {
         return "stopped";
       }
-      if (status === "duplicate" || status === "paused") {
+      if (status === "warning" || status === "duplicate" || status === "paused") {
         return "warning";
       }
       if (status === "error" || status === "invalid") {
@@ -1524,7 +1524,7 @@
     }
 
     function renderTaskStatusBadge(task) {
-      const status = normalizedTaskStatus(task?.status) || "pending";
+      const status = taskDisplayStatus(task);
       const statusLabel = taskStatusLabel(status);
       const badge = document.createElement("span");
       badge.className = `badge badge-icon ${statusClass(status)}`;
@@ -1599,8 +1599,8 @@
     }
 
     function taskCurrentStateSignature(task) {
-      const status = normalizedTaskStatus(task?.status) || "pending";
-      if (COMPLETED_STATUSES.has(status)) {
+      const status = taskDisplayStatus(task);
+      if (COMPLETED_STATUSES.has(normalizedTaskStatus(task?.status))) {
         return `status:${status}`;
       }
 
@@ -1617,8 +1617,8 @@
     }
 
     function renderTaskCurrentStateBadge(task) {
-      const status = normalizedTaskStatus(task?.status) || "pending";
-      if (COMPLETED_STATUSES.has(status) || !TASK_PROGRESS_VISIBLE) {
+      const status = taskDisplayStatus(task);
+      if (COMPLETED_STATUSES.has(normalizedTaskStatus(task?.status)) || !TASK_PROGRESS_VISIBLE) {
         return renderTaskStatusBadge(task);
       }
 
@@ -2938,9 +2938,9 @@
 
     const REVIEW_SETTINGS_LEVELS = [
       { value: "off", label: "Off", count: 0 },
-      { value: "low", label: "Low", count: 1 },
-      { value: "medium", label: "Medium", count: 3 },
-      { value: "high", label: "High", count: 6 },
+      { value: "low", label: "Low", count: 2 },
+      { value: "medium", label: "Medium", count: 5 },
+      { value: "high", label: "High", count: 10 },
     ];
     function setReviewSettingsLevel(level) {
       const normalized = String(level || "").trim().toLowerCase();
@@ -8136,8 +8136,8 @@
       const task = chatTaskByRequestID(requestID);
       if (!task || !TASK_PROGRESS_VISIBLE) return null;
 
-      const status = normalizedTaskStatus(task?.status) || "pending";
-      if (COMPLETED_STATUSES.has(status)) {
+      const status = taskDisplayStatus(task);
+      if (COMPLETED_STATUSES.has(normalizedTaskStatus(task?.status))) {
         const statusLabel = taskStatusLabel(status);
         const icon = document.createElement("span");
         icon.className = `chat-repo-message-meta-stage-icon ${statusClass(status)}`;
@@ -8168,10 +8168,10 @@
     function chatPromptMessageTone(message) {
       const requestID = String(message?.requestID || "").trim();
       const task = chatTaskByRequestID(requestID);
-      const status = normalizedTaskStatus(task?.status);
+      const status = taskDisplayStatus(task);
       if (status === "completed" || status === "no_changes") return "success";
       if (status === "error" || status === "invalid" || status === "stopped") return "failure";
-      if (status === "duplicate") return "warning";
+      if (status === "warning" || status === "duplicate") return "warning";
       const storedStatus = String(message?.statusText || message?.statusTitle || "").trim().toLowerCase();
       if (storedStatus.startsWith("completed") || storedStatus.startsWith("no changes")) return "success";
       if (storedStatus.startsWith("failed") || storedStatus.startsWith("invalid") || storedStatus.startsWith("stopped")) return "failure";
@@ -9801,6 +9801,14 @@
       return normalized;
     }
 
+    function taskDisplayStatus(task) {
+      const status = normalizedTaskStatus(task?.status) || "pending";
+      if (String(task?.warning || "").trim() && isSuccessfulTaskStatus(status)) {
+        return "warning";
+      }
+      return status;
+    }
+
     function statusClass(status) {
       const normalized = normalizedTaskStatus(status);
       if (!normalized) return "";
@@ -9974,7 +9982,7 @@
 
       for (const task of nextSnapshot?.tasks || []) {
         const requestID = String(task.request_id || "").trim();
-        if (!requestID || !isCompletedTask(task)) {
+        if (!requestID || !isCompletedTask(task) || taskDisplayStatus(task) === "warning") {
           continue;
         }
         const previousTask = previousStatuses.get(requestID);
@@ -10223,6 +10231,9 @@
     }
 
     function taskTerminalSound(task) {
+      if (taskDisplayStatus(task) === "warning") {
+        return "";
+      }
       const status = normalizedTaskStatus(task?.status);
       if (status === "merged") {
         return "merged";
@@ -11829,7 +11840,8 @@
         return;
       }
 
-      node.className = `task-result show ${statusClass(status)}`;
+      const displayStatus = taskDisplayStatus(task);
+      node.className = `task-result show ${statusClass(displayStatus)}`;
 
       const title = document.createElement("span");
       title.className = "task-result-title";
@@ -11839,7 +11851,10 @@
       detail.className = "task-result-detail";
       const prURL = taskPullRequestURL(task);
 
-      if (status === "completed") {
+      if (displayStatus === "warning") {
+        title.textContent = "Review Warning";
+        detail.textContent = String(task.warning || "").trim() || "Pull request needs human review.";
+      } else if (status === "completed") {
         title.textContent = "Task Success";
         detail.textContent = prURL ? "Pull request ready." : "Completed.";
       } else if (status === "no_changes") {
@@ -12113,6 +12128,7 @@
             collapsed: allowCollapse && isMinimizedTask(task),
             sparkle: shouldSparkleTask(task),
             status: String(task?.status || ""),
+            warning: String(task?.warning || ""),
             stage: String(task?.stage || ""),
             source: taskStartSource(task),
             currentState: taskCurrentStateSignature(task),

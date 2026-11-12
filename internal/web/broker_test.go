@@ -1448,6 +1448,26 @@ func TestBrokerRemovesFailedTasksAfterTimeout(t *testing.T) {
 	}
 }
 
+func TestBrokerPreservesReviewCycleWarningOnCompletedTask(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	b.IngestLog("task status=start request_id=req-review-warning")
+	b.IngestLog("task request_id=req-review-warning stage=review status=warn action=leave_draft reason=fix_passes_exhausted fix_passes=10")
+	b.IngestLog("task status=completed request_id=req-review-warning pr_url=https://example.com/pull/1")
+
+	task, ok := b.Task("req-review-warning")
+	if !ok {
+		t.Fatal("Task() found = false, want true")
+	}
+	if task.Status != "completed" {
+		t.Fatalf("task.Status = %q, want completed", task.Status)
+	}
+	if want := "Post-task review findings remain. Pull request left in draft for human review."; task.Warning != want {
+		t.Fatalf("task.Warning = %q, want %q", task.Warning, want)
+	}
+}
+
 func TestBrokerAppliesPromptWhenConfigRecordedAfterTaskStart(t *testing.T) {
 	t.Parallel()
 
