@@ -16,9 +16,9 @@ func TestReviewWatchReviewCount(t *testing.T) {
 	}{
 		{level: "", want: 0},
 		{level: "off", want: 0},
-		{level: "LOW", want: 1},
-		{level: "medium", want: 3},
-		{level: " high ", want: 6},
+		{level: "LOW", want: 2},
+		{level: "medium", want: 5},
+		{level: " high ", want: 10},
 	}
 	for _, tt := range tests {
 		t.Run(tt.level, func(t *testing.T) {

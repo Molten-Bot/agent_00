@@ -616,6 +616,10 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		strings.Contains(markup, `status === "no_changes" || status === "duplicate" || status === "paused"`) {
 		t.Fatalf("expected index html to render no-change completions with the completed status icon instead of warning")
 	}
+	if !strings.Contains(markup, `function taskDisplayStatus(task) {`) ||
+		!strings.Contains(markup, `title.textContent = "Review Warning";`) {
+		t.Fatalf("expected completed tasks with review-cycle warnings to use warning presentation")
+	}
 	if strings.Contains(markup, `status === "error" || status === "invalid" || status === "duplicate" || status === "stopped"`) || !strings.Contains(markup, `status === "error" || status === "invalid" || status === "duplicate"`) {
 		t.Fatalf("expected index html to avoid playing the error sound for user-stopped tasks")
 	}

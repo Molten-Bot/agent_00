@@ -3816,11 +3816,11 @@ func (h Harness) runFinalReviewCycle(
 
 func finalReviewMode(passes int) string {
 	switch passes {
-	case 1:
+	case 2:
 		return "low"
-	case 3:
+	case 5:
 		return "medium"
-	case 6:
+	case 10:
 		return "high"
 	default:
 		return "off"

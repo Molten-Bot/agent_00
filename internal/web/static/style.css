@@ -3176,6 +3176,7 @@ select.prompt-control {
   background: var(--good);
 }
 
+.badge.warning,
 .badge.duplicate,
 .badge.paused {
   background: var(--warn);
@@ -5004,6 +5005,11 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
 }
 
 .task-result.duplicate {
+  color: var(--surface-warning);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.task-result.warning {
   color: var(--surface-warning);
   background: rgba(245, 158, 11, 0.1);
 }

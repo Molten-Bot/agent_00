@@ -364,7 +364,7 @@ harness reports the targeting error instead of opening a replacement PR.
 
 Post-task PR review cycles are also off by default. Configure
 `review_watch.review_level` as `off`, `low`, `medium`, or `high` to run 0 or up
-to 1, 3, or 6 review-and-repair passes after a task creates its pull request and
+to 2, 5, or 10 review-and-repair passes after a task creates its pull request and
 initial checks finish. A pass with no negative findings ends the cycle early.
 Actionable findings are repaired and checked before the next pass, including a
 clean confirmation after the final repair. If findings remain after the repair

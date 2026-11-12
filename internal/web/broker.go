@@ -79,6 +79,7 @@ type Task struct {
 	PRURL             string        `json:"pr_url,omitempty"`
 	LiveAppURL        string        `json:"live_app_url,omitempty"`
 	Error             string        `json:"error,omitempty"`
+	Warning           string        `json:"warning,omitempty"`
 	StartedAt         string        `json:"started_at"`
 	UpdatedAt         string        `json:"updated_at"`
 	DurationSeconds   float64       `json:"duration_seconds,omitempty"`
@@ -299,6 +300,7 @@ type taskState struct {
 	PRURL             string
 	LiveAppURL        string
 	Error             string
+	Warning           string
 	StartedAt         time.Time
 	UpdatedAt         time.Time
 	TerminalAt        time.Time
@@ -511,6 +513,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			PRURL:             t.PRURL,
 			LiveAppURL:        t.LiveAppURL,
 			Error:             t.Error,
+			Warning:           t.Warning,
 			StartedAt:         t.StartedAt.UTC().Format(time.RFC3339Nano),
 			UpdatedAt:         t.UpdatedAt.UTC().Format(time.RFC3339Nano),
 			DurationSeconds:   taskDuration(t.StartedAt, t.UpdatedAt, now, status).Seconds(),
@@ -615,6 +618,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		PRURL:             t.PRURL,
 		LiveAppURL:        t.LiveAppURL,
 		Error:             t.Error,
+		Warning:           t.Warning,
 		StartedAt:         t.StartedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt:         t.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		DurationSeconds:   taskDuration(t.StartedAt, t.UpdatedAt, now, status).Seconds(),
@@ -1928,6 +1932,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 
 	if strings.HasPrefix(line, "task status=start") {
 		t.Status = "running"
+		t.Warning = ""
 		t.Source = stringsx.FirstNonEmpty(t.Source, normalizeTaskSource(fields["source"]), defaultTaskSourceForRequestID(t.RequestID))
 		t.Skill = stringsx.FirstNonEmpty(t.Skill, fields["skill"])
 		t.Workflow = stringsx.FirstNonEmpty(t.Workflow, workflowFromFields(fields))
@@ -2046,6 +2051,9 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
 		if !agentInvocationLine {
 			t.Error = stringsx.FirstNonEmpty(fields["err"], fields["error"], t.Error)
+		}
+		if fields["stage"] == "review" && fields["status"] == "warn" && fields["action"] == "leave_draft" && fields["reason"] == "fix_passes_exhausted" {
+			t.Warning = "Post-task review findings remain. Pull request left in draft for human review."
 		}
 	}
 

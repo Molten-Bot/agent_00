@@ -195,7 +195,7 @@ test('all settings save on close and survive reopening; no main Save button', as
   await toggle(page, 'review-settings-assign-creator');
   await select(page, 'review');
   await page.locator('#review-settings-slider').focus();
-  for (const [key, level, text] of [['ArrowRight', 'low', 'Low · 1 review'], ['ArrowRight', 'medium', 'Medium · 3 reviews'], ['ArrowRight', 'high', 'High · 6 reviews']]) {
+  for (const [key, level, text] of [['ArrowRight', 'low', 'Low · 2 reviews'], ['ArrowRight', 'medium', 'Medium · 5 reviews'], ['ArrowRight', 'high', 'High · 10 reviews']]) {
     await page.keyboard.press(key);
     assert.equal(await page.locator('#review-settings-level').inputValue(), level);
     assert.equal(await page.locator('#review-selected-text').textContent(), text);

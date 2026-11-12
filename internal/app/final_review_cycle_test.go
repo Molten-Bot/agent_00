@@ -28,6 +28,25 @@ type cleanReviewCycleRunner struct {
 	emptyNetDiff bool
 }
 
+func TestFinalReviewModeUsesConfiguredReviewCounts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		passes int
+		want   string
+	}{
+		{passes: 0, want: "off"},
+		{passes: 2, want: "low"},
+		{passes: 5, want: "medium"},
+		{passes: 10, want: "high"},
+	}
+	for _, tt := range tests {
+		if got := finalReviewMode(tt.passes); got != tt.want {
+			t.Errorf("finalReviewMode(%d) = %q, want %q", tt.passes, got, tt.want)
+		}
+	}
+}
+
 func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, error) {
 	r.t.Helper()
 	r.mu.Lock()
