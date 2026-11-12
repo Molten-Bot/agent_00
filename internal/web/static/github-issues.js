@@ -117,9 +117,6 @@
     branchFilter.dataset.branchFilter = branchFilterOptions[(optionIndex + 1) % branchFilterOptions.length].value;
     branchFilter.setAttribute("aria-label", `Branch filter: ${option.label}`);
     branchFilter.title = option.label;
-    for (const icon of branchFilterIcons) {
-      icon.hidden = icon.dataset.branchFilterIcon !== next;
-    }
   }
 
   try {

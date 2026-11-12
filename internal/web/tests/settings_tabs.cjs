@@ -605,7 +605,7 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
   });
 
   assert.notEqual(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
-  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=18');
+  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=19');
   await page.waitForFunction(() => document.querySelector('.github-issue-empty-state h2')?.textContent === 'No repositories available');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No repositories available');
   await page.locator('#github-issues-dock-link').click();
@@ -710,7 +710,7 @@ test('GitHub Issues filters issues by linked branch and remembers the choice', a
     value: button.dataset.value,
     label: button.getAttribute('aria-label'),
     visibleIcons: [...button.querySelectorAll('[data-branch-filter-icon]')]
-      .filter(icon => !icon.hidden)
+      .filter(icon => getComputedStyle(icon).display !== 'none')
       .map(icon => icon.getAttribute('data-lucide')),
   }));
   assert.deepEqual(await branchFilterState(), {
