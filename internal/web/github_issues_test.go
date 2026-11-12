@@ -599,6 +599,15 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	if strings.Contains(page, `<select id="github-issues-branch-filter"`) {
 		t.Error("branch filter should use icon buttons, not a dropdown")
 	}
+	branchFilterMarkup := page[branchFilterAt:assigneeFilterAt]
+	if count := strings.Count(branchFilterMarkup, `</button>`); count != 1 {
+		t.Errorf("branch filter renders %d buttons, want one cycling button", count)
+	}
+	for _, value := range []string{"all", "with", "without"} {
+		if !strings.Contains(branchFilterMarkup, `data-branch-filter-icon="`+value+`"`) {
+			t.Errorf("branch filter is missing %q cycle icon", value)
+		}
+	}
 	if strings.Contains(page, "github-issues.css") {
 		t.Error("GitHub Issues should share the common stylesheet")
 	}

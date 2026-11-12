@@ -705,32 +705,53 @@ test('GitHub Issues filters issues by linked branch and remembers the choice', a
   });
 
   await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '0');
-  assert.equal(await page.locator('#github-issues-branch-filter').getAttribute('data-value'), 'all');
-  assert.deepEqual(await page.locator('#github-issues-branch-filter button').evaluateAll(buttons => buttons.map(button => ({
-    value: button.dataset.branchFilter,
-    pressed: button.getAttribute('aria-pressed'),
-    icon: button.querySelector('svg')?.getAttribute('data-lucide'),
-  }))), [
-    { value: 'all', pressed: 'true', icon: 'git-branch' },
-    { value: 'with', pressed: 'false', icon: 'git-branch-plus' },
-    { value: 'without', pressed: 'false', icon: 'git-branch-minus' },
-  ]);
+  const branchFilter = page.locator('#github-issues-branch-filter');
+  const branchFilterState = () => branchFilter.evaluate(button => ({
+    value: button.dataset.value,
+    label: button.getAttribute('aria-label'),
+    visibleIcons: [...button.querySelectorAll('[data-branch-filter-icon]')]
+      .filter(icon => !icon.hidden)
+      .map(icon => icon.getAttribute('data-lucide')),
+  }));
+  assert.deepEqual(await branchFilterState(), {
+    value: 'all',
+    label: 'Branch filter: All',
+    visibleIcons: ['git-branch'],
+  });
   assert.equal(issueBranchFilter, 'all');
   const filteredResponse = page.waitForResponse(response => new URL(response.url()).searchParams.get('branch') === 'with');
-  await page.getByRole('button', { name: 'With branch' }).click();
+  await branchFilter.click();
   await filteredResponse;
+  assert.deepEqual(await branchFilterState(), {
+    value: 'with',
+    label: 'Branch filter: With branch',
+    visibleIcons: ['git-branch-plus'],
+  });
   assert.equal(issueBranchFilter, 'with');
   assert.equal(await page.locator('.github-issues-empty').textContent(), 'No open issues with an associated branch match the current filters.');
   assert.equal(await page.evaluate(() => localStorage.getItem('hubui.githubIssuesBranch.v1')), 'with');
   const unlinkedResponse = page.waitForResponse(response => new URL(response.url()).searchParams.get('branch') === 'without');
-  await page.getByRole('button', { name: 'Without branch' }).click();
+  await branchFilter.click();
   await unlinkedResponse;
+  assert.deepEqual(await branchFilterState(), {
+    value: 'without',
+    label: 'Branch filter: Without branch',
+    visibleIcons: ['git-branch-minus'],
+  });
   assert.equal(issueBranchFilter, 'without');
   assert.equal(await page.locator('.github-issues-empty').textContent(), 'No open issues without an associated branch match the current filters.');
   assert.equal(await page.evaluate(() => localStorage.getItem('hubui.githubIssuesBranch.v1')), 'without');
   await page.reload();
   await page.waitForFunction(() => document.getElementById('github-issues-branch-filter').dataset.value === 'without');
   assert.equal(issueBranchFilter, 'without');
+  const allResponse = page.waitForResponse(response => new URL(response.url()).searchParams.get('branch') === 'all');
+  await branchFilter.click();
+  await allResponse;
+  assert.deepEqual(await branchFilterState(), {
+    value: 'all',
+    label: 'Branch filter: All',
+    visibleIcons: ['git-branch'],
+  });
 });
 
 test('GitHub Issues renders inside Studio and uses the configured link mode', async t => {
