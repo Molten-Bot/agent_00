@@ -3228,7 +3228,7 @@ func commandErrorWithDetails(prefix string, err error, res execx.Result, maxChar
 
 func prTitleEditError(repoURL, requestedTitle string, res execx.Result) error {
 	// Runner errors include command arguments, so they disclose the title passed
-	// after --title. Preserve gh's actionable output after redacting that value.
+	// in the title field. Preserve gh's actionable output after redacting that value.
 	if requestedTitle != "" {
 		res.Stdout = strings.ReplaceAll(res.Stdout, requestedTitle, "[redacted pull request title]")
 		res.Stderr = strings.ReplaceAll(res.Stderr, requestedTitle, "[redacted pull request title]")
@@ -7905,7 +7905,17 @@ func prCommentCommand(repoDir, prURL, body string) execx.Command {
 }
 
 func prEditTitleCommand(repoDir, prURL, title string) execx.Command {
-	return ghCommand(repoDir, "pr", "edit", prURL, "--title", title)
+	repository := githubutil.PullRequestRepository(prURL)
+	number := githubutil.PullRequestSelector(prURL)
+	// Use the REST endpoint directly. `gh pr edit` queries deprecated Projects
+	// (classic) fields and can fail before it sends the title mutation.
+	return ghCommand(
+		repoDir,
+		"api",
+		"--method", "PATCH",
+		fmt.Sprintf("repos/%s/pulls/%s", repository, number),
+		"-f", "title="+title,
+	)
 }
 
 func prCreateWithOptionsCommand(repoDir string, cfg config.Config, baseBranch, headRef, repo string) execx.Command {

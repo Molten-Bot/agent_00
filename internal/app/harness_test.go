@@ -3561,8 +3561,8 @@ func TestRunFailedPRTitleEditDoesNotExposeRequestedTitle(t *testing.T) {
 		},
 		{
 			cmd: prEditTitleCommand(repoDir, prURL, requestedTitle),
-			res: execx.Result{Stderr: "GraphQL: could not update pull request " + requestedTitle + ": resource not accessible"},
-			err: fmt.Errorf("run gh [pr edit --title %s]: exit status 1", requestedTitle),
+			res: execx.Result{Stderr: "HTTP 403: could not update pull request " + requestedTitle + ": resource not accessible"},
+			err: fmt.Errorf("run gh [api -f title=%s]: exit status 1", requestedTitle),
 		},
 	}}
 
@@ -5898,7 +5898,7 @@ func TestCommandBuilders(t *testing.T) {
 	}
 
 	editTitle := prEditTitleCommand(repoDir, "https://github.com/acme/repo/pull/42", "fix: repair CI")
-	wantEditTitle := []string{"pr", "edit", "https://github.com/acme/repo/pull/42", "--title", "fix: repair CI"}
+	wantEditTitle := []string{"api", "--method", "PATCH", "repos/acme/repo/pulls/42", "-f", "title=fix: repair CI"}
 	if editTitle.Name != "gh" || editTitle.Dir != repoDir || !reflect.DeepEqual(editTitle.Args, wantEditTitle) {
 		t.Fatalf("pr edit title command unexpected: %+v", editTitle)
 	}
