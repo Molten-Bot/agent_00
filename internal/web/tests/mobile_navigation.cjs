@@ -114,6 +114,18 @@ test('swiping from a task action scrolls without firing it; tapping still opens 
   await page.waitForFunction(() => document.querySelector('#task-fullscreen').getAttribute('aria-hidden') === 'true');
 });
 
+for (const viewport of [{ width: 430, height: 932 }, { width: 932, height: 430 }]) {
+  test(`Enter adds a newline to the Studio prompt without submitting on mobile ${viewport.width}×${viewport.height}`, async t => {
+    const { page, writes } = await openPage(t, 'studio', viewport);
+    const prompt = page.locator('#builder-prompt-input');
+    await prompt.fill('First line');
+    await prompt.press('Enter');
+    await prompt.type('Second line');
+    assert.equal(await prompt.inputValue(), 'First line\nSecond line');
+    assert.deepEqual(writes, [], 'mobile Enter must not start a run');
+  });
+}
+
 test('More supports Escape, outside dismissal, settings and resizing back to desktop', async t => {
   const { page } = await openPage(t, 'current-work');
   const more = page.locator('#mobile-dock-more');

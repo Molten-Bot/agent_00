@@ -1963,10 +1963,11 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected index html to include prompt clear handler")
 	}
 	if !strings.Contains(markup, "function submitBuilderPromptOnEnter(event)") ||
+		!strings.Contains(markup, `window.matchMedia("(max-width: 700px), (max-width: 1100px) and (max-height: 500px) and (pointer: coarse)").matches`) ||
 		!strings.Contains(markup, "if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.isComposing)") ||
 		!strings.Contains(markup, "localPromptForm.requestSubmit();") ||
 		!strings.Contains(markup, "builderPromptInput.addEventListener(\"keydown\", submitBuilderPromptOnEnter);") {
-		t.Fatalf("expected index html to submit builder prompts on Enter while preserving Shift+Enter multiline input")
+		t.Fatalf("expected index html to submit desktop builder prompts on Enter while preserving multiline input on mobile and with modifiers")
 	}
 	if !strings.Contains(markup, "function hasReviewerDraftToClear(") ||
 		!strings.Contains(markup, "function hasBuilderDraftToClear(") ||
