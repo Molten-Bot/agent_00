@@ -292,6 +292,10 @@ func runServer(args []string) int {
 		// submissions for as long as SetupRequirement reports the hold.
 		daemonLogger("commit_signing status=error event=setup_required err=%q", err)
 	}
+	if err := workspace.PrepareDefaultRoots(); err != nil {
+		writeStderrLine(logger, fmt.Sprintf("workspace init error: %v", err))
+		return app.ExitWorkspace
+	}
 
 	if runtimeErr == nil {
 		authGate = newAgentAuthGate(ctx, runner, runtimeCfg, cfg, daemonLogger)

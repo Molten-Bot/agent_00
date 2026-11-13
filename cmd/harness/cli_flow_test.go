@@ -71,6 +71,14 @@ func TestRunServerRejectsDisabledListener(t *testing.T) {
 	}
 }
 
+func TestRunServerRejectsUnusableWorkspaceBeforeStarting(t *testing.T) {
+	configureUnusableWorkspaceRoots(t)
+
+	if code := runServer(nil); code != app.ExitWorkspace {
+		t.Fatalf("runServer() = %d, want %d", code, app.ExitWorkspace)
+	}
+}
+
 func configureUnusableWorkspaceRoots(t *testing.T) {
 	t.Helper()
 
