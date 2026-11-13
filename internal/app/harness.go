@@ -6502,7 +6502,11 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 }
 
 func hasSuccessfulFocusedValidation(text string) bool {
-	statuses := make(map[string]bool)
+	type validationStatus struct {
+		passed             bool
+		unresolvedFailures int
+	}
+	statuses := make(map[string]validationStatus)
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.Contains(line, "focused") || !stringsx.ContainsAny(line, []string{
@@ -6539,7 +6543,13 @@ func hasSuccessfulFocusedValidation(text string) bool {
 			"unknown",
 		}) {
 			for _, check := range checks {
-				statuses[check] = false
+				status := statuses[check]
+				// Each ordinary failure may belong to a distinct suite. A failed
+				// rerun still represents the existing unresolved failure.
+				if !isFocusedValidationRerun(line) || status.unresolvedFailures == 0 {
+					status.unresolvedFailures++
+				}
+				statuses[check] = status
 			}
 			continue
 		}
@@ -6549,19 +6559,32 @@ func hasSuccessfulFocusedValidation(text string) bool {
 			" green",
 		}) {
 			for _, check := range checks {
-				statuses[check] = true
+				status := statuses[check]
+				status.passed = true
+				if isFocusedValidationRerun(line) && status.unresolvedFailures > 0 {
+					status.unresolvedFailures--
+				}
+				statuses[check] = status
 			}
 		}
 	}
 	if len(statuses) == 0 {
 		return false
 	}
-	for _, passed := range statuses {
-		if !passed {
+	for _, status := range statuses {
+		if !status.passed || status.unresolvedFailures > 0 {
 			return false
 		}
 	}
 	return true
+}
+
+func isFocusedValidationRerun(line string) bool {
+	return stringsx.ContainsAny(line, []string{
+		"rerun",
+		"re-run",
+		"retry",
+	})
 }
 
 func focusedValidationChecks(line string) []string {

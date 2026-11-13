@@ -7789,6 +7789,15 @@ func TestPreExistingValidationFailureRequiresFocusedSuccessAndBaselineEvidence(t
 			}, "\n"),
 		},
 		{
+			name: "later distinct focused test suite passed",
+			output: strings.Join([]string{
+				"Focused unit tests failed.",
+				"Focused integration tests passed.",
+				"Baseline evidence: same failure reproduced on the base branch.",
+				failure,
+			}, "\n"),
+		},
+		{
 			name: "focused validation skipped",
 			output: strings.Join([]string{
 				"Focused tests passed with one skipped check.",
@@ -7805,6 +7814,16 @@ func TestPreExistingValidationFailureRequiresFocusedSuccessAndBaselineEvidence(t
 				failure,
 			}, "\n"),
 			want: true,
+		},
+		{
+			name: "one rerun does not clear another failed suite",
+			output: strings.Join([]string{
+				"Focused unit tests failed.",
+				"Focused integration tests failed.",
+				"Focused unit tests passed on rerun.",
+				"Baseline evidence: same failure reproduced on the base branch.",
+				failure,
+			}, "\n"),
 		},
 		{
 			name: "generic baseline failure is not matching evidence",
