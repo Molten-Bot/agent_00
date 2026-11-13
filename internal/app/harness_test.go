@@ -7825,6 +7825,14 @@ func TestPreExistingValidationFailureRequiresFocusedSuccessAndBaselineEvidence(t
 			want: true,
 		},
 		{
+			name: "same line rerun does not clear unrelated failed check",
+			output: strings.Join([]string{
+				"Focused tests failed initially, then focused lint passed on rerun.",
+				"Baseline evidence: same failure reproduced on the base branch.",
+				failure,
+			}, "\n"),
+		},
+		{
 			name: "focused validation passed then failed on same line",
 			output: strings.Join([]string{
 				"Focused tests passed initially, then failed on rerun.",

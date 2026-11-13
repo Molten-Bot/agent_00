@@ -6549,7 +6549,31 @@ func hasSuccessfulFocusedValidation(text string) bool {
 			"succeed",
 			" green",
 		})
-		failedThenPassedOnRerun := failed && passed && focusedValidationRerunPassedAfterFailure(line)
+		failureEnd, passIndex, failedThenPassedOnRerun := focusedValidationRerunTransition(line)
+		failedThenPassedOnRerun = failed && passed && failedThenPassedOnRerun
+		if failedThenPassedOnRerun {
+			failedChecks := focusedValidationChecks(line[:failureEnd])
+			passedChecks := focusedValidationChecksExplicit(line[failureEnd:passIndex])
+			if len(passedChecks) == 0 {
+				passedChecks = failedChecks
+			}
+			for _, check := range failedChecks {
+				status := statuses[check]
+				if status.unresolvedFailures == 0 {
+					status.unresolvedFailures++
+				}
+				statuses[check] = status
+			}
+			for _, check := range passedChecks {
+				status := statuses[check]
+				status.passed = true
+				if status.unresolvedFailures > 0 {
+					status.unresolvedFailures--
+				}
+				statuses[check] = status
+			}
+			continue
+		}
 		if failed {
 			for _, check := range checks {
 				status := statuses[check]
@@ -6586,15 +6610,19 @@ func hasSuccessfulFocusedValidation(text string) bool {
 	return true
 }
 
-func focusedValidationRerunPassedAfterFailure(line string) bool {
+func focusedValidationRerunTransition(line string) (failureEnd, passIndex int, ok bool) {
 	if !isFocusedValidationRerun(line) {
-		return false
+		return 0, 0, false
 	}
 	failureIndex := -1
 	for _, marker := range []string{"failed", "failure", "unavailable", "could not", "not green", "not successful", "unsuccessful"} {
-		failureIndex = max(failureIndex, strings.LastIndex(line, marker))
+		index := strings.LastIndex(line, marker)
+		if index > failureIndex {
+			failureIndex = index
+			failureEnd = index + len(marker)
+		}
 	}
-	passIndex := -1
+	passIndex = -1
 	for _, marker := range []string{" passed", " succeeded", " successful", " green"} {
 		index := strings.LastIndex(line, marker)
 		if index >= 4 && strings.TrimSpace(line[index-4:index]) == "not" {
@@ -6602,7 +6630,7 @@ func focusedValidationRerunPassedAfterFailure(line string) bool {
 		}
 		passIndex = max(passIndex, index)
 	}
-	return failureIndex >= 0 && passIndex > failureIndex
+	return failureEnd, passIndex, failureIndex >= 0 && passIndex > failureIndex
 }
 
 func isFocusedValidationRerun(line string) bool {
@@ -6614,6 +6642,14 @@ func isFocusedValidationRerun(line string) bool {
 }
 
 func focusedValidationChecks(line string) []string {
+	checks := focusedValidationChecksExplicit(line)
+	if len(checks) == 0 {
+		checks = append(checks, "validation")
+	}
+	return checks
+}
+
+func focusedValidationChecksExplicit(line string) []string {
 	checks := make([]string, 0, 4)
 	for check, markers := range map[string][]string{
 		"test":      {"test"},
@@ -6624,9 +6660,6 @@ func focusedValidationChecks(line string) []string {
 		if stringsx.ContainsAny(line, markers) {
 			checks = append(checks, check)
 		}
-	}
-	if len(checks) == 0 {
-		checks = append(checks, "validation")
 	}
 	return checks
 }
