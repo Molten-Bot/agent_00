@@ -6520,6 +6520,8 @@ func hasSuccessfulFocusedValidation(text string) bool {
 			"no focused",
 			"zero focused",
 			"none of the focused",
+			"skipped",
+			"skipping",
 			"did not pass",
 			"does not pass",
 			"not passed",
@@ -6535,7 +6537,8 @@ func hasSuccessfulFocusedValidation(text string) bool {
 			"uncertain",
 			"unknown",
 		}) {
-			return false
+			hasSuccess = false
+			continue
 		}
 		if stringsx.ContainsAny(line, []string{
 			" pass",
