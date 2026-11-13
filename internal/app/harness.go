@@ -6311,10 +6311,12 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 
 func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	text := strings.ToLower(strings.TrimSpace(detail))
+	// Codex writes progress and the complete user prompt to stderr. Validation
+	// proof must come from the agent's report on stdout (or its extracted failure
+	// detail), not instructions echoed on the diagnostic stream.
 	evidenceText := strings.ToLower(strings.TrimSpace(strings.Join([]string{
 		detail,
 		res.Stdout,
-		res.Stderr,
 	}, "\n")))
 	if text == "" {
 		text = evidenceText
@@ -6521,7 +6523,7 @@ func hasSuccessfulFocusedValidation(text string) bool {
 			continue
 		}
 		checks := focusedValidationChecks(line)
-		if stringsx.ContainsAny(line, []string{
+		failed := stringsx.ContainsAny(line, []string{
 			"no focused",
 			"zero focused",
 			"none of the focused",
@@ -6541,7 +6543,14 @@ func hasSuccessfulFocusedValidation(text string) bool {
 			"appears to",
 			"uncertain",
 			"unknown",
-		}) {
+		})
+		passed := stringsx.ContainsAny(line, []string{
+			" pass",
+			"succeed",
+			" green",
+		})
+		failedThenPassedOnRerun := failed && passed && focusedValidationRerunPassedAfterFailure(line)
+		if failed {
 			for _, check := range checks {
 				status := statuses[check]
 				// Each ordinary failure may belong to a distinct suite. A failed
@@ -6551,13 +6560,11 @@ func hasSuccessfulFocusedValidation(text string) bool {
 				}
 				statuses[check] = status
 			}
-			continue
+			if !failedThenPassedOnRerun {
+				continue
+			}
 		}
-		if stringsx.ContainsAny(line, []string{
-			" pass",
-			"succeed",
-			" green",
-		}) {
+		if passed {
 			for _, check := range checks {
 				status := statuses[check]
 				status.passed = true
@@ -6577,6 +6584,25 @@ func hasSuccessfulFocusedValidation(text string) bool {
 		}
 	}
 	return true
+}
+
+func focusedValidationRerunPassedAfterFailure(line string) bool {
+	if !isFocusedValidationRerun(line) {
+		return false
+	}
+	failureIndex := -1
+	for _, marker := range []string{"failed", "failure", "unavailable", "could not", "not green", "not successful", "unsuccessful"} {
+		failureIndex = max(failureIndex, strings.LastIndex(line, marker))
+	}
+	passIndex := -1
+	for _, marker := range []string{" passed", " succeeded", " successful", " green"} {
+		index := strings.LastIndex(line, marker)
+		if index >= 4 && strings.TrimSpace(line[index-4:index]) == "not" {
+			continue
+		}
+		passIndex = max(passIndex, index)
+	}
+	return failureIndex >= 0 && passIndex > failureIndex
 }
 
 func isFocusedValidationRerun(line string) bool {
@@ -6661,7 +6687,10 @@ func hasSeparateReportedFailure(detail string, outputs ...string) bool {
 		}
 		for _, line := range nonEmpty[start:] {
 			field := strings.TrimSpace(agentFailureFieldLine(line))
-			if !strings.HasPrefix(strings.ToLower(field), "failure:") || strings.EqualFold(field, "failure:") {
+			lowerField := strings.ToLower(field)
+			reportedFailure := strings.HasPrefix(lowerField, "failure:") && !strings.EqualFold(field, "failure:")
+			taskFailure := strings.HasPrefix(lowerField, "task failed")
+			if !reportedFailure && !taskFailure {
 				continue
 			}
 			if !strings.Contains(lowerDetail, strings.ToLower(field)) {

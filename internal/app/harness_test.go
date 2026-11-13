@@ -7816,6 +7816,23 @@ func TestPreExistingValidationFailureRequiresFocusedSuccessAndBaselineEvidence(t
 			want: true,
 		},
 		{
+			name: "focused validation failed then passed on same line",
+			output: strings.Join([]string{
+				"Focused tests failed initially, then passed on rerun.",
+				"Baseline evidence: same failure reproduced on the base branch.",
+				failure,
+			}, "\n"),
+			want: true,
+		},
+		{
+			name: "focused validation passed then failed on same line",
+			output: strings.Join([]string{
+				"Focused tests passed initially, then failed on rerun.",
+				"Baseline evidence: same failure reproduced on the base branch.",
+				failure,
+			}, "\n"),
+		},
+		{
 			name: "one rerun does not clear another failed suite",
 			output: strings.Join([]string{
 				"Focused unit tests failed.",
@@ -7942,6 +7959,12 @@ func TestPreExistingValidationFailureChecksTerminalSecondaryFailuresOnBothStream
 			},
 		},
 		{
+			name: "terminal task failed line",
+			res: execx.Result{
+				Stdout: validationEvidence + "\nTask failed: deployment command exited with status 1.",
+			},
+		},
+		{
 			name: "resolved stdout progress failure",
 			res: execx.Result{
 				Stdout: resolvedProgress + "\n" + validationEvidence,
@@ -7968,6 +7991,30 @@ func TestPreExistingValidationFailureChecksTerminalSecondaryFailuresOnBothStream
 				t.Fatalf("isNonFatalValidationToolingFailure() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPreExistingValidationFailureIgnoresStderrPromptEvidence(t *testing.T) {
+	t.Parallel()
+
+	failure := strings.Join([]string{
+		"Failure: Full workspace build not green due existing repository configuration.",
+		"Error details: Root task configuration has no build task.",
+	}, "\n")
+	res := execx.Result{
+		Stdout: failure,
+		Stderr: strings.Join([]string{
+			"OpenAI Codex",
+			"user",
+			"Report focused tests passed.",
+			"Report baseline evidence: same failure reproduced on the base branch.",
+			"codex",
+			"tokens used",
+		}, "\n"),
+	}
+
+	if isNonFatalValidationToolingFailure(failure, res) {
+		t.Fatal("isNonFatalValidationToolingFailure() = true, want false for evidence echoed only from prompt on stderr")
 	}
 }
 
