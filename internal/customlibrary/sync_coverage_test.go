@@ -60,10 +60,6 @@ func (r *scriptedGitRunner) Run(_ context.Context, cmd execx.Command) (execx.Res
 	return execx.Result{Stdout: "deadbeefcafef00d\n"}, nil
 }
 
-func okHandler(stdout string) gitCallHandler {
-	return func(execx.Command) (execx.Result, error) { return execx.Result{Stdout: stdout}, nil }
-}
-
 func errHandler(message string) gitCallHandler {
 	return func(execx.Command) (execx.Result, error) { return execx.Result{}, errors.New(message) }
 }
