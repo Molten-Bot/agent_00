@@ -7787,6 +7787,15 @@ func TestPreExistingValidationFailureRequiresFocusedSuccessAndBaselineEvidence(t
 				failure,
 			}, "\n"),
 		},
+		{
+			name: "separate incomplete work failure",
+			output: strings.Join([]string{
+				"Focused tests and type-check pass.",
+				"Baseline evidence: same failure reproduced on the base branch.",
+				failure,
+				"Requested work not completed because generated output still differs.",
+			}, "\n"),
+		},
 	}
 
 	for _, tc := range tests {

@@ -6311,11 +6311,13 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 
 func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	text := strings.ToLower(strings.TrimSpace(detail))
+	evidenceText := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		detail,
+		res.Stdout,
+		res.Stderr,
+	}, "\n")))
 	if text == "" {
-		text = strings.ToLower(strings.TrimSpace(strings.Join([]string{
-			res.Stdout,
-			res.Stderr,
-		}, "\n")))
+		text = evidenceText
 	}
 	if text == "" {
 		return false
@@ -6323,7 +6325,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	// Validation gaps are non-fatal only when they are the sole problem. Do
 	// not suppress an agent's explicit statement that it could not complete
 	// the requested work.
-	if stringsx.ContainsAny(text, []string{
+	if stringsx.ContainsAny(evidenceText, []string{
 		"cannot safely meet",
 		"cannot complete the requested",
 		"could not complete the requested",
@@ -6338,11 +6340,6 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	// focused validation and evidence that the same failure exists at baseline.
 	// The worktree/no-change gates still verify that an implementation run
 	// produced the requested repository delta.
-	evidenceText := strings.ToLower(strings.TrimSpace(strings.Join([]string{
-		detail,
-		res.Stdout,
-		res.Stderr,
-	}, "\n")))
 	preExistingValidation := stringsx.ContainsAny(text, []string{
 		"pre-existing",
 		"preexisting",
