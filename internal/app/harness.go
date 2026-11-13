@@ -6334,10 +6334,15 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	}
 
 	// A broader check can expose repository debt outside the requested change.
-	// Accept that as a validation gap only when the agent explicitly attributes
-	// it to pre-existing repository state and identifies validation context.
+	// Accept that as a validation gap only when the agent reports both successful
+	// focused validation and evidence that the same failure exists at baseline.
 	// The worktree/no-change gates still verify that an implementation run
 	// produced the requested repository delta.
+	evidenceText := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		detail,
+		res.Stdout,
+		res.Stderr,
+	}, "\n")))
 	preExistingValidation := stringsx.ContainsAny(text, []string{
 		"pre-existing",
 		"preexisting",
@@ -6358,7 +6363,9 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"outside the requested",
 		"outside requested",
 	})
-	if preExistingValidation {
+	if preExistingValidation &&
+		hasSuccessfulFocusedValidation(evidenceText) &&
+		hasBaselineFailureEvidence(evidenceText) {
 		return true
 	}
 
@@ -6492,6 +6499,75 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 
 	if hasValidationCommand && hasValidationContext {
 		return true
+	}
+	return false
+}
+
+func hasSuccessfulFocusedValidation(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.Contains(line, "focused") || !stringsx.ContainsAny(line, []string{
+			"validation",
+			"test",
+			"type-check",
+			"typecheck",
+			"lint",
+			"build",
+			"check",
+		}) {
+			continue
+		}
+		if stringsx.ContainsAny(line, []string{
+			"did not pass",
+			"does not pass",
+			"not passed",
+			"not green",
+			"not successful",
+			"unsuccessful",
+			"failed",
+			"failure",
+			"unavailable",
+			"could not",
+		}) {
+			continue
+		}
+		if stringsx.ContainsAny(line, []string{
+			" pass",
+			"succeed",
+			" green",
+		}) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasBaselineFailureEvidence(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		hasBaselineContext := stringsx.ContainsAny(line, []string{
+			"baseline",
+			"base branch",
+			"before this change",
+			"before the change",
+			"unchanged checkout",
+			"unmodified checkout",
+		})
+		hasReproduction := stringsx.ContainsAny(line, []string{
+			"same failure reproduced",
+			"reproduced the same failure",
+			"reproduced same failure",
+			"same error reproduced",
+			"reproduced the same error",
+			"reproduced same error",
+			"fails identically",
+			"failed identically",
+			"also fails",
+			"also failed",
+		})
+		if hasBaselineContext && hasReproduction {
+			return true
+		}
 	}
 	return false
 }

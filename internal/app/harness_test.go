@@ -7707,6 +7707,7 @@ func TestRunCodexAllowsPreExistingWorkspaceBuildFailure(t *testing.T) {
 			res: execx.Result{Stdout: strings.Join([]string{
 				"Changed client behavior and focused tests.",
 				"Focused tests and type-check pass.",
+				"Baseline evidence: same failure reproduced on the base branch before this change.",
 				"Failure: Full workspace build not green due existing repository configuration.",
 				"Error details: Root task configuration has no build task. Direct client build fails with TS5011: explicit rootDir now required.",
 			}, "\n")},
@@ -7723,6 +7724,81 @@ func TestRunCodexAllowsPreExistingWorkspaceBuildFailure(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(logs, "\n"), "action=validation_tooling_unavailable") {
 		t.Fatalf("logs missing validation-gap warning:\n%s", strings.Join(logs, "\n"))
+	}
+}
+
+func TestPreExistingValidationFailureRequiresFocusedSuccessAndBaselineEvidence(t *testing.T) {
+	t.Parallel()
+
+	failure := strings.Join([]string{
+		"Failure: Full workspace build not green due existing repository configuration.",
+		"Error details: Root task configuration has no build task.",
+	}, "\n")
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{
+			name: "both forms of evidence",
+			output: strings.Join([]string{
+				"Focused tests and type-check pass.",
+				"Baseline evidence: same failure reproduced on the base branch.",
+				failure,
+			}, "\n"),
+			want: true,
+		},
+		{
+			name: "missing baseline evidence",
+			output: strings.Join([]string{
+				"Focused tests and type-check pass.",
+				failure,
+			}, "\n"),
+		},
+		{
+			name: "missing focused validation",
+			output: strings.Join([]string{
+				"Baseline evidence: same failure reproduced on the base branch.",
+				failure,
+			}, "\n"),
+		},
+		{
+			name: "focused validation failed",
+			output: strings.Join([]string{
+				"Focused tests failed.",
+				"Baseline evidence: same failure reproduced on the base branch.",
+				failure,
+			}, "\n"),
+		},
+		{
+			name: "baseline context unrelated to reproduced failure",
+			output: strings.Join([]string{
+				"Focused tests passed.",
+				"Base branch was inspected.",
+				"Another optional command also fails.",
+				failure,
+			}, "\n"),
+		},
+		{
+			name: "focused validation not green",
+			output: strings.Join([]string{
+				"Focused tests not green.",
+				"Baseline evidence: same failure reproduced on the base branch.",
+				failure,
+			}, "\n"),
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := isNonFatalValidationToolingFailure(failure, execx.Result{Stdout: tc.output})
+			if got != tc.want {
+				t.Fatalf("isNonFatalValidationToolingFailure() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -8925,6 +9001,7 @@ func TestWithBackpressurePromptIncludesAdaptiveCriteria(t *testing.T) {
 		"Playwright or an actual browser path",
 		"benchmarks or performance measurements only when",
 		"functional correctness, tests, types, security/privacy, brevity/scope control, and visual design",
+		"evidence that the same failure reproduces at baseline, and focused validation that passed",
 		"Remote pull-request creation, pull-request check monitoring, and CI remediation are managed by the harness",
 	}
 	for _, snippet := range wantSnippets {

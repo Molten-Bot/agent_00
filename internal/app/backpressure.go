@@ -26,7 +26,7 @@ var defaultBackpressureRequirements = []string{
 	"Use review agents or explicit self-review passes where available. Cover functional correctness, tests, types, security/privacy, brevity/scope control, and visual design for UI work.",
 	"If a planning phase exists for this run, treat plan review as a gate before implementation. If no separate planning phase exists, briefly plan, implement, and then review the final diff against the plan.",
 	"Do not stop solely because optional tooling is missing in this runtime. Continue with alternative validation you can run and clearly report each validation gap in the final response.",
-	"Do not fail a completed task solely because broader validation has a demonstrably pre-existing failure unrelated to the requested change. Report the failing command, supporting evidence, and focused validation that passed.",
+	"Do not fail a completed task solely because broader validation has a demonstrably pre-existing failure unrelated to the requested change. Report the failing command, evidence that the same failure reproduces at baseline, and focused validation that passed.",
 	"Remote pull-request creation, pull-request check monitoring, and CI remediation are managed by the harness after local work is complete.",
 }
 
