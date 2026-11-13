@@ -5,6 +5,16 @@ package stringsx
 
 import "strings"
 
+// ContainsAny reports whether text contains any marker. Matching is case-sensitive.
+func ContainsAny(text string, markers []string) bool {
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // FirstNonEmpty returns the first value that is non-empty after trimming
 // surrounding whitespace, itself trimmed. It returns "" if every value is
 // empty or whitespace-only.

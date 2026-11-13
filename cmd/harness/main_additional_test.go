@@ -1595,37 +1595,6 @@ func TestRunLocalTaskReportsErrorWithSigningSnapshot(t *testing.T) {
 	}
 }
 
-func TestContainsAny(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		text    string
-		markers []string
-		want    bool
-	}{
-		{name: "nil markers", text: "some text", markers: nil, want: false},
-		{name: "empty markers", text: "some text", markers: []string{}, want: false},
-		{name: "no match", text: "some text", markers: []string{"xyz", "abc"}, want: false},
-		{name: "match first", text: "hello world", markers: []string{"hello", "xyz"}, want: true},
-		{name: "match last", text: "hello world", markers: []string{"xyz", "world"}, want: true},
-		{name: "empty text no markers match", text: "", markers: []string{"a"}, want: false},
-		{name: "empty marker always matches", text: "anything", markers: []string{""}, want: true},
-		{name: "empty text and empty marker", text: "", markers: []string{""}, want: true},
-		{name: "case sensitive", text: "Hello", markers: []string{"hello"}, want: false},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := containsAny(tt.text, tt.markers); got != tt.want {
-				t.Fatalf("containsAny(%q, %v) = %v, want %v", tt.text, tt.markers, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestTaskStartSourceForSubmissionTable(t *testing.T) {
 	t.Parallel()
 

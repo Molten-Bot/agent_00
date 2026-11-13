@@ -8,6 +8,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
 const RequiredPrompt = "Review the failing log paths first, identify every root cause behind the failed task, fix the underlying agent_00 application issues in this repository, validate locally where possible, and summarize the verified results. The failed run's original task prompt is withheld and is not supplied here; do not reconstruct it, ask for it, or implement the product change it requested unless that change is required to fix agent_00 failure handling."
@@ -404,7 +405,7 @@ func isMissingSecurityVerificationContractFailure(text string) bool {
 		return false
 	}
 
-	hasVerificationContext := containsAny(text, []string{
+	hasVerificationContext := stringsx.ContainsAny(text, []string{
 		"authentication",
 		"verification",
 		"verifier",
@@ -412,7 +413,7 @@ func isMissingSecurityVerificationContractFailure(text string) bool {
 		"signing-secret",
 		"signing secret",
 	})
-	hasMissingContract := containsAny(text, []string{
+	hasMissingContract := stringsx.ContainsAny(text, []string{
 		"no verification contract",
 		"missing verification contract",
 		"no signature contract",
@@ -424,7 +425,7 @@ func isMissingSecurityVerificationContractFailure(text string) bool {
 		"missing signing-secret contract",
 		"missing signing secret contract",
 	})
-	hasUnsafeOutcome := containsAny(text, []string{
+	hasUnsafeOutcome := stringsx.ContainsAny(text, []string{
 		"unresolved safely",
 		"cannot safely",
 		"can't safely",
@@ -432,15 +433,6 @@ func isMissingSecurityVerificationContractFailure(text string) bool {
 		"fake security",
 	})
 	return hasVerificationContext && hasMissingContract && hasUnsafeOutcome
-}
-
-func containsAny(text string, markers []string) bool {
-	for _, marker := range markers {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 // isUnreachableCoverageTargetFailure recognizes a measured customer-repository

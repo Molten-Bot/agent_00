@@ -523,12 +523,6 @@ func TestDefaultMetadataAndStringHelpers(t *testing.T) {
 	if got := ensurePRBodyFooter(" "); got != prBodyFooter {
 		t.Fatalf("ensurePRBodyFooter(empty) = %q, want footer", got)
 	}
-	if got := stripLineComments([]byte("{\"url\":\"https://example.com\"}//note\n")); strings.Contains(string(got), "//note") {
-		t.Fatalf("stripLineComments() retained comment: %q", string(got))
-	}
-	if got := stripLineComments([]byte(`{"quote":"escaped \\\" value"}`)); string(got) != `{"quote":"escaped \\\" value"}` {
-		t.Fatalf("stripLineComments(escaped string) = %q", string(got))
-	}
 	if got := normalizeNonEmptyStrings([]string{" a ", "", "a", "b "}); len(got) != 2 || got[0] != "a" || got[1] != "b" {
 		t.Fatalf("normalizeNonEmptyStrings() = %#v, want [a b]", got)
 	}

@@ -1899,15 +1899,6 @@ func promptPhraseTextContains(text, marker string) bool {
 	return strings.Contains(text, promptPhraseText(marker))
 }
 
-func containsAny(text string, markers []string) bool {
-	for _, marker := range markers {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
-}
-
 func failureFollowUpPrompt(logPaths []string, failedResult app.Result, failedRunCfg config.Config) string {
 	return failurefollowup.ComposePrompt(
 		failureFollowUpRequiredPrompt,
