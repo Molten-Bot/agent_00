@@ -11,6 +11,7 @@ import (
 func TestRunSingleReturnsPreflightWhenToolingUnavailable(t *testing.T) {
 	origArgs := os.Args
 	t.Cleanup(func() { os.Args = origArgs })
+	configureUnusableWorkspaceRoots(t)
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "run.json")
@@ -30,6 +31,7 @@ func TestRunSingleReturnsPreflightWhenToolingUnavailable(t *testing.T) {
 func TestRunMultiplexReturnsFirstSessionFailureExitCode(t *testing.T) {
 	origArgs := os.Args
 	t.Cleanup(func() { os.Args = origArgs })
+	configureUnusableWorkspaceRoots(t)
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "task.json")
@@ -49,6 +51,7 @@ func TestRunMultiplexReturnsFirstSessionFailureExitCode(t *testing.T) {
 func TestRunServerRejectsDisabledListener(t *testing.T) {
 	origArgs := os.Args
 	t.Cleanup(func() { os.Args = origArgs })
+	configureUnusableWorkspaceRoots(t)
 
 	dir := t.TempDir()
 	initPath := filepath.Join(dir, "init.json")
@@ -65,5 +68,18 @@ func TestRunServerRejectsDisabledListener(t *testing.T) {
 
 	if code := run(); code != app.ExitUsage {
 		t.Fatalf("run() = %d, want %d", code, app.ExitUsage)
+	}
+}
+
+func configureUnusableWorkspaceRoots(t *testing.T) {
+	t.Helper()
+
+	dir := t.TempDir()
+	for _, envName := range []string{"HARNESS_WORKSPACE_RAM_BASE", "HARNESS_WORKSPACE_DISK_BASE"} {
+		path := filepath.Join(dir, envName)
+		if err := os.WriteFile(path, []byte("not a directory"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", envName, err)
+		}
+		t.Setenv(envName, path)
 	}
 }

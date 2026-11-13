@@ -81,22 +81,10 @@ func run() int {
 
 	switch os.Args[1] {
 	case "run":
-		if err := workspace.PrepareDefaultRoots(); err != nil {
-			fmt.Fprintf(os.Stderr, "workspace init error: %v\n", err)
-			return app.ExitWorkspace
-		}
 		return runSingle(os.Args[2:])
 	case "multiplex":
-		if err := workspace.PrepareDefaultRoots(); err != nil {
-			fmt.Fprintf(os.Stderr, "workspace init error: %v\n", err)
-			return app.ExitWorkspace
-		}
 		return runMultiplex(os.Args[2:])
 	case "serve":
-		if err := workspace.PrepareDefaultRoots(); err != nil {
-			fmt.Fprintf(os.Stderr, "workspace init error: %v\n", err)
-			return app.ExitWorkspace
-		}
 		return runServer(os.Args[2:])
 	default:
 		printUsage()
