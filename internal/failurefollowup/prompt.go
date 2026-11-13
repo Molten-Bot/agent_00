@@ -70,6 +70,7 @@ var nonRemediableRepoAccessMarkers = []string{
 const githubSSHPermissionDeniedReason = "permission to repository denied"
 
 const unreachableCoverageTargetReason = "coverage target cannot be met safely"
+const missingSecurityContractReason = "security verification contract is missing"
 
 var nonRemediableFailureMarkers = []string{
 	"no space left on device",
@@ -381,12 +382,65 @@ func NonRemediableFailureReason(err error) string {
 	if isUnreachableCoverageTargetFailure(text) {
 		return unreachableCoverageTargetReason
 	}
+	if isMissingSecurityVerificationContractFailure(text) {
+		return missingSecurityContractReason
+	}
 	for _, marker := range nonRemediableFailureMarkers {
 		if strings.Contains(text, marker) {
 			return marker
 		}
 	}
 	return NonRemediableRepoAccessReason(err)
+}
+
+// isMissingSecurityVerificationContractFailure recognizes a safe refusal to
+// invent webhook authentication when the customer repository supplies no
+// verification contract. A follow-up against agent_00 cannot discover the
+// provider-specific secret or signature scheme needed to implement that task.
+// Keep the match compound so ordinary, actionable webhook bugs still receive
+// a failure follow-up.
+func isMissingSecurityVerificationContractFailure(text string) bool {
+	if !strings.Contains(text, "webhook") {
+		return false
+	}
+
+	hasVerificationContext := containsAny(text, []string{
+		"authentication",
+		"verification",
+		"verifier",
+		"signature",
+		"signing-secret",
+		"signing secret",
+	})
+	hasMissingContract := containsAny(text, []string{
+		"no verification contract",
+		"missing verification contract",
+		"no signature contract",
+		"missing signature contract",
+		"no verifier or signing-secret contract",
+		"no verifier or signing secret contract",
+		"no signing-secret contract",
+		"no signing secret contract",
+		"missing signing-secret contract",
+		"missing signing secret contract",
+	})
+	hasUnsafeOutcome := containsAny(text, []string{
+		"unresolved safely",
+		"cannot safely",
+		"can't safely",
+		"would break provider",
+		"fake security",
+	})
+	return hasVerificationContext && hasMissingContract && hasUnsafeOutcome
+}
+
+func containsAny(text string, markers []string) bool {
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // isUnreachableCoverageTargetFailure recognizes a measured customer-repository
