@@ -7780,6 +7780,15 @@ func TestPreExistingValidationFailureRequiresFocusedSuccessAndBaselineEvidence(t
 			}, "\n"),
 		},
 		{
+			name: "later different focused validation passed",
+			output: strings.Join([]string{
+				"Focused tests failed.",
+				"Focused lint passed.",
+				"Baseline evidence: same failure reproduced on the base branch.",
+				failure,
+			}, "\n"),
+		},
+		{
 			name: "focused validation skipped",
 			output: strings.Join([]string{
 				"Focused tests passed with one skipped check.",

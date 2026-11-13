@@ -6502,7 +6502,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 }
 
 func hasSuccessfulFocusedValidation(text string) bool {
-	hasSuccess := false
+	statuses := make(map[string]bool)
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.Contains(line, "focused") || !stringsx.ContainsAny(line, []string{
@@ -6516,6 +6516,7 @@ func hasSuccessfulFocusedValidation(text string) bool {
 		}) {
 			continue
 		}
+		checks := focusedValidationChecks(line)
 		if stringsx.ContainsAny(line, []string{
 			"no focused",
 			"zero focused",
@@ -6537,7 +6538,9 @@ func hasSuccessfulFocusedValidation(text string) bool {
 			"uncertain",
 			"unknown",
 		}) {
-			hasSuccess = false
+			for _, check := range checks {
+				statuses[check] = false
+			}
 			continue
 		}
 		if stringsx.ContainsAny(line, []string{
@@ -6545,10 +6548,38 @@ func hasSuccessfulFocusedValidation(text string) bool {
 			"succeed",
 			" green",
 		}) {
-			hasSuccess = true
+			for _, check := range checks {
+				statuses[check] = true
+			}
 		}
 	}
-	return hasSuccess
+	if len(statuses) == 0 {
+		return false
+	}
+	for _, passed := range statuses {
+		if !passed {
+			return false
+		}
+	}
+	return true
+}
+
+func focusedValidationChecks(line string) []string {
+	checks := make([]string, 0, 4)
+	for check, markers := range map[string][]string{
+		"test":      {"test"},
+		"typecheck": {"type-check", "typecheck"},
+		"lint":      {"lint"},
+		"build":     {"build"},
+	} {
+		if stringsx.ContainsAny(line, markers) {
+			checks = append(checks, check)
+		}
+	}
+	if len(checks) == 0 {
+		checks = append(checks, "validation")
+	}
+	return checks
 }
 
 func hasBaselineFailureEvidence(text string) bool {
