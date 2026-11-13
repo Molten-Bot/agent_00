@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -706,30 +705,6 @@ func TestDiagnosticDetailForResult(t *testing.T) {
 	if got := diagnosticDetailForResult(execx.Result{}); got != "check completed" {
 		t.Fatalf("diagnosticDetailForResult(empty) = %q", got)
 	}
-}
-
-type stubExecResult struct {
-	result execx.Result
-	err    error
-}
-
-type stubExecRunner struct {
-	results map[string]stubExecResult
-}
-
-func (r *stubExecRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, error) {
-	if r == nil {
-		return execx.Result{}, errors.New("nil runner")
-	}
-	entry, ok := r.results[stubCommandKey(cmd)]
-	if !ok {
-		return execx.Result{}, fmt.Errorf("unexpected command: %s", stubCommandKey(cmd))
-	}
-	return entry.result, entry.err
-}
-
-func stubCommandKey(cmd execx.Command) string {
-	return fmt.Sprintf("%s %s", cmd.Name, strings.Join(cmd.Args, " "))
 }
 
 func assertLogContains(t *testing.T, lines []string, want string) {

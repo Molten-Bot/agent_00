@@ -11,30 +11,6 @@ import (
 	"testing"
 )
 
-type noFlushResponseWriter struct {
-	header http.Header
-	status int
-	body   bytes.Buffer
-}
-
-func (w *noFlushResponseWriter) Header() http.Header {
-	if w.header == nil {
-		w.header = make(http.Header)
-	}
-	return w.header
-}
-
-func (w *noFlushResponseWriter) Write(data []byte) (int, error) {
-	if w.status == 0 {
-		w.status = http.StatusOK
-	}
-	return w.body.Write(data)
-}
-
-func (w *noFlushResponseWriter) WriteHeader(statusCode int) {
-	w.status = statusCode
-}
-
 func decodeJSONMap(t *testing.T, body *bytes.Buffer) map[string]any {
 	t.Helper()
 	var decoded map[string]any

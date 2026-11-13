@@ -2760,17 +2760,6 @@ func TestHandlerRemovesStandaloneSitePages(t *testing.T) {
 	}
 }
 
-func renderHandlerMarkup(t *testing.T, srv Server, path string) string {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
-	resp := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(resp, req)
-	if resp.Code != http.StatusOK {
-		t.Fatalf("%s status = %d", path, resp.Code)
-	}
-	return resp.Body.String()
-}
-
 func TestHandlerServesChatView(t *testing.T) {
 	t.Parallel()
 
