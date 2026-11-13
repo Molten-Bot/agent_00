@@ -6501,6 +6501,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 }
 
 func hasSuccessfulFocusedValidation(text string) bool {
+	hasSuccess := false
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.Contains(line, "focused") || !stringsx.ContainsAny(line, []string{
@@ -6526,17 +6527,17 @@ func hasSuccessfulFocusedValidation(text string) bool {
 			"unavailable",
 			"could not",
 		}) {
-			continue
+			return false
 		}
 		if stringsx.ContainsAny(line, []string{
 			" pass",
 			"succeed",
 			" green",
 		}) {
-			return true
+			hasSuccess = true
 		}
 	}
-	return false
+	return hasSuccess
 }
 
 func hasBaselineFailureEvidence(text string) bool {
@@ -6559,8 +6560,6 @@ func hasBaselineFailureEvidence(text string) bool {
 			"reproduced same error",
 			"fails identically",
 			"failed identically",
-			"also fails",
-			"also failed",
 		})
 		if hasBaselineContext && hasReproduction {
 			return true
