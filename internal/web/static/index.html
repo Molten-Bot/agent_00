@@ -13500,6 +13500,9 @@
       if (event.defaultPrevented || event.key !== "Enter") {
         return;
       }
+      if (window.matchMedia("(max-width: 700px), (max-width: 1100px) and (max-height: 500px) and (pointer: coarse)").matches) {
+        return;
+      }
       if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) {
         return;
       }
