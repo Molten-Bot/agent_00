@@ -67,6 +67,9 @@ func TestWithExecutionContractIncludesValidationToolingInstruction(t *testing.T)
 	if !strings.Contains(got, "missing repository validation script or task") {
 		t.Fatalf("WithExecutionContract() missing absent-validation-task guidance: %q", got)
 	}
+	if !strings.Contains(got, "pre-existing and unrelated to the requested change") {
+		t.Fatalf("WithExecutionContract() missing pre-existing validation guidance: %q", got)
+	}
 }
 
 func TestWithExecutionContractIncludesActivityPrivacyInstruction(t *testing.T) {

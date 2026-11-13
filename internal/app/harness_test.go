@@ -7696,6 +7696,60 @@ func TestRunCodexAllowsMissingTurboBuildTaskValidationGap(t *testing.T) {
 	}
 }
 
+func TestRunCodexAllowsPreExistingWorkspaceBuildFailure(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update client behavior"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"Changed client behavior and focused tests.",
+				"Focused tests and type-check pass.",
+				"Failure: Full workspace build not green due existing repository configuration.",
+				"Error details: Root task configuration has no build task. Direct client build fails with TS5011: explicit rootDir now required.",
+			}, "\n")},
+		},
+	}}
+
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
+		t.Fatalf("runCodex() error = %v, want nil for pre-existing workspace validation failure", err)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "action=validation_tooling_unavailable") {
+		t.Fatalf("logs missing validation-gap warning:\n%s", strings.Join(logs, "\n"))
+	}
+}
+
+func TestRunCodexDoesNotDowngradeIncompleteWorkWithPreExistingBuildFailure(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update build configuration"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{Stdout: strings.Join([]string{
+				"Failure: Build remains broken due existing repository configuration.",
+				"Error details: Generated build output does not match the requested configuration.",
+			}, "\n")},
+		},
+	}}
+
+	err := New(fake).runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil {
+		t.Fatal("runCodex() error = nil, want incomplete requested work to remain fatal")
+	}
+	if !strings.Contains(err.Error(), "codex reported failure") {
+		t.Fatalf("runCodex() error = %v, want codex reported failure marker", err)
+	}
+}
+
 func TestRunCodexAllowsLocalValidationToolMissingInRuntime(t *testing.T) {
 	t.Parallel()
 

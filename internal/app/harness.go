@@ -6320,11 +6320,46 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	if text == "" {
 		return false
 	}
-	// Missing validation tooling is non-fatal only when it is the sole
-	// problem. Do not suppress an agent's explicit statement that it cannot
-	// complete the requested work.
-	if strings.Contains(text, "cannot safely meet") {
+	// Validation gaps are non-fatal only when they are the sole problem. Do
+	// not suppress an agent's explicit statement that it could not complete
+	// the requested work.
+	if stringsx.ContainsAny(text, []string{
+		"cannot safely meet",
+		"cannot complete the requested",
+		"could not complete the requested",
+		"requested change not applied",
+		"requested work not completed",
+	}) {
 		return false
+	}
+
+	// A broader check can expose repository debt outside the requested change.
+	// Accept that as a validation gap only when the agent explicitly attributes
+	// it to pre-existing repository state and identifies validation context.
+	// The worktree/no-change gates still verify that an implementation run
+	// produced the requested repository delta.
+	preExistingValidation := stringsx.ContainsAny(text, []string{
+		"pre-existing",
+		"preexisting",
+		"existing repository configuration",
+		"existing repository validation",
+		"existing repository build",
+	}) && stringsx.ContainsAny(text, []string{
+		"validation",
+		"type-check",
+		"typecheck",
+		"test",
+		"lint",
+		"build",
+	}) && stringsx.ContainsAny(text, []string{
+		"full workspace",
+		"broader validation",
+		"unrelated to the requested",
+		"outside the requested",
+		"outside requested",
+	})
+	if preExistingValidation {
+		return true
 	}
 
 	validationUnavailableMarkers := []string{

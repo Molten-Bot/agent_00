@@ -51,7 +51,7 @@ You are working inside an existing repository. Solve the user's actual problem w
 - Go is available for Go workflows and validation, including `go test` and `go build`.
 - `git-changes-by-day` is available for exporting git history to CSV, for example `git-changes-by-day -repo /path/to/repo -text-out /tmp/commit-text.csv`.
 - `railsmith` is available for AGENTS.md work, for example `railsmith guide`, `railsmith doctor --root .`, `railsmith diff --root . --mode detailed`, and `railsmith check --root .`.
-- Use the tooling that matches the repository. If a tool or dependency is unavailable in this runtime, continue with any useful alternative checks and report the validation gap instead of failing solely for missing tooling.
+- Use the tooling that matches the repository. If a tool or dependency is unavailable in this runtime, continue with any useful alternative checks and report the validation gap instead of failing solely for missing tooling. Apply the same rule to broader validation only when repository evidence shows its failure was pre-existing and unrelated to the requested change; report the failing command, evidence, and focused checks that passed.
 
 ## Pull Request Screenshot Handoff
 
