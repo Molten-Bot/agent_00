@@ -1398,6 +1398,13 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	}
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		Err: errors.New("codex: codex reported failure: Failure: Webhook authentication unresolved safely. Error details: repository has no verifier or signing-secret contract; verification is unimplemented, and guessing would break providers."),
+	})
+	if ok || !strings.Contains(reason, "security verification contract is missing") {
+		t.Fatalf("shouldQueueFailureFollowUp(missing webhook security contract) = (%v, %q), want non-remediable contract skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
 		Err: errors.New("clone: run git [clone --single-branch git@github.com:Molten-Bot/forum.git /workspace/repo]: exit status 128 (fatal: unable to access 'https://github.com/Molten-Bot/forum.git/': Could not resolve host: github.com)"),
 	})
 	if ok || !strings.Contains(reason, "could not resolve host") {

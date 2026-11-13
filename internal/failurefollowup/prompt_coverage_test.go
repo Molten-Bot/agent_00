@@ -84,6 +84,18 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: issue target not met. Error details: current code needs 4232 more covered lines for 90%. Setting gate to 90 now would fail CI.")); got != unreachableCoverageTargetReason {
 		t.Fatalf("NonRemediableFailureReason(unreachable coverage target) = %q, want %q", got, unreachableCoverageTargetReason)
 	}
+	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: Webhook authentication unresolved safely. Error details: repository has no verifier or signing-secret contract; verification is unimplemented, and guessing would break providers.")); got != missingSecurityContractReason {
+		t.Fatalf("NonRemediableFailureReason(missing webhook security contract) = %q, want %q", got, missingSecurityContractReason)
+	}
+	for _, message := range []string{
+		"webhook signature verification rejects valid requests",
+		"webhook verifier is unimplemented and must be completed from the documented signing-secret contract",
+		"cannot safely finish unrelated webhook refactor",
+	} {
+		if got := NonRemediableFailureReason(errors.New(message)); got != "" {
+			t.Fatalf("NonRemediableFailureReason(%q) = %q, want actionable failure", message, got)
+		}
+	}
 }
 
 func TestInfrastructureFailureDoesNotSpawnAnotherCodingTask(t *testing.T) {
