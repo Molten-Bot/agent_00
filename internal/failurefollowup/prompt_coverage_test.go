@@ -90,6 +90,8 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 	for _, message := range []string{
 		"webhook signature verification rejects valid requests",
 		"webhook verifier is unimplemented and must be completed from the documented signing-secret contract",
+		"webhook verification is unimplemented and cannot safely be completed without more implementation work",
+		"webhook has no verifier and guessing an implementation would create fake security",
 		"cannot safely finish unrelated webhook refactor",
 	} {
 		if got := NonRemediableFailureReason(errors.New(message)); got != "" {

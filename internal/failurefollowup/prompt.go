@@ -413,9 +413,12 @@ func isMissingSecurityVerificationContractFailure(text string) bool {
 		"signing secret",
 	})
 	hasMissingContract := containsAny(text, []string{
-		"no verifier",
-		"verification unimplemented",
-		"verification is unimplemented",
+		"no verification contract",
+		"missing verification contract",
+		"no signature contract",
+		"missing signature contract",
+		"no verifier or signing-secret contract",
+		"no verifier or signing secret contract",
 		"no signing-secret contract",
 		"no signing secret contract",
 		"missing signing-secret contract",
