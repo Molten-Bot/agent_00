@@ -7805,12 +7805,38 @@ func TestPreExistingValidationFailureRequiresFocusedSuccessAndBaselineEvidence(t
 			}, "\n"),
 		},
 		{
+			name: "negated focused validation success",
+			output: strings.Join([]string{
+				"No focused tests passed.",
+				"Baseline evidence: same failure reproduced on the base branch.",
+				failure,
+			}, "\n"),
+		},
+		{
+			name: "uncertain baseline reproduction",
+			output: strings.Join([]string{
+				"Focused tests passed.",
+				"Whether the same failure reproduced on the base branch is unknown.",
+				failure,
+			}, "\n"),
+		},
+		{
 			name: "separate incomplete work failure",
 			output: strings.Join([]string{
 				"Focused tests and type-check pass.",
 				"Baseline evidence: same failure reproduced on the base branch.",
 				failure,
 				"Requested work not completed because generated output still differs.",
+			}, "\n"),
+		},
+		{
+			name: "separate fatal failure",
+			output: strings.Join([]string{
+				"Focused tests and type-check pass.",
+				"Baseline evidence: same failure reproduced on the base branch.",
+				failure,
+				"Failure: Deployment failed because service credentials were rejected.",
+				"Error details: deployment command exited with status 1.",
 			}, "\n"),
 		},
 	}

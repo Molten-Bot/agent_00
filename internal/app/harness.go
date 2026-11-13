@@ -6362,7 +6362,8 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	})
 	if preExistingValidation &&
 		hasSuccessfulFocusedValidation(evidenceText) &&
-		hasBaselineFailureEvidence(evidenceText) {
+		hasBaselineFailureEvidence(evidenceText) &&
+		!hasSeparateReportedFailure(detail, res.Stdout) {
 		return true
 	}
 
@@ -6516,6 +6517,9 @@ func hasSuccessfulFocusedValidation(text string) bool {
 			continue
 		}
 		if stringsx.ContainsAny(line, []string{
+			"no focused",
+			"zero focused",
+			"none of the focused",
 			"did not pass",
 			"does not pass",
 			"not passed",
@@ -6526,6 +6530,10 @@ func hasSuccessfulFocusedValidation(text string) bool {
 			"failure",
 			"unavailable",
 			"could not",
+			"apparently",
+			"appears to",
+			"uncertain",
+			"unknown",
 		}) {
 			return false
 		}
@@ -6561,7 +6569,33 @@ func hasBaselineFailureEvidence(text string) bool {
 			"fails identically",
 			"failed identically",
 		})
-		if hasBaselineContext && hasReproduction {
+		uncertainOrNegated := stringsx.ContainsAny(line, []string{
+			"did not reproduce",
+			"does not reproduce",
+			"not reproduced",
+			"could not reproduce",
+			"cannot reproduce",
+			"whether",
+			"apparently",
+			"appears to",
+			"uncertain",
+			"unknown",
+		})
+		if hasBaselineContext && hasReproduction && !uncertainOrNegated {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSeparateReportedFailure(detail, output string) bool {
+	lowerDetail := strings.ToLower(strings.TrimSpace(detail))
+	for _, line := range strings.Split(output, "\n") {
+		field := strings.TrimSpace(agentFailureFieldLine(line))
+		if !strings.HasPrefix(strings.ToLower(field), "failure:") || strings.EqualFold(field, "failure:") {
+			continue
+		}
+		if !strings.Contains(lowerDetail, strings.ToLower(field)) {
 			return true
 		}
 	}
