@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
+	"github.com/Molten-Bot/agent_00/internal/jsonx"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
 
@@ -282,7 +283,7 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
 
-	cleaned := stripLineComments(data)
+	cleaned := jsonx.StripLineComments(data)
 	var cfg Config
 	dec := json.NewDecoder(bytes.NewReader(cleaned))
 	if err := dec.Decode(&cfg); err != nil {
@@ -926,53 +927,6 @@ func summarize(s string, max int) string {
 	s = strings.TrimSpace(s)
 	s = strings.Trim(s, ",.;:-")
 	return s
-}
-
-func stripLineComments(data []byte) []byte {
-	var out []byte
-	inString := false
-	escaped := false
-
-	for i := 0; i < len(data); i++ {
-		ch := data[i]
-
-		if inString {
-			out = append(out, ch)
-			if escaped {
-				escaped = false
-				continue
-			}
-			if ch == '\\' {
-				escaped = true
-				continue
-			}
-			if ch == '"' {
-				inString = false
-			}
-			continue
-		}
-
-		if ch == '"' {
-			inString = true
-			out = append(out, ch)
-			continue
-		}
-
-		// Drop JSONC-style single-line comments.
-		if ch == '/' && i+1 < len(data) && data[i+1] == '/' {
-			for i < len(data) && data[i] != '\n' {
-				i++
-			}
-			if i < len(data) && data[i] == '\n' {
-				out = append(out, '\n')
-			}
-			continue
-		}
-
-		out = append(out, ch)
-	}
-
-	return out
 }
 
 func normalizeNonEmptyStrings(values []string) []string {

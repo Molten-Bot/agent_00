@@ -13,6 +13,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/gitsigning"
+	"github.com/Molten-Bot/agent_00/internal/jsonx"
 )
 
 var signingSettingsMu sync.Mutex
@@ -208,7 +209,7 @@ func (s SigningSettings) savedConfig() (gitsigning.Config, error) {
 	var doc struct {
 		CommitSigning gitsigning.Config `json:"commit_signing"`
 	}
-	if err := json.Unmarshal(stripLineComments(data), &doc); err != nil {
+	if err := json.Unmarshal(jsonx.StripLineComments(data), &doc); err != nil {
 		return gitsigning.Config{}, fmt.Errorf("%w: invalid runtime configuration", gitsigning.ErrSetup)
 	}
 	return doc.CommitSigning, nil

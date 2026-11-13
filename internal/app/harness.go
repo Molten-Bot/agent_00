@@ -1680,7 +1680,7 @@ func isMergeConflictResult(res execx.Result, err error) bool {
 		"resolve your current index first",
 		"you have unmerged paths",
 	}
-	return containsAny(text, markers)
+	return stringsx.ContainsAny(text, markers)
 }
 
 func hasUnmergedPaths(statusStdout string) bool {
@@ -4938,7 +4938,7 @@ func diskSpaceExhaustionError(cmd execx.Command, res execx.Result, err error) er
 
 func agentWorkspaceStorageExhausted(res execx.Result) bool {
 	detail := strings.ToLower(res.Stdout + "\n" + res.Stderr)
-	return containsAny(detail, []string{
+	return stringsx.ContainsAny(detail, []string{
 		"no space left on device",
 		"out of diskspace",
 		"disk quota exceeded",
@@ -5624,7 +5624,7 @@ func agentOutputCitesAgent00NoChangeEvidence(res execx.Result) bool {
 	evidenceMarkers := []string{
 		"internal/", "cmd/", "library/",
 	}
-	return containsAny(text, evidenceMarkers)
+	return stringsx.ContainsAny(text, evidenceMarkers)
 }
 
 func agentOutputCitesGeneralNoChangeEvidence(res execx.Result) bool {
@@ -5649,7 +5649,7 @@ func agentOutputHasConcreteBehaviorEvidence(text string) bool {
 		"tests passed",
 	}
 	for _, line := range splitOutputLines(text) {
-		if strings.Contains(line, "`") && containsAny(line, validationMarkers) {
+		if strings.Contains(line, "`") && stringsx.ContainsAny(line, validationMarkers) {
 			return true
 		}
 	}
@@ -5704,7 +5704,7 @@ func agentOutputHasNoChangeClaim(text string) bool {
 		"already satisfied",
 		"requested state already",
 	}
-	return containsAny(text, noOpMarkers)
+	return stringsx.ContainsAny(text, noOpMarkers)
 }
 
 var agentConcreteFileEvidencePatterns = []*regexp.Regexp{
@@ -6360,7 +6360,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"focused go validation unavailable in runtime",
 		"node_modules missing",
 	}
-	validationUnavailable := containsAny(text, validationUnavailableMarkers)
+	validationUnavailable := stringsx.ContainsAny(text, validationUnavailableMarkers)
 
 	missingTooling := strings.Contains(text, "command not found") ||
 		strings.Contains(text, ": not found") ||
@@ -6389,11 +6389,11 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		strings.Contains(text, "`uv` missing") ||
 		strings.Contains(text, "uv missing") ||
 		strings.Contains(text, "node_modules missing")
-	restrictedDependencyDownload := containsAny(text, []string{
+	restrictedDependencyDownload := stringsx.ContainsAny(text, []string{
 		"restricted network",
 		"network operation prohibited",
 		"network access prohibited",
-	}) && containsAny(text, []string{
+	}) && stringsx.ContainsAny(text, []string{
 		"could not download",
 		"failed to download",
 		"dependency download",
@@ -6445,8 +6445,8 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"network operation prohibited",
 		"network access prohibited",
 	}
-	hasValidationCommand := containsAny(text, validationCommandMarkers)
-	hasValidationContext := containsAny(text, validationContextMarkers)
+	hasValidationCommand := stringsx.ContainsAny(text, validationCommandMarkers)
+	hasValidationContext := stringsx.ContainsAny(text, validationContextMarkers)
 
 	// Some agent responses only include missing validation command output plus
 	// an "Alternative validation" section without explicit "validation unavailable"
@@ -6467,7 +6467,7 @@ func smokeFallbackSucceeded(text string) bool {
 		if !strings.Contains(line, "smoke") || !strings.Contains(line, "fallback") {
 			continue
 		}
-		if containsAny(line, []string{
+		if stringsx.ContainsAny(line, []string{
 			"fallback failed",
 			"fallback did not pass",
 			"fallback did not succeed",
@@ -6482,7 +6482,7 @@ func smokeFallbackSucceeded(text string) bool {
 		}) {
 			continue
 		}
-		if containsAny(line, []string{
+		if stringsx.ContainsAny(line, []string{
 			"apparently",
 			"appears to",
 			"cannot verify",
@@ -6501,7 +6501,7 @@ func smokeFallbackSucceeded(text string) bool {
 		}) {
 			continue
 		}
-		if containsAny(line, []string{
+		if stringsx.ContainsAny(line, []string{
 			"fallback succeeded",
 			"fallback passed",
 			"fallback smoke check succeeded",
@@ -6537,16 +6537,7 @@ func isCodexExecutionTransportFailure(res execx.Result, err error) bool {
 		"failed to lookup address information",
 		"temporary failure in name resolution",
 	}
-	return containsAny(text, transportMarkers)
-}
-
-func containsAny(text string, markers []string) bool {
-	for _, marker := range markers {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
+	return stringsx.ContainsAny(text, transportMarkers)
 }
 
 func isRecoveredTransientRegistryLookupFailure(detail string, res execx.Result) bool {
@@ -6620,13 +6611,13 @@ func isNonFatalRemoteDeploymentAuthFailure(detail string, res execx.Result) bool
 		"no repo-side failure reproduced",
 		"no repository-side failure reproduced",
 	}
-	if !containsAny(text, remoteCheckMarkers) {
+	if !stringsx.ContainsAny(text, remoteCheckMarkers) {
 		return false
 	}
-	if !containsAny(text, authUnavailableMarkers) {
+	if !stringsx.ContainsAny(text, authUnavailableMarkers) {
 		return false
 	}
-	if !containsAny(text, localPassMarkers) {
+	if !stringsx.ContainsAny(text, localPassMarkers) {
 		return false
 	}
 	return true

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/gitsigning"
+	"github.com/Molten-Bot/agent_00/internal/jsonx"
 )
 
 const defaultInitVersion = "v1"
@@ -99,7 +100,7 @@ func LoadInit(path string) (InitConfig, error) {
 		return InitConfig{}, fmt.Errorf("read init config: %w", err)
 	}
 
-	cleaned := stripLineComments(data)
+	cleaned := jsonx.StripLineComments(data)
 	cleaned, err = normalizeSchedulerJSON(cleaned)
 	if err != nil {
 		return InitConfig{}, fmt.Errorf("parse init json: %w", err)
@@ -328,50 +329,4 @@ func defaultSchedulerMaxParallelForCores(cores int) int {
 	default:
 		return cores
 	}
-}
-
-func stripLineComments(data []byte) []byte {
-	var out []byte
-	inString := false
-	escaped := false
-
-	for i := 0; i < len(data); i++ {
-		ch := data[i]
-
-		if inString {
-			out = append(out, ch)
-			if escaped {
-				escaped = false
-				continue
-			}
-			if ch == '\\' {
-				escaped = true
-				continue
-			}
-			if ch == '"' {
-				inString = false
-			}
-			continue
-		}
-
-		if ch == '"' {
-			inString = true
-			out = append(out, ch)
-			continue
-		}
-
-		if ch == '/' && i+1 < len(data) && data[i+1] == '/' {
-			for i < len(data) && data[i] != '\n' {
-				i++
-			}
-			if i < len(data) && data[i] == '\n' {
-				out = append(out, '\n')
-			}
-			continue
-		}
-
-		out = append(out, ch)
-	}
-
-	return out
 }
