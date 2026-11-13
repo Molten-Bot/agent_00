@@ -7854,6 +7854,77 @@ func TestPreExistingValidationFailureRequiresFocusedSuccessAndBaselineEvidence(t
 	}
 }
 
+func TestPreExistingValidationFailureChecksTerminalSecondaryFailuresOnBothStreams(t *testing.T) {
+	t.Parallel()
+
+	failure := strings.Join([]string{
+		"Failure: Full workspace build not green due existing repository configuration.",
+		"Error details: Root task configuration has no build task.",
+	}, "\n")
+	validationEvidence := strings.Join([]string{
+		"Focused tests and type-check pass.",
+		"Baseline evidence: same failure reproduced on the base branch.",
+		failure,
+	}, "\n")
+	secondaryFailure := strings.Join([]string{
+		"Failure: Deployment failed because service credentials were rejected.",
+		"Error details: deployment command exited with status 1.",
+	}, "\n")
+	resolvedProgress := strings.Join([]string{
+		secondaryFailure,
+		"Retried deployment.",
+		"Credentials refreshed.",
+		"Deployment started.",
+		"Health check started.",
+		"Health check passed.",
+		"Smoke check started.",
+		"Smoke check passed.",
+		"Deployment completed.",
+		"Done.",
+	}, "\n")
+
+	tests := []struct {
+		name string
+		res  execx.Result
+		want bool
+	}{
+		{
+			name: "terminal stderr failure",
+			res: execx.Result{
+				Stdout: validationEvidence,
+				Stderr: secondaryFailure,
+			},
+		},
+		{
+			name: "resolved stdout progress failure",
+			res: execx.Result{
+				Stdout: resolvedProgress + "\n" + validationEvidence,
+			},
+			want: true,
+		},
+		{
+			name: "resolved stderr progress failure",
+			res: execx.Result{
+				Stdout: validationEvidence,
+				Stderr: resolvedProgress,
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := isNonFatalValidationToolingFailure(failure, tc.res)
+			if got != tc.want {
+				t.Fatalf("isNonFatalValidationToolingFailure() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunCodexDoesNotDowngradeIncompleteWorkWithPreExistingBuildFailure(t *testing.T) {
 	t.Parallel()
 

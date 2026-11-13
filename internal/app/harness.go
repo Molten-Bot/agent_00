@@ -6363,7 +6363,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	if preExistingValidation &&
 		hasSuccessfulFocusedValidation(evidenceText) &&
 		hasBaselineFailureEvidence(evidenceText) &&
-		!hasSeparateReportedFailure(detail, res.Stdout) {
+		!hasSeparateReportedFailure(detail, res.Stdout, res.Stderr) {
 		return true
 	}
 
@@ -6588,15 +6588,28 @@ func hasBaselineFailureEvidence(text string) bool {
 	return false
 }
 
-func hasSeparateReportedFailure(detail, output string) bool {
+func hasSeparateReportedFailure(detail string, outputs ...string) bool {
 	lowerDetail := strings.ToLower(strings.TrimSpace(detail))
-	for _, line := range strings.Split(output, "\n") {
-		field := strings.TrimSpace(agentFailureFieldLine(line))
-		if !strings.HasPrefix(strings.ToLower(field), "failure:") || strings.EqualFold(field, "failure:") {
-			continue
+	for _, output := range outputs {
+		lines := splitOutputLines(output)
+		nonEmpty := make([]string, 0, len(lines))
+		for _, line := range lines {
+			if trimmed := strings.TrimSpace(line); trimmed != "" {
+				nonEmpty = append(nonEmpty, trimmed)
+			}
 		}
-		if !strings.Contains(lowerDetail, strings.ToLower(field)) {
-			return true
+		start := 0
+		if len(nonEmpty) > terminalFailureWindow {
+			start = len(nonEmpty) - terminalFailureWindow
+		}
+		for _, line := range nonEmpty[start:] {
+			field := strings.TrimSpace(agentFailureFieldLine(line))
+			if !strings.HasPrefix(strings.ToLower(field), "failure:") || strings.EqualFold(field, "failure:") {
+				continue
+			}
+			if !strings.Contains(lowerDetail, strings.ToLower(field)) {
+				return true
+			}
 		}
 	}
 	return false
@@ -6944,6 +6957,8 @@ func agentReportedFailureFields(nonEmpty []string) (bool, string) {
 	return false, ""
 }
 
+const terminalFailureWindow = 8
+
 func codexReportedFailureInOutput(output string, allowStructured bool) (bool, string) {
 	output = strings.TrimSpace(output)
 	if output == "" {
@@ -6965,7 +6980,6 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 	// Codex stdout often contains long tool transcripts. To avoid stale
 	// mid-run "Failure:" progress updates causing false failures, only
 	// treat terminal output lines as authoritative failure markers.
-	const terminalFailureWindow = 8
 	start := 0
 	if len(nonEmpty) > terminalFailureWindow {
 		start = len(nonEmpty) - terminalFailureWindow
