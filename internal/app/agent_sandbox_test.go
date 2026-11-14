@@ -33,16 +33,18 @@ func expectedCodexArgs(roots []string, extra ...string) []string {
 	if err != nil {
 		panic(err)
 	}
-	roots = append(append([]string(nil), roots...), codexHome)
 	filesystem := []string{`":root"="read"`}
 	for _, root := range roots {
 		encoded, _ := json.Marshal(root)
 		filesystem = append(filesystem, string(encoded)+`="write"`)
 	}
+	encodedHome, _ := json.Marshal(codexHome)
+	encodedAuth, _ := json.Marshal(filepath.Join(codexHome, "auth.json"))
+	filesystem = append(filesystem, string(encodedHome)+`="read"`, string(encodedAuth)+`="write"`)
 	args := []string{
 		"sandbox", "-P", "agent00_task",
 		"-c", `permissions.agent00_task={filesystem={` + strings.Join(filesystem, ",") + `},network={enabled=true}}`,
-		"--", "codex", "exec", "--dangerously-bypass-approvals-and-sandbox",
+		"--", "codex", "exec", "--ephemeral", "--dangerously-bypass-approvals-and-sandbox",
 		"-c", `approval_policy="never"`,
 	}
 	return append(args, extra...)

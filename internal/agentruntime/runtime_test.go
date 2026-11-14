@@ -42,7 +42,7 @@ func TestTaskSandboxWritableRoots(t *testing.T) {
 			}
 			filesystem := `permissions.agent00_task={filesystem={":root"="read","/tasks/current/repo/subdir"="write","/tasks/current"="write"`
 			if harness == HarnessCodex {
-				filesystem += `,"/persistent/auth"="write"`
+				filesystem += `,"/persistent/auth"="read","/persistent/auth/auth.json"="write"`
 			}
 			filesystem += `},network={enabled=true}}`
 			for _, required := range []string{
@@ -576,7 +576,7 @@ func TestBuildCommandCodex(t *testing.T) {
 	wantArgs := []string{
 		"sandbox", "-P", "agent00_task",
 		"-c", `permissions.agent00_task={filesystem={":root"="read","/tmp/work"="write","/tmp/run"="write"},network={enabled=true}}`,
-		"--", "codex", "exec", "--dangerously-bypass-approvals-and-sandbox",
+		"--", "codex", "exec", "--ephemeral", "--dangerously-bypass-approvals-and-sandbox",
 		"-c", `approval_policy="never"`,
 		"--skip-git-repo-check", "--add-dir", "/tmp/run", "--image", "a.png", "--image", "b.png",
 	}
@@ -588,7 +588,7 @@ func TestBuildCommandCodex(t *testing.T) {
 	}
 }
 
-func TestCodexTaskSandboxGrantsPersistentHome(t *testing.T) {
+func TestCodexTaskSandboxGrantsOnlyPersistentAuthFile(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")
@@ -610,9 +610,20 @@ func TestCodexTaskSandboxGrantsPersistentHome(t *testing.T) {
 	if cmd.Name != "custom-codex" {
 		t.Fatalf("Name = %q, want configured Codex command", cmd.Name)
 	}
+	wantAuth := fmt.Sprintf(`%q="write"`, filepath.Join(persistent, "auth.json"))
+	if !containsArgFragment(cmd.Args, wantAuth) {
+		t.Fatalf("persistent Codex auth file missing from sandbox roots: %v", cmd.Args)
+	}
+	wantReadOnlyHome := fmt.Sprintf(`%q="read"`, persistent)
+	if !containsArgFragment(cmd.Args, wantReadOnlyHome) {
+		t.Fatalf("persistent Codex home missing read-only boundary: %v", cmd.Args)
+	}
 	wantHome := fmt.Sprintf(`%q="write"`, persistent)
-	if !containsArgFragment(cmd.Args, wantHome) {
-		t.Fatalf("persistent Codex home missing from sandbox roots: %v", cmd.Args)
+	if containsArgFragment(cmd.Args, wantHome) {
+		t.Fatalf("persistent Codex home must stay read-only: %v", cmd.Args)
+	}
+	if !slices.Contains(cmd.Args, "--ephemeral") {
+		t.Fatalf("Codex task must not persist session state: %v", cmd.Args)
 	}
 	wantBoundary := []string{"--", "custom-codex", "exec"}
 	for i := 0; i+len(wantBoundary) <= len(cmd.Args); i++ {

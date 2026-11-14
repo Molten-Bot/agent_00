@@ -223,13 +223,13 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 		// codex exec does not accept a permission_profile config field. Run it
 		// without its inner sandbox and enforce the task's granular policy with
 		// the Codex sandbox helper, which supports named permission profiles.
-		codexHome, homeErr := codexConfigSandboxRoot(cmd.Env)
+		codexState, homeErr := codexConfigSandboxRules(cmd.Env)
 		if homeErr != nil {
 			return execx.Command{}, fmt.Errorf("prepare Codex sandbox home: %w", homeErr)
 		}
 		args := []string{
 			"sandbox", "-P", taskPermissionProfile,
-			"-c", taskPermissionProfileConfig(targetDir, opts, codexHome),
+			"-c", taskPermissionProfileConfigWithRules(targetDir, opts, codexState),
 			"--", cmd.Name,
 		}
 		cmd.Args = append(args, cmd.Args...)
@@ -329,20 +329,38 @@ func resolveSandboxPath(dir string) (string, error) {
 // resolution. In particular, agents cannot change repository config that later
 // harness Git commands would load.
 func taskPermissionProfileConfig(targetDir string, opts RunOptions, extraRoots ...string) string {
+	extraRules := make([]sandboxFilesystemRule, 0, len(extraRoots))
+	for _, root := range extraRoots {
+		extraRules = append(extraRules, sandboxFilesystemRule{path: root, access: "write"})
+	}
+	return taskPermissionProfileConfigWithRules(targetDir, opts, extraRules)
+}
+
+type sandboxFilesystemRule struct {
+	path   string
+	access string
+}
+
+func taskPermissionProfileConfigWithRules(targetDir string, opts RunOptions, extraRules []sandboxFilesystemRule) string {
 	roots := []string{targetDir, opts.WorkspaceDir}
 	roots = append(roots, opts.WritableDirs...)
-	roots = append(roots, extraRoots...)
 
 	filesystem := []string{`":root"="read"`}
-	seen := make(map[string]bool, len(roots))
-	for _, root := range roots {
+	seen := make(map[string]bool, len(roots)+len(extraRules))
+	appendRule := func(root, access string) {
 		root = strings.TrimSpace(root)
-		if root == "" || seen[root] {
-			continue
+		if root == "" || seen[root+"\x00"+access] {
+			return
 		}
-		seen[root] = true
+		seen[root+"\x00"+access] = true
 		encoded, _ := json.Marshal(root)
-		filesystem = append(filesystem, string(encoded)+`="write"`)
+		filesystem = append(filesystem, string(encoded)+`="`+access+`"`)
+	}
+	for _, root := range roots {
+		appendRule(root, "write")
+	}
+	for _, rule := range extraRules {
+		appendRule(rule.path, rule.access)
 	}
 	for _, gitDir := range findGitDirs(targetDir, opts.WorkspaceDir) {
 		for _, rule := range []struct {
@@ -456,21 +474,34 @@ func claudeConfigSandboxRoot(env []string) (string, error) {
 	return resolveSandboxPath(scratch)
 }
 
-// codexConfigSandboxRoot resolves the persistent Codex home that the CLI must
-// update for token rotation and session state. The harness serializes access to
-// this directory with AcquireCodexSession before starting the child process.
-func codexConfigSandboxRoot(env []string) (string, error) {
+// codexConfigSandboxRules resolves the files in persistent Codex home that the
+// CLI must update for token rotation. Task invocations are ephemeral, so they
+// need no persistent session state. Keep configuration, skills, plugins,
+// caches, and locks read-only even while the harness serializes CLI access.
+func codexConfigSandboxRules(env []string) ([]sandboxFilesystemRule, error) {
 	if len(env) == 0 {
 		env = os.Environ()
 	}
 	if !describesCodexConfigDir(env) {
-		return "", nil
+		return nil, nil
 	}
 	home, err := CodexHome(env)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return resolveSandboxPath(home)
+	home, err = resolveSandboxPath(home)
+	if err != nil {
+		return nil, err
+	}
+	auth, err := resolveSandboxPath(filepath.Join(home, "auth.json"))
+	if err != nil {
+		return nil, err
+	}
+	rules := []sandboxFilesystemRule{{path: home, access: "read"}}
+	if authParent := filepath.Dir(auth); authParent != home {
+		rules = append(rules, sandboxFilesystemRule{path: authParent, access: "read"})
+	}
+	return append(rules, sandboxFilesystemRule{path: auth, access: "write"}), nil
 }
 func describesCodexConfigDir(env []string) bool {
 	for _, entry := range env {
@@ -563,7 +594,7 @@ func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command
 		// Runtime.BuildCommand wraps this process in the granular task sandbox.
 		// Disable the inner sandbox so nested namespace setup cannot fail and so
 		// persistent operator sandbox settings cannot replace the outer policy.
-		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+		args = append(args, "--ephemeral", "--dangerously-bypass-approvals-and-sandbox")
 	}
 	args = append(args, "-c", `approval_policy="never"`)
 	if opts.SkipGitRepoCheck {

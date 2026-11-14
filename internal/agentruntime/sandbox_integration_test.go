@@ -89,6 +89,9 @@ func TestAgentSandboxWriteBoundary(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if err := os.WriteFile(filepath.Join(persistent, "auth.json"), []byte("old"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.WriteFile(filepath.Join(repo, ".git", "config"), []byte("[core]\n\trepositoryformatversion = 0\n\tbare = false\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -108,9 +111,13 @@ set -eu
 printf yes > repo-write
 printf yes > .git/index.lock
 if [ "$ALLOW_PERSISTENT_WRITE" = yes ]; then
-    printf yes > "$TEST_PERSISTENT/session-write"
-elif (printf bad > "$TEST_PERSISTENT/session-write") 2>/dev/null; then
+    printf yes > "$TEST_PERSISTENT/auth.json"
+elif (printf bad > "$TEST_PERSISTENT/auth.json") 2>/dev/null; then
     echo "sandbox allowed persistent config write" >&2
+    exit 1
+fi
+if (printf bad > "$TEST_PERSISTENT/session-write") 2>/dev/null; then
+    echo "sandbox allowed persistent session write" >&2
     exit 1
 fi
 if (printf bad > .git/config) 2>/dev/null; then
@@ -148,7 +155,12 @@ done
 			}
 			if harness == HarnessCodex {
 				// Exercise the generated Codex policy without invoking a model.
-				cmd.Args = []string{"sandbox", "-P", taskPermissionProfile, "-c", taskPermissionProfileConfig(repo, opts, persistent), "--", script}
+				rules, err := codexConfigSandboxRules(env)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cmd.Name = HarnessCodex
+				cmd.Args = []string{"sandbox", "-P", taskPermissionProfile, "-c", taskPermissionProfileConfigWithRules(repo, opts, rules), "--", script}
 				cmd.Stdin = ""
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -159,17 +171,14 @@ done
 			}
 			expectedWrites := []string{filepath.Join(repo, "repo-write"), filepath.Join(repo, ".git", "index.lock"), filepath.Join(tmp, "tmp-write")}
 			if harness == HarnessCodex {
-				expectedWrites = append(expectedWrites, filepath.Join(persistent, "session-write"))
+				expectedWrites = append(expectedWrites, filepath.Join(persistent, "auth.json"))
 			}
 			for _, path := range expectedWrites {
 				if _, err := os.Stat(path); err != nil {
 					t.Fatalf("expected allowed write %s: %v", path, err)
 				}
 			}
-			deniedWrites := []string{filepath.Join(base, "global-write"), filepath.Join(sibling, "write")}
-			if harness != HarnessCodex {
-				deniedWrites = append(deniedWrites, filepath.Join(persistent, "session-write"))
-			}
+			deniedWrites := []string{filepath.Join(base, "global-write"), filepath.Join(sibling, "write"), filepath.Join(persistent, "session-write")}
 			for _, path := range deniedWrites {
 				if _, err := os.Stat(path); !os.IsNotExist(err) {
 					t.Fatalf("outside write was not denied: %s (%v)", path, err)

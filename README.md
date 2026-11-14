@@ -131,8 +131,9 @@ read-only.
 Claude runs through `codex sandbox` with the same task boundary, including its
 child processes. This requires the Codex CLI even when selecting Claude; both
 CLIs are included in the Docker image. Missing or failed sandbox tooling stops
-the run. The trusted Codex CLI still saves login rotation and session state to
-the persistent `CODEX_HOME`; model-issued commands cannot write there.
+the run. Codex tasks do not persist session files. CLI can update only
+`auth.json` in persistent `CODEX_HOME` for login rotation; configuration,
+skills, plugins, caches, and locks stay read-only.
 
 Claude runs also get one directory inside the persistent `CLAUDE_CONFIG_DIR` as
 a writable root: `session-env`, the per-session scratch directory the CLI writes
