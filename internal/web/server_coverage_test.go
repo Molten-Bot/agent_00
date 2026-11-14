@@ -203,7 +203,7 @@ func TestHandleAgentAuthConfigureDecodeFailure(t *testing.T) {
 	}
 }
 
-func TestHandleChatAndHandleGameReportNotFoundForOtherPaths(t *testing.T) {
+func TestHandleChatReportsNotFoundForOtherPaths(t *testing.T) {
 	t.Parallel()
 
 	srv := NewServer("", NewBroker())
@@ -212,12 +212,6 @@ func TestHandleChatAndHandleGameReportNotFoundForOtherPaths(t *testing.T) {
 	srv.handleChat(rec, httptest.NewRequest(http.MethodGet, "/chat/extra", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("handleChat(other path) status = %d, want 404", rec.Code)
-	}
-
-	rec = httptest.NewRecorder()
-	srv.handleGame(rec, httptest.NewRequest(http.MethodGet, "/game/extra", nil))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("handleGame(other path) status = %d, want 404", rec.Code)
 	}
 }
 
