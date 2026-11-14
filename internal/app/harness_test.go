@@ -119,7 +119,7 @@ func isImplicitBranchFreshnessCommand(cmd execx.Command) bool {
 	if len(cmd.Args) >= 3 && cmd.Args[0] == "fetch" && cmd.Args[1] == "origin" {
 		return isKnownDefaultBranchName(cmd.Args[2])
 	}
-	return len(cmd.Args) == 3 && cmd.Args[0] == "merge" && cmd.Args[1] == "--no-edit" && cmd.Args[2] == "FETCH_HEAD"
+	return commandsEqual(cmd, mergeFetchedBranchCommand(cmd.Dir))
 }
 
 type captureRunner struct {
@@ -5960,23 +5960,23 @@ func TestCommandBuilders(t *testing.T) {
 	}
 
 	mergeFetchedBranch := mergeFetchedBranchCommand(repoDir)
-	wantMergeFetchedBranch := []string{"merge", "--no-edit", "FETCH_HEAD"}
+	wantMergeFetchedBranch := []string{"-c", "core.hooksPath=/dev/null", "merge", "--no-edit", "FETCH_HEAD"}
 	if mergeFetchedBranch.Name != "git" || mergeFetchedBranch.Dir != repoDir || !reflect.DeepEqual(mergeFetchedBranch.Args, wantMergeFetchedBranch) {
 		t.Fatalf("merge fetched branch command unexpected: %+v", mergeFetchedBranch)
 	}
 
 	pushDryRun := pushDryRunCommand(repoDir, branch)
-	wantPushDryRun := []string{"push", "--dry-run", "origin", "HEAD:refs/heads/" + branch}
+	wantPushDryRun := []string{"-c", "core.hooksPath=/dev/null", "push", "--dry-run", "origin", "HEAD:refs/heads/" + branch}
 	if pushDryRun.Name != "git" || pushDryRun.Dir != repoDir || !reflect.DeepEqual(pushDryRun.Args, wantPushDryRun) {
 		t.Fatalf("push dry-run command unexpected: %+v", pushDryRun)
 	}
 	pushForkDryRun := pushDryRunToRemoteCommand(repoDir, "fork", branch)
-	wantPushForkDryRun := []string{"push", "--dry-run", "fork", "HEAD:refs/heads/" + branch}
+	wantPushForkDryRun := []string{"-c", "core.hooksPath=/dev/null", "push", "--dry-run", "fork", "HEAD:refs/heads/" + branch}
 	if pushForkDryRun.Name != "git" || pushForkDryRun.Dir != repoDir || !reflect.DeepEqual(pushForkDryRun.Args, wantPushForkDryRun) {
 		t.Fatalf("push fork dry-run command unexpected: %+v", pushForkDryRun)
 	}
 	pushFork := pushToRemoteCommand(repoDir, "fork", branch)
-	wantPushFork := []string{"push", "-u", "fork", branch}
+	wantPushFork := []string{"-c", "core.hooksPath=/dev/null", "push", "-u", "fork", branch}
 	if pushFork.Name != "git" || pushFork.Dir != repoDir || !reflect.DeepEqual(pushFork.Args, wantPushFork) {
 		t.Fatalf("push fork command unexpected: %+v", pushFork)
 	}
@@ -6016,23 +6016,68 @@ func TestCommitCommandAddsMoltenbotCoAuthorTrailer(t *testing.T) {
 
 	repoDir := "/tmp/run/repo"
 	commit := commitCommand(repoDir, "feat: automate api")
-	want := []string{"commit", "-m", "feat: automate api", "-m", wantTrailer}
+	want := []string{"-c", "core.hooksPath=/dev/null", "commit", "-m", "feat: automate api", "-m", wantTrailer}
 	if commit.Name != "git" || commit.Dir != repoDir || !reflect.DeepEqual(commit.Args, want) {
 		t.Fatalf("commit command unexpected: %+v", commit)
 	}
 
 	remediationMessage := remediationCommitMessage("fix: tests", 2)
 	remediation := commitCommand(repoDir, remediationMessage)
-	wantRemediation := []string{"commit", "-m", "fix: tests (ci remediation 2)", "-m", wantTrailer}
+	wantRemediation := []string{"-c", "core.hooksPath=/dev/null", "commit", "-m", "fix: tests (ci remediation 2)", "-m", wantTrailer}
 	if remediation.Name != "git" || remediation.Dir != repoDir || !reflect.DeepEqual(remediation.Args, wantRemediation) {
 		t.Fatalf("remediation commit command unexpected: %+v", remediation)
 	}
 
 	messageWithTrailer := "feat: automate api\n\n" + wantTrailer
 	deduped := commitCommand(repoDir, messageWithTrailer)
-	wantDeduped := []string{"commit", "-m", messageWithTrailer}
+	wantDeduped := []string{"-c", "core.hooksPath=/dev/null", "commit", "-m", messageWithTrailer}
 	if deduped.Name != "git" || deduped.Dir != repoDir || !reflect.DeepEqual(deduped.Args, wantDeduped) {
 		t.Fatalf("deduped commit command unexpected: %+v", deduped)
+	}
+}
+
+func TestHarnessGitLifecycleCommandsDisableHooks(t *testing.T) {
+	t.Parallel()
+	commands := []execx.Command{
+		commitCommand("/tmp/repo", "fix bug"),
+		pushCommand("/tmp/repo", "topic"),
+		pushDryRunToRemoteCommand("/tmp/repo", publishRemoteOrigin, "topic"),
+		mergeFetchedBranchCommand("/tmp/repo"),
+		mergeAbortCommand("/tmp/repo"),
+	}
+	wantPrefix := []string{"-c", "core.hooksPath=/dev/null"}
+	for _, cmd := range commands {
+		if len(cmd.Args) < len(wantPrefix) || !reflect.DeepEqual(cmd.Args[:len(wantPrefix)], wantPrefix) {
+			t.Fatalf("Git lifecycle command can run repository hooks: %#v", cmd.Args)
+		}
+	}
+}
+
+func TestCommitCommandDoesNotRunRepositoryHook(t *testing.T) {
+	t.Parallel()
+	repo := t.TempDir()
+	runner := execx.OSRunner{}
+	run := func(cmd execx.Command) {
+		t.Helper()
+		res, err := runner.Run(context.Background(), cmd)
+		if err != nil {
+			t.Fatalf("run %s %v: %v\n%s", cmd.Name, cmd.Args, err, res.Stderr)
+		}
+	}
+	run(gitCommand(repo, "init", "--quiet"))
+	run(gitCommand(repo, "config", "user.name", "Agent Test"))
+	run(gitCommand(repo, "config", "user.email", "agent@example.test"))
+	if err := os.WriteFile(filepath.Join(repo, "change.txt"), []byte("change\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hook := filepath.Join(repo, ".git", "hooks", "pre-commit")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\ntouch hook-ran\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	run(addCommand(repo))
+	run(commitCommand(repo, "test commit"))
+	if _, err := os.Stat(filepath.Join(repo, "hook-ran")); !os.IsNotExist(err) {
+		t.Fatalf("repository hook ran outside agent sandbox: %v", err)
 	}
 }
 

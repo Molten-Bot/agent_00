@@ -206,7 +206,7 @@ func TestMergeAbortCommand(t *testing.T) {
 	t.Parallel()
 
 	got := mergeAbortCommand("/repo")
-	want := execx.Command{Dir: "/repo", Name: "git", Args: []string{"merge", "--abort"}}
+	want := execx.Command{Dir: "/repo", Name: "git", Args: []string{"-c", "core.hooksPath=/dev/null", "merge", "--abort"}}
 	if got.Name != want.Name || got.Dir != want.Dir || strings.Join(got.Args, " ") != strings.Join(want.Args, " ") {
 		t.Fatalf("mergeAbortCommand() = %+v, want %+v", got, want)
 	}

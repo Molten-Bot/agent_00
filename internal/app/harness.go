@@ -4697,6 +4697,13 @@ func gitCommand(dir string, args ...string) execx.Command {
 	return execx.Command{Dir: dir, Name: "git", Args: args}
 }
 
+// gitCommandWithoutHooks prevents repository-controlled hooks from crossing
+// the agent sandbox boundary when the harness performs Git lifecycle actions.
+func gitCommandWithoutHooks(dir string, args ...string) execx.Command {
+	args = append([]string{"-c", "core.hooksPath=/dev/null"}, args...)
+	return gitCommand(dir, args...)
+}
+
 // ghCommand builds a gh (GitHub CLI) invocation run in dir with the given arguments.
 func ghCommand(dir string, args ...string) execx.Command {
 	return execx.Command{Dir: dir, Name: "gh", Args: args}
@@ -7666,7 +7673,7 @@ func addPRCommentScreenshotsCommand(repoDir string, files []string) execx.Comman
 
 func commitCommand(repoDir, msg string) execx.Command {
 	args := append([]string{"commit"}, commitMessageArgs(msg)...)
-	return gitCommand(repoDir, args...)
+	return gitCommandWithoutHooks(repoDir, args...)
 }
 
 func commitMessageArgs(msg string) []string {
@@ -7683,12 +7690,12 @@ func pushCommand(repoDir, branch string) execx.Command {
 
 func pushToRemoteCommand(repoDir, remote, branch string) execx.Command {
 	remote = normalizeGitRemoteName(remote)
-	return gitCommand(repoDir, "push", "-u", remote, branch)
+	return gitCommandWithoutHooks(repoDir, "push", "-u", remote, branch)
 }
 
 func pushDryRunToRemoteCommand(repoDir, remote, branch string) execx.Command {
 	remote = normalizeGitRemoteName(remote)
-	return gitCommand(repoDir, "push", "--dry-run", remote, fmt.Sprintf("HEAD:refs/heads/%s", normalizeBranchRef(branch)))
+	return gitCommandWithoutHooks(repoDir, "push", "--dry-run", remote, fmt.Sprintf("HEAD:refs/heads/%s", normalizeBranchRef(branch)))
 }
 
 func commitsAheadOfBaseCommand(repoDir, baseBranch string) execx.Command {
@@ -7719,11 +7726,11 @@ func fetchBranchFromRemoteCommand(repoDir, remote, branch string) execx.Command 
 }
 
 func mergeFetchedBranchCommand(repoDir string) execx.Command {
-	return gitCommand(repoDir, "merge", "--no-edit", "FETCH_HEAD")
+	return gitCommandWithoutHooks(repoDir, "merge", "--no-edit", "FETCH_HEAD")
 }
 
 func mergeAbortCommand(repoDir string) execx.Command {
-	return gitCommand(repoDir, "merge", "--abort")
+	return gitCommandWithoutHooks(repoDir, "merge", "--abort")
 }
 
 func gitRemoteAddCommand(repoDir, remote, remoteURL string) execx.Command {

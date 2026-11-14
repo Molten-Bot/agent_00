@@ -84,7 +84,7 @@ func TestAgentSandboxWriteBoundary(t *testing.T) {
 			persistent := filepath.Join(base, "persistent")
 			sibling := filepath.Join(base, "other-task")
 			sandboxHome := filepath.Join(root, ".agent00-agent-io", "config", "sandbox")
-			for _, dir := range []string{repo, tmp, persistent, sibling, sandboxHome} {
+			for _, dir := range []string{repo, filepath.Join(repo, ".git"), tmp, persistent, sibling, sandboxHome} {
 				if err := os.MkdirAll(dir, 0o700); err != nil {
 					t.Fatal(err)
 				}
@@ -104,7 +104,7 @@ printf yes > .git/index.lock
 printf yes > "$TMPDIR/tmp-write"
 for path in "$TEST_BASE/global-write" "$TEST_SIBLING/write" "$TEST_PERSISTENT/write" escape/write; do
     if (printf bad > "$path") 2>/dev/null; then
-        echo "sandbox allowed an outside write" >&2
+        echo "sandbox allowed an outside write: $path" >&2
         exit 1
     fi
 done

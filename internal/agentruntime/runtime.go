@@ -312,7 +312,8 @@ func resolveSandboxPath(dir string) (string, error) {
 // their task workspace. Unlike Codex's built-in workspace-write profile, this
 // profile deliberately permits Git metadata writes so an agent can stage a
 // conflict resolution. The harness still owns commits, pushes, and every path
-// outside the task boundary.
+// outside the task boundary. Harness Git commands that can execute hooks disable
+// them explicitly before they run outside this sandbox.
 func taskPermissionProfileConfig(targetDir string, opts RunOptions, extraRoots ...string) string {
 	roots := []string{targetDir, opts.WorkspaceDir}
 	roots = append(roots, opts.WritableDirs...)

@@ -62,7 +62,7 @@ func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (exec
 		if len(cmd.Args) == 0 {
 			break
 		}
-		switch cmd.Args[0] {
+		switch gitOperation(cmd.Args) {
 		case "rev-parse":
 			return execx.Result{Stdout: "head-sha\n"}, nil
 		case "status":
@@ -304,7 +304,7 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 		if len(cmd.Args) == 0 {
 			break
 		}
-		switch cmd.Args[0] {
+		switch gitOperation(cmd.Args) {
 		case "rev-parse":
 			return execx.Result{Stdout: "head-sha\n"}, nil
 		case "status":

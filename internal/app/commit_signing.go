@@ -20,7 +20,7 @@ func (h Harness) runCommand(ctx context.Context, phase string, cmd execx.Command
 	if len(cmd.Args) == 0 {
 		return h.runCommandUnchecked(ctx, phase, cmd)
 	}
-	operation := cmd.Args[0]
+	operation := gitOperation(cmd.Args)
 	if operation == "push" {
 		trusted := make([]string, 0, len(h.signingHistory[cmd.Dir]))
 		for oid := range h.signingHistory[cmd.Dir] {
@@ -49,6 +49,21 @@ func (h Harness) runCommand(ctx context.Context, phase string, cmd execx.Command
 		err = h.recordSigningHistory(ctx, cmd.Dir, true)
 	}
 	return result, err
+}
+
+func gitOperation(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-c", "--config-env", "--git-dir", "--work-tree", "--namespace", "--super-prefix":
+			i++
+		case "--no-pager", "--paginate", "--no-replace-objects", "--bare":
+		default:
+			if !strings.HasPrefix(args[i], "-") {
+				return args[i]
+			}
+		}
+	}
+	return ""
 }
 
 // Only clone and harness-controlled fetches establish trusted history. Local task
