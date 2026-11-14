@@ -481,10 +481,10 @@ func claudeConfigSandboxRoot(env []string) (string, error) {
 	return resolveSandboxPath(scratch)
 }
 
-// codexConfigSandboxRules resolves the files in persistent Codex home that the
-// CLI must update for token rotation. Task invocations are ephemeral, so they
-// need no persistent session state. Keep configuration, skills, plugins,
-// caches, and locks read-only even while the harness serializes CLI access.
+// codexConfigSandboxRules resolves persistent Codex files needed when no
+// isolated task home exists. Task invocations are ephemeral, so they need no
+// persistent session state. Keep configuration, skills, plugins, caches, and
+// locks read-only even while the harness serializes CLI access.
 func codexConfigSandboxRules(env []string) ([]sandboxFilesystemRule, error) {
 	if len(env) == 0 {
 		env = os.Environ()

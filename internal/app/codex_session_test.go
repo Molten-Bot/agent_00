@@ -2,9 +2,7 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,7 +21,7 @@ func (f sessionRunnerFunc) Run(ctx context.Context, cmd execx.Command) (execx.Re
 	return f(ctx, cmd)
 }
 
-func TestCodexTasksIsolateRotatedCredentialsAcrossConcurrentRuns(t *testing.T) {
+func TestCodexTasksNeverPromoteTaskControlledCredentials(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
 	authPath := filepath.Join(home, "auth.json")
@@ -57,11 +55,8 @@ func TestCodexTasksIsolateRotatedCredentialsAcrossConcurrentRuns(t *testing.T) {
 		if err != nil {
 			return execx.Result{}, err
 		}
-		var credential struct {
-			Generation int `json:"generation"`
-		}
-		if err := json.Unmarshal(data, &credential); err != nil {
-			return execx.Result{}, err
+		if string(data) != `{"generation":0}` {
+			t.Errorf("seeded credentials = %q, want persistent generation", data)
 		}
 		for path, want := range map[string]string{
 			filepath.Join(taskHome, "config.toml"):         "model = \"configured\"\n",
@@ -74,8 +69,7 @@ func TestCodexTasksIsolateRotatedCredentialsAcrossConcurrentRuns(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 		next := filepath.Join(taskHome, ".auth-next")
-		rotated := []byte(fmt.Sprintf(`{"generation":%d}`, credential.Generation+1))
-		if err := os.WriteFile(next, rotated, 0o600); err != nil {
+		if err := os.WriteFile(next, []byte(`{"token":"task-controlled"}`), 0o600); err != nil {
 			return execx.Result{}, err
 		}
 		return execx.Result{Stdout: "completed"}, os.Rename(next, taskAuth)
@@ -96,8 +90,8 @@ func TestCodexTasksIsolateRotatedCredentialsAcrossConcurrentRuns(t *testing.T) {
 	}
 	wg.Wait()
 	data, err := os.ReadFile(authPath)
-	if err != nil || string(data) != `{"generation":12}` {
-		t.Fatalf("persistent credentials = %q, %v; want latest rotation", data, err)
+	if err != nil || string(data) != `{"generation":0}` {
+		t.Fatalf("task-controlled credentials reached persistent home: %q, %v", data, err)
 	}
 }
 
@@ -136,7 +130,7 @@ func TestCodexAuthFailureBlocksTasksUntilFreshLogin(t *testing.T) {
 	}
 }
 
-func TestFailedCodexRunDoesNotPersistTaskCredentials(t *testing.T) {
+func TestFailedCodexRunDoesNotChangePersistentCredentials(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
 	authPath := filepath.Join(home, "auth.json")

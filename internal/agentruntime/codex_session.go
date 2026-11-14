@@ -3,7 +3,6 @@ package agentruntime
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,7 +16,6 @@ var ErrCodexAuthRequired = errors.New("Codex authentication required; sign in ag
 
 const codexAuthFailureFile = ".agent00-auth-required"
 const codexCredentialSourceEnv = "AGENT00_CODEX_CREDENTIAL_SOURCE"
-const maxCodexCredentialSize = 16 << 20
 
 var codexReadOnlyConfigEntries = []string{"config.toml", "profiles", "skills", "plugins"}
 
@@ -60,7 +58,8 @@ func codexCredentialSource(environ []string) (string, bool) {
 
 // SeedCodexCredentials copies persistent credentials into a task-local home.
 // Codex may then use its normal sibling-temp-file-and-rename update without
-// granting model-issued commands write access to shared credentials.
+// granting model-issued commands write access to shared credentials. Changes
+// to this task-controlled copy must never be promoted to the persistent home.
 func SeedCodexCredentials(sourceHome, taskHome string) error {
 	if sourceHome == taskHome {
 		return nil
@@ -124,61 +123,6 @@ func SeedCodexHome(sourceHome, taskHome string) error {
 		if err := os.Symlink(source, destination); err != nil {
 			return fmt.Errorf("link read-only Codex configuration %s: %w", name, err)
 		}
-	}
-	return nil
-}
-
-// PersistCodexCredentials atomically installs a successful CLI rotation in the
-// persistent home. Callers must hold the Codex session lock and only invoke this
-// after a trusted CLI process exits successfully.
-func PersistCodexCredentials(taskHome, persistentHome string) error {
-	if taskHome == persistentHome {
-		return nil
-	}
-	taskPath := filepath.Join(taskHome, "auth.json")
-	info, err := os.Lstat(taskPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect rotated Codex credentials: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("rotated Codex credentials must be a regular file")
-	}
-	if info.Size() > maxCodexCredentialSize {
-		return fmt.Errorf("rotated Codex credentials exceed %d bytes", maxCodexCredentialSize)
-	}
-	content, err := os.ReadFile(taskPath)
-	if err != nil {
-		return fmt.Errorf("read rotated Codex credentials: %w", err)
-	}
-	if !json.Valid(content) {
-		return fmt.Errorf("rotated Codex credentials are not valid JSON")
-	}
-	persistentPath := filepath.Join(persistentHome, "auth.json")
-	if current, err := os.ReadFile(persistentPath); err == nil && string(current) == string(content) {
-		return nil
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read persistent Codex credentials: %w", err)
-	}
-	file, err := os.CreateTemp(persistentHome, ".auth-rotation-*")
-	if err != nil {
-		return fmt.Errorf("create persistent Codex credentials: %w", err)
-	}
-	defer os.Remove(file.Name())
-	if err := file.Chmod(0o600); err != nil {
-		file.Close()
-		return fmt.Errorf("secure persistent Codex credentials: %w", err)
-	}
-	_, writeErr := file.Write(content)
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
-		return fmt.Errorf("write persistent Codex credentials: %w", err)
-	}
-	if err := os.Rename(file.Name(), persistentPath); err != nil {
-		return fmt.Errorf("install persistent Codex credentials: %w", err)
 	}
 	return nil
 }

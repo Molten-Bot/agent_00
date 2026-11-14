@@ -97,41 +97,6 @@ func TestSeedCodexHomeLinksPersistentConfiguration(t *testing.T) {
 	}
 }
 
-func TestPersistCodexCredentialsUsesValidatedAtomicCopy(t *testing.T) {
-	t.Parallel()
-	persistent := t.TempDir()
-	taskHome := t.TempDir()
-	persistentPath := filepath.Join(persistent, "auth.json")
-	taskPath := filepath.Join(taskHome, "auth.json")
-	if err := os.WriteFile(persistentPath, []byte(`{"token":"old"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(taskPath, []byte(`{"token":"rotated"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := PersistCodexCredentials(taskHome, persistent); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(persistentPath)
-	if err != nil || string(got) != `{"token":"rotated"}` {
-		t.Fatalf("persistent credentials = %q, %v", got, err)
-	}
-	if info, err := os.Stat(persistentPath); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("persistent credential mode = %v, %v; want 0600", info, err)
-	}
-
-	if err := os.WriteFile(taskPath, []byte("not-json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := PersistCodexCredentials(taskHome, persistent); err == nil || !strings.Contains(err.Error(), "not valid JSON") {
-		t.Fatalf("invalid rotation error = %v", err)
-	}
-	got, err = os.ReadFile(persistentPath)
-	if err != nil || string(got) != `{"token":"rotated"}` {
-		t.Fatalf("invalid rotation changed persistent credentials: %q, %v", got, err)
-	}
-}
-
 func TestCodexSessionCancellationAndIndependentHomes(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()

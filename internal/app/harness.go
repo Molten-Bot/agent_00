@@ -6092,15 +6092,6 @@ func (h Harness) runCodexWithHeartbeat(
 				stateErr := agentruntime.MarkCodexAuthenticationRequired(codexCredentialHome)
 				return run.res, errors.Join(agentruntime.ErrCodexAuthRequired, stateErr)
 			}
-			if runtime.Harness == agentruntime.HarnessCodex && run.err == nil {
-				taskHome, homeErr := agentruntime.CodexHome(cmd.Env)
-				if homeErr != nil {
-					return run.res, homeErr
-				}
-				if err := agentruntime.PersistCodexCredentials(taskHome, codexCredentialHome); err != nil {
-					return run.res, err
-				}
-			}
 			if failed, detail := codexReportedFailure(run.res); failed {
 				detail = codexFailureDetailWithErrorDetails(run.res, detail)
 				if agentWorkspaceStorageExhausted(run.res) {
@@ -7191,8 +7182,8 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 	if len(environ) == 0 {
 		environ = os.Environ()
 	}
-	// Codex owns persistent auth, configuration, skills and token rotation. Never
-	// clone its auth cache into a task worktree or discard a refreshed generation.
+	// Resolve persistent Codex configuration before HOME isolation. Task execution
+	// receives an isolated credential copy; task-controlled changes stay isolated.
 	codexConfigDir, err := agentruntime.CodexHome(environ)
 	if err != nil {
 		return nil, err
