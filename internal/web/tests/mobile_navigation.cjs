@@ -114,6 +114,20 @@ test('swiping from a task action scrolls without firing it; tapping still opens 
   await page.waitForFunction(() => document.querySelector('#task-fullscreen').getAttribute('aria-hidden') === 'true');
 });
 
+test('running tasks omit the status icon and always expose their original prompt', async t => {
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false);
+  const task = page.locator('#task-list .task').first();
+  await task.waitFor();
+  assert.equal(await task.locator('.badge').count(), 0, 'running task has no status icon');
+
+  const prompt = task.locator('.task-prompt-toggle');
+  const originalPrompt = await task.locator('.task-id').getAttribute('title');
+  await prompt.waitFor();
+  await prompt.click();
+  await page.locator('#task-prompt-modal:not(.hidden)').waitFor();
+  assert.equal(await page.locator('#task-prompt-modal-body').textContent(), originalPrompt);
+});
+
 for (const viewport of [{ width: 430, height: 932 }, { width: 932, height: 430 }]) {
   test(`Enter adds a newline to the Studio prompt without submitting on mobile ${viewport.width}×${viewport.height}`, async t => {
     const { page, writes } = await openPage(t, 'studio', viewport);
