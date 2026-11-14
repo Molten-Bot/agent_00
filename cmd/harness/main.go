@@ -81,22 +81,10 @@ func run() int {
 
 	switch os.Args[1] {
 	case "run":
-		if err := workspace.PrepareDefaultRoots(); err != nil {
-			fmt.Fprintf(os.Stderr, "workspace init error: %v\n", err)
-			return app.ExitWorkspace
-		}
 		return runSingle(os.Args[2:])
 	case "multiplex":
-		if err := workspace.PrepareDefaultRoots(); err != nil {
-			fmt.Fprintf(os.Stderr, "workspace init error: %v\n", err)
-			return app.ExitWorkspace
-		}
 		return runMultiplex(os.Args[2:])
 	case "serve":
-		if err := workspace.PrepareDefaultRoots(); err != nil {
-			fmt.Fprintf(os.Stderr, "workspace init error: %v\n", err)
-			return app.ExitWorkspace
-		}
 		return runServer(os.Args[2:])
 	default:
 		printUsage()
@@ -303,6 +291,10 @@ func runServer(args []string) int {
 		// Settings → Commit signing, and signingSubmissionGate refuses task
 		// submissions for as long as SetupRequirement reports the hold.
 		daemonLogger("commit_signing status=error event=setup_required err=%q", err)
+	}
+	if err := workspace.PrepareDefaultRoots(); err != nil {
+		writeStderrLine(logger, fmt.Sprintf("workspace init error: %v", err))
+		return app.ExitWorkspace
 	}
 
 	if runtimeErr == nil {
