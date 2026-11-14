@@ -1525,16 +1525,13 @@
 
     function renderTaskStatusBadge(task) {
       const status = taskDisplayStatus(task);
+      if (status === "running" || status === "active") {
+        return null;
+      }
+
       const statusLabel = taskStatusLabel(status);
       const badge = document.createElement("span");
       badge.className = `badge badge-icon ${statusClass(status)}`;
-
-      if (status === "running" || status === "active") {
-        badge.title = "Running: task is actively executing.";
-        badge.setAttribute("aria-label", "Running: task is actively executing.");
-        badge.appendChild(createTaskActionIcon("loader"));
-        return badge;
-      }
 
       badge.title = `Status: ${statusLabel}.`;
       badge.setAttribute("aria-label", `Status: ${statusLabel}.`);
@@ -9772,11 +9769,6 @@
       return truncateText(taskPromptText(task) || taskSystemLabel(task) || "Task Prompt", TASK_PROMPT_MODAL_TITLE_MAX_CHARS);
     }
 
-    function taskHasTruncatedPrompt(task) {
-      const prompt = taskPromptText(task);
-      return prompt.length > TASK_PROMPT_PREVIEW_MAX_CHARS;
-    }
-
     function taskSystemLabel(task) {
       const requestID = taskRequestID(task);
       if (requestID.endsWith("-failure-review")) {
@@ -12293,9 +12285,6 @@
       };
 
       const renderPromptToggle = (task) => {
-        if (!taskHasTruncatedPrompt(task)) {
-          return null;
-        }
         const promptToggle = document.createElement("button");
         promptToggle.type = "button";
         promptToggle.className = "task-prompt-toggle task-icon-button";
@@ -12357,7 +12346,7 @@
 
         const topActions = document.createElement("div");
         topActions.className = "task-top-actions";
-        if (!taskHistoryView && !collapsed) {
+        if (badge && !taskHistoryView && !collapsed) {
           topActions.appendChild(badge);
         }
 
@@ -12612,7 +12601,7 @@
             node.classList.add("task-compact-state-left");
             node.appendChild(compactState);
           }
-        } else if (taskHistoryView) {
+        } else if (badge && taskHistoryView) {
           node.classList.add("task-history-status-left");
           node.appendChild(badge);
         }

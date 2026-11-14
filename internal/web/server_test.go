@@ -2164,9 +2164,16 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `stop.appendChild(createTaskActionIcon("stop"));`) {
 		t.Fatalf("expected index html to render task stop icon control")
 	}
-	if !strings.Contains(markup, `badge.appendChild(createTaskActionIcon("loader"));`) ||
-		!strings.Contains(markup, `badge.title = "Running: task is actively executing.";`) {
-		t.Fatalf("expected index html to render running badge loader icon with descriptive tooltip")
+	if !strings.Contains(markup, `if (status === "running" || status === "active") {
+        return null;
+      }`) ||
+		strings.Contains(markup, `badge.appendChild(createTaskActionIcon("loader"));`) {
+		t.Fatalf("expected index html to omit the running task status icon")
+	}
+	if !strings.Contains(markup, `const renderPromptToggle = (task) => {
+        const promptToggle = document.createElement("button");`) ||
+		strings.Contains(markup, `if (!taskHasTruncatedPrompt(task))`) {
+		t.Fatalf("expected index html to always render the task prompt action")
 	}
 	if !strings.Contains(markup, `close.textContent = "X";`) {
 		t.Fatalf("expected index html to render task close icon control")
