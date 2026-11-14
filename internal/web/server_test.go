@@ -2470,60 +2470,6 @@ func TestHandlerServesVendoredXtermAssets(t *testing.T) {
 	}
 }
 
-func TestHandlerGameServesZooCatch(t *testing.T) {
-	t.Parallel()
-
-	srv := NewServer("", NewBroker())
-	req := httptest.NewRequest(http.MethodGet, "/game", nil)
-	resp := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusOK {
-		t.Fatalf("status = %d", resp.Code)
-	}
-	if ct := resp.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
-		t.Fatalf("content-type = %q", ct)
-	}
-
-	markup := resp.Body.String()
-	if !strings.Contains(markup, `id="game-board"`) || !strings.Contains(markup, `src="/static/game.js"`) {
-		t.Fatalf("expected game markup to include board and script")
-	}
-	if !strings.Contains(markup, `src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"`) ||
-		!strings.Contains(markup, `window.gtag("config", "G-BY33RFG2WB");`) {
-		t.Fatalf("expected game page to load and configure google analytics")
-	}
-
-	script, err := staticFiles.ReadFile("static/game.js")
-	if err != nil {
-		t.Fatalf("read game script: %v", err)
-	}
-	gameScript := string(script)
-	if !strings.Contains(gameScript, "el.className = `animal animal-${animal.id}`;") ||
-		strings.Contains(gameScript, "style.background") ||
-		strings.Contains(gameScript, "style.order") ||
-		strings.Contains(gameScript, "style.transform") {
-		t.Fatalf("expected game script to use global stylesheet classes for static animal styles")
-	}
-
-	stylesheet, err := staticFiles.ReadFile("static/style.css")
-	if err != nil {
-		t.Fatalf("read style.css: %v", err)
-	}
-	css := string(stylesheet)
-	for _, want := range []string{
-		".animal-lion {",
-		"--zoo-animal-bg: #e8a14b;",
-		".animal-hippo {",
-		"--zoo-animal-order: 5;",
-		"transform: translate(var(--zoo-actor-x, 0), var(--zoo-actor-y, 0));",
-	} {
-		if !strings.Contains(css, want) {
-			t.Fatalf("expected game animal stylesheet to contain %q", want)
-		}
-	}
-}
-
 func TestIndexPromptReviewerClearBehavior(t *testing.T) {
 	t.Parallel()
 
@@ -2751,7 +2697,7 @@ func TestHandlerRemovesStandaloneSitePages(t *testing.T) {
 	t.Parallel()
 
 	srv := NewServer("", NewBroker())
-	for _, path := range []string{"/releases", "/dashboard"} {
+	for _, path := range []string{"/releases", "/dashboard", "/game"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		resp := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(resp, req)
