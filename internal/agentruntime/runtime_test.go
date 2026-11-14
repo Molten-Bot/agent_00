@@ -41,9 +41,6 @@ func TestTaskSandboxWritableRoots(t *testing.T) {
 				t.Fatal(err)
 			}
 			filesystem := `permissions.agent00_task={filesystem={":root"="read","/tasks/current/repo/subdir"="write","/tasks/current"="write"`
-			if harness == HarnessCodex {
-				filesystem += `,"/persistent/auth"="read","/persistent/auth/auth.json"="write"`
-			}
 			filesystem += `},network={enabled=true}}`
 			for _, required := range []string{
 				"agent00_task",
@@ -58,6 +55,11 @@ func TestTaskSandboxWritableRoots(t *testing.T) {
 					!slices.Contains(cmd.Args, `approval_policy="never"`) ||
 					!slices.Contains(cmd.Args, "--dangerously-bypass-approvals-and-sandbox") {
 					t.Fatalf("Codex must not permit escalation: %+v", cmd)
+				}
+				if slices.Contains(cmd.Env, "CODEX_HOME=/persistent/auth") ||
+					!slices.Contains(cmd.Env, "CODEX_HOME=/tasks/current/.agent00-agent-io/config/codex") ||
+					!slices.Contains(cmd.Env, "AGENT00_CODEX_CREDENTIAL_SOURCE=/persistent/auth") {
+					t.Fatalf("Codex must use isolated credentials: %#v", cmd.Env)
 				}
 			} else {
 				if cmd.Name != "codex" || !slices.Contains(cmd.Args, "custom-agent") {
@@ -588,7 +590,7 @@ func TestBuildCommandCodex(t *testing.T) {
 	}
 }
 
-func TestCodexTaskSandboxGrantsOnlyPersistentAuthFile(t *testing.T) {
+func TestCodexTaskSandboxIsolatesPersistentAuthFile(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")
@@ -610,17 +612,18 @@ func TestCodexTaskSandboxGrantsOnlyPersistentAuthFile(t *testing.T) {
 	if cmd.Name != "custom-codex" {
 		t.Fatalf("Name = %q, want configured Codex command", cmd.Name)
 	}
-	wantAuth := fmt.Sprintf(`%q="write"`, filepath.Join(persistent, "auth.json"))
-	if !containsArgFragment(cmd.Args, wantAuth) {
-		t.Fatalf("persistent Codex auth file missing from sandbox roots: %v", cmd.Args)
+	for _, forbidden := range []string{
+		fmt.Sprintf(`%q="write"`, persistent),
+		fmt.Sprintf(`%q="write"`, filepath.Join(persistent, "auth.json")),
+	} {
+		if containsArgFragment(cmd.Args, forbidden) {
+			t.Fatalf("persistent Codex credentials must stay read-only: %v", cmd.Args)
+		}
 	}
-	wantReadOnlyHome := fmt.Sprintf(`%q="read"`, persistent)
-	if !containsArgFragment(cmd.Args, wantReadOnlyHome) {
-		t.Fatalf("persistent Codex home missing read-only boundary: %v", cmd.Args)
-	}
-	wantHome := fmt.Sprintf(`%q="write"`, persistent)
-	if containsArgFragment(cmd.Args, wantHome) {
-		t.Fatalf("persistent Codex home must stay read-only: %v", cmd.Args)
+	taskHome := filepath.Join(root, ".agent00-agent-io", "config", "codex")
+	if !slices.Contains(cmd.Env, "CODEX_HOME="+taskHome) ||
+		!slices.Contains(cmd.Env, "AGENT00_CODEX_CREDENTIAL_SOURCE="+persistent) {
+		t.Fatalf("Env = %#v, want isolated home and persistent source", cmd.Env)
 	}
 	if !slices.Contains(cmd.Args, "--ephemeral") {
 		t.Fatalf("Codex task must not persist session state: %v", cmd.Args)

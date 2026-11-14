@@ -38,6 +38,28 @@ func TestCodexHome(t *testing.T) {
 	}
 }
 
+func TestSeedCodexCredentialsUsesAtomicTaskLocalCopy(t *testing.T) {
+	t.Parallel()
+	source := t.TempDir()
+	taskHome := filepath.Join(t.TempDir(), "config", "codex")
+	if err := os.WriteFile(filepath.Join(source, "auth.json"), []byte("persistent"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedCodexCredentials(source, taskHome); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskHome, ".auth-next"), []byte("refreshed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(taskHome, ".auth-next"), filepath.Join(taskHome, "auth.json")); err != nil {
+		t.Fatalf("task-local atomic credential refresh failed: %v", err)
+	}
+	persistent, err := os.ReadFile(filepath.Join(source, "auth.json"))
+	if err != nil || string(persistent) != "persistent" {
+		t.Fatalf("persistent credentials changed: %q, %v", persistent, err)
+	}
+}
+
 func TestCodexSessionCancellationAndIndependentHomes(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()

@@ -206,6 +206,13 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 	if err := validateWorkspaceDirs(targetDir, opts); err != nil {
 		return execx.Command{}, err
 	}
+	if normalizeHarness(r.Harness) == HarnessCodex && strings.TrimSpace(opts.WorkspaceDir) != "" {
+		var err error
+		opts.Env, err = isolatedCodexEnv(opts.Env, opts.WorkspaceDir)
+		if err != nil {
+			return execx.Command{}, fmt.Errorf("prepare isolated Codex home: %w", err)
+		}
+	}
 	def, ok := definitions[normalizeHarness(r.Harness)]
 	if !ok {
 		return execx.Command{}, fmt.Errorf("unsupported runtime harness %q", r.Harness)
@@ -482,6 +489,12 @@ func codexConfigSandboxRules(env []string) ([]sandboxFilesystemRule, error) {
 	if len(env) == 0 {
 		env = os.Environ()
 	}
+	// Task Codex homes live inside the writable workspace. Persistent credentials
+	// remain covered by the root read rule, while Codex can atomically replace its
+	// task-local auth.json without exposing shared credentials to model commands.
+	if _, ok := codexCredentialSource(env); ok {
+		return nil, nil
+	}
 	if !describesCodexConfigDir(env) {
 		return nil, nil
 	}
@@ -502,6 +515,25 @@ func codexConfigSandboxRules(env []string) ([]sandboxFilesystemRule, error) {
 		rules = append(rules, sandboxFilesystemRule{path: authParent, access: "read"})
 	}
 	return append(rules, sandboxFilesystemRule{path: auth, access: "write"}), nil
+}
+
+func isolatedCodexEnv(env []string, workspaceDir string) ([]string, error) {
+	if len(env) == 0 {
+		env = os.Environ()
+	}
+	persistent, err := CodexHome(env)
+	if err != nil {
+		return nil, err
+	}
+	isolated := filepath.Join(workspaceDir, ".agent00-agent-io", "config", "codex")
+	out := make([]string, 0, len(env)+2)
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "CODEX_HOME=") || strings.HasPrefix(entry, codexCredentialSourceEnv+"=") {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return append(out, "CODEX_HOME="+isolated, codexCredentialSourceEnv+"="+persistent), nil
 }
 func describesCodexConfigDir(env []string) bool {
 	for _, entry := range env {

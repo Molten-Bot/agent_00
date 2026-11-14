@@ -15,6 +15,7 @@ import (
 var ErrCodexAuthRequired = errors.New("Codex authentication required; sign in again in the harness runtime")
 
 const codexAuthFailureFile = ".agent00-auth-required"
+const codexCredentialSourceEnv = "AGENT00_CODEX_CREDENTIAL_SOURCE"
 
 // CodexHome resolves the operator's persistent home before task HOME isolation.
 func CodexHome(environ []string) (string, error) {
@@ -35,6 +36,59 @@ func CodexHome(environ []string) (string, error) {
 		home = filepath.Join(values["HOME"], ".codex")
 	}
 	return filepath.Abs(home)
+}
+
+// CodexCredentialSource returns the persistent home used to seed an isolated
+// task home. The source marker is removed before the agent process starts.
+func CodexCredentialSource(environ []string) (string, bool) {
+	return codexCredentialSource(environ)
+}
+
+func codexCredentialSource(environ []string) (string, bool) {
+	for i := len(environ) - 1; i >= 0; i-- {
+		key, value, ok := strings.Cut(environ[i], "=")
+		if ok && key == codexCredentialSourceEnv && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value), true
+		}
+	}
+	return "", false
+}
+
+// SeedCodexCredentials copies persistent credentials into a task-local home.
+// Codex may then use its normal sibling-temp-file-and-rename update without
+// granting model-issued commands write access to shared credentials.
+func SeedCodexCredentials(sourceHome, taskHome string) error {
+	if sourceHome == taskHome {
+		return nil
+	}
+	if err := os.MkdirAll(taskHome, 0o700); err != nil {
+		return fmt.Errorf("prepare isolated Codex home: %w", err)
+	}
+	content, err := os.ReadFile(filepath.Join(sourceHome, "auth.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read persistent Codex credentials: %w", err)
+	}
+	file, err := os.CreateTemp(taskHome, ".auth-*")
+	if err != nil {
+		return fmt.Errorf("create isolated Codex credentials: %w", err)
+	}
+	defer os.Remove(file.Name())
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
+		return fmt.Errorf("secure isolated Codex credentials: %w", err)
+	}
+	_, writeErr := file.Write(content)
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return fmt.Errorf("write isolated Codex credentials: %w", err)
+	}
+	if err := os.Rename(file.Name(), filepath.Join(taskHome, "auth.json")); err != nil {
+		return fmt.Errorf("install isolated Codex credentials: %w", err)
+	}
+	return nil
 }
 
 // CodexSession owns the credential lock. On Unix, pass ChildFiles to the child

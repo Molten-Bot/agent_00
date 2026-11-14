@@ -84,7 +84,8 @@ func TestAgentSandboxWriteBoundary(t *testing.T) {
 			persistent := filepath.Join(base, "persistent")
 			sibling := filepath.Join(base, "other-task")
 			sandboxHome := filepath.Join(root, ".agent00-agent-io", "config", "sandbox")
-			for _, dir := range []string{repo, filepath.Join(repo, ".git", "objects"), filepath.Join(repo, ".git", "refs", "heads"), tmp, persistent, sibling, sandboxHome} {
+			taskCodexHome := filepath.Join(root, ".agent00-agent-io", "config", "codex")
+			for _, dir := range []string{repo, filepath.Join(repo, ".git", "objects"), filepath.Join(repo, ".git", "refs", "heads"), tmp, persistent, sibling, sandboxHome, taskCodexHome} {
 				if err := os.MkdirAll(dir, 0o700); err != nil {
 					t.Fatal(err)
 				}
@@ -110,12 +111,12 @@ func TestAgentSandboxWriteBoundary(t *testing.T) {
 set -eu
 printf yes > repo-write
 printf yes > .git/index.lock
-if [ "$ALLOW_PERSISTENT_WRITE" = yes ]; then
-    printf yes > "$TEST_PERSISTENT/auth.json"
-elif (printf bad > "$TEST_PERSISTENT/auth.json") 2>/dev/null; then
+if (printf bad > "$TEST_PERSISTENT/auth.json") 2>/dev/null; then
     echo "sandbox allowed persistent config write" >&2
     exit 1
 fi
+printf refreshed > "$CODEX_HOME/.auth-next"
+mv "$CODEX_HOME/.auth-next" "$CODEX_HOME/auth.json"
 if (printf bad > "$TEST_PERSISTENT/session-write") 2>/dev/null; then
     echo "sandbox allowed persistent session write" >&2
     exit 1
@@ -139,11 +140,6 @@ done
 				"CODEX_HOME=" + persistent, "TEST_BASE=" + base,
 				"TEST_SIBLING=" + sibling, "TEST_PERSISTENT=" + persistent,
 			}
-			if harness == HarnessCodex {
-				env = append(env, "ALLOW_PERSISTENT_WRITE=yes")
-			} else {
-				env = append(env, "ALLOW_PERSISTENT_WRITE=no")
-			}
 			rt, err := Resolve(harness, script)
 			if err != nil {
 				t.Fatal(err)
@@ -155,7 +151,7 @@ done
 			}
 			if harness == HarnessCodex {
 				// Exercise the generated Codex policy without invoking a model.
-				rules, err := codexConfigSandboxRules(env)
+				rules, err := codexConfigSandboxRules(cmd.Env)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -170,9 +166,6 @@ done
 				t.Fatalf("sandbox probe failed: %v\n%s\n%s", err, res.Stdout, res.Stderr)
 			}
 			expectedWrites := []string{filepath.Join(repo, "repo-write"), filepath.Join(repo, ".git", "index.lock"), filepath.Join(tmp, "tmp-write")}
-			if harness == HarnessCodex {
-				expectedWrites = append(expectedWrites, filepath.Join(persistent, "auth.json"))
-			}
 			for _, path := range expectedWrites {
 				if _, err := os.Stat(path); err != nil {
 					t.Fatalf("expected allowed write %s: %v", path, err)
@@ -183,6 +176,10 @@ done
 				if _, err := os.Stat(path); !os.IsNotExist(err) {
 					t.Fatalf("outside write was not denied: %s (%v)", path, err)
 				}
+			}
+			persistentAuth, err := os.ReadFile(filepath.Join(persistent, "auth.json"))
+			if err != nil || string(persistentAuth) != "old" {
+				t.Fatalf("persistent credentials changed: %q, %v", persistentAuth, err)
 			}
 		})
 	}

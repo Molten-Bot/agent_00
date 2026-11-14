@@ -6015,11 +6015,17 @@ func (h Harness) runCodexWithHeartbeat(
 		return execx.Result{}, err
 	}
 
+	var codexCredentialHome string
 	if runtime.Harness == agentruntime.HarnessCodex {
-		home, err := agentruntime.CodexHome(cmd.Env)
+		taskHome, err := agentruntime.CodexHome(cmd.Env)
 		if err != nil {
 			return execx.Result{}, err
 		}
+		home := taskHome
+		if source, ok := agentruntime.CodexCredentialSource(cmd.Env); ok {
+			home = source
+		}
+		codexCredentialHome = home
 		h.logf("stage=codex status=waiting action=acquire_auth_session%s", invocation.logFieldsSuffix())
 		release, err := agentruntime.AcquireCodexSession(ctx, home)
 		if err != nil {
@@ -6030,12 +6036,15 @@ func (h Harness) runCodexWithHeartbeat(
 		if err := agentruntime.CheckCodexAuthentication(home); err != nil {
 			return execx.Result{}, err
 		}
+		if err := agentruntime.SeedCodexCredentials(home, taskHome); err != nil {
+			return execx.Result{}, err
+		}
 		// Resolve relative CODEX_HOME against the harness cwd, not the repo cwd.
 		env := cmd.Env
 		if len(env) == 0 {
 			env = os.Environ()
 		}
-		cmd.Env = environWithOverrides(env, "CODEX_HOME="+home)
+		cmd.Env = environWithoutKeys(environWithOverrides(env, "CODEX_HOME="+taskHome), "AGENT00_CODEX_CREDENTIAL_SOURCE")
 	}
 
 	runCtx := ctx
@@ -6080,8 +6089,7 @@ func (h Harness) runCodexWithHeartbeat(
 				return run.res, agentruntime.ErrClaudeAuthRequired
 			}
 			if runtime.Harness == agentruntime.HarnessCodex && codexInvocationAuthenticationFailed(run.res, run.err) {
-				home, _ := agentruntime.CodexHome(cmd.Env)
-				stateErr := agentruntime.MarkCodexAuthenticationRequired(home)
+				stateErr := agentruntime.MarkCodexAuthenticationRequired(codexCredentialHome)
 				return run.res, errors.Join(agentruntime.ErrCodexAuthRequired, stateErr)
 			}
 			if failed, detail := codexReportedFailure(run.res); failed {

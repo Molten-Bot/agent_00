@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,7 +21,7 @@ func (f sessionRunnerFunc) Run(ctx context.Context, cmd execx.Command) (execx.Re
 	return f(ctx, cmd)
 }
 
-func TestCodexTasksKeepRotatedCredentialsAcrossConcurrentRuns(t *testing.T) {
+func TestCodexTasksIsolateRotatedCredentialsAcrossConcurrentRuns(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
 	authPath := filepath.Join(home, "auth.json")
@@ -35,19 +34,27 @@ func TestCodexTasksKeepRotatedCredentialsAcrossConcurrentRuns(t *testing.T) {
 			t.Error("two Codex sessions shared a rotating login")
 		}
 		defer active.Add(-1)
-		if got := envValue(cmd.Env, "CODEX_HOME"); got != home {
-			t.Errorf("Codex home = %s", got)
+		taskHome := envValue(cmd.Env, "CODEX_HOME")
+		if taskHome == home || !strings.HasSuffix(taskHome, filepath.Join(".agent00-agent-io", "config", "codex")) {
+			t.Errorf("Codex home = %s, want task-local home", taskHome)
 		}
-		data, err := os.ReadFile(authPath)
+		if _, ok := environValue(cmd.Env, "AGENT00_CODEX_CREDENTIAL_SOURCE"); ok {
+			t.Error("persistent credential source leaked into agent environment")
+		}
+		taskAuth := filepath.Join(taskHome, "auth.json")
+		data, err := os.ReadFile(taskAuth)
 		if err != nil {
 			return execx.Result{}, err
 		}
-		generation, err := strconv.Atoi(string(data))
-		if err != nil {
-			return execx.Result{}, err
+		if string(data) != "0" {
+			t.Errorf("seeded credentials = %q, want persistent generation", data)
 		}
 		time.Sleep(time.Millisecond)
-		return execx.Result{Stdout: "completed"}, os.WriteFile(authPath, []byte(strconv.Itoa(generation+1)), 0o600)
+		next := filepath.Join(taskHome, ".auth-next")
+		if err := os.WriteFile(next, []byte("task-rotation"), 0o600); err != nil {
+			return execx.Result{}, err
+		}
+		return execx.Result{Stdout: "completed"}, os.Rename(next, taskAuth)
 	})}
 	var wg sync.WaitGroup
 	for range 12 {
@@ -57,7 +64,7 @@ func TestCodexTasksKeepRotatedCredentialsAcrossConcurrentRuns(t *testing.T) {
 			t.Fatal(err)
 		}
 		wg.Go(func() {
-			_, err := h.runCodexWithHeartbeat(context.Background(), agentruntime.Default(), runDir, "task", codexRunOptions{Env: env}, agentInvocationLogMetadata{})
+			_, err := h.runCodexWithHeartbeat(context.Background(), agentruntime.Default(), runDir, "task", codexRunOptions{WorkspaceDir: runDir, Env: env}, agentInvocationLogMetadata{})
 			if err != nil {
 				t.Errorf("run: %v", err)
 			}
@@ -65,8 +72,8 @@ func TestCodexTasksKeepRotatedCredentialsAcrossConcurrentRuns(t *testing.T) {
 	}
 	wg.Wait()
 	data, err := os.ReadFile(authPath)
-	if err != nil || string(data) != "12" {
-		t.Fatalf("rotated credentials = %q, %v; want 12", data, err)
+	if err != nil || string(data) != "0" {
+		t.Fatalf("persistent credentials = %q, %v; want unchanged", data, err)
 	}
 }
 
