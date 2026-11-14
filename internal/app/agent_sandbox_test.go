@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -28,6 +29,11 @@ func codexCommandWithOptions(targetDir, prompt string, opts codexRunOptions) exe
 }
 
 func expectedCodexArgs(roots []string, extra ...string) []string {
+	codexHome, err := agentruntime.CodexHome(os.Environ())
+	if err != nil {
+		panic(err)
+	}
+	roots = append(append([]string(nil), roots...), codexHome)
 	filesystem := []string{`":root"="read"`}
 	for _, root := range roots {
 		encoded, _ := json.Marshal(root)

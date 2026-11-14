@@ -24,7 +24,7 @@ func containsArgFragment(args []string, fragment string) bool {
 	return false
 }
 
-func TestTaskWorkspaceIsOnlyWritableRoot(t *testing.T) {
+func TestTaskSandboxWritableRoots(t *testing.T) {
 	t.Parallel()
 	for _, harness := range []string{HarnessCodex, HarnessClaude} {
 		t.Run(harness, func(t *testing.T) {
@@ -40,16 +40,21 @@ func TestTaskWorkspaceIsOnlyWritableRoot(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			filesystem := `permissions.agent00_task={filesystem={":root"="read","/tasks/current/repo/subdir"="write","/tasks/current"="write"`
+			if harness == HarnessCodex {
+				filesystem += `,"/persistent/auth"="write"`
+			}
+			filesystem += `},network={enabled=true}}`
 			for _, required := range []string{
 				"agent00_task",
-				`permissions.agent00_task={filesystem={":root"="read","/tasks/current/repo/subdir"="write","/tasks/current"="write"},network={enabled=true}}`,
+				filesystem,
 			} {
 				if !slices.Contains(cmd.Args, required) {
 					t.Fatalf("missing sandbox restriction %q in %v", required, cmd.Args)
 				}
 			}
 			if harness == HarnessCodex {
-				if cmd.Name != "codex" || !slices.Contains(cmd.Args, "custom-agent") ||
+				if cmd.Name != "custom-agent" || !slices.Contains(cmd.Args, "custom-agent") ||
 					!slices.Contains(cmd.Args, `approval_policy="never"`) ||
 					!slices.Contains(cmd.Args, "--dangerously-bypass-approvals-and-sandbox") {
 					t.Fatalf("Codex must not permit escalation: %+v", cmd)
@@ -581,6 +586,41 @@ func TestBuildCommandCodex(t *testing.T) {
 	if got, want := cmd.Env, []string{"GH_CONFIG_DIR=/tmp/gh"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Env = %#v, want %#v", got, want)
 	}
+}
+
+func TestCodexTaskSandboxGrantsPersistentHome(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	persistent := filepath.Join(t.TempDir(), "codex")
+	if err := os.Mkdir(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := Resolve(HarnessCodex, "custom-codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := rt.BuildCommand(repo, "fix", RunOptions{
+		WorkspaceDir: root,
+		Env:          []string{"CODEX_HOME=" + persistent},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Name != "custom-codex" {
+		t.Fatalf("Name = %q, want configured Codex command", cmd.Name)
+	}
+	wantHome := fmt.Sprintf(`%q="write"`, persistent)
+	if !containsArgFragment(cmd.Args, wantHome) {
+		t.Fatalf("persistent Codex home missing from sandbox roots: %v", cmd.Args)
+	}
+	wantBoundary := []string{"--", "custom-codex", "exec"}
+	for i := 0; i+len(wantBoundary) <= len(cmd.Args); i++ {
+		if slices.Equal(cmd.Args[i:i+len(wantBoundary)], wantBoundary) {
+			return
+		}
+	}
+	t.Fatalf("configured Codex command missing inside sandbox boundary: %v", cmd.Args)
 }
 
 func TestBuildCommandClaude(t *testing.T) {

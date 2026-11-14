@@ -223,13 +223,16 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 		// codex exec does not accept a permission_profile config field. Run it
 		// without its inner sandbox and enforce the task's granular policy with
 		// the Codex sandbox helper, which supports named permission profiles.
+		codexHome, homeErr := codexConfigSandboxRoot(cmd.Env)
+		if homeErr != nil {
+			return execx.Command{}, fmt.Errorf("prepare Codex sandbox home: %w", homeErr)
+		}
 		args := []string{
 			"sandbox", "-P", taskPermissionProfile,
-			"-c", taskPermissionProfileConfig(targetDir, opts),
+			"-c", taskPermissionProfileConfig(targetDir, opts, codexHome),
 			"--", cmd.Name,
 		}
 		cmd.Args = append(args, cmd.Args...)
-		cmd.Name = "codex"
 	}
 	if normalizeHarness(r.Harness) == HarnessClaude {
 		// Claude creates per-session scratch state next to its persistent
@@ -320,10 +323,11 @@ func resolveSandboxPath(dir string) (string, error) {
 	return filepath.Join(resolved, filepath.Base(path)), nil
 }
 
-// taskPermissionProfileConfig gives mutating agents write access only inside
-// their task workspace. Git metadata stays read-only except for the index and
-// object database needed to stage a conflict resolution. In particular, agents
-// cannot change repository config that later harness Git commands would load.
+// taskPermissionProfileConfig gives mutating agents write access to their task
+// workspace and explicit runtime state roots. Git metadata stays read-only
+// except for the index and object database needed to stage a conflict
+// resolution. In particular, agents cannot change repository config that later
+// harness Git commands would load.
 func taskPermissionProfileConfig(targetDir string, opts RunOptions, extraRoots ...string) string {
 	roots := []string{targetDir, opts.WorkspaceDir}
 	roots = append(roots, opts.WritableDirs...)
@@ -450,6 +454,35 @@ func claudeConfigSandboxRoot(env []string) (string, error) {
 		return "", err
 	}
 	return resolveSandboxPath(scratch)
+}
+
+// codexConfigSandboxRoot resolves the persistent Codex home that the CLI must
+// update for token rotation and session state. The harness serializes access to
+// this directory with AcquireCodexSession before starting the child process.
+func codexConfigSandboxRoot(env []string) (string, error) {
+	if len(env) == 0 {
+		env = os.Environ()
+	}
+	if !describesCodexConfigDir(env) {
+		return "", nil
+	}
+	home, err := CodexHome(env)
+	if err != nil {
+		return "", err
+	}
+	return resolveSandboxPath(home)
+}
+func describesCodexConfigDir(env []string) bool {
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || strings.TrimSpace(value) == "" {
+			continue
+		}
+		if key == "CODEX_HOME" || key == "HOME" {
+			return true
+		}
+	}
+	return false
 }
 
 // claudeSandboxEnv returns the environment the CLI actually resolves its

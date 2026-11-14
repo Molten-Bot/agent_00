@@ -107,12 +107,18 @@ func TestAgentSandboxWriteBoundary(t *testing.T) {
 set -eu
 printf yes > repo-write
 printf yes > .git/index.lock
+if [ "$ALLOW_PERSISTENT_WRITE" = yes ]; then
+    printf yes > "$TEST_PERSISTENT/session-write"
+elif (printf bad > "$TEST_PERSISTENT/session-write") 2>/dev/null; then
+    echo "sandbox allowed persistent config write" >&2
+    exit 1
+fi
 if (printf bad > .git/config) 2>/dev/null; then
     echo "sandbox allowed Git config write" >&2
     exit 1
 fi
 printf yes > "$TMPDIR/tmp-write"
-for path in "$TEST_BASE/global-write" "$TEST_SIBLING/write" "$TEST_PERSISTENT/write" escape/write; do
+for path in "$TEST_BASE/global-write" "$TEST_SIBLING/write" escape/write; do
     if (printf bad > "$path") 2>/dev/null; then
         echo "sandbox allowed an outside write: $path" >&2
         exit 1
@@ -126,6 +132,11 @@ done
 				"CODEX_HOME=" + persistent, "TEST_BASE=" + base,
 				"TEST_SIBLING=" + sibling, "TEST_PERSISTENT=" + persistent,
 			}
+			if harness == HarnessCodex {
+				env = append(env, "ALLOW_PERSISTENT_WRITE=yes")
+			} else {
+				env = append(env, "ALLOW_PERSISTENT_WRITE=no")
+			}
 			rt, err := Resolve(harness, script)
 			if err != nil {
 				t.Fatal(err)
@@ -137,7 +148,7 @@ done
 			}
 			if harness == HarnessCodex {
 				// Exercise the generated Codex policy without invoking a model.
-				cmd.Args = []string{"sandbox", "-P", taskPermissionProfile, "-c", taskPermissionProfileConfig(repo, opts), "--", script}
+				cmd.Args = []string{"sandbox", "-P", taskPermissionProfile, "-c", taskPermissionProfileConfig(repo, opts, persistent), "--", script}
 				cmd.Stdin = ""
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -146,12 +157,20 @@ done
 			if err != nil {
 				t.Fatalf("sandbox probe failed: %v\n%s\n%s", err, res.Stdout, res.Stderr)
 			}
-			for _, path := range []string{filepath.Join(repo, "repo-write"), filepath.Join(repo, ".git", "index.lock"), filepath.Join(tmp, "tmp-write")} {
+			expectedWrites := []string{filepath.Join(repo, "repo-write"), filepath.Join(repo, ".git", "index.lock"), filepath.Join(tmp, "tmp-write")}
+			if harness == HarnessCodex {
+				expectedWrites = append(expectedWrites, filepath.Join(persistent, "session-write"))
+			}
+			for _, path := range expectedWrites {
 				if _, err := os.Stat(path); err != nil {
 					t.Fatalf("expected allowed write %s: %v", path, err)
 				}
 			}
-			for _, path := range []string{filepath.Join(base, "global-write"), filepath.Join(sibling, "write"), filepath.Join(persistent, "write")} {
+			deniedWrites := []string{filepath.Join(base, "global-write"), filepath.Join(sibling, "write")}
+			if harness != HarnessCodex {
+				deniedWrites = append(deniedWrites, filepath.Join(persistent, "session-write"))
+			}
+			for _, path := range deniedWrites {
 				if _, err := os.Stat(path); !os.IsNotExist(err) {
 					t.Fatalf("outside write was not denied: %s (%v)", path, err)
 				}
