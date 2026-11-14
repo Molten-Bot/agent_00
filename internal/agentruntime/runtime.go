@@ -309,11 +309,9 @@ func resolveSandboxPath(dir string) (string, error) {
 }
 
 // taskPermissionProfileConfig gives mutating agents write access only inside
-// their task workspace. Unlike Codex's built-in workspace-write profile, this
-// profile deliberately permits Git metadata writes so an agent can stage a
-// conflict resolution. The harness still owns commits, pushes, and every path
-// outside the task boundary. Harness Git commands that can execute hooks disable
-// them explicitly before they run outside this sandbox.
+// their task workspace. Git metadata stays read-only except for the index and
+// object database needed to stage a conflict resolution. In particular, agents
+// cannot change repository config that later harness Git commands would load.
 func taskPermissionProfileConfig(targetDir string, opts RunOptions, extraRoots ...string) string {
 	roots := []string{targetDir, opts.WorkspaceDir}
 	roots = append(roots, opts.WritableDirs...)
@@ -330,7 +328,52 @@ func taskPermissionProfileConfig(targetDir string, opts RunOptions, extraRoots .
 		encoded, _ := json.Marshal(root)
 		filesystem = append(filesystem, string(encoded)+`="write"`)
 	}
+	if gitDir := findGitDir(targetDir, opts.WorkspaceDir); gitDir != "" {
+		for _, rule := range []struct {
+			path   string
+			access string
+		}{
+			{gitDir, "read"},
+			{filepath.Join(gitDir, "index"), "write"},
+			{filepath.Join(gitDir, "index.lock"), "write"},
+			{filepath.Join(gitDir, "objects"), "write"},
+		} {
+			encoded, _ := json.Marshal(rule.path)
+			filesystem = append(filesystem, string(encoded)+`="`+rule.access+`"`)
+		}
+	}
 	return "permissions." + taskPermissionProfile + "={filesystem={" + strings.Join(filesystem, ",") + "},network={enabled=true}}"
+}
+
+// findGitDir finds the repository metadata directory without invoking Git,
+// because repository config is untrusted at this boundary.
+func findGitDir(targetDir, workspaceDir string) string {
+	dir := filepath.Clean(targetDir)
+	if strings.TrimSpace(workspaceDir) == "" {
+		candidate := filepath.Join(dir, ".git")
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+		return ""
+	}
+	workspaceDir = filepath.Clean(workspaceDir)
+	for {
+		candidate := filepath.Join(dir, ".git")
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+		if dir == workspaceDir || dir == filepath.Dir(dir) {
+			return ""
+		}
+		parent := filepath.Dir(dir)
+		if workspaceDir != "." {
+			rel, err := filepath.Rel(workspaceDir, parent)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return ""
+			}
+		}
+		dir = parent
+	}
 }
 
 // claudeConfigSandboxRoot resolves the one directory inside the persistent

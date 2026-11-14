@@ -68,6 +68,28 @@ func TestTaskWorkspaceIsOnlyWritableRoot(t *testing.T) {
 	}
 }
 
+func TestTaskPermissionProfileProtectsGitConfig(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git", "objects"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	config := taskPermissionProfileConfig(filepath.Join(repo, "subdir"), RunOptions{WorkspaceDir: root})
+	for _, required := range []string{
+		fmt.Sprintf(`%q="write"`, root),
+		fmt.Sprintf(`%q="read"`, filepath.Join(repo, ".git")),
+		fmt.Sprintf(`%q="write"`, filepath.Join(repo, ".git", "index")),
+		fmt.Sprintf(`%q="write"`, filepath.Join(repo, ".git", "index.lock")),
+		fmt.Sprintf(`%q="write"`, filepath.Join(repo, ".git", "objects")),
+	} {
+		if !strings.Contains(config, required) {
+			t.Fatalf("missing Git metadata rule %q in %s", required, config)
+		}
+	}
+}
+
 func TestBuildCommandRejectsDirectoriesOutsideTask(t *testing.T) {
 	t.Parallel()
 	for _, harness := range []string{HarnessCodex, HarnessClaude} {

@@ -84,10 +84,16 @@ func TestAgentSandboxWriteBoundary(t *testing.T) {
 			persistent := filepath.Join(base, "persistent")
 			sibling := filepath.Join(base, "other-task")
 			sandboxHome := filepath.Join(root, ".agent00-agent-io", "config", "sandbox")
-			for _, dir := range []string{repo, filepath.Join(repo, ".git"), tmp, persistent, sibling, sandboxHome} {
+			for _, dir := range []string{repo, filepath.Join(repo, ".git", "objects"), filepath.Join(repo, ".git", "refs", "heads"), tmp, persistent, sibling, sandboxHome} {
 				if err := os.MkdirAll(dir, 0o700); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if err := os.WriteFile(filepath.Join(repo, ".git", "config"), []byte("[core]\n\trepositoryformatversion = 0\n\tbare = false\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600); err != nil {
+				t.Fatal(err)
 			}
 			// An operator config must not broaden the task's writable roots.
 			if err := os.WriteFile(filepath.Join(persistent, "config.toml"), []byte("[sandbox_workspace_write]\nwritable_roots = [\"/tmp\"]\n"), 0o600); err != nil {
@@ -101,6 +107,10 @@ func TestAgentSandboxWriteBoundary(t *testing.T) {
 set -eu
 printf yes > repo-write
 printf yes > .git/index.lock
+if (printf bad > .git/config) 2>/dev/null; then
+    echo "sandbox allowed Git config write" >&2
+    exit 1
+fi
 printf yes > "$TMPDIR/tmp-write"
 for path in "$TEST_BASE/global-write" "$TEST_SIBLING/write" "$TEST_PERSISTENT/write" escape/write; do
     if (printf bad > "$path") 2>/dev/null; then
