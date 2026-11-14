@@ -219,6 +219,18 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 	if cmd.Name == "" {
 		return execx.Command{}, fmt.Errorf("runtime command is required")
 	}
+	if normalizeHarness(r.Harness) == HarnessCodex && len(nonEmptyStrings(opts.DisallowedTools)) == 0 {
+		// codex exec does not accept a permission_profile config field. Run it
+		// without its inner sandbox and enforce the task's granular policy with
+		// the Codex sandbox helper, which supports named permission profiles.
+		args := []string{
+			"sandbox", "-P", taskPermissionProfile,
+			"-c", taskPermissionProfileConfig(targetDir, opts),
+			"--", cmd.Name,
+		}
+		cmd.Args = append(args, cmd.Args...)
+		cmd.Name = "codex"
+	}
 	if normalizeHarness(r.Harness) == HarnessClaude {
 		// Claude creates per-session scratch state next to its persistent
 		// configuration the first time a task uses a tool. That directory sits
@@ -515,12 +527,10 @@ func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command
 	if readOnly {
 		args = append(args, "--sandbox", "read-only")
 	} else {
-		// Select the profile for this invocation. default_permissions is only a
-		// fallback, so a sandbox_mode in persistent operator config can win.
-		args = append(args,
-			"-c", `permission_profile="`+taskPermissionProfile+`"`,
-			"-c", taskPermissionProfileConfig(targetDir, opts),
-		)
+		// Runtime.BuildCommand wraps this process in the granular task sandbox.
+		// Disable the inner sandbox so nested namespace setup cannot fail and so
+		// persistent operator sandbox settings cannot replace the outer policy.
+		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
 	}
 	args = append(args, "-c", `approval_policy="never"`)
 	if opts.SkipGitRepoCheck {

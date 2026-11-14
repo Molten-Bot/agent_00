@@ -34,8 +34,9 @@ func expectedCodexArgs(roots []string, extra ...string) []string {
 		filesystem = append(filesystem, string(encoded)+`="write"`)
 	}
 	args := []string{
-		"exec", "-c", `permission_profile="agent00_task"`,
+		"sandbox", "-P", "agent00_task",
 		"-c", `permissions.agent00_task={filesystem={` + strings.Join(filesystem, ",") + `},network={enabled=true}}`,
+		"--", "codex", "exec", "--dangerously-bypass-approvals-and-sandbox",
 		"-c", `approval_policy="never"`,
 	}
 	return append(args, extra...)

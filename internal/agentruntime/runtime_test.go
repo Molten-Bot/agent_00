@@ -41,18 +41,17 @@ func TestTaskWorkspaceIsOnlyWritableRoot(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, required := range []string{
-				`permission_profile="agent00_task"`,
+				"agent00_task",
 				`permissions.agent00_task={filesystem={":root"="read","/tasks/current/repo/subdir"="write","/tasks/current"="write"},network={enabled=true}}`,
 			} {
-				if harness == HarnessClaude && strings.HasPrefix(required, "permission_profile=") {
-					continue
-				}
 				if !slices.Contains(cmd.Args, required) {
 					t.Fatalf("missing sandbox restriction %q in %v", required, cmd.Args)
 				}
 			}
 			if harness == HarnessCodex {
-				if cmd.Name != "custom-agent" || !slices.Contains(cmd.Args, `approval_policy="never"`) {
+				if cmd.Name != "codex" || !slices.Contains(cmd.Args, "custom-agent") ||
+					!slices.Contains(cmd.Args, `approval_policy="never"`) ||
+					!slices.Contains(cmd.Args, "--dangerously-bypass-approvals-and-sandbox") {
 					t.Fatalf("Codex must not permit escalation: %+v", cmd)
 				}
 			} else {
@@ -570,8 +569,9 @@ func TestBuildCommandCodex(t *testing.T) {
 		t.Fatalf("Stdin = %q, want %q", got, want)
 	}
 	wantArgs := []string{
-		"exec", "-c", `permission_profile="agent00_task"`,
+		"sandbox", "-P", "agent00_task",
 		"-c", `permissions.agent00_task={filesystem={":root"="read","/tmp/work"="write","/tmp/run"="write"},network={enabled=true}}`,
+		"--", "codex", "exec", "--dangerously-bypass-approvals-and-sandbox",
 		"-c", `approval_policy="never"`,
 		"--skip-git-repo-check", "--add-dir", "/tmp/run", "--image", "a.png", "--image", "b.png",
 	}
