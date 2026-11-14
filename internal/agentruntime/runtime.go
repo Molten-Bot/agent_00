@@ -328,7 +328,7 @@ func taskPermissionProfileConfig(targetDir string, opts RunOptions, extraRoots .
 		encoded, _ := json.Marshal(root)
 		filesystem = append(filesystem, string(encoded)+`="write"`)
 	}
-	if gitDir := findGitDir(targetDir, opts.WorkspaceDir); gitDir != "" {
+	for _, gitDir := range findGitDirs(targetDir, opts.WorkspaceDir) {
 		for _, rule := range []struct {
 			path   string
 			access string
@@ -345,13 +345,49 @@ func taskPermissionProfileConfig(targetDir string, opts RunOptions, extraRoots .
 	return "permissions." + taskPermissionProfile + "={filesystem={" + strings.Join(filesystem, ",") + "},network={enabled=true}}"
 }
 
+// findGitDirs returns metadata directories for the target repository and every
+// repository cloned directly into the task workspace. Multi-repository runs use
+// the workspace itself as targetDir, so looking only at its ancestors would
+// leave each child repository's metadata covered by the workspace write grant.
+func findGitDirs(targetDir, workspaceDir string) []string {
+	seen := make(map[string]bool)
+	var gitDirs []string
+	add := func(gitDir string) {
+		if gitDir != "" && !seen[gitDir] {
+			seen[gitDir] = true
+			gitDirs = append(gitDirs, gitDir)
+		}
+	}
+
+	add(findGitDir(targetDir, workspaceDir))
+	workspaceDir = strings.TrimSpace(workspaceDir)
+	if workspaceDir == "" {
+		return gitDirs
+	}
+	workspaceDir = filepath.Clean(workspaceDir)
+	entries, err := os.ReadDir(workspaceDir)
+	if err != nil {
+		return gitDirs
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		candidate := filepath.Join(workspaceDir, entry.Name(), ".git")
+		if info, err := os.Lstat(candidate); err == nil && info.IsDir() {
+			add(candidate)
+		}
+	}
+	return gitDirs
+}
+
 // findGitDir finds the repository metadata directory without invoking Git,
 // because repository config is untrusted at this boundary.
 func findGitDir(targetDir, workspaceDir string) string {
 	dir := filepath.Clean(targetDir)
 	if strings.TrimSpace(workspaceDir) == "" {
 		candidate := filepath.Join(dir, ".git")
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+		if info, err := os.Lstat(candidate); err == nil && info.IsDir() {
 			return candidate
 		}
 		return ""
@@ -359,7 +395,7 @@ func findGitDir(targetDir, workspaceDir string) string {
 	workspaceDir = filepath.Clean(workspaceDir)
 	for {
 		candidate := filepath.Join(dir, ".git")
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+		if info, err := os.Lstat(candidate); err == nil && info.IsDir() {
 			return candidate
 		}
 		if dir == workspaceDir || dir == filepath.Dir(dir) {

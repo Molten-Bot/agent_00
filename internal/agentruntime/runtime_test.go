@@ -90,6 +90,31 @@ func TestTaskPermissionProfileProtectsGitConfig(t *testing.T) {
 	}
 }
 
+func TestTaskPermissionProfileProtectsEveryRepositoryGitConfig(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	repos := []string{filepath.Join(root, "first"), filepath.Join(root, "second")}
+	for _, repo := range repos {
+		if err := os.MkdirAll(filepath.Join(repo, ".git", "objects"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	config := taskPermissionProfileConfig(root, RunOptions{WorkspaceDir: root})
+	for _, repo := range repos {
+		for _, required := range []string{
+			fmt.Sprintf(`%q="read"`, filepath.Join(repo, ".git")),
+			fmt.Sprintf(`%q="write"`, filepath.Join(repo, ".git", "index")),
+			fmt.Sprintf(`%q="write"`, filepath.Join(repo, ".git", "index.lock")),
+			fmt.Sprintf(`%q="write"`, filepath.Join(repo, ".git", "objects")),
+		} {
+			if !strings.Contains(config, required) {
+				t.Fatalf("missing Git metadata rule %q in %s", required, config)
+			}
+		}
+	}
+}
+
 func TestBuildCommandRejectsDirectoriesOutsideTask(t *testing.T) {
 	t.Parallel()
 	for _, harness := range []string{HarnessCodex, HarnessClaude} {
