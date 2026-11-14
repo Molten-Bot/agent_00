@@ -60,6 +60,78 @@ func TestSeedCodexCredentialsUsesAtomicTaskLocalCopy(t *testing.T) {
 	}
 }
 
+func TestSeedCodexHomeLinksPersistentConfiguration(t *testing.T) {
+	t.Parallel()
+	source := t.TempDir()
+	taskHome := filepath.Join(t.TempDir(), "config", "codex")
+	if err := os.WriteFile(filepath.Join(source, "auth.json"), []byte(`{"token":"old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "config.toml"), []byte("profile = \"team\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(source, "plugins"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "plugins", "enabled"), []byte("yes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SeedCodexHome(source, taskHome); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{
+		filepath.Join(taskHome, "config.toml"):        "profile = \"team\"\n",
+		filepath.Join(taskHome, "plugins", "enabled"): "yes",
+	} {
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != want {
+			t.Fatalf("seeded configuration %s = %q, %v; want %q", path, got, err, want)
+		}
+	}
+	if info, err := os.Lstat(filepath.Join(taskHome, "config.toml")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("task config must link to read-only persistent config: %v, %v", info, err)
+	}
+	if info, err := os.Lstat(filepath.Join(taskHome, "auth.json")); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("task credentials must remain writable regular file: %v, %v", info, err)
+	}
+}
+
+func TestPersistCodexCredentialsUsesValidatedAtomicCopy(t *testing.T) {
+	t.Parallel()
+	persistent := t.TempDir()
+	taskHome := t.TempDir()
+	persistentPath := filepath.Join(persistent, "auth.json")
+	taskPath := filepath.Join(taskHome, "auth.json")
+	if err := os.WriteFile(persistentPath, []byte(`{"token":"old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(taskPath, []byte(`{"token":"rotated"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := PersistCodexCredentials(taskHome, persistent); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(persistentPath)
+	if err != nil || string(got) != `{"token":"rotated"}` {
+		t.Fatalf("persistent credentials = %q, %v", got, err)
+	}
+	if info, err := os.Stat(persistentPath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("persistent credential mode = %v, %v; want 0600", info, err)
+	}
+
+	if err := os.WriteFile(taskPath, []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := PersistCodexCredentials(taskHome, persistent); err == nil || !strings.Contains(err.Error(), "not valid JSON") {
+		t.Fatalf("invalid rotation error = %v", err)
+	}
+	got, err = os.ReadFile(persistentPath)
+	if err != nil || string(got) != `{"token":"rotated"}` {
+		t.Fatalf("invalid rotation changed persistent credentials: %q, %v", got, err)
+	}
+}
+
 func TestCodexSessionCancellationAndIndependentHomes(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()

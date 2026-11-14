@@ -6036,7 +6036,7 @@ func (h Harness) runCodexWithHeartbeat(
 		if err := agentruntime.CheckCodexAuthentication(home); err != nil {
 			return execx.Result{}, err
 		}
-		if err := agentruntime.SeedCodexCredentials(home, taskHome); err != nil {
+		if err := agentruntime.SeedCodexHome(home, taskHome); err != nil {
 			return execx.Result{}, err
 		}
 		// Resolve relative CODEX_HOME against the harness cwd, not the repo cwd.
@@ -6091,6 +6091,15 @@ func (h Harness) runCodexWithHeartbeat(
 			if runtime.Harness == agentruntime.HarnessCodex && codexInvocationAuthenticationFailed(run.res, run.err) {
 				stateErr := agentruntime.MarkCodexAuthenticationRequired(codexCredentialHome)
 				return run.res, errors.Join(agentruntime.ErrCodexAuthRequired, stateErr)
+			}
+			if runtime.Harness == agentruntime.HarnessCodex && run.err == nil {
+				taskHome, homeErr := agentruntime.CodexHome(cmd.Env)
+				if homeErr != nil {
+					return run.res, homeErr
+				}
+				if err := agentruntime.PersistCodexCredentials(taskHome, codexCredentialHome); err != nil {
+					return run.res, err
+				}
 			}
 			if failed, detail := codexReportedFailure(run.res); failed {
 				detail = codexFailureDetailWithErrorDetails(run.res, detail)

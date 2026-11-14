@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +17,9 @@ var ErrCodexAuthRequired = errors.New("Codex authentication required; sign in ag
 
 const codexAuthFailureFile = ".agent00-auth-required"
 const codexCredentialSourceEnv = "AGENT00_CODEX_CREDENTIAL_SOURCE"
+const maxCodexCredentialSize = 16 << 20
+
+var codexReadOnlyConfigEntries = []string{"config.toml", "profiles", "skills", "plugins"}
 
 // CodexHome resolves the operator's persistent home before task HOME isolation.
 func CodexHome(environ []string) (string, error) {
@@ -87,6 +91,94 @@ func SeedCodexCredentials(sourceHome, taskHome string) error {
 	}
 	if err := os.Rename(file.Name(), filepath.Join(taskHome, "auth.json")); err != nil {
 		return fmt.Errorf("install isolated Codex credentials: %w", err)
+	}
+	return nil
+}
+
+// SeedCodexHome prepares an isolated home with writable task-local credentials
+// and read-only links to operator configuration. Persistent configuration stays
+// outside the task's writable sandbox while profiles, skills, and plugins remain
+// available to the CLI.
+func SeedCodexHome(sourceHome, taskHome string) error {
+	if err := SeedCodexCredentials(sourceHome, taskHome); err != nil {
+		return err
+	}
+	if sourceHome == taskHome {
+		return nil
+	}
+	for _, name := range codexReadOnlyConfigEntries {
+		source := filepath.Join(sourceHome, name)
+		if _, err := os.Lstat(source); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return fmt.Errorf("inspect persistent Codex configuration %s: %w", name, err)
+		}
+		destination := filepath.Join(taskHome, name)
+		if target, err := os.Readlink(destination); err == nil && target == source {
+			continue
+		} else if err == nil {
+			return fmt.Errorf("isolated Codex configuration %s links to unexpected path", name)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect isolated Codex configuration %s: %w", name, err)
+		}
+		if err := os.Symlink(source, destination); err != nil {
+			return fmt.Errorf("link read-only Codex configuration %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// PersistCodexCredentials atomically installs a successful CLI rotation in the
+// persistent home. Callers must hold the Codex session lock and only invoke this
+// after a trusted CLI process exits successfully.
+func PersistCodexCredentials(taskHome, persistentHome string) error {
+	if taskHome == persistentHome {
+		return nil
+	}
+	taskPath := filepath.Join(taskHome, "auth.json")
+	info, err := os.Lstat(taskPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect rotated Codex credentials: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("rotated Codex credentials must be a regular file")
+	}
+	if info.Size() > maxCodexCredentialSize {
+		return fmt.Errorf("rotated Codex credentials exceed %d bytes", maxCodexCredentialSize)
+	}
+	content, err := os.ReadFile(taskPath)
+	if err != nil {
+		return fmt.Errorf("read rotated Codex credentials: %w", err)
+	}
+	if !json.Valid(content) {
+		return fmt.Errorf("rotated Codex credentials are not valid JSON")
+	}
+	persistentPath := filepath.Join(persistentHome, "auth.json")
+	if current, err := os.ReadFile(persistentPath); err == nil && string(current) == string(content) {
+		return nil
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read persistent Codex credentials: %w", err)
+	}
+	file, err := os.CreateTemp(persistentHome, ".auth-rotation-*")
+	if err != nil {
+		return fmt.Errorf("create persistent Codex credentials: %w", err)
+	}
+	defer os.Remove(file.Name())
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
+		return fmt.Errorf("secure persistent Codex credentials: %w", err)
+	}
+	_, writeErr := file.Write(content)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
+		return fmt.Errorf("write persistent Codex credentials: %w", err)
+	}
+	if err := os.Rename(file.Name(), persistentPath); err != nil {
+		return fmt.Errorf("install persistent Codex credentials: %w", err)
 	}
 	return nil
 }
