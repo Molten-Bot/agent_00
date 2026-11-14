@@ -41,10 +41,10 @@ func TestTaskWorkspaceIsOnlyWritableRoot(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, required := range []string{
-				`default_permissions="agent00_task"`,
+				`permission_profile="agent00_task"`,
 				`permissions.agent00_task={filesystem={":root"="read","/tasks/current/repo/subdir"="write","/tasks/current"="write"},network={enabled=true}}`,
 			} {
-				if harness == HarnessClaude && strings.HasPrefix(required, "default_permissions=") {
+				if harness == HarnessClaude && strings.HasPrefix(required, "permission_profile=") {
 					continue
 				}
 				if !slices.Contains(cmd.Args, required) {
@@ -570,7 +570,7 @@ func TestBuildCommandCodex(t *testing.T) {
 		t.Fatalf("Stdin = %q, want %q", got, want)
 	}
 	wantArgs := []string{
-		"exec", "-c", `default_permissions="agent00_task"`,
+		"exec", "-c", `permission_profile="agent00_task"`,
 		"-c", `permissions.agent00_task={filesystem={":root"="read","/tmp/work"="write","/tmp/run"="write"},network={enabled=true}}`,
 		"-c", `approval_policy="never"`,
 		"--skip-git-repo-check", "--add-dir", "/tmp/run", "--image", "a.png", "--image", "b.png",

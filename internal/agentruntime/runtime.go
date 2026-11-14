@@ -515,8 +515,10 @@ func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command
 	if readOnly {
 		args = append(args, "--sandbox", "read-only")
 	} else {
+		// Select the profile for this invocation. default_permissions is only a
+		// fallback, so a sandbox_mode in persistent operator config can win.
 		args = append(args,
-			"-c", `default_permissions="`+taskPermissionProfile+`"`,
+			"-c", `permission_profile="`+taskPermissionProfile+`"`,
 			"-c", taskPermissionProfileConfig(targetDir, opts),
 		)
 	}

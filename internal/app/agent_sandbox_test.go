@@ -34,7 +34,7 @@ func expectedCodexArgs(roots []string, extra ...string) []string {
 		filesystem = append(filesystem, string(encoded)+`="write"`)
 	}
 	args := []string{
-		"exec", "-c", `default_permissions="agent00_task"`,
+		"exec", "-c", `permission_profile="agent00_task"`,
 		"-c", `permissions.agent00_task={filesystem={` + strings.Join(filesystem, ",") + `},network={enabled=true}}`,
 		"-c", `approval_policy="never"`,
 	}
