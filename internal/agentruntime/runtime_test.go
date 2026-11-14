@@ -2,7 +2,6 @@ package agentruntime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +14,15 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
+
+func containsArgFragment(args []string, fragment string) bool {
+	for _, arg := range args {
+		if strings.Contains(arg, fragment) {
+			return true
+		}
+	}
+	return false
+}
 
 func TestTaskWorkspaceIsOnlyWritableRoot(t *testing.T) {
 	t.Parallel()
@@ -33,11 +41,12 @@ func TestTaskWorkspaceIsOnlyWritableRoot(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, required := range []string{
-				`sandbox_workspace_write.writable_roots=["/tasks/current"]`,
-				"sandbox_workspace_write.exclude_slash_tmp=true",
-				"sandbox_workspace_write.exclude_tmpdir_env_var=true",
-				"sandbox_workspace_write.network_access=true",
+				`default_permissions="agent00_task"`,
+				`permissions.agent00_task={filesystem={":root"="read","/tasks/current/repo/subdir"="write","/tasks/current"="write"},network={enabled=true}}`,
 			} {
+				if harness == HarnessClaude && strings.HasPrefix(required, "default_permissions=") {
+					continue
+				}
 				if !slices.Contains(cmd.Args, required) {
 					t.Fatalf("missing sandbox restriction %q in %v", required, cmd.Args)
 				}
@@ -173,12 +182,8 @@ func TestClaudeSandboxGrantsOnlyClaudeScratchDir(t *testing.T) {
 	if info, statErr := os.Stat(scratch); statErr != nil || !info.IsDir() {
 		t.Fatalf("scratch directory was not created: %v", statErr)
 	}
-	encoded, err := json.Marshal([]string{"/tasks/current", scratch})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "sandbox_workspace_write.writable_roots=" + string(encoded)
-	if !slices.Contains(cmd.Args, want) {
+	want := fmt.Sprintf("%q=\"write\"", scratch)
+	if !containsArgFragment(cmd.Args, want) {
 		t.Fatalf("missing Claude scratch root %q in %v", want, cmd.Args)
 	}
 }
@@ -242,11 +247,7 @@ func TestClaudeSandboxGrantsScratchDirFromProcessEnvironWhenEnvIsEmpty(t *testin
 	if info, statErr := os.Stat(scratch); statErr != nil || !info.IsDir() {
 		t.Fatalf("scratch directory was not created: %v", statErr)
 	}
-	encoded, err := json.Marshal([]string{"/tasks/current", scratch})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "sandbox_workspace_write.writable_roots=" + string(encoded); !slices.Contains(cmd.Args, want) {
+	if want := fmt.Sprintf("%q=\"write\"", scratch); !containsArgFragment(cmd.Args, want) {
 		t.Fatalf("missing Claude scratch root %q in %v", want, cmd.Args)
 	}
 }
@@ -289,8 +290,8 @@ func TestClaudeSandboxSkipsScratchGrantWhenConfigDirCannotBeExtended(t *testing.
 		if err != nil {
 			t.Fatalf("BuildCommand() error = %v, want the grant dropped instead of a build failure", err)
 		}
-		want := `sandbox_workspace_write.writable_roots=["/tasks/current"]`
-		if !slices.Contains(cmd.Args, want) {
+		want := `"/tasks/current"="write"`
+		if !containsArgFragment(cmd.Args, want) {
 			t.Fatalf("missing sandbox restriction %q in %v", want, cmd.Args)
 		}
 		for _, arg := range cmd.Args {
@@ -351,8 +352,8 @@ func TestClaudeSandboxSkipsScratchGrantWithoutConfigDirInEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `sandbox_workspace_write.writable_roots=["/tasks/current"]`
-	if !slices.Contains(cmd.Args, want) {
+	want := `"/tasks/current"="write"`
+	if !containsArgFragment(cmd.Args, want) {
 		t.Fatalf("missing sandbox restriction %q in %v", want, cmd.Args)
 	}
 }
@@ -522,11 +523,9 @@ func TestBuildCommandCodex(t *testing.T) {
 		t.Fatalf("Stdin = %q, want %q", got, want)
 	}
 	wantArgs := []string{
-		"exec", "--sandbox", "workspace-write", "-c", `approval_policy="never"`,
-		"-c", `sandbox_workspace_write.writable_roots=["/tmp/run"]`,
-		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
-		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-		"-c", "sandbox_workspace_write.network_access=true",
+		"exec", "-c", `default_permissions="agent00_task"`,
+		"-c", `permissions.agent00_task={filesystem={":root"="read","/tmp/work"="write","/tmp/run"="write"},network={enabled=true}}`,
+		"-c", `approval_policy="never"`,
 		"--skip-git-repo-check", "--add-dir", "/tmp/run", "--image", "a.png", "--image", "b.png",
 	}
 	if !reflect.DeepEqual(cmd.Args, wantArgs) {
@@ -553,11 +552,9 @@ func TestBuildCommandClaude(t *testing.T) {
 		t.Fatalf("BuildCommand() error = %v", err)
 	}
 	wantArgs := []string{
-		"sandbox", "-c", `sandbox_mode="workspace-write"`,
-		"-c", `sandbox_workspace_write.writable_roots=["/tmp/run"]`,
-		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
-		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-		"-c", "sandbox_workspace_write.network_access=true", "--", "claude",
+		"sandbox", "-P", "agent00_task",
+		"-c", `permissions.agent00_task={filesystem={":root"="read","/tmp/repo"="write","/tmp/run"="write"},network={enabled=true}}`,
+		"--", "claude",
 		"--print", "--output-format", "text", "--prompt-suggestions", "false",
 		"--no-session-persistence", "--dangerously-skip-permissions", "--add-dir", "/tmp/run", "--",
 	}

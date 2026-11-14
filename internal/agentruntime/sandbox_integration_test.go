@@ -100,6 +100,7 @@ func TestAgentSandboxWriteBoundary(t *testing.T) {
 			if err := os.WriteFile(script, []byte(`#!/bin/sh
 set -eu
 printf yes > repo-write
+printf yes > .git/index.lock
 printf yes > "$TMPDIR/tmp-write"
 for path in "$TEST_BASE/global-write" "$TEST_SIBLING/write" "$TEST_PERSISTENT/write" escape/write; do
     if (printf bad > "$path") 2>/dev/null; then
@@ -119,15 +120,14 @@ done
 			if err != nil {
 				t.Fatal(err)
 			}
-			cmd, err := rt.BuildCommand(repo, "probe", RunOptions{WorkspaceDir: root, Env: env})
+			opts := RunOptions{WorkspaceDir: root, Env: env}
+			cmd, err := rt.BuildCommand(repo, "probe", opts)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if harness == HarnessCodex {
 				// Exercise the generated Codex policy without invoking a model.
-				cmd.Name = "codex"
-				cmd.Args = append([]string{"sandbox", "-c", `sandbox_mode="workspace-write"`}, cmd.Args[3:]...)
-				cmd.Args = append(cmd.Args, "--", script)
+				cmd.Args = []string{"sandbox", "-P", taskPermissionProfile, "-c", taskPermissionProfileConfig(repo, opts), "--", script}
 				cmd.Stdin = ""
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -136,7 +136,7 @@ done
 			if err != nil {
 				t.Fatalf("sandbox probe failed: %v\n%s\n%s", err, res.Stdout, res.Stderr)
 			}
-			for _, path := range []string{filepath.Join(repo, "repo-write"), filepath.Join(tmp, "tmp-write")} {
+			for _, path := range []string{filepath.Join(repo, "repo-write"), filepath.Join(repo, ".git", "index.lock"), filepath.Join(tmp, "tmp-write")} {
 				if _, err := os.Stat(path); err != nil {
 					t.Fatalf("expected allowed write %s: %v", path, err)
 				}

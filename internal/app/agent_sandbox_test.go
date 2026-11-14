@@ -28,16 +28,15 @@ func codexCommandWithOptions(targetDir, prompt string, opts codexRunOptions) exe
 }
 
 func expectedCodexArgs(roots []string, extra ...string) []string {
-	if roots == nil {
-		roots = []string{}
+	filesystem := []string{`":root"="read"`}
+	for _, root := range roots {
+		encoded, _ := json.Marshal(root)
+		filesystem = append(filesystem, string(encoded)+`="write"`)
 	}
-	encoded, _ := json.Marshal(roots)
 	args := []string{
-		"exec", "--sandbox", "workspace-write", "-c", `approval_policy="never"`,
-		"-c", "sandbox_workspace_write.writable_roots=" + string(encoded),
-		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
-		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-		"-c", "sandbox_workspace_write.network_access=true",
+		"exec", "-c", `default_permissions="agent00_task"`,
+		"-c", `permissions.agent00_task={filesystem={` + strings.Join(filesystem, ",") + `},network={enabled=true}}`,
+		"-c", `approval_policy="never"`,
 	}
 	return append(args, extra...)
 }

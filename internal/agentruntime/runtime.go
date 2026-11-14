@@ -19,6 +19,11 @@ const (
 
 const defaultHarness = HarnessCodex
 
+const (
+	taskPermissionProfile   = "agent00_task"
+	reviewPermissionProfile = "agent00_review"
+)
+
 var ErrPromptImagesUnsupported = errors.New("prompt images are unsupported for this agent harness")
 
 var harnessDisplayNames = map[string]string{
@@ -247,12 +252,12 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 				filesystem += fmt.Sprintf(",%q=\"write\"", scratchDir)
 			}
 			args = append(args,
-				"-P", "agent00_review",
-				"-c", "permissions.agent00_review={filesystem={"+filesystem+"},network={enabled=true}}",
+				"-P", reviewPermissionProfile,
+				"-c", "permissions."+reviewPermissionProfile+"={filesystem={"+filesystem+"},network={enabled=true}}",
 			)
 		} else {
-			args = append(args, "-c", `sandbox_mode="workspace-write"`)
-			args = append(args, workspaceSandboxArgs(opts, scratchDir)...)
+			args = append(args, "-P", taskPermissionProfile)
+			args = append(args, "-c", taskPermissionProfileConfig(targetDir, opts, scratchDir))
 		}
 		args = append(args, "--", cmd.Name)
 		cmd.Args = append(args, cmd.Args...)
@@ -303,41 +308,28 @@ func resolveSandboxPath(dir string) (string, error) {
 	return filepath.Join(resolved, filepath.Base(path)), nil
 }
 
-// workspaceSandboxArgs builds the sandbox restrictions for one invocation.
-// extraRoots carries harness-owned directories outside the task workspace that
-// the CLI itself must keep writing to; they bypass validateWorkspaceDirs
-// because they never come from task configuration.
-func workspaceSandboxArgs(opts RunOptions, extraRoots ...string) []string {
-	roots := make([]string, 0, len(opts.WritableDirs)+len(extraRoots)+1)
-	if root := strings.TrimSpace(opts.WorkspaceDir); root != "" {
-		roots = append(roots, root)
-	}
-	for _, dir := range opts.WritableDirs {
-		if dir = strings.TrimSpace(dir); dir != "" {
-			roots = append(roots, dir)
-		}
-	}
-	for _, dir := range extraRoots {
-		if dir = strings.TrimSpace(dir); dir != "" {
-			roots = append(roots, dir)
-		}
-	}
-	unique := roots[:0]
+// taskPermissionProfileConfig gives mutating agents write access only inside
+// their task workspace. Unlike Codex's built-in workspace-write profile, this
+// profile deliberately permits Git metadata writes so an agent can stage a
+// conflict resolution. The harness still owns commits, pushes, and every path
+// outside the task boundary.
+func taskPermissionProfileConfig(targetDir string, opts RunOptions, extraRoots ...string) string {
+	roots := []string{targetDir, opts.WorkspaceDir}
+	roots = append(roots, opts.WritableDirs...)
+	roots = append(roots, extraRoots...)
+
+	filesystem := []string{`":root"="read"`}
 	seen := make(map[string]bool, len(roots))
 	for _, root := range roots {
-		if !seen[root] {
-			seen[root] = true
-			unique = append(unique, root)
+		root = strings.TrimSpace(root)
+		if root == "" || seen[root] {
+			continue
 		}
+		seen[root] = true
+		encoded, _ := json.Marshal(root)
+		filesystem = append(filesystem, string(encoded)+`="write"`)
 	}
-	encoded, _ := json.Marshal(unique)
-	return []string{
-		"-c", "sandbox_workspace_write.writable_roots=" + string(encoded),
-		"-c", "sandbox_workspace_write.exclude_slash_tmp=true",
-		"-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-		// Both runtimes need network access for dependency downloads and tests.
-		"-c", "sandbox_workspace_write.network_access=true",
-	}
+	return "permissions." + taskPermissionProfile + "={filesystem={" + strings.Join(filesystem, ",") + "},network={enabled=true}}"
 }
 
 // claudeConfigSandboxRoot resolves the one directory inside the persistent
@@ -439,14 +431,16 @@ func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command
 	// workspace-write, so the CLI cannot write anywhere regardless of which
 	// tool it tries to use.
 	readOnly := len(nonEmptyStrings(opts.DisallowedTools)) > 0
-	sandboxMode := "workspace-write"
+	args := []string{"exec"}
 	if readOnly {
-		sandboxMode = "read-only"
+		args = append(args, "--sandbox", "read-only")
+	} else {
+		args = append(args,
+			"-c", `default_permissions="`+taskPermissionProfile+`"`,
+			"-c", taskPermissionProfileConfig(targetDir, opts),
+		)
 	}
-	args := []string{"exec", "--sandbox", sandboxMode, "-c", `approval_policy="never"`}
-	if !readOnly {
-		args = append(args, workspaceSandboxArgs(opts)...)
-	}
+	args = append(args, "-c", `approval_policy="never"`)
 	if opts.SkipGitRepoCheck {
 		args = append(args, "--skip-git-repo-check")
 	}
