@@ -6384,7 +6384,6 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		strings.Contains(text, "shim missing") ||
 		strings.Contains(text, "tool missing") ||
 		strings.Contains(text, "runner missing") ||
-		strings.Contains(text, "local integration runner unavailable") ||
 		strings.Contains(text, "executable missing") ||
 		strings.Contains(text, "binary missing") ||
 		strings.Contains(text, "command missing") ||

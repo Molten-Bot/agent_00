@@ -8014,7 +8014,7 @@ func TestRunCodexAllowsFocusedValidationUnavailableFailure(t *testing.T) {
 	}
 }
 
-func TestRunCodexAllowsLocalIntegrationRunnerUnavailable(t *testing.T) {
+func TestRunCodexRejectsLocalIntegrationRunnerLabelWithoutMissingToolingEvidence(t *testing.T) {
 	t.Parallel()
 
 	targetDir := t.TempDir()
@@ -8034,13 +8034,40 @@ func TestRunCodexAllowsLocalIntegrationRunnerUnavailable(t *testing.T) {
 		},
 	}}
 
+	h := New(fake)
+	err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil {
+		t.Fatal("runCodex() error = nil, want Vitest failure")
+	}
+	if !strings.Contains(err.Error(), "codex reported failure") {
+		t.Fatalf("runCodex() error = %v, want codex reported failure marker", err)
+	}
+}
+
+func TestRunCodexAllowsLocalIntegrationRunnerUnavailableWithMissingToolingEvidence(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update repository tests"
+	firstCmd := codexCommand(targetDir, prompt)
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: firstCmd,
+			res: execx.Result{
+				Stdout: "Failure: Local integration runner unavailable.",
+				Stderr: "Error details: spawn vitest ENOENT",
+			},
+		},
+	}}
+
 	var logs []string
 	h := New(fake)
 	h.Logf = func(format string, args ...any) {
 		logs = append(logs, fmt.Sprintf(format, args...))
 	}
 	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
-		t.Fatalf("runCodex() error = %v, want nil for local integration-runner validation gap", err)
+		t.Fatalf("runCodex() error = %v, want nil for missing integration runner", err)
 	}
 	if !strings.Contains(strings.Join(logs, "\n"), "action=validation_tooling_unavailable") {
 		t.Fatalf("logs missing validation tooling warning:\n%s", strings.Join(logs, "\n"))
