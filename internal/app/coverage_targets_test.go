@@ -878,6 +878,26 @@ func TestStageHarnessManagedConflictResolutionAllowsTrailingWhitespace(t *testin
 	}
 }
 
+func TestValidateStagedConflictResolutionRejectsConflictMarkers(t *testing.T) {
+	t.Parallel()
+
+	repo := &repoWorkspace{URL: "git@github.com:acme/repo.git", Dir: "/repo"}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: stagedConflictResolutionCheckCommand(repo.Dir),
+			res: execx.Result{Stdout: "diff --git a/file.go b/file.go\n+++ b/file.go\n@@ -1 +1,5 @@\n+<<<<<<< ours\n+ours\n+=======\n+theirs\n+>>>>>>> theirs\n"},
+		},
+	}}
+	h := New(fake)
+	err := h.validateStagedConflictResolution(context.Background(), repo, "remote")
+	if err == nil || !strings.Contains(err.Error(), "leftover conflict marker") {
+		t.Fatalf("validateStagedConflictResolution() err = %v, want conflict-marker detail", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
 func TestAddedConflictMarker(t *testing.T) {
 	t.Parallel()
 

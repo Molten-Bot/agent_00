@@ -1562,6 +1562,9 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 			return ExitGit, "git", err
 		}
 	}
+	if err := h.validateStagedConflictResolution(ctx, repo, "base"); err != nil {
+		return ExitGit, "git", err
+	}
 	commitRes, commitErr := h.runCommand(ctx, "git", commitCommand(repo.Dir, baseSyncCommitMessage(baseBranch)))
 	if commitErr != nil {
 		noChanges, statusErr := h.refreshRepoChangeStateAfterNoOpCommit(ctx, repo, commitRes, commitErr)
@@ -1662,6 +1665,9 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 			return ExitGit, "git", err
 		}
 	}
+	if err := h.validateStagedConflictResolution(ctx, repo, "remote"); err != nil {
+		return ExitGit, "git", err
+	}
 	commitRes, commitErr := h.runCommand(ctx, "git", commitCommand(repo.Dir, remoteBranchSyncCommitMessage(branch)))
 	if commitErr != nil {
 		noChanges, statusErr := h.refreshRepoChangeStateAfterNoOpCommit(ctx, repo, commitRes, commitErr)
@@ -1737,6 +1743,27 @@ func (h Harness) stageHarnessManagedConflictResolution(
 		)
 	}
 	return statusRes, true, true, nil
+}
+
+func (h Harness) validateStagedConflictResolution(ctx context.Context, repo *repoWorkspace, syncKind string) error {
+	checkRes, checkErr := h.runCommand(ctx, "git", stagedConflictResolutionCheckCommand(repo.Dir))
+	if checkErr != nil {
+		return commandErrorWithDetails(
+			fmt.Sprintf("validate staged %s branch conflict resolution for repo %s", syncKind, repo.URL),
+			checkErr,
+			checkRes,
+			maxGitErrorDetailChars,
+		)
+	}
+	if marker, ok := addedConflictMarker(checkRes.Stdout); ok {
+		return fmt.Errorf(
+			"validate staged %s branch conflict resolution for repo %s: leftover conflict marker %q",
+			syncKind,
+			repo.URL,
+			marker,
+		)
+	}
+	return nil
 }
 
 func isMergeConflictResult(res execx.Result, err error) bool {
@@ -7665,6 +7692,10 @@ func statusCommand(repoDir string) execx.Command {
 
 func conflictResolutionCheckCommand(repoDir string) execx.Command {
 	return gitCommand(repoDir, "diff", "--no-color", "--no-ext-diff")
+}
+
+func stagedConflictResolutionCheckCommand(repoDir string) execx.Command {
+	return gitCommand(repoDir, "diff", "--cached", "--no-color", "--no-ext-diff")
 }
 
 func addedConflictMarker(diff string) (string, bool) {
