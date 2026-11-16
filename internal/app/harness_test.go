@@ -8014,6 +8014,39 @@ func TestRunCodexAllowsFocusedValidationUnavailableFailure(t *testing.T) {
 	}
 }
 
+func TestRunCodexAllowsLocalIntegrationRunnerUnavailable(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update repository tests"
+	firstCmd := codexCommand(targetDir, prompt)
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: firstCmd,
+			res: execx.Result{
+				Stdout: strings.Join([]string{
+					"Implementation complete. Lint, typechecks, unit tests, and builds passed.",
+					"Failure: Local integration runner unavailable.",
+					"Error details: Vitest reported `No test files found` plus `TypeError: code.charCodeAt is not a function`, including for existing integration tests.",
+				}, "\n"),
+			},
+		},
+	}}
+
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
+		t.Fatalf("runCodex() error = %v, want nil for local integration-runner validation gap", err)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "action=validation_tooling_unavailable") {
+		t.Fatalf("logs missing validation tooling warning:\n%s", strings.Join(logs, "\n"))
+	}
+}
+
 func TestRunCodexAllowsGoValidationBlockedByRestrictedDependencyDownload(t *testing.T) {
 	t.Parallel()
 

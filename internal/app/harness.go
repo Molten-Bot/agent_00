@@ -6337,6 +6337,8 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"local automated validation not runnable in this runtime",
 		"local test runner unavailable",
 		"local test runner unavailable in runtime",
+		"local integration runner unavailable",
+		"local integration runner unavailable in runtime",
 		"local test execution unavailable",
 		"local test execution unavailable in this runtime",
 		"unable to run automated test suite",
@@ -6382,6 +6384,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		strings.Contains(text, "shim missing") ||
 		strings.Contains(text, "tool missing") ||
 		strings.Contains(text, "runner missing") ||
+		strings.Contains(text, "local integration runner unavailable") ||
 		strings.Contains(text, "executable missing") ||
 		strings.Contains(text, "binary missing") ||
 		strings.Contains(text, "command missing") ||
