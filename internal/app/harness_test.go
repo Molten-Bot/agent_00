@@ -8014,7 +8014,7 @@ func TestRunCodexAllowsFocusedValidationUnavailableFailure(t *testing.T) {
 	}
 }
 
-func TestRunCodexRejectsLocalIntegrationRunnerLabelWithoutMissingToolingEvidence(t *testing.T) {
+func TestRunCodexAllowsKnownVitestIntegrationRunnerFailure(t *testing.T) {
 	t.Parallel()
 
 	targetDir := t.TempDir()
@@ -8034,10 +8034,38 @@ func TestRunCodexRejectsLocalIntegrationRunnerLabelWithoutMissingToolingEvidence
 		},
 	}}
 
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
+		t.Fatalf("runCodex() error = %v, want nil for known Vitest integration-runner failure", err)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "action=validation_tooling_unavailable") {
+		t.Fatalf("logs missing validation tooling warning:\n%s", strings.Join(logs, "\n"))
+	}
+}
+
+func TestRunCodexDoesNotHideImplementationFailureContainingIntegrationRunnerError(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update repository tests"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{
+				Stdout: "Failure: Could not complete requested implementation.",
+				Stderr: "Error details: Local integration runner unavailable. Vitest reported `No test files found` plus `TypeError: code.charCodeAt is not a function`.",
+			},
+		},
+	}}
+
 	h := New(fake)
 	err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
 	if err == nil {
-		t.Fatal("runCodex() error = nil, want Vitest failure")
+		t.Fatal("runCodex() error = nil, want implementation failure")
 	}
 	if !strings.Contains(err.Error(), "codex reported failure") {
 		t.Fatalf("runCodex() error = %v, want codex reported failure marker", err)

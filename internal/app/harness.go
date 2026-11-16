@@ -6337,8 +6337,6 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"local automated validation not runnable in this runtime",
 		"local test runner unavailable",
 		"local test runner unavailable in runtime",
-		"local integration runner unavailable",
-		"local integration runner unavailable in runtime",
 		"local test execution unavailable",
 		"local test execution unavailable in this runtime",
 		"unable to run automated test suite",
@@ -6363,6 +6361,10 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"node_modules missing",
 	}
 	validationUnavailable := stringsx.ContainsAny(text, validationUnavailableMarkers)
+	knownVitestIntegrationRunnerFailure :=
+		strings.HasPrefix(text, "failure: local integration runner unavailable") &&
+			strings.Contains(text, "no test files found") &&
+			strings.Contains(text, "typeerror: code.charcodeat is not a function")
 
 	missingTooling := strings.Contains(text, "command not found") ||
 		strings.Contains(text, ": not found") ||
@@ -6402,7 +6404,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"module download",
 	})
 	if !missingTooling && !restrictedDependencyDownload {
-		return false
+		return knownVitestIntegrationRunnerFailure
 	}
 	if strings.Contains(text, "smoke command") {
 		return smokeFallbackSucceeded(text)
@@ -6432,6 +6434,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	validationContextMarkers := []string{
 		"validation",
 		"test runner",
+		"integration runner",
 		"test execution",
 		"automated test",
 		"lint",
