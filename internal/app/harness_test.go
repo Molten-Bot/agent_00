@@ -8048,6 +8048,32 @@ func TestRunCodexAllowsKnownVitestIntegrationRunnerFailureOnExit50(t *testing.T)
 	}
 }
 
+func TestRunCodexDoesNotHideImplementationBlockerBehindKnownVitestFailure(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update repository tests"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{
+				Stdout: strings.Join([]string{
+					"Failure: Local integration runner unavailable.",
+					"Error details: Vitest reported `No test files found` plus `TypeError: code.charCodeAt is not a function`. Implementation remains incomplete because required fixtures could not be generated.",
+				}, "\n"),
+			},
+		},
+	}}
+
+	err := New(fake).runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil {
+		t.Fatal("runCodex() error = nil, want implementation blocker failure")
+	}
+	if !strings.Contains(err.Error(), "Implementation remains incomplete") {
+		t.Fatalf("runCodex() error = %v, want implementation blocker detail", err)
+	}
+}
+
 func TestRunCodexDoesNotHideImplementationFailureContainingIntegrationRunnerError(t *testing.T) {
 	t.Parallel()
 
@@ -8100,6 +8126,26 @@ func TestRunCodexAllowsLocalIntegrationRunnerUnavailableWithMissingToolingEviden
 	}
 	if !strings.Contains(strings.Join(logs, "\n"), "action=validation_tooling_unavailable") {
 		t.Fatalf("logs missing validation tooling warning:\n%s", strings.Join(logs, "\n"))
+	}
+}
+
+func TestRunCodexAllowsLocalIntegrationRunnerUnavailableForOtherRunner(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update repository tests"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{
+				Stdout: "Failure: Local integration runner unavailable.",
+				Stderr: "Error details: spawn playwright ENOENT",
+			},
+		},
+	}}
+
+	if err := New(fake).runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
+		t.Fatalf("runCodex() error = %v, want nil for missing integration runner", err)
 	}
 }
 

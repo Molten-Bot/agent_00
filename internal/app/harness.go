@@ -6323,7 +6323,27 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	// Missing validation tooling is non-fatal only when it is the sole
 	// problem. Do not suppress an agent's explicit statement that it cannot
 	// complete the requested work.
-	if strings.Contains(text, "cannot safely meet") {
+	if stringsx.ContainsAny(text, []string{
+		"cannot safely meet",
+		"cannot complete implementation",
+		"cannot implement",
+		"could not complete implementation",
+		"could not complete requested implementation",
+		"could not generate requested",
+		"could not generate the requested",
+		"could not implement",
+		"implementation blocked",
+		"implementation blocker",
+		"implementation could not be completed",
+		"implementation failed",
+		"implementation is incomplete",
+		"implementation remains incomplete",
+		"requested implementation could not be completed",
+		"requested implementation is incomplete",
+		"requested implementation remains incomplete",
+		"unable to complete implementation",
+		"unable to implement",
+	}) {
 		return false
 	}
 
@@ -6365,10 +6385,10 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		strings.HasPrefix(text, "failure: local integration runner unavailable") &&
 			strings.Contains(text, "no test files found") &&
 			strings.Contains(text, "typeerror: code.charcodeat is not a function")
-	missingVitestIntegrationRunner :=
+	missingExecutable := missingExecutableFromENOENT(text)
+	missingIntegrationRunner :=
 		strings.HasPrefix(text, "failure: local integration runner unavailable") &&
-			strings.Contains(text, "spawn vitest enoent")
-	missingExecutable := missingValidationExecutable(text)
+			missingExecutable
 	missingTooling := strings.Contains(text, "command not found") ||
 		strings.Contains(text, ": not found") ||
 		strings.Contains(text, "exit status 127") ||
@@ -6412,7 +6432,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	if strings.Contains(text, "smoke command") {
 		return smokeFallbackSucceeded(text)
 	}
-	if missingVitestIntegrationRunner {
+	if missingIntegrationRunner {
 		return true
 	}
 	if validationUnavailable {
@@ -6476,17 +6496,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	return false
 }
 
-func missingValidationExecutable(text string) bool {
-	validationExecutables := map[string]struct{}{
-		"eslint":        {},
-		"go":            {},
-		"golangci-lint": {},
-		"npm":           {},
-		"pnpm":          {},
-		"tsc":           {},
-		"vitest":        {},
-		"yarn":          {},
-	}
+func missingExecutableFromENOENT(text string) bool {
 	for _, line := range strings.Split(text, "\n") {
 		if !strings.Contains(line, "enoent") {
 			continue
@@ -6499,7 +6509,7 @@ func missingValidationExecutable(text string) bool {
 			}
 			executable := strings.Trim(fields[i+1], "`'\"()[]{}:;,")
 			executable = filepath.Base(executable)
-			if _, ok := validationExecutables[executable]; ok {
+			if executable != "" && executable != "." {
 				return true
 			}
 		}
