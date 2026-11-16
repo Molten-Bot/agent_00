@@ -7669,9 +7669,11 @@ func conflictResolutionCheckCommand(repoDir string) execx.Command {
 
 func addedConflictMarker(diff string) (string, bool) {
 	prefixColumns := 0
+	markerState := 0
 	for _, line := range strings.Split(diff, "\n") {
 		if strings.HasPrefix(line, "diff --") {
 			prefixColumns = 0
+			markerState = 0
 			continue
 		}
 		if strings.HasPrefix(line, "@@") {
@@ -7687,10 +7689,15 @@ func addedConflictMarker(diff string) (string, bool) {
 			continue
 		}
 		content := line[prefixColumns:]
-		for _, marker := range []string{"<<<<<<<", "|||||||", "=======", ">>>>>>>"} {
-			if strings.HasPrefix(content, marker) {
-				return marker, true
-			}
+		switch {
+		case strings.HasPrefix(content, "<<<<<<< "):
+			markerState = 1
+		case markerState == 1 && strings.HasPrefix(content, "||||||| "):
+			markerState = 2
+		case (markerState == 1 || markerState == 2) && content == "=======":
+			markerState = 3
+		case markerState == 3 && strings.HasPrefix(content, ">>>>>>> "):
+			return "<<<<<<<", true
 		}
 	}
 	return "", false
