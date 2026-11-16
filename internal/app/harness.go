@@ -6361,18 +6361,18 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"node_modules missing",
 	}
 	validationUnavailable := stringsx.ContainsAny(text, validationUnavailableMarkers)
-	knownVitestIntegrationRunnerFailure :=
-		strings.HasPrefix(text, "failure: local integration runner unavailable") &&
-			strings.Contains(text, "no test files found") &&
-			strings.Contains(text, "typeerror: code.charcodeat is not a function")
-
+	missingExecutable := strings.Contains(text, "enoent") && stringsx.ContainsAny(text, []string{
+		"spawn ",
+		"exec ",
+		"executable",
+	})
 	missingTooling := strings.Contains(text, "command not found") ||
 		strings.Contains(text, ": not found") ||
 		strings.Contains(text, "exit status 127") ||
 		strings.Contains(text, "exited with status 127") ||
 		strings.Contains(text, "exit code 127") ||
 		strings.Contains(text, "returned 127") ||
-		strings.Contains(text, "enoent") ||
+		missingExecutable ||
 		strings.Contains(text, "cannot find module") ||
 		strings.Contains(text, "do you have node modules installed") ||
 		strings.Contains(text, "have node modules installed") ||
@@ -6404,7 +6404,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"module download",
 	})
 	if !missingTooling && !restrictedDependencyDownload {
-		return knownVitestIntegrationRunnerFailure
+		return false
 	}
 	if strings.Contains(text, "smoke command") {
 		return smokeFallbackSucceeded(text)
@@ -6434,7 +6434,6 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	validationContextMarkers := []string{
 		"validation",
 		"test runner",
-		"integration runner",
 		"test execution",
 		"automated test",
 		"lint",
@@ -6452,6 +6451,9 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	}
 	hasValidationCommand := stringsx.ContainsAny(text, validationCommandMarkers)
 	hasValidationContext := stringsx.ContainsAny(text, validationContextMarkers)
+	if missingExecutable && hasValidationCommand {
+		return true
+	}
 
 	// Some agent responses only include missing validation command output plus
 	// an "Alternative validation" section without explicit "validation unavailable"
