@@ -888,14 +888,16 @@ func TestAddedConflictMarker(t *testing.T) {
 	}{
 		{name: "standard conflict", diff: "@@ -1 +1,5 @@\n+<<<<<<< ours\n+ours\n+=======\n+theirs\n+>>>>>>> theirs\n", want: true},
 		{name: "diff3 conflict", diff: "@@ -1 +1,7 @@\n+<<<<<<< ours\n+ours\n+||||||| base\n+base\n+=======\n+theirs\n+>>>>>>> theirs\n", want: true},
+		{name: "custom marker size", diff: "@@ -1 +1,5 @@\n+<<<<<<<<<< ours\n+ours\n+==========\n+theirs\n+>>>>>>>>>> theirs\n", want: true},
+		{name: "single character marker size", diff: "@@ -1 +1,2 @@\n+< ours\n+ours\n", want: true},
 		{name: "combined diff conflict", diff: "@@@ -1,1 -1,1 +1,5 @@@\n++<<<<<<< ours\n++ours\n++=======\n++theirs\n++>>>>>>> theirs\n", want: true},
 		{name: "trailing whitespace", diff: "@@ -1 +1 @@\n+resolved content   \n"},
 		{name: "marker after source plus", diff: "@@ -1 +1 @@\n++<<<<<<< example text\n"},
 		{name: "marker-like file name", diff: "+++ b/<<<<<<<\n"},
 		{name: "standalone separator", diff: "@@ -1 +1 @@\n+=======\n"},
 		{name: "marker prefixes in valid content", diff: "@@ -1 +1,4 @@\n+<<<<<<<not a marker\n+|||||||not a marker\n+======= heading\n+>>>>>>>not a marker\n"},
-		{name: "incomplete conflict", diff: "@@ -1 +1,3 @@\n+<<<<<<< ours\n+=======\n+missing closing marker\n"},
-		{name: "markers split across files", diff: "diff --git a/one b/one\n@@ -1 +1,2 @@\n+<<<<<<< ours\n+=======\ndiff --git a/two b/two\n@@ -1 +1 @@\n+>>>>>>> theirs\n"},
+		{name: "incomplete conflict", diff: "@@ -1 +1,3 @@\n+<<<<<<< ours\n+=======\n+missing closing marker\n", want: true},
+		{name: "markers split across files", diff: "diff --git a/one b/one\n@@ -1 +1,2 @@\n+<<<<<<< ours\n+=======\ndiff --git a/two b/two\n@@ -1 +1 @@\n+>>>>>>> theirs\n", want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
