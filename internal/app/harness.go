@@ -1695,6 +1695,14 @@ func (h Harness) stageHarnessManagedConflictResolution(
 			maxGitErrorDetailChars,
 		)
 	}
+	if marker, ok := addedConflictMarker(checkRes.Stdout); ok {
+		return execx.Result{}, false, false, fmt.Errorf(
+			"validate %s branch conflict resolution for repo %s: leftover conflict marker %q",
+			syncKind,
+			repo.URL,
+			marker,
+		)
+	}
 
 	statusRes, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
 	if err != nil {
@@ -7656,7 +7664,36 @@ func statusCommand(repoDir string) execx.Command {
 }
 
 func conflictResolutionCheckCommand(repoDir string) execx.Command {
-	return gitCommand(repoDir, "diff", "--check")
+	return gitCommand(repoDir, "diff", "--no-color", "--no-ext-diff")
+}
+
+func addedConflictMarker(diff string) (string, bool) {
+	prefixColumns := 0
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "diff --") {
+			prefixColumns = 0
+			continue
+		}
+		if strings.HasPrefix(line, "@@") {
+			atSigns := len(line) - len(strings.TrimLeft(line, "@"))
+			prefixColumns = atSigns - 1
+			continue
+		}
+		if prefixColumns < 1 || len(line) < prefixColumns {
+			continue
+		}
+		prefix := line[:prefixColumns]
+		if !strings.Contains(prefix, "+") {
+			continue
+		}
+		content := line[prefixColumns:]
+		for _, marker := range []string{"<<<<<<<", "|||||||", "=======", ">>>>>>>"} {
+			if strings.HasPrefix(content, marker) {
+				return marker, true
+			}
+		}
+	}
+	return "", false
 }
 
 const conflictResolutionConfirmation = "Conflict resolution complete."
@@ -8330,7 +8367,7 @@ func resolvePRCommentsLibraryPrompt() string {
 }
 
 func mergeMainLibraryPrompt() string {
-	const harnessStaging = "Harness-managed conflict staging (these rules override earlier Git-write instructions):\n- Git metadata is protected as read-only inside the agent sandbox. Do not run `git add`, `git commit`, `git merge`, `git fetch`, or other commands that write `.git`.\n- Resolve every conflict in the worktree, including marker-free binary, delete/modify, and rename conflicts. Use read-only Git commands and `git diff --check` to verify no conflict markers remain.\n- Only after inspecting and resolving every conflicted path, end the final response with the exact line `Conflict resolution complete.` This confirmation authorizes the harness to stage marker-free resolutions.\n- The harness will stage the resolved worktree, verify the index has no unmerged paths, and commit after the agent returns. A read-only `.git/index.lock` is not a conflict-resolution failure."
+	const harnessStaging = "Harness-managed conflict staging (these rules override earlier Git-write instructions):\n- Git metadata is protected as read-only inside the agent sandbox. Do not run `git add`, `git commit`, `git merge`, `git fetch`, or other commands that write `.git`.\n- Resolve every conflict in the worktree, including marker-free binary, delete/modify, and rename conflicts. Inspect `git diff --no-color --no-ext-diff` and verify no added conflict-marker lines remain.\n- Only after inspecting and resolving every conflicted path, end the final response with the exact line `Conflict resolution complete.` This confirmation authorizes the harness to stage marker-free resolutions.\n- The harness will stage the resolved worktree, verify the index has no unmerged paths, and commit after the agent returns. A read-only `.git/index.lock` is not a conflict-resolution failure."
 	catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 	if err == nil {
 		if task, ok := catalog.Task(mergeMainLibraryTaskName); ok && strings.TrimSpace(task.Prompt) != "" {

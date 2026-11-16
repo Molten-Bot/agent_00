@@ -845,8 +845,7 @@ func TestStageHarnessManagedConflictResolutionRejectsConflictMarkers(t *testing.
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{
 			cmd: conflictResolutionCheckCommand(repo.Dir),
-			res: execx.Result{Stdout: "file.go:12: leftover conflict marker\n"},
-			err: errors.New("exit status 2"),
+			res: execx.Result{Stdout: "diff --git a/file.go b/file.go\n+++ b/file.go\n@@ -1 +1,2 @@\n+<<<<<<< ours\n"},
 		},
 	}}
 	h := New(fake)
@@ -856,6 +855,50 @@ func TestStageHarnessManagedConflictResolutionRejectsConflictMarkers(t *testing.
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestStageHarnessManagedConflictResolutionAllowsTrailingWhitespace(t *testing.T) {
+	t.Parallel()
+
+	repo := &repoWorkspace{URL: "git@github.com:acme/repo.git", Dir: "/repo"}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: conflictResolutionCheckCommand(repo.Dir),
+			res: execx.Result{Stdout: "diff --git a/file.go b/file.go\n+++ b/file.go\n@@ -1 +1 @@\n+resolved content   \n"},
+		},
+		{cmd: statusCommand(repo.Dir), res: execx.Result{Stdout: "## agent00-build-api\n M file.go\n"}},
+	}}
+	h := New(fake)
+	if _, _, _, err := h.stageHarnessManagedConflictResolution(context.Background(), repo, "remote", true); err != nil {
+		t.Fatalf("stageHarnessManagedConflictResolution() error = %v, want trailing whitespace accepted", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestAddedConflictMarker(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		diff string
+		want bool
+	}{
+		{name: "standard diff marker", diff: "@@ -1 +1 @@\n+<<<<<<< ours\n", want: true},
+		{name: "combined diff marker", diff: "@@@ -1,1 -1,1 +1,2 @@@\n++>>>>>>> theirs\n", want: true},
+		{name: "trailing whitespace", diff: "@@ -1 +1 @@\n+resolved content   \n"},
+		{name: "marker after source plus", diff: "@@ -1 +1 @@\n++<<<<<<< example text\n"},
+		{name: "marker-like file name", diff: "+++ b/<<<<<<<\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, got := addedConflictMarker(tc.diff)
+			if got != tc.want {
+				t.Fatalf("addedConflictMarker() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
