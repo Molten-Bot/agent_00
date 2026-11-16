@@ -1524,7 +1524,6 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 		if !isReadOnlyGitIndexFailure(agentErr) {
 			return ExitCodex, agentStage, agentErr
 		}
-		resolutionConfirmed = true
 		h.logf(
 			"stage=%s status=warn action=defer_conflict_staging reason=git_index_read_only mode=base_sync_conflict repo=%s repo_dir=%s%s",
 			agentStage,
@@ -1625,7 +1624,6 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 		if !isReadOnlyGitIndexFailure(agentErr) {
 			return ExitCodex, agentStage, agentErr
 		}
-		resolutionConfirmed = true
 		h.logf(
 			"stage=%s status=warn action=defer_conflict_staging reason=git_index_read_only mode=remote_branch_sync_conflict repo=%s repo_dir=%s%s",
 			agentStage,
