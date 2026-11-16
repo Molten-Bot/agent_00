@@ -7695,7 +7695,7 @@ func addedConflictMarker(diff string) (string, bool) {
 }
 
 func conflictMarkerWidth(line string) int {
-	if len(line) == 0 || (line[0] != '<' && line[0] != '>') {
+	if len(line) == 0 || (line[0] != '<' && line[0] != '|' && line[0] != '>') {
 		return 0
 	}
 	marker := line[0]
