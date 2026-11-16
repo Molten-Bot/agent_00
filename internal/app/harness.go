@@ -6381,10 +6381,15 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"node_modules missing",
 	}
 	validationUnavailable := stringsx.ContainsAny(text, validationUnavailableMarkers)
+	outputText := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		res.Stdout,
+		res.Stderr,
+	}, "\n")))
 	knownVitestIntegrationRunnerFailure :=
 		strings.HasPrefix(text, "failure: local integration runner unavailable") &&
 			strings.Contains(text, "no test files found") &&
-			strings.Contains(text, "typeerror: code.charcodeat is not a function")
+			strings.Contains(text, "typeerror: code.charcodeat is not a function") &&
+			containsStandaloneSentence(outputText, "implementation complete")
 	missingExecutable := missingExecutableFromENOENT(text)
 	missingIntegrationRunner :=
 		strings.HasPrefix(text, "failure: local integration runner unavailable") &&

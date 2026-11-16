@@ -8048,6 +8048,33 @@ func TestRunCodexAllowsKnownVitestIntegrationRunnerFailureOnExit50(t *testing.T)
 	}
 }
 
+func TestRunCodexRequiresCompletedImplementationForKnownVitestFailure(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update repository tests"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{
+				Stdout: strings.Join([]string{
+					"Failure: Local integration runner unavailable.",
+					"Error details: Vitest reported `No test files found` plus `TypeError: code.charCodeAt is not a function`.",
+					"Only part of the requested implementation was completed.",
+				}, "\n"),
+			},
+		},
+	}}
+
+	err := New(fake).runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil {
+		t.Fatal("runCodex() error = nil, want incomplete implementation failure")
+	}
+	if !strings.Contains(err.Error(), "codex reported failure") {
+		t.Fatalf("runCodex() error = %v, want codex reported failure marker", err)
+	}
+}
+
 func TestRunCodexDoesNotHideImplementationBlockerBehindKnownVitestFailure(t *testing.T) {
 	t.Parallel()
 
