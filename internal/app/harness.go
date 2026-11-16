@@ -7687,16 +7687,20 @@ func addedConflictMarker(diff string) (string, bool) {
 			continue
 		}
 		content := line[prefixColumns:]
-		if width := openingConflictMarkerWidth(content); width > 0 {
+		if width := conflictMarkerWidth(content); width > 0 {
 			return content[:width], true
 		}
 	}
 	return "", false
 }
 
-func openingConflictMarkerWidth(line string) int {
+func conflictMarkerWidth(line string) int {
+	if len(line) == 0 || (line[0] != '<' && line[0] != '>') {
+		return 0
+	}
+	marker := line[0]
 	width := 0
-	for width < len(line) && line[width] == '<' {
+	for width < len(line) && line[width] == marker {
 		width++
 	}
 	if width == 0 || width >= len(line) || line[width] != ' ' {

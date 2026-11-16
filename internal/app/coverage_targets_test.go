@@ -890,6 +890,7 @@ func TestAddedConflictMarker(t *testing.T) {
 		{name: "diff3 conflict", diff: "@@ -1 +1,7 @@\n+<<<<<<< ours\n+ours\n+||||||| base\n+base\n+=======\n+theirs\n+>>>>>>> theirs\n", want: true},
 		{name: "custom marker size", diff: "@@ -1 +1,5 @@\n+<<<<<<<<<< ours\n+ours\n+==========\n+theirs\n+>>>>>>>>>> theirs\n", want: true},
 		{name: "single character marker size", diff: "@@ -1 +1,2 @@\n+< ours\n+ours\n", want: true},
+		{name: "closing marker only", diff: "@@ -1 +1 @@\n+>>>>>>> theirs\n", want: true},
 		{name: "combined diff conflict", diff: "@@@ -1,1 -1,1 +1,5 @@@\n++<<<<<<< ours\n++ours\n++=======\n++theirs\n++>>>>>>> theirs\n", want: true},
 		{name: "trailing whitespace", diff: "@@ -1 +1 @@\n+resolved content   \n"},
 		{name: "marker after source plus", diff: "@@ -1 +1 @@\n++<<<<<<< example text\n"},
