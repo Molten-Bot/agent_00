@@ -6361,11 +6361,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"node_modules missing",
 	}
 	validationUnavailable := stringsx.ContainsAny(text, validationUnavailableMarkers)
-	missingExecutable := strings.Contains(text, "enoent") && stringsx.ContainsAny(text, []string{
-		"spawn ",
-		"exec ",
-		"executable",
-	})
+	missingExecutable := missingValidationExecutable(text)
 	missingTooling := strings.Contains(text, "command not found") ||
 		strings.Contains(text, ": not found") ||
 		strings.Contains(text, "exit status 127") ||
@@ -6464,6 +6460,37 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 
 	if hasValidationCommand && hasValidationContext {
 		return true
+	}
+	return false
+}
+
+func missingValidationExecutable(text string) bool {
+	validationExecutables := map[string]struct{}{
+		"eslint":        {},
+		"go":            {},
+		"golangci-lint": {},
+		"npm":           {},
+		"pnpm":          {},
+		"tsc":           {},
+		"vitest":        {},
+		"yarn":          {},
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.Contains(line, "enoent") {
+			continue
+		}
+		fields := strings.Fields(line)
+		for i := 0; i+1 < len(fields); i++ {
+			operation := strings.Trim(fields[i], "`'\"()[]{}:;,")
+			if operation != "spawn" && operation != "exec" {
+				continue
+			}
+			executable := strings.Trim(fields[i+1], "`'\"()[]{}:;,")
+			executable = filepath.Base(executable)
+			if _, ok := validationExecutables[executable]; ok {
+				return true
+			}
+		}
 	}
 	return false
 }

@@ -8123,6 +8123,30 @@ func TestRunCodexDoesNotHideIntegrationFixtureENOENT(t *testing.T) {
 	}
 }
 
+func TestRunCodexDoesNotHideMissingImplementationExecutableMentioningVitest(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update repository tests"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{
+				Stdout: "Failure: Could not complete implementation because generated fixtures are unavailable for Vitest validation.",
+				Stderr: "Error details: spawn fixture-generator ENOENT",
+			},
+		},
+	}}
+
+	err := New(fake).runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil {
+		t.Fatal("runCodex() error = nil, want missing implementation executable failure")
+	}
+	if !strings.Contains(err.Error(), "fixture-generator ENOENT") {
+		t.Fatalf("runCodex() error = %v, want missing implementation executable detail", err)
+	}
+}
+
 func TestRunCodexAllowsGoValidationBlockedByRestrictedDependencyDownload(t *testing.T) {
 	t.Parallel()
 
