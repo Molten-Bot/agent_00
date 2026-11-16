@@ -6335,7 +6335,6 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"local automated test run unavailable",
 		"local automated validation not runnable",
 		"local automated validation not runnable in this runtime",
-		"local integration runner unavailable",
 		"local test runner unavailable",
 		"local test runner unavailable in runtime",
 		"local test execution unavailable",
@@ -6366,6 +6365,9 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		strings.HasPrefix(text, "failure: local integration runner unavailable") &&
 			strings.Contains(text, "no test files found") &&
 			strings.Contains(text, "typeerror: code.charcodeat is not a function")
+	missingVitestIntegrationRunner :=
+		strings.HasPrefix(text, "failure: local integration runner unavailable") &&
+			strings.Contains(text, "spawn vitest enoent")
 	missingExecutable := missingValidationExecutable(text)
 	missingTooling := strings.Contains(text, "command not found") ||
 		strings.Contains(text, ": not found") ||
@@ -6409,6 +6411,9 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	}
 	if strings.Contains(text, "smoke command") {
 		return smokeFallbackSucceeded(text)
+	}
+	if missingVitestIntegrationRunner {
+		return true
 	}
 	if validationUnavailable {
 		return true

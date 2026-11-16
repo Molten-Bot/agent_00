@@ -8103,6 +8103,30 @@ func TestRunCodexAllowsLocalIntegrationRunnerUnavailableWithMissingToolingEviden
 	}
 }
 
+func TestRunCodexDoesNotHideMissingImplementationExecutableBehindIntegrationRunnerMarker(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update generated client and integration tests"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{
+				Stdout: "Failure: Local integration runner unavailable.",
+				Stderr: "Error details: Could not generate the requested client: spawn npm ENOENT.",
+			},
+		},
+	}}
+
+	err := New(fake).runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil {
+		t.Fatal("runCodex() error = nil, want missing implementation executable failure")
+	}
+	if !strings.Contains(err.Error(), "spawn npm ENOENT") {
+		t.Fatalf("runCodex() error = %v, want missing implementation executable detail", err)
+	}
+}
+
 func TestRunCodexDoesNotHideIntegrationFixtureENOENT(t *testing.T) {
 	t.Parallel()
 
