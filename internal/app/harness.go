@@ -1518,10 +1518,13 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 		invocation.logFieldsSuffix(),
 	)
 	agentStart := time.Now()
-	if _, err := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation); err != nil {
-		if !isReadOnlyGitIndexFailure(err) {
-			return ExitCodex, agentStage, err
+	agentRes, agentErr := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation)
+	resolutionConfirmed := conflictResolutionConfirmed(agentRes)
+	if agentErr != nil {
+		if !isReadOnlyGitIndexFailure(agentErr) {
+			return ExitCodex, agentStage, agentErr
 		}
+		resolutionConfirmed = true
 		h.logf(
 			"stage=%s status=warn action=defer_conflict_staging reason=git_index_read_only mode=base_sync_conflict repo=%s repo_dir=%s%s",
 			agentStage,
@@ -1543,7 +1546,7 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 		return ExitGit, "git", err
 	}
 
-	statusRes, mergeNeedsCommit, harnessStaged, err := h.stageHarnessManagedConflictResolution(ctx, repo, "base")
+	statusRes, mergeNeedsCommit, harnessStaged, err := h.stageHarnessManagedConflictResolution(ctx, repo, "base", resolutionConfirmed)
 	if err != nil {
 		return ExitGit, "git", err
 	}
@@ -1616,10 +1619,13 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 		invocation.logFieldsSuffix(),
 	)
 	agentStart := time.Now()
-	if _, err := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation); err != nil {
-		if !isReadOnlyGitIndexFailure(err) {
-			return ExitCodex, agentStage, err
+	agentRes, agentErr := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation)
+	resolutionConfirmed := conflictResolutionConfirmed(agentRes)
+	if agentErr != nil {
+		if !isReadOnlyGitIndexFailure(agentErr) {
+			return ExitCodex, agentStage, agentErr
 		}
+		resolutionConfirmed = true
 		h.logf(
 			"stage=%s status=warn action=defer_conflict_staging reason=git_index_read_only mode=remote_branch_sync_conflict repo=%s repo_dir=%s%s",
 			agentStage,
@@ -1641,7 +1647,7 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 		return ExitGit, "git", err
 	}
 
-	statusRes, mergeNeedsCommit, harnessStaged, err := h.stageHarnessManagedConflictResolution(ctx, repo, "remote")
+	statusRes, mergeNeedsCommit, harnessStaged, err := h.stageHarnessManagedConflictResolution(ctx, repo, "remote", resolutionConfirmed)
 	if err != nil {
 		return ExitGit, "git", err
 	}
@@ -1680,6 +1686,7 @@ func (h Harness) stageHarnessManagedConflictResolution(
 	ctx context.Context,
 	repo *repoWorkspace,
 	syncKind string,
+	resolutionConfirmed bool,
 ) (execx.Result, bool, bool, error) {
 	checkRes, checkErr := h.runCommand(ctx, "git", conflictResolutionCheckCommand(repo.Dir))
 	if checkErr != nil {
@@ -1698,6 +1705,13 @@ func (h Harness) stageHarnessManagedConflictResolution(
 	mergeNeedsCommit := hasUnmergedPaths(statusRes.Stdout)
 	if !mergeNeedsCommit {
 		return statusRes, false, false, nil
+	}
+	if !resolutionConfirmed {
+		return execx.Result{}, false, false, fmt.Errorf(
+			"%s branch sync for repo %s still has unmerged paths without explicit agent confirmation that all conflict contents were resolved",
+			syncKind,
+			repo.URL,
+		)
 	}
 	if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
 		return execx.Result{}, false, false, err
@@ -7647,6 +7661,20 @@ func conflictResolutionCheckCommand(repoDir string) execx.Command {
 	return gitCommand(repoDir, "diff", "--check")
 }
 
+const conflictResolutionConfirmation = "Conflict resolution complete."
+
+func conflictResolutionConfirmed(res execx.Result) bool {
+	lines := splitOutputLines(res.Stdout)
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		return line == conflictResolutionConfirmation
+	}
+	return false
+}
+
 func reviewFixDiffCommand(repoDir, beforeHead string) execx.Command {
 	return gitCommand(repoDir, "diff", "--binary", strings.TrimSpace(beforeHead))
 }
@@ -8304,7 +8332,7 @@ func resolvePRCommentsLibraryPrompt() string {
 }
 
 func mergeMainLibraryPrompt() string {
-	const harnessStaging = "Harness-managed conflict staging (these rules override earlier Git-write instructions):\n- Git metadata is protected as read-only inside the agent sandbox. Do not run `git add`, `git commit`, `git merge`, `git fetch`, or other commands that write `.git`.\n- Resolve conflict contents in the worktree only. Use read-only Git commands and `git diff --check` to verify no conflict markers remain.\n- The harness will stage the resolved worktree, verify the index has no unmerged paths, and commit after the agent returns. A read-only `.git/index.lock` is not a conflict-resolution failure."
+	const harnessStaging = "Harness-managed conflict staging (these rules override earlier Git-write instructions):\n- Git metadata is protected as read-only inside the agent sandbox. Do not run `git add`, `git commit`, `git merge`, `git fetch`, or other commands that write `.git`.\n- Resolve every conflict in the worktree, including marker-free binary, delete/modify, and rename conflicts. Use read-only Git commands and `git diff --check` to verify no conflict markers remain.\n- Only after inspecting and resolving every conflicted path, end the final response with the exact line `Conflict resolution complete.` This confirmation authorizes the harness to stage marker-free resolutions.\n- The harness will stage the resolved worktree, verify the index has no unmerged paths, and commit after the agent returns. A read-only `.git/index.lock` is not a conflict-resolution failure."
 	catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 	if err == nil {
 		if task, ok := catalog.Task(mergeMainLibraryTaskName); ok && strings.TrimSpace(task.Prompt) != "" {

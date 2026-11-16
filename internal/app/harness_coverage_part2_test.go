@@ -162,6 +162,8 @@ func TestBaseSyncConflictPromptEmptyMergeSummary(t *testing.T) {
 	for _, want := range []string{
 		"Git metadata is protected as read-only inside the agent sandbox.",
 		"Do not run `git add`",
+		"including marker-free binary, delete/modify, and rename conflicts",
+		"`Conflict resolution complete.`",
 		"The harness will stage the resolved worktree",
 	} {
 		if !strings.Contains(got, want) {
@@ -172,6 +174,28 @@ func TestBaseSyncConflictPromptEmptyMergeSummary(t *testing.T) {
 	withOutput := baseSyncConflictPrompt("base task", "/repo", "git@github.com:acme/repo.git", "work", "main", execx.Result{Stderr: "CONFLICT (content): x"})
 	if !strings.Contains(withOutput, "CONFLICT (content): x") {
 		t.Fatalf("baseSyncConflictPrompt(with merge output) missing merge summary: %q", withOutput)
+	}
+}
+
+func TestConflictResolutionConfirmedRequiresTerminalExactMarker(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		res  execx.Result
+		want bool
+	}{
+		{name: "terminal marker", res: execx.Result{Stdout: "Resolved all paths.\nConflict resolution complete.\n"}, want: true},
+		{name: "nonterminal marker", res: execx.Result{Stdout: "Conflict resolution complete.\nMore work remains.\n"}},
+		{name: "stderr marker", res: execx.Result{Stderr: "Conflict resolution complete.\n"}},
+		{name: "near match", res: execx.Result{Stdout: "Conflict resolution complete\n"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := conflictResolutionConfirmed(tc.res); got != tc.want {
+				t.Fatalf("conflictResolutionConfirmed() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -769,8 +769,6 @@ func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 		{cmd: codexCommand(repoDir, resolvePrompt)},
 		{cmd: conflictResolutionCheckCommand(repoDir)},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
-		{cmd: addCommand(repoDir)},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
 	}}
 
 	h := New(fake)
@@ -778,8 +776,8 @@ func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 		context.Background(), repo, agentruntime.Default(), repoDir, codexRunOptions{},
 		codexBasePrompt, "", "", ".", "codex",
 	)
-	if err == nil || !strings.Contains(err.Error(), "still has unmerged paths after remediation") {
-		t.Fatalf("syncGeneratedWorkBranchWithBase() err = %v, want unmerged-paths fatal error", err)
+	if err == nil || !strings.Contains(err.Error(), "without explicit agent confirmation") {
+		t.Fatalf("syncGeneratedWorkBranchWithBase() err = %v, want missing-confirmation fatal error", err)
 	}
 	if exitCode != ExitGit || stage != "git" {
 		t.Fatalf("syncGeneratedWorkBranchWithBase() = (%d, %q), want (%d, \"git\")", exitCode, stage, ExitGit)
@@ -822,8 +820,6 @@ func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing
 		{cmd: codexCommand(repoDir, resolvePrompt)},
 		{cmd: conflictResolutionCheckCommand(repoDir)},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
-		{cmd: addCommand(repoDir)},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
 	}}
 
 	h := New(fake)
@@ -831,8 +827,8 @@ func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing
 		context.Background(), repo, 0, agentruntime.Default(), repoDir, codexRunOptions{},
 		codexBasePrompt, "", "", ".", "codex",
 	)
-	if err == nil || !strings.Contains(err.Error(), "still has unmerged paths after remediation") {
-		t.Fatalf("pushWithSyncAndConflictResolution() err = %v, want unmerged-paths fatal error", err)
+	if err == nil || !strings.Contains(err.Error(), "without explicit agent confirmation") {
+		t.Fatalf("pushWithSyncAndConflictResolution() err = %v, want missing-confirmation fatal error", err)
 	}
 	if exitCode != ExitGit || stage != "git" {
 		t.Fatalf("pushWithSyncAndConflictResolution() = (%d, %q), want (%d, \"git\")", exitCode, stage, ExitGit)
@@ -854,9 +850,27 @@ func TestStageHarnessManagedConflictResolutionRejectsConflictMarkers(t *testing.
 		},
 	}}
 	h := New(fake)
-	_, _, _, err := h.stageHarnessManagedConflictResolution(context.Background(), repo, "remote")
+	_, _, _, err := h.stageHarnessManagedConflictResolution(context.Background(), repo, "remote", true)
 	if err == nil || !strings.Contains(err.Error(), "leftover conflict marker") {
 		t.Fatalf("stageHarnessManagedConflictResolution() err = %v, want conflict-marker detail", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestStageHarnessManagedConflictResolutionRejectsUnconfirmedMarkerFreeConflict(t *testing.T) {
+	t.Parallel()
+
+	repo := &repoWorkspace{URL: "git@github.com:acme/repo.git", Dir: "/repo"}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: conflictResolutionCheckCommand(repo.Dir)},
+		{cmd: statusCommand(repo.Dir), res: execx.Result{Stdout: "UD binary.dat\n"}},
+	}}
+	h := New(fake)
+	_, _, _, err := h.stageHarnessManagedConflictResolution(context.Background(), repo, "remote", false)
+	if err == nil || !strings.Contains(err.Error(), "without explicit agent confirmation") {
+		t.Fatalf("stageHarnessManagedConflictResolution() err = %v, want missing-confirmation error", err)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))

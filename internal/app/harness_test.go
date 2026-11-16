@@ -2145,7 +2145,7 @@ func TestRunResolvePRCommentsPushSyncMergeConflictInvokesAgentAndRetries(t *test
 		{cmd: pushCommand(repoDir, cfg.BaseBranch), res: pushRejected, err: errors.New("push rejected")},
 		{cmd: fetchBranchCommand(repoDir, cfg.BaseBranch)},
 		{cmd: mergeFetchedBranchCommand(repoDir), res: mergeConflict, err: errors.New("exit status 1")},
-		{cmd: codexCommand(targetDir, remoteSyncPrompt)},
+		{cmd: codexCommand(targetDir, remoteSyncPrompt), res: execx.Result{Stdout: conflictResolutionConfirmation + "\n"}},
 		{cmd: conflictResolutionCheckCommand(repoDir)},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "UU test/worker.test.js\n"}},
 		{cmd: addCommand(repoDir)},
