@@ -740,7 +740,7 @@ func TestRemoteBranchSyncConflictErrorMethods(t *testing.T) {
 func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 	t.Parallel()
 
-	repoDir := "/repo"
+	repoDir := t.TempDir()
 	repo := &repoWorkspace{
 		URL:              "git@github.com:acme/repo.git",
 		Dir:              repoDir,
@@ -767,6 +767,9 @@ func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 		{cmd: fetchBranchCommand(repoDir, repo.BaseBranch)},
 		{cmd: mergeFetchedBranchCommand(repoDir), res: mergeConflict, err: errors.New("exit status 1")},
 		{cmd: codexCommand(repoDir, resolvePrompt)},
+		{cmd: conflictResolutionCheckCommand(repoDir)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
+		{cmd: addCommand(repoDir)},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
 	}}
 
@@ -789,7 +792,7 @@ func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 	t.Parallel()
 
-	repoDir := "/repo"
+	repoDir := t.TempDir()
 	repo := &repoWorkspace{
 		URL:    "git@github.com:acme/repo.git",
 		Dir:    repoDir,
@@ -817,6 +820,9 @@ func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing
 		{cmd: fetchBranchFromRemoteCommand(repo.Dir, publishRemoteOrigin, repo.Branch)},
 		{cmd: mergeFetchedBranchCommand(repo.Dir), res: mergeConflict, err: errors.New("exit status 1")},
 		{cmd: codexCommand(repoDir, resolvePrompt)},
+		{cmd: conflictResolutionCheckCommand(repoDir)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
+		{cmd: addCommand(repoDir)},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
 	}}
 
@@ -830,6 +836,27 @@ func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing
 	}
 	if exitCode != ExitGit || stage != "git" {
 		t.Fatalf("pushWithSyncAndConflictResolution() = (%d, %q), want (%d, \"git\")", exitCode, stage, ExitGit)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestStageHarnessManagedConflictResolutionRejectsConflictMarkers(t *testing.T) {
+	t.Parallel()
+
+	repo := &repoWorkspace{URL: "git@github.com:acme/repo.git", Dir: "/repo"}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: conflictResolutionCheckCommand(repo.Dir),
+			res: execx.Result{Stdout: "file.go:12: leftover conflict marker\n"},
+			err: errors.New("exit status 2"),
+		},
+	}}
+	h := New(fake)
+	_, _, _, err := h.stageHarnessManagedConflictResolution(context.Background(), repo, "remote")
+	if err == nil || !strings.Contains(err.Error(), "leftover conflict marker") {
+		t.Fatalf("stageHarnessManagedConflictResolution() err = %v, want conflict-marker detail", err)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))

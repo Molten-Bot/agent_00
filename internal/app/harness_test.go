@@ -2146,8 +2146,10 @@ func TestRunResolvePRCommentsPushSyncMergeConflictInvokesAgentAndRetries(t *test
 		{cmd: fetchBranchCommand(repoDir, cfg.BaseBranch)},
 		{cmd: mergeFetchedBranchCommand(repoDir), res: mergeConflict, err: errors.New("exit status 1")},
 		{cmd: codexCommand(targetDir, remoteSyncPrompt)},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: " M test/worker.test.js\n"}},
+		{cmd: conflictResolutionCheckCommand(repoDir)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "UU test/worker.test.js\n"}},
 		{cmd: addCommand(repoDir)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "M  test/worker.test.js\n"}},
 		{cmd: commitCommand(repoDir, syncCommitMessage)},
 		{cmd: pushCommand(repoDir, cfg.BaseBranch)},
 		{cmd: remoteBranchExistsOnOriginCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "abc123\trefs/heads/" + cfg.BaseBranch + "\n"}},
@@ -9064,9 +9066,15 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 			res: execx.Result{Stdout: "CONFLICT (content): Merge conflict in file.go\nAutomatic merge failed; fix conflicts and then commit the result."},
 			err: errors.New("merge failed"),
 		},
-		{cmd: codexCommand(repoDir, "resolve conflict")},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n M file.go\n"}},
+		{
+			cmd: codexCommand(repoDir, "resolve conflict"),
+			res: execx.Result{Stdout: "Failure: Conflict contents resolved, but Git index remains unmerged.\n" +
+				"Error details: `git add` fails: `fatal: Unable to create '.git/index.lock': Read-only file system`."},
+		},
+		{cmd: conflictResolutionCheckCommand(repoDir)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
 		{cmd: addCommand(repoDir)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nM  file.go\n"}},
 		{cmd: commitCommand(repoDir, baseSyncCommitMessage("main"))},
 		{cmd: fetchBranchCommand(repoDir, "main")},
 		{cmd: mergeFetchedBranchCommand(repoDir)},
@@ -9090,6 +9098,7 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 	joinedLogs := strings.Join(logs, "\n")
 	for _, want := range []string{
 		"mode=base_sync_conflict",
+		"action=defer_conflict_staging reason=git_index_read_only",
 		"agent_run_id=agent-base_sync_conflict-repo-1",
 		"repo=repo",
 		"repo_dir=repo",
