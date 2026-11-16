@@ -6320,10 +6320,15 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	if text == "" {
 		return false
 	}
+	outputText := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		text,
+		res.Stdout,
+		res.Stderr,
+	}, "\n")))
 	// Missing validation tooling is non-fatal only when it is the sole
 	// problem. Do not suppress an agent's explicit statement that it cannot
 	// complete the requested work.
-	if stringsx.ContainsAny(text, []string{
+	if stringsx.ContainsAny(outputText, []string{
 		"cannot safely meet",
 		"cannot complete implementation",
 		"cannot implement",
@@ -6338,6 +6343,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"implementation failed",
 		"implementation is incomplete",
 		"implementation remains incomplete",
+		"only part of the requested implementation was completed",
 		"requested implementation could not be completed",
 		"requested implementation is incomplete",
 		"requested implementation remains incomplete",
@@ -6381,15 +6387,10 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"node_modules missing",
 	}
 	validationUnavailable := stringsx.ContainsAny(text, validationUnavailableMarkers)
-	outputText := strings.ToLower(strings.TrimSpace(strings.Join([]string{
-		res.Stdout,
-		res.Stderr,
-	}, "\n")))
 	knownVitestIntegrationRunnerFailure :=
 		strings.HasPrefix(text, "failure: local integration runner unavailable") &&
 			strings.Contains(text, "no test files found") &&
-			strings.Contains(text, "typeerror: code.charcodeat is not a function") &&
-			containsStandaloneSentence(outputText, "implementation complete")
+			strings.Contains(text, "typeerror: code.charcodeat is not a function")
 	missingExecutable := missingExecutableFromENOENT(text)
 	missingIntegrationRunner :=
 		strings.HasPrefix(text, "failure: local integration runner unavailable") &&

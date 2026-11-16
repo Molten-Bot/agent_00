@@ -8026,7 +8026,6 @@ func TestRunCodexAllowsKnownVitestIntegrationRunnerFailureOnExit50(t *testing.T)
 			cmd: firstCmd,
 			res: execx.Result{
 				Stdout: strings.Join([]string{
-					"Implementation complete. Lint, typechecks, unit tests, and builds passed.",
 					"Failure: Local integration runner unavailable.",
 					"Error details: Vitest reported `No test files found` plus `TypeError: code.charCodeAt is not a function`, including for existing integration tests.",
 				}, "\n"),
@@ -8048,7 +8047,7 @@ func TestRunCodexAllowsKnownVitestIntegrationRunnerFailureOnExit50(t *testing.T)
 	}
 }
 
-func TestRunCodexRequiresCompletedImplementationForKnownVitestFailure(t *testing.T) {
+func TestRunCodexDoesNotHidePartialImplementationBehindKnownVitestFailure(t *testing.T) {
 	t.Parallel()
 
 	targetDir := t.TempDir()
