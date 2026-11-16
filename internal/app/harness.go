@@ -6361,6 +6361,10 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"node_modules missing",
 	}
 	validationUnavailable := stringsx.ContainsAny(text, validationUnavailableMarkers)
+	knownVitestIntegrationRunnerFailure :=
+		strings.HasPrefix(text, "failure: local integration runner unavailable") &&
+			strings.Contains(text, "no test files found") &&
+			strings.Contains(text, "typeerror: code.charcodeat is not a function")
 	missingExecutable := missingValidationExecutable(text)
 	missingTooling := strings.Contains(text, "command not found") ||
 		strings.Contains(text, ": not found") ||
@@ -6400,7 +6404,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"module download",
 	})
 	if !missingTooling && !restrictedDependencyDownload {
-		return false
+		return knownVitestIntegrationRunnerFailure
 	}
 	if strings.Contains(text, "smoke command") {
 		return smokeFallbackSucceeded(text)

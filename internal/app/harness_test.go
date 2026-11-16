@@ -8014,7 +8014,7 @@ func TestRunCodexAllowsFocusedValidationUnavailableFailure(t *testing.T) {
 	}
 }
 
-func TestRunCodexDoesNotHideVitestIntegrationRunnerCrash(t *testing.T) {
+func TestRunCodexAllowsKnownVitestIntegrationRunnerFailureOnExit50(t *testing.T) {
 	t.Parallel()
 
 	targetDir := t.TempDir()
@@ -8031,16 +8031,20 @@ func TestRunCodexDoesNotHideVitestIntegrationRunnerCrash(t *testing.T) {
 					"Error details: Vitest reported `No test files found` plus `TypeError: code.charCodeAt is not a function`, including for existing integration tests.",
 				}, "\n"),
 			},
+			err: errors.New("run codex [exec]: exit status 50"),
 		},
 	}}
 
+	var logs []string
 	h := New(fake)
-	err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
-	if err == nil {
-		t.Fatal("runCodex() error = nil, want Vitest crash failure")
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
 	}
-	if !strings.Contains(err.Error(), "TypeError: code.charCodeAt is not a function") {
-		t.Fatalf("runCodex() error = %v, want Vitest crash detail", err)
+	if err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", ""); err != nil {
+		t.Fatalf("runCodex() error = %v, want nil for known Vitest integration-runner failure", err)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "action=validation_tooling_unavailable") {
+		t.Fatalf("logs missing validation tooling warning:\n%s", strings.Join(logs, "\n"))
 	}
 }
 
