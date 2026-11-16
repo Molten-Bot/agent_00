@@ -6335,6 +6335,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"local automated test run unavailable",
 		"local automated validation not runnable",
 		"local automated validation not runnable in this runtime",
+		"local integration runner unavailable",
 		"local test runner unavailable",
 		"local test runner unavailable in runtime",
 		"local test execution unavailable",
@@ -6451,15 +6452,17 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	}
 	hasValidationCommand := stringsx.ContainsAny(text, validationCommandMarkers)
 	hasValidationContext := stringsx.ContainsAny(text, validationContextMarkers)
-	if missingExecutable && hasValidationCommand {
-		return true
-	}
-
 	// Some agent responses only include missing validation command output plus
 	// an "Alternative validation" section without explicit "validation unavailable"
 	// wording.
 	if strings.Contains(text, "alternative validation") && hasValidationCommand {
 		return true
+	}
+	// A missing executable name does not establish that only validation was
+	// blocked. The executable may be required to implement the requested change,
+	// while an unrelated validation command appears elsewhere in the response.
+	if missingExecutable {
+		return false
 	}
 
 	if hasValidationCommand && hasValidationContext {

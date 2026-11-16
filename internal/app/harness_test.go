@@ -8151,6 +8151,30 @@ func TestRunCodexDoesNotHideMissingImplementationExecutableMentioningVitest(t *t
 	}
 }
 
+func TestRunCodexDoesNotHideMissingImplementationExecutableWithValidationContext(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "update generated client and tests"
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{
+			cmd: codexCommand(targetDir, prompt),
+			res: execx.Result{
+				Stdout: "Failure: Could not generate the requested client. Validation would use `go test ./...` after generation.",
+				Stderr: "Error details: spawn npm ENOENT",
+			},
+		},
+	}}
+
+	err := New(fake).runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil {
+		t.Fatal("runCodex() error = nil, want missing implementation executable failure")
+	}
+	if !strings.Contains(err.Error(), "spawn npm ENOENT") {
+		t.Fatalf("runCodex() error = %v, want missing implementation executable detail", err)
+	}
+}
+
 func TestRunCodexAllowsGoValidationBlockedByRestrictedDependencyDownload(t *testing.T) {
 	t.Parallel()
 
