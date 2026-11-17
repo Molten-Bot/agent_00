@@ -2146,8 +2146,9 @@ func TestRunResolvePRCommentsPushSyncMergeConflictInvokesAgentAndRetries(t *test
 		{cmd: fetchBranchCommand(repoDir, cfg.BaseBranch)},
 		{cmd: mergeFetchedBranchCommand(repoDir), res: mergeConflict, err: errors.New("exit status 1")},
 		{cmd: codexCommand(targetDir, remoteSyncPrompt)},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: " M test/worker.test.js\n"}},
+		{cmd: diffCheckCommand(repoDir)},
 		{cmd: addCommand(repoDir)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "M  test/worker.test.js\n"}},
 		{cmd: commitCommand(repoDir, syncCommitMessage)},
 		{cmd: pushCommand(repoDir, cfg.BaseBranch)},
 		{cmd: remoteBranchExistsOnOriginCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "abc123\trefs/heads/" + cfg.BaseBranch + "\n"}},
@@ -9065,8 +9066,9 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 			err: errors.New("merge failed"),
 		},
 		{cmd: codexCommand(repoDir, "resolve conflict")},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n M file.go\n"}},
+		{cmd: diffCheckCommand(repoDir)},
 		{cmd: addCommand(repoDir)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nM  file.go\n"}},
 		{cmd: commitCommand(repoDir, baseSyncCommitMessage("main"))},
 		{cmd: fetchBranchCommand(repoDir, "main")},
 		{cmd: mergeFetchedBranchCommand(repoDir)},
@@ -9098,6 +9100,55 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 		if !strings.Contains(joinedLogs, want) {
 			t.Fatalf("logs missing base-sync workflow metadata %q:\n%s", want, joinedLogs)
 		}
+	}
+}
+
+func TestHarnessCanStageAgentResolvedMerge(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	runner := execx.OSRunner{}
+	runGit := func(args ...string) execx.Result {
+		t.Helper()
+		res, err := runner.Run(context.Background(), gitCommand(repoDir, args...))
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return res
+	}
+	write := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runGit("init", "-b", "main")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "Test User")
+	runGit("config", "commit.gpgsign", "false")
+	write("base\n")
+	runGit("add", "file.txt")
+	runGit("commit", "-m", "base")
+	runGit("checkout", "-b", "incoming")
+	write("incoming\n")
+	runGit("commit", "-am", "incoming")
+	runGit("checkout", "main")
+	write("current\n")
+	runGit("commit", "-am", "current")
+	if _, err := runner.Run(context.Background(), gitCommand(repoDir, "merge", "--no-edit", "incoming")); err == nil {
+		t.Fatal("conflicting merge succeeded, want conflict")
+	}
+	if _, err := runner.Run(context.Background(), diffCheckCommand(repoDir)); err == nil {
+		t.Fatal("git diff --check accepted unresolved conflict markers")
+	}
+
+	write("resolved\n")
+	runGit("diff", "--check")
+	runGit("add", "-A")
+	status := runGit("status", "--porcelain", "--branch")
+	if hasUnmergedPaths(status.Stdout) {
+		t.Fatalf("resolved merge remains unmerged after harness staging: %q", status.Stdout)
 	}
 }
 

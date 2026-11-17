@@ -767,10 +767,13 @@ func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 		{cmd: fetchBranchCommand(repoDir, repo.BaseBranch)},
 		{cmd: mergeFetchedBranchCommand(repoDir), res: mergeConflict, err: errors.New("exit status 1")},
 		{cmd: codexCommand(repoDir, resolvePrompt)},
+		{cmd: diffCheckCommand(repoDir)},
+		{cmd: addCommand(repoDir)},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
 	}}
 
 	h := New(fake)
+	h.Workspace.CheckSpace = nil
 	exitCode, stage, err := h.syncGeneratedWorkBranchWithBase(
 		context.Background(), repo, agentruntime.Default(), repoDir, codexRunOptions{},
 		codexBasePrompt, "", "", ".", "codex",
@@ -817,10 +820,13 @@ func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing
 		{cmd: fetchBranchFromRemoteCommand(repo.Dir, publishRemoteOrigin, repo.Branch)},
 		{cmd: mergeFetchedBranchCommand(repo.Dir), res: mergeConflict, err: errors.New("exit status 1")},
 		{cmd: codexCommand(repoDir, resolvePrompt)},
+		{cmd: diffCheckCommand(repoDir)},
+		{cmd: addCommand(repoDir)},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
 	}}
 
 	h := New(fake)
+	h.Workspace.CheckSpace = nil
 	exitCode, stage, err := h.pushWithSyncAndConflictResolution(
 		context.Background(), repo, 0, agentruntime.Default(), repoDir, codexRunOptions{},
 		codexBasePrompt, "", "", ".", "codex",

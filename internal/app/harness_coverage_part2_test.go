@@ -159,6 +159,9 @@ func TestBaseSyncConflictPromptEmptyMergeSummary(t *testing.T) {
 	if !strings.Contains(got, "git merge reported conflicts but did not provide output.") {
 		t.Fatalf("baseSyncConflictPrompt(empty merge result) missing fallback summary: %q", got)
 	}
+	if !strings.Contains(got, "do not run `git add`") || !strings.Contains(got, "harness will validate the worktree, stage the resolution") {
+		t.Fatalf("baseSyncConflictPrompt(empty merge result) missing harness-owned staging guidance: %q", got)
+	}
 
 	withOutput := baseSyncConflictPrompt("base task", "/repo", "git@github.com:acme/repo.git", "work", "main", execx.Result{Stderr: "CONFLICT (content): x"})
 	if !strings.Contains(withOutput, "CONFLICT (content): x") {
@@ -175,6 +178,9 @@ func TestRemoteBranchSyncConflictPromptDefaultsRemote(t *testing.T) {
 	}
 	if !strings.Contains(got, "git merge reported conflicts but did not provide output.") {
 		t.Fatalf("remoteBranchSyncConflictPrompt(empty merge result) missing fallback summary: %q", got)
+	}
+	if !strings.Contains(got, "do not run `git add`") || !strings.Contains(got, "harness will validate the worktree, stage the resolution") {
+		t.Fatalf("remoteBranchSyncConflictPrompt(empty merge result) missing harness-owned staging guidance: %q", got)
 	}
 
 	withRemote := remoteBranchSyncConflictPrompt("base task", "/repo", "git@github.com:acme/repo.git", "work", "upstream", execx.Result{Stderr: "CONFLICT"})

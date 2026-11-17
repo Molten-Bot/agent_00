@@ -1534,6 +1534,21 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 		return ExitGit, "git", err
 	}
 
+	diffCheckRes, err := h.runCommand(ctx, "git", diffCheckCommand(repo.Dir))
+	if err != nil {
+		return ExitGit, "git", commandErrorWithDetails(
+			fmt.Sprintf("validate base branch conflict resolution for repo %s", repo.URL),
+			err,
+			diffCheckRes,
+			maxGitErrorDetailChars,
+		)
+	}
+	if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
+		return ExitGit, "git", err
+	}
+	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
+		return ExitGit, "git", err
+	}
 	statusRes, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
 	if err != nil {
 		return ExitGit, "git", err
@@ -1546,12 +1561,6 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 	}
 
 	h.logf("stage=git status=start action=sync_base_commit repo=%s repo_dir=%s baseBranch=%s", repo.URL, repo.RelDir, baseBranch)
-	if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
-		return ExitGit, "git", err
-	}
-	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
-		return ExitGit, "git", err
-	}
 	commitRes, commitErr := h.runCommand(ctx, "git", commitCommand(repo.Dir, baseSyncCommitMessage(baseBranch)))
 	if commitErr != nil {
 		noChanges, statusErr := h.refreshRepoChangeStateAfterNoOpCommit(ctx, repo, commitRes, commitErr)
@@ -1624,6 +1633,21 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 		return ExitGit, "git", err
 	}
 
+	diffCheckRes, err := h.runCommand(ctx, "git", diffCheckCommand(repo.Dir))
+	if err != nil {
+		return ExitGit, "git", commandErrorWithDetails(
+			fmt.Sprintf("validate remote branch conflict resolution for repo %s", repo.URL),
+			err,
+			diffCheckRes,
+			maxGitErrorDetailChars,
+		)
+	}
+	if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
+		return ExitGit, "git", err
+	}
+	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
+		return ExitGit, "git", err
+	}
 	statusRes, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
 	if err != nil {
 		return ExitGit, "git", err
@@ -1636,12 +1660,6 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 	}
 
 	h.logf("stage=git status=start action=sync_remote_branch_commit repo=%s repo_dir=%s branch=%s remote=%s", repo.URL, repo.RelDir, branch, remote)
-	if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
-		return ExitGit, "git", err
-	}
-	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
-		return ExitGit, "git", err
-	}
 	commitRes, commitErr := h.runCommand(ctx, "git", commitCommand(repo.Dir, remoteBranchSyncCommitMessage(branch)))
 	if commitErr != nil {
 		noChanges, statusErr := h.refreshRepoChangeStateAfterNoOpCommit(ctx, repo, commitRes, commitErr)
@@ -7584,6 +7602,10 @@ func statusCommand(repoDir string) execx.Command {
 	return gitCommand(repoDir, "status", "--porcelain", "--branch")
 }
 
+func diffCheckCommand(repoDir string) execx.Command {
+	return gitCommand(repoDir, "diff", "--check")
+}
+
 func reviewFixDiffCommand(repoDir, beforeHead string) execx.Command {
 	return gitCommand(repoDir, "diff", "--binary", strings.TrimSpace(beforeHead))
 }
@@ -8164,7 +8186,7 @@ func baseSyncConflictPrompt(basePrompt, repoPath, repoURL, branch, baseBranch st
 		mergeSummary = "git merge reported conflicts but did not provide output."
 	}
 	return fmt.Sprintf(
-		"%s\n\nBase-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nBase branch being merged: %s\n\nThe harness fetched the latest base branch and `git merge --no-edit FETCH_HEAD` reported conflicts before PR creation.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest base-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. After resolving conflicts, leave the repository ready for the harness to commit the merge resolution and retry the base sync.\n\nOriginal task context:\n%s",
+		"%s\n\nBase-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nBase branch being merged: %s\n\nThe harness fetched the latest base branch and `git merge --no-edit FETCH_HEAD` reported conflicts before PR creation.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest base-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. Remove every conflict marker, but do not run `git add` or require the index to stop reporting unmerged paths: the agent sandbox intentionally protects Git metadata. The harness will validate the worktree, stage the resolution, commit it, and retry the base sync after you finish.\n\nOriginal task context:\n%s",
 		mergePrompt,
 		strings.TrimSpace(repoPath),
 		strings.TrimSpace(repoURL),
@@ -8185,7 +8207,7 @@ func remoteBranchSyncConflictPrompt(basePrompt, repoPath, repoURL, branch, remot
 		remote = publishRemoteOrigin
 	}
 	return fmt.Sprintf(
-		"%s\n\nRemote-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nRemote being merged: %s/%s\n\nThe harness committed the original task work, then `git push` was rejected because the remote branch had new commits. The harness fetched that branch and `git merge --no-edit FETCH_HEAD` reported conflicts before push retry.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest remote-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. After resolving conflicts, leave the repository ready for the harness to commit the merge resolution and retry the push.\n\nOriginal task context:\n%s",
+		"%s\n\nRemote-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nRemote being merged: %s/%s\n\nThe harness committed the original task work, then `git push` was rejected because the remote branch had new commits. The harness fetched that branch and `git merge --no-edit FETCH_HEAD` reported conflicts before push retry.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest remote-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. Remove every conflict marker, but do not run `git add` or require the index to stop reporting unmerged paths: the agent sandbox intentionally protects Git metadata. The harness will validate the worktree, stage the resolution, commit it, and retry the push after you finish.\n\nOriginal task context:\n%s",
 		mergePrompt,
 		strings.TrimSpace(repoPath),
 		strings.TrimSpace(repoURL),
@@ -8234,7 +8256,7 @@ func mergeMainLibraryPrompt() string {
 			return strings.TrimSpace(task.Prompt)
 		}
 	}
-	return "You are a senior software engineer resolving merge conflicts with the latest base branch. Preserve both sides' intended behavior, keep the diff scoped to conflict resolution, validate locally where possible, and report `Failure:` and `Error details:` if the conflict cannot be resolved safely. After editing a conflicted file to remove its conflict markers, immediately run `git add <file>` on it — removing the markers alone does not clear git's merge state, and the path stays unmerged in the index until re-added. Before finishing, run `git status --porcelain` and confirm no path is still marked unmerged."
+	return "You are a senior software engineer resolving merge conflicts with the latest base branch. Preserve both sides' intended behavior, keep the diff scoped to conflict resolution, validate locally where possible, and report `Failure:` and `Error details:` if the conflict cannot be resolved safely. Remove every conflict marker from each resolved file. Do not run `git add` or require the index to stop reporting unmerged paths because the agent sandbox protects Git metadata; the harness validates and stages the resolution after the agent finishes."
 }
 
 func summarizeCheckOutput(res execx.Result) string {
