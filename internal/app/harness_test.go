@@ -9095,7 +9095,7 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 		}},
 		{cmd: diffCheckCommand(repoDir)},
 		{cmd: addCommand(repoDir)},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nM  file.go\n"}},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n"}},
 		{cmd: commitCommand(repoDir, baseSyncCommitMessage("main"))},
 		{cmd: fetchBranchCommand(repoDir, "main")},
 		{cmd: mergeFetchedBranchCommand(repoDir)},
@@ -9127,6 +9127,60 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 		if !strings.Contains(joinedLogs, want) {
 			t.Fatalf("logs missing base-sync workflow metadata %q:\n%s", want, joinedLogs)
 		}
+	}
+}
+
+func TestResolveRemoteBranchSyncConflictCommitsCleanPorcelain(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	repo := &repoWorkspace{
+		URL:    "git@github.com:acme/repo.git",
+		Dir:    repoDir,
+		RelDir: "repo",
+		Branch: "agent00-build-api",
+	}
+	mergeConflict := execx.Result{Stdout: "CONFLICT (content): Merge conflict in file.go\nAutomatic merge failed; fix conflicts and then commit the result."}
+	resolvePrompt := remoteBranchSyncConflictPrompt(
+		"Build API",
+		repo.RelDir,
+		repo.URL,
+		repo.Branch,
+		publishRemoteOrigin,
+		mergeConflict,
+	)
+	conflictPath := filepath.Join(repoDir, "file.go")
+	if err := os.WriteFile(conflictPath, []byte("unresolved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: unmergedPathsCommand(repoDir), res: execx.Result{Stdout: "file.go\x00"}},
+		{cmd: unmergedIndexStagesCommand(repoDir), res: execx.Result{Stdout: "100644 aaaa 2\tfile.go\x00100644 bbbb 3\tfile.go\x00"}},
+		{cmd: codexCommand(repoDir, resolvePrompt), after: func() {
+			if err := os.WriteFile(conflictPath, []byte("resolved\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{cmd: diffCheckCommand(repoDir)},
+		{cmd: addCommand(repoDir)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n"}},
+		{cmd: commitCommand(repoDir, remoteBranchSyncCommitMessage(repo.Branch))},
+	}}
+	h := New(fake)
+	h.Workspace.CheckSpace = nil
+
+	exitCode, stage, err := h.resolveRemoteBranchSyncConflictWithAgent(
+		context.Background(), repo, agentruntime.Default(), repoDir, codexRunOptions{},
+		"Build API", "", "", ".", "codex", publishRemoteOrigin, mergeConflict, 1,
+	)
+	if err != nil {
+		t.Fatalf("resolveRemoteBranchSyncConflictWithAgent() err = %v", err)
+	}
+	if exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("resolveRemoteBranchSyncConflictWithAgent() = (%d, %q), want success", exitCode, stage)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("remaining expected commands = %d", len(fake.exps))
 	}
 }
 
@@ -9294,14 +9348,45 @@ func TestApplyExplicitConflictSelectionsStagesSelectedIndexSide(t *testing.T) {
 		fingerprint: "missing",
 		indexStages: map[int]unmergedIndexStage{2: selectedStage},
 	}}
-	fake := &fakeRunner{t: t, exps: []expectedRun{{
-		cmd: selectConflictStageCommand(repoDir, "module", selectedStage),
-	}}}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: selectConflictStageCommand(repoDir, "module", selectedStage)},
+		{cmd: diffWorktreePathCommand(repoDir, "module")},
+	}}
 	if err := New(fake).applyExplicitConflictSelections(context.Background(), repoDir, snapshot, map[string]int{"module": 2}); err != nil {
 		t.Fatalf("applyExplicitConflictSelections() error = %v", err)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("remaining expected commands = %d", len(fake.exps))
+	}
+}
+
+func TestApplyExplicitConflictSelectionsRejectsWorktreeMismatch(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	path := filepath.Join(repoDir, "file.txt")
+	if err := os.WriteFile(path, []byte("selected side\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := execx.OSRunner{}
+	if _, err := runner.Run(context.Background(), gitCommand(repoDir, "init", "-b", "main")); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	hashRes, err := runner.Run(context.Background(), gitCommand(repoDir, "hash-object", "-w", "file.txt"))
+	if err != nil {
+		t.Fatalf("git hash-object: %v", err)
+	}
+	selectedStage := unmergedIndexStage{mode: "100644", objectID: strings.TrimSpace(hashRes.Stdout)}
+	snapshot := unmergedWorktreeSnapshot{"file.txt": {
+		fingerprint: "-rw-r--r--:before",
+		indexStages: map[int]unmergedIndexStage{2: selectedStage},
+	}}
+	if err := os.WriteFile(path, []byte("different resolution\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = New(runner).applyExplicitConflictSelections(context.Background(), repoDir, snapshot, map[string]int{"file.txt": 2})
+	if err == nil || !strings.Contains(err.Error(), "does not match worktree") {
+		t.Fatalf("applyExplicitConflictSelections() error = %v, want worktree mismatch", err)
 	}
 }
 

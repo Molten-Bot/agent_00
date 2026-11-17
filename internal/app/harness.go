@@ -1569,9 +1569,6 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 	if hasUnmergedPaths(statusRes.Stdout) {
 		return ExitGit, "git", fmt.Errorf("base branch sync for repo %s still has unmerged paths after remediation", repo.URL)
 	}
-	if !hasTrackedWorktreeChanges(statusRes.Stdout) && !hasAheadCommitsInStatus(statusRes.Stdout) {
-		return ExitSuccess, "", nil
-	}
 
 	h.logf("stage=git status=start action=sync_base_commit repo=%s repo_dir=%s baseBranch=%s", repo.URL, repo.RelDir, baseBranch)
 	commitRes, commitErr := h.runCommand(ctx, "git", commitCommand(repo.Dir, baseSyncCommitMessage(baseBranch)))
@@ -1679,9 +1676,6 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 	}
 	if hasUnmergedPaths(statusRes.Stdout) {
 		return ExitGit, "git", fmt.Errorf("remote branch sync for repo %s still has unmerged paths after remediation", repo.URL)
-	}
-	if !hasTrackedWorktreeChanges(statusRes.Stdout) && !hasAheadCommitsInStatus(statusRes.Stdout) {
-		return ExitSuccess, "", nil
 	}
 
 	h.logf("stage=git status=start action=sync_remote_branch_commit repo=%s repo_dir=%s branch=%s remote=%s", repo.URL, repo.RelDir, branch, remote)
@@ -1824,19 +1818,15 @@ func (h Harness) applyExplicitConflictSelections(ctx context.Context, repoDir st
 		if !exists {
 			continue
 		}
-		after, err := conflictPathFingerprint(repoDir, path)
-		if err != nil {
-			return fmt.Errorf("fingerprint explicit conflict selection %q: %w", path, err)
-		}
-		if after != before.fingerprint {
-			continue
-		}
 		stage, ok := before.indexStages[selections[path]]
 		if !ok {
 			continue
 		}
 		if _, err := h.runCommand(ctx, "git", selectConflictStageCommand(repoDir, path, stage)); err != nil {
 			return fmt.Errorf("stage explicit conflict selection for %q: %w", path, err)
+		}
+		if _, err := h.runCommand(ctx, "git", diffWorktreePathCommand(repoDir, path)); err != nil {
+			return fmt.Errorf("explicit conflict selection for %q does not match worktree: %w", path, err)
 		}
 	}
 	return nil
@@ -7953,6 +7943,10 @@ func unmergedIndexStagesCommand(repoDir string) execx.Command {
 
 func selectConflictStageCommand(repoDir, path string, stage unmergedIndexStage) execx.Command {
 	return gitCommand(repoDir, "update-index", "--add", "--cacheinfo", stage.mode, stage.objectID, path)
+}
+
+func diffWorktreePathCommand(repoDir, path string) execx.Command {
+	return gitCommand(repoDir, "diff", "--quiet", "--", path)
 }
 
 func reviewFixDiffCommand(repoDir, beforeHead string) execx.Command {
