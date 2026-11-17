@@ -2163,7 +2163,7 @@ func TestRunResolvePRCommentsPushSyncMergeConflictInvokesAgentAndRetries(t *test
 				t.Fatal(err)
 			}
 		}},
-		{cmd: diffCheckCommand(repoDir)},
+		{cmd: conflictDiffCheckCommand(repoDir, unmergedWorktreeSnapshot{"test/worker.test.js": {}})},
 		{cmd: addCommand(repoDir)},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "M  test/worker.test.js\n"}},
 		{cmd: commitCommand(repoDir, syncCommitMessage)},
@@ -9093,7 +9093,7 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{cmd: diffCheckCommand(repoDir)},
+		{cmd: conflictDiffCheckCommand(repoDir, unmergedWorktreeSnapshot{"file.go": {}})},
 		{cmd: addCommand(repoDir)},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n"}},
 		{cmd: commitCommand(repoDir, baseSyncCommitMessage("main"))},
@@ -9161,7 +9161,7 @@ func TestResolveRemoteBranchSyncConflictCommitsCleanPorcelain(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{cmd: diffCheckCommand(repoDir)},
+		{cmd: conflictDiffCheckCommand(repoDir, unmergedWorktreeSnapshot{"file.go": {}})},
 		{cmd: addCommand(repoDir)},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n"}},
 		{cmd: commitCommand(repoDir, remoteBranchSyncCommitMessage(repo.Branch))},
@@ -9209,7 +9209,10 @@ func TestHarnessCanStageAgentResolvedMerge(t *testing.T) {
 	runGit("config", "user.name", "Test User")
 	runGit("config", "commit.gpgsign", "false")
 	write("base\n")
-	runGit("add", "file.txt")
+	if err := os.WriteFile(filepath.Join(repoDir, "unrelated.txt"), []byte("unrelated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "file.txt", "unrelated.txt")
 	runGit("commit", "-m", "base")
 	runGit("checkout", "-b", "incoming")
 	write("incoming\n")
@@ -9220,6 +9223,9 @@ func TestHarnessCanStageAgentResolvedMerge(t *testing.T) {
 	if _, err := runner.Run(context.Background(), gitCommand(repoDir, "merge", "--no-edit", "incoming")); err == nil {
 		t.Fatal("conflicting merge succeeded, want conflict")
 	}
+	if err := os.WriteFile(filepath.Join(repoDir, "unrelated.txt"), []byte("unrelated whitespace  \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	h := New(runner)
 	snapshot, err := h.captureUnmergedWorktreeSnapshot(context.Background(), repoDir)
 	if err != nil {
@@ -9228,7 +9234,7 @@ func TestHarnessCanStageAgentResolvedMerge(t *testing.T) {
 	if err := validateUnmergedWorktreeResolution(repoDir, snapshot, nil); err == nil {
 		t.Fatal("validateUnmergedWorktreeResolution() accepted unchanged conflict")
 	}
-	if _, err := runner.Run(context.Background(), diffCheckCommand(repoDir)); err == nil {
+	if _, err := runner.Run(context.Background(), conflictDiffCheckCommand(repoDir, snapshot)); err == nil {
 		t.Fatal("git diff --check accepted unresolved conflict markers")
 	}
 
@@ -9236,7 +9242,12 @@ func TestHarnessCanStageAgentResolvedMerge(t *testing.T) {
 	if err := validateUnmergedWorktreeResolution(repoDir, snapshot, nil); err != nil {
 		t.Fatalf("validateUnmergedWorktreeResolution() error = %v", err)
 	}
-	runGit("diff", "--check")
+	if _, err := runner.Run(context.Background(), diffCheckCommand(repoDir)); err == nil {
+		t.Fatal("whole-tree git diff --check accepted unrelated whitespace error")
+	}
+	if _, err := runner.Run(context.Background(), conflictDiffCheckCommand(repoDir, snapshot)); err != nil {
+		t.Fatalf("conflict-scoped git diff --check rejected valid resolution: %v", err)
+	}
 	runGit("add", "-A")
 	status := runGit("status", "--porcelain", "--branch")
 	if hasUnmergedPaths(status.Stdout) {

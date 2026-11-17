@@ -1544,7 +1544,7 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 		return ExitGit, "git", fmt.Errorf("validate base branch conflict resolution for repo %s: %w", repo.URL, err)
 	}
 
-	diffCheckRes, err := h.runCommand(ctx, "git", diffCheckCommand(repo.Dir))
+	diffCheckRes, err := h.runCommand(ctx, "git", conflictDiffCheckCommand(repo.Dir, conflictSnapshot))
 	if err != nil {
 		return ExitGit, "git", commandErrorWithDetails(
 			fmt.Sprintf("validate base branch conflict resolution for repo %s", repo.URL),
@@ -1652,7 +1652,7 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 		return ExitGit, "git", fmt.Errorf("validate remote branch conflict resolution for repo %s: %w", repo.URL, err)
 	}
 
-	diffCheckRes, err := h.runCommand(ctx, "git", diffCheckCommand(repo.Dir))
+	diffCheckRes, err := h.runCommand(ctx, "git", conflictDiffCheckCommand(repo.Dir, conflictSnapshot))
 	if err != nil {
 		return ExitGit, "git", commandErrorWithDetails(
 			fmt.Sprintf("validate remote branch conflict resolution for repo %s", repo.URL),
@@ -7931,6 +7931,16 @@ func statusCommand(repoDir string) execx.Command {
 
 func diffCheckCommand(repoDir string) execx.Command {
 	return gitCommand(repoDir, "diff", "--check")
+}
+
+func conflictDiffCheckCommand(repoDir string, snapshot unmergedWorktreeSnapshot) execx.Command {
+	paths := make([]string, 0, len(snapshot))
+	for path := range snapshot {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	args := append([]string{"diff", "--check", "--"}, paths...)
+	return gitCommand(repoDir, args...)
 }
 
 func unmergedPathsCommand(repoDir string) execx.Command {
