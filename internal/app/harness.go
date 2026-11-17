@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1507,6 +1508,10 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 		baseBranch,
 		mergeRes,
 	)
+	conflictSnapshot, err := h.captureUnmergedWorktreeSnapshot(ctx, repo.Dir)
+	if err != nil {
+		return ExitGit, "git", fmt.Errorf("capture base branch conflicts for repo %s: %w", repo.URL, err)
+	}
 	invocation := newAgentInvocationLogMetadata(runtime, "base_sync_conflict", attempt, repo.RelDir, repo.RelDir, codexTargetLabel)
 	h.logf(
 		"stage=%s status=start target=%s mode=base_sync_conflict attempt=%d repo=%s repo_dir=%s%s",
@@ -1532,6 +1537,9 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 	)
 	if err := h.validateEnforcedNonDefaultBranch(ctx, *repo); err != nil {
 		return ExitGit, "git", err
+	}
+	if err := validateUnmergedWorktreeResolution(repo.Dir, conflictSnapshot); err != nil {
+		return ExitGit, "git", fmt.Errorf("validate base branch conflict resolution for repo %s: %w", repo.URL, err)
 	}
 
 	diffCheckRes, err := h.runCommand(ctx, "git", diffCheckCommand(repo.Dir))
@@ -1606,6 +1614,10 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 		remote,
 		mergeRes,
 	)
+	conflictSnapshot, err := h.captureUnmergedWorktreeSnapshot(ctx, repo.Dir)
+	if err != nil {
+		return ExitGit, "git", fmt.Errorf("capture remote branch conflicts for repo %s: %w", repo.URL, err)
+	}
 	invocation := newAgentInvocationLogMetadata(runtime, "remote_branch_sync_conflict", attempt, repo.RelDir, repo.RelDir, codexTargetLabel)
 	h.logf(
 		"stage=%s status=start target=%s mode=remote_branch_sync_conflict attempt=%d repo=%s repo_dir=%s%s",
@@ -1631,6 +1643,9 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 	)
 	if err := h.validateEnforcedNonDefaultBranch(ctx, *repo); err != nil {
 		return ExitGit, "git", err
+	}
+	if err := validateUnmergedWorktreeResolution(repo.Dir, conflictSnapshot); err != nil {
+		return ExitGit, "git", fmt.Errorf("validate remote branch conflict resolution for repo %s: %w", repo.URL, err)
 	}
 
 	diffCheckRes, err := h.runCommand(ctx, "git", diffCheckCommand(repo.Dir))
@@ -1720,6 +1735,90 @@ func hasUnmergedPaths(statusStdout string) bool {
 		}
 	}
 	return false
+}
+
+type unmergedWorktreeSnapshot map[string]string
+
+func (h Harness) captureUnmergedWorktreeSnapshot(ctx context.Context, repoDir string) (unmergedWorktreeSnapshot, error) {
+	res, err := h.runCommand(ctx, "git", unmergedPathsCommand(repoDir))
+	if err != nil {
+		return nil, err
+	}
+
+	snapshot := make(unmergedWorktreeSnapshot)
+	for _, path := range strings.Split(res.Stdout, "\x00") {
+		if path == "" {
+			continue
+		}
+		fingerprint, err := conflictPathFingerprint(repoDir, path)
+		if err != nil {
+			return nil, fmt.Errorf("fingerprint unmerged path %q: %w", path, err)
+		}
+		snapshot[path] = fingerprint
+	}
+	if len(snapshot) == 0 {
+		return nil, fmt.Errorf("git reported a merge conflict but no unmerged paths were found")
+	}
+	return snapshot, nil
+}
+
+func validateUnmergedWorktreeResolution(repoDir string, snapshot unmergedWorktreeSnapshot) error {
+	var unchanged []string
+	for path, before := range snapshot {
+		after, err := conflictPathFingerprint(repoDir, path)
+		if err != nil {
+			return fmt.Errorf("fingerprint remediated path %q: %w", path, err)
+		}
+		if after == before {
+			unchanged = append(unchanged, path)
+		}
+	}
+	if len(unchanged) == 0 {
+		return nil
+	}
+	sort.Strings(unchanged)
+	return fmt.Errorf("unmerged paths lack worktree resolution evidence: %s", strings.Join(unchanged, ", "))
+}
+
+func conflictPathFingerprint(repoDir, path string) (string, error) {
+	rel := filepath.Clean(filepath.FromSlash(path))
+	if filepath.IsAbs(rel) || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid repository-relative path")
+	}
+	fullPath := filepath.Join(repoDir, rel)
+	info, err := os.Lstat(fullPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return "missing", nil
+	}
+	if err != nil {
+		return "", err
+	}
+
+	hash := sha256.New()
+	switch {
+	case info.Mode().IsRegular():
+		var file *os.File
+		file, err = os.Open(fullPath)
+		if err == nil {
+			_, err = io.Copy(hash, file)
+			closeErr := file.Close()
+			if err == nil {
+				err = closeErr
+			}
+		}
+	case info.Mode()&os.ModeSymlink != 0:
+		var target string
+		target, err = os.Readlink(fullPath)
+		if err == nil {
+			_, err = hash.Write([]byte(target))
+		}
+	default:
+		return "", fmt.Errorf("unsupported worktree file type %s", info.Mode().Type())
+	}
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s:%x", info.Mode(), hash.Sum(nil)), nil
 }
 
 func baseSyncCommitMessage(baseBranch string) string {
@@ -7604,6 +7703,10 @@ func statusCommand(repoDir string) execx.Command {
 
 func diffCheckCommand(repoDir string) execx.Command {
 	return gitCommand(repoDir, "diff", "--check")
+}
+
+func unmergedPathsCommand(repoDir string) execx.Command {
+	return gitCommand(repoDir, "diff", "--name-only", "--diff-filter=U", "-z")
 }
 
 func reviewFixDiffCommand(repoDir, beforeHead string) execx.Command {

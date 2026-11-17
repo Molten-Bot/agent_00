@@ -24,9 +24,10 @@ import (
 )
 
 type expectedRun struct {
-	cmd execx.Command
-	res execx.Result
-	err error
+	cmd   execx.Command
+	res   execx.Result
+	err   error
+	after func()
 }
 
 type fakeRunner struct {
@@ -88,6 +89,9 @@ func (f *fakeRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, er
 	exp := f.exps[matchIndex]
 	f.exps = append(f.exps[:matchIndex], f.exps[matchIndex+1:]...)
 	f.calls = append(f.calls, cmd)
+	if exp.after != nil {
+		exp.after()
+	}
 	return exp.res, exp.err
 }
 
@@ -2110,6 +2114,13 @@ func TestRunResolvePRCommentsPushSyncMergeConflictInvokesAgentAndRetries(t *test
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
+	conflictPath := filepath.Join(repoDir, "test", "worker.test.js")
+	if err := os.MkdirAll(filepath.Dir(conflictPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(conflictPath, []byte("unresolved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	pushRejected := execx.Result{
 		Stderr: "! [rejected]        release/2026.04-hotfix -> release/2026.04-hotfix (fetch first)\n",
@@ -2145,7 +2156,12 @@ func TestRunResolvePRCommentsPushSyncMergeConflictInvokesAgentAndRetries(t *test
 		{cmd: pushCommand(repoDir, cfg.BaseBranch), res: pushRejected, err: errors.New("push rejected")},
 		{cmd: fetchBranchCommand(repoDir, cfg.BaseBranch)},
 		{cmd: mergeFetchedBranchCommand(repoDir), res: mergeConflict, err: errors.New("exit status 1")},
-		{cmd: codexCommand(targetDir, remoteSyncPrompt)},
+		{cmd: unmergedPathsCommand(repoDir), res: execx.Result{Stdout: "test/worker.test.js\x00"}},
+		{cmd: codexCommand(targetDir, remoteSyncPrompt), after: func() {
+			if err := os.WriteFile(conflictPath, []byte("resolved\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{cmd: diffCheckCommand(repoDir)},
 		{cmd: addCommand(repoDir)},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "M  test/worker.test.js\n"}},
@@ -9058,6 +9074,10 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 		BaseBranch:       "main",
 		CreateWorkBranch: true,
 	}
+	conflictPath := filepath.Join(repoDir, "file.go")
+	if err := os.WriteFile(conflictPath, []byte("unresolved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: fetchBranchCommand(repoDir, "main")},
 		{
@@ -9065,7 +9085,12 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 			res: execx.Result{Stdout: "CONFLICT (content): Merge conflict in file.go\nAutomatic merge failed; fix conflicts and then commit the result."},
 			err: errors.New("merge failed"),
 		},
-		{cmd: codexCommand(repoDir, "resolve conflict")},
+		{cmd: unmergedPathsCommand(repoDir), res: execx.Result{Stdout: "file.go\x00"}},
+		{cmd: codexCommand(repoDir, "resolve conflict"), after: func() {
+			if err := os.WriteFile(conflictPath, []byte("resolved\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{cmd: diffCheckCommand(repoDir)},
 		{cmd: addCommand(repoDir)},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nM  file.go\n"}},
@@ -9139,16 +9164,71 @@ func TestHarnessCanStageAgentResolvedMerge(t *testing.T) {
 	if _, err := runner.Run(context.Background(), gitCommand(repoDir, "merge", "--no-edit", "incoming")); err == nil {
 		t.Fatal("conflicting merge succeeded, want conflict")
 	}
+	h := New(runner)
+	snapshot, err := h.captureUnmergedWorktreeSnapshot(context.Background(), repoDir)
+	if err != nil {
+		t.Fatalf("captureUnmergedWorktreeSnapshot() error = %v", err)
+	}
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot); err == nil {
+		t.Fatal("validateUnmergedWorktreeResolution() accepted unchanged conflict")
+	}
 	if _, err := runner.Run(context.Background(), diffCheckCommand(repoDir)); err == nil {
 		t.Fatal("git diff --check accepted unresolved conflict markers")
 	}
 
 	write("resolved\n")
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot); err != nil {
+		t.Fatalf("validateUnmergedWorktreeResolution() error = %v", err)
+	}
 	runGit("diff", "--check")
 	runGit("add", "-A")
 	status := runGit("status", "--porcelain", "--branch")
 	if hasUnmergedPaths(status.Stdout) {
 		t.Fatalf("resolved merge remains unmerged after harness staging: %q", status.Stdout)
+	}
+}
+
+func TestValidateUnmergedWorktreeResolutionRequiresEveryPathChange(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	binaryPath := filepath.Join(repoDir, "image.bin")
+	deletedPath := filepath.Join(repoDir, "deleted.txt")
+	if err := os.WriteFile(binaryPath, []byte{0x00, 0xff, 0x01}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(deletedPath, []byte("modified side\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	binaryBefore, err := conflictPathFingerprint(repoDir, "image.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedBefore, err := conflictPathFingerprint(repoDir, "deleted.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := unmergedWorktreeSnapshot{
+		"image.bin":   binaryBefore,
+		"deleted.txt": deletedBefore,
+	}
+
+	if err := os.Remove(deletedPath); err != nil {
+		t.Fatal(err)
+	}
+	err = validateUnmergedWorktreeResolution(repoDir, snapshot)
+	if err == nil || !strings.Contains(err.Error(), "image.bin") {
+		t.Fatalf("validateUnmergedWorktreeResolution() error = %v, want unchanged binary path", err)
+	}
+	if strings.Contains(err.Error(), "deleted.txt") {
+		t.Fatalf("validateUnmergedWorktreeResolution() error = %v, deletion should count as resolution evidence", err)
+	}
+
+	if err := os.WriteFile(binaryPath, []byte{0x00, 0xfe, 0x01}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot); err != nil {
+		t.Fatalf("validateUnmergedWorktreeResolution() error after every path changed = %v", err)
 	}
 }
 

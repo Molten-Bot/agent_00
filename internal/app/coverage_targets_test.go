@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -740,7 +742,7 @@ func TestRemoteBranchSyncConflictErrorMethods(t *testing.T) {
 func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 	t.Parallel()
 
-	repoDir := "/repo"
+	repoDir := t.TempDir()
 	repo := &repoWorkspace{
 		URL:              "git@github.com:acme/repo.git",
 		Dir:              repoDir,
@@ -759,6 +761,9 @@ func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 		repo.BaseBranch,
 		mergeConflict,
 	)
+	if err := os.WriteFile(filepath.Join(repoDir, "file.go"), []byte("unresolved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Drive the conflict through syncGeneratedWorkBranchWithBase (Run()'s actual
 	// call path) rather than invoking resolveBaseSyncConflictWithAgent directly,
@@ -766,10 +771,8 @@ func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: fetchBranchCommand(repoDir, repo.BaseBranch)},
 		{cmd: mergeFetchedBranchCommand(repoDir), res: mergeConflict, err: errors.New("exit status 1")},
+		{cmd: unmergedPathsCommand(repoDir), res: execx.Result{Stdout: "file.go\x00"}},
 		{cmd: codexCommand(repoDir, resolvePrompt)},
-		{cmd: diffCheckCommand(repoDir)},
-		{cmd: addCommand(repoDir)},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
 	}}
 
 	h := New(fake)
@@ -778,8 +781,8 @@ func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 		context.Background(), repo, agentruntime.Default(), repoDir, codexRunOptions{},
 		codexBasePrompt, "", "", ".", "codex",
 	)
-	if err == nil || !strings.Contains(err.Error(), "still has unmerged paths after remediation") {
-		t.Fatalf("syncGeneratedWorkBranchWithBase() err = %v, want unmerged-paths fatal error", err)
+	if err == nil || !strings.Contains(err.Error(), "lack worktree resolution evidence") {
+		t.Fatalf("syncGeneratedWorkBranchWithBase() err = %v, want missing-resolution-evidence error", err)
 	}
 	if exitCode != ExitGit || stage != "git" {
 		t.Fatalf("syncGeneratedWorkBranchWithBase() = (%d, %q), want (%d, \"git\")", exitCode, stage, ExitGit)
@@ -792,7 +795,7 @@ func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 	t.Parallel()
 
-	repoDir := "/repo"
+	repoDir := t.TempDir()
 	repo := &repoWorkspace{
 		URL:    "git@github.com:acme/repo.git",
 		Dir:    repoDir,
@@ -810,6 +813,9 @@ func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing
 		publishRemoteOrigin,
 		mergeConflict,
 	)
+	if err := os.WriteFile(filepath.Join(repoDir, "file.go"), []byte("unresolved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Drive the conflict through pushWithSyncAndConflictResolution (Run()'s actual
 	// call path) rather than invoking resolveRemoteBranchSyncConflictWithAgent
@@ -819,10 +825,8 @@ func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing
 		{cmd: pushToRemoteCommand(repo.Dir, publishRemoteOrigin, repo.Branch), res: nonFF, err: errors.New("exit status 1")},
 		{cmd: fetchBranchFromRemoteCommand(repo.Dir, publishRemoteOrigin, repo.Branch)},
 		{cmd: mergeFetchedBranchCommand(repo.Dir), res: mergeConflict, err: errors.New("exit status 1")},
+		{cmd: unmergedPathsCommand(repoDir), res: execx.Result{Stdout: "file.go\x00"}},
 		{cmd: codexCommand(repoDir, resolvePrompt)},
-		{cmd: diffCheckCommand(repoDir)},
-		{cmd: addCommand(repoDir)},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
 	}}
 
 	h := New(fake)
@@ -831,8 +835,8 @@ func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing
 		context.Background(), repo, 0, agentruntime.Default(), repoDir, codexRunOptions{},
 		codexBasePrompt, "", "", ".", "codex",
 	)
-	if err == nil || !strings.Contains(err.Error(), "still has unmerged paths after remediation") {
-		t.Fatalf("pushWithSyncAndConflictResolution() err = %v, want unmerged-paths fatal error", err)
+	if err == nil || !strings.Contains(err.Error(), "lack worktree resolution evidence") {
+		t.Fatalf("pushWithSyncAndConflictResolution() err = %v, want missing-resolution-evidence error", err)
 	}
 	if exitCode != ExitGit || stage != "git" {
 		t.Fatalf("pushWithSyncAndConflictResolution() = (%d, %q), want (%d, \"git\")", exitCode, stage, ExitGit)
