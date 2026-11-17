@@ -9088,13 +9088,18 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 		},
 		{cmd: unmergedPathsCommand(repoDir), res: execx.Result{Stdout: "file.go\x00"}},
 		{cmd: unmergedIndexStagesCommand(repoDir), res: execx.Result{Stdout: "100644 aaaa 2\tfile.go\x00100644 bbbb 3\tfile.go\x00"}},
-		{cmd: codexCommand(repoDir, "resolve conflict"), after: func() {
-			if err := os.WriteFile(conflictPath, []byte("resolved\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}},
+		{
+			cmd: codexCommand(repoDir, "resolve conflict"),
+			res: execx.Result{Stdout: explicitConflictSelectionPrefix + ` {"path":"file.go","stage":2}`},
+			after: func() {
+				if err := os.WriteFile(conflictPath, []byte("resolved\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}},
 		{cmd: conflictDiffCheckCommand(repoDir, unmergedWorktreeSnapshot{"file.go": {}})},
+		{cmd: diffConflictStageWorktreeCommand(repoDir, "file.go", 2)},
 		{cmd: addCommand(repoDir)},
+		{cmd: selectConflictStageCommand(repoDir, "file.go", unmergedIndexStage{mode: "100644", objectID: "aaaa"})},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n"}},
 		{cmd: commitCommand(repoDir, baseSyncCommitMessage("main"))},
 		{cmd: fetchBranchCommand(repoDir, "main")},
@@ -9156,13 +9161,18 @@ func TestResolveRemoteBranchSyncConflictCommitsCleanPorcelain(t *testing.T) {
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: unmergedPathsCommand(repoDir), res: execx.Result{Stdout: "file.go\x00"}},
 		{cmd: unmergedIndexStagesCommand(repoDir), res: execx.Result{Stdout: "100644 aaaa 2\tfile.go\x00100644 bbbb 3\tfile.go\x00"}},
-		{cmd: codexCommand(repoDir, resolvePrompt), after: func() {
-			if err := os.WriteFile(conflictPath, []byte("resolved\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}},
+		{
+			cmd: codexCommand(repoDir, resolvePrompt),
+			res: execx.Result{Stdout: explicitConflictSelectionPrefix + ` {"path":"file.go","stage":3}`},
+			after: func() {
+				if err := os.WriteFile(conflictPath, []byte("resolved\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}},
 		{cmd: conflictDiffCheckCommand(repoDir, unmergedWorktreeSnapshot{"file.go": {}})},
+		{cmd: diffConflictStageWorktreeCommand(repoDir, "file.go", 3)},
 		{cmd: addCommand(repoDir)},
+		{cmd: selectConflictStageCommand(repoDir, "file.go", unmergedIndexStage{mode: "100644", objectID: "bbbb"})},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n"}},
 		{cmd: commitCommand(repoDir, remoteBranchSyncCommitMessage(repo.Branch))},
 	}}
@@ -9350,7 +9360,7 @@ func TestExplicitConflictSelectionsRequiresTerminalJSONDirectives(t *testing.T) 
 	}
 }
 
-func TestApplyExplicitConflictSelectionsStagesSelectedIndexSide(t *testing.T) {
+func TestStageExplicitConflictSelectionsStagesSelectedIndexSide(t *testing.T) {
 	t.Parallel()
 
 	repoDir := t.TempDir()
@@ -9360,18 +9370,17 @@ func TestApplyExplicitConflictSelectionsStagesSelectedIndexSide(t *testing.T) {
 		indexStages: map[int]unmergedIndexStage{2: selectedStage},
 	}}
 	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{cmd: diffConflictStageWorktreeCommand(repoDir, "module", 2)},
 		{cmd: selectConflictStageCommand(repoDir, "module", selectedStage)},
 	}}
-	if err := New(fake).applyExplicitConflictSelections(context.Background(), repoDir, snapshot, map[string]int{"module": 2}); err != nil {
-		t.Fatalf("applyExplicitConflictSelections() error = %v", err)
+	if err := New(fake).stageExplicitConflictSelections(context.Background(), repoDir, snapshot, map[string]int{"module": 2}); err != nil {
+		t.Fatalf("stageExplicitConflictSelections() error = %v", err)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("remaining expected commands = %d", len(fake.exps))
 	}
 }
 
-func TestApplyExplicitConflictSelectionsValidatesAllSelectionsBeforeStaging(t *testing.T) {
+func TestValidateExplicitConflictSelectionWorktreesValidatesAllSelectionsBeforeGit(t *testing.T) {
 	t.Parallel()
 
 	repoDir := t.TempDir()
@@ -9381,19 +9390,19 @@ func TestApplyExplicitConflictSelectionsValidatesAllSelectionsBeforeStaging(t *t
 		indexStages: map[int]unmergedIndexStage{2: selectedStage},
 	}}
 	fake := &fakeRunner{t: t}
-	err := New(fake).applyExplicitConflictSelections(context.Background(), repoDir, snapshot, map[string]int{
+	err := New(fake).validateExplicitConflictSelectionWorktrees(context.Background(), repoDir, snapshot, map[string]int{
 		"first.txt": 2,
 		"later.txt": 3,
 	})
 	if err == nil || !strings.Contains(err.Error(), "unknown unmerged path") {
-		t.Fatalf("applyExplicitConflictSelections() error = %v, want unknown-path error", err)
+		t.Fatalf("validateExplicitConflictSelectionWorktrees() error = %v, want unknown-path error", err)
 	}
 	if len(fake.calls) != 0 {
-		t.Fatalf("applyExplicitConflictSelections() mutated index before validating all selections: %+v", fake.calls)
+		t.Fatalf("validateExplicitConflictSelectionWorktrees() ran git before validating all selections: %+v", fake.calls)
 	}
 }
 
-func TestApplyExplicitConflictSelectionsRejectsWorktreeMismatch(t *testing.T) {
+func TestValidateExplicitConflictSelectionWorktreesRejectsMismatch(t *testing.T) {
 	t.Parallel()
 
 	repoDir := t.TempDir()
@@ -9423,16 +9432,16 @@ func TestApplyExplicitConflictSelectionsRejectsWorktreeMismatch(t *testing.T) {
 	if err := os.WriteFile(path, []byte("different resolution\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err = New(runner).applyExplicitConflictSelections(context.Background(), repoDir, snapshot, map[string]int{"file.txt": 2})
+	err = New(runner).validateExplicitConflictSelectionWorktrees(context.Background(), repoDir, snapshot, map[string]int{"file.txt": 2})
 	if err == nil || !strings.Contains(err.Error(), "does not match worktree") {
-		t.Fatalf("applyExplicitConflictSelections() error = %v, want worktree mismatch", err)
+		t.Fatalf("validateExplicitConflictSelectionWorktrees() error = %v, want worktree mismatch", err)
 	}
 	stages, err := runner.Run(context.Background(), unmergedIndexStagesCommand(repoDir))
 	if err != nil {
 		t.Fatalf("git ls-files --unmerged: %v", err)
 	}
 	if !strings.Contains(stages.Stdout, " 2\tfile.txt") {
-		t.Fatalf("applyExplicitConflictSelections() mutated index before rejecting worktree mismatch: %q", stages.Stdout)
+		t.Fatalf("validateExplicitConflictSelectionWorktrees() mutated index before rejecting worktree mismatch: %q", stages.Stdout)
 	}
 }
 

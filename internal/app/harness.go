@@ -1556,10 +1556,13 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 	if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
 		return ExitGit, "git", err
 	}
+	if err := h.validateExplicitConflictSelectionWorktrees(ctx, repo.Dir, conflictSnapshot, explicitSelections); err != nil {
+		return ExitGit, "git", err
+	}
 	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
 		return ExitGit, "git", err
 	}
-	if err := h.applyExplicitConflictSelections(ctx, repo.Dir, conflictSnapshot, explicitSelections); err != nil {
+	if err := h.stageExplicitConflictSelections(ctx, repo.Dir, conflictSnapshot, explicitSelections); err != nil {
 		return ExitGit, "git", err
 	}
 	statusRes, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
@@ -1664,10 +1667,13 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 	if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
 		return ExitGit, "git", err
 	}
+	if err := h.validateExplicitConflictSelectionWorktrees(ctx, repo.Dir, conflictSnapshot, explicitSelections); err != nil {
+		return ExitGit, "git", err
+	}
 	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
 		return ExitGit, "git", err
 	}
-	if err := h.applyExplicitConflictSelections(ctx, repo.Dir, conflictSnapshot, explicitSelections); err != nil {
+	if err := h.stageExplicitConflictSelections(ctx, repo.Dir, conflictSnapshot, explicitSelections); err != nil {
 		return ExitGit, "git", err
 	}
 	statusRes, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
@@ -1829,7 +1835,7 @@ func validateExplicitConflictSelections(snapshot unmergedWorktreeSnapshot, selec
 	return nil
 }
 
-func (h Harness) applyExplicitConflictSelections(ctx context.Context, repoDir string, snapshot unmergedWorktreeSnapshot, selections map[string]int) error {
+func (h Harness) validateExplicitConflictSelectionWorktrees(ctx context.Context, repoDir string, snapshot unmergedWorktreeSnapshot, selections map[string]int) error {
 	if err := validateExplicitConflictSelections(snapshot, selections); err != nil {
 		return err
 	}
@@ -1843,6 +1849,18 @@ func (h Harness) applyExplicitConflictSelections(ctx context.Context, repoDir st
 			return fmt.Errorf("explicit conflict selection for %q does not match worktree: %w", path, err)
 		}
 	}
+	return nil
+}
+
+func (h Harness) stageExplicitConflictSelections(ctx context.Context, repoDir string, snapshot unmergedWorktreeSnapshot, selections map[string]int) error {
+	if err := validateExplicitConflictSelections(snapshot, selections); err != nil {
+		return err
+	}
+	paths := make([]string, 0, len(selections))
+	for path := range selections {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
 	for _, path := range paths {
 		stage := snapshot[path].indexStages[selections[path]]
 		if _, err := h.runCommand(ctx, "git", selectConflictStageCommand(repoDir, path, stage)); err != nil {
