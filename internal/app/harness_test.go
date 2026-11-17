@@ -9360,14 +9360,36 @@ func TestApplyExplicitConflictSelectionsStagesSelectedIndexSide(t *testing.T) {
 		indexStages: map[int]unmergedIndexStage{2: selectedStage},
 	}}
 	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: diffConflictStageWorktreeCommand(repoDir, "module", 2)},
 		{cmd: selectConflictStageCommand(repoDir, "module", selectedStage)},
-		{cmd: diffWorktreePathCommand(repoDir, "module")},
 	}}
 	if err := New(fake).applyExplicitConflictSelections(context.Background(), repoDir, snapshot, map[string]int{"module": 2}); err != nil {
 		t.Fatalf("applyExplicitConflictSelections() error = %v", err)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("remaining expected commands = %d", len(fake.exps))
+	}
+}
+
+func TestApplyExplicitConflictSelectionsValidatesAllSelectionsBeforeStaging(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	selectedStage := unmergedIndexStage{mode: "100644", objectID: strings.Repeat("a", 40)}
+	snapshot := unmergedWorktreeSnapshot{"first.txt": {
+		fingerprint: "before",
+		indexStages: map[int]unmergedIndexStage{2: selectedStage},
+	}}
+	fake := &fakeRunner{t: t}
+	err := New(fake).applyExplicitConflictSelections(context.Background(), repoDir, snapshot, map[string]int{
+		"first.txt": 2,
+		"later.txt": 3,
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown unmerged path") {
+		t.Fatalf("applyExplicitConflictSelections() error = %v, want unknown-path error", err)
+	}
+	if len(fake.calls) != 0 {
+		t.Fatalf("applyExplicitConflictSelections() mutated index before validating all selections: %+v", fake.calls)
 	}
 }
 
@@ -9388,6 +9410,12 @@ func TestApplyExplicitConflictSelectionsRejectsWorktreeMismatch(t *testing.T) {
 		t.Fatalf("git hash-object: %v", err)
 	}
 	selectedStage := unmergedIndexStage{mode: "100644", objectID: strings.TrimSpace(hashRes.Stdout)}
+	if _, err := runner.Run(context.Background(), execx.Command{
+		Dir: repoDir, Name: "git", Args: []string{"update-index", "--index-info"},
+		Stdin: selectedStage.mode + " " + selectedStage.objectID + " 2\tfile.txt\n",
+	}); err != nil {
+		t.Fatalf("git update-index --index-info: %v", err)
+	}
 	snapshot := unmergedWorktreeSnapshot{"file.txt": {
 		fingerprint: "-rw-r--r--:before",
 		indexStages: map[int]unmergedIndexStage{2: selectedStage},
@@ -9398,6 +9426,13 @@ func TestApplyExplicitConflictSelectionsRejectsWorktreeMismatch(t *testing.T) {
 	err = New(runner).applyExplicitConflictSelections(context.Background(), repoDir, snapshot, map[string]int{"file.txt": 2})
 	if err == nil || !strings.Contains(err.Error(), "does not match worktree") {
 		t.Fatalf("applyExplicitConflictSelections() error = %v, want worktree mismatch", err)
+	}
+	stages, err := runner.Run(context.Background(), unmergedIndexStagesCommand(repoDir))
+	if err != nil {
+		t.Fatalf("git ls-files --unmerged: %v", err)
+	}
+	if !strings.Contains(stages.Stdout, " 2\tfile.txt") {
+		t.Fatalf("applyExplicitConflictSelections() mutated index before rejecting worktree mismatch: %q", stages.Stdout)
 	}
 }
 

@@ -1785,6 +1785,9 @@ func (h Harness) captureUnmergedWorktreeSnapshot(ctx context.Context, repoDir st
 }
 
 func validateUnmergedWorktreeResolution(repoDir string, snapshot unmergedWorktreeSnapshot, explicitSelections map[string]int) error {
+	if err := validateExplicitConflictSelections(snapshot, explicitSelections); err != nil {
+		return err
+	}
 	var unchanged []string
 	for path, before := range snapshot {
 		after, err := conflictPathFingerprint(repoDir, path)
@@ -1807,7 +1810,7 @@ func validateUnmergedWorktreeResolution(repoDir string, snapshot unmergedWorktre
 	return fmt.Errorf("unmerged paths lack worktree resolution evidence: %s", strings.Join(unchanged, ", "))
 }
 
-func (h Harness) applyExplicitConflictSelections(ctx context.Context, repoDir string, snapshot unmergedWorktreeSnapshot, selections map[string]int) error {
+func validateExplicitConflictSelections(snapshot unmergedWorktreeSnapshot, selections map[string]int) error {
 	paths := make([]string, 0, len(selections))
 	for path := range selections {
 		paths = append(paths, path)
@@ -1816,17 +1819,34 @@ func (h Harness) applyExplicitConflictSelections(ctx context.Context, repoDir st
 	for _, path := range paths {
 		before, exists := snapshot[path]
 		if !exists {
-			continue
+			return fmt.Errorf("explicit conflict selection references unknown unmerged path %q", path)
 		}
-		stage, ok := before.indexStages[selections[path]]
-		if !ok {
-			continue
+		stage := selections[path]
+		if _, exists := before.indexStages[stage]; !exists {
+			return fmt.Errorf("explicit conflict selection for %q references unavailable stage %d", path, stage)
 		}
+	}
+	return nil
+}
+
+func (h Harness) applyExplicitConflictSelections(ctx context.Context, repoDir string, snapshot unmergedWorktreeSnapshot, selections map[string]int) error {
+	if err := validateExplicitConflictSelections(snapshot, selections); err != nil {
+		return err
+	}
+	paths := make([]string, 0, len(selections))
+	for path := range selections {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		if _, err := h.runCommand(ctx, "git", diffConflictStageWorktreeCommand(repoDir, path, selections[path])); err != nil {
+			return fmt.Errorf("explicit conflict selection for %q does not match worktree: %w", path, err)
+		}
+	}
+	for _, path := range paths {
+		stage := snapshot[path].indexStages[selections[path]]
 		if _, err := h.runCommand(ctx, "git", selectConflictStageCommand(repoDir, path, stage)); err != nil {
 			return fmt.Errorf("stage explicit conflict selection for %q: %w", path, err)
-		}
-		if _, err := h.runCommand(ctx, "git", diffWorktreePathCommand(repoDir, path)); err != nil {
-			return fmt.Errorf("explicit conflict selection for %q does not match worktree: %w", path, err)
 		}
 	}
 	return nil
@@ -7955,8 +7975,8 @@ func selectConflictStageCommand(repoDir, path string, stage unmergedIndexStage) 
 	return gitCommand(repoDir, "update-index", "--add", "--cacheinfo", stage.mode, stage.objectID, path)
 }
 
-func diffWorktreePathCommand(repoDir, path string) execx.Command {
-	return gitCommand(repoDir, "diff", "--quiet", "--", path)
+func diffConflictStageWorktreeCommand(repoDir, path string, stage int) execx.Command {
+	return gitCommand(repoDir, "diff", "--quiet", fmt.Sprintf(":%d:%s", stage, path), "--", path)
 }
 
 func reviewFixDiffCommand(repoDir, beforeHead string) execx.Command {
@@ -8539,7 +8559,7 @@ func baseSyncConflictPrompt(basePrompt, repoPath, repoURL, branch, baseBranch st
 		mergeSummary = "git merge reported conflicts but did not provide output."
 	}
 	return fmt.Sprintf(
-		"%s\n\nBase-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nBase branch being merged: %s\n\nThe harness fetched the latest base branch and `git merge --no-edit FETCH_HEAD` reported conflicts before PR creation.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest base-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. Remove every conflict marker, but do not run `git add` or require the index to stop reporting unmerged paths: the agent sandbox intentionally protects Git metadata. The harness will validate the worktree, stage the resolution, commit it, and retry the base sync after you finish. If resolving a binary file or submodule means selecting an unchanged index side, end your final response with `%s {\"path\":\"repository-relative path\",\"stage\":2}` (ours) or stage `3` (theirs) for each such path. Harness verifies selected stage exists; timestamps alone do not prove conflict resolution.\n\nOriginal task context:\n%s",
+		"%s\n\nBase-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nBase branch being merged: %s\n\nThe harness fetched the latest base branch and `git merge --no-edit FETCH_HEAD` reported conflicts before PR creation.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest base-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. Remove every conflict marker, but do not run `git add` or require the index to stop reporting unmerged paths: the agent sandbox intentionally protects Git metadata. The harness will validate the worktree, stage the resolution, commit it, and retry the base sync after you finish. If any resolution selects an index side whose contents leave the worktree unchanged, including a binary file, submodule, or the retained side of a modify/delete conflict, end your final response with `%s {\"path\":\"repository-relative path\",\"stage\":2}` (ours) or stage `3` (theirs) for each such path. Harness verifies selected stage exists; timestamps alone do not prove conflict resolution.\n\nOriginal task context:\n%s",
 		mergePrompt,
 		strings.TrimSpace(repoPath),
 		strings.TrimSpace(repoURL),
@@ -8561,7 +8581,7 @@ func remoteBranchSyncConflictPrompt(basePrompt, repoPath, repoURL, branch, remot
 		remote = publishRemoteOrigin
 	}
 	return fmt.Sprintf(
-		"%s\n\nRemote-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nRemote being merged: %s/%s\n\nThe harness committed the original task work, then `git push` was rejected because the remote branch had new commits. The harness fetched that branch and `git merge --no-edit FETCH_HEAD` reported conflicts before push retry.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest remote-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. Remove every conflict marker, but do not run `git add` or require the index to stop reporting unmerged paths: the agent sandbox intentionally protects Git metadata. The harness will validate the worktree, stage the resolution, commit it, and retry the push after you finish. If resolving a binary file or submodule means selecting an unchanged index side, end your final response with `%s {\"path\":\"repository-relative path\",\"stage\":2}` (ours) or stage `3` (theirs) for each such path. Harness verifies selected stage exists; timestamps alone do not prove conflict resolution.\n\nOriginal task context:\n%s",
+		"%s\n\nRemote-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nRemote being merged: %s/%s\n\nThe harness committed the original task work, then `git push` was rejected because the remote branch had new commits. The harness fetched that branch and `git merge --no-edit FETCH_HEAD` reported conflicts before push retry.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest remote-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. Remove every conflict marker, but do not run `git add` or require the index to stop reporting unmerged paths: the agent sandbox intentionally protects Git metadata. The harness will validate the worktree, stage the resolution, commit it, and retry the push after you finish. If any resolution selects an index side whose contents leave the worktree unchanged, including a binary file, submodule, or the retained side of a modify/delete conflict, end your final response with `%s {\"path\":\"repository-relative path\",\"stage\":2}` (ours) or stage `3` (theirs) for each such path. Harness verifies selected stage exists; timestamps alone do not prove conflict resolution.\n\nOriginal task context:\n%s",
 		mergePrompt,
 		strings.TrimSpace(repoPath),
 		strings.TrimSpace(repoURL),
