@@ -1812,13 +1812,102 @@ func conflictPathFingerprint(repoDir, path string) (string, error) {
 		if err == nil {
 			_, err = hash.Write([]byte(target))
 		}
+	case info.IsDir():
+		return gitWorktreeFingerprint(fullPath, info)
 	default:
 		return "", fmt.Errorf("unsupported worktree file type %s", info.Mode().Type())
 	}
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s:%x", info.Mode(), hash.Sum(nil)), nil
+	// Include modification time so explicitly selecting an unchanged binary side
+	// still leaves evidence that the agent handled the path.
+	return fmt.Sprintf("%s:%d:%x", info.Mode(), info.ModTime().UnixNano(), hash.Sum(nil)), nil
+}
+
+func gitWorktreeFingerprint(worktreeDir string, info os.FileInfo) (string, error) {
+	dotGitPath := filepath.Join(worktreeDir, ".git")
+	dotGitInfo, err := os.Lstat(dotGitPath)
+	if err != nil {
+		return "", fmt.Errorf("fingerprint directory as git worktree: %w", err)
+	}
+
+	gitDir := dotGitPath
+	switch {
+	case dotGitInfo.Mode().IsRegular():
+		contents, readErr := os.ReadFile(dotGitPath)
+		if readErr != nil {
+			return "", fmt.Errorf("read git worktree pointer: %w", readErr)
+		}
+		const prefix = "gitdir:"
+		pointer := strings.TrimSpace(string(contents))
+		if !strings.HasPrefix(strings.ToLower(pointer), prefix) {
+			return "", fmt.Errorf("invalid git worktree pointer")
+		}
+		gitDir = strings.TrimSpace(pointer[len(prefix):])
+		if !filepath.IsAbs(gitDir) {
+			gitDir = filepath.Join(worktreeDir, gitDir)
+		}
+	case dotGitInfo.IsDir():
+	default:
+		return "", fmt.Errorf("unsupported git worktree pointer type %s", dotGitInfo.Mode().Type())
+	}
+
+	headPath := filepath.Clean(filepath.Join(gitDir, "HEAD"))
+	head, err := os.ReadFile(headPath)
+	if err != nil {
+		return "", fmt.Errorf("read git worktree HEAD: %w", err)
+	}
+	headInfo, err := os.Stat(headPath)
+	if err != nil {
+		return "", fmt.Errorf("stat git worktree HEAD: %w", err)
+	}
+	headState := strings.TrimSpace(string(head))
+	if ref, found := strings.CutPrefix(headState, "ref: "); found {
+		refState, refErr := gitWorktreeRefFingerprint(gitDir, strings.TrimSpace(ref))
+		if refErr != nil {
+			return "", refErr
+		}
+		headState += ":" + refState
+	}
+	return fmt.Sprintf(
+		"git-worktree:%s:%d:%d:%s",
+		info.Mode(),
+		info.ModTime().UnixNano(),
+		headInfo.ModTime().UnixNano(),
+		headState,
+	), nil
+}
+
+func gitWorktreeRefFingerprint(gitDir, ref string) (string, error) {
+	cleanRef := filepath.Clean(filepath.FromSlash(ref))
+	if filepath.IsAbs(cleanRef) || cleanRef == "." || cleanRef == ".." || strings.HasPrefix(cleanRef, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid git worktree HEAD ref")
+	}
+	refPath := filepath.Join(gitDir, cleanRef)
+	contents, err := os.ReadFile(refPath)
+	if err == nil {
+		info, statErr := os.Stat(refPath)
+		if statErr != nil {
+			return "", fmt.Errorf("stat git worktree HEAD ref: %w", statErr)
+		}
+		return fmt.Sprintf("loose:%d:%s", info.ModTime().UnixNano(), strings.TrimSpace(string(contents))), nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("read git worktree HEAD ref: %w", err)
+	}
+
+	packedRefs, err := os.ReadFile(filepath.Join(gitDir, "packed-refs"))
+	if err != nil {
+		return "", fmt.Errorf("resolve git worktree HEAD ref: %w", err)
+	}
+	for line := range strings.Lines(string(packedRefs)) {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[1] == ref {
+			return "packed:" + fields[0], nil
+		}
+	}
+	return "", fmt.Errorf("git worktree HEAD ref %q not found", ref)
 }
 
 func baseSyncCommitMessage(baseBranch string) string {

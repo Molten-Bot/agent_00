@@ -9188,7 +9188,7 @@ func TestHarnessCanStageAgentResolvedMerge(t *testing.T) {
 	}
 }
 
-func TestValidateUnmergedWorktreeResolutionRequiresEveryPathChange(t *testing.T) {
+func TestValidateUnmergedWorktreeResolutionRequiresEveryPathResolutionEvidence(t *testing.T) {
 	t.Parallel()
 
 	repoDir := t.TempDir()
@@ -9229,6 +9229,69 @@ func TestValidateUnmergedWorktreeResolutionRequiresEveryPathChange(t *testing.T)
 	}
 	if err := validateUnmergedWorktreeResolution(repoDir, snapshot); err != nil {
 		t.Fatalf("validateUnmergedWorktreeResolution() error after every path changed = %v", err)
+	}
+}
+
+func TestValidateUnmergedWorktreeResolutionAcceptsExplicitUnchangedSideSelection(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	path := filepath.Join(repoDir, "image.bin")
+	contents := []byte{0x00, 0xff, 0x01}
+	if err := os.WriteFile(path, contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := conflictPathFingerprint(repoDir, "image.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := unmergedWorktreeSnapshot{"image.bin": before}
+
+	if err := os.WriteFile(path, contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	selectionTime := time.Now().Add(time.Second)
+	if err := os.Chtimes(path, selectionTime, selectionTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot); err != nil {
+		t.Fatalf("validateUnmergedWorktreeResolution() rejected explicit unchanged-side selection: %v", err)
+	}
+}
+
+func TestConflictPathFingerprintSupportsInitializedSubmodule(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	moduleDir := filepath.Join(repoDir, "module")
+	moduleGitDir := filepath.Join(repoDir, ".git", "modules", "module")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(moduleGitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleDir, ".git"), []byte("gitdir: ../.git/modules/module\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	headPath := filepath.Join(moduleGitDir, "HEAD")
+	if err := os.WriteFile(headPath, []byte(strings.Repeat("1", 40)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := conflictPathFingerprint(repoDir, "module")
+	if err != nil {
+		t.Fatalf("conflictPathFingerprint() error for initialized submodule = %v", err)
+	}
+	snapshot := unmergedWorktreeSnapshot{"module": before}
+
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot); err == nil {
+		t.Fatal("validateUnmergedWorktreeResolution() accepted unchanged submodule")
+	}
+	if err := os.WriteFile(headPath, []byte(strings.Repeat("2", 40)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot); err != nil {
+		t.Fatalf("validateUnmergedWorktreeResolution() rejected resolved submodule: %v", err)
 	}
 }
 
