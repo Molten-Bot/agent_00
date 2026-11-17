@@ -772,6 +772,7 @@ func TestResolveBaseSyncConflictWithAgentStillUnmergedIsFatal(t *testing.T) {
 		{cmd: fetchBranchCommand(repoDir, repo.BaseBranch)},
 		{cmd: mergeFetchedBranchCommand(repoDir), res: mergeConflict, err: errors.New("exit status 1")},
 		{cmd: unmergedPathsCommand(repoDir), res: execx.Result{Stdout: "file.go\x00"}},
+		{cmd: unmergedIndexStagesCommand(repoDir), res: execx.Result{Stdout: "100644 aaaa 2\tfile.go\x00100644 bbbb 3\tfile.go\x00"}},
 		{cmd: codexCommand(repoDir, resolvePrompt)},
 	}}
 
@@ -826,6 +827,7 @@ func TestResolveRemoteBranchSyncConflictWithAgentStillUnmergedIsFatal(t *testing
 		{cmd: fetchBranchFromRemoteCommand(repo.Dir, publishRemoteOrigin, repo.Branch)},
 		{cmd: mergeFetchedBranchCommand(repo.Dir), res: mergeConflict, err: errors.New("exit status 1")},
 		{cmd: unmergedPathsCommand(repoDir), res: execx.Result{Stdout: "file.go\x00"}},
+		{cmd: unmergedIndexStagesCommand(repoDir), res: execx.Result{Stdout: "100644 aaaa 2\tfile.go\x00100644 bbbb 3\tfile.go\x00"}},
 		{cmd: codexCommand(repoDir, resolvePrompt)},
 	}}
 

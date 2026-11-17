@@ -2157,6 +2157,7 @@ func TestRunResolvePRCommentsPushSyncMergeConflictInvokesAgentAndRetries(t *test
 		{cmd: fetchBranchCommand(repoDir, cfg.BaseBranch)},
 		{cmd: mergeFetchedBranchCommand(repoDir), res: mergeConflict, err: errors.New("exit status 1")},
 		{cmd: unmergedPathsCommand(repoDir), res: execx.Result{Stdout: "test/worker.test.js\x00"}},
+		{cmd: unmergedIndexStagesCommand(repoDir), res: execx.Result{Stdout: "100644 aaaa 2\ttest/worker.test.js\x00100644 bbbb 3\ttest/worker.test.js\x00"}},
 		{cmd: codexCommand(targetDir, remoteSyncPrompt), after: func() {
 			if err := os.WriteFile(conflictPath, []byte("resolved\n"), 0o644); err != nil {
 				t.Fatal(err)
@@ -9086,6 +9087,7 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 			err: errors.New("merge failed"),
 		},
 		{cmd: unmergedPathsCommand(repoDir), res: execx.Result{Stdout: "file.go\x00"}},
+		{cmd: unmergedIndexStagesCommand(repoDir), res: execx.Result{Stdout: "100644 aaaa 2\tfile.go\x00100644 bbbb 3\tfile.go\x00"}},
 		{cmd: codexCommand(repoDir, "resolve conflict"), after: func() {
 			if err := os.WriteFile(conflictPath, []byte("resolved\n"), 0o644); err != nil {
 				t.Fatal(err)
@@ -9169,7 +9171,7 @@ func TestHarnessCanStageAgentResolvedMerge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("captureUnmergedWorktreeSnapshot() error = %v", err)
 	}
-	if err := validateUnmergedWorktreeResolution(repoDir, snapshot); err == nil {
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot, nil); err == nil {
 		t.Fatal("validateUnmergedWorktreeResolution() accepted unchanged conflict")
 	}
 	if _, err := runner.Run(context.Background(), diffCheckCommand(repoDir)); err == nil {
@@ -9177,7 +9179,7 @@ func TestHarnessCanStageAgentResolvedMerge(t *testing.T) {
 	}
 
 	write("resolved\n")
-	if err := validateUnmergedWorktreeResolution(repoDir, snapshot); err != nil {
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot, nil); err != nil {
 		t.Fatalf("validateUnmergedWorktreeResolution() error = %v", err)
 	}
 	runGit("diff", "--check")
@@ -9209,14 +9211,14 @@ func TestValidateUnmergedWorktreeResolutionRequiresEveryPathResolutionEvidence(t
 		t.Fatal(err)
 	}
 	snapshot := unmergedWorktreeSnapshot{
-		"image.bin":   binaryBefore,
-		"deleted.txt": deletedBefore,
+		"image.bin":   {fingerprint: binaryBefore},
+		"deleted.txt": {fingerprint: deletedBefore},
 	}
 
 	if err := os.Remove(deletedPath); err != nil {
 		t.Fatal(err)
 	}
-	err = validateUnmergedWorktreeResolution(repoDir, snapshot)
+	err = validateUnmergedWorktreeResolution(repoDir, snapshot, nil)
 	if err == nil || !strings.Contains(err.Error(), "image.bin") {
 		t.Fatalf("validateUnmergedWorktreeResolution() error = %v, want unchanged binary path", err)
 	}
@@ -9227,12 +9229,12 @@ func TestValidateUnmergedWorktreeResolutionRequiresEveryPathResolutionEvidence(t
 	if err := os.WriteFile(binaryPath, []byte{0x00, 0xfe, 0x01}, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateUnmergedWorktreeResolution(repoDir, snapshot); err != nil {
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot, nil); err != nil {
 		t.Fatalf("validateUnmergedWorktreeResolution() error after every path changed = %v", err)
 	}
 }
 
-func TestValidateUnmergedWorktreeResolutionAcceptsExplicitUnchangedSideSelection(t *testing.T) {
+func TestValidateUnmergedWorktreeResolutionRequiresExplicitUnchangedSideSelection(t *testing.T) {
 	t.Parallel()
 
 	repoDir := t.TempDir()
@@ -9245,7 +9247,10 @@ func TestValidateUnmergedWorktreeResolutionAcceptsExplicitUnchangedSideSelection
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := unmergedWorktreeSnapshot{"image.bin": before}
+	snapshot := unmergedWorktreeSnapshot{"image.bin": {fingerprint: before, indexStages: map[int]unmergedIndexStage{
+		2: {mode: "100644", objectID: "aaaa"},
+		3: {mode: "100644", objectID: "bbbb"},
+	}}}
 
 	if err := os.WriteFile(path, contents, 0o644); err != nil {
 		t.Fatal(err)
@@ -9254,8 +9259,65 @@ func TestValidateUnmergedWorktreeResolutionAcceptsExplicitUnchangedSideSelection
 	if err := os.Chtimes(path, selectionTime, selectionTime); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateUnmergedWorktreeResolution(repoDir, snapshot); err != nil {
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot, nil); err == nil {
+		t.Fatal("validateUnmergedWorktreeResolution() accepted timestamp-only binary change")
+	}
+	selections := explicitConflictSelections("resolved binary\n" + explicitConflictSelectionPrefix + ` {"path":"image.bin","stage":2}` + "\n")
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot, selections); err != nil {
 		t.Fatalf("validateUnmergedWorktreeResolution() rejected explicit unchanged-side selection: %v", err)
+	}
+}
+
+func TestExplicitConflictSelectionsRequiresTerminalJSONDirectives(t *testing.T) {
+	t.Parallel()
+
+	stdout := explicitConflictSelectionPrefix + ` {"path":"ignored.bin","stage":2}` + "\nsummary\n" +
+		explicitConflictSelectionPrefix + ` {"path":"image.bin","stage":2}` + "\n" +
+		explicitConflictSelectionPrefix + ` {"path":"dir/submodule","stage":3}` + "\n"
+	got := explicitConflictSelections(stdout)
+	for _, path := range []string{"image.bin", "dir/submodule"} {
+		if _, ok := got[path]; !ok {
+			t.Fatalf("explicitConflictSelections() missing %q: %#v", path, got)
+		}
+	}
+	if _, ok := got["ignored.bin"]; ok {
+		t.Fatalf("explicitConflictSelections() accepted non-terminal directive: %#v", got)
+	}
+}
+
+func TestApplyExplicitConflictSelectionsStagesSelectedIndexSide(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	selectedStage := unmergedIndexStage{mode: "160000", objectID: strings.Repeat("a", 40)}
+	snapshot := unmergedWorktreeSnapshot{"module": {
+		fingerprint: "missing",
+		indexStages: map[int]unmergedIndexStage{2: selectedStage},
+	}}
+	fake := &fakeRunner{t: t, exps: []expectedRun{{
+		cmd: selectConflictStageCommand(repoDir, "module", selectedStage),
+	}}}
+	if err := New(fake).applyExplicitConflictSelections(context.Background(), repoDir, snapshot, map[string]int{"module": 2}); err != nil {
+		t.Fatalf("applyExplicitConflictSelections() error = %v", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("remaining expected commands = %d", len(fake.exps))
+	}
+}
+
+func TestValidateUnmergedWorktreeResolutionAcceptsMissingSubmoduleIndexSelection(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	snapshot := unmergedWorktreeSnapshot{"module": {
+		fingerprint: "missing",
+		indexStages: map[int]unmergedIndexStage{3: {mode: "160000", objectID: strings.Repeat("b", 40)}},
+	}}
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot, map[string]int{"module": 3}); err != nil {
+		t.Fatalf("validateUnmergedWorktreeResolution() rejected selected uninitialized submodule: %v", err)
+	}
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot, map[string]int{"module": 2}); err == nil {
+		t.Fatal("validateUnmergedWorktreeResolution() accepted unavailable submodule index stage")
 	}
 }
 
@@ -9282,16 +9344,40 @@ func TestConflictPathFingerprintSupportsInitializedSubmodule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("conflictPathFingerprint() error for initialized submodule = %v", err)
 	}
-	snapshot := unmergedWorktreeSnapshot{"module": before}
+	snapshot := unmergedWorktreeSnapshot{"module": {fingerprint: before}}
 
-	if err := validateUnmergedWorktreeResolution(repoDir, snapshot); err == nil {
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot, nil); err == nil {
 		t.Fatal("validateUnmergedWorktreeResolution() accepted unchanged submodule")
 	}
 	if err := os.WriteFile(headPath, []byte(strings.Repeat("2", 40)+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateUnmergedWorktreeResolution(repoDir, snapshot); err != nil {
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot, nil); err != nil {
 		t.Fatalf("validateUnmergedWorktreeResolution() rejected resolved submodule: %v", err)
+	}
+}
+
+func TestConflictPathFingerprintSupportsUninitializedSubmodule(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	moduleDir := filepath.Join(repoDir, "module")
+	if err := os.Mkdir(moduleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before, err := conflictPathFingerprint(repoDir, "module")
+	if err != nil {
+		t.Fatalf("conflictPathFingerprint() error for uninitialized submodule = %v", err)
+	}
+	snapshot := unmergedWorktreeSnapshot{"module": {fingerprint: before}}
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot, nil); err == nil {
+		t.Fatal("validateUnmergedWorktreeResolution() accepted unchanged uninitialized submodule")
+	}
+	if err := os.WriteFile(filepath.Join(moduleDir, "checked-out.txt"), []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateUnmergedWorktreeResolution(repoDir, snapshot, nil); err != nil {
+		t.Fatalf("validateUnmergedWorktreeResolution() rejected initialized submodule content: %v", err)
 	}
 }
 

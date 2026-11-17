@@ -1523,7 +1523,8 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 		invocation.logFieldsSuffix(),
 	)
 	agentStart := time.Now()
-	if _, err := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation); err != nil {
+	agentRes, err := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation)
+	if err != nil {
 		return ExitCodex, agentStage, err
 	}
 	h.logf(
@@ -1538,7 +1539,8 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 	if err := h.validateEnforcedNonDefaultBranch(ctx, *repo); err != nil {
 		return ExitGit, "git", err
 	}
-	if err := validateUnmergedWorktreeResolution(repo.Dir, conflictSnapshot); err != nil {
+	explicitSelections := explicitConflictSelections(agentRes.Stdout)
+	if err := validateUnmergedWorktreeResolution(repo.Dir, conflictSnapshot, explicitSelections); err != nil {
 		return ExitGit, "git", fmt.Errorf("validate base branch conflict resolution for repo %s: %w", repo.URL, err)
 	}
 
@@ -1555,6 +1557,9 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 		return ExitGit, "git", err
 	}
 	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
+		return ExitGit, "git", err
+	}
+	if err := h.applyExplicitConflictSelections(ctx, repo.Dir, conflictSnapshot, explicitSelections); err != nil {
 		return ExitGit, "git", err
 	}
 	statusRes, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
@@ -1629,7 +1634,8 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 		invocation.logFieldsSuffix(),
 	)
 	agentStart := time.Now()
-	if _, err := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation); err != nil {
+	agentRes, err := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation)
+	if err != nil {
 		return ExitCodex, agentStage, err
 	}
 	h.logf(
@@ -1644,7 +1650,8 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 	if err := h.validateEnforcedNonDefaultBranch(ctx, *repo); err != nil {
 		return ExitGit, "git", err
 	}
-	if err := validateUnmergedWorktreeResolution(repo.Dir, conflictSnapshot); err != nil {
+	explicitSelections := explicitConflictSelections(agentRes.Stdout)
+	if err := validateUnmergedWorktreeResolution(repo.Dir, conflictSnapshot, explicitSelections); err != nil {
 		return ExitGit, "git", fmt.Errorf("validate remote branch conflict resolution for repo %s: %w", repo.URL, err)
 	}
 
@@ -1661,6 +1668,9 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 		return ExitGit, "git", err
 	}
 	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
+		return ExitGit, "git", err
+	}
+	if err := h.applyExplicitConflictSelections(ctx, repo.Dir, conflictSnapshot, explicitSelections); err != nil {
 		return ExitGit, "git", err
 	}
 	statusRes, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
@@ -1737,10 +1747,28 @@ func hasUnmergedPaths(statusStdout string) bool {
 	return false
 }
 
-type unmergedWorktreeSnapshot map[string]string
+type unmergedWorktreeState struct {
+	fingerprint string
+	indexStages map[int]unmergedIndexStage
+}
+
+type unmergedIndexStage struct {
+	mode     string
+	objectID string
+}
+
+type unmergedWorktreeSnapshot map[string]unmergedWorktreeState
 
 func (h Harness) captureUnmergedWorktreeSnapshot(ctx context.Context, repoDir string) (unmergedWorktreeSnapshot, error) {
 	res, err := h.runCommand(ctx, "git", unmergedPathsCommand(repoDir))
+	if err != nil {
+		return nil, err
+	}
+	indexRes, err := h.runCommand(ctx, "git", unmergedIndexStagesCommand(repoDir))
+	if err != nil {
+		return nil, err
+	}
+	indexStages, err := parseUnmergedIndexStages(indexRes.Stdout)
 	if err != nil {
 		return nil, err
 	}
@@ -1754,7 +1782,7 @@ func (h Harness) captureUnmergedWorktreeSnapshot(ctx context.Context, repoDir st
 		if err != nil {
 			return nil, fmt.Errorf("fingerprint unmerged path %q: %w", path, err)
 		}
-		snapshot[path] = fingerprint
+		snapshot[path] = unmergedWorktreeState{fingerprint: fingerprint, indexStages: indexStages[path]}
 	}
 	if len(snapshot) == 0 {
 		return nil, fmt.Errorf("git reported a merge conflict but no unmerged paths were found")
@@ -1762,14 +1790,19 @@ func (h Harness) captureUnmergedWorktreeSnapshot(ctx context.Context, repoDir st
 	return snapshot, nil
 }
 
-func validateUnmergedWorktreeResolution(repoDir string, snapshot unmergedWorktreeSnapshot) error {
+func validateUnmergedWorktreeResolution(repoDir string, snapshot unmergedWorktreeSnapshot, explicitSelections map[string]int) error {
 	var unchanged []string
 	for path, before := range snapshot {
 		after, err := conflictPathFingerprint(repoDir, path)
 		if err != nil {
 			return fmt.Errorf("fingerprint remediated path %q: %w", path, err)
 		}
-		if after == before {
+		if after == before.fingerprint {
+			if stage, explicitlySelected := explicitSelections[path]; explicitlySelected {
+				if _, stageExists := before.indexStages[stage]; stageExists {
+					continue
+				}
+			}
 			unchanged = append(unchanged, path)
 		}
 	}
@@ -1778,6 +1811,85 @@ func validateUnmergedWorktreeResolution(repoDir string, snapshot unmergedWorktre
 	}
 	sort.Strings(unchanged)
 	return fmt.Errorf("unmerged paths lack worktree resolution evidence: %s", strings.Join(unchanged, ", "))
+}
+
+func (h Harness) applyExplicitConflictSelections(ctx context.Context, repoDir string, snapshot unmergedWorktreeSnapshot, selections map[string]int) error {
+	paths := make([]string, 0, len(selections))
+	for path := range selections {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		before, exists := snapshot[path]
+		if !exists {
+			continue
+		}
+		after, err := conflictPathFingerprint(repoDir, path)
+		if err != nil {
+			return fmt.Errorf("fingerprint explicit conflict selection %q: %w", path, err)
+		}
+		if after != before.fingerprint {
+			continue
+		}
+		stage, ok := before.indexStages[selections[path]]
+		if !ok {
+			continue
+		}
+		if _, err := h.runCommand(ctx, "git", selectConflictStageCommand(repoDir, path, stage)); err != nil {
+			return fmt.Errorf("stage explicit conflict selection for %q: %w", path, err)
+		}
+	}
+	return nil
+}
+
+const explicitConflictSelectionPrefix = "AGENT00_CONFLICT_SELECTION:"
+
+type explicitConflictSelection struct {
+	Path  string `json:"path"`
+	Stage int    `json:"stage"`
+}
+
+func explicitConflictSelections(stdout string) map[string]int {
+	selections := make(map[string]int)
+	lines := splitOutputLines(stdout)
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		value, found := strings.CutPrefix(line, explicitConflictSelectionPrefix)
+		if !found {
+			break
+		}
+		var selection explicitConflictSelection
+		if err := json.Unmarshal([]byte(strings.TrimSpace(value)), &selection); err == nil && selection.Path != "" && (selection.Stage == 2 || selection.Stage == 3) {
+			selections[selection.Path] = selection.Stage
+		}
+	}
+	return selections
+}
+
+func parseUnmergedIndexStages(stdout string) (map[string]map[int]unmergedIndexStage, error) {
+	stages := make(map[string]map[int]unmergedIndexStage)
+	for _, record := range strings.Split(stdout, "\x00") {
+		if record == "" {
+			continue
+		}
+		metadata, path, found := strings.Cut(record, "\t")
+		fields := strings.Fields(metadata)
+		if !found || len(fields) != 3 || path == "" {
+			return nil, fmt.Errorf("invalid unmerged index record %q", record)
+		}
+		stage, err := strconv.Atoi(fields[2])
+		if err != nil || stage < 1 || stage > 3 {
+			return nil, fmt.Errorf("invalid unmerged index stage in record %q", record)
+		}
+		if stages[path] == nil {
+			stages[path] = make(map[int]unmergedIndexStage)
+		}
+		stages[path][stage] = unmergedIndexStage{mode: fields[0], objectID: fields[1]}
+	}
+	return stages, nil
 }
 
 func conflictPathFingerprint(repoDir, path string) (string, error) {
@@ -1813,16 +1925,67 @@ func conflictPathFingerprint(repoDir, path string) (string, error) {
 			_, err = hash.Write([]byte(target))
 		}
 	case info.IsDir():
-		return gitWorktreeFingerprint(fullPath, info)
+		return directoryConflictFingerprint(fullPath, info)
 	default:
 		return "", fmt.Errorf("unsupported worktree file type %s", info.Mode().Type())
 	}
 	if err != nil {
 		return "", err
 	}
-	// Include modification time so explicitly selecting an unchanged binary side
-	// still leaves evidence that the agent handled the path.
-	return fmt.Sprintf("%s:%d:%x", info.Mode(), info.ModTime().UnixNano(), hash.Sum(nil)), nil
+	return fmt.Sprintf("%s:%x", info.Mode(), hash.Sum(nil)), nil
+}
+
+func directoryConflictFingerprint(dir string, info os.FileInfo) (string, error) {
+	if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+		return gitWorktreeFingerprint(dir, info)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+
+	hash := sha256.New()
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		entryInfo, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(hash, "%s\x00%s\x00", filepath.ToSlash(rel), entryInfo.Mode())
+		if entry.Type()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			_, err = io.WriteString(hash, target)
+			return err
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(hash, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		_, err = hash.Write([]byte{0})
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("directory:%s:%x", info.Mode(), hash.Sum(nil)), nil
 }
 
 func gitWorktreeFingerprint(worktreeDir string, info os.FileInfo) (string, error) {
@@ -1858,10 +2021,6 @@ func gitWorktreeFingerprint(worktreeDir string, info os.FileInfo) (string, error
 	if err != nil {
 		return "", fmt.Errorf("read git worktree HEAD: %w", err)
 	}
-	headInfo, err := os.Stat(headPath)
-	if err != nil {
-		return "", fmt.Errorf("stat git worktree HEAD: %w", err)
-	}
 	headState := strings.TrimSpace(string(head))
 	if ref, found := strings.CutPrefix(headState, "ref: "); found {
 		refState, refErr := gitWorktreeRefFingerprint(gitDir, strings.TrimSpace(ref))
@@ -1870,13 +2029,7 @@ func gitWorktreeFingerprint(worktreeDir string, info os.FileInfo) (string, error
 		}
 		headState += ":" + refState
 	}
-	return fmt.Sprintf(
-		"git-worktree:%s:%d:%d:%s",
-		info.Mode(),
-		info.ModTime().UnixNano(),
-		headInfo.ModTime().UnixNano(),
-		headState,
-	), nil
+	return fmt.Sprintf("git-worktree:%s:%s", info.Mode(), headState), nil
 }
 
 func gitWorktreeRefFingerprint(gitDir, ref string) (string, error) {
@@ -1887,11 +2040,7 @@ func gitWorktreeRefFingerprint(gitDir, ref string) (string, error) {
 	refPath := filepath.Join(gitDir, cleanRef)
 	contents, err := os.ReadFile(refPath)
 	if err == nil {
-		info, statErr := os.Stat(refPath)
-		if statErr != nil {
-			return "", fmt.Errorf("stat git worktree HEAD ref: %w", statErr)
-		}
-		return fmt.Sprintf("loose:%d:%s", info.ModTime().UnixNano(), strings.TrimSpace(string(contents))), nil
+		return "loose:" + strings.TrimSpace(string(contents)), nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("read git worktree HEAD ref: %w", err)
@@ -7798,6 +7947,14 @@ func unmergedPathsCommand(repoDir string) execx.Command {
 	return gitCommand(repoDir, "diff", "--name-only", "--diff-filter=U", "-z")
 }
 
+func unmergedIndexStagesCommand(repoDir string) execx.Command {
+	return gitCommand(repoDir, "ls-files", "--unmerged", "-z")
+}
+
+func selectConflictStageCommand(repoDir, path string, stage unmergedIndexStage) execx.Command {
+	return gitCommand(repoDir, "update-index", "--add", "--cacheinfo", stage.mode, stage.objectID, path)
+}
+
 func reviewFixDiffCommand(repoDir, beforeHead string) execx.Command {
 	return gitCommand(repoDir, "diff", "--binary", strings.TrimSpace(beforeHead))
 }
@@ -8378,13 +8535,14 @@ func baseSyncConflictPrompt(basePrompt, repoPath, repoURL, branch, baseBranch st
 		mergeSummary = "git merge reported conflicts but did not provide output."
 	}
 	return fmt.Sprintf(
-		"%s\n\nBase-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nBase branch being merged: %s\n\nThe harness fetched the latest base branch and `git merge --no-edit FETCH_HEAD` reported conflicts before PR creation.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest base-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. Remove every conflict marker, but do not run `git add` or require the index to stop reporting unmerged paths: the agent sandbox intentionally protects Git metadata. The harness will validate the worktree, stage the resolution, commit it, and retry the base sync after you finish.\n\nOriginal task context:\n%s",
+		"%s\n\nBase-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nBase branch being merged: %s\n\nThe harness fetched the latest base branch and `git merge --no-edit FETCH_HEAD` reported conflicts before PR creation.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest base-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. Remove every conflict marker, but do not run `git add` or require the index to stop reporting unmerged paths: the agent sandbox intentionally protects Git metadata. The harness will validate the worktree, stage the resolution, commit it, and retry the base sync after you finish. If resolving a binary file or submodule means selecting an unchanged index side, end your final response with `%s {\"path\":\"repository-relative path\",\"stage\":2}` (ours) or stage `3` (theirs) for each such path. Harness verifies selected stage exists; timestamps alone do not prove conflict resolution.\n\nOriginal task context:\n%s",
 		mergePrompt,
 		strings.TrimSpace(repoPath),
 		strings.TrimSpace(repoURL),
 		strings.TrimSpace(branch),
 		strings.TrimSpace(baseBranch),
 		mergeSummary,
+		explicitConflictSelectionPrefix,
 		strings.TrimSpace(basePrompt),
 	)
 }
@@ -8399,7 +8557,7 @@ func remoteBranchSyncConflictPrompt(basePrompt, repoPath, repoURL, branch, remot
 		remote = publishRemoteOrigin
 	}
 	return fmt.Sprintf(
-		"%s\n\nRemote-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nRemote being merged: %s/%s\n\nThe harness committed the original task work, then `git push` was rejected because the remote branch had new commits. The harness fetched that branch and `git merge --no-edit FETCH_HEAD` reported conflicts before push retry.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest remote-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. Remove every conflict marker, but do not run `git add` or require the index to stop reporting unmerged paths: the agent sandbox intentionally protects Git metadata. The harness will validate the worktree, stage the resolution, commit it, and retry the push after you finish.\n\nOriginal task context:\n%s",
+		"%s\n\nRemote-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nRemote being merged: %s/%s\n\nThe harness committed the original task work, then `git push` was rejected because the remote branch had new commits. The harness fetched that branch and `git merge --no-edit FETCH_HEAD` reported conflicts before push retry.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest remote-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. Remove every conflict marker, but do not run `git add` or require the index to stop reporting unmerged paths: the agent sandbox intentionally protects Git metadata. The harness will validate the worktree, stage the resolution, commit it, and retry the push after you finish. If resolving a binary file or submodule means selecting an unchanged index side, end your final response with `%s {\"path\":\"repository-relative path\",\"stage\":2}` (ours) or stage `3` (theirs) for each such path. Harness verifies selected stage exists; timestamps alone do not prove conflict resolution.\n\nOriginal task context:\n%s",
 		mergePrompt,
 		strings.TrimSpace(repoPath),
 		strings.TrimSpace(repoURL),
@@ -8407,6 +8565,7 @@ func remoteBranchSyncConflictPrompt(basePrompt, repoPath, repoURL, branch, remot
 		strings.TrimSpace(remote),
 		strings.TrimSpace(branch),
 		mergeSummary,
+		explicitConflictSelectionPrefix,
 		strings.TrimSpace(basePrompt),
 	)
 }
