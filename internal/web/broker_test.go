@@ -653,6 +653,32 @@ func TestBrokerCapturesReviewPRURLFromRunConfig(t *testing.T) {
 	if got, want := task.PRURL, "https://github.com/acme/repo/pull/42"; got != want {
 		t.Fatalf("task.PRURL = %q, want %q", got, want)
 	}
+	if got, want := task.Workflow, "code-review"; got != want {
+		t.Fatalf("task.Workflow = %q, want %q", got, want)
+	}
+}
+
+func TestBrokerCapturesAutoMergeFromQueuedReviewConfig(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	b.RecordTaskRunConfig("req-auto-merge", []byte(`{"repo":"acme/repo","review":{"prNumber":42,"autoMerge":true}}`))
+	b.RecordTaskRunConfig("req-manual", []byte(`{"repo":"acme/repo","review":{"prNumber":43}}`))
+
+	autoMergeTask, ok := b.Task("req-auto-merge")
+	if !ok {
+		t.Fatal("Task(req-auto-merge) ok = false, want true")
+	}
+	if !autoMergeTask.AutoMerge {
+		t.Fatal("Task(req-auto-merge).AutoMerge = false, want true")
+	}
+	manualTask, ok := b.Task("req-manual")
+	if !ok {
+		t.Fatal("Task(req-manual) ok = false, want true")
+	}
+	if manualTask.AutoMerge {
+		t.Fatal("Task(req-manual).AutoMerge = true, want false")
+	}
 }
 
 func TestBrokerCapturesFirstPRURLFromCompletedPRURLsField(t *testing.T) {

@@ -701,6 +701,26 @@ func TestRunConfigJSONHelpersHandleEmptyAndMalformedPayloads(t *testing.T) {
 	}
 }
 
+func TestWorkflowFromRunConfigJSONRecognizesStructuredReview(t *testing.T) {
+	t.Parallel()
+
+	for _, payload := range []string{
+		`{"review":{"prNumber":42}}`,
+		`{"review":{"prUrl":"https://github.com/acme/repo/pull/42"}}`,
+		`{"review":{"headBranch":"feature/review-me"}}`,
+	} {
+		if got, want := workflowFromRunConfigJSON([]byte(payload)), "code-review"; got != want {
+			t.Errorf("workflowFromRunConfigJSON(%s) = %q, want %q", payload, got, want)
+		}
+	}
+	if got, want := workflowFromRunConfigJSON([]byte(`{"libraryTaskName":"unit-test-coverage","review":{"prNumber":42}}`)), "code-review"; got != want {
+		t.Fatalf("workflowFromRunConfigJSON(structured review with library task) = %q, want %q", got, want)
+	}
+	if got, want := workflowFromRunConfigJSON([]byte(`{"libraryTaskName":"unit-test-coverage","review":{}}`)), "unit-test-coverage"; got != want {
+		t.Fatalf("workflowFromRunConfigJSON(empty review) = %q, want %q", got, want)
+	}
+}
+
 func TestParseIntFieldAndParseFloatField(t *testing.T) {
 	t.Parallel()
 

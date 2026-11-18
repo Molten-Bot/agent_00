@@ -70,6 +70,7 @@ type Task struct {
 	Repos             []string      `json:"repos,omitempty"`
 	Reviewers         []string      `json:"reviewers,omitempty"`
 	BaseBranch        string        `json:"base_branch,omitempty"`
+	AutoMerge         bool          `json:"auto_merge,omitempty"`
 	Status            string        `json:"status"`
 	Stage             string        `json:"stage,omitempty"`
 	StageStatus       string        `json:"stage_status,omitempty"`
@@ -291,6 +292,7 @@ type taskState struct {
 	Repos             []string
 	Reviewers         []string
 	BaseBranch        string
+	AutoMerge         bool
 	Status            string
 	Stage             string
 	StageStatus       string
@@ -504,6 +506,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			Repos:             append([]string(nil), t.Repos...),
 			Reviewers:         append([]string(nil), t.Reviewers...),
 			BaseBranch:        t.BaseBranch,
+			AutoMerge:         t.AutoMerge,
 			Status:            status,
 			Stage:             t.Stage,
 			StageStatus:       t.StageStatus,
@@ -609,6 +612,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		Repos:             append([]string(nil), t.Repos...),
 		Reviewers:         append([]string(nil), t.Reviewers...),
 		BaseBranch:        t.BaseBranch,
+		AutoMerge:         t.AutoMerge,
 		Status:            status,
 		Stage:             t.Stage,
 		StageStatus:       t.StageStatus,
@@ -651,6 +655,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 	reviewers := reviewersFromRunConfigJSON(cfgCopy)
 	workflow := workflowFromRunConfigJSON(cfgCopy)
 	agentHarness := agentHarnessFromRunConfigJSON(cfgCopy)
+	autoMerge := autoMergeFromRunConfigJSON(cfgCopy)
 	source = stringsx.FirstNonEmpty(
 		normalizeTaskSource(source),
 		sourceFromRunConfigJSON(cfgCopy),
@@ -689,6 +694,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 			Repos:             append([]string(nil), repos...),
 			Reviewers:         append([]string(nil), reviewers...),
 			BaseBranch:        baseBranch,
+			AutoMerge:         autoMerge,
 			Branch:            baseBranch,
 			PRURL:             prURL,
 			Status:            "pending",
@@ -747,6 +753,10 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 	}
 	if t != nil && !slices.Equal(t.Reviewers, reviewers) {
 		t.Reviewers = append([]string(nil), reviewers...)
+		changed = true
+	}
+	if t != nil && t.AutoMerge != autoMerge {
+		t.AutoMerge = autoMerge
 		changed = true
 	}
 	if baseBranch != "" {
@@ -1458,6 +1468,7 @@ type runConfigFields struct {
 	source       string
 	branch       string
 	prURL        string
+	autoMerge    bool
 }
 
 // runConfigFieldsLocked returns the decoded fields for requestID's stored run
@@ -1480,6 +1491,7 @@ func (b *Broker) runConfigFieldsLocked(requestID string) runConfigFields {
 		source:       sourceFromRunConfigJSON(raw),
 		branch:       branchFromRunConfigJSON(raw),
 		prURL:        prURLFromRunConfigJSON(raw),
+		autoMerge:    autoMergeFromRunConfigJSON(raw),
 	}
 	if b.runConfigFieldCache == nil {
 		b.runConfigFieldCache = map[string]runConfigFields{}
@@ -1888,6 +1900,7 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 		if existing.PRURL == "" {
 			existing.PRURL = fields.prURL
 		}
+		existing.AutoMerge = fields.autoMerge
 		existing.UpdatedAt = now
 		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", existing.Status, existing.Error, existing.Workflow, existing.AgentHarness, existing.Source, existing.Repos, existing.PRURL, now)
 		return existing
@@ -1907,6 +1920,7 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 		BaseBranch:        fields.branch,
 		Branch:            fields.branch,
 		PRURL:             fields.prURL,
+		AutoMerge:         fields.autoMerge,
 		Status:            "pending",
 		StartedAt:         now,
 		UpdatedAt:         now,
@@ -2874,6 +2888,21 @@ func prURLFromRunConfigJSON(runConfigJSON []byte) string {
 	return strings.TrimSpace(raw.PRURL)
 }
 
+func autoMergeFromRunConfigJSON(runConfigJSON []byte) bool {
+	if len(runConfigJSON) == 0 {
+		return false
+	}
+	var raw struct {
+		Review *struct {
+			AutoMerge bool `json:"autoMerge"`
+		} `json:"review"`
+	}
+	if err := json.Unmarshal(runConfigJSON, &raw); err != nil || raw.Review == nil {
+		return false
+	}
+	return raw.Review.AutoMerge
+}
+
 func workflowFromRunConfigJSON(runConfigJSON []byte) string {
 	if len(runConfigJSON) == 0 {
 		return ""
@@ -2882,9 +2911,17 @@ func workflowFromRunConfigJSON(runConfigJSON []byte) string {
 		LibraryTaskName      string `json:"libraryTaskName"`
 		LibraryTaskNameLower string `json:"librarytaskname"`
 		Skill                string `json:"skill"`
+		Review               *struct {
+			PRNumber   int    `json:"prNumber"`
+			PRURL      string `json:"prUrl"`
+			HeadBranch string `json:"headBranch"`
+		} `json:"review"`
 	}
 	if err := json.Unmarshal(runConfigJSON, &raw); err != nil {
 		return ""
+	}
+	if raw.Review != nil && (raw.Review.PRNumber > 0 || strings.TrimSpace(raw.Review.PRURL) != "" || strings.TrimSpace(raw.Review.HeadBranch) != "") {
+		return "code-review"
 	}
 	return stringsx.FirstNonEmpty(raw.LibraryTaskName, raw.LibraryTaskNameLower, raw.Skill)
 }

@@ -632,6 +632,15 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "function taskProgressStepsForTask(") || !strings.Contains(markup, "function taskProgressCurrentStepID(") || !strings.Contains(markup, "function taskProgressModel(") {
 		t.Fatalf("expected index html to build dynamic progress steps per task")
 	}
+	if !strings.Contains(markup, `code_review: { id: "code_review", label: "Code Review"`) ||
+		!strings.Contains(markup, `function isReadOnlyReviewTask(task) {`) ||
+		!strings.Contains(markup, `return taskStartSource(task) === "review" || isReadOnlyReviewTask(task);`) ||
+		!strings.Contains(markup, `const reviewStepIDs = [entry, "prepare", "clone", "code_review", "finalize"];`) ||
+		!strings.Contains(markup, `if (isReadOnlyReviewTask(task)) {`) ||
+		!strings.Contains(markup, `if (stage === "git" || stage === "review" || TASK_PROGRESS_AGENT_STAGES.has(stage)) {`) ||
+		!strings.Contains(markup, `return "code_review";`) {
+		t.Fatalf("expected only read-only review tasks to use their dedicated review workflow progress steps")
+	}
 	if !strings.Contains(markup, "taskProgressSignalCache: new Map(),") ||
 		!strings.Contains(markup, "function taskProgressLogSignals(task)") ||
 		!strings.Contains(markup, "taskProgressSignalsSignature(signals)") ||
@@ -829,7 +838,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, "if (!TASK_PROGRESS_VISIBLE || !task || isCompletedTask(task)) {") {
 		t.Fatalf("expected completed tasks to retain their workflow progress bar")
 	}
-	if !strings.Contains(markup, `if (status === "merged" && taskAutoMergeStepEnabled()) {`) ||
+	if !strings.Contains(markup, `if (status === "merged" && taskAutoMergeStepEnabled(task)) {`) ||
 		!strings.Contains(markup, `if (status === "completed" || status === "no_changes" || status === "merged") {`) {
 		t.Fatalf("expected merged tasks to advance through auto-merge and other successful terminal tasks to finalize")
 	}
