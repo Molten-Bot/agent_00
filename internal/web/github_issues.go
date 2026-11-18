@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -71,57 +70,6 @@ type githubLinkedBranchResponse struct {
 type githubIssueSearchCountResponse struct {
 	TotalCount        int  `json:"total_count"`
 	IncompleteResults bool `json:"incomplete_results"`
-}
-
-// handleGitHubLabels lists labels across repositories available to this user.
-// Labels are an automation filter, so return a stable de-duplicated list.
-func (s Server) handleGitHubLabels(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) {
-		return
-	}
-	enabled, err := s.githubIssuesEnabled(r.Context())
-	if err != nil || !enabled {
-		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "GitHub Issues integration is turned off in Settings"})
-		return
-	}
-	if s.GitHubIssueRunner == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "GitHub issue runner is unavailable"})
-		return
-	}
-	repos, err := s.enabledGitHubRepos(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("list GitHub repositories: %v", err)})
-		return
-	}
-	labels := make(map[string]string)
-	for _, repo := range repos {
-		name, ok := validGitHubRepository(repo.FullName)
-		if !ok {
-			continue
-		}
-		result, err := s.GitHubIssueRunner.Run(r.Context(), execx.Command{Name: "gh", Args: []string{"label", "list", "--repo", name, "--limit", "1000", "--json", "name"}})
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("list GitHub labels for %s: %v", name, err)})
-			return
-		}
-		var entries []GitHubIssueLabel
-		if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &entries); err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": fmt.Sprintf("decode GitHub labels for %s: %v", name, err)})
-			return
-		}
-		for _, entry := range entries {
-			label := strings.TrimSpace(entry.Name)
-			if label != "" {
-				labels[strings.ToLower(label)] = label
-			}
-		}
-	}
-	out := make([]string, 0, len(labels))
-	for _, label := range labels {
-		out = append(out, label)
-	}
-	sort.Strings(out)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "labels": out})
 }
 
 type GitHubIssueComment struct {

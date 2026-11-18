@@ -8713,9 +8713,8 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   font-weight: 500;
 }
 
-.github-issues-auto-start-labels select {
+.github-issues-auto-start-labels input {
   width: 100%;
-  min-height: 104px;
 }
 
 .github-issues-settings-link-mode {

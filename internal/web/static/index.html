@@ -910,8 +910,8 @@
                 <span>Only issues assigned to me</span>
               </label>
               <label class="github-issues-auto-start-labels" for="review-settings-github-issues-auto-start-labels">
-                <span>Required labels <small>Optional. Every selected label must be on issue.</small></span>
-                <select id="review-settings-github-issues-auto-start-labels" multiple size="5" aria-label="Required GitHub issue labels"></select>
+                <span>Required labels <small>Optional. Enter comma-separated labels; every label must be on issue.</small></span>
+                <input id="review-settings-github-issues-auto-start-labels" type="text" placeholder="bug, priority" aria-label="Required GitHub issue labels, comma-separated">
               </label>
               <p class="github-issues-settings-description">Checks open issues across accessible repositories while Agent Hub runs. Existing matching issues are left alone; each new match starts once.</p>
             </div>
@@ -2984,8 +2984,9 @@
       if (reviewSettingsGitHubIssuesAutoStartOnlyAssigned instanceof HTMLInputElement) {
         reviewSettingsGitHubIssuesAutoStartOnlyAssigned.checked = state.reviewSettings.githubIssueAutoStartOnlyAssigned;
       }
-      setGitHubIssueAutoStartLabels(state.reviewSettings.githubIssueAutoStartLabels);
-      if (state.reviewSettings.githubIssuesEnabled) void loadGitHubIssueAutoStartLabels();
+      if (reviewSettingsGitHubIssuesAutoStartLabels instanceof HTMLInputElement) {
+        reviewSettingsGitHubIssuesAutoStartLabels.value = state.reviewSettings.githubIssueAutoStartLabels.join(", ");
+      }
       if (reviewSettingsAssignCreator instanceof HTMLInputElement) {
         reviewSettingsAssignCreator.checked = state.reviewSettings.assignCreator;
       }
@@ -3022,30 +3023,6 @@
       ) {
         renderTasks(state.snapshot);
         renderFullscreenTasks(state.snapshot);
-      }
-    }
-
-    function setGitHubIssueAutoStartLabels(labels) {
-      if (!(reviewSettingsGitHubIssuesAutoStartLabels instanceof HTMLSelectElement)) return;
-      const selected = new Set((Array.isArray(labels) ? labels : []).map(label => String(label).trim()).filter(Boolean));
-      const available = Array.from(reviewSettingsGitHubIssuesAutoStartLabels.options, option => option.value);
-      for (const label of selected) if (!available.includes(label)) available.push(label);
-      reviewSettingsGitHubIssuesAutoStartLabels.replaceChildren(...available.sort((a, b) => a.localeCompare(b)).map(label => {
-        const option = new Option(label, label, false, selected.has(label));
-        return option;
-      }));
-    }
-
-    async function loadGitHubIssueAutoStartLabels() {
-      if (!(reviewSettingsGitHubIssuesAutoStartLabels instanceof HTMLSelectElement)) return;
-      try {
-        const response = await fetch("/api/github/labels", { cache: "no-store" });
-        const body = await response.json();
-        if (!response.ok || !body?.ok || !Array.isArray(body.labels)) return;
-        const selected = Array.from(reviewSettingsGitHubIssuesAutoStartLabels.selectedOptions, option => option.value);
-        setGitHubIssueAutoStartLabels([...selected, ...body.labels]);
-      } catch (_error) {
-        // Existing selected labels remain usable when GitHub is unavailable.
       }
     }
 
@@ -3105,7 +3082,7 @@
         github_issue_link_mode: reviewSettingsGitHubIssuesLinkClose instanceof HTMLInputElement && reviewSettingsGitHubIssuesLinkClose.checked ? "close" : "reference",
         github_issue_auto_start_assigned: reviewSettingsGitHubIssuesAutoStartAssigned instanceof HTMLInputElement ? reviewSettingsGitHubIssuesAutoStartAssigned.checked : false,
         github_issue_auto_start_only_assigned: reviewSettingsGitHubIssuesAutoStartOnlyAssigned instanceof HTMLInputElement ? reviewSettingsGitHubIssuesAutoStartOnlyAssigned.checked : true,
-        github_issue_auto_start_labels: reviewSettingsGitHubIssuesAutoStartLabels instanceof HTMLSelectElement ? Array.from(reviewSettingsGitHubIssuesAutoStartLabels.selectedOptions, option => option.value) : [],
+        github_issue_auto_start_labels: reviewSettingsGitHubIssuesAutoStartLabels instanceof HTMLInputElement ? reviewSettingsGitHubIssuesAutoStartLabels.value.split(",").map(label => label.trim()).filter(Boolean) : [],
         assign_creator: reviewSettingsAssignCreator instanceof HTMLInputElement ? reviewSettingsAssignCreator.checked : true,
         disabled_repositories: [...(state.reviewSettings.disabledRepositories || [])],
       };
@@ -13878,7 +13855,6 @@
     }
     reviewSettingsGitHubIssuesEnabled?.addEventListener("change", () => {
       state.reviewSettings = { ...state.reviewSettings, githubIssuesEnabled: Boolean(reviewSettingsGitHubIssuesEnabled.checked) };
-      if (state.reviewSettings.githubIssuesEnabled) void loadGitHubIssueAutoStartLabels();
       syncGitHubIssuesDockLinkAvailability();
       syncGitHubIssuesLinkModeSetting();
       if (!state.reviewSettings.githubIssuesEnabled && state.promptMode === "issues") {
