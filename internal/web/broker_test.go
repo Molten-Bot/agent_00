@@ -653,6 +653,9 @@ func TestBrokerCapturesReviewPRURLFromRunConfig(t *testing.T) {
 	if got, want := task.PRURL, "https://github.com/acme/repo/pull/42"; got != want {
 		t.Fatalf("task.PRURL = %q, want %q", got, want)
 	}
+	if got, want := task.Workflow, "code-review"; got != want {
+		t.Fatalf("task.Workflow = %q, want %q", got, want)
+	}
 }
 
 func TestBrokerCapturesAutoMergeFromQueuedReviewConfig(t *testing.T) {

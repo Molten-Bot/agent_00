@@ -2911,9 +2911,17 @@ func workflowFromRunConfigJSON(runConfigJSON []byte) string {
 		LibraryTaskName      string `json:"libraryTaskName"`
 		LibraryTaskNameLower string `json:"librarytaskname"`
 		Skill                string `json:"skill"`
+		Review               *struct {
+			PRNumber   int    `json:"prNumber"`
+			PRURL      string `json:"prUrl"`
+			HeadBranch string `json:"headBranch"`
+		} `json:"review"`
 	}
 	if err := json.Unmarshal(runConfigJSON, &raw); err != nil {
 		return ""
+	}
+	if raw.Review != nil && (raw.Review.PRNumber > 0 || strings.TrimSpace(raw.Review.PRURL) != "" || strings.TrimSpace(raw.Review.HeadBranch) != "") {
+		return "code-review"
 	}
 	return stringsx.FirstNonEmpty(raw.LibraryTaskName, raw.LibraryTaskNameLower, raw.Skill)
 }
