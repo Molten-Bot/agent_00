@@ -9,6 +9,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 )
 
 func TestCloneErrorWithDetails(t *testing.T) {
@@ -87,7 +88,7 @@ func TestIsMissingRemoteBranchCloneError(t *testing.T) {
 	}
 }
 
-func TestCloneRepositoriesRetainsRequiredBranchCheckoutForValidationWhenRemoteBranchDisappearsAfterClone(t *testing.T) {
+func TestCloneRepositoriesRejectsDeletedRequiredBranchWithRecognizableError(t *testing.T) {
 	t.Parallel()
 
 	repoURL := "https://github.com/acme/repo.git"
@@ -107,8 +108,12 @@ func TestCloneRepositoriesRetainsRequiredBranchCheckoutForValidationWhenRemoteBr
 		{cmd: fetchBaseBranchCommand(repoDir, branch), res: missingRef, err: errors.New("exit status 128")},
 	}}
 
-	if err := New(fake).cloneRepositories(context.Background(), repos, branch); err != nil {
-		t.Fatalf("cloneRepositories() error = %v, want retained checkout", err)
+	err := New(fake).cloneRepositories(context.Background(), repos, branch)
+	if err == nil {
+		t.Fatal("cloneRepositories() error = nil, want deleted branch failure")
+	}
+	if got := failurefollowup.NonRemediableFailureReason(err); got != "remote branch does not exist" {
+		t.Fatalf("NonRemediableFailureReason(cloneRepositories error) = %q, want missing branch reason; error: %v", got, err)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
