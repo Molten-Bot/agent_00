@@ -33,13 +33,14 @@ func (s Server) runGitHubIssueAutoStart(ctx context.Context) {
 	seen := make(map[string]bool)
 	baseline := true
 	filters := ""
+	baselineAt := time.Now()
 	for {
-		s.pollGitHubIssueAutoStart(ctx, seen, &baseline, &filters)
+		s.pollGitHubIssueAutoStart(ctx, seen, &baseline, &filters, baselineAt)
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-		case <-s.issueAutoStartWake:
+		case baselineAt = <-ticker.C:
+		case baselineAt = <-s.issueAutoStartWake:
 		}
 	}
 }
@@ -49,12 +50,12 @@ func (s Server) wakeGitHubIssueAutoStart() {
 		return
 	}
 	select {
-	case s.issueAutoStartWake <- struct{}{}:
+	case s.issueAutoStartWake <- time.Now():
 	default:
 	}
 }
 
-func (s Server) pollGitHubIssueAutoStart(ctx context.Context, seen map[string]bool, baseline *bool, filters *string) {
+func (s Server) pollGitHubIssueAutoStart(ctx context.Context, seen map[string]bool, baseline *bool, filters *string, baselineAt time.Time) {
 	state, err := s.ReviewSettingsStatus(ctx)
 	if err != nil {
 		s.logf("localruntime.ui status=warn event=github_issue_auto_start_settings err=%q", err)
@@ -70,7 +71,7 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context, seen map[string]bo
 		*baseline = true
 		*filters = nextFilters
 	}
-	if err := s.scanGitHubIssuesForAutoStart(ctx, *baseline, seen, state.GitHubIssueLinkMode, state.GitHubIssueAutoStartOnlyAssigned, state.GitHubIssueAutoStartLabels); err != nil {
+	if err := s.scanGitHubIssuesForAutoStart(ctx, *baseline, baselineAt, seen, state.GitHubIssueLinkMode, state.GitHubIssueAutoStartOnlyAssigned, state.GitHubIssueAutoStartLabels); err != nil {
 		s.logf("localruntime.ui status=warn event=github_issue_auto_start_scan err=%q", err)
 		return
 	}
@@ -94,7 +95,7 @@ func githubIssueAutoStartFilterKey(onlyAssigned bool, labels []string) string {
 	return fmt.Sprintf("%t:%s", onlyAssigned, encoded)
 }
 
-func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool, seen map[string]bool, linkMode string, onlyAssigned bool, selectedLabels []string) error {
+func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool, baselineAt time.Time, seen map[string]bool, linkMode string, onlyAssigned bool, selectedLabels []string) error {
 	repos, err := s.enabledGitHubRepos(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve GitHub repositories: %w", err)
@@ -118,7 +119,7 @@ func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool,
 			if seen[key] {
 				continue
 			}
-			if baseline {
+			if baseline && !githubIssueMatchedAtOrAfter(issue, baselineAt) {
 				seen[key] = true
 				continue
 			}
@@ -167,6 +168,20 @@ func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool,
 		return fmt.Errorf("%s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+func githubIssueMatchedAtOrAfter(issue GitHubIssue, cutoff time.Time) bool {
+	if cutoff.IsZero() {
+		return false
+	}
+	cutoff = cutoff.Truncate(time.Second)
+	for _, value := range []string{issue.CreatedAt, issue.UpdatedAt} {
+		matchedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+		if err == nil && !matchedAt.Before(cutoff) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s Server) listGitHubIssuesForAutoStart(ctx context.Context, repository string, onlyAssigned bool) ([]GitHubIssue, error) {

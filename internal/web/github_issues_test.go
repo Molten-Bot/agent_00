@@ -153,17 +153,17 @@ func TestAssignedIssueAutoStartBaselinesAndSubmitsNewIssueOnce(t *testing.T) {
 		return "request-1", nil
 	}
 	seen := make(map[string]bool)
-	if err := srv.scanGitHubIssuesForAutoStart(context.Background(), true, seen, config.GitHubIssueLinkClose, true, nil); err != nil {
+	if err := srv.scanGitHubIssuesForAutoStart(context.Background(), true, time.Time{}, seen, config.GitHubIssueLinkClose, true, nil); err != nil {
 		t.Fatalf("baseline scan error: %v", err)
 	}
 	if len(submitted) != 0 || !seen["acme/repo#22"] {
 		t.Fatalf("baseline submitted %d tasks, seen=%v", len(submitted), seen)
 	}
 	assigned = true
-	if err := srv.scanGitHubIssuesForAutoStart(context.Background(), false, seen, config.GitHubIssueLinkClose, true, nil); err != nil {
+	if err := srv.scanGitHubIssuesForAutoStart(context.Background(), false, time.Time{}, seen, config.GitHubIssueLinkClose, true, nil); err != nil {
 		t.Fatalf("new issue scan error: %v", err)
 	}
-	if err := srv.scanGitHubIssuesForAutoStart(context.Background(), false, seen, config.GitHubIssueLinkClose, true, nil); err != nil {
+	if err := srv.scanGitHubIssuesForAutoStart(context.Background(), false, time.Time{}, seen, config.GitHubIssueLinkClose, true, nil); err != nil {
 		t.Fatalf("repeat issue scan error: %v", err)
 	}
 	if len(submitted) != 1 || listCalls != 3 {
@@ -180,6 +180,44 @@ func TestAssignedIssueAutoStartBaselinesAndSubmitsNewIssueOnce(t *testing.T) {
 	}
 	if run.RepoURL != "https://github.com/acme/repo" || run.BaseBranch != "main" || run.GitHubIssue.Number != 23 || run.GitHubIssue.LinkMode != config.GitHubIssueLinkClose || !strings.Contains(run.Prompt, "Build it") || !strings.Contains(run.Prompt, "Include a test.") {
 		t.Fatalf("submitted run omitted issue context or metadata: %#v", run)
+	}
+}
+
+func TestGitHubIssueAutoStartQueuesIssueMatchedDuringBaseline(t *testing.T) {
+	t.Parallel()
+	baselineAt := time.Date(2026, time.November, 18, 18, 14, 31, 0, time.UTC)
+	var submitted [][]byte
+	srv := NewServer("", NewBroker())
+	srv.GitHubIssueRunner = githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "issue" && cmd.Args[1] == "list" {
+			return execx.Result{Stdout: `[{"number":22,"createdAt":"2026-11-18T18:00:00Z","updatedAt":"2026-11-18T18:00:00Z"},{"number":23,"createdAt":"2026-11-18T18:00:00Z","updatedAt":"2026-11-18T18:14:32Z"}]`}, nil
+		}
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "issue" && cmd.Args[1] == "view" {
+			return execx.Result{Stdout: `{"number":23,"title":"Labeled during startup","state":"OPEN","createdAt":"2026-11-18T18:00:00Z","updatedAt":"2026-11-18T18:14:32Z","author":{"login":"octocat"}}`}, nil
+		}
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "api" {
+			return execx.Result{Stdout: `[]`}, nil
+		}
+		t.Fatalf("unexpected gh command: %#v", cmd)
+		return execx.Result{}, nil
+	})
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{{FullName: "acme/repo", HTMLURL: "https://github.com/acme/repo"}}, nil
+	}
+	srv.SubmitLocalPrompt = func(_ context.Context, body []byte) (string, error) {
+		submitted = append(submitted, append([]byte(nil), body...))
+		return "request-1", nil
+	}
+
+	seen := make(map[string]bool)
+	if err := srv.scanGitHubIssuesForAutoStart(context.Background(), true, baselineAt, seen, config.GitHubIssueLinkReference, false, nil); err != nil {
+		t.Fatalf("baseline scan error: %v", err)
+	}
+	if len(submitted) != 1 {
+		t.Fatalf("submitted tasks = %d, want 1", len(submitted))
+	}
+	if !seen["acme/repo#22"] || !seen["acme/repo#23"] {
+		t.Fatalf("baseline did not record old and newly queued issues: %v", seen)
 	}
 }
 
@@ -213,9 +251,9 @@ func TestGitHubIssueAutoStartBaselinesWhenFiltersChange(t *testing.T) {
 	seen := make(map[string]bool)
 	baseline := true
 	filters := ""
-	srv.pollGitHubIssueAutoStart(context.Background(), seen, &baseline, &filters)
+	srv.pollGitHubIssueAutoStart(context.Background(), seen, &baseline, &filters, time.Now())
 	labels = []string{"feature"}
-	srv.pollGitHubIssueAutoStart(context.Background(), seen, &baseline, &filters)
+	srv.pollGitHubIssueAutoStart(context.Background(), seen, &baseline, &filters, time.Now())
 	if len(submitted) != 0 {
 		t.Fatalf("filter change submitted %d tasks, want 0", len(submitted))
 	}
