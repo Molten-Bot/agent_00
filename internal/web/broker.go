@@ -2055,6 +2055,9 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		if fields["stage"] == "review" && fields["status"] == "warn" && fields["action"] == "leave_draft" && fields["reason"] == "fix_passes_exhausted" {
 			t.Warning = "Post-task review findings remain. Pull request left in draft for human review."
 		}
+		if fields["stage"] == "review" && fields["status"] == "warn" && fields["action"] == "stop" && fields["reason"] == "pr_merged" {
+			t.Warning = "Pull request merged during post-task review. Review cycle stopped early."
+		}
 	}
 
 	if strings.Contains(line, " cmd ") {
