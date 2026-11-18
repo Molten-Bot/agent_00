@@ -9912,15 +9912,16 @@
       return state.sparkleTaskIDs.has(requestID);
     }
 
-    function isReviewTask(task) {
-      if (taskStartSource(task) === "review") {
-        return true;
-      }
+    function isReadOnlyReviewTask(task) {
       const workflow = String(task?.workflow || task?.libraryTaskName || task?.library_task || task?.skill || "")
         .trim()
         .toLowerCase()
         .replace(/[\s-]+/g, "_");
       return workflow === "code_review" || workflow === "pull_request_code_review";
+    }
+
+    function isReviewTask(task) {
+      return taskStartSource(task) === "review" || isReadOnlyReviewTask(task);
     }
 
     function syncNewReviewTaskFocus(previousSnapshot, nextSnapshot) {
@@ -11550,7 +11551,7 @@
     function taskProgressStepsForTask(task, signals) {
       const status = normalizedTaskStatus(task?.status);
       const entry = taskProgressEntryStepID(task);
-      if (isReviewTask(task)) {
+      if (isReadOnlyReviewTask(task)) {
         const reviewStepIDs = [entry, "prepare", "clone", "code_review", "finalize"];
         if (taskAutoMergeStepEnabled() && status !== "no_changes") {
           reviewStepIDs.push("auto_merge");
@@ -11613,7 +11614,7 @@
       }
 
       const stage = String(task?.stage || "").trim().toLowerCase();
-      if (isReviewTask(task)) {
+      if (isReadOnlyReviewTask(task)) {
         if (taskAutoMergeStepEnabled() && signals.hasAutoMergeSeen) {
           return "auto_merge";
         }
@@ -11713,7 +11714,7 @@
         taskAutoMergeStepEnabled() ? "auto_merge" : "",
         taskReviewStepEnabled() ? "review_cycle" : "",
         taskStartSource(task),
-        isReviewTask(task) ? "code_review" : "implementation",
+        isReadOnlyReviewTask(task) ? "code_review" : "implementation",
         String(task?.pr_url || ""),
         String(logs.length),
         tail,
