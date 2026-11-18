@@ -66,7 +66,7 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context, seen map[string]bo
 	state, err := s.ReviewSettingsStatus(ctx)
 	if err != nil {
 		s.logf("localruntime.ui status=warn event=github_issue_auto_start_settings err=%q", err)
-		return *baseline
+		return true
 	}
 	if !state.GitHubIssuesEnabled || !state.GitHubIssueAutoStartAssigned {
 		*baseline = true
@@ -227,16 +227,43 @@ func (s Server) githubIssueMatchedAtOrAfter(ctx context.Context, repository stri
 		return false, err
 	}
 	wantedLabels := normalizedGitHubIssueLabels(selectedLabels)
-	for _, event := range events {
-		if !timestampAtOrAfter(event.CreatedAt, cutoff) {
+	matchingLabels := make(map[string]struct{}, len(issue.Labels))
+	for _, label := range issue.Labels {
+		name := strings.ToLower(strings.TrimSpace(label.Name))
+		if _, ok := wantedLabels[name]; ok {
+			matchingLabels[name] = struct{}{}
+		}
+	}
+	// Rewind current labels through complete event history, then replay it so a
+	// labeled event only qualifies when it changes issue from unmatched to matched.
+	for index := len(events) - 1; index >= 0; index-- {
+		event := events[index]
+		name := strings.ToLower(strings.TrimSpace(event.Label.Name))
+		if _, ok := wantedLabels[name]; !ok {
 			continue
 		}
-		if strings.EqualFold(event.Event, "labeled") {
-			if _, ok := wantedLabels[strings.ToLower(strings.TrimSpace(event.Label.Name))]; ok {
-				return true, nil
+		switch {
+		case strings.EqualFold(event.Event, "labeled"):
+			delete(matchingLabels, name)
+		case strings.EqualFold(event.Event, "unlabeled"):
+			matchingLabels[name] = struct{}{}
+		}
+	}
+	for _, event := range events {
+		name := strings.ToLower(strings.TrimSpace(event.Label.Name))
+		if _, ok := wantedLabels[name]; ok {
+			switch {
+			case strings.EqualFold(event.Event, "labeled"):
+				wasMatched := len(matchingLabels) > 0
+				matchingLabels[name] = struct{}{}
+				if !wasMatched && timestampAtOrAfter(event.CreatedAt, cutoff) {
+					return true, nil
+				}
+			case strings.EqualFold(event.Event, "unlabeled"):
+				delete(matchingLabels, name)
 			}
 		}
-		if onlyAssigned && strings.EqualFold(event.Event, "assigned") {
+		if timestampAtOrAfter(event.CreatedAt, cutoff) && onlyAssigned && strings.EqualFold(event.Event, "assigned") {
 			login, err := currentGitHubLogin()
 			if err != nil {
 				return false, fmt.Errorf("resolve current GitHub user: %w", err)

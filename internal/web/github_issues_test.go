@@ -257,6 +257,32 @@ func TestGitHubIssueAutoStartIgnoresUnrelatedUpdateDuringBaseline(t *testing.T) 
 	}
 }
 
+func TestGitHubIssueAutoStartLabelEventMustCreateMatchTransition(t *testing.T) {
+	t.Parallel()
+	baselineAt := time.Date(2026, time.November, 18, 18, 14, 31, 0, time.UTC)
+	issue := GitHubIssue{
+		Number:    22,
+		Labels:    []GitHubIssueLabel{{Name: "ready-for-agent"}, {Name: "priority"}},
+		CreatedAt: "2026-11-18T18:00:00Z",
+		UpdatedAt: "2026-11-18T18:14:32Z",
+	}
+	srv := NewServer("", NewBroker())
+	srv.GitHubIssueRunner = githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+		return execx.Result{Stdout: `[
+			{"event":"labeled","created_at":"2026-11-18T18:00:00Z","label":{"name":"ready-for-agent"}},
+			{"event":"labeled","created_at":"2026-11-18T18:14:32Z","label":{"name":"priority"}}
+		]`}, nil
+	})
+
+	matched, err := srv.githubIssueMatchedAtOrAfter(context.Background(), "acme/repo", issue, baselineAt, false, []string{"ready-for-agent", "priority"}, nil)
+	if err != nil {
+		t.Fatalf("verify match: %v", err)
+	}
+	if matched {
+		t.Fatal("adding another selected label to an already matching issue counted as a match transition")
+	}
+}
+
 func TestGitHubIssueAutoStartAssignmentMustTargetCurrentUser(t *testing.T) {
 	t.Parallel()
 	baselineAt := time.Date(2026, time.November, 18, 18, 14, 31, 0, time.UTC)
@@ -336,6 +362,20 @@ func TestGitHubIssueAutoStartRetainsCutoffAfterFailedBaseline(t *testing.T) {
 	}
 	if submitted != 1 || baseline {
 		t.Fatalf("submitted/baseline = %d/%t, want 1/false", submitted, baseline)
+	}
+}
+
+func TestGitHubIssueAutoStartRetainsCutoffAfterSettingsError(t *testing.T) {
+	t.Parallel()
+	srv := NewServer("", NewBroker())
+	srv.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) {
+		return ReviewSettingsState{}, errors.New("temporary settings failure")
+	}
+	baseline := false
+	filters := "false:[]"
+
+	if retain := srv.pollGitHubIssueAutoStart(context.Background(), make(map[string]bool), &baseline, &filters, time.Now()); !retain {
+		t.Fatal("settings error did not retain cutoff after initial baseline completed")
 	}
 }
 
