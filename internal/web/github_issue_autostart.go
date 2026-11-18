@@ -94,7 +94,7 @@ func githubIssueAutoStartFilterKey(onlyAssigned bool, labels []string) string {
 	return fmt.Sprintf("%t:%s", onlyAssigned, encoded)
 }
 
-func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool, seen map[string]bool, linkMode string, onlyAssigned bool, requiredLabels []string) error {
+func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool, seen map[string]bool, linkMode string, onlyAssigned bool, selectedLabels []string) error {
 	repos, err := s.enabledGitHubRepos(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve GitHub repositories: %w", err)
@@ -111,7 +111,7 @@ func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool,
 			continue
 		}
 		for _, issue := range issues {
-			if !githubIssueHasAllLabels(issue, requiredLabels) {
+			if !githubIssueHasAnyLabel(issue, selectedLabels) {
 				continue
 			}
 			key := fullName + "#" + fmt.Sprint(issue.Number)
@@ -185,20 +185,23 @@ func (s Server) listGitHubIssuesForAutoStart(ctx context.Context, repository str
 	return issues, nil
 }
 
-func githubIssueHasAllLabels(issue GitHubIssue, required []string) bool {
-	if len(required) == 0 {
-		return true
-	}
-	have := make(map[string]struct{}, len(issue.Labels))
-	for _, label := range issue.Labels {
-		have[strings.ToLower(strings.TrimSpace(label.Name))] = struct{}{}
-	}
-	for _, label := range required {
-		if _, ok := have[strings.ToLower(strings.TrimSpace(label))]; !ok {
-			return false
+func githubIssueHasAnyLabel(issue GitHubIssue, selected []string) bool {
+	wanted := make(map[string]struct{}, len(selected))
+	for _, label := range selected {
+		label = strings.ToLower(strings.TrimSpace(label))
+		if label != "" {
+			wanted[label] = struct{}{}
 		}
 	}
-	return true
+	if len(wanted) == 0 {
+		return true
+	}
+	for _, label := range issue.Labels {
+		if _, ok := wanted[strings.ToLower(strings.TrimSpace(label.Name))]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func buildGitHubIssueAutoStartPrompt(repository string, issue GitHubIssue) string {
