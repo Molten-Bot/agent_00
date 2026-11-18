@@ -611,6 +611,8 @@ test('GitHub issue labels use comma-separated input without background label loa
   await select(page, 'github-issues');
   const labels = page.locator('#review-settings-github-issues-auto-start-labels');
   assert.equal(await labels.evaluate(element => element.tagName), 'INPUT');
+  assert.equal(await labels.getAttribute('aria-label'), 'GitHub issue trigger labels, comma-separated');
+  assert.match(await labels.locator('xpath=preceding-sibling::span').innerText(), /any matching label enables issue/);
   assert.equal(await labels.inputValue(), 'bug, priority');
   assert.equal(labelRequests, 0);
   await labels.fill(' bug, priority, , needs triage ');

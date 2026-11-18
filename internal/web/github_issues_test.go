@@ -85,14 +85,20 @@ func TestGitHubLabelsEndpointIsRemoved(t *testing.T) {
 	}
 }
 
-func TestGitHubIssueAutoStartRequiresEverySelectedLabel(t *testing.T) {
+func TestGitHubIssueAutoStartMatchesAnySelectedLabel(t *testing.T) {
 	t.Parallel()
 	issue := GitHubIssue{Labels: []GitHubIssueLabel{{Name: "bug"}, {Name: "priority"}}}
-	if !githubIssueHasAllLabels(issue, []string{"BUG", "priority"}) {
-		t.Fatal("matching labels should pass case-insensitively")
+	if !githubIssueHasAnyLabel(issue, []string{"feature", "BUG"}) {
+		t.Fatal("one matching label should pass case-insensitively")
 	}
-	if githubIssueHasAllLabels(issue, []string{"bug", "feature"}) {
-		t.Fatal("issue missing one required label should not pass")
+	if githubIssueHasAnyLabel(issue, []string{"feature", "docs"}) {
+		t.Fatal("issue without any selected label should not pass")
+	}
+	if !githubIssueHasAnyLabel(issue, nil) {
+		t.Fatal("empty label selection should allow every issue")
+	}
+	if !githubIssueHasAnyLabel(issue, []string{" ", ""}) {
+		t.Fatal("blank label selection should allow every issue")
 	}
 }
 

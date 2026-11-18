@@ -289,8 +289,8 @@ func applyGitHubIssueAutoStartOnlyAssignedToDoc(doc map[string]any, enabled bool
 	doc["github_issue_auto_start_only_assigned"] = false
 }
 
-// ReadRuntimeConfigGitHubIssueAutoStartLabels returns labels that every
-// automatically started issue must have.
+// ReadRuntimeConfigGitHubIssueAutoStartLabels returns labels where any match
+// makes an issue eligible to start automatically.
 func ReadRuntimeConfigGitHubIssueAutoStartLabels(path string) []string {
 	path = strings.TrimSpace(path)
 	if path == "" {
