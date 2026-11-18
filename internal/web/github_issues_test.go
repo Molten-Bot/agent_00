@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -190,12 +191,15 @@ func TestGitHubIssueAutoStartQueuesIssueMatchedDuringBaseline(t *testing.T) {
 	srv := NewServer("", NewBroker())
 	srv.GitHubIssueRunner = githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "issue" && cmd.Args[1] == "list" {
-			return execx.Result{Stdout: `[{"number":22,"createdAt":"2026-11-18T18:00:00Z","updatedAt":"2026-11-18T18:00:00Z"},{"number":23,"createdAt":"2026-11-18T18:00:00Z","updatedAt":"2026-11-18T18:14:32Z"}]`}, nil
+			return execx.Result{Stdout: `[{"number":22,"labels":[{"name":"ready-for-agent"}],"createdAt":"2026-11-18T18:00:00Z","updatedAt":"2026-11-18T18:00:00Z"},{"number":23,"labels":[{"name":"ready-for-agent"}],"createdAt":"2026-11-18T18:00:00Z","updatedAt":"2026-11-18T18:14:32Z"}]`}, nil
 		}
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "issue" && cmd.Args[1] == "view" {
 			return execx.Result{Stdout: `{"number":23,"title":"Labeled during startup","state":"OPEN","createdAt":"2026-11-18T18:00:00Z","updatedAt":"2026-11-18T18:14:32Z","author":{"login":"octocat"}}`}, nil
 		}
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "api" {
+			if strings.Contains(cmd.Args[len(cmd.Args)-1], "/events?") {
+				return execx.Result{Stdout: `[{"event":"labeled","created_at":"2026-11-18T18:14:32Z","label":{"name":"ready-for-agent"}}]`}, nil
+			}
 			return execx.Result{Stdout: `[]`}, nil
 		}
 		t.Fatalf("unexpected gh command: %#v", cmd)
@@ -210,7 +214,7 @@ func TestGitHubIssueAutoStartQueuesIssueMatchedDuringBaseline(t *testing.T) {
 	}
 
 	seen := make(map[string]bool)
-	if err := srv.scanGitHubIssuesForAutoStart(context.Background(), true, baselineAt, seen, config.GitHubIssueLinkReference, false, nil); err != nil {
+	if err := srv.scanGitHubIssuesForAutoStart(context.Background(), true, baselineAt, seen, config.GitHubIssueLinkReference, false, []string{"ready-for-agent"}); err != nil {
 		t.Fatalf("baseline scan error: %v", err)
 	}
 	if len(submitted) != 1 {
@@ -218,6 +222,120 @@ func TestGitHubIssueAutoStartQueuesIssueMatchedDuringBaseline(t *testing.T) {
 	}
 	if !seen["acme/repo#22"] || !seen["acme/repo#23"] {
 		t.Fatalf("baseline did not record old and newly queued issues: %v", seen)
+	}
+}
+
+func TestGitHubIssueAutoStartIgnoresUnrelatedUpdateDuringBaseline(t *testing.T) {
+	t.Parallel()
+	baselineAt := time.Date(2026, time.November, 18, 18, 14, 31, 0, time.UTC)
+	submitted := 0
+	srv := NewServer("", NewBroker())
+	srv.GitHubIssueRunner = githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "issue" && cmd.Args[1] == "list" {
+			return execx.Result{Stdout: `[{"number":22,"labels":[{"name":"ready-for-agent"}],"createdAt":"2026-11-18T18:00:00Z","updatedAt":"2026-11-18T18:14:32Z"}]`}, nil
+		}
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "api" {
+			return execx.Result{Stdout: `[{"event":"renamed","created_at":"2026-11-18T18:14:32Z"}]`}, nil
+		}
+		t.Fatalf("unexpected gh command: %#v", cmd)
+		return execx.Result{}, nil
+	})
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{{FullName: "acme/repo"}}, nil
+	}
+	srv.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
+		submitted++
+		return "request-1", nil
+	}
+
+	seen := make(map[string]bool)
+	if err := srv.scanGitHubIssuesForAutoStart(context.Background(), true, baselineAt, seen, config.GitHubIssueLinkReference, false, []string{"ready-for-agent"}); err != nil {
+		t.Fatalf("baseline scan error: %v", err)
+	}
+	if submitted != 0 || !seen["acme/repo#22"] {
+		t.Fatalf("unrelated update submitted %d tasks, seen=%v", submitted, seen)
+	}
+}
+
+func TestGitHubIssueAutoStartAssignmentMustTargetCurrentUser(t *testing.T) {
+	t.Parallel()
+	baselineAt := time.Date(2026, time.November, 18, 18, 14, 31, 0, time.UTC)
+	issue := GitHubIssue{
+		Number:    22,
+		CreatedAt: "2026-11-18T18:00:00Z",
+		UpdatedAt: "2026-11-18T18:14:32Z",
+	}
+	for _, tc := range []struct {
+		name     string
+		assignee string
+		want     bool
+	}{
+		{name: "another user", assignee: "someone-else", want: false},
+		{name: "current user", assignee: "octocat", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := NewServer("", NewBroker())
+			srv.GitHubIssueRunner = githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+				return execx.Result{Stdout: fmt.Sprintf(`[{"event":"assigned","created_at":"2026-11-18T18:14:32Z","assignee":{"login":%q}}]`, tc.assignee)}, nil
+			})
+			matched, err := srv.githubIssueMatchedAtOrAfter(context.Background(), "acme/repo", issue, baselineAt, true, nil, func() (string, error) {
+				return "octocat", nil
+			})
+			if err != nil {
+				t.Fatalf("verify match: %v", err)
+			}
+			if matched != tc.want {
+				t.Fatalf("matched = %t, want %t", matched, tc.want)
+			}
+		})
+	}
+}
+
+func TestGitHubIssueAutoStartRetainsCutoffAfterFailedBaseline(t *testing.T) {
+	t.Parallel()
+	baselineAt := time.Date(2026, time.November, 18, 18, 14, 31, 0, time.UTC)
+	listCalls := 0
+	submitted := 0
+	srv := NewServer("", NewBroker())
+	srv.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) {
+		return ReviewSettingsState{GitHubIssuesEnabled: true, GitHubIssueAutoStartAssigned: true}, nil
+	}
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{{FullName: "acme/repo"}}, nil
+	}
+	srv.GitHubIssueRunner = githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "issue" && cmd.Args[1] == "list" {
+			listCalls++
+			if listCalls == 1 {
+				return execx.Result{}, errors.New("temporary list failure")
+			}
+			return execx.Result{Stdout: `[{"number":23,"createdAt":"2026-11-18T18:14:32Z","updatedAt":"2026-11-18T18:14:32Z"}]`}, nil
+		}
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "issue" && cmd.Args[1] == "view" {
+			return execx.Result{Stdout: `{"number":23,"title":"Created before retry","state":"OPEN","author":{"login":"octocat"}}`}, nil
+		}
+		if len(cmd.Args) >= 2 && cmd.Args[0] == "api" {
+			return execx.Result{Stdout: `[]`}, nil
+		}
+		t.Fatalf("unexpected gh command: %#v", cmd)
+		return execx.Result{}, nil
+	})
+	srv.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
+		submitted++
+		return "request-1", nil
+	}
+
+	seen := make(map[string]bool)
+	baseline := true
+	filters := ""
+	if retain := srv.pollGitHubIssueAutoStart(context.Background(), seen, &baseline, &filters, baselineAt); !retain {
+		t.Fatal("failed baseline did not retain its cutoff")
+	}
+	if retain := srv.pollGitHubIssueAutoStart(context.Background(), seen, &baseline, &filters, baselineAt); retain {
+		t.Fatal("successful baseline retained its cutoff")
+	}
+	if submitted != 1 || baseline {
+		t.Fatalf("submitted/baseline = %d/%t, want 1/false", submitted, baseline)
 	}
 }
 
