@@ -116,6 +116,7 @@ type Server struct {
 	ResolveGitHubRepos      func(context.Context) ([]GitHubRepo, error)
 	GitHubIssueRunner       execx.Runner
 	gitHubRepos             *gitHubRepoCache
+	issueAutoStartWake      chan struct{}
 	Ready                   chan<- error
 }
 
@@ -214,10 +215,11 @@ type ReviewSettingsRequest struct {
 // NewServer returns a monitor HTTP server.
 func NewServer(addr string, broker *Broker) Server {
 	return Server{
-		Addr:        strings.TrimSpace(addr),
-		Broker:      broker,
-		Logf:        func(string, ...any) {},
-		gitHubRepos: &gitHubRepoCache{},
+		Addr:               strings.TrimSpace(addr),
+		Broker:             broker,
+		Logf:               func(string, ...any) {},
+		gitHubRepos:        &gitHubRepoCache{},
+		issueAutoStartWake: make(chan struct{}, 1),
 		LoadLibraryTasks: func() ([]library.TaskSummary, error) {
 			catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 			if err != nil {
@@ -2075,6 +2077,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		s.wakeGitHubIssueAutoStart()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":       true,
 			"settings": state,

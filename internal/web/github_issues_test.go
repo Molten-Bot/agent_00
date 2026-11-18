@@ -218,6 +218,78 @@ func TestGitHubIssueAutoStartBaselinesWhenFiltersChange(t *testing.T) {
 	}
 }
 
+func TestReviewSettingsSaveWakesGitHubIssueAutoStart(t *testing.T) {
+	t.Parallel()
+	srv := NewServer("", NewBroker())
+	srv.ConfigureReviewSettings = func(context.Context, ReviewSettingsRequest) (ReviewSettingsState, error) {
+		return ReviewSettingsState{GitHubIssuesEnabled: true, GitHubIssueAutoStartAssigned: true}, nil
+	}
+
+	response := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/review-settings", strings.NewReader(`{"merge_method":"squash","review_level":"off","github_issues_enabled":true,"github_issue_auto_start_assigned":true}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	select {
+	case <-srv.issueAutoStartWake:
+	default:
+		t.Fatal("successful settings save did not wake GitHub issue auto-start")
+	}
+}
+
+func TestGitHubIssueAutoStartWakeScansImmediately(t *testing.T) {
+	t.Parallel()
+	scanned := make(chan struct{}, 2)
+	submitted := make(chan struct{}, 1)
+	newIssue := false
+	srv := NewServer("", NewBroker())
+	srv.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) {
+		return ReviewSettingsState{GitHubIssuesEnabled: true, GitHubIssueAutoStartAssigned: true}, nil
+	}
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return []GitHubRepo{{FullName: "acme/repo"}}, nil
+	}
+	srv.GitHubIssueRunner = githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if cmd.Args[0] == "api" {
+			return execx.Result{Stdout: `[]`}, nil
+		}
+		switch cmd.Args[1] {
+		case "list":
+			current := newIssue
+			scanned <- struct{}{}
+			if current {
+				return execx.Result{Stdout: `[{"number":22},{"number":23}]`}, nil
+			}
+			return execx.Result{Stdout: `[{"number":22}]`}, nil
+		case "view":
+			return execx.Result{Stdout: `{"number":23,"title":"New issue","state":"OPEN","author":{"login":"octocat"}}`}, nil
+		default:
+			t.Fatalf("unexpected gh command: %#v", cmd)
+			return execx.Result{}, nil
+		}
+	})
+	srv.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
+		submitted <- struct{}{}
+		return "request-1", nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.runGitHubIssueAutoStart(ctx)
+	select {
+	case <-scanned:
+	case <-time.After(time.Second):
+		t.Fatal("initial GitHub issue baseline did not run")
+	}
+	newIssue = true
+	srv.wakeGitHubIssueAutoStart()
+	select {
+	case <-submitted:
+	case <-time.After(time.Second):
+		t.Fatal("wake did not scan and submit new GitHub issue immediately")
+	}
+}
+
 func TestGitHubIssueListRejectsInvalidFiltersBeforeCallingGh(t *testing.T) {
 	t.Parallel()
 	calls := 0
