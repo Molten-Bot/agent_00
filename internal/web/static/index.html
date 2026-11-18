@@ -1091,6 +1091,7 @@
       commit: { id: "commit", label: "Commit", detail: "Git commit and push synchronization.", icon: "commit" },
       pr: { id: "pr", label: "Pull Request", detail: "Pull request lookup or creation.", icon: "pr" },
       checks: { id: "checks", label: "Checks", detail: "PR checks and remediation loop.", icon: "checks" },
+      code_review: { id: "code_review", label: "Code Review", detail: "Read pull request context and post review findings.", icon: "review" },
       review: { id: "review", label: "Review", detail: "Independent post-task pull request review.", icon: "review" },
       review_fix: { id: "review_fix", label: "Fix Findings", detail: "Apply the current review pass findings.", icon: "review_fix" },
       review_checks: { id: "review_checks", label: "Review Checks", detail: "Push review fixes and verify pull request checks.", icon: "review_checks" },
@@ -1146,6 +1147,7 @@
       commit: "git-commit-horizontal",
       pr: "git-pull-request",
       checks: "shield-check",
+      code_review: "clipboard-check",
       review: "clipboard-check",
       review_fix: "wrench",
       review_checks: "shield-check",
@@ -11393,6 +11395,10 @@
       }
       if (stage === "review") {
         signals.hasReviewSeen = true;
+        const action = String(parseTaskProgressField(line, "action") || "").trim().toLowerCase();
+        if (action === "auto_merge") {
+          signals.hasAutoMergeSeen = true;
+        }
       }
       if (stage === "review_fix") {
         signals.hasReviewFixSeen = true;
@@ -11544,6 +11550,13 @@
     function taskProgressStepsForTask(task, signals) {
       const status = normalizedTaskStatus(task?.status);
       const entry = taskProgressEntryStepID(task);
+      if (isReviewTask(task)) {
+        const reviewStepIDs = [entry, "prepare", "clone", "code_review", "finalize"];
+        if (taskAutoMergeStepEnabled() && status !== "no_changes") {
+          reviewStepIDs.push("auto_merge");
+        }
+        return reviewStepIDs.map((id) => TASK_PROGRESS_STEP_DEFS[id]).filter(Boolean);
+      }
       const stepIDs = [entry, "prepare", "clone", "branch", "publish"];
 
       if (signals.hasForkFallback) {
@@ -11600,6 +11613,24 @@
       }
 
       const stage = String(task?.stage || "").trim().toLowerCase();
+      if (isReviewTask(task)) {
+        if (taskAutoMergeStepEnabled() && signals.hasAutoMergeSeen) {
+          return "auto_merge";
+        }
+        if (TASK_PROGRESS_PREP_STAGES.has(stage)) {
+          return "prepare";
+        }
+        if (stage === "clone") {
+          return "clone";
+        }
+        if (stage === "finalize") {
+          return "finalize";
+        }
+        if (stage === "git" || stage === "review" || TASK_PROGRESS_AGENT_STAGES.has(stage)) {
+          return "code_review";
+        }
+        return taskProgressEntryStepID(task);
+      }
       if (TASK_PROGRESS_PREP_STAGES.has(stage)) {
         return "prepare";
       }
@@ -11682,6 +11713,7 @@
         taskAutoMergeStepEnabled() ? "auto_merge" : "",
         taskReviewStepEnabled() ? "review_cycle" : "",
         taskStartSource(task),
+        isReviewTask(task) ? "code_review" : "implementation",
         String(task?.pr_url || ""),
         String(logs.length),
         tail,

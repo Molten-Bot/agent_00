@@ -632,6 +632,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "function taskProgressStepsForTask(") || !strings.Contains(markup, "function taskProgressCurrentStepID(") || !strings.Contains(markup, "function taskProgressModel(") {
 		t.Fatalf("expected index html to build dynamic progress steps per task")
 	}
+	if !strings.Contains(markup, `code_review: { id: "code_review", label: "Code Review"`) ||
+		!strings.Contains(markup, `const reviewStepIDs = [entry, "prepare", "clone", "code_review", "finalize"];`) ||
+		!strings.Contains(markup, `if (stage === "git" || stage === "review" || TASK_PROGRESS_AGENT_STAGES.has(stage)) {`) ||
+		!strings.Contains(markup, `return "code_review";`) {
+		t.Fatalf("expected review-only tasks to use their dedicated review workflow progress steps")
+	}
 	if !strings.Contains(markup, "taskProgressSignalCache: new Map(),") ||
 		!strings.Contains(markup, "function taskProgressLogSignals(task)") ||
 		!strings.Contains(markup, "taskProgressSignalsSignature(signals)") ||
