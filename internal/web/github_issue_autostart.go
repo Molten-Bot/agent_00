@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -33,13 +34,20 @@ func (s Server) runGitHubIssueAutoStart(ctx context.Context) {
 	seen := make(map[string]bool)
 	baseline := true
 	filters := ""
+	baselineAt := time.Now()
 	for {
-		s.pollGitHubIssueAutoStart(ctx, seen, &baseline, &filters)
+		retainBaselineAt := s.pollGitHubIssueAutoStart(ctx, seen, &baseline, &filters, baselineAt)
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-		case <-s.issueAutoStartWake:
+		case nextPollAt := <-ticker.C:
+			if !retainBaselineAt {
+				baselineAt = nextPollAt
+			}
+		case nextPollAt := <-s.issueAutoStartWake:
+			if !retainBaselineAt {
+				baselineAt = nextPollAt
+			}
 		}
 	}
 }
@@ -49,32 +57,33 @@ func (s Server) wakeGitHubIssueAutoStart() {
 		return
 	}
 	select {
-	case s.issueAutoStartWake <- struct{}{}:
+	case s.issueAutoStartWake <- time.Now():
 	default:
 	}
 }
 
-func (s Server) pollGitHubIssueAutoStart(ctx context.Context, seen map[string]bool, baseline *bool, filters *string) {
+func (s Server) pollGitHubIssueAutoStart(ctx context.Context, seen map[string]bool, baseline *bool, filters *string, baselineAt time.Time) bool {
 	state, err := s.ReviewSettingsStatus(ctx)
 	if err != nil {
 		s.logf("localruntime.ui status=warn event=github_issue_auto_start_settings err=%q", err)
-		return
+		return true
 	}
 	if !state.GitHubIssuesEnabled || !state.GitHubIssueAutoStartAssigned {
 		*baseline = true
 		*filters = ""
-		return
+		return false
 	}
 	nextFilters := githubIssueAutoStartFilterKey(state.GitHubIssueAutoStartOnlyAssigned, state.GitHubIssueAutoStartLabels)
 	if nextFilters != *filters {
 		*baseline = true
 		*filters = nextFilters
 	}
-	if err := s.scanGitHubIssuesForAutoStart(ctx, *baseline, seen, state.GitHubIssueLinkMode, state.GitHubIssueAutoStartOnlyAssigned, state.GitHubIssueAutoStartLabels); err != nil {
+	if err := s.scanGitHubIssuesForAutoStart(ctx, *baseline, baselineAt, seen, state.GitHubIssueLinkMode, state.GitHubIssueAutoStartOnlyAssigned, state.GitHubIssueAutoStartLabels); err != nil {
 		s.logf("localruntime.ui status=warn event=github_issue_auto_start_scan err=%q", err)
-		return
+		return *baseline
 	}
 	*baseline = false
+	return false
 }
 
 func githubIssueAutoStartFilterKey(onlyAssigned bool, labels []string) string {
@@ -94,12 +103,31 @@ func githubIssueAutoStartFilterKey(onlyAssigned bool, labels []string) string {
 	return fmt.Sprintf("%t:%s", onlyAssigned, encoded)
 }
 
-func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool, seen map[string]bool, linkMode string, onlyAssigned bool, selectedLabels []string) error {
+func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool, baselineAt time.Time, seen map[string]bool, linkMode string, onlyAssigned bool, selectedLabels []string) error {
 	repos, err := s.enabledGitHubRepos(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve GitHub repositories: %w", err)
 	}
 	var errs []string
+	var currentLogin string
+	currentGitHubLogin := func() (string, error) {
+		if currentLogin != "" {
+			return currentLogin, nil
+		}
+		result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: []string{"api", "user"}})
+		if err != nil {
+			return "", err
+		}
+		var user GitHubIssueUser
+		if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &user); err != nil {
+			return "", fmt.Errorf("decode current GitHub user: %w", err)
+		}
+		currentLogin = strings.TrimSpace(user.Login)
+		if currentLogin == "" {
+			return "", fmt.Errorf("current GitHub user has no login")
+		}
+		return currentLogin, nil
+	}
 	for _, repo := range repos {
 		fullName, ok := validGitHubRepository(repo.FullName)
 		if !ok {
@@ -119,8 +147,15 @@ func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool,
 				continue
 			}
 			if baseline {
-				seen[key] = true
-				continue
+				matched, err := s.githubIssueMatchedAtOrAfter(ctx, fullName, issue, baselineAt, onlyAssigned, selectedLabels, currentGitHubLogin)
+				if err != nil {
+					errs = append(errs, fmt.Sprintf("verify match for %s: %v", key, err))
+					continue
+				}
+				if !matched {
+					seen[key] = true
+					continue
+				}
 			}
 			fullIssue, err := s.fetchGitHubIssue(ctx, fullName, issue.Number)
 			if err != nil {
@@ -167,6 +202,116 @@ func (s Server) scanGitHubIssuesForAutoStart(ctx context.Context, baseline bool,
 		return fmt.Errorf("%s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+type githubIssueEvent struct {
+	Event     string           `json:"event"`
+	CreatedAt string           `json:"created_at"`
+	Label     GitHubIssueLabel `json:"label"`
+	Assignee  GitHubIssueUser  `json:"assignee"`
+}
+
+func (s Server) githubIssueMatchedAtOrAfter(ctx context.Context, repository string, issue GitHubIssue, cutoff time.Time, onlyAssigned bool, selectedLabels []string, currentGitHubLogin func() (string, error)) (bool, error) {
+	if cutoff.IsZero() {
+		return false, nil
+	}
+	cutoff = cutoff.Truncate(time.Second)
+	if timestampAtOrAfter(issue.CreatedAt, cutoff) {
+		return true, nil
+	}
+	if !timestampAtOrAfter(issue.UpdatedAt, cutoff) || (!onlyAssigned && len(normalizedGitHubIssueLabels(selectedLabels)) == 0) {
+		return false, nil
+	}
+	events, err := s.listGitHubIssueEvents(ctx, repository, issue.Number)
+	if err != nil {
+		return false, err
+	}
+	wantedLabels := normalizedGitHubIssueLabels(selectedLabels)
+	matchingLabels := make(map[string]struct{}, len(issue.Labels))
+	for _, label := range issue.Labels {
+		name := strings.ToLower(strings.TrimSpace(label.Name))
+		if _, ok := wantedLabels[name]; ok {
+			matchingLabels[name] = struct{}{}
+		}
+	}
+	// Rewind current labels through complete event history, then replay it so a
+	// labeled event only qualifies when it changes issue from unmatched to matched.
+	for index := len(events) - 1; index >= 0; index-- {
+		event := events[index]
+		name := strings.ToLower(strings.TrimSpace(event.Label.Name))
+		if _, ok := wantedLabels[name]; !ok {
+			continue
+		}
+		switch {
+		case strings.EqualFold(event.Event, "labeled"):
+			delete(matchingLabels, name)
+		case strings.EqualFold(event.Event, "unlabeled"):
+			matchingLabels[name] = struct{}{}
+		}
+	}
+	for _, event := range events {
+		name := strings.ToLower(strings.TrimSpace(event.Label.Name))
+		if _, ok := wantedLabels[name]; ok {
+			switch {
+			case strings.EqualFold(event.Event, "labeled"):
+				wasMatched := len(matchingLabels) > 0
+				matchingLabels[name] = struct{}{}
+				if !wasMatched && timestampAtOrAfter(event.CreatedAt, cutoff) {
+					return true, nil
+				}
+			case strings.EqualFold(event.Event, "unlabeled"):
+				delete(matchingLabels, name)
+			}
+		}
+		if timestampAtOrAfter(event.CreatedAt, cutoff) && onlyAssigned && strings.EqualFold(event.Event, "assigned") {
+			login, err := currentGitHubLogin()
+			if err != nil {
+				return false, fmt.Errorf("resolve current GitHub user: %w", err)
+			}
+			if strings.EqualFold(strings.TrimSpace(event.Assignee.Login), login) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func timestampAtOrAfter(value string, cutoff time.Time) bool {
+	valueAt, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+	return err == nil && !valueAt.Before(cutoff)
+}
+
+func normalizedGitHubIssueLabels(labels []string) map[string]struct{} {
+	normalized := make(map[string]struct{}, len(labels))
+	for _, label := range labels {
+		if label = strings.ToLower(strings.TrimSpace(label)); label != "" {
+			normalized[label] = struct{}{}
+		}
+	}
+	return normalized
+}
+
+func (s Server) listGitHubIssueEvents(ctx context.Context, repository string, number int) ([]githubIssueEvent, error) {
+	result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{
+		Name: "gh",
+		Args: []string{"api", "--paginate", fmt.Sprintf("repos/%s/issues/%d/events?per_page=100", repository, number)},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("load GitHub issue events: %w", err)
+	}
+	decoder := json.NewDecoder(strings.NewReader(strings.TrimSpace(result.Stdout)))
+	var events []githubIssueEvent
+	for {
+		var page []githubIssueEvent
+		err := decoder.Decode(&page)
+		if err == io.EOF {
+			return events, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("decode GitHub issue events: %w", err)
+		}
+		events = append(events, page...)
+	}
 }
 
 func (s Server) listGitHubIssuesForAutoStart(ctx context.Context, repository string, onlyAssigned bool) ([]GitHubIssue, error) {
