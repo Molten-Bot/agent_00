@@ -293,6 +293,7 @@ func (w *Watcher) runConfigForReview(candidate reviewCandidate, ownerRepo string
 	if err != nil {
 		return config.Config{}, err
 	}
+	runCfg.LibraryTaskDisplayName = fmt.Sprintf("%s · %s #%d", runCfg.LibraryTaskDisplayName, ownerRepo, prNumber)
 	runCfg.ResponseMode = stringsx.FirstNonEmpty(options.ResponseMode, "off")
 	runCfg.Review = &config.ReviewConfig{
 		PRNumber:                 prNumber,

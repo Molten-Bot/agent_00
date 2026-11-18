@@ -1676,6 +1676,11 @@ func TestPromptFromRunConfigJSON(t *testing.T) {
 			want: "100% Unit Test Coverage\n\nRaise coverage.",
 		},
 		{
+			name: "explicit library task display name overrides catalog title",
+			raw:  []byte(`{"libraryTaskName":"unit-test-coverage","libraryTaskDisplayName":"100% Unit Test Coverage · acme/repo #42"}`),
+			want: "100% Unit Test Coverage · acme/repo #42\n\nRaise coverage.",
+		},
+		{
 			name: "library task falls back to prompt when metadata missing",
 			raw:  []byte(`{"libraryTaskName":"missing-task","prompt":"Full execution prompt."}`),
 			want: "Full execution prompt.",

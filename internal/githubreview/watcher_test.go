@@ -87,6 +87,9 @@ func TestPollOnceQueuesReviewOnlyForCurrentRequestedReviewer(t *testing.T) {
 	if got, want := enqueued.LibraryTaskName, codeReviewTaskName; got != want {
 		t.Fatalf("LibraryTaskName = %q, want %q", got, want)
 	}
+	if got, want := enqueued.LibraryTaskDisplayName, "Pull Request Code Review · acme/repo #42"; got != want {
+		t.Fatalf("LibraryTaskDisplayName = %q, want %q", got, want)
+	}
 	if enqueued.Review == nil {
 		t.Fatal("Review = nil, want populated review config")
 	}

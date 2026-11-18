@@ -2711,11 +2711,15 @@ func promptFromRunConfigJSON(runConfigJSON []byte) string {
 	}
 	taskName := stringAt("librarytaskname", "libraryTaskName")
 	if taskName != "" {
+		displayName := stringAt("librarytaskdisplayname", "libraryTaskDisplayName")
 		catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 		if err == nil {
 			for _, task := range catalog.Summaries() {
 				if strings.TrimSpace(task.Name) != taskName {
 					continue
+				}
+				if displayName != "" {
+					task.DisplayName = displayName
 				}
 				return libraryTaskDisplayText(task)
 			}
