@@ -169,6 +169,7 @@ type repoWorkspace struct {
 	PublishStrategy             string
 	PRCommentScreenshotBaseline map[string]string
 	PRCommentScreenshotFiles    []string
+	ReviewStoppedOnMerge        bool
 }
 
 type codexRunOptions = agentruntime.RunOptions
@@ -628,6 +629,9 @@ func (h Harness) processChangedRepo(
 		ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt,
 		agentsPath, codexTargetLabel, agentStage, multiRepo,
 	)
+	if repo.ReviewStoppedOnMerge {
+		return ExitSuccess, "", nil
+	}
 	findingsRemain := errors.Is(err, errFinalReviewFindingsRemain)
 	if findingsRemain {
 		if draftErr := h.ensurePullRequestDraft(ctx, *repo); draftErr != nil {
@@ -3615,6 +3619,11 @@ func (h Harness) runFinalReviewCycle(
 		if err != nil {
 			return ExitPR, "review", err
 		}
+		if strings.EqualFold(strings.TrimSpace(reviewContext.Metadata.State), "merged") {
+			repo.ReviewStoppedOnMerge = true
+			h.logFinalReviewStoppedForMergedPR(*repo, pass, passLabelTotal)
+			return ExitSuccess, "", nil
+		}
 		reviewPrompt := finalReviewPrompt(cfg.Prompt, reviewContext.Prompt, pass, passLabelTotal)
 		reviewPrompt, err = withReviewSkillPrompt(reviewPrompt)
 		if err != nil {
@@ -3643,6 +3652,10 @@ func (h Harness) runFinalReviewCycle(
 		)
 		if err != nil {
 			return ExitCodex, agentStage, err
+		}
+		if h.finalReviewPullRequestMerged(ctx, *repo, pass, passLabelTotal) {
+			repo.ReviewStoppedOnMerge = true
+			return ExitSuccess, "", nil
 		}
 		if err := h.validateEnforcedNonDefaultBranch(ctx, *repo); err != nil {
 			return ExitGit, "git", err
@@ -3752,6 +3765,10 @@ func (h Harness) runFinalReviewCycle(
 		); err != nil {
 			return ExitCodex, agentStage, err
 		}
+		if h.finalReviewPullRequestMerged(ctx, *repo, pass, h.FinalReviewPasses) {
+			repo.ReviewStoppedOnMerge = true
+			return ExitSuccess, "", nil
+		}
 		if err := h.validateEnforcedNonDefaultBranch(ctx, *repo); err != nil {
 			return ExitGit, "git", err
 		}
@@ -3812,6 +3829,38 @@ func (h Harness) runFinalReviewCycle(
 			repo.PRURL,
 		)
 	}
+}
+
+func (h Harness) finalReviewPullRequestMerged(ctx context.Context, repo repoWorkspace, pass, total int) bool {
+	state, err := h.loadPullRequestState(ctx, repo.Dir, repo.PRURL)
+	if err != nil {
+		h.logf(
+			"stage=review status=warn action=check_pr_state reason=lookup_failed pass=%d total=%d repo=%s repo_dir=%s pr_url=%s err=%q",
+			pass,
+			total,
+			repo.URL,
+			repo.RelDir,
+			repo.PRURL,
+			err,
+		)
+		return false
+	}
+	if strings.TrimSpace(state.MergedAt) == "" && !strings.EqualFold(strings.TrimSpace(state.State), "merged") {
+		return false
+	}
+	h.logFinalReviewStoppedForMergedPR(repo, pass, total)
+	return true
+}
+
+func (h Harness) logFinalReviewStoppedForMergedPR(repo repoWorkspace, pass, total int) {
+	h.logf(
+		"stage=review status=warn action=stop reason=pr_merged pass=%d total=%d repo=%s repo_dir=%s pr_url=%s",
+		pass,
+		total,
+		repo.URL,
+		repo.RelDir,
+		repo.PRURL,
+	)
 }
 
 func finalReviewMode(passes int) string {

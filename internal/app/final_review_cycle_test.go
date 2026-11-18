@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,15 +18,16 @@ import (
 )
 
 type cleanReviewCycleRunner struct {
-	t            *testing.T
-	mu           sync.Mutex
-	reviews      int
-	comments     int
-	checks       int
-	released     int
-	prompts      []string
-	argv         [][]string
-	emptyNetDiff bool
+	t                *testing.T
+	mu               sync.Mutex
+	reviews          int
+	comments         int
+	checks           int
+	released         int
+	prompts          []string
+	argv             [][]string
+	emptyNetDiff     bool
+	mergeAfterReview bool
 }
 
 func TestFinalReviewModeUsesConfiguredReviewCounts(t *testing.T) {
@@ -82,6 +84,9 @@ func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (exec
 		}
 	case "gh":
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "view" {
+			if r.mergeAfterReview && slices.Contains(cmd.Args, "url,state,mergedAt,headRefName") {
+				return execx.Result{Stdout: `{"url":"https://github.com/acme/repo/pull/7","state":"MERGED","mergedAt":"2026-11-18T12:00:00Z","headRefName":"feature"}`}, nil
+			}
 			return execx.Result{Stdout: `{"number":7,"title":"Change","url":"https://github.com/acme/repo/pull/7","state":"OPEN","baseRefName":"main","headRefName":"feature","headRefOid":"head-sha","author":{"login":"dev"}}`}, nil
 		}
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "review" {
@@ -146,6 +151,56 @@ func TestRunFinalReviewCycleStopsAfterCleanPass(t *testing.T) {
 		if !strings.Contains(prompt, "The bundled review skill is mandatory") || !strings.Contains(prompt, fmt.Sprintf("Post-task review pass %d/3", i+1)) {
 			t.Fatalf("review prompt %d did not include skill and pass context", i+1)
 		}
+	}
+}
+
+func TestRunFinalReviewCycleStopsWhenPullRequestMergesDuringReview(t *testing.T) {
+	runner := &cleanReviewCycleRunner{t: t, mergeAfterReview: true}
+	var logs []string
+	h := New(runner)
+	h.FinalReviewPasses = 3
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:        "https://github.com/acme/repo.git",
+		Dir:        repoDir,
+		RelDir:     "repo",
+		Branch:     "feature",
+		BaseBranch: "main",
+		PRURL:      "https://github.com/acme/repo/pull/7",
+		Changed:    true,
+	}
+
+	exitCode, stage, err := h.runFinalReviewCycle(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior."},
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err != nil || exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want successful early stop", exitCode, stage, err)
+	}
+	if runner.reviews != 1 || runner.comments != 0 {
+		t.Fatalf("review/comment counts = %d/%d, want 1/0 after merge", runner.reviews, runner.comments)
+	}
+	if !repo.ReviewStoppedOnMerge {
+		t.Fatal("ReviewStoppedOnMerge = false, want true")
+	}
+	if joined := strings.Join(logs, "\n"); !strings.Contains(joined, "status=warn action=stop reason=pr_merged") {
+		t.Fatalf("logs missing merged-during-review warning: %s", joined)
 	}
 }
 
@@ -628,6 +683,50 @@ func TestProcessChangedRepoRejectsEmptyNetDiffAfterReviewCycle(t *testing.T) {
 	}
 	if runner.released != 0 {
 		t.Fatalf("released count = %d, want 0 for an empty net diff", runner.released)
+	}
+}
+
+func TestProcessChangedRepoSkipsPostReviewWorkWhenPullRequestMerged(t *testing.T) {
+	runner := &cleanReviewCycleRunner{t: t, emptyNetDiff: true, mergeAfterReview: true}
+	h := New(runner)
+	h.FinalReviewPasses = 1
+
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	repo := &repoWorkspace{
+		URL:                "https://github.com/acme/repo.git",
+		Dir:                repoDir,
+		RelDir:             "repo",
+		Branch:             "feature",
+		BaseBranch:         "main",
+		PRURL:              "https://github.com/acme/repo/pull/7",
+		Changed:            true,
+		CreateWorkBranch:   true,
+		WriteAccessChecked: true,
+		WriteAccessAllowed: true,
+		PushRemote:         publishRemoteOrigin,
+	}
+
+	exitCode, stage, err := h.processChangedRepo(
+		context.Background(),
+		config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "do the work"},
+		repo,
+		agentruntime.Default(),
+		repoDir,
+		codexRunOptions{},
+		"",
+		"",
+		"repo",
+		"codex",
+		false,
+	)
+	if err != nil || exitCode != ExitSuccess || stage != "" {
+		t.Fatalf("processChangedRepo() = (%d, %q, %v), want successful merged-PR stop", exitCode, stage, err)
+	}
+	if runner.released != 0 {
+		t.Fatalf("released count = %d, want 0 after PR merged", runner.released)
 	}
 }
 

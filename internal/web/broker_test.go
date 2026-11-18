@@ -1468,6 +1468,26 @@ func TestBrokerPreservesReviewCycleWarningOnCompletedTask(t *testing.T) {
 	}
 }
 
+func TestBrokerPreservesMergedDuringReviewWarningOnCompletedTask(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	b.IngestLog("task status=start request_id=req-review-merged")
+	b.IngestLog("task request_id=req-review-merged stage=review status=warn action=stop reason=pr_merged pass=2 total=5")
+	b.IngestLog("task status=completed request_id=req-review-merged pr_url=https://example.com/pull/1")
+
+	task, ok := b.Task("req-review-merged")
+	if !ok {
+		t.Fatal("Task() found = false, want true")
+	}
+	if task.Status != "completed" {
+		t.Fatalf("task.Status = %q, want completed", task.Status)
+	}
+	if want := "Pull request merged during post-task review. Review cycle stopped early."; task.Warning != want {
+		t.Fatalf("task.Warning = %q, want %q", task.Warning, want)
+	}
+}
+
 func TestBrokerAppliesPromptWhenConfigRecordedAfterTaskStart(t *testing.T) {
 	t.Parallel()
 
