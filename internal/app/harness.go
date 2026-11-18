@@ -2654,11 +2654,10 @@ func (h Harness) cloneRepositories(ctx context.Context, repos []repoWorkspace, b
 		h.logf("stage=clone status=start action=fetch_base branch=%s repo=%s repo_dir=%s", repo.BaseBranch, repo.URL, repo.RelDir)
 		res, err := h.runCommand(ctx, "clone", fetchBaseBranchCommand(repo.Dir, repo.BaseBranch))
 		if err != nil {
-			// cloneRepository already checked out this branch successfully. If the
-			// remote branch disappears between clone and this refresh, retain the
-			// usable checkout; required-branch workflows verify the remote head
-			// separately before any agent or git writes run.
-			if isMissingRemoteBranchCloneError(err, res) {
+			// Required non-default branch workflows verify the remote head again
+			// before any agent or git writes run. Other existing-branch workflows
+			// must fail here so they cannot recreate a branch deleted after clone.
+			if repo.RequiresNonDefaultBranch && isMissingRemoteBranchCloneError(err, res) {
 				h.logf("stage=clone status=warn action=fetch_base reason=missing_remote_branch branch=%s repo=%s repo_dir=%s", repo.BaseBranch, repo.URL, repo.RelDir)
 				continue
 			}

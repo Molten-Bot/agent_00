@@ -87,17 +87,19 @@ func TestIsMissingRemoteBranchCloneError(t *testing.T) {
 	}
 }
 
-func TestCloneRepositoriesRetainsCheckoutWhenRemoteBranchDisappearsAfterClone(t *testing.T) {
+func TestCloneRepositoriesRetainsRequiredBranchCheckoutForValidationWhenRemoteBranchDisappearsAfterClone(t *testing.T) {
 	t.Parallel()
 
 	repoURL := "https://github.com/acme/repo.git"
 	branch := "feature/topic"
 	repoDir := filepath.Join(t.TempDir(), "repo")
 	repos := []repoWorkspace{{
-		URL:               repoURL,
-		Dir:               repoDir,
-		RelDir:            "repo",
-		RequireExistingPR: true,
+		URL:                      repoURL,
+		Dir:                      repoDir,
+		RelDir:                   "repo",
+		RequiresNonDefaultBranch: true,
+		RequiredBranch:           branch,
+		RequiredBranchTask:       "branch-task",
 	}}
 	missingRef := execx.Result{Stderr: "fatal: couldn't find remote ref feature/topic"}
 	fake := &fakeRunner{t: t, exps: []expectedRun{
@@ -107,6 +109,32 @@ func TestCloneRepositoriesRetainsCheckoutWhenRemoteBranchDisappearsAfterClone(t 
 
 	if err := New(fake).cloneRepositories(context.Background(), repos, branch); err != nil {
 		t.Fatalf("cloneRepositories() error = %v, want retained checkout", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestCloneRepositoriesRejectsDeletedResolvePRCommentsBranch(t *testing.T) {
+	t.Parallel()
+
+	repoURL := "https://github.com/acme/repo.git"
+	branch := "feature/topic"
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	repos := []repoWorkspace{{
+		URL:                repoURL,
+		Dir:                repoDir,
+		RelDir:             "repo",
+		RequiredBranchTask: resolvePRCommentsLibraryTaskName,
+	}}
+	missingRef := execx.Result{Stderr: "fatal: couldn't find remote ref feature/topic"}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: cloneRepoCommand(repoURL, branch, repoDir)},
+		{cmd: fetchBaseBranchCommand(repoDir, branch), res: missingRef, err: errors.New("exit status 128")},
+	}}
+
+	if err := New(fake).cloneRepositories(context.Background(), repos, branch); err == nil {
+		t.Fatal("cloneRepositories() error = nil, want deleted branch failure")
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
