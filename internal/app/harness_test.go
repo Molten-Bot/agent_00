@@ -2145,9 +2145,12 @@ func TestRunResolvePRCommentsPushSyncMergeConflictInvokesAgentAndRetries(t *test
 		{cmd: pushCommand(repoDir, cfg.BaseBranch), res: pushRejected, err: errors.New("push rejected")},
 		{cmd: fetchBranchCommand(repoDir, cfg.BaseBranch)},
 		{cmd: mergeFetchedBranchCommand(repoDir), res: mergeConflict, err: errors.New("exit status 1")},
-		{cmd: codexCommand(targetDir, remoteSyncPrompt)},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: " M test/worker.test.js\n"}},
+		{cmd: codexCommand(targetDir, remoteSyncPrompt), res: execx.Result{Stdout: conflictResolutionConfirmation + "\n"}},
+		{cmd: conflictResolutionCheckCommand(repoDir)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "UU test/worker.test.js\n"}},
 		{cmd: addCommand(repoDir)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "M  test/worker.test.js\n"}},
+		{cmd: stagedConflictResolutionCheckCommand(repoDir)},
 		{cmd: commitCommand(repoDir, syncCommitMessage)},
 		{cmd: pushCommand(repoDir, cfg.BaseBranch)},
 		{cmd: remoteBranchExistsOnOriginCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "abc123\trefs/heads/" + cfg.BaseBranch + "\n"}},
@@ -9064,9 +9067,17 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 			res: execx.Result{Stdout: "CONFLICT (content): Merge conflict in file.go\nAutomatic merge failed; fix conflicts and then commit the result."},
 			err: errors.New("merge failed"),
 		},
-		{cmd: codexCommand(repoDir, "resolve conflict")},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\n M file.go\n"}},
+		{
+			cmd: codexCommand(repoDir, "resolve conflict"),
+			res: execx.Result{Stdout: "Failure: Conflict contents resolved, but Git index remains unmerged.\n" +
+				"Error details: `git add` fails: `fatal: Unable to create '.git/index.lock': Read-only file system`.\n" +
+				conflictResolutionConfirmation + "\n"},
+		},
+		{cmd: conflictResolutionCheckCommand(repoDir)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
 		{cmd: addCommand(repoDir)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nM  file.go\n"}},
+		{cmd: stagedConflictResolutionCheckCommand(repoDir)},
 		{cmd: commitCommand(repoDir, baseSyncCommitMessage("main"))},
 		{cmd: fetchBranchCommand(repoDir, "main")},
 		{cmd: mergeFetchedBranchCommand(repoDir)},
@@ -9090,6 +9101,7 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 	joinedLogs := strings.Join(logs, "\n")
 	for _, want := range []string{
 		"mode=base_sync_conflict",
+		"action=defer_conflict_staging reason=git_index_read_only",
 		"agent_run_id=agent-base_sync_conflict-repo-1",
 		"repo=repo",
 		"repo_dir=repo",
@@ -9098,6 +9110,47 @@ func TestSyncGeneratedWorkBranchResolvesMergeConflictWithAgent(t *testing.T) {
 		if !strings.Contains(joinedLogs, want) {
 			t.Fatalf("logs missing base-sync workflow metadata %q:\n%s", want, joinedLogs)
 		}
+	}
+}
+
+func TestSyncGeneratedWorkBranchDoesNotStageReadOnlyIndexFailureWithoutResolutionConfirmation(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	repo := &repoWorkspace{
+		URL:              "git@github.com:acme/repo.git",
+		Dir:              repoDir,
+		RelDir:           "repo",
+		Branch:           "agent00-build-api",
+		BaseBranch:       "main",
+		CreateWorkBranch: true,
+	}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: fetchBranchCommand(repoDir, "main")},
+		{
+			cmd: mergeFetchedBranchCommand(repoDir),
+			res: execx.Result{Stdout: "CONFLICT (content): Merge conflict in file.go\nAutomatic merge failed; fix conflicts and then commit the result."},
+			err: errors.New("merge failed"),
+		},
+		{
+			cmd: codexCommand(repoDir, "resolve conflict"),
+			res: execx.Result{Stdout: "Failure: Conflict contents resolved, but Git index remains unmerged.\n" +
+				"Error details: `git add` fails: `fatal: Unable to create '.git/index.lock': Read-only file system`."},
+		},
+		{cmd: conflictResolutionCheckCommand(repoDir)},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## agent00-build-api\nUU file.go\n"}},
+	}}
+
+	h := New(fake)
+	exitCode, stage, err := h.syncGeneratedWorkBranchWithBase(context.Background(), repo, agentruntime.Default(), repoDir, codexRunOptions{}, "Build API", "", "", ".", "codex")
+	if err == nil || !strings.Contains(err.Error(), "without explicit agent confirmation") {
+		t.Fatalf("syncGeneratedWorkBranchWithBase() err = %v, want missing-confirmation error", err)
+	}
+	if exitCode != ExitGit || stage != "git" {
+		t.Fatalf("syncGeneratedWorkBranchWithBase() = (%d, %q), want (%d, %q)", exitCode, stage, ExitGit, "git")
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("remaining expected commands = %d", len(fake.exps))
 	}
 }
 

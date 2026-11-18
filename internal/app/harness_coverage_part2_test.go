@@ -159,10 +159,43 @@ func TestBaseSyncConflictPromptEmptyMergeSummary(t *testing.T) {
 	if !strings.Contains(got, "git merge reported conflicts but did not provide output.") {
 		t.Fatalf("baseSyncConflictPrompt(empty merge result) missing fallback summary: %q", got)
 	}
+	for _, want := range []string{
+		"Git metadata is protected as read-only inside the agent sandbox.",
+		"Do not run `git add`",
+		"including marker-free binary, delete/modify, and rename conflicts",
+		"`Conflict resolution complete.`",
+		"The harness will stage the resolved worktree",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("baseSyncConflictPrompt(empty merge result) missing harness-managed staging instruction %q: %q", want, got)
+		}
+	}
 
 	withOutput := baseSyncConflictPrompt("base task", "/repo", "git@github.com:acme/repo.git", "work", "main", execx.Result{Stderr: "CONFLICT (content): x"})
 	if !strings.Contains(withOutput, "CONFLICT (content): x") {
 		t.Fatalf("baseSyncConflictPrompt(with merge output) missing merge summary: %q", withOutput)
+	}
+}
+
+func TestConflictResolutionConfirmedRequiresTerminalExactMarker(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		res  execx.Result
+		want bool
+	}{
+		{name: "terminal marker", res: execx.Result{Stdout: "Resolved all paths.\nConflict resolution complete.\n"}, want: true},
+		{name: "nonterminal marker", res: execx.Result{Stdout: "Conflict resolution complete.\nMore work remains.\n"}},
+		{name: "stderr marker", res: execx.Result{Stderr: "Conflict resolution complete.\n"}},
+		{name: "near match", res: execx.Result{Stdout: "Conflict resolution complete\n"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := conflictResolutionConfirmed(tc.res); got != tc.want {
+				t.Fatalf("conflictResolutionConfirmed() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -176,10 +209,41 @@ func TestRemoteBranchSyncConflictPromptDefaultsRemote(t *testing.T) {
 	if !strings.Contains(got, "git merge reported conflicts but did not provide output.") {
 		t.Fatalf("remoteBranchSyncConflictPrompt(empty merge result) missing fallback summary: %q", got)
 	}
+	if !strings.Contains(got, "The harness will stage the resolved worktree") {
+		t.Fatalf("remoteBranchSyncConflictPrompt(blank remote) missing harness-managed staging instruction: %q", got)
+	}
 
 	withRemote := remoteBranchSyncConflictPrompt("base task", "/repo", "git@github.com:acme/repo.git", "work", "upstream", execx.Result{Stderr: "CONFLICT"})
 	if !strings.Contains(withRemote, "Remote being merged: upstream/work") {
 		t.Fatalf("remoteBranchSyncConflictPrompt(explicit remote) = %q, want upstream/work", withRemote)
+	}
+}
+
+func TestIsReadOnlyGitIndexFailure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil},
+		{
+			name: "sandbox protected index",
+			err:  errors.New("codex reported failure: Failure: Conflict contents resolved, but Git index remains unmerged. Error details: `git add` failed: fatal: Unable to create '.git/index.lock': Read-only file system"),
+			want: true,
+		},
+		{name: "ordinary index contention", err: errors.New("codex reported failure: git add failed: .git/index.lock already exists")},
+		{name: "unrelated read only failure", err: errors.New("codex reported failure: read-only file system")},
+		{name: "raw command error", err: errors.New("git add: unable to create .git/index.lock: read-only file system")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isReadOnlyGitIndexFailure(tt.err); got != tt.want {
+				t.Fatalf("isReadOnlyGitIndexFailure(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }
 

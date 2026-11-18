@@ -1518,8 +1518,19 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 		invocation.logFieldsSuffix(),
 	)
 	agentStart := time.Now()
-	if _, err := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation); err != nil {
-		return ExitCodex, agentStage, err
+	agentRes, agentErr := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation)
+	resolutionConfirmed := conflictResolutionConfirmed(agentRes)
+	if agentErr != nil {
+		if !isReadOnlyGitIndexFailure(agentErr) {
+			return ExitCodex, agentStage, agentErr
+		}
+		h.logf(
+			"stage=%s status=warn action=defer_conflict_staging reason=git_index_read_only mode=base_sync_conflict repo=%s repo_dir=%s%s",
+			agentStage,
+			repo.URL,
+			repo.RelDir,
+			invocation.logFieldsSuffix(),
+		)
 	}
 	h.logf(
 		"stage=%s status=ok elapsed_s=%d mode=base_sync_conflict attempt=%d repo=%s repo_dir=%s%s",
@@ -1534,22 +1545,24 @@ func (h Harness) resolveBaseSyncConflictWithAgent(
 		return ExitGit, "git", err
 	}
 
-	statusRes, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
+	statusRes, mergeNeedsCommit, harnessStaged, err := h.stageHarnessManagedConflictResolution(ctx, repo, "base", resolutionConfirmed)
 	if err != nil {
 		return ExitGit, "git", err
 	}
-	if hasUnmergedPaths(statusRes.Stdout) {
-		return ExitGit, "git", fmt.Errorf("base branch sync for repo %s still has unmerged paths after remediation", repo.URL)
-	}
-	if !hasTrackedWorktreeChanges(statusRes.Stdout) && !hasAheadCommitsInStatus(statusRes.Stdout) {
+	if !mergeNeedsCommit && !hasTrackedWorktreeChanges(statusRes.Stdout) && !hasAheadCommitsInStatus(statusRes.Stdout) {
 		return ExitSuccess, "", nil
 	}
 
 	h.logf("stage=git status=start action=sync_base_commit repo=%s repo_dir=%s baseBranch=%s", repo.URL, repo.RelDir, baseBranch)
-	if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
-		return ExitGit, "git", err
+	if !harnessStaged {
+		if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
+			return ExitGit, "git", err
+		}
+		if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
+			return ExitGit, "git", err
+		}
 	}
-	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
+	if err := h.validateStagedConflictResolution(ctx, repo, "base"); err != nil {
 		return ExitGit, "git", err
 	}
 	commitRes, commitErr := h.runCommand(ctx, "git", commitCommand(repo.Dir, baseSyncCommitMessage(baseBranch)))
@@ -1608,8 +1621,19 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 		invocation.logFieldsSuffix(),
 	)
 	agentStart := time.Now()
-	if _, err := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation); err != nil {
-		return ExitCodex, agentStage, err
+	agentRes, agentErr := h.runCodexCapture(ctx, runtime, codexDir, prompt, codexOpts, agentsPath, responseMode, invocation)
+	resolutionConfirmed := conflictResolutionConfirmed(agentRes)
+	if agentErr != nil {
+		if !isReadOnlyGitIndexFailure(agentErr) {
+			return ExitCodex, agentStage, agentErr
+		}
+		h.logf(
+			"stage=%s status=warn action=defer_conflict_staging reason=git_index_read_only mode=remote_branch_sync_conflict repo=%s repo_dir=%s%s",
+			agentStage,
+			repo.URL,
+			repo.RelDir,
+			invocation.logFieldsSuffix(),
+		)
 	}
 	h.logf(
 		"stage=%s status=ok elapsed_s=%d mode=remote_branch_sync_conflict attempt=%d repo=%s repo_dir=%s%s",
@@ -1624,22 +1648,24 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 		return ExitGit, "git", err
 	}
 
-	statusRes, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
+	statusRes, mergeNeedsCommit, harnessStaged, err := h.stageHarnessManagedConflictResolution(ctx, repo, "remote", resolutionConfirmed)
 	if err != nil {
 		return ExitGit, "git", err
 	}
-	if hasUnmergedPaths(statusRes.Stdout) {
-		return ExitGit, "git", fmt.Errorf("remote branch sync for repo %s still has unmerged paths after remediation", repo.URL)
-	}
-	if !hasTrackedWorktreeChanges(statusRes.Stdout) && !hasAheadCommitsInStatus(statusRes.Stdout) {
+	if !mergeNeedsCommit && !hasTrackedWorktreeChanges(statusRes.Stdout) && !hasAheadCommitsInStatus(statusRes.Stdout) {
 		return ExitSuccess, "", nil
 	}
 
 	h.logf("stage=git status=start action=sync_remote_branch_commit repo=%s repo_dir=%s branch=%s remote=%s", repo.URL, repo.RelDir, branch, remote)
-	if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
-		return ExitGit, "git", err
+	if !harnessStaged {
+		if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
+			return ExitGit, "git", err
+		}
+		if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
+			return ExitGit, "git", err
+		}
 	}
-	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
+	if err := h.validateStagedConflictResolution(ctx, repo, "remote"); err != nil {
 		return ExitGit, "git", err
 	}
 	commitRes, commitErr := h.runCommand(ctx, "git", commitCommand(repo.Dir, remoteBranchSyncCommitMessage(branch)))
@@ -1658,6 +1684,86 @@ func (h Harness) resolveRemoteBranchSyncConflictWithAgent(
 	}
 	h.logf("stage=git status=ok action=sync_remote_branch_commit repo=%s repo_dir=%s branch=%s remote=%s", repo.URL, repo.RelDir, branch, remote)
 	return ExitSuccess, "", nil
+}
+
+func (h Harness) stageHarnessManagedConflictResolution(
+	ctx context.Context,
+	repo *repoWorkspace,
+	syncKind string,
+	resolutionConfirmed bool,
+) (execx.Result, bool, bool, error) {
+	checkRes, checkErr := h.runCommand(ctx, "git", conflictResolutionCheckCommand(repo.Dir))
+	if checkErr != nil {
+		return execx.Result{}, false, false, commandErrorWithDetails(
+			fmt.Sprintf("validate %s branch conflict resolution for repo %s", syncKind, repo.URL),
+			checkErr,
+			checkRes,
+			maxGitErrorDetailChars,
+		)
+	}
+	if marker, ok := addedConflictMarker(checkRes.Stdout); ok {
+		return execx.Result{}, false, false, fmt.Errorf(
+			"validate %s branch conflict resolution for repo %s: leftover conflict marker %q",
+			syncKind,
+			repo.URL,
+			marker,
+		)
+	}
+
+	statusRes, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
+	if err != nil {
+		return execx.Result{}, false, false, err
+	}
+	mergeNeedsCommit := hasUnmergedPaths(statusRes.Stdout)
+	if !mergeNeedsCommit {
+		return statusRes, false, false, nil
+	}
+	if !resolutionConfirmed {
+		return execx.Result{}, false, false, fmt.Errorf(
+			"%s branch sync for repo %s still has unmerged paths without explicit agent confirmation that all conflict contents were resolved",
+			syncKind,
+			repo.URL,
+		)
+	}
+	if err := h.ensureWorkspaceSpaceForCommit(repo); err != nil {
+		return execx.Result{}, false, false, err
+	}
+	if _, err := h.runCommand(ctx, "git", addCommand(repo.Dir)); err != nil {
+		return execx.Result{}, false, false, err
+	}
+	statusRes, err = h.runCommand(ctx, "git", statusCommand(repo.Dir))
+	if err != nil {
+		return execx.Result{}, false, false, err
+	}
+	if hasUnmergedPaths(statusRes.Stdout) {
+		return execx.Result{}, false, false, fmt.Errorf(
+			"%s branch sync for repo %s still has unmerged paths after remediation and harness staging",
+			syncKind,
+			repo.URL,
+		)
+	}
+	return statusRes, true, true, nil
+}
+
+func (h Harness) validateStagedConflictResolution(ctx context.Context, repo *repoWorkspace, syncKind string) error {
+	checkRes, checkErr := h.runCommand(ctx, "git", stagedConflictResolutionCheckCommand(repo.Dir))
+	if checkErr != nil {
+		return commandErrorWithDetails(
+			fmt.Sprintf("validate staged %s branch conflict resolution for repo %s", syncKind, repo.URL),
+			checkErr,
+			checkRes,
+			maxGitErrorDetailChars,
+		)
+	}
+	if marker, ok := addedConflictMarker(checkRes.Stdout); ok {
+		return fmt.Errorf(
+			"validate staged %s branch conflict resolution for repo %s: leftover conflict marker %q",
+			syncKind,
+			repo.URL,
+			marker,
+		)
+	}
+	return nil
 }
 
 func isMergeConflictResult(res execx.Result, err error) bool {
@@ -7584,6 +7690,75 @@ func statusCommand(repoDir string) execx.Command {
 	return gitCommand(repoDir, "status", "--porcelain", "--branch")
 }
 
+func conflictResolutionCheckCommand(repoDir string) execx.Command {
+	return gitCommand(repoDir, "diff", "--no-color", "--no-ext-diff")
+}
+
+func stagedConflictResolutionCheckCommand(repoDir string) execx.Command {
+	return gitCommand(repoDir, "diff", "--cached", "--no-color", "--no-ext-diff")
+}
+
+func addedConflictMarker(diff string) (string, bool) {
+	prefixColumns := 0
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "diff --") {
+			prefixColumns = 0
+			continue
+		}
+		if strings.HasPrefix(line, "@@") {
+			atSigns := len(line) - len(strings.TrimLeft(line, "@"))
+			prefixColumns = atSigns - 1
+			continue
+		}
+		if prefixColumns < 1 || len(line) < prefixColumns {
+			continue
+		}
+		prefix := line[:prefixColumns]
+		if !strings.Contains(prefix, "+") {
+			continue
+		}
+		content := line[prefixColumns:]
+		if width := conflictMarkerWidth(content); width > 0 {
+			return content[:width], true
+		}
+	}
+	return "", false
+}
+
+const minimumConflictMarkerWidth = 7
+
+func conflictMarkerWidth(line string) int {
+	if len(line) == 0 || (line[0] != '<' && line[0] != '|' && line[0] != '>') {
+		return 0
+	}
+	marker := line[0]
+	width := 0
+	for width < len(line) && line[width] == marker {
+		width++
+	}
+	if width < minimumConflictMarkerWidth {
+		return 0
+	}
+	if width >= len(line) || line[width] != ' ' {
+		return 0
+	}
+	return width
+}
+
+const conflictResolutionConfirmation = "Conflict resolution complete."
+
+func conflictResolutionConfirmed(res execx.Result) bool {
+	lines := splitOutputLines(res.Stdout)
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		return line == conflictResolutionConfirmation
+	}
+	return false
+}
+
 func reviewFixDiffCommand(repoDir, beforeHead string) execx.Command {
 	return gitCommand(repoDir, "diff", "--binary", strings.TrimSpace(beforeHead))
 }
@@ -7636,6 +7811,19 @@ func hasAheadCommitsInStatus(stdout string) bool {
 
 func addCommand(repoDir string) execx.Command {
 	return gitCommand(repoDir, "add", "-A")
+}
+
+func isReadOnlyGitIndexFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	detail := strings.ToLower(err.Error())
+	return strings.Contains(detail, "reported failure:") &&
+		strings.Contains(detail, "conflict contents resolved") &&
+		strings.Contains(detail, "git index remains unmerged") &&
+		strings.Contains(detail, "git add") &&
+		strings.Contains(detail, "index.lock") &&
+		strings.Contains(detail, "read-only file system")
 }
 
 // ensureWorkspaceSpaceForCommit re-checks free space on repo.Dir's filesystem right
@@ -8228,13 +8416,14 @@ func resolvePRCommentsLibraryPrompt() string {
 }
 
 func mergeMainLibraryPrompt() string {
+	const harnessStaging = "Harness-managed conflict staging (these rules override earlier Git-write instructions):\n- Git metadata is protected as read-only inside the agent sandbox. Do not run `git add`, `git commit`, `git merge`, `git fetch`, or other commands that write `.git`.\n- Resolve every conflict in the worktree, including marker-free binary, delete/modify, and rename conflicts. Inspect `git diff --no-color --no-ext-diff` and verify no added conflict-marker lines remain.\n- Only after inspecting and resolving every conflicted path, end the final response with the exact line `Conflict resolution complete.` This confirmation authorizes the harness to stage marker-free resolutions.\n- The harness will stage the resolved worktree, verify the index has no unmerged paths, and commit after the agent returns. A read-only `.git/index.lock` is not a conflict-resolution failure."
 	catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 	if err == nil {
 		if task, ok := catalog.Task(mergeMainLibraryTaskName); ok && strings.TrimSpace(task.Prompt) != "" {
-			return strings.TrimSpace(task.Prompt)
+			return strings.TrimSpace(task.Prompt) + "\n\n" + harnessStaging
 		}
 	}
-	return "You are a senior software engineer resolving merge conflicts with the latest base branch. Preserve both sides' intended behavior, keep the diff scoped to conflict resolution, validate locally where possible, and report `Failure:` and `Error details:` if the conflict cannot be resolved safely. After editing a conflicted file to remove its conflict markers, immediately run `git add <file>` on it — removing the markers alone does not clear git's merge state, and the path stays unmerged in the index until re-added. Before finishing, run `git status --porcelain` and confirm no path is still marked unmerged."
+	return "You are a senior software engineer resolving merge conflicts with the latest base branch. Preserve both sides' intended behavior, keep the diff scoped to conflict resolution, validate locally where possible, and report `Failure:` and `Error details:` if the conflict cannot be resolved safely.\n\n" + harnessStaging
 }
 
 func summarizeCheckOutput(res execx.Result) string {
