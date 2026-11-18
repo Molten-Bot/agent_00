@@ -116,7 +116,7 @@ type Server struct {
 	ResolveGitHubRepos      func(context.Context) ([]GitHubRepo, error)
 	GitHubIssueRunner       execx.Runner
 	gitHubRepos             *gitHubRepoCache
-	issueAutoStartWake      chan struct{}
+	issueAutoStartWake      chan time.Time
 	Ready                   chan<- error
 }
 
@@ -219,7 +219,7 @@ func NewServer(addr string, broker *Broker) Server {
 		Broker:             broker,
 		Logf:               func(string, ...any) {},
 		gitHubRepos:        &gitHubRepoCache{},
-		issueAutoStartWake: make(chan struct{}, 1),
+		issueAutoStartWake: make(chan time.Time, 1),
 		LoadLibraryTasks: func() ([]library.TaskSummary, error) {
 			catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 			if err != nil {
