@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -112,7 +113,7 @@ func TestCloneRepositoriesRejectsDeletedRequiredBranchWithRecognizableError(t *t
 	if err == nil {
 		t.Fatal("cloneRepositories() error = nil, want deleted branch failure")
 	}
-	if got := failurefollowup.NonRemediableFailureReason(err); got != "remote branch does not exist" {
+	if got := failurefollowup.NonRemediableFailureReason(fmt.Errorf("clone: %w", err)); got != "remote branch does not exist" {
 		t.Fatalf("NonRemediableFailureReason(cloneRepositories error) = %q, want missing branch reason; error: %v", got, err)
 	}
 	if len(fake.exps) != 0 {

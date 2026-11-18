@@ -1419,6 +1419,13 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	}
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		Err: errors.New("codex: codex reported failure: Failure: parser regression. Error details: generated Git output containing `fatal: couldn't find remote ref feature/topic` is not recognized."),
+	})
+	if !ok || reason != "" {
+		t.Fatalf("shouldQueueFailureFollowUp(agent-reported missing remote ref) = (%v, %q), want actionable follow-up", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
 		Err: errors.New("clone: run git [clone ...]: exit status 128"),
 	})
 	if !ok || reason != "" {

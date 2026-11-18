@@ -69,6 +69,9 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 	if got := NonRemediableFailureReason(errors.New("clone: run git [fetch origin feature/topic:refs/remotes/origin/feature/topic]: exit status 128 (fatal: couldn't find remote ref feature/topic)")); got != missingRemoteBranchReason {
 		t.Fatalf("NonRemediableFailureReason(missing remote ref) = %q, want %q", got, missingRemoteBranchReason)
 	}
+	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: parser regression. Error details: generated Git output containing `fatal: couldn't find remote ref feature/topic` is not recognized.")); got != "" {
+		t.Fatalf("NonRemediableFailureReason(agent-reported missing remote ref) = %q, want actionable failure", got)
+	}
 	if got := NonRemediableFailureReason(errors.New("codex: codex reported failure: Failure: No June 14 release entry created. Error details: `git-changes-by-day` ran across all repos. `2026-06-14` UTC rows: `0` in every repo. Adding entry would require invented project/note content.")); got != "would require invented" {
 		t.Fatalf("NonRemediableFailureReason(invented content) = %q, want %q", got, "would require invented")
 	}
