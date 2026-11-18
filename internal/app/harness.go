@@ -2758,8 +2758,9 @@ func (h Harness) cloneRepositories(ctx context.Context, repos []repoWorkspace, b
 			continue
 		}
 		h.logf("stage=clone status=start action=fetch_base branch=%s repo=%s repo_dir=%s", repo.BaseBranch, repo.URL, repo.RelDir)
-		if _, err := h.runCommand(ctx, "clone", fetchBaseBranchCommand(repo.Dir, repo.BaseBranch)); err != nil {
-			return err
+		res, err := h.runCommand(ctx, "clone", fetchBaseBranchCommand(repo.Dir, repo.BaseBranch))
+		if err != nil {
+			return cloneErrorWithDetails(err, res)
 		}
 		h.logf("stage=clone status=ok action=fetch_base branch=%s repo=%s repo_dir=%s", repo.BaseBranch, repo.URL, repo.RelDir)
 	}
@@ -5310,6 +5311,8 @@ func isMissingRemoteBranchCloneError(err error, res execx.Result) bool {
 	}
 	text := strings.ToLower(strings.Join([]string{res.Stdout, res.Stderr, err.Error()}, "\n"))
 	return strings.Contains(text, "could not find remote branch") ||
+		strings.Contains(text, "couldn't find remote ref") ||
+		strings.Contains(text, "could not find remote ref") ||
 		(strings.Contains(text, "remote branch") && strings.Contains(text, "not found"))
 }
 

@@ -1,12 +1,16 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 )
 
 func TestCloneErrorWithDetails(t *testing.T) {
@@ -76,6 +80,70 @@ func TestIsMissingRemoteBranchCloneError(t *testing.T) {
 	errOther := errors.New("connection timeout")
 	if isMissingRemoteBranchCloneError(errOther, execx.Result{Stderr: "unable to access repository"}) {
 		t.Fatal("isMissingRemoteBranchCloneError(unrelated error) = true, want false")
+	}
+
+	errMissingRef := errors.New("fetch failed")
+	resMissingRef := execx.Result{Stderr: "fatal: couldn't find remote ref feature/topic"}
+	if !isMissingRemoteBranchCloneError(errMissingRef, resMissingRef) {
+		t.Fatal("isMissingRemoteBranchCloneError(missing remote ref) = false, want true")
+	}
+}
+
+func TestCloneRepositoriesRejectsDeletedRequiredBranchWithRecognizableError(t *testing.T) {
+	t.Parallel()
+
+	repoURL := "https://github.com/acme/repo.git"
+	branch := "feature/topic"
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	repos := []repoWorkspace{{
+		URL:                      repoURL,
+		Dir:                      repoDir,
+		RelDir:                   "repo",
+		RequiresNonDefaultBranch: true,
+		RequiredBranch:           branch,
+		RequiredBranchTask:       "branch-task",
+	}}
+	missingRef := execx.Result{Stderr: "fatal: couldn't find remote ref feature/topic"}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: cloneRepoCommand(repoURL, branch, repoDir)},
+		{cmd: fetchBaseBranchCommand(repoDir, branch), res: missingRef, err: errors.New("exit status 128")},
+	}}
+
+	err := New(fake).cloneRepositories(context.Background(), repos, branch)
+	if err == nil {
+		t.Fatal("cloneRepositories() error = nil, want deleted branch failure")
+	}
+	if got := failurefollowup.NonRemediableFailureReason(fmt.Errorf("clone: %w", err)); got != "remote branch does not exist" {
+		t.Fatalf("NonRemediableFailureReason(cloneRepositories error) = %q, want missing branch reason; error: %v", got, err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestCloneRepositoriesRejectsDeletedResolvePRCommentsBranch(t *testing.T) {
+	t.Parallel()
+
+	repoURL := "https://github.com/acme/repo.git"
+	branch := "feature/topic"
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	repos := []repoWorkspace{{
+		URL:                repoURL,
+		Dir:                repoDir,
+		RelDir:             "repo",
+		RequiredBranchTask: resolvePRCommentsLibraryTaskName,
+	}}
+	missingRef := execx.Result{Stderr: "fatal: couldn't find remote ref feature/topic"}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: cloneRepoCommand(repoURL, branch, repoDir)},
+		{cmd: fetchBaseBranchCommand(repoDir, branch), res: missingRef, err: errors.New("exit status 128")},
+	}}
+
+	if err := New(fake).cloneRepositories(context.Background(), repos, branch); err == nil {
+		t.Fatal("cloneRepositories() error = nil, want deleted branch failure")
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
 	}
 }
 

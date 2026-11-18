@@ -72,6 +72,7 @@ const githubSSHPermissionDeniedReason = "permission to repository denied"
 
 const unreachableCoverageTargetReason = "coverage target cannot be met safely"
 const missingSecurityContractReason = "security verification contract is missing"
+const missingRemoteBranchReason = "remote branch does not exist"
 
 var nonRemediableFailureMarkers = []string{
 	"no space left on device",
@@ -386,12 +387,28 @@ func NonRemediableFailureReason(err error) string {
 	if isMissingSecurityVerificationContractFailure(text) {
 		return missingSecurityContractReason
 	}
+	if isMissingRemoteBranchFailure(text) {
+		return missingRemoteBranchReason
+	}
 	for _, marker := range nonRemediableFailureMarkers {
 		if strings.Contains(text, marker) {
 			return marker
 		}
 	}
 	return NonRemediableRepoAccessReason(err)
+}
+
+func isMissingRemoteBranchFailure(text string) bool {
+	// Only clone-stage errors prove that the branch required to start the run
+	// disappeared. Agent failures may quote the same Git diagnostics while
+	// reporting an actionable bug in repository code.
+	if !strings.HasPrefix(strings.TrimSpace(text), "clone:") {
+		return false
+	}
+	return strings.Contains(text, "couldn't find remote ref") ||
+		strings.Contains(text, "could not find remote ref") ||
+		strings.Contains(text, "could not find remote branch") ||
+		(strings.Contains(text, "remote branch") && strings.Contains(text, "not found"))
 }
 
 // isMissingSecurityVerificationContractFailure recognizes a safe refusal to
