@@ -595,6 +595,30 @@ test('GitHub Issues toggle exposes and hides the dock link and persists on reloa
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
 });
 
+test('GitHub issue labels use comma-separated input without background label loading', async t => {
+  let labelRequests = 0;
+  const initialSettings = {
+    ...defaults,
+    github_issues_enabled: true,
+    github_issue_auto_start_labels: ['bug', 'priority'],
+  };
+  const { page, writes } = await openSettings(t, { initialSettings, configurePage: async page => {
+    await page.route('**/api/github/labels', route => {
+      labelRequests++;
+      return route.fulfill({ json: { ok: true, labels: ['auto-filled'] } });
+    });
+  }});
+  await select(page, 'github-issues');
+  const labels = page.locator('#review-settings-github-issues-auto-start-labels');
+  assert.equal(await labels.evaluate(element => element.tagName), 'INPUT');
+  assert.equal(await labels.inputValue(), 'bug, priority');
+  assert.equal(labelRequests, 0);
+  await labels.fill(' bug, priority, , needs triage ');
+  await close(page);
+  assert.deepEqual(writes.at(-1).github_issue_auto_start_labels, ['bug', 'priority', 'needs triage']);
+  assert.equal(labelRequests, 0);
+});
+
 test('GitHub Issues settings initialize even when Studio opens in another prompt mode', async t => {
   const { page } = await openSettings(t, {
     path: '/',
