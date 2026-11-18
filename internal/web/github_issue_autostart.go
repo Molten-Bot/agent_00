@@ -39,7 +39,18 @@ func (s Server) runGitHubIssueAutoStart(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-s.issueAutoStartWake:
 		}
+	}
+}
+
+func (s Server) wakeGitHubIssueAutoStart() {
+	if s.issueAutoStartWake == nil {
+		return
+	}
+	select {
+	case s.issueAutoStartWake <- struct{}{}:
+	default:
 	}
 }
 
