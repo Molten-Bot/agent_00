@@ -838,7 +838,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, "if (!TASK_PROGRESS_VISIBLE || !task || isCompletedTask(task)) {") {
 		t.Fatalf("expected completed tasks to retain their workflow progress bar")
 	}
-	if !strings.Contains(markup, `if (status === "merged" && taskAutoMergeStepEnabled()) {`) ||
+	if !strings.Contains(markup, `if (status === "merged" && taskAutoMergeStepEnabled(task)) {`) ||
 		!strings.Contains(markup, `if (status === "completed" || status === "no_changes" || status === "merged") {`) {
 		t.Fatalf("expected merged tasks to advance through auto-merge and other successful terminal tasks to finalize")
 	}

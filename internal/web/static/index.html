@@ -1541,7 +1541,10 @@
       return badge;
     }
 
-    function taskAutoMergeStepEnabled() {
+    function taskAutoMergeStepEnabled(task) {
+      if (task) {
+        return Boolean(task.auto_merge);
+      }
       return Boolean(state.reviewSettings?.autoMerge);
     }
 
@@ -11553,7 +11556,7 @@
       const entry = taskProgressEntryStepID(task);
       if (isReadOnlyReviewTask(task)) {
         const reviewStepIDs = [entry, "prepare", "clone", "code_review", "finalize"];
-        if (taskAutoMergeStepEnabled() && status !== "no_changes") {
+        if (taskAutoMergeStepEnabled(task) && status !== "no_changes") {
           reviewStepIDs.push("auto_merge");
         }
         return reviewStepIDs.map((id) => TASK_PROGRESS_STEP_DEFS[id]).filter(Boolean);
@@ -11583,7 +11586,7 @@
         }
       }
       stepIDs.push("finalize");
-      if (taskAutoMergeStepEnabled() && status !== "no_changes") {
+      if (taskAutoMergeStepEnabled(task) && status !== "no_changes") {
         stepIDs.push("auto_merge");
       }
 
@@ -11606,7 +11609,7 @@
 
     function taskProgressCurrentStepID(task, signals) {
       const status = normalizedTaskStatus(task?.status);
-      if (status === "merged" && taskAutoMergeStepEnabled()) {
+      if (status === "merged" && taskAutoMergeStepEnabled(task)) {
         return "auto_merge";
       }
       if (status === "completed" || status === "no_changes" || status === "merged") {
@@ -11615,7 +11618,7 @@
 
       const stage = String(task?.stage || "").trim().toLowerCase();
       if (isReadOnlyReviewTask(task)) {
-        if (taskAutoMergeStepEnabled() && signals.hasAutoMergeSeen) {
+        if (taskAutoMergeStepEnabled(task) && signals.hasAutoMergeSeen) {
           return "auto_merge";
         }
         if (TASK_PROGRESS_PREP_STAGES.has(stage)) {
@@ -11641,7 +11644,7 @@
       if (stage === "workflow") {
         return signals.hasForkFallback ? "fork" : "publish";
       }
-      if (taskAutoMergeStepEnabled() && signals.hasAutoMergeSeen) {
+      if (taskAutoMergeStepEnabled(task) && signals.hasAutoMergeSeen) {
         return "auto_merge";
       }
       if (stage === "review") {
@@ -11711,7 +11714,7 @@
         String(task?.stage || ""),
         String(task?.stage_status || ""),
         String(task?.status || ""),
-        taskAutoMergeStepEnabled() ? "auto_merge" : "",
+        taskAutoMergeStepEnabled(task) ? "auto_merge" : "",
         taskReviewStepEnabled() ? "review_cycle" : "",
         taskStartSource(task),
         isReadOnlyReviewTask(task) ? "code_review" : "implementation",
@@ -12117,7 +12120,6 @@
         selectedTaskId: state.selectedTaskId,
         viewMode,
         statusFilter,
-        autoMergeStep: taskAutoMergeStepEnabled(),
         reviewCycleStep: taskReviewStepEnabled(),
         showOutputAction,
         showImageAction,
@@ -12132,6 +12134,7 @@
             status: String(task?.status || ""),
             warning: String(task?.warning || ""),
             stage: String(task?.stage || ""),
+            autoMergeStep: taskAutoMergeStepEnabled(task),
             source: taskStartSource(task),
             currentState: taskCurrentStateSignature(task),
             prompt: taskDisplayLabel(task),
