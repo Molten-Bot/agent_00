@@ -12328,6 +12328,18 @@
         return promptToggle;
       };
 
+      const renderAssetToggle = (task) => {
+        const count = Array.isArray(task?.assets) ? task.assets.length : 0;
+        if (!count) return null;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "task-assets-toggle task-copy-link";
+        button.textContent = `${count} asset${count === 1 ? "" : "s"}`;
+        button.title = "View GitHub attachments in the task prompt.";
+        bindTaskActionButton(button, () => openTaskPromptModal(task));
+        return button;
+      };
+
       if (!tasks.length) {
         renderEmptyState();
         restoreTaskScrollAnchor(listNode, scrollAnchor);
@@ -12405,6 +12417,8 @@
           if (imageAction) {
             promptActions.appendChild(imageAction);
           }
+          const assetAction = renderAssetToggle(task);
+          if (assetAction) promptActions.appendChild(assetAction);
           const githubAction = renderTaskPullRequestAction(task);
           if (githubAction) {
             promptActions.appendChild(githubAction);
@@ -12456,6 +12470,8 @@
         if (imageAction) {
           topActions.appendChild(imageAction);
         }
+        const assetAction = renderAssetToggle(task);
+        if (assetAction) topActions.appendChild(assetAction);
 
         const showTaskCloneAction = canCopyTaskCloneCommand(task);
         const inlineCompletedActions = isCompletedTask(task) && showTaskCloneAction;

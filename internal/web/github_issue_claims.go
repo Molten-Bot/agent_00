@@ -15,6 +15,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubassets"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
@@ -244,6 +245,9 @@ func (s Server) claimAndSubmitIssue(ctx context.Context, run config.Config, sett
 	issue.Claim = claim
 	run.BaseBranch = base
 	setGitHubIssuePrompt(&run, fresh)
+	if err := githubassets.Validate(run.Assets); err != nil {
+		return "", err
+	}
 	record := localruntime.IssueClaimRecord{ID: claim.ID, InstanceID: s.instanceID(), Phase: "reserving", Run: run}
 	if err := s.IssueClaims.Save(record); err != nil {
 		return "", fmt.Errorf("persist claim before reservation: %w", err)
@@ -611,6 +615,10 @@ func (s Server) handleIssueAutomationRetry(w http.ResponseWriter, r *http.Reques
 	runIssue.Claim = claim
 	run.BaseBranch = base
 	setGitHubIssuePrompt(&run, issue)
+	if err := githubassets.Validate(run.Assets); err != nil {
+		writeJSONError(w, 400, err)
+		return
+	}
 	record := localruntime.IssueClaimRecord{ID: claim.ID, InstanceID: s.instanceID(), Phase: "reserving", Run: run}
 	if err = s.IssueClaims.Save(record); err != nil {
 		writeJSONError(w, 503, err)

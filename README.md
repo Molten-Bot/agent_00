@@ -118,6 +118,23 @@ repository instructions and focuses on coding and validation while the harness
 handles ownership, commits, pushes, and PR creation. A failed issue or comment
 fetch blocks admission rather than queueing an incomplete prompt.
 
+GitHub-hosted attachments in the description and comments become explicit
+`assets` on the run config (URL, name, and source comment), with an asset count
+on the task and a list in its prompt. Manual starts, automatic starts, and issue
+retries all discover attachments from the fresh snapshot and deduplicate URLs.
+Before the agent starts, the harness downloads them to `task-assets/` in the run
+workspace, outside the repository. PNG, JPEG, GIF, and WebP images use the existing
+agent image path support. Documents and other files are supplied as local paths;
+the agent must use available readers and report formats it cannot inspect.
+This does not install document converters or guarantee support for every format.
+
+Downloads use the current `gh` credential for GitHub requests, with credentials
+removed on storage redirects. Only GitHub upload URLs and known storage redirects
+are fetched; other web links remain in the prompt. Limits are 32 attachments,
+25 MiB per file, and 100 MiB total per run. Missing, inaccessible, oversized, or
+HTML responses fail the run at the `assets` stage before agent execution. Retrying
+downloads the references again; downloaded bytes are not embedded in saved configs.
+
 Every automatic or manual issue start reserves `agent00-issue-<number>` as a
 linked branch before queueing. Only the winner can start. The configurable
 exclusion label defaults to `agent_00-in-progress`; it cannot also be a trigger

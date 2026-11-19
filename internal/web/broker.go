@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
+	"github.com/Molten-Bot/agent_00/internal/githubassets"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
@@ -58,35 +59,36 @@ type TaskControls struct {
 
 // Task represents one local task execution state.
 type Task struct {
-	RequestID         string        `json:"request_id"`
-	Source            string        `json:"source,omitempty"`
-	Prompt            string        `json:"prompt,omitempty"`
-	PromptIsUserInput bool          `json:"prompt_is_user_input"`
-	Images            []PromptImage `json:"images,omitempty"`
-	Skill             string        `json:"skill,omitempty"`
-	Workflow          string        `json:"workflow,omitempty"`
-	AgentHarness      string        `json:"agent_harness,omitempty"`
-	Repo              string        `json:"repo,omitempty"`
-	Repos             []string      `json:"repos,omitempty"`
-	Reviewers         []string      `json:"reviewers,omitempty"`
-	BaseBranch        string        `json:"base_branch,omitempty"`
-	AutoMerge         bool          `json:"auto_merge,omitempty"`
-	Status            string        `json:"status"`
-	Stage             string        `json:"stage,omitempty"`
-	StageStatus       string        `json:"stage_status,omitempty"`
-	ExitCode          int           `json:"exit_code,omitempty"`
-	WorkspaceDir      string        `json:"workspace_dir,omitempty"`
-	Branch            string        `json:"branch,omitempty"`
-	PRURL             string        `json:"pr_url,omitempty"`
-	LiveAppURL        string        `json:"live_app_url,omitempty"`
-	Error             string        `json:"error,omitempty"`
-	Warning           string        `json:"warning,omitempty"`
-	StartedAt         string        `json:"started_at"`
-	UpdatedAt         string        `json:"updated_at"`
-	DurationSeconds   float64       `json:"duration_seconds,omitempty"`
-	CanRerun          bool          `json:"can_rerun,omitempty"`
-	Controls          TaskControls  `json:"controls,omitempty"`
-	Logs              []TaskLog     `json:"logs"`
+	RequestID         string               `json:"request_id"`
+	Source            string               `json:"source,omitempty"`
+	Prompt            string               `json:"prompt,omitempty"`
+	PromptIsUserInput bool                 `json:"prompt_is_user_input"`
+	Images            []PromptImage        `json:"images,omitempty"`
+	Assets            []githubassets.Asset `json:"assets,omitempty"`
+	Skill             string               `json:"skill,omitempty"`
+	Workflow          string               `json:"workflow,omitempty"`
+	AgentHarness      string               `json:"agent_harness,omitempty"`
+	Repo              string               `json:"repo,omitempty"`
+	Repos             []string             `json:"repos,omitempty"`
+	Reviewers         []string             `json:"reviewers,omitempty"`
+	BaseBranch        string               `json:"base_branch,omitempty"`
+	AutoMerge         bool                 `json:"auto_merge,omitempty"`
+	Status            string               `json:"status"`
+	Stage             string               `json:"stage,omitempty"`
+	StageStatus       string               `json:"stage_status,omitempty"`
+	ExitCode          int                  `json:"exit_code,omitempty"`
+	WorkspaceDir      string               `json:"workspace_dir,omitempty"`
+	Branch            string               `json:"branch,omitempty"`
+	PRURL             string               `json:"pr_url,omitempty"`
+	LiveAppURL        string               `json:"live_app_url,omitempty"`
+	Error             string               `json:"error,omitempty"`
+	Warning           string               `json:"warning,omitempty"`
+	StartedAt         string               `json:"started_at"`
+	UpdatedAt         string               `json:"updated_at"`
+	DurationSeconds   float64              `json:"duration_seconds,omitempty"`
+	CanRerun          bool                 `json:"can_rerun,omitempty"`
+	Controls          TaskControls         `json:"controls,omitempty"`
+	Logs              []TaskLog            `json:"logs"`
 }
 
 // PromptImage captures one prompt image attachment shown in task views.
@@ -285,6 +287,7 @@ type taskState struct {
 	Prompt            string
 	PromptIsUserInput bool
 	Images            []PromptImage
+	Assets            []githubassets.Asset
 	Skill             string
 	Workflow          string
 	AgentHarness      string
@@ -499,6 +502,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			Prompt:            t.Prompt,
 			PromptIsUserInput: t.PromptIsUserInput,
 			Images:            append([]PromptImage(nil), t.Images...),
+			Assets:            slices.Clone(t.Assets),
 			Skill:             t.Skill,
 			Workflow:          taskWorkflow(t),
 			AgentHarness:      taskAgentHarness(t),
@@ -605,6 +609,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		Prompt:            t.Prompt,
 		PromptIsUserInput: t.PromptIsUserInput,
 		Images:            append([]PromptImage(nil), t.Images...),
+		Assets:            slices.Clone(t.Assets),
 		Skill:             t.Skill,
 		Workflow:          taskWorkflow(t),
 		AgentHarness:      taskAgentHarness(t),
@@ -649,6 +654,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 	cfgCopy := append([]byte(nil), runConfigJSON...)
 	prompt := promptFromRunConfigJSON(cfgCopy)
 	images := imagesFromRunConfigJSON(cfgCopy)
+	assets := assetsFromRunConfigJSON(cfgCopy)
 	baseBranch := branchFromRunConfigJSON(cfgCopy)
 	prURL := prURLFromRunConfigJSON(cfgCopy)
 	repos := reposFromRunConfigJSON(cfgCopy)
@@ -688,6 +694,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 			Prompt:            prompt,
 			PromptIsUserInput: promptIsUserInputForTask(requestID, prompt),
 			Images:            append([]PromptImage(nil), images...),
+			Assets:            slices.Clone(assets),
 			Workflow:          workflow,
 			AgentHarness:      agentHarness,
 			Repo:              stringsx.FirstNonEmpty(repos...),
@@ -728,6 +735,10 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 				changed = true
 			}
 		}
+	}
+	if t != nil && !slices.Equal(t.Assets, assets) {
+		t.Assets = slices.Clone(assets)
+		changed = true
 	}
 	if t != nil && !slices.Equal(t.Images, images) {
 		t.Images = append([]PromptImage(nil), images...)
@@ -827,6 +838,7 @@ func (b *Broker) RecordRejectedPromptSubmissionWithSource(runConfigJSON []byte, 
 	baseBranch := branchFromRunConfigJSON(runConfigJSON)
 	prompt := promptFromRunConfigJSON(runConfigJSON)
 	images := imagesFromRunConfigJSON(runConfigJSON)
+	assets := assetsFromRunConfigJSON(runConfigJSON)
 	reviewers := reviewersFromRunConfigJSON(runConfigJSON)
 	workflow := workflowFromRunConfigJSON(runConfigJSON)
 	agentHarness := agentHarnessFromRunConfigJSON(runConfigJSON)
@@ -847,6 +859,7 @@ func (b *Broker) RecordRejectedPromptSubmissionWithSource(runConfigJSON []byte, 
 		Prompt:            prompt,
 		PromptIsUserInput: promptIsUserInputForTask(requestID, prompt),
 		Images:            append([]PromptImage(nil), images...),
+		Assets:            slices.Clone(assets),
 		Workflow:          workflow,
 		AgentHarness:      agentHarness,
 		Repo:              stringsx.FirstNonEmpty(repos...),
@@ -1462,6 +1475,7 @@ func normalizedGroupName(name, fallback string) string {
 type runConfigFields struct {
 	raw          []byte
 	images       []PromptImage
+	assets       []githubassets.Asset
 	workflow     string
 	agentHarness string
 	reviewers    []string
@@ -1485,6 +1499,7 @@ func (b *Broker) runConfigFieldsLocked(requestID string) runConfigFields {
 	fields := runConfigFields{
 		raw:          raw,
 		images:       imagesFromRunConfigJSON(raw),
+		assets:       assetsFromRunConfigJSON(raw),
 		workflow:     workflowFromRunConfigJSON(raw),
 		agentHarness: agentHarnessFromRunConfigJSON(raw),
 		reviewers:    reviewersFromRunConfigJSON(raw),
@@ -1876,6 +1891,9 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 			existing.PromptIsUserInput = promptIsUserInputForTask(requestID, existing.Prompt)
 		}
 		fields := b.runConfigFieldsLocked(requestID)
+		if len(existing.Assets) == 0 {
+			existing.Assets = slices.Clone(fields.assets)
+		}
 		if len(existing.Images) == 0 {
 			existing.Images = slices.Clone(fields.images)
 		}
@@ -1914,6 +1932,7 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 		Prompt:            prompt,
 		PromptIsUserInput: promptIsUserInputForTask(requestID, prompt),
 		Images:            slices.Clone(fields.images),
+		Assets:            slices.Clone(fields.assets),
 		Workflow:          fields.workflow,
 		AgentHarness:      fields.agentHarness,
 		Reviewers:         slices.Clone(fields.reviewers),
@@ -3025,4 +3044,14 @@ func normalizeTaskTerminalStatus(status string) string {
 	default:
 		return strings.TrimSpace(status)
 	}
+}
+
+func assetsFromRunConfigJSON(raw []byte) []githubassets.Asset {
+	var cfg struct {
+		Assets []githubassets.Asset `json:"assets"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return nil
+	}
+	return cfg.Assets
 }

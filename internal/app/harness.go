@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -191,6 +192,8 @@ type Harness struct {
 	LoadSigning    func(context.Context) (*gitsigning.Snapshot, error)
 	signingHistory map[string]map[string]bool
 	Runner         execx.Runner
+	// AssetTransport optionally replaces HTTP transport for attachment downloads.
+	AssetTransport http.RoundTripper
 	Workspace      workspace.Manager
 	Now            func() time.Time
 	Logf           logFn
@@ -467,6 +470,15 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	if err != nil {
 		return h.fail(ExitConfig, "config", err, runDir)
 	}
+	assetFiles, err := h.materializeTaskAssets(ctx, runDir, cfg.Assets)
+	if err != nil {
+		return h.fail(ExitConfig, "assets", err, runDir)
+	}
+	for _, file := range assetFiles {
+		if file.IsImage() {
+			imagePaths = append(imagePaths, file.Path)
+		}
+	}
 	imageArgs, err := codexImageArgs(codexDir, imagePaths)
 	if err != nil {
 		return h.fail(ExitConfig, "config", err, runDir)
@@ -476,11 +488,12 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		SkipGitRepoCheck: len(repos) > 1,
 		ImagePaths:       imageArgs,
 	}
-	if len(imageArgs) > 0 {
+	if len(imageArgs) > 0 || len(assetFiles) > 0 {
 		codexOpts.WritableDirs = []string{runDir}
 	}
 	codexBasePrompt := workspaceCodexPrompt(cfg.Prompt, cfg.TargetSubdir, repos)
 	codexBasePrompt = withPromptImagePaths(codexBasePrompt, imageArgs)
+	codexBasePrompt = withTaskAssetPaths(codexBasePrompt, assetFiles)
 	var reviewContext *preparedReviewContext
 	if reviewPrompt, preparedContext, err := h.prepareReviewPrompt(ctx, runCfg, repos, codexBasePrompt); err != nil {
 		return h.fail(ExitPR, "review", err, runDir)
