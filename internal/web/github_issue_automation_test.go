@@ -25,6 +25,7 @@ type automationGitHub struct {
 	issue       GitHubIssue
 	comments    string
 	branch      bool
+	blockedBy   int
 	labels      []GitHubIssueLabel
 	tags        map[string]string
 	refs        map[string]string
@@ -80,7 +81,7 @@ func (f *automationGitHub) Run(ctx context.Context, cmd execx.Command) (execx.Re
 		if f.branch {
 			count = 1
 		}
-		return execx.Result{Stdout: fmt.Sprintf(`{"data":{"nodes":[{"id":"I17","linkedBranches":{"totalCount":%d},"closedByPullRequestsReferences":{"totalCount":0}}]}}`, count)}, nil
+		return execx.Result{Stdout: fmt.Sprintf(`{"data":{"nodes":[{"id":"I17","linkedBranches":{"totalCount":%d},"closedByPullRequestsReferences":{"totalCount":0},"issueDependenciesSummary":{"blockedBy":%d}}]}}`, count, f.blockedBy)}, nil
 	}
 	if strings.Contains(query, "defaultBranchRef") {
 		count := 0
@@ -89,7 +90,7 @@ func (f *automationGitHub) Run(ctx context.Context, cmd execx.Command) (execx.Re
 			count = 1
 			nodes = `[{"ref":{"name":"agent00-issue-17"}}]`
 		}
-		return execx.Result{Stdout: fmt.Sprintf(`{"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base"}},"issue":{"id":"I17","linkedBranches":{"totalCount":%d,"nodes":%s},"closedByPullRequestsReferences":{"totalCount":0}}}}}`, count, nodes)}, nil
+		return execx.Result{Stdout: fmt.Sprintf(`{"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base"}},"issue":{"id":"I17","linkedBranches":{"totalCount":%d,"nodes":%s},"closedByPullRequestsReferences":{"totalCount":0},"issueDependenciesSummary":{"blockedBy":%d}}}}}`, count, nodes, f.blockedBy)}, nil
 	}
 	if strings.Contains(args, "--method POST") {
 		var body map[string]json.RawMessage
@@ -224,6 +225,65 @@ func TestIssueAutomationReconsidersChangedEligibility(t *testing.T) {
 	s.pollGitHubIssueAutoStart(context.Background())
 	if len(f.submissions) != 1 {
 		t.Fatalf("changed match suppressed: %+v", s.issueAutomation.status)
+	}
+}
+
+func TestIssueAutomationDefersOpenDependencies(t *testing.T) {
+	t.Parallel()
+	f := newAutomationGitHub()
+	f.blockedBy = 1
+	s := automationServer(t, f)
+	s.pollGitHubIssueAutoStart(context.Background())
+	if len(f.submissions) != 0 || f.branch || s.issueAutomation.status.Issues[0].Reason != "blocked by open issue" {
+		t.Fatalf("blocked issue admitted: status=%+v", s.issueAutomation.status)
+	}
+	f.blockedBy = 0
+	s.pollGitHubIssueAutoStart(context.Background())
+	if len(f.submissions) != 1 {
+		t.Fatalf("unblocked issue not reconsidered: status=%+v", s.issueAutomation.status)
+	}
+}
+
+func TestIssueAutomationRechecksDependenciesBeforeClaim(t *testing.T) {
+	t.Parallel()
+	f := newAutomationGitHub()
+	s := automationServer(t, f)
+	s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		result, err := f.Run(ctx, cmd)
+		if strings.Contains(strings.Join(cmd.Args, " "), "nodes(ids:") {
+			f.mu.Lock()
+			f.blockedBy = 1
+			f.mu.Unlock()
+		}
+		return result, err
+	})
+	s.pollGitHubIssueAutoStart(context.Background())
+	records, err := s.IssueClaims.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.submissions) != 0 || f.branch || len(f.tags) != 0 || len(records) != 0 {
+		t.Fatalf("dependency race created claim: submissions=%d branch=%t tags=%d records=%d", len(f.submissions), f.branch, len(f.tags), len(records))
+	}
+	if !strings.Contains(s.issueAutomation.status.Error, "blocked by 1 open issue") {
+		t.Fatalf("dependency race not explained: %+v", s.issueAutomation.status)
+	}
+}
+
+func TestIssueAutomationRetryDefersNewOpenDependency(t *testing.T) {
+	t.Parallel()
+	f := newAutomationGitHub()
+	s := automationServer(t, f)
+	s.pollGitHubIssueAutoStart(context.Background())
+	claimID := f.submissions[0].GitHubIssue.Claim.ID
+	tagCount := len(f.tags)
+	f.blockedBy = 1
+	response := retryIssue(t, s, claimID, true)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "blocked by 1 open issue") {
+		t.Fatalf("blocked retry = %d %s", response.Code, response.Body.String())
+	}
+	if len(f.submissions) != 1 || len(f.tags) != tagCount {
+		t.Fatalf("blocked retry mutated claim: submissions=%d tags=%d", len(f.submissions), len(f.tags))
 	}
 }
 
