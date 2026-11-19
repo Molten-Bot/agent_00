@@ -243,6 +243,7 @@ func (s Server) claimAndSubmitIssue(ctx context.Context, run config.Config, sett
 	claim := &config.GitHubIssueClaim{ID: newIssueClaimID(), Branch: fmt.Sprintf("agent00-issue-%d", issue.Number), BaseBranch: base, ExclusionLabel: issueExclusionLabel(settings), Attempt: 1}
 	issue.Claim = claim
 	run.BaseBranch = base
+	setGitHubIssuePrompt(&run, fresh)
 	record := localruntime.IssueClaimRecord{ID: claim.ID, InstanceID: s.instanceID(), Phase: "reserving", Run: run}
 	if err := s.IssueClaims.Save(record); err != nil {
 		return "", fmt.Errorf("persist claim before reservation: %w", err)
@@ -609,6 +610,7 @@ func (s Server) handleIssueAutomationRetry(w http.ResponseWriter, r *http.Reques
 	run.GitHubIssue = &runIssue
 	runIssue.Claim = claim
 	run.BaseBranch = base
+	setGitHubIssuePrompt(&run, issue)
 	record := localruntime.IssueClaimRecord{ID: claim.ID, InstanceID: s.instanceID(), Phase: "reserving", Run: run}
 	if err = s.IssueClaims.Save(record); err != nil {
 		writeJSONError(w, 503, err)

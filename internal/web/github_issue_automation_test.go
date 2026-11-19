@@ -23,6 +23,7 @@ import (
 type automationGitHub struct {
 	mu          sync.Mutex
 	issue       GitHubIssue
+	comments    string
 	branch      bool
 	labels      []GitHubIssueLabel
 	tags        map[string]string
@@ -136,6 +137,9 @@ func (f *automationGitHub) Run(ctx context.Context, cmd execx.Command) (execx.Re
 	case strings.Contains(endpoint, "/git/ref/heads/"):
 		return execx.Result{Stdout: `{"object":{"sha":"existing-commits"}}`}, nil
 	case strings.Contains(endpoint, "/issues/17/comments"):
+		if f.comments != "" {
+			return execx.Result{Stdout: f.comments}, nil
+		}
 		return execx.Result{Stdout: `[]`}, nil
 	case strings.Contains(endpoint, "/issues?"):
 		return output([]any{map[string]any{"number": 17, "node_id": "I17", "title": f.issue.Title, "state": strings.ToLower(f.issue.State), "html_url": f.issue.URL, "assignees": f.issue.Assignees, "labels": f.issue.Labels}})

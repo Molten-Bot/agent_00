@@ -108,6 +108,16 @@ exclusion label are skipped. Repository discovery refreshes every five minutes.
 The settings panel shows scan times, account, repositories, errors, and each
 issue's eligibility or submission outcome. **Scan now** requests an early scan.
 
+Before queueing an automatic start, manual issue start, or explicit retry, the
+harness fetches the current title, description, and all paginated comments from
+GitHub. It builds the task prompt with the issue link, comment authors and
+timestamps, reserved branch and PR base, and configured issue linking behavior.
+Browser text and saved retry prompts are replaced with this fresh snapshot;
+existing runtime options are retained. The agent receives the usual shared and
+repository instructions and focuses on coding and validation while the harness
+handles ownership, commits, pushes, and PR creation. A failed issue or comment
+fetch blocks admission rather than queueing an incomplete prompt.
+
 Every automatic or manual issue start reserves `agent00-issue-<number>` as a
 linked branch before queueing. Only the winner can start. The configurable
 exclusion label defaults to `agent_00-in-progress`; it cannot also be a trigger

@@ -149,11 +149,9 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 				decision.Reason = "associated branch or closing PR"
 				status.Skipped++
 			} else {
-				issue, err := s.fetchGitHubIssue(ctx, fullName, entry.Number)
-				if err == nil {
-					run := issueRunConfig(repo, issue, settings.GitHubIssueLinkMode)
-					decision.RequestID, err = s.claimAndSubmitIssue(ctx, run, settings, status.Account, s.SubmitLocalPrompt)
-				}
+				run := issueRunConfig(repo, entry.GitHubIssue, settings.GitHubIssueLinkMode)
+				var err error
+				decision.RequestID, err = s.claimAndSubmitIssue(ctx, run, settings, status.Account, s.SubmitLocalPrompt)
 				if err != nil {
 					decision.Reason = "submission blocked"
 					decision.Error = err.Error()
@@ -208,10 +206,6 @@ func issueEligibilityReason(issue GitHubIssue, settings ReviewSettingsState, log
 }
 
 func issueRunConfig(repo GitHubRepo, issue GitHubIssue, mode string) config.Config {
-	url := strings.TrimSpace(issue.URL)
-	if url == "" {
-		url = fmt.Sprintf("https://github.com/%s/issues/%d", repo.FullName, issue.Number)
-	}
 	repoURL := repo.HTMLURL
 	if repoURL == "" {
 		repoURL = "https://github.com/" + repo.FullName
@@ -219,7 +213,9 @@ func issueRunConfig(repo GitHubRepo, issue GitHubIssue, mode string) config.Conf
 	if mode != config.GitHubIssueLinkClose {
 		mode = config.GitHubIssueLinkReference
 	}
-	return config.Config{RepoURL: repoURL, BaseBranch: repo.DefaultBranch, Prompt: buildGitHubIssueAutoStartPrompt(repo.FullName, issue), GitHubIssue: &config.GitHubIssueConfig{Repository: repo.FullName, Number: issue.Number, URL: url, LinkMode: mode}}
+	run := config.Config{RepoURL: repoURL, BaseBranch: repo.DefaultBranch, GitHubIssue: &config.GitHubIssueConfig{Repository: repo.FullName, Number: issue.Number, LinkMode: mode}}
+	setGitHubIssuePrompt(&run, issue)
+	return run
 }
 
 // REST pagination has no search-result or arbitrary 1,000-issue ceiling.
@@ -274,27 +270,4 @@ func githubIssueHasAnyLabel(issue GitHubIssue, selected []string) bool {
 		}
 	}
 	return false
-}
-
-func buildGitHubIssueAutoStartPrompt(repository string, issue GitHubIssue) string {
-	var prompt strings.Builder
-	fmt.Fprintf(&prompt, "Complete GitHub issue %s#%d: %s\n\n", repository, issue.Number, issue.Title)
-	fmt.Fprintf(&prompt, "Issue URL: %s\nState: %s\nAuthor: @%s\n", issue.URL, issue.State, issue.Author.Login)
-	if len(issue.Labels) > 0 {
-		labels := make([]string, 0, len(issue.Labels))
-		for _, label := range issue.Labels {
-			labels = append(labels, label.Name)
-		}
-		fmt.Fprintf(&prompt, "Labels: %s\n", strings.Join(labels, ", "))
-	}
-	prompt.WriteString("\n## Issue description\n")
-	prompt.WriteString(strings.TrimSpace(issue.Body))
-	if len(issue.Comments) > 0 {
-		prompt.WriteString("\n\n## Issue comments\n")
-		for _, comment := range issue.Comments {
-			fmt.Fprintf(&prompt, "\n### @%s\n%s\n", comment.Author.Login, strings.TrimSpace(comment.Body))
-		}
-	}
-	prompt.WriteString("\n\nImplement the requested change in the repository. Follow the repository's instructions, run the relevant checks, and summarize the result.")
-	return strings.TrimSpace(prompt.String())
 }
