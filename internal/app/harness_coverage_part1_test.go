@@ -254,6 +254,20 @@ func TestH1CovPromptPullRequestMatchesRepoBranch(t *testing.T) {
 	}
 }
 
+func TestH1CovPullRequestHeadMatchesBaseline(t *testing.T) {
+	t.Parallel()
+
+	if !pullRequestHeadMatchesBaseline(prStateView{HeadRefOID: "ABC123"}, repoWorkspace{BaselineHead: "abc123"}) {
+		t.Fatal("matching head SHA should match case-insensitively")
+	}
+	if pullRequestHeadMatchesBaseline(prStateView{HeadRefOID: "old-head"}, repoWorkspace{BaselineHead: "current-head"}) {
+		t.Fatal("historical head SHA should not match baseline")
+	}
+	if pullRequestHeadMatchesBaseline(prStateView{}, repoWorkspace{}) {
+		t.Fatal("empty head SHAs should not match")
+	}
+}
+
 // ---- libraryTaskRequiresNonDefaultBranch (empty task name path only; a
 // configured task name would load the on-disk library catalog, which is
 // exercised by internal/library's own tests rather than here) ----
