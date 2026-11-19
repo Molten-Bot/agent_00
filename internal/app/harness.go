@@ -159,6 +159,7 @@ type repoWorkspace struct {
 	RequiredBranchTask          string
 	BaselineHead                string
 	CreateWorkBranch            bool
+	IssueClaimBranch            bool
 	Changed                     bool
 	BranchCollisionSuffix       string
 	BranchCollisionAttempts     int
@@ -337,6 +338,20 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		}
 	}
 	cloneBaseBranch := strings.TrimSpace(runCfg.BaseBranch)
+	var issueClaim *config.GitHubIssueClaim
+	if runCfg.GitHubIssue != nil {
+		issueClaim = runCfg.GitHubIssue.Claim
+	}
+	if issueClaim != nil {
+		if len(repoURLs) != 1 {
+			return h.fail(ExitConfig, "config", fmt.Errorf("claimed issue runs require exactly one repository"), runDir)
+		}
+		ref, ok := parseGitHubRepoRef(repoURLs[0])
+		if !ok || !strings.EqualFold(ref.owner+"/"+ref.name, runCfg.GitHubIssue.Repository) {
+			return h.fail(ExitConfig, "config", fmt.Errorf("claimed issue repository does not match run repository"), runDir)
+		}
+		cloneBaseBranch = issueClaim.Branch
+	}
 
 	repos := make([]repoWorkspace, 0, len(repoURLs))
 	for i, repoURL := range repoURLs {
@@ -348,7 +363,8 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 			RequireExistingPR:        feedbackPRURL != "",
 			Dir:                      repoDir,
 			RelDir:                   relDir,
-			RequiresNonDefaultBranch: runCfg.RequiresNonDefaultBranch,
+			RequiresNonDefaultBranch: runCfg.RequiresNonDefaultBranch || issueClaim != nil,
+			IssueClaimBranch:         issueClaim != nil,
 			RequiredBranch:           normalizeBranchRef(cloneBaseBranch),
 			RequiredBranchTask:       strings.TrimSpace(runCfg.LibraryTaskName),
 			PushRemote:               publishRemoteOrigin,
@@ -363,6 +379,15 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	}
 	if err := h.validateRequiredNonDefaultBranches(ctx, runCfg, repos); err != nil {
 		return h.fail(ExitGit, "git", err, runDir)
+	}
+	if issueClaim != nil {
+		// Clone the reserved branch without fallback, preserving prior commits on
+		// explicit retry. Use the original base for diff/review/PR operations.
+		repos[0].BaseBranch = issueClaim.BaseBranch
+		repos[0].CreateWorkBranch = true
+		if _, err := h.runCommand(ctx, "git", fetchBaseBranchCommand(repos[0].Dir, issueClaim.BaseBranch)); err != nil {
+			return h.fail(ExitGit, "git", err, runDir)
+		}
 	}
 	if len(repos) > 0 {
 		runCfg.BaseBranch = repos[0].BaseBranch
@@ -381,6 +406,11 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	branchCollisionSuffix := runBranchCollisionSuffix(runNow, guid)
 	for i := range repos {
 		branch := strings.TrimSpace(repos[i].BaseBranch)
+		if issueClaim != nil {
+			repos[i].Branch = issueClaim.Branch
+			h.logf("stage=git status=ok action=issue_claim_branch branch=%s baseBranch=%s", issueClaim.Branch, issueClaim.BaseBranch)
+			continue
+		}
 		if repos[i].CreateWorkBranch && !reviewRun {
 			branch = generatedBranch
 			repos[i].BranchCollisionSuffix = branchCollisionSuffix
@@ -401,6 +431,11 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 			return h.fail(ExitGit, "git", err, runDir)
 		}
 		h.logf("stage=git status=ok action=branch branch=%s repo=%s repo_dir=%s", branch, repos[i].URL, repos[i].RelDir)
+	}
+	if issueClaim != nil {
+		if err := h.validateEnforcedNonDefaultBranches(ctx, repos); err != nil {
+			return h.fail(ExitGit, "git", err, runDir)
+		}
 	}
 	if !reviewRun {
 		for i := range repos {
@@ -1984,6 +2019,9 @@ func (h Harness) renameGeneratedWorkBranch(ctx context.Context, repo *repoWorksp
 	if repo == nil {
 		return fmt.Errorf("repo workspace is required")
 	}
+	if repo.IssueClaimBranch {
+		return fmt.Errorf("reserved issue branch cannot be renamed; explicit recovery is required")
+	}
 	oldBranch := normalizeBranchRef(repo.Branch)
 	if oldBranch == "" {
 		return fmt.Errorf("work branch is required")
@@ -2218,6 +2256,9 @@ func (h Harness) preparePublishWorkflow(ctx context.Context, repo *repoWorkspace
 			repo.Branch,
 			err,
 		)
+		if repo.IssueClaimBranch {
+			return fmt.Errorf("reserved issue branch requires direct repository write access: %w", err)
+		}
 		if fallbackErr := h.prepareForkFallbackPublishWorkflow(ctx, repo); fallbackErr != nil {
 			return fmt.Errorf(
 				"prepare fork fallback for repo %s after direct write denial: %w",

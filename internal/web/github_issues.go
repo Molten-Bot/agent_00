@@ -181,7 +181,7 @@ func (s Server) listGitHubIssues(ctx context.Context, repository, state, search,
 		if assignee == "me" {
 			args = append(args, "--assignee", "@me")
 		}
-		result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: args})
+		result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: args})
 		if err != nil {
 			return nil, err
 		}
@@ -249,7 +249,7 @@ func (s Server) githubIssueSearchCount(ctx context.Context, repository, state, s
 	if assignee == "me" {
 		query += " assignee:@me"
 	}
-	result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{
+	result, err := s.runIssueGH(ctx, execx.Command{
 		Name: "gh",
 		Args: []string{"api", "--method", "GET", "search/issues", "-f", "q=" + query, "-F", "per_page=1"},
 	})
@@ -280,7 +280,7 @@ func (s Server) githubIssuesWithLinkedBranches(ctx context.Context, issues []git
 		for _, issue := range issues[start:end] {
 			args = append(args, "-F", "ids[]="+issue.ID)
 		}
-		result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: args})
+		result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: args})
 		if err != nil {
 			return nil, fmt.Errorf("list linked GitHub issue branches: %w", err)
 		}
@@ -317,7 +317,7 @@ func (s Server) fetchGitHubIssue(ctx context.Context, repository string, number 
 		"issue", "view", strconv.Itoa(number), "--repo", repository,
 		"--json", "number,title,body,state,url,author,labels,assignees,createdAt,updatedAt",
 	}
-	result, err := s.GitHubIssueRunner.Run(ctx, execx.Command{Name: "gh", Args: args})
+	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: args})
 	if err != nil {
 		return GitHubIssue{}, fmt.Errorf("view GitHub issue: %w", err)
 	}
@@ -328,7 +328,7 @@ func (s Server) fetchGitHubIssue(ctx context.Context, repository string, number 
 	if issue.Number != number {
 		return GitHubIssue{}, fmt.Errorf("GitHub returned a different issue number")
 	}
-	commentResult, err := s.GitHubIssueRunner.Run(ctx, execx.Command{
+	commentResult, err := s.runIssueGH(ctx, execx.Command{
 		Name: "gh",
 		Args: []string{"api", "--paginate", fmt.Sprintf("repos/%s/issues/%d/comments", repository, number)},
 	})

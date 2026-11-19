@@ -66,3 +66,25 @@ func TestNormalizePRBodyForGitHubIssueAddsConfiguredLinkBeforeFooter(t *testing.
 		}
 	}
 }
+
+func TestValidateGitHubIssueClaim(t *testing.T) {
+	t.Parallel()
+	issue := &GitHubIssueConfig{Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17", Claim: &GitHubIssueClaim{ID: "claim", Branch: "agent00-issue-17", BaseBranch: "main", ExclusionLabel: "claimed", Attempt: 1}}
+	if err := validateGitHubIssueConfig(issue); err != nil {
+		t.Fatal(err)
+	}
+	for _, edit := range []func(*GitHubIssueClaim){
+		func(c *GitHubIssueClaim) { c.Branch = "main" },
+		func(c *GitHubIssueClaim) { c.BaseBranch = c.Branch },
+		func(c *GitHubIssueClaim) { c.Attempt = 0 },
+		func(c *GitHubIssueClaim) { c.ExclusionLabel = "" },
+	} {
+		copy := *issue.Claim
+		edit(&copy)
+		changed := *issue
+		changed.Claim = &copy
+		if err := validateGitHubIssueConfig(&changed); err == nil {
+			t.Fatalf("invalid claim accepted: %+v", copy)
+		}
+	}
+}

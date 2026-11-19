@@ -94,6 +94,48 @@ waits while the same task and repository are already pending, running, or paused
 Submission failures appear in the schedules dialog and retry at the next interval.
 Deleting a schedule leaves any run already started intact.
 
+### GitHub issue automation
+
+In **Settings → GitHub Issues**, enable GitHub Issues and automatic matching.
+For assigned, labeled work, keep **Only issues assigned to me** enabled and add
+`ready-for-agent` to **Trigger labels**. Any selected label matches; an empty
+list allows any label. Assignment uses the same `gh` account as repository
+and issue discovery. Disabled repositories are excluded.
+
+The service checks immediately and every minute, including the existing open
+backlog. Issues with an associated branch, closing PR (including closed PRs), or
+exclusion label are skipped. Repository discovery refreshes every five minutes.
+The settings panel shows scan times, account, repositories, errors, and each
+issue's eligibility or submission outcome. **Scan now** requests an early scan.
+
+Every automatic or manual issue start reserves `agent00-issue-<number>` as a
+linked branch before queueing. Only the winner can start. The configurable
+exclusion label defaults to `agent_00-in-progress`; it cannot also be a trigger
+label. Claims remain reserved while an issue is open, including after failure
+or interruption. Tasks keep their reserved branch and target the original base
+branch; collisions never cause a second branch to be generated.
+
+Admission records live in `issue-claims/` beside the runtime `config.json` and
+must be retained with that configuration. Immutable annotated Git tags named
+`agent00-issue-<number>-claim-<attempt>` store claim identity, instance, base
+branch and exclusion label on GitHub. They serialize explicit retries across
+instances and contain no task prompts or issue descriptions. Repository rules
+must permit creation of these branches/tags and issue labels. This requires
+repository contents and issues write access; permission failures appear in the
+status panel and block admission.
+
+Use **Recover / retry** only after stopping the previous worker on every
+instance. Recovery preserves the branch's existing commits and refuses a stale
+claim identity, an active local task, or a closed issue. Ambiguous API results
+are never automatically replayed. An unrecorded reservation can be explicitly
+recovered, provided its single linked branch has the expected reserved name.
+Do not delete claim tags to clear a reservation. Keep the exclusion label until
+resolving or explicitly recovering the issue.
+
+Upgrade **all** instances before enabling backlog processing: older versions
+ignore these ownership rules. Automation stays off unless already enabled, but
+an enabled installation will scan its backlog after upgrading.
+
 ### Workspace storage
 
 Retained task checkouts need disk capacity. For long-running Docker installations,

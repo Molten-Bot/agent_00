@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
+	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
@@ -115,6 +116,8 @@ type Server struct {
 	ResolveGitHubProfileURL func(context.Context) (string, error)
 	ResolveGitHubRepos      func(context.Context) ([]GitHubRepo, error)
 	GitHubIssueRunner       execx.Runner
+	IssueClaims             *localruntime.IssueClaimStore
+	issueAutomation         *issueAutomationState
 	gitHubRepos             *gitHubRepoCache
 	issueAutoStartWake      chan time.Time
 	Ready                   chan<- error
@@ -172,22 +175,23 @@ type gitHubRepoCache struct {
 }
 
 type ReviewSettingsState struct {
-	AutoMerge                        bool     `json:"auto_merge"`
-	DeleteMergedBranches             bool     `json:"delete_merged_branches"`
-	MergeMethod                      string   `json:"merge_method"`
-	ReviewLevel                      string   `json:"review_level"`
-	DefaultLibraryEnabled            bool     `json:"default_library_enabled"`
-	ChatEnabled                      bool     `json:"chat_enabled"`
-	JSONEnabled                      bool     `json:"json_enabled"`
-	GitHubIssuesEnabled              bool     `json:"github_issues_enabled"`
-	GitHubIssueLinkMode              string   `json:"github_issue_link_mode"`
-	GitHubIssueAutoStartEnabled      bool     `json:"github_issue_auto_start_enabled"`
-	GitHubIssueAutoStartAssigned     bool     `json:"github_issue_auto_start_assigned"`
-	GitHubIssueAutoStartOnlyAssigned bool     `json:"github_issue_auto_start_only_assigned"`
-	GitHubIssueAutoStartLabels       []string `json:"github_issue_auto_start_labels"`
-	AssignCreator                    bool     `json:"assign_creator"`
-	DisabledRepositories             []string `json:"disabled_repositories"`
-	Message                          string   `json:"message,omitempty"`
+	AutoMerge                          bool     `json:"auto_merge"`
+	DeleteMergedBranches               bool     `json:"delete_merged_branches"`
+	MergeMethod                        string   `json:"merge_method"`
+	ReviewLevel                        string   `json:"review_level"`
+	DefaultLibraryEnabled              bool     `json:"default_library_enabled"`
+	ChatEnabled                        bool     `json:"chat_enabled"`
+	JSONEnabled                        bool     `json:"json_enabled"`
+	GitHubIssuesEnabled                bool     `json:"github_issues_enabled"`
+	GitHubIssueLinkMode                string   `json:"github_issue_link_mode"`
+	GitHubIssueAutoStartEnabled        bool     `json:"github_issue_auto_start_enabled"`
+	GitHubIssueAutoStartAssigned       bool     `json:"github_issue_auto_start_assigned"`
+	GitHubIssueAutoStartOnlyAssigned   bool     `json:"github_issue_auto_start_only_assigned"`
+	GitHubIssueAutoStartLabels         []string `json:"github_issue_auto_start_labels"`
+	GitHubIssueAutoStartExclusionLabel string   `json:"github_issue_auto_start_exclusion_label"`
+	AssignCreator                      bool     `json:"assign_creator"`
+	DisabledRepositories               []string `json:"disabled_repositories"`
+	Message                            string   `json:"message,omitempty"`
 }
 
 type ReviewSettingsRequest struct {
@@ -201,15 +205,16 @@ type ReviewSettingsRequest struct {
 	// ChatEnabled is a pointer for the same reason as DefaultLibraryEnabled.
 	ChatEnabled *bool `json:"chat_enabled,omitempty"`
 	// JSONEnabled is a pointer for the same reason as DefaultLibraryEnabled.
-	JSONEnabled                      *bool     `json:"json_enabled,omitempty"`
-	GitHubIssuesEnabled              *bool     `json:"github_issues_enabled,omitempty"`
-	GitHubIssueLinkMode              *string   `json:"github_issue_link_mode,omitempty"`
-	GitHubIssueAutoStartEnabled      *bool     `json:"github_issue_auto_start_enabled,omitempty"`
-	GitHubIssueAutoStartAssigned     *bool     `json:"github_issue_auto_start_assigned,omitempty"`
-	GitHubIssueAutoStartOnlyAssigned *bool     `json:"github_issue_auto_start_only_assigned,omitempty"`
-	GitHubIssueAutoStartLabels       *[]string `json:"github_issue_auto_start_labels,omitempty"`
-	AssignCreator                    *bool     `json:"assign_creator,omitempty"`
-	DisabledRepositories             *[]string `json:"disabled_repositories,omitempty"`
+	JSONEnabled                        *bool     `json:"json_enabled,omitempty"`
+	GitHubIssuesEnabled                *bool     `json:"github_issues_enabled,omitempty"`
+	GitHubIssueLinkMode                *string   `json:"github_issue_link_mode,omitempty"`
+	GitHubIssueAutoStartEnabled        *bool     `json:"github_issue_auto_start_enabled,omitempty"`
+	GitHubIssueAutoStartAssigned       *bool     `json:"github_issue_auto_start_assigned,omitempty"`
+	GitHubIssueAutoStartOnlyAssigned   *bool     `json:"github_issue_auto_start_only_assigned,omitempty"`
+	GitHubIssueAutoStartLabels         *[]string `json:"github_issue_auto_start_labels,omitempty"`
+	GitHubIssueAutoStartExclusionLabel *string   `json:"github_issue_auto_start_exclusion_label,omitempty"`
+	AssignCreator                      *bool     `json:"assign_creator,omitempty"`
+	DisabledRepositories               *[]string `json:"disabled_repositories,omitempty"`
 }
 
 // NewServer returns a monitor HTTP server.
@@ -220,6 +225,7 @@ func NewServer(addr string, broker *Broker) Server {
 		Logf:               func(string, ...any) {},
 		gitHubRepos:        &gitHubRepoCache{},
 		issueAutoStartWake: make(chan time.Time, 1),
+		issueAutomation:    &issueAutomationState{},
 		LoadLibraryTasks: func() ([]library.TaskSummary, error) {
 			catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 			if err != nil {
@@ -308,6 +314,15 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/speech/transcribe", s.handleSpeechTranscribe)
 	mux.HandleFunc("/api/github/profile", s.handleGitHubProfile)
 	mux.HandleFunc("/api/github/repos", s.handleGitHubRepos)
+	mux.HandleFunc("/api/github/automation", s.handleIssueAutomationStatus)
+	mux.HandleFunc("/api/github/automation/retry", s.handleIssueAutomationRetry)
+	mux.HandleFunc("/api/github/automation/scan", func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodPost) {
+			return
+		}
+		s.wakeGitHubIssueAutoStart()
+		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+	})
 	mux.HandleFunc("/api/github/issues", s.handleGitHubIssues)
 	mux.HandleFunc("/api/github/issues/", s.handleGitHubIssues)
 	mux.HandleFunc("/api/review-settings", s.handleReviewSettings)
@@ -2033,7 +2048,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":       true,
-			"settings": state,
+			"settings": normalizedIssueSettingsState(state),
 		})
 	case http.MethodPost:
 		if s.ConfigureReviewSettings == nil {
@@ -2062,6 +2077,10 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		if err := req.normalizeIssueAutoStart(); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err)
+			return
+		}
 		state, err := s.ConfigureReviewSettings(r.Context(), req)
 		if strings.TrimSpace(state.MergeMethod) == "" {
 			state.MergeMethod = "squash"
@@ -2073,14 +2092,14 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"ok":       false,
 				"error":    err.Error(),
-				"settings": state,
+				"settings": normalizedIssueSettingsState(state),
 			})
 			return
 		}
 		s.wakeGitHubIssueAutoStart()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":       true,
-			"settings": state,
+			"settings": normalizedIssueSettingsState(state),
 		})
 	}
 }
@@ -2388,6 +2407,8 @@ func (s Server) loadGitHubRepos(ctx context.Context) ([]GitHubRepo, error) {
 	)
 	if s.ResolveGitHubRepos != nil {
 		repos, err = s.ResolveGitHubRepos(ctx)
+	} else if s.GitHubIssueRunner != nil {
+		repos, err = s.issueGitHubRepos(ctx)
 	} else {
 		repos, err = resolveAuthenticatedGitHubRepos(ctx, http.DefaultClient)
 	}
@@ -2727,7 +2748,7 @@ func (s Server) handlePromptSubmit(
 	if source == "json" && !s.requireJSONEnabled(w, r) {
 		return
 	}
-	requestID, err := submit(r.Context(), body)
+	requestID, err := s.submitWithIssueClaim(r.Context(), body, submit)
 	if err != nil {
 		if duplicateRequestID, duplicateState, ok := duplicateSubmissionDetails(err); ok {
 			writeJSON(w, http.StatusConflict, map[string]any{
@@ -2959,6 +2980,13 @@ func (s Server) handleTaskRerun(w http.ResponseWriter, r *http.Request, requestI
 		return
 	}
 
+	var issueRun struct {
+		GitHubIssue *config.GitHubIssueConfig `json:"githubIssue"`
+	}
+	if json.Unmarshal(runConfigJSON, &issueRun) == nil && issueRun.GitHubIssue != nil && issueRun.GitHubIssue.Claim != nil {
+		writeJSONError(w, http.StatusConflict, fmt.Errorf("issue tasks require explicit claim recovery in Settings → GitHub Issues"))
+		return
+	}
 	force := parseTruthyQueryParam(r.URL.Query().Get("force"))
 
 	submit := func(ctx context.Context, body []byte) (string, error) {
@@ -2971,7 +2999,7 @@ func (s Server) handleTaskRerun(w http.ResponseWriter, r *http.Request, requestI
 	}
 
 	sourceTask, sourceTaskFound := s.Broker.Task(requestID)
-	newRequestID, err := submit(r.Context(), runConfigJSON)
+	newRequestID, err := s.submitWithIssueClaim(r.Context(), runConfigJSON, submit)
 	if err != nil {
 		if duplicateRequestID, duplicateState, ok := duplicateSubmissionDetails(err); ok {
 			writeJSON(w, http.StatusConflict, map[string]any{

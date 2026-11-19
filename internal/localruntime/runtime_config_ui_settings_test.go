@@ -39,16 +39,17 @@ func TestReadRuntimeConfigUISettingsMatchesIndividualReaders(t *testing.T) {
 	}
 	for name, path := range paths {
 		want := RuntimeConfigUISettings{
-			DefaultLibraryEnabled:            ReadRuntimeConfigDefaultLibraryEnabled(path),
-			ChatEnabled:                      ReadRuntimeConfigChatEnabled(path),
-			JSONEnabled:                      ReadRuntimeConfigJSONEnabled(path),
-			GitHubIssuesEnabled:              ReadRuntimeConfigGitHubIssuesEnabled(path),
-			GitHubIssueLinkMode:              ReadRuntimeConfigGitHubIssueLinkMode(path),
-			GitHubIssueAutoStartAssigned:     ReadRuntimeConfigGitHubIssueAutoStartAssigned(path),
-			GitHubIssueAutoStartOnlyAssigned: ReadRuntimeConfigGitHubIssueAutoStartOnlyAssigned(path),
-			GitHubIssueAutoStartLabels:       ReadRuntimeConfigGitHubIssueAutoStartLabels(path),
-			AssignCreator:                    ReadRuntimeConfigAssignCreator(path),
-			DisabledRepositories:             ReadRuntimeConfigDisabledRepositories(path),
+			DefaultLibraryEnabled:              ReadRuntimeConfigDefaultLibraryEnabled(path),
+			ChatEnabled:                        ReadRuntimeConfigChatEnabled(path),
+			JSONEnabled:                        ReadRuntimeConfigJSONEnabled(path),
+			GitHubIssuesEnabled:                ReadRuntimeConfigGitHubIssuesEnabled(path),
+			GitHubIssueLinkMode:                ReadRuntimeConfigGitHubIssueLinkMode(path),
+			GitHubIssueAutoStartAssigned:       ReadRuntimeConfigGitHubIssueAutoStartAssigned(path),
+			GitHubIssueAutoStartOnlyAssigned:   ReadRuntimeConfigGitHubIssueAutoStartOnlyAssigned(path),
+			GitHubIssueAutoStartLabels:         ReadRuntimeConfigGitHubIssueAutoStartLabels(path),
+			GitHubIssueAutoStartExclusionLabel: DefaultGitHubIssueExclusionLabel,
+			AssignCreator:                      ReadRuntimeConfigAssignCreator(path),
+			DisabledRepositories:               ReadRuntimeConfigDisabledRepositories(path),
 		}
 		if got := ReadRuntimeConfigUISettings(path); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: ReadRuntimeConfigUISettings() = %+v, want %+v", name, got, want)

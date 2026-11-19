@@ -168,6 +168,7 @@ func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 // githubIssueLinkMode is optional; when omitted, the existing behavior remains.
 type RuntimeConfigUISettingsUpdate struct {
 	OnlyAssigned         *bool
+	ExclusionLabel       *string
 	Labels               *[]string
 	DisabledRepositories *[]string
 }
@@ -244,9 +245,23 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 			githubIssueAutoStartLabels = setting.Labels
 		}
 	}
+	for _, setting := range settingsUpdates {
+		if setting.ExclusionLabel != nil {
+			label := strings.TrimSpace(*setting.ExclusionLabel)
+			if label == "" || len(label) > 50 || strings.ContainsAny(label, "\r\n") {
+				return fmt.Errorf("issue exclusion label must contain 1–50 characters and no newlines")
+			}
+			doc["github_issue_auto_start_exclusion_label"] = label
+		}
+	}
 	applyGitHubIssueAutoStartOnlyAssignedToDoc(doc, onlyAssigned)
 	if githubIssueAutoStartLabels != nil {
 		applyGitHubIssueAutoStartLabelsToDoc(doc, *githubIssueAutoStartLabels)
+	}
+	for _, label := range githubIssueAutoStartLabelsFromDoc(doc) {
+		if strings.EqualFold(label, githubIssueExclusionLabelFromDoc(doc)) {
+			return fmt.Errorf("issue exclusion label must not also be a trigger label")
+		}
 	}
 	assignCreatorValue := assignCreatorFromDoc(doc)
 	if assignCreator != nil {
@@ -306,7 +321,14 @@ func ReadRuntimeConfigGitHubIssueAutoStartLabels(path string) []string {
 func githubIssueAutoStartLabelsFromDoc(doc map[string]any) []string {
 	raw, ok := doc["github_issue_auto_start_labels"].([]any)
 	if !ok {
-		return nil
+		if labels, typed := doc["github_issue_auto_start_labels"].([]string); typed {
+			raw = make([]any, len(labels))
+			for i, label := range labels {
+				raw[i] = label
+			}
+		} else {
+			return nil
+		}
 	}
 	return normalizeGitHubIssueAutoStartLabels(raw)
 }
@@ -444,38 +466,61 @@ func applyDefaultLibraryEnabledToDoc(doc map[string]any, enabled bool) {
 // RuntimeConfigUISettings holds the persisted UI and automation toggles read
 // from one runtime config file.
 type RuntimeConfigUISettings struct {
-	DefaultLibraryEnabled            bool
-	ChatEnabled                      bool
-	JSONEnabled                      bool
-	GitHubIssuesEnabled              bool
-	GitHubIssueLinkMode              string
-	GitHubIssueAutoStartAssigned     bool
-	GitHubIssueAutoStartOnlyAssigned bool
-	GitHubIssueAutoStartLabels       []string
-	AssignCreator                    bool
-	DisabledRepositories             []string
+	DefaultLibraryEnabled              bool
+	ChatEnabled                        bool
+	JSONEnabled                        bool
+	GitHubIssuesEnabled                bool
+	GitHubIssueLinkMode                string
+	GitHubIssueAutoStartAssigned       bool
+	GitHubIssueAutoStartOnlyAssigned   bool
+	GitHubIssueAutoStartLabels         []string
+	GitHubIssueAutoStartExclusionLabel string
+	AssignCreator                      bool
+	DisabledRepositories               []string
 }
 
 // ReadRuntimeConfigUISettings reads the runtime config once and returns every
 // UI toggle. Each field matches its ReadRuntimeConfig* counterpart, including
 // defaults when the path is empty or the file is unreadable.
 func ReadRuntimeConfigUISettings(path string) RuntimeConfigUISettings {
+	settings, _ := LoadRuntimeConfigUISettings(path)
+	return settings
+}
+
+const DefaultGitHubIssueExclusionLabel = "agent_00-in-progress"
+
+func githubIssueExclusionLabelFromDoc(doc map[string]any) string {
+	label, _ := doc["github_issue_auto_start_exclusion_label"].(string)
+	if label = strings.TrimSpace(label); label == "" {
+		return DefaultGitHubIssueExclusionLabel
+	}
+	return label
+}
+
+// LoadRuntimeConfigUISettings distinguishes missing initial configuration from
+// malformed or unreadable settings, which must not silently disable automation.
+func LoadRuntimeConfigUISettings(path string) (RuntimeConfigUISettings, error) {
+	var loadErr error
 	var doc map[string]any
 	if path = strings.TrimSpace(path); path != "" {
-		doc, _ = readRuntimeConfigDoc(path)
+		doc, loadErr = readRuntimeConfigDoc(path)
+		if errors.Is(loadErr, os.ErrNotExist) {
+			loadErr = nil
+		}
 	}
 	return RuntimeConfigUISettings{
-		DefaultLibraryEnabled:            defaultLibraryEnabledFromDoc(doc),
-		ChatEnabled:                      chatEnabledFromDoc(doc),
-		JSONEnabled:                      jsonEnabledFromDoc(doc),
-		GitHubIssuesEnabled:              githubIssuesEnabledFromDoc(doc),
-		GitHubIssueLinkMode:              githubIssueLinkModeFromDoc(doc),
-		GitHubIssueAutoStartAssigned:     githubIssueAutoStartAssignedFromDoc(doc),
-		GitHubIssueAutoStartOnlyAssigned: githubIssueAutoStartOnlyAssignedFromDoc(doc),
-		GitHubIssueAutoStartLabels:       githubIssueAutoStartLabelsFromDoc(doc),
-		AssignCreator:                    assignCreatorFromDoc(doc),
-		DisabledRepositories:             disabledRepositoriesFromDoc(doc),
-	}
+		DefaultLibraryEnabled:              defaultLibraryEnabledFromDoc(doc),
+		ChatEnabled:                        chatEnabledFromDoc(doc),
+		JSONEnabled:                        jsonEnabledFromDoc(doc),
+		GitHubIssuesEnabled:                githubIssuesEnabledFromDoc(doc),
+		GitHubIssueLinkMode:                githubIssueLinkModeFromDoc(doc),
+		GitHubIssueAutoStartAssigned:       githubIssueAutoStartAssignedFromDoc(doc),
+		GitHubIssueAutoStartOnlyAssigned:   githubIssueAutoStartOnlyAssignedFromDoc(doc),
+		GitHubIssueAutoStartLabels:         githubIssueAutoStartLabelsFromDoc(doc),
+		GitHubIssueAutoStartExclusionLabel: githubIssueExclusionLabelFromDoc(doc),
+		AssignCreator:                      assignCreatorFromDoc(doc),
+		DisabledRepositories:               disabledRepositoriesFromDoc(doc),
+	}, loadErr
 }
 
 func disabledRepositoriesFromDoc(doc map[string]any) []string {

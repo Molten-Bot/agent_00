@@ -211,7 +211,7 @@ test('all settings save on close and survive reopening; no main Save button', as
   assert.equal(await page.locator('#custom-library-name').inputValue(), 'kept draft');
   await toggle(page, 'review-settings-default-library');
   await close(page);
-  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], assign_creator: false, disabled_repositories: [] });
+  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], github_issue_auto_start_exclusion_label: "agent_00-in-progress", assign_creator: false, disabled_repositories: [] });
   await page.reload();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   assert.equal(await page.locator('#review-settings-auto-merge').isChecked(), true);
@@ -1326,3 +1326,49 @@ for (const viewport of [{ width: 1280, height: 1100 }, { width: 430, height: 932
     await close(page);
   });
 }
+
+test('issue automation exposes failures and persists the exclusion label', async t => {
+  const { page, writes } = await openSettings(t, {
+    initialSettings: { ...defaults, github_issues_enabled: true, github_issue_auto_start_assigned: true },
+    configurePage: async page => {
+      await page.route('**/api/github/automation', route => route.fulfill({ json: {
+        ok: true, status: { enabled: true, account: 'octocat', repositories: ['acme/repo'], error: 'agent authorization required', issues: [{ repository: 'acme/repo', number: 17, reason: 'submission blocked', error: 'agent authorization required' }] }, claims: [],
+      } }));
+    },
+  });
+  await select(page, 'github-issues');
+  await page.waitForFunction(() => document.getElementById('github-automation-status').textContent.includes('agent authorization required'));
+  assert.match(await page.locator('#github-automation-status').textContent(), /octocat/);
+  assert.match(await page.locator('#github-automation-decisions').textContent(), /acme\/repo#17/);
+  assert.equal(await page.locator('#review-settings-github-issues-exclusion-label').inputValue(), 'agent_00-in-progress');
+  await page.locator('#review-settings-github-issues-exclusion-label').fill('team-claimed');
+  await close(page);
+  assert.equal(writes.at(-1).github_issue_auto_start_exclusion_label, 'team-claimed');
+});
+
+test('issue recovery requires confirmation and sends the observed claim identity', async t => {
+  const retries = [];
+  const { page } = await openSettings(t, {
+    initialSettings: { ...defaults, github_issues_enabled: true },
+    configurePage: async page => {
+      await page.route('**/api/github/automation', route => route.fulfill({ json: {
+        ok: true, status: { enabled: true, issues: [] }, claims: [{ id: 'claim-1', repository: 'acme/repo', number: 17, phase: 'blocked', attempt: 1 }],
+      } }));
+      await page.route('**/api/github/automation/retry**', route => {
+        if (route.request().method() === 'POST') { retries.push(route.request().postDataJSON()); return route.fulfill({ status: 202, json: { ok: true, request_id: 'retry-1' } }); }
+        return route.fulfill({ json: { ok: true, expectedClaimId: 'claim-1', attempt: 1 } });
+      });
+    },
+  });
+  await select(page, 'github-issues');
+  const button = page.getByRole('button', { name: 'Recover / retry' });
+  await button.waitFor();
+  page.once('dialog', dialog => dialog.dismiss());
+  await button.click();
+  await page.waitForFunction(() => !document.querySelector('#github-automation-decisions button').disabled);
+  assert.equal(retries.length, 0);
+  page.once('dialog', dialog => { assert.match(dialog.message(), /previous worker has stopped/); return dialog.accept(); });
+  await button.click();
+  await page.waitForFunction(() => !document.querySelector('#github-automation-decisions button').disabled);
+  assert.deepEqual(retries, [{ repository: 'acme/repo', number: 17, expectedClaimId: 'claim-1', confirmStopped: true }]);
+});

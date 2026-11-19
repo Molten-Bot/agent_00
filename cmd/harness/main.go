@@ -602,6 +602,9 @@ func runServer(args []string) int {
 		return requestID, nil
 	}
 	queueFailureRerun = func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string) {
+		if failedRunCfg.GitHubIssue != nil && failedRunCfg.GitHubIssue.Claim != nil {
+			return
+		}
 		if ok, reason := shouldQueueFailureRerun(source, failedResult); !ok {
 			daemonLogger(
 				"task status=warn action=skip_failure_rerun request_id=%s err=%q",
@@ -741,6 +744,7 @@ func runServer(args []string) int {
 		uiServer.AutomaticMode = *uiAutomatic
 		uiServer.ConfiguredHarness = cfg.AgentHarness
 		uiServer.GitHubIssueRunner = runner
+		uiServer.IssueClaims = &localruntime.IssueClaimStore{Root: filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "issue-claims")}
 		uiServer.Logf = daemonLogger
 		uiServer.LoadLibraryTasks = func() ([]library.TaskSummary, error) {
 			var catalog library.Catalog
@@ -800,7 +804,7 @@ func runServer(args []string) int {
 		signing := signingSettings(cfg, runner)
 		uiServer.CommitSigning = &signing
 		uiServer.ReviewSettingsStatus = func(context.Context) (web.ReviewSettingsState, error) {
-			return currentReviewSettingsState(cfg), nil
+			return loadReviewSettingsState(cfg)
 		}
 		uiServer.ConfigureReviewSettings = func(_ context.Context, req web.ReviewSettingsRequest) (web.ReviewSettingsState, error) {
 			state, err := configureReviewSettings(cfg, req)
@@ -2572,31 +2576,44 @@ func effectiveRuntimeConfig(cfg localruntime.InitConfig) (localruntime.InitConfi
 }
 
 func currentReviewSettingsState(cfg localruntime.InitConfig) web.ReviewSettingsState {
+	state, _ := loadReviewSettingsState(cfg)
+	return state
+}
+
+func loadReviewSettingsState(cfg localruntime.InitConfig) (web.ReviewSettingsState, error) {
 	activeCfg, err := effectiveRuntimeConfig(cfg)
 	if err != nil {
 		activeCfg = cfg
 	}
 	activeCfg.ApplyDefaults()
-	ui := localruntime.ReadRuntimeConfigUISettings(cfg.RuntimeConfigPath)
+	ui, uiErr := localruntime.LoadRuntimeConfigUISettings(cfg.RuntimeConfigPath)
 	return web.ReviewSettingsState{
-		AutoMerge:                        activeCfg.ReviewWatch.AutoMergeEnabled(),
-		DeleteMergedBranches:             activeCfg.ReviewWatch.DeleteMergedBranchesEnabled(),
-		MergeMethod:                      activeCfg.ReviewWatch.MergeMethod,
-		ReviewLevel:                      activeCfg.ReviewWatch.ReviewLevel,
-		DefaultLibraryEnabled:            ui.DefaultLibraryEnabled,
-		ChatEnabled:                      ui.ChatEnabled,
-		JSONEnabled:                      ui.JSONEnabled,
-		GitHubIssuesEnabled:              ui.GitHubIssuesEnabled,
-		GitHubIssueLinkMode:              ui.GitHubIssueLinkMode,
-		GitHubIssueAutoStartAssigned:     ui.GitHubIssueAutoStartAssigned,
-		GitHubIssueAutoStartOnlyAssigned: ui.GitHubIssueAutoStartOnlyAssigned,
-		GitHubIssueAutoStartLabels:       ui.GitHubIssueAutoStartLabels,
-		AssignCreator:                    ui.AssignCreator,
-		DisabledRepositories:             ui.DisabledRepositories,
-	}
+		AutoMerge:                          activeCfg.ReviewWatch.AutoMergeEnabled(),
+		DeleteMergedBranches:               activeCfg.ReviewWatch.DeleteMergedBranchesEnabled(),
+		MergeMethod:                        activeCfg.ReviewWatch.MergeMethod,
+		ReviewLevel:                        activeCfg.ReviewWatch.ReviewLevel,
+		DefaultLibraryEnabled:              ui.DefaultLibraryEnabled,
+		ChatEnabled:                        ui.ChatEnabled,
+		JSONEnabled:                        ui.JSONEnabled,
+		GitHubIssuesEnabled:                ui.GitHubIssuesEnabled,
+		GitHubIssueLinkMode:                ui.GitHubIssueLinkMode,
+		GitHubIssueAutoStartAssigned:       ui.GitHubIssueAutoStartAssigned,
+		GitHubIssueAutoStartEnabled:        ui.GitHubIssueAutoStartAssigned,
+		GitHubIssueAutoStartExclusionLabel: ui.GitHubIssueAutoStartExclusionLabel,
+		GitHubIssueAutoStartOnlyAssigned:   ui.GitHubIssueAutoStartOnlyAssigned,
+		GitHubIssueAutoStartLabels:         ui.GitHubIssueAutoStartLabels,
+		AssignCreator:                      ui.AssignCreator,
+		DisabledRepositories:               ui.DisabledRepositories,
+	}, errors.Join(err, uiErr)
 }
 
 func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettingsRequest) (web.ReviewSettingsState, error) {
+	if req.GitHubIssueAutoStartEnabled != nil {
+		if req.GitHubIssueAutoStartAssigned != nil && *req.GitHubIssueAutoStartAssigned != *req.GitHubIssueAutoStartEnabled {
+			return currentReviewSettingsState(cfg), fmt.Errorf("conflicting issue auto-start settings")
+		}
+		req.GitHubIssueAutoStartAssigned = req.GitHubIssueAutoStartEnabled
+	}
 	method := normalizeReviewSettingsMergeMethod(req.MergeMethod)
 	if method == "" {
 		state := currentReviewSettingsState(cfg)
@@ -2624,7 +2641,7 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		MergeMethod:          method,
 		ReviewLevel:          reviewLevel,
 	}
-	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled, req.GitHubIssueLinkMode, req.GitHubIssueAutoStartAssigned, req.AssignCreator, localruntime.RuntimeConfigUISettingsUpdate{OnlyAssigned: req.GitHubIssueAutoStartOnlyAssigned, Labels: req.GitHubIssueAutoStartLabels, DisabledRepositories: req.DisabledRepositories}); err != nil {
+	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled, req.GitHubIssueLinkMode, req.GitHubIssueAutoStartAssigned, req.AssignCreator, localruntime.RuntimeConfigUISettingsUpdate{OnlyAssigned: req.GitHubIssueAutoStartOnlyAssigned, Labels: req.GitHubIssueAutoStartLabels, ExclusionLabel: req.GitHubIssueAutoStartExclusionLabel, DisabledRepositories: req.DisabledRepositories}); err != nil {
 		state := currentReviewSettingsState(cfg)
 		return state, err
 	}

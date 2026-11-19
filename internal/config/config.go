@@ -69,10 +69,21 @@ func (c Config) AssignCreatorEnabled() bool {
 
 // GitHubIssueConfig preserves the GitHub issue that originated a run.
 type GitHubIssueConfig struct {
-	Repository string `json:"repository"`
-	Number     int    `json:"number"`
-	URL        string `json:"url"`
-	LinkMode   string `json:"linkMode,omitempty"`
+	Repository string            `json:"repository"`
+	Number     int               `json:"number"`
+	URL        string            `json:"url"`
+	LinkMode   string            `json:"linkMode,omitempty"`
+	Claim      *GitHubIssueClaim `json:"claim,omitempty"`
+}
+
+// GitHubIssueClaim pins an issue task to its reserved remote branch. The claim
+// ID identifies durable admission state; it is not an authentication secret.
+type GitHubIssueClaim struct {
+	ID             string `json:"id"`
+	Branch         string `json:"branch"`
+	BaseBranch     string `json:"baseBranch"`
+	ExclusionLabel string `json:"exclusionLabel"`
+	Attempt        int    `json:"attempt"`
 }
 
 const (
@@ -432,6 +443,11 @@ func validateGitHubIssueConfig(issue *GitHubIssueConfig) error {
 	}
 	if issue.Number <= 0 {
 		return fmt.Errorf("githubIssue.number must be positive")
+	}
+	if claim := issue.Claim; claim != nil {
+		if claim.ID == "" || claim.Branch != fmt.Sprintf("agent00-issue-%d", issue.Number) || strings.TrimSpace(claim.BaseBranch) == "" || claim.BaseBranch == claim.Branch || strings.TrimSpace(claim.ExclusionLabel) == "" || claim.Attempt < 1 {
+			return fmt.Errorf("githubIssue.claim requires an ID, deterministic issue branch, distinct base branch, exclusion label, and positive attempt")
+		}
 	}
 	parsedURL, err := url.Parse(strings.TrimSpace(issue.URL))
 	if err != nil || parsedURL.Scheme != "https" || parsedURL.Host == "" || parsedURL.User != nil {
