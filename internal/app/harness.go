@@ -519,7 +519,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		return h.fail(ExitCodex, agentStage, err, runDir)
 	}
 	h.logf("stage=%s status=ok elapsed_s=%d%s", agentStage, int(time.Since(codexStart).Seconds()), initialAgentInvocation.logFieldsSuffix())
-	if err := h.validateEnforcedNonDefaultBranches(ctx, repos); err != nil {
+	// A PR may merge and delete its remote branch while the agent runs. Keep
+	// local branch pinning here; changed repos get full remote validation before writes.
+	if err := h.validateEnforcedNonDefaultBranchCheckouts(ctx, repos); err != nil {
 		return h.fail(ExitGit, "git", err, runDir)
 	}
 
@@ -2832,6 +2834,15 @@ func (h Harness) validateRequiredNonDefaultBranches(ctx context.Context, cfg con
 func (h Harness) validateEnforcedNonDefaultBranches(ctx context.Context, repos []repoWorkspace) error {
 	for _, repo := range repos {
 		if err := h.validateEnforcedNonDefaultBranch(ctx, repo); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h Harness) validateEnforcedNonDefaultBranchCheckouts(ctx context.Context, repos []repoWorkspace) error {
+	for _, repo := range repos {
+		if err := h.validateEnforcedNonDefaultBranchCheckout(ctx, repo); err != nil {
 			return err
 		}
 	}

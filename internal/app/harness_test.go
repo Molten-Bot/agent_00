@@ -1696,7 +1696,6 @@ func TestRunRequiredNonDefaultBranchRejectsAgentBranchSwitchBeforeGitWrites(t *t
 		{cmd: pushDryRunCommand(repoDir, cfg.BaseBranch)},
 		{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "1111111111111111111111111111111111111111\n"}},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
-		{cmd: remoteDefaultBranchCommand(repoDir), res: defaultBranch},
 		{cmd: currentBranchCommand(repoDir), res: execx.Result{Stdout: "main\n"}},
 	}}
 
@@ -1749,9 +1748,7 @@ func TestRunRequiredNonDefaultBranchKeepsFeaturePublishPinned(t *testing.T) {
 		{cmd: pushDryRunCommand(repoDir, cfg.BaseBranch)},
 		{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "1111111111111111111111111111111111111111\n"}},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
-		{cmd: remoteDefaultBranchCommand(repoDir), res: defaultBranch},
 		{cmd: currentBranchCommand(repoDir), res: execx.Result{Stdout: cfg.BaseBranch + "\n"}},
-		{cmd: remoteBranchExistsOnOriginCommand(repoDir, cfg.BaseBranch), res: featureHead},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## " + cfg.BaseBranch + "...origin/" + cfg.BaseBranch + "\n M file.go\n"}},
 		{cmd: remoteDefaultBranchCommand(repoDir), res: defaultBranch},
 		{cmd: currentBranchCommand(repoDir), res: execx.Result{Stdout: cfg.BaseBranch + "\n"}},
@@ -3230,6 +3227,67 @@ func TestRunResolvePRCommentsNoChangesReportsExistingPR(t *testing.T) {
 	}
 	if got, want := res.RepoResults[0].PRURL, prURL; got != want {
 		t.Fatalf("RepoResults[0].PRURL = %q, want %q", got, want)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestRunResolvePRCommentsNoChangesAllowsRemoteBranchDeletedDuringAgentRun(t *testing.T) {
+	t.Parallel()
+
+	cfg := sampleConfig()
+	cfg.BaseBranch = "release/2026.04-hotfix"
+	cfg.LibraryTaskName = resolvePRCommentsLibraryTaskName
+	cfg.RequiresNonDefaultBranch = true
+	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
+	guid := "abcdef123456"
+	runDir := testRunDir(guid)
+	agentsPath := filepath.Join(runDir, "AGENTS.md")
+	repoDir := filepath.Join(runDir, "repo")
+	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
+	prURL := "https://github.com/acme/repo/pull/77"
+	defaultBranch := execx.Result{Stdout: "ref: refs/heads/main\tHEAD\nabc123\tHEAD\n"}
+	currentBranch := execx.Result{Stdout: cfg.BaseBranch + "\n"}
+	remoteHead := execx.Result{Stdout: "abc123\trefs/heads/" + cfg.BaseBranch + "\n"}
+
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"--version"}}},
+		{cmd: execx.Command{Name: "codex", Args: []string{"--help"}}},
+		{cmd: execx.Command{Name: "gh", Args: []string{"auth", "status"}}},
+		{cmd: cloneCommand(cfg, repoDir)},
+		{cmd: fetchBaseBranchCommand(repoDir, cfg.BaseBranch)},
+		{cmd: remoteDefaultBranchCommand(repoDir), res: defaultBranch},
+		{cmd: currentBranchCommand(repoDir), res: currentBranch},
+		{cmd: remoteBranchExistsOnOriginCommand(repoDir, cfg.BaseBranch), res: remoteHead},
+		{cmd: pushDryRunCommand(repoDir, cfg.BaseBranch)},
+		{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "1111111111111111111111111111111111111111\n"}},
+		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
+		{cmd: currentBranchCommand(repoDir), res: currentBranch},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## " + cfg.BaseBranch + "...origin/" + cfg.BaseBranch + "\n"}},
+		{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "1111111111111111111111111111111111111111\n"}},
+		{cmd: remoteBranchExistsOnOriginCommand(repoDir, cfg.BaseBranch)},
+		{cmd: prLookupAnyByHeadCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: prURL + "\n"}},
+	}}
+
+	h := New(fake)
+	h.Now = func() time.Time { return now }
+	h.Workspace = testWorkspaceManager(guid)
+	h.TargetDirOK = func(path string) bool { return path == targetDir }
+
+	res := h.Run(context.Background(), cfg)
+	if res.Err != nil {
+		t.Fatalf("Run() err = %v", res.Err)
+	}
+	if res.ExitCode != ExitSuccess {
+		t.Fatalf("ExitCode = %d", res.ExitCode)
+	}
+	if !res.NoChanges {
+		t.Fatal("NoChanges = false, want true")
+	}
+	if got, want := res.PRURL, prURL; got != want {
+		t.Fatalf("PRURL = %q, want %q", got, want)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
