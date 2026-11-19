@@ -1749,6 +1749,7 @@ func TestRunRequiredNonDefaultBranchKeepsFeaturePublishPinned(t *testing.T) {
 		{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "1111111111111111111111111111111111111111\n"}},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
 		{cmd: currentBranchCommand(repoDir), res: execx.Result{Stdout: cfg.BaseBranch + "\n"}},
+		{cmd: remoteDefaultBranchCommand(repoDir), res: defaultBranch},
 		{cmd: remoteBranchExistsOnOriginCommand(repoDir, cfg.BaseBranch), res: featureHead},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## " + cfg.BaseBranch + "...origin/" + cfg.BaseBranch + "\n M file.go\n"}},
 		{cmd: remoteDefaultBranchCommand(repoDir), res: defaultBranch},
@@ -3266,6 +3267,7 @@ func TestRunResolvePRCommentsNoChangesAllowsRemoteBranchDeletedDuringAgentRun(t 
 		{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "1111111111111111111111111111111111111111\n"}},
 		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
 		{cmd: currentBranchCommand(repoDir), res: currentBranch},
+		{cmd: remoteDefaultBranchCommand(repoDir), res: defaultBranch},
 		{cmd: remoteBranchExistsOnOriginCommand(repoDir, cfg.BaseBranch)},
 		{cmd: prLookupAnyByHeadCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prStateViewCommand(repoDir, prURL), res: execx.Result{Stdout: `{"url":"` + prURL + `","state":"MERGED","mergedAt":"2026-04-02T15:05:00Z","headRefName":"` + cfg.BaseBranch + `"}`}},
@@ -9584,6 +9586,7 @@ func TestValidateEnforcedNonDefaultBranchAfterAgentRejectsMissingRemoteForOpenPR
 	}
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: currentBranchCommand(repo.Dir), res: execx.Result{Stdout: branch + "\n"}},
+		{cmd: remoteDefaultBranchCommand(repo.Dir), res: execx.Result{Stdout: "ref: refs/heads/main\tHEAD\nabc123\tHEAD\n"}},
 		{cmd: remoteBranchExistsOnOriginCommand(repo.Dir, branch)},
 		{cmd: prLookupAnyByHeadCommand(repo.Dir, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prStateViewCommand(repo.Dir, prURL), res: execx.Result{Stdout: `{"url":"` + prURL + `","state":"OPEN","headRefName":"` + branch + `"}`}},
@@ -9592,6 +9595,33 @@ func TestValidateEnforcedNonDefaultBranchAfterAgentRejectsMissingRemoteForOpenPR
 	err := New(fake).validateEnforcedNonDefaultBranchAfterAgent(context.Background(), repo)
 	if err == nil || !strings.Contains(err.Error(), `does not resolve to refs/heads/`+branch) {
 		t.Fatalf("validateEnforcedNonDefaultBranchAfterAgent() error = %v, want missing remote branch rejection", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestValidateEnforcedNonDefaultBranchAfterAgentRejectsRepositoryDefault(t *testing.T) {
+	t.Parallel()
+
+	const branch = "release"
+	repo := repoWorkspace{
+		URL:                      "git@github.com:acme/repo.git",
+		Dir:                      "/tmp/repo",
+		Branch:                   branch,
+		BaseBranch:               branch,
+		RequiresNonDefaultBranch: true,
+		RequiredBranch:           branch,
+		RequiredBranchTask:       resolvePRCommentsLibraryTaskName,
+	}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: currentBranchCommand(repo.Dir), res: execx.Result{Stdout: branch + "\n"}},
+		{cmd: remoteDefaultBranchCommand(repo.Dir), res: execx.Result{Stdout: "ref: refs/heads/" + branch + "\tHEAD\nabc123\tHEAD\n"}},
+	}}
+
+	err := New(fake).validateEnforcedNonDefaultBranchAfterAgent(context.Background(), repo)
+	if err == nil || !strings.Contains(err.Error(), `configured base branch "release" is repository default "release"`) {
+		t.Fatalf("validateEnforcedNonDefaultBranchAfterAgent() error = %v, want repository default rejection", err)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))

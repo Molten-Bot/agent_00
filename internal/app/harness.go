@@ -2860,6 +2860,9 @@ func (h Harness) validateEnforcedNonDefaultBranchAfterAgent(ctx context.Context,
 	if err := h.validateEnforcedNonDefaultBranchCheckout(ctx, repo); err != nil {
 		return err
 	}
+	if err := h.validateEnforcedNonDefaultBranchDefault(ctx, repo); err != nil {
+		return err
+	}
 
 	requiredBranch := normalizeBranchRef(repo.RequiredBranch)
 	remoteHeadRes, remoteHeadErr := h.runCommand(ctx, "git", remoteBranchExistsOnOriginCommand(repo.Dir, requiredBranch))
@@ -2903,7 +2906,30 @@ func (h Harness) validateEnforcedNonDefaultBranch(ctx context.Context, repo repo
 	if !repo.RequiresNonDefaultBranch {
 		return nil
 	}
+	if err := h.validateEnforcedNonDefaultBranchDefault(ctx, repo); err != nil {
+		return err
+	}
+	if err := h.validateEnforcedNonDefaultBranchCheckout(ctx, repo); err != nil {
+		return err
+	}
 
+	requiredBranch := normalizeBranchRef(repo.RequiredBranch)
+	remoteHeadRes, remoteHeadErr := h.runCommand(ctx, "git", remoteBranchExistsOnOriginCommand(repo.Dir, requiredBranch))
+	if remoteHeadErr != nil {
+		return commandErrorWithDetails(
+			fmt.Sprintf("verify remote branch head %q for repo %s", requiredBranch, repo.URL),
+			remoteHeadErr,
+			remoteHeadRes,
+			maxGitErrorDetailChars,
+		)
+	}
+	if !remoteBranchHeadExists(remoteHeadRes.Stdout, requiredBranch) {
+		return requiredRemoteBranchError(repo, requiredBranch)
+	}
+	return nil
+}
+
+func (h Harness) validateEnforcedNonDefaultBranchDefault(ctx context.Context, repo repoWorkspace) error {
 	requiredBranch := normalizeBranchRef(repo.RequiredBranch)
 	taskName := strings.TrimSpace(repo.RequiredBranchTask)
 	if isProtectedDefaultBranchName(requiredBranch) {
@@ -2936,22 +2962,6 @@ func (h Harness) validateEnforcedNonDefaultBranch(ctx context.Context, repo repo
 			defaultBranch,
 			repo.URL,
 		)
-	}
-	if err := h.validateEnforcedNonDefaultBranchCheckout(ctx, repo); err != nil {
-		return err
-	}
-
-	remoteHeadRes, remoteHeadErr := h.runCommand(ctx, "git", remoteBranchExistsOnOriginCommand(repo.Dir, requiredBranch))
-	if remoteHeadErr != nil {
-		return commandErrorWithDetails(
-			fmt.Sprintf("verify remote branch head %q for repo %s", requiredBranch, repo.URL),
-			remoteHeadErr,
-			remoteHeadRes,
-			maxGitErrorDetailChars,
-		)
-	}
-	if !remoteBranchHeadExists(remoteHeadRes.Stdout, requiredBranch) {
-		return requiredRemoteBranchError(repo, requiredBranch)
 	}
 	return nil
 }
