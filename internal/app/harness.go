@@ -519,9 +519,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		return h.fail(ExitCodex, agentStage, err, runDir)
 	}
 	h.logf("stage=%s status=ok elapsed_s=%d%s", agentStage, int(time.Since(codexStart).Seconds()), initialAgentInvocation.logFieldsSuffix())
-	// A PR may merge and delete its remote branch while the agent runs. Keep
-	// local branch pinning here; changed repos get full remote validation before writes.
-	if err := h.validateEnforcedNonDefaultBranchCheckouts(ctx, repos); err != nil {
+	// A PR may merge and delete its remote branch while the agent runs. Allow
+	// that case only after GitHub confirms the PR associated with the branch merged.
+	if err := h.validateEnforcedNonDefaultBranchesAfterAgent(ctx, repos); err != nil {
 		return h.fail(ExitGit, "git", err, runDir)
 	}
 
@@ -1402,10 +1402,14 @@ func (h Harness) loadPullRequestState(ctx context.Context, repoDir, prURL string
 }
 
 func pullRequestStateIsOpen(state prStateView) bool {
-	if strings.TrimSpace(state.MergedAt) != "" {
+	if pullRequestStateIsMerged(state) {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(state.State), "open")
+}
+
+func pullRequestStateIsMerged(state prStateView) bool {
+	return strings.TrimSpace(state.MergedAt) != "" || strings.EqualFold(strings.TrimSpace(state.State), "merged")
 }
 
 func promptPullRequestMatchesRepoBranch(state prStateView, repo repoWorkspace) bool {
@@ -2840,13 +2844,59 @@ func (h Harness) validateEnforcedNonDefaultBranches(ctx context.Context, repos [
 	return nil
 }
 
-func (h Harness) validateEnforcedNonDefaultBranchCheckouts(ctx context.Context, repos []repoWorkspace) error {
+func (h Harness) validateEnforcedNonDefaultBranchesAfterAgent(ctx context.Context, repos []repoWorkspace) error {
 	for _, repo := range repos {
-		if err := h.validateEnforcedNonDefaultBranchCheckout(ctx, repo); err != nil {
+		if err := h.validateEnforcedNonDefaultBranchAfterAgent(ctx, repo); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (h Harness) validateEnforcedNonDefaultBranchAfterAgent(ctx context.Context, repo repoWorkspace) error {
+	if !repo.RequiresNonDefaultBranch {
+		return nil
+	}
+	if err := h.validateEnforcedNonDefaultBranchCheckout(ctx, repo); err != nil {
+		return err
+	}
+
+	requiredBranch := normalizeBranchRef(repo.RequiredBranch)
+	remoteHeadRes, remoteHeadErr := h.runCommand(ctx, "git", remoteBranchExistsOnOriginCommand(repo.Dir, requiredBranch))
+	if remoteHeadErr != nil {
+		return commandErrorWithDetails(
+			fmt.Sprintf("verify remote branch head %q for repo %s", requiredBranch, repo.URL),
+			remoteHeadErr,
+			remoteHeadRes,
+			maxGitErrorDetailChars,
+		)
+	}
+	if remoteBranchHeadExists(remoteHeadRes.Stdout, requiredBranch) {
+		return nil
+	}
+
+	prURL, err := h.lookupAnyPRURLByHead(ctx, repo)
+	if err != nil {
+		return fmt.Errorf("verify merged pull request for missing remote branch %q in repo %s: %w", requiredBranch, repo.URL, err)
+	}
+	if prURL != "" {
+		state, err := h.loadPullRequestState(ctx, repo.Dir, prURL)
+		if err != nil {
+			return fmt.Errorf("verify merged pull request for missing remote branch %q in repo %s: %w", requiredBranch, repo.URL, err)
+		}
+		if promptPullRequestMatchesRepoBranch(state, repo) && pullRequestStateIsMerged(state) {
+			h.logf(
+				"stage=git status=ok action=allow_missing_remote_branch reason=pr_merged repo=%s repo_dir=%s branch=%s pr_url=%s",
+				repo.URL,
+				repo.RelDir,
+				requiredBranch,
+				prURL,
+			)
+			return nil
+		}
+	}
+
+	return requiredRemoteBranchError(repo, requiredBranch)
 }
 
 func (h Harness) validateEnforcedNonDefaultBranch(ctx context.Context, repo repoWorkspace) error {
@@ -2901,15 +2951,19 @@ func (h Harness) validateEnforcedNonDefaultBranch(ctx context.Context, repo repo
 		)
 	}
 	if !remoteBranchHeadExists(remoteHeadRes.Stdout, requiredBranch) {
-		return fmt.Errorf(
-			"library task %q requires a remote branch head; configured base branch %q does not resolve to refs/heads/%s for repo %s",
-			taskName,
-			requiredBranch,
-			requiredBranch,
-			repo.URL,
-		)
+		return requiredRemoteBranchError(repo, requiredBranch)
 	}
 	return nil
+}
+
+func requiredRemoteBranchError(repo repoWorkspace, requiredBranch string) error {
+	return fmt.Errorf(
+		"library task %q requires a remote branch head; configured base branch %q does not resolve to refs/heads/%s for repo %s",
+		strings.TrimSpace(repo.RequiredBranchTask),
+		requiredBranch,
+		requiredBranch,
+		repo.URL,
+	)
 }
 
 func (h Harness) validateEnforcedNonDefaultBranchCheckout(ctx context.Context, repo repoWorkspace) error {
