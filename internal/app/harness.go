@@ -1332,6 +1332,7 @@ type prStateView struct {
 	State       string `json:"state"`
 	MergedAt    string `json:"mergedAt"`
 	HeadRefName string `json:"headRefName"`
+	HeadRefOID  string `json:"headRefOid"`
 }
 
 func (h Harness) recreatePullRequestIfClosed(ctx context.Context, repo *repoWorkspace, cfg config.Config) (bool, error) {
@@ -1422,6 +1423,12 @@ func promptPullRequestMatchesRepoBranch(state prStateView, repo repoWorkspace) b
 		expected = branchNameFromHeadRef(repoPRHeadRef(repo))
 	}
 	return actual == expected
+}
+
+func pullRequestHeadMatchesBaseline(state prStateView, repo repoWorkspace) bool {
+	baseline := strings.TrimSpace(repo.BaselineHead)
+	head := strings.TrimSpace(state.HeadRefOID)
+	return baseline != "" && head != "" && strings.EqualFold(head, baseline)
 }
 
 func branchNameFromHeadRef(headRef string) string {
@@ -2887,7 +2894,9 @@ func (h Harness) validateEnforcedNonDefaultBranchAfterAgent(ctx context.Context,
 		if err != nil {
 			return fmt.Errorf("verify merged pull request for missing remote branch %q in repo %s: %w", requiredBranch, repo.URL, err)
 		}
-		if promptPullRequestMatchesRepoBranch(state, repo) && pullRequestStateIsMerged(state) {
+		if promptPullRequestMatchesRepoBranch(state, repo) &&
+			pullRequestStateIsMerged(state) &&
+			pullRequestHeadMatchesBaseline(state, repo) {
 			h.logf(
 				"stage=git status=ok action=allow_missing_remote_branch reason=pr_merged repo=%s repo_dir=%s branch=%s pr_url=%s",
 				repo.URL,
@@ -8368,7 +8377,7 @@ func prLookupAnyByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Comma
 
 func prStateViewCommand(repoDir, prURL string) execx.Command {
 	selector := githubutil.PullRequestSelector(prURL)
-	args := []string{"pr", "view", selector, "--json", "url,state,mergedAt,headRefName"}
+	args := []string{"pr", "view", selector, "--json", "url,state,mergedAt,headRefName,headRefOid"}
 	if repo := githubutil.PullRequestRepository(prURL); repo != "" {
 		args = append(args, "--repo", repo)
 	}

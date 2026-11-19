@@ -3270,7 +3270,7 @@ func TestRunResolvePRCommentsNoChangesAllowsRemoteBranchDeletedDuringAgentRun(t 
 		{cmd: remoteDefaultBranchCommand(repoDir), res: defaultBranch},
 		{cmd: remoteBranchExistsOnOriginCommand(repoDir, cfg.BaseBranch)},
 		{cmd: prLookupAnyByHeadCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: prURL + "\n"}},
-		{cmd: prStateViewCommand(repoDir, prURL), res: execx.Result{Stdout: `{"url":"` + prURL + `","state":"MERGED","mergedAt":"2026-04-02T15:05:00Z","headRefName":"` + cfg.BaseBranch + `"}`}},
+		{cmd: prStateViewCommand(repoDir, prURL), res: execx.Result{Stdout: `{"url":"` + prURL + `","state":"MERGED","mergedAt":"2026-04-02T15:05:00Z","headRefName":"` + cfg.BaseBranch + `","headRefOid":"1111111111111111111111111111111111111111"}`}},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## " + cfg.BaseBranch + "...origin/" + cfg.BaseBranch + "\n"}},
 		{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "1111111111111111111111111111111111111111\n"}},
 		{cmd: remoteBranchExistsOnOriginCommand(repoDir, cfg.BaseBranch)},
@@ -9595,6 +9595,40 @@ func TestValidateEnforcedNonDefaultBranchAfterAgentRejectsMissingRemoteForOpenPR
 	err := New(fake).validateEnforcedNonDefaultBranchAfterAgent(context.Background(), repo)
 	if err == nil || !strings.Contains(err.Error(), `does not resolve to refs/heads/`+branch) {
 		t.Fatalf("validateEnforcedNonDefaultBranchAfterAgent() error = %v, want missing remote branch rejection", err)
+	}
+	if len(fake.exps) != 0 {
+		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	}
+}
+
+func TestValidateEnforcedNonDefaultBranchAfterAgentRejectsMergedPRFromReusedBranch(t *testing.T) {
+	t.Parallel()
+
+	const (
+		branch = "feature/conflicted"
+		prURL  = "https://github.com/acme/repo/pull/42"
+	)
+	repo := repoWorkspace{
+		URL:                      "git@github.com:acme/repo.git",
+		Dir:                      "/tmp/repo",
+		Branch:                   branch,
+		BaseBranch:               branch,
+		RequiresNonDefaultBranch: true,
+		RequiredBranch:           branch,
+		RequiredBranchTask:       resolvePRCommentsLibraryTaskName,
+		BaselineHead:             "current-head",
+	}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: currentBranchCommand(repo.Dir), res: execx.Result{Stdout: branch + "\n"}},
+		{cmd: remoteDefaultBranchCommand(repo.Dir), res: execx.Result{Stdout: "ref: refs/heads/main\tHEAD\nabc123\tHEAD\n"}},
+		{cmd: remoteBranchExistsOnOriginCommand(repo.Dir, branch)},
+		{cmd: prLookupAnyByHeadCommand(repo.Dir, branch), res: execx.Result{Stdout: prURL + "\n"}},
+		{cmd: prStateViewCommand(repo.Dir, prURL), res: execx.Result{Stdout: `{"url":"` + prURL + `","state":"MERGED","mergedAt":"2026-04-02T15:05:00Z","headRefName":"` + branch + `","headRefOid":"historical-head"}`}},
+	}}
+
+	err := New(fake).validateEnforcedNonDefaultBranchAfterAgent(context.Background(), repo)
+	if err == nil || !strings.Contains(err.Error(), `does not resolve to refs/heads/`+branch) {
+		t.Fatalf("validateEnforcedNonDefaultBranchAfterAgent() error = %v, want reused-branch PR rejection", err)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))

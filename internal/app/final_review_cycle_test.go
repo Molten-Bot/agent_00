@@ -84,7 +84,7 @@ func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (exec
 		}
 	case "gh":
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "view" {
-			if r.mergeAfterReview && slices.Contains(cmd.Args, "url,state,mergedAt,headRefName") {
+			if r.mergeAfterReview && slices.Contains(cmd.Args, "url,state,mergedAt,headRefName,headRefOid") {
 				return execx.Result{Stdout: `{"url":"https://github.com/acme/repo/pull/7","state":"MERGED","mergedAt":"2026-11-18T12:00:00Z","headRefName":"feature"}`}, nil
 			}
 			return execx.Result{Stdout: `{"number":7,"title":"Change","url":"https://github.com/acme/repo/pull/7","state":"OPEN","baseRefName":"main","headRefName":"feature","headRefOid":"head-sha","author":{"login":"dev"}}`}, nil
