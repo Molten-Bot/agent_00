@@ -8,6 +8,35 @@ import (
 	"testing"
 )
 
+func TestRuntimeDockerfileCrossCompilesGoBinariesForTargetPlatform(t *testing.T) {
+	t.Parallel()
+
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	dockerfilePath := filepath.Join(repoRoot, "Dockerfile")
+
+	data, err := os.ReadFile(dockerfilePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", dockerfilePath, err)
+	}
+
+	content := string(data)
+	for _, want := range []string{
+		"ARG TARGETOS=linux",
+		"ARG TARGETARCH=amd64",
+		"CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOBIN=/out",
+		"CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH}",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("%s does not cross-compile Go binaries using target platform setting %q", dockerfilePath, want)
+		}
+	}
+}
+
 func TestRuntimeDockerfileCopiesFullLibraryCatalog(t *testing.T) {
 	t.Parallel()
 
