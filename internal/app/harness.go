@@ -4143,7 +4143,8 @@ func (h Harness) buildReviewPromptContext(
 	metaRes, err := h.runCommand(ctx, "review", metadataCmd)
 	gitHubTokenEnvSanitized := false
 	if err != nil {
-		if !isGitHubUnauthorizedError(err) {
+		fallbackReason := githubCredentialFallbackReason(err)
+		if fallbackReason == "" {
 			return nil, fmt.Errorf("load pull request metadata: %w", err)
 		}
 		retryCmd := commandWithoutGitHubTokenEnv(metadataCmd)
@@ -4151,7 +4152,7 @@ func (h Harness) buildReviewPromptContext(
 		if retryErr != nil {
 			return nil, fmt.Errorf("load pull request metadata: %w (retry without GH_TOKEN/GITHUB_TOKEN: %v)", err, retryErr)
 		}
-		h.logf("stage=review status=warn action=retry_without_env_github_token reason=github_auth_unauthorized repo=%s repo_dir=%s", repo.URL, repo.RelDir)
+		h.logf("stage=review status=warn action=retry_without_env_github_token reason=%s repo=%s repo_dir=%s", fallbackReason, repo.URL, repo.RelDir)
 		metaRes = retryRes
 		gitHubTokenEnvSanitized = true
 	}
@@ -7309,6 +7310,26 @@ func isGitHubUnauthorizedError(err error) bool {
 	return strings.Contains(text, "http 401") ||
 		strings.Contains(text, "requires authentication") ||
 		strings.Contains(text, "bad credentials")
+}
+
+func githubCredentialFallbackReason(err error) string {
+	if isGitHubUnauthorizedError(err) {
+		return "github_auth_unauthorized"
+	}
+	if isGitHubPrimaryRateLimitError(err) {
+		return "github_primary_rate_limit_exceeded"
+	}
+	return ""
+}
+
+func isGitHubPrimaryRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "api rate limit already exceeded") ||
+		strings.Contains(text, "api rate limit exceeded") ||
+		strings.Contains(text, "rate limit exceeded for user")
 }
 
 func commandWithoutGitHubTokenEnv(cmd execx.Command) execx.Command {
