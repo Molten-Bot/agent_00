@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestDeployVnextPublishesSupplyChainAttestations(t *testing.T) {
+func TestDeployVnextPublishesMultiPlatformImageWithSupplyChainAttestations(t *testing.T) {
 	t.Parallel()
 
 	_, file, _, ok := runtime.Caller(0)
@@ -26,15 +26,18 @@ func TestDeployVnextPublishesSupplyChainAttestations(t *testing.T) {
 
 	content := string(data)
 	for _, want := range []string{
+		"timeout-minutes: 60",
+		"uses: docker/setup-qemu-action@v4",
+		"platforms: arm64",
 		"uses: docker/build-push-action@v7",
 		"provenance: mode=max",
 		"sbom: true",
 		"pull: true",
-		"platforms: linux/amd64",
+		"platforms: linux/amd64,linux/arm64",
 		"moltenai/agent_00:vnext",
 	} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("%s missing supply chain attestation setting %q", workflowPath, want)
+		if strings.Count(content, want) != 1 {
+			t.Fatalf("%s count of multi-platform publishing setting %q = %d, want 1", workflowPath, want, strings.Count(content, want))
 		}
 	}
 }
