@@ -1272,7 +1272,48 @@ func TestBuildReviewPromptContextRetriesMetadataWithoutInvalidGitHubTokenEnv(t *
 	}
 	for _, idx := range []int{1, 4, 5, 6} {
 		if envContainsKey(fake.calls[idx].Env, "GH_TOKEN") || envContainsKey(fake.calls[idx].Env, "GITHUB_TOKEN") {
-			t.Fatalf("call %d env contains GitHub token variables: %#v", idx, fake.calls[idx].Env)
+			t.Fatalf("call %d env contains GitHub token variables", idx)
+		}
+	}
+}
+
+func TestBuildReviewPromptContextRetriesMetadataWithoutRateLimitedGitHubTokenEnv(t *testing.T) {
+	t.Setenv("GH_TOKEN", "rate-limited-token")
+	t.Setenv("GITHUB_TOKEN", "rate-limited-token")
+
+	repoDir := t.TempDir()
+	metadataJSON := `{"number":2,"title":"Fix bug","body":"Body","url":"https://github.com/acme/repo/pull/2","state":"OPEN","baseRefName":"main","headRefName":"fix-bug","headRefOid":"abc123","author":{"login":"octocat"}}`
+	rateLimitErr := errors.New("run gh [pr view 2]: exit status 1 (GraphQL: API rate limit already exceeded for user ID 123.)")
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: prReviewMetadataCommand(repoDir, "2"), err: rateLimitErr},
+		{cmd: prReviewMetadataCommand(repoDir, "2"), res: execx.Result{Stdout: metadataJSON}},
+		{cmd: fetchRemoteBranchCommand(repoDir, "main")},
+		{cmd: fetchPullRequestHeadCommand(repoDir, 2)},
+		{cmd: prReviewIssueCommentsCommand(repoDir, 2), res: execx.Result{Stdout: "[]"}},
+		{cmd: prReviewReviewCommentsCommand(repoDir, 2), res: execx.Result{Stdout: "[]"}},
+		{cmd: prReviewReviewsCommand(repoDir, 2), res: execx.Result{Stdout: "[]"}},
+		{cmd: reviewDiffStatCommand(repoDir, "refs/remotes/origin/main", "refs/remotes/origin/agent00-pr-2"), res: execx.Result{Stdout: " file.go | 1 +"}},
+		{cmd: reviewDiffPatchCommand(repoDir, "refs/remotes/origin/main", "refs/remotes/origin/agent00-pr-2"), res: execx.Result{Stdout: "diff --git a/file.go b/file.go"}},
+	}}
+	var logs []string
+	h := New(fake)
+	h.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	ctx, err := h.buildReviewPromptContext(context.Background(), repoWorkspace{URL: "https://github.com/acme/repo.git", Dir: repoDir, RelDir: "repo"}, config.ReviewConfig{PRNumber: 2})
+	if err != nil {
+		t.Fatalf("buildReviewPromptContext() err = %v", err)
+	}
+	if !ctx.GitHubTokenEnvSanitized {
+		t.Fatal("GitHubTokenEnvSanitized = false, want true")
+	}
+	if got := strings.Join(logs, "\n"); !strings.Contains(got, "reason=github_primary_rate_limit_exceeded") {
+		t.Fatalf("logs = %q, want rate-limit retry warning", got)
+	}
+	for _, idx := range []int{1, 4, 5, 6} {
+		if envContainsKey(fake.calls[idx].Env, "GH_TOKEN") || envContainsKey(fake.calls[idx].Env, "GITHUB_TOKEN") {
+			t.Fatalf("call %d env contains GitHub token variables", idx)
 		}
 	}
 }
