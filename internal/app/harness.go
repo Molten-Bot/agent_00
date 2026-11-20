@@ -189,7 +189,9 @@ type agentInvocationLogMetadata struct {
 // Harness executes the clone -> codex -> PR workflow.
 type Harness struct {
 	// OnStep reports semantic progress, never command output or heartbeats.
-	OnStep               func(string)
+	OnStep func(string)
+	// OnPRTitle reports the title after a successful PR creation or title update.
+	OnPRTitle            func(url, title string)
 	ResumeIssueWorkspace bool
 	Signing              *gitsigning.Snapshot
 	LoadSigning          func(context.Context) (*gitsigning.Snapshot, error)
@@ -1281,6 +1283,9 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 			h.logf("stage=pr status=start action=update_title repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 			if editRes, err := h.runCommand(ctx, "pr", prEditTitleCommand(repo.Dir, repo.PRURL, requestedTitle)); err != nil {
 				return ExitPR, "pr", prTitleEditError(repo.URL, requestedTitle, editRes)
+			}
+			if h.OnPRTitle != nil {
+				h.OnPRTitle(repo.PRURL, requestedTitle)
 			}
 			h.logf("stage=pr status=ok action=update_title repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 		}
@@ -2699,21 +2704,21 @@ func (h Harness) createPullRequestURL(
 			continue
 		}
 
-		if prURL := extractFirstURL(prRes.Stdout); prURL != "" {
-			return prURL, nil
+		prURL := stringsx.FirstNonEmpty(extractFirstURL(prRes.Stdout), extractFirstURL(prRes.Stderr))
+		if prURL == "" {
+			var verifyErr error
+			prURL, verifyErr = h.lookupOpenPRURLByHead(ctx, repo)
+			if verifyErr != nil {
+				return "", fmt.Errorf("verify open pull request for repo %s: %w", repo.URL, verifyErr)
+			}
+			if prURL == "" {
+				return "", fmt.Errorf("gh pr create did not return a PR URL for repo %s", repo.URL)
+			}
 		}
-		if prURL := extractFirstURL(prRes.Stderr); prURL != "" {
-			return prURL, nil
+		if h.OnPRTitle != nil {
+			h.OnPRTitle(prURL, cfg.PRTitle)
 		}
-
-		prURL, verifyErr := h.lookupOpenPRURLByHead(ctx, repo)
-		if verifyErr != nil {
-			return "", fmt.Errorf("verify open pull request for repo %s: %w", repo.URL, verifyErr)
-		}
-		if prURL != "" {
-			return prURL, nil
-		}
-		return "", fmt.Errorf("gh pr create did not return a PR URL for repo %s", repo.URL)
+		return prURL, nil
 	}
 }
 

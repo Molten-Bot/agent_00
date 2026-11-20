@@ -60,6 +60,35 @@ func TestBrokerTracksTaskLifecycleAndCommandOutput(t *testing.T) {
 	}
 }
 
+func TestBrokerRecordsTaskPRTitlesByURL(t *testing.T) {
+	t.Parallel()
+
+	const requestID = "req-title"
+	const primaryURL = "https://github.com/acme/repo/pull/99"
+	const otherURL = "https://github.com/acme/repo-two/pull/42"
+	const runConfig = `{"prompt":"Original prompt","prTitle":"Configured title"}`
+	b := NewBroker()
+	b.RecordTaskRunConfig(requestID, []byte(runConfig))
+	if task, _ := b.Task(requestID); task.PRTitle != "" {
+		t.Fatalf("title before creation = %q, want empty", task.PRTitle)
+	}
+
+	b.RecordTaskPRTitle(requestID, primaryURL, "First title")
+	if task, _ := b.Task(requestID); task.PRTitle != "First title" || task.PRURL != primaryURL {
+		t.Fatalf("task after creation = %+v", task)
+	}
+
+	b.RecordTaskPRTitle(requestID, primaryURL, "Updated title")
+	b.RecordTaskPRTitle(requestID, otherURL, "Other title")
+	b.IngestLog("task status=completed request_id=" + requestID + " pr_url=" + primaryURL)
+	if task := b.StreamSnapshot().Tasks[0]; task.PRTitle != "Updated title" || task.Prompt != "Original prompt" {
+		t.Fatalf("completed task = %+v", task)
+	}
+	if raw, ok := b.TaskRunConfig(requestID); !ok || string(raw) != runConfig {
+		t.Fatalf("rerun config = %q, want %s", raw, runConfig)
+	}
+}
+
 func TestBrokerTracksLiveAppURLFromTaskLogs(t *testing.T) {
 	t.Parallel()
 

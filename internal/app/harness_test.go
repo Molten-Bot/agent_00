@@ -263,6 +263,7 @@ func TestRunHappyPathCreatesPR(t *testing.T) {
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
 	branch := "agent00-build-api"
+	const prURL = "https://github.com/acme/repo/pull/42"
 
 	fake := &fakeRunner{t: t, allowUnorderedClones: true, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -277,14 +278,21 @@ func TestRunHappyPathCreatesPR(t *testing.T) {
 		{cmd: addCommand(repoDir)},
 		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
 		{cmd: pushCommand(repoDir, branch)},
-		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: "https://github.com/acme/repo/pull/42\n"}},
-		{cmd: prChecksCommand(repoDir, "https://github.com/acme/repo/pull/42")},
+		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
+		{cmd: prChecksCommand(repoDir, prURL)},
 	}}
 
 	h := New(fake)
 	h.Now = func() time.Time { return now }
 	h.Workspace = testWorkspaceManager(guid)
 	h.TargetDirOK = func(path string) bool { return path == targetDir }
+	var reportedTitle string
+	h.OnPRTitle = func(url, title string) {
+		if url != prURL {
+			t.Errorf("reported PR URL = %q, want %q", url, prURL)
+		}
+		reportedTitle = title
+	}
 
 	res := h.Run(context.Background(), cfg)
 	if res.Err != nil {
@@ -293,8 +301,11 @@ func TestRunHappyPathCreatesPR(t *testing.T) {
 	if res.ExitCode != ExitSuccess {
 		t.Fatalf("ExitCode = %d", res.ExitCode)
 	}
-	if res.PRURL != "https://github.com/acme/repo/pull/42" {
+	if res.PRURL != prURL {
 		t.Fatalf("PRURL = %q", res.PRURL)
+	}
+	if reportedTitle != cfg.PRTitle {
+		t.Fatalf("reported PR title = %q, want %q", reportedTitle, cfg.PRTitle)
 	}
 	if got, want := res.Branch, branch; got != want {
 		t.Fatalf("Branch = %q, want %q", got, want)

@@ -1264,8 +1264,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, "function taskPromptPreview(") {
 		t.Fatalf("expected index html to remove fixed-length task prompt preview helper")
 	}
-	if !strings.Contains(markup, "const prompt = taskPromptText(task);") || !strings.Contains(markup, "return prompt;") {
-		t.Fatalf("expected index html to pass full task prompt text to task title truncation")
+	if !strings.Contains(markup, `return String(task?.pr_title || "").trim() || taskPromptText(task);`) {
+		t.Fatalf("expected index html to prefer the pull request title and fall back to task prompt text")
 	}
 	if !strings.Contains(markup, `if (!task || typeof task.prompt !== "string") return "";`) {
 		t.Fatalf("expected index html to display available task prompt text")
@@ -1273,11 +1273,11 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `if (requestID.endsWith("-failure-review")) {`) || !strings.Contains(markup, `return "Failure review";`) {
 		t.Fatalf("expected index html to give failure follow-up tasks a neutral Current Work label")
 	}
-	if !strings.Contains(markup, `return taskSystemLabel(task) || "Task";`) {
+	if !strings.Contains(markup, `truncateText(taskNameText(task), TASK_PROMPT_PREVIEW_MAX_CHARS) || taskSystemLabel(task) || "Task";`) {
 		t.Fatalf("expected index html to provide task labels without unavailable prompt copy")
 	}
-	if !strings.Contains(markup, "id.title = prompt;") {
-		t.Fatalf("expected index html task title tooltip to contain prompt text only")
+	if !strings.Contains(markup, "const name = taskNameText(task);") || !strings.Contains(markup, "id.title = name;") {
+		t.Fatalf("expected index html task title tooltip to contain the full task name")
 	}
 	if !strings.Contains(markup, "const promptOnly = normalizeTaskPanelView(state.taskPanelView) === \"prompt\";") {
 		t.Fatalf("expected index html to compute a prompt-only task rendering mode")

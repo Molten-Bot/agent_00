@@ -9759,12 +9759,12 @@
       return `${text.slice(0, Math.max(1, limit - 1)).trimEnd()}...`;
     }
 
-    function taskPromptPreviewText(task) {
-      return truncateText(taskPromptText(task), TASK_PROMPT_PREVIEW_MAX_CHARS);
+    function taskNameText(task) {
+      return String(task?.pr_title || "").trim() || taskPromptText(task);
     }
 
     function taskPromptModalTitleText(task) {
-      return truncateText(taskPromptText(task) || taskSystemLabel(task) || "Task Prompt", TASK_PROMPT_MODAL_TITLE_MAX_CHARS);
+      return truncateText(taskNameText(task) || taskSystemLabel(task) || "Task Prompt", TASK_PROMPT_MODAL_TITLE_MAX_CHARS);
     }
 
     function taskSystemLabel(task) {
@@ -9776,11 +9776,7 @@
     }
 
     function taskDisplayLabel(task) {
-      const prompt = taskPromptPreviewText(task);
-      if (!prompt) {
-        return taskSystemLabel(task) || "Task";
-      }
-      return prompt;
+      return truncateText(taskNameText(task), TASK_PROMPT_PREVIEW_MAX_CHARS) || taskSystemLabel(task) || "Task";
     }
 
     function normalizedTaskStatus(status) {
@@ -11008,6 +11004,7 @@
           String(existing.status || "") === String(copy.status || "") &&
           String(existing.error || "") === String(copy.error || "") &&
           String(existing.pr_url || "") === String(copy.pr_url || "") &&
+          String(existing.pr_title || "") === String(copy.pr_title || "") &&
           existingLogsLength === nextLogsLength
         ) {
           continue;
@@ -12153,7 +12150,7 @@
             autoMergeStep: taskAutoMergeStepEnabled(task),
             source: taskStartSource(task),
             currentState: taskCurrentStateSignature(task),
-            prompt: taskDisplayLabel(task),
+            name: taskNameText(task),
             repos: formatTaskRepos(task),
             originalSiteURL: taskOriginalSiteURL(task),
             conceptSiteURL: taskConceptSiteURL(task),
@@ -12378,9 +12375,9 @@
         const id = document.createElement("div");
         id.className = "task-id";
         id.textContent = taskDisplayLabel(task);
-        const prompt = taskPromptText(task);
-        if (prompt) {
-          id.title = prompt;
+        const name = taskNameText(task);
+        if (name) {
+          id.title = name;
         }
 
         const badge = renderTaskStatusBadge(task);

@@ -80,6 +80,7 @@ type Task struct {
 	WorkspaceDir      string               `json:"workspace_dir,omitempty"`
 	Branch            string               `json:"branch,omitempty"`
 	PRURL             string               `json:"pr_url,omitempty"`
+	PRTitle           string               `json:"pr_title,omitempty"`
 	LiveAppURL        string               `json:"live_app_url,omitempty"`
 	Error             string               `json:"error,omitempty"`
 	Warning           string               `json:"warning,omitempty"`
@@ -303,6 +304,7 @@ type taskState struct {
 	WorkspaceDir      string
 	Branch            string
 	PRURL             string
+	PRTitles          map[string]string
 	LiveAppURL        string
 	Error             string
 	Warning           string
@@ -518,6 +520,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			WorkspaceDir:      t.WorkspaceDir,
 			Branch:            t.Branch,
 			PRURL:             t.PRURL,
+			PRTitle:           t.PRTitles[t.PRURL],
 			LiveAppURL:        t.LiveAppURL,
 			Error:             t.Error,
 			Warning:           t.Warning,
@@ -625,6 +628,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		WorkspaceDir:      t.WorkspaceDir,
 		Branch:            t.Branch,
 		PRURL:             t.PRURL,
+		PRTitle:           t.PRTitles[t.PRURL],
 		LiveAppURL:        t.LiveAppURL,
 		Error:             t.Error,
 		Warning:           t.Warning,
@@ -634,6 +638,29 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		CanRerun:          canRerun,
 		Logs:              append([]TaskLog(nil), t.Logs...),
 	}, true
+}
+
+// RecordTaskPRTitle updates the title associated with a task's pull request.
+func (b *Broker) RecordTaskPRTitle(requestID, prURL, title string) {
+	title = strings.TrimSpace(title)
+	if prURL == "" || title == "" {
+		return
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	t := b.tasks[requestID]
+	if t == nil || t.PRTitles[prURL] == title {
+		return
+	}
+	if t.PRTitles == nil {
+		t.PRTitles = make(map[string]string)
+	}
+	t.PRTitles[prURL] = title
+	t.PRURL = prURL
+	t.UpdatedAt = b.now().UTC()
+	b.notifySubscribersLocked()
 }
 
 // RecordTaskRunConfig stores a parsed task run config payload for future reruns.
