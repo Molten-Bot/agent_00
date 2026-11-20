@@ -81,7 +81,7 @@ func TestBrokerRecordsTaskPRTitlesByURL(t *testing.T) {
 	b.RecordTaskPRTitle(requestID, primaryURL, "Updated title")
 	b.RecordTaskPRTitle(requestID, otherURL, "Other title")
 	b.IngestLog("task status=completed request_id=" + requestID + " pr_url=" + primaryURL)
-	if task := b.StreamSnapshot().Tasks[0]; task.PRTitle != "Updated title" || task.Prompt != "Original prompt" {
+	if task := b.StreamSnapshot().Tasks[0]; task.PRTitle != "Updated title" || task.PRTitleURL != primaryURL || task.Prompt != "Original prompt" {
 		t.Fatalf("completed task = %+v", task)
 	}
 	if raw, ok := b.TaskRunConfig(requestID); !ok || string(raw) != runConfig {
@@ -103,8 +103,8 @@ func TestBrokerKeepsCreatedPRTitleWhenCompletionSelectsReusedPR(t *testing.T) {
 
 	task, _ := b.Task(requestID)
 	for _, task := range []Task{task, b.StreamSnapshot().Tasks[0]} {
-		if task.PRURL != reusedURL || task.PRTitle != createdTitle || task.Status != "completed" {
-			t.Errorf("completed task = %+v, want URL %q and title %q", task, reusedURL, createdTitle)
+		if task.PRURL != reusedURL || task.PRTitleURL != createdURL || task.PRTitle != createdTitle || task.Status != "completed" {
+			t.Errorf("completed task = %+v, want primary URL %q and title %q paired with %q", task, reusedURL, createdTitle, createdURL)
 		}
 	}
 }

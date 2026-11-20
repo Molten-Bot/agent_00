@@ -809,6 +809,35 @@ func TestH1CovCreatePullRequestURL(t *testing.T) {
 		}
 	})
 
+	t.Run("title lookup failure keeps recovered PR", func(t *testing.T) {
+		t.Parallel()
+		cfg := sampleConfig()
+		repo := repoWorkspace{Dir: "/repo", URL: cfg.RepoURL, Branch: "agent00-topic", BaseBranch: "main"}
+		const prURL = "https://github.com/acme/repo/pull/3"
+		fake := &fakeRunner{t: t, exps: []expectedRun{
+			{
+				cmd: prCreateWithOptionsCommand(repo.Dir, cfg, repo.BaseBranch, repo.Branch, ""),
+				res: execx.Result{Stderr: "pull request already exists: " + prURL},
+				err: errors.New("exit status 1"),
+			},
+			{
+				cmd: ghCommand(repo.Dir, "pr", "view", prURL, "--json", "title", "--jq", ".title"),
+				err: errors.New("HTTP 504"),
+			},
+		}}
+		h := New(fake)
+		h.OnPRTitle = func(url, title string) {
+			t.Errorf("OnPRTitle(%q, %q) called after title lookup failed", url, title)
+		}
+		got, err := h.createPullRequestURL(context.Background(), repo, cfg, true, repo.Branch, "")
+		if err != nil || got != prURL {
+			t.Fatalf("createPullRequestURL() = (%q, %v), want (%q, nil)", got, err, prURL)
+		}
+		if len(fake.exps) != 0 {
+			t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+		}
+	})
+
 	t.Run("transient failure falls back to lookup success", func(t *testing.T) {
 		t.Parallel()
 		cfg := sampleConfig()

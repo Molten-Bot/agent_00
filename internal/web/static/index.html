@@ -1464,7 +1464,7 @@
     }
 
     function renderTaskPullRequestAction(task) {
-      const prURL = taskPullRequestURL(task);
+      const prURL = taskDisplayPullRequestURL(task);
       if (!isCompletedTask(task) || !prURL) {
         return null;
       }
@@ -8181,7 +8181,7 @@
       if (status !== "completed" && status !== "no_changes") {
         return null;
       }
-      const href = taskPullRequestURL(task);
+      const href = taskDisplayPullRequestURL(task);
       if (!href) {
         return null;
       }
@@ -9572,7 +9572,7 @@
     }
 
     function taskGitHubLinkURL(task) {
-      const prURL = taskPullRequestURL(task);
+      const prURL = taskDisplayPullRequestURL(task);
       if (prURL) {
         return prURL;
       }
@@ -9586,6 +9586,10 @@
 
     function taskPullRequestURL(task) {
       return String(task?.pr_url || "").trim();
+    }
+
+    function taskDisplayPullRequestURL(task) {
+      return String(task?.pr_title_url || "").trim() || taskPullRequestURL(task);
     }
 
     function taskLiveAppURL(task) {
@@ -11005,6 +11009,7 @@
           String(existing.error || "") === String(copy.error || "") &&
           String(existing.pr_url || "") === String(copy.pr_url || "") &&
           String(existing.pr_title || "") === String(copy.pr_title || "") &&
+          String(existing.pr_title_url || "") === String(copy.pr_title_url || "") &&
           existingLogsLength === nextLogsLength
         ) {
           continue;
@@ -11731,7 +11736,7 @@
         taskReviewStepEnabled() ? "review_cycle" : "",
         taskStartSource(task),
         isReadOnlyReviewTask(task) ? "code_review" : "implementation",
-        String(task?.pr_url || ""),
+        taskDisplayPullRequestURL(task),
         String(logs.length),
         tail,
         taskProgressSignalsSignature(signals),
@@ -11867,7 +11872,7 @@
 
       const detail = document.createElement("span");
       detail.className = "task-result-detail";
-      const prURL = taskPullRequestURL(task);
+      const prURL = taskDisplayPullRequestURL(task);
 
       if (displayStatus === "warning") {
         title.textContent = "Review Warning";
@@ -13152,6 +13157,7 @@
       const renderSig = [
         selected.request_id || "",
         selectedLabel,
+        taskDisplayPullRequestURL(selected),
         selected.status || "",
         selected.stage || "",
         logs.length,

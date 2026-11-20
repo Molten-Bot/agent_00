@@ -330,6 +330,8 @@ func TestRunPRCreateAlreadyExistsReusesExistingPR(t *testing.T) {
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
 	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
+	const recoveredTitle = "Actual title on GitHub"
+	transientErr := errors.New("HTTP 504")
 	prCreateStderr := fmt.Sprintf(
 		"a pull request for branch %q into branch %q already exists:\n%s\n",
 		branch,
@@ -350,7 +352,11 @@ func TestRunPRCreateAlreadyExistsReusesExistingPR(t *testing.T) {
 		{cmd: addCommand(repoDir)},
 		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
 		{cmd: pushCommand(repoDir, branch)},
+		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stderr: transientErr.Error()}, err: transientErr},
+		{cmd: remoteBranchExistsOnOriginCommand(repoDir, branch), res: execx.Result{Stdout: "abc123\trefs/heads/" + branch + "\n"}},
+		{cmd: prLookupByHeadCommand(repoDir, branch), res: execx.Result{Stdout: "[]\n"}},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stderr: prCreateStderr}, err: errors.New("pr create failed")},
+		{cmd: ghCommand(repoDir, "pr", "view", prURL, "--json", "title", "--jq", ".title"), res: execx.Result{Stdout: recoveredTitle + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL)},
 	}}
 
@@ -358,6 +364,14 @@ func TestRunPRCreateAlreadyExistsReusesExistingPR(t *testing.T) {
 	h.Now = func() time.Time { return now }
 	h.Workspace = testWorkspaceManager(guid)
 	h.TargetDirOK = func(path string) bool { return path == targetDir }
+	h.Sleep = func(context.Context, time.Duration) error { return nil }
+	var titleReports int
+	h.OnPRTitle = func(url, title string) {
+		titleReports++
+		if url != prURL || title != recoveredTitle {
+			t.Errorf("OnPRTitle(%q, %q), want (%q, %q)", url, title, prURL, recoveredTitle)
+		}
+	}
 
 	res := h.Run(context.Background(), cfg)
 	if res.Err != nil {
@@ -368,6 +382,9 @@ func TestRunPRCreateAlreadyExistsReusesExistingPR(t *testing.T) {
 	}
 	if res.PRURL != prURL {
 		t.Fatalf("PRURL = %q, want %q", res.PRURL, prURL)
+	}
+	if titleReports != 1 {
+		t.Fatalf("title reports = %d, want 1", titleReports)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))

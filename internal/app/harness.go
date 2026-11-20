@@ -2656,6 +2656,14 @@ func (h Harness) createPullRequestURL(
 					repo.Branch,
 					existingPRURL,
 				)
+				if h.OnPRTitle != nil {
+					titleRes, titleErr := h.runCommand(ctx, "pr", ghCommand(repo.Dir, "pr", "view", existingPRURL, "--json", "title", "--jq", ".title"))
+					if titleErr != nil {
+						h.logf("stage=pr status=warn action=lookup_existing reason=title_lookup_failed pr_url=%s err=%q", existingPRURL, titleErr)
+					} else if title := strings.TrimSpace(titleRes.Stdout); title != "" {
+						h.OnPRTitle(existingPRURL, title)
+					}
+				}
 				return existingPRURL, nil
 			}
 

@@ -81,6 +81,7 @@ type Task struct {
 	Branch            string               `json:"branch,omitempty"`
 	PRURL             string               `json:"pr_url,omitempty"`
 	PRTitle           string               `json:"pr_title,omitempty"`
+	PRTitleURL        string               `json:"pr_title_url,omitempty"`
 	LiveAppURL        string               `json:"live_app_url,omitempty"`
 	Error             string               `json:"error,omitempty"`
 	Warning           string               `json:"warning,omitempty"`
@@ -305,7 +306,7 @@ type taskState struct {
 	Branch            string
 	PRURL             string
 	PRTitles          map[string]string
-	LatestPRTitle     string
+	LatestTitledPRURL string
 	LiveAppURL        string
 	Error             string
 	Warning           string
@@ -499,6 +500,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 	for _, t := range tasks {
 		_, canRerun := b.runConfigs[t.RequestID]
 		status := normalizeTaskTerminalStatus(t.Status)
+		prTitle, prTitleURL := taskPRTitle(t)
 		snapshot.Tasks = append(snapshot.Tasks, Task{
 			RequestID:         t.RequestID,
 			Source:            t.Source,
@@ -521,7 +523,8 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			WorkspaceDir:      t.WorkspaceDir,
 			Branch:            t.Branch,
 			PRURL:             t.PRURL,
-			PRTitle:           taskPRTitle(t),
+			PRTitle:           prTitle,
+			PRTitleURL:        prTitleURL,
 			LiveAppURL:        t.LiveAppURL,
 			Error:             t.Error,
 			Warning:           t.Warning,
@@ -607,6 +610,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 	}
 	_, canRerun := b.runConfigs[requestID]
 	status := normalizeTaskTerminalStatus(t.Status)
+	prTitle, prTitleURL := taskPRTitle(t)
 	return Task{
 		RequestID:         t.RequestID,
 		Source:            t.Source,
@@ -629,7 +633,8 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		WorkspaceDir:      t.WorkspaceDir,
 		Branch:            t.Branch,
 		PRURL:             t.PRURL,
-		PRTitle:           taskPRTitle(t),
+		PRTitle:           prTitle,
+		PRTitleURL:        prTitleURL,
 		LiveAppURL:        t.LiveAppURL,
 		Error:             t.Error,
 		Warning:           t.Warning,
@@ -659,7 +664,7 @@ func (b *Broker) RecordTaskPRTitle(requestID, prURL, title string) {
 		t.PRTitles = make(map[string]string)
 	}
 	t.PRTitles[prURL] = title
-	t.LatestPRTitle = title
+	t.LatestTitledPRURL = prURL
 	t.PRURL = prURL
 	t.UpdatedAt = b.now().UTC()
 	b.notifySubscribersLocked()
@@ -1339,9 +1344,12 @@ func taskWorkflow(t *taskState) string {
 	return stringsx.FirstNonEmpty(t.Workflow, t.Skill)
 }
 
-func taskPRTitle(t *taskState) string {
+func taskPRTitle(t *taskState) (title, url string) {
+	if title := t.PRTitles[t.PRURL]; title != "" {
+		return title, t.PRURL
+	}
 	// Multi-repo completion can select a reused PR without a recorded title.
-	return stringsx.FirstNonEmpty(t.PRTitles[t.PRURL], t.LatestPRTitle)
+	return t.PRTitles[t.LatestTitledPRURL], t.LatestTitledPRURL
 }
 
 func taskAgentHarness(t *taskState) string {
