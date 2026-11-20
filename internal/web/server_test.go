@@ -256,7 +256,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `<meta name="twitter:image" content="https://app.molten.bot/logo.svg">`) {
 		t.Fatalf("expected index html to use the agent logo for social previews")
 	}
-	if !strings.Contains(markup, `defer src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"`) {
+	if !strings.Contains(markup, `defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"`) {
 		t.Fatalf("expected index html to load D3.js for dashboard stats")
 	}
 	if !strings.Contains(markup, `id="dashboard-display"`) ||
