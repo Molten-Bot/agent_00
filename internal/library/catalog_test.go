@@ -153,15 +153,36 @@ func TestDefaultRepairTasksUseSharedFailureReporting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"flaky-test-stabilization", "ci-build-lint-typecheck-hardening"} {
+	for _, name := range []string{
+		"agents-md-guardrails",
+		"ci-build-lint-typecheck-hardening",
+		"dependency-vulnerability-remediation",
+		"e2e-smoke-test-creation",
+		"fix-merge-main",
+		"flaky-test-stabilization",
+		"google-tags",
+		"move-page-css-to-global-css",
+		"readme-upkeep",
+		"reduce-codebase-centralize-classes",
+		"release-readiness-review",
+		"root-cause-bug-fix",
+		"secrets-pii-logging-removal",
+		"security-secrets",
+		"unit-test-coverage",
+		"unused-code-asset-cleanup",
+		"website-seo-llm-discoverability",
+		"website-serving-performance",
+	} {
 		t.Run(name, func(t *testing.T) {
 			task, ok := catalog.Task(name)
 			if !ok {
 				t.Fatalf("catalog missing task %q", name)
 			}
-			want := "\n\nFailure reporting:\n- " + failurefollowup.FailureResponseInstruction + "\n\n"
-			if !strings.Contains(task.Prompt, want) {
-				t.Errorf("task prompt is missing the shared failure reporting section %q", want)
+			_, report, _ := strings.Cut(task.Prompt, "\n\nFailure reporting:\n")
+			section, _, _ := strings.Cut(report, "\n\n")
+			want := "- " + failurefollowup.FailureResponseInstruction
+			if section != want {
+				t.Errorf("failure reporting section = %q, want %q", section, want)
 			}
 		})
 	}
