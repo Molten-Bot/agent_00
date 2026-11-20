@@ -27,8 +27,11 @@ func TestWithExecutionContractIncludesFailureResponseInstruction(t *testing.T) {
 	if !strings.Contains(got, FailureResponseInstruction) {
 		t.Fatalf("WithExecutionContract() missing failure response instruction: %q", got)
 	}
-	if !strings.Contains(got, "Use explicit `Failure:` and `Error details:` fields.") {
-		t.Fatalf("WithExecutionContract() missing explicit failure field guidance: %q", got)
+	if !strings.Contains(got, "start the final response with explicit `Failure:` and `Error details:` fields on consecutive lines, in that order.") {
+		t.Fatalf("WithExecutionContract() missing failure field order guidance: %q", got)
+	}
+	if !strings.Contains(got, "Describe earlier failures fixed during the run under `Resolved issue:` after any blocker fields.") {
+		t.Fatalf("WithExecutionContract() missing resolved issue guidance: %q", got)
 	}
 }
 

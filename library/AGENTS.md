@@ -60,7 +60,7 @@ You are working inside an existing repository. Solve the user's actual problem w
 
 ## Failure And Privacy
 
-- When failures occur, return `Failure:` and `Error details:` fields with a concrete summary and error detail.
+- When the current run ends with an unresolved failure, return `Failure:` and `Error details:` fields with a concrete summary and error detail. Describe earlier failures fixed during the run under `Resolved issue:`.
 - Before sharing repository or pull-request links in public activity, use `gh repo view OWNER/REPO --json isPrivate,nameWithOwner`; share repo and PR links only when GitHub reports `isPrivate:false`.
 - If a repository is not initialized after clone, use only `gh` CLI and `git` tools to create and push a main branch, then continue once git state is ready.
 - If network connectivity does not come back after a few retries, pause remote-dependent work and report the blocked operation and last error clearly.

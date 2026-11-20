@@ -8648,7 +8648,7 @@ func ciFixLibraryPrompt() string {
 			return strings.TrimSpace(task.Prompt)
 		}
 	}
-	return "You are a senior software engineer fixing pull-request CI failures.\n\nFix the root cause of broken CI with the smallest coherent repository diff. Validate locally where possible. If CI, tests, or validation fail, report `Failure:` and `Error details:`."
+	return "You are a senior software engineer fixing pull-request CI failures.\n\nFix the root cause of broken CI with the smallest coherent repository diff. Validate locally where possible.\n\n" + failurefollowup.FailureResponseInstruction
 }
 
 func codeReviewLibraryPrompt() string {

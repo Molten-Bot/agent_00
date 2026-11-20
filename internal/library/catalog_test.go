@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 )
 
 func TestDefaultLibraryJSONFilesHaveCanonicalShape(t *testing.T) {
@@ -140,6 +142,52 @@ func TestDefaultLibraryJSONFilesHaveCanonicalShape(t *testing.T) {
 		if got := task.PRTitle; got != want {
 			t.Errorf("%s: PRTitle = %q, want %q", path, got, want)
 		}
+	}
+}
+
+func TestDefaultRepairTasksUseSharedFailureReporting(t *testing.T) {
+	t.Setenv(catalogDirEnv, "")
+	t.Setenv(agentsSeedEnv, "")
+
+	catalog, err := LoadCatalog(DefaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"agents-md-guardrails",
+		"ci-build-lint-typecheck-hardening",
+		"contributor-history-ranking",
+		"dependency-vulnerability-remediation",
+		"e2e-smoke-test-creation",
+		"fix-merge-main",
+		"flaky-test-stabilization",
+		"google-tags",
+		"move-page-css-to-global-css",
+		"readme-upkeep",
+		"reduce-codebase-centralize-classes",
+		"release-readiness-review",
+		"root-cause-bug-fix",
+		"secrets-pii-logging-removal",
+		"security-review",
+		"security-secrets",
+		"ui-ux-audit",
+		"unit-test-coverage",
+		"unused-code-asset-cleanup",
+		"website-seo-llm-discoverability",
+		"website-serving-performance",
+	} {
+		t.Run(name, func(t *testing.T) {
+			task, ok := catalog.Task(name)
+			if !ok {
+				t.Fatalf("catalog missing task %q", name)
+			}
+			_, report, _ := strings.Cut(task.Prompt, "\n\nFailure reporting:\n")
+			section, _, _ := strings.Cut(report, "\n\n")
+			want := "- " + failurefollowup.FailureResponseInstruction
+			if section != want {
+				t.Errorf("failure reporting section = %q, want %q", section, want)
+			}
+		})
 	}
 }
 
@@ -583,8 +631,10 @@ func TestDefaultCatalogIncludesFixPRCITestsTask(t *testing.T) {
 		"check pr ci status",
 		"do not remove, skip, weaken, or rename test cases unless the tested functionality has been intentionally removed",
 		"test coverage must go up when practical and must never go down",
+		"if a ci, test, or validation failure still blocks completion",
 		"`failure:`",
 		"`error details:`",
+		"describe earlier ci failures fixed during the run under `resolved issue:`",
 		"do not fail solely for that",
 		"repository is not initialized after clone",
 		"do not stop work just because you cannot create a pull request or watch remote ci/cd",

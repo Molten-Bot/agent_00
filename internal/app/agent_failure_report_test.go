@@ -75,6 +75,24 @@ func TestCodexReportedFailureIgnoresFailureFieldWithoutErrorDetails(t *testing.T
 	}
 }
 
+func TestCodexReportedFailureDetectsBlockerAfterResolvedIssue(t *testing.T) {
+	t.Parallel()
+
+	res := execx.Result{Stdout: strings.Join([]string{
+		"Resolved issue: Test cases shared temporary state.",
+		"**Failure:** The full test suite still fails.",
+		"**Error details:** A separate test times out waiting for a worker.",
+	}, "\n")}
+
+	failed, detail := codexReportedFailure(res)
+	if !failed || detail != "Failure: The full test suite still fails." {
+		t.Fatalf("codexReportedFailure() = (%v, %q), want the unresolved failure", failed, detail)
+	}
+	if full := codexFailureDetailWithErrorDetails(res, detail); !strings.Contains(full, "A separate test times out waiting for a worker.") {
+		t.Fatalf("failure detail = %q, want the unresolved error details", full)
+	}
+}
+
 // The terminal-window guard keeps a mid-run "Failure:" progress update from
 // failing a run that went on to finish. Reading both mandated fields out of
 // the report header must not reach around that guard.
