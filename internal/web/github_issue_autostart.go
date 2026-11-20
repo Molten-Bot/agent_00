@@ -138,14 +138,17 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 			}
 			candidates = append(candidates, entry)
 		}
-		linked, err := s.githubIssuesWithLinkedBranches(ctx, candidates)
+		development, err := s.githubIssueDevelopmentStates(ctx, candidates)
 		if err != nil {
 			status.addError(err)
 			continue
 		}
 		for _, entry := range candidates {
 			decision := issueAutomationDecision{Repository: fullName, Number: entry.Number}
-			if linked[entry.ID] {
+			if development[entry.ID].Blocked {
+				decision.Reason = "blocked by open issue"
+				status.Skipped++
+			} else if development[entry.ID].Linked {
 				decision.Reason = "associated branch or closing PR"
 				status.Skipped++
 			} else {

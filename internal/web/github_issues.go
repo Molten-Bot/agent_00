@@ -56,6 +56,9 @@ type githubDevelopmentAssociationNode struct {
 	ClosedByPullRequestsReferences struct {
 		TotalCount int `json:"totalCount"`
 	} `json:"closedByPullRequestsReferences"`
+	IssueDependenciesSummary struct {
+		BlockedBy int `json:"blockedBy"`
+	} `json:"issueDependenciesSummary"`
 }
 
 type githubLinkedBranchResponse struct {
@@ -267,13 +270,30 @@ func (s Server) githubIssueSearchCount(ctx context.Context, repository, state, s
 }
 
 func (s Server) githubIssuesWithLinkedBranches(ctx context.Context, issues []githubIssueListEntry) (map[string]bool, error) {
-	const query = `query($ids:[ID!]!){nodes(ids:$ids){... on Issue{id linkedBranches(first:1){totalCount} closedByPullRequestsReferences(first:1,includeClosedPrs:true){totalCount}}}}`
+	states, err := s.githubIssueDevelopmentStates(ctx, issues)
+	if err != nil {
+		return nil, err
+	}
+	linked := make(map[string]bool, len(states))
+	for id, state := range states {
+		linked[id] = state.Linked
+	}
+	return linked, nil
+}
+
+type githubIssueDevelopmentState struct {
+	Linked  bool
+	Blocked bool
+}
+
+func (s Server) githubIssueDevelopmentStates(ctx context.Context, issues []githubIssueListEntry) (map[string]githubIssueDevelopmentState, error) {
+	const query = `query($ids:[ID!]!){nodes(ids:$ids){... on Issue{id linkedBranches(first:1){totalCount} closedByPullRequestsReferences(first:1,includeClosedPrs:true){totalCount} issueDependenciesSummary{blockedBy}}}}`
 	for _, issue := range issues {
 		if strings.TrimSpace(issue.ID) == "" {
 			return nil, fmt.Errorf("GitHub issue %d is missing its node ID", issue.Number)
 		}
 	}
-	linked := make(map[string]bool, len(issues))
+	states := make(map[string]githubIssueDevelopmentState, len(issues))
 	for start := 0; start < len(issues); start += githubIssueLinkedBranchBatchSize {
 		end := min(start+githubIssueLinkedBranchBatchSize, len(issues))
 		args := []string{"api", "graphql", "-f", "query=" + query}
@@ -293,14 +313,17 @@ func (s Server) githubIssuesWithLinkedBranches(ctx context.Context, issues []git
 		}
 		for _, node := range response.Data.Nodes {
 			if node.ID != "" {
-				linked[node.ID] = node.LinkedBranches.TotalCount > 0 || node.ClosedByPullRequestsReferences.TotalCount > 0
+				states[node.ID] = githubIssueDevelopmentState{
+					Linked:  node.LinkedBranches.TotalCount > 0 || node.ClosedByPullRequestsReferences.TotalCount > 0,
+					Blocked: node.IssueDependenciesSummary.BlockedBy > 0,
+				}
 			}
 		}
 	}
-	if len(linked) != len(issues) {
-		return nil, fmt.Errorf("GitHub returned linked branch data for %d of %d issues", len(linked), len(issues))
+	if len(states) != len(issues) {
+		return nil, fmt.Errorf("GitHub returned development data for %d of %d issues", len(states), len(issues))
 	}
-	return linked, nil
+	return states, nil
 }
 
 func (s Server) handleGitHubIssueDetail(w http.ResponseWriter, r *http.Request, repository string, number int) {

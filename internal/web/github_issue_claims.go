@@ -129,6 +129,7 @@ type issueClaimTarget struct {
 	SHA        string
 	Linked     int
 	ClosingPRs int
+	BlockedBy  int
 	Branches   []string
 }
 
@@ -137,7 +138,7 @@ func (s Server) issueClaimTarget(ctx context.Context, repository string, number 
 	if !ok {
 		return issueClaimTarget{}, fmt.Errorf("invalid issue repository")
 	}
-	const query = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name target{oid}} issue(number:$number){id linkedBranches(first:100){totalCount nodes{ref{name}}} closedByPullRequestsReferences(first:1,includeClosedPrs:true){totalCount}}}}`
+	const query = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name target{oid}} issue(number:$number){id linkedBranches(first:100){totalCount nodes{ref{name}}} closedByPullRequestsReferences(first:1,includeClosedPrs:true){totalCount} issueDependenciesSummary{blockedBy}}}}`
 	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "graphql", "-f", "query=" + query, "-f", "owner=" + owner, "-f", "name=" + name, "-F", fmt.Sprintf("number=%d", number)}})
 	if err != nil {
 		return issueClaimTarget{}, err
@@ -159,6 +160,7 @@ func (s Server) issueClaimTarget(ctx context.Context, repository string, number 
 						Nodes      []struct{ Ref *struct{ Name string } }
 					}
 					ClosedByPullRequestsReferences struct{ TotalCount int }
+					IssueDependenciesSummary       struct{ BlockedBy int }
 				}
 			}
 		} `json:"data"`
@@ -173,7 +175,7 @@ func (s Server) issueClaimTarget(ctx context.Context, repository string, number 
 	if repo == nil || repo.Issue == nil || repo.Issue.ID == "" || repo.DefaultBranchRef == nil || repo.DefaultBranchRef.Target.OID == "" {
 		return issueClaimTarget{}, fmt.Errorf("incomplete issue or default branch data")
 	}
-	target := issueClaimTarget{ID: repo.Issue.ID, BaseBranch: repo.DefaultBranchRef.Name, SHA: repo.DefaultBranchRef.Target.OID, Linked: repo.Issue.LinkedBranches.TotalCount, ClosingPRs: repo.Issue.ClosedByPullRequestsReferences.TotalCount}
+	target := issueClaimTarget{ID: repo.Issue.ID, BaseBranch: repo.DefaultBranchRef.Name, SHA: repo.DefaultBranchRef.Target.OID, Linked: repo.Issue.LinkedBranches.TotalCount, ClosingPRs: repo.Issue.ClosedByPullRequestsReferences.TotalCount, BlockedBy: repo.Issue.IssueDependenciesSummary.BlockedBy}
 	for _, node := range repo.Issue.LinkedBranches.Nodes {
 		if node.Ref != nil {
 			target.Branches = append(target.Branches, node.Ref.Name)
@@ -227,6 +229,9 @@ func (s Server) claimAndSubmitIssue(ctx context.Context, run config.Config, sett
 	}
 	if target.Linked > 0 || target.ClosingPRs > 0 {
 		return "", fmt.Errorf("issue has an associated branch or closing PR")
+	}
+	if target.BlockedBy > 0 {
+		return "", fmt.Errorf("issue is blocked by %d open issue(s)", target.BlockedBy)
 	}
 	// Use the repository's default base for automatic work; manual selections
 	// may choose a different existing base without changing the claim name.
@@ -577,6 +582,10 @@ func (s Server) handleIssueAutomationRetry(w http.ResponseWriter, r *http.Reques
 	target, err := s.issueClaimTarget(r.Context(), repository, request.Number)
 	if err != nil {
 		writeJSONError(w, 502, err)
+		return
+	}
+	if target.BlockedBy > 0 {
+		writeJSONError(w, 409, fmt.Errorf("issue is blocked by %d open issue(s)", target.BlockedBy))
 		return
 	}
 	branch := fmt.Sprintf("agent00-issue-%d", request.Number)
