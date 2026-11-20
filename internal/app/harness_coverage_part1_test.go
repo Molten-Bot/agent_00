@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/config"
@@ -806,6 +808,49 @@ func TestH1CovCreatePullRequestURL(t *testing.T) {
 		prURL, err := h.createPullRequestURL(context.Background(), repo, cfg, true, "agent00-topic", "")
 		if err != nil || prURL != "https://github.com/acme/repo/pull/3" {
 			t.Fatalf("createPullRequestURL() = (%q, %v), want pull/3 reuse", prURL, err)
+		}
+	})
+
+	t.Run("exhausted title lookup retries keep recovered PR", func(t *testing.T) {
+		t.Parallel()
+		cfg := sampleConfig()
+		repo := repoWorkspace{Dir: "/repo", URL: cfg.RepoURL, Branch: "agent00-topic", BaseBranch: "main"}
+		const prURL = "https://github.com/acme/repo/pull/3"
+		fake := &fakeRunner{t: t, exps: []expectedRun{
+			{
+				cmd: prCreateWithOptionsCommand(repo.Dir, cfg, repo.BaseBranch, repo.Branch, ""),
+				res: execx.Result{Stderr: "pull request already exists: " + prURL},
+				err: errors.New("exit status 1"),
+			},
+		}}
+		for range maxPRCreateAttempts {
+			fake.exps = append(fake.exps, expectedRun{
+				cmd: ghCommand(repo.Dir, "pr", "view", prURL, "--json", "title", "--jq", ".title"),
+				err: errors.New("HTTP 504"),
+			})
+		}
+		h := New(fake)
+		h.Sleep = func(context.Context, time.Duration) error { return nil }
+		var lookupWarning string
+		h.Logf = func(format string, args ...any) {
+			line := fmt.Sprintf(format, args...)
+			if strings.Contains(line, "reason=title_lookup_failed") {
+				lookupWarning = line
+			}
+		}
+		h.OnPRTitle = func(url, title string) {
+			t.Errorf("OnPRTitle(%q, %q) called after title lookup failed", url, title)
+		}
+		got, err := h.createPullRequestURL(context.Background(), repo, cfg, true, repo.Branch, "")
+		if err != nil || got != prURL {
+			t.Fatalf("createPullRequestURL() = (%q, %v), want (%q, nil)", got, err, prURL)
+		}
+		if len(fake.exps) != 0 {
+			t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+		}
+		if !strings.Contains(lookupWarning, "status=warn") || !strings.Contains(lookupWarning, "HTTP 504") ||
+			strings.Contains(lookupWarning, " err=") || strings.Contains(lookupWarning, " error=") {
+			t.Fatalf("title lookup warning = %q, want diagnostic without task error fields", lookupWarning)
 		}
 	})
 

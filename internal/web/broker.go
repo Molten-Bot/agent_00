@@ -80,6 +80,8 @@ type Task struct {
 	WorkspaceDir      string               `json:"workspace_dir,omitempty"`
 	Branch            string               `json:"branch,omitempty"`
 	PRURL             string               `json:"pr_url,omitempty"`
+	PRTitle           string               `json:"pr_title,omitempty"`
+	PRTitleURL        string               `json:"pr_title_url,omitempty"`
 	LiveAppURL        string               `json:"live_app_url,omitempty"`
 	Error             string               `json:"error,omitempty"`
 	Warning           string               `json:"warning,omitempty"`
@@ -303,6 +305,8 @@ type taskState struct {
 	WorkspaceDir      string
 	Branch            string
 	PRURL             string
+	PRTitles          map[string]string
+	TitledPRURLs      []string
 	LiveAppURL        string
 	Error             string
 	Warning           string
@@ -496,6 +500,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 	for _, t := range tasks {
 		_, canRerun := b.runConfigs[t.RequestID]
 		status := normalizeTaskTerminalStatus(t.Status)
+		prTitle, prTitleURL := taskPRTitle(t)
 		snapshot.Tasks = append(snapshot.Tasks, Task{
 			RequestID:         t.RequestID,
 			Source:            t.Source,
@@ -518,6 +523,8 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			WorkspaceDir:      t.WorkspaceDir,
 			Branch:            t.Branch,
 			PRURL:             t.PRURL,
+			PRTitle:           prTitle,
+			PRTitleURL:        prTitleURL,
 			LiveAppURL:        t.LiveAppURL,
 			Error:             t.Error,
 			Warning:           t.Warning,
@@ -603,6 +610,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 	}
 	_, canRerun := b.runConfigs[requestID]
 	status := normalizeTaskTerminalStatus(t.Status)
+	prTitle, prTitleURL := taskPRTitle(t)
 	return Task{
 		RequestID:         t.RequestID,
 		Source:            t.Source,
@@ -625,6 +633,8 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		WorkspaceDir:      t.WorkspaceDir,
 		Branch:            t.Branch,
 		PRURL:             t.PRURL,
+		PRTitle:           prTitle,
+		PRTitleURL:        prTitleURL,
 		LiveAppURL:        t.LiveAppURL,
 		Error:             t.Error,
 		Warning:           t.Warning,
@@ -634,6 +644,31 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		CanRerun:          canRerun,
 		Logs:              append([]TaskLog(nil), t.Logs...),
 	}, true
+}
+
+// RecordTaskPRTitle updates the title associated with a task's pull request.
+func (b *Broker) RecordTaskPRTitle(requestID, prURL, title string) {
+	title = strings.TrimSpace(title)
+	if prURL == "" || title == "" {
+		return
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	t := b.tasks[requestID]
+	if t == nil || t.PRTitles[prURL] == title {
+		return
+	}
+	if t.PRTitles == nil {
+		t.PRTitles = make(map[string]string)
+	}
+	t.PRTitles[prURL] = title
+	t.TitledPRURLs = slices.DeleteFunc(t.TitledPRURLs, func(url string) bool { return url == prURL })
+	t.TitledPRURLs = append(t.TitledPRURLs, prURL)
+	t.PRURL = prURL
+	t.UpdatedAt = b.now().UTC()
+	b.notifySubscribersLocked()
 }
 
 // RecordTaskRunConfig stores a parsed task run config payload for future reruns.
@@ -1308,6 +1343,18 @@ func taskWorkflow(t *taskState) string {
 		return ""
 	}
 	return stringsx.FirstNonEmpty(t.Workflow, t.Skill)
+}
+
+func taskPRTitle(t *taskState) (title, url string) {
+	if title := t.PRTitles[t.PRURL]; title != "" {
+		return title, t.PRURL
+	}
+	// Multi-repo completion can select a reused PR without a recorded title.
+	if len(t.TitledPRURLs) > 0 {
+		url := t.TitledPRURLs[len(t.TitledPRURLs)-1]
+		return t.PRTitles[url], url
+	}
+	return "", ""
 }
 
 func taskAgentHarness(t *taskState) string {
@@ -2082,6 +2129,11 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		}
 		t.Branch = stringsx.FirstNonEmpty(fields["branch"], t.Branch)
 		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
+		if fields["stage"] == "pr" && fields["status"] == "ok" && fields["action"] == "recreate_closed_pr" {
+			oldPRURL := fields["old_pr_url"]
+			delete(t.PRTitles, oldPRURL)
+			t.TitledPRURLs = slices.DeleteFunc(t.TitledPRURLs, func(url string) bool { return url == oldPRURL })
+		}
 		if !agentInvocationLine {
 			t.Error = stringsx.FirstNonEmpty(fields["err"], fields["error"], t.Error)
 		}

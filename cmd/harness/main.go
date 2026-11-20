@@ -641,7 +641,7 @@ func runServer(args []string) int {
 						return false
 					}
 					return taskHandle.IsStopped()
-				}, signingSnapshot)
+				}, signingSnapshot, monitorBroker)
 				if taskHandle != nil {
 					taskHandle.SetRunning(false)
 				}
@@ -1485,6 +1485,7 @@ func runLocalTask(
 	finalReviewPasses int,
 	wasStopped func() bool,
 	signingSnapshot *gitsigning.Snapshot,
+	broker *web.Broker,
 ) localTaskOutcome {
 	logf(
 		"task status=start request_id=%s skill=%s repo=%s repos=%s",
@@ -1495,6 +1496,11 @@ func runLocalTask(
 	)
 
 	h := app.New(runner)
+	if broker != nil {
+		h.OnPRTitle = func(url, title string) {
+			broker.RecordTaskPRTitle(requestID, url, title)
+		}
+	}
 	h.FinalReviewPasses = finalReviewPasses
 	h.Signing = signingSnapshot
 	if repairWork, ok := ctx.Value(issueRepairContextKey{}).(*issueRepairWork); ok {

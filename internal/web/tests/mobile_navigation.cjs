@@ -8,7 +8,7 @@ let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
 
-async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile = true) {
+async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile = true, fixtureTasks) {
   const page = await browser.newPage({ viewport, isMobile: mobile, hasTouch: mobile });
   page.setDefaultTimeout(10000);
   t.after(() => page.close());
@@ -16,7 +16,7 @@ async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile 
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, [], 'no browser JavaScript errors'));
   const now = new Date().toISOString();
-  const tasks = Array.from({ length: 24 }, (_, i) => ({
+  const tasks = fixtureTasks ?? Array.from({ length: 24 }, (_, i) => ({
     request_id: `mobile-${i}`, prompt: `Task ${i + 1}: Improve repository navigation and support long descriptions on mobile devices`,
     prompt_is_user_input: true, repo: 'example/mobile-project', status: i < 16 ? 'running' : 'completed',
     stage: 'agent', source: 'prompt', agent_harness: 'codex',
@@ -126,6 +126,48 @@ test('running tasks omit the status icon and always expose their original prompt
   await prompt.click();
   await page.locator('#task-prompt-modal:not(.hidden)').waitFor();
   assert.equal(await page.locator('#task-prompt-modal-body').textContent(), originalPrompt);
+});
+
+test('task card distinguishes the titled pull request from the merged pull request', async t => {
+  const trackedURL = 'https://github.com/example/project/pull/10';
+  const titledURL = 'https://github.com/example/other-project/pull/20';
+  const untitledURL = 'https://github.com/example/project/pull/30';
+  const now = new Date().toISOString();
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, [{
+    request_id: 'multi-repo', prompt: 'Original prompt', repo: 'example/project',
+    status: 'merged', started_at: now, updated_at: now,
+    pr_url: trackedURL, pr_title_url: titledURL,
+    pr_title: 'Improve repository navigation',
+  }, {
+    request_id: 'untitled-pr', prompt: 'Untitled PR prompt', repo: 'example/project',
+    status: 'completed', started_at: now, updated_at: now, pr_url: untitledURL,
+  }, {
+    request_id: 'running-pr', prompt: 'Running PR prompt', repo: 'example/project',
+    status: 'running', started_at: now, updated_at: now, pr_title_url: titledURL,
+    pr_title: 'Improve repository navigation',
+  }]);
+
+  const runningTask = page.locator('#task-list .task[data-request-id="running-pr"]');
+  assert.equal(await runningTask.locator('a.task-progress-step[title^="GitHub:"]').getAttribute('href'), titledURL);
+  await page.locator('#task-history-toggle').click();
+  const task = page.locator('#task-list .task[data-request-id="multi-repo"]');
+  await task.locator('.task-github-link').waitFor();
+  assert.match(await task.locator('.task-id').textContent(), /Improve repository navigation/);
+  assert.equal(await task.locator('.task-github-link').getAttribute('href'), titledURL);
+  const mergedBadge = task.getByRole('link', { name: `Merged pull request: ${trackedURL}` });
+  assert.equal(await mergedBadge.getAttribute('href', { timeout: 2000 }), trackedURL);
+  assert.equal(await mergedBadge.getAttribute('title'), `Merged pull request: ${trackedURL}`);
+  await page.evaluate(() => { window.open = url => { window.openedPR = url; }; });
+  await mergedBadge.click();
+  assert.equal(await page.evaluate(() => window.openedPR), trackedURL);
+  const untitledTask = page.locator('#task-list .task[data-request-id="untitled-pr"]');
+  assert.equal(await untitledTask.locator('.task-github-link').getAttribute('href'), untitledURL);
+
+  await task.locator('.task-output-toggle').click();
+  const result = page.locator('#task-fullscreen-result');
+  await result.locator('.task-result-link').waitFor();
+  assert.equal(await result.locator('.task-result-title').textContent(), 'PR Merged');
+  assert.equal(await result.locator('.task-result-link').getAttribute('href'), trackedURL);
 });
 
 for (const viewport of [{ width: 430, height: 932 }, { width: 932, height: 430 }]) {

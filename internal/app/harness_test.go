@@ -263,6 +263,7 @@ func TestRunHappyPathCreatesPR(t *testing.T) {
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
 	branch := "agent00-build-api"
+	const prURL = "https://github.com/acme/repo/pull/42"
 
 	fake := &fakeRunner{t: t, allowUnorderedClones: true, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -280,14 +281,21 @@ func TestRunHappyPathCreatesPR(t *testing.T) {
 		{cmd: addCommand(repoDir)},
 		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
 		{cmd: pushCommand(repoDir, branch)},
-		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: "https://github.com/acme/repo/pull/42\n"}},
-		{cmd: prChecksCommand(repoDir, "https://github.com/acme/repo/pull/42")},
+		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
+		{cmd: prChecksCommand(repoDir, prURL)},
 	}}
 
 	h := New(fake)
 	h.Now = func() time.Time { return now }
 	h.Workspace = testWorkspaceManager(guid)
 	h.TargetDirOK = func(path string) bool { return path == targetDir }
+	var reportedTitle string
+	h.OnPRTitle = func(url, title string) {
+		if url != prURL {
+			t.Errorf("reported PR URL = %q, want %q", url, prURL)
+		}
+		reportedTitle = title
+	}
 
 	res := h.Run(context.Background(), cfg)
 	if res.Err != nil {
@@ -296,8 +304,11 @@ func TestRunHappyPathCreatesPR(t *testing.T) {
 	if res.ExitCode != ExitSuccess {
 		t.Fatalf("ExitCode = %d", res.ExitCode)
 	}
-	if res.PRURL != "https://github.com/acme/repo/pull/42" {
+	if res.PRURL != prURL {
 		t.Fatalf("PRURL = %q", res.PRURL)
+	}
+	if reportedTitle != cfg.PRTitle {
+		t.Fatalf("reported PR title = %q, want %q", reportedTitle, cfg.PRTitle)
 	}
 	if got, want := res.Branch, branch; got != want {
 		t.Fatalf("Branch = %q, want %q", got, want)
@@ -322,6 +333,8 @@ func TestRunPRCreateAlreadyExistsReusesExistingPR(t *testing.T) {
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
 	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
+	const recoveredTitle = "Actual title on GitHub"
+	transientErr := errors.New("HTTP 504")
 	prCreateStderr := fmt.Sprintf(
 		"a pull request for branch %q into branch %q already exists:\n%s\n",
 		branch,
@@ -342,7 +355,13 @@ func TestRunPRCreateAlreadyExistsReusesExistingPR(t *testing.T) {
 		{cmd: addCommand(repoDir)},
 		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
 		{cmd: pushCommand(repoDir, branch)},
+		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stderr: transientErr.Error()}, err: transientErr},
+		{cmd: remoteBranchExistsOnOriginCommand(repoDir, branch), res: execx.Result{Stdout: "abc123\trefs/heads/" + branch + "\n"}},
+		{cmd: prLookupByHeadCommand(repoDir, branch), res: execx.Result{Stdout: "[]\n"}},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stderr: prCreateStderr}, err: errors.New("pr create failed")},
+		{cmd: ghCommand(repoDir, "pr", "view", prURL, "--json", "title", "--jq", ".title"), res: execx.Result{Stderr: "HTTP 502"}, err: errors.New("exit status 1")},
+		{cmd: ghCommand(repoDir, "pr", "view", prURL, "--json", "title", "--jq", ".title"), res: execx.Result{Stderr: "error connecting to api.github.com"}, err: errors.New("exit status 1")},
+		{cmd: ghCommand(repoDir, "pr", "view", prURL, "--json", "title", "--jq", ".title"), res: execx.Result{Stdout: recoveredTitle + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL)},
 	}}
 
@@ -350,6 +369,14 @@ func TestRunPRCreateAlreadyExistsReusesExistingPR(t *testing.T) {
 	h.Now = func() time.Time { return now }
 	h.Workspace = testWorkspaceManager(guid)
 	h.TargetDirOK = func(path string) bool { return path == targetDir }
+	h.Sleep = func(context.Context, time.Duration) error { return nil }
+	var titleReports int
+	h.OnPRTitle = func(url, title string) {
+		titleReports++
+		if url != prURL || title != recoveredTitle {
+			t.Errorf("OnPRTitle(%q, %q), want (%q, %q)", url, title, prURL, recoveredTitle)
+		}
+	}
 
 	res := h.Run(context.Background(), cfg)
 	if res.Err != nil {
@@ -360,6 +387,9 @@ func TestRunPRCreateAlreadyExistsReusesExistingPR(t *testing.T) {
 	}
 	if res.PRURL != prURL {
 		t.Fatalf("PRURL = %q, want %q", res.PRURL, prURL)
+	}
+	if titleReports != 1 {
+		t.Fatalf("title reports = %d, want 1", titleReports)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
@@ -674,6 +704,7 @@ func TestRunPRCreateTransientFailureReusesLookupResult(t *testing.T) {
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
 	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
+	const recoveredTitle = "Actual title on GitHub"
 	transientErr := errors.New("error checking for existing pull request: HTTP 504: We couldn't respond to your request in time. (https://api.github.com/graphql)")
 
 	fake := &fakeRunner{t: t, allowUnorderedClones: true, exps: []expectedRun{
@@ -691,7 +722,7 @@ func TestRunPRCreateTransientFailureReusesLookupResult(t *testing.T) {
 		{cmd: pushCommand(repoDir, branch)},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stderr: transientErr.Error()}, err: transientErr},
 		{cmd: remoteBranchExistsOnOriginCommand(repoDir, branch), res: execx.Result{Stdout: "abc123\trefs/heads/" + branch + "\n"}},
-		{cmd: prLookupByHeadCommand(repoDir, branch), res: execx.Result{Stdout: `[{"url":"` + prURL + `"}]`}},
+		{cmd: prLookupByHeadCommand(repoDir, branch), res: execx.Result{Stdout: `[{"url":"` + prURL + `","title":"` + recoveredTitle + `"}]`}},
 		{cmd: prChecksCommand(repoDir, prURL)},
 	}}
 
@@ -703,6 +734,13 @@ func TestRunPRCreateTransientFailureReusesLookupResult(t *testing.T) {
 		t.Fatal("Sleep() called; lookup result should avoid retry delay")
 		return nil
 	}
+	var titleReports int
+	h.OnPRTitle = func(url, title string) {
+		titleReports++
+		if url != prURL || title != recoveredTitle {
+			t.Errorf("OnPRTitle(%q, %q), want (%q, %q)", url, title, prURL, recoveredTitle)
+		}
+	}
 
 	res := h.Run(context.Background(), cfg)
 	if res.Err != nil {
@@ -713,6 +751,9 @@ func TestRunPRCreateTransientFailureReusesLookupResult(t *testing.T) {
 	}
 	if res.PRURL != prURL {
 		t.Fatalf("PRURL = %q, want %q", res.PRURL, prURL)
+	}
+	if titleReports != 1 {
+		t.Fatalf("title reports = %d, want 1", titleReports)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
@@ -5953,12 +5994,12 @@ func TestCommandBuilders(t *testing.T) {
 	}
 
 	prLookup := prLookupByHeadCommand(repoDir, branch)
-	wantLookup := []string{"pr", "list", "--state", "open", "--head", branch, "--json", "url", "--limit", "1"}
+	wantLookup := []string{"pr", "list", "--state", "open", "--head", branch, "--json", "url,title", "--limit", "1"}
 	if prLookup.Name != "gh" || prLookup.Dir != repoDir || !reflect.DeepEqual(prLookup.Args, wantLookup) {
 		t.Fatalf("pr lookup command unexpected: %+v", prLookup)
 	}
 	prLookupWithRepo := prLookupByHeadWithRepoCommand(repoDir, "octocat:"+branch, "acme/repo")
-	wantLookupWithRepo := []string{"pr", "list", "--state", "open", "--head", "octocat:" + branch, "--json", "url", "--limit", "1", "--repo", "acme/repo"}
+	wantLookupWithRepo := []string{"pr", "list", "--state", "open", "--head", "octocat:" + branch, "--json", "url,title", "--limit", "1", "--repo", "acme/repo"}
 	if prLookupWithRepo.Name != "gh" || prLookupWithRepo.Dir != repoDir || !reflect.DeepEqual(prLookupWithRepo.Args, wantLookupWithRepo) {
 		t.Fatalf("pr lookup with repo command unexpected: %+v", prLookupWithRepo)
 	}

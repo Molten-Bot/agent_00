@@ -189,7 +189,9 @@ type agentInvocationLogMetadata struct {
 // Harness executes the clone -> codex -> PR workflow.
 type Harness struct {
 	// OnStep reports semantic progress, never command output or heartbeats.
-	OnStep               func(string)
+	OnStep func(string)
+	// OnPRTitle reports the title after PR creation, creation recovery, or a title update.
+	OnPRTitle            func(url, title string)
 	ResumeIssueWorkspace bool
 	Signing              *gitsigning.Snapshot
 	LoadSigning          func(context.Context) (*gitsigning.Snapshot, error)
@@ -1281,6 +1283,9 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 			h.logf("stage=pr status=start action=update_title repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 			if editRes, err := h.runCommand(ctx, "pr", prEditTitleCommand(repo.Dir, repo.PRURL, requestedTitle)); err != nil {
 				return ExitPR, "pr", prTitleEditError(repo.URL, requestedTitle, editRes)
+			}
+			if h.OnPRTitle != nil {
+				h.OnPRTitle(repo.PRURL, requestedTitle)
 			}
 			h.logf("stage=pr status=ok action=update_title repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 		}
@@ -2651,21 +2656,27 @@ func (h Harness) createPullRequestURL(
 					repo.Branch,
 					existingPRURL,
 				)
+				if h.OnPRTitle != nil {
+					h.reportRecoveredPRTitle(ctx, repo.Dir, existingPRURL)
+				}
 				return existingPRURL, nil
 			}
 
 			retryable := shouldRetryPRCreate(prRes, err)
 			if retryable {
-				prURL, lookupErr := h.lookupOpenPRURLByHead(ctx, repo)
-				if lookupErr == nil && prURL != "" {
+				pr, lookupErr := h.lookupOpenPRByHead(ctx, repo)
+				if lookupErr == nil && pr.URL != "" {
 					h.logf(
 						"stage=pr status=warn action=reuse_existing reason=create_transient_failed repo=%s repo_dir=%s branch=%s pr_url=%s",
 						repo.URL,
 						repo.RelDir,
 						repo.Branch,
-						prURL,
+						pr.URL,
 					)
-					return prURL, nil
+					if h.OnPRTitle != nil && pr.Title != "" {
+						h.OnPRTitle(pr.URL, pr.Title)
+					}
+					return pr.URL, nil
 				}
 				if lookupErr != nil {
 					h.logf(
@@ -2699,59 +2710,86 @@ func (h Harness) createPullRequestURL(
 			continue
 		}
 
-		if prURL := extractFirstURL(prRes.Stdout); prURL != "" {
-			return prURL, nil
+		prURL := stringsx.FirstNonEmpty(extractFirstURL(prRes.Stdout), extractFirstURL(prRes.Stderr))
+		if prURL == "" {
+			var verifyErr error
+			prURL, verifyErr = h.lookupOpenPRURLByHead(ctx, repo)
+			if verifyErr != nil {
+				return "", fmt.Errorf("verify open pull request for repo %s: %w", repo.URL, verifyErr)
+			}
+			if prURL == "" {
+				return "", fmt.Errorf("gh pr create did not return a PR URL for repo %s", repo.URL)
+			}
 		}
-		if prURL := extractFirstURL(prRes.Stderr); prURL != "" {
-			return prURL, nil
+		if h.OnPRTitle != nil {
+			h.OnPRTitle(prURL, cfg.PRTitle)
 		}
+		return prURL, nil
+	}
+}
 
-		prURL, verifyErr := h.lookupOpenPRURLByHead(ctx, repo)
-		if verifyErr != nil {
-			return "", fmt.Errorf("verify open pull request for repo %s: %w", repo.URL, verifyErr)
+func (h Harness) reportRecoveredPRTitle(ctx context.Context, repoDir, prURL string) {
+	cmd := ghCommand(repoDir, "pr", "view", prURL, "--json", "title", "--jq", ".title")
+	for attempt := 1; ; attempt++ {
+		res, err := h.runCommand(ctx, "pr", cmd)
+		if err == nil {
+			if title := strings.TrimSpace(res.Stdout); title != "" {
+				h.OnPRTitle(prURL, title)
+			}
+			return
 		}
-		if prURL != "" {
-			return prURL, nil
+		err = commandErrorWithDetails("look up pull request title", err, res, maxGitErrorDetailChars)
+		if ctx.Err() == nil && attempt < maxPRCreateAttempts && isTransientGitHubCLIError(err) {
+			err = h.Sleep(ctx, prCreateRetryDelay)
+			if err == nil {
+				continue
+			}
 		}
-		return "", fmt.Errorf("gh pr create did not return a PR URL for repo %s", repo.URL)
+		h.logf("stage=pr status=warn action=lookup_existing reason=title_lookup_failed pr_url=%s detail=%q", prURL, err)
+		return
 	}
 }
 
 func (h Harness) lookupOpenPRURLByHead(ctx context.Context, repo repoWorkspace) (string, error) {
+	pr, err := h.lookupOpenPRByHead(ctx, repo)
+	return pr.URL, err
+}
+
+func (h Harness) lookupOpenPRByHead(ctx context.Context, repo repoWorkspace) (ghPRLookupEntry, error) {
 	headRef := repoPRHeadRef(repo)
 	if headRef == "" {
-		return "", nil
+		return ghPRLookupEntry{}, nil
 	}
 	branch := normalizeBranchRef(repo.Branch)
 	if branch == "" {
-		return "", nil
+		return ghPRLookupEntry{}, nil
 	}
 
 	pushRemote := repoPushRemote(repo)
 	remoteRes, remoteErr := h.runCommand(ctx, "git", remoteBranchExistsOnRemoteCommand(repo.Dir, pushRemote, branch))
 	if remoteErr != nil {
 		if shouldRetryPRCreate(remoteRes, remoteErr) {
-			return "", fmt.Errorf("%w: verify remote branch %q for repo %s on remote %q: %w", errTransientPRLookup, branch, repo.URL, pushRemote, remoteErr)
+			return ghPRLookupEntry{}, fmt.Errorf("%w: verify remote branch %q for repo %s on remote %q: %w", errTransientPRLookup, branch, repo.URL, pushRemote, remoteErr)
 		}
-		return "", fmt.Errorf("verify remote branch %q for repo %s on remote %q: %w", branch, repo.URL, pushRemote, remoteErr)
+		return ghPRLookupEntry{}, fmt.Errorf("verify remote branch %q for repo %s on remote %q: %w", branch, repo.URL, pushRemote, remoteErr)
 	}
 	if !hasRemoteBranch(remoteRes) {
-		return "", nil
+		return ghPRLookupEntry{}, nil
 	}
 
 	lookupRes, err := h.runCommand(ctx, "pr", prLookupByHeadWithRepoCommand(repo.Dir, headRef, repoPRTargetRepo(repo)))
 	if err != nil {
-		return "", commandErrorWithDetails(
+		return ghPRLookupEntry{}, commandErrorWithDetails(
 			fmt.Sprintf("lookup open pull request for repo %s branch %q", repo.URL, headRef),
 			err,
 			lookupRes,
 			maxGitErrorDetailChars,
 		)
 	}
-	if prURL := parsePRURLFromLookupOutput(lookupRes.Stdout); prURL != "" {
-		return prURL, nil
+	if pr := parsePRLookupOutput(lookupRes.Stdout); pr.URL != "" {
+		return pr, nil
 	}
-	return parsePRURLFromLookupOutput(lookupRes.Stderr), nil
+	return parsePRLookupOutput(lookupRes.Stderr), nil
 }
 
 func (h Harness) lookupAnyPRURLByHead(ctx context.Context, repo repoWorkspace) (string, error) {
@@ -2769,10 +2807,10 @@ func (h Harness) lookupAnyPRURLByHead(ctx context.Context, repo repoWorkspace) (
 			maxGitErrorDetailChars,
 		)
 	}
-	if prURL := parsePRURLFromLookupOutput(lookupRes.Stdout); prURL != "" {
-		return prURL, nil
+	if pr := parsePRLookupOutput(lookupRes.Stdout); pr.URL != "" {
+		return pr.URL, nil
 	}
-	return parsePRURLFromLookupOutput(lookupRes.Stderr), nil
+	return parsePRLookupOutput(lookupRes.Stderr).URL, nil
 }
 
 func (h Harness) runCloneWithRetry(
@@ -7349,30 +7387,33 @@ func extractFirstURL(text string) string {
 }
 
 type ghPRLookupEntry struct {
-	URL string `json:"url"`
+	URL   string `json:"url"`
+	Title string `json:"title"`
 }
 
-func parsePRURLFromLookupOutput(raw string) string {
+func parsePRLookupOutput(raw string) ghPRLookupEntry {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return ""
+		return ghPRLookupEntry{}
 	}
 
 	var list []ghPRLookupEntry
 	if err := json.Unmarshal([]byte(raw), &list); err == nil {
 		for _, entry := range list {
-			if url := strings.TrimSpace(entry.URL); url != "" {
-				return url
+			entry.URL = strings.TrimSpace(entry.URL)
+			if entry.URL != "" {
+				return entry
 			}
 		}
-		return ""
+		return ghPRLookupEntry{}
 	}
 
 	var single ghPRLookupEntry
 	if err := json.Unmarshal([]byte(raw), &single); err == nil {
-		return strings.TrimSpace(single.URL)
+		single.URL = strings.TrimSpace(single.URL)
+		return single
 	}
-	return extractFirstURL(raw)
+	return ghPRLookupEntry{URL: extractFirstURL(raw)}
 }
 
 func hasRemoteBranch(res execx.Result) bool {
@@ -8422,7 +8463,7 @@ func prLookupByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Command 
 }
 
 func prLookupByHeadStateCommand(repoDir, state, headRef, repo string) execx.Command {
-	args := []string{"pr", "list", "--state", state, "--head", headRef, "--json", "url", "--limit", "1"}
+	args := []string{"pr", "list", "--state", state, "--head", headRef, "--json", "url,title", "--limit", "1"}
 	if strings.TrimSpace(repo) != "" {
 		args = append(args, "--repo", strings.TrimSpace(repo))
 	}

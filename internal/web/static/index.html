@@ -1464,7 +1464,7 @@
     }
 
     function renderTaskPullRequestAction(task) {
-      const prURL = taskPullRequestURL(task);
+      const prURL = taskCardPullRequestURL(task);
       if (!isCompletedTask(task) || !prURL) {
         return null;
       }
@@ -1543,12 +1543,20 @@
         return null;
       }
 
-      const statusLabel = taskStatusLabel(status);
-      const badge = document.createElement("span");
+      const mergedPRURL = status === "merged" ? taskPullRequestURL(task) : "";
+      const hasSeparateMergedPR = Boolean(mergedPRURL && mergedPRURL !== taskCardPullRequestURL(task));
+      const badge = document.createElement(hasSeparateMergedPR ? "a" : "span");
       badge.className = `badge badge-icon ${statusClass(status)}`;
+      const label = hasSeparateMergedPR ? `Merged pull request: ${mergedPRURL}` : `Status: ${taskStatusLabel(status)}.`;
+      if (hasSeparateMergedPR) {
+        badge.href = mergedPRURL;
+        badge.target = "_blank";
+        badge.rel = "noopener noreferrer";
+        badge.addEventListener("click", (event) => openExternalTaskLink(event, mergedPRURL));
+      }
 
-      badge.title = `Status: ${statusLabel}.`;
-      badge.setAttribute("aria-label", `Status: ${statusLabel}.`);
+      badge.title = label;
+      badge.setAttribute("aria-label", label);
       badge.appendChild(createTaskStatusIcon(status));
       return badge;
     }
@@ -9572,7 +9580,7 @@
     }
 
     function taskGitHubLinkURL(task) {
-      const prURL = taskPullRequestURL(task);
+      const prURL = taskCardPullRequestURL(task);
       if (prURL) {
         return prURL;
       }
@@ -9586,6 +9594,10 @@
 
     function taskPullRequestURL(task) {
       return String(task?.pr_url || "").trim();
+    }
+
+    function taskCardPullRequestURL(task) {
+      return String(task?.pr_title_url || "").trim() || taskPullRequestURL(task);
     }
 
     function taskLiveAppURL(task) {
@@ -9759,12 +9771,12 @@
       return `${text.slice(0, Math.max(1, limit - 1)).trimEnd()}...`;
     }
 
-    function taskPromptPreviewText(task) {
-      return truncateText(taskPromptText(task), TASK_PROMPT_PREVIEW_MAX_CHARS);
+    function taskNameText(task) {
+      return String(task?.pr_title || "").trim() || taskPromptText(task);
     }
 
     function taskPromptModalTitleText(task) {
-      return truncateText(taskPromptText(task) || taskSystemLabel(task) || "Task Prompt", TASK_PROMPT_MODAL_TITLE_MAX_CHARS);
+      return truncateText(taskNameText(task) || taskSystemLabel(task) || "Task Prompt", TASK_PROMPT_MODAL_TITLE_MAX_CHARS);
     }
 
     function taskSystemLabel(task) {
@@ -9776,11 +9788,7 @@
     }
 
     function taskDisplayLabel(task) {
-      const prompt = taskPromptPreviewText(task);
-      if (!prompt) {
-        return taskSystemLabel(task) || "Task";
-      }
-      return prompt;
+      return truncateText(taskNameText(task), TASK_PROMPT_PREVIEW_MAX_CHARS) || taskSystemLabel(task) || "Task";
     }
 
     function normalizedTaskStatus(status) {
@@ -11008,6 +11016,8 @@
           String(existing.status || "") === String(copy.status || "") &&
           String(existing.error || "") === String(copy.error || "") &&
           String(existing.pr_url || "") === String(copy.pr_url || "") &&
+          String(existing.pr_title || "") === String(copy.pr_title || "") &&
+          String(existing.pr_title_url || "") === String(copy.pr_title_url || "") &&
           existingLogsLength === nextLogsLength
         ) {
           continue;
@@ -11734,7 +11744,7 @@
         taskReviewStepEnabled() ? "review_cycle" : "",
         taskStartSource(task),
         isReadOnlyReviewTask(task) ? "code_review" : "implementation",
-        String(task?.pr_url || ""),
+        taskPullRequestURL(task),
         String(logs.length),
         tail,
         taskProgressSignalsSignature(signals),
@@ -12153,7 +12163,7 @@
             autoMergeStep: taskAutoMergeStepEnabled(task),
             source: taskStartSource(task),
             currentState: taskCurrentStateSignature(task),
-            prompt: taskDisplayLabel(task),
+            name: taskNameText(task),
             repos: formatTaskRepos(task),
             originalSiteURL: taskOriginalSiteURL(task),
             conceptSiteURL: taskConceptSiteURL(task),
@@ -12378,9 +12388,9 @@
         const id = document.createElement("div");
         id.className = "task-id";
         id.textContent = taskDisplayLabel(task);
-        const prompt = taskPromptText(task);
-        if (prompt) {
-          id.title = prompt;
+        const name = taskNameText(task);
+        if (name) {
+          id.title = name;
         }
 
         const badge = renderTaskStatusBadge(task);
@@ -13155,6 +13165,7 @@
       const renderSig = [
         selected.request_id || "",
         selectedLabel,
+        taskPullRequestURL(selected),
         selected.status || "",
         selected.stage || "",
         logs.length,
