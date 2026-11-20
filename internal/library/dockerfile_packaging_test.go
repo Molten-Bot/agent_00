@@ -264,7 +264,7 @@ func TestRuntimeDockerfileInstallsOpenAIPythonSDK(t *testing.T) {
 
 	content := string(data)
 	for _, want := range []string{
-		"ARG OPENAI_PYTHON_VERSION=2.53.0",
+		"ARG OPENAI_PYTHON_VERSION=3.57.0",
 		"python3 -m pip install",
 		"openai==${OPENAI_PYTHON_VERSION}",
 	} {
