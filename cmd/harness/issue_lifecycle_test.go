@@ -55,6 +55,23 @@ func TestIssueExecutionIdempotenceAndTerminalReceipt(t *testing.T) {
 	}
 }
 
+func TestIssueExecutionRejectsSupersededOwner(t *testing.T) {
+	t.Parallel()
+	store, record := lifecycleRecord(t)
+	record.InstanceID = "previous-owner"
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+	if work != nil {
+		work.lock.Close()
+		t.Fatal("superseded owner was allowed to execute")
+	}
+	if err == nil || !strings.Contains(err.Error(), "issue ownership changed") || strings.Contains(err.Error(), "%!") {
+		t.Fatalf("unexpected ownership error: %v", err)
+	}
+}
+
 func TestIssueExecutionTracksProcessExitAndStartFailure(t *testing.T) {
 	t.Parallel()
 	store, record := lifecycleRecord(t)

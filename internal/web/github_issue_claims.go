@@ -89,17 +89,19 @@ func newIssueClaimID() string {
 func (s Server) instanceID() string {
 	s.issueAutomation.mu.Lock()
 	defer s.issueAutomation.mu.Unlock()
-	if s.issueAutomation.instanceID == "" {
-		if s.IssueRecovery != nil {
-			id, err := s.IssueClaims.Identity()
-			if err != nil {
-				s.logf("event=issue_identity status=error err=%q", err)
-				return ""
-			}
-			s.issueAutomation.instanceID = id
-		} else {
-			s.issueAutomation.instanceID = newIssueClaimID()
+	// Durable admission and execution must use the same on-disk owner. A
+	// cached legacy identity (or an identity from replaced storage) must not
+	// poison every subsequent explicit recovery attempt.
+	if s.IssueRecovery != nil {
+		id, err := s.IssueClaims.Identity()
+		if err != nil {
+			s.logf("event=issue_identity status=error err=%q", err)
+			return ""
 		}
+		return id
+	}
+	if s.issueAutomation.instanceID == "" {
+		s.issueAutomation.instanceID = newIssueClaimID()
 	}
 	return s.issueAutomation.instanceID
 }

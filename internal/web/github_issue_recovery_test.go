@@ -94,6 +94,61 @@ func recoveryPR(state, merged, head, base string) string {
 	return `[{"number":42,"state":"` + state + `","merged_at":` + merged + `,"head":{"ref":"` + head + `","repo":{"full_name":"acme/repo"}},"base":{"ref":"` + base + `","repo":{"full_name":"acme/repo"}}}]`
 }
 
+func TestExplicitIssueRecoveryUsesPersistentOwner(t *testing.T) {
+	t.Parallel()
+	for _, action := range []string{"start", "recover"} {
+		t.Run(action, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			s.pollGitHubIssueAutoStart(context.Background())
+			previous := completeRecoveryRecord(t, s, "stopped", 3)
+			// Simulate a cached identity left behind by an earlier server configuration.
+			s.issueAutomation.instanceID = strings.Repeat("f", 32)
+			s.SubmitLocalPrompt = func(ctx context.Context, body []byte) (string, error) {
+				run, err := localruntime.ParseRunConfigJSON(body)
+				if err != nil {
+					return "", err
+				}
+				record, err := s.IssueClaims.Load(run.GitHubIssue.Claim.ID)
+				if err != nil {
+					return "", err
+				}
+				owner, err := s.IssueClaims.Identity()
+				if err != nil {
+					return "", err
+				}
+				if record.InstanceID != owner {
+					return "", errors.New("issue ownership changed")
+				}
+				if err := s.ValidateIssueOwnership(ctx, run); err != nil {
+					return "", err
+				}
+				return f.submit(ctx, body)
+			}
+			if action == "recover" {
+				response := retryIssue(t, s, previous.ID, true)
+				if response.Code != http.StatusAccepted {
+					t.Fatalf("recovery=%d %s", response.Code, response.Body.String())
+				}
+			} else {
+				body, err := json.Marshal(previous.Run)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.submitWithIssueClaim(context.Background(), body, s.SubmitLocalPrompt); err != nil {
+					t.Fatalf("explicit start: %v", err)
+				}
+			}
+			latest := latestRecoveryRecord(t, s)
+			if len(f.submissions) != 2 || latest.ID == previous.ID || latest.Run.GitHubIssue.Claim.Attempt != previous.Run.GitHubIssue.Claim.Attempt+1 {
+				t.Fatal("explicit recovery did not submit a fresh attempt")
+			}
+			if latest.Run.GitHubIssue.Claim.Branch != previous.Run.GitHubIssue.Claim.Branch || latest.AgentAttempts != 0 || latest.Outcome != "" {
+				t.Fatal("explicit recovery lost the branch or retained the previous retry limit")
+			}
+		})
+	}
+}
+
 func TestIssueRecoveryRetryAfterDurableBranchReservationFailure(t *testing.T) {
 	t.Parallel()
 	for _, scenario := range []string{"matching intent", "different owner", "previously reserved"} {

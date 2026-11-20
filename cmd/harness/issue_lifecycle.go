@@ -33,8 +33,11 @@ func prepareIssueExecution(store *localruntime.IssueClaimStore, run config.Confi
 		return nil, "", nil
 	}
 	owner, err := store.Identity()
-	if err != nil || owner != record.InstanceID {
-		return nil, "", fmt.Errorf("issue owner is unavailable or changed: %w", err)
+	if err != nil {
+		return nil, "", fmt.Errorf("load issue owner: %w", err)
+	}
+	if owner != record.InstanceID {
+		return nil, "", fmt.Errorf("issue ownership changed; start the issue again to create a new attempt")
 	}
 	if record.RequestID == "" {
 		return nil, "", fmt.Errorf("issue dispatch intent has no request ID")
