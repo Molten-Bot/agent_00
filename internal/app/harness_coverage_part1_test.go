@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -830,6 +831,13 @@ func TestH1CovCreatePullRequestURL(t *testing.T) {
 		}
 		h := New(fake)
 		h.Sleep = func(context.Context, time.Duration) error { return nil }
+		var lookupWarning string
+		h.Logf = func(format string, args ...any) {
+			line := fmt.Sprintf(format, args...)
+			if strings.Contains(line, "reason=title_lookup_failed") {
+				lookupWarning = line
+			}
+		}
 		h.OnPRTitle = func(url, title string) {
 			t.Errorf("OnPRTitle(%q, %q) called after title lookup failed", url, title)
 		}
@@ -839,6 +847,10 @@ func TestH1CovCreatePullRequestURL(t *testing.T) {
 		}
 		if len(fake.exps) != 0 {
 			t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+		}
+		if !strings.Contains(lookupWarning, "status=warn") || !strings.Contains(lookupWarning, "HTTP 504") ||
+			strings.Contains(lookupWarning, " err=") || strings.Contains(lookupWarning, " error=") {
+			t.Fatalf("title lookup warning = %q, want diagnostic without task error fields", lookupWarning)
 		}
 	})
 

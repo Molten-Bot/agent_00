@@ -2738,13 +2738,14 @@ func (h Harness) reportRecoveredPRTitle(ctx context.Context, repoDir, prURL stri
 			}
 			return
 		}
-		if ctx.Err() == nil && attempt < maxPRCreateAttempts && shouldRetryPRCreate(res, err) {
+		err = commandErrorWithDetails("look up pull request title", err, res, maxGitErrorDetailChars)
+		if ctx.Err() == nil && attempt < maxPRCreateAttempts && isTransientGitHubCLIError(err) {
 			err = h.Sleep(ctx, prCreateRetryDelay)
 			if err == nil {
 				continue
 			}
 		}
-		h.logf("stage=pr status=warn action=lookup_existing reason=title_lookup_failed pr_url=%s err=%q", prURL, err)
+		h.logf("stage=pr status=warn action=lookup_existing reason=title_lookup_failed pr_url=%s detail=%q", prURL, err)
 		return
 	}
 }

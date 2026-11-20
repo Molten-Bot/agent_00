@@ -306,7 +306,7 @@ type taskState struct {
 	Branch            string
 	PRURL             string
 	PRTitles          map[string]string
-	LatestTitledPRURL string
+	TitledPRURLs      []string
 	LiveAppURL        string
 	Error             string
 	Warning           string
@@ -664,7 +664,8 @@ func (b *Broker) RecordTaskPRTitle(requestID, prURL, title string) {
 		t.PRTitles = make(map[string]string)
 	}
 	t.PRTitles[prURL] = title
-	t.LatestTitledPRURL = prURL
+	t.TitledPRURLs = slices.DeleteFunc(t.TitledPRURLs, func(url string) bool { return url == prURL })
+	t.TitledPRURLs = append(t.TitledPRURLs, prURL)
 	t.PRURL = prURL
 	t.UpdatedAt = b.now().UTC()
 	b.notifySubscribersLocked()
@@ -1349,7 +1350,11 @@ func taskPRTitle(t *taskState) (title, url string) {
 		return title, t.PRURL
 	}
 	// Multi-repo completion can select a reused PR without a recorded title.
-	return t.PRTitles[t.LatestTitledPRURL], t.LatestTitledPRURL
+	if len(t.TitledPRURLs) > 0 {
+		url := t.TitledPRURLs[len(t.TitledPRURLs)-1]
+		return t.PRTitles[url], url
+	}
+	return "", ""
 }
 
 func taskAgentHarness(t *taskState) string {
@@ -2124,6 +2129,11 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		}
 		t.Branch = stringsx.FirstNonEmpty(fields["branch"], t.Branch)
 		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
+		if fields["stage"] == "pr" && fields["status"] == "ok" && fields["action"] == "recreate_closed_pr" {
+			oldPRURL := fields["old_pr_url"]
+			delete(t.PRTitles, oldPRURL)
+			t.TitledPRURLs = slices.DeleteFunc(t.TitledPRURLs, func(url string) bool { return url == oldPRURL })
+		}
 		if !agentInvocationLine {
 			t.Error = stringsx.FirstNonEmpty(fields["err"], fields["error"], t.Error)
 		}

@@ -109,6 +109,44 @@ func TestBrokerKeepsCreatedPRTitleWhenCompletionSelectsReusedPR(t *testing.T) {
 	}
 }
 
+func TestBrokerDropsSupersededPRTitleWhenReplacementHasNoTitle(t *testing.T) {
+	t.Parallel()
+
+	const requestID = "req-replacement"
+	const closedURL = "https://github.com/acme/repo/pull/99"
+	const replacementURL = "https://github.com/acme/repo/pull/100"
+	const otherURL = "https://github.com/acme/other/pull/42"
+	const otherTitle = "Title from another repository"
+	for _, tc := range []struct {
+		name, fallbackURL, fallbackTitle string
+	}{
+		{name: "single repo"},
+		{name: "multi repo", fallbackURL: otherURL, fallbackTitle: otherTitle},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			b := NewBroker()
+			b.IngestLog("task status=start request_id=" + requestID)
+			b.RecordTaskPRTitle(requestID, tc.fallbackURL, tc.fallbackTitle)
+			b.RecordTaskPRTitle(requestID, closedURL, "Closed PR title")
+			b.IngestLog("task request_id=" + requestID + " stage=pr status=ok action=recreate_closed_pr old_pr_url=" + closedURL + " pr_url=" + replacementURL)
+
+			check := func(task Task) {
+				t.Helper()
+				if task.PRURL != replacementURL || task.PRTitle != tc.fallbackTitle || task.PRTitleURL != tc.fallbackURL {
+					t.Fatalf("PR metadata = (%q, %q, %q), want (%q, %q, %q)",
+						task.PRURL, task.PRTitle, task.PRTitleURL, replacementURL, tc.fallbackTitle, tc.fallbackURL)
+				}
+			}
+			task, _ := b.Task(requestID)
+			check(task)
+			b.IngestLog("task status=completed request_id=" + requestID + " pr_url=" + replacementURL)
+			check(b.StreamSnapshot().Tasks[0])
+		})
+	}
+}
+
 func TestBrokerTracksLiveAppURLFromTaskLogs(t *testing.T) {
 	t.Parallel()
 

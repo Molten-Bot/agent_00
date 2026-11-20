@@ -357,6 +357,7 @@ func TestRunPRCreateAlreadyExistsReusesExistingPR(t *testing.T) {
 		{cmd: prLookupByHeadCommand(repoDir, branch), res: execx.Result{Stdout: "[]\n"}},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stderr: prCreateStderr}, err: errors.New("pr create failed")},
 		{cmd: ghCommand(repoDir, "pr", "view", prURL, "--json", "title", "--jq", ".title"), res: execx.Result{Stderr: "HTTP 502"}, err: errors.New("exit status 1")},
+		{cmd: ghCommand(repoDir, "pr", "view", prURL, "--json", "title", "--jq", ".title"), res: execx.Result{Stderr: "error connecting to api.github.com"}, err: errors.New("exit status 1")},
 		{cmd: ghCommand(repoDir, "pr", "view", prURL, "--json", "title", "--jq", ".title"), res: execx.Result{Stdout: recoveredTitle + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL)},
 	}}
