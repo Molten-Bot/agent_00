@@ -720,9 +720,43 @@
         return;
       }
       if (taskStatus) taskStatus.textContent = `Could not start task: ${error.message || "request failed"}`;
+      if (error.body?.recoveryRequired) showRecoveryAction(issue, repo);
       track("github_issue_task_failed", analyticsParams);
       submitButtons.forEach((button) => { button.disabled = false; });
     }
+  }
+
+  function showRecoveryAction(issue, repo) {
+    const actions = detail.querySelector(".github-issue-task-actions .prompt-actions-end");
+    if (!actions || actions.querySelector(".github-issue-recover")) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "prompt-action-button github-issue-recover";
+    button.textContent = "Recover / retry";
+    button.addEventListener("click", async () => {
+      const buttons = Array.from(actions.querySelectorAll("button"));
+      const taskStatus = actions.closest(".github-issue-task-actions").querySelector(".github-issue-task-status");
+      buttons.forEach((entry) => { entry.disabled = true; });
+      let queued = false;
+      try {
+        const query = new URLSearchParams({ repo: repo.full_name, number: issue.number });
+        const claim = await requestJSON(`/api/github/automation/retry?${query}`, { cache: "no-store" });
+        if (!window.confirm(`Retry ${repo.full_name}#${issue.number}? Confirm that its previous worker has stopped on every Agent Hub instance. The existing branch and commits will be preserved.`)) return;
+        taskStatus.textContent = "Recovering task…";
+        const body = await requestJSON("/api/github/automation/retry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repository: repo.full_name, number: issue.number, expectedClaimId: claim.expectedClaimId, confirmStopped: true }),
+        });
+        queued = true;
+        taskStatus.textContent = `Task queued (${body.request_id || "request accepted"}).`;
+      } catch (error) {
+        taskStatus.textContent = `Could not recover task: ${error.message || "request failed"}`;
+      } finally {
+        if (!queued) buttons.forEach((entry) => { entry.disabled = false; });
+      }
+    });
+    actions.prepend(button);
   }
 
   async function loadIssue(number) {

@@ -151,11 +151,20 @@ must permit creation of these branches/tags and issue labels. This requires
 repository contents and issues write access; permission failures appear in the
 status panel and block admission.
 
-Use **Recover / retry** only after stopping the previous worker on every
-instance. Recovery preserves the branch's existing commits and refuses a stale
+**Start task** and the task-history **Rerun** action automatically recover the
+latest claim when its task failed or was stopped on the current instance. They
+preserve the original runtime options and refresh the issue content. Background
+scans do not automatically retry failures.
+
+For interrupted admissions, restarted instances, or unknown worker state, use
+**Recover / retry** beside the start error or in **Settings → GitHub Issues**,
+after stopping the previous worker on every instance.
+Recovery preserves the branch's existing commits and refuses a stale
 claim identity, an active local task, or a closed issue. Ambiguous API results
 are never automatically replayed. An unrecorded reservation can be explicitly
 recovered, provided its single linked branch has the expected reserved name.
+If reservation failed before creating a branch, recovery creates it after
+verifying that no remote attempt or development association exists.
 Do not delete claim tags to clear a reservation. Keep the exclusion label until
 resolving or explicitly recovering the issue.
 

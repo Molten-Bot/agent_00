@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
-	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
@@ -2750,6 +2749,10 @@ func (s Server) handlePromptSubmit(
 	}
 	requestID, err := s.submitWithIssueClaim(r.Context(), body, submit)
 	if err != nil {
+		if errors.Is(err, errIssueRecoveryRequired) {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": err.Error(), "recoveryRequired": true})
+			return
+		}
 		if duplicateRequestID, duplicateState, ok := duplicateSubmissionDetails(err); ok {
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"ok":         false,
@@ -2980,13 +2983,6 @@ func (s Server) handleTaskRerun(w http.ResponseWriter, r *http.Request, requestI
 		return
 	}
 
-	var issueRun struct {
-		GitHubIssue *config.GitHubIssueConfig `json:"githubIssue"`
-	}
-	if json.Unmarshal(runConfigJSON, &issueRun) == nil && issueRun.GitHubIssue != nil && issueRun.GitHubIssue.Claim != nil {
-		writeJSONError(w, http.StatusConflict, fmt.Errorf("issue tasks require explicit claim recovery in Settings → GitHub Issues"))
-		return
-	}
 	force := parseTruthyQueryParam(r.URL.Query().Get("force"))
 
 	submit := func(ctx context.Context, body []byte) (string, error) {
@@ -3001,6 +2997,10 @@ func (s Server) handleTaskRerun(w http.ResponseWriter, r *http.Request, requestI
 	sourceTask, sourceTaskFound := s.Broker.Task(requestID)
 	newRequestID, err := s.submitWithIssueClaim(r.Context(), runConfigJSON, submit)
 	if err != nil {
+		if errors.Is(err, errIssueRecoveryRequired) {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": err.Error(), "recoveryRequired": true})
+			return
+		}
 		if duplicateRequestID, duplicateState, ok := duplicateSubmissionDetails(err); ok {
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"ok":           false,

@@ -103,9 +103,6 @@ func (s Server) submitWithIssueClaim(ctx context.Context, body []byte, submit fu
 	if run.GitHubIssue == nil {
 		return submit(ctx, body)
 	}
-	if run.GitHubIssue.Claim != nil {
-		return "", fmt.Errorf("an existing issue claim requires explicit recovery from GitHub Issues settings")
-	}
 	if s.ReviewSettingsStatus == nil {
 		return "", fmt.Errorf("issue settings are unavailable")
 	}
@@ -120,7 +117,7 @@ func (s Server) submitWithIssueClaim(ctx context.Context, body []byte, submit fu
 	// obey exclusions, development associations, and the same ownership protocol.
 	settings.GitHubIssueAutoStartOnlyAssigned = false
 	settings.GitHubIssueAutoStartLabels = nil
-	return s.claimAndSubmitIssue(ctx, run, settings, "", submit)
+	return s.claimAndSubmitIssueMode(ctx, run, settings, "", submit, true)
 }
 
 type issueClaimTarget struct {
@@ -185,6 +182,14 @@ func (s Server) issueClaimTarget(ctx context.Context, repository string, number 
 }
 
 func (s Server) claimAndSubmitIssue(ctx context.Context, run config.Config, settings ReviewSettingsState, login string, submit func(context.Context, []byte) (string, error)) (string, error) {
+	return s.claimAndSubmitIssueMode(ctx, run, settings, login, submit, false)
+}
+
+var errIssueRecoveryRequired = errors.New("issue is reserved by a previous attempt; use Recover / retry here or in Settings → GitHub Issues after its worker has stopped")
+
+// Only an explicit start/rerun may recover a known failed local attempt. The
+// background scanner must never turn a persistent failure into a retry loop.
+func (s Server) claimAndSubmitIssueMode(ctx context.Context, run config.Config, settings ReviewSettingsState, login string, submit func(context.Context, []byte) (string, error), manual bool) (string, error) {
 	if s.issueAutomation == nil || s.IssueClaims == nil {
 		return "", fmt.Errorf("issue claim storage is unavailable")
 	}
@@ -213,8 +218,14 @@ func (s Server) claimAndSubmitIssue(ctx context.Context, run config.Config, sett
 	for _, record := range records {
 		prior := record.Run.GitHubIssue
 		if strings.EqualFold(prior.Repository, issue.Repository) && prior.Number == issue.Number {
-			return "", fmt.Errorf("issue has a durable claim; explicit recovery is required")
+			if manual {
+				return s.restartFailedIssue(ctx, issue, records, submit)
+			}
+			return "", errIssueRecoveryRequired
 		}
+	}
+	if issue.Claim != nil {
+		return "", errIssueRecoveryRequired
 	}
 	fresh, err := s.fetchGitHubIssue(ctx, issue.Repository, issue.Number)
 	if err != nil {
@@ -257,10 +268,23 @@ func (s Server) claimAndSubmitIssue(ctx context.Context, run config.Config, sett
 	if err := s.IssueClaims.Save(record); err != nil {
 		return "", fmt.Errorf("persist claim before reservation: %w", err)
 	}
+	if err := s.reserveIssueBranch(ctx, target.ID, claim.Branch, sha); err != nil {
+		return "", s.blockIssueClaim(record, err)
+	}
+	// An immutable annotated tag records each admitted attempt. Its unique ref
+	// also serializes explicit recovery across independent instances. It contains
+	// ownership metadata only, never issue text, prompts, credentials or logs.
+	if err = s.publishIssueAttempt(ctx, issue, sha, record.InstanceID); err != nil {
+		return "", s.blockIssueClaim(record, err)
+	}
+	return s.finishIssueAdmission(ctx, record, submit)
+}
+
+func (s Server) reserveIssueBranch(ctx context.Context, issueID, branch, sha string) error {
 	const mutation = `mutation($issue:ID!,$name:String!,$oid:GitObjectID!){createLinkedBranch(input:{issueId:$issue,name:$name,oid:$oid}){linkedBranch{ref{name}}}}`
-	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "graphql", "-f", "query=" + mutation, "-f", "issue=" + target.ID, "-f", "name=" + claim.Branch, "-f", "oid=" + sha}})
+	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "graphql", "-f", "query=" + mutation, "-f", "issue=" + issueID, "-f", "name=" + branch, "-f", "oid=" + sha}})
 	if err != nil {
-		return "", s.blockIssueClaim(record, fmt.Errorf("reserve issue branch (ownership unconfirmed): %w", err))
+		return fmt.Errorf("reserve issue branch (ownership unconfirmed): %w", err)
 	}
 	var response struct {
 		Errors []struct{ Message string }
@@ -270,16 +294,48 @@ func (s Server) claimAndSubmitIssue(ctx context.Context, run config.Config, sett
 			}
 		}
 	}
-	if err = json.Unmarshal([]byte(result.Stdout), &response); err != nil || len(response.Errors) > 0 || response.Data.CreateLinkedBranch.LinkedBranch.Ref.Name != claim.Branch {
-		return "", s.blockIssueClaim(record, fmt.Errorf("GitHub did not confirm exclusive creation of the exact reserved branch; inspect the claim before retrying"))
+	if err = json.Unmarshal([]byte(result.Stdout), &response); err != nil || len(response.Errors) > 0 || response.Data.CreateLinkedBranch.LinkedBranch.Ref.Name != branch {
+		return fmt.Errorf("GitHub did not confirm exclusive creation of the exact reserved branch; inspect the claim before retrying")
 	}
-	// An immutable annotated tag records each admitted attempt. Its unique ref
-	// also serializes explicit recovery across independent instances. It contains
-	// ownership metadata only, never issue text, prompts, credentials or logs.
-	if err = s.publishIssueAttempt(ctx, issue, sha, record.InstanceID); err != nil {
-		return "", s.blockIssueClaim(record, err)
+	return nil
+}
+
+func (s Server) restartFailedIssue(ctx context.Context, issue *config.GitHubIssueConfig, records []localruntime.IssueClaimRecord, submit func(context.Context, []byte) (string, error)) (string, error) {
+	remote, err := s.latestIssueAttempt(ctx, issue.Repository, issue.Number)
+	if err != nil {
+		return "", err
 	}
-	return s.finishIssueAdmission(ctx, record, submit)
+	if remote.Claim.ID == "" || remote.InstanceID != s.instanceID() || s.Broker == nil {
+		return "", errIssueRecoveryRequired
+	}
+	if issue.Claim != nil && issue.Claim.ID != remote.Claim.ID {
+		return "", errIssueRecoveryRequired
+	}
+	for _, record := range records {
+		prior := record.Run.GitHubIssue
+		if record.ID != remote.Claim.ID || record.InstanceID != remote.InstanceID || record.Phase != "submitted" ||
+			!strings.EqualFold(prior.Repository, issue.Repository) || prior.Number != issue.Number {
+			continue
+		}
+		task, ok := s.Broker.Task(record.RequestID)
+		if !ok {
+			break
+		}
+		switch normalizeTaskTerminalStatus(task.Status) {
+		case "error", "invalid", "stopped":
+			// Recovery must bypass completed-request deduplication, just like the
+			// explicit recovery endpoint. The claim protocol still excludes races.
+			if s.SubmitTaskRerun != nil {
+				submit = func(ctx context.Context, body []byte) (string, error) {
+					return s.SubmitTaskRerun(ctx, record.RequestID, body, false)
+				}
+			}
+			id, _, err := s.recoverIssueClaim(ctx, issue.Repository, issue.Number, remote, submit)
+			return id, err
+		}
+		break
+	}
+	return "", errIssueRecoveryRequired
 }
 
 func (s Server) blockIssueClaim(record localruntime.IssueClaimRecord, cause error) error {
@@ -529,40 +585,52 @@ func (s Server) handleIssueAutomationRetry(w http.ResponseWriter, r *http.Reques
 		writeJSONError(w, 409, fmt.Errorf("claim changed; refresh before retrying"))
 		return
 	}
-	settings, err := s.ReviewSettingsStatus(r.Context())
+	submit := s.issueRetrySubmitter()
+	requestID, status, err := s.recoverIssueClaim(r.Context(), repository, request.Number, remote, submit)
 	if err != nil {
-		writeJSONError(w, 503, err)
+		writeJSONError(w, status, err)
 		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "request_id": requestID})
+}
+
+func (s Server) issueRetrySubmitter() func(context.Context, []byte) (string, error) {
+	if s.SubmitTaskRerun != nil {
+		return func(ctx context.Context, body []byte) (string, error) { return s.SubmitTaskRerun(ctx, "", body, false) }
+	}
+	return s.SubmitLocalPrompt
+}
+
+// The caller holds admission and has verified that the prior worker stopped.
+func (s Server) recoverIssueClaim(ctx context.Context, repository string, number int, remote issueAttemptMetadata, submit func(context.Context, []byte) (string, error)) (string, int, error) {
+	settings, err := s.ReviewSettingsStatus(ctx)
+	if err != nil {
+		return "", 503, err
 	}
 	if !settings.GitHubIssuesEnabled {
-		writeJSONError(w, 409, fmt.Errorf("GitHub Issues is disabled"))
-		return
+		return "", 409, fmt.Errorf("GitHub Issues is disabled")
 	}
 	for _, disabled := range settings.DisabledRepositories {
-		if strings.EqualFold(strings.TrimSuffix(strings.TrimPrefix(disabled, "https://github.com/"), ".git"), repository) {
-			writeJSONError(w, 409, fmt.Errorf("repository is disabled"))
-			return
+		if issueRepositoryMatchesRun(disabled, repository) {
+			return "", 409, fmt.Errorf("repository is disabled")
 		}
 	}
 	records, err := s.IssueClaims.List()
 	if err != nil {
-		writeJSONError(w, 503, err)
-		return
+		return "", 503, err
 	}
-	if s.activeIssueTask(repository, request.Number) {
-		writeJSONError(w, http.StatusConflict, fmt.Errorf("stop the active task before retrying"))
-		return
+	if s.activeIssueTask(repository, number) {
+		return "", http.StatusConflict, fmt.Errorf("stop the active task before retrying")
 	}
 	var savedRun *config.Config
 	for _, record := range records {
 		issue := record.Run.GitHubIssue
-		if !strings.EqualFold(issue.Repository, repository) || issue.Number != request.Number {
+		if !strings.EqualFold(issue.Repository, repository) || issue.Number != number {
 			continue
 		}
 		if record.InstanceID == s.instanceID() && record.RequestID != "" && s.Broker != nil {
 			if task, ok := s.Broker.Task(record.RequestID); ok && !isCompletedTaskStatus(task.Status) {
-				writeJSONError(w, 409, fmt.Errorf("stop the active task before retrying"))
-				return
+				return "", 409, fmt.Errorf("stop the active task before retrying")
 			}
 		}
 		if issue.Claim.ID == remote.Claim.ID || remote.Claim.ID == "" {
@@ -570,34 +638,33 @@ func (s Server) handleIssueAutomationRetry(w http.ResponseWriter, r *http.Reques
 			savedRun = &run
 		}
 	}
-	issue, err := s.fetchGitHubIssue(r.Context(), repository, request.Number)
+	issue, err := s.fetchGitHubIssue(ctx, repository, number)
 	if err != nil {
-		writeJSONError(w, 502, err)
-		return
+		return "", 502, err
 	}
 	if !strings.EqualFold(issue.State, "open") {
-		writeJSONError(w, 409, fmt.Errorf("closed issues cannot be retried"))
-		return
+		return "", 409, fmt.Errorf("closed issues cannot be retried")
 	}
-	target, err := s.issueClaimTarget(r.Context(), repository, request.Number)
+	target, err := s.issueClaimTarget(ctx, repository, number)
 	if err != nil {
-		writeJSONError(w, 502, err)
-		return
+		return "", 502, err
 	}
 	if target.BlockedBy > 0 {
-		writeJSONError(w, 409, fmt.Errorf("issue is blocked by %d open issue(s)", target.BlockedBy))
-		return
+		return "", 409, fmt.Errorf("issue is blocked by %d open issue(s)", target.BlockedBy)
 	}
-	branch := fmt.Sprintf("agent00-issue-%d", request.Number)
+	branch := fmt.Sprintf("agent00-issue-%d", number)
 	linked := false
 	for _, name := range target.Branches {
 		if name == branch {
 			linked = true
 		}
 	}
-	if !linked || target.Linked != 1 {
-		writeJSONError(w, 409, fmt.Errorf("recovery requires the single reserved issue branch; inspect development links first"))
-		return
+	// An admission can fail before GitHub creates the branch. Explicit recovery
+	// may reserve it anew only when there is no remote attempt or development
+	// association, and a local journal confirms that admission was attempted.
+	reserve := target.Linked == 0 && target.ClosingPRs == 0 && remote.Claim.ID == "" && savedRun != nil
+	if !reserve && (!linked || target.Linked != 1) {
+		return "", 409, fmt.Errorf("recovery requires the single reserved issue branch; inspect development links first")
 	}
 	base := remote.Claim.BaseBranch
 	if base == "" && savedRun != nil {
@@ -625,32 +692,32 @@ func (s Server) handleIssueAutomationRetry(w http.ResponseWriter, r *http.Reques
 	run.BaseBranch = base
 	setGitHubIssuePrompt(&run, issue)
 	if err := githubassets.Validate(run.Assets); err != nil {
-		writeJSONError(w, 400, err)
-		return
+		return "", 400, err
 	}
 	record := localruntime.IssueClaimRecord{ID: claim.ID, InstanceID: s.instanceID(), Phase: "reserving", Run: run}
 	if err = s.IssueClaims.Save(record); err != nil {
-		writeJSONError(w, 503, err)
-		return
+		return "", 503, err
 	}
-	sha, err := s.issueBranchSHA(r.Context(), repository, branch)
+	var sha string
+	if reserve {
+		sha, err = s.issueBranchSHA(ctx, repository, base)
+		if err == nil {
+			err = s.reserveIssueBranch(ctx, target.ID, branch, sha)
+		}
+	} else {
+		sha, err = s.issueBranchSHA(ctx, repository, branch)
+	}
 	if err == nil {
-		err = s.publishIssueAttempt(r.Context(), run.GitHubIssue, sha, record.InstanceID)
+		err = s.publishIssueAttempt(ctx, run.GitHubIssue, sha, record.InstanceID)
 	}
 	if err != nil {
-		writeJSONError(w, 409, s.blockIssueClaim(record, err))
-		return
+		return "", 409, s.blockIssueClaim(record, err)
 	}
-	submit := s.SubmitLocalPrompt
-	if s.SubmitTaskRerun != nil {
-		submit = func(ctx context.Context, body []byte) (string, error) { return s.SubmitTaskRerun(ctx, "", body, false) }
-	}
-	requestID, err := s.finishIssueAdmission(r.Context(), record, submit)
+	requestID, err := s.finishIssueAdmission(ctx, record, submit)
 	if err != nil {
-		writeJSONError(w, 409, err)
-		return
+		return "", http.StatusConflict, err
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "request_id": requestID})
+	return requestID, http.StatusAccepted, nil
 }
 
 func issueRepositoryMatchesRun(value, repository string) bool {

@@ -780,6 +780,64 @@ test('GitHub Issues filters issues by linked branch and remembers the choice', a
   });
 });
 
+test('GitHub Issues offers recovery after a reserved-task error and requires confirmation', async t => {
+  const issue = { number: 17, title: 'Recover failed task', state: 'OPEN',
+    url: 'https://github.com/acme/repo/issues/17', body: 'Retry this task.' };
+  const retries = [];
+  let reads = 0;
+  const { page } = await openSettings(t, {
+    path: '/#studio-issues',
+    initialSettings: { ...defaults, github_issues_enabled: true },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [
+        { full_name: 'acme/repo', default_branch: 'main' },
+      ] } }));
+      await page.route('**/api/github/issues**', route => route.fulfill({ json:
+        new URL(route.request().url()).pathname.endsWith('/17')
+          ? { ok: true, issue } : { ok: true, issues: [issue] },
+      }));
+      await page.route('**/api/local-prompt', route => route.fulfill({ status: 409,
+        json: { ok: false, recoveryRequired: true, error: 'Use Recover / retry after the previous worker has stopped.' },
+      }));
+      await page.route('**/api/github/automation/retry**', route => {
+        if (route.request().method() === 'GET') {
+          reads++;
+          return route.fulfill({ json: { ok: true, expectedClaimId: `claim-${reads}` } });
+        }
+        retries.push(route.request().postDataJSON());
+        if (retries.length === 1) return route.fulfill({ status: 409, json: { ok: false, error: 'claim changed; refresh before retrying' } });
+        return route.fulfill({ status: 202, json: { ok: true, request_id: 'recovered-17' } });
+      });
+    },
+  });
+  await page.locator('#github-issues-repo').selectOption('acme/repo');
+  await page.locator('.github-issue-list-item').click();
+  const start = page.getByRole('button', { name: 'Start task', exact: true });
+  await start.click();
+  const recover = page.getByRole('button', { name: 'Recover / retry', exact: true });
+  await recover.waitFor();
+  page.once('dialog', async dialog => {
+    assert.match(dialog.message(), /previous worker has stopped/);
+    await dialog.dismiss();
+  });
+  await recover.click();
+  await page.waitForFunction(() => !document.querySelector('.github-issue-recover').disabled);
+  assert.equal(retries.length, 0, 'cancel must not retry');
+  page.once('dialog', dialog => dialog.accept());
+  await recover.click();
+  await page.waitForFunction(() => document.querySelector('.github-issue-task-status').textContent.includes('claim changed'));
+  assert.equal(await recover.isEnabled(), true);
+  page.once('dialog', dialog => dialog.accept());
+  await recover.click();
+  await page.waitForFunction(() => document.querySelector('.github-issue-task-status').textContent === 'Task queued (recovered-17).');
+  assert.deepEqual(retries, [
+    { repository: 'acme/repo', number: 17, expectedClaimId: 'claim-2', confirmStopped: true },
+    { repository: 'acme/repo', number: 17, expectedClaimId: 'claim-3', confirmStopped: true },
+  ]);
+  assert.equal(await start.isDisabled(), true);
+  assert.equal(await recover.isDisabled(), true);
+});
+
 test('GitHub Issues renders inside Studio and uses the configured link mode', async t => {
   let submitted;
   let issueQueryState;
