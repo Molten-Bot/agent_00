@@ -3,10 +3,13 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
 func TestFailedIssueCanBeStartedOrRerun(t *testing.T) {
@@ -65,7 +68,7 @@ func TestFailedIssueCanBeStartedOrRerun(t *testing.T) {
 	}
 }
 
-func TestIssueStartRequiresRecoveryForUncertainOrSuccessfulAttempts(t *testing.T) {
+func TestIssueStartRecoversPriorAttempts(t *testing.T) {
 	t.Parallel()
 	for _, scenario := range []string{"missing task", "restarted instance", "new remote owner", "blocked admission", "completed", "no_changes", "stale supplied claim", "active"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -110,15 +113,12 @@ func TestIssueStartRequiresRecoveryForUncertainOrSuccessfulAttempts(t *testing.T
 			before := len(f.submissions)
 			response := httptest.NewRecorder()
 			s.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/local-prompt", strings.NewReader(string(body))))
-			if len(f.submissions) != before {
-				t.Fatal("uncertain/successful attempt was restarted")
-			}
 			if scenario == "active" {
 				if !strings.Contains(response.Body.String(), "active local task") {
 					t.Fatalf("active worker not detected: %s", response.Body.String())
 				}
-			} else if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"recoveryRequired":true`) {
-				t.Fatalf("missing actionable recovery response: %d %s", response.Code, response.Body.String())
+			} else if response.Code != http.StatusAccepted || len(f.submissions) != before+1 {
+				t.Fatalf("start did not recover: %d %s", response.Code, response.Body.String())
 			}
 		})
 	}
@@ -156,7 +156,11 @@ func TestFailedIssueConcurrentRestartsAdmitOnce(t *testing.T) {
 	errors := make(chan error, 2)
 	for range 2 {
 		go func() {
-			_, err := s.submitWithIssueClaim(context.Background(), body, f.submit)
+			_, err := s.submitWithIssueClaim(context.Background(), body, func(ctx context.Context, body []byte) (string, error) {
+				id, err := f.submit(ctx, body)
+				s.Broker.RecordTaskRunConfig(id, body)
+				return id, err
+			})
 			errors <- err
 		}()
 	}
@@ -173,5 +177,46 @@ func TestFailedIssueConcurrentRestartsAdmitOnce(t *testing.T) {
 	records, err := s.IssueClaims.List()
 	if err != nil || len(records) != 2 || records[0].Phase != "submitted" || records[1].Phase != "submitted" {
 		t.Fatalf("receipts=%+v err=%v", records, err)
+	}
+}
+
+func TestIssueStartIgnoresStaleDevelopmentLinks(t *testing.T) {
+	t.Parallel()
+	for _, durable := range []bool{false, true} {
+		for _, scenario := range []string{"deleted branch", "extra links", "unlinked branch", "no local history"} {
+			t.Run(fmt.Sprintf("durable=%t/%s", durable, scenario), func(t *testing.T) {
+				f := newAutomationGitHub()
+				s := automationServer(t, f)
+				if durable {
+					var backend *recoveryGitHub
+					s, backend = recoveryServer(t)
+					f = backend.automationGitHub
+				}
+				s.pollGitHubIssueAutoStart(context.Background())
+				if len(f.submissions) != 1 {
+					t.Fatal("initial task not submitted")
+				}
+				switch scenario {
+				case "deleted branch":
+					f.branch = false
+				case "extra links":
+					f.extraLinks = true
+				case "unlinked branch":
+					f.unlinked = true
+				case "no local history":
+					s.IssueClaims = &localruntime.IssueClaimStore{Root: t.TempDir()}
+				}
+				run := issueRunConfig(GitHubRepo{FullName: "acme/repo", DefaultBranch: "main"}, f.issue, "reference")
+				body, _ := json.Marshal(run)
+				response := httptest.NewRecorder()
+				s.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/local-prompt", strings.NewReader(string(body))))
+				if response.Code != http.StatusAccepted || len(f.submissions) != 2 || !f.branch {
+					t.Fatalf("start: %d %s submissions=%d", response.Code, response.Body.String(), len(f.submissions))
+				}
+				if f.submissions[1].GitHubIssue.Claim.Attempt != 2 {
+					t.Fatal("start did not advance the attempt")
+				}
+			})
+		}
 	}
 }

@@ -122,8 +122,8 @@ func (s Server) submitWithIssueClaim(ctx context.Context, body []byte, submit fu
 	if !settings.GitHubIssuesEnabled {
 		return "", fmt.Errorf("GitHub Issues is disabled")
 	}
-	// Manual starts intentionally need not match automatic trigger filters, but
-	// obey exclusions, development associations, and the same ownership protocol.
+	// Explicit starts use the issue as the execution key; automatic trigger
+	// filters and development links do not establish another worker.
 	settings.GitHubIssueAutoStartOnlyAssigned = false
 	settings.GitHubIssueAutoStartLabels = nil
 	return s.claimAndSubmitIssueMode(ctx, run, settings, "", submit, true)
@@ -209,7 +209,8 @@ func (s Server) claimAndSubmitIssue(ctx context.Context, run config.Config, sett
 
 var errIssueRecoveryRequired = errors.New("issue is reserved by a previous attempt; use Recover / retry here or in Settings → GitHub Issues after its worker has stopped")
 
-// Only an explicit start/rerun may recover a known failed local attempt. The
+// Explicit starts recover previous attempts under the one-worker-per-issue
+// assumption. The
 // background scanner must never turn a persistent failure into a retry loop.
 func (s Server) claimAndSubmitIssueMode(ctx context.Context, run config.Config, settings ReviewSettingsState, login string, submit func(context.Context, []byte) (string, error), manual bool) (string, error) {
 	if s.issueAutomation == nil || s.IssueClaims == nil {
@@ -233,6 +234,14 @@ func (s Server) claimAndSubmitIssueMode(ctx context.Context, run config.Config, 
 			return "", fmt.Errorf("repository is disabled")
 		}
 	}
+	if manual {
+		remote, err := s.latestIssueAttempt(ctx, issue.Repository, issue.Number)
+		if err != nil {
+			return "", err
+		}
+		id, _, err := s.recoverIssueClaimWithRun(ctx, issue.Repository, issue.Number, remote, submit, false, &run)
+		return id, err
+	}
 	records, err := s.IssueClaims.List()
 	if err != nil && s.IssueRecovery == nil {
 		return "", err
@@ -240,9 +249,6 @@ func (s Server) claimAndSubmitIssueMode(ctx context.Context, run config.Config, 
 	for _, record := range records {
 		prior := record.Run.GitHubIssue
 		if strings.EqualFold(prior.Repository, issue.Repository) && prior.Number == issue.Number {
-			if manual {
-				return s.restartFailedIssue(ctx, issue, records, submit)
-			}
 			return "", errIssueRecoveryRequired
 		}
 	}
@@ -337,44 +343,6 @@ func (s Server) reserveIssueBranch(ctx context.Context, issueID, branch, sha str
 	return nil
 }
 
-func (s Server) restartFailedIssue(ctx context.Context, issue *config.GitHubIssueConfig, records []localruntime.IssueClaimRecord, submit func(context.Context, []byte) (string, error)) (string, error) {
-	remote, err := s.latestIssueAttempt(ctx, issue.Repository, issue.Number)
-	if err != nil {
-		return "", err
-	}
-	if remote.Claim.ID == "" || remote.InstanceID != s.instanceID() || s.Broker == nil {
-		return "", errIssueRecoveryRequired
-	}
-	if issue.Claim != nil && issue.Claim.ID != remote.Claim.ID {
-		return "", errIssueRecoveryRequired
-	}
-	for _, record := range records {
-		prior := record.Run.GitHubIssue
-		if record.ID != remote.Claim.ID || record.InstanceID != remote.InstanceID || record.Phase != "submitted" ||
-			!strings.EqualFold(prior.Repository, issue.Repository) || prior.Number != issue.Number {
-			continue
-		}
-		task, ok := s.Broker.Task(record.RequestID)
-		if !ok {
-			break
-		}
-		switch normalizeTaskTerminalStatus(task.Status) {
-		case "error", "invalid", "stopped":
-			// Recovery must bypass completed-request deduplication, just like the
-			// explicit recovery endpoint. The claim protocol still excludes races.
-			if s.SubmitTaskRerun != nil {
-				submit = func(ctx context.Context, body []byte) (string, error) {
-					return s.SubmitTaskRerun(ctx, record.RequestID, body, false)
-				}
-			}
-			id, _, err := s.recoverIssueClaim(ctx, issue.Repository, issue.Number, remote, submit)
-			return id, err
-		}
-		break
-	}
-	return "", errIssueRecoveryRequired
-}
-
 func (s Server) blockIssueClaim(record localruntime.IssueClaimRecord, cause error) error {
 	return errors.Join(cause, s.IssueClaims.Update(record.ID, func(current *localruntime.IssueClaimRecord) error {
 		current.Phase = "blocked"
@@ -436,6 +404,25 @@ func (s Server) finishIssueAdmission(ctx context.Context, record localruntime.Is
 	}
 	s.logf("localruntime.ui status=ok event=github_issue_auto_start issue=%d request_id=%s", issue.Number, requestID)
 	return requestID, nil
+}
+
+// Matching refs returns an empty list for a missing branch without conflating
+// absence with authentication failures or transient GitHub errors.
+func (s Server) issueBranchExists(ctx context.Context, repository, branch string) (bool, error) {
+	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "repos/" + repository + "/git/matching-refs/heads/" + branch}})
+	if err != nil {
+		return false, err
+	}
+	var refs []struct{ Ref string }
+	if err := json.Unmarshal([]byte(result.Stdout), &refs); err != nil {
+		return false, err
+	}
+	for _, ref := range refs {
+		if ref.Ref == "refs/heads/"+branch {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s Server) issueBranchSHA(ctx context.Context, repository, branch string) (string, error) {
@@ -707,12 +694,16 @@ func (s Server) issueRetrySubmitter() func(context.Context, []byte) (string, err
 	return s.SubmitLocalPrompt
 }
 
-// The caller holds admission and has verified that the prior worker stopped.
+// The caller holds admission. Recovery checks local worker liveness.
 func (s Server) recoverIssueClaim(ctx context.Context, repository string, number int, remote issueAttemptMetadata, submit func(context.Context, []byte) (string, error)) (string, int, error) {
 	return s.recoverIssueClaimMode(ctx, repository, number, remote, submit, false)
 }
 
 func (s Server) recoverIssueClaimMode(ctx context.Context, repository string, number int, remote issueAttemptMetadata, submit func(context.Context, []byte) (string, error), automatic bool) (string, int, error) {
+	return s.recoverIssueClaimWithRun(ctx, repository, number, remote, submit, automatic, nil)
+}
+
+func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string, number int, remote issueAttemptMetadata, submit func(context.Context, []byte) (string, error), automatic bool, requestedRun *config.Config) (string, int, error) {
 	settings, err := s.ReviewSettingsStatus(ctx)
 	if err != nil {
 		return "", 503, err
@@ -739,7 +730,7 @@ func (s Server) recoverIssueClaimMode(ctx context.Context, repository string, nu
 		}
 		lock.Close()
 	}
-	if s.IssueRecovery == nil && s.activeIssueTask(repository, number) {
+	if s.activeIssueTask(repository, number) {
 		return "", http.StatusConflict, fmt.Errorf("stop the active task before retrying")
 	}
 	var savedRun *config.Config
@@ -766,7 +757,12 @@ func (s Server) recoverIssueClaimMode(ctx context.Context, repository string, nu
 			previous = record
 		}
 	}
-	if s.IssueRecovery != nil && remote.Claim.ID != "" {
+	if requestedRun != nil && s.SubmitTaskRerun != nil {
+		submit = func(ctx context.Context, body []byte) (string, error) {
+			return s.SubmitTaskRerun(ctx, previous.RequestID, body, false)
+		}
+	}
+	if automatic && s.IssueRecovery != nil && remote.Claim.ID != "" {
 		pr, err := s.verifiedIssuePR(ctx, &config.GitHubIssueConfig{Repository: repository, Number: number, Claim: &remote.Claim})
 		if err != nil {
 			return "", 502, err
@@ -786,7 +782,7 @@ func (s Server) recoverIssueClaimMode(ctx context.Context, repository string, nu
 	if err != nil {
 		return "", 502, err
 	}
-	if target.BlockedBy > 0 {
+	if automatic && target.BlockedBy > 0 {
 		return "", 409, fmt.Errorf("issue is blocked by %d open issue(s)", target.BlockedBy)
 	}
 	branch := fmt.Sprintf("agent00-issue-%d", number)
@@ -798,23 +794,39 @@ func (s Server) recoverIssueClaimMode(ctx context.Context, repository string, nu
 	}
 	// Version two publishes ownership before creating the linked branch. A
 	// failed branch reservation can therefore have a remote attempt already.
-	// Only the matching local intent may recover that incomplete admission;
-	// never recreate a previously confirmed branch that has since disappeared.
+	// Automatic recovery needs the matching local intent for that incomplete
+	// admission; explicit starts may also recreate a deleted branch.
 	incompleteReservation := remote.Claim.ID == "" || (previous.Version == 2 &&
 		previous.ID == remote.Claim.ID && previous.InstanceID == remote.InstanceID &&
 		previous.InstanceID == s.instanceID() && !previous.BranchReserved)
 	reserve := target.Linked == 0 && target.ClosingPRs == 0 && savedRun != nil && incompleteReservation
-	if !reserve && (!linked || target.Linked != 1) {
-		return "", 409, fmt.Errorf("recovery requires the single reserved issue branch; inspect development links first")
+	if automatic {
+		if !reserve && (!linked || target.Linked != 1) {
+			return "", 409, fmt.Errorf("automatic recovery requires the reserved issue branch")
+		}
+	} else {
+		// One agent works each issue. Development links can be stale, missing,
+		// or include unrelated branches; inspect the actual ref before reusing it.
+		exists, err := s.issueBranchExists(ctx, repository, branch)
+		if err != nil {
+			return "", 502, err
+		}
+		reserve = !exists
 	}
 	base := remote.Claim.BaseBranch
 	if base == "" && savedRun != nil {
 		base = savedRun.GitHubIssue.Claim.BaseBranch
 	}
+	if base == "" && requestedRun != nil {
+		base = requestedRun.BaseBranch
+	}
 	if base == "" {
 		base = target.BaseBranch
 	}
 	run := issueRunConfig(GitHubRepo{FullName: repository, DefaultBranch: base}, issue, settings.GitHubIssueLinkMode)
+	if requestedRun != nil {
+		run = *requestedRun
+	}
 	if savedRun != nil {
 		run = *savedRun
 	}
