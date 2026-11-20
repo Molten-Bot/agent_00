@@ -190,7 +190,7 @@ type agentInvocationLogMetadata struct {
 type Harness struct {
 	// OnStep reports semantic progress, never command output or heartbeats.
 	OnStep func(string)
-	// OnPRTitle reports the title after a successful PR creation or title update.
+	// OnPRTitle reports the title after PR creation, creation recovery, or a title update.
 	OnPRTitle            func(url, title string)
 	ResumeIssueWorkspace bool
 	Signing              *gitsigning.Snapshot
@@ -2661,16 +2661,19 @@ func (h Harness) createPullRequestURL(
 
 			retryable := shouldRetryPRCreate(prRes, err)
 			if retryable {
-				prURL, lookupErr := h.lookupOpenPRURLByHead(ctx, repo)
-				if lookupErr == nil && prURL != "" {
+				pr, lookupErr := h.lookupOpenPRByHead(ctx, repo)
+				if lookupErr == nil && pr.URL != "" {
 					h.logf(
 						"stage=pr status=warn action=reuse_existing reason=create_transient_failed repo=%s repo_dir=%s branch=%s pr_url=%s",
 						repo.URL,
 						repo.RelDir,
 						repo.Branch,
-						prURL,
+						pr.URL,
 					)
-					return prURL, nil
+					if h.OnPRTitle != nil && pr.Title != "" {
+						h.OnPRTitle(pr.URL, pr.Title)
+					}
+					return pr.URL, nil
 				}
 				if lookupErr != nil {
 					h.logf(
@@ -2723,40 +2726,45 @@ func (h Harness) createPullRequestURL(
 }
 
 func (h Harness) lookupOpenPRURLByHead(ctx context.Context, repo repoWorkspace) (string, error) {
+	pr, err := h.lookupOpenPRByHead(ctx, repo)
+	return pr.URL, err
+}
+
+func (h Harness) lookupOpenPRByHead(ctx context.Context, repo repoWorkspace) (ghPRLookupEntry, error) {
 	headRef := repoPRHeadRef(repo)
 	if headRef == "" {
-		return "", nil
+		return ghPRLookupEntry{}, nil
 	}
 	branch := normalizeBranchRef(repo.Branch)
 	if branch == "" {
-		return "", nil
+		return ghPRLookupEntry{}, nil
 	}
 
 	pushRemote := repoPushRemote(repo)
 	remoteRes, remoteErr := h.runCommand(ctx, "git", remoteBranchExistsOnRemoteCommand(repo.Dir, pushRemote, branch))
 	if remoteErr != nil {
 		if shouldRetryPRCreate(remoteRes, remoteErr) {
-			return "", fmt.Errorf("%w: verify remote branch %q for repo %s on remote %q: %w", errTransientPRLookup, branch, repo.URL, pushRemote, remoteErr)
+			return ghPRLookupEntry{}, fmt.Errorf("%w: verify remote branch %q for repo %s on remote %q: %w", errTransientPRLookup, branch, repo.URL, pushRemote, remoteErr)
 		}
-		return "", fmt.Errorf("verify remote branch %q for repo %s on remote %q: %w", branch, repo.URL, pushRemote, remoteErr)
+		return ghPRLookupEntry{}, fmt.Errorf("verify remote branch %q for repo %s on remote %q: %w", branch, repo.URL, pushRemote, remoteErr)
 	}
 	if !hasRemoteBranch(remoteRes) {
-		return "", nil
+		return ghPRLookupEntry{}, nil
 	}
 
 	lookupRes, err := h.runCommand(ctx, "pr", prLookupByHeadWithRepoCommand(repo.Dir, headRef, repoPRTargetRepo(repo)))
 	if err != nil {
-		return "", commandErrorWithDetails(
+		return ghPRLookupEntry{}, commandErrorWithDetails(
 			fmt.Sprintf("lookup open pull request for repo %s branch %q", repo.URL, headRef),
 			err,
 			lookupRes,
 			maxGitErrorDetailChars,
 		)
 	}
-	if prURL := parsePRURLFromLookupOutput(lookupRes.Stdout); prURL != "" {
-		return prURL, nil
+	if pr := parsePRLookupOutput(lookupRes.Stdout); pr.URL != "" {
+		return pr, nil
 	}
-	return parsePRURLFromLookupOutput(lookupRes.Stderr), nil
+	return parsePRLookupOutput(lookupRes.Stderr), nil
 }
 
 func (h Harness) lookupAnyPRURLByHead(ctx context.Context, repo repoWorkspace) (string, error) {
@@ -2774,10 +2782,10 @@ func (h Harness) lookupAnyPRURLByHead(ctx context.Context, repo repoWorkspace) (
 			maxGitErrorDetailChars,
 		)
 	}
-	if prURL := parsePRURLFromLookupOutput(lookupRes.Stdout); prURL != "" {
-		return prURL, nil
+	if pr := parsePRLookupOutput(lookupRes.Stdout); pr.URL != "" {
+		return pr.URL, nil
 	}
-	return parsePRURLFromLookupOutput(lookupRes.Stderr), nil
+	return parsePRLookupOutput(lookupRes.Stderr).URL, nil
 }
 
 func (h Harness) runCloneWithRetry(
@@ -7354,30 +7362,33 @@ func extractFirstURL(text string) string {
 }
 
 type ghPRLookupEntry struct {
-	URL string `json:"url"`
+	URL   string `json:"url"`
+	Title string `json:"title"`
 }
 
-func parsePRURLFromLookupOutput(raw string) string {
+func parsePRLookupOutput(raw string) ghPRLookupEntry {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return ""
+		return ghPRLookupEntry{}
 	}
 
 	var list []ghPRLookupEntry
 	if err := json.Unmarshal([]byte(raw), &list); err == nil {
 		for _, entry := range list {
-			if url := strings.TrimSpace(entry.URL); url != "" {
-				return url
+			entry.URL = strings.TrimSpace(entry.URL)
+			if entry.URL != "" {
+				return entry
 			}
 		}
-		return ""
+		return ghPRLookupEntry{}
 	}
 
 	var single ghPRLookupEntry
 	if err := json.Unmarshal([]byte(raw), &single); err == nil {
-		return strings.TrimSpace(single.URL)
+		single.URL = strings.TrimSpace(single.URL)
+		return single
 	}
-	return extractFirstURL(raw)
+	return ghPRLookupEntry{URL: extractFirstURL(raw)}
 }
 
 func hasRemoteBranch(res execx.Result) bool {
@@ -8427,7 +8438,7 @@ func prLookupByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Command 
 }
 
 func prLookupByHeadStateCommand(repoDir, state, headRef, repo string) execx.Command {
-	args := []string{"pr", "list", "--state", state, "--head", headRef, "--json", "url", "--limit", "1"}
+	args := []string{"pr", "list", "--state", state, "--head", headRef, "--json", "url,title", "--limit", "1"}
 	if strings.TrimSpace(repo) != "" {
 		args = append(args, "--repo", strings.TrimSpace(repo))
 	}

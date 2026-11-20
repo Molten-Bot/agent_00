@@ -682,6 +682,7 @@ func TestRunPRCreateTransientFailureReusesLookupResult(t *testing.T) {
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
 	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/42"
+	const recoveredTitle = "Actual title on GitHub"
 	transientErr := errors.New("error checking for existing pull request: HTTP 504: We couldn't respond to your request in time. (https://api.github.com/graphql)")
 
 	fake := &fakeRunner{t: t, allowUnorderedClones: true, exps: []expectedRun{
@@ -699,7 +700,7 @@ func TestRunPRCreateTransientFailureReusesLookupResult(t *testing.T) {
 		{cmd: pushCommand(repoDir, branch)},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stderr: transientErr.Error()}, err: transientErr},
 		{cmd: remoteBranchExistsOnOriginCommand(repoDir, branch), res: execx.Result{Stdout: "abc123\trefs/heads/" + branch + "\n"}},
-		{cmd: prLookupByHeadCommand(repoDir, branch), res: execx.Result{Stdout: `[{"url":"` + prURL + `"}]`}},
+		{cmd: prLookupByHeadCommand(repoDir, branch), res: execx.Result{Stdout: `[{"url":"` + prURL + `","title":"` + recoveredTitle + `"}]`}},
 		{cmd: prChecksCommand(repoDir, prURL)},
 	}}
 
@@ -711,6 +712,13 @@ func TestRunPRCreateTransientFailureReusesLookupResult(t *testing.T) {
 		t.Fatal("Sleep() called; lookup result should avoid retry delay")
 		return nil
 	}
+	var titleReports int
+	h.OnPRTitle = func(url, title string) {
+		titleReports++
+		if url != prURL || title != recoveredTitle {
+			t.Errorf("OnPRTitle(%q, %q), want (%q, %q)", url, title, prURL, recoveredTitle)
+		}
+	}
 
 	res := h.Run(context.Background(), cfg)
 	if res.Err != nil {
@@ -721,6 +729,9 @@ func TestRunPRCreateTransientFailureReusesLookupResult(t *testing.T) {
 	}
 	if res.PRURL != prURL {
 		t.Fatalf("PRURL = %q, want %q", res.PRURL, prURL)
+	}
+	if titleReports != 1 {
+		t.Fatalf("title reports = %d, want 1", titleReports)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
@@ -5961,12 +5972,12 @@ func TestCommandBuilders(t *testing.T) {
 	}
 
 	prLookup := prLookupByHeadCommand(repoDir, branch)
-	wantLookup := []string{"pr", "list", "--state", "open", "--head", branch, "--json", "url", "--limit", "1"}
+	wantLookup := []string{"pr", "list", "--state", "open", "--head", branch, "--json", "url,title", "--limit", "1"}
 	if prLookup.Name != "gh" || prLookup.Dir != repoDir || !reflect.DeepEqual(prLookup.Args, wantLookup) {
 		t.Fatalf("pr lookup command unexpected: %+v", prLookup)
 	}
 	prLookupWithRepo := prLookupByHeadWithRepoCommand(repoDir, "octocat:"+branch, "acme/repo")
-	wantLookupWithRepo := []string{"pr", "list", "--state", "open", "--head", "octocat:" + branch, "--json", "url", "--limit", "1", "--repo", "acme/repo"}
+	wantLookupWithRepo := []string{"pr", "list", "--state", "open", "--head", "octocat:" + branch, "--json", "url,title", "--limit", "1", "--repo", "acme/repo"}
 	if prLookupWithRepo.Name != "gh" || prLookupWithRepo.Dir != repoDir || !reflect.DeepEqual(prLookupWithRepo.Args, wantLookupWithRepo) {
 		t.Fatalf("pr lookup with repo command unexpected: %+v", prLookupWithRepo)
 	}

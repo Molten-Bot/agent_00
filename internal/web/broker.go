@@ -305,6 +305,7 @@ type taskState struct {
 	Branch            string
 	PRURL             string
 	PRTitles          map[string]string
+	LatestPRTitle     string
 	LiveAppURL        string
 	Error             string
 	Warning           string
@@ -520,7 +521,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			WorkspaceDir:      t.WorkspaceDir,
 			Branch:            t.Branch,
 			PRURL:             t.PRURL,
-			PRTitle:           t.PRTitles[t.PRURL],
+			PRTitle:           taskPRTitle(t),
 			LiveAppURL:        t.LiveAppURL,
 			Error:             t.Error,
 			Warning:           t.Warning,
@@ -628,7 +629,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		WorkspaceDir:      t.WorkspaceDir,
 		Branch:            t.Branch,
 		PRURL:             t.PRURL,
-		PRTitle:           t.PRTitles[t.PRURL],
+		PRTitle:           taskPRTitle(t),
 		LiveAppURL:        t.LiveAppURL,
 		Error:             t.Error,
 		Warning:           t.Warning,
@@ -658,6 +659,7 @@ func (b *Broker) RecordTaskPRTitle(requestID, prURL, title string) {
 		t.PRTitles = make(map[string]string)
 	}
 	t.PRTitles[prURL] = title
+	t.LatestPRTitle = title
 	t.PRURL = prURL
 	t.UpdatedAt = b.now().UTC()
 	b.notifySubscribersLocked()
@@ -1335,6 +1337,11 @@ func taskWorkflow(t *taskState) string {
 		return ""
 	}
 	return stringsx.FirstNonEmpty(t.Workflow, t.Skill)
+}
+
+func taskPRTitle(t *taskState) string {
+	// Multi-repo completion can select a reused PR without a recorded title.
+	return stringsx.FirstNonEmpty(t.PRTitles[t.PRURL], t.LatestPRTitle)
 }
 
 func taskAgentHarness(t *taskState) string {

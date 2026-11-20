@@ -89,6 +89,26 @@ func TestBrokerRecordsTaskPRTitlesByURL(t *testing.T) {
 	}
 }
 
+func TestBrokerKeepsCreatedPRTitleWhenCompletionSelectsReusedPR(t *testing.T) {
+	t.Parallel()
+
+	const requestID = "req-multi-repo"
+	const reusedURL = "https://github.com/acme/repo/pull/99"
+	const createdURL = "https://github.com/acme/repo-two/pull/42"
+	const createdTitle = "Title of created PR"
+	b := NewBroker()
+	b.IngestLog("task status=start request_id=" + requestID)
+	b.RecordTaskPRTitle(requestID, createdURL, createdTitle)
+	b.IngestLog("task status=completed request_id=" + requestID + " pr_url=" + reusedURL + " pr_urls=" + reusedURL + "," + createdURL)
+
+	task, _ := b.Task(requestID)
+	for _, task := range []Task{task, b.StreamSnapshot().Tasks[0]} {
+		if task.PRURL != reusedURL || task.PRTitle != createdTitle || task.Status != "completed" {
+			t.Errorf("completed task = %+v, want URL %q and title %q", task, reusedURL, createdTitle)
+		}
+	}
+}
+
 func TestBrokerTracksLiveAppURLFromTaskLogs(t *testing.T) {
 	t.Parallel()
 
