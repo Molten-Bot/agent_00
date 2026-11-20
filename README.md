@@ -117,8 +117,8 @@ without hiding an already tracked issue. Discovery checkpoints one page per
 repository and rotates large repository lists. Repository discovery refreshes
 every five minutes. **Scan now** requests an early scan.
 
-The settings panel shows scan errors, durable outcomes, worker liveness, current
-workflow step, retry timing, pending unlocks, verified PRs, and repair tasks.
+Task recovery belongs to the specific task on the **GitHub Issues** page. Select
+the issue there to review and retry its work when recovery is required.
 A successful task status alone is not proof of delivery: automation verifies an
 open (including draft) or merged PR for the reserved head and intended base.
 Closed, unmerged PRs do not count as delivery.
