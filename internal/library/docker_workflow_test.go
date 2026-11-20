@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestDeployVnextPublishesMultiPlatformImageWithSupplyChainAttestations(t *testing.T) {
+func TestDeployVnextPublishesOptionalARMImageWithSupplyChainAttestations(t *testing.T) {
 	t.Parallel()
 
 	_, file, _, ok := runtime.Caller(0)
@@ -26,14 +26,15 @@ func TestDeployVnextPublishesMultiPlatformImageWithSupplyChainAttestations(t *te
 
 	content := string(data)
 	for _, want := range []string{
+		"build_arm64:\n        description: Include ARM64 image (slower; unchecked publishes AMD64 only)\n        type: boolean\n        default: false",
 		"timeout-minutes: 60",
-		"uses: docker/setup-qemu-action@v4",
+		"if: ${{ inputs.build_arm64 }}\n        uses: docker/setup-qemu-action@v4",
 		"platforms: arm64",
 		"uses: docker/build-push-action@v7",
 		"provenance: mode=max",
 		"sbom: true",
 		"pull: true",
-		"platforms: linux/amd64,linux/arm64",
+		"platforms: ${{ inputs.build_arm64 && 'linux/amd64,linux/arm64' || 'linux/amd64' }}",
 		"moltenai/agent_00:vnext",
 	} {
 		if strings.Count(content, want) != 1 {

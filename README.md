@@ -15,6 +15,14 @@ docker run -p 7777:7777 \
   moltenai/agent_00:latest
 ```
 
+The **deploy-vnext** GitHub Actions workflow has an **Include ARM64 image**
+checkbox, unchecked by default. Leave it unchecked to publish AMD64 only and
+skip ARM emulation; check it to publish both AMD64 and ARM64. This applies to
+both the `vnext` tag and the dated build tag. An AMD64-only release replaces
+the previous `vnext` manifest, so ARM users should use a dated tag from a build
+that included ARM64. **deploy-prod** promotes the architectures present in its
+selected source tag; choose a build with ARM64 to include it in `latest`.
+
 ### Docker Compose with Prompt Dictation
 
 ```bash
