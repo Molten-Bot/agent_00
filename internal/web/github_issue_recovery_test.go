@@ -93,6 +93,33 @@ func recoveryPR(state, merged, head, base string) string {
 	return `[{"number":42,"state":"` + state + `","merged_at":` + merged + `,"head":{"ref":"` + head + `","repo":{"full_name":"acme/repo"}},"base":{"ref":"` + base + `","repo":{"full_name":"acme/repo"}}}]`
 }
 
+func TestIssueRecoveryScanReportsFiltersForTrackedIssues(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(context.Background())
+	record := completeRecoveryRecord(t, s, "stopped", 1)
+	for _, reason := range []string{"wrong assignee", "missing trigger label"} {
+		f.issue.Assignees = []GitHubIssueUser{{Login: "octocat"}}
+		f.issue.Labels = []GitHubIssueLabel{{Name: "ready"}}
+		if reason == "wrong assignee" {
+			f.issue.Assignees = nil
+		} else {
+			f.issue.Labels = nil
+		}
+		s.pollGitHubIssueAutoStart(context.Background())
+		decisions := s.issueAutomation.status.Issues
+		if len(decisions) != 1 || decisions[0].Reason != reason {
+			t.Fatalf("tracked issue filter = %+v, want %q", decisions, reason)
+		}
+		if got := latestRecoveryRecord(t, s); got.ID != record.ID {
+			t.Fatal("filtering replaced the recovery record")
+		}
+	}
+	if len(f.submissions) != 1 {
+		t.Fatal("filtering restarted a stopped task")
+	}
+}
+
 func TestIssueRecoveryUnlocksOnlyAfterWorkerExit(t *testing.T) {
 	t.Parallel()
 	for _, outcome := range []string{"completed", "error", "no_changes", "stopped", "warn"} {

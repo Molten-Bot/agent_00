@@ -174,7 +174,7 @@ repair still needs them. Journals remain available for audit.
 
 The local recovery protocol uses inherited Unix file locks and records process
 groups. A surviving agent or uncertain process termination prevents takeover.
-Legacy claims and ownership changes require **Recover / retry**, after stopping
+Legacy claims and ownership changes require **Retry** in **Settings → GitHub Issues**, after stopping
 the previous worker on every instance. Automatic cross-machine failover is not
 performed. Restarting the owning instance recovers its durable dispatch intents.
 

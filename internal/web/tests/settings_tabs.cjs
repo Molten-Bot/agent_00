@@ -612,7 +612,7 @@ test('GitHub issue labels use comma-separated input without background label loa
   const labels = page.locator('#review-settings-github-issues-auto-start-labels');
   assert.equal(await labels.evaluate(element => element.tagName), 'INPUT');
   assert.equal(await labels.getAttribute('aria-label'), 'GitHub issue trigger labels, comma-separated');
-  assert.match(await labels.locator('xpath=preceding-sibling::span').innerText(), /any matching label enables issue/);
+  assert.match(await labels.locator('xpath=preceding-sibling::span').innerText(), /Match any; comma-separated/);
   assert.equal(await labels.inputValue(), 'bug, priority');
   assert.equal(labelRequests, 0);
   await labels.fill(' bug, priority, , needs triage ');
@@ -1395,8 +1395,12 @@ test('issue automation exposes failures and persists the exclusion label', async
     },
   });
   await select(page, 'github-issues');
-  await page.waitForFunction(() => document.getElementById('github-automation-status').textContent.includes('agent authorization required'));
-  assert.match(await page.locator('#github-automation-status').textContent(), /octocat/);
+  await page.waitForFunction(() => document.getElementById('github-automation-status').textContent === 'Scan needs attention.');
+  const error = page.locator('#github-automation-error details');
+  assert.equal(await error.getAttribute('open'), null, 'error details are collapsed');
+  await error.locator('summary').click();
+  assert.equal(await error.locator('p').isVisible(), true);
+  assert.match(await error.textContent(), /agent authorization required/);
   assert.match(await page.locator('#github-automation-decisions').textContent(), /acme\/repo#17/);
   assert.equal(await page.locator('#review-settings-github-issues-exclusion-label').inputValue(), 'agent_00-in-progress');
   await page.locator('#review-settings-github-issues-exclusion-label').fill('team-claimed');
@@ -1419,7 +1423,7 @@ test('issue recovery requires confirmation and sends the observed claim identity
     },
   });
   await select(page, 'github-issues');
-  const button = page.getByRole('button', { name: 'Recover / retry' });
+  const button = page.getByRole('button', { name: 'Retry', exact: true });
   await button.waitFor();
   page.once('dialog', dialog => dialog.dismiss());
   await button.click();
@@ -1430,3 +1434,67 @@ test('issue recovery requires confirmation and sends the observed claim identity
   await page.waitForFunction(() => !document.querySelector('#github-automation-decisions button').disabled);
   assert.deepEqual(retries, [{ repository: 'acme/repo', number: 17, expectedClaimId: 'claim-1', confirmStopped: true }]);
 });
+
+for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+  test(`issue automation shows matching tickets with styled retry actions at ${viewport.width}px`, async t => {
+    let matching = true;
+    let partial = false;
+    const { page } = await openSettings(t, {
+      viewport,
+      initialSettings: { ...defaults, github_issues_enabled: true, github_issue_auto_start_assigned: true, github_issue_auto_start_labels: ['ready'] },
+      configurePage: async page => {
+        await page.route('**/api/github/automation', route => route.fulfill({ json: {
+          ok: true,
+          status: { enabled: true, account: 'octocat', repositories: ['acme/repo'], lastSuccess: '2026-01-01T00:00:00Z', scanned: 500, skipped: 498, issues: partial ? [] : [
+            { repository: 'acme/repo', number: 11, reason: 'wrong assignee' },
+            { repository: 'acme/repo', number: 12, reason: 'missing trigger label' },
+            { repository: 'acme/repo', number: 13, reason: 'closed issue' },
+            { repository: 'acme/repo', number: 17, reason: matching ? 'claimed elsewhere or excluded' : 'wrong assignee' },
+            { repository: 'acme/repo', number: 18, reason: matching ? 'submitted' : 'missing trigger label' },
+          ] },
+          claims: [
+            { repository: 'acme/repo', number: 11, phase: 'blocked', attempt: 1 },
+            { repository: 'acme/repo', number: 12, phase: 'blocked', attempt: 1 },
+            { repository: 'acme/repo', number: 13, phase: 'completed', attempt: 1 },
+            { repository: 'acme/repo', number: 17, phase: 'blocked', attempt: 1 },
+            { repository: 'acme/repo', number: 18, phase: 'running', workerAlive: true, step: 'agent', agentAttempts: 2, attempt: 1 },
+          ],
+        } }));
+      },
+    });
+    await select(page, 'github-issues');
+    const list = page.getByRole('list', { name: 'Matching issues' });
+    await page.waitForFunction(() => document.querySelectorAll('#github-automation-decisions li').length === 2);
+    assert.deepEqual(await list.locator('strong').allTextContents(), ['acme/repo#17', 'acme/repo#18']);
+    assert.equal(await list.getByRole('button', { name: 'Retry', exact: true }).count(), 1);
+    const recoveryDetails = list.locator('details');
+    assert.equal(await recoveryDetails.getAttribute('open'), null, 'recovery diagnostics stay collapsed');
+    assert.equal(await recoveryDetails.locator('p').isVisible(), false);
+    await recoveryDetails.locator('summary').click();
+    assert.match(await recoveryDetails.locator('p').innerText(), /Worker: running/);
+    assert.match(await recoveryDetails.locator('p').innerText(), /Agent attempts: 2/);
+    assert.equal(await page.locator('#github-automation-status').textContent(), 'Auto-start on');
+    for (const button of await page.locator('.github-automation button').all()) {
+      const style = await button.evaluate(node => {
+        const css = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return { border: css.borderTopWidth, radius: css.borderTopLeftRadius, height: rect.height, left: rect.left, right: rect.right };
+      });
+      assert.ok(parseFloat(style.border) > 0 && parseFloat(style.radius) > 0, 'actions use bordered, rounded app buttons');
+      assert.ok(style.height >= 38, 'actions retain the app touch target');
+      assert.ok(style.left >= 0 && style.right <= viewport.width, 'actions fit the viewport');
+    }
+    assert.equal(await list.evaluate(node => node.scrollWidth <= node.clientWidth), true, 'ticket rows do not overflow');
+    partial = true;
+    await Promise.all([
+      page.waitForResponse(response => response.url().endsWith('/api/github/automation')),
+      page.getByRole('button', { name: 'Refresh', exact: true }).click(),
+    ]);
+    assert.deepEqual(await list.locator('strong').allTextContents(), ['acme/repo#17', 'acme/repo#18'], 'partial scans do not restore rejected claims');
+    partial = false;
+    matching = false;
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await page.waitForFunction(() => document.getElementById('github-automation-decisions').textContent === 'No matching issues.');
+    assert.equal(await list.getByRole('button').count(), 0, 'saved claims cannot restore filtered-out tickets');
+  });
+}

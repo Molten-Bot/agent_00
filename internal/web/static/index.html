@@ -20,7 +20,7 @@
   <script src="/static/lucide.min.js"></script>
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
-  <link rel="stylesheet" href="/static/style.css?v=7">
+  <link rel="stylesheet" href="/static/style.css?v=8">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -892,7 +892,6 @@
               <i data-lucide="folder-kanban" aria-hidden="true"></i>
               <span>Enable GitHub Issues workflow</span>
             </label>
-            <p class="github-issues-settings-description">Browse issues from a repository and start a task with its full description and comments. The task follows the normal pull request, review, and merge workflow.</p>
             <label class="selectable-option">
               <input class="sr-only" id="review-settings-assign-creator" type="checkbox">
               <i data-lucide="user-check" aria-hidden="true"></i>
@@ -902,7 +901,7 @@
               <label class="selectable-option">
                 <input class="sr-only" id="review-settings-github-issues-auto-start-assigned" type="checkbox">
                 <i data-lucide="play" aria-hidden="true"></i>
-                <span>Auto-start matching issues, including backlog</span>
+                <span>Auto-start matching issues</span>
               </label>
               <label class="selectable-option">
                 <input class="sr-only" id="review-settings-github-issues-auto-start-only-assigned" type="checkbox">
@@ -910,19 +909,23 @@
                 <span>Only issues assigned to me</span>
               </label>
               <label class="github-issues-auto-start-labels" for="review-settings-github-issues-auto-start-labels">
-                <span>Trigger labels <small>Optional. Enter comma-separated labels; any matching label enables issue.</small></span>
+                <span>Trigger labels <small>Match any; comma-separated.</small></span>
                 <input id="review-settings-github-issues-auto-start-labels" type="text" placeholder="ai automation, ready" aria-label="GitHub issue trigger labels, comma-separated">
               </label>
               <label class="github-issues-auto-start-labels" for="review-settings-github-issues-exclusion-label">
-                <span>Exclusion label <small>Reserved issues keep this label until explicitly recovered or resolved.</small></span>
+                <span>Exclusion label</span>
                 <input id="review-settings-github-issues-exclusion-label" type="text" maxlength="50" value="agent_00-in-progress" aria-label="GitHub issue exclusion label">
               </label>
-              <p class="github-issues-settings-description">Checks all matching open issues, including backlog, every minute while Agent Hub runs. Issues with a linked branch, closing pull request, or exclusion label are skipped. All Agent Hub instances must be upgraded before enabling this workflow.</p>
-              <section aria-label="Issue automation status">
-                <p id="github-automation-status" role="status">Automation status has not loaded.</p>
-                <button id="github-automation-refresh" type="button">Refresh status</button>
-                <button id="github-automation-scan" type="button">Scan now</button>
-                <ul id="github-automation-decisions"></ul>
+              <section class="github-automation" aria-label="Issue automation status">
+                <div class="github-automation-toolbar">
+                  <p id="github-automation-status" class="github-issues-status" role="status">Loading…</p>
+                  <div class="github-automation-actions">
+                    <button id="github-automation-refresh" class="prompt-action-button" type="button">Refresh</button>
+                    <button id="github-automation-scan" class="prompt-action-button" type="button">Scan now</button>
+                  </div>
+                </div>
+                <div id="github-automation-error"></div>
+                <ul id="github-automation-decisions" class="github-automation-issues" aria-label="Matching issues"></ul>
               </section>
             </div>
             <div id="review-settings-github-issues-link-mode" class="github-issues-settings-link-mode" hidden>
@@ -14236,6 +14239,6 @@
   <script src="/static/custom-library-sources.js"></script>
   <script src="/static/marked.umd.js?v=18.1.3"></script>
   <script src="/static/github-issues.js?v=19"></script>
-  <script src="/static/github-automation.js?v=1"></script>
+  <script src="/static/github-automation.js?v=2"></script>
 </body>
 </html>

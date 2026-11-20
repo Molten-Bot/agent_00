@@ -223,6 +223,14 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 		status.Scanned += len(issues)
 		candidates := []githubIssueListEntry{}
 		for _, entry := range issues {
+			// Report current filters for tracked issues too, so settings can hide
+			// nonmatches without changing their independent recovery lifecycle.
+			reason := issueEligibilityReason(entry.GitHubIssue, settings, status.Account)
+			if reason != "" {
+				status.Skipped++
+				status.Issues = append(status.Issues, issueAutomationDecision{Repository: fullName, Number: entry.Number, Reason: reason})
+				continue
+			}
 			if s.IssueRecovery != nil {
 				found := false
 				for _, record := range tracked {
@@ -236,12 +244,6 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 					status.Issues = append(status.Issues, issueAutomationDecision{Repository: fullName, Number: entry.Number, Reason: "tracked by recovery"})
 					continue
 				}
-			}
-			reason := issueEligibilityReason(entry.GitHubIssue, settings, status.Account)
-			if reason != "" {
-				status.Skipped++
-				status.Issues = append(status.Issues, issueAutomationDecision{Repository: fullName, Number: entry.Number, Reason: reason})
-				continue
 			}
 			candidates = append(candidates, entry)
 		}

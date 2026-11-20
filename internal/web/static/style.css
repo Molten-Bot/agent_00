@@ -8725,6 +8725,83 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   border-top: 1px solid var(--border);
 }
 
+.github-automation {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.github-automation-toolbar,
+.github-automation-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.github-automation-toolbar {
+  justify-content: space-between;
+}
+
+.github-automation-issues {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.github-automation-issue {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--bg-panel-strong);
+}
+
+.github-automation-issue-info {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-size: .8rem;
+  overflow-wrap: anywhere;
+}
+
+.github-automation-issue-state,
+.github-automation-empty {
+  color: var(--text-soft);
+  font-size: .76rem;
+}
+
+.github-automation-error,
+.github-automation-details {
+  color: var(--bad);
+  font-size: .76rem;
+  overflow-wrap: anywhere;
+}
+
+.github-automation-details {
+  color: var(--text-soft);
+}
+
+.github-automation-error summary,
+.github-automation-details summary {
+  cursor: pointer;
+}
+
+.github-automation-error p,
+.github-automation-details p {
+  margin: 6px 0 0;
+  white-space: pre-line;
+}
+
+#github-automation-error:empty {
+  display: none;
+}
+
 .github-issues-settings-heading {
   color: var(--text);
   font-size: .82rem;
