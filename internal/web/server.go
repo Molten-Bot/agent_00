@@ -1923,9 +1923,10 @@ func (s Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	lastSnapshotAt := time.Now()
 	var snapshotTimer *time.Timer
 	var snapshotTimerCh <-chan time.Time
+	fullLogsID := r.URL.Query().Get("task_output")
 
 	writeSSESnapshot := func() bool {
-		payload, err := json.Marshal(s.streamSnapshot())
+		payload, err := json.Marshal(s.streamSnapshot(fullLogsID))
 		if err != nil {
 			s.logf("localruntime.ui status=warn event=marshal_snapshot err=%q", err)
 			return true
@@ -2004,11 +2005,11 @@ func (s Server) snapshot() Snapshot {
 	return s.withTaskControls(s.Broker.Snapshot())
 }
 
-func (s Server) streamSnapshot() Snapshot {
+func (s Server) streamSnapshot(fullLogsID string) Snapshot {
 	if s.Broker == nil {
 		return Snapshot{}
 	}
-	return s.withTaskControls(s.Broker.StreamSnapshot())
+	return s.withTaskControls(s.Broker.StreamSnapshot(fullLogsID))
 }
 
 func (s Server) withTaskControls(snapshot Snapshot) Snapshot {

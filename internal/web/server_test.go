@@ -1119,10 +1119,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, "if (document.hidden)") {
 		t.Fatalf("expected index html to backpressure stream-driven renders")
 	}
-	if !strings.Contains(markup, "const MAX_TERMINAL_LINES = 500;") ||
-		!strings.Contains(markup, "function visibleTerminalLogs(logs)") ||
-		!strings.Contains(markup, "visibleLogs.slice(previousCount)") {
-		t.Fatalf("expected task terminal rendering to cap and append visible logs")
+	if !strings.Contains(markup, "const MAX_TASK_HISTORY_LOGS = 500;") ||
+		!strings.Contains(markup, "logs.slice(append ? previous.count : 0)") {
+		t.Fatalf("expected task history to cap stored logs and the console to append output")
 	}
 	if !strings.Contains(markup, `if (!showTaskPanel) {`) ||
 		!strings.Contains(markup, `if (state.appDisplay === "dashboard") {`) {
@@ -3589,9 +3588,8 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	if !strings.Contains(css, "grid-template-rows: auto auto minmax(0, 1fr);") {
 		t.Fatalf("expected stylesheet to dedicate remaining full screen height to the task output terminal")
 	}
-	if !strings.Contains(css, ".task-xterm-ready .xterm-scrollable-element {") ||
-		!strings.Contains(css, "scrollbar-gutter: stable;") {
-		t.Fatalf("expected stylesheet to keep the xterm 6 output scrollbar visible")
+	if !strings.Contains(css, ".xterm-has-scrollback .xterm-scrollable-element > .scrollbar.vertical {") {
+		t.Fatalf("expected stylesheet to show the xterm output scrollbar when scrollback is available")
 	}
 	if !strings.Contains(css, ".task.task-collapsed") {
 		t.Fatalf("expected stylesheet to include collapsed task styles")

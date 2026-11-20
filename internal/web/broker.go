@@ -434,6 +434,7 @@ type snapshotOptions struct {
 	events     bool
 	logs       snapshotLogMode
 	aggregates bool
+	fullLogsID string
 }
 
 // Snapshot returns a deep copy of current monitor state.
@@ -441,11 +442,9 @@ func (b *Broker) Snapshot() Snapshot {
 	return b.snapshot(snapshotOptions{events: true, logs: snapshotLogsFull, aggregates: true})
 }
 
-// StreamSnapshot returns the compact state sent to /api/stream clients: no
-// event history and task logs capped to the stream tail. It is equivalent to
-// compactStreamSnapshot(b.Snapshot()) without copying data it would discard.
-func (b *Broker) StreamSnapshot() Snapshot {
-	return b.snapshot(snapshotOptions{logs: snapshotLogsStream, aggregates: true})
+// StreamSnapshot caps task logs to the stream tail, except for the open console.
+func (b *Broker) StreamSnapshot(fullLogsID string) Snapshot {
+	return b.snapshot(snapshotOptions{logs: snapshotLogsStream, aggregates: true, fullLogsID: fullLogsID})
 }
 
 // TaskList returns the current tasks, ordered as in Snapshot, without task
@@ -496,6 +495,10 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 	for _, t := range tasks {
 		_, canRerun := b.runConfigs[t.RequestID]
 		status := normalizeTaskTerminalStatus(t.Status)
+		logMode := opts.logs
+		if opts.fullLogsID != "" && opts.fullLogsID == t.RequestID {
+			logMode = snapshotLogsFull
+		}
 		snapshot.Tasks = append(snapshot.Tasks, Task{
 			RequestID:         t.RequestID,
 			Source:            t.Source,
@@ -525,7 +528,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			UpdatedAt:         t.UpdatedAt.UTC().Format(time.RFC3339Nano),
 			DurationSeconds:   taskDuration(t.StartedAt, t.UpdatedAt, now, status).Seconds(),
 			CanRerun:          canRerun,
-			Logs:              snapshotTaskLogs(t.Logs, opts.logs),
+			Logs:              snapshotTaskLogs(t.Logs, logMode),
 		})
 	}
 	if !opts.aggregates {

@@ -8,7 +8,7 @@ let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
 
-async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile = true) {
+async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile = true, useLiveTasks = false) {
   const page = await browser.newPage({ viewport, isMobile: mobile, hasTouch: mobile });
   page.setDefaultTimeout(10000);
   t.after(() => page.close());
@@ -27,6 +27,7 @@ async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile 
     const url = new URL(route.request().url());
     if (url.origin !== new URL(baseURL).origin) return route.abort();
     if (!url.pathname.startsWith('/api/')) return route.continue();
+    if (useLiveTasks && ['/api/status', '/api/stream'].includes(url.pathname)) return route.continue();
     if (route.request().method() !== 'GET') writes.push(url.pathname);
     let json = { ok: true };
     if (url.pathname === '/api/status') json = { tasks, events: [], repositories: [], stats: {}, resources: {} };
@@ -48,6 +49,51 @@ async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile 
   await page.waitForFunction(() => document.querySelector('.page-bottom-dock')?.dataset.bottomDockReady === 'true');
   return { page, writes };
 }
+
+test('console scroll thumb tracks overflow and reaches the oldest retained output', async t => {
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, true);
+  const openOutput = id => page.locator(`#task-list .task[data-request-id="${id}"] .task-output-toggle`).click();
+  const scrollbar = page.locator('#task-fullscreen-terminal .scrollbar.vertical');
+  const thumb = scrollbar.locator('.slider');
+
+  await openOutput('terminal-short');
+  await scrollbar.waitFor({ state: 'attached' });
+  assert.equal(await scrollbar.evaluate(node => getComputedStyle(node).opacity), '0');
+  await page.locator('#task-fullscreen-close').click();
+
+  await page.waitForFunction(() => state.snapshot?.tasks.find(task => task.request_id === 'terminal-long')?.logs.length < 600);
+  await openOutput('terminal-long');
+  await page.waitForFunction(() => {
+    const buffer = taskFullscreenXterm?.buffer.active;
+    return buffer?.getLine(1)?.translateToString(true).endsWith('Output line 1') &&
+      buffer.viewportY === buffer.baseY &&
+      buffer.getLine(buffer.baseY + buffer.cursorY)?.translateToString(true).endsWith('Output line 1800');
+  });
+  await page.mouse.move(0, 0);
+  assert.equal(await scrollbar.evaluate(node => getComputedStyle(node).opacity), '1');
+
+  const track = await scrollbar.boundingBox();
+  const slider = await thumb.boundingBox();
+  assert.ok(slider.height < track.height && slider.height > 0);
+  assert.ok(slider.y + slider.height <= 900, 'thumb stays inside the viewport at the bottom');
+  await page.mouse.move(slider.x + slider.width / 2, slider.y + slider.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(slider.x + slider.width / 2, track.y, { steps: 5 });
+  await page.mouse.up();
+  await page.waitForFunction(() => taskFullscreenXterm.buffer.active.viewportY === 0);
+
+  await page.evaluate(() => {
+    const snapshot = structuredClone(state.snapshot);
+    const task = snapshot.tasks.find(task => task.request_id === 'terminal-long');
+    task.logs.push({ text: 'New output while reviewing', stream: 'stdout' });
+    statusStream.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(snapshot) }));
+  });
+  await page.waitForFunction(() => {
+    const buffer = taskFullscreenXterm.buffer.active;
+    return buffer.getLine(buffer.baseY + buffer.cursorY)?.translateToString(true).endsWith('New output while reviewing');
+  });
+  assert.equal(await page.evaluate(() => taskFullscreenXterm.buffer.active.viewportY), 0);
+});
 
 async function assertFits(page) {
   const geometry = await page.evaluate(() => {

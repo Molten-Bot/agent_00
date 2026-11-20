@@ -27,11 +27,11 @@ func newSnapshotTestBroker(t *testing.T) *Broker {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	b.now = func() time.Time { return now }
 	b.RecordTaskRunConfig("req-long", []byte(`{"repo":"https://github.com/acme/repo","prompt":"long task","agentHarness":"claude","reviewers":["@octo"],"baseBranch":"main","prUrl":"https://github.com/acme/repo/pull/7"}`))
-	b.IngestLog("dispatch request_id=req-long stage=clone status=ok")
+	b.IngestLog("task request_id=req-long stage=clone status=ok")
 	for i := 0; i < maxStreamTaskLogs+25; i++ {
-		b.IngestLog(fmt.Sprintf("dispatch request_id=req-long stage=agent status=running line=%d", i))
+		b.IngestLog(fmt.Sprintf("task request_id=req-long stage=agent status=running line=%d", i))
 	}
-	b.IngestLog("dispatch request_id=req-short stage=clone status=start")
+	b.IngestLog("task request_id=req-short stage=clone status=start")
 	return b
 }
 
@@ -41,10 +41,31 @@ func TestStreamSnapshotMatchesCompactedSnapshot(t *testing.T) {
 	b := newSnapshotTestBroker(t)
 	full := b.Snapshot()
 	want := compactStreamSnapshot(full)
-	got := b.StreamSnapshot()
+	got := b.StreamSnapshot("")
 	want.GeneratedAt = got.GeneratedAt
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("StreamSnapshot() differs from compactStreamSnapshot(Snapshot())\ngot:  %+v\nwant: %+v", got, want)
+	}
+}
+
+func TestStreamSnapshotKeepsAllLogsForOpenConsole(t *testing.T) {
+	t.Parallel()
+
+	b := newSnapshotTestBroker(t)
+	for i := 0; i < maxStreamTaskLogs+5; i++ {
+		b.IngestLog(fmt.Sprintf("task request_id=req-other stage=agent status=running line=%d", i))
+	}
+	full := b.Snapshot()
+	want := compactStreamSnapshot(b.Snapshot())
+	got := b.StreamSnapshot("req-long")
+	want.GeneratedAt = got.GeneratedAt
+	for i, task := range full.Tasks {
+		if task.RequestID == "req-long" {
+			want.Tasks[i].Logs = task.Logs
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatal("stream snapshot should include all retained logs only for the open console")
 	}
 }
 
@@ -57,7 +78,7 @@ func TestSnapshotTimestampsAreStrictlyIncreasing(t *testing.T) {
 	}
 
 	first := b.Snapshot()
-	second := b.StreamSnapshot()
+	second := b.StreamSnapshot("")
 	firstGeneratedAt, err := time.Parse(time.RFC3339Nano, first.GeneratedAt)
 	if err != nil {
 		t.Fatalf("parse first generated_at: %v", err)

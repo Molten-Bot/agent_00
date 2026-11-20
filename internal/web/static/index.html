@@ -1065,12 +1065,13 @@
     const BACKGROUND_PARTICLE_ANIMATION_ENABLED = false;
     const TASK_HISTORY_LIMIT = 25;
     const TASK_HISTORY_MAX_AGE_MS = 60 * 60 * 1000;
-    const MAX_TERMINAL_LINES = 500;
+    const MAX_TASK_HISTORY_LOGS = 500;
     const TASK_XTERM_VERSION = "6.0.0";
     const TASK_XTERM_MIN_COLS = 24;
     const TASK_XTERM_MIN_ROWS = 6;
     const TASK_XTERM_DEFAULT_COLS = 120;
     const TASK_XTERM_DEFAULT_ROWS = 24;
+    const TASK_XTERM_SCROLLBAR_WIDTH = 14;
     const CHAT_PROMPT_LOG_STICKY_SCROLL_PX = 24;
     const TASK_PROGRESS_VISIBLE = true;
     const TASK_PROMPT_PREVIEW_MAX_CHARS = 180;
@@ -2086,6 +2087,8 @@
     let pendingStreamSnapshotText = "";
     let streamRenderTimer = null;
     let streamRenderFrame = null;
+    let statusStream = null;
+    let streamedTaskOutputID = "";
     let pendingStreamSnapshot = null;
     let taskHistoryPruneTimer = null;
     let taskTimingRefreshTimer = null;
@@ -2096,6 +2099,7 @@
     let chatRepoResizeRenderQueued = false;
     let taskFullscreenXterm = null;
     let taskFullscreenXtermMount = null;
+    let renderedXtermLogs = null;
     let taskFullscreenXtermResizeObserver = null;
     scheduleTaskHistoryPrune();
     let taskFullscreenXtermResizeQueued = false;
@@ -10823,7 +10827,7 @@
       if (!Array.isArray(logs) || !logs.length) {
         return [];
       }
-      const start = Math.max(0, logs.length - MAX_TERMINAL_LINES);
+      const start = Math.max(0, logs.length - MAX_TASK_HISTORY_LOGS);
       const out = [];
       for (let i = start; i < logs.length; i += 1) {
         const row = logs[i] || {};
@@ -12859,6 +12863,9 @@
         foreground: rootCSSValue("--text", "#0f1b33"),
         cursor: rootCSSValue("--accent", "#7b61ff"),
         selectionBackground: "rgba(123, 97, 255, 0.24)",
+        scrollbarSliderBackground: rootCSSValue("--surface-scroll-thumb"),
+        scrollbarSliderHoverBackground: rootCSSValue("--surface-scroll-thumb-hover"),
+        scrollbarSliderActiveBackground: rootCSSValue("--surface-scroll-thumb-hover"),
         black: "#1f2937",
         red: rootCSSValue("--surface-stderr", "#c2410c"),
         green: rootCSSValue("--good", "#2bb673"),
@@ -12904,11 +12911,9 @@
       }
       taskFullscreenXterm = null;
       taskFullscreenXtermMount = null;
+      renderedXtermLogs = null;
       if (taskFullscreenTerminal) {
         taskFullscreenTerminal.classList.remove("task-xterm-ready");
-        taskFullscreenTerminal.dataset.xtermBaseSig = "";
-        taskFullscreenTerminal.dataset.xtermFirstKey = "";
-        taskFullscreenTerminal.dataset.xtermLogCount = "";
       }
     }
 
@@ -12937,10 +12942,14 @@
           fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace",
           fontSize: 13,
           lineHeight: 1.35,
-          scrollback: Math.max(1000, MAX_TERMINAL_LINES * 3),
+          overviewRuler: { width: TASK_XTERM_SCROLLBAR_WIDTH },
           theme: taskFullscreenXtermTheme(),
         });
         taskFullscreenXterm.open(mount);
+        const term = taskFullscreenXterm;
+        term.onRender(() => {
+          mount.classList.toggle("xterm-has-scrollback", term.buffer.active.baseY > 0);
+        });
         taskFullscreenXtermMount = mount;
         observeTaskFullscreenXtermResize(terminalNode);
         queueTaskFullscreenXtermResize();
@@ -12975,47 +12984,24 @@
       return Number.isFinite(parsed) ? parsed : 0;
     }
 
-    function measureTaskFullscreenTerminalCell(mount) {
-      if (!mount) {
-        return { width: 8, height: 18 };
-      }
-      const measure = document.createElement("span");
-      measure.className = "task-xterm-measure";
-      measure.textContent = "MMMMMMMMMM";
-      mount.appendChild(measure);
-      const rect = measure.getBoundingClientRect();
-      measure.remove();
-      return {
-        width: Math.max(6, rect.width / 10 || 8),
-        height: Math.max(14, rect.height || 18),
-      };
-    }
-
     function resizeTaskFullscreenXterm() {
       if (!taskFullscreenXterm || !taskFullscreenXtermMount) {
         return;
       }
       const rect = taskFullscreenXtermMount.getBoundingClientRect();
-      if (rect.width < 1 || rect.height < 1) {
+      const screen = taskFullscreenXterm.element.querySelector(".xterm-screen").getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1 || screen.width < 1 || screen.height < 1) {
         return;
       }
       const styles = window.getComputedStyle(taskFullscreenXtermMount);
-      const width = rect.width - parseCSSPixels(styles.paddingLeft) - parseCSSPixels(styles.paddingRight);
+      const width = rect.width - parseCSSPixels(styles.paddingLeft) - parseCSSPixels(styles.paddingRight) - TASK_XTERM_SCROLLBAR_WIDTH;
       const height = rect.height - parseCSSPixels(styles.paddingTop) - parseCSSPixels(styles.paddingBottom);
-      const cell = measureTaskFullscreenTerminalCell(taskFullscreenXtermMount);
-      const cols = Math.max(TASK_XTERM_MIN_COLS, Math.floor(width / cell.width));
-      const rows = Math.max(TASK_XTERM_MIN_ROWS, Math.floor(height / cell.height));
+      const cellWidth = screen.width / taskFullscreenXterm.cols;
+      const cellHeight = screen.height / taskFullscreenXterm.rows;
+      const cols = Math.max(TASK_XTERM_MIN_COLS, Math.floor(width / cellWidth));
+      const rows = Math.max(TASK_XTERM_MIN_ROWS, Math.floor(height / cellHeight));
       if (taskFullscreenXterm.cols !== cols || taskFullscreenXterm.rows !== rows) {
         taskFullscreenXterm.resize(cols, rows);
-      }
-    }
-
-    function taskFullscreenXtermPinnedToBottom(term) {
-      try {
-        const buffer = term?.buffer?.active;
-        return !buffer || buffer.viewportY >= buffer.baseY - 1;
-      } catch (_err) {
-        return true;
       }
     }
 
@@ -13034,15 +13020,7 @@
       const style = streamANSIStyle(stream);
       const reset = style ? "\x1b[0m" : "";
       const prefix = `[${relativeTime(row?.time)}] [${stream}] `;
-      return `${style}${prefix}${normalizeTerminalLogText(row?.text)}${reset}\r\n`;
-    }
-
-    function visibleTerminalLogs(logs) {
-      const rows = Array.isArray(logs) ? logs : [];
-      if (rows.length <= MAX_TERMINAL_LINES) {
-        return rows;
-      }
-      return rows.slice(rows.length - MAX_TERMINAL_LINES);
+      return `${style}${prefix}${normalizeTerminalLogText(row?.text)}${reset}`;
     }
 
     function terminalLogKey(row) {
@@ -13053,46 +13031,38 @@
       ].join("\u001f");
     }
 
-    function renderXtermTaskLogs(logs, terminalNode) {
+    function renderXtermTaskLogs(logs, terminalNode, requestID) {
       const term = ensureTaskFullscreenXterm(terminalNode);
       if (!term) {
         return false;
       }
-      const visibleLogs = visibleTerminalLogs(logs);
-      const firstKey = visibleLogs.length ? terminalLogKey(visibleLogs[0]) : "";
-      const lastKey = visibleLogs.length ? terminalLogKey(visibleLogs[visibleLogs.length - 1]) : "";
-      const baseSig = [
-        String(state.selectedTaskId || ""),
-        String(visibleLogs.length),
-        firstKey,
-        lastKey,
-      ].join("|");
-      const previousBaseSig = String(terminalNode.dataset.xtermBaseSig || "");
-      const previousCount = Number(terminalNode.dataset.xtermLogCount || 0);
-      const wasPinnedToBottom = taskFullscreenXtermPinnedToBottom(term);
-      let output = "";
-      let resetBuffer = true;
-      if (
-        previousBaseSig &&
-        visibleLogs.length > previousCount &&
-        previousCount > 0 &&
-        previousCount < visibleLogs.length &&
-        String(terminalNode.dataset.xtermFirstKey || "") === firstKey
-      ) {
-        output = visibleLogs.slice(previousCount).map(taskLogToTerminalText).join("");
-        resetBuffer = false;
-      } else {
-        output = visibleLogs.length
-        ? visibleLogs.map(taskLogToTerminalText).join("")
-        : "\x1b[2mNo output captured yet.\x1b[0m\r\n";
+      const previous = renderedXtermLogs;
+      const sameTask = previous?.term === term && previous.requestID === requestID;
+      const firstKey = terminalLogKey(logs[0]);
+      const lastKey = terminalLogKey(logs[logs.length - 1]);
+      if (sameTask && previous.count === logs.length && previous.firstKey === firstKey && previous.lastKey === lastKey) {
+        return true;
       }
-      terminalNode.dataset.xtermBaseSig = baseSig;
-      terminalNode.dataset.xtermFirstKey = firstKey;
-      terminalNode.dataset.xtermLogCount = String(visibleLogs.length);
-      queueTaskFullscreenXtermResize();
-      term.write(`${resetBuffer ? "\x1bc" : ""}${output}`, () => {
-        if (wasPinnedToBottom) {
+      const append = sameTask && previous.count > 0 && previous.count < logs.length &&
+        previous.firstKey === firstKey && previous.lastKey === terminalLogKey(logs[previous.count - 1]);
+      const output = logs.length
+        ? logs.slice(append ? previous.count : 0).map(taskLogToTerminalText).join("\r\n")
+        : "\x1b[2mNo output captured yet.\x1b[0m";
+      // Budget for wraps at the narrowest width, including double-width characters.
+      const wrapWidth = Math.floor(TASK_XTERM_MIN_COLS / 2);
+      const outputRows = output.split("\r\n").reduce((rows, line) => rows + Math.max(1, Math.ceil(line.length / wrapWidth)), 0);
+      const rows = outputRows + (append ? previous.rows : 0);
+      if (rows > term.options.scrollback) {
+        term.options.scrollback = rows;
+      }
+      renderedXtermLogs = { term, requestID, count: logs.length, firstKey, lastKey, rows };
+
+      const { viewportY, baseY } = term.buffer.active;
+      term.write(`${append ? "\r\n" : "\x1bc"}${output}`, () => {
+        if (!sameTask || viewportY === baseY) {
           term.scrollToBottom();
+        } else if (!append) {
+          term.scrollToLine(viewportY);
         }
       });
       return true;
@@ -13101,16 +13071,14 @@
     function renderPlainTaskLogs(logs, terminalNode, wasPinnedToBottom) {
       destroyTaskFullscreenXterm();
       terminalNode.replaceChildren();
-      const visibleLogs = visibleTerminalLogs(logs);
 
-      if (!visibleLogs.length) {
+      if (!logs.length) {
         terminalNode.textContent = "No output captured yet.";
         return;
       }
 
       const frag = document.createDocumentFragment();
-      for (let i = 0; i < visibleLogs.length; i += 1) {
-        const row = visibleLogs[i];
+      for (const row of logs) {
         const line = document.createElement("div");
         const stream = row.stream || "meta";
         line.className = stream === "stderr" ? "stderr-line" : (stream === "stdout" ? "stdout-line" : "meta-line");
@@ -13128,12 +13096,7 @@
         return;
       }
       if (terminalNode === taskFullscreenTerminal && taskFullscreenXterm) {
-        try {
-          taskFullscreenXterm.write("\x1bc");
-        } catch (_err) {
-          destroyTaskFullscreenXterm();
-        }
-        return;
+        destroyTaskFullscreenXterm();
       }
       terminalNode.textContent = "";
     }
@@ -13158,9 +13121,8 @@
         selected.status || "",
         selected.stage || "",
         logs.length,
-        lastLog?.time || "",
-        lastLog?.stream || "",
-        lastLog?.text || "",
+        terminalLogKey(logs[0]),
+        terminalLogKey(lastLog),
       ].join("|");
       if (terminalNode.dataset.renderSig === renderSig) {
         terminalNode.dataset.pendingRenderSig = "";
@@ -13177,12 +13139,13 @@
       headLabelNode.textContent = `${selectedLabel} | ${selected.status || "pending"} | ${selected.stage || "-"}`;
       renderTaskResult(selected, resultNode);
       const wasPinnedToBottom = terminalNode.scrollTop + terminalNode.clientHeight >= terminalNode.scrollHeight - 24;
-      if (!renderXtermTaskLogs(logs, terminalNode)) {
+      if (!renderXtermTaskLogs(logs, terminalNode, selected.request_id)) {
         renderPlainTaskLogs(logs, terminalNode, wasPinnedToBottom);
       }
     }
 
     function renderFullscreenTerminal(snapshot) {
+      syncTaskOutputStream();
       if (!state.taskFullscreenOpen || state.taskFullscreenMode !== "console") {
         clearFullscreenTerminalRender();
         return;
@@ -13434,15 +13397,25 @@
       queuePendingStreamRender();
     });
 
-    function startStream() {
-      const stream = new EventSource("/api/stream");
-
+    function syncTaskOutputStream() {
+      const requestID = state.taskFullscreenOpen && state.taskFullscreenMode === "console" ? state.selectedTaskId : "";
+      if (statusStream && streamedTaskOutputID === requestID) {
+        return;
+      }
+      statusStream?.close();
+      discardPendingStreamSnapshots();
+      streamedTaskOutputID = requestID;
+      const query = requestID ? `?task_output=${encodeURIComponent(requestID)}` : "";
+      const stream = new EventSource(`/api/stream${query}`);
+      statusStream = stream;
       stream.onopen = () => {
         setLocalConnection(true, "Connected");
       };
 
       stream.onmessage = (event) => {
-        queueStreamSnapshot(event.data);
+        if (stream === statusStream) {
+          queueStreamSnapshot(event.data);
+        }
       };
 
       stream.onerror = () => {
@@ -14231,7 +14204,7 @@
     void loadAgentAuthStatus();
     void refreshSpeechStatus();
     loadInitial();
-    startStream();
+    syncTaskOutputStream();
   </script>
   <script src="/static/library-schedules.js"></script>
   <script src="/static/commit-signing.js"></script>
