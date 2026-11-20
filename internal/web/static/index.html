@@ -1543,12 +1543,20 @@
         return null;
       }
 
-      const statusLabel = taskStatusLabel(status);
-      const badge = document.createElement("span");
+      const mergedPRURL = status === "merged" ? taskPullRequestURL(task) : "";
+      const hasSeparateMergedPR = Boolean(mergedPRURL && mergedPRURL !== taskCardPullRequestURL(task));
+      const badge = document.createElement(hasSeparateMergedPR ? "a" : "span");
       badge.className = `badge badge-icon ${statusClass(status)}`;
+      const label = hasSeparateMergedPR ? `Merged pull request: ${mergedPRURL}` : `Status: ${taskStatusLabel(status)}.`;
+      if (hasSeparateMergedPR) {
+        badge.href = mergedPRURL;
+        badge.target = "_blank";
+        badge.rel = "noopener noreferrer";
+        badge.addEventListener("click", (event) => openExternalTaskLink(event, mergedPRURL));
+      }
 
-      badge.title = `Status: ${statusLabel}.`;
-      badge.setAttribute("aria-label", `Status: ${statusLabel}.`);
+      badge.title = label;
+      badge.setAttribute("aria-label", label);
       badge.appendChild(createTaskStatusIcon(status));
       return badge;
     }

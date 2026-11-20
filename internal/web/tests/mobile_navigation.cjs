@@ -128,7 +128,7 @@ test('running tasks omit the status icon and always expose their original prompt
   assert.equal(await page.locator('#task-prompt-modal-body').textContent(), originalPrompt);
 });
 
-test('task card links to the titled pull request while merge result links to the tracked pull request', async t => {
+test('task card distinguishes the titled pull request from the merged pull request', async t => {
   const trackedURL = 'https://github.com/example/project/pull/10';
   const titledURL = 'https://github.com/example/other-project/pull/20';
   const untitledURL = 'https://github.com/example/project/pull/30';
@@ -154,6 +154,12 @@ test('task card links to the titled pull request while merge result links to the
   await task.locator('.task-github-link').waitFor();
   assert.match(await task.locator('.task-id').textContent(), /Improve repository navigation/);
   assert.equal(await task.locator('.task-github-link').getAttribute('href'), titledURL);
+  const mergedBadge = task.getByRole('link', { name: `Merged pull request: ${trackedURL}` });
+  assert.equal(await mergedBadge.getAttribute('href', { timeout: 2000 }), trackedURL);
+  assert.equal(await mergedBadge.getAttribute('title'), `Merged pull request: ${trackedURL}`);
+  await page.evaluate(() => { window.open = url => { window.openedPR = url; }; });
+  await mergedBadge.click();
+  assert.equal(await page.evaluate(() => window.openedPR), trackedURL);
   const untitledTask = page.locator('#task-list .task[data-request-id="untitled-pr"]');
   assert.equal(await untitledTask.locator('.task-github-link').getAttribute('href'), untitledURL);
 
