@@ -796,10 +796,14 @@ func (s Server) recoverIssueClaimMode(ctx context.Context, repository string, nu
 			linked = true
 		}
 	}
-	// An admission can fail before GitHub creates the branch. Explicit recovery
-	// may reserve it anew only when there is no remote attempt or development
-	// association, and a local journal confirms that admission was attempted.
-	reserve := target.Linked == 0 && target.ClosingPRs == 0 && remote.Claim.ID == "" && savedRun != nil
+	// Version two publishes ownership before creating the linked branch. A
+	// failed branch reservation can therefore have a remote attempt already.
+	// Only the matching local intent may recover that incomplete admission;
+	// never recreate a previously confirmed branch that has since disappeared.
+	incompleteReservation := remote.Claim.ID == "" || (previous.Version == 2 &&
+		previous.ID == remote.Claim.ID && previous.InstanceID == remote.InstanceID &&
+		previous.InstanceID == s.instanceID() && !previous.BranchReserved)
+	reserve := target.Linked == 0 && target.ClosingPRs == 0 && savedRun != nil && incompleteReservation
 	if !reserve && (!linked || target.Linked != 1) {
 		return "", 409, fmt.Errorf("recovery requires the single reserved issue branch; inspect development links first")
 	}
