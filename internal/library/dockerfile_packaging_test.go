@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestRuntimeDockerfileCrossCompilesGoBinariesForTargetPlatform(t *testing.T) {
+func TestRuntimeDockerfileBuildsGoBinariesForTargetPlatform(t *testing.T) {
 	t.Parallel()
 
 	_, file, _, ok := runtime.Caller(0)
@@ -26,13 +26,13 @@ func TestRuntimeDockerfileCrossCompilesGoBinariesForTargetPlatform(t *testing.T)
 
 	content := string(data)
 	for _, want := range []string{
-		"ARG TARGETOS=linux",
-		"ARG TARGETARCH=amd64",
+		"\nARG TARGETOS\n",
+		"\nARG TARGETARCH\n",
 		"CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOBIN=/out",
 		"CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH}",
 	} {
 		if !strings.Contains(content, want) {
-			t.Fatalf("%s does not cross-compile Go binaries using target platform setting %q", dockerfilePath, want)
+			t.Fatalf("%s does not build Go binaries using target platform setting %q", dockerfilePath, want)
 		}
 	}
 }

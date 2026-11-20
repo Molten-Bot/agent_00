@@ -1,7 +1,8 @@
 FROM golang:1.26.5-trixie AS build
 WORKDIR /src
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+# Inherit BuildKit's target platform; defaults here would override ARM64 builds.
+ARG TARGETOS
+ARG TARGETARCH
 ARG GIT_CHANGES_BY_DAY_VERSION=v0.0.0-20260518234615-87ad8a8d0d77
 
 COPY go.mod ./
