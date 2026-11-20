@@ -48,11 +48,11 @@ jobs:
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-browsers-${{ runner.os }}-1.62.1
+          key: playwright-browsers-${{ runner.os }}-1.65.1
 
       - name: Install Playwright
         run: |
-          npm install --no-save playwright@1.62.1
+          npm install --no-save playwright@1.65.1
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
             npx playwright install-deps chromium
           else

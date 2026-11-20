@@ -138,7 +138,7 @@ func TestRuntimeDockerfileInstallsPlaywrightTest(t *testing.T) {
 
 	content := string(data)
 	for _, want := range []string{
-		"ARG PLAYWRIGHT_VERSION=1.62.1",
+		"ARG PLAYWRIGHT_VERSION=1.65.1",
 		"\"playwright@${PLAYWRIGHT_VERSION}\"",
 		"\"@playwright/test@${PLAYWRIGHT_VERSION}\"",
 		"NODE_PATH=/usr/local/lib/node_modules",
@@ -354,9 +354,9 @@ func TestRuntimeDockerfilePinsAgentCLIs(t *testing.T) {
 
 	content := string(data)
 	for _, want := range []string{
-		"ARG CODEX_VERSION=0.147.0",
-		"ARG CLAUDE_CODE_VERSION=2.1.224",
-		"ARG MARKED_VERSION=18.1.3",
+		"ARG CODEX_VERSION=0.171.0",
+		"ARG CLAUDE_CODE_VERSION=2.1.329",
+		"ARG MARKED_VERSION=18.2.1",
 		"\"@openai/codex@${CODEX_VERSION}\"",
 		"\"@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}\"",
 		"\"marked@${MARKED_VERSION}\"",
