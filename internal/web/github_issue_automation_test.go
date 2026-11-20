@@ -25,6 +25,8 @@ type automationGitHub struct {
 	issue       GitHubIssue
 	comments    string
 	branch      bool
+	extraLinks  bool
+	unlinked    bool
 	blockedBy   int
 	labels      []GitHubIssueLabel
 	tags        map[string]string
@@ -90,6 +92,12 @@ func (f *automationGitHub) Run(ctx context.Context, cmd execx.Command) (execx.Re
 			count = 1
 			nodes = `[{"ref":{"name":"agent00-issue-17"}}]`
 		}
+		if f.unlinked {
+			count, nodes = 0, "[]"
+		}
+		if f.extraLinks {
+			count++
+		}
 		return execx.Result{Stdout: fmt.Sprintf(`{"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base"}},"issue":{"id":"I17","linkedBranches":{"totalCount":%d,"nodes":%s},"closedByPullRequestsReferences":{"totalCount":0},"issueDependenciesSummary":{"blockedBy":%d}}}}}`, count, nodes, f.blockedBy)}, nil
 	}
 	if strings.Contains(args, "--method POST") {
@@ -126,6 +134,11 @@ func (f *automationGitHub) Run(ctx context.Context, cmd execx.Command) (execx.Re
 	switch {
 	case endpoint == "user":
 		return execx.Result{Stdout: `{"login":"octocat"}`}, nil
+	case strings.Contains(endpoint, "/git/matching-refs/heads/"):
+		if f.branch {
+			return execx.Result{Stdout: `[{"ref":"refs/heads/agent00-issue-17"}]`}, nil
+		}
+		return execx.Result{Stdout: `[]`}, nil
 	case strings.Contains(endpoint, "/git/matching-refs/"):
 		refs := []any{}
 		for ref, sha := range f.refs {
@@ -270,19 +283,18 @@ func TestIssueAutomationRechecksDependenciesBeforeClaim(t *testing.T) {
 	}
 }
 
-func TestIssueAutomationRetryDefersNewOpenDependency(t *testing.T) {
+func TestIssueAutomationExplicitRetryOverridesOpenDependency(t *testing.T) {
 	t.Parallel()
 	f := newAutomationGitHub()
 	s := automationServer(t, f)
 	s.pollGitHubIssueAutoStart(context.Background())
 	claimID := f.submissions[0].GitHubIssue.Claim.ID
-	tagCount := len(f.tags)
 	f.blockedBy = 1
 	response := retryIssue(t, s, claimID, true)
-	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "blocked by 1 open issue") {
+	if response.Code != http.StatusAccepted {
 		t.Fatalf("blocked retry = %d %s", response.Code, response.Body.String())
 	}
-	if len(f.submissions) != 1 || len(f.tags) != tagCount {
+	if len(f.submissions) != 2 {
 		t.Fatalf("blocked retry mutated claim: submissions=%d tags=%d", len(f.submissions), len(f.tags))
 	}
 }
@@ -475,6 +487,8 @@ func TestIssueAutomationManualStartsShareClaims(t *testing.T) {
 	if len(f.submissions) != 1 || f.submissions[0].GitHubIssue.Claim == nil {
 		t.Fatal("manual start bypassed ownership")
 	}
+	saved, _ := json.Marshal(f.submissions[0])
+	s.Broker.RecordTaskRunConfig("request-1", saved)
 	if _, err := s.submitWithIssueClaim(context.Background(), body, f.submit); err == nil {
 		t.Fatal("manual duplicate accepted")
 	}

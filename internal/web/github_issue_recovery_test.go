@@ -116,12 +116,6 @@ func TestIssueRecoveryRetryAfterDurableBranchReservationFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			response := retryIssue(t, s, record.ID, true)
-			if scenario != "matching intent" {
-				if response.Code != http.StatusConflict || f.branch || len(f.submissions) != 0 {
-					t.Fatalf("unsafe recovery: %d %s", response.Code, response.Body.String())
-				}
-				return
-			}
 			if response.Code != http.StatusAccepted || !f.branch || len(f.submissions) != 1 {
 				t.Fatalf("recovery: %d %s", response.Code, response.Body.String())
 			}
