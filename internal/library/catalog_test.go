@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 )
 
 func TestDefaultLibraryJSONFilesHaveCanonicalShape(t *testing.T) {
@@ -140,6 +142,28 @@ func TestDefaultLibraryJSONFilesHaveCanonicalShape(t *testing.T) {
 		if got := task.PRTitle; got != want {
 			t.Errorf("%s: PRTitle = %q, want %q", path, got, want)
 		}
+	}
+}
+
+func TestDefaultRepairTasksUseSharedFailureReporting(t *testing.T) {
+	t.Setenv(catalogDirEnv, "")
+	t.Setenv(agentsSeedEnv, "")
+
+	catalog, err := LoadCatalog(DefaultDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"flaky-test-stabilization", "ci-build-lint-typecheck-hardening"} {
+		t.Run(name, func(t *testing.T) {
+			task, ok := catalog.Task(name)
+			if !ok {
+				t.Fatalf("catalog missing task %q", name)
+			}
+			want := "\n\nFailure reporting:\n- " + failurefollowup.FailureResponseInstruction + "\n\n"
+			if !strings.Contains(task.Prompt, want) {
+				t.Errorf("task prompt is missing the shared failure reporting section %q", want)
+			}
+		})
 	}
 }
 
