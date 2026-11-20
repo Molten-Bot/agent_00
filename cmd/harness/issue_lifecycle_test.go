@@ -67,7 +67,7 @@ func TestIssueExecutionRejectsSupersededOwner(t *testing.T) {
 		work.lock.Close()
 		t.Fatal("superseded owner was allowed to execute")
 	}
-	if err == nil || !strings.Contains(err.Error(), "issue ownership changed") || strings.Contains(err.Error(), "%!") {
+	if !errors.Is(err, localruntime.ErrIssueOwnershipChanged) || strings.Contains(err.Error(), "%!") {
 		t.Fatalf("unexpected ownership error: %v", err)
 	}
 }
@@ -146,6 +146,9 @@ func TestIssueRepairOutboxDeduplicatesAndRetainsFailures(t *testing.T) {
 	for _, repair := range repairs {
 		if repair.State != "queued" || !repair.NextAttemptAt.After(time.Now()) {
 			t.Fatal("failed enqueue was lost")
+		}
+		if !strings.Contains(repair.Run.Prompt, "- exit_code=unavailable\n") {
+			t.Fatal("repair prompt reported a process exit code the claim did not record")
 		}
 	}
 }

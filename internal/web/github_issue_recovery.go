@@ -82,6 +82,9 @@ func (s Server) prepareObservedIssue(ctx context.Context, record localruntime.Is
 // Resume only effects whose unique remote identity matches this durable intent.
 // Ownership tags precede linked-branch creation in protocol version two.
 func (s Server) resumeIssueAdmission(ctx context.Context, record localruntime.IssueClaimRecord, submit func(context.Context, []byte) (string, error)) (string, error) {
+	if err := s.IssueClaims.CheckOwner(record.InstanceID); err != nil {
+		return "", s.blockIssueClaim(record, err)
+	}
 	issue := record.Run.GitHubIssue
 	remote, err := s.latestIssueAttempt(ctx, issue.Repository, issue.Number)
 	if err != nil {
@@ -159,7 +162,7 @@ func (s Server) ReconcileIssueWork(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return errors.Join(append(problems, ctx.Err())...)
 		}
-		if record.Version != 2 || record.InstanceID != s.instanceID() {
+		if record.Version != 2 {
 			continue
 		}
 		if err := s.reconcileIssueRecord(ctx, record); err != nil {
@@ -193,6 +196,16 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	record, err = s.IssueClaims.Load(record.ID)
 	if err != nil {
 		return err
+	}
+	if record.State == "blocked" && record.Error == localruntime.ErrIssueOwnershipChanged.Error() && record.NextAttemptAt.IsZero() {
+		return nil
+	}
+	if err := s.IssueClaims.CheckOwner(record.InstanceID); err != nil {
+		if !errors.Is(err, localruntime.ErrIssueOwnershipChanged) {
+			return err
+		}
+		blockStaleIssueClaim(&record)
+		return s.IssueClaims.Save(record)
 	}
 	if stopped, err := localruntime.IssueProcessesStopped(record); err != nil || !stopped {
 		record.State = "waiting_for_worker"
@@ -391,6 +404,10 @@ func repairableIssueIncident(record localruntime.IssueClaimRecord) bool {
 	if failurefollowup.NonRemediableFailureReason(errors.New(record.Error)) != "" {
 		return false
 	}
+	// A previous daemon rendered an owner mismatch by wrapping a nil error.
+	if strings.Contains(record.Error, "issue owner is unavailable or changed: %!w(<nil>)") {
+		return false
+	}
 	lower := strings.ToLower(record.Error)
 	for _, reason := range []string{"issue is ineligible", "associated branch", "open dependencies", "dispatch capacity", "automation disabled", "repository disabled", "ownership", "permission", "rate limit", "worker descendants", "agent auth required"} {
 		if strings.Contains(lower, reason) {
@@ -407,11 +424,15 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 		if current.StartedAt.After(record.StartedAt) || current.StoppedAt.After(record.StoppedAt) {
 			return nil
 		}
-		current.State = "retry_wait"
 		if record.RepairRequestID != "" {
 			current.RepairRequestID = record.RepairRequestID
 		}
 		current.RepairError = record.RepairError
+		if errors.Is(cause, localruntime.ErrIssueOwnershipChanged) {
+			blockStaleIssueClaim(current)
+			return nil
+		}
+		current.State = "retry_wait"
 		current.Error = cause.Error()
 		current.Failures++
 		current.NextAttemptAt = time.Now().Add(issueRetryDelay(*current, s.IssueRecovery.Defaults()))
@@ -422,6 +443,12 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 		return nil
 	})
 	return errors.Join(cause, err)
+}
+
+func blockStaleIssueClaim(record *localruntime.IssueClaimRecord) {
+	record.State = "blocked"
+	record.Error = localruntime.ErrIssueOwnershipChanged.Error()
+	record.NextAttemptAt = time.Time{}
 }
 
 func (s Server) unlockIssue(ctx context.Context, record *localruntime.IssueClaimRecord) error {

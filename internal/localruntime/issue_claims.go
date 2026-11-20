@@ -61,6 +61,8 @@ type IssueClaimStore struct {
 
 var issueClaimIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
+var ErrIssueOwnershipChanged = errors.New("issue ownership changed; start the issue again to create a new attempt")
+
 func (s *IssueClaimStore) Save(record IssueClaimRecord) error {
 	if s == nil || s.Root == "" {
 		return fmt.Errorf("issue claim storage is unavailable")
@@ -202,6 +204,17 @@ func (s *IssueClaimStore) Identity() (string, error) {
 	}
 	id := hex.EncodeToString(bytes[:])
 	return id, writeIssueJSON(s.Root, "instance", id)
+}
+
+func (s *IssueClaimStore) CheckOwner(instanceID string) error {
+	owner, err := s.Identity()
+	if err != nil {
+		return fmt.Errorf("load issue owner: %w", err)
+	}
+	if owner != instanceID {
+		return ErrIssueOwnershipChanged
+	}
+	return nil
 }
 
 // ScanPage checkpoints one page per repository per scan. A failed processing

@@ -181,6 +181,79 @@ func TestIssueRecoveryRetryAfterDurableBranchReservationFailure(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryBlocksStaleAdmissionUntilExplicitRetry(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, f := recoveryServer(t)
+	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
+		return "", errors.New("issue owner is unavailable or changed: %!w(<nil>)")
+	}
+	s.pollGitHubIssueAutoStart(ctx)
+	previous := latestRecoveryRecord(t, s)
+	if previous.State != "retry_wait" || !previous.UnlockPending || previous.AgentAttempts != 0 {
+		t.Fatalf("unexpected failed admission state: %s, unlock pending=%t, agent attempts=%d", previous.State, previous.UnlockPending, previous.AgentAttempts)
+	}
+	previous.Failures = 4
+	previous.NextAttemptAt = time.Now().Add(time.Hour)
+	if repairableIssueIncident(previous) {
+		t.Fatal("historical ownership failure would enqueue a repair")
+	}
+	if err := s.IssueClaims.Save(previous); err != nil {
+		t.Fatal(err)
+	}
+	owner := strings.Repeat("f", 32)
+	if err := os.WriteFile(filepath.Join(s.IssueClaims.Root, "instance"), []byte(`"`+owner+`"`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.SubmitLocalPrompt = f.submit
+	commands := len(f.trace)
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	blocked := latestRecoveryRecord(t, s)
+	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || !blocked.NextAttemptAt.IsZero() || !blocked.UnlockPending {
+		t.Fatalf("stale admission state=%s error=%q retry=%v unlock pending=%t", blocked.State, blocked.Error, blocked.NextAttemptAt, blocked.UnlockPending)
+	}
+	if len(f.trace) != commands || len(f.submissions) != 0 {
+		t.Fatal("stale admission accessed GitHub or submitted a worker")
+	}
+	response := retryIssue(t, s, previous.ID, true)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("explicit recovery=%d %s", response.Code, response.Body.String())
+	}
+	recovered := latestRecoveryRecord(t, s)
+	if recovered.InstanceID != owner || recovered.Run.GitHubIssue.Claim.Attempt != 2 || len(f.submissions) != 1 {
+		t.Fatal("explicit recovery did not dispatch a new attempt with the current identity")
+	}
+	if recovered.Run.GitHubIssue.Claim.Branch != previous.Run.GitHubIssue.Claim.Branch || len(f.refs) != 2 {
+		t.Fatal("explicit recovery did not preserve the reserved branch and prior ownership tag")
+	}
+}
+
+func TestIssueRecoveryStopsRetryWhenDispatchRejectsOwner(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, f := recoveryServer(t)
+	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
+		return "", errors.New("temporary dispatch failure")
+	}
+	s.pollGitHubIssueAutoStart(ctx)
+	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
+		return "", localruntime.ErrIssueOwnershipChanged
+	}
+	if err := s.ReconcileIssueWork(ctx); !errors.Is(err, localruntime.ErrIssueOwnershipChanged) {
+		t.Fatalf("expected dispatch rejection, got %v", err)
+	}
+	record := latestRecoveryRecord(t, s)
+	if record.State != "blocked" || !record.NextAttemptAt.IsZero() || repairableIssueIncident(record) {
+		t.Fatalf("rejected dispatch state=%s retry=%v error=%q", record.State, record.NextAttemptAt, record.Error)
+	}
+	s.SubmitLocalPrompt = f.submit
+	if err := s.ReconcileIssueWork(ctx); err != nil || len(f.submissions) != 0 {
+		t.Fatalf("rejected claim retried without confirmation: submissions=%d, error=%v", len(f.submissions), err)
+	}
+}
+
 func TestIssueRecoveryScanReportsFiltersForTrackedIssues(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)

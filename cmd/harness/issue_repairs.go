@@ -56,7 +56,10 @@ func (q *issueRepairQueue) capture(_ context.Context, issue localruntime.IssueCl
 		}
 		q.logf("event=issue_repair_read status=error err=%q", err)
 	}
-	run := failureFollowUpRunConfig(issue.RequestID, app.Result{Err: errors.New(issue.Error)}, issue.Run, q.logRoot)
+	// The claim journal does not record a process exit code. Admission can
+	// fail before a worker even starts.
+	failureContext := formatFailureFollowUpContext("unavailable", errors.New(issue.Error), issue.Run.Prompt)
+	run := failureFollowUpRunConfigWithContext(issue.RequestID, app.Result{}, issue.Run, q.logRoot, failureContext)
 	record := localruntime.IssueRepairRecord{ID: id, RequestID: "repair-" + id, State: "queued", Run: run}
 	return record.RequestID, q.store.Save(record)
 }
