@@ -17,16 +17,17 @@ const defaultInitVersion = "v1"
 
 // InitConfig is the init.json contract for local server mode.
 type InitConfig struct {
-	CommitSigning     gitsigning.Config `json:"commit_signing,omitempty"`
-	Version           string            `json:"version"`
-	LogLevel          string            `json:"log_level,omitempty"`
-	AgentHarness      string            `json:"agent_harness,omitempty"`
-	AgentCommand      string            `json:"agent_command,omitempty"`
-	GitHubToken       string            `json:"github_token,omitempty"`
-	OpenAIAPIKey      string            `json:"openai_api_key,omitempty"`
-	RuntimeConfigPath string            `json:"-"`
-	Scheduler         SchedulerConfig   `json:"scheduler"`
-	ReviewWatch       ReviewWatchConfig `json:"review_watch,omitempty"`
+	CommitSigning     gitsigning.Config   `json:"commit_signing,omitempty"`
+	Version           string              `json:"version"`
+	LogLevel          string              `json:"log_level,omitempty"`
+	AgentHarness      string              `json:"agent_harness,omitempty"`
+	AgentCommand      string              `json:"agent_command,omitempty"`
+	GitHubToken       string              `json:"github_token,omitempty"`
+	OpenAIAPIKey      string              `json:"openai_api_key,omitempty"`
+	RuntimeConfigPath string              `json:"-"`
+	Scheduler         SchedulerConfig     `json:"scheduler"`
+	IssueRecovery     IssueRecoveryConfig `json:"issue_recovery,omitempty"`
+	ReviewWatch       ReviewWatchConfig   `json:"review_watch,omitempty"`
 }
 
 // SchedulerConfig controls local worker behavior.
@@ -223,6 +224,12 @@ func (c *InitConfig) ApplyDefaults() {
 
 // Validate checks required values.
 func (c InitConfig) Validate() error {
+	if c.IssueRecovery.MaxAttempts < 0 || c.IssueRecovery.StepTimeoutSeconds < 0 || c.IssueRecovery.RetryDelaySeconds < 0 || c.IssueRecovery.MaxBackoffSeconds < 0 {
+		return fmt.Errorf("issue_recovery values must be nonnegative; zero selects the default")
+	}
+	if c.IssueRecovery.StepTimeoutSeconds > 30*24*3600 || c.IssueRecovery.MaxBackoffSeconds > 30*24*3600 || c.IssueRecovery.RetryDelaySeconds > 30*24*3600 {
+		return fmt.Errorf("issue_recovery durations must not exceed 30 days")
+	}
 	if strings.TrimSpace(c.Version) == "" {
 		return fmt.Errorf("version is required")
 	}

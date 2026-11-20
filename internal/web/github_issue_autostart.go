@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,7 +23,60 @@ func (s Server) runIssueGH(ctx context.Context, cmd execx.Command) (execx.Result
 	}
 	ctx, cancel := context.WithTimeout(ctx, githubIssueCommandTimeout)
 	defer cancel()
-	return s.GitHubIssueRunner.Run(ctx, cmd)
+	if s.IssueRecovery != nil && len(cmd.Args) > 0 && cmd.Args[0] == "api" {
+		cmd.Args = append([]string{"api", "--include"}, cmd.Args[1:]...)
+	}
+	result, err := s.GitHubIssueRunner.Run(ctx, cmd)
+	if s.IssueRecovery != nil {
+		result.Stdout, err = issueAPIResponse(result.Stdout, err)
+	}
+	return result, err
+}
+
+type issueRateLimitError struct {
+	error
+	RetryAt time.Time
+}
+
+func (e *issueRateLimitError) Unwrap() error { return e.error }
+
+func issueAPIResponse(raw string, cause error) (string, error) {
+	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+	var body []string
+	headers := false
+	retryAt := time.Time{}
+	for _, line := range lines {
+		if strings.HasPrefix(line, "HTTP/") {
+			headers = true
+			continue
+		}
+		if headers {
+			if line == "" {
+				headers = false
+				continue
+			}
+			key, value, _ := strings.Cut(line, ":")
+			value = strings.TrimSpace(value)
+			if strings.EqualFold(key, "Retry-After") {
+				if seconds, err := strconv.Atoi(value); err == nil {
+					retryAt = time.Now().Add(time.Duration(seconds) * time.Second)
+				} else if date, err := http.ParseTime(value); err == nil {
+					retryAt = date
+				}
+			}
+			if strings.EqualFold(key, "X-RateLimit-Reset") && cause != nil {
+				if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && time.Unix(seconds, 0).After(retryAt) {
+					retryAt = time.Unix(seconds, 0)
+				}
+			}
+			continue
+		}
+		body = append(body, line)
+	}
+	if cause != nil && !retryAt.IsZero() {
+		cause = &issueRateLimitError{cause, retryAt}
+	}
+	return strings.Join(body, "\n"), cause
 }
 
 // Reconcile current eligibility, including backlog. Observing an issue never
@@ -54,6 +109,11 @@ func (s Server) wakeGitHubIssueAutoStart() {
 }
 
 func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
+	if s.IssueRecovery != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
+		defer cancel()
+	}
 	status := issueAutomationStatus{LastAttempt: time.Now().UTC(), Issues: []issueAutomationDecision{}}
 	if s.issueAutomation == nil {
 		return
@@ -73,6 +133,9 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 			s.logf("localruntime.ui status=warn event=github_issue_auto_start_scan err=%q", status.Error)
 		}
 	}()
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		status.addError(err)
+	}
 	settings, err := s.ReviewSettingsStatus(ctx)
 	if err != nil {
 		status.Error = "load automation settings: " + err.Error()
@@ -87,9 +150,12 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 		status.Error = err.Error()
 		return
 	}
-	if _, err := s.IssueClaims.List(); err != nil {
-		status.Error = "read issue claims: " + err.Error()
-		return
+	tracked, listErr := s.IssueClaims.List()
+	if err := listErr; err != nil {
+		status.addError(fmt.Errorf("read issue claims: %w", err))
+		if s.IssueRecovery == nil {
+			return
+		}
 	}
 	// Refresh the shared repository cache periodically, including repositories
 	// newly accessible to this account. Failed refreshes remain visible.
@@ -112,17 +178,44 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 		s.issueAutomation.mu.Unlock()
 	}
 	repos = filterDisabledGitHubRepos(repos, settings.DisabledRepositories)
-	for _, repo := range repos {
+	start, repoCount := 0, len(repos)
+	if s.IssueRecovery != nil && repoCount > 0 {
+		cursor, err := s.IssueClaims.ScanPage("@repositories", 0)
+		if err != nil {
+			status.addError(err)
+			return
+		}
+		start = (cursor - 1) % repoCount
+		repos = append(append([]GitHubRepo{}, repos[start:]...), repos[:start]...)
+		if len(repos) > 8 {
+			repos = repos[:8]
+		}
+	}
+	for index, repo := range repos {
 		if ctx.Err() != nil {
 			status.Error = ctx.Err().Error()
 			return
+		}
+		if s.IssueRecovery != nil {
+			if _, err := s.IssueClaims.ScanPage("@repositories", (start+index+1)%repoCount+1); err != nil {
+				status.addError(err)
+				return
+			}
 		}
 		fullName, ok := validGitHubRepository(repo.FullName)
 		if !ok {
 			continue
 		}
 		status.Repositories = append(status.Repositories, fullName)
-		issues, err := s.listGitHubIssuesForAutoStart(ctx, fullName)
+		page := 0
+		if s.IssueRecovery != nil {
+			page, err = s.IssueClaims.ScanPage(fullName, 0)
+			if err != nil {
+				status.addError(err)
+				continue
+			}
+		}
+		issues, nextPage, err := s.issueScanPage(ctx, fullName, page)
 		if err != nil {
 			status.addError(fmt.Errorf("list %s: %w", fullName, err))
 			continue
@@ -130,6 +223,20 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 		status.Scanned += len(issues)
 		candidates := []githubIssueListEntry{}
 		for _, entry := range issues {
+			if s.IssueRecovery != nil {
+				found := false
+				for _, record := range tracked {
+					if record.Run.GitHubIssue.Number == entry.Number && strings.EqualFold(record.Run.GitHubIssue.Repository, fullName) {
+						found = true
+						break
+					}
+				}
+				if found {
+					status.Skipped++
+					status.Issues = append(status.Issues, issueAutomationDecision{Repository: fullName, Number: entry.Number, Reason: "tracked by recovery"})
+					continue
+				}
+			}
 			reason := issueEligibilityReason(entry.GitHubIssue, settings, status.Account)
 			if reason != "" {
 				status.Skipped++
@@ -138,12 +245,23 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 			}
 			candidates = append(candidates, entry)
 		}
-		development, err := s.githubIssueDevelopmentStates(ctx, candidates)
+		// Native admission journals every filter match before inspecting remote
+		// development links. Dependencies and abandoned branches stay visible.
+		development := map[string]githubIssueDevelopmentState{}
+		if s.IssueRecovery == nil {
+			development, err = s.githubIssueDevelopmentStates(ctx, candidates)
+		}
 		if err != nil {
 			status.addError(err)
 			continue
 		}
+		pageAccepted := true
 		for _, entry := range candidates {
+			if ctx.Err() != nil {
+				pageAccepted = false
+				status.addError(ctx.Err())
+				break
+			}
 			decision := issueAutomationDecision{Repository: fullName, Number: entry.Number}
 			if development[entry.ID].Blocked {
 				decision.Reason = "blocked by open issue"
@@ -156,6 +274,19 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 				var err error
 				decision.RequestID, err = s.claimAndSubmitIssue(ctx, run, settings, status.Account, s.SubmitLocalPrompt)
 				if err != nil {
+					// A durable record is sufficient to advance discovery; it is
+					// reconciled separately even when admission is blocked.
+					records, _ := s.IssueClaims.List()
+					found := false
+					for _, record := range records {
+						if record.Run.GitHubIssue.Number == entry.Number && strings.EqualFold(record.Run.GitHubIssue.Repository, fullName) {
+							found = true
+							break
+						}
+					}
+					if !found {
+						pageAccepted = false
+					}
 					decision.Reason = "submission blocked"
 					decision.Error = err.Error()
 					status.addError(err)
@@ -165,6 +296,11 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 				}
 			}
 			status.Issues = append(status.Issues, decision)
+		}
+		if page > 0 && pageAccepted {
+			if _, err := s.IssueClaims.ScanPage(fullName, nextPage); err != nil {
+				status.addError(err)
+			}
 		}
 	}
 }
@@ -227,7 +363,32 @@ func (s Server) listGitHubIssuesForAutoStart(ctx context.Context, repository str
 	if err != nil {
 		return nil, err
 	}
-	decoder := json.NewDecoder(strings.NewReader(result.Stdout))
+	return decodeIssueScanPages(result.Stdout)
+}
+
+func (s Server) issueScanPage(ctx context.Context, repository string, page int) ([]githubIssueListEntry, int, error) {
+	if page == 0 {
+		issues, err := s.listGitHubIssuesForAutoStart(ctx, repository)
+		return issues, 0, err
+	}
+	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", fmt.Sprintf("repos/%s/issues?state=open&per_page=100&sort=created&direction=asc&page=%d", repository, page)}})
+	if err != nil {
+		return nil, page, err
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal([]byte(result.Stdout), &raw); err != nil {
+		return nil, page, err
+	}
+	next := 1
+	if len(raw) == 100 {
+		next = page + 1
+	}
+	issues, err := decodeIssueScanPages(result.Stdout)
+	return issues, next, err
+}
+
+func decodeIssueScanPages(raw string) ([]githubIssueListEntry, error) {
+	decoder := json.NewDecoder(strings.NewReader(raw))
 	var issues []githubIssueListEntry
 	for {
 		var page []struct {

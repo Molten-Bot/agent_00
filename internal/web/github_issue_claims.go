@@ -90,7 +90,16 @@ func (s Server) instanceID() string {
 	s.issueAutomation.mu.Lock()
 	defer s.issueAutomation.mu.Unlock()
 	if s.issueAutomation.instanceID == "" {
-		s.issueAutomation.instanceID = newIssueClaimID()
+		if s.IssueRecovery != nil {
+			id, err := s.IssueClaims.Identity()
+			if err != nil {
+				s.logf("event=issue_identity status=error err=%q", err)
+				return ""
+			}
+			s.issueAutomation.instanceID = id
+		} else {
+			s.issueAutomation.instanceID = newIssueClaimID()
+		}
 	}
 	return s.issueAutomation.instanceID
 }
@@ -135,7 +144,7 @@ func (s Server) issueClaimTarget(ctx context.Context, repository string, number 
 	if !ok {
 		return issueClaimTarget{}, fmt.Errorf("invalid issue repository")
 	}
-	const query = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name target{oid}} issue(number:$number){id linkedBranches(first:100){totalCount nodes{ref{name}}} closedByPullRequestsReferences(first:1,includeClosedPrs:true){totalCount} issueDependenciesSummary{blockedBy}}}}`
+	const query = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name target{oid}} issue(number:$number){id linkedBranches(first:100){totalCount nodes{ref{name}}} closedByPullRequestsReferences(first:100,includeClosedPrs:true){totalCount nodes{state merged}} issueDependenciesSummary{blockedBy}}}}`
 	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "graphql", "-f", "query=" + query, "-f", "owner=" + owner, "-f", "name=" + name, "-F", fmt.Sprintf("number=%d", number)}})
 	if err != nil {
 		return issueClaimTarget{}, err
@@ -156,8 +165,14 @@ func (s Server) issueClaimTarget(ctx context.Context, repository string, number 
 						TotalCount int
 						Nodes      []struct{ Ref *struct{ Name string } }
 					}
-					ClosedByPullRequestsReferences struct{ TotalCount int }
-					IssueDependenciesSummary       struct{ BlockedBy int }
+					ClosedByPullRequestsReferences struct {
+						TotalCount int
+						Nodes      []struct {
+							State  string
+							Merged bool
+						}
+					}
+					IssueDependenciesSummary struct{ BlockedBy int }
 				}
 			}
 		} `json:"data"`
@@ -172,7 +187,14 @@ func (s Server) issueClaimTarget(ctx context.Context, repository string, number 
 	if repo == nil || repo.Issue == nil || repo.Issue.ID == "" || repo.DefaultBranchRef == nil || repo.DefaultBranchRef.Target.OID == "" {
 		return issueClaimTarget{}, fmt.Errorf("incomplete issue or default branch data")
 	}
-	target := issueClaimTarget{ID: repo.Issue.ID, BaseBranch: repo.DefaultBranchRef.Name, SHA: repo.DefaultBranchRef.Target.OID, Linked: repo.Issue.LinkedBranches.TotalCount, ClosingPRs: repo.Issue.ClosedByPullRequestsReferences.TotalCount, BlockedBy: repo.Issue.IssueDependenciesSummary.BlockedBy}
+	closing := repo.Issue.ClosedByPullRequestsReferences
+	blockingPRs := closing.TotalCount - len(closing.Nodes)
+	for _, pr := range closing.Nodes {
+		if strings.EqualFold(pr.State, "OPEN") || pr.Merged {
+			blockingPRs++
+		}
+	}
+	target := issueClaimTarget{ID: repo.Issue.ID, BaseBranch: repo.DefaultBranchRef.Name, SHA: repo.DefaultBranchRef.Target.OID, Linked: repo.Issue.LinkedBranches.TotalCount, ClosingPRs: blockingPRs, BlockedBy: repo.Issue.IssueDependenciesSummary.BlockedBy}
 	for _, node := range repo.Issue.LinkedBranches.Nodes {
 		if node.Ref != nil {
 			target.Branches = append(target.Branches, node.Ref.Name)
@@ -212,7 +234,7 @@ func (s Server) claimAndSubmitIssueMode(ctx context.Context, run config.Config, 
 		}
 	}
 	records, err := s.IssueClaims.List()
-	if err != nil {
+	if err != nil && s.IssueRecovery == nil {
 		return "", err
 	}
 	for _, record := range records {
@@ -226,6 +248,9 @@ func (s Server) claimAndSubmitIssueMode(ctx context.Context, run config.Config, 
 	}
 	if issue.Claim != nil {
 		return "", errIssueRecoveryRequired
+	}
+	if s.IssueRecovery != nil {
+		return s.admitDurableIssue(ctx, run, settings, login, submit)
 	}
 	fresh, err := s.fetchGitHubIssue(ctx, issue.Repository, issue.Number)
 	if err != nil {
@@ -265,8 +290,20 @@ func (s Server) claimAndSubmitIssueMode(ctx context.Context, run config.Config, 
 		return "", err
 	}
 	record := localruntime.IssueClaimRecord{ID: claim.ID, InstanceID: s.instanceID(), Phase: "reserving", Run: run}
+	if record.InstanceID == "" {
+		return "", fmt.Errorf("persistent instance identity is unavailable")
+	}
+	if s.IssueRecovery != nil {
+		record.Version = 2
+		record.State = "reserving"
+		record.IssueNodeID = target.ID
+		record.ReservationSHA = sha
+	}
 	if err := s.IssueClaims.Save(record); err != nil {
 		return "", fmt.Errorf("persist claim before reservation: %w", err)
+	}
+	if record.Version == 2 {
+		return s.resumeIssueAdmission(ctx, record, submit)
 	}
 	if err := s.reserveIssueBranch(ctx, target.ID, claim.Branch, sha); err != nil {
 		return "", s.blockIssueClaim(record, err)
@@ -339,13 +376,41 @@ func (s Server) restartFailedIssue(ctx context.Context, issue *config.GitHubIssu
 }
 
 func (s Server) blockIssueClaim(record localruntime.IssueClaimRecord, cause error) error {
-	record.Phase = "blocked"
-	record.Error = cause.Error()
-	return errors.Join(cause, s.IssueClaims.Save(record))
+	return errors.Join(cause, s.IssueClaims.Update(record.ID, func(current *localruntime.IssueClaimRecord) error {
+		current.Phase = "blocked"
+		current.Error = cause.Error()
+		if current.Version == 2 {
+			current.State = "retry_wait"
+			current.Incident = "admission"
+			current.UnlockPending = current.LabelAdded
+		}
+		return nil
+	}))
 }
 
 func (s Server) finishIssueAdmission(ctx context.Context, record localruntime.IssueClaimRecord, submit func(context.Context, []byte) (string, error)) (string, error) {
 	issue := record.Run.GitHubIssue
+	if record.Version == 2 && s.Broker != nil {
+		pending := 0
+		for _, task := range s.Broker.TaskList() {
+			if !isCompletedTaskStatus(task.Status) {
+				pending++
+			}
+		}
+		if pending >= 32 {
+			return "", s.blockIssueClaim(record, fmt.Errorf("dispatch capacity reached; issue retained for retry"))
+		}
+	}
+	if record.Version == 2 {
+		// Persist label intent before the API call: a lost response still needs
+		// reconciliation. Eligibility was checked before acquiring ownership.
+		record.LabelAdded = true
+		record.State = "queued"
+		record.RequestID = "issue-" + record.ID
+		if err := s.IssueClaims.Save(record); err != nil {
+			return "", err
+		}
+	}
 	if err := s.ensureIssueClaimLabel(ctx, issue); err != nil {
 		return "", s.blockIssueClaim(record, err)
 	}
@@ -362,9 +427,11 @@ func (s Server) finishIssueAdmission(ctx context.Context, record localruntime.Is
 	if err != nil {
 		return "", s.blockIssueClaim(record, fmt.Errorf("submit claimed issue: %w", err))
 	}
-	record.Phase = "submitted"
-	record.RequestID = requestID
-	if err := s.IssueClaims.Save(record); err != nil {
+	if err := s.IssueClaims.Update(record.ID, func(current *localruntime.IssueClaimRecord) error {
+		current.Phase = "submitted"
+		current.RequestID = requestID
+		return nil
+	}); err != nil {
 		return "", fmt.Errorf("task %s was accepted but claim receipt could not be saved; do not resubmit: %w", requestID, err)
 	}
 	s.logf("localruntime.ui status=ok event=github_issue_auto_start issue=%d request_id=%s", issue.Number, requestID)
@@ -524,12 +591,51 @@ func (s Server) handleIssueAutomationStatus(w http.ResponseWriter, r *http.Reque
 				phase = task.Status
 			}
 		}
-		claims = append(claims, map[string]any{"id": record.ID, "repository": issue.Repository, "number": issue.Number, "phase": phase, "requestId": record.RequestID, "error": record.Error, "instanceId": record.InstanceID, "attempt": issue.Claim.Attempt})
+		entry := map[string]any{"id": record.ID, "repository": issue.Repository, "number": issue.Number, "phase": phase, "requestId": record.RequestID, "error": record.Error, "instanceId": record.InstanceID, "attempt": issue.Claim.Attempt}
+		if record.Version == 2 {
+			entry["phase"] = record.State
+			entry["step"] = record.Step
+			entry["stepStartedAt"] = record.StepStartedAt
+			entry["agentAttempts"] = record.AgentAttempts
+			entry["nextAttemptAt"] = record.NextAttemptAt
+			entry["unlockPending"] = record.UnlockPending
+			entry["prUrl"] = record.PRURL
+			entry["incident"] = record.Incident
+			entry["repairRequestId"] = record.RepairRequestID
+			entry["repairError"] = record.RepairError
+			lock, lockErr := s.IssueClaims.TryLock(localruntime.IssueExecutionKey(issue))
+			if lockErr != nil {
+				entry["workerAlive"] = "unknown"
+			} else {
+				entry["workerAlive"] = lock == nil
+				if lock != nil {
+					lock.Close()
+					if stopped, err := localruntime.IssueProcessesStopped(record); err != nil {
+						entry["workerAlive"] = "unknown"
+					} else {
+						entry["workerAlive"] = !stopped
+					}
+				}
+			}
+		} else {
+			entry["recoveryNote"] = "legacy claim: worker termination requires explicit confirmation"
+		}
+		claims = append(claims, entry)
 	}
 	if err != nil {
 		status.addError(err)
 	}
-	writeJSON(w, 200, map[string]any{"ok": err == nil, "status": status, "claims": claims})
+	repairs := []map[string]any{}
+	if s.IssueRepairs != nil {
+		records, repairErr := s.IssueRepairs.List()
+		if repairErr != nil {
+			status.addError(repairErr)
+		}
+		for _, record := range records {
+			repairs = append(repairs, map[string]any{"requestId": record.RequestID, "state": record.State, "error": record.Error, "prUrl": record.PRURL})
+		}
+	}
+	writeJSON(w, 200, map[string]any{"ok": err == nil, "status": status, "claims": claims, "repairs": repairs})
 }
 
 func (s Server) handleIssueAutomationRetry(w http.ResponseWriter, r *http.Request) {
@@ -603,6 +709,10 @@ func (s Server) issueRetrySubmitter() func(context.Context, []byte) (string, err
 
 // The caller holds admission and has verified that the prior worker stopped.
 func (s Server) recoverIssueClaim(ctx context.Context, repository string, number int, remote issueAttemptMetadata, submit func(context.Context, []byte) (string, error)) (string, int, error) {
+	return s.recoverIssueClaimMode(ctx, repository, number, remote, submit, false)
+}
+
+func (s Server) recoverIssueClaimMode(ctx context.Context, repository string, number int, remote issueAttemptMetadata, submit func(context.Context, []byte) (string, error), automatic bool) (string, int, error) {
 	settings, err := s.ReviewSettingsStatus(ctx)
 	if err != nil {
 		return "", 503, err
@@ -616,19 +726,36 @@ func (s Server) recoverIssueClaim(ctx context.Context, repository string, number
 		}
 	}
 	records, err := s.IssueClaims.List()
-	if err != nil {
+	if err != nil && s.IssueRecovery == nil {
 		return "", 503, err
 	}
-	if s.activeIssueTask(repository, number) {
+	if s.IssueRecovery != nil {
+		lock, err := s.IssueClaims.TryLock(localruntime.IssueExecutionKey(&config.GitHubIssueConfig{Repository: repository, Number: number}))
+		if err != nil {
+			return "", 503, err
+		}
+		if lock == nil {
+			return "", 409, fmt.Errorf("stop the active worker and its subprocesses before retrying")
+		}
+		lock.Close()
+	}
+	if s.IssueRecovery == nil && s.activeIssueTask(repository, number) {
 		return "", http.StatusConflict, fmt.Errorf("stop the active task before retrying")
 	}
 	var savedRun *config.Config
+	var previous localruntime.IssueClaimRecord
 	for _, record := range records {
 		issue := record.Run.GitHubIssue
 		if !strings.EqualFold(issue.Repository, repository) || issue.Number != number {
 			continue
 		}
-		if record.InstanceID == s.instanceID() && record.RequestID != "" && s.Broker != nil {
+		if record.Version == 2 && record.InstanceID == s.instanceID() {
+			stopped, err := localruntime.IssueProcessesStopped(record)
+			if !stopped && (err == nil || automatic) {
+				return "", 409, fmt.Errorf("worker termination is not confirmed; inspect subprocesses before retrying")
+			}
+		}
+		if record.Version != 2 && record.InstanceID == s.instanceID() && record.RequestID != "" && s.Broker != nil {
 			if task, ok := s.Broker.Task(record.RequestID); ok && !isCompletedTaskStatus(task.Status) {
 				return "", 409, fmt.Errorf("stop the active task before retrying")
 			}
@@ -636,6 +763,16 @@ func (s Server) recoverIssueClaim(ctx context.Context, repository string, number
 		if issue.Claim.ID == remote.Claim.ID || remote.Claim.ID == "" {
 			run := record.Run
 			savedRun = &run
+			previous = record
+		}
+	}
+	if s.IssueRecovery != nil && remote.Claim.ID != "" {
+		pr, err := s.verifiedIssuePR(ctx, &config.GitHubIssueConfig{Repository: repository, Number: number, Claim: &remote.Claim})
+		if err != nil {
+			return "", 502, err
+		}
+		if pr != "" {
+			return "", 409, fmt.Errorf("issue already has an open or merged PR")
 		}
 	}
 	issue, err := s.fetchGitHubIssue(ctx, repository, number)
@@ -684,6 +821,9 @@ func (s Server) recoverIssueClaim(ctx context.Context, repository string, number
 	if exclusion == "" {
 		exclusion = issueExclusionLabel(settings)
 	}
+	if automatic && !previous.LabelAdded && githubIssueHasAnyLabel(issue, []string{exclusion}) {
+		return "", 409, fmt.Errorf("issue was excluded after its worker stopped")
+	}
 	claim := &config.GitHubIssueClaim{ID: newIssueClaimID(), Branch: branch, BaseBranch: base, ExclusionLabel: exclusion, Attempt: remote.Claim.Attempt + 1}
 	// Copy rather than mutating a stored config's issue pointer.
 	runIssue := *run.GitHubIssue
@@ -695,10 +835,42 @@ func (s Server) recoverIssueClaim(ctx context.Context, repository string, number
 		return "", 400, err
 	}
 	record := localruntime.IssueClaimRecord{ID: claim.ID, InstanceID: s.instanceID(), Phase: "reserving", Run: run}
+	if s.IssueRecovery != nil {
+		if record.InstanceID == "" {
+			return "", 503, fmt.Errorf("persistent instance identity is unavailable")
+		}
+		record.Version = 2
+		record.State = "reserving"
+		record.IssueNodeID = target.ID
+		record.BranchReserved = !reserve
+		record.WorkspaceDir = previous.WorkspaceDir
+		if automatic {
+			record.AgentAttempts = previous.AgentAttempts
+		}
+	}
 	if err = s.IssueClaims.Save(record); err != nil {
 		return "", 503, err
 	}
 	var sha string
+	if record.Version == 2 {
+		ref := branch
+		if reserve {
+			ref = base
+		}
+		sha, err = s.issueBranchSHA(ctx, repository, ref)
+		if err != nil {
+			return "", 502, s.blockIssueClaim(record, err)
+		}
+		record.ReservationSHA = sha
+		if err := s.IssueClaims.Save(record); err != nil {
+			return "", 503, err
+		}
+		requestID, err := s.resumeIssueAdmission(ctx, record, submit)
+		if err != nil {
+			return "", 409, err
+		}
+		return requestID, http.StatusAccepted, nil
+	}
 	if reserve {
 		sha, err = s.issueBranchSHA(ctx, repository, base)
 		if err == nil {

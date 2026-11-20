@@ -94,7 +94,7 @@ func TestTaskLogMirrorWritesAggregateAndTaskLogs(t *testing.T) {
 	assertLogFileContent(t, filepath.Join(root, fallbackLogSubdir, legacyTaskLogFileName), []string{lines[2]})
 }
 
-func TestTaskLogMirrorResetsExistingRootOnInit(t *testing.T) {
+func TestTaskLogMirrorPreservesExistingRootOnInit(t *testing.T) {
 	t.Parallel()
 
 	root := filepath.Join(t.TempDir(), ".log")
@@ -111,8 +111,8 @@ func TestTaskLogMirrorResetsExistingRootOnInit(t *testing.T) {
 		t.Fatalf("newTaskLogMirror() error = %v", err)
 	}
 
-	if _, statErr := os.Stat(stale); !os.IsNotExist(statErr) {
-		t.Fatalf("stale log path still exists after init: stat err = %v", statErr)
+	if content, err := os.ReadFile(stale); err != nil || string(content) != "stale\n" {
+		t.Fatalf("previous log was lost after init: content=%q err=%v", content, err)
 	}
 
 	mirror.WriteLine("task request_id=local-1712345678-000222 stage=codex status=start")

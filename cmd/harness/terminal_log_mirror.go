@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -14,7 +15,7 @@ import (
 
 const (
 	logDirectoryName    = ".log"
-	maxLogFileOpenMode  = 0o644
+	maxLogFileOpenMode  = 0o600
 	maxOpenTaskLogFiles = 128
 )
 
@@ -36,6 +37,7 @@ type taskLogMirror struct {
 	aggregate     *os.File
 	taskFiles     map[string]*os.File
 	taskFileOrder []string
+	writeErr      error
 }
 
 func newDefaultTaskLogMirror() (*taskLogMirror, error) {
@@ -79,10 +81,8 @@ func resetLogRoot(absRoot string) error {
 	if filepath.Base(absRoot) != logDirectoryName {
 		return fmt.Errorf("refusing to reset non-%s directory: %s", logDirectoryName, absRoot)
 	}
-	if err := os.RemoveAll(absRoot); err != nil {
-		return err
-	}
-	return os.MkdirAll(absRoot, 0o755)
+	// Startup must never erase unresolved incidents or follow-up evidence.
+	return os.MkdirAll(absRoot, 0o700)
 }
 
 func defaultLogRoot() (string, error) {
@@ -124,19 +124,52 @@ func (m *taskLogMirror) WriteLine(line string) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	var problems []error
 
 	if m.aggregate != nil {
-		_, _ = m.aggregate.WriteString(trimmed + "\n")
+		if _, err := m.aggregate.WriteString(trimmed + "\n"); err != nil {
+			problems = append(problems, err)
+		}
 	}
 
 	subdir := taskLogSubdirForLine(trimmed)
 	for _, fileName := range []string{logFileName, legacyTaskLogFileName} {
 		taskFile, err := m.taskLogFileLocked(subdir, fileName)
 		if err != nil {
+			problems = append(problems, err)
 			continue
 		}
-		_, _ = taskFile.WriteString(trimmed + "\n")
+		if _, err := taskFile.WriteString(trimmed + "\n"); err != nil {
+			problems = append(problems, err)
+		}
 	}
+	if err := errors.Join(problems...); err != nil {
+		if m.writeErr == nil {
+			fmt.Fprintf(os.Stderr, "task log persistence failed: %v\n", err)
+		}
+		m.writeErr = err
+	} else {
+		m.writeErr = nil
+	}
+}
+
+func (m *taskLogMirror) Error() error { m.mu.Lock(); defer m.mu.Unlock(); return m.writeErr }
+
+func (m *taskLogMirror) Sync() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var problems []error
+	if m.aggregate != nil {
+		if err := m.aggregate.Sync(); err != nil {
+			problems = append(problems, err)
+		}
+	}
+	for _, file := range m.taskFiles {
+		if err := file.Sync(); err != nil {
+			problems = append(problems, err)
+		}
+	}
+	return errors.Join(append(problems, m.writeErr)...)
 }
 
 func (m *taskLogMirror) Close() error {

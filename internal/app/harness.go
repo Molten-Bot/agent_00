@@ -188,10 +188,13 @@ type agentInvocationLogMetadata struct {
 
 // Harness executes the clone -> codex -> PR workflow.
 type Harness struct {
-	Signing        *gitsigning.Snapshot
-	LoadSigning    func(context.Context) (*gitsigning.Snapshot, error)
-	signingHistory map[string]map[string]bool
-	Runner         execx.Runner
+	// OnStep reports semantic progress, never command output or heartbeats.
+	OnStep               func(string)
+	ResumeIssueWorkspace bool
+	Signing              *gitsigning.Snapshot
+	LoadSigning          func(context.Context) (*gitsigning.Snapshot, error)
+	signingHistory       map[string]map[string]bool
+	Runner               execx.Runner
 	// AssetTransport optionally replaces HTTP transport for attachment downloads.
 	AssetTransport http.RoundTripper
 	Workspace      workspace.Manager
@@ -229,6 +232,7 @@ func New(runner execx.Runner) Harness {
 
 // Run executes a full automation attempt.
 func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
+	h.step("preflight")
 	if h.Runner == nil {
 		return h.fail(ExitUsage, "usage", fmt.Errorf("runner is required"), "")
 	}
@@ -374,6 +378,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 			PublishStrategy:          publishStrategyDirect,
 		})
 	}
+	h.step("clone")
 	if err := h.cloneRepositories(ctx, repos, cloneBaseBranch); err != nil {
 		if feedbackPRURL != "" {
 			err = errors.Join(ErrPRFeedbackTarget, err)
@@ -527,7 +532,24 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 
 	h.logf("stage=%s status=start target=%s%s", agentStage, codexTargetLabel, initialAgentInvocation.logFieldsSuffix())
 	codexStart := time.Now()
-	agentRes, err := h.runCodexCapture(ctx, runtime, codexDir, codexBasePrompt, codexOpts, agentsPath, agentResponseMode, initialAgentInvocation)
+	var agentRes execx.Result
+	publicationPending := false
+	if h.ResumeIssueWorkspace && issueClaim != nil {
+		status, statusErr := h.runCommand(ctx, "git", statusCommand(repos[0].Dir))
+		if statusErr != nil {
+			return h.fail(ExitGit, "git", statusErr, runDir)
+		}
+		publicationPending, err = h.repoHasPendingChanges(ctx, repos[0], status.Stdout)
+		if err != nil {
+			return h.fail(ExitGit, "git", err, runDir)
+		}
+	}
+	if !publicationPending {
+		h.step("agent")
+		agentRes, err = h.runCodexCapture(ctx, runtime, codexDir, codexBasePrompt, codexOpts, agentsPath, agentResponseMode, initialAgentInvocation)
+	} else {
+		h.logf("stage=git status=ok action=resume_publication")
+	}
 	if err != nil {
 		return h.fail(ExitCodex, agentStage, err, runDir)
 	}
@@ -3105,6 +3127,22 @@ func (h Harness) cloneRepository(ctx context.Context, repo *repoWorkspace, branc
 	if repo == nil {
 		return fmt.Errorf("repo workspace is required")
 	}
+	if h.ResumeIssueWorkspace && repo.IssueClaimBranch {
+		if info, err := os.Stat(filepath.Join(repo.Dir, ".git")); err == nil && info.IsDir() {
+			remote, err := h.runCommand(ctx, "clone", gitCommand(repo.Dir, "remote", "get-url", "origin"))
+			if err != nil {
+				return err
+			}
+			actual, ok := parseGitHubRepoRef(strings.TrimSpace(remote.Stdout))
+			expected, want := parseGitHubRepoRef(repo.URL)
+			if !ok || !want || !strings.EqualFold(actual.owner+"/"+actual.name, expected.owner+"/"+expected.name) {
+				return fmt.Errorf("preserved workspace remote does not match issue repository")
+			}
+			repo.BaseBranch = branch
+			repo.CreateWorkBranch = true
+			return nil
+		}
+	}
 
 	branch = strings.TrimSpace(branch)
 	if repo.RequiresNonDefaultBranch {
@@ -5156,7 +5194,14 @@ func (h Harness) logf(format string, args ...any) {
 	h.Logf(format, args...)
 }
 
+func (h Harness) step(step string) {
+	if h.OnStep != nil {
+		h.OnStep(step)
+	}
+}
+
 func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd execx.Command) (execx.Result, error) {
+	h.step(phase)
 	onLine := func(stream, line string) {
 		if strings.TrimSpace(line) == "" {
 			return

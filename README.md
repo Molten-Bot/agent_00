@@ -111,10 +111,17 @@ list allows any label. Assignment uses the same `gh` account as repository
 and issue discovery. Disabled repositories are excluded.
 
 The service checks immediately and every minute, including the existing open
-backlog. Issues with an associated branch, closing PR (including closed PRs), or
-exclusion label are skipped. Repository discovery refreshes every five minutes.
-The settings panel shows scan times, account, repositories, errors, and each
-issue's eligibility or submission outcome. **Scan now** requests an early scan.
+backlog. Each matching issue is journaled before admission. Excluded issues
+remain excluded; development associations and open dependencies block new work
+without hiding an already tracked issue. Discovery checkpoints one page per
+repository and rotates large repository lists. Repository discovery refreshes
+every five minutes. **Scan now** requests an early scan.
+
+The settings panel shows scan errors, durable outcomes, worker liveness, current
+workflow step, retry timing, pending unlocks, verified PRs, and repair tasks.
+A successful task status alone is not proof of delivery: automation verifies an
+open (including draft) or merged PR for the reserved head and intended base.
+Closed, unmerged PRs do not count as delivery.
 
 Before queueing an automatic start, manual issue start, or explicit retry, the
 harness fetches the current title, description, and all paginated comments from
@@ -144,37 +151,67 @@ HTML responses fail the run at the `assets` stage before agent execution. Retryi
 downloads the references again; downloaded bytes are not embedded in saved configs.
 
 Every automatic or manual issue start reserves `agent00-issue-<number>` as a
-linked branch before queueing. Only the winner can start. The configurable
-exclusion label defaults to `agent_00-in-progress`; it cannot also be a trigger
-label. Claims remain reserved while an issue is open, including after failure
-or interruption. Tasks keep their reserved branch and target the original base
-branch; collisions never cause a second branch to be generated.
+linked branch before queueing. Only the owner can start. New claims publish
+immutable attempt metadata before branch creation, and ambiguous GitHub responses
+are reconciled by exact claim identity. Tasks retain their reserved branch and
+original PR base; collisions never generate a second branch.
 
-Admission records live in `issue-claims/` beside the runtime `config.json` and
-must be retained with that configuration. Immutable annotated Git tags named
-`agent00-issue-<number>-claim-<attempt>` store claim identity, instance, base
-branch and exclusion label on GitHub. They serialize explicit retries across
-instances and contain no task prompts or issue descriptions. Repository rules
-must permit creation of these branches/tags and issue labels. This requires
-repository contents and issues write access; permission failures appear in the
-status panel and block admission.
+The configurable execution exclusion label defaults to `agent_00-in-progress`
+and cannot also be a trigger label. After the worker and its subprocesses stop,
+automation removes the label it added. Removal failures are persisted and retried.
+Warnings or stale heartbeats alone never unlock a running task. Branches and
+ownership tags remain intact: unlocking execution does not release the issue to
+another instance. Do not delete claim tags to clear a reservation.
 
-**Start task** and the task-history **Rerun** action automatically recover the
-latest claim when its task failed or was stopped on the current instance. They
-preserve the original runtime options and refresh the issue content. Background
-scans do not automatically retry failures.
+Durable state lives beside runtime `config.json`: `issue-claims/`,
+`issue-repairs/`, `issue-workspaces/`, `repair-workspaces/`, and `logs/.log/`.
+Keep this directory on persistent storage. The standard Compose configuration
+already mounts `/workspace/config`. Only one daemon may use the same runtime
+directory; separate instances coordinate through GitHub ownership tags. Logs
+survive startup. Unresolved work and evidence are retained; fulfilled issue
+artifacts become eligible for cleanup after 30 days, provided no unresolved
+repair still needs them. Journals remain available for audit.
 
-For interrupted admissions, restarted instances, or unknown worker state, use
-**Recover / retry** beside the start error or in **Settings → GitHub Issues**,
-after stopping the previous worker on every instance.
-Recovery preserves the branch's existing commits and refuses a stale
-claim identity, an active local task, or a closed issue. Ambiguous API results
-are never automatically replayed. An unrecorded reservation can be explicitly
-recovered, provided its single linked branch has the expected reserved name.
-If reservation failed before creating a branch, recovery creates it after
-verifying that no remote attempt or development association exists.
-Do not delete claim tags to clear a reservation. Keep the exclusion label until
-resolving or explicitly recovering the issue.
+The local recovery protocol uses inherited Unix file locks and records process
+groups. A surviving agent or uncertain process termination prevents takeover.
+Legacy claims and ownership changes require **Recover / retry**, after stopping
+the previous worker on every instance. Automatic cross-machine failover is not
+performed. Restarting the owning instance recovers its durable dispatch intents.
+
+Background recovery verifies PR delivery before retrying, reuses preserved local
+changes and remote commits, and attempts publication before running another
+agent. It permits three agent attempts per failure cycle, with initial delays
+of one and five minutes plus jitter. Infrastructure checks back off up to an
+hour and honor GitHub retry/reset headers. Auth and signing gates do not consume
+agent attempts. Exhausted attempts, explicit stops/pauses, and no-change results
+without a PR remain visible blockers requiring review or explicit retry. A
+manual recovery resets the agent-attempt budget and refreshes issue content.
+
+A watchdog stops a single workflow step after two hours. Advancing to another
+step resets its timer; streaming output, heartbeats, and retries in the same
+step do not. There is no total task-duration limit. Configure defaults in the
+runtime configuration (these are server settings, not run-config fields):
+
+```json
+"issue_recovery": {
+  "max_attempts": 3,
+  "step_timeout_seconds": 7200,
+  "retry_delay_seconds": 60,
+  "max_backoff_seconds": 3600
+}
+```
+
+Suspected harness failures enqueue persistent, deduplicated agent_00 repair
+tasks based on local logs. Enqueue failures remain queued; failed or interrupted
+repair executions remain visible for investigation and do not spawn recursive
+repair tasks. Customer prompts and identifiers are redacted from repair prompts
+and PR context. A repair PR does not resolve the original issue, automatically
+merge/deploy a fix, or reset its retry budget.
+
+Repository rules must permit creation of ownership tags, branches, and issue
+labels. Permission or storage failures remain explicit blockers. Progress cannot
+be guaranteed during a permanent outage or loss of persistent storage; unresolved
+issues are never intentionally treated as successful delivery.
 
 Upgrade **all** instances before enabling backlog processing: older versions
 ignore these ownership rules. Automation stays off unless already enabled, but

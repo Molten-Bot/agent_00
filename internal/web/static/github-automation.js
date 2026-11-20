@@ -35,17 +35,30 @@
       const current = body.status || {};
       status.textContent = `${current.enabled ? 'Enabled' : 'Disabled'} · Account: ${current.account || 'unknown'} · Repositories: ${(current.repositories || []).join(', ') || 'none'} · Last scan: ${timestamp(current.lastAttempt)} · Last successful scan: ${timestamp(current.lastSuccess)} · Checked: ${current.scanned || 0} · Skipped: ${current.skipped || 0} · Submitted: ${current.submitted || 0}${current.error ? ` · ${current.error}` : ''}`;
       const entries = new Map();
+      const repairs = new Map((body.repairs || []).map(repair => [repair.requestId, repair]));
       for (const entry of current.issues || []) entries.set(`${entry.repository}#${entry.number}`, entry);
       for (const claim of body.claims || []) {
         const key = `${claim.repository}#${claim.number}`;
         const previous = entries.get(key);
         if (previous?.attempt > claim.attempt) continue;
-        entries.set(key, { ...claim, reason: claim.phase, recoverable: true });
+        entries.set(key, { ...claim, reason: claim.phase, recoverable: claim.workerAlive !== true && claim.phase !== 'fulfilled' });
       }
       list.replaceChildren();
       for (const [key, entry] of entries) {
         const item = document.createElement('li');
         item.textContent = `${key}: ${entry.reason || 'unknown'}${entry.error ? ` — ${entry.error}` : ''}`;
+        if (entry.workerAlive !== undefined) item.append(` · Worker: ${entry.workerAlive === true ? 'running' : entry.workerAlive === false ? 'stopped' : 'unknown'}`);
+        if (entry.unlockPending) item.append(' · Unlock pending');
+        if (entry.step) item.append(` · Step: ${entry.step} since ${timestamp(entry.stepStartedAt)}`);
+        if (entry.agentAttempts !== undefined) item.append(` · Agent attempts: ${entry.agentAttempts}`);
+        if (entry.nextAttemptAt && !entry.nextAttemptAt.startsWith('0001-')) item.append(` · Retry: ${timestamp(entry.nextAttemptAt)}`);
+        if (entry.prUrl) item.append(` · Verified PR: ${entry.prUrl}`);
+        if (entry.recoveryNote) item.append(` · ${entry.recoveryNote}`);
+        if (entry.repairRequestId) {
+          const repair = repairs.get(entry.repairRequestId);
+          item.append(` · Repair: ${entry.repairRequestId} (${repair?.state || 'pending'})${repair?.error ? ` — ${repair.error}` : ''}${repair?.prUrl ? ` · ${repair.prUrl}` : ''}`);
+        }
+        if (entry.repairError) item.append(` · Repair queue: ${entry.repairError}`);
         if (entry.recoverable || ['associated branch or closing PR', 'claimed elsewhere or excluded'].includes(entry.reason)) {
           const button = document.createElement('button');
           button.type = 'button'; button.textContent = 'Recover / retry';

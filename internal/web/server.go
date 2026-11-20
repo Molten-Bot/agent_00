@@ -116,10 +116,16 @@ type Server struct {
 	ResolveGitHubRepos      func(context.Context) ([]GitHubRepo, error)
 	GitHubIssueRunner       execx.Runner
 	IssueClaims             *localruntime.IssueClaimStore
-	issueAutomation         *issueAutomationState
-	gitHubRepos             *gitHubRepoCache
-	issueAutoStartWake      chan time.Time
-	Ready                   chan<- error
+	// IssueRecovery is enabled only when the submitter implements durable
+	// receipts and inherited worker locks. Legacy embedders remain manual-only.
+	IssueRecovery      *localruntime.IssueRecoveryConfig
+	IssueRepair        func(context.Context, localruntime.IssueClaimRecord) (string, error)
+	IssueRepairs       *localruntime.IssueRepairStore
+	IssueReady         func(context.Context) error
+	issueAutomation    *issueAutomationState
+	gitHubRepos        *gitHubRepoCache
+	issueAutoStartWake chan time.Time
+	Ready              chan<- error
 }
 
 // AgentAuthState describes current runtime agent-auth readiness and device flow hints.

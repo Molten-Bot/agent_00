@@ -260,7 +260,24 @@ func runServer(args []string) int {
 		cfg.Scheduler.MaxParallel = *parallel
 	}
 
-	logger := newDefaultTerminalLogger()
+	issueClaims := &localruntime.IssueClaimStore{Root: filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "issue-claims")}
+	instanceLock, lockErr := issueClaims.TryLock("instance")
+	if lockErr != nil || instanceLock == nil {
+		fmt.Fprintf(os.Stderr, "issue runtime directory is unavailable or already in use: %v\n", lockErr)
+		return app.ExitConfig
+	}
+	defer instanceLock.Close()
+	if _, err := issueClaims.Identity(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return app.ExitConfig
+	}
+	logger := newTerminalLogger(os.Stderr, isTerminalFile(os.Stderr))
+	persistentLogs, logErr := newTaskLogMirror(filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "logs", ".log"))
+	if logErr != nil {
+		fmt.Fprintln(os.Stderr, logErr)
+		return app.ExitConfig
+	}
+	logger.sink = persistentLogs
 	defer logger.Close()
 	runner := execx.OSRunner{}
 	monitorBroker := web.NewBroker()
@@ -309,12 +326,18 @@ func runServer(args []string) int {
 		logRoot = strings.TrimSpace(mirror.rootDir)
 	}
 
+	repairQueue := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "issue-repairs")}, claims: issueClaims, logRoot: logRoot, logf: daemonLogger, runner: runner, policy: cfg.IssueRecovery.Defaults()}
+	var wakeIssueRecovery func()
+	var verifyIssueOwnership func(context.Context, config.Config) error
 	var queueFailureRerun func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string)
 	var queueFailureFollowUp func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string)
 	var queueUnexpectedNoChangesFollowUp func(requestID string, result app.Result, runCfg config.Config)
 	var queueEscalatedNoChangesFollowUp func(requestID string, result app.Result, runCfg config.Config)
 	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error)
 	enqueueLocalRun = func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error) {
+		if err := persistentLogs.Error(); err != nil {
+			return "", fmt.Errorf("task log storage unavailable: %w", err)
+		}
 		if err := signingSubmissionGate(reqCtx, cfg, runner); err != nil {
 			return "", err
 		}
@@ -350,7 +373,24 @@ func runServer(args []string) int {
 			source = localSubmitSource
 		}
 
+		repairWork, _ := reqCtx.Value(issueRepairContextKey{}).(*issueRepairWork)
+		issueWork, existingRequest, err := prepareIssueExecution(issueClaims, runCfg, activeCfg.IssueRecovery)
+		if err != nil {
+			return "", err
+		}
+		if existingRequest != "" {
+			return existingRequest, nil
+		}
+		dispatched := false
+		defer func() {
+			if issueWork != nil && !dispatched {
+				issueWork.lock.Close()
+			}
+		}()
 		dedupeKey := dedupeKeyForSubmission(runCfg, source)
+		if issueWork != nil {
+			dedupeKey = ""
+		}
 		if force {
 			dedupeKey = ""
 		}
@@ -383,6 +423,12 @@ func runServer(args []string) int {
 			time.Now().UTC().Unix(),
 			atomic.AddUint64(&localTaskSeq, 1),
 		)
+		if issueWork != nil {
+			requestID = issueWork.record.RequestID
+		}
+		if repairWork != nil {
+			requestID = repairWork.record.RequestID
+		}
 		if dedupeKey != "" {
 			if accepted, state, duplicateOf := localSubmitDeduper.Begin(dedupeKey, requestID, allowCompletedDuplicate); !accepted {
 				daemonLogger(
@@ -412,13 +458,37 @@ func runServer(args []string) int {
 			taskHandle *localTaskHandle,
 		) {
 			finalState := ""
+			defer cancelRun(nil)
+			defer localTaskController.Complete(requestID)
+			var issueResult app.Result
+			if repairWork != nil {
+				runCtx = context.WithValue(runCtx, issueRepairContextKey{}, repairWork)
+				defer func() { repairWork.finish(finalState, issueResult) }()
+				if err := repairWork.start(); err != nil {
+					finalState = "error"
+					issueResult.Err = err
+					return
+				}
+			}
+			if issueWork != nil {
+				defer func() {
+					if err := persistentLogs.Sync(); err != nil {
+						issueResult.Err = errors.Join(issueResult.Err, fmt.Errorf("persist task logs: %w", err))
+					}
+					if err := issueWork.finish(runCtx, finalState, issueResult); err != nil {
+						daemonLogger("event=issue_finish status=error request_id=%s err=%q", requestID, err)
+					}
+					if wakeIssueRecovery != nil {
+						wakeIssueRecovery()
+					}
+				}()
+				runCtx = context.WithValue(runCtx, issueExecutionContextKey{}, issueWork)
+			}
 			if dedupeKey != "" {
 				defer func() {
 					localSubmitDeduper.Done(dedupeKey, requestID, dedupeFinalStateForSubmission(source, finalState))
 				}()
 			}
-			defer cancelRun(nil)
-			defer localTaskController.Complete(requestID)
 
 			for {
 				if taskHandle != nil {
@@ -435,6 +505,7 @@ func runServer(args []string) int {
 								ExitCode: app.ExitPreflight,
 								Err:      fmt.Errorf("task wait: %w", waitErr),
 							}
+							issueResult = failedResult
 							if allowFailureFollowUp {
 								if queueFailureRerun != nil {
 									queueFailureRerun(requestID, failedResult, runCfg, source)
@@ -489,6 +560,7 @@ func runServer(args []string) int {
 							ExitCode: app.ExitConfig,
 							Err:      fmt.Errorf("task signing: %w", signingErr),
 						}
+						issueResult = failedResult
 						if allowFailureFollowUp {
 							if queueFailureRerun != nil {
 								queueFailureRerun(requestID, failedResult, runCfg, source)
@@ -521,6 +593,7 @@ func runServer(args []string) int {
 							ExitCode: app.ExitPreflight,
 							Err:      fmt.Errorf("task acquire: %w", acquireErr),
 						}
+						issueResult = failedResult
 						if allowFailureFollowUp {
 							if queueFailureRerun != nil {
 								queueFailureRerun(requestID, failedResult, runCfg, source)
@@ -543,7 +616,27 @@ func runServer(args []string) int {
 				if startCfg, startCfgErr := effectiveRuntimeConfig(activeCfg); startCfgErr == nil {
 					finalReviewPasses = startCfg.ReviewWatch.ReviewCount()
 				}
-				outcome := runLocalTask(runCtx, runner, daemonLogger, "local", requestID, runCfg, finalReviewPasses, func() bool {
+				taskRunner := execx.Runner(runner)
+				if issueWork != nil {
+					if verifyIssueOwnership != nil {
+						if err := verifyIssueOwnership(runCtx, runCfg); err != nil {
+							release()
+							finalState = "error"
+							issueResult.Err = err
+							return
+						}
+					}
+					taskRunner = localruntime.IssueRunner{Runner: runner, Lock: issueWork.lock, Store: issueWork.store, RecordID: issueWork.record.ID, Check: func(checkCtx context.Context) error {
+						if verifyIssueOwnership != nil {
+							return verifyIssueOwnership(checkCtx, runCfg)
+						}
+						return nil
+					}}
+				}
+				if repairWork != nil {
+					taskRunner = localruntime.IssueRunner{Runner: runner, Lock: repairWork.lock}
+				}
+				outcome := runLocalTask(runCtx, taskRunner, daemonLogger, "local", requestID, runCfg, finalReviewPasses, func() bool {
 					if taskHandle == nil {
 						return false
 					}
@@ -554,6 +647,7 @@ func runServer(args []string) int {
 				}
 				release()
 
+				issueResult = outcome.Result
 				finalState = outcome.State
 				switch outcome.State {
 				case "error":
@@ -584,7 +678,7 @@ func runServer(args []string) int {
 						)
 					} else {
 					}
-					if source != noChangesFollowUpSource && source != noChangesEscalationSource && queueUnexpectedNoChangesFollowUp != nil {
+					if source != issueRepairSource && source != noChangesFollowUpSource && source != noChangesEscalationSource && queueUnexpectedNoChangesFollowUp != nil {
 						queueUnexpectedNoChangesFollowUp(requestID, outcome.Result, runCfg)
 					}
 					if queueEscalatedNoChangesFollowUp != nil {
@@ -594,11 +688,14 @@ func runServer(args []string) int {
 					}
 				case "completed":
 				}
-				cleanupTaskWorkspaceOnCompletion(requestID, outcome.Result, daemonLogger)
+				if issueWork == nil && repairWork == nil {
+					cleanupTaskWorkspaceOnCompletion(requestID, outcome.Result, daemonLogger)
+				}
 				return
 			}
 		}(requestID, runCfg, activeCfg, dedupeKey, source, allowFailureFollowUp, runCtx, cancelRun, taskHandle)
 
+		dispatched = true
 		return requestID, nil
 	}
 	queueFailureRerun = func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string) {
@@ -630,6 +727,9 @@ func runServer(args []string) int {
 		)
 	}
 	queueFailureFollowUp = func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string) {
+		if failedRunCfg.GitHubIssue != nil && failedRunCfg.GitHubIssue.Claim != nil {
+			return
+		}
 		if ok, reason := shouldQueueFailureFollowUp(source, failedResult); !ok {
 			daemonLogger(
 				"task status=warn action=skip_failure_followup request_id=%s err=%q",
@@ -664,6 +764,9 @@ func runServer(args []string) int {
 		)
 	}
 	queueUnexpectedNoChangesFollowUp = func(requestID string, result app.Result, runCfg config.Config) {
+		if runCfg.GitHubIssue != nil && runCfg.GitHubIssue.Claim != nil {
+			return
+		}
 		logPaths := existingPaths(followUpTaskLogPaths(logRoot, requestID))
 		if ok, reason := shouldQueueUnexpectedNoChangesFollowUpWithLogs(result, runCfg, logPaths); !ok {
 			daemonLogger(
@@ -736,6 +839,7 @@ func runServer(args []string) int {
 		)
 	}
 
+	go repairQueue.run(ctx, enqueueLocalRun)
 	var reviewWatcher *githubreview.Watcher
 	if strings.TrimSpace(*uiListen) != "" {
 		uiServer := web.NewServer(*uiListen, monitorBroker)
@@ -744,7 +848,27 @@ func runServer(args []string) int {
 		uiServer.AutomaticMode = *uiAutomatic
 		uiServer.ConfiguredHarness = cfg.AgentHarness
 		uiServer.GitHubIssueRunner = runner
-		uiServer.IssueClaims = &localruntime.IssueClaimStore{Root: filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "issue-claims")}
+		uiServer.IssueClaims = issueClaims
+		uiServer.IssueRecovery = &cfg.IssueRecovery
+		uiServer.IssueRepair = repairQueue.capture
+		uiServer.IssueRepairs = repairQueue.store
+		uiServer.IssueReady = func(checkCtx context.Context) error {
+			if err := signingSubmissionGate(checkCtx, cfg, runner); err != nil {
+				return err
+			}
+			if authGate != nil {
+				state, err := authGate.Status(checkCtx)
+				if err != nil {
+					return err
+				}
+				if state.Required && !state.Ready {
+					return fmt.Errorf("agent auth required: %s", state.Message)
+				}
+			}
+			return nil
+		}
+		wakeIssueRecovery = uiServer.WakeIssueRecovery
+		verifyIssueOwnership = uiServer.ValidateIssueOwnership
 		uiServer.Logf = daemonLogger
 		uiServer.LoadLibraryTasks = func() ([]library.TaskSummary, error) {
 			var catalog library.Catalog
@@ -761,6 +885,15 @@ func runServer(args []string) int {
 			return library.OrderSummariesByUsage(catalog.Summaries(), usage), nil
 		}
 		cleanupTaskLogs := func(_ context.Context, requestID string) error {
+			records, err := issueClaims.List()
+			if err != nil {
+				return err
+			}
+			for _, record := range records {
+				if record.RequestID == requestID && record.State != "fulfilled" {
+					return fmt.Errorf("unresolved issue evidence is retained; resolve or explicitly abandon the issue before deleting it")
+				}
+			}
 			var errs []error
 
 			logDir, ok := taskLogDir(logRoot, requestID)
@@ -873,6 +1006,11 @@ func runServer(args []string) int {
 		uiServer.CloseTask = cleanupTaskLogs
 		uiServer.ResolveTaskControls = localTaskController.Controls
 		uiServer.PauseTask = func(_ context.Context, requestID string) error {
+			if localTaskController.Controls(requestID).Pause {
+				if err := persistIssueControl(issueClaims, requestID, "paused"); err != nil {
+					return err
+				}
+			}
 			if err := localTaskController.Pause(requestID); err != nil {
 				return err
 			}
@@ -880,6 +1018,11 @@ func runServer(args []string) int {
 			return nil
 		}
 		uiServer.RunTask = func(_ context.Context, requestID string) error {
+			if localTaskController.Controls(requestID).Run {
+				if err := persistIssueControl(issueClaims, requestID, ""); err != nil {
+					return err
+				}
+			}
 			if err := localTaskController.Run(requestID); err != nil {
 				return err
 			}
@@ -887,6 +1030,11 @@ func runServer(args []string) int {
 			return nil
 		}
 		uiServer.ForceRunTask = func(_ context.Context, requestID string) error {
+			if localTaskController.Controls(requestID).ForceRun {
+				if err := persistIssueControl(issueClaims, requestID, ""); err != nil {
+					return err
+				}
+			}
 			if err := localTaskController.ForceRun(requestID); err != nil {
 				return err
 			}
@@ -894,6 +1042,11 @@ func runServer(args []string) int {
 			return nil
 		}
 		uiServer.StopTask = func(_ context.Context, requestID string) error {
+			if localTaskController.Controls(requestID).Stop {
+				if err := persistIssueControl(issueClaims, requestID, "stopped"); err != nil {
+					return err
+				}
+			}
 			canonical, err := localTaskController.StopWithCanonical(requestID)
 			if err != nil {
 				return err
@@ -1344,12 +1497,29 @@ func runLocalTask(
 	h := app.New(runner)
 	h.FinalReviewPasses = finalReviewPasses
 	h.Signing = signingSnapshot
+	if repairWork, ok := ctx.Value(issueRepairContextKey{}).(*issueRepairWork); ok {
+		repairCtx, cancel := context.WithCancelCause(ctx)
+		watchdog := localruntime.NewStepWatchdog(time.Duration(repairWork.queue.policy.Defaults().StepTimeoutSeconds)*time.Second, cancel)
+		ctx = repairCtx
+		defer func() { watchdog.Close(); cancel(nil) }()
+		h.OnStep = func(step string) { watchdog.Advance(step) }
+		h.Workspace.Root = filepath.Join(filepath.Dir(repairWork.queue.claims.Root), "repair-workspaces")
+		h.Workspace.NewGUID = func() string { return repairWork.record.ID }
+	}
+	if issueWork, ok := ctx.Value(issueExecutionContextKey{}).(*issueExecution); ok {
+		var finish func()
+		ctx, finish = issueWork.configure(ctx, &h)
+		defer finish()
+	}
 	h.Logf = func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)
 		logf("task request_id=%s %s", requestID, line)
 	}
 
 	res := h.Run(ctx, runCfg)
+	if res.Err != nil && context.Cause(ctx) != nil {
+		res.Err = errors.Join(res.Err, context.Cause(ctx))
+	}
 	if res.Err != nil {
 		if wasStopped != nil && wasStopped() {
 			stopErr := context.Cause(ctx)

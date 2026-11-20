@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Command describes a subprocess execution.
@@ -23,6 +24,11 @@ type Command struct {
 	InheritedFiles []*os.File
 	// Stdin is optional input piped to the command's stdin.
 	Stdin string
+	// Started persists process identity before execution is acknowledged. A
+	// failure terminates the process group. Exited runs after Wait completes.
+	Started     func(int) error
+	Exited      func(int)
+	StartFailed func()
 }
 
 // Result is subprocess output.
@@ -62,6 +68,7 @@ func runWithStream(ctx context.Context, cmd Command, handler StreamLineHandler) 
 		ctx = context.Background()
 	}
 	c := exec.CommandContext(ctx, cmd.Name, cmd.Args...)
+	c.WaitDelay = 5 * time.Second
 	c.ExtraFiles = cmd.InheritedFiles
 	configureCommandProcessGroup(c)
 	if cmd.Dir != "" {
@@ -84,7 +91,17 @@ func runWithStream(ctx context.Context, cmd Command, handler StreamLineHandler) 
 	c.Stderr = io.MultiWriter(&stderr, &stderrEmitter)
 
 	err := c.Start()
+	if err != nil && cmd.StartFailed != nil {
+		cmd.StartFailed()
+	}
 	if err == nil {
+		var startErr error
+		if cmd.Started != nil {
+			startErr = cmd.Started(c.Process.Pid)
+			if startErr != nil {
+				terminateCommandProcessGroup(c)
+			}
+		}
 		// Start initializes c.Process. A cancellation watcher must not read it
 		// while Start is still writing it, or survive after this run returns.
 		done := make(chan struct{})
@@ -100,6 +117,12 @@ func runWithStream(ctx context.Context, cmd Command, handler StreamLineHandler) 
 		err = c.Wait()
 		close(done)
 		<-watcherDone
+		if cmd.Exited != nil {
+			cmd.Exited(c.Process.Pid)
+		}
+		if startErr != nil {
+			err = startErr
+		}
 	}
 	stdoutEmitter.Flush()
 	stderrEmitter.Flush()

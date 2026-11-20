@@ -1,0 +1,396 @@
+package web
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
+)
+
+type recoveryGitHub struct {
+	*automationGitHub
+	prs             string
+	deleteError     bool
+	deletes         int
+	loseTagResponse bool
+}
+
+func (f *recoveryGitHub) Run(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+	args := strings.Join(cmd.Args, " ")
+	if strings.Contains(args, "/pulls?") {
+		return execx.Result{Stdout: f.prs}, nil
+	}
+	if strings.Contains(args, "--method DELETE") {
+		f.deletes++
+		if f.deleteError {
+			return execx.Result{}, errors.New("temporary label removal failure")
+		}
+		labels := []GitHubIssueLabel{}
+		for _, label := range f.issue.Labels {
+			if label.Name != localruntime.DefaultGitHubIssueExclusionLabel {
+				labels = append(labels, label)
+			}
+		}
+		f.issue.Labels = labels
+		return execx.Result{Stdout: `[]`}, nil
+	}
+	if strings.Contains(args, "/git/ref/heads/") && len(f.submissions) == 0 {
+		return execx.Result{Stdout: `{"object":{"sha":"base"}}`}, nil
+	}
+	res, err := f.automationGitHub.Run(ctx, cmd)
+	if err == nil && f.loseTagResponse && strings.Contains(args, "--method POST") && strings.Contains(args, "/git/refs") {
+		return execx.Result{}, errors.New("lost tag response")
+	}
+	return res, err
+}
+func recoveryServer(t *testing.T) (Server, *recoveryGitHub) {
+	t.Helper()
+	f := &recoveryGitHub{automationGitHub: newAutomationGitHub(), prs: `[]`}
+	s := automationServer(t, f.automationGitHub)
+	s.GitHubIssueRunner = f
+	s.IssueRecovery = &localruntime.IssueRecoveryConfig{}
+	return s, f
+}
+func latestRecoveryRecord(t *testing.T, s Server) localruntime.IssueClaimRecord {
+	t.Helper()
+	records, err := s.IssueClaims.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) == 0 {
+		t.Fatal("no durable records")
+	}
+	latest := records[0]
+	for _, record := range records {
+		if record.Run.GitHubIssue.Claim.Attempt > latest.Run.GitHubIssue.Claim.Attempt {
+			latest = record
+		}
+	}
+	return latest
+}
+func completeRecoveryRecord(t *testing.T, s Server, outcome string, attempts int) localruntime.IssueClaimRecord {
+	t.Helper()
+	record := latestRecoveryRecord(t, s)
+	record.Outcome = outcome
+	record.State = "verifying"
+	record.AgentAttempts = attempts
+	record.StoppedAt = time.Now()
+	record.UnlockPending = true
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	return record
+}
+func recoveryPR(state, merged, head, base string) string {
+	return `[{"number":42,"state":"` + state + `","merged_at":` + merged + `,"head":{"ref":"` + head + `","repo":{"full_name":"acme/repo"}},"base":{"ref":"` + base + `","repo":{"full_name":"acme/repo"}}}]`
+}
+
+func TestIssueRecoveryUnlocksOnlyAfterWorkerExit(t *testing.T) {
+	t.Parallel()
+	for _, outcome := range []string{"completed", "error", "no_changes", "stopped", "warn"} {
+		t.Run(outcome, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			s.pollGitHubIssueAutoStart(context.Background())
+			record := completeRecoveryRecord(t, s, outcome, 1)
+			lock, err := s.IssueClaims.TryLock(localruntime.IssueExecutionKey(record.Run.GitHubIssue))
+			if err != nil || lock == nil {
+				t.Fatal(err)
+			}
+			if err := s.ReconcileIssueWork(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if f.deletes != 0 {
+				t.Fatal("unlocked while worker was alive")
+			}
+			lock.Close()
+			if err := s.ReconcileIssueWork(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			got := latestRecoveryRecord(t, s)
+			if f.deletes != 1 || got.UnlockPending || got.LabelAdded {
+				t.Fatalf("unlock failed: %+v deletes=%d", got, f.deletes)
+			}
+			if got.State == "fulfilled" {
+				t.Fatal("missing PR counted as success")
+			}
+			if !f.branch || len(f.refs) != 1 {
+				t.Fatal("unlock destroyed branch or ownership")
+			}
+			if outcome == "stopped" || outcome == "no_changes" {
+				if got.State != "blocked" {
+					t.Fatalf("state=%s", got.State)
+				}
+			}
+		})
+	}
+}
+
+func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, state, merged, head, base string
+		fulfilled                       bool
+	}{
+		{"open draft allowed", "open", "null", "agent00-issue-17", "main", true},
+		{"merged", "closed", `"2026-01-01T00:00:00Z"`, "agent00-issue-17", "main", true},
+		{"closed unmerged", "closed", "null", "agent00-issue-17", "main", false},
+		{"wrong head", "open", "null", "other", "main", false},
+		{"wrong base", "open", "null", "agent00-issue-17", "other", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			s.pollGitHubIssueAutoStart(context.Background())
+			completeRecoveryRecord(t, s, "error", 1)
+			f.prs = recoveryPR(tc.state, tc.merged, tc.head, tc.base)
+			if err := s.ReconcileIssueWork(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			got := latestRecoveryRecord(t, s)
+			if (got.State == "fulfilled") != tc.fulfilled {
+				t.Fatalf("state=%s", got.State)
+			}
+			if tc.fulfilled && got.PRURL != "https://github.com/acme/repo/pull/42" {
+				t.Fatal("missing verified PR")
+			}
+		})
+	}
+}
+
+func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(context.Background())
+	record := completeRecoveryRecord(t, s, "error", 1)
+	f.deleteError = true
+	if err := s.ReconcileIssueWork(context.Background()); err == nil {
+		t.Fatal("unlock failure hidden")
+	}
+	if !latestRecoveryRecord(t, s).UnlockPending {
+		t.Fatal("lost pending unlock")
+	}
+	restarted := NewServer("", NewBroker())
+	restarted.IssueClaims = s.IssueClaims
+	restarted.IssueRecovery = s.IssueRecovery
+	restarted.GitHubIssueRunner = f
+	restarted.SubmitLocalPrompt = f.submit
+	restarted.ReviewSettingsStatus = s.ReviewSettingsStatus
+	if restarted.instanceID() != s.instanceID() {
+		t.Fatal("instance identity changed on restart")
+	}
+	f.deleteError = false
+	if err := restarted.ReconcileIssueWork(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.NextAttemptAt = time.Now().Add(-time.Second)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ReconcileIssueWork(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := latestRecoveryRecord(t, s)
+	if len(f.submissions) != 2 || got.AgentAttempts != 1 || got.Run.GitHubIssue.Claim.Attempt != 2 {
+		t.Fatalf("retry lost lineage: %+v submissions=%d", got, len(f.submissions))
+	}
+}
+
+func TestIssueRecoveryBudgetStopAndNoChangeDoNotRerun(t *testing.T) {
+	t.Parallel()
+	for _, outcome := range []string{"error", "stopped", "no_changes"} {
+		t.Run(outcome, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			s.pollGitHubIssueAutoStart(context.Background())
+			completeRecoveryRecord(t, s, outcome, 3)
+			for range 2 {
+				if err := s.ReconcileIssueWork(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(f.submissions) != 1 || latestRecoveryRecord(t, s).State != "blocked" {
+				t.Fatal("blocked issue reran")
+			}
+		})
+	}
+}
+
+func TestIssueRecoveryHandlesAmbiguousReservationAndFastCompletion(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	f.ambiguous = true
+	f.loseTagResponse = true
+	s.SubmitLocalPrompt = func(ctx context.Context, body []byte) (string, error) {
+		id, err := f.submit(ctx, body)
+		if err != nil {
+			return "", err
+		}
+		record := latestRecoveryRecord(t, s)
+		record.State = "verifying"
+		record.Outcome = "no_changes"
+		record.StoppedAt = time.Now()
+		return id, s.IssueClaims.Save(record)
+	}
+	s.pollGitHubIssueAutoStart(context.Background())
+	got := latestRecoveryRecord(t, s)
+	if len(f.submissions) != 1 || got.Outcome != "no_changes" || got.Phase != "submitted" {
+		t.Fatalf("ambiguous mutation or fast receipt failed: %+v", got)
+	}
+	if strings.Index(strings.Join(f.trace, "\n"), "/git/refs") > strings.Index(strings.Join(f.trace, "\n"), "createLinkedBranch") {
+		t.Fatal("branch reserved before ownership metadata")
+	}
+}
+
+func TestIssueRecoveryCapturesAdmissionBeforeGitHubFails(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	f.fail = "issue view"
+	s.pollGitHubIssueAutoStart(context.Background())
+	record := latestRecoveryRecord(t, s)
+	if record.Version != 2 || record.Incident != "admission" || len(f.submissions) != 0 {
+		t.Fatalf("admission failure lost: %+v", record)
+	}
+	f.fail = ""
+	if err := s.ReconcileIssueWork(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.submissions) != 1 {
+		t.Fatal("observed issue not recovered")
+	}
+}
+
+func TestIssueRecoveryCorruptionAndStatusDoNotHideHealthyClaims(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(context.Background())
+	completeRecoveryRecord(t, s, "error", 1)
+	if err := os.WriteFile(filepath.Join(s.IssueClaims.Root, strings.Repeat("f", 32)+".json"), []byte("broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.prs = recoveryPR("open", "null", "agent00-issue-17", "main")
+	if err := s.ReconcileIssueWork(context.Background()); err == nil {
+		t.Fatal("corrupt record not reported")
+	}
+	response := httptest.NewRecorder()
+	s.handleIssueAutomationStatus(response, httptest.NewRequest("GET", "/", nil))
+	var body struct {
+		Claims []struct {
+			Phase string
+			PRURL string `json:"prUrl"`
+		}
+		Status struct{ Error string }
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Claims) != 1 || body.Claims[0].Phase != "fulfilled" || body.Status.Error == "" {
+		t.Fatalf("status=%s", response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "Customer task") {
+		t.Fatal("status leaked prompt")
+	}
+}
+
+func TestIssueRecoveryIndependentInstancesAndStaleOwnership(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	other := automationServer(t, f.automationGitHub)
+	other.GitHubIssueRunner = f
+	other.IssueRecovery = &localruntime.IssueRecoveryConfig{}
+	results := make(chan error, 2)
+	initialIssue := f.issue
+	for _, server := range []Server{s, other} {
+		go func(s Server) {
+			settings, _ := s.ReviewSettingsStatus(context.Background())
+			run := issueRunConfig(GitHubRepo{FullName: "acme/repo", DefaultBranch: "main"}, initialIssue, "reference")
+			_, err := s.claimAndSubmitIssue(context.Background(), run, settings, "octocat", f.submit)
+			results <- err
+		}(server)
+	}
+	successes := 0
+	for range 2 {
+		if <-results == nil {
+			successes++
+		}
+	}
+	if successes != 1 || len(f.submissions) != 1 {
+		t.Fatalf("duplicate admission: successes=%d submissions=%d", successes, len(f.submissions))
+	}
+	for _, server := range []Server{s, other} {
+		record := latestRecoveryRecord(t, server)
+		err := server.ValidateIssueOwnership(context.Background(), record.Run)
+		if record.ID == f.submissions[0].GitHubIssue.Claim.ID {
+			if err != nil {
+				t.Fatal(err)
+			}
+		} else if err == nil {
+			t.Fatal("stale owner allowed publication")
+		}
+	}
+}
+
+func TestIssueRecoveryRateHeadersAndPaginationCheckpoint(t *testing.T) {
+	t.Parallel()
+	body, err := issueAPIResponse("HTTP/2.0 429 Too Many Requests\r\nRetry-After: 600\r\n\r\n{\"message\":\"slow down\"}\n", errors.New("rate limited"))
+	var limit *issueRateLimitError
+	if !errors.As(err, &limit) || time.Until(limit.RetryAt) < 9*time.Minute || !strings.HasPrefix(body, "{") {
+		t.Fatalf("rate response=%s %v", body, err)
+	}
+	s, _ := recoveryServer(t)
+	if _, err := s.IssueClaims.ScanPage("acme/repo", 12); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+	if page, err := restarted.ScanPage("acme/repo", 0); err != nil || page != 12 {
+		t.Fatalf("checkpoint=%d %v", page, err)
+	}
+}
+
+func TestIssueRecoveryDeliveredIssueDoesNotBecomeScanError(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(context.Background())
+	completeRecoveryRecord(t, s, "completed", 1)
+	f.prs = recoveryPR("open", "null", "agent00-issue-17", "main")
+	s.pollGitHubIssueAutoStart(context.Background())
+	s.pollGitHubIssueAutoStart(context.Background())
+	if len(f.submissions) != 1 || s.issueAutomation.status.Error != "" || latestRecoveryRecord(t, s).State != "fulfilled" {
+		t.Fatalf("delivered issue treated as failed admission: %+v", s.issueAutomation.status)
+	}
+}
+
+func TestIssueRecoveryKeepsPausedAndUncertainWorkersBlocked(t *testing.T) {
+	t.Parallel()
+	for _, scenario := range []string{"paused", "uncertain"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			s.pollGitHubIssueAutoStart(context.Background())
+			record := latestRecoveryRecord(t, s)
+			if scenario == "paused" {
+				record.Control = "paused"
+			} else {
+				record.ProcessUncertain = true
+			}
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.ReconcileIssueWork(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(f.submissions) != 1 {
+				t.Fatal("paused or uncertain worker restarted")
+			}
+			if scenario == "uncertain" && f.deletes != 0 {
+				t.Fatal("uncertain worker unlocked")
+			}
+		})
+	}
+}

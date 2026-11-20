@@ -41,6 +41,9 @@ var osExecutable = os.Executable
 
 // Manager creates isolated run directories.
 type Manager struct {
+	// Root pins durable issue workspaces to persistent storage without changing
+	// process-wide workspace environment variables.
+	Root       string
 	PathExists func(string) bool
 	MkdirAll   func(string, os.FileMode) error
 	NewGUID    func() string
@@ -442,6 +445,9 @@ func findPathUpward(startDir, relPath string) (string, bool) {
 }
 
 func (m Manager) rootCandidates() []string {
+	if m.Root != "" {
+		return []string{m.Root}
+	}
 	preferredBase := m.SelectBase()
 	fallbackBase := configuredDiskBase()
 	if preferredBase == fallbackBase {
