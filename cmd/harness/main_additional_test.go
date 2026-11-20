@@ -422,7 +422,7 @@ func TestFailureFollowUpPromptDefaultWhenNoPaths(t *testing.T) {
 		t.Fatalf("prompt missing default log path hint: %q", got)
 	}
 
-	if !strings.Contains(got, "When failures occur, send a response back to the calling agent that clearly states failure and includes the error details. Use explicit `Failure:` and `Error details:` fields.") {
+	if !strings.Contains(got, "When the current run ends with an unresolved failure, send a response back to the calling agent using explicit `Failure:` and `Error details:` fields. Describe earlier failures fixed during the run under `Resolved issue:`.") {
 		t.Fatalf("prompt missing failure response instruction: %q", got)
 	}
 	if !strings.Contains(got, "If a repository is not initialized after clone, use only gh CLI/git tools to create and push a main branch, then continue once git state is ready for work.") {

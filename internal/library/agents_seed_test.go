@@ -34,6 +34,8 @@ func TestAgentsSeedSharesRuntimeToolingAndSafety(t *testing.T) {
 		"`railsmith` is available",
 		"railsmith doctor --root .",
 		"`Failure:` and `Error details:`",
+		"When the current run ends with an unresolved failure",
+		"Describe earlier failures fixed during the run under `Resolved issue:`.",
 		"`gh repo view OWNER/REPO --json isPrivate,nameWithOwner`",
 		"retry the connection attempt a few times",
 		"concrete repository evidence",
