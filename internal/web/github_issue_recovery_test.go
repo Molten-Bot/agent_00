@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -91,6 +92,44 @@ func completeRecoveryRecord(t *testing.T, s Server, outcome string, attempts int
 }
 func recoveryPR(state, merged, head, base string) string {
 	return `[{"number":42,"state":"` + state + `","merged_at":` + merged + `,"head":{"ref":"` + head + `","repo":{"full_name":"acme/repo"}},"base":{"ref":"` + base + `","repo":{"full_name":"acme/repo"}}}]`
+}
+
+func TestIssueRecoveryRetryAfterDurableBranchReservationFailure(t *testing.T) {
+	t.Parallel()
+	for _, scenario := range []string{"matching intent", "different owner", "previously reserved"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			f.fail = "query=mutation"
+			s.pollGitHubIssueAutoStart(context.Background())
+			record := latestRecoveryRecord(t, s)
+			if !record.RemoteRecorded || record.BranchReserved || f.branch || len(f.submissions) != 0 {
+				t.Fatalf("expected ownership without branch: %+v", record)
+			}
+			f.fail = ""
+			switch scenario {
+			case "different owner":
+				record.InstanceID = "another-instance"
+			case "previously reserved":
+				record.BranchReserved = true
+			}
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			response := retryIssue(t, s, record.ID, true)
+			if scenario != "matching intent" {
+				if response.Code != http.StatusConflict || f.branch || len(f.submissions) != 0 {
+					t.Fatalf("unsafe recovery: %d %s", response.Code, response.Body.String())
+				}
+				return
+			}
+			if response.Code != http.StatusAccepted || !f.branch || len(f.submissions) != 1 {
+				t.Fatalf("recovery: %d %s", response.Code, response.Body.String())
+			}
+			if claim := f.submissions[0].GitHubIssue.Claim; claim.Attempt != 2 || claim.ID == record.ID {
+				t.Fatalf("expected new serialized attempt: %+v", claim)
+			}
+		})
+	}
 }
 
 func TestIssueRecoveryScanReportsFiltersForTrackedIssues(t *testing.T) {
