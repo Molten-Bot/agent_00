@@ -2657,12 +2657,7 @@ func (h Harness) createPullRequestURL(
 					existingPRURL,
 				)
 				if h.OnPRTitle != nil {
-					titleRes, titleErr := h.runCommand(ctx, "pr", ghCommand(repo.Dir, "pr", "view", existingPRURL, "--json", "title", "--jq", ".title"))
-					if titleErr != nil {
-						h.logf("stage=pr status=warn action=lookup_existing reason=title_lookup_failed pr_url=%s err=%q", existingPRURL, titleErr)
-					} else if title := strings.TrimSpace(titleRes.Stdout); title != "" {
-						h.OnPRTitle(existingPRURL, title)
-					}
+					h.reportRecoveredPRTitle(ctx, repo.Dir, existingPRURL)
 				}
 				return existingPRURL, nil
 			}
@@ -2730,6 +2725,27 @@ func (h Harness) createPullRequestURL(
 			h.OnPRTitle(prURL, cfg.PRTitle)
 		}
 		return prURL, nil
+	}
+}
+
+func (h Harness) reportRecoveredPRTitle(ctx context.Context, repoDir, prURL string) {
+	cmd := ghCommand(repoDir, "pr", "view", prURL, "--json", "title", "--jq", ".title")
+	for attempt := 1; ; attempt++ {
+		res, err := h.runCommand(ctx, "pr", cmd)
+		if err == nil {
+			if title := strings.TrimSpace(res.Stdout); title != "" {
+				h.OnPRTitle(prURL, title)
+			}
+			return
+		}
+		if ctx.Err() == nil && attempt < maxPRCreateAttempts && shouldRetryPRCreate(res, err) {
+			err = h.Sleep(ctx, prCreateRetryDelay)
+			if err == nil {
+				continue
+			}
+		}
+		h.logf("stage=pr status=warn action=lookup_existing reason=title_lookup_failed pr_url=%s err=%q", prURL, err)
+		return
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/config"
@@ -809,7 +810,7 @@ func TestH1CovCreatePullRequestURL(t *testing.T) {
 		}
 	})
 
-	t.Run("title lookup failure keeps recovered PR", func(t *testing.T) {
+	t.Run("exhausted title lookup retries keep recovered PR", func(t *testing.T) {
 		t.Parallel()
 		cfg := sampleConfig()
 		repo := repoWorkspace{Dir: "/repo", URL: cfg.RepoURL, Branch: "agent00-topic", BaseBranch: "main"}
@@ -820,12 +821,15 @@ func TestH1CovCreatePullRequestURL(t *testing.T) {
 				res: execx.Result{Stderr: "pull request already exists: " + prURL},
 				err: errors.New("exit status 1"),
 			},
-			{
+		}}
+		for range maxPRCreateAttempts {
+			fake.exps = append(fake.exps, expectedRun{
 				cmd: ghCommand(repo.Dir, "pr", "view", prURL, "--json", "title", "--jq", ".title"),
 				err: errors.New("HTTP 504"),
-			},
-		}}
+			})
+		}
 		h := New(fake)
+		h.Sleep = func(context.Context, time.Duration) error { return nil }
 		h.OnPRTitle = func(url, title string) {
 			t.Errorf("OnPRTitle(%q, %q) called after title lookup failed", url, title)
 		}

@@ -128,21 +128,34 @@ test('running tasks omit the status icon and always expose their original prompt
   assert.equal(await page.locator('#task-prompt-modal-body').textContent(), originalPrompt);
 });
 
-test('task card and merge result link to the tracked pull request', async t => {
+test('task card links to the titled pull request while merge result links to the tracked pull request', async t => {
   const trackedURL = 'https://github.com/example/project/pull/10';
+  const titledURL = 'https://github.com/example/other-project/pull/20';
+  const untitledURL = 'https://github.com/example/project/pull/30';
   const now = new Date().toISOString();
   const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, [{
     request_id: 'multi-repo', prompt: 'Original prompt', repo: 'example/project',
     status: 'merged', started_at: now, updated_at: now,
-    pr_url: trackedURL, pr_title_url: 'https://github.com/example/other-project/pull/20',
+    pr_url: trackedURL, pr_title_url: titledURL,
+    pr_title: 'Improve repository navigation',
+  }, {
+    request_id: 'untitled-pr', prompt: 'Untitled PR prompt', repo: 'example/project',
+    status: 'completed', started_at: now, updated_at: now, pr_url: untitledURL,
+  }, {
+    request_id: 'running-pr', prompt: 'Running PR prompt', repo: 'example/project',
+    status: 'running', started_at: now, updated_at: now, pr_title_url: titledURL,
     pr_title: 'Improve repository navigation',
   }]);
 
+  const runningTask = page.locator('#task-list .task[data-request-id="running-pr"]');
+  assert.equal(await runningTask.locator('a.task-progress-step[title^="GitHub:"]').getAttribute('href'), titledURL);
   await page.locator('#task-history-toggle').click();
   const task = page.locator('#task-list .task[data-request-id="multi-repo"]');
   await task.locator('.task-github-link').waitFor();
   assert.match(await task.locator('.task-id').textContent(), /Improve repository navigation/);
-  assert.equal(await task.locator('.task-github-link').getAttribute('href'), trackedURL);
+  assert.equal(await task.locator('.task-github-link').getAttribute('href'), titledURL);
+  const untitledTask = page.locator('#task-list .task[data-request-id="untitled-pr"]');
+  assert.equal(await untitledTask.locator('.task-github-link').getAttribute('href'), untitledURL);
 
   await task.locator('.task-output-toggle').click();
   const result = page.locator('#task-fullscreen-result');

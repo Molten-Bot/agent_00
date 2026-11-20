@@ -1464,7 +1464,7 @@
     }
 
     function renderTaskPullRequestAction(task) {
-      const prURL = taskPullRequestURL(task);
+      const prURL = taskCardPullRequestURL(task);
       if (!isCompletedTask(task) || !prURL) {
         return null;
       }
@@ -9572,7 +9572,7 @@
     }
 
     function taskGitHubLinkURL(task) {
-      const prURL = taskPullRequestURL(task);
+      const prURL = taskCardPullRequestURL(task);
       if (prURL) {
         return prURL;
       }
@@ -9586,6 +9586,10 @@
 
     function taskPullRequestURL(task) {
       return String(task?.pr_url || "").trim();
+    }
+
+    function taskCardPullRequestURL(task) {
+      return String(task?.pr_title_url || "").trim() || taskPullRequestURL(task);
     }
 
     function taskLiveAppURL(task) {
