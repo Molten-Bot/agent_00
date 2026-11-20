@@ -8580,6 +8580,34 @@ func TestCodexReportedFailureDetectsMarkdownReportHeaderBelowLeadIn(t *testing.T
 	}
 }
 
+func TestCodexReportedFailureDetectsBlockerBeforeResolvedIssues(t *testing.T) {
+	t.Parallel()
+
+	const blocker = "Failure: could not write the report."
+	const details = "Error details: report directory is read-only."
+	report := []string{
+		blocker,
+		details,
+		"Resolved issue: dependency installation succeeded on retry.",
+		"Resolved issue: focused tests passed after correcting the fixture.",
+		"Validation:",
+		"- Focused tests passed.",
+		"- Report contents were checked.",
+		"- Checked the destination directory.",
+		"- Retried writing the report.",
+		"- Confirmed the directory is read-only.",
+	}
+	res := execx.Result{Stdout: strings.Join(report, "\n")}
+	if failed, detail := codexReportedFailure(res); !failed || detail != blocker {
+		t.Fatalf("codexReportedFailure(blocked report) = (%v, %q), want (true, %q)", failed, detail, blocker)
+	}
+
+	res.Stdout = strings.Join(report[2:], "\n")
+	if failed, detail := codexReportedFailure(res); failed || detail != "" {
+		t.Fatalf("codexReportedFailure(resolved issues only) = (%v, %q), want (false, %q)", failed, detail, "")
+	}
+}
+
 func TestCodexReportedFailureIgnoresQuotedDiffFailureLine(t *testing.T) {
 	t.Parallel()
 
@@ -8895,7 +8923,7 @@ func TestWithCompletionGatePromptIncludesAgentRuntimeGuidance(t *testing.T) {
 		"Keep an existing required gate; do not remove it merely to make validation pass.",
 		"Treat non-empty product, bug, feature, or review text in it as the implementation target.",
 		"Do not answer that no implementation task was given when the agent input includes a requested repository change.",
-		"When the current run ends with an unresolved failure, send a response back to the calling agent using explicit `Failure:` and `Error details:` fields. Describe earlier failures fixed during the run under `Resolved issue:`.",
+		"When the current run ends with an unresolved failure, start the final response with explicit `Failure:` and `Error details:` fields on consecutive lines, in that order. Describe earlier failures fixed during the run under `Resolved issue:` after any blocker fields.",
 		"If local test or validation tooling is unavailable in this runtime (for example `command not found`, missing `node_modules`, a missing repository validation script or task, or restricted network access blocking dependency downloads), do not fail solely for that and do not use `Failure:` solely for that validation gap.",
 		"Before sharing repository or pull-request links in public activity, use `gh repo view OWNER/REPO --json isPrivate,nameWithOwner` during clone or PR tooling.",
 		"Share repo and PR links only when GitHub reports `isPrivate:false`; never share private repository links.",

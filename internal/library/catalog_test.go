@@ -156,6 +156,7 @@ func TestDefaultRepairTasksUseSharedFailureReporting(t *testing.T) {
 	for _, name := range []string{
 		"agents-md-guardrails",
 		"ci-build-lint-typecheck-hardening",
+		"contributor-history-ranking",
 		"dependency-vulnerability-remediation",
 		"e2e-smoke-test-creation",
 		"fix-merge-main",
@@ -167,7 +168,9 @@ func TestDefaultRepairTasksUseSharedFailureReporting(t *testing.T) {
 		"release-readiness-review",
 		"root-cause-bug-fix",
 		"secrets-pii-logging-removal",
+		"security-review",
 		"security-secrets",
+		"ui-ux-audit",
 		"unit-test-coverage",
 		"unused-code-asset-cleanup",
 		"website-seo-llm-discoverability",
