@@ -306,6 +306,7 @@ func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 	}
 	if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
 		r.NextAttemptAt = time.Now().Add(-time.Second)
+		r.PublicationReady = true
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -314,7 +315,7 @@ func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := latestRecoveryRecord(t, s)
-	if len(f.submissions) != 2 || got.AgentAttempts != 1 || got.Run.GitHubIssue.Claim.Attempt != 2 {
+	if len(f.submissions) != 2 || got.AgentAttempts != 1 || got.Run.GitHubIssue.Claim.Attempt != 2 || !got.PublicationReady {
 		t.Fatalf("retry lost lineage: %+v submissions=%d", got, len(f.submissions))
 	}
 }
@@ -335,6 +336,32 @@ func TestIssueRecoveryBudgetStopAndNoChangeDoNotRerun(t *testing.T) {
 				t.Fatal("blocked issue reran")
 			}
 		})
+	}
+}
+
+func TestIssueRecoverySkipsRepairForReportedUpstreamDependency(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(context.Background())
+	record := completeRecoveryRecord(t, s, "error", 3)
+	record.RunError = "codex: codex reported failure: Failure: Export incomplete. Error details: Export awaits #72 for schema approval."
+	record.Error = record.RunError
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	repairs := 0
+	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
+		repairs++
+		return "repair", nil
+	}
+	for range 2 {
+		if err := s.ReconcileIssueWork(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.State != "blocked" || got.FailureDetail() != record.RunError || repairs != 0 || len(f.submissions) != 1 {
+		t.Fatalf("state=%s repairs=%d submissions=%d failure=%q", got.State, repairs, len(f.submissions), got.FailureDetail())
 	}
 }
 

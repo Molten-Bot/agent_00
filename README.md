@@ -179,8 +179,8 @@ the previous worker on every instance. Automatic cross-machine failover is not
 performed. Restarting the owning instance recovers its durable dispatch intents.
 
 Background recovery verifies PR delivery before retrying, reuses preserved local
-changes and remote commits, and attempts publication before running another
-agent. It permits three agent attempts per failure cycle, with initial delays
+changes and remote commits, and resumes publication once the journal confirms
+agent success. It permits three agent attempts per failure cycle, with initial delays
 of one and five minutes plus jitter. Infrastructure checks back off up to an
 hour and honor GitHub retry/reset headers. Auth and signing gates do not consume
 agent attempts. Exhausted attempts, explicit stops/pauses, and no-change results
