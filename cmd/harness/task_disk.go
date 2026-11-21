@@ -34,17 +34,10 @@ func openLocalTaskDiskHistory(configPath string) (*localruntime.TaskDiskHistory,
 	return localruntime.OpenTaskDiskHistory(historyPath)
 }
 
-func fallbackTaskWorkspace(manager workspace.Manager, root string) string {
-	if manager.Root != "" || root == "" {
-		return ""
-	}
-	// DiskRoots always ends with the configured disk root for an unpinned manager.
+func canRetryTaskWorkspace(manager workspace.Manager) bool {
+	// Let admission check space on both roots when retrying allocation.
 	manager.CheckSpace = nil
-	roots := manager.DiskRoots()
-	if fallback := roots[len(roots)-1]; fallback != root {
-		return fallback
-	}
-	return ""
+	return len(manager.DiskRoots()) > 1
 }
 
 func (w *issueRepairWork) workspaceDir() string {

@@ -221,7 +221,11 @@ func TestAdaptiveSchedulerReportsWorkspaceSetupFailure(t *testing.T) {
 
 func TestAdaptiveSchedulerQueuesWhenWorkspaceRootIsOutOfSpace(t *testing.T) {
 	t.Parallel()
+	testAdaptiveSchedulerQueuesWhenWorkspaceRootIsOutOfSpace(t, syscall.ENOSPC)
+}
 
+func testAdaptiveSchedulerQueuesWhenWorkspaceRootIsOutOfSpace(t *testing.T, diskFull error) {
+	t.Helper()
 	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
 	controller.sample = staticSample{}
 	controller.diskSpace = func(string) (string, uint64, error) {
@@ -233,7 +237,7 @@ func TestAdaptiveSchedulerQueuesWhenWorkspaceRootIsOutOfSpace(t *testing.T) {
 		Root: root,
 		MkdirAll: func(path string, mode os.FileMode) error {
 			if full {
-				return &os.PathError{Op: "mkdir", Path: path, Err: syscall.ENOSPC}
+				return &os.PathError{Op: "mkdir", Path: path, Err: diskFull}
 			}
 			return os.MkdirAll(path, mode)
 		},
@@ -255,6 +259,66 @@ func TestAdaptiveSchedulerQueuesWhenWorkspaceRootIsOutOfSpace(t *testing.T) {
 	controller.sampleAndUpdate()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAdaptiveSchedulerDrainsReservationsForOlderDiskWaiter(t *testing.T) {
+	t.Parallel()
+
+	const unit = workspace.MinimumFreeBytes
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 4}, nil)
+	sameDevice, otherDevice := t.TempDir(), t.TempDir()
+	controller.diskSpace = func(path string) (string, uint64, error) {
+		if path == otherDevice {
+			return "other", 3 * unit, nil
+		}
+		return "shared", 3 * unit, nil
+	}
+
+	small := TaskDiskRequest{Workspace: workspace.Manager{Root: sameDevice}}
+	large := small
+	large.Workspace.Root = t.TempDir()
+	large.RequiredBytes = func() uint64 { return 3 * unit }
+	unrelated := TaskDiskRequest{Workspace: workspace.Manager{Root: otherDevice}}
+	running := &taskWaiter{disk: &small}
+	older := &taskWaiter{disk: &large}
+	controller.waiters = []*taskWaiter{running, older}
+	controller.tryGrantLocked(0)
+	if !running.granted || !older.diskBlocked {
+		t.Fatalf("running admitted = %v, older disk blocked = %v", running.granted, older.diskBlocked)
+	}
+
+	var younger []*taskWaiter
+	for range 3 {
+		waiter := &taskWaiter{disk: &small}
+		younger = append(younger, waiter)
+		controller.waiters = append(controller.waiters, waiter)
+		controller.tryGrantLocked(len(controller.waiters) - 1)
+		if waiter.granted || !waiter.diskBlocked {
+			t.Fatal("younger job was not queued behind the older job on shared storage")
+		}
+	}
+	other := &taskWaiter{disk: &unrelated}
+	controller.waiters = append(controller.waiters, other)
+	controller.tryGrantLocked(len(controller.waiters) - 1)
+	if !other.granted {
+		t.Fatal("job on unrelated storage was not admitted")
+	}
+
+	controller.releaseFunc(running)()
+	if !older.granted {
+		t.Fatal("older job was not admitted after the running reservation released")
+	}
+	for _, waiter := range younger {
+		if waiter.granted {
+			t.Fatal("younger job was admitted while the older job reserved shared storage")
+		}
+	}
+	controller.releaseFunc(older)()
+	for _, waiter := range younger {
+		if !waiter.granted {
+			t.Fatal("younger job was not admitted after the older job released shared storage")
+		}
 	}
 }
 

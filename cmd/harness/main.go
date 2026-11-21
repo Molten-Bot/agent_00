@@ -496,13 +496,13 @@ func runServer(args []string) int {
 
 			diskKey := localruntime.TaskDiskKey(runCfg.RepoList())
 			diskRequest := localTaskDiskRequest(runCtx, diskHistory, diskKey)
-			forceFallback := false
+			forceRetry := false
 			for {
 				if taskHandle != nil {
 					if waitErr := taskHandle.WaitUntilRunnable(runCtx); waitErr != nil {
-						if errors.Is(waitErr, errTaskStoppedByOperator) {
+						if taskHandle.IsStopped() {
 							finalState = "stopped"
-							daemonLogger("task status=stopped request_id=%s err=%q", requestID, waitErr)
+							daemonLogger("task status=stopped request_id=%s err=%q", requestID, errTaskStoppedByOperator)
 							return
 						}
 						finalState = "error"
@@ -527,7 +527,7 @@ func runServer(args []string) int {
 				}
 
 				settings := signingSettings(activeCfg, runner)
-				forceAcquire := forceFallback
+				forceAcquire := forceRetry
 				var workspaceRoot string
 				admission := prepareLocalTaskAdmission(
 					runCtx,
@@ -643,7 +643,7 @@ func runServer(args []string) int {
 				}
 				taskWorkspace := diskRequest.Workspace
 				taskWorkspace.Root = workspaceRoot
-				fallback := fallbackTaskWorkspace(diskRequest.Workspace, workspaceRoot)
+				canRetryWorkspace := diskRequest.RetryRoot == "" && canRetryTaskWorkspace(diskRequest.Workspace)
 				outcome := runLocalTask(runCtx, taskRunner, daemonLogger, "local", requestID, runCfg, finalReviewPasses, func() bool {
 					if taskHandle == nil {
 						return false
@@ -651,15 +651,15 @@ func runServer(args []string) int {
 					return taskHandle.IsStopped()
 				}, signingSnapshot, monitorBroker, taskWorkspace, func(runDir string) {
 					recordLocalTaskDiskUsage(diskHistory, diskKey, requestID, runDir, daemonLogger)
-				}, fallback != "")
+				}, canRetryWorkspace)
 				if taskHandle != nil {
 					taskHandle.SetRunning(false)
 				}
 				if outcome.State == "retry_workspace" {
 					release()
-					diskRequest.Workspace.Root = fallback
-					forceFallback = forceAcquire
-					daemonLogger("task status=warn action=retry_workspace_on_fallback request_id=%s err=%q", requestID, outcome.Result.Err)
+					diskRequest.RetryRoot = workspaceRoot
+					forceRetry = forceAcquire
+					daemonLogger("task status=warn action=retry_workspace_allocation request_id=%s err=%q", requestID, outcome.Result.Err)
 					continue
 				}
 
@@ -1063,12 +1063,8 @@ func runServer(args []string) int {
 					return err
 				}
 			}
-			canonical, err := localTaskController.StopWithCanonical(requestID)
-			if err != nil {
-				return err
-			}
-			daemonLogger("task status=stopped request_id=%s err=%q", stringsx.FirstNonEmpty(canonical, requestID), errTaskStoppedByOperator)
-			return nil
+			// The worker publishes terminal status after recording workspace usage.
+			return localTaskController.Stop(requestID)
 		}
 		go func() {
 			if err := uiServer.Run(ctx); err != nil {

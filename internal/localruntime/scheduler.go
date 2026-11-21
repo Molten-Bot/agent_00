@@ -44,16 +44,17 @@ type AdaptiveScheduler struct {
 }
 
 type taskWaiter struct {
-	id          uint64
-	requestID   string
-	granted     bool
-	err         error
-	notify      chan struct{}
-	disk        *TaskDiskRequest
-	root        string
-	device      string
-	diskBytes   uint64
-	diskBlocked bool
+	id           uint64
+	requestID    string
+	granted      bool
+	err          error
+	notify       chan struct{}
+	disk         *TaskDiskRequest
+	root         string
+	device       string
+	diskBytes    uint64
+	diskBlocked  bool
+	drainDevices []string
 }
 
 // TaskDiskRequest describes the storage needed for a task workspace.
@@ -61,6 +62,8 @@ type TaskDiskRequest struct {
 	Workspace     workspace.Manager
 	ExistingDir   string
 	RequiredBytes func() uint64
+	// RetryRoot is the root whose allocation failed. Try it after other roots.
+	RetryRoot string
 }
 
 type resourceSample struct {
@@ -89,13 +92,18 @@ type defaultResourceSampler struct {
 	diskZeroTotalSamples   int
 }
 
+// WithSchedulerDiskSpace supplies the scheduler's free-space sampler.
+func WithSchedulerDiskSpace(sample func(string) (string, uint64, error)) func(*AdaptiveScheduler) {
+	return func(c *AdaptiveScheduler) { c.diskSpace = sample }
+}
+
 // NewAdaptiveScheduler returns a queue-aware, adaptive scheduler.
-func NewAdaptiveScheduler(cfg SchedulerConfig, logf func(string, ...any)) *AdaptiveScheduler {
+func NewAdaptiveScheduler(cfg SchedulerConfig, logf func(string, ...any), options ...func(*AdaptiveScheduler)) *AdaptiveScheduler {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 	cfg = normalizeSchedulerConfig(cfg)
-	return &AdaptiveScheduler{
+	c := &AdaptiveScheduler{
 		cfg:       cfg,
 		logf:      logf,
 		sample:    &defaultResourceSampler{},
@@ -104,6 +112,10 @@ func NewAdaptiveScheduler(cfg SchedulerConfig, logf func(string, ...any)) *Adapt
 		allowed:   cfg.MaxParallel,
 		stopCh:    make(chan struct{}),
 	}
+	for _, option := range options {
+		option(c)
+	}
+	return c
 }
 
 // Start begins background sampling. Safe to call multiple times.
@@ -241,6 +253,9 @@ func (c *AdaptiveScheduler) acquire(ctx context.Context, requestID string, disk 
 				c.tryGrantLocked(0)
 			} else {
 				c.removeWaiterLocked(waiter.id)
+				if len(waiter.drainDevices) > 0 {
+					c.tryGrantLocked(0)
+				}
 			}
 			c.mu.Unlock()
 			return "", nil, ctx.Err()
@@ -283,7 +298,7 @@ func (c *AdaptiveScheduler) acquireForce(ctx context.Context, requestID string, 
 		c.mu.Unlock()
 		return "", nil, errSchedulerClosed
 	}
-	if _, err := c.reserveDiskLocked(waiter, true, make(map[string]diskSample)); err != nil {
+	if _, err := c.reserveDiskLocked(waiter, true, make(map[string]diskSample), nil); err != nil {
 		c.mu.Unlock()
 		return "", nil, err
 	}
@@ -326,14 +341,24 @@ func (c *AdaptiveScheduler) releaseLocked(waiter *taskWaiter) {
 }
 
 func (c *AdaptiveScheduler) tryGrantLocked(start int) {
+	if c.running >= c.allowed || start >= len(c.waiters) {
+		return
+	}
 	samples := make(map[string]diskSample)
-	// A disk-blocked task can wait while smaller tasks or tasks on another
-	// filesystem use otherwise idle slots.
+	draining := make(map[string]struct{})
+	for _, older := range c.waiters[:start] {
+		for _, device := range older.drainDevices {
+			draining[device] = struct{}{}
+		}
+	}
 	for i := start; c.running < c.allowed && i < len(c.waiters); {
 		waiter := c.waiters[i]
-		granted, err := c.reserveDiskLocked(waiter, false, samples)
+		granted, err := c.reserveDiskLocked(waiter, false, samples, draining)
 		if !granted && err == nil {
 			waiter.diskBlocked = true
+			for _, device := range waiter.drainDevices {
+				draining[device] = struct{}{}
+			}
 			i++
 			continue
 		}

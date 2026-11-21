@@ -1712,12 +1712,15 @@ func TestOpenLocalTaskDiskHistoryPreservesRuntimeConfig(t *testing.T) {
 func TestRunLocalTaskRecordsDiskUsageBeforeTerminalLog(t *testing.T) {
 	for _, checkoutSucceeds := range []bool{false, true} {
 		t.Run(fmt.Sprintf("checkout_succeeds=%t", checkoutSucceeds), func(t *testing.T) {
-			testRunLocalTaskDiskUsageBeforeTerminalLog(t, checkoutSucceeds)
+			testRunLocalTaskDiskUsageBeforeTerminalLog(t, checkoutSucceeds, false)
 		})
 	}
+	t.Run("stopped_after_checkout", func(t *testing.T) {
+		testRunLocalTaskDiskUsageBeforeTerminalLog(t, true, true)
+	})
 }
 
-func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds bool) {
+func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds, stop bool) {
 	t.Helper()
 	taskWorkspace := workspace.Manager{Root: t.TempDir()}
 	t.Setenv("CODEX_HOME", t.TempDir())
@@ -1749,6 +1752,14 @@ func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds b
 		return execx.Result{}, nil
 	})
 	broker := web.NewBroker()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	controller := newLocalTaskController()
+	handle := controller.Register("req-disk", cancel)
+	wantState := "error"
+	if stop {
+		wantState = "stopped"
+	}
 	var sawStageError, sawTerminalError bool
 	stage := "clone"
 	if checkoutSucceeds {
@@ -1759,11 +1770,16 @@ func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds b
 		broker.IngestLog(line)
 		if strings.HasPrefix(line, "task request_id=req-disk stage="+stage+" status=error") {
 			sawStageError = true
+			if stop {
+				if err := controller.Stop("req-disk"); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := broker.CloseTask("req-disk"); !errors.Is(err, web.ErrTaskNotCompleted) {
 				t.Errorf("close at stage error = %v, want task to remain active", err)
 			}
 		}
-		if !strings.HasPrefix(line, "task status=error request_id=req-disk ") {
+		if !strings.HasPrefix(line, "task status="+wantState+" request_id=req-disk ") {
 			return
 		}
 		sawTerminalError = true
@@ -1782,11 +1798,11 @@ func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds b
 			t.Errorf("close at terminal error: %v", err)
 		}
 	}
-	outcome := runLocalTask(context.Background(), runner, logf, "local", "req-disk", cfg, 0, nil, nil, broker, taskWorkspace, func(runDir string) {
+	outcome := runLocalTask(ctx, runner, logf, "local", "req-disk", cfg, 0, handle.IsStopped, nil, broker, taskWorkspace, func(runDir string) {
 		recordLocalTaskDiskUsage(history, key, "req-disk", runDir, logf)
 	}, false)
-	if outcome.State != "error" {
-		t.Fatalf("outcome = %+v, want error", outcome)
+	if outcome.State != wantState {
+		t.Fatalf("outcome = %+v, want %s", outcome, wantState)
 	}
 	if !checkoutSucceeds && !errors.Is(outcome.Result.Err, cloneErr) {
 		t.Fatalf("outcome = %+v, want clone failure", outcome)
@@ -1797,17 +1813,28 @@ func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds b
 }
 
 func TestRunLocalTaskRetriesRunDirectoryCreationOnFallback(t *testing.T) {
+	t.Run("fallback_available", func(t *testing.T) {
+		testRunLocalTaskRetriesRunDirectoryCreation(t, false)
+	})
+	t.Run("preferred_recovers", func(t *testing.T) {
+		testRunLocalTaskRetriesRunDirectoryCreation(t, true)
+	})
+}
+
+func testRunLocalTaskRetriesRunDirectoryCreation(t *testing.T, fallbackFull bool) {
+	t.Helper()
 	ram, disk := t.TempDir(), t.TempDir()
 	t.Setenv("HARNESS_WORKSPACE_RAM_BASE", ram)
 	t.Setenv("HARNESS_WORKSPACE_DISK_BASE", disk)
 	t.Setenv("HARNESS_WORKSPACE_ROOT_NAME", "workspaces")
 	t.Setenv("CODEX_HOME", t.TempDir())
 	ramRoot, diskRoot := filepath.Join(ram, "workspaces"), filepath.Join(disk, "workspaces")
+	failAllocation := true
 	manager := workspace.Manager{
 		PathExists: func(string) bool { return true },
 		CanExec:    func(string) bool { return true },
 		MkdirAll: func(path string, mode os.FileMode) error {
-			if filepath.Dir(path) == ramRoot {
+			if failAllocation && filepath.Dir(path) == ramRoot {
 				return &os.PathError{Op: "mkdir", Path: path, Err: syscall.ENOSPC}
 			}
 			return os.MkdirAll(path, mode)
@@ -1824,30 +1851,51 @@ func TestRunLocalTaskRetriesRunDirectoryCreationOnFallback(t *testing.T) {
 	logf := func(format string, args ...any) { broker.IngestLog(fmt.Sprintf(format, args...)) }
 	taskWorkspace := manager
 	taskWorkspace.Root = ramRoot
-	fallback := fallbackTaskWorkspace(manager, ramRoot)
-	outcome := runLocalTask(context.Background(), runner, logf, "local", "req-fallback", cfg, 0, nil, nil, broker, taskWorkspace, nil, fallback != "")
-	if outcome.State != "retry_workspace" || !errors.Is(outcome.Result.Err, syscall.ENOSPC) || fallback != diskRoot {
-		t.Fatalf("outcome = %+v, fallback = %q, want retry on %q", outcome, fallback, diskRoot)
+	outcome := runLocalTask(context.Background(), runner, logf, "local", "req-fallback", cfg, 0, nil, nil, broker, taskWorkspace, nil, canRetryTaskWorkspace(manager))
+	if outcome.State != "retry_workspace" || !errors.Is(outcome.Result.Err, syscall.ENOSPC) {
+		t.Fatalf("outcome = %+v, want retry after ENOSPC", outcome)
 	}
 	if err := broker.CloseTask("req-fallback"); !errors.Is(err, web.ErrTaskNotCompleted) {
 		t.Fatalf("close after failed allocation = %v, want task to remain active", err)
 	}
-	if got := fallbackTaskWorkspace(taskWorkspace, ramRoot); got != "" {
-		t.Fatalf("pinned workspace fallback = %q, want none", got)
+	if canRetryTaskWorkspace(taskWorkspace) {
+		t.Fatal("pinned workspace should not retry on another root")
 	}
 
-	controller := localruntime.NewAdaptiveScheduler(localruntime.SchedulerConfig{MaxParallel: 1}, logf)
-	taskWorkspace.Root = fallback
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	failAllocation = false
+	preferredSamples := 0
+	controller := localruntime.NewAdaptiveScheduler(localruntime.SchedulerConfig{MaxParallel: 1, SampleIntervalMS: 250}, logf,
+		localruntime.WithSchedulerDiskSpace(func(path string) (string, uint64, error) {
+			if fallbackFull {
+				if path == diskRoot {
+					return path, 0, nil
+				}
+				preferredSamples++
+				if preferredSamples == 1 {
+					return path, 0, nil
+				}
+			}
+			return path, workspace.MinimumFreeBytes, nil
+		}),
+	)
+	wantRoot := diskRoot
+	if fallbackFull {
+		wantRoot = ramRoot
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	root, release, err := controller.AcquireWorkspace(ctx, "req-fallback", localruntime.TaskDiskRequest{Workspace: taskWorkspace}, false)
-	if err != nil || root != diskRoot {
-		t.Fatalf("fallback admission = %q, %v, want %q", root, err, diskRoot)
+	if fallbackFull {
+		controller.Start(ctx)
+	}
+	root, release, err := controller.AcquireWorkspace(ctx, "req-fallback", localruntime.TaskDiskRequest{Workspace: manager, RetryRoot: ramRoot}, false)
+	if err != nil || root != wantRoot {
+		t.Fatalf("retry admission = %q, %v, want %q", root, err, wantRoot)
 	}
 	defer release()
+	taskWorkspace.Root = root
 	outcome = runLocalTask(ctx, runner, logf, "local", "req-fallback", cfg, 0, nil, nil, broker, taskWorkspace, nil, false)
-	if filepath.Dir(outcome.Result.WorkspaceDir) != diskRoot {
-		t.Fatalf("retry workspace = %q, want directory under %q", outcome.Result.WorkspaceDir, diskRoot)
+	if filepath.Dir(outcome.Result.WorkspaceDir) != wantRoot {
+		t.Fatalf("retry workspace = %q, want directory under %q", outcome.Result.WorkspaceDir, wantRoot)
 	}
 }
 

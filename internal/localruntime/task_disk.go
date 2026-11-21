@@ -9,10 +9,10 @@ import (
 	"math/big"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
@@ -109,7 +109,7 @@ type diskSample struct {
 	err    error
 }
 
-func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, samples map[string]diskSample) (bool, error) {
+func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, samples map[string]diskSample, draining map[string]struct{}) (bool, error) {
 	if waiter.disk == nil {
 		return true, nil
 	}
@@ -126,10 +126,17 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		// when capacity is too low for this task to start.
 		manager.CheckSpace = nil
 	}
-	for _, root := range manager.DiskRoots() {
+	roots := manager.DiskRoots()
+	if i := slices.Index(roots, waiter.disk.RetryRoot); i >= 0 && i < len(roots)-1 {
+		failed := roots[i]
+		copy(roots[i:], roots[i+1:])
+		roots[len(roots)-1] = failed
+	}
+	waiter.drainDevices = waiter.drainDevices[:0]
+	for _, root := range roots {
 		manager.Root = root
 		if err := manager.PrepareRoots(); err != nil {
-			if !force && errors.Is(err, syscall.ENOSPC) {
+			if !force && isWorkspaceDiskFull(err) {
 				blocked = true
 			} else {
 				setupErr = err
@@ -152,7 +159,12 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		// Reserve each running task's full allowance. Free space may already
 		// reflect some of its writes, so this is deliberately conservative.
 		device, available := sample.device, sample.free
-		if reserved := c.reserved[device]; reserved != nil {
+		if _, olderWaiting := draining[device]; olderWaiting {
+			blocked = true
+			continue
+		}
+		reserved := c.reserved[device]
+		if reserved != nil {
 			if reserved.IsUint64() {
 				available -= min(available, reserved.Uint64())
 			} else {
@@ -162,6 +174,12 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		fits := available >= max(workspace.MinimumFreeBytes, required)
 		if !fits && !force {
 			blocked = true
+			// Let running jobs drain on this filesystem before admitting
+			// younger jobs there. A shortage on an idle filesystem still
+			// permits smaller jobs to use its available space.
+			if reserved != nil {
+				waiter.drainDevices = append(waiter.drainDevices, device)
+			}
 			continue
 		}
 		if fits {
