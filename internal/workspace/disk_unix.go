@@ -13,11 +13,19 @@ func diskSpace(path string) (string, uint64, error) {
 	if err := syscall.Statfs(path, &stat); err != nil {
 		return "", 0, err
 	}
-	var info syscall.Stat_t
-	if err := syscall.Stat(path, &info); err != nil {
+	pool, err := diskPoolID(path, uint32(stat.Type))
+	if err != nil {
 		return "", 0, err
 	}
-	return strconv.FormatUint(uint64(info.Dev), 10), stat.Bavail * uint64(stat.Bsize), nil
+	return pool, stat.Bavail * uint64(stat.Bsize), nil
+}
+
+func diskDeviceID(path string) (string, error) {
+	var info syscall.Stat_t
+	if err := syscall.Stat(path, &info); err != nil {
+		return "", err
+	}
+	return strconv.FormatUint(uint64(info.Dev), 10), nil
 }
 
 func fileDiskBytes(info os.FileInfo) (uint64, diskFileID) {

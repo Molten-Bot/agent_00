@@ -101,6 +101,44 @@ func TestTaskDiskHistoryFlushRetriesFailedWrite(t *testing.T) {
 	}
 }
 
+func TestTaskDiskHistoryPreservesMaximaAfterFailedLoad(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "disk-history.json")
+	invalid := []byte(`{"first":256,"second":"invalid"}`)
+	if err := os.WriteFile(path, invalid, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	history, err := OpenTaskDiskHistory(path)
+	if err == nil {
+		t.Fatal("invalid history loaded successfully")
+	}
+	for key, size := range map[string]uint64{"first": 128, "third": 512} {
+		if err := history.Record(key, size); err == nil {
+			t.Fatal("record succeeded while history could not be loaded")
+		}
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != string(invalid) {
+		t.Fatalf("unreadable history changed: %q, %v", got, err)
+	}
+	if err := os.WriteFile(path, []byte(`{"first":256,"second":64}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := history.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]uint64{"first": 256, "second": 64, "third": 512} {
+		if got := reopened.RequiredBytes(key); got != want {
+			t.Errorf("required bytes for %q = %d, want %d", key, got, want)
+		}
+	}
+}
+
 func TestAdaptiveSchedulerReservesSpacePerFilesystem(t *testing.T) {
 	t.Parallel()
 
@@ -357,16 +395,29 @@ func TestAdaptiveSchedulerDrainsWorkspacesForOlderDiskWaiter(t *testing.T) {
 	t.Parallel()
 
 	const unit = workspace.MinimumFreeBytes
-	for _, cleanup := range []bool{true, false} {
-		t.Run("cleanup="+strconv.FormatBool(cleanup), func(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		cleanup     bool
+		usage       uint64
+		reservation uint64
+		required    uint64
+	}{
+		{name: "within reservation", cleanup: true, usage: unit, reservation: unit, required: 4 * unit},
+		{name: "over reservation", cleanup: true, usage: 2 * unit, reservation: unit, required: 4 * unit},
+		{name: "without reserved bytes", cleanup: true, usage: 2 * unit, required: 4 * unit},
+		{name: "oversized after cleanup", cleanup: true, usage: 2 * unit, reservation: unit, required: 5 * unit},
+		{name: "no cleanup", usage: unit, reservation: unit, required: 4 * unit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 3}, nil)
-			free := uint64(3 * unit)
+			free := uint64(4 * unit)
 			controller.diskSpace = func(string) (string, uint64, error) {
 				return "shared", free, nil
 			}
 			small := TaskDiskRequest{Workspace: workspace.Manager{Root: t.TempDir()}}
 			active := small
-			active.CleanupOnCompletion = cleanup
+			active.CleanupOnCompletion = tc.cleanup
+			active.RequiredBytes = func() uint64 { return tc.reservation }
 			running := &taskWaiter{disk: &active}
 			controller.waiters = []*taskWaiter{running}
 			controller.tryGrantLocked(0)
@@ -374,10 +425,9 @@ func TestAdaptiveSchedulerDrainsWorkspacesForOlderDiskWaiter(t *testing.T) {
 				t.Fatal("initial task was not admitted")
 			}
 
-			// A running workspace has written one unit of its allowance.
-			free = 2 * unit
+			free -= tc.usage
 			large := small
-			large.RequiredBytes = func() uint64 { return 3 * unit }
+			large.RequiredBytes = func() uint64 { return tc.required }
 			older := &taskWaiter{disk: &large}
 			controller.waiters = []*taskWaiter{older}
 			controller.tryGrantLocked(0)
@@ -387,16 +437,19 @@ func TestAdaptiveSchedulerDrainsWorkspacesForOlderDiskWaiter(t *testing.T) {
 			younger := &taskWaiter{disk: &small}
 			controller.waiters = append(controller.waiters, younger)
 			controller.tryGrantLocked(1)
-			if younger.granted == cleanup {
-				t.Fatalf("younger admitted = %v with active workspace cleanup = %v", younger.granted, cleanup)
+			if younger.granted == tc.cleanup {
+				t.Fatalf("younger admitted = %v with active workspace cleanup = %v", younger.granted, tc.cleanup)
 			}
 
-			if cleanup {
-				free = 3 * unit
+			if tc.cleanup {
+				free += tc.usage
 			}
 			controller.releaseFunc(running)()
-			if older.granted != cleanup {
-				t.Fatalf("older admitted = %v after active workspace cleanup = %v", older.granted, cleanup)
+			if older.granted != (free >= tc.required) {
+				t.Fatalf("older admitted = %v after release with %d bytes free, requires %d", older.granted, free, tc.required)
+			}
+			if !older.granted && !younger.granted {
+				t.Fatal("younger job stayed queued after the draining workspace released")
 			}
 		})
 	}

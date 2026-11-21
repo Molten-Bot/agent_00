@@ -335,14 +335,14 @@ func (c *AdaptiveScheduler) releaseFunc(waiter *taskWaiter) func() {
 
 func (c *AdaptiveScheduler) releaseLocked(waiter *taskWaiter) {
 	c.running--
-	if waiter.diskBytes > 0 {
+	if waiter.disk != nil && (waiter.diskBytes > 0 || waiter.disk.CleanupOnCompletion) {
 		reservation := c.reserved[waiter.device]
 		bytes := new(big.Int).SetUint64(waiter.diskBytes)
 		reservation.total.Sub(&reservation.total, bytes)
 		if waiter.disk.CleanupOnCompletion {
-			reservation.reclaimable.Sub(&reservation.reclaimable, bytes)
+			reservation.cleanupWorkspaces--
 		}
-		if reservation.total.Sign() == 0 {
+		if reservation.total.Sign() == 0 && reservation.cleanupWorkspaces == 0 {
 			delete(c.reserved, waiter.device)
 		}
 	}

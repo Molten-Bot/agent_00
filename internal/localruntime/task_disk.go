@@ -21,10 +21,11 @@ import (
 // TaskDiskHistory stores the largest completed workspace for each repository
 // list. The keys contain no repository URLs, prompts, or workspace paths.
 type TaskDiskHistory struct {
-	path  string
-	mu    sync.Mutex
-	max   map[string]uint64
-	dirty bool
+	path      string
+	mu        sync.Mutex
+	max       map[string]uint64
+	dirty     bool
+	needsLoad bool
 }
 
 func OpenTaskDiskHistory(path string) (*TaskDiskHistory, error) {
@@ -32,22 +33,28 @@ func OpenTaskDiskHistory(path string) (*TaskDiskHistory, error) {
 	if path == "" {
 		return history, nil
 	}
+	maxima, err := readTaskDiskMaxima(path)
+	history.needsLoad = err != nil
+	if maxima != nil {
+		history.max = maxima
+	}
+	return history, err
+}
+
+func readTaskDiskMaxima(path string) (map[string]uint64, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return history, nil
+		return nil, nil
 	}
 	if err != nil {
-		return history, err
+		return nil, err
 	}
 
 	var maxima map[string]uint64
 	if err := json.Unmarshal(data, &maxima); err != nil {
-		return history, fmt.Errorf("decode task disk history: %w", err)
+		return nil, fmt.Errorf("decode task disk history: %w", err)
 	}
-	if maxima != nil {
-		history.max = maxima
-	}
-	return history, nil
+	return maxima, nil
 }
 
 // TaskDiskKey identifies the repositories checked out by a task, independent
@@ -103,6 +110,29 @@ func (h *TaskDiskHistory) flushLocked() error {
 	if h.path == "" || !h.dirty {
 		return nil
 	}
+	if h.needsLoad {
+		// Preserve the sidecar and keep measurements pending until the old
+		// maxima can be read and merged.
+		maxima, err := readTaskDiskMaxima(h.path)
+		if err != nil {
+			return fmt.Errorf("reload task disk history before saving: %w", err)
+		}
+		if maxima == nil {
+			maxima = make(map[string]uint64)
+		}
+		h.dirty = false
+		for key, size := range h.max {
+			if size > maxima[key] {
+				maxima[key] = size
+				h.dirty = true
+			}
+		}
+		h.max = maxima
+		h.needsLoad = false
+		if !h.dirty {
+			return nil
+		}
+	}
 
 	data, err := json.Marshal(h.max)
 	if err == nil {
@@ -122,8 +152,8 @@ type diskSample struct {
 }
 
 type diskReservation struct {
-	total       big.Int
-	reclaimable big.Int
+	total             big.Int
+	cleanupWorkspaces int
 }
 
 func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, samples map[string]diskSample, draining map[string]struct{}) (bool, error) {
@@ -195,10 +225,9 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		fits := available >= minimum
 		if !fits && !force {
 			blocked = true
-			// Cleanup can restore space already consumed by active workspaces.
-			// Use their reserved sizes as estimates for draining only.
-			if sample.free >= minimum || (reservation != nil &&
-				reservation.reclaimable.Cmp(new(big.Int).SetUint64(minimum-sample.free)) >= 0) {
+			// Active workspaces may have written past their reservations.
+			// Drain until cleanup reveals how much space the pool can recover.
+			if sample.free >= minimum || (reservation != nil && reservation.cleanupWorkspaces > 0) {
 				waiter.drainDevices = append(waiter.drainDevices, device)
 			}
 			continue
@@ -223,7 +252,7 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 
 func (c *AdaptiveScheduler) setDiskReservation(waiter *taskWaiter, root, device string, size uint64) {
 	waiter.root, waiter.device, waiter.diskBytes = root, device, size
-	if size > 0 {
+	if size > 0 || waiter.disk.CleanupOnCompletion {
 		reservation := c.reserved[device]
 		if reservation == nil {
 			reservation = &diskReservation{}
@@ -232,7 +261,7 @@ func (c *AdaptiveScheduler) setDiskReservation(waiter *taskWaiter, root, device 
 		bytes := new(big.Int).SetUint64(size)
 		reservation.total.Add(&reservation.total, bytes)
 		if waiter.disk.CleanupOnCompletion {
-			reservation.reclaimable.Add(&reservation.reclaimable, bytes)
+			reservation.cleanupWorkspaces++
 		}
 	}
 }
