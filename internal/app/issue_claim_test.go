@@ -3,11 +3,14 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
@@ -141,42 +144,92 @@ func TestClaimedIssuePreservesExistingCheckout(t *testing.T) {
 	}
 }
 
-func TestClaimedIssuePublishesPendingWorkBeforeAgentRerun(t *testing.T) {
+func TestClaimedIssueResumesOnlyAcceptedPublication(t *testing.T) {
 	t.Parallel()
-	cfg := sampleConfig()
-	cfg.GitHubIssue = &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17", Claim: &config.GitHubIssueClaim{ID: "claim", Branch: "agent00-issue-17", BaseBranch: "main", ExclusionLabel: "claimed", Attempt: 2}}
-	publishing, agentStarted := false, false
-	runner := issueBranchRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
-		args := strings.Join(cmd.Args, " ")
-		if cmd.Name == "codex" && !strings.Contains(args, "--help") {
-			agentStarted = true
-			return execx.Result{}, errors.New("unexpected agent rerun")
-		}
-		if cmd.Name == "git" {
-			switch {
-			case strings.Contains(args, "ls-remote --symref"):
-				return execx.Result{Stdout: "ref: refs/heads/main\tHEAD\nbase\tHEAD\n"}, nil
-			case strings.Contains(args, "branch --show-current"):
-				return execx.Result{Stdout: "agent00-issue-17\n"}, nil
-			case strings.Contains(args, "ls-remote --heads origin agent00-issue-17"):
-				return execx.Result{Stdout: "existing\trefs/heads/agent00-issue-17\n"}, nil
-			case strings.Contains(args, "status --porcelain"):
-				return execx.Result{Stdout: "## agent00-issue-17\n M app.go\n"}, nil
-			case strings.Contains(args, "merge --ff-only"):
-				t.Error("fast-forward attempted with pending work")
-			case strings.Contains(args, "add -A"):
-				publishing = true
-				return execx.Result{}, errors.New("stop at publication")
+	for _, tc := range []struct {
+		name            string
+		ready           bool
+		agentFails      bool
+		wantPublish     bool
+		wantExit        int
+		wantCheckpoints []bool
+	}{
+		{name: "accepted work resumes publication", ready: true, wantPublish: true, wantExit: ExitGit},
+		{name: "failed agent leaves partial work unpublished", agentFails: true, wantExit: ExitCodex, wantCheckpoints: []bool{false}},
+		{name: "successful retry makes work publishable", wantPublish: true, wantExit: ExitGit, wantCheckpoints: []bool{false, true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := sampleConfig()
+			cfg.GitHubIssue = &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17", Claim: &config.GitHubIssueClaim{ID: "claim", Branch: "agent00-issue-17", BaseBranch: "main", ExclusionLabel: "claimed", Attempt: 2}}
+			publishing, agentStarted := false, false
+			runner := issueBranchRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+				args := strings.Join(cmd.Args, " ")
+				if cmd.Name == "codex" && !strings.Contains(args, "--help") {
+					agentStarted = true
+					if tc.agentFails {
+						return execx.Result{Stdout: "Failure: Export incomplete.\nError details: Export waits for an upstream approval."}, nil
+					}
+					return execx.Result{}, nil
+				}
+				if cmd.Name == "git" {
+					switch {
+					case strings.Contains(args, "ls-remote --symref"):
+						return execx.Result{Stdout: "ref: refs/heads/main\tHEAD\nbase\tHEAD\n"}, nil
+					case strings.Contains(args, "branch --show-current"):
+						return execx.Result{Stdout: "agent00-issue-17\n"}, nil
+					case strings.Contains(args, "ls-remote --heads origin agent00-issue-17"):
+						return execx.Result{Stdout: "existing\trefs/heads/agent00-issue-17\n"}, nil
+					case strings.Contains(args, "status --porcelain"):
+						return execx.Result{Stdout: "## agent00-issue-17\n M app.go\n"}, nil
+					case strings.Contains(args, "add -A"):
+						publishing = true
+						return execx.Result{}, errors.New("stop at publication")
+					}
+				}
+				return execx.Result{}, nil
+			})
+			h := New(runner)
+			h.ResumeIssueWorkspace = true
+			h.IssuePublicationReady = tc.ready
+			var checkpoints []bool
+			h.SaveIssuePublicationReady = func(ready bool) error {
+				checkpoints = append(checkpoints, ready)
+				return nil
 			}
-		}
-		return execx.Result{}, nil
-	})
-	h := New(runner)
-	h.ResumeIssueWorkspace = true
-	h.Workspace = testWorkspaceManager("issue-publication-resume")
-	h.TargetDirOK = func(string) bool { return true }
-	result := h.Run(context.Background(), cfg)
-	if !publishing || agentStarted || result.ExitCode != ExitGit {
-		t.Fatalf("pending work not published first: publishing=%t agent=%t result=%+v", publishing, agentStarted, result)
+			h.Workspace = testWorkspaceManager("issue-publication-resume")
+			h.TargetDirOK = func(string) bool { return true }
+			result := h.Run(context.Background(), cfg)
+			if publishing != tc.wantPublish || agentStarted == tc.ready || result.ExitCode != tc.wantExit {
+				t.Fatalf("publishing=%t agent=%t result=%+v", publishing, agentStarted, result)
+			}
+			if !slices.Equal(checkpoints, tc.wantCheckpoints) {
+				t.Fatalf("publication checkpoints=%v, want %v", checkpoints, tc.wantCheckpoints)
+			}
+		})
+	}
+}
+
+func TestIssueConflictAgentRestoresPublicationReadiness(t *testing.T) {
+	t.Parallel()
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprint(failed), func(t *testing.T) {
+			h := New(issueBranchRunner(func(context.Context, execx.Command) (execx.Result, error) {
+				if failed {
+					return execx.Result{Stdout: "Failure: Conflicts remain.\nError details: Unable to resolve the merge."}, nil
+				}
+				return execx.Result{Stdout: "Resolved merge conflicts."}, nil
+			}))
+			var checkpoints []bool
+			h.SaveIssuePublicationReady = func(ready bool) error { checkpoints = append(checkpoints, ready); return nil }
+			runtime := agentruntime.Default()
+			_, err := h.runCodexCapture(context.Background(), runtime, t.TempDir(), "Resolve conflicts", codexRunOptions{}, "", "off", newAgentInvocationLogMetadata(runtime, "base_sync_conflict", 1, "repo", "repo", "."))
+			want := []bool{false, true}
+			if failed {
+				want = []bool{false}
+			}
+			if (err != nil) != failed || !slices.Equal(checkpoints, want) {
+				t.Fatalf("err=%v checkpoints=%v want=%v", err, checkpoints, want)
+			}
+		})
 	}
 }

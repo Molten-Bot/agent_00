@@ -47,8 +47,7 @@ func TestIssueExecutionIdempotenceAndTerminalReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.UnlockPending || got.StoppedAt.IsZero() || got.Outcome != "error" || got.ExitCode != app.ExitGit ||
-		got.Error != "push failed" || got.WorkspaceDir == "" {
+	if !got.UnlockPending || got.StoppedAt.IsZero() || got.Outcome != "error" || got.FailureDetail() != "push failed" || got.ExitCode != app.ExitGit || got.WorkspaceDir == "" {
 		t.Fatalf("lost terminal evidence: %+v", got)
 	}
 	if work2, duplicate, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{}); err != nil || work2 != nil || duplicate != record.RequestID {
@@ -121,7 +120,7 @@ func TestIssueRepairOutboxDeduplicatesAndRetainsFailures(t *testing.T) {
 	q := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: filepath.Join(t.TempDir(), "repairs")}, claims: store, logRoot: t.TempDir(), logf: func(string, ...any) {}}
 	record.Step = "pr"
 	record.Incident = "missing_pr"
-	record.ExitCode = app.ExitPR
+	record.ExitCode = 0
 	record.Error = "internal invariant failed"
 	id, err := q.capture(context.Background(), record)
 	if err != nil {
@@ -131,8 +130,9 @@ func TestIssueRepairOutboxDeduplicatesAndRetainsFailures(t *testing.T) {
 	if err != nil || again != id {
 		t.Fatal("identical incident not deduplicated")
 	}
-	record.Error = "different invariant failed"
-	record.ExitCode = 0 // Older records did not persist an exit code.
+	record.RunError = "different invariant failed"
+	record.ExitCode = app.ExitCodex
+	record.Error = "agent retry budget exhausted"
 	other, err := q.capture(context.Background(), record)
 	if err != nil || other == id {
 		t.Fatal("unrelated incident suppressed")
@@ -150,12 +150,17 @@ func TestIssueRepairOutboxDeduplicatesAndRetainsFailures(t *testing.T) {
 		if repair.State != "queued" || !repair.NextAttemptAt.After(time.Now()) {
 			t.Fatal("failed enqueue was lost")
 		}
-		if repair.RequestID == id {
-			if !strings.Contains(repair.Run.Prompt, "- exit_code=70\n") {
-				t.Fatal("repair prompt lost the harness exit code")
+		switch repair.RequestID {
+		case id:
+			if strings.Contains(repair.Run.Prompt, "exit_code=") {
+				t.Fatal("legacy repair context reported an invented exit code")
 			}
-		} else if strings.Contains(repair.Run.Prompt, "- exit_code=") {
-			t.Fatal("repair prompt invented an exit code for an older record")
+		case other:
+			if !strings.Contains(repair.Run.Prompt, "exit_code=50") ||
+				!strings.Contains(repair.Run.Prompt, "different invariant failed") ||
+				strings.Contains(repair.Run.Prompt, "agent retry budget exhausted") {
+				t.Fatal("repair context lost the terminal outcome")
+			}
 		}
 	}
 }

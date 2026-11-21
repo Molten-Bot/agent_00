@@ -99,6 +99,10 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 		"webhook verification is unimplemented and cannot safely be completed without more implementation work",
 		"webhook has no verifier and guessing an implementation would create fake security",
 		"cannot safely finish unrelated webhook refactor",
+		"codex: codex reported failure: Failure: Export broken. Error details: Reproduced the regression described in #72.",
+		"codex: codex reported failure: Failure: Export broken. Error details: This code depends on #72, but its changes are already present.",
+		"codex: codex reported failure: Failure: Export broken. Error details: The queue stalls waiting for a worker.",
+		"codex: codex reported failure: Failure: Export broken. Error details: No longer waiting on #72; parser crashes.",
 	} {
 		if got := NonRemediableFailureReason(errors.New(message)); got != "" {
 			t.Fatalf("NonRemediableFailureReason(%q) = %q, want actionable failure", message, got)

@@ -28,7 +28,9 @@ type IssueClaimRecord struct {
 	Run              config.Config `json:"run"`
 	State            string        `json:"state,omitempty"`
 	Outcome          string        `json:"outcome,omitempty"`
+	RunError         string        `json:"runError,omitempty"`
 	ExitCode         int           `json:"exitCode,omitempty"`
+	PublicationReady bool          `json:"publicationReady,omitempty"`
 	Step             string        `json:"step,omitempty"`
 	StepStartedAt    time.Time     `json:"stepStartedAt,omitempty"`
 	StartedAt        time.Time     `json:"startedAt,omitempty"`
@@ -53,6 +55,14 @@ type IssueClaimRecord struct {
 	ProcessBootID    string        `json:"processBootId,omitempty"`
 	NoChangeEvidence bool          `json:"noChangeEvidence,omitempty"`
 	Control          string        `json:"control,omitempty"`
+}
+
+// FailureDetail prefers the terminal run error over a later recovery status.
+func (r IssueClaimRecord) FailureDetail() string {
+	if r.RunError != "" {
+		return r.RunError
+	}
+	return r.Error
 }
 
 type IssueClaimStore struct {

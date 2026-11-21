@@ -870,6 +870,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		record.IssueNodeID = target.ID
 		record.BranchReserved = !reserve
 		record.WorkspaceDir = previous.WorkspaceDir
+		record.PublicationReady = previous.PublicationReady
 		if automatic {
 			record.AgentAttempts = previous.AgentAttempts
 		}

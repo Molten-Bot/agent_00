@@ -213,7 +213,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	// Preserve the classification before later checks can replace the last
 	// error. This also handles records written before the incident existed.
 	if record.Outcome == "error" && record.Incident != unmergedDependencyIncident &&
-		failurefollowup.NonRemediableFailureReason(errors.New(record.Error)) == failurefollowup.UnmergedDependencyReason {
+		failurefollowup.NonRemediableFailureReason(errors.New(record.FailureDetail())) == failurefollowup.UnmergedDependencyReason {
 		record.Incident = unmergedDependencyIncident
 		record.NextAttemptAt = time.Time{}
 		if err := s.IssueClaims.Save(record); err != nil {
@@ -432,13 +432,14 @@ func repairableIssueIncident(record localruntime.IssueClaimRecord) bool {
 	if record.Outcome == "" && record.Failures < 3 {
 		return false
 	}
-	if failurefollowup.NonRemediableFailureReason(errors.New(record.Error)) != "" {
+	detail := record.FailureDetail()
+	if failurefollowup.NonRemediableFailureReason(errors.New(detail)) != "" {
 		return false
 	}
-	if strings.Contains(record.Error, localruntime.LegacyIssueOwnershipFailure) {
+	if strings.Contains(detail, localruntime.LegacyIssueOwnershipFailure) {
 		return false
 	}
-	lower := strings.ToLower(record.Error)
+	lower := strings.ToLower(detail)
 	for _, reason := range []string{"issue is ineligible", "associated branch", "open dependencies", "dispatch capacity", "automation disabled", "repository disabled", "ownership", "permission", "rate limit", "worker descendants", "agent auth required"} {
 		if strings.Contains(lower, reason) {
 			return false

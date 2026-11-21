@@ -193,10 +193,15 @@ type Harness struct {
 	// OnPRTitle reports the title after PR creation, creation recovery, or a title update.
 	OnPRTitle            func(url, title string)
 	ResumeIssueWorkspace bool
-	Signing              *gitsigning.Snapshot
-	LoadSigning          func(context.Context) (*gitsigning.Snapshot, error)
-	signingHistory       map[string]map[string]bool
-	Runner               execx.Runner
+	// IssuePublicationReady records that a prior attempt accepted the agent result.
+	IssuePublicationReady bool
+	// SaveIssuePublicationReady checkpoints agent acceptance before publication.
+	SaveIssuePublicationReady func(bool) error
+
+	Signing        *gitsigning.Snapshot
+	LoadSigning    func(context.Context) (*gitsigning.Snapshot, error)
+	signingHistory map[string]map[string]bool
+	Runner         execx.Runner
 	// AssetTransport optionally replaces HTTP transport for attachment downloads.
 	AssetTransport http.RoundTripper
 	Workspace      workspace.Manager
@@ -479,7 +484,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		if err != nil {
 			return h.fail(ExitGit, "git", err, runDir)
 		}
-		if issueClaim.Attempt > 1 && !publicationPending {
+		hasPendingWork := publicationPending
+		publicationPending = hasPendingWork && h.IssuePublicationReady
+		if issueClaim.Attempt > 1 && !hasPendingWork {
 			// A dependency may have merged since the issue branch was reserved.
 			// Incorporate the fetched base before the agent tests the branch.
 			repo := repos[0]
@@ -5863,6 +5870,11 @@ func (h Harness) runCodexCapture(
 	responseMode string,
 	invocation agentInvocationLogMetadata,
 ) (execx.Result, error) {
+	if h.SaveIssuePublicationReady != nil {
+		if err := h.SaveIssuePublicationReady(false); err != nil {
+			return execx.Result{}, fmt.Errorf("clear issue publication readiness: %w", err)
+		}
+	}
 	finalPrompt := withBackpressurePrompt(prompt, nil)
 	cleanup := func() error { return nil }
 
@@ -5922,6 +5934,11 @@ func (h Harness) runCodexCapture(
 			targetDir,
 			cleanupErr,
 		)
+	}
+	if err == nil && h.SaveIssuePublicationReady != nil {
+		if saveErr := h.SaveIssuePublicationReady(true); saveErr != nil {
+			err = fmt.Errorf("record issue publication readiness: %w", saveErr)
+		}
 	}
 	return res, err
 }
