@@ -2107,13 +2107,17 @@ func failureFollowUpPromptWithContext(logPaths []string, failureContext string) 
 // diagnosis but commonly embeds those same identifiers, so it is routed
 // through failurefollowup.RedactFailureDetail first.
 func failureFollowUpFailureContext(failedResult app.Result, failedRunCfg config.Config) string {
-	return formatFailureFollowUpContext(fmt.Sprint(failedResult.ExitCode), failedResult.Err, failedRunCfg.Prompt)
+	exitCode := ""
+	if failedResult.ExitCode != 0 {
+		exitCode = fmt.Sprint(failedResult.ExitCode)
+	}
+	return formatFailureFollowUpContext(exitCode, failedResult.Err, failedRunCfg.Prompt)
 }
 
 func formatFailureFollowUpContext(exitCode string, failure error, prompt string) string {
-	lines := []string{
-		"Observed failure context:",
-		"- exit_code=" + exitCode,
+	lines := []string{"Observed failure context:"}
+	if exitCode != "" {
+		lines = append(lines, "- exit_code="+exitCode)
 	}
 	if failure != nil {
 		if detail := failurefollowup.RedactFailureDetail(failure.Error()); detail != "" {

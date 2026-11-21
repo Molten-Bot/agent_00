@@ -537,6 +537,7 @@ func TestFailureFollowUpRunConfigKeepsFailedRunIdentifiersOutOfThePrompt(t *test
 
 	logRoot := filepath.Join(t.TempDir(), ".log")
 	failedResult := app.Result{
+		ExitCode:     app.ExitCodex,
 		Err:          fmt.Errorf("checks failed"),
 		WorkspaceDir: "/workspace/tasks/acme-billing-widget/repo",
 		Branch:       "agent00-rename-the-acmecorp-billing-widget",

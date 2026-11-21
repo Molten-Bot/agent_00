@@ -524,6 +524,48 @@ func TestIssueRecoveryBudgetStopAndNoChangeDoNotRerun(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryBlocksUnmergedPrerequisiteWithoutRepair(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(context.Background())
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.Incident = "missing_pr"
+	record.Error = "codex: codex reported failure: Failure: Delivery blocked by unmerged #12. Error details: Required changes are pending review."
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
+		t.Fatal("dependency failure queued a harness repair")
+		return "", nil
+	}
+	f.deleteError = true
+	if err := s.ReconcileIssueWork(context.Background()); err == nil {
+		t.Fatal("expected temporary unlock failure")
+	}
+	if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.NextAttemptAt = time.Now().Add(-time.Second)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.deleteError = false
+	for range 2 {
+		if err := s.ReconcileIssueWork(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.State != "blocked" || got.UnlockPending || got.LabelAdded ||
+		got.RepairRequestID != "" || got.AgentAttempts != 1 || !got.NextAttemptAt.IsZero() ||
+		!strings.Contains(got.Error, "required pull request is unmerged") || len(f.submissions) != 1 {
+		t.Fatalf("unexpected dependency recovery state: state=%q error=%q attempts=%d submissions=%d", got.State, got.Error, got.AgentAttempts, len(f.submissions))
+	}
+	response := retryIssue(t, s, record.ID, true)
+	if response.Code != http.StatusAccepted || len(f.submissions) != 2 {
+		t.Fatalf("explicit retry: status=%d submissions=%d response=%s", response.Code, len(f.submissions), response.Body.String())
+	}
+}
+
 func TestIssueRecoveryHandlesAmbiguousReservationAndFastCompletion(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
