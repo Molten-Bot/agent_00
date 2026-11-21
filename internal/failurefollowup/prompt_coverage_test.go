@@ -113,3 +113,19 @@ func TestInfrastructureFailureDoesNotSpawnAnotherCodingTask(t *testing.T) {
 		}
 	}
 }
+
+func TestNonRemediableFailureReasonRecognizesUnmergedPrerequisite(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ message, want string }{
+		{"codex: codex reported failure: Failure: Delivery blocked by unmerged #12. Error details: Required API is unavailable.", UnmergedDependencyReason},
+		{"claude: claude reported failure: Failure: Blocked by an unmerged pull request `#12`. Error details: Base still lacks the prerequisite.", UnmergedDependencyReason},
+		{"codex: codex reported failure: Failure: Git index remains unmerged. Error details: Conflict in a modified file.", ""},
+		{"codex: codex reported failure: Failure: Parser rejects valid output. Error details: Fixture says blocked by unmerged #12.", ""},
+		{"codex: codex reported failure: Failure: Parser rejected 'blocked by unmerged #12'. Error details: Fix the parser.", ""},
+		{"git: merge blocked by unmerged #12", ""},
+	} {
+		if got := NonRemediableFailureReason(errors.New(tc.message)); got != tc.want {
+			t.Errorf("NonRemediableFailureReason(%q) = %q, want %q", tc.message, got, tc.want)
+		}
+	}
+}

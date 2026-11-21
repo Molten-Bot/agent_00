@@ -532,8 +532,6 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	initialRepo, initialRepoDir := initialAgentInvocationRepoMetadata(repos)
 	initialAgentInvocation := newAgentInvocationLogMetadata(runtime, invocationMode, 1, initialRepo, initialRepoDir, codexTargetLabel)
 
-	h.logf("stage=%s status=start target=%s%s", agentStage, codexTargetLabel, initialAgentInvocation.logFieldsSuffix())
-	codexStart := time.Now()
 	var agentRes execx.Result
 	publicationPending := false
 	if h.ResumeIssueWorkspace && issueClaim != nil {
@@ -545,7 +543,19 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		if err != nil {
 			return h.fail(ExitGit, "git", err, runDir)
 		}
+		if issueClaim.Attempt > 1 && !publicationPending {
+			// A dependency may have merged since the issue branch was reserved.
+			// Incorporate the fetched base before the agent tests the branch.
+			repo := repos[0]
+			baseRef := remoteBaseComparisonRef(repo.BaseBranch)
+			res, err := h.runCommand(ctx, "git", gitCommand(repo.Dir, "merge", "--ff-only", baseRef))
+			if err != nil {
+				return h.fail(ExitGit, "git", commandErrorWithDetails("fast-forward issue branch to fetched base", err, res, maxGitErrorDetailChars), runDir)
+			}
+		}
 	}
+	h.logf("stage=%s status=start target=%s%s", agentStage, codexTargetLabel, initialAgentInvocation.logFieldsSuffix())
+	codexStart := time.Now()
 	if !publicationPending {
 		h.step("agent")
 		agentRes, err = h.runCodexCapture(ctx, runtime, codexDir, codexBasePrompt, codexOpts, agentsPath, agentResponseMode, initialAgentInvocation)
