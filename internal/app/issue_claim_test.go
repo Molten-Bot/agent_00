@@ -22,6 +22,8 @@ func TestClaimedIssueRetryClonesAndFastForwardsReservedBranchBeforeAgent(t *test
 	t.Parallel()
 	cfg := sampleConfig()
 	cfg.GitHubIssue = &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17", Claim: &config.GitHubIssueClaim{ID: "claim", Branch: "agent00-issue-17", BaseBranch: "main", ExclusionLabel: "claimed", Attempt: 2}}
+	const oldRequirement = "Run the old validation command."
+	const newRequirement = "Run the new validation command."
 	cloned, baseFetched, fastForwarded, agentStarted := false, false, false, false
 	runner := issueBranchRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 		args := strings.Join(cmd.Args, " ")
@@ -32,6 +34,13 @@ func TestClaimedIssueRetryClonesAndFastForwardsReservedBranchBeforeAgent(t *test
 					t.Fatalf("wrong clone branch: %s", args)
 				}
 				cloned = true
+				repoDir := cmd.Args[len(cmd.Args)-1]
+				if err := os.MkdirAll(repoDir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(repoDir, backpressureFilename), []byte(oldRequirement), 0600); err != nil {
+					t.Fatal(err)
+				}
 			case strings.Contains(args, "switch ") || strings.Contains(args, "checkout ") || strings.Contains(args, "branch -m"):
 				t.Fatalf("claimed branch must not be created, reset, or renamed: %s", args)
 			case strings.Contains(args, "fetch origin main:refs/remotes/origin/main"):
@@ -40,9 +49,15 @@ func TestClaimedIssueRetryClonesAndFastForwardsReservedBranchBeforeAgent(t *test
 				return execx.Result{Stdout: "## agent00-issue-17\n"}, nil
 			case strings.Contains(args, "rev-list --count refs/remotes/origin/main..HEAD"):
 				return execx.Result{Stdout: "0\n"}, nil
-			case strings.Contains(args, "merge --ff-only refs/remotes/origin/main"):
+			case strings.HasPrefix(args, "merge "):
 				if !baseFetched {
 					t.Error("fast-forward attempted before base fetch")
+				}
+				if args != "merge --ff-only --no-overwrite-ignore refs/remotes/origin/main" {
+					t.Errorf("unexpected fast-forward command: %s", args)
+				}
+				if err := os.WriteFile(filepath.Join(cmd.Dir, backpressureFilename), []byte(newRequirement), 0600); err != nil {
+					t.Fatal(err)
 				}
 				fastForwarded = true
 			case strings.Contains(args, "ls-remote --symref"):
@@ -58,6 +73,9 @@ func TestClaimedIssueRetryClonesAndFastForwardsReservedBranchBeforeAgent(t *test
 			if !fastForwarded {
 				t.Error("agent started before issue branch fast-forward")
 			}
+			if !strings.Contains(cmd.Stdin, newRequirement) || strings.Contains(cmd.Stdin, oldRequirement) {
+				t.Error("agent prompt did not use updated backpressure requirements")
+			}
 			return execx.Result{Stdout: "Failure: Delivery blocked by unmerged #12.\nError details: Required changes are pending review."}, nil
 		}
 		return execx.Result{}, nil
@@ -65,6 +83,7 @@ func TestClaimedIssueRetryClonesAndFastForwardsReservedBranchBeforeAgent(t *test
 	h := New(runner)
 	h.ResumeIssueWorkspace = true
 	h.Workspace = testWorkspaceManager("issue-claim-branch")
+	h.Workspace.Root = t.TempDir()
 	h.TargetDirOK = func(string) bool { return true }
 	result := h.Run(context.Background(), cfg)
 	if !cloned || !baseFetched || !fastForwarded || !agentStarted || result.ExitCode != ExitCodex ||

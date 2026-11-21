@@ -78,8 +78,9 @@ const missingRemoteBranchReason = "remote branch does not exist"
 const UnmergedDependencyReason = "required pull request is unmerged"
 
 // Match a blocker in the agent's failure summary. Error details can quote the
-// same wording while describing a different, actionable failure.
-var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:[^"'\x60\r\n]*\bblocked by (?:an? |the )?unmerged (?:pull request |pr )?\x60?#[1-9][0-9]*\b`)
+// same wording while describing a different, actionable failure. An apostrophe
+// between word characters can be part of a contraction rather than a quote.
+var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\bblocked by (?:an? |the )?unmerged (?:pull request |pr )?\x60?#[1-9][0-9]*\b`)
 
 var nonRemediableFailureMarkers = []string{
 	"no space left on device",
