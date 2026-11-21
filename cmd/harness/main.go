@@ -319,6 +319,10 @@ func runServer(args []string) int {
 	}
 
 	scheduler := localruntime.NewAdaptiveScheduler(cfg.Scheduler, daemonLogger)
+	diskHistory, err := localruntime.OpenTaskDiskHistory(filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "task-disk-usage.json"))
+	if err != nil {
+		daemonLogger("scheduler status=warn action=load_task_disk_history err=%q", err)
+	}
 	scheduler.Start(ctx)
 
 	logRoot := ""
@@ -490,6 +494,8 @@ func runServer(args []string) int {
 				}()
 			}
 
+			diskKey := localruntime.TaskDiskKey(runCfg.RepoList())
+			diskRequest := localTaskDiskRequest(runCtx, diskHistory, diskKey)
 			for {
 				if taskHandle != nil {
 					if waitErr := taskHandle.WaitUntilRunnable(runCtx); waitErr != nil {
@@ -521,6 +527,7 @@ func runServer(args []string) int {
 
 				settings := signingSettings(activeCfg, runner)
 				forceAcquire := false
+				var workspaceRoot string
 				admission := prepareLocalTaskAdmission(
 					runCtx,
 					taskHandle,
@@ -534,11 +541,8 @@ func runServer(args []string) int {
 						if taskHandle != nil && !forceAcquire {
 							forceAcquire = taskHandle.ConsumeForceAcquire()
 						}
-						acquire := scheduler.Acquire
-						if forceAcquire {
-							acquire = scheduler.AcquireForce
-						}
-						release, err := acquire(acquireCtx, requestID)
+						root, release, err := scheduler.AcquireWorkspace(acquireCtx, requestID, diskRequest, forceAcquire)
+						workspaceRoot = root
 						if taskHandle != nil {
 							taskHandle.ClearAcquireCancel(cancelAcquire)
 						}
@@ -608,6 +612,7 @@ func runServer(args []string) int {
 
 				signingSnapshot := admission.SigningSnapshot
 				release := admission.Release
+				defer release()
 
 				if taskHandle != nil {
 					taskHandle.SetRunning(true)
@@ -620,7 +625,6 @@ func runServer(args []string) int {
 				if issueWork != nil {
 					if verifyIssueOwnership != nil {
 						if err := verifyIssueOwnership(runCtx, runCfg); err != nil {
-							release()
 							finalState = "error"
 							issueResult.Err = err
 							return
@@ -641,11 +645,11 @@ func runServer(args []string) int {
 						return false
 					}
 					return taskHandle.IsStopped()
-				}, signingSnapshot, monitorBroker)
+				}, signingSnapshot, monitorBroker, workspaceRoot)
 				if taskHandle != nil {
 					taskHandle.SetRunning(false)
 				}
-				release()
+				recordLocalTaskDiskUsage(diskHistory, diskKey, requestID, outcome.Result.WorkspaceDir, daemonLogger)
 
 				issueResult = outcome.Result
 				finalState = outcome.State
@@ -1486,6 +1490,7 @@ func runLocalTask(
 	wasStopped func() bool,
 	signingSnapshot *gitsigning.Snapshot,
 	broker *web.Broker,
+	workspaceRoot string,
 ) localTaskOutcome {
 	logf(
 		"task status=start request_id=%s skill=%s repo=%s repos=%s",
@@ -1509,13 +1514,16 @@ func runLocalTask(
 		ctx = repairCtx
 		defer func() { watchdog.Close(); cancel(nil) }()
 		h.OnStep = func(step string) { watchdog.Advance(step) }
-		h.Workspace.Root = filepath.Join(filepath.Dir(repairWork.queue.claims.Root), "repair-workspaces")
+		h.Workspace.Root = filepath.Dir(repairWork.workspaceDir())
 		h.Workspace.NewGUID = func() string { return repairWork.record.ID }
 	}
 	if issueWork, ok := ctx.Value(issueExecutionContextKey{}).(*issueExecution); ok {
 		var finish func()
 		ctx, finish = issueWork.configure(ctx, &h)
 		defer finish()
+	}
+	if workspaceRoot != "" {
+		h.Workspace.Root = workspaceRoot
 	}
 	h.Logf = func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)

@@ -1516,6 +1516,7 @@ func TestRunLocalTaskReportsErrorState(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		"",
 	)
 
 	if outcome.State != "error" {
@@ -1545,6 +1546,7 @@ func TestRunLocalTaskReportsStoppedStateWithoutCancelCause(t *testing.T) {
 		func() bool { return true },
 		nil,
 		nil,
+		"",
 	)
 
 	if outcome.State != "stopped" {
@@ -1579,6 +1581,7 @@ func TestRunLocalTaskReportsStoppedStateWithCancelCause(t *testing.T) {
 		func() bool { return true },
 		nil,
 		nil,
+		"",
 	)
 
 	if outcome.State != "stopped" {
@@ -1606,6 +1609,7 @@ func TestRunLocalTaskReportsErrorWithSigningSnapshot(t *testing.T) {
 		nil,
 		&gitsigning.Snapshot{},
 		nil,
+		"",
 	)
 
 	if outcome.State != "error" {

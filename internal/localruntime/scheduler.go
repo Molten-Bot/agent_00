@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
+	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
 var errSchedulerClosed = errors.New("task controller is closed")
@@ -23,16 +24,18 @@ var errSchedulerClosed = errors.New("task controller is closed")
 // AdaptiveScheduler controls task admission with rolling system load samples.
 // It never preempts running work; when pressure rises, newer tasks stay queued.
 type AdaptiveScheduler struct {
-	cfg    SchedulerConfig
-	logf   func(string, ...any)
-	sample resourceSampler
+	cfg       SchedulerConfig
+	logf      func(string, ...any)
+	sample    resourceSampler
+	diskSpace func(string) (string, uint64, error)
 
-	mu      sync.Mutex
-	waiters []*taskWaiter
-	running int
-	allowed int
-	window  []resourceSample
-	closed  bool
+	mu       sync.Mutex
+	waiters  []*taskWaiter
+	reserved map[string]uint64
+	running  int
+	allowed  int
+	window   []resourceSample
+	closed   bool
 
 	startOnce sync.Once
 	stopCh    chan struct{}
@@ -40,10 +43,22 @@ type AdaptiveScheduler struct {
 }
 
 type taskWaiter struct {
-	id        uint64
-	requestID string
-	granted   bool
-	notify    chan struct{}
+	id          uint64
+	requestID   string
+	granted     bool
+	notify      chan struct{}
+	disk        *TaskDiskRequest
+	root        string
+	device      string
+	diskBytes   uint64
+	diskBlocked bool
+}
+
+// TaskDiskRequest describes the storage needed for a task workspace.
+type TaskDiskRequest struct {
+	Workspace     workspace.Manager
+	ExistingDir   string
+	RequiredBytes func() uint64
 }
 
 type resourceSample struct {
@@ -79,11 +94,13 @@ func NewAdaptiveScheduler(cfg SchedulerConfig, logf func(string, ...any)) *Adapt
 	}
 	cfg = normalizeSchedulerConfig(cfg)
 	return &AdaptiveScheduler{
-		cfg:     cfg,
-		logf:    logf,
-		sample:  &defaultResourceSampler{},
-		allowed: cfg.MaxParallel,
-		stopCh:  make(chan struct{}),
+		cfg:       cfg,
+		logf:      logf,
+		sample:    &defaultResourceSampler{},
+		diskSpace: workspace.DiskSpace,
+		reserved:  make(map[string]uint64),
+		allowed:   cfg.MaxParallel,
+		stopCh:    make(chan struct{}),
 	}
 }
 
@@ -118,8 +135,21 @@ func (c *AdaptiveScheduler) Start(ctx context.Context) {
 
 // Acquire blocks until the caller is admitted to run. The returned function must be called once when done.
 func (c *AdaptiveScheduler) Acquire(ctx context.Context, requestID string) (func(), error) {
+	_, release, err := c.acquire(ctx, requestID, nil)
+	return release, err
+}
+
+// AcquireWorkspace admits work and returns the workspace root whose space was reserved.
+func (c *AdaptiveScheduler) AcquireWorkspace(ctx context.Context, requestID string, disk TaskDiskRequest, force bool) (string, func(), error) {
+	if force {
+		return c.acquireForce(ctx, requestID, &disk)
+	}
+	return c.acquire(ctx, requestID, &disk)
+}
+
+func (c *AdaptiveScheduler) acquire(ctx context.Context, requestID string, disk *TaskDiskRequest) (string, func(), error) {
 	if c == nil {
-		return func() {}, nil
+		return "", func() {}, nil
 	}
 
 	requestID = strings.TrimSpace(requestID)
@@ -127,20 +157,26 @@ func (c *AdaptiveScheduler) Acquire(ctx context.Context, requestID string) (func
 		id:        c.nextID.Add(1),
 		requestID: requestID,
 		notify:    make(chan struct{}, 1),
+		disk:      disk,
 	}
 
 	var (
-		queued     bool
-		granted    bool
-		queueDepth int
-		running    int
-		allowed    int
+		queued      bool
+		granted     bool
+		queueDepth  int
+		running     int
+		allowed     int
+		queueReason string
 	)
 
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return nil, errSchedulerClosed
+		return "", nil, errSchedulerClosed
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return "", nil, err
 	}
 	c.waiters = append(c.waiters, waiter)
 	c.tryGrantLocked()
@@ -150,16 +186,20 @@ func (c *AdaptiveScheduler) Acquire(ctx context.Context, requestID string) (func
 		queueDepth = len(c.waiters)
 		running = c.running
 		allowed = c.allowed
+		if waiter.diskBlocked {
+			queueReason = " reason=disk_space"
+		}
 	}
 	c.mu.Unlock()
 
 	if queued {
 		c.logf(
-			"task status=queued request_id=%s queue_depth=%d running=%d allowed=%d",
+			"task status=queued request_id=%s queue_depth=%d running=%d allowed=%d%s",
 			stringsx.FirstNonEmpty(waiter.requestID, fmt.Sprintf("queued-%d", waiter.id)),
 			queueDepth,
 			running,
 			allowed,
+			queueReason,
 		)
 		// Re-sample immediately after queueing so work does not sit idle until the
 		// next background tick when pressure has already dropped back below the
@@ -168,7 +208,7 @@ func (c *AdaptiveScheduler) Acquire(ctx context.Context, requestID string) (func
 	}
 
 	if granted {
-		return c.releaseFunc(), nil
+		return waiter.root, c.releaseFunc(waiter), nil
 	}
 
 	for {
@@ -178,35 +218,27 @@ func (c *AdaptiveScheduler) Acquire(ctx context.Context, requestID string) (func
 			granted := waiter.granted
 			c.mu.Unlock()
 			if granted {
-				return c.releaseFunc(), nil
+				return waiter.root, c.releaseFunc(waiter), nil
 			}
 		case <-ctx.Done():
 			c.mu.Lock()
 			if waiter.granted {
-				if c.running > 0 {
-					c.running--
-				}
-				c.tryGrantLocked()
-				c.mu.Unlock()
-				return nil, ctx.Err()
+				c.releaseLocked(waiter)
+			} else {
+				c.removeWaiterLocked(waiter.id)
 			}
-			c.removeWaiterLocked(waiter.id)
 			c.tryGrantLocked()
 			c.mu.Unlock()
-			return nil, ctx.Err()
+			return "", nil, ctx.Err()
 		case <-c.stopCh:
 			c.mu.Lock()
 			if waiter.granted {
-				if c.running > 0 {
-					c.running--
-				}
-				c.tryGrantLocked()
-				c.mu.Unlock()
-				return nil, errSchedulerClosed
+				c.releaseLocked(waiter)
+			} else {
+				c.removeWaiterLocked(waiter.id)
 			}
-			c.removeWaiterLocked(waiter.id)
 			c.mu.Unlock()
-			return nil, errSchedulerClosed
+			return "", nil, errSchedulerClosed
 		}
 	}
 }
@@ -214,23 +246,30 @@ func (c *AdaptiveScheduler) Acquire(ctx context.Context, requestID string) (func
 // AcquireForce admits a caller immediately, even when current running work exceeds allowed capacity.
 // Use this sparingly for explicit operator override actions.
 func (c *AdaptiveScheduler) AcquireForce(ctx context.Context, requestID string) (func(), error) {
+	_, release, err := c.acquireForce(ctx, requestID, nil)
+	return release, err
+}
+
+func (c *AdaptiveScheduler) acquireForce(ctx context.Context, requestID string, disk *TaskDiskRequest) (string, func(), error) {
 	if c == nil {
-		return func() {}, nil
+		return "", func() {}, nil
 	}
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return "", nil, ctx.Err()
 	default:
 	}
 
 	requestID = strings.TrimSpace(requestID)
+	waiter := &taskWaiter{disk: disk}
 
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return nil, errSchedulerClosed
+		return "", nil, errSchedulerClosed
 	}
+	c.reserveDiskLocked(waiter, true)
 	c.running++
 	running := c.running
 	allowed := c.allowed
@@ -243,27 +282,42 @@ func (c *AdaptiveScheduler) AcquireForce(ctx context.Context, requestID string) 
 		allowed,
 	)
 
-	return c.releaseFunc(), nil
+	return waiter.root, c.releaseFunc(waiter), nil
 }
 
-func (c *AdaptiveScheduler) releaseFunc() func() {
+func (c *AdaptiveScheduler) releaseFunc(waiter *taskWaiter) func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			c.mu.Lock()
-			if c.running > 0 {
-				c.running--
-			}
+			c.releaseLocked(waiter)
 			c.tryGrantLocked()
 			c.mu.Unlock()
 		})
 	}
 }
 
+func (c *AdaptiveScheduler) releaseLocked(waiter *taskWaiter) {
+	c.running--
+	if waiter.diskBytes > 0 {
+		c.reserved[waiter.device] -= waiter.diskBytes
+		if c.reserved[waiter.device] == 0 {
+			delete(c.reserved, waiter.device)
+		}
+	}
+}
+
 func (c *AdaptiveScheduler) tryGrantLocked() {
-	for c.running < c.allowed && len(c.waiters) > 0 {
-		waiter := c.waiters[0]
-		c.waiters = c.waiters[1:]
+	// A disk-blocked task can wait while smaller tasks or tasks on another
+	// filesystem use otherwise idle slots.
+	for i := 0; c.running < c.allowed && i < len(c.waiters); {
+		waiter := c.waiters[i]
+		if !c.reserveDiskLocked(waiter, false) {
+			waiter.diskBlocked = true
+			i++
+			continue
+		}
+		c.waiters = append(c.waiters[:i], c.waiters[i+1:]...)
 		waiter.granted = true
 		c.running++
 		select {
@@ -311,6 +365,9 @@ func (c *AdaptiveScheduler) sampleAndUpdate() {
 	sample, err := c.sample.Sample()
 	if err != nil {
 		c.logf("scheduler status=sample_error err=%q", err)
+		c.mu.Lock()
+		c.tryGrantLocked()
+		c.mu.Unlock()
 		return
 	}
 
