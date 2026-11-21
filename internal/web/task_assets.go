@@ -66,7 +66,7 @@ func (s Server) handleTaskAssetPreview(w http.ResponseWriter, r *http.Request, r
 		http.Error(w, "Preview unavailable.", http.StatusBadGateway)
 		return
 	}
-	defer body.Close()
+	defer func() { body.Close() }()
 
 	isVideo := strings.HasPrefix(mediaType, "video/")
 	if videoID != "" && !isVideo {
@@ -89,11 +89,10 @@ func (s Server) handleTaskAssetPreview(w http.ResponseWriter, r *http.Request, r
 	if flusher, ok := w.(http.Flusher); ok && isVideo {
 		dst = taskVideoWriter{ResponseWriter: w, Flusher: flusher}
 	}
-	if video, ok := body.(interface{ ContentLength() int64 }); ok && video.ContentLength() > 0 {
+	if video, ok := body.(*githubassets.VideoPreviewBody); ok && video.ContentLength() > 0 {
 		size := video.ContentLength()
 		w.Header().Set("Accept-Ranges", "bytes")
-		// Serve one range from the forward-only stream. Without validators,
-		// an If-Range request always falls back to the full response.
+		// Without validators, If-Range always falls back to the full response.
 		if spec, ok := strings.CutPrefix(r.Header.Get("Range"), "bytes="); ok && !strings.Contains(spec, ",") && r.Header.Get("If-Range") == "" {
 			start, end, ok := taskVideoByteRange(spec, size)
 			if !ok {
@@ -101,8 +100,20 @@ func (s Server) handleTaskAssetPreview(w http.ResponseWriter, r *http.Request, r
 				http.Error(w, "Invalid byte range.", http.StatusRequestedRangeNotSatisfiable)
 				return
 			}
-			if _, err := io.CopyN(io.Discard, body, start); err != nil {
-				panic(http.ErrAbortHandler)
+			if start > 0 {
+				// Preview has sniffed the format. Fetch the requested bytes
+				// directly, retaining the original stream for upstreams without ranges.
+				ranged, err := video.OpenRange(r.Context(), start, end)
+				if err != nil {
+					http.Error(w, "Preview unavailable.", http.StatusBadGateway)
+					return
+				}
+				if ranged != nil {
+					body.Close()
+					body = ranged
+				} else if _, err := io.CopyN(io.Discard, body, start); err != nil {
+					panic(http.ErrAbortHandler)
+				}
 			}
 			length := end - start + 1
 			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, size))

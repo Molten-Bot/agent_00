@@ -3211,11 +3211,13 @@ func withGzip(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		gz := gzip.NewWriter(w)
+		gz := &gzipResponseWriter{ResponseWriter: w}
 		defer func() {
-			_ = gz.Close()
+			if gz.writer != nil {
+				_ = gz.writer.Close()
+			}
 		}()
-		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, writer: gz}, r)
+		next.ServeHTTP(gz, r)
 	})
 }
 
@@ -3253,6 +3255,14 @@ func (w *gzipResponseWriter) WriteHeader(statusCode int) {
 	}
 	w.wroteHeader = true
 	headers := w.ResponseWriter.Header()
+	// Ranges describe byte offsets in the uncompressed video stream.
+	if strings.HasPrefix(headers.Get("Content-Type"), "video/") || headers.Get("Content-Range") != "" {
+		w.ResponseWriter.WriteHeader(statusCode)
+		return
+	}
+	if w.writer == nil {
+		w.writer = gzip.NewWriter(w.ResponseWriter)
+	}
 	if strings.TrimSpace(headers.Get("Content-Encoding")) == "" {
 		headers.Set("Content-Encoding", "gzip")
 	}
@@ -3265,10 +3275,16 @@ func (w *gzipResponseWriter) Write(payload []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
+	if w.writer == nil {
+		return w.ResponseWriter.Write(payload)
+	}
 	return w.writer.Write(payload)
 }
 
 func (w *gzipResponseWriter) Flush() {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
 	if w.writer != nil {
 		_ = w.writer.Flush()
 	}

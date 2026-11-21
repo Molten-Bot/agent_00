@@ -353,6 +353,7 @@ func TestTaskAssetPreviewVideoRanges(t *testing.T) {
 			}
 			req.Header.Set("Range", tc.rangeHeader)
 			req.Header.Set("If-Range", tc.ifRange)
+			req.Header.Set("Accept-Encoding", "gzip")
 			resp, err := ts.Client().Do(req)
 			if err != nil {
 				t.Fatal(err)
@@ -361,7 +362,7 @@ func TestTaskAssetPreviewVideoRanges(t *testing.T) {
 			if resp.StatusCode != tc.status || resp.Header.Get("Content-Range") != tc.contentRange {
 				t.Fatalf("got status %d and Content-Range %q, want %d and %q", resp.StatusCode, resp.Header.Get("Content-Range"), tc.status, tc.contentRange)
 			}
-			if resp.Header.Get("Cache-Control") != "no-store" || resp.Header.Get("Accept-Ranges") != "bytes" {
+			if resp.Header.Get("Cache-Control") != "no-store" || resp.Header.Get("Accept-Ranges") != "bytes" || resp.Header.Get("Content-Encoding") != "" {
 				t.Fatalf("unexpected preview headers: %v", resp.Header)
 			}
 			if tc.status == http.StatusRequestedRangeNotSatisfiable {
@@ -373,6 +374,66 @@ func TestTaskAssetPreviewVideoRanges(t *testing.T) {
 			body, err := io.ReadAll(resp.Body)
 			if err != nil || string(body) != tc.body {
 				t.Fatalf("got body %q and error %v, want %q", body, err, tc.body)
+			}
+		})
+	}
+}
+
+func TestTaskAssetPreviewFetchesUpstreamVideoRange(t *testing.T) {
+	t.Parallel()
+	const assetURL = "https://github.com/user-attachments/assets/video"
+	const prefix = "\x00\x00\x00\x14ftypmp42\x00\x00\x00\x00mp42"
+	const data = "video"
+	for _, tc := range []struct {
+		name, contentRange, encoding string
+		status                       int
+	}{
+		{"seek", "bytes 4096-4100/8192", "", http.StatusPartialContent},
+		{"wrong range", "bytes 0-4/8192", "", http.StatusBadGateway},
+		{"wrong total", "bytes 4096-4100/16384", "", http.StatusBadGateway},
+		{"encoded range", "bytes 4096-4100/8192", "gzip", http.StatusBadGateway},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := githubIssueTestServer(nil, true)
+			srv.Broker.RecordTaskRunConfig("req-video", []byte(fmt.Sprintf(`{"assets":[{"url":%q}]}`, assetURL)))
+			srv.assetTransport = taskAssetTransportFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Header.Get("Authorization") != "" || req.Header.Get("Cookie") != "" {
+					t.Error("native seek forwarded viewer credentials")
+				}
+				if req.URL.Host == "github.com" {
+					return &http.Response{StatusCode: http.StatusFound, Header: http.Header{
+						"Location": {"https://objects.githubusercontent.com/video?signature=fixture"},
+					}, Body: http.NoBody}, nil
+				}
+				if req.URL.Host != "objects.githubusercontent.com" {
+					return nil, fmt.Errorf("unexpected seek host")
+				}
+				if req.Header.Get("Range") == "" {
+					// Provide just the sniff window. Reading through to the seek
+					// offset would hit EOF before the requested bytes.
+					return &http.Response{StatusCode: http.StatusOK, ContentLength: 8192,
+						Body: io.NopCloser(strings.NewReader(prefix + strings.Repeat("\x00", 512-len(prefix))))}, nil
+				}
+				if req.Header.Get("Range") != "bytes=4096-4100" || req.Header.Get("Accept-Encoding") != "identity" {
+					t.Error("upstream did not receive the exact byte range with identity encoding")
+				}
+				return &http.Response{StatusCode: http.StatusPartialContent, ContentLength: int64(len(data)), Header: http.Header{
+					"Content-Range": {tc.contentRange}, "Content-Encoding": {tc.encoding},
+				}, Body: io.NopCloser(strings.NewReader(data))}, nil
+			})
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/tasks/req-video/asset-preview?video="+taskAssetVideoID(assetURL), nil)
+			req.Header.Set("Range", "bytes=4096-4100")
+			req.Header.Set("Accept-Encoding", "gzip")
+			req.Header.Set("Authorization", "Bearer viewer-fixture")
+			req.AddCookie(&http.Cookie{Name: "viewer", Value: "cookie-fixture"})
+			srv.Handler().ServeHTTP(w, req)
+			if w.Code != tc.status {
+				t.Fatalf("seek status = %d, want %d", w.Code, tc.status)
+			}
+			if tc.status == http.StatusPartialContent && (w.Body.String() != data ||
+				w.Header().Get("Content-Range") != tc.contentRange || w.Header().Get("Content-Encoding") != "") {
+				t.Fatalf("unexpected seek body or headers: %q, %v", w.Body.String(), w.Header())
 			}
 		})
 	}

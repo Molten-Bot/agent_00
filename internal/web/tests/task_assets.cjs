@@ -228,6 +228,7 @@ for (const mobile of [false, true]) {
     const stream = await streamResponse;
     assert.equal(stream.status(), 200);
     assert.equal(stream.headers()['content-type'], 'video/webm');
+    assert.equal(stream.headers()['content-encoding'], undefined);
     assert.equal(stream.request().headers().authorization, undefined);
     const video = viewer.locator('video');
     await expect(video).toBeVisible();

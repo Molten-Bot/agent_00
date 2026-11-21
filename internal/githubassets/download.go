@@ -107,7 +107,7 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 			return checkRedirect(req, via)
 		}
 	}
-	resp, err := fetch(ctx, client, asset.URL, viewerToken)
+	resp, err := fetch(ctx, client, asset.URL, viewerToken, "")
 	if err != nil {
 		var status *attachmentHTTPError
 		if u.Host == "github.com" && errors.As(err, &status) && status.githubAccess {
@@ -150,7 +150,14 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 	}
 	if strings.HasPrefix(mediaType, "video/") {
 		closeBody = false
-		return &videoPreviewBody{body: io.LimitedReader{R: body, N: maxVideoPreviewBytes}, length: resp.ContentLength, Closer: resp.Body}, mediaType, nil
+		return &VideoPreviewBody{
+			body:   io.LimitedReader{R: body, N: maxVideoPreviewBytes},
+			length: resp.ContentLength,
+			Closer: resp.Body,
+			client: client,
+			url:    asset.URL,
+			token:  viewerToken,
+		}, mediaType, nil
 	}
 	data, err := readAttachment(body, resp.ContentLength, MaxFileBytes)
 	if err != nil {
@@ -167,15 +174,41 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 	return nil, "", fmt.Errorf("attachment format is not supported for previews")
 }
 
-type videoPreviewBody struct {
+// VideoPreviewBody streams a sniffed video attachment.
+type VideoPreviewBody struct {
 	body   io.LimitedReader
 	length int64
 	io.Closer
+	client *http.Client
+	url    string
+	token  string
 }
 
-func (b *videoPreviewBody) ContentLength() int64 { return b.length }
+func (b *VideoPreviewBody) ContentLength() int64 { return b.length }
 
-func (b *videoPreviewBody) Read(p []byte) (int, error) {
+// OpenRange requests an inclusive byte range from the upstream attachment.
+// A nil body with no error means the upstream ignored the range.
+func (b *VideoPreviewBody) OpenRange(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+	resp, err := fetch(ctx, b.client, b.url, b.token, fmt.Sprintf("bytes=%d-%d", start, end))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusOK {
+		resp.Body.Close()
+		return nil, nil
+	}
+	wantRange := fmt.Sprintf("bytes %d-%d/%d", start, end, b.length)
+	encoding := resp.Header.Get("Content-Encoding")
+	if resp.Header.Get("Content-Range") != wantRange ||
+		(resp.ContentLength >= 0 && resp.ContentLength != end-start+1) ||
+		(resp.Uncompressed || encoding != "" && !strings.EqualFold(encoding, "identity")) {
+		resp.Body.Close()
+		return nil, fmt.Errorf("invalid attachment range response")
+	}
+	return resp.Body, nil
+}
+
+func (b *VideoPreviewBody) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -257,7 +290,7 @@ func allowedDownload(u *url.URL) bool {
 }
 
 func downloadOne(ctx context.Context, client *http.Client, asset Asset, dir, token string, index int, limit int64) (File, int64, error) {
-	resp, err := fetch(ctx, client, asset.URL, token)
+	resp, err := fetch(ctx, client, asset.URL, token, "")
 	if err != nil {
 		return File{}, 0, err
 	}
@@ -306,7 +339,7 @@ func (e *attachmentHTTPError) Error() string {
 	return fmt.Sprintf("GitHub returned HTTP %d; verify attachment availability and repository access", e.status)
 }
 
-func fetch(ctx context.Context, client *http.Client, rawURL, token string) (*http.Response, error) {
+func fetch(ctx context.Context, client *http.Client, rawURL, token, byteRange string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("invalid attachment request")
@@ -315,6 +348,10 @@ func fetch(ctx context.Context, client *http.Client, rawURL, token string) (*htt
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("Accept", "application/octet-stream")
+	if byteRange != "" {
+		req.Header.Set("Range", byteRange)
+		req.Header.Set("Accept-Encoding", "identity")
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		// net/http errors contain URLs, including signed redirect credentials.
@@ -326,7 +363,7 @@ func fetch(ctx context.Context, client *http.Client, rawURL, token string) (*htt
 		}
 		return nil, fmt.Errorf("attachment request failed (network, timeout, or disallowed redirect)")
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && (byteRange == "" || resp.StatusCode != http.StatusPartialContent) {
 		defer resp.Body.Close()
 		if resp.Request != nil {
 			req = resp.Request
