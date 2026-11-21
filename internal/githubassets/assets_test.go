@@ -1,6 +1,7 @@
 package githubassets
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -159,21 +160,23 @@ func TestPreviewText(t *testing.T) {
 	t.Parallel()
 	const textMediaType = "text/plain; charset=utf-8"
 	for _, tc := range []struct {
-		name        string
-		contentType string
-		body        string
-		want        string
+		name, contentType, disposition, body, want string
 	}{
-		{"UTF-8 log with generic type", "application/octet-stream", "INFO\tCafé\r\n", textMediaType},
-		{"explicit plain text with markup", "text/plain", "<script>alert('example')</script>", textMediaType},
-		{"HTML login page", "text/html; charset=utf-8", "Sign in to GitHub", ""},
-		{"sniffed HTML login page", "application/octet-stream", "<!DOCTYPE html><html>Sign in</html>", ""},
-		{"invalid UTF-8", "text/plain", "prefix\xff", ""},
-		{"binary after sniff window", "text/plain", strings.Repeat("a", 512) + "\x00", ""},
+		{"UTF-8 log with generic type", "application/octet-stream", "", "INFO\tCafé\r\n", textMediaType},
+		{"explicit plain text with markup", "text/plain", "", "<script>alert('example')</script>", textMediaType},
+		{"HTML attachment", "text/html; charset=utf-8", `attachment; filename="page.html"`, "<!DOCTYPE html><p>Café</p>", textMediaType},
+		{"sniffed HTML attachment", "application/octet-stream", "attachment", "<script>example()</script>", textMediaType},
+		{"invalid HTML attachment", "text/html", "attachment", "<!DOCTYPE html>\x00", ""},
+		{"HTML login page", "text/html; charset=utf-8", "", "Sign in to GitHub", ""},
+		{"sniffed HTML login page", "application/octet-stream", "", "<!DOCTYPE html><html>Sign in</html>", ""},
+		{"invalid UTF-8", "text/plain", "", "prefix\xff", ""},
+		{"binary after sniff window", "text/plain", "", strings.Repeat("a", 512) + "\x00", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				return response(req, 200, tc.body, http.Header{"Content-Type": {tc.contentType}}), nil
+				return response(req, 200, tc.body, http.Header{
+					"Content-Type": {tc.contentType}, "Content-Disposition": {tc.disposition},
+				}), nil
 			})
 			asset := Asset{URL: "https://github.com/user-attachments/files/42/example.txt"}
 			data, mediaType, err := Preview(context.Background(), asset, "", transport)
@@ -186,6 +189,50 @@ func TestPreviewText(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPreviewVideoSizeLimit(t *testing.T) {
+	t.Parallel()
+	const mp4 = "\x00\x00\x00\x14ftypmp42\x00\x00\x00\x00mp42"
+	for _, tc := range []struct {
+		name, prefix, contentType string
+		size, contentLength       int64
+		want                      string
+	}{
+		{"MP4 with generic type and unknown length", mp4, "application/octet-stream", MaxFileBytes + 1, -1, "video/mp4"},
+		{"QuickTime at video limit", "\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  ", "video/quicktime", maxVideoPreviewBytes, maxVideoPreviewBytes, "video/quicktime"},
+		{"declared video length above limit", mp4, "video/mp4", 512, maxVideoPreviewBytes + 1, ""},
+		{"video body above limit", mp4, "video/mp4", maxVideoPreviewBytes + 1, -1, ""},
+		{"PDF above regular limit", "%PDF-1.4", "application/octet-stream", 512, MaxFileBytes + 1, ""},
+		{"HTML above regular limit", "<!DOCTYPE html>", "text/html", 512, MaxFileBytes + 1, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				resp := response(req, http.StatusOK, "", http.Header{
+					"Content-Type": {tc.contentType}, "Content-Disposition": {"attachment"},
+				})
+				resp.Body = io.NopCloser(io.MultiReader(strings.NewReader(tc.prefix), io.LimitReader(zeroReader{}, tc.size-int64(len(tc.prefix)))))
+				resp.ContentLength = tc.contentLength
+				return resp, nil
+			})
+			asset := Asset{URL: "https://github.com/user-attachments/assets/example"}
+			data, mediaType, err := Preview(context.Background(), asset, "", transport)
+			if tc.want == "" {
+				if err == nil || !strings.Contains(err.Error(), "size limit") || len(data) != 0 {
+					t.Fatalf("preview returned %d bytes and error %v, want size limit error", len(data), err)
+				}
+			} else if err != nil || mediaType != tc.want || int64(len(data)) != tc.size || !bytes.HasPrefix(data, []byte(tc.prefix)) {
+				t.Fatalf("preview returned %d bytes as %q with error %v, want %d bytes as %q", len(data), mediaType, err, tc.size, tc.want)
+			}
+		})
+	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
 }
 
 func TestPreviewAudio(t *testing.T) {

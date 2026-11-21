@@ -34,6 +34,7 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 			return nil, fmt.Errorf("unexpected preview host or cookie")
 		}
 		status, mediaType, body := http.StatusNotFound, "text/plain", ""
+		headers := make(http.Header)
 		if req.Header.Get("Authorization") != "" && req.URL.Path != "/user-attachments/assets/unavailable" {
 			t.Error("viewer credentials were reused for another attachment")
 		}
@@ -44,6 +45,9 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 			status, mediaType, body = http.StatusOK, "application/octet-stream", taskAssetTestPDF()
 		case "/user-attachments/files/42/notes.txt":
 			status, mediaType, body = http.StatusOK, "text/plain", "<script>throw new Error('attachment executed')</script>\nUTF-8: café"
+		case "/user-attachments/files/42/page.html":
+			status, mediaType, body = http.StatusOK, "text/html", "<!DOCTYPE html>\n<strong>Café</strong>"
+			headers.Set("Content-Disposition", `attachment; filename="page.html"`)
 		case "/user-attachments/files/42/tone.wav":
 			status, mediaType, body = http.StatusOK, "application/octet-stream", taskAssetTestWAV()
 		case "/user-attachments/files/42/silence.mp3":
@@ -57,7 +61,8 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 		case "/user-attachments/assets/unsupported":
 			status, body = http.StatusOK, "\x00\xff"
 		}
-		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {mediaType}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+		headers.Set("Content-Type", mediaType)
+		return &http.Response{StatusCode: status, Header: headers, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})
 	run := issueRunConfig(GitHubRepo{FullName: "example/project"}, GitHubIssue{
 		Number: 17, Title: "Inspect the attachments", State: "OPEN",
@@ -71,7 +76,10 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 	srv.Broker.RecordTaskRunConfig("req-assets", raw)
 	srv.Broker.RecordTaskRunConfig("req-single-asset", []byte(`{"repo":"example/project","prompt":"Task with one attachment","assets":[{"url":"https://github.com/user-attachments/assets/unavailable","name":"unavailable"}]}`))
 	srv.Broker.RecordTaskRunConfig("req-unsupported-asset", []byte(`{"repo":"example/project","prompt":"Task with an unsupported attachment","assets":[{"url":"https://github.com/user-attachments/assets/unsupported","name":"unsupported"}]}`))
-	srv.Broker.RecordTaskRunConfig("req-text-asset", []byte(`{"repo":"example/project","prompt":"Task with a text attachment","assets":[{"url":"https://github.com/user-attachments/files/42/notes.txt","name":"notes.txt"}]}`))
+	srv.Broker.RecordTaskRunConfig("req-text-asset", []byte(`{"repo":"example/project","prompt":"Task with text attachments","assets":[
+		{"url":"https://github.com/user-attachments/files/42/notes.txt","name":"notes.txt"},
+		{"url":"https://github.com/user-attachments/files/42/page.html","name":"page.html"}
+	]}`))
 	srv.Broker.RecordTaskRunConfig("req-audio-asset", []byte(`{"repo":"example/project","prompt":"Task with audio attachments","assets":[{"url":"https://github.com/user-attachments/files/42/tone.wav","name":"tone.wav"},{"url":"https://github.com/user-attachments/files/42/silence.mp3","name":"silence.mp3"}]}`))
 	srv.Broker.RecordTaskRunConfig("req-no-assets", []byte(`{"repo":"example/project","prompt":"Task without attachments"}`))
 	ts := httptest.NewServer(srv.Handler())

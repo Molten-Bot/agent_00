@@ -1,6 +1,7 @@
 package githubassets
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -21,6 +22,7 @@ import (
 
 const MaxFileBytes int64 = 25 << 20
 const MaxTotalBytes int64 = 100 << 20
+const maxVideoPreviewBytes int64 = 100 << 20
 
 // ErrPreviewAccess means GitHub denied access or concealed the attachment.
 var ErrPreviewAccess = errors.New("GitHub attachment requires access")
@@ -103,7 +105,7 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 			return checkRedirect(req, via)
 		}
 	}
-	data, headers, err := fetch(ctx, client, asset.URL, viewerToken, MaxFileBytes)
+	resp, err := fetch(ctx, client, asset.URL, viewerToken)
 	if err != nil {
 		var status *attachmentHTTPError
 		if u.Host == "github.com" && errors.As(err, &status) && status.githubAccess {
@@ -111,29 +113,38 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 		}
 		return nil, "", err
 	}
-	detected := http.DetectContentType(data)
-	contentType := headers.Get("Content-Type")
+	defer resp.Body.Close()
+	// Classify the response before reading its body so only videos get the larger budget.
+	const sniffBytes = 512 // http.DetectContentType's sniff window
+	body := bufio.NewReaderSize(resp.Body, sniffBytes)
+	prefix, err := body.Peek(sniffBytes)
+	if err != nil && err != io.EOF {
+		return nil, "", fmt.Errorf("read attachment response failed")
+	}
+	detected := http.DetectContentType(prefix)
+	contentType := resp.Header.Get("Content-Type")
 	declared, _, _ := mime.ParseMediaType(contentType)
+	mediaType := ""
 	if strings.HasPrefix(strings.ToLower(contentType), "text/html") ||
 		strings.HasPrefix(detected, "text/html") && declared != "text/plain" {
-		return nil, "", fmt.Errorf("GitHub returned HTML instead of an attachment; verify repository access")
+		disposition, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Disposition"))
+		if disposition != "attachment" {
+			return nil, "", fmt.Errorf("GitHub returned HTML instead of an attachment; verify repository access")
+		}
+		// Leave mediaType empty so HTML uploads go through plain-text validation.
+	} else {
+		mediaType = previewMediaType(detected, declared, prefix)
 	}
-	switch detected {
-	case "application/pdf", "audio/mpeg", "image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp", "image/x-icon", "video/mp4", "video/webm":
-		return data, detected, nil
-	case "audio/wave":
-		return data, "audio/wav", nil
-	case "application/ogg":
-		return data, "video/ogg", nil
+	limit := MaxFileBytes
+	if strings.HasPrefix(mediaType, "video/") {
+		limit = maxVideoPreviewBytes
 	}
-	// Some browser media formats have no signature in http.DetectContentType.
-	switch declared {
-	case "audio/mpeg", "image/avif", "image/svg+xml", "image/vnd.microsoft.icon", "video/ogg", "video/quicktime", "video/x-m4v":
-		return data, declared, nil
+	data, err := readAttachment(body, resp.ContentLength, limit)
+	if err != nil {
+		return nil, "", err
 	}
-	// Go sniffs ID3 tags but misses MP3 streams that start with an MPEG Layer III frame.
-	if isMP3Frame(data) {
-		return data, "audio/mpeg", nil
+	if mediaType != "" {
+		return data, mediaType, nil
 	}
 	if utf8.Valid(data) && bytes.IndexFunc(data, func(r rune) bool {
 		return unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r'
@@ -141,6 +152,27 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 		return data, "text/plain; charset=utf-8", nil
 	}
 	return nil, "", fmt.Errorf("attachment format is not supported for previews")
+}
+
+func previewMediaType(detected, declared string, prefix []byte) string {
+	switch detected {
+	case "application/pdf", "audio/mpeg", "image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp", "image/x-icon", "video/mp4", "video/webm":
+		return detected
+	case "audio/wave":
+		return "audio/wav"
+	case "application/ogg":
+		return "video/ogg"
+	}
+	// Some browser media formats have no signature in http.DetectContentType.
+	switch declared {
+	case "audio/mpeg", "image/avif", "image/svg+xml", "image/vnd.microsoft.icon", "video/ogg", "video/quicktime", "video/x-m4v":
+		return declared
+	}
+	// Go sniffs ID3 tags but misses MP3 streams that start with an MPEG Layer III frame.
+	if isMP3Frame(prefix) {
+		return "audio/mpeg"
+	}
+	return ""
 }
 
 func isMP3Frame(data []byte) bool {
@@ -183,10 +215,16 @@ func allowedDownload(u *url.URL) bool {
 }
 
 func downloadOne(ctx context.Context, client *http.Client, asset Asset, dir, token string, index int, limit int64) (File, int64, error) {
-	data, headers, err := fetch(ctx, client, asset.URL, token, limit)
+	resp, err := fetch(ctx, client, asset.URL, token)
 	if err != nil {
 		return File{}, 0, err
 	}
+	defer resp.Body.Close()
+	data, err := readAttachment(resp.Body, resp.ContentLength, limit)
+	if err != nil {
+		return File{}, 0, err
+	}
+	headers := resp.Header
 	mediaType := http.DetectContentType(data)
 	if strings.HasPrefix(mediaType, "text/html") || strings.HasPrefix(strings.ToLower(headers.Get("Content-Type")), "text/html") {
 		return File{}, 0, fmt.Errorf("GitHub returned HTML instead of an attachment; verify repository access")
@@ -226,10 +264,10 @@ func (e *attachmentHTTPError) Error() string {
 	return fmt.Sprintf("GitHub returned HTTP %d; verify attachment availability and repository access", e.status)
 }
 
-func fetch(ctx context.Context, client *http.Client, rawURL, token string, limit int64) ([]byte, http.Header, error) {
+func fetch(ctx context.Context, client *http.Client, rawURL, token string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("invalid attachment request")
+		return nil, fmt.Errorf("invalid attachment request")
 	}
 	if req.URL.Host == "github.com" && token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -239,36 +277,40 @@ func fetch(ctx context.Context, client *http.Client, rawURL, token string, limit
 	if err != nil {
 		// net/http errors contain URLs, including signed redirect credentials.
 		if ctx.Err() != nil {
-			return nil, nil, ctx.Err()
+			return nil, ctx.Err()
 		}
 		if errors.Is(err, ErrPreviewAccess) {
-			return nil, nil, ErrPreviewAccess
+			return nil, ErrPreviewAccess
 		}
-		return nil, nil, fmt.Errorf("attachment request failed (network, timeout, or disallowed redirect)")
+		return nil, fmt.Errorf("attachment request failed (network, timeout, or disallowed redirect)")
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
 		if resp.Request != nil {
 			req = resp.Request
 		}
 		access := resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound
 		rateLimited := resp.Header.Get("Retry-After") != "" || resp.Header.Get("X-RateLimit-Remaining") == "0"
-		return nil, nil, &attachmentHTTPError{status: resp.StatusCode, githubAccess: req.URL.Host == "github.com" && access && !rateLimited}
+		return nil, &attachmentHTTPError{status: resp.StatusCode, githubAccess: req.URL.Host == "github.com" && access && !rateLimited}
 	}
-	if resp.ContentLength > limit {
-		return nil, nil, fmt.Errorf("attachment exceeds download size limit")
+	return resp, nil
+}
+
+func readAttachment(body io.Reader, contentLength, limit int64) ([]byte, error) {
+	if contentLength > limit {
+		return nil, fmt.Errorf("attachment exceeds download size limit")
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
 	if err != nil {
-		return nil, nil, fmt.Errorf("read attachment response failed")
+		return nil, fmt.Errorf("read attachment response failed")
 	}
 	if int64(len(data)) > limit {
-		return nil, nil, fmt.Errorf("attachment exceeds download size limit")
+		return nil, fmt.Errorf("attachment exceeds download size limit")
 	}
 	if len(data) == 0 {
-		return nil, nil, fmt.Errorf("attachment is empty")
+		return nil, fmt.Errorf("attachment is empty")
 	}
-	return data, resp.Header, nil
+	return data, nil
 }
 
 func safeFilename(name string) string {

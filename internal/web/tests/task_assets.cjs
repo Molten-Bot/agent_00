@@ -184,6 +184,13 @@ for (const mobile of [false, true]) {
     assert.equal(await textPreview.textContent(), "<script>throw new Error('attachment executed')</script>\nUTF-8: café",
       'late authorization cannot replace a different preview');
     await staleAuth.close();
+    const htmlResponse = page.waitForResponse(response =>
+      response.url().endsWith('/asset-preview') && decodeURIComponent(response.request().headers()['x-task-asset-url']).endsWith('/page.html'));
+    await next.click();
+    assert.equal((await htmlResponse).headers()['content-type'], 'text/plain; charset=utf-8');
+    await expect(textPreview).toBeVisible();
+    assert.equal(await textPreview.textContent(), '<!DOCTYPE html>\n<strong>Café</strong>');
+    await expect(textPreview.locator('*')).toHaveCount(0);
     await page.keyboard.press('Escape');
     await expect(viewer.locator('pre')).toHaveCount(0);
 
