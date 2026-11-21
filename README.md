@@ -230,10 +230,11 @@ and falls back to the configured disk base when the preferred base is full.
 This reserve is an early check, not a limit on an individual build's disk usage.
 The daemon records the largest workspace size observed at task completion for each
 repository or combination of repositories. It stores these estimates by repository
-hash in `task-disk-usage.json` beside the runtime config. Tasks without a history
-reserve 512 MiB. When available space cannot cover a task's estimate alongside
-other reservations on the same filesystem, the task stays queued until space
-becomes available. Force start overrides this admission check.
+hash in a sidecar with `.task-disk-usage.json` appended to the runtime config path.
+Tasks without a history reserve 512 MiB. When available space cannot cover a
+task's estimate alongside other reservations on the same filesystem, the task
+stays queued until space becomes available. Force start overrides this admission
+check.
 Storage exhaustion requires an infrastructure repair and does not launch another
 coding task on the same exhausted filesystem.
 

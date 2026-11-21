@@ -27,6 +27,9 @@ type TaskDiskHistory struct {
 
 func OpenTaskDiskHistory(path string) (*TaskDiskHistory, error) {
 	history := &TaskDiskHistory{path: path, max: make(map[string]uint64)}
+	if path == "" {
+		return history, nil
+	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return history, nil
@@ -84,7 +87,7 @@ func (h *TaskDiskHistory) Record(key string, size uint64) error {
 		h.max[key] = size
 		h.dirty = true
 	}
-	if !h.dirty {
+	if h.path == "" || !h.dirty {
 		return nil
 	}
 
@@ -99,7 +102,13 @@ func (h *TaskDiskHistory) Record(key string, size uint64) error {
 	return nil
 }
 
-func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool) (bool, error) {
+type diskSample struct {
+	device string
+	free   uint64
+	err    error
+}
+
+func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, samples map[string]diskSample) (bool, error) {
 	if waiter.disk == nil {
 		return true, nil
 	}
@@ -110,19 +119,34 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool) (b
 	var fallbackRoot, fallbackDevice string
 	var setupErr error
 	blocked := false
-	for _, root := range waiter.disk.Workspace.DiskRoots() {
+	manager := waiter.disk.Workspace
+	if !force {
+		// Disk admission handles free space. PrepareRoots checks setup even
+		// when capacity is too low for this task to start.
+		manager.CheckSpace = nil
+	}
+	for _, root := range manager.DiskRoots() {
+		manager.Root = root
+		if err := manager.PrepareRoots(); err != nil {
+			setupErr = err
+			continue
+		}
 		path := root
 		if waiter.disk.ExistingDir != "" {
 			path = waiter.disk.ExistingDir
 		}
-		device, free, err := c.diskSpace(path)
-		if err != nil {
-			setupErr = fmt.Errorf("inspect workspace storage %s: %w", path, err)
+		sample, ok := samples[path]
+		if !ok {
+			sample.device, sample.free, sample.err = c.diskSpace(path)
+			samples[path] = sample
+		}
+		if sample.err != nil {
+			setupErr = fmt.Errorf("inspect workspace storage %s: %w", path, sample.err)
 			continue
 		}
 		// Reserve each running task's full allowance. Free space may already
 		// reflect some of its writes, so this is deliberately conservative.
-		available := free
+		device, available := sample.device, sample.free
 		if reserved := c.reserved[device]; reserved != nil {
 			if reserved.IsUint64() {
 				available -= min(available, reserved.Uint64())
@@ -133,12 +157,6 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool) (b
 		fits := available >= max(workspace.MinimumFreeBytes, required)
 		if !fits && !force {
 			blocked = true
-			continue
-		}
-		manager := waiter.disk.Workspace
-		manager.Root = root
-		if err := manager.PrepareRoots(); err != nil {
-			setupErr = err
 			continue
 		}
 		if fits {

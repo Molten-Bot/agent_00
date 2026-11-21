@@ -283,7 +283,7 @@ func (c *AdaptiveScheduler) acquireForce(ctx context.Context, requestID string, 
 		c.mu.Unlock()
 		return "", nil, errSchedulerClosed
 	}
-	if _, err := c.reserveDiskLocked(waiter, true); err != nil {
+	if _, err := c.reserveDiskLocked(waiter, true, make(map[string]diskSample)); err != nil {
 		c.mu.Unlock()
 		return "", nil, err
 	}
@@ -326,11 +326,12 @@ func (c *AdaptiveScheduler) releaseLocked(waiter *taskWaiter) {
 }
 
 func (c *AdaptiveScheduler) tryGrantLocked(start int) {
+	samples := make(map[string]diskSample)
 	// A disk-blocked task can wait while smaller tasks or tasks on another
 	// filesystem use otherwise idle slots.
 	for i := start; c.running < c.allowed && i < len(c.waiters); {
 		waiter := c.waiters[i]
-		granted, err := c.reserveDiskLocked(waiter, false)
+		granted, err := c.reserveDiskLocked(waiter, false, samples)
 		if !granted && err == nil {
 			waiter.diskBlocked = true
 			i++

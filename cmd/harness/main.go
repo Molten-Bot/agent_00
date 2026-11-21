@@ -319,7 +319,7 @@ func runServer(args []string) int {
 	}
 
 	scheduler := localruntime.NewAdaptiveScheduler(cfg.Scheduler, daemonLogger)
-	diskHistory, err := localruntime.OpenTaskDiskHistory(filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "task-disk-usage.json"))
+	diskHistory, err := openLocalTaskDiskHistory(cfg.RuntimeConfigPath)
 	if err != nil {
 		daemonLogger("scheduler status=warn action=load_task_disk_history err=%q", err)
 	}
@@ -640,12 +640,14 @@ func runServer(args []string) int {
 				if repairWork != nil {
 					taskRunner = localruntime.IssueRunner{Runner: runner, Lock: repairWork.lock}
 				}
+				taskWorkspace := diskRequest.Workspace
+				taskWorkspace.Root = workspaceRoot
 				outcome := runLocalTask(runCtx, taskRunner, daemonLogger, "local", requestID, runCfg, finalReviewPasses, func() bool {
 					if taskHandle == nil {
 						return false
 					}
 					return taskHandle.IsStopped()
-				}, signingSnapshot, monitorBroker, workspaceRoot, func(runDir string) {
+				}, signingSnapshot, monitorBroker, taskWorkspace, func(runDir string) {
 					recordLocalTaskDiskUsage(diskHistory, diskKey, requestID, runDir, daemonLogger)
 				})
 				if taskHandle != nil {
@@ -1491,7 +1493,7 @@ func runLocalTask(
 	wasStopped func() bool,
 	signingSnapshot *gitsigning.Snapshot,
 	broker *web.Broker,
-	workspaceRoot string,
+	taskWorkspace workspace.Manager,
 	recordDiskUsage func(string),
 ) localTaskOutcome {
 	logf(
@@ -1503,6 +1505,7 @@ func runLocalTask(
 	)
 
 	h := app.New(runner)
+	h.Workspace = taskWorkspace
 	if broker != nil {
 		h.OnPRTitle = func(url, title string) {
 			broker.RecordTaskPRTitle(requestID, url, title)
@@ -1523,9 +1526,6 @@ func runLocalTask(
 		var finish func()
 		ctx, finish = issueWork.configure(ctx, &h)
 		defer finish()
-	}
-	if workspaceRoot != "" {
-		h.Workspace.Root = workspaceRoot
 	}
 	h.Logf = func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)

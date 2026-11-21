@@ -201,7 +201,7 @@ func TestAdaptiveSchedulerReportsWorkspaceSetupFailure(t *testing.T) {
 	for _, force := range []bool{false, true} {
 		controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
 		controller.diskSpace = func(string) (string, uint64, error) {
-			return "disk", workspace.MinimumFreeBytes, nil
+			return "disk", 0, nil
 		}
 		request := TaskDiskRequest{Workspace: workspace.Manager{
 			Root: t.TempDir(),
@@ -331,5 +331,35 @@ func TestAdaptiveSchedulerDoesNotReprobeDiskWaitersOnSubmission(t *testing.T) {
 	}
 	if probes != submissions {
 		t.Fatalf("disk probes = %d, want %d", probes, submissions)
+	}
+}
+
+func TestAdaptiveSchedulerSharesDiskSamplesWithinAdmissionPass(t *testing.T) {
+	t.Parallel()
+
+	const unit = workspace.MinimumFreeBytes
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 3}, nil)
+	request := TaskDiskRequest{Workspace: workspace.Manager{Root: t.TempDir()}}
+	first := &taskWaiter{disk: &request}
+	second := &taskWaiter{disk: &request}
+	third := &taskWaiter{disk: &request}
+	controller.waiters = []*taskWaiter{first, second, third}
+	free := uint64(2 * unit)
+	probes := 0
+	controller.diskSpace = func(string) (string, uint64, error) {
+		probes++
+		return "disk", free, nil
+	}
+
+	controller.tryGrantLocked(0)
+	if probes != 1 || !first.granted || !second.granted || !third.diskBlocked || third.granted {
+		t.Fatalf("first pass: probes = %d, admitted = %v/%v/%v, third disk blocked = %v",
+			probes, first.granted, second.granted, third.granted, third.diskBlocked)
+	}
+
+	free = 3 * unit
+	controller.tryGrantLocked(0)
+	if probes != 2 || !third.granted {
+		t.Fatalf("second pass: probes = %d, third admitted = %v", probes, third.granted)
 	}
 }

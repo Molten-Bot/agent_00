@@ -2,11 +2,26 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
+
+func openLocalTaskDiskHistory(configPath string) (*localruntime.TaskDiskHistory, error) {
+	configPath = filepath.Clean(configPath)
+	resolved, err := filepath.EvalSymlinks(configPath)
+	if err == nil {
+		configPath = resolved
+	} else if _, statErr := os.Lstat(configPath); !errors.Is(statErr, os.ErrNotExist) {
+		history, _ := localruntime.OpenTaskDiskHistory("")
+		return history, fmt.Errorf("resolve runtime config path for disk history: %w", err)
+	}
+	return localruntime.OpenTaskDiskHistory(configPath + ".task-disk-usage.json")
+}
 
 func (w *issueRepairWork) workspaceDir() string {
 	return filepath.Join(filepath.Dir(w.queue.claims.Root), "repair-workspaces", w.record.ID)

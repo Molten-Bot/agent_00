@@ -21,6 +21,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
+	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
 type stubAgentAuthGate struct {
@@ -1525,7 +1526,7 @@ func TestRunLocalTaskReportsErrorState(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		"",
+		workspace.NewManager(),
 		nil,
 	)
 
@@ -1556,7 +1557,7 @@ func TestRunLocalTaskReportsStoppedStateWithoutCancelCause(t *testing.T) {
 		func() bool { return true },
 		nil,
 		nil,
-		"",
+		workspace.NewManager(),
 		nil,
 	)
 
@@ -1592,7 +1593,7 @@ func TestRunLocalTaskReportsStoppedStateWithCancelCause(t *testing.T) {
 		func() bool { return true },
 		nil,
 		nil,
-		"",
+		workspace.NewManager(),
 		nil,
 	)
 
@@ -1621,7 +1622,7 @@ func TestRunLocalTaskReportsErrorWithSigningSnapshot(t *testing.T) {
 		nil,
 		&gitsigning.Snapshot{},
 		nil,
-		"",
+		workspace.NewManager(),
 		nil,
 	)
 
@@ -1630,8 +1631,65 @@ func TestRunLocalTaskReportsErrorWithSigningSnapshot(t *testing.T) {
 	}
 }
 
+func TestOpenLocalTaskDiskHistoryPreservesRuntimeConfig(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"task-disk-usage.json", "runtime.json.task-disk-usage.json"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), name)
+			const runtimeConfig = `{"scheduler":{"maxParallel":3}}`
+			if err := os.WriteFile(path, []byte(runtimeConfig), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			configPath := path
+			if name != "task-disk-usage.json" {
+				configPath = filepath.Join(filepath.Dir(path), "runtime.json")
+				if err := os.Symlink(path, configPath); err != nil {
+					t.Fatal(err)
+				}
+			}
+			history, err := openLocalTaskDiskHistory(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := history.Record("repo", 42); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := openLocalTaskDiskHistory(configPath)
+			if err != nil || reopened.RequiredBytes("repo") != 42 {
+				t.Fatalf("reopen disk history: got %+v, error = %v", reopened, err)
+			}
+			got, err := os.ReadFile(configPath)
+			if err != nil || string(got) != runtimeConfig {
+				t.Fatalf("runtime config after disk history write = %q, error = %v", got, err)
+			}
+		})
+	}
+
+	t.Run("dangling config symlink", func(t *testing.T) {
+		configPath := filepath.Join(t.TempDir(), "runtime.json")
+		target := configPath + ".task-disk-usage.json"
+		if err := os.Symlink(target, configPath); err != nil {
+			t.Fatal(err)
+		}
+		history, err := openLocalTaskDiskHistory(configPath)
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("open disk history with dangling runtime config = %v, want missing config error", err)
+		}
+		if err := history.Record("repo", 42); err != nil {
+			t.Fatal(err)
+		}
+		if got := history.RequiredBytes("repo"); got != 42 {
+			t.Fatalf("in-memory disk requirement = %d, want 42", got)
+		}
+		if _, err := os.Stat(configPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat runtime config = %v, want it to stay missing", err)
+		}
+	})
+}
+
 func TestRunLocalTaskRecordsDiskUsageBeforeTerminalLog(t *testing.T) {
-	root := t.TempDir()
+	taskWorkspace := workspace.Manager{Root: t.TempDir()}
 	t.Setenv("CODEX_HOME", t.TempDir())
 	historyPath := filepath.Join(t.TempDir(), "task-disk-usage.json")
 	history, err := localruntime.OpenTaskDiskHistory(historyPath)
@@ -1677,7 +1735,7 @@ func TestRunLocalTaskRecordsDiskUsageBeforeTerminalLog(t *testing.T) {
 			t.Errorf("close at terminal error: %v", err)
 		}
 	}
-	outcome := runLocalTask(context.Background(), runner, logf, "local", "req-disk", cfg, 0, nil, nil, broker, root, func(runDir string) {
+	outcome := runLocalTask(context.Background(), runner, logf, "local", "req-disk", cfg, 0, nil, nil, broker, taskWorkspace, func(runDir string) {
 		recordLocalTaskDiskUsage(history, key, "req-disk", runDir, logf)
 	})
 	if outcome.State != "error" || !errors.Is(outcome.Result.Err, cloneErr) {
