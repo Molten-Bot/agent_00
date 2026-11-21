@@ -353,6 +353,9 @@ func (s Server) blockIssueClaim(record localruntime.IssueClaimRecord, cause erro
 			current.State = "retry_wait"
 			current.Incident = "admission"
 			current.UnlockPending = current.LabelAdded
+			if errors.Is(cause, localruntime.ErrIssueOwnershipChanged) {
+				blockStaleIssueClaim(current)
+			}
 		}
 		return nil
 	}))
@@ -360,6 +363,11 @@ func (s Server) blockIssueClaim(record localruntime.IssueClaimRecord, cause erro
 
 func (s Server) finishIssueAdmission(ctx context.Context, record localruntime.IssueClaimRecord, submit func(context.Context, []byte) (string, error)) (string, error) {
 	issue := record.Run.GitHubIssue
+	if record.Version == 2 {
+		if err := s.IssueClaims.CheckOwner(record.InstanceID); err != nil {
+			return "", s.blockIssueClaim(record, err)
+		}
+	}
 	if record.Version == 2 && s.Broker != nil {
 		pending := 0
 		for _, task := range s.Broker.TaskList() {
