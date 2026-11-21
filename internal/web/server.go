@@ -197,6 +197,8 @@ type ReviewSettingsState struct {
 	AssignCreator                      bool     `json:"assign_creator"`
 	DisabledRepositories               []string `json:"disabled_repositories"`
 	Message                            string   `json:"message,omitempty"`
+
+	GitHubIssueRepositories localruntime.GitHubIssueRepositories `json:"github_issue_repositories"`
 }
 
 type ReviewSettingsRequest struct {
@@ -220,6 +222,8 @@ type ReviewSettingsRequest struct {
 	GitHubIssueAutoStartExclusionLabel *string   `json:"github_issue_auto_start_exclusion_label,omitempty"`
 	AssignCreator                      *bool     `json:"assign_creator,omitempty"`
 	DisabledRepositories               *[]string `json:"disabled_repositories,omitempty"`
+
+	GitHubIssueRepositories localruntime.GitHubIssueRepositories `json:"github_issue_repositories"`
 }
 
 // NewServer returns a monitor HTTP server.

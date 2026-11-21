@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -471,10 +472,71 @@ func TestIssueAutomationWakeScansImmediatelyAndSettingsAlias(t *testing.T) {
 	}
 }
 
+func TestIssueAutomationTargetsSelectedRepositories(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newAutomationGitHub()
+	s := automationServer(t, f)
+	repos := []GitHubRepo{
+		{FullName: "acme/repo", DefaultBranch: "main"},
+		{FullName: "acme/other", DefaultBranch: "main"},
+		{FullName: "acme/paused", DefaultBranch: "main"},
+		{FullName: "acme/unselected", DefaultBranch: "main"},
+		{FullName: "acme/disabled", DefaultBranch: "main"},
+	}
+	s.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) { return repos, nil }
+	settings, _ := s.ReviewSettingsStatus(ctx)
+	settings.DisabledRepositories = []string{"acme/disabled"}
+	settings.GitHubIssueRepositories = localruntime.GitHubIssueRepositories{}
+	s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) { return settings, nil }
+
+	s.pollGitHubIssueAutoStart(ctx)
+	if s.issueAutomation.status.Enabled || f.calls != 0 {
+		t.Fatal("empty repository selection fell back to global settings")
+	}
+
+	f.issue.Assignees = nil
+	f.issue.Labels = append(f.issue.Labels, GitHubIssueLabel{Name: "repo-claimed"})
+	settings.GitHubIssueRepositories["acme/repo"] = localruntime.GitHubIssueRepositorySettings{
+		AutoStart: true, TriggerLabels: []string{"ready"}, ExclusionLabel: "repo-claimed",
+	}
+	settings.GitHubIssueRepositories["acme/other"] = localruntime.GitHubIssueRepositorySettings{
+		AutoStart: true, OnlyAssigned: true, TriggerLabels: []string{"other-ready"}, ExclusionLabel: "other-claimed",
+	}
+	settings.GitHubIssueRepositories["acme/paused"] = localruntime.GitHubIssueRepositorySettings{
+		ExclusionLabel: "paused-claimed",
+	}
+	settings.GitHubIssueRepositories["acme/disabled"] = localruntime.GitHubIssueRepositorySettings{
+		AutoStart: true, ExclusionLabel: "disabled-claimed",
+	}
+	s.pollGitHubIssueAutoStart(ctx)
+	status := s.issueAutomation.status
+	if !status.Enabled || !slices.Equal(status.Repositories, []string{"acme/repo", "acme/other"}) || len(f.submissions) != 0 {
+		t.Fatalf("unexpected repository scan: %+v", status)
+	}
+	if len(status.Issues) != 2 || status.Issues[0].Reason != "claimed elsewhere or excluded" || status.Issues[1].Reason != "wrong assignee" {
+		t.Fatalf("wrong repository filters: %+v", status.Issues)
+	}
+
+	f.issue.Assignees = []GitHubIssueUser{{Login: "octocat"}}
+	f.issue.Labels = []GitHubIssueLabel{{Name: "ready"}}
+	s.pollGitHubIssueAutoStart(ctx)
+	status = s.issueAutomation.status
+	if len(status.Issues) != 2 || status.Issues[1].Reason != "missing trigger label" || len(f.submissions) != 1 {
+		t.Fatalf("wrong repository labels: %+v", status)
+	}
+	if issue := f.submissions[0].GitHubIssue; issue.Repository != "acme/repo" || issue.Claim.ExclusionLabel != "repo-claimed" {
+		t.Fatalf("wrong claim settings: %+v", issue)
+	}
+}
+
 func TestIssueAutomationManualStartsShareClaims(t *testing.T) {
 	t.Parallel()
 	f := newAutomationGitHub()
 	s := automationServer(t, f)
+	settings, _ := s.ReviewSettingsStatus(context.Background())
+	settings.GitHubIssueRepositories = localruntime.GitHubIssueRepositories{}
+	s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) { return settings, nil }
 	f.issue.Assignees = nil
 	f.issue.Labels = nil
 	run := issueRunConfig(GitHubRepo{FullName: "acme/repo", DefaultBranch: "main"}, f.issue, "reference")

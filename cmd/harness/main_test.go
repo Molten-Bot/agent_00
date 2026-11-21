@@ -922,6 +922,47 @@ func TestConfigureReviewSettingsPersistsGitHubIssuesToggle(t *testing.T) {
 	}
 }
 
+func TestConfigureReviewSettingsPersistsIssueRepositories(t *testing.T) {
+	t.Parallel()
+	cfg := localruntime.InitConfig{RuntimeConfigPath: filepath.Join(t.TempDir(), "config.json"), AgentHarness: "codex"}
+	req := web.ReviewSettingsRequest{MergeMethod: "squash", ReviewLevel: "off"}
+	state, err := configureReviewSettings(cfg, req)
+	if err != nil || state.GitHubIssueRepositories != nil {
+		t.Fatalf("initial repositories = %v, err = %v", state.GitHubIssueRepositories, err)
+	}
+
+	req.GitHubIssueRepositories = localruntime.GitHubIssueRepositories{
+		"Acme/One": {AutoStart: true, OnlyAssigned: true, TriggerLabels: []string{" ready ", "READY"}, ExclusionLabel: " one-claimed "},
+		"acme/two": {ExclusionLabel: "two-claimed"},
+	}
+	want := localruntime.GitHubIssueRepositories{
+		"acme/one": {AutoStart: true, OnlyAssigned: true, TriggerLabels: []string{"ready"}, ExclusionLabel: "one-claimed"},
+		"acme/two": {TriggerLabels: []string{}, ExclusionLabel: "two-claimed"},
+	}
+	state, err = configureReviewSettings(cfg, req)
+	if err != nil || !reflect.DeepEqual(state.GitHubIssueRepositories, want) {
+		t.Fatalf("saved repositories = %#v, err = %v", state.GitHubIssueRepositories, err)
+	}
+
+	req.GitHubIssueRepositories["acme/two"] = localruntime.GitHubIssueRepositorySettings{
+		TriggerLabels: []string{"TWO-CLAIMED"}, ExclusionLabel: "two-claimed",
+	}
+	if _, err := configureReviewSettings(cfg, req); err == nil {
+		t.Fatal("repository trigger matching its exclusion was accepted")
+	}
+	req.GitHubIssueRepositories = nil
+	state, err = configureReviewSettings(cfg, req)
+	if err != nil || !reflect.DeepEqual(state.GitHubIssueRepositories, want) {
+		t.Fatalf("omitted selection changed repositories = %#v, err = %v", state.GitHubIssueRepositories, err)
+	}
+
+	req.GitHubIssueRepositories = localruntime.GitHubIssueRepositories{}
+	state, err = configureReviewSettings(cfg, req)
+	if err != nil || state.GitHubIssueRepositories == nil || len(state.GitHubIssueRepositories) != 0 {
+		t.Fatalf("empty selection fell back to legacy = %#v, err = %v", state.GitHubIssueRepositories, err)
+	}
+}
+
 func TestConfigureReviewSettingsOmittedDefaultLibraryEnabledKeepsCurrentValue(t *testing.T) {
 	t.Parallel()
 

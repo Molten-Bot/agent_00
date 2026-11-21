@@ -104,11 +104,16 @@ Deleting a schedule leaves any run already started intact.
 
 ### GitHub issue automation
 
-In **Settings → GitHub Issues**, enable GitHub Issues and automatic matching.
-For assigned, labeled work, keep **Only issues assigned to me** enabled and add
-`ready-for-agent` to **Trigger labels**. Any selected label matches; an empty
-list allows any label. Assignment uses the same `gh` account as repository
-and issue discovery. Disabled repositories are excluded.
+In **Settings → GitHub Issues**, enable the workflow, choose a repository from
+the available repositories, and enable issue automation for it. Set
+**Auto-start matching issues**, **Only issues assigned to me**, **Trigger labels**,
+and the **Exclusion label** for each selected repository. Any trigger label
+matches. An empty list allows any label. Assignment uses the same `gh` account
+as repository and issue discovery. Studio still supports browsing and manually
+starting issues in available repositories outside the automation selection.
+
+Existing global auto-start settings keep working until you enable automation
+for a specific repository or turn off existing auto-start in settings.
 
 The service checks immediately and every minute, including the existing open
 backlog. Each matching issue is journaled before admission. Excluded issues

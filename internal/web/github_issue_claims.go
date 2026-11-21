@@ -721,6 +721,13 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	if !settings.GitHubIssuesEnabled {
 		return "", 409, fmt.Errorf("GitHub Issues is disabled")
 	}
+	if automatic {
+		var enabled bool
+		settings, enabled = settings.issueAutoStartForRepository(repository)
+		if !enabled {
+			return "", 409, fmt.Errorf("issue automation disabled")
+		}
+	}
 	for _, disabled := range settings.DisabledRepositories {
 		if issueRepositoryMatchesRun(disabled, repository) {
 			return "", 409, fmt.Errorf("repository is disabled")

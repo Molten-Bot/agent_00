@@ -8699,6 +8699,11 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 	border-top: 1px solid var(--border);
 }
 
+.github-issues-automation-fields {
+  display: grid;
+  gap: 8px;
+}
+
 .github-issues-auto-start-labels {
   display: grid;
   gap: 6px;
@@ -8715,6 +8720,11 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
 
 .github-issues-auto-start-labels input {
   width: 100%;
+}
+
+.github-issues-auto-start-labels select {
+  appearance: auto;
+  background-image: none;
 }
 
 .github-issues-settings-link-mode {

@@ -327,7 +327,8 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if err != nil {
 		return s.deferIssueRecord(record, err)
 	}
-	if !settings.GitHubIssuesEnabled || !settings.GitHubIssueAutoStartAssigned {
+	settings, autoStart := settings.issueAutoStartForRepository(issue.Repository)
+	if !autoStart {
 		record.State = "blocked"
 		record.Error = "issue automation disabled"
 		return s.IssueClaims.Save(record)

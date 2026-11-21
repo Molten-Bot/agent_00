@@ -506,6 +506,30 @@ func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryRespectsRepositoryAutoStart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	settings, _ := s.ReviewSettingsStatus(ctx)
+	settings.GitHubIssueRepositories = localruntime.GitHubIssueRepositories{
+		"acme/other": {AutoStart: true, ExclusionLabel: "other-claimed"},
+	}
+	s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) { return settings, nil }
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	blocked := latestRecoveryRecord(t, s)
+	if blocked.State != "blocked" || blocked.Error != "issue automation disabled" || blocked.UnlockPending || len(f.submissions) != 1 {
+		t.Fatalf("removed repository did not finish cleanup and block retry: %+v", blocked)
+	}
+	response := retryIssue(t, s, record.ID, true)
+	if response.Code != 202 || len(f.submissions) != 2 {
+		t.Fatalf("explicit retry = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestIssueRecoveryBudgetStopAndNoChangeDoNotRerun(t *testing.T) {
 	t.Parallel()
 	for _, outcome := range []string{"error", "stopped", "no_changes"} {

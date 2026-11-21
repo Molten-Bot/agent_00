@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
+	"github.com/Molten-Bot/agent_00/internal/config"
 )
 
 const (
@@ -163,16 +164,66 @@ func SaveRuntimeConfigReviewAndDefaultLibrarySettings(
 	)
 }
 
-// SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings persists review
-// automation, library, chat, JSON, and GitHub Issues settings in one update.
-// githubIssueLinkMode is optional; when omitted, the existing behavior remains.
+// GitHubIssueRepositorySettings controls automatic issue admission for one repository.
+type GitHubIssueRepositorySettings struct {
+	AutoStart      bool     `json:"auto_start"`
+	OnlyAssigned   bool     `json:"only_assigned"`
+	TriggerLabels  []string `json:"trigger_labels"`
+	ExclusionLabel string   `json:"exclusion_label"`
+}
+
+// GitHubIssueRepositories maps selected OWNER/REPO paths to their automation
+// settings. Nil keeps legacy global settings. An empty map selects no repos.
+type GitHubIssueRepositories map[string]GitHubIssueRepositorySettings
+
+const githubIssueRepositoriesKey = "github_issue_repositories"
+
+func normalizeGitHubIssueRepositories(repositories GitHubIssueRepositories) (GitHubIssueRepositories, error) {
+	if repositories == nil {
+		return nil, nil
+	}
+	normalized := make(GitHubIssueRepositories, len(repositories))
+	for name, settings := range repositories {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if !config.ValidGitHubRepository(key) {
+			return nil, fmt.Errorf("issue automation repository %q must be OWNER/REPO", name)
+		}
+		if _, exists := normalized[key]; exists {
+			return nil, fmt.Errorf("duplicate issue automation repository %q", name)
+		}
+		settings.ExclusionLabel = strings.TrimSpace(settings.ExclusionLabel)
+		if err := validateIssueExclusionLabel(settings.ExclusionLabel); err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		settings.TriggerLabels = normalizeGitHubIssueAutoStartLabels(settings.TriggerLabels)
+		for _, label := range settings.TriggerLabels {
+			if strings.EqualFold(label, settings.ExclusionLabel) {
+				return nil, fmt.Errorf("%s: issue exclusion label must not also be a trigger label", name)
+			}
+		}
+		normalized[key] = settings
+	}
+	return normalized, nil
+}
+
+func validateIssueExclusionLabel(label string) error {
+	if label == "" || len(label) > 50 || strings.ContainsAny(label, "\r\n") {
+		return fmt.Errorf("issue exclusion label must contain 1–50 characters and no newlines")
+	}
+	return nil
+}
+
 type RuntimeConfigUISettingsUpdate struct {
+	IssueRepositories    GitHubIssueRepositories
 	OnlyAssigned         *bool
 	ExclusionLabel       *string
 	Labels               *[]string
 	DisabledRepositories *[]string
 }
 
+// SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings persists review
+// automation, library, chat, JSON, and GitHub Issues settings in one update.
+// githubIssueLinkMode is optional; when omitted, the existing behavior remains.
 func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 	path string,
 	initCfg InitConfig,
@@ -248,8 +299,8 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 	for _, setting := range settingsUpdates {
 		if setting.ExclusionLabel != nil {
 			label := strings.TrimSpace(*setting.ExclusionLabel)
-			if label == "" || len(label) > 50 || strings.ContainsAny(label, "\r\n") {
-				return fmt.Errorf("issue exclusion label must contain 1–50 characters and no newlines")
+			if err := validateIssueExclusionLabel(label); err != nil {
+				return err
 			}
 			doc["github_issue_auto_start_exclusion_label"] = label
 		}
@@ -271,6 +322,13 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 	for _, setting := range settingsUpdates {
 		if setting.DisabledRepositories != nil {
 			applyDisabledRepositoriesToDoc(doc, *setting.DisabledRepositories)
+		}
+		if setting.IssueRepositories != nil {
+			repositories, err := normalizeGitHubIssueRepositories(setting.IssueRepositories)
+			if err != nil {
+				return err
+			}
+			doc[githubIssueRepositoriesKey] = repositories
 		}
 	}
 
@@ -319,27 +377,28 @@ func ReadRuntimeConfigGitHubIssueAutoStartLabels(path string) []string {
 }
 
 func githubIssueAutoStartLabelsFromDoc(doc map[string]any) []string {
+	if labels, ok := doc["github_issue_auto_start_labels"].([]string); ok {
+		return normalizeGitHubIssueAutoStartLabels(labels)
+	}
 	raw, ok := doc["github_issue_auto_start_labels"].([]any)
 	if !ok {
-		if labels, typed := doc["github_issue_auto_start_labels"].([]string); typed {
-			raw = make([]any, len(labels))
-			for i, label := range labels {
-				raw[i] = label
-			}
-		} else {
-			return nil
+		return nil
+	}
+	labels := make([]string, 0, len(raw))
+	for _, value := range raw {
+		if label, ok := value.(string); ok {
+			labels = append(labels, label)
 		}
 	}
-	return normalizeGitHubIssueAutoStartLabels(raw)
+	return normalizeGitHubIssueAutoStartLabels(labels)
 }
 
-func normalizeGitHubIssueAutoStartLabels(values []any) []string {
+func normalizeGitHubIssueAutoStartLabels(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	labels := make([]string, 0, len(values))
 	for _, raw := range values {
-		label, ok := raw.(string)
-		label = strings.TrimSpace(label)
-		if !ok || label == "" {
+		label := strings.TrimSpace(raw)
+		if label == "" {
 			continue
 		}
 		key := strings.ToLower(label)
@@ -354,11 +413,7 @@ func normalizeGitHubIssueAutoStartLabels(values []any) []string {
 }
 
 func applyGitHubIssueAutoStartLabelsToDoc(doc map[string]any, labels []string) {
-	raw := make([]any, len(labels))
-	for i, label := range labels {
-		raw[i] = label
-	}
-	normalized := normalizeGitHubIssueAutoStartLabels(raw)
+	normalized := normalizeGitHubIssueAutoStartLabels(labels)
 	if len(normalized) == 0 {
 		delete(doc, "github_issue_auto_start_labels")
 		return
@@ -466,6 +521,7 @@ func applyDefaultLibraryEnabledToDoc(doc map[string]any, enabled bool) {
 // RuntimeConfigUISettings holds the persisted UI and automation toggles read
 // from one runtime config file.
 type RuntimeConfigUISettings struct {
+	GitHubIssueRepositories            GitHubIssueRepositories
 	DefaultLibraryEnabled              bool
 	ChatEnabled                        bool
 	JSONEnabled                        bool
@@ -508,7 +564,24 @@ func LoadRuntimeConfigUISettings(path string) (RuntimeConfigUISettings, error) {
 			loadErr = nil
 		}
 	}
+	var repositories GitHubIssueRepositories
+	if raw, ok := doc[githubIssueRepositoriesKey]; ok && loadErr == nil {
+		encoded, err := json.Marshal(raw)
+		if err == nil {
+			err = json.Unmarshal(encoded, &repositories)
+		}
+		if err == nil && repositories == nil {
+			err = fmt.Errorf("expected an object")
+		}
+		if err == nil {
+			repositories, err = normalizeGitHubIssueRepositories(repositories)
+		}
+		if err != nil {
+			loadErr = fmt.Errorf("read %s: %w", githubIssueRepositoriesKey, err)
+		}
+	}
 	return RuntimeConfigUISettings{
+		GitHubIssueRepositories:            repositories,
 		DefaultLibraryEnabled:              defaultLibraryEnabledFromDoc(doc),
 		ChatEnabled:                        chatEnabledFromDoc(doc),
 		JSONEnabled:                        jsonEnabledFromDoc(doc),

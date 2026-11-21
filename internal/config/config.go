@@ -443,7 +443,7 @@ func validateGitHubIssueConfig(issue *GitHubIssueConfig) error {
 	}
 	repository := strings.TrimSpace(issue.Repository)
 	parts := strings.Split(repository, "/")
-	if len(parts) != 2 || !validGitHubIssuePathPart(parts[0]) || !validGitHubIssuePathPart(parts[1]) {
+	if !ValidGitHubRepository(repository) {
 		return fmt.Errorf("githubIssue.repository must be OWNER/REPO")
 	}
 	if issue.Number <= 0 {
@@ -467,6 +467,12 @@ func validateGitHubIssueConfig(issue *GitHubIssueConfig) error {
 		return fmt.Errorf("githubIssue.linkMode must be reference or close")
 	}
 	return nil
+}
+
+// ValidGitHubRepository reports whether value is an OWNER/REPO path.
+func ValidGitHubRepository(value string) bool {
+	owner, repo, ok := strings.Cut(value, "/")
+	return ok && validGitHubIssuePathPart(owner) && validGitHubIssuePathPart(repo)
 }
 
 func validGitHubIssuePathPart(value string) bool {
