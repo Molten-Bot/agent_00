@@ -474,6 +474,30 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		}
 	}
 
+	publicationPending := false
+	if h.ResumeIssueWorkspace && issueClaim != nil {
+		status, statusErr := h.runCommand(ctx, "git", statusCommand(repos[0].Dir))
+		if statusErr != nil {
+			return h.fail(ExitGit, "git", statusErr, runDir)
+		}
+		publicationPending, err = h.repoHasPendingChanges(ctx, repos[0], status.Stdout)
+		if err != nil {
+			return h.fail(ExitGit, "git", err, runDir)
+		}
+		hasPendingWork := publicationPending
+		publicationPending = hasPendingWork && h.IssuePublicationReady
+		if issueClaim.Attempt > 1 && !hasPendingWork {
+			// A dependency may have merged since the issue branch was reserved.
+			// Incorporate the fetched base before the agent tests the branch.
+			repo := repos[0]
+			baseRef := remoteBaseComparisonRef(repo.BaseBranch)
+			res, err := h.runCommand(ctx, "git", gitCommand(repo.Dir, "merge", "--ff-only", "--no-overwrite-ignore", baseRef))
+			if err != nil {
+				return h.fail(ExitGit, "git", commandErrorWithDetails("fast-forward issue branch to fetched base", err, res, maxGitErrorDetailChars), runDir)
+			}
+		}
+	}
+
 	codexDir := targetDir
 	if len(repos) > 1 {
 		codexDir = runDir
@@ -537,20 +561,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	initialRepo, initialRepoDir := initialAgentInvocationRepoMetadata(repos)
 	initialAgentInvocation := newAgentInvocationLogMetadata(runtime, invocationMode, 1, initialRepo, initialRepoDir, codexTargetLabel)
 
+	var agentRes execx.Result
 	h.logf("stage=%s status=start target=%s%s", agentStage, codexTargetLabel, initialAgentInvocation.logFieldsSuffix())
 	codexStart := time.Now()
-	var agentRes execx.Result
-	publicationPending := false
-	if h.ResumeIssueWorkspace && h.IssuePublicationReady && issueClaim != nil {
-		status, statusErr := h.runCommand(ctx, "git", statusCommand(repos[0].Dir))
-		if statusErr != nil {
-			return h.fail(ExitGit, "git", statusErr, runDir)
-		}
-		publicationPending, err = h.repoHasPendingChanges(ctx, repos[0], status.Stdout)
-		if err != nil {
-			return h.fail(ExitGit, "git", err, runDir)
-		}
-	}
 	if !publicationPending {
 		h.step("agent")
 		agentRes, err = h.runCodexCapture(ctx, runtime, codexDir, codexBasePrompt, codexOpts, agentsPath, agentResponseMode, initialAgentInvocation)
@@ -559,11 +572,6 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	}
 	if err != nil {
 		return h.fail(ExitCodex, agentStage, err, runDir)
-	}
-	if !publicationPending && h.SaveIssuePublicationReady != nil {
-		if err := h.SaveIssuePublicationReady(true); err != nil {
-			return h.fail(ExitWorkspace, "workspace", fmt.Errorf("record issue publication readiness: %w", err), runDir)
-		}
 	}
 	h.logf("stage=%s status=ok elapsed_s=%d%s", agentStage, int(time.Since(codexStart).Seconds()), initialAgentInvocation.logFieldsSuffix())
 	// A PR may merge and delete its remote branch while the agent runs. Allow
@@ -5926,6 +5934,11 @@ func (h Harness) runCodexCapture(
 			targetDir,
 			cleanupErr,
 		)
+	}
+	if err == nil && h.SaveIssuePublicationReady != nil {
+		if saveErr := h.SaveIssuePublicationReady(true); saveErr != nil {
+			err = fmt.Errorf("record issue publication readiness: %w", saveErr)
+		}
 	}
 	return res, err
 }

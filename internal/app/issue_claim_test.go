@@ -3,12 +3,14 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
@@ -19,11 +21,13 @@ func (f issueBranchRunner) Run(ctx context.Context, cmd execx.Command) (execx.Re
 	return f(ctx, cmd)
 }
 
-func TestClaimedIssueClonesReservedBranchWithoutCreatingAnother(t *testing.T) {
+func TestClaimedIssueRetryClonesAndFastForwardsReservedBranchBeforeAgent(t *testing.T) {
 	t.Parallel()
 	cfg := sampleConfig()
 	cfg.GitHubIssue = &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17", Claim: &config.GitHubIssueClaim{ID: "claim", Branch: "agent00-issue-17", BaseBranch: "main", ExclusionLabel: "claimed", Attempt: 2}}
-	cloned, baseFetched, agentStarted := false, false, false
+	const oldRequirement = "Run the old validation command."
+	const newRequirement = "Run the new validation command."
+	cloned, baseFetched, fastForwarded, agentStarted := false, false, false, false
 	runner := issueBranchRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 		args := strings.Join(cmd.Args, " ")
 		if cmd.Name == "git" {
@@ -33,10 +37,32 @@ func TestClaimedIssueClonesReservedBranchWithoutCreatingAnother(t *testing.T) {
 					t.Fatalf("wrong clone branch: %s", args)
 				}
 				cloned = true
+				repoDir := cmd.Args[len(cmd.Args)-1]
+				if err := os.MkdirAll(repoDir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(repoDir, backpressureFilename), []byte(oldRequirement), 0600); err != nil {
+					t.Fatal(err)
+				}
 			case strings.Contains(args, "switch ") || strings.Contains(args, "checkout ") || strings.Contains(args, "branch -m"):
 				t.Fatalf("claimed branch must not be created, reset, or renamed: %s", args)
 			case strings.Contains(args, "fetch origin main:refs/remotes/origin/main"):
 				baseFetched = true
+			case strings.Contains(args, "status --porcelain"):
+				return execx.Result{Stdout: "## agent00-issue-17\n"}, nil
+			case strings.Contains(args, "rev-list --count refs/remotes/origin/main..HEAD"):
+				return execx.Result{Stdout: "0\n"}, nil
+			case strings.HasPrefix(args, "merge "):
+				if !baseFetched {
+					t.Error("fast-forward attempted before base fetch")
+				}
+				if args != "merge --ff-only --no-overwrite-ignore refs/remotes/origin/main" {
+					t.Errorf("unexpected fast-forward command: %s", args)
+				}
+				if err := os.WriteFile(filepath.Join(cmd.Dir, backpressureFilename), []byte(newRequirement), 0600); err != nil {
+					t.Fatal(err)
+				}
+				fastForwarded = true
 			case strings.Contains(args, "ls-remote --symref"):
 				return execx.Result{Stdout: "ref: refs/heads/main\tHEAD\nbase\tHEAD\n"}, nil
 			case strings.Contains(args, "branch --show-current"):
@@ -47,16 +73,25 @@ func TestClaimedIssueClonesReservedBranchWithoutCreatingAnother(t *testing.T) {
 		}
 		if cmd.Name == "codex" && !strings.Contains(args, "--help") {
 			agentStarted = true
-			return execx.Result{}, errors.New("stop after branch verification")
+			if !fastForwarded {
+				t.Error("agent started before issue branch fast-forward")
+			}
+			if !strings.Contains(cmd.Stdin, newRequirement) || strings.Contains(cmd.Stdin, oldRequirement) {
+				t.Error("agent prompt did not use updated backpressure requirements")
+			}
+			return execx.Result{Stdout: "Failure: Delivery blocked by unmerged #12.\nError details: Required changes are pending review."}, nil
 		}
 		return execx.Result{}, nil
 	})
 	h := New(runner)
+	h.ResumeIssueWorkspace = true
 	h.Workspace = testWorkspaceManager("issue-claim-branch")
+	h.Workspace.Root = t.TempDir()
 	h.TargetDirOK = func(string) bool { return true }
 	result := h.Run(context.Background(), cfg)
-	if !cloned || !baseFetched || !agentStarted || result.ExitCode != ExitCodex {
-		t.Fatalf("clone/base/agent=%t/%t/%t result=%+v", cloned, baseFetched, agentStarted, result)
+	if !cloned || !baseFetched || !fastForwarded || !agentStarted || result.ExitCode != ExitCodex ||
+		result.Err == nil || !strings.Contains(result.Err.Error(), "reported failure") {
+		t.Fatalf("clone/base/fast-forward/agent=%t/%t/%t/%t result=%+v", cloned, baseFetched, fastForwarded, agentStarted, result)
 	}
 }
 
@@ -169,6 +204,31 @@ func TestClaimedIssueResumesOnlyAcceptedPublication(t *testing.T) {
 			}
 			if !slices.Equal(checkpoints, tc.wantCheckpoints) {
 				t.Fatalf("publication checkpoints=%v, want %v", checkpoints, tc.wantCheckpoints)
+			}
+		})
+	}
+}
+
+func TestIssueConflictAgentRestoresPublicationReadiness(t *testing.T) {
+	t.Parallel()
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprint(failed), func(t *testing.T) {
+			h := New(issueBranchRunner(func(context.Context, execx.Command) (execx.Result, error) {
+				if failed {
+					return execx.Result{Stdout: "Failure: Conflicts remain.\nError details: Unable to resolve the merge."}, nil
+				}
+				return execx.Result{Stdout: "Resolved merge conflicts."}, nil
+			}))
+			var checkpoints []bool
+			h.SaveIssuePublicationReady = func(ready bool) error { checkpoints = append(checkpoints, ready); return nil }
+			runtime := agentruntime.Default()
+			_, err := h.runCodexCapture(context.Background(), runtime, t.TempDir(), "Resolve conflicts", codexRunOptions{}, "", "off", newAgentInvocationLogMetadata(runtime, "base_sync_conflict", 1, "repo", "repo", "."))
+			want := []bool{false, true}
+			if failed {
+				want = []bool{false}
+			}
+			if (err != nil) != failed || !slices.Equal(checkpoints, want) {
+				t.Fatalf("err=%v checkpoints=%v want=%v", err, checkpoints, want)
 			}
 		})
 	}

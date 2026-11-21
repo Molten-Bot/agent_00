@@ -17,6 +17,8 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
+const unmergedDependencyIncident = "unmerged_dependency"
+
 func (s Server) WakeIssueRecovery() { s.wakeGitHubIssueAutoStart() }
 
 func (s Server) admitDurableIssue(ctx context.Context, run config.Config, settings ReviewSettingsState, login string, submit func(context.Context, []byte) (string, error)) (string, error) {
@@ -82,6 +84,9 @@ func (s Server) prepareObservedIssue(ctx context.Context, record localruntime.Is
 // Resume only effects whose unique remote identity matches this durable intent.
 // Ownership tags precede linked-branch creation in protocol version two.
 func (s Server) resumeIssueAdmission(ctx context.Context, record localruntime.IssueClaimRecord, submit func(context.Context, []byte) (string, error)) (string, error) {
+	if err := s.IssueClaims.CheckOwner(record.InstanceID); err != nil {
+		return "", s.blockIssueClaim(record, err)
+	}
 	issue := record.Run.GitHubIssue
 	remote, err := s.latestIssueAttempt(ctx, issue.Repository, issue.Number)
 	if err != nil {
@@ -159,7 +164,7 @@ func (s Server) ReconcileIssueWork(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return errors.Join(append(problems, ctx.Err())...)
 		}
-		if record.Version != 2 || record.InstanceID != s.instanceID() {
+		if record.Version != 2 {
 			continue
 		}
 		if err := s.reconcileIssueRecord(ctx, record); err != nil {
@@ -194,7 +199,31 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if err != nil {
 		return err
 	}
+	staleOwner := isStaleIssueClaim(record)
+	if err := s.IssueClaims.CheckOwner(record.InstanceID); err != nil {
+		if !errors.Is(err, localruntime.ErrIssueOwnershipChanged) {
+			return err
+		}
+		if staleOwner && record.NextAttemptAt.IsZero() {
+			return nil
+		}
+		blockStaleIssueClaim(&record)
+		return s.IssueClaims.Save(record)
+	}
+	// Preserve the classification before later checks can replace the last
+	// error. This also handles records written before the incident existed.
+	if record.Outcome == "error" && record.Incident != unmergedDependencyIncident &&
+		failurefollowup.NonRemediableFailureReason(errors.New(record.FailureDetail())) == failurefollowup.UnmergedDependencyReason {
+		record.Incident = unmergedDependencyIncident
+		record.NextAttemptAt = time.Time{}
+		if err := s.IssueClaims.Save(record); err != nil {
+			return err
+		}
+	}
 	if stopped, err := localruntime.IssueProcessesStopped(record); err != nil || !stopped {
+		if staleOwner {
+			return err
+		}
 		record.State = "waiting_for_worker"
 		record.Error = "worker descendants may still be running; issue remains locked"
 		if err != nil {
@@ -212,6 +241,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if err != nil {
 		return s.deferIssueRecord(record, err)
 	}
+	if staleOwner && (remote.Claim.ID != record.ID || remote.InstanceID != record.InstanceID) {
+		return nil
+	}
 	resumingNewIntent := record.Outcome == "" && !record.RemoteRecorded && remote.Claim.Attempt < issue.Claim.Attempt
 	if remote.Claim.ID != "" && !resumingNewIntent && (remote.Claim.ID != record.ID || remote.InstanceID != record.InstanceID) {
 		record.State = "blocked"
@@ -228,7 +260,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			record.StoppedAt = time.Now().UTC()
 			record.Outcome = "interrupted"
 			record.Incident = "interrupted"
-			record.Error = "worker exited before recording its outcome"
+			if !staleOwner {
+				record.Error = "worker exited before recording its outcome"
+			}
 		}
 		record.UnlockPending = record.LabelAdded
 	}
@@ -252,6 +286,11 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			return s.IssueClaims.Save(record)
 		}
 	}
+	// A restored owner can finalize a stopped attempt. Dispatch still requires
+	// an explicit retry.
+	if staleOwner {
+		return s.IssueClaims.Save(record)
+	}
 	if record.Outcome != "" && record.Incident == "" {
 		record.Incident = "missing_pr"
 	}
@@ -265,13 +304,17 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		}
 	}
 	policy := s.IssueRecovery.Defaults()
-	if record.Control != "" || record.Outcome == "stopped" || record.Outcome == "no_changes" || record.AgentAttempts >= policy.MaxAttempts {
+	if record.Control != "" || record.Outcome == "stopped" || record.Outcome == "no_changes" ||
+		record.Incident == unmergedDependencyIncident || record.AgentAttempts >= policy.MaxAttempts {
 		record.State = "blocked"
-		switch record.Outcome {
-		case "stopped":
+		switch {
+		case record.Outcome == "stopped":
 			record.Error = "stopped by operator; explicit resume required"
-		case "no_changes":
+		case record.Outcome == "no_changes":
 			record.Error = "no PR produced; review no-change evidence before retrying"
+		case record.Incident == unmergedDependencyIncident:
+			record.Error = failurefollowup.UnmergedDependencyReason + "; explicit retry required after merge"
+			record.NextAttemptAt = time.Time{}
 		default:
 			record.Error = "agent retry budget exhausted; explicit retry or deployed fix required"
 		}
@@ -382,7 +425,8 @@ func issueRetryDelay(record localruntime.IssueClaimRecord, policy localruntime.I
 }
 
 func repairableIssueIncident(record localruntime.IssueClaimRecord) bool {
-	if record.Control != "" || record.Incident == "" || record.Incident == "service_shutdown" || record.Outcome == "stopped" || (record.Outcome == "no_changes" && record.NoChangeEvidence) {
+	if record.Control != "" || record.Incident == "" || record.Incident == "service_shutdown" ||
+		record.Incident == unmergedDependencyIncident || record.Outcome == "stopped" || (record.Outcome == "no_changes" && record.NoChangeEvidence) {
 		return false
 	}
 	if record.Outcome == "" && record.Failures < 3 {
@@ -390,6 +434,9 @@ func repairableIssueIncident(record localruntime.IssueClaimRecord) bool {
 	}
 	detail := record.FailureDetail()
 	if failurefollowup.NonRemediableFailureReason(errors.New(detail)) != "" {
+		return false
+	}
+	if strings.Contains(detail, localruntime.LegacyIssueOwnershipFailure) {
 		return false
 	}
 	lower := strings.ToLower(detail)
@@ -408,12 +455,18 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 		if current.StartedAt.After(record.StartedAt) || current.StoppedAt.After(record.StoppedAt) {
 			return nil
 		}
-		current.State = "retry_wait"
 		if record.RepairRequestID != "" {
 			current.RepairRequestID = record.RepairRequestID
 		}
 		current.RepairError = record.RepairError
-		current.Error = cause.Error()
+		if errors.Is(cause, localruntime.ErrIssueOwnershipChanged) {
+			blockStaleIssueClaim(current)
+			return nil
+		}
+		if !isStaleIssueClaim(*current) {
+			current.State = "retry_wait"
+			current.Error = cause.Error()
+		}
 		current.Failures++
 		current.NextAttemptAt = time.Now().Add(issueRetryDelay(*current, s.IssueRecovery.Defaults()))
 		var rate *issueRateLimitError
@@ -423,6 +476,16 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 		return nil
 	})
 	return errors.Join(cause, err)
+}
+
+func isStaleIssueClaim(record localruntime.IssueClaimRecord) bool {
+	return record.State == "blocked" && record.Error == localruntime.ErrIssueOwnershipChanged.Error()
+}
+
+func blockStaleIssueClaim(record *localruntime.IssueClaimRecord) {
+	record.State = "blocked"
+	record.Error = localruntime.ErrIssueOwnershipChanged.Error()
+	record.NextAttemptAt = time.Time{}
 }
 
 func (s Server) unlockIssue(ctx context.Context, record *localruntime.IssueClaimRecord) error {

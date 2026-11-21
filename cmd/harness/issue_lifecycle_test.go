@@ -67,7 +67,7 @@ func TestIssueExecutionRejectsSupersededOwner(t *testing.T) {
 		work.lock.Close()
 		t.Fatal("superseded owner was allowed to execute")
 	}
-	if err == nil || !strings.Contains(err.Error(), "issue ownership changed") || strings.Contains(err.Error(), "%!") {
+	if !errors.Is(err, localruntime.ErrIssueOwnershipChanged) || strings.Contains(err.Error(), "%!") {
 		t.Fatalf("unexpected ownership error: %v", err)
 	}
 }
@@ -120,6 +120,7 @@ func TestIssueRepairOutboxDeduplicatesAndRetainsFailures(t *testing.T) {
 	q := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: filepath.Join(t.TempDir(), "repairs")}, claims: store, logRoot: t.TempDir(), logf: func(string, ...any) {}}
 	record.Step = "pr"
 	record.Incident = "missing_pr"
+	record.ExitCode = 0
 	record.Error = "internal invariant failed"
 	id, err := q.capture(context.Background(), record)
 	if err != nil {
@@ -248,5 +249,37 @@ func TestIssueRepairRequiresVerifiedPR(t *testing.T) {
 		if err := q.verifyPR(record); (err == nil) != tc.valid {
 			t.Fatalf("state=%s head=%s verified=%v", tc.state, tc.head, err)
 		}
+	}
+}
+
+func TestIssueRepairOutboxBlocksLegacyOwnershipFailure(t *testing.T) {
+	t.Parallel()
+	claims, issue := lifecycleRecord(t)
+	q := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: filepath.Join(t.TempDir(), "repairs")}, claims: claims, logRoot: t.TempDir(), logf: t.Logf}
+	for _, state := range []string{"queued", "running"} {
+		t.Run(state, func(t *testing.T) {
+			// An older binary stored the original error only in the prompt.
+			failure := errors.New("submit claimed issue: issue owner is unavailable or changed: %!w(<nil>)")
+			run := failureFollowUpRunConfigWithContext(issue.RequestID, app.Result{}, issue.Run, q.logRoot, formatFailureFollowUpContext("0", failure, issue.Run.Prompt))
+			id := strings.Repeat("b", 32)
+			old := localruntime.IssueRepairRecord{ID: id, RequestID: "repair-" + id, State: state, Run: run}
+			if err := q.store.Save(old); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				q.reconcile(context.Background(), func(context.Context, config.Config, bool, string, bool) (string, error) {
+					t.Error("legacy ownership repair dispatched")
+					return "", errors.New("unexpected dispatch")
+				})
+			}
+			repairs, err := q.store.List()
+			if err != nil || len(repairs) != 1 {
+				t.Fatalf("expected one retained repair, got %d, error=%v", len(repairs), err)
+			}
+			saved := repairs[0]
+			if saved.State != "blocked" || saved.Error == "" || saved.Started || saved.Run.Prompt != old.Run.Prompt {
+				t.Fatalf("legacy repair state=%s error=%q started=%t prompt retained=%t", saved.State, saved.Error, saved.Started, saved.Run.Prompt == old.Run.Prompt)
+			}
+		})
 	}
 }

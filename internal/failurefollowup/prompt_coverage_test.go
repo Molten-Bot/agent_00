@@ -102,6 +102,7 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 		"codex: codex reported failure: Failure: Export broken. Error details: Reproduced the regression described in #72.",
 		"codex: codex reported failure: Failure: Export broken. Error details: This code depends on #72, but its changes are already present.",
 		"codex: codex reported failure: Failure: Export broken. Error details: The queue stalls waiting for a worker.",
+		"codex: codex reported failure: Failure: Export broken. Error details: No longer waiting on #72; parser crashes.",
 	} {
 		if got := NonRemediableFailureReason(errors.New(message)); got != "" {
 			t.Fatalf("NonRemediableFailureReason(%q) = %q, want actionable failure", message, got)
@@ -113,6 +114,26 @@ func TestInfrastructureFailureDoesNotSpawnAnotherCodingTask(t *testing.T) {
 	for _, message := range []string{"clone: No space left on device", "workspace storage /mnt has only 0 MiB free", "bwrap: No permissions to create a new namespace", "Sandbox namespace creation denied"} {
 		if NonRemediableFailureReason(errors.New(message)) == "" {
 			t.Fatalf("infrastructure failure was treated as code-remediable: %s", message)
+		}
+	}
+}
+
+func TestNonRemediableFailureReasonRecognizesUnmergedPrerequisite(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ message, want string }{
+		{"codex: codex reported failure: Failure: Delivery blocked by unmerged #12. Error details: Required API is unavailable.", UnmergedDependencyReason},
+		{"codex: codex reported failure: Failure: Can't deploy while blocked by unmerged #12.", UnmergedDependencyReason},
+		{"claude: claude reported failure: Failure: Blocked by an unmerged pull request `#12`. Error details: Base still lacks the prerequisite.", UnmergedDependencyReason},
+		{"codex: codex reported failure: Failure: Git index remains unmerged. Error details: Conflict in a modified file.", ""},
+		{"codex: codex reported failure: Failure: Parser rejects valid output. Error details: Fixture says blocked by unmerged #12.", ""},
+		{"codex: codex reported failure: Failure: Parser rejected 'blocked by unmerged #12'. Error details: Fix the parser.", ""},
+		{"codex: codex reported failure: Failure: Parser can't read 'blocked by unmerged #12'. Error details: Fix the parser.", ""},
+		{"git: merge blocked by unmerged #12", ""},
+		{"codex: codex reported failure: Failure: No longer blocked by unmerged #12; parser crashes.", ""},
+		{"codex: codex reported failure: Failure: Not blocked by unmerged #12; parser crashes.", ""},
+	} {
+		if got := NonRemediableFailureReason(errors.New(tc.message)); got != tc.want {
+			t.Errorf("NonRemediableFailureReason(%q) = %q, want %q", tc.message, got, tc.want)
 		}
 	}
 }
