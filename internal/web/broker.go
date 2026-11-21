@@ -2056,6 +2056,13 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		t.StageStatus = stringsx.FirstNonEmpty(fields["status"], "paused")
 	}
 
+	if strings.HasPrefix(line, "task status=warn ") && fields["action"] == "retry_workspace_allocation" && t.Status == "running" {
+		t.Status = "pending"
+		t.Stage = "task"
+		t.StageStatus = "queued"
+		t.Error = ""
+	}
+
 	if strings.HasPrefix(line, "task status=resumed") {
 		if t.Status == "" || t.Status == "paused" || t.Status == "pending" {
 			t.Status = "pending"

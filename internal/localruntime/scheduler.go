@@ -32,7 +32,7 @@ type AdaptiveScheduler struct {
 
 	mu       sync.Mutex
 	waiters  []*taskWaiter
-	reserved map[string]*big.Int
+	reserved map[string]*diskReservation
 	running  int
 	allowed  int
 	window   []resourceSample
@@ -62,6 +62,8 @@ type TaskDiskRequest struct {
 	Workspace     workspace.Manager
 	ExistingDir   string
 	RequiredBytes func() uint64
+	// CleanupOnCompletion identifies workspaces removed before reservation release.
+	CleanupOnCompletion bool
 	// RetryRoot is the root whose allocation failed. Try it after other roots.
 	RetryRoot string
 	// RetryAfter delays normal admission after a disk-full allocation failure.
@@ -110,7 +112,7 @@ func NewAdaptiveScheduler(cfg SchedulerConfig, logf func(string, ...any), option
 		logf:      logf,
 		sample:    &defaultResourceSampler{},
 		diskSpace: workspace.DiskSpace,
-		reserved:  make(map[string]*big.Int),
+		reserved:  make(map[string]*diskReservation),
 		allowed:   cfg.MaxParallel,
 		stopCh:    make(chan struct{}),
 	}
@@ -334,9 +336,13 @@ func (c *AdaptiveScheduler) releaseFunc(waiter *taskWaiter) func() {
 func (c *AdaptiveScheduler) releaseLocked(waiter *taskWaiter) {
 	c.running--
 	if waiter.diskBytes > 0 {
-		reserved := c.reserved[waiter.device]
-		reserved.Sub(reserved, new(big.Int).SetUint64(waiter.diskBytes))
-		if reserved.Sign() == 0 {
+		reservation := c.reserved[waiter.device]
+		bytes := new(big.Int).SetUint64(waiter.diskBytes)
+		reservation.total.Sub(&reservation.total, bytes)
+		if waiter.disk.CleanupOnCompletion {
+			reservation.reclaimable.Sub(&reservation.reclaimable, bytes)
+		}
+		if reservation.total.Sign() == 0 {
 			delete(c.reserved, waiter.device)
 		}
 	}

@@ -496,6 +496,7 @@ func runServer(args []string) int {
 
 			diskKey := localruntime.TaskDiskKey(runCfg.RepoList())
 			diskRequest := localTaskDiskRequest(runCtx, diskHistory, diskKey)
+			diskRequest.CleanupOnCompletion = issueWork == nil && repairWork == nil
 			forceRetry := false
 			for {
 				if taskHandle != nil {
@@ -656,6 +657,7 @@ func runServer(args []string) int {
 					taskHandle.SetRunning(false)
 				}
 				if outcome.State == "retry_workspace" {
+					daemonLogger("task status=warn action=retry_workspace_allocation request_id=%s err=%q", requestID, outcome.Result.Err)
 					release()
 					diskRequest.RetryRoot = workspaceRoot
 					forceRetry = canRetryWorkspace && forceAcquire
@@ -663,7 +665,6 @@ func runServer(args []string) int {
 						delay := time.Duration(max(250, cfg.Scheduler.SampleIntervalMS)) * time.Millisecond
 						diskRequest.RetryAfter = time.Now().Add(delay)
 					}
-					daemonLogger("task status=warn action=retry_workspace_allocation request_id=%s err=%q", requestID, outcome.Result.Err)
 					continue
 				}
 				defer release()
@@ -709,8 +710,11 @@ func runServer(args []string) int {
 					}
 				case "completed":
 				}
-				if issueWork == nil && repairWork == nil {
+				if diskRequest.CleanupOnCompletion {
 					cleanupTaskWorkspaceOnCompletion(requestID, outcome.Result, daemonLogger)
+					if err := diskHistory.Flush(); err != nil {
+						daemonLogger("scheduler status=warn action=flush_task_disk_history request_id=%s err=%q", requestID, err)
+					}
 				}
 				return
 			}

@@ -89,6 +89,17 @@ func (h *TaskDiskHistory) Record(key string, size uint64) error {
 		h.max[key] = size
 		h.dirty = true
 	}
+	return h.flushLocked()
+}
+
+// Flush retries any unsaved measurements without recording a new sample.
+func (h *TaskDiskHistory) Flush() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.flushLocked()
+}
+
+func (h *TaskDiskHistory) flushLocked() error {
 	if h.path == "" || !h.dirty {
 		return nil
 	}
@@ -108,6 +119,11 @@ type diskSample struct {
 	device string
 	free   uint64
 	err    error
+}
+
+type diskReservation struct {
+	total       big.Int
+	reclaimable big.Int
 }
 
 func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, samples map[string]diskSample, draining map[string]struct{}) (bool, error) {
@@ -167,10 +183,10 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 			blocked = true
 			continue
 		}
-		reserved := c.reserved[device]
-		if reserved != nil {
-			if reserved.IsUint64() {
-				available -= min(available, reserved.Uint64())
+		reservation := c.reserved[device]
+		if reservation != nil {
+			if reservation.total.IsUint64() {
+				available -= min(available, reservation.total.Uint64())
 			} else {
 				available = 0
 			}
@@ -179,8 +195,10 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		fits := available >= minimum
 		if !fits && !force {
 			blocked = true
-			// Drain only when releasing reservations can make this task fit.
-			if sample.free >= minimum {
+			// Cleanup can restore space already consumed by active workspaces.
+			// Use their reserved sizes as estimates for draining only.
+			if sample.free >= minimum || (reservation != nil &&
+				reservation.reclaimable.Cmp(new(big.Int).SetUint64(minimum-sample.free)) >= 0) {
 				waiter.drainDevices = append(waiter.drainDevices, device)
 			}
 			continue
@@ -206,11 +224,15 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 func (c *AdaptiveScheduler) setDiskReservation(waiter *taskWaiter, root, device string, size uint64) {
 	waiter.root, waiter.device, waiter.diskBytes = root, device, size
 	if size > 0 {
-		reserved := c.reserved[device]
-		if reserved == nil {
-			reserved = new(big.Int)
-			c.reserved[device] = reserved
+		reservation := c.reserved[device]
+		if reservation == nil {
+			reservation = &diskReservation{}
+			c.reserved[device] = reservation
 		}
-		reserved.Add(reserved, new(big.Int).SetUint64(size))
+		bytes := new(big.Int).SetUint64(size)
+		reservation.total.Add(&reservation.total, bytes)
+		if waiter.disk.CleanupOnCompletion {
+			reservation.reclaimable.Add(&reservation.reclaimable, bytes)
+		}
 	}
 }

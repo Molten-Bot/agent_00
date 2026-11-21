@@ -70,6 +70,37 @@ func TestTaskDiskHistoryPersistsOnlyLargerMeasurements(t *testing.T) {
 	}
 }
 
+func TestTaskDiskHistoryFlushRetriesFailedWrite(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "disk-history.json")
+	history, err := OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := TaskDiskKey([]string{"https://github.com/example/repo"})
+	// A directory at the destination prevents the atomic replacement.
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := history.Record(key, 256); err == nil {
+		t.Fatal("record succeeded while destination was blocked")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := history.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.RequiredBytes(key); got != 256 {
+		t.Fatalf("reopened disk requirement = %d, want 256", got)
+	}
+}
+
 func TestAdaptiveSchedulerReservesSpacePerFilesystem(t *testing.T) {
 	t.Parallel()
 
@@ -319,6 +350,55 @@ func TestAdaptiveSchedulerDrainsReservationsForOlderDiskWaiter(t *testing.T) {
 		if !waiter.granted {
 			t.Fatal("younger job was not admitted after the older job released shared storage")
 		}
+	}
+}
+
+func TestAdaptiveSchedulerDrainsWorkspacesForOlderDiskWaiter(t *testing.T) {
+	t.Parallel()
+
+	const unit = workspace.MinimumFreeBytes
+	for _, cleanup := range []bool{true, false} {
+		t.Run("cleanup="+strconv.FormatBool(cleanup), func(t *testing.T) {
+			controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 3}, nil)
+			free := uint64(3 * unit)
+			controller.diskSpace = func(string) (string, uint64, error) {
+				return "shared", free, nil
+			}
+			small := TaskDiskRequest{Workspace: workspace.Manager{Root: t.TempDir()}}
+			active := small
+			active.CleanupOnCompletion = cleanup
+			running := &taskWaiter{disk: &active}
+			controller.waiters = []*taskWaiter{running}
+			controller.tryGrantLocked(0)
+			if !running.granted {
+				t.Fatal("initial task was not admitted")
+			}
+
+			// A running workspace has written one unit of its allowance.
+			free = 2 * unit
+			large := small
+			large.RequiredBytes = func() uint64 { return 3 * unit }
+			older := &taskWaiter{disk: &large}
+			controller.waiters = []*taskWaiter{older}
+			controller.tryGrantLocked(0)
+			if older.granted {
+				t.Fatal("older task admitted before storage was available")
+			}
+			younger := &taskWaiter{disk: &small}
+			controller.waiters = append(controller.waiters, younger)
+			controller.tryGrantLocked(1)
+			if younger.granted == cleanup {
+				t.Fatalf("younger admitted = %v with active workspace cleanup = %v", younger.granted, cleanup)
+			}
+
+			if cleanup {
+				free = 3 * unit
+			}
+			controller.releaseFunc(running)()
+			if older.granted != cleanup {
+				t.Fatalf("older admitted = %v after active workspace cleanup = %v", older.granted, cleanup)
+			}
+		})
 	}
 }
 
