@@ -154,3 +154,36 @@ func TestDownloadHonorsCancellationAndRemainingLimit(t *testing.T) {
 		t.Fatalf("unsafe error=%v", err)
 	}
 }
+
+func TestPreviewText(t *testing.T) {
+	t.Parallel()
+	const textMediaType = "text/plain; charset=utf-8"
+	for _, tc := range []struct {
+		name        string
+		contentType string
+		body        string
+		want        string
+	}{
+		{"UTF-8 log with generic type", "application/octet-stream", "INFO\tCafé\r\n", textMediaType},
+		{"explicit plain text with markup", "text/plain", "<script>alert('example')</script>", textMediaType},
+		{"HTML login page", "text/html; charset=utf-8", "Sign in to GitHub", ""},
+		{"sniffed HTML login page", "application/octet-stream", "<!DOCTYPE html><html>Sign in</html>", ""},
+		{"invalid UTF-8", "text/plain", "prefix\xff", ""},
+		{"binary after sniff window", "text/plain", strings.Repeat("a", 512) + "\x00", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return response(req, 200, tc.body, http.Header{"Content-Type": {tc.contentType}}), nil
+			})
+			asset := Asset{URL: "https://github.com/user-attachments/files/42/example.txt"}
+			data, mediaType, err := Preview(context.Background(), asset, transport)
+			if tc.want == "" {
+				if err == nil || len(data) != 0 {
+					t.Fatal("unsupported content was returned")
+				}
+			} else if err != nil || mediaType != tc.want || string(data) != tc.body {
+				t.Fatalf("preview = (%q, %q, %v), want original text as %s", data, mediaType, err, tc.want)
+			}
+		})
+	}
+}

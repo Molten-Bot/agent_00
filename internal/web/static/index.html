@@ -10518,7 +10518,7 @@
     function clearTaskAssetMedia() {
       taskAssetPreviewRequest?.abort();
       taskAssetPreviewRequest = undefined;
-      const media = taskAssetViewer.querySelector(".task-image-viewer-image");
+      const media = taskAssetViewer.querySelector(".task-image-viewer-image, .task-asset-text");
       if (media) {
         media.remove();
         media.removeAttribute("src");
@@ -10553,6 +10553,17 @@
         const response = await fetch(endpoint, { signal });
         if (!response.ok) throw new Error("Preview unavailable.");
         const blob = await response.blob();
+        if (blob.type.startsWith("text/plain")) {
+          const text = await blob.text();
+          if (signal.aborted || !taskAssetViewer.open) return;
+          const preview = document.createElement("pre");
+          preview.className = "task-asset-text";
+          preview.tabIndex = 0;
+          preview.textContent = text;
+          taskAssetMessage.before(preview);
+          taskAssetMessage.hidden = true;
+          return;
+        }
         const isPDF = blob.type === "application/pdf";
         // Keep SVG in an opaque origin even if opened outside its image element.
         let src;
@@ -12167,8 +12178,9 @@
         run(event);
       });
       button.addEventListener("click", (event) => {
-        if (handledPointerDown) {
-          handledPointerDown = false;
+        const duplicatePointerClick = handledPointerDown && event.detail > 0;
+        handledPointerDown = false;
+        if (duplicatePointerClick) {
           event.preventDefault();
           event.stopPropagation();
           return;
@@ -12517,8 +12529,8 @@
         button.textContent = `${count} asset${count === 1 ? "" : "s"}`;
         button.title = "View task assets.";
         button.setAttribute("aria-haspopup", "dialog");
-        button.addEventListener("click", (event) => {
-          event.stopPropagation();
+        bindTaskActionButton(button, () => {
+          button.focus({ preventScroll: true });
           openTaskAssetViewer(taskRequestID(task), task.assets);
         });
         return button;

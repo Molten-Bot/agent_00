@@ -53,8 +53,24 @@ for (const mobile of [false, true]) {
     await expect(assets).toHaveText('2 assets');
     await expect(page.locator('#task-list .task[data-request-id="req-no-assets"] .task-assets-toggle')).toHaveCount(0);
     assert.deepEqual(attachmentRequests, [], 'previews load only when requested');
-    if (mobile) await assets.tap(); else await assets.click();
     const viewer = page.locator('#task-asset-viewer');
+    if (mobile) {
+      await assets.tap();
+    } else {
+      const originalButton = await assets.elementHandle();
+      const box = await assets.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      // A changed task snapshot replaces the card before the pointer is released.
+      await page.evaluate(() => render({
+        ...state.snapshot,
+        tasks: state.snapshot.tasks.map(task => task.request_id === 'req-assets'
+          ? { ...task, prompt: 'Updated task prompt from live snapshot' }
+          : task),
+      }));
+      assert.equal(await originalButton.evaluate(button => button.isConnected), false);
+      await page.mouse.up();
+    }
     const previous = viewer.getByRole('button', { name: 'Previous asset' });
     const next = viewer.getByRole('button', { name: 'Next asset' });
     const source = viewer.getByRole('link', { name: 'Open on GitHub' });
@@ -103,6 +119,21 @@ for (const mobile of [false, true]) {
     await viewer.getByRole('button', { name: 'Close asset viewer' }).click();
     await expect(viewer).toBeHidden();
     await expect(singleAsset).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(viewer).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(viewer).toBeHidden();
+
+    const textAsset = page.locator('#task-list .task[data-request-id="req-text-asset"] .task-assets-toggle');
+    await textAsset.focus();
+    await page.keyboard.press('Enter');
+    const textPreview = viewer.locator('pre');
+    await expect(textPreview).toBeVisible();
+    assert.equal(await textPreview.textContent(), "<script>throw new Error('attachment executed')</script>\nUTF-8: café");
+    await expect(textPreview.locator('*')).toHaveCount(0);
+    await expect(viewer.getByRole('status')).toBeHidden();
+    await page.keyboard.press('Escape');
+    await expect(viewer.locator('pre')).toHaveCount(0);
     assert.deepEqual(errors, [], 'no browser JavaScript errors');
     assert.deepEqual(writes, [], 'viewing assets must not submit or modify a task');
   });

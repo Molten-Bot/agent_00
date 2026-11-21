@@ -1,6 +1,7 @@
 package githubassets
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
@@ -73,26 +76,41 @@ func Download(ctx context.Context, assets []Asset, dir, token string, transport 
 	return files, nil
 }
 
-// Preview fetches a single attachment and returns bytes for supported browser media.
-func Preview(ctx context.Context, asset Asset, token string, transport http.RoundTripper) ([]byte, string, error) {
-	if err := Validate([]Asset{asset}); err != nil {
-		return nil, "", err
+// Preview fetches public attachment bytes for the UI, which cannot authorize viewers for private GitHub assets.
+func Preview(ctx context.Context, asset Asset, transport http.RoundTripper) ([]byte, string, error) {
+	u, err := url.Parse(asset.URL)
+	if err != nil || !allowedAttachment(u) {
+		return nil, "", fmt.Errorf("invalid attachment URL")
 	}
-	data, headers, err := fetch(ctx, downloadClient(token, transport), asset.URL, token, MaxFileBytes)
+	if u.Host == "private-user-images.githubusercontent.com" || u.RawQuery != "" {
+		return nil, "", fmt.Errorf("attachment URL may require private access")
+	}
+	data, headers, err := fetch(ctx, downloadClient("", transport), asset.URL, "", MaxFileBytes)
 	if err != nil {
 		return nil, "", err
 	}
-	switch mediaType := http.DetectContentType(data); mediaType {
+	detected := http.DetectContentType(data)
+	contentType := headers.Get("Content-Type")
+	declared, _, _ := mime.ParseMediaType(contentType)
+	if strings.HasPrefix(strings.ToLower(contentType), "text/html") ||
+		strings.HasPrefix(detected, "text/html") && declared != "text/plain" {
+		return nil, "", fmt.Errorf("GitHub returned HTML instead of an attachment; verify repository access")
+	}
+	switch detected {
 	case "application/pdf", "image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp", "image/x-icon", "video/mp4", "video/webm":
-		return data, mediaType, nil
+		return data, detected, nil
 	case "application/ogg":
 		return data, "video/ogg", nil
 	}
 	// Some browser media formats have no signature in http.DetectContentType.
-	mediaType, _, _ := mime.ParseMediaType(headers.Get("Content-Type"))
-	switch mediaType {
+	switch declared {
 	case "image/avif", "image/svg+xml", "image/vnd.microsoft.icon", "video/ogg", "video/quicktime", "video/x-m4v":
-		return data, mediaType, nil
+		return data, declared, nil
+	}
+	if utf8.Valid(data) && bytes.IndexFunc(data, func(r rune) bool {
+		return unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r'
+	}) == -1 {
+		return data, "text/plain; charset=utf-8", nil
 	}
 	return nil, "", fmt.Errorf("attachment format is not supported for previews")
 }
@@ -133,6 +151,9 @@ func downloadOne(ctx context.Context, client *http.Client, asset Asset, dir, tok
 		return File{}, 0, err
 	}
 	mediaType := http.DetectContentType(data)
+	if strings.HasPrefix(mediaType, "text/html") || strings.HasPrefix(strings.ToLower(headers.Get("Content-Type")), "text/html") {
+		return File{}, 0, fmt.Errorf("GitHub returned HTML instead of an attachment; verify repository access")
+	}
 	name := asset.Name
 	if _, params, err := mime.ParseMediaType(headers.Get("Content-Disposition")); err == nil && params["filename"] != "" {
 		name = params["filename"]
@@ -192,9 +213,6 @@ func fetch(ctx context.Context, client *http.Client, rawURL, token string, limit
 	}
 	if len(data) == 0 {
 		return nil, nil, fmt.Errorf("attachment is empty")
-	}
-	if strings.HasPrefix(http.DetectContentType(data), "text/html") || strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") {
-		return nil, nil, fmt.Errorf("GitHub returned HTML instead of an attachment; verify repository access")
 	}
 	return data, resp.Header, nil
 }

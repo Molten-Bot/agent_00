@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -24,17 +23,13 @@ func (f taskAssetTransportFunc) RoundTrip(r *http.Request) (*http.Response, erro
 
 func TestTaskAssetsRenderInBrowser(t *testing.T) {
 	requireBrowserTooling(t, "task asset checks")
-	t.Setenv("GH_TOKEN", "")
-	t.Setenv("GITHUB_TOKEN", "")
-	srv := githubIssueTestServer(githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
-		if cmd.Name != "gh" || !slices.Equal(cmd.Args, []string{"auth", "token", "--hostname", "github.com"}) {
-			return execx.Result{}, fmt.Errorf("unexpected GitHub CLI command")
-		}
-		return execx.Result{Stdout: "fixture-token\n"}, nil
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+		t.Error("preview looked up server GitHub credentials")
+		return execx.Result{}, fmt.Errorf("unexpected GitHub CLI command")
 	}), true)
 	srv.assetTransport = taskAssetTransportFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Host != "github.com" || req.Header.Get("Authorization") != "Bearer fixture-token" {
-			return nil, fmt.Errorf("missing GitHub CLI authentication")
+		if req.URL.Host != "github.com" || req.Header.Get("Authorization") != "" {
+			return nil, fmt.Errorf("unexpected preview host or credentials")
 		}
 		status, mediaType, body := http.StatusNotFound, "text/plain", ""
 		switch req.URL.Path {
@@ -42,6 +37,8 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 			status, mediaType, body = http.StatusOK, "image/svg+xml", `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="640" height="360" fill="#246"/></svg>`
 		case "/user-attachments/files/42/spec.pdf":
 			status, mediaType, body = http.StatusOK, "application/octet-stream", taskAssetTestPDF()
+		case "/user-attachments/files/42/notes.txt":
+			status, mediaType, body = http.StatusOK, "text/plain", "<script>throw new Error('attachment executed')</script>\nUTF-8: café"
 		}
 		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {mediaType}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})
@@ -56,10 +53,44 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 	}
 	srv.Broker.RecordTaskRunConfig("req-assets", raw)
 	srv.Broker.RecordTaskRunConfig("req-single-asset", []byte(`{"repo":"example/project","prompt":"Task with one attachment","assets":[{"url":"https://github.com/user-attachments/assets/unavailable","name":"unavailable"}]}`))
+	srv.Broker.RecordTaskRunConfig("req-text-asset", []byte(`{"repo":"example/project","prompt":"Task with a text attachment","assets":[{"url":"https://github.com/user-attachments/files/42/notes.txt","name":"notes.txt"}]}`))
 	srv.Broker.RecordTaskRunConfig("req-no-assets", []byte(`{"repo":"example/project","prompt":"Task without attachments"}`))
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 	runBrowserSuite(t, ts.URL, time.Minute, "task asset checks", "tests/task_assets.cjs")
+}
+
+func TestTaskAssetPreviewDoesNotUseServerAuthorization(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+		t.Error("preview looked up server GitHub credentials")
+		return execx.Result{Stdout: "fixture-token"}, nil
+	}), true)
+	srv.Broker.RecordTaskRunConfig("req-assets", []byte(`{"prompt":"Inspect files","assets":[
+		{"url":"https://github.com/user-attachments/assets/private"},
+		{"url":"https://private-user-images.githubusercontent.com/42/private.png?jwt=fixture"},
+		{"url":"https://github.com/user-attachments/assets/private?token=fixture"}
+	]}`))
+	srv.assetTransport = taskAssetTransportFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/user-attachments/assets/private" || req.URL.RawQuery != "" {
+			t.Error("preview fetched a stored capability URL")
+		}
+		if req.Header.Get("Authorization") != "" || req.Header.Get("Cookie") != "" {
+			t.Error("preview forwarded authorization")
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("%PDF-1.4\nprivate bytes"))}, nil
+		}
+		return &http.Response{StatusCode: http.StatusNotFound, Body: http.NoBody}, nil
+	})
+
+	handler := srv.Handler()
+	for index := range 3 {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/tasks/req-assets/asset-preview?index=%d", index), nil)
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusBadGateway || strings.Contains(w.Body.String(), "private bytes") {
+			t.Errorf("preview %d returned status %d, want 502 without attachment bytes", index, w.Code)
+		}
+	}
 }
 
 func taskAssetTestPDF() string {

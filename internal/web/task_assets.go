@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
 )
 
@@ -20,12 +19,7 @@ func (s Server) handleTaskAssetPreview(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 
-	runner := s.GitHubIssueRunner
-	if runner == nil {
-		runner = execx.OSRunner{}
-	}
-	token := githubassets.AuthToken(r.Context(), runner)
-	data, mediaType, err := githubassets.Preview(r.Context(), task.Assets[index], token, s.assetTransport)
+	data, mediaType, err := githubassets.Preview(r.Context(), task.Assets[index], s.assetTransport)
 	if err != nil {
 		http.Error(w, "Preview unavailable.", http.StatusBadGateway)
 		return
