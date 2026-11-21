@@ -3011,10 +3011,12 @@
       });
     }
 
+    let issueAutomationRepositoriesEdited = false;
     function applyReviewSettingsState(nextState) {
       const previousAutoMerge = taskAutoMergeStepEnabled();
       const previousReviewCycle = taskReviewStepEnabled();
       state.reviewSettings = normalizeReviewSettings(nextState);
+      issueAutomationRepositoriesEdited = false;
       if (reviewSettingsAutoMerge instanceof HTMLInputElement) {
         reviewSettingsAutoMerge.checked = state.reviewSettings.autoMerge;
       }
@@ -3128,7 +3130,6 @@
         json_enabled: reviewSettingsJSONEnabled instanceof HTMLInputElement ? reviewSettingsJSONEnabled.checked : false,
         github_issues_enabled: reviewSettingsGitHubIssuesEnabled instanceof HTMLInputElement ? reviewSettingsGitHubIssuesEnabled.checked : false,
         github_issue_link_mode: reviewSettingsGitHubIssuesLinkClose instanceof HTMLInputElement && reviewSettingsGitHubIssuesLinkClose.checked ? "close" : "reference",
-        github_issue_repositories: state.reviewSettings.githubIssueRepositories ?? undefined,
         assign_creator: reviewSettingsAssignCreator instanceof HTMLInputElement ? reviewSettingsAssignCreator.checked : true,
         disabled_repositories: [...(state.reviewSettings.disabledRepositories || [])],
       };
@@ -3140,6 +3141,9 @@
       }
       if (state.settingsBusy || !state.settingsOpen) return;
       const payload = currentReviewSettingsPayload();
+      if (issueAutomationRepositoriesEdited) {
+        payload.github_issue_repositories = state.reviewSettings.githubIssueRepositories;
+      }
       setSettingsBusy(true);
       setReviewSettingsStatus("ok", "Saving review settings...");
       try {
@@ -14011,10 +14015,12 @@
         delete repositories[repo];
       }
       current.githubIssueRepositories = repositories;
+      issueAutomationRepositoriesEdited = true;
       renderIssueAutomationRepositories();
     });
     issueAutomationStopLegacy.addEventListener("click", () => {
       state.reviewSettings.githubIssueRepositories = {};
+      issueAutomationRepositoriesEdited = true;
       renderIssueAutomationRepositories();
       issueAutomationRepository.focus();
       setReviewSettingsStatus("", "Changes will be saved on close.");
@@ -14028,6 +14034,7 @@
         settings.only_assigned = reviewSettingsGitHubIssuesAutoStartOnlyAssigned.checked;
         settings.trigger_labels = reviewSettingsGitHubIssuesAutoStartLabels.value.split(",").map(label => label.trim()).filter(Boolean);
         settings.exclusion_label = reviewSettingsGitHubIssuesExclusionLabel.value.trim();
+        issueAutomationRepositoriesEdited = true;
       });
     }
     reviewSettingsGitHubIssuesEnabled?.addEventListener("change", () => {

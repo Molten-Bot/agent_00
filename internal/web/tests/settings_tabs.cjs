@@ -1445,3 +1445,30 @@ test('GitHub Issues settings keep automation configuration without task listing 
   await close(page);
   assert.equal(writes.at(-1).github_issue_repositories['acme/repo'].exclusion_label, 'team-claimed');
 });
+
+test('saving unrelated settings in a stale tab preserves a repository disabled in another tab', async t => {
+  let settings = {
+    ...defaults,
+    github_issues_enabled: true,
+    github_issue_repositories: { 'acme/repo': { auto_start: true, exclusion_label: 'team-claimed' } },
+  };
+  const configurePage = async page => {
+    await page.route('**/api/review-settings', route => {
+      if (route.request().method() === 'POST') settings = { ...settings, ...route.request().postDataJSON() };
+      return route.fulfill({ json: { ok: true, settings } });
+    });
+  };
+  const { page: staleTab } = await openSettings(t, { configurePage });
+  const { page: currentTab } = await openSettings(t, { configurePage });
+  await select(currentTab, 'github-issues');
+  await currentTab.getByLabel('Automation repository').selectOption('acme/repo');
+  await toggle(currentTab, 'review-settings-github-issues-repository-enabled');
+  await close(currentTab);
+  assert.deepEqual(settings.github_issue_repositories, {});
+
+  await select(staleTab, 'automation');
+  await toggle(staleTab, 'review-settings-auto-merge');
+  await close(staleTab);
+  assert.equal(settings.auto_merge, true);
+  assert.deepEqual(settings.github_issue_repositories, {});
+});
