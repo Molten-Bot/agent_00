@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"regexp"
@@ -31,7 +32,7 @@ type AdaptiveScheduler struct {
 
 	mu       sync.Mutex
 	waiters  []*taskWaiter
-	reserved map[string]uint64
+	reserved map[string]*big.Int
 	running  int
 	allowed  int
 	window   []resourceSample
@@ -46,6 +47,7 @@ type taskWaiter struct {
 	id          uint64
 	requestID   string
 	granted     bool
+	err         error
 	notify      chan struct{}
 	disk        *TaskDiskRequest
 	root        string
@@ -98,7 +100,7 @@ func NewAdaptiveScheduler(cfg SchedulerConfig, logf func(string, ...any)) *Adapt
 		logf:      logf,
 		sample:    &defaultResourceSampler{},
 		diskSpace: workspace.DiskSpace,
-		reserved:  make(map[string]uint64),
+		reserved:  make(map[string]*big.Int),
 		allowed:   cfg.MaxParallel,
 		stopCh:    make(chan struct{}),
 	}
@@ -167,6 +169,7 @@ func (c *AdaptiveScheduler) acquire(ctx context.Context, requestID string, disk 
 		running     int
 		allowed     int
 		queueReason string
+		acquireErr  error
 	)
 
 	c.mu.Lock()
@@ -179,9 +182,12 @@ func (c *AdaptiveScheduler) acquire(ctx context.Context, requestID string, disk 
 		return "", nil, err
 	}
 	c.waiters = append(c.waiters, waiter)
-	c.tryGrantLocked()
+	// Earlier waiters have already been considered whenever a slot is free.
+	// Retry disk-blocked waiters on a scheduler tick or when work releases space.
+	c.tryGrantLocked(len(c.waiters) - 1)
 	granted = waiter.granted
-	queued = !granted
+	acquireErr = waiter.err
+	queued = !granted && acquireErr == nil
 	if queued {
 		queueDepth = len(c.waiters)
 		running = c.running
@@ -204,9 +210,14 @@ func (c *AdaptiveScheduler) acquire(ctx context.Context, requestID string, disk 
 		// Re-sample immediately after queueing so work does not sit idle until the
 		// next background tick when pressure has already dropped back below the
 		// resume threshold.
-		c.sampleAndUpdate()
+		if queueReason == "" {
+			c.sampleResources(false)
+		}
 	}
 
+	if acquireErr != nil {
+		return "", nil, acquireErr
+	}
 	if granted {
 		return waiter.root, c.releaseFunc(waiter), nil
 	}
@@ -215,8 +226,11 @@ func (c *AdaptiveScheduler) acquire(ctx context.Context, requestID string, disk 
 		select {
 		case <-waiter.notify:
 			c.mu.Lock()
-			granted := waiter.granted
+			granted, err := waiter.granted, waiter.err
 			c.mu.Unlock()
+			if err != nil {
+				return "", nil, err
+			}
 			if granted {
 				return waiter.root, c.releaseFunc(waiter), nil
 			}
@@ -224,10 +238,10 @@ func (c *AdaptiveScheduler) acquire(ctx context.Context, requestID string, disk 
 			c.mu.Lock()
 			if waiter.granted {
 				c.releaseLocked(waiter)
+				c.tryGrantLocked(0)
 			} else {
 				c.removeWaiterLocked(waiter.id)
 			}
-			c.tryGrantLocked()
 			c.mu.Unlock()
 			return "", nil, ctx.Err()
 		case <-c.stopCh:
@@ -269,7 +283,10 @@ func (c *AdaptiveScheduler) acquireForce(ctx context.Context, requestID string, 
 		c.mu.Unlock()
 		return "", nil, errSchedulerClosed
 	}
-	c.reserveDiskLocked(waiter, true)
+	if _, err := c.reserveDiskLocked(waiter, true); err != nil {
+		c.mu.Unlock()
+		return "", nil, err
+	}
 	c.running++
 	running := c.running
 	allowed := c.allowed
@@ -291,7 +308,7 @@ func (c *AdaptiveScheduler) releaseFunc(waiter *taskWaiter) func() {
 		once.Do(func() {
 			c.mu.Lock()
 			c.releaseLocked(waiter)
-			c.tryGrantLocked()
+			c.tryGrantLocked(0)
 			c.mu.Unlock()
 		})
 	}
@@ -300,26 +317,30 @@ func (c *AdaptiveScheduler) releaseFunc(waiter *taskWaiter) func() {
 func (c *AdaptiveScheduler) releaseLocked(waiter *taskWaiter) {
 	c.running--
 	if waiter.diskBytes > 0 {
-		c.reserved[waiter.device] -= waiter.diskBytes
-		if c.reserved[waiter.device] == 0 {
+		reserved := c.reserved[waiter.device]
+		reserved.Sub(reserved, new(big.Int).SetUint64(waiter.diskBytes))
+		if reserved.Sign() == 0 {
 			delete(c.reserved, waiter.device)
 		}
 	}
 }
 
-func (c *AdaptiveScheduler) tryGrantLocked() {
+func (c *AdaptiveScheduler) tryGrantLocked(start int) {
 	// A disk-blocked task can wait while smaller tasks or tasks on another
 	// filesystem use otherwise idle slots.
-	for i := 0; c.running < c.allowed && i < len(c.waiters); {
+	for i := start; c.running < c.allowed && i < len(c.waiters); {
 		waiter := c.waiters[i]
-		if !c.reserveDiskLocked(waiter, false) {
+		granted, err := c.reserveDiskLocked(waiter, false)
+		if !granted && err == nil {
 			waiter.diskBlocked = true
 			i++
 			continue
 		}
 		c.waiters = append(c.waiters[:i], c.waiters[i+1:]...)
-		waiter.granted = true
-		c.running++
+		waiter.granted, waiter.err = granted, err
+		if granted {
+			c.running++
+		}
 		select {
 		case waiter.notify <- struct{}{}:
 		default:
@@ -358,6 +379,10 @@ func (c *AdaptiveScheduler) close() {
 }
 
 func (c *AdaptiveScheduler) sampleAndUpdate() {
+	c.sampleResources(true)
+}
+
+func (c *AdaptiveScheduler) sampleResources(retryDisk bool) {
 	if c == nil || c.sample == nil {
 		return
 	}
@@ -365,9 +390,11 @@ func (c *AdaptiveScheduler) sampleAndUpdate() {
 	sample, err := c.sample.Sample()
 	if err != nil {
 		c.logf("scheduler status=sample_error err=%q", err)
-		c.mu.Lock()
-		c.tryGrantLocked()
-		c.mu.Unlock()
+		if retryDisk {
+			c.mu.Lock()
+			c.tryGrantLocked(0)
+			c.mu.Unlock()
+		}
 		return
 	}
 
@@ -393,7 +420,9 @@ func (c *AdaptiveScheduler) sampleAndUpdate() {
 		nextAllowed = c.cfg.MaxParallel
 	}
 	c.allowed = nextAllowed
-	c.tryGrantLocked()
+	if retryDisk || nextAllowed > prevAllowed {
+		c.tryGrantLocked(0)
+	}
 	queueDepth := len(c.waiters)
 	running := c.running
 	c.mu.Unlock()

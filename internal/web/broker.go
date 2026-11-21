@@ -313,6 +313,7 @@ type taskState struct {
 	StartedAt         time.Time
 	UpdatedAt         time.Time
 	TerminalAt        time.Time
+	explicitTerminal  bool
 	Logs              []TaskLog
 }
 
@@ -2012,6 +2013,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 
 	if strings.HasPrefix(line, "task status=start") {
 		t.Status = "running"
+		t.explicitTerminal = fields["explicit_terminal"] == "true"
 		t.Warning = ""
 		t.Source = stringsx.FirstNonEmpty(t.Source, normalizeTaskSource(fields["source"]), defaultTaskSourceForRequestID(t.RequestID))
 		t.Skill = stringsx.FirstNonEmpty(t.Skill, fields["skill"])
@@ -2123,7 +2125,8 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		}
 		if stageStatus := fields["status"]; stageStatus != "" {
 			t.StageStatus = stageStatus
-			if stageStatus == "error" && t.Status == "running" && !agentInvocationLine {
+			// Local runs publish their final status after recording workspace usage.
+			if stageStatus == "error" && t.Status == "running" && !agentInvocationLine && !t.explicitTerminal {
 				t.Status = "error"
 			}
 		}

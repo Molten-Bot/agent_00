@@ -3,8 +3,10 @@ package localruntime
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -190,5 +192,144 @@ func TestAdaptiveSchedulerRetriesDiskPressureWithFailedCPUSample(t *testing.T) {
 	controller.sampleAndUpdate()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAdaptiveSchedulerReportsWorkspaceSetupFailure(t *testing.T) {
+	t.Parallel()
+
+	for _, force := range []bool{false, true} {
+		controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
+		controller.diskSpace = func(string) (string, uint64, error) {
+			return "disk", workspace.MinimumFreeBytes, nil
+		}
+		request := TaskDiskRequest{Workspace: workspace.Manager{
+			Root: t.TempDir(),
+			MkdirAll: func(string, os.FileMode) error {
+				return os.ErrPermission
+			},
+		}}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_, release, err := controller.AcquireWorkspace(ctx, "broken-root", request, force)
+		cancel()
+		if release != nil || !errors.Is(err, os.ErrPermission) {
+			t.Fatalf("force=%v: acquisition error = %v, want %v", force, err, os.ErrPermission)
+		}
+	}
+}
+
+func TestAdaptiveSchedulerTriesAnotherWorkspaceAfterSetupFailure(t *testing.T) {
+	ram, disk := t.TempDir(), t.TempDir()
+	t.Setenv("HARNESS_WORKSPACE_RAM_BASE", ram)
+	t.Setenv("HARNESS_WORKSPACE_DISK_BASE", disk)
+	t.Setenv("HARNESS_WORKSPACE_ROOT_NAME", "test-workspaces")
+
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
+	controller.diskSpace = func(path string) (string, uint64, error) {
+		return filepath.Dir(path), workspace.MinimumFreeBytes, nil
+	}
+	request := TaskDiskRequest{Workspace: workspace.Manager{
+		PathExists: func(string) bool { return true },
+		CanExec:    func(string) bool { return true },
+		MkdirAll: func(path string, mode os.FileMode) error {
+			if filepath.Dir(path) == ram {
+				return os.ErrPermission
+			}
+			return os.MkdirAll(path, mode)
+		},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	root, release, err := controller.AcquireWorkspace(ctx, "fallback", request, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if want := filepath.Join(disk, "test-workspaces"); root != want {
+		t.Fatalf("workspace root = %q, want %q", root, want)
+	}
+}
+
+func TestAdaptiveSchedulerReservesFullForcedEstimate(t *testing.T) {
+	t.Parallel()
+
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 3}, nil)
+	free := uint64(workspace.MinimumFreeBytes)
+	controller.diskSpace = func(string) (string, uint64, error) {
+		return "disk", free, nil
+	}
+	request := TaskDiskRequest{
+		Workspace:     workspace.Manager{Root: t.TempDir()},
+		RequiredBytes: func() uint64 { return math.MaxUint64 },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, releaseFirst, err := controller.AcquireWorkspace(ctx, "forced-first", request, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseFirst()
+	_, releaseSecond, err := controller.AcquireWorkspace(ctx, "forced-second", request, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseSecond()
+	free = math.MaxUint64
+
+	done := make(chan error, 1)
+	request.RequiredBytes = nil
+	go func() {
+		_, release, err := controller.AcquireWorkspace(ctx, "normal", request, false)
+		if err == nil {
+			release()
+		}
+		done <- err
+	}()
+	waitForQueuedRequest(t, controller, "normal")
+	releaseFirst()
+	controller.mu.Lock()
+	remaining := len(controller.waiters)
+	controller.mu.Unlock()
+	if remaining != 1 {
+		t.Fatal("normal task admitted with a forced reservation still running")
+	}
+	releaseSecond()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdaptiveSchedulerDoesNotReprobeDiskWaitersOnSubmission(t *testing.T) {
+	t.Parallel()
+
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
+	controller.sample = staticSample{}
+	root := t.TempDir()
+	probes := 0
+	controller.diskSpace = func(string) (string, uint64, error) {
+		probes++
+		return "disk", 0, nil
+	}
+	request := TaskDiskRequest{Workspace: workspace.Manager{Root: root}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	const submissions = 12
+	done := make(chan error, submissions)
+	for i := range submissions {
+		id := strconv.Itoa(i)
+		go func() {
+			_, _, err := controller.AcquireWorkspace(ctx, id, request, false)
+			done <- err
+		}()
+		waitForQueuedRequest(t, controller, id)
+	}
+	cancel()
+	for range submissions {
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("acquisition error = %v, want cancellation", err)
+		}
+	}
+	if probes != submissions {
+		t.Fatalf("disk probes = %d, want %d", probes, submissions)
 	}
 }

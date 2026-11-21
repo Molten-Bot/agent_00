@@ -645,11 +645,12 @@ func runServer(args []string) int {
 						return false
 					}
 					return taskHandle.IsStopped()
-				}, signingSnapshot, monitorBroker, workspaceRoot)
+				}, signingSnapshot, monitorBroker, workspaceRoot, func(runDir string) {
+					recordLocalTaskDiskUsage(diskHistory, diskKey, requestID, runDir, daemonLogger)
+				})
 				if taskHandle != nil {
 					taskHandle.SetRunning(false)
 				}
-				recordLocalTaskDiskUsage(diskHistory, diskKey, requestID, outcome.Result.WorkspaceDir, daemonLogger)
 
 				issueResult = outcome.Result
 				finalState = outcome.State
@@ -1491,9 +1492,10 @@ func runLocalTask(
 	signingSnapshot *gitsigning.Snapshot,
 	broker *web.Broker,
 	workspaceRoot string,
+	recordDiskUsage func(string),
 ) localTaskOutcome {
 	logf(
-		"task status=start request_id=%s skill=%s repo=%s repos=%s",
+		"task status=start request_id=%s skill=%s repo=%s repos=%s explicit_terminal=true",
 		requestID,
 		skill,
 		runCfg.RepoURL,
@@ -1531,6 +1533,9 @@ func runLocalTask(
 	}
 
 	res := h.Run(ctx, runCfg)
+	if recordDiskUsage != nil {
+		recordDiskUsage(res.WorkspaceDir)
+	}
 	if res.Err != nil && context.Cause(ctx) != nil {
 		res.Err = errors.Join(res.Err, context.Cause(ctx))
 	}

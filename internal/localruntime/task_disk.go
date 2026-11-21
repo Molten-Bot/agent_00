@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/url"
 	"os"
 	"sort"
@@ -98,16 +99,17 @@ func (h *TaskDiskHistory) Record(key string, size uint64) error {
 	return nil
 }
 
-func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool) bool {
+func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool) (bool, error) {
 	if waiter.disk == nil {
-		return true
+		return true, nil
 	}
 	required := uint64(workspace.MinimumFreeBytes)
 	if waiter.disk.RequiredBytes != nil {
 		required = waiter.disk.RequiredBytes()
 	}
 	var fallbackRoot, fallbackDevice string
-	var fallbackAvailable uint64
+	var setupErr error
+	blocked := false
 	for _, root := range waiter.disk.Workspace.DiskRoots() {
 		path := root
 		if waiter.disk.ExistingDir != "" {
@@ -115,33 +117,56 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool) bo
 		}
 		device, free, err := c.diskSpace(path)
 		if err != nil {
+			setupErr = fmt.Errorf("inspect workspace storage %s: %w", path, err)
 			continue
 		}
 		// Reserve each running task's full allowance. Free space may already
 		// reflect some of its writes, so this is deliberately conservative.
-		available := free - min(free, c.reserved[device])
-		if available >= max(workspace.MinimumFreeBytes, required) {
-			manager := waiter.disk.Workspace
-			manager.Root = root
-			if err := manager.PrepareRoots(); err != nil {
-				continue
+		available := free
+		if reserved := c.reserved[device]; reserved != nil {
+			if reserved.IsUint64() {
+				available -= min(available, reserved.Uint64())
+			} else {
+				available = 0
 			}
+		}
+		fits := available >= max(workspace.MinimumFreeBytes, required)
+		if !fits && !force {
+			blocked = true
+			continue
+		}
+		manager := waiter.disk.Workspace
+		manager.Root = root
+		if err := manager.PrepareRoots(); err != nil {
+			setupErr = err
+			continue
+		}
+		if fits {
 			c.setDiskReservation(waiter, root, device, required)
-			return true
+			return true, nil
 		}
 		if fallbackRoot == "" {
-			fallbackRoot, fallbackDevice, fallbackAvailable = root, device, available
+			fallbackRoot, fallbackDevice = root, device
 		}
 	}
-	if force && fallbackRoot != "" {
-		c.setDiskReservation(waiter, fallbackRoot, fallbackDevice, min(required, fallbackAvailable))
+	if fallbackRoot != "" {
+		c.setDiskReservation(waiter, fallbackRoot, fallbackDevice, required)
+		return true, nil
 	}
-	return force
+	if blocked {
+		return false, nil
+	}
+	return false, setupErr
 }
 
 func (c *AdaptiveScheduler) setDiskReservation(waiter *taskWaiter, root, device string, size uint64) {
 	waiter.root, waiter.device, waiter.diskBytes = root, device, size
 	if size > 0 {
-		c.reserved[device] += size
+		reserved := c.reserved[device]
+		if reserved == nil {
+			reserved = new(big.Int)
+			c.reserved[device] = reserved
+		}
+		reserved.Add(reserved, new(big.Int).SetUint64(size))
 	}
 }

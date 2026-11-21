@@ -16,6 +16,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
@@ -1525,6 +1526,7 @@ func TestRunLocalTaskReportsErrorState(t *testing.T) {
 		nil,
 		nil,
 		"",
+		nil,
 	)
 
 	if outcome.State != "error" {
@@ -1555,6 +1557,7 @@ func TestRunLocalTaskReportsStoppedStateWithoutCancelCause(t *testing.T) {
 		nil,
 		nil,
 		"",
+		nil,
 	)
 
 	if outcome.State != "stopped" {
@@ -1590,6 +1593,7 @@ func TestRunLocalTaskReportsStoppedStateWithCancelCause(t *testing.T) {
 		nil,
 		nil,
 		"",
+		nil,
 	)
 
 	if outcome.State != "stopped" {
@@ -1618,10 +1622,69 @@ func TestRunLocalTaskReportsErrorWithSigningSnapshot(t *testing.T) {
 		&gitsigning.Snapshot{},
 		nil,
 		"",
+		nil,
 	)
 
 	if outcome.State != "error" {
 		t.Fatalf("runLocalTask() state = %q, want error", outcome.State)
+	}
+}
+
+func TestRunLocalTaskRecordsDiskUsageBeforeTerminalLog(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CODEX_HOME", t.TempDir())
+	historyPath := filepath.Join(t.TempDir(), "task-disk-usage.json")
+	history, err := localruntime.OpenTaskDiskHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{RepoURL: "https://github.com/example/repo", Prompt: "fix tests", AgentHarness: "codex"}
+	key := localruntime.TaskDiskKey(cfg.RepoList())
+	cloneErr := errors.New("test clone failure")
+	runner := repairPRRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if cmd.Name == "git" && len(cmd.Args) > 0 && cmd.Args[0] == "clone" {
+			runDir := filepath.Dir(cmd.Args[len(cmd.Args)-1])
+			if err := os.WriteFile(filepath.Join(runDir, "payload"), []byte("workspace data"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return execx.Result{}, cloneErr
+		}
+		return execx.Result{}, nil
+	})
+	broker := web.NewBroker()
+	var sawStageError, sawTerminalError bool
+	logf := func(format string, args ...any) {
+		line := fmt.Sprintf(format, args...)
+		broker.IngestLog(line)
+		if strings.HasPrefix(line, "task request_id=req-disk stage=clone status=error") {
+			sawStageError = true
+			if err := broker.CloseTask("req-disk"); !errors.Is(err, web.ErrTaskNotCompleted) {
+				t.Errorf("close at stage error = %v, want task to remain active", err)
+			}
+		}
+		if !strings.HasPrefix(line, "task status=error request_id=req-disk ") {
+			return
+		}
+		sawTerminalError = true
+		recorded, err := localruntime.OpenTaskDiskHistory(historyPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recorded.RequiredBytes(key) == 0 {
+			t.Error("terminal log published before disk usage was saved")
+		}
+		if err := broker.CloseTask("req-disk"); err != nil {
+			t.Errorf("close at terminal error: %v", err)
+		}
+	}
+	outcome := runLocalTask(context.Background(), runner, logf, "local", "req-disk", cfg, 0, nil, nil, broker, root, func(runDir string) {
+		recordLocalTaskDiskUsage(history, key, "req-disk", runDir, logf)
+	})
+	if outcome.State != "error" || !errors.Is(outcome.Result.Err, cloneErr) {
+		t.Fatalf("outcome = %+v, want clone failure", outcome)
+	}
+	if !sawStageError || !sawTerminalError {
+		t.Fatalf("saw stage error = %v, terminal error = %v, want both", sawStageError, sawTerminalError)
 	}
 }
 
