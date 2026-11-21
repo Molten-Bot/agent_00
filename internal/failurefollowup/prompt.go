@@ -390,12 +390,36 @@ func NonRemediableFailureReason(err error) string {
 	if isMissingRemoteBranchFailure(text) {
 		return missingRemoteBranchReason
 	}
+	if IsReportedIssueDependencyBlocked(text) {
+		return "required issue dependency is still open"
+	}
 	for _, marker := range nonRemediableFailureMarkers {
 		if strings.Contains(text, marker) {
 			return marker
 		}
 	}
 	return NonRemediableRepoAccessReason(err)
+}
+
+var openIssueDependencyPattern = regexp.MustCompile("(?:^|[.!?]\\s+|\\n\\s*)(?:issue )?`?#\\d+`? (?:is|remains) (?:still )?(?:open|unmerged)\\b")
+
+// IsReportedIssueDependencyBlocked requires both an open issue reference and
+// an explicit prerequisite. A failure may mention open issues incidentally.
+func IsReportedIssueDependencyBlocked(detail string) bool {
+	detail = strings.ToLower(detail)
+	_, detail, reported := strings.Cut(detail, " reported failure: failure:")
+	if !reported {
+		return false
+	}
+	_, detail, hasDetails := strings.Cut(detail, "error details:")
+	if !hasDetails || !openIssueDependencyPattern.MatchString(strings.TrimSpace(detail)) {
+		return false
+	}
+	return stringsx.ContainsAny(detail, []string{
+		"merge is required before",
+		"merge and acceptance checks are required before",
+		"must be merged before",
+	})
 }
 
 func isMissingRemoteBranchFailure(text string) bool {
