@@ -293,6 +293,9 @@ func runServer(args []string) int {
 
 	localSubmitDeduper := newLocalSubmissionDeduper(localSubmissionDedupTTL)
 	localTaskController := newLocalTaskController()
+	localTaskController.persistStop = func(requestID string) error {
+		return persistIssueControl(issueClaims, requestID, "stopped")
+	}
 	var localTaskSeq uint64
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -652,12 +655,7 @@ func runServer(args []string) int {
 				taskWorkspace := diskRequest.Workspace
 				taskWorkspace.Root = workspaceRoot
 				canRetryWorkspace := diskRequest.RetryRoot == "" && canRetryTaskWorkspace(diskRequest.Workspace)
-				outcome := runLocalTask(runCtx, taskRunner, daemonLogger, "local", requestID, runCfg, finalReviewPasses, func() bool {
-					if taskHandle == nil {
-						return false
-					}
-					return taskHandle.IsStopped()
-				}, signingSnapshot, monitorBroker, taskWorkspace, func(runDir string) {
+				outcome := runLocalTask(runCtx, taskRunner, daemonLogger, "local", requestID, runCfg, finalReviewPasses, taskHandle, signingSnapshot, monitorBroker, taskWorkspace, func(runDir string) {
 					recordLocalTaskDiskUsage(diskHistory, diskKey, requestID, runDir, daemonLogger)
 				}, canRetryWorkspace)
 				if taskHandle != nil {
@@ -1074,11 +1072,6 @@ func runServer(args []string) int {
 			return nil
 		}
 		uiServer.StopTask = func(_ context.Context, requestID string) error {
-			if localTaskController.Controls(requestID).Stop {
-				if err := persistIssueControl(issueClaims, requestID, "stopped"); err != nil {
-					return err
-				}
-			}
 			// The worker publishes terminal status after recording workspace usage.
 			return localTaskController.Stop(requestID)
 		}
@@ -1511,7 +1504,7 @@ func runLocalTask(
 	requestID string,
 	runCfg config.Config,
 	finalReviewPasses int,
-	wasStopped func() bool,
+	taskHandle *localTaskHandle,
 	signingSnapshot *gitsigning.Snapshot,
 	broker *web.Broker,
 	taskWorkspace workspace.Manager,
@@ -1561,6 +1554,9 @@ func runLocalTask(
 		(canRetryWorkspace || localruntime.IsWorkspaceDiskFull(res.Err)) {
 		return localTaskOutcome{State: "retry_workspace", Result: res}
 	}
+	if res.Err == nil {
+		taskHandle.BeginFinalization()
+	}
 	if checkoutComplete && recordDiskUsage != nil {
 		recordDiskUsage(res.WorkspaceDir)
 	}
@@ -1568,7 +1564,7 @@ func runLocalTask(
 		res.Err = errors.Join(res.Err, context.Cause(ctx))
 	}
 	if res.Err != nil {
-		if wasStopped != nil && wasStopped() {
+		if taskHandle.IsStopped() {
 			stopErr := context.Cause(ctx)
 			if stopErr == nil {
 				stopErr = errTaskStoppedByOperator

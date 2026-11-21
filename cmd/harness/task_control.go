@@ -13,8 +13,9 @@ import (
 var errTaskStoppedByOperator = errors.New("task was stopped by operator")
 
 type localTaskController struct {
-	mu    sync.RWMutex
-	tasks map[string]*localTaskHandle
+	mu          sync.RWMutex
+	tasks       map[string]*localTaskHandle
+	persistStop func(string) error
 }
 
 type localTaskHandle struct {
@@ -24,6 +25,7 @@ type localTaskHandle struct {
 	paused        bool
 	running       bool
 	stopped       bool
+	finalizing    bool
 	forceAcquire  bool
 	pauseWait     chan struct{}
 	acquireCancel context.CancelFunc
@@ -117,10 +119,12 @@ func (c *localTaskController) StopWithCanonical(requestID string) (string, error
 	if err != nil {
 		return canonical, err
 	}
-	if stopped := handle.Stop(); !stopped {
-		return canonical, fmt.Errorf("task is already stopped")
-	}
-	return canonical, nil
+	return canonical, handle.stop(func() error {
+		if c.persistStop == nil {
+			return nil
+		}
+		return c.persistStop(canonical)
+	})
 }
 
 func (c *localTaskController) ForceRun(requestID string) error {
@@ -243,38 +247,44 @@ func (h *localTaskHandle) Controls() web.TaskControls {
 		return web.TaskControls{}
 	}
 
+	canStop := !h.finalizing
 	if h.running {
 		if h.paused {
 			return web.TaskControls{
 				Run:  true,
-				Stop: true,
+				Stop: canStop,
 			}
 		}
 		return web.TaskControls{
 			Pause: true,
-			Stop:  true,
+			Stop:  canStop,
 		}
 	}
 
 	if h.paused {
 		return web.TaskControls{
 			Run:  true,
-			Stop: true,
+			Stop: canStop,
 		}
 	}
 
 	return web.TaskControls{
 		Pause:    true,
 		ForceRun: true,
-		Stop:     true,
+		Stop:     canStop,
 	}
 }
 
-func (h *localTaskHandle) Stop() bool {
+func (h *localTaskHandle) BeginFinalization() {
 	if h == nil {
-		return false
+		return
 	}
+	h.mu.Lock()
+	h.finalizing = true
+	h.mu.Unlock()
+}
 
+func (h *localTaskHandle) stop(persist func() error) error {
 	var (
 		pauseWait     chan struct{}
 		acquireCancel context.CancelFunc
@@ -283,7 +293,18 @@ func (h *localTaskHandle) Stop() bool {
 	h.mu.Lock()
 	if h.stopped {
 		h.mu.Unlock()
-		return false
+		return fmt.Errorf("task is already stopped")
+	}
+	if h.finalizing {
+		h.mu.Unlock()
+		return fmt.Errorf("task is finalizing")
+	}
+	// Persist the stop before canceling, under the same lock as finalization.
+	if persist != nil {
+		if err := persist(); err != nil {
+			h.mu.Unlock()
+			return err
+		}
 	}
 	h.stopped = true
 	h.paused = false
@@ -304,7 +325,7 @@ func (h *localTaskHandle) Stop() bool {
 	if cancel != nil {
 		cancel(errTaskStoppedByOperator)
 	}
-	return true
+	return nil
 }
 
 func (h *localTaskHandle) SetAcquireCancel(cancel context.CancelFunc) {

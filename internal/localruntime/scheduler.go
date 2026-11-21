@@ -301,7 +301,7 @@ func (c *AdaptiveScheduler) acquireForce(ctx context.Context, requestID string, 
 		c.mu.Unlock()
 		return "", nil, errSchedulerClosed
 	}
-	if _, err := c.reserveDiskLocked(waiter, true, make(map[string]diskSample)); err != nil {
+	if _, err := c.reserveDiskLocked(waiter, true, make(map[string]diskSample), nil); err != nil {
 		c.mu.Unlock()
 		return "", nil, err
 	}
@@ -352,6 +352,7 @@ func (c *AdaptiveScheduler) tryGrantLocked(start int) {
 		return
 	}
 	samples := make(map[string]diskSample)
+	preparedRoots := make(map[string]error)
 	if start == 0 {
 		// A retry pass rechecks drain decisions in queue order. New submissions
 		// reuse those decisions and update only the devices they need.
@@ -359,7 +360,7 @@ func (c *AdaptiveScheduler) tryGrantLocked(start int) {
 	}
 	for i := start; c.running < c.allowed && i < len(c.waiters); {
 		waiter := c.waiters[i]
-		granted, err := c.reserveDiskLocked(waiter, false, samples)
+		granted, err := c.reserveDiskLocked(waiter, false, samples, preparedRoots)
 		if !granted && err == nil {
 			waiter.diskBlocked = true
 			for _, device := range waiter.drainDevices {

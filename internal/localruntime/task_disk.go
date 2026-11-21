@@ -157,7 +157,7 @@ type diskReservation struct {
 	cleanupWorkspaces int
 }
 
-func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, samples map[string]diskSample) (bool, error) {
+func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, samples map[string]diskSample, preparedRoots map[string]error) (bool, error) {
 	if waiter.disk == nil {
 		return true, nil
 	}
@@ -169,6 +169,7 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 	if waiter.disk.RequiredBytes != nil {
 		required = waiter.disk.RequiredBytes()
 	}
+	minimum := max(workspace.MinimumFreeBytes, required)
 	var fallbackRoot, fallbackDevice string
 	var setupErr error
 	blocked := false
@@ -185,8 +186,15 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		roots[len(roots)-1] = failed
 	}
 	for _, root := range roots {
-		manager.Root = root
-		if err := manager.PrepareRoots(); err != nil {
+		err, prepared := preparedRoots[root]
+		if !prepared {
+			manager.Root = root
+			err = manager.PrepareRoots()
+			if !force {
+				preparedRoots[root] = err
+			}
+		}
+		if err != nil {
 			if !force && IsWorkspaceDiskFull(err) {
 				blocked = true
 			} else {
@@ -207,6 +215,11 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 			setupErr = fmt.Errorf("inspect workspace storage %s: %w", path, sample.err)
 			continue
 		}
+		if !force && minimum > sample.total {
+			// Freeing space here cannot admit this task. Keep looking for
+			// a usable root or a setup error that explains the failure.
+			continue
+		}
 		// Reserve each running task's full allowance. Free space may already
 		// reflect some of its writes, so this is deliberately conservative.
 		device, available := sample.device, sample.free
@@ -222,13 +235,12 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 				available = 0
 			}
 		}
-		minimum := max(workspace.MinimumFreeBytes, required)
 		fits := available >= minimum
 		if !fits && !force {
 			blocked = true
 			// Active workspaces may have written past their reservations.
 			// Drain until cleanup reveals how much space the pool can recover.
-			if minimum <= sample.total && (sample.free >= minimum || (reservation != nil && reservation.cleanupWorkspaces > 0)) {
+			if sample.free >= minimum || (reservation != nil && reservation.cleanupWorkspaces > 0) {
 				waiter.drainDevices = append(waiter.drainDevices, device)
 			}
 			continue

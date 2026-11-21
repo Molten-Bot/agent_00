@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -1557,7 +1560,7 @@ func TestRunLocalTaskReportsStoppedStateWithoutCancelCause(t *testing.T) {
 			Prompt:  "fix tests",
 		},
 		0,
-		func() bool { return true },
+		&localTaskHandle{stopped: true},
 		nil,
 		nil,
 		workspace.NewManager(),
@@ -1594,7 +1597,7 @@ func TestRunLocalTaskReportsStoppedStateWithCancelCause(t *testing.T) {
 			Prompt:  "fix tests",
 		},
 		0,
-		func() bool { return true },
+		&localTaskHandle{stopped: true},
 		nil,
 		nil,
 		workspace.NewManager(),
@@ -1804,6 +1807,53 @@ func TestRunLocalTaskRecordsDiskUsageBeforeTerminalLog(t *testing.T) {
 	})
 }
 
+func TestRunLocalTaskRejectsStopDuringSuccessfulDiskAccounting(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	const requestID = "req-finalizing"
+	cfg := config.Config{
+		RepoURL: "https://github.com/example/repo", Prompt: "check tests", AgentHarness: "codex", BaseBranch: "main",
+	}
+	runner := repairPRRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if cmd.Name == "git" && len(cmd.Args) > 0 && cmd.Args[0] == "clone" {
+			return execx.Result{}, os.MkdirAll(cmd.Args[len(cmd.Args)-1], 0o755)
+		}
+		if cmd.Name == "git" && slices.Contains(cmd.Args, "rev-list") {
+			return execx.Result{Stdout: "0\n"}, nil
+		}
+		return execx.Result{}, nil
+	})
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	controller := newLocalTaskController()
+	controller.persistStop = func(string) error {
+		t.Error("stop during disk accounting reached issue persistence")
+		return nil
+	}
+	handle := controller.Register(requestID, cancel)
+	handle.SetRunning(true)
+	broker := web.NewBroker()
+	server := web.NewServer("", broker)
+	server.StopTask = func(_ context.Context, id string) error { return controller.Stop(id) }
+	handler := server.Handler()
+	accounted := false
+	outcome := runLocalTask(ctx, runner, func(format string, args ...any) {
+		broker.IngestLog(fmt.Sprintf(format, args...))
+	}, "local", requestID, cfg, 0, handle, nil, broker, workspace.Manager{Root: t.TempDir()}, func(string) {
+		accounted = true
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/tasks/"+requestID+"/stop", nil))
+		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "task is finalizing") {
+			t.Errorf("stop during disk accounting = %d %s, want finalization conflict", response.Code, response.Body.String())
+		}
+		if controller.Controls(requestID).Stop || handle.IsStopped() || ctx.Err() != nil {
+			t.Error("finalizing task still offers stop or was stopped")
+		}
+	}, false)
+	if !accounted || outcome.State != "no_changes" || outcome.Result.Err != nil {
+		t.Fatalf("disk accounting ran = %v, outcome = %+v, want successful no-changes result", accounted, outcome)
+	}
+}
+
 func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds, stop bool) {
 	t.Helper()
 	taskWorkspace := workspace.Manager{Root: t.TempDir()}
@@ -1882,7 +1932,7 @@ func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds, 
 			t.Errorf("close at terminal error: %v", err)
 		}
 	}
-	outcome := runLocalTask(ctx, runner, logf, "local", "req-disk", cfg, 0, handle.IsStopped, nil, broker, taskWorkspace, func(runDir string) {
+	outcome := runLocalTask(ctx, runner, logf, "local", "req-disk", cfg, 0, handle, nil, broker, taskWorkspace, func(runDir string) {
 		recordLocalTaskDiskUsage(history, key, "req-disk", runDir, logf)
 	}, false)
 	if outcome.State != wantState {

@@ -592,6 +592,47 @@ func TestAdaptiveSchedulerTriesAnotherWorkspaceAfterSetupFailure(t *testing.T) {
 	}
 }
 
+func TestAdaptiveSchedulerReportsFallbackSetupFailureWhenPreferredIsTooSmall(t *testing.T) {
+	const unit = workspace.MinimumFreeBytes
+	ram, disk := t.TempDir(), t.TempDir()
+	t.Setenv("HARNESS_WORKSPACE_RAM_BASE", ram)
+	t.Setenv("HARNESS_WORKSPACE_DISK_BASE", disk)
+	t.Setenv("HARNESS_WORKSPACE_ROOT_NAME", "test-workspaces")
+
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
+	total := uint64(unit)
+	controller.diskSpace = func(string) (string, uint64, uint64, error) {
+		return "ram", unit, total, nil
+	}
+	request := TaskDiskRequest{
+		Workspace: workspace.Manager{
+			PathExists: func(string) bool { return true },
+			CanExec:    func(string) bool { return true },
+			MkdirAll: func(path string, _ os.FileMode) error {
+				if filepath.Dir(path) == disk {
+					return os.ErrPermission
+				}
+				return nil
+			},
+		},
+		RequiredBytes: func() uint64 { return 2 * unit },
+	}
+	waiter := &taskWaiter{disk: &request}
+	controller.waiters = []*taskWaiter{waiter}
+	controller.tryGrantLocked(0)
+	if !errors.Is(waiter.err, os.ErrPermission) || waiter.diskBlocked || waiter.granted {
+		t.Fatalf("too-small preferred root: error = %v, blocked = %v, granted = %v", waiter.err, waiter.diskBlocked, waiter.granted)
+	}
+
+	total = 2 * unit
+	waiter = &taskWaiter{disk: &request}
+	controller.waiters = []*taskWaiter{waiter}
+	controller.tryGrantLocked(0)
+	if waiter.err != nil || !waiter.diskBlocked || waiter.granted {
+		t.Fatalf("preferred root with recoverable pressure: error = %v, blocked = %v, granted = %v", waiter.err, waiter.diskBlocked, waiter.granted)
+	}
+}
+
 func TestAdaptiveSchedulerReservesFullForcedEstimate(t *testing.T) {
 	t.Parallel()
 
@@ -681,7 +722,14 @@ func TestAdaptiveSchedulerSharesDiskSamplesWithinAdmissionPass(t *testing.T) {
 
 	const unit = workspace.MinimumFreeBytes
 	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 3}, nil)
-	request := TaskDiskRequest{Workspace: workspace.Manager{Root: t.TempDir()}}
+	preparations := 0
+	request := TaskDiskRequest{Workspace: workspace.Manager{
+		Root: t.TempDir(),
+		MkdirAll: func(path string, mode os.FileMode) error {
+			preparations++
+			return os.MkdirAll(path, mode)
+		},
+	}}
 	first := &taskWaiter{disk: &request}
 	second := &taskWaiter{disk: &request}
 	third := &taskWaiter{disk: &request}
@@ -694,6 +742,9 @@ func TestAdaptiveSchedulerSharesDiskSamplesWithinAdmissionPass(t *testing.T) {
 	}
 
 	controller.tryGrantLocked(0)
+	if preparations != 1 {
+		t.Fatalf("first pass: root preparations = %d, want 1", preparations)
+	}
 	if probes != 1 || !first.granted || !second.granted || !third.diskBlocked || third.granted {
 		t.Fatalf("first pass: probes = %d, admitted = %v/%v/%v, third disk blocked = %v",
 			probes, first.granted, second.granted, third.granted, third.diskBlocked)
@@ -701,6 +752,9 @@ func TestAdaptiveSchedulerSharesDiskSamplesWithinAdmissionPass(t *testing.T) {
 
 	free = 3 * unit
 	controller.tryGrantLocked(0)
+	if preparations != 2 {
+		t.Fatalf("second pass: root preparations = %d, want 2", preparations)
+	}
 	if probes != 2 || !third.granted {
 		t.Fatalf("second pass: probes = %d, third admitted = %v", probes, third.granted)
 	}
