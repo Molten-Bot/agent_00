@@ -469,6 +469,30 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		}
 	}
 
+	publicationPending := false
+	if h.ResumeIssueWorkspace && issueClaim != nil {
+		status, statusErr := h.runCommand(ctx, "git", statusCommand(repos[0].Dir))
+		if statusErr != nil {
+			return h.fail(ExitGit, "git", statusErr, runDir)
+		}
+		publicationPending, err = h.repoHasPendingChanges(ctx, repos[0], status.Stdout)
+		if err != nil {
+			return h.fail(ExitGit, "git", err, runDir)
+		}
+	}
+	if issueClaim != nil && issueClaim.SyncBaseOnRetry && !publicationPending {
+		baseRef := remoteBaseComparisonRef(issueClaim.BaseBranch)
+		res, mergeErr := h.runCommand(ctx, "git", gitCommand(repos[0].Dir, "merge", "--no-edit", baseRef))
+		if mergeErr != nil {
+			err := commandErrorWithDetails("merge latest base into reserved issue branch", mergeErr, res, maxGitErrorDetailChars)
+			if isMergeConflictResult(res, mergeErr) {
+				_, abortErr := h.runCommand(ctx, "git", mergeAbortCommand(repos[0].Dir))
+				err = errors.Join(err, abortErr)
+			}
+			return h.fail(ExitGit, "git", err, runDir)
+		}
+	}
+
 	codexDir := targetDir
 	if len(repos) > 1 {
 		codexDir = runDir
@@ -535,17 +559,6 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	h.logf("stage=%s status=start target=%s%s", agentStage, codexTargetLabel, initialAgentInvocation.logFieldsSuffix())
 	codexStart := time.Now()
 	var agentRes execx.Result
-	publicationPending := false
-	if h.ResumeIssueWorkspace && issueClaim != nil {
-		status, statusErr := h.runCommand(ctx, "git", statusCommand(repos[0].Dir))
-		if statusErr != nil {
-			return h.fail(ExitGit, "git", statusErr, runDir)
-		}
-		publicationPending, err = h.repoHasPendingChanges(ctx, repos[0], status.Stdout)
-		if err != nil {
-			return h.fail(ExitGit, "git", err, runDir)
-		}
-	}
 	if !publicationPending {
 		h.step("agent")
 		agentRes, err = h.runCodexCapture(ctx, runtime, codexDir, codexBasePrompt, codexOpts, agentsPath, agentResponseMode, initialAgentInvocation)

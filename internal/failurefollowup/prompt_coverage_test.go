@@ -116,6 +116,8 @@ func TestNonRemediableFailureReasonForUnmergedPrerequisite(t *testing.T) {
 		{"claude: claude reported failure: Failure: Upgrade blocked by an unmerged pull request.\nError details: New API is pending.", "required pull request is unmerged"},
 		{"codex: codex reported failure: Failure: Importer regression. Error details: The fixture says blocked by unmerged #42.", ""},
 		{"codex: codex reported failure: Failure: Importer is not blocked by unmerged PR #42. Error details: Code panics on startup.", ""},
+		{"codex: codex reported failure: Failure: Importer is no longer blocked by unmerged #42, but panics on startup.", ""},
+		{"codex: codex reported failure: Failure: Importer is no longer blocked by unmerged #42 but is blocked by unmerged #43.", "required pull request is unmerged"},
 		{"clone: blocked by unmerged #42", ""},
 	} {
 		if got := NonRemediableFailureReason(errors.New(tc.report)); got != tc.want {

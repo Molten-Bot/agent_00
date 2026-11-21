@@ -168,7 +168,7 @@ var (
 	// Prompt-derived branch slugs; see slug.BranchName.
 	branchSlugPattern = regexp.MustCompile(`(?i)\bagent00-[A-Za-z0-9._-]+`)
 
-	unmergedPullRequestPattern = regexp.MustCompile(`\b(not )?blocked by (?:an? |the )?unmerged (?:#\d+\b|(?:pr|pull request)\b)`)
+	unmergedPullRequestPattern = regexp.MustCompile(`\b(not |no longer )?blocked by (?:an? |the )?unmerged (?:#\d+\b|(?:pr|pull request)\b)`)
 )
 
 // RedactFailureDetail strips customer-derived identifiers out of a failed run's
@@ -414,8 +414,12 @@ func IsUnmergedPullRequestBlocker(err error) bool {
 	for _, agent := range []string{"codex", "claude"} {
 		if report, ok := strings.CutPrefix(text, agent+": "+agent+" reported failure: failure: "); ok {
 			summary, _, _ := strings.Cut(report, " error details:")
-			match := unmergedPullRequestPattern.FindStringSubmatch(summary)
-			return match != nil && match[1] == ""
+			for _, match := range unmergedPullRequestPattern.FindAllStringSubmatch(summary, -1) {
+				if match[1] == "" {
+					return true
+				}
+			}
+			return false
 		}
 	}
 	return false

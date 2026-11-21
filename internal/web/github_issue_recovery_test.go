@@ -358,12 +358,12 @@ func TestIssueRecoveryBlocksUnmergedPrerequisiteAfterUnlockRetry(t *testing.T) {
 	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), got.Error) {
 		t.Fatalf("automation status did not expose the blocker: %d %s", resp.Code, resp.Body)
 	}
-	remote, err := s.latestIssueAttempt(ctx, record.Run.GitHubIssue.Repository, record.Run.GitHubIssue.Number)
-	if err != nil {
-		t.Fatal(err)
+	retry := retryIssue(t, s, record.ID, true)
+	if retry.Code != http.StatusAccepted || len(f.submissions) != 2 {
+		t.Fatalf("explicit recovery failed: status=%d submissions=%d body=%s", retry.Code, len(f.submissions), retry.Body)
 	}
-	if _, status, err := s.recoverIssueClaim(ctx, record.Run.GitHubIssue.Repository, record.Run.GitHubIssue.Number, remote, f.submit); err != nil || status != http.StatusAccepted || len(f.submissions) != 2 {
-		t.Fatalf("explicit recovery failed: status=%d submissions=%d err=%v", status, len(f.submissions), err)
+	if !f.submissions[1].GitHubIssue.Claim.SyncBaseOnRetry {
+		t.Fatal("explicit recovery did not request a base sync")
 	}
 }
 
