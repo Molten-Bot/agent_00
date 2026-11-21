@@ -82,9 +82,10 @@ func Download(ctx context.Context, assets []Asset, dir, token string, transport 
 	return files, nil
 }
 
-// Preview fetches attachment bytes using only the requesting viewer's optional
-// GitHub token. Stored URLs must not grant access on their own.
-func Preview(ctx context.Context, asset Asset, viewerToken string, transport http.RoundTripper) ([]byte, string, error) {
+// Preview opens an attachment using only the requesting viewer's optional
+// GitHub token. The caller must close the returned body. Video streams can
+// report a size limit or upstream read error after delivering partial data.
+func Preview(ctx context.Context, asset Asset, viewerToken string, transport http.RoundTripper) (io.ReadCloser, string, error) {
 	u, err := url.Parse(asset.URL)
 	if err != nil || !allowedAttachment(u) {
 		return nil, "", fmt.Errorf("invalid attachment URL")
@@ -113,13 +114,24 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 		}
 		return nil, "", err
 	}
-	defer resp.Body.Close()
+	closeBody := true
+	defer func() {
+		if closeBody {
+			resp.Body.Close()
+		}
+	}()
+	if resp.ContentLength > maxVideoPreviewBytes {
+		return nil, "", fmt.Errorf("attachment exceeds download size limit")
+	}
 	// Classify the response before reading its body so only videos get the larger budget.
 	const sniffBytes = 512 // http.DetectContentType's sniff window
 	body := bufio.NewReaderSize(resp.Body, sniffBytes)
 	prefix, err := body.Peek(sniffBytes)
 	if err != nil && err != io.EOF {
 		return nil, "", fmt.Errorf("read attachment response failed")
+	}
+	if len(prefix) == 0 {
+		return nil, "", fmt.Errorf("attachment is empty")
 	}
 	detected := http.DetectContentType(prefix)
 	contentType := resp.Header.Get("Content-Type")
@@ -135,23 +147,49 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 	} else {
 		mediaType = previewMediaType(detected, declared, prefix)
 	}
-	limit := MaxFileBytes
 	if strings.HasPrefix(mediaType, "video/") {
-		limit = maxVideoPreviewBytes
+		closeBody = false
+		return &videoPreviewBody{body: io.LimitedReader{R: body, N: maxVideoPreviewBytes}, Closer: resp.Body}, mediaType, nil
 	}
-	data, err := readAttachment(body, resp.ContentLength, limit)
+	data, err := readAttachment(body, resp.ContentLength, MaxFileBytes)
 	if err != nil {
 		return nil, "", err
 	}
 	if mediaType != "" {
-		return data, mediaType, nil
+		return io.NopCloser(bytes.NewReader(data)), mediaType, nil
 	}
 	if utf8.Valid(data) && bytes.IndexFunc(data, func(r rune) bool {
 		return unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r'
 	}) == -1 {
-		return data, "text/plain; charset=utf-8", nil
+		return io.NopCloser(bytes.NewReader(data)), "text/plain; charset=utf-8", nil
 	}
 	return nil, "", fmt.Errorf("attachment format is not supported for previews")
+}
+
+type videoPreviewBody struct {
+	body io.LimitedReader
+	io.Closer
+}
+
+func (b *videoPreviewBody) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	var n int
+	var err error
+	if b.body.N > 0 {
+		n, err = b.body.Read(p)
+	} else {
+		// Distinguish a complete video at the limit from an oversized one.
+		var extra [1]byte
+		if _, err = io.ReadFull(b.body.R, extra[:]); err == nil {
+			return 0, fmt.Errorf("attachment exceeds download size limit")
+		}
+	}
+	if err != nil && err != io.EOF {
+		return n, fmt.Errorf("read attachment response failed")
+	}
+	return n, err
 }
 
 func previewMediaType(detected, declared string, prefix []byte) string {

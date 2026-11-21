@@ -3,6 +3,7 @@ package web
 import (
 	_ "embed"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -47,7 +48,7 @@ func (s Server) handleTaskAssetPreview(w http.ResponseWriter, r *http.Request, r
 	if fields := strings.Fields(r.Header.Get("Authorization")); len(fields) == 2 && strings.EqualFold(fields[0], "Bearer") {
 		viewerToken = fields[1]
 	}
-	data, mediaType, err := githubassets.Preview(r.Context(), task.Assets[index], viewerToken, s.assetTransport)
+	body, mediaType, err := githubassets.Preview(r.Context(), task.Assets[index], viewerToken, s.assetTransport)
 	if errors.Is(err, githubassets.ErrPreviewAccess) {
 		http.Error(w, "GitHub attachment requires access.", http.StatusForbidden)
 		return
@@ -56,11 +57,32 @@ func (s Server) handleTaskAssetPreview(w http.ResponseWriter, r *http.Request, r
 		http.Error(w, "Preview unavailable.", http.StatusBadGateway)
 		return
 	}
+	defer body.Close()
 
 	w.Header().Set("Content-Type", mediaType)
 	w.Header().Set("Content-Disposition", "attachment")
 	w.Header().Set("Content-Security-Policy", "sandbox")
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Write(data)
+	var dst io.Writer = w
+	if flusher, ok := w.(http.Flusher); ok && strings.HasPrefix(mediaType, "video/") {
+		dst = taskVideoWriter{ResponseWriter: w, Flusher: flusher}
+	}
+	if _, err := io.Copy(dst, body); err != nil {
+		// Headers may already be sent. Abort so an incomplete preview fails the fetch.
+		panic(http.ErrAbortHandler)
+	}
+}
+
+type taskVideoWriter struct {
+	http.ResponseWriter
+	http.Flusher
+}
+
+func (w taskVideoWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	if err == nil {
+		w.Flush()
+	}
+	return n, err
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -234,6 +235,58 @@ func TestTaskAssetPreviewDistinguishesAccessFailures(t *testing.T) {
 			srv.Handler().ServeHTTP(w, taskAssetPreviewRequest("req-asset", "https://github.com/user-attachments/assets/example"))
 			if w.Code != tc.want || w.Header().Get("Cache-Control") != "no-store" {
 				t.Errorf("preview status = %d, cache control = %q, want %d and no-store", w.Code, w.Header().Get("Cache-Control"), tc.want)
+			}
+		})
+	}
+}
+
+func TestTaskAssetPreviewStreamsVideo(t *testing.T) {
+	t.Parallel()
+	const assetURL = "https://github.com/user-attachments/assets/video"
+	prefix := "\x00\x00\x00\x14ftypmp42\x00\x00\x00\x00mp42" + strings.Repeat("\x00", 512-20)
+	for _, tc := range []struct {
+		name        string
+		upstreamErr error
+	}{
+		{name: "success"},
+		{name: "interrupted", upstreamErr: errors.New("upstream interrupted")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := githubIssueTestServer(nil, true)
+			srv.Broker.RecordTaskRunConfig("req-video", []byte(fmt.Sprintf(`{"assets":[{"url":%q}]}`, assetURL)))
+			upstream, finish := io.Pipe()
+			srv.assetTransport = taskAssetTransportFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, ContentLength: -1, Body: struct {
+					io.Reader
+					io.Closer
+				}{io.MultiReader(strings.NewReader(prefix), upstream), upstream}}, nil
+			})
+			ts := httptest.NewServer(srv.Handler())
+			defer ts.Close()
+			defer finish.Close()
+
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/tasks/req-video/asset-preview", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("X-Task-Asset-URL", url.PathEscape(assetURL))
+			resp, err := ts.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "video/mp4" || resp.Header.Get("Cache-Control") != "no-store" {
+				t.Fatalf("unexpected video response: status = %d, headers = %v", resp.StatusCode, resp.Header)
+			}
+			data := make([]byte, len(prefix))
+			if _, err := io.ReadFull(resp.Body, data); err != nil || string(data) != prefix {
+				t.Fatalf("first video bytes were not delivered before upstream EOF: %v", err)
+			}
+			finish.CloseWithError(tc.upstreamErr)
+			if _, err := io.Copy(io.Discard, resp.Body); (err != nil) != (tc.upstreamErr != nil) {
+				t.Fatalf("client read error = %v, upstream read error = %v", err, tc.upstreamErr)
 			}
 		})
 	}
