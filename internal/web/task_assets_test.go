@@ -2,11 +2,13 @@ package web
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +44,12 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 			status, mediaType, body = http.StatusOK, "application/octet-stream", taskAssetTestPDF()
 		case "/user-attachments/files/42/notes.txt":
 			status, mediaType, body = http.StatusOK, "text/plain", "<script>throw new Error('attachment executed')</script>\nUTF-8: café"
+		case "/user-attachments/files/42/tone.wav":
+			status, mediaType, body = http.StatusOK, "application/octet-stream", taskAssetTestWAV()
+		case "/user-attachments/files/42/silence.mp3":
+			// Untagged MPEG-1 Layer III silence, 128 kbps at 44.1 kHz.
+			frame := "\xff\xfb\x90\x64" + strings.Repeat("\x00", 413)
+			status, mediaType, body = http.StatusOK, "application/octet-stream", strings.Repeat(frame, 8)
 		case "/user-attachments/assets/unavailable":
 			if req.Header.Get("Authorization") == "Bearer viewer-fixture" {
 				status, body = http.StatusOK, "Private attachment preview"
@@ -64,6 +72,7 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 	srv.Broker.RecordTaskRunConfig("req-single-asset", []byte(`{"repo":"example/project","prompt":"Task with one attachment","assets":[{"url":"https://github.com/user-attachments/assets/unavailable","name":"unavailable"}]}`))
 	srv.Broker.RecordTaskRunConfig("req-unsupported-asset", []byte(`{"repo":"example/project","prompt":"Task with an unsupported attachment","assets":[{"url":"https://github.com/user-attachments/assets/unsupported","name":"unsupported"}]}`))
 	srv.Broker.RecordTaskRunConfig("req-text-asset", []byte(`{"repo":"example/project","prompt":"Task with a text attachment","assets":[{"url":"https://github.com/user-attachments/files/42/notes.txt","name":"notes.txt"}]}`))
+	srv.Broker.RecordTaskRunConfig("req-audio-asset", []byte(`{"repo":"example/project","prompt":"Task with audio attachments","assets":[{"url":"https://github.com/user-attachments/files/42/tone.wav","name":"tone.wav"},{"url":"https://github.com/user-attachments/files/42/silence.mp3","name":"silence.mp3"}]}`))
 	srv.Broker.RecordTaskRunConfig("req-no-assets", []byte(`{"repo":"example/project","prompt":"Task without attachments"}`))
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -93,12 +102,19 @@ func TestTaskAssetPreviewDoesNotUseServerAuthorization(t *testing.T) {
 	})
 
 	handler := srv.Handler()
-	for index, status := range []int{http.StatusForbidden, http.StatusBadGateway, http.StatusBadGateway} {
+	for index, tc := range []struct {
+		url    string
+		status int
+	}{
+		{"https://github.com/user-attachments/assets/private", http.StatusForbidden},
+		{"https://private-user-images.githubusercontent.com/42/private.png?jwt=fixture", http.StatusBadGateway},
+		{"https://github.com/user-attachments/assets/private?token=fixture", http.StatusBadGateway},
+	} {
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/tasks/req-assets/asset-preview?index=%d", index), nil)
+		req := taskAssetPreviewRequest("req-assets", tc.url)
 		handler.ServeHTTP(w, req)
-		if w.Code != status || strings.Contains(w.Body.String(), "private bytes") {
-			t.Errorf("preview %d returned status %d, want %d without attachment bytes", index, w.Code, status)
+		if w.Code != tc.status || strings.Contains(w.Body.String(), "private bytes") {
+			t.Errorf("preview %d returned status %d, want %d without attachment bytes", index, w.Code, tc.status)
 		}
 	}
 }
@@ -141,18 +157,18 @@ func TestTaskAssetPreviewUsesViewerAuthorization(t *testing.T) {
 	})
 	handler := srv.Handler()
 	for _, tc := range []struct {
-		name, authorization string
-		index, status       int
+		name, authorization, assetURL string
+		status                        int
 	}{
-		{"other viewer", "Bearer denied-fixture", 0, http.StatusForbidden},
-		{"authorized viewer", "Bearer viewer-fixture", 0, http.StatusOK},
-		{"anonymous after authorized", "", 0, http.StatusForbidden},
-		{"stored storage URL", "Bearer viewer-fixture", 1, http.StatusBadGateway},
-		{"stored URL with query", "Bearer viewer-fixture", 2, http.StatusBadGateway},
+		{"other viewer", "Bearer denied-fixture", "https://github.com/user-attachments/assets/private", http.StatusForbidden},
+		{"authorized viewer", "Bearer viewer-fixture", "https://github.com/user-attachments/assets/private", http.StatusOK},
+		{"anonymous after authorized", "", "https://github.com/user-attachments/assets/private", http.StatusForbidden},
+		{"stored storage URL", "Bearer viewer-fixture", "https://private-user-images.githubusercontent.com/42/private.png?jwt=stored-fixture", http.StatusBadGateway},
+		{"stored URL with query", "Bearer viewer-fixture", "https://github.com/user-attachments/assets/private?token=stored-fixture", http.StatusBadGateway},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/tasks/req-private/asset-preview?index=%d", tc.index), nil)
+			req := taskAssetPreviewRequest("req-private", tc.assetURL)
 			req.Header.Set("Authorization", tc.authorization)
 			req.AddCookie(&http.Cookie{Name: "viewer", Value: "cookie-fixture"})
 			handler.ServeHTTP(w, req)
@@ -207,7 +223,7 @@ func TestTaskAssetPreviewDistinguishesAccessFailures(t *testing.T) {
 				return resp, nil
 			})
 			w := httptest.NewRecorder()
-			srv.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/tasks/req-asset/asset-preview?index=0", nil))
+			srv.Handler().ServeHTTP(w, taskAssetPreviewRequest("req-asset", "https://github.com/user-attachments/assets/example"))
 			if w.Code != tc.want || w.Header().Get("Cache-Control") != "no-store" {
 				t.Errorf("preview status = %d, cache control = %q, want %d and no-store", w.Code, w.Header().Get("Cache-Control"), tc.want)
 			}
@@ -238,6 +254,29 @@ func taskAssetTestPDF() string {
 	return pdf.String()
 }
 
+func taskAssetTestWAV() string {
+	const samples = 8000
+	// One second of 8 kHz, 8-bit mono PCM.
+	data := make([]byte, 44+samples)
+	copy(data, "RIFF")
+	binary.LittleEndian.PutUint32(data[4:], 36+samples)
+	copy(data[8:], "WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00")
+	binary.LittleEndian.PutUint32(data[24:], samples)
+	binary.LittleEndian.PutUint32(data[28:], samples)
+	copy(data[32:], "\x01\x00\x08\x00data")
+	binary.LittleEndian.PutUint32(data[40:], samples)
+	for i := range data[44:] {
+		data[44+i] = 128
+	}
+	return string(data)
+}
+
+func taskAssetPreviewRequest(requestID, assetURL string) *http.Request {
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks/"+requestID+"/asset-preview", nil)
+	req.Header.Set("X-Task-Asset-URL", url.PathEscape(assetURL))
+	return req
+}
+
 func TestTaskAssetPreviewRequiresStoredAsset(t *testing.T) {
 	t.Parallel()
 	srv := githubIssueTestServer(githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
@@ -246,17 +285,54 @@ func TestTaskAssetPreviewRequiresStoredAsset(t *testing.T) {
 	}), true)
 	srv.Broker.RecordTaskRunConfig("req-assets", []byte(`{"prompt":"Inspect files","assets":[{"url":"https://github.com/user-attachments/files/42/spec.pdf"}]}`))
 	handler := srv.Handler()
-	for _, path := range []string{
-		"/api/tasks/missing/asset-preview?index=0",
-		"/api/tasks/req-assets/asset-preview?index=-1",
-		"/api/tasks/req-assets/asset-preview?index=1",
-		"/api/tasks/req-assets/asset-preview?url=https://github.com/user-attachments/files/42/spec.pdf",
+	for _, req := range []*http.Request{
+		taskAssetPreviewRequest("missing", "https://github.com/user-attachments/files/42/spec.pdf"),
+		taskAssetPreviewRequest("req-assets", "https://github.com/user-attachments/files/42/other.pdf"),
+		httptest.NewRequest(http.MethodGet, "/api/tasks/req-assets/asset-preview?index=0", nil),
+		httptest.NewRequest(http.MethodGet, "/api/tasks/req-assets/asset-preview?url=https://github.com/user-attachments/files/42/spec.pdf", nil),
 	} {
 		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		handler.ServeHTTP(w, req)
 		if w.Code != http.StatusNotFound {
-			t.Errorf("GET %s returned %d, want 404", path, w.Code)
+			t.Errorf("GET %s returned %d, want 404", req.URL, w.Code)
 		}
+	}
+}
+
+func TestTaskAssetPreviewFollowsIdentityAcrossSnapshots(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(nil, true)
+	const selected = "https://github.com/user-attachments/files/42/selected%20file.txt"
+	const other = "https://github.com/user-attachments/files/42/other.txt"
+	record := func(assets string) {
+		srv.Broker.RecordTaskRunConfig("req-assets", []byte(`{"assets":[`+assets+`]}`))
+	}
+	selectedAsset, otherAsset := fmt.Sprintf(`{"url":%q}`, selected), fmt.Sprintf(`{"url":%q}`, other)
+	record(selectedAsset + "," + otherAsset)
+	task, _ := srv.Broker.Task("req-assets")
+	assetURL := task.Assets[0].URL
+	fetches := 0
+	srv.assetTransport = taskAssetTransportFunc(func(req *http.Request) (*http.Response, error) {
+		fetches++
+		if req.URL.String() != selected {
+			t.Errorf("preview fetched a different attachment")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("Selected attachment"))}, nil
+	})
+	handler := srv.Handler()
+	record(otherAsset + "," + selectedAsset)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, taskAssetPreviewRequest("req-assets", assetURL))
+	if w.Code != http.StatusOK || w.Body.String() != "Selected attachment" {
+		t.Fatalf("reordered attachment status = %d, body = %q", w.Code, w.Body.String())
+	}
+	record(otherAsset)
+	w = httptest.NewRecorder()
+	req := taskAssetPreviewRequest("req-assets", assetURL)
+	req.Header.Set("Authorization", "Bearer viewer-fixture")
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound || fetches != 1 {
+		t.Fatalf("removed attachment status = %d, upstream requests = %d, want 404 and one upstream request total", w.Code, fetches)
 	}
 }
 

@@ -4,7 +4,8 @@ import (
 	_ "embed"
 	"errors"
 	"net/http"
-	"strconv"
+	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
@@ -31,8 +32,13 @@ func (s Server) handleTaskAssetPreview(w http.ResponseWriter, r *http.Request, r
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	task, ok := s.Broker.Task(requestID)
-	index, err := strconv.Atoi(r.URL.Query().Get("index"))
-	if !ok || err != nil || index < 0 || index >= len(task.Assets) {
+	assetURL, err := url.PathUnescape(r.Header.Get("X-Task-Asset-URL"))
+	if !ok || err != nil || assetURL == "" {
+		http.NotFound(w, r)
+		return
+	}
+	index := slices.IndexFunc(task.Assets, func(asset githubassets.Asset) bool { return asset.URL == assetURL })
+	if index == -1 {
 		http.NotFound(w, r)
 		return
 	}

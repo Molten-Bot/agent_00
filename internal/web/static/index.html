@@ -10544,13 +10544,37 @@
 
       taskAssetPreviewRequest = new AbortController();
       const { signal } = taskAssetPreviewRequest;
-      const params = new URLSearchParams({ request: viewedTaskRequestID, index: viewedTaskAssetIndex });
+      const params = new URLSearchParams({ request: viewedTaskRequestID, asset: asset.url });
       try {
-        const status = await loadTaskAssetPreview(params, taskAssetMessage, { signal, title });
-        if (signal.aborted || !taskAssetViewer.open || status === 200) return;
+        const response = await fetchTaskAssetPreview(params, { signal });
+        if (signal.aborted || !taskAssetViewer.open) return;
+        if (response.ok) {
+          await showTaskAssetPreview(await response.blob(), taskAssetMessage, { signal, title });
+          return;
+        }
         taskAssetMessage.textContent = "Preview unavailable.";
-        if (status === 403 && window.isSecureContext && url.hostname === "github.com" && !url.search) {
-          taskAssetAuthLink.href = `/task-asset-auth?${params}`;
+        if (response.status === 403 && window.isSecureContext && url.hostname === "github.com" && !url.search) {
+          // The isolated authorization tab returns only the preview bytes.
+          const channelName = `task-asset-preview-${crypto.randomUUID()}`;
+          const channel = new BroadcastChannel(channelName);
+          signal.addEventListener("abort", () => channel.close(), { once: true });
+          channel.onmessage = async ({ data }) => {
+            if (signal.aborted || !taskAssetViewer.open || !(data instanceof Blob)) return;
+            channel.onmessage = null;
+            taskAssetAuthLink.hidden = true;
+            taskAssetAuthLink.removeAttribute("href");
+            taskAssetMessage.textContent = "Loading preview…";
+            try {
+              await showTaskAssetPreview(data, taskAssetMessage, { signal, title });
+              if (!signal.aborted && taskAssetViewer.open) channel.postMessage("shown");
+            } catch {
+              if (!signal.aborted && taskAssetViewer.open) taskAssetMessage.textContent = "Preview unavailable.";
+            } finally {
+              channel.close();
+            }
+          };
+          params.set("channel", channelName);
+          taskAssetAuthLink.href = `/task-asset-auth#${params}`;
           taskAssetAuthLink.hidden = false;
         }
       } catch {
@@ -10578,7 +10602,7 @@
     taskAssetPrev.addEventListener("click", () => stepTaskAssetViewer(-1));
     taskAssetNext.addEventListener("click", () => stepTaskAssetViewer(1));
     taskAssetViewer.addEventListener("keydown", (event) => {
-      if (event.target.tagName === "VIDEO") return;
+      if (event.target.matches("audio, video")) return;
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       event.preventDefault();
       stepTaskAssetViewer(event.key === "ArrowLeft" ? -1 : 1);

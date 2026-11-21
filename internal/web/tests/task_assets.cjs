@@ -34,7 +34,7 @@ for (const mobile of [false, true]) {
       if (!url.pathname.startsWith('/api/')) return route.continue();
       if (route.request().method() !== 'GET') writes.push(url.pathname);
       if (url.pathname.endsWith('/asset-preview')) {
-        attachmentRequests.push(url.pathname + url.search);
+        attachmentRequests.push([url.pathname + url.search, decodeURIComponent(route.request().headers()['x-task-asset-url'])]);
         return route.continue();
       }
       if (url.pathname === '/api/status') return route.continue();
@@ -83,8 +83,9 @@ for (const mobile of [false, true]) {
     await expect(viewer.getByRole('img', { name: 'screenshot-id' })).toBeVisible();
     await expect(count).toHaveText('1 / 2');
     await expect(source).toHaveAttribute('href', screenshotURL);
-    assert.deepEqual(attachmentRequests, ['/api/tasks/req-assets/asset-preview?index=0']);
-    const pdfResponse = page.waitForResponse(response => response.url().endsWith('/asset-preview?index=1'));
+    assert.deepEqual(attachmentRequests, [['/api/tasks/req-assets/asset-preview', screenshotURL]]);
+    const pdfResponse = page.waitForResponse(response =>
+      response.url().endsWith('/asset-preview') && decodeURIComponent(response.request().headers()['x-task-asset-url']) === pdfURL);
     await next.click();
     const response = await pdfResponse;
     assert.equal(response.status(), 200);
@@ -110,7 +111,7 @@ for (const mobile of [false, true]) {
     await page.keyboard.press('Escape');
     await expect(viewer).toBeHidden();
     await expect(assets).toBeFocused();
-    assert.deepEqual(attachmentRequests, [0, 1, 0, 1].map(index => `/api/tasks/req-assets/asset-preview?index=${index}`),
+    assert.deepEqual(attachmentRequests, [screenshotURL, pdfURL, screenshotURL, pdfURL].map(url => ['/api/tasks/req-assets/asset-preview', url]),
       'only the current asset preview is requested');
 
     const singleAsset = page.locator('#task-list .task[data-request-id="req-single-asset"] .task-assets-toggle');
@@ -142,19 +143,21 @@ for (const mobile of [false, true]) {
     await retry.click();
     await expect(auth.getByRole('status')).toHaveText('GitHub denied access to this attachment.');
     await expect(token).toHaveValue('');
+    const authClosed = auth.waitForEvent('close');
     await token.fill('viewer-fixture');
     await retry.click();
-    await expect(auth.locator('pre')).toHaveText('Private attachment preview');
-    await expect(token).toBeHidden();
-    await expect(token).toHaveValue('');
-    await expect(viewer.getByRole('status')).toHaveText('Preview unavailable.');
-    await auth.close();
+    await expect(viewer.locator('pre')).toHaveText('Private attachment preview');
+    await expect(viewer.getByRole('status')).toBeHidden();
+    await authClosed;
     await viewer.getByRole('button', { name: 'Close asset viewer' }).click();
     await expect(viewer).toBeHidden();
     await expect(singleAsset).toBeFocused();
     await page.keyboard.press('Enter');
     await expect(viewer).toBeVisible();
     await expect(viewer.getByRole('status')).toHaveText('Preview unavailable.');
+    const staleAuthOpening = page.context().waitForEvent('page');
+    await authLink.click();
+    const staleAuth = await staleAuthOpening;
     await page.keyboard.press('Escape');
     await expect(viewer).toBeHidden();
 
@@ -172,8 +175,31 @@ for (const mobile of [false, true]) {
     assert.equal(await textPreview.textContent(), "<script>throw new Error('attachment executed')</script>\nUTF-8: café");
     await expect(textPreview.locator('*')).toHaveCount(0);
     await expect(viewer.getByRole('status')).toBeHidden();
+    const staleToken = staleAuth.getByLabel('GitHub token with access to this attachment');
+    await staleToken.fill('viewer-fixture');
+    await staleAuth.getByRole('button', { name: 'Retry preview' }).click();
+    await expect(staleAuth.locator('pre')).toHaveText('Private attachment preview');
+    await expect(staleToken).toBeHidden();
+    await expect(staleToken).toHaveValue('');
+    assert.equal(await textPreview.textContent(), "<script>throw new Error('attachment executed')</script>\nUTF-8: café",
+      'late authorization cannot replace a different preview');
+    await staleAuth.close();
     await page.keyboard.press('Escape');
     await expect(viewer.locator('pre')).toHaveCount(0);
+
+    await page.locator('#task-list .task[data-request-id="req-audio-asset"] .task-assets-toggle').click();
+    const audio = viewer.locator('audio');
+    await expect(audio).toBeVisible();
+    await expect(audio).toHaveJSProperty('controls', true);
+    await expect(audio).toHaveJSProperty('duration', 1);
+    await expect(viewer.getByRole('status')).toBeHidden();
+    await next.click();
+    await expect(audio).toHaveAccessibleName('silence.mp3');
+    await expect(audio).toBeVisible();
+    await audio.evaluate(element => element.play());
+    await expect.poll(() => audio.evaluate(element => element.currentTime)).toBeGreaterThan(0);
+    await page.keyboard.press('Escape');
+    await expect(audio).toHaveCount(0);
     assert.deepEqual(errors, [], 'no browser JavaScript errors');
     assert.deepEqual(writes, [], 'viewing assets must not submit or modify a task');
   });

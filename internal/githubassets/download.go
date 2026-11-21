@@ -119,15 +119,21 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 		return nil, "", fmt.Errorf("GitHub returned HTML instead of an attachment; verify repository access")
 	}
 	switch detected {
-	case "application/pdf", "image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp", "image/x-icon", "video/mp4", "video/webm":
+	case "application/pdf", "audio/mpeg", "image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp", "image/x-icon", "video/mp4", "video/webm":
 		return data, detected, nil
+	case "audio/wave":
+		return data, "audio/wav", nil
 	case "application/ogg":
 		return data, "video/ogg", nil
 	}
 	// Some browser media formats have no signature in http.DetectContentType.
 	switch declared {
-	case "image/avif", "image/svg+xml", "image/vnd.microsoft.icon", "video/ogg", "video/quicktime", "video/x-m4v":
+	case "audio/mpeg", "image/avif", "image/svg+xml", "image/vnd.microsoft.icon", "video/ogg", "video/quicktime", "video/x-m4v":
 		return data, declared, nil
+	}
+	// Go sniffs ID3 tags but misses MP3 streams that start with an MPEG Layer III frame.
+	if isMP3Frame(data) {
+		return data, "audio/mpeg", nil
 	}
 	if utf8.Valid(data) && bytes.IndexFunc(data, func(r rune) bool {
 		return unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r'
@@ -135,6 +141,15 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 		return data, "text/plain; charset=utf-8", nil
 	}
 	return nil, "", fmt.Errorf("attachment format is not supported for previews")
+}
+
+func isMP3Frame(data []byte) bool {
+	if len(data) < 4 || data[0] != 0xff || data[1]&0xe0 != 0xe0 {
+		return false
+	}
+	version, layer := (data[1]>>3)&3, (data[1]>>1)&3
+	bitrate, sampleRate := data[2]>>4, (data[2]>>2)&3
+	return version != 1 && layer == 1 && bitrate != 15 && sampleRate != 3 && data[3]&3 != 2
 }
 
 func downloadClient(token string, transport http.RoundTripper) *http.Client {

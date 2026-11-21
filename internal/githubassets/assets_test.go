@@ -187,3 +187,32 @@ func TestPreviewText(t *testing.T) {
 		})
 	}
 }
+
+func TestPreviewAudio(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, contentType, body, want string
+	}{
+		{"tagged MP3", "application/octet-stream", "ID3\x04\x00\x00", "audio/mpeg"},
+		{"untagged MP3", "application/octet-stream", "\xff\xfb\x90\x64", "audio/mpeg"},
+		{"declared MP3", "audio/mpeg", "\x00\xff", "audio/mpeg"},
+		{"WAV", "application/octet-stream", "RIFF\x00\x00\x00\x00WAVE", "audio/wav"},
+		{"invalid MP3 header", "application/octet-stream", "\xff\xfb\xfc\x64", ""},
+		{"HTML labeled as MP3", "audio/mpeg", "<!DOCTYPE html><html>Sign in</html>", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return response(req, 200, tc.body, http.Header{"Content-Type": {tc.contentType}}), nil
+			})
+			asset := Asset{URL: "https://github.com/user-attachments/assets/example"}
+			data, mediaType, err := Preview(context.Background(), asset, "", transport)
+			if tc.want == "" {
+				if err == nil || len(data) != 0 {
+					t.Fatal("unsupported content was returned")
+				}
+			} else if err != nil || mediaType != tc.want || string(data) != tc.body {
+				t.Fatalf("preview = (%q, %q, %v), want original audio as %s", data, mediaType, err, tc.want)
+			}
+		})
+	}
+}
