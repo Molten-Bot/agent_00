@@ -187,12 +187,28 @@ func TestIssueRetentionPreservesUnresolvedEvidence(t *testing.T) {
 	if _, err := os.Stat(file); err != nil {
 		t.Fatal("locked workspace deleted")
 	}
-	lock.Close()
-	if err := retainIssueEvidence(store, repairs, logRoot, time.Now()); err != nil {
+	if err := lock.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("resolved artifact not retired")
+	// Concurrent subprocess tests can briefly inherit this descriptor between
+	// fork and exec, keeping flock held after our close. Retention deliberately
+	// skips busy locks and tries again on a later pass; exercise that contract.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := retainIssueEvidence(store, repairs, logRoot, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		_, err := os.Stat(file)
+		if errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("resolved artifact not retired after repeated retention passes")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
