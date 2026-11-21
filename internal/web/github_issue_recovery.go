@@ -388,10 +388,11 @@ func repairableIssueIncident(record localruntime.IssueClaimRecord) bool {
 	if record.Outcome == "" && record.Failures < 3 {
 		return false
 	}
-	if failurefollowup.NonRemediableFailureReason(errors.New(record.Error)) != "" {
+	detail := record.FailureDetail()
+	if failurefollowup.NonRemediableFailureReason(errors.New(detail)) != "" {
 		return false
 	}
-	lower := strings.ToLower(record.Error)
+	lower := strings.ToLower(detail)
 	for _, reason := range []string{"issue is ineligible", "associated branch", "open dependencies", "dispatch capacity", "automation disabled", "repository disabled", "ownership", "permission", "rate limit", "worker descendants", "agent auth required"} {
 		if strings.Contains(lower, reason) {
 			return false

@@ -73,6 +73,9 @@ const githubSSHPermissionDeniedReason = "permission to repository denied"
 const unreachableCoverageTargetReason = "coverage target cannot be met safely"
 const missingSecurityContractReason = "security verification contract is missing"
 const missingRemoteBranchReason = "remote branch does not exist"
+const upstreamIssueDependencyReason = "task is waiting on an upstream issue"
+
+var upstreamIssueDependencyPattern = regexp.MustCompile(`\b(?:awaits?|waiting (?:on|for)|blocked by)\s+#\d+\b`)
 
 var nonRemediableFailureMarkers = []string{
 	"no space left on device",
@@ -389,6 +392,10 @@ func NonRemediableFailureReason(err error) string {
 	}
 	if isMissingRemoteBranchFailure(text) {
 		return missingRemoteBranchReason
+	}
+	if report, details, ok := strings.Cut(text, "error details:"); ok &&
+		strings.Contains(report, "reported failure:") && upstreamIssueDependencyPattern.MatchString(details) {
+		return upstreamIssueDependencyReason
 	}
 	for _, marker := range nonRemediableFailureMarkers {
 		if strings.Contains(text, marker) {

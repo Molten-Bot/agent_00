@@ -193,10 +193,15 @@ type Harness struct {
 	// OnPRTitle reports the title after PR creation, creation recovery, or a title update.
 	OnPRTitle            func(url, title string)
 	ResumeIssueWorkspace bool
-	Signing              *gitsigning.Snapshot
-	LoadSigning          func(context.Context) (*gitsigning.Snapshot, error)
-	signingHistory       map[string]map[string]bool
-	Runner               execx.Runner
+	// IssuePublicationReady records that a prior attempt accepted the agent result.
+	IssuePublicationReady bool
+	// SaveIssuePublicationReady checkpoints agent acceptance before publication.
+	SaveIssuePublicationReady func(bool) error
+
+	Signing        *gitsigning.Snapshot
+	LoadSigning    func(context.Context) (*gitsigning.Snapshot, error)
+	signingHistory map[string]map[string]bool
+	Runner         execx.Runner
 	// AssetTransport optionally replaces HTTP transport for attachment downloads.
 	AssetTransport http.RoundTripper
 	Workspace      workspace.Manager
@@ -536,7 +541,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	codexStart := time.Now()
 	var agentRes execx.Result
 	publicationPending := false
-	if h.ResumeIssueWorkspace && issueClaim != nil {
+	if h.ResumeIssueWorkspace && h.IssuePublicationReady && issueClaim != nil {
 		status, statusErr := h.runCommand(ctx, "git", statusCommand(repos[0].Dir))
 		if statusErr != nil {
 			return h.fail(ExitGit, "git", statusErr, runDir)
@@ -554,6 +559,11 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	}
 	if err != nil {
 		return h.fail(ExitCodex, agentStage, err, runDir)
+	}
+	if !publicationPending && h.SaveIssuePublicationReady != nil {
+		if err := h.SaveIssuePublicationReady(true); err != nil {
+			return h.fail(ExitWorkspace, "workspace", fmt.Errorf("record issue publication readiness: %w", err), runDir)
+		}
 	}
 	h.logf("stage=%s status=ok elapsed_s=%d%s", agentStage, int(time.Since(codexStart).Seconds()), initialAgentInvocation.logFieldsSuffix())
 	// A PR may merge and delete its remote branch while the agent runs. Allow
@@ -5852,6 +5862,11 @@ func (h Harness) runCodexCapture(
 	responseMode string,
 	invocation agentInvocationLogMetadata,
 ) (execx.Result, error) {
+	if h.SaveIssuePublicationReady != nil {
+		if err := h.SaveIssuePublicationReady(false); err != nil {
+			return execx.Result{}, fmt.Errorf("clear issue publication readiness: %w", err)
+		}
+	}
 	finalPrompt := withBackpressurePrompt(prompt, nil)
 	cleanup := func() error { return nil }
 
