@@ -56,7 +56,7 @@ func (q *issueRepairQueue) capture(_ context.Context, issue localruntime.IssueCl
 		}
 		q.logf("event=issue_repair_read status=error err=%q", err)
 	}
-	run := failureFollowUpRunConfig(issue.RequestID, app.Result{Err: errors.New(issue.Error)}, issue.Run, q.logRoot)
+	run := failureFollowUpRunConfig(issue.RequestID, app.Result{ExitCode: issue.ExitCode, Err: errors.New(issue.Error)}, issue.Run, q.logRoot)
 	record := localruntime.IssueRepairRecord{ID: id, RequestID: "repair-" + id, State: "queued", Run: run}
 	return record.RequestID, q.store.Save(record)
 }
