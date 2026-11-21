@@ -606,6 +606,30 @@
     </div>
   </div>
 
+  <dialog id="task-asset-viewer" class="task-image-viewer-shell" aria-labelledby="task-asset-title">
+    <div class="task-image-viewer-head">
+      <span id="task-asset-title" class="task-image-viewer-title"></span>
+      <form method="dialog">
+        <button class="task-image-viewer-close" type="submit" aria-label="Close asset viewer" autofocus>
+          <i data-lucide="x" aria-hidden="true"></i>
+        </button>
+      </form>
+    </div>
+    <div class="task-image-viewer-stage">
+      <button id="task-asset-prev" class="task-image-viewer-nav task-image-viewer-prev" type="button" aria-label="Previous asset">
+        <i data-lucide="chevron-left" aria-hidden="true"></i>
+      </button>
+      <p id="task-asset-message" role="status"></p>
+      <button id="task-asset-next" class="task-image-viewer-nav task-image-viewer-next" type="button" aria-label="Next asset">
+        <i data-lucide="chevron-right" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div class="task-asset-footer">
+      <span id="task-asset-count" aria-live="polite"></span>
+      <a id="task-asset-source" target="_blank" rel="noopener noreferrer">Open on GitHub</a>
+    </div>
+  </dialog>
+
   <dialog id="library-schedule-modal" class="library-schedule-modal" aria-labelledby="library-schedule-title">
     <div class="library-prompt-modal-head">
       <h2 id="library-schedule-title">Schedules</h2>
@@ -10464,6 +10488,123 @@
       renderTaskImageViewer();
     }
 
+    const taskAssetViewer = document.getElementById("task-asset-viewer");
+    const taskAssetTitle = document.getElementById("task-asset-title");
+    const taskAssetMessage = document.getElementById("task-asset-message");
+    const taskAssetPrev = document.getElementById("task-asset-prev");
+    const taskAssetNext = document.getElementById("task-asset-next");
+    const taskAssetCount = document.getElementById("task-asset-count");
+    const taskAssetSource = document.getElementById("task-asset-source");
+    let viewedTaskAssets = [];
+    let viewedTaskAssetIndex = 0;
+
+    function taskAssetURL(raw) {
+      let url;
+      try {
+        url = new URL(raw);
+      } catch {
+        return null;
+      }
+      if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
+      if (url.hostname === "github.com" &&
+          /^\/(?:user-attachments\/(?:assets|files)|[^/]+\/[^/]+\/(?:assets|files))\//.test(url.pathname)) return url;
+      if (url.hostname === "user-images.githubusercontent.com" || url.hostname === "private-user-images.githubusercontent.com") return url;
+      return null;
+    }
+
+    function clearTaskAssetMedia() {
+      const media = taskAssetViewer.querySelector(".task-image-viewer-image");
+      if (!media) return;
+      media.remove();
+      media.removeAttribute("src");
+      if (media.tagName === "VIDEO") media.load();
+    }
+
+    function renderTaskAssetViewer() {
+      clearTaskAssetMedia();
+      const asset = viewedTaskAssets[viewedTaskAssetIndex];
+      const url = taskAssetURL(asset.url);
+      taskAssetTitle.textContent = asset.name || "Task asset";
+      const multiple = viewedTaskAssets.length > 1;
+      taskAssetPrev.hidden = taskAssetNext.hidden = !multiple;
+      taskAssetCount.textContent = multiple ? `${viewedTaskAssetIndex + 1} / ${viewedTaskAssets.length}` : "";
+      taskAssetSource.hidden = !url;
+      taskAssetSource.removeAttribute("href");
+      if (url) taskAssetSource.href = url.href;
+      taskAssetMessage.hidden = false;
+      taskAssetMessage.textContent = "Preview unavailable.";
+      if (!url) return;
+
+      // Current GitHub media uploads can have opaque URLs with no extension.
+      const opaque = /^\/user-attachments\/assets\//.test(url.pathname) || /\/assets\/[^/]+$/.test(url.pathname);
+      const image = /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i.test(url.pathname);
+      const video = /\.(?:m4v|mov|mp4|ogg|ogv|webm)$/i.test(url.pathname);
+      if (!opaque && !image && !video) return;
+
+      function showMedia(tag, tryVideo = false) {
+        const media = document.createElement(tag);
+        media.className = "task-image-viewer-image";
+        media.hidden = true;
+        if (tag === "video") {
+          media.controls = true;
+          media.playsInline = true;
+          media.preload = "metadata";
+          media.setAttribute("aria-label", taskAssetTitle.textContent);
+        } else {
+          media.alt = taskAssetTitle.textContent;
+          media.referrerPolicy = "no-referrer";
+        }
+        media.addEventListener(tag === "video" ? "loadedmetadata" : "load", () => {
+          if (!media.isConnected) return;
+          taskAssetMessage.hidden = true;
+          media.hidden = false;
+        });
+        media.addEventListener("error", () => {
+          if (!media.isConnected) return;
+          clearTaskAssetMedia();
+          if (tryVideo) {
+            showMedia("video");
+          } else {
+            taskAssetMessage.hidden = false;
+            taskAssetMessage.textContent = "Preview unavailable.";
+          }
+        });
+        taskAssetMessage.textContent = "Loading preview…";
+        taskAssetMessage.before(media);
+        media.src = url.href;
+      }
+
+      if (video) showMedia("video");
+      else showMedia("img", opaque && !image);
+    }
+
+    function openTaskAssetViewer(assets) {
+      viewedTaskAssets = assets;
+      viewedTaskAssetIndex = 0;
+      renderTaskAssetViewer();
+      taskAssetViewer.showModal();
+    }
+
+    function stepTaskAssetViewer(direction) {
+      const count = viewedTaskAssets.length;
+      if (count < 2) return;
+      viewedTaskAssetIndex = (viewedTaskAssetIndex + direction + count) % count;
+      renderTaskAssetViewer();
+    }
+
+    taskAssetPrev.addEventListener("click", () => stepTaskAssetViewer(-1));
+    taskAssetNext.addEventListener("click", () => stepTaskAssetViewer(1));
+    taskAssetViewer.addEventListener("keydown", (event) => {
+      if (event.target.tagName === "VIDEO") return;
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      stepTaskAssetViewer(event.key === "ArrowLeft" ? -1 : 1);
+    });
+    taskAssetViewer.addEventListener("close", () => {
+      clearTaskAssetMedia();
+      viewedTaskAssets = [];
+    });
+
     function taskFullscreenMode(mode) {
       return String(mode || "").trim().toLowerCase() === "console" ? "console" : "work";
     }
@@ -12347,8 +12488,12 @@
         button.type = "button";
         button.className = "task-assets-toggle task-copy-link";
         button.textContent = `${count} asset${count === 1 ? "" : "s"}`;
-        button.title = "View GitHub attachments in the task prompt.";
-        bindTaskActionButton(button, () => openTaskPromptModal(task));
+        button.title = "View task assets.";
+        button.setAttribute("aria-haspopup", "dialog");
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          openTaskAssetViewer(task.assets);
+        });
         return button;
       };
 
@@ -14080,6 +14225,7 @@
       });
     }
     document.addEventListener("keydown", (event) => {
+      if (taskAssetViewer.open) return;
       if (event.key === "Escape" && state.taskPromptModalOpen) {
         event.preventDefault();
         closeTaskPromptModal();

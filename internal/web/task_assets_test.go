@@ -22,6 +22,7 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.Broker.RecordTaskRunConfig("req-assets", raw)
+	srv.Broker.RecordTaskRunConfig("req-single-asset", []byte(`{"repo":"example/project","prompt":"Task with one attachment","assets":[{"url":"https://github.com/user-attachments/assets/unavailable","name":"unavailable"}]}`))
 	srv.Broker.RecordTaskRunConfig("req-no-assets", []byte(`{"repo":"example/project","prompt":"Task without attachments"}`))
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

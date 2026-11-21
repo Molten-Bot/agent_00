@@ -5444,6 +5444,47 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   text-align: center;
 }
 
+#task-asset-viewer {
+  position: fixed;
+  inset: 0;
+  width: min(960px, calc(100% - 24px));
+  height: min(680px, calc(100dvh - 32px));
+  margin: auto;
+  padding: 0;
+  color: #fff;
+}
+
+#task-asset-viewer:not([open]),
+#task-asset-viewer [hidden] {
+  display: none;
+}
+
+#task-asset-viewer::backdrop {
+  background: rgba(4, 9, 17, 0.78);
+  backdrop-filter: blur(10px) saturate(120%);
+}
+
+#task-asset-message {
+  margin: 0;
+  text-align: center;
+}
+
+.task-asset-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.85rem;
+}
+
+#task-asset-source {
+  margin-left: auto;
+  color: #fff;
+  text-decoration: underline;
+}
+
 .library-prompt-modal {
   position: fixed;
   inset: 0;
