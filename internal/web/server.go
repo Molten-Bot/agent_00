@@ -115,6 +115,7 @@ type Server struct {
 	ResolveGitHubProfileURL func(context.Context) (string, error)
 	ResolveGitHubRepos      func(context.Context) ([]GitHubRepo, error)
 	GitHubIssueRunner       execx.Runner
+	assetTransport          http.RoundTripper
 	IssueClaims             *localruntime.IssueClaimStore
 	// IssueRecovery is enabled only when the submitter implements durable
 	// receipts and inherited worker locks. Legacy embedders remain manual-only.
@@ -2804,6 +2805,8 @@ func (s Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
 	}
 	action := ""
 	switch {
+	case strings.HasSuffix(path, "/asset-preview"):
+		action = "asset-preview"
 	case strings.HasSuffix(path, "/rerun"):
 		action = "rerun"
 	case strings.HasSuffix(path, "/delete"):
@@ -2841,6 +2844,8 @@ func (s Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch action {
+	case "asset-preview":
+		s.handleTaskAssetPreview(w, r, decoded)
 	case "rerun":
 		s.handleTaskRerun(w, r, decoded)
 	case "delete":

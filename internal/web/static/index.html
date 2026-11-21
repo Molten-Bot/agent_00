@@ -10497,6 +10497,9 @@
     const taskAssetSource = document.getElementById("task-asset-source");
     let viewedTaskAssets = [];
     let viewedTaskAssetIndex = 0;
+    let viewedTaskRequestID = "";
+    let taskAssetPreviewRequest;
+    let taskAssetObjectURL;
 
     function taskAssetURL(raw) {
       let url;
@@ -10513,18 +10516,26 @@
     }
 
     function clearTaskAssetMedia() {
+      taskAssetPreviewRequest?.abort();
+      taskAssetPreviewRequest = undefined;
       const media = taskAssetViewer.querySelector(".task-image-viewer-image");
-      if (!media) return;
-      media.remove();
-      media.removeAttribute("src");
-      if (media.tagName === "VIDEO") media.load();
+      if (media) {
+        media.remove();
+        media.removeAttribute("src");
+        if (media.tagName === "VIDEO") media.load();
+      }
+      if (taskAssetObjectURL) {
+        URL.revokeObjectURL(taskAssetObjectURL);
+        taskAssetObjectURL = undefined;
+      }
     }
 
-    function renderTaskAssetViewer() {
+    async function renderTaskAssetViewer() {
       clearTaskAssetMedia();
       const asset = viewedTaskAssets[viewedTaskAssetIndex];
       const url = taskAssetURL(asset.url);
-      taskAssetTitle.textContent = asset.name || "Task asset";
+      const title = asset.name || "Task asset";
+      taskAssetTitle.textContent = title;
       const multiple = viewedTaskAssets.length > 1;
       taskAssetPrev.hidden = taskAssetNext.hidden = !multiple;
       taskAssetCount.textContent = multiple ? `${viewedTaskAssetIndex + 1} / ${viewedTaskAssets.length}` : "";
@@ -10532,29 +10543,49 @@
       taskAssetSource.removeAttribute("href");
       if (url) taskAssetSource.href = url.href;
       taskAssetMessage.hidden = false;
-      taskAssetMessage.textContent = "Preview unavailable.";
+      taskAssetMessage.textContent = url ? "Loading preview…" : "Preview unavailable.";
       if (!url) return;
 
-      // Current GitHub media uploads can have opaque URLs with no extension.
-      const opaque = /^\/user-attachments\/assets\//.test(url.pathname) || /\/assets\/[^/]+$/.test(url.pathname);
-      const image = /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i.test(url.pathname);
-      const video = /\.(?:m4v|mov|mp4|ogg|ogv|webm)$/i.test(url.pathname);
-      if (!opaque && !image && !video) return;
+      taskAssetPreviewRequest = new AbortController();
+      const { signal } = taskAssetPreviewRequest;
+      const endpoint = `/api/tasks/${encodeURIComponent(viewedTaskRequestID)}/asset-preview?index=${viewedTaskAssetIndex}`;
+      try {
+        const response = await fetch(endpoint, { signal });
+        if (!response.ok) throw new Error("Preview unavailable.");
+        const blob = await response.blob();
+        const isPDF = blob.type === "application/pdf";
+        // Keep SVG in an opaque origin even if opened outside its image element.
+        let src;
+        if (blob.type === "image/svg+xml") {
+          src = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+        }
+        if (signal.aborted || !taskAssetViewer.open) return;
+        if (isPDF && navigator.pdfViewerEnabled === false) throw new Error("Preview unavailable.");
+        if (!src) {
+          taskAssetObjectURL = URL.createObjectURL(blob);
+          src = taskAssetObjectURL;
+        }
 
-      function showMedia(tag, tryVideo = false) {
-        const media = document.createElement(tag);
+        const media = document.createElement(isPDF ? "iframe" : blob.type.startsWith("video/") ? "video" : "img");
         media.className = "task-image-viewer-image";
-        media.hidden = true;
-        if (tag === "video") {
+        media.hidden = !isPDF;
+        if (isPDF) {
+          taskAssetMessage.hidden = true;
+          media.title = title;
+        } else if (media.tagName === "VIDEO") {
           media.controls = true;
           media.playsInline = true;
           media.preload = "metadata";
-          media.setAttribute("aria-label", taskAssetTitle.textContent);
+          media.setAttribute("aria-label", title);
         } else {
-          media.alt = taskAssetTitle.textContent;
-          media.referrerPolicy = "no-referrer";
+          media.alt = title;
         }
-        media.addEventListener(tag === "video" ? "loadedmetadata" : "load", () => {
+        media.addEventListener(media.tagName === "VIDEO" ? "loadedmetadata" : "load", () => {
           if (!media.isConnected) return;
           taskAssetMessage.hidden = true;
           media.hidden = false;
@@ -10562,23 +10593,18 @@
         media.addEventListener("error", () => {
           if (!media.isConnected) return;
           clearTaskAssetMedia();
-          if (tryVideo) {
-            showMedia("video");
-          } else {
-            taskAssetMessage.hidden = false;
-            taskAssetMessage.textContent = "Preview unavailable.";
-          }
+          taskAssetMessage.hidden = false;
+          taskAssetMessage.textContent = "Preview unavailable.";
         });
-        taskAssetMessage.textContent = "Loading preview…";
+        media.src = src;
         taskAssetMessage.before(media);
-        media.src = url.href;
+      } catch {
+        if (!signal.aborted) taskAssetMessage.textContent = "Preview unavailable.";
       }
-
-      if (video) showMedia("video");
-      else showMedia("img", opaque && !image);
     }
 
-    function openTaskAssetViewer(assets) {
+    function openTaskAssetViewer(requestID, assets) {
+      viewedTaskRequestID = requestID;
       viewedTaskAssets = assets;
       viewedTaskAssetIndex = 0;
       renderTaskAssetViewer();
@@ -10601,6 +10627,7 @@
       stepTaskAssetViewer(event.key === "ArrowLeft" ? -1 : 1);
     });
     taskAssetViewer.addEventListener("close", () => {
+      if (taskAssetViewer.open) return;
       clearTaskAssetMedia();
       viewedTaskAssets = [];
     });
@@ -12492,7 +12519,7 @@
         button.setAttribute("aria-haspopup", "dialog");
         button.addEventListener("click", (event) => {
           event.stopPropagation();
-          openTaskAssetViewer(task.assets);
+          openTaskAssetViewer(taskRequestID(task), task.assets);
         });
         return button;
       };

@@ -9,7 +9,7 @@ const screenshotURL = 'https://github.com/user-attachments/assets/screenshot-id'
 const pdfURL = 'https://github.com/user-attachments/files/42/spec.pdf';
 const unavailableURL = 'https://github.com/user-attachments/assets/unavailable';
 
-before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
+before(async () => { browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
 
 for (const mobile of [false, true]) {
@@ -25,21 +25,18 @@ for (const mobile of [false, true]) {
     page.on('console', message => {
       if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:')) errors.push(message.text());
     });
-    await page.route('**/*', route => {
+    await page.route(/^https?:/, route => {
       const url = new URL(route.request().url());
       if (url.origin !== new URL(baseURL).origin) {
-        if (url.pathname.includes('/user-attachments/')) attachmentRequests.push(url.href);
-        if (url.href === screenshotURL) {
-          return route.fulfill({
-            contentType: 'image/svg+xml',
-            body: '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="640" height="360" fill="#246" /></svg>',
-          });
-        }
-        if (url.href === unavailableURL) return route.fulfill({ status: 404 });
+        if (url.pathname.includes('/user-attachments/')) errors.push('Browser requested a GitHub attachment');
         return route.abort();
       }
       if (!url.pathname.startsWith('/api/')) return route.continue();
       if (route.request().method() !== 'GET') writes.push(url.pathname);
+      if (url.pathname.endsWith('/asset-preview')) {
+        attachmentRequests.push(url.pathname + url.search);
+        return route.continue();
+      }
       if (url.pathname === '/api/status') return route.continue();
       if (url.pathname === '/api/stream') return route.fulfill({ contentType: 'text/event-stream', body: '' });
       let json = { ok: true };
@@ -67,19 +64,34 @@ for (const mobile of [false, true]) {
     await expect(viewer.getByRole('img', { name: 'screenshot-id' })).toBeVisible();
     await expect(count).toHaveText('1 / 2');
     await expect(source).toHaveAttribute('href', screenshotURL);
+    assert.deepEqual(attachmentRequests, ['/api/tasks/req-assets/asset-preview?index=0']);
+    const pdfResponse = page.waitForResponse(response => response.url().endsWith('/asset-preview?index=1'));
     await next.click();
+    const response = await pdfResponse;
+    assert.equal(response.status(), 200);
+    assert.equal(response.headers()['content-type'], 'application/pdf');
+    assert.equal(response.headers()['cache-control'], 'no-store');
+    assert.equal(response.headers()['authorization'], undefined);
     await expect(viewer).toHaveAccessibleName('spec.pdf');
-    await expect(viewer.getByRole('status')).toHaveText('Preview unavailable.');
+    await expect(viewer.getByTitle('spec.pdf')).toBeVisible();
+    await expect(viewer.getByTitle('spec.pdf')).toHaveAttribute('src', /^blob:/);
+    await expect(viewer.getByRole('status')).toBeHidden();
+    const pdfFrame = () => page.frames().find(frame =>
+      frame.url().startsWith('chrome-extension:') && frame.parentFrame()?.url().startsWith('blob:'),
+    );
+    await expect.poll(() => Boolean(pdfFrame())).toBe(true);
+    await expect(pdfFrame().locator('pdf-viewer embed')).toBeVisible();
     await expect(source).toHaveAttribute('href', pdfURL);
     await expect(count).toHaveText('2 / 2');
     await previous.click();
     await expect(viewer.getByRole('img', { name: 'screenshot-id' })).toBeVisible();
     await page.keyboard.press('ArrowLeft');
     await expect(count).toHaveText('2 / 2');
+    await expect.poll(() => attachmentRequests.length).toBe(4);
     await page.keyboard.press('Escape');
     await expect(viewer).toBeHidden();
-    assert.ok(attachmentRequests.length > 0 && attachmentRequests.every(url => url === screenshotURL),
-      'only the current media preview is loaded');
+    assert.deepEqual(attachmentRequests, [0, 1, 0, 1].map(index => `/api/tasks/req-assets/asset-preview?index=${index}`),
+      'only the current asset preview is requested');
 
     const singleAsset = page.locator('#task-list .task[data-request-id="req-single-asset"] .task-assets-toggle');
     await expect(singleAsset).toHaveText('1 asset');
