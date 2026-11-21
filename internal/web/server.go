@@ -341,6 +341,7 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/agent-auth/verify", s.handleAgentAuthVerify)
 	mux.HandleFunc("/api/agent-auth/configure", s.handleAgentAuthConfigure)
 	mux.HandleFunc("/api/tasks/", s.handleTaskAction)
+	mux.HandleFunc("/task-asset-auth", handleTaskAssetAuth)
 	mux.HandleFunc("/healthz", s.handleHealth)
 	return withGzip(mux)
 }

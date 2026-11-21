@@ -25,7 +25,7 @@ for (const mobile of [false, true]) {
     page.on('console', message => {
       if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:')) errors.push(message.text());
     });
-    await page.route(/^https?:/, route => {
+    await page.context().route(/^https?:/, route => {
       const url = new URL(route.request().url());
       if (url.origin !== new URL(baseURL).origin) {
         if (url.pathname.includes('/user-attachments/')) errors.push('Browser requested a GitHub attachment');
@@ -54,9 +54,12 @@ for (const mobile of [false, true]) {
     await expect(page.locator('#task-list .task[data-request-id="req-no-assets"] .task-assets-toggle')).toHaveCount(0);
     assert.deepEqual(attachmentRequests, [], 'previews load only when requested');
     const viewer = page.locator('#task-asset-viewer');
+    await expect(viewer).toBeHidden();
+    await expect(page.locator('link[href="/static/style.css?v=9"]')).toHaveCount(1);
     if (mobile) {
       await assets.tap();
     } else {
+      await assets.scrollIntoViewIfNeeded();
       const originalButton = await assets.elementHandle();
       const box = await assets.boundingBox();
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -117,12 +120,35 @@ for (const mobile of [false, true]) {
     await expect(source).toHaveAttribute('href', unavailableURL);
     await expect(previous).toBeHidden();
     await expect(next).toBeHidden();
-    const token = viewer.getByLabel('GitHub token with access to this attachment');
+    await expect(page.locator('#task-asset-token')).toHaveCount(0);
+    const authLink = viewer.getByRole('link', { name: 'Preview with GitHub token', exact: false });
+    const [auth, authResponse] = await Promise.all([
+      page.context().waitForEvent('page'),
+      page.context().waitForEvent('response', { predicate: response => new URL(response.url()).pathname === '/task-asset-auth' }),
+      authLink.click(),
+    ]);
+    auth.on('pageerror', error => errors.push(error.message));
+    auth.on('console', message => {
+      if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:')) errors.push(message.text());
+    });
+    assert.equal(authResponse.headers()['cross-origin-opener-policy'], 'same-origin');
+    assert.match(authResponse.headers()['content-security-policy'], /frame-ancestors 'none'/);
+    assert.equal(await auth.evaluate(() => window.opener), null);
+    assert.deepEqual(await auth.locator('script').evaluateAll(scripts => scripts.map(script => script.getAttribute('src'))),
+      ['/static/task-asset-preview.js', '/static/task-asset-auth.js']);
+    const token = auth.getByLabel('GitHub token with access to this attachment');
+    const retry = auth.getByRole('button', { name: 'Retry preview' });
+    await token.fill('denied-fixture');
+    await retry.click();
+    await expect(auth.getByRole('status')).toHaveText('GitHub denied access to this attachment.');
+    await expect(token).toHaveValue('');
     await token.fill('viewer-fixture');
-    await viewer.getByRole('button', { name: 'Retry preview' }).click();
-    await expect(viewer.locator('pre')).toHaveText('Private attachment preview');
+    await retry.click();
+    await expect(auth.locator('pre')).toHaveText('Private attachment preview');
     await expect(token).toBeHidden();
     await expect(token).toHaveValue('');
+    await expect(viewer.getByRole('status')).toHaveText('Preview unavailable.');
+    await auth.close();
     await viewer.getByRole('button', { name: 'Close asset viewer' }).click();
     await expect(viewer).toBeHidden();
     await expect(singleAsset).toBeFocused();
@@ -131,6 +157,12 @@ for (const mobile of [false, true]) {
     await expect(viewer.getByRole('status')).toHaveText('Preview unavailable.');
     await page.keyboard.press('Escape');
     await expect(viewer).toBeHidden();
+
+    const unsupported = page.locator('#task-list .task[data-request-id="req-unsupported-asset"] .task-assets-toggle');
+    await unsupported.click();
+    await expect(viewer.getByRole('status')).toHaveText('Preview unavailable.');
+    await expect(viewer.locator('#task-asset-auth-link')).toBeHidden();
+    await page.keyboard.press('Escape');
 
     const textAsset = page.locator('#task-list .task[data-request-id="req-text-asset"] .task-assets-toggle');
     await textAsset.focus();

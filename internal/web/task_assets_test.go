@@ -46,6 +46,8 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 			if req.Header.Get("Authorization") == "Bearer viewer-fixture" {
 				status, body = http.StatusOK, "Private attachment preview"
 			}
+		case "/user-attachments/assets/unsupported":
+			status, body = http.StatusOK, "\x00\xff"
 		}
 		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {mediaType}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})
@@ -60,6 +62,7 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 	}
 	srv.Broker.RecordTaskRunConfig("req-assets", raw)
 	srv.Broker.RecordTaskRunConfig("req-single-asset", []byte(`{"repo":"example/project","prompt":"Task with one attachment","assets":[{"url":"https://github.com/user-attachments/assets/unavailable","name":"unavailable"}]}`))
+	srv.Broker.RecordTaskRunConfig("req-unsupported-asset", []byte(`{"repo":"example/project","prompt":"Task with an unsupported attachment","assets":[{"url":"https://github.com/user-attachments/assets/unsupported","name":"unsupported"}]}`))
 	srv.Broker.RecordTaskRunConfig("req-text-asset", []byte(`{"repo":"example/project","prompt":"Task with a text attachment","assets":[{"url":"https://github.com/user-attachments/files/42/notes.txt","name":"notes.txt"}]}`))
 	srv.Broker.RecordTaskRunConfig("req-no-assets", []byte(`{"repo":"example/project","prompt":"Task without attachments"}`))
 	ts := httptest.NewServer(srv.Handler())
@@ -90,12 +93,12 @@ func TestTaskAssetPreviewDoesNotUseServerAuthorization(t *testing.T) {
 	})
 
 	handler := srv.Handler()
-	for index := range 3 {
+	for index, status := range []int{http.StatusForbidden, http.StatusBadGateway, http.StatusBadGateway} {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/tasks/req-assets/asset-preview?index=%d", index), nil)
 		handler.ServeHTTP(w, req)
-		if w.Code != http.StatusBadGateway || strings.Contains(w.Body.String(), "private bytes") {
-			t.Errorf("preview %d returned status %d, want 502 without attachment bytes", index, w.Code)
+		if w.Code != status || strings.Contains(w.Body.String(), "private bytes") {
+			t.Errorf("preview %d returned status %d, want %d without attachment bytes", index, w.Code, status)
 		}
 	}
 }
@@ -141,9 +144,9 @@ func TestTaskAssetPreviewUsesViewerAuthorization(t *testing.T) {
 		name, authorization string
 		index, status       int
 	}{
-		{"other viewer", "Bearer denied-fixture", 0, http.StatusBadGateway},
+		{"other viewer", "Bearer denied-fixture", 0, http.StatusForbidden},
 		{"authorized viewer", "Bearer viewer-fixture", 0, http.StatusOK},
-		{"anonymous after authorized", "", 0, http.StatusBadGateway},
+		{"anonymous after authorized", "", 0, http.StatusForbidden},
 		{"stored storage URL", "Bearer viewer-fixture", 1, http.StatusBadGateway},
 		{"stored URL with query", "Bearer viewer-fixture", 2, http.StatusBadGateway},
 	} {
@@ -163,6 +166,52 @@ func TestTaskAssetPreviewUsesViewerAuthorization(t *testing.T) {
 	}
 	if storageRequests != 1 {
 		t.Fatalf("storage requests = %d, want one viewer-authorized request", storageRequests)
+	}
+}
+
+func TestTaskAssetPreviewDistinguishesAccessFailures(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name           string
+		upstream, want int
+		header         http.Header
+	}{
+		{name: "unauthorized", upstream: 401, want: 403},
+		{name: "forbidden", upstream: 403, want: 403},
+		{name: "missing or private", upstream: 404, want: 403},
+		{name: "GitHub sign-in redirect", upstream: 302, want: 403, header: http.Header{"Location": {"/login"}}},
+		{name: "network failure", want: 502},
+		{name: "upstream failure", upstream: 503, want: 502},
+		{name: "unsupported media", upstream: 200, want: 502},
+		{name: "oversized asset", upstream: 200, want: 502},
+		{name: "rate limited", upstream: 403, want: 502, header: http.Header{"Retry-After": {"60"}}},
+		{name: "storage denied", upstream: 302, want: 502, header: http.Header{"Location": {"https://objects.githubusercontent.com/asset?signature=fixture"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := githubIssueTestServer(nil, true)
+			srv.Broker.RecordTaskRunConfig("req-asset", []byte(`{"assets":[{"url":"https://github.com/user-attachments/assets/example"}]}`))
+			srv.assetTransport = taskAssetTransportFunc(func(req *http.Request) (*http.Response, error) {
+				if tc.upstream == 0 {
+					return nil, fmt.Errorf("upstream unavailable")
+				}
+				if req.URL.Host == "objects.githubusercontent.com" {
+					return &http.Response{StatusCode: http.StatusForbidden, Request: req, Body: http.NoBody}, nil
+				}
+				if req.URL.Path != "/user-attachments/assets/example" {
+					t.Errorf("unexpected upstream path %q", req.URL.Path)
+				}
+				resp := &http.Response{StatusCode: tc.upstream, Request: req, Header: tc.header, Body: io.NopCloser(strings.NewReader("\x00\xff"))}
+				if tc.name == "oversized asset" {
+					resp.ContentLength = 26 << 20
+				}
+				return resp, nil
+			})
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/tasks/req-asset/asset-preview?index=0", nil))
+			if w.Code != tc.want || w.Header().Get("Cache-Control") != "no-store" {
+				t.Errorf("preview status = %d, cache control = %q, want %d and no-store", w.Code, w.Header().Get("Cache-Control"), tc.want)
+			}
+		})
 	}
 }
 

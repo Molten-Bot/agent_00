@@ -3,6 +3,7 @@ package githubassets
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -20,6 +21,9 @@ import (
 
 const MaxFileBytes int64 = 25 << 20
 const MaxTotalBytes int64 = 100 << 20
+
+// ErrPreviewAccess means GitHub denied access or concealed the attachment.
+var ErrPreviewAccess = errors.New("GitHub attachment requires access")
 
 type File struct {
 	Asset
@@ -89,8 +93,22 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 	if u.Host != "github.com" {
 		viewerToken = ""
 	}
-	data, headers, err := fetch(ctx, downloadClient(viewerToken, transport), asset.URL, viewerToken, MaxFileBytes)
+	client := downloadClient(viewerToken, transport)
+	if u.Host == "github.com" {
+		checkRedirect := client.CheckRedirect
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if req.URL.Scheme == "https" && req.URL.Host == "github.com" && req.URL.Path == "/login" {
+				return ErrPreviewAccess
+			}
+			return checkRedirect(req, via)
+		}
+	}
+	data, headers, err := fetch(ctx, client, asset.URL, viewerToken, MaxFileBytes)
 	if err != nil {
+		var status *attachmentHTTPError
+		if u.Host == "github.com" && errors.As(err, &status) && status.githubAccess {
+			return nil, "", ErrPreviewAccess
+		}
 		return nil, "", err
 	}
 	detected := http.DetectContentType(data)
@@ -184,6 +202,15 @@ func downloadOne(ctx context.Context, client *http.Client, asset Asset, dir, tok
 	return File{Asset: asset, Path: filePath, MediaType: mediaType}, int64(len(data)), nil
 }
 
+type attachmentHTTPError struct {
+	status       int
+	githubAccess bool
+}
+
+func (e *attachmentHTTPError) Error() string {
+	return fmt.Sprintf("GitHub returned HTTP %d; verify attachment availability and repository access", e.status)
+}
+
 func fetch(ctx context.Context, client *http.Client, rawURL, token string, limit int64) ([]byte, http.Header, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -199,11 +226,19 @@ func fetch(ctx context.Context, client *http.Client, rawURL, token string, limit
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()
 		}
+		if errors.Is(err, ErrPreviewAccess) {
+			return nil, nil, ErrPreviewAccess
+		}
 		return nil, nil, fmt.Errorf("attachment request failed (network, timeout, or disallowed redirect)")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("GitHub returned HTTP %d; verify attachment availability and repository access", resp.StatusCode)
+		if resp.Request != nil {
+			req = resp.Request
+		}
+		access := resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound
+		rateLimited := resp.Header.Get("Retry-After") != "" || resp.Header.Get("X-RateLimit-Remaining") == "0"
+		return nil, nil, &attachmentHTTPError{status: resp.StatusCode, githubAccess: req.URL.Host == "github.com" && access && !rateLimited}
 	}
 	if resp.ContentLength > limit {
 		return nil, nil, fmt.Errorf("attachment exceeds download size limit")

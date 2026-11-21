@@ -20,7 +20,8 @@
   <script src="/static/lucide.min.js"></script>
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
-  <link rel="stylesheet" href="/static/style.css?v=8">
+  <script src="/static/task-asset-preview.js"></script>
+  <link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -620,11 +621,7 @@
         <i data-lucide="chevron-left" aria-hidden="true"></i>
       </button>
       <p id="task-asset-message" role="status"></p>
-      <form id="task-asset-auth" hidden>
-        <label for="task-asset-token">GitHub token with access to this attachment</label>
-        <input id="task-asset-token" class="prompt-control" type="password" autocomplete="off" required>
-        <button class="prompt-control" type="submit">Retry preview</button>
-      </form>
+      <a id="task-asset-auth-link" target="_blank" rel="noopener noreferrer" hidden>Preview with GitHub token (opens in a new tab)</a>
       <button id="task-asset-next" class="task-image-viewer-nav task-image-viewer-next" type="button" aria-label="Next asset">
         <i data-lucide="chevron-right" aria-hidden="true"></i>
       </button>
@@ -10500,15 +10497,13 @@
     const taskAssetNext = document.getElementById("task-asset-next");
     const taskAssetCount = document.getElementById("task-asset-count");
     const taskAssetSource = document.getElementById("task-asset-source");
-    const taskAssetAuth = document.getElementById("task-asset-auth");
-    const taskAssetToken = document.getElementById("task-asset-token");
+    const taskAssetAuthLink = document.getElementById("task-asset-auth-link");
     let viewedTaskAssets = [];
     let viewedTaskAssetIndex = 0;
     let viewedTaskRequestID = "";
     let taskAssetOpener;
     let taskAssetOpenerList;
     let taskAssetPreviewRequest;
-    let taskAssetObjectURL;
 
     function taskAssetURL(raw) {
       let url;
@@ -10525,23 +10520,13 @@
     }
 
     function clearTaskAssetMedia() {
-      taskAssetAuth.hidden = true;
-      taskAssetToken.value = "";
+      taskAssetAuthLink.hidden = true;
+      taskAssetAuthLink.removeAttribute("href");
       taskAssetPreviewRequest?.abort();
       taskAssetPreviewRequest = undefined;
-      const media = taskAssetViewer.querySelector(".task-image-viewer-image, .task-asset-text");
-      if (media) {
-        media.remove();
-        media.removeAttribute("src");
-        if (media.tagName === "VIDEO") media.load();
-      }
-      if (taskAssetObjectURL) {
-        URL.revokeObjectURL(taskAssetObjectURL);
-        taskAssetObjectURL = undefined;
-      }
     }
 
-    async function renderTaskAssetViewer(viewerToken = "") {
+    async function renderTaskAssetViewer() {
       clearTaskAssetMedia();
       const asset = viewedTaskAssets[viewedTaskAssetIndex];
       const url = taskAssetURL(asset.url);
@@ -10559,76 +10544,17 @@
 
       taskAssetPreviewRequest = new AbortController();
       const { signal } = taskAssetPreviewRequest;
-      const endpoint = `/api/tasks/${encodeURIComponent(viewedTaskRequestID)}/asset-preview?index=${viewedTaskAssetIndex}`;
+      const params = new URLSearchParams({ request: viewedTaskRequestID, index: viewedTaskAssetIndex });
       try {
-        const headers = viewerToken ? { Authorization: `Bearer ${viewerToken}` } : {};
-        const response = await fetch(endpoint, { signal, headers, redirect: "error" });
-        if (!response.ok) {
-          if (!signal.aborted && taskAssetViewer.open && window.isSecureContext &&
-              response.status === 502 && url.hostname === "github.com" && !url.search) {
-            taskAssetAuth.hidden = false;
-          }
-          throw new Error("Preview unavailable.");
+        const status = await loadTaskAssetPreview(params, taskAssetMessage, { signal, title });
+        if (signal.aborted || !taskAssetViewer.open || status === 200) return;
+        taskAssetMessage.textContent = "Preview unavailable.";
+        if (status === 403 && window.isSecureContext && url.hostname === "github.com" && !url.search) {
+          taskAssetAuthLink.href = `/task-asset-auth?${params}`;
+          taskAssetAuthLink.hidden = false;
         }
-        const blob = await response.blob();
-        if (blob.type.startsWith("text/plain")) {
-          const text = await blob.text();
-          if (signal.aborted || !taskAssetViewer.open) return;
-          const preview = document.createElement("pre");
-          preview.className = "task-asset-text";
-          preview.tabIndex = 0;
-          preview.textContent = text;
-          taskAssetMessage.before(preview);
-          taskAssetMessage.hidden = true;
-          return;
-        }
-        const isPDF = blob.type === "application/pdf";
-        // Keep SVG in an opaque origin even if opened outside its image element.
-        let src;
-        if (blob.type === "image/svg+xml") {
-          src = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-          });
-        }
-        if (signal.aborted || !taskAssetViewer.open) return;
-        if (isPDF && navigator.pdfViewerEnabled === false) throw new Error("Preview unavailable.");
-        if (!src) {
-          taskAssetObjectURL = URL.createObjectURL(blob);
-          src = taskAssetObjectURL;
-        }
-
-        const media = document.createElement(isPDF ? "iframe" : blob.type.startsWith("video/") ? "video" : "img");
-        media.className = "task-image-viewer-image";
-        media.hidden = !isPDF;
-        if (isPDF) {
-          taskAssetMessage.hidden = true;
-          media.title = title;
-        } else if (media.tagName === "VIDEO") {
-          media.controls = true;
-          media.playsInline = true;
-          media.preload = "metadata";
-          media.setAttribute("aria-label", title);
-        } else {
-          media.alt = title;
-        }
-        media.addEventListener(media.tagName === "VIDEO" ? "loadedmetadata" : "load", () => {
-          if (!media.isConnected) return;
-          taskAssetMessage.hidden = true;
-          media.hidden = false;
-        });
-        media.addEventListener("error", () => {
-          if (!media.isConnected) return;
-          clearTaskAssetMedia();
-          taskAssetMessage.hidden = false;
-          taskAssetMessage.textContent = "Preview unavailable.";
-        });
-        media.src = src;
-        taskAssetMessage.before(media);
       } catch {
-        if (!signal.aborted) taskAssetMessage.textContent = "Preview unavailable.";
+        if (!signal.aborted && taskAssetViewer.open) taskAssetMessage.textContent = "Preview unavailable.";
       }
     }
 
@@ -10651,16 +10577,8 @@
 
     taskAssetPrev.addEventListener("click", () => stepTaskAssetViewer(-1));
     taskAssetNext.addEventListener("click", () => stepTaskAssetViewer(1));
-    taskAssetAuth.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const token = taskAssetToken.value.trim();
-      if (token) {
-        taskAssetViewer.querySelector("[autofocus]").focus();
-        renderTaskAssetViewer(token);
-      }
-    });
     taskAssetViewer.addEventListener("keydown", (event) => {
-      if (event.target.tagName === "VIDEO" || event.target === taskAssetToken) return;
+      if (event.target.tagName === "VIDEO") return;
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       event.preventDefault();
       stepTaskAssetViewer(event.key === "ArrowLeft" ? -1 : 1);
