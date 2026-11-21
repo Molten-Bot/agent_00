@@ -24,6 +24,7 @@ type IssueClaimRecord struct {
 	Phase            string        `json:"phase"`
 	RequestID        string        `json:"requestId,omitempty"`
 	Error            string        `json:"error,omitempty"`
+	ExitCode         int           `json:"exitCode,omitempty"`
 	UpdatedAt        time.Time     `json:"updatedAt"`
 	Run              config.Config `json:"run"`
 	State            string        `json:"state,omitempty"`

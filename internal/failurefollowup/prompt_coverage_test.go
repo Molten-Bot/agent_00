@@ -113,3 +113,24 @@ func TestInfrastructureFailureDoesNotSpawnAnotherCodingTask(t *testing.T) {
 		}
 	}
 }
+
+func TestNonRemediableFailureReasonWithIssuePrerequisite(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		detail string
+		want   string
+	}{
+		{"#17 is still open. Its merge and acceptance checks are required before rollout.", "required issue dependency is still open"},
+		{"Issue `#52` remains unmerged. It must be merged before continuing.", "required issue dependency is still open"},
+		{"#17 is still open because the retry loop dropped the result.", ""},
+		{"Regression: message contains `#17 is still open. Its merge is required before rollout.`", ""},
+		{"The branch must be merged before rollout.", ""},
+	} {
+		t.Run(tc.detail, func(t *testing.T) {
+			message := "codex: codex reported failure: Failure: Task incomplete. Error details: " + tc.detail
+			if got := NonRemediableFailureReason(errors.New(message)); got != tc.want {
+				t.Fatalf("NonRemediableFailureReason() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

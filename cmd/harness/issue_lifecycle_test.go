@@ -40,14 +40,14 @@ func TestIssueExecutionIdempotenceAndTerminalReceipt(t *testing.T) {
 	if work2, duplicate, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{}); err != nil || work2 != nil || duplicate != record.RequestID {
 		t.Fatalf("duplicate=%v %s %v", work2, duplicate, err)
 	}
-	if err := work.finish(context.Background(), "error", app.Result{Err: errors.New("push failed")}); err != nil {
+	if err := work.finish(context.Background(), "error", app.Result{ExitCode: app.ExitGit, Err: errors.New("push failed")}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := store.Load(record.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.UnlockPending || got.StoppedAt.IsZero() || got.Outcome != "error" || got.Error != "push failed" || got.WorkspaceDir == "" {
+	if !got.UnlockPending || got.StoppedAt.IsZero() || got.Outcome != "error" || got.ExitCode != app.ExitGit || got.Error != "push failed" || got.WorkspaceDir == "" {
 		t.Fatalf("lost terminal evidence: %+v", got)
 	}
 	if work2, duplicate, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{}); err != nil || work2 != nil || duplicate != record.RequestID {
@@ -121,6 +121,7 @@ func TestIssueRepairOutboxDeduplicatesAndRetainsFailures(t *testing.T) {
 	record.Step = "pr"
 	record.Incident = "missing_pr"
 	record.Error = "internal invariant failed"
+	record.ExitCode = app.ExitCodex
 	id, err := q.capture(context.Background(), record)
 	if err != nil {
 		t.Fatal(err)
@@ -130,6 +131,7 @@ func TestIssueRepairOutboxDeduplicatesAndRetainsFailures(t *testing.T) {
 		t.Fatal("identical incident not deduplicated")
 	}
 	record.Error = "different invariant failed"
+	record.ExitCode = 0 // Older records have no recorded exit code.
 	other, err := q.capture(context.Background(), record)
 	if err != nil || other == id {
 		t.Fatal("unrelated incident suppressed")
@@ -146,6 +148,12 @@ func TestIssueRepairOutboxDeduplicatesAndRetainsFailures(t *testing.T) {
 	for _, repair := range repairs {
 		if repair.State != "queued" || !repair.NextAttemptAt.After(time.Now()) {
 			t.Fatal("failed enqueue was lost")
+		}
+		if repair.RequestID == id && !strings.Contains(repair.Run.Prompt, "- exit_code=50") {
+			t.Fatal("repair prompt lost recorded exit code")
+		}
+		if repair.RequestID == other && strings.Contains(repair.Run.Prompt, "- exit_code=") {
+			t.Fatal("repair prompt reported an unrecorded exit code")
 		}
 	}
 }

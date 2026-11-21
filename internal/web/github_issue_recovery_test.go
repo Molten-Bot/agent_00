@@ -279,6 +279,53 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryBlocksReportedDependencyWithoutDispatchingRepair(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.Error = "codex: codex reported failure: Failure: Task incomplete. Error details: #52 is still open. Its merge is required before rollout."
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	repairs := 0
+	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
+		repairs++
+		return "unexpected-repair", nil
+	}
+	f.deleteError = true
+	if err := s.ReconcileIssueWork(ctx); err == nil {
+		t.Fatal("unlock error hidden")
+	}
+	if got := latestRecoveryRecord(t, s); !got.UnlockPending || got.Error != record.Error {
+		t.Fatalf("lost original failure during unlock retry: %+v", got)
+	}
+	if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.NextAttemptAt = time.Now().Add(-time.Second)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.deleteError = false
+	for range 2 {
+		if err := s.ReconcileIssueWork(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.State != "blocked" || got.UnlockPending || !got.NextAttemptAt.IsZero() || got.Error != record.Error {
+		t.Fatalf("dependency failure did not stay blocked and unlocked: %+v", got)
+	}
+	if repairs != 0 || len(f.submissions) != 1 {
+		t.Fatalf("started extra work: repairs=%d submissions=%d", repairs, len(f.submissions))
+	}
+	response := retryIssue(t, s, record.ID, true)
+	if response.Code != http.StatusAccepted || len(f.submissions) != 2 {
+		t.Fatalf("explicit retry failed: %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
