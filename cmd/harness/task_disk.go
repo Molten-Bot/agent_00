@@ -17,19 +17,26 @@ func openLocalTaskDiskHistory(configPath string) (*localruntime.TaskDiskHistory,
 	// after the configured path so those writes don't change its location.
 	historyName := "." + filepath.Base(configPath) + ".task-disk-usage.json"
 	historyPath := filepath.Join(filepath.Dir(configPath), historyName)
-	resolved, err := filepath.EvalSymlinks(configPath)
-	if err == nil {
-		if dir, dirErr := filepath.EvalSymlinks(filepath.Dir(configPath)); dirErr == nil && resolved == filepath.Join(dir, historyName) {
+	configInfo, err := os.Stat(configPath)
+	if err != nil {
+		_, lstatErr := os.Lstat(configPath)
+		if !errors.Is(err, os.ErrNotExist) || !errors.Is(lstatErr, os.ErrNotExist) {
 			history, _ := localruntime.OpenTaskDiskHistory("")
-			return history, fmt.Errorf("disk history path is the runtime config symlink target")
+			return history, fmt.Errorf("inspect runtime config for disk history: %w", err)
 		}
-	} else if _, statErr := os.Lstat(configPath); !errors.Is(statErr, os.ErrNotExist) {
-		history, _ := localruntime.OpenTaskDiskHistory("")
-		return history, fmt.Errorf("resolve runtime config path for disk history: %w", err)
 	}
-	if info, err := os.Lstat(historyPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+	historyInfo, err := os.Lstat(historyPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		history, _ := localruntime.OpenTaskDiskHistory("")
+		return history, fmt.Errorf("inspect disk history path: %w", err)
+	}
+	if historyInfo != nil && historyInfo.Mode()&os.ModeSymlink != 0 {
 		history, _ := localruntime.OpenTaskDiskHistory("")
 		return history, fmt.Errorf("disk history path is a symlink")
+	}
+	if configInfo != nil && historyInfo != nil && os.SameFile(configInfo, historyInfo) {
+		history, _ := localruntime.OpenTaskDiskHistory("")
+		return history, fmt.Errorf("disk history path refers to the runtime config file")
 	}
 	return localruntime.OpenTaskDiskHistory(historyPath)
 }

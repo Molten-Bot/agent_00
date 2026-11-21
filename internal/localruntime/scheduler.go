@@ -64,6 +64,8 @@ type TaskDiskRequest struct {
 	RequiredBytes func() uint64
 	// RetryRoot is the root whose allocation failed. Try it after other roots.
 	RetryRoot string
+	// RetryAfter delays normal admission after a disk-full allocation failure.
+	RetryAfter time.Time
 }
 
 type resourceSample struct {

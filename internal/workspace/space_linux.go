@@ -20,7 +20,7 @@ func checkWorkspaceSpace(path string) error {
 	}
 	available := stat.Bavail * uint64(stat.Bsize)
 	if available < MinimumFreeBytes {
-		return fmt.Errorf("workspace storage %s has only %d MiB free; at least 512 MiB is required; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem", path, available/(1024*1024))
+		return fmt.Errorf("workspace storage %s has only %d MiB free; at least 512 MiB is required; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem: %w", path, available/(1024*1024), syscall.ENOSPC)
 	}
 	return nil
 }

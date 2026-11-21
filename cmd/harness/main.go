@@ -613,7 +613,6 @@ func runServer(args []string) int {
 
 				signingSnapshot := admission.SigningSnapshot
 				release := admission.Release
-				defer release()
 
 				if taskHandle != nil {
 					taskHandle.SetRunning(true)
@@ -626,6 +625,7 @@ func runServer(args []string) int {
 				if issueWork != nil {
 					if verifyIssueOwnership != nil {
 						if err := verifyIssueOwnership(runCtx, runCfg); err != nil {
+							release()
 							finalState = "error"
 							issueResult.Err = err
 							return
@@ -658,10 +658,15 @@ func runServer(args []string) int {
 				if outcome.State == "retry_workspace" {
 					release()
 					diskRequest.RetryRoot = workspaceRoot
-					forceRetry = forceAcquire
+					forceRetry = canRetryWorkspace && forceAcquire
+					if !canRetryWorkspace {
+						delay := time.Duration(max(250, cfg.Scheduler.SampleIntervalMS)) * time.Millisecond
+						diskRequest.RetryAfter = time.Now().Add(delay)
+					}
 					daemonLogger("task status=warn action=retry_workspace_allocation request_id=%s err=%q", requestID, outcome.Result.Err)
 					continue
 				}
+				defer release()
 
 				issueResult = outcome.Result
 				finalState = outcome.State
@@ -1541,7 +1546,8 @@ func runLocalTask(
 	}
 
 	res := h.Run(ctx, runCfg)
-	if canRetryWorkspace && ctx.Err() == nil && res.ExitCode == app.ExitWorkspace && res.WorkspaceDir == "" {
+	if ctx.Err() == nil && res.ExitCode == app.ExitWorkspace && res.WorkspaceDir == "" &&
+		(canRetryWorkspace || localruntime.IsWorkspaceDiskFull(res.Err)) {
 		return localTaskOutcome{State: "retry_workspace", Result: res}
 	}
 	if checkoutComplete && recordDiskUsage != nil {

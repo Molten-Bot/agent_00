@@ -322,6 +322,59 @@ func TestAdaptiveSchedulerDrainsReservationsForOlderDiskWaiter(t *testing.T) {
 	}
 }
 
+func TestAdaptiveSchedulerAdmitsSmallerTaskBehindOversizedWaiter(t *testing.T) {
+	t.Parallel()
+
+	const unit = workspace.MinimumFreeBytes
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 3}, nil)
+	controller.diskSpace = func(string) (string, uint64, error) {
+		return "shared", 2 * unit, nil
+	}
+	small := TaskDiskRequest{Workspace: workspace.Manager{Root: t.TempDir()}}
+	large := small
+	large.RequiredBytes = func() uint64 { return 3 * unit }
+	running := &taskWaiter{disk: &small}
+	older := &taskWaiter{disk: &large}
+	controller.waiters = []*taskWaiter{running, older}
+	controller.tryGrantLocked(0)
+	if !running.granted || !older.diskBlocked {
+		t.Fatalf("running admitted = %v, oversized task disk blocked = %v", running.granted, older.diskBlocked)
+	}
+	younger := &taskWaiter{disk: &small}
+	controller.waiters = append(controller.waiters, younger)
+	controller.tryGrantLocked(len(controller.waiters) - 1)
+	if !younger.granted {
+		t.Fatal("oversized task blocked a younger job that fits on shared storage")
+	}
+}
+
+func TestAdaptiveSchedulerWaitsBeforeReadmittingFailedAllocation(t *testing.T) {
+	t.Parallel()
+
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
+	controller.sample = staticSample{}
+	controller.diskSpace = func(string) (string, uint64, error) {
+		return "disk", workspace.MinimumFreeBytes, nil
+	}
+	root := t.TempDir()
+	request := TaskDiskRequest{
+		Workspace:  workspace.Manager{Root: root},
+		RetryRoot:  root,
+		RetryAfter: time.Now().Add(time.Hour),
+	}
+	waiter := &taskWaiter{disk: &request}
+	controller.waiters = []*taskWaiter{waiter}
+	controller.tryGrantLocked(0)
+	if waiter.granted || !waiter.diskBlocked {
+		t.Fatal("disk-full retry was not queued while waiting to retry")
+	}
+	request.RetryAfter = time.Now().Add(-time.Second)
+	controller.sampleAndUpdate()
+	if !waiter.granted || waiter.root != root {
+		t.Fatalf("retry admitted = %v, root = %q, want %q", waiter.granted, waiter.root, root)
+	}
+}
+
 func TestAdaptiveSchedulerTriesAnotherWorkspaceAfterSetupFailure(t *testing.T) {
 	ram, disk := t.TempDir(), t.TempDir()
 	t.Setenv("HARNESS_WORKSPACE_RAM_BASE", ram)

@@ -3,6 +3,7 @@
 package workspace
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -41,8 +42,8 @@ func TestCheckWorkspaceSpaceRejectsLowAvailableSpace(t *testing.T) {
 	}
 
 	err := checkWorkspaceSpace("/irrelevant/path")
-	if err == nil {
-		t.Fatal("checkWorkspaceSpace(low space) error = nil, want non-nil")
+	if !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("checkWorkspaceSpace(low space) error = %v, want ENOSPC", err)
 	}
 	if !strings.Contains(err.Error(), "has only") {
 		t.Fatalf("checkWorkspaceSpace(low space) error = %q, want mention of free space shortfall", err.Error())

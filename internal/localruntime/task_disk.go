@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
@@ -113,6 +114,9 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 	if waiter.disk == nil {
 		return true, nil
 	}
+	if !force && time.Now().Before(waiter.disk.RetryAfter) {
+		return false, nil
+	}
 	required := uint64(workspace.MinimumFreeBytes)
 	if waiter.disk.RequiredBytes != nil {
 		required = waiter.disk.RequiredBytes()
@@ -136,7 +140,7 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 	for _, root := range roots {
 		manager.Root = root
 		if err := manager.PrepareRoots(); err != nil {
-			if !force && isWorkspaceDiskFull(err) {
+			if !force && IsWorkspaceDiskFull(err) {
 				blocked = true
 			} else {
 				setupErr = err
@@ -171,13 +175,12 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 				available = 0
 			}
 		}
-		fits := available >= max(workspace.MinimumFreeBytes, required)
+		minimum := max(workspace.MinimumFreeBytes, required)
+		fits := available >= minimum
 		if !fits && !force {
 			blocked = true
-			// Let running jobs drain on this filesystem before admitting
-			// younger jobs there. A shortage on an idle filesystem still
-			// permits smaller jobs to use its available space.
-			if reserved != nil {
+			// Drain only when releasing reservations can make this task fit.
+			if sample.free >= minimum {
 				waiter.drainDevices = append(waiter.drainDevices, device)
 			}
 			continue

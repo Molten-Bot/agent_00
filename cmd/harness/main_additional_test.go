@@ -1687,6 +1687,33 @@ func TestOpenLocalTaskDiskHistoryPreservesRuntimeConfig(t *testing.T) {
 		})
 	}
 
+	t.Run("config aliases sidecar", func(t *testing.T) {
+		dir := t.TempDir()
+		configPath := filepath.Join(dir, "runtime.json")
+		historyPath := filepath.Join(dir, ".runtime.json.task-disk-usage.json")
+		const runtimeConfig = `{"scheduler":{"maxParallel":3}}`
+		if err := os.WriteFile(configPath, []byte(runtimeConfig), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(configPath, historyPath); err != nil {
+			t.Fatal(err)
+		}
+		history, err := openLocalTaskDiskHistory(configPath)
+		if err == nil || !strings.Contains(err.Error(), "refers to the runtime config file") {
+			t.Fatalf("open disk history with shared file identity = %v", err)
+		}
+		if err := history.Record("repo", 42); err != nil {
+			t.Fatal(err)
+		}
+		if got := history.RequiredBytes("repo"); got != 42 {
+			t.Fatalf("in-memory disk requirement = %d, want 42", got)
+		}
+		got, err := os.ReadFile(historyPath)
+		if err != nil || string(got) != runtimeConfig {
+			t.Fatalf("shared file after disk history write = %q, error = %v", got, err)
+		}
+	})
+
 	t.Run("dangling config symlink", func(t *testing.T) {
 		configPath := filepath.Join(t.TempDir(), "runtime.json")
 		target := filepath.Join(filepath.Dir(configPath), ".runtime.json.task-disk-usage.json")
@@ -1893,6 +1920,30 @@ func testRunLocalTaskRetriesRunDirectoryCreation(t *testing.T, fallbackFull bool
 	}
 	defer release()
 	taskWorkspace.Root = root
+	for _, test := range []struct {
+		err   error
+		state string
+	}{
+		{syscall.ENOSPC, "retry_workspace"},
+		{os.ErrPermission, "error"},
+	} {
+		failedWorkspace := taskWorkspace
+		failedWorkspace.MkdirAll = func(path string, mode os.FileMode) error {
+			if filepath.Dir(path) == root {
+				return &os.PathError{Op: "mkdir", Path: path, Err: test.err}
+			}
+			return os.MkdirAll(path, mode)
+		}
+		outcome = runLocalTask(ctx, runner, logf, "local", "req-requeue", cfg, 0, nil, nil, broker, failedWorkspace, nil, false)
+		if outcome.State != test.state || !errors.Is(outcome.Result.Err, test.err) {
+			t.Fatalf("allocation with %v: outcome = %+v, want %s", test.err, outcome, test.state)
+		}
+		if test.state == "retry_workspace" {
+			if err := broker.CloseTask("req-requeue"); !errors.Is(err, web.ErrTaskNotCompleted) {
+				t.Fatalf("close after retry allocation failure = %v, want task to remain active", err)
+			}
+		}
+	}
 	outcome = runLocalTask(ctx, runner, logf, "local", "req-fallback", cfg, 0, nil, nil, broker, taskWorkspace, nil, false)
 	if filepath.Dir(outcome.Result.WorkspaceDir) != wantRoot {
 		t.Fatalf("retry workspace = %q, want directory under %q", outcome.Result.WorkspaceDir, wantRoot)
