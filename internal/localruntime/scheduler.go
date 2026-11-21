@@ -28,11 +28,12 @@ type AdaptiveScheduler struct {
 	cfg       SchedulerConfig
 	logf      func(string, ...any)
 	sample    resourceSampler
-	diskSpace func(string) (string, uint64, error)
+	diskSpace func(string) (string, uint64, uint64, error)
 
 	mu       sync.Mutex
 	waiters  []*taskWaiter
 	reserved map[string]*diskReservation
+	draining map[string]*taskWaiter
 	running  int
 	allowed  int
 	window   []resourceSample
@@ -96,8 +97,8 @@ type defaultResourceSampler struct {
 	diskZeroTotalSamples   int
 }
 
-// WithSchedulerDiskSpace supplies the scheduler's free-space sampler.
-func WithSchedulerDiskSpace(sample func(string) (string, uint64, error)) func(*AdaptiveScheduler) {
+// WithSchedulerDiskSpace supplies filesystem identity, available bytes, and total capacity.
+func WithSchedulerDiskSpace(sample func(string) (string, uint64, uint64, error)) func(*AdaptiveScheduler) {
 	return func(c *AdaptiveScheduler) { c.diskSpace = sample }
 }
 
@@ -113,6 +114,7 @@ func NewAdaptiveScheduler(cfg SchedulerConfig, logf func(string, ...any), option
 		sample:    &defaultResourceSampler{},
 		diskSpace: workspace.DiskSpace,
 		reserved:  make(map[string]*diskReservation),
+		draining:  make(map[string]*taskWaiter),
 		allowed:   cfg.MaxParallel,
 		stopCh:    make(chan struct{}),
 	}
@@ -255,11 +257,8 @@ func (c *AdaptiveScheduler) acquire(ctx context.Context, requestID string, disk 
 			if waiter.granted {
 				c.releaseLocked(waiter)
 				c.tryGrantLocked(0)
-			} else {
-				c.removeWaiterLocked(waiter.id)
-				if len(waiter.drainDevices) > 0 {
-					c.tryGrantLocked(0)
-				}
+			} else if c.removeWaiterLocked(waiter.id) {
+				c.tryGrantLocked(0)
 			}
 			c.mu.Unlock()
 			return "", nil, ctx.Err()
@@ -302,7 +301,7 @@ func (c *AdaptiveScheduler) acquireForce(ctx context.Context, requestID string, 
 		c.mu.Unlock()
 		return "", nil, errSchedulerClosed
 	}
-	if _, err := c.reserveDiskLocked(waiter, true, make(map[string]diskSample), nil); err != nil {
+	if _, err := c.reserveDiskLocked(waiter, true, make(map[string]diskSample)); err != nil {
 		c.mu.Unlock()
 		return "", nil, err
 	}
@@ -353,19 +352,18 @@ func (c *AdaptiveScheduler) tryGrantLocked(start int) {
 		return
 	}
 	samples := make(map[string]diskSample)
-	draining := make(map[string]struct{})
-	for _, older := range c.waiters[:start] {
-		for _, device := range older.drainDevices {
-			draining[device] = struct{}{}
-		}
+	if start == 0 {
+		// A retry pass rechecks drain decisions in queue order. New submissions
+		// reuse those decisions and update only the devices they need.
+		clear(c.draining)
 	}
 	for i := start; c.running < c.allowed && i < len(c.waiters); {
 		waiter := c.waiters[i]
-		granted, err := c.reserveDiskLocked(waiter, false, samples, draining)
+		granted, err := c.reserveDiskLocked(waiter, false, samples)
 		if !granted && err == nil {
 			waiter.diskBlocked = true
 			for _, device := range waiter.drainDevices {
-				draining[device] = struct{}{}
+				c.draining[device] = waiter
 			}
 			i++
 			continue
@@ -382,14 +380,23 @@ func (c *AdaptiveScheduler) tryGrantLocked(start int) {
 	}
 }
 
-func (c *AdaptiveScheduler) removeWaiterLocked(id uint64) {
+// removeWaiterLocked reports whether removing the waiter ended a drain.
+func (c *AdaptiveScheduler) removeWaiterLocked(id uint64) bool {
 	for i, waiter := range c.waiters {
 		if waiter.id != id {
 			continue
 		}
 		c.waiters = append(c.waiters[:i], c.waiters[i+1:]...)
-		return
+		endedDrain := false
+		for _, device := range waiter.drainDevices {
+			if c.draining[device] == waiter {
+				delete(c.draining, device)
+				endedDrain = true
+			}
+		}
+		return endedDrain
 	}
+	return false
 }
 
 func (c *AdaptiveScheduler) close() {
@@ -401,6 +408,7 @@ func (c *AdaptiveScheduler) close() {
 	c.closed = true
 	waiters := append([]*taskWaiter(nil), c.waiters...)
 	c.waiters = nil
+	clear(c.draining)
 	c.mu.Unlock()
 
 	for _, waiter := range waiters {

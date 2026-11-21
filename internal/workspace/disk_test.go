@@ -13,13 +13,13 @@ func TestDiskSpaceUsesExistingParent(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	device, _, err := DiskSpace(root)
+	device, _, total, err := DiskSpace(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, free, err := DiskSpace(filepath.Join(root, "missing", "workspace"))
-	if err != nil || got != device || free == 0 {
-		t.Fatalf("DiskSpace(missing workspace) = %q, %d, %v", got, free, err)
+	got, free, gotTotal, err := DiskSpace(filepath.Join(root, "missing", "workspace"))
+	if err != nil || got != device || gotTotal != total || free == 0 || free > total {
+		t.Fatalf("DiskSpace(missing workspace) = %q, %d, %d, %v", got, free, gotTotal, err)
 	}
 }
 

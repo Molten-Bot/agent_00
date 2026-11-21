@@ -323,6 +323,15 @@ func runServer(args []string) int {
 	if err != nil {
 		daemonLogger("scheduler status=warn action=load_task_disk_history err=%q", err)
 	}
+	diskHistoryDone := make(chan struct{})
+	go func() {
+		defer close(diskHistoryDone)
+		retryLocalTaskDiskHistory(ctx, diskHistory, 30*time.Second, daemonLogger)
+	}()
+	defer func() {
+		stop()
+		<-diskHistoryDone
+	}()
 	scheduler.Start(ctx)
 
 	logRoot := ""
@@ -624,13 +633,11 @@ func runServer(args []string) int {
 				}
 				taskRunner := execx.Runner(runner)
 				if issueWork != nil {
-					if verifyIssueOwnership != nil {
-						if err := verifyIssueOwnership(runCtx, runCfg); err != nil {
-							release()
-							finalState = "error"
-							issueResult.Err = err
-							return
-						}
+					ownership := checkLocalIssueOwnership(runCtx, runCfg, requestID, taskHandle, verifyIssueOwnership, daemonLogger)
+					if ownership.Result.Err != nil {
+						finalState, issueResult = ownership.State, ownership.Result
+						release()
+						return
 					}
 					taskRunner = localruntime.IssueRunner{Runner: runner, Lock: issueWork.lock, Store: issueWork.store, RecordID: issueWork.record.ID, Check: func(checkCtx context.Context) error {
 						if verifyIssueOwnership != nil {

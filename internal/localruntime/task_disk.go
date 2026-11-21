@@ -148,6 +148,7 @@ func (h *TaskDiskHistory) flushLocked() error {
 type diskSample struct {
 	device string
 	free   uint64
+	total  uint64
 	err    error
 }
 
@@ -156,10 +157,11 @@ type diskReservation struct {
 	cleanupWorkspaces int
 }
 
-func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, samples map[string]diskSample, draining map[string]struct{}) (bool, error) {
+func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, samples map[string]diskSample) (bool, error) {
 	if waiter.disk == nil {
 		return true, nil
 	}
+	waiter.drainDevices = waiter.drainDevices[:0]
 	if !force && time.Now().Before(waiter.disk.RetryAfter) {
 		return false, nil
 	}
@@ -182,7 +184,6 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		copy(roots[i:], roots[i+1:])
 		roots[len(roots)-1] = failed
 	}
-	waiter.drainDevices = waiter.drainDevices[:0]
 	for _, root := range roots {
 		manager.Root = root
 		if err := manager.PrepareRoots(); err != nil {
@@ -199,7 +200,7 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		}
 		sample, ok := samples[path]
 		if !ok {
-			sample.device, sample.free, sample.err = c.diskSpace(path)
+			sample.device, sample.free, sample.total, sample.err = c.diskSpace(path)
 			samples[path] = sample
 		}
 		if sample.err != nil {
@@ -209,7 +210,7 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		// Reserve each running task's full allowance. Free space may already
 		// reflect some of its writes, so this is deliberately conservative.
 		device, available := sample.device, sample.free
-		if _, olderWaiting := draining[device]; olderWaiting {
+		if !force && c.draining[device] != nil {
 			blocked = true
 			continue
 		}
@@ -227,7 +228,7 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 			blocked = true
 			// Active workspaces may have written past their reservations.
 			// Drain until cleanup reveals how much space the pool can recover.
-			if sample.free >= minimum || (reservation != nil && reservation.cleanupWorkspaces > 0) {
+			if minimum <= sample.total && (sample.free >= minimum || (reservation != nil && reservation.cleanupWorkspaces > 0)) {
 				waiter.drainDevices = append(waiter.drainDevices, device)
 			}
 			continue

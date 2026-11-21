@@ -8,16 +8,16 @@ import (
 	"syscall"
 )
 
-func diskSpace(path string) (string, uint64, error) {
+func diskSpace(path string) (string, uint64, uint64, error) {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(path, &stat); err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
 	pool, err := diskPoolID(path, uint32(stat.Type))
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
-	return pool, stat.Bavail * uint64(stat.Bsize), nil
+	return pool, stat.Bavail * uint64(stat.Bsize), stat.Blocks * uint64(stat.Bsize), nil
 }
 
 func diskDeviceID(path string) (string, error) {

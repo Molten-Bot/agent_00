@@ -1637,6 +1637,63 @@ func TestRunLocalTaskReportsErrorWithSigningSnapshot(t *testing.T) {
 	}
 }
 
+func TestRetryLocalTaskDiskHistoryPersistsRetainedWorkspaceUsage(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "disk-history.json")
+	history, err := localruntime.OpenTaskDiskHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	key := localruntime.TaskDiskKey([]string{"https://github.com/example/repo"})
+	if err := history.Record(key, 256); err == nil {
+		t.Fatal("record succeeded while destination was blocked")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	failed := make(chan struct{}, 1)
+	go func() {
+		defer close(done)
+		retryLocalTaskDiskHistory(ctx, history, 10*time.Millisecond, func(string, ...any) {
+			select {
+			case failed <- struct{}{}:
+			default:
+			}
+		})
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	select {
+	case <-failed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background flush did not retry the failed write")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		reopened, err := localruntime.OpenTaskDiskHistory(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reopened.RequiredBytes(key) == 256 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background flush did not persist the maximum after storage recovered")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestOpenLocalTaskDiskHistoryPreservesRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
@@ -1892,17 +1949,17 @@ func testRunLocalTaskRetriesRunDirectoryCreation(t *testing.T, fallbackFull bool
 	failAllocation = false
 	preferredSamples := 0
 	controller := localruntime.NewAdaptiveScheduler(localruntime.SchedulerConfig{MaxParallel: 1, SampleIntervalMS: 250}, logf,
-		localruntime.WithSchedulerDiskSpace(func(path string) (string, uint64, error) {
+		localruntime.WithSchedulerDiskSpace(func(path string) (string, uint64, uint64, error) {
 			if fallbackFull {
 				if path == diskRoot {
-					return path, 0, nil
+					return path, 0, workspace.MinimumFreeBytes, nil
 				}
 				preferredSamples++
 				if preferredSamples == 1 {
-					return path, 0, nil
+					return path, 0, workspace.MinimumFreeBytes, nil
 				}
 			}
-			return path, workspace.MinimumFreeBytes, nil
+			return path, workspace.MinimumFreeBytes, workspace.MinimumFreeBytes, nil
 		}),
 	)
 	wantRoot := diskRoot

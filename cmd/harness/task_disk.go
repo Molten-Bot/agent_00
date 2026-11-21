@@ -6,10 +6,31 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
+
+// Retry dirty writes even when a completed workspace was retained or the queue is idle.
+func retryLocalTaskDiskHistory(ctx context.Context, history *localruntime.TaskDiskHistory, interval time.Duration, logf func(string, ...any)) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	flush := func() {
+		if err := history.Flush(); err != nil {
+			logf("scheduler status=warn action=flush_task_disk_history err=%q", err)
+		}
+	}
+	for {
+		select {
+		case <-ticker.C:
+			flush()
+		case <-ctx.Done():
+			flush()
+			return
+		}
+	}
+}
 
 func openLocalTaskDiskHistory(configPath string) (*localruntime.TaskDiskHistory, error) {
 	configPath = filepath.Clean(configPath)

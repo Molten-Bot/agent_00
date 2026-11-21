@@ -146,11 +146,11 @@ func TestAdaptiveSchedulerReservesSpacePerFilesystem(t *testing.T) {
 	controller.sample = staticSample{}
 	root, sameVolume, other := t.TempDir(), t.TempDir(), t.TempDir()
 	const unit = workspace.MinimumFreeBytes
-	controller.diskSpace = func(path string) (string, uint64, error) {
+	controller.diskSpace = func(path string) (string, uint64, uint64, error) {
 		if path == other {
-			return "other-volume", 3 * unit, nil
+			return "other-volume", 3 * unit, math.MaxUint64, nil
 		}
-		return "shared-volume", 3 * unit, nil
+		return "shared-volume", 3 * unit, math.MaxUint64, nil
 	}
 	request := TaskDiskRequest{
 		Workspace:     workspace.Manager{Root: root},
@@ -206,11 +206,11 @@ func TestAdaptiveSchedulerSelectsFallbackWorkspaceWithRoom(t *testing.T) {
 		CanExec:    func(string) bool { return true },
 	}
 	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
-	controller.diskSpace = func(path string) (string, uint64, error) {
+	controller.diskSpace = func(path string) (string, uint64, uint64, error) {
 		if filepath.Dir(path) == ram {
-			return ram, workspace.MinimumFreeBytes, nil
+			return ram, workspace.MinimumFreeBytes, math.MaxUint64, nil
 		}
-		return disk, 3 * workspace.MinimumFreeBytes, nil
+		return disk, 3 * workspace.MinimumFreeBytes, math.MaxUint64, nil
 	}
 	request := TaskDiskRequest{Workspace: targets, RequiredBytes: func() uint64 {
 		return 2 * workspace.MinimumFreeBytes
@@ -236,8 +236,8 @@ func TestAdaptiveSchedulerRetriesDiskPressureWithFailedCPUSample(t *testing.T) {
 	controller.sample = staticSample{err: errors.New("metrics unavailable")}
 	root := t.TempDir()
 	free := uint64(required - 1)
-	controller.diskSpace = func(string) (string, uint64, error) {
-		return "disk", free, nil
+	controller.diskSpace = func(string) (string, uint64, uint64, error) {
+		return "disk", free, math.MaxUint64, nil
 	}
 	request := TaskDiskRequest{
 		Workspace:     workspace.Manager{Root: root},
@@ -270,8 +270,8 @@ func TestAdaptiveSchedulerReportsWorkspaceSetupFailure(t *testing.T) {
 
 	for _, force := range []bool{false, true} {
 		controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
-		controller.diskSpace = func(string) (string, uint64, error) {
-			return "disk", 0, nil
+		controller.diskSpace = func(string) (string, uint64, uint64, error) {
+			return "disk", 0, math.MaxUint64, nil
 		}
 		request := TaskDiskRequest{Workspace: workspace.Manager{
 			Root: t.TempDir(),
@@ -297,8 +297,8 @@ func testAdaptiveSchedulerQueuesWhenWorkspaceRootIsOutOfSpace(t *testing.T, disk
 	t.Helper()
 	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
 	controller.sample = staticSample{}
-	controller.diskSpace = func(string) (string, uint64, error) {
-		return "disk", workspace.MinimumFreeBytes, nil
+	controller.diskSpace = func(string) (string, uint64, uint64, error) {
+		return "disk", workspace.MinimumFreeBytes, math.MaxUint64, nil
 	}
 	root := filepath.Join(t.TempDir(), "workspaces")
 	full := true
@@ -337,11 +337,11 @@ func TestAdaptiveSchedulerDrainsReservationsForOlderDiskWaiter(t *testing.T) {
 	const unit = workspace.MinimumFreeBytes
 	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 4}, nil)
 	sameDevice, otherDevice := t.TempDir(), t.TempDir()
-	controller.diskSpace = func(path string) (string, uint64, error) {
+	controller.diskSpace = func(path string) (string, uint64, uint64, error) {
 		if path == otherDevice {
-			return "other", 3 * unit, nil
+			return "other", 3 * unit, math.MaxUint64, nil
 		}
-		return "shared", 3 * unit, nil
+		return "shared", 3 * unit, math.MaxUint64, nil
 	}
 
 	small := TaskDiskRequest{Workspace: workspace.Manager{Root: sameDevice}}
@@ -401,18 +401,21 @@ func TestAdaptiveSchedulerDrainsWorkspacesForOlderDiskWaiter(t *testing.T) {
 		usage       uint64
 		reservation uint64
 		required    uint64
+		total       uint64
+		wantDrain   bool
 	}{
-		{name: "within reservation", cleanup: true, usage: unit, reservation: unit, required: 4 * unit},
-		{name: "over reservation", cleanup: true, usage: 2 * unit, reservation: unit, required: 4 * unit},
-		{name: "without reserved bytes", cleanup: true, usage: 2 * unit, required: 4 * unit},
-		{name: "oversized after cleanup", cleanup: true, usage: 2 * unit, reservation: unit, required: 5 * unit},
-		{name: "no cleanup", usage: unit, reservation: unit, required: 4 * unit},
+		{name: "within reservation", cleanup: true, usage: unit, reservation: unit, required: 4 * unit, total: 4 * unit, wantDrain: true},
+		{name: "over reservation", cleanup: true, usage: 2 * unit, reservation: unit, required: 4 * unit, total: 4 * unit, wantDrain: true},
+		{name: "without reserved bytes", cleanup: true, usage: 2 * unit, required: 4 * unit, total: 4 * unit, wantDrain: true},
+		{name: "oversized after cleanup", cleanup: true, usage: 2 * unit, reservation: unit, required: 5 * unit, total: 6 * unit, wantDrain: true},
+		{name: "exceeds filesystem capacity", cleanup: true, usage: 2 * unit, reservation: unit, required: 5 * unit, total: 4 * unit},
+		{name: "no cleanup", usage: unit, reservation: unit, required: 4 * unit, total: 4 * unit},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 3}, nil)
 			free := uint64(4 * unit)
-			controller.diskSpace = func(string) (string, uint64, error) {
-				return "shared", free, nil
+			controller.diskSpace = func(string) (string, uint64, uint64, error) {
+				return "shared", free, tc.total, nil
 			}
 			small := TaskDiskRequest{Workspace: workspace.Manager{Root: t.TempDir()}}
 			active := small
@@ -437,8 +440,8 @@ func TestAdaptiveSchedulerDrainsWorkspacesForOlderDiskWaiter(t *testing.T) {
 			younger := &taskWaiter{disk: &small}
 			controller.waiters = append(controller.waiters, younger)
 			controller.tryGrantLocked(1)
-			if younger.granted == tc.cleanup {
-				t.Fatalf("younger admitted = %v with active workspace cleanup = %v", younger.granted, tc.cleanup)
+			if younger.granted == tc.wantDrain {
+				t.Fatalf("younger admitted = %v, want drain = %v", younger.granted, tc.wantDrain)
 			}
 
 			if tc.cleanup {
@@ -455,13 +458,62 @@ func TestAdaptiveSchedulerDrainsWorkspacesForOlderDiskWaiter(t *testing.T) {
 	}
 }
 
+func TestAdaptiveSchedulerResumesAdmissionWhenDrainingWaiterCancels(t *testing.T) {
+	t.Parallel()
+
+	const unit = workspace.MinimumFreeBytes
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 3}, nil)
+	controller.diskSpace = func(string) (string, uint64, uint64, error) {
+		return "shared", 3 * unit, 3 * unit, nil
+	}
+	small := TaskDiskRequest{Workspace: workspace.Manager{Root: t.TempDir()}}
+	large := small
+	large.RequiredBytes = func() uint64 { return 3 * unit }
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, release, err := controller.AcquireWorkspace(ctx, "running", small, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	olderCtx, cancelOlder := context.WithCancel(ctx)
+	defer cancelOlder()
+	olderDone := make(chan error, 1)
+	go func() {
+		_, release, err := controller.AcquireWorkspace(olderCtx, "older", large, false)
+		if release != nil {
+			release()
+		}
+		olderDone <- err
+	}()
+	waitForQueuedRequest(t, controller, "older")
+	youngerDone := make(chan error, 1)
+	go func() {
+		_, release, err := controller.AcquireWorkspace(ctx, "younger", small, false)
+		if release != nil {
+			release()
+		}
+		youngerDone <- err
+	}()
+	waitForQueuedRequest(t, controller, "younger")
+
+	cancelOlder()
+	if err := <-olderDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("older acquisition error = %v, want cancellation", err)
+	}
+	if err := <-youngerDone; err != nil {
+		t.Fatalf("younger acquisition after drain canceled: %v", err)
+	}
+}
+
 func TestAdaptiveSchedulerAdmitsSmallerTaskBehindOversizedWaiter(t *testing.T) {
 	t.Parallel()
 
 	const unit = workspace.MinimumFreeBytes
 	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 3}, nil)
-	controller.diskSpace = func(string) (string, uint64, error) {
-		return "shared", 2 * unit, nil
+	controller.diskSpace = func(string) (string, uint64, uint64, error) {
+		return "shared", 2 * unit, math.MaxUint64, nil
 	}
 	small := TaskDiskRequest{Workspace: workspace.Manager{Root: t.TempDir()}}
 	large := small
@@ -486,8 +538,8 @@ func TestAdaptiveSchedulerWaitsBeforeReadmittingFailedAllocation(t *testing.T) {
 
 	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
 	controller.sample = staticSample{}
-	controller.diskSpace = func(string) (string, uint64, error) {
-		return "disk", workspace.MinimumFreeBytes, nil
+	controller.diskSpace = func(string) (string, uint64, uint64, error) {
+		return "disk", workspace.MinimumFreeBytes, math.MaxUint64, nil
 	}
 	root := t.TempDir()
 	request := TaskDiskRequest{
@@ -515,8 +567,8 @@ func TestAdaptiveSchedulerTriesAnotherWorkspaceAfterSetupFailure(t *testing.T) {
 	t.Setenv("HARNESS_WORKSPACE_ROOT_NAME", "test-workspaces")
 
 	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
-	controller.diskSpace = func(path string) (string, uint64, error) {
-		return filepath.Dir(path), workspace.MinimumFreeBytes, nil
+	controller.diskSpace = func(path string) (string, uint64, uint64, error) {
+		return filepath.Dir(path), workspace.MinimumFreeBytes, math.MaxUint64, nil
 	}
 	request := TaskDiskRequest{Workspace: workspace.Manager{
 		PathExists: func(string) bool { return true },
@@ -545,8 +597,8 @@ func TestAdaptiveSchedulerReservesFullForcedEstimate(t *testing.T) {
 
 	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 3}, nil)
 	free := uint64(workspace.MinimumFreeBytes)
-	controller.diskSpace = func(string) (string, uint64, error) {
-		return "disk", free, nil
+	controller.diskSpace = func(string) (string, uint64, uint64, error) {
+		return "disk", free, math.MaxUint64, nil
 	}
 	request := TaskDiskRequest{
 		Workspace:     workspace.Manager{Root: t.TempDir()},
@@ -596,9 +648,9 @@ func TestAdaptiveSchedulerDoesNotReprobeDiskWaitersOnSubmission(t *testing.T) {
 	controller.sample = staticSample{}
 	root := t.TempDir()
 	probes := 0
-	controller.diskSpace = func(string) (string, uint64, error) {
+	controller.diskSpace = func(string) (string, uint64, uint64, error) {
 		probes++
-		return "disk", 0, nil
+		return "disk", 0, math.MaxUint64, nil
 	}
 	request := TaskDiskRequest{Workspace: workspace.Manager{Root: root}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -636,9 +688,9 @@ func TestAdaptiveSchedulerSharesDiskSamplesWithinAdmissionPass(t *testing.T) {
 	controller.waiters = []*taskWaiter{first, second, third}
 	free := uint64(2 * unit)
 	probes := 0
-	controller.diskSpace = func(string) (string, uint64, error) {
+	controller.diskSpace = func(string) (string, uint64, uint64, error) {
 		probes++
-		return "disk", free, nil
+		return "disk", free, math.MaxUint64, nil
 	}
 
 	controller.tryGrantLocked(0)

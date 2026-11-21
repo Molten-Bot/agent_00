@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,49 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/web"
 )
+
+func TestIssueOwnershipCheckPublishesOperatorStop(t *testing.T) {
+	t.Parallel()
+
+	store, record := lifecycleRecord(t)
+	work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+	if err != nil || work == nil {
+		t.Fatalf("prepare issue execution = %v, %v", work, err)
+	}
+	defer work.lock.Close()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	controller := newLocalTaskController()
+	handle := controller.Register(record.RequestID, cancel)
+	broker := web.NewBroker()
+	broker.RecordTaskRunConfig(record.RequestID, []byte(`{"repo":"https://github.com/acme/repo","prompt":"fix issue"}`))
+
+	outcome := checkLocalIssueOwnership(ctx, record.Run, record.RequestID, handle, func(ctx context.Context, _ config.Config) error {
+		if err := controller.Stop(record.RequestID); err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Errorf("verify issue ownership: %w", ctx.Err())
+	}, func(format string, args ...any) {
+		broker.IngestLog(fmt.Sprintf(format, args...))
+	})
+	controller.Complete(record.RequestID)
+	if outcome.State != "stopped" || !errors.Is(outcome.Result.Err, context.Canceled) {
+		t.Fatalf("ownership outcome = %+v", outcome)
+	}
+	task, ok := broker.Task(record.RequestID)
+	if !ok || task.Status != "stopped" {
+		t.Fatalf("dashboard task found = %v, status = %q", ok, task.Status)
+	}
+	if err := work.finish(ctx, outcome.State, outcome.Result); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Load(record.ID)
+	if err != nil || stored.Outcome != "stopped" {
+		t.Fatalf("stored outcome = %q, %v", stored.Outcome, err)
+	}
+}
 
 func lifecycleRecord(t *testing.T) (*localruntime.IssueClaimStore, localruntime.IssueClaimRecord) {
 	t.Helper()
