@@ -198,9 +198,6 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		return err
 	}
 	staleOwner := isStaleIssueClaim(record)
-	if staleOwner && record.StoppedAt.IsZero() {
-		return nil
-	}
 	if err := s.IssueClaims.CheckOwner(record.InstanceID); err != nil {
 		if !errors.Is(err, localruntime.ErrIssueOwnershipChanged) {
 			return err
@@ -251,7 +248,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			record.StoppedAt = time.Now().UTC()
 			record.Outcome = "interrupted"
 			record.Incident = "interrupted"
-			record.Error = "worker exited before recording its outcome"
+			if !staleOwner {
+				record.Error = "worker exited before recording its outcome"
+			}
 		}
 		record.UnlockPending = record.LabelAdded
 	}
@@ -278,7 +277,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	// A restored owner can finalize a stopped attempt. Dispatch still requires
 	// an explicit retry.
 	if staleOwner {
-		return nil
+		return s.IssueClaims.Save(record)
 	}
 	if record.Outcome != "" && record.Incident == "" {
 		record.Incident = "missing_pr"

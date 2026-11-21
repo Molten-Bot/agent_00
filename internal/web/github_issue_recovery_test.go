@@ -308,6 +308,65 @@ func TestIssueRecoveryFinalizesCompletedAttemptAfterOwnerRestored(t *testing.T) 
 	}
 }
 
+func TestIssueRecoveryFinalizesInterruptedAttemptAfterOwnerRestored(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	record := completeRecoveryRecord(t, s, "completed", 1)
+	record.StoppedAt = time.Time{}
+	record.Outcome = ""
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	identityPath := filepath.Join(s.IssueClaims.Root, "instance")
+	writeOwner := func(owner string) {
+		t.Helper()
+		if err := os.WriteFile(identityPath, []byte(`"`+owner+`"`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeOwner(strings.Repeat("f", 32))
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	blocked := latestRecoveryRecord(t, s)
+	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || !blocked.UnlockPending || f.deletes != 0 {
+		t.Fatalf("completed attempt was not fenced while owner differed: state=%s error=%q unlock pending=%t deletes=%d", blocked.State, blocked.Error, blocked.UnlockPending, f.deletes)
+	}
+
+	writeOwner(record.InstanceID)
+	f.deleteError = true
+	if err := s.ReconcileIssueWork(ctx); err == nil || !strings.Contains(err.Error(), "temporary label removal failure") {
+		t.Fatalf("expected label removal failure after owner restored, got %v", err)
+	}
+	blocked = latestRecoveryRecord(t, s)
+	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || blocked.NextAttemptAt.IsZero() {
+		t.Fatalf("label removal failure lost the dispatch block: state=%s error=%q retry=%v", blocked.State, blocked.Error, blocked.NextAttemptAt)
+	}
+	blocked.NextAttemptAt = time.Now().Add(-time.Second)
+	if err := s.IssueClaims.Save(blocked); err != nil {
+		t.Fatal(err)
+	}
+	f.deleteError = false
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	blocked = latestRecoveryRecord(t, s)
+	if blocked.State != "blocked" || blocked.UnlockPending || blocked.LabelAdded || f.deletes != 2 || len(f.submissions) != 1 {
+		t.Fatalf("cleanup without PR: state=%s unlock pending=%t label added=%t deletes=%d submissions=%d", blocked.State, blocked.UnlockPending, blocked.LabelAdded, f.deletes, len(f.submissions))
+	}
+
+	f.prs = recoveryPR("open", "null", "agent00-issue-17", "main")
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	final := latestRecoveryRecord(t, s)
+	if final.State != "fulfilled" || final.PRURL != "https://github.com/acme/repo/pull/42" || final.VerifiedAt.IsZero() || !final.NextAttemptAt.IsZero() || len(f.submissions) != 1 {
+		t.Fatalf("unexpected final state=%s PR=%q verified=%v retry=%v submissions=%d", final.State, final.PRURL, final.VerifiedAt, final.NextAttemptAt, len(f.submissions))
+	}
+}
+
 func TestIssueRecoveryScanReportsFiltersForTrackedIssues(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
