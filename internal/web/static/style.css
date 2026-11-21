@@ -5464,9 +5464,24 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   backdrop-filter: blur(10px) saturate(120%);
 }
 
+#task-asset-viewer .task-image-viewer-stage {
+  flex-direction: column;
+  gap: 12px;
+}
+
 #task-asset-message {
   margin: 0;
   text-align: center;
+}
+
+#task-asset-auth {
+  display: grid;
+  gap: 8px;
+  max-width: 100%;
+}
+
+#task-asset-token {
+  min-width: 0;
 }
 
 #task-asset-viewer iframe {

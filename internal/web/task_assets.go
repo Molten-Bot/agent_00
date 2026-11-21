@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
 )
@@ -19,7 +20,11 @@ func (s Server) handleTaskAssetPreview(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 
-	data, mediaType, err := githubassets.Preview(r.Context(), task.Assets[index], s.assetTransport)
+	var viewerToken string
+	if fields := strings.Fields(r.Header.Get("Authorization")); len(fields) == 2 && strings.EqualFold(fields[0], "Bearer") {
+		viewerToken = fields[1]
+	}
+	data, mediaType, err := githubassets.Preview(r.Context(), task.Assets[index], viewerToken, s.assetTransport)
 	if err != nil {
 		http.Error(w, "Preview unavailable.", http.StatusBadGateway)
 		return

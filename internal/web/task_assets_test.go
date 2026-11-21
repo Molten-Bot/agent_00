@@ -28,10 +28,13 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 		return execx.Result{}, fmt.Errorf("unexpected GitHub CLI command")
 	}), true)
 	srv.assetTransport = taskAssetTransportFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Host != "github.com" || req.Header.Get("Authorization") != "" {
-			return nil, fmt.Errorf("unexpected preview host or credentials")
+		if req.URL.Host != "github.com" || req.Header.Get("Cookie") != "" {
+			return nil, fmt.Errorf("unexpected preview host or cookie")
 		}
 		status, mediaType, body := http.StatusNotFound, "text/plain", ""
+		if req.Header.Get("Authorization") != "" && req.URL.Path != "/user-attachments/assets/unavailable" {
+			t.Error("viewer credentials were reused for another attachment")
+		}
 		switch req.URL.Path {
 		case "/user-attachments/assets/screenshot-id":
 			status, mediaType, body = http.StatusOK, "image/svg+xml", `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="640" height="360" fill="#246"/></svg>`
@@ -39,6 +42,10 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 			status, mediaType, body = http.StatusOK, "application/octet-stream", taskAssetTestPDF()
 		case "/user-attachments/files/42/notes.txt":
 			status, mediaType, body = http.StatusOK, "text/plain", "<script>throw new Error('attachment executed')</script>\nUTF-8: café"
+		case "/user-attachments/assets/unavailable":
+			if req.Header.Get("Authorization") == "Bearer viewer-fixture" {
+				status, body = http.StatusOK, "Private attachment preview"
+			}
 		}
 		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {mediaType}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})
@@ -90,6 +97,72 @@ func TestTaskAssetPreviewDoesNotUseServerAuthorization(t *testing.T) {
 		if w.Code != http.StatusBadGateway || strings.Contains(w.Body.String(), "private bytes") {
 			t.Errorf("preview %d returned status %d, want 502 without attachment bytes", index, w.Code)
 		}
+	}
+}
+
+func TestTaskAssetPreviewUsesViewerAuthorization(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(githubIssueRunnerFunc(func(context.Context, execx.Command) (execx.Result, error) {
+		t.Error("preview looked up server GitHub credentials")
+		return execx.Result{}, fmt.Errorf("unexpected GitHub CLI command")
+	}), true)
+	srv.Broker.RecordTaskRunConfig("req-private", []byte(`{"assets":[
+		{"url":"https://github.com/user-attachments/assets/private"},
+		{"url":"https://private-user-images.githubusercontent.com/42/private.png?jwt=stored-fixture"},
+		{"url":"https://github.com/user-attachments/assets/private?token=stored-fixture"}
+	]}`))
+	const privateBody = "%PDF-1.4\nprivate bytes"
+	var storageRequests int
+	srv.assetTransport = taskAssetTransportFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Cookie") != "" {
+			t.Error("preview forwarded cookies")
+		}
+		switch req.URL.String() {
+		case "https://github.com/user-attachments/assets/private":
+			if req.Header.Get("Authorization") == "Bearer viewer-fixture" {
+				return &http.Response{StatusCode: http.StatusFound, Header: http.Header{
+					"Location": {"https://private-user-images.githubusercontent.com/42/private.png?jwt=fresh-fixture"},
+				}, Body: http.NoBody}, nil
+			}
+			return &http.Response{StatusCode: http.StatusNotFound, Body: http.NoBody}, nil
+		case "https://private-user-images.githubusercontent.com/42/private.png?jwt=fresh-fixture":
+			storageRequests++
+			if req.Header.Get("Authorization") != "" {
+				t.Error("viewer token forwarded to storage")
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(privateBody))}, nil
+		default:
+			t.Error("preview fetched an unexpected URL")
+			return nil, fmt.Errorf("unexpected attachment request")
+		}
+	})
+	handler := srv.Handler()
+	for _, tc := range []struct {
+		name, authorization string
+		index, status       int
+	}{
+		{"other viewer", "Bearer denied-fixture", 0, http.StatusBadGateway},
+		{"authorized viewer", "Bearer viewer-fixture", 0, http.StatusOK},
+		{"anonymous after authorized", "", 0, http.StatusBadGateway},
+		{"stored storage URL", "Bearer viewer-fixture", 1, http.StatusBadGateway},
+		{"stored URL with query", "Bearer viewer-fixture", 2, http.StatusBadGateway},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/tasks/req-private/asset-preview?index=%d", tc.index), nil)
+			req.Header.Set("Authorization", tc.authorization)
+			req.AddCookie(&http.Cookie{Name: "viewer", Value: "cookie-fixture"})
+			handler.ServeHTTP(w, req)
+			if w.Code != tc.status || w.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("preview status = %d, cache control = %q, want %d and no-store", w.Code, w.Header().Get("Cache-Control"), tc.status)
+			}
+			if (w.Body.String() == privateBody) != (tc.status == http.StatusOK) {
+				t.Fatal("unexpected private attachment access")
+			}
+		})
+	}
+	if storageRequests != 1 {
+		t.Fatalf("storage requests = %d, want one viewer-authorized request", storageRequests)
 	}
 }
 

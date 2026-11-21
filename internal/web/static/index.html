@@ -620,6 +620,11 @@
         <i data-lucide="chevron-left" aria-hidden="true"></i>
       </button>
       <p id="task-asset-message" role="status"></p>
+      <form id="task-asset-auth" hidden>
+        <label for="task-asset-token">GitHub token with access to this attachment</label>
+        <input id="task-asset-token" class="prompt-control" type="password" autocomplete="off" required>
+        <button class="prompt-control" type="submit">Retry preview</button>
+      </form>
       <button id="task-asset-next" class="task-image-viewer-nav task-image-viewer-next" type="button" aria-label="Next asset">
         <i data-lucide="chevron-right" aria-hidden="true"></i>
       </button>
@@ -10495,9 +10500,13 @@
     const taskAssetNext = document.getElementById("task-asset-next");
     const taskAssetCount = document.getElementById("task-asset-count");
     const taskAssetSource = document.getElementById("task-asset-source");
+    const taskAssetAuth = document.getElementById("task-asset-auth");
+    const taskAssetToken = document.getElementById("task-asset-token");
     let viewedTaskAssets = [];
     let viewedTaskAssetIndex = 0;
     let viewedTaskRequestID = "";
+    let taskAssetOpener;
+    let taskAssetOpenerList;
     let taskAssetPreviewRequest;
     let taskAssetObjectURL;
 
@@ -10516,6 +10525,8 @@
     }
 
     function clearTaskAssetMedia() {
+      taskAssetAuth.hidden = true;
+      taskAssetToken.value = "";
       taskAssetPreviewRequest?.abort();
       taskAssetPreviewRequest = undefined;
       const media = taskAssetViewer.querySelector(".task-image-viewer-image, .task-asset-text");
@@ -10530,7 +10541,7 @@
       }
     }
 
-    async function renderTaskAssetViewer() {
+    async function renderTaskAssetViewer(viewerToken = "") {
       clearTaskAssetMedia();
       const asset = viewedTaskAssets[viewedTaskAssetIndex];
       const url = taskAssetURL(asset.url);
@@ -10550,8 +10561,15 @@
       const { signal } = taskAssetPreviewRequest;
       const endpoint = `/api/tasks/${encodeURIComponent(viewedTaskRequestID)}/asset-preview?index=${viewedTaskAssetIndex}`;
       try {
-        const response = await fetch(endpoint, { signal });
-        if (!response.ok) throw new Error("Preview unavailable.");
+        const headers = viewerToken ? { Authorization: `Bearer ${viewerToken}` } : {};
+        const response = await fetch(endpoint, { signal, headers, redirect: "error" });
+        if (!response.ok) {
+          if (!signal.aborted && taskAssetViewer.open && window.isSecureContext &&
+              response.status === 502 && url.hostname === "github.com" && !url.search) {
+            taskAssetAuth.hidden = false;
+          }
+          throw new Error("Preview unavailable.");
+        }
         const blob = await response.blob();
         if (blob.type.startsWith("text/plain")) {
           const text = await blob.text();
@@ -10614,10 +10632,12 @@
       }
     }
 
-    function openTaskAssetViewer(requestID, assets) {
+    function openTaskAssetViewer(requestID, assets, opener, openerList) {
       viewedTaskRequestID = requestID;
       viewedTaskAssets = assets;
       viewedTaskAssetIndex = 0;
+      taskAssetOpener = opener;
+      taskAssetOpenerList = openerList;
       renderTaskAssetViewer();
       taskAssetViewer.showModal();
     }
@@ -10631,8 +10651,16 @@
 
     taskAssetPrev.addEventListener("click", () => stepTaskAssetViewer(-1));
     taskAssetNext.addEventListener("click", () => stepTaskAssetViewer(1));
+    taskAssetAuth.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const token = taskAssetToken.value.trim();
+      if (token) {
+        taskAssetViewer.querySelector("[autofocus]").focus();
+        renderTaskAssetViewer(token);
+      }
+    });
     taskAssetViewer.addEventListener("keydown", (event) => {
-      if (event.target.tagName === "VIDEO") return;
+      if (event.target.tagName === "VIDEO" || event.target === taskAssetToken) return;
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       event.preventDefault();
       stepTaskAssetViewer(event.key === "ArrowLeft" ? -1 : 1);
@@ -10641,6 +10669,12 @@
       if (taskAssetViewer.open) return;
       clearTaskAssetMedia();
       viewedTaskAssets = [];
+      if (!taskAssetOpener?.isConnected && viewedTaskRequestID) {
+        const selector = `.task[data-request-id="${CSS.escape(viewedTaskRequestID)}"] .task-assets-toggle`;
+        taskAssetOpenerList?.querySelector(selector)?.focus({ preventScroll: true });
+      }
+      taskAssetOpener = taskAssetOpenerList = undefined;
+      viewedTaskRequestID = "";
     });
 
     function taskFullscreenMode(mode) {
@@ -12531,7 +12565,7 @@
         button.setAttribute("aria-haspopup", "dialog");
         bindTaskActionButton(button, () => {
           button.focus({ preventScroll: true });
-          openTaskAssetViewer(taskRequestID(task), task.assets);
+          openTaskAssetViewer(taskRequestID(task), task.assets, button, listNode);
         });
         return button;
       };

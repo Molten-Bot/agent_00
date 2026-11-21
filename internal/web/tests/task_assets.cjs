@@ -106,6 +106,7 @@ for (const mobile of [false, true]) {
     await expect.poll(() => attachmentRequests.length).toBe(4);
     await page.keyboard.press('Escape');
     await expect(viewer).toBeHidden();
+    await expect(assets).toBeFocused();
     assert.deepEqual(attachmentRequests, [0, 1, 0, 1].map(index => `/api/tasks/req-assets/asset-preview?index=${index}`),
       'only the current asset preview is requested');
 
@@ -116,11 +117,18 @@ for (const mobile of [false, true]) {
     await expect(source).toHaveAttribute('href', unavailableURL);
     await expect(previous).toBeHidden();
     await expect(next).toBeHidden();
+    const token = viewer.getByLabel('GitHub token with access to this attachment');
+    await token.fill('viewer-fixture');
+    await viewer.getByRole('button', { name: 'Retry preview' }).click();
+    await expect(viewer.locator('pre')).toHaveText('Private attachment preview');
+    await expect(token).toBeHidden();
+    await expect(token).toHaveValue('');
     await viewer.getByRole('button', { name: 'Close asset viewer' }).click();
     await expect(viewer).toBeHidden();
     await expect(singleAsset).toBeFocused();
     await page.keyboard.press('Enter');
     await expect(viewer).toBeVisible();
+    await expect(viewer.getByRole('status')).toHaveText('Preview unavailable.');
     await page.keyboard.press('Escape');
     await expect(viewer).toBeHidden();
 

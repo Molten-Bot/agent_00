@@ -76,8 +76,9 @@ func Download(ctx context.Context, assets []Asset, dir, token string, transport 
 	return files, nil
 }
 
-// Preview fetches public attachment bytes for the UI, which cannot authorize viewers for private GitHub assets.
-func Preview(ctx context.Context, asset Asset, transport http.RoundTripper) ([]byte, string, error) {
+// Preview fetches attachment bytes using only the requesting viewer's optional
+// GitHub token. Stored URLs must not grant access on their own.
+func Preview(ctx context.Context, asset Asset, viewerToken string, transport http.RoundTripper) ([]byte, string, error) {
 	u, err := url.Parse(asset.URL)
 	if err != nil || !allowedAttachment(u) {
 		return nil, "", fmt.Errorf("invalid attachment URL")
@@ -85,7 +86,10 @@ func Preview(ctx context.Context, asset Asset, transport http.RoundTripper) ([]b
 	if u.Host == "private-user-images.githubusercontent.com" || u.RawQuery != "" {
 		return nil, "", fmt.Errorf("attachment URL may require private access")
 	}
-	data, headers, err := fetch(ctx, downloadClient("", transport), asset.URL, "", MaxFileBytes)
+	if u.Host != "github.com" {
+		viewerToken = ""
+	}
+	data, headers, err := fetch(ctx, downloadClient(viewerToken, transport), asset.URL, viewerToken, MaxFileBytes)
 	if err != nil {
 		return nil, "", err
 	}

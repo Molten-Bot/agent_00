@@ -176,7 +176,7 @@ func TestPreviewText(t *testing.T) {
 				return response(req, 200, tc.body, http.Header{"Content-Type": {tc.contentType}}), nil
 			})
 			asset := Asset{URL: "https://github.com/user-attachments/files/42/example.txt"}
-			data, mediaType, err := Preview(context.Background(), asset, transport)
+			data, mediaType, err := Preview(context.Background(), asset, "", transport)
 			if tc.want == "" {
 				if err == nil || len(data) != 0 {
 					t.Fatal("unsupported content was returned")
