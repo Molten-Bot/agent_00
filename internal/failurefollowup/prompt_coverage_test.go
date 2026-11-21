@@ -125,6 +125,8 @@ func TestNonRemediableFailureReasonRecognizesUnmergedPrerequisite(t *testing.T) 
 		{"codex: codex reported failure: Failure: Parser rejected 'blocked by unmerged #12'. Error details: Fix the parser.", ""},
 		{"codex: codex reported failure: Failure: Parser can't read 'blocked by unmerged #12'. Error details: Fix the parser.", ""},
 		{"git: merge blocked by unmerged #12", ""},
+		{"codex: codex reported failure: Failure: No longer blocked by unmerged #12; parser crashes.", ""},
+		{"codex: codex reported failure: Failure: Not blocked by unmerged #12; parser crashes.", ""},
 	} {
 		if got := NonRemediableFailureReason(errors.New(tc.message)); got != tc.want {
 			t.Errorf("NonRemediableFailureReason(%q) = %q, want %q", tc.message, got, tc.want)

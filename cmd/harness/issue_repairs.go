@@ -125,9 +125,16 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 			lock.Close()
 			continue
 		}
-		if record.Started {
+		var blockedReason string
+		switch {
+		case record.Started:
+			blockedReason = "repair worker interrupted; inspect preserved logs before another repair attempt"
+		case legacyIssueOwnershipRepair(record.Run.Prompt):
+			blockedReason = localruntime.ErrIssueOwnershipChanged.Error()
+		}
+		if blockedReason != "" {
 			record.State = "blocked"
-			record.Error = "repair worker interrupted; inspect preserved logs before another repair attempt"
+			record.Error = blockedReason
 			if err := q.store.Save(record); err != nil {
 				q.logf("event=issue_repair_save status=error err=%q", err)
 			}
@@ -158,6 +165,17 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 	if err := retainIssueEvidence(q.claims, q.store, q.logRoot, time.Now()); err != nil {
 		q.logf("event=issue_evidence_retention status=error err=%q", err)
 	}
+}
+
+func legacyIssueOwnershipRepair(prompt string) bool {
+	// Older outbox records kept the original failure only in this prompt block.
+	_, failure, ok := strings.Cut(prompt, "\n\nObserved failure context:\n- exit_code=")
+	if !ok {
+		return false
+	}
+	_, failure, _ = strings.Cut(failure, "\n")
+	line, _, _ := strings.Cut(failure, "\n")
+	return strings.HasPrefix(line, "- error=\"") && strings.Contains(line, localruntime.LegacyIssueOwnershipFailure)
 }
 
 func (w *issueRepairWork) start() error {

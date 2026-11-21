@@ -1602,6 +1602,16 @@ func failureFollowUpRunConfig(
 	failedRunCfg config.Config,
 	logRoot string,
 ) config.Config {
+	return failureFollowUpRunConfigWithContext(failedRequestID, failedResult, failedRunCfg, logRoot, failureFollowUpFailureContext(failedResult, failedRunCfg))
+}
+
+func failureFollowUpRunConfigWithContext(
+	failedRequestID string,
+	failedResult app.Result,
+	failedRunCfg config.Config,
+	logRoot string,
+	failureContext string,
+) config.Config {
 	logPaths := followUpTaskLogPaths(logRoot, failedRequestID)
 	baseBranch, targetSubdir := failurefollowup.FollowUpTargeting(
 		failedRunCfg.BaseBranch,
@@ -1612,7 +1622,7 @@ func failureFollowUpRunConfig(
 		Repos:        failureFollowUpRepos(failedResult, failedRunCfg),
 		BaseBranch:   baseBranch,
 		TargetSubdir: targetSubdir,
-		Prompt:       failureFollowUpPrompt(logPaths, failedResult, failedRunCfg),
+		Prompt:       failureFollowUpPromptWithContext(logPaths, failureContext),
 	}
 }
 
@@ -2072,6 +2082,10 @@ func promptPhraseTextContains(text, marker string) bool {
 }
 
 func failureFollowUpPrompt(logPaths []string, failedResult app.Result, failedRunCfg config.Config) string {
+	return failureFollowUpPromptWithContext(logPaths, failureFollowUpFailureContext(failedResult, failedRunCfg))
+}
+
+func failureFollowUpPromptWithContext(logPaths []string, failureContext string) string {
 	return failurefollowup.ComposePrompt(
 		failureFollowUpRequiredPrompt,
 		logPaths,
@@ -2081,7 +2095,7 @@ func failureFollowUpPrompt(logPaths []string, failedResult app.Result, failedRun
 			".log/local/<request timestamp>/<request sequence>/terminal.log",
 		},
 		"",
-		failureFollowUpFailureContext(failedResult, failedRunCfg),
+		failureContext,
 	)
 }
 
@@ -2093,16 +2107,24 @@ func failureFollowUpPrompt(logPaths []string, failedResult app.Result, failedRun
 // diagnosis but commonly embeds those same identifiers, so it is routed
 // through failurefollowup.RedactFailureDetail first.
 func failureFollowUpFailureContext(failedResult app.Result, failedRunCfg config.Config) string {
-	lines := []string{"Observed failure context:"}
+	exitCode := ""
 	if failedResult.ExitCode != 0 {
-		lines = append(lines, fmt.Sprintf("- exit_code=%d", failedResult.ExitCode))
+		exitCode = fmt.Sprint(failedResult.ExitCode)
 	}
-	if failedResult.Err != nil {
-		if detail := failurefollowup.RedactFailureDetail(failedResult.Err.Error()); detail != "" {
+	return formatFailureFollowUpContext(exitCode, failedResult.Err, failedRunCfg.Prompt)
+}
+
+func formatFailureFollowUpContext(exitCode string, failure error, prompt string) string {
+	lines := []string{"Observed failure context:"}
+	if exitCode != "" {
+		lines = append(lines, "- exit_code="+exitCode)
+	}
+	if failure != nil {
+		if detail := failurefollowup.RedactFailureDetail(failure.Error()); detail != "" {
 			lines = append(lines, fmt.Sprintf("- error=%q", detail))
 		}
 	}
-	if notice := failurefollowup.RedactTaskPrompt(failedRunCfg.Prompt); notice != "" {
+	if notice := failurefollowup.RedactTaskPrompt(prompt); notice != "" {
 		lines = append(lines, "", notice)
 	}
 	if len(lines) == 1 {

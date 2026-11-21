@@ -399,7 +399,8 @@ func NonRemediableFailureReason(err error) string {
 		return missingRemoteBranchReason
 	}
 	summary, _, _ := strings.Cut(text, "error details:")
-	if unmergedDependencySummary.MatchString(summary) {
+	if unmergedDependencySummary.MatchString(summary) &&
+		!strings.Contains(summary, "no longer blocked") && !strings.Contains(summary, "not blocked") {
 		return UnmergedDependencyReason
 	}
 	for _, marker := range nonRemediableFailureMarkers {
