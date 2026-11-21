@@ -86,6 +86,9 @@ for (const harness of ['claude', 'codex']) test(`settings reopen ${harness} sign
           accepts_browser_code: harness === 'claude', device_code: harness === 'codex' ? 'ABCD-EFGH' : '',
         };
       } else if (path.endsWith('/configure')) {
+        assert.equal(harness, 'claude');
+        assert.equal(route.request().method(), 'POST');
+        assert.deepEqual(route.request().postDataJSON(), { claude_auth_code: 'browser-code#test-state' });
         auth = { harness, required: true, ready: true, state: 'ready' };
       } else if (path.endsWith('/verify')) {
         verifies++;
@@ -102,15 +105,13 @@ for (const harness of ['claude', 'codex']) test(`settings reopen ${harness} sign
   await select(page, 'automation');
   await toggle(page, 'review-settings-auto-merge');
   await link.click();
-  await page.waitForFunction(harness => {
-    if (!document.getElementById('settings-gate').classList.contains('hidden')) return false;
-    const selector = harness === 'claude' ? '#agent-auth-browser-code-input' : '#agent-auth-device-code-row';
-    return !document.querySelector(selector).classList.contains('hidden');
-  }, harness);
+  const signInChallenge = page.locator(harness === 'claude' ? '#agent-auth-browser-code-input' : '#agent-auth-device-code-row');
+  await page.locator('#settings-gate').waitFor({ state: 'hidden' });
+  await signInChallenge.waitFor({ state: 'visible' });
   assert.equal(starts, 1);
   assert.equal(writes.at(-1).auto_merge, true, 'pending settings saved before sign-in');
   assert.equal(await page.locator('#local-prompt-submit').isDisabled(), true);
-  if (harness === 'claude') await page.locator('#agent-auth-browser-code-input').fill('browser-code#test-state');
+  if (harness === 'claude') await signInChallenge.fill('browser-code#test-state');
   else await page.locator('#agent-auth-verify').click();
   await page.waitForFunction(() => document.getElementById('agent-auth-gate').classList.contains('hidden'));
   assert.equal(await page.locator('#local-prompt-submit').isEnabled(), true);

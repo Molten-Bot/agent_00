@@ -85,21 +85,15 @@ func TestProbeBaseAllowsExecReturnsFalseWhenBaseDirMissing(t *testing.T) {
 // the osExecutable seam lets the test substitute a fake executable location
 // without depending on the real `go test` binary's on-disk path.
 func TestResolveAgentsSeedPathFallsBackToExecutableDirectory(t *testing.T) {
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(wd) })
-
-	cwdRoot := t.TempDir()
-	if err := os.Chdir(cwdRoot); err != nil {
-		t.Fatalf("Chdir(%q) error = %v", cwdRoot, err)
-	}
+	exeRoot := t.TempDir()
+	// TMPDIR can sit beneath a real seed. Start at the volume root so the
+	// working-directory search cannot find a seed beside the temp directory.
+	cwdRoot := filepath.VolumeName(exeRoot) + string(filepath.Separator)
+	t.Chdir(cwdRoot)
 	if _, ok := findPathUpward(cwdRoot, agentsSeedPath); ok {
 		t.Fatal("test setup invalid: cwd already resolves the seed path upward")
 	}
 
-	exeRoot := t.TempDir()
 	seedDir := filepath.Join(exeRoot, "library")
 	if err := os.MkdirAll(seedDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(seedDir) error = %v", err)
