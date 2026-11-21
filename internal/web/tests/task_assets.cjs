@@ -8,6 +8,9 @@ let browser;
 const screenshotURL = 'https://github.com/user-attachments/assets/screenshot-id';
 const pdfURL = 'https://github.com/user-attachments/files/42/spec.pdf';
 const unavailableURL = 'https://github.com/user-attachments/assets/unavailable';
+const signedImageURL = 'https://private-user-images.githubusercontent.com/42/private.png?jwt=fixture%2Bsignature';
+const expiredImageURL = 'https://private-user-images.githubusercontent.com/42/expired.png?jwt=expired-fixture';
+const pixelPNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/P2cAAAAASUVORK5CYII=', 'base64');
 
 before(async () => { browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
@@ -20,13 +23,24 @@ for (const mobile of [false, true]) {
     });
     page.setDefaultTimeout(10000);
     t.after(() => page.close());
-    const errors = [], writes = [], attachmentRequests = [];
+    const errors = [], writes = [], attachmentRequests = [], signedImageRequests = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => {
       if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:')) errors.push(message.text());
     });
     await page.context().route(/^https?:/, route => {
       const url = new URL(route.request().url());
+      if (url.href === signedImageURL || url.href === expiredImageURL) {
+        signedImageRequests.push({
+          url: url.href,
+          type: route.request().resourceType(),
+          referer: route.request().headers().referer,
+          authorization: route.request().headers().authorization,
+        });
+        return url.href === signedImageURL
+          ? route.fulfill({ contentType: 'image/png', body: pixelPNG })
+          : route.fulfill({ status: 403 });
+      }
       if (url.origin !== new URL(baseURL).origin) {
         if (url.pathname.includes('/user-attachments/')) errors.push('Browser requested a GitHub attachment');
         return route.abort();
@@ -207,6 +221,37 @@ for (const mobile of [false, true]) {
     await expect.poll(() => audio.evaluate(element => element.currentTime)).toBeGreaterThan(0);
     await page.keyboard.press('Escape');
     await expect(audio).toHaveCount(0);
+
+    const streamResponse = page.waitForResponse(response => response.request().resourceType() === 'media' &&
+      new URL(response.url()).pathname === '/api/tasks/req-video-asset/asset-preview');
+    await page.locator('#task-list .task[data-request-id="req-video-asset"] .task-assets-toggle').click();
+    const stream = await streamResponse;
+    assert.equal(stream.status(), 200);
+    assert.equal(stream.headers()['content-type'], 'video/webm');
+    assert.equal(stream.request().headers().authorization, undefined);
+    const video = viewer.locator('video');
+    await expect(video).toBeVisible();
+    await expect(video).toHaveAccessibleName('Recording');
+    await video.evaluate(element => element.play());
+    await expect.poll(() => video.evaluate(element => element.currentTime)).toBeGreaterThan(0);
+    await page.keyboard.press('Escape');
+    await expect(video).toHaveCount(0);
+
+    const proxyRequestsBeforePrivateImages = attachmentRequests.length;
+    await page.locator('#task-list .task[data-request-id="req-private-images"] .task-assets-toggle').click();
+    const privateImage = viewer.getByRole('img', { name: 'Private screenshot' });
+    await expect(privateImage).toBeVisible();
+    await expect(privateImage).toHaveJSProperty('naturalWidth', 1);
+    await expect(source).toHaveAttribute('href', signedImageURL);
+    await next.click();
+    await expect(privateImage).toHaveCount(0);
+    await expect(viewer.getByRole('status')).toHaveText('Preview unavailable.');
+    await expect(source).toHaveAttribute('href', expiredImageURL);
+    await expect(authLink).toBeHidden();
+    assert.equal(attachmentRequests.length, proxyRequestsBeforePrivateImages);
+    assert.deepEqual(signedImageRequests, [signedImageURL, expiredImageURL].map(url =>
+      ({ url, type: 'image', referer: undefined, authorization: undefined })));
+    await page.keyboard.press('Escape');
     assert.deepEqual(errors, [], 'no browser JavaScript errors');
     assert.deepEqual(writes, [], 'viewing assets must not submit or modify a task');
   });

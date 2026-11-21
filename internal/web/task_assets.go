@@ -1,8 +1,10 @@
 package web
 
 import (
+	"crypto/sha256"
 	_ "embed"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -34,18 +36,24 @@ func (s Server) handleTaskAssetPreview(w http.ResponseWriter, r *http.Request, r
 	w.Header().Set("Cache-Control", "no-store")
 	task, ok := s.Broker.Task(requestID)
 	assetURL, err := url.PathUnescape(r.Header.Get("X-Task-Asset-URL"))
-	if !ok || err != nil || assetURL == "" {
+	videoID := r.URL.Query().Get("video")
+	if !ok || err != nil || (assetURL == "") == (videoID == "") {
 		http.NotFound(w, r)
 		return
 	}
-	index := slices.IndexFunc(task.Assets, func(asset githubassets.Asset) bool { return asset.URL == assetURL })
+	index := slices.IndexFunc(task.Assets, func(asset githubassets.Asset) bool {
+		if videoID != "" {
+			return taskAssetVideoID(asset.URL) == videoID
+		}
+		return asset.URL == assetURL
+	})
 	if index == -1 {
 		http.NotFound(w, r)
 		return
 	}
 
 	var viewerToken string
-	if fields := strings.Fields(r.Header.Get("Authorization")); len(fields) == 2 && strings.EqualFold(fields[0], "Bearer") {
+	if fields := strings.Fields(r.Header.Get("Authorization")); videoID == "" && len(fields) == 2 && strings.EqualFold(fields[0], "Bearer") {
 		viewerToken = fields[1]
 	}
 	body, mediaType, err := githubassets.Preview(r.Context(), task.Assets[index], viewerToken, s.assetTransport)
@@ -59,19 +67,35 @@ func (s Server) handleTaskAssetPreview(w http.ResponseWriter, r *http.Request, r
 	}
 	defer body.Close()
 
+	isVideo := strings.HasPrefix(mediaType, "video/")
+	if videoID != "" && !isVideo {
+		http.NotFound(w, r)
+		return
+	}
 	w.Header().Set("Content-Type", mediaType)
 	w.Header().Set("Content-Disposition", "attachment")
 	w.Header().Set("Content-Security-Policy", "sandbox")
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if isVideo && videoID == "" && viewerToken == "" && r.Header.Get("X-Task-Asset-Playback") == "native" {
+		// Let the media element own the stream. Use the attachment identity
+		// without putting the upstream URL in the playback request.
+		w.Header().Set("X-Task-Asset-Video", taskAssetVideoID(assetURL))
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	var dst io.Writer = w
-	if flusher, ok := w.(http.Flusher); ok && strings.HasPrefix(mediaType, "video/") {
+	if flusher, ok := w.(http.Flusher); ok && isVideo {
 		dst = taskVideoWriter{ResponseWriter: w, Flusher: flusher}
 	}
 	if _, err := io.Copy(dst, body); err != nil {
-		// Headers may already be sent. Abort so an incomplete preview fails the fetch.
+		// Abort so the client sees a failed stream even if headers were already sent.
 		panic(http.ErrAbortHandler)
 	}
+}
+
+func taskAssetVideoID(assetURL string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(assetURL)))
 }
 
 type taskVideoWriter struct {

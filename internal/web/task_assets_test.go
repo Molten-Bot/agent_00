@@ -1,7 +1,9 @@
 package web
 
 import (
+	"bytes"
 	"context"
+	_ "embed"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -19,6 +21,9 @@ import (
 )
 
 type taskAssetTransportFunc func(*http.Request) (*http.Response, error)
+
+//go:embed testdata/task-asset-preview.webm
+var taskAssetTestVideo []byte // Four seconds of VP8 in a live WebM container.
 
 func (f taskAssetTransportFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
@@ -55,6 +60,14 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 			// Untagged MPEG-1 Layer III silence, 128 kbps at 44.1 kHz.
 			frame := "\xff\xfb\x90\x64" + strings.Repeat("\x00", 413)
 			status, mediaType, body = http.StatusOK, "application/octet-stream", strings.Repeat(frame, 8)
+		case "/user-attachments/assets/video":
+			// Keep the upstream open so playback must start before EOF.
+			tail, finish := io.Pipe()
+			context.AfterFunc(req.Context(), func() { finish.Close() })
+			return &http.Response{StatusCode: http.StatusOK, ContentLength: -1, Body: struct {
+				io.Reader
+				io.Closer
+			}{io.MultiReader(bytes.NewReader(taskAssetTestVideo), tail), tail}}, nil
 		case "/user-attachments/assets/unavailable":
 			if req.Header.Get("Authorization") == "Bearer viewer-fixture" {
 				status, body = http.StatusOK, "Private attachment preview"
@@ -82,6 +95,11 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 		{"url":"https://github.com/user-attachments/files/42/page.html","name":"page.html"}
 	]}`))
 	srv.Broker.RecordTaskRunConfig("req-audio-asset", []byte(`{"repo":"example/project","prompt":"Task with audio attachments","assets":[{"url":"https://github.com/user-attachments/files/42/tone.wav","name":"tone.wav"},{"url":"https://github.com/user-attachments/files/42/silence.mp3","name":"silence.mp3"}]}`))
+	srv.Broker.RecordTaskRunConfig("req-video-asset", []byte(`{"repo":"example/project","prompt":"Task with video","assets":[{"url":"https://github.com/user-attachments/assets/video","name":"Recording"}]}`))
+	srv.Broker.RecordTaskRunConfig("req-private-images", []byte(`{"repo":"example/project","prompt":"Task with signed images","assets":[
+		{"url":"https://private-user-images.githubusercontent.com/42/private.png?jwt=fixture%2Bsignature","name":"Private screenshot"},
+		{"url":"https://private-user-images.githubusercontent.com/42/expired.png?jwt=expired-fixture","name":"Expired screenshot"}
+	]}`))
 	srv.Broker.RecordTaskRunConfig("req-no-assets", []byte(`{"repo":"example/project","prompt":"Task without attachments"}`))
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -188,6 +206,14 @@ func TestTaskAssetPreviewUsesViewerAuthorization(t *testing.T) {
 				t.Fatal("unexpected private attachment access")
 			}
 		})
+	}
+	native := httptest.NewRequest(http.MethodGet, "/api/tasks/req-private/asset-preview?video="+
+		taskAssetVideoID("https://github.com/user-attachments/assets/private"), nil)
+	native.Header.Set("Authorization", "Bearer viewer-fixture")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, native)
+	if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), privateBody) {
+		t.Fatalf("native playback forwarded viewer authorization: status = %d", w.Code)
 	}
 	if storageRequests != 1 {
 		t.Fatalf("storage requests = %d, want one viewer-authorized request", storageRequests)
@@ -351,6 +377,7 @@ func TestTaskAssetPreviewRequiresStoredAsset(t *testing.T) {
 		taskAssetPreviewRequest("req-assets", "https://github.com/user-attachments/files/42/other.pdf"),
 		httptest.NewRequest(http.MethodGet, "/api/tasks/req-assets/asset-preview?index=0", nil),
 		httptest.NewRequest(http.MethodGet, "/api/tasks/req-assets/asset-preview?url=https://github.com/user-attachments/files/42/spec.pdf", nil),
+		httptest.NewRequest(http.MethodGet, "/api/tasks/req-assets/asset-preview?video="+taskAssetVideoID("https://github.com/user-attachments/files/42/other.pdf"), nil),
 	} {
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)

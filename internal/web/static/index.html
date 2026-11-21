@@ -20,7 +20,7 @@
   <script src="/static/lucide.min.js"></script>
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
-  <script src="/static/task-asset-preview.js"></script>
+  <script src="/static/task-asset-preview.js?v=2"></script>
   <link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body>
@@ -10544,11 +10544,22 @@
 
       taskAssetPreviewRequest = new AbortController();
       const { signal } = taskAssetPreviewRequest;
+      if (url.hostname === "private-user-images.githubusercontent.com" && url.search && url.pathname !== "/") {
+        // The browser uses the signed URL as an image source without a server proxy.
+        showTaskAssetMedia("image/*", url.href, taskAssetMessage, { signal, title });
+        return;
+      }
       const params = new URLSearchParams({ request: viewedTaskRequestID, asset: asset.url });
       try {
-        const response = await fetchTaskAssetPreview(params, { signal });
+        const response = await fetchTaskAssetPreview(params, { signal, nativePlayback: true });
         if (signal.aborted || !taskAssetViewer.open) return;
         if (response.ok) {
+          const mediaType = response.headers.get("Content-Type") || "";
+          const videoID = response.headers.get("X-Task-Asset-Video");
+          if (mediaType.startsWith("video/") && /^[a-f0-9]{64}$/.test(videoID)) {
+            showTaskAssetMedia(mediaType, `${taskAssetPreviewPath(params)}?video=${videoID}`, taskAssetMessage, { signal, title });
+            return;
+          }
           await showTaskAssetPreview(await response.blob(), taskAssetMessage, { signal, title });
           return;
         }

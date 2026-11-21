@@ -1,8 +1,13 @@
-function fetchTaskAssetPreview(params, { signal, token = "" }) {
+function taskAssetPreviewPath(params) {
   const requestID = encodeURIComponent(params.get("request") || "");
+  return `/api/tasks/${requestID}/asset-preview`;
+}
+
+function fetchTaskAssetPreview(params, { signal, token = "", nativePlayback = false }) {
   const headers = { "X-Task-Asset-URL": encodeURIComponent(params.get("asset") || "") };
   if (token) headers.Authorization = `Bearer ${token}`;
-  return fetch(`/api/tasks/${requestID}/asset-preview`, { signal, headers, redirect: "error" });
+  if (nativePlayback) headers["X-Task-Asset-Playback"] = "native";
+  return fetch(taskAssetPreviewPath(params), { signal, headers, redirect: "error" });
 }
 
 async function showTaskAssetPreview(blob, message, { signal, title }) {
@@ -20,12 +25,6 @@ async function showTaskAssetPreview(blob, message, { signal, title }) {
     return;
   }
 
-  const isPDF = blob.type === "application/pdf";
-  const isVideo = blob.type.startsWith("video/");
-  const isAudio = blob.type.startsWith("audio/");
-  if (!isPDF && !isVideo && !isAudio && !blob.type.startsWith("image/")) {
-    throw new Error("Preview unavailable.");
-  }
   // Keep SVG in an opaque origin even if opened outside its image element.
   let src;
   if (blob.type === "image/svg+xml") {
@@ -37,9 +36,18 @@ async function showTaskAssetPreview(blob, message, { signal, title }) {
     });
   }
   if (signal.aborted) return;
-  if (isPDF && navigator.pdfViewerEnabled === false) throw new Error("Preview unavailable.");
-  const objectURL = src ? "" : URL.createObjectURL(blob);
+  showTaskAssetMedia(blob.type, src || blob, message, { signal, title });
+}
 
+function showTaskAssetMedia(mediaType, source, message, { signal, title }) {
+  const isPDF = mediaType === "application/pdf";
+  const isVideo = mediaType.startsWith("video/");
+  const isAudio = mediaType.startsWith("audio/");
+  if ((!isPDF && !isVideo && !isAudio && !mediaType.startsWith("image/")) ||
+      (isPDF && navigator.pdfViewerEnabled === false)) {
+    throw new Error("Preview unavailable.");
+  }
+  const objectURL = source instanceof Blob ? URL.createObjectURL(source) : "";
   const media = document.createElement(isPDF ? "iframe" : isVideo ? "video" : isAudio ? "audio" : "img");
   const hasControls = isVideo || isAudio;
   media.className = "task-image-viewer-image";
@@ -54,6 +62,7 @@ async function showTaskAssetPreview(blob, message, { signal, title }) {
     media.setAttribute("aria-label", title);
   } else {
     media.alt = title;
+    media.referrerPolicy = "no-referrer";
   }
   function removeMedia() {
     media.remove();
@@ -74,6 +83,6 @@ async function showTaskAssetPreview(blob, message, { signal, title }) {
     message.hidden = false;
     message.textContent = "Preview unavailable.";
   });
-  media.src = src || objectURL;
+  media.src = objectURL || source;
   message.before(media);
 }
