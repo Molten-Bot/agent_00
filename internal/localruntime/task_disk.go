@@ -186,6 +186,12 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 		roots[len(roots)-1] = failed
 	}
 	for _, root := range roots {
+		if root == waiter.disk.PermissionDeniedRoot {
+			if setupErr == nil {
+				setupErr = fmt.Errorf("allocate workspace under %s: %w", root, os.ErrPermission)
+			}
+			continue
+		}
 		err, prepared := preparedRoots[root]
 		if !prepared {
 			manager.Root = root

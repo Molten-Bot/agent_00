@@ -665,6 +665,9 @@ func runServer(args []string) int {
 					daemonLogger("task status=warn action=retry_workspace_allocation request_id=%s err=%q", requestID, outcome.Result.Err)
 					release()
 					diskRequest.RetryRoot = workspaceRoot
+					if errors.Is(outcome.Result.Err, os.ErrPermission) {
+						diskRequest.PermissionDeniedRoot = workspaceRoot
+					}
 					forceRetry = canRetryWorkspace && forceAcquire
 					if !canRetryWorkspace {
 						delay := time.Duration(max(250, cfg.Scheduler.SampleIntervalMS)) * time.Millisecond
@@ -1563,23 +1566,26 @@ func runLocalTask(
 	if res.Err != nil && context.Cause(ctx) != nil {
 		res.Err = errors.Join(res.Err, context.Cause(ctx))
 	}
-	if res.Err != nil {
-		if taskHandle.IsStopped() {
-			stopErr := context.Cause(ctx)
-			if stopErr == nil {
-				stopErr = errTaskStoppedByOperator
-			}
-			logf(
-				"task status=stopped request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
-				requestID,
-				res.ExitCode,
-				res.WorkspaceDir,
-				res.Branch,
-				res.PRURL,
-				stopErr,
-			)
-			return localTaskOutcome{State: "stopped", Result: res}
+	if taskHandle.IsStopped() {
+		stopErr := context.Cause(ctx)
+		if stopErr == nil {
+			stopErr = errTaskStoppedByOperator
 		}
+		if res.Err == nil {
+			res.Err = stopErr
+		}
+		logf(
+			"task status=stopped request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
+			requestID,
+			res.ExitCode,
+			res.WorkspaceDir,
+			res.Branch,
+			res.PRURL,
+			stopErr,
+		)
+		return localTaskOutcome{State: "stopped", Result: res}
+	}
+	if res.Err != nil {
 		logf(
 			"task status=error request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
 			requestID,

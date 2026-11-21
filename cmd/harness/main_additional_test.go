@@ -1808,6 +1808,15 @@ func TestRunLocalTaskRecordsDiskUsageBeforeTerminalLog(t *testing.T) {
 }
 
 func TestRunLocalTaskRejectsStopDuringSuccessfulDiskAccounting(t *testing.T) {
+	testRunLocalTaskStopAroundFinalization(t, false)
+}
+
+func TestRunLocalTaskHonorsStopBeforeSuccessfulFinalization(t *testing.T) {
+	testRunLocalTaskStopAroundFinalization(t, true)
+}
+
+func testRunLocalTaskStopAroundFinalization(t *testing.T, stopBeforeFinalization bool) {
+	t.Helper()
 	t.Setenv("CODEX_HOME", t.TempDir())
 	const requestID = "req-finalizing"
 	cfg := config.Config{
@@ -1825,8 +1834,9 @@ func TestRunLocalTaskRejectsStopDuringSuccessfulDiskAccounting(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 	controller := newLocalTaskController()
+	stopPersisted := false
 	controller.persistStop = func(string) error {
-		t.Error("stop during disk accounting reached issue persistence")
+		stopPersisted = true
 		return nil
 	}
 	handle := controller.Register(requestID, cancel)
@@ -1837,9 +1847,20 @@ func TestRunLocalTaskRejectsStopDuringSuccessfulDiskAccounting(t *testing.T) {
 	handler := server.Handler()
 	accounted := false
 	outcome := runLocalTask(ctx, runner, func(format string, args ...any) {
-		broker.IngestLog(fmt.Sprintf(format, args...))
+		line := fmt.Sprintf(format, args...)
+		broker.IngestLog(line)
+		if stopBeforeFinalization && line == "task request_id="+requestID+" stage=git status=no_changes" {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/tasks/"+requestID+"/stop", nil))
+			if response.Code != http.StatusOK || !stopPersisted {
+				t.Errorf("stop before finalization = %d %s, persisted = %t", response.Code, response.Body.String(), stopPersisted)
+			}
+		}
 	}, "local", requestID, cfg, 0, handle, nil, broker, workspace.Manager{Root: t.TempDir()}, func(string) {
 		accounted = true
+		if stopBeforeFinalization {
+			return
+		}
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/tasks/"+requestID+"/stop", nil))
 		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "task is finalizing") {
@@ -1849,7 +1870,11 @@ func TestRunLocalTaskRejectsStopDuringSuccessfulDiskAccounting(t *testing.T) {
 			t.Error("finalizing task still offers stop or was stopped")
 		}
 	}, false)
-	if !accounted || outcome.State != "no_changes" || outcome.Result.Err != nil {
+	if stopBeforeFinalization {
+		if !accounted || !stopPersisted || !outcome.Result.NoChanges || outcome.State != "stopped" || !errors.Is(outcome.Result.Err, errTaskStoppedByOperator) {
+			t.Fatalf("disk accounting ran = %v, stop persisted = %v, outcome = %+v, want stopped after successful harness result", accounted, stopPersisted, outcome)
+		}
+	} else if !accounted || stopPersisted || outcome.State != "no_changes" || outcome.Result.Err != nil {
 		t.Fatalf("disk accounting ran = %v, outcome = %+v, want successful no-changes result", accounted, outcome)
 	}
 }
@@ -1948,14 +1973,17 @@ func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds, 
 
 func TestRunLocalTaskRetriesRunDirectoryCreationOnFallback(t *testing.T) {
 	t.Run("fallback_available", func(t *testing.T) {
-		testRunLocalTaskRetriesRunDirectoryCreation(t, false)
+		testRunLocalTaskRetriesRunDirectoryCreation(t, syscall.ENOSPC, false)
 	})
 	t.Run("preferred_recovers", func(t *testing.T) {
-		testRunLocalTaskRetriesRunDirectoryCreation(t, true)
+		testRunLocalTaskRetriesRunDirectoryCreation(t, syscall.ENOSPC, true)
+	})
+	t.Run("permission_denied_waits_for_fallback", func(t *testing.T) {
+		testRunLocalTaskRetriesRunDirectoryCreation(t, os.ErrPermission, true)
 	})
 }
 
-func testRunLocalTaskRetriesRunDirectoryCreation(t *testing.T, fallbackFull bool) {
+func testRunLocalTaskRetriesRunDirectoryCreation(t *testing.T, allocationErr error, fallbackFull bool) {
 	t.Helper()
 	ram, disk := t.TempDir(), t.TempDir()
 	t.Setenv("HARNESS_WORKSPACE_RAM_BASE", ram)
@@ -1969,7 +1997,7 @@ func testRunLocalTaskRetriesRunDirectoryCreation(t *testing.T, fallbackFull bool
 		CanExec:    func(string) bool { return true },
 		MkdirAll: func(path string, mode os.FileMode) error {
 			if failAllocation && filepath.Dir(path) == ramRoot {
-				return &os.PathError{Op: "mkdir", Path: path, Err: syscall.ENOSPC}
+				return &os.PathError{Op: "mkdir", Path: path, Err: allocationErr}
 			}
 			return os.MkdirAll(path, mode)
 		},
@@ -1986,8 +2014,8 @@ func testRunLocalTaskRetriesRunDirectoryCreation(t *testing.T, fallbackFull bool
 	taskWorkspace := manager
 	taskWorkspace.Root = ramRoot
 	outcome := runLocalTask(context.Background(), runner, logf, "local", "req-fallback", cfg, 0, nil, nil, broker, taskWorkspace, nil, canRetryTaskWorkspace(manager))
-	if outcome.State != "retry_workspace" || !errors.Is(outcome.Result.Err, syscall.ENOSPC) {
-		t.Fatalf("outcome = %+v, want retry after ENOSPC", outcome)
+	if outcome.State != "retry_workspace" || !errors.Is(outcome.Result.Err, allocationErr) {
+		t.Fatalf("outcome = %+v, want retry after %v", outcome, allocationErr)
 	}
 	if err := broker.CloseTask("req-fallback"); !errors.Is(err, web.ErrTaskNotCompleted) {
 		t.Fatalf("close after failed allocation = %v, want task to remain active", err)
@@ -1996,24 +2024,30 @@ func testRunLocalTaskRetriesRunDirectoryCreation(t *testing.T, fallbackFull bool
 		t.Fatal("pinned workspace should not retry on another root")
 	}
 
-	failAllocation = false
-	preferredSamples := 0
+	permissionDenied := errors.Is(allocationErr, os.ErrPermission)
+	failAllocation = permissionDenied
+	preferredSamples, fallbackSamples := 0, 0
 	controller := localruntime.NewAdaptiveScheduler(localruntime.SchedulerConfig{MaxParallel: 1, SampleIntervalMS: 250}, logf,
 		localruntime.WithSchedulerDiskSpace(func(path string) (string, uint64, uint64, error) {
 			if fallbackFull {
 				if path == diskRoot {
-					return path, 0, workspace.MinimumFreeBytes, nil
+					fallbackSamples++
+					if !permissionDenied || fallbackSamples == 1 {
+						return path, 0, workspace.MinimumFreeBytes, nil
+					}
 				}
-				preferredSamples++
-				if preferredSamples == 1 {
-					return path, 0, workspace.MinimumFreeBytes, nil
+				if path == ramRoot && !permissionDenied {
+					preferredSamples++
+					if preferredSamples == 1 {
+						return path, 0, workspace.MinimumFreeBytes, nil
+					}
 				}
 			}
 			return path, workspace.MinimumFreeBytes, workspace.MinimumFreeBytes, nil
 		}),
 	)
 	wantRoot := diskRoot
-	if fallbackFull {
+	if fallbackFull && !permissionDenied {
 		wantRoot = ramRoot
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2021,7 +2055,11 @@ func testRunLocalTaskRetriesRunDirectoryCreation(t *testing.T, fallbackFull bool
 	if fallbackFull {
 		controller.Start(ctx)
 	}
-	root, release, err := controller.AcquireWorkspace(ctx, "req-fallback", localruntime.TaskDiskRequest{Workspace: manager, RetryRoot: ramRoot}, false)
+	request := localruntime.TaskDiskRequest{Workspace: manager, RetryRoot: ramRoot}
+	if permissionDenied {
+		request.PermissionDeniedRoot = ramRoot
+	}
+	root, release, err := controller.AcquireWorkspace(ctx, "req-fallback", request, false)
 	if err != nil || root != wantRoot {
 		t.Fatalf("retry admission = %q, %v, want %q", root, err, wantRoot)
 	}

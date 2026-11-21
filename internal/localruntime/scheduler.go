@@ -67,6 +67,8 @@ type TaskDiskRequest struct {
 	CleanupOnCompletion bool
 	// RetryRoot is the root whose allocation failed. Try it after other roots.
 	RetryRoot string
+	// PermissionDeniedRoot is excluded from further admission for this task.
+	PermissionDeniedRoot string
 	// RetryAfter delays normal admission after a disk-full allocation failure.
 	RetryAfter time.Time
 }
