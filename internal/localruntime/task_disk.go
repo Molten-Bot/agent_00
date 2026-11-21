@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
@@ -128,7 +129,11 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 	for _, root := range manager.DiskRoots() {
 		manager.Root = root
 		if err := manager.PrepareRoots(); err != nil {
-			setupErr = err
+			if !force && errors.Is(err, syscall.ENOSPC) {
+				blocked = true
+			} else {
+				setupErr = err
+			}
 			continue
 		}
 		path := root

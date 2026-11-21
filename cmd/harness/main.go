@@ -496,6 +496,7 @@ func runServer(args []string) int {
 
 			diskKey := localruntime.TaskDiskKey(runCfg.RepoList())
 			diskRequest := localTaskDiskRequest(runCtx, diskHistory, diskKey)
+			forceFallback := false
 			for {
 				if taskHandle != nil {
 					if waitErr := taskHandle.WaitUntilRunnable(runCtx); waitErr != nil {
@@ -526,7 +527,7 @@ func runServer(args []string) int {
 				}
 
 				settings := signingSettings(activeCfg, runner)
-				forceAcquire := false
+				forceAcquire := forceFallback
 				var workspaceRoot string
 				admission := prepareLocalTaskAdmission(
 					runCtx,
@@ -642,6 +643,7 @@ func runServer(args []string) int {
 				}
 				taskWorkspace := diskRequest.Workspace
 				taskWorkspace.Root = workspaceRoot
+				fallback := fallbackTaskWorkspace(diskRequest.Workspace, workspaceRoot)
 				outcome := runLocalTask(runCtx, taskRunner, daemonLogger, "local", requestID, runCfg, finalReviewPasses, func() bool {
 					if taskHandle == nil {
 						return false
@@ -649,9 +651,16 @@ func runServer(args []string) int {
 					return taskHandle.IsStopped()
 				}, signingSnapshot, monitorBroker, taskWorkspace, func(runDir string) {
 					recordLocalTaskDiskUsage(diskHistory, diskKey, requestID, runDir, daemonLogger)
-				})
+				}, fallback != "")
 				if taskHandle != nil {
 					taskHandle.SetRunning(false)
+				}
+				if outcome.State == "retry_workspace" {
+					release()
+					diskRequest.Workspace.Root = fallback
+					forceFallback = forceAcquire
+					daemonLogger("task status=warn action=retry_workspace_on_fallback request_id=%s err=%q", requestID, outcome.Result.Err)
+					continue
 				}
 
 				issueResult = outcome.Result
@@ -1495,6 +1504,7 @@ func runLocalTask(
 	broker *web.Broker,
 	taskWorkspace workspace.Manager,
 	recordDiskUsage func(string),
+	canRetryWorkspace bool,
 ) localTaskOutcome {
 	logf(
 		"task status=start request_id=%s skill=%s repo=%s repos=%s explicit_terminal=true",
@@ -1506,6 +1516,8 @@ func runLocalTask(
 
 	h := app.New(runner)
 	h.Workspace = taskWorkspace
+	checkoutComplete := false
+	h.OnCheckout = func() { checkoutComplete = true }
 	if broker != nil {
 		h.OnPRTitle = func(url, title string) {
 			broker.RecordTaskPRTitle(requestID, url, title)
@@ -1533,7 +1545,10 @@ func runLocalTask(
 	}
 
 	res := h.Run(ctx, runCfg)
-	if recordDiskUsage != nil {
+	if canRetryWorkspace && ctx.Err() == nil && res.ExitCode == app.ExitWorkspace && res.WorkspaceDir == "" {
+		return localTaskOutcome{State: "retry_workspace", Result: res}
+	}
+	if checkoutComplete && recordDiskUsage != nil {
 		recordDiskUsage(res.WorkspaceDir)
 	}
 	if res.Err != nil && context.Cause(ctx) != nil {

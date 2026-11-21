@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/app"
@@ -1528,6 +1530,7 @@ func TestRunLocalTaskReportsErrorState(t *testing.T) {
 		nil,
 		workspace.NewManager(),
 		nil,
+		false,
 	)
 
 	if outcome.State != "error" {
@@ -1559,6 +1562,7 @@ func TestRunLocalTaskReportsStoppedStateWithoutCancelCause(t *testing.T) {
 		nil,
 		workspace.NewManager(),
 		nil,
+		false,
 	)
 
 	if outcome.State != "stopped" {
@@ -1595,6 +1599,7 @@ func TestRunLocalTaskReportsStoppedStateWithCancelCause(t *testing.T) {
 		nil,
 		workspace.NewManager(),
 		nil,
+		false,
 	)
 
 	if outcome.State != "stopped" {
@@ -1624,6 +1629,7 @@ func TestRunLocalTaskReportsErrorWithSigningSnapshot(t *testing.T) {
 		nil,
 		workspace.NewManager(),
 		nil,
+		false,
 	)
 
 	if outcome.State != "error" {
@@ -1663,12 +1669,27 @@ func TestOpenLocalTaskDiskHistoryPreservesRuntimeConfig(t *testing.T) {
 			if err != nil || string(got) != runtimeConfig {
 				t.Fatalf("runtime config after disk history write = %q, error = %v", got, err)
 			}
+			if configPath != path {
+				if err := localruntime.SaveRuntimeConfigAgentRuntime(configPath, localruntime.InitConfig{}, "codex", ""); err != nil {
+					t.Fatal(err)
+				}
+				if info, err := os.Lstat(configPath); err != nil || info.Mode()&os.ModeSymlink != 0 {
+					t.Fatalf("runtime config should be replaced by a regular file: %v", err)
+				}
+				if err := history.Record("repo", 64); err != nil {
+					t.Fatal(err)
+				}
+				reopened, err := openLocalTaskDiskHistory(configPath)
+				if err != nil || reopened.RequiredBytes("repo") != 64 {
+					t.Fatalf("reopen disk history after replacing config symlink: got %+v, error = %v", reopened, err)
+				}
+			}
 		})
 	}
 
 	t.Run("dangling config symlink", func(t *testing.T) {
 		configPath := filepath.Join(t.TempDir(), "runtime.json")
-		target := configPath + ".task-disk-usage.json"
+		target := filepath.Join(filepath.Dir(configPath), ".runtime.json.task-disk-usage.json")
 		if err := os.Symlink(target, configPath); err != nil {
 			t.Fatal(err)
 		}
@@ -1689,6 +1710,15 @@ func TestOpenLocalTaskDiskHistoryPreservesRuntimeConfig(t *testing.T) {
 }
 
 func TestRunLocalTaskRecordsDiskUsageBeforeTerminalLog(t *testing.T) {
+	for _, checkoutSucceeds := range []bool{false, true} {
+		t.Run(fmt.Sprintf("checkout_succeeds=%t", checkoutSucceeds), func(t *testing.T) {
+			testRunLocalTaskDiskUsageBeforeTerminalLog(t, checkoutSucceeds)
+		})
+	}
+}
+
+func testRunLocalTaskDiskUsageBeforeTerminalLog(t *testing.T, checkoutSucceeds bool) {
+	t.Helper()
 	taskWorkspace := workspace.Manager{Root: t.TempDir()}
 	t.Setenv("CODEX_HOME", t.TempDir())
 	historyPath := filepath.Join(t.TempDir(), "task-disk-usage.json")
@@ -1696,25 +1726,38 @@ func TestRunLocalTaskRecordsDiskUsageBeforeTerminalLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Config{RepoURL: "https://github.com/example/repo", Prompt: "fix tests", AgentHarness: "codex"}
+	cfg := config.Config{
+		RepoURL: "https://github.com/example/repo", Prompt: "fix tests", AgentHarness: "codex",
+		BaseBranch: "main", TargetSubdir: "missing",
+	}
 	key := localruntime.TaskDiskKey(cfg.RepoList())
 	cloneErr := errors.New("test clone failure")
 	runner := repairPRRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 		if cmd.Name == "git" && len(cmd.Args) > 0 && cmd.Args[0] == "clone" {
-			runDir := filepath.Dir(cmd.Args[len(cmd.Args)-1])
+			repoDir := cmd.Args[len(cmd.Args)-1]
+			runDir := filepath.Dir(repoDir)
 			if err := os.WriteFile(filepath.Join(runDir, "payload"), []byte("workspace data"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			return execx.Result{}, cloneErr
+			if !checkoutSucceeds {
+				return execx.Result{}, cloneErr
+			}
+			if err := os.MkdirAll(repoDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
 		}
 		return execx.Result{}, nil
 	})
 	broker := web.NewBroker()
 	var sawStageError, sawTerminalError bool
+	stage := "clone"
+	if checkoutSucceeds {
+		stage = "config"
+	}
 	logf := func(format string, args ...any) {
 		line := fmt.Sprintf(format, args...)
 		broker.IngestLog(line)
-		if strings.HasPrefix(line, "task request_id=req-disk stage=clone status=error") {
+		if strings.HasPrefix(line, "task request_id=req-disk stage="+stage+" status=error") {
 			sawStageError = true
 			if err := broker.CloseTask("req-disk"); !errors.Is(err, web.ErrTaskNotCompleted) {
 				t.Errorf("close at stage error = %v, want task to remain active", err)
@@ -1728,8 +1771,12 @@ func TestRunLocalTaskRecordsDiskUsageBeforeTerminalLog(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if recorded.RequiredBytes(key) == 0 {
-			t.Error("terminal log published before disk usage was saved")
+		if got := recorded.RequiredBytes(key); (got > 0) != checkoutSucceeds {
+			t.Errorf("disk history at terminal log = %d, checkout succeeded = %t", got, checkoutSucceeds)
+		}
+		request := localTaskDiskRequest(context.Background(), recorded, key)
+		if got := request.RequiredBytes(); !checkoutSucceeds && got != workspace.MinimumFreeBytes {
+			t.Errorf("reservation after failed checkout = %d, want %d", got, workspace.MinimumFreeBytes)
 		}
 		if err := broker.CloseTask("req-disk"); err != nil {
 			t.Errorf("close at terminal error: %v", err)
@@ -1737,12 +1784,70 @@ func TestRunLocalTaskRecordsDiskUsageBeforeTerminalLog(t *testing.T) {
 	}
 	outcome := runLocalTask(context.Background(), runner, logf, "local", "req-disk", cfg, 0, nil, nil, broker, taskWorkspace, func(runDir string) {
 		recordLocalTaskDiskUsage(history, key, "req-disk", runDir, logf)
-	})
-	if outcome.State != "error" || !errors.Is(outcome.Result.Err, cloneErr) {
+	}, false)
+	if outcome.State != "error" {
+		t.Fatalf("outcome = %+v, want error", outcome)
+	}
+	if !checkoutSucceeds && !errors.Is(outcome.Result.Err, cloneErr) {
 		t.Fatalf("outcome = %+v, want clone failure", outcome)
 	}
 	if !sawStageError || !sawTerminalError {
 		t.Fatalf("saw stage error = %v, terminal error = %v, want both", sawStageError, sawTerminalError)
+	}
+}
+
+func TestRunLocalTaskRetriesRunDirectoryCreationOnFallback(t *testing.T) {
+	ram, disk := t.TempDir(), t.TempDir()
+	t.Setenv("HARNESS_WORKSPACE_RAM_BASE", ram)
+	t.Setenv("HARNESS_WORKSPACE_DISK_BASE", disk)
+	t.Setenv("HARNESS_WORKSPACE_ROOT_NAME", "workspaces")
+	t.Setenv("CODEX_HOME", t.TempDir())
+	ramRoot, diskRoot := filepath.Join(ram, "workspaces"), filepath.Join(disk, "workspaces")
+	manager := workspace.Manager{
+		PathExists: func(string) bool { return true },
+		CanExec:    func(string) bool { return true },
+		MkdirAll: func(path string, mode os.FileMode) error {
+			if filepath.Dir(path) == ramRoot {
+				return &os.PathError{Op: "mkdir", Path: path, Err: syscall.ENOSPC}
+			}
+			return os.MkdirAll(path, mode)
+		},
+	}
+	cfg := config.Config{
+		RepoURL: "https://github.com/example/repo", Prompt: "fix tests", AgentHarness: "codex",
+		BaseBranch: "main", TargetSubdir: "missing",
+	}
+	runner := repairPRRunner(func(context.Context, execx.Command) (execx.Result, error) {
+		return execx.Result{}, nil
+	})
+	broker := web.NewBroker()
+	logf := func(format string, args ...any) { broker.IngestLog(fmt.Sprintf(format, args...)) }
+	taskWorkspace := manager
+	taskWorkspace.Root = ramRoot
+	fallback := fallbackTaskWorkspace(manager, ramRoot)
+	outcome := runLocalTask(context.Background(), runner, logf, "local", "req-fallback", cfg, 0, nil, nil, broker, taskWorkspace, nil, fallback != "")
+	if outcome.State != "retry_workspace" || !errors.Is(outcome.Result.Err, syscall.ENOSPC) || fallback != diskRoot {
+		t.Fatalf("outcome = %+v, fallback = %q, want retry on %q", outcome, fallback, diskRoot)
+	}
+	if err := broker.CloseTask("req-fallback"); !errors.Is(err, web.ErrTaskNotCompleted) {
+		t.Fatalf("close after failed allocation = %v, want task to remain active", err)
+	}
+	if got := fallbackTaskWorkspace(taskWorkspace, ramRoot); got != "" {
+		t.Fatalf("pinned workspace fallback = %q, want none", got)
+	}
+
+	controller := localruntime.NewAdaptiveScheduler(localruntime.SchedulerConfig{MaxParallel: 1}, logf)
+	taskWorkspace.Root = fallback
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	root, release, err := controller.AcquireWorkspace(ctx, "req-fallback", localruntime.TaskDiskRequest{Workspace: taskWorkspace}, false)
+	if err != nil || root != diskRoot {
+		t.Fatalf("fallback admission = %q, %v, want %q", root, err, diskRoot)
+	}
+	defer release()
+	outcome = runLocalTask(ctx, runner, logf, "local", "req-fallback", cfg, 0, nil, nil, broker, taskWorkspace, nil, false)
+	if filepath.Dir(outcome.Result.WorkspaceDir) != diskRoot {
+		t.Fatalf("retry workspace = %q, want directory under %q", outcome.Result.WorkspaceDir, diskRoot)
 	}
 }
 

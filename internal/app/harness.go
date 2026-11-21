@@ -190,6 +190,8 @@ type agentInvocationLogMetadata struct {
 type Harness struct {
 	// OnStep reports semantic progress, never command output or heartbeats.
 	OnStep func(string)
+	// OnCheckout reports that all repositories have been checked out successfully.
+	OnCheckout func()
 	// OnPRTitle reports the title after PR creation, creation recovery, or a title update.
 	OnPRTitle            func(url, title string)
 	ResumeIssueWorkspace bool
@@ -391,6 +393,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 			err = errors.Join(ErrPRFeedbackTarget, err)
 		}
 		return h.fail(ExitClone, "clone", err, runDir)
+	}
+	if h.OnCheckout != nil {
+		h.OnCheckout()
 	}
 	if err := h.validateRequiredNonDefaultBranches(ctx, runCfg, repos); err != nil {
 		return h.fail(ExitGit, "git", err, runDir)

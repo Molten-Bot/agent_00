@@ -13,14 +13,38 @@ import (
 
 func openLocalTaskDiskHistory(configPath string) (*localruntime.TaskDiskHistory, error) {
 	configPath = filepath.Clean(configPath)
+	// Runtime config writes can replace its symlink. Keep the sidecar named
+	// after the configured path so those writes don't change its location.
+	historyName := "." + filepath.Base(configPath) + ".task-disk-usage.json"
+	historyPath := filepath.Join(filepath.Dir(configPath), historyName)
 	resolved, err := filepath.EvalSymlinks(configPath)
 	if err == nil {
-		configPath = resolved
+		if dir, dirErr := filepath.EvalSymlinks(filepath.Dir(configPath)); dirErr == nil && resolved == filepath.Join(dir, historyName) {
+			history, _ := localruntime.OpenTaskDiskHistory("")
+			return history, fmt.Errorf("disk history path is the runtime config symlink target")
+		}
 	} else if _, statErr := os.Lstat(configPath); !errors.Is(statErr, os.ErrNotExist) {
 		history, _ := localruntime.OpenTaskDiskHistory("")
 		return history, fmt.Errorf("resolve runtime config path for disk history: %w", err)
 	}
-	return localruntime.OpenTaskDiskHistory(configPath + ".task-disk-usage.json")
+	if info, err := os.Lstat(historyPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		history, _ := localruntime.OpenTaskDiskHistory("")
+		return history, fmt.Errorf("disk history path is a symlink")
+	}
+	return localruntime.OpenTaskDiskHistory(historyPath)
+}
+
+func fallbackTaskWorkspace(manager workspace.Manager, root string) string {
+	if manager.Root != "" || root == "" {
+		return ""
+	}
+	// DiskRoots always ends with the configured disk root for an unpinned manager.
+	manager.CheckSpace = nil
+	roots := manager.DiskRoots()
+	if fallback := roots[len(roots)-1]; fallback != root {
+		return fallback
+	}
+	return ""
 }
 
 func (w *issueRepairWork) workspaceDir() string {

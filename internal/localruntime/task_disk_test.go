@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -215,6 +216,45 @@ func TestAdaptiveSchedulerReportsWorkspaceSetupFailure(t *testing.T) {
 		if release != nil || !errors.Is(err, os.ErrPermission) {
 			t.Fatalf("force=%v: acquisition error = %v, want %v", force, err, os.ErrPermission)
 		}
+	}
+}
+
+func TestAdaptiveSchedulerQueuesWhenWorkspaceRootIsOutOfSpace(t *testing.T) {
+	t.Parallel()
+
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
+	controller.sample = staticSample{}
+	controller.diskSpace = func(string) (string, uint64, error) {
+		return "disk", workspace.MinimumFreeBytes, nil
+	}
+	root := filepath.Join(t.TempDir(), "workspaces")
+	full := true
+	request := TaskDiskRequest{Workspace: workspace.Manager{
+		Root: root,
+		MkdirAll: func(path string, mode os.FileMode) error {
+			if full {
+				return &os.PathError{Op: "mkdir", Path: path, Err: syscall.ENOSPC}
+			}
+			return os.MkdirAll(path, mode)
+		},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, release, err := controller.AcquireWorkspace(ctx, "full-root", request, false)
+		if err == nil {
+			release()
+		}
+		done <- err
+	}()
+	waitForQueuedRequest(t, controller, "full-root")
+	controller.mu.Lock()
+	full = false
+	controller.mu.Unlock()
+	controller.sampleAndUpdate()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
