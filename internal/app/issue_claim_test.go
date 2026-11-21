@@ -20,9 +20,26 @@ func (f issueBranchRunner) Run(ctx context.Context, cmd execx.Command) (execx.Re
 
 func TestClaimedIssueClonesReservedBranchWithoutCreatingAnother(t *testing.T) {
 	t.Parallel()
+	for _, scenario := range []struct {
+		name     string
+		sync     bool
+		conflict bool
+	}{
+		{name: "ordinary attempt"},
+		{name: "explicit retry", sync: true},
+		{name: "conflicting explicit retry", sync: true, conflict: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			testClaimedIssueCheckout(t, scenario.sync, scenario.conflict)
+		})
+	}
+}
+
+func testClaimedIssueCheckout(t *testing.T, sync, conflict bool) {
+	t.Helper()
 	cfg := sampleConfig()
-	cfg.GitHubIssue = &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17", Claim: &config.GitHubIssueClaim{ID: "claim", Branch: "agent00-issue-17", BaseBranch: "main", ExclusionLabel: "claimed", Attempt: 2}}
-	cloned, baseFetched, agentStarted := false, false, false
+	cfg.GitHubIssue = &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17", Claim: &config.GitHubIssueClaim{ID: "claim", Branch: "agent00-issue-17", BaseBranch: "main", ExclusionLabel: "claimed", Attempt: 2, SyncBaseOnRetry: sync}}
+	cloned, baseFetched, merged, aborted, agentStarted := false, false, false, false, false
 	runner := issueBranchRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 		args := strings.Join(cmd.Args, " ")
 		if cmd.Name == "git" {
@@ -36,6 +53,16 @@ func TestClaimedIssueClonesReservedBranchWithoutCreatingAnother(t *testing.T) {
 				t.Fatalf("claimed branch must not be created, reset, or renamed: %s", args)
 			case strings.Contains(args, "fetch origin main:refs/remotes/origin/main"):
 				baseFetched = true
+			case args == "merge --no-edit refs/remotes/origin/main":
+				if !cloned || !baseFetched || agentStarted {
+					t.Fatal("base merge must follow clone and fetch, before agent starts")
+				}
+				merged = true
+				if conflict {
+					return execx.Result{Stderr: "Automatic merge failed; fix conflicts and then commit the result."}, errors.New("exit status 1")
+				}
+			case args == "merge --abort":
+				aborted = true
 			case strings.Contains(args, "ls-remote --symref"):
 				return execx.Result{Stdout: "ref: refs/heads/main\tHEAD\nbase\tHEAD\n"}, nil
 			case strings.Contains(args, "branch --show-current"):
@@ -54,8 +81,12 @@ func TestClaimedIssueClonesReservedBranchWithoutCreatingAnother(t *testing.T) {
 	h.Workspace = testWorkspaceManager("issue-claim-branch")
 	h.TargetDirOK = func(string) bool { return true }
 	result := h.Run(context.Background(), cfg)
-	if !cloned || !baseFetched || !agentStarted || result.ExitCode != ExitCodex {
-		t.Fatalf("clone/base/agent=%t/%t/%t result=%+v", cloned, baseFetched, agentStarted, result)
+	wantExit := ExitCodex
+	if conflict {
+		wantExit = ExitGit
+	}
+	if !cloned || !baseFetched || merged != sync || aborted != conflict || agentStarted == conflict || result.ExitCode != wantExit {
+		t.Fatalf("clone=%t fetch=%t merge=%t abort=%t agent=%t result=%+v", cloned, baseFetched, merged, aborted, agentStarted, result)
 	}
 }
 
@@ -111,7 +142,7 @@ func TestClaimedIssuePreservesExistingCheckout(t *testing.T) {
 func TestClaimedIssuePublishesPendingWorkBeforeAgentRerun(t *testing.T) {
 	t.Parallel()
 	cfg := sampleConfig()
-	cfg.GitHubIssue = &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17", Claim: &config.GitHubIssueClaim{ID: "claim", Branch: "agent00-issue-17", BaseBranch: "main", ExclusionLabel: "claimed", Attempt: 2}}
+	cfg.GitHubIssue = &config.GitHubIssueConfig{Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17", Claim: &config.GitHubIssueClaim{ID: "claim", Branch: "agent00-issue-17", BaseBranch: "main", ExclusionLabel: "claimed", Attempt: 2, SyncBaseOnRetry: true}}
 	publishing, agentStarted := false, false
 	runner := issueBranchRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 		args := strings.Join(cmd.Args, " ")
@@ -129,6 +160,8 @@ func TestClaimedIssuePublishesPendingWorkBeforeAgentRerun(t *testing.T) {
 				return execx.Result{Stdout: "existing\trefs/heads/agent00-issue-17\n"}, nil
 			case strings.Contains(args, "status --porcelain"):
 				return execx.Result{Stdout: "## agent00-issue-17\n M app.go\n"}, nil
+			case strings.HasPrefix(args, "merge "):
+				t.Fatal("pending work must be committed before syncing the base")
 			case strings.Contains(args, "add -A"):
 				publishing = true
 				return execx.Result{}, errors.New("stop at publication")

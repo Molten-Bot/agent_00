@@ -194,6 +194,11 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if err != nil {
 		return err
 	}
+	// Older attempts stored the terminal diagnostic in Error. Preserve it
+	// before reconciliation can replace Error with an operational failure.
+	if record.Outcome != "" && record.OutcomeError == "" {
+		record.OutcomeError = record.Error
+	}
 	if stopped, err := localruntime.IssueProcessesStopped(record); err != nil || !stopped {
 		record.State = "waiting_for_worker"
 		record.Error = "worker descendants may still be running; issue remains locked"
@@ -254,6 +259,12 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	}
 	if record.Outcome != "" && record.Incident == "" {
 		record.Incident = "missing_pr"
+	}
+	if record.Outcome == "error" && record.Control == "" && failurefollowup.IsUnmergedPullRequestBlocker(errors.New(record.OutcomeError)) {
+		record.State = "blocked"
+		record.Error = "required pull request is unmerged; retry explicitly after it merges"
+		record.NextAttemptAt = time.Time{}
+		return s.IssueClaims.Save(record)
 	}
 	if s.IssueRepair != nil && record.RepairRequestID == "" && repairableIssueIncident(record) {
 		id, repairErr := s.IssueRepair(ctx, record)
@@ -412,6 +423,9 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 			current.RepairRequestID = record.RepairRequestID
 		}
 		current.RepairError = record.RepairError
+		if current.OutcomeError == "" {
+			current.OutcomeError = record.OutcomeError
+		}
 		current.Error = cause.Error()
 		current.Failures++
 		current.NextAttemptAt = time.Now().Add(issueRetryDelay(*current, s.IssueRecovery.Defaults()))

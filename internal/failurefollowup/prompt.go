@@ -167,6 +167,8 @@ var (
 
 	// Prompt-derived branch slugs; see slug.BranchName.
 	branchSlugPattern = regexp.MustCompile(`(?i)\bagent00-[A-Za-z0-9._-]+`)
+
+	unmergedPullRequestPattern = regexp.MustCompile(`\b(not |no longer )?blocked by (?:an? |the )?unmerged (?:#\d+\b|(?:pr|pull request)\b)`)
 )
 
 // RedactFailureDetail strips customer-derived identifiers out of a failed run's
@@ -390,12 +392,37 @@ func NonRemediableFailureReason(err error) string {
 	if isMissingRemoteBranchFailure(text) {
 		return missingRemoteBranchReason
 	}
+	if IsUnmergedPullRequestBlocker(err) {
+		return "required pull request is unmerged"
+	}
 	for _, marker := range nonRemediableFailureMarkers {
 		if strings.Contains(text, marker) {
 			return marker
 		}
 	}
 	return NonRemediableRepoAccessReason(err)
+}
+
+// IsUnmergedPullRequestBlocker recognizes an explicit prerequisite in an
+// agent's failure summary. Diagnostic details can quote the same language
+// while describing an unrelated failure.
+func IsUnmergedPullRequestBlocker(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.Join(strings.Fields(strings.ToLower(err.Error())), " ")
+	for _, agent := range []string{"codex", "claude"} {
+		if report, ok := strings.CutPrefix(text, agent+": "+agent+" reported failure: failure: "); ok {
+			summary, _, _ := strings.Cut(report, " error details:")
+			for _, match := range unmergedPullRequestPattern.FindAllStringSubmatch(summary, -1) {
+				if match[1] == "" {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return false
 }
 
 func isMissingRemoteBranchFailure(text string) bool {

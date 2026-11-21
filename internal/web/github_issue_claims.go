@@ -842,7 +842,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	if automatic && !previous.LabelAdded && githubIssueHasAnyLabel(issue, []string{exclusion}) {
 		return "", 409, fmt.Errorf("issue was excluded after its worker stopped")
 	}
-	claim := &config.GitHubIssueClaim{ID: newIssueClaimID(), Branch: branch, BaseBranch: base, ExclusionLabel: exclusion, Attempt: remote.Claim.Attempt + 1}
+	claim := &config.GitHubIssueClaim{ID: newIssueClaimID(), Branch: branch, BaseBranch: base, ExclusionLabel: exclusion, Attempt: remote.Claim.Attempt + 1, SyncBaseOnRetry: !automatic}
 	// Copy rather than mutating a stored config's issue pointer.
 	runIssue := *run.GitHubIssue
 	run.GitHubIssue = &runIssue

@@ -319,6 +319,54 @@ func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryBlocksUnmergedPrerequisiteAfterUnlockRetry(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, f := recoveryServer(t)
+	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
+		t.Error("external prerequisite queued an agent_00 repair")
+		return "", nil
+	}
+	s.pollGitHubIssueAutoStart(ctx)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.Error = "codex: codex reported failure: Failure: Upgrade blocked by unmerged #42. Error details: Required interface is pending."
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	f.deleteError = true
+	if err := s.ReconcileIssueWork(ctx); err == nil {
+		t.Fatal("unlock failure hidden")
+	}
+	if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.NextAttemptAt = time.Now().Add(-time.Second)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.deleteError = false
+	for range 2 {
+		if err := s.ReconcileIssueWork(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := latestRecoveryRecord(t, s)
+	if len(f.submissions) != 1 || got.State != "blocked" || got.LabelAdded || got.OutcomeError != record.Error || !strings.Contains(got.Error, "retry explicitly") {
+		t.Fatalf("unexpected recovery result: state=%s label=%t submissions=%d error=%q outcomeError=%q", got.State, got.LabelAdded, len(f.submissions), got.Error, got.OutcomeError)
+	}
+	resp := httptest.NewRecorder()
+	s.Handler().ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/api/github/automation", nil))
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), got.Error) {
+		t.Fatalf("automation status did not expose the blocker: %d %s", resp.Code, resp.Body)
+	}
+	retry := retryIssue(t, s, record.ID, true)
+	if retry.Code != http.StatusAccepted || len(f.submissions) != 2 {
+		t.Fatalf("explicit recovery failed: status=%d submissions=%d body=%s", retry.Code, len(f.submissions), retry.Body)
+	}
+	if !f.submissions[1].GitHubIssue.Claim.SyncBaseOnRetry {
+		t.Fatal("explicit recovery did not request a base sync")
+	}
+}
+
 func TestIssueRecoveryBudgetStopAndNoChangeDoNotRerun(t *testing.T) {
 	t.Parallel()
 	for _, outcome := range []string{"error", "stopped", "no_changes"} {

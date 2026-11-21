@@ -81,11 +81,12 @@ type GitHubIssueConfig struct {
 // GitHubIssueClaim pins an issue task to its reserved remote branch. The claim
 // ID identifies durable admission state; it is not an authentication secret.
 type GitHubIssueClaim struct {
-	ID             string `json:"id"`
-	Branch         string `json:"branch"`
-	BaseBranch     string `json:"baseBranch"`
-	ExclusionLabel string `json:"exclusionLabel"`
-	Attempt        int    `json:"attempt"`
+	ID              string `json:"id"`
+	Branch          string `json:"branch"`
+	BaseBranch      string `json:"baseBranch"`
+	ExclusionLabel  string `json:"exclusionLabel"`
+	Attempt         int    `json:"attempt"`
+	SyncBaseOnRetry bool   `json:"syncBaseOnRetry,omitempty"`
 }
 
 const (

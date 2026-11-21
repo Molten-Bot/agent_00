@@ -2095,7 +2095,9 @@ func failureFollowUpPrompt(logPaths []string, failedResult app.Result, failedRun
 func failureFollowUpFailureContext(failedResult app.Result, failedRunCfg config.Config) string {
 	lines := []string{
 		"Observed failure context:",
-		fmt.Sprintf("- exit_code=%d", failedResult.ExitCode),
+	}
+	if failedResult.ExitCode != app.ExitSuccess {
+		lines = append(lines, fmt.Sprintf("- exit_code=%d", failedResult.ExitCode))
 	}
 	if failedResult.Err != nil {
 		if detail := failurefollowup.RedactFailureDetail(failedResult.Err.Error()); detail != "" {
