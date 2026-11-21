@@ -85,6 +85,7 @@ func Download(ctx context.Context, assets []Asset, dir, token string, transport 
 // Preview opens an attachment using only the requesting viewer's optional
 // GitHub token. The caller must close the returned body. Video streams can
 // report a size limit or upstream read error after delivering partial data.
+// Their bodies expose ContentLength() int64, which returns -1 if unknown.
 func Preview(ctx context.Context, asset Asset, viewerToken string, transport http.RoundTripper) (io.ReadCloser, string, error) {
 	u, err := url.Parse(asset.URL)
 	if err != nil || !allowedAttachment(u) {
@@ -149,7 +150,7 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 	}
 	if strings.HasPrefix(mediaType, "video/") {
 		closeBody = false
-		return &videoPreviewBody{body: io.LimitedReader{R: body, N: maxVideoPreviewBytes}, Closer: resp.Body}, mediaType, nil
+		return &videoPreviewBody{body: io.LimitedReader{R: body, N: maxVideoPreviewBytes}, length: resp.ContentLength, Closer: resp.Body}, mediaType, nil
 	}
 	data, err := readAttachment(body, resp.ContentLength, MaxFileBytes)
 	if err != nil {
@@ -167,9 +168,12 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 }
 
 type videoPreviewBody struct {
-	body io.LimitedReader
+	body   io.LimitedReader
+	length int64
 	io.Closer
 }
+
+func (b *videoPreviewBody) ContentLength() int64 { return b.length }
 
 func (b *videoPreviewBody) Read(p []byte) (int, error) {
 	if len(p) == 0 {

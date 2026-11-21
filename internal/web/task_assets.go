@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
@@ -88,10 +89,62 @@ func (s Server) handleTaskAssetPreview(w http.ResponseWriter, r *http.Request, r
 	if flusher, ok := w.(http.Flusher); ok && isVideo {
 		dst = taskVideoWriter{ResponseWriter: w, Flusher: flusher}
 	}
+	if video, ok := body.(interface{ ContentLength() int64 }); ok && video.ContentLength() > 0 {
+		size := video.ContentLength()
+		w.Header().Set("Accept-Ranges", "bytes")
+		// Serve one range from the forward-only stream. Without validators,
+		// an If-Range request always falls back to the full response.
+		if spec, ok := strings.CutPrefix(r.Header.Get("Range"), "bytes="); ok && !strings.Contains(spec, ",") && r.Header.Get("If-Range") == "" {
+			start, end, ok := taskVideoByteRange(spec, size)
+			if !ok {
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", size))
+				http.Error(w, "Invalid byte range.", http.StatusRequestedRangeNotSatisfiable)
+				return
+			}
+			if _, err := io.CopyN(io.Discard, body, start); err != nil {
+				panic(http.ErrAbortHandler)
+			}
+			length := end - start + 1
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, size))
+			w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
+			w.WriteHeader(http.StatusPartialContent)
+			if _, err := io.CopyN(dst, body, length); err != nil {
+				panic(http.ErrAbortHandler)
+			}
+			return
+		}
+	}
 	if _, err := io.Copy(dst, body); err != nil {
 		// Abort so the client sees a failed stream even if headers were already sent.
 		panic(http.ErrAbortHandler)
 	}
+}
+
+func taskVideoByteRange(spec string, size int64) (start, end int64, ok bool) {
+	first, last, found := strings.Cut(strings.TrimSpace(spec), "-")
+	if !found {
+		return 0, 0, false
+	}
+	end = size - 1
+	if first == "" {
+		suffix, err := strconv.ParseInt(last, 10, 64)
+		if err != nil || suffix <= 0 {
+			return 0, 0, false
+		}
+		return size - min(suffix, size), end, true
+	}
+	start, err := strconv.ParseInt(first, 10, 64)
+	if err != nil || start < 0 || start >= size {
+		return 0, 0, false
+	}
+	if last != "" {
+		lastByte, err := strconv.ParseInt(last, 10, 64)
+		if err != nil || lastByte < start {
+			return 0, 0, false
+		}
+		end = min(lastByte, end)
+	}
+	return start, end, true
 }
 
 func taskAssetVideoID(assetURL string) string {

@@ -298,6 +298,7 @@ func TestTaskAssetPreviewStreamsVideo(t *testing.T) {
 				t.Fatal(err)
 			}
 			req.Header.Set("X-Task-Asset-URL", url.PathEscape(assetURL))
+			req.Header.Set("Range", "bytes=0-1")
 			resp, err := ts.Client().Do(req)
 			if err != nil {
 				t.Fatal(err)
@@ -306,6 +307,9 @@ func TestTaskAssetPreviewStreamsVideo(t *testing.T) {
 			if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "video/mp4" || resp.Header.Get("Cache-Control") != "no-store" {
 				t.Fatalf("unexpected video response: status = %d, headers = %v", resp.StatusCode, resp.Header)
 			}
+			if resp.Header.Get("Accept-Ranges") != "" || resp.Header.Get("Content-Range") != "" {
+				t.Fatalf("unknown-length stream advertised range support: %v", resp.Header)
+			}
 			data := make([]byte, len(prefix))
 			if _, err := io.ReadFull(resp.Body, data); err != nil || string(data) != prefix {
 				t.Fatalf("first video bytes were not delivered before upstream EOF: %v", err)
@@ -313,6 +317,62 @@ func TestTaskAssetPreviewStreamsVideo(t *testing.T) {
 			finish.CloseWithError(tc.upstreamErr)
 			if _, err := io.Copy(io.Discard, resp.Body); (err != nil) != (tc.upstreamErr != nil) {
 				t.Fatalf("client read error = %v, upstream read error = %v", err, tc.upstreamErr)
+			}
+		})
+	}
+}
+
+func TestTaskAssetPreviewVideoRanges(t *testing.T) {
+	t.Parallel()
+	const assetURL = "https://github.com/user-attachments/assets/video"
+	const data = "\x00\x00\x00\x14ftypmp42\x00\x00\x00\x00mp42video payload"
+	srv := githubIssueTestServer(nil, true)
+	srv.Broker.RecordTaskRunConfig("req-video", []byte(fmt.Sprintf(`{"assets":[{"url":%q}]}`, assetURL)))
+	srv.assetTransport = taskAssetTransportFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, ContentLength: int64(len(data)), Body: io.NopCloser(strings.NewReader(data))}, nil
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	for _, tc := range []struct {
+		name, rangeHeader, ifRange, contentRange, body string
+		status                                         int
+	}{
+		{"Safari probe", "bytes=0-1", "", "bytes 0-1/33", data[:2], http.StatusPartialContent},
+		{"open end", "bytes=20-", "", "bytes 20-32/33", data[20:], http.StatusPartialContent},
+		{"suffix", "bytes=-7", "", "bytes 26-32/33", data[26:], http.StatusPartialContent},
+		{"clamped end", "bytes=30-99", "", "bytes 30-32/33", data[30:], http.StatusPartialContent},
+		{"unsatisfiable", "bytes=33-", "", "bytes */33", "", http.StatusRequestedRangeNotSatisfiable},
+		{"no range", "", "", "", data, http.StatusOK},
+		{"unmatched validator", "bytes=0-1", `"old"`, "", data, http.StatusOK},
+		{"multiple ranges", "bytes=0-1,4-5", "", "", data, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/tasks/req-video/asset-preview?video="+taskAssetVideoID(assetURL), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Range", tc.rangeHeader)
+			req.Header.Set("If-Range", tc.ifRange)
+			resp, err := ts.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != tc.status || resp.Header.Get("Content-Range") != tc.contentRange {
+				t.Fatalf("got status %d and Content-Range %q, want %d and %q", resp.StatusCode, resp.Header.Get("Content-Range"), tc.status, tc.contentRange)
+			}
+			if resp.Header.Get("Cache-Control") != "no-store" || resp.Header.Get("Accept-Ranges") != "bytes" {
+				t.Fatalf("unexpected preview headers: %v", resp.Header)
+			}
+			if tc.status == http.StatusRequestedRangeNotSatisfiable {
+				return
+			}
+			if resp.Header.Get("Content-Type") != "video/mp4" || tc.status == http.StatusPartialContent && resp.ContentLength != int64(len(tc.body)) {
+				t.Fatalf("unexpected video headers: %v", resp.Header)
+			}
+			body, err := io.ReadAll(resp.Body)
+			if err != nil || string(body) != tc.body {
+				t.Fatalf("got body %q and error %v, want %q", body, err, tc.body)
 			}
 		})
 	}
