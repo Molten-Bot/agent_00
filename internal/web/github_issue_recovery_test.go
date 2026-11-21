@@ -738,3 +738,28 @@ func TestIssueRecoveryKeepsPausedAndUncertainWorkersBlocked(t *testing.T) {
 		})
 	}
 }
+
+func TestIssueRecoveryDoesNotRepairDiskExhaustionAfterStatusChanges(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(context.Background())
+	record := completeRecoveryRecord(t, s, "error", 3)
+	record.RunError = "git: write failed: no space left on device"
+	record.Error = "agent retry budget exhausted; explicit retry required"
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
+		t.Fatal("disk exhaustion queued an application repair after its status changed")
+		return "", nil
+	}
+	for range 2 {
+		if err := s.ReconcileIssueWork(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.State != "blocked" || got.FailureDetail() != record.RunError || len(f.submissions) != 1 {
+		t.Fatalf("state=%s failure=%q submissions=%d", got.State, got.FailureDetail(), len(f.submissions))
+	}
+}
