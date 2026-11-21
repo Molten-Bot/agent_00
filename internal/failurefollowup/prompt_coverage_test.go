@@ -106,6 +106,24 @@ func TestNonRemediableFailureReasonRecognizesQuotaAndAllowsNoDelta(t *testing.T)
 	}
 }
 
+func TestNonRemediableFailureReasonForUnmergedPrerequisite(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		report string
+		want   string
+	}{
+		{"codex: codex reported failure: Failure: Rollout blocked by unmerged #42. Error details: Base lacks required changes.", "required pull request is unmerged"},
+		{"claude: claude reported failure: Failure: Upgrade blocked by an unmerged pull request.\nError details: New API is pending.", "required pull request is unmerged"},
+		{"codex: codex reported failure: Failure: Importer regression. Error details: The fixture says blocked by unmerged #42.", ""},
+		{"codex: codex reported failure: Failure: Importer is not blocked by unmerged PR #42. Error details: Code panics on startup.", ""},
+		{"clone: blocked by unmerged #42", ""},
+	} {
+		if got := NonRemediableFailureReason(errors.New(tc.report)); got != tc.want {
+			t.Errorf("NonRemediableFailureReason(%q) = %q, want %q", tc.report, got, tc.want)
+		}
+	}
+}
+
 func TestInfrastructureFailureDoesNotSpawnAnotherCodingTask(t *testing.T) {
 	for _, message := range []string{"clone: No space left on device", "workspace storage /mnt has only 0 MiB free", "bwrap: No permissions to create a new namespace", "Sandbox namespace creation denied"} {
 		if NonRemediableFailureReason(errors.New(message)) == "" {

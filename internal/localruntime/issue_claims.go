@@ -28,6 +28,8 @@ type IssueClaimRecord struct {
 	Run              config.Config `json:"run"`
 	State            string        `json:"state,omitempty"`
 	Outcome          string        `json:"outcome,omitempty"`
+	OutcomeError     string        `json:"outcomeError,omitempty"`
+	ExitCode         int           `json:"exitCode,omitempty"`
 	Step             string        `json:"step,omitempty"`
 	StepStartedAt    time.Time     `json:"stepStartedAt,omitempty"`
 	StartedAt        time.Time     `json:"startedAt,omitempty"`

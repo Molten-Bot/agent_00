@@ -115,6 +115,7 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 	}
 	return e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
 		record.Outcome = state
+		record.ExitCode = result.ExitCode
 		record.State = "verifying"
 		record.StoppedAt = time.Now().UTC()
 		record.UnlockPending = record.LabelAdded
@@ -127,6 +128,7 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
 			record.Error = cause.Error()
 		}
+		record.OutcomeError = record.Error
 		if state != "completed" {
 			record.Incident = "missing_pr"
 		}
