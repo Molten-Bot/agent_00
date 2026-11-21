@@ -193,10 +193,15 @@ type Harness struct {
 	// OnPRTitle reports the title after PR creation, creation recovery, or a title update.
 	OnPRTitle            func(url, title string)
 	ResumeIssueWorkspace bool
-	Signing              *gitsigning.Snapshot
-	LoadSigning          func(context.Context) (*gitsigning.Snapshot, error)
-	signingHistory       map[string]map[string]bool
-	Runner               execx.Runner
+	// IssuePublicationReady records that a prior attempt accepted the agent result.
+	IssuePublicationReady bool
+	// SaveIssuePublicationReady checkpoints agent acceptance before publication.
+	SaveIssuePublicationReady func(bool) error
+
+	Signing        *gitsigning.Snapshot
+	LoadSigning    func(context.Context) (*gitsigning.Snapshot, error)
+	signingHistory map[string]map[string]bool
+	Runner         execx.Runner
 	// AssetTransport optionally replaces HTTP transport for attachment downloads.
 	AssetTransport http.RoundTripper
 	Workspace      workspace.Manager
@@ -469,6 +474,30 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		}
 	}
 
+	publicationPending := false
+	if h.ResumeIssueWorkspace && issueClaim != nil {
+		status, statusErr := h.runCommand(ctx, "git", statusCommand(repos[0].Dir))
+		if statusErr != nil {
+			return h.fail(ExitGit, "git", statusErr, runDir)
+		}
+		publicationPending, err = h.repoHasPendingChanges(ctx, repos[0], status.Stdout)
+		if err != nil {
+			return h.fail(ExitGit, "git", err, runDir)
+		}
+		hasPendingWork := publicationPending
+		publicationPending = hasPendingWork && h.IssuePublicationReady
+		if issueClaim.Attempt > 1 && !hasPendingWork {
+			// A dependency may have merged since the issue branch was reserved.
+			// Incorporate the fetched base before the agent tests the branch.
+			repo := repos[0]
+			baseRef := remoteBaseComparisonRef(repo.BaseBranch)
+			res, err := h.runCommand(ctx, "git", gitCommand(repo.Dir, "merge", "--ff-only", "--no-overwrite-ignore", baseRef))
+			if err != nil {
+				return h.fail(ExitGit, "git", commandErrorWithDetails("fast-forward issue branch to fetched base", err, res, maxGitErrorDetailChars), runDir)
+			}
+		}
+	}
+
 	codexDir := targetDir
 	if len(repos) > 1 {
 		codexDir = runDir
@@ -532,20 +561,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	initialRepo, initialRepoDir := initialAgentInvocationRepoMetadata(repos)
 	initialAgentInvocation := newAgentInvocationLogMetadata(runtime, invocationMode, 1, initialRepo, initialRepoDir, codexTargetLabel)
 
+	var agentRes execx.Result
 	h.logf("stage=%s status=start target=%s%s", agentStage, codexTargetLabel, initialAgentInvocation.logFieldsSuffix())
 	codexStart := time.Now()
-	var agentRes execx.Result
-	publicationPending := false
-	if h.ResumeIssueWorkspace && issueClaim != nil {
-		status, statusErr := h.runCommand(ctx, "git", statusCommand(repos[0].Dir))
-		if statusErr != nil {
-			return h.fail(ExitGit, "git", statusErr, runDir)
-		}
-		publicationPending, err = h.repoHasPendingChanges(ctx, repos[0], status.Stdout)
-		if err != nil {
-			return h.fail(ExitGit, "git", err, runDir)
-		}
-	}
 	if !publicationPending {
 		h.step("agent")
 		agentRes, err = h.runCodexCapture(ctx, runtime, codexDir, codexBasePrompt, codexOpts, agentsPath, agentResponseMode, initialAgentInvocation)
@@ -5852,6 +5870,11 @@ func (h Harness) runCodexCapture(
 	responseMode string,
 	invocation agentInvocationLogMetadata,
 ) (execx.Result, error) {
+	if h.SaveIssuePublicationReady != nil {
+		if err := h.SaveIssuePublicationReady(false); err != nil {
+			return execx.Result{}, fmt.Errorf("clear issue publication readiness: %w", err)
+		}
+	}
 	finalPrompt := withBackpressurePrompt(prompt, nil)
 	cleanup := func() error { return nil }
 
@@ -5911,6 +5934,11 @@ func (h Harness) runCodexCapture(
 			targetDir,
 			cleanupErr,
 		)
+	}
+	if err == nil && h.SaveIssuePublicationReady != nil {
+		if saveErr := h.SaveIssuePublicationReady(true); saveErr != nil {
+			err = fmt.Errorf("record issue publication readiness: %w", saveErr)
+		}
 	}
 	return res, err
 }

@@ -32,12 +32,8 @@ func prepareIssueExecution(store *localruntime.IssueClaimStore, run config.Confi
 	if record.Version != 2 {
 		return nil, "", nil
 	}
-	owner, err := store.Identity()
-	if err != nil {
-		return nil, "", fmt.Errorf("load issue owner: %w", err)
-	}
-	if owner != record.InstanceID {
-		return nil, "", fmt.Errorf("issue ownership changed; start the issue again to create a new attempt")
+	if err := store.CheckOwner(record.InstanceID); err != nil {
+		return nil, "", err
 	}
 	if record.RequestID == "" {
 		return nil, "", fmt.Errorf("issue dispatch intent has no request ID")
@@ -77,6 +73,7 @@ func prepareIssueExecution(store *localruntime.IssueClaimStore, run config.Confi
 		}
 		if !hasRepository {
 			record.WorkspaceDir = filepath.Join(filepath.Dir(store.Root), "issue-workspaces", record.ID)
+			record.PublicationReady = false
 		}
 	}
 	record.State = "queued"
@@ -115,14 +112,17 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 	}
 	return e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
 		record.Outcome = state
+		record.ExitCode = result.ExitCode
 		record.State = "verifying"
 		record.StoppedAt = time.Now().UTC()
 		record.UnlockPending = record.LabelAdded
 		if result.WorkspaceDir != "" {
 			record.WorkspaceDir = result.WorkspaceDir
 		}
+		record.RunError = ""
 		if result.Err != nil {
-			record.Error = result.Err.Error()
+			record.RunError = result.Err.Error()
+			record.Error = record.RunError
 		}
 		if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
 			record.Error = cause.Error()
@@ -144,6 +144,13 @@ func (e *issueExecution) configure(ctx context.Context, h *app.Harness) (context
 	h.Workspace.Root = filepath.Dir(e.record.WorkspaceDir)
 	h.Workspace.NewGUID = func() string { return filepath.Base(e.record.WorkspaceDir) }
 	h.ResumeIssueWorkspace = true
+	h.IssuePublicationReady = e.record.PublicationReady
+	h.SaveIssuePublicationReady = func(ready bool) error {
+		return e.store.Update(e.record.ID, func(record *localruntime.IssueClaimRecord) error {
+			record.PublicationReady = ready
+			return nil
+		})
+	}
 	startedAgent := false
 	h.OnStep = func(step string) {
 		if !watchdog.Advance(step) {

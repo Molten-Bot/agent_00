@@ -181,6 +181,192 @@ func TestIssueRecoveryRetryAfterDurableBranchReservationFailure(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryBlocksStaleAdmissionUntilExplicitRetry(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, f := recoveryServer(t)
+	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
+		return "", errors.New("issue owner is unavailable or changed: %!w(<nil>)")
+	}
+	s.pollGitHubIssueAutoStart(ctx)
+	previous := latestRecoveryRecord(t, s)
+	if previous.State != "retry_wait" || !previous.UnlockPending || previous.AgentAttempts != 0 {
+		t.Fatalf("unexpected failed admission state: %s, unlock pending=%t, agent attempts=%d", previous.State, previous.UnlockPending, previous.AgentAttempts)
+	}
+	previous.Failures = 4
+	previous.NextAttemptAt = time.Now().Add(time.Hour)
+	if repairableIssueIncident(previous) {
+		t.Fatal("historical ownership failure would enqueue a repair")
+	}
+	if err := s.IssueClaims.Save(previous); err != nil {
+		t.Fatal(err)
+	}
+	owner := strings.Repeat("f", 32)
+	if err := os.WriteFile(filepath.Join(s.IssueClaims.Root, "instance"), []byte(`"`+owner+`"`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.SubmitLocalPrompt = f.submit
+	commands := len(f.trace)
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	blocked := latestRecoveryRecord(t, s)
+	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || !blocked.NextAttemptAt.IsZero() || !blocked.UnlockPending {
+		t.Fatalf("stale admission state=%s error=%q retry=%v unlock pending=%t", blocked.State, blocked.Error, blocked.NextAttemptAt, blocked.UnlockPending)
+	}
+	if len(f.trace) != commands || len(f.submissions) != 0 {
+		t.Fatal("stale admission accessed GitHub or submitted a worker")
+	}
+	response := retryIssue(t, s, previous.ID, true)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("explicit recovery=%d %s", response.Code, response.Body.String())
+	}
+	recovered := latestRecoveryRecord(t, s)
+	if recovered.InstanceID != owner || recovered.Run.GitHubIssue.Claim.Attempt != 2 || len(f.submissions) != 1 {
+		t.Fatal("explicit recovery did not dispatch a new attempt with the current identity")
+	}
+	if recovered.Run.GitHubIssue.Claim.Branch != previous.Run.GitHubIssue.Claim.Branch || len(f.refs) != 2 {
+		t.Fatal("explicit recovery did not preserve the reserved branch and prior ownership tag")
+	}
+}
+
+func TestIssueRecoveryStopsRetryWhenDispatchRejectsOwner(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, f := recoveryServer(t)
+	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
+		return "", errors.New("temporary dispatch failure")
+	}
+	s.pollGitHubIssueAutoStart(ctx)
+	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
+		return "", localruntime.ErrIssueOwnershipChanged
+	}
+	if err := s.ReconcileIssueWork(ctx); !errors.Is(err, localruntime.ErrIssueOwnershipChanged) {
+		t.Fatalf("expected dispatch rejection, got %v", err)
+	}
+	record := latestRecoveryRecord(t, s)
+	if record.State != "blocked" || !record.NextAttemptAt.IsZero() || repairableIssueIncident(record) {
+		t.Fatalf("rejected dispatch state=%s retry=%v error=%q", record.State, record.NextAttemptAt, record.Error)
+	}
+	s.SubmitLocalPrompt = f.submit
+	if err := s.ReconcileIssueWork(ctx); err != nil || len(f.submissions) != 0 {
+		t.Fatalf("rejected claim retried without confirmation: submissions=%d, error=%v", len(f.submissions), err)
+	}
+}
+
+func TestIssueRecoveryFinalizesCompletedAttemptAfterOwnerRestored(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	record := completeRecoveryRecord(t, s, "completed", 1)
+	identityPath := filepath.Join(s.IssueClaims.Root, "instance")
+	writeOwner := func(owner string) {
+		t.Helper()
+		if err := os.WriteFile(identityPath, []byte(`"`+owner+`"`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeOwner(strings.Repeat("f", 32))
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	blocked := latestRecoveryRecord(t, s)
+	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || !blocked.UnlockPending || f.deletes != 0 {
+		t.Fatalf("completed attempt was not fenced while owner differed: state=%s error=%q unlock pending=%t deletes=%d", blocked.State, blocked.Error, blocked.UnlockPending, f.deletes)
+	}
+
+	writeOwner(record.InstanceID)
+	f.deleteError = true
+	if err := s.ReconcileIssueWork(ctx); err == nil || !strings.Contains(err.Error(), "temporary label removal failure") {
+		t.Fatalf("expected label removal failure after owner restored, got %v", err)
+	}
+	blocked = latestRecoveryRecord(t, s)
+	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || blocked.NextAttemptAt.IsZero() {
+		t.Fatalf("label removal failure lost the dispatch block: state=%s error=%q retry=%v", blocked.State, blocked.Error, blocked.NextAttemptAt)
+	}
+	blocked.NextAttemptAt = time.Now().Add(-time.Second)
+	if err := s.IssueClaims.Save(blocked); err != nil {
+		t.Fatal(err)
+	}
+	f.deleteError = false
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	blocked = latestRecoveryRecord(t, s)
+	if blocked.State != "blocked" || blocked.UnlockPending || blocked.LabelAdded || f.deletes != 2 || len(f.submissions) != 1 {
+		t.Fatalf("cleanup without PR: state=%s unlock pending=%t label added=%t deletes=%d submissions=%d", blocked.State, blocked.UnlockPending, blocked.LabelAdded, f.deletes, len(f.submissions))
+	}
+
+	f.prs = recoveryPR("open", "null", "agent00-issue-17", "main")
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	final := latestRecoveryRecord(t, s)
+	if final.State != "fulfilled" || final.PRURL != "https://github.com/acme/repo/pull/42" || final.VerifiedAt.IsZero() || !final.NextAttemptAt.IsZero() || len(f.submissions) != 1 {
+		t.Fatalf("unexpected final state=%s PR=%q verified=%v retry=%v submissions=%d", final.State, final.PRURL, final.VerifiedAt, final.NextAttemptAt, len(f.submissions))
+	}
+}
+
+func TestIssueRecoveryFinalizesInterruptedAttemptAfterOwnerRestored(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	record := completeRecoveryRecord(t, s, "completed", 1)
+	record.StoppedAt = time.Time{}
+	record.Outcome = ""
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	identityPath := filepath.Join(s.IssueClaims.Root, "instance")
+	writeOwner := func(owner string) {
+		t.Helper()
+		if err := os.WriteFile(identityPath, []byte(`"`+owner+`"`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeOwner(strings.Repeat("f", 32))
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	blocked := latestRecoveryRecord(t, s)
+	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || !blocked.UnlockPending || f.deletes != 0 {
+		t.Fatalf("completed attempt was not fenced while owner differed: state=%s error=%q unlock pending=%t deletes=%d", blocked.State, blocked.Error, blocked.UnlockPending, f.deletes)
+	}
+
+	writeOwner(record.InstanceID)
+	f.deleteError = true
+	if err := s.ReconcileIssueWork(ctx); err == nil || !strings.Contains(err.Error(), "temporary label removal failure") {
+		t.Fatalf("expected label removal failure after owner restored, got %v", err)
+	}
+	blocked = latestRecoveryRecord(t, s)
+	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || blocked.NextAttemptAt.IsZero() {
+		t.Fatalf("label removal failure lost the dispatch block: state=%s error=%q retry=%v", blocked.State, blocked.Error, blocked.NextAttemptAt)
+	}
+	blocked.NextAttemptAt = time.Now().Add(-time.Second)
+	if err := s.IssueClaims.Save(blocked); err != nil {
+		t.Fatal(err)
+	}
+	f.deleteError = false
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	blocked = latestRecoveryRecord(t, s)
+	if blocked.State != "blocked" || blocked.UnlockPending || blocked.LabelAdded || f.deletes != 2 || len(f.submissions) != 1 {
+		t.Fatalf("cleanup without PR: state=%s unlock pending=%t label added=%t deletes=%d submissions=%d", blocked.State, blocked.UnlockPending, blocked.LabelAdded, f.deletes, len(f.submissions))
+	}
+
+	f.prs = recoveryPR("open", "null", "agent00-issue-17", "main")
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	final := latestRecoveryRecord(t, s)
+	if final.State != "fulfilled" || final.PRURL != "https://github.com/acme/repo/pull/42" || final.VerifiedAt.IsZero() || !final.NextAttemptAt.IsZero() || len(f.submissions) != 1 {
+		t.Fatalf("unexpected final state=%s PR=%q verified=%v retry=%v submissions=%d", final.State, final.PRURL, final.VerifiedAt, final.NextAttemptAt, len(f.submissions))
+	}
+}
+
 func TestIssueRecoveryScanReportsFiltersForTrackedIssues(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
@@ -306,6 +492,7 @@ func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 	}
 	if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
 		r.NextAttemptAt = time.Now().Add(-time.Second)
+		r.PublicationReady = true
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -314,7 +501,7 @@ func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := latestRecoveryRecord(t, s)
-	if len(f.submissions) != 2 || got.AgentAttempts != 1 || got.Run.GitHubIssue.Claim.Attempt != 2 {
+	if len(f.submissions) != 2 || got.AgentAttempts != 1 || got.Run.GitHubIssue.Claim.Attempt != 2 || !got.PublicationReady {
 		t.Fatalf("retry lost lineage: %+v submissions=%d", got, len(f.submissions))
 	}
 }
@@ -335,6 +522,48 @@ func TestIssueRecoveryBudgetStopAndNoChangeDoNotRerun(t *testing.T) {
 				t.Fatal("blocked issue reran")
 			}
 		})
+	}
+}
+
+func TestIssueRecoveryBlocksUnmergedPrerequisiteWithoutRepair(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(context.Background())
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.Incident = "missing_pr"
+	record.Error = "codex: codex reported failure: Failure: Delivery blocked by unmerged #12. Error details: Required changes are pending review."
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
+		t.Fatal("dependency failure queued a harness repair")
+		return "", nil
+	}
+	f.deleteError = true
+	if err := s.ReconcileIssueWork(context.Background()); err == nil {
+		t.Fatal("expected temporary unlock failure")
+	}
+	if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.NextAttemptAt = time.Now().Add(-time.Second)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.deleteError = false
+	for range 2 {
+		if err := s.ReconcileIssueWork(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.State != "blocked" || got.UnlockPending || got.LabelAdded ||
+		got.RepairRequestID != "" || got.AgentAttempts != 1 || !got.NextAttemptAt.IsZero() ||
+		!strings.Contains(got.Error, "required pull request is unmerged") || len(f.submissions) != 1 {
+		t.Fatalf("unexpected dependency recovery state: state=%q error=%q attempts=%d submissions=%d", got.State, got.Error, got.AgentAttempts, len(f.submissions))
+	}
+	response := retryIssue(t, s, record.ID, true)
+	if response.Code != http.StatusAccepted || len(f.submissions) != 2 {
+		t.Fatalf("explicit retry: status=%d submissions=%d response=%s", response.Code, len(f.submissions), response.Body.String())
 	}
 }
 
@@ -507,5 +736,30 @@ func TestIssueRecoveryKeepsPausedAndUncertainWorkersBlocked(t *testing.T) {
 				t.Fatal("uncertain worker unlocked")
 			}
 		})
+	}
+}
+
+func TestIssueRecoveryDoesNotRepairDiskExhaustionAfterStatusChanges(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(context.Background())
+	record := completeRecoveryRecord(t, s, "error", 3)
+	record.RunError = "git: write failed: no space left on device"
+	record.Error = "agent retry budget exhausted; explicit retry required"
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
+		t.Fatal("disk exhaustion queued an application repair after its status changed")
+		return "", nil
+	}
+	for range 2 {
+		if err := s.ReconcileIssueWork(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.State != "blocked" || got.FailureDetail() != record.RunError || len(f.submissions) != 1 {
+		t.Fatalf("state=%s failure=%q submissions=%d", got.State, got.FailureDetail(), len(f.submissions))
 	}
 }

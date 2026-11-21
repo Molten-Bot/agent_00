@@ -28,6 +28,9 @@ type IssueClaimRecord struct {
 	Run              config.Config `json:"run"`
 	State            string        `json:"state,omitempty"`
 	Outcome          string        `json:"outcome,omitempty"`
+	RunError         string        `json:"runError,omitempty"`
+	ExitCode         int           `json:"exitCode,omitempty"`
+	PublicationReady bool          `json:"publicationReady,omitempty"`
 	Step             string        `json:"step,omitempty"`
 	StepStartedAt    time.Time     `json:"stepStartedAt,omitempty"`
 	StartedAt        time.Time     `json:"startedAt,omitempty"`
@@ -54,12 +57,25 @@ type IssueClaimRecord struct {
 	Control          string        `json:"control,omitempty"`
 }
 
+// FailureDetail prefers the terminal run error over a later recovery status.
+func (r IssueClaimRecord) FailureDetail() string {
+	if r.RunError != "" {
+		return r.RunError
+	}
+	return r.Error
+}
+
 type IssueClaimStore struct {
 	Root string
 	mu   sync.Mutex
 }
 
 var issueClaimIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
+var ErrIssueOwnershipChanged = errors.New("issue ownership changed; start the issue again to create a new attempt")
+
+// LegacyIssueOwnershipFailure is the error rendered by older binaries that wrapped a nil error.
+const LegacyIssueOwnershipFailure = "issue owner is unavailable or changed: %!w(<nil>)"
 
 func (s *IssueClaimStore) Save(record IssueClaimRecord) error {
 	if s == nil || s.Root == "" {
@@ -202,6 +218,17 @@ func (s *IssueClaimStore) Identity() (string, error) {
 	}
 	id := hex.EncodeToString(bytes[:])
 	return id, writeIssueJSON(s.Root, "instance", id)
+}
+
+func (s *IssueClaimStore) CheckOwner(instanceID string) error {
+	owner, err := s.Identity()
+	if err != nil {
+		return fmt.Errorf("load issue owner: %w", err)
+	}
+	if owner != instanceID {
+		return ErrIssueOwnershipChanged
+	}
+	return nil
 }
 
 // ScanPage checkpoints one page per repository per scan. A failed processing
