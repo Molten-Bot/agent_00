@@ -25,7 +25,7 @@ func DiskUsage(root string) (uint64, error) {
 		if err != nil {
 			return err
 		}
-		if !entry.Type().IsRegular() {
+		if !entry.Type().IsRegular() && !entry.IsDir() {
 			return nil
 		}
 		info, err := entry.Info()

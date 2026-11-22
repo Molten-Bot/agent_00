@@ -1557,9 +1557,20 @@ func runLocalTask(
 		(canRetryWorkspace || localruntime.IsWorkspaceDiskFull(res.Err)) {
 		return localTaskOutcome{State: "retry_workspace", Result: res}
 	}
-	if res.Err == nil {
-		taskHandle.BeginFinalization()
+	if ctx.Err() == nil && canRetryWorkspace && res.ExitCode == app.ExitClone &&
+		(errors.Is(res.Err, app.ErrWorkspaceDiskFull) || localruntime.IsWorkspaceDiskFull(res.Err)) {
+		// Only fresh checkouts can move volumes. Retained issue workspaces
+		// are pinned to their root and must preserve their existing work.
+		if _, issue := ctx.Value(issueExecutionContextKey{}).(*issueExecution); !issue {
+			if _, repair := ctx.Value(issueRepairContextKey{}).(*issueRepairWork); !repair {
+				removed, err := removeManagedWorkspaceDir(res.WorkspaceDir)
+				if err == nil && removed {
+					return localTaskOutcome{State: "retry_workspace", Result: res}
+				}
+			}
+		}
 	}
+	taskHandle.BeginFinalization()
 	if checkoutComplete && recordDiskUsage != nil {
 		recordDiskUsage(res.WorkspaceDir)
 	}

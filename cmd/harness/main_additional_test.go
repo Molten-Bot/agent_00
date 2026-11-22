@@ -1808,19 +1808,26 @@ func TestRunLocalTaskRecordsDiskUsageBeforeTerminalLog(t *testing.T) {
 }
 
 func TestRunLocalTaskRejectsStopDuringSuccessfulDiskAccounting(t *testing.T) {
-	testRunLocalTaskStopAroundFinalization(t, false)
+	testRunLocalTaskStopAroundFinalization(t, false, false)
 }
 
 func TestRunLocalTaskHonorsStopBeforeSuccessfulFinalization(t *testing.T) {
-	testRunLocalTaskStopAroundFinalization(t, true)
+	testRunLocalTaskStopAroundFinalization(t, true, false)
 }
 
-func testRunLocalTaskStopAroundFinalization(t *testing.T, stopBeforeFinalization bool) {
+func TestRunLocalTaskRejectsStopDuringFailedDiskAccounting(t *testing.T) {
+	testRunLocalTaskStopAroundFinalization(t, false, true)
+}
+
+func testRunLocalTaskStopAroundFinalization(t *testing.T, stopBeforeFinalization, fail bool) {
 	t.Helper()
 	t.Setenv("CODEX_HOME", t.TempDir())
 	const requestID = "req-finalizing"
 	cfg := config.Config{
 		RepoURL: "https://github.com/example/repo", Prompt: "check tests", AgentHarness: "codex", BaseBranch: "main",
+	}
+	if fail {
+		cfg.TargetSubdir = "missing"
 	}
 	runner := repairPRRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
 		if cmd.Name == "git" && len(cmd.Args) > 0 && cmd.Args[0] == "clone" {
@@ -1873,6 +1880,10 @@ func testRunLocalTaskStopAroundFinalization(t *testing.T, stopBeforeFinalization
 	if stopBeforeFinalization {
 		if !accounted || !stopPersisted || !outcome.Result.NoChanges || outcome.State != "stopped" || !errors.Is(outcome.Result.Err, errTaskStoppedByOperator) {
 			t.Fatalf("disk accounting ran = %v, stop persisted = %v, outcome = %+v, want stopped after successful harness result", accounted, stopPersisted, outcome)
+		}
+	} else if fail {
+		if !accounted || stopPersisted || outcome.State != "error" || outcome.Result.Err == nil {
+			t.Fatalf("disk accounting ran = %v, stop persisted = %v, outcome = %+v", accounted, stopPersisted, outcome)
 		}
 	} else if !accounted || stopPersisted || outcome.State != "no_changes" || outcome.Result.Err != nil {
 		t.Fatalf("disk accounting ran = %v, outcome = %+v, want successful no-changes result", accounted, outcome)
@@ -2306,4 +2317,44 @@ func TestCleanupTaskWorkspaceOnCompletionSkipsUnmanagedWorkspace(t *testing.T) {
 		t.Fatalf("unmanaged workspace was removed: %v", err)
 	}
 	assertLogContains(t, logs, "action=skip_unmanaged_workspace_cleanup request_id=req-unmanaged")
+}
+
+func TestRunLocalTaskRetriesDiskFullCheckoutOnce(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	ram, disk := t.TempDir(), t.TempDir()
+	t.Setenv("HARNESS_WORKSPACE_RAM_BASE", ram)
+	t.Setenv("HARNESS_WORKSPACE_DISK_BASE", disk)
+	t.Setenv("HARNESS_WORKSPACE_ROOT_NAME", "tasks")
+	cfg := config.Config{RepoURL: "https://github.com/example/repo", Prompt: "fix tests", AgentHarness: "codex", BaseBranch: "main"}
+	runner := repairPRRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if cmd.Name == "git" && len(cmd.Args) > 0 && cmd.Args[0] == "clone" {
+			if err := os.MkdirAll(cmd.Args[len(cmd.Args)-1], 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return execx.Result{Stderr: "fatal: No space left on device"}, errors.New("exit status 128")
+		}
+		return execx.Result{}, nil
+	})
+	broker := web.NewBroker()
+	logf := func(format string, args ...any) { broker.IngestLog(fmt.Sprintf(format, args...)) }
+	manager := workspace.Manager{Root: filepath.Join(ram, "tasks")}
+	outcome := runLocalTask(context.Background(), runner, logf, "local", "req-checkout", cfg, 0, nil, nil, broker, manager, func(string) {
+		t.Error("incomplete checkout must not lower the disk estimate")
+	}, true)
+	if outcome.State != "retry_workspace" || !errors.Is(outcome.Result.Err, app.ErrWorkspaceDiskFull) {
+		t.Fatalf("outcome = %+v, want checkout retry", outcome)
+	}
+	if _, err := os.Stat(outcome.Result.WorkspaceDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial checkout not cleaned up: %v", err)
+	}
+	if err := broker.CloseTask("req-checkout"); !errors.Is(err, web.ErrTaskNotCompleted) {
+		t.Fatalf("retry became terminal: %v", err)
+	}
+	// A second failure on the fallback is terminal, preventing endless
+	// retries when a repository exceeds both volumes' capacity.
+	manager.Root = filepath.Join(disk, "tasks")
+	outcome = runLocalTask(context.Background(), runner, logf, "local", "req-checkout", cfg, 0, nil, nil, broker, manager, nil, false)
+	if outcome.State != "error" || filepath.Dir(outcome.Result.WorkspaceDir) != manager.Root {
+		t.Fatalf("fallback outcome = %+v", outcome)
+	}
 }

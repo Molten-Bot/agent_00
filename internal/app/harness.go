@@ -57,6 +57,9 @@ import (
 // never inspects.
 var readOnlyReviewDisallowedTools = []string{"Edit", "Write", "NotebookEdit", "Bash", "Agent", "Skill", "Workflow", "ReportFindings"}
 
+// ErrWorkspaceDiskFull identifies local storage exhaustion reported by Git.
+var ErrWorkspaceDiskFull = errors.New("workspace storage exhausted")
+
 const (
 	ExitSuccess   = 0
 	ExitUsage     = 2
@@ -5333,7 +5336,7 @@ func diskSpaceExhaustionError(cmd execx.Command, res execx.Result, err error) er
 	}
 	return fmt.Errorf(
 		"workspace storage ran out of space running %s %s in %s; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem or free up space: %w",
-		cmd.Name, strings.Join(cmd.Args, " "), cmd.Dir, err,
+		cmd.Name, strings.Join(cmd.Args, " "), cmd.Dir, errors.Join(ErrWorkspaceDiskFull, err),
 	)
 }
 
