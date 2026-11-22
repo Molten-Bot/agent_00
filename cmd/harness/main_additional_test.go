@@ -1456,10 +1456,18 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
 		ExitCode: app.ExitGit,
-		Err:      errors.New("git: GitHub push protection blocked publication: remove the flagged credential from every outgoing commit before retrying"),
+		Err:      fmt.Errorf("git: %w: remove the flagged credential from every outgoing commit before retrying", failurefollowup.ErrGitHubPushProtection),
 	})
 	if ok || !strings.Contains(reason, "GitHub push protection blocked publication") {
 		t.Fatalf("shouldQueueFailureFollowUp(push protection failure) = (%v, %q), want non-remediable push protection skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		ExitCode: app.ExitCodex,
+		Err:      errors.New("codex: codex reported failure: Failure: parser failed. Error details: GitHub push protection blocked publication: example error text"),
+	})
+	if !ok || reason != "" {
+		t.Fatalf("quoted push protection = (%v, %q), want repair", ok, reason)
 	}
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
