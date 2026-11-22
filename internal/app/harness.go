@@ -6789,33 +6789,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"node_modules missing",
 	}
 
-	missingTooling := strings.Contains(text, "command not found") ||
-		strings.Contains(text, ": not found") ||
-		strings.Contains(text, "exit status 127") ||
-		strings.Contains(text, "exited with status 127") ||
-		strings.Contains(text, "exit code 127") ||
-		strings.Contains(text, "returned 127") ||
-		strings.Contains(text, "enoent") ||
-		strings.Contains(text, "cannot find module") ||
-		strings.Contains(text, "do you have node modules installed") ||
-		strings.Contains(text, "have node modules installed") ||
-		strings.Contains(text, "do you have node_modules installed") ||
-		strings.Contains(text, "have node_modules installed") ||
-		strings.Contains(text, "not installed in runtime") ||
-		strings.Contains(text, "tooling/deps not installed") ||
-		strings.Contains(text, "missing deps") ||
-		strings.Contains(text, "missing dependencies") ||
-		strings.Contains(text, "missing dependency") ||
-		strings.Contains(text, "shim missing") ||
-		strings.Contains(text, "tool missing") ||
-		strings.Contains(text, "runner missing") ||
-		strings.Contains(text, "executable missing") ||
-		strings.Contains(text, "binary missing") ||
-		strings.Contains(text, "command missing") ||
-		strings.Contains(text, "could not find task 'build' in project") ||
-		strings.Contains(text, "`uv` missing") ||
-		strings.Contains(text, "uv missing") ||
-		strings.Contains(text, "node_modules missing")
+	missingTooling := hasMissingValidationTool(text)
 	restrictedDependencyDownload := stringsx.ContainsAny(text, []string{
 		"restricted network",
 		"network operation prohibited",
@@ -6831,7 +6805,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	}
 	// A missing tool elsewhere in the report does not explain a failed test
 	// or compiler diagnostic.
-	if failurefollowup.HasValidationFailureEvidence(text) {
+	if failurefollowup.HasValidationFailureEvidence(text) || hasUnexplainedValidationExit(text) {
 		return false
 	}
 	smokeCommand := strings.Contains(text, "smoke command")
@@ -6919,12 +6893,60 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	return false
 }
 
+func hasMissingValidationTool(text string) bool {
+	return strings.Contains(text, "command not found") ||
+		strings.Contains(text, ": not found") ||
+		strings.Contains(text, "exit status 127") ||
+		strings.Contains(text, "exited with status 127") ||
+		strings.Contains(text, "exit code 127") ||
+		strings.Contains(text, "returned 127") ||
+		strings.Contains(text, "enoent") ||
+		strings.Contains(text, "cannot find module") ||
+		strings.Contains(text, "do you have node modules installed") ||
+		strings.Contains(text, "have node modules installed") ||
+		strings.Contains(text, "do you have node_modules installed") ||
+		strings.Contains(text, "have node_modules installed") ||
+		strings.Contains(text, "not installed in runtime") ||
+		strings.Contains(text, "tooling/deps not installed") ||
+		strings.Contains(text, "missing deps") ||
+		strings.Contains(text, "missing dependencies") ||
+		strings.Contains(text, "missing dependency") ||
+		strings.Contains(text, "shim missing") ||
+		strings.Contains(text, "tool missing") ||
+		strings.Contains(text, "runner missing") ||
+		strings.Contains(text, "executable missing") ||
+		strings.Contains(text, "binary missing") ||
+		strings.Contains(text, "command missing") ||
+		strings.Contains(text, "could not find task 'build' in project") ||
+		strings.Contains(text, "`uv` missing") ||
+		strings.Contains(text, "uv missing") ||
+		strings.Contains(text, "node_modules missing")
+}
+
+// A nonzero command exit needs its own missing-tool explanation. A separate
+// optional lint failure cannot explain a test runner that actually ran.
+var validationCommandExit = regexp.MustCompile(`\b(?:exit(?:ed)?(?: with)? (?:status|code)|returned) ([1-9][0-9]*)\b`)
+var validationDiagnosticBreak = regexp.MustCompile(`\n| \| |[.;] +`)
+
+func hasUnexplainedValidationExit(text string) bool {
+	for _, diagnostic := range validationDiagnosticBreak.Split(text, -1) {
+		for _, match := range validationCommandExit.FindAllStringSubmatch(diagnostic, -1) {
+			if match[1] != "127" && !hasMissingValidationTool(diagnostic) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 var smokeFallbackPass = regexp.MustCompile(`(?:^|[.;!]\s+)(?:the )?(?:smoke fallback|fallback(?: smoke(?: check| test)?)?) (?:passed|succeeded)(?: using [^\s,.;!]+)?(?:[.!]?$|[.;!]\s+)`)
 var smokeCheckFailure = regexp.MustCompile(`\b(?:smoke (?:fallback|check|test)|fallback smoke(?: check| test)?|(?:health |readiness )?endpoint) (?:failed|did not pass|timed out)\b`)
 var smokeHTTPFailure = regexp.MustCompile(`\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b`)
 
+var expectedSmokeHTTPStatus = regexp.MustCompile(`\bexpected http(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b|\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000) (?:as expected\b|\(expected\))`)
+
 func smokeFallbackSucceeded(text string) bool {
-	if smokeHTTPFailure.MatchString(text) || smokeCheckFailure.MatchString(text) {
+	if smokeHTTPFailure.MatchString(expectedSmokeHTTPStatus.ReplaceAllString(text, "")) || smokeCheckFailure.MatchString(text) {
 		return false
 	}
 	confirmed := false
@@ -7184,9 +7206,10 @@ func codexErrorDetailLines(lines []string, stopAtSection bool, detailsHeadingLev
 			// A plain field has no heading level. Use diagnostic evidence to
 			// distinguish a nested Validation heading from a sibling section.
 			level := markdownHeadingLevel(trimmed)
-			if detailsHeadingLevel == 0 && level > 0 && strings.TrimRight(lower, ":*_# ") == "validation" {
+			label, inline, _ := strings.Cut(lower, ":")
+			if detailsHeadingLevel == 0 && strings.TrimRight(label, "*_# ") == "validation" {
 				subsection := codexErrorDetailLines(lines[i+1:], true, level)
-				body := strings.Join(subsection, "\n")
+				body := strings.TrimSpace(inline) + "\n" + strings.Join(subsection, "\n")
 				lowerBody := strings.ToLower(body)
 				if reportedValidationFailure.MatchString(lowerBody) ||
 					failurefollowup.HasValidationFailureEvidence(body) || smokeHTTPFailure.MatchString(lowerBody) {
