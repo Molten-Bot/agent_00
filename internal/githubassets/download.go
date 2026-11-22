@@ -139,8 +139,9 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 	contentType := resp.Header.Get("Content-Type")
 	declared, _, _ := mime.ParseMediaType(contentType)
 	mediaType := ""
-	if strings.HasPrefix(strings.ToLower(contentType), "text/html") ||
-		strings.HasPrefix(detected, "text/html") && declared != "text/plain" {
+	isHTML := strings.HasPrefix(strings.ToLower(contentType), "text/html") ||
+		strings.HasPrefix(detected, "text/html") && declared != "text/plain"
+	if isHTML {
 		disposition, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Disposition"))
 		if disposition != "attachment" {
 			return nil, "", fmt.Errorf("GitHub returned HTML instead of an attachment; verify repository access")
@@ -163,6 +164,10 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 	data, err := readAttachment(body, resp.ContentLength, MaxFileBytes)
 	if err != nil {
 		return nil, "", err
+	}
+	// An AVIF file type box can extend past the sniff window.
+	if !isHTML && len(data) > len(prefix) && isAVIF(data) {
+		mediaType = "image/avif"
 	}
 	if mediaType != "" {
 		return io.NopCloser(bytes.NewReader(data)), mediaType, nil
