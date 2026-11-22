@@ -71,7 +71,7 @@ for (const mobile of [false, true]) {
     assert.deepEqual(attachmentRequests, [], 'previews load only when requested');
     const viewer = page.locator('#task-asset-viewer');
     await expect(viewer).toBeHidden();
-    await expect(page.locator('link[href="/static/style.css?v=10"]')).toHaveCount(1);
+    await expect(page.locator('link[href="/static/style.css?v=11"]')).toHaveCount(1);
     if (mobile) {
       await assets.tap();
     } else {
