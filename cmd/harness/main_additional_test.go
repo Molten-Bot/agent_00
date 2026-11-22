@@ -1441,6 +1441,14 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	}
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		ExitCode: app.ExitCodex,
+		Err:      errors.New("codex: codex reported failure: Failure: Production rollout is pending. Error details: IAM setup and Secrets Manager configuration are outstanding."),
+	})
+	if ok || !strings.Contains(reason, "production rollout requires external prerequisites") {
+		t.Fatalf("shouldQueueFailureFollowUp(external rollout prerequisites) = (%v, %q), want provisioning skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
 		Err: errors.New("clone: run git [clone ...]: exit status 128"),
 	})
 	if !ok || reason != "" {

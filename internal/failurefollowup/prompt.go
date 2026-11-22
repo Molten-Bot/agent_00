@@ -77,10 +77,19 @@ const missingRemoteBranchReason = "remote branch does not exist"
 // UnmergedDependencyReason identifies an agent-reported prerequisite PR.
 const UnmergedDependencyReason = "required pull request is unmerged"
 
+// ExternalRolloutPrerequisitesReason identifies cloud provisioning that must
+// happen before a production rollout can continue.
+const ExternalRolloutPrerequisitesReason = "production rollout requires external prerequisites"
+
 // Match a blocker in the agent's failure summary. Error details can quote the
 // same wording while describing a different, actionable failure. An apostrophe
 // between word characters can be part of a contraction rather than a quote.
 var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\bblocked by (?:an? |the )?unmerged (?:pull request |pr )?\x60?#[1-9][0-9]*\b`)
+
+var pendingProductionRolloutSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:\s*(?:the )?production (?:rollout|deployment)(?: for #[1-9][0-9]*)? (?:remains|is|is still) pending\.?$`)
+var outstandingProvisioning = regexp.MustCompile(`\b(?:remain|are(?: still)?) (?:outstanding|pending)$`)
+var iamProvisioning = regexp.MustCompile(`\b(?:scoped iam|iam (?:access|approval|configuration|permissions?|polic(?:y|ies)|roles?|setup))\b`)
+var secretProvisioning = regexp.MustCompile(`\bsecrets manager (?:configuration|keys?|provisioning|secrets?|setup)\b`)
 
 var nonRemediableFailureMarkers = []string{
 	"no space left on device",
@@ -398,10 +407,22 @@ func NonRemediableFailureReason(err error) string {
 	if isMissingRemoteBranchFailure(text) {
 		return missingRemoteBranchReason
 	}
-	summary, _, _ := strings.Cut(text, "error details:")
+	summary, details, _ := strings.Cut(text, "error details:")
 	if unmergedDependencySummary.MatchString(summary) &&
 		!strings.Contains(summary, "no longer blocked") && !strings.Contains(summary, "not blocked") {
 		return UnmergedDependencyReason
+	}
+	if pendingProductionRolloutSummary.MatchString(strings.TrimSpace(summary)) {
+		// Require both provisioning prerequisites in the same outstanding
+		// statement. A pending rollout can also be caused by a code defect.
+		statement := strings.TrimSpace(details)
+		if end := strings.IndexAny(statement, ".!?\r\n"); end >= 0 {
+			statement = strings.TrimSpace(statement[:end])
+		}
+		if outstandingProvisioning.MatchString(statement) && iamProvisioning.MatchString(statement) &&
+			secretProvisioning.MatchString(statement) {
+			return ExternalRolloutPrerequisitesReason
+		}
 	}
 	for _, marker := range nonRemediableFailureMarkers {
 		if strings.Contains(text, marker) {

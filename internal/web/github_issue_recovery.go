@@ -18,6 +18,7 @@ import (
 )
 
 const unmergedDependencyIncident = "unmerged_dependency"
+const externalRolloutPrerequisitesIncident = "external_rollout_prerequisites"
 
 func (s Server) WakeIssueRecovery() { s.wakeGitHubIssueAutoStart() }
 
@@ -212,12 +213,22 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	}
 	// Preserve the classification before later checks can replace the last
 	// error. This also handles records written before the incident existed.
-	if record.Outcome == "error" && record.Incident != unmergedDependencyIncident &&
-		failurefollowup.NonRemediableFailureReason(errors.New(record.FailureDetail())) == failurefollowup.UnmergedDependencyReason {
-		record.Incident = unmergedDependencyIncident
-		record.NextAttemptAt = time.Time{}
-		if err := s.IssueClaims.Save(record); err != nil {
-			return err
+	if record.Outcome == "error" {
+		detail := record.FailureDetail()
+		var incident string
+		switch failurefollowup.NonRemediableFailureReason(errors.New(detail)) {
+		case failurefollowup.UnmergedDependencyReason:
+			incident = unmergedDependencyIncident
+		case failurefollowup.ExternalRolloutPrerequisitesReason:
+			incident = externalRolloutPrerequisitesIncident
+		}
+		if incident != "" && record.Incident != incident {
+			record.Incident = incident
+			record.RunError = detail
+			record.NextAttemptAt = time.Time{}
+			if err := s.IssueClaims.Save(record); err != nil {
+				return err
+			}
 		}
 	}
 	if stopped, err := localruntime.IssueProcessesStopped(record); err != nil || !stopped {
@@ -305,7 +316,8 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	}
 	policy := s.IssueRecovery.Defaults()
 	if record.Control != "" || record.Outcome == "stopped" || record.Outcome == "no_changes" ||
-		record.Incident == unmergedDependencyIncident || record.AgentAttempts >= policy.MaxAttempts {
+		record.Incident == unmergedDependencyIncident || record.Incident == externalRolloutPrerequisitesIncident ||
+		record.AgentAttempts >= policy.MaxAttempts {
 		record.State = "blocked"
 		switch {
 		case record.Outcome == "stopped":
@@ -314,6 +326,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			record.Error = "no PR produced; review no-change evidence before retrying"
 		case record.Incident == unmergedDependencyIncident:
 			record.Error = failurefollowup.UnmergedDependencyReason + "; explicit retry required after merge"
+			record.NextAttemptAt = time.Time{}
+		case record.Incident == externalRolloutPrerequisitesIncident:
+			record.Error = failurefollowup.ExternalRolloutPrerequisitesReason + "; explicit retry required after provisioning"
 			record.NextAttemptAt = time.Time{}
 		default:
 			record.Error = "agent retry budget exhausted; explicit retry or deployed fix required"
@@ -451,7 +466,8 @@ func issueRetryDelay(record localruntime.IssueClaimRecord, policy localruntime.I
 
 func repairableIssueIncident(record localruntime.IssueClaimRecord) bool {
 	if record.Control != "" || record.Incident == "" || record.Incident == "service_shutdown" ||
-		record.Incident == unmergedDependencyIncident || record.Outcome == "stopped" || (record.Outcome == "no_changes" && record.NoChangeEvidence) {
+		record.Incident == unmergedDependencyIncident || record.Incident == externalRolloutPrerequisitesIncident ||
+		record.Outcome == "stopped" || (record.Outcome == "no_changes" && record.NoChangeEvidence) {
 		return false
 	}
 	if record.Outcome == "" && record.Failures < 3 {

@@ -635,6 +635,41 @@ func TestIssueRecoveryBlocksUnmergedPrerequisiteWithoutRepair(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryBlocksExternalRolloutWithoutRepair(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.Incident = "missing_pr"
+	const detail = "codex: codex reported failure: Failure: Production deployment remains pending. Error details: IAM approval and Secrets Manager provisioning remain outstanding. Feature disabled."
+	// Older records may carry the terminal error only in Error.
+	record.Error = detail
+	record.NextAttemptAt = time.Now().Add(time.Hour)
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
+		t.Fatal("external provisioning failure queued a harness repair")
+		return "", nil
+	}
+	for range 2 {
+		if err := s.ReconcileIssueWork(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.State != "blocked" || got.FailureDetail() != detail || got.UnlockPending || got.LabelAdded ||
+		got.RepairRequestID != "" || got.AgentAttempts != 1 || !got.NextAttemptAt.IsZero() ||
+		!strings.Contains(got.Error, "explicit retry required after provisioning") || len(f.submissions) != 1 {
+		t.Fatalf("unexpected rollout recovery state: state=%q error=%q attempts=%d submissions=%d", got.State, got.Error, got.AgentAttempts, len(f.submissions))
+	}
+	response := retryIssue(t, s, record.ID, true)
+	if response.Code != http.StatusAccepted || len(f.submissions) != 2 {
+		t.Fatalf("explicit retry: status=%d submissions=%d response=%s", response.Code, len(f.submissions), response.Body.String())
+	}
+}
+
 func TestIssueRecoveryHandlesAmbiguousReservationAndFastCompletion(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
