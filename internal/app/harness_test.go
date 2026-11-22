@@ -3253,17 +3253,21 @@ func TestPopulateNoChangePRURLsForIssue(t *testing.T) {
 		promptURL   string
 		resolvedURL string
 		promptBase  string
+		promptOwner string
 		wantPR      bool
 	}{
 		{name: "closed", lookupState: "CLOSED"},
 		{name: "merged with closed PRs excluded", lookupState: "MERGED", wantPR: true},
-		{name: "open", lookupState: "OPEN", wantPR: true},
-		{name: "closed prompt fallback", promptURL: prURL, promptState: "CLOSED", promptBase: "main"},
-		{name: "merged prompt fallback after closed lookup", lookupState: "CLOSED", promptURL: prURL, promptState: "MERGED", promptBase: "main", wantPR: true},
+		{name: "open after mismatched heads", lookupState: "OPEN", wantPR: true},
+		{name: "matching branch without matching head repository"},
+		{name: "closed prompt fallback", promptURL: prURL, promptState: "CLOSED", promptBase: "main", promptOwner: "acme"},
+		{name: "merged prompt fallback after closed lookup", lookupState: "CLOSED", promptURL: prURL, promptState: "MERGED", promptBase: "main", promptOwner: "acme", wantPR: true},
 		{name: "prompt PR in another repository", promptURL: otherRepoPR},
-		{name: "prompt PR resolves to another repository", promptURL: prURL, resolvedURL: otherRepoPR, promptState: "OPEN", promptBase: "main"},
-		{name: "prompt PR targets another base", promptURL: prURL, promptState: "OPEN", promptBase: "release"},
-		{name: "prompt PR has no base", promptURL: prURL, promptState: "OPEN"},
+		{name: "prompt PR resolves to another repository", promptURL: prURL, resolvedURL: otherRepoPR, promptState: "OPEN", promptBase: "main", promptOwner: "acme"},
+		{name: "prompt PR targets another base", promptURL: prURL, promptState: "OPEN", promptBase: "release", promptOwner: "acme"},
+		{name: "prompt PR has no base", promptURL: prURL, promptState: "OPEN", promptOwner: "acme"},
+		{name: "prompt PR from fork", promptURL: prURL, promptState: "OPEN", promptBase: "main", promptOwner: "fork"},
+		{name: "prompt PR has no head owner", promptURL: prURL, promptState: "OPEN", promptBase: "main"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -3274,28 +3278,36 @@ func TestPopulateNoChangePRURLsForIssue(t *testing.T) {
 				Repository: "Acme/Repo", Number: 17, Title: "Issue title",
 				Claim: &config.GitHubIssueClaim{Branch: repo.Branch, BaseBranch: "main"},
 			}}
-			var exps []expectedRun
-			for _, state := range []string{"open", "merged"} {
-				cmd := ghCommand(repo.Dir, "pr", "list", "--state", state, "--head", repo.Branch, "--json", "url,title,state", "--limit", "1", "--repo", "Acme/Repo", "--base", "main")
-				// GitHub returns the first eligible result. A newer closed PR or a
-				// PR targeting another base would hide the match in an unfiltered list.
-				result := "[]"
-				if strings.EqualFold(state, tc.lookupState) {
-					result = fmt.Sprintf(`[{"url":%q,"title":%q,"state":%q}]`, prURL, prTitle, tc.lookupState)
-				}
-				exps = append(exps, expectedRun{cmd: cmd, res: execx.Result{Stdout: result}})
-				if result != "[]" {
-					break
-				}
+			pull := func(url, title, headRepo, base, state, mergedAt string) string {
+				return fmt.Sprintf(`{"html_url":%q,"title":%q,"state":%q,"merged_at":%s,"head":{"ref":%q,"repo":{"full_name":%q}},"base":{"ref":%q}}`,
+					url, title, state, mergedAt, repo.Branch, headRepo, base)
 			}
+			results := []string{
+				pull("https://github.com/acme/repo/pull/11", "Fork title", "fork/repo", "main", "open", "null"),
+				pull("https://github.com/acme/repo/pull/12", "Other head repository", "acme/other", "main", "open", "null"),
+				pull("https://github.com/acme/repo/pull/13", "Missing head repository", "", "main", "open", "null"),
+				pull("https://github.com/acme/repo/pull/14", "Other base", "acme/repo", "release", "open", "null"),
+			}
+			if tc.lookupState != "" {
+				state, mergedAt := strings.ToLower(tc.lookupState), "null"
+				if tc.lookupState == "MERGED" {
+					results = append(results, pull("https://github.com/acme/repo/pull/15", "Closed without merge", "acme/repo", "main", "closed", "null"))
+					state, mergedAt = "closed", `"2026-04-02T15:05:00Z"`
+				}
+				results = append(results, pull(prURL, prTitle, "acme/repo", "main", state, mergedAt))
+			}
+			exps := []expectedRun{{
+				cmd: ghCommand(repo.Dir, "api", "repos/Acme/Repo/pulls?base=main&head=Acme%3Aagent00-issue-17&page=1&per_page=100&state=all"),
+				res: execx.Result{Stdout: "[" + strings.Join(results, ",") + "]"},
+			}}
 			if tc.promptURL != "" {
 				cfg.Prompt = "Related PR: " + tc.promptURL
 			}
 			if tc.promptState != "" {
 				exps = append(exps, expectedRun{
 					cmd: prStateViewCommand(repo.Dir, tc.promptURL),
-					res: execx.Result{Stdout: fmt.Sprintf(`{"url":%q,"title":%q,"state":%q,"headRefName":%q,"baseRefName":%q}`,
-						cmp.Or(tc.resolvedURL, tc.promptURL), prTitle, tc.promptState, repo.Branch, tc.promptBase)},
+					res: execx.Result{Stdout: fmt.Sprintf(`{"url":%q,"title":%q,"state":%q,"headRefName":%q,"baseRefName":%q,"headRepository":{"name":"repo"},"headRepositoryOwner":{"login":%q}}`,
+						cmp.Or(tc.resolvedURL, tc.promptURL), prTitle, tc.promptState, repo.Branch, tc.promptBase, tc.promptOwner)},
 				})
 			}
 			fake := &fakeRunner{t: t, exps: exps}

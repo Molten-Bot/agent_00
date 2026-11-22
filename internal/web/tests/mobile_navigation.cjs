@@ -29,7 +29,10 @@ async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile 
     if (!url.pathname.startsWith('/api/')) return route.continue();
     if (route.request().method() !== 'GET') writes.push(url.pathname);
     let json = { ok: true };
-    if (url.pathname === '/api/status') json = { tasks, events: [], repositories: [], stats: {}, resources: {} };
+    if (url.pathname === '/api/status') json = {
+      events: [], repositories: [], stats: {}, resources: {},
+      ...(typeof tasks === 'function' ? tasks() : { tasks }),
+    };
     if (url.pathname === '/api/agent-auth') json.auth = { required: false, ready: true, harness: 'codex', state: 'ready' };
     if (url.pathname === '/api/review-settings') json.settings = {
       review_level: 'off', default_library_enabled: true, json_enabled: true, chat_enabled: true, github_issues_enabled: true,
@@ -174,6 +177,32 @@ test('task card distinguishes the titled pull request from the merged pull reque
   await result.locator('.task-result-link').waitFor();
   assert.equal(await result.locator('.task-result-title').textContent(), 'PR Merged');
   assert.equal(await result.locator('.task-result-link').getAttribute('href'), trackedURL);
+});
+
+test('task history picks up a verified manual PR after the task expires', async t => {
+  const requestID = 'expired-issue-task';
+  const prURL = 'https://github.com/example/project/pull/42';
+  const completedAt = new Date(Date.now() - 15 * 60_000).toISOString();
+  const verifiedPR = { url: prURL, title: 'Manually opened PR', verified_at: new Date().toISOString() };
+  let snapshot = { tasks: [{
+    request_id: requestID, prompt: 'Original prompt', repo: 'example/project',
+    status: 'error', started_at: completedAt, updated_at: completedAt, issue_title: 'Original issue title',
+  }] };
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, () => snapshot);
+  await page.waitForFunction(id => JSON.parse(localStorage.getItem('hubui.taskHistory.v1') || '[]')
+    .some(task => task.request_id === id), requestID);
+
+  snapshot = { tasks: [], verified_task_prs: { [requestID]: verifiedPR, 'unknown-task': verifiedPR } };
+  await page.reload();
+  await page.locator('#task-history-toggle').click();
+  const task = page.locator(`#task-list .task[data-request-id="${requestID}"]`);
+  await task.getByText(verifiedPR.title, { exact: true }).waitFor();
+  assert.equal(await task.locator('.task-github-link').getAttribute('href'), prURL);
+  assert.equal(await page.locator('#task-list .task[data-request-id="unknown-task"]').count(), 0);
+  const saved = await page.evaluate(id => JSON.parse(localStorage.getItem('hubui.taskHistory.v1'))
+    .find(task => task.request_id === id), requestID);
+  assert.equal(saved.history_completed_at, completedAt);
+  assert.equal(saved.prompt, 'Original prompt');
 });
 
 for (const viewport of [{ width: 430, height: 932 }, { width: 932, height: 430 }]) {

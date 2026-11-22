@@ -195,8 +195,11 @@ type Harness struct {
 	OnStep func(string)
 	// OnCheckout reports that all repositories have been checked out successfully.
 	OnCheckout func()
-	// OnPRTitle reports the title after PR creation, reuse, or a title update.
-	OnPRTitle            func(url, title string)
+	// OnPRTitle reports reused or updated PR titles and handles creation when OnPRCreated is unset.
+	OnPRTitle func(url, title string)
+	// OnPRCreated reports the URL and title of a newly created pull request.
+	OnPRCreated func(url, title string)
+
 	ResumeIssueWorkspace bool
 	// IssuePublicationReady records that a prior attempt accepted the agent result.
 	IssuePublicationReady bool
@@ -1397,13 +1400,20 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 }
 
 type prStateView struct {
-	URL         string `json:"url"`
-	Title       string `json:"title"`
-	State       string `json:"state"`
-	MergedAt    string `json:"mergedAt"`
-	BaseRefName string `json:"baseRefName"`
-	HeadRefName string `json:"headRefName"`
-	HeadRefOID  string `json:"headRefOid"`
+	URL            string `json:"url"`
+	Title          string `json:"title"`
+	State          string `json:"state"`
+	MergedAt       string `json:"mergedAt"`
+	BaseRefName    string `json:"baseRefName"`
+	HeadRefName    string `json:"headRefName"`
+	HeadRefOID     string `json:"headRefOid"`
+	HeadRepository struct {
+		Name          string `json:"name"`
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"headRepository"`
+	HeadRepositoryOwner struct {
+		Login string `json:"login"`
+	} `json:"headRepositoryOwner"`
 }
 
 func (h Harness) recreatePullRequestIfClosed(ctx context.Context, repo *repoWorkspace, cfg config.Config) (bool, error) {
@@ -2656,9 +2666,12 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 				}
 			} else {
 				resolvedURL := stringsx.FirstNonEmpty(state.URL, promptPRURL)
+				headRepo := stringsx.FirstNonEmpty(state.HeadRepository.NameWithOwner,
+					state.HeadRepositoryOwner.Login+"/"+state.HeadRepository.Name)
 				if strings.EqualFold(githubutil.PullRequestRepository(resolvedURL), targetRepo) &&
 					(claimedBase == "" || state.BaseRefName == claimedBase) &&
-					(cfg.GitHubIssue == nil || pullRequestStateIsOpen(state) || pullRequestStateIsMerged(state)) {
+					(cfg.GitHubIssue == nil || (strings.EqualFold(headRepo, issuePRHeadRepository(repos[i])) &&
+						(pullRequestStateIsOpen(state) || pullRequestStateIsMerged(state)))) {
 					pr = ghPRLookupEntry{URL: resolvedURL, Title: state.Title}
 				}
 			}
@@ -2779,7 +2792,9 @@ func (h Harness) createPullRequestURL(
 				return "", fmt.Errorf("gh pr create did not return a PR URL for repo %s", repo.URL)
 			}
 		}
-		if h.OnPRTitle != nil {
+		if h.OnPRCreated != nil {
+			h.OnPRCreated(prURL, cfg.PRTitle)
+		} else if h.OnPRTitle != nil {
 			h.OnPRTitle(prURL, cfg.PRTitle)
 		}
 		return prURL, nil
@@ -2854,24 +2869,70 @@ func (h Harness) lookupAnyPRByHead(ctx context.Context, repo repoWorkspace) (ghP
 	return h.runPRLookup(ctx, repo, headRef, "any", cmd)
 }
 
+func issuePRHeadRepository(repo repoWorkspace) string {
+	ref, ok := parseGitHubRepoRef(repo.URL)
+	if !ok {
+		return ""
+	}
+	owner := stringsx.FirstNonEmpty(repo.PRHeadOwner, ref.owner)
+	return owner + "/" + ref.name
+}
+
 func (h Harness) lookupIssuePRByHead(ctx context.Context, repo repoWorkspace, base string) (ghPRLookupEntry, error) {
-	headRef := repoPRHeadRef(repo)
-	if headRef == "" {
+	branch := branchNameFromHeadRef(repoPRHeadRef(repo))
+	headRepo := issuePRHeadRepository(repo)
+	target := repoPRTargetRepo(repo)
+	if branch == "" || headRepo == "" || target == "" {
 		return ghPRLookupEntry{}, nil
 	}
 
-	// Filter on GitHub before limiting results so a newer closed PR cannot hide a merged one.
-	for _, state := range []string{"open", "merged"} {
-		cmd := prLookupByHeadStateCommand(repo.Dir, state, headRef, repoPRTargetRepo(repo))
+	owner, _, _ := strings.Cut(headRepo, "/")
+	var merged ghPRLookupEntry
+	for page := 1; ; page++ {
+		query := url.Values{"state": {"all"}, "head": {owner + ":" + branch}, "per_page": {"100"}, "page": {strconv.Itoa(page)}}
 		if base != "" {
-			cmd.Args = append(cmd.Args, "--base", base)
+			query.Set("base", base)
 		}
-		pr, err := h.runPRLookup(ctx, repo, headRef, state, cmd)
-		if err != nil || pr.URL != "" {
-			return pr, err
+		cmd := ghCommand(repo.Dir, "api", "repos/"+target+"/pulls?"+query.Encode())
+		res, err := h.runCommand(ctx, "pr", cmd)
+		if err != nil {
+			return ghPRLookupEntry{}, commandErrorWithDetails("lookup pull request for issue branch", err, res, maxGitErrorDetailChars)
+		}
+		var prs []struct {
+			URL      string `json:"html_url"`
+			Title    string `json:"title"`
+			State    string `json:"state"`
+			MergedAt string `json:"merged_at"`
+			Head     struct {
+				Ref  string `json:"ref"`
+				Repo struct {
+					FullName string `json:"full_name"`
+				} `json:"repo"`
+			} `json:"head"`
+			Base struct {
+				Ref string `json:"ref"`
+			} `json:"base"`
+		}
+		if err := json.Unmarshal([]byte(res.Stdout), &prs); err != nil {
+			return ghPRLookupEntry{}, fmt.Errorf("decode pull requests for issue branch: %w", err)
+		}
+		for _, pr := range prs {
+			if pr.URL == "" || pr.Head.Ref != branch || !strings.EqualFold(pr.Head.Repo.FullName, headRepo) ||
+				(base != "" && pr.Base.Ref != base) {
+				continue
+			}
+			entry := ghPRLookupEntry{URL: pr.URL, Title: pr.Title, State: pr.State}
+			if pr.State == "open" {
+				return entry, nil
+			}
+			if pr.MergedAt != "" && merged.URL == "" {
+				merged = entry
+			}
+		}
+		if len(prs) < 100 {
+			return merged, nil
 		}
 	}
-	return ghPRLookupEntry{}, nil
 }
 
 func (h Harness) runPRLookup(ctx context.Context, repo repoWorkspace, headRef, state string, cmd execx.Command) (ghPRLookupEntry, error) {
@@ -8564,7 +8625,7 @@ func prLookupAnyByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Comma
 
 func prStateViewCommand(repoDir, prURL string) execx.Command {
 	selector := githubutil.PullRequestSelector(prURL)
-	args := []string{"pr", "view", selector, "--json", "url,title,state,mergedAt,baseRefName,headRefName,headRefOid"}
+	args := []string{"pr", "view", selector, "--json", "url,title,state,mergedAt,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner"}
 	if repo := githubutil.PullRequestRepository(prURL); repo != "" {
 		args = append(args, "--repo", repo)
 	}

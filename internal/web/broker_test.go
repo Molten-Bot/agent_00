@@ -98,9 +98,13 @@ func TestBrokerKeepsCreatedPRTitleWhenCompletionSelectsReusedPR(t *testing.T) {
 	const createdTitle = "Title of created PR"
 	b := NewBroker()
 	b.IngestLog("task status=start request_id=" + requestID)
-	b.RecordTaskPRTitle(requestID, createdURL, createdTitle)
+	b.RecordCreatedTaskPRTitle(requestID, createdURL, createdTitle)
+	b.RecordTaskPRTitle(requestID, reusedURL, "Reused PR title")
+	if task, _ := b.Task(requestID); task.PRTitleURL != createdURL || task.PRTitle != createdTitle {
+		t.Fatalf("in-progress task lost created PR metadata: %+v", task)
+	}
 	b.IngestLog("task status=completed request_id=" + requestID + " pr_url=" + reusedURL + " pr_urls=" + reusedURL + "," + createdURL)
-	b.recordTaskPRTitle(requestID, reusedURL, "Monitored reused PR title", true)
+	b.recordTaskPRTitle(requestID, reusedURL, "Monitored reused PR title", taskPRTitleMonitored)
 
 	task, _ := b.Task(requestID)
 	for _, task := range []Task{task, b.StreamSnapshot().Tasks[0]} {

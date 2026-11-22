@@ -179,6 +179,7 @@ func (s Server) ReconcileIssueWork(ctx context.Context) error {
 
 func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.IssueClaimRecord) error {
 	if record.State == "fulfilled" && !record.UnlockPending {
+		s.publishVerifiedIssuePR(record)
 		return nil
 	}
 	lock, err := s.IssueClaims.TryLock(localruntime.IssueExecutionKey(record.Run.GitHubIssue))
@@ -279,6 +280,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		}
 		if pr.URL != "" {
 			record.PRURL = pr.URL
+			record.PRTitle = strings.TrimSpace(pr.Title)
 			record.VerifiedAt = time.Now().UTC()
 			record.State = "fulfilled"
 			record.Error = ""
@@ -286,9 +288,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			if err := s.IssueClaims.Save(record); err != nil {
 				return err
 			}
-			if s.Broker != nil {
-				s.Broker.RecordTaskPRTitle(record.RequestID, pr.URL, pr.Title)
-			}
+			s.publishVerifiedIssuePR(record)
 			return nil
 		}
 	}
@@ -417,6 +417,14 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		return s.deferIssueRecord(record, err)
 	}
 	return nil
+}
+
+func (s Server) publishVerifiedIssuePR(record localruntime.IssueClaimRecord) {
+	if s.Broker != nil {
+		s.Broker.recordVerifiedTaskPR(record.RequestID, verifiedTaskPR{
+			URL: record.PRURL, Title: record.PRTitle, VerifiedAt: record.VerifiedAt,
+		})
+	}
 }
 
 // ValidateIssueOwnership fences harness-controlled execution and publication.

@@ -482,6 +482,43 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryPublishesVerifiedPRAfterTaskExpires(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	now := time.Now().Add(-defaultTerminalTaskTimeout)
+	s.Broker.now = func() time.Time { return now }
+	s.Broker.IngestLog("task status=error request_id=" + record.RequestID)
+	now = time.Now()
+	if _, ok := s.Broker.Task(record.RequestID); ok {
+		t.Fatal("terminal task should have expired")
+	}
+
+	f.prs = recoveryPR("open", "null", "agent00-issue-17", "main")
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	check := func(snapshot Snapshot) {
+		t.Helper()
+		pr := snapshot.VerifiedTaskPRs[record.RequestID]
+		if pr.URL != "https://github.com/acme/repo/pull/42" || pr.Title != recoveryPRTitle || pr.VerifiedAt.IsZero() {
+			t.Fatalf("verified PR metadata = %+v", pr)
+		}
+		if len(snapshot.Tasks) != 0 {
+			t.Fatalf("snapshot resurrected expired task: %+v", snapshot.Tasks)
+		}
+	}
+	check(s.Broker.StreamSnapshot())
+
+	s.Broker = NewBroker()
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	check(s.Broker.Snapshot())
+}
+
 func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)

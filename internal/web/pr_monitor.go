@@ -236,7 +236,7 @@ func (m *PRMergeMonitor) checkTaskPR(ctx context.Context, task Task) {
 		return
 	}
 	if !isReviewTask(task.Source, task.Workflow) {
-		m.Broker.recordTaskPRTitle(task.RequestID, task.PRURL, state.Title, true)
+		m.Broker.recordTaskPRTitle(task.RequestID, task.PRURL, state.Title, taskPRTitleMonitored)
 	}
 	if !state.Merged() {
 		m.maybeQueueReviewFeedback(ctx, task, state)

@@ -11232,16 +11232,18 @@
 
     function rememberCompletedTaskHistory(snapshot) {
       const nowMs = Date.now();
+      const liveTaskIDs = new Set();
       let changed = false;
       if (!(state.taskHistoryByID instanceof Map)) {
         state.taskHistoryByID = new Map();
         changed = true;
       }
       for (const task of snapshot?.tasks || []) {
+        const requestID = String(task?.request_id || "").trim();
+        liveTaskIDs.add(requestID);
         if (!isCompletedTask(task)) {
           continue;
         }
-        const requestID = String(task?.request_id || "").trim();
         if (!requestID || isTaskHistoryExpired(task, nowMs)) {
           continue;
         }
@@ -11272,6 +11274,24 @@
           continue;
         }
         state.taskHistoryByID.set(requestID, copy);
+        changed = true;
+      }
+      for (const [requestID, pr] of Object.entries(snapshot?.verified_task_prs || {})) {
+        const existing = state.taskHistoryByID.get(requestID);
+        if (!existing || liveTaskIDs.has(requestID) || !pr?.url || !pr?.title ||
+            isTaskHistoryExpired(existing, nowMs) ||
+            parseTaskTimestamp(existing.updated_at) > parseTaskTimestamp(pr.verified_at)) {
+          continue;
+        }
+        if (existing.pr_url === pr.url && existing.pr_title_url === pr.url && existing.pr_title === pr.title) {
+          continue;
+        }
+        state.taskHistoryByID.set(requestID, {
+          ...existing,
+          pr_url: pr.url,
+          pr_title_url: pr.url,
+          pr_title: pr.title,
+        });
         changed = true;
       }
       const pruned = pruneTaskHistory(nowMs);
