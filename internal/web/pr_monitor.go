@@ -236,7 +236,19 @@ func (m *PRMergeMonitor) checkTaskPR(ctx context.Context, task Task) {
 		return
 	}
 	if !isReviewTask(task.Source, task.Workflow) {
-		m.Broker.recordTaskPRTitle(task.RequestID, task.PRURL, state.Title, taskPRTitleMonitored)
+		if task.PRTitleURL == "" || task.PRTitleURL == task.PRURL {
+			m.Broker.recordTaskPRTitle(task.RequestID, task.PRURL, state.Title, taskPRTitleMonitored)
+		} else {
+			result, err := m.Runner.Run(ctx, execx.Command{
+				Name: "gh",
+				Args: []string{"pr", "view", task.PRTitleURL, "--json", "title", "--jq", ".title"},
+			})
+			if err != nil {
+				m.Logf("localruntime.ui status=warn event=pr_monitor_title request_id=%s pr_url=%s err=%q", task.RequestID, task.PRTitleURL, err)
+			} else {
+				m.Broker.recordTaskPRTitle(task.RequestID, task.PRTitleURL, result.Stdout, taskPRTitleMonitored)
+			}
+		}
 	}
 	if !state.Merged() {
 		m.maybeQueueReviewFeedback(ctx, task, state)

@@ -203,6 +203,31 @@ test('task history picks up a verified manual PR after the task expires', async 
     .find(task => task.request_id === id), requestID);
   assert.equal(saved.history_completed_at, completedAt);
   assert.equal(saved.prompt, 'Original prompt');
+  assert.equal(saved.pr_title_updated_at, verifiedPR.verified_at);
+});
+
+test('task history keeps a renamed PR title when the live task expires', async t => {
+  const requestID = 'renamed-pr-task';
+  const prURL = 'https://github.com/example/project/pull/42';
+  const now = Date.now();
+  const completedAt = new Date(now - 15 * 60_000).toISOString();
+  const renamedAt = new Date(now - 60_000).toISOString();
+  const verifiedPR = { url: prURL, title: 'Original PR title', verified_at: new Date(now - 120_000).toISOString() };
+  let snapshot = { tasks: [{
+    request_id: requestID, prompt: 'Original prompt', repo: 'example/project',
+    status: 'completed', started_at: completedAt, updated_at: completedAt,
+    pr_url: prURL, pr_title_url: prURL, pr_title: 'Renamed PR title', pr_title_updated_at: renamedAt,
+  }] };
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, () => snapshot);
+  await page.waitForFunction(id => JSON.parse(localStorage.getItem('hubui.taskHistory.v1') || '[]')
+    .some(task => task.request_id === id && task.pr_title === 'Renamed PR title'), requestID);
+
+  snapshot = { tasks: [], verified_task_prs: { [requestID]: verifiedPR } };
+  await page.reload();
+  await page.locator('#task-history-toggle').click();
+  const task = page.locator(`#task-list .task[data-request-id="${requestID}"]`);
+  assert.equal(await task.locator('.task-id').textContent(), 'Renamed PR title');
+  assert.equal(await task.locator('.task-github-link').getAttribute('href'), prURL);
 });
 
 for (const viewport of [{ width: 430, height: 932 }, { width: 932, height: 430 }]) {

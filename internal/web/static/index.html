@@ -11269,6 +11269,7 @@
           String(existing.issue_title || "") === String(copy.issue_title || "") &&
           String(existing.pr_title || "") === String(copy.pr_title || "") &&
           String(existing.pr_title_url || "") === String(copy.pr_title_url || "") &&
+          String(existing.pr_title_updated_at || "") === String(copy.pr_title_updated_at || "") &&
           existingLogsLength === nextLogsLength
         ) {
           continue;
@@ -11278,12 +11279,11 @@
       }
       for (const [requestID, pr] of Object.entries(snapshot?.verified_task_prs || {})) {
         const existing = state.taskHistoryByID.get(requestID);
+        const verifiedAt = parseTaskTimestamp(pr?.verified_at);
         if (!existing || liveTaskIDs.has(requestID) || !pr?.url || !pr?.title ||
-            isTaskHistoryExpired(existing, nowMs) ||
-            parseTaskTimestamp(existing.updated_at) > parseTaskTimestamp(pr.verified_at)) {
-          continue;
-        }
-        if (existing.pr_url === pr.url && existing.pr_title_url === pr.url && existing.pr_title === pr.title) {
+            isTaskHistoryExpired(existing, nowMs) || !verifiedAt ||
+            verifiedAt <= parseTaskTimestamp(existing.pr_title_updated_at) ||
+            (!existing.pr_title_updated_at && verifiedAt < parseTaskTimestamp(existing.updated_at))) {
           continue;
         }
         state.taskHistoryByID.set(requestID, {
@@ -11291,6 +11291,7 @@
           pr_url: pr.url,
           pr_title_url: pr.url,
           pr_title: pr.title,
+          pr_title_updated_at: pr.verified_at,
         });
         changed = true;
       }

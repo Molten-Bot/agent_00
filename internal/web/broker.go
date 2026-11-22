@@ -86,6 +86,7 @@ type Task struct {
 	IssueTitle        string               `json:"issue_title,omitempty"`
 	PRTitle           string               `json:"pr_title,omitempty"`
 	PRTitleURL        string               `json:"pr_title_url,omitempty"`
+	PRTitleUpdatedAt  string               `json:"pr_title_updated_at,omitempty"`
 	LiveAppURL        string               `json:"live_app_url,omitempty"`
 	Error             string               `json:"error,omitempty"`
 	Warning           string               `json:"warning,omitempty"`
@@ -320,7 +321,7 @@ type taskState struct {
 	WorkspaceDir      string
 	Branch            string
 	PRURL             string
-	PRTitles          map[string]string
+	PRTitles          map[string]taskPRTitleMetadata
 	CreatedPRURLs     map[string]bool
 	TitledPRURLs      []string
 	LiveAppURL        string
@@ -543,8 +544,9 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			Branch:            t.Branch,
 			PRURL:             t.PRURL,
 			IssueTitle:        b.runConfigFieldsLocked(t.RequestID).issueTitle,
-			PRTitle:           prTitle,
+			PRTitle:           prTitle.title,
 			PRTitleURL:        prTitleURL,
+			PRTitleUpdatedAt:  formatTimeOrEmpty(prTitle.updatedAt),
 			LiveAppURL:        t.LiveAppURL,
 			Error:             t.Error,
 			Warning:           t.Warning,
@@ -654,8 +656,9 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		Branch:            t.Branch,
 		PRURL:             t.PRURL,
 		IssueTitle:        b.runConfigFieldsLocked(t.RequestID).issueTitle,
-		PRTitle:           prTitle,
+		PRTitle:           prTitle.title,
 		PRTitleURL:        prTitleURL,
+		PRTitleUpdatedAt:  formatTimeOrEmpty(prTitle.updatedAt),
 		LiveAppURL:        t.LiveAppURL,
 		Error:             t.Error,
 		Warning:           t.Warning,
@@ -679,6 +682,11 @@ func (b *Broker) RecordCreatedTaskPRTitle(requestID, prURL, title string) {
 
 type taskPRTitleSource int
 
+type taskPRTitleMetadata struct {
+	title     string
+	updatedAt time.Time
+}
+
 const (
 	taskPRTitleReported taskPRTitleSource = iota
 	taskPRTitleCreated
@@ -694,7 +702,7 @@ func (b *Broker) recordTaskPRTitle(requestID, prURL, title string, source taskPR
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if t := b.tasks[requestID]; t != nil && setTaskPRTitle(t, prURL, title, source) {
+	if t := b.tasks[requestID]; t != nil && setTaskPRTitle(t, prURL, title, b.now(), source) {
 		b.notifySubscribersLocked()
 	}
 }
@@ -711,21 +719,28 @@ func (b *Broker) recordVerifiedTaskPR(requestID string, pr verifiedTaskPR) {
 	}
 	b.verifiedTaskPRs[requestID] = pr
 	if t := b.tasks[requestID]; t != nil {
-		setTaskPRTitle(t, pr.URL, pr.Title, taskPRTitleReported)
+		current, _ := taskPRTitle(t)
+		if pr.VerifiedAt.After(current.updatedAt) {
+			setTaskPRTitle(t, pr.URL, pr.Title, pr.VerifiedAt, taskPRTitleReported)
+		}
 	}
 	b.notifySubscribersLocked()
 }
 
-func setTaskPRTitle(t *taskState, prURL, title string, source taskPRTitleSource) bool {
+func setTaskPRTitle(t *taskState, prURL, title string, updatedAt time.Time, source taskPRTitleSource) bool {
 	created := source == taskPRTitleCreated
-	if t.PRTitles[prURL] == title && (!created || t.CreatedPRURLs[prURL]) {
+	if t.PRTitles[prURL].title == title && (!created || t.CreatedPRURLs[prURL]) {
 		return false
 	}
 	if source == taskPRTitleMonitored {
-		// A merge lookup can track a different PR from the one on the task card.
 		_, titledURL := taskPRTitle(t)
-		if t.PRURL != prURL || (titledURL != "" && titledURL != prURL) {
+		if stringsx.FirstNonEmpty(titledURL, t.PRURL) != prURL {
 			return false
+		}
+		if titledURL != "" {
+			// Refresh the displayed title without changing the PR tracked for merge.
+			t.PRTitles[prURL] = taskPRTitleMetadata{title: title, updatedAt: updatedAt}
+			return true
 		}
 	}
 	if created {
@@ -735,9 +750,9 @@ func setTaskPRTitle(t *taskState, prURL, title string, source taskPRTitleSource)
 		t.CreatedPRURLs[prURL] = true
 	}
 	if t.PRTitles == nil {
-		t.PRTitles = make(map[string]string)
+		t.PRTitles = make(map[string]taskPRTitleMetadata)
 	}
-	t.PRTitles[prURL] = title
+	t.PRTitles[prURL] = taskPRTitleMetadata{title: title, updatedAt: updatedAt}
 	t.TitledPRURLs = slices.DeleteFunc(t.TitledPRURLs, func(url string) bool { return url == prURL })
 	t.TitledPRURLs = append(t.TitledPRURLs, prURL)
 	t.PRURL = prURL
@@ -1422,7 +1437,7 @@ func taskWorkflow(t *taskState) string {
 	return stringsx.FirstNonEmpty(t.Workflow, t.Skill)
 }
 
-func taskPRTitle(t *taskState) (title, url string) {
+func taskPRTitle(t *taskState) (taskPRTitleMetadata, string) {
 	if len(t.CreatedPRURLs) > 0 && !t.CreatedPRURLs[t.PRURL] {
 		for _, url := range slices.Backward(t.TitledPRURLs) {
 			if t.CreatedPRURLs[url] {
@@ -1430,15 +1445,15 @@ func taskPRTitle(t *taskState) (title, url string) {
 			}
 		}
 	}
-	if title := t.PRTitles[t.PRURL]; title != "" {
-		return title, t.PRURL
+	if metadata := t.PRTitles[t.PRURL]; metadata.title != "" {
+		return metadata, t.PRURL
 	}
 	// Multi-repo completion can select a PR without a recorded title.
 	if len(t.TitledPRURLs) > 0 {
 		url := t.TitledPRURLs[len(t.TitledPRURLs)-1]
 		return t.PRTitles[url], url
 	}
-	return "", ""
+	return taskPRTitleMetadata{}, ""
 }
 
 func taskAgentHarness(t *taskState) string {

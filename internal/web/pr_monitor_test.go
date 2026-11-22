@@ -51,6 +51,47 @@ func TestDefaultPRMergePollIntervalIsLowLatency(t *testing.T) {
 	}
 }
 
+func TestPRMergeMonitorRefreshesDisplayedPRTitle(t *testing.T) {
+	t.Parallel()
+
+	const requestID = "req-multi-repo"
+	const trackedURL = "https://github.com/acme/repo/pull/42"
+	const displayedURL = "https://github.com/acme/other/pull/99"
+	broker := NewBroker()
+	now := time.Date(2026, time.April, 9, 12, 0, 0, 0, time.UTC)
+	broker.now = func() time.Time { return now }
+	broker.IngestLog("task status=start request_id=" + requestID)
+	broker.RecordCreatedTaskPRTitle(requestID, displayedURL, "Original title")
+	broker.IngestLog("task status=completed request_id=" + requestID + " pr_url=" + trackedURL)
+	task, _ := broker.Task(requestID)
+	verifiedAt := now.Add(time.Minute)
+	now = now.Add(2 * time.Minute)
+
+	runner := &stubPRMonitorRunner{
+		results: []execx.Result{
+			{Stdout: `{"state":"OPEN","title":"Tracked PR title"}`},
+			{Stdout: `[]`},
+			{Stdout: "Renamed title\n"},
+		},
+	}
+	monitor := PRMergeMonitor{Runner: runner, Broker: broker, Logf: t.Logf}
+	monitor.checkTaskPR(t.Context(), task)
+
+	broker.recordVerifiedTaskPR(requestID, verifiedTaskPR{URL: displayedURL, Title: "Original title", VerifiedAt: verifiedAt})
+	got := broker.StreamSnapshot().Tasks[0]
+	if got.PRURL != trackedURL || got.PRTitleURL != displayedURL || got.PRTitle != "Renamed title" || got.Status != "completed" {
+		t.Fatalf("task after PR title refresh = %+v", got)
+	}
+	if got.PRTitleUpdatedAt != now.Format(time.RFC3339Nano) || got.UpdatedAt != task.UpdatedAt {
+		t.Fatalf("title timestamp = %q and task timestamp = %q, want %s and %s",
+			got.PRTitleUpdatedAt, got.UpdatedAt, now.Format(time.RFC3339Nano), task.UpdatedAt)
+	}
+	commands := runner.Commands()
+	if want := []string{"pr", "view", displayedURL, "--json", "title", "--jq", ".title"}; len(commands) != 3 || !slices.Equal(commands[2].Args, want) {
+		t.Fatalf("commands = %+v, want displayed PR lookup %v", commands, want)
+	}
+}
+
 func TestPRMergeMonitorMarksMergedTaskDoneAndRunsCleanup(t *testing.T) {
 	t.Parallel()
 
