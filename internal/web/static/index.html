@@ -9666,8 +9666,22 @@
       const source = String(task?.source || "").trim() || recordedTaskStartSource(task);
       if (source && source !== "github_issues") return "";
 
-      const header = taskPromptRawText(task).match(/^Complete GitHub issue ([\w.-]+\/[\w.-]+)#([1-9]\d*):[^\r\n]*\r?\n\r?\nIssue URL:[ \t]+(https:\/\/github\.com\/\1\/issues\/\2\/?)[ \t]*(?=\r?\n|$)/i);
-      return header?.[3] || "";
+      const prompt = taskPromptRawText(task);
+      const header = prompt.match(/^Complete GitHub issue ([\w.-]+\/[\w.-]+)#([1-9]\d*):/i);
+      if (!header) {
+        const legacy = source === "github_issues" && prompt.match(/^#([1-9]\d*):[^\r\n]*(?:\r?\n|$)/);
+        const repos = normalizedTaskRepos(task);
+        return legacy && repos.length === 1 && /^[\w.-]+\/[\w.-]+$/.test(repos[0])
+          ? `https://github.com/${repos[0]}/issues/${legacy[1]}` : "";
+      }
+      const expectedURL = `https://github.com/${header[1]}/issues/${header[2]}`;
+      const recordedURL = prompt.match(/(?:^|\r?\n)Issue URL:[ \t]*([^\r\n]*)/i);
+      if (recordedURL) {
+        return recordedURL[1].trim().replace(/\/$/, "").toLowerCase() === expectedURL.toLowerCase() ? expectedURL : "";
+      }
+      // Older saved task prompts can retain only the generated title.
+      return normalizedTaskRepos(task).some(repo => repo.toLowerCase() === header[1].toLowerCase())
+        ? expectedURL : "";
     }
 
     function taskPullRequestURL(task) {

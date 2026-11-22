@@ -178,6 +178,8 @@ test('legacy issue prompts restore task actions and workflow links', async t => 
   });
   const running = issueTask('legacy-running', 17, 'running');
   const saved = issueTask('local-legacy-history', 18, 'completed');
+  saved.source = 'github_issues';
+  saved.prompt = '#18: Update navigation\n\nIssue description\n\nComments:\n(No comments.)';
   const unrelated = issueTask('ordinary-history', 19, 'completed');
   unrelated.prompt = `Review this sample prompt:\n\n${unrelated.prompt}`;
   const lookalike = issueTask('lookalike-history', 20, 'completed');
