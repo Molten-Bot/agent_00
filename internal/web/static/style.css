@@ -2308,6 +2308,13 @@ select.prompt-control {
     0 10px 24px rgba(10, 132, 255, 0.18);
 }
 
+.task-history-toggle-badge,
+.task-assets-count {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .task-history-toggle-badge {
   position: absolute;
   top: -4px;
@@ -2322,9 +2329,6 @@ select.prompt-control {
   background: linear-gradient(180deg, #0a84ff, #0057d8);
   box-shadow: 0 8px 18px rgba(10, 132, 255, 0.3);
   color: #fff;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1;
 }
 
 .task-fullscreen-toggle:hover,
@@ -3009,6 +3013,16 @@ select.prompt-control {
   height: 100%;
   object-fit: contain;
   filter: var(--agent-logo-filter);
+}
+
+.task .task-assets-toggle.task-copy-link {
+  width: auto;
+  flex: 0 0 auto;
+  gap: 3px;
+}
+
+.task-assets-toggle .task-action-glyph {
+  flex-shrink: 0;
 }
 
 .task-clone-logo {
