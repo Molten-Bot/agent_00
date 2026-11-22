@@ -205,7 +205,7 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 }
 
 func isIssueRepairDependencyBlock(reason string) bool {
-	return reason == failurefollowup.OpenDependencyReason || reason == failurefollowup.UnmergedDependencyReason
+	return reason == failurefollowup.OpenDependencyReason || reason == failurefollowup.UnmergedDependencyReason || reason == failurefollowup.ExternalRolloutPrerequisitesReason
 }
 
 func (q *issueRepairQueue) releaseSharedBlockedRepairReceipts(blocked map[string]localruntime.IssueRepairRecord) {
@@ -264,6 +264,8 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 			return failurefollowup.UnmergedDependencyReason, nil
 		case localruntime.IssueIncidentOpenDependency:
 			return failurefollowup.OpenDependencyReason, nil
+		case "external_rollout_prerequisites":
+			return failurefollowup.ExternalRolloutPrerequisitesReason, nil
 		}
 		if reason := failurefollowup.NonRemediableFailureReason(errors.New(issue.FailureDetail())); isIssueRepairDependencyBlock(reason) {
 			return reason, nil
@@ -387,9 +389,15 @@ func retainIssueEvidence(claims *localruntime.IssueClaimStore, repairs *localrun
 	}
 	blockedRepairs := map[string]bool{}
 	for _, repair := range repairRecords {
-		if repair.State != "completed" {
-			blockedRepairs[repair.RequestID] = true
+		if repair.State == "completed" {
+			continue
 		}
+		// A rollout repair skipped before dispatch has no unresolved repair work.
+		// Its issue evidence still follows the verified retry retention window.
+		if repair.State == "blocked" && repair.Error == failurefollowup.ExternalRolloutPrerequisitesReason && !repair.Started && repair.PRURL == "" {
+			continue
+		}
+		blockedRepairs[repair.RequestID] = true
 	}
 	protectedIssues := map[string]bool{}
 	latest := map[string]localruntime.IssueClaimRecord{}

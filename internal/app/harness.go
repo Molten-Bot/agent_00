@@ -6622,14 +6622,14 @@ func (h Harness) runCodexWithHeartbeat(
 				return run.res, errors.Join(agentruntime.ErrCodexAuthRequired, stateErr)
 			}
 			if failed, detail := codexReportedFailure(run.res); failed {
-				detail = codexFailureDetailWithErrorDetails(run.res, detail)
+				detail, fullDetail := codexFailureDetailWithErrorDetails(run.res, detail)
 				if agentWorkspaceStorageExhausted(run.res) {
 					return run.res, fmt.Errorf("%s reported failure: workspace storage ran out of space while the agent was running; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem or free up space: %s", agentStage, detail)
 				}
 				if isImplementationTargetFailure(detail) {
 					return run.res, fmt.Errorf("%s reported failure: %s", agentStage, detail)
 				}
-				if isNonFatalValidationToolingFailure(detail, run.res) {
+				if isNonFatalValidationToolingFailure(fullDetail, run.res) {
 					h.logf(
 						"stage=%s status=warn action=validation_tooling_unavailable detail=%q%s",
 						agentStage,
@@ -6833,24 +6833,19 @@ func containsStandaloneSentence(lowerLine, sentence string) bool {
 	return false
 }
 
-func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) string {
+func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) (display, full string) {
 	detail := strings.TrimSpace(failureDetail)
 	if detail == "" {
 		detail = "Failure: task failed."
 	}
 	errorDetail := codexExtractErrorDetail(res.Stdout)
 	if errorDetail == "" {
-		errorDetail = codexExtractErrorDetail(res.Stderr)
+		errorDetail = codexExtractStderrErrorDetail(res.Stderr, detail)
 	}
-	if errorDetail == "" {
-		return detail
+	if errorDetail == "" || strings.Contains(strings.ToLower(detail), strings.ToLower(errorDetail)) {
+		return detail, detail
 	}
-	lowerDetail := strings.ToLower(detail)
-	lowerError := strings.ToLower(errorDetail)
-	if strings.Contains(lowerDetail, lowerError) {
-		return detail
-	}
-	return strings.TrimSpace(detail + " " + errorDetail)
+	return detail + " " + codexDisplayErrorDetail(errorDetail), detail + "\n" + errorDetail
 }
 
 func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
@@ -6869,6 +6864,22 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	// complete the requested work.
 	if strings.Contains(text, "cannot safely meet") {
 		return false
+	}
+
+	// Require the reported failure itself to concern validation. The details
+	// can supply missing-tool evidence but may also mention unrelated caveats.
+	reportedFailure := strings.TrimSpace(detail) != ""
+	reason := text
+	if reportedFailure {
+		report, ok := strings.CutPrefix(text, "failure:")
+		if !ok {
+			return false
+		}
+		summary, details, _ := strings.Cut(report, "error details:")
+		reason = strings.TrimSpace(summary)
+		if reason == "" {
+			reason = strings.TrimLeft(strings.TrimSpace(details), "- `")
+		}
 	}
 
 	validationUnavailableMarkers := []string{
@@ -6901,39 +6912,12 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"local validation tooling unavailable in runtime",
 		"build validation unavailable",
 		"full build validation could not run",
-		"full-suite validation unavailable in runtime",
+		"full-suite validation unavailable",
 		"focused go validation unavailable in runtime",
 		"node_modules missing",
 	}
-	validationUnavailable := stringsx.ContainsAny(text, validationUnavailableMarkers)
 
-	missingTooling := strings.Contains(text, "command not found") ||
-		strings.Contains(text, ": not found") ||
-		strings.Contains(text, "exit status 127") ||
-		strings.Contains(text, "exited with status 127") ||
-		strings.Contains(text, "exit code 127") ||
-		strings.Contains(text, "returned 127") ||
-		strings.Contains(text, "enoent") ||
-		strings.Contains(text, "cannot find module") ||
-		strings.Contains(text, "do you have node modules installed") ||
-		strings.Contains(text, "have node modules installed") ||
-		strings.Contains(text, "do you have node_modules installed") ||
-		strings.Contains(text, "have node_modules installed") ||
-		strings.Contains(text, "not installed in runtime") ||
-		strings.Contains(text, "tooling/deps not installed") ||
-		strings.Contains(text, "missing deps") ||
-		strings.Contains(text, "missing dependencies") ||
-		strings.Contains(text, "missing dependency") ||
-		strings.Contains(text, "shim missing") ||
-		strings.Contains(text, "tool missing") ||
-		strings.Contains(text, "runner missing") ||
-		strings.Contains(text, "executable missing") ||
-		strings.Contains(text, "binary missing") ||
-		strings.Contains(text, "command missing") ||
-		strings.Contains(text, "could not find task 'build' in project") ||
-		strings.Contains(text, "`uv` missing") ||
-		strings.Contains(text, "uv missing") ||
-		strings.Contains(text, "node_modules missing")
+	missingTooling := hasMissingValidationTool(text)
 	restrictedDependencyDownload := stringsx.ContainsAny(text, []string{
 		"restricted network",
 		"network operation prohibited",
@@ -6947,8 +6931,17 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	if !missingTooling && !restrictedDependencyDownload {
 		return false
 	}
+	// A missing tool elsewhere in the report does not explain a failed test
+	// or compiler diagnostic.
+	if failurefollowup.HasValidationFailureEvidence(text) || hasUnexplainedValidationExit(text) {
+		return false
+	}
+	smokeCommand := strings.Contains(text, "smoke command")
+	smokeValidation := smokeCommand || stringsx.ContainsAny(text, []string{"smoke fallback", "fallback smoke"})
+	if smokeValidation && !smokeFallbackSucceeded(text) {
+		return false
+	}
 	validationCommandMarkers := []string{
-		"smoke command",
 		"npm run lint",
 		"npm run build",
 		"npm run check",
@@ -6965,43 +6958,32 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"go vet",
 		"golangci-lint",
 	}
-	// Only a validation failure can be waived for missing local tooling.
-	// Unlabeled validation notes must not override an implementation blocker.
-	if strings.TrimSpace(detail) != "" {
-		report, ok := strings.CutPrefix(text, "failure:")
-		if !ok {
-			return false
+	if reportedFailure {
+		smokeReason := strings.TrimPrefix(reason, "initial ")
+		if command, ok := strings.CutPrefix(smokeReason, "`"); ok {
+			_, suffix, _ := strings.Cut(command, "`")
+			smokeReason = strings.TrimSpace(suffix)
 		}
-		summary, details, _ := strings.Cut(report, "error details:")
-		reason := strings.TrimSpace(summary)
-		if reason == "" {
-			reason = strings.TrimLeft(strings.TrimSpace(details), "- `")
+		if strings.HasPrefix(smokeReason, "smoke command ") {
+			return true
 		}
-		validationSummary := false
 		for _, marker := range validationUnavailableMarkers {
-			validationSummary = validationSummary || strings.HasPrefix(reason, marker)
+			if strings.HasPrefix(reason, marker) {
+				return true
+			}
 		}
 		commandReason := strings.TrimLeft(strings.TrimPrefix(strings.TrimPrefix(reason, "full "), "local "), "`")
-		commandReason = strings.TrimPrefix(commandReason, "initial ")
-		if quoted, ok := strings.CutPrefix(commandReason, "`"); ok {
-			_, suffix, closed := strings.Cut(quoted, "`")
-			if closed && strings.HasPrefix(strings.TrimSpace(suffix), "smoke command ") {
-				commandReason = strings.TrimSpace(suffix)
-			}
-		}
 		for _, command := range validationCommandMarkers {
 			if rest, ok := strings.CutPrefix(commandReason, command); ok && (rest == "" || strings.ContainsRune(" `.:", rune(rest[0]))) {
-				validationSummary = true
+				return true
 			}
 		}
-		if !validationSummary {
-			return false
-		}
+		return false
 	}
-	if strings.Contains(text, "smoke command") {
-		return smokeFallbackSucceeded(text)
+	if smokeCommand {
+		return true
 	}
-	if validationUnavailable {
+	if stringsx.ContainsAny(text, validationUnavailableMarkers) {
 		return true
 	}
 
@@ -7039,10 +7021,77 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	return false
 }
 
+func hasMissingValidationTool(text string) bool {
+	return strings.Contains(text, "command not found") ||
+		strings.Contains(text, ": not found") ||
+		strings.Contains(text, "exit status 127") ||
+		strings.Contains(text, "exited with status 127") ||
+		strings.Contains(text, "exit code 127") ||
+		strings.Contains(text, "returned 127") ||
+		strings.Contains(text, "enoent") ||
+		strings.Contains(text, "cannot find module") ||
+		strings.Contains(text, "do you have node modules installed") ||
+		strings.Contains(text, "have node modules installed") ||
+		strings.Contains(text, "do you have node_modules installed") ||
+		strings.Contains(text, "have node_modules installed") ||
+		strings.Contains(text, "not installed in runtime") ||
+		strings.Contains(text, "tooling/deps not installed") ||
+		strings.Contains(text, "missing deps") ||
+		strings.Contains(text, "missing dependencies") ||
+		strings.Contains(text, "missing dependency") ||
+		strings.Contains(text, "shim missing") ||
+		strings.Contains(text, "tool missing") ||
+		strings.Contains(text, "runner missing") ||
+		strings.Contains(text, "executable missing") ||
+		strings.Contains(text, "binary missing") ||
+		strings.Contains(text, "command missing") ||
+		strings.Contains(text, "could not find task 'build' in project") ||
+		strings.Contains(text, "`uv` missing") ||
+		strings.Contains(text, "uv missing") ||
+		strings.Contains(text, "node_modules missing")
+}
+
+// A nonzero command exit needs its own missing-tool explanation. A separate
+// optional lint failure cannot explain a test runner that actually ran.
+var validationCommandExit = regexp.MustCompile(`\b(?:exit(?:ed)?(?: with)? (?:status|code)|returned) ([1-9][0-9]*)\b`)
+var validationDiagnosticBreak = regexp.MustCompile(`\n| \| |[.;] +`)
+
+func hasUnexplainedValidationExit(text string) bool {
+	for _, diagnostic := range validationDiagnosticBreak.Split(text, -1) {
+		for _, match := range validationCommandExit.FindAllStringSubmatchIndex(diagnostic, -1) {
+			if diagnostic[match[2]:match[3]] == "127" {
+				continue
+			}
+			// An ordinary failing exit is not a missing-command status. Require
+			// the report to attribute that exit to the tooling gap explicitly.
+			suffix := strings.TrimSpace(diagnostic[match[1]:])
+			cause, causal := strings.CutPrefix(suffix, "because ")
+			if !causal {
+				cause, causal = strings.CutPrefix(suffix, "due to ")
+			}
+			if !causal || !hasMissingValidationTool(cause) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var smokeFallbackPass = regexp.MustCompile(`(?:^|[.;!]\s+)(?:the )?(?:smoke fallback|fallback(?: smoke(?: check| test)?)?) (?:passed|succeeded)(?: using [^\s,.;!]+)?(?:[.!]?$|[.;!]\s+)`)
+var smokeCheckFailure = regexp.MustCompile(`\b(?:smoke (?:fallback|check|test)|fallback smoke(?: check| test)?|(?:health |readiness )?endpoint) (?:failed|did not pass|timed out)\b`)
+var smokeHTTPFailure = regexp.MustCompile(`\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b`)
+
+var expectedSmokeHTTPStatus = regexp.MustCompile(`\bexpected http(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b|\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000) (?:as expected\b|\(expected\))`)
+
 func smokeFallbackSucceeded(text string) bool {
+	if smokeHTTPFailure.MatchString(expectedSmokeHTTPStatus.ReplaceAllString(text, "")) || smokeCheckFailure.MatchString(text) {
+		return false
+	}
+	confirmed := false
 	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.Contains(line, "smoke") || !strings.Contains(line, "fallback") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(agentFailureFieldLine(line), "error details:"), "failure:"))
+		if !strings.HasPrefix(line, "fallback ") && !strings.HasPrefix(line, "the fallback ") &&
+			(!strings.Contains(line, "smoke") || !strings.Contains(line, "fallback")) {
 			continue
 		}
 		if stringsx.ContainsAny(line, []string{
@@ -7058,7 +7107,7 @@ func smokeFallbackSucceeded(text string) bool {
 			"succeeded: false",
 			"passed: false",
 		}) {
-			continue
+			return false
 		}
 		if stringsx.ContainsAny(line, []string{
 			"apparently",
@@ -7079,16 +7128,11 @@ func smokeFallbackSucceeded(text string) bool {
 		}) {
 			continue
 		}
-		if stringsx.ContainsAny(line, []string{
-			"fallback succeeded",
-			"fallback passed",
-			"fallback smoke check succeeded",
-			"fallback smoke check passed",
-		}) {
-			return true
+		if smokeFallbackPass.MatchString(line) {
+			confirmed = true
 		}
 	}
-	return false
+	return confirmed
 }
 
 func isImplementationTargetFailure(detail string) bool {
@@ -7201,57 +7245,83 @@ func isNonFatalRemoteDeploymentAuthFailure(detail string, res execx.Result) bool
 	return true
 }
 
+func codexExtractStderrErrorDetail(output, failure string) string {
+	// Codex writes its prompt and tool transcript to stderr. Only consume a
+	// compact report at the start of the stream or a standalone diagnostic.
+	output = strings.TrimSpace(output)
+	lines := splitOutputLines(output)
+	if len(lines) == 0 || len(lines) > 8 {
+		return ""
+	}
+	first := agentFailureFieldLine(lines[0])
+	if len(lines) > 1 && strings.EqualFold(first, failure) {
+		for _, line := range lines[1:] {
+			switch strings.ToLower(strings.TrimSpace(line)) {
+			case "user", "codex", "exec", "tokens used":
+				return ""
+			}
+		}
+		if strings.HasPrefix(strings.ToLower(agentFailureFieldLine(lines[1])), "error details:") {
+			return codexExtractErrorDetail(output)
+		}
+		return ""
+	}
+	if len(lines) == 1 {
+		return codexExtractErrorDetail(output)
+	}
+	// Some wrappers send the details field separately as a single bullet.
+	if len(lines) == 2 && strings.EqualFold(first, "error details:") && strings.HasPrefix(strings.TrimSpace(lines[1]), "- ") {
+		return codexExtractErrorDetail(output)
+	}
+	return ""
+}
+
 func codexExtractErrorDetail(output string) string {
 	lines := splitOutputLines(output)
-	for i, line := range lines {
+	if len(lines) == 0 {
+		return ""
+	}
+
+	nonEmpty := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		nonEmpty = append(nonEmpty, trimmed)
+	}
+	if len(nonEmpty) == 0 {
+		return ""
+	}
+
+	for i, line := range nonEmpty {
 		field := agentFailureFieldLine(line)
 		lower := strings.ToLower(field)
 		if strings.HasPrefix(lower, "error details:") {
-			detail := agentErrorDetailField(field[len("error details:"):], lines[i+1:])
-			if detail != "" {
-				return "Error details: " + detail
+			suffix := strings.TrimSpace(field[len("error details:"):])
+			details := codexErrorDetailLines(nonEmpty[i+1:], true, markdownHeadingLevel(line))
+			if suffix == "" && len(details) == 0 {
+				return "Error details: unknown error."
 			}
-			return "Error details: unknown error."
+			header := strings.TrimSpace("Error details: " + suffix)
+			return strings.Join(append([]string{header}, details...), "\n")
 		}
 		if isStructuredFailureErrorLine(line) {
-			return strings.TrimSpace(line)
+			return line
 		}
 	}
 
-	fallback := codexJoinErrorDetailLines(lines)
-	if fallback == "" {
+	fallback := codexErrorDetailLines(nonEmpty, false, 0)
+	if len(fallback) == 0 {
 		return ""
 	}
-	return "Error details: " + fallback
+	return "Error details:\n" + strings.Join(fallback, "\n")
 }
 
-func agentErrorDetailField(suffix string, lines []string) string {
+func codexErrorDetailLines(lines []string, stopAtSection bool, detailsHeadingLevel int) []string {
 	var details []string
-	if suffix = strings.TrimSpace(suffix); suffix != "" {
-		details = append(details, suffix)
-	}
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || isMarkdownCodeFence(line) {
-			continue
-		}
-		field := strings.ToLower(agentFailureFieldLine(line))
-		if strings.HasPrefix(line, "##") || strings.HasPrefix(line, "# ") ||
-			strings.HasPrefix(field, "resolved issue:") || strings.HasPrefix(field, "failure:") ||
-			strings.HasPrefix(field, "error details:") || strings.HasPrefix(field, "validation:") {
-			break
-		}
-		details = append(details, line)
-	}
-	return strings.Join(details, "\n")
-}
-
-func codexJoinErrorDetailLines(lines []string) string {
-	const maxDetailsLines = 3
-	const maxDetailChars = 320
-
-	details := make([]string, 0, maxDetailsLines)
-	for _, line := range lines {
+	var fence string
+	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
@@ -7259,25 +7329,92 @@ func codexJoinErrorDetailLines(lines []string) string {
 		// A Markdown code fence carries no diagnostic text of its own, and
 		// agents routinely wrap the reported error in one.
 		if isMarkdownCodeFence(trimmed) {
+			if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+				switch {
+				case fence == "":
+					fence = trimmed[:3]
+				case strings.HasPrefix(trimmed, fence):
+					fence = ""
+				}
+			}
 			continue
 		}
 		lower := strings.ToLower(agentFailureFieldLine(trimmed))
+		if stopAtSection && fence == "" && isAgentReportSection(trimmed, lower, detailsHeadingLevel) {
+			// A plain field has no heading level. Use diagnostic evidence to
+			// distinguish a nested Validation heading from a sibling section.
+			level := markdownHeadingLevel(trimmed)
+			label, inline, _ := strings.Cut(lower, ":")
+			if detailsHeadingLevel == 0 && strings.TrimRight(label, "*_# ") == "validation" {
+				subsection := codexErrorDetailLines(lines[i+1:], true, level)
+				body := strings.TrimSpace(inline) + "\n" + strings.Join(subsection, "\n")
+				lowerBody := strings.ToLower(body)
+				if reportedValidationFailure.MatchString(lowerBody) ||
+					failurefollowup.HasValidationFailureEvidence(body) || smokeHTTPFailure.MatchString(lowerBody) {
+					details = append(details, trimmed)
+					details = append(details, subsection...)
+				}
+			}
+			break
+		}
 		if strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
 			continue
 		}
 		details = append(details, trimmed)
-		if len(details) >= maxDetailsLines {
-			break
-		}
 	}
-	if len(details) == 0 {
-		return ""
+	return details
+}
+
+var reportedValidationFailure = regexp.MustCompile(`\b(?:tests?|checks?|validation) (?:still )?(?:fail(?:s|ed|ing)?|did not pass)\b`)
+
+func markdownHeadingLevel(line string) int {
+	title := strings.TrimLeft(line, "#")
+	if level := len(line) - len(title); level >= 1 && level <= 6 && (title == "" || title[0] == ' ' || title[0] == '\t') {
+		return level
 	}
-	joined := strings.Join(details, " | ")
-	if len(joined) <= maxDetailChars {
-		return joined
+	return 0
+}
+
+func isAgentReportSection(line, field string, detailsHeadingLevel int) bool {
+	// Subheadings of a Markdown Error details section can label diagnostics.
+	// A plain field has no heading level, so only known report sections end it.
+	if level := markdownHeadingLevel(line); level > 0 && detailsHeadingLevel > 0 {
+		return level <= detailsHeadingLevel
 	}
-	return strings.TrimSpace(joined[:maxDetailChars-3]) + "..."
+	label, _, _ := strings.Cut(field, ":")
+	switch strings.TrimRight(label, "*_# ") {
+	case "failure", "error details", "resolved issue", "validation", "alternative validation", "verification", "unblock path":
+		return true
+	case "next steps", "notes":
+		return markdownHeadingLevel(line) > 0
+	default:
+		return false
+	}
+}
+
+// Keep omissions visible to downstream repair classifiers that receive the
+// displayed error rather than the complete report.
+const truncatedErrorDetails = " | [error details truncated]"
+
+func codexDisplayErrorDetail(detail string) string {
+	const maxDetailsLines = 3
+	const maxDetailChars = 320
+
+	header, continuation, ok := strings.Cut(detail, "\n")
+	if !ok {
+		return detail
+	}
+	details := strings.SplitN(continuation, "\n", maxDetailsLines+1)
+	truncated := len(details) > maxDetailsLines
+	joined := strings.Join(details[:min(len(details), maxDetailsLines)], " | ")
+	separator := " | "
+	if header == "Error details:" {
+		separator = " "
+	}
+	if !truncated && len(joined) <= maxDetailChars {
+		return header + separator + joined
+	}
+	return header + separator + strings.TrimSpace(joined[:min(len(joined), maxDetailChars-len(truncatedErrorDetails))]) + truncatedErrorDetails
 }
 
 // isMarkdownCodeFence reports whether a line is only a code fence. An opening

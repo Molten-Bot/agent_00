@@ -85,6 +85,10 @@ var ErrGitHubPushProtection = errors.New(GitHubPushProtectionReason)
 // UnmergedDependencyReason identifies an agent-reported prerequisite PR.
 const UnmergedDependencyReason = "required pull request is unmerged"
 
+// ExternalRolloutPrerequisitesReason identifies cloud provisioning that must
+// happen before a production rollout can continue.
+const ExternalRolloutPrerequisitesReason = "production rollout requires external prerequisites"
+
 // OpenDependencyReason identifies an agent-reported open prerequisite.
 const OpenDependencyReason = "required dependency is still open"
 
@@ -92,6 +96,25 @@ const OpenDependencyReason = "required dependency is still open"
 // same wording while describing a different, actionable failure. An apostrophe
 // between word characters can be part of a contraction rather than a quote.
 var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\bblocked by (?:an? |the )?unmerged (?:pull request |pr )?\x60?#[1-9][0-9]*\b`)
+
+var pendingProductionRolloutSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:\s*(?:the )?production (?:rollout|deployment)(?: for #[1-9][0-9]*)? (?:remains|is|is still) pending\.?$`)
+var outstandingProvisioning = regexp.MustCompile(` (?:remain|are)(?: still)? (?:outstanding|pending)$`)
+var provisioningListSeparator = regexp.MustCompile(`, (?:and )?| and `)
+var iamProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:scoped iam|(?:scoped )?iam (?:access|approval|configuration|permissions?|polic(?:y|ies)|roles?|setup))$`)
+var secretProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:shared )?secrets manager (?:configuration|keys?|provisioning|secrets?|setup)$`)
+var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* flags? defaults? to (?:off|disabled))$`)
+
+var validationFailureEvidence = regexp.MustCompile(
+	`(?m)^\s*--- fail:|\bassertion(?:error| error| failed| failure)\b|\bexpected\b[^\n]*?(?:,\s*|\s+)(?:got|received)\b` +
+		`|\bfail[ \t]+\S+[ \t]+\[build failed\]` +
+		`|\.go:\d+(?::\d+)?:[ \t]+(?:undefined:|syntax error:|cannot (?:use|convert|assign)\b|invalid\b|` +
+		`[^\n]+\b(?:redeclared in this block|declared and not used|imported and not used)\b)`,
+)
+
+// HasValidationFailureEvidence reports whether text includes a test or compiler failure.
+func HasValidationFailureEvidence(text string) bool {
+	return validationFailureEvidence.MatchString(strings.ToLower(text))
+}
 
 const issueID = `#[1-9][0-9]*`
 const backtickedIssueID = `\x60` + issueID + `\x60`
@@ -454,20 +477,76 @@ func NonRemediableFailureReason(err error) string {
 	if isMissingRemoteBranchFailure(report) {
 		return missingRemoteBranchReason
 	}
-	summary, detail, _ := strings.Cut(report, "error details:")
+	summary, details, _ := strings.Cut(report, "error details:")
 	if unmergedDependencySummary.MatchString(summary) &&
 		!strings.Contains(summary, "no longer blocked") && !strings.Contains(summary, "not blocked") {
 		return UnmergedDependencyReason
 	}
-	if isOpenDependencyFailure(summary, detail) {
+	if pendingProductionRolloutSummary.MatchString(strings.TrimSpace(summary)) && hasOutstandingRolloutProvisioning(details) {
+		return ExternalRolloutPrerequisitesReason
+	}
+	reportedFailure := strings.HasPrefix(summary, "codex: codex reported failure:") ||
+		strings.HasPrefix(summary, "claude: claude reported failure:")
+	if isOpenDependencyFailure(summary, details) {
 		return OpenDependencyReason
 	}
 	for _, marker := range nonRemediableFailureMarkers {
-		if strings.Contains(text, marker) {
-			return marker
+		if !strings.Contains(text, marker) {
+			continue
 		}
+		// A failed test can quote a quota or billing error in its output.
+		// Keep actual invocation errors and quota blockers stated in the summary.
+		switch marker {
+		case "quota exceeded", "insufficient_quota", "billing":
+			if reportedFailure && !strings.Contains(summary, marker) &&
+				HasValidationFailureEvidence(strings.ReplaceAll(details, " | ", "\n")) {
+				continue
+			}
+		}
+		return marker
 	}
 	return NonRemediableRepoAccessReason(err)
+}
+
+func hasOutstandingRolloutProvisioning(details string) bool {
+	// The harness may flatten multiline error details with " | ".
+	details = strings.ReplaceAll(strings.TrimSpace(details), " | ", "\n")
+	statements := strings.FieldsFunc(details, func(r rune) bool {
+		return r == '.' || r == '!' || r == '?' || r == '\r' || r == '\n'
+	})
+	if len(statements) == 0 {
+		return false
+	}
+	statement := strings.TrimSpace(statements[0])
+	predicate := outstandingProvisioning.FindStringIndex(statement)
+	if predicate == nil {
+		return false
+	}
+	// The status must apply to the provisioning items themselves. Reject a
+	// different subject or clause that merely mentions those prerequisites.
+	var iam, secret bool
+	for _, item := range provisioningListSeparator.Split(statement[:predicate[0]], -1) {
+		switch {
+		case iamProvisioning.MatchString(item):
+			iam = true
+		case secretProvisioning.MatchString(item):
+			secret = true
+		case item == "deployed source verification":
+			// The status can also apply to verifying the deployment.
+		default:
+			return false
+		}
+	}
+	if !iam || !secret {
+		return false
+	}
+	// Suppress recovery only when the remaining details are known status text.
+	for _, extra := range statements[1:] {
+		if extra = strings.TrimSpace(extra); extra != "" && !disabledRolloutStatus.MatchString(extra) {
+			return false
+		}
+	}
+	return true
 }
 
 func isOpenDependencyFailure(summary, detail string) bool {
@@ -479,7 +558,7 @@ func isOpenDependencyFailure(summary, detail string) bool {
 		return true
 	}
 	// Normalize whitespace within each line while retaining line boundaries.
-	lines := strings.Split(strings.TrimSpace(detail), "\n")
+	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(detail), " | ", "\n"), "\n")
 	for i, line := range lines {
 		lines[i] = strings.Join(strings.Fields(line), " ")
 	}

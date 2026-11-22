@@ -138,6 +138,46 @@ func TestNonRemediableFailureReasonRecognizesUnmergedPrerequisite(t *testing.T) 
 	}
 }
 
+func TestNonRemediableFailureReasonRequiresExternalRolloutEvidence(t *testing.T) {
+	t.Parallel()
+	const details = "Production IAM access and Secrets Manager provisioning are still outstanding."
+	for _, tc := range []struct {
+		name    string
+		message string
+		blocked bool
+	}{
+		{"codex pending rollout", "codex: codex reported failure: Failure: Production rollout for #42 remains pending. Error details: " + details, true},
+		{"claude pending deployment", "claude: claude reported failure: Failure: Production deployment is pending.\nError details: " + details, true},
+		{"pending rollout with code defect", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Local build fails in the Secrets Manager adapter.", false},
+		{"pending rollout with defaults status", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " API and MCP flags default to off.", true},
+		{"pending rollout with joined defaults status", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " | API and MCP flags default to off.", true},
+		{"pending rollout with joined unpunctuated details", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Production IAM access and Secrets Manager provisioning are still outstanding | API flags default to off", true},
+		{"pending rollout with flag regression", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " Due to a regression API flags default to off.", false},
+		{"pending rollout with failure after joined status", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " | API flags default to off | Deployment tests fail", false},
+		{"pending rollout with later test failure", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " Deployment tests fail.", false},
+		{"test failure after defaults status", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " API and MCP flags default to off.\nDeployment tests fail.", false},
+		{"pending code changes for both services", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Fixes to IAM and Secrets Manager adapters remain pending.", false},
+		{"pending infrastructure work but code defect caused failure", "codex: codex reported failure: Failure: Local build fails in the deployment package. Error details: " + details, false},
+		{"quoted diagnostic", "codex: codex reported failure: Failure: Rollout parser rejects a valid report. Error details: `Production rollout remains pending. Error details: " + details + "`", false},
+		{"resolved provisioning", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: IAM access and Secrets Manager provisioning are complete. Local tests fail.", false},
+		{"resolved provisioning and pending fixes in one sentence", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: IAM access and Secrets Manager provisioning are complete, but adapter fixes remain outstanding.", false},
+		{"pending fixes named for provisioning", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: IAM permissions validation and Secrets Manager key parsing fixes remain outstanding.", false},
+		{"only one prerequisite outstanding", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Secrets Manager provisioning is complete, but IAM access and deployed source verification remain pending.", false},
+		{"provisioning and verification outstanding", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Scoped IAM, shared Secrets Manager key, and deployed source verification remain outstanding.", true},
+		{"outstanding prerequisites in reverse order", "claude: claude reported failure: Failure: Production deployment is still pending. Error details: Shared Secrets Manager key and scoped IAM are pending.", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := ""
+			if tc.blocked {
+				want = "production rollout requires external prerequisites"
+			}
+			if got := NonRemediableFailureReason(errors.New(tc.message)); got != want {
+				t.Errorf("NonRemediableFailureReason() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestNonRemediableFailureReasonRecognizesOpenPrerequisite(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ message, want string }{

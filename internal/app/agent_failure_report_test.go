@@ -1,10 +1,12 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 )
@@ -47,7 +49,7 @@ func TestCodexReportedFailureDetectsMarkdownFailureFields(t *testing.T) {
 		t.Fatalf("detail = %q, want the reported failure summary", detail)
 	}
 
-	full := codexFailureDetailWithErrorDetails(res, detail)
+	_, full := codexFailureDetailWithErrorDetails(res, detail)
 	if !strings.Contains(full, "read-only file system") {
 		t.Fatalf("detail = %q, want the reported error details", full)
 	}
@@ -90,8 +92,37 @@ func TestCodexReportedFailureDetectsBlockerAfterResolvedIssue(t *testing.T) {
 	if !failed || detail != "Failure: The full test suite still fails." {
 		t.Fatalf("codexReportedFailure() = (%v, %q), want the unresolved failure", failed, detail)
 	}
-	if full := codexFailureDetailWithErrorDetails(res, detail); !strings.Contains(full, "A separate test times out waiting for a worker.") {
+	if _, full := codexFailureDetailWithErrorDetails(res, detail); !strings.Contains(full, "A separate test times out waiting for a worker.") {
 		t.Fatalf("failure detail = %q, want the unresolved error details", full)
+	}
+}
+
+func TestCodexFailureDetailIgnoresStderrPromptEcho(t *testing.T) {
+	t.Parallel()
+
+	const summary = "Failure: Could not complete the implementation."
+	const privateText = "PRIVATE TASK TEXT"
+	for _, stderr := range []string{
+		"OpenAI Codex\nuser\nError details:\n" + privateText + "\ncodex\n" + summary,
+		"user\n" + summary + "\nError details:\n- " + privateText,
+		"Error details: <failing command or blocker>\n" + privateText,
+		summary + "\nError details: <failing command or blocker>\nuser\n" + privateText,
+	} {
+		display, full := codexFailureDetailWithErrorDetails(execx.Result{Stdout: summary, Stderr: stderr}, summary)
+		if display != summary || full != summary {
+			t.Errorf("failure detail = (%q, %q), want only the failure summary", display, full)
+		}
+	}
+}
+
+func TestCodexFailureDetailRetainsCompactStderrReport(t *testing.T) {
+	t.Parallel()
+
+	const summary = "Failure: Could not complete the implementation."
+	const stderr = summary + "\nError details:\nAssertionError: expected status 200, got 500."
+	_, full := codexFailureDetailWithErrorDetails(execx.Result{Stderr: stderr}, summary)
+	if full != stderr {
+		t.Errorf("full failure detail = %q, want %q", full, stderr)
 	}
 }
 
@@ -141,27 +172,301 @@ func TestCodexExtractErrorDetailDropsFencesWithInfoString(t *testing.T) {
 	}
 }
 
-func TestCodexReportedFailurePreservesWrappedRolloutBlocker(t *testing.T) {
+func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *testing.T) {
 	t.Parallel()
 
-	const evidence = "#72 is still open. Its proposed configuration lacks\n" +
-		"account metadata needed for evidence reads. Scoped IAM,\n" +
-		"shared key provisioning, and deployed verification remain pending.\n" +
-		"API and MCP evidence stay disabled by default."
-	for _, separator := range []string{" ", "\n"} {
-		res := execx.Result{Stdout: "Failure: Production rollout remains blocked.\n" +
-			"**Error details:**" + separator + evidence + "\nResolved issue: Local tests now pass."}
-		failed, summary := codexReportedFailure(res)
-		if !failed {
-			t.Fatal("failure report was not detected")
-		}
-		detail := codexFailureDetailWithErrorDetails(res, summary)
-		if !strings.HasSuffix(detail, "Error details: "+evidence) {
-			t.Errorf("failure detail = %q, want complete evidence through the end of the field", detail)
-		}
-		err := fmt.Errorf("codex: codex reported failure: %s", detail)
-		if got := failurefollowup.NonRemediableFailureReason(err); got != failurefollowup.OpenDependencyReason {
-			t.Errorf("failure reason = %q, want %q", got, failurefollowup.OpenDependencyReason)
+	statusLines := "\nMCP flags default to off.\nWorker flags default to off."
+	for _, tc := range []struct {
+		name           string
+		detailsHeading bool
+		continuation   string
+		wantReason     string
+	}{
+		{
+			name:       "external prerequisites only",
+			wantReason: failurefollowup.ExternalRolloutPrerequisitesReason,
+		},
+		{
+			name:         "deployment tests fail",
+			continuation: "\n\nDeployment tests fail.",
+		},
+		{
+			name:           "deployment test failure under a Markdown subheading",
+			detailsHeading: true,
+			continuation:   "\n\n### Deployment tests\nThe readiness assertion failed.",
+		},
+		{
+			name:         "deployment test failure under a heading in a plain field",
+			continuation: "\n\n### Deployment tests\nDeployment tests fail.",
+		},
+		{
+			name:         "deployment test failure in an inline validation field",
+			continuation: "\nValidation: Deployment tests failed.",
+		},
+		{
+			name:         "deployment test failure under validation in a plain field",
+			continuation: "\n\n### Validation\nDeployment tests failed.",
+		},
+		{
+			name:         "deployment test failure under a heading quotes quota",
+			continuation: "\n\n### Deployment tests\nAssertionError: expected `quota exceeded`, got HTTP 500.",
+		},
+		{
+			name:         "deployment test failure after three status lines",
+			continuation: statusLines + "\nDeployment tests fail.",
+		},
+		{
+			name:         "byte limit reached before late test failure",
+			continuation: "\nAPI flags default to off." + strings.Repeat(" ", 320) + "Deployment tests fail.",
+		},
+		{
+			name:         "three status lines fit",
+			continuation: statusLines,
+			wantReason:   failurefollowup.ExternalRolloutPrerequisitesReason,
+		},
+		{
+			name:         "resolved issue after three status lines",
+			continuation: statusLines + "\n**Resolved issue:** Deployment tests failed before the fix.",
+			wantReason:   failurefollowup.ExternalRolloutPrerequisitesReason,
+		},
+		{
+			name:         "resolved issue section",
+			continuation: "\n\n**Resolved issue:** Deployment tests failed before the fix.\nDeployment tests now pass.",
+			wantReason:   failurefollowup.ExternalRolloutPrerequisitesReason,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			targetDir := t.TempDir()
+			const prompt = "Complete the rollout"
+			detailsField := "Error details:"
+			if tc.detailsHeading {
+				detailsField = "## **Error details:**"
+			}
+			output := "Failure: Production rollout remains pending.\n" +
+				detailsField + " IAM access and Secrets Manager provisioning are still outstanding.\n" +
+				"API flags default to off." + tc.continuation
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(targetDir, prompt),
+				res: execx.Result{Stdout: output},
+			}}})
+			err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+			if err == nil {
+				t.Fatal("runCodex() error = nil, want a reported failure")
+			}
+			if !strings.Contains(err.Error(), " | API flags default to off.") {
+				t.Errorf("runCodex() error = %q, want the status continuation", err)
+			}
+			result := h.fail(ExitCodex, "codex", err, targetDir)
+			if got := failurefollowup.NonRemediableFailureReason(result.Err); got != tc.wantReason {
+				t.Errorf("NonRemediableFailureReason() = %q, want %q for %q", got, tc.wantReason, err)
+			}
+		})
+	}
+}
+
+func TestRunCodexKeepsImplementationFailureFatalWithValidationToolingCaveat(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, summary, details string
+	}{
+		{
+			name:    "missing validation runner in details",
+			summary: "Could not complete the implementation.",
+			details: "Local test runner unavailable in runtime. vitest: command not found.",
+		},
+		{
+			name:    "validation command in details",
+			summary: "Required implementation changes remain unfinished.",
+			details: "`npm run build` failed with `sh: 1: tsc: not found`.",
+		},
+		{
+			name:    "validation caveat in summary",
+			summary: "Could not update repository files. Local validation tooling unavailable.",
+			details: "Writing the required files failed. vitest: command not found.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			targetDir := t.TempDir()
+			const prompt = "Update the application"
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(targetDir, prompt),
+				res: execx.Result{Stdout: "Failure: " + tc.summary + "\nError details: " + tc.details},
+			}}})
+			err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+			if err == nil || !strings.Contains(err.Error(), tc.summary) {
+				t.Fatalf("runCodex() error = %v, want implementation failure %q", err, tc.summary)
+			}
+		})
+	}
+}
+
+func TestRunCodexClassifiesCompleteValidationReport(t *testing.T) {
+	t.Parallel()
+
+	const longDetails = "Failure: Local validation tooling unavailable in runtime.\n" +
+		"Error details:\n" +
+		"Attempted the configured validation command.\n" +
+		"The shell started with the runtime PATH.\n" +
+		"The command exited before running any tests.\n" +
+		"vitest: command not found."
+	const smokeReport = "Failure: Local validation command failed.\n" +
+		"Error details: The curl smoke command exited with command not found.\n"
+	const taskBlocker = "\nCannot safely meet the required coverage target."
+
+	for _, tc := range []struct {
+		name, output string
+		wantError    bool
+		wantBounded  bool
+	}{
+		{"missing tool after three lines", longDetails, false, false},
+		{"task blocker after display limit", longDetails + taskBlocker, true, true},
+		{"Go assertion and missing linter", "Failure: go test ./internal/web failed.\nError details: expected status 200, got 500.\nOptional lint: eslint: command not found.", true, false},
+		{"Go compiler diagnostic and missing linter", "Failure: go test ./internal/web failed.\nError details: handler.go:12:6: undefined: renderPage\nOptional lint: golangci-lint: command not found.", true, false},
+		{"Go build failure and missing linter", "Failure: go test ./internal/web failed.\nError details:\nFAIL\texample.com/project/internal/web [build failed]\nOptional lint: golangci-lint: command not found.", true, false},
+		{"fenced Go test failure and missing linter", "Failure: go test ./internal/web failed.\nError details:\n```text\n--- FAIL: TestStatus (0.00s)\n```\nOptional lint: golangci-lint: command not found.", true, false},
+		{"Jest exit followed by an unrelated same-clause linter gap", "Failure: npm test failed.\nError details: Jest exited with status 1, but optional eslint: command not found.", true, false},
+		{"Jest exit followed by an unrelated comma linter gap", "Failure: npm test failed.\nError details: Jest exited with status 1, optional eslint: command not found.", true, false},
+		{"Jest exit and missing optional linter", "Failure: npm test failed.\nError details: Jest exited with status 1.\nOptional lint: eslint: command not found.", true, false},
+		{"Jest exit and missing linter on the same line", "Failure: npm test failed.\nError details: Jest exited with status 1. Optional lint: eslint: command not found.", true, false},
+		{"test command exit explained by missing runner", "Failure: npm test failed.\nError details: npm test exited with status 1 because vitest: command not found.", false, false},
+		{"JavaScript assertion and missing linter", "Failure: npm test failed.\nError details: AssertionError: expected true to be false.\nOptional lint: eslint: command not found.", true, false},
+		{"smoke command in details with failed fallback", smokeReport + "Smoke fallback failed.", true, false},
+		{"conflicting smoke fallback results", smokeReport + "Smoke fallback succeeded.\nSmoke fallback failed.", true, false},
+		{"fallback starts server but endpoint fails", smokeReport + "Fallback succeeded in starting the server, but the endpoint returned HTTP 503.", true, false},
+		{"fallback success contradicted by endpoint", smokeReport + "Fallback succeeded.\nThe endpoint returned HTTP 503.", true, false},
+		{"fallback success contradicted by failed check", smokeReport + "Fallback succeeded.\nFallback smoke check failed.", true, false},
+		{"only server startup succeeded", smokeReport + "Fallback succeeded in starting the server.", true, false},
+		{"smoke only named in fallback", "Failure: Local validation command failed.\nError details: curl: command not found. Smoke fallback failed.", true, false},
+		{"smoke command in details with successful fallback", smokeReport + "Smoke fallback succeeded.", false, false},
+		{"fallback result on its own line", smokeReport + "Fallback succeeded.", false, false},
+		{"expected unauthorized response", smokeReport + "Fallback smoke check passed. Endpoint returned expected HTTP 401.", false, false},
+		{"unauthorized response as expected", smokeReport + "Fallback smoke check passed. Endpoint returned HTTP 401 as expected.", false, false},
+		{"expected status does not mask unexpected response", smokeReport + "Fallback smoke check passed. Endpoint expected HTTP 401 but returned HTTP 503.", true, false},
+		{"fallback smoke check passed with Python", smokeReport + "Fallback smoke check passed using Python. Endpoint returned HTTP 200.", false, false},
+		{"unrelated fallback", smokeReport + "Notes: Database fallback succeeded.", true, false},
+		{"unrelated smoke success in next section", smokeReport + "Validation: Unrelated smoke fallback succeeded.", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			targetDir := t.TempDir()
+			const prompt = "Update the application"
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(targetDir, prompt),
+				res: execx.Result{Stdout: tc.output},
+			}}})
+			err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+			if (err != nil) != tc.wantError {
+				t.Fatalf("runCodex() error = %v, want error = %v", err, tc.wantError)
+			}
+			if tc.wantBounded &&
+				(!strings.Contains(err.Error(), truncatedErrorDetails) || strings.Contains(err.Error(), "vitest:")) {
+				t.Fatalf("runCodex() error = %q, want bounded error details", err)
+			}
+		})
+	}
+}
+
+func TestRunCodexKeepsCodeFailureRemediableAfterValidationSection(t *testing.T) {
+	t.Parallel()
+
+	for _, heading := range []string{"Validation:", "**Validation:**", "### Validation", "### Unblock path", "## Next steps", "###\tNotes"} {
+		t.Run(heading, func(t *testing.T) {
+			t.Parallel()
+
+			targetDir := t.TempDir()
+			const prompt = "Update the application"
+			output := "Failure: Build failed.\n" +
+				"Error details: undefined variable in the application.\n\n" +
+				heading + "\nA fixture quotes `quota exceeded`."
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(targetDir, prompt),
+				res: execx.Result{Stdout: output},
+			}}})
+			err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+			if err == nil || !strings.Contains(err.Error(), "undefined variable") || strings.Contains(err.Error(), "A fixture quotes") {
+				t.Fatalf("runCodex() error = %v, want build failure without the separate section", err)
+			}
+			result := h.fail(ExitCodex, "codex", err, targetDir)
+			if reason := failurefollowup.NonRemediableFailureReason(result.Err); reason != "" {
+				t.Fatalf("NonRemediableFailureReason() = %q, want repair eligible for %q", reason, err)
+			}
+		})
+	}
+}
+
+func TestRunCodexClassifiesQuotaEvidenceInErrorDetails(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, summary, details, evidence, wantReason string
+	}{
+		{
+			name:     "quoted quota in a continued assertion",
+			summary:  "Deployment tests failed.",
+			details:  "The readiness check returned HTTP 500.\nAssertionError: expected `quota exceeded` to be mapped to HTTP 429.",
+			evidence: "AssertionError:",
+		},
+		{
+			name:     "quota and billing text in Go test output",
+			summary:  "Go tests failed.",
+			details:  "\n```text\n--- FAIL: TestQuotaMessage (0.00s)\n    handler_test.go:42: response omitted quota exceeded. Check your plan and billing details.\n```",
+			evidence: "quota exceeded",
+		},
+		{
+			name:       "actual quota blocker in details",
+			summary:    "Could not finish the run.",
+			details:    "The provider request failed.\nERROR: Quota exceeded. Check your plan and billing details.",
+			evidence:   "ERROR: Quota exceeded",
+			wantReason: "quota exceeded",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			targetDir := t.TempDir()
+			const prompt = "Update the application"
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(targetDir, prompt),
+				res: execx.Result{Stdout: "Failure: " + tc.summary + "\nError details: " + tc.details},
+			}}})
+			err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+			if err == nil || !strings.Contains(err.Error(), tc.evidence) {
+				t.Fatalf("runCodex() error = %v, want diagnostic %q", err, tc.evidence)
+			}
+			result := h.fail(ExitCodex, "codex", err, targetDir)
+			if got := failurefollowup.NonRemediableFailureReason(result.Err); got != tc.wantReason {
+				t.Errorf("NonRemediableFailureReason() = %q, want %q for %q", got, tc.wantReason, err)
+			}
+		})
+	}
+}
+
+func TestCodexExtractErrorDetailRetainsFencedDiagnosticHeadings(t *testing.T) {
+	t.Parallel()
+
+	output := "Failure: Build failed.\nError details:\n" +
+		"```text\n### Diagnostic output\nValidation: quota exceeded\n```\n" +
+		"### Notes\nUnrelated fixture output."
+	const want = "Error details:\n### Diagnostic output\nValidation: quota exceeded"
+	if detail := codexExtractErrorDetail(output); detail != want {
+		t.Fatalf("codexExtractErrorDetail() = %q, want %q", detail, want)
+	}
+}
+
+func TestCodexExtractErrorDetailRetainsMarkdownSubsections(t *testing.T) {
+	t.Parallel()
+
+	for _, field := range []string{"Error details:", "## Error details:"} {
+		output := "Failure: Deployment validation failed.\n" + field +
+			"\n### Validation\nDeployment tests failed.\n" +
+			"## Next steps\nUnrelated notes."
+		const want = "Error details:\n### Validation\nDeployment tests failed."
+		if detail := codexExtractErrorDetail(output); detail != want {
+			t.Errorf("codexExtractErrorDetail() with %q = %q, want %q", field, detail, want)
 		}
 	}
 }
@@ -199,5 +504,57 @@ func TestAgentFailureFieldLineStripsMarkdownDecoration(t *testing.T) {
 		if got := agentFailureFieldLine(tc.line); got != tc.want {
 			t.Fatalf("agentFailureFieldLine(%q) = %q, want %q", tc.line, got, tc.want)
 		}
+	}
+}
+
+func TestCodexReportedFailurePreservesWrappedRolloutBlocker(t *testing.T) {
+	t.Parallel()
+
+	const evidence = "#72 is still open. Its proposed configuration lacks\n" +
+		"account metadata needed for evidence reads. Scoped IAM,\n" +
+		"shared key provisioning, and deployed verification remain pending.\n" +
+		"API and MCP evidence stay disabled by default."
+	for _, separator := range []string{" ", "\n"} {
+		res := execx.Result{Stdout: "Failure: Production rollout remains blocked.\n" +
+			"**Error details:**" + separator + evidence + "\nResolved issue: Local tests now pass."}
+		failed, summary := codexReportedFailure(res)
+		if !failed {
+			t.Fatal("failure report was not detected")
+		}
+		_, detail := codexFailureDetailWithErrorDetails(res, summary)
+		if !strings.Contains(strings.ReplaceAll(detail, "Error details:\n", "Error details: "), "Error details: "+evidence) {
+			t.Errorf("failure detail = %q, want complete evidence through the end of the field", detail)
+		}
+		err := fmt.Errorf("codex: codex reported failure: %s", detail)
+		if got := failurefollowup.NonRemediableFailureReason(err); got != failurefollowup.OpenDependencyReason {
+			t.Errorf("failure reason = %q, want %q", got, failurefollowup.OpenDependencyReason)
+		}
+	}
+}
+
+func TestRunCodexDependencyClassificationSurvivesDisplayFormatting(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, report, want string
+	}{
+		{"soft wrap extends operation", "Failure: Export remains blocked.\nError details: #72 is still open and blocks the export\ndocumentation. Fix the export parser.", ""},
+		{"soft wrap within operation", "Failure: Production rollout for #81 remains blocked.\nError details: #72 is still open and blocks the production\nrollout for #81\nVerification is pending.", failurefollowup.OpenDependencyReason},
+		{"paragraph evidence", "Failure: Production rollout remains blocked.\nError details: #72 is still open\n\nIts proposed configuration lacks account metadata needed for evidence reads.\n\nCredential setup and verification remain pending. API and CLI evidence stay disabled by default.", failurefollowup.OpenDependencyReason},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			target := t.TempDir()
+			fake := &fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(target, "complete task"),
+				res: execx.Result{Stdout: tc.report},
+			}}}
+			err := New(fake).runCodex(t.Context(), agentruntime.Default(), target, "complete task", codexRunOptions{}, "", "")
+			if err == nil {
+				t.Fatal("task failure was waived")
+			}
+			if got := failurefollowup.NonRemediableFailureReason(fmt.Errorf("codex: %w", err)); got != tc.want {
+				t.Fatalf("reason = %q, want %q: %v", got, tc.want, err)
+			}
+		})
 	}
 }
