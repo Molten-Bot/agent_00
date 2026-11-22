@@ -230,6 +230,39 @@ test('task history keeps a renamed PR title when the live task expires', async t
   assert.equal(await task.locator('.task-github-link').getAttribute('href'), prURL);
 });
 
+for (const { name, trackedPR, titledPR, expectedTitle } of [
+  { name: 'different PR', trackedPR: 42, titledPR: 42, expectedTitle: 'Archived PR title' },
+  { name: 'tracked PR with a different card PR', trackedPR: 43, titledPR: 42, expectedTitle: 'Archived PR title' },
+  { name: 'card PR with a different tracked PR', trackedPR: 42, titledPR: 43, expectedTitle: 'Archived PR title' },
+  { name: 'same PR', trackedPR: 43, titledPR: 43, expectedTitle: 'Verified PR title' },
+]) {
+  test(`task history after recovery verifies ${name}`, async t => {
+    const requestID = 'archived-issue-task';
+    const prURL = number => `https://github.com/example/project/pull/${number}`;
+    const completedAt = new Date(Date.now() - 15 * 60_000).toISOString();
+    const verifiedPR = { url: prURL(43), title: 'Verified PR title', verified_at: new Date().toISOString() };
+    let snapshot = { tasks: [{
+      request_id: requestID, prompt: 'Original prompt', repo: 'example/project',
+      status: 'merged', started_at: completedAt, updated_at: completedAt,
+      pr_url: prURL(trackedPR), pr_title_url: prURL(titledPR),
+      pr_title: 'Archived PR title', pr_title_updated_at: completedAt,
+    }] };
+    const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, () => snapshot);
+    await page.waitForFunction(id => JSON.parse(localStorage.getItem('hubui.taskHistory.v1') || '[]')
+      .some(task => task.request_id === id), requestID);
+
+    snapshot = { tasks: [], verified_task_prs: { [requestID]: verifiedPR } };
+    await page.reload();
+    await page.locator('#task-history-toggle').click();
+    const task = page.locator(`#task-list .task[data-request-id="${requestID}"]`);
+    assert.equal(await task.locator('.task-id').textContent(), expectedTitle);
+    assert.equal(await task.locator('.task-github-link').getAttribute('href'), prURL(titledPR));
+    const savedPRURL = await page.evaluate(id => JSON.parse(localStorage.getItem('hubui.taskHistory.v1'))
+      .find(task => task.request_id === id).pr_url, requestID);
+    assert.equal(savedPRURL, prURL(trackedPR));
+  });
+}
+
 for (const viewport of [{ width: 430, height: 932 }, { width: 932, height: 430 }]) {
   test(`Enter adds a newline to the Studio prompt without submitting on mobile ${viewport.width}×${viewport.height}`, async t => {
     const { page, writes } = await openPage(t, 'studio', viewport);

@@ -11280,7 +11280,10 @@
       for (const [requestID, pr] of Object.entries(snapshot?.verified_task_prs || {})) {
         const existing = state.taskHistoryByID.get(requestID);
         const verifiedAt = parseTaskTimestamp(pr?.verified_at);
+        const trackedPRURL = taskPullRequestURL(existing);
+        const cardPRURL = taskCardPullRequestURL(existing);
         if (!existing || liveTaskIDs.has(requestID) || !pr?.url || !pr?.title ||
+            (trackedPRURL && trackedPRURL !== pr.url) || (cardPRURL && cardPRURL !== pr.url) ||
             isTaskHistoryExpired(existing, nowMs) || !verifiedAt ||
             verifiedAt <= parseTaskTimestamp(existing.pr_title_updated_at) ||
             (!existing.pr_title_updated_at && verifiedAt < parseTaskTimestamp(existing.updated_at))) {
