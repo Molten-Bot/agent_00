@@ -1028,7 +1028,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 	t.Run("prompt PR URL used when head matches", func(t *testing.T) {
 		t.Parallel()
 		promptPRURL := "https://github.com/acme/repo/pull/8"
-		repos := []repoWorkspace{{Dir: "/repo", Branch: "agent00-topic"}}
+		repos := []repoWorkspace{{URL: "https://github.com/acme/repo", Dir: "/repo", Branch: "agent00-topic"}}
 		fake := &fakeRunner{t: t, exps: []expectedRun{
 			{cmd: remoteBranchExistsOnRemoteCommand(repos[0].Dir, publishRemoteOrigin, repos[0].Branch), res: execx.Result{Stdout: ""}},
 			{cmd: prLookupAnyByHeadWithRepoCommand(repos[0].Dir, "agent00-topic", ""), res: execx.Result{Stdout: "[]"}},
@@ -1047,7 +1047,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 	t.Run("prompt PR URL branch mismatch with requirePRURL fails", func(t *testing.T) {
 		t.Parallel()
 		promptPRURL := "https://github.com/acme/repo/pull/8"
-		repos := []repoWorkspace{{Dir: "/repo", Branch: "agent00-topic"}}
+		repos := []repoWorkspace{{URL: "https://github.com/acme/repo", Dir: "/repo", Branch: "agent00-topic"}}
 		fake := &fakeRunner{t: t, exps: []expectedRun{
 			{cmd: remoteBranchExistsOnRemoteCommand(repos[0].Dir, publishRemoteOrigin, repos[0].Branch), res: execx.Result{Stdout: ""}},
 			{cmd: prLookupAnyByHeadWithRepoCommand(repos[0].Dir, "agent00-topic", ""), res: execx.Result{Stdout: "[]"}},

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -3243,41 +3244,58 @@ func TestPopulateNoChangePRURLsForIssue(t *testing.T) {
 
 	const prURL = "https://github.com/acme/repo/pull/123"
 	const prTitle = "Existing pull request title"
+	const otherRepoPR = "https://github.com/acme/other/pull/123"
 
 	for _, tc := range []struct {
 		name        string
 		lookupState string
 		promptState string
+		promptURL   string
+		resolvedURL string
+		promptBase  string
 		wantPR      bool
 	}{
 		{name: "closed", lookupState: "CLOSED"},
-		{name: "merged", lookupState: "MERGED", wantPR: true},
+		{name: "merged with closed PRs excluded", lookupState: "MERGED", wantPR: true},
 		{name: "open", lookupState: "OPEN", wantPR: true},
-		{name: "closed prompt fallback", promptState: "CLOSED"},
-		{name: "merged prompt fallback after closed lookup", lookupState: "CLOSED", promptState: "MERGED", wantPR: true},
+		{name: "closed prompt fallback", promptURL: prURL, promptState: "CLOSED", promptBase: "main"},
+		{name: "merged prompt fallback after closed lookup", lookupState: "CLOSED", promptURL: prURL, promptState: "MERGED", promptBase: "main", wantPR: true},
+		{name: "prompt PR in another repository", promptURL: otherRepoPR},
+		{name: "prompt PR resolves to another repository", promptURL: prURL, resolvedURL: otherRepoPR, promptState: "OPEN", promptBase: "main"},
+		{name: "prompt PR targets another base", promptURL: prURL, promptState: "OPEN", promptBase: "release"},
+		{name: "prompt PR has no base", promptURL: prURL, promptState: "OPEN"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			repo := repoWorkspace{Dir: "/repo", Branch: "agent00-issue-17"}
+			repo := repoWorkspace{Dir: "/repo", URL: "git@github.com:Acme/Repo.git", Branch: "agent00-issue-17"}
 			repos := []repoWorkspace{repo}
-			cfg := config.Config{GitHubIssue: &config.GitHubIssueConfig{Number: 17, Title: "Issue title"}}
-			exps := []expectedRun{{cmd: remoteBranchExistsOnOriginCommand(repo.Dir, repo.Branch)}}
-			lookupCmd := prLookupAnyByHeadCommand(repo.Dir, repo.Branch)
-			if tc.lookupState == "OPEN" {
-				exps[0].res.Stdout = "abc123\trefs/heads/" + repo.Branch + "\n"
-				lookupCmd = prLookupByHeadCommand(repo.Dir, repo.Branch)
+			cfg := config.Config{GitHubIssue: &config.GitHubIssueConfig{
+				Repository: "Acme/Repo", Number: 17, Title: "Issue title",
+				Claim: &config.GitHubIssueClaim{Branch: repo.Branch, BaseBranch: "main"},
+			}}
+			var exps []expectedRun
+			for _, state := range []string{"open", "merged"} {
+				cmd := ghCommand(repo.Dir, "pr", "list", "--state", state, "--head", repo.Branch, "--json", "url,title,state", "--limit", "1", "--repo", "Acme/Repo", "--base", "main")
+				// GitHub returns the first eligible result. A newer closed PR or a
+				// PR targeting another base would hide the match in an unfiltered list.
+				result := "[]"
+				if strings.EqualFold(state, tc.lookupState) {
+					result = fmt.Sprintf(`[{"url":%q,"title":%q,"state":%q}]`, prURL, prTitle, tc.lookupState)
+				}
+				exps = append(exps, expectedRun{cmd: cmd, res: execx.Result{Stdout: result}})
+				if result != "[]" {
+					break
+				}
 			}
-			lookupResult := "[]"
-			if tc.lookupState != "" {
-				lookupResult = fmt.Sprintf(`[{"url":%q,"title":%q,"state":%q}]`, prURL, prTitle, tc.lookupState)
+			if tc.promptURL != "" {
+				cfg.Prompt = "Related PR: " + tc.promptURL
 			}
-			exps = append(exps, expectedRun{cmd: lookupCmd, res: execx.Result{Stdout: lookupResult}})
 			if tc.promptState != "" {
-				cfg.Prompt = "Related PR: " + prURL
 				exps = append(exps, expectedRun{
-					cmd: prStateViewCommand(repo.Dir, prURL),
-					res: execx.Result{Stdout: fmt.Sprintf(`{"url":%q,"title":%q,"state":%q,"headRefName":%q}`, prURL, prTitle, tc.promptState, repo.Branch)},
+					cmd: prStateViewCommand(repo.Dir, tc.promptURL),
+					res: execx.Result{Stdout: fmt.Sprintf(`{"url":%q,"title":%q,"state":%q,"headRefName":%q,"baseRefName":%q}`,
+						cmp.Or(tc.resolvedURL, tc.promptURL), prTitle, tc.promptState, repo.Branch, tc.promptBase)},
 				})
 			}
 			fake := &fakeRunner{t: t, exps: exps}

@@ -1401,6 +1401,7 @@ type prStateView struct {
 	Title       string `json:"title"`
 	State       string `json:"state"`
 	MergedAt    string `json:"mergedAt"`
+	BaseRefName string `json:"baseRefName"`
 	HeadRefName string `json:"headRefName"`
 	HeadRefOID  string `json:"headRefOid"`
 }
@@ -2569,11 +2570,30 @@ func repoPRTargetRepo(repo repoWorkspace) string {
 
 func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspace, cfg config.Config, requirePRURL bool) error {
 	promptPRURL := pullRequestURLFromPrompt(cfg.Prompt)
+	promptPRRepo := githubutil.PullRequestRepository(promptPRURL)
+	var claimedBase string
+	if cfg.GitHubIssue != nil && cfg.GitHubIssue.Claim != nil {
+		claimedBase = normalizeBranchRef(cfg.GitHubIssue.Claim.BaseBranch)
+	}
 	for i := range repos {
 		if repos[i].RequireExistingPR && repos[i].PRURL != "" {
 			continue
 		}
-		pr, err := h.lookupOpenPRByHead(ctx, repos[i])
+		targetRepo := repoPRTargetRepo(repos[i])
+		if targetRepo == "" {
+			if ref, ok := parseGitHubRepoRef(repos[i].URL); ok {
+				targetRepo = ref.owner + "/" + ref.name
+			}
+		}
+		var pr ghPRLookupEntry
+		var err error
+		if cfg.GitHubIssue != nil {
+			repo := repos[i]
+			repo.PRTargetRepo = targetRepo
+			pr, err = h.lookupIssuePRByHead(ctx, repo, claimedBase)
+		} else {
+			pr, err = h.lookupOpenPRByHead(ctx, repos[i])
+		}
 		if err != nil {
 			h.logf(
 				"stage=pr status=warn action=lookup_existing reason=failed repo=%s repo_dir=%s branch=%s err=%q",
@@ -2587,7 +2607,7 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 			}
 			continue
 		}
-		if pr.URL == "" {
+		if pr.URL == "" && cfg.GitHubIssue == nil {
 			pr, err = h.lookupAnyPRByHead(ctx, repos[i])
 			if err != nil {
 				h.logf(
@@ -2602,11 +2622,8 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 				}
 				continue
 			}
-			if cfg.GitHubIssue != nil && strings.EqualFold(pr.State, "closed") {
-				pr = ghPRLookupEntry{}
-			}
 		}
-		if pr.URL == "" && promptPRURL != "" {
+		if pr.URL == "" && promptPRRepo != "" && strings.EqualFold(promptPRRepo, targetRepo) {
 			state, err := h.loadPullRequestState(ctx, repos[i].Dir, promptPRURL)
 			if err != nil {
 				h.logf(
@@ -2637,10 +2654,12 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 						strings.TrimSpace(state.HeadRefName),
 					)
 				}
-			} else if cfg.GitHubIssue == nil || pullRequestStateIsOpen(state) || pullRequestStateIsMerged(state) {
-				pr = ghPRLookupEntry{
-					URL:   stringsx.FirstNonEmpty(state.URL, promptPRURL),
-					Title: state.Title,
+			} else {
+				resolvedURL := stringsx.FirstNonEmpty(state.URL, promptPRURL)
+				if strings.EqualFold(githubutil.PullRequestRepository(resolvedURL), targetRepo) &&
+					(claimedBase == "" || state.BaseRefName == claimedBase) &&
+					(cfg.GitHubIssue == nil || pullRequestStateIsOpen(state) || pullRequestStateIsMerged(state)) {
+					pr = ghPRLookupEntry{URL: resolvedURL, Title: state.Title}
 				}
 			}
 		}
@@ -2816,19 +2835,8 @@ func (h Harness) lookupOpenPRByHead(ctx context.Context, repo repoWorkspace) (gh
 		return ghPRLookupEntry{}, nil
 	}
 
-	lookupRes, err := h.runCommand(ctx, "pr", prLookupByHeadWithRepoCommand(repo.Dir, headRef, repoPRTargetRepo(repo)))
-	if err != nil {
-		return ghPRLookupEntry{}, commandErrorWithDetails(
-			fmt.Sprintf("lookup open pull request for repo %s branch %q", repo.URL, headRef),
-			err,
-			lookupRes,
-			maxGitErrorDetailChars,
-		)
-	}
-	if pr := parsePRLookupOutput(lookupRes.Stdout); pr.URL != "" {
-		return pr, nil
-	}
-	return parsePRLookupOutput(lookupRes.Stderr), nil
+	cmd := prLookupByHeadWithRepoCommand(repo.Dir, headRef, repoPRTargetRepo(repo))
+	return h.runPRLookup(ctx, repo, headRef, "open", cmd)
 }
 
 func (h Harness) lookupAnyPRURLByHead(ctx context.Context, repo repoWorkspace) (string, error) {
@@ -2842,10 +2850,35 @@ func (h Harness) lookupAnyPRByHead(ctx context.Context, repo repoWorkspace) (ghP
 		return ghPRLookupEntry{}, nil
 	}
 
-	lookupRes, err := h.runCommand(ctx, "pr", prLookupAnyByHeadWithRepoCommand(repo.Dir, headRef, repoPRTargetRepo(repo)))
+	cmd := prLookupAnyByHeadWithRepoCommand(repo.Dir, headRef, repoPRTargetRepo(repo))
+	return h.runPRLookup(ctx, repo, headRef, "any", cmd)
+}
+
+func (h Harness) lookupIssuePRByHead(ctx context.Context, repo repoWorkspace, base string) (ghPRLookupEntry, error) {
+	headRef := repoPRHeadRef(repo)
+	if headRef == "" {
+		return ghPRLookupEntry{}, nil
+	}
+
+	// Filter on GitHub before limiting results so a newer closed PR cannot hide a merged one.
+	for _, state := range []string{"open", "merged"} {
+		cmd := prLookupByHeadStateCommand(repo.Dir, state, headRef, repoPRTargetRepo(repo))
+		if base != "" {
+			cmd.Args = append(cmd.Args, "--base", base)
+		}
+		pr, err := h.runPRLookup(ctx, repo, headRef, state, cmd)
+		if err != nil || pr.URL != "" {
+			return pr, err
+		}
+	}
+	return ghPRLookupEntry{}, nil
+}
+
+func (h Harness) runPRLookup(ctx context.Context, repo repoWorkspace, headRef, state string, cmd execx.Command) (ghPRLookupEntry, error) {
+	lookupRes, err := h.runCommand(ctx, "pr", cmd)
 	if err != nil {
 		return ghPRLookupEntry{}, commandErrorWithDetails(
-			fmt.Sprintf("lookup any pull request for repo %s branch %q", repo.URL, headRef),
+			fmt.Sprintf("lookup %s pull request for repo %s branch %q", state, repo.URL, headRef),
 			err,
 			lookupRes,
 			maxGitErrorDetailChars,
@@ -8531,7 +8564,7 @@ func prLookupAnyByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Comma
 
 func prStateViewCommand(repoDir, prURL string) execx.Command {
 	selector := githubutil.PullRequestSelector(prURL)
-	args := []string{"pr", "view", selector, "--json", "url,title,state,mergedAt,headRefName,headRefOid"}
+	args := []string{"pr", "view", selector, "--json", "url,title,state,mergedAt,baseRefName,headRefName,headRefOid"}
 	if repo := githubutil.PullRequestRepository(prURL); repo != "" {
 		args = append(args, "--repo", repo)
 	}
