@@ -1,6 +1,7 @@
 package failurefollowup
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -73,6 +74,13 @@ const githubSSHPermissionDeniedReason = "permission to repository denied"
 const unreachableCoverageTargetReason = "coverage target cannot be met safely"
 const missingSecurityContractReason = "security verification contract is missing"
 const missingRemoteBranchReason = "remote branch does not exist"
+
+// GitHubPushProtectionReason is the safe summary of a rejected Git push.
+const GitHubPushProtectionReason = "GitHub push protection blocked publication"
+
+// ErrGitHubPushProtection identifies a rejection observed during git push.
+// Agent-authored text cannot establish that publication was rejected.
+var ErrGitHubPushProtection = errors.New(GitHubPushProtectionReason)
 
 // UnmergedDependencyReason identifies an agent-reported prerequisite PR.
 const UnmergedDependencyReason = "required pull request is unmerged"
@@ -427,6 +435,9 @@ func NonRemediableFailureReason(err error) string {
 	text := strings.ToLower(strings.TrimSpace(err.Error()))
 	if text == "" {
 		return ""
+	}
+	if errors.Is(err, ErrGitHubPushProtection) {
+		return GitHubPushProtectionReason
 	}
 	// The harness joins log persistence errors to the original run error before
 	// storing it. Keep that suffix out of the report used to identify blockers.

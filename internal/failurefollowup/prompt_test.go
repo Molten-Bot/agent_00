@@ -420,3 +420,21 @@ func TestNonRemediableRepoAccessReasonDetectsWorkflowScopeRejection(t *testing.T
 		t.Fatalf("NonRemediableRepoAccessReason() = %q", got)
 	}
 }
+
+func TestPushProtectionRequiresObservedPushError(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"typed", fmt.Errorf("push failed: %w", ErrGitHubPushProtection), GitHubPushProtectionReason},
+		{"quoted", errors.New("agent: Failure: parser failed. Error details: GitHub push protection blocked publication: example diagnostic"), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := NonRemediableFailureReason(tc.err); got != tc.want {
+				t.Fatalf("reason = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

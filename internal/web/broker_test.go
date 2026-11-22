@@ -282,16 +282,22 @@ func TestBrokerTracksDashboardSourceMix(t *testing.T) {
 	b.RecordTaskRunConfigWithSource("local-prompt", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"from prompt"}`), "prompt")
 	b.RecordTaskRunConfigWithSource("local-review", []byte(`{"repo":"git@github.com:acme/repo.git","libraryTaskName":"code-review"}`), "review")
 	b.RecordTaskRunConfigWithSource("local-github-issues", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"from GitHub Issues"}`), "github_issues")
+	b.RecordTaskRunConfig("local-issue-metadata", []byte(`{"repoUrl":"https://github.com/acme/repo","prompt":"from issue metadata","githubIssue":{"number":42,"repository":"acme/repo","url":"https://github.com/acme/repo/issues/42"}}`))
 	b.RecordTaskRunConfigWithSource("unknown-source", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"from unknown source"}`), "unknown")
+	b.IngestLog("task status=start request_id=issue-restored")
 
 	snap := b.Snapshot()
 	got := map[string]int{}
 	for _, group := range snap.Stats.SourceMix {
 		got[group.Name] = group.Tasks
 	}
-	for _, name := range []string{"Chat", "GitHub Issues", "Other", "JSON", "Library", "Prompt", "Review"} {
-		if got[name] != 1 {
-			t.Fatalf("source_mix[%q] = %d, want 1 (all groups: %#v)", name, got[name], snap.Stats.SourceMix)
+	want := map[string]int{"Chat": 1, "GitHub Issues": 3, "JSON": 1, "Library": 2, "Prompt": 2}
+	if len(got) != len(want) {
+		t.Fatalf("source_mix = %v, want %v", got, want)
+	}
+	for name, count := range want {
+		if got[name] != count {
+			t.Fatalf("source_mix[%q] = %d, want %d", name, got[name], count)
 		}
 	}
 }

@@ -52,7 +52,7 @@ jobs:
 
       - name: Install Playwright
         run: |
-          npm install --no-save playwright@1.65.1
+          npm install --no-save playwright@1.65.1 d3@7.9.2
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
             npx playwright install-deps chromium
           else
