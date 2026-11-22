@@ -87,9 +87,10 @@ const ExternalRolloutPrerequisitesReason = "production rollout requires external
 var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\bblocked by (?:an? |the )?unmerged (?:pull request |pr )?\x60?#[1-9][0-9]*\b`)
 
 var pendingProductionRolloutSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:\s*(?:the )?production (?:rollout|deployment)(?: for #[1-9][0-9]*)? (?:remains|is|is still) pending\.?$`)
-var outstandingProvisioning = regexp.MustCompile(`\b(?:remain|are(?: still)?) (?:outstanding|pending)$`)
-var iamProvisioning = regexp.MustCompile(`\b(?:scoped iam|iam (?:access|approval|configuration|permissions?|polic(?:y|ies)|roles?|setup))\b`)
-var secretProvisioning = regexp.MustCompile(`\bsecrets manager (?:configuration|keys?|provisioning|secrets?|setup)\b`)
+var outstandingProvisioning = regexp.MustCompile(` (?:remain|are)(?: still)? (?:outstanding|pending)$`)
+var provisioningListSeparator = regexp.MustCompile(`, (?:and )?| and `)
+var iamProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:scoped iam|(?:scoped )?iam (?:access|approval|configuration|permissions?|polic(?:y|ies)|roles?|setup))$`)
+var secretProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:shared )?secrets manager (?:configuration|keys?|provisioning|secrets?|setup)$`)
 
 var nonRemediableFailureMarkers = []string{
 	"no space left on device",
@@ -412,17 +413,8 @@ func NonRemediableFailureReason(err error) string {
 		!strings.Contains(summary, "no longer blocked") && !strings.Contains(summary, "not blocked") {
 		return UnmergedDependencyReason
 	}
-	if pendingProductionRolloutSummary.MatchString(strings.TrimSpace(summary)) {
-		// Require both provisioning prerequisites in the same outstanding
-		// statement. A pending rollout can also be caused by a code defect.
-		statement := strings.TrimSpace(details)
-		if end := strings.IndexAny(statement, ".!?\r\n"); end >= 0 {
-			statement = strings.TrimSpace(statement[:end])
-		}
-		if outstandingProvisioning.MatchString(statement) && iamProvisioning.MatchString(statement) &&
-			secretProvisioning.MatchString(statement) {
-			return ExternalRolloutPrerequisitesReason
-		}
+	if pendingProductionRolloutSummary.MatchString(strings.TrimSpace(summary)) && hasOutstandingRolloutProvisioning(details) {
+		return ExternalRolloutPrerequisitesReason
 	}
 	for _, marker := range nonRemediableFailureMarkers {
 		if strings.Contains(text, marker) {
@@ -430,6 +422,33 @@ func NonRemediableFailureReason(err error) string {
 		}
 	}
 	return NonRemediableRepoAccessReason(err)
+}
+
+func hasOutstandingRolloutProvisioning(details string) bool {
+	statement := strings.TrimSpace(details)
+	if end := strings.IndexAny(statement, ".!?\r\n"); end >= 0 {
+		statement = strings.TrimSpace(statement[:end])
+	}
+	predicate := outstandingProvisioning.FindStringIndex(statement)
+	if predicate == nil {
+		return false
+	}
+	// The status must apply to the provisioning items themselves. Reject a
+	// different subject or clause that merely mentions those prerequisites.
+	var iam, secret bool
+	for _, item := range provisioningListSeparator.Split(statement[:predicate[0]], -1) {
+		switch {
+		case iamProvisioning.MatchString(item):
+			iam = true
+		case secretProvisioning.MatchString(item):
+			secret = true
+		case item == "deployed source verification":
+			// The status can also apply to verifying the deployment.
+		default:
+			return false
+		}
+	}
+	return iam && secret
 }
 
 func isMissingRemoteBranchFailure(text string) bool {

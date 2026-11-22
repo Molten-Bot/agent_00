@@ -13,6 +13,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 )
@@ -322,6 +323,58 @@ func TestIssueRepairOutboxBlocksLegacyOwnershipFailure(t *testing.T) {
 			saved := repairs[0]
 			if saved.State != "blocked" || saved.Error == "" || saved.Started || saved.Run.Prompt != old.Run.Prompt {
 				t.Fatalf("legacy repair state=%s error=%q started=%t prompt retained=%t", saved.State, saved.Error, saved.Started, saved.Run.Prompt == old.Run.Prompt)
+			}
+		})
+	}
+}
+
+func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, state, exitCode, details string
+		blocked                        bool
+	}{
+		{"queued and linked", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
+		{"dispatch intent without a claim link", "running", "", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
+		{"actionable", "queued", "50", "IAM approval and Secrets Manager provisioning are complete, but local fixes remain outstanding.", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			claims, issue := lifecycleRecord(t)
+			q := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, claims: claims, logRoot: t.TempDir(), logf: t.Logf}
+			failure := errors.New("codex: codex reported failure: Failure: Production rollout remains pending.\nError details: " + tc.details)
+			run := failureFollowUpRunConfigWithContext(issue.RequestID, app.Result{}, issue.Run, q.logRoot, formatFailureFollowUpContext(tc.exitCode, failure, issue.Run.Prompt))
+			id := strings.Repeat("b", 32)
+			record := localruntime.IssueRepairRecord{ID: id, RequestID: "repair-" + id, State: tc.state, Run: run}
+			if tc.state == "queued" {
+				issue.Outcome = "error"
+				issue.Error = failure.Error()
+				issue.Incident = "missing_pr"
+				issue.RepairRequestID = record.RequestID
+				if err := claims.Save(issue); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := q.store.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			for range 2 {
+				q.reconcile(context.Background(), func(context.Context, config.Config, bool, string, bool) (string, error) {
+					calls++
+					return "", errors.New("agent auth required")
+				})
+			}
+			repairs, err := q.store.List()
+			if err != nil || len(repairs) != 1 {
+				t.Fatalf("expected one retained repair, got %d, error=%v", len(repairs), err)
+			}
+			got := repairs[0]
+			if tc.blocked {
+				if calls != 0 || got.State != "blocked" || got.Error != failurefollowup.ExternalRolloutPrerequisitesReason || got.Started {
+					t.Fatalf("external prerequisite: calls=%d state=%q error=%q started=%t", calls, got.State, got.Error, got.Started)
+				}
+			} else if calls != 1 || got.State != "queued" || !got.NextAttemptAt.After(time.Now()) {
+				t.Fatalf("actionable failure: calls=%d state=%q next attempt=%v", calls, got.State, got.NextAttemptAt)
 			}
 		})
 	}

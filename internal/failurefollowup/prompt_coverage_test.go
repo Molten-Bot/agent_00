@@ -153,6 +153,11 @@ func TestNonRemediableFailureReasonRequiresExternalRolloutEvidence(t *testing.T)
 		{"pending infrastructure work but code defect caused failure", "codex: codex reported failure: Failure: Local build fails in the deployment package. Error details: " + details, false},
 		{"quoted diagnostic", "codex: codex reported failure: Failure: Rollout parser rejects a valid report. Error details: `Production rollout remains pending. Error details: " + details + "`", false},
 		{"resolved provisioning", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: IAM access and Secrets Manager provisioning are complete. Local tests fail.", false},
+		{"resolved provisioning and pending fixes in one sentence", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: IAM access and Secrets Manager provisioning are complete, but adapter fixes remain outstanding.", false},
+		{"pending fixes named for provisioning", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: IAM permissions validation and Secrets Manager key parsing fixes remain outstanding.", false},
+		{"only one prerequisite outstanding", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Secrets Manager provisioning is complete, but IAM access and deployed source verification remain pending.", false},
+		{"provisioning and verification outstanding", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Scoped IAM, shared Secrets Manager key, and deployed source verification remain outstanding.", true},
+		{"outstanding prerequisites in reverse order", "claude: claude reported failure: Failure: Production deployment is still pending. Error details: Shared Secrets Manager key and scoped IAM are pending.", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			want := ""

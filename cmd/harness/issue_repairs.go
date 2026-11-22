@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -134,8 +135,8 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 		switch {
 		case record.Started:
 			blockedReason = "repair worker interrupted; inspect preserved logs before another repair attempt"
-		case legacyIssueOwnershipRepair(record.Run.Prompt):
-			blockedReason = localruntime.ErrIssueOwnershipChanged.Error()
+		default:
+			blockedReason = savedIssueRepairBlockReason(record.Run.Prompt)
 		}
 		if blockedReason != "" {
 			record.State = "blocked"
@@ -172,15 +173,32 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 	}
 }
 
-func legacyIssueOwnershipRepair(prompt string) bool {
+func savedIssueRepairBlockReason(prompt string) string {
 	// Older outbox records kept the original failure only in this prompt block.
-	_, failure, ok := strings.Cut(prompt, "\n\nObserved failure context:\n- exit_code=")
+	// Recheck it before replay, even if claim reconciliation has yet to run.
+	_, failure, ok := strings.Cut(prompt, "\n\nObserved failure context:\n")
 	if !ok {
-		return false
+		return ""
 	}
-	_, failure, _ = strings.Cut(failure, "\n")
+	if strings.HasPrefix(failure, "- exit_code=") {
+		_, failure, _ = strings.Cut(failure, "\n")
+	}
 	line, _, _ := strings.Cut(failure, "\n")
-	return strings.HasPrefix(line, "- error=\"") && strings.Contains(line, localruntime.LegacyIssueOwnershipFailure)
+	quoted, ok := strings.CutPrefix(line, "- error=")
+	if !ok {
+		return ""
+	}
+	detail, err := strconv.Unquote(quoted)
+	if err != nil {
+		return ""
+	}
+	if strings.Contains(detail, localruntime.LegacyIssueOwnershipFailure) {
+		return localruntime.ErrIssueOwnershipChanged.Error()
+	}
+	if reason := failurefollowup.NonRemediableFailureReason(errors.New(detail)); reason == failurefollowup.ExternalRolloutPrerequisitesReason {
+		return reason
+	}
+	return ""
 }
 
 func (w *issueRepairWork) start() error {
