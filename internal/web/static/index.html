@@ -4710,8 +4710,13 @@
         .cornerRadius(6)
         .padAngle(0.02);
       const slices = total > 0 ? pie(entries) : [];
+      function activateSlice(slice, datum) {
+        d3.select(slice).attr("d", hoverArc).classed("is-active", true);
+        root.select(".dashboard-d3-center-value").text(options.showPercent ? share(datum.data) : String(datum.data.value));
+        root.select(".dashboard-d3-center-label").text(datum.data.label);
+      }
 
-      root.selectAll("path.dashboard-d3-slice")
+      const slicePaths = root.selectAll("path.dashboard-d3-slice")
         .data(slices, (datum) => datum.data.label)
         .join(
           (enter) => enter.append("path")
@@ -4730,9 +4735,7 @@
           ? `${data.label}: ${data.value} ${data.value === 1 ? "prompt" : "prompts"} (${share(data)})`
           : `${data.label}: ${data.value}`)
         .on("mouseenter focus", function (_event, datum) {
-          d3.select(this).attr("d", hoverArc).classed("is-active", true);
-          root.select(".dashboard-d3-center-value").text(options.showPercent ? share(datum.data) : String(datum.data.value));
-          root.select(".dashboard-d3-center-label").text(datum.data.label);
+          activateSlice(this, datum);
         })
         .on("mouseleave blur", function () {
           d3.select(this).attr("d", arc).classed("is-active", false);
@@ -4768,6 +4771,10 @@
         .attr("text-anchor", "middle")
         .attr("dy", "1.55em")
         .text(options.centerLabel || "tasks");
+
+      slicePaths.filter(":focus").each(function (datum) {
+        activateSlice(this, datum);
+      });
 
       const labelRows = total > 0 ? entries : [{ label: "No data", value: 0, color: dashboardCSSValue("--dashboard-chart-empty", "#8ca0bd") }];
       const legend = svg.selectAll("g.dashboard-d3-legend")

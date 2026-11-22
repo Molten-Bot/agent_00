@@ -81,6 +81,17 @@ test('320px: five source legend rows leave room for the focused share', async t 
     });
   });
   assert.equal(overlapsRing, false, 'focused percentage and label fit inside the ring');
+
+  const viewBox = await chart.getAttribute('viewBox');
+  await page.setViewportSize({ width: 932, height: 430 });
+  await page.waitForFunction(previous => document.querySelector('#dashboard-source-chart').getAttribute('viewBox') !== previous, viewBox);
+  assert.equal(await slices.nth(3).evaluate(node => node === document.activeElement), true);
+  assert.equal(await chart.locator('.dashboard-d3-center-value').textContent(), '42.9%');
+  assert.equal(await chart.locator('.dashboard-d3-center-label').textContent(), 'GitHub Issues');
+
+  await chart.focus();
+  assert.equal(await chart.locator('.dashboard-d3-center-value').textContent(), '7');
+  assert.equal(await chart.locator('.dashboard-d3-center-label').textContent(), 'prompts');
 });
 
 async function assertFits(page) {
