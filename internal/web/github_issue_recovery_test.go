@@ -619,6 +619,12 @@ func TestIssueRecoveryBlocksPrerequisiteWithoutRepair(t *testing.T) {
 			incident: openDependencyIncident,
 			want:     "required dependency is still open; explicit retry required after resolution",
 		},
+		{
+			name:     "open dependency with log sync failure",
+			report:   "Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks account metadata required for evidence reads. Credential setup and verification remain pending. Audit evidence stays disabled by default.\npersist task logs: sync terminal.log: invalid argument",
+			incident: openDependencyIncident,
+			want:     "required dependency is still open; explicit retry required after resolution",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			testIssueRecoveryBlocksPrerequisite(t, tc.report, tc.incident, tc.want)

@@ -90,6 +90,7 @@ const backtickedIssueID = `\x60` + issueID + `\x60`
 const openDependencyReference = `(?:issue |pull request |pr |dependency )?(?:` + issueID + `|` + backtickedIssueID + `|\[(?:issue |pull request |pr )?` + issueID + `\]\([^\s()]+\))`
 const openDependencyCause = `(?:because ` + openDependencyReference + ` is still open|(?:by|on) (?:(?:still[- ])?open ` +
 	openDependencyReference + `|` + openDependencyReference + `, which is still open))`
+const evidenceAccessPrerequisite = `(?:credential setup|(?:scoped )?iam|(?:shared )?key provisioning)`
 
 var (
 	blockedFailureSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:[ \t]*(?:((?:[^"'\x60\r\n]|\b'\b|` +
@@ -101,7 +102,10 @@ var (
 	openDependencyEvidenceDetail = regexp.MustCompile(`^` + openDependencyReference +
 		` is still open\.\s+its [^.!?;\r\n]+ lacks? [^.!?;\r\n]+ (?:needed|required) for evidence reads\b`)
 	evidenceRolloutTarget = regexp.MustCompile(`^(?: |\.\s+(?:(?:those|the) )?evidence reads are )(?:needed|required) for `)
-	evidenceDisabled      = regexp.MustCompile(`^\.\s+(?:[^.!?;\r\n]+ (?:is|are|remains?) pending\.\s+)?` +
+	// The fallback requires pending access setup and verification alongside
+	// disabled evidence to tie the open issue to the rollout.
+	rolloutEvidencePending = regexp.MustCompile(`^\.\s+` + evidenceAccessPrerequisite + `(?:, ` + evidenceAccessPrerequisite + `)*,?` +
+		` and (?:deployed )?verification (?:are|remain) pending\.\s+` +
 		`(?:[a-z0-9 -]+ )?evidence (?:stays?|remains?) disabled(?: by default)?[.!]?$`)
 	issueIDCodeSpan = regexp.MustCompile(`\x60(` + issueID + `)\x60`)
 	operationEnd    = regexp.MustCompile(`^(?:[.!](?:\s|$)|$)`)
@@ -411,19 +415,22 @@ func NonRemediableFailureReason(err error) string {
 	if text == "" {
 		return ""
 	}
-	if agentruntime.CodexAuthenticationFailure(text) {
+	// The harness joins log persistence errors to the original run error before
+	// storing it. Keep that suffix out of the report used to identify blockers.
+	report, _, _ := strings.Cut(text, "\npersist task logs: ")
+	if agentruntime.CodexAuthenticationFailure(report) {
 		return "codex authentication required"
 	}
-	if isUnreachableCoverageTargetFailure(text) {
+	if isUnreachableCoverageTargetFailure(report) {
 		return unreachableCoverageTargetReason
 	}
-	if isMissingSecurityVerificationContractFailure(text) {
+	if isMissingSecurityVerificationContractFailure(report) {
 		return missingSecurityContractReason
 	}
-	if isMissingRemoteBranchFailure(text) {
+	if isMissingRemoteBranchFailure(report) {
 		return missingRemoteBranchReason
 	}
-	summary, detail, _ := strings.Cut(text, "error details:")
+	summary, detail, _ := strings.Cut(report, "error details:")
 	if unmergedDependencySummary.MatchString(summary) &&
 		!strings.Contains(summary, "no longer blocked") && !strings.Contains(summary, "not blocked") {
 		return UnmergedDependencyReason
@@ -461,7 +468,7 @@ func isOpenDependencyFailure(summary, detail string) bool {
 			target := rest[targetPrefix[1]:]
 			return matchesDependencyOperation(operation, target) || matchesDependencyOperation("rollout", target)
 		}
-		return evidenceDisabled.MatchString(rest)
+		return rolloutEvidencePending.MatchString(rest)
 	}
 	return false
 }
