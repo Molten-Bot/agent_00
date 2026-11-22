@@ -110,9 +110,13 @@ var rolloutSentenceBoundary = regexp.MustCompile(`[.!?][ \t]+`)
 var rolloutValidationPassed = regexp.MustCompile(`^validation passed for [^;\s][^;]*$`)
 var rolloutSectionCheckPassed = regexp.MustCompile(`^[^;\s][^;]*[ :]passed[.!]?$`)
 var rolloutSectionCheckBlocker = regexp.MustCompile(`^no\b|\b(?:0|zero) passed\b|\b(?:never|crash(?:ed|es|ing)?|couldn't|didn't)\b`)
-var rolloutProgressBlocker = regexp.MustCompile(`\b(?:but|except|however|fail(?:ed|s|ure|ing)?|panics?|regressions?|blocked|broken|cannot|could not|unable|incomplete|pending|unavailable|missing|not)\b`)
+
+const timeoutOutcome = `timed out|deadline exceeded`
+
+var rolloutProgressBlocker = regexp.MustCompile(`\b(?:but|except|however|fail(?:ed|s|ure|ing)?|panics?|regressions?|blocked|broken|cannot|could not|unable|incomplete|pending|unavailable|missing|not|` + timeoutOutcome + `)\b`)
 var httpFailureStatus = regexp.MustCompile(`\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b`)
-var validationTimeout = regexp.MustCompile(`\b(?:timed out|timeout|deadline exceeded)\b`)
+var expectedUnauthorizedResult = regexp.MustCompile(`\b(?:(?:returned|received|got) |passed (?:with |\())expected http(?:/\d(?:\.\d)?)? 401\b|\bhttp(?:/\d(?:\.\d)?)? 401 (?:as expected\b|\(expected\))`)
+var validationTimeout = regexp.MustCompile(`\b(?:timeout|` + timeoutOutcome + `)\b`)
 
 // HasValidationTimeout reports timeout evidence in a validation diagnostic.
 func HasValidationTimeout(text string) bool {
@@ -575,7 +579,7 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	for _, line := range lines[1:] {
 		line = strings.TrimSpace(line)
 		label, inline, _ := strings.Cut(line, ":")
-		if strings.Trim(label, "#*_ \t") == "validation" {
+		if IsRolloutValidationSection(label) {
 			inValidation = true
 			line = strings.Trim(inline, "*_ \t")
 			if line == "" {
@@ -598,8 +602,18 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	return !progressPending
 }
 
+// IsRolloutValidationSection identifies a label that introduces validation checks.
+func IsRolloutValidationSection(label string) bool {
+	switch strings.Trim(label, "#*_ \t") {
+	case "validation", "verification", "alternative validation":
+		return true
+	default:
+		return false
+	}
+}
+
 // IsPassingRolloutValidationCheck identifies positive evidence inside a
-// Validation section.
+// validation section.
 func IsPassingRolloutValidationCheck(line string) bool {
 	return isPassingRolloutValidation(rolloutValidationCheckLine(strings.ToLower(line)), true)
 }
@@ -613,10 +627,16 @@ func rolloutValidationCheckLine(line string) string {
 }
 
 func isPassingRolloutValidation(line string, inSection bool) bool {
-	return (rolloutValidationPassed.MatchString(line) || inSection && rolloutSectionCheckPassed.MatchString(line)) &&
+	passed := rolloutValidationPassed.MatchString(line)
+	statusText := line
+	if inSection {
+		statusText = expectedUnauthorizedResult.ReplaceAllString(line, "")
+		passed = passed || rolloutSectionCheckPassed.MatchString(line) || statusText != line
+	}
+	return passed &&
 		(!inSection || !rolloutSectionCheckBlocker.MatchString(line)) &&
 		!rolloutProgressBlocker.MatchString(line) && !rolloutSentenceBoundary.MatchString(line) &&
-		!HasValidationTimeout(line) && !HasHTTPFailureStatus(line)
+		!HasValidationTimeout(line) && !HasHTTPFailureStatus(statusText)
 }
 
 func isRolloutProgressLine(line string) bool {

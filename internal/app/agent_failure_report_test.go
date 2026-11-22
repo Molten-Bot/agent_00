@@ -214,6 +214,24 @@ func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *t
 			continuation:   statusLines + "\n\n## **Validation**\nUnit tests passed.\nSmoke check returned HTTP 500.",
 		},
 		{
+			name:         "nonzero exit under validation",
+			continuation: "\n\n### Validation\nReadiness probe exited with status 1.",
+		},
+		{
+			name:           "HTTP failure under a peer verification heading",
+			detailsHeading: true,
+			continuation:   "\n\n## Verification\nSmoke check returned HTTP 500.",
+		},
+		{
+			name:         "HTTP failure under alternative validation after passing validation",
+			continuation: "\nValidation: Unit tests passed.\n**Alternative validation:** Smoke check returned HTTP 500.",
+		},
+		{
+			name:         "expected authorization response is sole verification result",
+			continuation: "\nImplemented the endpoint.\nVerification: Authorization check received HTTP 401 as expected.",
+			wantReason:   failurefollowup.ExternalRolloutPrerequisitesReason,
+		},
+		{
 			name:           "passing peer validation is omitted",
 			detailsHeading: true,
 			continuation:   "\n\n## Validation\nUnit tests passed.\n\n## Resolved issue:\nSmoke check returned HTTP 500 before the fix.",
@@ -370,6 +388,10 @@ func TestRunCodexCountsPassingValidationSectionAfterProgress(t *testing.T) {
 		name, extra, want string
 	}{
 		{"passing checks", "\n## Next steps\nProvision infrastructure.", failurefollowup.ExternalRolloutPrerequisitesReason},
+		{"expected authorization response", "- Authorization check returned expected HTTP 401.", failurefollowup.ExternalRolloutPrerequisitesReason},
+		{"authorization response expectation without a result", "- Authorization check expects HTTP 401.", ""},
+		{"unexpected authorization response", "- Authorization check returned HTTP 401.", ""},
+		{"expected authorization response with another failure", "- Authorization check returned HTTP 401 as expected, and readiness returned HTTP 500.", ""},
 		{"mixed results", "- Readiness probe timed out.", ""},
 		{"negative pass count", "* No smoke checks passed.", ""},
 		{"unexpected check result", "- Startup produced no response.", ""},

@@ -7352,10 +7352,11 @@ func codexErrorDetailLines(lines []string, stopAtSection bool, detailsHeadingLev
 		}
 		lower := strings.ToLower(agentFailureFieldLine(trimmed))
 		if stopAtSection && fence == "" && isAgentReportSection(trimmed, lower, detailsHeadingLevel) {
-			// A separate Validation section can confirm progress or report a failure.
+			// Validation sections can confirm progress or report a failure, even
+			// when they follow the error details or another validation section.
 			level := markdownHeadingLevel(trimmed)
 			label, inline, _ := strings.Cut(lower, ":")
-			if strings.TrimRight(label, "*_# ") == "validation" {
+			if failurefollowup.IsRolloutValidationSection(label) {
 				subsection := codexErrorDetailLines(lines[i+1:], true, level)
 				body := strings.TrimSpace(inline) + "\n" + strings.Join(subsection, "\n")
 				if hasReportedValidationEvidence(body) {
@@ -7377,7 +7378,7 @@ var reportedValidationFailure = regexp.MustCompile(`\b(?:tests?|checks?|validati
 
 func hasReportedValidationEvidence(body string) bool {
 	body = strings.ToLower(body)
-	if reportedValidationFailure.MatchString(body) || smokeCheckFailure.MatchString(body) ||
+	if reportedValidationFailure.MatchString(body) || smokeCheckFailure.MatchString(body) || validationCommandExit.MatchString(body) ||
 		failurefollowup.HasValidationTimeout(body) || failurefollowup.HasValidationFailureEvidence(body) ||
 		failurefollowup.HasHTTPFailureStatus(body) {
 		return true
@@ -7405,8 +7406,11 @@ func isAgentReportSection(line, field string, detailsHeadingLevel int) bool {
 		return level <= detailsHeadingLevel
 	}
 	label, _, _ := strings.Cut(field, ":")
+	if failurefollowup.IsRolloutValidationSection(label) {
+		return true
+	}
 	switch strings.TrimRight(label, "*_# ") {
-	case "failure", "error details", "resolved issue", "validation", "alternative validation", "verification", "unblock path":
+	case "failure", "error details", "resolved issue", "unblock path":
 		return true
 	case "next steps", "notes":
 		return markdownHeadingLevel(line) > 0
