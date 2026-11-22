@@ -271,6 +271,48 @@ test('task card distinguishes the titled pull request from the merged pull reque
   assert.equal(await result.locator('.task-result-link').getAttribute('href'), trackedURL);
 });
 
+test('legacy issue prompts restore task actions and workflow links', async t => {
+  const now = new Date().toISOString();
+  const issueTask = (id, number, status) => ({
+    request_id: id, repo: 'example/project', status, started_at: now, updated_at: now,
+    prompt: `Complete GitHub issue example/project#${number}: Update navigation\n\nIssue URL: https://github.com/example/project/issues/${number}\nState: OPEN`,
+  });
+  const running = issueTask('legacy-running', 17, 'running');
+  const saved = issueTask('local-legacy-history', 18, 'completed');
+  saved.source = 'github_issues';
+  saved.prompt = '#18: Update navigation\n\nIssue description\n\nComments:\n(No comments.)';
+  const unrelated = issueTask('ordinary-history', 19, 'completed');
+  unrelated.prompt = `Review this sample prompt:\n\n${unrelated.prompt}`;
+  const lookalike = issueTask('lookalike-history', 20, 'completed');
+  lookalike.prompt = lookalike.prompt.replace('github.com/', 'github.com.example/');
+  const chat = { ...issueTask('local-chat-issue-prompt', 21, 'running'), source: 'chat' };
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, [running, chat]);
+  await page.evaluate(tasks => localStorage.setItem('hubui.taskHistory.v1', JSON.stringify(tasks)), [saved, unrelated, lookalike]);
+  await page.reload();
+
+  const runningCard = page.locator('#task-list .task[data-request-id="legacy-running"]');
+  const workflowLink = runningCard.locator('.task-progress-step').first();
+  const actionLink = runningCard.locator('.task-footer').getByRole('link', { name: 'Open issue on GitHub.' });
+  for (const link of [workflowLink, actionLink]) {
+    assert.equal(await link.getAttribute('href'), 'https://github.com/example/project/issues/17');
+  }
+
+  const chatCard = page.locator('#task-list .task[data-request-id="local-chat-issue-prompt"]');
+  await chatCard.locator('.task-progress-step').first().waitFor();
+  assert.equal(await chatCard.locator('.task-progress-step').first().locator('svg.lucide-message-circle').isVisible(), true);
+  assert.equal(await chatCard.getByRole('link', { name: 'Open issue on GitHub.' }).count(), 0);
+
+  await page.locator('#task-history-toggle').click();
+  const savedCard = page.locator('#task-list .task[data-request-id="local-legacy-history"]');
+  const savedLink = savedCard.getByRole('link', { name: 'Open issue on GitHub.' });
+  assert.equal(await savedLink.getAttribute('href'), 'https://github.com/example/project/issues/18');
+  for (const id of ['ordinary-history', 'lookalike-history']) {
+    const card = page.locator(`#task-list .task[data-request-id="${id}"]`);
+    await card.waitFor();
+    assert.equal(await card.getByRole('link', { name: 'Open issue on GitHub.' }).count(), 0);
+  }
+});
+
 test('task history picks up a verified manual PR after the task expires', async t => {
   const requestID = 'expired-issue-task';
   const prURL = 'https://github.com/example/project/pull/42';
