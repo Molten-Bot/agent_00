@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
+	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
 var errSchedulerClosed = errors.New("task controller is closed")
@@ -23,16 +25,19 @@ var errSchedulerClosed = errors.New("task controller is closed")
 // AdaptiveScheduler controls task admission with rolling system load samples.
 // It never preempts running work; when pressure rises, newer tasks stay queued.
 type AdaptiveScheduler struct {
-	cfg    SchedulerConfig
-	logf   func(string, ...any)
-	sample resourceSampler
+	cfg       SchedulerConfig
+	logf      func(string, ...any)
+	sample    resourceSampler
+	diskSpace func(string) (string, uint64, uint64, error)
 
-	mu      sync.Mutex
-	waiters []*taskWaiter
-	running int
-	allowed int
-	window  []resourceSample
-	closed  bool
+	mu       sync.Mutex
+	waiters  []*taskWaiter
+	reserved map[string]*diskReservation
+	draining map[string]*taskWaiter
+	running  int
+	allowed  int
+	window   []resourceSample
+	closed   bool
 
 	startOnce sync.Once
 	stopCh    chan struct{}
@@ -40,10 +45,32 @@ type AdaptiveScheduler struct {
 }
 
 type taskWaiter struct {
-	id        uint64
-	requestID string
-	granted   bool
-	notify    chan struct{}
+	id           uint64
+	requestID    string
+	granted      bool
+	err          error
+	notify       chan struct{}
+	disk         *TaskDiskRequest
+	root         string
+	device       string
+	diskBytes    uint64
+	diskBlocked  bool
+	drainDevices []string
+}
+
+// TaskDiskRequest describes the storage needed for a task workspace.
+type TaskDiskRequest struct {
+	Workspace     workspace.Manager
+	ExistingDir   string
+	RequiredBytes func() uint64
+	// CleanupOnCompletion identifies workspaces removed before reservation release.
+	CleanupOnCompletion bool
+	// RetryRoot is the root whose allocation failed. Try it after other roots.
+	RetryRoot string
+	// PermissionDeniedRoot is excluded from further admission for this task.
+	PermissionDeniedRoot string
+	// RetryAfter delays normal admission after a disk-full allocation failure.
+	RetryAfter time.Time
 }
 
 type resourceSample struct {
@@ -72,19 +99,31 @@ type defaultResourceSampler struct {
 	diskZeroTotalSamples   int
 }
 
+// WithSchedulerDiskSpace supplies filesystem identity, available bytes, and total capacity.
+func WithSchedulerDiskSpace(sample func(string) (string, uint64, uint64, error)) func(*AdaptiveScheduler) {
+	return func(c *AdaptiveScheduler) { c.diskSpace = sample }
+}
+
 // NewAdaptiveScheduler returns a queue-aware, adaptive scheduler.
-func NewAdaptiveScheduler(cfg SchedulerConfig, logf func(string, ...any)) *AdaptiveScheduler {
+func NewAdaptiveScheduler(cfg SchedulerConfig, logf func(string, ...any), options ...func(*AdaptiveScheduler)) *AdaptiveScheduler {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 	cfg = normalizeSchedulerConfig(cfg)
-	return &AdaptiveScheduler{
-		cfg:     cfg,
-		logf:    logf,
-		sample:  &defaultResourceSampler{},
-		allowed: cfg.MaxParallel,
-		stopCh:  make(chan struct{}),
+	c := &AdaptiveScheduler{
+		cfg:       cfg,
+		logf:      logf,
+		sample:    &defaultResourceSampler{},
+		diskSpace: workspace.DiskSpace,
+		reserved:  make(map[string]*diskReservation),
+		draining:  make(map[string]*taskWaiter),
+		allowed:   cfg.MaxParallel,
+		stopCh:    make(chan struct{}),
 	}
+	for _, option := range options {
+		option(c)
+	}
+	return c
 }
 
 // Start begins background sampling. Safe to call multiple times.
@@ -118,8 +157,21 @@ func (c *AdaptiveScheduler) Start(ctx context.Context) {
 
 // Acquire blocks until the caller is admitted to run. The returned function must be called once when done.
 func (c *AdaptiveScheduler) Acquire(ctx context.Context, requestID string) (func(), error) {
+	_, release, err := c.acquire(ctx, requestID, nil)
+	return release, err
+}
+
+// AcquireWorkspace admits work and returns the workspace root whose space was reserved.
+func (c *AdaptiveScheduler) AcquireWorkspace(ctx context.Context, requestID string, disk TaskDiskRequest, force bool) (string, func(), error) {
+	if force {
+		return c.acquireForce(ctx, requestID, &disk)
+	}
+	return c.acquire(ctx, requestID, &disk)
+}
+
+func (c *AdaptiveScheduler) acquire(ctx context.Context, requestID string, disk *TaskDiskRequest) (string, func(), error) {
 	if c == nil {
-		return func() {}, nil
+		return "", func() {}, nil
 	}
 
 	requestID = strings.TrimSpace(requestID)
@@ -127,86 +179,100 @@ func (c *AdaptiveScheduler) Acquire(ctx context.Context, requestID string) (func
 		id:        c.nextID.Add(1),
 		requestID: requestID,
 		notify:    make(chan struct{}, 1),
+		disk:      disk,
 	}
 
 	var (
-		queued     bool
-		granted    bool
-		queueDepth int
-		running    int
-		allowed    int
+		queued      bool
+		granted     bool
+		queueDepth  int
+		running     int
+		allowed     int
+		queueReason string
+		acquireErr  error
 	)
 
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return nil, errSchedulerClosed
+		return "", nil, errSchedulerClosed
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return "", nil, err
 	}
 	c.waiters = append(c.waiters, waiter)
-	c.tryGrantLocked()
+	// Earlier waiters have already been considered whenever a slot is free.
+	// Retry disk-blocked waiters on a scheduler tick or when work releases space.
+	c.tryGrantLocked(len(c.waiters) - 1)
 	granted = waiter.granted
-	queued = !granted
+	acquireErr = waiter.err
+	queued = !granted && acquireErr == nil
 	if queued {
 		queueDepth = len(c.waiters)
 		running = c.running
 		allowed = c.allowed
+		if waiter.diskBlocked {
+			queueReason = " reason=disk_space"
+		}
 	}
 	c.mu.Unlock()
 
 	if queued {
 		c.logf(
-			"task status=queued request_id=%s queue_depth=%d running=%d allowed=%d",
+			"task status=queued request_id=%s queue_depth=%d running=%d allowed=%d%s",
 			stringsx.FirstNonEmpty(waiter.requestID, fmt.Sprintf("queued-%d", waiter.id)),
 			queueDepth,
 			running,
 			allowed,
+			queueReason,
 		)
 		// Re-sample immediately after queueing so work does not sit idle until the
 		// next background tick when pressure has already dropped back below the
 		// resume threshold.
-		c.sampleAndUpdate()
+		if queueReason == "" {
+			c.sampleResources(false)
+		}
 	}
 
+	if acquireErr != nil {
+		return "", nil, acquireErr
+	}
 	if granted {
-		return c.releaseFunc(), nil
+		return waiter.root, c.releaseFunc(waiter), nil
 	}
 
 	for {
 		select {
 		case <-waiter.notify:
 			c.mu.Lock()
-			granted := waiter.granted
+			granted, err := waiter.granted, waiter.err
 			c.mu.Unlock()
+			if err != nil {
+				return "", nil, err
+			}
 			if granted {
-				return c.releaseFunc(), nil
+				return waiter.root, c.releaseFunc(waiter), nil
 			}
 		case <-ctx.Done():
 			c.mu.Lock()
 			if waiter.granted {
-				if c.running > 0 {
-					c.running--
-				}
-				c.tryGrantLocked()
-				c.mu.Unlock()
-				return nil, ctx.Err()
+				c.releaseLocked(waiter)
+				c.tryGrantLocked(0)
+			} else if c.removeWaiterLocked(waiter.id) {
+				c.tryGrantLocked(0)
 			}
-			c.removeWaiterLocked(waiter.id)
-			c.tryGrantLocked()
 			c.mu.Unlock()
-			return nil, ctx.Err()
+			return "", nil, ctx.Err()
 		case <-c.stopCh:
 			c.mu.Lock()
 			if waiter.granted {
-				if c.running > 0 {
-					c.running--
-				}
-				c.tryGrantLocked()
-				c.mu.Unlock()
-				return nil, errSchedulerClosed
+				c.releaseLocked(waiter)
+			} else {
+				c.removeWaiterLocked(waiter.id)
 			}
-			c.removeWaiterLocked(waiter.id)
 			c.mu.Unlock()
-			return nil, errSchedulerClosed
+			return "", nil, errSchedulerClosed
 		}
 	}
 }
@@ -214,22 +280,32 @@ func (c *AdaptiveScheduler) Acquire(ctx context.Context, requestID string) (func
 // AcquireForce admits a caller immediately, even when current running work exceeds allowed capacity.
 // Use this sparingly for explicit operator override actions.
 func (c *AdaptiveScheduler) AcquireForce(ctx context.Context, requestID string) (func(), error) {
+	_, release, err := c.acquireForce(ctx, requestID, nil)
+	return release, err
+}
+
+func (c *AdaptiveScheduler) acquireForce(ctx context.Context, requestID string, disk *TaskDiskRequest) (string, func(), error) {
 	if c == nil {
-		return func() {}, nil
+		return "", func() {}, nil
 	}
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return "", nil, ctx.Err()
 	default:
 	}
 
 	requestID = strings.TrimSpace(requestID)
+	waiter := &taskWaiter{disk: disk}
 
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return nil, errSchedulerClosed
+		return "", nil, errSchedulerClosed
+	}
+	if _, err := c.reserveDiskLocked(waiter, true, make(map[string]diskSample), nil); err != nil {
+		c.mu.Unlock()
+		return "", nil, err
 	}
 	c.running++
 	running := c.running
@@ -243,29 +319,63 @@ func (c *AdaptiveScheduler) AcquireForce(ctx context.Context, requestID string) 
 		allowed,
 	)
 
-	return c.releaseFunc(), nil
+	return waiter.root, c.releaseFunc(waiter), nil
 }
 
-func (c *AdaptiveScheduler) releaseFunc() func() {
+func (c *AdaptiveScheduler) releaseFunc(waiter *taskWaiter) func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			c.mu.Lock()
-			if c.running > 0 {
-				c.running--
-			}
-			c.tryGrantLocked()
+			c.releaseLocked(waiter)
+			c.tryGrantLocked(0)
 			c.mu.Unlock()
 		})
 	}
 }
 
-func (c *AdaptiveScheduler) tryGrantLocked() {
-	for c.running < c.allowed && len(c.waiters) > 0 {
-		waiter := c.waiters[0]
-		c.waiters = c.waiters[1:]
-		waiter.granted = true
-		c.running++
+func (c *AdaptiveScheduler) releaseLocked(waiter *taskWaiter) {
+	c.running--
+	if waiter.disk != nil && (waiter.diskBytes > 0 || waiter.disk.CleanupOnCompletion) {
+		reservation := c.reserved[waiter.device]
+		bytes := new(big.Int).SetUint64(waiter.diskBytes)
+		reservation.total.Sub(&reservation.total, bytes)
+		if waiter.disk.CleanupOnCompletion {
+			reservation.cleanupWorkspaces--
+		}
+		if reservation.total.Sign() == 0 && reservation.cleanupWorkspaces == 0 {
+			delete(c.reserved, waiter.device)
+		}
+	}
+}
+
+func (c *AdaptiveScheduler) tryGrantLocked(start int) {
+	if c.running >= c.allowed || start >= len(c.waiters) {
+		return
+	}
+	samples := make(map[string]diskSample)
+	preparedRoots := make(map[string]error)
+	if start == 0 {
+		// A retry pass rechecks drain decisions in queue order. New submissions
+		// reuse those decisions and update only the devices they need.
+		clear(c.draining)
+	}
+	for i := start; c.running < c.allowed && i < len(c.waiters); {
+		waiter := c.waiters[i]
+		granted, err := c.reserveDiskLocked(waiter, false, samples, preparedRoots)
+		if !granted && err == nil {
+			waiter.diskBlocked = true
+			for _, device := range waiter.drainDevices {
+				c.draining[device] = waiter
+			}
+			i++
+			continue
+		}
+		c.waiters = append(c.waiters[:i], c.waiters[i+1:]...)
+		waiter.granted, waiter.err = granted, err
+		if granted {
+			c.running++
+		}
 		select {
 		case waiter.notify <- struct{}{}:
 		default:
@@ -273,14 +383,23 @@ func (c *AdaptiveScheduler) tryGrantLocked() {
 	}
 }
 
-func (c *AdaptiveScheduler) removeWaiterLocked(id uint64) {
+// removeWaiterLocked reports whether removing the waiter ended a drain.
+func (c *AdaptiveScheduler) removeWaiterLocked(id uint64) bool {
 	for i, waiter := range c.waiters {
 		if waiter.id != id {
 			continue
 		}
 		c.waiters = append(c.waiters[:i], c.waiters[i+1:]...)
-		return
+		endedDrain := false
+		for _, device := range waiter.drainDevices {
+			if c.draining[device] == waiter {
+				delete(c.draining, device)
+				endedDrain = true
+			}
+		}
+		return endedDrain
 	}
+	return false
 }
 
 func (c *AdaptiveScheduler) close() {
@@ -292,6 +411,7 @@ func (c *AdaptiveScheduler) close() {
 	c.closed = true
 	waiters := append([]*taskWaiter(nil), c.waiters...)
 	c.waiters = nil
+	clear(c.draining)
 	c.mu.Unlock()
 
 	for _, waiter := range waiters {
@@ -304,6 +424,10 @@ func (c *AdaptiveScheduler) close() {
 }
 
 func (c *AdaptiveScheduler) sampleAndUpdate() {
+	c.sampleResources(true)
+}
+
+func (c *AdaptiveScheduler) sampleResources(retryDisk bool) {
 	if c == nil || c.sample == nil {
 		return
 	}
@@ -311,6 +435,11 @@ func (c *AdaptiveScheduler) sampleAndUpdate() {
 	sample, err := c.sample.Sample()
 	if err != nil {
 		c.logf("scheduler status=sample_error err=%q", err)
+		if retryDisk {
+			c.mu.Lock()
+			c.tryGrantLocked(0)
+			c.mu.Unlock()
+		}
 		return
 	}
 
@@ -336,7 +465,9 @@ func (c *AdaptiveScheduler) sampleAndUpdate() {
 		nextAllowed = c.cfg.MaxParallel
 	}
 	c.allowed = nextAllowed
-	c.tryGrantLocked()
+	if retryDisk || nextAllowed > prevAllowed {
+		c.tryGrantLocked(0)
+	}
 	queueDepth := len(c.waiters)
 	running := c.running
 	c.mu.Unlock()

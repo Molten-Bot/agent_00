@@ -745,6 +745,34 @@ func TestBrokerCapturesReviewPRURLFromRunConfig(t *testing.T) {
 	}
 }
 
+func TestBrokerQueuesWorkspaceAllocationRetry(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	const start = "task status=start request_id=local-retry explicit_terminal=true"
+	b.IngestLog(start)
+	b.IngestLog(`task request_id=local-retry stage=workspace status=error err="no space left on device"`)
+	b.IngestLog(`task status=warn action=retry_workspace_allocation request_id=local-retry err="no space left on device"`)
+
+	snap := b.Snapshot()
+	if len(snap.Tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(snap.Tasks))
+	}
+	task := snap.Tasks[0]
+	if task.Status != "pending" || task.StageStatus != "queued" || task.Error != "" {
+		t.Fatalf("retry task status = %q, stage status = %q, error = %q", task.Status, task.StageStatus, task.Error)
+	}
+	if snap.Stats.PendingTasks != 1 || snap.Stats.RunningTasks != 0 {
+		t.Fatalf("retry counts: pending = %d, running = %d", snap.Stats.PendingTasks, snap.Stats.RunningTasks)
+	}
+
+	b.IngestLog(start)
+	snap = b.Snapshot()
+	if snap.Tasks[0].Status != "running" || snap.Stats.PendingTasks != 0 || snap.Stats.RunningTasks != 1 {
+		t.Fatalf("restarted task status = %q, pending = %d, running = %d", snap.Tasks[0].Status, snap.Stats.PendingTasks, snap.Stats.RunningTasks)
+	}
+}
+
 func TestBrokerCapturesAutoMergeFromQueuedReviewConfig(t *testing.T) {
 	t.Parallel()
 

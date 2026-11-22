@@ -293,6 +293,9 @@ func runServer(args []string) int {
 
 	localSubmitDeduper := newLocalSubmissionDeduper(localSubmissionDedupTTL)
 	localTaskController := newLocalTaskController()
+	localTaskController.persistStop = func(requestID string) error {
+		return persistIssueControl(issueClaims, requestID, "stopped")
+	}
 	var localTaskSeq uint64
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -319,6 +322,19 @@ func runServer(args []string) int {
 	}
 
 	scheduler := localruntime.NewAdaptiveScheduler(cfg.Scheduler, daemonLogger)
+	diskHistory, err := openLocalTaskDiskHistory(cfg.RuntimeConfigPath)
+	if err != nil {
+		daemonLogger("scheduler status=warn action=load_task_disk_history err=%q", err)
+	}
+	diskHistoryDone := make(chan struct{})
+	go func() {
+		defer close(diskHistoryDone)
+		retryLocalTaskDiskHistory(ctx, diskHistory, 30*time.Second, daemonLogger)
+	}()
+	defer func() {
+		stop()
+		<-diskHistoryDone
+	}()
 	scheduler.Start(ctx)
 
 	logRoot := ""
@@ -490,12 +506,16 @@ func runServer(args []string) int {
 				}()
 			}
 
+			diskKey := localruntime.TaskDiskKey(runCfg.RepoList())
+			diskRequest := localTaskDiskRequest(runCtx, diskHistory, diskKey)
+			diskRequest.CleanupOnCompletion = issueWork == nil && repairWork == nil
+			forceRetry := false
 			for {
 				if taskHandle != nil {
 					if waitErr := taskHandle.WaitUntilRunnable(runCtx); waitErr != nil {
-						if errors.Is(waitErr, errTaskStoppedByOperator) {
+						if taskHandle.IsStopped() {
 							finalState = "stopped"
-							daemonLogger("task status=stopped request_id=%s err=%q", requestID, waitErr)
+							daemonLogger("task status=stopped request_id=%s err=%q", requestID, errTaskStoppedByOperator)
 							return
 						}
 						finalState = "error"
@@ -520,7 +540,8 @@ func runServer(args []string) int {
 				}
 
 				settings := signingSettings(activeCfg, runner)
-				forceAcquire := false
+				forceAcquire := forceRetry
+				var workspaceRoot string
 				admission := prepareLocalTaskAdmission(
 					runCtx,
 					taskHandle,
@@ -534,11 +555,8 @@ func runServer(args []string) int {
 						if taskHandle != nil && !forceAcquire {
 							forceAcquire = taskHandle.ConsumeForceAcquire()
 						}
-						acquire := scheduler.Acquire
-						if forceAcquire {
-							acquire = scheduler.AcquireForce
-						}
-						release, err := acquire(acquireCtx, requestID)
+						root, release, err := scheduler.AcquireWorkspace(acquireCtx, requestID, diskRequest, forceAcquire)
+						workspaceRoot = root
 						if taskHandle != nil {
 							taskHandle.ClearAcquireCancel(cancelAcquire)
 						}
@@ -618,13 +636,11 @@ func runServer(args []string) int {
 				}
 				taskRunner := execx.Runner(runner)
 				if issueWork != nil {
-					if verifyIssueOwnership != nil {
-						if err := verifyIssueOwnership(runCtx, runCfg); err != nil {
-							release()
-							finalState = "error"
-							issueResult.Err = err
-							return
-						}
+					ownership := checkLocalIssueOwnership(runCtx, runCfg, requestID, taskHandle, verifyIssueOwnership, daemonLogger)
+					if ownership.Result.Err != nil {
+						finalState, issueResult = ownership.State, ownership.Result
+						release()
+						return
 					}
 					taskRunner = localruntime.IssueRunner{Runner: runner, Lock: issueWork.lock, Store: issueWork.store, RecordID: issueWork.record.ID, Check: func(checkCtx context.Context) error {
 						if verifyIssueOwnership != nil {
@@ -636,16 +652,30 @@ func runServer(args []string) int {
 				if repairWork != nil {
 					taskRunner = localruntime.IssueRunner{Runner: runner, Lock: repairWork.lock}
 				}
-				outcome := runLocalTask(runCtx, taskRunner, daemonLogger, "local", requestID, runCfg, finalReviewPasses, func() bool {
-					if taskHandle == nil {
-						return false
-					}
-					return taskHandle.IsStopped()
-				}, signingSnapshot, monitorBroker)
+				taskWorkspace := diskRequest.Workspace
+				taskWorkspace.Root = workspaceRoot
+				canRetryWorkspace := diskRequest.RetryRoot == "" && canRetryTaskWorkspace(diskRequest.Workspace)
+				outcome := runLocalTask(runCtx, taskRunner, daemonLogger, "local", requestID, runCfg, finalReviewPasses, taskHandle, signingSnapshot, monitorBroker, taskWorkspace, func(runDir string) {
+					recordLocalTaskDiskUsage(diskHistory, diskKey, requestID, runDir, daemonLogger)
+				}, canRetryWorkspace)
 				if taskHandle != nil {
 					taskHandle.SetRunning(false)
 				}
-				release()
+				if outcome.State == "retry_workspace" {
+					daemonLogger("task status=warn action=retry_workspace_allocation request_id=%s err=%q", requestID, outcome.Result.Err)
+					release()
+					diskRequest.RetryRoot = workspaceRoot
+					if errors.Is(outcome.Result.Err, os.ErrPermission) {
+						diskRequest.PermissionDeniedRoot = workspaceRoot
+					}
+					forceRetry = canRetryWorkspace && forceAcquire
+					if !canRetryWorkspace {
+						delay := time.Duration(max(250, cfg.Scheduler.SampleIntervalMS)) * time.Millisecond
+						diskRequest.RetryAfter = time.Now().Add(delay)
+					}
+					continue
+				}
+				defer release()
 
 				issueResult = outcome.Result
 				finalState = outcome.State
@@ -688,8 +718,11 @@ func runServer(args []string) int {
 					}
 				case "completed":
 				}
-				if issueWork == nil && repairWork == nil {
+				if diskRequest.CleanupOnCompletion {
 					cleanupTaskWorkspaceOnCompletion(requestID, outcome.Result, daemonLogger)
+					if err := diskHistory.Flush(); err != nil {
+						daemonLogger("scheduler status=warn action=flush_task_disk_history request_id=%s err=%q", requestID, err)
+					}
 				}
 				return
 			}
@@ -1042,17 +1075,8 @@ func runServer(args []string) int {
 			return nil
 		}
 		uiServer.StopTask = func(_ context.Context, requestID string) error {
-			if localTaskController.Controls(requestID).Stop {
-				if err := persistIssueControl(issueClaims, requestID, "stopped"); err != nil {
-					return err
-				}
-			}
-			canonical, err := localTaskController.StopWithCanonical(requestID)
-			if err != nil {
-				return err
-			}
-			daemonLogger("task status=stopped request_id=%s err=%q", stringsx.FirstNonEmpty(canonical, requestID), errTaskStoppedByOperator)
-			return nil
+			// The worker publishes terminal status after recording workspace usage.
+			return localTaskController.Stop(requestID)
 		}
 		go func() {
 			if err := uiServer.Run(ctx); err != nil {
@@ -1483,12 +1507,15 @@ func runLocalTask(
 	requestID string,
 	runCfg config.Config,
 	finalReviewPasses int,
-	wasStopped func() bool,
+	taskHandle *localTaskHandle,
 	signingSnapshot *gitsigning.Snapshot,
 	broker *web.Broker,
+	taskWorkspace workspace.Manager,
+	recordDiskUsage func(string),
+	canRetryWorkspace bool,
 ) localTaskOutcome {
 	logf(
-		"task status=start request_id=%s skill=%s repo=%s repos=%s",
+		"task status=start request_id=%s skill=%s repo=%s repos=%s explicit_terminal=true",
 		requestID,
 		skill,
 		runCfg.RepoURL,
@@ -1496,6 +1523,9 @@ func runLocalTask(
 	)
 
 	h := app.New(runner)
+	h.Workspace = taskWorkspace
+	checkoutComplete := false
+	h.OnCheckout = func() { checkoutComplete = true }
 	if broker != nil {
 		h.OnPRTitle = func(url, title string) {
 			broker.RecordTaskPRTitle(requestID, url, title)
@@ -1509,7 +1539,7 @@ func runLocalTask(
 		ctx = repairCtx
 		defer func() { watchdog.Close(); cancel(nil) }()
 		h.OnStep = func(step string) { watchdog.Advance(step) }
-		h.Workspace.Root = filepath.Join(filepath.Dir(repairWork.queue.claims.Root), "repair-workspaces")
+		h.Workspace.Root = filepath.Dir(repairWork.workspaceDir())
 		h.Workspace.NewGUID = func() string { return repairWork.record.ID }
 	}
 	if issueWork, ok := ctx.Value(issueExecutionContextKey{}).(*issueExecution); ok {
@@ -1523,26 +1553,50 @@ func runLocalTask(
 	}
 
 	res := h.Run(ctx, runCfg)
+	if ctx.Err() == nil && res.ExitCode == app.ExitWorkspace && res.WorkspaceDir == "" &&
+		(canRetryWorkspace || localruntime.IsWorkspaceDiskFull(res.Err)) {
+		return localTaskOutcome{State: "retry_workspace", Result: res}
+	}
+	if ctx.Err() == nil && canRetryWorkspace && res.ExitCode == app.ExitClone &&
+		(errors.Is(res.Err, app.ErrWorkspaceDiskFull) || localruntime.IsWorkspaceDiskFull(res.Err)) {
+		// Only fresh checkouts can move volumes. Retained issue workspaces
+		// are pinned to their root and must preserve their existing work.
+		if _, issue := ctx.Value(issueExecutionContextKey{}).(*issueExecution); !issue {
+			if _, repair := ctx.Value(issueRepairContextKey{}).(*issueRepairWork); !repair {
+				removed, err := removeManagedWorkspaceDir(res.WorkspaceDir)
+				if err == nil && removed {
+					return localTaskOutcome{State: "retry_workspace", Result: res}
+				}
+			}
+		}
+	}
+	taskHandle.BeginFinalization()
+	if checkoutComplete && recordDiskUsage != nil {
+		recordDiskUsage(res.WorkspaceDir)
+	}
 	if res.Err != nil && context.Cause(ctx) != nil {
 		res.Err = errors.Join(res.Err, context.Cause(ctx))
 	}
-	if res.Err != nil {
-		if wasStopped != nil && wasStopped() {
-			stopErr := context.Cause(ctx)
-			if stopErr == nil {
-				stopErr = errTaskStoppedByOperator
-			}
-			logf(
-				"task status=stopped request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
-				requestID,
-				res.ExitCode,
-				res.WorkspaceDir,
-				res.Branch,
-				res.PRURL,
-				stopErr,
-			)
-			return localTaskOutcome{State: "stopped", Result: res}
+	if taskHandle.IsStopped() {
+		stopErr := context.Cause(ctx)
+		if stopErr == nil {
+			stopErr = errTaskStoppedByOperator
 		}
+		if res.Err == nil {
+			res.Err = stopErr
+		}
+		logf(
+			"task status=stopped request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
+			requestID,
+			res.ExitCode,
+			res.WorkspaceDir,
+			res.Branch,
+			res.PRURL,
+			stopErr,
+		)
+		return localTaskOutcome{State: "stopped", Result: res}
+	}
+	if res.Err != nil {
 		logf(
 			"task status=error request_id=%s exit_code=%d workspace=%s branch=%s pr_url=%s err=%q",
 			requestID,

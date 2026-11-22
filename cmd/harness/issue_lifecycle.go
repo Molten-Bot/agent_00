@@ -21,6 +21,23 @@ type issueExecution struct {
 	policy localruntime.IssueRecoveryConfig
 }
 
+func checkLocalIssueOwnership(ctx context.Context, run config.Config, requestID string, task *localTaskHandle, verify func(context.Context, config.Config) error, logf func(string, ...any)) localTaskOutcome {
+	if verify == nil {
+		return localTaskOutcome{}
+	}
+	err := verify(ctx, run)
+	if err == nil {
+		return localTaskOutcome{}
+	}
+	result := app.Result{ExitCode: app.ExitPreflight, Err: err}
+	if task.IsStopped() {
+		logf("task status=stopped request_id=%s err=%q", requestID, errTaskStoppedByOperator)
+		return localTaskOutcome{State: "stopped", Result: result}
+	}
+	logf("task status=error request_id=%s err=%q", requestID, err)
+	return localTaskOutcome{State: "error", Result: result}
+}
+
 func prepareIssueExecution(store *localruntime.IssueClaimStore, run config.Config, policy localruntime.IssueRecoveryConfig) (*issueExecution, string, error) {
 	if run.GitHubIssue == nil || run.GitHubIssue.Claim == nil {
 		return nil, "", nil

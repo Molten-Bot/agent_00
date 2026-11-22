@@ -42,11 +42,11 @@ func TestLocalTaskHandlePauseRunAndStopErrorPaths(t *testing.T) {
 	if err := handle.Run(); err == nil {
 		t.Fatal("Run(not paused) error = nil, want non-nil")
 	}
-	if !handle.Stop() {
-		t.Fatal("Stop() = false, want true on first call")
+	if err := handle.stop(nil); err != nil {
+		t.Fatalf("stop() error on first call = %v", err)
 	}
-	if handle.Stop() {
-		t.Fatal("Stop() = true, want false on second call")
+	if err := handle.stop(nil); err == nil {
+		t.Fatal("stop() error on second call = nil")
 	}
 	if err := handle.Pause(); err == nil {
 		t.Fatal("Pause(stopped) error = nil, want non-nil")
@@ -154,7 +154,9 @@ func TestWaitUntilRunnableContextCancelAndStoppedHandle(t *testing.T) {
 		t.Fatalf("WaitUntilRunnable(timeout) error = %v, want deadline exceeded", err)
 	}
 
-	handle.Stop()
+	if err := handle.stop(nil); err != nil {
+		t.Fatalf("stop() error = %v", err)
+	}
 	if err := handle.WaitUntilRunnable(context.Background()); !errors.Is(err, errTaskStoppedByOperator) {
 		t.Fatalf("WaitUntilRunnable(stopped) error = %v, want %v", err, errTaskStoppedByOperator)
 	}
@@ -208,8 +210,8 @@ func TestLocalTaskControllerControlsReflectHandleState(t *testing.T) {
 		Stop: true,
 	})
 
-	if !handle.Stop() {
-		t.Fatal("Stop() = false, want true")
+	if err := handle.stop(nil); err != nil {
+		t.Fatalf("stop() error = %v", err)
 	}
 	assertControls("stopped", controller.Controls("local-controls"), web.TaskControls{})
 	assertControls("missing", controller.Controls("missing"), web.TaskControls{})
