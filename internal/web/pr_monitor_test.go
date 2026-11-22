@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
@@ -90,6 +91,58 @@ func TestPRMergeMonitorRefreshesDisplayedPRTitle(t *testing.T) {
 	if want := []string{"pr", "view", displayedURL, "--json", "title", "--jq", ".title"}; len(commands) != 3 || !slices.Equal(commands[2].Args, want) {
 		t.Fatalf("commands = %+v, want displayed PR lookup %v", commands, want)
 	}
+}
+
+func TestPRMergeMonitorCleansUpWhenDisplayedPRTitleLookupTimesOut(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		const requestID = "req-stalled-title"
+		const trackedURL = "https://github.com/acme/repo/pull/42"
+		const displayedURL = "https://github.com/acme/other/pull/99"
+		broker := NewBroker()
+		broker.IngestLog("task status=start request_id=" + requestID)
+		broker.RecordCreatedTaskPRTitle(requestID, displayedURL, "Existing title")
+		broker.IngestLog("task status=completed request_id=" + requestID + " pr_url=" + trackedURL)
+		task, _ := broker.Task(requestID)
+
+		var lookupErr error
+		runner := githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+			switch cmd.Args[2] {
+			case "42":
+				return execx.Result{Stdout: `{"state":"MERGED"}`}, nil
+			case displayedURL:
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) > 2*time.Second {
+					t.Fatal("display-only title lookup needs a deadline within two seconds")
+				}
+				<-ctx.Done()
+				lookupErr = ctx.Err()
+				return execx.Result{}, lookupErr
+			default:
+				t.Fatalf("unexpected command: %+v", cmd)
+				return execx.Result{}, nil
+			}
+		})
+		var cleaned string
+		monitor := PRMergeMonitor{
+			Runner: runner,
+			Broker: broker,
+			Logf:   t.Logf,
+			CleanupTask: func(ctx context.Context, id string) error {
+				if err := ctx.Err(); err != nil {
+					t.Fatalf("cleanup context is canceled: %v", err)
+				}
+				cleaned = id
+				return nil
+			},
+		}
+		monitor.checkTaskPR(t.Context(), task)
+
+		got, ok := broker.Task(requestID)
+		if lookupErr != context.DeadlineExceeded || cleaned != requestID || !ok || got.Status != "merged" || got.PRTitle != "Existing title" {
+			t.Fatalf("lookup error = %v, cleaned task = %q, task = %+v", lookupErr, cleaned, got)
+		}
+	})
 }
 
 func TestPRMergeMonitorMarksMergedTaskDoneAndRunsCleanup(t *testing.T) {

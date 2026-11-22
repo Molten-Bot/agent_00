@@ -17,6 +17,7 @@ import (
 )
 
 const defaultPRMergePollInterval = 10 * time.Second
+const prMonitorTitleLookupTimeout = 2 * time.Second
 const automatedReviewCycleMarker = "<!-- agent00-review-cycle"
 
 // PRMergeMonitor watches task pull requests and marks merged tasks as done.
@@ -239,10 +240,12 @@ func (m *PRMergeMonitor) checkTaskPR(ctx context.Context, task Task) {
 		if task.PRTitleURL == "" || task.PRTitleURL == task.PRURL {
 			m.Broker.recordTaskPRTitle(task.RequestID, task.PRURL, state.Title, taskPRTitleMonitored)
 		} else {
-			result, err := m.Runner.Run(ctx, execx.Command{
+			titleCtx, cancel := context.WithTimeout(ctx, prMonitorTitleLookupTimeout)
+			result, err := m.Runner.Run(titleCtx, execx.Command{
 				Name: "gh",
 				Args: []string{"pr", "view", task.PRTitleURL, "--json", "title", "--jq", ".title"},
 			})
+			cancel()
 			if err != nil {
 				m.Logf("localruntime.ui status=warn event=pr_monitor_title request_id=%s pr_url=%s err=%q", task.RequestID, task.PRTitleURL, err)
 			} else {

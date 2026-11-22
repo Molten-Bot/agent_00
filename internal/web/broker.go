@@ -713,12 +713,17 @@ func (b *Broker) recordVerifiedTaskPR(requestID string, pr verifiedTaskPR) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	t := b.tasks[requestID]
+	// Recovery can verify a different PR from the one the task is tracking.
+	if t != nil && t.PRURL != "" && t.PRURL != pr.URL {
+		return
+	}
 	if b.now().Sub(pr.VerifiedAt) >= verifiedTaskPRRetention ||
 		!pr.VerifiedAt.After(b.verifiedTaskPRs[requestID].VerifiedAt) {
 		return
 	}
 	b.verifiedTaskPRs[requestID] = pr
-	if t := b.tasks[requestID]; t != nil {
+	if t != nil {
 		current, _ := taskPRTitle(t)
 		if pr.VerifiedAt.After(current.updatedAt) {
 			setTaskPRTitle(t, pr.URL, pr.Title, pr.VerifiedAt, taskPRTitleReported)

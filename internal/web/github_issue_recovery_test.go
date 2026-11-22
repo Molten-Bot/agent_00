@@ -482,6 +482,28 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryKeepsExistingMergeTarget(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	record := completeRecoveryRecord(t, s, "completed", 1)
+	const trackedURL = "https://github.com/acme/repo/pull/41"
+	s.Broker.IngestLog("task status=completed request_id=" + record.RequestID + " pr_url=" + trackedURL)
+
+	f.prs = recoveryPR("closed", `"2026-01-01T00:00:00Z"`, "agent00-issue-17", "main")
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := latestRecoveryRecord(t, s); got.State != "fulfilled" || got.PRURL != "https://github.com/acme/repo/pull/42" {
+		t.Fatalf("recovery state = %q, PR = %q, want fulfilled with PR 42", got.State, got.PRURL)
+	}
+	task, ok := s.Broker.Task(record.RequestID)
+	if !ok || task.PRURL != trackedURL || task.Status != "completed" {
+		t.Fatalf("task after recovery = %+v, want completed with PR %q", task, trackedURL)
+	}
+}
+
 func TestIssueRecoveryPublishesVerifiedPRAfterTaskExpires(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
