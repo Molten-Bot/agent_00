@@ -1,10 +1,13 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 )
 
 // markdownFailureReport mirrors the shape agents actually produce for the
@@ -136,6 +139,53 @@ func TestCodexExtractErrorDetailDropsFencesWithInfoString(t *testing.T) {
 	}
 	if strings.Contains(detail, "```") {
 		t.Fatalf("codexExtractErrorDetail() = %q, want Markdown code fences dropped", detail)
+	}
+}
+
+func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name         string
+		continuation string
+		wantReason   string
+	}{
+		{
+			name:       "external prerequisites only",
+			wantReason: failurefollowup.ExternalRolloutPrerequisitesReason,
+		},
+		{
+			name:         "deployment tests fail",
+			continuation: "\n\nDeployment tests fail.",
+		},
+		{
+			name:         "resolved issue section",
+			continuation: "\n\n**Resolved issue:** Deployment tests failed before the fix.\nDeployment tests now pass.",
+			wantReason:   failurefollowup.ExternalRolloutPrerequisitesReason,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			targetDir := t.TempDir()
+			const prompt = "Complete the rollout"
+			output := "Failure: Production rollout remains pending.\n" +
+				"**Error details:** IAM access and Secrets Manager provisioning are still outstanding.\n" +
+				"API flags default to off." + tc.continuation
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(targetDir, prompt),
+				res: execx.Result{Stdout: output},
+			}}})
+			err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+			if err == nil {
+				t.Fatal("runCodex() error = nil, want a reported failure")
+			}
+			if !strings.Contains(err.Error(), " | API flags default to off.") {
+				t.Errorf("runCodex() error = %q, want the status continuation", err)
+			}
+			result := h.fail(ExitCodex, "codex", err, targetDir)
+			if got := failurefollowup.NonRemediableFailureReason(result.Err); got != tc.wantReason {
+				t.Errorf("NonRemediableFailureReason() = %q, want %q for %q", got, tc.wantReason, err)
+			}
+		})
 	}
 }
 

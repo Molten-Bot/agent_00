@@ -7062,10 +7062,13 @@ func codexExtractErrorDetail(output string) string {
 		lower := strings.ToLower(field)
 		if strings.HasPrefix(lower, "error details:") {
 			suffix := strings.TrimSpace(field[len("error details:"):])
+			extra := codexJoinErrorDetailLines(nonEmpty[i+1:], true)
 			if suffix != "" {
+				if extra != "" {
+					suffix += " | " + extra
+				}
 				return "Error details: " + suffix
 			}
-			extra := codexJoinErrorDetailLines(nonEmpty[i+1:])
 			if extra != "" {
 				return "Error details: " + extra
 			}
@@ -7076,14 +7079,14 @@ func codexExtractErrorDetail(output string) string {
 		}
 	}
 
-	fallback := codexJoinErrorDetailLines(nonEmpty)
+	fallback := codexJoinErrorDetailLines(nonEmpty, false)
 	if fallback == "" {
 		return ""
 	}
 	return "Error details: " + fallback
 }
 
-func codexJoinErrorDetailLines(lines []string) string {
+func codexJoinErrorDetailLines(lines []string, stopAtResolvedIssue bool) string {
 	const maxDetailsLines = 3
 	const maxDetailChars = 320
 
@@ -7099,6 +7102,9 @@ func codexJoinErrorDetailLines(lines []string) string {
 			continue
 		}
 		lower := strings.ToLower(agentFailureFieldLine(trimmed))
+		if stopAtResolvedIssue && strings.HasPrefix(lower, "resolved issue:") {
+			break
+		}
 		if strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
 			continue
 		}
