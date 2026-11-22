@@ -613,6 +613,12 @@ func TestIssueRecoveryBlocksPrerequisiteWithoutRepair(t *testing.T) {
 			incident: openDependencyIncident,
 			want:     "required dependency is still open; explicit retry required after resolution",
 		},
+		{
+			name:     "open dependency missing rollout evidence",
+			report:   "Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks account metadata required for evidence reads.",
+			incident: openDependencyIncident,
+			want:     "required dependency is still open; explicit retry required after resolution",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			testIssueRecoveryBlocksPrerequisite(t, tc.report, tc.incident, tc.want)

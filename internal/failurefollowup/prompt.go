@@ -90,11 +90,15 @@ var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: cla
 const openDependencyReference = `(?:issue |pull request |pr )?(?:#[1-9][0-9]*|\x60#[1-9][0-9]*\x60|\[(?:issue |pull request |pr )?#[1-9][0-9]*\]\([^\s()]+\))`
 
 var (
-	blockedFailureSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\b(?:remains|is) blocked[.!]?$`)
-	openDependencyDetail  = regexp.MustCompile(`^(?:` +
-		openDependencyReference + ` is still open and (?:blocks|is blocking) [a-z0-9]|blocked (?:because ` +
+	blockedFailureSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:[ \t]*((?:[^"'\x60\r\n]|\b'\b)+) (?:remains|is) blocked[.!]?$`)
+	openDependencyDetail  = regexp.MustCompile(`^blocked (?:because ` +
 		openDependencyReference + ` is still open|(?:by|on) ` +
-		openDependencyReference + `, which is still open)(?:[.!](?:\s|$)|$))`)
+		openDependencyReference + `, which is still open)(?:[.!](?:\s|$)|$)`)
+	openDependencyTarget = regexp.MustCompile(`^` + openDependencyReference +
+		` is still open and (?:blocks|is blocking) ([^!?;\r\n]+?)(?:[.!](?:\s|$)|$)`)
+	rolloutOperation             = regexp.MustCompile(`\brollout(?: for .+)?$`)
+	openDependencyEvidenceDetail = regexp.MustCompile(`^` + openDependencyReference +
+		` is still open\.\s+its [^.!?;\r\n]+ lacks? [^.!?;\r\n]+ (?:needed|required) for evidence reads(?:[.!](?:\s|$)|$)`)
 )
 
 var nonRemediableFailureMarkers = []string{
@@ -418,7 +422,7 @@ func NonRemediableFailureReason(err error) string {
 		!strings.Contains(summary, "no longer blocked") && !strings.Contains(summary, "not blocked") {
 		return UnmergedDependencyReason
 	}
-	if blockedFailureSummary.MatchString(strings.TrimSpace(summary)) && openDependencyDetail.MatchString(strings.TrimSpace(detail)) {
+	if isOpenDependencyFailure(summary, detail) {
 		return OpenDependencyReason
 	}
 	for _, marker := range nonRemediableFailureMarkers {
@@ -427,6 +431,24 @@ func NonRemediableFailureReason(err error) string {
 		}
 	}
 	return NonRemediableRepoAccessReason(err)
+}
+
+func isOpenDependencyFailure(summary, detail string) bool {
+	blocked := blockedFailureSummary.FindStringSubmatch(strings.TrimSpace(summary))
+	if blocked == nil {
+		return false
+	}
+	detail = strings.TrimSpace(detail)
+	if openDependencyDetail.MatchString(detail) {
+		return true
+	}
+	operation := strings.TrimPrefix(strings.TrimSpace(blocked[1]), "the ")
+	if target := openDependencyTarget.FindStringSubmatch(detail); target != nil {
+		return strings.TrimPrefix(strings.TrimSpace(target[1]), "the ") == operation
+	}
+	// A rollout report can name the open ticket first, then explain which
+	// evidence reads its missing prerequisites prevent.
+	return rolloutOperation.MatchString(operation) && openDependencyEvidenceDetail.MatchString(detail)
 }
 
 func isMissingRemoteBranchFailure(text string) bool {
