@@ -30,6 +30,8 @@ func TestIssueAdmissionBuildsFreshPrompt(t *testing.T) {
 			} else {
 				run := issueRunConfig(GitHubRepo{FullName: "acme/repo"}, f.issue, config.GitHubIssueLinkClose)
 				run.Prompt = "Stale browser description"
+				run.GitHubIssue.Title = "Stale browser issue title"
+				run.PRTitle = "Stale browser PR title"
 				run.Assets = []githubassets.Asset{{URL: "https://github.com/user-attachments/assets/stale", Name: "stale"}}
 				run.AgentHarness = "claude"
 				body, _ := json.Marshal(run)
@@ -41,6 +43,9 @@ func TestIssueAdmissionBuildsFreshPrompt(t *testing.T) {
 				t.Fatalf("submissions=%d status=%+v", len(f.submissions), s.issueAutomation.status)
 			}
 			run := f.submissions[0]
+			if run.GitHubIssue.Title != f.issue.Title || run.PRTitle != f.issue.Title {
+				t.Fatalf("issue title = %q, PR title = %q, want %q", run.GitHubIssue.Title, run.PRTitle, f.issue.Title)
+			}
 			if len(run.Assets) != 2 || run.Assets[0].Source != "Issue description" || run.Assets[1].Source != "Comment 2" || !strings.Contains(run.Prompt, "Task assets (2)") {
 				t.Fatalf("missing authoritative issue attachments: %+v", run.Assets)
 			}
@@ -117,6 +122,9 @@ func TestIssueRetryRefreshesPromptAndPreservesOptions(t *testing.T) {
 				t.Fatalf("retry: %d %s", response.Code, response.Body.String())
 			}
 			retried := f.submissions[1]
+			if retried.GitHubIssue.Title != f.issue.Title || retried.PRTitle != f.issue.Title {
+				t.Fatalf("retry issue title = %q, PR title = %q, want %q", retried.GitHubIssue.Title, retried.PRTitle, f.issue.Title)
+			}
 			if len(retried.Assets) != 1 || retried.Assets[0].Name != "new.pdf" || retried.Assets[0].Source != "Comment 2" {
 				t.Fatalf("retry did not refresh attachments: %+v", retried.Assets)
 			}

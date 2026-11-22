@@ -1530,6 +1530,9 @@ func runLocalTask(
 		h.OnPRTitle = func(url, title string) {
 			broker.RecordTaskPRTitle(requestID, url, title)
 		}
+		h.OnPRCreated = func(url, title string) {
+			broker.RecordCreatedTaskPRTitle(requestID, url, title)
+		}
 	}
 	h.FinalReviewPasses = finalReviewPasses
 	h.Signing = signingSnapshot

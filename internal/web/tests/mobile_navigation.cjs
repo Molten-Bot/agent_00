@@ -29,7 +29,10 @@ async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile 
     if (!url.pathname.startsWith('/api/')) return route.continue();
     if (route.request().method() !== 'GET') writes.push(url.pathname);
     let json = { ok: true };
-    if (url.pathname === '/api/status') json = { tasks, events: [], repositories: [], stats: {}, resources: {} };
+    if (url.pathname === '/api/status') json = {
+      events: [], repositories: [], stats: {}, resources: {},
+      ...(typeof tasks === 'function' ? tasks() : { tasks }),
+    };
     if (url.pathname === '/api/agent-auth') json.auth = { required: false, ready: true, harness: 'codex', state: 'ready' };
     if (url.pathname === '/api/review-settings') json.settings = {
       review_level: 'off', default_library_enabled: true, json_enabled: true, chat_enabled: true, github_issues_enabled: true,
@@ -144,10 +147,16 @@ test('task card distinguishes the titled pull request from the merged pull reque
   }, {
     request_id: 'running-pr', prompt: 'Running PR prompt', repo: 'example/project',
     status: 'running', started_at: now, updated_at: now, pr_title_url: titledURL,
-    pr_title: 'Improve repository navigation',
+    issue_title: 'Original issue title', pr_title: 'Improve repository navigation',
+  }, {
+    request_id: 'queued-issue', prompt: 'Full issue prompt', repo: 'example/project',
+    status: 'pending', started_at: now, updated_at: now, issue_title: 'Original issue title',
   }]);
 
+  const queuedIssue = page.locator('#task-list .task[data-request-id="queued-issue"]');
+  assert.equal(await queuedIssue.locator('.task-id').textContent(), 'Original issue title');
   const runningTask = page.locator('#task-list .task[data-request-id="running-pr"]');
+  assert.equal(await runningTask.locator('.task-id').textContent(), 'Improve repository navigation');
   assert.equal(await runningTask.locator('a.task-progress-step[title^="GitHub:"]').getAttribute('href'), titledURL);
   await page.locator('#task-history-toggle').click();
   const task = page.locator('#task-list .task[data-request-id="multi-repo"]');
@@ -211,6 +220,90 @@ test('legacy issue prompts restore task actions and workflow links', async t => 
     assert.equal(await card.getByRole('link', { name: 'Open issue on GitHub.' }).count(), 0);
   }
 });
+
+test('task history picks up a verified manual PR after the task expires', async t => {
+  const requestID = 'expired-issue-task';
+  const prURL = 'https://github.com/example/project/pull/42';
+  const completedAt = new Date(Date.now() - 15 * 60_000).toISOString();
+  const verifiedPR = { url: prURL, title: 'Manually opened PR', verified_at: new Date().toISOString() };
+  let snapshot = { tasks: [{
+    request_id: requestID, prompt: 'Original prompt', repo: 'example/project',
+    status: 'error', started_at: completedAt, updated_at: completedAt, issue_title: 'Original issue title',
+  }] };
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, () => snapshot);
+  await page.waitForFunction(id => JSON.parse(localStorage.getItem('hubui.taskHistory.v1') || '[]')
+    .some(task => task.request_id === id), requestID);
+
+  snapshot = { tasks: [], verified_task_prs: { [requestID]: verifiedPR, 'unknown-task': verifiedPR } };
+  await page.reload();
+  await page.locator('#task-history-toggle').click();
+  const task = page.locator(`#task-list .task[data-request-id="${requestID}"]`);
+  await task.getByText(verifiedPR.title, { exact: true }).waitFor();
+  assert.equal(await task.locator('.task-github-link').getAttribute('href'), prURL);
+  assert.equal(await page.locator('#task-list .task[data-request-id="unknown-task"]').count(), 0);
+  const saved = await page.evaluate(id => JSON.parse(localStorage.getItem('hubui.taskHistory.v1'))
+    .find(task => task.request_id === id), requestID);
+  assert.equal(saved.history_completed_at, completedAt);
+  assert.equal(saved.prompt, 'Original prompt');
+  assert.equal(saved.pr_title_updated_at, verifiedPR.verified_at);
+});
+
+test('task history keeps a renamed PR title when the live task expires', async t => {
+  const requestID = 'renamed-pr-task';
+  const prURL = 'https://github.com/example/project/pull/42';
+  const now = Date.now();
+  const completedAt = new Date(now - 15 * 60_000).toISOString();
+  const renamedAt = new Date(now - 60_000).toISOString();
+  const verifiedPR = { url: prURL, title: 'Original PR title', verified_at: new Date(now - 120_000).toISOString() };
+  let snapshot = { tasks: [{
+    request_id: requestID, prompt: 'Original prompt', repo: 'example/project',
+    status: 'completed', started_at: completedAt, updated_at: completedAt,
+    pr_url: prURL, pr_title_url: prURL, pr_title: 'Renamed PR title', pr_title_updated_at: renamedAt,
+  }] };
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, () => snapshot);
+  await page.waitForFunction(id => JSON.parse(localStorage.getItem('hubui.taskHistory.v1') || '[]')
+    .some(task => task.request_id === id && task.pr_title === 'Renamed PR title'), requestID);
+
+  snapshot = { tasks: [], verified_task_prs: { [requestID]: verifiedPR } };
+  await page.reload();
+  await page.locator('#task-history-toggle').click();
+  const task = page.locator(`#task-list .task[data-request-id="${requestID}"]`);
+  assert.equal(await task.locator('.task-id').textContent(), 'Renamed PR title');
+  assert.equal(await task.locator('.task-github-link').getAttribute('href'), prURL);
+});
+
+for (const { name, trackedPR, titledPR, expectedTitle } of [
+  { name: 'different PR', trackedPR: 42, titledPR: 42, expectedTitle: 'Archived PR title' },
+  { name: 'tracked PR with a different card PR', trackedPR: 43, titledPR: 42, expectedTitle: 'Archived PR title' },
+  { name: 'card PR with a different tracked PR', trackedPR: 42, titledPR: 43, expectedTitle: 'Archived PR title' },
+  { name: 'same PR', trackedPR: 43, titledPR: 43, expectedTitle: 'Verified PR title' },
+]) {
+  test(`task history after recovery verifies ${name}`, async t => {
+    const requestID = 'archived-issue-task';
+    const prURL = number => `https://github.com/example/project/pull/${number}`;
+    const completedAt = new Date(Date.now() - 15 * 60_000).toISOString();
+    const verifiedPR = { url: prURL(43), title: 'Verified PR title', verified_at: new Date().toISOString() };
+    let snapshot = { tasks: [{
+      request_id: requestID, prompt: 'Original prompt', repo: 'example/project',
+      status: 'merged', started_at: completedAt, updated_at: completedAt,
+      pr_url: prURL(trackedPR), pr_title_url: prURL(titledPR),
+      pr_title: 'Archived PR title', pr_title_updated_at: completedAt,
+    }] };
+    const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, () => snapshot);
+    await page.waitForFunction(id => JSON.parse(localStorage.getItem('hubui.taskHistory.v1') || '[]')
+      .some(task => task.request_id === id), requestID);
+
+    snapshot = { tasks: [], verified_task_prs: { [requestID]: verifiedPR } };
+    await page.reload();
+    await page.locator('#task-history-toggle').click();
+    const task = page.locator(`#task-list .task[data-request-id="${requestID}"]`);
+    assert.equal(await task.locator('.task-id').textContent(), expectedTitle);
+    assert.equal(await task.locator('.task-github-link').getAttribute('href'), prURL(titledPR));
+    const savedPRURL = await page.evaluate(id => JSON.parse(localStorage.getItem('hubui.taskHistory.v1'))
+      .find(task => task.request_id === id).pr_url, requestID);
+    assert.equal(savedPRURL, prURL(trackedPR));
+  });
+}
 
 for (const viewport of [{ width: 430, height: 932 }, { width: 932, height: 430 }]) {
   test(`Enter adds a newline to the Studio prompt without submitting on mobile ${viewport.width}×${viewport.height}`, async t => {

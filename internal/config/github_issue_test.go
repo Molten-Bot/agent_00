@@ -5,6 +5,24 @@ import (
 	"testing"
 )
 
+func TestApplyDefaultsUsesGitHubIssueTitleVerbatim(t *testing.T) {
+	t.Parallel()
+
+	const title = "agent00-Fix issue-20260407-002959"
+	for _, issueTitle := range []string{title, ""} {
+		cfg := Config{
+			Prompt:      "Complete GitHub issue acme/repo#17: " + title + "\n\nIssue description",
+			PRTitle:     "Stale PR title",
+			GitHubIssue: &GitHubIssueConfig{Repository: "acme/repo", Number: 17, Title: issueTitle},
+		}
+		cfg.ApplyDefaults()
+		cfg.ApplyDefaults()
+		if cfg.PRTitle != title {
+			t.Errorf("PRTitle = %q, want %q (issue metadata title %q)", cfg.PRTitle, title, issueTitle)
+		}
+	}
+}
+
 func TestValidateGitHubIssueRunMetadata(t *testing.T) {
 	t.Parallel()
 

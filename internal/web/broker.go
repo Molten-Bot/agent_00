@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"slices"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
 	"github.com/Molten-Bot/agent_00/internal/library"
@@ -25,6 +27,7 @@ const (
 	defaultMaxTaskLogs         = 2000
 	defaultTerminalTaskTimeout = 10 * time.Minute
 	defaultClosedTaskRetention = 24 * time.Hour
+	verifiedTaskPRRetention    = time.Hour
 	defaultMaxReleases         = 100
 )
 
@@ -81,8 +84,10 @@ type Task struct {
 	Branch            string               `json:"branch,omitempty"`
 	GitHubIssueURL    string               `json:"github_issue_url,omitempty"`
 	PRURL             string               `json:"pr_url,omitempty"`
+	IssueTitle        string               `json:"issue_title,omitempty"`
 	PRTitle           string               `json:"pr_title,omitempty"`
 	PRTitleURL        string               `json:"pr_title_url,omitempty"`
+	PRTitleUpdatedAt  string               `json:"pr_title_updated_at,omitempty"`
 	LiveAppURL        string               `json:"live_app_url,omitempty"`
 	Error             string               `json:"error,omitempty"`
 	Warning           string               `json:"warning,omitempty"`
@@ -247,6 +252,14 @@ type Snapshot struct {
 	Tasks                   []Task          `json:"tasks"`
 	PromptedRepos           []string        `json:"prompted_repos,omitempty"`
 	CustomLibraryGeneration int64           `json:"custom_library_generation"`
+
+	VerifiedTaskPRs map[string]verifiedTaskPR `json:"verified_task_prs,omitempty"`
+}
+
+type verifiedTaskPR struct {
+	URL        string    `json:"url"`
+	Title      string    `json:"title"`
+	VerifiedAt time.Time `json:"verified_at"`
 }
 
 // Broker collects daemon logs and exposes monitor state snapshots.
@@ -279,6 +292,9 @@ type Broker struct {
 
 	customLibraryGeneration int64
 
+	// Verified PR metadata can still update browser history after task expiry.
+	verifiedTaskPRs map[string]verifiedTaskPR
+
 	// runConfigFieldCache memoizes fields decoded from runConfigs so log
 	// ingestion does not re-decode the same payload on every line.
 	runConfigFieldCache map[string]runConfigFields
@@ -307,7 +323,8 @@ type taskState struct {
 	Branch            string
 	GitHubIssueURL    string
 	PRURL             string
-	PRTitles          map[string]string
+	PRTitles          map[string]taskPRTitleMetadata
+	CreatedPRURLs     map[string]bool
 	TitledPRURLs      []string
 	LiveAppURL        string
 	Error             string
@@ -361,6 +378,7 @@ func NewBroker() *Broker {
 		maxEvents:        defaultMaxEvents,
 		maxTaskLog:       defaultMaxTaskLogs,
 		tasks:            map[string]*taskState{},
+		verifiedTaskPRs:  map[string]verifiedTaskPR{},
 		closedTasks:      map[string]time.Time{},
 		runConfigs:       map[string][]byte{},
 		repoIndex:        map[string]int{},
@@ -484,6 +502,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 		Resources:     b.resources,
 		PromptedRepos: append([]string(nil), b.promptedRepos...),
 	}
+	snapshot.VerifiedTaskPRs = maps.Clone(b.verifiedTaskPRs)
 	if opts.events {
 		snapshot.Events = append([]Event(nil), b.events...)
 	}
@@ -527,8 +546,10 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			Branch:            t.Branch,
 			GitHubIssueURL:    t.GitHubIssueURL,
 			PRURL:             t.PRURL,
-			PRTitle:           prTitle,
+			IssueTitle:        b.runConfigFieldsLocked(t.RequestID).issueTitle,
+			PRTitle:           prTitle.title,
 			PRTitleURL:        prTitleURL,
+			PRTitleUpdatedAt:  formatTimeOrEmpty(prTitle.updatedAt),
 			LiveAppURL:        t.LiveAppURL,
 			Error:             t.Error,
 			Warning:           t.Warning,
@@ -638,8 +659,10 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		Branch:            t.Branch,
 		GitHubIssueURL:    t.GitHubIssueURL,
 		PRURL:             t.PRURL,
-		PRTitle:           prTitle,
+		IssueTitle:        b.runConfigFieldsLocked(t.RequestID).issueTitle,
+		PRTitle:           prTitle.title,
 		PRTitleURL:        prTitleURL,
+		PRTitleUpdatedAt:  formatTimeOrEmpty(prTitle.updatedAt),
 		LiveAppURL:        t.LiveAppURL,
 		Error:             t.Error,
 		Warning:           t.Warning,
@@ -653,6 +676,28 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 
 // RecordTaskPRTitle updates the title associated with a task's pull request.
 func (b *Broker) RecordTaskPRTitle(requestID, prURL, title string) {
+	b.recordTaskPRTitle(requestID, prURL, title, taskPRTitleReported)
+}
+
+// RecordCreatedTaskPRTitle gives newly created PRs priority on the task card.
+func (b *Broker) RecordCreatedTaskPRTitle(requestID, prURL, title string) {
+	b.recordTaskPRTitle(requestID, prURL, title, taskPRTitleCreated)
+}
+
+type taskPRTitleSource int
+
+type taskPRTitleMetadata struct {
+	title     string
+	updatedAt time.Time
+}
+
+const (
+	taskPRTitleReported taskPRTitleSource = iota
+	taskPRTitleCreated
+	taskPRTitleMonitored
+)
+
+func (b *Broker) recordTaskPRTitle(requestID, prURL, title string, source taskPRTitleSource) {
 	title = strings.TrimSpace(title)
 	if prURL == "" || title == "" {
 		return
@@ -661,19 +706,66 @@ func (b *Broker) RecordTaskPRTitle(requestID, prURL, title string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	t := b.tasks[requestID]
-	if t == nil || t.PRTitles[prURL] == title {
+	if t := b.tasks[requestID]; t != nil && setTaskPRTitle(t, prURL, title, b.now(), source) {
+		b.notifySubscribersLocked()
+	}
+}
+
+func (b *Broker) recordVerifiedTaskPR(requestID string, pr verifiedTaskPR) {
+	if requestID == "" || pr.URL == "" || pr.Title == "" || pr.VerifiedAt.IsZero() {
 		return
 	}
-	if t.PRTitles == nil {
-		t.PRTitles = make(map[string]string)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	t := b.tasks[requestID]
+	// Recovery can verify a different PR from the one the task is tracking.
+	if t != nil && t.PRURL != "" && t.PRURL != pr.URL {
+		return
 	}
-	t.PRTitles[prURL] = title
+	if b.now().Sub(pr.VerifiedAt) >= verifiedTaskPRRetention ||
+		!pr.VerifiedAt.After(b.verifiedTaskPRs[requestID].VerifiedAt) {
+		return
+	}
+	b.verifiedTaskPRs[requestID] = pr
+	if t != nil {
+		current, _ := taskPRTitle(t)
+		if pr.VerifiedAt.After(current.updatedAt) {
+			setTaskPRTitle(t, pr.URL, pr.Title, pr.VerifiedAt, taskPRTitleReported)
+		}
+	}
+	b.notifySubscribersLocked()
+}
+
+func setTaskPRTitle(t *taskState, prURL, title string, updatedAt time.Time, source taskPRTitleSource) bool {
+	created := source == taskPRTitleCreated
+	if t.PRTitles[prURL].title == title && (!created || t.CreatedPRURLs[prURL]) {
+		return false
+	}
+	if source == taskPRTitleMonitored {
+		_, titledURL := taskPRTitle(t)
+		if stringsx.FirstNonEmpty(titledURL, t.PRURL) != prURL {
+			return false
+		}
+		if titledURL != "" {
+			// Refresh the displayed title without changing the PR tracked for merge.
+			t.PRTitles[prURL] = taskPRTitleMetadata{title: title, updatedAt: updatedAt}
+			return true
+		}
+	}
+	if created {
+		if t.CreatedPRURLs == nil {
+			t.CreatedPRURLs = make(map[string]bool)
+		}
+		t.CreatedPRURLs[prURL] = true
+	}
+	if t.PRTitles == nil {
+		t.PRTitles = make(map[string]taskPRTitleMetadata)
+	}
+	t.PRTitles[prURL] = taskPRTitleMetadata{title: title, updatedAt: updatedAt}
 	t.TitledPRURLs = slices.DeleteFunc(t.TitledPRURLs, func(url string) bool { return url == prURL })
 	t.TitledPRURLs = append(t.TitledPRURLs, prURL)
 	t.PRURL = prURL
-	t.UpdatedAt = b.now().UTC()
-	b.notifySubscribersLocked()
+	return true
 }
 
 // RecordTaskRunConfig stores a parsed task run config payload for future reruns.
@@ -1136,10 +1228,14 @@ func isStoppedTaskStatus(status string) bool {
 }
 
 func isReviewTaskAttempt(attempt taskAttemptState) bool {
-	if normalizeTaskSource(attempt.Source) == "review" {
+	return isReviewTask(attempt.Source, attempt.Workflow)
+}
+
+func isReviewTask(source, workflow string) bool {
+	if normalizeTaskSource(source) == "review" {
 		return true
 	}
-	switch strings.ToLower(strings.TrimSpace(attempt.Workflow)) {
+	switch strings.ToLower(strings.TrimSpace(workflow)) {
 	case "code-review", "code_review", "pull request code review":
 		return true
 	default:
@@ -1356,16 +1452,23 @@ func taskWorkflow(t *taskState) string {
 	return stringsx.FirstNonEmpty(t.Workflow, t.Skill)
 }
 
-func taskPRTitle(t *taskState) (title, url string) {
-	if title := t.PRTitles[t.PRURL]; title != "" {
-		return title, t.PRURL
+func taskPRTitle(t *taskState) (taskPRTitleMetadata, string) {
+	if len(t.CreatedPRURLs) > 0 && !t.CreatedPRURLs[t.PRURL] {
+		for _, url := range slices.Backward(t.TitledPRURLs) {
+			if t.CreatedPRURLs[url] {
+				return t.PRTitles[url], url
+			}
+		}
 	}
-	// Multi-repo completion can select a reused PR without a recorded title.
+	if metadata := t.PRTitles[t.PRURL]; metadata.title != "" {
+		return metadata, t.PRURL
+	}
+	// Multi-repo completion can select a PR without a recorded title.
 	if len(t.TitledPRURLs) > 0 {
 		url := t.TitledPRURLs[len(t.TitledPRURLs)-1]
 		return t.PRTitles[url], url
 	}
-	return "", ""
+	return taskPRTitleMetadata{}, ""
 }
 
 func taskAgentHarness(t *taskState) string {
@@ -1540,6 +1643,7 @@ type runConfigFields struct {
 	source       string
 	branch       string
 	prURL        string
+	issueTitle   string
 	autoMerge    bool
 }
 
@@ -1564,6 +1668,7 @@ func (b *Broker) runConfigFieldsLocked(requestID string) runConfigFields {
 		source:       sourceFromRunConfigJSON(raw),
 		branch:       branchFromRunConfigJSON(raw),
 		prURL:        prURLFromRunConfigJSON(raw),
+		issueTitle:   issueTitleFromRunConfigJSON(raw),
 		autoMerge:    autoMergeFromRunConfigJSON(raw),
 	}
 	if b.runConfigFieldCache == nil {
@@ -1880,6 +1985,11 @@ func (b *Broker) forgetTaskAttemptsLocked(requestID string) {
 }
 
 func (b *Broker) pruneExpiredTasksLocked(now time.Time) {
+	for requestID, pr := range b.verifiedTaskPRs {
+		if now.Sub(pr.VerifiedAt) >= verifiedTaskPRRetention {
+			delete(b.verifiedTaskPRs, requestID)
+		}
+	}
 	for requestID, task := range b.tasks {
 		if task == nil || !isCompletedTaskStatus(task.Status) {
 			continue
@@ -2152,6 +2262,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		if fields["stage"] == "pr" && fields["status"] == "ok" && fields["action"] == "recreate_closed_pr" {
 			oldPRURL := fields["old_pr_url"]
 			delete(t.PRTitles, oldPRURL)
+			delete(t.CreatedPRURLs, oldPRURL)
 			t.TitledPRURLs = slices.DeleteFunc(t.TitledPRURLs, func(url string) bool { return url == oldPRURL })
 		}
 		if !agentInvocationLine {
@@ -2792,6 +2903,17 @@ func appendNonEmptyUnique(dst []string, values ...string) []string {
 	}
 
 	return out
+}
+
+func issueTitleFromRunConfigJSON(raw []byte) string {
+	var payload struct {
+		Prompt      string                    `json:"prompt"`
+		GitHubIssue *config.GitHubIssueConfig `json:"githubIssue"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	return (config.Config{Prompt: payload.Prompt, GitHubIssue: payload.GitHubIssue}).GitHubIssueTitle()
 }
 
 func promptFromRunConfigJSON(runConfigJSON []byte) string {

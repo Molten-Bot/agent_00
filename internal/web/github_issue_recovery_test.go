@@ -90,8 +90,11 @@ func completeRecoveryRecord(t *testing.T, s Server, outcome string, attempts int
 	}
 	return record
 }
+
+const recoveryPRTitle = "Manually opened PR"
+
 func recoveryPR(state, merged, head, base string) string {
-	return `[{"number":42,"state":"` + state + `","merged_at":` + merged + `,"head":{"ref":"` + head + `","repo":{"full_name":"acme/repo"}},"base":{"ref":"` + base + `","repo":{"full_name":"acme/repo"}}}]`
+	return `[{"number":42,"title":"` + recoveryPRTitle + `","state":"` + state + `","merged_at":` + merged + `,"head":{"ref":"` + head + `","repo":{"full_name":"acme/repo"}},"base":{"ref":"` + base + `","repo":{"full_name":"acme/repo"}}}]`
 }
 
 func TestExplicitIssueRecoveryUsesPersistentOwner(t *testing.T) {
@@ -436,6 +439,7 @@ func TestIssueRecoveryUnlocksOnlyAfterWorkerExit(t *testing.T) {
 
 func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 	t.Parallel()
+	const prURL = "https://github.com/acme/repo/pull/42"
 	for _, tc := range []struct {
 		name, state, merged, head, base string
 		fulfilled                       bool
@@ -449,7 +453,8 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := recoveryServer(t)
 			s.pollGitHubIssueAutoStart(context.Background())
-			completeRecoveryRecord(t, s, "error", 1)
+			record := completeRecoveryRecord(t, s, "error", 1)
+			s.Broker.IngestLog("task status=error request_id=" + record.RequestID)
 			f.prs = recoveryPR(tc.state, tc.merged, tc.head, tc.base)
 			if err := s.ReconcileIssueWork(context.Background()); err != nil {
 				t.Fatal(err)
@@ -458,11 +463,82 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 			if (got.State == "fulfilled") != tc.fulfilled {
 				t.Fatalf("state=%s", got.State)
 			}
-			if tc.fulfilled && got.PRURL != "https://github.com/acme/repo/pull/42" {
+			if tc.fulfilled && got.PRURL != prURL {
 				t.Fatal("missing verified PR")
+			}
+			task, ok := s.Broker.Task(record.RequestID)
+			if !ok {
+				t.Fatal("missing task")
+			}
+			if tc.fulfilled {
+				if task.PRURL != prURL || task.PRTitleURL != prURL || task.PRTitle != recoveryPRTitle {
+					t.Fatalf("task PR = (%q, %q, %q), want (%q, %q, %q)",
+						task.PRURL, task.PRTitleURL, task.PRTitle, prURL, prURL, recoveryPRTitle)
+				}
+			} else if task.PRURL != "" || task.PRTitle != "" {
+				t.Fatalf("unverified PR published to task: (%q, %q)", task.PRURL, task.PRTitle)
 			}
 		})
 	}
+}
+
+func TestIssueRecoveryKeepsExistingMergeTarget(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	record := completeRecoveryRecord(t, s, "completed", 1)
+	const trackedURL = "https://github.com/acme/repo/pull/41"
+	s.Broker.IngestLog("task status=completed request_id=" + record.RequestID + " pr_url=" + trackedURL)
+
+	f.prs = recoveryPR("closed", `"2026-01-01T00:00:00Z"`, "agent00-issue-17", "main")
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := latestRecoveryRecord(t, s); got.State != "fulfilled" || got.PRURL != "https://github.com/acme/repo/pull/42" {
+		t.Fatalf("recovery state = %q, PR = %q, want fulfilled with PR 42", got.State, got.PRURL)
+	}
+	task, ok := s.Broker.Task(record.RequestID)
+	if !ok || task.PRURL != trackedURL || task.Status != "completed" {
+		t.Fatalf("task after recovery = %+v, want completed with PR %q", task, trackedURL)
+	}
+}
+
+func TestIssueRecoveryPublishesVerifiedPRAfterTaskExpires(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	now := time.Now().Add(-defaultTerminalTaskTimeout)
+	s.Broker.now = func() time.Time { return now }
+	s.Broker.IngestLog("task status=error request_id=" + record.RequestID)
+	now = time.Now()
+	if _, ok := s.Broker.Task(record.RequestID); ok {
+		t.Fatal("terminal task should have expired")
+	}
+
+	f.prs = recoveryPR("open", "null", "agent00-issue-17", "main")
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	check := func(snapshot Snapshot) {
+		t.Helper()
+		pr := snapshot.VerifiedTaskPRs[record.RequestID]
+		if pr.URL != "https://github.com/acme/repo/pull/42" || pr.Title != recoveryPRTitle || pr.VerifiedAt.IsZero() {
+			t.Fatalf("verified PR metadata = %+v", pr)
+		}
+		if len(snapshot.Tasks) != 0 {
+			t.Fatalf("snapshot resurrected expired task: %+v", snapshot.Tasks)
+		}
+	}
+	check(s.Broker.StreamSnapshot())
+
+	s.Broker = NewBroker()
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	check(s.Broker.Snapshot())
 }
 
 func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
