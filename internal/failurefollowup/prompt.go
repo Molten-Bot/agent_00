@@ -91,6 +91,7 @@ var outstandingProvisioning = regexp.MustCompile(` (?:remain|are)(?: still)? (?:
 var provisioningListSeparator = regexp.MustCompile(`, (?:and )?| and `)
 var iamProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:scoped iam|(?:scoped )?iam (?:access|approval|configuration|permissions?|polic(?:y|ies)|roles?|setup))$`)
 var secretProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:shared )?secrets manager (?:configuration|keys?|provisioning|secrets?|setup)$`)
+var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_ -]* flags? defaults? to (?:off|disabled))$`)
 
 var nonRemediableFailureMarkers = []string{
 	"no space left on device",
@@ -425,10 +426,13 @@ func NonRemediableFailureReason(err error) string {
 }
 
 func hasOutstandingRolloutProvisioning(details string) bool {
-	statement := strings.TrimSpace(details)
-	if end := strings.IndexAny(statement, ".!?\r\n"); end >= 0 {
-		statement = strings.TrimSpace(statement[:end])
+	statements := strings.FieldsFunc(strings.TrimSpace(details), func(r rune) bool {
+		return r == '.' || r == '!' || r == '?' || r == '\r' || r == '\n'
+	})
+	if len(statements) == 0 {
+		return false
 	}
+	statement := strings.TrimSpace(statements[0])
 	predicate := outstandingProvisioning.FindStringIndex(statement)
 	if predicate == nil {
 		return false
@@ -448,7 +452,16 @@ func hasOutstandingRolloutProvisioning(details string) bool {
 			return false
 		}
 	}
-	return iam && secret
+	if !iam || !secret {
+		return false
+	}
+	// Suppress recovery only when the remaining details are known status text.
+	for _, extra := range statements[1:] {
+		if extra = strings.TrimSpace(extra); extra != "" && !disabledRolloutStatus.MatchString(extra) {
+			return false
+		}
+	}
+	return true
 }
 
 func isMissingRemoteBranchFailure(text string) bool {

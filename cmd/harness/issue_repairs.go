@@ -273,9 +273,15 @@ func retainIssueEvidence(claims *localruntime.IssueClaimStore, repairs *localrun
 	}
 	blockedRepairs := map[string]bool{}
 	for _, repair := range repairRecords {
-		if repair.State != "completed" {
-			blockedRepairs[repair.RequestID] = true
+		if repair.State == "completed" {
+			continue
 		}
+		// A rollout repair skipped before dispatch has no unresolved repair work.
+		// Its issue evidence still follows the verified retry retention window.
+		if repair.State == "blocked" && repair.Error == failurefollowup.ExternalRolloutPrerequisitesReason && !repair.Started && repair.PRURL == "" {
+			continue
+		}
+		blockedRepairs[repair.RequestID] = true
 	}
 	protectedIssues := map[string]bool{}
 	latest := map[string]localruntime.IssueClaimRecord{}

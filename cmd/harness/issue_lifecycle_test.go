@@ -271,6 +271,77 @@ func TestIssueRetentionPreservesUnresolvedEvidence(t *testing.T) {
 	}
 }
 
+func TestIssueRetentionAfterRetryWithBlockedRepair(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason string
+		started      bool
+		remove       bool
+	}{
+		{name: "legacy rollout skip", reason: failurefollowup.ExternalRolloutPrerequisitesReason, remove: true},
+		{name: "previously started rollout repair", reason: failurefollowup.ExternalRolloutPrerequisitesReason, started: true},
+		{name: "other blocked repair", reason: localruntime.ErrIssueOwnershipChanged.Error()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			claims, issue := lifecycleRecord(t)
+			repairs := &localruntime.IssueRepairStore{Root: t.TempDir()}
+			id := strings.Repeat("b", 32)
+			repair := localruntime.IssueRepairRecord{ID: id, RequestID: "repair-" + id, State: "blocked", Error: tc.reason, Started: tc.started}
+			if err := repairs.Save(repair); err != nil {
+				t.Fatal(err)
+			}
+			issue.State = "incident"
+			issue.RepairRequestID = repair.RequestID
+			issue.WorkspaceDir = filepath.Join(filepath.Dir(claims.Root), "issue-workspaces", issue.ID)
+			logRoot := t.TempDir()
+			logDir, ok := taskLogDir(logRoot, issue.RequestID)
+			if !ok {
+				t.Fatal("invalid issue log path")
+			}
+			paths := []string{issue.WorkspaceDir, logDir}
+			for _, path := range paths {
+				if err := os.MkdirAll(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := claims.Save(issue); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now()
+			checkRetention := func(now time.Time, remove bool) {
+				t.Helper()
+				if err := retainIssueEvidence(claims, repairs, logRoot, now); err != nil {
+					t.Fatal(err)
+				}
+				for _, path := range paths {
+					_, err := os.Stat(path)
+					if (remove && !errors.Is(err, os.ErrNotExist)) || (!remove && err != nil) {
+						t.Errorf("stat %s after retention = %v, want removed=%t", path, err, remove)
+					}
+				}
+			}
+			checkRetention(now, false)
+			retry := issue
+			retry.ID = strings.Repeat("c", 32)
+			retry.RequestID = "issue-" + retry.ID
+			claim := *issue.Run.GitHubIssue.Claim
+			claim.ID = retry.ID
+			claim.Attempt++
+			issueCfg := *issue.Run.GitHubIssue
+			issueCfg.Claim = &claim
+			retry.Run.GitHubIssue = &issueCfg
+			retry.State = "fulfilled"
+			retry.VerifiedAt = now
+			retry.RepairRequestID = ""
+			retry.WorkspaceDir = ""
+			if err := claims.Save(retry); err != nil {
+				t.Fatal(err)
+			}
+			checkRetention(now.Add(29*24*time.Hour), false)
+			checkRetention(now.Add(31*24*time.Hour), tc.remove)
+		})
+	}
+}
+
 type repairPRRunner func(context.Context, execx.Command) (execx.Result, error)
 
 func (f repairPRRunner) Run(ctx context.Context, cmd execx.Command) (execx.Result, error) {
@@ -337,6 +408,7 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 		{"queued and linked", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
 		{"dispatch intent without a claim link", "running", "", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
 		{"actionable", "queued", "50", "IAM approval and Secrets Manager provisioning are complete, but local fixes remain outstanding.", false},
+		{"actionable after provisioning details", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding. Deployment tests fail.", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			claims, issue := lifecycleRecord(t)
