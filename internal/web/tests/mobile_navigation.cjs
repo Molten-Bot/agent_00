@@ -170,6 +170,40 @@ test('task card distinguishes the titled pull request from the merged pull reque
   assert.equal(await result.locator('.task-result-link').getAttribute('href'), trackedURL);
 });
 
+test('legacy issue prompts restore task actions and workflow links', async t => {
+  const now = new Date().toISOString();
+  const issueTask = (id, number, status) => ({
+    request_id: id, repo: 'example/project', status, started_at: now, updated_at: now,
+    prompt: `Complete GitHub issue example/project#${number}: Update navigation\n\nIssue URL: https://github.com/example/project/issues/${number}\nState: OPEN`,
+  });
+  const running = issueTask('legacy-running', 17, 'running');
+  const saved = issueTask('legacy-history', 18, 'completed');
+  const unrelated = issueTask('ordinary-history', 19, 'completed');
+  unrelated.prompt = `Review this sample prompt:\n\n${unrelated.prompt}`;
+  const lookalike = issueTask('lookalike-history', 20, 'completed');
+  lookalike.prompt = lookalike.prompt.replace('github.com/', 'github.com.example/');
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, [running]);
+  await page.evaluate(tasks => localStorage.setItem('hubui.taskHistory.v1', JSON.stringify(tasks)), [saved, unrelated, lookalike]);
+  await page.reload();
+
+  const runningCard = page.locator('#task-list .task[data-request-id="legacy-running"]');
+  const workflowLink = runningCard.locator('.task-progress-step').first();
+  const actionLink = runningCard.locator('.task-footer').getByRole('link', { name: 'Open issue on GitHub.' });
+  for (const link of [workflowLink, actionLink]) {
+    assert.equal(await link.getAttribute('href'), 'https://github.com/example/project/issues/17');
+  }
+
+  await page.locator('#task-history-toggle').click();
+  const savedCard = page.locator('#task-list .task[data-request-id="legacy-history"]');
+  const savedLink = savedCard.getByRole('link', { name: 'Open issue on GitHub.' });
+  assert.equal(await savedLink.getAttribute('href'), 'https://github.com/example/project/issues/18');
+  for (const id of ['ordinary-history', 'lookalike-history']) {
+    const card = page.locator(`#task-list .task[data-request-id="${id}"]`);
+    await card.waitFor();
+    assert.equal(await card.getByRole('link', { name: 'Open issue on GitHub.' }).count(), 0);
+  }
+});
+
 for (const viewport of [{ width: 430, height: 932 }, { width: 932, height: 430 }]) {
   test(`Enter adds a newline to the Studio prompt without submitting on mobile ${viewport.width}×${viewport.height}`, async t => {
     const { page, writes } = await openPage(t, 'studio', viewport);

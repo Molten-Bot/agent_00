@@ -9711,7 +9711,12 @@
     }
 
     function taskIssueURL(task) {
-      return String(task?.github_issue_url || "").trim();
+      const issueURL = String(task?.github_issue_url || "").trim();
+      if (issueURL) return issueURL;
+
+      // Older history entries only have the generated issue prompt.
+      const header = taskPromptRawText(task).match(/^Complete GitHub issue ([\w.-]+\/[\w.-]+)#([1-9]\d*):[^\r\n]*\r?\n\r?\nIssue URL:[ \t]+(https:\/\/github\.com\/\1\/issues\/\2\/?)[ \t]*(?=\r?\n|$)/i);
+      return header?.[3] || "";
     }
 
     function taskPullRequestURL(task) {
