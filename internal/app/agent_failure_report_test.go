@@ -48,7 +48,7 @@ func TestCodexReportedFailureDetectsMarkdownFailureFields(t *testing.T) {
 		t.Fatalf("detail = %q, want the reported failure summary", detail)
 	}
 
-	full := codexFailureDetailWithErrorDetails(res, detail)
+	_, full := codexFailureDetailWithErrorDetails(res, detail)
 	if !strings.Contains(full, "read-only file system") {
 		t.Fatalf("detail = %q, want the reported error details", full)
 	}
@@ -91,7 +91,7 @@ func TestCodexReportedFailureDetectsBlockerAfterResolvedIssue(t *testing.T) {
 	if !failed || detail != "Failure: The full test suite still fails." {
 		t.Fatalf("codexReportedFailure() = (%v, %q), want the unresolved failure", failed, detail)
 	}
-	if full := codexFailureDetailWithErrorDetails(res, detail); !strings.Contains(full, "A separate test times out waiting for a worker.") {
+	if _, full := codexFailureDetailWithErrorDetails(res, detail); !strings.Contains(full, "A separate test times out waiting for a worker.") {
 		t.Fatalf("failure detail = %q, want the unresolved error details", full)
 	}
 }
@@ -244,6 +244,95 @@ func TestRunCodexKeepsImplementationFailureFatalWithValidationToolingCaveat(t *t
 				t.Fatalf("runCodex() error = %v, want implementation failure %q", err, tc.summary)
 			}
 		})
+	}
+}
+
+func TestRunCodexClassifiesCompleteValidationReport(t *testing.T) {
+	t.Parallel()
+
+	const longDetails = "Failure: Local validation tooling unavailable in runtime.\n" +
+		"Error details:\n" +
+		"Attempted the configured validation command.\n" +
+		"The shell started with the runtime PATH.\n" +
+		"The command exited before running any tests.\n" +
+		"vitest: command not found."
+	const smokeReport = "Failure: Local validation command failed.\n" +
+		"Error details: The curl smoke command exited with command not found.\n"
+	const taskBlocker = "\nCannot safely meet the required coverage target."
+
+	for _, tc := range []struct {
+		name, output string
+		wantError    bool
+		wantBounded  bool
+	}{
+		{"missing tool after three lines", longDetails, false, false},
+		{"task blocker after display limit", longDetails + taskBlocker, true, true},
+		{"smoke command in details with failed fallback", smokeReport + "Smoke fallback failed.", true, false},
+		{"conflicting smoke fallback results", smokeReport + "Smoke fallback succeeded.\nSmoke fallback failed.", true, false},
+		{"smoke only named in fallback", "Failure: Local validation command failed.\nError details: curl: command not found. Smoke fallback failed.", true, false},
+		{"smoke command in details with successful fallback", smokeReport + "Smoke fallback succeeded.", false, false},
+		{"fallback result on its own line", smokeReport + "Fallback succeeded.", false, false},
+		{"unrelated fallback", smokeReport + "Notes: Database fallback succeeded.", true, false},
+		{"unrelated smoke success in next section", smokeReport + "Validation: Unrelated smoke fallback succeeded.", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			targetDir := t.TempDir()
+			const prompt = "Update the application"
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(targetDir, prompt),
+				res: execx.Result{Stdout: tc.output},
+			}}})
+			err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+			if (err != nil) != tc.wantError {
+				t.Fatalf("runCodex() error = %v, want error = %v", err, tc.wantError)
+			}
+			if tc.wantBounded &&
+				(!strings.Contains(err.Error(), truncatedErrorDetails) || strings.Contains(err.Error(), "vitest:")) {
+				t.Fatalf("runCodex() error = %q, want bounded error details", err)
+			}
+		})
+	}
+}
+
+func TestRunCodexKeepsCodeFailureRemediableAfterValidationSection(t *testing.T) {
+	t.Parallel()
+
+	for _, heading := range []string{"Validation:", "**Validation:**", "### Validation", "### Unblock path"} {
+		t.Run(heading, func(t *testing.T) {
+			t.Parallel()
+
+			targetDir := t.TempDir()
+			const prompt = "Update the application"
+			output := "Failure: Build failed.\n" +
+				"Error details: undefined variable in the application.\n\n" +
+				heading + "\nA fixture quotes `quota exceeded`."
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(targetDir, prompt),
+				res: execx.Result{Stdout: output},
+			}}})
+			err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+			if err == nil || !strings.Contains(err.Error(), "undefined variable") {
+				t.Fatalf("runCodex() error = %v, want build failure", err)
+			}
+			result := h.fail(ExitCodex, "codex", err, targetDir)
+			if reason := failurefollowup.NonRemediableFailureReason(result.Err); reason != "" {
+				t.Fatalf("NonRemediableFailureReason() = %q, want repair eligible for %q", reason, err)
+			}
+		})
+	}
+}
+
+func TestCodexExtractErrorDetailRetainsFencedDiagnosticHeadings(t *testing.T) {
+	t.Parallel()
+
+	output := "Failure: Build failed.\nError details:\n" +
+		"```text\nValidation: quota exceeded\n```\n" +
+		"### Validation\nUnrelated fixture output."
+	detail := codexExtractErrorDetail(output)
+	if !strings.Contains(detail, "Validation: quota exceeded") || strings.Contains(detail, "Unrelated fixture") {
+		t.Fatalf("codexExtractErrorDetail() = %q, want only the fenced diagnostic", detail)
 	}
 }
 

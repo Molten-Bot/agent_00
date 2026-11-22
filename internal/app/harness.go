@@ -6494,14 +6494,14 @@ func (h Harness) runCodexWithHeartbeat(
 				return run.res, errors.Join(agentruntime.ErrCodexAuthRequired, stateErr)
 			}
 			if failed, detail := codexReportedFailure(run.res); failed {
-				detail = codexFailureDetailWithErrorDetails(run.res, detail)
+				detail, fullDetail := codexFailureDetailWithErrorDetails(run.res, detail)
 				if agentWorkspaceStorageExhausted(run.res) {
 					return run.res, fmt.Errorf("%s reported failure: workspace storage ran out of space while the agent was running; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem or free up space: %s", agentStage, detail)
 				}
 				if isImplementationTargetFailure(detail) {
 					return run.res, fmt.Errorf("%s reported failure: %s", agentStage, detail)
 				}
-				if isNonFatalValidationToolingFailure(detail, run.res) {
+				if isNonFatalValidationToolingFailure(fullDetail, run.res) {
 					h.logf(
 						"stage=%s status=warn action=validation_tooling_unavailable detail=%q%s",
 						agentStage,
@@ -6705,7 +6705,7 @@ func containsStandaloneSentence(lowerLine, sentence string) bool {
 	return false
 }
 
-func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) string {
+func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) (display, full string) {
 	detail := strings.TrimSpace(failureDetail)
 	if detail == "" {
 		detail = "Failure: task failed."
@@ -6714,15 +6714,10 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 	if errorDetail == "" {
 		errorDetail = codexExtractErrorDetail(res.Stderr)
 	}
-	if errorDetail == "" {
-		return detail
+	if errorDetail == "" || strings.Contains(strings.ToLower(detail), strings.ToLower(errorDetail)) {
+		return detail, detail
 	}
-	lowerDetail := strings.ToLower(detail)
-	lowerError := strings.ToLower(errorDetail)
-	if strings.Contains(lowerDetail, lowerError) {
-		return detail
-	}
-	return strings.TrimSpace(detail + " " + errorDetail)
+	return detail + " " + codexDisplayErrorDetail(errorDetail), detail + "\n" + errorDetail
 }
 
 func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
@@ -6739,7 +6734,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	// Missing validation tooling is non-fatal only when it is the sole
 	// problem. Do not suppress an agent's explicit statement that it cannot
 	// complete the requested work.
-	if strings.Contains(text, "cannot safely meet") || strings.Contains(text, truncatedErrorDetails) {
+	if strings.Contains(text, "cannot safely meet") {
 		return false
 	}
 
@@ -6755,7 +6750,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		summary, details, _ := strings.Cut(report, "error details:")
 		reason = strings.TrimSpace(summary)
 		if reason == "" {
-			reason = strings.TrimLeft(details, " \t-`")
+			reason = strings.TrimLeft(strings.TrimSpace(details), "- `")
 		}
 	}
 
@@ -6834,6 +6829,11 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	if !missingTooling && !restrictedDependencyDownload {
 		return false
 	}
+	smokeCommand := strings.Contains(text, "smoke command")
+	smokeValidation := smokeCommand || stringsx.ContainsAny(text, []string{"smoke fallback", "fallback smoke"})
+	if smokeValidation && !smokeFallbackSucceeded(text) {
+		return false
+	}
 	validationCommandMarkers := []string{
 		"npm run lint",
 		"npm run build",
@@ -6858,7 +6858,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 			smokeReason = strings.TrimSpace(suffix)
 		}
 		if strings.HasPrefix(smokeReason, "smoke command ") {
-			return smokeFallbackSucceeded(text)
+			return true
 		}
 		for _, marker := range validationUnavailableMarkers {
 			if strings.HasPrefix(reason, marker) {
@@ -6873,8 +6873,8 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		}
 		return false
 	}
-	if strings.Contains(text, "smoke command") {
-		return smokeFallbackSucceeded(text)
+	if smokeCommand {
+		return true
 	}
 	if stringsx.ContainsAny(text, validationUnavailableMarkers) {
 		return true
@@ -6915,9 +6915,10 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 }
 
 func smokeFallbackSucceeded(text string) bool {
+	confirmed := false
 	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.Contains(line, "smoke") || !strings.Contains(line, "fallback") {
+		line = strings.TrimSpace(strings.TrimPrefix(agentFailureFieldLine(line), "error details:"))
+		if !strings.HasPrefix(line, "fallback ") && (!strings.Contains(line, "smoke") || !strings.Contains(line, "fallback")) {
 			continue
 		}
 		if stringsx.ContainsAny(line, []string{
@@ -6933,7 +6934,7 @@ func smokeFallbackSucceeded(text string) bool {
 			"succeeded: false",
 			"passed: false",
 		}) {
-			continue
+			return false
 		}
 		if stringsx.ContainsAny(line, []string{
 			"apparently",
@@ -6960,10 +6961,10 @@ func smokeFallbackSucceeded(text string) bool {
 			"fallback smoke check succeeded",
 			"fallback smoke check passed",
 		}) {
-			return true
+			confirmed = true
 		}
 	}
-	return false
+	return confirmed
 }
 
 func isImplementationTargetFailure(detail string) bool {
@@ -7099,39 +7100,28 @@ func codexExtractErrorDetail(output string) string {
 		lower := strings.ToLower(field)
 		if strings.HasPrefix(lower, "error details:") {
 			suffix := strings.TrimSpace(field[len("error details:"):])
-			extra := codexJoinErrorDetailLines(nonEmpty[i+1:], true)
-			if suffix != "" {
-				if extra != "" {
-					suffix += " | " + extra
-				}
-				return "Error details: " + suffix
+			details := codexErrorDetailLines(nonEmpty[i+1:], true)
+			if suffix == "" && len(details) == 0 {
+				return "Error details: unknown error."
 			}
-			if extra != "" {
-				return "Error details: " + extra
-			}
-			return "Error details: unknown error."
+			header := strings.TrimSpace("Error details: " + suffix)
+			return strings.Join(append([]string{header}, details...), "\n")
 		}
 		if isStructuredFailureErrorLine(line) {
 			return line
 		}
 	}
 
-	fallback := codexJoinErrorDetailLines(nonEmpty, false)
-	if fallback == "" {
+	fallback := codexErrorDetailLines(nonEmpty, false)
+	if len(fallback) == 0 {
 		return ""
 	}
-	return "Error details: " + fallback
+	return "Error details:\n" + strings.Join(fallback, "\n")
 }
 
-// Keep omissions visible to classifiers that rely on complete error details.
-const truncatedErrorDetails = " | [error details truncated]"
-
-func codexJoinErrorDetailLines(lines []string, stopAtResolvedIssue bool) string {
-	const maxDetailsLines = 3
-	const maxDetailChars = 320
-
-	details := make([]string, 0, maxDetailsLines)
-	truncated := false
+func codexErrorDetailLines(lines []string, stopAtSection bool) []string {
+	var details []string
+	var fence string
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
@@ -7140,29 +7130,64 @@ func codexJoinErrorDetailLines(lines []string, stopAtResolvedIssue bool) string 
 		// A Markdown code fence carries no diagnostic text of its own, and
 		// agents routinely wrap the reported error in one.
 		if isMarkdownCodeFence(trimmed) {
+			if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+				switch {
+				case fence == "":
+					fence = trimmed[:3]
+				case strings.HasPrefix(trimmed, fence):
+					fence = ""
+				}
+			}
 			continue
 		}
 		lower := strings.ToLower(agentFailureFieldLine(trimmed))
-		if stopAtResolvedIssue && strings.HasPrefix(lower, "resolved issue:") {
+		if stopAtSection && fence == "" && isAgentReportSection(trimmed, lower) {
 			break
 		}
 		if strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
 			continue
 		}
-		if len(details) >= maxDetailsLines {
-			truncated = true
-			break
-		}
 		details = append(details, trimmed)
 	}
-	if len(details) == 0 {
-		return ""
+	return details
+}
+
+func isAgentReportSection(line, field string) bool {
+	if heading := strings.TrimLeft(line, "#"); heading != line && strings.HasPrefix(heading, " ") {
+		return true
 	}
-	joined := strings.Join(details, " | ")
+	label, _, _ := strings.Cut(field, ":")
+	switch strings.TrimRight(label, "*_") {
+	case "failure", "error details", "resolved issue", "validation", "alternative validation", "verification":
+		return true
+	default:
+		return false
+	}
+}
+
+// Keep omissions visible to downstream repair classifiers that receive the
+// displayed error rather than the complete report.
+const truncatedErrorDetails = " | [error details truncated]"
+
+func codexDisplayErrorDetail(detail string) string {
+	const maxDetailsLines = 3
+	const maxDetailChars = 320
+
+	header, continuation, ok := strings.Cut(detail, "\n")
+	if !ok {
+		return detail
+	}
+	details := strings.SplitN(continuation, "\n", maxDetailsLines+1)
+	truncated := len(details) > maxDetailsLines
+	joined := strings.Join(details[:min(len(details), maxDetailsLines)], " | ")
+	separator := " | "
+	if header == "Error details:" {
+		separator = " "
+	}
 	if !truncated && len(joined) <= maxDetailChars {
-		return joined
+		return header + separator + joined
 	}
-	return strings.TrimSpace(joined[:min(len(joined), maxDetailChars-len(truncatedErrorDetails))]) + truncatedErrorDetails
+	return header + separator + strings.TrimSpace(joined[:min(len(joined), maxDetailChars-len(truncatedErrorDetails))]) + truncatedErrorDetails
 }
 
 // isMarkdownCodeFence reports whether a line is only a code fence. An opening
