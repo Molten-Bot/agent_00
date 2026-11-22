@@ -17,11 +17,11 @@
     message.hidden = false;
     message.textContent = "Loading preview…";
     try {
-      const response = await fetchTaskAssetPreview(params, { signal, token });
+      const response = await fetchTaskAssetPreview(params, { signal, token, nativePlayback: true });
       if (signal.aborted) return;
       if (response.ok) {
-        const blob = await response.blob();
-        await showTaskAssetPreview(blob, message, { signal, title });
+        const preview = taskAssetVideoPreview(response) || await response.blob();
+        await showTaskAssetAuthorizedPreview(preview, params, message, { signal, title });
         if (signal.aborted || !channelName) return;
         channel = new BroadcastChannel(channelName);
         channel.onmessage = ({ data }) => {
@@ -30,7 +30,7 @@
             window.close();
           }
         };
-        channel.postMessage(blob);
+        channel.postMessage(preview);
         return;
       }
       if (response.status === 403) {

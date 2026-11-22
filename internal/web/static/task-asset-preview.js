@@ -86,3 +86,21 @@ function showTaskAssetMedia(mediaType, source, message, { signal, title }) {
   media.src = objectURL || source;
   message.before(media);
 }
+
+function taskAssetVideoPreview(response) {
+  const mediaType = response.headers.get("Content-Type") || "";
+  const videoID = response.headers.get("X-Task-Asset-Video");
+  if (!mediaType.startsWith("video/") || !/^[a-f0-9]{64}$/.test(videoID)) return null;
+  return { mediaType, videoID, playback: response.headers.get("X-Task-Asset-Playback") || "" };
+}
+
+function showTaskAssetAuthorizedPreview(data, params, message, options) {
+  if (data instanceof Blob) return showTaskAssetPreview(data, message, options);
+  if (!data || !/^video\/[a-z0-9.+-]+$/i.test(data.mediaType) ||
+      !/^[a-f0-9]{64}$/.test(data.videoID) || !/^[a-zA-Z0-9_-]*$/.test(data.playback)) {
+    throw new Error("Invalid video preview");
+  }
+  const query = new URLSearchParams({ video: data.videoID });
+  if (data.playback) query.set("playback", data.playback);
+  showTaskAssetMedia(data.mediaType, `${taskAssetPreviewPath(params)}?${query}`, message, options);
+}

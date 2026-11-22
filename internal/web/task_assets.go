@@ -1,8 +1,12 @@
 package web
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/sha256"
 	_ "embed"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
 )
@@ -24,7 +29,7 @@ func handleTaskAssetAuth(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src blob: data:; media-src blob:; frame-src blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src blob: data:; media-src 'self' blob:; frame-src blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 	w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Write(taskAssetAuthHTML)
@@ -57,6 +62,14 @@ func (s Server) handleTaskAssetPreview(w http.ResponseWriter, r *http.Request, r
 	if fields := strings.Fields(r.Header.Get("Authorization")); videoID == "" && len(fields) == 2 && strings.EqualFold(fields[0], "Bearer") {
 		viewerToken = fields[1]
 	}
+	if playback := r.URL.Query().Get("playback"); playback != "" {
+		grant, err := s.openAssetPlayback(playback)
+		if err != nil || videoID == "" || grant.Request != requestID || grant.Video != videoID || time.Now().Unix() >= grant.Expires {
+			http.NotFound(w, r)
+			return
+		}
+		viewerToken = grant.Token
+	}
 	body, mediaType, err := githubassets.Preview(r.Context(), task.Assets[index], viewerToken, s.assetTransport)
 	if errors.Is(err, githubassets.ErrPreviewAccess) {
 		http.Error(w, "GitHub attachment requires access.", http.StatusForbidden)
@@ -78,10 +91,20 @@ func (s Server) handleTaskAssetPreview(w http.ResponseWriter, r *http.Request, r
 	w.Header().Set("Content-Security-Policy", "sandbox")
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	if isVideo && videoID == "" && viewerToken == "" && r.Header.Get("X-Task-Asset-Playback") == "native" {
+	if isVideo && videoID == "" && r.Header.Get("X-Task-Asset-Playback") == "native" {
 		// Let the media element own the stream. Use the attachment identity
 		// without putting the upstream URL in the playback request.
 		w.Header().Set("X-Task-Asset-Video", taskAssetVideoID(assetURL))
+		if viewerToken != "" {
+			grant := assetPlaybackGrant{requestID, taskAssetVideoID(assetURL), viewerToken, time.Now().Add(30 * time.Minute).Unix()}
+			data, _ := json.Marshal(grant)
+			aead, err := s.assetPlaybackCipher()
+			if err != nil {
+				http.Error(w, "Preview unavailable.", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("X-Task-Asset-Playback", base64.RawURLEncoding.EncodeToString(aead.Seal(nil, nil, data, nil)))
+		}
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -173,4 +196,43 @@ func (w taskVideoWriter) Write(p []byte) (int, error) {
 		w.Flush()
 	}
 	return n, err
+}
+
+// Playback capabilities expose only this attachment, never the viewer's GitHub
+// token. They expire after 30 minutes and become invalid on server restart.
+type assetPlaybackGrant struct {
+	Request string
+	Video   string
+	Token   string
+	Expires int64
+}
+
+func (s Server) assetPlaybackCipher() (cipher.AEAD, error) {
+	if len(s.assetPlaybackKey) == 0 {
+		return nil, errors.New("playback key unavailable")
+	}
+	key := sha256.Sum256(s.assetPlaybackKey)
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCMWithRandomNonce(block)
+}
+
+func (s Server) openAssetPlayback(value string) (assetPlaybackGrant, error) {
+	var grant assetPlaybackGrant
+	data, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return grant, err
+	}
+	aead, err := s.assetPlaybackCipher()
+	if err != nil {
+		return grant, err
+	}
+	data, err = aead.Open(nil, nil, data, nil)
+	if err != nil {
+		return grant, err
+	}
+	err = json.Unmarshal(data, &grant)
+	return grant, err
 }

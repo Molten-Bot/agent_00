@@ -150,7 +150,7 @@ for (const mobile of [false, true]) {
     assert.match(authResponse.headers()['content-security-policy'], /frame-ancestors 'none'/);
     assert.equal(await auth.evaluate(() => window.opener), null);
     assert.deepEqual(await auth.locator('script').evaluateAll(scripts => scripts.map(script => script.getAttribute('src'))),
-      ['/static/task-asset-preview.js', '/static/task-asset-auth.js']);
+      ['/static/task-asset-preview.js?v=3', '/static/task-asset-auth.js?v=2']);
     const token = auth.getByLabel('GitHub token with access to this attachment');
     const retry = auth.getByRole('button', { name: 'Retry preview' });
     await token.fill('denied-fixture');
@@ -237,6 +237,38 @@ for (const mobile of [false, true]) {
     await expect.poll(() => video.evaluate(element => element.currentTime)).toBeGreaterThan(0);
     await page.keyboard.press('Escape');
     await expect(video).toHaveCount(0);
+
+    await page.locator('#task-list .task[data-request-id="req-private-video"] .task-assets-toggle').click();
+    await expect(authLink).toBeVisible();
+    const privateAuthOpening = page.context().waitForEvent('page');
+    await authLink.click();
+    const privateAuth = await privateAuthOpening;
+    await privateAuth.getByLabel('GitHub token with access to this attachment').fill('viewer-fixture');
+    const privateAuthClosed = privateAuth.waitForEvent('close');
+    await privateAuth.getByRole('button', { name: 'Retry preview' }).click();
+    await expect(video).toBeVisible();
+    await video.evaluate(element => element.play());
+    await expect.poll(() => video.evaluate(element => element.currentTime)).toBeGreaterThan(0);
+    await privateAuthClosed;
+    const privateSource = await video.getAttribute('src');
+    assert.ok(privateSource.includes('playback='));
+    assert.ok(!privateSource.includes('viewer-fixture'));
+    // The capability cannot authorize another task or video identity.
+    const wrongTask = await page.request.get(new URL(privateSource.replace('req-private-video', 'req-video-asset'), page.url()).href);
+    assert.equal(wrongTask.status(), 404);
+    const wrongAsset = new URL(privateSource, page.url());
+    wrongAsset.searchParams.set('video', '0'.repeat(64));
+    assert.equal((await page.request.get(wrongAsset.href)).status(), 404);
+    await next.click();
+    await expect(viewer.locator('img')).toBeVisible();
+    await previous.click();
+    await expect(video).toBeVisible();
+    await expect(authLink).toBeHidden();
+    assert.equal(await video.getAttribute('src'), privateSource);
+    await page.keyboard.press('Escape');
+    await page.locator('#task-list .task[data-request-id="req-private-video"] .task-assets-toggle').click();
+    await expect(authLink).toBeVisible();
+    await page.keyboard.press('Escape');
 
     const proxyRequestsBeforePrivateImages = attachmentRequests.length;
     await page.locator('#task-list .task[data-request-id="req-private-images"] .task-assets-toggle').click();

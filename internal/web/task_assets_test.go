@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -41,7 +42,7 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 		}
 		status, mediaType, body := http.StatusNotFound, "text/plain", ""
 		headers := make(http.Header)
-		if req.Header.Get("Authorization") != "" && req.URL.Path != "/user-attachments/assets/unavailable" {
+		if req.Header.Get("Authorization") != "" && req.URL.Path != "/user-attachments/assets/unavailable" && req.URL.Path != "/user-attachments/assets/private-video" {
 			t.Error("viewer credentials were reused for another attachment")
 		}
 		switch req.URL.Path {
@@ -60,7 +61,10 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 			// Untagged MPEG-1 Layer III silence, 128 kbps at 44.1 kHz.
 			frame := "\xff\xfb\x90\x64" + strings.Repeat("\x00", 413)
 			status, mediaType, body = http.StatusOK, "application/octet-stream", strings.Repeat(frame, 8)
-		case "/user-attachments/assets/video":
+		case "/user-attachments/assets/private-video", "/user-attachments/assets/video":
+			if req.URL.Path == "/user-attachments/assets/private-video" && req.Header.Get("Authorization") != "Bearer viewer-fixture" {
+				break
+			}
 			// Keep the upstream open so playback must start before EOF.
 			tail, finish := io.Pipe()
 			context.AfterFunc(req.Context(), func() { finish.Close() })
@@ -100,6 +104,7 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 		{"url":"https://private-user-images.githubusercontent.com/42/private.png?jwt=fixture%2Bsignature","name":"Private screenshot"},
 		{"url":"https://private-user-images.githubusercontent.com/42/expired.png?jwt=expired-fixture","name":"Expired screenshot"}
 	]}`))
+	srv.Broker.RecordTaskRunConfig("req-private-video", []byte(`{"repo":"example/project","prompt":"Private video","assets":[{"url":"https://github.com/user-attachments/assets/private-video","name":"Private recording"},{"url":"https://github.com/user-attachments/assets/screenshot-id","name":"Screenshot"}]}`))
 	srv.Broker.RecordTaskRunConfig("req-no-assets", []byte(`{"repo":"example/project","prompt":"Task without attachments"}`))
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -567,5 +572,66 @@ func TestTaskAssetsSurviveSnapshotsWithoutSharingSlices(t *testing.T) {
 	task, _ = b.Task("req-assets")
 	if len(task.Assets) != 0 {
 		t.Fatal("removed assets persisted")
+	}
+}
+
+func TestAssetPlaybackCapabilityScope(t *testing.T) {
+	t.Parallel()
+	s := Server{assetPlaybackKey: []byte("test key")}
+	aead, err := s.assetPlaybackCipher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := assetPlaybackGrant{"request", "video", "viewer-secret", time.Now().Add(time.Minute).Unix()}
+	data, _ := json.Marshal(original)
+	sealed := base64.RawURLEncoding.EncodeToString(aead.Seal(nil, nil, data, nil))
+	grant, err := s.openAssetPlayback(sealed)
+	if err != nil || grant != original {
+		t.Fatalf("round trip: %v", err)
+	}
+	for _, value := range []string{sealed[:len(sealed)-4], "invalid"} {
+		if _, err := s.openAssetPlayback(value); err == nil {
+			t.Fatal("accepted invalid capability")
+		}
+	}
+	other := Server{assetPlaybackKey: []byte("other server")}
+	if _, err := other.openAssetPlayback(sealed); err == nil {
+		t.Fatal("accepted capability from another server")
+	}
+}
+
+func TestTaskAssetPlaybackRejectsInvalidScopeAndExpiry(t *testing.T) {
+	t.Parallel()
+	srv := githubIssueTestServer(nil, true)
+	srv.assetPlaybackKey = []byte("test playback key")
+	assetURL := "https://github.com/user-attachments/assets/private-video"
+	srv.Broker.RecordTaskRunConfig("request", []byte(`{"repo":"example/project","prompt":"Video","assets":[{"url":"https://github.com/user-attachments/assets/private-video"}]}`))
+	srv.assetTransport = taskAssetTransportFunc(func(*http.Request) (*http.Response, error) {
+		t.Error("invalid capability reached upstream")
+		return nil, errors.New("unexpected request")
+	})
+	videoID := taskAssetVideoID(assetURL)
+	for _, tc := range []struct {
+		name, request, video string
+		expires              int64
+	}{
+		{"expired", "request", videoID, time.Now().Add(-time.Second).Unix()},
+		{"other task", "other", videoID, time.Now().Add(time.Minute).Unix()},
+		{"other asset", "request", "other", time.Now().Add(time.Minute).Unix()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, _ := json.Marshal(assetPlaybackGrant{tc.request, tc.video, "viewer-fixture", tc.expires})
+			aead, err := srv.assetPlaybackCipher()
+			if err != nil {
+				t.Fatal(err)
+			}
+			capability := base64.RawURLEncoding.EncodeToString(aead.Seal(nil, nil, data, nil))
+			req := httptest.NewRequest(http.MethodGet, "/api/tasks/request/asset-preview?video="+videoID+"&playback="+capability, nil)
+			res := httptest.NewRecorder()
+			srv.handleTaskAssetPreview(res, req, "request")
+			if res.Code != http.StatusNotFound {
+				t.Fatalf("status = %d", res.Code)
+			}
+		})
 	}
 }

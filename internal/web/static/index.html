@@ -20,7 +20,7 @@
   <script src="/static/lucide.min.js"></script>
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
-  <script src="/static/task-asset-preview.js?v=2"></script>
+  <script src="/static/task-asset-preview.js?v=3"></script>
   <link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body>
@@ -10504,6 +10504,7 @@
     let taskAssetOpener;
     let taskAssetOpenerList;
     let taskAssetPreviewRequest;
+    const authorizedTaskAssetPreviews = new Map();
 
     function taskAssetURL(raw) {
       let url;
@@ -10550,6 +10551,11 @@
         return;
       }
       const params = new URLSearchParams({ request: viewedTaskRequestID, asset: asset.url });
+      const cached = authorizedTaskAssetPreviews.get(asset.url);
+      if (cached) {
+        await showTaskAssetAuthorizedPreview(cached, params, taskAssetMessage, { signal, title });
+        return;
+      }
       try {
         const response = await fetchTaskAssetPreview(params, { signal, nativePlayback: true });
         if (signal.aborted || !taskAssetViewer.open) return;
@@ -10570,13 +10576,14 @@
           const channel = new BroadcastChannel(channelName);
           signal.addEventListener("abort", () => channel.close(), { once: true });
           channel.onmessage = async ({ data }) => {
-            if (signal.aborted || !taskAssetViewer.open || !(data instanceof Blob)) return;
+            if (signal.aborted || !taskAssetViewer.open) return;
             channel.onmessage = null;
             taskAssetAuthLink.hidden = true;
             taskAssetAuthLink.removeAttribute("href");
             taskAssetMessage.textContent = "Loading preview…";
             try {
-              await showTaskAssetPreview(data, taskAssetMessage, { signal, title });
+              await showTaskAssetAuthorizedPreview(data, params, taskAssetMessage, { signal, title });
+              if (!signal.aborted) authorizedTaskAssetPreviews.set(asset.url, data);
               if (!signal.aborted && taskAssetViewer.open) channel.postMessage("shown");
             } catch {
               if (!signal.aborted && taskAssetViewer.open) taskAssetMessage.textContent = "Preview unavailable.";
@@ -10594,6 +10601,7 @@
     }
 
     function openTaskAssetViewer(requestID, assets, opener, openerList) {
+      authorizedTaskAssetPreviews.clear();
       viewedTaskRequestID = requestID;
       viewedTaskAssets = assets;
       viewedTaskAssetIndex = 0;
@@ -10621,6 +10629,7 @@
     taskAssetViewer.addEventListener("close", () => {
       if (taskAssetViewer.open) return;
       clearTaskAssetMedia();
+      authorizedTaskAssetPreviews.clear();
       viewedTaskAssets = [];
       if (!taskAssetOpener?.isConnected && viewedTaskRequestID) {
         const selector = `.task[data-request-id="${CSS.escape(viewedTaskRequestID)}"] .task-assets-toggle`;

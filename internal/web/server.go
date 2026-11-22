@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -116,6 +117,7 @@ type Server struct {
 	ResolveGitHubRepos      func(context.Context) ([]GitHubRepo, error)
 	GitHubIssueRunner       execx.Runner
 	assetTransport          http.RoundTripper
+	assetPlaybackKey        []byte
 	IssueClaims             *localruntime.IssueClaimStore
 	// IssueRecovery is enabled only when the submitter implements durable
 	// receipts and inherited worker locks. Legacy embedders remain manual-only.
@@ -297,6 +299,7 @@ func notifyServerReady(ready chan<- error, err error) {
 
 // Handler returns the HTTP handler for the monitor UI/API.
 func (s Server) Handler() http.Handler {
+	s.assetPlaybackKey = []byte(rand.Text())
 	mux := http.NewServeMux()
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
