@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -115,6 +116,8 @@ type Server struct {
 	ResolveGitHubProfileURL func(context.Context) (string, error)
 	ResolveGitHubRepos      func(context.Context) ([]GitHubRepo, error)
 	GitHubIssueRunner       execx.Runner
+	assetTransport          http.RoundTripper
+	assetPlaybackKey        []byte
 	IssueClaims             *localruntime.IssueClaimStore
 	// IssueRecovery is enabled only when the submitter implements durable
 	// receipts and inherited worker locks. Legacy embedders remain manual-only.
@@ -301,6 +304,7 @@ func notifyServerReady(ready chan<- error, err error) {
 
 // Handler returns the HTTP handler for the monitor UI/API.
 func (s Server) Handler() http.Handler {
+	s.assetPlaybackKey = []byte(rand.Text())
 	mux := http.NewServeMux()
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -345,6 +349,7 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/agent-auth/verify", s.handleAgentAuthVerify)
 	mux.HandleFunc("/api/agent-auth/configure", s.handleAgentAuthConfigure)
 	mux.HandleFunc("/api/tasks/", s.handleTaskAction)
+	mux.HandleFunc("/task-asset-auth", handleTaskAssetAuth)
 	mux.HandleFunc("/healthz", s.handleHealth)
 	return withGzip(mux)
 }
@@ -2809,6 +2814,8 @@ func (s Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
 	}
 	action := ""
 	switch {
+	case strings.HasSuffix(path, "/asset-preview"):
+		action = "asset-preview"
 	case strings.HasSuffix(path, "/rerun"):
 		action = "rerun"
 	case strings.HasSuffix(path, "/delete"):
@@ -2846,6 +2853,8 @@ func (s Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch action {
+	case "asset-preview":
+		s.handleTaskAssetPreview(w, r, decoded)
 	case "rerun":
 		s.handleTaskRerun(w, r, decoded)
 	case "delete":
@@ -3210,11 +3219,13 @@ func withGzip(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		gz := gzip.NewWriter(w)
+		gz := &gzipResponseWriter{ResponseWriter: w}
 		defer func() {
-			_ = gz.Close()
+			if gz.writer != nil {
+				_ = gz.writer.Close()
+			}
 		}()
-		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, writer: gz}, r)
+		next.ServeHTTP(gz, r)
 	})
 }
 
@@ -3252,6 +3263,14 @@ func (w *gzipResponseWriter) WriteHeader(statusCode int) {
 	}
 	w.wroteHeader = true
 	headers := w.ResponseWriter.Header()
+	// Ranges describe byte offsets in the uncompressed video stream.
+	if strings.HasPrefix(headers.Get("Content-Type"), "video/") || headers.Get("Content-Range") != "" {
+		w.ResponseWriter.WriteHeader(statusCode)
+		return
+	}
+	if w.writer == nil {
+		w.writer = gzip.NewWriter(w.ResponseWriter)
+	}
 	if strings.TrimSpace(headers.Get("Content-Encoding")) == "" {
 		headers.Set("Content-Encoding", "gzip")
 	}
@@ -3264,10 +3283,16 @@ func (w *gzipResponseWriter) Write(payload []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
+	if w.writer == nil {
+		return w.ResponseWriter.Write(payload)
+	}
 	return w.writer.Write(payload)
 }
 
 func (w *gzipResponseWriter) Flush() {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
 	if w.writer != nil {
 		_ = w.writer.Flush()
 	}

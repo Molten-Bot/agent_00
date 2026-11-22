@@ -20,7 +20,8 @@
   <script src="/static/lucide.min.js"></script>
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
-  <link rel="stylesheet" href="/static/style.css?v=8">
+  <script src="/static/task-asset-preview.js?v=3"></script>
+  <link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -605,6 +606,31 @@
       </div>
     </div>
   </div>
+
+  <dialog id="task-asset-viewer" class="task-image-viewer-shell" aria-labelledby="task-asset-title">
+    <div class="task-image-viewer-head">
+      <span id="task-asset-title" class="task-image-viewer-title"></span>
+      <form method="dialog">
+        <button class="task-image-viewer-close" type="submit" aria-label="Close asset viewer" autofocus>
+          <i data-lucide="x" aria-hidden="true"></i>
+        </button>
+      </form>
+    </div>
+    <div class="task-image-viewer-stage">
+      <button id="task-asset-prev" class="task-image-viewer-nav task-image-viewer-prev" type="button" aria-label="Previous asset">
+        <i data-lucide="chevron-left" aria-hidden="true"></i>
+      </button>
+      <p id="task-asset-message" role="status"></p>
+      <a id="task-asset-auth-link" target="_blank" rel="noopener noreferrer" hidden>Preview with GitHub token (opens in a new tab)</a>
+      <button id="task-asset-next" class="task-image-viewer-nav task-image-viewer-next" type="button" aria-label="Next asset">
+        <i data-lucide="chevron-right" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div class="task-asset-footer">
+      <span id="task-asset-count" aria-live="polite"></span>
+      <a id="task-asset-source" target="_blank" rel="noopener noreferrer">Open on GitHub</a>
+    </div>
+  </dialog>
 
   <dialog id="library-schedule-modal" class="library-schedule-modal" aria-labelledby="library-schedule-title">
     <div class="library-prompt-modal-head">
@@ -10532,6 +10558,155 @@
       renderTaskImageViewer();
     }
 
+    const taskAssetViewer = document.getElementById("task-asset-viewer");
+    const taskAssetTitle = document.getElementById("task-asset-title");
+    const taskAssetMessage = document.getElementById("task-asset-message");
+    const taskAssetPrev = document.getElementById("task-asset-prev");
+    const taskAssetNext = document.getElementById("task-asset-next");
+    const taskAssetCount = document.getElementById("task-asset-count");
+    const taskAssetSource = document.getElementById("task-asset-source");
+    const taskAssetAuthLink = document.getElementById("task-asset-auth-link");
+    let viewedTaskAssets = [];
+    let viewedTaskAssetIndex = 0;
+    let viewedTaskRequestID = "";
+    let taskAssetOpener;
+    let taskAssetOpenerList;
+    let taskAssetPreviewRequest;
+    const authorizedTaskAssetPreviews = new Map();
+
+    function taskAssetURL(raw) {
+      let url;
+      try {
+        url = new URL(raw);
+      } catch {
+        return null;
+      }
+      if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
+      if (url.hostname === "github.com" &&
+          /^\/(?:user-attachments\/(?:assets|files)|[^/]+\/[^/]+\/(?:assets|files))\//.test(url.pathname)) return url;
+      if (url.hostname === "user-images.githubusercontent.com" || url.hostname === "private-user-images.githubusercontent.com") return url;
+      return null;
+    }
+
+    function clearTaskAssetMedia() {
+      taskAssetAuthLink.hidden = true;
+      taskAssetAuthLink.removeAttribute("href");
+      taskAssetPreviewRequest?.abort();
+      taskAssetPreviewRequest = undefined;
+    }
+
+    async function renderTaskAssetViewer() {
+      clearTaskAssetMedia();
+      const asset = viewedTaskAssets[viewedTaskAssetIndex];
+      const url = taskAssetURL(asset.url);
+      const title = asset.name || "Task asset";
+      taskAssetTitle.textContent = title;
+      const multiple = viewedTaskAssets.length > 1;
+      taskAssetPrev.hidden = taskAssetNext.hidden = !multiple;
+      taskAssetCount.textContent = multiple ? `${viewedTaskAssetIndex + 1} / ${viewedTaskAssets.length}` : "";
+      taskAssetSource.hidden = !url;
+      taskAssetSource.removeAttribute("href");
+      if (url) taskAssetSource.href = url.href;
+      taskAssetMessage.hidden = false;
+      taskAssetMessage.textContent = url ? "Loading preview…" : "Preview unavailable.";
+      if (!url) return;
+
+      taskAssetPreviewRequest = new AbortController();
+      const { signal } = taskAssetPreviewRequest;
+      if (url.hostname === "private-user-images.githubusercontent.com" && url.search && url.pathname !== "/") {
+        // The browser uses the signed URL as an image source without a server proxy.
+        showTaskAssetMedia("image/*", url.href, taskAssetMessage, { signal, title });
+        return;
+      }
+      const params = new URLSearchParams({ request: viewedTaskRequestID, asset: asset.url });
+      const cached = authorizedTaskAssetPreviews.get(asset.url);
+      if (cached) {
+        await showTaskAssetAuthorizedPreview(cached, params, taskAssetMessage, { signal, title });
+        return;
+      }
+      try {
+        const response = await fetchTaskAssetPreview(params, { signal, nativePlayback: true });
+        if (signal.aborted || !taskAssetViewer.open) return;
+        if (response.ok) {
+          const mediaType = response.headers.get("Content-Type") || "";
+          const videoID = response.headers.get("X-Task-Asset-Video");
+          if (mediaType.startsWith("video/") && /^[a-f0-9]{64}$/.test(videoID)) {
+            showTaskAssetMedia(mediaType, `${taskAssetPreviewPath(params)}?video=${videoID}`, taskAssetMessage, { signal, title });
+            return;
+          }
+          await showTaskAssetPreview(await response.blob(), taskAssetMessage, { signal, title });
+          return;
+        }
+        taskAssetMessage.textContent = "Preview unavailable.";
+        if (response.status === 403 && window.isSecureContext && url.hostname === "github.com" && !url.search) {
+          // The isolated authorization tab returns only the preview bytes.
+          const channelName = `task-asset-preview-${crypto.randomUUID()}`;
+          const channel = new BroadcastChannel(channelName);
+          signal.addEventListener("abort", () => channel.close(), { once: true });
+          channel.onmessage = async ({ data }) => {
+            if (signal.aborted || !taskAssetViewer.open) return;
+            channel.onmessage = null;
+            taskAssetAuthLink.hidden = true;
+            taskAssetAuthLink.removeAttribute("href");
+            taskAssetMessage.textContent = "Loading preview…";
+            try {
+              await showTaskAssetAuthorizedPreview(data, params, taskAssetMessage, { signal, title });
+              if (!signal.aborted) authorizedTaskAssetPreviews.set(asset.url, data);
+              if (!signal.aborted && taskAssetViewer.open) channel.postMessage("shown");
+            } catch {
+              if (!signal.aborted && taskAssetViewer.open) taskAssetMessage.textContent = "Preview unavailable.";
+            } finally {
+              channel.close();
+            }
+          };
+          params.set("channel", channelName);
+          taskAssetAuthLink.href = `/task-asset-auth#${params}`;
+          taskAssetAuthLink.hidden = false;
+        }
+      } catch {
+        if (!signal.aborted && taskAssetViewer.open) taskAssetMessage.textContent = "Preview unavailable.";
+      }
+    }
+
+    function openTaskAssetViewer(requestID, assets, opener, openerList) {
+      authorizedTaskAssetPreviews.clear();
+      viewedTaskRequestID = requestID;
+      viewedTaskAssets = assets;
+      viewedTaskAssetIndex = 0;
+      taskAssetOpener = opener;
+      taskAssetOpenerList = openerList;
+      renderTaskAssetViewer();
+      taskAssetViewer.showModal();
+    }
+
+    function stepTaskAssetViewer(direction) {
+      const count = viewedTaskAssets.length;
+      if (count < 2) return;
+      viewedTaskAssetIndex = (viewedTaskAssetIndex + direction + count) % count;
+      renderTaskAssetViewer();
+    }
+
+    taskAssetPrev.addEventListener("click", () => stepTaskAssetViewer(-1));
+    taskAssetNext.addEventListener("click", () => stepTaskAssetViewer(1));
+    taskAssetViewer.addEventListener("keydown", (event) => {
+      if (event.target.matches("audio, video")) return;
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      stepTaskAssetViewer(event.key === "ArrowLeft" ? -1 : 1);
+    });
+    taskAssetViewer.addEventListener("close", () => {
+      if (taskAssetViewer.open) return;
+      clearTaskAssetMedia();
+      authorizedTaskAssetPreviews.clear();
+      viewedTaskAssets = [];
+      if (!taskAssetOpener?.isConnected && viewedTaskRequestID) {
+        const selector = `.task[data-request-id="${CSS.escape(viewedTaskRequestID)}"] .task-assets-toggle`;
+        taskAssetOpenerList?.querySelector(selector)?.focus({ preventScroll: true });
+      }
+      taskAssetOpener = taskAssetOpenerList = undefined;
+      viewedTaskRequestID = "";
+    });
+
     function taskFullscreenMode(mode) {
       return String(mode || "").trim().toLowerCase() === "console" ? "console" : "work";
     }
@@ -12067,8 +12242,9 @@
         run(event);
       });
       button.addEventListener("click", (event) => {
-        if (handledPointerDown) {
-          handledPointerDown = false;
+        const duplicatePointerClick = handledPointerDown && event.detail > 0;
+        handledPointerDown = false;
+        if (duplicatePointerClick) {
           event.preventDefault();
           event.stopPropagation();
           return;
@@ -12415,8 +12591,12 @@
         button.type = "button";
         button.className = "task-assets-toggle task-copy-link";
         button.textContent = `${count} asset${count === 1 ? "" : "s"}`;
-        button.title = "View GitHub attachments in the task prompt.";
-        bindTaskActionButton(button, () => openTaskPromptModal(task));
+        button.title = "View task assets.";
+        button.setAttribute("aria-haspopup", "dialog");
+        bindTaskActionButton(button, () => {
+          button.focus({ preventScroll: true });
+          openTaskAssetViewer(taskRequestID(task), task.assets, button, listNode);
+        });
         return button;
       };
 
@@ -14188,6 +14368,7 @@
       });
     }
     document.addEventListener("keydown", (event) => {
+      if (taskAssetViewer.open) return;
       if (event.key === "Escape" && state.taskPromptModalOpen) {
         event.preventDefault();
         closeTaskPromptModal();

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GitHub attachment preview</title>
+  <link rel="stylesheet" href="/static/style.css?v=9">
+  <script defer src="/static/task-asset-preview.js?v=3"></script>
+  <script defer src="/static/task-asset-auth.js?v=2"></script>
+</head>
+<body>
+  <main id="task-asset-auth-page" class="task-image-viewer-shell">
+    <header class="task-image-viewer-head">
+      <h1 class="task-image-viewer-title">GitHub attachment preview</h1>
+    </header>
+    <div class="task-image-viewer-stage">
+      <p id="task-asset-message" role="status">Preview unavailable.</p>
+      <form id="task-asset-auth" autocomplete="off" hidden>
+        <label for="task-asset-token">GitHub token with access to this attachment</label>
+        <input id="task-asset-token" class="prompt-control" type="password" required>
+        <button class="prompt-control" type="submit">Retry preview</button>
+      </form>
+    </div>
+  </main>
+</body>
+</html>
