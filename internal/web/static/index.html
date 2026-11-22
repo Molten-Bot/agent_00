@@ -898,24 +898,46 @@
               <span>Assign created pull requests and worked issues to me</span>
             </label>
             <div id="review-settings-github-issues-auto-start" class="github-issues-auto-start" hidden>
-              <label class="selectable-option">
-                <input class="sr-only" id="review-settings-github-issues-auto-start-assigned" type="checkbox">
-                <i data-lucide="play" aria-hidden="true"></i>
-                <span>Auto-start matching issues</span>
+              <div id="review-settings-github-issues-legacy" hidden>
+                <p class="github-issues-settings-description">Existing auto-start settings apply to all available repositories until you enable automation for a specific repository.</p>
+                <button id="review-settings-github-issues-stop-legacy" class="prompt-action-button" type="button">Turn off existing auto-start</button>
+              </div>
+              <label class="github-issues-auto-start-labels" for="review-settings-github-issues-repository">
+                <span>Automation repository</span>
+                <select id="review-settings-github-issues-repository" class="prompt-control">
+                  <option value="">Choose a repository</option>
+                </select>
               </label>
-              <label class="selectable-option">
-                <input class="sr-only" id="review-settings-github-issues-auto-start-only-assigned" type="checkbox">
-                <i data-lucide="user-round-arrow-left" aria-hidden="true"></i>
-                <span>Only issues assigned to me</span>
+              <label id="review-settings-github-issues-repository-toggle" class="selectable-option" hidden>
+                <input class="sr-only" id="review-settings-github-issues-repository-enabled" type="checkbox">
+                <i data-lucide="folder-kanban" aria-hidden="true"></i>
+                <span>Enable issue automation for this repository</span>
               </label>
-              <label class="github-issues-auto-start-labels" for="review-settings-github-issues-auto-start-labels">
-                <span>Trigger labels <small>Match any; comma-separated.</small></span>
-                <input id="review-settings-github-issues-auto-start-labels" type="text" placeholder="ai automation, ready" aria-label="GitHub issue trigger labels, comma-separated">
-              </label>
-              <label class="github-issues-auto-start-labels" for="review-settings-github-issues-exclusion-label">
-                <span>Exclusion label</span>
-                <input id="review-settings-github-issues-exclusion-label" type="text" maxlength="50" value="agent_00-in-progress" aria-label="GitHub issue exclusion label">
-              </label>
+              <div id="review-settings-github-issues-repository-fields" class="github-issues-automation-fields" hidden>
+                <label class="selectable-option">
+                  <input class="sr-only" id="review-settings-github-issues-auto-start-assigned" type="checkbox">
+                  <i data-lucide="play" aria-hidden="true"></i>
+                  <span>Auto-start matching issues</span>
+                </label>
+                <label class="selectable-option">
+                  <input class="sr-only" id="review-settings-github-issues-auto-start-only-assigned" type="checkbox">
+                  <svg class="lucide lucide-user-round-arrow-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="m19 16-3 3"></path>
+                    <path d="M2 21a8 8 0 0 1 12.664-6.5"></path>
+                    <path d="M22 19h-6l3 3"></path>
+                    <circle cx="10" cy="8" r="5"></circle>
+                  </svg>
+                  <span>Only issues assigned to me</span>
+                </label>
+                <label class="github-issues-auto-start-labels" for="review-settings-github-issues-auto-start-labels">
+                  <span>Trigger labels <small>Match any label. Separate labels with commas.</small></span>
+                  <input id="review-settings-github-issues-auto-start-labels" type="text" placeholder="ready-for-agent">
+                </label>
+                <label class="github-issues-auto-start-labels" for="review-settings-github-issues-exclusion-label">
+                  <span>Exclusion label</span>
+                  <input id="review-settings-github-issues-exclusion-label" type="text" maxlength="50">
+                </label>
+              </div>
               <section class="github-automation" aria-label="Issue automation status">
                 <div class="github-automation-toolbar">
                   <p id="github-automation-status" class="github-issues-status" role="status">Loading…</p>
@@ -1734,6 +1756,7 @@
         jsonEnabled: jsonEnabledRaw === undefined ? false : Boolean(jsonEnabledRaw),
         githubIssuesEnabled: githubIssuesEnabledRaw === undefined ? false : Boolean(githubIssuesEnabledRaw),
         githubIssueLinkMode: ["reference", "close"].includes(githubIssueLinkModeRaw) ? githubIssueLinkModeRaw : "reference",
+        githubIssueRepositories: settings.github_issue_repositories ?? null,
         githubIssueAutoStartAssigned: Boolean(githubIssueAutoStartAssignedRaw),
         githubIssueAutoStartExclusionLabel: String(settings.github_issue_auto_start_exclusion_label ?? settings.githubIssueAutoStartExclusionLabel ?? "agent_00-in-progress"),
         githubIssueAutoStartOnlyAssigned: githubIssueAutoStartOnlyAssignedRaw === undefined ? true : Boolean(githubIssueAutoStartOnlyAssignedRaw),
@@ -2264,6 +2287,12 @@
     const reviewSettingsRepositoriesEmpty = document.getElementById("review-settings-repositories-empty");
     const reviewSettingsGitHubIssuesEnabled = document.getElementById("review-settings-github-issues-enabled");
     const reviewSettingsGitHubIssuesAutoStart = document.getElementById("review-settings-github-issues-auto-start");
+    const issueAutomationRepository = document.getElementById("review-settings-github-issues-repository");
+    const issueAutomationRepositoryToggle = document.getElementById("review-settings-github-issues-repository-toggle");
+    const issueAutomationRepositoryEnabled = document.getElementById("review-settings-github-issues-repository-enabled");
+    const issueAutomationRepositoryFields = document.getElementById("review-settings-github-issues-repository-fields");
+    const issueAutomationLegacy = document.getElementById("review-settings-github-issues-legacy");
+    const issueAutomationStopLegacy = document.getElementById("review-settings-github-issues-stop-legacy");
     const reviewSettingsGitHubIssuesAutoStartAssigned = document.getElementById("review-settings-github-issues-auto-start-assigned");
     const reviewSettingsGitHubIssuesAutoStartOnlyAssigned = document.getElementById("review-settings-github-issues-auto-start-only-assigned");
     const reviewSettingsGitHubIssuesAutoStartLabels = document.getElementById("review-settings-github-issues-auto-start-labels");
@@ -2612,6 +2641,7 @@
           if (loadSequence === githubReposLoadSequence) {
             state.githubReposLoading = false;
             githubReposLoadPromise = null;
+            renderIssueAutomationRepositories();
             syncChatDockLinkAvailability();
             if (state.appDisplay === "chat") {
               loadChatRepos();
@@ -2981,10 +3011,14 @@
       });
     }
 
+    let issueAutomationRepositoriesEdited = false;
+    let issueAutomationRepositoriesSnapshot = null;
     function applyReviewSettingsState(nextState) {
       const previousAutoMerge = taskAutoMergeStepEnabled();
       const previousReviewCycle = taskReviewStepEnabled();
       state.reviewSettings = normalizeReviewSettings(nextState);
+      issueAutomationRepositoriesEdited = false;
+      issueAutomationRepositoriesSnapshot = JSON.parse(JSON.stringify(state.reviewSettings.githubIssueRepositories));
       if (reviewSettingsAutoMerge instanceof HTMLInputElement) {
         reviewSettingsAutoMerge.checked = state.reviewSettings.autoMerge;
       }
@@ -3005,16 +3039,6 @@
       if (reviewSettingsGitHubIssuesEnabled instanceof HTMLInputElement) {
         reviewSettingsGitHubIssuesEnabled.checked = state.reviewSettings.githubIssuesEnabled;
       }
-      if (reviewSettingsGitHubIssuesAutoStartAssigned instanceof HTMLInputElement) {
-        reviewSettingsGitHubIssuesAutoStartAssigned.checked = state.reviewSettings.githubIssueAutoStartAssigned;
-      }
-      if (reviewSettingsGitHubIssuesAutoStartOnlyAssigned instanceof HTMLInputElement) {
-        reviewSettingsGitHubIssuesAutoStartOnlyAssigned.checked = state.reviewSettings.githubIssueAutoStartOnlyAssigned;
-      }
-      if (reviewSettingsGitHubIssuesAutoStartLabels instanceof HTMLInputElement) {
-        reviewSettingsGitHubIssuesAutoStartLabels.value = state.reviewSettings.githubIssueAutoStartLabels.join(", ");
-      }
-      if (reviewSettingsGitHubIssuesExclusionLabel instanceof HTMLInputElement) { reviewSettingsGitHubIssuesExclusionLabel.value = state.reviewSettings.githubIssueAutoStartExclusionLabel; }
       if (reviewSettingsAssignCreator instanceof HTMLInputElement) {
         reviewSettingsAssignCreator.checked = state.reviewSettings.assignCreator;
       }
@@ -3108,10 +3132,6 @@
         json_enabled: reviewSettingsJSONEnabled instanceof HTMLInputElement ? reviewSettingsJSONEnabled.checked : false,
         github_issues_enabled: reviewSettingsGitHubIssuesEnabled instanceof HTMLInputElement ? reviewSettingsGitHubIssuesEnabled.checked : false,
         github_issue_link_mode: reviewSettingsGitHubIssuesLinkClose instanceof HTMLInputElement && reviewSettingsGitHubIssuesLinkClose.checked ? "close" : "reference",
-        github_issue_auto_start_exclusion_label: reviewSettingsGitHubIssuesExclusionLabel.value.trim(),
-        github_issue_auto_start_assigned: reviewSettingsGitHubIssuesAutoStartAssigned instanceof HTMLInputElement ? reviewSettingsGitHubIssuesAutoStartAssigned.checked : false,
-        github_issue_auto_start_only_assigned: reviewSettingsGitHubIssuesAutoStartOnlyAssigned instanceof HTMLInputElement ? reviewSettingsGitHubIssuesAutoStartOnlyAssigned.checked : true,
-        github_issue_auto_start_labels: reviewSettingsGitHubIssuesAutoStartLabels instanceof HTMLInputElement ? reviewSettingsGitHubIssuesAutoStartLabels.value.split(",").map(label => label.trim()).filter(Boolean) : [],
         assign_creator: reviewSettingsAssignCreator instanceof HTMLInputElement ? reviewSettingsAssignCreator.checked : true,
         disabled_repositories: [...(state.reviewSettings.disabledRepositories || [])],
       };
@@ -3123,6 +3143,10 @@
       }
       if (state.settingsBusy || !state.settingsOpen) return;
       const payload = currentReviewSettingsPayload();
+      if (issueAutomationRepositoriesEdited) {
+        payload.github_issue_repositories = state.reviewSettings.githubIssueRepositories;
+        payload.expected_issue_repositories = { repositories: issueAutomationRepositoriesSnapshot };
+      }
       setSettingsBusy(true);
       setReviewSettingsStatus("ok", "Saving review settings...");
       try {
@@ -7235,7 +7259,51 @@
       button.prepend(avatar);
     }
 
+    function renderIssueAutomationFields() {
+      const repo = issueAutomationRepository.value;
+      const settings = state.reviewSettings.githubIssueRepositories?.[repo];
+      issueAutomationRepositoryToggle.hidden = !repo;
+      issueAutomationRepositoryEnabled.checked = Boolean(settings);
+      issueAutomationRepositoryFields.hidden = !settings;
+      if (settings) {
+        reviewSettingsGitHubIssuesAutoStartAssigned.checked = settings.auto_start;
+        reviewSettingsGitHubIssuesAutoStartOnlyAssigned.checked = settings.only_assigned;
+        reviewSettingsGitHubIssuesAutoStartLabels.value = (settings.trigger_labels || []).join(", ");
+        reviewSettingsGitHubIssuesExclusionLabel.value = settings.exclusion_label;
+      }
+    }
+
+    function renderIssueAutomationRepositories() {
+      const selected = issueAutomationRepository.value;
+      const configured = state.reviewSettings.githubIssueRepositories;
+      issueAutomationLegacy.hidden = configured !== null || !state.reviewSettings.githubIssueAutoStartAssigned;
+      const available = new Map();
+      for (const repo of state.githubRepos) {
+        const value = githubRepoSelectValue(repo);
+        const name = repo.full_name || githubRepoPathFromValue(value);
+        if (name && !repositoryDisabled(value)) available.set(name.toLowerCase(), name);
+      }
+      const selectedKeys = Object.keys(configured || {}).sort();
+      const availableKeys = [...available.keys()].filter(key => !configured?.[key]).sort();
+      const placeholder = selectedKeys.length || availableKeys.length
+        ? "Choose a repository"
+        : (state.githubReposLoadError || "No repositories available");
+      issueAutomationRepository.replaceChildren(new Option(placeholder, ""));
+      for (const [label, keys] of [["Enabled for automation", selectedKeys], ["Available repositories", availableKeys]]) {
+        if (!keys.length) continue;
+        const group = document.createElement("optgroup");
+        group.label = label;
+        for (const key of keys) {
+          group.append(new Option(available.get(key) || `${key} (unavailable)`, key));
+        }
+        issueAutomationRepository.append(group);
+      }
+      issueAutomationRepository.value = selectedKeys.includes(selected) || available.has(selected) ? selected : "";
+      renderIssueAutomationFields();
+    }
+
     function renderRepositorySettings() {
+      renderIssueAutomationRepositories();
       if (!reviewSettingsRepositories || !reviewSettingsOwners || !reviewSettingsRepositoriesEmpty) return;
       const repos = repositorySettingsRepoValues();
       const groups = repositoryOwnerGroups(repos);
@@ -13882,6 +13950,7 @@
       reviewSettingsClose.disabled = Boolean(busy);
       for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches,
         reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsGitHubIssuesEnabled,
+        issueAutomationRepository, issueAutomationRepositoryEnabled, issueAutomationStopLegacy,
         reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsGitHubIssuesAutoStartOnlyAssigned, reviewSettingsGitHubIssuesAutoStartLabels, reviewSettingsGitHubIssuesExclusionLabel, reviewSettingsAssignCreator, reviewSettingsSlider, ...reviewSettingsMergeOptions,
         ...Array.from(reviewSettingsRepositories?.querySelectorAll("input") || []),
         ...Array.from(reviewSettingsOwners?.querySelectorAll("button") || [])]) {
@@ -13929,8 +13998,47 @@
       reviewSettingsForm.addEventListener("submit", submitReviewSettings);
     }
     for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches, reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled,
-      reviewSettingsGitHubIssuesEnabled, reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsGitHubIssuesAutoStartOnlyAssigned, reviewSettingsGitHubIssuesAutoStartLabels, reviewSettingsGitHubIssuesExclusionLabel, reviewSettingsAssignCreator, ...reviewSettingsGitHubIssuesLinkModeOptions]) {
+      reviewSettingsGitHubIssuesEnabled, issueAutomationRepositoryEnabled, reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsGitHubIssuesAutoStartOnlyAssigned, reviewSettingsGitHubIssuesAutoStartLabels, reviewSettingsGitHubIssuesExclusionLabel, reviewSettingsAssignCreator, ...reviewSettingsGitHubIssuesLinkModeOptions]) {
       control.addEventListener("change", () => setReviewSettingsStatus("", "Changes will be saved on close."));
+    }
+    issueAutomationRepository.addEventListener("change", renderIssueAutomationFields);
+    issueAutomationRepositoryEnabled.addEventListener("change", () => {
+      const repo = issueAutomationRepository.value;
+      if (!repo) return;
+      const current = state.reviewSettings;
+      const repositories = { ...current.githubIssueRepositories };
+      if (issueAutomationRepositoryEnabled.checked) {
+        repositories[repo] = {
+          auto_start: current.githubIssueRepositories === null && current.githubIssueAutoStartAssigned,
+          only_assigned: current.githubIssueAutoStartOnlyAssigned,
+          trigger_labels: current.githubIssueAutoStartLabels,
+          exclusion_label: current.githubIssueAutoStartExclusionLabel,
+        };
+      } else {
+        delete repositories[repo];
+      }
+      current.githubIssueRepositories = repositories;
+      issueAutomationRepositoriesEdited = true;
+      renderIssueAutomationRepositories();
+    });
+    issueAutomationStopLegacy.addEventListener("click", () => {
+      state.reviewSettings.githubIssueRepositories = {};
+      issueAutomationRepositoriesEdited = true;
+      renderIssueAutomationRepositories();
+      issueAutomationRepository.focus();
+      setReviewSettingsStatus("", "Changes will be saved on close.");
+    });
+    for (const control of [reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsGitHubIssuesAutoStartOnlyAssigned,
+      reviewSettingsGitHubIssuesAutoStartLabels, reviewSettingsGitHubIssuesExclusionLabel]) {
+      control.addEventListener("input", () => {
+        const settings = state.reviewSettings.githubIssueRepositories?.[issueAutomationRepository.value];
+        if (!settings) return;
+        settings.auto_start = reviewSettingsGitHubIssuesAutoStartAssigned.checked;
+        settings.only_assigned = reviewSettingsGitHubIssuesAutoStartOnlyAssigned.checked;
+        settings.trigger_labels = reviewSettingsGitHubIssuesAutoStartLabels.value.split(",").map(label => label.trim()).filter(Boolean);
+        settings.exclusion_label = reviewSettingsGitHubIssuesExclusionLabel.value.trim();
+        issueAutomationRepositoriesEdited = true;
+      });
     }
     reviewSettingsGitHubIssuesEnabled?.addEventListener("change", () => {
       state.reviewSettings = { ...state.reviewSettings, githubIssuesEnabled: Boolean(reviewSettingsGitHubIssuesEnabled.checked) };

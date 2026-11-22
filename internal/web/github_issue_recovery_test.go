@@ -506,6 +506,74 @@ func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryRespectsRepositoryAutoStart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	settings, _ := s.ReviewSettingsStatus(ctx)
+	settings.GitHubIssueRepositories = localruntime.GitHubIssueRepositories{
+		"acme/other": {AutoStart: true, ExclusionLabel: "other-claimed"},
+	}
+	s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) { return settings, nil }
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	blocked := latestRecoveryRecord(t, s)
+	if blocked.State != "blocked" || blocked.Error != "issue automation disabled" || blocked.UnlockPending || len(f.submissions) != 1 {
+		t.Fatalf("removed repository did not finish cleanup and block retry: %+v", blocked)
+	}
+	response := retryIssue(t, s, record.ID, true)
+	if response.Code != 202 || len(f.submissions) != 2 {
+		t.Fatalf("explicit retry = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestIssueRecoveryUsesCurrentRepositoryExclusionLabel(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	record := completeRecoveryRecord(t, s, "error", 1)
+	const exclusion = "team-claimed"
+	settings, _ := s.ReviewSettingsStatus(ctx)
+	settings.GitHubIssueRepositories = localruntime.GitHubIssueRepositories{
+		"acme/repo": {AutoStart: true, ExclusionLabel: exclusion},
+	}
+	s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) { return settings, nil }
+	f.issue.Labels = append(f.issue.Labels, GitHubIssueLabel{Name: exclusion})
+	makeRetryDue := func() {
+		t.Helper()
+		if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+			r.NextAttemptAt = time.Now().Add(-time.Second)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	makeRetryDue()
+	if err := s.ReconcileIssueWork(ctx); err == nil || !strings.Contains(err.Error(), "issue was excluded after its worker stopped") {
+		t.Fatalf("reconcile with current exclusion label = %v", err)
+	}
+	if len(f.submissions) != 1 || f.deletes != 1 || !githubIssueHasAnyLabel(f.issue, []string{exclusion}) {
+		t.Fatalf("expected only the prior claim label to be cleaned up: submissions=%d deletes=%d labels=%v", len(f.submissions), f.deletes, f.issue.Labels)
+	}
+	for i, label := range f.issue.Labels {
+		if label.Name == exclusion {
+			f.issue.Labels = append(f.issue.Labels[:i], f.issue.Labels[i+1:]...)
+			break
+		}
+	}
+	makeRetryDue()
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.submissions) != 2 || f.submissions[1].GitHubIssue.Claim.ExclusionLabel != exclusion {
+		t.Fatalf("retry did not claim with current exclusion label: submissions=%d", len(f.submissions))
+	}
+}
+
 func TestIssueRecoveryBudgetStopAndNoChangeDoNotRerun(t *testing.T) {
 	t.Parallel()
 	for _, outcome := range []string{"error", "stopped", "no_changes"} {
@@ -761,5 +829,46 @@ func TestIssueRecoveryDoesNotRepairDiskExhaustionAfterStatusChanges(t *testing.T
 	got := latestRecoveryRecord(t, s)
 	if got.State != "blocked" || got.FailureDetail() != record.RunError || len(f.submissions) != 1 {
 		t.Fatalf("state=%s failure=%q submissions=%d", got.State, got.FailureDetail(), len(f.submissions))
+	}
+}
+
+func TestPreparedIssueRecoveryRechecksEligibility(t *testing.T) {
+	t.Parallel()
+	for _, scenario := range []string{"new exclusion", "closed", "own label"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			ctx := context.Background()
+			f.fail = "/labels?"
+			s.pollGitHubIssueAutoStart(ctx)
+			record := latestRecoveryRecord(t, s)
+			if record.IssueNodeID == "" || record.Outcome != "" || len(f.submissions) != 0 {
+				t.Fatalf("expected prepared admission: %+v", record)
+			}
+			f.fail = ""
+			settings, _ := s.ReviewSettingsStatus(ctx)
+			switch scenario {
+			case "new exclusion":
+				settings.GitHubIssueAutoStartExclusionLabel = "new-exclusion"
+				f.issue.Labels = append(f.issue.Labels, GitHubIssueLabel{Name: "new-exclusion"})
+			case "closed":
+				f.issue.State = "closed"
+			case "own label":
+				record.LabelAdded = true
+				f.issue.Labels = append(f.issue.Labels, GitHubIssueLabel{Name: record.Run.GitHubIssue.Claim.ExclusionLabel})
+			}
+			s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) { return settings, nil }
+			record.NextAttemptAt = time.Time{}
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			err := s.ReconcileIssueWork(ctx)
+			if scenario == "own label" {
+				if err != nil || len(f.submissions) != 1 {
+					t.Fatalf("owned label blocked recovery: %v submissions=%d", err, len(f.submissions))
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "issue is ineligible") || len(f.submissions) != 0 {
+				t.Fatalf("ineligible issue resumed: %v submissions=%d", err, len(f.submissions))
+			}
+		})
 	}
 }

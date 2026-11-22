@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
 
@@ -415,23 +416,10 @@ func appendGitHubIssueComments(issue *GitHubIssue, comments []githubIssueComment
 
 func validGitHubRepository(value string) (string, bool) {
 	value = strings.TrimSpace(value)
-	parts := strings.Split(value, "/")
-	if len(parts) != 2 || !validGitHubRepositoryPart(parts[0]) || !validGitHubRepositoryPart(parts[1]) {
+	if !config.ValidGitHubRepository(value) {
 		return "", false
 	}
 	return value, true
-}
-
-func validGitHubRepositoryPart(value string) bool {
-	if value == "" || value == "." || value == ".." {
-		return false
-	}
-	for _, char := range value {
-		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '-' || char == '_' || char == '.') {
-			return false
-		}
-	}
-	return true
 }
 
 func (s Server) handleGitHubIssuesPage(w http.ResponseWriter, r *http.Request) {

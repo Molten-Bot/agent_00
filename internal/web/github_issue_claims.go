@@ -721,6 +721,13 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	if !settings.GitHubIssuesEnabled {
 		return "", 409, fmt.Errorf("GitHub Issues is disabled")
 	}
+	if automatic {
+		var enabled bool
+		settings, enabled = settings.issueAutoStartForRepository(repository)
+		if !enabled {
+			return "", 409, fmt.Errorf("issue automation disabled")
+		}
+	}
 	for _, disabled := range settings.DisabledRepositories {
 		if issueRepositoryMatchesRun(disabled, repository) {
 			return "", 409, fmt.Errorf("repository is disabled")
@@ -847,8 +854,13 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	if exclusion == "" {
 		exclusion = issueExclusionLabel(settings)
 	}
-	if automatic && !previous.LabelAdded && githubIssueHasAnyLabel(issue, []string{exclusion}) {
-		return "", 409, fmt.Errorf("issue was excluded after its worker stopped")
+	if automatic {
+		currentExclusion := issueExclusionLabel(settings)
+		ownsCurrentLabel := previous.LabelAdded && strings.EqualFold(previous.Run.GitHubIssue.Claim.ExclusionLabel, currentExclusion)
+		if !ownsCurrentLabel && githubIssueHasAnyLabel(issue, []string{currentExclusion}) {
+			return "", 409, fmt.Errorf("issue was excluded after its worker stopped")
+		}
+		exclusion = currentExclusion
 	}
 	claim := &config.GitHubIssueClaim{ID: newIssueClaimID(), Branch: branch, BaseBranch: base, ExclusionLabel: exclusion, Attempt: remote.Claim.Attempt + 1}
 	// Copy rather than mutating a stored config's issue pointer.

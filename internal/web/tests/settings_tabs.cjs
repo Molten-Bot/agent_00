@@ -212,7 +212,7 @@ test('all settings save on close and survive reopening; no main Save button', as
   assert.equal(await page.locator('#custom-library-name').inputValue(), 'kept draft');
   await toggle(page, 'review-settings-default-library');
   await close(page);
-  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], github_issue_auto_start_exclusion_label: "agent_00-in-progress", assign_creator: false, disabled_repositories: [] });
+  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], assign_creator: false, disabled_repositories: [] });
   await page.reload();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   assert.equal(await page.locator('#review-settings-auto-merge').isChecked(), true);
@@ -553,13 +553,27 @@ test('json toggle marks the experimental JSON tab unavailable immediately and pe
 });
 
 test('GitHub Issues toggle exposes and hides the dock link and persists on reload', async t => {
-  const { page, writes } = await openSettings(t);
+  const { page, writes } = await openSettings(t, {
+    initialSettings: { ...defaults, disabled_repositories: ['acme/disabled'] },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({
+        json: { ok: true, repos: ['acme/one', 'acme/two', 'acme/disabled'].map(full_name => ({ full_name })) },
+      }));
+    },
+  });
+  const repository = page.getByLabel('Automation repository');
   assert.equal(await page.locator('#review-settings-github-issues-enabled').isChecked(), false);
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
   await select(page, 'github-issues');
   await toggle(page, 'review-settings-github-issues-enabled');
   assert.equal(await page.locator('#review-settings-github-issues-auto-start').isVisible(), true);
+  await repository.selectOption('acme/one');
+  assert.equal(await repository.locator('option[value="acme/disabled"]').count(), 0);
+  await toggle(page, 'review-settings-github-issues-repository-enabled');
   await toggle(page, 'review-settings-github-issues-auto-start-assigned');
+  await repository.selectOption('acme/two');
+  await toggle(page, 'review-settings-github-issues-repository-enabled');
+  assert.equal(await page.locator('#review-settings-github-issues-auto-start-assigned').isChecked(), false);
   assert.equal(await page.locator('#review-settings-github-issues-link-mode').isVisible(), true);
   assert.equal(await page.locator('#settings-tab-github-issues [data-lucide="folder-kanban"]').count(), 1);
   assert.equal(await page.locator('#review-settings-github-issues-enabled').locator('xpath=..').locator('[data-lucide="folder-kanban"]').count(), 1);
@@ -570,7 +584,8 @@ test('GitHub Issues toggle exposes and hides the dock link and persists on reloa
   await close(page);
   assert.equal(writes.at(-1).github_issues_enabled, true);
   assert.equal(writes.at(-1).github_issue_link_mode, 'close');
-  assert.equal(writes.at(-1).github_issue_auto_start_assigned, true);
+  assert.equal(writes.at(-1).github_issue_repositories['acme/one'].auto_start, true);
+  assert.equal(writes.at(-1).github_issue_repositories['acme/two'].auto_start, false);
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'false');
   assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), '#studio-issues');
   await page.reload();
@@ -578,6 +593,7 @@ test('GitHub Issues toggle exposes and hides the dock link and persists on reloa
   await select(page, 'github-issues');
   assert.equal(await page.locator('#review-settings-github-issues-enabled').isChecked(), true);
   assert.equal(await page.locator('#review-settings-github-issues-link-close').isChecked(), true);
+  await repository.selectOption('acme/one');
   assert.equal(await page.locator('#review-settings-github-issues-auto-start-assigned').isChecked(), true);
   await toggle(page, 'review-settings-github-issues-enabled');
   assert.equal(await page.locator('#review-settings-github-issues-link-mode').isVisible(), false);
@@ -588,7 +604,8 @@ test('GitHub Issues toggle exposes and hides the dock link and persists on reloa
   await close(page);
   assert.equal(writes.at(-1).github_issues_enabled, false);
   assert.equal(writes.at(-1).github_issue_link_mode, 'close');
-  assert.equal(writes.at(-1).github_issue_auto_start_assigned, true);
+  assert.equal(writes.at(-1).github_issue_repositories['acme/one'].auto_start, true);
+  assert.equal(writes.at(-1).github_issue_repositories['acme/two'].auto_start, false);
   await page.reload();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   await select(page, 'github-issues');
@@ -601,24 +618,35 @@ test('GitHub issue labels use comma-separated input without background label loa
   const initialSettings = {
     ...defaults,
     github_issues_enabled: true,
-    github_issue_auto_start_labels: ['bug', 'priority'],
+    github_issue_repositories: {
+      'acme/repo': { auto_start: true, only_assigned: true, trigger_labels: ['bug', 'priority'], exclusion_label: 'repo-claimed' },
+    },
   };
   const { page, writes } = await openSettings(t, { initialSettings, configurePage: async page => {
+    await page.route('**/api/github/repos**', route => route.fulfill({
+      json: { ok: true, repos: [{ full_name: 'acme/repo' }] },
+    }));
     await page.route('**/api/github/labels', route => {
       labelRequests++;
       return route.fulfill({ json: { ok: true, labels: ['auto-filled'] } });
     });
   }});
   await select(page, 'github-issues');
+  await page.getByLabel('Automation repository').selectOption('acme/repo');
+  const assigneeIcon = page.locator('label:has(#review-settings-github-issues-auto-start-only-assigned) svg');
+  const studioIcon = page.locator('#github-issues-assignee-filter svg');
+  for (const selector of ['path', 'circle']) {
+    assert.deepEqual(await assigneeIcon.locator(selector).evaluateAll(nodes => nodes.map(node => node.outerHTML)),
+      await studioIcon.locator(selector).evaluateAll(nodes => nodes.map(node => node.outerHTML)));
+  }
   const labels = page.locator('#review-settings-github-issues-auto-start-labels');
   assert.equal(await labels.evaluate(element => element.tagName), 'INPUT');
-  assert.equal(await labels.getAttribute('aria-label'), 'GitHub issue trigger labels, comma-separated');
-  assert.match(await labels.locator('xpath=preceding-sibling::span').innerText(), /Match any; comma-separated/);
+  assert.match(await labels.locator('xpath=preceding-sibling::span').innerText(), /Match any label/);
   assert.equal(await labels.inputValue(), 'bug, priority');
   assert.equal(labelRequests, 0);
   await labels.fill(' bug, priority, , needs triage ');
   await close(page);
-  assert.deepEqual(writes.at(-1).github_issue_auto_start_labels, ['bug', 'priority', 'needs triage']);
+  assert.deepEqual(writes.at(-1).github_issue_repositories['acme/repo'].trigger_labels, ['bug', 'priority', 'needs triage']);
   assert.equal(labelRequests, 0);
 });
 
@@ -1391,6 +1419,9 @@ test('GitHub Issues settings keep automation configuration without task listing 
   const { page, writes } = await openSettings(t, {
     initialSettings: { ...defaults, github_issues_enabled: true, github_issue_auto_start_assigned: true },
     configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({
+        json: { ok: true, repos: [{ full_name: 'acme/repo' }] },
+      }));
       await page.route('**/api/github/automation**', route => {
         automationRequests.push({ path: new URL(route.request().url()).pathname, method: route.request().method() });
         return route.fulfill({ json: { ok: true, status: { enabled: true }, claims: [] } });
@@ -1405,8 +1436,74 @@ test('GitHub Issues settings keep automation configuration without task listing 
   await page.getByRole('button', { name: 'Scan now', exact: true }).click();
   await page.waitForFunction(() => document.getElementById('github-automation-status').textContent === 'Scanning…');
   assert.deepEqual(automationRequests.at(-1), { path: '/api/github/automation/scan', method: 'POST' });
+  assert.equal(await page.locator('#review-settings-github-issues-legacy').isVisible(), true);
+  await page.getByLabel('Automation repository').selectOption('acme/repo');
+  await toggle(page, 'review-settings-github-issues-repository-enabled');
+  assert.equal(await page.locator('#review-settings-github-issues-legacy').isVisible(), false);
+  assert.equal(await page.locator('#review-settings-github-issues-auto-start-assigned').isChecked(), true);
   assert.equal(await page.locator('#review-settings-github-issues-exclusion-label').inputValue(), 'agent_00-in-progress');
   await page.locator('#review-settings-github-issues-exclusion-label').fill('team-claimed');
   await close(page);
-  assert.equal(writes.at(-1).github_issue_auto_start_exclusion_label, 'team-claimed');
+  assert.equal(writes.at(-1).github_issue_repositories['acme/repo'].exclusion_label, 'team-claimed');
+});
+
+test('saving unrelated settings in a stale tab preserves a repository disabled in another tab', async t => {
+  let settings = {
+    ...defaults,
+    github_issues_enabled: true,
+    github_issue_repositories: { 'acme/repo': { auto_start: true, exclusion_label: 'team-claimed' } },
+  };
+  const configurePage = async page => {
+    await page.route('**/api/review-settings', route => {
+      if (route.request().method() === 'POST') settings = { ...settings, ...route.request().postDataJSON() };
+      return route.fulfill({ json: { ok: true, settings } });
+    });
+  };
+  const { page: staleTab } = await openSettings(t, { configurePage });
+  const { page: currentTab } = await openSettings(t, { configurePage });
+  await select(currentTab, 'github-issues');
+  await currentTab.getByLabel('Automation repository').selectOption('acme/repo');
+  await toggle(currentTab, 'review-settings-github-issues-repository-enabled');
+  await close(currentTab);
+  assert.deepEqual(settings.github_issue_repositories, {});
+
+  await select(staleTab, 'automation');
+  await toggle(staleTab, 'review-settings-auto-merge');
+  await close(staleTab);
+  assert.equal(settings.auto_merge, true);
+  assert.deepEqual(settings.github_issue_repositories, {});
+});
+
+test('editing repositories in a stale tab sends its original snapshot and preserves concurrent removal', async t => {
+  const repo = { auto_start: true, only_assigned: true, trigger_labels: [], exclusion_label: 'claimed' };
+  const original = { 'acme/one': { ...repo }, 'acme/two': { ...repo } };
+  let settings = { ...defaults, github_issues_enabled: true, github_issue_repositories: structuredClone(original) };
+  let rejected = false;
+  const configurePage = async page => {
+    await page.route('**/api/review-settings', route => {
+      if (route.request().method() === 'POST') {
+        const payload = route.request().postDataJSON();
+        assert.deepEqual(payload.expected_issue_repositories.repositories, original);
+        if (JSON.stringify(payload.expected_issue_repositories.repositories) !== JSON.stringify(settings.github_issue_repositories)) {
+          rejected = true;
+          return route.fulfill({ status: 400, json: { error: 'issue automation settings changed in another session; reload the page and try again' } });
+        }
+        settings = { ...settings, ...payload };
+      }
+      return route.fulfill({ json: { ok: true, settings } });
+    });
+  };
+  const { page: staleTab } = await openSettings(t, { configurePage });
+  const { page: currentTab } = await openSettings(t, { configurePage });
+  await select(currentTab, 'github-issues');
+  await currentTab.getByLabel('Automation repository').selectOption('acme/two');
+  await toggle(currentTab, 'review-settings-github-issues-repository-enabled');
+  await close(currentTab);
+  await select(staleTab, 'github-issues');
+  await staleTab.getByLabel('Automation repository').selectOption('acme/one');
+  await toggle(staleTab, 'review-settings-github-issues-auto-start-assigned');
+  await staleTab.locator('#review-settings-close').click();
+  await staleTab.getByText('issue automation settings changed in another session; reload the page and try again', { exact: true }).waitFor();
+  assert.equal(rejected, true);
+  assert.deepEqual(settings.github_issue_repositories, { 'acme/one': repo });
 });

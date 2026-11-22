@@ -79,6 +79,32 @@ func issueAPIResponse(raw string, cause error) (string, error) {
 	return strings.Join(body, "\n"), cause
 }
 
+func (settings ReviewSettingsState) issueAutoStartEnabled() bool {
+	if !settings.GitHubIssuesEnabled {
+		return false
+	}
+	if settings.GitHubIssueRepositories == nil {
+		return settings.GitHubIssueAutoStartAssigned
+	}
+	for _, repo := range settings.GitHubIssueRepositories {
+		if repo.AutoStart {
+			return true
+		}
+	}
+	return false
+}
+
+func (settings ReviewSettingsState) issueAutoStartForRepository(repository string) (ReviewSettingsState, bool) {
+	if settings.GitHubIssueRepositories == nil {
+		return settings, settings.GitHubIssuesEnabled && settings.GitHubIssueAutoStartAssigned
+	}
+	repo := settings.GitHubIssueRepositories[strings.ToLower(repository)]
+	settings.GitHubIssueAutoStartOnlyAssigned = repo.OnlyAssigned
+	settings.GitHubIssueAutoStartLabels = repo.TriggerLabels
+	settings.GitHubIssueAutoStartExclusionLabel = repo.ExclusionLabel
+	return settings, settings.GitHubIssuesEnabled && repo.AutoStart
+}
+
 // Reconcile current eligibility, including backlog. Observing an issue never
 // consumes it; only a durable, remotely exclusive claim permits submission.
 func (s Server) runGitHubIssueAutoStart(ctx context.Context) {
@@ -141,7 +167,7 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 		status.Error = "load automation settings: " + err.Error()
 		return
 	}
-	status.Enabled = settings.GitHubIssuesEnabled && settings.GitHubIssueAutoStartAssigned
+	status.Enabled = settings.issueAutoStartEnabled()
 	if !status.Enabled {
 		return
 	}
@@ -178,6 +204,18 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 		s.issueAutomation.mu.Unlock()
 	}
 	repos = filterDisabledGitHubRepos(repos, settings.DisabledRepositories)
+	// Filter before advancing the cursor so unselected repositories consume
+	// none of the limited scan slots.
+	scanRepos := make([]GitHubRepo, 0, len(repos))
+	for _, repo := range repos {
+		if name, ok := validGitHubRepository(repo.FullName); ok {
+			if _, enabled := settings.issueAutoStartForRepository(name); enabled {
+				repo.FullName = name
+				scanRepos = append(scanRepos, repo)
+			}
+		}
+	}
+	repos = scanRepos
 	start, repoCount := 0, len(repos)
 	if s.IssueRecovery != nil && repoCount > 0 {
 		cursor, err := s.IssueClaims.ScanPage("@repositories", 0)
@@ -202,10 +240,8 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 				return
 			}
 		}
-		fullName, ok := validGitHubRepository(repo.FullName)
-		if !ok {
-			continue
-		}
+		fullName := repo.FullName
+		repoSettings, _ := settings.issueAutoStartForRepository(fullName)
 		status.Repositories = append(status.Repositories, fullName)
 		page := 0
 		if s.IssueRecovery != nil {
@@ -225,7 +261,7 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 		for _, entry := range issues {
 			// Report current filters for tracked issues too, so settings can hide
 			// nonmatches without changing their independent recovery lifecycle.
-			reason := issueEligibilityReason(entry.GitHubIssue, settings, status.Account)
+			reason := issueEligibilityReason(entry.GitHubIssue, repoSettings, status.Account)
 			if reason != "" {
 				status.Skipped++
 				status.Issues = append(status.Issues, issueAutomationDecision{Repository: fullName, Number: entry.Number, Reason: reason})
@@ -274,7 +310,7 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 			} else {
 				run := issueRunConfig(repo, entry.GitHubIssue, settings.GitHubIssueLinkMode)
 				var err error
-				decision.RequestID, err = s.claimAndSubmitIssue(ctx, run, settings, status.Account, s.SubmitLocalPrompt)
+				decision.RequestID, err = s.claimAndSubmitIssue(ctx, run, repoSettings, status.Account, s.SubmitLocalPrompt)
 				if err != nil {
 					// A durable record is sufficient to advance discovery; it is
 					// reconciled separately even when admission is blocked.
