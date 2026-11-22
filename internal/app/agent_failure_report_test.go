@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -298,6 +299,48 @@ func TestRunCodexKeepsImplementationFailureFatalWithValidationToolingCaveat(t *t
 			err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
 			if err == nil || !strings.Contains(err.Error(), tc.summary) {
 				t.Fatalf("runCodex() error = %v, want implementation failure %q", err, tc.summary)
+			}
+		})
+	}
+}
+
+func TestRunCodexClassifiesExternalRolloutBeforeDisplayTruncation(t *testing.T) {
+	t.Parallel()
+
+	const prerequisites = "Scoped IAM, shared reference key, deployment, and live source verification still require infrastructure work. " +
+		"API flags default off. Docker-backed integration tests could not run because no container runtime was available."
+	const output = "Failure: Production rollout for #42 remains pending.\nError details: " + prerequisites +
+		"\n\nImplemented the requested endpoint and added tests for representative input, error responses, " +
+		"authorization, query parameter handling, response serialization, request cancellation, and concurrent requests. " +
+		"Updated fixture coverage to include pagination boundaries and empty responses across the supported query combinations." +
+		"\n\nValidation passed for the build and unit suite"
+
+	for _, tc := range []struct {
+		name, extra, want string
+	}{
+		{"external prerequisites", ".\n\nResolved issue: A test failed before the fixture was fixed.", failurefollowup.ExternalRolloutPrerequisitesReason},
+		{"late code failure", ".\n\nDeployment tests fail.", ""},
+		{"mixed validation result", ", but the readiness check failed.", ""},
+		{"code defect in the same paragraph", ". The service crashes on startup.", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := t.TempDir()
+			const prompt = "Complete the rollout"
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(target, prompt),
+				res: execx.Result{Stdout: output + tc.extra},
+			}}})
+			err := h.runCodex(t.Context(), agentruntime.Default(), target, prompt, codexRunOptions{}, "", "")
+			if err == nil {
+				t.Fatal("pending rollout must remain a failed run")
+			}
+			if truncated := strings.Contains(err.Error(), truncatedErrorDetails); truncated != (tc.want == "") {
+				t.Fatalf("unexpected truncation status for %q", err)
+			}
+			result := h.fail(ExitCodex, "codex", err, target)
+			// Issue recovery reparses the persisted error text after restart.
+			if got := failurefollowup.NonRemediableFailureReason(errors.New(result.Err.Error())); got != tc.want {
+				t.Fatalf("reason = %q, want %q: %v", got, tc.want, err)
 			}
 		})
 	}

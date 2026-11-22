@@ -6845,7 +6845,20 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 	if errorDetail == "" || strings.Contains(strings.ToLower(detail), strings.ToLower(errorDetail)) {
 		return detail, detail
 	}
-	return detail + " " + codexDisplayErrorDetail(errorDetail), detail + "\n" + errorDetail
+	display = codexDisplayErrorDetail(errorDetail)
+	full = detail + "\n" + errorDetail
+	if strings.HasSuffix(display, truncatedErrorDetails) {
+		// Keep a complete blocker statement in the persisted error if the
+		// rest of the report only confirms progress or unavailable validation.
+		if details, ok := strings.CutPrefix(errorDetail, "Error details:"); ok {
+			first, _, _ := strings.Cut(strings.TrimSpace(details), "\n")
+			if len(first) <= maxErrorDetailChars && failurefollowup.IsExternalRolloutFailure(detail, first) &&
+				failurefollowup.IsExternalRolloutFailure(detail, details) {
+				display = "Error details: " + first
+			}
+		}
+	}
+	return detail + " " + display, full
 }
 
 func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
@@ -7395,10 +7408,10 @@ func isAgentReportSection(line, field string, detailsHeadingLevel int) bool {
 // Keep omissions visible to downstream repair classifiers that receive the
 // displayed error rather than the complete report.
 const truncatedErrorDetails = " | [error details truncated]"
+const maxErrorDetailChars = 320
 
 func codexDisplayErrorDetail(detail string) string {
 	const maxDetailsLines = 3
-	const maxDetailChars = 320
 
 	header, continuation, ok := strings.Cut(detail, "\n")
 	if !ok {
@@ -7411,10 +7424,10 @@ func codexDisplayErrorDetail(detail string) string {
 	if header == "Error details:" {
 		separator = " "
 	}
-	if !truncated && len(joined) <= maxDetailChars {
+	if !truncated && len(joined) <= maxErrorDetailChars {
 		return header + separator + joined
 	}
-	return header + separator + strings.TrimSpace(joined[:min(len(joined), maxDetailChars-len(truncatedErrorDetails))]) + truncatedErrorDetails
+	return header + separator + strings.TrimSpace(joined[:min(len(joined), maxErrorDetailChars-len(truncatedErrorDetails))]) + truncatedErrorDetails
 }
 
 // isMarkdownCodeFence reports whether a line is only a code fence. An opening

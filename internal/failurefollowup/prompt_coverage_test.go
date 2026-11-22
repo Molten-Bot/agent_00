@@ -165,6 +165,9 @@ func TestNonRemediableFailureReasonRequiresExternalRolloutEvidence(t *testing.T)
 		{"only one prerequisite outstanding", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Secrets Manager provisioning is complete, but IAM access and deployed source verification remain pending.", false},
 		{"provisioning and verification outstanding", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Scoped IAM, shared Secrets Manager key, and deployed source verification remain outstanding.", true},
 		{"outstanding prerequisites in reverse order", "claude: claude reported failure: Failure: Production deployment is still pending. Error details: Shared Secrets Manager key and scoped IAM are pending.", true},
+		{"reported infrastructure work with missing container runtime", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Scoped IAM and shared reference key still require infrastructure work. Service flags default off. Docker-backed integration tests could not run because no container runtime was available.", true},
+		{"container tests ran and failed", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " Docker-backed integration tests failed after startup.", false},
+		{"legacy truncated diagnostics", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " | [error details truncated]", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			want := ""
