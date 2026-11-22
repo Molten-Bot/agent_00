@@ -898,7 +898,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 	headRef := repoPRHeadRef(*repo)
 	targetRepo := repoPRTargetRepo(*repo)
 	if !createWorkBranch && !repo.RequireExistingPR {
-		prURL, err := h.lookupOpenPRURLByHead(ctx, *repo)
+		pr, err := h.lookupOpenPRByHead(ctx, *repo)
 		if err != nil {
 			if shouldTreatReusedBranchPRLookupFailureAsNonFatal(err) {
 				h.logf(
@@ -912,7 +912,10 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 			}
 			return ExitPR, "pr", err
 		}
-		repo.PRURL = prURL
+		repo.PRURL = pr.URL
+		if h.OnPRTitle != nil && pr.URL != "" && pr.Title != "" {
+			h.OnPRTitle(pr.URL, pr.Title)
+		}
 	}
 
 	if repo.PRURL == "" {
@@ -1395,6 +1398,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 
 type prStateView struct {
 	URL         string `json:"url"`
+	Title       string `json:"title"`
 	State       string `json:"state"`
 	MergedAt    string `json:"mergedAt"`
 	HeadRefName string `json:"headRefName"`
@@ -2583,9 +2587,8 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 			}
 			continue
 		}
-		prURL := pr.URL
-		if prURL == "" {
-			prURL, err = h.lookupAnyPRURLByHead(ctx, repos[i])
+		if pr.URL == "" {
+			pr, err = h.lookupAnyPRByHead(ctx, repos[i])
 			if err != nil {
 				h.logf(
 					"stage=pr status=warn action=lookup_existing reason=fallback_failed repo=%s repo_dir=%s branch=%s err=%q",
@@ -2600,7 +2603,7 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 				continue
 			}
 		}
-		if prURL == "" && promptPRURL != "" {
+		if pr.URL == "" && promptPRURL != "" {
 			state, err := h.loadPullRequestState(ctx, repos[i].Dir, promptPRURL)
 			if err != nil {
 				h.logf(
@@ -2632,17 +2635,20 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 					)
 				}
 			} else {
-				prURL = stringsx.FirstNonEmpty(state.URL, promptPRURL)
+				pr = ghPRLookupEntry{
+					URL:   stringsx.FirstNonEmpty(state.URL, promptPRURL),
+					Title: state.Title,
+				}
 			}
 		}
-		if prURL == "" {
+		if pr.URL == "" {
 			if requirePRURL {
 				return fmt.Errorf("no pull request found for unchanged repo %s branch %q", repos[i].URL, repos[i].Branch)
 			}
 			continue
 		}
-		repos[i].PRURL = prURL
-		if h.OnPRTitle != nil && pr.URL != "" && pr.Title != "" {
+		repos[i].PRURL = pr.URL
+		if h.OnPRTitle != nil && pr.Title != "" {
 			h.OnPRTitle(pr.URL, pr.Title)
 		}
 		h.logf(
@@ -2823,14 +2829,19 @@ func (h Harness) lookupOpenPRByHead(ctx context.Context, repo repoWorkspace) (gh
 }
 
 func (h Harness) lookupAnyPRURLByHead(ctx context.Context, repo repoWorkspace) (string, error) {
+	pr, err := h.lookupAnyPRByHead(ctx, repo)
+	return pr.URL, err
+}
+
+func (h Harness) lookupAnyPRByHead(ctx context.Context, repo repoWorkspace) (ghPRLookupEntry, error) {
 	headRef := repoPRHeadRef(repo)
 	if headRef == "" {
-		return "", nil
+		return ghPRLookupEntry{}, nil
 	}
 
 	lookupRes, err := h.runCommand(ctx, "pr", prLookupAnyByHeadWithRepoCommand(repo.Dir, headRef, repoPRTargetRepo(repo)))
 	if err != nil {
-		return "", commandErrorWithDetails(
+		return ghPRLookupEntry{}, commandErrorWithDetails(
 			fmt.Sprintf("lookup any pull request for repo %s branch %q", repo.URL, headRef),
 			err,
 			lookupRes,
@@ -2838,9 +2849,9 @@ func (h Harness) lookupAnyPRURLByHead(ctx context.Context, repo repoWorkspace) (
 		)
 	}
 	if pr := parsePRLookupOutput(lookupRes.Stdout); pr.URL != "" {
-		return pr.URL, nil
+		return pr, nil
 	}
-	return parsePRLookupOutput(lookupRes.Stderr).URL, nil
+	return parsePRLookupOutput(lookupRes.Stderr), nil
 }
 
 func (h Harness) runCloneWithRetry(
@@ -8516,7 +8527,7 @@ func prLookupAnyByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Comma
 
 func prStateViewCommand(repoDir, prURL string) execx.Command {
 	selector := githubutil.PullRequestSelector(prURL)
-	args := []string{"pr", "view", selector, "--json", "url,state,mergedAt,headRefName,headRefOid"}
+	args := []string{"pr", "view", selector, "--json", "url,title,state,mergedAt,headRefName,headRefOid"}
 	if repo := githubutil.PullRequestRepository(prURL); repo != "" {
 		args = append(args, "--repo", repo)
 	}
