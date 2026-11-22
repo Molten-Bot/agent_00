@@ -357,8 +357,10 @@ func TestRunPRCreateAlreadyExistsReusesExistingPR(t *testing.T) {
 		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
 		{cmd: pushCommand(repoDir, branch)},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stderr: transientErr.Error()}, err: transientErr},
-		{cmd: remoteBranchExistsOnOriginCommand(repoDir, branch), res: execx.Result{Stdout: "abc123\trefs/heads/" + branch + "\n"}},
-		{cmd: prLookupByHeadCommand(repoDir, branch), res: execx.Result{Stdout: "[]\n"}},
+		{
+			cmd: ghCommand(repoDir, "api", "repos/acme/repo/pulls?base=main&head=acme%3A"+branch+"&page=1&per_page=100&state=open"),
+			res: execx.Result{Stdout: "[]\n"},
+		},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stderr: prCreateStderr}, err: errors.New("pr create failed")},
 		{cmd: ghCommand(repoDir, "pr", "view", prURL, "--json", "title", "--jq", ".title"), res: execx.Result{Stderr: "HTTP 502"}, err: errors.New("exit status 1")},
 		{cmd: ghCommand(repoDir, "pr", "view", prURL, "--json", "title", "--jq", ".title"), res: execx.Result{Stderr: "error connecting to api.github.com"}, err: errors.New("exit status 1")},
@@ -656,8 +658,13 @@ func TestRunPRCreateTransientFailureRetriesAndSucceeds(t *testing.T) {
 		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
 		{cmd: pushCommand(repoDir, branch)},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stderr: transientErr.Error()}, err: transientErr},
-		{cmd: remoteBranchExistsOnOriginCommand(repoDir, branch), res: execx.Result{Stdout: "abc123\trefs/heads/" + branch + "\n"}},
-		{cmd: prLookupByHeadCommand(repoDir, branch), res: execx.Result{Stdout: "[]\n"}},
+		{
+			cmd: ghCommand(repoDir, "api", "repos/acme/repo/pulls?base=main&head=acme%3A"+branch+"&page=1&per_page=100&state=open"),
+			res: execx.Result{Stdout: fmt.Sprintf(`[
+				{"html_url":"https://github.com/acme/repo/pull/7","title":"Fork title","state":"open","head":{"ref":%q,"repo":{"full_name":"fork/repo"}},"base":{"ref":"main"}},
+				{"html_url":"https://github.com/acme/repo/pull/8","title":"Wrong base title","state":"open","head":{"ref":%q,"repo":{"full_name":"acme/repo"}},"base":{"ref":"release"}}
+			]`, branch, branch)},
+		},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL)},
 	}}
@@ -673,6 +680,12 @@ func TestRunPRCreateTransientFailureRetriesAndSucceeds(t *testing.T) {
 			t.Fatalf("sleep delay = %s, want %s", d, prCreateRetryDelay)
 		}
 		return nil
+	}
+
+	h.OnPRTitle = func(url, title string) {
+		if url != prURL || title != cfg.PRTitle {
+			t.Errorf("OnPRTitle(%q, %q), want (%q, %q)", url, title, prURL, cfg.PRTitle)
+		}
 	}
 
 	res := h.Run(context.Background(), cfg)
@@ -722,8 +735,11 @@ func TestRunPRCreateTransientFailureReusesLookupResult(t *testing.T) {
 		{cmd: commitCommand(repoDir, cfg.CommitMessage)},
 		{cmd: pushCommand(repoDir, branch)},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stderr: transientErr.Error()}, err: transientErr},
-		{cmd: remoteBranchExistsOnOriginCommand(repoDir, branch), res: execx.Result{Stdout: "abc123\trefs/heads/" + branch + "\n"}},
-		{cmd: prLookupByHeadCommand(repoDir, branch), res: execx.Result{Stdout: `[{"url":"` + prURL + `","title":"` + recoveredTitle + `"}]`}},
+		{
+			cmd: ghCommand(repoDir, "api", "repos/acme/repo/pulls?base=main&head=acme%3A"+branch+"&page=1&per_page=100&state=open"),
+			res: execx.Result{Stdout: fmt.Sprintf(`[{"html_url":%q,"title":%q,"state":"open","head":{"ref":%q,"repo":{"full_name":"acme/repo"}},"base":{"ref":"main"}}]`,
+				prURL, recoveredTitle, branch)},
+		},
 		{cmd: prChecksCommand(repoDir, prURL)},
 	}}
 
@@ -3681,7 +3697,7 @@ func TestRunFailedChecksTriggersCodexRemediation(t *testing.T) {
 		{cmd: pushCommand(repoDir, branch)},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: checkSummary + "\n"}, err: errors.New("checks failed")},
-		{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1))},
+		{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1, false))},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: " M file.go\n"}},
 		{cmd: addCommand(repoDir)},
 		{cmd: commitCommand(repoDir, remediationCommitMessage(cfg.CommitMessage, 1))},
@@ -3724,6 +3740,54 @@ func TestRunFailedChecksTriggersCodexRemediation(t *testing.T) {
 	}
 }
 
+func TestIssuePRRemediationPreservesTitleAndPushesCodeFix(t *testing.T) {
+	t.Parallel()
+
+	cfg := sampleConfig()
+	cfg.AssignCreator = new(bool)
+	cfg.GitHubIssue = &config.GitHubIssueConfig{
+		Repository: "acme/repo", Number: 17, Title: "Original issue title",
+		URL: "https://github.com/acme/repo/issues/17",
+	}
+	cfg.ApplyDefaults()
+	repo := &repoWorkspace{
+		Dir: t.TempDir(), URL: cfg.RepoURL, Branch: "agent00-issue-17", BaseBranch: "main",
+		CreateWorkBranch: true, WriteAccessChecked: true, WriteAccessAllowed: true,
+	}
+	prURL := "https://github.com/acme/repo/pull/42"
+	checkSummary := "unit-tests\tfail\t4s"
+	repairPrompt := remediationPrompt(cfg.Prompt, prURL, checkSummary, 1, true)
+	if !strings.Contains(repairPrompt, preserveIssueTitleInstruction) || strings.Contains(repairPrompt, prTitleRemediationPrefix) {
+		t.Fatal("issue remediation prompt must preserve the title and omit the title-edit directive")
+	}
+	fake := &fakeRunner{t: t, exps: []expectedRun{
+		{cmd: addCommand(repo.Dir)},
+		{cmd: commitCommand(repo.Dir, cfg.CommitMessage)},
+		{cmd: pushCommand(repo.Dir, repo.Branch)},
+		{cmd: prCreateCommand(repo.Dir, cfg, repo.Branch), res: execx.Result{Stdout: prURL + "\n"}},
+		{cmd: prChecksCommand(repo.Dir, prURL), res: execx.Result{Stdout: checkSummary + "\n"}, err: errors.New("checks failed")},
+		{cmd: codexCommand(repo.Dir, repairPrompt), res: execx.Result{Stdout: prTitleRemediationPrefix + " Proposed title\n"}},
+		{cmd: statusCommand(repo.Dir), res: execx.Result{Stdout: " M file.go\n"}},
+		{cmd: addCommand(repo.Dir)},
+		{cmd: commitCommand(repo.Dir, remediationCommitMessage(cfg.CommitMessage, 1))},
+		{cmd: pushCommand(repo.Dir, repo.Branch)},
+		{cmd: prChecksCommand(repo.Dir, prURL)},
+	}}
+	h := New(fake)
+	h.OnPRTitle = func(url, title string) {
+		if url != prURL || title != cfg.GitHubIssue.Title {
+			t.Errorf("OnPRTitle(%q, %q), want (%q, %q)", url, title, prURL, cfg.GitHubIssue.Title)
+		}
+	}
+
+	code, stage, err := h.processChangedRepoWithoutFinalReviews(
+		t.Context(), cfg, repo, agentruntime.Default(), repo.Dir, codexRunOptions{}, cfg.Prompt, "", "repo", "codex", false,
+	)
+	if err != nil || code != ExitSuccess || stage != "" || len(fake.exps) != 0 {
+		t.Fatalf("processChangedRepoWithoutFinalReviews() = (%d, %q, %v), unconsumed expectations: %d", code, stage, err, len(fake.exps))
+	}
+}
+
 func TestRunFailedTitleCheckWaitsForUpdatedTitleWithoutConsumingRemediationAttempts(t *testing.T) {
 	t.Parallel()
 
@@ -3755,7 +3819,7 @@ func TestRunFailedTitleCheckWaitsForUpdatedTitleWithoutConsumingRemediationAttem
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: checkSummary + "\n"}, err: errors.New("checks failed")},
 		{
-			cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1)),
+			cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1, false)),
 			res: execx.Result{Stdout: "Repository files need no changes.\n" + prTitleRemediationPrefix + " " + replacementTitle + "\n"},
 		},
 		{cmd: prEditTitleCommand(repoDir, prURL, replacementTitle)},
@@ -3832,7 +3896,7 @@ func TestRunFailedPRTitleEditDoesNotExposeRequestedTitle(t *testing.T) {
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: checkSummary + "\n"}, err: errors.New("checks failed")},
 		{
-			cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1)),
+			cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1, false)),
 			res: execx.Result{Stdout: prTitleRemediationPrefix + " " + requestedTitle + "\n"},
 		},
 		{
@@ -4030,7 +4094,7 @@ func TestRunTreatsChecksWatchTimeoutWithPendingChecksAsFailure(t *testing.T) {
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL), err: errPRChecksWatchTimeout},
 		{cmd: prChecksJSONCommand(repoDir, prURL, true), res: execx.Result{Stdout: checkSnapshot + "\n"}},
-		{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1))},
+		{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1, false))},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "\n"}},
 	}}
 
@@ -4098,7 +4162,7 @@ func TestRunTreatsChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.T) 
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL), err: errPRChecksWatchTimeout},
 		{cmd: prChecksJSONCommand(repoDir, prURL, true), err: errors.New("checks snapshot unavailable")},
-		{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1))},
+		{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1, false))},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "\n"}},
 	}}
 
@@ -4166,7 +4230,7 @@ func TestRunTreatsAnyChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.
 		{cmd: requiredStatusChecksCommand(repoDir, "acme/repo", "main"), res: execx.Result{Stdout: `{"contexts":["test"],"checks":[]}`}},
 		{cmd: prChecksAnyCommand(repoDir, prURL), err: errPRChecksWatchTimeout},
 		{cmd: prChecksJSONCommand(repoDir, prURL, false), err: errors.New("checks snapshot unavailable")},
-		{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1))},
+		{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1, false))},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "\n"}},
 	}}
 
@@ -4204,7 +4268,7 @@ func TestRunTreatsAnyChecksWatchTimeoutSnapshotQueryFailureAsFailure(t *testing.
 func TestRemediationPromptUsesCIFixLibraryTask(t *testing.T) {
 	t.Parallel()
 
-	prompt := remediationPrompt("Original task prompt", "https://github.com/acme/repo/pull/42", "unit tests failed", 1)
+	prompt := remediationPrompt("Original task prompt", "https://github.com/acme/repo/pull/42", "unit tests failed", 1, false)
 
 	for _, want := range []string{
 		"You are a senior software engineer fixing pull-request CI failures.",
@@ -4451,7 +4515,7 @@ func TestRunFailedChecksWithNoRemediationChangesFails(t *testing.T) {
 		{cmd: pushCommand(repoDir, branch)},
 		{cmd: prCreateCommand(repoDir, cfg, branch), res: execx.Result{Stdout: prURL + "\n"}},
 		{cmd: prChecksCommand(repoDir, prURL), res: execx.Result{Stdout: checkSummary + "\n"}, err: errors.New("checks failed")},
-		{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1))},
+		{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, checkSummary, 1, false))},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "\n"}},
 	}}
 
@@ -4590,7 +4654,7 @@ func TestRunNoChecksReportedAfterRetryWindowTriggersRemediation(t *testing.T) {
 		expectedRun{cmd: requiredStatusChecksCommand(repoDir, "acme/repo", "main"), res: execx.Result{Stdout: `{"contexts":["ci/test"],"checks":[]}`}},
 		expectedRun{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "abcdef123456\n"}},
 		expectedRun{cmd: workflowDispatchRunsCommand(repoDir, branch), res: execx.Result{Stdout: "[]\n"}},
-		expectedRun{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, noChecks, 1))},
+		expectedRun{cmd: codexCommand(targetDir, remediationPrompt(withAgentsPrompt(cfg.Prompt, agentsPath), prURL, noChecks, 1, false))},
 		expectedRun{cmd: statusCommand(repoDir), res: execx.Result{Stdout: " M file.go\n"}},
 		expectedRun{cmd: addCommand(repoDir)},
 		expectedRun{cmd: commitCommand(repoDir, remediationCommitMessage(cfg.CommitMessage, 1))},
@@ -5153,7 +5217,7 @@ func TestRunMultiRepoRemediationUsesWorkspaceCodexOptions(t *testing.T) {
 	codexPrompt = withAgentsPrompt(codexPrompt, agentsPath)
 	prURL := "https://github.com/acme/repo-a/pull/99"
 	checkSummary := "X integration-tests failing"
-	repairPrompt := remediationPromptForRepo(codexPrompt, repoRelA, cfg.Repos[0], prURL, checkSummary, 1, true)
+	repairPrompt := remediationPromptForRepo(codexPrompt, repoRelA, cfg.Repos[0], prURL, checkSummary, 1, true, false)
 
 	fake := &fakeRunner{t: t, allowUnorderedClones: true, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -9298,7 +9362,7 @@ func TestBackpressurePromptCoversReviewAndRemediationPrompts(t *testing.T) {
 	}
 
 	basePrompt := withBackpressurePrompt("Build API", nil)
-	repairPrompt := remediationPrompt(basePrompt, "https://github.com/acme/repo/pull/42", "unit tests failed", 1)
+	repairPrompt := remediationPrompt(basePrompt, "https://github.com/acme/repo/pull/42", "unit tests failed", 1, false)
 	if !strings.Contains(repairPrompt, backpressureHeading) {
 		t.Fatalf("remediation prompt missing backpressure context:\n%s", repairPrompt)
 	}

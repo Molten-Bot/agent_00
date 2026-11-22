@@ -857,26 +857,44 @@ func TestH1CovCreatePullRequestURL(t *testing.T) {
 	t.Run("transient failure falls back to lookup success", func(t *testing.T) {
 		t.Parallel()
 		cfg := sampleConfig()
-		repo := repoWorkspace{Dir: "/repo", URL: cfg.RepoURL, Branch: "agent00-topic", BaseBranch: "main"}
+		repo := repoWorkspace{Dir: "/repo", URL: cfg.RepoURL, Branch: "agent00-topic", BaseBranch: "main",
+			PRHeadOwner: "fork", PRTargetRepo: "acme/repo"}
 		fake := &fakeRunner{t: t, exps: []expectedRun{
 			{
-				cmd: prCreateWithOptionsCommand(repo.Dir, cfg, repo.BaseBranch, "agent00-topic", ""),
+				cmd: prCreateWithOptionsCommand(repo.Dir, cfg, repo.BaseBranch, "fork:agent00-topic", "acme/repo"),
 				res: execx.Result{Stderr: "HTTP 500"},
 				err: errors.New("exit status 1"),
 			},
-			{cmd: remoteBranchExistsOnRemoteCommand(repo.Dir, publishRemoteOrigin, repo.Branch), res: execx.Result{Stdout: "sha\trefs/heads/agent00-topic\n"}},
 			{
-				cmd: prLookupByHeadWithRepoCommand(repo.Dir, "agent00-topic", ""),
-				res: execx.Result{Stdout: `[{"url":"https://github.com/acme/repo/pull/4"}]`},
+				cmd: ghCommand(repo.Dir, "api", "repos/acme/repo/pulls?base=main&head=fork%3Aagent00-topic&page=1&per_page=100&state=open"),
+				res: execx.Result{Stdout: `[{"html_url":"https://github.com/acme/repo/pull/4","state":"open","head":{"ref":"agent00-topic","repo":{"full_name":"fork/repo"}},"base":{"ref":"main"}}]`},
 			},
 		}}
 		h := New(fake)
-		prURL, err := h.createPullRequestURL(context.Background(), repo, cfg, true, "agent00-topic", "")
+		prURL, err := h.createPullRequestURL(context.Background(), repo, cfg, true, "fork:agent00-topic", "acme/repo")
 		if err != nil || prURL != "https://github.com/acme/repo/pull/4" {
 			t.Fatalf("createPullRequestURL() = (%q, %v), want pull/4 via lookup fallback", prURL, err)
 		}
 		if len(fake.exps) != 0 {
 			t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+		}
+	})
+
+	t.Run("transient failure with implicit base retries creation", func(t *testing.T) {
+		t.Parallel()
+		cfg := sampleConfig()
+		repo := repoWorkspace{Dir: "/repo", URL: cfg.RepoURL, Branch: "agent00-topic"}
+		cmd := prCreateWithoutBaseWithOptionsCommand(repo.Dir, cfg, repo.Branch, "")
+		const prURL = "https://github.com/acme/repo/pull/5"
+		fake := &fakeRunner{t: t, exps: []expectedRun{
+			{cmd: cmd, err: errors.New("HTTP 500")},
+			{cmd: cmd, res: execx.Result{Stdout: prURL}},
+		}}
+		h := New(fake)
+		h.Sleep = func(context.Context, time.Duration) error { return nil }
+		got, err := h.createPullRequestURL(t.Context(), repo, cfg, false, repo.Branch, "")
+		if err != nil || got != prURL || len(fake.exps) != 0 {
+			t.Fatalf("createPullRequestURL() = (%q, %v), want (%q, nil), unconsumed expectations: %d", got, err, prURL, len(fake.exps))
 		}
 	})
 
