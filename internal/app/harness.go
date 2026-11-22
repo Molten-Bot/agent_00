@@ -6720,8 +6720,11 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 	return detail + " " + codexDisplayErrorDetail(errorDetail), detail + "\n" + errorDetail
 }
 
-var testFailureEvidence = regexp.MustCompile(
-	`(?m)^\s*--- fail:|\bassertion(?:error| error| failed| failure)\b|\bexpected\b[^\n]*?(?:,\s*|\s+)(?:got|received)\b`,
+var validationFailureEvidence = regexp.MustCompile(
+	`(?m)^\s*--- fail:|\bassertion(?:error| error| failed| failure)\b|\bexpected\b[^\n]*?(?:,\s*|\s+)(?:got|received)\b` +
+		`|\bfail[ \t]+\S+[ \t]+\[build failed\]` +
+		`|\.go:\d+(?::\d+)?:[ \t]+(?:undefined:|syntax error:|cannot (?:use|convert|assign)\b|invalid\b|` +
+		`[^\n]+\b(?:redeclared in this block|declared and not used|imported and not used)\b)`,
 )
 
 func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
@@ -6833,9 +6836,9 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	if !missingTooling && !restrictedDependencyDownload {
 		return false
 	}
-	// A missing tool elsewhere in the report does not explain a test that ran
-	// and failed.
-	if testFailureEvidence.MatchString(text) {
+	// A missing tool elsewhere in the report does not explain a failed test
+	// or compiler diagnostic.
+	if validationFailureEvidence.MatchString(text) {
 		return false
 	}
 	smokeCommand := strings.Contains(text, "smoke command")
@@ -7163,7 +7166,7 @@ func codexErrorDetailLines(lines []string, stopAtSection bool, detailsHeadingLev
 
 func markdownHeadingLevel(line string) int {
 	title := strings.TrimLeft(line, "#")
-	if level := len(line) - len(title); level >= 1 && level <= 6 && strings.HasPrefix(title, " ") {
+	if level := len(line) - len(title); level >= 1 && level <= 6 && (title == "" || title[0] == ' ' || title[0] == '\t') {
 		return level
 	}
 	return 0
@@ -7171,8 +7174,9 @@ func markdownHeadingLevel(line string) int {
 
 func isAgentReportSection(line, field string, detailsHeadingLevel int) bool {
 	// Subheadings of a Markdown Error details section can label diagnostics.
-	if level := markdownHeadingLevel(line); level > 0 && detailsHeadingLevel > 0 {
-		return level <= detailsHeadingLevel
+	// A plain field ends at the first heading.
+	if level := markdownHeadingLevel(line); level > 0 {
+		return detailsHeadingLevel == 0 || level <= detailsHeadingLevel
 	}
 	label, _, _ := strings.Cut(field, ":")
 	switch strings.TrimRight(label, "*_# ") {

@@ -147,9 +147,10 @@ func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *t
 
 	statusLines := "\nMCP flags default to off.\nWorker flags default to off."
 	for _, tc := range []struct {
-		name         string
-		continuation string
-		wantReason   string
+		name           string
+		detailsHeading bool
+		continuation   string
+		wantReason     string
 	}{
 		{
 			name:       "external prerequisites only",
@@ -160,8 +161,9 @@ func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *t
 			continuation: "\n\nDeployment tests fail.",
 		},
 		{
-			name:         "deployment test failure under a Markdown heading",
-			continuation: "\n\n### Deployment tests\nThe readiness assertion failed.",
+			name:           "deployment test failure under a Markdown subheading",
+			detailsHeading: true,
+			continuation:   "\n\n### Deployment tests\nThe readiness assertion failed.",
 		},
 		{
 			name:         "deployment test failure after three status lines",
@@ -190,8 +192,12 @@ func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *t
 		t.Run(tc.name, func(t *testing.T) {
 			targetDir := t.TempDir()
 			const prompt = "Complete the rollout"
+			detailsField := "**Error details:**"
+			if tc.detailsHeading {
+				detailsField = "## " + detailsField
+			}
 			output := "Failure: Production rollout remains pending.\n" +
-				"**Error details:** IAM access and Secrets Manager provisioning are still outstanding.\n" +
+				detailsField + " IAM access and Secrets Manager provisioning are still outstanding.\n" +
 				"API flags default to off." + tc.continuation
 			h := New(&fakeRunner{t: t, exps: []expectedRun{{
 				cmd: codexCommand(targetDir, prompt),
@@ -272,6 +278,8 @@ func TestRunCodexClassifiesCompleteValidationReport(t *testing.T) {
 		{"missing tool after three lines", longDetails, false, false},
 		{"task blocker after display limit", longDetails + taskBlocker, true, true},
 		{"Go assertion and missing linter", "Failure: go test ./internal/web failed.\nError details: expected status 200, got 500.\nOptional lint: eslint: command not found.", true, false},
+		{"Go compiler diagnostic and missing linter", "Failure: go test ./internal/web failed.\nError details: handler.go:12:6: undefined: renderPage\nOptional lint: golangci-lint: command not found.", true, false},
+		{"Go build failure and missing linter", "Failure: go test ./internal/web failed.\nError details:\nFAIL\texample.com/project/internal/web [build failed]\nOptional lint: golangci-lint: command not found.", true, false},
 		{"fenced Go test failure and missing linter", "Failure: go test ./internal/web failed.\nError details:\n```text\n--- FAIL: TestStatus (0.00s)\n```\nOptional lint: golangci-lint: command not found.", true, false},
 		{"JavaScript assertion and missing linter", "Failure: npm test failed.\nError details: AssertionError: expected true to be false.\nOptional lint: eslint: command not found.", true, false},
 		{"smoke command in details with failed fallback", smokeReport + "Smoke fallback failed.", true, false},
@@ -306,7 +314,7 @@ func TestRunCodexClassifiesCompleteValidationReport(t *testing.T) {
 func TestRunCodexKeepsCodeFailureRemediableAfterValidationSection(t *testing.T) {
 	t.Parallel()
 
-	for _, heading := range []string{"Validation:", "**Validation:**", "### Validation", "### Unblock path"} {
+	for _, heading := range []string{"Validation:", "**Validation:**", "### Validation", "### Unblock path", "## Next steps", "###\tNotes"} {
 		t.Run(heading, func(t *testing.T) {
 			t.Parallel()
 
@@ -335,11 +343,11 @@ func TestCodexExtractErrorDetailRetainsFencedDiagnosticHeadings(t *testing.T) {
 	t.Parallel()
 
 	output := "Failure: Build failed.\nError details:\n" +
-		"```text\nValidation: quota exceeded\n```\n" +
-		"### Validation\nUnrelated fixture output."
-	detail := codexExtractErrorDetail(output)
-	if !strings.Contains(detail, "Validation: quota exceeded") || strings.Contains(detail, "Unrelated fixture") {
-		t.Fatalf("codexExtractErrorDetail() = %q, want only the fenced diagnostic", detail)
+		"```text\n### Diagnostic output\nValidation: quota exceeded\n```\n" +
+		"### Notes\nUnrelated fixture output."
+	const want = "Error details:\n### Diagnostic output\nValidation: quota exceeded"
+	if detail := codexExtractErrorDetail(output); detail != want {
+		t.Fatalf("codexExtractErrorDetail() = %q, want %q", detail, want)
 	}
 }
 
