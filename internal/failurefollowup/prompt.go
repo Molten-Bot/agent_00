@@ -117,6 +117,15 @@ var rolloutProgressBlocker = regexp.MustCompile(`\b(?:but|except|however|fail(?:
 var httpFailureStatus = regexp.MustCompile(`\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b`)
 var expectedUnauthorizedResult = regexp.MustCompile(`\b(?:(?:returned|received|got) |passed (?:with |\())expected http(?:/\d(?:\.\d)?)? 401\b|\bhttp(?:/\d(?:\.\d)?)? 401 (?:as expected\b|\(expected\))`)
 var validationTimeout = regexp.MustCompile(`\b(?:timeout|` + timeoutOutcome + `)\b`)
+var rolloutFailureOutcome = regexp.MustCompile(
+	`\b(?:(?:produced|returned) no response|exit(?:ed)?(?: with)? (?:status|code) [1-9][0-9]*|crash(?:ed|es|ing)? (?:on|during|at) startup)\b`,
+)
+
+// HasRolloutFailureOutcome reports explicit failed outcomes that can appear
+// alongside implementation or validation success.
+func HasRolloutFailureOutcome(text string) bool {
+	return rolloutFailureOutcome.MatchString(strings.ToLower(text))
+}
 
 // HasValidationTimeout reports timeout evidence in a validation diagnostic.
 func HasValidationTimeout(text string) bool {
@@ -544,7 +553,7 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	details = strings.ToLower(strings.TrimSpace(details))
 	lines := strings.Split(strings.ReplaceAll(details, " | ", "\n"), "\n")
 	statements := rolloutStatements(lines[0])
-	if len(statements) == 0 || HasValidationFailureEvidence(details) {
+	if len(statements) == 0 || HasValidationFailureEvidence(details) || HasRolloutFailureOutcome(details) {
 		return false
 	}
 	statement := strings.TrimSpace(statements[0])

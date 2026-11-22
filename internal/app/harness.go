@@ -7380,7 +7380,7 @@ func hasReportedValidationEvidence(body string) bool {
 	body = strings.ToLower(body)
 	if reportedValidationFailure.MatchString(body) || smokeCheckFailure.MatchString(body) || validationCommandExit.MatchString(body) ||
 		failurefollowup.HasValidationTimeout(body) || failurefollowup.HasValidationFailureEvidence(body) ||
-		failurefollowup.HasHTTPFailureStatus(body) {
+		failurefollowup.HasRolloutFailureOutcome(body) || failurefollowup.HasHTTPFailureStatus(body) {
 		return true
 	}
 	for _, line := range strings.Split(body, "\n") {

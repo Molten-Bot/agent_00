@@ -350,6 +350,7 @@ func TestRunCodexClassifiesExternalRolloutBeforeDisplayTruncation(t *testing.T) 
 		{"external prerequisites", ".\n\nResolved issue: A test failed before the fixture was fixed.", failurefollowup.ExternalRolloutPrerequisitesReason},
 		{"late code failure", ".\n\nDeployment tests fail.", ""},
 		{"readiness timeout under validation", ".\n\n### Validation\n- Readiness check timed out.", ""},
+		{"startup produced no response under validation", ".\n\n### Validation\n- Startup produced no response.", ""},
 		{"mixed validation result", ", but the readiness check failed.", ""},
 		{"successful unit tests and failed smoke check", "; smoke check returned HTTP 500.", ""},
 		{"code defect in the same paragraph", ". The service crashes on startup.", ""},
@@ -374,6 +375,20 @@ func TestRunCodexClassifiesExternalRolloutBeforeDisplayTruncation(t *testing.T) 
 				t.Fatalf("reason = %q, want %q: %v", got, tc.want, err)
 			}
 		})
+	}
+}
+
+func TestCodexExtractErrorDetailPreservesStartupWithoutResponse(t *testing.T) {
+	t.Parallel()
+
+	const output = "Failure: Production rollout remains pending.\n" +
+		"Error details: Scoped IAM and shared reference key still require infrastructure work.\n" +
+		"Validation passed for unit tests.\n\n" +
+		"## Validation\n- Startup produced no response."
+	const want = "Error details: Scoped IAM and shared reference key still require infrastructure work.\n" +
+		"Validation passed for unit tests.\n## Validation\n- Startup produced no response."
+	if got := codexExtractErrorDetail(output); got != want {
+		t.Fatalf("codexExtractErrorDetail() = %q, want %q", got, want)
 	}
 }
 
