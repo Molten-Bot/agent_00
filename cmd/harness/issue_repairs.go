@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -267,8 +269,16 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 		case "external_rollout_prerequisites":
 			return failurefollowup.ExternalRolloutPrerequisitesReason, nil
 		}
-		if reason := failurefollowup.NonRemediableFailureReason(errors.New(issue.FailureDetail())); isIssueRepairDependencyBlock(reason) {
+		sourceFailure := issue.FailureDetail()
+		if reason := failurefollowup.NonRemediableFailureReason(errors.New(sourceFailure)); isIssueRepairDependencyBlock(reason) {
 			return reason, nil
+		}
+		readStdout := func(stage string) string {
+			return issueRepairAgentStdout(q.logRoot, issue.RequestID, stage)
+		}
+		if app.IsExternalRolloutFailureFromStdout(sourceFailure, readStdout) ||
+			(failure != failurefollowup.RedactFailureDetail(sourceFailure) && app.IsExternalRolloutFailureFromStdout(failure, readStdout)) {
+			return failurefollowup.ExternalRolloutPrerequisitesReason, nil
 		}
 	}
 	if err != nil && foundSource {
@@ -276,6 +286,56 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 		return "", nil
 	}
 	return "", err
+}
+
+func issueRepairAgentStdout(logRoot, requestID, stage string) string {
+	dir, ok := failurefollowup.TaskLogDir(logRoot, requestID)
+	if !ok {
+		return ""
+	}
+	prefix := "task request_id=" + requestID + " cmd phase=" + stage + " name="
+	for _, name := range []string{logFileName, legacyTaskLogFileName} {
+		if stdout := readIssueRepairAgentStdout(filepath.Join(dir, name), prefix); stdout != "" {
+			return stdout
+		}
+	}
+	return ""
+}
+
+func readIssueRepairAgentStdout(path, prefix string) string {
+	log, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer log.Close()
+	scanner := bufio.NewScanner(log)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	var stdout strings.Builder
+	for scanner.Scan() {
+		command, ok := strings.CutPrefix(scanner.Text(), prefix)
+		if !ok {
+			continue
+		}
+		_, stream, _ := strings.Cut(command, " stream=")
+		// Rendered stdout may have been shortened or filtered.
+		if strings.HasPrefix(stream, "stdout text=") {
+			return ""
+		}
+		encoded, ok := strings.CutPrefix(stream, "stdout b64=")
+		if !ok {
+			continue
+		}
+		line, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return ""
+		}
+		stdout.Write(line)
+		stdout.WriteByte('\n')
+	}
+	if scanner.Err() != nil {
+		return ""
+	}
+	return stdout.String()
 }
 
 func issueRepairSourceLogDir(prompt string) string {

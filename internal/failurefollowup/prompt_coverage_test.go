@@ -167,6 +167,8 @@ func TestNonRemediableFailureReasonRequiresExternalRolloutEvidence(t *testing.T)
 		{"outstanding prerequisites in reverse order", "claude: claude reported failure: Failure: Production deployment is still pending. Error details: Shared Secrets Manager key and scoped IAM are pending.", true},
 		{"reported infrastructure work with missing container runtime", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Scoped IAM and shared reference key still require infrastructure work. Service flags default off. Docker-backed integration tests could not run because no container runtime was available.", true},
 		{"container tests ran and failed", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " Docker-backed integration tests failed after startup.", false},
+		{"unit validation with failed smoke check", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nValidation passed for unit tests; smoke check returned HTTP 500.", false},
+		{"unit validation with failed smoke check after comma", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nValidation passed for unit tests, and smoke check returned HTTP/1.1 503.", false},
 		{"legacy truncated diagnostics", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " | [error details truncated]", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

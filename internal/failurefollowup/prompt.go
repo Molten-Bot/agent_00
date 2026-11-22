@@ -107,8 +107,15 @@ var unavailableContainerValidation = regexp.MustCompile(`^docker-backed (?:[a-z0
 var rolloutProgress = regexp.MustCompile(`^(?:added|implemented|updated|wired) \S`)
 var rolloutProgressFollowOn = regexp.MustCompile(`^(?:added|implemented|updated|wired|tests cover) \S`)
 var rolloutSentenceBoundary = regexp.MustCompile(`[.!?][ \t]+`)
-var rolloutValidationPassed = regexp.MustCompile(`^validation passed for \S`)
+var rolloutValidationPassed = regexp.MustCompile(`^validation passed for [^;\s][^;]*$`)
 var rolloutProgressBlocker = regexp.MustCompile(`\b(?:but|except|however|fail(?:ed|s|ure|ing)?|panics?|regressions?|blocked|broken|cannot|could not|unable|incomplete|pending|unavailable|missing|not)\b`)
+var httpFailureStatus = regexp.MustCompile(`\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b`)
+
+// HasHTTPFailureStatus reports whether text contains an HTTP error status or
+// the status curl reports when it does not receive an HTTP response.
+func HasHTTPFailureStatus(text string) bool {
+	return httpFailureStatus.MatchString(strings.ToLower(text))
+}
 
 var validationFailureEvidence = regexp.MustCompile(
 	`(?m)^\s*--- fail:|\bassertion(?:error| error| failed| failure)\b|\bexpected\b[^\n]*?(?:,\s*|\s+)(?:got|received)\b` +
@@ -562,7 +569,7 @@ func IsExternalRolloutFailure(summary, details string) bool {
 		case isRolloutProgressLine(line):
 			progressPending = true
 		case rolloutValidationPassed.MatchString(line) && !rolloutProgressBlocker.MatchString(line) &&
-			!rolloutSentenceBoundary.MatchString(line):
+			!rolloutSentenceBoundary.MatchString(line) && !HasHTTPFailureStatus(line):
 			progressPending = false
 		case !rolloutStatusOnly(rolloutStatements(line)):
 			return false

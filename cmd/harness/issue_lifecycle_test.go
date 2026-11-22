@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -450,6 +451,82 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 				}
 			} else if calls != 1 || got.State != "queued" || !got.NextAttemptAt.After(time.Now()) {
 				t.Fatalf("actionable failure: calls=%d state=%q next attempt=%v", calls, got.State, got.NextAttemptAt)
+			}
+		})
+	}
+}
+
+func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
+	t.Parallel()
+	const summary = "Failure: Production rollout remains pending."
+	const prerequisites = "IAM approval and Secrets Manager provisioning remain outstanding."
+	const progress = "Added the endpoint in /tmp/worktree."
+	const stored = "codex: codex reported failure: " + summary + " Error details: " + prerequisites +
+		" | " + progress + " | Updated fixtures. | Validation passed for unit tests. | [error details truncated]"
+	for _, tc := range []struct {
+		name, state, file, stream, lastLine string
+		blocked                             bool
+	}{
+		{"linked repair with full report", "queued", logFileName, "stdout", "API flags default off.", true},
+		{"dispatch intent with legacy log", "running", legacyTaskLogFileName, "stdout", "API flags default off.", true},
+		{"deployment defect beyond truncation", "queued", logFileName, "stdout", "Smoke check returned HTTP 500.", false},
+		{"stderr echo", "queued", logFileName, "stderr", "API flags default off.", false},
+		{"unrelated report", "queued", logFileName, "stdout", "API flags default off.", false},
+		{"missing log", "queued", "", "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			claims, issue := lifecycleRecord(t)
+			q := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, claims: claims, logRoot: t.TempDir(), logf: t.Logf}
+			issue.RunError = stored
+			issue.ExitCode = app.ExitCodex
+			record := saveLegacyIssueRepair(t, q, issue)
+			record.State = tc.state
+			if err := q.store.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			if tc.state == "queued" {
+				issue.RepairRequestID = record.RequestID
+				if err := claims.Save(issue); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.file != "" {
+				dir, _ := taskLogDir(q.logRoot, issue.RequestID)
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				added := progress
+				if tc.name == "unrelated report" {
+					added = "Added the worker."
+				}
+				var log strings.Builder
+				for _, line := range []string{summary, "Error details: " + prerequisites, added, "Updated fixtures.",
+					"Validation passed for unit tests.", tc.lastLine} {
+					fmt.Fprintf(&log, "task request_id=%s cmd phase=codex name=codex stream=%s b64=%s\n",
+						issue.RequestID, tc.stream, base64.StdEncoding.EncodeToString([]byte(line)))
+				}
+				if err := os.WriteFile(filepath.Join(dir, tc.file), []byte(log.String()), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			calls := 0
+			for range 2 {
+				q.reconcile(t.Context(), func(context.Context, config.Config, bool, string, bool) (string, error) {
+					calls++
+					return "", errors.New("agent auth required")
+				})
+			}
+			repairs, err := q.store.List()
+			if err != nil || len(repairs) != 1 {
+				t.Fatalf("expected one retained repair, got %d, error=%v", len(repairs), err)
+			}
+			got := repairs[0]
+			if tc.blocked {
+				if calls != 0 || got.State != "blocked" || got.Error != failurefollowup.ExternalRolloutPrerequisitesReason || got.Started {
+					t.Fatalf("external prerequisite: calls=%d state=%q error=%q started=%t", calls, got.State, got.Error, got.Started)
+				}
+			} else if calls != 1 || got.State != "queued" {
+				t.Fatalf("actionable failure: calls=%d state=%q", calls, got.State)
 			}
 		})
 	}

@@ -7092,12 +7092,10 @@ func hasUnexplainedValidationExit(text string) bool {
 
 var smokeFallbackPass = regexp.MustCompile(`(?:^|[.;!]\s+)(?:the )?(?:smoke fallback|fallback(?: smoke(?: check| test)?)?) (?:passed|succeeded)(?: using [^\s,.;!]+)?(?:[.!]?$|[.;!]\s+)`)
 var smokeCheckFailure = regexp.MustCompile(`\b(?:smoke (?:fallback|check|test)|fallback smoke(?: check| test)?|(?:health |readiness )?endpoint) (?:failed|did not pass|timed out)\b`)
-var smokeHTTPFailure = regexp.MustCompile(`\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b`)
-
 var expectedSmokeHTTPStatus = regexp.MustCompile(`\bexpected http(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b|\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000) (?:as expected\b|\(expected\))`)
 
 func smokeFallbackSucceeded(text string) bool {
-	if smokeHTTPFailure.MatchString(expectedSmokeHTTPStatus.ReplaceAllString(text, "")) || smokeCheckFailure.MatchString(text) {
+	if failurefollowup.HasHTTPFailureStatus(expectedSmokeHTTPStatus.ReplaceAllString(text, "")) || smokeCheckFailure.MatchString(text) {
 		return false
 	}
 	confirmed := false
@@ -7361,9 +7359,8 @@ func codexErrorDetailLines(lines []string, stopAtSection bool, detailsHeadingLev
 			if detailsHeadingLevel == 0 && strings.TrimRight(label, "*_# ") == "validation" {
 				subsection := codexErrorDetailLines(lines[i+1:], true, level)
 				body := strings.TrimSpace(inline) + "\n" + strings.Join(subsection, "\n")
-				lowerBody := strings.ToLower(body)
-				if reportedValidationFailure.MatchString(lowerBody) ||
-					failurefollowup.HasValidationFailureEvidence(body) || smokeHTTPFailure.MatchString(lowerBody) {
+				if reportedValidationFailure.MatchString(strings.ToLower(body)) ||
+					failurefollowup.HasValidationFailureEvidence(body) || failurefollowup.HasHTTPFailureStatus(body) {
 					details = append(details, trimmed)
 					details = append(details, subsection...)
 				}
@@ -7409,6 +7406,37 @@ func isAgentReportSection(line, field string, detailsHeadingLevel int) bool {
 // displayed error rather than the complete report.
 const truncatedErrorDetails = " | [error details truncated]"
 const maxErrorDetailChars = 320
+
+// IsExternalRolloutFailureFromStdout rechecks a legacy truncated agent error
+// against its original stdout. Read stdout only for a truncated agent report.
+func IsExternalRolloutFailureFromStdout(failure string, readStdout func(stage string) string) bool {
+	failure, _, _ = strings.Cut(failure, "\npersist task logs: ")
+	if !strings.HasSuffix(failure, truncatedErrorDetails) {
+		return false
+	}
+	stage, report, _ := strings.Cut(failure, ": ")
+	if stage != agentruntime.HarnessCodex && stage != agentruntime.HarnessClaude {
+		return false
+	}
+	if !strings.HasPrefix(report, stage+" reported failure: ") {
+		return false
+	}
+	stdout := readStdout(stage)
+	failed, summary := codexReportedFailureInOutput(stdout, true)
+	if !failed {
+		return false
+	}
+	detail := codexExtractErrorDetail(stdout)
+	details, ok := strings.CutPrefix(detail, "Error details:")
+	if !ok {
+		return false
+	}
+	// Reproduce the legacy display before applying the classification to the
+	// full report. The redacted repair prompt may be the only stored error.
+	legacy := stage + ": " + stage + " reported failure: " + summary + " " + codexDisplayErrorDetail(detail)
+	return (legacy == failure || failurefollowup.RedactFailureDetail(legacy) == failure) &&
+		failurefollowup.IsExternalRolloutFailure(summary, details)
+}
 
 func codexDisplayErrorDetail(detail string) string {
 	const maxDetailsLines = 3

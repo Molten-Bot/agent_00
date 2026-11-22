@@ -321,6 +321,7 @@ func TestRunCodexClassifiesExternalRolloutBeforeDisplayTruncation(t *testing.T) 
 		{"external prerequisites", ".\n\nResolved issue: A test failed before the fixture was fixed.", failurefollowup.ExternalRolloutPrerequisitesReason},
 		{"late code failure", ".\n\nDeployment tests fail.", ""},
 		{"mixed validation result", ", but the readiness check failed.", ""},
+		{"successful unit tests and failed smoke check", "; smoke check returned HTTP 500.", ""},
 		{"code defect in the same paragraph", ". The service crashes on startup.", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
