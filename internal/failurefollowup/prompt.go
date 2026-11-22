@@ -579,7 +579,7 @@ func IsExternalRolloutFailure(summary, details string) bool {
 }
 
 func isRolloutProgressLine(line string) bool {
-	if !rolloutProgress.MatchString(line) || rolloutProgressBlocker.MatchString(line) {
+	if !rolloutProgress.MatchString(line) || rolloutProgressBlocker.MatchString(line) || HasHTTPFailureStatus(line) {
 		return false
 	}
 	for _, sentence := range rolloutSentenceBoundary.Split(line, -1)[1:] {

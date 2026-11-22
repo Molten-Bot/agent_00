@@ -484,11 +484,17 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 			if err := q.store.Save(record); err != nil {
 				t.Fatal(err)
 			}
+			issue.Outcome = "error"
+			issue.Incident = "missing_pr"
+			issue.StoppedAt = time.Now().Add(-time.Minute)
+			issue.NextAttemptAt = time.Now().Add(time.Minute)
 			if tc.state == "queued" {
 				issue.RepairRequestID = record.RequestID
-				if err := claims.Save(issue); err != nil {
-					t.Fatal(err)
-				}
+			} else {
+				issue.RunError = ""
+			}
+			if err := claims.Save(issue); err != nil {
+				t.Fatal(err)
 			}
 			if tc.file != "" {
 				dir, _ := taskLogDir(q.logRoot, issue.RequestID)
@@ -510,23 +516,46 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 				}
 			}
 			calls := 0
+			enqueue := func(context.Context, config.Config, bool, string, bool) (string, error) {
+				calls++
+				return "", errors.New("agent auth required")
+			}
+			if tc.blocked {
+				lock, err := claims.TryLock(localruntime.IssueExecutionKey(issue.Run.GitHubIssue))
+				if err != nil || lock == nil {
+					t.Fatalf("lock source claim: %v", err)
+				}
+				q.reconcile(t.Context(), enqueue)
+				lock.Close()
+				repairs, err := q.store.List()
+				if err != nil || len(repairs) != 1 || repairs[0].State != tc.state || calls != 0 {
+					t.Fatalf("changed outbox or dispatched while source claim was locked: calls=%d err=%v", calls, err)
+				}
+			}
 			for range 2 {
-				q.reconcile(t.Context(), func(context.Context, config.Config, bool, string, bool) (string, error) {
-					calls++
-					return "", errors.New("agent auth required")
-				})
+				q.reconcile(t.Context(), enqueue)
 			}
 			repairs, err := q.store.List()
 			if err != nil || len(repairs) != 1 {
 				t.Fatalf("expected one retained repair, got %d, error=%v", len(repairs), err)
 			}
 			got := repairs[0]
+			source, err := claims.Load(issue.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if tc.blocked {
 				if calls != 0 || got.State != "blocked" || got.Error != failurefollowup.ExternalRolloutPrerequisitesReason || got.Started {
 					t.Fatalf("external prerequisite: calls=%d state=%q error=%q started=%t", calls, got.State, got.Error, got.Started)
 				}
+				if source.Incident != localruntime.IssueIncidentExternalRollout || !source.NextAttemptAt.IsZero() ||
+					source.RunError != issue.RunError || source.RepairRequestID != issue.RepairRequestID {
+					t.Fatalf("source claim lost retry blocker or evidence: incident=%q next attempt=%v", source.Incident, source.NextAttemptAt)
+				}
 			} else if calls != 1 || got.State != "queued" {
 				t.Fatalf("actionable failure: calls=%d state=%q", calls, got.State)
+			} else if source.Incident != issue.Incident || !source.NextAttemptAt.Equal(issue.NextAttemptAt) {
+				t.Fatalf("actionable source claim changed: incident=%q next attempt=%v", source.Incident, source.NextAttemptAt)
 			}
 		})
 	}

@@ -209,6 +209,17 @@ func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *t
 			continuation: "\n\n### Validation\nDeployment tests failed.",
 		},
 		{
+			name:           "HTTP failure under a peer validation heading",
+			detailsHeading: true,
+			continuation:   statusLines + "\n\n## **Validation**\nUnit tests passed.\nSmoke check returned HTTP 500.",
+		},
+		{
+			name:           "passing peer validation is omitted",
+			detailsHeading: true,
+			continuation:   "\n\n## Validation\nUnit tests passed.\n\n## Resolved issue:\nSmoke check returned HTTP 500 before the fix.",
+			wantReason:     failurefollowup.ExternalRolloutPrerequisitesReason,
+		},
+		{
 			name:         "deployment test failure under a heading quotes quota",
 			continuation: "\n\n### Deployment tests\nAssertionError: expected `quota exceeded`, got HTTP 500.",
 		},

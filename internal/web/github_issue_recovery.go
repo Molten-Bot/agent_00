@@ -17,15 +17,13 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
-const externalRolloutPrerequisitesIncident = "external_rollout_prerequisites"
-
 func issueDependencyRetryError(incident string) string {
 	switch incident {
 	case localruntime.IssueIncidentUnmergedDependency:
 		return failurefollowup.UnmergedDependencyReason + "; explicit retry required after merge"
 	case localruntime.IssueIncidentOpenDependency:
 		return failurefollowup.OpenDependencyReason + "; explicit retry required after resolution"
-	case externalRolloutPrerequisitesIncident:
+	case localruntime.IssueIncidentExternalRollout:
 		return failurefollowup.ExternalRolloutPrerequisitesReason + "; explicit retry required after provisioning"
 	default:
 		return ""
@@ -233,7 +231,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		case failurefollowup.OpenDependencyReason:
 			record.Incident = localruntime.IssueIncidentOpenDependency
 		case failurefollowup.ExternalRolloutPrerequisitesReason:
-			record.Incident = externalRolloutPrerequisitesIncident
+			record.Incident = localruntime.IssueIncidentExternalRollout
 		}
 		if issueDependencyRetryError(record.Incident) != "" {
 			record.RunError = record.FailureDetail()

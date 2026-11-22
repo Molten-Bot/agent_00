@@ -169,6 +169,7 @@ func TestNonRemediableFailureReasonRequiresExternalRolloutEvidence(t *testing.T)
 		{"container tests ran and failed", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " Docker-backed integration tests failed after startup.", false},
 		{"unit validation with failed smoke check", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nValidation passed for unit tests; smoke check returned HTTP 500.", false},
 		{"unit validation with failed smoke check after comma", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nValidation passed for unit tests, and smoke check returned HTTP/1.1 503.", false},
+		{"implementation progress with a startup defect", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nAdded the readiness endpoint, which returns HTTP 500 on startup.\nValidation passed for unit tests.", false},
 		{"legacy truncated diagnostics", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " | [error details truncated]", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

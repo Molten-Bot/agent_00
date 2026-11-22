@@ -266,7 +266,7 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 			return failurefollowup.UnmergedDependencyReason, nil
 		case localruntime.IssueIncidentOpenDependency:
 			return failurefollowup.OpenDependencyReason, nil
-		case "external_rollout_prerequisites":
+		case localruntime.IssueIncidentExternalRollout:
 			return failurefollowup.ExternalRolloutPrerequisitesReason, nil
 		}
 		sourceFailure := issue.FailureDetail()
@@ -278,6 +278,10 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 		}
 		if app.IsExternalRolloutFailureFromStdout(sourceFailure, readStdout) ||
 			(failure != failurefollowup.RedactFailureDetail(sourceFailure) && app.IsExternalRolloutFailureFromStdout(failure, readStdout)) {
+			// Record the retry blocker before the outbox stops checking this report.
+			if err := q.persistRecoveredRolloutBlock(issue); err != nil {
+				return "", err
+			}
 			return failurefollowup.ExternalRolloutPrerequisitesReason, nil
 		}
 	}
@@ -286,6 +290,28 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 		return "", nil
 	}
 	return "", err
+}
+
+func (q *issueRepairQueue) persistRecoveredRolloutBlock(issue localruntime.IssueClaimRecord) error {
+	lock, err := q.claims.TryLock(localruntime.IssueExecutionKey(issue.Run.GitHubIssue))
+	if err != nil {
+		return err
+	}
+	if lock == nil {
+		return errors.New("source issue claim is locked")
+	}
+	defer lock.Close()
+	return q.claims.Update(issue.ID, func(current *localruntime.IssueClaimRecord) error {
+		if current.RequestID != issue.RequestID || current.FailureDetail() != issue.FailureDetail() || current.Incident != issue.Incident {
+			return errors.New("source issue claim changed during rollout recovery")
+		}
+		if current.Outcome == "error" && current.State != "fulfilled" {
+			current.Incident = localruntime.IssueIncidentExternalRollout
+			current.RunError = current.FailureDetail()
+			current.NextAttemptAt = time.Time{}
+		}
+		return nil
+	})
 }
 
 func issueRepairAgentStdout(logRoot, requestID, stage string) string {

@@ -7352,11 +7352,10 @@ func codexErrorDetailLines(lines []string, stopAtSection bool, detailsHeadingLev
 		}
 		lower := strings.ToLower(agentFailureFieldLine(trimmed))
 		if stopAtSection && fence == "" && isAgentReportSection(trimmed, lower, detailsHeadingLevel) {
-			// A plain field has no heading level. Use diagnostic evidence to
-			// distinguish a nested Validation heading from a sibling section.
+			// A separate Validation section can carry failure evidence.
 			level := markdownHeadingLevel(trimmed)
 			label, inline, _ := strings.Cut(lower, ":")
-			if detailsHeadingLevel == 0 && strings.TrimRight(label, "*_# ") == "validation" {
+			if strings.TrimRight(label, "*_# ") == "validation" {
 				subsection := codexErrorDetailLines(lines[i+1:], true, level)
 				body := strings.TrimSpace(inline) + "\n" + strings.Join(subsection, "\n")
 				if reportedValidationFailure.MatchString(strings.ToLower(body)) ||
