@@ -784,7 +784,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if err != nil {
 			return "", 502, err
 		}
-		if pr != "" {
+		if pr.URL != "" {
 			return "", 409, fmt.Errorf("issue already has an open or merged PR")
 		}
 	}

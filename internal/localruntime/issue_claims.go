@@ -39,6 +39,7 @@ type IssueClaimRecord struct {
 	AgentAttempts    int           `json:"agentAttempts,omitempty"`
 	WorkspaceDir     string        `json:"workspaceDir,omitempty"`
 	PRURL            string        `json:"prUrl,omitempty"`
+	PRTitle          string        `json:"prTitle,omitempty"`
 	VerifiedAt       time.Time     `json:"verifiedAt,omitempty"`
 	LabelAdded       bool          `json:"labelAdded,omitempty"`
 	UnlockPending    bool          `json:"unlockPending,omitempty"`

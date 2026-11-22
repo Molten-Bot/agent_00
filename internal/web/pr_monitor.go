@@ -17,6 +17,7 @@ import (
 )
 
 const defaultPRMergePollInterval = 10 * time.Second
+const prMonitorTitleLookupTimeout = 2 * time.Second
 const automatedReviewCycleMarker = "<!-- agent00-review-cycle"
 
 // PRMergeMonitor watches task pull requests and marks merged tasks as done.
@@ -234,6 +235,23 @@ func (m *PRMergeMonitor) checkTaskPR(ctx context.Context, task Task) {
 	if err != nil {
 		m.Logf("localruntime.ui status=warn event=pr_monitor request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
 		return
+	}
+	if !isReviewTask(task.Source, task.Workflow) {
+		if task.PRTitleURL == "" || task.PRTitleURL == task.PRURL {
+			m.Broker.recordTaskPRTitle(task.RequestID, task.PRURL, state.Title, taskPRTitleMonitored)
+		} else {
+			titleCtx, cancel := context.WithTimeout(ctx, prMonitorTitleLookupTimeout)
+			result, err := m.Runner.Run(titleCtx, execx.Command{
+				Name: "gh",
+				Args: []string{"pr", "view", task.PRTitleURL, "--json", "title", "--jq", ".title"},
+			})
+			cancel()
+			if err != nil {
+				m.Logf("localruntime.ui status=warn event=pr_monitor_title request_id=%s pr_url=%s err=%q", task.RequestID, task.PRTitleURL, err)
+			} else {
+				m.Broker.recordTaskPRTitle(task.RequestID, task.PRTitleURL, result.Stdout, taskPRTitleMonitored)
+			}
+		}
 	}
 	if !state.Merged() {
 		m.maybeQueueReviewFeedback(ctx, task, state)
@@ -455,18 +473,7 @@ func (s prViewState) Open() bool {
 }
 
 func shouldMonitorTaskReviewFeedback(task Task) bool {
-	if !shouldMonitorTaskPR(task) {
-		return false
-	}
-	if normalizeTaskSource(task.Source) == "review" {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(task.Workflow)) {
-	case "code-review", "code_review", "pull request code review":
-		return false
-	default:
-		return true
-	}
+	return shouldMonitorTaskPR(task) && !isReviewTask(task.Source, task.Workflow)
 }
 
 func actionablePRReviewFeedback(task Task, state prViewState) PRReviewFeedback {
