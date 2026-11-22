@@ -84,7 +84,7 @@ for (const mobile of [false, true]) {
       await page.evaluate(() => render({
         ...state.snapshot,
         tasks: state.snapshot.tasks.map(task => task.request_id === 'req-assets'
-          ? { ...task, prompt: 'Updated task prompt from live snapshot' }
+          ? { ...task, issue_title: 'Updated issue title from live snapshot' }
           : task),
       }));
       assert.equal(await originalButton.evaluate(button => button.isConnected), false);

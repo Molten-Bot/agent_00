@@ -12,11 +12,15 @@ import (
 // fetched during admission. Runtime options and the ownership claim are retained.
 func setGitHubIssuePrompt(run *config.Config, issue GitHubIssue) {
 	metadata := *run.GitHubIssue
+	metadata.Title = strings.TrimSpace(issue.Title)
 	metadata.URL = strings.TrimSpace(issue.URL)
 	if metadata.URL == "" {
 		metadata.URL = fmt.Sprintf("https://github.com/%s/issues/%d", metadata.Repository, metadata.Number)
 	}
 	run.GitHubIssue = &metadata
+	if metadata.Title != "" {
+		run.PRTitle = metadata.Title
+	}
 	sources := []githubassets.Source{{Name: "Issue description", Body: issue.Body}}
 	for i, comment := range issue.Comments {
 		sources = append(sources, githubassets.Source{Name: fmt.Sprintf("Comment %d", i+1), Body: comment.Body})
@@ -25,7 +29,7 @@ func setGitHubIssuePrompt(run *config.Config, issue GitHubIssue) {
 	run.Assets = githubassets.Discover(sources)
 
 	var prompt strings.Builder
-	fmt.Fprintf(&prompt, "Complete GitHub issue %s#%d: %s\n\n", metadata.Repository, metadata.Number, issue.Title)
+	fmt.Fprintf(&prompt, "Complete GitHub issue %s#%d: %s\n\n", metadata.Repository, metadata.Number, metadata.Title)
 	fmt.Fprintf(&prompt, "Issue URL: %s\nState: %s\n", metadata.URL, issue.State)
 	if issue.Author.Login != "" {
 		fmt.Fprintf(&prompt, "Author: @%s\n", issue.Author.Login)
