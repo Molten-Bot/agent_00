@@ -5,6 +5,7 @@ const { chromium } = require('playwright');
 const { expect } = require('playwright/test');
 const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
 let browser;
+const issueURL = 'https://github.com/example/project/issues/17';
 const screenshotURL = 'https://github.com/user-attachments/assets/screenshot-id';
 const pdfURL = 'https://github.com/user-attachments/files/42/spec.pdf';
 const unavailableURL = 'https://github.com/user-attachments/assets/unavailable';
@@ -41,6 +42,7 @@ for (const mobile of [false, true]) {
           ? route.fulfill({ contentType: 'image/png', body: pixelPNG })
           : route.fulfill({ status: 403 });
       }
+      if (url.href === issueURL) return route.fulfill({ body: 'Original GitHub issue' });
       if (url.origin !== new URL(baseURL).origin) {
         if (url.pathname.includes('/user-attachments/')) errors.push('Browser requested a GitHub attachment');
         return route.abort();
@@ -63,6 +65,19 @@ for (const mobile of [false, true]) {
 
     await page.goto(`${baseURL}/#current-work`);
     const task = page.locator('#task-list .task[data-request-id="req-assets"]');
+    const issueAction = task.locator('.task-footer').getByRole('link', { name: 'Open issue on GitHub.' });
+    const issueStep = task.locator('.task-progress-step').first();
+    for (const link of [issueAction, issueStep]) {
+      await expect(link).toHaveAttribute('href', issueURL);
+      await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+      await expect(link.locator('svg.lucide-square-kanban')).toBeVisible();
+      const [issue] = await Promise.all([page.context().waitForEvent('page'), link.click()]);
+      await expect(issue).toHaveURL(issueURL);
+      await issue.close();
+    }
+    const ordinaryTask = page.locator('#task-list .task[data-request-id="req-no-assets"]');
+    await expect(ordinaryTask.locator('.task-progress-step').first().locator('svg.lucide-pencil')).toBeVisible();
+    await expect(ordinaryTask.getByRole('link', { name: 'Open issue on GitHub.' })).toHaveCount(0);
     const assets = task.locator('.task-assets-toggle');
     await expect(assets).toHaveAccessibleName('View 2 task assets');
     await expect(assets.locator('svg.lucide-images')).toBeVisible();

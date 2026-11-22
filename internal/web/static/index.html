@@ -1127,6 +1127,7 @@
     const TASK_PROGRESS_STEP_DEFS = Object.freeze({
       entry_chat: { id: "entry_chat", label: "Chat", detail: "Queued from Chat.", icon: "entry_chat" },
       entry_prompt: { id: "entry_prompt", label: "Prompt", detail: "Queued from Prompt Studio.", icon: "entry_prompt" },
+      entry_github_issue: { id: "entry_github_issue", label: "GitHub issue", detail: "Queued from a GitHub issue.", icon: "entry_github_issue" },
       entry_library: { id: "entry_library", label: "Library", detail: "Queued from Library Studio.", icon: "entry_library" },
       entry_json: { id: "entry_json", label: "JSON", detail: "Queued from JSON Studio.", icon: "entry_json" },
       entry_review: { id: "entry_review", label: "Review", detail: "Queued from a pull request review request.", icon: "entry_review" },
@@ -1170,6 +1171,7 @@
       image: "image",
       images: "images",
       prompt: "file-text",
+      issue: "square-kanban",
       loader: "loader-circle",
       default: "loader-circle",
     });
@@ -1184,6 +1186,7 @@
     const TASK_PROGRESS_ICON_NAMES = Object.freeze({
       entry_chat: "message-circle",
       entry_prompt: "pencil",
+      entry_github_issue: "square-kanban",
       entry_library: "book-open",
       entry_json: "braces",
       entry_review: "git-pull-request",
@@ -1498,6 +1501,22 @@
       if (typeof window.open === "function") {
         window.open(url, "_blank", "noopener,noreferrer");
       }
+    }
+
+    function renderTaskIssueAction(task) {
+      const issueURL = taskIssueURL(task);
+      if (!issueURL) return null;
+
+      const link = document.createElement("a");
+      link.className = "task-github-link";
+      link.href = issueURL;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.title = "Open issue on GitHub.";
+      link.setAttribute("aria-label", link.title);
+      link.appendChild(createTaskActionIcon("issue"));
+      link.addEventListener("click", (event) => openExternalTaskLink(event, issueURL));
+      return link;
     }
 
     function renderTaskPullRequestAction(task) {
@@ -9605,6 +9624,32 @@
       return repoURL;
     }
 
+    function taskIssueURL(task) {
+      const issueURL = String(task?.github_issue_url || "").trim();
+      if (issueURL) return issueURL;
+
+      // Older history entries only have the generated issue prompt.
+      const source = String(task?.source || "").trim() || recordedTaskStartSource(task);
+      if (source && source !== "github_issues") return "";
+
+      const prompt = taskPromptRawText(task);
+      const header = prompt.match(/^Complete GitHub issue ([\w.-]+\/[\w.-]+)#([1-9]\d*):/i);
+      if (!header) {
+        const legacy = source === "github_issues" && prompt.match(/^#([1-9]\d*):[^\r\n]*(?:\r?\n|$)/);
+        const repos = normalizedTaskRepos(task);
+        return legacy && repos.length === 1 && /^[\w.-]+\/[\w.-]+$/.test(repos[0])
+          ? `https://github.com/${repos[0]}/issues/${legacy[1]}` : "";
+      }
+      const expectedURL = `https://github.com/${header[1]}/issues/${header[2]}`;
+      const recordedURL = prompt.match(/(?:^|\r?\n)Issue URL:[ \t]*([^\r\n]*)/i);
+      if (recordedURL) {
+        return recordedURL[1].trim().replace(/\/$/, "").toLowerCase() === expectedURL.toLowerCase() ? expectedURL : "";
+      }
+      // Older saved task prompts can retain only the generated title.
+      return normalizedTaskRepos(task).some(repo => repo.toLowerCase() === header[1].toLowerCase())
+        ? expectedURL : "";
+    }
+
     function taskPullRequestURL(task) {
       return String(task?.pr_url || "").trim();
     }
@@ -10933,7 +10978,7 @@
       }
     }
 
-    function taskStartSource(task) {
+    function recordedTaskStartSource(task) {
       const candidates = [
         task?.source,
         task?.start_source,
@@ -10950,6 +10995,13 @@
           return source;
         }
       }
+      return "";
+    }
+
+    function taskStartSource(task) {
+      const source = recordedTaskStartSource(task);
+      if (source) return source;
+
       const requestID = taskRequestID(task).toLowerCase();
       if (requestID.startsWith("local-")) {
         return "prompt";
@@ -11183,6 +11235,7 @@
           String(existing.issue_title || "") === String(copy.issue_title || "") &&
           String(existing.pr_title || "") === String(copy.pr_title || "") &&
           String(existing.pr_title_url || "") === String(copy.pr_title_url || "") &&
+          taskIssueURL(existing) === taskIssueURL(copy) &&
           String(existing.pr_title_updated_at || "") === String(copy.pr_title_updated_at || "") &&
           existingLogsLength === nextLogsLength
         ) {
@@ -11497,6 +11550,9 @@
     }
 
     function taskProgressEntryStepID(task) {
+      if (taskIssueURL(task) || task?.source === "github_issues") {
+        return "entry_github_issue";
+      }
       switch (taskStartSource(task)) {
         case "chat":
           return "entry_chat";
@@ -11930,6 +11986,7 @@
         taskAutoMergeStepEnabled(task) ? "auto_merge" : "",
         taskReviewStepEnabled() ? "review_cycle" : "",
         taskStartSource(task),
+        taskProgressEntryStepID(task),
         isReadOnlyReviewTask(task) ? "code_review" : "implementation",
         taskPullRequestURL(task),
         String(logs.length),
@@ -12001,21 +12058,23 @@
       steps.className = "task-progress-steps";
       for (let i = 0; i < stepsModel.length; i += 1) {
         const step = stepsModel[i];
+        const isIssueStep = step.id === "entry_github_issue";
         const isGitHubStep = String(step?.icon || "").trim().toLowerCase() === "github";
-        const githubHref = isGitHubStep ? taskGitHubLinkURL(task) : "";
+        const githubHref = isIssueStep ? taskIssueURL(task) : isGitHubStep ? taskGitHubLinkURL(task) : "";
         const marker = document.createElement(githubHref ? "a" : "span");
         marker.className = "task-progress-step";
         if (githubHref) {
           marker.href = githubHref;
           marker.target = "_blank";
           marker.rel = "noopener noreferrer";
+          if (isIssueStep) marker.setAttribute("aria-label", "Open issue on GitHub.");
           marker.addEventListener("click", (event) => {
-            openExternalTaskLink(event, githubHref, () => {
+            openExternalTaskLink(event, githubHref, isGitHubStep ? () => {
               trackAnalyticsEvent("task_github_step_opened", {
                 request_id: taskRequestID(task),
                 progress_step: step.label,
               });
-            });
+            } : null);
           });
         }
 
@@ -12349,7 +12408,7 @@
             warning: String(task?.warning || ""),
             stage: String(task?.stage || ""),
             autoMergeStep: taskAutoMergeStepEnabled(task),
-            source: taskStartSource(task),
+            entryStep: taskProgressEntryStepID(task),
             currentState: taskCurrentStateSignature(task),
             name: taskNameText(task),
             repos: formatTaskRepos(task),
@@ -12364,6 +12423,7 @@
             prURL: String(task?.pr_url || "").trim(),
             liveAppURL: taskLiveAppURL(task),
             githubURL: taskGitHubLinkURL(task),
+            issueURL: taskIssueURL(task),
             canRerun: canRerunTask(task),
             canCopyClone: canCopyTaskCloneCommand(task),
             historyOnly: Boolean(task?.history_only),
@@ -12631,6 +12691,8 @@
           }
           const assetAction = renderAssetToggle(task);
           if (assetAction) promptActions.appendChild(assetAction);
+          const issueAction = renderTaskIssueAction(task);
+          if (issueAction) promptActions.appendChild(issueAction);
           const githubAction = renderTaskPullRequestAction(task);
           if (githubAction) {
             promptActions.appendChild(githubAction);
@@ -12786,6 +12848,8 @@
           topActions.appendChild(rerun);
         }
 
+        const issueAction = renderTaskIssueAction(task);
+        if (issueAction) topActions.appendChild(issueAction);
         const githubAction = renderTaskPullRequestAction(task);
         if (githubAction) {
           topActions.appendChild(githubAction);
