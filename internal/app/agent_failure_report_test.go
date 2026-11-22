@@ -160,6 +160,10 @@ func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *t
 			continuation: "\n\nDeployment tests fail.",
 		},
 		{
+			name:         "deployment test failure under a Markdown heading",
+			continuation: "\n\n### Deployment tests\nThe readiness assertion failed.",
+		},
+		{
 			name:         "deployment test failure after three status lines",
 			continuation: statusLines + "\nDeployment tests fail.",
 		},
@@ -267,6 +271,9 @@ func TestRunCodexClassifiesCompleteValidationReport(t *testing.T) {
 	}{
 		{"missing tool after three lines", longDetails, false, false},
 		{"task blocker after display limit", longDetails + taskBlocker, true, true},
+		{"Go assertion and missing linter", "Failure: go test ./internal/web failed.\nError details: expected status 200, got 500.\nOptional lint: eslint: command not found.", true, false},
+		{"fenced Go test failure and missing linter", "Failure: go test ./internal/web failed.\nError details:\n```text\n--- FAIL: TestStatus (0.00s)\n```\nOptional lint: golangci-lint: command not found.", true, false},
+		{"JavaScript assertion and missing linter", "Failure: npm test failed.\nError details: AssertionError: expected true to be false.\nOptional lint: eslint: command not found.", true, false},
 		{"smoke command in details with failed fallback", smokeReport + "Smoke fallback failed.", true, false},
 		{"conflicting smoke fallback results", smokeReport + "Smoke fallback succeeded.\nSmoke fallback failed.", true, false},
 		{"smoke only named in fallback", "Failure: Local validation command failed.\nError details: curl: command not found. Smoke fallback failed.", true, false},
@@ -333,6 +340,18 @@ func TestCodexExtractErrorDetailRetainsFencedDiagnosticHeadings(t *testing.T) {
 	detail := codexExtractErrorDetail(output)
 	if !strings.Contains(detail, "Validation: quota exceeded") || strings.Contains(detail, "Unrelated fixture") {
 		t.Fatalf("codexExtractErrorDetail() = %q, want only the fenced diagnostic", detail)
+	}
+}
+
+func TestCodexExtractErrorDetailRetainsMarkdownSubsections(t *testing.T) {
+	t.Parallel()
+
+	output := "Failure: Deployment validation failed.\n" +
+		"## Error details:\n### Validation\nDeployment tests failed.\n" +
+		"## Next steps\nUnrelated notes."
+	detail := codexExtractErrorDetail(output)
+	if !strings.Contains(detail, "Deployment tests failed.") || strings.Contains(detail, "Unrelated notes.") {
+		t.Fatalf("codexExtractErrorDetail() = %q, want only the nested diagnostic", detail)
 	}
 }
 

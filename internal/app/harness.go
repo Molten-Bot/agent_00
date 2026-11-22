@@ -6720,6 +6720,10 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 	return detail + " " + codexDisplayErrorDetail(errorDetail), detail + "\n" + errorDetail
 }
 
+var testFailureEvidence = regexp.MustCompile(
+	`(?m)^\s*--- fail:|\bassertion(?:error| error| failed| failure)\b|\bexpected\b[^\n]*?(?:,\s*|\s+)(?:got|received)\b`,
+)
+
 func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	text := strings.ToLower(strings.TrimSpace(detail))
 	if text == "" {
@@ -6827,6 +6831,11 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"module download",
 	})
 	if !missingTooling && !restrictedDependencyDownload {
+		return false
+	}
+	// A missing tool elsewhere in the report does not explain a test that ran
+	// and failed.
+	if testFailureEvidence.MatchString(text) {
 		return false
 	}
 	smokeCommand := strings.Contains(text, "smoke command")
@@ -7100,7 +7109,7 @@ func codexExtractErrorDetail(output string) string {
 		lower := strings.ToLower(field)
 		if strings.HasPrefix(lower, "error details:") {
 			suffix := strings.TrimSpace(field[len("error details:"):])
-			details := codexErrorDetailLines(nonEmpty[i+1:], true)
+			details := codexErrorDetailLines(nonEmpty[i+1:], true, markdownHeadingLevel(line))
 			if suffix == "" && len(details) == 0 {
 				return "Error details: unknown error."
 			}
@@ -7112,14 +7121,14 @@ func codexExtractErrorDetail(output string) string {
 		}
 	}
 
-	fallback := codexErrorDetailLines(nonEmpty, false)
+	fallback := codexErrorDetailLines(nonEmpty, false, 0)
 	if len(fallback) == 0 {
 		return ""
 	}
 	return "Error details:\n" + strings.Join(fallback, "\n")
 }
 
-func codexErrorDetailLines(lines []string, stopAtSection bool) []string {
+func codexErrorDetailLines(lines []string, stopAtSection bool, detailsHeadingLevel int) []string {
 	var details []string
 	var fence string
 	for _, line := range lines {
@@ -7141,7 +7150,7 @@ func codexErrorDetailLines(lines []string, stopAtSection bool) []string {
 			continue
 		}
 		lower := strings.ToLower(agentFailureFieldLine(trimmed))
-		if stopAtSection && fence == "" && isAgentReportSection(trimmed, lower) {
+		if stopAtSection && fence == "" && isAgentReportSection(trimmed, lower, detailsHeadingLevel) {
 			break
 		}
 		if strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
@@ -7152,13 +7161,22 @@ func codexErrorDetailLines(lines []string, stopAtSection bool) []string {
 	return details
 }
 
-func isAgentReportSection(line, field string) bool {
-	if heading := strings.TrimLeft(line, "#"); heading != line && strings.HasPrefix(heading, " ") {
-		return true
+func markdownHeadingLevel(line string) int {
+	title := strings.TrimLeft(line, "#")
+	if level := len(line) - len(title); level >= 1 && level <= 6 && strings.HasPrefix(title, " ") {
+		return level
+	}
+	return 0
+}
+
+func isAgentReportSection(line, field string, detailsHeadingLevel int) bool {
+	// Subheadings of a Markdown Error details section can label diagnostics.
+	if level := markdownHeadingLevel(line); level > 0 && detailsHeadingLevel > 0 {
+		return level <= detailsHeadingLevel
 	}
 	label, _, _ := strings.Cut(field, ":")
-	switch strings.TrimRight(label, "*_") {
-	case "failure", "error details", "resolved issue", "validation", "alternative validation", "verification":
+	switch strings.TrimRight(label, "*_# ") {
+	case "failure", "error details", "resolved issue", "validation", "alternative validation", "verification", "unblock path":
 		return true
 	default:
 		return false
