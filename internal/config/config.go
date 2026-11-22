@@ -73,9 +73,29 @@ func (c Config) AssignCreatorEnabled() bool {
 type GitHubIssueConfig struct {
 	Repository string            `json:"repository"`
 	Number     int               `json:"number"`
+	Title      string            `json:"title,omitempty"`
 	URL        string            `json:"url"`
 	LinkMode   string            `json:"linkMode,omitempty"`
 	Claim      *GitHubIssueClaim `json:"claim,omitempty"`
+}
+
+// GitHubIssueTitle returns the issue title captured when the run was admitted.
+func (c Config) GitHubIssueTitle() string {
+	issue := c.GitHubIssue
+	if issue == nil {
+		return ""
+	}
+	if title := strings.TrimSpace(issue.Title); title != "" {
+		return title
+	}
+	// Older admitted runs captured the title only in the generated prompt.
+	firstLine, _, _ := strings.Cut(strings.TrimSpace(c.Prompt), "\n")
+	prefix := fmt.Sprintf("Complete GitHub issue %s#%d: ", issue.Repository, issue.Number)
+	title, ok := strings.CutPrefix(firstLine, prefix)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(title)
 }
 
 // GitHubIssueClaim pins an issue task to its reserved remote branch. The claim
@@ -358,7 +378,9 @@ func (c *Config) ApplyDefaults() {
 	if strings.TrimSpace(c.CommitMessage) == "" {
 		c.CommitMessage = defaultCommitMessage(c.Prompt)
 	}
-	if strings.TrimSpace(c.PRTitle) == "" {
+	if issueTitle := c.GitHubIssueTitle(); issueTitle != "" {
+		c.PRTitle = issueTitle
+	} else if strings.TrimSpace(c.PRTitle) == "" {
 		c.PRTitle = defaultPRTitle(c.Prompt)
 	} else {
 		c.PRTitle = normalizePRTitle(c.PRTitle)

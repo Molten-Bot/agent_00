@@ -101,6 +101,7 @@ const (
 	maxReviewDiffPatchChars          = 30000
 	measuredQualityTargetInstruction = "When a task or review requires a test, coverage, lint, or quality target, first make underlying code or test changes and run the measurement. Add or raise the required gate only after the target passes. Keep an existing required gate; do not remove it merely to make validation pass. If the target cannot be met safely in this pass, report Failure and Error details instead of making gate-only changes."
 	prTitleRemediationInstruction    = "If the failing check can only be fixed by changing the pull-request title, do not mutate the PR or report Failure. Put this exact plain-text directive as the final line of your response: PR title remediation: <replacement title>. The harness will apply it."
+	preserveIssueTitleInstruction    = "Preserve the GitHub issue title on the pull request. Fix failing checks without changing the pull-request title."
 	prTitleRemediationPrefix         = "PR title remediation:"
 	maxPRTitleRunes                  = 256
 	bootstrapGitUserName             = "agent_00"
@@ -195,8 +196,11 @@ type Harness struct {
 	OnStep func(string)
 	// OnCheckout reports that all repositories have been checked out successfully.
 	OnCheckout func()
-	// OnPRTitle reports the title after PR creation, creation recovery, or a title update.
-	OnPRTitle            func(url, title string)
+	// OnPRTitle reports reused or updated PR titles and handles creation when OnPRCreated is unset.
+	OnPRTitle func(url, title string)
+	// OnPRCreated reports the URL and title of a newly created pull request.
+	OnPRCreated func(url, title string)
+
 	ResumeIssueWorkspace bool
 	// IssuePublicationReady records that a prior attempt accepted the agent result.
 	IssuePublicationReady bool
@@ -653,7 +657,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 				runDir,
 			)
 		}
-		if err := h.populateNoChangePRURLs(ctx, repos, cfg.Prompt, requiresVerifiedNoChangePRURL(cfg.Prompt)); err != nil {
+		if err := h.populateNoChangePRURLs(ctx, repos, cfg, requiresVerifiedNoChangePRURL(cfg.Prompt)); err != nil {
 			return h.failWithRepos(ExitPR, "pr", err, runDir, repos)
 		}
 		h.logf("stage=git status=no_changes")
@@ -691,7 +695,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		}
 	}
 	if changedCount == 0 {
-		if err := h.populateNoChangePRURLs(ctx, repos, cfg.Prompt, requiresVerifiedNoChangePRURL(cfg.Prompt)); err != nil {
+		if err := h.populateNoChangePRURLs(ctx, repos, cfg, requiresVerifiedNoChangePRURL(cfg.Prompt)); err != nil {
 			return h.failWithRepos(ExitPR, "pr", err, runDir, repos)
 		}
 		h.logf("stage=git status=no_changes")
@@ -898,7 +902,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 	headRef := repoPRHeadRef(*repo)
 	targetRepo := repoPRTargetRepo(*repo)
 	if !createWorkBranch && !repo.RequireExistingPR {
-		prURL, err := h.lookupOpenPRURLByHead(ctx, *repo)
+		pr, err := h.lookupOpenPRByHead(ctx, *repo)
 		if err != nil {
 			if shouldTreatReusedBranchPRLookupFailureAsNonFatal(err) {
 				h.logf(
@@ -912,7 +916,10 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 			}
 			return ExitPR, "pr", err
 		}
-		repo.PRURL = prURL
+		repo.PRURL = pr.URL
+		if h.OnPRTitle != nil && pr.URL != "" && pr.Title != "" {
+			h.OnPRTitle(pr.URL, pr.Title)
+		}
 	}
 
 	if repo.PRURL == "" {
@@ -958,6 +965,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		)
 	}
 
+	preserveIssueTitle := cfg.GitHubIssue != nil
 	for attempt := 0; ; attempt++ {
 		remainingTitlePropagationRetries := 0
 	checkPR:
@@ -1275,6 +1283,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 			checkSummary,
 			attempt+1,
 			multiRepo,
+			preserveIssueTitle,
 		)
 		remediationInvocation := newAgentInvocationLogMetadata(runtime, "remediation", attempt+1, repo.RelDir, repo.RelDir, codexTargetLabel)
 		h.logf(
@@ -1305,7 +1314,8 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 		}
 
 		requestedTitle, titleRequested := remediationPRTitle(agentRes)
-		if titleRequested {
+		updateTitle := titleRequested && !preserveIssueTitle
+		if updateTitle {
 			h.logf("stage=pr status=start action=update_title repo=%s repo_dir=%s pr_url=%s attempt=%d", repo.URL, repo.RelDir, repo.PRURL, attempt+1)
 			if editRes, err := h.runCommand(ctx, "pr", prEditTitleCommand(repo.Dir, repo.PRURL, requestedTitle)); err != nil {
 				return ExitPR, "pr", prTitleEditError(repo.URL, requestedTitle, editRes)
@@ -1321,7 +1331,7 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 			return ExitGit, "git", err
 		}
 		if strings.TrimSpace(statusRes.Stdout) == "" {
-			if titleRequested {
+			if updateTitle {
 				h.logf(
 					"stage=checks status=waiting reason=pr_title_updated repo=%s repo_dir=%s pr_url=%s attempt=%d",
 					repo.URL,
@@ -1394,11 +1404,20 @@ func (h Harness) processChangedRepoWithoutFinalReviews(
 }
 
 type prStateView struct {
-	URL         string `json:"url"`
-	State       string `json:"state"`
-	MergedAt    string `json:"mergedAt"`
-	HeadRefName string `json:"headRefName"`
-	HeadRefOID  string `json:"headRefOid"`
+	URL            string `json:"url"`
+	Title          string `json:"title"`
+	State          string `json:"state"`
+	MergedAt       string `json:"mergedAt"`
+	BaseRefName    string `json:"baseRefName"`
+	HeadRefName    string `json:"headRefName"`
+	HeadRefOID     string `json:"headRefOid"`
+	HeadRepository struct {
+		Name          string `json:"name"`
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"headRepository"`
+	HeadRepositoryOwner struct {
+		Login string `json:"login"`
+	} `json:"headRepositoryOwner"`
 }
 
 func (h Harness) recreatePullRequestIfClosed(ctx context.Context, repo *repoWorkspace, cfg config.Config) (bool, error) {
@@ -2563,13 +2582,30 @@ func repoPRTargetRepo(repo repoWorkspace) string {
 	return strings.TrimSpace(repo.PRTargetRepo)
 }
 
-func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspace, prompt string, requirePRURL bool) error {
-	promptPRURL := pullRequestURLFromPrompt(prompt)
+func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspace, cfg config.Config, requirePRURL bool) error {
+	promptPRURL := pullRequestURLFromPrompt(cfg.Prompt)
+	promptPRRepo := githubutil.PullRequestRepository(promptPRURL)
+	var claimedBase string
+	if cfg.GitHubIssue != nil && cfg.GitHubIssue.Claim != nil {
+		claimedBase = normalizeBranchRef(cfg.GitHubIssue.Claim.BaseBranch)
+	}
 	for i := range repos {
 		if repos[i].RequireExistingPR && repos[i].PRURL != "" {
 			continue
 		}
-		prURL, err := h.lookupOpenPRURLByHead(ctx, repos[i])
+		targetRepo := repoPRTargetRepo(repos[i])
+		if targetRepo == "" {
+			if ref, ok := parseGitHubRepoRef(repos[i].URL); ok {
+				targetRepo = ref.owner + "/" + ref.name
+			}
+		}
+		var pr ghPRLookupEntry
+		var err error
+		if cfg.GitHubIssue != nil {
+			pr, err = h.lookupPRByRefs(ctx, repos[i], targetRepo, claimedBase, "all")
+		} else {
+			pr, err = h.lookupOpenPRByHead(ctx, repos[i])
+		}
 		if err != nil {
 			h.logf(
 				"stage=pr status=warn action=lookup_existing reason=failed repo=%s repo_dir=%s branch=%s err=%q",
@@ -2583,8 +2619,8 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 			}
 			continue
 		}
-		if prURL == "" {
-			prURL, err = h.lookupAnyPRURLByHead(ctx, repos[i])
+		if pr.URL == "" && cfg.GitHubIssue == nil {
+			pr, err = h.lookupAnyPRByHead(ctx, repos[i])
 			if err != nil {
 				h.logf(
 					"stage=pr status=warn action=lookup_existing reason=fallback_failed repo=%s repo_dir=%s branch=%s err=%q",
@@ -2599,7 +2635,7 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 				continue
 			}
 		}
-		if prURL == "" && promptPRURL != "" {
+		if pr.URL == "" && promptPRRepo != "" && strings.EqualFold(promptPRRepo, targetRepo) {
 			state, err := h.loadPullRequestState(ctx, repos[i].Dir, promptPRURL)
 			if err != nil {
 				h.logf(
@@ -2631,16 +2667,27 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 					)
 				}
 			} else {
-				prURL = stringsx.FirstNonEmpty(state.URL, promptPRURL)
+				resolvedURL := stringsx.FirstNonEmpty(state.URL, promptPRURL)
+				headRepo := stringsx.FirstNonEmpty(state.HeadRepository.NameWithOwner,
+					state.HeadRepositoryOwner.Login+"/"+state.HeadRepository.Name)
+				if strings.EqualFold(githubutil.PullRequestRepository(resolvedURL), targetRepo) &&
+					(claimedBase == "" || state.BaseRefName == claimedBase) &&
+					strings.EqualFold(headRepo, prHeadRepository(repos[i])) &&
+					(cfg.GitHubIssue == nil || pullRequestStateIsOpen(state) || pullRequestStateIsMerged(state)) {
+					pr = ghPRLookupEntry{URL: resolvedURL, Title: state.Title}
+				}
 			}
 		}
-		if prURL == "" {
+		if pr.URL == "" {
 			if requirePRURL {
 				return fmt.Errorf("no pull request found for unchanged repo %s branch %q", repos[i].URL, repos[i].Branch)
 			}
 			continue
 		}
-		repos[i].PRURL = prURL
+		repos[i].PRURL = pr.URL
+		if h.OnPRTitle != nil && pr.Title != "" {
+			h.OnPRTitle(pr.URL, pr.Title)
+		}
 		h.logf(
 			"stage=pr status=ok action=lookup_existing repo=%s repo_dir=%s branch=%s pr_url=%s",
 			repos[i].URL,
@@ -2689,8 +2736,10 @@ func (h Harness) createPullRequestURL(
 			}
 
 			retryable := shouldRetryPRCreate(prRes, err)
-			if retryable {
-				pr, lookupErr := h.lookupOpenPRByHead(ctx, repo)
+			// Without an explicit base, gh selects it. Retry creation instead of
+			// attaching a PR whose base we cannot verify.
+			if retryable && createWorkBranch && repo.BaseBranch != "" {
+				pr, lookupErr := h.lookupPRByRefs(ctx, repo, targetRepo, repo.BaseBranch, "open")
 				if lookupErr == nil && pr.URL != "" {
 					h.logf(
 						"stage=pr status=warn action=reuse_existing reason=create_transient_failed repo=%s repo_dir=%s branch=%s pr_url=%s",
@@ -2747,7 +2796,9 @@ func (h Harness) createPullRequestURL(
 				return "", fmt.Errorf("gh pr create did not return a PR URL for repo %s", repo.URL)
 			}
 		}
-		if h.OnPRTitle != nil {
+		if h.OnPRCreated != nil {
+			h.OnPRCreated(prURL, cfg.PRTitle)
+		} else if h.OnPRTitle != nil {
 			h.OnPRTitle(prURL, cfg.PRTitle)
 		}
 		return prURL, nil
@@ -2803,10 +2854,100 @@ func (h Harness) lookupOpenPRByHead(ctx context.Context, repo repoWorkspace) (gh
 		return ghPRLookupEntry{}, nil
 	}
 
-	lookupRes, err := h.runCommand(ctx, "pr", prLookupByHeadWithRepoCommand(repo.Dir, headRef, repoPRTargetRepo(repo)))
+	cmd := prLookupByHeadWithRepoCommand(repo.Dir, headRef, repoPRTargetRepo(repo))
+	return h.runPRLookup(ctx, repo, headRef, "open", cmd)
+}
+
+func (h Harness) lookupAnyPRURLByHead(ctx context.Context, repo repoWorkspace) (string, error) {
+	pr, err := h.lookupAnyPRByHead(ctx, repo)
+	return pr.URL, err
+}
+
+func (h Harness) lookupAnyPRByHead(ctx context.Context, repo repoWorkspace) (ghPRLookupEntry, error) {
+	headRef := repoPRHeadRef(repo)
+	if headRef == "" {
+		return ghPRLookupEntry{}, nil
+	}
+
+	cmd := prLookupAnyByHeadWithRepoCommand(repo.Dir, headRef, repoPRTargetRepo(repo))
+	return h.runPRLookup(ctx, repo, headRef, "any", cmd)
+}
+
+func prHeadRepository(repo repoWorkspace) string {
+	ref, ok := parseGitHubRepoRef(repo.URL)
+	if !ok {
+		return ""
+	}
+	owner := stringsx.FirstNonEmpty(repo.PRHeadOwner, ref.owner)
+	return owner + "/" + ref.name
+}
+
+func (h Harness) lookupPRByRefs(ctx context.Context, repo repoWorkspace, target, base, state string) (ghPRLookupEntry, error) {
+	branch := branchNameFromHeadRef(repoPRHeadRef(repo))
+	headRepo := prHeadRepository(repo)
+	if target == "" {
+		if ref, ok := parseGitHubRepoRef(repo.URL); ok {
+			target = ref.owner + "/" + ref.name
+		}
+	}
+	if branch == "" || headRepo == "" || target == "" {
+		return ghPRLookupEntry{}, nil
+	}
+
+	owner, _, _ := strings.Cut(headRepo, "/")
+	var merged ghPRLookupEntry
+	for page := 1; ; page++ {
+		query := url.Values{"state": {state}, "head": {owner + ":" + branch}, "per_page": {"100"}, "page": {strconv.Itoa(page)}}
+		if base != "" {
+			query.Set("base", base)
+		}
+		cmd := ghCommand(repo.Dir, "api", "repos/"+target+"/pulls?"+query.Encode())
+		res, err := h.runCommand(ctx, "pr", cmd)
+		if err != nil {
+			return ghPRLookupEntry{}, commandErrorWithDetails("lookup pull request by refs", err, res, maxGitErrorDetailChars)
+		}
+		var prs []struct {
+			URL      string `json:"html_url"`
+			Title    string `json:"title"`
+			State    string `json:"state"`
+			MergedAt string `json:"merged_at"`
+			Head     struct {
+				Ref  string `json:"ref"`
+				Repo struct {
+					FullName string `json:"full_name"`
+				} `json:"repo"`
+			} `json:"head"`
+			Base struct {
+				Ref string `json:"ref"`
+			} `json:"base"`
+		}
+		if err := json.Unmarshal([]byte(res.Stdout), &prs); err != nil {
+			return ghPRLookupEntry{}, fmt.Errorf("decode pull requests by refs: %w", err)
+		}
+		for _, pr := range prs {
+			if pr.URL == "" || pr.Head.Ref != branch || !strings.EqualFold(pr.Head.Repo.FullName, headRepo) ||
+				(base != "" && pr.Base.Ref != base) {
+				continue
+			}
+			entry := ghPRLookupEntry{URL: pr.URL, Title: pr.Title, State: pr.State}
+			if pr.State == "open" {
+				return entry, nil
+			}
+			if state == "all" && pr.MergedAt != "" && merged.URL == "" {
+				merged = entry
+			}
+		}
+		if len(prs) < 100 {
+			return merged, nil
+		}
+	}
+}
+
+func (h Harness) runPRLookup(ctx context.Context, repo repoWorkspace, headRef, state string, cmd execx.Command) (ghPRLookupEntry, error) {
+	lookupRes, err := h.runCommand(ctx, "pr", cmd)
 	if err != nil {
 		return ghPRLookupEntry{}, commandErrorWithDetails(
-			fmt.Sprintf("lookup open pull request for repo %s branch %q", repo.URL, headRef),
+			fmt.Sprintf("lookup %s pull request for repo %s branch %q", state, repo.URL, headRef),
 			err,
 			lookupRes,
 			maxGitErrorDetailChars,
@@ -2816,27 +2957,6 @@ func (h Harness) lookupOpenPRByHead(ctx context.Context, repo repoWorkspace) (gh
 		return pr, nil
 	}
 	return parsePRLookupOutput(lookupRes.Stderr), nil
-}
-
-func (h Harness) lookupAnyPRURLByHead(ctx context.Context, repo repoWorkspace) (string, error) {
-	headRef := repoPRHeadRef(repo)
-	if headRef == "" {
-		return "", nil
-	}
-
-	lookupRes, err := h.runCommand(ctx, "pr", prLookupAnyByHeadWithRepoCommand(repo.Dir, headRef, repoPRTargetRepo(repo)))
-	if err != nil {
-		return "", commandErrorWithDetails(
-			fmt.Sprintf("lookup any pull request for repo %s branch %q", repo.URL, headRef),
-			err,
-			lookupRes,
-			maxGitErrorDetailChars,
-		)
-	}
-	if pr := parsePRLookupOutput(lookupRes.Stdout); pr.URL != "" {
-		return pr.URL, nil
-	}
-	return parsePRLookupOutput(lookupRes.Stderr).URL, nil
 }
 
 func (h Harness) runCloneWithRetry(
@@ -7587,6 +7707,7 @@ func extractFirstURL(text string) string {
 type ghPRLookupEntry struct {
 	URL   string `json:"url"`
 	Title string `json:"title"`
+	State string `json:"state"`
 }
 
 func parsePRLookupOutput(raw string) ghPRLookupEntry {
@@ -8661,7 +8782,7 @@ func prLookupByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Command 
 }
 
 func prLookupByHeadStateCommand(repoDir, state, headRef, repo string) execx.Command {
-	args := []string{"pr", "list", "--state", state, "--head", headRef, "--json", "url,title", "--limit", "1"}
+	args := []string{"pr", "list", "--state", state, "--head", headRef, "--json", "url,title,state", "--limit", "1"}
 	if strings.TrimSpace(repo) != "" {
 		args = append(args, "--repo", strings.TrimSpace(repo))
 	}
@@ -8674,7 +8795,7 @@ func prLookupAnyByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Comma
 
 func prStateViewCommand(repoDir, prURL string) execx.Command {
 	selector := githubutil.PullRequestSelector(prURL)
-	args := []string{"pr", "view", selector, "--json", "url,state,mergedAt,headRefName,headRefOid"}
+	args := []string{"pr", "view", selector, "--json", "url,title,state,mergedAt,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner"}
 	if repo := githubutil.PullRequestRepository(prURL); repo != "" {
 		args = append(args, "--repo", repo)
 	}
@@ -8784,12 +8905,12 @@ func withImplementationTargetGuard(prompt string) string {
 	)
 }
 
-func remediationPrompt(basePrompt, prURL, checkSummary string, attempt int) string {
+func remediationPrompt(basePrompt, prURL, checkSummary string, attempt int, preserveIssueTitle bool) string {
 	ciFixPrompt := ciFixLibraryPrompt()
 	return fmt.Sprintf(
 		"%s\n\n%s\n\nRemediation round %d/%d.\nAn open PR already exists: %s\n\nPR CI/CD checks are failing right now.\nLatest check output:\n%s\n\nOriginal task context:\n%s",
 		ciFixPrompt,
-		prTitleRemediationInstruction,
+		remediationTitleInstruction(preserveIssueTitle),
 		attempt,
 		maxPRCheckRemediationAttempts,
 		prURL,
@@ -8798,15 +8919,15 @@ func remediationPrompt(basePrompt, prURL, checkSummary string, attempt int) stri
 	)
 }
 
-func remediationPromptForRepo(basePrompt, repoPath, repoURL, prURL, checkSummary string, attempt int, multiRepo bool) string {
+func remediationPromptForRepo(basePrompt, repoPath, repoURL, prURL, checkSummary string, attempt int, multiRepo, preserveIssueTitle bool) string {
 	if !multiRepo {
-		return remediationPrompt(basePrompt, prURL, checkSummary, attempt)
+		return remediationPrompt(basePrompt, prURL, checkSummary, attempt, preserveIssueTitle)
 	}
 	ciFixPrompt := ciFixLibraryPrompt()
 	return fmt.Sprintf(
 		"%s\n\n%s\n\nRemediation round %d/%d.\nTarget repository workspace path: %s\nTarget repository remote: %s\nAn open PR already exists for this repository: %s\n\nPR CI/CD checks are failing right now for this repository.\nLatest check output:\n%s\n\nFocus remediation changes on this repository. If you also change other repositories, ensure each changed repository has its own branch and PR.\n\nOriginal task context:\n%s",
 		ciFixPrompt,
-		prTitleRemediationInstruction,
+		remediationTitleInstruction(preserveIssueTitle),
 		attempt,
 		maxPRCheckRemediationAttempts,
 		repoPath,
@@ -8815,6 +8936,13 @@ func remediationPromptForRepo(basePrompt, repoPath, repoURL, prURL, checkSummary
 		checkSummary,
 		strings.TrimSpace(basePrompt),
 	)
+}
+
+func remediationTitleInstruction(preserveIssueTitle bool) string {
+	if preserveIssueTitle {
+		return preserveIssueTitleInstruction
+	}
+	return prTitleRemediationInstruction
 }
 
 // remediationPRTitle accepts only a terminal, plain-text stdout directive.
