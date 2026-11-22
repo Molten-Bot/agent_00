@@ -85,20 +85,24 @@ const OpenDependencyReason = "required dependency is still open"
 // between word characters can be part of a contraction rather than a quote.
 var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\bblocked by (?:an? |the )?unmerged (?:pull request |pr )?\x60?#[1-9][0-9]*\b`)
 
-// A terse failure summary can leave the prerequisite itself to Error details.
-// The details must say the open ticket caused the blockage.
-const openDependencyReference = `(?:issue |pull request |pr )?(?:#[1-9][0-9]*|\x60#[1-9][0-9]*\x60|\[(?:issue |pull request |pr )?#[1-9][0-9]*\]\([^\s()]+\))`
+const issueID = `#[1-9][0-9]*`
+const backtickedIssueID = `\x60` + issueID + `\x60`
+const openDependencyReference = `(?:issue |pull request |pr |dependency )?(?:` + issueID + `|` + backtickedIssueID + `|\[(?:issue |pull request |pr )?` + issueID + `\]\([^\s()]+\))`
+const openDependencyCause = `(?:because ` + openDependencyReference + ` is still open|(?:by|on) (?:(?:still[- ])?open ` +
+	openDependencyReference + `|` + openDependencyReference + `, which is still open))`
 
 var (
-	blockedFailureSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:[ \t]*((?:[^"'\x60\r\n]|\b'\b)+) (?:remains|is) blocked[.!]?$`)
-	openDependencyDetail  = regexp.MustCompile(`^blocked (?:because ` +
-		openDependencyReference + ` is still open|(?:by|on) ` +
-		openDependencyReference + `, which is still open)(?:[.!](?:\s|$)|$)`)
+	blockedFailureSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:[ \t]*(?:((?:[^"'\x60\r\n]|\b'\b|` +
+		backtickedIssueID + `)+) (?:remains |is ))?blocked(?: (` + openDependencyCause + `))?[.!]?$`)
+	openDependencyDetail = regexp.MustCompile(`^blocked ` + openDependencyCause + `(?:[.!](?:\s|$)|$)`)
 	openDependencyTarget = regexp.MustCompile(`^` + openDependencyReference +
-		` is still open and (?:blocks|is blocking) ([^!?;\r\n]+?)(?:[.!](?:\s|$)|$)`)
+		` is still open and (?:blocks|is blocking) `)
 	rolloutOperation             = regexp.MustCompile(`\brollout(?: for .+)?$`)
 	openDependencyEvidenceDetail = regexp.MustCompile(`^` + openDependencyReference +
-		` is still open\.\s+its [^.!?;\r\n]+ lacks? [^.!?;\r\n]+ (?:needed|required) for evidence reads(?:[.!](?:\s|$)|$)`)
+		` is still open\.\s+its [^.!?;\r\n]+ lacks? [^.!?;\r\n]+ (?:needed|required) for evidence reads` +
+		`(?: |\.\s+(?:(?:those|the) )?evidence reads are )(?:needed|required) for `)
+	issueIDCodeSpan = regexp.MustCompile(`\x60(` + issueID + `)\x60`)
+	operationEnd    = regexp.MustCompile(`^(?:[.!](?:\s|$)|$)`)
 )
 
 var nonRemediableFailureMarkers = []string{
@@ -438,17 +442,36 @@ func isOpenDependencyFailure(summary, detail string) bool {
 	if blocked == nil {
 		return false
 	}
+	if blocked[2] != "" {
+		return true
+	}
+	if blocked[1] == "" {
+		return false
+	}
 	detail = strings.TrimSpace(detail)
 	if openDependencyDetail.MatchString(detail) {
 		return true
 	}
-	operation := strings.TrimPrefix(strings.TrimSpace(blocked[1]), "the ")
-	if target := openDependencyTarget.FindStringSubmatch(detail); target != nil {
-		return strings.TrimPrefix(strings.TrimSpace(target[1]), "the ") == operation
+	operation := normalizeDependencyOperation(blocked[1])
+	if prefix := openDependencyTarget.FindStringIndex(detail); prefix != nil {
+		return matchesDependencyOperation(operation, detail[prefix[1]:])
 	}
-	// A rollout report can name the open ticket first, then explain which
-	// evidence reads its missing prerequisites prevent.
-	return rolloutOperation.MatchString(operation) && openDependencyEvidenceDetail.MatchString(detail)
+	if prefix := openDependencyEvidenceDetail.FindStringIndex(detail); prefix != nil && rolloutOperation.MatchString(operation) {
+		target := detail[prefix[1]:]
+		return matchesDependencyOperation(operation, target) || matchesDependencyOperation("rollout", target)
+	}
+	return false
+}
+
+func normalizeDependencyOperation(operation string) string {
+	return strings.TrimPrefix(issueIDCodeSpan.ReplaceAllString(strings.TrimSpace(operation), "$1"), "the ")
+}
+
+func matchesDependencyOperation(operation, target string) bool {
+	// Compare the full name before checking for sentence punctuation. An
+	// operation can contain periods followed by spaces, as in "U.S. rollout".
+	rest, ok := strings.CutPrefix(normalizeDependencyOperation(target), operation)
+	return ok && operationEnd.MatchString(rest)
 }
 
 func isMissingRemoteBranchFailure(text string) bool {
