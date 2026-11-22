@@ -2841,11 +2841,12 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		ReviewLevel:          reviewLevel,
 	}
 	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled, req.GitHubIssueLinkMode, req.GitHubIssueAutoStartAssigned, req.AssignCreator, localruntime.RuntimeConfigUISettingsUpdate{
-		OnlyAssigned:         req.GitHubIssueAutoStartOnlyAssigned,
-		Labels:               req.GitHubIssueAutoStartLabels,
-		ExclusionLabel:       req.GitHubIssueAutoStartExclusionLabel,
-		DisabledRepositories: req.DisabledRepositories,
-		IssueRepositories:    req.GitHubIssueRepositories,
+		OnlyAssigned:              req.GitHubIssueAutoStartOnlyAssigned,
+		Labels:                    req.GitHubIssueAutoStartLabels,
+		ExclusionLabel:            req.GitHubIssueAutoStartExclusionLabel,
+		DisabledRepositories:      req.DisabledRepositories,
+		IssueRepositories:         req.GitHubIssueRepositories,
+		ExpectedIssueRepositories: req.ExpectedIssueRepositories,
 	}); err != nil {
 		state := currentReviewSettingsState(cfg)
 		return state, err

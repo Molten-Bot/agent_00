@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -176,6 +177,11 @@ type GitHubIssueRepositorySettings struct {
 // settings. Nil keeps legacy global settings. An empty map selects no repos.
 type GitHubIssueRepositories map[string]GitHubIssueRepositorySettings
 
+// GitHubIssueRepositoriesSnapshot preserves nil legacy settings for conflict detection.
+type GitHubIssueRepositoriesSnapshot struct {
+	Repositories GitHubIssueRepositories `json:"repositories"`
+}
+
 const githubIssueRepositoriesKey = "github_issue_repositories"
 
 func normalizeGitHubIssueRepositories(repositories GitHubIssueRepositories) (GitHubIssueRepositories, error) {
@@ -214,11 +220,12 @@ func validateIssueExclusionLabel(label string) error {
 }
 
 type RuntimeConfigUISettingsUpdate struct {
-	IssueRepositories    GitHubIssueRepositories
-	OnlyAssigned         *bool
-	ExclusionLabel       *string
-	Labels               *[]string
-	DisabledRepositories *[]string
+	IssueRepositories         GitHubIssueRepositories
+	ExpectedIssueRepositories *GitHubIssueRepositoriesSnapshot
+	OnlyAssigned              *bool
+	ExclusionLabel            *string
+	Labels                    *[]string
+	DisabledRepositories      *[]string
 }
 
 // SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings persists review
@@ -324,6 +331,27 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 			applyDisabledRepositoriesToDoc(doc, *setting.DisabledRepositories)
 		}
 		if setting.IssueRepositories != nil {
+			if setting.ExpectedIssueRepositories != nil {
+				var current GitHubIssueRepositories
+				raw, err := json.Marshal(doc[githubIssueRepositoriesKey])
+				if err != nil {
+					return err
+				}
+				if err := json.Unmarshal(raw, &current); err != nil {
+					return err
+				}
+				current, err = normalizeGitHubIssueRepositories(current)
+				if err != nil {
+					return err
+				}
+				expected, err := normalizeGitHubIssueRepositories(setting.ExpectedIssueRepositories.Repositories)
+				if err != nil {
+					return err
+				}
+				if !reflect.DeepEqual(current, expected) {
+					return fmt.Errorf("issue automation settings changed in another session; reload the page and try again")
+				}
+			}
 			repositories, err := normalizeGitHubIssueRepositories(setting.IssueRepositories)
 			if err != nil {
 				return err

@@ -3012,11 +3012,13 @@
     }
 
     let issueAutomationRepositoriesEdited = false;
+    let issueAutomationRepositoriesSnapshot = null;
     function applyReviewSettingsState(nextState) {
       const previousAutoMerge = taskAutoMergeStepEnabled();
       const previousReviewCycle = taskReviewStepEnabled();
       state.reviewSettings = normalizeReviewSettings(nextState);
       issueAutomationRepositoriesEdited = false;
+      issueAutomationRepositoriesSnapshot = JSON.parse(JSON.stringify(state.reviewSettings.githubIssueRepositories));
       if (reviewSettingsAutoMerge instanceof HTMLInputElement) {
         reviewSettingsAutoMerge.checked = state.reviewSettings.autoMerge;
       }
@@ -3143,6 +3145,7 @@
       const payload = currentReviewSettingsPayload();
       if (issueAutomationRepositoriesEdited) {
         payload.github_issue_repositories = state.reviewSettings.githubIssueRepositories;
+        payload.expected_issue_repositories = { repositories: issueAutomationRepositoriesSnapshot };
       }
       setSettingsBusy(true);
       setReviewSettingsStatus("ok", "Saving review settings...");

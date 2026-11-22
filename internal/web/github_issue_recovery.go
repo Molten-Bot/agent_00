@@ -356,6 +356,30 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	lock.Close()
 	lock = nil
 	if record.Outcome == "" {
+		var fresh GitHubIssue
+		fresh, err = s.fetchGitHubIssue(ctx, issue.Repository, issue.Number)
+		if err != nil {
+			return s.deferIssueRecord(record, err)
+		}
+		var login string
+		login, err = s.issueGitHubLogin(ctx)
+		if err != nil {
+			return s.deferIssueRecord(record, err)
+		}
+		// Our durable claim may already have applied its own exclusion label.
+		// Only ignore that label, never a newly configured exclusion label.
+		if record.LabelAdded {
+			labels := make([]GitHubIssueLabel, 0, len(fresh.Labels))
+			for _, label := range fresh.Labels {
+				if !strings.EqualFold(label.Name, issue.Claim.ExclusionLabel) {
+					labels = append(labels, label)
+				}
+			}
+			fresh.Labels = labels
+		}
+		if reason := issueEligibilityReason(fresh, settings, login); reason != "" {
+			return s.deferIssueRecord(record, fmt.Errorf("issue is ineligible: %s", reason))
+		}
 		if record.IssueNodeID == "" {
 			login, err := s.issueGitHubLogin(ctx)
 			if err != nil {

@@ -1472,3 +1472,37 @@ test('saving unrelated settings in a stale tab preserves a repository disabled i
   assert.equal(settings.auto_merge, true);
   assert.deepEqual(settings.github_issue_repositories, {});
 });
+
+test('editing repositories in a stale tab sends its original snapshot and preserves concurrent removal', async t => {
+  const repo = { auto_start: true, only_assigned: true, trigger_labels: [], exclusion_label: 'claimed' };
+  const original = { 'acme/one': { ...repo }, 'acme/two': { ...repo } };
+  let settings = { ...defaults, github_issues_enabled: true, github_issue_repositories: structuredClone(original) };
+  let rejected = false;
+  const configurePage = async page => {
+    await page.route('**/api/review-settings', route => {
+      if (route.request().method() === 'POST') {
+        const payload = route.request().postDataJSON();
+        assert.deepEqual(payload.expected_issue_repositories.repositories, original);
+        if (JSON.stringify(payload.expected_issue_repositories.repositories) !== JSON.stringify(settings.github_issue_repositories)) {
+          rejected = true;
+          return route.fulfill({ status: 400, json: { error: 'issue automation settings changed in another session; reload the page and try again' } });
+        }
+        settings = { ...settings, ...payload };
+      }
+      return route.fulfill({ json: { ok: true, settings } });
+    });
+  };
+  const { page: staleTab } = await openSettings(t, { configurePage });
+  const { page: currentTab } = await openSettings(t, { configurePage });
+  await select(currentTab, 'github-issues');
+  await currentTab.getByLabel('Automation repository').selectOption('acme/two');
+  await toggle(currentTab, 'review-settings-github-issues-repository-enabled');
+  await close(currentTab);
+  await select(staleTab, 'github-issues');
+  await staleTab.getByLabel('Automation repository').selectOption('acme/one');
+  await toggle(staleTab, 'review-settings-github-issues-auto-start-assigned');
+  await staleTab.locator('#review-settings-close').click();
+  await staleTab.getByText('issue automation settings changed in another session; reload the page and try again', { exact: true }).waitFor();
+  assert.equal(rejected, true);
+  assert.deepEqual(settings.github_issue_repositories, { 'acme/one': repo });
+});

@@ -223,7 +223,8 @@ type ReviewSettingsRequest struct {
 	AssignCreator                      *bool     `json:"assign_creator,omitempty"`
 	DisabledRepositories               *[]string `json:"disabled_repositories,omitempty"`
 
-	GitHubIssueRepositories localruntime.GitHubIssueRepositories `json:"github_issue_repositories"`
+	GitHubIssueRepositories   localruntime.GitHubIssueRepositories          `json:"github_issue_repositories"`
+	ExpectedIssueRepositories *localruntime.GitHubIssueRepositoriesSnapshot `json:"expected_issue_repositories,omitempty"`
 }
 
 // NewServer returns a monitor HTTP server.

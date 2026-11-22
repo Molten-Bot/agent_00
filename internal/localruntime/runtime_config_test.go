@@ -188,3 +188,40 @@ func TestLoadRuntimeConfigSupportsExplicitExistingDirectory(t *testing.T) {
 		t.Fatalf("environment override ignored: %s", cfg.RuntimeConfigPath)
 	}
 }
+
+func TestIssueRepositorySettingsRejectStaleSnapshot(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.json")
+	save := func(repos GitHubIssueRepositories, expected *GitHubIssueRepositoriesSnapshot) error {
+		return SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(path, InitConfig{}, ReviewWatchConfig{MergeMethod: "squash", ReviewLevel: "off"}, nil, nil, nil, nil, nil, nil, nil, RuntimeConfigUISettingsUpdate{IssueRepositories: repos, ExpectedIssueRepositories: expected})
+	}
+	original := GitHubIssueRepositories{"acme/one": {AutoStart: true, ExclusionLabel: "claimed"}, "acme/two": {AutoStart: true, ExclusionLabel: "claimed"}}
+	if err := save(original, &GitHubIssueRepositoriesSnapshot{}); err != nil {
+		t.Fatal(err)
+	}
+	remaining := GitHubIssueRepositories{"acme/one": original["acme/one"]}
+	if err := save(remaining, &GitHubIssueRepositoriesSnapshot{Repositories: original}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := GitHubIssueRepositories{"acme/one": {ExclusionLabel: "changed"}, "acme/two": original["acme/two"]}
+	if err := save(edited, &GitHubIssueRepositoriesSnapshot{Repositories: original}); err == nil || !strings.Contains(err.Error(), "another session") {
+		t.Fatalf("stale save: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("stale save changed persisted settings")
+	}
+	if err := save(GitHubIssueRepositories{}, &GitHubIssueRepositoriesSnapshot{Repositories: remaining}); err != nil {
+		t.Fatal(err)
+	}
+	if err := save(original, &GitHubIssueRepositoriesSnapshot{}); err == nil {
+		t.Fatal("legacy snapshot overwrote explicit empty selection")
+	}
+}
