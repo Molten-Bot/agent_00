@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -230,6 +231,10 @@ func (b *VideoPreviewBody) Read(p []byte) (int, error) {
 }
 
 func previewMediaType(detected, declared string, prefix []byte) string {
+	// GitHub can serve AVIF bytes under a JPEG content type.
+	if isAVIF(prefix) {
+		return "image/avif"
+	}
 	switch detected {
 	case "application/pdf", "audio/mpeg", "image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp", "image/x-icon", "video/mp4", "video/webm":
 		return detected
@@ -248,6 +253,29 @@ func previewMediaType(detected, declared string, prefix []byte) string {
 		return "audio/mpeg"
 	}
 	return ""
+}
+
+func isAVIF(prefix []byte) bool {
+	if len(prefix) < 16 || string(prefix[4:8]) != "ftyp" {
+		return false
+	}
+	boxSize := binary.BigEndian.Uint32(prefix[:4])
+	if boxSize < 16 || boxSize%4 != 0 || boxSize > uint32(len(prefix)) {
+		return false
+	}
+	isAVIFBrand := func(brand []byte) bool {
+		return string(brand) == "avif" || string(brand) == "avis"
+	}
+	if isAVIFBrand(prefix[8:12]) {
+		return true
+	}
+	// Skip the minor version and check the compatible brands in the box.
+	for offset := 16; offset < int(boxSize); offset += 4 {
+		if isAVIFBrand(prefix[offset : offset+4]) {
+			return true
+		}
+	}
+	return false
 }
 
 func isMP3Frame(data []byte) bool {

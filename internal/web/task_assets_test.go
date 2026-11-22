@@ -26,6 +26,9 @@ type taskAssetTransportFunc func(*http.Request) (*http.Response, error)
 //go:embed testdata/task-asset-preview.webm
 var taskAssetTestVideo []byte // Four seconds of VP8 in a live WebM container.
 
+//go:embed testdata/task-asset-preview.avif
+var taskAssetTestImage string // A generated 2×2 AVIF image.
+
 func (f taskAssetTransportFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
@@ -74,7 +77,7 @@ func TestTaskAssetsRenderInBrowser(t *testing.T) {
 			}{io.MultiReader(bytes.NewReader(taskAssetTestVideo), tail), tail}}, nil
 		case "/user-attachments/assets/unavailable":
 			if req.Header.Get("Authorization") == "Bearer viewer-fixture" {
-				status, body = http.StatusOK, "Private attachment preview"
+				status, mediaType, body = http.StatusOK, "image/jpeg", taskAssetTestImage
 			}
 		case "/user-attachments/assets/unsupported":
 			status, body = http.StatusOK, "\x00\xff"
