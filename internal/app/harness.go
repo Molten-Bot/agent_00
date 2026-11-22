@@ -6739,8 +6739,24 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	// Missing validation tooling is non-fatal only when it is the sole
 	// problem. Do not suppress an agent's explicit statement that it cannot
 	// complete the requested work.
-	if strings.Contains(text, "cannot safely meet") {
+	if strings.Contains(text, "cannot safely meet") || strings.Contains(text, truncatedErrorDetails) {
 		return false
+	}
+
+	// Require the reported failure itself to concern validation. The details
+	// can supply missing-tool evidence but may also mention unrelated caveats.
+	reportedFailure := strings.TrimSpace(detail) != ""
+	reason := text
+	if reportedFailure {
+		report, ok := strings.CutPrefix(text, "failure:")
+		if !ok {
+			return false
+		}
+		summary, details, _ := strings.Cut(report, "error details:")
+		reason = strings.TrimSpace(summary)
+		if reason == "" {
+			reason = strings.TrimLeft(details, " \t-`")
+		}
 	}
 
 	validationUnavailableMarkers := []string{
@@ -6773,10 +6789,10 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"local validation tooling unavailable in runtime",
 		"build validation unavailable",
 		"full build validation could not run",
+		"full-suite validation unavailable",
 		"focused go validation unavailable in runtime",
 		"node_modules missing",
 	}
-	validationUnavailable := stringsx.ContainsAny(text, validationUnavailableMarkers)
 
 	missingTooling := strings.Contains(text, "command not found") ||
 		strings.Contains(text, ": not found") ||
@@ -6818,15 +6834,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	if !missingTooling && !restrictedDependencyDownload {
 		return false
 	}
-	if strings.Contains(text, "smoke command") {
-		return smokeFallbackSucceeded(text)
-	}
-	if validationUnavailable {
-		return true
-	}
-
 	validationCommandMarkers := []string{
-		"smoke command",
 		"npm run lint",
 		"npm run build",
 		"npm run check",
@@ -6843,6 +6851,35 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"go vet",
 		"golangci-lint",
 	}
+	if reportedFailure {
+		smokeReason := strings.TrimPrefix(reason, "initial ")
+		if command, ok := strings.CutPrefix(smokeReason, "`"); ok {
+			_, suffix, _ := strings.Cut(command, "`")
+			smokeReason = strings.TrimSpace(suffix)
+		}
+		if strings.HasPrefix(smokeReason, "smoke command ") {
+			return smokeFallbackSucceeded(text)
+		}
+		for _, marker := range validationUnavailableMarkers {
+			if strings.HasPrefix(reason, marker) {
+				return true
+			}
+		}
+		commandReason := strings.TrimLeft(strings.TrimPrefix(strings.TrimPrefix(reason, "full "), "local "), "`")
+		for _, command := range validationCommandMarkers {
+			if rest, ok := strings.CutPrefix(commandReason, command); ok && (rest == "" || strings.ContainsRune(" `.:", rune(rest[0]))) {
+				return true
+			}
+		}
+		return false
+	}
+	if strings.Contains(text, "smoke command") {
+		return smokeFallbackSucceeded(text)
+	}
+	if stringsx.ContainsAny(text, validationUnavailableMarkers) {
+		return true
+	}
+
 	validationContextMarkers := []string{
 		"validation",
 		"test runner",
@@ -7086,11 +7123,15 @@ func codexExtractErrorDetail(output string) string {
 	return "Error details: " + fallback
 }
 
+// Keep omissions visible to classifiers that rely on complete error details.
+const truncatedErrorDetails = " | [error details truncated]"
+
 func codexJoinErrorDetailLines(lines []string, stopAtResolvedIssue bool) string {
 	const maxDetailsLines = 3
 	const maxDetailChars = 320
 
 	details := make([]string, 0, maxDetailsLines)
+	truncated := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
@@ -7108,19 +7149,20 @@ func codexJoinErrorDetailLines(lines []string, stopAtResolvedIssue bool) string 
 		if strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
 			continue
 		}
-		details = append(details, trimmed)
 		if len(details) >= maxDetailsLines {
+			truncated = true
 			break
 		}
+		details = append(details, trimmed)
 	}
 	if len(details) == 0 {
 		return ""
 	}
 	joined := strings.Join(details, " | ")
-	if len(joined) <= maxDetailChars {
+	if !truncated && len(joined) <= maxDetailChars {
 		return joined
 	}
-	return strings.TrimSpace(joined[:maxDetailChars-3]) + "..."
+	return strings.TrimSpace(joined[:min(len(joined), maxDetailChars-len(truncatedErrorDetails))]) + truncatedErrorDetails
 }
 
 // isMarkdownCodeFence reports whether a line is only a code fence. An opening

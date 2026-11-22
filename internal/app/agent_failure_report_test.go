@@ -145,6 +145,7 @@ func TestCodexExtractErrorDetailDropsFencesWithInfoString(t *testing.T) {
 func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *testing.T) {
 	t.Parallel()
 
+	statusLines := "\nMCP flags default to off.\nWorker flags default to off."
 	for _, tc := range []struct {
 		name         string
 		continuation string
@@ -157,6 +158,24 @@ func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *t
 		{
 			name:         "deployment tests fail",
 			continuation: "\n\nDeployment tests fail.",
+		},
+		{
+			name:         "deployment test failure after three status lines",
+			continuation: statusLines + "\nDeployment tests fail.",
+		},
+		{
+			name:         "byte limit reached before late test failure",
+			continuation: "\nAPI flags default to off." + strings.Repeat(" ", 320) + "Deployment tests fail.",
+		},
+		{
+			name:         "three status lines fit",
+			continuation: statusLines,
+			wantReason:   failurefollowup.ExternalRolloutPrerequisitesReason,
+		},
+		{
+			name:         "resolved issue after three status lines",
+			continuation: statusLines + "\n**Resolved issue:** Deployment tests failed before the fix.",
+			wantReason:   failurefollowup.ExternalRolloutPrerequisitesReason,
 		},
 		{
 			name:         "resolved issue section",
@@ -184,6 +203,45 @@ func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *t
 			result := h.fail(ExitCodex, "codex", err, targetDir)
 			if got := failurefollowup.NonRemediableFailureReason(result.Err); got != tc.wantReason {
 				t.Errorf("NonRemediableFailureReason() = %q, want %q for %q", got, tc.wantReason, err)
+			}
+		})
+	}
+}
+
+func TestRunCodexKeepsImplementationFailureFatalWithValidationToolingCaveat(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, summary, details string
+	}{
+		{
+			name:    "missing validation runner in details",
+			summary: "Could not complete the implementation.",
+			details: "Local test runner unavailable in runtime. vitest: command not found.",
+		},
+		{
+			name:    "validation command in details",
+			summary: "Required implementation changes remain unfinished.",
+			details: "`npm run build` failed with `sh: 1: tsc: not found`.",
+		},
+		{
+			name:    "validation caveat in summary",
+			summary: "Could not update repository files. Local validation tooling unavailable.",
+			details: "Writing the required files failed. vitest: command not found.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			targetDir := t.TempDir()
+			const prompt = "Update the application"
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(targetDir, prompt),
+				res: execx.Result{Stdout: "Failure: " + tc.summary + "\nError details: " + tc.details},
+			}}})
+			err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+			if err == nil || !strings.Contains(err.Error(), tc.summary) {
+				t.Fatalf("runCodex() error = %v, want implementation failure %q", err, tc.summary)
 			}
 		})
 	}
