@@ -7050,8 +7050,18 @@ var validationDiagnosticBreak = regexp.MustCompile(`\n| \| |[.;] +`)
 
 func hasUnexplainedValidationExit(text string) bool {
 	for _, diagnostic := range validationDiagnosticBreak.Split(text, -1) {
-		for _, match := range validationCommandExit.FindAllStringSubmatch(diagnostic, -1) {
-			if match[1] != "127" && !hasMissingValidationTool(diagnostic) {
+		for _, match := range validationCommandExit.FindAllStringSubmatchIndex(diagnostic, -1) {
+			if diagnostic[match[2]:match[3]] == "127" {
+				continue
+			}
+			// An ordinary failing exit is not a missing-command status. Require
+			// the report to attribute that exit to the tooling gap explicitly.
+			suffix := strings.TrimSpace(diagnostic[match[1]:])
+			cause, causal := strings.CutPrefix(suffix, "because ")
+			if !causal {
+				cause, causal = strings.CutPrefix(suffix, "due to ")
+			}
+			if !causal || !hasMissingValidationTool(cause) {
 				return true
 			}
 		}

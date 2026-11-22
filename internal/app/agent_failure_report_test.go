@@ -326,6 +326,8 @@ func TestRunCodexClassifiesCompleteValidationReport(t *testing.T) {
 		{"Go compiler diagnostic and missing linter", "Failure: go test ./internal/web failed.\nError details: handler.go:12:6: undefined: renderPage\nOptional lint: golangci-lint: command not found.", true, false},
 		{"Go build failure and missing linter", "Failure: go test ./internal/web failed.\nError details:\nFAIL\texample.com/project/internal/web [build failed]\nOptional lint: golangci-lint: command not found.", true, false},
 		{"fenced Go test failure and missing linter", "Failure: go test ./internal/web failed.\nError details:\n```text\n--- FAIL: TestStatus (0.00s)\n```\nOptional lint: golangci-lint: command not found.", true, false},
+		{"Jest exit followed by an unrelated same-clause linter gap", "Failure: npm test failed.\nError details: Jest exited with status 1, but optional eslint: command not found.", true, false},
+		{"Jest exit followed by an unrelated comma linter gap", "Failure: npm test failed.\nError details: Jest exited with status 1, optional eslint: command not found.", true, false},
 		{"Jest exit and missing optional linter", "Failure: npm test failed.\nError details: Jest exited with status 1.\nOptional lint: eslint: command not found.", true, false},
 		{"Jest exit and missing linter on the same line", "Failure: npm test failed.\nError details: Jest exited with status 1. Optional lint: eslint: command not found.", true, false},
 		{"test command exit explained by missing runner", "Failure: npm test failed.\nError details: npm test exited with status 1 because vitest: command not found.", false, false},
