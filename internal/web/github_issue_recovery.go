@@ -17,16 +17,11 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
-const (
-	unmergedDependencyIncident = "unmerged_dependency"
-	openDependencyIncident     = "open_dependency"
-)
-
 func issueDependencyRetryError(incident string) string {
 	switch incident {
-	case unmergedDependencyIncident:
+	case localruntime.IssueIncidentUnmergedDependency:
 		return failurefollowup.UnmergedDependencyReason + "; explicit retry required after merge"
-	case openDependencyIncident:
+	case localruntime.IssueIncidentOpenDependency:
 		return failurefollowup.OpenDependencyReason + "; explicit retry required after resolution"
 	default:
 		return ""
@@ -229,9 +224,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if record.Outcome == "error" && issueDependencyRetryError(record.Incident) == "" {
 		switch failurefollowup.NonRemediableFailureReason(errors.New(record.FailureDetail())) {
 		case failurefollowup.UnmergedDependencyReason:
-			record.Incident = unmergedDependencyIncident
+			record.Incident = localruntime.IssueIncidentUnmergedDependency
 		case failurefollowup.OpenDependencyReason:
-			record.Incident = openDependencyIncident
+			record.Incident = localruntime.IssueIncidentOpenDependency
 		}
 		if issueDependencyRetryError(record.Incident) != "" {
 			record.NextAttemptAt = time.Time{}

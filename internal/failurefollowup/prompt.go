@@ -91,11 +91,13 @@ const openDependencyReference = `(?:issue |pull request |pr |dependency )?(?:` +
 const openDependencyCause = `(?:because ` + openDependencyReference + ` is still open|(?:by|on) (?:(?:still[- ])?open ` +
 	openDependencyReference + `|` + openDependencyReference + `, which is still open))`
 const evidenceAccessPrerequisite = `(?:credential setup|(?:scoped )?iam|(?:shared )?key provisioning)`
+const blockerDetailEnd = `(?:[.!](?:\s|$)| \| |$)`
+const rolloutEvidenceChannel = `(?:api|cli|mcp)`
 
 var (
 	blockedFailureSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:[ \t]*(?:((?:[^"'\x60\r\n]|\b'\b|` +
 		backtickedIssueID + `)+) (?:remains |is ))?blocked(?: (` + openDependencyCause + `))?[.!]?$`)
-	openDependencyDetail = regexp.MustCompile(`^blocked ` + openDependencyCause + `(?:[.!](?:\s|$)|$)`)
+	openDependencyDetail = regexp.MustCompile(`^blocked ` + openDependencyCause + blockerDetailEnd)
 	openDependencyTarget = regexp.MustCompile(`^` + openDependencyReference +
 		` is still open and (?:blocks|is blocking) `)
 	rolloutOperation             = regexp.MustCompile(`\brollout(?: for .+)?$`)
@@ -103,12 +105,12 @@ var (
 		` is still open\.\s+its [^.!?;\r\n]+ lacks? [^.!?;\r\n]+ (?:needed|required) for evidence reads\b`)
 	evidenceRolloutTarget = regexp.MustCompile(`^(?: |\.\s+(?:(?:those|the) )?evidence reads are )(?:needed|required) for `)
 	// The fallback requires pending access setup and verification alongside
-	// disabled evidence to tie the open issue to the rollout.
+	// disabled API, CLI, or MCP evidence to tie the open issue to the rollout.
 	rolloutEvidencePending = regexp.MustCompile(`^\.\s+` + evidenceAccessPrerequisite + `(?:, ` + evidenceAccessPrerequisite + `)*,?` +
 		` and (?:deployed )?verification (?:are|remain) pending\.\s+` +
-		`(?:[a-z0-9 -]+ )?evidence (?:stays?|remains?) disabled(?: by default)?[.!]?$`)
+		rolloutEvidenceChannel + `(?: and ` + rolloutEvidenceChannel + `)? evidence (?:stays?|remains?) disabled(?: by default)?[.!]?$`)
 	issueIDCodeSpan = regexp.MustCompile(`\x60(` + issueID + `)\x60`)
-	operationEnd    = regexp.MustCompile(`^(?:[.!](?:\s|$)|$)`)
+	operationEnd    = regexp.MustCompile(`^` + blockerDetailEnd)
 )
 
 var nonRemediableFailureMarkers = []string{

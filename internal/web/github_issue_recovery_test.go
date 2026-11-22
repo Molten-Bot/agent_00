@@ -604,25 +604,31 @@ func TestIssueRecoveryBlocksPrerequisiteWithoutRepair(t *testing.T) {
 		{
 			name:     "unmerged pull request",
 			report:   "Delivery blocked by unmerged #12. Error details: Required changes are pending review.",
-			incident: unmergedDependencyIncident,
+			incident: localruntime.IssueIncidentUnmergedDependency,
 			want:     "required pull request is unmerged; explicit retry required after merge",
 		},
 		{
 			name:     "open dependency",
 			report:   "Export remains blocked. Error details: [#72](https://github.com/example/project/issues/72) is still open and blocks the export.",
-			incident: openDependencyIncident,
+			incident: localruntime.IssueIncidentOpenDependency,
+			want:     "required dependency is still open; explicit retry required after resolution",
+		},
+		{
+			name:     "open dependency with multiline details",
+			report:   "Export remains blocked. Error details: #72 is still open and blocks the export | Verification is pending.",
+			incident: localruntime.IssueIncidentOpenDependency,
 			want:     "required dependency is still open; explicit retry required after resolution",
 		},
 		{
 			name:     "open dependency missing rollout evidence",
 			report:   "Production rollout for `#81` remains blocked. Error details: #72 is still open. Its proposed configuration lacks account metadata required for evidence reads. Those evidence reads are required for the rollout.",
-			incident: openDependencyIncident,
+			incident: localruntime.IssueIncidentOpenDependency,
 			want:     "required dependency is still open; explicit retry required after resolution",
 		},
 		{
 			name:     "open dependency with log sync failure",
-			report:   "Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks account metadata required for evidence reads. Credential setup and verification remain pending. Audit evidence stays disabled by default.\npersist task logs: sync terminal.log: invalid argument",
-			incident: openDependencyIncident,
+			report:   "Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks account metadata required for evidence reads. Credential setup and verification remain pending. API and MCP evidence stay disabled by default.\npersist task logs: sync terminal.log: invalid argument",
+			incident: localruntime.IssueIncidentOpenDependency,
 			want:     "required dependency is still open; explicit retry required after resolution",
 		},
 	} {

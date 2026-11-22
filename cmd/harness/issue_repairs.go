@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -131,11 +132,19 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 			continue
 		}
 		var blockedReason string
+		failure := issueRepairFailureDetail(record.Run.Prompt)
 		switch {
 		case record.Started:
 			blockedReason = "repair worker interrupted; inspect preserved logs before another repair attempt"
-		case legacyIssueOwnershipRepair(record.Run.Prompt):
+		case strings.Contains(failure, localruntime.LegacyIssueOwnershipFailure):
 			blockedReason = localruntime.ErrIssueOwnershipChanged.Error()
+		default:
+			blockedReason, err = q.dependencyBlockReason(record.RequestID, failure)
+			if err != nil {
+				q.logf("event=issue_repair_check_source status=error err=%q", err)
+				lock.Close()
+				continue
+			}
 		}
 		if blockedReason != "" {
 			record.State = "blocked"
@@ -172,15 +181,49 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 	}
 }
 
-func legacyIssueOwnershipRepair(prompt string) bool {
-	// Older outbox records kept the original failure only in this prompt block.
-	_, failure, ok := strings.Cut(prompt, "\n\nObserved failure context:\n- exit_code=")
-	if !ok {
-		return false
+func (q *issueRepairQueue) dependencyBlockReason(requestID, failure string) (string, error) {
+	switch reason := failurefollowup.NonRemediableFailureReason(errors.New(failure)); reason {
+	case failurefollowup.UnmergedDependencyReason, failurefollowup.OpenDependencyReason:
+		return reason, nil
 	}
-	_, failure, _ = strings.Cut(failure, "\n")
-	line, _, _ := strings.Cut(failure, "\n")
-	return strings.HasPrefix(line, "- error=\"") && strings.Contains(line, localruntime.LegacyIssueOwnershipFailure)
+	// The source claim may have been classified since capture. Its run error
+	// also preserves details that were redacted from the repair prompt.
+	issues, err := q.claims.List()
+	for _, issue := range issues {
+		if issue.RepairRequestID != requestID {
+			continue
+		}
+		switch issue.Incident {
+		case localruntime.IssueIncidentUnmergedDependency:
+			return failurefollowup.UnmergedDependencyReason, nil
+		case localruntime.IssueIncidentOpenDependency:
+			return failurefollowup.OpenDependencyReason, nil
+		}
+		switch reason := failurefollowup.NonRemediableFailureReason(errors.New(issue.FailureDetail())); reason {
+		case failurefollowup.UnmergedDependencyReason, failurefollowup.OpenDependencyReason:
+			return reason, nil
+		}
+	}
+	return "", err
+}
+
+func issueRepairFailureDetail(prompt string) string {
+	// The stored prompt is available even if capture's receipt never made it
+	// into the source claim. The exit code was optional in older records.
+	_, context, ok := strings.Cut(prompt, "\n\nObserved failure context:\n")
+	if !ok {
+		return ""
+	}
+	line, rest, _ := strings.Cut(context, "\n")
+	if strings.HasPrefix(line, "- exit_code=") {
+		line, _, _ = strings.Cut(rest, "\n")
+	}
+	quoted, ok := strings.CutPrefix(line, "- error=")
+	if !ok {
+		return ""
+	}
+	failure, _ := strconv.Unquote(quoted)
+	return failure
 }
 
 func (w *issueRepairWork) start() error {

@@ -74,6 +74,11 @@ var issueClaimIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 var ErrIssueOwnershipChanged = errors.New("issue ownership changed; start the issue again to create a new attempt")
 
+const (
+	IssueIncidentUnmergedDependency = "unmerged_dependency"
+	IssueIncidentOpenDependency     = "open_dependency"
+)
+
 // LegacyIssueOwnershipFailure is the error rendered by older binaries that wrapped a nil error.
 const LegacyIssueOwnershipFailure = "issue owner is unavailable or changed: %!w(<nil>)"
 
