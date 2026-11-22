@@ -205,3 +205,17 @@ func TestNonRemediableFailureReasonRecognizesOpenPrerequisite(t *testing.T) {
 		}
 	}
 }
+
+func TestDependencyOperationDoesNotEndAtSoftWrap(t *testing.T) {
+	t.Parallel()
+	for _, target := range []string{
+		"export\ndocumentation. Fix the export parser.",
+		"export\nconfiguration. Fix the export parser.",
+		"export\nlogs. Fix the export parser.",
+	} {
+		message := "codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open and blocks the " + target
+		if got := NonRemediableFailureReason(errors.New(message)); got != "" {
+			t.Fatalf("reason = %q, want repair eligible: %s", got, message)
+		}
+	}
+}

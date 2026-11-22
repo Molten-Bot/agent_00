@@ -501,6 +501,8 @@ func normalizeDependencyOperation(operation string) string {
 	return strings.TrimPrefix(issueIDCodeSpan.ReplaceAllString(strings.TrimSpace(operation), "$1"), "the ")
 }
 
+var pendingDependencyVerification = regexp.MustCompile(`^(?:verification|deployed verification) (?:is |remains? )?pending[.!]?(?:$|\n| \| )`)
+
 func matchesDependencyOperation(operation, target string) bool {
 	// Compare the full name before checking for sentence punctuation. An
 	// operation can contain periods followed by spaces, as in "U.S. rollout".
@@ -509,7 +511,17 @@ func matchesDependencyOperation(operation, target string) bool {
 	rest, ok := strings.CutPrefix(flatTarget, operation)
 	// Flattening preserves byte offsets, so check for a boundary in the
 	// original target after matching the operation across wrapped lines.
-	return ok && operationEnd.MatchString(target[len(target)-len(rest):])
+	if !ok {
+		return false
+	}
+	boundary := target[len(target)-len(rest):]
+	if strings.HasPrefix(boundary, "\n") {
+		// A soft wrap can continue the operation name ("export documentation").
+		// Only an explicit independent verification clause establishes a new
+		// sentence when the report omits punctuation at the line boundary.
+		return pendingDependencyVerification.MatchString(strings.TrimSpace(boundary))
+	}
+	return operationEnd.MatchString(boundary)
 }
 
 func isMissingRemoteBranchFailure(text string) bool {

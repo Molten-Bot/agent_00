@@ -6773,6 +6773,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"local validation tooling unavailable in runtime",
 		"build validation unavailable",
 		"full build validation could not run",
+		"full-suite validation unavailable in runtime",
 		"focused go validation unavailable in runtime",
 		"node_modules missing",
 	}
@@ -6818,13 +6819,6 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	if !missingTooling && !restrictedDependencyDownload {
 		return false
 	}
-	if strings.Contains(text, "smoke command") {
-		return smokeFallbackSucceeded(text)
-	}
-	if validationUnavailable {
-		return true
-	}
-
 	validationCommandMarkers := []string{
 		"smoke command",
 		"npm run lint",
@@ -6843,6 +6837,46 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"go vet",
 		"golangci-lint",
 	}
+	// Only a validation failure can be waived for missing local tooling.
+	// Unlabeled validation notes must not override an implementation blocker.
+	if strings.TrimSpace(detail) != "" {
+		report, ok := strings.CutPrefix(text, "failure:")
+		if !ok {
+			return false
+		}
+		summary, details, _ := strings.Cut(report, "error details:")
+		reason := strings.TrimSpace(summary)
+		if reason == "" {
+			reason = strings.TrimLeft(strings.TrimSpace(details), "- `")
+		}
+		validationSummary := false
+		for _, marker := range validationUnavailableMarkers {
+			validationSummary = validationSummary || strings.HasPrefix(reason, marker)
+		}
+		commandReason := strings.TrimLeft(strings.TrimPrefix(strings.TrimPrefix(reason, "full "), "local "), "`")
+		commandReason = strings.TrimPrefix(commandReason, "initial ")
+		if quoted, ok := strings.CutPrefix(commandReason, "`"); ok {
+			_, suffix, closed := strings.Cut(quoted, "`")
+			if closed && strings.HasPrefix(strings.TrimSpace(suffix), "smoke command ") {
+				commandReason = strings.TrimSpace(suffix)
+			}
+		}
+		for _, command := range validationCommandMarkers {
+			if rest, ok := strings.CutPrefix(commandReason, command); ok && (rest == "" || strings.ContainsRune(" `.:", rune(rest[0]))) {
+				validationSummary = true
+			}
+		}
+		if !validationSummary {
+			return false
+		}
+	}
+	if strings.Contains(text, "smoke command") {
+		return smokeFallbackSucceeded(text)
+	}
+	if validationUnavailable {
+		return true
+	}
+
 	validationContextMarkers := []string{
 		"validation",
 		"test runner",
@@ -7070,11 +7104,11 @@ func agentErrorDetailField(suffix string, lines []string) string {
 	}
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if (line == "" && len(details) == 0) || isMarkdownCodeFence(line) {
+		if line == "" || isMarkdownCodeFence(line) {
 			continue
 		}
 		field := strings.ToLower(agentFailureFieldLine(line))
-		if line == "" || strings.HasPrefix(line, "##") || strings.HasPrefix(line, "# ") ||
+		if strings.HasPrefix(line, "##") || strings.HasPrefix(line, "# ") ||
 			strings.HasPrefix(field, "resolved issue:") || strings.HasPrefix(field, "failure:") ||
 			strings.HasPrefix(field, "error details:") || strings.HasPrefix(field, "validation:") {
 			break

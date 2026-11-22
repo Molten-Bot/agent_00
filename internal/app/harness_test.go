@@ -9945,3 +9945,35 @@ func TestFinalReviewPromptExcludesBranchHistoryRepairs(t *testing.T) {
 		}
 	}
 }
+
+func TestRunCodexPreservesTaskBlockersAcrossValidationNotesAndParagraphs(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, report string
+		dependency   bool
+	}{
+		{"unlabeled tooling note", "Failure: Production rollout remains blocked.\nError details: #72 is still open and blocks the production rollout.\nLocal validation tooling unavailable in runtime: go test failed: go: command not found.", true},
+		{"paragraphs within details", "Failure: Production rollout remains blocked.\nError details: #72 is still open\n\nIts proposed configuration lacks account metadata needed for evidence reads.\n\nCredential setup and verification remain pending. API and CLI evidence stay disabled by default.", true},
+		{"implementation error with tooling note", "Failure: Parser cannot load the requested export.\nError details: nil pointer panic.\nLocal validation tooling unavailable in runtime: go test failed: go: command not found.", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			target := t.TempDir()
+			fake := &fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(target, "complete task"),
+				res: execx.Result{Stdout: tc.report},
+			}}}
+			err := New(fake).runCodex(t.Context(), agentruntime.Default(), target, "complete task", codexRunOptions{}, "", "")
+			if err == nil {
+				t.Fatal("task failure was waived")
+			}
+			reason := failurefollowup.NonRemediableFailureReason(fmt.Errorf("codex: %w", err))
+			if tc.dependency && reason != failurefollowup.OpenDependencyReason {
+				t.Fatalf("reason = %q, want dependency: %v", reason, err)
+			}
+			if !tc.dependency && reason != "" {
+				t.Fatalf("reason = %q, want repair eligible", reason)
+			}
+		})
+	}
+}
