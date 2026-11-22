@@ -1441,6 +1441,14 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	}
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		ExitCode: app.ExitCodex,
+		Err:      errors.New("codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open. Sample data is pending."),
+	})
+	if ok || !strings.Contains(reason, "required dependency is still open") {
+		t.Fatalf("shouldQueueFailureFollowUp(open prerequisite) = (%v, %q), want dependency skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
 		Err: errors.New("clone: run git [clone ...]: exit status 128"),
 	})
 	if !ok || reason != "" {

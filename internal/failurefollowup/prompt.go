@@ -77,10 +77,20 @@ const missingRemoteBranchReason = "remote branch does not exist"
 // UnmergedDependencyReason identifies an agent-reported prerequisite PR.
 const UnmergedDependencyReason = "required pull request is unmerged"
 
+// OpenDependencyReason identifies an agent-reported open prerequisite.
+const OpenDependencyReason = "required dependency is still open"
+
 // Match a blocker in the agent's failure summary. Error details can quote the
 // same wording while describing a different, actionable failure. An apostrophe
 // between word characters can be part of a contraction rather than a quote.
 var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\bblocked by (?:an? |the )?unmerged (?:pull request |pr )?\x60?#[1-9][0-9]*\b`)
+
+// A terse failure summary can leave the prerequisite itself to Error details.
+// Require a direct blocker summary followed by an explicit open reference.
+var (
+	blockedFailureSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\b(?:remains|is) blocked[.!]?$`)
+	openDependencyDetail  = regexp.MustCompile(`^(?:issue |pull request |pr )?(?:#[1-9][0-9]*|\x60#[1-9][0-9]*\x60) is still open(?:[.!](?:\s|$)|$)`)
+)
 
 var nonRemediableFailureMarkers = []string{
 	"no space left on device",
@@ -398,10 +408,13 @@ func NonRemediableFailureReason(err error) string {
 	if isMissingRemoteBranchFailure(text) {
 		return missingRemoteBranchReason
 	}
-	summary, _, _ := strings.Cut(text, "error details:")
+	summary, detail, _ := strings.Cut(text, "error details:")
 	if unmergedDependencySummary.MatchString(summary) &&
 		!strings.Contains(summary, "no longer blocked") && !strings.Contains(summary, "not blocked") {
 		return UnmergedDependencyReason
+	}
+	if blockedFailureSummary.MatchString(strings.TrimSpace(summary)) && openDependencyDetail.MatchString(strings.TrimSpace(detail)) {
+		return OpenDependencyReason
 	}
 	for _, marker := range nonRemediableFailureMarkers {
 		if strings.Contains(text, marker) {

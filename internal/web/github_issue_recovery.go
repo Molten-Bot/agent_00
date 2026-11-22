@@ -17,7 +17,21 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
-const unmergedDependencyIncident = "unmerged_dependency"
+const (
+	unmergedDependencyIncident = "unmerged_dependency"
+	openDependencyIncident     = "open_dependency"
+)
+
+func issueDependencyRetryError(incident string) string {
+	switch incident {
+	case unmergedDependencyIncident:
+		return failurefollowup.UnmergedDependencyReason + "; explicit retry required after merge"
+	case openDependencyIncident:
+		return failurefollowup.OpenDependencyReason + "; explicit retry required after resolution"
+	default:
+		return ""
+	}
+}
 
 func (s Server) WakeIssueRecovery() { s.wakeGitHubIssueAutoStart() }
 
@@ -212,12 +226,18 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	}
 	// Preserve the classification before later checks can replace the last
 	// error. This also handles records written before the incident existed.
-	if record.Outcome == "error" && record.Incident != unmergedDependencyIncident &&
-		failurefollowup.NonRemediableFailureReason(errors.New(record.FailureDetail())) == failurefollowup.UnmergedDependencyReason {
-		record.Incident = unmergedDependencyIncident
-		record.NextAttemptAt = time.Time{}
-		if err := s.IssueClaims.Save(record); err != nil {
-			return err
+	if record.Outcome == "error" && issueDependencyRetryError(record.Incident) == "" {
+		switch failurefollowup.NonRemediableFailureReason(errors.New(record.FailureDetail())) {
+		case failurefollowup.UnmergedDependencyReason:
+			record.Incident = unmergedDependencyIncident
+		case failurefollowup.OpenDependencyReason:
+			record.Incident = openDependencyIncident
+		}
+		if issueDependencyRetryError(record.Incident) != "" {
+			record.NextAttemptAt = time.Time{}
+			if err := s.IssueClaims.Save(record); err != nil {
+				return err
+			}
 		}
 	}
 	if stopped, err := localruntime.IssueProcessesStopped(record); err != nil || !stopped {
@@ -304,16 +324,17 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		}
 	}
 	policy := s.IssueRecovery.Defaults()
+	dependencyRetryError := issueDependencyRetryError(record.Incident)
 	if record.Control != "" || record.Outcome == "stopped" || record.Outcome == "no_changes" ||
-		record.Incident == unmergedDependencyIncident || record.AgentAttempts >= policy.MaxAttempts {
+		dependencyRetryError != "" || record.AgentAttempts >= policy.MaxAttempts {
 		record.State = "blocked"
 		switch {
 		case record.Outcome == "stopped":
 			record.Error = "stopped by operator; explicit resume required"
 		case record.Outcome == "no_changes":
 			record.Error = "no PR produced; review no-change evidence before retrying"
-		case record.Incident == unmergedDependencyIncident:
-			record.Error = failurefollowup.UnmergedDependencyReason + "; explicit retry required after merge"
+		case dependencyRetryError != "":
+			record.Error = dependencyRetryError
 			record.NextAttemptAt = time.Time{}
 		default:
 			record.Error = "agent retry budget exhausted; explicit retry or deployed fix required"
@@ -451,7 +472,7 @@ func issueRetryDelay(record localruntime.IssueClaimRecord, policy localruntime.I
 
 func repairableIssueIncident(record localruntime.IssueClaimRecord) bool {
 	if record.Control != "" || record.Incident == "" || record.Incident == "service_shutdown" ||
-		record.Incident == unmergedDependencyIncident || record.Outcome == "stopped" || (record.Outcome == "no_changes" && record.NoChangeEvidence) {
+		issueDependencyRetryError(record.Incident) != "" || record.Outcome == "stopped" || (record.Outcome == "no_changes" && record.NoChangeEvidence) {
 		return false
 	}
 	if record.Outcome == "" && record.Failures < 3 {
