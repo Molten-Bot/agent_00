@@ -4029,9 +4029,13 @@ func TestHandlerDashboardStatsIncludeTaskSourcesFromSubmitPaths(t *testing.T) {
 	for _, group := range snap.Stats.SourceMix {
 		got[group.Name] = group.Tasks
 	}
-	for _, name := range []string{"Chat", "GitHub Issues", "Other", "JSON", "Library", "Prompt"} {
-		if got[name] != 1 {
-			t.Fatalf("source_mix[%q] = %d, want 1 (all groups: %#v)", name, got[name], snap.Stats.SourceMix)
+	want := map[string]int{"Chat": 1, "GitHub Issues": 1, "JSON": 1, "Library": 1, "Prompt": 2}
+	if len(got) != len(want) {
+		t.Fatalf("source_mix = %v, want %v", got, want)
+	}
+	for name, count := range want {
+		if got[name] != count {
+			t.Fatalf("source_mix[%q] = %d, want %d", name, got[name], count)
 		}
 	}
 }

@@ -520,7 +520,6 @@
                 <span id="dashboard-source-total">0 prompts</span>
               </div>
               <svg id="dashboard-source-chart" class="dashboard-d3-chart" role="img" aria-label="Prompt source chart" tabindex="0"></svg>
-              <div id="dashboard-source-legend" class="dashboard-source-legend" aria-label="Prompt source legend"></div>
             </div>
           </div>
         </section>
@@ -2239,7 +2238,6 @@
     const dashboardTaskChart = document.getElementById("dashboard-task-chart");
     const dashboardSourceTotal = document.getElementById("dashboard-source-total");
     const dashboardSourceChart = document.getElementById("dashboard-source-chart");
-    const dashboardSourceLegend = document.getElementById("dashboard-source-legend");
     const dashboardShareX = document.getElementById("dashboard-share-x");
     const dashboardShareFacebook = document.getElementById("dashboard-share-facebook");
     const dashboardShareWhatsApp = document.getElementById("dashboard-share-whatsapp");
@@ -4611,24 +4609,14 @@
       "--dashboard-chart-failed",
     ];
     const DASHBOARD_TASK_COLOR_FALLBACKS = ["#5aa7f2", "#f0b355", "#c98bf2", "#9aa6bd", "#63c892", "#f07c78"];
-    const DASHBOARD_SOURCE_COLOR_VARS = {
-      chat: "--dashboard-chart-chat",
-      json: "--dashboard-chart-json",
-      library: "--dashboard-chart-library",
-      prompt: "--dashboard-chart-prompt",
-      review: "--dashboard-chart-review",
-      github_issues: "--dashboard-chart-github-issues",
-      other: "--dashboard-chart-other",
-    };
-    const DASHBOARD_SOURCE_COLOR_FALLBACKS = {
-      chat: "#56c8ba",
-      json: "#e8b35a",
-      library: "#6fb0f4",
-      prompt: "#7bc99a",
-      review: "#f08fb2",
-      github_issues: "#7bc99a",
-      other: "#8ca0bd",
-    };
+    const DASHBOARD_SOURCES = new Map([
+      ["Chat", { icon: "bot-message-square", color: "--dashboard-chart-chat", fallback: "#56c8ba" }],
+      ["Prompt", { icon: "pencil", color: "--dashboard-chart-prompt", fallback: "#9a8cff" }],
+      ["Library", { icon: "book-open", color: "--dashboard-chart-library", fallback: "#6fb0f4" }],
+      ["GitHub Issues", { icon: "folder-kanban", color: "--dashboard-chart-github-issues", fallback: "#7bc99a" }],
+      ["JSON", { icon: "braces", color: "--dashboard-chart-json", fallback: "#e8b35a" }],
+    ]);
+    const dashboardSourcePercent = new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 });
 
     function dashboardCSSValue(name, fallback) {
       const value = rootCSSValue(name, fallback);
@@ -4642,38 +4630,6 @@
 
     function dashboardTaskColors() {
       return DASHBOARD_TASK_COLOR_VARS.map((name, index) => dashboardCSSValue(name, DASHBOARD_TASK_COLOR_FALLBACKS[index]));
-    }
-
-    function dashboardSourceColor(label) {
-      const key = dashboardSourceKey(label);
-      return dashboardCSSValue(DASHBOARD_SOURCE_COLOR_VARS[key], DASHBOARD_SOURCE_COLOR_FALLBACKS[key]);
-    }
-
-    function dashboardSourceKey(label) {
-      const key = String(label || "").trim().toLowerCase();
-      if (key === "dialogue") return "chat";
-      if (key === "github issues" || key === "github_issue" || key === "github_issues") return "github_issues";
-      return DASHBOARD_SOURCE_COLOR_VARS[key] ? key : "other";
-    }
-
-    function dashboardSourceIconName(label) {
-      switch (dashboardSourceKey(label)) {
-        case "dialogue":
-        case "chat":
-          return "message-circle";
-        case "json":
-          return "braces";
-        case "library":
-          return "book-open";
-        case "review":
-          return "git-pull-request";
-        case "github_issues":
-          return "folder-kanban";
-        case "prompt":
-          return "pencil";
-        default:
-          return "circle-help";
-      }
     }
 
     function dashboardTaskIconName(label) {
@@ -4697,12 +4653,6 @@
       }
     }
 
-    function clearDashboardSourceLegend() {
-      if (!dashboardSourceLegend) return;
-      dashboardSourceLegend.replaceChildren();
-      dashboardSourceLegend.hidden = true;
-    }
-
     function dashboardChartNodeSize(svgNode) {
       const rect = svgNode.getBoundingClientRect();
       const width = Math.max(260, Math.floor(rect.width || svgNode.clientWidth || 0));
@@ -4719,13 +4669,20 @@
       const margin = 18;
       const legendSideWidth = 150;
       const legendGap = 28;
-      const sideLegendMinWidth = 560;
-      const useSideLegend = width >= sideLegendMinWidth;
+      const legendRowGap = 24;
+      const legendColumnWidth = options.showPercent ? 144 : 96;
+      const useSideLegend = width >= 560;
+      const legendColumns = options.showPercent
+        ? Math.min(Math.max(1, entries.length), Math.floor(width / legendColumnWidth))
+        : Math.max(1, entries.length);
+      const legendHeight = Math.ceil(Math.max(1, entries.length) / legendColumns) * legendRowGap;
       const chartWidth = useSideLegend ? Math.max(180, width - ((legendSideWidth + legendGap) * 2)) : width;
-      const radius = Math.max(72, Math.min(chartWidth, height) / 2 - margin);
+      const chartHeight = !useSideLegend && options.showPercent ? height - legendHeight : height;
+      const radius = Math.min(chartWidth, chartHeight) / 2 - margin;
       const innerRadius = radius * 0.62;
       const centerX = width / 2;
-      const centerY = useSideLegend ? height / 2 : height / 2 - 8;
+      const centerY = useSideLegend || options.showPercent ? chartHeight / 2 : height / 2 - 8;
+      const share = (row) => dashboardSourcePercent.format(row.value / total);
       const svg = d3.select(svgNode)
         .attr("viewBox", `0 0 ${width} ${height}`)
         .attr("preserveAspectRatio", "xMidYMid meet");
@@ -4768,10 +4725,12 @@
         )
         .attr("fill", (datum) => datum.data.color)
         .attr("stroke", border)
-        .attr("aria-label", (datum) => `${datum.data.label}: ${datum.data.value}`)
+        .attr("aria-label", ({ data }) => options.showPercent
+          ? `${data.label}: ${data.value} ${data.value === 1 ? "prompt" : "prompts"} (${share(data)})`
+          : `${data.label}: ${data.value}`)
         .on("mouseenter focus", function (_event, datum) {
           d3.select(this).attr("d", hoverArc).classed("is-active", true);
-          root.select(".dashboard-d3-center-value").text(String(datum.data.value));
+          root.select(".dashboard-d3-center-value").text(options.showPercent ? share(datum.data) : String(datum.data.value));
           root.select(".dashboard-d3-center-label").text(datum.data.label);
         })
         .on("mouseleave blur", function () {
@@ -4809,7 +4768,7 @@
         .attr("dy", "1.55em")
         .text(options.centerLabel || "tasks");
 
-      const labelRows = total > 0 ? entries : [{ label: "No data", value: 0, color: dashboardCSSValue("--dashboard-chart-other", "#8ca0bd") }];
+      const labelRows = total > 0 ? entries : [{ label: "No data", value: 0, color: dashboardCSSValue("--dashboard-chart-empty", "#8ca0bd") }];
       const legend = svg.selectAll("g.dashboard-d3-legend")
         .data([null])
         .join("g")
@@ -4837,19 +4796,19 @@
           (update) => update,
           (exit) => exit.remove(),
         );
-      const legendWidth = Math.min(width - 20, labelRows.length * 96);
+      const legendWidth = Math.min(width - 20, legendColumns * legendColumnWidth);
       const legendX = useSideLegend ? Math.min(width - legendSideWidth, centerX + radius + legendGap) : 0;
-      const legendRowGap = 24;
       const legendStartY = useSideLegend
         ? (height / 2) - (((labelRows.length - 1) * legendRowGap) / 2)
-        : height - 24;
+        : height - legendHeight;
       legendItems
         .attr("transform", (_row, index) => {
           if (useSideLegend) {
             return `translate(${legendX},${legendStartY + (index * legendRowGap)})`;
           }
-          const x = (width - legendWidth) / 2 + (index * legendWidth / Math.max(1, labelRows.length));
-          return `translate(${x},${legendStartY})`;
+          const x = (width - legendWidth) / 2 + ((index % legendColumns) * legendWidth / legendColumns);
+          const y = legendStartY + Math.floor(index / legendColumns) * legendRowGap;
+          return `translate(${x},${y})`;
         });
       legendItems.select("rect")
         .attr("fill", (row) => row.color)
@@ -4863,7 +4822,7 @@
       legendItems.select("text")
         .attr("x", legendIconName ? 20 : 16)
         .attr("fill", dashboardCSSValue("--muted", "#5a6f95"))
-        .text((row) => row.label);
+        .text((row) => options.showPercent && total > 0 ? `${row.label} ${share(row)}` : row.label);
       if (legendIconName) {
         replaceLucideIcons(svgNode);
       }
@@ -4882,28 +4841,25 @@
 
     function renderDashboardSourceMix(stats) {
       const sourceMix = Array.isArray(stats?.source_mix) ? stats.source_mix : [];
-      const labels = [];
-      const data = [];
+      const rows = [];
       let total = 0;
       for (const group of sourceMix) {
+        const label = group?.name;
+        const source = DASHBOARD_SOURCES.get(label);
         const count = Number(group?.tasks || 0);
-        if (!Number.isFinite(count) || count <= 0) {
+        if (!source || !Number.isFinite(count) || count <= 0) {
           continue;
         }
-        labels.push(String(group?.name || "Other"));
-        data.push(count);
+        rows.push({ label, value: count, color: dashboardCSSValue(source.color, source.fallback) });
         total += count;
       }
       if (dashboardSourceTotal) {
         dashboardSourceTotal.textContent = `${total} ${total === 1 ? "prompt" : "prompts"}`;
       }
-      const rows = labels.length > 0
-        ? labels.map((label, index) => ({ label, value: data[index], color: dashboardSourceColor(label) }))
-        : [{ label: "No prompts", value: 0, color: dashboardSourceColor("other") }];
-      clearDashboardSourceLegend();
       renderDashboardD3Donut(dashboardSourceChart, rows, {
         centerLabel: "prompts",
-        legendIconName: dashboardSourceIconName,
+        legendIconName: (label) => DASHBOARD_SOURCES.get(label)?.icon || "circle-help",
+        showPercent: true,
       });
     }
 
@@ -14501,6 +14457,9 @@
     window.addEventListener("resize", () => {
       queueChatRepoResizeRender();
       syncPromptInputSizes();
+      if (state.appDisplay === "dashboard") {
+        renderDashboardSourceMix(state.snapshot?.stats);
+      }
     }, { passive: true });
 
     localPromptForm.addEventListener("submit", submitLocalPrompt);
