@@ -60,6 +60,40 @@ func TestBrokerTracksTaskLifecycleAndCommandOutput(t *testing.T) {
 	}
 }
 
+func TestBrokerTaskStatusRevisionChangesOnlyWithStatus(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	const requestID = "req-status-revision"
+	const requestField = " request_id=" + requestID
+	for _, step := range []struct {
+		line     string
+		status   string
+		revision uint64
+	}{
+		{"task status=start" + requestField, "running", 1},
+		{"task" + requestField + " stage=codex status=start", "running", 1},
+		{"task status=paused" + requestField, "paused", 2},
+		{"task status=start" + requestField, "running", 3},
+		{"task status=completed" + requestField, "completed", 4},
+	} {
+		b.IngestLog(step.line)
+		tasks := b.Snapshot().Tasks
+		if len(tasks) != 1 || tasks[0].Status != step.status || tasks[0].StatusRevision != step.revision {
+			t.Fatalf("after %q, tasks = %+v, want %s at revision %d", step.line, tasks, step.status, step.revision)
+		}
+	}
+	for range 2 {
+		if err := b.MarkTaskPRMerged(requestID, ""); err != nil {
+			t.Fatal(err)
+		}
+		task, ok := b.Task(requestID)
+		if !ok || task.Status != "merged" || task.StatusRevision != 5 {
+			t.Fatalf("after merge, task = %+v, want merged at revision 5", task)
+		}
+	}
+}
+
 func TestBrokerRecordsTaskPRTitlesByURL(t *testing.T) {
 	t.Parallel()
 

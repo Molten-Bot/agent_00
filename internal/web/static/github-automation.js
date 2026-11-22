@@ -42,7 +42,7 @@
     try {
       await request('/api/github/automation/scan', { method: 'POST' });
       status.textContent = 'Scanning…';
-      window.trackAnalyticsEvent?.('github_automation_scan_queued', { source: 'settings' });
+      window.trackAnalyticsEvent?.('github_automation_scan_accepted', { source: 'settings' });
     } catch (error) {
       status.textContent = error.message;
       window.trackAnalyticsEvent?.('github_automation_scan_failed', { source: 'settings' });

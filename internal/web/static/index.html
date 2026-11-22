@@ -1256,7 +1256,12 @@
       }
     }
 
+    const initialRouteHash = window.location.hash;
+    let initialDashboardPending = appDisplayFromHash() === "dashboard";
+
     function trackAppPageView() {
+      // Dashboard availability is decided by the initial status response.
+      if (initialDashboardPending && window.location.hash === initialRouteHash) return;
       // Both setters can run during one navigation. Read the resolved screen after they finish.
       queueMicrotask(() => {
         const mode = state.appDisplay;
@@ -13515,6 +13520,35 @@
       return ["pending", "running", "paused"].includes(status) ? status : "";
     }
 
+    async function trackTaskStatusOnce(key, params) {
+      const storageKey = "agent00.analytics.task-status-transitions";
+      const report = () => {
+        let keys = [];
+        try {
+          const stored = JSON.parse(localStorage.getItem(storageKey));
+          if (Array.isArray(stored)) keys = stored;
+        } catch {
+          // Report best-effort when storage cannot be read.
+        }
+        if (keys.includes(key) || !trackAnalyticsEvent("task_status_observed", params)) return;
+        try {
+          localStorage.setItem(storageKey, JSON.stringify([...keys.slice(-999), key]));
+        } catch {
+          // The event was already sent.
+        }
+      };
+      try {
+        // Serialize the check and send across windows, including simultaneous stream updates.
+        if (navigator.locks) {
+          await navigator.locks.request(storageKey, report);
+          return;
+        }
+      } catch {
+        // Storage alone can still deduplicate sequential deliveries.
+      }
+      report();
+    }
+
     function trackObservedTaskStatuses(previous, current) {
       if (!previous || previous === current) return;
       const previousStatuses = new Map((previous.tasks || []).map(task =>
@@ -13524,7 +13558,8 @@
         const status = analyticsTaskStatus(task);
         const previousStatus = previousStatuses.get(id);
         if (!id || !status || status === previousStatus) continue;
-        trackAnalyticsEvent("task_status_observed", {
+        const key = JSON.stringify([id, task.started_at, task.status_revision ?? task.updated_at, status]);
+        void trackTaskStatusOnce(key, {
           task_status: status,
           previous_status: previousStatus,
           source: taskStartSource(task) || "unknown",
@@ -13625,6 +13660,11 @@
         });
       } catch (err) {
         setLocalConnection(false, `Unable to load state: ${err.message}`);
+      } finally {
+        if (initialDashboardPending) {
+          initialDashboardPending = false;
+          trackAppPageView();
+        }
       }
     }
 
@@ -14550,6 +14590,6 @@
   <script src="/static/custom-library-sources.js"></script>
   <script src="/static/marked.umd.js?v=18.2.1"></script>
   <script src="/static/github-issues.js?v=19"></script>
-  <script src="/static/github-automation.js?v=3"></script>
+  <script src="/static/github-automation.js?v=4"></script>
 </body>
 </html>

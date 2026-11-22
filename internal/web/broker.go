@@ -77,6 +77,7 @@ type Task struct {
 	BaseBranch        string               `json:"base_branch,omitempty"`
 	AutoMerge         bool                 `json:"auto_merge,omitempty"`
 	Status            string               `json:"status"`
+	StatusRevision    uint64               `json:"status_revision"`
 	Stage             string               `json:"stage,omitempty"`
 	StageStatus       string               `json:"stage_status,omitempty"`
 	ExitCode          int                  `json:"exit_code,omitempty"`
@@ -316,6 +317,7 @@ type taskState struct {
 	BaseBranch        string
 	AutoMerge         bool
 	Status            string
+	StatusRevision    uint64
 	Stage             string
 	StageStatus       string
 	ExitCode          int
@@ -539,6 +541,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			BaseBranch:        t.BaseBranch,
 			AutoMerge:         t.AutoMerge,
 			Status:            status,
+			StatusRevision:    t.StatusRevision,
 			Stage:             t.Stage,
 			StageStatus:       t.StageStatus,
 			ExitCode:          t.ExitCode,
@@ -652,6 +655,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		BaseBranch:        t.BaseBranch,
 		AutoMerge:         t.AutoMerge,
 		Status:            status,
+		StatusRevision:    t.StatusRevision,
 		Stage:             t.Stage,
 		StageStatus:       t.StageStatus,
 		ExitCode:          t.ExitCode,
@@ -1806,7 +1810,10 @@ func (b *Broker) MarkTaskPRMerged(requestID string, mergedAt string) error {
 		return ErrTaskNotCompleted
 	}
 
-	task.Status = "merged"
+	if task.Status != "merged" {
+		task.Status = "merged"
+		task.StatusRevision++
+	}
 	task.Stage = "finalize"
 	task.StageStatus = "merged"
 	task.TerminalAt = now
@@ -2114,8 +2121,12 @@ func (b *Broker) ensureTaskLocked(requestID string, now time.Time) *taskState {
 }
 
 func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[string]string, now time.Time) {
+	previousStatus := normalizeTaskTerminalStatus(t.Status)
 	defer func() {
 		if t != nil {
+			if normalizeTaskTerminalStatus(t.Status) != previousStatus {
+				t.StatusRevision++
+			}
 			if isFinalTaskLifecycleLine(fields) && isCompletedTaskStatus(t.Status) {
 				t.TerminalAt = now
 			}

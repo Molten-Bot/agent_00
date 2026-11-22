@@ -9,8 +9,8 @@ let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
 
-async function openPage(t, submit = {}) {
-  const page = await browser.newPage();
+async function openPage(t, { submit = {}, context, initialSnapshot = snapshot } = {}) {
+  const page = context ? await context.newPage() : await browser.newPage();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   t.after(async () => {
@@ -25,7 +25,7 @@ async function openPage(t, submit = {}) {
     if (url.origin !== baseURL) return route.abort();
     switch (url.pathname) {
       case '/api/status':
-        return route.fulfill({ json: snapshot });
+        return route.fulfill({ json: initialSnapshot });
       case '/api/agent-auth':
         return route.fulfill({ json: { ok: true, auth: { required: false, ready: true, state: 'ready' } } });
       case '/api/review-settings':
@@ -103,7 +103,7 @@ test('Studio reports each rendered route once with safe location and referrer', 
 });
 
 test('Chat records validation and duplicate prompts without repository or prompt contents', async t => {
-  const page = await openPage(t, { status: 409, json: { duplicate: true, error: 'duplicate fixture' } });
+  const page = await openPage(t, { submit: { status: 409, json: { duplicate: true, error: 'duplicate fixture' } } });
   await page.goto(`${baseURL}/chat?code=private-query`);
   await assertTag(page);
   assert.deepEqual((await events(page, 'page_view')).map(event => event.page_location), [`${baseURL}/chat`]);
@@ -135,20 +135,56 @@ test('GA opt-out suppresses sends and credential popup stays isolated', async t 
   assert.equal(await page.locator('script[src*="analytics"], script[src*="googletagmanager"]').count(), 0);
 });
 
-test('Task snapshots emit changed statuses only and keep request IDs local', async t => {
-  const page = await openPage(t);
-  await page.goto(baseURL);
-  await page.waitForFunction(() => state.snapshot !== undefined && state.snapshot !== null);
+test('Dashboard deep links report only the resolved screen', async t => {
+  for (const [totalTasks, display] of [[1, 'dashboard'], [0, 'studio-builder']]) {
+    const page = await openPage(t, { initialSnapshot: { ...snapshot, stats: { total_tasks: totalTasks } } });
+    await page.goto(`${baseURL}/#dashboard`);
+    await page.waitForFunction(() => state.snapshot !== null);
+    await expect.poll(async () => (await events(page, 'page_view')).map(event => event.page_location))
+      .toEqual([`${baseURL}/#${display}`]);
+  }
+});
+
+test('Task transitions are reported once across windows and keep request IDs local', async t => {
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const pages = [await openPage(t, { context }), await openPage(t, { context })];
+  await Promise.all(pages.map(async page => {
+    await page.goto(baseURL);
+    await page.waitForFunction(() => state.snapshot !== null);
+    await page.evaluate(() => Object.defineProperty(document, 'hidden', { value: false }));
+  }));
+  const observedStatuses = async () => (await Promise.all(pages.map(page => events(page, 'task_status_observed')))).flat();
   const statuses = ['pending', 'running', 'paused', 'running', 'completed', 'completed'];
   for (const [index, status] of statuses.entries()) {
     const generatedAt = new Date(index * 1000).toISOString();
-    await page.evaluate(({ status, snapshot, generatedAt }) => window.testTaskStream.onmessage({ data: JSON.stringify({
-      ...snapshot, generated_at: generatedAt, tasks: [{ request_id: 'private-task-fixture', source: 'prompt', status }],
-    }) }), { status, snapshot, generatedAt });
-    await page.waitForFunction(generatedAt => state.snapshot.generated_at === generatedAt, generatedAt);
+    const packet = { ...snapshot, generated_at: generatedAt, tasks: [{
+      request_id: 'private-task-fixture', source: 'prompt', status,
+      started_at: new Date(0).toISOString(), updated_at: generatedAt, status_revision: Math.min(index, 4),
+    }] };
+    await Promise.all(pages.map(async (page, client) => {
+      const task = { ...packet.tasks[0], updated_at: new Date(index * 1000 + client).toISOString() };
+      await page.evaluate(packet => window.testTaskStream.onmessage({ data: JSON.stringify(packet) }), { ...packet, tasks: [task] });
+      await page.waitForFunction(generatedAt => state.snapshot.generated_at === generatedAt, generatedAt);
+    }));
+    await expect.poll(async () => (await observedStatuses()).filter(event =>
+      event.task_status === status && event.previous_status === statuses[index - 1]).length).toBe(index === 5 ? 0 : 1);
   }
-  const observed = await events(page, 'task_status_observed');
-  assert.deepEqual(observed.map(event => event.task_status), ['pending', 'running', 'paused', 'running', 'completed']);
-  assert.equal(observed[3].previous_status, 'paused');
+  const observed = await observedStatuses();
+  assert.equal(observed.length, 5);
   assert.doesNotMatch(JSON.stringify(observed), /private-task-fixture/);
+});
+
+test('Automation scan reports acceptance for HTTP 202', async t => {
+  const page = await openPage(t);
+  await page.route('**/api/review-settings', route => route.fulfill({ json: { ok: true, settings: { github_issues_enabled: true } } }));
+  await page.route('**/api/github/automation/scan', route => route.continue());
+  await page.goto(baseURL);
+  await page.locator('#settings-open').click();
+  await page.locator('#settings-tab-github-issues').click();
+  const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/github/automation/scan');
+  await page.locator('#github-automation-scan').click();
+  assert.equal((await response).status(), 202);
+  await expect.poll(async () => await events(page, 'github_automation_scan_accepted')).toHaveLength(1);
+  assert.equal((await events(page, 'github_automation_scan_queued')).length, 0);
 });
