@@ -93,6 +93,18 @@ var iamProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:scoped ia
 var secretProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:shared )?secrets manager (?:configuration|keys?|provisioning|secrets?|setup)$`)
 var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* flags? defaults? to (?:off|disabled))$`)
 
+var validationFailureEvidence = regexp.MustCompile(
+	`(?m)^\s*--- fail:|\bassertion(?:error| error| failed| failure)\b|\bexpected\b[^\n]*?(?:,\s*|\s+)(?:got|received)\b` +
+		`|\bfail[ \t]+\S+[ \t]+\[build failed\]` +
+		`|\.go:\d+(?::\d+)?:[ \t]+(?:undefined:|syntax error:|cannot (?:use|convert|assign)\b|invalid\b|` +
+		`[^\n]+\b(?:redeclared in this block|declared and not used|imported and not used)\b)`,
+)
+
+// HasValidationFailureEvidence reports whether text includes a test or compiler failure.
+func HasValidationFailureEvidence(text string) bool {
+	return validationFailureEvidence.MatchString(strings.ToLower(text))
+}
+
 var nonRemediableFailureMarkers = []string{
 	"no space left on device",
 	"no permissions to create a new namespace",
@@ -417,10 +429,22 @@ func NonRemediableFailureReason(err error) string {
 	if pendingProductionRolloutSummary.MatchString(strings.TrimSpace(summary)) && hasOutstandingRolloutProvisioning(details) {
 		return ExternalRolloutPrerequisitesReason
 	}
+	reportedFailure := strings.HasPrefix(summary, "codex: codex reported failure:") ||
+		strings.HasPrefix(summary, "claude: claude reported failure:")
 	for _, marker := range nonRemediableFailureMarkers {
-		if strings.Contains(text, marker) {
-			return marker
+		if !strings.Contains(text, marker) {
+			continue
 		}
+		// A failed test can quote a quota or billing error in its output.
+		// Keep actual invocation errors and quota blockers stated in the summary.
+		switch marker {
+		case "quota exceeded", "insufficient_quota", "billing":
+			if reportedFailure && !strings.Contains(summary, marker) &&
+				HasValidationFailureEvidence(strings.ReplaceAll(details, " | ", "\n")) {
+				continue
+			}
+		}
+		return marker
 	}
 	return NonRemediableRepoAccessReason(err)
 }

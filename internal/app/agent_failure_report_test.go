@@ -166,6 +166,14 @@ func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *t
 			continuation:   "\n\n### Deployment tests\nThe readiness assertion failed.",
 		},
 		{
+			name:         "deployment test failure under a heading in a plain field",
+			continuation: "\n\n### Deployment tests\nDeployment tests fail.",
+		},
+		{
+			name:         "deployment test failure under a heading quotes quota",
+			continuation: "\n\n### Deployment tests\nAssertionError: expected `quota exceeded`, got HTTP 500.",
+		},
+		{
 			name:         "deployment test failure after three status lines",
 			continuation: statusLines + "\nDeployment tests fail.",
 		},
@@ -192,9 +200,9 @@ func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *t
 		t.Run(tc.name, func(t *testing.T) {
 			targetDir := t.TempDir()
 			const prompt = "Complete the rollout"
-			detailsField := "**Error details:**"
+			detailsField := "Error details:"
 			if tc.detailsHeading {
-				detailsField = "## " + detailsField
+				detailsField = "## **Error details:**"
 			}
 			output := "Failure: Production rollout remains pending.\n" +
 				detailsField + " IAM access and Secrets Manager provisioning are still outstanding.\n" +
@@ -328,12 +336,59 @@ func TestRunCodexKeepsCodeFailureRemediableAfterValidationSection(t *testing.T) 
 				res: execx.Result{Stdout: output},
 			}}})
 			err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
-			if err == nil || !strings.Contains(err.Error(), "undefined variable") {
-				t.Fatalf("runCodex() error = %v, want build failure", err)
+			if err == nil || !strings.Contains(err.Error(), "undefined variable") || strings.Contains(err.Error(), "A fixture quotes") {
+				t.Fatalf("runCodex() error = %v, want build failure without the separate section", err)
 			}
 			result := h.fail(ExitCodex, "codex", err, targetDir)
 			if reason := failurefollowup.NonRemediableFailureReason(result.Err); reason != "" {
 				t.Fatalf("NonRemediableFailureReason() = %q, want repair eligible for %q", reason, err)
+			}
+		})
+	}
+}
+
+func TestRunCodexClassifiesQuotaEvidenceInErrorDetails(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, summary, details, evidence, wantReason string
+	}{
+		{
+			name:     "quoted quota in a continued assertion",
+			summary:  "Deployment tests failed.",
+			details:  "The readiness check returned HTTP 500.\nAssertionError: expected `quota exceeded` to be mapped to HTTP 429.",
+			evidence: "AssertionError:",
+		},
+		{
+			name:     "quota and billing text in Go test output",
+			summary:  "Go tests failed.",
+			details:  "\n```text\n--- FAIL: TestQuotaMessage (0.00s)\n    handler_test.go:42: response omitted quota exceeded. Check your plan and billing details.\n```",
+			evidence: "quota exceeded",
+		},
+		{
+			name:       "actual quota blocker in details",
+			summary:    "Could not finish the run.",
+			details:    "The provider request failed.\nERROR: Quota exceeded. Check your plan and billing details.",
+			evidence:   "ERROR: Quota exceeded",
+			wantReason: "quota exceeded",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			targetDir := t.TempDir()
+			const prompt = "Update the application"
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(targetDir, prompt),
+				res: execx.Result{Stdout: "Failure: " + tc.summary + "\nError details: " + tc.details},
+			}}})
+			err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+			if err == nil || !strings.Contains(err.Error(), tc.evidence) {
+				t.Fatalf("runCodex() error = %v, want diagnostic %q", err, tc.evidence)
+			}
+			result := h.fail(ExitCodex, "codex", err, targetDir)
+			if got := failurefollowup.NonRemediableFailureReason(result.Err); got != tc.wantReason {
+				t.Errorf("NonRemediableFailureReason() = %q, want %q for %q", got, tc.wantReason, err)
 			}
 		})
 	}

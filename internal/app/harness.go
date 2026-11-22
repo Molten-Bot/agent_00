@@ -6720,13 +6720,6 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 	return detail + " " + codexDisplayErrorDetail(errorDetail), detail + "\n" + errorDetail
 }
 
-var validationFailureEvidence = regexp.MustCompile(
-	`(?m)^\s*--- fail:|\bassertion(?:error| error| failed| failure)\b|\bexpected\b[^\n]*?(?:,\s*|\s+)(?:got|received)\b` +
-		`|\bfail[ \t]+\S+[ \t]+\[build failed\]` +
-		`|\.go:\d+(?::\d+)?:[ \t]+(?:undefined:|syntax error:|cannot (?:use|convert|assign)\b|invalid\b|` +
-		`[^\n]+\b(?:redeclared in this block|declared and not used|imported and not used)\b)`,
-)
-
 func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	text := strings.ToLower(strings.TrimSpace(detail))
 	if text == "" {
@@ -6838,7 +6831,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	}
 	// A missing tool elsewhere in the report does not explain a failed test
 	// or compiler diagnostic.
-	if validationFailureEvidence.MatchString(text) {
+	if failurefollowup.HasValidationFailureEvidence(text) {
 		return false
 	}
 	smokeCommand := strings.Contains(text, "smoke command")
@@ -7174,14 +7167,16 @@ func markdownHeadingLevel(line string) int {
 
 func isAgentReportSection(line, field string, detailsHeadingLevel int) bool {
 	// Subheadings of a Markdown Error details section can label diagnostics.
-	// A plain field ends at the first heading.
-	if level := markdownHeadingLevel(line); level > 0 {
-		return detailsHeadingLevel == 0 || level <= detailsHeadingLevel
+	// A plain field has no heading level, so only known report sections end it.
+	if level := markdownHeadingLevel(line); level > 0 && detailsHeadingLevel > 0 {
+		return level <= detailsHeadingLevel
 	}
 	label, _, _ := strings.Cut(field, ":")
 	switch strings.TrimRight(label, "*_# ") {
 	case "failure", "error details", "resolved issue", "validation", "alternative validation", "verification", "unblock path":
 		return true
+	case "next steps", "notes":
+		return markdownHeadingLevel(line) > 0
 	default:
 		return false
 	}
