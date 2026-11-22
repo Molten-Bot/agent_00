@@ -21,7 +21,7 @@
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
   <script src="/static/task-asset-preview.js?v=3"></script>
-  <link rel="stylesheet" href="/static/style.css?v=9">
+  <link rel="stylesheet" href="/static/style.css?v=10">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -1183,6 +1183,7 @@
       pause: "pause",
       stop: "square",
       image: "image",
+      images: "images",
       prompt: "file-text",
       loader: "loader-circle",
       default: "loader-circle",
@@ -12595,9 +12596,17 @@
         const button = document.createElement("button");
         button.type = "button";
         button.className = "task-assets-toggle task-copy-link";
-        button.textContent = `${count} asset${count === 1 ? "" : "s"}`;
-        button.title = "View task assets.";
+        button.title = count === 1 ? "View 1 task asset" : `View ${count} task assets`;
+        button.setAttribute("aria-label", button.title);
         button.setAttribute("aria-haspopup", "dialog");
+        button.appendChild(createTaskActionIcon(count === 1 ? "image" : "images"));
+        if (count > 1) {
+          const countLabel = document.createElement("span");
+          countLabel.className = "task-assets-count";
+          countLabel.textContent = String(count);
+          countLabel.setAttribute("aria-hidden", "true");
+          button.appendChild(countLabel);
+        }
         bindTaskActionButton(button, () => {
           button.focus({ preventScroll: true });
           openTaskAssetViewer(taskRequestID(task), task.assets, button, listNode);

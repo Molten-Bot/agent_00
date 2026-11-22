@@ -64,12 +64,14 @@ for (const mobile of [false, true]) {
     await page.goto(`${baseURL}/#current-work`);
     const task = page.locator('#task-list .task[data-request-id="req-assets"]');
     const assets = task.locator('.task-assets-toggle');
-    await expect(assets).toHaveText('2 assets');
+    await expect(assets).toHaveAccessibleName('View 2 task assets');
+    await expect(assets.locator('svg.lucide-images')).toBeVisible();
+    await expect(assets).toHaveText('2');
     await expect(page.locator('#task-list .task[data-request-id="req-no-assets"] .task-assets-toggle')).toHaveCount(0);
     assert.deepEqual(attachmentRequests, [], 'previews load only when requested');
     const viewer = page.locator('#task-asset-viewer');
     await expect(viewer).toBeHidden();
-    await expect(page.locator('link[href="/static/style.css?v=9"]')).toHaveCount(1);
+    await expect(page.locator('link[href="/static/style.css?v=10"]')).toHaveCount(1);
     if (mobile) {
       await assets.tap();
     } else {
@@ -129,7 +131,9 @@ for (const mobile of [false, true]) {
       'only the current asset preview is requested');
 
     const singleAsset = page.locator('#task-list .task[data-request-id="req-single-asset"] .task-assets-toggle');
-    await expect(singleAsset).toHaveText('1 asset');
+    await expect(singleAsset).toHaveAccessibleName('View 1 task asset');
+    await expect(singleAsset.locator('svg.lucide-image')).toBeVisible();
+    await expect(singleAsset).toHaveText('');
     await singleAsset.click();
     await expect(viewer.getByRole('status')).toHaveText('Preview unavailable.');
     await expect(source).toHaveAttribute('href', unavailableURL);
