@@ -108,8 +108,16 @@ var rolloutProgress = regexp.MustCompile(`^(?:added|implemented|updated|wired) \
 var rolloutProgressFollowOn = regexp.MustCompile(`^(?:added|implemented|updated|wired|tests cover) \S`)
 var rolloutSentenceBoundary = regexp.MustCompile(`[.!?][ \t]+`)
 var rolloutValidationPassed = regexp.MustCompile(`^validation passed for [^;\s][^;]*$`)
+var rolloutSectionCheckPassed = regexp.MustCompile(`^[^;\s][^;]*[ :]passed[.!]?$`)
+var rolloutSectionCheckBlocker = regexp.MustCompile(`^no\b|\b(?:0|zero) passed\b|\b(?:never|crash(?:ed|es|ing)?|couldn't|didn't)\b`)
 var rolloutProgressBlocker = regexp.MustCompile(`\b(?:but|except|however|fail(?:ed|s|ure|ing)?|panics?|regressions?|blocked|broken|cannot|could not|unable|incomplete|pending|unavailable|missing|not)\b`)
 var httpFailureStatus = regexp.MustCompile(`\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b`)
+var validationTimeout = regexp.MustCompile(`\b(?:timed out|timeout|deadline exceeded)\b`)
+
+// HasValidationTimeout reports timeout evidence in a validation diagnostic.
+func HasValidationTimeout(text string) bool {
+	return validationTimeout.MatchString(strings.ToLower(text))
+}
 
 // HasHTTPFailureStatus reports whether text contains an HTTP error status or
 // the status curl reports when it does not receive an HTTP response.
@@ -563,19 +571,52 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	// Completion notes can include filenames and versions. Match them as
 	// whole lines. Require a clean validation result after implementation prose.
 	var progressPending bool
+	var inValidation bool
 	for _, line := range lines[1:] {
 		line = strings.TrimSpace(line)
+		label, inline, _ := strings.Cut(line, ":")
+		if strings.Trim(label, "#*_ \t") == "validation" {
+			inValidation = true
+			line = strings.Trim(inline, "*_ \t")
+			if line == "" {
+				continue
+			}
+		}
+		if inValidation {
+			line = rolloutValidationCheckLine(line)
+		}
 		switch {
 		case isRolloutProgressLine(line):
 			progressPending = true
-		case rolloutValidationPassed.MatchString(line) && !rolloutProgressBlocker.MatchString(line) &&
-			!rolloutSentenceBoundary.MatchString(line) && !HasHTTPFailureStatus(line):
+			inValidation = false
+		case isPassingRolloutValidation(line, inValidation):
 			progressPending = false
 		case !rolloutStatusOnly(rolloutStatements(line)):
 			return false
 		}
 	}
 	return !progressPending
+}
+
+// IsPassingRolloutValidationCheck identifies positive evidence inside a
+// Validation section.
+func IsPassingRolloutValidationCheck(line string) bool {
+	return isPassingRolloutValidation(rolloutValidationCheckLine(strings.ToLower(line)), true)
+}
+
+func rolloutValidationCheckLine(line string) string {
+	line = strings.TrimSpace(line)
+	if len(line) > 1 && strings.ContainsRune("-*+", rune(line[0])) && strings.ContainsRune(" \t", rune(line[1])) {
+		line = line[2:]
+	}
+	return strings.Trim(line, "*_ \t")
+}
+
+func isPassingRolloutValidation(line string, inSection bool) bool {
+	return (rolloutValidationPassed.MatchString(line) || inSection && rolloutSectionCheckPassed.MatchString(line)) &&
+		(!inSection || !rolloutSectionCheckBlocker.MatchString(line)) &&
+		!rolloutProgressBlocker.MatchString(line) && !rolloutSentenceBoundary.MatchString(line) &&
+		!HasValidationTimeout(line) && !HasHTTPFailureStatus(line)
 }
 
 func isRolloutProgressLine(line string) bool {

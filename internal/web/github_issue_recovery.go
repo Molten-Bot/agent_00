@@ -225,12 +225,15 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	// Preserve the classification before later checks can replace the last
 	// error. This also handles records written before the incident existed.
 	if record.Outcome == "error" && issueDependencyRetryError(record.Incident) == "" {
-		switch failurefollowup.NonRemediableFailureReason(errors.New(record.FailureDetail())) {
-		case failurefollowup.UnmergedDependencyReason:
+		failure := record.FailureDetail()
+		reason := failurefollowup.NonRemediableFailureReason(errors.New(failure))
+		switch {
+		case reason == failurefollowup.UnmergedDependencyReason:
 			record.Incident = localruntime.IssueIncidentUnmergedDependency
-		case failurefollowup.OpenDependencyReason:
+		case reason == failurefollowup.OpenDependencyReason:
 			record.Incident = localruntime.IssueIncidentOpenDependency
-		case failurefollowup.ExternalRolloutPrerequisitesReason:
+		case reason == failurefollowup.ExternalRolloutPrerequisitesReason,
+			s.IssueRolloutBlockedFromLogs != nil && s.IssueRolloutBlockedFromLogs(record.RequestID, failure):
 			record.Incident = localruntime.IssueIncidentExternalRollout
 		}
 		if issueDependencyRetryError(record.Incident) != "" {

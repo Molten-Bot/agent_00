@@ -273,11 +273,8 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 		if reason := failurefollowup.NonRemediableFailureReason(errors.New(sourceFailure)); isIssueRepairDependencyBlock(reason) {
 			return reason, nil
 		}
-		readStdout := func(stage string) string {
-			return issueRepairAgentStdout(q.logRoot, issue.RequestID, stage)
-		}
-		if app.IsExternalRolloutFailureFromStdout(sourceFailure, readStdout) ||
-			(failure != failurefollowup.RedactFailureDetail(sourceFailure) && app.IsExternalRolloutFailureFromStdout(failure, readStdout)) {
+		if q.rolloutBlockedFromLogs(issue.RequestID, sourceFailure) ||
+			(failure != failurefollowup.RedactFailureDetail(sourceFailure) && q.rolloutBlockedFromLogs(issue.RequestID, failure)) {
 			// Record the retry blocker before the outbox stops checking this report.
 			if err := q.persistRecoveredRolloutBlock(issue); err != nil {
 				return "", err
@@ -290,6 +287,12 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 		return "", nil
 	}
 	return "", err
+}
+
+func (q *issueRepairQueue) rolloutBlockedFromLogs(requestID, failure string) bool {
+	return app.IsExternalRolloutFailureFromStdout(failure, func(stage string) string {
+		return issueRepairAgentStdout(q.logRoot, requestID, stage)
+	})
 }
 
 func (q *issueRepairQueue) persistRecoveredRolloutBlock(issue localruntime.IssueClaimRecord) error {

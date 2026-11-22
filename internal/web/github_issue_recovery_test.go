@@ -794,6 +794,43 @@ func TestIssueRecoveryBlocksExternalRolloutWithoutRepair(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryChecksPreservedRolloutBeforeOverdueRetry(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(t.Context())
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.Incident = "missing_pr"
+	record.RunError = "codex: codex reported failure: Failure: Production rollout remains pending. " +
+		"Error details: Scoped IAM and shared reference key still require infrastructure work. | [error details truncated]"
+	record.NextAttemptAt = time.Now().Add(-time.Minute)
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	s.IssueRolloutBlockedFromLogs = func(requestID, failure string) bool {
+		reads++
+		if requestID != record.RequestID || failure != record.RunError {
+			t.Fatalf("stdout lookup used request %q and failure %q", requestID, failure)
+		}
+		return true
+	}
+	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
+		t.Fatal("external provisioning failure queued a harness repair")
+		return "", nil
+	}
+	for range 2 {
+		if err := s.ReconcileIssueWork(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := latestRecoveryRecord(t, s)
+	if reads != 1 || len(f.submissions) != 1 || got.Incident != localruntime.IssueIncidentExternalRollout ||
+		got.State != "blocked" || !got.NextAttemptAt.IsZero() || got.FailureDetail() != record.RunError {
+		t.Fatalf("overdue claim was not durably blocked: state=%q incident=%q reads=%d submissions=%d",
+			got.State, got.Incident, reads, len(f.submissions))
+	}
+}
+
 func TestIssueRecoveryHandlesAmbiguousReservationAndFastCompletion(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)

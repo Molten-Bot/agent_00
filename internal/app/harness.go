@@ -7352,14 +7352,13 @@ func codexErrorDetailLines(lines []string, stopAtSection bool, detailsHeadingLev
 		}
 		lower := strings.ToLower(agentFailureFieldLine(trimmed))
 		if stopAtSection && fence == "" && isAgentReportSection(trimmed, lower, detailsHeadingLevel) {
-			// A separate Validation section can carry failure evidence.
+			// A separate Validation section can confirm progress or report a failure.
 			level := markdownHeadingLevel(trimmed)
 			label, inline, _ := strings.Cut(lower, ":")
 			if strings.TrimRight(label, "*_# ") == "validation" {
 				subsection := codexErrorDetailLines(lines[i+1:], true, level)
 				body := strings.TrimSpace(inline) + "\n" + strings.Join(subsection, "\n")
-				if reportedValidationFailure.MatchString(strings.ToLower(body)) ||
-					failurefollowup.HasValidationFailureEvidence(body) || failurefollowup.HasHTTPFailureStatus(body) {
+				if hasReportedValidationEvidence(body) {
 					details = append(details, trimmed)
 					details = append(details, subsection...)
 				}
@@ -7375,6 +7374,21 @@ func codexErrorDetailLines(lines []string, stopAtSection bool, detailsHeadingLev
 }
 
 var reportedValidationFailure = regexp.MustCompile(`\b(?:tests?|checks?|validation) (?:still )?(?:fail(?:s|ed|ing)?|did not pass)\b`)
+
+func hasReportedValidationEvidence(body string) bool {
+	body = strings.ToLower(body)
+	if reportedValidationFailure.MatchString(body) || smokeCheckFailure.MatchString(body) ||
+		failurefollowup.HasValidationTimeout(body) || failurefollowup.HasValidationFailureEvidence(body) ||
+		failurefollowup.HasHTTPFailureStatus(body) {
+		return true
+	}
+	for _, line := range strings.Split(body, "\n") {
+		if failurefollowup.IsPassingRolloutValidationCheck(line) {
+			return true
+		}
+	}
+	return false
+}
 
 func markdownHeadingLevel(line string) int {
 	title := strings.TrimLeft(line, "#")

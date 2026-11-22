@@ -121,14 +121,16 @@ type Server struct {
 	IssueClaims             *localruntime.IssueClaimStore
 	// IssueRecovery is enabled only when the submitter implements durable
 	// receipts and inherited worker locks. Legacy embedders remain manual-only.
-	IssueRecovery      *localruntime.IssueRecoveryConfig
-	IssueRepair        func(context.Context, localruntime.IssueClaimRecord) (string, error)
-	IssueRepairs       *localruntime.IssueRepairStore
-	IssueReady         func(context.Context) error
-	issueAutomation    *issueAutomationState
-	gitHubRepos        *gitHubRepoCache
-	issueAutoStartWake chan time.Time
-	Ready              chan<- error
+	IssueRecovery *localruntime.IssueRecoveryConfig
+	IssueRepair   func(context.Context, localruntime.IssueClaimRecord) (string, error)
+	// IssueRolloutBlockedFromLogs rechecks truncated failures before automatic retry.
+	IssueRolloutBlockedFromLogs func(requestID, failure string) bool
+	IssueRepairs                *localruntime.IssueRepairStore
+	IssueReady                  func(context.Context) error
+	issueAutomation             *issueAutomationState
+	gitHubRepos                 *gitHubRepoCache
+	issueAutoStartWake          chan time.Time
+	Ready                       chan<- error
 }
 
 // AgentAuthState describes current runtime agent-auth readiness and device flow hints.

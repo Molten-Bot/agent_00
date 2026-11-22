@@ -470,6 +470,8 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 		{"linked repair with full report", "queued", logFileName, "stdout", "API flags default off.", true},
 		{"dispatch intent with legacy log", "running", legacyTaskLogFileName, "stdout", "API flags default off.", true},
 		{"deployment defect beyond truncation", "queued", logFileName, "stdout", "Smoke check returned HTTP 500.", false},
+		{"readiness timeout under validation beyond truncation", "queued", logFileName, "stdout", "## Validation\n- Readiness check timed out.", false},
+		{"passing validation beyond truncation", "queued", logFileName, "stdout", "## Validation\n- Unit tests passed.", true},
 		{"stderr echo", "queued", logFileName, "stderr", "API flags default off.", false},
 		{"unrelated report", "queued", logFileName, "stdout", "API flags default off.", false},
 		{"missing log", "queued", "", "", "", false},

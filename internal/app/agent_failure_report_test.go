@@ -331,6 +331,7 @@ func TestRunCodexClassifiesExternalRolloutBeforeDisplayTruncation(t *testing.T) 
 	}{
 		{"external prerequisites", ".\n\nResolved issue: A test failed before the fixture was fixed.", failurefollowup.ExternalRolloutPrerequisitesReason},
 		{"late code failure", ".\n\nDeployment tests fail.", ""},
+		{"readiness timeout under validation", ".\n\n### Validation\n- Readiness check timed out.", ""},
 		{"mixed validation result", ", but the readiness check failed.", ""},
 		{"successful unit tests and failed smoke check", "; smoke check returned HTTP 500.", ""},
 		{"code defect in the same paragraph", ". The service crashes on startup.", ""},
@@ -351,6 +352,40 @@ func TestRunCodexClassifiesExternalRolloutBeforeDisplayTruncation(t *testing.T) 
 			}
 			result := h.fail(ExitCodex, "codex", err, target)
 			// Issue recovery reparses the persisted error text after restart.
+			if got := failurefollowup.NonRemediableFailureReason(errors.New(result.Err.Error())); got != tc.want {
+				t.Fatalf("reason = %q, want %q: %v", got, tc.want, err)
+			}
+		})
+	}
+}
+
+func TestRunCodexCountsPassingValidationSectionAfterProgress(t *testing.T) {
+	t.Parallel()
+
+	const output = "Failure: Production rollout remains pending.\n" +
+		"Error details: Scoped IAM and shared reference key still require infrastructure work.\n" +
+		"Implemented the requested endpoint.\n\n" +
+		"## Validation\n- `go test ./...` passed.\n* **Build passed.**\n"
+	for _, tc := range []struct {
+		name, extra, want string
+	}{
+		{"passing checks", "\n## Next steps\nProvision infrastructure.", failurefollowup.ExternalRolloutPrerequisitesReason},
+		{"mixed results", "- Readiness probe timed out.", ""},
+		{"negative pass count", "* No smoke checks passed.", ""},
+		{"unexpected check result", "- Startup produced no response.", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := t.TempDir()
+			const prompt = "Complete the rollout"
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(target, prompt),
+				res: execx.Result{Stdout: output + tc.extra},
+			}}})
+			err := h.runCodex(t.Context(), agentruntime.Default(), target, prompt, codexRunOptions{}, "", "")
+			if err == nil {
+				t.Fatal("pending rollout must remain a failed run")
+			}
+			result := h.fail(ExitCodex, "codex", err, target)
 			if got := failurefollowup.NonRemediableFailureReason(errors.New(result.Err.Error())); got != tc.want {
 				t.Fatalf("reason = %q, want %q: %v", got, tc.want, err)
 			}
