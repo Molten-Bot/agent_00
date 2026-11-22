@@ -4723,8 +4723,8 @@
         .attr("dy", "1.55em")
         .text(options.centerLabel || "tasks");
 
-      const hoveredSlice = slicePaths.filter(":hover");
-      (hoveredSlice.empty() ? slicePaths.filter(":focus") : hoveredSlice).each(function (datum) {
+      const focusedSlice = slicePaths.filter(":focus");
+      (focusedSlice.empty() ? slicePaths.filter(":hover") : focusedSlice).each(function (datum) {
         activateSlice(this, datum);
       });
 

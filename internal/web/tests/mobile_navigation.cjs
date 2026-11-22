@@ -124,6 +124,17 @@ test('resizing the source chart keeps the share for a stationary pointer over a 
   assert.equal(await value.textContent(), '75%');
   assert.equal(await label.textContent(), 'GitHub Issues');
 
+  const chatSlice = chart.getByLabel(/^Chat:/);
+  await chatSlice.focus();
+  const focusedViewBox = await chart.getAttribute('viewBox');
+  await page.setViewportSize({ width: 1020, height: 900 });
+  await page.waitForFunction(previous => document.querySelector('#dashboard-source-chart').getAttribute('viewBox') !== previous, focusedViewBox);
+  assert.equal(await chatSlice.evaluate(node => node === document.activeElement), true);
+  assert.equal(await slice.evaluate(node => node.matches(':hover')), true);
+  assert.equal(await value.textContent(), '25%');
+  assert.equal(await label.textContent(), 'Chat');
+
+  await chart.focus();
   await page.mouse.move(0, 0);
   assert.equal(await chart.locator('.dashboard-d3-slice.is-active').count(), 0);
   assert.equal(await value.textContent(), '4');
