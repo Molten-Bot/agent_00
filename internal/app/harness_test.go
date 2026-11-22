@@ -3508,7 +3508,7 @@ func TestRunExistingPRNoChangesUsesPromptPRURLWhenHeadLookupIsEmpty(t *testing.T
 		{cmd: remoteBranchExistsOnOriginCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "abc123\trefs/heads/" + cfg.BaseBranch + "\n"}},
 		{cmd: prLookupByHeadCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "[]\n"}},
 		{cmd: prLookupAnyByHeadCommand(repoDir, cfg.BaseBranch), res: execx.Result{Stdout: "[]\n"}},
-		{cmd: prStateViewCommand(repoDir, prURL), res: execx.Result{Stdout: `{"url":"` + prURL + `","title":"` + prTitle + `","state":"MERGED","mergedAt":"2026-04-02T15:00:00Z","headRefName":"` + cfg.BaseBranch + `"}`}},
+		{cmd: prStateViewCommand(repoDir, prURL), res: execx.Result{Stdout: `{"url":"` + prURL + `","title":"` + prTitle + `","state":"MERGED","mergedAt":"2026-04-02T15:00:00Z","headRefName":"` + cfg.BaseBranch + `","headRepository":{"nameWithOwner":"acme/repo"}}`}},
 	}}
 
 	h := New(fake)
@@ -10120,5 +10120,29 @@ func TestFinalReviewPromptExcludesBranchHistoryRepairs(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("finalReviewPrompt() missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestNoChangePromptPRRejectsForeignHead(t *testing.T) {
+	t.Parallel()
+	for _, owner := range []string{"fork/repo", ""} {
+		t.Run(owner, func(t *testing.T) {
+			repo := repoWorkspace{Dir: "/repo", URL: "https://github.com/acme/repo", Branch: "topic"}
+			const prURL = "https://github.com/acme/repo/pull/123"
+			fake := &fakeRunner{t: t, exps: []expectedRun{
+				{cmd: remoteBranchExistsOnOriginCommand(repo.Dir, repo.Branch)},
+				{cmd: prLookupAnyByHeadCommand(repo.Dir, repo.Branch), res: execx.Result{Stdout: "[]"}},
+				{cmd: prStateViewCommand(repo.Dir, prURL), res: execx.Result{Stdout: fmt.Sprintf(`{"url":%q,"title":"Foreign title","state":"OPEN","headRefName":"topic","headRepository":{"nameWithOwner":%q}}`, prURL, owner)}},
+			}}
+			h := New(fake)
+			h.OnPRTitle = func(_, _ string) { t.Fatal("published foreign PR title") }
+			repos := []repoWorkspace{repo}
+			if err := h.populateNoChangePRURLs(t.Context(), repos, config.Config{Prompt: prURL}, true); err == nil {
+				t.Fatal("expected rejection of unverified head repository")
+			}
+			if repos[0].PRURL != "" {
+				t.Fatal("attached foreign PR")
+			}
+		})
 	}
 }

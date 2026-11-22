@@ -1050,7 +1050,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 		fake := &fakeRunner{t: t, exps: []expectedRun{
 			{cmd: remoteBranchExistsOnRemoteCommand(repos[0].Dir, publishRemoteOrigin, repos[0].Branch), res: execx.Result{Stdout: ""}},
 			{cmd: prLookupAnyByHeadWithRepoCommand(repos[0].Dir, "agent00-topic", ""), res: execx.Result{Stdout: "[]"}},
-			{cmd: prStateViewCommand(repos[0].Dir, promptPRURL), res: execx.Result{Stdout: `{"url":"` + promptPRURL + `","state":"open","headRefName":"agent00-topic"}`}},
+			{cmd: prStateViewCommand(repos[0].Dir, promptPRURL), res: execx.Result{Stdout: `{"url":"` + promptPRURL + `","state":"open","headRefName":"agent00-topic","headRepository":{"nameWithOwner":"acme/repo"}}`}},
 		}}
 		h := New(fake)
 		prompt := "Original task prompt mentions " + promptPRURL

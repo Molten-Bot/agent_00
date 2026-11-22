@@ -2672,8 +2672,8 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 					state.HeadRepositoryOwner.Login+"/"+state.HeadRepository.Name)
 				if strings.EqualFold(githubutil.PullRequestRepository(resolvedURL), targetRepo) &&
 					(claimedBase == "" || state.BaseRefName == claimedBase) &&
-					(cfg.GitHubIssue == nil || (strings.EqualFold(headRepo, prHeadRepository(repos[i])) &&
-						(pullRequestStateIsOpen(state) || pullRequestStateIsMerged(state)))) {
+					strings.EqualFold(headRepo, prHeadRepository(repos[i])) &&
+					(cfg.GitHubIssue == nil || pullRequestStateIsOpen(state) || pullRequestStateIsMerged(state)) {
 					pr = ghPRLookupEntry{URL: resolvedURL, Title: state.Title}
 				}
 			}
