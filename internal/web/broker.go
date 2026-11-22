@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
 	"github.com/Molten-Bot/agent_00/internal/library"
@@ -80,6 +81,7 @@ type Task struct {
 	WorkspaceDir      string               `json:"workspace_dir,omitempty"`
 	Branch            string               `json:"branch,omitempty"`
 	PRURL             string               `json:"pr_url,omitempty"`
+	IssueTitle        string               `json:"issue_title,omitempty"`
 	PRTitle           string               `json:"pr_title,omitempty"`
 	PRTitleURL        string               `json:"pr_title_url,omitempty"`
 	LiveAppURL        string               `json:"live_app_url,omitempty"`
@@ -524,6 +526,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			WorkspaceDir:      t.WorkspaceDir,
 			Branch:            t.Branch,
 			PRURL:             t.PRURL,
+			IssueTitle:        b.runConfigFieldsLocked(t.RequestID).issueTitle,
 			PRTitle:           prTitle,
 			PRTitleURL:        prTitleURL,
 			LiveAppURL:        t.LiveAppURL,
@@ -634,6 +637,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		WorkspaceDir:      t.WorkspaceDir,
 		Branch:            t.Branch,
 		PRURL:             t.PRURL,
+		IssueTitle:        b.runConfigFieldsLocked(t.RequestID).issueTitle,
 		PRTitle:           prTitle,
 		PRTitleURL:        prTitleURL,
 		LiveAppURL:        t.LiveAppURL,
@@ -649,6 +653,10 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 
 // RecordTaskPRTitle updates the title associated with a task's pull request.
 func (b *Broker) RecordTaskPRTitle(requestID, prURL, title string) {
+	b.recordTaskPRTitle(requestID, prURL, title, false)
+}
+
+func (b *Broker) recordTaskPRTitle(requestID, prURL, title string, fromMonitor bool) {
 	title = strings.TrimSpace(title)
 	if prURL == "" || title == "" {
 		return
@@ -660,6 +668,13 @@ func (b *Broker) RecordTaskPRTitle(requestID, prURL, title string) {
 	t := b.tasks[requestID]
 	if t == nil || t.PRTitles[prURL] == title {
 		return
+	}
+	if fromMonitor {
+		// A merge lookup can track a different PR from the one on the task card.
+		_, titledURL := taskPRTitle(t)
+		if t.PRURL != prURL || (titledURL != "" && titledURL != prURL) {
+			return
+		}
 	}
 	if t.PRTitles == nil {
 		t.PRTitles = make(map[string]string)
@@ -1530,6 +1545,7 @@ type runConfigFields struct {
 	source       string
 	branch       string
 	prURL        string
+	issueTitle   string
 	autoMerge    bool
 }
 
@@ -1554,6 +1570,7 @@ func (b *Broker) runConfigFieldsLocked(requestID string) runConfigFields {
 		source:       sourceFromRunConfigJSON(raw),
 		branch:       branchFromRunConfigJSON(raw),
 		prURL:        prURLFromRunConfigJSON(raw),
+		issueTitle:   issueTitleFromRunConfigJSON(raw),
 		autoMerge:    autoMergeFromRunConfigJSON(raw),
 	}
 	if b.runConfigFieldCache == nil {
@@ -2782,6 +2799,17 @@ func appendNonEmptyUnique(dst []string, values ...string) []string {
 	}
 
 	return out
+}
+
+func issueTitleFromRunConfigJSON(raw []byte) string {
+	var payload struct {
+		Prompt      string                    `json:"prompt"`
+		GitHubIssue *config.GitHubIssueConfig `json:"githubIssue"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	return (config.Config{Prompt: payload.Prompt, GitHubIssue: payload.GitHubIssue}).GitHubIssueTitle()
 }
 
 func promptFromRunConfigJSON(runConfigJSON []byte) string {

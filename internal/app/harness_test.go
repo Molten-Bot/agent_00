@@ -6380,6 +6380,7 @@ func TestPRCreateCommandsEnforceStandardBodyFormat(t *testing.T) {
 
 func TestPRCreateCommandsIncludeGitHubIssueLinkMode(t *testing.T) {
 	t.Parallel()
+	const title = "agent00-Fix issue-20260407-002959"
 	for _, test := range []struct {
 		mode string
 		want string
@@ -6390,12 +6391,16 @@ func TestPRCreateCommandsIncludeGitHubIssueLinkMode(t *testing.T) {
 		t.Run(test.mode, func(t *testing.T) {
 			cfg := sampleConfig()
 			cfg.GitHubIssue = &config.GitHubIssueConfig{
-				Repository: "acme/repo", Number: 17, URL: "https://github.com/acme/repo/issues/17", LinkMode: test.mode,
+				Repository: "acme/repo", Number: 17, Title: title, URL: "https://github.com/acme/repo/issues/17", LinkMode: test.mode,
 			}
+			cfg.ApplyDefaults()
 			for _, command := range []execx.Command{
 				prCreateCommand("/tmp/repo", cfg, "topic-branch"),
 				prCreateWithoutBaseCommand("/tmp/repo", cfg, "topic-branch"),
 			} {
+				if got, ok := flagValue(command.Args, "--title"); !ok || got != title {
+					t.Fatalf("PR create title = %q, want %q", got, title)
+				}
 				body, ok := flagValue(command.Args, "--body")
 				if !ok || !strings.Contains(body, test.want) {
 					t.Fatalf("PR create body = %q, want %q", body, test.want)

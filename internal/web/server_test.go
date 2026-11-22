@@ -1264,8 +1264,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, "function taskPromptPreview(") {
 		t.Fatalf("expected index html to remove fixed-length task prompt preview helper")
 	}
-	if !strings.Contains(markup, `return String(task?.pr_title || "").trim() || taskPromptText(task);`) {
-		t.Fatalf("expected index html to prefer the pull request title and fall back to task prompt text")
+	if !strings.Contains(markup, `return String(task?.pr_title || "").trim() || String(task?.issue_title || "").trim() || taskPromptText(task);`) {
+		t.Fatalf("expected index html to prefer the pull request title, then the issue title, then the task prompt")
 	}
 	if !strings.Contains(markup, `if (!task || typeof task.prompt !== "string") return "";`) {
 		t.Fatalf("expected index html to display available task prompt text")

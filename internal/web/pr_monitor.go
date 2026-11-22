@@ -235,6 +235,7 @@ func (m *PRMergeMonitor) checkTaskPR(ctx context.Context, task Task) {
 		m.Logf("localruntime.ui status=warn event=pr_monitor request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
 		return
 	}
+	m.Broker.recordTaskPRTitle(task.RequestID, task.PRURL, state.Title, true)
 	if !state.Merged() {
 		m.maybeQueueReviewFeedback(ctx, task, state)
 		return

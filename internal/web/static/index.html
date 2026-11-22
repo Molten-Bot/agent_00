@@ -9866,7 +9866,7 @@
     }
 
     function taskNameText(task) {
-      return String(task?.pr_title || "").trim() || taskPromptText(task);
+      return String(task?.pr_title || "").trim() || String(task?.issue_title || "").trim() || taskPromptText(task);
     }
 
     function taskPromptModalTitleText(task) {
@@ -11259,6 +11259,7 @@
           String(existing.status || "") === String(copy.status || "") &&
           String(existing.error || "") === String(copy.error || "") &&
           String(existing.pr_url || "") === String(copy.pr_url || "") &&
+          String(existing.issue_title || "") === String(copy.issue_title || "") &&
           String(existing.pr_title || "") === String(copy.pr_title || "") &&
           String(existing.pr_title_url || "") === String(copy.pr_title_url || "") &&
           existingLogsLength === nextLogsLength

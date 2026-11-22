@@ -313,7 +313,7 @@ func TestPRMergeMonitorKeepsTaskVisibleUntilPRIsMerged(t *testing.T) {
 	broker.IngestLog("dispatch status=completed request_id=req-open workspace=/tmp/run branch=agent00-ship pr_url=https://github.com/acme/repo/pull/77")
 
 	runner := &stubPRMonitorRunner{
-		result: execx.Result{Stdout: `{"state":"OPEN","mergedAt":""}`},
+		result: execx.Result{Stdout: `{"state":"OPEN","mergedAt":"","title":"Published PR title"}`},
 	}
 
 	monitor := PRMergeMonitor{
@@ -331,7 +331,8 @@ func TestPRMergeMonitorKeepsTaskVisibleUntilPRIsMerged(t *testing.T) {
 	}()
 
 	waitForHubUITest(t, 5*time.Second, func() bool {
-		return len(runner.Commands()) > 0
+		task, ok := broker.Task("req-open")
+		return ok && task.PRTitle == "Published PR title"
 	})
 
 	snap := broker.Snapshot()

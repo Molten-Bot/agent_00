@@ -144,10 +144,16 @@ test('task card distinguishes the titled pull request from the merged pull reque
   }, {
     request_id: 'running-pr', prompt: 'Running PR prompt', repo: 'example/project',
     status: 'running', started_at: now, updated_at: now, pr_title_url: titledURL,
-    pr_title: 'Improve repository navigation',
+    issue_title: 'Original issue title', pr_title: 'Improve repository navigation',
+  }, {
+    request_id: 'queued-issue', prompt: 'Full issue prompt', repo: 'example/project',
+    status: 'pending', started_at: now, updated_at: now, issue_title: 'Original issue title',
   }]);
 
+  const queuedIssue = page.locator('#task-list .task[data-request-id="queued-issue"]');
+  assert.equal(await queuedIssue.locator('.task-id').textContent(), 'Original issue title');
   const runningTask = page.locator('#task-list .task[data-request-id="running-pr"]');
+  assert.equal(await runningTask.locator('.task-id').textContent(), 'Improve repository navigation');
   assert.equal(await runningTask.locator('a.task-progress-step[title^="GitHub:"]').getAttribute('href'), titledURL);
   await page.locator('#task-history-toggle').click();
   const task = page.locator('#task-list .task[data-request-id="multi-repo"]');
