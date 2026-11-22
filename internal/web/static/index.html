@@ -834,7 +834,7 @@
           <div class="onboarding-modal-header">
             <h2 id="settings-title"><i data-lucide="settings" aria-hidden="true"></i><span>Settings</span></h2>
             <button id="settings-agent-reauthenticate" class="settings-auth-link hidden" type="button">Sign in again</button>
-            <p id="settings-message" class="sr-only">Configure library, automation, reviews, merging, and commit signing.</p>
+            <p id="settings-message" class="sr-only">Configure library, automation, repositories, reviews, merging, and commit signing.</p>
           </div>
           <button id="review-settings-close" class="settings-modal-close onboarding-modal-close" type="button" aria-label="Close settings" title="Close">
             <i data-lucide="x" aria-hidden="true"></i>
@@ -855,6 +855,9 @@
           </button>
           <button id="settings-tab-automation" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-automation" data-settings-tab="automation">
             <i data-lucide="wand-sparkles" aria-hidden="true"></i><span>Automation</span>
+          </button>
+          <button id="settings-tab-repositories" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-repositories" data-settings-tab="repositories">
+            <i data-lucide="folder-git-2" aria-hidden="true"></i><span>Repositories</span>
           </button>
           <button id="settings-tab-github-issues" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-github-issues" data-settings-tab="github-issues">
             <i data-lucide="folder-kanban" aria-hidden="true"></i><span>GitHub Issues</span>
@@ -893,24 +896,24 @@
               <i data-lucide="braces" aria-hidden="true"></i>
               <span>JSON input (experimental)</span>
             </label>
-            <div class="repository-settings">
-              <div class="repository-settings-heading">
-                <strong>Repositories</strong>
-                <small>Deselect an owner to hide every repository it owns, or deselect single repositories.</small>
-              </div>
-              <div class="repository-settings-columns" id="review-settings-repository-columns">
-                <div class="repository-settings-column" id="review-settings-owners-column">
-                  <small class="repository-settings-column-title" id="review-settings-owners-title">Organizations &amp; people</small>
-                  <div id="review-settings-owners" class="repository-settings-list" role="group" aria-labelledby="review-settings-owners-title"></div>
-                </div>
-                <div class="repository-settings-column">
-                  <small class="repository-settings-column-title" id="review-settings-repositories-title">Repositories</small>
-                  <div id="review-settings-repositories" class="repository-settings-list" role="group" aria-labelledby="review-settings-repositories-title"></div>
-                </div>
-              </div>
-              <p id="review-settings-repositories-empty" class="github-issues-settings-description">No repositories loaded.</p>
-            </div>
           </fieldset>
+          <div id="settings-panel-repositories" class="review-settings-section" role="tabpanel" aria-labelledby="settings-tab-repositories" hidden>
+            <div class="repository-settings-heading">
+              <strong>Repositories</strong>
+              <small>Deselect an owner to hide every repository it owns, or deselect single repositories.</small>
+            </div>
+            <div class="repository-settings-columns" id="review-settings-repository-columns">
+              <div class="repository-settings-column" id="review-settings-owners-column">
+                <small class="repository-settings-column-title" id="review-settings-owners-title">Organizations &amp; people</small>
+                <div id="review-settings-owners" class="repository-settings-list" role="group" aria-labelledby="review-settings-owners-title"></div>
+              </div>
+              <div class="repository-settings-column">
+                <small class="repository-settings-column-title" id="review-settings-repositories-title">Repositories</small>
+                <div id="review-settings-repositories" class="repository-settings-list" role="group" aria-labelledby="review-settings-repositories-title"></div>
+              </div>
+            </div>
+            <p id="review-settings-repositories-empty" class="github-issues-settings-description">No repositories loaded.</p>
+          </div>
           <fieldset id="settings-panel-github-issues" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-github-issues" hidden>
             <legend class="review-settings-section-title sr-only">GitHub Issues</legend>
             <label class="selectable-option">
@@ -2334,6 +2337,7 @@
     const settingsTabButtons = Array.from(document.querySelectorAll("[data-settings-tab]"));
     const settingsTabPanels = {
       automation: document.getElementById("settings-panel-automation"),
+      repositories: document.getElementById("settings-panel-repositories"),
       "github-issues": document.getElementById("settings-panel-github-issues"),
       review: document.getElementById("settings-panel-review"),
       merge: document.getElementById("settings-panel-merge"),

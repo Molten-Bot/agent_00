@@ -232,18 +232,24 @@ test('repository selections hide dropdown options and manual entry enables them 
     });
   }});
   await select(page, 'automation');
+  assert.equal(await page.locator('#settings-panel-automation #review-settings-repository-columns').count(), 0);
+  await select(page, 'repositories');
+  const tab = page.getByRole('tab', { name: 'Repositories', exact: true });
+  assert.equal(await tab.locator('svg.lucide-folder-git-2').count(), 1);
+  await page.getByRole('tabpanel', { name: 'Repositories', exact: true }).waitFor();
   const option = page.locator('#review-settings-repositories input[value="https://github.com/acme/widget"]');
   const row = page.locator('#review-settings-repositories label:has(input[value="https://github.com/acme/widget"])');
   await option.waitFor({ state: 'attached' });
   assert.equal(await option.isChecked(), true, 'repositories default enabled');
   assert.equal(await row.locator('svg.lucide-folder-git-2').count(), 1, 'repositories use the lucide git repository icon');
   await toggleRepositoryRow(page, 'https://github.com/acme/widget');
+  await select(page, 'automation');
   await close(page);
   assert.deepEqual(writes.at(-1).disabled_repositories, ['https://github.com/acme/widget']);
   assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 0);
 
   await page.locator('#settings-open').click();
-  await select(page, 'automation');
+  await select(page, 'repositories');
   assert.equal(await option.count(), 0, 'a fully disabled owner has no repositories in the repository picker');
   await page.locator('#review-settings-owners [data-repo-owner="acme"]').click();
   await close(page);
@@ -251,7 +257,7 @@ test('repository selections hide dropdown options and manual entry enables them 
   assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 1);
 
   await page.locator('#settings-open').click();
-  await select(page, 'automation');
+  await select(page, 'repositories');
   await toggleRepositoryRow(page, 'https://github.com/acme/widget');
   await close(page);
 
@@ -275,7 +281,7 @@ test('repository rows and owner buttons both look inert while settings load', as
       return route.fallback();
     });
   }});
-  await select(page, 'automation');
+  await select(page, 'repositories');
   const styleOf = node => ({ opacity: Number(getComputedStyle(node).opacity), cursor: getComputedStyle(node).cursor });
   const row = page.locator('#review-settings-repositories label').first();
   const owner = page.locator('#review-settings-owners [data-repo-owner="acme"]');
@@ -311,7 +317,7 @@ test('owner avatars clear and restore every repository they own', async t => {
       if (/^https:\/\/github\.com\/.*\.png/.test(request.url())) avatarProbes.push(request.url());
     });
   }});
-  await select(page, 'automation');
+  await select(page, 'repositories');
   const acme = page.locator('#review-settings-owners [data-repo-owner="acme"]');
   const octocat = page.locator('#review-settings-owners [data-repo-owner="octocat"]');
   await acme.waitFor();
@@ -376,7 +382,7 @@ test('owner avatars clear and restore every repository they own', async t => {
   assert.equal(await page.locator('#builder-repo-select option[value="https://github.com/acme/widget"]').count(), 0);
 
   await page.locator('#settings-open').click();
-  await select(page, 'automation');
+  await select(page, 'repositories');
   await acme.click();
   assert.equal(await acme.getAttribute('aria-pressed'), 'true', 'a fully cleared owner restores all repositories when none were individually deselected');
   await toggleRepositoryRow(page, 'https://github.com/acme/gadget');
@@ -391,7 +397,7 @@ test('owner avatars clear and restore every repository they own', async t => {
   await page.goto(`${baseURL}/`);
   await page.locator('#settings-open').click();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
-  await select(page, 'automation');
+  await select(page, 'repositories');
   await acme.waitFor();
   assert.equal(await acme.getAttribute('aria-pressed'), 'false', 'the owner-wide clear survives a reload');
   assert.equal(await page.locator('#review-settings-repositories input[value^="https://github.com/acme/"]').count(), 0, 'hidden owner repositories stay hidden after reload');
@@ -417,7 +423,7 @@ test('an owner the GitHub API never described keeps a neutral icon', async t => 
       ] } }));
     },
   });
-  await select(page, 'automation');
+  await select(page, 'repositories');
   const initech = page.locator('#review-settings-owners [data-repo-owner="initech"]');
   await initech.locator('svg.lucide-at-sign').waitFor();
   assert.equal(await initech.locator('svg.lucide-user').count(), 0, 'an owner with no API metadata is never drawn as a person');
@@ -435,7 +441,7 @@ test('ownerless repository history stays visible when disabled', async t => {
       await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos: [] } }));
     },
   });
-  await select(page, 'automation');
+  await select(page, 'repositories');
   const option = page.locator(`#review-settings-repositories input[value="${repo}"]`);
   await option.waitFor();
   assert.equal(await option.isChecked(), false, 'ownerless disabled history can still be selected directly');
@@ -512,9 +518,10 @@ test('chat toggle marks the experimental chat tab unavailable immediately and pe
   assert.equal(await page.locator('#review-settings-chat-enabled').isChecked(), true);
   assert.equal(await page.locator('[data-app-display=chat]').getAttribute('aria-disabled'), 'false');
   assert.notEqual(await page.locator('[data-app-display=chat]').getAttribute('title'), 'Chat is turned off in Settings → Automation');
-  await select(page, 'automation');
+  await select(page, 'repositories');
   assert.equal(await page.locator('#review-settings-repository-columns').evaluate(columns => columns.classList.contains('hidden')), true, 'empty repository state hides both duplicate column headings and lists');
   assert.equal(await page.locator('#review-settings-repositories-empty').isVisible(), true, 'empty repository state keeps its single message');
+  await select(page, 'automation');
   await toggle(page, 'review-settings-chat-enabled');
   assert.equal(await page.locator('[data-app-display=chat]').getAttribute('aria-disabled'), 'true');
   assert.equal(await page.locator('[data-app-display=chat]').getAttribute('title'), 'Chat is turned off in Settings → Automation');
@@ -1232,7 +1239,7 @@ test('failed save preserves the open dialog and edits; repeated close is single 
 
 test('selected labels remain visible; hover and keyboard navigation reveal reachable tabs', async t => {
   const { page } = await openSettings(t);
-  for (const name of ['library', 'automation', 'review', 'merge', 'signing']) {
+  for (const name of ['library', 'automation', 'repositories', 'review', 'merge', 'signing']) {
     await select(page, name); await page.mouse.move(0, 0);
     await page.waitForFunction(name => getComputedStyle(document.querySelector(`#settings-tab-${name} span`)).opacity === '1', name);
     assert.equal(await page.locator(`#settings-tab-${name} span`).evaluate(el => el.scrollWidth <= el.clientWidth + 1), true);
@@ -1241,6 +1248,8 @@ test('selected labels remain visible; hover and keyboard navigation reveal reach
   assert.equal(await page.locator('#settings-tab-library').getAttribute('aria-selected'), 'true');
   await page.keyboard.press('ArrowRight');
   assert.equal(await page.locator('#settings-tab-automation').getAttribute('aria-selected'), 'true');
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.locator('#settings-tab-repositories').getAttribute('aria-selected'), 'true');
   await page.locator('.settings-tabbar').evaluate(async el => { await Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {}))); });
   await page.locator('#settings-tab-review').hover();
   await page.waitForFunction(() => getComputedStyle(document.querySelector('#settings-tab-review span')).opacity === '1');
@@ -1251,7 +1260,7 @@ for (const theme of ['light', 'dark', 'night', 'pink']) test(`${theme} theme: se
   const { page } = await openSettings(t, { theme });
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const name of ['library', 'automation', 'review', 'merge', 'signing']) {
+    for (const name of ['library', 'automation', 'repositories', 'review', 'merge', 'signing']) {
       await select(page, name); await page.mouse.move(0, 0);
       assert.equal(await page.locator('.settings-shell').evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, `${theme}/${width}/${name} fits`);
     }
@@ -1394,7 +1403,7 @@ for (const viewport of [{ width: 1280, height: 1100 }, { width: 430, height: 932
     });
     const initial = await geometry();
     assert.ok(initial.top >= 0 && initial.bottom <= viewport.height, 'dialog fits the screen');
-    for (const name of ['signing', 'automation', 'review', 'merge', 'library']) {
+    for (const name of ['signing', 'automation', 'repositories', 'review', 'merge', 'library']) {
       await select(page, name);
       const current = await geometry();
       for (const key of ['top', 'height', 'headerTop', 'tabsTop']) {

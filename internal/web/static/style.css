@@ -6978,15 +6978,6 @@ body.onboarding-modal-open {
   font-weight: 700;
 }
 
-.repository-settings {
-  display: grid;
-  gap: 10px;
-  grid-column: 1 / -1;
-  margin-top: 8px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border-subtle, rgba(127, 127, 127, 0.25));
-}
-
 .repository-settings-heading {
   display: grid;
   gap: 3px;
@@ -7029,6 +7020,7 @@ body.onboarding-modal-open {
   gap: 9px;
   min-height: 44px;
   min-width: 0;
+  margin: 0;
   padding: 8px 10px;
   text-align: left;
 }
