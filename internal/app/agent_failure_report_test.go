@@ -96,6 +96,35 @@ func TestCodexReportedFailureDetectsBlockerAfterResolvedIssue(t *testing.T) {
 	}
 }
 
+func TestCodexFailureDetailIgnoresStderrPromptEcho(t *testing.T) {
+	t.Parallel()
+
+	const summary = "Failure: Could not complete the implementation."
+	const privateText = "PRIVATE TASK TEXT"
+	for _, stderr := range []string{
+		"OpenAI Codex\nuser\nError details:\n" + privateText + "\ncodex\n" + summary,
+		"user\n" + summary + "\nError details:\n- " + privateText,
+		"Error details: <failing command or blocker>\n" + privateText,
+		summary + "\nError details: <failing command or blocker>\nuser\n" + privateText,
+	} {
+		display, full := codexFailureDetailWithErrorDetails(execx.Result{Stdout: summary, Stderr: stderr}, summary)
+		if display != summary || full != summary {
+			t.Errorf("failure detail = (%q, %q), want only the failure summary", display, full)
+		}
+	}
+}
+
+func TestCodexFailureDetailRetainsCompactStderrReport(t *testing.T) {
+	t.Parallel()
+
+	const summary = "Failure: Could not complete the implementation."
+	const stderr = summary + "\nError details:\nAssertionError: expected status 200, got 500."
+	_, full := codexFailureDetailWithErrorDetails(execx.Result{Stderr: stderr}, summary)
+	if full != stderr {
+		t.Errorf("full failure detail = %q, want %q", full, stderr)
+	}
+}
+
 // The terminal-window guard keeps a mid-run "Failure:" progress update from
 // failing a run that went on to finish. Reading both mandated fields out of
 // the report header must not reach around that guard.
@@ -168,6 +197,10 @@ func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *t
 		{
 			name:         "deployment test failure under a heading in a plain field",
 			continuation: "\n\n### Deployment tests\nDeployment tests fail.",
+		},
+		{
+			name:         "deployment test failure under validation in a plain field",
+			continuation: "\n\n### Validation\nDeployment tests failed.",
 		},
 		{
 			name:         "deployment test failure under a heading quotes quota",
@@ -292,9 +325,14 @@ func TestRunCodexClassifiesCompleteValidationReport(t *testing.T) {
 		{"JavaScript assertion and missing linter", "Failure: npm test failed.\nError details: AssertionError: expected true to be false.\nOptional lint: eslint: command not found.", true, false},
 		{"smoke command in details with failed fallback", smokeReport + "Smoke fallback failed.", true, false},
 		{"conflicting smoke fallback results", smokeReport + "Smoke fallback succeeded.\nSmoke fallback failed.", true, false},
+		{"fallback starts server but endpoint fails", smokeReport + "Fallback succeeded in starting the server, but the endpoint returned HTTP 503.", true, false},
+		{"fallback success contradicted by endpoint", smokeReport + "Fallback succeeded.\nThe endpoint returned HTTP 503.", true, false},
+		{"fallback success contradicted by failed check", smokeReport + "Fallback succeeded.\nFallback smoke check failed.", true, false},
+		{"only server startup succeeded", smokeReport + "Fallback succeeded in starting the server.", true, false},
 		{"smoke only named in fallback", "Failure: Local validation command failed.\nError details: curl: command not found. Smoke fallback failed.", true, false},
 		{"smoke command in details with successful fallback", smokeReport + "Smoke fallback succeeded.", false, false},
 		{"fallback result on its own line", smokeReport + "Fallback succeeded.", false, false},
+		{"fallback smoke check passed with Python", smokeReport + "Fallback smoke check passed using Python. Endpoint returned HTTP 200.", false, false},
 		{"unrelated fallback", smokeReport + "Notes: Database fallback succeeded.", true, false},
 		{"unrelated smoke success in next section", smokeReport + "Validation: Unrelated smoke fallback succeeded.", true, false},
 	} {
@@ -409,12 +447,14 @@ func TestCodexExtractErrorDetailRetainsFencedDiagnosticHeadings(t *testing.T) {
 func TestCodexExtractErrorDetailRetainsMarkdownSubsections(t *testing.T) {
 	t.Parallel()
 
-	output := "Failure: Deployment validation failed.\n" +
-		"## Error details:\n### Validation\nDeployment tests failed.\n" +
-		"## Next steps\nUnrelated notes."
-	detail := codexExtractErrorDetail(output)
-	if !strings.Contains(detail, "Deployment tests failed.") || strings.Contains(detail, "Unrelated notes.") {
-		t.Fatalf("codexExtractErrorDetail() = %q, want only the nested diagnostic", detail)
+	for _, field := range []string{"Error details:", "## Error details:"} {
+		output := "Failure: Deployment validation failed.\n" + field +
+			"\n### Validation\nDeployment tests failed.\n" +
+			"## Next steps\nUnrelated notes."
+		const want = "Error details:\n### Validation\nDeployment tests failed."
+		if detail := codexExtractErrorDetail(output); detail != want {
+			t.Errorf("codexExtractErrorDetail() with %q = %q, want %q", field, detail, want)
+		}
 	}
 }
 

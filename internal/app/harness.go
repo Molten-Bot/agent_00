@@ -6712,7 +6712,7 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 	}
 	errorDetail := codexExtractErrorDetail(res.Stdout)
 	if errorDetail == "" {
-		errorDetail = codexExtractErrorDetail(res.Stderr)
+		errorDetail = codexExtractStderrErrorDetail(res.Stderr, detail)
 	}
 	if errorDetail == "" || strings.Contains(strings.ToLower(detail), strings.ToLower(errorDetail)) {
 		return detail, detail
@@ -6919,11 +6919,19 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	return false
 }
 
+var smokeFallbackPass = regexp.MustCompile(`(?:^|[.;!]\s+)(?:the )?(?:smoke fallback|fallback(?: smoke(?: check| test)?)?) (?:passed|succeeded)(?: using [^\s,.;!]+)?(?:[.!]?$|[.;!]\s+)`)
+var smokeCheckFailure = regexp.MustCompile(`\b(?:smoke (?:fallback|check|test)|fallback smoke(?: check| test)?|(?:health |readiness )?endpoint) (?:failed|did not pass|timed out)\b`)
+var smokeHTTPFailure = regexp.MustCompile(`\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b`)
+
 func smokeFallbackSucceeded(text string) bool {
+	if smokeHTTPFailure.MatchString(text) || smokeCheckFailure.MatchString(text) {
+		return false
+	}
 	confirmed := false
 	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(strings.TrimPrefix(agentFailureFieldLine(line), "error details:"))
-		if !strings.HasPrefix(line, "fallback ") && (!strings.Contains(line, "smoke") || !strings.Contains(line, "fallback")) {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(agentFailureFieldLine(line), "error details:"), "failure:"))
+		if !strings.HasPrefix(line, "fallback ") && !strings.HasPrefix(line, "the fallback ") &&
+			(!strings.Contains(line, "smoke") || !strings.Contains(line, "fallback")) {
 			continue
 		}
 		if stringsx.ContainsAny(line, []string{
@@ -6960,12 +6968,7 @@ func smokeFallbackSucceeded(text string) bool {
 		}) {
 			continue
 		}
-		if stringsx.ContainsAny(line, []string{
-			"fallback succeeded",
-			"fallback passed",
-			"fallback smoke check succeeded",
-			"fallback smoke check passed",
-		}) {
+		if smokeFallbackPass.MatchString(line) {
 			confirmed = true
 		}
 	}
@@ -7082,6 +7085,37 @@ func isNonFatalRemoteDeploymentAuthFailure(detail string, res execx.Result) bool
 	return true
 }
 
+func codexExtractStderrErrorDetail(output, failure string) string {
+	// Codex writes its prompt and tool transcript to stderr. Only consume a
+	// compact report at the start of the stream or a standalone diagnostic.
+	output = strings.TrimSpace(output)
+	lines := splitOutputLines(output)
+	if len(lines) == 0 || len(lines) > 8 {
+		return ""
+	}
+	first := agentFailureFieldLine(lines[0])
+	if len(lines) > 1 && strings.EqualFold(first, failure) {
+		for _, line := range lines[1:] {
+			switch strings.ToLower(strings.TrimSpace(line)) {
+			case "user", "codex", "exec", "tokens used":
+				return ""
+			}
+		}
+		if strings.HasPrefix(strings.ToLower(agentFailureFieldLine(lines[1])), "error details:") {
+			return codexExtractErrorDetail(output)
+		}
+		return ""
+	}
+	if len(lines) == 1 {
+		return codexExtractErrorDetail(output)
+	}
+	// Some wrappers send the details field separately as a single bullet.
+	if len(lines) == 2 && strings.EqualFold(first, "error details:") && strings.HasPrefix(strings.TrimSpace(lines[1]), "- ") {
+		return codexExtractErrorDetail(output)
+	}
+	return ""
+}
+
 func codexExtractErrorDetail(output string) string {
 	lines := splitOutputLines(output)
 	if len(lines) == 0 {
@@ -7127,7 +7161,7 @@ func codexExtractErrorDetail(output string) string {
 func codexErrorDetailLines(lines []string, stopAtSection bool, detailsHeadingLevel int) []string {
 	var details []string
 	var fence string
-	for _, line := range lines {
+	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
@@ -7147,6 +7181,19 @@ func codexErrorDetailLines(lines []string, stopAtSection bool, detailsHeadingLev
 		}
 		lower := strings.ToLower(agentFailureFieldLine(trimmed))
 		if stopAtSection && fence == "" && isAgentReportSection(trimmed, lower, detailsHeadingLevel) {
+			// A plain field has no heading level. Use diagnostic evidence to
+			// distinguish a nested Validation heading from a sibling section.
+			level := markdownHeadingLevel(trimmed)
+			if detailsHeadingLevel == 0 && level > 0 && strings.TrimRight(lower, ":*_# ") == "validation" {
+				subsection := codexErrorDetailLines(lines[i+1:], true, level)
+				body := strings.Join(subsection, "\n")
+				lowerBody := strings.ToLower(body)
+				if reportedValidationFailure.MatchString(lowerBody) ||
+					failurefollowup.HasValidationFailureEvidence(body) || smokeHTTPFailure.MatchString(lowerBody) {
+					details = append(details, trimmed)
+					details = append(details, subsection...)
+				}
+			}
 			break
 		}
 		if strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
@@ -7156,6 +7203,8 @@ func codexErrorDetailLines(lines []string, stopAtSection bool, detailsHeadingLev
 	}
 	return details
 }
+
+var reportedValidationFailure = regexp.MustCompile(`\b(?:tests?|checks?|validation) (?:still )?(?:fail(?:s|ed|ing)?|did not pass)\b`)
 
 func markdownHeadingLevel(line string) int {
 	title := strings.TrimLeft(line, "#")
