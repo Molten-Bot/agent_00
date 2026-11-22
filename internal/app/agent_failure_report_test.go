@@ -1,10 +1,12 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 )
 
 // markdownFailureReport mirrors the shape agents actually produce for the
@@ -136,6 +138,31 @@ func TestCodexExtractErrorDetailDropsFencesWithInfoString(t *testing.T) {
 	}
 	if strings.Contains(detail, "```") {
 		t.Fatalf("codexExtractErrorDetail() = %q, want Markdown code fences dropped", detail)
+	}
+}
+
+func TestCodexReportedFailurePreservesWrappedRolloutBlocker(t *testing.T) {
+	t.Parallel()
+
+	const evidence = "#72 is still open. Its proposed configuration lacks\n" +
+		"account metadata needed for evidence reads. Scoped IAM,\n" +
+		"shared key provisioning, and deployed verification remain pending.\n" +
+		"API and MCP evidence stay disabled by default."
+	for _, separator := range []string{" ", "\n"} {
+		res := execx.Result{Stdout: "Failure: Production rollout remains blocked.\n" +
+			"**Error details:**" + separator + evidence + "\nResolved issue: Local tests now pass."}
+		failed, summary := codexReportedFailure(res)
+		if !failed {
+			t.Fatal("failure report was not detected")
+		}
+		detail := codexFailureDetailWithErrorDetails(res, summary)
+		if !strings.HasSuffix(detail, "Error details: "+evidence) {
+			t.Errorf("failure detail = %q, want complete evidence through the end of the field", detail)
+		}
+		err := fmt.Errorf("codex: codex reported failure: %s", detail)
+		if got := failurefollowup.NonRemediableFailureReason(err); got != failurefollowup.OpenDependencyReason {
+			t.Errorf("failure reason = %q, want %q", got, failurefollowup.OpenDependencyReason)
+		}
 	}
 }
 

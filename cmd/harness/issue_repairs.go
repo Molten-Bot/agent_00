@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,15 +42,25 @@ type issueRepairQueue struct {
 func (q *issueRepairQueue) capture(_ context.Context, issue localruntime.IssueClaimRecord) (string, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	failure := issue.FailureDetail()
-	detail := failurefollowup.RedactFailureDetail(failure)
-	fingerprint := sha256.Sum256([]byte(issue.Step + "\n" + issue.Incident + "\n" + detail))
-	id := hex.EncodeToString(fingerprint[:16])
+	id := issueRepairID(issue)
+	fingerprint := sha256.Sum256([]byte(issue.ID + "\n" + id))
+	claimRepairID := hex.EncodeToString(fingerprint[:16])
 	records, err := q.store.List()
-	for _, record := range records {
-		if record.ID == id {
+	var shared *localruntime.IssueRepairRecord
+	for i, record := range records {
+		if record.ID == claimRepairID {
 			return record.RequestID, nil
 		}
+		if record.ID == id {
+			shared = &records[i]
+		}
+	}
+	if shared != nil {
+		if shared.State != "blocked" || !isIssueRepairDependencyBlock(shared.Error) || isIssueRepairSource(*shared, issue) {
+			return shared.RequestID, nil
+		}
+		// The source claim's dependency does not block this claim's repair.
+		id = claimRepairID
 	}
 	if err != nil {
 		if _, statErr := os.Stat(filepath.Join(q.store.Root, id+".json")); !errors.Is(statErr, os.ErrNotExist) {
@@ -58,12 +69,18 @@ func (q *issueRepairQueue) capture(_ context.Context, issue localruntime.IssueCl
 		q.logf("event=issue_repair_read status=error err=%q", err)
 	}
 	result := app.Result{ExitCode: issue.ExitCode}
-	if failure != "" {
+	if failure := issue.FailureDetail(); failure != "" {
 		result.Err = errors.New(failure)
 	}
 	run := failureFollowUpRunConfig(issue.RequestID, result, issue.Run, q.logRoot)
-	record := localruntime.IssueRepairRecord{ID: id, RequestID: "repair-" + id, State: "queued", Run: run}
+	record := localruntime.IssueRepairRecord{ID: id, RequestID: "repair-" + id, SourceClaimID: issue.ID, State: "queued", Run: run}
 	return record.RequestID, q.store.Save(record)
+}
+
+func issueRepairID(issue localruntime.IssueClaimRecord) string {
+	detail := failurefollowup.RedactFailureDetail(issue.FailureDetail())
+	fingerprint := sha256.Sum256([]byte(issue.Step + "\n" + issue.Incident + "\n" + detail))
+	return hex.EncodeToString(fingerprint[:16])
 }
 
 func (q *issueRepairQueue) run(ctx context.Context, enqueue localRunEnqueueFunc) {
@@ -84,6 +101,7 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 	if err != nil {
 		q.logf("event=issue_repairs status=error err=%q", err)
 	}
+	dependencyBlocked := make(map[string]localruntime.IssueRepairRecord)
 	for _, record := range records {
 		if record.PRURL != "" && record.State != "completed" && !time.Now().Before(record.NextAttemptAt) {
 			if err := q.verifyPR(record); err == nil {
@@ -98,6 +116,9 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 			}
 		}
 		if record.State == "completed" || record.State == "blocked" || time.Now().Before(record.NextAttemptAt) {
+			if record.State == "blocked" && isIssueRepairDependencyBlock(record.Error) {
+				dependencyBlocked[record.RequestID] = record
+			}
 			continue
 		}
 		lock, err := q.claims.TryLock("repair-" + record.ID)
@@ -131,17 +152,27 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 			continue
 		}
 		var blockedReason string
+		failure := issueRepairFailureDetail(record.Run.Prompt)
 		switch {
 		case record.Started:
 			blockedReason = "repair worker interrupted; inspect preserved logs before another repair attempt"
-		case legacyIssueOwnershipRepair(record.Run.Prompt):
+		case strings.Contains(failure, localruntime.LegacyIssueOwnershipFailure):
 			blockedReason = localruntime.ErrIssueOwnershipChanged.Error()
+		default:
+			blockedReason, err = q.dependencyBlockReason(record, failure)
+			if err != nil {
+				q.logf("event=issue_repair_check_source status=error err=%q", err)
+				lock.Close()
+				continue
+			}
 		}
 		if blockedReason != "" {
 			record.State = "blocked"
 			record.Error = blockedReason
 			if err := q.store.Save(record); err != nil {
 				q.logf("event=issue_repair_save status=error err=%q", err)
+			} else if isIssueRepairDependencyBlock(blockedReason) {
+				dependencyBlocked[record.RequestID] = record
 			}
 			lock.Close()
 			continue
@@ -167,20 +198,121 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 			}
 		}
 	}
+	q.releaseSharedBlockedRepairReceipts(dependencyBlocked)
 	if err := retainIssueEvidence(q.claims, q.store, q.logRoot, time.Now()); err != nil {
 		q.logf("event=issue_evidence_retention status=error err=%q", err)
 	}
 }
 
-func legacyIssueOwnershipRepair(prompt string) bool {
-	// Older outbox records kept the original failure only in this prompt block.
-	_, failure, ok := strings.Cut(prompt, "\n\nObserved failure context:\n- exit_code=")
-	if !ok {
-		return false
+func isIssueRepairDependencyBlock(reason string) bool {
+	return reason == failurefollowup.OpenDependencyReason || reason == failurefollowup.UnmergedDependencyReason
+}
+
+func (q *issueRepairQueue) releaseSharedBlockedRepairReceipts(blocked map[string]localruntime.IssueRepairRecord) {
+	if len(blocked) == 0 {
+		return
 	}
-	_, failure, _ = strings.Cut(failure, "\n")
-	line, _, _ := strings.Cut(failure, "\n")
-	return strings.HasPrefix(line, "- error=\"") && strings.Contains(line, localruntime.LegacyIssueOwnershipFailure)
+	issues, err := q.claims.List()
+	if err != nil {
+		q.logf("event=issue_repair_read_claims status=error err=%q", err)
+	}
+	for _, issue := range issues {
+		repair, ok := blocked[issue.RepairRequestID]
+		if !ok || (repair.SourceClaimID == "" && issueRepairSourceLogDir(repair.Run.Prompt) == "") || isIssueRepairSource(repair, issue) {
+			continue
+		}
+		// Older fingerprint-only IDs could give unrelated claims the same
+		// receipt. Let normal issue recovery reconsider those claims.
+		lock, err := q.claims.TryLock(localruntime.IssueExecutionKey(issue.Run.GitHubIssue))
+		if err == nil && lock != nil {
+			err = q.claims.Update(issue.ID, func(current *localruntime.IssueClaimRecord) error {
+				if current.RepairRequestID == repair.RequestID {
+					current.RepairRequestID = ""
+				}
+				return nil
+			})
+			lock.Close()
+		}
+		if err != nil {
+			q.logf("event=issue_repair_release_receipt status=error err=%q", err)
+		}
+	}
+}
+
+func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepairRecord, failure string) (string, error) {
+	if reason := failurefollowup.NonRemediableFailureReason(errors.New(failure)); isIssueRepairDependencyBlock(reason) {
+		return reason, nil
+	}
+	// The source claim may have been classified since capture. Its run error
+	// also preserves details that were redacted from the repair prompt.
+	hasSource := record.SourceClaimID != "" || issueRepairSourceLogDir(record.Run.Prompt) != ""
+	issues, err := q.claims.List()
+	foundSource := false
+	for _, issue := range issues {
+		// Receipts and fingerprints could be shared across claims in older
+		// records. Use them only when no explicit source was recorded.
+		if hasSource {
+			if !isIssueRepairSource(record, issue) {
+				continue
+			}
+		} else if issue.RepairRequestID != record.RequestID && issueRepairID(issue) != record.ID {
+			continue
+		}
+		foundSource = true
+		switch issue.Incident {
+		case localruntime.IssueIncidentUnmergedDependency:
+			return failurefollowup.UnmergedDependencyReason, nil
+		case localruntime.IssueIncidentOpenDependency:
+			return failurefollowup.OpenDependencyReason, nil
+		}
+		if reason := failurefollowup.NonRemediableFailureReason(errors.New(issue.FailureDetail())); isIssueRepairDependencyBlock(reason) {
+			return reason, nil
+		}
+	}
+	if err != nil && foundSource {
+		q.logf("event=issue_repair_check_source status=partial err=%q", err)
+		return "", nil
+	}
+	return "", err
+}
+
+func issueRepairSourceLogDir(prompt string) string {
+	_, logSection, _ := strings.Cut(prompt, "\n\nRelevant failing log path(s):\n- ")
+	logDir, _, _ := strings.Cut(logSection, "\n")
+	if logDir == ".log/local/<request timestamp>/<request sequence>" {
+		return ""
+	}
+	return logDir
+}
+
+func isIssueRepairSource(record localruntime.IssueRepairRecord, issue localruntime.IssueClaimRecord) bool {
+	if record.SourceClaimID != "" {
+		return record.SourceClaimID == issue.ID
+	}
+	// Legacy prompts store the log directory at capture time. Compare its
+	// request-specific suffix so restarts can use a different log root.
+	logDir := issueRepairSourceLogDir(record.Run.Prompt)
+	subdir, ok := failurefollowup.IdentifierSubdir(issue.RequestID)
+	return logDir != "" && ok && (logDir == subdir || strings.HasSuffix(logDir, string(filepath.Separator)+subdir))
+}
+
+func issueRepairFailureDetail(prompt string) string {
+	// The stored prompt is available even if capture's receipt never made it
+	// into the source claim. The exit code was optional in older records.
+	_, context, ok := strings.Cut(prompt, "\n\nObserved failure context:\n")
+	if !ok {
+		return ""
+	}
+	line, rest, _ := strings.Cut(context, "\n")
+	if strings.HasPrefix(line, "- exit_code=") {
+		line, _, _ = strings.Cut(rest, "\n")
+	}
+	quoted, ok := strings.CutPrefix(line, "- error=")
+	if !ok {
+		return ""
+	}
+	failure, _ := strconv.Unquote(quoted)
+	return failure
 }
 
 func (w *issueRepairWork) start() error {

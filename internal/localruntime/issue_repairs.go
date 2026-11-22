@@ -15,6 +15,7 @@ import (
 type IssueRepairRecord struct {
 	ID            string        `json:"id"`
 	RequestID     string        `json:"requestId"`
+	SourceClaimID string        `json:"sourceClaimId,omitempty"`
 	State         string        `json:"state"`
 	Error         string        `json:"error,omitempty"`
 	PRURL         string        `json:"prUrl,omitempty"`

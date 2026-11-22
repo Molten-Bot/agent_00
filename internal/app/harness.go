@@ -6901,6 +6901,7 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"local validation tooling unavailable in runtime",
 		"build validation unavailable",
 		"full build validation could not run",
+		"full-suite validation unavailable in runtime",
 		"focused go validation unavailable in runtime",
 		"node_modules missing",
 	}
@@ -6946,13 +6947,6 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 	if !missingTooling && !restrictedDependencyDownload {
 		return false
 	}
-	if strings.Contains(text, "smoke command") {
-		return smokeFallbackSucceeded(text)
-	}
-	if validationUnavailable {
-		return true
-	}
-
 	validationCommandMarkers := []string{
 		"smoke command",
 		"npm run lint",
@@ -6971,6 +6965,46 @@ func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
 		"go vet",
 		"golangci-lint",
 	}
+	// Only a validation failure can be waived for missing local tooling.
+	// Unlabeled validation notes must not override an implementation blocker.
+	if strings.TrimSpace(detail) != "" {
+		report, ok := strings.CutPrefix(text, "failure:")
+		if !ok {
+			return false
+		}
+		summary, details, _ := strings.Cut(report, "error details:")
+		reason := strings.TrimSpace(summary)
+		if reason == "" {
+			reason = strings.TrimLeft(strings.TrimSpace(details), "- `")
+		}
+		validationSummary := false
+		for _, marker := range validationUnavailableMarkers {
+			validationSummary = validationSummary || strings.HasPrefix(reason, marker)
+		}
+		commandReason := strings.TrimLeft(strings.TrimPrefix(strings.TrimPrefix(reason, "full "), "local "), "`")
+		commandReason = strings.TrimPrefix(commandReason, "initial ")
+		if quoted, ok := strings.CutPrefix(commandReason, "`"); ok {
+			_, suffix, closed := strings.Cut(quoted, "`")
+			if closed && strings.HasPrefix(strings.TrimSpace(suffix), "smoke command ") {
+				commandReason = strings.TrimSpace(suffix)
+			}
+		}
+		for _, command := range validationCommandMarkers {
+			if rest, ok := strings.CutPrefix(commandReason, command); ok && (rest == "" || strings.ContainsRune(" `.:", rune(rest[0]))) {
+				validationSummary = true
+			}
+		}
+		if !validationSummary {
+			return false
+		}
+	}
+	if strings.Contains(text, "smoke command") {
+		return smokeFallbackSucceeded(text)
+	}
+	if validationUnavailable {
+		return true
+	}
+
 	validationContextMarkers := []string{
 		"validation",
 		"test runner",
@@ -7169,46 +7203,47 @@ func isNonFatalRemoteDeploymentAuthFailure(detail string, res execx.Result) bool
 
 func codexExtractErrorDetail(output string) string {
 	lines := splitOutputLines(output)
-	if len(lines) == 0 {
-		return ""
-	}
-
-	nonEmpty := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		nonEmpty = append(nonEmpty, trimmed)
-	}
-	if len(nonEmpty) == 0 {
-		return ""
-	}
-
-	for i, line := range nonEmpty {
+	for i, line := range lines {
 		field := agentFailureFieldLine(line)
 		lower := strings.ToLower(field)
 		if strings.HasPrefix(lower, "error details:") {
-			suffix := strings.TrimSpace(field[len("error details:"):])
-			if suffix != "" {
-				return "Error details: " + suffix
-			}
-			extra := codexJoinErrorDetailLines(nonEmpty[i+1:])
-			if extra != "" {
-				return "Error details: " + extra
+			detail := agentErrorDetailField(field[len("error details:"):], lines[i+1:])
+			if detail != "" {
+				return "Error details: " + detail
 			}
 			return "Error details: unknown error."
 		}
 		if isStructuredFailureErrorLine(line) {
-			return line
+			return strings.TrimSpace(line)
 		}
 	}
 
-	fallback := codexJoinErrorDetailLines(nonEmpty)
+	fallback := codexJoinErrorDetailLines(lines)
 	if fallback == "" {
 		return ""
 	}
 	return "Error details: " + fallback
+}
+
+func agentErrorDetailField(suffix string, lines []string) string {
+	var details []string
+	if suffix = strings.TrimSpace(suffix); suffix != "" {
+		details = append(details, suffix)
+	}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || isMarkdownCodeFence(line) {
+			continue
+		}
+		field := strings.ToLower(agentFailureFieldLine(line))
+		if strings.HasPrefix(line, "##") || strings.HasPrefix(line, "# ") ||
+			strings.HasPrefix(field, "resolved issue:") || strings.HasPrefix(field, "failure:") ||
+			strings.HasPrefix(field, "error details:") || strings.HasPrefix(field, "validation:") {
+			break
+		}
+		details = append(details, line)
+	}
+	return strings.Join(details, "\n")
 }
 
 func codexJoinErrorDetailLines(lines []string) string {

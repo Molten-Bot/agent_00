@@ -137,3 +137,85 @@ func TestNonRemediableFailureReasonRecognizesUnmergedPrerequisite(t *testing.T) 
 		}
 	}
 }
+
+func TestNonRemediableFailureReasonRecognizesOpenPrerequisite(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ message, want string }{
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open and blocks the export.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: The release of v1.2 is blocked. Error details: #72 is still open and is blocking the release of v1.2. Verification is pending.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: U.S. rollout for v1.2 is blocked. Error details: #72 is still open and blocks the U.S. rollout for v1.2. Verification is pending.", OpenDependencyReason},
+		{"claude: claude reported failure: Failure: Import is blocked.\nError details: Blocked by issue `#72`, which is still open.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: [#72](https://github.com/example/project/issues/72) is still open and blocks the export.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: Blocked because [issue #72](https://github.com/example/project/issues/72) is still open.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Production rollout for `#81` remains blocked. Error details: #72 is still open and blocks the production rollout for #81.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Production rollout for `#81` remains blocked because #72 is still open.", OpenDependencyReason},
+		{"claude: claude reported failure: Failure: Blocked by open issue `#72`. Error details: Upstream changes are pending.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Export blocked by open issue #72. Error details: Upstream changes are pending.", OpenDependencyReason},
+		{"claude: claude reported failure: Failure: Export blocked. Error details: #72 is still open and blocks the export.", OpenDependencyReason},
+		{"claude: claude reported failure: Failure: Blocked.\nError details: Blocked by open issue `#72`. Upstream changes are pending.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open and blocks the export | Verification is pending.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: Blocked by open issue #72 | Verification is pending.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open and blocks the export documentation | Fix the export parser.", ""},
+		{"codex: codex reported failure: Failure: Blocked. Error details: #72 is still open.", ""},
+		{"codex: codex reported failure: Failure: Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks account metadata needed for evidence reads. Those evidence reads are required for the rollout.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks account metadata needed for evidence reads required for production rollout for `#81`.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks service metadata and client settings needed for evidence reads. Credential setup and verification remain pending. API and CLI evidence stay disabled by default.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Production rollout for #81 remains blocked. Error details: #72 is still open. | Its proposed configuration lacks account metadata needed for evidence reads. | Those evidence reads are required for the rollout.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Production rollout remains blocked. Error details: #72 is still open | Its proposed configuration lacks account metadata needed for evidence reads. | Credential setup and verification remain pending. API and MCP evidence stay disabled by default.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Production rollout remains blocked. Error details: #72 is still open\nIts proposed configuration lacks account metadata needed for evidence reads required for the rollout.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Production rollout remains blocked. Error details: #72 is still open\nIts proposed configuration lacks\naccount metadata needed for evidence reads\nCredential setup and verification remain pending\nAPI and MCP evidence stay disabled by default.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Production rollout for #81 remains blocked. Error details: #72 is still open and blocks the production\nrollout for #81\nVerification is pending.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Production rollout for #81 remains blocked. Error details: #72 is still open and blocks the production\nrollout for #82\nVerification is pending.", ""},
+		{"codex: codex reported failure: Failure: Production rollout remains blocked. Error details: #72 is still open. Its proposed configuration lacks account metadata needed for evidence reads. Credential setup and verification remain pending | API evidence stays disabled by default.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Production rollout remains blocked. Error details: #72 is still open | Its proposed configuration lacks account metadata needed for evidence reads. | A parser panic blocks deployment. API evidence stays disabled by default.", ""},
+		{"codex: codex reported failure: Failure: Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks service metadata needed for evidence reads. Credential setup and verification remain pending. Optional audit evidence stays disabled by default.", ""},
+		{"codex: codex reported failure: Failure: Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks service metadata needed for evidence reads. Credential setup and verification remain pending. Audit evidence stays disabled by default.", ""},
+		{"codex: codex reported failure: Failure: Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks service metadata needed for evidence reads. Scoped IAM, shared key provisioning, and deployed verification remain pending. API and CLI evidence stay disabled by default.\npersist task logs: sync terminal.log: invalid argument\nsync term: invalid argument", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Blocked by open issue #72.\npersist task logs: sync terminal.log: invalid argument", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Export remains blocked.\npersist task logs: Error details: #72 is still open and blocks the export.", ""},
+		{"codex: codex reported failure: Failure: Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks service metadata needed for evidence reads. A fix for the parser crash remains pending. Audit evidence stays disabled by default.", ""},
+		{"codex: codex reported failure: Failure: Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks service metadata needed for evidence reads. The rollout fails with a parser panic. API evidence stays disabled by default.", ""},
+		{"codex: codex reported failure: Failure: Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks account metadata needed for evidence reads. The rollout fails with a parser panic.", ""},
+		{"codex: codex reported failure: Failure: Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks account metadata needed for evidence reads required for production rollout for #82.", ""},
+		{"codex: codex reported failure: Failure: Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks the site list and account metadata needed for evidence reads. Deployment checks remain pending.", ""},
+		{"codex: codex reported failure: Failure: Production rollout for `#81` remains blocked. Error details: #72 is still open and blocks the production rollout for `#811`.", ""},
+		{"codex: codex reported failure: Failure: Parser rejects `Blocked by open issue #72`. Error details: Fix the parser.", ""},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open.", ""},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open and blocks the import. The export fails with a parser panic.", ""},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open and is blocking the export documentation.", ""},
+		{"codex: codex reported failure: Failure: Production rollout remains blocked. Error details: #72 is still open. Its proposed documentation lacks examples needed for onboarding.", ""},
+		{"codex: codex reported failure: Failure: Export of rollout logs remains blocked. Error details: #72 is still open. Its proposed configuration lacks account metadata needed for evidence reads. The export fails with a parser panic.", ""},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open. The export fails with a parser panic.", ""},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: [#72](https://github.com/example/project/issues/72) is still open. The export fails with a parser panic.", ""},
+		{"codex: codex reported failure: Failure: Parser crashes. Error details: #72 is still open.", ""},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: Fixture says #72 is still open and blocks the export.", ""},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open but unrelated.", ""},
+		{"codex: codex reported failure: Failure: Export is no longer blocked. Error details: #72 is still open and blocks the export.", ""},
+		{"codex: codex reported failure: Failure: Export not blocked by open issue #72. Error details: Fix the export parser.", ""},
+		{"codex: codex reported failure: Failure: Export isn't blocked by open issue #72. Error details: Fix the export parser.", ""},
+		{"codex: codex reported failure: Failure: Export not yet blocked by open issue #72. Error details: Fix the export parser.", ""},
+		{"codex: codex reported failure: Failure: Export no longer blocked by open issue #72. Error details: Fix the export parser.", ""},
+		{"codex: codex reported failure: Failure: Export blocked. Error details: #72 is still open and blocks the import. The export fails with a parser panic.", ""},
+		{"codex: codex reported failure: Failure: Parser rejects 'Export remains blocked'. Error details: #72 is still open and blocks the export.", ""},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: Sample data is invalid.", ""},
+		{"git: Failure: Export remains blocked. Error details: #72 is still open and blocks the export.", ""},
+	} {
+		if got := NonRemediableFailureReason(errors.New(tc.message)); got != tc.want {
+			t.Errorf("NonRemediableFailureReason(%q) = %q, want %q", tc.message, got, tc.want)
+		}
+	}
+}
+
+func TestDependencyOperationDoesNotEndAtSoftWrap(t *testing.T) {
+	t.Parallel()
+	for _, target := range []string{
+		"export\ndocumentation. Fix the export parser.",
+		"export\nconfiguration. Fix the export parser.",
+		"export\nlogs. Fix the export parser.",
+	} {
+		message := "codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open and blocks the " + target
+		if got := NonRemediableFailureReason(errors.New(message)); got != "" {
+			t.Fatalf("reason = %q, want repair eligible: %s", got, message)
+		}
+	}
+}
