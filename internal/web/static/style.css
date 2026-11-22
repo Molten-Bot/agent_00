@@ -4347,6 +4347,11 @@ select.prompt-control {
   padding: 16px;
 }
 
+.dashboard-source-chart-shell {
+  grid-template-rows: auto minmax(var(--dashboard-source-chart-min-height, 0px), 1fr) auto;
+  min-height: min-content;
+}
+
 .dashboard-chart-head {
   display: flex;
   align-items: center;

@@ -2,13 +2,14 @@
 // Requires Playwright/Chromium. All APIs use fixtures; no tasks or settings are changed.
 const { before, after, test } = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 const { chromium } = require('playwright');
 const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
 let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
 
-async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile = true, fixtureTasks) {
+async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile = true, fixtureTasks, stats = {}) {
   const page = await browser.newPage({ viewport, isMobile: mobile, hasTouch: mobile });
   page.setDefaultTimeout(10000);
   t.after(() => page.close());
@@ -25,11 +26,15 @@ async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile 
   }));
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/d3.min.js') && stats.source_mix) {
+      const d3Script = path.resolve(path.dirname(require.resolve('d3')), '../dist/d3.min.js');
+      return route.fulfill({ path: d3Script, contentType: 'application/javascript' });
+    }
     if (url.origin !== new URL(baseURL).origin) return route.abort();
     if (!url.pathname.startsWith('/api/')) return route.continue();
     if (route.request().method() !== 'GET') writes.push(url.pathname);
     let json = { ok: true };
-    if (url.pathname === '/api/status') json = { tasks, events: [], repositories: [], stats: {}, resources: {} };
+    if (url.pathname === '/api/status') json = { tasks, events: [], repositories: [], stats, resources: {} };
     if (url.pathname === '/api/agent-auth') json.auth = { required: false, ready: true, harness: 'codex', state: 'ready' };
     if (url.pathname === '/api/review-settings') json.settings = {
       review_level: 'off', default_library_enabled: true, json_enabled: true, chat_enabled: true, github_issues_enabled: true,
@@ -48,6 +53,35 @@ async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile 
   await page.waitForFunction(() => document.querySelector('.page-bottom-dock')?.dataset.bottomDockReady === 'true');
   return { page, writes };
 }
+
+test('320px: five source legend rows leave room for the focused share', async t => {
+  try {
+    require.resolve('d3');
+  } catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') throw error;
+    return t.skip('d3 module not available');
+  }
+  const sourceMix = ['Chat', 'Prompt', 'Library', 'GitHub Issues', 'JSON']
+    .map(name => ({ name, tasks: name === 'GitHub Issues' ? 3 : 1 }));
+  const { page } = await openPage(t, 'dashboard', { width: 320, height: 844 }, true, [], {
+    source_mix: sourceMix, total_tasks: 7,
+  });
+  const chart = page.locator('#dashboard-source-chart');
+  const slices = chart.locator('.dashboard-d3-slice');
+  await slices.nth(3).focus();
+  assert.equal(await chart.locator('.dashboard-d3-legend-item svg').count(), 5);
+  assert.equal(await chart.locator('.dashboard-d3-center-value').textContent(), '42.9%');
+  const overlapsRing = await chart.evaluate(svg => {
+    const slices = [...svg.querySelectorAll('.dashboard-d3-slice')];
+    return [...svg.querySelectorAll('.dashboard-d3-center-value, .dashboard-d3-center-label')].some(text => {
+      const { x, y, width, height } = text.getBBox();
+      return [x, x + width / 2, x + width].some(px =>
+        [y, y + height / 2, y + height].some(py =>
+          slices.some(slice => slice.isPointInFill(new DOMPoint(px, py)))));
+    });
+  });
+  assert.equal(overlapsRing, false, 'focused percentage and label fit inside the ring');
+});
 
 async function assertFits(page) {
   const geometry = await page.evaluate(() => {
