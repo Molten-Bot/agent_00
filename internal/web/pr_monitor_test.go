@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
@@ -49,6 +50,99 @@ func TestDefaultPRMergePollIntervalIsLowLatency(t *testing.T) {
 	if defaultPRMergePollInterval > 10*time.Second {
 		t.Fatalf("defaultPRMergePollInterval = %s, want low-latency merge updates", defaultPRMergePollInterval)
 	}
+}
+
+func TestPRMergeMonitorRefreshesDisplayedPRTitle(t *testing.T) {
+	t.Parallel()
+
+	const requestID = "req-multi-repo"
+	const trackedURL = "https://github.com/acme/repo/pull/42"
+	const displayedURL = "https://github.com/acme/other/pull/99"
+	broker := NewBroker()
+	now := time.Date(2026, time.April, 9, 12, 0, 0, 0, time.UTC)
+	broker.now = func() time.Time { return now }
+	broker.IngestLog("task status=start request_id=" + requestID)
+	broker.RecordCreatedTaskPRTitle(requestID, displayedURL, "Original title")
+	broker.IngestLog("task status=completed request_id=" + requestID + " pr_url=" + trackedURL)
+	task, _ := broker.Task(requestID)
+	verifiedAt := now.Add(time.Minute)
+	now = now.Add(2 * time.Minute)
+
+	runner := &stubPRMonitorRunner{
+		results: []execx.Result{
+			{Stdout: `{"state":"OPEN","title":"Tracked PR title"}`},
+			{Stdout: `[]`},
+			{Stdout: "Renamed title\n"},
+		},
+	}
+	monitor := PRMergeMonitor{Runner: runner, Broker: broker, Logf: t.Logf}
+	monitor.checkTaskPR(t.Context(), task)
+
+	broker.recordVerifiedTaskPR(requestID, verifiedTaskPR{URL: displayedURL, Title: "Original title", VerifiedAt: verifiedAt})
+	got := broker.StreamSnapshot().Tasks[0]
+	if got.PRURL != trackedURL || got.PRTitleURL != displayedURL || got.PRTitle != "Renamed title" || got.Status != "completed" {
+		t.Fatalf("task after PR title refresh = %+v", got)
+	}
+	if got.PRTitleUpdatedAt != now.Format(time.RFC3339Nano) || got.UpdatedAt != task.UpdatedAt {
+		t.Fatalf("title timestamp = %q and task timestamp = %q, want %s and %s",
+			got.PRTitleUpdatedAt, got.UpdatedAt, now.Format(time.RFC3339Nano), task.UpdatedAt)
+	}
+	commands := runner.Commands()
+	if want := []string{"pr", "view", displayedURL, "--json", "title", "--jq", ".title"}; len(commands) != 3 || !slices.Equal(commands[2].Args, want) {
+		t.Fatalf("commands = %+v, want displayed PR lookup %v", commands, want)
+	}
+}
+
+func TestPRMergeMonitorCleansUpWhenDisplayedPRTitleLookupTimesOut(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		const requestID = "req-stalled-title"
+		const trackedURL = "https://github.com/acme/repo/pull/42"
+		const displayedURL = "https://github.com/acme/other/pull/99"
+		broker := NewBroker()
+		broker.IngestLog("task status=start request_id=" + requestID)
+		broker.RecordCreatedTaskPRTitle(requestID, displayedURL, "Existing title")
+		broker.IngestLog("task status=completed request_id=" + requestID + " pr_url=" + trackedURL)
+		task, _ := broker.Task(requestID)
+
+		var lookupErr error
+		runner := githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+			switch cmd.Args[2] {
+			case "42":
+				return execx.Result{Stdout: `{"state":"MERGED"}`}, nil
+			case displayedURL:
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) > 2*time.Second {
+					t.Fatal("display-only title lookup needs a deadline within two seconds")
+				}
+				<-ctx.Done()
+				lookupErr = ctx.Err()
+				return execx.Result{}, lookupErr
+			default:
+				t.Fatalf("unexpected command: %+v", cmd)
+				return execx.Result{}, nil
+			}
+		})
+		var cleaned string
+		monitor := PRMergeMonitor{
+			Runner: runner,
+			Broker: broker,
+			Logf:   t.Logf,
+			CleanupTask: func(ctx context.Context, id string) error {
+				if err := ctx.Err(); err != nil {
+					t.Fatalf("cleanup context is canceled: %v", err)
+				}
+				cleaned = id
+				return nil
+			},
+		}
+		monitor.checkTaskPR(t.Context(), task)
+
+		got, ok := broker.Task(requestID)
+		if lookupErr != context.DeadlineExceeded || cleaned != requestID || !ok || got.Status != "merged" || got.PRTitle != "Existing title" {
+			t.Fatalf("lookup error = %v, cleaned task = %q, task = %+v", lookupErr, cleaned, got)
+		}
+	})
 }
 
 func TestPRMergeMonitorMarksMergedTaskDoneAndRunsCleanup(t *testing.T) {
@@ -309,11 +403,16 @@ func TestPRMergeMonitorKeepsTaskVisibleUntilPRIsMerged(t *testing.T) {
 	t.Parallel()
 
 	broker := NewBroker()
+	now := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
+	broker.now = func() time.Time { return now }
 	broker.IngestLog("dispatch status=start request_id=req-open repo=git@github.com:acme/repo.git")
+	now = now.Add(2 * time.Minute)
 	broker.IngestLog("dispatch status=completed request_id=req-open workspace=/tmp/run branch=agent00-ship pr_url=https://github.com/acme/repo/pull/77")
+	completedAt := now.Format(time.RFC3339Nano)
+	now = now.Add(time.Minute)
 
 	runner := &stubPRMonitorRunner{
-		result: execx.Result{Stdout: `{"state":"OPEN","mergedAt":""}`},
+		result: execx.Result{Stdout: `{"state":"OPEN","mergedAt":"","title":"Published PR title"}`},
 	}
 
 	monitor := PRMergeMonitor{
@@ -331,7 +430,8 @@ func TestPRMergeMonitorKeepsTaskVisibleUntilPRIsMerged(t *testing.T) {
 	}()
 
 	waitForHubUITest(t, 5*time.Second, func() bool {
-		return len(runner.Commands()) > 0
+		task, ok := broker.Task("req-open")
+		return ok && task.PRTitle == "Published PR title"
 	})
 
 	snap := broker.Snapshot()
@@ -340,6 +440,12 @@ func TestPRMergeMonitorKeepsTaskVisibleUntilPRIsMerged(t *testing.T) {
 	}
 	if got, want := snap.Tasks[0].RequestID, "req-open"; got != want {
 		t.Fatalf("task request_id = %q, want %q", got, want)
+	}
+	if got := snap.Tasks[0].UpdatedAt; got != completedAt {
+		t.Errorf("task.UpdatedAt after PR title update = %q, want %q", got, completedAt)
+	}
+	if got, want := snap.Tasks[0].DurationSeconds, 120.0; got != want {
+		t.Errorf("task.DurationSeconds after PR title update = %v, want %v", got, want)
 	}
 
 	cancel()
@@ -517,7 +623,7 @@ func TestActionablePRReviewFeedbackIgnoresAutomatedReviewCycleComments(t *testin
 	}
 }
 
-func TestPRMergeMonitorDoesNotQueueFeedbackForReviewTasks(t *testing.T) {
+func TestPRMergeMonitorDoesNotReplaceReviewTaskTitleOrQueueFeedback(t *testing.T) {
 	t.Parallel()
 
 	broker := NewBroker()
@@ -531,6 +637,7 @@ func TestPRMergeMonitorDoesNotQueueFeedbackForReviewTasks(t *testing.T) {
 			"state":"OPEN",
 			"mergedAt":"",
 			"url":"https://github.com/acme/repo/pull/117",
+			"title":"Published PR title",
 			"headRefName":"feature",
 			"baseRefName":"main",
 			"latestReviews":[{"id":"review-1","author":{"login":"reviewer"},"state":"COMMENTED","submittedAt":"2026-05-30T12:00:00Z","body":%q}],
@@ -549,10 +656,25 @@ func TestPRMergeMonitorDoesNotQueueFeedbackForReviewTasks(t *testing.T) {
 		},
 	}
 
-	monitor.checkTaskPR(context.Background(), broker.Snapshot().Tasks[0])
+	original, ok := broker.Task("req-review")
+	if !ok || original.Prompt == "" {
+		t.Fatal("expected review task with a prompt")
+	}
+	monitor.checkTaskPR(t.Context(), original)
 
 	if calls != 0 {
 		t.Fatalf("OnReviewFeedback calls = %d, want 0", calls)
+	}
+	task, _ := broker.Task("req-review")
+	if task.PRTitle != "" || task.Prompt != original.Prompt {
+		t.Fatalf("review task prompt = %q, PR title = %q, want prompt %q and no PR title", task.Prompt, task.PRTitle, original.Prompt)
+	}
+
+	runner.result = execx.Result{Stdout: `{"state":"MERGED","mergedAt":"2026-05-31T12:00:00Z","title":"Published PR title"}`}
+	monitor.checkTaskPR(t.Context(), task)
+	task, _ = broker.Task("req-review")
+	if task.Status != "merged" || task.PRTitle != "" {
+		t.Fatalf("review task status = %q, PR title = %q, want merged and no PR title", task.Status, task.PRTitle)
 	}
 }
 

@@ -9819,7 +9819,7 @@
     }
 
     function taskNameText(task) {
-      return String(task?.pr_title || "").trim() || taskPromptText(task);
+      return String(task?.pr_title || "").trim() || String(task?.issue_title || "").trim() || taskPromptText(task);
     }
 
     function taskPromptModalTitleText(task) {
@@ -11180,16 +11180,18 @@
 
     function rememberCompletedTaskHistory(snapshot) {
       const nowMs = Date.now();
+      const liveTaskIDs = new Set();
       let changed = false;
       if (!(state.taskHistoryByID instanceof Map)) {
         state.taskHistoryByID = new Map();
         changed = true;
       }
       for (const task of snapshot?.tasks || []) {
+        const requestID = String(task?.request_id || "").trim();
+        liveTaskIDs.add(requestID);
         if (!isCompletedTask(task)) {
           continue;
         }
-        const requestID = String(task?.request_id || "").trim();
         if (!requestID || isTaskHistoryExpired(task, nowMs)) {
           continue;
         }
@@ -11212,13 +11214,36 @@
           String(existing.status || "") === String(copy.status || "") &&
           String(existing.error || "") === String(copy.error || "") &&
           String(existing.pr_url || "") === String(copy.pr_url || "") &&
+          String(existing.issue_title || "") === String(copy.issue_title || "") &&
           String(existing.pr_title || "") === String(copy.pr_title || "") &&
           String(existing.pr_title_url || "") === String(copy.pr_title_url || "") &&
+          String(existing.pr_title_updated_at || "") === String(copy.pr_title_updated_at || "") &&
           existingLogsLength === nextLogsLength
         ) {
           continue;
         }
         state.taskHistoryByID.set(requestID, copy);
+        changed = true;
+      }
+      for (const [requestID, pr] of Object.entries(snapshot?.verified_task_prs || {})) {
+        const existing = state.taskHistoryByID.get(requestID);
+        const verifiedAt = parseTaskTimestamp(pr?.verified_at);
+        const trackedPRURL = taskPullRequestURL(existing);
+        const cardPRURL = taskCardPullRequestURL(existing);
+        if (!existing || liveTaskIDs.has(requestID) || !pr?.url || !pr?.title ||
+            (trackedPRURL && trackedPRURL !== pr.url) || (cardPRURL && cardPRURL !== pr.url) ||
+            isTaskHistoryExpired(existing, nowMs) || !verifiedAt ||
+            verifiedAt <= parseTaskTimestamp(existing.pr_title_updated_at) ||
+            (!existing.pr_title_updated_at && verifiedAt < parseTaskTimestamp(existing.updated_at))) {
+          continue;
+        }
+        state.taskHistoryByID.set(requestID, {
+          ...existing,
+          pr_url: pr.url,
+          pr_title_url: pr.url,
+          pr_title: pr.title,
+          pr_title_updated_at: pr.verified_at,
+        });
         changed = true;
       }
       const pruned = pruneTaskHistory(nowMs);
