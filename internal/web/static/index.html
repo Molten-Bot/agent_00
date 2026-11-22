@@ -10599,7 +10599,9 @@
           await showTaskAssetPreview(await response.blob(), taskAssetMessage, { signal, title });
           return;
         }
-        taskAssetMessage.textContent = "Preview unavailable.";
+        taskAssetMessage.textContent = response.status === 403
+          ? "GitHub access required to preview this attachment."
+          : "Preview unavailable.";
         if (response.status === 403 && window.isSecureContext && url.hostname === "github.com" && !url.search) {
           // The isolated authorization tab returns only the preview bytes.
           const channelName = `task-asset-preview-${crypto.randomUUID()}`;
