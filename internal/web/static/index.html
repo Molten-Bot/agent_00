@@ -14,7 +14,7 @@
   <script src="/static/lucide.min.js"></script>
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
-  <script src="/static/task-asset-preview.js?v=3"></script>
+  <script src="/static/task-asset-preview.js?v=4"></script>
   <link rel="stylesheet" href="/static/style.css?v=11">
 </head>
 <body>
@@ -1257,11 +1257,11 @@
     }
 
     const initialRouteHash = window.location.hash;
-    let initialDashboardPending = appDisplayFromHash() === "dashboard";
+    let initialRoutePending = appDisplayFromHash() !== "studio" || promptModeFromHash() === "json";
 
     function trackAppPageView() {
-      // Dashboard availability is decided by the initial status response.
-      if (initialDashboardPending && window.location.hash === initialRouteHash) return;
+      // Deep links can temporarily fall back to Studio while availability loads.
+      if (initialRoutePending && window.location.hash === initialRouteHash) return;
       // Both setters can run during one navigation. Read the resolved screen after they finish.
       queueMicrotask(() => {
         const mode = state.appDisplay;
@@ -2094,10 +2094,10 @@
     let claudePostSubmitVerifyTimer = null;
     let claudePostSubmitVerifyInFlight = false;
     let claudePostSubmitVerifyAttempts = 0;
-    let pendingStreamSnapshotText = "";
     let streamRenderTimer = null;
     let streamRenderFrame = null;
     let pendingStreamSnapshot = null;
+    let lastObservedTaskSnapshot = null;
     let taskHistoryPruneTimer = null;
     let taskTimingRefreshTimer = null;
     let deferredSelectionRenderTimer = null;
@@ -13567,12 +13567,18 @@
       }
     }
 
+    function observeTaskSnapshot(snapshot) {
+      if (!snapshot || snapshotIsOlder(snapshot, lastObservedTaskSnapshot)) return false;
+      trackObservedTaskStatuses(lastObservedTaskSnapshot, snapshot);
+      lastObservedTaskSnapshot = snapshot;
+      return true;
+    }
+
     function render(snapshot) {
       if (!snapshot || snapshotIsOlder(snapshot)) return;
       syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
       state.snapshot = snapshot;
-      trackObservedTaskStatuses(previousSnapshot, snapshot);
       syncLocalPromptSubmitDisabled();
       syncTaskCompletionSounds(snapshot);
       syncTaskViewDockCompletion(previousSnapshot, snapshot);
@@ -13642,6 +13648,7 @@
           throw new Error(`status http ${response.status}`);
         }
         const snapshot = await response.json();
+        observeTaskSnapshot(snapshot);
         await reviewSettingsPromise;
         render(snapshot);
         const initialDisplay = appDisplayFromHash();
@@ -13653,16 +13660,19 @@
         if (promptModeFromHash() === "json" && state.promptMode !== "json" && jsonFeatureEnabled()) {
           setPromptMode("json");
         }
-        void githubReposPromise.then(() => {
-          if (initialDisplay === "chat" && appDisplayFromHash() === "chat") {
+        if (initialDisplay === "chat" && chatFeatureEnabled()) {
+          await githubReposPromise;
+          if (appDisplayFromHash() === "chat") {
             setAppDisplay("chat");
+            // A failed first load can trigger a retry in setAppDisplay.
+            await githubReposLoadPromise;
           }
-        });
+        }
       } catch (err) {
         setLocalConnection(false, `Unable to load state: ${err.message}`);
       } finally {
-        if (initialDashboardPending) {
-          initialDashboardPending = false;
+        if (initialRoutePending) {
+          initialRoutePending = false;
           trackAppPageView();
         }
       }
@@ -13687,34 +13697,27 @@
       streamRenderFrame = window.requestAnimationFrame(renderPendingStreamSnapshot);
     }
 
-    function flushPendingStreamSnapshot() {
-      streamRenderTimer = null;
-      if (document.hidden) {
-        return;
-      }
-      const payload = pendingStreamSnapshotText;
-      pendingStreamSnapshotText = "";
-      if (!payload) {
-        return;
-      }
-      try {
-        pendingStreamSnapshot = JSON.parse(payload);
-        queuePendingStreamRender();
-      } catch (_err) {
-        // Ignore malformed event packets.
-      }
-    }
-
     function queueStreamSnapshot(payload) {
-      pendingStreamSnapshotText = String(payload || "");
+      let snapshot;
+      try {
+        snapshot = JSON.parse(payload);
+      } catch (_err) {
+        return;
+      }
+      if (!snapshot || !Array.isArray(snapshot.tasks)) return;
+      // Observe every delivered snapshot, even when the UI renders only the latest one.
+      if (!observeTaskSnapshot(snapshot)) return;
+      pendingStreamSnapshot = snapshot;
       if (streamRenderTimer !== null) {
         return;
       }
-      streamRenderTimer = window.setTimeout(flushPendingStreamSnapshot, STREAM_RENDER_INTERVAL_MS);
+      streamRenderTimer = window.setTimeout(() => {
+        streamRenderTimer = null;
+        queuePendingStreamRender();
+      }, STREAM_RENDER_INTERVAL_MS);
     }
 
     function discardPendingStreamSnapshots() {
-      pendingStreamSnapshotText = "";
       pendingStreamSnapshot = null;
       if (streamRenderTimer !== null) {
         window.clearTimeout(streamRenderTimer);
@@ -13732,10 +13735,6 @@
           window.cancelAnimationFrame(streamRenderFrame);
           streamRenderFrame = null;
         }
-        return;
-      }
-      if (pendingStreamSnapshotText) {
-        flushPendingStreamSnapshot();
         return;
       }
       queuePendingStreamRender();

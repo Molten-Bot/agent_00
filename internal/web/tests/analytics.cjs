@@ -145,6 +145,35 @@ test('Dashboard deep links report only the resolved screen', async t => {
   }
 });
 
+test('Current Work, Chat, and JSON deep links wait for route availability', async t => {
+  const activeSnapshot = { ...snapshot, tasks: [{ request_id: 'work-fixture', status: 'running' }] };
+  const cases = [
+    ['current-work', '**/api/status', { json: activeSnapshot }, 'current-work'],
+    ['work', '**/api/status', { json: snapshot }, 'studio-builder'],
+    ['chat', '**/api/github/repos?*', { json: { ok: true, repos: [] } }, 'chat'],
+    ['chat', '**/api/github/repos?*', { status: 503 }, 'studio-builder'],
+    ['studio-json', '**/api/review-settings', { json: { settings: { json_enabled: true } } }, 'studio-json'],
+    ['studio-json', '**/api/review-settings', { json: { settings: { json_enabled: false } } }, 'studio-builder'],
+  ];
+  for (const [hash, endpoint, response, display] of cases) {
+    const page = await openPage(t);
+    let release;
+    const pending = new Promise(resolve => { release = resolve; });
+    await page.route(endpoint, async route => {
+      await pending;
+      await route.fulfill(response);
+    });
+    try {
+      await page.goto(`${baseURL}/#${hash}`, { waitUntil: 'domcontentloaded' });
+      assert.deepEqual(await events(page, 'page_view'), [], hash);
+    } finally {
+      release();
+    }
+    await expect.poll(async () => (await events(page, 'page_view')).map(event => event.page_location))
+      .toEqual([`${baseURL}/#${display}`]);
+  }
+});
+
 test('Task transitions are reported once across windows and keep request IDs local', async t => {
   const context = await browser.newContext();
   t.after(() => context.close());
@@ -173,6 +202,53 @@ test('Task transitions are reported once across windows and keep request IDs loc
   const observed = await observedStatuses();
   assert.equal(observed.length, 5);
   assert.doesNotMatch(JSON.stringify(observed), /private-task-fixture/);
+});
+
+test('Every delivered task transition is observed even when stream renders are coalesced', async t => {
+  const page = await openPage(t);
+  await page.goto(baseURL);
+  await page.waitForFunction(() => state.snapshot !== null);
+  const sequence = ['pending', 'running', 'paused', 'running', 'completed'];
+  await page.evaluate(({ snapshot, sequence }) => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    for (const [index, status] of sequence.entries()) {
+      const packet = { ...snapshot, generated_at: new Date(index * 1000).toISOString(), tasks: [{
+        request_id: 'burst-task-fixture', source: 'prompt', status, status_revision: index,
+      }] };
+      window.testTaskStream.onmessage({ data: JSON.stringify(packet) });
+    }
+    window.testTaskStream.onmessage({ data: '{malformed' });
+    window.testTaskStream.onmessage({ data: JSON.stringify({
+      ...snapshot, generated_at: new Date(0).toISOString(),
+      tasks: [{ request_id: 'burst-task-fixture', status: 'failed', status_revision: 0 }],
+    }) });
+  }, { snapshot, sequence });
+  await expect.poll(async () => (await events(page, 'task_status_observed'))
+    .map(event => [event.previous_status, event.task_status]))
+    .toEqual(sequence.map((status, index) => [sequence[index - 1], status]));
+  assert.deepEqual(await page.evaluate(() => state.snapshot.tasks), []);
+
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForFunction(() => state.snapshot.tasks[0]?.status === 'completed');
+  assert.equal((await events(page, 'task_status_observed')).length, sequence.length);
+});
+
+test('An image decode error reports a sanitized preview failure', async t => {
+  const page = await openPage(t, { initialSnapshot: { ...snapshot, tasks: [{
+    request_id: 'media-task-fixture', status: 'running',
+    assets: [{ name: 'private-image-fixture', url: 'https://github.com/user-attachments/assets/private-asset-fixture' }],
+  }] } });
+  await page.route('**/api/tasks/*/asset-preview', route =>
+    route.fulfill({ contentType: 'image/png', body: 'invalid image bytes' }));
+  await page.goto(`${baseURL}/#current-work`);
+  await page.locator('#task-list .task-assets-toggle').click();
+  await expect(page.locator('#task-asset-message')).toHaveText('Preview unavailable.');
+  await expect.poll(async () => await events(page, 'task_asset_preview_failed')).toEqual([
+    { send_to: 'G-BY33RFG2WB', media_type: 'image' },
+  ]);
 });
 
 test('Automation scan reports acceptance for HTTP 202', async t => {
