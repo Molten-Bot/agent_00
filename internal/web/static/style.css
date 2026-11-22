@@ -4225,8 +4225,7 @@ select.prompt-control {
 }
 
 .dashboard-stat-card,
-.dashboard-chart-shell,
-.dashboard-time-panel {
+.dashboard-chart-shell {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-control-bg-strong);
@@ -4357,55 +4356,6 @@ select.prompt-control {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-
-.dashboard-time-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.dashboard-time-panel {
-  display: grid;
-  gap: 12px;
-  min-height: 180px;
-  padding: 16px;
-}
-
-.dashboard-time-list {
-  display: grid;
-  gap: 10px;
-}
-
-.dashboard-time-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  min-height: 38px;
-  padding: 9px 0;
-  border-top: 1px solid var(--border);
-}
-
-.dashboard-time-name {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-size: 0.92rem;
-  font-weight: 800;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dashboard-time-meta,
-.dashboard-time-empty {
-  color: var(--meta);
-  font-size: 0.82rem;
-  font-weight: 750;
-}
-
-.dashboard-time-empty {
-  margin: 0;
 }
 
 #dashboard-task-chart,
@@ -4566,15 +4516,7 @@ select.prompt-control {
     grid-template-columns: 1fr;
   }
 
-  .dashboard-time-grid {
-    grid-template-columns: 1fr;
-  }
-
   .dashboard-chart-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .dashboard-time-row {
     grid-template-columns: 1fr;
   }
 }

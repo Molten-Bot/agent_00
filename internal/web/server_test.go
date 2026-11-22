@@ -266,18 +266,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `Session Runtime`) ||
 		!strings.Contains(markup, `stats.session_runtime_seconds`) ||
 		!strings.Contains(markup, `id="dashboard-time-saved"`) ||
-		!strings.Contains(markup, `id="dashboard-workflow-times"`) ||
-		!strings.Contains(markup, `id="dashboard-agent-times"`) ||
 		!strings.Contains(markup, `id="dashboard-task-chart"`) ||
 		!strings.Contains(markup, `id="dashboard-source-chart"`) ||
 		!strings.Contains(markup, `id="dashboard-source-total"`) {
 		t.Fatalf("expected index html to render the dashboard stats panel")
 	}
-	if !strings.Contains(markup, `function dashboardTimeDisplayName(name)`) ||
-		!strings.Contains(markup, `if (rawName === "code_for_me") {`) ||
-		!strings.Contains(markup, `return "Code for me";`) ||
-		!strings.Contains(markup, `label.textContent = dashboardTimeDisplayName(row?.name);`) {
-		t.Fatalf("expected dashboard time breakdown names to format code_for_me for display")
+	if strings.Contains(markup, `id="dashboard-workflow-times"`) ||
+		strings.Contains(markup, `id="dashboard-agent-times"`) {
+		t.Fatalf("expected dashboard to omit workflow and agent time breakdowns")
 	}
 	if !strings.Contains(markup, `<span class="dashboard-stat-label">Total Tasks</span>`) ||
 		!strings.Contains(markup, `<strong id="dashboard-total-tasks">0</strong>`) ||
