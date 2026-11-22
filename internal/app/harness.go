@@ -7076,7 +7076,7 @@ func agentErrorDetailField(suffix string, lines []string) string {
 		field := strings.ToLower(agentFailureFieldLine(line))
 		if line == "" || strings.HasPrefix(line, "##") || strings.HasPrefix(line, "# ") ||
 			strings.HasPrefix(field, "resolved issue:") || strings.HasPrefix(field, "failure:") ||
-			strings.HasPrefix(field, "error details:") {
+			strings.HasPrefix(field, "error details:") || strings.HasPrefix(field, "validation:") {
 			break
 		}
 		details = append(details, line)

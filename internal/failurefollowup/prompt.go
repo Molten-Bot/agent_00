@@ -91,32 +91,38 @@ const openDependencyReference = `(?:issue |pull request |pr |dependency )?(?:` +
 const openDependencyCause = `(?:because ` + openDependencyReference + ` is still open|(?:by|on) (?:(?:still[- ])?open ` +
 	openDependencyReference + `|` + openDependencyReference + `, which is still open))`
 const evidenceAccessPrerequisite = `(?:credential setup|(?:scoped )?iam|(?:shared )?key provisioning)`
-const blockerDetailEnd = `(?:[.!](?:\s|$)| \| |$)`
+const blockerDetailEnd = `(?:[.!](?:\s|$)| \| |\n|$)`
 const rolloutEvidenceChannel = `(?:api|cli|mcp)`
 
 // Older reports join separate lines with " | ", with or without punctuation
 // at the end of each original line.
-const evidenceSentenceBreak = `(?:\.\s+(?:\|\s+)?| \| )`
+const evidenceSentenceBreak = `(?:\.\s+(?:\|\s+)?| \| |\n)`
 
 var (
 	blockedFailureSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:[ \t]*(?:((?:[^"'\x60\r\n]|\b'\b|` +
 		backtickedIssueID + `)+?) (?:remains |is )?)?blocked(?: (` + openDependencyCause + `))?[.!]?$`)
 	negatedBlockerOperation = regexp.MustCompile(`(?:\b(?:not|never|no longer)|n['’]t)(?: yet| currently)?$`)
-	openDependencyDetail    = regexp.MustCompile(`^blocked ` + openDependencyCause + blockerDetailEnd)
-	openDependencyTarget    = regexp.MustCompile(`^` + openDependencyReference +
+	openDependencyDetail    = wrappedDetailPattern(`^blocked ` + openDependencyCause + blockerDetailEnd)
+	openDependencyTarget    = wrappedDetailPattern(`^` + openDependencyReference +
 		` is still open and (?:blocks|is blocking) `)
 	rolloutOperation             = regexp.MustCompile(`\brollout(?: for .+)?$`)
-	openDependencyEvidenceDetail = regexp.MustCompile(`^` + openDependencyReference +
-		` is still open` + evidenceSentenceBreak + `its [^.!?;|\r\n]+ lacks? [^.!?;|\r\n]+ (?:needed|required) for evidence reads\b`)
-	evidenceRolloutTarget = regexp.MustCompile(`^(?: (?:\| )?|` + evidenceSentenceBreak + `(?:(?:those|the) )?evidence reads are )(?:needed|required) for `)
+	openDependencyEvidenceDetail = wrappedDetailPattern(`^` + openDependencyReference +
+		` is still open` + evidenceSentenceBreak + `its [^.!?;|]+ lacks? [^.!?;|]+ (?:needed|required) for evidence reads\b`)
+	evidenceRolloutTarget = wrappedDetailPattern(`^(?: (?:\| )?|` + evidenceSentenceBreak + `(?:(?:those|the) )?evidence reads are )(?:needed|required) for `)
 	// The fallback requires pending access setup and verification alongside
 	// disabled API, CLI, or MCP evidence to tie the open issue to the rollout.
-	rolloutEvidencePending = regexp.MustCompile(`^` + evidenceSentenceBreak + evidenceAccessPrerequisite + `(?:, ` + evidenceAccessPrerequisite + `)*,?` +
+	rolloutEvidencePending = wrappedDetailPattern(`^` + evidenceSentenceBreak + evidenceAccessPrerequisite + `(?:, ` + evidenceAccessPrerequisite + `)*,?` +
 		` and (?:deployed )?verification (?:are|remain) pending` + evidenceSentenceBreak +
 		rolloutEvidenceChannel + `(?: and ` + rolloutEvidenceChannel + `)? evidence (?:stays?|remains?) disabled(?: by default)?[.!]?$`)
 	issueIDCodeSpan = regexp.MustCompile(`\x60(` + issueID + `)\x60`)
 	operationEnd    = regexp.MustCompile(`^` + blockerDetailEnd)
 )
+
+// Detail patterns distinguish sentence boundaries from whitespace within a
+// phrase, which may wrap across lines in the same report.
+func wrappedDetailPattern(pattern string) *regexp.Regexp {
+	return regexp.MustCompile(strings.ReplaceAll(pattern, " ", `[ \n]+`))
+}
 
 var nonRemediableFailureMarkers = []string{
 	"no space left on device",
@@ -461,13 +467,12 @@ func isOpenDependencyFailure(summary, detail string) bool {
 	if blocked[2] != "" {
 		return true
 	}
-	// Match wrapped prose without changing the error retained for diagnosis.
-	detail = strings.TrimSpace(detail)
-	if matchesOpenDependencyDetail(blocked[1], strings.Join(strings.Fields(detail), " ")) {
-		return true
+	// Normalize whitespace within each line while retaining line boundaries.
+	lines := strings.Split(strings.TrimSpace(detail), "\n")
+	for i, line := range lines {
+		lines[i] = strings.Join(strings.Fields(line), " ")
 	}
-	// Preserve detection for reports that use line breaks as sentence boundaries.
-	return strings.Contains(detail, "\n") && matchesOpenDependencyDetail(blocked[1], strings.ReplaceAll(detail, "\n", " | "))
+	return matchesOpenDependencyDetail(blocked[1], strings.Join(lines, "\n"))
 }
 
 func matchesOpenDependencyDetail(operation, detail string) bool {
@@ -499,8 +504,12 @@ func normalizeDependencyOperation(operation string) string {
 func matchesDependencyOperation(operation, target string) bool {
 	// Compare the full name before checking for sentence punctuation. An
 	// operation can contain periods followed by spaces, as in "U.S. rollout".
-	rest, ok := strings.CutPrefix(normalizeDependencyOperation(target), operation)
-	return ok && operationEnd.MatchString(rest)
+	target = issueIDCodeSpan.ReplaceAllString(strings.TrimSpace(target), "$1")
+	flatTarget := strings.TrimPrefix(strings.ReplaceAll(target, "\n", " "), "the ")
+	rest, ok := strings.CutPrefix(flatTarget, operation)
+	// Flattening preserves byte offsets, so check for a boundary in the
+	// original target after matching the operation across wrapped lines.
+	return ok && operationEnd.MatchString(target[len(target)-len(rest):])
 }
 
 func isMissingRemoteBranchFailure(text string) bool {

@@ -8075,6 +8075,31 @@ func TestRunCodexDoesNotDowngradeTaskBlockerToValidationGap(t *testing.T) {
 	}
 }
 
+func TestRunCodexKeepsRolloutFailureWithSeparateValidationGap(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	prompt := "complete the rollout"
+	fake := &fakeRunner{t: t, exps: []expectedRun{{
+		cmd: codexCommand(targetDir, prompt),
+		res: execx.Result{Stdout: strings.Join([]string{
+			"Failure: Production rollout remains blocked.",
+			"Error details: #72 is still open and blocks the production rollout.",
+			"- **Validation:** Local validation tooling unavailable in runtime.",
+			"`go test ./...` failed: `go: command not found`.",
+		}, "\n")},
+	}}}
+
+	err := New(fake).runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
+	if err == nil {
+		t.Fatal("runCodex() error = nil, want rollout failure")
+	}
+	const want = "codex reported failure: Failure: Production rollout remains blocked. Error details: #72 is still open and blocks the production rollout."
+	if err.Error() != want {
+		t.Fatalf("runCodex() error = %q, want %q", err, want)
+	}
+}
+
 func TestRunCodexAllowsNPMCheckMissingNodeModulesPluginResolution(t *testing.T) {
 	t.Parallel()
 
