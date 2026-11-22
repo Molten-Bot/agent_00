@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -43,6 +45,7 @@ func TestIssueRepairOutboxRechecksDependencyBlockers(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, captured, current, incident, want string
+		missingReceipt, missingLogRoot          bool
 	}{
 		{
 			name:     "legacy queued report",
@@ -61,10 +64,33 @@ func TestIssueRepairOutboxRechecksDependencyBlockers(t *testing.T) {
 			incident: localruntime.IssueIncidentUnmergedDependency,
 			want:     failurefollowup.UnmergedDependencyReason,
 		},
+		{
+			name:           "redacted issue link without receipt",
+			captured:       "codex: codex reported failure: Failure: Export remains blocked. Error details: [#72](https://github.com/example/project/issues/72) is still open and blocks the export.",
+			want:           failurefollowup.OpenDependencyReason,
+			missingReceipt: true,
+		},
+		{
+			name:           "source classified after capture without receipt",
+			captured:       "temporary recovery failure",
+			incident:       localruntime.IssueIncidentOpenDependency,
+			want:           failurefollowup.OpenDependencyReason,
+			missingReceipt: true,
+		},
+		{
+			name:           "redacted issue link without receipt or log path",
+			captured:       "codex: codex reported failure: Failure: Export remains blocked. Error details: [#72](https://github.com/example/project/issues/72) is still open and blocks the export.",
+			want:           failurefollowup.OpenDependencyReason,
+			missingReceipt: true,
+			missingLogRoot: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			claims, issue := lifecycleRecord(t)
-			q := issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, claims: claims, logf: t.Logf}
+			q := issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, claims: claims, logRoot: t.TempDir(), logf: t.Logf}
+			if tc.missingLogRoot {
+				q.logRoot = ""
+			}
 			issue.Incident = "missing_pr"
 			issue.RunError = tc.captured
 			issue.ExitCode = app.ExitCodex
@@ -72,10 +98,16 @@ func TestIssueRepairOutboxRechecksDependencyBlockers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if tc.current != "" || tc.incident != "" {
-				issue.RepairRequestID = id
-				issue.RunError = tc.current
-				issue.Incident = tc.incident
+			if tc.current != "" || tc.incident != "" || tc.missingReceipt {
+				if !tc.missingReceipt {
+					issue.RepairRequestID = id
+				}
+				if tc.current != "" {
+					issue.RunError = tc.current
+				}
+				if tc.incident != "" {
+					issue.Incident = tc.incident
+				}
 				issue.Error = "temporary label removal failure"
 				if err := claims.Save(issue); err != nil {
 					t.Fatal(err)
@@ -93,6 +125,60 @@ func TestIssueRepairOutboxRechecksDependencyBlockers(t *testing.T) {
 			}
 			if got := repairs[0]; got.State != "blocked" || got.Started || got.Error != tc.want {
 				t.Fatalf("repair state = %q, started = %t, error = %q", got.State, got.Started, got.Error)
+			}
+		})
+	}
+}
+
+func TestIssueRepairOutboxWithCorruptClaim(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name          string
+		corruptSource bool
+		wantCalls     int
+	}{
+		{name: "unrelated claim", wantCalls: 1},
+		{name: "source claim", corruptSource: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			claims, issue := lifecycleRecord(t)
+			q := issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, claims: claims, logRoot: t.TempDir(), logf: t.Logf}
+			issue.RunError = "internal invariant failed"
+			id, err := q.capture(context.Background(), issue)
+			if err != nil {
+				t.Fatal(err)
+			}
+			issue.RepairRequestID = id
+			if err := claims.Save(issue); err != nil {
+				t.Fatal(err)
+			}
+			corruptID := strings.Repeat("b", 32)
+			if tc.corruptSource {
+				corruptID = issue.ID
+				other := issue
+				other.ID = strings.Repeat("b", 32)
+				other.RequestID = "issue-" + other.ID
+				other.RepairRequestID = ""
+				otherIssue := *issue.Run.GitHubIssue
+				otherClaim := *otherIssue.Claim
+				otherClaim.ID = other.ID
+				otherIssue.Claim = &otherClaim
+				other.Run.GitHubIssue = &otherIssue
+				if err := claims.Save(other); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(claims.Root, corruptID+".json"), []byte("{"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			q.reconcile(context.Background(), func(ctx context.Context, _ config.Config, _ bool, _ string, _ bool) (string, error) {
+				calls++
+				work := ctx.Value(issueRepairContextKey{}).(*issueRepairWork)
+				return work.record.RequestID, work.lock.Close()
+			})
+			if calls != tc.wantCalls {
+				t.Fatalf("dispatches = %d, want %d", calls, tc.wantCalls)
 			}
 		})
 	}

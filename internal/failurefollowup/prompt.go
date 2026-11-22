@@ -94,6 +94,10 @@ const evidenceAccessPrerequisite = `(?:credential setup|(?:scoped )?iam|(?:share
 const blockerDetailEnd = `(?:[.!](?:\s|$)| \| |$)`
 const rolloutEvidenceChannel = `(?:api|cli|mcp)`
 
+// The harness joins separate report lines with " | ", with or without
+// punctuation at the end of each original line.
+const evidenceSentenceBreak = `(?:\.\s+(?:\|\s+)?| \| )`
+
 var (
 	blockedFailureSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:[ \t]*(?:((?:[^"'\x60\r\n]|\b'\b|` +
 		backtickedIssueID + `)+) (?:remains |is ))?blocked(?: (` + openDependencyCause + `))?[.!]?$`)
@@ -102,12 +106,12 @@ var (
 		` is still open and (?:blocks|is blocking) `)
 	rolloutOperation             = regexp.MustCompile(`\brollout(?: for .+)?$`)
 	openDependencyEvidenceDetail = regexp.MustCompile(`^` + openDependencyReference +
-		` is still open\.\s+its [^.!?;\r\n]+ lacks? [^.!?;\r\n]+ (?:needed|required) for evidence reads\b`)
-	evidenceRolloutTarget = regexp.MustCompile(`^(?: |\.\s+(?:(?:those|the) )?evidence reads are )(?:needed|required) for `)
+		` is still open` + evidenceSentenceBreak + `its [^.!?;|\r\n]+ lacks? [^.!?;|\r\n]+ (?:needed|required) for evidence reads\b`)
+	evidenceRolloutTarget = regexp.MustCompile(`^(?: (?:\| )?|` + evidenceSentenceBreak + `(?:(?:those|the) )?evidence reads are )(?:needed|required) for `)
 	// The fallback requires pending access setup and verification alongside
 	// disabled API, CLI, or MCP evidence to tie the open issue to the rollout.
-	rolloutEvidencePending = regexp.MustCompile(`^\.\s+` + evidenceAccessPrerequisite + `(?:, ` + evidenceAccessPrerequisite + `)*,?` +
-		` and (?:deployed )?verification (?:are|remain) pending\.\s+` +
+	rolloutEvidencePending = regexp.MustCompile(`^` + evidenceSentenceBreak + evidenceAccessPrerequisite + `(?:, ` + evidenceAccessPrerequisite + `)*,?` +
+		` and (?:deployed )?verification (?:are|remain) pending` + evidenceSentenceBreak +
 		rolloutEvidenceChannel + `(?: and ` + rolloutEvidenceChannel + `)? evidence (?:stays?|remains?) disabled(?: by default)?[.!]?$`)
 	issueIDCodeSpan = regexp.MustCompile(`\x60(` + issueID + `)\x60`)
 	operationEnd    = regexp.MustCompile(`^` + blockerDetailEnd)

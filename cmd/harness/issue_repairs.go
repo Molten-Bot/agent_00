@@ -42,10 +42,7 @@ type issueRepairQueue struct {
 func (q *issueRepairQueue) capture(_ context.Context, issue localruntime.IssueClaimRecord) (string, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	failure := issue.FailureDetail()
-	detail := failurefollowup.RedactFailureDetail(failure)
-	fingerprint := sha256.Sum256([]byte(issue.Step + "\n" + issue.Incident + "\n" + detail))
-	id := hex.EncodeToString(fingerprint[:16])
+	id := issueRepairID(issue)
 	records, err := q.store.List()
 	for _, record := range records {
 		if record.ID == id {
@@ -59,12 +56,18 @@ func (q *issueRepairQueue) capture(_ context.Context, issue localruntime.IssueCl
 		q.logf("event=issue_repair_read status=error err=%q", err)
 	}
 	result := app.Result{ExitCode: issue.ExitCode}
-	if failure != "" {
+	if failure := issue.FailureDetail(); failure != "" {
 		result.Err = errors.New(failure)
 	}
 	run := failureFollowUpRunConfig(issue.RequestID, result, issue.Run, q.logRoot)
 	record := localruntime.IssueRepairRecord{ID: id, RequestID: "repair-" + id, State: "queued", Run: run}
 	return record.RequestID, q.store.Save(record)
+}
+
+func issueRepairID(issue localruntime.IssueClaimRecord) string {
+	detail := failurefollowup.RedactFailureDetail(issue.FailureDetail())
+	fingerprint := sha256.Sum256([]byte(issue.Step + "\n" + issue.Incident + "\n" + detail))
+	return hex.EncodeToString(fingerprint[:16])
 }
 
 func (q *issueRepairQueue) run(ctx context.Context, enqueue localRunEnqueueFunc) {
@@ -139,7 +142,7 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 		case strings.Contains(failure, localruntime.LegacyIssueOwnershipFailure):
 			blockedReason = localruntime.ErrIssueOwnershipChanged.Error()
 		default:
-			blockedReason, err = q.dependencyBlockReason(record.RequestID, failure)
+			blockedReason, err = q.dependencyBlockReason(record, failure)
 			if err != nil {
 				q.logf("event=issue_repair_check_source status=error err=%q", err)
 				lock.Close()
@@ -181,18 +184,32 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 	}
 }
 
-func (q *issueRepairQueue) dependencyBlockReason(requestID, failure string) (string, error) {
+func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepairRecord, failure string) (string, error) {
 	switch reason := failurefollowup.NonRemediableFailureReason(errors.New(failure)); reason {
 	case failurefollowup.UnmergedDependencyReason, failurefollowup.OpenDependencyReason:
 		return reason, nil
 	}
 	// The source claim may have been classified since capture. Its run error
 	// also preserves details that were redacted from the repair prompt.
+	_, logSection, _ := strings.Cut(record.Run.Prompt, "\n\nRelevant failing log path(s):\n- ")
+	logDir, _, _ := strings.Cut(logSection, "\n")
+	hasSourceLog := logDir != "" && logDir != ".log/local/<request timestamp>/<request sequence>"
 	issues, err := q.claims.List()
+	foundSource := false
 	for _, issue := range issues {
-		if issue.RepairRequestID != requestID {
-			continue
+		// The outbox can survive a crash before the claim receipt is saved.
+		// Use its first log path, or its fingerprint if no path was recorded.
+		if issue.RepairRequestID != record.RequestID {
+			if hasSourceLog {
+				sourceDir, _ := taskLogDir(q.logRoot, issue.RequestID)
+				if sourceDir != logDir {
+					continue
+				}
+			} else if issueRepairID(issue) != record.ID {
+				continue
+			}
 		}
+		foundSource = true
 		switch issue.Incident {
 		case localruntime.IssueIncidentUnmergedDependency:
 			return failurefollowup.UnmergedDependencyReason, nil
@@ -203,6 +220,10 @@ func (q *issueRepairQueue) dependencyBlockReason(requestID, failure string) (str
 		case failurefollowup.UnmergedDependencyReason, failurefollowup.OpenDependencyReason:
 			return reason, nil
 		}
+	}
+	if err != nil && foundSource {
+		q.logf("event=issue_repair_check_source status=partial err=%q", err)
+		return "", nil
 	}
 	return "", err
 }
