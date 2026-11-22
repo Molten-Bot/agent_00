@@ -40,32 +40,6 @@
     }
   }
 
-  function trackDockEvent(name, params) {
-    const eventName = String(name || "").trim();
-    if (!eventName || typeof window.gtag !== "function") {
-      return;
-    }
-    const payload = { send_to: "G-BY33RFG2WB" };
-    for (const [key, value] of Object.entries(params || {})) {
-      if (typeof value === "string" && value.trim()) {
-        payload[key] = value.trim();
-        continue;
-      }
-      if (typeof value === "number" && Number.isFinite(value)) {
-        payload[key] = value;
-        continue;
-      }
-      if (typeof value === "boolean") {
-        payload[key] = value;
-      }
-    }
-    try {
-      window.gtag("event", eventName, payload);
-    } catch (_err) {
-      // Analytics must not block dock navigation.
-    }
-  }
-
   function themeLabel(theme) {
     const normalized = THEME_MODES.includes(theme) ? theme : DEFAULT_THEME_MODE;
     return normalized.charAt(0).toUpperCase() + normalized.slice(1);
@@ -141,7 +115,7 @@
     themeToggleButton.addEventListener("click", () => {
       const nextTheme = nextThemeMode(currentThemeMode());
       applyThemeMode(nextTheme, true);
-      trackDockEvent("theme_changed", { theme: nextTheme });
+      window.trackAnalyticsEvent?.("theme_changed", { theme: nextTheme });
     });
   }
 
@@ -164,7 +138,7 @@
       link.addEventListener("click", (event) => {
         event.preventDefault();
         const hash = link.hash || "";
-        trackDockEvent("dock_home_mode_opened", {
+        window.trackAnalyticsEvent?.("dock_home_mode_opened", {
           source: "bottom_dock",
           prompt_mode: String(link.id || "").replace("prompt-mode-", ""),
         });
@@ -272,7 +246,7 @@
     const githubProfileLink = root.querySelector("#github-profile-link");
     if (githubProfileLink) {
       githubProfileLink.addEventListener("click", () => {
-        trackDockEvent("github_profile_opened", { source: "dock" });
+        window.trackAnalyticsEvent?.("github_profile_opened", { source: "dock" });
       });
     }
 
@@ -288,7 +262,7 @@
         if (dockLinkDisabled(link)) {
           return;
         }
-        trackDockEvent("site_page_nav_opened", {
+        window.trackAnalyticsEvent?.("site_page_nav_opened", {
           source: "dock",
           target: String(link.getAttribute("data-app-display") || "").trim(),
         });

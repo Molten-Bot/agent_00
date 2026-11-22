@@ -45,14 +45,9 @@ var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype 
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Title}}</title>
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"></script>
-  <script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag() { window.dataLayer.push(arguments); }
-    window.gtag = window.gtag || gtag;
-    window.gtag("js", new Date());
-    window.gtag("config", "G-BY33RFG2WB");
-  </script>
+  <script src="/static/analytics.js"></script>
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB" referrerpolicy="no-referrer"></script>
+  <script>window.trackAnalyticsPageView?.("/chat", { app_display: "chat" });</script>
   <script src="/static/lucide.min.js"></script>
   <script src="/static/site-header.js"></script>
   <link rel="stylesheet" href="/static/style.css">
@@ -646,27 +641,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           if (!grid || !status) return;
 
           function trackChatEvent(name, params) {
-            const eventName = String(name || "").trim();
-            if (!eventName || typeof window.gtag !== "function") return;
-            const payload = { send_to: "G-BY33RFG2WB" };
-            for (const [key, value] of Object.entries(params || {})) {
-              if (typeof value === "string" && value.trim()) {
-                payload[key] = value.trim();
-                continue;
-              }
-              if (typeof value === "number" && Number.isFinite(value)) {
-                payload[key] = value;
-                continue;
-              }
-              if (typeof value === "boolean") {
-                payload[key] = value;
-              }
-            }
-            try {
-              window.gtag("event", eventName, payload);
-            } catch (_err) {
-              // Analytics must not block chat interactions.
-            }
+            window.trackAnalyticsEvent?.(name, { ...params, source: "chat_page" });
           }
 
           function repoRunValue(repo) {
@@ -732,11 +707,11 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
           }
 
           function repoAnalyticsParams(repo, extra) {
+            const ownerType = repoOwnerType(repo);
             return Object.assign({
               repo_visibility: repo && repo.private ? "private" : "public",
-              owner_type: repoOwnerType(repo) || "unknown",
-              has_language: Boolean(String(repo && repo.language || "").trim()),
-              source: "chat_page"
+              owner_type: ["organization", "user"].includes(ownerType) ? ownerType : "unknown",
+              has_language: Boolean(String(repo && repo.language || "").trim())
             }, extra || {});
           }
 
@@ -1476,8 +1451,10 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             statusNode.textContent = "Submitting...";
             statusNode.dataset.tone = "warn";
             trackChatEvent("chat_repo_prompt_started", repoAnalyticsParams(repo, {
-              has_base_branch: Boolean(branch)
+              has_default_branch: Boolean(branch)
             }));
+            let failureEvent = "chat_repo_prompt_failed";
+            let httpStatus;
             try {
               const response = await fetch("/api/local-prompt", {
                 method: "POST",
@@ -1491,17 +1468,19 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
                 body = null;
               }
               if (!response.ok) {
+                httpStatus = response.status;
+                if (httpStatus === 409 && body?.duplicate) failureEvent = "chat_repo_prompt_duplicate";
                 throw new Error(body && body.error ? body.error : "submit http " + response.status);
               }
               const requestID = body && body.request_id ? body.request_id : "(unknown)";
               input.value = "";
               statusNode.textContent = "Queued request " + requestID;
               statusNode.dataset.tone = "ok";
-              trackChatEvent("chat_repo_prompt_succeeded", repoAnalyticsParams(repo, { request_id: requestID }));
+              trackChatEvent("chat_repo_prompt_succeeded", repoAnalyticsParams(repo));
             } catch (err) {
               statusNode.textContent = "Submit failed: " + (err && err.message ? err.message : "unknown error");
               statusNode.dataset.tone = "error";
-              trackChatEvent("chat_repo_prompt_failed", repoAnalyticsParams(repo));
+              trackChatEvent(failureEvent, repoAnalyticsParams(repo, { http_status: httpStatus }));
               // A rejection can be the signing hold appearing between loads, so
               // surface the banner instead of leaving only the API message.
               void refreshCommitSigningHold();
@@ -1601,6 +1580,9 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             card.appendChild(panel);
 
             const openPrompt = () => {
+              if (card.getAttribute("aria-expanded") !== "true") {
+                trackChatEvent("chat_repo_prompt_opened", repoAnalyticsParams(repo));
+              }
               grid.querySelectorAll(".chat-repo-card[aria-expanded='true']").forEach((node) => {
                 if (node !== card) node.setAttribute("aria-expanded", "false");
               });

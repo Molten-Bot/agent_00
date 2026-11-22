@@ -246,8 +246,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"`) {
 		t.Fatalf("expected index html to load the google analytics tag script")
 	}
-	if !strings.Contains(markup, `window.gtag("config", "G-BY33RFG2WB", { send_page_view: false });`) {
-		t.Fatalf("expected index html to configure google analytics with the agent00 measurement id")
+	if !strings.Contains(markup, `src="/static/analytics.js"`) {
+		t.Fatalf("expected index html to load the shared analytics helper")
 	}
 	if !strings.Contains(markup, `<title>Molten AI: Agent_00</title>`) {
 		t.Fatalf("expected index html to set app title to Molten AI: Agent_00")
@@ -2308,29 +2308,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `const DEFAULT_THEME_MODE = "dark";`) {
 		t.Fatalf("expected index html to define dark as the default theme mode")
 	}
-	if !strings.Contains(markup, `const GOOGLE_ANALYTICS_MEASUREMENT_ID = "G-BY33RFG2WB";`) {
-		t.Fatalf("expected index html to expose the google analytics measurement id constant to the usage tracker")
-	}
-	if !strings.Contains(markup, `function trackAnalyticsEvent(name, params = {})`) {
-		t.Fatalf("expected index html to include the analytics event helper")
-	}
-	if !strings.Contains(markup, `function trackAnalyticsPageView(appDisplay)`) ||
-		!strings.Contains(markup, `function analyticsPageLocation()`) ||
-		!strings.Contains(markup, `window.gtag("event", "page_view", payload);`) ||
-		!strings.Contains(markup, `lastAnalyticsPageLocation = currentLocation;`) ||
-		!strings.Contains(markup, `setAppDisplay(appDisplayFromHash(), { trackPageView: false });`) ||
-		!strings.Contains(markup, `trackAnalyticsPageView(state.appDisplay);`) {
-		t.Fatalf("expected index html to track virtual page views for hash-routed app screens")
-	}
-	if !strings.Contains(markup, `const payload = { send_to: GOOGLE_ANALYTICS_MEASUREMENT_ID };`) {
-		t.Fatalf("expected analytics events to route to the configured google analytics destination")
-	}
-	if !strings.Contains(markup, `trackAnalyticsEvent("prompt_submit_succeeded", { prompt_mode: state.promptMode, request_id: requestID });`) {
-		t.Fatalf("expected index html to track successful prompt submissions")
-	}
 	for _, want := range []string{
 		`trackAnalyticsEvent("task_view_changed", { task_view: nextView });`,
-		`trackAnalyticsEvent("task_pull_request_opened", { request_id: taskRequestID(task) });`,
+		`trackAnalyticsEvent("task_pull_request_opened");`,
 		`trackAnalyticsEvent("task_github_step_opened", {`,
 		`trackAnalyticsEvent("agent_auth_configure_started", agentAuthAnalyticsParams({ auth_method: "github_token" }));`,
 		`trackAnalyticsEvent("prompt_screenshots_attached", {`,
@@ -2357,20 +2337,20 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, "taskStateBlocksSubmission") || strings.Contains(markup, "pendingSubmittedRequestID") {
 		t.Fatal("task status must not block queueing another prompt")
 	}
-	if !strings.Contains(markup, `trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: state.promptMode });
+	if !strings.Contains(markup, `trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: promptMode });
             setLocalPromptStatus("warn", duplicateNotice(body));`) {
 		t.Fatalf("expected index html to keep selected task history filter when a duplicate submit resolves to an active task")
 	}
 	if !strings.Contains(markup, `clearSubmittedPromptState();
-        trackAnalyticsEvent("prompt_submit_succeeded", { prompt_mode: state.promptMode, request_id: requestID });`) {
+        trackAnalyticsEvent("prompt_submit_succeeded", { prompt_mode: promptMode });`) {
 		t.Fatalf("expected index html to keep prompt submit success flow without changing task history filter")
 	}
-	if !strings.Contains(markup, `trackAnalyticsEvent("task_rerun_duplicate", { request_id: requestID, forced: force });
+	if !strings.Contains(markup, `trackAnalyticsEvent("task_rerun_duplicate", { forced: force });
             setLocalPromptStatus("warn", duplicateNotice(body));`) {
 		t.Fatalf("expected index html to keep selected task history filter when a duplicate rerun resolves to an active task")
 	}
 	if !strings.Contains(markup, `const newRequestID = body?.request_id || "(unknown)";
-        trackAnalyticsEvent("task_rerun_succeeded", { request_id: requestID, forced: force, rerun_request_id: newRequestID });`) {
+        trackAnalyticsEvent("task_rerun_succeeded", { forced: force });`) {
 		t.Fatalf("expected index html to keep selected task history filter after a successful rerun")
 	}
 	if !strings.Contains(markup, `return THEME_MODES.includes(raw) ? raw : DEFAULT_THEME_MODE;`) {
@@ -2741,7 +2721,7 @@ func TestHandlerServesChatView(t *testing.T) {
 	required := []string{
 		`<title>agent_00 Chat</title>`,
 		`src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"`,
-		`window.gtag("config", "G-BY33RFG2WB");`,
+		`src="/static/analytics.js"`,
 		`src="/static/site-header.js"`,
 		`<agent-00-header agent-harness="codex" agent-label="Codex"></agent-00-header>`,
 		`class="page-bottom-dock"`,

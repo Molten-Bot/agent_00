@@ -6,14 +6,8 @@
   <title>Molten AI: Agent_00</title>
   <meta property="og:image" content="https://app.molten.bot/logo.svg">
   <meta name="twitter:image" content="https://app.molten.bot/logo.svg">
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB"></script>
-  <script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag() { window.dataLayer.push(arguments); }
-    window.gtag = window.gtag || gtag;
-    window.gtag("js", new Date());
-    window.gtag("config", "G-BY33RFG2WB", { send_page_view: false });
-  </script>
+  <script src="/static/analytics.js"></script>
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB" referrerpolicy="no-referrer"></script>
   <script>
     window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};
   </script>
@@ -1025,7 +1019,7 @@
               <textarea id="commit-signing-public-key" class="prompt-text" rows="3" readonly aria-describedby="commit-signing-public-key-help" placeholder="Your public key appears here after you save an SSH private key"></textarea>
               <div class="commit-signing-actions">
                 <button id="commit-signing-copy" type="button" class="prompt-action-button" disabled>Copy public key</button>
-                <a href="https://github.com/settings/ssh/new" target="_blank" rel="noopener noreferrer">Add to GitHub as a Signing Key</a>
+                <a id="commit-signing-github-link" href="https://github.com/settings/ssh/new" target="_blank" rel="noopener noreferrer">Add to GitHub as a Signing Key</a>
               </div>
               <p id="commit-signing-registration">No signing key configured.</p>
               <div class="commit-signing-actions">
@@ -1113,7 +1107,7 @@
     const TASK_PROMPT_MODAL_TITLE_MAX_CHARS = 90;
     const DASHBOARD_SHARE_URL = "https://molten.bot/code";
     const DASHBOARD_SHARE_IMAGE_URL = "https://app.molten.bot/logo.svg";
-    const GOOGLE_ANALYTICS_MEASUREMENT_ID = "G-BY33RFG2WB";
+    const trackAnalyticsEvent = (...args) => window.trackAnalyticsEvent?.(...args);
     const COMPLETED_STATUSES = new Set(["completed", "no_changes", "merged", "error", "invalid", "duplicate", "stopped"]);
     const TASK_PROGRESS_PREP_STAGES = new Set(["preflight", "auth", "workspace", "config", "submit", "task"]);
     const TASK_PROGRESS_AGENT_STAGES = new Set(["codex", "claude", "agent"]);
@@ -1262,78 +1256,26 @@
       }
     }
 
-    function trackAnalyticsEvent(name, params = {}) {
-      if (typeof window.gtag !== "function") {
-        return;
-      }
-
-      const eventName = String(name || "").trim();
-      if (!eventName) {
-        return;
-      }
-
-      const payload = { send_to: GOOGLE_ANALYTICS_MEASUREMENT_ID };
-      for (const [key, value] of Object.entries(params || {})) {
-        if (typeof value === "string") {
-          const trimmed = value.trim();
-          if (trimmed) {
-            payload[key] = trimmed;
-          }
-          continue;
-        }
-        if (typeof value === "number" && Number.isFinite(value)) {
-          payload[key] = value;
-          continue;
-        }
-        if (typeof value === "boolean") {
-          payload[key] = value;
-        }
-      }
-
-      try {
-        window.gtag("event", eventName, payload);
-      } catch (_err) {
-        // Keep UI interactions working even if analytics delivery fails.
-      }
-    }
-
-    function analyticsPageLocation() {
-      return `${window.location.origin}${window.location.pathname}${window.location.hash || ""}`;
-    }
-
-    function trackAnalyticsPageView(appDisplay) {
-      if (typeof window.gtag !== "function") {
-        return;
-      }
-
-      const mode = appDisplay === "dashboard" || appDisplay === "chat" || appDisplay === "work" ? appDisplay : "studio";
-      const currentLocation = analyticsPageLocation();
-      const payload = {
-        send_to: GOOGLE_ANALYTICS_MEASUREMENT_ID,
-        page_title: document.title,
-        page_location: currentLocation,
-        app_display: mode,
-      };
-      if (mode === "studio") {
-        payload.prompt_mode = promptModeFromHash() || state.promptMode;
-      }
-      if (lastAnalyticsPageLocation && lastAnalyticsPageLocation !== currentLocation) {
-        payload.page_referrer = lastAnalyticsPageLocation;
-      }
-
-      try {
-        window.gtag("event", "page_view", payload);
-        lastAnalyticsPageLocation = currentLocation;
-      } catch (_err) {
-        // Keep navigation working even if analytics delivery fails.
-      }
+    function trackAppPageView() {
+      // Both setters can run during one navigation. Read the resolved screen after they finish.
+      queueMicrotask(() => {
+        const mode = state.appDisplay;
+        const path = mode === "studio" ? promptHashFromMode(state.promptMode)
+          : mode === "work" ? "#current-work" : `#${mode}`;
+        const params = { app_display: mode };
+        if (mode === "studio") params.prompt_mode = state.promptMode;
+        window.trackAnalyticsPageView?.(`/${path}`, params);
+      });
     }
 
     function agentAuthAnalyticsParams(extra = {}) {
+      const harness = authHarness(state.agentAuth);
+      const { auth_state: authState = state.agentAuth.state, ...params } = extra;
       return {
-        agent_harness: authHarness(state.agentAuth),
-        auth_state: String(state.agentAuth?.state || "").trim(),
-        ...extra,
+        agent_harness: isSupportedHarnessSelectionValue(harness) ? harness : "unknown",
+        auth_state: ["checking", "ready", "needs_device_auth", "pending_device_auth", "needs_browser_login",
+          "pending_browser_login", "needs_configure", "needs_harness_selection", "error"].includes(authState) ? authState : "other",
+        ...params,
       };
     }
 
@@ -1515,7 +1457,9 @@
       link.title = "Open issue on GitHub.";
       link.setAttribute("aria-label", link.title);
       link.appendChild(createTaskActionIcon("issue"));
-      link.addEventListener("click", (event) => openExternalTaskLink(event, issueURL));
+      link.addEventListener("click", (event) => openExternalTaskLink(event, issueURL, () => {
+        trackAnalyticsEvent("task_github_step_opened", { progress_step: "entry_github_issue" });
+      }));
       return link;
     }
 
@@ -1542,7 +1486,7 @@
       link.appendChild(logo);
       link.addEventListener("click", (event) => {
         openExternalTaskLink(event, prURL, () => {
-          trackAnalyticsEvent("task_pull_request_opened", { request_id: taskRequestID(task) });
+          trackAnalyticsEvent("task_pull_request_opened");
         });
       });
       return link;
@@ -1575,9 +1519,7 @@
         node.rel = "noopener noreferrer";
         node.addEventListener("click", (event) => {
           openExternalTaskLink(event, url, () => {
-            trackAnalyticsEvent(isConcept ? "task_concept_site_opened" : "task_original_site_opened", {
-              request_id: taskRequestID(task),
-            });
+            trackAnalyticsEvent(isConcept ? "task_concept_site_opened" : "task_original_site_opened");
           });
         });
       } else {
@@ -2142,7 +2084,6 @@
       persistTaskHistory();
       persistTaskHistoryUnseenIDs();
     }
-    let lastAnalyticsPageLocation = "";
     let agentAuthRefreshTimer = null;
     let agentAuthAutoSubmitTimer = null;
     let claudePostSubmitVerifyTimer = null;
@@ -3008,6 +2949,9 @@
 
     function setSettingsTab(tab) {
       const normalized = Object.prototype.hasOwnProperty.call(settingsTabPanels, tab) ? tab : "library";
+      if (state.settingsOpen && normalized !== state.settingsTab) {
+        trackAnalyticsEvent("settings_tab_selected", { tab: normalized });
+      }
       state.settingsTab = normalized;
       settingsTabButtons.forEach((button) => {
         const selected = button.getAttribute("data-settings-tab") === normalized;
@@ -3185,6 +3129,7 @@
         await window.CommitSigningSettings?.saveOnClose();
         // A failed initial read must never replace saved settings with defaults.
         if (!state.settingsLoaded) { setSettingsOpen(false); return; }
+        trackAnalyticsEvent("review_settings_save_started", { tab: state.settingsTab });
         const response = await fetch("/api/review-settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -3671,13 +3616,18 @@
       setAgentAuthBusy(true);
       try {
         await submitReviewSettings();
-        if (state.settingsOpen) return; // Keep edits visible if saving failed.
+        if (state.settingsOpen) {
+          trackAnalyticsEvent("agent_reauth_blocked", agentAuthAnalyticsParams({ reason: "settings_save_failed" }));
+          return;
+        }
         const harness = authHarness(state.agentAuth);
+        trackAnalyticsEvent("agent_reauth_started", agentAuthAnalyticsParams({ source: "settings" }));
         applyAgentAuthGate({ harness, required: true, ready: false, state: "checking", message: "Starting sign-in…" });
         try {
           const auth = await requestAgentAuth("/api/agent-auth/reauthenticate", "POST");
           applyAgentAuthGate(auth);
         } catch (err) {
+          trackAnalyticsEvent("agent_reauth_failed", agentAuthAnalyticsParams({ source: "settings" }));
           applyAgentAuthGate({ harness, required: true, ready: false, state: "error", message: `Sign-in failed: ${err.message}` });
         }
       } finally {
@@ -3687,7 +3637,13 @@
     }
 
     function applyAgentAuthGate(auth) {
+      const previousAuth = state.agentAuth;
       state.agentAuth = normalizeAgentAuth(auth);
+      if ((state.agentAuth.required || previousAuth.required) &&
+          (previousAuth.state !== state.agentAuth.state || previousAuth.ready !== state.agentAuth.ready ||
+           authHarness(previousAuth) !== authHarness(state.agentAuth))) {
+        trackAnalyticsEvent("agent_auth_state_changed", agentAuthAnalyticsParams({ ready: state.agentAuth.ready }));
+      }
       updateSettingsAgentAuth();
       renderConfiguredAgent();
       const gateVisible = state.agentAuth.required && !state.agentAuth.ready;
@@ -4157,6 +4113,7 @@
       } catch (err) {
         const message = err && err.message ? err.message : "Invalid GitHub token.";
         setAgentAuthConfigureError(message);
+        trackAnalyticsEvent("agent_auth_configure_invalid", agentAuthAnalyticsParams({ auth_method: "github_token" }));
         return;
       }
 
@@ -4196,6 +4153,7 @@
       const credentials = agentAuthConfigureInput ? String(agentAuthConfigureInput.value || "").trim() : "";
       if (!credentials) {
         setAgentAuthConfigureError("Paste Claude credentials first.");
+        trackAnalyticsEvent("agent_auth_configure_invalid", agentAuthAnalyticsParams({ auth_method: "claude_credentials" }));
         return;
       }
 
@@ -6254,6 +6212,11 @@
       return String(task.type || "").trim().toLowerCase() || "other";
     }
 
+    function libraryAnalyticsType(type) {
+      if (type.startsWith("source:")) return "custom";
+      return LIBRARY_TASK_TYPE_ORDER.includes(type) ? type : "other";
+    }
+
     function libraryTaskTypeMeta(typeID) {
       const id = String(typeID || "").trim().toLowerCase() || "other";
       if (id.startsWith("source:")) {
@@ -6348,7 +6311,8 @@
           state.selectedLibraryTask = "";
           trackAnalyticsEvent("library_type_selected", {
             prompt_mode: state.promptMode,
-            library_type: type.id,
+            library_type: libraryAnalyticsType(type.id),
+            result_count: type.count,
           });
           renderLibraryTaskOptions();
           if (state.promptMode === "json") {
@@ -6382,7 +6346,7 @@
       state.libraryPromptModalOpen = true;
       trackAnalyticsEvent("library_prompt_modal_opened", {
         prompt_mode: state.promptMode,
-        library_task: entry.name,
+        library_type: libraryAnalyticsType(entry.type),
       });
       libraryPromptModalTitle.textContent = entry.displayName || "Library Prompt";
       libraryPromptModalBody.textContent = entry.prompt || "No prompt text provided.";
@@ -6536,7 +6500,7 @@
       taskPromptModal.classList.remove("hidden");
       taskPromptModal.setAttribute("aria-hidden", "false");
       document.body.classList.add("task-prompt-modal-open");
-      trackAnalyticsEvent("task_prompt_modal_opened", { request_id: taskRequestID(task) });
+      trackAnalyticsEvent("task_prompt_modal_opened");
       if (taskPromptModalClose) {
         taskPromptModalClose.focus();
       }
@@ -6644,7 +6608,7 @@
           if (changed) {
             trackAnalyticsEvent("library_task_selected", {
               prompt_mode: state.promptMode,
-              library_task: entry.name,
+              library_type: libraryAnalyticsType(entry.type),
             });
           }
           renderLibraryTaskOptions();
@@ -7870,6 +7834,7 @@
 
       const openPrompt = () => {
         if (repoKey && state.chatOpenRepoKey !== repoKey) {
+          trackAnalyticsEvent("chat_repo_prompt_opened", { source: "chat", repo_visibility: repo?.private ? "private" : "public" });
           state.chatOpenRepoKey = repoKey;
           state.chatRepoPage = 1;
           renderChatRepos();
@@ -8297,7 +8262,7 @@
       link.append(logo);
       link.addEventListener("click", (event) => {
         openExternalTaskLink(event, completion.href, () => {
-          trackAnalyticsEvent("chat_prompt_completion_pr_opened", { request_id: completion.requestID });
+          trackAnalyticsEvent("chat_prompt_completion_pr_opened");
         });
       });
       body.appendChild(link);
@@ -9099,7 +9064,6 @@
         rememberRepos([repoValue]);
         renderChatRepos();
         trackAnalyticsEvent("chat_repo_prompt_succeeded", {
-          request_id: requestID,
           repo_visibility: repo?.private ? "private" : "public",
           image_count: promptImages.length,
           source: "chat",
@@ -9240,7 +9204,6 @@
         });
         mode = "studio";
       }
-      const previousMode = state.appDisplay;
       const showDashboard = mode === "dashboard";
       const showChat = mode === "chat";
       const showWork = mode === "work";
@@ -9292,9 +9255,7 @@
           window.history.pushState(null, "", nextHash);
         }
       }
-      if (previousMode !== mode && options.trackPageView !== false) {
-        trackAnalyticsPageView(mode);
-      }
+      trackAppPageView();
       if (showChat) {
         void loadChatRepos();
       }
@@ -9343,14 +9304,13 @@
       if (isIssues) void window.initGitHubIssuesPanel?.();
       if (previousMode !== mode) {
         trackAnalyticsEvent("prompt_mode_changed", { prompt_mode: mode });
+        if (state.appDisplay === "studio") trackAppPageView();
       }
     }
 
     function activatePromptMode(mode) {
       const nextMode = mode === "library" || mode === "json" || mode === "issues" ? mode : "builder";
       if (state.appDisplay === "studio" && state.promptMode === nextMode && !Boolean(state.ui?.automaticMode)) return;
-      const wasStudio = state.appDisplay === "studio";
-      const promptModeChanged = state.promptMode !== nextMode;
       if (nextMode === "json") {
         try {
           syncRawFromMode(state.promptMode === "library" ? "library" : "builder");
@@ -9366,9 +9326,6 @@
       }
       setPromptMode(nextMode);
       setAppDisplay("studio", { updateHash: promptHashFromMode(nextMode) });
-      if (wasStudio && promptModeChanged) {
-        trackAnalyticsPageView("studio");
-      }
     }
 
     function clearLocalPromptStatusTimer() {
@@ -9807,7 +9764,7 @@
         preserveContents: true,
         copiedLabel: "Copied git clone command",
       });
-      trackAnalyticsEvent("task_clone_command_copied", { request_id: taskRequestID(task) });
+      trackAnalyticsEvent("task_clone_command_copied");
     }
 
     function taskPromptText(task) {
@@ -10453,7 +10410,7 @@
       requestID = String(requestID || "").trim();
       if (!requestID) return;
       state.selectedTaskId = requestID;
-      trackAnalyticsEvent("task_output_opened", { request_id: requestID });
+      trackAnalyticsEvent("task_output_opened");
       setTaskFullscreen(true, "console");
     }
 
@@ -10503,7 +10460,7 @@
       if (!requestID) return;
       state.selectedTaskId = requestID;
       state.taskImageViewer = { requestID, index: Math.max(0, Number(index) || 0) };
-      trackAnalyticsEvent("task_images_opened", { request_id: requestID });
+      trackAnalyticsEvent("task_images_opened");
       renderTaskImageViewer();
     }
 
@@ -10602,6 +10559,7 @@
           return;
         }
         taskAssetMessage.textContent = "Preview unavailable.";
+        trackAnalyticsEvent("task_asset_preview_failed", { http_status: response.status });
         if (response.status === 403 && window.isSecureContext && url.hostname === "github.com" && !url.search) {
           // The isolated authorization tab returns only the preview bytes.
           const channelName = `task-asset-preview-${crypto.randomUUID()}`;
@@ -10628,7 +10586,10 @@
           taskAssetAuthLink.hidden = false;
         }
       } catch {
-        if (!signal.aborted && taskAssetViewer.open) taskAssetMessage.textContent = "Preview unavailable.";
+        if (!signal.aborted && taskAssetViewer.open) {
+          taskAssetMessage.textContent = "Preview unavailable.";
+          trackAnalyticsEvent("task_asset_preview_failed");
+        }
       }
     }
 
@@ -10641,6 +10602,7 @@
       taskAssetOpenerList = openerList;
       renderTaskAssetViewer();
       taskAssetViewer.showModal();
+      trackAnalyticsEvent("task_assets_opened", { asset_count: assets.length });
     }
 
     function stepTaskAssetViewer(direction) {
@@ -10648,10 +10610,13 @@
       if (count < 2) return;
       viewedTaskAssetIndex = (viewedTaskAssetIndex + direction + count) % count;
       renderTaskAssetViewer();
+      trackAnalyticsEvent("task_asset_changed", { direction: direction < 0 ? "previous" : "next" });
     }
 
     taskAssetPrev.addEventListener("click", () => stepTaskAssetViewer(-1));
     taskAssetNext.addEventListener("click", () => stepTaskAssetViewer(1));
+    taskAssetSource.addEventListener("click", () => trackAnalyticsEvent("task_asset_source_opened"));
+    taskAssetAuthLink.addEventListener("click", () => trackAnalyticsEvent("task_asset_auth_opened"));
     taskAssetViewer.addEventListener("keydown", (event) => {
       if (event.target.matches("audio, video")) return;
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
@@ -10735,7 +10700,7 @@
 
     async function dismissTask(requestID) {
       if (!requestID || state.closeInFlight.has(requestID)) return;
-      trackAnalyticsEvent("task_close_started", { request_id: requestID });
+      trackAnalyticsEvent("task_close_started");
       state.closeInFlight.add(requestID);
       render(state.snapshot);
 
@@ -10756,10 +10721,10 @@
 
         setLocalPromptStatus("ok", `Deleted task ${requestID}`);
         completeTaskDismissal(requestID);
-        trackAnalyticsEvent("task_close_succeeded", { request_id: requestID });
+        trackAnalyticsEvent("task_close_succeeded");
         render(state.snapshot);
       } catch (err) {
-        trackAnalyticsEvent("task_close_failed", { request_id: requestID });
+        trackAnalyticsEvent("task_close_failed");
         setLocalPromptStatus("error", `Delete failed: ${err.message}`);
       } finally {
         state.closeInFlight.delete(requestID);
@@ -10805,7 +10770,7 @@
       if (!requestID || state.rerunInFlight.has(requestID)) {
         return;
       }
-      trackAnalyticsEvent("task_rerun_started", { request_id: requestID, forced: force });
+      trackAnalyticsEvent("task_rerun_started", { forced: force });
       state.rerunInFlight.add(requestID);
       render(state.snapshot);
       setLocalPromptStatus("warn", force ? `Force re-running ${requestID}...` : `Re-running ${requestID}...`);
@@ -10833,7 +10798,7 @@
                 return rerunTask(requestID, true);
               }
             }
-            trackAnalyticsEvent("task_rerun_duplicate", { request_id: requestID, forced: force });
+            trackAnalyticsEvent("task_rerun_duplicate", { forced: force });
             setLocalPromptStatus("warn", duplicateNotice(body));
             return;
           }
@@ -10841,11 +10806,11 @@
         }
 
         const newRequestID = body?.request_id || "(unknown)";
-        trackAnalyticsEvent("task_rerun_succeeded", { request_id: requestID, forced: force, rerun_request_id: newRequestID });
+        trackAnalyticsEvent("task_rerun_succeeded", { forced: force });
         completeTaskDismissal(requestID);
         setLocalPromptStatus("ok", force ? `Queued forced request ${newRequestID} (re-run of ${requestID})` : `Queued request ${newRequestID} (re-run of ${requestID})`);
       } catch (err) {
-        trackAnalyticsEvent("task_rerun_failed", { request_id: requestID, forced: force });
+        trackAnalyticsEvent("task_rerun_failed", { forced: force });
         setLocalPromptStatus("error", force ? `Forced re-run failed: ${err.message}` : `Re-run failed: ${err.message}`);
       } finally {
         state.rerunInFlight.delete(requestID);
@@ -10890,7 +10855,7 @@
           : action === "pause"
             ? "Pause"
             : "Stop";
-      trackAnalyticsEvent("task_control_started", { request_id: requestID, action, forced: force });
+      trackAnalyticsEvent("task_control_started", { action, forced: force });
       setLocalPromptStatus("warn", `${actionLabel} ${requestID}...`);
 
       try {
@@ -10907,10 +10872,10 @@
         if (!response.ok) {
           throw new Error(body?.error || `${action} http ${response.status}`);
         }
-        trackAnalyticsEvent("task_control_succeeded", { request_id: requestID, action, forced: force });
+        trackAnalyticsEvent("task_control_succeeded", { action, forced: force });
         setLocalPromptStatus("ok", `${actionLabel} applied to ${requestID}`);
       } catch (err) {
-        trackAnalyticsEvent("task_control_failed", { request_id: requestID, action, forced: force });
+        trackAnalyticsEvent("task_control_failed", { action, forced: force });
         setLocalPromptStatus("error", `${actionLabel} failed: ${err.message}`);
       } finally {
         state.taskControlInFlight.delete(flightKey);
@@ -10973,6 +10938,8 @@
         case "json":
         case "raw":
           return "json";
+        case "github_issues":
+          return "github_issues";
         default:
           return "";
       }
@@ -12069,12 +12036,11 @@
           marker.rel = "noopener noreferrer";
           if (isIssueStep) marker.setAttribute("aria-label", "Open issue on GitHub.");
           marker.addEventListener("click", (event) => {
-            openExternalTaskLink(event, githubHref, isGitHubStep ? () => {
+            openExternalTaskLink(event, githubHref, () => {
               trackAnalyticsEvent("task_github_step_opened", {
-                request_id: taskRequestID(task),
-                progress_step: step.label,
+                progress_step: step.id,
               });
-            } : null);
+            });
           });
         }
 
@@ -12173,7 +12139,7 @@
         link.append(logo, label);
         link.addEventListener("click", (event) => {
           openExternalTaskLink(event, prURL, () => {
-            trackAnalyticsEvent("task_pull_request_opened", { request_id: taskRequestID(task) });
+            trackAnalyticsEvent("task_pull_request_opened");
           });
         });
         node.appendChild(link);
@@ -12186,7 +12152,7 @@
       const changed = state.selectedTaskId !== requestID;
       state.selectedTaskId = requestID;
       if (changed && requestID) {
-        trackAnalyticsEvent("task_selected", { request_id: requestID });
+        trackAnalyticsEvent("task_selected");
       }
       render(state.snapshot);
     }
@@ -13541,11 +13507,37 @@
           candidateGeneratedAt.nanoseconds < currentGeneratedAt.nanoseconds);
     }
 
+    function analyticsTaskStatus(task) {
+      const status = normalizedTaskStatus(task.status);
+      if (COMPLETED_STATUSES.has(status)) return status;
+      if (status === "active") return "running";
+      if (status === "queued") return "pending";
+      return ["pending", "running", "paused"].includes(status) ? status : "";
+    }
+
+    function trackObservedTaskStatuses(previous, current) {
+      if (!previous || previous === current) return;
+      const previousStatuses = new Map((previous.tasks || []).map(task =>
+        [taskRequestID(task), analyticsTaskStatus(task)]));
+      for (const task of current.tasks || []) {
+        const id = taskRequestID(task);
+        const status = analyticsTaskStatus(task);
+        const previousStatus = previousStatuses.get(id);
+        if (!id || !status || status === previousStatus) continue;
+        trackAnalyticsEvent("task_status_observed", {
+          task_status: status,
+          previous_status: previousStatus,
+          source: taskStartSource(task) || "unknown",
+        });
+      }
+    }
+
     function render(snapshot) {
       if (!snapshot || snapshotIsOlder(snapshot)) return;
       syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
       state.snapshot = snapshot;
+      trackObservedTaskStatuses(previousSnapshot, snapshot);
       syncLocalPromptSubmitDisabled();
       syncTaskCompletionSounds(snapshot);
       syncTaskViewDockCompletion(previousSnapshot, snapshot);
@@ -13729,13 +13721,15 @@
 
     async function submitLocalPrompt(event) {
       event.preventDefault();
+      const promptMode = state.promptMode;
       if (state.promptSubmitInFlight) {
+        trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: promptMode, reason: "in_flight" });
         setLocalPromptStatus("warn", "Submitting...");
         syncLocalPromptSubmitDisabled();
         return;
       }
       if (state.agentAuth.required && !state.agentAuth.ready) {
-        trackAnalyticsEvent("prompt_submit_blocked_auth", { prompt_mode: state.promptMode });
+        trackAnalyticsEvent("prompt_submit_blocked_auth", { prompt_mode: promptMode });
         setLocalPromptStatus("error", `${currentAgentLabel()} auth is required. Complete the authorization screen first.`);
         return;
       }
@@ -13743,7 +13737,7 @@
       try {
         normalized = currentPromptPayload();
       } catch (err) {
-        trackAnalyticsEvent("prompt_submit_invalid", { prompt_mode: state.promptMode });
+        trackAnalyticsEvent("prompt_submit_invalid", { prompt_mode: promptMode });
         setLocalPromptStatus("error", `Invalid input: ${err.message}`);
         return;
       }
@@ -13753,16 +13747,16 @@
       state.promptSubmitInFlight = true;
       syncLocalPromptSubmitDisabled();
       trackAnalyticsEvent("prompt_submit_started", {
-        prompt_mode: state.promptMode,
+        prompt_mode: promptMode,
         image_count: state.promptImages.length,
       });
       setLocalPromptStatus("warn", "Submitting...");
 
       try {
-        const submitEndpoint = state.promptMode === "library" ? "/api/library/run" : "/api/local-prompt";
+        const submitEndpoint = promptMode === "library" ? "/api/library/run" : "/api/local-prompt";
         const response = await fetch(submitEndpoint, {
           method: "POST",
-          headers: { "Content-Type": "application/json", [TASK_SOURCE_HEADER]: promptModeTaskSource(state.promptMode) },
+          headers: { "Content-Type": "application/json", [TASK_SOURCE_HEADER]: promptModeTaskSource(promptMode) },
           body: normalized.compact,
         });
 
@@ -13775,7 +13769,7 @@
 
         if (!response.ok) {
           if (response.status === 409 && body?.duplicate) {
-            trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: state.promptMode });
+            trackAnalyticsEvent("prompt_submit_duplicate", { prompt_mode: promptMode });
             setLocalPromptStatus("warn", duplicateNotice(body));
             return;
           }
@@ -13793,10 +13787,10 @@
           // Ignore local history extraction failures.
         }
         clearSubmittedPromptState();
-        trackAnalyticsEvent("prompt_submit_succeeded", { prompt_mode: state.promptMode, request_id: requestID });
+        trackAnalyticsEvent("prompt_submit_succeeded", { prompt_mode: promptMode });
         setLocalPromptStatus("ok", `Queued request ${requestID}`);
       } catch (err) {
-        trackAnalyticsEvent("prompt_submit_failed", { prompt_mode: state.promptMode });
+        trackAnalyticsEvent("prompt_submit_failed", { prompt_mode: promptMode });
         setLocalPromptStatus("error", `Submit failed: ${err.message}`);
         await loadAgentAuthStatus();
       } finally {
@@ -14126,6 +14120,9 @@
     }
     const settingsGate = document.getElementById("settings-gate");
     function setSettingsOpen(open) {
+      if (Boolean(state.settingsOpen) !== open) {
+        trackAnalyticsEvent(open ? "settings_opened" : "settings_closed", { tab: state.settingsTab });
+      }
       state.settingsOpen = Boolean(open);
       settingsGate.classList.toggle("hidden", !open);
       settingsGate.setAttribute("aria-hidden", open ? "false" : "true");
@@ -14159,6 +14156,9 @@
       setSettingsOpen(true);
     });
     settingsAgentReauthenticate.addEventListener("click", () => void reauthenticateAgent());
+    document.getElementById("commit-signing-github-link")?.addEventListener("click", () => {
+      trackAnalyticsEvent("commit_signing_help_opened", { destination: "github_signing_keys" });
+    });
     settingsGate.addEventListener("click", (event) => {
       if (event.target === settingsGate && !state.settingsBusy) void submitReviewSettings();
     });
@@ -14186,6 +14186,7 @@
       if (!state.commitSigningSetupRequired) return;
       event.preventDefault();
       event.stopImmediatePropagation();
+      trackAnalyticsEvent("prompt_submit_blocked_setup", { prompt_mode: state.promptMode, reason: "commit_signing" });
       setLocalPromptStatus("error", commitSigningHoldMessage());
       openCommitSigningSettings();
     }, true);
@@ -14460,21 +14461,14 @@
         if (display === "work") {
           clearTaskViewDockCompletion();
         }
+        trackAnalyticsEvent("app_navigation_clicked", { app_display: display, source: "dock" });
         setAppDisplay(display, { updateHash: true });
       });
     }
     window.addEventListener("hashchange", () => {
-      const previousDisplay = state.appDisplay;
-      const previousPromptMode = state.promptMode;
-      const nextDisplay = appDisplayFromHash();
-      setAppDisplay(nextDisplay);
+      setAppDisplay(appDisplayFromHash());
       const hashPromptMode = promptModeFromHash();
-      if (hashPromptMode) {
-        setPromptMode(hashPromptMode);
-        if (nextDisplay === "studio" && previousDisplay === "studio" && previousPromptMode !== hashPromptMode) {
-          trackAnalyticsPageView("studio");
-        }
-      }
+      if (hashPromptMode) setPromptMode(hashPromptMode);
     });
     if (chatRepoGrid) {
       chatRepoGrid.addEventListener("focusout", () => {
@@ -14535,9 +14529,8 @@
     }
     initAppearanceControls();
     initSnowfallBackground();
-    setAppDisplay(appDisplayFromHash(), { trackPageView: false });
+    setAppDisplay(appDisplayFromHash());
     setPromptMode(promptModeFromHash() || "builder");
-    trackAnalyticsPageView(state.appDisplay);
     applyPromptVisibility();
     if (normalizeTaskStatusFilter(state.taskStatusFilter) === "completed") {
       clearTaskHistoryUnseen();

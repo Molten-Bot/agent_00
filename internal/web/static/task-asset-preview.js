@@ -60,6 +60,9 @@ function showTaskAssetMedia(mediaType, source, message, { signal, title }) {
     if (isVideo) media.playsInline = true;
     media.preload = "metadata";
     media.setAttribute("aria-label", title);
+    const params = { media_type: isVideo ? "video" : "audio" };
+    media.addEventListener("playing", () => window.trackAnalyticsEvent?.("task_asset_media_started", params), { once: true });
+    media.addEventListener("ended", () => window.trackAnalyticsEvent?.("task_asset_media_completed", params), { once: true });
   } else {
     media.alt = title;
     media.referrerPolicy = "no-referrer";
