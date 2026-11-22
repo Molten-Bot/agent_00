@@ -3238,6 +3238,71 @@ func TestRunNoChangesReportsMergedPRWhenBranchNoLongerExists(t *testing.T) {
 	}
 }
 
+func TestPopulateNoChangePRURLsForIssue(t *testing.T) {
+	t.Parallel()
+
+	const prURL = "https://github.com/acme/repo/pull/123"
+	const prTitle = "Existing pull request title"
+
+	for _, tc := range []struct {
+		name        string
+		lookupState string
+		promptState string
+		wantPR      bool
+	}{
+		{name: "closed", lookupState: "CLOSED"},
+		{name: "merged", lookupState: "MERGED", wantPR: true},
+		{name: "open", lookupState: "OPEN", wantPR: true},
+		{name: "closed prompt fallback", promptState: "CLOSED"},
+		{name: "merged prompt fallback after closed lookup", lookupState: "CLOSED", promptState: "MERGED", wantPR: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			repo := repoWorkspace{Dir: "/repo", Branch: "agent00-issue-17"}
+			repos := []repoWorkspace{repo}
+			cfg := config.Config{GitHubIssue: &config.GitHubIssueConfig{Number: 17, Title: "Issue title"}}
+			exps := []expectedRun{{cmd: remoteBranchExistsOnOriginCommand(repo.Dir, repo.Branch)}}
+			lookupCmd := prLookupAnyByHeadCommand(repo.Dir, repo.Branch)
+			if tc.lookupState == "OPEN" {
+				exps[0].res.Stdout = "abc123\trefs/heads/" + repo.Branch + "\n"
+				lookupCmd = prLookupByHeadCommand(repo.Dir, repo.Branch)
+			}
+			lookupResult := "[]"
+			if tc.lookupState != "" {
+				lookupResult = fmt.Sprintf(`[{"url":%q,"title":%q,"state":%q}]`, prURL, prTitle, tc.lookupState)
+			}
+			exps = append(exps, expectedRun{cmd: lookupCmd, res: execx.Result{Stdout: lookupResult}})
+			if tc.promptState != "" {
+				cfg.Prompt = "Related PR: " + prURL
+				exps = append(exps, expectedRun{
+					cmd: prStateViewCommand(repo.Dir, prURL),
+					res: execx.Result{Stdout: fmt.Sprintf(`{"url":%q,"title":%q,"state":%q,"headRefName":%q}`, prURL, prTitle, tc.promptState, repo.Branch)},
+				})
+			}
+			fake := &fakeRunner{t: t, exps: exps}
+			h := New(fake)
+			var reportedURL, reportedTitle string
+			h.OnPRTitle = func(url, title string) { reportedURL, reportedTitle = url, title }
+
+			if err := h.populateNoChangePRURLs(t.Context(), repos, cfg, false); err != nil {
+				t.Fatalf("populateNoChangePRURLs() error = %v", err)
+			}
+			wantURL, wantTitle := "", ""
+			if tc.wantPR {
+				wantURL, wantTitle = prURL, prTitle
+			}
+			if repos[0].PRURL != wantURL || reportedURL != wantURL || reportedTitle != wantTitle {
+				t.Fatalf("PRURL = %q, reported PR = (%q, %q), want PRURL %q and reported PR (%q, %q)",
+					repos[0].PRURL, reportedURL, reportedTitle, wantURL, wantURL, wantTitle)
+			}
+			if len(fake.exps) != 0 {
+				t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+			}
+		})
+	}
+}
+
 func TestRunResolvePRCommentsNoChangesReportsExistingPR(t *testing.T) {
 	t.Parallel()
 
@@ -6032,12 +6097,12 @@ func TestCommandBuilders(t *testing.T) {
 	}
 
 	prLookup := prLookupByHeadCommand(repoDir, branch)
-	wantLookup := []string{"pr", "list", "--state", "open", "--head", branch, "--json", "url,title", "--limit", "1"}
+	wantLookup := []string{"pr", "list", "--state", "open", "--head", branch, "--json", "url,title,state", "--limit", "1"}
 	if prLookup.Name != "gh" || prLookup.Dir != repoDir || !reflect.DeepEqual(prLookup.Args, wantLookup) {
 		t.Fatalf("pr lookup command unexpected: %+v", prLookup)
 	}
 	prLookupWithRepo := prLookupByHeadWithRepoCommand(repoDir, "octocat:"+branch, "acme/repo")
-	wantLookupWithRepo := []string{"pr", "list", "--state", "open", "--head", "octocat:" + branch, "--json", "url,title", "--limit", "1", "--repo", "acme/repo"}
+	wantLookupWithRepo := []string{"pr", "list", "--state", "open", "--head", "octocat:" + branch, "--json", "url,title,state", "--limit", "1", "--repo", "acme/repo"}
 	if prLookupWithRepo.Name != "gh" || prLookupWithRepo.Dir != repoDir || !reflect.DeepEqual(prLookupWithRepo.Args, wantLookupWithRepo) {
 		t.Fatalf("pr lookup with repo command unexpected: %+v", prLookupWithRepo)
 	}

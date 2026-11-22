@@ -529,7 +529,7 @@ func TestActionablePRReviewFeedbackIgnoresAutomatedReviewCycleComments(t *testin
 	}
 }
 
-func TestPRMergeMonitorDoesNotQueueFeedbackForReviewTasks(t *testing.T) {
+func TestPRMergeMonitorDoesNotReplaceReviewTaskTitleOrQueueFeedback(t *testing.T) {
 	t.Parallel()
 
 	broker := NewBroker()
@@ -543,6 +543,7 @@ func TestPRMergeMonitorDoesNotQueueFeedbackForReviewTasks(t *testing.T) {
 			"state":"OPEN",
 			"mergedAt":"",
 			"url":"https://github.com/acme/repo/pull/117",
+			"title":"Published PR title",
 			"headRefName":"feature",
 			"baseRefName":"main",
 			"latestReviews":[{"id":"review-1","author":{"login":"reviewer"},"state":"COMMENTED","submittedAt":"2026-05-30T12:00:00Z","body":%q}],
@@ -561,10 +562,25 @@ func TestPRMergeMonitorDoesNotQueueFeedbackForReviewTasks(t *testing.T) {
 		},
 	}
 
-	monitor.checkTaskPR(context.Background(), broker.Snapshot().Tasks[0])
+	original, ok := broker.Task("req-review")
+	if !ok || original.Prompt == "" {
+		t.Fatal("expected review task with a prompt")
+	}
+	monitor.checkTaskPR(t.Context(), original)
 
 	if calls != 0 {
 		t.Fatalf("OnReviewFeedback calls = %d, want 0", calls)
+	}
+	task, _ := broker.Task("req-review")
+	if task.PRTitle != "" || task.Prompt != original.Prompt {
+		t.Fatalf("review task prompt = %q, PR title = %q, want prompt %q and no PR title", task.Prompt, task.PRTitle, original.Prompt)
+	}
+
+	runner.result = execx.Result{Stdout: `{"state":"MERGED","mergedAt":"2026-05-31T12:00:00Z","title":"Published PR title"}`}
+	monitor.checkTaskPR(t.Context(), task)
+	task, _ = broker.Task("req-review")
+	if task.Status != "merged" || task.PRTitle != "" {
+		t.Fatalf("review task status = %q, PR title = %q, want merged and no PR title", task.Status, task.PRTitle)
 	}
 }
 

@@ -1140,10 +1140,14 @@ func isStoppedTaskStatus(status string) bool {
 }
 
 func isReviewTaskAttempt(attempt taskAttemptState) bool {
-	if normalizeTaskSource(attempt.Source) == "review" {
+	return isReviewTask(attempt.Source, attempt.Workflow)
+}
+
+func isReviewTask(source, workflow string) bool {
+	if normalizeTaskSource(source) == "review" {
 		return true
 	}
-	switch strings.ToLower(strings.TrimSpace(attempt.Workflow)) {
+	switch strings.ToLower(strings.TrimSpace(workflow)) {
 	case "code-review", "code_review", "pull request code review":
 		return true
 	default:

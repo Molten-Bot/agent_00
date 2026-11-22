@@ -653,7 +653,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 				runDir,
 			)
 		}
-		if err := h.populateNoChangePRURLs(ctx, repos, cfg.Prompt, requiresVerifiedNoChangePRURL(cfg.Prompt)); err != nil {
+		if err := h.populateNoChangePRURLs(ctx, repos, cfg, requiresVerifiedNoChangePRURL(cfg.Prompt)); err != nil {
 			return h.failWithRepos(ExitPR, "pr", err, runDir, repos)
 		}
 		h.logf("stage=git status=no_changes")
@@ -691,7 +691,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		}
 	}
 	if changedCount == 0 {
-		if err := h.populateNoChangePRURLs(ctx, repos, cfg.Prompt, requiresVerifiedNoChangePRURL(cfg.Prompt)); err != nil {
+		if err := h.populateNoChangePRURLs(ctx, repos, cfg, requiresVerifiedNoChangePRURL(cfg.Prompt)); err != nil {
 			return h.failWithRepos(ExitPR, "pr", err, runDir, repos)
 		}
 		h.logf("stage=git status=no_changes")
@@ -2567,8 +2567,8 @@ func repoPRTargetRepo(repo repoWorkspace) string {
 	return strings.TrimSpace(repo.PRTargetRepo)
 }
 
-func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspace, prompt string, requirePRURL bool) error {
-	promptPRURL := pullRequestURLFromPrompt(prompt)
+func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspace, cfg config.Config, requirePRURL bool) error {
+	promptPRURL := pullRequestURLFromPrompt(cfg.Prompt)
 	for i := range repos {
 		if repos[i].RequireExistingPR && repos[i].PRURL != "" {
 			continue
@@ -2602,6 +2602,9 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 				}
 				continue
 			}
+			if cfg.GitHubIssue != nil && strings.EqualFold(pr.State, "closed") {
+				pr = ghPRLookupEntry{}
+			}
 		}
 		if pr.URL == "" && promptPRURL != "" {
 			state, err := h.loadPullRequestState(ctx, repos[i].Dir, promptPRURL)
@@ -2634,7 +2637,7 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 						strings.TrimSpace(state.HeadRefName),
 					)
 				}
-			} else {
+			} else if cfg.GitHubIssue == nil || pullRequestStateIsOpen(state) || pullRequestStateIsMerged(state) {
 				pr = ghPRLookupEntry{
 					URL:   stringsx.FirstNonEmpty(state.URL, promptPRURL),
 					Title: state.Title,
@@ -7440,6 +7443,7 @@ func extractFirstURL(text string) string {
 type ghPRLookupEntry struct {
 	URL   string `json:"url"`
 	Title string `json:"title"`
+	State string `json:"state"`
 }
 
 func parsePRLookupOutput(raw string) ghPRLookupEntry {
@@ -8514,7 +8518,7 @@ func prLookupByHeadWithRepoCommand(repoDir, headRef, repo string) execx.Command 
 }
 
 func prLookupByHeadStateCommand(repoDir, state, headRef, repo string) execx.Command {
-	args := []string{"pr", "list", "--state", state, "--head", headRef, "--json", "url,title", "--limit", "1"}
+	args := []string{"pr", "list", "--state", state, "--head", headRef, "--json", "url,title,state", "--limit", "1"}
 	if strings.TrimSpace(repo) != "" {
 		args = append(args, "--repo", strings.TrimSpace(repo))
 	}

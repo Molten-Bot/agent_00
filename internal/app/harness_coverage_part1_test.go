@@ -962,7 +962,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 		t.Parallel()
 		repos := []repoWorkspace{{Dir: "/repo", RequireExistingPR: true, PRURL: "https://github.com/acme/repo/pull/1"}}
 		h := New(&fakeRunner{t: t})
-		if err := h.populateNoChangePRURLs(context.Background(), repos, "", false); err != nil {
+		if err := h.populateNoChangePRURLs(context.Background(), repos, config.Config{}, false); err != nil {
 			t.Fatalf("populateNoChangePRURLs() err = %v, want nil", err)
 		}
 		if repos[0].PRURL != "https://github.com/acme/repo/pull/1" {
@@ -981,7 +981,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 			},
 		}}
 		h := New(fake)
-		if err := h.populateNoChangePRURLs(context.Background(), repos, "", false); err != nil {
+		if err := h.populateNoChangePRURLs(context.Background(), repos, config.Config{}, false); err != nil {
 			t.Fatalf("populateNoChangePRURLs() err = %v, want nil (tolerated)", err)
 		}
 		if repos[0].PRURL != "" {
@@ -1000,7 +1000,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 			},
 		}}
 		h := New(fake)
-		err := h.populateNoChangePRURLs(context.Background(), repos, "", true)
+		err := h.populateNoChangePRURLs(context.Background(), repos, config.Config{}, true)
 		if err == nil || !strings.Contains(err.Error(), "verify existing pull request") {
 			t.Fatalf("populateNoChangePRURLs() err = %v, want verify-existing error", err)
 		}
@@ -1017,7 +1017,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 			},
 		}}
 		h := New(fake)
-		if err := h.populateNoChangePRURLs(context.Background(), repos, "", false); err != nil {
+		if err := h.populateNoChangePRURLs(context.Background(), repos, config.Config{}, false); err != nil {
 			t.Fatalf("populateNoChangePRURLs() err = %v, want nil", err)
 		}
 		if repos[0].PRURL != "https://github.com/acme/repo/pull/2" {
@@ -1036,7 +1036,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 		}}
 		h := New(fake)
 		prompt := "Original task prompt mentions " + promptPRURL
-		if err := h.populateNoChangePRURLs(context.Background(), repos, prompt, false); err != nil {
+		if err := h.populateNoChangePRURLs(context.Background(), repos, config.Config{Prompt: prompt}, false); err != nil {
 			t.Fatalf("populateNoChangePRURLs() err = %v, want nil", err)
 		}
 		if repos[0].PRURL != promptPRURL {
@@ -1055,7 +1055,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 		}}
 		h := New(fake)
 		prompt := "Original task prompt mentions " + promptPRURL
-		err := h.populateNoChangePRURLs(context.Background(), repos, prompt, true)
+		err := h.populateNoChangePRURLs(context.Background(), repos, config.Config{Prompt: prompt}, true)
 		if err == nil || !strings.Contains(err.Error(), "did not match") {
 			t.Fatalf("populateNoChangePRURLs() err = %v, want branch mismatch error", err)
 		}
@@ -1069,7 +1069,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 			{cmd: prLookupAnyByHeadWithRepoCommand(repos[0].Dir, "agent00-topic", ""), res: execx.Result{Stdout: "[]"}},
 		}}
 		h := New(fake)
-		err := h.populateNoChangePRURLs(context.Background(), repos, "", true)
+		err := h.populateNoChangePRURLs(context.Background(), repos, config.Config{}, true)
 		if err == nil || !strings.Contains(err.Error(), "no pull request found") {
 			t.Fatalf("populateNoChangePRURLs() err = %v, want no-PR-found error", err)
 		}
