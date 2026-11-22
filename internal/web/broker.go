@@ -1140,7 +1140,8 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 		}
 		addTimeStatsGroupWithSavedDuration(workflowGroups, workflowNamer.name(attempt.Workflow), status, duration, savedDuration)
 		addTimeStatsGroupWithSavedDuration(agentGroups, normalizedGroupName(attempt.Agent, "Unknown Agent"), status, duration, savedDuration)
-		addCountStatsGroup(sourceGroups, sourceGroupName(attempt.Source), status)
+		source := stringsx.FirstNonEmpty(attempt.Source, defaultTaskSourceForRequestID(requestID))
+		addCountStatsGroup(sourceGroups, sourceGroupName(source), status)
 	}
 	for _, repo := range b.repositories {
 		for _, attempt := range repoAttempts[repo.Key] {
@@ -1556,7 +1557,6 @@ func addCountStatsGroup(groups map[string]*CountStatsGroup, name, status string)
 	if groups == nil {
 		return
 	}
-	name = normalizedGroupName(name, "Other")
 	group := groups[name]
 	if group == nil {
 		group = &CountStatsGroup{Name: name}
@@ -1600,16 +1600,12 @@ func sourceGroupName(source string) string {
 		return "Chat"
 	case "json":
 		return "JSON"
-	case "library":
+	case "library", "review":
 		return "Library"
-	case "review":
-		return "Review"
 	case "github_issues":
 		return "GitHub Issues"
-	case "prompt":
-		return "Prompt"
 	default:
-		return "Other"
+		return "Prompt"
 	}
 }
 
@@ -3148,18 +3144,19 @@ func sourceFromRunConfigJSON(runConfigJSON []byte) string {
 		return ""
 	}
 	var raw struct {
-		Source             string `json:"source"`
-		StartSource        string `json:"startSource"`
-		StartSourceSnake   string `json:"start_source"`
-		TaskSource         string `json:"taskSource"`
-		TaskSourceSnake    string `json:"task_source"`
-		RequestSource      string `json:"requestSource"`
-		RequestSourceSnake string `json:"request_source"`
+		Source             string          `json:"source"`
+		StartSource        string          `json:"startSource"`
+		StartSourceSnake   string          `json:"start_source"`
+		TaskSource         string          `json:"taskSource"`
+		TaskSourceSnake    string          `json:"task_source"`
+		RequestSource      string          `json:"requestSource"`
+		RequestSourceSnake string          `json:"request_source"`
+		GitHubIssue        json.RawMessage `json:"githubIssue"`
 	}
 	if err := json.Unmarshal(runConfigJSON, &raw); err != nil {
 		return ""
 	}
-	return stringsx.FirstNonEmpty(
+	source := stringsx.FirstNonEmpty(
 		normalizeTaskSource(raw.Source),
 		normalizeTaskSource(raw.StartSource),
 		normalizeTaskSource(raw.StartSourceSnake),
@@ -3168,11 +3165,23 @@ func sourceFromRunConfigJSON(runConfigJSON []byte) string {
 		normalizeTaskSource(raw.RequestSource),
 		normalizeTaskSource(raw.RequestSourceSnake),
 	)
+	if source != "" || len(raw.GitHubIssue) == 0 {
+		return source
+	}
+	var issue struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal(raw.GitHubIssue, &issue); err == nil && issue.Number > 0 {
+		return "github_issues"
+	}
+	return ""
 }
 
 func defaultTaskSourceForRequestID(requestID string) string {
 	requestID = strings.ToLower(strings.TrimSpace(requestID))
 	switch {
+	case strings.HasPrefix(requestID, "issue-"):
+		return "github_issues"
 	case strings.HasPrefix(requestID, "local-"):
 		return "prompt"
 	default:

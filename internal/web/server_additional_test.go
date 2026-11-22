@@ -791,49 +791,22 @@ func TestSpeechDictationFallbackInBrowser(t *testing.T) {
 	runBrowserSuite(t, ts.URL, 60*time.Second, "speech dictation fallback checks", "tests/speech_dictation.cjs")
 }
 
-func TestDashboardSourceLegendStylesLiveInGlobalStylesheet(t *testing.T) {
+func TestDashboardSourceLegendUsesAppIcons(t *testing.T) {
 	t.Parallel()
 
 	markup, err := staticFiles.ReadFile("static/index.html")
 	if err != nil {
 		t.Fatalf("read index.html: %v", err)
 	}
-	html := string(markup)
-	if strings.Contains(html, "item.style.setProperty(\"--dashboard-source-legend-color\"") {
-		t.Fatalf("expected dashboard source legend color styling to live in static/style.css")
-	}
-	if !strings.Contains(html, "function dashboardSourceIconName(label) {\n      switch (dashboardSourceKey(label))") ||
-		!strings.Contains(html, "case \"github_issues\":\n          return \"folder-kanban\";") {
-		t.Fatalf("expected GitHub Issues dashboard sources to use the folder-kanban icon")
-	}
-	if !strings.Contains(html, `clearDashboardSourceLegend();`) ||
-		!strings.Contains(html, `legendIconName: dashboardSourceIconName,`) {
-		t.Fatalf("expected dashboard source chart to hide the duplicate external legend and render icons inside the chart legend")
-	}
-	if !strings.Contains(html, `.attr("class", "dashboard-d3-legend-icon-foreign")`) ||
-		!strings.Contains(html, `.attr("data-lucide", (row) => legendIconName ? legendIconName(row.label) : null)`) {
-		t.Fatalf("expected dashboard d3 legend to include source icons in the chart")
-	}
-
-	data, err := fs.ReadFile(staticFiles, "static/style.css")
-	if err != nil {
-		t.Fatalf("read embedded style.css: %v", err)
-	}
-	css := string(data)
 	for _, want := range []string{
-		".dashboard-source-legend-icon {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 14px;\n  height: 14px;\n  color: var(--dashboard-chart-other);\n}",
-		".dashboard-source-legend-item-chat .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-chat);\n}",
-		".dashboard-source-legend-item-hub .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-hub);\n}",
-		".dashboard-source-legend-item-json .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-json);\n}",
-		".dashboard-source-legend-item-library .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-library);\n}",
-		".dashboard-source-legend-item-prompt .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-prompt);\n}",
-		".dashboard-source-legend-item-review .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-review);\n}",
-		".dashboard-source-legend-item-github_issues .dashboard-source-legend-icon {\n  color: var(--dashboard-chart-github-issues);\n}",
-		".dashboard-d3-legend-icon-foreign {\n  color: var(--dashboard-chart-other);\n  overflow: visible;\n  pointer-events: none;\n}",
-		".dashboard-source-legend[hidden] {\n  display: none;\n}",
+		`["Chat", { icon: "bot-message-square"`,
+		`["Prompt", { icon: "pencil"`,
+		`["Library", { icon: "book-open"`,
+		`["GitHub Issues", { icon: "folder-kanban"`,
+		`["JSON", { icon: "braces"`,
 	} {
-		if !strings.Contains(css, want) {
-			t.Fatalf("embedded style.css missing %q", want)
+		if !strings.Contains(string(markup), want) {
+			t.Errorf("dashboard source legend missing %q", want)
 		}
 	}
 }

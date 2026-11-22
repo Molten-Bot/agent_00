@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -503,5 +504,57 @@ func TestAgentFailureFieldLineStripsMarkdownDecoration(t *testing.T) {
 		if got := agentFailureFieldLine(tc.line); got != tc.want {
 			t.Fatalf("agentFailureFieldLine(%q) = %q, want %q", tc.line, got, tc.want)
 		}
+	}
+}
+
+func TestCodexReportedFailurePreservesWrappedRolloutBlocker(t *testing.T) {
+	t.Parallel()
+
+	const evidence = "#72 is still open. Its proposed configuration lacks\n" +
+		"account metadata needed for evidence reads. Scoped IAM,\n" +
+		"shared key provisioning, and deployed verification remain pending.\n" +
+		"API and MCP evidence stay disabled by default."
+	for _, separator := range []string{" ", "\n"} {
+		res := execx.Result{Stdout: "Failure: Production rollout remains blocked.\n" +
+			"**Error details:**" + separator + evidence + "\nResolved issue: Local tests now pass."}
+		failed, summary := codexReportedFailure(res)
+		if !failed {
+			t.Fatal("failure report was not detected")
+		}
+		_, detail := codexFailureDetailWithErrorDetails(res, summary)
+		if !strings.Contains(strings.ReplaceAll(detail, "Error details:\n", "Error details: "), "Error details: "+evidence) {
+			t.Errorf("failure detail = %q, want complete evidence through the end of the field", detail)
+		}
+		err := fmt.Errorf("codex: codex reported failure: %s", detail)
+		if got := failurefollowup.NonRemediableFailureReason(err); got != failurefollowup.OpenDependencyReason {
+			t.Errorf("failure reason = %q, want %q", got, failurefollowup.OpenDependencyReason)
+		}
+	}
+}
+
+func TestRunCodexDependencyClassificationSurvivesDisplayFormatting(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, report, want string
+	}{
+		{"soft wrap extends operation", "Failure: Export remains blocked.\nError details: #72 is still open and blocks the export\ndocumentation. Fix the export parser.", ""},
+		{"soft wrap within operation", "Failure: Production rollout for #81 remains blocked.\nError details: #72 is still open and blocks the production\nrollout for #81\nVerification is pending.", failurefollowup.OpenDependencyReason},
+		{"paragraph evidence", "Failure: Production rollout remains blocked.\nError details: #72 is still open\n\nIts proposed configuration lacks account metadata needed for evidence reads.\n\nCredential setup and verification remain pending. API and CLI evidence stay disabled by default.", failurefollowup.OpenDependencyReason},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			target := t.TempDir()
+			fake := &fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(target, "complete task"),
+				res: execx.Result{Stdout: tc.report},
+			}}}
+			err := New(fake).runCodex(t.Context(), agentruntime.Default(), target, "complete task", codexRunOptions{}, "", "")
+			if err == nil {
+				t.Fatal("task failure was waived")
+			}
+			if got := failurefollowup.NonRemediableFailureReason(fmt.Errorf("codex: %w", err)); got != tc.want {
+				t.Fatalf("reason = %q, want %q: %v", got, tc.want, err)
+			}
+		})
 	}
 }

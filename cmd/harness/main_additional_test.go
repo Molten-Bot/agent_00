@@ -1449,6 +1449,22 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	}
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		ExitCode: app.ExitCodex,
+		Err:      errors.New("codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open and blocks the export."),
+	})
+	if ok || !strings.Contains(reason, "required dependency is still open") {
+		t.Fatalf("shouldQueueFailureFollowUp(open prerequisite) = (%v, %q), want dependency skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		ExitCode: app.ExitCodex,
+		Err:      errors.New("codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open. The export fails with a parser panic."),
+	})
+	if !ok || reason != "" {
+		t.Fatalf("shouldQueueFailureFollowUp(incidental open ticket) = (%v, %q), want actionable follow-up", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
 		Err: errors.New("clone: run git [clone ...]: exit status 128"),
 	})
 	if !ok || reason != "" {
@@ -1460,6 +1476,22 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 	})
 	if ok || !strings.Contains(reason, "refusing to allow an oauth app to create or update workflow") {
 		t.Fatalf("shouldQueueFailureFollowUp(workflow scope failure) = (%v, %q), want non-remediable workflow-scope skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		ExitCode: app.ExitGit,
+		Err:      fmt.Errorf("git: %w: remove the flagged credential from every outgoing commit before retrying", failurefollowup.ErrGitHubPushProtection),
+	})
+	if ok || !strings.Contains(reason, "GitHub push protection blocked publication") {
+		t.Fatalf("shouldQueueFailureFollowUp(push protection failure) = (%v, %q), want non-remediable push protection skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		ExitCode: app.ExitCodex,
+		Err:      errors.New("codex: codex reported failure: Failure: parser failed. Error details: GitHub push protection blocked publication: example error text"),
+	})
+	if !ok || reason != "" {
+		t.Fatalf("quoted push protection = (%v, %q), want repair", ok, reason)
 	}
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{

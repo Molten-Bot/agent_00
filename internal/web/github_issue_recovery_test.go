@@ -669,13 +669,59 @@ func TestIssueRecoveryBudgetStopAndNoChangeDoNotRerun(t *testing.T) {
 	}
 }
 
-func TestIssueRecoveryBlocksUnmergedPrerequisiteWithoutRepair(t *testing.T) {
+func TestIssueRecoveryBlocksPrerequisiteWithoutRepair(t *testing.T) {
 	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		report   string
+		incident string
+		want     string
+	}{
+		{
+			name:     "unmerged pull request",
+			report:   "Delivery blocked by unmerged #12. Error details: Required changes are pending review.",
+			incident: localruntime.IssueIncidentUnmergedDependency,
+			want:     "required pull request is unmerged; explicit retry required after merge",
+		},
+		{
+			name:     "open dependency",
+			report:   "Export remains blocked. Error details: [#72](https://github.com/example/project/issues/72) is still open and blocks the export.",
+			incident: localruntime.IssueIncidentOpenDependency,
+			want:     "required dependency is still open; explicit retry required after resolution",
+		},
+		{
+			name:     "open dependency with multiline details",
+			report:   "Export remains blocked. Error details: #72 is still open and blocks the export | Verification is pending.",
+			incident: localruntime.IssueIncidentOpenDependency,
+			want:     "required dependency is still open; explicit retry required after resolution",
+		},
+		{
+			name:     "open dependency missing rollout evidence",
+			report:   "Production rollout for `#81` remains blocked. Error details: #72 is still open. Its proposed configuration lacks account metadata required for evidence reads. Those evidence reads are required for the rollout.",
+			incident: localruntime.IssueIncidentOpenDependency,
+			want:     "required dependency is still open; explicit retry required after resolution",
+		},
+		{
+			name:     "open dependency with log sync failure",
+			report:   "Production rollout for #81 remains blocked. Error details: #72 is still open. Its proposed configuration lacks account metadata required for evidence reads. Credential setup and verification remain pending. API and MCP evidence stay disabled by default.\npersist task logs: sync terminal.log: invalid argument",
+			incident: localruntime.IssueIncidentOpenDependency,
+			want:     "required dependency is still open; explicit retry required after resolution",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testIssueRecoveryBlocksPrerequisite(t, tc.report, tc.incident, tc.want)
+		})
+	}
+}
+
+func testIssueRecoveryBlocksPrerequisite(t *testing.T, report, incident, want string) {
+	t.Helper()
 	s, f := recoveryServer(t)
 	s.pollGitHubIssueAutoStart(context.Background())
 	record := completeRecoveryRecord(t, s, "error", 1)
 	record.Incident = "missing_pr"
-	record.Error = "codex: codex reported failure: Failure: Delivery blocked by unmerged #12. Error details: Required changes are pending review."
+	record.Error = "codex: codex reported failure: Failure: " + report
+	record.NextAttemptAt = time.Now().Add(time.Hour)
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
@@ -702,7 +748,7 @@ func TestIssueRecoveryBlocksUnmergedPrerequisiteWithoutRepair(t *testing.T) {
 	got := latestRecoveryRecord(t, s)
 	if got.State != "blocked" || got.UnlockPending || got.LabelAdded ||
 		got.RepairRequestID != "" || got.AgentAttempts != 1 || !got.NextAttemptAt.IsZero() ||
-		!strings.Contains(got.Error, "required pull request is unmerged") || len(f.submissions) != 1 {
+		got.Incident != incident || got.Error != want || len(f.submissions) != 1 {
 		t.Fatalf("unexpected dependency recovery state: state=%q error=%q attempts=%d submissions=%d", got.State, got.Error, got.AgentAttempts, len(f.submissions))
 	}
 	response := retryIssue(t, s, record.ID, true)

@@ -1,6 +1,7 @@
 package failurefollowup
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -74,12 +75,22 @@ const unreachableCoverageTargetReason = "coverage target cannot be met safely"
 const missingSecurityContractReason = "security verification contract is missing"
 const missingRemoteBranchReason = "remote branch does not exist"
 
+// GitHubPushProtectionReason is the safe summary of a rejected Git push.
+const GitHubPushProtectionReason = "GitHub push protection blocked publication"
+
+// ErrGitHubPushProtection identifies a rejection observed during git push.
+// Agent-authored text cannot establish that publication was rejected.
+var ErrGitHubPushProtection = errors.New(GitHubPushProtectionReason)
+
 // UnmergedDependencyReason identifies an agent-reported prerequisite PR.
 const UnmergedDependencyReason = "required pull request is unmerged"
 
 // ExternalRolloutPrerequisitesReason identifies cloud provisioning that must
 // happen before a production rollout can continue.
 const ExternalRolloutPrerequisitesReason = "production rollout requires external prerequisites"
+
+// OpenDependencyReason identifies an agent-reported open prerequisite.
+const OpenDependencyReason = "required dependency is still open"
 
 // Match a blocker in the agent's failure summary. Error details can quote the
 // same wording while describing a different, actionable failure. An apostrophe
@@ -103,6 +114,45 @@ var validationFailureEvidence = regexp.MustCompile(
 // HasValidationFailureEvidence reports whether text includes a test or compiler failure.
 func HasValidationFailureEvidence(text string) bool {
 	return validationFailureEvidence.MatchString(strings.ToLower(text))
+}
+
+const issueID = `#[1-9][0-9]*`
+const backtickedIssueID = `\x60` + issueID + `\x60`
+const openDependencyReference = `(?:issue |pull request |pr |dependency )?(?:` + issueID + `|` + backtickedIssueID + `|\[(?:issue |pull request |pr )?` + issueID + `\]\([^\s()]+\))`
+const openDependencyCause = `(?:because ` + openDependencyReference + ` is still open|(?:by|on) (?:(?:still[- ])?open ` +
+	openDependencyReference + `|` + openDependencyReference + `, which is still open))`
+const evidenceAccessPrerequisite = `(?:credential setup|(?:scoped )?iam|(?:shared )?key provisioning)`
+const blockerDetailEnd = `(?:[.!](?:\s|$)| \| |\n|$)`
+const rolloutEvidenceChannel = `(?:api|cli|mcp)`
+
+// Older reports join separate lines with " | ", with or without punctuation
+// at the end of each original line.
+const evidenceSentenceBreak = `(?:\.\s+(?:\|\s+)?| \| |\n)`
+
+var (
+	blockedFailureSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:[ \t]*(?:((?:[^"'\x60\r\n]|\b'\b|` +
+		backtickedIssueID + `)+?) (?:remains |is )?)?blocked(?: (` + openDependencyCause + `))?[.!]?$`)
+	negatedBlockerOperation = regexp.MustCompile(`(?:\b(?:not|never|no longer)|n['’]t)(?: yet| currently)?$`)
+	openDependencyDetail    = wrappedDetailPattern(`^blocked ` + openDependencyCause + blockerDetailEnd)
+	openDependencyTarget    = wrappedDetailPattern(`^` + openDependencyReference +
+		` is still open and (?:blocks|is blocking) `)
+	rolloutOperation             = regexp.MustCompile(`\brollout(?: for .+)?$`)
+	openDependencyEvidenceDetail = wrappedDetailPattern(`^` + openDependencyReference +
+		` is still open` + evidenceSentenceBreak + `its [^.!?;|]+ lacks? [^.!?;|]+ (?:needed|required) for evidence reads\b`)
+	evidenceRolloutTarget = wrappedDetailPattern(`^(?: (?:\| )?|` + evidenceSentenceBreak + `(?:(?:those|the) )?evidence reads are )(?:needed|required) for `)
+	// The fallback requires pending access setup and verification alongside
+	// disabled API, CLI, or MCP evidence to tie the open issue to the rollout.
+	rolloutEvidencePending = wrappedDetailPattern(`^` + evidenceSentenceBreak + evidenceAccessPrerequisite + `(?:, ` + evidenceAccessPrerequisite + `)*,?` +
+		` and (?:deployed )?verification (?:are|remain) pending` + evidenceSentenceBreak +
+		rolloutEvidenceChannel + `(?: and ` + rolloutEvidenceChannel + `)? evidence (?:stays?|remains?) disabled(?: by default)?[.!]?$`)
+	issueIDCodeSpan = regexp.MustCompile(`\x60(` + issueID + `)\x60`)
+	operationEnd    = regexp.MustCompile(`^` + blockerDetailEnd)
+)
+
+// Detail patterns distinguish sentence boundaries from whitespace within a
+// phrase, which may wrap across lines in the same report.
+func wrappedDetailPattern(pattern string) *regexp.Regexp {
+	return regexp.MustCompile(strings.ReplaceAll(pattern, " ", `[ \n]+`))
 }
 
 var nonRemediableFailureMarkers = []string{
@@ -409,19 +459,25 @@ func NonRemediableFailureReason(err error) string {
 	if text == "" {
 		return ""
 	}
-	if agentruntime.CodexAuthenticationFailure(text) {
+	if errors.Is(err, ErrGitHubPushProtection) {
+		return GitHubPushProtectionReason
+	}
+	// The harness joins log persistence errors to the original run error before
+	// storing it. Keep that suffix out of the report used to identify blockers.
+	report, _, _ := strings.Cut(text, "\npersist task logs: ")
+	if agentruntime.CodexAuthenticationFailure(report) {
 		return "codex authentication required"
 	}
-	if isUnreachableCoverageTargetFailure(text) {
+	if isUnreachableCoverageTargetFailure(report) {
 		return unreachableCoverageTargetReason
 	}
-	if isMissingSecurityVerificationContractFailure(text) {
+	if isMissingSecurityVerificationContractFailure(report) {
 		return missingSecurityContractReason
 	}
-	if isMissingRemoteBranchFailure(text) {
+	if isMissingRemoteBranchFailure(report) {
 		return missingRemoteBranchReason
 	}
-	summary, details, _ := strings.Cut(text, "error details:")
+	summary, details, _ := strings.Cut(report, "error details:")
 	if unmergedDependencySummary.MatchString(summary) &&
 		!strings.Contains(summary, "no longer blocked") && !strings.Contains(summary, "not blocked") {
 		return UnmergedDependencyReason
@@ -431,6 +487,9 @@ func NonRemediableFailureReason(err error) string {
 	}
 	reportedFailure := strings.HasPrefix(summary, "codex: codex reported failure:") ||
 		strings.HasPrefix(summary, "claude: claude reported failure:")
+	if isOpenDependencyFailure(summary, details) {
+		return OpenDependencyReason
+	}
 	for _, marker := range nonRemediableFailureMarkers {
 		if !strings.Contains(text, marker) {
 			continue
@@ -488,6 +547,71 @@ func hasOutstandingRolloutProvisioning(details string) bool {
 		}
 	}
 	return true
+}
+
+func isOpenDependencyFailure(summary, detail string) bool {
+	blocked := blockedFailureSummary.FindStringSubmatch(strings.TrimSpace(summary))
+	if blocked == nil || negatedBlockerOperation.MatchString(strings.TrimSpace(blocked[1])) {
+		return false
+	}
+	if blocked[2] != "" {
+		return true
+	}
+	// Normalize whitespace within each line while retaining line boundaries.
+	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(detail), " | ", "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = strings.Join(strings.Fields(line), " ")
+	}
+	return matchesOpenDependencyDetail(blocked[1], strings.Join(lines, "\n"))
+}
+
+func matchesOpenDependencyDetail(operation, detail string) bool {
+	if openDependencyDetail.MatchString(detail) {
+		return true
+	}
+	if operation == "" {
+		return false
+	}
+	operation = normalizeDependencyOperation(operation)
+	if prefix := openDependencyTarget.FindStringIndex(detail); prefix != nil {
+		return matchesDependencyOperation(operation, detail[prefix[1]:])
+	}
+	if prefix := openDependencyEvidenceDetail.FindStringIndex(detail); prefix != nil && rolloutOperation.MatchString(operation) {
+		rest := detail[prefix[1]:]
+		if targetPrefix := evidenceRolloutTarget.FindStringIndex(rest); targetPrefix != nil {
+			target := rest[targetPrefix[1]:]
+			return matchesDependencyOperation(operation, target) || matchesDependencyOperation("rollout", target)
+		}
+		return rolloutEvidencePending.MatchString(rest)
+	}
+	return false
+}
+
+func normalizeDependencyOperation(operation string) string {
+	return strings.TrimPrefix(issueIDCodeSpan.ReplaceAllString(strings.TrimSpace(operation), "$1"), "the ")
+}
+
+var pendingDependencyVerification = regexp.MustCompile(`^(?:verification|deployed verification) (?:is |remains? )?pending[.!]?(?:$|\n| \| )`)
+
+func matchesDependencyOperation(operation, target string) bool {
+	// Compare the full name before checking for sentence punctuation. An
+	// operation can contain periods followed by spaces, as in "U.S. rollout".
+	target = issueIDCodeSpan.ReplaceAllString(strings.TrimSpace(target), "$1")
+	flatTarget := strings.TrimPrefix(strings.ReplaceAll(target, "\n", " "), "the ")
+	rest, ok := strings.CutPrefix(flatTarget, operation)
+	// Flattening preserves byte offsets, so check for a boundary in the
+	// original target after matching the operation across wrapped lines.
+	if !ok {
+		return false
+	}
+	boundary := target[len(target)-len(rest):]
+	if strings.HasPrefix(boundary, "\n") {
+		// A soft wrap can continue the operation name ("export documentation").
+		// Only an explicit independent verification clause establishes a new
+		// sentence when the report omits punctuation at the line boundary.
+		return pendingDependencyVerification.MatchString(strings.TrimSpace(boundary))
+	}
+	return operationEnd.MatchString(boundary)
 }
 
 func isMissingRemoteBranchFailure(text string) bool {

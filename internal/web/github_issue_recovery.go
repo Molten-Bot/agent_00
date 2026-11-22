@@ -17,8 +17,20 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
-const unmergedDependencyIncident = "unmerged_dependency"
 const externalRolloutPrerequisitesIncident = "external_rollout_prerequisites"
+
+func issueDependencyRetryError(incident string) string {
+	switch incident {
+	case localruntime.IssueIncidentUnmergedDependency:
+		return failurefollowup.UnmergedDependencyReason + "; explicit retry required after merge"
+	case localruntime.IssueIncidentOpenDependency:
+		return failurefollowup.OpenDependencyReason + "; explicit retry required after resolution"
+	case externalRolloutPrerequisitesIncident:
+		return failurefollowup.ExternalRolloutPrerequisitesReason + "; explicit retry required after provisioning"
+	default:
+		return ""
+	}
+}
 
 func (s Server) WakeIssueRecovery() { s.wakeGitHubIssueAutoStart() }
 
@@ -214,18 +226,17 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	}
 	// Preserve the classification before later checks can replace the last
 	// error. This also handles records written before the incident existed.
-	if record.Outcome == "error" {
-		detail := record.FailureDetail()
-		var incident string
-		switch failurefollowup.NonRemediableFailureReason(errors.New(detail)) {
+	if record.Outcome == "error" && issueDependencyRetryError(record.Incident) == "" {
+		switch failurefollowup.NonRemediableFailureReason(errors.New(record.FailureDetail())) {
 		case failurefollowup.UnmergedDependencyReason:
-			incident = unmergedDependencyIncident
+			record.Incident = localruntime.IssueIncidentUnmergedDependency
+		case failurefollowup.OpenDependencyReason:
+			record.Incident = localruntime.IssueIncidentOpenDependency
 		case failurefollowup.ExternalRolloutPrerequisitesReason:
-			incident = externalRolloutPrerequisitesIncident
+			record.Incident = externalRolloutPrerequisitesIncident
 		}
-		if incident != "" && record.Incident != incident {
-			record.Incident = incident
-			record.RunError = detail
+		if issueDependencyRetryError(record.Incident) != "" {
+			record.RunError = record.FailureDetail()
 			record.NextAttemptAt = time.Time{}
 			if err := s.IssueClaims.Save(record); err != nil {
 				return err
@@ -321,20 +332,17 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		}
 	}
 	policy := s.IssueRecovery.Defaults()
+	dependencyRetryError := issueDependencyRetryError(record.Incident)
 	if record.Control != "" || record.Outcome == "stopped" || record.Outcome == "no_changes" ||
-		record.Incident == unmergedDependencyIncident || record.Incident == externalRolloutPrerequisitesIncident ||
-		record.AgentAttempts >= policy.MaxAttempts {
+		dependencyRetryError != "" || record.AgentAttempts >= policy.MaxAttempts {
 		record.State = "blocked"
 		switch {
 		case record.Outcome == "stopped":
 			record.Error = "stopped by operator; explicit resume required"
 		case record.Outcome == "no_changes":
 			record.Error = "no PR produced; review no-change evidence before retrying"
-		case record.Incident == unmergedDependencyIncident:
-			record.Error = failurefollowup.UnmergedDependencyReason + "; explicit retry required after merge"
-			record.NextAttemptAt = time.Time{}
-		case record.Incident == externalRolloutPrerequisitesIncident:
-			record.Error = failurefollowup.ExternalRolloutPrerequisitesReason + "; explicit retry required after provisioning"
+		case dependencyRetryError != "":
+			record.Error = dependencyRetryError
 			record.NextAttemptAt = time.Time{}
 		default:
 			record.Error = "agent retry budget exhausted; explicit retry or deployed fix required"
@@ -480,8 +488,7 @@ func issueRetryDelay(record localruntime.IssueClaimRecord, policy localruntime.I
 
 func repairableIssueIncident(record localruntime.IssueClaimRecord) bool {
 	if record.Control != "" || record.Incident == "" || record.Incident == "service_shutdown" ||
-		record.Incident == unmergedDependencyIncident || record.Incident == externalRolloutPrerequisitesIncident ||
-		record.Outcome == "stopped" || (record.Outcome == "no_changes" && record.NoChangeEvidence) {
+		issueDependencyRetryError(record.Incident) != "" || record.Outcome == "stopped" || (record.Outcome == "no_changes" && record.NoChangeEvidence) {
 		return false
 	}
 	if record.Outcome == "" && record.Failures < 3 {
