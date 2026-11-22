@@ -500,7 +500,7 @@
               </div>
               <svg id="dashboard-task-chart" class="dashboard-d3-chart" role="img" aria-label="Task status chart" tabindex="0"></svg>
             </div>
-            <div class="dashboard-chart-shell dashboard-source-chart-shell">
+            <div class="dashboard-chart-shell">
               <div class="dashboard-chart-head">
                 <span>Source Mix</span>
                 <span id="dashboard-source-total">0 prompts</span>
@@ -4627,31 +4627,29 @@
       const d3 = window.d3;
       const entries = Array.isArray(rows) ? rows.filter((row) => Number(row?.value || 0) > 0) : [];
       const total = entries.reduce((sum, row) => sum + Number(row.value || 0), 0);
-      const minSourceChartSize = 260;
-      const width = Math.max(minSourceChartSize, Math.floor(svgNode.getBoundingClientRect().width));
+      const minChartWidth = 260;
+      const minChartHeight = options.showPercent ? 260 : 220;
+      const width = Math.max(minChartWidth, Math.floor(svgNode.getBoundingClientRect().width));
       const margin = 18;
       const legendSideWidth = 150;
       const legendGap = 28;
       const legendRowGap = 24;
       const legendColumnWidth = options.showPercent ? 144 : 96;
       const sideLegendSpace = 2 * (legendSideWidth + legendGap);
-      const useSideLegend = width >= (options.showPercent ? minSourceChartSize + sideLegendSpace : 560);
-      const legendColumns = options.showPercent
-        ? Math.min(Math.max(1, entries.length), Math.floor(width / legendColumnWidth))
-        : Math.max(1, entries.length);
+      const useSideLegend = width >= (options.showPercent ? minChartWidth + sideLegendSpace : 560);
+      const legendColumns = Math.min(Math.max(1, entries.length), Math.floor((width - 20) / legendColumnWidth));
       const legendHeight = Math.ceil(Math.max(1, entries.length) / legendColumns) * legendRowGap;
-      if (options.showPercent) {
-        // Keep room for the focused percentage inside the ring when the legend wraps.
-        const minHeight = minSourceChartSize + (useSideLegend ? 0 : legendHeight);
-        svgNode.parentElement.style.setProperty("--dashboard-source-chart-min-height", `${minHeight}px`);
-      }
-      const height = Math.max(220, Math.floor(svgNode.getBoundingClientRect().height));
+      const bottomLegendHeight = useSideLegend ? 0 : legendHeight;
+      // Let the card grow for wrapped legend rows so the ring still has room for its center label.
+      const minHeight = minChartHeight + bottomLegendHeight;
+      svgNode.parentElement.style.setProperty("--dashboard-chart-min-height", `${minHeight}px`);
+      const height = Math.max(minHeight, Math.floor(svgNode.getBoundingClientRect().height));
       const chartWidth = useSideLegend ? Math.max(180, width - sideLegendSpace) : width;
-      const chartHeight = !useSideLegend && options.showPercent ? height - legendHeight : height;
+      const chartHeight = height - bottomLegendHeight;
       const radius = Math.min(chartWidth, chartHeight) / 2 - margin;
       const innerRadius = radius * 0.62;
       const centerX = width / 2;
-      const centerY = useSideLegend || options.showPercent ? chartHeight / 2 : height / 2 - 8;
+      const centerY = chartHeight / 2;
       const share = (row) => dashboardSourcePercent.format(row.value / total);
       const svg = d3.select(svgNode)
         .attr("viewBox", `0 0 ${width} ${height}`)
@@ -4721,10 +4719,10 @@
         .data(total > 0 ? [] : [null])
         .join("circle")
         .attr("class", "dashboard-d3-empty")
-        .attr("r", radius)
+        .attr("r", (radius + innerRadius) / 2)
         .attr("fill", "none")
         .attr("stroke", dashboardCSSValue("--border", "rgba(17, 34, 68, 0.14)"))
-        .attr("stroke-width", Math.max(18, radius - innerRadius));
+        .attr("stroke-width", radius - innerRadius);
 
       root.selectAll(".dashboard-d3-center-value")
         .data([null])
@@ -4775,17 +4773,17 @@
           (update) => update,
           (exit) => exit.remove(),
         );
-      const legendWidth = Math.min(width - 20, legendColumns * legendColumnWidth);
+      const legendWidth = legendColumns * legendColumnWidth;
       const legendX = useSideLegend ? Math.min(width - legendSideWidth, centerX + radius + legendGap) : 0;
       const legendStartY = useSideLegend
         ? (height / 2) - (((labelRows.length - 1) * legendRowGap) / 2)
-        : height - legendHeight;
+        : chartHeight;
       legendItems
         .attr("transform", (_row, index) => {
           if (useSideLegend) {
             return `translate(${legendX},${legendStartY + (index * legendRowGap)})`;
           }
-          const x = (width - legendWidth) / 2 + ((index % legendColumns) * legendWidth / legendColumns);
+          const x = (width - legendWidth) / 2 + ((index % legendColumns) * legendColumnWidth);
           const y = legendStartY + Math.floor(index / legendColumns) * legendRowGap;
           return `translate(${x},${y})`;
         });
@@ -10601,7 +10599,9 @@
           await showTaskAssetPreview(await response.blob(), taskAssetMessage, { signal, title });
           return;
         }
-        taskAssetMessage.textContent = "Preview unavailable.";
+        taskAssetMessage.textContent = response.status === 403
+          ? "GitHub access required to preview this attachment."
+          : "Preview unavailable.";
         if (response.status === 403 && window.isSecureContext && url.hostname === "github.com" && !url.search) {
           // The isolated authorization tab returns only the preview bytes.
           const channelName = `task-asset-preview-${crypto.randomUUID()}`;
@@ -14505,7 +14505,7 @@
       queueChatRepoResizeRender();
       syncPromptInputSizes();
       if (state.appDisplay === "dashboard") {
-        renderDashboardSourceMix(state.snapshot?.stats);
+        renderDashboardStats(state.snapshot);
       }
     }, { passive: true });
 
