@@ -4692,6 +4692,7 @@
           root.select(".dashboard-d3-center-value").text(total > 0 ? String(total) : "0");
           root.select(".dashboard-d3-center-label").text(options.centerLabel || "tasks");
         })
+        .classed("is-active", false)
         .attr("d", function (datum) {
           this.__dashboardArcDatum = datum;
           return arc(datum);
@@ -4722,7 +4723,8 @@
         .attr("dy", "1.55em")
         .text(options.centerLabel || "tasks");
 
-      slicePaths.filter(":focus").each(function (datum) {
+      const hoveredSlice = slicePaths.filter(":hover");
+      (hoveredSlice.empty() ? slicePaths.filter(":focus") : hoveredSlice).each(function (datum) {
         activateSlice(this, datum);
       });
 

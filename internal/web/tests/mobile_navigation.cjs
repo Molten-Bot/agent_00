@@ -54,13 +54,19 @@ async function openPage(t, hash, viewport = { width: 430, height: 932 }, mobile 
   return { page, writes };
 }
 
-test('320px: five source legend rows leave room for the focused share', async t => {
+function hasD3(t) {
   try {
     require.resolve('d3');
+    return true;
   } catch (error) {
     if (error.code !== 'MODULE_NOT_FOUND') throw error;
-    return t.skip('d3 module not available');
+    t.skip('d3 module not available');
+    return false;
   }
+}
+
+test('320px: five source legend rows leave room for the focused share', async t => {
+  if (!hasD3(t)) return;
   const sourceMix = ['Chat', 'Prompt', 'Library', 'GitHub Issues', 'JSON']
     .map(name => ({ name, tasks: name === 'GitHub Issues' ? 3 : 1 }));
   const { page } = await openPage(t, 'dashboard', { width: 320, height: 844 }, true, [], {
@@ -92,6 +98,36 @@ test('320px: five source legend rows leave room for the focused share', async t 
   await chart.focus();
   assert.equal(await chart.locator('.dashboard-d3-center-value').textContent(), '7');
   assert.equal(await chart.locator('.dashboard-d3-center-label').textContent(), 'prompts');
+});
+
+test('resizing the source chart keeps the share for a stationary pointer over a slice', async t => {
+  if (!hasD3(t)) return;
+  const { page } = await openPage(t, 'dashboard', { width: 1000, height: 900 }, false, [], {
+    source_mix: [{ name: 'Chat', tasks: 1 }, { name: 'GitHub Issues', tasks: 3 }],
+    total_tasks: 4,
+  });
+  const chart = page.locator('#dashboard-source-chart');
+  const slice = chart.getByLabel(/^GitHub Issues:/);
+  const value = chart.locator('.dashboard-d3-center-value');
+  const label = chart.locator('.dashboard-d3-center-label');
+  await slice.scrollIntoViewIfNeeded();
+  const box = await slice.boundingBox();
+  const pointer = { x: box.x + box.width * 0.1, y: box.y + box.height * 0.5 };
+  await page.mouse.move(pointer.x, pointer.y);
+  assert.equal(await value.textContent(), '75%');
+
+  const viewBox = await chart.getAttribute('viewBox');
+  await page.setViewportSize({ width: 1010, height: 900 });
+  await page.waitForFunction(previous => document.querySelector('#dashboard-source-chart').getAttribute('viewBox') !== previous, viewBox);
+  assert.equal(await slice.evaluate((node, { x, y }) => document.elementFromPoint(x, y) === node, pointer), true);
+  assert.equal(await chart.locator('.dashboard-d3-slice.is-active').count(), 1);
+  assert.equal(await value.textContent(), '75%');
+  assert.equal(await label.textContent(), 'GitHub Issues');
+
+  await page.mouse.move(0, 0);
+  assert.equal(await chart.locator('.dashboard-d3-slice.is-active').count(), 0);
+  assert.equal(await value.textContent(), '4');
+  assert.equal(await label.textContent(), 'prompts');
 });
 
 async function assertFits(page) {
