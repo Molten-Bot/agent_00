@@ -264,6 +264,39 @@ func (zeroReader) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
+func TestPreviewMislabeledAVIF(t *testing.T) {
+	t.Parallel()
+	const extended = "\x00\x00\x00\x01ftyp"
+	for _, tc := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"32-bit size", "\x00\x00\x00\x10ftypavif\x00\x00\x00\x00", true},
+		{"64-bit size with major brand", extended + "\x00\x00\x00\x00\x00\x00\x00\x18avif\x00\x00\x00\x00", true},
+		{"64-bit size with compatible brand", extended + "\x00\x00\x00\x00\x00\x00\x00\x1cmif1\x00\x00\x00\x00avis", true},
+		{"truncated size field", extended + "\x00\x00\x00\x00", false},
+		{"size excludes minor version", extended + "\x00\x00\x00\x00\x00\x00\x00\x14avif\x00\x00\x00\x00", false},
+		{"size exceeds available bytes", extended + "\x00\x00\x00\x01\x00\x00\x00\x18avif\x00\x00\x00\x00", false},
+		{"partial compatible brand", extended + "\x00\x00\x00\x00\x00\x00\x00\x1bmif1\x00\x00\x00\x00avif", false},
+		{"brand outside box", extended + "\x00\x00\x00\x00\x00\x00\x00\x18mif1\x00\x00\x00\x00avif", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return response(req, http.StatusOK, tc.body, http.Header{"Content-Type": {"image/jpeg"}}), nil
+			})
+			asset := Asset{URL: "https://github.com/user-attachments/assets/example"}
+			data, mediaType, err := readTestPreview(asset, transport)
+			if tc.want {
+				if err != nil || mediaType != "image/avif" || string(data) != tc.body {
+					t.Fatalf("preview = (%q, %q, %v), want original bytes as image/avif", data, mediaType, err)
+				}
+			} else if err == nil || len(data) != 0 {
+				t.Fatal("malformed or unsupported content was returned")
+			}
+		})
+	}
+}
+
 func TestPreviewAudio(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

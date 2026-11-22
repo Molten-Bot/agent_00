@@ -259,18 +259,23 @@ func isAVIF(prefix []byte) bool {
 	if len(prefix) < 16 || string(prefix[4:8]) != "ftyp" {
 		return false
 	}
-	boxSize := binary.BigEndian.Uint32(prefix[:4])
-	if boxSize < 16 || boxSize%4 != 0 || boxSize > uint32(len(prefix)) {
+	boxSize := uint64(binary.BigEndian.Uint32(prefix[:4]))
+	headerSize := 8
+	if boxSize == 1 {
+		boxSize = binary.BigEndian.Uint64(prefix[8:16])
+		headerSize = 16
+	}
+	brandsStart := headerSize + 8 // Major brand and minor version precede compatible brands.
+	if boxSize < uint64(brandsStart) || boxSize%4 != 0 || boxSize > uint64(len(prefix)) {
 		return false
 	}
 	isAVIFBrand := func(brand []byte) bool {
 		return string(brand) == "avif" || string(brand) == "avis"
 	}
-	if isAVIFBrand(prefix[8:12]) {
+	if isAVIFBrand(prefix[headerSize : headerSize+4]) {
 		return true
 	}
-	// Skip the minor version and check the compatible brands in the box.
-	for offset := 16; offset < int(boxSize); offset += 4 {
+	for offset := brandsStart; offset < int(boxSize); offset += 4 {
 		if isAVIFBrand(prefix[offset : offset+4]) {
 			return true
 		}
