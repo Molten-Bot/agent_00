@@ -309,8 +309,13 @@ func TestPRMergeMonitorKeepsTaskVisibleUntilPRIsMerged(t *testing.T) {
 	t.Parallel()
 
 	broker := NewBroker()
+	now := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
+	broker.now = func() time.Time { return now }
 	broker.IngestLog("dispatch status=start request_id=req-open repo=git@github.com:acme/repo.git")
+	now = now.Add(2 * time.Minute)
 	broker.IngestLog("dispatch status=completed request_id=req-open workspace=/tmp/run branch=agent00-ship pr_url=https://github.com/acme/repo/pull/77")
+	completedAt := now.Format(time.RFC3339Nano)
+	now = now.Add(time.Minute)
 
 	runner := &stubPRMonitorRunner{
 		result: execx.Result{Stdout: `{"state":"OPEN","mergedAt":"","title":"Published PR title"}`},
@@ -341,6 +346,12 @@ func TestPRMergeMonitorKeepsTaskVisibleUntilPRIsMerged(t *testing.T) {
 	}
 	if got, want := snap.Tasks[0].RequestID, "req-open"; got != want {
 		t.Fatalf("task request_id = %q, want %q", got, want)
+	}
+	if got := snap.Tasks[0].UpdatedAt; got != completedAt {
+		t.Errorf("task.UpdatedAt after PR title update = %q, want %q", got, completedAt)
+	}
+	if got, want := snap.Tasks[0].DurationSeconds, 120.0; got != want {
+		t.Errorf("task.DurationSeconds after PR title update = %v, want %v", got, want)
 	}
 
 	cancel()

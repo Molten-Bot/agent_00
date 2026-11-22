@@ -683,7 +683,6 @@ func (b *Broker) recordTaskPRTitle(requestID, prURL, title string, fromMonitor b
 	t.TitledPRURLs = slices.DeleteFunc(t.TitledPRURLs, func(url string) bool { return url == prURL })
 	t.TitledPRURLs = append(t.TitledPRURLs, prURL)
 	t.PRURL = prURL
-	t.UpdatedAt = b.now().UTC()
 	b.notifySubscribersLocked()
 }
 
