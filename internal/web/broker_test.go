@@ -66,11 +66,11 @@ func TestBrokerRecordsTaskPRTitlesByURL(t *testing.T) {
 	const requestID = "req-title"
 	const primaryURL = "https://github.com/acme/repo/pull/99"
 	const otherURL = "https://github.com/acme/repo-two/pull/42"
-	const runConfig = `{"prompt":"Original prompt","prTitle":"Configured title"}`
+	const runConfig = `{"prompt":"Original prompt","githubIssue":{"title":"Issue title"},"prTitle":"Configured title"}`
 	b := NewBroker()
 	b.RecordTaskRunConfig(requestID, []byte(runConfig))
-	if task, _ := b.Task(requestID); task.PRTitle != "" {
-		t.Fatalf("title before creation = %q, want empty", task.PRTitle)
+	if task, _ := b.Task(requestID); task.IssueTitle != "Issue title" || task.PRTitle != "" {
+		t.Fatalf("task before creation = %+v", task)
 	}
 
 	b.RecordTaskPRTitle(requestID, primaryURL, "First title")
@@ -81,7 +81,7 @@ func TestBrokerRecordsTaskPRTitlesByURL(t *testing.T) {
 	b.RecordTaskPRTitle(requestID, primaryURL, "Updated title")
 	b.RecordTaskPRTitle(requestID, otherURL, "Other title")
 	b.IngestLog("task status=completed request_id=" + requestID + " pr_url=" + primaryURL)
-	if task := b.StreamSnapshot().Tasks[0]; task.PRTitle != "Updated title" || task.PRTitleURL != primaryURL || task.Prompt != "Original prompt" {
+	if task := b.StreamSnapshot().Tasks[0]; task.IssueTitle != "Issue title" || task.PRTitle != "Updated title" || task.PRTitleURL != primaryURL || task.Prompt != "Original prompt" {
 		t.Fatalf("completed task = %+v", task)
 	}
 	if raw, ok := b.TaskRunConfig(requestID); !ok || string(raw) != runConfig {
@@ -98,8 +98,13 @@ func TestBrokerKeepsCreatedPRTitleWhenCompletionSelectsReusedPR(t *testing.T) {
 	const createdTitle = "Title of created PR"
 	b := NewBroker()
 	b.IngestLog("task status=start request_id=" + requestID)
-	b.RecordTaskPRTitle(requestID, createdURL, createdTitle)
+	b.RecordCreatedTaskPRTitle(requestID, createdURL, createdTitle)
+	b.RecordTaskPRTitle(requestID, reusedURL, "Reused PR title")
+	if task, _ := b.Task(requestID); task.PRTitleURL != createdURL || task.PRTitle != createdTitle {
+		t.Fatalf("in-progress task lost created PR metadata: %+v", task)
+	}
 	b.IngestLog("task status=completed request_id=" + requestID + " pr_url=" + reusedURL + " pr_urls=" + reusedURL + "," + createdURL)
+	b.recordTaskPRTitle(requestID, reusedURL, "Monitored reused PR title", taskPRTitleMonitored)
 
 	task, _ := b.Task(requestID)
 	for _, task := range []Task{task, b.StreamSnapshot().Tasks[0]} {

@@ -857,26 +857,44 @@ func TestH1CovCreatePullRequestURL(t *testing.T) {
 	t.Run("transient failure falls back to lookup success", func(t *testing.T) {
 		t.Parallel()
 		cfg := sampleConfig()
-		repo := repoWorkspace{Dir: "/repo", URL: cfg.RepoURL, Branch: "agent00-topic", BaseBranch: "main"}
+		repo := repoWorkspace{Dir: "/repo", URL: cfg.RepoURL, Branch: "agent00-topic", BaseBranch: "main",
+			PRHeadOwner: "fork", PRTargetRepo: "acme/repo"}
 		fake := &fakeRunner{t: t, exps: []expectedRun{
 			{
-				cmd: prCreateWithOptionsCommand(repo.Dir, cfg, repo.BaseBranch, "agent00-topic", ""),
+				cmd: prCreateWithOptionsCommand(repo.Dir, cfg, repo.BaseBranch, "fork:agent00-topic", "acme/repo"),
 				res: execx.Result{Stderr: "HTTP 500"},
 				err: errors.New("exit status 1"),
 			},
-			{cmd: remoteBranchExistsOnRemoteCommand(repo.Dir, publishRemoteOrigin, repo.Branch), res: execx.Result{Stdout: "sha\trefs/heads/agent00-topic\n"}},
 			{
-				cmd: prLookupByHeadWithRepoCommand(repo.Dir, "agent00-topic", ""),
-				res: execx.Result{Stdout: `[{"url":"https://github.com/acme/repo/pull/4"}]`},
+				cmd: ghCommand(repo.Dir, "api", "repos/acme/repo/pulls?base=main&head=fork%3Aagent00-topic&page=1&per_page=100&state=open"),
+				res: execx.Result{Stdout: `[{"html_url":"https://github.com/acme/repo/pull/4","state":"open","head":{"ref":"agent00-topic","repo":{"full_name":"fork/repo"}},"base":{"ref":"main"}}]`},
 			},
 		}}
 		h := New(fake)
-		prURL, err := h.createPullRequestURL(context.Background(), repo, cfg, true, "agent00-topic", "")
+		prURL, err := h.createPullRequestURL(context.Background(), repo, cfg, true, "fork:agent00-topic", "acme/repo")
 		if err != nil || prURL != "https://github.com/acme/repo/pull/4" {
 			t.Fatalf("createPullRequestURL() = (%q, %v), want pull/4 via lookup fallback", prURL, err)
 		}
 		if len(fake.exps) != 0 {
 			t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+		}
+	})
+
+	t.Run("transient failure with implicit base retries creation", func(t *testing.T) {
+		t.Parallel()
+		cfg := sampleConfig()
+		repo := repoWorkspace{Dir: "/repo", URL: cfg.RepoURL, Branch: "agent00-topic"}
+		cmd := prCreateWithoutBaseWithOptionsCommand(repo.Dir, cfg, repo.Branch, "")
+		const prURL = "https://github.com/acme/repo/pull/5"
+		fake := &fakeRunner{t: t, exps: []expectedRun{
+			{cmd: cmd, err: errors.New("HTTP 500")},
+			{cmd: cmd, res: execx.Result{Stdout: prURL}},
+		}}
+		h := New(fake)
+		h.Sleep = func(context.Context, time.Duration) error { return nil }
+		got, err := h.createPullRequestURL(t.Context(), repo, cfg, false, repo.Branch, "")
+		if err != nil || got != prURL || len(fake.exps) != 0 {
+			t.Fatalf("createPullRequestURL() = (%q, %v), want (%q, nil), unconsumed expectations: %d", got, err, prURL, len(fake.exps))
 		}
 	})
 
@@ -962,7 +980,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 		t.Parallel()
 		repos := []repoWorkspace{{Dir: "/repo", RequireExistingPR: true, PRURL: "https://github.com/acme/repo/pull/1"}}
 		h := New(&fakeRunner{t: t})
-		if err := h.populateNoChangePRURLs(context.Background(), repos, "", false); err != nil {
+		if err := h.populateNoChangePRURLs(context.Background(), repos, config.Config{}, false); err != nil {
 			t.Fatalf("populateNoChangePRURLs() err = %v, want nil", err)
 		}
 		if repos[0].PRURL != "https://github.com/acme/repo/pull/1" {
@@ -981,7 +999,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 			},
 		}}
 		h := New(fake)
-		if err := h.populateNoChangePRURLs(context.Background(), repos, "", false); err != nil {
+		if err := h.populateNoChangePRURLs(context.Background(), repos, config.Config{}, false); err != nil {
 			t.Fatalf("populateNoChangePRURLs() err = %v, want nil (tolerated)", err)
 		}
 		if repos[0].PRURL != "" {
@@ -1000,7 +1018,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 			},
 		}}
 		h := New(fake)
-		err := h.populateNoChangePRURLs(context.Background(), repos, "", true)
+		err := h.populateNoChangePRURLs(context.Background(), repos, config.Config{}, true)
 		if err == nil || !strings.Contains(err.Error(), "verify existing pull request") {
 			t.Fatalf("populateNoChangePRURLs() err = %v, want verify-existing error", err)
 		}
@@ -1017,7 +1035,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 			},
 		}}
 		h := New(fake)
-		if err := h.populateNoChangePRURLs(context.Background(), repos, "", false); err != nil {
+		if err := h.populateNoChangePRURLs(context.Background(), repos, config.Config{}, false); err != nil {
 			t.Fatalf("populateNoChangePRURLs() err = %v, want nil", err)
 		}
 		if repos[0].PRURL != "https://github.com/acme/repo/pull/2" {
@@ -1028,15 +1046,15 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 	t.Run("prompt PR URL used when head matches", func(t *testing.T) {
 		t.Parallel()
 		promptPRURL := "https://github.com/acme/repo/pull/8"
-		repos := []repoWorkspace{{Dir: "/repo", Branch: "agent00-topic"}}
+		repos := []repoWorkspace{{URL: "https://github.com/acme/repo", Dir: "/repo", Branch: "agent00-topic"}}
 		fake := &fakeRunner{t: t, exps: []expectedRun{
 			{cmd: remoteBranchExistsOnRemoteCommand(repos[0].Dir, publishRemoteOrigin, repos[0].Branch), res: execx.Result{Stdout: ""}},
 			{cmd: prLookupAnyByHeadWithRepoCommand(repos[0].Dir, "agent00-topic", ""), res: execx.Result{Stdout: "[]"}},
-			{cmd: prStateViewCommand(repos[0].Dir, promptPRURL), res: execx.Result{Stdout: `{"url":"` + promptPRURL + `","state":"open","headRefName":"agent00-topic"}`}},
+			{cmd: prStateViewCommand(repos[0].Dir, promptPRURL), res: execx.Result{Stdout: `{"url":"` + promptPRURL + `","state":"open","headRefName":"agent00-topic","headRepository":{"nameWithOwner":"acme/repo"}}`}},
 		}}
 		h := New(fake)
 		prompt := "Original task prompt mentions " + promptPRURL
-		if err := h.populateNoChangePRURLs(context.Background(), repos, prompt, false); err != nil {
+		if err := h.populateNoChangePRURLs(context.Background(), repos, config.Config{Prompt: prompt}, false); err != nil {
 			t.Fatalf("populateNoChangePRURLs() err = %v, want nil", err)
 		}
 		if repos[0].PRURL != promptPRURL {
@@ -1047,7 +1065,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 	t.Run("prompt PR URL branch mismatch with requirePRURL fails", func(t *testing.T) {
 		t.Parallel()
 		promptPRURL := "https://github.com/acme/repo/pull/8"
-		repos := []repoWorkspace{{Dir: "/repo", Branch: "agent00-topic"}}
+		repos := []repoWorkspace{{URL: "https://github.com/acme/repo", Dir: "/repo", Branch: "agent00-topic"}}
 		fake := &fakeRunner{t: t, exps: []expectedRun{
 			{cmd: remoteBranchExistsOnRemoteCommand(repos[0].Dir, publishRemoteOrigin, repos[0].Branch), res: execx.Result{Stdout: ""}},
 			{cmd: prLookupAnyByHeadWithRepoCommand(repos[0].Dir, "agent00-topic", ""), res: execx.Result{Stdout: "[]"}},
@@ -1055,7 +1073,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 		}}
 		h := New(fake)
 		prompt := "Original task prompt mentions " + promptPRURL
-		err := h.populateNoChangePRURLs(context.Background(), repos, prompt, true)
+		err := h.populateNoChangePRURLs(context.Background(), repos, config.Config{Prompt: prompt}, true)
 		if err == nil || !strings.Contains(err.Error(), "did not match") {
 			t.Fatalf("populateNoChangePRURLs() err = %v, want branch mismatch error", err)
 		}
@@ -1069,7 +1087,7 @@ func TestH1CovPopulateNoChangePRURLs(t *testing.T) {
 			{cmd: prLookupAnyByHeadWithRepoCommand(repos[0].Dir, "agent00-topic", ""), res: execx.Result{Stdout: "[]"}},
 		}}
 		h := New(fake)
-		err := h.populateNoChangePRURLs(context.Background(), repos, "", true)
+		err := h.populateNoChangePRURLs(context.Background(), repos, config.Config{}, true)
 		if err == nil || !strings.Contains(err.Error(), "no pull request found") {
 			t.Fatalf("populateNoChangePRURLs() err = %v, want no-PR-found error", err)
 		}
