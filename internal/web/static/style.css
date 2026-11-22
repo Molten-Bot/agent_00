@@ -1921,6 +1921,7 @@ select.prompt-control {
 }
 
 .speech-stream-bar {
+  --bar-level: 0;
   position: relative;
   z-index: 1;
   display: block;
@@ -4416,6 +4417,10 @@ select.prompt-control {
   pointer-events: none;
 }
 
+.dashboard-d3-legend-icon-shell {
+  color: var(--dashboard-legend-icon-color, inherit);
+}
+
 .dashboard-d3-legend-icon-shell,
 .dashboard-d3-legend-icon-shell svg {
   display: block;
@@ -4722,6 +4727,10 @@ html.pink .task-site-url-action[data-state="current"] {
   height: 100%;
   background: var(--brand-gradient);
   transition: width 0.18s ease;
+}
+
+.task-progress-fill-single-step {
+  --task-progress-fill-width: 100%;
 }
 
 .task-progress-steps {

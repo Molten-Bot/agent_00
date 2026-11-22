@@ -21,7 +21,7 @@
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
   <script src="/static/task-asset-preview.js?v=3"></script>
-  <link rel="stylesheet" href="/static/style.css?v=11">
+  <link rel="stylesheet" href="/static/style.css?v=12">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -4795,7 +4795,7 @@
       legendItems.select("foreignObject.dashboard-d3-legend-icon-foreign")
         .attr("display", legendIconName ? null : "none");
       legendItems.select(".dashboard-d3-legend-icon-shell")
-        .style("color", (row) => row.color);
+        .style("--dashboard-legend-icon-color", (row) => row.color);
       legendItems.select(".dashboard-d3-legend-icon-shell i")
         .attr("data-lucide", (row) => legendIconName ? legendIconName(row.label) : null);
       legendItems.select("text")
@@ -5180,7 +5180,7 @@
       const previousHeight = input.classList.contains("prompt-textarea-manual-size")
         ? input.getBoundingClientRect().height
         : 0;
-      input.style.setProperty("--prompt-textarea-height", "auto");
+      input.style.removeProperty("--prompt-textarea-height");
       const contentHeight = (input.scrollHeight || minHeight) + borderHeight;
       const nextHeight = Math.max(minHeight, previousHeight, Math.min(contentHeight, maxHeight));
       input.style.setProperty("--prompt-textarea-height", `${Math.ceil(nextHeight)}px`);
@@ -5503,9 +5503,9 @@
       ensureSpeechStreamBars(stream);
       stream.classList.toggle("is-active", Boolean(active));
       if (!active) {
-        stream.style.setProperty("--speech-level", "0");
+        stream.style.removeProperty("--speech-level");
         stream.querySelectorAll(".speech-stream-bar").forEach((bar) => {
-          bar.style.setProperty("--bar-level", "0");
+          bar.style.removeProperty("--bar-level");
         });
       }
     }
@@ -5532,8 +5532,6 @@
       for (let i = 0; i < 44; i += 1) {
         const bar = document.createElement("span");
         bar.className = "speech-stream-bar";
-        bar.style.setProperty("--bar-index", String(i));
-        bar.style.setProperty("--bar-level", "0");
         fragment.appendChild(bar);
       }
       stream.replaceChildren(fragment);
@@ -12050,7 +12048,7 @@
       if (stepsModel.length > 1) {
         fill.style.setProperty("--task-progress-fill-width", `${(index / (stepsModel.length - 1)) * 100}%`);
       } else {
-        fill.style.setProperty("--task-progress-fill-width", "100%");
+        fill.classList.add("task-progress-fill-single-step");
       }
       line.appendChild(fill);
 

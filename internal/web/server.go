@@ -879,7 +879,7 @@ func (s Server) handleChat(w http.ResponseWriter, r *http.Request) {
             if (!(stream instanceof HTMLElement)) return;
             stream.classList.toggle("is-active", Boolean(active));
             if (!active) {
-              stream.style.setProperty("--speech-level", "0");
+              stream.style.removeProperty("--speech-level");
             }
           }
 
