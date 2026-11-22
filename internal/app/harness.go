@@ -5298,6 +5298,14 @@ func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd exec
 	}
 
 	if err != nil {
+		if cmd.Name == "git" && len(cmd.Args) > 0 && cmd.Args[0] == "push" {
+			detail := strings.ToLower(res.Stderr + "\n" + res.Stdout)
+			if strings.Contains(detail, "github push protection") || strings.Contains(detail, "push cannot contain secrets") {
+				// The task log has the remote diagnostics. Keep commit paths and
+				// the unblock URL out of the result and any follow-up context.
+				return execx.Result{}, fmt.Errorf("%s: remove the flagged credential from every outgoing commit before retrying. If valid, revoke or rotate it. See the local task log for locations", failurefollowup.GitHubPushProtectionReason)
+			}
+		}
 		if diskErr := diskSpaceExhaustionError(cmd, res, err); diskErr != nil {
 			return res, diskErr
 		}

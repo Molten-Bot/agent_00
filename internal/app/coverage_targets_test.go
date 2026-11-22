@@ -1261,6 +1261,43 @@ func TestPushWithSync(t *testing.T) {
 		}
 	})
 
+	t.Run("push protection reports a safe error without retrying", func(t *testing.T) {
+		t.Parallel()
+		repo := &repoWorkspace{Dir: "/repo", Branch: "agent00-topic", CreateWorkBranch: true}
+		pushErr := errors.New("exit status 1: error: failed to push some refs")
+		stderr := "remote: error: GH013: Repository rule violations found\n" +
+			"remote: GITHUB PUSH PROTECTION\n" +
+			"remote: path: sample/credential.txt:12\n" +
+			"remote: https://example.invalid/details\n" +
+			"! [remote rejected] (push declined)\n" +
+			"error: failed to push some refs\n"
+		fake := &fakeRunner{t: t, exps: []expectedRun{
+			{cmd: pushToRemoteCommand(repo.Dir, publishRemoteOrigin, repo.Branch), res: execx.Result{Stderr: stderr}, err: pushErr},
+		}}
+		h := New(fake)
+		err := h.pushWithSync(context.Background(), repo, 0, true)
+		want := "GitHub push protection blocked publication: remove the flagged credential from every outgoing commit before retrying. If valid, revoke or rotate it. See the local task log for locations"
+		if err == nil || err.Error() != want {
+			t.Fatalf("pushWithSync() err = %v, want %q", err, want)
+		}
+		if len(fake.exps) != 0 {
+			t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+		}
+	})
+
+	t.Run("other repository rule rejections retain original error", func(t *testing.T) {
+		t.Parallel()
+		repo := &repoWorkspace{Dir: "/repo", Branch: "agent00-topic"}
+		pushErr := errors.New("exit status 1: required status check is missing")
+		fake := &fakeRunner{t: t, exps: []expectedRun{
+			{cmd: pushToRemoteCommand(repo.Dir, publishRemoteOrigin, repo.Branch), res: execx.Result{Stderr: "remote: error: GH013: Repository rule violations found"}, err: pushErr},
+		}}
+		h := New(fake)
+		if err := h.pushWithSync(context.Background(), repo, 0, true); !errors.Is(err, pushErr) {
+			t.Fatalf("pushWithSync() err = %v, want original error %v", err, pushErr)
+		}
+	})
+
 	t.Run("non-fast-forward on generated branch renames and retries", func(t *testing.T) {
 		t.Parallel()
 		repo := &repoWorkspace{

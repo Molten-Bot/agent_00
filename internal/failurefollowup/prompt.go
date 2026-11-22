@@ -74,6 +74,9 @@ const unreachableCoverageTargetReason = "coverage target cannot be met safely"
 const missingSecurityContractReason = "security verification contract is missing"
 const missingRemoteBranchReason = "remote branch does not exist"
 
+// GitHubPushProtectionReason is the safe summary of a rejected Git push.
+const GitHubPushProtectionReason = "GitHub push protection blocked publication"
+
 // UnmergedDependencyReason identifies an agent-reported prerequisite PR.
 const UnmergedDependencyReason = "required pull request is unmerged"
 
@@ -385,6 +388,9 @@ func NonRemediableFailureReason(err error) string {
 	text := strings.ToLower(strings.TrimSpace(err.Error()))
 	if text == "" {
 		return ""
+	}
+	if strings.Contains(text, strings.ToLower(GitHubPushProtectionReason)+":") {
+		return GitHubPushProtectionReason
 	}
 	if agentruntime.CodexAuthenticationFailure(text) {
 		return "codex authentication required"
