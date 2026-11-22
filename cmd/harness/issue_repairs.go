@@ -60,7 +60,7 @@ func (q *issueRepairQueue) capture(_ context.Context, issue localruntime.IssueCl
 		result.Err = errors.New(failure)
 	}
 	run := failureFollowUpRunConfig(issue.RequestID, result, issue.Run, q.logRoot)
-	record := localruntime.IssueRepairRecord{ID: id, RequestID: "repair-" + id, State: "queued", Run: run}
+	record := localruntime.IssueRepairRecord{ID: id, RequestID: "repair-" + id, SourceClaimID: issue.ID, State: "queued", Run: run}
 	return record.RequestID, q.store.Save(record)
 }
 
@@ -198,14 +198,19 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 	foundSource := false
 	for _, issue := range issues {
 		// The outbox can survive a crash before the claim receipt is saved.
-		// Use its first log path, or its fingerprint if no path was recorded.
+		// Older repairs lack a source claim ID and still need the legacy lookup.
 		if issue.RepairRequestID != record.RequestID {
-			if hasSourceLog {
+			switch {
+			case record.SourceClaimID != "":
+				if issue.ID != record.SourceClaimID {
+					continue
+				}
+			case hasSourceLog:
 				sourceDir, _ := taskLogDir(q.logRoot, issue.RequestID)
 				if sourceDir != logDir {
 					continue
 				}
-			} else if issueRepairID(issue) != record.ID {
+			case issueRepairID(issue) != record.ID:
 				continue
 			}
 		}

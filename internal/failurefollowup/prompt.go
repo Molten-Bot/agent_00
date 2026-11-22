@@ -100,9 +100,10 @@ const evidenceSentenceBreak = `(?:\.\s+(?:\|\s+)?| \| )`
 
 var (
 	blockedFailureSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:[ \t]*(?:((?:[^"'\x60\r\n]|\b'\b|` +
-		backtickedIssueID + `)+) (?:remains |is ))?blocked(?: (` + openDependencyCause + `))?[.!]?$`)
-	openDependencyDetail = regexp.MustCompile(`^blocked ` + openDependencyCause + blockerDetailEnd)
-	openDependencyTarget = regexp.MustCompile(`^` + openDependencyReference +
+		backtickedIssueID + `)+?) (?:remains |is )?)?blocked(?: (` + openDependencyCause + `))?[.!]?$`)
+	negatedBlockerOperation = regexp.MustCompile(`(?:\b(?:not|never|no longer)|n['’]t)(?: yet| currently)?$`)
+	openDependencyDetail    = regexp.MustCompile(`^blocked ` + openDependencyCause + blockerDetailEnd)
+	openDependencyTarget    = regexp.MustCompile(`^` + openDependencyReference +
 		` is still open and (?:blocks|is blocking) `)
 	rolloutOperation             = regexp.MustCompile(`\brollout(?: for .+)?$`)
 	openDependencyEvidenceDetail = regexp.MustCompile(`^` + openDependencyReference +
@@ -454,7 +455,7 @@ func NonRemediableFailureReason(err error) string {
 
 func isOpenDependencyFailure(summary, detail string) bool {
 	blocked := blockedFailureSummary.FindStringSubmatch(strings.TrimSpace(summary))
-	if blocked == nil {
+	if blocked == nil || negatedBlockerOperation.MatchString(strings.TrimSpace(blocked[1])) {
 		return false
 	}
 	detail = strings.TrimSpace(detail)

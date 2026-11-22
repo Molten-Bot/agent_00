@@ -45,7 +45,7 @@ func TestIssueRepairOutboxRechecksDependencyBlockers(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, captured, current, incident, want string
-		missingReceipt, missingLogRoot          bool
+		missingReceipt, missingLogRoot, legacy  bool
 	}{
 		{
 			name:     "legacy queued report",
@@ -78,8 +78,18 @@ func TestIssueRepairOutboxRechecksDependencyBlockers(t *testing.T) {
 			missingReceipt: true,
 		},
 		{
-			name:           "redacted issue link without receipt or log path",
+			name:           "legacy redacted issue link without receipt or log path",
 			captured:       "codex: codex reported failure: Failure: Export remains blocked. Error details: [#72](https://github.com/example/project/issues/72) is still open and blocks the export.",
+			want:           failurefollowup.OpenDependencyReason,
+			missingReceipt: true,
+			missingLogRoot: true,
+			legacy:         true,
+		},
+		{
+			name:           "source reclassified without receipt or log path",
+			captured:       "temporary recovery failure",
+			current:        "upstream changes are pending",
+			incident:       localruntime.IssueIncidentOpenDependency,
 			want:           failurefollowup.OpenDependencyReason,
 			missingReceipt: true,
 			missingLogRoot: true,
@@ -97,6 +107,16 @@ func TestIssueRepairOutboxRechecksDependencyBlockers(t *testing.T) {
 			id, err := q.capture(context.Background(), issue)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.legacy {
+				repairs, err := q.store.List()
+				if err != nil || len(repairs) != 1 {
+					t.Fatalf("repair records = %d, err = %v", len(repairs), err)
+				}
+				repairs[0].SourceClaimID = ""
+				if err := q.store.Save(repairs[0]); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if tc.current != "" || tc.incident != "" || tc.missingReceipt {
 				if !tc.missingReceipt {
