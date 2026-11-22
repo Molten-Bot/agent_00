@@ -1340,7 +1340,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected completed task result banners to include pull request links")
 	}
 	if !strings.Contains(markup, `const isGitHubStep = String(step?.icon || "").trim().toLowerCase() === "github";`) ||
-		!strings.Contains(markup, `const githubHref = isGitHubStep ? taskGitHubLinkURL(task) : "";`) ||
+		!strings.Contains(markup, `const githubHref = isIssueStep ? taskIssueURL(task) : isGitHubStep ? taskGitHubLinkURL(task) : "";`) ||
 		!strings.Contains(markup, `const marker = document.createElement(githubHref ? "a" : "span");`) ||
 		!strings.Contains(markup, `marker.href = githubHref;`) {
 		t.Fatalf("expected index html to link the final GitHub progress step to the repo before PR creation and the PR once available")

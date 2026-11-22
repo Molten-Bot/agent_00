@@ -79,6 +79,7 @@ type Task struct {
 	ExitCode          int                  `json:"exit_code,omitempty"`
 	WorkspaceDir      string               `json:"workspace_dir,omitempty"`
 	Branch            string               `json:"branch,omitempty"`
+	GitHubIssueURL    string               `json:"github_issue_url,omitempty"`
 	PRURL             string               `json:"pr_url,omitempty"`
 	PRTitle           string               `json:"pr_title,omitempty"`
 	PRTitleURL        string               `json:"pr_title_url,omitempty"`
@@ -304,6 +305,7 @@ type taskState struct {
 	ExitCode          int
 	WorkspaceDir      string
 	Branch            string
+	GitHubIssueURL    string
 	PRURL             string
 	PRTitles          map[string]string
 	TitledPRURLs      []string
@@ -523,6 +525,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			ExitCode:          t.ExitCode,
 			WorkspaceDir:      t.WorkspaceDir,
 			Branch:            t.Branch,
+			GitHubIssueURL:    t.GitHubIssueURL,
 			PRURL:             t.PRURL,
 			PRTitle:           prTitle,
 			PRTitleURL:        prTitleURL,
@@ -633,6 +636,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		ExitCode:          t.ExitCode,
 		WorkspaceDir:      t.WorkspaceDir,
 		Branch:            t.Branch,
+		GitHubIssueURL:    t.GitHubIssueURL,
 		PRURL:             t.PRURL,
 		PRTitle:           prTitle,
 		PRTitleURL:        prTitleURL,
@@ -692,6 +696,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 	images := imagesFromRunConfigJSON(cfgCopy)
 	assets := assetsFromRunConfigJSON(cfgCopy)
 	baseBranch := branchFromRunConfigJSON(cfgCopy)
+	issueURL := githubIssueURLFromRunConfigJSON(cfgCopy)
 	prURL := prURLFromRunConfigJSON(cfgCopy)
 	repos := reposFromRunConfigJSON(cfgCopy)
 	reviewers := reviewersFromRunConfigJSON(cfgCopy)
@@ -739,6 +744,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 			BaseBranch:        baseBranch,
 			AutoMerge:         autoMerge,
 			Branch:            baseBranch,
+			GitHubIssueURL:    issueURL,
 			PRURL:             prURL,
 			Status:            "pending",
 			Stage:             "task",
@@ -757,6 +763,10 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 	}
 	if prURL != "" && t != nil && t.PRURL != prURL {
 		t.PRURL = prURL
+		changed = true
+	}
+	if t != nil && t.GitHubIssueURL != issueURL {
+		t.GitHubIssueURL = issueURL
 		changed = true
 	}
 	if prompt != "" {
@@ -2948,6 +2958,23 @@ func branchFromRunConfigJSON(runConfigJSON []byte) string {
 		return ""
 	}
 	return stringsx.FirstNonEmpty(raw.BaseBranch, raw.Branch)
+}
+
+func githubIssueURLFromRunConfigJSON(runConfigJSON []byte) string {
+	var raw struct {
+		GitHubIssue struct {
+			URL string `json:"url"`
+		} `json:"githubIssue"`
+	}
+	if err := json.Unmarshal(runConfigJSON, &raw); err != nil {
+		return ""
+	}
+	issueURL := strings.TrimSpace(raw.GitHubIssue.URL)
+	parsed, err := url.Parse(issueURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil {
+		return ""
+	}
+	return issueURL
 }
 
 func prURLFromRunConfigJSON(runConfigJSON []byte) string {
