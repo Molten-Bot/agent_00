@@ -86,10 +86,15 @@ const OpenDependencyReason = "required dependency is still open"
 var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\bblocked by (?:an? |the )?unmerged (?:pull request |pr )?\x60?#[1-9][0-9]*\b`)
 
 // A terse failure summary can leave the prerequisite itself to Error details.
-// Require a direct blocker summary followed by an explicit open reference.
+// The details must say the open ticket caused the blockage.
+const openDependencyReference = `(?:issue |pull request |pr )?(?:#[1-9][0-9]*|\x60#[1-9][0-9]*\x60|\[(?:issue |pull request |pr )?#[1-9][0-9]*\]\([^\s()]+\))`
+
 var (
 	blockedFailureSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\b(?:remains|is) blocked[.!]?$`)
-	openDependencyDetail  = regexp.MustCompile(`^(?:issue |pull request |pr )?(?:#[1-9][0-9]*|\x60#[1-9][0-9]*\x60) is still open(?:[.!](?:\s|$)|$)`)
+	openDependencyDetail  = regexp.MustCompile(`^(?:` +
+		openDependencyReference + ` is still open and (?:blocks|is blocking) [a-z0-9]|blocked (?:because ` +
+		openDependencyReference + ` is still open|(?:by|on) ` +
+		openDependencyReference + `, which is still open)(?:[.!](?:\s|$)|$))`)
 )
 
 var nonRemediableFailureMarkers = []string{

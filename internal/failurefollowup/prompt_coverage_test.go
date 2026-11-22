@@ -141,15 +141,20 @@ func TestNonRemediableFailureReasonRecognizesUnmergedPrerequisite(t *testing.T) 
 func TestNonRemediableFailureReasonRecognizesOpenPrerequisite(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ message, want string }{
-		{"codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open. Sample data is pending.", OpenDependencyReason},
-		{"claude: claude reported failure: Failure: Import is blocked.\nError details: Issue `#72` is still open.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open and blocks the export.", OpenDependencyReason},
+		{"claude: claude reported failure: Failure: Import is blocked.\nError details: Blocked by issue `#72`, which is still open.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: [#72](https://github.com/example/project/issues/72) is still open and blocks the export.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: Blocked because [issue #72](https://github.com/example/project/issues/72) is still open.", OpenDependencyReason},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open.", ""},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open. The export fails with a parser panic.", ""},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: [#72](https://github.com/example/project/issues/72) is still open. The export fails with a parser panic.", ""},
 		{"codex: codex reported failure: Failure: Parser crashes. Error details: #72 is still open.", ""},
-		{"codex: codex reported failure: Failure: Export remains blocked. Error details: Fixture says #72 is still open.", ""},
+		{"codex: codex reported failure: Failure: Export remains blocked. Error details: Fixture says #72 is still open and blocks the export.", ""},
 		{"codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open but unrelated.", ""},
-		{"codex: codex reported failure: Failure: Export is no longer blocked. Error details: #72 is still open.", ""},
-		{"codex: codex reported failure: Failure: Parser rejects 'Export remains blocked'. Error details: #72 is still open.", ""},
+		{"codex: codex reported failure: Failure: Export is no longer blocked. Error details: #72 is still open and blocks the export.", ""},
+		{"codex: codex reported failure: Failure: Parser rejects 'Export remains blocked'. Error details: #72 is still open and blocks the export.", ""},
 		{"codex: codex reported failure: Failure: Export remains blocked. Error details: Sample data is invalid.", ""},
-		{"git: Failure: Export remains blocked. Error details: #72 is still open.", ""},
+		{"git: Failure: Export remains blocked. Error details: #72 is still open and blocks the export.", ""},
 	} {
 		if got := NonRemediableFailureReason(errors.New(tc.message)); got != tc.want {
 			t.Errorf("NonRemediableFailureReason(%q) = %q, want %q", tc.message, got, tc.want)

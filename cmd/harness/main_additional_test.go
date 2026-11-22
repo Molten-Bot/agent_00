@@ -1442,10 +1442,18 @@ func TestShouldQueueFailureFollowUpSkipsNonRemediableFailureReasons(t *testing.T
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
 		ExitCode: app.ExitCodex,
-		Err:      errors.New("codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open. Sample data is pending."),
+		Err:      errors.New("codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open and blocks the export."),
 	})
 	if ok || !strings.Contains(reason, "required dependency is still open") {
 		t.Fatalf("shouldQueueFailureFollowUp(open prerequisite) = (%v, %q), want dependency skip", ok, reason)
+	}
+
+	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{
+		ExitCode: app.ExitCodex,
+		Err:      errors.New("codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open. The export fails with a parser panic."),
+	})
+	if !ok || reason != "" {
+		t.Fatalf("shouldQueueFailureFollowUp(incidental open ticket) = (%v, %q), want actionable follow-up", ok, reason)
 	}
 
 	ok, reason = shouldQueueFailureFollowUp("local_submit", app.Result{

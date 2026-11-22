@@ -609,7 +609,7 @@ func TestIssueRecoveryBlocksPrerequisiteWithoutRepair(t *testing.T) {
 		},
 		{
 			name:     "open dependency",
-			report:   "Export remains blocked. Error details: #72 is still open. Sample data is pending.",
+			report:   "Export remains blocked. Error details: [#72](https://github.com/example/project/issues/72) is still open and blocks the export.",
 			incident: openDependencyIncident,
 			want:     "required dependency is still open; explicit retry required after resolution",
 		},
