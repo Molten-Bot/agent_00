@@ -407,8 +407,10 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 	}{
 		{"queued and linked", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
 		{"dispatch intent without a claim link", "running", "", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
+		{"joined provisioning and flag status", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding | API and MCP flags default to off.", true},
 		{"actionable", "queued", "50", "IAM approval and Secrets Manager provisioning are complete, but local fixes remain outstanding.", false},
 		{"actionable after provisioning details", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding. Deployment tests fail.", false},
+		{"actionable flag regression", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding | Due to a regression API flags default to off.", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			claims, issue := lifecycleRecord(t)

@@ -91,7 +91,7 @@ var outstandingProvisioning = regexp.MustCompile(` (?:remain|are)(?: still)? (?:
 var provisioningListSeparator = regexp.MustCompile(`, (?:and )?| and `)
 var iamProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:scoped iam|(?:scoped )?iam (?:access|approval|configuration|permissions?|polic(?:y|ies)|roles?|setup))$`)
 var secretProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:shared )?secrets manager (?:configuration|keys?|provisioning|secrets?|setup)$`)
-var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_ -]* flags? defaults? to (?:off|disabled))$`)
+var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* flags? defaults? to (?:off|disabled))$`)
 
 var nonRemediableFailureMarkers = []string{
 	"no space left on device",
@@ -426,7 +426,9 @@ func NonRemediableFailureReason(err error) string {
 }
 
 func hasOutstandingRolloutProvisioning(details string) bool {
-	statements := strings.FieldsFunc(strings.TrimSpace(details), func(r rune) bool {
+	// The harness may flatten multiline error details with " | ".
+	details = strings.ReplaceAll(strings.TrimSpace(details), " | ", "\n")
+	statements := strings.FieldsFunc(details, func(r rune) bool {
 		return r == '.' || r == '!' || r == '?' || r == '\r' || r == '\n'
 	})
 	if len(statements) == 0 {
