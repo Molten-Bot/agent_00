@@ -99,8 +99,10 @@ var (
 		` is still open and (?:blocks|is blocking) `)
 	rolloutOperation             = regexp.MustCompile(`\brollout(?: for .+)?$`)
 	openDependencyEvidenceDetail = regexp.MustCompile(`^` + openDependencyReference +
-		` is still open\.\s+its [^.!?;\r\n]+ lacks? [^.!?;\r\n]+ (?:needed|required) for evidence reads` +
-		`(?: |\.\s+(?:(?:those|the) )?evidence reads are )(?:needed|required) for `)
+		` is still open\.\s+its [^.!?;\r\n]+ lacks? [^.!?;\r\n]+ (?:needed|required) for evidence reads\b`)
+	evidenceRolloutTarget = regexp.MustCompile(`^(?: |\.\s+(?:(?:those|the) )?evidence reads are )(?:needed|required) for `)
+	evidenceDisabled      = regexp.MustCompile(`^\.\s+(?:[^.!?;\r\n]+ (?:is|are|remains?) pending\.\s+)?` +
+		`(?:[a-z0-9 -]+ )?evidence (?:stays?|remains?) disabled(?: by default)?[.!]?$`)
 	issueIDCodeSpan = regexp.MustCompile(`\x60(` + issueID + `)\x60`)
 	operationEnd    = regexp.MustCompile(`^(?:[.!](?:\s|$)|$)`)
 )
@@ -442,23 +444,24 @@ func isOpenDependencyFailure(summary, detail string) bool {
 	if blocked == nil {
 		return false
 	}
-	if blocked[2] != "" {
+	detail = strings.TrimSpace(detail)
+	if blocked[2] != "" || openDependencyDetail.MatchString(detail) {
 		return true
 	}
 	if blocked[1] == "" {
 		return false
-	}
-	detail = strings.TrimSpace(detail)
-	if openDependencyDetail.MatchString(detail) {
-		return true
 	}
 	operation := normalizeDependencyOperation(blocked[1])
 	if prefix := openDependencyTarget.FindStringIndex(detail); prefix != nil {
 		return matchesDependencyOperation(operation, detail[prefix[1]:])
 	}
 	if prefix := openDependencyEvidenceDetail.FindStringIndex(detail); prefix != nil && rolloutOperation.MatchString(operation) {
-		target := detail[prefix[1]:]
-		return matchesDependencyOperation(operation, target) || matchesDependencyOperation("rollout", target)
+		rest := detail[prefix[1]:]
+		if targetPrefix := evidenceRolloutTarget.FindStringIndex(rest); targetPrefix != nil {
+			target := rest[targetPrefix[1]:]
+			return matchesDependencyOperation(operation, target) || matchesDependencyOperation("rollout", target)
+		}
+		return evidenceDisabled.MatchString(rest)
 	}
 	return false
 }
