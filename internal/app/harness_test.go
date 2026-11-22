@@ -3121,6 +3121,7 @@ func TestRunNoChangesOnMainReportsExistingPR(t *testing.T) {
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
 	branch := "agent00-build-api"
 	prURL := "https://github.com/acme/repo/pull/123"
+	const prTitle = "Title of existing PR"
 
 	fake := &fakeRunner{t: t, exps: []expectedRun{
 		{cmd: execx.Command{Name: "git", Args: []string{"--version"}}},
@@ -3133,13 +3134,17 @@ func TestRunNoChangesOnMainReportsExistingPR(t *testing.T) {
 		{cmd: codexCommand(targetDir, withAgentsPrompt(cfg.Prompt, agentsPath))},
 		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "\n"}},
 		{cmd: remoteBranchExistsOnOriginCommand(repoDir, branch), res: execx.Result{Stdout: "abc123\trefs/heads/" + branch + "\n"}},
-		{cmd: prLookupByHeadCommand(repoDir, branch), res: execx.Result{Stdout: "[{\"url\":\"" + prURL + "\"}]\n"}},
+		{cmd: prLookupByHeadCommand(repoDir, branch), res: execx.Result{Stdout: fmt.Sprintf(`[{"url":%q,"title":%q}]`, prURL, prTitle)}},
 	}}
 
 	h := New(fake)
 	h.Now = func() time.Time { return now }
 	h.Workspace = testWorkspaceManager(guid)
 	h.TargetDirOK = func(path string) bool { return path == targetDir }
+	var reportedURL, reportedTitle string
+	h.OnPRTitle = func(url, title string) {
+		reportedURL, reportedTitle = url, title
+	}
 
 	res := h.Run(context.Background(), cfg)
 	if res.Err != nil {
@@ -3159,6 +3164,9 @@ func TestRunNoChangesOnMainReportsExistingPR(t *testing.T) {
 	}
 	if got, want := res.RepoResults[0].PRURL, prURL; got != want {
 		t.Fatalf("RepoResults[0].PRURL = %q, want %q", got, want)
+	}
+	if reportedURL != prURL || reportedTitle != prTitle {
+		t.Fatalf("reported PR = (%q, %q), want (%q, %q)", reportedURL, reportedTitle, prURL, prTitle)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))

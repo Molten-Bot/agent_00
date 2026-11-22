@@ -90,8 +90,11 @@ func completeRecoveryRecord(t *testing.T, s Server, outcome string, attempts int
 	}
 	return record
 }
+
+const recoveryPRTitle = "Manually opened PR"
+
 func recoveryPR(state, merged, head, base string) string {
-	return `[{"number":42,"state":"` + state + `","merged_at":` + merged + `,"head":{"ref":"` + head + `","repo":{"full_name":"acme/repo"}},"base":{"ref":"` + base + `","repo":{"full_name":"acme/repo"}}}]`
+	return `[{"number":42,"title":"` + recoveryPRTitle + `","state":"` + state + `","merged_at":` + merged + `,"head":{"ref":"` + head + `","repo":{"full_name":"acme/repo"}},"base":{"ref":"` + base + `","repo":{"full_name":"acme/repo"}}}]`
 }
 
 func TestExplicitIssueRecoveryUsesPersistentOwner(t *testing.T) {
@@ -436,6 +439,7 @@ func TestIssueRecoveryUnlocksOnlyAfterWorkerExit(t *testing.T) {
 
 func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 	t.Parallel()
+	const prURL = "https://github.com/acme/repo/pull/42"
 	for _, tc := range []struct {
 		name, state, merged, head, base string
 		fulfilled                       bool
@@ -449,7 +453,8 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := recoveryServer(t)
 			s.pollGitHubIssueAutoStart(context.Background())
-			completeRecoveryRecord(t, s, "error", 1)
+			record := completeRecoveryRecord(t, s, "error", 1)
+			s.Broker.IngestLog("task status=error request_id=" + record.RequestID)
 			f.prs = recoveryPR(tc.state, tc.merged, tc.head, tc.base)
 			if err := s.ReconcileIssueWork(context.Background()); err != nil {
 				t.Fatal(err)
@@ -458,8 +463,20 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 			if (got.State == "fulfilled") != tc.fulfilled {
 				t.Fatalf("state=%s", got.State)
 			}
-			if tc.fulfilled && got.PRURL != "https://github.com/acme/repo/pull/42" {
+			if tc.fulfilled && got.PRURL != prURL {
 				t.Fatal("missing verified PR")
+			}
+			task, ok := s.Broker.Task(record.RequestID)
+			if !ok {
+				t.Fatal("missing task")
+			}
+			if tc.fulfilled {
+				if task.PRURL != prURL || task.PRTitleURL != prURL || task.PRTitle != recoveryPRTitle {
+					t.Fatalf("task PR = (%q, %q, %q), want (%q, %q, %q)",
+						task.PRURL, task.PRTitleURL, task.PRTitle, prURL, prURL, recoveryPRTitle)
+				}
+			} else if task.PRURL != "" || task.PRTitle != "" {
+				t.Fatalf("unverified PR published to task: (%q, %q)", task.PRURL, task.PRTitle)
 			}
 		})
 	}

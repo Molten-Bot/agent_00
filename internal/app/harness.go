@@ -195,7 +195,7 @@ type Harness struct {
 	OnStep func(string)
 	// OnCheckout reports that all repositories have been checked out successfully.
 	OnCheckout func()
-	// OnPRTitle reports the title after PR creation, creation recovery, or a title update.
+	// OnPRTitle reports the title after PR creation, reuse, or a title update.
 	OnPRTitle            func(url, title string)
 	ResumeIssueWorkspace bool
 	// IssuePublicationReady records that a prior attempt accepted the agent result.
@@ -2569,7 +2569,7 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 		if repos[i].RequireExistingPR && repos[i].PRURL != "" {
 			continue
 		}
-		prURL, err := h.lookupOpenPRURLByHead(ctx, repos[i])
+		pr, err := h.lookupOpenPRByHead(ctx, repos[i])
 		if err != nil {
 			h.logf(
 				"stage=pr status=warn action=lookup_existing reason=failed repo=%s repo_dir=%s branch=%s err=%q",
@@ -2583,6 +2583,7 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 			}
 			continue
 		}
+		prURL := pr.URL
 		if prURL == "" {
 			prURL, err = h.lookupAnyPRURLByHead(ctx, repos[i])
 			if err != nil {
@@ -2641,6 +2642,9 @@ func (h Harness) populateNoChangePRURLs(ctx context.Context, repos []repoWorkspa
 			continue
 		}
 		repos[i].PRURL = prURL
+		if h.OnPRTitle != nil && pr.URL != "" && pr.Title != "" {
+			h.OnPRTitle(pr.URL, pr.Title)
+		}
 		h.logf(
 			"stage=pr status=ok action=lookup_existing repo=%s repo_dir=%s branch=%s pr_url=%s",
 			repos[i].URL,

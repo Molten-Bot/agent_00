@@ -277,13 +277,19 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		if err != nil {
 			return s.deferIssueRecord(record, err)
 		}
-		if pr != "" {
-			record.PRURL = pr
+		if pr.URL != "" {
+			record.PRURL = pr.URL
 			record.VerifiedAt = time.Now().UTC()
 			record.State = "fulfilled"
 			record.Error = ""
 			record.NextAttemptAt = time.Time{}
-			return s.IssueClaims.Save(record)
+			if err := s.IssueClaims.Save(record); err != nil {
+				return err
+			}
+			if s.Broker != nil {
+				s.Broker.RecordTaskPRTitle(record.RequestID, pr.URL, pr.Title)
+			}
+			return nil
 		}
 	}
 	// A restored owner can finalize a stopped attempt. Dispatch still requires
@@ -531,16 +537,22 @@ func (s Server) unlockIssue(ctx context.Context, record *localruntime.IssueClaim
 	return s.IssueClaims.Save(*record)
 }
 
-func (s Server) verifiedIssuePR(ctx context.Context, issue *config.GitHubIssueConfig) (string, error) {
+type verifiedIssuePullRequest struct {
+	URL   string
+	Title string
+}
+
+func (s Server) verifiedIssuePR(ctx context.Context, issue *config.GitHubIssueConfig) (verifiedIssuePullRequest, error) {
 	owner, _, _ := strings.Cut(issue.Repository, "/")
 	for page := 1; ; page++ {
 		query := url.Values{"state": {"all"}, "head": {owner + ":" + issue.Claim.Branch}, "base": {issue.Claim.BaseBranch}, "per_page": {"100"}, "page": {fmt.Sprint(page)}}
 		result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "repos/" + issue.Repository + "/pulls?" + query.Encode()}})
 		if err != nil {
-			return "", err
+			return verifiedIssuePullRequest{}, err
 		}
 		var prs []struct {
 			Number   int
+			Title    string
 			State    string
 			MergedAt *time.Time `json:"merged_at"`
 			Head     struct {
@@ -557,15 +569,18 @@ func (s Server) verifiedIssuePR(ctx context.Context, issue *config.GitHubIssueCo
 			}
 		}
 		if err := json.Unmarshal([]byte(result.Stdout), &prs); err != nil {
-			return "", err
+			return verifiedIssuePullRequest{}, err
 		}
 		for _, pr := range prs {
 			if pr.Number > 0 && (pr.State == "open" || pr.MergedAt != nil) && pr.Head.Ref == issue.Claim.Branch && pr.Base.Ref == issue.Claim.BaseBranch && strings.EqualFold(pr.Head.Repo.FullName, issue.Repository) && strings.EqualFold(pr.Base.Repo.FullName, issue.Repository) {
-				return fmt.Sprintf("https://github.com/%s/pull/%d", issue.Repository, pr.Number), nil
+				return verifiedIssuePullRequest{
+					URL:   fmt.Sprintf("https://github.com/%s/pull/%d", issue.Repository, pr.Number),
+					Title: pr.Title,
+				}, nil
 			}
 		}
 		if len(prs) < 100 {
-			return "", nil
+			return verifiedIssuePullRequest{}, nil
 		}
 	}
 }
