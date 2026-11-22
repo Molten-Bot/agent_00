@@ -7041,46 +7041,47 @@ func isNonFatalRemoteDeploymentAuthFailure(detail string, res execx.Result) bool
 
 func codexExtractErrorDetail(output string) string {
 	lines := splitOutputLines(output)
-	if len(lines) == 0 {
-		return ""
-	}
-
-	nonEmpty := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		nonEmpty = append(nonEmpty, trimmed)
-	}
-	if len(nonEmpty) == 0 {
-		return ""
-	}
-
-	for i, line := range nonEmpty {
+	for i, line := range lines {
 		field := agentFailureFieldLine(line)
 		lower := strings.ToLower(field)
 		if strings.HasPrefix(lower, "error details:") {
-			suffix := strings.TrimSpace(field[len("error details:"):])
-			if suffix != "" {
-				return "Error details: " + suffix
-			}
-			extra := codexJoinErrorDetailLines(nonEmpty[i+1:])
-			if extra != "" {
-				return "Error details: " + extra
+			detail := agentErrorDetailField(field[len("error details:"):], lines[i+1:])
+			if detail != "" {
+				return "Error details: " + detail
 			}
 			return "Error details: unknown error."
 		}
 		if isStructuredFailureErrorLine(line) {
-			return line
+			return strings.TrimSpace(line)
 		}
 	}
 
-	fallback := codexJoinErrorDetailLines(nonEmpty)
+	fallback := codexJoinErrorDetailLines(lines)
 	if fallback == "" {
 		return ""
 	}
 	return "Error details: " + fallback
+}
+
+func agentErrorDetailField(suffix string, lines []string) string {
+	var details []string
+	if suffix = strings.TrimSpace(suffix); suffix != "" {
+		details = append(details, suffix)
+	}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if (line == "" && len(details) == 0) || isMarkdownCodeFence(line) {
+			continue
+		}
+		field := strings.ToLower(agentFailureFieldLine(line))
+		if line == "" || strings.HasPrefix(line, "##") || strings.HasPrefix(line, "# ") ||
+			strings.HasPrefix(field, "resolved issue:") || strings.HasPrefix(field, "failure:") ||
+			strings.HasPrefix(field, "error details:") {
+			break
+		}
+		details = append(details, line)
+	}
+	return strings.Join(details, "\n")
 }
 
 func codexJoinErrorDetailLines(lines []string) string {

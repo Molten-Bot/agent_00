@@ -46,6 +46,7 @@ func TestIssueRepairOutboxRechecksDependencyBlockers(t *testing.T) {
 	for _, tc := range []struct {
 		name, captured, current, incident, want string
 		missingReceipt, missingLogRoot, legacy  bool
+		changedLogRoot                          bool
 	}{
 		{
 			name:     "legacy queued report",
@@ -86,6 +87,16 @@ func TestIssueRepairOutboxRechecksDependencyBlockers(t *testing.T) {
 			legacy:         true,
 		},
 		{
+			name:           "legacy source reclassified without receipt after log root changes",
+			captured:       "temporary recovery failure",
+			current:        "upstream changes are pending",
+			incident:       localruntime.IssueIncidentOpenDependency,
+			want:           failurefollowup.OpenDependencyReason,
+			missingReceipt: true,
+			legacy:         true,
+			changedLogRoot: true,
+		},
+		{
 			name:           "source reclassified without receipt or log path",
 			captured:       "temporary recovery failure",
 			current:        "upstream changes are pending",
@@ -104,19 +115,18 @@ func TestIssueRepairOutboxRechecksDependencyBlockers(t *testing.T) {
 			issue.Incident = "missing_pr"
 			issue.RunError = tc.captured
 			issue.ExitCode = app.ExitCodex
-			id, err := q.capture(context.Background(), issue)
-			if err != nil {
-				t.Fatal(err)
-			}
+			var id string
 			if tc.legacy {
-				repairs, err := q.store.List()
-				if err != nil || len(repairs) != 1 {
-					t.Fatalf("repair records = %d, err = %v", len(repairs), err)
-				}
-				repairs[0].SourceClaimID = ""
-				if err := q.store.Save(repairs[0]); err != nil {
+				id = saveLegacyIssueRepair(t, &q, issue).RequestID
+			} else {
+				var err error
+				id, err = q.capture(context.Background(), issue)
+				if err != nil {
 					t.Fatal(err)
 				}
+			}
+			if tc.changedLogRoot {
+				q.logRoot = t.TempDir()
 			}
 			if tc.current != "" || tc.incident != "" || tc.missingReceipt {
 				if !tc.missingReceipt {
@@ -147,6 +157,110 @@ func TestIssueRepairOutboxRechecksDependencyBlockers(t *testing.T) {
 				t.Fatalf("repair state = %q, started = %t, error = %q", got.State, got.Started, got.Error)
 			}
 		})
+	}
+}
+
+func saveLegacyIssueRepair(t *testing.T, q *issueRepairQueue, issue localruntime.IssueClaimRecord) localruntime.IssueRepairRecord {
+	t.Helper()
+	id := issueRepairID(issue)
+	result := app.Result{ExitCode: issue.ExitCode, Err: errors.New(issue.FailureDetail())}
+	record := localruntime.IssueRepairRecord{
+		ID: id, RequestID: "repair-" + id, State: "queued",
+		Run: failureFollowUpRunConfig(issue.RequestID, result, issue.Run, q.logRoot),
+	}
+	if err := q.store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	return record
+}
+
+func TestIssueRepairDependencyBlockDoesNotSuppressAnotherClaim(t *testing.T) {
+	t.Parallel()
+	for _, legacy := range []bool{false, true} {
+		name := "new claim"
+		if legacy {
+			name = "legacy shared receipt"
+		}
+		t.Run(name, func(t *testing.T) {
+			testIssueRepairDependencyBlockDoesNotSuppressAnotherClaim(t, legacy)
+		})
+	}
+}
+
+func testIssueRepairDependencyBlockDoesNotSuppressAnotherClaim(t *testing.T, legacy bool) {
+	t.Helper()
+	claims, blocked := lifecycleRecord(t)
+	q := issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, claims: claims, logRoot: t.TempDir(), logf: t.Logf}
+	blocked.Incident = "missing_pr"
+	blocked.RunError = "worker failed in /private/first"
+	other := blocked
+	other.ID = strings.Repeat("b", 32)
+	other.RequestID = "issue-" + other.ID
+	other.RunError = "worker failed in /private/second"
+	otherIssue := *blocked.Run.GitHubIssue
+	otherClaim := *otherIssue.Claim
+	otherClaim.ID = other.ID
+	otherIssue.Claim = &otherClaim
+	otherIssue.Number++
+	other.Run.GitHubIssue = &otherIssue
+	var blockedID string
+	if legacy {
+		blockedID = saveLegacyIssueRepair(t, &q, blocked).RequestID
+		q.logRoot = t.TempDir()
+		if id, err := q.capture(context.Background(), blocked); err != nil || id != blockedID {
+			t.Fatalf("source claim capture = %q, %v, want %q", id, err, blockedID)
+		}
+		blocked.RepairRequestID = blockedID
+		other.RepairRequestID = blockedID
+		if err := claims.Save(other); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		var err error
+		blockedID, err = q.capture(context.Background(), blocked)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if shared, err := q.capture(context.Background(), other); err != nil || shared != blockedID {
+			t.Fatalf("matching actionable failure captured as %q, %v, want %q", shared, err, blockedID)
+		}
+	}
+	blocked.Incident = localruntime.IssueIncidentOpenDependency
+	if err := claims.Save(blocked); err != nil {
+		t.Fatal(err)
+	}
+	q.reconcile(context.Background(), func(context.Context, config.Config, bool, string, bool) (string, error) {
+		t.Fatal("blocked dependency repair dispatched")
+		return "", nil
+	})
+	if legacy {
+		stored, err := claims.Load(other.ID)
+		if err != nil || stored.RepairRequestID != "" {
+			t.Fatalf("unrelated claim still points at blocked repair: %q, %v", stored.RepairRequestID, err)
+		}
+		owner, err := claims.Load(blocked.ID)
+		if err != nil || owner.RepairRequestID != blockedID {
+			t.Fatalf("source receipt = %q, %v, want %q", owner.RepairRequestID, err, blockedID)
+		}
+		other = stored
+	} else if err := claims.Save(other); err != nil {
+		t.Fatal(err)
+	}
+	otherID, err := q.capture(context.Background(), other)
+	if err != nil || otherID == blockedID {
+		t.Fatalf("unrelated claim captured as %q, err = %v, blocker = %q", otherID, err, blockedID)
+	}
+	if again, err := q.capture(context.Background(), other); err != nil || again != otherID {
+		t.Fatalf("unrelated claim recaptured as %q, %v, want %q", again, err, otherID)
+	}
+	var dispatched []string
+	q.reconcile(context.Background(), func(ctx context.Context, _ config.Config, _ bool, _ string, _ bool) (string, error) {
+		work := ctx.Value(issueRepairContextKey{}).(*issueRepairWork)
+		dispatched = append(dispatched, work.record.RequestID)
+		return work.record.RequestID, work.lock.Close()
+	})
+	if len(dispatched) != 1 || dispatched[0] != otherID {
+		t.Fatalf("dispatched %v, want only %q", dispatched, otherID)
 	}
 }
 

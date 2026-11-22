@@ -94,8 +94,8 @@ const evidenceAccessPrerequisite = `(?:credential setup|(?:scoped )?iam|(?:share
 const blockerDetailEnd = `(?:[.!](?:\s|$)| \| |$)`
 const rolloutEvidenceChannel = `(?:api|cli|mcp)`
 
-// The harness joins separate report lines with " | ", with or without
-// punctuation at the end of each original line.
+// Older reports join separate lines with " | ", with or without punctuation
+// at the end of each original line.
 const evidenceSentenceBreak = `(?:\.\s+(?:\|\s+)?| \| )`
 
 var (
@@ -458,14 +458,26 @@ func isOpenDependencyFailure(summary, detail string) bool {
 	if blocked == nil || negatedBlockerOperation.MatchString(strings.TrimSpace(blocked[1])) {
 		return false
 	}
-	detail = strings.TrimSpace(detail)
-	if blocked[2] != "" || openDependencyDetail.MatchString(detail) {
+	if blocked[2] != "" {
 		return true
 	}
-	if blocked[1] == "" {
+	// Match wrapped prose without changing the error retained for diagnosis.
+	detail = strings.TrimSpace(detail)
+	if matchesOpenDependencyDetail(blocked[1], strings.Join(strings.Fields(detail), " ")) {
+		return true
+	}
+	// Preserve detection for reports that use line breaks as sentence boundaries.
+	return strings.Contains(detail, "\n") && matchesOpenDependencyDetail(blocked[1], strings.ReplaceAll(detail, "\n", " | "))
+}
+
+func matchesOpenDependencyDetail(operation, detail string) bool {
+	if openDependencyDetail.MatchString(detail) {
+		return true
+	}
+	if operation == "" {
 		return false
 	}
-	operation := normalizeDependencyOperation(blocked[1])
+	operation = normalizeDependencyOperation(operation)
 	if prefix := openDependencyTarget.FindStringIndex(detail); prefix != nil {
 		return matchesDependencyOperation(operation, detail[prefix[1]:])
 	}
