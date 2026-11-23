@@ -1257,7 +1257,7 @@
     }
 
     const initialRouteHash = window.location.hash;
-    let initialRoutePending = appDisplayFromHash() !== "studio" || promptModeFromHash() === "json";
+    let initialRoutePending = appDisplayFromHash() !== "studio" || ["json", "issues"].includes(promptModeFromHash());
 
     function trackAppPageView() {
       // Deep links can temporarily fall back to Studio while availability loads.
@@ -13551,19 +13551,28 @@
 
     function trackObservedTaskStatuses(previous, current) {
       if (!previous || previous === current) return;
-      const previousStatuses = new Map((previous.tasks || []).map(task =>
-        [taskRequestID(task), analyticsTaskStatus(task)]));
+      const previousTasks = new Map((previous.tasks || []).map(task => [taskRequestID(task), task]));
       for (const task of current.tasks || []) {
         const id = taskRequestID(task);
-        const status = analyticsTaskStatus(task);
-        const previousStatus = previousStatuses.get(id);
-        if (!id || !status || status === previousStatus) continue;
-        const key = JSON.stringify([id, task.started_at, task.status_revision ?? task.updated_at, status]);
-        void trackTaskStatusOnce(key, {
-          task_status: status,
-          previous_status: previousStatus,
-          source: taskStartSource(task) || "unknown",
+        const prior = previousTasks.get(id);
+        const transitions = (task.status_transitions || []).filter(transition =>
+          transition.revision > (prior?.status_revision ?? 0));
+        // Older servers expose only the latest status.
+        if (!transitions.length) transitions.push({
+          status: task.status, previous_status: prior?.status,
+          revision: task.status_revision ?? task.updated_at,
         });
+        for (const transition of transitions) {
+          const status = analyticsTaskStatus({ status: transition.status });
+          const previousStatus = analyticsTaskStatus({ status: transition.previous_status });
+          if (!id || !status || status === previousStatus) continue;
+          const key = JSON.stringify([id, task.started_at, transition.revision, status]);
+          void trackTaskStatusOnce(key, {
+            task_status: status,
+            previous_status: previousStatus || undefined,
+            source: taskStartSource(task) || "unknown",
+          });
+        }
       }
     }
 

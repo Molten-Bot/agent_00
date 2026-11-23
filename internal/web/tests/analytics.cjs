@@ -154,6 +154,8 @@ test('Current Work, Chat, and JSON deep links wait for route availability', asyn
     ['chat', '**/api/github/repos?*', { status: 503 }, 'studio-builder'],
     ['studio-json', '**/api/review-settings', { json: { settings: { json_enabled: true } } }, 'studio-json'],
     ['studio-json', '**/api/review-settings', { json: { settings: { json_enabled: false } } }, 'studio-builder'],
+    ['studio-issues', '**/api/review-settings', { json: { settings: { github_issues_enabled: false } } }, 'studio-builder'],
+    ['studio-issues', '**/api/review-settings', { json: { settings: { github_issues_enabled: true } } }, 'studio-issues'],
   ];
   for (const [hash, endpoint, response, display] of cases) {
     const page = await openPage(t);
@@ -264,3 +266,22 @@ test('Automation scan reports acceptance for HTTP 202', async t => {
   await expect.poll(async () => await events(page, 'github_automation_scan_accepted')).toHaveLength(1);
   assert.equal((await events(page, 'github_automation_scan_queued')).length, 0);
 });
+
+ test('Server-coalesced snapshots preserve pause and resume transitions', async t => {
+  const page = await openPage(t, { initialSnapshot: { ...snapshot, tasks: [{
+    request_id: 'coalesced-fixture', status: 'running', status_revision: 1,
+  }] } });
+  await page.goto(baseURL);
+  await page.waitForFunction(() => state.snapshot !== null);
+  await page.evaluate(snapshot => window.testTaskStream.onmessage({ data: JSON.stringify({
+    ...snapshot, tasks: [{ request_id: 'coalesced-fixture', status: 'running', status_revision: 3,
+      status_transitions: [
+        { revision: 1, status: 'running', previous_status: 'pending' },
+        { revision: 2, status: 'paused', previous_status: 'running' },
+        { revision: 3, status: 'running', previous_status: 'paused' },
+      ],
+    }],
+  }) }), snapshot);
+  await expect.poll(async () => (await events(page, 'task_status_observed')).map(event => event.task_status))
+    .toEqual(['paused', 'running']);
+ });

@@ -61,43 +61,51 @@ type TaskControls struct {
 }
 
 // Task represents one local task execution state.
+// TaskStatusTransition preserves lifecycle changes between coalesced snapshots.
+type TaskStatusTransition struct {
+	Revision       uint64 `json:"revision"`
+	Status         string `json:"status"`
+	PreviousStatus string `json:"previous_status"`
+}
+
 type Task struct {
-	RequestID         string               `json:"request_id"`
-	Source            string               `json:"source,omitempty"`
-	Prompt            string               `json:"prompt,omitempty"`
-	PromptIsUserInput bool                 `json:"prompt_is_user_input"`
-	Images            []PromptImage        `json:"images,omitempty"`
-	Assets            []githubassets.Asset `json:"assets,omitempty"`
-	Skill             string               `json:"skill,omitempty"`
-	Workflow          string               `json:"workflow,omitempty"`
-	AgentHarness      string               `json:"agent_harness,omitempty"`
-	Repo              string               `json:"repo,omitempty"`
-	Repos             []string             `json:"repos,omitempty"`
-	Reviewers         []string             `json:"reviewers,omitempty"`
-	BaseBranch        string               `json:"base_branch,omitempty"`
-	AutoMerge         bool                 `json:"auto_merge,omitempty"`
-	Status            string               `json:"status"`
-	StatusRevision    uint64               `json:"status_revision"`
-	Stage             string               `json:"stage,omitempty"`
-	StageStatus       string               `json:"stage_status,omitempty"`
-	ExitCode          int                  `json:"exit_code,omitempty"`
-	WorkspaceDir      string               `json:"workspace_dir,omitempty"`
-	Branch            string               `json:"branch,omitempty"`
-	GitHubIssueURL    string               `json:"github_issue_url,omitempty"`
-	PRURL             string               `json:"pr_url,omitempty"`
-	IssueTitle        string               `json:"issue_title,omitempty"`
-	PRTitle           string               `json:"pr_title,omitempty"`
-	PRTitleURL        string               `json:"pr_title_url,omitempty"`
-	PRTitleUpdatedAt  string               `json:"pr_title_updated_at,omitempty"`
-	LiveAppURL        string               `json:"live_app_url,omitempty"`
-	Error             string               `json:"error,omitempty"`
-	Warning           string               `json:"warning,omitempty"`
-	StartedAt         string               `json:"started_at"`
-	UpdatedAt         string               `json:"updated_at"`
-	DurationSeconds   float64              `json:"duration_seconds,omitempty"`
-	CanRerun          bool                 `json:"can_rerun,omitempty"`
-	Controls          TaskControls         `json:"controls,omitempty"`
-	Logs              []TaskLog            `json:"logs"`
+	RequestID         string                 `json:"request_id"`
+	Source            string                 `json:"source,omitempty"`
+	Prompt            string                 `json:"prompt,omitempty"`
+	PromptIsUserInput bool                   `json:"prompt_is_user_input"`
+	Images            []PromptImage          `json:"images,omitempty"`
+	Assets            []githubassets.Asset   `json:"assets,omitempty"`
+	Skill             string                 `json:"skill,omitempty"`
+	Workflow          string                 `json:"workflow,omitempty"`
+	AgentHarness      string                 `json:"agent_harness,omitempty"`
+	Repo              string                 `json:"repo,omitempty"`
+	Repos             []string               `json:"repos,omitempty"`
+	Reviewers         []string               `json:"reviewers,omitempty"`
+	BaseBranch        string                 `json:"base_branch,omitempty"`
+	AutoMerge         bool                   `json:"auto_merge,omitempty"`
+	Status            string                 `json:"status"`
+	StatusRevision    uint64                 `json:"status_revision"`
+	StatusTransitions []TaskStatusTransition `json:"status_transitions,omitempty"`
+	Stage             string                 `json:"stage,omitempty"`
+	StageStatus       string                 `json:"stage_status,omitempty"`
+	ExitCode          int                    `json:"exit_code,omitempty"`
+	WorkspaceDir      string                 `json:"workspace_dir,omitempty"`
+	Branch            string                 `json:"branch,omitempty"`
+	GitHubIssueURL    string                 `json:"github_issue_url,omitempty"`
+	PRURL             string                 `json:"pr_url,omitempty"`
+	IssueTitle        string                 `json:"issue_title,omitempty"`
+	PRTitle           string                 `json:"pr_title,omitempty"`
+	PRTitleURL        string                 `json:"pr_title_url,omitempty"`
+	PRTitleUpdatedAt  string                 `json:"pr_title_updated_at,omitempty"`
+	LiveAppURL        string                 `json:"live_app_url,omitempty"`
+	Error             string                 `json:"error,omitempty"`
+	Warning           string                 `json:"warning,omitempty"`
+	StartedAt         string                 `json:"started_at"`
+	UpdatedAt         string                 `json:"updated_at"`
+	DurationSeconds   float64                `json:"duration_seconds,omitempty"`
+	CanRerun          bool                   `json:"can_rerun,omitempty"`
+	Controls          TaskControls           `json:"controls,omitempty"`
+	Logs              []TaskLog              `json:"logs"`
 }
 
 // PromptImage captures one prompt image attachment shown in task views.
@@ -318,6 +326,7 @@ type taskState struct {
 	AutoMerge         bool
 	Status            string
 	StatusRevision    uint64
+	StatusTransitions []TaskStatusTransition
 	Stage             string
 	StageStatus       string
 	ExitCode          int
@@ -542,6 +551,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			AutoMerge:         t.AutoMerge,
 			Status:            status,
 			StatusRevision:    t.StatusRevision,
+			StatusTransitions: slices.Clone(t.StatusTransitions),
 			Stage:             t.Stage,
 			StageStatus:       t.StageStatus,
 			ExitCode:          t.ExitCode,
@@ -656,6 +666,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		AutoMerge:         t.AutoMerge,
 		Status:            status,
 		StatusRevision:    t.StatusRevision,
+		StatusTransitions: slices.Clone(t.StatusTransitions),
 		Stage:             t.Stage,
 		StageStatus:       t.StageStatus,
 		ExitCode:          t.ExitCode,
@@ -1811,8 +1822,9 @@ func (b *Broker) MarkTaskPRMerged(requestID string, mergedAt string) error {
 	}
 
 	if task.Status != "merged" {
+		previousStatus := task.Status
 		task.Status = "merged"
-		task.StatusRevision++
+		task.recordStatusTransition(previousStatus)
 	}
 	task.Stage = "finalize"
 	task.StageStatus = "merged"
@@ -2125,7 +2137,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 	defer func() {
 		if t != nil {
 			if normalizeTaskTerminalStatus(t.Status) != previousStatus {
-				t.StatusRevision++
+				t.recordStatusTransition(previousStatus)
 			}
 			if isFinalTaskLifecycleLine(fields) && isCompletedTaskStatus(t.Status) {
 				t.TerminalAt = now
@@ -3285,4 +3297,16 @@ func assetsFromRunConfigJSON(raw []byte) []githubassets.Asset {
 		return nil
 	}
 	return cfg.Assets
+}
+
+// Keep a bounded history so slow clients can observe short pause/resume cycles
+// without growing every status response for the lifetime of a task.
+func (t *taskState) recordStatusTransition(previous string) {
+	t.StatusRevision++
+	t.StatusTransitions = append(t.StatusTransitions, TaskStatusTransition{
+		Revision: t.StatusRevision, Status: t.Status, PreviousStatus: previous,
+	})
+	if len(t.StatusTransitions) > 128 {
+		t.StatusTransitions = slices.Clone(t.StatusTransitions[len(t.StatusTransitions)-128:])
+	}
 }
