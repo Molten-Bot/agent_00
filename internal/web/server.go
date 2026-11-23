@@ -186,6 +186,7 @@ type ReviewSettingsState struct {
 	ReviewLevel                        string   `json:"review_level"`
 	DefaultLibraryEnabled              bool     `json:"default_library_enabled"`
 	ChatEnabled                        bool     `json:"chat_enabled"`
+	WorkflowEnabled                    bool     `json:"workflow_enabled"`
 	JSONEnabled                        bool     `json:"json_enabled"`
 	GitHubIssuesEnabled                bool     `json:"github_issues_enabled"`
 	GitHubIssueLinkMode                string   `json:"github_issue_link_mode"`
@@ -211,7 +212,8 @@ type ReviewSettingsRequest struct {
 	DefaultLibraryEnabled *bool `json:"default_library_enabled,omitempty"`
 	// ChatEnabled is a pointer for the same reason as DefaultLibraryEnabled.
 	ChatEnabled *bool `json:"chat_enabled,omitempty"`
-	// JSONEnabled is a pointer for the same reason as DefaultLibraryEnabled.
+	// WorkflowEnabled and JSONEnabled preserve saved values when omitted.
+	WorkflowEnabled                    *bool     `json:"workflow_enabled,omitempty"`
 	JSONEnabled                        *bool     `json:"json_enabled,omitempty"`
 	GitHubIssuesEnabled                *bool     `json:"github_issues_enabled,omitempty"`
 	GitHubIssueLinkMode                *string   `json:"github_issue_link_mode,omitempty"`
@@ -463,11 +465,16 @@ func (s Server) injectBottomDockComponent(ctx context.Context, data []byte) []by
 		return data
 	}
 	chatEnabled, jsonEnabled, githubIssuesEnabled := true, true, false
+	workflowEnabled := false
 	if s.ReviewSettingsStatus != nil {
 		settings, settingsErr := s.ReviewSettingsStatus(ctx)
 		chatEnabled = settingsErr == nil && settings.ChatEnabled
+		workflowEnabled = settingsErr == nil && settings.WorkflowEnabled
 		jsonEnabled = settingsErr == nil && settings.JSONEnabled
 		githubIssuesEnabled = settingsErr == nil && settings.GitHubIssuesEnabled
+	}
+	if workflowEnabled {
+		dock = bytes.Replace(dock, []byte(`id="workflow-dock-link" class="prompt-mode-link site-dock-link hidden"`), []byte(`id="workflow-dock-link" class="prompt-mode-link site-dock-link"`), 1)
 	}
 	if !chatEnabled {
 		dock = bytes.Replace(dock,

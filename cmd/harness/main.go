@@ -2857,6 +2857,7 @@ func loadReviewSettingsState(cfg localruntime.InitConfig) (web.ReviewSettingsSta
 		ReviewLevel:                        activeCfg.ReviewWatch.ReviewLevel,
 		DefaultLibraryEnabled:              ui.DefaultLibraryEnabled,
 		ChatEnabled:                        ui.ChatEnabled,
+		WorkflowEnabled:                    ui.WorkflowEnabled,
 		JSONEnabled:                        ui.JSONEnabled,
 		GitHubIssuesEnabled:                ui.GitHubIssuesEnabled,
 		GitHubIssueLinkMode:                ui.GitHubIssueLinkMode,
@@ -2906,6 +2907,7 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		ReviewLevel:          reviewLevel,
 	}
 	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled, req.GitHubIssueLinkMode, req.GitHubIssueAutoStartAssigned, req.AssignCreator, localruntime.RuntimeConfigUISettingsUpdate{
+		WorkflowEnabled:           req.WorkflowEnabled,
 		OnlyAssigned:              req.GitHubIssueAutoStartOnlyAssigned,
 		Labels:                    req.GitHubIssueAutoStartLabels,
 		ExclusionLabel:            req.GitHubIssueAutoStartExclusionLabel,

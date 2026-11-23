@@ -7,7 +7,7 @@ const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
 let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
-const defaults = { auto_merge: false, delete_merged_branches: false, merge_method: 'squash', review_level: 'off', default_library_enabled: true, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], assign_creator: true };
+const defaults = { auto_merge: false, delete_merged_branches: false, merge_method: 'squash', review_level: 'off', default_library_enabled: true, chat_enabled: true, workflow_enabled: false, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], assign_creator: true };
 async function openSettings(t, { viewport = { width: 1280, height: 900 }, theme = 'dark', configurePage, initialSettings = defaults, path = '#settings' } = {}) {
   const page = await browser.newPage({ viewport });
   t.after(() => page.close());
@@ -212,7 +212,7 @@ test('all settings save on close and survive reopening; no main Save button', as
   assert.equal(await page.locator('#custom-library-name').inputValue(), 'kept draft');
   await toggle(page, 'review-settings-default-library');
   await close(page);
-  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], assign_creator: false, disabled_repositories: [] });
+  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, workflow_enabled: false, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], assign_creator: false, disabled_repositories: [] });
   await page.reload();
   await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
   assert.equal(await page.locator('#review-settings-auto-merge').isChecked(), true);
@@ -951,8 +951,8 @@ test('GitHub Issues renders inside Studio and uses the configured link mode', as
     const root = document.querySelector('.prompt-mode-tabs-dock');
     const ids = ['prompt-mode-library', 'github-issues-dock-link', 'task-view-dock-link'];
     return ids.map(id => Array.from(root.children).findIndex(node => node.id === id));
-  }), [2, 3, 5]);
-  assert.equal(await page.locator('#github-issues-dock-link + .prompt-mode-divider').count(), 1);
+  }), [2, 3, 6]);
+  assert.equal(await page.locator('#workflow-dock-link + .prompt-mode-divider').count(), 1);
   assert.equal(await page.locator('#prompt-visibility-toggle').count(), 0);
   const title = page.locator('#prompt-panel-title .prompt-title-mode.active');
   const titleWidth = await title.evaluate(node => node.getBoundingClientRect().width);
@@ -1515,4 +1515,37 @@ test('editing repositories in a stale tab sends its original snapshot and preser
   await staleTab.getByText('issue automation settings changed in another session; reload the page and try again', { exact: true }).waitFor();
   assert.equal(rejected, true);
   assert.deepEqual(settings.github_issue_repositories, { 'acme/one': repo });
+});
+
+
+test('Workflow beta is opt-in, isolated, persistent, and disabled on direct navigation', async t => {
+  const { page, writes } = await openSettings(t, { configurePage: async page => {
+    await page.route('**/api/status', route => route.fulfill({ json: { tasks: [], events: [], repositories: [], stats: {}, resources: {} } }));
+  }});
+  assert.equal(await page.locator('#workflow-dock-link').isVisible(), false);
+  await select(page, 'automation');
+  assert.equal(await page.locator('#review-settings-workflow-enabled').isChecked(), false);
+  await toggle(page, 'review-settings-workflow-enabled');
+  await close(page);
+  assert.equal(writes.at(-1).workflow_enabled, true);
+  await page.locator('#workflow-dock-link').click();
+  await page.reload();
+  await page.waitForFunction(() => document.body.dataset.appDisplay === 'workflow');
+  assert.equal(await page.locator('#workflow-display').isVisible(), true);
+  for (const selector of ['#local-prompt-form', '#task-panel', '#chat-display', '#dashboard-display', '#github-issues-panel']) {
+    assert.equal(await page.locator(selector).isVisible(), false, `${selector} stays out of Workflow`);
+  }
+  await page.locator('#prompt-mode-builder').click();
+  assert.equal(await page.locator('#workflow-display').isVisible(), false);
+  await page.locator('#workflow-dock-link').click();
+  await page.locator('#settings-open').click();
+  await select(page, 'automation');
+  await toggle(page, 'review-settings-workflow-enabled');
+  await close(page);
+  assert.equal(writes.at(-1).workflow_enabled, false);
+  assert.equal(await page.locator('#workflow-dock-link').isVisible(), false);
+  assert.equal(await page.locator('body').getAttribute('data-app-display'), 'studio');
+  await page.goto(`${baseURL}/#workflow`);
+  await page.waitForFunction(() => document.body.dataset.appDisplay === 'studio');
+  assert.equal(await page.locator('#workflow-display').isVisible(), false);
 });
