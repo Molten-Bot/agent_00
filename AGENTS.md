@@ -10,7 +10,7 @@
 
 - agent_00 is a Go module and CLI for running AI coding agents against GitHub repositories and turning prompts into pull requests.
 - The executable lives in `cmd/harness`. Shared behavior belongs in focused `internal/*` packages: `app`, `agentruntime`, `config`, `execx`, `localruntime`, `library`, `multiplex`, `slug`, `web`, and `workspace`.
-- The local web UI is served from embedded files under `internal/web/static`; there is no separate npm frontend build pipeline in this repo.
+- The local web UI is served from embedded files under `internal/web/static`; the Workflow editor has an isolated npm build under `internal/web/workflow`. Its generated assets are checked into `internal/web/static`, so ordinary Go builds do not require Node.
 
 ## Commands
 
@@ -20,6 +20,7 @@
   - `go build ./...`
   - `go build -o bin/harness ./cmd/harness`
   - `go test ./...`
+- For Workflow editor changes, run `npm ci --prefix internal/web/workflow`, `npm test --prefix internal/web/workflow`, and `npm run build --prefix internal/web/workflow`; commit the generated editor assets with their source.
 - For focused validation, prefer the smallest relevant package or test first, for example `go test ./internal/config` or `go test ./internal/app -run TestName`, then broaden when the change has wider impact.
 - Build and run the local harness with `go build -o bin/harness ./cmd/harness` and `./bin/harness serve`.
 - CLI modes are `harness run --config <path-to-json>`, `harness multiplex --config <path-or-dir> [--parallel <n>]`, and `harness serve [--init <path-to-init-json> | --config <path-to-config-json>] [--parallel <n>] [--ui-listen <host:port>] [--ui-automatic]`.

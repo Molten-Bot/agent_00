@@ -16,7 +16,7 @@
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
   <script src="/static/task-asset-preview.js?v=4"></script>
-  <link rel="stylesheet" href="/static/style.css?v=12">
+  <link rel="stylesheet" href="/static/style.css?v=13">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -420,9 +420,7 @@
         </section>
 
         <section id="workflow-display" class="panel hidden" aria-labelledby="workflow-title" aria-hidden="true">
-          <div class="panel-header">
-            <h1 id="workflow-title" class="panel-section-title">Workflow <span class="panel-section-copy">Beta</span></h1>
-          </div>
+          <div id="workflow-editor-root"></div>
         </section>
 
         <section id="dashboard-display" class="dashboard-display hidden" aria-labelledby="dashboard-title" aria-hidden="true">
@@ -9215,6 +9213,29 @@
       }
     }
 
+    let workflowEditorLoad;
+    function loadWorkflowEditor() {
+      if (!workflowEditorLoad) {
+        const css = document.createElement("link");
+        css.rel = "stylesheet";
+        css.href = "/static/workflow-editor.css?v=2";
+        document.head.appendChild(css);
+        workflowEditorLoad = new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "/static/workflow-editor.js?v=2";
+          script.onload = resolve;
+          script.onerror = () => { script.remove(); css.remove(); workflowEditorLoad = null; reject(new Error("Unable to load Workflow editor. Reload to try again.")); };
+          document.head.appendChild(script);
+        });
+      }
+      return workflowEditorLoad.then(() => {
+        window.mountWorkflowEditor();
+        window.dispatchEvent(new CustomEvent("workflow-display", { detail: "workflow" }));
+      }).catch(error => {
+        document.getElementById("workflow-editor-root").textContent = error.message;
+      });
+    }
+
     function setAppDisplay(display, options = {}) {
       let mode = display === "dashboard" || display === "chat" || display === "work" || display === "workflow" ? display : "studio";
       if (mode === "dashboard" && !dashboardAvailable(state.snapshot)) {
@@ -9239,6 +9260,9 @@
       }
       workflowDisplay.classList.toggle("hidden", mode !== "workflow");
       workflowDisplay.setAttribute("aria-hidden", String(mode !== "workflow"));
+      if (mode === "workflow") {
+        void loadWorkflowEditor();
+      }
       const showDashboard = mode === "dashboard";
       const showChat = mode === "chat";
       const showWork = mode === "work";

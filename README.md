@@ -231,6 +231,11 @@ an enabled installation will scan its backlog after upgrading.
 
 ### Workspace storage
 
+PR reviews and runs with post-task review passes use `HARNESS_WORKSPACE_DISK_BASE`
+(default `/tmp`) unless a durable workspace root is pinned. Keep review storage
+outside `/dev`: native read-only sandboxes replace that mount, hiding checkouts
+under `/dev/shm`. Reviews retain their read-only filesystem restrictions.
+
 Retained task checkouts need disk capacity. For long-running Docker installations,
 mount a persistent volume at the configured workspace base. Do not point both
 `HARNESS_WORKSPACE_RAM_BASE` and `HARNESS_WORKSPACE_DISK_BASE` at the same small
@@ -490,6 +495,25 @@ go build -o bin/harness ./cmd/harness
 ```
 
 Local `harness serve` listens on `127.0.0.1:7777` by default.
+
+Workflow is an opt-in beta under **Settings → Automation → Workflow (beta)**.
+Its React Flow proof of concept supports adding, connecting, moving, and editing
+steps; checking graph structure; saving a draft in this browser; and exporting JSON.
+It does not execute automation yet. Saved drafts are local to the browser and origin.
+
+The isolated editor source is in `internal/web/workflow`. To update its checked-in
+Go-embedded assets, run:
+
+```bash
+npm ci --prefix internal/web/workflow
+npm test --prefix internal/web/workflow
+npm run build --prefix internal/web/workflow
+go build -o bin/harness ./cmd/harness
+```
+
+The editor is loaded only when Workflow opens. No Node server or runtime CDN is
+required. Generated assets and dependency license notices live in `internal/web/static`.
+
 
 The web UI sends manual GA4 page views and engagement events. Keep Enhanced
 Measurement disabled on its GA4 web stream to prevent duplicate history-based

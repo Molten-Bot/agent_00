@@ -16,3 +16,4 @@ prompt-images/*
 *.out
 /harness
 /node_modules/*
+/internal/web/workflow/node_modules/

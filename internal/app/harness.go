@@ -335,6 +335,12 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	h.logf("stage=auth status=ok")
 
 	h.logf("stage=workspace status=start")
+	// Read-only sandboxes replace /dev, hiding RAM checkouts under /dev/shm.
+	// Allocate on disk before cloning, including implementation runs that
+	// will later enter a read-only review pass. Keep the sandbox read-only.
+	if cfg.Review != nil || h.FinalReviewPasses > 0 {
+		h.Workspace.PreferDisk = true
+	}
 	runDir, guid, err := h.Workspace.CreateRunDir()
 	if err != nil {
 		return h.fail(ExitWorkspace, "workspace", err, "")
