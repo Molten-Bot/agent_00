@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestApplyDefaultsUsesGitHubIssueTitleVerbatim(t *testing.T) {
@@ -81,6 +82,39 @@ func TestNormalizePRBodyForGitHubIssueAddsConfiguredLinkBeforeFooter(t *testing.
 		footerAt := strings.Index(body, prBodyFooter)
 		if linkAt < 0 || footerAt < 0 || linkAt >= footerAt {
 			t.Fatalf("normalized body = %q, want %q before the footer", body, test.want)
+		}
+	}
+}
+
+func TestNormalizePRBodyWithFencedPromptIsIdempotent(t *testing.T) {
+	t.Parallel()
+	prompt := "Run the example:\n\n```sh\necho example\n```\n\nKeep this final line."
+	legacyBody := "Summary\n\nOriginal task prompt:\n```text\n" + prompt + "\n```"
+	body := NormalizePRBody(legacyBody, prompt)
+	if !strings.Contains(body, "Original task prompt:\n````text\n"+prompt+"\n````") || strings.Count(body, "Keep this final line.") != 1 {
+		t.Fatalf("expected a single fenced prompt in %q", body)
+	}
+	if again := NormalizePRBody(body, prompt); again != body {
+		t.Fatalf("second normalization changed body to %q", again)
+	}
+}
+
+func TestNormalizePRBodyForGitHubIssueFitsLongContent(t *testing.T) {
+	t.Parallel()
+	issue := &GitHubIssueConfig{Number: 17, LinkMode: GitHubIssueLinkClose}
+	prompt := "Closes #17\n\n```sh\necho example\n```\n\n" + strings.Repeat("界", githubPRBodyMaxBytes)
+	for _, summary := range []string{"Custom summary", strings.Repeat("a", githubPRBodyMaxBytes)} {
+		normalized := NormalizePRBody(summary, prompt)
+		body := NormalizePRBodyForGitHubIssue(normalized, prompt, issue)
+		if len(body) > githubPRBodyMaxBytes || !utf8.ValidString(body) {
+			t.Fatalf("invalid GitHub body of %d bytes", len(body))
+		}
+		if !strings.Contains(body, "[Prompt truncated to fit GitHub's body limit.]\n````") ||
+			!strings.HasSuffix(body, "\n\nCloses #17\n\n"+prBodyFooter) {
+			t.Fatal("body lost its closing fence, issue link, or footer")
+		}
+		if len(summary) < githubPRBodyMaxBytes && !strings.Contains(body, summary) {
+			t.Fatal("body lost its custom summary")
 		}
 	}
 }

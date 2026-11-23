@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
@@ -32,6 +33,7 @@ const prBodyFormatReferenceLine = "Standard PR format reference: https://github.
 const prBodyDefaultSummary = "This PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified."
 const prBodyFooter = "Curious how this was built? See how AI agents can help with your own projects: [Agent_00](https://molten.bot/code?source=pr)"
 const prBodyPromptHeading = "Original task prompt:"
+const githubPRBodyMaxBytes = 65_536 // A byte limit also fits GitHub's character limit.
 
 // Config is the v1 public contract for a harness run.
 type Config struct {
@@ -862,29 +864,16 @@ func NormalizePRBody(body, prompt string) string {
 	return ensurePRBodyPromptAndFooter(body, prompt)
 }
 
-// NormalizePRBodyForGitHubIssue adds an issue reference to the normalized PR
-// body while keeping the standard footer at the end.
+// NormalizePRBodyForGitHubIssue prepares a body for GitHub's size limit and
+// adds the configured issue reference before the standard footer.
 func NormalizePRBodyForGitHubIssue(body, prompt string, issue *GitHubIssueConfig) string {
-	normalized := NormalizePRBody(body, prompt)
-	if issue == nil || issue.Number <= 0 {
-		return normalized
-	}
-	line := fmt.Sprintf("Related to #%d", issue.Number)
-	if strings.EqualFold(strings.TrimSpace(issue.LinkMode), GitHubIssueLinkClose) {
-		line = fmt.Sprintf("Closes #%d", issue.Number)
-	}
-	if strings.Contains("\n"+normalized+"\n", "\n"+line+"\n") {
-		return normalized
-	}
-	if footerAt := strings.LastIndex(normalized, prBodyFooter); footerAt >= 0 {
-		return normalized[:footerAt] + line + "\n\n" + normalized[footerAt:]
-	}
-	return strings.TrimRight(normalized, "\n") + "\n\n" + line
+	return formatPRBody(body, prompt, issue, githubPRBodyMaxBytes)
 }
 
 var wsRE = regexp.MustCompile(`\s+`)
 var generatedPRTitleSuffixRE = regexp.MustCompile(`-[0-9]{8}-[0-9]{6}(?:-[0-9a-fA-F]{1,8})?$`)
-var generatedPRPromptBlockRE = regexp.MustCompile(`(?s)(?:^|\n{2,})` + prBodyPromptHeading + "\n```text\n.*?\n```")
+var generatedPRPromptOpeningRE = regexp.MustCompile(`(?:^|\n{2,})` + prBodyPromptHeading + "\n(`{3,})text\n")
+var prPromptFenceLineRE = regexp.MustCompile("(?m)^[ \t]*(`{3,})")
 
 func normalizePRTitle(title string) string {
 	title = trimGeneratedPRTitleSuffix(strings.TrimSpace(title))
@@ -918,30 +907,96 @@ func ensurePRBodyFooter(body string) string {
 	if body == "" {
 		return prBodyFooter
 	}
-	if strings.Contains(body, "https://molten.bot/code?source=pr") {
+	if strings.HasSuffix(body, prBodyFooter) {
 		return body
 	}
 	return body + "\n\n" + prBodyFooter
 }
 
 func ensurePRBodyPromptAndFooter(body, prompt string) string {
-	body = extractPRBodySummary(body)
+	return formatPRBody(body, prompt, nil, 0)
+}
+
+func formatPRBody(body, prompt string, issue *GitHubIssueConfig, maxBytes int) string {
 	prompt = strings.TrimSpace(prompt)
-	if body == "" {
-		body = prBodyDefaultSummary
+	fenceLength := 3
+	for _, line := range prPromptFenceLineRE.FindAllStringSubmatch(prompt, -1) {
+		fenceLength = max(fenceLength, len(line[1])+1)
+	}
+	fence := strings.Repeat("`", fenceLength)
+	if fenceLength > 3 {
+		// Older configs used three backticks even when the prompt contained
+		// a closing fence. Remove the complete legacy block when it matches.
+		body = strings.ReplaceAll(body, prBodyPromptHeading+"\n```text\n"+prompt+"\n```", "")
+	}
+	summary := extractPRBodySummary(body)
+	issueLine := ""
+	if issue != nil && issue.Number > 0 {
+		issueLine = fmt.Sprintf("Related to #%d", issue.Number)
+		if strings.EqualFold(strings.TrimSpace(issue.LinkMode), GitHubIssueLinkClose) {
+			issueLine = fmt.Sprintf("Closes #%d", issue.Number)
+		}
+	}
+	promptOmitted := false
+	if maxBytes > 0 {
+		summary = strings.ToValidUTF8(summary, "\uFFFD")
+		prompt = strings.ToValidUTF8(prompt, "\uFFFD")
+		// Reserve space for generated sections and the issue link. An oversized
+		// custom summary is omitted whole so it cannot leave Markdown unclosed.
+		maxBytes -= len(prBodyGeneratedByLine) + len(prBodyDefaultSummary) + len(prBodyFooter) + 4
+		if issueLine != "" {
+			maxBytes -= len(issueLine) + 2
+		}
+		summaryBudget := maxBytes - 2
+		if prompt != "" {
+			summaryBudget -= len(prPromptOmissionNotice) + 2
+		}
+		if len(summary) > summaryBudget {
+			summary = "[Custom PR summary omitted because it exceeds GitHub's body limit.]"
+		}
+		if summary != "" {
+			maxBytes -= len(summary) + 2
+		}
+		if prompt != "" {
+			blockOverhead := len(prBodyPromptHeading) + len("\ntext\n\n") + 2*len(fence)
+			prompt = limitPRPrompt(prompt, maxBytes-2-blockOverhead)
+			promptOmitted = prompt == ""
+		}
 	}
 
 	sections := []string{
 		prBodyGeneratedByLine,
 		prBodyDefaultSummary,
 	}
-	if body != "" && body != prBodyDefaultSummary {
-		sections = append(sections, body)
+	if summary != "" {
+		sections = append(sections, summary)
 	}
 	if prompt != "" {
-		sections = append(sections, prBodyPromptHeading+"\n```text\n"+prompt+"\n```")
+		sections = append(sections, prBodyPromptHeading+"\n"+fence+"text\n"+prompt+"\n"+fence)
+	} else if promptOmitted {
+		sections = append(sections, prPromptOmissionNotice)
+	}
+	if issueLine != "" && !strings.Contains("\n"+summary+"\n", "\n"+issueLine+"\n") {
+		sections = append(sections, issueLine)
 	}
 	return ensurePRBodyFooter(strings.Join(sections, "\n\n"))
+}
+
+const prPromptOmissionNotice = "[Original task prompt omitted because it exceeds GitHub's body limit.]"
+
+func limitPRPrompt(prompt string, budget int) string {
+	const notice = "\n[Prompt truncated to fit GitHub's body limit.]"
+	if len(prompt) <= budget {
+		return prompt
+	}
+	if budget < len(notice) {
+		return ""
+	}
+	end := budget - len(notice)
+	for end > 0 && !utf8.RuneStart(prompt[end]) {
+		end--
+	}
+	return strings.TrimRight(prompt[:end], " \t\r\n") + notice
 }
 
 func extractPRBodySummary(body string) string {
@@ -951,7 +1006,19 @@ func extractPRBodySummary(body string) string {
 	}
 
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyFooter, ""))
-	body = strings.TrimSpace(generatedPRPromptBlockRE.ReplaceAllString(body, ""))
+	for {
+		opening := generatedPRPromptOpeningRE.FindStringSubmatchIndex(body)
+		if opening == nil {
+			break
+		}
+		fence := body[opening[2]:opening[3]]
+		closing := "\n" + fence
+		_, after, found := strings.Cut(body[opening[1]:]+"\n", closing+"\n")
+		if !found {
+			break
+		}
+		body = strings.TrimSpace(body[:opening[0]] + "\n\n" + strings.TrimPrefix(after, "\n"))
+	}
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyGeneratedByLine, ""))
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyFormatReferenceLine, ""))
 	body = strings.TrimSpace(strings.ReplaceAll(body, "Agent summary of issue resolution:", ""))

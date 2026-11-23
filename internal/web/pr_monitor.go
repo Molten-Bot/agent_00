@@ -448,7 +448,7 @@ func (m *PRMergeMonitor) prReviewComments(ctx context.Context, prURL string) ([]
 	}
 	res, err := m.Runner.Run(ctx, execx.Command{
 		Name: "gh",
-		Args: []string{"api", fmt.Sprintf("repos/%s/pulls/%s/comments", repo, selector), "-F", "per_page=100"},
+		Args: []string{"api", "--method", "GET", fmt.Sprintf("repos/%s/pulls/%s/comments", repo, selector), "-F", "per_page=100"},
 	})
 	if err != nil {
 		return nil, err
