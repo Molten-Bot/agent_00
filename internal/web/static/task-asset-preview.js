@@ -49,6 +49,7 @@ function showTaskAssetMedia(mediaType, source, message, { signal, title }) {
   }
   const objectURL = source instanceof Blob ? URL.createObjectURL(source) : "";
   const media = document.createElement(isPDF ? "iframe" : isVideo ? "video" : isAudio ? "audio" : "img");
+  const params = { media_type: isPDF ? "pdf" : isVideo ? "video" : isAudio ? "audio" : "image" };
   const hasControls = isVideo || isAudio;
   media.className = "task-image-viewer-image";
   media.hidden = !isPDF;
@@ -60,6 +61,8 @@ function showTaskAssetMedia(mediaType, source, message, { signal, title }) {
     if (isVideo) media.playsInline = true;
     media.preload = "metadata";
     media.setAttribute("aria-label", title);
+    media.addEventListener("playing", () => window.trackAnalyticsEvent?.("task_asset_media_started", params), { once: true });
+    media.addEventListener("ended", () => window.trackAnalyticsEvent?.("task_asset_media_completed", params), { once: true });
   } else {
     media.alt = title;
     media.referrerPolicy = "no-referrer";
@@ -82,6 +85,7 @@ function showTaskAssetMedia(mediaType, source, message, { signal, title }) {
     removeMedia();
     message.hidden = false;
     message.textContent = "Preview unavailable.";
+    window.trackAnalyticsEvent?.("task_asset_preview_failed", params);
   });
   media.src = objectURL || source;
   message.before(media);

@@ -60,6 +60,71 @@ func TestBrokerTracksTaskLifecycleAndCommandOutput(t *testing.T) {
 	}
 }
 
+func TestBrokerTaskStatusRevisionChangesOnlyWithStatus(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	const requestID = "req-status-revision"
+	const requestField = " request_id=" + requestID
+	for _, step := range []struct {
+		line     string
+		status   string
+		revision uint64
+	}{
+		{"task status=start" + requestField, "running", 1},
+		{"task" + requestField + " stage=codex status=start", "running", 1},
+		{"task status=paused" + requestField, "paused", 2},
+		{"task status=start" + requestField, "running", 3},
+		{"task status=completed" + requestField, "completed", 4},
+	} {
+		b.IngestLog(step.line)
+		tasks := b.Snapshot().Tasks
+		if len(tasks) != 1 || tasks[0].Status != step.status || tasks[0].StatusRevision != step.revision {
+			t.Fatalf("after %q, tasks = %+v, want %s at revision %d", step.line, tasks, step.status, step.revision)
+		}
+	}
+	for range 2 {
+		if err := b.MarkTaskPRMerged(requestID, ""); err != nil {
+			t.Fatal(err)
+		}
+		task, ok := b.Task(requestID)
+		if !ok || task.Status != "merged" || task.StatusRevision != 5 {
+			t.Fatalf("after merge, task = %+v, want merged at revision 5", task)
+		}
+	}
+}
+
+func TestBrokerPreservesStatusTransitionsBetweenSnapshots(t *testing.T) {
+	t.Parallel()
+	b := NewBroker()
+	b.IngestLog("task status=start request_id=transition-fixture")
+	before := b.Snapshot().Tasks[0]
+	b.IngestLog("task status=paused request_id=transition-fixture")
+	b.IngestLog("task status=start request_id=transition-fixture")
+	after := b.StreamSnapshot().Tasks[0]
+	if len(before.StatusTransitions) != 1 || len(after.StatusTransitions) != 3 {
+		t.Fatalf("history lengths before=%d after=%d", len(before.StatusTransitions), len(after.StatusTransitions))
+	}
+	for i, want := range []string{"running", "paused", "running"} {
+		if got := after.StatusTransitions[i]; got.Status != want || got.Revision != uint64(i+1) {
+			t.Fatalf("transition %d = %+v", i, got)
+		}
+	}
+	after.StatusTransitions[0].Status = "mutated"
+	task, _ := b.Task("transition-fixture")
+	if task.StatusTransitions[0].Status != "running" {
+		t.Fatal("snapshot mutated broker history")
+	}
+	for range 130 {
+		b.IngestLog("task status=paused request_id=transition-fixture")
+		b.IngestLog("task status=start request_id=transition-fixture")
+	}
+	task, _ = b.Task("transition-fixture")
+	if len(task.StatusTransitions) != 128 || task.StatusTransitions[127].Revision != task.StatusRevision {
+		t.Fatal("history must retain the latest 128 transitions")
+	}
+}
+
 func TestBrokerRecordsTaskPRTitlesByURL(t *testing.T) {
 	t.Parallel()
 

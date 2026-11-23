@@ -486,6 +486,10 @@ go build -o bin/harness ./cmd/harness
 
 Local `harness serve` listens on `127.0.0.1:7777` by default.
 
+The web UI sends manual GA4 page views and engagement events. Keep Enhanced
+Measurement disabled on its GA4 web stream to prevent duplicate history-based
+page views and automatic collection of raw link and form URLs.
+
 With GitHub auth configured, local server mode also watches GitHub review-request
 notifications by default. When the authenticated GitHub user is still requested
 as a PR reviewer, the harness queues the bundled `code-review` task and posts a
