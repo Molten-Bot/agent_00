@@ -345,8 +345,17 @@ func (s Server) reserveIssueBranch(ctx context.Context, issueID, branch, sha str
 	return nil
 }
 
+// Admission can fail after a successor claim is saved. Tell reconciliation
+// that the failed intent already owns the retry deadline.
+type issueAdmissionDeferredError struct{ error }
+
+func (e *issueAdmissionDeferredError) Unwrap() error { return e.error }
+
 func (s Server) blockIssueClaim(record localruntime.IssueClaimRecord, cause error) error {
-	return errors.Join(cause, s.IssueClaims.Update(record.ID, func(current *localruntime.IssueClaimRecord) error {
+	err := s.IssueClaims.Update(record.ID, func(current *localruntime.IssueClaimRecord) error {
+		if current.StartedAt.After(record.StartedAt) || current.StoppedAt.After(record.StoppedAt) {
+			return nil
+		}
 		current.Phase = "blocked"
 		current.Error = cause.Error()
 		if current.Version == 2 {
@@ -355,10 +364,16 @@ func (s Server) blockIssueClaim(record localruntime.IssueClaimRecord, cause erro
 			current.UnlockPending = current.LabelAdded
 			if errors.Is(cause, localruntime.ErrIssueOwnershipChanged) {
 				blockStaleIssueClaim(current)
+			} else if s.IssueRecovery != nil {
+				s.scheduleIssueRetry(current, cause)
 			}
 		}
 		return nil
-	}))
+	})
+	if err == nil && record.Version == 2 && s.IssueRecovery != nil {
+		return &issueAdmissionDeferredError{cause}
+	}
+	return errors.Join(cause, err)
 }
 
 func (s Server) finishIssueAdmission(ctx context.Context, record localruntime.IssueClaimRecord, submit func(context.Context, []byte) (string, error)) (string, error) {
@@ -594,6 +609,8 @@ func (s Server) handleIssueAutomationStatus(w http.ResponseWriter, r *http.Reque
 			entry["step"] = record.Step
 			entry["stepStartedAt"] = record.StepStartedAt
 			entry["agentAttempts"] = record.AgentAttempts
+			entry["runFailures"] = issueRunFailures(record)
+			entry["recoveryFailures"] = record.Failures
 			entry["nextAttemptAt"] = record.NextAttemptAt
 			entry["unlockPending"] = record.UnlockPending
 			entry["prUrl"] = record.PRURL
@@ -885,6 +902,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		record.PublicationReady = previous.PublicationReady
 		if automatic {
 			record.AgentAttempts = previous.AgentAttempts
+			record.PriorRunFailures = issueRunFailures(previous)
 		}
 	}
 	if err = s.IssueClaims.Save(record); err != nil {

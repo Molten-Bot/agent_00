@@ -47,6 +47,7 @@ type IssueClaimRecord struct {
 	RepairRequestID  string        `json:"repairRequestId,omitempty"`
 	RepairError      string        `json:"repairError,omitempty"`
 	Failures         int           `json:"failures,omitempty"`
+	PriorRunFailures int           `json:"priorRunFailures,omitempty"`
 	IssueNodeID      string        `json:"issueNodeId,omitempty"`
 	ReservationSHA   string        `json:"reservationSha,omitempty"`
 	RemoteRecorded   bool          `json:"remoteRecorded,omitempty"`

@@ -370,9 +370,6 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			return s.IssueClaims.Save(record)
 		}
 	}
-	if !record.NextAttemptAt.IsZero() && time.Now().Before(record.NextAttemptAt) {
-		return s.IssueClaims.Save(record)
-	}
 	if record.Outcome != "" && record.NextAttemptAt.IsZero() {
 		record.State = "retry_wait"
 		record.NextAttemptAt = time.Now().Add(issueRetryDelay(record, policy))
@@ -438,6 +435,10 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		_, _, err = s.recoverIssueClaimMode(ctx, issue.Repository, issue.Number, remote, s.issueRetrySubmitter(), true)
 	}
 	if err != nil {
+		var deferred *issueAdmissionDeferredError
+		if errors.As(err, &deferred) {
+			return err
+		}
 		return s.deferIssueRecord(record, err)
 	}
 	return nil
@@ -469,9 +470,27 @@ func (s Server) ValidateIssueOwnership(ctx context.Context, run config.Config) e
 	return nil
 }
 
+// Count a terminal outcome once per claim. Each automatic successor carries
+// the previous count, including runs that never reached the agent step.
+func issueRunFailures(record localruntime.IssueClaimRecord) int {
+	if record.State == "fulfilled" {
+		return 0
+	}
+	failures := record.PriorRunFailures
+	switch record.Outcome {
+	case "error", "completed", "no_changes":
+		failures++
+	case "interrupted":
+		if record.Incident != "service_shutdown" {
+			failures++
+		}
+	}
+	return failures
+}
+
 func issueRetryDelay(record localruntime.IssueClaimRecord, policy localruntime.IssueRecoveryConfig) time.Duration {
 	seconds := policy.RetryDelaySeconds
-	for i := 1; i < max(record.AgentAttempts, record.Failures) && seconds < policy.MaxBackoffSeconds; i++ {
+	for i := 1; i < max(record.AgentAttempts, record.Failures, issueRunFailures(record)) && seconds < policy.MaxBackoffSeconds; i++ {
 		if seconds > policy.MaxBackoffSeconds/5 {
 			seconds = policy.MaxBackoffSeconds
 		} else {
@@ -485,6 +504,15 @@ func issueRetryDelay(record localruntime.IssueClaimRecord, policy localruntime.I
 		jitter = int(record.ID[0]) % max(1, seconds/5)
 	}
 	return time.Duration(min(seconds+jitter, policy.MaxBackoffSeconds)) * time.Second
+}
+
+func (s Server) scheduleIssueRetry(record *localruntime.IssueClaimRecord, cause error) {
+	record.Failures++
+	record.NextAttemptAt = time.Now().Add(issueRetryDelay(*record, s.IssueRecovery.Defaults()))
+	var rate *issueRateLimitError
+	if errors.As(cause, &rate) && rate.RetryAt.After(record.NextAttemptAt) {
+		record.NextAttemptAt = rate.RetryAt
+	}
 }
 
 func repairableIssueIncident(record localruntime.IssueClaimRecord) bool {
@@ -530,12 +558,7 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 			current.State = "retry_wait"
 			current.Error = cause.Error()
 		}
-		current.Failures++
-		current.NextAttemptAt = time.Now().Add(issueRetryDelay(*current, s.IssueRecovery.Defaults()))
-		var rate *issueRateLimitError
-		if errors.As(cause, &rate) && rate.RetryAt.After(current.NextAttemptAt) {
-			current.NextAttemptAt = rate.RetryAt
-		}
+		s.scheduleIssueRetry(current, cause)
 		return nil
 	})
 	return errors.Join(cause, err)
