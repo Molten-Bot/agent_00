@@ -873,6 +873,7 @@ func NormalizePRBodyForGitHubIssue(body, prompt string, issue *GitHubIssueConfig
 var wsRE = regexp.MustCompile(`\s+`)
 var generatedPRTitleSuffixRE = regexp.MustCompile(`-[0-9]{8}-[0-9]{6}(?:-[0-9a-fA-F]{1,8})?$`)
 var generatedPRPromptOpeningRE = regexp.MustCompile(`(?:^|\n{2,})` + prBodyPromptHeading + "\n(`{3,})text\n")
+var generatedPRIssueLinkRE = regexp.MustCompile(`^(?:Related to|Closes) #[0-9]+$`)
 var prPromptFenceLineRE = regexp.MustCompile("(?m)^[ \t]*(`{3,})")
 
 func normalizePRTitle(title string) string {
@@ -924,12 +925,7 @@ func formatPRBody(body, prompt string, issue *GitHubIssueConfig, maxBytes int) s
 		fenceLength = max(fenceLength, len(line[1])+1)
 	}
 	fence := strings.Repeat("`", fenceLength)
-	if fenceLength > 3 {
-		// Older configs used three backticks even when the prompt contained
-		// a closing fence. Remove the complete legacy block when it matches.
-		body = strings.ReplaceAll(body, prBodyPromptHeading+"\n```text\n"+prompt+"\n```", "")
-	}
-	summary := extractPRBodySummary(body)
+	summary := extractPRBodySummary(body, prompt)
 	issueLine := ""
 	if issue != nil && issue.Number > 0 {
 		issueLine = fmt.Sprintf("Related to #%d", issue.Number)
@@ -999,7 +995,7 @@ func limitPRPrompt(prompt string, budget int) string {
 	return strings.TrimRight(prompt[:end], " \t\r\n") + notice
 }
 
-func extractPRBodySummary(body string) string {
+func extractPRBodySummary(body, prompt string) string {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return ""
@@ -1012,19 +1008,54 @@ func extractPRBodySummary(body string) string {
 			break
 		}
 		fence := body[opening[2]:opening[3]]
-		closing := regexp.MustCompile("\n" + fence + "[ \t]*\n")
-		remainder := body[opening[1]:] + "\n"
-		match := closing.FindStringIndex(remainder)
-		if match == nil {
+		after, found := afterPRPromptFence(body[opening[1]:], fence, prompt)
+		if !found {
 			break
 		}
-		body = strings.TrimSpace(body[:opening[0]] + "\n\n" + strings.TrimPrefix(remainder[match[1]:], "\n"))
+		body = strings.TrimSpace(body[:opening[0]] + "\n\n" + strings.TrimPrefix(after, "\n"))
 	}
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyGeneratedByLine, ""))
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyFormatReferenceLine, ""))
 	body = strings.TrimSpace(strings.ReplaceAll(body, "Agent summary of issue resolution:", ""))
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyDefaultSummary, ""))
 	return strings.TrimSpace(body)
+}
+
+func afterPRPromptFence(body, fence, prompt string) (string, bool) {
+	if fence == "```" {
+		// Legacy bodies used three backticks even when the prompt contained
+		// them. The generated block ended the body, apart from the issue
+		// link and footer, so prefer the fence at that boundary.
+		end := len(body)
+		last := strings.LastIndexByte(body, '\n') + 1
+		if generatedPRIssueLinkRE.MatchString(body[last:]) {
+			end = len(strings.TrimRight(body[:last], "\n"))
+		}
+		lineStart := strings.LastIndexByte(body[:end], '\n') + 1
+		if strings.TrimRight(body[lineStart:end], " \t\r") == fence {
+			return strings.TrimPrefix(body[end:], "\n"), true
+		}
+
+		// An exact prompt match also disambiguates a block in a custom body.
+		if prompt != "" {
+			if rest, found := strings.CutPrefix(body, prompt+"\n"); found {
+				line, after, _ := strings.Cut(rest, "\n")
+				if strings.TrimRight(line, " \t\r") == fence {
+					return after, true
+				}
+			}
+		}
+	}
+	for {
+		line, after, more := strings.Cut(body, "\n")
+		if strings.TrimRight(line, " \t\r") == fence {
+			return after, true
+		}
+		if !more {
+			return "", false
+		}
+		body = after
+	}
 }
 
 func summarize(s string, max int) string {

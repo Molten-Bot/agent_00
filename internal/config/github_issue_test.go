@@ -99,6 +99,37 @@ func TestNormalizePRBodyWithFencedPromptIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestNormalizePRBodyForGitHubIssueRemovesStaleLegacyFencedPrompt(t *testing.T) {
+	t.Parallel()
+
+	const summary = "Custom summary.\n\n```sh\necho summary\n```"
+	const staleBlock = "Original task prompt:\n```text\nOld instructions.\n\n```sh\necho stale\n``` \t\n\nStale final line.\n``` \t"
+	const prompt = "Use the updated instructions."
+	issue := &GitHubIssueConfig{Number: 17, LinkMode: GitHubIssueLinkClose}
+	for _, suffix := range []string{"", "\n\nCloses #17", "\n\nRelated to #17"} {
+		body := summary + "\n\n" + staleBlock + suffix + "\n\n" + prBodyFooter
+		want := NormalizePRBodyForGitHubIssue(summary+suffix, prompt, issue)
+		got := NormalizePRBodyForGitHubIssue(body, prompt, issue)
+		if got != want {
+			t.Errorf("normalized body = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestNormalizePRBodyMatchesWholeClosingFenceLine(t *testing.T) {
+	t.Parallel()
+
+	fence := strings.Repeat("`", 4096)
+	body := "Summary before.\n\n" + prBodyPromptHeading + "\n" + fence + "text\n" +
+		fence[:len(fence)-1] + "\n" + fence + "`\n" + fence + " extra\n" +
+		"Stale final line.\n" + fence + " \t\n\nSummary after."
+	got := NormalizePRBody(body, "Updated instructions.")
+	want := NormalizePRBody("Summary before.\n\nSummary after.", "Updated instructions.")
+	if got != want {
+		t.Fatal("normalization closed the prompt at the wrong fence")
+	}
+}
+
 func TestNormalizePRBodyForGitHubIssueFitsLongContent(t *testing.T) {
 	t.Parallel()
 	issue := &GitHubIssueConfig{Number: 17, LinkMode: GitHubIssueLinkClose}
