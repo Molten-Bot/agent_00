@@ -1921,6 +1921,7 @@ select.prompt-control {
 }
 
 .speech-stream-bar {
+  --bar-level: 0;
   position: relative;
   z-index: 1;
   display: block;
@@ -4374,6 +4375,7 @@ select.prompt-control {
 }
 
 .dashboard-d3-slice {
+  stroke-width: 2;
   filter: drop-shadow(0 7px 14px rgba(10, 44, 102, 0.12));
   transition: filter 140ms ease;
 }
@@ -4385,6 +4387,7 @@ select.prompt-control {
 }
 
 .dashboard-d3-empty {
+  fill: none;
   opacity: 0.78;
 }
 
@@ -4410,6 +4413,10 @@ select.prompt-control {
   color: var(--dashboard-chart-empty);
   overflow: visible;
   pointer-events: none;
+}
+
+.dashboard-d3-legend-icon-shell {
+  color: var(--dashboard-legend-icon-color, inherit);
 }
 
 .dashboard-d3-legend-icon-shell,
@@ -4718,6 +4725,10 @@ html.pink .task-site-url-action[data-state="current"] {
   height: 100%;
   background: var(--brand-gradient);
   transition: width 0.18s ease;
+}
+
+.task-progress-fill-single-step {
+  --task-progress-fill-width: 100%;
 }
 
 .task-progress-steps {
