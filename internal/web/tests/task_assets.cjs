@@ -150,7 +150,7 @@ for (const mobile of [false, true]) {
     await expect(singleAsset.locator('svg.lucide-image')).toBeVisible();
     await expect(singleAsset).toHaveText('');
     await singleAsset.click();
-    await expect(viewer.getByRole('status')).toHaveText('Preview unavailable.');
+    await expect(viewer.getByRole('status')).toHaveText('GitHub access required to preview this attachment.');
     await expect(source).toHaveAttribute('href', unavailableURL);
     await expect(previous).toBeHidden();
     await expect(next).toBeHidden();
@@ -178,8 +178,14 @@ for (const mobile of [false, true]) {
     await expect(token).toHaveValue('');
     const authClosed = auth.waitForEvent('close');
     await token.fill('viewer-fixture');
+    const imageResponse = auth.waitForResponse(response => response.url().endsWith('/asset-preview'));
     await retry.click();
-    await expect(viewer.locator('pre')).toHaveText('Private attachment preview');
+    const authorizedImage = viewer.getByRole('img', { name: 'unavailable' });
+    const attachment = await imageResponse;
+    assert.equal(attachment.status(), 200);
+    assert.equal(attachment.headers()['content-type'], 'image/avif');
+    await expect(authorizedImage).toBeVisible();
+    await expect(authorizedImage).toHaveJSProperty('naturalWidth', 2);
     await expect(viewer.getByRole('status')).toBeHidden();
     await authClosed;
     await viewer.getByRole('button', { name: 'Close asset viewer' }).click();
@@ -187,7 +193,7 @@ for (const mobile of [false, true]) {
     await expect(singleAsset).toBeFocused();
     await page.keyboard.press('Enter');
     await expect(viewer).toBeVisible();
-    await expect(viewer.getByRole('status')).toHaveText('Preview unavailable.');
+    await expect(viewer.getByRole('status')).toHaveText('GitHub access required to preview this attachment.');
     const staleAuthOpening = page.context().waitForEvent('page');
     await authLink.click();
     const staleAuth = await staleAuthOpening;
@@ -211,7 +217,7 @@ for (const mobile of [false, true]) {
     const staleToken = staleAuth.getByLabel('GitHub token with access to this attachment');
     await staleToken.fill('viewer-fixture');
     await staleAuth.getByRole('button', { name: 'Retry preview' }).click();
-    await expect(staleAuth.locator('pre')).toHaveText('Private attachment preview');
+    await expect(staleAuth.getByRole('img')).toHaveJSProperty('naturalWidth', 2);
     await expect(staleToken).toBeHidden();
     await expect(staleToken).toHaveValue('');
     assert.equal(await textPreview.textContent(), "<script>throw new Error('attachment executed')</script>\nUTF-8: café",
