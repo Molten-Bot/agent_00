@@ -505,7 +505,7 @@ func issueRunFailures(record localruntime.IssueClaimRecord) int {
 }
 
 func issueRetryFailures(record localruntime.IssueClaimRecord) int {
-	return max(record.AgentAttempts, record.Failures, issueRunFailures(record))
+	return max(record.AgentAttempts, record.Failures+issueRunFailures(record))
 }
 
 func issueRetryDelay(id string, failures int, policy localruntime.IssueRecoveryConfig) time.Duration {
@@ -603,6 +603,7 @@ func (s Server) deferIssueUnlock(id string, cause error) error {
 	err := s.IssueClaims.Update(id, func(record *localruntime.IssueClaimRecord) error {
 		record.UnlockPending = true
 		record.UnlockFailures++
+		record.UnlockError = cause.Error()
 		record.NextUnlockAt = issueRetryDeadline(record.ID, record.UnlockFailures, s.IssueRecovery.Defaults(), cause)
 		return nil
 	})
@@ -626,6 +627,7 @@ func (s Server) unlockIssue(ctx context.Context, record *localruntime.IssueClaim
 	record.UnlockPending = false
 	record.NextUnlockAt = time.Time{}
 	record.UnlockFailures = 0
+	record.UnlockError = ""
 	return s.IssueClaims.Save(*record)
 }
 

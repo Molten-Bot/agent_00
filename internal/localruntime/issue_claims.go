@@ -44,6 +44,7 @@ type IssueClaimRecord struct {
 	LabelAdded       bool          `json:"labelAdded,omitempty"`
 	UnlockPending    bool          `json:"unlockPending,omitempty"`
 	NextUnlockAt     time.Time     `json:"nextUnlockAt,omitzero"`
+	UnlockError      string        `json:"unlockError,omitempty"`
 	UnlockFailures   int           `json:"unlockFailures,omitempty"`
 	Incident         string        `json:"incident,omitempty"`
 	RepairRequestID  string        `json:"repairRequestId,omitempty"`

@@ -618,6 +618,7 @@ func (s Server) handleIssueAutomationStatus(w http.ResponseWriter, r *http.Reque
 			entry["nextAttemptAt"] = record.NextAttemptAt
 			entry["nextUnlockAt"] = record.NextUnlockAt
 			entry["unlockPending"] = record.UnlockPending
+			entry["unlockError"] = record.UnlockError
 			entry["prUrl"] = record.PRURL
 			entry["incident"] = record.Incident
 			entry["repairRequestId"] = record.RepairRequestID
@@ -908,6 +909,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if automatic {
 			record.AgentAttempts = previous.AgentAttempts
 			record.PriorRunFailures = issueRunFailures(previous)
+			record.Failures = previous.Failures
 		}
 	}
 	if err = s.IssueClaims.Save(record); err != nil {
