@@ -123,7 +123,7 @@ func TestClaimedIssueDefersNonFastForwardSyncUntilPublication(t *testing.T) {
 			} else {
 				probeCommands = append(probeCommands, "fetch origin refs/heads/"+branch, "rev-list --max-count=1 FETCH_HEAD..HEAD")
 			}
-			publishCommands := []string{"push -u origin " + branch, "fetch origin " + branch, "merge --no-edit FETCH_HEAD", "push -u origin " + branch}
+			publishCommands := []string{"push -u origin " + branch, "fetch origin refs/heads/" + branch, "merge --no-edit --no-overwrite-ignore FETCH_HEAD", "push -u origin " + branch}
 			wantCommands := append(probeCommands, publishCommands...)
 			var commands []string
 			pushes := 0
@@ -219,12 +219,16 @@ func TestClaimedIssueResumesOnlyAcceptedPublication(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
 		ready           bool
+		remoteOnly      bool
+		localCommits    bool
 		agentFails      bool
 		wantPublish     bool
 		wantExit        int
 		wantCheckpoints []bool
 	}{
 		{name: "accepted work resumes publication", ready: true, wantPublish: true, wantExit: ExitGit},
+		{name: "accepted local commits resume publication", ready: true, localCommits: true, wantPublish: true, wantExit: ExitGit},
+		{name: "remote commits do not resume publication", ready: true, remoteOnly: true, agentFails: true, wantExit: ExitCodex, wantCheckpoints: []bool{false}},
 		{name: "failed agent leaves partial work unpublished", agentFails: true, wantExit: ExitCodex, wantCheckpoints: []bool{false}},
 		{name: "successful retry makes work publishable", wantPublish: true, wantExit: ExitGit, wantCheckpoints: []bool{false, true}},
 	} {
@@ -250,7 +254,17 @@ func TestClaimedIssueResumesOnlyAcceptedPublication(t *testing.T) {
 					case strings.Contains(args, "ls-remote --heads origin agent00-issue-17"):
 						return execx.Result{Stdout: "existing\trefs/heads/agent00-issue-17\n"}, nil
 					case strings.Contains(args, "status --porcelain"):
+						if tc.remoteOnly || tc.localCommits {
+							return execx.Result{Stdout: "## agent00-issue-17\n"}, nil
+						}
 						return execx.Result{Stdout: "## agent00-issue-17\n M app.go\n"}, nil
+					case args == "rev-list --max-count=1 FETCH_HEAD..HEAD":
+						if tc.localCommits {
+							return execx.Result{Stdout: "local-commit\n"}, nil
+						}
+						return execx.Result{}, nil
+					case strings.Contains(args, "rev-list --count refs/remotes/origin/main..HEAD"):
+						return execx.Result{Stdout: "1\n"}, nil
 					case strings.Contains(args, "add -A"):
 						publishing = true
 						return execx.Result{}, errors.New("stop at publication")
@@ -269,7 +283,7 @@ func TestClaimedIssueResumesOnlyAcceptedPublication(t *testing.T) {
 			h.Workspace = testWorkspaceManager("issue-publication-resume")
 			h.TargetDirOK = func(string) bool { return true }
 			result := h.Run(context.Background(), cfg)
-			if publishing != tc.wantPublish || agentStarted == tc.ready || result.ExitCode != tc.wantExit {
+			if publishing != tc.wantPublish || agentStarted == (tc.ready && !tc.remoteOnly) || result.ExitCode != tc.wantExit {
 				t.Fatalf("publishing=%t agent=%t result=%+v", publishing, agentStarted, result)
 			}
 			if !slices.Equal(checkpoints, tc.wantCheckpoints) {
