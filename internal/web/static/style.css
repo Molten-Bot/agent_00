@@ -4379,6 +4379,7 @@ select.prompt-control {
 }
 
 .dashboard-d3-slice {
+  stroke-width: 2;
   filter: drop-shadow(0 7px 14px rgba(10, 44, 102, 0.12));
   transition: filter 140ms ease;
 }
@@ -4390,6 +4391,7 @@ select.prompt-control {
 }
 
 .dashboard-d3-empty {
+  fill: none;
   opacity: 0.78;
 }
 
