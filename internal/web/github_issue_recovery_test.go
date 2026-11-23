@@ -1134,13 +1134,16 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 		name, evidence       string
 		matchedLogs, repair  bool
 		legacyErrorFieldOnly bool
+		logsRestored         bool
 	}{
 		{name: "ambiguous preserved report", evidence: ambiguous, repair: true},
 		{name: "legacy error field", evidence: ambiguous, repair: true, legacyErrorFieldOnly: true},
 		{name: "confirmed preserved report", evidence: confirmed},
 		{name: "confirmed legacy error field", evidence: confirmed, legacyErrorFieldOnly: true},
+		{name: "confirmed secret only", evidence: prefix + "The shared Secrets Manager key requires external provisioning.", legacyErrorFieldOnly: true},
 		{name: "matching stdout reports a failed check", evidence: truncated, matchedLogs: true, repair: true},
 		{name: "no matching stdout for truncated report", evidence: truncated},
+		{name: "stdout restored after legacy error is overwritten", evidence: truncated, repair: true, legacyErrorFieldOnly: true, logsRestored: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := recoveryServer(t)
@@ -1157,11 +1160,12 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 			if err := s.IssueClaims.Save(record); err != nil {
 				t.Fatal(err)
 			}
+			matchedLogs := tc.matchedLogs
 			s.IssueRolloutBlockedFromLogs = func(requestID, failure string) (bool, bool) {
 				if requestID != record.RequestID || failure != truncated {
 					t.Fatalf("unexpected stdout lookup for %q and %q", requestID, failure)
 				}
-				return false, tc.matchedLogs
+				return false, matchedLogs
 			}
 			calls := 0
 			s.IssueRepair = func(_ context.Context, issue localruntime.IssueClaimRecord) (string, error) {
@@ -1171,9 +1175,18 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 				}
 				return "repair-test", nil
 			}
-			for range 2 {
+			for pass := range 2 {
 				if err := s.ReconcileIssueWork(t.Context()); err != nil {
 					t.Fatal(err)
+				}
+				if pass == 0 && tc.logsRestored {
+					got := latestRecoveryRecord(t, s)
+					if got.State != "blocked" || got.Incident != record.Incident ||
+						got.Error != issueDependencyRetryError(record.Incident) || got.RunError != tc.evidence || calls != 0 {
+						t.Fatalf("legacy failure not preserved while stdout is unavailable: state=%q incident=%q error=%q run error=%q repair calls=%d",
+							got.State, got.Incident, got.Error, got.RunError, calls)
+					}
+					matchedLogs = true
 				}
 			}
 			got := latestRecoveryRecord(t, s)

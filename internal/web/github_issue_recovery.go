@@ -250,7 +250,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			}
 		}
 		if record.Incident != previousIncident ||
-			(record.Incident == localruntime.IssueIncidentExternalRollout && record.RunError == "" && !missingEvidence) {
+			(record.Incident == localruntime.IssueIncidentExternalRollout && record.RunError == "" && (!missingEvidence || truncated)) {
 			record.RunError = failure
 			if issueDependencyRetryError(record.Incident) != "" {
 				record.NextAttemptAt = time.Time{}

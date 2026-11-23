@@ -106,8 +106,8 @@ const OpenDependencyReason = "required dependency is still open"
 var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\bblocked by (?:an? |the )?unmerged (?:pull request |pr )?\x60?#[1-9][0-9]*\b`)
 
 var pendingProductionRolloutSummary = regexp.MustCompile(`^failure:\s*(?:(?:the )?production (?:rollout|deployment)(?: for #[1-9][0-9]*)?|#[1-9][0-9]* production (?:rollout|deployment)) (?:remains|is|is still) (?:pending|incomplete)\.?$`)
-var outstandingProvisioning = regexp.MustCompile(` (?:remain|are)(?: still)? (?:outstanding|pending)$`)
-var externalProvisioningRequired = regexp.MustCompile(` (?:still )?require external provisioning$`)
+var outstandingProvisioning = regexp.MustCompile(` (?:remains?|are|is)(?: still)? (?:outstanding|pending)$`)
+var externalProvisioningRequired = regexp.MustCompile(` (?:still )?requires? external provisioning$`)
 var provisioningListSeparator = regexp.MustCompile(`, (?:and )?| and `)
 
 const iamPrerequisite = `(?:the )?(?:production )?(?:scoped )?iam`
@@ -582,19 +582,19 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	}
 	// Infrastructure configuration and resource names can refer to repository
 	// edits. Require explicit external provisioning for those items.
-	var infrastructure, secret bool
+	var confirmedPrerequisite bool
 	for _, item := range provisioningListSeparator.Split(statement[:predicate[0]], -1) {
 		switch {
-		case iamProvisioning.MatchString(item) || (explicitExternal && (iamConfiguration.MatchString(item) || item == "infrastructure changes")):
-			infrastructure = true
-		case secretProvisioning.MatchString(item) || (explicitExternal && secretConfiguration.MatchString(item)):
-			secret = true
+		case iamProvisioning.MatchString(item), secretProvisioning.MatchString(item):
+			confirmedPrerequisite = true
+		case explicitExternal && (iamConfiguration.MatchString(item) || secretConfiguration.MatchString(item) || item == "infrastructure changes"):
+			confirmedPrerequisite = true
 		case item == "deployment", item == "deployed source verification", item == "live source verification", item == "live verification":
 		default:
 			return false
 		}
 	}
-	if !infrastructure || !secret {
+	if !confirmedPrerequisite {
 		return false
 	}
 	if !rolloutStatusOnly(statements[1:]) {
