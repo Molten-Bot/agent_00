@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -138,8 +139,9 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 	contentType := resp.Header.Get("Content-Type")
 	declared, _, _ := mime.ParseMediaType(contentType)
 	mediaType := ""
-	if strings.HasPrefix(strings.ToLower(contentType), "text/html") ||
-		strings.HasPrefix(detected, "text/html") && declared != "text/plain" {
+	isHTML := strings.HasPrefix(strings.ToLower(contentType), "text/html") ||
+		strings.HasPrefix(detected, "text/html") && declared != "text/plain"
+	if isHTML {
 		disposition, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Disposition"))
 		if disposition != "attachment" {
 			return nil, "", fmt.Errorf("GitHub returned HTML instead of an attachment; verify repository access")
@@ -162,6 +164,10 @@ func Preview(ctx context.Context, asset Asset, viewerToken string, transport htt
 	data, err := readAttachment(body, resp.ContentLength, MaxFileBytes)
 	if err != nil {
 		return nil, "", err
+	}
+	// An AVIF file type box can extend past the sniff window.
+	if !isHTML && len(data) > len(prefix) && isAVIF(data) {
+		mediaType = "image/avif"
 	}
 	if mediaType != "" {
 		return io.NopCloser(bytes.NewReader(data)), mediaType, nil
@@ -230,6 +236,10 @@ func (b *VideoPreviewBody) Read(p []byte) (int, error) {
 }
 
 func previewMediaType(detected, declared string, prefix []byte) string {
+	// GitHub can serve AVIF bytes under a JPEG content type.
+	if isAVIF(prefix) {
+		return "image/avif"
+	}
 	switch detected {
 	case "application/pdf", "audio/mpeg", "image/bmp", "image/gif", "image/jpeg", "image/png", "image/webp", "image/x-icon", "video/mp4", "video/webm":
 		return detected
@@ -248,6 +258,34 @@ func previewMediaType(detected, declared string, prefix []byte) string {
 		return "audio/mpeg"
 	}
 	return ""
+}
+
+func isAVIF(prefix []byte) bool {
+	if len(prefix) < 16 || string(prefix[4:8]) != "ftyp" {
+		return false
+	}
+	boxSize := uint64(binary.BigEndian.Uint32(prefix[:4]))
+	headerSize := 8
+	if boxSize == 1 {
+		boxSize = binary.BigEndian.Uint64(prefix[8:16])
+		headerSize = 16
+	}
+	brandsStart := headerSize + 8 // Major brand and minor version precede compatible brands.
+	if boxSize < uint64(brandsStart) || boxSize%4 != 0 || boxSize > uint64(len(prefix)) {
+		return false
+	}
+	isAVIFBrand := func(brand []byte) bool {
+		return string(brand) == "avif" || string(brand) == "avis"
+	}
+	if isAVIFBrand(prefix[headerSize : headerSize+4]) {
+		return true
+	}
+	for offset := brandsStart; offset < int(boxSize); offset += 4 {
+		if isAVIFBrand(prefix[offset : offset+4]) {
+			return true
+		}
+	}
+	return false
 }
 
 func isMP3Frame(data []byte) bool {

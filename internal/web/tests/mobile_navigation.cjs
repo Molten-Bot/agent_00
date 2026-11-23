@@ -68,13 +68,35 @@ function hasD3(t) {
   }
 }
 
-test('320px: five source legend rows leave room for the focused share', async t => {
+test('320px: legends fit inside both charts and leave room for the focused share', async t => {
   if (!hasD3(t)) return;
   const sourceMix = ['Chat', 'Prompt', 'Library', 'GitHub Issues', 'JSON']
     .map(name => ({ name, tasks: name === 'GitHub Issues' ? 3 : 1 }));
   const { page } = await openPage(t, 'dashboard', { width: 320, height: 844 }, true, [], {
-    source_mix: sourceMix, total_tasks: 7,
+    source_mix: sourceMix, total_tasks: 7, running_tasks: 2, paused_tasks: 1,
+    pending_tasks: 1, stopped_tasks: 1, completed_tasks: 1, failed_tasks: 1,
   });
+  await assertFits(page);
+  for (const [id, count] of [['dashboard-source-chart', 5], ['dashboard-task-chart', 6]]) {
+    const legend = page.locator(`#${id} .dashboard-d3-legend-item`);
+    await legend.nth(count - 1).waitFor();
+    const overflowingLabels = await legend.evaluateAll(items => {
+      const svg = items[0].ownerSVGElement;
+      const bounds = svg.getBoundingClientRect();
+      const card = svg.parentElement.getBoundingClientRect();
+      const ring = svg.querySelector('.dashboard-d3-root').getBoundingClientRect();
+      const labels = items.map(item => item.getBoundingClientRect());
+      return items.filter((_item, index) => {
+        const label = labels[index];
+        return label.left < bounds.left || label.right > bounds.right ||
+          label.top < ring.bottom || label.bottom > Math.min(bounds.bottom, card.bottom) ||
+          labels.slice(0, index).some(previous =>
+            label.top < previous.bottom && label.bottom > previous.top &&
+            label.left < previous.right && label.right > previous.left);
+      }).map(item => item.textContent);
+    });
+    assert.deepEqual(overflowingLabels, [], `${id}: legend entries fit below the ring without overlap`);
+  }
   const chart = page.locator('#dashboard-source-chart');
   const slices = chart.locator('.dashboard-d3-slice');
   await slices.nth(3).focus();
@@ -92,8 +114,11 @@ test('320px: five source legend rows leave room for the focused share', async t 
   assert.equal(overlapsRing, false, 'focused percentage and label fit inside the ring');
 
   const viewBox = await chart.getAttribute('viewBox');
+  const taskChart = page.locator('#dashboard-task-chart');
+  const taskViewBox = await taskChart.getAttribute('viewBox');
   await page.setViewportSize({ width: 932, height: 430 });
   await page.waitForFunction(previous => document.querySelector('#dashboard-source-chart').getAttribute('viewBox') !== previous, viewBox);
+  assert.notEqual(await taskChart.getAttribute('viewBox'), taskViewBox);
   assert.equal(await slices.nth(3).evaluate(node => node === document.activeElement), true);
   assert.equal(await chart.locator('.dashboard-d3-center-value').textContent(), '42.9%');
   assert.equal(await chart.locator('.dashboard-d3-center-label').textContent(), 'GitHub Issues');
