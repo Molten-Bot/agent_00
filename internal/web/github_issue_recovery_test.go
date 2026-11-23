@@ -104,6 +104,11 @@ func TestExplicitIssueRecoveryUsesPersistentOwner(t *testing.T) {
 			s, f := recoveryServer(t)
 			s.pollGitHubIssueAutoStart(context.Background())
 			previous := completeRecoveryRecord(t, s, "stopped", 3)
+			previous.PriorRunFailures = 2
+			previous.NextAttemptAt = time.Now().Add(time.Hour)
+			if err := s.IssueClaims.Save(previous); err != nil {
+				t.Fatal(err)
+			}
 			// Simulate a cached identity left behind by an earlier server configuration.
 			s.issueAutomation.instanceID = strings.Repeat("f", 32)
 			s.SubmitLocalPrompt = func(ctx context.Context, body []byte) (string, error) {
@@ -145,7 +150,7 @@ func TestExplicitIssueRecoveryUsesPersistentOwner(t *testing.T) {
 			if len(f.submissions) != 2 || latest.ID == previous.ID || latest.Run.GitHubIssue.Claim.Attempt != previous.Run.GitHubIssue.Claim.Attempt+1 {
 				t.Fatal("explicit recovery did not submit a fresh attempt")
 			}
-			if latest.Run.GitHubIssue.Claim.Branch != previous.Run.GitHubIssue.Claim.Branch || latest.AgentAttempts != 0 || latest.Outcome != "" {
+			if latest.Run.GitHubIssue.Claim.Branch != previous.Run.GitHubIssue.Claim.Branch || latest.AgentAttempts != 0 || issueRunFailures(latest) != 0 || latest.Outcome != "" {
 				t.Fatal("explicit recovery lost the branch or retained the previous retry limit")
 			}
 		})
@@ -241,6 +246,7 @@ func TestIssueRecoveryStopsRetryWhenDispatchRejectsOwner(t *testing.T) {
 		return "", errors.New("temporary dispatch failure")
 	}
 	s.pollGitHubIssueAutoStart(ctx)
+	expireIssueRetry(t, s, latestRecoveryRecord(t, s).ID)
 	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
 		return "", localruntime.ErrIssueOwnershipChanged
 	}
@@ -285,10 +291,10 @@ func TestIssueRecoveryFinalizesCompletedAttemptAfterOwnerRestored(t *testing.T) 
 		t.Fatalf("expected label removal failure after owner restored, got %v", err)
 	}
 	blocked = latestRecoveryRecord(t, s)
-	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || blocked.NextAttemptAt.IsZero() {
-		t.Fatalf("label removal failure lost the dispatch block: state=%s error=%q retry=%v", blocked.State, blocked.Error, blocked.NextAttemptAt)
+	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || !blocked.NextAttemptAt.IsZero() || blocked.NextUnlockAt.IsZero() {
+		t.Fatalf("label removal failure lost the dispatch block or cleanup deadline: state=%s error=%q dispatch=%v cleanup=%v", blocked.State, blocked.Error, blocked.NextAttemptAt, blocked.NextUnlockAt)
 	}
-	blocked.NextAttemptAt = time.Now().Add(-time.Second)
+	blocked.NextUnlockAt = time.Now().Add(-time.Second)
 	if err := s.IssueClaims.Save(blocked); err != nil {
 		t.Fatal(err)
 	}
@@ -344,10 +350,10 @@ func TestIssueRecoveryFinalizesInterruptedAttemptAfterOwnerRestored(t *testing.T
 		t.Fatalf("expected label removal failure after owner restored, got %v", err)
 	}
 	blocked = latestRecoveryRecord(t, s)
-	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || blocked.NextAttemptAt.IsZero() {
-		t.Fatalf("label removal failure lost the dispatch block: state=%s error=%q retry=%v", blocked.State, blocked.Error, blocked.NextAttemptAt)
+	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || !blocked.NextAttemptAt.IsZero() || blocked.NextUnlockAt.IsZero() {
+		t.Fatalf("label removal failure lost the dispatch block or cleanup deadline: state=%s error=%q dispatch=%v cleanup=%v", blocked.State, blocked.Error, blocked.NextAttemptAt, blocked.NextUnlockAt)
 	}
-	blocked.NextAttemptAt = time.Now().Add(-time.Second)
+	blocked.NextUnlockAt = time.Now().Add(-time.Second)
 	if err := s.IssueClaims.Save(blocked); err != nil {
 		t.Fatal(err)
 	}
@@ -566,6 +572,21 @@ func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 	if err := restarted.ReconcileIssueWork(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if f.deletes != 1 {
+		t.Fatalf("retried cleanup before its deadline: deletes=%d", f.deletes)
+	}
+	if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.NextUnlockAt = time.Now().Add(-time.Second)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ReconcileIssueWork(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := latestRecoveryRecord(t, restarted); got.UnlockPending || got.NextAttemptAt.IsZero() || f.deletes != 2 {
+		t.Fatalf("cleanup did not finish and start the run cooldown: pending=%t deadline=%v deletes=%d", got.UnlockPending, got.NextAttemptAt, f.deletes)
+	}
 	if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
 		r.NextAttemptAt = time.Now().Add(-time.Second)
 		r.PublicationReady = true
@@ -579,6 +600,274 @@ func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 	got := latestRecoveryRecord(t, s)
 	if len(f.submissions) != 2 || got.AgentAttempts != 1 || got.Run.GitHubIssue.Claim.Attempt != 2 || !got.PublicationReady {
 		t.Fatalf("retry lost lineage: %+v submissions=%d", got, len(f.submissions))
+	}
+}
+
+func expireIssueRetry(t *testing.T, s Server, id string) {
+	t.Helper()
+	if err := s.IssueClaims.Update(id, func(record *localruntime.IssueClaimRecord) error {
+		record.NextAttemptAt = time.Now().Add(-time.Second)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIssueRecoveryDefersCleanupAfterLabelAdmissionRateLimit(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, f := recoveryServer(t)
+	retryAt := time.Now().UTC().Truncate(time.Second).Add(2 * time.Hour)
+	requests := 0
+	s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		requests++
+		if strings.Contains(strings.Join(cmd.Args, " "), "--method POST repos/acme/repo/issues/17/labels") {
+			return execx.Result{Stdout: "HTTP/2.0 429 Too Many Requests\r\nRetry-After: " + retryAt.Format(http.TimeFormat) + "\r\n\r\n"}, errors.New("rate limited")
+		}
+		return f.Run(ctx, cmd)
+	})
+	s.pollGitHubIssueAutoStart(ctx)
+	s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+	waiting := latestRecoveryRecord(t, s)
+	before := requests
+	if err := s.ReconcileIssueWork(ctx); err != nil || requests != before {
+		t.Fatalf("reconciliation called GitHub before Retry-After: requests=%d, error=%v", requests-before, err)
+	}
+	if !waiting.UnlockPending || !waiting.NextAttemptAt.Equal(retryAt) || !waiting.NextUnlockAt.Equal(retryAt) ||
+		waiting.UnlockFailures != 0 || len(f.submissions) != 0 {
+		t.Fatalf("label admission did not persist both deadlines: %+v", waiting)
+	}
+}
+
+func TestIssueRecoveryHonorsLabelCleanupRetryAfter(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, f := recoveryServer(t)
+	dispatches := 0
+	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
+		dispatches++
+		return "", errors.New("temporary dispatch failure")
+	}
+	s.pollGitHubIssueAutoStart(ctx)
+	waiting := latestRecoveryRecord(t, s)
+	if !waiting.UnlockPending || !waiting.NextAttemptAt.After(time.Now()) {
+		t.Fatalf("failed admission did not leave a label and dispatch cooldown: %+v", waiting)
+	}
+	requests := 0
+	rateLimited := errors.New("rate limited")
+	retryAt := time.Now().UTC().Truncate(time.Second).Add(2 * time.Hour)
+	s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		requests++
+		if strings.Contains(strings.Join(cmd.Args, " "), "--method DELETE") {
+			return execx.Result{Stdout: "HTTP/2.0 429 Too Many Requests\r\nRetry-After: " + retryAt.Format(http.TimeFormat) + "\r\n\r\n"}, rateLimited
+		}
+		return f.Run(ctx, cmd)
+	})
+	if err := s.ReconcileIssueWork(ctx); !errors.Is(err, rateLimited) {
+		t.Fatalf("label cleanup should run during dispatch cooldown, got %v", err)
+	}
+	s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+	got := latestRecoveryRecord(t, s)
+	if !got.UnlockPending || !got.NextUnlockAt.Equal(retryAt) || got.UnlockFailures != 1 ||
+		!got.NextAttemptAt.Equal(waiting.NextAttemptAt) || got.Failures != waiting.Failures || got.UnlockError == "" || got.Error != waiting.Error {
+		t.Fatalf("cleanup failure changed dispatch backoff or lost Retry-After: %+v", got)
+	}
+	if err := s.IssueClaims.Update(waiting.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.NextAttemptAt = time.Time{}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/automation", nil))
+	var status struct {
+		Claims []struct {
+			ID            string
+			NextAttemptAt time.Time
+			NextUnlockAt  time.Time
+			UnlockPending bool
+			UnlockError   string
+		}
+	}
+	if response.Code != http.StatusOK {
+		t.Fatalf("automation status = %d: %s", response.Code, response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Claims) != 1 || status.Claims[0].ID != waiting.ID || !status.Claims[0].NextAttemptAt.IsZero() ||
+		!status.Claims[0].UnlockPending || status.Claims[0].UnlockError != got.UnlockError || !status.Claims[0].NextUnlockAt.Equal(retryAt) {
+		t.Fatalf("automation status omitted independent cleanup deadline: %s", response.Body.String())
+	}
+	before := requests
+	if err := s.ReconcileIssueWork(ctx); err != nil || requests != before {
+		t.Fatalf("reconciliation called GitHub during cleanup cooldown: requests=%d, error=%v", requests-before, err)
+	}
+	if err := s.IssueClaims.Update(waiting.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.NextUnlockAt = time.Now().Add(-time.Second)
+		r.NextAttemptAt = waiting.NextAttemptAt
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.GitHubIssueRunner = f
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got = latestRecoveryRecord(t, s)
+	if got.UnlockPending || got.LabelAdded || !got.NextUnlockAt.IsZero() || got.UnlockFailures != 0 || got.UnlockError != "" || f.deletes != 1 || dispatches != 1 {
+		t.Fatalf("due cleanup did not clear label and backoff: %+v deletes=%d dispatches=%d", got, f.deletes, dispatches)
+	}
+}
+
+func TestIssueRecoveryBacksOffRepeatedFailuresWithoutAgentAttempts(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	for i, seconds := range []int{60, 300, 1500, 3600, 3600} {
+		// Preflight or publication can fail without starting another agent.
+		record := completeRecoveryRecord(t, s, "error", 0)
+		before := time.Now()
+		if err := s.ReconcileIssueWork(ctx); err != nil {
+			t.Fatal(err)
+		}
+		after := time.Now()
+		waiting := latestRecoveryRecord(t, s)
+		delay := time.Duration(seconds) * time.Second
+		maxDelay := min(delay+delay/5, time.Hour)
+		if waiting.State != "retry_wait" || waiting.ID != record.ID || issueRunFailures(waiting) != i+1 ||
+			waiting.NextAttemptAt.Before(before.Add(delay)) || waiting.NextAttemptAt.After(after.Add(maxDelay)) {
+			t.Fatalf("failure %d: state=%s count=%d retry=%v, want delay %v", i+1, waiting.State, issueRunFailures(waiting), waiting.NextAttemptAt, delay)
+		}
+		s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+		if err := s.ReconcileIssueWork(ctx); err != nil || len(f.submissions) != i+1 {
+			t.Fatalf("retried before deadline: submissions=%d, error=%v", len(f.submissions), err)
+		}
+		if got := latestRecoveryRecord(t, s); !got.NextAttemptAt.Equal(waiting.NextAttemptAt) || issueRunFailures(got) != i+1 {
+			t.Fatalf("waiting changed deadline or counted the same run twice: %+v", got)
+		}
+		expireIssueRetry(t, s, record.ID)
+		if err := s.ReconcileIssueWork(ctx); err != nil || len(f.submissions) != i+2 {
+			t.Fatalf("due retry: submissions=%d, error=%v", len(f.submissions), err)
+		}
+	}
+
+	completeRecoveryRecord(t, s, "error", 0)
+	f.prs = recoveryPR("open", "null", "agent00-issue-17", "main")
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.State != "fulfilled" || issueRunFailures(got) != 0 || !got.NextAttemptAt.IsZero() || len(f.submissions) != 6 {
+		t.Fatalf("verified PR did not end retries: state=%s failures=%d deadline=%v submissions=%d", got.State, issueRunFailures(got), got.NextAttemptAt, len(f.submissions))
+	}
+}
+
+func TestIssueRecoveryBacksOffFailedSuccessorAdmission(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	previous := completeRecoveryRecord(t, s, "error", 0)
+	expireIssueRetry(t, s, previous.ID)
+	dispatchErr := errors.New("temporary dispatch failure")
+	calls := 0
+	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
+		calls++
+		return "", dispatchErr
+	}
+	for failures := 1; failures <= 2; failures++ {
+		before := time.Now()
+		if err := s.ReconcileIssueWork(ctx); !errors.Is(err, dispatchErr) {
+			t.Fatalf("expected dispatch failure, got %v", err)
+		}
+		got := latestRecoveryRecord(t, s)
+		if got.ID == previous.ID || got.State != "retry_wait" || got.Failures != failures || issueRunFailures(got) != 1 {
+			t.Fatalf("cooldown missing on successor: %+v", got)
+		}
+		wantDelay := issueRetryDelay(got.ID, 1+failures, s.IssueRecovery.Defaults())
+		if got.NextAttemptAt.Before(before.Add(wantDelay)) || got.NextAttemptAt.After(time.Now().Add(wantDelay)) {
+			t.Fatalf("mixed run/admission failures did not increase delay: %+v", got)
+		}
+		response := httptest.NewRecorder()
+		s.handleIssueAutomationStatus(response, httptest.NewRequest(http.MethodGet, "/api/github/automation", nil))
+		var status struct {
+			Claims []struct {
+				ID               string
+				RunFailures      int
+				RecoveryFailures int
+				NextAttemptAt    time.Time
+			}
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil {
+			t.Fatal(err)
+		}
+		matched := false
+		for _, claim := range status.Claims {
+			if claim.ID == got.ID {
+				matched = claim.RunFailures == 1 && claim.RecoveryFailures == failures && claim.NextAttemptAt.Equal(got.NextAttemptAt)
+			}
+		}
+		if !matched {
+			t.Fatal("automation status omitted the successor's counts or deadline")
+		}
+		if err := s.ReconcileIssueWork(ctx); err != nil || calls != failures || len(f.submissions) != 1 {
+			t.Fatalf("cooling claim dispatched: calls=%d, submissions=%d, error=%v", calls, len(f.submissions), err)
+		}
+		unlocked := latestRecoveryRecord(t, s)
+		if unlocked.LabelAdded || unlocked.UnlockPending || githubIssueHasAnyLabel(f.issue, []string{got.Run.GitHubIssue.Claim.ExclusionLabel}) {
+			t.Fatal("failed dispatch kept its exclusion label during backoff")
+		}
+		if !unlocked.NextAttemptAt.Equal(got.NextAttemptAt) || !unlocked.NextAttemptAt.After(time.Now()) || unlocked.Failures != failures {
+			t.Fatalf("unlock changed the dispatch cooldown: deadline=%v failures=%d", unlocked.NextAttemptAt, unlocked.Failures)
+		}
+		expireIssueRetry(t, s, got.ID)
+	}
+	s.SubmitLocalPrompt = f.submit
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	record := completeRecoveryRecord(t, s, "error", 0)
+	expireIssueRetry(t, s, record.ID)
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	successor := latestRecoveryRecord(t, s)
+	if successor.Failures != 2 || issueRunFailures(successor) != 2 || issueRetryFailures(successor) != 4 {
+		t.Fatalf("successor lost mixed failure streak: %+v", successor)
+	}
+}
+
+func TestIssueRecoveryPersistsRepairReceiptBeforeFailedAdmission(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	previous := completeRecoveryRecord(t, s, "error", 0)
+	expireIssueRetry(t, s, previous.ID)
+	s.IssueRepair = func(_ context.Context, record localruntime.IssueClaimRecord) (string, error) {
+		if record.ID != previous.ID {
+			t.Fatalf("repair attempted for claim %s, want %s", record.ID, previous.ID)
+		}
+		return "repair-request", nil
+	}
+	dispatchErr := errors.New("temporary dispatch failure")
+	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
+		return "", dispatchErr
+	}
+	if err := s.ReconcileIssueWork(ctx); !errors.Is(err, dispatchErr) {
+		t.Fatalf("expected dispatch failure, got %v", err)
+	}
+	if got := latestRecoveryRecord(t, s); got.ID == previous.ID || got.State != "retry_wait" || len(f.submissions) != 1 {
+		t.Fatalf("expected deferred successor, got claim %s in state %s", got.ID, got.State)
+	}
+	saved, err := (&localruntime.IssueClaimStore{Root: s.IssueClaims.Root}).Load(previous.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.RepairRequestID != "repair-request" {
+		t.Fatalf("saved repair receipt = %q", saved.RepairRequestID)
 	}
 }
 
@@ -734,7 +1023,10 @@ func testIssueRecoveryBlocksPrerequisite(t *testing.T, report, incident, want st
 		t.Fatal("expected temporary unlock failure")
 	}
 	if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
-		r.NextAttemptAt = time.Now().Add(-time.Second)
+		if !r.NextAttemptAt.IsZero() || r.NextUnlockAt.IsZero() {
+			t.Fatalf("dependency failure scheduled dispatch or lost cleanup deadline: dispatch=%v cleanup=%v", r.NextAttemptAt, r.NextUnlockAt)
+		}
+		r.NextUnlockAt = time.Now().Add(-time.Second)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -863,10 +1155,12 @@ func TestIssueRecoveryCapturesAdmissionBeforeGitHubFails(t *testing.T) {
 	f.fail = "issue view"
 	s.pollGitHubIssueAutoStart(context.Background())
 	record := latestRecoveryRecord(t, s)
-	if record.Version != 2 || record.Incident != "admission" || len(f.submissions) != 0 {
+	if record.Version != 2 || record.Incident != "admission" || record.Failures != 1 ||
+		!record.NextAttemptAt.After(time.Now()) || len(f.submissions) != 0 {
 		t.Fatalf("admission failure lost: %+v", record)
 	}
 	f.fail = ""
+	expireIssueRetry(t, s, record.ID)
 	if err := s.ReconcileIssueWork(context.Background()); err != nil {
 		t.Fatal(err)
 	}

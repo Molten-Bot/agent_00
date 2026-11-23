@@ -187,12 +187,17 @@ Background recovery verifies PR delivery before retrying, reuses preserved local
 changes and remote commits, and resumes publication once the journal confirms
 agent success. Legacy journals without this checkpoint rerun the agent before
 publishing, because pending changes alone do not prove a successful result.
-It permits three agent attempts per failure cycle, with initial delays
-of one and five minutes plus jitter. Infrastructure checks back off up to an
-hour and honor GitHub retry/reset headers. Auth and signing gates do not consume
+It permits three agent attempts per failure cycle. Consecutive unsuccessful
+runs increase the retry delay fivefold, starting at one minute plus jitter and
+capped at one hour by default. The count follows automatic retries, including
+runs that fail before starting the agent or while publishing a PR. Admission
+and infrastructure failures also back off and honor GitHub retry/reset headers.
+The local `/api/github/automation` endpoint exposes the run and recovery failure
+counts and next retry time for each claim. Auth and signing gates do not consume
 agent attempts. Exhausted attempts, explicit stops/pauses, and no-change results
-without a PR remain visible blockers requiring review or explicit retry. A
-manual recovery resets the agent-attempt budget and refreshes issue content.
+without a PR remain visible blockers requiring review or explicit retry.
+Verified PR delivery ends the failure streak. A manual recovery starts a new
+failure cycle and refreshes issue content.
 
 A watchdog stops a single workflow step after two hours. Advancing to another
 step resets its timer; streaming output, heartbeats, and retries in the same

@@ -43,10 +43,14 @@ type IssueClaimRecord struct {
 	VerifiedAt       time.Time     `json:"verifiedAt,omitempty"`
 	LabelAdded       bool          `json:"labelAdded,omitempty"`
 	UnlockPending    bool          `json:"unlockPending,omitempty"`
+	NextUnlockAt     time.Time     `json:"nextUnlockAt,omitzero"`
+	UnlockError      string        `json:"unlockError,omitempty"`
+	UnlockFailures   int           `json:"unlockFailures,omitempty"`
 	Incident         string        `json:"incident,omitempty"`
 	RepairRequestID  string        `json:"repairRequestId,omitempty"`
 	RepairError      string        `json:"repairError,omitempty"`
 	Failures         int           `json:"failures,omitempty"`
+	PriorRunFailures int           `json:"priorRunFailures,omitempty"`
 	IssueNodeID      string        `json:"issueNodeId,omitempty"`
 	ReservationSHA   string        `json:"reservationSha,omitempty"`
 	RemoteRecorded   bool          `json:"remoteRecorded,omitempty"`
