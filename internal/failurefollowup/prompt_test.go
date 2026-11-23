@@ -41,12 +41,20 @@ func TestWithExecutionContractRequestsExternalRolloutEvidence(t *testing.T) {
 	got := WithExecutionContract("Complete the rollout")
 	for _, want := range []string{
 		"first sentence of `Error details:`",
+		"use `Failure: Production rollout remains pending.` as the summary",
 		"explicitly state that they require external provisioning",
 		"Include any pending repository work or failed checks in the same error details.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("execution contract missing %q", want)
 		}
+	}
+	const example = "Failure: Production rollout remains pending.\nError details: IAM setup and Secrets Manager configuration require external provisioning."
+	if !strings.Contains(got, "\n\n"+example+"\n\n") {
+		t.Fatal("execution contract missing consecutive rollout failure fields")
+	}
+	if reason := NonRemediableFailureReason(errors.New("codex: codex reported failure: " + example)); reason != ExternalRolloutPrerequisitesReason {
+		t.Errorf("rollout example classified as %q, want %q", reason, ExternalRolloutPrerequisitesReason)
 	}
 }
 

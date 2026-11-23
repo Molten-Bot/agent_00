@@ -222,23 +222,39 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		blockStaleIssueClaim(&record)
 		return s.IssueClaims.Save(record)
 	}
-	// Preserve the classification before later checks can replace the last
-	// error. This also handles records written before the incident existed.
-	if record.Outcome == "error" && issueDependencyRetryError(record.Incident) == "" {
+	// Reclassify stored rollout incidents because older classifiers accepted
+	// ambiguous provisioning reports. Preserve the evidence before recovery
+	// checks can replace the last error.
+	if record.Outcome == "error" && (issueDependencyRetryError(record.Incident) == "" || record.Incident == localruntime.IssueIncidentExternalRollout) {
 		failure := record.FailureDetail()
 		reason := failurefollowup.NonRemediableFailureReason(errors.New(failure))
+		previousIncident := record.Incident
+		truncated := failurefollowup.HasTruncatedErrorDetails(failure)
+		var blockedFromLogs, matchedLogs bool
+		if truncated && s.IssueRolloutBlockedFromLogs != nil {
+			blockedFromLogs, matchedLogs = s.IssueRolloutBlockedFromLogs(record.RequestID, failure)
+		}
+		missingEvidence := failure == "" || failure == issueDependencyRetryError(previousIncident) ||
+			(truncated && !matchedLogs)
 		switch {
 		case reason == failurefollowup.UnmergedDependencyReason:
 			record.Incident = localruntime.IssueIncidentUnmergedDependency
 		case reason == failurefollowup.OpenDependencyReason:
 			record.Incident = localruntime.IssueIncidentOpenDependency
-		case reason == failurefollowup.ExternalRolloutPrerequisitesReason,
-			s.IssueRolloutBlockedFromLogs != nil && s.IssueRolloutBlockedFromLogs(record.RequestID, failure):
+		case reason == failurefollowup.ExternalRolloutPrerequisitesReason, blockedFromLogs:
 			record.Incident = localruntime.IssueIncidentExternalRollout
+		case previousIncident == localruntime.IssueIncidentExternalRollout && !missingEvidence:
+			record.Incident = "missing_pr"
+			if record.Error == issueDependencyRetryError(previousIncident) {
+				record.Error = ""
+			}
 		}
-		if issueDependencyRetryError(record.Incident) != "" {
-			record.RunError = record.FailureDetail()
-			record.NextAttemptAt = time.Time{}
+		if record.Incident != previousIncident ||
+			(record.Incident == localruntime.IssueIncidentExternalRollout && record.RunError == "" && !missingEvidence) {
+			record.RunError = failure
+			if issueDependencyRetryError(record.Incident) != "" {
+				record.NextAttemptAt = time.Time{}
+			}
 			if err := s.IssueClaims.Save(record); err != nil {
 				return err
 			}

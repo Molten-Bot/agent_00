@@ -7489,38 +7489,40 @@ func isAgentReportSection(line, field string, detailsHeadingLevel int) bool {
 
 // Keep omissions visible to downstream repair classifiers that receive the
 // displayed error rather than the complete report.
-const truncatedErrorDetails = " | [error details truncated]"
+const truncatedErrorDetails = failurefollowup.TruncatedErrorDetails
 const maxErrorDetailChars = 320
 
-// IsExternalRolloutFailureFromStdout rechecks a legacy truncated agent error
-// against its original stdout. Read stdout only for a truncated agent report.
-func IsExternalRolloutFailureFromStdout(failure string, readStdout func(stage string) string) bool {
+// CheckExternalRolloutFailureFromStdout reports the classification and whether
+// the preserved stdout matched the stored truncated report.
+func CheckExternalRolloutFailureFromStdout(failure string, readStdout func(stage string) string) (blocked, matched bool) {
 	failure, _, _ = strings.Cut(failure, "\npersist task logs: ")
 	if !strings.HasSuffix(failure, truncatedErrorDetails) {
-		return false
+		return false, false
 	}
 	stage, report, _ := strings.Cut(failure, ": ")
 	if stage != agentruntime.HarnessCodex && stage != agentruntime.HarnessClaude {
-		return false
+		return false, false
 	}
 	if !strings.HasPrefix(report, stage+" reported failure: ") {
-		return false
+		return false, false
 	}
 	stdout := readStdout(stage)
 	failed, summary := codexReportedFailureInOutput(stdout, true)
 	if !failed {
-		return false
+		return false, false
 	}
 	detail := codexExtractErrorDetail(stdout)
 	details, ok := strings.CutPrefix(detail, "Error details:")
 	if !ok {
-		return false
+		return false, false
 	}
 	// Reproduce the legacy display before applying the classification to the
 	// full report. The redacted repair prompt may be the only stored error.
 	legacy := stage + ": " + stage + " reported failure: " + summary + " " + codexDisplayErrorDetail(detail)
-	return (legacy == failure || failurefollowup.RedactFailureDetail(legacy) == failure) &&
-		failurefollowup.IsExternalRolloutFailure(summary, details)
+	if legacy != failure && failurefollowup.RedactFailureDetail(legacy) != failure {
+		return false, false
+	}
+	return failurefollowup.IsExternalRolloutFailure(summary, details), true
 }
 
 func codexDisplayErrorDetail(detail string) string {

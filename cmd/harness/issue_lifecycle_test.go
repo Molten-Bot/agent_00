@@ -416,6 +416,8 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 		{"actionable", "queued", "50", "IAM approval and Secrets Manager provisioning are complete, but local fixes remain outstanding.", false},
 		{"actionable after provisioning details", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding. Deployment tests fail.", false},
 		{"actionable flag regression", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding | Due to a regression API flags default to off.", false},
+		{"stale stored blocker", "blocked", "50", "IAM setup and Secrets Manager configuration are outstanding.", false},
+		{"confirmed stored blocker", "blocked", "50", "IAM setup and Secrets Manager configuration require external provisioning.", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			claims, issue := lifecycleRecord(t)
@@ -424,11 +426,15 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 			run := failureFollowUpRunConfigWithContext(issue.RequestID, app.Result{}, issue.Run, q.logRoot, formatFailureFollowUpContext(tc.exitCode, failure, issue.Run.Prompt))
 			id := strings.Repeat("b", 32)
 			record := localruntime.IssueRepairRecord{ID: id, RequestID: "repair-" + id, State: tc.state, Run: run}
-			if tc.state == "queued" {
+			if tc.state == "queued" || tc.state == "blocked" {
 				issue.Outcome = "error"
 				issue.Error = failure.Error()
 				issue.Incident = "missing_pr"
 				issue.RepairRequestID = record.RequestID
+				if tc.state == "blocked" {
+					record.Error = failurefollowup.ExternalRolloutPrerequisitesReason
+					issue.Incident = localruntime.IssueIncidentExternalRollout
+				}
 				if err := claims.Save(issue); err != nil {
 					t.Fatal(err)
 				}
@@ -473,6 +479,8 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 		{"linked repair with full report", "queued", logFileName, "stdout", "API flags default off.", true},
 		{"dispatch intent with legacy log", "running", legacyTaskLogFileName, "stdout", "API flags default off.", true},
 		{"deployment defect beyond truncation", "queued", logFileName, "stdout", "Smoke check returned HTTP 500.", false},
+		{"stored blocker with deployment defect beyond truncation", "blocked", logFileName, "stdout", "Smoke check returned HTTP 500.", false},
+		{"stored blocker with missing stdout", "blocked", "", "", "", true},
 		{"readiness timeout under validation beyond truncation", "queued", logFileName, "stdout", "## Validation\n- Readiness check timed out.", false},
 		{"passing validation beyond truncation", "queued", logFileName, "stdout", "## Validation\n- Unit tests passed.", true},
 		{"stderr echo", "queued", logFileName, "stderr", "API flags default off.", false},
@@ -486,6 +494,9 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 			issue.ExitCode = app.ExitCodex
 			record := saveLegacyIssueRepair(t, q, issue)
 			record.State = tc.state
+			if tc.state == "blocked" {
+				record.Error = failurefollowup.ExternalRolloutPrerequisitesReason
+			}
 			if err := q.store.Save(record); err != nil {
 				t.Fatal(err)
 			}
@@ -493,7 +504,11 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 			issue.Incident = "missing_pr"
 			issue.StoppedAt = time.Now().Add(-time.Minute)
 			issue.NextAttemptAt = time.Now().Add(time.Minute)
-			if tc.state == "queued" {
+			if tc.state == "blocked" {
+				issue.Incident = localruntime.IssueIncidentExternalRollout
+				issue.NextAttemptAt = time.Time{}
+			}
+			if tc.state == "queued" || tc.state == "blocked" {
 				issue.RepairRequestID = record.RequestID
 			} else {
 				issue.RunError = ""

@@ -25,7 +25,7 @@ const RedactedTaskPromptNotice = "Task prompt: redacted by the harness. Follow-u
 const FollowUpRepositoryURL = config.DefaultRepositoryURL
 
 const FailureResponseInstruction = "When the current run ends with an unresolved failure, start the final response with explicit `Failure:` and `Error details:` fields on consecutive lines, in that order. Describe earlier failures fixed during the run under `Resolved issue:` after any blocker fields."
-const rolloutFailureEvidenceInstruction = "If external provisioning blocks a production rollout, name the verified prerequisites in the first sentence of `Error details:` and explicitly state that they require external provisioning. For example, `Error details: IAM setup and Secrets Manager configuration require external provisioning.` Include any pending repository work or failed checks in the same error details. Omit credential values."
+const rolloutFailureEvidenceInstruction = "If external provisioning blocks a production rollout, use `Failure: Production rollout remains pending.` as the summary. On the next line, name the verified prerequisites in the first sentence of `Error details:` and explicitly state that they require external provisioning. For example:\n\nFailure: Production rollout remains pending.\nError details: IAM setup and Secrets Manager configuration require external provisioning.\n\nInclude any pending repository work or failed checks in the same error details. Omit credential values."
 const RuntimeToolingInstruction = "Runtime tooling available to agents includes Playwright for local browser testing, screenshots, and comparisons; npm for JavaScript package installs, scripts, tests, and builds; Python with pip and virtualenv; and Go tooling such as `go test` and `go build`. Use the matching local tooling when it fits the repository."
 const ValidationToolingInstruction = "If local test or validation tooling is unavailable in this runtime (for example `command not found`, missing `node_modules`, a missing repository validation script or task, or restricted network access blocking dependency downloads), do not fail solely for that and do not use `Failure:` solely for that validation gap. Continue with repository changes, run any alternative checks you can, and clearly report the validation gap."
 const ActivityPrivacyInstruction = "Before sharing repository or pull-request links in public activity, use `gh repo view OWNER/REPO --json isPrivate,nameWithOwner` during clone or PR tooling. Share repo and PR links only when GitHub reports `isPrivate:false`; never share private repository links."
@@ -56,7 +56,13 @@ const (
 	LogFileName           = "terminal.log"
 	LegacyTaskLogFileName = "term"
 	FallbackLogSubdir     = "main"
+	TruncatedErrorDetails = " | [error details truncated]"
 )
+
+func HasTruncatedErrorDetails(failure string) bool {
+	report, _, _ := strings.Cut(failure, "\npersist task logs: ")
+	return strings.HasSuffix(report, TruncatedErrorDetails)
+}
 
 var nonRemediableRepoAccessMarkers = []string{
 	"write access to repository not granted",

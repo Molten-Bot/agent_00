@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
@@ -1099,12 +1100,12 @@ func TestIssueRecoveryChecksPreservedRolloutBeforeOverdueRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	reads := 0
-	s.IssueRolloutBlockedFromLogs = func(requestID, failure string) bool {
+	s.IssueRolloutBlockedFromLogs = func(requestID, failure string) (bool, bool) {
 		reads++
 		if requestID != record.RequestID || failure != record.RunError {
 			t.Fatalf("stdout lookup used request %q and failure %q", requestID, failure)
 		}
-		return true
+		return true, true
 	}
 	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
 		t.Fatal("external provisioning failure queued a harness repair")
@@ -1116,10 +1117,77 @@ func TestIssueRecoveryChecksPreservedRolloutBeforeOverdueRetry(t *testing.T) {
 		}
 	}
 	got := latestRecoveryRecord(t, s)
-	if reads != 1 || len(f.submissions) != 1 || got.Incident != localruntime.IssueIncidentExternalRollout ||
+	if reads != 2 || len(f.submissions) != 1 || got.Incident != localruntime.IssueIncidentExternalRollout ||
 		got.State != "blocked" || !got.NextAttemptAt.IsZero() || got.FailureDetail() != record.RunError {
 		t.Fatalf("overdue claim was not durably blocked: state=%q incident=%q reads=%d submissions=%d",
 			got.State, got.Incident, reads, len(f.submissions))
+	}
+}
+
+func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
+	t.Parallel()
+	const prefix = "codex: codex reported failure: Failure: Production rollout remains pending. Error details: "
+	const ambiguous = prefix + "IAM setup and Secrets Manager configuration are outstanding."
+	const confirmed = prefix + "IAM setup and Secrets Manager configuration require external provisioning."
+	const truncated = confirmed + failurefollowup.TruncatedErrorDetails
+	for _, tc := range []struct {
+		name, evidence       string
+		matchedLogs, repair  bool
+		legacyErrorFieldOnly bool
+	}{
+		{name: "ambiguous preserved report", evidence: ambiguous, repair: true},
+		{name: "legacy error field", evidence: ambiguous, repair: true, legacyErrorFieldOnly: true},
+		{name: "confirmed preserved report", evidence: confirmed},
+		{name: "confirmed legacy error field", evidence: confirmed, legacyErrorFieldOnly: true},
+		{name: "matching stdout reports a failed check", evidence: truncated, matchedLogs: true, repair: true},
+		{name: "no matching stdout for truncated report", evidence: truncated},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			s.pollGitHubIssueAutoStart(t.Context())
+			record := completeRecoveryRecord(t, s, "error", 1)
+			record.State = "blocked"
+			record.Incident = localruntime.IssueIncidentExternalRollout
+			record.Error = issueDependencyRetryError(record.Incident)
+			if tc.legacyErrorFieldOnly {
+				record.Error = tc.evidence
+			} else {
+				record.RunError = tc.evidence
+			}
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			s.IssueRolloutBlockedFromLogs = func(requestID, failure string) (bool, bool) {
+				if requestID != record.RequestID || failure != truncated {
+					t.Fatalf("unexpected stdout lookup for %q and %q", requestID, failure)
+				}
+				return false, tc.matchedLogs
+			}
+			calls := 0
+			s.IssueRepair = func(_ context.Context, issue localruntime.IssueClaimRecord) (string, error) {
+				calls++
+				if issue.Incident != "missing_pr" || issue.FailureDetail() != tc.evidence {
+					t.Fatalf("unexpected repair evidence: incident=%q detail=%q", issue.Incident, issue.FailureDetail())
+				}
+				return "repair-test", nil
+			}
+			for range 2 {
+				if err := s.ReconcileIssueWork(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := latestRecoveryRecord(t, s)
+			if got.RunError != tc.evidence || len(f.submissions) != 1 {
+				t.Fatalf("lost evidence or submitted a replacement worker: detail=%q submissions=%d", got.RunError, len(f.submissions))
+			}
+			if tc.repair {
+				if calls != 1 || got.RepairRequestID != "repair-test" || got.State != "retry_wait" || got.NextAttemptAt.IsZero() {
+					t.Fatalf("stale rollout block remained: calls=%d receipt=%q state=%q", calls, got.RepairRequestID, got.State)
+				}
+			} else if calls != 0 || got.Incident != localruntime.IssueIncidentExternalRollout || got.State != "blocked" || !got.NextAttemptAt.IsZero() {
+				t.Fatalf("rollout block was lost: calls=%d incident=%q state=%q", calls, got.Incident, got.State)
+			}
+		})
 	}
 }
 
