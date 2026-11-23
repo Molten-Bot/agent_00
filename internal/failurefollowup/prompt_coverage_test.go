@@ -147,6 +147,11 @@ func TestNonRemediableFailureReasonRequiresExternalRolloutEvidence(t *testing.T)
 		blocked bool
 	}{
 		{"codex pending rollout", "codex: codex reported failure: Failure: Production rollout for #42 remains pending. Error details: " + details, true},
+		{"leading rollout issue reference", "codex: codex reported failure: Failure: #42 production rollout remains pending. Error details: " + details, true},
+		{"incomplete rollout", "codex: codex reported failure: Failure: Production rollout is still incomplete. Error details: " + details, true},
+		{"pending infrastructure changes", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Infrastructure changes and Secrets Manager provisioning are outstanding.", true},
+		{"pending live verification", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Production IAM access, Secrets Manager provisioning, and live verification are outstanding.", true},
+		{"pending rollout with evidence switches", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " CLI and API evidence switches default to disabled.", true},
 		{"claude pending deployment", "claude: claude reported failure: Failure: Production deployment is pending.\nError details: " + details, true},
 		{"pending rollout with code defect", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Local build fails in the Secrets Manager adapter.", false},
 		{"pending rollout with defaults status", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " API and MCP flags default to off.", true},
@@ -157,6 +162,9 @@ func TestNonRemediableFailureReasonRequiresExternalRolloutEvidence(t *testing.T)
 		{"pending rollout with later test failure", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " Deployment tests fail.", false},
 		{"test failure after defaults status", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " API and MCP flags default to off.\nDeployment tests fail.", false},
 		{"pending code changes for both services", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Fixes to IAM and Secrets Manager adapters remain pending.", false},
+		{"infrastructure code changes", "codex: codex reported failure: Failure: Production rollout remains incomplete. Error details: Infrastructure adapter changes and Secrets Manager provisioning are outstanding.", false},
+		{"infrastructure changes without secret provisioning", "codex: codex reported failure: Failure: Production rollout remains incomplete. Error details: Infrastructure changes and live verification are outstanding.", false},
+		{"incomplete rollout with failed tests", "codex: codex reported failure: Failure: #42 production rollout remains incomplete. Error details: Infrastructure changes and Secrets Manager setup are pending. CLI evidence switches default off. Deployment tests failed.", false},
 		{"pending infrastructure work but code defect caused failure", "codex: codex reported failure: Failure: Local build fails in the deployment package. Error details: " + details, false},
 		{"quoted diagnostic", "codex: codex reported failure: Failure: Rollout parser rejects a valid report. Error details: `Production rollout remains pending. Error details: " + details + "`", false},
 		{"resolved provisioning", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: IAM access and Secrets Manager provisioning are complete. Local tests fail.", false},

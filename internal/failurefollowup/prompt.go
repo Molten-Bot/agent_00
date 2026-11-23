@@ -97,12 +97,12 @@ const OpenDependencyReason = "required dependency is still open"
 // between word characters can be part of a contraction rather than a quote.
 var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\bblocked by (?:an? |the )?unmerged (?:pull request |pr )?\x60?#[1-9][0-9]*\b`)
 
-var pendingProductionRolloutSummary = regexp.MustCompile(`^failure:\s*(?:the )?production (?:rollout|deployment)(?: for #[1-9][0-9]*)? (?:remains|is|is still) pending\.?$`)
+var pendingProductionRolloutSummary = regexp.MustCompile(`^failure:\s*(?:(?:the )?production (?:rollout|deployment)(?: for #[1-9][0-9]*)?|#[1-9][0-9]* production (?:rollout|deployment)) (?:remains|is|is still) (?:pending|incomplete)\.?$`)
 var outstandingProvisioning = regexp.MustCompile(` (?:(?:remain|are)(?: still)? (?:outstanding|pending)|(?:still )?require infrastructure work)$`)
 var provisioningListSeparator = regexp.MustCompile(`, (?:and )?| and `)
 var iamProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:scoped iam|(?:scoped )?iam (?:access|approval|configuration|permissions?|polic(?:y|ies)|roles?|setup))$`)
 var secretProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:(?:shared )?secrets manager (?:configuration|keys?|provisioning|secrets?|setup)|shared reference keys?)$`)
-var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* flags? defaults?(?: to)? (?:off|disabled))$`)
+var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* (?:flags?|evidence switches?) defaults?(?: to)? (?:off|disabled))$`)
 var unavailableContainerValidation = regexp.MustCompile(`^docker-backed (?:[a-z0-9_-]+ )*integration(?: tests?)? could not run because no container runtime was available$`)
 var rolloutProgress = regexp.MustCompile(`^(?:added|implemented|updated|wired) \S`)
 var rolloutProgressFollowOn = regexp.MustCompile(`^(?:added|implemented|updated|wired|tests cover) \S`)
@@ -563,19 +563,19 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	}
 	// The status must apply to the provisioning items themselves. Reject a
 	// different subject or clause that merely mentions those prerequisites.
-	var iam, secret bool
+	var infrastructure, secret bool
 	for _, item := range provisioningListSeparator.Split(statement[:predicate[0]], -1) {
 		switch {
-		case iamProvisioning.MatchString(item):
-			iam = true
+		case iamProvisioning.MatchString(item), item == "infrastructure changes":
+			infrastructure = true
 		case secretProvisioning.MatchString(item):
 			secret = true
-		case item == "deployment", item == "deployed source verification", item == "live source verification":
+		case item == "deployment", item == "deployed source verification", item == "live source verification", item == "live verification":
 		default:
 			return false
 		}
 	}
-	if !iam || !secret {
+	if !infrastructure || !secret {
 		return false
 	}
 	if !rolloutStatusOnly(statements[1:]) {

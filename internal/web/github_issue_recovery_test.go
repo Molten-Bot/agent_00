@@ -1056,9 +1056,9 @@ func TestIssueRecoveryBlocksExternalRolloutWithoutRepair(t *testing.T) {
 	s.pollGitHubIssueAutoStart(ctx)
 	record := completeRecoveryRecord(t, s, "error", 1)
 	record.Incident = "missing_pr"
-	const detail = "codex: codex reported failure: Failure: Production deployment remains pending. " +
-		"Error details: Scoped IAM and shared reference key still require infrastructure work. Service flags default off. " +
-		"Docker-backed integration tests could not run because no container runtime was available."
+	const detail = "codex: codex reported failure: Failure: #42 production deployment is still incomplete. " +
+		"Error details: Secrets Manager setup, live verification, and infrastructure changes are outstanding. " +
+		"CLI evidence switches default to disabled."
 	// Older records may carry the terminal error only in Error.
 	record.Error = detail
 	record.NextAttemptAt = time.Now().Add(time.Hour)
