@@ -178,15 +178,16 @@ func saveLegacyIssueRepair(t *testing.T, q *issueRepairQueue, issue localruntime
 func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name            string
-		attempt, number int
-		state           string
-		legacy, skip    bool
-		sourceFulfilled bool
-		admissionRetry  bool
-		waitForSlot     bool
-		sourceReadError bool
-		ordinary        bool
+		name               string
+		attempt, number    int
+		state              string
+		legacy, skip       bool
+		sourceFulfilled    bool
+		admissionRetry     bool
+		waitForSlot        bool
+		sourceReadError    bool
+		unrelatedReadError bool
+		ordinary           bool
 	}{
 		{name: "legacy source log", attempt: 3, number: 17, state: "fulfilled", legacy: true, skip: true},
 		{name: "explicit source claim", attempt: 3, number: 17, state: "fulfilled", skip: true},
@@ -197,6 +198,8 @@ func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
 		{name: "legacy source fulfilled while waiting for a slot", attempt: 3, number: 17, state: "incident", legacy: true, sourceFulfilled: true, waitForSlot: true, skip: true},
 		{name: "unfulfilled retry while waiting for a slot", attempt: 3, number: 17, state: "incident", waitForSlot: true},
 		{name: "source read failed after scheduler admission", attempt: 3, number: 17, state: "incident", waitForSlot: true, sourceReadError: true},
+		{name: "unrelated malformed claim after admission", attempt: 3, number: 18, state: "incident", waitForSlot: true, unrelatedReadError: true},
+		{name: "legacy source with unrelated malformed claim", attempt: 3, number: 18, state: "incident", waitForSlot: true, legacy: true, unrelatedReadError: true},
 		{name: "ordinary repair with newer fulfillment", attempt: 3, number: 17, state: "fulfilled", ordinary: true},
 		{name: "ordinary repair with fulfilled source", attempt: 3, number: 17, state: "incident", sourceFulfilled: true, ordinary: true},
 		{name: "different issue", attempt: 3, number: 18, state: "fulfilled"},
@@ -289,6 +292,11 @@ func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
 			if waiting != nil {
 				if tc.sourceReadError {
 					if err := os.WriteFile(filepath.Join(claims.Root, source.ID+".json"), []byte("{"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if tc.unrelatedReadError {
+					if err := os.WriteFile(filepath.Join(claims.Root, other.ID+".json"), []byte("{"), 0600); err != nil {
 						t.Fatal(err)
 					}
 				}

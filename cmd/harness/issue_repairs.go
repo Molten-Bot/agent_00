@@ -472,13 +472,23 @@ func (w *issueRepairWork) start() error {
 	if w.record.ReopenedRollout {
 		// The source may have been fulfilled while the scheduler held this repair.
 		issues, err := w.queue.claims.List()
+		foundSource := false
 		for _, issue := range issues {
-			if isIssueRepairSource(w.record, issue) && issueRepairSourceFulfilled(issue, issues) {
+			if !isIssueRepairSource(w.record, issue) {
+				continue
+			}
+			foundSource = true
+			if issueRepairSourceFulfilled(issue, issues) {
 				return errIssueRepairSourceFulfilled
 			}
 		}
 		if err != nil {
-			return fmt.Errorf("%w: %w", errIssueRepairSourceCheck, err)
+			if !foundSource {
+				return fmt.Errorf("%w: %w", errIssueRepairSourceCheck, err)
+			}
+			// List returns valid claims alongside errors for malformed records.
+			// An unrelated unreadable claim must not starve this source's repair.
+			w.queue.logf("event=issue_repair_check_source status=partial err=%q", err)
 		}
 	}
 	w.queue.mu.Lock()
