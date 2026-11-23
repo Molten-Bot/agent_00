@@ -464,6 +464,14 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 			return h.fail(ExitGit, "git", err, runDir)
 		}
 	}
+	// Capture unpublished local work before preflight can import remote commits.
+	localPublicationPending := false
+	if h.ResumeIssueWorkspace && issueClaim != nil && h.IssuePublicationReady {
+		localPublicationPending, err = h.reservedIssueHasLocalWork(ctx, repos[0])
+		if err != nil {
+			return h.fail(ExitGit, "git", err, runDir)
+		}
+	}
 	if !reviewRun {
 		for i := range repos {
 			if err := h.preparePublishWorkflow(ctx, &repos[i]); err != nil {
@@ -497,7 +505,7 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 			return h.fail(ExitGit, "git", err, runDir)
 		}
 		hasPendingWork := publicationPending
-		publicationPending = hasPendingWork && h.IssuePublicationReady
+		publicationPending = localPublicationPending && h.IssuePublicationReady
 		if issueClaim.Attempt > 1 && !hasPendingWork {
 			// A dependency may have merged since the issue branch was reserved.
 			// Incorporate the fetched base before the agent tests the branch.
@@ -2051,7 +2059,7 @@ func (h Harness) pushWithSync(ctx context.Context, repo *repoWorkspace, remediat
 		if !isNonFastForwardPush(res, err) || pushAttempt >= maxPushSyncAttempts {
 			return err
 		}
-		if repo.CreateWorkBranch {
+		if repo.CreateWorkBranch && !repo.IssueClaimBranch {
 			if err := h.renameWorkBranchForRemoteCollision(ctx, repo, pushRemote); err != nil {
 				return fmt.Errorf("avoid remote branch collision before push retry: %w", err)
 			}
@@ -2078,10 +2086,16 @@ func (h Harness) pushWithSync(ctx context.Context, repo *repoWorkspace, remediat
 				maxPushSyncAttempts-1,
 			)
 		}
-		if _, syncErr := h.runCommand(ctx, "git", fetchBranchFromRemoteCommand(repo.Dir, pushRemote, repo.Branch)); syncErr != nil {
+		fetchRef := repo.Branch
+		mergeCmd := mergeFetchedBranchCommand(repo.Dir)
+		if repo.IssueClaimBranch {
+			fetchRef = "refs/heads/" + normalizeBranchRef(repo.Branch)
+			mergeCmd = gitCommand(repo.Dir, "merge", "--no-edit", "--no-overwrite-ignore", "FETCH_HEAD")
+		}
+		if _, syncErr := h.runCommand(ctx, "git", fetchBranchFromRemoteCommand(repo.Dir, pushRemote, fetchRef)); syncErr != nil {
 			return fmt.Errorf("sync branch %q on remote %q before push retry: %w", repo.Branch, pushRemote, syncErr)
 		}
-		if mergeRes, syncErr := h.runCommand(ctx, "git", mergeFetchedBranchCommand(repo.Dir)); syncErr != nil {
+		if mergeRes, syncErr := h.runCommand(ctx, "git", mergeCmd); syncErr != nil {
 			mergeErr := commandErrorWithDetails(
 				fmt.Sprintf("sync branch %q on remote %q before push retry", repo.Branch, pushRemote),
 				syncErr,
@@ -2317,13 +2331,20 @@ func (h Harness) preparePublishWorkflow(ctx context.Context, repo *repoWorkspace
 	)
 
 	probe, err := h.probeRemoteWriteAccessOnRemote(ctx, *repo, publishRemoteOrigin, "workflow")
-	if err == nil && probe.NonFastForward && repo.CreateWorkBranch {
-		if renameErr := h.renameWorkBranchForRemoteCollision(ctx, repo, publishRemoteOrigin); renameErr != nil {
-			return renameErr
-		}
-		probe, err = h.probeRemoteWriteAccessOnRemote(ctx, *repo, publishRemoteOrigin, "workflow")
-		if err == nil && probe.NonFastForward {
-			err = fmt.Errorf("generated work branch %q still conflicts with remote %q", repo.Branch, publishRemoteOrigin)
+	if err == nil && probe.NonFastForward {
+		switch {
+		case repo.IssueClaimBranch:
+			if syncErr := h.fastForwardReservedIssueBranch(ctx, *repo); syncErr != nil {
+				return syncErr
+			}
+		case repo.CreateWorkBranch:
+			if renameErr := h.renameWorkBranchForRemoteCollision(ctx, repo, publishRemoteOrigin); renameErr != nil {
+				return renameErr
+			}
+			probe, err = h.probeRemoteWriteAccessOnRemote(ctx, *repo, publishRemoteOrigin, "workflow")
+			if err == nil && probe.NonFastForward {
+				err = fmt.Errorf("generated work branch %q still conflicts with remote %q", repo.Branch, publishRemoteOrigin)
+			}
 		}
 	}
 
@@ -2379,6 +2400,53 @@ func (h Harness) preparePublishWorkflow(ctx context.Context, repo *repoWorkspace
 		)
 		return nil
 	}
+}
+
+func (h Harness) reservedIssueHasLocalWork(ctx context.Context, repo repoWorkspace) (bool, error) {
+	status, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
+	if err != nil {
+		return false, fmt.Errorf("check reserved issue local work: %w", err)
+	}
+	if hasTrackedWorktreeChanges(status.Stdout) {
+		return true, nil
+	}
+	ref := "refs/heads/" + normalizeBranchRef(repo.Branch)
+	if _, err := h.runCommand(ctx, "git", fetchBranchFromRemoteCommand(repo.Dir, repoPushRemote(repo), ref)); err != nil {
+		return false, fmt.Errorf("fetch reserved issue branch for publication check: %w", err)
+	}
+	ahead, err := h.runCommand(ctx, "git", gitCommand(repo.Dir, "rev-list", "--max-count=1", "FETCH_HEAD..HEAD"))
+	if err != nil {
+		return false, fmt.Errorf("check unpublished reserved issue commits: %w", err)
+	}
+	return strings.TrimSpace(ahead.Stdout) != "", nil
+}
+
+func (h Harness) fastForwardReservedIssueBranch(ctx context.Context, repo repoWorkspace) error {
+	// Leave uncommitted or divergent work for the regular push sync, which runs
+	// after publication has been authorized and local changes are committed.
+	status, err := h.runCommand(ctx, "git", statusCommand(repo.Dir))
+	if err != nil {
+		return fmt.Errorf("check reserved issue branch worktree: %w", err)
+	}
+	if hasTrackedWorktreeChanges(status.Stdout) {
+		return nil
+	}
+	ref := "refs/heads/" + normalizeBranchRef(repo.Branch)
+	if _, err := h.runCommand(ctx, "git", fetchBranchFromRemoteCommand(repo.Dir, publishRemoteOrigin, ref)); err != nil {
+		return fmt.Errorf("fetch reserved issue branch: %w", err)
+	}
+	ahead, err := h.runCommand(ctx, "git", gitCommand(repo.Dir, "rev-list", "--max-count=1", "FETCH_HEAD..HEAD"))
+	if err != nil {
+		return fmt.Errorf("compare reserved issue branch with fetched head: %w", err)
+	}
+	if strings.TrimSpace(ahead.Stdout) != "" {
+		return nil
+	}
+	res, err := h.runCommand(ctx, "git", gitCommand(repo.Dir, "merge", "--ff-only", "--no-overwrite-ignore", "FETCH_HEAD"))
+	if err != nil {
+		return commandErrorWithDetails("fast-forward reserved issue branch", err, res, maxGitErrorDetailChars)
+	}
+	return nil
 }
 
 type ghViewerProfile struct {
