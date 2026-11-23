@@ -25,6 +25,7 @@ const RedactedTaskPromptNotice = "Task prompt: redacted by the harness. Follow-u
 const FollowUpRepositoryURL = config.DefaultRepositoryURL
 
 const FailureResponseInstruction = "When the current run ends with an unresolved failure, start the final response with explicit `Failure:` and `Error details:` fields on consecutive lines, in that order. Describe earlier failures fixed during the run under `Resolved issue:` after any blocker fields."
+const rolloutFailureEvidenceInstruction = "If external provisioning blocks a production rollout, name the verified prerequisites in the first sentence of `Error details:` and explicitly state that they require external provisioning. For example, `Error details: IAM setup and Secrets Manager configuration require external provisioning.` Include any pending repository work or failed checks in the same error details. Omit credential values."
 const RuntimeToolingInstruction = "Runtime tooling available to agents includes Playwright for local browser testing, screenshots, and comparisons; npm for JavaScript package installs, scripts, tests, and builds; Python with pip and virtualenv; and Go tooling such as `go test` and `go build`. Use the matching local tooling when it fits the repository."
 const ValidationToolingInstruction = "If local test or validation tooling is unavailable in this runtime (for example `command not found`, missing `node_modules`, a missing repository validation script or task, or restricted network access blocking dependency downloads), do not fail solely for that and do not use `Failure:` solely for that validation gap. Continue with repository changes, run any alternative checks you can, and clearly report the validation gap."
 const ActivityPrivacyInstruction = "Before sharing repository or pull-request links in public activity, use `gh repo view OWNER/REPO --json isPrivate,nameWithOwner` during clone or PR tooling. Share repo and PR links only when GitHub reports `isPrivate:false`; never share private repository links."
@@ -35,6 +36,7 @@ const NoOpInstruction = "Only return a no-op when the task is genuinely review/i
 
 var ExecutionContract = strings.Join([]string{
 	FailureResponseInstruction,
+	rolloutFailureEvidenceInstruction,
 	RuntimeToolingInstruction,
 	ValidationToolingInstruction,
 	ActivityPrivacyInstruction,
@@ -99,7 +101,7 @@ var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: cla
 
 var pendingProductionRolloutSummary = regexp.MustCompile(`^failure:\s*(?:(?:the )?production (?:rollout|deployment)(?: for #[1-9][0-9]*)?|#[1-9][0-9]* production (?:rollout|deployment)) (?:remains|is|is still) (?:pending|incomplete)\.?$`)
 var outstandingProvisioning = regexp.MustCompile(` (?:remain|are)(?: still)? (?:outstanding|pending)$`)
-var externalProvisioningRequired = regexp.MustCompile(` (?:still )?require (?:infrastructure work|external provisioning)$`)
+var externalProvisioningRequired = regexp.MustCompile(` (?:still )?require external provisioning$`)
 var provisioningListSeparator = regexp.MustCompile(`, (?:and )?| and `)
 
 const iamPrerequisite = `(?:the )?(?:production )?(?:scoped )?iam`
@@ -572,13 +574,13 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	if predicate == nil {
 		return false
 	}
-	// Configuration and resource names can refer to repository edits. Accept
-	// them only when the report explicitly requires infrastructure work.
-	var iam, secret bool
+	// Infrastructure configuration and resource names can refer to repository
+	// edits. Require explicit external provisioning for those items.
+	var infrastructure, secret bool
 	for _, item := range provisioningListSeparator.Split(statement[:predicate[0]], -1) {
 		switch {
-		case iamProvisioning.MatchString(item) || (explicitExternal && iamConfiguration.MatchString(item)):
-			iam = true
+		case iamProvisioning.MatchString(item) || (explicitExternal && (iamConfiguration.MatchString(item) || item == "infrastructure changes")):
+			infrastructure = true
 		case secretProvisioning.MatchString(item) || (explicitExternal && secretConfiguration.MatchString(item)):
 			secret = true
 		case item == "deployment", item == "deployed source verification", item == "live source verification", item == "live verification":
@@ -586,7 +588,7 @@ func IsExternalRolloutFailure(summary, details string) bool {
 			return false
 		}
 	}
-	if !iam || !secret {
+	if !infrastructure || !secret {
 		return false
 	}
 	if !rolloutStatusOnly(statements[1:]) {

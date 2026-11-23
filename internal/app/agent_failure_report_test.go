@@ -336,8 +336,8 @@ func TestRunCodexKeepsImplementationFailureFatalWithValidationToolingCaveat(t *t
 func TestRunCodexClassifiesExternalRolloutBeforeDisplayTruncation(t *testing.T) {
 	t.Parallel()
 
-	const prerequisites = "Scoped IAM, shared reference key, deployment, and live source verification still require infrastructure work. " +
-		"API flags default off. Docker-backed integration tests could not run because no container runtime was available."
+	const prerequisites = "Infrastructure changes, shared Secrets Manager key, and live verification still require external provisioning. " +
+		"API and MCP evidence switches default to off. Docker-backed integration tests could not run because no container runtime was available."
 	const output = "Failure: Production rollout for #42 remains pending.\nError details: " + prerequisites +
 		"\n\nImplemented the requested endpoint and added tests for representative input, error responses, " +
 		"authorization, query parameter handling, response serialization, request cancellation, and concurrent requests. " +
@@ -384,10 +384,10 @@ func TestCodexExtractErrorDetailPreservesStartupWithoutResponse(t *testing.T) {
 	t.Parallel()
 
 	const output = "Failure: Production rollout remains pending.\n" +
-		"Error details: Scoped IAM and shared reference key still require infrastructure work.\n" +
+		"Error details: Scoped IAM and shared reference key still require external provisioning.\n" +
 		"Validation passed for unit tests.\n\n" +
 		"## Validation\n- Startup produced no response."
-	const want = "Error details: Scoped IAM and shared reference key still require infrastructure work.\n" +
+	const want = "Error details: Scoped IAM and shared reference key still require external provisioning.\n" +
 		"Validation passed for unit tests.\n## Validation\n- Startup produced no response."
 	if got := codexExtractErrorDetail(output); got != want {
 		t.Fatalf("codexExtractErrorDetail() = %q, want %q", got, want)
@@ -398,7 +398,7 @@ func TestRunCodexCountsPassingValidationSectionAfterProgress(t *testing.T) {
 	t.Parallel()
 
 	const output = "Failure: Production rollout remains pending.\n" +
-		"Error details: Scoped IAM and shared reference key still require infrastructure work.\n" +
+		"Error details: Scoped IAM and shared reference key still require external provisioning.\n" +
 		"Implemented the requested endpoint.\n\n" +
 		"## Validation\n- `go test ./...` passed.\n* **Build passed.**\n"
 	for _, tc := range []struct {

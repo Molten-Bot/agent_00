@@ -409,8 +409,9 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 		{"queued and linked", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
 		{"dispatch intent without a claim link", "running", "", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
 		{"joined provisioning and flag status", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding | API and MCP flags default to off.", true},
-		{"provisioning with unavailable integration validation", "queued", "50", "Scoped IAM, shared reference key, and deployment still require infrastructure work. API flags default off. Docker-backed integration tests could not run because no container runtime was available.", true},
-		{"ambiguous infrastructure changes", "queued", "50", "Infrastructure changes, shared Secrets Manager key, and live verification remain pending. API flags default off.", false},
+		{"provisioning with unavailable integration validation", "queued", "50", "Scoped IAM, shared reference key, and deployment still require external provisioning. API flags default off. Docker-backed integration tests could not run because no container runtime was available.", true},
+		{"ambiguous infrastructure changes", "queued", "50", "Infrastructure changes, shared Secrets Manager key, and live verification remain pending. API and MCP evidence switches default to off.", false},
+		{"infrastructure configuration work", "queued", "50", "IAM policies and Secrets Manager configuration still require infrastructure work.", false},
 		{"ambiguous IAM and secret configuration", "queued", "50", "IAM setup and Secrets Manager configuration are outstanding.", false},
 		{"actionable", "queued", "50", "IAM approval and Secrets Manager provisioning are complete, but local fixes remain outstanding.", false},
 		{"actionable after provisioning details", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding. Deployment tests fail.", false},
@@ -460,8 +461,8 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 
 func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 	t.Parallel()
-	const summary = "Failure: Production rollout remains pending."
-	const prerequisites = "IAM approval and Secrets Manager provisioning remain outstanding."
+	const summary = "Failure: #42 production rollout remains incomplete."
+	const prerequisites = "Infrastructure changes, shared Secrets Manager key, and live verification still require external provisioning. API and MCP evidence switches default to off."
 	const progress = "Added the endpoint in /tmp/worktree."
 	const stored = "codex: codex reported failure: " + summary + " Error details: " + prerequisites +
 		" | " + progress + " | Updated fixtures. | Validation passed for unit tests. | [error details truncated]"

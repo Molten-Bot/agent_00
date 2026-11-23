@@ -35,6 +35,21 @@ func TestWithExecutionContractIncludesFailureResponseInstruction(t *testing.T) {
 	}
 }
 
+func TestWithExecutionContractRequestsExternalRolloutEvidence(t *testing.T) {
+	t.Parallel()
+
+	got := WithExecutionContract("Complete the rollout")
+	for _, want := range []string{
+		"first sentence of `Error details:`",
+		"explicitly state that they require external provisioning",
+		"Include any pending repository work or failed checks in the same error details.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("execution contract missing %q", want)
+		}
+	}
+}
+
 func TestWithExecutionContractIncludesRuntimeToolingInstruction(t *testing.T) {
 	t.Parallel()
 

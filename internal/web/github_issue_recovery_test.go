@@ -1093,7 +1093,7 @@ func TestIssueRecoveryChecksPreservedRolloutBeforeOverdueRetry(t *testing.T) {
 	record := completeRecoveryRecord(t, s, "error", 1)
 	record.Incident = "missing_pr"
 	record.RunError = "codex: codex reported failure: Failure: Production rollout remains pending. " +
-		"Error details: Scoped IAM and shared reference key still require infrastructure work. | [error details truncated]"
+		"Error details: Scoped IAM and shared reference key still require external provisioning. | [error details truncated]"
 	record.NextAttemptAt = time.Now().Add(-time.Minute)
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)

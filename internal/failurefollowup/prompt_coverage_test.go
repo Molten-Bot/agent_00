@@ -158,6 +158,9 @@ func TestNonRemediableFailureReasonRequiresExternalRolloutEvidence(t *testing.T)
 		{"IAM configuration with secret provisioning", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Production IAM configuration and Secrets Manager provisioning remain pending.", false},
 		{"IAM approval with secret configuration", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: IAM approval and Secrets Manager configuration remain pending.", false},
 		{"explicit external provisioning", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: IAM setup and Secrets Manager configuration still require external provisioning.", true},
+		{"infrastructure configuration work", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: IAM policies and Secrets Manager configuration still require infrastructure work.", false},
+		{"logged rollout without external evidence", "codex: codex reported failure: Failure: #42 production rollout remains incomplete. Error details: Infrastructure changes, shared Secrets Manager key, and live verification remain pending. API and MCP evidence switches default to off.", false},
+		{"logged rollout with explicit provisioning", "codex: codex reported failure: Failure: #42 production rollout remains incomplete. Error details: Infrastructure changes, shared Secrets Manager key, and live verification still require external provisioning. API and MCP evidence switches default to off.", true},
 		{"pending rollout with defaults status", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " API and MCP flags default to off.", true},
 		{"pending rollout with joined defaults status", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " | API and MCP flags default to off.", true},
 		{"pending rollout with joined unpunctuated details", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Production IAM access and Secrets Manager provisioning are still outstanding | API flags default to off", true},
@@ -178,7 +181,7 @@ func TestNonRemediableFailureReasonRequiresExternalRolloutEvidence(t *testing.T)
 		{"resource names alone", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Scoped IAM and shared Secrets Manager key are pending.", false},
 		{"provisioning and verification outstanding", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Scoped IAM approval, shared Secrets Manager key provisioning, and deployed source verification remain outstanding.", true},
 		{"outstanding prerequisites in reverse order", "claude: claude reported failure: Failure: Production deployment is still pending. Error details: Shared Secrets Manager key provisioning and scoped IAM access are pending.", true},
-		{"reported infrastructure work with missing container runtime", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Scoped IAM and shared reference key still require infrastructure work. Service flags default off. Docker-backed integration tests could not run because no container runtime was available.", true},
+		{"reported provisioning with missing container runtime", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Scoped IAM and shared reference key still require external provisioning. Service flags default off. Docker-backed integration tests could not run because no container runtime was available.", true},
 		{"container tests ran and failed", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " Docker-backed integration tests failed after startup.", false},
 		{"unit validation with failed smoke check", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nValidation passed for unit tests; smoke check returned HTTP 500.", false},
 		{"unit validation with failed smoke check after comma", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nValidation passed for unit tests, and smoke check returned HTTP/1.1 503.", false},
@@ -293,7 +296,7 @@ func TestExternalRolloutRejectsMixedProbeResults(t *testing.T) {
 		"Implemented the endpoint.\nValidation passed for unit tests.\nValidation:\n- curl: (7) Failed to connect to localhost port 8080.",
 	} {
 		if IsExternalRolloutFailure("Failure: Production rollout remains pending.",
-			"Scoped IAM and shared reference key still require infrastructure work.\n"+result) {
+			"Scoped IAM and shared reference key still require external provisioning.\n"+result) {
 			t.Errorf("mixed result suppressed repair: %s", result)
 		}
 	}
