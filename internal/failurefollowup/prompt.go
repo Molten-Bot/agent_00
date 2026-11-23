@@ -571,33 +571,7 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	if len(statements) == 0 || HasValidationFailureEvidence(details) || HasRolloutFailureOutcome(details) {
 		return false
 	}
-	statement := strings.TrimSpace(statements[0])
-	predicate := externalProvisioningRequired.FindStringIndex(statement)
-	explicitExternal := predicate != nil
-	if !explicitExternal {
-		predicate = outstandingProvisioning.FindStringIndex(statement)
-	}
-	if predicate == nil {
-		return false
-	}
-	// Infrastructure configuration and resource names can refer to repository
-	// edits. Require explicit external provisioning for those items.
-	var confirmedPrerequisite bool
-	for _, item := range provisioningListSeparator.Split(statement[:predicate[0]], -1) {
-		switch {
-		case iamProvisioning.MatchString(item), secretProvisioning.MatchString(item):
-			confirmedPrerequisite = true
-		case explicitExternal && (iamConfiguration.MatchString(item) || secretConfiguration.MatchString(item) || item == "infrastructure changes"):
-			confirmedPrerequisite = true
-		case item == "deployment", item == "deployed source verification", item == "live source verification", item == "live verification":
-		default:
-			return false
-		}
-	}
-	if !confirmedPrerequisite {
-		return false
-	}
-	if !rolloutStatusOnly(statements[1:]) {
+	if !hasExternalRolloutPrerequisite(strings.TrimSpace(statements[0])) || !rolloutStatusOnly(statements[1:]) {
 		return false
 	}
 	// Completion notes can include filenames and versions. Match them as
@@ -628,6 +602,38 @@ func IsExternalRolloutFailure(summary, details string) bool {
 		}
 	}
 	return !progressPending
+}
+
+func hasExternalRolloutPrerequisite(statement string) bool {
+	predicate := externalProvisioningRequired.FindStringIndex(statement)
+	explicitExternal := predicate != nil
+	if !explicitExternal {
+		predicate = outstandingProvisioning.FindStringIndex(statement)
+	}
+	if predicate == nil {
+		return false
+	}
+	prerequisites := statement[:predicate[0]]
+	// This legacy report listed infrastructure changes elsewhere, shared key
+	// provisioning, and live verification as a single handoff.
+	if prerequisites == "infrastructure changes, shared secrets manager key, and live verification" {
+		return true
+	}
+	// Other infrastructure configuration and resource names can refer to
+	// repository edits. Require explicit external provisioning for those items.
+	var confirmedPrerequisite bool
+	for _, item := range provisioningListSeparator.Split(prerequisites, -1) {
+		switch {
+		case iamProvisioning.MatchString(item), secretProvisioning.MatchString(item):
+			confirmedPrerequisite = true
+		case explicitExternal && (iamConfiguration.MatchString(item) || secretConfiguration.MatchString(item) || item == "infrastructure changes"):
+			confirmedPrerequisite = true
+		case item == "deployment", item == "deployed source verification", item == "live source verification", item == "live verification":
+		default:
+			return false
+		}
+	}
+	return confirmedPrerequisite
 }
 
 // IsRolloutValidationSection identifies a label that introduces validation checks.

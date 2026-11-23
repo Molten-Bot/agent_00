@@ -275,6 +275,11 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 			if !isIssueRepairSource(record, issue) {
 				continue
 			}
+			// Only a known source can establish which issue supersedes a
+			// skipped repair. Legacy receipts may be shared across issues.
+			if isSkippedRolloutRepair(record) && newerIssueAttemptFulfilled(issue, issues) {
+				return failurefollowup.ExternalRolloutPrerequisitesReason, nil
+			}
 		} else if issue.RepairRequestID != record.RequestID && issueRepairID(issue) != record.ID {
 			continue
 		}
@@ -317,6 +322,18 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 		return failurefollowup.ExternalRolloutPrerequisitesReason, err
 	}
 	return "", err
+}
+
+func newerIssueAttemptFulfilled(source localruntime.IssueClaimRecord, issues []localruntime.IssueClaimRecord) bool {
+	issue := source.Run.GitHubIssue
+	key := localruntime.IssueExecutionKey(issue)
+	for _, current := range issues {
+		other := current.Run.GitHubIssue
+		if current.State == "fulfilled" && other.Claim.Attempt > issue.Claim.Attempt && localruntime.IssueExecutionKey(other) == key {
+			return true
+		}
+	}
+	return false
 }
 
 func (q *issueRepairQueue) rolloutBlockedFromLogs(requestID, failure string) (blocked, matched bool) {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
@@ -172,6 +173,82 @@ func saveLegacyIssueRepair(t *testing.T, q *issueRepairQueue, issue localruntime
 		t.Fatal(err)
 	}
 	return record
+}
+
+func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name            string
+		attempt, number int
+		state           string
+		legacy, skip    bool
+	}{
+		{name: "legacy source log", attempt: 3, number: 17, state: "fulfilled", legacy: true, skip: true},
+		{name: "explicit source claim", attempt: 3, number: 17, state: "fulfilled", skip: true},
+		{name: "different issue", attempt: 3, number: 18, state: "fulfilled"},
+		{name: "older fulfillment", attempt: 1, number: 17, state: "fulfilled"},
+		{name: "unfulfilled retry", attempt: 3, number: 17, state: "incident"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			claims, source := lifecycleRecord(t)
+			q := issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, claims: claims, logRoot: t.TempDir(), logf: t.Logf}
+			source.RunError = "codex: codex reported failure: Failure: Production rollout remains pending. Error details: IAM setup and Secrets Manager configuration are outstanding."
+			source.Incident = localruntime.IssueIncidentExternalRollout
+			source.Outcome = "error"
+			source.Run.GitHubIssue.Claim.Attempt = 2
+			record := saveLegacyIssueRepair(t, &q, source)
+			record.State = "blocked"
+			record.Error = failurefollowup.ExternalRolloutPrerequisitesReason
+			if !tc.legacy {
+				record.SourceClaimID = source.ID
+			}
+			source.RepairRequestID = record.RequestID
+			if err := q.store.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			if err := claims.Save(source); err != nil {
+				t.Fatal(err)
+			}
+
+			other := source
+			other.ID = strings.Repeat("c", 32)
+			other.RequestID = "issue-" + other.ID
+			other.State = tc.state
+			other.RepairRequestID = ""
+			cfg := *source.Run.GitHubIssue
+			cfg.Number = tc.number
+			claim := *cfg.Claim
+			claim.ID = other.ID
+			claim.Attempt = tc.attempt
+			cfg.Claim = &claim
+			other.Run.GitHubIssue = &cfg
+			if other.State == "fulfilled" {
+				other.VerifiedAt = time.Now()
+			}
+			if err := claims.Save(other); err != nil {
+				t.Fatal(err)
+			}
+
+			calls := 0
+			for range 2 {
+				q.reconcile(t.Context(), func(context.Context, config.Config, bool, string, bool) (string, error) {
+					calls++
+					return "", errors.New("unexpected dispatch")
+				})
+			}
+			repairs, err := q.store.List()
+			if err != nil || len(repairs) != 1 {
+				t.Fatalf("repair records = %d, err = %v", len(repairs), err)
+			}
+			if tc.skip {
+				if calls != 0 || repairs[0].State != "blocked" || repairs[0].Error != record.Error {
+					t.Fatalf("superseded repair changed or dispatched: calls=%d state=%q error=%q", calls, repairs[0].State, repairs[0].Error)
+				}
+			} else if calls != 1 || repairs[0].State != "queued" {
+				t.Fatalf("repair should remain eligible: calls=%d state=%q", calls, repairs[0].State)
+			}
+		})
+	}
 }
 
 func TestIssueRepairDependencyBlockDoesNotSuppressAnotherClaim(t *testing.T) {
