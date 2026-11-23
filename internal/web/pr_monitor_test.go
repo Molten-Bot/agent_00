@@ -566,6 +566,38 @@ func TestPRMergeMonitorIgnoresCleanReviewFeedback(t *testing.T) {
 	}
 }
 
+func TestPRMergeMonitorQueuesReviewFeedbackFromLaterCommentPage(t *testing.T) {
+	t.Parallel()
+
+	const prURL = "https://github.com/acme/repo/pull/120"
+	broker := NewBroker()
+	broker.IngestLog("dispatch status=start request_id=req-inline repo=git@github.com:acme/repo.git")
+	broker.IngestLog("dispatch status=completed request_id=req-inline branch=feature pr_url=" + prURL)
+	task, _ := broker.Task("req-inline")
+
+	// Some gh versions print each paginated response as a separate JSON array.
+	firstPage := `[` + strings.Repeat(`{"body":"Looks good."},`, 99) + `{"body":"Looks good."}]`
+	runner := &stubPRMonitorRunner{results: []execx.Result{
+		{Stdout: `{"state":"OPEN","number":120,"title":"Update settings"}`},
+		{Stdout: firstPage + `[{"id":101,"body":"Please fix the missing error handling."}]`},
+	}}
+	var items []PRReviewFeedbackItem
+	monitor := PRMergeMonitor{
+		Runner: runner,
+		Broker: broker,
+		Logf:   t.Logf,
+		OnReviewFeedback: func(_ context.Context, _ Task, feedback PRReviewFeedback) (string, error) {
+			items = append(items, feedback.Items...)
+			return "local-follow-up", nil
+		},
+	}
+	monitor.checkTaskPR(t.Context(), task)
+
+	if len(items) != 1 || items[0].Kind != "review_comment" || items[0].ID != "101" {
+		t.Fatalf("queued items = %+v, want review comment 101", items)
+	}
+}
+
 func TestActionablePRReviewFeedbackIncludesInlineReviewComments(t *testing.T) {
 	t.Parallel()
 

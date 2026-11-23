@@ -2786,6 +2786,11 @@ func (h Harness) createPullRequestURL(
 	for attempt := 1; ; attempt++ {
 		prRes, err := h.runCommand(ctx, "pr", cmd)
 		if err != nil {
+			// The runner's wrapper includes command arguments. Use subprocess
+			// output and the exit error to classify and report creation failures.
+			if cause := errors.Unwrap(err); cause != nil {
+				err = commandErrorWithDetails("create pull request", cause, prRes, maxGitErrorDetailChars)
+			}
 			if ctx.Err() != nil {
 				return "", err
 			}
@@ -8887,7 +8892,7 @@ func prCreateCommandWithBase(repoDir string, cfg config.Config, includeBase bool
 	args = append(args,
 		"--head", headRef,
 		"--title", cfg.PRTitle,
-		"--body", normalizedPRBody,
+		"--body-file", "-",
 	)
 	if strings.TrimSpace(repo) != "" {
 		args = append(args, "--repo", strings.TrimSpace(repo))
@@ -8905,7 +8910,9 @@ func prCreateCommandWithBase(repoDir string, cfg config.Config, includeBase bool
 		args = append(args, "--label", label)
 	}
 	args = appendPRReviewers(args, cfg.Reviewers)
-	return ghCommand(repoDir, args...)
+	cmd := ghCommand(repoDir, args...)
+	cmd.Stdin = normalizedPRBody
+	return cmd
 }
 
 func prCreateWithoutBaseWithOptionsCommand(repoDir string, cfg config.Config, headRef, repo string) execx.Command {

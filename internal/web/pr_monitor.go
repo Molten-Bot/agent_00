@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"sync"
@@ -448,20 +449,22 @@ func (m *PRMergeMonitor) prReviewComments(ctx context.Context, prURL string) ([]
 	}
 	res, err := m.Runner.Run(ctx, execx.Command{
 		Name: "gh",
-		Args: []string{"api", fmt.Sprintf("repos/%s/pulls/%s/comments", repo, selector), "-F", "per_page=100"},
+		Args: []string{"api", "--paginate", "--method", "GET", fmt.Sprintf("repos/%s/pulls/%s/comments", repo, selector), "-F", "per_page=100"},
 	})
 	if err != nil {
 		return nil, err
 	}
-	raw := strings.TrimSpace(res.Stdout)
-	if raw == "" {
-		return nil, nil
-	}
+	decoder := json.NewDecoder(strings.NewReader(res.Stdout))
 	var comments []prReviewCommentEntry
-	if decodeErr := json.Unmarshal([]byte(raw), &comments); decodeErr != nil {
-		return nil, fmt.Errorf("decode pull request review comments response: %w", decodeErr)
+	for {
+		var page []prReviewCommentEntry
+		if err := decoder.Decode(&page); err == io.EOF {
+			return comments, nil
+		} else if err != nil {
+			return nil, fmt.Errorf("decode pull request review comments response: %w", err)
+		}
+		comments = append(comments, page...)
 	}
-	return comments, nil
 }
 
 func (s prViewState) Merged() bool {

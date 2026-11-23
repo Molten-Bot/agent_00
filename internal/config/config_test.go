@@ -827,3 +827,20 @@ func TestApplyDefaultsReplacesStaleOriginalPromptBlock(t *testing.T) {
 		t.Fatalf("PRBody = %q, want updated prompt block", cfg.PRBody)
 	}
 }
+
+func TestApplyDefaultsRemovesStalePromptWithTrailingFenceWhitespace(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		RepoURL: "git@github.com:acme/repo.git",
+		Prompt:  "review the pull request",
+		PRBody:  "Custom summary.\n\nOriginal task prompt:\n````text\n``` \nStale prompt.\n```` \t\n\nAdditional summary.",
+	}
+	cfg.ApplyDefaults()
+
+	want := prBodyGeneratedByLine + "\n\n" + prBodyDefaultSummary +
+		"\n\nCustom summary.\n\nAdditional summary.\n\nOriginal task prompt:\n```text\nreview the pull request\n```\n\n" + prBodyFooter
+	if cfg.PRBody != want {
+		t.Fatalf("PRBody = %q, want %q", cfg.PRBody, want)
+	}
+}
