@@ -118,7 +118,7 @@ var httpFailureStatus = regexp.MustCompile(`\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|
 var expectedUnauthorizedResult = regexp.MustCompile(`\b(?:(?:returned|received|got) |passed (?:with |\())expected http(?:/\d(?:\.\d)?)? 401\b|\bhttp(?:/\d(?:\.\d)?)? 401 (?:as expected\b|\(expected\))`)
 var validationTimeout = regexp.MustCompile(`\b(?:timeout|` + timeoutOutcome + `)\b`)
 var rolloutFailureOutcome = regexp.MustCompile(
-	`\b(?:(?:produced|returned) no response|exit(?:ed)?(?: with)? (?:status|code) [1-9][0-9]*|crash(?:ed|es|ing)? (?:on|during|at) startup)\b`,
+	`\b(?:(?:produced|returned) no response|exit(?:ed)?(?: with)? (?:status|code) [1-9][0-9]*|crash(?:ed|es|ing)? (?:on|during|at) startup|(?:probe|check|command|test) returned [1-9][0-9]*)\b|\bcurl: \([1-9][0-9]*\)|\b(?:connection refused|could not connect|failed to connect)\b`,
 )
 
 // HasRolloutFailureOutcome reports explicit failed outcomes that can appear

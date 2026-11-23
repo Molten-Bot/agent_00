@@ -74,31 +74,44 @@ func (l *terminalLogger) Print(line string) {
 		return
 	}
 
-	rendered, mode := formatTerminalLogLine(strings.TrimSpace(line))
+	line = strings.TrimSpace(line)
+	fields := parseSimpleKVFields(line)
+	preserveStdout := fields["stream"] == "stdout" && fields["b64"] != "" &&
+		(fields["phase"] == "codex" || fields["phase"] == "claude")
+	rendered, mode := formatTerminalLogLine(line)
 	if mode == terminalLogModeDrop || rendered == "" {
+		if preserveStdout {
+			l.Capture(line)
+		}
 		return
 	}
 
+	// Recovery needs the complete agent report even at debug level. Rendering
+	// may shorten or filter stdout; keep the original only in the local mirror.
+	sinkLine := rendered
+	if preserveStdout {
+		sinkLine = line
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	switch mode {
 	case terminalLogModeProgress:
 		if l.tty {
-			l.writeSinkLocked(rendered)
+			l.writeSinkLocked(sinkLine)
 			l.renderProgressLocked(rendered)
 			return
 		}
 		l.clearProgressLocked()
 		_, _ = fmt.Fprintln(l.out, rendered)
-		l.writeSinkLocked(rendered)
+		l.writeSinkLocked(sinkLine)
 	case terminalLogModeSinkOnly:
 		l.clearProgressLocked()
-		l.writeSinkLocked(rendered)
+		l.writeSinkLocked(sinkLine)
 	default:
 		l.clearProgressLocked()
 		_, _ = fmt.Fprintln(l.out, rendered)
-		l.writeSinkLocked(rendered)
+		l.writeSinkLocked(sinkLine)
 	}
 }
 

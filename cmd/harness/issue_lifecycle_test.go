@@ -562,3 +562,36 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 		})
 	}
 }
+
+func TestIssueRepairRecoversRawAgentStdoutAtEveryLogLevel(t *testing.T) {
+	t.Parallel()
+	for _, level := range []localruntime.LogLevel{localruntime.LogLevelDebug, localruntime.LogLevelInfo, localruntime.LogLevelWarn} {
+		for _, stage := range []string{"codex", "claude"} {
+			t.Run(level.String()+"/"+stage, func(t *testing.T) {
+				root := filepath.Join(t.TempDir(), ".log")
+				mirror, err := newTaskLogMirror(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var rendered strings.Builder
+				logger := newTerminalLogger(&rendered, false)
+				logger.sink = mirror
+				router := newRuntimeLogRouter(logger, nil, level)
+				const requestID = "local-1712345678-000007"
+				// A long line exercises terminal truncation while structured output can be
+				// filtered from the display entirely. Both must survive in the task mirror.
+				lines := []string{"Failure: Production rollout remains pending.", strings.Repeat("diagnostic ", 1000), `{"type":"result","result":"complete"}`}
+				for _, line := range lines {
+					router.Printf("task request_id=%s cmd phase=%s name=%s stream=stdout b64=%s", requestID, stage, stage, base64.StdEncoding.EncodeToString([]byte(line)))
+				}
+				logger.Close()
+				if got, want := issueRepairAgentStdout(root, requestID, stage), strings.Join(lines, "\n")+"\n"; got != want {
+					t.Fatalf("recovered stdout length=%d, want %d", len(got), len(want))
+				}
+				if strings.Contains(rendered.String(), "b64=") {
+					t.Fatal("raw payload leaked into rendered output")
+				}
+			})
+		}
+	}
+}

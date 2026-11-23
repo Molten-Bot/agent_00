@@ -270,3 +270,18 @@ func TestDependencyOperationDoesNotEndAtSoftWrap(t *testing.T) {
 		}
 	}
 }
+
+func TestExternalRolloutRejectsMixedProbeResults(t *testing.T) {
+	t.Parallel()
+	for _, result := range []string{
+		"Validation passed for unit tests, and readiness probe returned 1.",
+		"Validation passed for unit tests, and smoke check returned 2.",
+		"Implemented the endpoint, which crashes on startup.\nValidation passed for unit tests.",
+		"Implemented the endpoint.\nValidation passed for unit tests.\nValidation:\n- curl: (7) Failed to connect to localhost port 8080.",
+	} {
+		if IsExternalRolloutFailure("Failure: Production rollout remains pending.",
+			"Scoped IAM and shared reference key still require infrastructure work.\n"+result) {
+			t.Errorf("mixed result suppressed repair: %s", result)
+		}
+	}
+}

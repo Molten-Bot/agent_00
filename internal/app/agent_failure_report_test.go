@@ -351,6 +351,8 @@ func TestRunCodexClassifiesExternalRolloutBeforeDisplayTruncation(t *testing.T) 
 		{"late code failure", ".\n\nDeployment tests fail.", ""},
 		{"readiness timeout under validation", ".\n\n### Validation\n- Readiness check timed out.", ""},
 		{"startup produced no response under validation", ".\n\n### Validation\n- Startup produced no response.", ""},
+		{"curl connection error under validation", ".\n\n### Validation\n- curl: (7) Failed to connect to localhost port 8080.", ""},
+		{"nonzero probe in mixed validation", ", and readiness probe returned 1.", ""},
 		{"mixed validation result", ", but the readiness check failed.", ""},
 		{"successful unit tests and failed smoke check", "; smoke check returned HTTP 500.", ""},
 		{"code defect in the same paragraph", ". The service crashes on startup.", ""},
