@@ -875,6 +875,7 @@ var generatedPRTitleSuffixRE = regexp.MustCompile(`-[0-9]{8}-[0-9]{6}(?:-[0-9a-f
 var generatedPRPromptOpeningRE = regexp.MustCompile(`^` + prBodyPromptHeading + "\n(`{3,})text\n")
 var prPromptFenceLineRE = regexp.MustCompile("(?m)^[ \t]*(`{3,})")
 var prSummaryFenceLineRE = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
+var prSummaryListMarkerRE = regexp.MustCompile(`^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])( +)`)
 
 func normalizePRTitle(title string) string {
 	title = trimGeneratedPRTitleSuffix(strings.TrimSpace(title))
@@ -981,24 +982,24 @@ func formatPRBody(body, prompt string, issue *GitHubIssueConfig, maxBytes int) s
 }
 
 func preparePRBodySummary(summary, issueLine string) (string, bool) {
-	var fence string
+	var fences prSummaryFences
 	var hasIssueLine bool
 	atSectionStart := true
 	for rest := summary; rest != ""; {
 		line, after, _ := strings.Cut(rest, "\n")
-		if fence == "" && issueLine != "" && line == issueLine {
+		fences.advance(line)
+		if fences.fence == "" && issueLine != "" && line == issueLine {
 			if atSectionStart && after == "" {
 				// Keep a trailing issue section after the prompt on repeated normalization.
 				return strings.TrimRight(summary[:len(summary)-len(rest)], "\n"), hasIssueLine
 			}
 			hasIssueLine = true
 		}
-		fence = prSummaryFenceAfterLine(fence, line)
 		atSectionStart = line == ""
 		rest = after
 	}
-	if fence != "" {
-		summary += "\n" + fence
+	if fences.fence != "" {
+		summary += "\n" + strings.Repeat(" ", fences.indent()) + fences.fence
 	}
 	return summary, hasIssueLine
 }
@@ -1047,19 +1048,59 @@ func extractPRBodySummary(body, prompt string) string {
 
 func findPRPromptOpening(body string) (start int, content, fence string, found bool) {
 	atSectionStart := true
-	var summaryFence string
+	var fences prSummaryFences
 	for rest := body; rest != ""; {
-		if summaryFence == "" && atSectionStart {
+		line, after, _ := strings.Cut(rest, "\n")
+		fences.advance(line)
+		if fences.fence == "" && atSectionStart {
 			if opening := generatedPRPromptOpeningRE.FindStringSubmatchIndex(rest); opening != nil {
 				return len(body) - len(rest), rest[opening[1]:], rest[opening[2]:opening[3]], true
 			}
 		}
-		line, after, _ := strings.Cut(rest, "\n")
-		summaryFence = prSummaryFenceAfterLine(summaryFence, line)
 		atSectionStart = line == ""
 		rest = after
 	}
 	return 0, "", "", false
+}
+
+type prSummaryFences struct {
+	listIndents []int
+	fence       string
+}
+
+func (f *prSummaryFences) indent() int {
+	if len(f.listIndents) == 0 {
+		return 0
+	}
+	return f.listIndents[len(f.listIndents)-1]
+}
+
+func (f *prSummaryFences) advance(line string) {
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	leading := len(line) - len(strings.TrimLeft(line, " "))
+	for leading < f.indent() {
+		// A dedent ends the list item and any fence it contains.
+		f.listIndents = f.listIndents[:len(f.listIndents)-1]
+		f.fence = ""
+	}
+	line = line[f.indent():]
+	if f.fence == "" {
+		for {
+			marker := prSummaryListMarkerRE.FindStringSubmatchIndex(line)
+			if marker == nil {
+				break
+			}
+			width := marker[1]
+			if marker[3]-marker[2] > 4 {
+				width = marker[2] + 1
+			}
+			f.listIndents = append(f.listIndents, f.indent()+width)
+			line = line[width:]
+		}
+	}
+	f.fence = prSummaryFenceAfterLine(f.fence, line)
 }
 
 func prSummaryFenceAfterLine(fence, line string) string {
@@ -1141,8 +1182,21 @@ func legacyPromptHasBareCodeClose(body, fence string) bool {
 			// an example followed by more prompt text or the wrapper's close.
 			nextLine, _, _ := strings.Cut(after, "\n")
 			nextLine = strings.TrimRight(nextLine, " \t\r")
-			return !previousLineBlank && strings.TrimRight(line, " \t\r") == fence &&
-				(nextLine == "" || nextLine == fence)
+			if previousLineBlank || strings.TrimRight(line, " \t\r") != fence {
+				return false
+			}
+			if nextLine != "" {
+				return nextLine == fence
+			}
+			// A bare fence can open a trailing summary's code block directly
+			// after prose, with a blank first line. Keep that complete block.
+			for after != "" {
+				line, after, _ = strings.Cut(after, "\n")
+				if prSummaryFenceAfterLine(fence, line) == "" {
+					return strings.TrimSpace(after) != ""
+				}
+			}
+			return true
 		}
 		previousLineBlank = strings.TrimSpace(line) == ""
 		body = after

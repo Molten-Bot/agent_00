@@ -146,9 +146,15 @@ func TestNormalizePRBodyPreservesFencedSummaryAfterLegacyPrompt(t *testing.T) {
 		})
 	}
 	attachedSummary := strings.Replace(summary, "\n\n```", "\n```", 1)
-	body := prBodyPromptHeading + "\n```text\nOld instructions.\n```\n\n" + attachedSummary
-	if got, want := NormalizePRBody(body, prompt), NormalizePRBody(attachedSummary, prompt); got != want {
-		t.Errorf("normalized body = %q, want %q", got, want)
+	for _, summary := range []string{attachedSummary, strings.Replace(attachedSummary, "```\necho", "```\n\necho", 1)} {
+		body := prBodyPromptHeading + "\n```text\nOld instructions.\n```\n\n" + summary
+		got, want := NormalizePRBody(body, prompt), NormalizePRBody(summary, prompt)
+		if got != want {
+			t.Errorf("normalized body = %q, want %q", got, want)
+		}
+		if again := NormalizePRBody(got, prompt); again != got {
+			t.Errorf("second normalization changed body to %q", again)
+		}
 	}
 }
 
@@ -194,6 +200,33 @@ func TestNormalizePRBodyClosesSummaryFenceBeforeGeneratedSections(t *testing.T) 
 			}
 			if got := NormalizePRBodyForGitHubIssue(want, prompt, issue); got != want {
 				t.Fatalf("second issue normalization changed body to %q", got)
+			}
+		})
+	}
+}
+
+func TestNormalizePRBodyClosesListSummaryFenceInContext(t *testing.T) {
+	t.Parallel()
+
+	const prompt = "Updated instructions."
+	issue := &GitHubIssueConfig{Number: 17, LinkMode: GitHubIssueLinkClose}
+	for _, test := range []struct {
+		name, summary, closingFence string
+	}{
+		{"bullet", "- Example:\n  ```text\n  Example output.", "\n  ```"},
+		{"fence on list marker", "1. ```text\n   Example output.", "\n   ```"},
+		{"nested ordered list", "- Example:\n  1. Output:\n     ~~~~text\n     Example output.", "\n     ~~~~"},
+		{"dedented fence", "- Example:\n  ```text\n  Example output.\n```", "\n```"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			want := prBodyGeneratedByLine + "\n\n" + prBodyDefaultSummary + "\n\n" + test.summary + test.closingFence +
+				"\n\n" + prBodyPromptHeading + "\n```text\n" + prompt + "\n```\n\nCloses #17\n\n" + prBodyFooter
+			got := NormalizePRBodyForGitHubIssue(test.summary, prompt, issue)
+			if got != want {
+				t.Errorf("normalized body = %q, want %q", got, want)
+			}
+			if again := NormalizePRBodyForGitHubIssue(want, prompt, issue); again != want {
+				t.Errorf("second normalization changed body to %q", again)
 			}
 		})
 	}
