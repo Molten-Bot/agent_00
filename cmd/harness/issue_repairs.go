@@ -185,6 +185,7 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 			lock.Close()
 			continue
 		}
+		record.ReopenedRollout = record.ReopenedRollout || isSkippedRolloutRepair(record)
 		if record.State == "blocked" {
 			record.Error = ""
 		}
@@ -280,9 +281,9 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 			if !isIssueRepairSource(record, issue) {
 				continue
 			}
-			// Admission errors return reopened repairs to the queue. Recheck
-			// fulfillment on every dispatch of an unstarted repair with a known source.
-			if !record.Started && record.PRURL == "" && (issue.State == "fulfilled" || newerIssueAttemptFulfilled(issue, issues)) {
+			// Admission errors return reopened rollout repairs to the queue.
+			if (record.ReopenedRollout || isSkippedRolloutRepair(record)) && !record.Started && record.PRURL == "" &&
+				(issue.State == "fulfilled" || newerIssueAttemptFulfilled(issue, issues)) {
 				return issueRepairSourceFulfilledReason, nil
 			}
 		} else if issue.RepairRequestID != record.RequestID && issueRepairID(issue) != record.ID {

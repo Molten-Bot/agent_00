@@ -583,7 +583,7 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	checkStatements := func(statements []string) bool {
 		for _, statement := range statements {
 			statement = strings.TrimSpace(statement)
-			if !confirmed && hasExternalRolloutPrerequisite(statement) {
+			if hasExternalRolloutPrerequisite(statement) {
 				confirmed = true
 			} else if statement != "" && !disabledRolloutStatus.MatchString(statement) && !unavailableContainerValidation.MatchString(statement) {
 				return false

@@ -24,6 +24,9 @@ type IssueRepairRecord struct {
 	UpdatedAt     time.Time     `json:"updatedAt"`
 	Started       bool          `json:"started,omitempty"`
 	Run           config.Config `json:"run"`
+
+	// Preserve the repair's prior rollout block across admission retries.
+	ReopenedRollout bool `json:"reopenedRollout,omitempty"`
 }
 
 type IssueRepairStore struct {

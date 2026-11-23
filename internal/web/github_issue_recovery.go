@@ -234,8 +234,13 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		if truncated && s.IssueRolloutBlockedFromLogs != nil {
 			blockedFromLogs, matchedLogs = s.IssueRolloutBlockedFromLogs(record.RequestID, failure)
 		}
-		missingEvidence := failure == "" || failure == issueDependencyRetryError(previousIncident) ||
-			(truncated && !matchedLogs)
+		// Legacy records used Error for both terminal reports and mutable
+		// recovery status. Only the terminal report can disprove a blocker.
+		lowerFailure := strings.ToLower(failure)
+		terminalEvidence := failure != "" && failure != issueDependencyRetryError(previousIncident) &&
+			(record.RunError != "" ||
+				strings.HasPrefix(lowerFailure, "codex: codex reported failure: failure:") ||
+				strings.HasPrefix(lowerFailure, "claude: claude reported failure: failure:"))
 		switch {
 		case reason == failurefollowup.UnmergedDependencyReason:
 			record.Incident = localruntime.IssueIncidentUnmergedDependency
@@ -243,14 +248,14 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			record.Incident = localruntime.IssueIncidentOpenDependency
 		case reason == failurefollowup.ExternalRolloutPrerequisitesReason, blockedFromLogs:
 			record.Incident = localruntime.IssueIncidentExternalRollout
-		case previousIncident == localruntime.IssueIncidentExternalRollout && !missingEvidence:
+		case previousIncident == localruntime.IssueIncidentExternalRollout && (matchedLogs || (!truncated && terminalEvidence)):
 			record.Incident = "missing_pr"
 			if record.Error == issueDependencyRetryError(previousIncident) {
 				record.Error = ""
 			}
 		}
 		if record.Incident != previousIncident ||
-			(record.Incident == localruntime.IssueIncidentExternalRollout && record.RunError == "" && (!missingEvidence || truncated)) {
+			(record.Incident == localruntime.IssueIncidentExternalRollout && record.RunError == "" && terminalEvidence) {
 			record.RunError = failure
 			if issueDependencyRetryError(record.Incident) != "" {
 				record.NextAttemptAt = time.Time{}

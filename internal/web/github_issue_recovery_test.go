@@ -1135,9 +1135,11 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 		matchedLogs, repair  bool
 		legacyErrorFieldOnly bool
 		logsRestored         bool
+		recoveryStatusOnly   bool
 	}{
 		{name: "ambiguous preserved report", evidence: ambiguous, repair: true},
 		{name: "legacy error field", evidence: ambiguous, repair: true, legacyErrorFieldOnly: true},
+		{name: "legacy recovery status", evidence: "temporary GitHub verification failure", legacyErrorFieldOnly: true, recoveryStatusOnly: true},
 		{name: "confirmed preserved report", evidence: confirmed},
 		{name: "confirmed legacy error field", evidence: confirmed, legacyErrorFieldOnly: true},
 		{name: "confirmed secret only", evidence: prefix + "The shared Secrets Manager key requires external provisioning.", legacyErrorFieldOnly: true},
@@ -1190,7 +1192,11 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 				}
 			}
 			got := latestRecoveryRecord(t, s)
-			if got.RunError != tc.evidence || len(f.submissions) != 1 {
+			wantRunError := tc.evidence
+			if tc.recoveryStatusOnly {
+				wantRunError = ""
+			}
+			if got.RunError != wantRunError || len(f.submissions) != 1 {
 				t.Fatalf("lost evidence or submitted a replacement worker: detail=%q submissions=%d", got.RunError, len(f.submissions))
 			}
 			if tc.repair {

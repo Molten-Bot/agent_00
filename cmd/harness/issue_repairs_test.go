@@ -184,12 +184,15 @@ func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
 		legacy, skip    bool
 		sourceFulfilled bool
 		admissionRetry  bool
+		ordinary        bool
 	}{
 		{name: "legacy source log", attempt: 3, number: 17, state: "fulfilled", legacy: true, skip: true},
 		{name: "explicit source claim", attempt: 3, number: 17, state: "fulfilled", skip: true},
 		{name: "source claim fulfilled", attempt: 3, number: 17, state: "incident", sourceFulfilled: true, skip: true},
 		{name: "newer attempt fulfilled after enqueue rejection", attempt: 3, number: 17, state: "fulfilled", admissionRetry: true, skip: true},
 		{name: "source fulfilled after enqueue rejection", attempt: 3, number: 17, state: "incident", sourceFulfilled: true, admissionRetry: true, skip: true},
+		{name: "ordinary repair with newer fulfillment", attempt: 3, number: 17, state: "fulfilled", ordinary: true},
+		{name: "ordinary repair with fulfilled source", attempt: 3, number: 17, state: "incident", sourceFulfilled: true, ordinary: true},
 		{name: "different issue", attempt: 3, number: 18, state: "fulfilled"},
 		{name: "older fulfillment", attempt: 1, number: 17, state: "fulfilled"},
 		{name: "unfulfilled retry", attempt: 3, number: 17, state: "incident"},
@@ -201,9 +204,15 @@ func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
 			source.Incident = localruntime.IssueIncidentExternalRollout
 			source.Outcome = "error"
 			source.Run.GitHubIssue.Claim.Attempt = 2
+			if tc.ordinary {
+				source.RunError = "internal invariant failed"
+				source.Incident = "missing_pr"
+			}
 			record := saveLegacyIssueRepair(t, &q, source)
-			record.State = "blocked"
-			record.Error = failurefollowup.ExternalRolloutPrerequisitesReason
+			if !tc.ordinary {
+				record.State = "blocked"
+				record.Error = failurefollowup.ExternalRolloutPrerequisitesReason
+			}
 			if !tc.legacy {
 				record.SourceClaimID = source.ID
 			}
