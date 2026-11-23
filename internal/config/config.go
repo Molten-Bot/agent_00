@@ -988,7 +988,7 @@ func preparePRBodySummary(summary, issueLine string) (string, bool) {
 	for rest := summary; rest != ""; {
 		line, after, _ := strings.Cut(rest, "\n")
 		fences.advance(line)
-		if fences.fence == "" && issueLine != "" && line == issueLine {
+		if fences.fence == "" && !fences.inComment && issueLine != "" && line == issueLine {
 			if atSectionStart && after == "" {
 				// Keep a trailing issue section after the prompt on repeated normalization.
 				return strings.TrimRight(summary[:len(summary)-len(rest)], "\n"), hasIssueLine
@@ -1052,7 +1052,7 @@ func findPRPromptOpening(body string) (start int, content, fence string, found b
 	for rest := body; rest != ""; {
 		line, after, _ := strings.Cut(rest, "\n")
 		fences.advance(line)
-		if fences.fence == "" && atSectionStart {
+		if fences.fence == "" && !fences.inComment && atSectionStart {
 			if opening := generatedPRPromptOpeningRE.FindStringSubmatchIndex(rest); opening != nil {
 				return len(body) - len(rest), rest[opening[1]:], rest[opening[2]:opening[3]], true
 			}
@@ -1066,6 +1066,7 @@ func findPRPromptOpening(body string) (start int, content, fence string, found b
 type prSummaryFences struct {
 	listIndents []int
 	fence       string
+	inComment   bool
 }
 
 func (f *prSummaryFences) indent() int {
@@ -1081,11 +1082,16 @@ func (f *prSummaryFences) advance(line string) {
 	}
 	leading := len(line) - len(strings.TrimLeft(line, " "))
 	for leading < f.indent() {
-		// A dedent ends the list item and any fence it contains.
+		// A dedent ends the list item and its Markdown blocks.
 		f.listIndents = f.listIndents[:len(f.listIndents)-1]
 		f.fence = ""
+		f.inComment = false
 	}
 	line = line[f.indent():]
+	if f.inComment {
+		f.inComment = !strings.Contains(line, "-->")
+		return
+	}
 	if f.fence == "" {
 		for {
 			marker := prSummaryListMarkerRE.FindStringSubmatchIndex(line)
@@ -1098,6 +1104,11 @@ func (f *prSummaryFences) advance(line string) {
 			}
 			f.listIndents = append(f.listIndents, f.indent()+width)
 			line = line[width:]
+		}
+		trimmed := strings.TrimLeft(line, " ")
+		if len(line)-len(trimmed) <= 3 && strings.HasPrefix(trimmed, "<!--") {
+			f.inComment = !strings.Contains(trimmed[len("<!--"):], "-->")
+			return
 		}
 	}
 	f.fence = prSummaryFenceAfterLine(f.fence, line)
@@ -1188,15 +1199,21 @@ func legacyPromptHasBareCodeClose(body, fence string) bool {
 			if nextLine != "" {
 				return nextLine == fence
 			}
-			// A bare fence can open a trailing summary's code block directly
-			// after prose, with a blank first line. Keep that complete block.
+			// A complete summary example can have prose after its close. Only
+			// continue looking for the wrapper if another bare fence remains.
+			fences := prSummaryFences{fence: fence}
+			exampleClosed := false
 			for after != "" {
 				line, after, _ = strings.Cut(after, "\n")
-				if prSummaryFenceAfterLine(fence, line) == "" {
-					return strings.TrimSpace(after) != ""
+				wasOutsideFence := fences.fence == ""
+				fences.advance(line)
+				if fences.fence == "" {
+					exampleClosed = true
+				} else if wasOutsideFence && fences.fence == fence && strings.TrimRight(line, " \t\r") == fence {
+					return true
 				}
 			}
-			return true
+			return !exampleClosed
 		}
 		previousLineBlank = strings.TrimSpace(line) == ""
 		body = after
