@@ -19,23 +19,25 @@ func DedupeKey(cfg Config) string {
 	repos := normalizeRepoListForDeduper(cfg.RepoList())
 	targetSubdir := normalizeTargetSubdirForDeduper(cfg.TargetSubdir)
 	payload := struct {
-		Repos        []string             `json:"repos"`
-		BaseBranch   string               `json:"baseBranch"`
-		TargetSubdir string               `json:"targetSubdir"`
-		Reviewers    []string             `json:"reviewers,omitempty"`
-		Review       *reviewDedupePayload `json:"review,omitempty"`
-		AgentHarness string               `json:"agentHarness,omitempty"`
-		AgentCommand string               `json:"agentCommand,omitempty"`
-		PromptHash   string               `json:"promptHash"`
+		WorkflowEvent string               `json:"workflowEvent,omitempty"`
+		Repos         []string             `json:"repos"`
+		BaseBranch    string               `json:"baseBranch"`
+		TargetSubdir  string               `json:"targetSubdir"`
+		Reviewers     []string             `json:"reviewers,omitempty"`
+		Review        *reviewDedupePayload `json:"review,omitempty"`
+		AgentHarness  string               `json:"agentHarness,omitempty"`
+		AgentCommand  string               `json:"agentCommand,omitempty"`
+		PromptHash    string               `json:"promptHash"`
 	}{
-		Repos:        repos,
-		BaseBranch:   baseBranch,
-		TargetSubdir: targetSubdir,
-		Reviewers:    normalizeReviewerListForDeduper(mergeReviewers(cfg.Reviewers, cfg.GitHubHandle)),
-		Review:       reviewDedupePayloadForDeduper(cfg.Review),
-		AgentHarness: strings.ToLower(strings.TrimSpace(cfg.AgentHarness)),
-		AgentCommand: strings.TrimSpace(cfg.AgentCommand),
-		PromptHash:   promptHashForDeduper(cfg.Prompt),
+		WorkflowEvent: workflowEventID(cfg),
+		Repos:         repos,
+		BaseBranch:    baseBranch,
+		TargetSubdir:  targetSubdir,
+		Reviewers:     normalizeReviewerListForDeduper(mergeReviewers(cfg.Reviewers, cfg.GitHubHandle)),
+		Review:        reviewDedupePayloadForDeduper(cfg.Review),
+		AgentHarness:  strings.ToLower(strings.TrimSpace(cfg.AgentHarness)),
+		AgentCommand:  strings.TrimSpace(cfg.AgentCommand),
+		PromptHash:    promptHashForDeduper(cfg.Prompt),
 	}
 
 	encoded, err := json.Marshal(payload)
@@ -140,4 +142,11 @@ func normalizeTargetSubdirForDeduper(subdir string) string {
 func promptHashForDeduper(prompt string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(prompt)))
 	return hex.EncodeToString(sum[:])
+}
+
+func workflowEventID(cfg Config) string {
+	if cfg.Workflow == nil {
+		return ""
+	}
+	return cfg.Workflow.EventID
 }

@@ -1,0 +1,285 @@
+{
+  "version": 1,
+  "workflowVersion": 2,
+  "templates": [
+    {
+      "id": "implement",
+      "definition": {
+        "id": "implement",
+        "name": "Implement issues",
+        "repository": "example/repository",
+        "enabled": false,
+        "includeBacklog": false,
+        "trigger": {
+          "event": "issue.labeled",
+          "value": "ready-for-agent"
+        },
+        "filters": {
+          "mode": "all",
+          "rules": []
+        },
+        "task": {
+          "kind": "implement",
+          "instructions": "Implement the issue and run the relevant tests.",
+          "assignCreator": false,
+          "issueLinkMode": "reference",
+          "draft": false
+        },
+        "reviewCycles": 0,
+        "merge": {
+          "enabled": false,
+          "method": "squash",
+          "requireApproval": true,
+          "deleteBranch": false
+        },
+        "positions": {}
+      },
+      "name": "Implement issues",
+      "description": "Run an agent when an issue receives the ready-for-agent label."
+    },
+    {
+      "id": "review",
+      "definition": {
+        "id": "review",
+        "name": "Review pull requests",
+        "repository": "example/repository",
+        "enabled": false,
+        "includeBacklog": false,
+        "trigger": {
+          "event": "pr.review_requested",
+          "value": "@me"
+        },
+        "filters": {
+          "mode": "all",
+          "rules": []
+        },
+        "task": {
+          "kind": "review",
+          "instructions": "Review the pull request for correctness, regressions, and missing tests.",
+          "assignCreator": false,
+          "issueLinkMode": "reference",
+          "draft": false
+        },
+        "reviewCycles": 0,
+        "merge": {
+          "enabled": false,
+          "method": "squash",
+          "requireApproval": true,
+          "deleteBranch": false
+        },
+        "positions": {}
+      },
+      "name": "Review PRs",
+      "description": "Review pull requests when your GitHub account is requested as a reviewer."
+    },
+    {
+      "id": "repair",
+      "definition": {
+        "id": "repair",
+        "name": "Repair failed checks",
+        "repository": "example/repository",
+        "enabled": false,
+        "includeBacklog": false,
+        "trigger": {
+          "event": "pr.checks_failed",
+          "value": ""
+        },
+        "filters": {
+          "mode": "all",
+          "rules": []
+        },
+        "task": {
+          "kind": "repair",
+          "instructions": "Read the failed checks and review feedback, fix the root cause, and run the relevant tests.",
+          "assignCreator": false,
+          "issueLinkMode": "reference",
+          "draft": false
+        },
+        "reviewCycles": 0,
+        "merge": {
+          "enabled": false,
+          "method": "squash",
+          "requireApproval": true,
+          "deleteBranch": false
+        },
+        "positions": {}
+      },
+      "name": "Repair checks",
+      "description": "Repair pull requests with failed checks."
+    },
+    {
+      "id": "schedule",
+      "definition": {
+        "id": "schedule",
+        "name": "Scheduled repository task",
+        "repository": "example/repository",
+        "enabled": false,
+        "includeBacklog": false,
+        "trigger": {
+          "event": "schedule",
+          "intervalHours": 24
+        },
+        "filters": {
+          "mode": "all",
+          "rules": []
+        },
+        "task": {
+          "kind": "implement",
+          "instructions": "Run the requested repository maintenance task.",
+          "assignCreator": false,
+          "issueLinkMode": "reference",
+          "draft": false
+        },
+        "reviewCycles": 0,
+        "merge": {
+          "enabled": false,
+          "method": "squash",
+          "requireApproval": true,
+          "deleteBranch": false
+        },
+        "positions": {}
+      },
+      "name": "Scheduled task",
+      "description": "Run a repository task daily. Choose a Library prompt or write your own."
+    },
+    {
+      "id": "assigned",
+      "definition": {
+        "id": "assigned",
+        "name": "Assigned issues",
+        "repository": "example/repository",
+        "enabled": false,
+        "includeBacklog": false,
+        "trigger": {
+          "event": "issue.assigned",
+          "value": "@me"
+        },
+        "filters": {
+          "mode": "all",
+          "rules": []
+        },
+        "task": {
+          "kind": "implement",
+          "instructions": "Implement the issue and run the relevant tests.",
+          "assignCreator": true,
+          "issueLinkMode": "reference",
+          "draft": false
+        },
+        "reviewCycles": 2,
+        "merge": {
+          "enabled": false,
+          "method": "squash",
+          "requireApproval": true,
+          "deleteBranch": false
+        },
+        "positions": {}
+      },
+      "name": "Assigned issues",
+      "description": "Implement issues assigned to you, with up to two review repair cycles."
+    },
+    {
+      "id": "changes",
+      "definition": {
+        "id": "changes",
+        "name": "Address PR feedback",
+        "repository": "example/repository",
+        "enabled": false,
+        "includeBacklog": false,
+        "trigger": {
+          "event": "pr.changes_requested"
+        },
+        "filters": {
+          "mode": "all",
+          "rules": []
+        },
+        "task": {
+          "kind": "repair",
+          "instructions": "Address the requested review changes and run the relevant tests.",
+          "assignCreator": false,
+          "issueLinkMode": "reference",
+          "draft": false
+        },
+        "reviewCycles": 2,
+        "merge": {
+          "enabled": false,
+          "method": "squash",
+          "requireApproval": true,
+          "deleteBranch": false
+        },
+        "positions": {}
+      },
+      "name": "Address PR feedback",
+      "description": "React to requested changes and repair the pull request, with up to two review repair cycles."
+    },
+    {
+      "id": "delivery",
+      "definition": {
+        "id": "delivery",
+        "name": "Issue to merge",
+        "repository": "example/repository",
+        "enabled": false,
+        "includeBacklog": false,
+        "trigger": {
+          "event": "issue.labeled",
+          "value": "ready-for-agent"
+        },
+        "filters": {
+          "mode": "all",
+          "rules": []
+        },
+        "task": {
+          "kind": "implement",
+          "instructions": "Implement the issue and run the relevant tests.",
+          "assignCreator": false,
+          "issueLinkMode": "close",
+          "draft": false
+        },
+        "reviewCycles": 2,
+        "merge": {
+          "enabled": true,
+          "method": "squash",
+          "requireApproval": true,
+          "deleteBranch": true
+        },
+        "positions": {}
+      },
+      "name": "Issue to merge",
+      "description": "Implement labeled issues, allow two repair cycles, then squash merge after successful checks and human approval. Delete the merged branch."
+    },
+    {
+      "id": "review_merge",
+      "definition": {
+        "id": "review_merge",
+        "name": "Review and merge",
+        "repository": "example/repository",
+        "enabled": false,
+        "includeBacklog": false,
+        "trigger": {
+          "event": "pr.review_requested",
+          "value": "@me"
+        },
+        "filters": {
+          "mode": "all",
+          "rules": []
+        },
+        "task": {
+          "kind": "review",
+          "instructions": "Review the pull request for correctness, regressions, and missing tests.",
+          "assignCreator": false,
+          "issueLinkMode": "reference",
+          "draft": false
+        },
+        "reviewCycles": 0,
+        "merge": {
+          "enabled": true,
+          "method": "squash",
+          "requireApproval": true,
+          "deleteBranch": true
+        },
+        "positions": {}
+      },
+      "name": "Review and merge",
+      "description": "Review requested PRs, then squash merge clean reviews after successful checks and human approval. Delete the merged branch."
+    }
+  ]
+}

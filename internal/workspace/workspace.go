@@ -41,6 +41,9 @@ var osExecutable = os.Executable
 
 // Manager creates isolated run directories.
 type Manager struct {
+	// PreferDisk keeps read-only agent passes out of RAM storage such as
+	// /dev/shm, which a sandbox may replace with a private /dev mount.
+	PreferDisk bool
 	// Root pins durable issue workspaces to persistent storage without changing
 	// process-wide workspace environment variables.
 	Root       string
@@ -71,8 +74,12 @@ func PrepareDefaultRoots() error {
 	return NewManager().PrepareRoots()
 }
 
-// SelectBase chooses /dev/shm when available and executable, else /tmp.
+// SelectBase chooses disk storage when requested, otherwise executable RAM
+// storage when available, with disk storage as the fallback.
 func (m Manager) SelectBase() string {
+	if m.PreferDisk {
+		return configuredDiskBase()
+	}
 	exists := m.PathExists
 	if exists == nil {
 		exists = pathExists

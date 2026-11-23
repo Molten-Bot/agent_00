@@ -9560,3 +9560,31 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
     padding-inline: 76px;
   }
 }
+
+/* Workflow is an isolated studio that shares the application shell. */
+body[data-app-display="workflow"] .app.dashboard-app {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+body[data-app-display="workflow"] .layout,
+body[data-app-display="workflow"] .right-col {
+  min-height: 0;
+  height: 100%;
+}
+
+body[data-app-display="workflow"] .right-col {
+  align-content: stretch;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+body[data-app-display="workflow"] #task-panel {
+  display: none;
+}
+
+#workflow-display {
+  min-height: 0;
+  overflow: auto;
+}

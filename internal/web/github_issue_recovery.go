@@ -397,6 +397,12 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		return s.deferIssueRecord(record, err)
 	}
 	settings, autoStart := settings.issueAutoStartForRepository(issue.Repository)
+	if record.Run.Workflow != nil {
+		settings, autoStart, err = s.workflowIssueSettings(record.Run)
+		if err != nil {
+			return s.deferIssueRecord(record, err)
+		}
+	}
 	if !autoStart {
 		record.State = "blocked"
 		record.Error = "issue automation disabled"

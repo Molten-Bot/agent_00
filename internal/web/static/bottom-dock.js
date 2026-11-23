@@ -150,7 +150,7 @@
   function syncPageNavLinks(root) {
     const hashDisplay = String(window.location.hash || "").replace(/^#/, "").trim();
     const currentPath = normalizePath(window.location.pathname);
-    const hashAppDisplay = hashDisplay === "dashboard" || hashDisplay === "chat" || hashDisplay === "work"
+    const hashAppDisplay = hashDisplay === "dashboard" || hashDisplay === "chat" || hashDisplay === "work" || hashDisplay === "workflow"
       ? hashDisplay
       : hashDisplay === "current-work"
         ? "work"
