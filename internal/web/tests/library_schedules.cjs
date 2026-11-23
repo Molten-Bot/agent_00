@@ -23,6 +23,7 @@ test('Library scheduling creates a workflow draft with its prompt and repository
  if(url.pathname.startsWith('/api/'))return route.fulfill({json:{ok:true}});return route.continue()});
  await page.goto(baseURL+'/#studio-library');
  await page.waitForFunction(()=>state.libraryTasks.length===1);
+  assert.equal(await page.locator('#library-repo-input').inputValue(),'','repository stays empty until explicitly selected');
  await page.evaluate(()=>{libraryRepoInput.value='https://github.com/acme/repo.git';libraryBaseBranch.value='feature';libraryTargetSubdir.value='src';updateLibraryScheduleTrigger(state.libraryTasks[0]);});
  await page.locator('#library-schedule-trigger').click();
  await page.getByLabel('Trigger type').waitFor();assert.equal(new URL(page.url()).hash,'#workflow');assert.equal(await page.getByLabel('Trigger type').inputValue(),'schedule');assert.equal(await page.getByLabel('Workflow repository').inputValue(),'acme/repo');

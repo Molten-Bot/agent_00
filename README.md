@@ -688,8 +688,6 @@ Useful environment variables:
 - `HARNESS_AGENT_HARNESS`: default agent harness.
 - `HARNESS_AGENT_COMMAND`: default agent executable.
 - `OPENAI_API_KEY`: Codex login bootstrap.
-- `HARNESS_DEFAULT_REPOSITORY`: optional repository prefill for Prompt
-  Studio; omitted leaves the repository field empty.
 - `WHISPER_SPEECH_HOST`: optional speech sidecar host; defaults to
   `faster-whisper`.
 - `WHISPER_SPEECH_PORT`: optional speech sidecar Wyoming port; defaults to

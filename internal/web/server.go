@@ -1834,7 +1834,6 @@ func (s Server) injectIndexConfig(data []byte) []byte {
 		AutomaticMode        bool         `json:"automaticMode"`
 		ConfiguredHarness    string       `json:"configuredHarness"`
 		ConfiguredAgentLabel string       `json:"configuredAgentLabel"`
-		DefaultRepository    string       `json:"defaultRepository"`
 		PromptImageHarnesses []string     `json:"promptImageHarnesses"`
 		GitHubReposReady     bool         `json:"githubReposReady"`
 		GitHubRepos          []GitHubRepo `json:"githubRepos,omitempty"`
@@ -1850,7 +1849,6 @@ func (s Server) injectIndexConfig(data []byte) []byte {
 		AutomaticMode:        s.AutomaticMode,
 		ConfiguredHarness:    configuredHarness,
 		ConfiguredAgentLabel: configuredAgentLabel,
-		DefaultRepository:    defaultStudioRepository(),
 		PromptImageHarnesses: agentruntime.SupportedPromptImageHarnesses(),
 		GitHubReposReady:     reposReady,
 		GitHubRepos:          repos,
@@ -1862,14 +1860,10 @@ func (s Server) injectIndexConfig(data []byte) []byte {
 
 	return bytes.Replace(
 		data,
-		[]byte(`window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};`),
+		[]byte(`window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","promptImageHarnesses":["codex"],"githubReposReady":false};`),
 		[]byte("window.__RUNTIME_UI_CONFIG__ = "+string(cfg)+";"),
 		1,
 	)
-}
-
-func defaultStudioRepository() string {
-	return strings.TrimSpace(os.Getenv("HARNESS_DEFAULT_REPOSITORY"))
 }
 
 func (s Server) handleState(w http.ResponseWriter, _ *http.Request) {
