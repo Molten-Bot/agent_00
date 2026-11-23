@@ -116,6 +116,33 @@ func TestNormalizePRBodyForGitHubIssueRemovesStaleLegacyFencedPrompt(t *testing.
 	}
 }
 
+func TestNormalizePRBodyPreservesFencedSummaryAfterLegacyPrompt(t *testing.T) {
+	t.Parallel()
+
+	const prompt = "Updated instructions."
+	const summary = "Custom summary.\n\n```\necho summary\n```"
+	const fencedPrompt = "Run the example:\n\n```sh\necho prompt\n```\n\nKeep this final line."
+	bareFencedPrompt := strings.Replace(fencedPrompt, "```sh", "```", 1)
+	for _, test := range []struct {
+		name      string
+		oldPrompt string
+		newPrompt string
+	}{
+		{"matching prompt", prompt, prompt},
+		{"stale prompt", "Old instructions.", prompt},
+		{"matching prompt with unlabeled code", bareFencedPrompt, bareFencedPrompt},
+		{"stale prompt with code", fencedPrompt, prompt},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := prBodyPromptHeading + "\n```text\n" + test.oldPrompt + "\n``` \t\n\n" + summary + "\n\n" + prBodyFooter
+			want := NormalizePRBody(summary, test.newPrompt)
+			if got := NormalizePRBody(body, test.newPrompt); got != want {
+				t.Errorf("normalized body = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestNormalizePRBodyMatchesWholeClosingFenceLine(t *testing.T) {
 	t.Parallel()
 

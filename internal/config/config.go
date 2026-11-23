@@ -873,7 +873,6 @@ func NormalizePRBodyForGitHubIssue(body, prompt string, issue *GitHubIssueConfig
 var wsRE = regexp.MustCompile(`\s+`)
 var generatedPRTitleSuffixRE = regexp.MustCompile(`-[0-9]{8}-[0-9]{6}(?:-[0-9a-fA-F]{1,8})?$`)
 var generatedPRPromptOpeningRE = regexp.MustCompile(`(?:^|\n{2,})` + prBodyPromptHeading + "\n(`{3,})text\n")
-var generatedPRIssueLinkRE = regexp.MustCompile(`^(?:Related to|Closes) #[0-9]+$`)
 var prPromptFenceLineRE = regexp.MustCompile("(?m)^[ \t]*(`{3,})")
 
 func normalizePRTitle(title string) string {
@@ -1022,37 +1021,47 @@ func extractPRBodySummary(body, prompt string) string {
 }
 
 func afterPRPromptFence(body, fence, prompt string) (string, bool) {
-	if fence == "```" {
-		// Legacy bodies used three backticks even when the prompt contained
-		// them. The generated block ended the body, apart from the issue
-		// link and footer, so prefer the fence at that boundary.
-		end := len(body)
-		last := strings.LastIndexByte(body, '\n') + 1
-		if generatedPRIssueLinkRE.MatchString(body[last:]) {
-			end = len(strings.TrimRight(body[:last], "\n"))
-		}
-		lineStart := strings.LastIndexByte(body[:end], '\n') + 1
-		if strings.TrimRight(body[lineStart:end], " \t\r") == fence {
-			return strings.TrimPrefix(body[end:], "\n"), true
-		}
-
-		// An exact prompt match also disambiguates a block in a custom body.
-		if prompt != "" {
-			if rest, found := strings.CutPrefix(body, prompt+"\n"); found {
-				line, after, _ := strings.Cut(rest, "\n")
-				if strings.TrimRight(line, " \t\r") == fence {
-					return after, true
-				}
+	legacy := fence == "```"
+	if legacy && prompt != "" {
+		// The known prompt can contain the same fence as its wrapper.
+		if rest, found := strings.CutPrefix(body, prompt+"\n"); found {
+			line, after, _ := strings.Cut(rest, "\n")
+			if strings.TrimRight(line, " \t\r") == fence {
+				return after, true
 			}
 		}
 	}
+
+	// For stale legacy prompts, a fence with an info string identifies an
+	// embedded code block. A bare fence outside such a block ends the prompt.
+	innerFenceLength := 0
+	var fallback string
+	var foundFallback bool
 	for {
 		line, after, more := strings.Cut(body, "\n")
-		if strings.TrimRight(line, " \t\r") == fence {
-			return after, true
+		line = strings.TrimRight(line, " \t\r")
+		if line == fence {
+			if innerFenceLength == 0 {
+				return after, true
+			}
+			// The prompt may end with an unclosed code example.
+			if !foundFallback {
+				fallback, foundFallback = after, true
+			}
+		}
+		if legacy {
+			if match := prPromptFenceLineRE.FindStringSubmatchIndex(line); match != nil {
+				length := match[3] - match[2]
+				info := line[match[3]:]
+				if innerFenceLength == 0 && info != "" && !strings.Contains(info, "`") {
+					innerFenceLength = length
+				} else if innerFenceLength > 0 && info == "" && length >= innerFenceLength {
+					innerFenceLength = 0
+				}
+			}
 		}
 		if !more {
-			return "", false
+			return fallback, foundFallback
 		}
 		body = after
 	}
