@@ -872,8 +872,9 @@ func NormalizePRBodyForGitHubIssue(body, prompt string, issue *GitHubIssueConfig
 
 var wsRE = regexp.MustCompile(`\s+`)
 var generatedPRTitleSuffixRE = regexp.MustCompile(`-[0-9]{8}-[0-9]{6}(?:-[0-9a-fA-F]{1,8})?$`)
-var generatedPRPromptOpeningRE = regexp.MustCompile(`(?:^|\n{2,})` + prBodyPromptHeading + "\n(`{3,})text\n")
+var generatedPRPromptOpeningRE = regexp.MustCompile(`^` + prBodyPromptHeading + "\n(`{3,})text\n")
 var prPromptFenceLineRE = regexp.MustCompile("(?m)^[ \t]*(`{3,})")
+var prSummaryFenceLineRE = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
 
 func normalizePRTitle(title string) string {
 	title = trimGeneratedPRTitleSuffix(strings.TrimSpace(title))
@@ -1002,22 +1003,47 @@ func extractPRBodySummary(body, prompt string) string {
 
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyFooter, ""))
 	for {
-		opening := generatedPRPromptOpeningRE.FindStringSubmatchIndex(body)
-		if opening == nil {
-			break
-		}
-		fence := body[opening[2]:opening[3]]
-		after, found := afterPRPromptFence(body[opening[1]:], fence, prompt)
+		start, content, fence, found := findPRPromptOpening(body)
 		if !found {
 			break
 		}
-		body = strings.TrimSpace(body[:opening[0]] + "\n\n" + strings.TrimPrefix(after, "\n"))
+		after, found := afterPRPromptFence(content, fence, prompt)
+		if !found {
+			break
+		}
+		body = strings.TrimSpace(strings.TrimRight(body[:start], "\n") + "\n\n" + strings.TrimPrefix(after, "\n"))
 	}
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyGeneratedByLine, ""))
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyFormatReferenceLine, ""))
 	body = strings.TrimSpace(strings.ReplaceAll(body, "Agent summary of issue resolution:", ""))
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyDefaultSummary, ""))
 	return strings.TrimSpace(body)
+}
+
+func findPRPromptOpening(body string) (start int, content, fence string, found bool) {
+	atSectionStart := true
+	var summaryFence string
+	for rest := body; rest != ""; {
+		if summaryFence == "" && atSectionStart {
+			if opening := generatedPRPromptOpeningRE.FindStringSubmatchIndex(rest); opening != nil {
+				return len(body) - len(rest), rest[opening[1]:], rest[opening[2]:opening[3]], true
+			}
+		}
+		line, after, _ := strings.Cut(rest, "\n")
+		if match := prSummaryFenceLineRE.FindStringSubmatch(line); match != nil {
+			delimiter, info := match[1], match[2]
+			if summaryFence == "" {
+				if delimiter[0] == '~' || !strings.Contains(info, "`") {
+					summaryFence = delimiter
+				}
+			} else if strings.HasPrefix(delimiter, summaryFence) && strings.TrimSpace(info) == "" {
+				summaryFence = ""
+			}
+		}
+		atSectionStart = line == ""
+		rest = after
+	}
+	return 0, "", "", false
 }
 
 func afterPRPromptFence(body, fence, prompt string) (string, bool) {
@@ -1032,24 +1058,30 @@ func afterPRPromptFence(body, fence, prompt string) (string, bool) {
 		}
 	}
 
-	// For stale legacy prompts, a fence with an info string identifies an
-	// embedded code block. A bare fence outside such a block ends the prompt.
+	// Legacy wrappers and unlabeled code blocks can share a fence. The
+	// formatter closes the wrapper after trimmed prompt content and separates
+	// the next section with a blank line.
 	innerFenceLength := 0
+	previousLineBlank := true
 	var fallback string
 	var foundFallback bool
 	for {
 		line, after, more := strings.Cut(body, "\n")
 		line = strings.TrimRight(line, " \t\r")
-		if line == fence {
-			if innerFenceLength == 0 {
+		if line == fence && innerFenceLength == 0 {
+			nextLine, _, _ := strings.Cut(after, "\n")
+			if !legacy || !more || after == "" || (!previousLineBlank && strings.TrimSpace(nextLine) == "") {
 				return after, true
 			}
-			// The prompt may end with an unclosed code example.
 			if !foundFallback {
 				fallback, foundFallback = after, true
 			}
-		}
-		if legacy {
+			innerFenceLength = len(fence)
+		} else if legacy {
+			// The prompt may end with an unclosed code example.
+			if line == fence && !foundFallback {
+				fallback, foundFallback = after, true
+			}
 			if match := prPromptFenceLineRE.FindStringSubmatchIndex(line); match != nil {
 				length := match[3] - match[2]
 				info := line[match[3]:]
@@ -1063,6 +1095,7 @@ func afterPRPromptFence(body, fence, prompt string) (string, bool) {
 		if !more {
 			return fallback, foundFallback
 		}
+		previousLineBlank = strings.TrimSpace(line) == ""
 		body = after
 	}
 }

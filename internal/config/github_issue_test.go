@@ -131,6 +131,8 @@ func TestNormalizePRBodyPreservesFencedSummaryAfterLegacyPrompt(t *testing.T) {
 		{"matching prompt", prompt, prompt},
 		{"stale prompt", "Old instructions.", prompt},
 		{"matching prompt with unlabeled code", bareFencedPrompt, bareFencedPrompt},
+		{"stale prompt with unlabeled code", bareFencedPrompt, prompt},
+		{"stale prompt with multiple unlabeled blocks", bareFencedPrompt + "\n```\nsecond example\n```\n\n```\n\nthird example\n```", prompt},
 		{"stale prompt with code", fencedPrompt, prompt},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -138,6 +140,27 @@ func TestNormalizePRBodyPreservesFencedSummaryAfterLegacyPrompt(t *testing.T) {
 			want := NormalizePRBody(summary, test.newPrompt)
 			if got := NormalizePRBody(body, test.newPrompt); got != want {
 				t.Errorf("normalized body = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestNormalizePRBodyPreservesPromptExamplesInFencedSummary(t *testing.T) {
+	t.Parallel()
+
+	const prompt = "Updated instructions."
+	const example = prBodyPromptHeading + "\n````text\nLiteral prompt example.\n````"
+	for _, fence := range []string{"`````", "~~~~"} {
+		t.Run(fence, func(t *testing.T) {
+			summary := "Custom summary.\n\n" + fence + "markdown\n\n" + example + "\n" + fence
+			body := summary + "\n\n" + prBodyPromptHeading + "\n````text\nOld instructions.\n````"
+			want := prBodyGeneratedByLine + "\n\n" + prBodyDefaultSummary + "\n\n" + summary +
+				"\n\n" + prBodyPromptHeading + "\n```text\n" + prompt + "\n```\n\n" + prBodyFooter
+			if got := NormalizePRBody(body, prompt); got != want {
+				t.Fatalf("normalized body = %q, want %q", got, want)
+			}
+			if got := NormalizePRBody(want, prompt); got != want {
+				t.Fatalf("second normalization changed body to %q", got)
 			}
 		})
 	}
