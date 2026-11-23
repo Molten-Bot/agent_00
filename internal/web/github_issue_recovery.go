@@ -257,7 +257,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	}
 	record.ProcessGroups = nil
 	record.ProcessUncertain = false
-	if !record.NextAttemptAt.IsZero() && time.Now().Before(record.NextAttemptAt) {
+	cooling := time.Now().Before(record.NextAttemptAt)
+	// Failed admission can leave a label to clean up while dispatch cools down.
+	if cooling && (record.Outcome != "" || !record.UnlockPending) {
 		return nil
 	}
 	issue := record.Run.GitHubIssue
@@ -296,6 +298,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			return s.deferIssueRecord(record, err)
 		}
 	}
+	if cooling {
+		return nil
+	}
 	if remote.Claim.ID == record.ID && record.BranchReserved {
 		pr, err := s.verifiedIssuePR(ctx, issue)
 		if err != nil {
@@ -330,6 +335,10 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		} else {
 			record.RepairRequestID = id
 			record.RepairError = ""
+		}
+		// Admission can defer its own retry without saving this record again.
+		if err := s.IssueClaims.Save(record); err != nil {
+			return fmt.Errorf("persist issue repair result: %w", err)
 		}
 	}
 	policy := s.IssueRecovery.Defaults()

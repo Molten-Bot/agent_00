@@ -688,7 +688,46 @@ func TestIssueRecoveryBacksOffFailedSuccessorAdmission(t *testing.T) {
 		if err := s.ReconcileIssueWork(ctx); err != nil || calls != failures || len(f.submissions) != 1 {
 			t.Fatalf("cooling claim dispatched: calls=%d, submissions=%d, error=%v", calls, len(f.submissions), err)
 		}
+		unlocked := latestRecoveryRecord(t, s)
+		if unlocked.LabelAdded || unlocked.UnlockPending || githubIssueHasAnyLabel(f.issue, []string{got.Run.GitHubIssue.Claim.ExclusionLabel}) {
+			t.Fatal("failed dispatch kept its exclusion label during backoff")
+		}
+		if !unlocked.NextAttemptAt.Equal(got.NextAttemptAt) || !unlocked.NextAttemptAt.After(time.Now()) || unlocked.Failures != failures {
+			t.Fatalf("unlock changed the dispatch cooldown: deadline=%v failures=%d", unlocked.NextAttemptAt, unlocked.Failures)
+		}
 		expireIssueRetry(t, s, got.ID)
+	}
+}
+
+func TestIssueRecoveryPersistsRepairReceiptBeforeFailedAdmission(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	previous := completeRecoveryRecord(t, s, "error", 0)
+	expireIssueRetry(t, s, previous.ID)
+	s.IssueRepair = func(_ context.Context, record localruntime.IssueClaimRecord) (string, error) {
+		if record.ID != previous.ID {
+			t.Fatalf("repair attempted for claim %s, want %s", record.ID, previous.ID)
+		}
+		return "repair-request", nil
+	}
+	dispatchErr := errors.New("temporary dispatch failure")
+	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
+		return "", dispatchErr
+	}
+	if err := s.ReconcileIssueWork(ctx); !errors.Is(err, dispatchErr) {
+		t.Fatalf("expected dispatch failure, got %v", err)
+	}
+	if got := latestRecoveryRecord(t, s); got.ID == previous.ID || got.State != "retry_wait" || len(f.submissions) != 1 {
+		t.Fatalf("expected deferred successor, got claim %s in state %s", got.ID, got.State)
+	}
+	saved, err := (&localruntime.IssueClaimStore{Root: s.IssueClaims.Root}).Load(previous.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.RepairRequestID != "repair-request" {
+		t.Fatalf("saved repair receipt = %q", saved.RepairRequestID)
 	}
 }
 
