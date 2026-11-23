@@ -411,6 +411,7 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 		{"joined provisioning and flag status", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding | API and MCP flags default to off.", true},
 		{"provisioning with unavailable integration validation", "queued", "50", "Scoped IAM, shared reference key, and deployment still require infrastructure work. API flags default off. Docker-backed integration tests could not run because no container runtime was available.", true},
 		{"ambiguous infrastructure changes", "queued", "50", "Infrastructure changes, shared Secrets Manager key, and live verification remain pending. API flags default off.", false},
+		{"ambiguous IAM and secret configuration", "queued", "50", "IAM setup and Secrets Manager configuration are outstanding.", false},
 		{"actionable", "queued", "50", "IAM approval and Secrets Manager provisioning are complete, but local fixes remain outstanding.", false},
 		{"actionable after provisioning details", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding. Deployment tests fail.", false},
 		{"actionable flag regression", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding | Due to a regression API flags default to off.", false},

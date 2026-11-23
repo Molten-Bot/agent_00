@@ -98,10 +98,17 @@ const OpenDependencyReason = "required dependency is still open"
 var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\bblocked by (?:an? |the )?unmerged (?:pull request |pr )?\x60?#[1-9][0-9]*\b`)
 
 var pendingProductionRolloutSummary = regexp.MustCompile(`^failure:\s*(?:(?:the )?production (?:rollout|deployment)(?: for #[1-9][0-9]*)?|#[1-9][0-9]* production (?:rollout|deployment)) (?:remains|is|is still) (?:pending|incomplete)\.?$`)
-var outstandingProvisioning = regexp.MustCompile(` (?:(?:remain|are)(?: still)? (?:outstanding|pending)|(?:still )?require infrastructure work)$`)
+var outstandingProvisioning = regexp.MustCompile(` (?:remain|are)(?: still)? (?:outstanding|pending)$`)
+var externalProvisioningRequired = regexp.MustCompile(` (?:still )?require (?:infrastructure work|external provisioning)$`)
 var provisioningListSeparator = regexp.MustCompile(`, (?:and )?| and `)
-var iamProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:scoped iam|(?:scoped )?iam (?:access|approval|configuration|permissions?|polic(?:y|ies)|roles?|setup))$`)
-var secretProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:(?:shared )?secrets manager (?:configuration|keys?|provisioning|secrets?|setup)|shared reference keys?)$`)
+
+const iamPrerequisite = `(?:the )?(?:production )?(?:scoped )?iam`
+const secretPrerequisite = `(?:the )?(?:production )?(?:shared )?secrets manager`
+
+var iamProvisioning = regexp.MustCompile(`^` + iamPrerequisite + ` (?:access|approval|provisioning)$`)
+var secretProvisioning = regexp.MustCompile(`^` + secretPrerequisite + ` (?:(?:key|secret) )?provisioning$`)
+var iamConfiguration = regexp.MustCompile(`^` + iamPrerequisite + `(?: (?:configuration|permissions?|polic(?:y|ies)|roles?|setup))?$`)
+var secretConfiguration = regexp.MustCompile(`^(?:` + secretPrerequisite + ` (?:configuration|keys?|secrets?|setup)|(?:the )?(?:production )?shared reference keys?)$`)
 var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* (?:flags?|evidence switches?) defaults?(?: to)? (?:off|disabled))$`)
 var unavailableContainerValidation = regexp.MustCompile(`^docker-backed (?:[a-z0-9_-]+ )*integration(?: tests?)? could not run because no container runtime was available$`)
 var rolloutProgress = regexp.MustCompile(`^(?:added|implemented|updated|wired) \S`)
@@ -557,18 +564,22 @@ func IsExternalRolloutFailure(summary, details string) bool {
 		return false
 	}
 	statement := strings.TrimSpace(statements[0])
-	predicate := outstandingProvisioning.FindStringIndex(statement)
+	predicate := externalProvisioningRequired.FindStringIndex(statement)
+	explicitExternal := predicate != nil
+	if !explicitExternal {
+		predicate = outstandingProvisioning.FindStringIndex(statement)
+	}
 	if predicate == nil {
 		return false
 	}
-	// The status must apply to the provisioning items themselves. Generic
-	// infrastructure changes can refer to unfinished repository edits.
+	// Configuration and resource names can refer to repository edits. Accept
+	// them only when the report explicitly requires infrastructure work.
 	var iam, secret bool
 	for _, item := range provisioningListSeparator.Split(statement[:predicate[0]], -1) {
 		switch {
-		case iamProvisioning.MatchString(item):
+		case iamProvisioning.MatchString(item) || (explicitExternal && iamConfiguration.MatchString(item)):
 			iam = true
-		case secretProvisioning.MatchString(item):
+		case secretProvisioning.MatchString(item) || (explicitExternal && secretConfiguration.MatchString(item)):
 			secret = true
 		case item == "deployment", item == "deployed source verification", item == "live source verification", item == "live verification":
 		default:
