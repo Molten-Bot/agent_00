@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    name: Build and test
+  go-checks:
+    name: Build and Go tests
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -38,29 +38,89 @@ jobs:
           go build ./...
           go build -o bin/harness ./cmd/harness
 
+      - name: Test non-web packages
+        shell: bash
+        run: |
+          go list ./... > /tmp/ci-go-packages
+          mapfile -t packages < <(grep -v '^github.com/Molten-Bot/agent_00/internal/web$' /tmp/ci-go-packages)
+          go test "${packages[@]}"
+
+  web-tests:
+    name: Web and browser tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Keep the image and npm package versions together. The image supplies
+    # browsers and OS dependencies, avoiding apt downloads on every run.
+    container:
+      image: mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579
+      options: --ipc=host
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.mod
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: "22"
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v5
-        id: playwright-cache
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-browsers-${{ runner.os }}-1.65.1
+      - name: Install browser test modules
+        run: npm install --no-save --package-lock=false playwright@1.65.1 d3@7.9.2
 
-      - name: Install Playwright
+      - name: Verify browser tooling
+        # Fail instead of silently skipping browser tests if tooling is missing.
         run: |
-          npm install --no-save playwright@1.65.1 d3@7.9.2
-          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
-            npx playwright install-deps chromium
-          else
-            npx playwright install --with-deps chromium
-          fi
+          node - <<'JS'
+          const { chromium } = require('playwright');
+          require.resolve('playwright/test');
+          require.resolve('d3');
+          (async () => {
+            const browser = await chromium.launch({ headless: true });
+            await browser.close();
+          })().catch(error => { console.error(error); process.exit(1); });
+          JS
 
-      - name: Test
-        run: go test ./...
+      - name: Test web package
+        run: go test -count=1 ./internal/web
+
+  race-checks:
+    name: Credential and scheduler race checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.mod
 
       - name: Check credential and scheduler concurrency
         run: go test -race ./internal/agentruntime ./internal/app ./cmd/harness ./internal/localruntime
+
+  build-and-test:
+    # Preserve the required check name while running its work in parallel.
+    name: Build and test
+    needs: [go-checks, web-tests, race-checks]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Require all checks to pass
+        env:
+          GO_RESULT: ${{ needs.go-checks.result }}
+          WEB_RESULT: ${{ needs.web-tests.result }}
+          RACE_RESULT: ${{ needs.race-checks.result }}
+        run: |
+          test "$GO_RESULT" = success
+          test "$WEB_RESULT" = success
+          test "$RACE_RESULT" = success
