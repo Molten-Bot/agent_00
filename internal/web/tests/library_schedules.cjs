@@ -44,7 +44,7 @@ test('slider progresses from hours to days to weeks and tops out at two weeks', 
   assert.equal(samples.max, 'every 2 weeks');
 });
 
-test('reopening a schedule snaps an off-grid saved interval to its nearest step', async t => {
+test('opens schedules without a repository and snaps a saved off-grid interval', async t => {
   const page = await openPage(t);
   const saved = await page.evaluate(async () => {
     const response = await fetch('/api/library/schedules', {
@@ -57,6 +57,9 @@ test('reopening a schedule snaps an off-grid saved interval to its nearest step'
   assert.equal(saved.ok, true, `expected schedule PUT to succeed: ${JSON.stringify(saved)}`);
 
   await page.goto(`${baseURL}/#studio-library`);
+  const scheduleScript = await page.locator('script[src^="/static/library-schedules.js"]').getAttribute('src');
+  assert.ok(new URL(scheduleScript, baseURL).searchParams.get('v'), 'schedule script must bypass older cached copies');
+  assert.equal(await page.locator('#library-repo-input').inputValue(), '');
   await page.waitForSelector('#library-schedules-open');
   await page.locator('#library-schedules-open').click();
   const editButton = page.locator('button[title^="Edit schedule"]').first();
