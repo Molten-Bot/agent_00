@@ -10,7 +10,7 @@
   <script src="/static/analytics.js"></script>
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB" referrerpolicy="no-referrer"></script>
   <script>
-    window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["codex"],"githubReposReady":false};
+    window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","promptImageHarnesses":["codex"],"githubReposReady":false};
   </script>
   <script src="/static/lucide.min.js"></script>
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
@@ -1235,7 +1235,6 @@
         automaticMode: Boolean(config.automaticMode),
         configuredHarness: String(config.configuredHarness || "").trim(),
         configuredAgentLabel: String(config.configuredAgentLabel || "").trim(),
-        defaultRepository: normalizeRepoValue(config.defaultRepository || ""),
         githubReposReady: Boolean(config.githubReposReady),
         githubRepos: Array.isArray(config.githubRepos) ? config.githubRepos : [],
       };
@@ -1299,15 +1298,6 @@
         return agentAuthLabel(harness);
       }
       return String(state.ui.configuredAgentLabel || "").trim() || "Agent";
-    }
-
-    function defaultRepository() {
-      return normalizeRepoValue(state.ui.defaultRepository || "");
-    }
-
-    function enabledDefaultRepository() {
-      const repo = defaultRepository();
-      return repositoryDisabled(repo) ? "" : repo;
     }
 
     function configuredAgentLogoURL() {
@@ -6709,8 +6699,8 @@
     }
 
     function resetBaseBranchForRepositoryChange(previousRepo, nextRepo) {
-      const previousKey = repoDedupeKey(normalizeRepoValue(previousRepo) || defaultRepository());
-      const nextKey = repoDedupeKey(normalizeRepoValue(nextRepo) || defaultRepository());
+      const previousKey = repoDedupeKey(previousRepo);
+      const nextKey = repoDedupeKey(nextRepo);
       if (previousKey && nextKey && previousKey !== nextKey) {
         resetBaseBranchToDefault(true, false);
       }
@@ -6855,7 +6845,7 @@
     }
 
     function builderPayload() {
-      const repo = normalizeRepoValue(builderRepoInput.value) || enabledDefaultRepository();
+      const repo = normalizeRepoValue(builderRepoInput.value);
       if (!repo) {
         throw new Error("Repository is required.");
       }
@@ -6885,7 +6875,7 @@
     }
 
     function libraryPayload(taskName = selectedLibraryTaskName()) {
-      const repo = normalizeRepoValue(libraryRepoInput.value) || enabledDefaultRepository();
+      const repo = normalizeRepoValue(libraryRepoInput.value);
       if (!repo) {
         throw new Error("Repository is required.");
       }
@@ -7016,7 +7006,7 @@
       builderPromptInput.focus();
     }
 
-    function defaultRepoSelection(currentValue, selectedValue, unique) {
+    function repoHistorySelection(currentValue, selectedValue, unique) {
       if (selectedValue && unique.includes(selectedValue)) {
         return selectedValue;
       }
@@ -7026,7 +7016,7 @@
       if (state.repoHistory.length > 0 && unique.length > 0) {
         return unique[0];
       }
-      return enabledDefaultRepository();
+      return "";
     }
 
     function githubRepoSelectValue(repo) {
@@ -7352,7 +7342,7 @@
       const keepManualSelection = manualSelected && select.dataset.manual === "true";
       const nextValue = keepManualSelection
         ? ""
-        : defaultRepoSelection(currentValue, manualSelected ? "" : selectedValue, unique);
+        : repoHistorySelection(currentValue, selectedValue, unique);
       select.value = nextValue;
       if (nextValue) {
         input.value = nextValue;

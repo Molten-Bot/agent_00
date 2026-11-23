@@ -479,35 +479,38 @@ test('JSON submission enables manually added repositories', async t => {
   assert.deepEqual(writes.at(-1).disabled_repositories, []);
 });
 
-test('disabled default repository cannot be submitted implicitly', async t => {
+test('a listed repository must be selected before submitting a fresh prompt', async t => {
   const repoURL = 'https://github.com/acme/widget';
-  let submissions = 0;
+  const submissions = [];
   const { page } = await openSettings(t, {
-    initialSettings: { ...defaults, disabled_repositories: [repoURL] },
     configurePage: async page => {
       await page.route('**/api/status', route => route.fulfill({
         json: { tasks: [], events: [], repositories: [], stats: {}, resources: {} },
       }));
-      await page.route(`${baseURL}/`, async route => {
-        const response = await route.fetch();
-        const body = (await response.text()).replace('"defaultRepository":""', `"defaultRepository":"${repoURL}"`);
-        return route.fulfill({ response, body });
-      });
       await page.route('**/api/github/repos**', route => route.fulfill({
         json: { ok: true, repos: [{ name: 'widget', full_name: 'acme/widget', html_url: repoURL }] },
       }));
       await page.route('**/api/local-prompt', route => {
-        submissions++;
-        return route.fulfill({ json: { ok: true, request_id: 'unexpected' } });
+        submissions.push(route.request().postDataJSON());
+        return route.fulfill({ json: { ok: true, request_id: 'selected-repo-task' } });
       });
     },
   });
   await close(page);
+  const selectRepo = page.locator('#builder-repo-select');
+  await selectRepo.locator(`option[value="${repoURL}"]`).waitFor({ state: 'attached' });
+  assert.equal(await selectRepo.inputValue(), '');
   assert.equal(await page.locator('#builder-repo-input').inputValue(), '');
   await page.locator('#builder-prompt-input').fill('Do work');
   await page.locator('#local-prompt-submit').click();
   await page.waitForFunction(() => document.getElementById('local-prompt-status').textContent.includes('Repository is required.'));
-  assert.equal(submissions, 0);
+  assert.equal(submissions.length, 0);
+
+  await selectRepo.selectOption(repoURL);
+  await page.locator('#local-prompt-submit').click();
+  await page.waitForFunction(() => document.getElementById('local-prompt-status').textContent.includes('Queued request selected-repo-task'));
+  assert.equal(submissions.length, 1);
+  assert.deepEqual(submissions[0].repos, [repoURL]);
 });
 
 test('chat toggle marks the experimental chat tab unavailable immediately and persists on reload', async t => {

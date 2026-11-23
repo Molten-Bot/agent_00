@@ -2044,7 +2044,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `reviewerField.classList.toggle("hidden", !manualSelected);`) {
 		t.Fatalf("expected reviewer manual input to show only when manual reviewer entry is selected")
 	}
-	if !strings.Contains(markup, "function defaultRepoSelection(") {
+	if !strings.Contains(markup, "function repoHistorySelection(") {
 		t.Fatalf("expected index html to include repo history default selection helper")
 	}
 	if !strings.Contains(markup, "function githubRepoSelectValue(repo)") ||
@@ -2057,20 +2057,12 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, "includeCurrent && repoDedupeKey(repo) === repoDedupeKey(currentValue)") {
 		t.Fatalf("expected repository dropdown to exclude a disabled current manual value")
 	}
-	if !strings.Contains(markup, `"defaultRepository":""`) {
-		t.Fatalf("expected index html to leave the default repository empty")
-	}
 	if !strings.Contains(markup, "if (state.repoHistory.length > 0 && unique.length > 0)") {
 		t.Fatalf("expected index html to default repo selection to saved history when available")
 	}
-	if !strings.Contains(markup, "function enabledDefaultRepository()") ||
-		!strings.Contains(markup, `return repositoryDisabled(repo) ? "" : repo;`) ||
-		!strings.Contains(markup, "return enabledDefaultRepository();") {
-		t.Fatalf("expected index html to fall back only when a default repository is configured")
-	}
 	if !strings.Contains(markup, "const keepManualSelection = manualSelected && select.dataset.manual === \"true\";") ||
 		!strings.Contains(markup, "const nextValue = keepManualSelection") ||
-		!strings.Contains(markup, "defaultRepoSelection(currentValue, manualSelected ? \"\" : selectedValue, unique);") ||
+		!strings.Contains(markup, "repoHistorySelection(currentValue, selectedValue, unique);") ||
 		!strings.Contains(markup, "if (nextValue) {") ||
 		!strings.Contains(markup, "input.value = nextValue;") {
 		t.Fatalf("expected index html to sync default saved repo selection into the repository input")
@@ -2104,9 +2096,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `"reviewers": [`) || !strings.Contains(markup, `"octocat"`) || !strings.Contains(markup, `"hubot"`) {
 		t.Fatalf("expected index html JSON example to include reviewers")
 	}
-	if !strings.Contains(markup, "const repo = normalizeRepoValue(builderRepoInput.value) || enabledDefaultRepository();") ||
-		!strings.Contains(markup, "const repo = normalizeRepoValue(libraryRepoInput.value) || enabledDefaultRepository();") {
-		t.Fatalf("expected index html payload builders to require a repository unless an enabled default is configured")
+	if !strings.Contains(markup, "const repo = normalizeRepoValue(builderRepoInput.value);") ||
+		!strings.Contains(markup, "const repo = normalizeRepoValue(libraryRepoInput.value);") {
+		t.Fatalf("expected index html payload builders to read the repository from the form")
 	}
 	if !strings.Contains(markup, "const payload = {\n        repos: [repo],\n        targetsubdir:") ||
 		!strings.Contains(markup, "if (branch) {\n        payload.branch = branch;\n      }") {
@@ -2296,7 +2288,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "clearSubmittedPromptState();") {
 		t.Fatalf("expected index html to clear the submitted prompt state after a successful queue")
 	}
-	if !strings.Contains(markup, `window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["claude","codex"],"githubReposReady":false};`) {
+	if !strings.Contains(markup, `window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","promptImageHarnesses":["claude","codex"],"githubReposReady":false};`) {
 		t.Fatalf("expected index html to include default UI config")
 	}
 	if !strings.Contains(markup, `id="theme-toggle"`) || !strings.Contains(markup, `function nextThemeMode(theme)`) {
@@ -2497,11 +2489,11 @@ func TestIndexPromptReviewerClearBehavior(t *testing.T) {
 	}
 
 	clearStart := strings.Index(markup, "function clearBuilderPromptDraft()")
-	defaultStart := strings.Index(markup, "function defaultRepoSelection(")
-	if clearStart == -1 || defaultStart == -1 || defaultStart < clearStart {
-		t.Fatalf("expected builder clear handler before repo default helper")
+	repoHistoryStart := strings.Index(markup, "function repoHistorySelection(")
+	if clearStart == -1 || repoHistoryStart == -1 || repoHistoryStart < clearStart {
+		t.Fatalf("expected builder clear handler before repo history selection helper")
 	}
-	if !strings.Contains(markup[clearStart:defaultStart], "clearReviewerSelection();") {
+	if !strings.Contains(markup[clearStart:repoHistoryStart], "clearReviewerSelection();") {
 		t.Fatalf("expected manual Clear to clear selected reviewer")
 	}
 }
@@ -2520,26 +2512,8 @@ func TestHandlerIndexInjectsAutomaticModeConfig(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `window.__RUNTIME_UI_CONFIG__ = {"automaticMode":true,"configuredHarness":"","configuredAgentLabel":"","defaultRepository":"","promptImageHarnesses":["claude","codex"],"githubReposReady":false};`) {
+	if !strings.Contains(markup, `window.__RUNTIME_UI_CONFIG__ = {"automaticMode":true,"configuredHarness":"","configuredAgentLabel":"","promptImageHarnesses":["claude","codex"],"githubReposReady":false};`) {
 		t.Fatalf("expected automatic mode UI config, got %q", markup)
-	}
-}
-
-func TestHandlerIndexInjectsConfiguredDefaultRepository(t *testing.T) {
-	t.Setenv("HARNESS_DEFAULT_REPOSITORY", "git@github.com:acme/project.git")
-
-	srv := NewServer("", NewBroker())
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	resp := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusOK {
-		t.Fatalf("status = %d", resp.Code)
-	}
-
-	markup := resp.Body.String()
-	if !strings.Contains(markup, `"defaultRepository":"git@github.com:acme/project.git"`) {
-		t.Fatalf("expected configured default repository, got %q", markup)
 	}
 }
 
@@ -2557,7 +2531,7 @@ func TestHandlerIndexInjectsConfiguredHarness(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"claude","configuredAgentLabel":"Claude","defaultRepository":"","promptImageHarnesses":["claude","codex"],"githubReposReady":false};`) {
+	if !strings.Contains(markup, `window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"claude","configuredAgentLabel":"Claude","promptImageHarnesses":["claude","codex"],"githubReposReady":false};`) {
 		t.Fatalf("expected configured harness UI config, got %q", markup)
 	}
 }

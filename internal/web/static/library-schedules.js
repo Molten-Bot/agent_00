@@ -75,7 +75,7 @@
   }
   function refreshButtons() {
     document.getElementById("library-schedules-count").textContent = schedules.length ? String(schedules.length) : "";
-    const repo = repoDedupeKey(libraryRepoInput.value || defaultRepository());
+    const repo = repoDedupeKey(libraryRepoInput.value);
     for (const button of document.querySelectorAll(".library-schedule-task-button")) {
       if (!button.dataset.taskName) continue;
       const entry = schedules.find((entry) => entry.libraryTaskName === button.dataset.taskName && repoDedupeKey(entry.repo) === repo);
