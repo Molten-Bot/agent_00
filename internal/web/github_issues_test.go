@@ -488,7 +488,7 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 			t.Errorf("GitHub Issues settings should not render task automation control %q", removed)
 		}
 	}
-	if !strings.Contains(page, "github-automation.js?v=3") {
+	if !strings.Contains(page, "github-automation.js?v=4") {
 		t.Error("GitHub Issues settings should retain automatic-discovery status and scan controls")
 	}
 	if strings.Contains(page, `id="github-issues-title"`) || !strings.Contains(page, `data-prompt-title-label="GitHub Issues"`) {

@@ -2,9 +2,21 @@ package web
 
 import (
 	"io/fs"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestGoogleAnalyticsInBrowser(t *testing.T) {
+	requireBrowserTooling(t, "Google Analytics check")
+
+	srv := NewServer("", NewBroker())
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	runBrowserSuite(t, ts.URL, time.Minute, "Google Analytics checks", "tests/analytics.cjs")
+}
 
 func TestSettingsAndIssueAssetsTrackMeaningfulEngagement(t *testing.T) {
 	t.Parallel()

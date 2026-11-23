@@ -33,10 +33,20 @@
     } catch (error) { status.textContent = error.message; }
     finally { loading = false; }
   }
-  document.getElementById('github-automation-refresh')?.addEventListener('click', refresh);
+  document.getElementById('github-automation-refresh')?.addEventListener('click', () => {
+    window.trackAnalyticsEvent?.('github_automation_refresh_clicked', { source: 'settings' });
+    void refresh();
+  });
   document.getElementById('github-automation-scan')?.addEventListener('click', async () => {
-    try { await request('/api/github/automation/scan', { method: 'POST' }); status.textContent = 'Scanning…'; }
-    catch (error) { status.textContent = error.message; }
+    window.trackAnalyticsEvent?.('github_automation_scan_started', { source: 'settings' });
+    try {
+      await request('/api/github/automation/scan', { method: 'POST' });
+      status.textContent = 'Scanning…';
+      window.trackAnalyticsEvent?.('github_automation_scan_accepted', { source: 'settings' });
+    } catch (error) {
+      status.textContent = error.message;
+      window.trackAnalyticsEvent?.('github_automation_scan_failed', { source: 'settings' });
+    }
   });
   new MutationObserver(() => { if (!panel.hidden) refresh(); }).observe(panel, { attributes: true, attributeFilter: ['hidden'] });
   setInterval(() => { if (!panel.hidden && document.visibilityState !== 'hidden') refresh(); }, 15000);

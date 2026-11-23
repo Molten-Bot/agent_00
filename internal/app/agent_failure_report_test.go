@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -208,6 +209,35 @@ func TestCodexReportedRolloutFailurePreservesInlineErrorDetailContinuations(t *t
 			continuation: "\n\n### Validation\nDeployment tests failed.",
 		},
 		{
+			name:           "HTTP failure under a peer validation heading",
+			detailsHeading: true,
+			continuation:   statusLines + "\n\n## **Validation**\nUnit tests passed.\nSmoke check returned HTTP 500.",
+		},
+		{
+			name:         "nonzero exit under validation",
+			continuation: "\n\n### Validation\nReadiness probe exited with status 1.",
+		},
+		{
+			name:           "HTTP failure under a peer verification heading",
+			detailsHeading: true,
+			continuation:   "\n\n## Verification\nSmoke check returned HTTP 500.",
+		},
+		{
+			name:         "HTTP failure under alternative validation after passing validation",
+			continuation: "\nValidation: Unit tests passed.\n**Alternative validation:** Smoke check returned HTTP 500.",
+		},
+		{
+			name:         "expected authorization response is sole verification result",
+			continuation: "\nImplemented the endpoint.\nVerification: Authorization check received HTTP 401 as expected.",
+			wantReason:   failurefollowup.ExternalRolloutPrerequisitesReason,
+		},
+		{
+			name:           "passing peer validation is omitted",
+			detailsHeading: true,
+			continuation:   "\n\n## Validation\nUnit tests passed.\n\n## Resolved issue:\nSmoke check returned HTTP 500 before the fix.",
+			wantReason:     failurefollowup.ExternalRolloutPrerequisitesReason,
+		},
+		{
 			name:         "deployment test failure under a heading quotes quota",
 			continuation: "\n\n### Deployment tests\nAssertionError: expected `quota exceeded`, got HTTP 500.",
 		},
@@ -298,6 +328,105 @@ func TestRunCodexKeepsImplementationFailureFatalWithValidationToolingCaveat(t *t
 			err := h.runCodex(context.Background(), agentruntime.Default(), targetDir, prompt, codexRunOptions{}, "", "")
 			if err == nil || !strings.Contains(err.Error(), tc.summary) {
 				t.Fatalf("runCodex() error = %v, want implementation failure %q", err, tc.summary)
+			}
+		})
+	}
+}
+
+func TestRunCodexClassifiesExternalRolloutBeforeDisplayTruncation(t *testing.T) {
+	t.Parallel()
+
+	const prerequisites = "Scoped IAM, shared reference key, deployment, and live source verification still require infrastructure work. " +
+		"API flags default off. Docker-backed integration tests could not run because no container runtime was available."
+	const output = "Failure: Production rollout for #42 remains pending.\nError details: " + prerequisites +
+		"\n\nImplemented the requested endpoint and added tests for representative input, error responses, " +
+		"authorization, query parameter handling, response serialization, request cancellation, and concurrent requests. " +
+		"Updated fixture coverage to include pagination boundaries and empty responses across the supported query combinations." +
+		"\n\nValidation passed for the build and unit suite"
+
+	for _, tc := range []struct {
+		name, extra, want string
+	}{
+		{"external prerequisites", ".\n\nResolved issue: A test failed before the fixture was fixed.", failurefollowup.ExternalRolloutPrerequisitesReason},
+		{"late code failure", ".\n\nDeployment tests fail.", ""},
+		{"readiness timeout under validation", ".\n\n### Validation\n- Readiness check timed out.", ""},
+		{"startup produced no response under validation", ".\n\n### Validation\n- Startup produced no response.", ""},
+		{"curl connection error under validation", ".\n\n### Validation\n- curl: (7) Failed to connect to localhost port 8080.", ""},
+		{"nonzero probe in mixed validation", ", and readiness probe returned 1.", ""},
+		{"mixed validation result", ", but the readiness check failed.", ""},
+		{"successful unit tests and failed smoke check", "; smoke check returned HTTP 500.", ""},
+		{"code defect in the same paragraph", ". The service crashes on startup.", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := t.TempDir()
+			const prompt = "Complete the rollout"
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(target, prompt),
+				res: execx.Result{Stdout: output + tc.extra},
+			}}})
+			err := h.runCodex(t.Context(), agentruntime.Default(), target, prompt, codexRunOptions{}, "", "")
+			if err == nil {
+				t.Fatal("pending rollout must remain a failed run")
+			}
+			if truncated := strings.Contains(err.Error(), truncatedErrorDetails); truncated != (tc.want == "") {
+				t.Fatalf("unexpected truncation status for %q", err)
+			}
+			result := h.fail(ExitCodex, "codex", err, target)
+			// Issue recovery reparses the persisted error text after restart.
+			if got := failurefollowup.NonRemediableFailureReason(errors.New(result.Err.Error())); got != tc.want {
+				t.Fatalf("reason = %q, want %q: %v", got, tc.want, err)
+			}
+		})
+	}
+}
+
+func TestCodexExtractErrorDetailPreservesStartupWithoutResponse(t *testing.T) {
+	t.Parallel()
+
+	const output = "Failure: Production rollout remains pending.\n" +
+		"Error details: Scoped IAM and shared reference key still require infrastructure work.\n" +
+		"Validation passed for unit tests.\n\n" +
+		"## Validation\n- Startup produced no response."
+	const want = "Error details: Scoped IAM and shared reference key still require infrastructure work.\n" +
+		"Validation passed for unit tests.\n## Validation\n- Startup produced no response."
+	if got := codexExtractErrorDetail(output); got != want {
+		t.Fatalf("codexExtractErrorDetail() = %q, want %q", got, want)
+	}
+}
+
+func TestRunCodexCountsPassingValidationSectionAfterProgress(t *testing.T) {
+	t.Parallel()
+
+	const output = "Failure: Production rollout remains pending.\n" +
+		"Error details: Scoped IAM and shared reference key still require infrastructure work.\n" +
+		"Implemented the requested endpoint.\n\n" +
+		"## Validation\n- `go test ./...` passed.\n* **Build passed.**\n"
+	for _, tc := range []struct {
+		name, extra, want string
+	}{
+		{"passing checks", "\n## Next steps\nProvision infrastructure.", failurefollowup.ExternalRolloutPrerequisitesReason},
+		{"expected authorization response", "- Authorization check returned expected HTTP 401.", failurefollowup.ExternalRolloutPrerequisitesReason},
+		{"authorization response expectation without a result", "- Authorization check expects HTTP 401.", ""},
+		{"unexpected authorization response", "- Authorization check returned HTTP 401.", ""},
+		{"expected authorization response with another failure", "- Authorization check returned HTTP 401 as expected, and readiness returned HTTP 500.", ""},
+		{"mixed results", "- Readiness probe timed out.", ""},
+		{"negative pass count", "* No smoke checks passed.", ""},
+		{"unexpected check result", "- Startup produced no response.", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := t.TempDir()
+			const prompt = "Complete the rollout"
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(target, prompt),
+				res: execx.Result{Stdout: output + tc.extra},
+			}}})
+			err := h.runCodex(t.Context(), agentruntime.Default(), target, prompt, codexRunOptions{}, "", "")
+			if err == nil {
+				t.Fatal("pending rollout must remain a failed run")
+			}
+			result := h.fail(ExitCodex, "codex", err, target)
+			if got := failurefollowup.NonRemediableFailureReason(errors.New(result.Err.Error())); got != tc.want {
+				t.Fatalf("reason = %q, want %q: %v", got, tc.want, err)
 			}
 		})
 	}

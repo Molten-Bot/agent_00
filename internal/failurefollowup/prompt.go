@@ -97,12 +97,46 @@ const OpenDependencyReason = "required dependency is still open"
 // between word characters can be part of a contraction rather than a quote.
 var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\bblocked by (?:an? |the )?unmerged (?:pull request |pr )?\x60?#[1-9][0-9]*\b`)
 
-var pendingProductionRolloutSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:\s*(?:the )?production (?:rollout|deployment)(?: for #[1-9][0-9]*)? (?:remains|is|is still) pending\.?$`)
-var outstandingProvisioning = regexp.MustCompile(` (?:remain|are)(?: still)? (?:outstanding|pending)$`)
+var pendingProductionRolloutSummary = regexp.MustCompile(`^failure:\s*(?:the )?production (?:rollout|deployment)(?: for #[1-9][0-9]*)? (?:remains|is|is still) pending\.?$`)
+var outstandingProvisioning = regexp.MustCompile(` (?:(?:remain|are)(?: still)? (?:outstanding|pending)|(?:still )?require infrastructure work)$`)
 var provisioningListSeparator = regexp.MustCompile(`, (?:and )?| and `)
 var iamProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:scoped iam|(?:scoped )?iam (?:access|approval|configuration|permissions?|polic(?:y|ies)|roles?|setup))$`)
-var secretProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:shared )?secrets manager (?:configuration|keys?|provisioning|secrets?|setup)$`)
-var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* flags? defaults? to (?:off|disabled))$`)
+var secretProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:(?:shared )?secrets manager (?:configuration|keys?|provisioning|secrets?|setup)|shared reference keys?)$`)
+var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* flags? defaults?(?: to)? (?:off|disabled))$`)
+var unavailableContainerValidation = regexp.MustCompile(`^docker-backed (?:[a-z0-9_-]+ )*integration(?: tests?)? could not run because no container runtime was available$`)
+var rolloutProgress = regexp.MustCompile(`^(?:added|implemented|updated|wired) \S`)
+var rolloutProgressFollowOn = regexp.MustCompile(`^(?:added|implemented|updated|wired|tests cover) \S`)
+var rolloutSentenceBoundary = regexp.MustCompile(`[.!?][ \t]+`)
+var rolloutValidationPassed = regexp.MustCompile(`^validation passed for [^;\s][^;]*$`)
+var rolloutSectionCheckPassed = regexp.MustCompile(`^[^;\s][^;]*[ :]passed[.!]?$`)
+var rolloutSectionCheckBlocker = regexp.MustCompile(`^no\b|\b(?:0|zero) passed\b|\b(?:never|crash(?:ed|es|ing)?|couldn't|didn't)\b`)
+
+const timeoutOutcome = `timed out|deadline exceeded`
+
+var rolloutProgressBlocker = regexp.MustCompile(`\b(?:but|except|however|fail(?:ed|s|ure|ing)?|panics?|regressions?|blocked|broken|cannot|could not|unable|incomplete|pending|unavailable|missing|not|` + timeoutOutcome + `)\b`)
+var httpFailureStatus = regexp.MustCompile(`\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b`)
+var expectedUnauthorizedResult = regexp.MustCompile(`\b(?:(?:returned|received|got) |passed (?:with |\())expected http(?:/\d(?:\.\d)?)? 401\b|\bhttp(?:/\d(?:\.\d)?)? 401 (?:as expected\b|\(expected\))`)
+var validationTimeout = regexp.MustCompile(`\b(?:timeout|` + timeoutOutcome + `)\b`)
+var rolloutFailureOutcome = regexp.MustCompile(
+	`\b(?:(?:produced|returned) no response|exit(?:ed)?(?: with)? (?:status|code) [1-9][0-9]*|crash(?:ed|es|ing)? (?:on|during|at) startup|(?:probe|check|command|test) returned [1-9][0-9]*)\b|\bcurl: \([1-9][0-9]*\)|\b(?:connection refused|could not connect|failed to connect)\b`,
+)
+
+// HasRolloutFailureOutcome reports explicit failed outcomes that can appear
+// alongside implementation or validation success.
+func HasRolloutFailureOutcome(text string) bool {
+	return rolloutFailureOutcome.MatchString(strings.ToLower(text))
+}
+
+// HasValidationTimeout reports timeout evidence in a validation diagnostic.
+func HasValidationTimeout(text string) bool {
+	return validationTimeout.MatchString(strings.ToLower(text))
+}
+
+// HasHTTPFailureStatus reports whether text contains an HTTP error status or
+// the status curl reports when it does not receive an HTTP response.
+func HasHTTPFailureStatus(text string) bool {
+	return httpFailureStatus.MatchString(strings.ToLower(text))
+}
 
 var validationFailureEvidence = regexp.MustCompile(
 	`(?m)^\s*--- fail:|\bassertion(?:error| error| failed| failure)\b|\bexpected\b[^\n]*?(?:,\s*|\s+)(?:got|received)\b` +
@@ -482,11 +516,13 @@ func NonRemediableFailureReason(err error) string {
 		!strings.Contains(summary, "no longer blocked") && !strings.Contains(summary, "not blocked") {
 		return UnmergedDependencyReason
 	}
-	if pendingProductionRolloutSummary.MatchString(strings.TrimSpace(summary)) && hasOutstandingRolloutProvisioning(details) {
+	agentSummary, reportedFailure := strings.CutPrefix(summary, "codex: codex reported failure:")
+	if !reportedFailure {
+		agentSummary, reportedFailure = strings.CutPrefix(summary, "claude: claude reported failure:")
+	}
+	if reportedFailure && IsExternalRolloutFailure(agentSummary, details) {
 		return ExternalRolloutPrerequisitesReason
 	}
-	reportedFailure := strings.HasPrefix(summary, "codex: codex reported failure:") ||
-		strings.HasPrefix(summary, "claude: claude reported failure:")
 	if isOpenDependencyFailure(summary, details) {
 		return OpenDependencyReason
 	}
@@ -508,13 +544,16 @@ func NonRemediableFailureReason(err error) string {
 	return NonRemediableRepoAccessReason(err)
 }
 
-func hasOutstandingRolloutProvisioning(details string) bool {
-	// The harness may flatten multiline error details with " | ".
-	details = strings.ReplaceAll(strings.TrimSpace(details), " | ", "\n")
-	statements := strings.FieldsFunc(details, func(r rune) bool {
-		return r == '.' || r == '!' || r == '?' || r == '\r' || r == '\n'
-	})
-	if len(statements) == 0 {
+// IsExternalRolloutFailure identifies a reported rollout blocked by infrastructure.
+// Pass the complete diagnostic when available so a later code failure can veto it.
+func IsExternalRolloutFailure(summary, details string) bool {
+	if !pendingProductionRolloutSummary.MatchString(strings.ToLower(strings.TrimSpace(summary))) {
+		return false
+	}
+	details = strings.ToLower(strings.TrimSpace(details))
+	lines := strings.Split(strings.ReplaceAll(details, " | ", "\n"), "\n")
+	statements := rolloutStatements(lines[0])
+	if len(statements) == 0 || HasValidationFailureEvidence(details) || HasRolloutFailureOutcome(details) {
 		return false
 	}
 	statement := strings.TrimSpace(statements[0])
@@ -531,8 +570,7 @@ func hasOutstandingRolloutProvisioning(details string) bool {
 			iam = true
 		case secretProvisioning.MatchString(item):
 			secret = true
-		case item == "deployed source verification":
-			// The status can also apply to verifying the deployment.
+		case item == "deployment", item == "deployed source verification", item == "live source verification":
 		default:
 			return false
 		}
@@ -540,9 +578,98 @@ func hasOutstandingRolloutProvisioning(details string) bool {
 	if !iam || !secret {
 		return false
 	}
-	// Suppress recovery only when the remaining details are known status text.
-	for _, extra := range statements[1:] {
-		if extra = strings.TrimSpace(extra); extra != "" && !disabledRolloutStatus.MatchString(extra) {
+	if !rolloutStatusOnly(statements[1:]) {
+		return false
+	}
+	// Completion notes can include filenames and versions. Match them as
+	// whole lines. Require a clean validation result after implementation prose.
+	var progressPending bool
+	var inValidation bool
+	for _, line := range lines[1:] {
+		line = strings.TrimSpace(line)
+		label, inline, _ := strings.Cut(line, ":")
+		if IsRolloutValidationSection(label) {
+			inValidation = true
+			line = strings.Trim(inline, "*_ \t")
+			if line == "" {
+				continue
+			}
+		}
+		if inValidation {
+			line = rolloutValidationCheckLine(line)
+		}
+		switch {
+		case isRolloutProgressLine(line):
+			progressPending = true
+			inValidation = false
+		case isPassingRolloutValidation(line, inValidation):
+			progressPending = false
+		case !rolloutStatusOnly(rolloutStatements(line)):
+			return false
+		}
+	}
+	return !progressPending
+}
+
+// IsRolloutValidationSection identifies a label that introduces validation checks.
+func IsRolloutValidationSection(label string) bool {
+	switch strings.Trim(label, "#*_ \t") {
+	case "validation", "verification", "alternative validation":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsPassingRolloutValidationCheck identifies positive evidence inside a
+// validation section.
+func IsPassingRolloutValidationCheck(line string) bool {
+	return isPassingRolloutValidation(rolloutValidationCheckLine(strings.ToLower(line)), true)
+}
+
+func rolloutValidationCheckLine(line string) string {
+	line = strings.TrimSpace(line)
+	if len(line) > 1 && strings.ContainsRune("-*+", rune(line[0])) && strings.ContainsRune(" \t", rune(line[1])) {
+		line = line[2:]
+	}
+	return strings.Trim(line, "*_ \t")
+}
+
+func isPassingRolloutValidation(line string, inSection bool) bool {
+	passed := rolloutValidationPassed.MatchString(line)
+	statusText := line
+	if inSection {
+		statusText = expectedUnauthorizedResult.ReplaceAllString(line, "")
+		passed = passed || rolloutSectionCheckPassed.MatchString(line) || statusText != line
+	}
+	return passed &&
+		(!inSection || !rolloutSectionCheckBlocker.MatchString(line)) &&
+		!rolloutProgressBlocker.MatchString(line) && !rolloutSentenceBoundary.MatchString(line) &&
+		!HasValidationTimeout(line) && !HasHTTPFailureStatus(statusText)
+}
+
+func isRolloutProgressLine(line string) bool {
+	if !rolloutProgress.MatchString(line) || rolloutProgressBlocker.MatchString(line) || HasHTTPFailureStatus(line) {
+		return false
+	}
+	for _, sentence := range rolloutSentenceBoundary.Split(line, -1)[1:] {
+		if !rolloutProgressFollowOn.MatchString(sentence) {
+			return false
+		}
+	}
+	return true
+}
+
+func rolloutStatements(line string) []string {
+	return strings.FieldsFunc(line, func(r rune) bool {
+		return r == '.' || r == '!' || r == '?' || r == '\r'
+	})
+}
+
+func rolloutStatusOnly(statements []string) bool {
+	for _, extra := range statements {
+		if extra = strings.TrimSpace(extra); extra != "" &&
+			!disabledRolloutStatus.MatchString(extra) && !unavailableContainerValidation.MatchString(extra) {
 			return false
 		}
 	}

@@ -17,15 +17,13 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
-const externalRolloutPrerequisitesIncident = "external_rollout_prerequisites"
-
 func issueDependencyRetryError(incident string) string {
 	switch incident {
 	case localruntime.IssueIncidentUnmergedDependency:
 		return failurefollowup.UnmergedDependencyReason + "; explicit retry required after merge"
 	case localruntime.IssueIncidentOpenDependency:
 		return failurefollowup.OpenDependencyReason + "; explicit retry required after resolution"
-	case externalRolloutPrerequisitesIncident:
+	case localruntime.IssueIncidentExternalRollout:
 		return failurefollowup.ExternalRolloutPrerequisitesReason + "; explicit retry required after provisioning"
 	default:
 		return ""
@@ -227,13 +225,16 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	// Preserve the classification before later checks can replace the last
 	// error. This also handles records written before the incident existed.
 	if record.Outcome == "error" && issueDependencyRetryError(record.Incident) == "" {
-		switch failurefollowup.NonRemediableFailureReason(errors.New(record.FailureDetail())) {
-		case failurefollowup.UnmergedDependencyReason:
+		failure := record.FailureDetail()
+		reason := failurefollowup.NonRemediableFailureReason(errors.New(failure))
+		switch {
+		case reason == failurefollowup.UnmergedDependencyReason:
 			record.Incident = localruntime.IssueIncidentUnmergedDependency
-		case failurefollowup.OpenDependencyReason:
+		case reason == failurefollowup.OpenDependencyReason:
 			record.Incident = localruntime.IssueIncidentOpenDependency
-		case failurefollowup.ExternalRolloutPrerequisitesReason:
-			record.Incident = externalRolloutPrerequisitesIncident
+		case reason == failurefollowup.ExternalRolloutPrerequisitesReason,
+			s.IssueRolloutBlockedFromLogs != nil && s.IssueRolloutBlockedFromLogs(record.RequestID, failure):
+			record.Incident = localruntime.IssueIncidentExternalRollout
 		}
 		if issueDependencyRetryError(record.Incident) != "" {
 			record.RunError = record.FailureDetail()

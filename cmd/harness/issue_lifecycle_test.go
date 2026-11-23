@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -408,6 +409,7 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 		{"queued and linked", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
 		{"dispatch intent without a claim link", "running", "", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
 		{"joined provisioning and flag status", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding | API and MCP flags default to off.", true},
+		{"provisioning with unavailable integration validation", "queued", "50", "Scoped IAM, shared reference key, and deployment still require infrastructure work. API flags default off. Docker-backed integration tests could not run because no container runtime was available.", true},
 		{"actionable", "queued", "50", "IAM approval and Secrets Manager provisioning are complete, but local fixes remain outstanding.", false},
 		{"actionable after provisioning details", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding. Deployment tests fail.", false},
 		{"actionable flag regression", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding | Due to a regression API flags default to off.", false},
@@ -451,5 +453,145 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 				t.Fatalf("actionable failure: calls=%d state=%q next attempt=%v", calls, got.State, got.NextAttemptAt)
 			}
 		})
+	}
+}
+
+func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
+	t.Parallel()
+	const summary = "Failure: Production rollout remains pending."
+	const prerequisites = "IAM approval and Secrets Manager provisioning remain outstanding."
+	const progress = "Added the endpoint in /tmp/worktree."
+	const stored = "codex: codex reported failure: " + summary + " Error details: " + prerequisites +
+		" | " + progress + " | Updated fixtures. | Validation passed for unit tests. | [error details truncated]"
+	for _, tc := range []struct {
+		name, state, file, stream, lastLine string
+		blocked                             bool
+	}{
+		{"linked repair with full report", "queued", logFileName, "stdout", "API flags default off.", true},
+		{"dispatch intent with legacy log", "running", legacyTaskLogFileName, "stdout", "API flags default off.", true},
+		{"deployment defect beyond truncation", "queued", logFileName, "stdout", "Smoke check returned HTTP 500.", false},
+		{"readiness timeout under validation beyond truncation", "queued", logFileName, "stdout", "## Validation\n- Readiness check timed out.", false},
+		{"passing validation beyond truncation", "queued", logFileName, "stdout", "## Validation\n- Unit tests passed.", true},
+		{"stderr echo", "queued", logFileName, "stderr", "API flags default off.", false},
+		{"unrelated report", "queued", logFileName, "stdout", "API flags default off.", false},
+		{"missing log", "queued", "", "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			claims, issue := lifecycleRecord(t)
+			q := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, claims: claims, logRoot: t.TempDir(), logf: t.Logf}
+			issue.RunError = stored
+			issue.ExitCode = app.ExitCodex
+			record := saveLegacyIssueRepair(t, q, issue)
+			record.State = tc.state
+			if err := q.store.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			issue.Outcome = "error"
+			issue.Incident = "missing_pr"
+			issue.StoppedAt = time.Now().Add(-time.Minute)
+			issue.NextAttemptAt = time.Now().Add(time.Minute)
+			if tc.state == "queued" {
+				issue.RepairRequestID = record.RequestID
+			} else {
+				issue.RunError = ""
+			}
+			if err := claims.Save(issue); err != nil {
+				t.Fatal(err)
+			}
+			if tc.file != "" {
+				dir, _ := taskLogDir(q.logRoot, issue.RequestID)
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				added := progress
+				if tc.name == "unrelated report" {
+					added = "Added the worker."
+				}
+				var log strings.Builder
+				for _, line := range []string{summary, "Error details: " + prerequisites, added, "Updated fixtures.",
+					"Validation passed for unit tests.", tc.lastLine} {
+					fmt.Fprintf(&log, "task request_id=%s cmd phase=codex name=codex stream=%s b64=%s\n",
+						issue.RequestID, tc.stream, base64.StdEncoding.EncodeToString([]byte(line)))
+				}
+				if err := os.WriteFile(filepath.Join(dir, tc.file), []byte(log.String()), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			calls := 0
+			enqueue := func(context.Context, config.Config, bool, string, bool) (string, error) {
+				calls++
+				return "", errors.New("agent auth required")
+			}
+			if tc.blocked {
+				lock, err := claims.TryLock(localruntime.IssueExecutionKey(issue.Run.GitHubIssue))
+				if err != nil || lock == nil {
+					t.Fatalf("lock source claim: %v", err)
+				}
+				q.reconcile(t.Context(), enqueue)
+				lock.Close()
+				repairs, err := q.store.List()
+				if err != nil || len(repairs) != 1 || repairs[0].State != tc.state || calls != 0 {
+					t.Fatalf("changed outbox or dispatched while source claim was locked: calls=%d err=%v", calls, err)
+				}
+			}
+			for range 2 {
+				q.reconcile(t.Context(), enqueue)
+			}
+			repairs, err := q.store.List()
+			if err != nil || len(repairs) != 1 {
+				t.Fatalf("expected one retained repair, got %d, error=%v", len(repairs), err)
+			}
+			got := repairs[0]
+			source, err := claims.Load(issue.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.blocked {
+				if calls != 0 || got.State != "blocked" || got.Error != failurefollowup.ExternalRolloutPrerequisitesReason || got.Started {
+					t.Fatalf("external prerequisite: calls=%d state=%q error=%q started=%t", calls, got.State, got.Error, got.Started)
+				}
+				if source.Incident != localruntime.IssueIncidentExternalRollout || !source.NextAttemptAt.IsZero() ||
+					source.RunError != issue.RunError || source.RepairRequestID != issue.RepairRequestID {
+					t.Fatalf("source claim lost retry blocker or evidence: incident=%q next attempt=%v", source.Incident, source.NextAttemptAt)
+				}
+			} else if calls != 1 || got.State != "queued" {
+				t.Fatalf("actionable failure: calls=%d state=%q", calls, got.State)
+			} else if source.Incident != issue.Incident || !source.NextAttemptAt.Equal(issue.NextAttemptAt) {
+				t.Fatalf("actionable source claim changed: incident=%q next attempt=%v", source.Incident, source.NextAttemptAt)
+			}
+		})
+	}
+}
+
+func TestIssueRepairRecoversRawAgentStdoutAtEveryLogLevel(t *testing.T) {
+	t.Parallel()
+	for _, level := range []localruntime.LogLevel{localruntime.LogLevelDebug, localruntime.LogLevelInfo, localruntime.LogLevelWarn} {
+		for _, stage := range []string{"codex", "claude"} {
+			t.Run(level.String()+"/"+stage, func(t *testing.T) {
+				root := filepath.Join(t.TempDir(), ".log")
+				mirror, err := newTaskLogMirror(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var rendered strings.Builder
+				logger := newTerminalLogger(&rendered, false)
+				logger.sink = mirror
+				router := newRuntimeLogRouter(logger, nil, level)
+				const requestID = "local-1712345678-000007"
+				// A long line exercises terminal truncation while structured output can be
+				// filtered from the display entirely. Both must survive in the task mirror.
+				lines := []string{"Failure: Production rollout remains pending.", strings.Repeat("diagnostic ", 1000), `{"type":"result","result":"complete"}`}
+				for _, line := range lines {
+					router.Printf("task request_id=%s cmd phase=%s name=%s stream=stdout b64=%s", requestID, stage, stage, base64.StdEncoding.EncodeToString([]byte(line)))
+				}
+				logger.Close()
+				if got, want := issueRepairAgentStdout(root, requestID, stage), strings.Join(lines, "\n")+"\n"; got != want {
+					t.Fatalf("recovered stdout length=%d, want %d", len(got), len(want))
+				}
+				if strings.Contains(rendered.String(), "b64=") {
+					t.Fatal("raw payload leaked into rendered output")
+				}
+			})
+		}
 	}
 }
