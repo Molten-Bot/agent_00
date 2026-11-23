@@ -18,7 +18,7 @@ import (
 
 func TestIssueRepairCaptureUsesWorkerFailureAfterUnlockError(t *testing.T) {
 	t.Parallel()
-	q := issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, logf: t.Logf}
+	q := issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, logf: t.Logf, wake: make(chan struct{}, 1)}
 	issue := localruntime.IssueClaimRecord{
 		Step: "agent", Incident: "missing_pr", Outcome: "error", ExitCode: app.ExitCodex,
 		Error: "temporary label removal failure", RunError: "worker failed in /private/workspace",
@@ -27,9 +27,19 @@ func TestIssueRepairCaptureUsesWorkerFailureAfterUnlockError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	select {
+	case <-q.wake:
+	default:
+		t.Fatal("new durable repair did not wake the queue")
+	}
 	issue.Error = "different unlock failure"
 	if retryID, err := q.capture(context.Background(), issue); err != nil || retryID != id {
 		t.Fatalf("same worker failure queued a different repair: %q, %v", retryID, err)
+	}
+	select {
+	case <-q.wake:
+		t.Fatal("duplicate capture woke the queue again")
+	default:
 	}
 	records, err := q.store.List()
 	if err != nil || len(records) != 1 {

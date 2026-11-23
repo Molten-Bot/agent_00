@@ -5452,8 +5452,21 @@ func (h Harness) step(step string) {
 	}
 }
 
-func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd execx.Command) (execx.Result, error) {
+func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd execx.Command) (result execx.Result, runErr error) {
 	h.step(phase)
+	started := time.Now()
+	// Do not log arguments or environment: they can contain credentials or
+	// customer data. These timings separate subprocess latency from agent time.
+	defer func() {
+		if cmd.Name != "git" && cmd.Name != "gh" {
+			return // Agent invocations already have elapsed time and heartbeats.
+		}
+		status := "ok"
+		if runErr != nil {
+			status = "error"
+		}
+		h.logf("event=command_finish phase=%s name=%s outcome=%s elapsed_ms=%d", phase, cmd.Name, status, time.Since(started).Milliseconds())
+	}()
 	onLine := func(stream, line string) {
 		if strings.TrimSpace(line) == "" {
 			return

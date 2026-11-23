@@ -1035,6 +1035,25 @@ func TestBrokerIgnoresNestedRequestMetadataInsideQuotedCommandText(t *testing.T)
 	}
 }
 
+func TestBrokerClearsRecoveredCheckError(t *testing.T) {
+	t.Parallel()
+	b := NewBroker()
+	b.IngestLog("task status=start request_id=recovered")
+	b.IngestLog(`task request_id=recovered stage=checks status=warn err="no required checks reported"`)
+	b.IngestLog("task request_id=recovered stage=checks status=ok reason=latest_snapshot")
+	if got := b.Snapshot().Tasks[0]; got.Error != "" || got.Status != "running" {
+		t.Fatalf("successful fallback retains error: %+v", got)
+	}
+	b.IngestLog(`task request_id=recovered event=command_finish phase=git name=git outcome=error elapsed_ms=4`)
+	if got := b.Snapshot().Tasks[0]; got.Status != "running" || got.Stage != "checks" {
+		t.Fatal("command timing changed workflow status")
+	}
+	b.IngestLog(`task status=error request_id=recovered err="push failed"`)
+	if got := b.Snapshot().Tasks[0]; got.Error != "push failed" || got.Status != "error" {
+		t.Fatal("terminal failure was hidden")
+	}
+}
+
 func TestBrokerCapturesWorkspaceAndBranchFromErrorStatus(t *testing.T) {
 	t.Parallel()
 

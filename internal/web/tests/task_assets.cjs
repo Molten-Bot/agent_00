@@ -3,6 +3,7 @@ const { after, before, test } = require('node:test');
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
 const { expect } = require('playwright/test');
+const fs = require('node:fs');
 const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
 let browser;
 const issueURL = 'https://github.com/example/project/issues/17';
@@ -13,8 +14,21 @@ const signedImageURL = 'https://private-user-images.githubusercontent.com/42/pri
 const expiredImageURL = 'https://private-user-images.githubusercontent.com/42/expired.png?jwt=expired-fixture';
 const pixelPNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/P2cAAAAASUVORK5CYII=', 'base64');
 
-before(async () => { browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--no-sandbox'] }); });
-after(async () => { await browser?.close(); });
+// Full Chromium creates a Unix singleton socket under TMPDIR. Repair workspace
+// paths can exceed its 107-byte limit. A private relative path keeps the socket
+// short and inside the writable workspace, without using a shared /tmp bypass.
+let browserTmp;
+before(async () => {
+  browserTmp = fs.mkdtempSync('.browser-tmp-');
+  browser = await chromium.launch({
+    channel: 'chromium', headless: true, args: ['--no-sandbox'],
+    env: { ...process.env, TMPDIR: browserTmp, TMP: browserTmp, TEMP: browserTmp },
+  });
+});
+after(async () => {
+  try { await browser?.close(); }
+  finally { if (browserTmp) fs.rmSync(browserTmp, { recursive: true, force: true }); }
+});
 
 for (const mobile of [false, true]) {
   test(`${mobile ? 'mobile' : 'desktop'}: task assets open in a navigable preview dialog`, async t => {

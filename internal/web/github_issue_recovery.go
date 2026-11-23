@@ -372,7 +372,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	policy := s.IssueRecovery.Defaults()
 	dependencyRetryError := issueDependencyRetryError(record.Incident)
 	if record.Control != "" || record.Outcome == "stopped" || record.Outcome == "no_changes" ||
-		dependencyRetryError != "" || record.AgentAttempts >= policy.MaxAttempts {
+		dependencyRetryError != "" || record.AgentAttempts >= policy.MaxAttempts || issueRunFailures(record) >= policy.MaxAttempts {
 		record.State = "blocked"
 		switch {
 		case record.Outcome == "stopped":
@@ -382,6 +382,8 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		case dependencyRetryError != "":
 			record.Error = dependencyRetryError
 			record.NextAttemptAt = time.Time{}
+		case issueRunFailures(record) >= policy.MaxAttempts:
+			record.Error = "workflow retry budget exhausted; explicit retry or deployed fix required"
 		default:
 			record.Error = "agent retry budget exhausted; explicit retry or deployed fix required"
 		}

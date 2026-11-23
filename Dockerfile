@@ -45,6 +45,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        curl \
         file \
         git \
         gcc \
