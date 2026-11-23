@@ -40,6 +40,31 @@ func (s *Store) Save(d Document) (Document, error) {
 	if err = d.Validate(); err != nil {
 		return old, err
 	}
+	if raw, readErr := os.ReadFile(s.Path); readErr == nil {
+		var header struct {
+			Version int `json:"version"`
+		}
+		if json.Unmarshal(raw, &header) == nil && header.Version == 1 {
+			backup, backupErr := os.OpenFile(s.Path+".v1.bak", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if backupErr == nil {
+				_, backupErr = backup.Write(raw)
+				if backupErr == nil {
+					backupErr = backup.Sync()
+				}
+				closeErr := backup.Close()
+				if backupErr != nil {
+					os.Remove(s.Path + ".v1.bak")
+					return old, backupErr
+				}
+				if closeErr != nil {
+					os.Remove(s.Path + ".v1.bak")
+					return old, closeErr
+				}
+			} else if !errors.Is(backupErr, os.ErrExist) {
+				return old, backupErr
+			}
+		}
+	}
 	d.Revision++
 	err = writeAtomic(s.Path, d)
 	return d, err

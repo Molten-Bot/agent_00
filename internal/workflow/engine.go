@@ -14,6 +14,7 @@ import (
 )
 
 type Item struct {
+	HumanApproved  bool     `json:"humanApproved"`
 	Viewer         string   `json:"viewer,omitempty"`
 	Number         int      `json:"number"`
 	Repository     string   `json:"repository"`
@@ -149,10 +150,11 @@ type observation struct {
 	Generation  uint64 `json:"generation"`
 }
 type State struct {
-	Version      int                    `json:"version"`
-	Observations map[string]observation `json:"observations"`
-	Baselines    map[string]bool        `json:"baselines"`
-	Runs         []Run                  `json:"runs"`
+	Schedules    map[string]ScheduleCursor `json:"schedules,omitempty"`
+	Version      int                       `json:"version"`
+	Observations map[string]observation    `json:"observations"`
+	Baselines    map[string]bool           `json:"baselines"`
+	Runs         []Run                     `json:"runs"`
 }
 type Outcome struct {
 	ReviewClean  bool   `json:"reviewClean"`
@@ -162,6 +164,8 @@ type Outcome struct {
 	Reason       string `json:"reason,omitempty"`
 }
 type Engine struct {
+	Now       func() time.Time
+	Active    func(Definition) bool
 	Store     *Store
 	StatePath string
 	Enabled   func() bool
@@ -177,7 +181,7 @@ type Engine struct {
 }
 
 func (e *Engine) load() (State, error) {
-	s := State{Version: 1, Observations: map[string]observation{}, Baselines: map[string]bool{}, Runs: []Run{}}
+	s := State{Version: 2, Observations: map[string]observation{}, Baselines: map[string]bool{}, Runs: []Run{}}
 	b, err := os.ReadFile(e.StatePath)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -188,7 +192,10 @@ func (e *Engine) load() (State, error) {
 	if err = decodeStrict(b, &s); err != nil {
 		return s, err
 	}
-	if s.Version != 1 || s.Observations == nil || s.Baselines == nil {
+	if s.Version == 1 {
+		s.Version = 2
+	}
+	if s.Version != 2 || s.Observations == nil || s.Baselines == nil {
 		return s, fmt.Errorf("unsupported workflow runtime state")
 	}
 	return s, nil
@@ -205,6 +212,9 @@ func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) 
 	}
 	if !e.Allowed(w.Repository) {
 		return nil, fmt.Errorf("repository is disabled in Settings")
+	}
+	if w.Trigger.Event == "schedule" {
+		return []Decision{{Item: Item{Repository: w.Repository, Kind: "schedule", Title: "Scheduled repository task"}, Matches: true, Reason: fmt.Sprintf("Runs every %d hours while enabled; no GitHub event is required", w.Trigger.IntervalHours)}}, nil
 	}
 	items, err := e.Fetch(ctx, w.Repository)
 	if err != nil {
@@ -237,9 +247,7 @@ func (e *Engine) Run(ctx context.Context) {
 func (e *Engine) Tick(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if !e.Enabled() {
-		return nil
-	}
+	featureEnabled := e.Enabled()
 	d, err := e.Store.Load()
 	if err != nil {
 		return err
@@ -263,9 +271,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 		}
 		entity := fmt.Sprintf("%s#%d", strings.ToLower(r.Item.Repository), r.Item.Number)
 		busy[entity] = true
-		if !exists || !w.Enabled || (!e.Allowed(w.Repository) || !e.Allowed(r.Item.Repository)) {
-			continue
-		}
+		active := featureEnabled && exists && w.Enabled && e.Allowed(w.Repository) && e.Allowed(r.Item.Repository)
 		if r.Status == "dispatching" {
 			if e.Reconcile != nil {
 				r.RequestID = e.Reconcile(r.ID)
@@ -289,7 +295,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 				if r.PRURL == "" {
 					r.PRURL = r.Item.URL
 				}
-				if r.Workflow.Merge.Enabled && w.Merge.Enabled && strings.Contains(r.PRURL, "/pull/") {
+				if r.Workflow.Merge.Enabled && (!exists || w.Merge.Enabled) && strings.Contains(r.PRURL, "/pull/") {
 					r.Status = "waiting"
 					r.Reason = "Waiting for checks and merge requirements"
 					if r.Workflow.Task.Kind == "review" {
@@ -306,11 +312,14 @@ func (e *Engine) Tick(ctx context.Context) error {
 				}
 			}
 		}
-		if r.Status == "waiting" && !w.Merge.Enabled {
+		if r.Status == "waiting" && (!exists || !w.Merge.Enabled) {
 			r.Status = "succeeded"
 			r.Reason = "Automatic merge disabled in current definition"
 		}
-		if r.Status == "waiting" {
+		if r.Status == "waiting" && !active {
+			r.Reason = "Merge paused: workflow feature, workflow, or repository is disabled"
+		}
+		if r.Status == "waiting" && active {
 			i, inspectErr := e.InspectPR(ctx, r.Item.Repository, r.PRURL)
 			if inspectErr != nil {
 				errs = append(errs, inspectErr)
@@ -331,7 +340,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 				r.Reason = "Waiting for requested changes"
 			} else if !i.ChecksPassed {
 				r.Reason = "Waiting for successful checks"
-			} else if r.Workflow.Merge.RequireApproval && i.ReviewDecision != "APPROVED" {
+			} else if r.Workflow.Merge.RequireApproval && !i.HumanApproved {
 				r.Reason = "Waiting for human approval"
 			} else {
 				if r.MergeHead == "" {
@@ -353,7 +362,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 				}
 			}
 		}
-		r.UpdatedAt = time.Now().UTC()
+		r.UpdatedAt = e.now()
 		if terminal(r.Status) {
 			delete(busy, entity)
 		}
@@ -363,7 +372,13 @@ func (e *Engine) Tick(ctx context.Context) error {
 	}
 	cache := map[string][]Item{}
 	for _, w := range d.Workflows {
-		if !w.Enabled || !e.Allowed(w.Repository) {
+		if !featureEnabled || !w.Enabled || !e.Allowed(w.Repository) {
+			continue
+		}
+		if w.Trigger.Event == "schedule" {
+			if err := e.tickSchedule(ctx, w, &s, busy); err != nil {
+				return err
+			}
 			continue
 		}
 		key := strings.ToLower(w.Repository)
@@ -405,7 +420,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 				continue
 			}
 			id := digest([]any{obsKey, fingerprint, old.Generation})
-			r := Run{ID: id, Workflow: w, Item: i, Status: "dispatching", Reason: reason, UpdatedAt: time.Now().UTC()}
+			r := Run{ID: id, Workflow: w, Item: i, Status: "dispatching", Reason: reason, UpdatedAt: e.now()}
 			s.Runs = append(s.Runs, r)
 			if err := save(); err != nil {
 				return err

@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/Molten-Bot/agent_00/internal/library"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,19 +32,69 @@ func workflowRepositoryGate(path string, c config.Config) error {
 	}
 	return nil
 }
+
+type workflowLibraryResolver func(string, string, string, string) (config.Config, error)
+
 func workflowRunConfig(r workflow.Run) (config.Config, error) {
+	return workflowRunConfigWithLibrary(r, func(name, repo, branch, context string) (config.Config, error) {
+		catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
+		if err != nil {
+			return config.Config{}, err
+		}
+		return catalog.ExpandRunConfigWithContext(name, repo, branch, context)
+	})
+}
+func workflowRunConfigWithLibrary(r workflow.Run, resolve workflowLibraryResolver) (config.Config, error) {
 	w, i := r.Workflow, r.Item
+	repo := "https://github.com/" + w.Repository + ".git"
+	branch := w.Task.BaseBranch
+	if i.Kind == "pr" {
+		branch = i.HeadBranch
+	}
+	c := config.Config{RepoURL: repo, Prompt: w.Task.Instructions, BaseBranch: branch}
+	if w.Task.LibraryTaskName != "" {
+		var err error
+		c, err = resolve(w.Task.LibraryTaskName, repo, branch, w.Task.Instructions)
+		if err != nil {
+			return config.Config{}, fmt.Errorf("resolve workflow library prompt: %w", err)
+		}
+	}
+	resolvedPrompt := c.Prompt
+	if i.Kind == "issue" || i.Kind == "pr" {
+		c.Prompt += "\n\nGitHub item: " + i.URL + "\nTitle: " + i.Title + "\n\n" + i.Body
+	}
 	assign := w.Task.AssignCreator
-	c := config.Config{RepoURL: "https://github.com/" + w.Repository + ".git", Prompt: w.Task.Instructions + "\n\nGitHub item: " + i.URL + "\nTitle: " + i.Title + "\n\n" + i.Body, PRTitle: i.Title, Draft: w.Task.Draft, AssignCreator: &assign, Workflow: &config.WorkflowRunConfig{Instructions: w.Task.Instructions, ID: w.ID, EventID: r.ID, Name: w.Name, ReviewCycles: w.ReviewCycles}}
+	c.AssignCreator = &assign
+	c.Draft = w.Task.Draft
+	if w.Task.TargetSubdir != "" {
+		c.TargetSubdir = w.Task.TargetSubdir
+	}
+	if w.Task.Reviewers != nil {
+		c.Reviewers = append([]string(nil), (*w.Task.Reviewers)...)
+	}
+	c.Workflow = &config.WorkflowRunConfig{Instructions: resolvedPrompt, ID: w.ID, EventID: r.ID, Name: w.Name, ReviewCycles: w.ReviewCycles}
 	if i.Kind == "issue" {
+		c.PRTitle = i.Title
 		c.GitHubIssue = &config.GitHubIssueConfig{Repository: w.Repository, Number: i.Number, Title: i.Title, URL: i.URL, LinkMode: w.Task.IssueLinkMode}
-	} else if w.Task.Kind == "review" {
+	} else if i.Kind == "pr" && w.Task.Kind == "review" {
 		c.Review = &config.ReviewConfig{PRNumber: i.Number, PRURL: i.URL, HeadBranch: i.HeadBranch, Trigger: "manual", Writeback: "comment"}
-	} else {
-		c.BaseBranch = i.HeadBranch
+	} else if i.Kind == "pr" {
 		c.RequiresNonDefaultBranch = true
-		c.LibraryTaskName = "resolve-pr-comments"
+		if c.LibraryTaskName == "" {
+			c.LibraryTaskName = "resolve-pr-comments"
+		}
 		c.Prompt += "\n\nRead current checks and review feedback. Repair this existing pull request on its head branch; do not open another pull request."
+	}
+	c.ApplyDefaults()
+	return c, c.Validate()
+}
+
+// Stored workflow configurations already contain their resolved prompt. Parsing
+// them as library selections would reject or re-expand that captured prompt.
+func parseResolvedWorkflowConfig(body []byte) (config.Config, error) {
+	var c config.Config
+	if err := json.Unmarshal(body, &c); err != nil {
+		return c, err
 	}
 	c.ApplyDefaults()
 	return c, c.Validate()
@@ -59,6 +112,9 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 	if _, err := store.Load(); err != nil {
 		return err
 	}
+	if err := migrateLibrarySchedules(cfg, store); err != nil {
+		return err
+	}
 	gh := workflow.GitHub{Runner: runner}
 	engine := &workflow.Engine{Store: store, StatePath: filepath.Join(root, "workflow-state.json"), Fetch: gh.Fetch, InspectPR: gh.Inspect, Merge: gh.Merge, Logf: logf}
 	engine.Enabled = func() bool {
@@ -72,17 +128,54 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 		if !engine.Enabled() || !engine.Allowed(r.Workflow.Repository) {
 			return "", fmt.Errorf("workflow execution disabled")
 		}
-		c, err := workflowRunConfig(r)
+		c, err := workflowRunConfigWithLibrary(r, func(name, repo, branch, promptContext string) (config.Config, error) {
+			var catalog library.Catalog
+			var err error
+			settings, err := localruntime.LoadRuntimeConfigUISettings(cfg.RuntimeConfigPath)
+			if err != nil {
+				return config.Config{}, err
+			}
+			if settings.DefaultLibraryEnabled {
+				catalog, err = library.LoadCustomizedCatalog(library.DefaultDir)
+			} else {
+				catalog, err = library.LoadCustomLibraryCatalog()
+			}
+			if err != nil {
+				return config.Config{}, err
+			}
+			return catalog.ExpandRunConfigWithContext(name, repo, branch, promptContext)
+		})
 		if err != nil {
 			return "", err
 		}
 		return server.SubmitWorkflowRun(ctx, c, func(submitCtx context.Context, body []byte) (string, error) {
-			parsed, err := localruntime.ParseRunConfigJSON(body)
+			parsed, err := parseResolvedWorkflowConfig(body)
 			if err != nil {
 				return "", err
 			}
-			return enqueue(submitCtx, parsed, false, "workflow", false)
+			id, err := enqueue(submitCtx, parsed, false, "workflow", false)
+			if err == nil && parsed.LibraryTaskName != "" {
+				if usageErr := localruntime.IncrementRuntimeConfigLibraryTaskUsage(cfg.RuntimeConfigPath, cfg, parsed.LibraryTaskName); usageErr != nil {
+					logf("workflow library usage status=warn err=%q", usageErr)
+				}
+			}
+			return id, err
 		})
+	}
+	engine.Active = func(w workflow.Definition) bool {
+		for _, t := range broker.TaskList() {
+			switch t.Status {
+			case "completed", "no_changes", "merged", "error", "invalid", "stopped", "duplicate":
+				continue
+			}
+			repos := append([]string{t.Repo}, t.Repos...)
+			for _, repo := range repos {
+				if workflow.CanonicalRepository(repo) == workflow.CanonicalRepository(w.Repository) {
+					return true
+				}
+			}
+		}
+		return false
 	}
 	engine.Status = func(id string) workflow.Outcome {
 		for _, t := range broker.TaskList() {
@@ -121,7 +214,7 @@ func migrateWorkflowSettings(cfg localruntime.InitConfig, store *workflow.Store)
 	if err != nil {
 		return err
 	}
-	d := workflow.Document{Version: 1, Workflows: []workflow.Definition{}, Migration: "Legacy automation settings remain in config.json. Repository rules were copied as disabled drafts. Global review/merge preferences are no longer automatic; enable individual workflows explicitly."}
+	d := workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{}, Migration: "Legacy automation settings remain in config.json. Repository rules were copied as disabled drafts. Global review/merge preferences are no longer automatic; enable individual workflows explicitly."}
 	// Preserve the exact legacy file before changing the source of automation behavior.
 	if raw, err := os.ReadFile(cfg.RuntimeConfigPath); err == nil {
 		backup := filepath.Join(filepath.Dir(store.Path), "workflow-legacy-settings.json")
@@ -169,4 +262,65 @@ func migrateWorkflowSettings(cfg localruntime.InitConfig, store *workflow.Store)
 		}
 	}
 	return store.Initialize(d)
+}
+
+func migrateLibrarySchedules(cfg localruntime.InitConfig, store *workflow.Store) error {
+	doc, err := store.Load()
+	if err != nil {
+		return err
+	}
+	if doc.LibrarySchedulesMigrated {
+		return nil
+	}
+	legacy := &localruntime.LibrarySchedules{Path: cfg.RuntimeConfigPath, Init: cfg}
+	schedules, err := legacy.List()
+	if err != nil {
+		return err
+	}
+	ui, err := localruntime.LoadRuntimeConfigUISettings(cfg.RuntimeConfigPath)
+	if err != nil {
+		return err
+	}
+	for _, schedule := range schedules {
+		sum := sha256.Sum256([]byte(schedule.Key))
+		id := "library-" + hex.EncodeToString(sum[:12])
+		found := false
+		for _, w := range doc.Workflows {
+			if w.ID == id {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		next := schedule.NextRunAt
+		reviewers := append([]string{}, schedule.Reviewers...)
+		targetSubdir := strings.TrimSpace(schedule.TargetSubdir)
+		if targetSubdir == "" {
+			targetSubdir = "."
+		}
+		name := "Scheduled " + schedule.LibraryTaskName
+		if len(name) > 100 {
+			name = name[:100]
+		}
+		doc.Workflows = append(doc.Workflows, workflow.Definition{ID: id, Name: name, Repository: strings.SplitN(schedule.Key, "@", 2)[1], Enabled: true, Trigger: workflow.Trigger{Event: "schedule", IntervalHours: schedule.IntervalHours, StartAt: &next}, Filters: workflow.Filters{Mode: "all", Rules: []workflow.Rule{}}, Task: workflow.Task{Kind: "implement", LibraryTaskName: schedule.LibraryTaskName, Instructions: schedule.PromptContext, BaseBranch: schedule.BaseBranch, TargetSubdir: targetSubdir, Reviewers: &reviewers, Draft: schedule.Draft, AssignCreator: ui.AssignCreator, IssueLinkMode: "reference"}, Merge: workflow.Merge{Method: "squash", RequireApproval: true}})
+	}
+	doc.LibrarySchedulesMigrated = true
+	if len(schedules) > 0 {
+		doc.Migration += " Library schedules moved here with their next due time and task options. They run only while the Workflow feature is enabled. The legacy scheduler is stopped."
+	}
+	_, err = store.Save(doc)
+	return err
+}
+
+func parseWorkflowOrSelection(body []byte) (config.Config, error) {
+	var header struct {
+		Workflow *config.WorkflowRunConfig `json:"workflow"`
+		Prompt   string                    `json:"prompt"`
+	}
+	if json.Unmarshal(body, &header) == nil && header.Workflow != nil && header.Workflow.EventID != "" && header.Prompt != "" {
+		return parseResolvedWorkflowConfig(body)
+	}
+	return localruntime.ParseRunConfigJSON(body)
 }

@@ -3251,6 +3251,8 @@ func normalizeTaskSource(source string) string {
 	source = strings.ToLower(strings.TrimSpace(source))
 	source = strings.ReplaceAll(source, "-", "_")
 	switch source {
+	case "workflow":
+		return "workflow"
 	case "chat":
 		return "chat"
 	case "prompt", "builder", "studio", "local", "local_submit":

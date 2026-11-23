@@ -124,6 +124,13 @@ func (g GitHub) Inspect(ctx context.Context, repo, selector string) (Item, error
 			i.ChecksFailed = true
 		}
 	}
+	reviews, err := g.command(ctx, "api", "--paginate", "--slurp", "repos/"+repo+"/pulls/"+strconv.Itoa(i.Number)+"/reviews?per_page=100")
+	if err != nil {
+		return Item{}, err
+	}
+	if err := applyReviews(&i, reviews); err != nil {
+		return Item{}, err
+	}
 	return i, nil
 }
 func (g GitHub) Merge(ctx context.Context, r Run) error {
@@ -140,8 +147,43 @@ func (g GitHub) Merge(ctx context.Context, r Run) error {
 
 // CanonicalRepository accepts the forms used by the harness's run config.
 func CanonicalRepository(value string) string {
-	value = strings.TrimSpace(value)
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimPrefix(value, "ssh://git@github.com/")
+	value = strings.TrimPrefix(value, "ssh://github.com/")
+	value = strings.TrimPrefix(value, "github.com/")
 	value = strings.TrimPrefix(value, "https://github.com/")
 	value = strings.TrimPrefix(value, "git@github.com:")
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(value, "/"), ".git"))
+}
+
+// GitHub reviewDecision may be empty on unprotected repositories. Inspect actual
+// submitted reviews as well; an outsider or bot cannot satisfy human approval.
+func applyReviews(i *Item, raw string) error {
+	type review struct {
+		State       string
+		CommitID    string `json:"commit_id"`
+		Association string `json:"author_association"`
+		User        struct{ Login, Type string }
+	}
+	var pages [][]review
+	if err := json.Unmarshal([]byte(raw), &pages); err != nil {
+		return fmt.Errorf("decode pull request reviews: %w", err)
+	}
+	latest := map[string]review{}
+	for _, page := range pages {
+		for _, r := range page {
+			if r.User.Login != "" && contains([]string{"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}, r.State) {
+				latest[strings.ToLower(r.User.Login)] = r
+			}
+		}
+	}
+	for _, r := range latest {
+		if r.State == "CHANGES_REQUESTED" {
+			i.ReviewDecision = "CHANGES_REQUESTED"
+		}
+		if r.State == "APPROVED" && r.CommitID == i.HeadSHA && r.User.Type == "User" && contains([]string{"OWNER", "MEMBER", "COLLABORATOR"}, r.Association) {
+			i.HumanApproved = true
+		}
+	}
+	return nil
 }

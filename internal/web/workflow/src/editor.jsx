@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import "@xyflow/react/style.css";
 import "./style.css";
-import { events, newWorkflow, diagram, replaceDefinition } from "./model.js";
+import { events, newWorkflow, diagram, replaceDefinition, workflowTemplates } from "./model.js";
 const icons = {
   repository: FolderGit2,
   trigger: Zap,
@@ -108,6 +108,8 @@ function Editor() {
     [current, setCurrent] = useState(null),
     [repo, setRepo] = useState(""),
     [repos, setRepos] = useState([]),
+    [libraryTasks, setLibraryTasks] = useState([]),
+    [scheduleStatuses, setScheduleStatuses] = useState([]),
     [selection, setSelection] = useState("trigger"),
     [dirty, setDirty] = useState(false),
     [notice, setNotice] = useState(""),
@@ -128,15 +130,22 @@ function Editor() {
   }
   useEffect(() => {
     reload();
+    api("/api/library")
+      .then((data) => setLibraryTasks(data.tasks || []))
+      .catch((e) => setNotice(e.message));
     api("/api/github/repos")
       .then((data) => setRepos(data.repos || []))
       .catch((e) => setNotice(e.message));
   }, []);
   useEffect(() => {
-    const refresh = () =>
-      api("/api/workflows/runs")
+    const refresh = () => {
+      api("/api/workflows/schedules")
+        .then((data) => setScheduleStatuses(Array.isArray(data) ? data : []))
+        .catch(() => {});
+      return api("/api/workflows/runs")
         .then(setRuns)
         .catch(() => {});
+    };
     refresh();
     const timer = setInterval(refresh, 15000);
     return () => clearInterval(timer);
@@ -161,6 +170,73 @@ function Editor() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [dirty]);
+  useEffect(() => {
+    const receive = () => {
+      const seed = window.pendingWorkflowSchedule;
+      if (!seed || !doc) return;
+      if (dirty) {
+        setNotice(
+          "Save or discard the current workflow before creating a schedule from Library.",
+        );
+        return;
+      }
+      delete window.pendingWorkflowSchedule;
+      const repository =
+        seed.workflowRepository ||
+        seed.repos[0]
+          .replace(/^https:\/\/github.com\//, "")
+          .replace(/^git@github.com:/, "")
+          .replace(/\.git$/, "");
+      const draft = newWorkflow(repository, "schedule");
+      draft.name = `Scheduled ${seed.librarytaskname}`;
+      draft.task = {
+        ...draft.task,
+        libraryTaskName: seed.librarytaskname,
+        instructions: seed.promptcontext || "",
+        baseBranch: seed.branch || "",
+        targetSubdir: seed.targetsubdir || ".",
+        reviewers: seed.reviewers || [],
+        draft: !!seed.draft,
+      };
+      setRepo(repository);
+      setCurrent(draft);
+      setDirty(true);
+      setSelection("trigger");
+      setNotice(
+        "Scheduled workflow draft created from Library. Save it, then enable when ready.",
+      );
+      setTimeout(() => flow.fitView({ padding: 32 }), 0);
+    };
+    receive();
+    window.addEventListener("workflow-create-schedule", receive);
+    return () =>
+      window.removeEventListener("workflow-create-schedule", receive);
+  }, [doc, dirty, flow]);
+  const scheduled = current?.trigger.event === "schedule";
+  const libraryTask = libraryTasks.find(
+    (t) => t.name === current?.task.libraryTaskName,
+  );
+  const instructionsLabel = current?.task.libraryTaskName
+    ? (libraryTask?.promptContextLabel || "Additional context") +
+      (libraryTask?.promptContextRequired ? " (required)" : " (optional)")
+    : "Instructions";
+  const scheduleStatus = scheduleStatuses.find(
+    (s) => s.workflowId === current?.id,
+  );
+  function changeTrigger(event) {
+    edit({
+      trigger:
+        event === "schedule"
+          ? { event, intervalHours: 24 }
+          : { event, value: "" },
+      includeBacklog: false,
+      filters: { mode: "all", rules: [] },
+      task: {
+        ...current.task,
+        kind: event.startsWith("pr.") ? "review" : "implement",
+      },
+    });
+  }
   function edit(update) {
     setCurrent((w) => ({ ...w, ...update }));
     setDirty(true);
@@ -211,7 +287,7 @@ function Editor() {
     setCurrent(newWorkflow(repo.trim(), kind));
     setSelection("trigger");
     setDirty(true);
-    setNotice("New draft. Save it before enabling automation.");
+    setNotice(`${workflowTemplates.find((t) => t.id === kind).name} template copied. Review its settings, save the draft, then enable when ready.`);
     setTimeout(() => flow.fitView({ padding: 32 }), 0);
   }
   async function showPreview() {
@@ -306,7 +382,7 @@ function Editor() {
                 ? "Enabled"
                 : current
                   ? "Saved draft"
-                  : "Version 1"}
+                  : `Version ${doc?.version || 2}`}
           </span>
           <button
             disabled={!doc}
@@ -318,7 +394,7 @@ function Editor() {
           {current && (
             <>
               <button disabled={busy} onClick={showPreview}>
-                Preview matches
+                {scheduled ? "Preview schedule" : "Preview matches"}
               </button>
               <button disabled={busy} onClick={() => save(false)}>
                 <Save size={15} />
@@ -382,20 +458,18 @@ function Editor() {
           {!visible.length && (
             <p className="wf-muted">No workflows for this repository.</p>
           )}
-          <div className="wf-section-label wf-spacer">NEW WORKFLOW</div>
-          {["implement", "review", "repair"].map((kind) => (
+          <div className="wf-section-label wf-spacer">WORKFLOW TEMPLATES</div>
+          <p className="wf-muted">Choose a repository above, then a template. Each creates an editable draft with automation off.</p>
+          {workflowTemplates.map((template) => (
             <button
-              className="wf-template"
-              key={kind}
-              onClick={() => create(kind)}
+              className="wf-template wf-template-card"
+              key={template.id}
+              aria-label={template.name}
+              onClick={() => create(template.id)}
               disabled={!doc}
             >
               <Plus size={14} />
-              {kind === "implement"
-                ? "Implement issues"
-                : kind === "review"
-                  ? "Review PRs"
-                  : "Repair checks"}
+              <span><strong>{template.name}</strong><small>{template.description}</small></span>
             </button>
           ))}
           {doc?.migration && (
@@ -493,42 +567,115 @@ function Editor() {
                     The repository filter and commit signing settings apply to
                     every workflow.
                   </p>
-                  <Toggle
-                    label="Include existing matching items on first activation"
-                    value={current.includeBacklog}
-                    onChange={(v) => edit({ includeBacklog: v })}
-                  />
-                  <p className="wf-muted">
-                    Off by default. Otherwise, the first scan establishes a
-                    baseline and only new matches start work.
-                  </p>
+                  {!scheduled && (
+                    <>
+                      <Toggle
+                        label="Include existing matching items on first activation"
+                        value={current.includeBacklog}
+                        onChange={(v) => edit({ includeBacklog: v })}
+                      />
+                      <p className="wf-muted">
+                        Off by default. Otherwise, the first scan establishes a
+                        baseline and only new matches start work.
+                      </p>
+                    </>
+                  )}
                 </>
               )}
               {selection === "trigger" && (
                 <>
                   <h2>What starts work?</h2>
-                  <Field label="GitHub event">
+                  <Field label="Trigger type">
                     <select
                       value={current.trigger.event}
-                      onChange={(e) => {
-                        const issue = e.target.value.startsWith("issue.");
-                        edit({
-                          trigger: { event: e.target.value, value: "" },
-                          filters: { mode: "all", rules: [] },
-                          task: {
-                            ...current.task,
-                            kind: issue ? "implement" : "review",
-                          },
-                        });
-                      }}
+                      onChange={(e) => changeTrigger(e.target.value)}
                     >
                       {events.map((e) => (
                         <option key={e} value={e}>
-                          {e.replaceAll(".", " · ").replaceAll("_", " ")}
+                          {e === "schedule"
+                            ? "Scheduled"
+                            : e.replaceAll(".", " · ").replaceAll("_", " ")}
                         </option>
                       ))}
                     </select>
                   </Field>
+                  {scheduled && (
+                    <>
+                      <Field label="Repeat every (hours)">
+                        <input
+                          type="number"
+                          min="1"
+                          max="336"
+                          value={current.trigger.intervalHours}
+                          onChange={(e) =>
+                            edit({
+                              trigger: {
+                                ...current.trigger,
+                                intervalHours: Number(e.target.value),
+                              },
+                            })
+                          }
+                        />
+                      </Field>
+                      <div className="wf-schedule-presets">
+                        {[
+                          [1, "Hourly"],
+                          [24, "Daily"],
+                          [168, "Weekly"],
+                          [336, "Fortnightly"],
+                        ].map(([hours, label]) => (
+                          <button
+                            key={hours}
+                            onClick={() =>
+                              edit({
+                                trigger: {
+                                  ...current.trigger,
+                                  intervalHours: hours,
+                                },
+                              })
+                            }
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      <Field
+                        label={`First run (optional, ${Intl.DateTimeFormat().resolvedOptions().timeZone})`}
+                      >
+                        <input
+                          type="datetime-local"
+                          value={
+                            current.trigger.startAt
+                              ? localDateInput(current.trigger.startAt)
+                              : ""
+                          }
+                          onChange={(e) =>
+                            edit({
+                              trigger: {
+                                ...current.trigger,
+                                startAt: e.target.value
+                                  ? new Date(e.target.value).toISOString()
+                                  : undefined,
+                              },
+                            })
+                          }
+                        />
+                      </Field>
+                      <p className="wf-muted">
+                        Without a first-run time, the first run is one interval
+                        after enabling. Keep the app running. Missed intervals
+                        produce one catch-up run; overlapping runs wait.
+                      </p>
+                      <p className="wf-muted">
+                        {dirty
+                          ? "Save to update the schedule."
+                          : scheduleStatus?.nextRunAt &&
+                              !scheduleStatus.nextRunAt.startsWith("0001")
+                            ? `Next due: ${new Date(scheduleStatus.nextRunAt).toLocaleString()}${scheduleStatus.enabled ? "" : " (paused)"}`
+                            : "The next due time is set when enabled."}
+                      </p>
+                    </>
+                  )}
                   {/assigned|labeled|review_requested/.test(
                     current.trigger.event,
                   ) && (
@@ -552,19 +699,22 @@ function Editor() {
                       />
                     </Field>
                   )}
-                  <Toggle
-                    label="Include existing matches on first activation"
-                    value={current.includeBacklog}
-                    onChange={(v) => edit({ includeBacklog: v })}
-                  />
-                  <p className="wf-muted">
-                    GitHub is checked every 30 seconds. A new match starts one
-                    task. A match must stop matching before it can activate
-                    again.
-                  </p>
+                  {!scheduled && (
+                    <>
+                      <Toggle
+                        label="Include existing matches on first activation"
+                        value={current.includeBacklog}
+                        onChange={(v) => edit({ includeBacklog: v })}
+                      />
+                      <p className="wf-muted">
+                        GitHub is checked every 30 seconds. A match must stop
+                        matching before it can activate again.
+                      </p>
+                    </>
+                  )}
                 </>
               )}
-              {selection === "filters" && (
+              {selection === "filters" && !scheduled && (
                 <>
                   <h2>Which items?</h2>
                   <Field label="Match rules">
@@ -681,12 +831,101 @@ function Editor() {
                       </select>
                     </Field>
                   )}
-                  <Field label="Instructions">
+                  <Field label="Prompt source">
+                    <select
+                      aria-label="Prompt source"
+                      value={current.task.libraryTaskName || ""}
+                      onChange={(e) =>
+                        edit({
+                          task: {
+                            ...current.task,
+                            libraryTaskName: e.target.value || undefined,
+                            instructions: e.target.value
+                              ? ""
+                              : current.task.instructions,
+                          },
+                        })
+                      }
+                    >
+                      <option value="">Inline instructions</option>
+                      {current.task.libraryTaskName && !libraryTask && (
+                        <option value={current.task.libraryTaskName}>
+                          {current.task.libraryTaskName} (unavailable)
+                        </option>
+                      )}
+                      {libraryTasks.map((t) => (
+                        <option value={t.name} key={t.name}>
+                          {t.displayName || t.name}
+                          {t.sourceName ? ` · ${t.sourceName}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  {current.task.libraryTaskName && (
+                    <>
+                      <p className="wf-muted">
+                        The current library prompt is resolved at each run. Its
+                        expanded instructions are recorded with the task.
+                      </p>
+                      {libraryTask && (
+                        <details className="wf-prompt-preview">
+                          <summary>Preview library prompt</summary>
+                          <pre>{libraryTask.prompt}</pre>
+                        </details>
+                      )}
+                    </>
+                  )}
+                  <Field label={instructionsLabel}>
                     <textarea
-                      rows={7}
+                      aria-label={instructionsLabel}
+                      rows={6}
                       value={current.task.instructions}
                       onChange={(e) =>
                         updateTask("instructions", e.target.value)
+                      }
+                      placeholder={libraryTask?.promptContextPlaceholder || ""}
+                    />
+                  </Field>
+                  {!current.trigger.event.startsWith("pr.") && (
+                    <Field
+                      label={
+                        libraryTask?.requiresNonDefaultBranch
+                          ? "Base branch (non-default required)"
+                          : "Base branch (optional)"
+                      }
+                    >
+                      <input
+                        value={current.task.baseBranch || ""}
+                        onChange={(e) =>
+                          updateTask("baseBranch", e.target.value)
+                        }
+                        placeholder="Repository default"
+                      />
+                    </Field>
+                  )}
+                  <Field label="Target directory (optional)">
+                    <input
+                      value={current.task.targetSubdir || ""}
+                      onChange={(e) =>
+                        updateTask("targetSubdir", e.target.value)
+                      }
+                      placeholder="Library default or ."
+                    />
+                  </Field>
+                  <Field label="PR reviewers (comma-separated)">
+                    <input
+                      value={(current.task.reviewers || []).join(", ")}
+                      onChange={(e) =>
+                        updateTask(
+                          "reviewers",
+                          e.target.value.split(",").map((v) => v.trim()),
+                        )
+                      }
+                      onBlur={() =>
+                        updateTask(
+                          "reviewers",
+                          (current.task.reviewers || []).filter(Boolean),
+                        )
                       }
                     />
                   </Field>
@@ -796,7 +1035,8 @@ function Editor() {
               ? preview.map((p) => (
                   <p key={p.item.number}>
                     <strong>
-                      #{p.item.number} {p.item.title}
+                      {p.item.kind === "schedule" ? "" : `#${p.item.number} `}
+                      {p.item.title}
                     </strong>{" "}
                     · {p.matches ? "Matches" : "Skipped"} — {p.reason}
                   </p>
@@ -808,7 +1048,10 @@ function Editor() {
                   .map((r) => (
                     <p key={r.id}>
                       <strong>
-                        #{r.item.number} · {r.status}
+                        {r.item.kind === "schedule"
+                          ? "Scheduled run"
+                          : `#${r.item.number}`}{" "}
+                        · {r.status}
                       </strong>{" "}
                       — {r.reason}
                       {r.requestId && ` · Task ${r.requestId}`}
@@ -828,6 +1071,12 @@ function Editor() {
       </footer>
     </div>
   );
+}
+function localDateInput(value) {
+  const d = new Date(value);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 16);
 }
 let root;
 window.mountWorkflowEditor = () => {

@@ -92,3 +92,11 @@
 .wf-editor button:disabled { opacity:.45; cursor:default; }
 @media(max-width:900px) { .wf-workspace {grid-template-columns:165px minmax(0,1fr) 210px;} .wf-header-actions {flex-wrap:wrap;} }
 @media(max-width:650px) { .wf-workspace {display:flex; flex-direction:column; overflow:auto;} .wf-palette,.wf-inspector {display:block; max-height:none; overflow:visible; flex-shrink:0;} .wf-canvas {min-height:360px; flex-shrink:0;} .wf-header {flex-wrap:wrap;} }
+.wf-schedule-presets {display:flex;flex-wrap:wrap;gap:5px;}
+.wf-prompt-preview {font-size:11px;color:var(--muted);}
+.wf-prompt-preview pre {white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;font:inherit;line-height:1.6;}
+
+.wf-editor button.wf-template-card { align-items: flex-start; text-align: left; white-space: normal; height: auto; padding: 10px 8px; }
+.wf-template-card > svg { margin-top: 2px; }
+.wf-template-card strong { display: block; font-size: 11px; }
+.wf-template-card small { display: block; margin-top: 5px; font-size: 10px; line-height: 1.5; color: var(--muted); }

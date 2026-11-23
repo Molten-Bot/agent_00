@@ -56,19 +56,14 @@ func TestLibraryScheduleAPI(t *testing.T) {
 	}
 }
 
-// TestLibraryScheduleSliderSnapsToStepsInBrowser drives the real
-// static/library-schedules.js in a headless browser, unlike TestLibraryScheduleAPI
-// above which only exercises the Go-side interval validation. hoursForIndex and
-// indexForHours are unexported closures with no Go-reachable equivalent, so this
-// is the only coverage for the slider's hours -> days -> weeks snap table and for
-// an off-grid saved interval snapping back to its nearest step.
-func TestLibraryScheduleSliderSnapsToStepsInBrowser(t *testing.T) {
-	requireBrowserTooling(t, "browser-driven slider snapping check")
+// The Library shortcut opens a scheduled Workflow draft with the selected options.
+func TestLibrarySchedulingMovesToWorkflowInBrowser(t *testing.T) {
+	requireBrowserTooling(t, "Library to Workflow scheduling")
 
 	server := NewServer("", NewBroker())
 	server.LibrarySchedules = &localruntime.LibrarySchedules{Path: filepath.Join(t.TempDir(), "config.json"), Init: localruntime.InitConfig{Version: "v1"}}
 	ts := httptest.NewServer(server.Handler())
 	defer ts.Close()
 
-	runBrowserSuite(t, ts.URL, 60*time.Second, "library schedule slider snapping check", "tests/library_schedules.cjs")
+	runBrowserSuite(t, ts.URL, 60*time.Second, "Library to Workflow scheduling", "tests/library_schedules.cjs")
 }

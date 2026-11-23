@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
@@ -84,5 +87,105 @@ func TestWorkflowMigrationPreservesOriginalAndIsIdempotent(t *testing.T) {
 	backup, _ := os.ReadFile(filepath.Join(root, "workflow-legacy-settings.json"))
 	if string(backup) != string(original) {
 		t.Fatal("legacy settings not preserved")
+	}
+}
+
+func TestWorkflowLibraryPromptResolvesPerOccurrenceAndSurvivesSubmission(t *testing.T) {
+	t.Parallel()
+	revision := 0
+	reviewers := []string{"reviewer"}
+	resolver := func(name, repo, branch, context string) (config.Config, error) {
+		revision++
+		return config.Config{RepoURL: repo, LibraryTaskName: name, LibraryTaskDisplayName: "Library task", Prompt: fmt.Sprintf("Library revision %d: %s", revision, context), BaseBranch: branch, CommitMessage: "test: library", TargetSubdir: "library-dir", RequiresNonDefaultBranch: true}, nil
+	}
+	r := workflow.Run{ID: "occurrence-1", Workflow: workflow.Definition{ID: "scheduled", Name: "Scheduled coverage", Repository: "acme/repo", Task: workflow.Task{Kind: "implement", LibraryTaskName: "unit-test-coverage", Instructions: "Focus on regressions", BaseBranch: "feature", TargetSubdir: "src", Reviewers: &reviewers, Draft: true}}, Item: workflow.Item{Kind: "schedule"}}
+	first, err := workflowRunConfigWithLibrary(r, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(first.Prompt, "Library revision 1") || strings.Contains(first.Prompt, "GitHub item") || first.TargetSubdir != "src" || !first.Draft || !first.RequiresNonDefaultBranch || first.Workflow.Instructions != first.Prompt {
+		t.Fatal(first)
+	}
+	r.ID = "occurrence-2"
+	second, err := workflowRunConfigWithLibrary(r, resolver)
+	if err != nil || !strings.Contains(second.Prompt, "Library revision 2") {
+		t.Fatal(second, err)
+	}
+	data, _ := json.Marshal(first)
+	parsed, err := parseWorkflowOrSelection(data)
+	if err != nil || parsed.Prompt != first.Prompt || parsed.LibraryTaskName != first.LibraryTaskName {
+		t.Fatal(parsed, err)
+	}
+	r.Item = workflow.Item{Kind: "issue", Number: 1, Repository: "acme/repo", URL: "https://github.com/acme/repo/issues/1", Title: "Issue"}
+	r.Workflow.Task.IssueLinkMode = "reference"
+	issue, err := workflowRunConfigWithLibrary(r, resolver)
+	if err != nil || !strings.Contains(issue.Workflow.Instructions, "Library revision 3") {
+		t.Fatal(issue, err)
+	}
+}
+func TestLibraryScheduleMigrationPreservesTimingAndIsOneTime(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	path := filepath.Join(root, "config.json")
+	cfg := localruntime.InitConfig{Version: "v1", RuntimeConfigPath: path}
+	cfg.ApplyDefaults()
+	legacy := &localruntime.LibrarySchedules{Path: path, Init: cfg}
+	saved, err := legacy.Save(localruntime.LibraryScheduleInput{LibraryTaskName: "unit-test-coverage", Repo: "https://github.com/acme/repo.git", IntervalHours: 12, BaseBranch: "feature", TargetSubdir: "src", Reviewers: []string{"reviewer"}, PromptContext: "Tests for API", Draft: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &workflow.Store{Path: filepath.Join(root, "workflows.json")}
+	if err = store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = migrateLibrarySchedules(cfg, store); err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := store.Load()
+	if len(doc.Workflows) != 1 || !doc.LibrarySchedulesMigrated {
+		t.Fatal(doc)
+	}
+	w := doc.Workflows[0]
+	if w.Trigger.Event != "schedule" || w.Trigger.IntervalHours != 12 || !w.Trigger.StartAt.Equal(saved.NextRunAt) || w.Task.LibraryTaskName != saved.LibraryTaskName || w.Task.Instructions != saved.PromptContext || w.Task.BaseBranch != "feature" || w.Task.TargetSubdir != "src" || !w.Task.Draft || !w.Enabled {
+		t.Fatal(w)
+	}
+	doc.Workflows = nil
+	store.Save(doc)
+	if err = migrateLibrarySchedules(cfg, store); err != nil {
+		t.Fatal(err)
+	}
+	doc, _ = store.Load()
+	if len(doc.Workflows) != 0 {
+		t.Fatal("deleted migration reappeared")
+	}
+	old, err := legacy.List()
+	if err != nil || len(old) != 1 {
+		t.Fatal("original schedules were not retained", err)
+	}
+}
+
+func TestLibraryScheduleMigrationKeepsExplicitRootAndNoReviewers(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	cfg := localruntime.InitConfig{Version: "v1", RuntimeConfigPath: filepath.Join(root, "config.json")}
+	cfg.ApplyDefaults()
+	legacy := &localruntime.LibrarySchedules{Path: cfg.RuntimeConfigPath, Init: cfg}
+	if _, err := legacy.Save(localruntime.LibraryScheduleInput{LibraryTaskName: "unit-test-coverage", Repo: "acme/repo", IntervalHours: 24}); err != nil {
+		t.Fatal(err)
+	}
+	store := &workflow.Store{Path: filepath.Join(root, "workflows.json")}
+	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateLibrarySchedules(cfg, store); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := doc.Workflows[0].Task
+	if task.TargetSubdir != "." || task.Reviewers == nil || len(*task.Reviewers) != 0 {
+		t.Fatal("migration changed legacy root/reviewer defaults", task)
 	}
 }

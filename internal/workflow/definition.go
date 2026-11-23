@@ -8,15 +8,17 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"time"
 )
 
-const Version = 1
+const Version = 2
 
 type Document struct {
-	Version   int          `json:"version"`
-	Revision  uint64       `json:"revision"`
-	Workflows []Definition `json:"workflows"`
-	Migration string       `json:"migration,omitempty"`
+	LibrarySchedulesMigrated bool         `json:"librarySchedulesMigrated,omitempty"`
+	Version                  int          `json:"version"`
+	Revision                 uint64       `json:"revision"`
+	Workflows                []Definition `json:"workflows"`
+	Migration                string       `json:"migration,omitempty"`
 }
 type Definition struct {
 	ID             string              `json:"id"`
@@ -36,8 +38,10 @@ type Position struct {
 	Y float64 `json:"y"`
 }
 type Trigger struct {
-	Event string `json:"event"`
-	Value string `json:"value,omitempty"`
+	IntervalHours int        `json:"intervalHours,omitempty"`
+	StartAt       *time.Time `json:"startAt,omitempty"`
+	Event         string     `json:"event"`
+	Value         string     `json:"value,omitempty"`
 }
 type Filters struct {
 	Mode  string `json:"mode"`
@@ -49,11 +53,15 @@ type Rule struct {
 	Value    string `json:"value"`
 }
 type Task struct {
-	Kind          string `json:"kind"`
-	Instructions  string `json:"instructions"`
-	AssignCreator bool   `json:"assignCreator"`
-	IssueLinkMode string `json:"issueLinkMode"`
-	Draft         bool   `json:"draft"`
+	LibraryTaskName string    `json:"libraryTaskName,omitempty"`
+	BaseBranch      string    `json:"baseBranch,omitempty"`
+	TargetSubdir    string    `json:"targetSubdir,omitempty"`
+	Reviewers       *[]string `json:"reviewers,omitempty"`
+	Kind            string    `json:"kind"`
+	Instructions    string    `json:"instructions"`
+	AssignCreator   bool      `json:"assignCreator"`
+	IssueLinkMode   string    `json:"issueLinkMode"`
+	Draft           bool      `json:"draft"`
 }
 type Merge struct {
 	Enabled         bool   `json:"enabled"`
@@ -64,7 +72,7 @@ type Merge struct {
 
 var repoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,80}$`)
-var Events = []string{"issue.opened", "issue.assigned", "issue.labeled", "pr.opened", "pr.assigned", "pr.labeled", "pr.ready", "pr.review_requested", "pr.changes_requested", "pr.checks_failed"}
+var Events = []string{"schedule", "issue.opened", "issue.assigned", "issue.labeled", "pr.opened", "pr.assigned", "pr.labeled", "pr.ready", "pr.review_requested", "pr.changes_requested", "pr.checks_failed"}
 
 func contains(values []string, value string) bool {
 	for _, v := range values {
@@ -106,6 +114,22 @@ func (w Definition) Validate() error {
 	if (strings.HasSuffix(w.Trigger.Event, "assigned") || strings.HasSuffix(w.Trigger.Event, "labeled") || w.Trigger.Event == "pr.review_requested") && strings.TrimSpace(w.Trigger.Value) == "" {
 		return fmt.Errorf("this trigger requires a label or GitHub login")
 	}
+	if w.Trigger.Event == "schedule" {
+		if w.Trigger.IntervalHours < 1 || w.Trigger.IntervalHours > 336 {
+			return fmt.Errorf("scheduled interval must be 1–336 hours")
+		}
+		if w.Task.Kind != "implement" || len(w.Filters.Rules) != 0 || w.IncludeBacklog {
+			return fmt.Errorf("scheduled triggers run repository tasks without issue/PR filters or backlog")
+		}
+		if w.Trigger.StartAt != nil && w.Trigger.StartAt.IsZero() {
+			return fmt.Errorf("startAt must be a valid timestamp")
+		}
+	} else if w.Trigger.IntervalHours != 0 || w.Trigger.StartAt != nil {
+		return fmt.Errorf("schedule options require a scheduled trigger")
+	}
+	if w.Task.LibraryTaskName != "" && !regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`).MatchString(w.Task.LibraryTaskName) {
+		return fmt.Errorf("library task name must be a task slug")
+	}
 	if w.Filters.Mode != "all" && w.Filters.Mode != "any" {
 		return fmt.Errorf("filter mode must be all or any")
 	}
@@ -126,7 +150,7 @@ func (w Definition) Validate() error {
 			return fmt.Errorf("issueType is an issue filter")
 		}
 	}
-	if !contains([]string{"implement", "review", "repair"}, w.Task.Kind) || strings.TrimSpace(w.Task.Instructions) == "" {
+	if !contains([]string{"implement", "review", "repair"}, w.Task.Kind) || (strings.TrimSpace(w.Task.Instructions) == "" && w.Task.LibraryTaskName == "") {
 		return fmt.Errorf("task kind and instructions are required")
 	}
 	if strings.HasPrefix(w.Trigger.Event, "issue.") && w.Task.Kind != "implement" {
@@ -153,6 +177,9 @@ func Decode(data []byte) (Document, error) {
 	var d Document
 	err := decodeStrict(data, &d)
 	if err == nil {
+		if d.Version == 1 {
+			d.Version = Version
+		}
 		err = d.Validate()
 	}
 	return d, err

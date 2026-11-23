@@ -74,33 +74,47 @@ such key, so there the button disappears with the sidecar as before. Set
 
 ### Library settings
 
-Open **Settings → Library** to add a private library repository and choose its
-name. Its tasks appear under that name in tabs to the left of the built-in
-categories. An explicit task `displayName` is preserved; otherwise the task title
-is derived from the source name and task slug.
+Open **Library → Manage custom libraries** to add a private library repository
+and choose its name. Its tasks appear under that source name. Explicit task
+`displayName` values are preserved; otherwise titles derive from the source and slug.
 
-Turn off **Show default library** and save to hide built-in tasks from the
-picker. The setting persists across restarts and leaves custom tasks available.
-Existing schedules for built-in tasks continue to run; delete a schedule to stop
-its recurring runs.
+**Settings → Features → Bundled library** controls built-in task availability.
+Custom tasks remain available. Workflows resolve prompts from the currently
+available catalog; an unavailable task produces an explicit activation failure.
 
 ### Recurring library tasks
 
-On the Library page, choose a repository and use the clock beside a task to
-schedule it every 1–168 hours. **Schedules** opens the list to edit the interval
-or delete a recurrence. **Run** continues to launch a one-time task.
+Scheduling now lives in **Workflow**. Create a **Scheduled task** template, or
+use the schedule shortcut beside a selected Library task to open a workflow
+draft carrying its repository, prompt context, branch, directory, reviewers,
+and draft-PR option. **Run** in Library still launches a one-time task.
 
-Schedules are stored in the app's `config.json` under `library_schedules`, keyed
-by task slug and canonical GitHub repository (`task-slug@owner/repo`). SSH and
-HTTPS URLs for the same repository share one schedule. Each run uses the current
-library prompt and the saved branch, directory, and reviewers.
+Select the **Agent task → Prompt source** to use inline instructions or a library
+prompt. Library prompts work with GitHub triggers as well as scheduled triggers.
+Their current definition is expanded at each activation; the resolved prompt is
+recorded with that task so later library edits do not change an existing run.
+Optional context extends the library prompt. Required context and non-default
+branch requirements are checked before enabling a workflow and again at execution.
 
-The first run is due one interval after saving; editing resets the next run time.
-Keep the app running for schedules to execute (checked every 30 seconds). After
-downtime, one overdue run resumes without replaying every missed interval. A run
-waits while the same task and repository are already pending, running, or paused.
-Submission failures appear in the schedules dialog and retry at the next interval.
-Deleting a schedule leaves any run already started intact.
+A scheduled trigger repeats every **1–336 hours**, with hourly/daily/weekly/
+fortnightly presets and an optional first-run date and time. The editor uses your
+local timezone and saves an absolute timestamp. Without a first-run time, the
+first occurrence is due one interval after enabling. Changing the interval or
+first-run time resets the cursor; prompt and layout edits preserve it. Scheduled
+triggers run directly against the repository without issue/PR filters, then use
+the same review and merge stages as other workflows.
+
+Keep the native app running; due work is checked every 30 seconds. Missed
+intervals coalesce into one catch-up run. Scheduled work waits while that
+repository has an active task. A failed submission is recorded and retried at
+the next interval. Pausing preserves the cursor; disabling the Workflow feature
+or excluding the repository prevents new occurrences and merges.
+
+Existing `config.json` library schedules migrate once into `workflows.json`,
+preserving their next due time and task options. They remain enabled definitions,
+but execution requires the Workflow feature to be enabled. The old scheduler is
+stopped and its API returns HTTP 410; the original entries remain for recovery.
+Deleting an imported workflow does not re-import it on restart.
 
 ### GitHub issue automation
 
@@ -498,18 +512,30 @@ pipeline; arbitrary branches or custom executable node types are not supported.
 Save draft pauses the workflow; Enable is a separate action. Preview matches is
 read-only. Activation history explains submitted tasks and merge waits.
 
+Choose a repository and a **Workflow template** to create an editable, disabled
+workflow. Templates cover labeled or assigned issues, requested PR reviews,
+requested changes, failed checks, scheduled tasks, issue-to-merge, and
+review-and-merge. Merge templates require successful checks and human approval;
+review-and-merge also requires a clean agent review. Save and explicitly enable
+each workflow when ready. Multiple copies can target the same repository.
+Templates are independent copies: editing one does not change other workflows.
+The versioned catalog is `internal/web/workflow/src/templates.json`; its definitions
+are checked against the backend workflow schema in tests.
+
 Definitions live in **`workflows.json` beside the runtime `config.json`** (normally
-`.agent00/workflows.json`). Export downloads this same portable format. Version 1
+`.agent00/workflows.json`). Export downloads this same portable format. Version 2
 uses camelCase fields and a top-level `version`, `revision`, and `workflows` array.
 IDs remain stable when renaming a workflow. Saves use atomic replacement and
 revision checks; stale browser writes receive HTTP 409. Unknown fields, invalid
 policies, and unsupported future versions fail closed without overwriting files.
+Version 1 definitions are read compatibly and upgraded on save; the original file
+is retained as `workflows.json.v1.bak`. Unsupported future versions are rejected.
 An empty `workflows` array is valid. Keep exported definitions in your repository
 if you want Git history; credentials and runtime history do not belong in them.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "revision": 0,
   "workflows": [{
     "id": "implement-ready-issues",
@@ -535,7 +561,7 @@ if you want Git history; credentials and runtime history do not belong in them.
 }
 ```
 
-Supported triggers: issue opened/assigned/labeled and PR opened/assigned/labeled,
+Supported triggers: scheduled intervals, issue opened/assigned/labeled and PR opened/assigned/labeled,
 ready, review requested, changes requested, or failed checks. Assignment and
 review-request triggers accept a GitHub login or `@me`; label triggers take a
 label. Filters support all/any groups, exact case-insensitive is/isNot comparisons,
@@ -543,7 +569,7 @@ labels, authors, assignees, bots, issue types, PR reviewers, base branches, draf
 and linked issues. Boolean values use `"true"`/`"false"`. Linked issues means
 GitHub's closing-issue relationships. Triggers are observed state transitions,
 not a webhook event replay: changes that occur entirely between polls can be
-missed, and a match must become false before it can activate again. Definition
+missed, and a match must become false before it can activate again. For GitHub triggers, definition
 policy edits establish a new baseline; renaming and moving nodes do not.
 
 Issue tasks retain durable claims, reserved branches, fresh issue comments, and
@@ -551,11 +577,16 @@ recovery. PR tasks either review and comment or repair the existing head branch.
 Review limits are 0–10 repair cycles plus a final confirmation review; review-only
 tasks perform one review. Merge supports squash/merge/rebase and optional branch
 deletion. It waits for checks, a non-draft PR, no requested changes, and optional
-human approval, then binds the merge to the observed head commit. PRs with no
+human approval from an owner, member, or collaborator on the current head, then binds the merge to the observed head commit. PRs with no
 checks remain waiting. Review writeback success alone never authorizes merging:
 a review must explicitly report a clean result. GitHub branch protection applies.
 
-`workflow-state.json` is a separate, private runtime journal for baselines,
+Scheduled definitions use `trigger: {"event":"schedule","intervalHours":24}`
+and optionally a `startAt` RFC 3339 timestamp. Agent steps reference a prompt with
+`task.libraryTaskName`; `task.instructions` then supplies additional context.
+`task.baseBranch`, `targetSubdir`, and `reviewers` retain per-workflow task options.
+
+`workflow-state.json` is a separate, private runtime journal for schedule cursors, baselines,
 activation IDs, task outcomes, and merge state. Keep it on restart; do not use it
 as a shared definition file. A dispatch interrupted before its receipt is known
 is reconciled from task history and otherwise held for inspection, never blindly

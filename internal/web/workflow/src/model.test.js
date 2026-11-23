@@ -36,3 +36,36 @@ test("diagram represents actual policy and preserves layout", () => {
   assert.match(graph.nodes.find((n) => n.id === "review").data.detail, /5/);
   assert.match(graph.nodes.find((n) => n.id === "merge").data.detail, /rebase/);
 });
+
+test("scheduled tasks use the same agent/review/merge pipeline without GitHub filters", () => {
+  const w = newWorkflow("acme/repo", "schedule", "scheduled");
+  w.task.libraryTaskName = "audit";
+  const graph = diagram(w);
+  assert.equal(w.trigger.intervalHours, 24);
+  assert.equal(w.enabled, false);
+  assert.equal(graph.nodes.length, 5);
+  assert.equal(
+    graph.nodes.some((n) => n.id === "filters"),
+    false,
+  );
+  assert.match(graph.nodes.find((n) => n.id === "task").data.detail, /audit/);
+  assert.match(
+    graph.nodes.find((n) => n.id === "trigger").data.detail,
+    /24 hours/,
+  );
+});
+
+test("template copies are independent across repositories and preserve merge policy", () => {
+  const a = newWorkflow("acme/one", "delivery", "first");
+  const b = newWorkflow("acme/two", "delivery", "second");
+  assert.equal(a.enabled, false);
+  assert.equal(a.reviewCycles, 2);
+  assert.deepEqual(a.merge, { enabled: true, method: "squash", requireApproval: true, deleteBranch: true });
+  a.merge.method = "rebase";
+  a.filters.rules.push({field: "label", operator: "is", value: "bug"});
+  assert.equal(b.merge.method, "squash");
+  assert.equal(b.filters.rules.length, 0);
+  assert.equal(b.repository, "acme/two");
+  assert.equal(newWorkflow("acme/three", "delivery", "third").merge.method, "squash");
+  assert.throws(() => newWorkflow("acme/repo", "missing", "id"), /Unknown workflow template/);
+});

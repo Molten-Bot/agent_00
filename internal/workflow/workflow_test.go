@@ -77,6 +77,9 @@ func TestFiltersAndTriggers(t *testing.T) {
 		t.Fatal("any rule ignored")
 	}
 	for _, event := range Events {
+		if event == "schedule" {
+			continue
+		}
 		w.Trigger = Trigger{Event: event, Value: "agent"}
 		i.Kind = strings.Split(event, ".")[0]
 		i.Labels = []string{"agent"}
@@ -93,7 +96,7 @@ func testEngine(t *testing.T, w ...Definition) (*Engine, *[]Item, *int) {
 	t.Helper()
 	root := t.TempDir()
 	store := &Store{Path: filepath.Join(root, "workflows.json")}
-	if err := store.Initialize(Document{Version: 1, Workflows: w}); err != nil {
+	if err := store.Initialize(Document{Version: Version, Workflows: w}); err != nil {
 		t.Fatal(err)
 	}
 	items := []Item{}
@@ -185,6 +188,7 @@ func TestEngineMergeGatesAndReviewFindings(t *testing.T) {
 				t.Fatal("merged without approval")
 			}
 			pr.ReviewDecision = "APPROVED"
+			pr.HumanApproved = true
 			tick(t, e)
 			want := 0
 			if clean {
@@ -232,6 +236,9 @@ func TestGitHubPollingAndHeadBoundMerge(t *testing.T) {
 	g := GitHub{Runner: fakeRunner(func(_ context.Context, c execx.Command) (execx.Result, error) {
 		commands = append(commands, c)
 		args := strings.Join(c.Args, " ")
+		if strings.Contains(args, "/reviews?") {
+			return execx.Result{Stdout: `[[]]`}, nil
+		}
 		if strings.Contains(args, "repos/") {
 			return execx.Result{Stdout: `[[{"number":1,"title":"Bug","html_url":"https://github.com/acme/repo/issues/1","user":{"login":"author"},"type":{"name":"Bug"},"labels":[{"name":"ready"}]},{"number":2,"pull_request":{}}]]`}, nil
 		}
@@ -314,5 +321,31 @@ func TestEditedDefinitionBaselinesWithoutReplayingBacklog(t *testing.T) {
 	tick(t, e)
 	if *count != 0 {
 		t.Fatal("policy edit replayed backlog")
+	}
+}
+
+func TestHumanApprovalRequiresTrustedHumanOnCurrentHead(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, kind, association, head string
+		want                          bool
+	}{{"human", "User", "MEMBER", "abc", true}, {"bot", "Bot", "MEMBER", "abc", false}, {"outsider", "User", "CONTRIBUTOR", "abc", false}, {"stale", "User", "MEMBER", "old", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := Item{HeadSHA: "abc"}
+			data, _ := json.Marshal([]any{[]any{map[string]any{"state": "APPROVED", "commit_id": tc.head, "author_association": tc.association, "user": map[string]string{"login": "reviewer", "type": tc.kind}}}})
+			if err := applyReviews(&i, string(data)); err != nil {
+				t.Fatal(err)
+			}
+			if i.HumanApproved != tc.want {
+				t.Fatalf("approval %v want %v", i.HumanApproved, tc.want)
+			}
+		})
+	}
+	i := Item{HeadSHA: "abc"}
+	if err := applyReviews(&i, `[[{"state":"APPROVED","commit_id":"abc","author_association":"MEMBER","user":{"login":"reviewer","type":"User"}},{"state":"CHANGES_REQUESTED","commit_id":"abc","author_association":"MEMBER","user":{"login":"reviewer","type":"User"}}]]`); err != nil {
+		t.Fatal(err)
+	}
+	if i.HumanApproved || i.ReviewDecision != "CHANGES_REQUESTED" {
+		t.Fatal("later review did not supersede approval")
 	}
 }

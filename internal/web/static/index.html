@@ -286,9 +286,7 @@
                 <div class="prompt-field prompt-field-task-list">
                   <div class="library-schedule-toolbar">
                     <span class="prompt-label">Task Library</span>
-                    <button id="library-schedules-open" class="prompt-action-button" type="button" title="View and manage recurring library tasks">
-                      <i data-lucide="calendar-clock" aria-hidden="true"></i><span>Schedules</span><span id="library-schedules-count"></span>
-                    </button>
+
                   </div>
                   <div id="library-type-tabs" class="library-type-tabs" role="tablist" aria-label="Library task types"></div>
                   <div id="library-task-list" class="library-task-list"></div>
@@ -631,53 +629,7 @@
     </div>
   </dialog>
 
-  <dialog id="library-schedule-modal" class="library-schedule-modal" aria-labelledby="library-schedule-title">
-    <div class="library-prompt-modal-head">
-      <h2 id="library-schedule-title">Schedules</h2>
-      <button id="library-schedule-close" class="settings-modal-close" type="button" title="Close schedules" aria-label="Close schedules"><i data-lucide="x" aria-hidden="true"></i></button>
-    </div>
-    <div class="library-schedule-body">
-      <p class="library-schedule-copy">Repeat library tasks while the app is running. One schedule per task and repository.</p>
-      <div id="library-schedule-list"></div>
-      <form id="library-schedule-editor" hidden>
-        <h3 id="library-schedule-task"></h3>
-        <p id="library-schedule-repo" class="library-schedule-copy"></p>
-        <p id="library-schedule-options" class="library-schedule-copy"></p>
-        <label id="library-schedule-context-field" class="prompt-field prompt-field-prompt-context hidden">
-          <span class="prompt-label" id="library-schedule-context-label">Additional context</span>
-          <textarea
-            id="library-schedule-context-input"
-            class="prompt-text prompt-control"
-            rows="3"
-            spellcheck="false"></textarea>
-        </label>
-        <label id="library-schedule-draft-field" class="prompt-field prompt-field-draft-pr">
-          <span class="prompt-label">Draft</span>
-          <span class="prompt-draft-toggle" title="Draft PR">
-            <input id="library-schedule-draft" class="prompt-draft-toggle-input" type="checkbox" aria-label="Open pull request as a draft">
-            <i data-lucide="git-pull-request-draft" class="prompt-draft-toggle-icon" aria-hidden="true"></i>
-          </span>
-        </label>
-        <label class="library-schedule-interval" for="library-schedule-hours">Repeat <output id="library-schedule-frequency" for="library-schedule-hours">every 24 hours</output></label>
-        <input id="library-schedule-hours" type="range" min="0" max="0" step="1" value="0" aria-label="Repeat interval in hours">
-        <div class="library-schedule-range"><span id="library-schedule-range-min"></span><span id="library-schedule-range-max"></span></div>
-        <p id="library-schedule-next" class="library-schedule-copy"></p>
-        <label id="library-schedule-run-now-field" class="prompt-field prompt-field-draft-pr">
-          <span><strong>Run Now</strong><small>Start one run when schedule is saved</small></span>
-          <span class="prompt-draft-toggle">
-            <input id="library-schedule-run-now" class="prompt-draft-toggle-input" type="checkbox" aria-label="Run task now after saving schedule">
-            <span class="prompt-draft-toggle-track" aria-hidden="true"><span class="prompt-draft-toggle-thumb"></span></span>
-          </span>
-        </label>
-        <div class="library-schedule-actions">
-          <button id="library-schedule-delete" class="prompt-action-button" type="button" title="Delete this recurring schedule" hidden><i data-lucide="trash-2" aria-hidden="true"></i><span>Delete</span></button>
-          <button id="library-schedule-back" class="prompt-action-button" type="button" title="Return to all schedules"><i data-lucide="arrow-left" aria-hidden="true"></i><span>Back</span></button>
-          <button id="library-schedule-save" class="prompt-action-button prompt-submit" type="submit" title="Save this recurring schedule"><i data-lucide="check" aria-hidden="true"></i><span>Save schedule</span></button>
-        </div>
-      </form>
-      <p id="library-schedule-status" class="library-schedule-copy" role="status" aria-live="polite"></p>
-    </div>
-  </dialog>
+
 
   <div
     id="library-prompt-modal"
@@ -6647,7 +6599,7 @@
       }
       replaceLucideIcons(libraryTaskList);
       updateLibraryScheduleTrigger(activeEntry);
-      window.LibrarySchedulesUI?.refreshButtons();
+
     }
 
     function renderLibraryPromptContextField(entry) {
@@ -6678,9 +6630,13 @@
         return;
       }
       libraryScheduleTrigger.dataset.taskName = entry.name;
-      libraryScheduleTrigger.title = `Schedule ${entry.displayName}`;
-      libraryScheduleTrigger.setAttribute("aria-label", `Schedule ${entry.displayName}`);
-      libraryScheduleTrigger.onclick = () => window.LibrarySchedulesUI?.openFor(entry);
+      libraryScheduleTrigger.title = `Create scheduled workflow for ${entry.displayName}`;
+      libraryScheduleTrigger.setAttribute("aria-label", `Create scheduled workflow for ${entry.displayName}`);
+      libraryScheduleTrigger.onclick = () => {
+ if(!state.reviewSettings.workflowEnabled){document.getElementById("settings-open").click();setSettingsTab("automation");setReviewSettingsStatus("", "Enable Workflow (beta) to create scheduled workflows.");return;}
+ try { const payload = libraryPayload(entry.name); window.pendingWorkflowSchedule = {...payload,workflowRepository:githubRepoPathFromValue(payload.repos[0])}; window.location.hash = "workflow"; setAppDisplay("workflow"); void loadWorkflowEditor().then(()=>window.dispatchEvent(new Event("workflow-create-schedule"))); }
+ catch(error){setLocalPromptStatus("error",error.message);}
+ };
     }
 
     function syncBaseBranchClearState() {
@@ -9196,11 +9152,11 @@
       if (!workflowEditorLoad) {
         const css = document.createElement("link");
         css.rel = "stylesheet";
-        css.href = "/static/workflow-editor.css?v=4";
+        css.href = "/static/workflow-editor.css?v=6";
         document.head.appendChild(css);
         workflowEditorLoad = new Promise((resolve, reject) => {
           const script = document.createElement("script");
-          script.src = "/static/workflow-editor.js?v=4";
+          script.src = "/static/workflow-editor.js?v=6";
           script.onload = resolve;
           script.onerror = () => { script.remove(); css.remove(); workflowEditorLoad = null; reject(new Error("Unable to load Workflow editor. Reload to try again.")); };
           document.head.appendChild(script);
@@ -10979,6 +10935,8 @@
         case "json":
         case "raw":
           return "json";
+        case "workflow":
+          return "workflow";
         case "github_issues":
           return "github_issues";
         default:
@@ -14636,7 +14594,7 @@
     loadInitial();
     startStream();
   </script>
-  <script src="/static/library-schedules.js"></script>
+
   <script src="/static/commit-signing.js"></script>
   <script src="/static/custom-library-sources.js"></script>
   <script src="/static/marked.umd.js?v=18.2.1"></script>

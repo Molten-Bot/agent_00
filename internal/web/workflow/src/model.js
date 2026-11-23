@@ -1,4 +1,7 @@
+import catalog from "./templates.json" with { type: "json" };
+export const workflowTemplates = catalog.templates;
 export const events = [
+  "schedule",
   "issue.opened",
   "issue.assigned",
   "issue.labeled",
@@ -10,57 +13,10 @@ export const events = [
   "pr.changes_requested",
   "pr.checks_failed",
 ];
-export function newWorkflow(
-  repository,
-  kind = "implement",
-  id = crypto.randomUUID(),
-) {
-  return {
-    id,
-    name: {
-      implement: "Implement issues",
-      review: "Review pull requests",
-      repair: "Repair failed checks",
-    }[kind],
-    repository,
-    enabled: false,
-    includeBacklog: false,
-    trigger: {
-      event: {
-        implement: "issue.labeled",
-        review: "pr.review_requested",
-        repair: "pr.checks_failed",
-      }[kind],
-      value:
-        kind === "implement"
-          ? "ready-for-agent"
-          : kind === "review"
-            ? "@me"
-            : "",
-    },
-    filters: { mode: "all", rules: [] },
-    task: {
-      kind,
-      instructions: {
-        implement: "Implement the issue and run the relevant tests.",
-        review:
-          "Review the pull request for correctness, regressions, and missing tests.",
-        repair:
-          "Read the failed checks and review feedback, fix the root cause, and run the relevant tests.",
-      }[kind],
-      assignCreator: false,
-      issueLinkMode: "reference",
-      draft: false,
-    },
-    reviewCycles: 0,
-    merge: {
-      enabled: false,
-      method: "squash",
-      requireApproval: true,
-      deleteBranch: false,
-    },
-    positions: {},
-  };
+export function newWorkflow(repository, kind = "implement", id = crypto.randomUUID()) {
+  const template = workflowTemplates.find((entry) => entry.id === kind);
+  if (!template) throw new Error(`Unknown workflow template: ${kind}`);
+  return { ...structuredClone(template.definition), id, repository, enabled: false, includeBacklog: false };
 }
 export function diagram(w) {
   const steps = [
@@ -68,7 +24,9 @@ export function diagram(w) {
     [
       "trigger",
       "Trigger",
-      w.trigger.event.replaceAll(".", " · ").replaceAll("_", " ") +
+      (w.trigger.event === "schedule"
+        ? `Every ${w.trigger.intervalHours} hours`
+        : w.trigger.event.replaceAll(".", " · ").replaceAll("_", " ")) +
         (w.trigger.value ? ` · ${w.trigger.value}` : ""),
     ],
     [
@@ -85,7 +43,9 @@ export function diagram(w) {
         : w.task.kind === "repair"
           ? "Repair PR"
           : "Agent task",
-      w.task.instructions,
+      w.task.libraryTaskName
+        ? `Library · ${w.task.libraryTaskName}`
+        : w.task.instructions,
     ],
     [
       "review",
@@ -102,6 +62,7 @@ export function diagram(w) {
         : "Leave the pull request for a human",
     ],
   ];
+  if (w.trigger.event === "schedule") steps.splice(2, 1);
   return {
     nodes: steps.map(([id, label, detail], index) => ({
       id,
@@ -109,14 +70,12 @@ export function diagram(w) {
       position: w.positions?.[id] || { x: 80, y: index * 145 },
       data: { label, detail, kind: id, enabled: w.enabled },
     })),
-    edges: steps
-      .slice(1)
-      .map(([id], index) => ({
-        id: `${steps[index][0]}-${id}`,
-        source: steps[index][0],
-        target: id,
-        type: "smoothstep",
-      })),
+    edges: steps.slice(1).map(([id], index) => ({
+      id: `${steps[index][0]}-${id}`,
+      source: steps[index][0],
+      target: id,
+      type: "smoothstep",
+    })),
   };
 }
 export function replaceDefinition(document, definition) {

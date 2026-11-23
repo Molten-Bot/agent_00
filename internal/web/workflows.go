@@ -8,6 +8,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
@@ -39,6 +40,10 @@ func (s Server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := workflow.Decode(data)
 	if err != nil {
+		workflowError(w, 400, err)
+		return
+	}
+	if err = s.validateWorkflowLibrary(d); err != nil {
 		workflowError(w, 400, err)
 		return
 	}
@@ -124,4 +129,68 @@ func (s Server) workflowIssueSettings(run config.Config) (ReviewSettingsState, b
 		}
 	}
 	return ReviewSettingsState{}, false, nil
+}
+
+func (s Server) handleWorkflowSchedules(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+	if s.Workflows == nil {
+		workflowError(w, 503, errors.New("workflow store unavailable"))
+		return
+	}
+	status, err := s.Workflows.ScheduleStatus()
+	if err != nil {
+		workflowError(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, status)
+}
+
+func (s Server) validateWorkflowLibrary(doc workflow.Document) error {
+	needed := false
+	for _, w := range doc.Workflows {
+		if w.Enabled && w.Task.LibraryTaskName != "" {
+			needed = true
+		}
+	}
+	if !needed {
+		return nil
+	}
+	if s.LoadLibraryTasks == nil {
+		return fmt.Errorf("library catalog unavailable")
+	}
+	tasks, err := s.LoadLibraryTasks()
+	if err != nil {
+		return err
+	}
+	for _, w := range doc.Workflows {
+		if !w.Enabled || w.Task.LibraryTaskName == "" {
+			continue
+		}
+		found := false
+		for _, task := range tasks {
+			if task.Name != w.Task.LibraryTaskName {
+				continue
+			}
+			found = true
+			if task.PromptContextRequired && strings.TrimSpace(w.Task.Instructions) == "" {
+				return fmt.Errorf("workflow %q: library prompt requires additional context", w.Name)
+			}
+			if task.RequiresNonDefaultBranch && !strings.HasPrefix(w.Trigger.Event, "pr.") && strings.TrimSpace(w.Task.BaseBranch) != "" {
+				guard := config.Config{RepoURL: "https://github.com/" + w.Repository + ".git", Prompt: "Validate library branch", LibraryTaskName: task.Name, RequiresNonDefaultBranch: true, BaseBranch: w.Task.BaseBranch}
+				guard.ApplyDefaults()
+				if err := guard.Validate(); err != nil {
+					return fmt.Errorf("workflow %q: %w", w.Name, err)
+				}
+			}
+			if task.RequiresNonDefaultBranch && !strings.HasPrefix(w.Trigger.Event, "pr.") && strings.TrimSpace(w.Task.BaseBranch) == "" {
+				return fmt.Errorf("workflow %q: library task requires a non-default base branch", w.Name)
+			}
+		}
+		if !found {
+			return fmt.Errorf("workflow %q: library task %q is unavailable", w.Name, w.Task.LibraryTaskName)
+		}
+	}
+	return nil
 }

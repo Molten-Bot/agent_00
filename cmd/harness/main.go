@@ -1032,21 +1032,7 @@ func runServer(args []string) int {
 			}
 		}
 
-		schedules := &localruntime.LibrarySchedules{
-			Path: cfg.RuntimeConfigPath, Init: cfg, Logf: daemonLogger,
-			Submit: func(reqCtx context.Context, runCfg config.Config) (string, error) {
-				id, err := enqueueLocalRun(reqCtx, runCfg, true, libraryScheduleSource, false)
-				if err == nil {
-					recordLibraryUsage(runCfg)
-				}
-				return id, err
-			},
-			Active: func(schedule localruntime.LibrarySchedule) bool {
-				return libraryScheduleActive(monitorBroker, schedule)
-			},
-		}
-		uiServer.LibrarySchedules = schedules
-		go schedules.Run(ctx)
+		// Scheduled tasks are now owned by the workflow engine.
 
 		customLibrarySources := &localruntime.CustomLibrarySources{
 			Path:   cfg.RuntimeConfigPath,
@@ -1060,7 +1046,7 @@ func runServer(args []string) int {
 		uiServer.CustomLibrarySources = customLibrarySources
 		go customLibrarySources.Run(ctx, time.Hour)
 		uiServer.SubmitLocalPrompt = func(reqCtx context.Context, body []byte) (string, error) {
-			runCfg, err := localruntime.ParseRunConfigJSON(body)
+			runCfg, err := parseWorkflowOrSelection(body)
 			if err != nil {
 				return "", fmt.Errorf("invalid run config: %w", err)
 			}
@@ -1068,7 +1054,7 @@ func runServer(args []string) int {
 			return enqueueLocalRun(reqCtx, runCfg, true, localSubmitSource, false)
 		}
 		uiServer.SubmitTaskRerun = func(reqCtx context.Context, _ string, body []byte, force bool) (string, error) {
-			runCfg, err := localruntime.ParseRunConfigJSON(body)
+			runCfg, err := parseWorkflowOrSelection(body)
 			if err != nil {
 				return "", fmt.Errorf("invalid run config: %w", err)
 			}
