@@ -933,6 +933,7 @@ func formatPRBody(body, prompt string, issue *GitHubIssueConfig, maxBytes int) s
 			issueLine = fmt.Sprintf("Closes #%d", issue.Number)
 		}
 	}
+	summary, hasIssueLine := preparePRBodySummary(summary, issueLine)
 	promptOmitted := false
 	if maxBytes > 0 {
 		summary = strings.ToValidUTF8(summary, "\uFFFD")
@@ -949,6 +950,7 @@ func formatPRBody(body, prompt string, issue *GitHubIssueConfig, maxBytes int) s
 		}
 		if len(summary) > summaryBudget {
 			summary = "[Custom PR summary omitted because it exceeds GitHub's body limit.]"
+			hasIssueLine = false
 		}
 		if summary != "" {
 			maxBytes -= len(summary) + 2
@@ -972,10 +974,33 @@ func formatPRBody(body, prompt string, issue *GitHubIssueConfig, maxBytes int) s
 	} else if promptOmitted {
 		sections = append(sections, prPromptOmissionNotice)
 	}
-	if issueLine != "" && !strings.Contains("\n"+summary+"\n", "\n"+issueLine+"\n") {
+	if issueLine != "" && !hasIssueLine {
 		sections = append(sections, issueLine)
 	}
 	return ensurePRBodyFooter(strings.Join(sections, "\n\n"))
+}
+
+func preparePRBodySummary(summary, issueLine string) (string, bool) {
+	var fence string
+	var hasIssueLine bool
+	atSectionStart := true
+	for rest := summary; rest != ""; {
+		line, after, _ := strings.Cut(rest, "\n")
+		if fence == "" && issueLine != "" && line == issueLine {
+			if atSectionStart && after == "" {
+				// Keep a trailing issue section after the prompt on repeated normalization.
+				return strings.TrimRight(summary[:len(summary)-len(rest)], "\n"), hasIssueLine
+			}
+			hasIssueLine = true
+		}
+		fence = prSummaryFenceAfterLine(fence, line)
+		atSectionStart = line == ""
+		rest = after
+	}
+	if fence != "" {
+		summary += "\n" + fence
+	}
+	return summary, hasIssueLine
 }
 
 const prPromptOmissionNotice = "[Original task prompt omitted because it exceeds GitHub's body limit.]"
@@ -1030,20 +1055,26 @@ func findPRPromptOpening(body string) (start int, content, fence string, found b
 			}
 		}
 		line, after, _ := strings.Cut(rest, "\n")
-		if match := prSummaryFenceLineRE.FindStringSubmatch(line); match != nil {
-			delimiter, info := match[1], match[2]
-			if summaryFence == "" {
-				if delimiter[0] == '~' || !strings.Contains(info, "`") {
-					summaryFence = delimiter
-				}
-			} else if strings.HasPrefix(delimiter, summaryFence) && strings.TrimSpace(info) == "" {
-				summaryFence = ""
-			}
-		}
+		summaryFence = prSummaryFenceAfterLine(summaryFence, line)
 		atSectionStart = line == ""
 		rest = after
 	}
 	return 0, "", "", false
+}
+
+func prSummaryFenceAfterLine(fence, line string) string {
+	match := prSummaryFenceLineRE.FindStringSubmatch(line)
+	if match == nil {
+		return fence
+	}
+	delimiter, info := match[1], match[2]
+	if fence == "" && (delimiter[0] == '~' || !strings.Contains(info, "`")) {
+		return delimiter
+	}
+	if fence != "" && strings.HasPrefix(delimiter, fence) && strings.TrimSpace(info) == "" {
+		return ""
+	}
+	return fence
 }
 
 func afterPRPromptFence(body, fence, prompt string) (string, bool) {
@@ -1070,7 +1101,8 @@ func afterPRPromptFence(body, fence, prompt string) (string, bool) {
 		line = strings.TrimRight(line, " \t\r")
 		if line == fence && innerFenceLength == 0 {
 			nextLine, _, _ := strings.Cut(after, "\n")
-			if !legacy || !more || after == "" || (!previousLineBlank && strings.TrimSpace(nextLine) == "") {
+			sectionEnd := !previousLineBlank && strings.TrimSpace(nextLine) == ""
+			if !legacy || !more || after == "" || (sectionEnd && !legacyPromptHasBareCodeClose(after, fence)) {
 				return after, true
 			}
 			if !foundFallback {
@@ -1098,6 +1130,24 @@ func afterPRPromptFence(body, fence, prompt string) (string, bool) {
 		previousLineBlank = strings.TrimSpace(line) == ""
 		body = after
 	}
+}
+
+func legacyPromptHasBareCodeClose(body, fence string) bool {
+	previousLineBlank := true
+	for body != "" {
+		line, after, _ := strings.Cut(body, "\n")
+		if prSummaryFenceAfterLine("", line) != "" {
+			// Prefer the section break unless this fence looks like the end of
+			// an example followed by more prompt text or the wrapper's close.
+			nextLine, _, _ := strings.Cut(after, "\n")
+			nextLine = strings.TrimRight(nextLine, " \t\r")
+			return !previousLineBlank && strings.TrimRight(line, " \t\r") == fence &&
+				(nextLine == "" || nextLine == fence)
+		}
+		previousLineBlank = strings.TrimSpace(line) == ""
+		body = after
+	}
+	return false
 }
 
 func summarize(s string, max int) string {

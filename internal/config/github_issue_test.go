@@ -132,6 +132,8 @@ func TestNormalizePRBodyPreservesFencedSummaryAfterLegacyPrompt(t *testing.T) {
 		{"stale prompt", "Old instructions.", prompt},
 		{"matching prompt with unlabeled code", bareFencedPrompt, bareFencedPrompt},
 		{"stale prompt with unlabeled code", bareFencedPrompt, prompt},
+		{"stale prompt with unlabeled code after prose", "Run the example:\n```\n\necho stale\n```\n\nStale final line.", prompt},
+		{"stale prompt ending in unlabeled code after prose", "Run the example:\n```\n\necho stale\n```", prompt},
 		{"stale prompt with multiple unlabeled blocks", bareFencedPrompt + "\n```\nsecond example\n```\n\n```\n\nthird example\n```", prompt},
 		{"stale prompt with code", fencedPrompt, prompt},
 	} {
@@ -142,6 +144,11 @@ func TestNormalizePRBodyPreservesFencedSummaryAfterLegacyPrompt(t *testing.T) {
 				t.Errorf("normalized body = %q, want %q", got, want)
 			}
 		})
+	}
+	attachedSummary := strings.Replace(summary, "\n\n```", "\n```", 1)
+	body := prBodyPromptHeading + "\n```text\nOld instructions.\n```\n\n" + attachedSummary
+	if got, want := NormalizePRBody(body, prompt), NormalizePRBody(attachedSummary, prompt); got != want {
+		t.Errorf("normalized body = %q, want %q", got, want)
 	}
 }
 
@@ -161,6 +168,32 @@ func TestNormalizePRBodyPreservesPromptExamplesInFencedSummary(t *testing.T) {
 			}
 			if got := NormalizePRBody(want, prompt); got != want {
 				t.Fatalf("second normalization changed body to %q", got)
+			}
+		})
+	}
+}
+
+func TestNormalizePRBodyClosesSummaryFenceBeforeGeneratedSections(t *testing.T) {
+	t.Parallel()
+
+	const prompt = "Updated instructions."
+	const issueLine = "Closes #17"
+	issue := &GitHubIssueConfig{Number: 17, LinkMode: GitHubIssueLinkClose}
+	for _, fence := range []string{"```", "`````", "~~~~"} {
+		t.Run(fence, func(t *testing.T) {
+			summary := "Custom summary.\n" + fence + "text\nExample output.\n" + issueLine
+			want := prBodyGeneratedByLine + "\n\n" + prBodyDefaultSummary + "\n\n" + summary + "\n" + fence +
+				"\n\n" + prBodyPromptHeading + "\n```text\n" + prompt + "\n```"
+			normalized := NormalizePRBody(summary, prompt)
+			if normalized != want+"\n\n"+prBodyFooter {
+				t.Fatalf("normalized body = %q, want closed summary fence before prompt and footer", normalized)
+			}
+			want += "\n\n" + issueLine + "\n\n" + prBodyFooter
+			if got := NormalizePRBodyForGitHubIssue(normalized, prompt, issue); got != want {
+				t.Fatalf("issue body = %q, want %q", got, want)
+			}
+			if got := NormalizePRBodyForGitHubIssue(want, prompt, issue); got != want {
+				t.Fatalf("second issue normalization changed body to %q", got)
 			}
 		})
 	}
