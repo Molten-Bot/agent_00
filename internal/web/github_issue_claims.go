@@ -366,6 +366,10 @@ func (s Server) blockIssueClaim(record localruntime.IssueClaimRecord, cause erro
 				blockStaleIssueClaim(current)
 			} else if s.IssueRecovery != nil {
 				s.scheduleIssueRetry(current, cause)
+				var rate *issueRateLimitError
+				if current.UnlockPending && errors.As(cause, &rate) && rate.RetryAt.After(current.NextUnlockAt) {
+					current.NextUnlockAt = rate.RetryAt
+				}
 			}
 		}
 		return nil
@@ -612,6 +616,7 @@ func (s Server) handleIssueAutomationStatus(w http.ResponseWriter, r *http.Reque
 			entry["runFailures"] = issueRunFailures(record)
 			entry["recoveryFailures"] = record.Failures
 			entry["nextAttemptAt"] = record.NextAttemptAt
+			entry["nextUnlockAt"] = record.NextUnlockAt
 			entry["unlockPending"] = record.UnlockPending
 			entry["prUrl"] = record.PRURL
 			entry["incident"] = record.Incident

@@ -613,6 +613,32 @@ func expireIssueRetry(t *testing.T, s Server, id string) {
 	}
 }
 
+func TestIssueRecoveryDefersCleanupAfterLabelAdmissionRateLimit(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, f := recoveryServer(t)
+	retryAt := time.Now().UTC().Truncate(time.Second).Add(2 * time.Hour)
+	requests := 0
+	s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		requests++
+		if strings.Contains(strings.Join(cmd.Args, " "), "--method POST repos/acme/repo/issues/17/labels") {
+			return execx.Result{Stdout: "HTTP/2.0 429 Too Many Requests\r\nRetry-After: " + retryAt.Format(http.TimeFormat) + "\r\n\r\n"}, errors.New("rate limited")
+		}
+		return f.Run(ctx, cmd)
+	})
+	s.pollGitHubIssueAutoStart(ctx)
+	s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+	waiting := latestRecoveryRecord(t, s)
+	before := requests
+	if err := s.ReconcileIssueWork(ctx); err != nil || requests != before {
+		t.Fatalf("reconciliation called GitHub before Retry-After: requests=%d, error=%v", requests-before, err)
+	}
+	if !waiting.UnlockPending || !waiting.NextAttemptAt.Equal(retryAt) || !waiting.NextUnlockAt.Equal(retryAt) ||
+		waiting.UnlockFailures != 0 || len(f.submissions) != 0 {
+		t.Fatalf("label admission did not persist both deadlines: %+v", waiting)
+	}
+}
+
 func TestIssueRecoveryHonorsLabelCleanupRetryAfter(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -646,7 +672,32 @@ func TestIssueRecoveryHonorsLabelCleanupRetryAfter(t *testing.T) {
 		!got.NextAttemptAt.Equal(waiting.NextAttemptAt) || got.Failures != waiting.Failures {
 		t.Fatalf("cleanup failure changed dispatch backoff or lost Retry-After: %+v", got)
 	}
-	expireIssueRetry(t, s, waiting.ID)
+	if err := s.IssueClaims.Update(waiting.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.NextAttemptAt = time.Time{}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/github/automation", nil))
+	var status struct {
+		Claims []struct {
+			ID            string
+			NextAttemptAt time.Time
+			NextUnlockAt  time.Time
+			UnlockPending bool
+		}
+	}
+	if response.Code != http.StatusOK {
+		t.Fatalf("automation status = %d: %s", response.Code, response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Claims) != 1 || status.Claims[0].ID != waiting.ID || !status.Claims[0].NextAttemptAt.IsZero() ||
+		!status.Claims[0].UnlockPending || !status.Claims[0].NextUnlockAt.Equal(retryAt) {
+		t.Fatalf("automation status omitted independent cleanup deadline: %s", response.Body.String())
+	}
 	before := requests
 	if err := s.ReconcileIssueWork(ctx); err != nil || requests != before {
 		t.Fatalf("reconciliation called GitHub during cleanup cooldown: requests=%d, error=%v", requests-before, err)
