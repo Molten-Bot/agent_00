@@ -48,7 +48,7 @@ var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype 
   <script src="/static/analytics.js"></script>
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB" referrerpolicy="no-referrer"></script>
   <script>window.trackAnalyticsPageView?.("/chat", { app_display: "chat" });</script>
-  <script src="/static/lucide.min.js"></script>
+  <script src="/static/lucide.min.js?v=1.78.0"></script>
   <script src="/static/site-header.js"></script>
   <link rel="stylesheet" href="/static/style.css">
 </head>

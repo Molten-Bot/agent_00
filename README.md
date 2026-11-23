@@ -514,6 +514,13 @@ go build -o bin/harness ./cmd/harness
 The editor is loaded only when Workflow opens. No Node server or runtime CDN is
 required. Generated assets and dependency license notices live in `internal/web/static`.
 
+Shared browser libraries (Lucide, Marked, xterm, and Emoji Mart) are pinned in
+`internal/web/vendor/package.json` and its lockfile. After updating those pins, run
+`npm ci --prefix internal/web/vendor` and `npm run build --prefix internal/web/vendor`
+to refresh their vendored browser assets and license notices. Neither frontend
+package directory is required at runtime.
+
+
 
 The web UI sends manual GA4 page views and engagement events. Keep Enhanced
 Measurement disabled on its GA4 web stream to prevent duplicate history-based
