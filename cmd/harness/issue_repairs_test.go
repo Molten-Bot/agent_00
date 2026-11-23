@@ -182,9 +182,14 @@ func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
 		attempt, number int
 		state           string
 		legacy, skip    bool
+		sourceFulfilled bool
+		admissionRetry  bool
 	}{
 		{name: "legacy source log", attempt: 3, number: 17, state: "fulfilled", legacy: true, skip: true},
 		{name: "explicit source claim", attempt: 3, number: 17, state: "fulfilled", skip: true},
+		{name: "source claim fulfilled", attempt: 3, number: 17, state: "incident", sourceFulfilled: true, skip: true},
+		{name: "newer attempt fulfilled after enqueue rejection", attempt: 3, number: 17, state: "fulfilled", admissionRetry: true, skip: true},
+		{name: "source fulfilled after enqueue rejection", attempt: 3, number: 17, state: "incident", sourceFulfilled: true, admissionRetry: true, skip: true},
 		{name: "different issue", attempt: 3, number: 18, state: "fulfilled"},
 		{name: "older fulfillment", attempt: 1, number: 17, state: "fulfilled"},
 		{name: "unfulfilled retry", attempt: 3, number: 17, state: "incident"},
@@ -206,10 +211,6 @@ func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
 			if err := q.store.Save(record); err != nil {
 				t.Fatal(err)
 			}
-			if err := claims.Save(source); err != nil {
-				t.Fatal(err)
-			}
-
 			other := source
 			other.ID = strings.Repeat("c", 32)
 			other.RequestID = "issue-" + other.ID
@@ -225,23 +226,46 @@ func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
 			if other.State == "fulfilled" {
 				other.VerifiedAt = time.Now()
 			}
+			calls := 0
+			enqueue := func(context.Context, config.Config, bool, string, bool) (string, error) {
+				calls++
+				return "", errors.New("admission unavailable")
+			}
+			if tc.admissionRetry {
+				if err := claims.Save(source); err != nil {
+					t.Fatal(err)
+				}
+				q.reconcile(t.Context(), enqueue)
+				repairs, err := q.store.List()
+				if err != nil || len(repairs) != 1 || calls != 1 || repairs[0].State != "queued" || repairs[0].NextAttemptAt.IsZero() {
+					t.Fatalf("reopened repair was not queued for retry: calls=%d repairs=%+v err=%v", calls, repairs, err)
+				}
+				record = repairs[0]
+				record.NextAttemptAt = time.Time{}
+				if err := q.store.Save(record); err != nil {
+					t.Fatal(err)
+				}
+				calls = 0
+			}
+			if tc.sourceFulfilled {
+				source.State = "fulfilled"
+				source.VerifiedAt = time.Now()
+			}
+			if err := claims.Save(source); err != nil {
+				t.Fatal(err)
+			}
 			if err := claims.Save(other); err != nil {
 				t.Fatal(err)
 			}
-
-			calls := 0
 			for range 2 {
-				q.reconcile(t.Context(), func(context.Context, config.Config, bool, string, bool) (string, error) {
-					calls++
-					return "", errors.New("unexpected dispatch")
-				})
+				q.reconcile(t.Context(), enqueue)
 			}
 			repairs, err := q.store.List()
 			if err != nil || len(repairs) != 1 {
 				t.Fatalf("repair records = %d, err = %v", len(repairs), err)
 			}
 			if tc.skip {
-				if calls != 0 || repairs[0].State != "blocked" || repairs[0].Error != record.Error {
+				if calls != 0 || repairs[0].State != "blocked" || repairs[0].Error != issueRepairSourceFulfilledReason {
 					t.Fatalf("superseded repair changed or dispatched: calls=%d state=%q error=%q", calls, repairs[0].State, repairs[0].Error)
 				}
 			} else if calls != 1 || repairs[0].State != "queued" {

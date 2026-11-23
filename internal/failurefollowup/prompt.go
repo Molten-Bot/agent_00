@@ -109,6 +109,7 @@ var pendingProductionRolloutSummary = regexp.MustCompile(`^failure:\s*(?:(?:the 
 var outstandingProvisioning = regexp.MustCompile(` (?:remains?|are|is)(?: still)? (?:outstanding|pending)$`)
 var externalProvisioningRequired = regexp.MustCompile(` (?:still )?requires? external provisioning$`)
 var provisioningListSeparator = regexp.MustCompile(`, (?:and )?| and `)
+var legacyRolloutPrerequisites = regexp.MustCompile(`^infrastructure changes, shared secrets manager key, and live verification (?:remains?|are)(?: still)? (?:outstanding|pending)$`)
 
 const iamPrerequisite = `(?:the )?(?:production )?(?:scoped )?iam`
 const secretPrerequisite = `(?:the )?(?:production )?(?:shared )?secrets manager`
@@ -117,6 +118,7 @@ var iamProvisioning = regexp.MustCompile(`^` + iamPrerequisite + ` (?:access|app
 var secretProvisioning = regexp.MustCompile(`^` + secretPrerequisite + ` (?:(?:key|secret) )?provisioning$`)
 var iamConfiguration = regexp.MustCompile(`^` + iamPrerequisite + `(?: (?:configuration|permissions?|polic(?:y|ies)|roles?|setup))?$`)
 var secretConfiguration = regexp.MustCompile(`^(?:` + secretPrerequisite + ` (?:configuration|keys?|secrets?|setup)|(?:the )?(?:production )?shared reference keys?)$`)
+var infrastructureResource = regexp.MustCompile(`^(?:the )?(?:production )?(?:infrastructure changes|(?:cloud |service )?accounts?|cloud resources?|clusters?|credentials?|(?:tls |ssl )?certificates?|(?:database|network) (?:access|credentials)|databases?|dns(?: (?:delegation|records?|zones?))?|firewall rules?|kms keys?|(?:private )?networks?|subnets?|vpcs?|vpc endpoints?)$`)
 var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* (?:flags?|evidence switches?) defaults?(?: to)? (?:off|disabled))$`)
 var unavailableContainerValidation = regexp.MustCompile(`^docker-backed (?:[a-z0-9_-]+ )*integration(?: tests?)? could not run because no container runtime was available$`)
 var rolloutProgress = regexp.MustCompile(`^(?:added|implemented|updated|wired) \S`)
@@ -571,7 +573,25 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	if len(statements) == 0 || HasValidationFailureEvidence(details) || HasRolloutFailureOutcome(details) {
 		return false
 	}
-	if !hasExternalRolloutPrerequisite(strings.TrimSpace(statements[0])) || !rolloutStatusOnly(statements[1:]) {
+	first := strings.TrimSpace(statements[0])
+	confirmed := hasExternalRolloutPrerequisite(first)
+	if !confirmed && !legacyRolloutPrerequisites.MatchString(first) {
+		return false
+	}
+	// A legacy status line can describe pending repository work. Require a
+	// separate provisioning statement before treating it as a handoff.
+	checkStatements := func(statements []string) bool {
+		for _, statement := range statements {
+			statement = strings.TrimSpace(statement)
+			if !confirmed && hasExternalRolloutPrerequisite(statement) {
+				confirmed = true
+			} else if statement != "" && !disabledRolloutStatus.MatchString(statement) && !unavailableContainerValidation.MatchString(statement) {
+				return false
+			}
+		}
+		return true
+	}
+	if !checkStatements(statements[1:]) {
 		return false
 	}
 	// Completion notes can include filenames and versions. Match them as
@@ -597,11 +617,11 @@ func IsExternalRolloutFailure(summary, details string) bool {
 			inValidation = false
 		case isPassingRolloutValidation(line, inValidation):
 			progressPending = false
-		case !rolloutStatusOnly(rolloutStatements(line)):
+		case !checkStatements(rolloutStatements(line)):
 			return false
 		}
 	}
-	return !progressPending
+	return confirmed && !progressPending
 }
 
 func hasExternalRolloutPrerequisite(statement string) bool {
@@ -613,20 +633,14 @@ func hasExternalRolloutPrerequisite(statement string) bool {
 	if predicate == nil {
 		return false
 	}
-	prerequisites := statement[:predicate[0]]
-	// This legacy report listed infrastructure changes elsewhere, shared key
-	// provisioning, and live verification as a single handoff.
-	if prerequisites == "infrastructure changes, shared secrets manager key, and live verification" {
-		return true
-	}
 	// Other infrastructure configuration and resource names can refer to
 	// repository edits. Require explicit external provisioning for those items.
 	var confirmedPrerequisite bool
-	for _, item := range provisioningListSeparator.Split(prerequisites, -1) {
+	for _, item := range provisioningListSeparator.Split(statement[:predicate[0]], -1) {
 		switch {
 		case iamProvisioning.MatchString(item), secretProvisioning.MatchString(item):
 			confirmedPrerequisite = true
-		case explicitExternal && (iamConfiguration.MatchString(item) || secretConfiguration.MatchString(item) || item == "infrastructure changes"):
+		case explicitExternal && (iamConfiguration.MatchString(item) || secretConfiguration.MatchString(item) || infrastructureResource.MatchString(item)):
 			confirmedPrerequisite = true
 		case item == "deployment", item == "deployed source verification", item == "live source verification", item == "live verification":
 		default:
@@ -689,16 +703,6 @@ func rolloutStatements(line string) []string {
 	return strings.FieldsFunc(line, func(r rune) bool {
 		return r == '.' || r == '!' || r == '?' || r == '\r'
 	})
-}
-
-func rolloutStatusOnly(statements []string) bool {
-	for _, extra := range statements {
-		if extra = strings.TrimSpace(extra); extra != "" &&
-			!disabledRolloutStatus.MatchString(extra) && !unavailableContainerValidation.MatchString(extra) {
-			return false
-		}
-	}
-	return true
 }
 
 func isOpenDependencyFailure(summary, detail string) bool {

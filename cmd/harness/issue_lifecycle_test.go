@@ -279,6 +279,7 @@ func TestIssueRetentionAfterRetryWithBlockedRepair(t *testing.T) {
 		remove       bool
 	}{
 		{name: "legacy rollout skip", reason: failurefollowup.ExternalRolloutPrerequisitesReason, remove: true},
+		{name: "repair skipped after issue fulfillment", reason: issueRepairSourceFulfilledReason, remove: true},
 		{name: "previously started rollout repair", reason: failurefollowup.ExternalRolloutPrerequisitesReason, started: true},
 		{name: "other blocked repair", reason: localruntime.ErrIssueOwnershipChanged.Error()},
 	} {
@@ -410,7 +411,8 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 		{"dispatch intent without a claim link", "running", "", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
 		{"joined provisioning and flag status", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding | API and MCP flags default to off.", true},
 		{"provisioning with unavailable integration validation", "queued", "50", "Scoped IAM, shared reference key, and deployment still require external provisioning. API flags default off. Docker-backed integration tests could not run because no container runtime was available.", true},
-		{"verified legacy rollout prerequisites", "queued", "50", "Infrastructure changes, shared Secrets Manager key, and live verification remain pending. API and MCP evidence switches default to off.", true},
+		{"uncorroborated legacy rollout prerequisites", "queued", "50", "Infrastructure changes, shared Secrets Manager key, and live verification remain pending. API and MCP evidence switches default to off.", false},
+		{"corroborated legacy rollout prerequisites", "queued", "50", "Infrastructure changes, shared Secrets Manager key, and live verification remain pending. API and MCP evidence switches default to off. The shared Secrets Manager key requires external provisioning.", true},
 		{"infrastructure configuration work", "queued", "50", "IAM policies and Secrets Manager configuration still require infrastructure work.", false},
 		{"ambiguous IAM and secret configuration", "queued", "50", "IAM setup and Secrets Manager configuration are outstanding.", false},
 		{"actionable", "queued", "50", "IAM approval and Secrets Manager provisioning are complete, but local fixes remain outstanding.", false},

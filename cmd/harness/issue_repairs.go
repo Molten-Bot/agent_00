@@ -24,6 +24,7 @@ import (
 )
 
 const issueRepairSource = "issue_repair"
+const issueRepairSourceFulfilledReason = "source issue already fulfilled"
 
 type issueRepairContextKey struct{}
 type issueRepairWork struct {
@@ -58,10 +59,10 @@ func (q *issueRepairQueue) capture(_ context.Context, issue localruntime.IssueCl
 		}
 	}
 	if shared != nil {
-		if shared.State != "blocked" || !isIssueRepairDependencyBlock(shared.Error) || isIssueRepairSource(*shared, issue) {
+		if shared.State != "blocked" || !isIssueRepairClaimBlock(shared.Error) || isIssueRepairSource(*shared, issue) {
 			return shared.RequestID, nil
 		}
-		// The source claim's dependency does not block this claim's repair.
+		// A blocker specific to the source claim does not apply to this claim.
 		id = claimRepairID
 	}
 	if err != nil {
@@ -103,7 +104,7 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 	if err != nil {
 		q.logf("event=issue_repairs status=error err=%q", err)
 	}
-	dependencyBlocked := make(map[string]localruntime.IssueRepairRecord)
+	claimBlocked := make(map[string]localruntime.IssueRepairRecord)
 	for _, record := range records {
 		if record.PRURL != "" && record.State != "completed" && !time.Now().Before(record.NextAttemptAt) {
 			if err := q.verifyPR(record); err == nil {
@@ -118,8 +119,8 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 			}
 		}
 		if issueRepairDispatchFinished(record) || time.Now().Before(record.NextAttemptAt) {
-			if record.State == "blocked" && isIssueRepairDependencyBlock(record.Error) {
-				dependencyBlocked[record.RequestID] = record
+			if record.State == "blocked" && isIssueRepairClaimBlock(record.Error) {
+				claimBlocked[record.RequestID] = record
 			}
 			continue
 		}
@@ -170,7 +171,7 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 		}
 		if blockedReason != "" {
 			if record.State == "blocked" && record.Error == blockedReason {
-				dependencyBlocked[record.RequestID] = record
+				claimBlocked[record.RequestID] = record
 				lock.Close()
 				continue
 			}
@@ -178,8 +179,8 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 			record.Error = blockedReason
 			if err := q.store.Save(record); err != nil {
 				q.logf("event=issue_repair_save status=error err=%q", err)
-			} else if isIssueRepairDependencyBlock(blockedReason) {
-				dependencyBlocked[record.RequestID] = record
+			} else if isIssueRepairClaimBlock(blockedReason) {
+				claimBlocked[record.RequestID] = record
 			}
 			lock.Close()
 			continue
@@ -208,7 +209,7 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 			}
 		}
 	}
-	q.releaseSharedBlockedRepairReceipts(dependencyBlocked)
+	q.releaseSharedBlockedRepairReceipts(claimBlocked)
 	if err := retainIssueEvidence(q.claims, q.store, q.logRoot, time.Now()); err != nil {
 		q.logf("event=issue_evidence_retention status=error err=%q", err)
 	}
@@ -225,6 +226,10 @@ func isSkippedRolloutRepair(record localruntime.IssueRepairRecord) bool {
 
 func isIssueRepairDependencyBlock(reason string) bool {
 	return reason == failurefollowup.OpenDependencyReason || reason == failurefollowup.UnmergedDependencyReason || reason == failurefollowup.ExternalRolloutPrerequisitesReason
+}
+
+func isIssueRepairClaimBlock(reason string) bool {
+	return reason == issueRepairSourceFulfilledReason || isIssueRepairDependencyBlock(reason)
 }
 
 func (q *issueRepairQueue) releaseSharedBlockedRepairReceipts(blocked map[string]localruntime.IssueRepairRecord) {
@@ -275,10 +280,10 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 			if !isIssueRepairSource(record, issue) {
 				continue
 			}
-			// Only a known source can establish which issue supersedes a
-			// skipped repair. Legacy receipts may be shared across issues.
-			if isSkippedRolloutRepair(record) && newerIssueAttemptFulfilled(issue, issues) {
-				return failurefollowup.ExternalRolloutPrerequisitesReason, nil
+			// Admission errors return reopened repairs to the queue. Recheck
+			// fulfillment on every dispatch of an unstarted repair with a known source.
+			if !record.Started && record.PRURL == "" && (issue.State == "fulfilled" || newerIssueAttemptFulfilled(issue, issues)) {
+				return issueRepairSourceFulfilledReason, nil
 			}
 		} else if issue.RepairRequestID != record.RequestID && issueRepairID(issue) != record.ID {
 			continue
@@ -528,9 +533,8 @@ func retainIssueEvidence(claims *localruntime.IssueClaimStore, repairs *localrun
 		if repair.State == "completed" {
 			continue
 		}
-		// A rollout repair skipped before dispatch has no unresolved repair work.
-		// Its issue evidence still follows the verified retry retention window.
-		if isSkippedRolloutRepair(repair) {
+		// Repairs skipped before dispatch follow the fulfilled issue's retention window.
+		if isSkippedRolloutRepair(repair) || (repair.State == "blocked" && repair.Error == issueRepairSourceFulfilledReason) {
 			continue
 		}
 		blockedRepairs[repair.RequestID] = true
