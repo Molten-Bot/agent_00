@@ -78,6 +78,7 @@ var ErrIssueOwnershipChanged = errors.New("issue ownership changed; start the is
 const (
 	IssueIncidentUnmergedDependency = "unmerged_dependency"
 	IssueIncidentOpenDependency     = "open_dependency"
+	IssueIncidentExternalRollout    = "external_rollout_prerequisites"
 )
 
 // LegacyIssueOwnershipFailure is the error rendered by older binaries that wrapped a nil error.

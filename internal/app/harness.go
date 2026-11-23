@@ -6845,7 +6845,20 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 	if errorDetail == "" || strings.Contains(strings.ToLower(detail), strings.ToLower(errorDetail)) {
 		return detail, detail
 	}
-	return detail + " " + codexDisplayErrorDetail(errorDetail), detail + "\n" + errorDetail
+	display = codexDisplayErrorDetail(errorDetail)
+	full = detail + "\n" + errorDetail
+	if strings.HasSuffix(display, truncatedErrorDetails) {
+		// Keep a complete blocker statement in the persisted error if the
+		// rest of the report only confirms progress or unavailable validation.
+		if details, ok := strings.CutPrefix(errorDetail, "Error details:"); ok {
+			first, _, _ := strings.Cut(strings.TrimSpace(details), "\n")
+			if len(first) <= maxErrorDetailChars && failurefollowup.IsExternalRolloutFailure(detail, first) &&
+				failurefollowup.IsExternalRolloutFailure(detail, details) {
+				display = "Error details: " + first
+			}
+		}
+	}
+	return detail + " " + display, full
 }
 
 func isNonFatalValidationToolingFailure(detail string, res execx.Result) bool {
@@ -7079,12 +7092,10 @@ func hasUnexplainedValidationExit(text string) bool {
 
 var smokeFallbackPass = regexp.MustCompile(`(?:^|[.;!]\s+)(?:the )?(?:smoke fallback|fallback(?: smoke(?: check| test)?)?) (?:passed|succeeded)(?: using [^\s,.;!]+)?(?:[.!]?$|[.;!]\s+)`)
 var smokeCheckFailure = regexp.MustCompile(`\b(?:smoke (?:fallback|check|test)|fallback smoke(?: check| test)?|(?:health |readiness )?endpoint) (?:failed|did not pass|timed out)\b`)
-var smokeHTTPFailure = regexp.MustCompile(`\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b`)
-
 var expectedSmokeHTTPStatus = regexp.MustCompile(`\bexpected http(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b|\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000) (?:as expected\b|\(expected\))`)
 
 func smokeFallbackSucceeded(text string) bool {
-	if smokeHTTPFailure.MatchString(expectedSmokeHTTPStatus.ReplaceAllString(text, "")) || smokeCheckFailure.MatchString(text) {
+	if failurefollowup.HasHTTPFailureStatus(expectedSmokeHTTPStatus.ReplaceAllString(text, "")) || smokeCheckFailure.MatchString(text) {
 		return false
 	}
 	confirmed := false
@@ -7341,16 +7352,14 @@ func codexErrorDetailLines(lines []string, stopAtSection bool, detailsHeadingLev
 		}
 		lower := strings.ToLower(agentFailureFieldLine(trimmed))
 		if stopAtSection && fence == "" && isAgentReportSection(trimmed, lower, detailsHeadingLevel) {
-			// A plain field has no heading level. Use diagnostic evidence to
-			// distinguish a nested Validation heading from a sibling section.
+			// Validation sections can confirm progress or report a failure, even
+			// when they follow the error details or another validation section.
 			level := markdownHeadingLevel(trimmed)
 			label, inline, _ := strings.Cut(lower, ":")
-			if detailsHeadingLevel == 0 && strings.TrimRight(label, "*_# ") == "validation" {
+			if failurefollowup.IsRolloutValidationSection(label) {
 				subsection := codexErrorDetailLines(lines[i+1:], true, level)
 				body := strings.TrimSpace(inline) + "\n" + strings.Join(subsection, "\n")
-				lowerBody := strings.ToLower(body)
-				if reportedValidationFailure.MatchString(lowerBody) ||
-					failurefollowup.HasValidationFailureEvidence(body) || smokeHTTPFailure.MatchString(lowerBody) {
+				if hasReportedValidationEvidence(body) {
 					details = append(details, trimmed)
 					details = append(details, subsection...)
 				}
@@ -7367,6 +7376,21 @@ func codexErrorDetailLines(lines []string, stopAtSection bool, detailsHeadingLev
 
 var reportedValidationFailure = regexp.MustCompile(`\b(?:tests?|checks?|validation) (?:still )?(?:fail(?:s|ed|ing)?|did not pass)\b`)
 
+func hasReportedValidationEvidence(body string) bool {
+	body = strings.ToLower(body)
+	if reportedValidationFailure.MatchString(body) || smokeCheckFailure.MatchString(body) || validationCommandExit.MatchString(body) ||
+		failurefollowup.HasValidationTimeout(body) || failurefollowup.HasValidationFailureEvidence(body) ||
+		failurefollowup.HasRolloutFailureOutcome(body) || failurefollowup.HasHTTPFailureStatus(body) {
+		return true
+	}
+	for _, line := range strings.Split(body, "\n") {
+		if failurefollowup.IsPassingRolloutValidationCheck(line) {
+			return true
+		}
+	}
+	return false
+}
+
 func markdownHeadingLevel(line string) int {
 	title := strings.TrimLeft(line, "#")
 	if level := len(line) - len(title); level >= 1 && level <= 6 && (title == "" || title[0] == ' ' || title[0] == '\t') {
@@ -7382,8 +7406,11 @@ func isAgentReportSection(line, field string, detailsHeadingLevel int) bool {
 		return level <= detailsHeadingLevel
 	}
 	label, _, _ := strings.Cut(field, ":")
+	if failurefollowup.IsRolloutValidationSection(label) {
+		return true
+	}
 	switch strings.TrimRight(label, "*_# ") {
-	case "failure", "error details", "resolved issue", "validation", "alternative validation", "verification", "unblock path":
+	case "failure", "error details", "resolved issue", "unblock path":
 		return true
 	case "next steps", "notes":
 		return markdownHeadingLevel(line) > 0
@@ -7395,10 +7422,41 @@ func isAgentReportSection(line, field string, detailsHeadingLevel int) bool {
 // Keep omissions visible to downstream repair classifiers that receive the
 // displayed error rather than the complete report.
 const truncatedErrorDetails = " | [error details truncated]"
+const maxErrorDetailChars = 320
+
+// IsExternalRolloutFailureFromStdout rechecks a legacy truncated agent error
+// against its original stdout. Read stdout only for a truncated agent report.
+func IsExternalRolloutFailureFromStdout(failure string, readStdout func(stage string) string) bool {
+	failure, _, _ = strings.Cut(failure, "\npersist task logs: ")
+	if !strings.HasSuffix(failure, truncatedErrorDetails) {
+		return false
+	}
+	stage, report, _ := strings.Cut(failure, ": ")
+	if stage != agentruntime.HarnessCodex && stage != agentruntime.HarnessClaude {
+		return false
+	}
+	if !strings.HasPrefix(report, stage+" reported failure: ") {
+		return false
+	}
+	stdout := readStdout(stage)
+	failed, summary := codexReportedFailureInOutput(stdout, true)
+	if !failed {
+		return false
+	}
+	detail := codexExtractErrorDetail(stdout)
+	details, ok := strings.CutPrefix(detail, "Error details:")
+	if !ok {
+		return false
+	}
+	// Reproduce the legacy display before applying the classification to the
+	// full report. The redacted repair prompt may be the only stored error.
+	legacy := stage + ": " + stage + " reported failure: " + summary + " " + codexDisplayErrorDetail(detail)
+	return (legacy == failure || failurefollowup.RedactFailureDetail(legacy) == failure) &&
+		failurefollowup.IsExternalRolloutFailure(summary, details)
+}
 
 func codexDisplayErrorDetail(detail string) string {
 	const maxDetailsLines = 3
-	const maxDetailChars = 320
 
 	header, continuation, ok := strings.Cut(detail, "\n")
 	if !ok {
@@ -7411,10 +7469,10 @@ func codexDisplayErrorDetail(detail string) string {
 	if header == "Error details:" {
 		separator = " "
 	}
-	if !truncated && len(joined) <= maxDetailChars {
+	if !truncated && len(joined) <= maxErrorDetailChars {
 		return header + separator + joined
 	}
-	return header + separator + strings.TrimSpace(joined[:min(len(joined), maxDetailChars-len(truncatedErrorDetails))]) + truncatedErrorDetails
+	return header + separator + strings.TrimSpace(joined[:min(len(joined), maxErrorDetailChars-len(truncatedErrorDetails))]) + truncatedErrorDetails
 }
 
 // isMarkdownCodeFence reports whether a line is only a code fence. An opening

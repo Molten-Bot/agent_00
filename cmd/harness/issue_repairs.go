@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -264,11 +266,20 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 			return failurefollowup.UnmergedDependencyReason, nil
 		case localruntime.IssueIncidentOpenDependency:
 			return failurefollowup.OpenDependencyReason, nil
-		case "external_rollout_prerequisites":
+		case localruntime.IssueIncidentExternalRollout:
 			return failurefollowup.ExternalRolloutPrerequisitesReason, nil
 		}
-		if reason := failurefollowup.NonRemediableFailureReason(errors.New(issue.FailureDetail())); isIssueRepairDependencyBlock(reason) {
+		sourceFailure := issue.FailureDetail()
+		if reason := failurefollowup.NonRemediableFailureReason(errors.New(sourceFailure)); isIssueRepairDependencyBlock(reason) {
 			return reason, nil
+		}
+		if q.rolloutBlockedFromLogs(issue.RequestID, sourceFailure) ||
+			(failure != failurefollowup.RedactFailureDetail(sourceFailure) && q.rolloutBlockedFromLogs(issue.RequestID, failure)) {
+			// Record the retry blocker before the outbox stops checking this report.
+			if err := q.persistRecoveredRolloutBlock(issue); err != nil {
+				return "", err
+			}
+			return failurefollowup.ExternalRolloutPrerequisitesReason, nil
 		}
 	}
 	if err != nil && foundSource {
@@ -276,6 +287,84 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 		return "", nil
 	}
 	return "", err
+}
+
+func (q *issueRepairQueue) rolloutBlockedFromLogs(requestID, failure string) bool {
+	return app.IsExternalRolloutFailureFromStdout(failure, func(stage string) string {
+		return issueRepairAgentStdout(q.logRoot, requestID, stage)
+	})
+}
+
+func (q *issueRepairQueue) persistRecoveredRolloutBlock(issue localruntime.IssueClaimRecord) error {
+	lock, err := q.claims.TryLock(localruntime.IssueExecutionKey(issue.Run.GitHubIssue))
+	if err != nil {
+		return err
+	}
+	if lock == nil {
+		return errors.New("source issue claim is locked")
+	}
+	defer lock.Close()
+	return q.claims.Update(issue.ID, func(current *localruntime.IssueClaimRecord) error {
+		if current.RequestID != issue.RequestID || current.FailureDetail() != issue.FailureDetail() || current.Incident != issue.Incident {
+			return errors.New("source issue claim changed during rollout recovery")
+		}
+		if current.Outcome == "error" && current.State != "fulfilled" {
+			current.Incident = localruntime.IssueIncidentExternalRollout
+			current.RunError = current.FailureDetail()
+			current.NextAttemptAt = time.Time{}
+		}
+		return nil
+	})
+}
+
+func issueRepairAgentStdout(logRoot, requestID, stage string) string {
+	dir, ok := failurefollowup.TaskLogDir(logRoot, requestID)
+	if !ok {
+		return ""
+	}
+	prefix := "task request_id=" + requestID + " cmd phase=" + stage + " name="
+	for _, name := range []string{logFileName, legacyTaskLogFileName} {
+		if stdout := readIssueRepairAgentStdout(filepath.Join(dir, name), prefix); stdout != "" {
+			return stdout
+		}
+	}
+	return ""
+}
+
+func readIssueRepairAgentStdout(path, prefix string) string {
+	log, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer log.Close()
+	scanner := bufio.NewScanner(log)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	var stdout strings.Builder
+	for scanner.Scan() {
+		command, ok := strings.CutPrefix(scanner.Text(), prefix)
+		if !ok {
+			continue
+		}
+		_, stream, _ := strings.Cut(command, " stream=")
+		// Rendered stdout may have been shortened or filtered.
+		if strings.HasPrefix(stream, "stdout text=") {
+			return ""
+		}
+		encoded, ok := strings.CutPrefix(stream, "stdout b64=")
+		if !ok {
+			continue
+		}
+		line, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return ""
+		}
+		stdout.Write(line)
+		stdout.WriteByte('\n')
+	}
+	if scanner.Err() != nil {
+		return ""
+	}
+	return stdout.String()
 }
 
 func issueRepairSourceLogDir(prompt string) string {

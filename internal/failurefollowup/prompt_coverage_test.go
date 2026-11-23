@@ -165,6 +165,17 @@ func TestNonRemediableFailureReasonRequiresExternalRolloutEvidence(t *testing.T)
 		{"only one prerequisite outstanding", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Secrets Manager provisioning is complete, but IAM access and deployed source verification remain pending.", false},
 		{"provisioning and verification outstanding", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Scoped IAM, shared Secrets Manager key, and deployed source verification remain outstanding.", true},
 		{"outstanding prerequisites in reverse order", "claude: claude reported failure: Failure: Production deployment is still pending. Error details: Shared Secrets Manager key and scoped IAM are pending.", true},
+		{"reported infrastructure work with missing container runtime", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Scoped IAM and shared reference key still require infrastructure work. Service flags default off. Docker-backed integration tests could not run because no container runtime was available.", true},
+		{"container tests ran and failed", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " Docker-backed integration tests failed after startup.", false},
+		{"unit validation with failed smoke check", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nValidation passed for unit tests; smoke check returned HTTP 500.", false},
+		{"unit validation with failed smoke check after comma", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nValidation passed for unit tests, and smoke check returned HTTP/1.1 503.", false},
+		{"unit validation with nonzero probe exit", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nValidation passed for unit tests, and readiness probe exited with status 1.", false},
+		{"unit validation with zero probe exit", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nValidation passed for unit tests, and readiness probe exited with status 0.", true},
+		{"implementation progress with a startup defect", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nAdded the readiness endpoint, which returns HTTP 500 on startup.\nValidation passed for unit tests.", false},
+		{"implementation progress with a startup crash", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nImplemented the endpoint, which crashes on startup.\nValidation passed for unit tests.", false},
+		{"implementation progress with a startup timeout", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nImplemented the endpoint, which timed out during startup.\nValidation passed for unit tests.", false},
+		{"implementation progress with timeout configuration", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + "\nImplemented startup timeout configuration.\nValidation passed for unit tests.", true},
+		{"legacy truncated diagnostics", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " | [error details truncated]", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			want := ""
@@ -256,6 +267,21 @@ func TestDependencyOperationDoesNotEndAtSoftWrap(t *testing.T) {
 		message := "codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open and blocks the " + target
 		if got := NonRemediableFailureReason(errors.New(message)); got != "" {
 			t.Fatalf("reason = %q, want repair eligible: %s", got, message)
+		}
+	}
+}
+
+func TestExternalRolloutRejectsMixedProbeResults(t *testing.T) {
+	t.Parallel()
+	for _, result := range []string{
+		"Validation passed for unit tests, and readiness probe returned 1.",
+		"Validation passed for unit tests, and smoke check returned 2.",
+		"Implemented the endpoint, which crashes on startup.\nValidation passed for unit tests.",
+		"Implemented the endpoint.\nValidation passed for unit tests.\nValidation:\n- curl: (7) Failed to connect to localhost port 8080.",
+	} {
+		if IsExternalRolloutFailure("Failure: Production rollout remains pending.",
+			"Scoped IAM and shared reference key still require infrastructure work.\n"+result) {
+			t.Errorf("mixed result suppressed repair: %s", result)
 		}
 	}
 }
