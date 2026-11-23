@@ -305,16 +305,16 @@ func TestRunFinalReviewCycleUsesReadOnlySandboxOnCodex(t *testing.T) {
 	args := runner.argv[0]
 	idx := -1
 	for i, arg := range args {
-		if arg == "--sandbox" {
+		if arg == "-P" {
 			idx = i
 			break
 		}
 	}
 	if idx == -1 || idx+1 >= len(args) {
-		t.Fatalf("args %v did not include --sandbox", args)
+		t.Fatalf("args %v did not include -P", args)
 	}
-	if got := args[idx+1]; got != "read-only" {
-		t.Fatalf("sandbox mode = %q, want %q (review pass must not retain workspace-write access)", got, "read-only")
+	if got := args[idx+1]; got != "agent00_review" {
+		t.Fatalf("sandbox mode = %q, want %q (review pass must not retain workspace-write access)", got, "agent00_review")
 	}
 	for _, arg := range args {
 		if arg == "--add-dir" || strings.Contains(arg, "sandbox_workspace_write") {

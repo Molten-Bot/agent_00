@@ -149,3 +149,64 @@ done
 		})
 	}
 }
+
+// Run with TMPDIR on /dev/shm to exercise RAM-backed task workspaces as well
+// as the default disk-backed temporary directory.
+func TestReviewSandboxWorkspaceReadable(t *testing.T) {
+	if os.Getenv("HARNESS_TEST_CODEX_SANDBOX") != "1" {
+		t.Skip("set HARNESS_TEST_CODEX_SANDBOX=1 to exercise the installed sandbox")
+	}
+	for _, harness := range []string{HarnessCodex, HarnessClaude} {
+		t.Run(harness, func(t *testing.T) {
+			root := t.TempDir()
+			repo := filepath.Join(root, "repo")
+			for _, dir := range []string{filepath.Join(repo, ".git"), filepath.Join(root, ".agent00-agent-io", "config", "sandbox")} {
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, path := range []string{filepath.Join(root, "AGENTS.md"), filepath.Join(repo, ".git", "HEAD"), filepath.Join(repo, "guide.md")} {
+				if err := os.WriteFile(path, []byte("prepared workspace\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			script := filepath.Join(root, "probe")
+			if err := os.WriteFile(script, []byte(`#!/bin/sh
+set -eu
+test "$PWD" = "$TEST_ROOT/repo"
+for path in ../AGENTS.md .git/HEAD guide.md; do
+    test "$(cat "$path")" = 'prepared workspace'
+done
+for path in repo-write .git/HEAD guide.md ../AGENTS.md ../outside-write; do
+    if (printf bad > "$path") 2>/dev/null; then
+        echo "review allowed write: $path" >&2
+        exit 1
+    fi
+done
+`), 0700); err != nil {
+				t.Fatal(err)
+			}
+			rt, _ := Resolve(harness, script)
+			cmd, err := rt.BuildCommand(repo, "review", RunOptions{
+				WorkspaceDir: root, DisallowedTools: []string{"Write"},
+				Env: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "TEST_ROOT=" + root,
+					"CODEX_HOME=" + filepath.Join(root, ".agent00-agent-io", "config", "sandbox")},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if harness == HarnessCodex {
+				cmd.Name = "codex"
+				cmd.Args[0] = "sandbox"
+				cmd.Args = append(cmd.Args, "--", script)
+			}
+			cmd.Stdin = ""
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			res, err := (execx.OSRunner{}).Run(ctx, cmd)
+			if err != nil {
+				t.Fatalf("review workspace probe failed: %v\n%s\n%s", err, res.Stdout, res.Stderr)
+			}
+		})
+	}
+}
