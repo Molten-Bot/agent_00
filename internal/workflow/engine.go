@@ -14,7 +14,7 @@ import (
 )
 
 type Item struct {
- Viewer string `json:"viewer,omitempty"`
+	Viewer         string   `json:"viewer,omitempty"`
 	Number         int      `json:"number"`
 	Repository     string   `json:"repository"`
 	Kind           string   `json:"kind"`
@@ -55,8 +55,10 @@ func Match(w Definition, i Item) (bool, string) {
 		return false, "Item type does not match"
 	}
 	triggerValue := w.Trigger.Value
- if triggerValue == "@me" { triggerValue = i.Viewer }
- matched := false
+	if triggerValue == "@me" {
+		triggerValue = i.Viewer
+	}
+	matched := false
 	switch w.Trigger.Event {
 	case "issue.opened", "pr.opened":
 		matched = true
@@ -100,8 +102,10 @@ func Match(w Definition, i Item) (bool, string) {
 			values = []string{fmt.Sprint(i.LinkedIssue)}
 		}
 		value := r.Value
- if value == "@me" && contains([]string{"author", "assignee", "reviewer"}, r.Field) { value = i.Viewer }
- ok := value != "" && has(values, value)
+		if value == "@me" && contains([]string{"author", "assignee", "reviewer"}, r.Field) {
+			value = i.Viewer
+		}
+		ok := value != "" && has(values, value)
 		if r.Operator == "isNot" {
 			ok = !ok
 		}
@@ -129,6 +133,7 @@ func digest(v any) string {
 }
 
 type Run struct {
+	Outcome   *Outcome   `json:"outcome,omitempty"`
 	ID        string     `json:"id"`
 	Workflow  Definition `json:"workflow"`
 	Item      Item       `json:"item"`
@@ -150,9 +155,11 @@ type State struct {
 	Runs         []Run                  `json:"runs"`
 }
 type Outcome struct {
-	Status string
-	PRURL  string
-	Reason string
+	ReviewClean  bool   `json:"reviewClean"`
+	ReviewedHead string `json:"reviewedHead,omitempty"`
+	Status       string `json:"status"`
+	PRURL        string `json:"prUrl,omitempty"`
+	Reason       string `json:"reason,omitempty"`
 }
 type Engine struct {
 	Store     *Store
@@ -256,7 +263,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 		}
 		entity := fmt.Sprintf("%s#%d", strings.ToLower(r.Item.Repository), r.Item.Number)
 		busy[entity] = true
-		if !exists || !w.Enabled || !e.Allowed(w.Repository) {
+		if !exists || !w.Enabled || (!e.Allowed(w.Repository) || !e.Allowed(r.Item.Repository)) {
 			continue
 		}
 		if r.Status == "dispatching" {
@@ -271,6 +278,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 		}
 		if r.Status == "running" {
 			o := e.Status(r.RequestID)
+			if r.Outcome != nil {
+				o = *r.Outcome
+			}
 			if o.Status == "failed" {
 				r.Status = "failed"
 				r.Reason = o.Reason
@@ -279,20 +289,38 @@ func (e *Engine) Tick(ctx context.Context) error {
 				if r.PRURL == "" {
 					r.PRURL = r.Item.URL
 				}
-				if r.Workflow.Merge.Enabled && strings.Contains(r.PRURL, "/pull/") {
+				if r.Workflow.Merge.Enabled && w.Merge.Enabled && strings.Contains(r.PRURL, "/pull/") {
 					r.Status = "waiting"
 					r.Reason = "Waiting for checks and merge requirements"
+					if r.Workflow.Task.Kind == "review" {
+						if !o.ReviewClean || o.ReviewedHead == "" {
+							r.Status = "completed"
+							r.Reason = "Review posted; no confirmed clean review, so merge was not attempted"
+						} else {
+							r.MergeHead = o.ReviewedHead
+						}
+					}
 				} else {
 					r.Status = "succeeded"
 					r.Reason = "Task completed"
 				}
 			}
 		}
+		if r.Status == "waiting" && !w.Merge.Enabled {
+			r.Status = "succeeded"
+			r.Reason = "Automatic merge disabled in current definition"
+		}
 		if r.Status == "waiting" {
 			i, inspectErr := e.InspectPR(ctx, r.Item.Repository, r.PRURL)
 			if inspectErr != nil {
 				errs = append(errs, inspectErr)
 				continue
+			}
+			if r.MergeHead == "" && i.HeadSHA != "" {
+				r.MergeHead = i.HeadSHA
+				if err := save(); err != nil {
+					return err
+				}
 			}
 			if !i.Open {
 				r.Status = "completed"
@@ -315,6 +343,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 				if r.MergeHead != i.HeadSHA {
 					r.Status = "failed"
 					r.Reason = "Head changed after merge eligibility; a new review is required"
+				} else if !e.StillEnabled(w) {
+					r.Reason = "Workflow changed or was disabled before merge"
 				} else if mergeErr := e.Merge(ctx, *r); mergeErr != nil {
 					r.Reason = "Merge blocked: " + mergeErr.Error()
 				} else {
@@ -365,7 +395,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 			if old.Fingerprint == fingerprint {
 				continue
 			}
-			if busy[entity] {
+			if busy[entity] && (hadBaseline || w.IncludeBacklog) {
 				continue
 			}
 			old.Fingerprint = fingerprint
@@ -380,7 +410,13 @@ func (e *Engine) Tick(ctx context.Context) error {
 			if err := save(); err != nil {
 				return err
 			}
-			request, submitErr := e.Submit(ctx, r)
+			var request string
+			var submitErr error
+			if !e.StillEnabled(w) {
+				submitErr = fmt.Errorf("workflow changed or was disabled before submission")
+			} else {
+				request, submitErr = e.Submit(ctx, r)
+			}
 			index := len(s.Runs) - 1
 			if submitErr != nil {
 				s.Runs[index].Status = "failed"
@@ -403,4 +439,46 @@ func (e *Engine) Tick(ctx context.Context) error {
 }
 func terminal(status string) bool {
 	return contains([]string{"failed", "succeeded", "merged", "completed"}, status)
+}
+
+// Complete durably records the task's semantic outcome independently of UI logs.
+func (e *Engine) Complete(id string, outcome Outcome) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s, err := e.load()
+	if err != nil {
+		return err
+	}
+	for n := range s.Runs {
+		if s.Runs[n].ID == id {
+			s.Runs[n].Outcome = &outcome
+			if s.Runs[n].Status == "failed" {
+				s.Runs[n].Status = "running"
+			}
+			return writeAtomic(e.StatePath, s)
+		}
+	}
+	return fmt.Errorf("workflow activation not found")
+}
+
+// StillEnabled rechecks switches after potentially slow GitHub reads.
+func (e *Engine) StillEnabled(w Definition) bool {
+	if !e.Enabled() || !e.Allowed(w.Repository) {
+		return false
+	}
+	doc, err := e.Store.Load()
+	if err != nil {
+		return false
+	}
+	for _, current := range doc.Workflows {
+		if current.ID == w.ID && current.Enabled && strings.EqualFold(current.Repository, w.Repository) {
+			a, b := current, w
+			a.Name = ""
+			b.Name = ""
+			a.Positions = nil
+			b.Positions = nil
+			return digest(a) == digest(b)
+		}
+	}
+	return false
 }

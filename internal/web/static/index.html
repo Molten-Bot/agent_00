@@ -208,7 +208,22 @@
                 </label>
               </div>
 
-              <div id="prompt-library-panel" class="prompt-panel hidden">
+              <div id="prompt-library-panel" class="prompt-panel hidden"><details class="library-sources"><summary>Manage custom libraries</summary><div class="review-settings-section custom-library-section" id="custom-library-section">
+            <h3>Custom libraries</h3>
+            
+            <div class="stack custom-library-fields">
+              <p>Pull library tasks from a private git repository your account can already access. Add the repo's SSH or HTTPS URL and a display name; this app clones <code>./prompt/*.md</code> from it once now, then refreshes hourly or whenever you reopen the app.</p>
+              <label for="custom-library-name">Name</label>
+              <input id="custom-library-name" class="prompt-text" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="acme-docs" maxlength="48">
+              <label for="custom-library-repo">Git repository (SSH or HTTPS)</label>
+              <input id="custom-library-repo" class="prompt-text" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="git@github.com:acme/internal-library.git">
+              <div class="commit-signing-actions">
+                <button id="custom-library-add" type="button" class="prompt-action-button prompt-submit">Add library repo</button>
+              </div>
+              <p id="custom-library-status" role="status" aria-live="polite"></p>
+              <div id="custom-library-list"></div>
+            </div>
+          </div></details>
                 <div class="prompt-grid">
                   <label id="library-repo-history-field" class="prompt-field prompt-field-repo-history">
                     <span class="prompt-label">Repository</span>
@@ -827,30 +842,11 @@
 
         <div class="settings-tabbed-panel">
         <div class="settings-tabbar" role="tablist" aria-label="Settings sections">
-          <button id="settings-tab-library" class="settings-tab active" type="button" role="tab" aria-selected="true" aria-controls="custom-library-section" data-settings-tab="library">
-            <svg class="custom-library-tab-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="3" y="4" width="13" height="3" rx="1"></rect>
-              <rect x="3" y="10.5" width="10" height="3" rx="1"></rect>
-              <rect x="3" y="17" width="13" height="3" rx="1"></rect>
-              <path d="M19.5 4.5a4 4 0 1 1-1.2-2.8"></path>
-              <path d="M19.5 1v3.5h-3.5"></path>
-            </svg>
-            <span>Library</span>
-          </button>
           <button id="settings-tab-automation" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-automation" data-settings-tab="automation">
-            <i data-lucide="wand-sparkles" aria-hidden="true"></i><span>Automation</span>
+            <i data-lucide="wand-sparkles" aria-hidden="true"></i><span>Features</span>
           </button>
           <button id="settings-tab-repositories" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-repositories" data-settings-tab="repositories">
             <i data-lucide="folder-git-2" aria-hidden="true"></i><span>Repositories</span>
-          </button>
-          <button id="settings-tab-github-issues" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-github-issues" data-settings-tab="github-issues">
-            <i data-lucide="folder-kanban" aria-hidden="true"></i><span>GitHub Issues</span>
-          </button>
-          <button id="settings-tab-review" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-review" data-settings-tab="review">
-            <i data-lucide="message-circle-code" aria-hidden="true"></i><span>Post-task Review</span>
-          </button>
-          <button id="settings-tab-merge" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-merge" data-settings-tab="merge">
-            <i data-lucide="merge" aria-hidden="true"></i><span>Merge Method</span>
           </button>
           <button id="settings-tab-signing" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="commit-signing-section" data-settings-tab="signing">
             <i data-lucide="globe-lock" aria-hidden="true"></i><span>Commit Signing</span>
@@ -859,17 +855,17 @@
 
         <form id="review-settings-form" class="stack review-settings-form" data-settings-panel="review">
           <fieldset id="settings-panel-automation" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-automation" hidden>
-            <legend class="review-settings-section-title sr-only">Automation</legend>
-            <label class="selectable-option">
-              <input class="sr-only" id="review-settings-auto-merge" type="checkbox">
-              <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-robot-arm"><path d="M12 21 7.5 8.322"/><path d="m14 7 1.75-3.767a.5.5 0 0 1 .662-.172L20 5.005"/><path d="m20 8.998-3.588 1.944a.5.5 0 0 1-.662-.172L14 7H8"/><path d="M3.486 21h10"/><path d="M5 21V8.732"/><circle cx="6" cy="7" r="2"/></svg>
-              <span>Auto-merge clean reviews</span>
+            <legend class="review-settings-section-title sr-only">Features</legend><label class="selectable-option">
+          <input class="sr-only" id="review-settings-default-library" type="checkbox" checked>
+          <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="library-big"><rect width="8" height="18" x="3" y="3" rx="1"/><path d="M7 3v18"/><path d="M20.4 18.9c.2.5-.1 1.1-.6 1.3l-1.9.7c-.5.2-1.1-.1-1.3-.6L11.1 5.1c-.2-.5.1-1.1.6-1.3l1.9-.7c.5-.2 1.1.1 1.3.6Z"/></svg>
+          <span>Bundled library</span>
+        </label><label class="selectable-option">
+              <input class="sr-only" id="review-settings-github-issues-enabled" type="checkbox">
+              <i data-lucide="folder-kanban" aria-hidden="true"></i>
+              <span>GitHub Issues</span>
             </label>
-            <label class="selectable-option">
-              <input class="sr-only" id="review-settings-delete-merged-branches" type="checkbox">
-              <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="git-branch-minus"><path d="M15 6a9 9 0 0 0-9 9V3"/><path d="M21 18h-6"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></svg>
-              <span>Delete merged branches</span>
-            </label>
+            
+            
             <label class="selectable-option">
               <input class="sr-only" id="review-settings-chat-enabled" type="checkbox">
               <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="message-circle"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/></svg>
@@ -889,7 +885,7 @@
           <div id="settings-panel-repositories" class="review-settings-section" role="tabpanel" aria-labelledby="settings-tab-repositories" hidden>
             <div class="repository-settings-heading">
               <strong>Repositories</strong>
-              <small>Deselect an owner to hide every repository it owns, or deselect single repositories.</small>
+              <small>Choose which repositories are available. Excluded repositories cannot start tasks or workflows.</small>
             </div>
             <div class="repository-settings-columns" id="review-settings-repository-columns">
               <div class="repository-settings-column" id="review-settings-owners-column">
@@ -903,13 +899,63 @@
             </div>
             <p id="review-settings-repositories-empty" class="github-issues-settings-description">No repositories loaded.</p>
           </div>
-          <fieldset id="settings-panel-github-issues" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-github-issues" hidden>
+          
+          
+          
+          <div class="review-settings-section commit-signing-section" id="commit-signing-section" role="tabpanel" aria-labelledby="settings-tab-signing" hidden>
+            <h3 class="review-settings-section-title sr-only">Commit signing</h3>
+            <div class="stack commit-signing-fields">
+              <p id="commit-signing-setup-required" class="commit-signing-required" role="alert" hidden></p>
+              <p>1. Paste your SSH private key and click Save signing settings. 2. Copy the public key shown below and add it to GitHub as a Signing Key. 3. Check registration, enable “Sign commits for all tasks”, and close settings to save. Changes apply to tasks that start after saving.</p>
+              <label for="commit-signing-private-key">SSH private key</label>
+              <textarea id="commit-signing-private-key" class="prompt-text agent-auth-secret-input" rows="4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="commit-signing-private-key-help" placeholder="Paste the full SSH private key, including BEGIN and END lines"></textarea>
+              <p id="commit-signing-private-key-help">Signing requires the private key. A public key alone cannot sign commits.</p>
+              <label for="commit-signing-passphrase">Passphrase (if your key is protected)</label>
+              <input id="commit-signing-passphrase" class="prompt-text" type="password" autocomplete="off">
+              <p>The app saves an unlocked copy of the key with restricted file permissions so background tasks can sign unattended. Your passphrase is never saved.</p>
+              <p id="commit-signing-account"></p>
+              <p id="commit-signing-fingerprint"></p>
+              <label for="commit-signing-public-key">Public signing key (read-only)</label>
+              <p id="commit-signing-public-key-help">Generated from your saved private key. Copy this key to GitHub; there is nothing to paste into this box.</p>
+              <textarea id="commit-signing-public-key" class="prompt-text" rows="3" readonly aria-describedby="commit-signing-public-key-help" placeholder="Your public key appears here after you save an SSH private key"></textarea>
+              <div class="commit-signing-actions">
+                <button id="commit-signing-copy" type="button" class="prompt-action-button" disabled>Copy public key</button>
+                <a id="commit-signing-github-link" href="https://github.com/settings/ssh/new" target="_blank" rel="noopener noreferrer">Add to GitHub as a Signing Key</a>
+              </div>
+              <p id="commit-signing-registration">No signing key configured.</p>
+              <div class="commit-signing-actions">
+                <button id="commit-signing-verify" type="button" class="prompt-action-button" disabled>Check registration</button>
+                <button id="commit-signing-save" type="button" class="prompt-action-button prompt-submit">Save signing settings</button>
+              </div>
+              <p id="commit-signing-status" role="status" aria-live="polite"></p>
+              <label class="selectable-option">
+                <input class="sr-only" id="commit-signing-enabled" type="checkbox" disabled aria-describedby="commit-signing-enabled-help">
+                <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="earth-lock"><path d="M7 3.34V5a3 3 0 0 0 3 3"/><path d="M11 21.95V18a2 2 0 0 0-2-2 2 2 0 0 1-2-2v-1a2 2 0 0 0-2-2H2.05"/><path d="M21.54 15H17a2 2 0 0 0-2 2v4.54"/><path d="M12 2a10 10 0 1 0 9.54 13"/><path d="M20 6V4a2 2 0 1 0-4 0v2"/><rect width="8" height="5" x="14" y="6" rx="1"/></svg>
+                <span>Sign commits for all tasks</span>
+              </label>
+              <p id="commit-signing-enabled-help">Save an SSH private key above to enable commit signing.</p>
+            </div>
+          </div>
+          
+        </form>
+        </div>
+        <p id="review-settings-status" class="settings-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
+
+      </div>
+    </section>
+  </div>
+
+  <div hidden inert id="legacy-automation-settings" aria-hidden="true"><label class="selectable-option">
+              <input class="sr-only" id="review-settings-auto-merge" type="checkbox">
+              <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-robot-arm"><path d="M12 21 7.5 8.322"/><path d="m14 7 1.75-3.767a.5.5 0 0 1 .662-.172L20 5.005"/><path d="m20 8.998-3.588 1.944a.5.5 0 0 1-.662-.172L14 7H8"/><path d="M3.486 21h10"/><path d="M5 21V8.732"/><circle cx="6" cy="7" r="2"/></svg>
+              <span>Auto-merge clean reviews</span>
+            </label><label class="selectable-option">
+              <input class="sr-only" id="review-settings-delete-merged-branches" type="checkbox">
+              <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="git-branch-minus"><path d="M15 6a9 9 0 0 0-9 9V3"/><path d="M21 18h-6"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></svg>
+              <span>Delete merged branches</span>
+            </label><fieldset id="settings-panel-github-issues" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-github-issues" hidden>
             <legend class="review-settings-section-title sr-only">GitHub Issues</legend>
-            <label class="selectable-option">
-              <input class="sr-only" id="review-settings-github-issues-enabled" type="checkbox">
-              <i data-lucide="folder-kanban" aria-hidden="true"></i>
-              <span>Enable GitHub Issues workflow</span>
-            </label>
+            
             <label class="selectable-option">
               <input class="sr-only" id="review-settings-assign-creator" type="checkbox">
               <i data-lucide="user-check" aria-hidden="true"></i>
@@ -980,8 +1026,7 @@
                 </label>
               </div>
             </div>
-          </fieldset>
-          <div id="settings-panel-review" class="review-settings-section review-settings-level" role="tabpanel" aria-labelledby="settings-tab-review" hidden>
+          </fieldset><div id="settings-panel-review" class="review-settings-section review-settings-level" role="tabpanel" aria-labelledby="settings-tab-review" hidden>
             <input id="review-settings-level" type="hidden" value="off">
             <div class="review-slider">
               <label class="sr-only" for="review-settings-slider">Number of post-task reviews</label>
@@ -994,8 +1039,7 @@
                 <span class="review-slider-stop" title="High · 10 reviews"><svg><use href="#review-high"/></svg></span>
               </div>
             </div>
-          </div>
-          <div id="settings-panel-merge" class="review-settings-section review-settings-merge-method" role="tabpanel" aria-labelledby="settings-tab-merge" hidden>
+          </div><div id="settings-panel-merge" class="review-settings-section review-settings-merge-method" role="tabpanel" aria-labelledby="settings-tab-merge" hidden>
             <span id="review-settings-merge-method-label" class="sr-only">Merge Method</span>
             <input id="review-settings-merge-method" type="hidden" value="squash">
             <div class="review-settings-merge-slider" role="radiogroup" aria-labelledby="review-settings-merge-method-label">
@@ -1010,69 +1054,7 @@
                 <i data-lucide="git-branch" aria-hidden="true"></i><span>Rebase</span>
               </button>
             </div>
-          </div>
-          <div class="review-settings-section commit-signing-section" id="commit-signing-section" role="tabpanel" aria-labelledby="settings-tab-signing" hidden>
-            <h3 class="review-settings-section-title sr-only">Commit signing</h3>
-            <div class="stack commit-signing-fields">
-              <p id="commit-signing-setup-required" class="commit-signing-required" role="alert" hidden></p>
-              <p>1. Paste your SSH private key and click Save signing settings. 2. Copy the public key shown below and add it to GitHub as a Signing Key. 3. Check registration, enable “Sign commits for all tasks”, and close settings to save. Changes apply to tasks that start after saving.</p>
-              <label for="commit-signing-private-key">SSH private key</label>
-              <textarea id="commit-signing-private-key" class="prompt-text agent-auth-secret-input" rows="4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="commit-signing-private-key-help" placeholder="Paste the full SSH private key, including BEGIN and END lines"></textarea>
-              <p id="commit-signing-private-key-help">Signing requires the private key. A public key alone cannot sign commits.</p>
-              <label for="commit-signing-passphrase">Passphrase (if your key is protected)</label>
-              <input id="commit-signing-passphrase" class="prompt-text" type="password" autocomplete="off">
-              <p>The app saves an unlocked copy of the key with restricted file permissions so background tasks can sign unattended. Your passphrase is never saved.</p>
-              <p id="commit-signing-account"></p>
-              <p id="commit-signing-fingerprint"></p>
-              <label for="commit-signing-public-key">Public signing key (read-only)</label>
-              <p id="commit-signing-public-key-help">Generated from your saved private key. Copy this key to GitHub; there is nothing to paste into this box.</p>
-              <textarea id="commit-signing-public-key" class="prompt-text" rows="3" readonly aria-describedby="commit-signing-public-key-help" placeholder="Your public key appears here after you save an SSH private key"></textarea>
-              <div class="commit-signing-actions">
-                <button id="commit-signing-copy" type="button" class="prompt-action-button" disabled>Copy public key</button>
-                <a id="commit-signing-github-link" href="https://github.com/settings/ssh/new" target="_blank" rel="noopener noreferrer">Add to GitHub as a Signing Key</a>
-              </div>
-              <p id="commit-signing-registration">No signing key configured.</p>
-              <div class="commit-signing-actions">
-                <button id="commit-signing-verify" type="button" class="prompt-action-button" disabled>Check registration</button>
-                <button id="commit-signing-save" type="button" class="prompt-action-button prompt-submit">Save signing settings</button>
-              </div>
-              <p id="commit-signing-status" role="status" aria-live="polite"></p>
-              <label class="selectable-option">
-                <input class="sr-only" id="commit-signing-enabled" type="checkbox" disabled aria-describedby="commit-signing-enabled-help">
-                <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="earth-lock"><path d="M7 3.34V5a3 3 0 0 0 3 3"/><path d="M11 21.95V18a2 2 0 0 0-2-2 2 2 0 0 1-2-2v-1a2 2 0 0 0-2-2H2.05"/><path d="M21.54 15H17a2 2 0 0 0-2 2v4.54"/><path d="M12 2a10 10 0 1 0 9.54 13"/><path d="M20 6V4a2 2 0 1 0-4 0v2"/><rect width="8" height="5" x="14" y="6" rx="1"/></svg>
-                <span>Sign commits for all tasks</span>
-              </label>
-              <p id="commit-signing-enabled-help">Save an SSH private key above to enable commit signing.</p>
-            </div>
-          </div>
-          <div class="review-settings-section custom-library-section" id="custom-library-section" role="tabpanel" aria-labelledby="settings-tab-library">
-            <h3 class="review-settings-section-title sr-only">Library</h3>
-            <label class="selectable-option">
-          <input class="sr-only" id="review-settings-default-library" type="checkbox" checked>
-          <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="library-big"><rect width="8" height="18" x="3" y="3" rx="1"/><path d="M7 3v18"/><path d="M20.4 18.9c.2.5-.1 1.1-.6 1.3l-1.9.7c-.5.2-1.1-.1-1.3-.6L11.1 5.1c-.2-.5.1-1.1.6-1.3l1.9-.7c.5-.2 1.1.1 1.3.6Z"/></svg>
-          <span>Show default library</span>
-        </label>
-            <div class="stack custom-library-fields">
-              <p>Pull library tasks from a private git repository your account can already access. Add the repo's SSH or HTTPS URL and a display name; this app clones <code>./prompt/*.md</code> from it once now, then refreshes hourly or whenever you reopen the app.</p>
-              <label for="custom-library-name">Name</label>
-              <input id="custom-library-name" class="prompt-text" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="acme-docs" maxlength="48">
-              <label for="custom-library-repo">Git repository (SSH or HTTPS)</label>
-              <input id="custom-library-repo" class="prompt-text" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="git@github.com:acme/internal-library.git">
-              <div class="commit-signing-actions">
-                <button id="custom-library-add" type="button" class="prompt-action-button prompt-submit">Add library repo</button>
-              </div>
-              <p id="custom-library-status" role="status" aria-live="polite"></p>
-              <div id="custom-library-list"></div>
-            </div>
-          </div>
-        </form>
-        </div>
-        <p id="review-settings-status" class="settings-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
-
-      </div>
-    </section>
-  </div>
-
+          </div></div>
   <!-- bottom-dock -->
 
   <script>
@@ -1997,7 +1979,7 @@
       ui: stateUI,
       agentAuth: normalizeAgentAuth({ required: true, ready: false, state: "checking", message: "Checking agent authorization…" }),
       reviewSettings: normalizeReviewSettings({}),
-      settingsTab: "library",
+      settingsTab: "repositories",
       customLibraryGeneration: null,
       snapshot: null,
       selectedTaskId: "",
@@ -2299,11 +2281,7 @@
     const settingsTabPanels = {
       automation: document.getElementById("settings-panel-automation"),
       repositories: document.getElementById("settings-panel-repositories"),
-      "github-issues": document.getElementById("settings-panel-github-issues"),
-      review: document.getElementById("settings-panel-review"),
-      merge: document.getElementById("settings-panel-merge"),
       signing: document.getElementById("commit-signing-section"),
-      library: document.getElementById("custom-library-section"),
     };
     const reviewSettingsLevel = document.getElementById("review-settings-level");
     const reviewSettingsSlider = document.getElementById("review-settings-slider");
@@ -2978,7 +2956,7 @@
     }
 
     function setSettingsTab(tab) {
-      const normalized = Object.prototype.hasOwnProperty.call(settingsTabPanels, tab) ? tab : "library";
+      const normalized = Object.prototype.hasOwnProperty.call(settingsTabPanels, tab) ? tab : "repositories";
       if (state.settingsOpen && normalized !== state.settingsTab) {
         trackAnalyticsEvent("settings_tab_selected", { tab: normalized });
       }
@@ -9218,11 +9196,11 @@
       if (!workflowEditorLoad) {
         const css = document.createElement("link");
         css.rel = "stylesheet";
-        css.href = "/static/workflow-editor.css?v=3";
+        css.href = "/static/workflow-editor.css?v=4";
         document.head.appendChild(css);
         workflowEditorLoad = new Promise((resolve, reject) => {
           const script = document.createElement("script");
-          script.src = "/static/workflow-editor.js?v=3";
+          script.src = "/static/workflow-editor.js?v=4";
           script.onload = resolve;
           script.onerror = () => { script.remove(); css.remove(); workflowEditorLoad = null; reject(new Error("Unable to load Workflow editor. Reload to try again.")); };
           document.head.appendChild(script);
@@ -14397,6 +14375,7 @@
       setSettingsTab(settingsTabButtons[index].dataset.settingsTab);
       settingsTabButtons[index].focus();
     });
+    document.querySelector(".library-sources").addEventListener("toggle", event => { if(event.target.open) window.dispatchEvent(new Event("custom-library-sources-open")); });
     setSettingsTab(state.settingsTab);
     if (reviewSettingsClose) {
       reviewSettingsClose.addEventListener("click", () => {

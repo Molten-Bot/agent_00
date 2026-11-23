@@ -129,6 +129,8 @@ var errFinalReviewFindingsRemain = errors.New("post-task review findings remain"
 
 // Result captures run output and status.
 type Result struct {
+	ReviewClean      bool
+	ReviewedHead     string
 	ExitCode         int
 	Err              error
 	WorkspaceDir     string
@@ -200,6 +202,8 @@ type Harness struct {
 	OnPRTitle func(url, title string)
 	// OnPRCreated reports the URL and title of a newly created pull request.
 	OnPRCreated func(url, title string)
+	// OnReviewResult separates successful writeback from a clean review.
+	OnReviewResult func(clean bool, head string)
 
 	ResumeIssueWorkspace bool
 	// IssuePublicationReady records that a prior attempt accepted the agent result.
@@ -4768,6 +4772,9 @@ func (h Harness) completeReviewRun(
 		}
 	}
 
+	if h.OnReviewResult != nil {
+		h.OnReviewResult(outcomeOK && reviewOutcomeAllowsAutoMerge(outcome), metadata.HeadRefOID)
+	}
 	if cfg.Review.AutoMerge {
 		if err := h.autoMergeCleanReview(ctx, *repo, writebackSelector, writebackRepo, cfg.Review.MergeMethod, metadata, outcome, reviewContext != nil && reviewContext.GitHubTokenEnvSanitized); err != nil {
 			return err

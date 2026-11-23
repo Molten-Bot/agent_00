@@ -44,8 +44,11 @@ func (g GitHub) Fetch(ctx context.Context, repo string) ([]Item, error) {
 		return nil, fmt.Errorf("decode GitHub issues: %w", err)
 	}
 	viewer, err := g.command(ctx, "api", "user", "--jq", ".login")
- if err != nil { return nil, err }; viewer = strings.TrimSpace(viewer)
- items := []Item{}
+	if err != nil {
+		return nil, err
+	}
+	viewer = strings.TrimSpace(viewer)
+	items := []Item{}
 	for _, page := range pages {
 		for _, v := range page {
 			if v.PullRequest != nil {
@@ -54,7 +57,7 @@ func (g GitHub) Fetch(ctx context.Context, repo string) ([]Item, error) {
 					return nil, err
 				}
 				i.Viewer = viewer
- items = append(items, i)
+				items = append(items, i)
 				continue
 			}
 			i := Item{Repository: repo, Number: v.Number, Kind: "issue", Title: v.Title, Body: v.Body, URL: v.HTMLURL, Author: v.User.Login, Bot: v.User.Type == "Bot", Open: true}
@@ -68,7 +71,7 @@ func (g GitHub) Fetch(ctx context.Context, repo string) ([]Item, error) {
 				i.IssueType = v.Type.Name
 			}
 			i.Viewer = viewer
- items = append(items, i)
+			items = append(items, i)
 		}
 	}
 	return items, nil

@@ -103,13 +103,13 @@ for (const harness of ['claude', 'codex']) test(`settings reopen ${harness} sign
   const link = page.locator('#settings-agent-reauthenticate');
   assert.equal(await link.textContent(), `Sign in to ${harness === 'claude' ? 'Claude Code' : 'Codex'} again`);
   await select(page, 'automation');
-  await toggle(page, 'review-settings-auto-merge');
+  await toggle(page, 'review-settings-workflow-enabled');
   await link.click();
   const signInChallenge = page.locator(harness === 'claude' ? '#agent-auth-browser-code-input' : '#agent-auth-device-code-row');
   await page.locator('#settings-gate').waitFor({ state: 'hidden' });
   await signInChallenge.waitFor({ state: 'visible' });
   assert.equal(starts, 1);
-  assert.equal(writes.at(-1).auto_merge, true, 'pending settings saved before sign-in');
+  assert.equal(writes.at(-1).workflow_enabled, true, 'pending settings saved before sign-in');
   assert.equal(await page.locator('#local-prompt-submit').isDisabled(), true);
   if (harness === 'claude') await signInChallenge.fill('browser-code#test-state');
   else await page.locator('#agent-auth-verify').click();
@@ -184,43 +184,15 @@ test('reauthentication start errors are visible and later status recovers', asyn
   await page.waitForFunction(() => document.getElementById('agent-auth-gate').classList.contains('hidden'));
 });
 
-test('all settings save on close and survive reopening; no main Save button', async t => {
-  const { page, writes } = await openSettings(t);
-  assert.equal(await page.locator('#review-settings-save').count(), 0);
-  assert.equal(await page.locator('.settings-header-slim #review-settings-close').count(), 1);
-  await select(page, 'automation');
-  await toggle(page, 'review-settings-auto-merge');
-  await toggle(page, 'review-settings-delete-merged-branches');
-  await select(page, 'github-issues');
-  assert.equal(await page.locator('#review-settings-assign-creator').isChecked(), true);
-  await toggle(page, 'review-settings-assign-creator');
-  await select(page, 'review');
-  await page.locator('#review-settings-slider').focus();
-  for (const [key, level, text] of [['ArrowRight', 'low', 'Low · 2 reviews'], ['ArrowRight', 'medium', 'Medium · 5 reviews'], ['ArrowRight', 'high', 'High · 10 reviews']]) {
-    await page.keyboard.press(key);
-    assert.equal(await page.locator('#review-settings-level').inputValue(), level);
-    assert.equal(await page.locator('#review-selected-text').textContent(), text);
-    assert.equal(await page.locator('#review-selected-icon').getAttribute('href'), `#review-${level}`);
-  }
-  await select(page, 'merge');
-  await page.locator('[data-review-settings-merge-method=rebase]').click();
-  await select(page, 'library');
-  await page.locator('#custom-library-name').fill('kept draft');
-  await toggle(page, 'review-settings-default-library');
-  assert.equal(await page.locator('.custom-library-fields').isVisible(), false);
-  await toggle(page, 'review-settings-default-library');
-  assert.equal(await page.locator('#custom-library-name').inputValue(), 'kept draft');
-  await toggle(page, 'review-settings-default-library');
-  await close(page);
-  assert.deepEqual(writes.at(-1), { auto_merge: true, delete_merged_branches: true, merge_method: 'rebase', review_level: 'high', default_library_enabled: false, chat_enabled: true, workflow_enabled: false, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], assign_creator: false, disabled_repositories: [] });
-  await page.reload();
-  await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
-  assert.equal(await page.locator('#review-settings-auto-merge').isChecked(), true);
-  assert.equal(await page.locator('#review-settings-slider').inputValue(), '3');
-  assert.equal(await page.locator('#review-settings-default-library').isChecked(), false);
-  assert.equal(await page.locator('#review-settings-merge-method').inputValue(), 'rebase');
-  await select(page, 'github-issues');
-  assert.equal(await page.locator('#review-settings-assign-creator').isChecked(), false);
+test('feature settings save on close and survive reopening', async t => {
+ const {page,writes}=await openSettings(t);
+ assert.equal(await page.locator('[data-settings-tab]').count(),3);
+ await select(page,'automation');
+ assert.equal(await page.locator('#settings-tab-automation').innerText(),'Features');
+ for(const id of ['review-settings-workflow-enabled','review-settings-json-enabled','review-settings-github-issues-enabled']) await toggle(page,id);
+ await close(page);assert.equal(writes.at(-1).workflow_enabled,true);assert.equal(writes.at(-1).json_enabled,true);assert.equal(writes.at(-1).github_issues_enabled,true);
+ await page.reload();await page.waitForFunction(()=>!document.getElementById('review-settings-close').disabled);await select(page,'automation');assert.equal(await page.locator('#review-settings-workflow-enabled').isChecked(),true);
+ assert.equal(await page.locator('#review-settings-auto-merge').isVisible(),false);
 });
 
 test('repository selections hide dropdown options and manual entry enables them again', async t => {
@@ -559,103 +531,11 @@ test('json toggle marks the experimental JSON tab unavailable immediately and pe
   await page.waitForFunction(() => document.body.dataset.promptMode === 'json');
 });
 
-test('GitHub Issues toggle exposes and hides the dock link and persists on reload', async t => {
-  const { page, writes } = await openSettings(t, {
-    initialSettings: { ...defaults, disabled_repositories: ['acme/disabled'] },
-    configurePage: async page => {
-      await page.route('**/api/github/repos**', route => route.fulfill({
-        json: { ok: true, repos: ['acme/one', 'acme/two', 'acme/disabled'].map(full_name => ({ full_name })) },
-      }));
-    },
-  });
-  const repository = page.getByLabel('Automation repository');
-  assert.equal(await page.locator('#review-settings-github-issues-enabled').isChecked(), false);
-  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
-  await select(page, 'github-issues');
-  await toggle(page, 'review-settings-github-issues-enabled');
-  assert.equal(await page.locator('#review-settings-github-issues-auto-start').isVisible(), true);
-  await repository.selectOption('acme/one');
-  assert.equal(await repository.locator('option[value="acme/disabled"]').count(), 0);
-  await toggle(page, 'review-settings-github-issues-repository-enabled');
-  await toggle(page, 'review-settings-github-issues-auto-start-assigned');
-  await repository.selectOption('acme/two');
-  await toggle(page, 'review-settings-github-issues-repository-enabled');
-  assert.equal(await page.locator('#review-settings-github-issues-auto-start-assigned').isChecked(), false);
-  assert.equal(await page.locator('#review-settings-github-issues-link-mode').isVisible(), true);
-  assert.equal(await page.locator('#settings-tab-github-issues [data-lucide="folder-kanban"]').count(), 1);
-  assert.equal(await page.locator('#review-settings-github-issues-enabled').locator('xpath=..').locator('[data-lucide="folder-kanban"]').count(), 1);
-  assert.equal(await page.locator('#review-settings-github-issues-link-reference').isChecked(), true);
-  await page.locator('#review-settings-github-issues-link-close').check();
-  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'false');
-  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), '#studio-issues');
-  await close(page);
-  assert.equal(writes.at(-1).github_issues_enabled, true);
-  assert.equal(writes.at(-1).github_issue_link_mode, 'close');
-  assert.equal(writes.at(-1).github_issue_repositories['acme/one'].auto_start, true);
-  assert.equal(writes.at(-1).github_issue_repositories['acme/two'].auto_start, false);
-  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'false');
-  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), '#studio-issues');
-  await page.reload();
-  await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
-  await select(page, 'github-issues');
-  assert.equal(await page.locator('#review-settings-github-issues-enabled').isChecked(), true);
-  assert.equal(await page.locator('#review-settings-github-issues-link-close').isChecked(), true);
-  await repository.selectOption('acme/one');
-  assert.equal(await page.locator('#review-settings-github-issues-auto-start-assigned').isChecked(), true);
-  await toggle(page, 'review-settings-github-issues-enabled');
-  assert.equal(await page.locator('#review-settings-github-issues-link-mode').isVisible(), false);
-  assert.equal(await page.locator('#review-settings-github-issues-auto-start').isVisible(), false);
-  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
-  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('href'), null);
-  assert.equal(await page.locator('#github-issues-dock-link').evaluate(link => link.classList.contains('hidden')), true);
-  await close(page);
-  assert.equal(writes.at(-1).github_issues_enabled, false);
-  assert.equal(writes.at(-1).github_issue_link_mode, 'close');
-  assert.equal(writes.at(-1).github_issue_repositories['acme/one'].auto_start, true);
-  assert.equal(writes.at(-1).github_issue_repositories['acme/two'].auto_start, false);
-  await page.reload();
-  await page.waitForFunction(() => !document.getElementById('review-settings-close').disabled);
-  await select(page, 'github-issues');
-  assert.equal(await page.locator('#review-settings-github-issues-enabled').isChecked(), false);
-  assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'), 'true');
+test('GitHub Issues feature toggle controls the dock and persists', async t => {
+ const {page,writes}=await openSettings(t);await select(page,'automation');await toggle(page,'review-settings-github-issues-enabled');await close(page);assert.equal(writes.at(-1).github_issues_enabled,true);assert.equal(await page.locator('#github-issues-dock-link').getAttribute('aria-disabled'),'false');await page.reload();await page.waitForFunction(()=>!document.getElementById('review-settings-close').disabled);await select(page,'automation');await toggle(page,'review-settings-github-issues-enabled');await close(page);assert.equal(writes.at(-1).github_issues_enabled,false);
 });
 
-test('GitHub issue labels use comma-separated input without background label loading', async t => {
-  let labelRequests = 0;
-  const initialSettings = {
-    ...defaults,
-    github_issues_enabled: true,
-    github_issue_repositories: {
-      'acme/repo': { auto_start: true, only_assigned: true, trigger_labels: ['bug', 'priority'], exclusion_label: 'repo-claimed' },
-    },
-  };
-  const { page, writes } = await openSettings(t, { initialSettings, configurePage: async page => {
-    await page.route('**/api/github/repos**', route => route.fulfill({
-      json: { ok: true, repos: [{ full_name: 'acme/repo' }] },
-    }));
-    await page.route('**/api/github/labels', route => {
-      labelRequests++;
-      return route.fulfill({ json: { ok: true, labels: ['auto-filled'] } });
-    });
-  }});
-  await select(page, 'github-issues');
-  await page.getByLabel('Automation repository').selectOption('acme/repo');
-  const assigneeIcon = page.locator('label:has(#review-settings-github-issues-auto-start-only-assigned) svg');
-  const studioIcon = page.locator('#github-issues-assignee-filter svg');
-  for (const selector of ['path', 'circle']) {
-    assert.deepEqual(await assigneeIcon.locator(selector).evaluateAll(nodes => nodes.map(node => node.outerHTML)),
-      await studioIcon.locator(selector).evaluateAll(nodes => nodes.map(node => node.outerHTML)));
-  }
-  const labels = page.locator('#review-settings-github-issues-auto-start-labels');
-  assert.equal(await labels.evaluate(element => element.tagName), 'INPUT');
-  assert.match(await labels.locator('xpath=preceding-sibling::span').innerText(), /Match any label/);
-  assert.equal(await labels.inputValue(), 'bug, priority');
-  assert.equal(labelRequests, 0);
-  await labels.fill(' bug, priority, , needs triage ');
-  await close(page);
-  assert.deepEqual(writes.at(-1).github_issue_repositories['acme/repo'].trigger_labels, ['bug', 'priority', 'needs triage']);
-  assert.equal(labelRequests, 0);
-});
+
 
 test('GitHub Issues settings initialize even when Studio opens in another prompt mode', async t => {
   const { page } = await openSettings(t, {
@@ -1206,9 +1086,9 @@ test('GitHub issue load analytics keeps request-time search context', async t =>
 
 for (const method of ['escape', 'backdrop']) test(`${method} saves settings before closing`, async t => {
   const { page, writes } = await openSettings(t);
-  await select(page, 'automation'); await toggle(page, 'review-settings-auto-merge');
+  await select(page, 'automation'); await toggle(page, 'review-settings-workflow-enabled');
   await close(page, method);
-  assert.equal(writes.at(-1).auto_merge, true);
+  assert.equal(writes.at(-1).workflow_enabled, true);
 });
 
 test('failed save preserves the open dialog and edits; repeated close is single flight', async t => {
@@ -1222,14 +1102,14 @@ test('failed save preserves the open dialog and edits; repeated close is single 
       return route.fulfill(fail ? { status: 500, json: { error: 'Storage temporarily unavailable.' } } : { json: { ok: true, settings: route.request().postDataJSON() } });
     });
   }});
-  await select(page, 'automation'); await toggle(page, 'review-settings-auto-merge');
+  await select(page, 'automation'); await toggle(page, 'review-settings-workflow-enabled');
   await page.locator('#review-settings-close').click();
   await page.waitForFunction(() => document.getElementById('review-settings-close').disabled);
   await page.keyboard.press('Escape');
   assert.equal(posts, 1); release();
   await page.waitForFunction(() => document.getElementById('review-settings-status').textContent.includes('Storage temporarily'));
   assert.equal(await page.locator('#settings-gate').isVisible(), true);
-  assert.equal(await page.locator('#review-settings-auto-merge').isChecked(), true);
+  assert.equal(await page.locator('#review-settings-workflow-enabled').isChecked(), true);
   fail = false;
   await page.locator('#review-settings-close').click();
   while (posts < 2) await new Promise(resolve => setTimeout(resolve, 10));
@@ -1237,58 +1117,41 @@ test('failed save preserves the open dialog and edits; repeated close is single 
   await page.waitForFunction(() => document.getElementById('settings-gate').classList.contains('hidden'));
 });
 
-test('selected labels remain visible; hover and keyboard navigation reveal reachable tabs', async t => {
-  const { page } = await openSettings(t);
-  for (const name of ['library', 'automation', 'repositories', 'review', 'merge', 'signing']) {
-    await select(page, name); await page.mouse.move(0, 0);
-    await page.waitForFunction(name => getComputedStyle(document.querySelector(`#settings-tab-${name} span`)).opacity === '1', name);
-    assert.equal(await page.locator(`#settings-tab-${name} span`).evaluate(el => el.scrollWidth <= el.clientWidth + 1), true);
-  }
-  await page.locator('#settings-tab-signing').focus(); await page.keyboard.press('Home');
-  assert.equal(await page.locator('#settings-tab-library').getAttribute('aria-selected'), 'true');
-  await page.keyboard.press('ArrowRight');
-  assert.equal(await page.locator('#settings-tab-automation').getAttribute('aria-selected'), 'true');
-  await page.keyboard.press('ArrowRight');
-  assert.equal(await page.locator('#settings-tab-repositories').getAttribute('aria-selected'), 'true');
-  await page.locator('.settings-tabbar').evaluate(async el => { await Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {}))); });
-  await page.locator('#settings-tab-review').hover();
-  await page.waitForFunction(() => getComputedStyle(document.querySelector('#settings-tab-review span')).opacity === '1');
-  assert.equal(await page.locator('.settings-tabbar').evaluate(el => el.scrollHeight <= el.clientHeight + 1), true);
+test('the three settings tabs are reachable with keyboard navigation', async t => {
+ const {page}=await openSettings(t);for(const name of ['automation','repositories','signing']) await select(page,name);
+ await page.locator('#settings-tab-signing').focus();await page.keyboard.press('Home');assert.equal(await page.locator('#settings-tab-automation').getAttribute('aria-selected'),'true');await page.keyboard.press('ArrowRight');assert.equal(await page.locator('#settings-tab-repositories').getAttribute('aria-selected'),'true');await page.keyboard.press('End');assert.equal(await page.locator('#settings-tab-signing').getAttribute('aria-selected'),'true');
 });
 
 for (const theme of ['light', 'dark', 'night', 'pink']) test(`${theme} theme: selected highlights, icons, desktop and mobile panels`, async t => {
   const { page } = await openSettings(t, { theme });
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const name of ['library', 'automation', 'repositories', 'review', 'merge', 'signing']) {
+    for (const name of ['automation', 'repositories', 'signing']) {
       await select(page, name); await page.mouse.move(0, 0);
       assert.equal(await page.locator('.settings-shell').evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, `${theme}/${width}/${name} fits`);
     }
     await select(page, 'automation');
-    if (!(await page.locator('#review-settings-auto-merge').isChecked())) await toggle(page, 'review-settings-auto-merge');
-    const colors = await page.locator('label:has(#review-settings-auto-merge)').evaluate(el => {
+    if (!(await page.locator('#review-settings-workflow-enabled').isChecked())) await toggle(page, 'review-settings-workflow-enabled');
+    const colors = await page.locator('label:has(#review-settings-workflow-enabled)').evaluate(el => {
       const marker = document.createElement('span'); marker.style.color = 'var(--running)'; el.append(marker);
       const highlight = getComputedStyle(marker).color; marker.remove();
       return { icon: getComputedStyle(el.querySelector('svg')).color, highlight, text: getComputedStyle(el).color, surface: getComputedStyle(el).backgroundImage };
     });
     assert.equal(colors.icon, colors.highlight);
     assert.notEqual(colors.surface, 'none');
-    await select(page, 'review');
-    assert.equal(await page.locator('#review-slider-value svg').evaluate(el => getComputedStyle(el).color), colors.highlight);
-    assert.equal(await page.locator('.review-slider-stop[data-current=true] svg').evaluate(el => getComputedStyle(el).color), colors.highlight);
-    assert.equal(await page.locator('.review-slider-stop strong').count(), 0);
+
   }
 });
 
 test('changing themes while the dialog is open updates colors and preserves choices', async t => {
   const { page } = await openSettings(t);
-  await select(page, 'automation'); await toggle(page, 'review-settings-auto-merge');
+  await select(page, 'automation'); await toggle(page, 'review-settings-workflow-enabled');
   const surfaces=[];
   for(const theme of ['light','dark','night','pink']) {
     // These are the same root classes changed by the app's theme picker.
     await page.evaluate(theme => { document.documentElement.classList.remove('light','dark','night','pink'); document.documentElement.classList.add(theme); document.documentElement.setAttribute('data-theme',theme); },theme);
     surfaces.push(await page.locator('.settings-tabbed-panel').evaluate(el=>getComputedStyle(el).backgroundImage));
-    assert.equal(await page.locator('#review-settings-auto-merge').isChecked(),true);
+    assert.equal(await page.locator('#review-settings-workflow-enabled').isChecked(),true);
   }
   assert.equal(new Set(surfaces).size,4);
 });
@@ -1306,7 +1169,7 @@ test('library sources load on direct open and refresh after adding and removing'
       return route.fulfill({ json: { ok: true, sources } });
     });
   }});
-  await select(page, 'library');
+  await close(page); await page.locator('#prompt-mode-library').click(); await page.locator('.library-sources > summary').click();
   await page.waitForSelector('#custom-library-list .library-schedule-row');
   assert.equal(await page.locator('#custom-library-list .library-schedule-row').count(), 1);
   await page.locator('#custom-library-name').fill('new-library');
@@ -1343,7 +1206,7 @@ test('library source refresh failure does not report successful add as failed', 
       return route.fulfill({ json: { ok: true, sources: [] } });
     });
   }});
-  await select(page, 'library');
+  await close(page); await page.locator('#prompt-mode-library').click(); await page.locator('.library-sources > summary').click();
   await page.locator('#custom-library-name').fill('new-library');
   await page.locator('#custom-library-repo').fill('git@example.com:team/new.git');
   await page.locator('#custom-library-add').click();
@@ -1367,7 +1230,7 @@ test('a failed initial read cannot overwrite saved settings with defaults', asyn
     });
   }});
   await page.waitForFunction(() => document.getElementById('review-settings-status').textContent.includes('Settings unavailable'));
-  assert.equal(await page.locator('#review-settings-auto-merge').isDisabled(), true);
+  assert.equal(await page.locator('#review-settings-workflow-enabled').isDisabled(), true);
   await close(page);
   assert.equal(posts, 0);
 });
@@ -1403,7 +1266,7 @@ for (const viewport of [{ width: 1280, height: 1100 }, { width: 430, height: 932
     });
     const initial = await geometry();
     assert.ok(initial.top >= 0 && initial.bottom <= viewport.height, 'dialog fits the screen');
-    for (const name of ['signing', 'automation', 'repositories', 'review', 'merge', 'library']) {
+    for (const name of ['signing', 'automation', 'repositories']) {
       await select(page, name);
       const current = await geometry();
       for (const key of ['top', 'height', 'headerTop', 'tabsTop']) {
@@ -1417,105 +1280,17 @@ for (const viewport of [{ width: 1280, height: 1100 }, { width: 430, height: 932
     assert.equal(scrolled.headerTop, initial.headerTop, 'scrolling long content keeps Close reachable');
     assert.equal(scrolled.tabsTop, initial.tabsTop, 'scrolling long content keeps tabs reachable');
     assert.ok(await page.locator('#commit-signing-section').evaluate(node => node.scrollTop > 0), 'long panels scroll internally');
-    await select(page, 'review');
-    assert.equal(await page.locator('#review-settings-slider').isVisible(), true);
+    await select(page, 'automation');
+    assert.equal(await page.locator('label:has(#review-settings-workflow-enabled)').isVisible(), true);
     await close(page);
   });
 }
 
-test('GitHub Issues settings keep automation configuration without task listing or recovery controls', async t => {
-  const automationRequests = [];
-  const { page, writes } = await openSettings(t, {
-    initialSettings: { ...defaults, github_issues_enabled: true, github_issue_auto_start_assigned: true },
-    configurePage: async page => {
-      await page.route('**/api/github/repos**', route => route.fulfill({
-        json: { ok: true, repos: [{ full_name: 'acme/repo' }] },
-      }));
-      await page.route('**/api/github/automation**', route => {
-        automationRequests.push({ path: new URL(route.request().url()).pathname, method: route.request().method() });
-        return route.fulfill({ json: { ok: true, status: { enabled: true }, claims: [] } });
-      });
-    },
-  });
-  await select(page, 'github-issues');
-  await page.waitForFunction(() => document.getElementById('github-automation-status').textContent === 'Auto-start on');
-  assert.equal(await page.locator('#github-automation-decisions').count(), 0);
-  assert.equal(await page.getByRole('button', { name: 'Retry', exact: true }).count(), 0);
-  assert.deepEqual(automationRequests, [{ path: '/api/github/automation', method: 'GET' }]);
-  await page.getByRole('button', { name: 'Scan now', exact: true }).click();
-  await page.waitForFunction(() => document.getElementById('github-automation-status').textContent === 'Scanning…');
-  assert.deepEqual(automationRequests.at(-1), { path: '/api/github/automation/scan', method: 'POST' });
-  assert.equal(await page.locator('#review-settings-github-issues-legacy').isVisible(), true);
-  await page.getByLabel('Automation repository').selectOption('acme/repo');
-  await toggle(page, 'review-settings-github-issues-repository-enabled');
-  assert.equal(await page.locator('#review-settings-github-issues-legacy').isVisible(), false);
-  assert.equal(await page.locator('#review-settings-github-issues-auto-start-assigned').isChecked(), true);
-  assert.equal(await page.locator('#review-settings-github-issues-exclusion-label').inputValue(), 'agent_00-in-progress');
-  await page.locator('#review-settings-github-issues-exclusion-label').fill('team-claimed');
-  await close(page);
-  assert.equal(writes.at(-1).github_issue_repositories['acme/repo'].exclusion_label, 'team-claimed');
-});
 
-test('saving unrelated settings in a stale tab preserves a repository disabled in another tab', async t => {
-  let settings = {
-    ...defaults,
-    github_issues_enabled: true,
-    github_issue_repositories: { 'acme/repo': { auto_start: true, exclusion_label: 'team-claimed' } },
-  };
-  const configurePage = async page => {
-    await page.route('**/api/review-settings', route => {
-      if (route.request().method() === 'POST') settings = { ...settings, ...route.request().postDataJSON() };
-      return route.fulfill({ json: { ok: true, settings } });
-    });
-  };
-  const { page: staleTab } = await openSettings(t, { configurePage });
-  const { page: currentTab } = await openSettings(t, { configurePage });
-  await select(currentTab, 'github-issues');
-  await currentTab.getByLabel('Automation repository').selectOption('acme/repo');
-  await toggle(currentTab, 'review-settings-github-issues-repository-enabled');
-  await close(currentTab);
-  assert.deepEqual(settings.github_issue_repositories, {});
 
-  await select(staleTab, 'automation');
-  await toggle(staleTab, 'review-settings-auto-merge');
-  await close(staleTab);
-  assert.equal(settings.auto_merge, true);
-  assert.deepEqual(settings.github_issue_repositories, {});
-});
 
-test('editing repositories in a stale tab sends its original snapshot and preserves concurrent removal', async t => {
-  const repo = { auto_start: true, only_assigned: true, trigger_labels: [], exclusion_label: 'claimed' };
-  const original = { 'acme/one': { ...repo }, 'acme/two': { ...repo } };
-  let settings = { ...defaults, github_issues_enabled: true, github_issue_repositories: structuredClone(original) };
-  let rejected = false;
-  const configurePage = async page => {
-    await page.route('**/api/review-settings', route => {
-      if (route.request().method() === 'POST') {
-        const payload = route.request().postDataJSON();
-        assert.deepEqual(payload.expected_issue_repositories.repositories, original);
-        if (JSON.stringify(payload.expected_issue_repositories.repositories) !== JSON.stringify(settings.github_issue_repositories)) {
-          rejected = true;
-          return route.fulfill({ status: 400, json: { error: 'issue automation settings changed in another session; reload the page and try again' } });
-        }
-        settings = { ...settings, ...payload };
-      }
-      return route.fulfill({ json: { ok: true, settings } });
-    });
-  };
-  const { page: staleTab } = await openSettings(t, { configurePage });
-  const { page: currentTab } = await openSettings(t, { configurePage });
-  await select(currentTab, 'github-issues');
-  await currentTab.getByLabel('Automation repository').selectOption('acme/two');
-  await toggle(currentTab, 'review-settings-github-issues-repository-enabled');
-  await close(currentTab);
-  await select(staleTab, 'github-issues');
-  await staleTab.getByLabel('Automation repository').selectOption('acme/one');
-  await toggle(staleTab, 'review-settings-github-issues-auto-start-assigned');
-  await staleTab.locator('#review-settings-close').click();
-  await staleTab.getByText('issue automation settings changed in another session; reload the page and try again', { exact: true }).waitFor();
-  assert.equal(rejected, true);
-  assert.deepEqual(settings.github_issue_repositories, { 'acme/one': repo });
-});
+
+
 
 
 test('Workflow beta is opt-in, isolated, persistent, and disabled on direct navigation', async t => {

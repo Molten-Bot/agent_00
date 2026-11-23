@@ -104,23 +104,17 @@ Deleting a schedule leaves any run already started intact.
 
 ### GitHub issue automation
 
-In **Settings → GitHub Issues**, enable the workflow, choose a repository from
-the available repositories, and enable issue automation for it. Set
-**Auto-start matching issues**, **Only issues assigned to me**, **Trigger labels**,
-and the **Exclusion label** for each selected repository. Any trigger label
-matches. An empty list allows any label. Assignment uses the same `gh` account
-as repository and issue discovery. Studio still supports browsing and manually
-starting issues in available repositories outside the automation selection.
+Enable **Settings → Features → Workflow (beta)** and open Workflow in the bottom
+navigation. Create an **Implement issues** workflow for a selected repository,
+choose its trigger and filters, save the draft, then explicitly enable it.
+Repositories may have no workflows or multiple independent workflows. The GitHub
+Issues feature controls the issue browser separately from workflow execution.
 
-Existing global auto-start settings keep working until you enable automation
-for a specific repository or turn off existing auto-start in settings.
-
-The service checks immediately and every minute, including the existing open
-backlog. Each matching issue is journaled before admission. Excluded issues
-remain excluded; development associations and open dependencies block new work
-without hiding an already tracked issue. Discovery checkpoints one page per
-repository and rotates large repository lists. Repository discovery refreshes
-every five minutes. **Scan now** requests an early scan.
+Workflow polling checks every 30 seconds. Existing matching items are skipped on
+the first scan unless **Include existing matches** is enabled. Legacy global
+issue/review watchers no longer start new tasks. Existing per-repository issue
+rules migrate to disabled drafts; the original configuration remains intact and
+a private `workflow-legacy-settings.json` backup is saved alongside it.
 
 Task recovery belongs to the specific task on the **GitHub Issues** page. Select
 the issue there to review and retry its work when recovery is required.
@@ -496,10 +490,78 @@ go build -o bin/harness ./cmd/harness
 
 Local `harness serve` listens on `127.0.0.1:7777` by default.
 
-Workflow is an opt-in beta under **Settings → Automation → Workflow (beta)**.
-Its React Flow proof of concept supports adding, connecting, moving, and editing
-steps; checking graph structure; saving a draft in this browser; and exporting JSON.
-It does not execute automation yet. Saved drafts are local to the browser and origin.
+Workflow is an opt-in beta under **Settings → Features → Workflow (beta)**.
+The React Flow editor defines an executable pipeline: repository → trigger →
+filters → task → bounded review cycles → optional merge. Select a node to edit
+its policy and drag nodes to arrange the canvas. Connections describe this
+pipeline; arbitrary branches or custom executable node types are not supported.
+Save draft pauses the workflow; Enable is a separate action. Preview matches is
+read-only. Activation history explains submitted tasks and merge waits.
+
+Definitions live in **`workflows.json` beside the runtime `config.json`** (normally
+`.agent00/workflows.json`). Export downloads this same portable format. Version 1
+uses camelCase fields and a top-level `version`, `revision`, and `workflows` array.
+IDs remain stable when renaming a workflow. Saves use atomic replacement and
+revision checks; stale browser writes receive HTTP 409. Unknown fields, invalid
+policies, and unsupported future versions fail closed without overwriting files.
+An empty `workflows` array is valid. Keep exported definitions in your repository
+if you want Git history; credentials and runtime history do not belong in them.
+
+```json
+{
+  "version": 1,
+  "revision": 0,
+  "workflows": [{
+    "id": "implement-ready-issues",
+    "name": "Implement ready issues",
+    "repository": "acme/project",
+    "enabled": false,
+    "includeBacklog": false,
+    "trigger": {"event": "issue.labeled", "value": "ready-for-agent"},
+    "filters": {"mode": "all", "rules": [
+      {"field": "assignee", "operator": "is", "value": "@me"},
+      {"field": "label", "operator": "isNot", "value": "blocked"}
+    ]},
+    "task": {
+      "kind": "implement",
+      "instructions": "Implement the issue and run relevant tests.",
+      "assignCreator": false,
+      "issueLinkMode": "close",
+      "draft": false
+    },
+    "reviewCycles": 2,
+    "merge": {"enabled": false, "method": "squash", "requireApproval": true, "deleteBranch": false}
+  }]
+}
+```
+
+Supported triggers: issue opened/assigned/labeled and PR opened/assigned/labeled,
+ready, review requested, changes requested, or failed checks. Assignment and
+review-request triggers accept a GitHub login or `@me`; label triggers take a
+label. Filters support all/any groups, exact case-insensitive is/isNot comparisons,
+labels, authors, assignees, bots, issue types, PR reviewers, base branches, drafts,
+and linked issues. Boolean values use `"true"`/`"false"`. Linked issues means
+GitHub's closing-issue relationships. Triggers are observed state transitions,
+not a webhook event replay: changes that occur entirely between polls can be
+missed, and a match must become false before it can activate again. Definition
+policy edits establish a new baseline; renaming and moving nodes do not.
+
+Issue tasks retain durable claims, reserved branches, fresh issue comments, and
+recovery. PR tasks either review and comment or repair the existing head branch.
+Review limits are 0–10 repair cycles plus a final confirmation review; review-only
+tasks perform one review. Merge supports squash/merge/rebase and optional branch
+deletion. It waits for checks, a non-draft PR, no requested changes, and optional
+human approval, then binds the merge to the observed head commit. PRs with no
+checks remain waiting. Review writeback success alone never authorizes merging:
+a review must explicitly report a clean result. GitHub branch protection applies.
+
+`workflow-state.json` is a separate, private runtime journal for baselines,
+activation IDs, task outcomes, and merge state. Keep it on restart; do not use it
+as a shared definition file. A dispatch interrupted before its receipt is known
+is reconciled from task history and otherwise held for inspection, never blindly
+repeated. The global repository filter gates task admission and execution; commit
+signing remains global. Turning off Workflow stops new activations and merges,
+while already started tasks retain their captured policy and can finish.
 
 The isolated editor source is in `internal/web/workflow`. To update its checked-in
 Go-embedded assets, run:

@@ -193,6 +193,7 @@ func promptImageFromDataURI(value string) (PromptImage, error) {
 // ReviewConfig captures structured pull-request review context for review tasks.
 // WorkflowRunConfig records the policy used for an automated run.
 type WorkflowRunConfig struct {
+	Instructions string `json:"instructions,omitempty"`
 	ID           string `json:"id"`
 	EventID      string `json:"eventId"`
 	Name         string `json:"name"`

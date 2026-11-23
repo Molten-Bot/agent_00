@@ -1,36 +1,38 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { exampleWorkflow, validConnection, validateWorkflow, serializeDraft, readDraft } from './model.js';
-test('example is valid and survives saving without transient selection state', () => {
-  const draft = exampleWorkflow();
-  assert.deepEqual(validateWorkflow(draft.nodes,draft.edges), []);
-  draft.nodes[0].selected = true;
-  const restored = readDraft(JSON.stringify(serializeDraft(draft.name,draft.nodes,draft.edges)));
-  assert.equal(restored.nodes[0].selected, undefined);
-  assert.deepEqual(validateWorkflow(restored.nodes,restored.edges), []);
+import test from "node:test";
+import assert from "node:assert/strict";
+import { newWorkflow, diagram, replaceDefinition } from "./model.js";
+test("new workflows are disabled, skip backlog, and default to manual merge", () => {
+  for (const kind of ["implement", "review", "repair"]) {
+    const w = newWorkflow("acme/repo", kind, "id");
+    assert.equal(w.enabled, false);
+    assert.equal(w.includeBacklog, false);
+    assert.equal(w.merge.enabled, false);
+    assert.equal(w.task.kind, kind);
+  }
 });
-test('connections reject self links, occupied ports, terminal outputs, and cycles', () => {
-  const { nodes,edges } = exampleWorkflow();
-  for (const connection of [
-    {source:'agent',target:'agent',sourceHandle:'out'},
-    {source:'trigger',target:'approval',sourceHandle:'out'},
-    {source:'action',target:'approval',sourceHandle:'out'},
-    {source:'approval',target:'trigger',sourceHandle:'out'},
-    {source:'approval',target:'agent',sourceHandle:'out'},
-  ]) assert.equal(validConnection(connection,nodes,edges),false);
-  assert.equal(validConnection({source:'approval',target:'action',sourceHandle:'out'},nodes,edges.filter(e => e.source !== 'approval')),true);
-  assert.equal(validConnection({source:'approval',target:'agent',sourceHandle:'out'},nodes,edges.filter(e => e.source !== 'approval')),false);
+test("multiple workflows survive independent updates", () => {
+  const a = newWorkflow("acme/repo", "implement", "one"),
+    b = newWorkflow("acme/repo", "review", "two");
+  let doc = { version: 1, revision: 3, workflows: [] };
+  doc = replaceDefinition(replaceDefinition(doc, a), b);
+  doc = replaceDefinition(doc, { ...a, name: "Updated" });
+  assert.equal(doc.workflows.length, 2);
+  assert.equal(doc.workflows[1].name, b.name);
+  assert.equal(doc.revision, 3);
 });
-test('validation identifies missing branches and disconnected steps', () => {
-  const {nodes,edges} = exampleWorkflow();
-  const errors = validateWorkflow(nodes,edges.filter(e => e.sourceHandle !== 'no'));
-  assert.ok(errors.some(e => e.includes('both branches')));
-  assert.ok(errors.some(e => e.includes('disconnected')));
-  assert.ok(validateWorkflow([],[]).length >= 2);
-});
-test('invalid saved drafts fail safely', () => {
-  assert.throws(() => readDraft('{'));
-  assert.throws(() => readDraft(JSON.stringify({version:2,nodes:[],edges:[]})));
-  const draft = exampleWorkflow(); draft.nodes[0].data.kind = '__proto__';
-  assert.throws(() => readDraft(JSON.stringify(draft)));
+test("diagram represents actual policy and preserves layout", () => {
+  const w = newWorkflow("acme/repo", "implement", "one");
+  w.reviewCycles = 5;
+  w.merge.enabled = true;
+  w.merge.method = "rebase";
+  w.positions.task = { x: 40, y: 50 };
+  const graph = diagram(w);
+  assert.equal(graph.nodes.length, 6);
+  assert.equal(graph.edges.length, 5);
+  assert.deepEqual(graph.nodes.find((n) => n.id === "task").position, {
+    x: 40,
+    y: 50,
+  });
+  assert.match(graph.nodes.find((n) => n.id === "review").data.detail, /5/);
+  assert.match(graph.nodes.find((n) => n.id === "merge").data.detail, /rebase/);
 });

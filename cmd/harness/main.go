@@ -31,6 +31,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/multiplex"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
 	"github.com/Molten-Bot/agent_00/internal/web"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
@@ -349,6 +350,7 @@ func runServer(args []string) int {
 	var queueFailureFollowUp func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string)
 	var queueUnexpectedNoChangesFollowUp func(requestID string, result app.Result, runCfg config.Config)
 	var queueEscalatedNoChangesFollowUp func(requestID string, result app.Result, runCfg config.Config)
+	var workflowEngine *workflow.Engine
 	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error)
 	enqueueLocalRun = func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error) {
 		if err := persistentLogs.Error(); err != nil {
@@ -695,6 +697,19 @@ func runServer(args []string) int {
 				}
 				defer release()
 
+				if runCfg.Workflow != nil && workflowEngine != nil {
+					status := "succeeded"
+					if outcome.Result.Err != nil || outcome.State == "error" || outcome.State == "stopped" {
+						status = "failed"
+					}
+					reason := "Task completed"
+					if outcome.Result.Err != nil {
+						reason = outcome.Result.Err.Error()
+					}
+					if err := workflowEngine.Complete(runCfg.Workflow.EventID, workflow.Outcome{Status: status, PRURL: outcome.Result.PRURL, Reason: reason, ReviewClean: outcome.Result.ReviewClean, ReviewedHead: outcome.Result.ReviewedHead}); err != nil {
+						daemonLogger("workflow status=error action=complete err=%q", err)
+					}
+				}
 				issueResult = outcome.Result
 				finalState = outcome.State
 				switch outcome.State {
@@ -903,6 +918,7 @@ func runServer(args []string) int {
 			daemonLogger("workflow status=error err=%q", err)
 			return app.ExitConfig
 		}
+		workflowEngine = uiServer.Workflows
 		uiServer.IssueClaims = issueClaims
 		uiServer.IssueRecovery = &cfg.IssueRecovery
 		uiServer.IssueRepair = repairQueue.capture
@@ -1112,6 +1128,7 @@ func runServer(args []string) int {
 				writeStderrLine(logger, fmt.Sprintf("error: %v", err))
 				return app.ExitPreflight
 			}
+			go workflowEngine.Run(ctx)
 			daemonLogger("localruntime.ui status=ready url=%s", monitorURL(*uiListen))
 		case <-ctx.Done():
 			return app.ExitSuccess
@@ -1556,7 +1573,12 @@ func runLocalTask(
 		logf("task request_id=%s %s", requestID, line)
 	}
 
+	var cleanReview bool
+	var reviewedHead string
+	h.OnReviewResult = func(clean bool, head string) { cleanReview = clean; reviewedHead = head }
 	res := h.Run(ctx, runCfg)
+	res.ReviewClean = cleanReview
+	res.ReviewedHead = reviewedHead
 	if ctx.Err() == nil && res.ExitCode == app.ExitWorkspace && res.WorkspaceDir == "" &&
 		(canRetryWorkspace || localruntime.IsWorkspaceDiskFull(res.Err)) {
 		return localTaskOutcome{State: "retry_workspace", Result: res}

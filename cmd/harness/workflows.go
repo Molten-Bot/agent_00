@@ -32,11 +32,11 @@ func workflowRepositoryGate(path string, c config.Config) error {
 func workflowRunConfig(r workflow.Run) (config.Config, error) {
 	w, i := r.Workflow, r.Item
 	assign := w.Task.AssignCreator
-	c := config.Config{RepoURL: "https://github.com/" + w.Repository + ".git", Prompt: w.Task.Instructions + "\n\nGitHub item: " + i.URL + "\nTitle: " + i.Title + "\n\n" + i.Body, PRTitle: i.Title, Draft: w.Task.Draft, AssignCreator: &assign, Workflow: &config.WorkflowRunConfig{ID: w.ID, EventID: r.ID, Name: w.Name, ReviewCycles: w.ReviewCycles}}
+	c := config.Config{RepoURL: "https://github.com/" + w.Repository + ".git", Prompt: w.Task.Instructions + "\n\nGitHub item: " + i.URL + "\nTitle: " + i.Title + "\n\n" + i.Body, PRTitle: i.Title, Draft: w.Task.Draft, AssignCreator: &assign, Workflow: &config.WorkflowRunConfig{Instructions: w.Task.Instructions, ID: w.ID, EventID: r.ID, Name: w.Name, ReviewCycles: w.ReviewCycles}}
 	if i.Kind == "issue" {
 		c.GitHubIssue = &config.GitHubIssueConfig{Repository: w.Repository, Number: i.Number, Title: i.Title, URL: i.URL, LinkMode: w.Task.IssueLinkMode}
 	} else if w.Task.Kind == "review" {
-		c.Review = &config.ReviewConfig{PRNumber: i.Number, PRURL: i.URL, HeadBranch: i.HeadBranch, Trigger: "workflow", Writeback: "comment"}
+		c.Review = &config.ReviewConfig{PRNumber: i.Number, PRURL: i.URL, HeadBranch: i.HeadBranch, Trigger: "manual", Writeback: "comment"}
 	} else {
 		c.BaseBranch = i.HeadBranch
 		c.RequiresNonDefaultBranch = true
@@ -76,10 +76,16 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 		if err != nil {
 			return "", err
 		}
-		return enqueue(ctx, c, false, "workflow", false)
+		return server.SubmitWorkflowRun(ctx, c, func(submitCtx context.Context, body []byte) (string, error) {
+			parsed, err := localruntime.ParseRunConfigJSON(body)
+			if err != nil {
+				return "", err
+			}
+			return enqueue(submitCtx, parsed, false, "workflow", false)
+		})
 	}
 	engine.Status = func(id string) workflow.Outcome {
-		for _, t := range broker.Snapshot().Tasks {
+		for _, t := range broker.TaskList() {
 			if t.RequestID != id {
 				continue
 			}
@@ -94,7 +100,7 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 		return workflow.Outcome{Status: "running", Reason: "Task history unavailable"}
 	}
 	engine.Reconcile = func(event string) string {
-		for _, t := range broker.Snapshot().Tasks {
+		for _, t := range broker.TaskList() {
 			data, ok := broker.TaskRunConfig(t.RequestID)
 			if !ok {
 				continue
@@ -107,7 +113,7 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 		return ""
 	}
 	server.Workflows = engine
-	go engine.Run(ctx)
+	_ = ctx // The caller starts polling after server callbacks are configured.
 	return nil
 }
 func migrateWorkflowSettings(cfg localruntime.InitConfig, store *workflow.Store) error {
