@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
@@ -1085,9 +1086,9 @@ func TestIssueRecoveryBlocksExternalRolloutWithoutRepair(t *testing.T) {
 	s.pollGitHubIssueAutoStart(ctx)
 	record := completeRecoveryRecord(t, s, "error", 1)
 	record.Incident = "missing_pr"
-	const detail = "codex: codex reported failure: Failure: Production deployment remains pending. " +
-		"Error details: Scoped IAM and shared reference key still require infrastructure work. Service flags default off. " +
-		"Docker-backed integration tests could not run because no container runtime was available."
+	const detail = "codex: codex reported failure: Failure: #42 production deployment is still incomplete. " +
+		"Error details: Secrets Manager provisioning, live verification, and production IAM approval are outstanding. " +
+		"CLI evidence switches default to disabled."
 	// Older records may carry the terminal error only in Error.
 	record.Error = detail
 	record.NextAttemptAt = time.Now().Add(time.Hour)
@@ -1122,18 +1123,18 @@ func TestIssueRecoveryChecksPreservedRolloutBeforeOverdueRetry(t *testing.T) {
 	record := completeRecoveryRecord(t, s, "error", 1)
 	record.Incident = "missing_pr"
 	record.RunError = "codex: codex reported failure: Failure: Production rollout remains pending. " +
-		"Error details: Scoped IAM and shared reference key still require infrastructure work. | [error details truncated]"
+		"Error details: Scoped IAM and shared reference key still require external provisioning. | [error details truncated]"
 	record.NextAttemptAt = time.Now().Add(-time.Minute)
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
 	reads := 0
-	s.IssueRolloutBlockedFromLogs = func(requestID, failure string) bool {
+	s.IssueRolloutBlockedFromLogs = func(requestID, failure string) (bool, bool) {
 		reads++
 		if requestID != record.RequestID || failure != record.RunError {
 			t.Fatalf("stdout lookup used request %q and failure %q", requestID, failure)
 		}
-		return true
+		return true, true
 	}
 	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
 		t.Fatal("external provisioning failure queued a harness repair")
@@ -1145,10 +1146,96 @@ func TestIssueRecoveryChecksPreservedRolloutBeforeOverdueRetry(t *testing.T) {
 		}
 	}
 	got := latestRecoveryRecord(t, s)
-	if reads != 1 || len(f.submissions) != 1 || got.Incident != localruntime.IssueIncidentExternalRollout ||
+	if reads != 2 || len(f.submissions) != 1 || got.Incident != localruntime.IssueIncidentExternalRollout ||
 		got.State != "blocked" || !got.NextAttemptAt.IsZero() || got.FailureDetail() != record.RunError {
 		t.Fatalf("overdue claim was not durably blocked: state=%q incident=%q reads=%d submissions=%d",
 			got.State, got.Incident, reads, len(f.submissions))
+	}
+}
+
+func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
+	t.Parallel()
+	const prefix = "codex: codex reported failure: Failure: Production rollout remains pending. Error details: "
+	const ambiguous = prefix + "IAM setup and Secrets Manager configuration are outstanding."
+	const confirmed = prefix + "IAM setup and Secrets Manager configuration require external provisioning."
+	const truncated = confirmed + failurefollowup.TruncatedErrorDetails
+	for _, tc := range []struct {
+		name, evidence       string
+		matchedLogs, repair  bool
+		legacyErrorFieldOnly bool
+		logsRestored         bool
+		recoveryStatusOnly   bool
+	}{
+		{name: "ambiguous preserved report", evidence: ambiguous, repair: true},
+		{name: "legacy error field", evidence: ambiguous, repair: true, legacyErrorFieldOnly: true},
+		{name: "legacy recovery status", evidence: "temporary GitHub verification failure", legacyErrorFieldOnly: true, recoveryStatusOnly: true},
+		{name: "confirmed preserved report", evidence: confirmed},
+		{name: "confirmed legacy error field", evidence: confirmed, legacyErrorFieldOnly: true},
+		{name: "confirmed secret only", evidence: prefix + "The shared Secrets Manager key requires external provisioning.", legacyErrorFieldOnly: true},
+		{name: "matching stdout reports a failed check", evidence: truncated, matchedLogs: true, repair: true},
+		{name: "no matching stdout for truncated report", evidence: truncated},
+		{name: "stdout restored after legacy error is overwritten", evidence: truncated, repair: true, legacyErrorFieldOnly: true, logsRestored: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			s.pollGitHubIssueAutoStart(t.Context())
+			record := completeRecoveryRecord(t, s, "error", 1)
+			record.State = "blocked"
+			record.Incident = localruntime.IssueIncidentExternalRollout
+			record.Error = issueDependencyRetryError(record.Incident)
+			if tc.legacyErrorFieldOnly {
+				record.Error = tc.evidence
+			} else {
+				record.RunError = tc.evidence
+			}
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			matchedLogs := tc.matchedLogs
+			s.IssueRolloutBlockedFromLogs = func(requestID, failure string) (bool, bool) {
+				if requestID != record.RequestID || failure != truncated {
+					t.Fatalf("unexpected stdout lookup for %q and %q", requestID, failure)
+				}
+				return false, matchedLogs
+			}
+			calls := 0
+			s.IssueRepair = func(_ context.Context, issue localruntime.IssueClaimRecord) (string, error) {
+				calls++
+				if issue.Incident != "missing_pr" || issue.FailureDetail() != tc.evidence {
+					t.Fatalf("unexpected repair evidence: incident=%q detail=%q", issue.Incident, issue.FailureDetail())
+				}
+				return "repair-test", nil
+			}
+			for pass := range 2 {
+				if err := s.ReconcileIssueWork(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				if pass == 0 && tc.logsRestored {
+					got := latestRecoveryRecord(t, s)
+					if got.State != "blocked" || got.Incident != record.Incident ||
+						got.Error != issueDependencyRetryError(record.Incident) || got.RunError != tc.evidence || calls != 0 {
+						t.Fatalf("legacy failure not preserved while stdout is unavailable: state=%q incident=%q error=%q run error=%q repair calls=%d",
+							got.State, got.Incident, got.Error, got.RunError, calls)
+					}
+					matchedLogs = true
+				}
+			}
+			got := latestRecoveryRecord(t, s)
+			wantRunError := tc.evidence
+			if tc.recoveryStatusOnly {
+				wantRunError = ""
+			}
+			if got.RunError != wantRunError || len(f.submissions) != 1 {
+				t.Fatalf("lost evidence or submitted a replacement worker: detail=%q submissions=%d", got.RunError, len(f.submissions))
+			}
+			if tc.repair {
+				if calls != 1 || got.RepairRequestID != "repair-test" || got.State != "retry_wait" || got.NextAttemptAt.IsZero() {
+					t.Fatalf("stale rollout block remained: calls=%d receipt=%q state=%q", calls, got.RepairRequestID, got.State)
+				}
+			} else if calls != 0 || got.Incident != localruntime.IssueIncidentExternalRollout || got.State != "blocked" || !got.NextAttemptAt.IsZero() {
+				t.Fatalf("rollout block was lost: calls=%d incident=%q state=%q", calls, got.Incident, got.State)
+			}
+		})
 	}
 }
 

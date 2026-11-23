@@ -25,6 +25,7 @@ const RedactedTaskPromptNotice = "Task prompt: redacted by the harness. Follow-u
 const FollowUpRepositoryURL = config.DefaultRepositoryURL
 
 const FailureResponseInstruction = "When the current run ends with an unresolved failure, start the final response with explicit `Failure:` and `Error details:` fields on consecutive lines, in that order. Describe earlier failures fixed during the run under `Resolved issue:` after any blocker fields."
+const rolloutFailureEvidenceInstruction = "If external provisioning blocks a production rollout, use `Failure: Production rollout remains pending.` as the summary. On the next line, name the verified prerequisites in the first sentence of `Error details:` and explicitly state that they require external provisioning. For example:\n\nFailure: Production rollout remains pending.\nError details: IAM setup and Secrets Manager configuration require external provisioning.\n\nInclude any pending repository work or failed checks in the same error details. Omit credential values."
 const RuntimeToolingInstruction = "Runtime tooling available to agents includes Playwright for local browser testing, screenshots, and comparisons; npm for JavaScript package installs, scripts, tests, and builds; Python with pip and virtualenv; and Go tooling such as `go test` and `go build`. Use the matching local tooling when it fits the repository."
 const ValidationToolingInstruction = "If local test or validation tooling is unavailable in this runtime (for example `command not found`, missing `node_modules`, a missing repository validation script or task, or restricted network access blocking dependency downloads), do not fail solely for that and do not use `Failure:` solely for that validation gap. Continue with repository changes, run any alternative checks you can, and clearly report the validation gap."
 const ActivityPrivacyInstruction = "Before sharing repository or pull-request links in public activity, use `gh repo view OWNER/REPO --json isPrivate,nameWithOwner` during clone or PR tooling. Share repo and PR links only when GitHub reports `isPrivate:false`; never share private repository links."
@@ -35,6 +36,7 @@ const NoOpInstruction = "Only return a no-op when the task is genuinely review/i
 
 var ExecutionContract = strings.Join([]string{
 	FailureResponseInstruction,
+	rolloutFailureEvidenceInstruction,
 	RuntimeToolingInstruction,
 	ValidationToolingInstruction,
 	ActivityPrivacyInstruction,
@@ -54,7 +56,13 @@ const (
 	LogFileName           = "terminal.log"
 	LegacyTaskLogFileName = "term"
 	FallbackLogSubdir     = "main"
+	TruncatedErrorDetails = " | [error details truncated]"
 )
+
+func HasTruncatedErrorDetails(failure string) bool {
+	report, _, _ := strings.Cut(failure, "\npersist task logs: ")
+	return strings.HasSuffix(report, TruncatedErrorDetails)
+}
 
 var nonRemediableRepoAccessMarkers = []string{
 	"write access to repository not granted",
@@ -97,12 +105,21 @@ const OpenDependencyReason = "required dependency is still open"
 // between word characters can be part of a contraction rather than a quote.
 var unmergedDependencySummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:(?:[^"'\x60\r\n]|\b'\b)*\bblocked by (?:an? |the )?unmerged (?:pull request |pr )?\x60?#[1-9][0-9]*\b`)
 
-var pendingProductionRolloutSummary = regexp.MustCompile(`^failure:\s*(?:the )?production (?:rollout|deployment)(?: for #[1-9][0-9]*)? (?:remains|is|is still) pending\.?$`)
-var outstandingProvisioning = regexp.MustCompile(` (?:(?:remain|are)(?: still)? (?:outstanding|pending)|(?:still )?require infrastructure work)$`)
+var pendingProductionRolloutSummary = regexp.MustCompile(`^failure:\s*(?:(?:the )?production (?:rollout|deployment)(?: for #[1-9][0-9]*)?|#[1-9][0-9]* production (?:rollout|deployment)) (?:remains|is|is still) (?:pending|incomplete)\.?$`)
+var outstandingProvisioning = regexp.MustCompile(` (?:remains?|are|is)(?: still)? (?:outstanding|pending)$`)
+var externalProvisioningRequired = regexp.MustCompile(` (?:still )?requires? external provisioning$`)
 var provisioningListSeparator = regexp.MustCompile(`, (?:and )?| and `)
-var iamProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:scoped iam|(?:scoped )?iam (?:access|approval|configuration|permissions?|polic(?:y|ies)|roles?|setup))$`)
-var secretProvisioning = regexp.MustCompile(`^(?:the )?(?:production )?(?:(?:shared )?secrets manager (?:configuration|keys?|provisioning|secrets?|setup)|shared reference keys?)$`)
-var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* flags? defaults?(?: to)? (?:off|disabled))$`)
+var legacyRolloutPrerequisites = regexp.MustCompile(`^infrastructure changes, shared secrets manager key, and live verification (?:remains?|are)(?: still)? (?:outstanding|pending)$`)
+
+const iamPrerequisite = `(?:production )?(?:scoped )?iam`
+const secretPrerequisite = `(?:production )?(?:shared )?secrets manager`
+
+var iamProvisioning = regexp.MustCompile(`^` + iamPrerequisite + ` (?:access|approval|provisioning)$`)
+var secretProvisioning = regexp.MustCompile(`^` + secretPrerequisite + ` (?:(?:key|secret) )?provisioning$`)
+var iamConfiguration = regexp.MustCompile(`^` + iamPrerequisite + `(?: (?:configuration|permissions?|polic(?:y|ies)|roles?|setup))?$`)
+var secretConfiguration = regexp.MustCompile(`^(?:` + secretPrerequisite + ` (?:configuration|keys?|secrets?|setup)|(?:production )?shared reference keys?)$`)
+var infrastructureResource = regexp.MustCompile(`^(?:production )?(?:infrastructure changes|(?:cloud |service )?accounts?|cloud resources?|(?:kubernetes |eks |ecs |gke |aks )?clusters?|credentials?|(?:tls |ssl )?certificates?|(?:database|network) (?:access|credentials)|databases?|dns(?: (?:delegation|records?|zones?))?|firewall rules?|kms keys?|(?:private )?networks?|subnets?|vpcs?|vpc endpoints?)$`)
+var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* (?:flags?|evidence switches?) defaults?(?: to)? (?:off|disabled))$`)
 var unavailableContainerValidation = regexp.MustCompile(`^docker-backed (?:[a-z0-9_-]+ )*integration(?: tests?)? could not run because no container runtime was available$`)
 var rolloutProgress = regexp.MustCompile(`^(?:added|implemented|updated|wired) \S`)
 var rolloutProgressFollowOn = regexp.MustCompile(`^(?:added|implemented|updated|wired|tests cover) \S`)
@@ -556,29 +573,29 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	if len(statements) == 0 || HasValidationFailureEvidence(details) || HasRolloutFailureOutcome(details) {
 		return false
 	}
-	statement := strings.TrimSpace(statements[0])
-	predicate := outstandingProvisioning.FindStringIndex(statement)
-	if predicate == nil {
+	first := strings.TrimSpace(statements[0])
+	legacy := legacyRolloutPrerequisites.MatchString(first)
+	if !legacy && len(externalRolloutPrerequisites(first)) == 0 {
 		return false
 	}
-	// The status must apply to the provisioning items themselves. Reject a
-	// different subject or clause that merely mentions those prerequisites.
-	var iam, secret bool
-	for _, item := range provisioningListSeparator.Split(statement[:predicate[0]], -1) {
-		switch {
-		case iamProvisioning.MatchString(item):
-			iam = true
-		case secretProvisioning.MatchString(item):
-			secret = true
-		case item == "deployment", item == "deployed source verification", item == "live source verification":
-		default:
-			return false
+	// A legacy status line can describe pending repository work. Corroborate
+	// both prerequisites before treating it as an external handoff.
+	var infrastructureConfirmed, secretConfirmed bool
+	checkStatements := func(statements []string) bool {
+		for _, statement := range statements {
+			statement = strings.TrimSpace(statement)
+			items := externalRolloutPrerequisites(statement)
+			if len(items) == 0 && statement != "" && !disabledRolloutStatus.MatchString(statement) && !unavailableContainerValidation.MatchString(statement) {
+				return false
+			}
+			for _, item := range items {
+				infrastructureConfirmed = infrastructureConfirmed || strings.TrimPrefix(item, "production ") == "infrastructure changes"
+				secretConfirmed = secretConfirmed || secretProvisioning.MatchString(item) || secretConfiguration.MatchString(item)
+			}
 		}
+		return true
 	}
-	if !iam || !secret {
-		return false
-	}
-	if !rolloutStatusOnly(statements[1:]) {
+	if !checkStatements(statements[1:]) {
 		return false
 	}
 	// Completion notes can include filenames and versions. Match them as
@@ -604,11 +621,40 @@ func IsExternalRolloutFailure(summary, details string) bool {
 			inValidation = false
 		case isPassingRolloutValidation(line, inValidation):
 			progressPending = false
-		case !rolloutStatusOnly(rolloutStatements(line)):
+		case !checkStatements(rolloutStatements(line)):
 			return false
 		}
 	}
-	return !progressPending
+	return (!legacy || (infrastructureConfirmed && secretConfirmed)) && !progressPending
+}
+
+func externalRolloutPrerequisites(statement string) []string {
+	predicate := externalProvisioningRequired.FindStringIndex(statement)
+	explicitExternal := predicate != nil
+	if !explicitExternal {
+		predicate = outstandingProvisioning.FindStringIndex(statement)
+	}
+	if predicate == nil {
+		return nil
+	}
+	// Other infrastructure configuration and resource names can refer to
+	// repository edits. Require explicit external provisioning for those items.
+	var prerequisites []string
+	for _, item := range provisioningListSeparator.Split(statement[:predicate[0]], -1) {
+		if article, name, _ := strings.Cut(item, " "); article == "a" || article == "an" || article == "the" {
+			item = name
+		}
+		switch {
+		case iamProvisioning.MatchString(item), secretProvisioning.MatchString(item):
+			prerequisites = append(prerequisites, item)
+		case explicitExternal && (iamConfiguration.MatchString(item) || secretConfiguration.MatchString(item) || infrastructureResource.MatchString(item)):
+			prerequisites = append(prerequisites, item)
+		case item == "deployment", item == "deployed source verification", item == "live source verification", item == "live verification":
+		default:
+			return nil
+		}
+	}
+	return prerequisites
 }
 
 // IsRolloutValidationSection identifies a label that introduces validation checks.
@@ -664,16 +710,6 @@ func rolloutStatements(line string) []string {
 	return strings.FieldsFunc(line, func(r rune) bool {
 		return r == '.' || r == '!' || r == '?' || r == '\r'
 	})
-}
-
-func rolloutStatusOnly(statements []string) bool {
-	for _, extra := range statements {
-		if extra = strings.TrimSpace(extra); extra != "" &&
-			!disabledRolloutStatus.MatchString(extra) && !unavailableContainerValidation.MatchString(extra) {
-			return false
-		}
-	}
-	return true
 }
 
 func isOpenDependencyFailure(summary, detail string) bool {

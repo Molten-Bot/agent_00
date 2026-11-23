@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/config"
@@ -182,6 +183,172 @@ func saveLegacyIssueRepair(t *testing.T, q *issueRepairQueue, issue localruntime
 		t.Fatal(err)
 	}
 	return record
+}
+
+func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name               string
+		attempt, number    int
+		state              string
+		legacy, skip       bool
+		sourceFulfilled    bool
+		admissionRetry     bool
+		waitForSlot        bool
+		sourceReadError    bool
+		unrelatedReadError bool
+		ordinary           bool
+	}{
+		{name: "legacy source log", attempt: 3, number: 17, state: "fulfilled", legacy: true, skip: true},
+		{name: "explicit source claim", attempt: 3, number: 17, state: "fulfilled", skip: true},
+		{name: "source claim fulfilled", attempt: 3, number: 17, state: "incident", sourceFulfilled: true, skip: true},
+		{name: "newer attempt fulfilled after enqueue rejection", attempt: 3, number: 17, state: "fulfilled", admissionRetry: true, skip: true},
+		{name: "source fulfilled after enqueue rejection", attempt: 3, number: 17, state: "incident", sourceFulfilled: true, admissionRetry: true, skip: true},
+		{name: "newer attempt fulfilled while waiting for a slot", attempt: 3, number: 17, state: "fulfilled", waitForSlot: true, skip: true},
+		{name: "legacy source fulfilled while waiting for a slot", attempt: 3, number: 17, state: "incident", legacy: true, sourceFulfilled: true, waitForSlot: true, skip: true},
+		{name: "unfulfilled retry while waiting for a slot", attempt: 3, number: 17, state: "incident", waitForSlot: true},
+		{name: "source read failed after scheduler admission", attempt: 3, number: 17, state: "incident", waitForSlot: true, sourceReadError: true},
+		{name: "unrelated malformed claim after admission", attempt: 3, number: 18, state: "incident", waitForSlot: true, unrelatedReadError: true},
+		{name: "legacy source with unrelated malformed claim", attempt: 3, number: 18, state: "incident", waitForSlot: true, legacy: true, unrelatedReadError: true},
+		{name: "ordinary repair with newer fulfillment", attempt: 3, number: 17, state: "fulfilled", ordinary: true},
+		{name: "ordinary repair with fulfilled source", attempt: 3, number: 17, state: "incident", sourceFulfilled: true, ordinary: true},
+		{name: "different issue", attempt: 3, number: 18, state: "fulfilled"},
+		{name: "older fulfillment", attempt: 1, number: 17, state: "fulfilled"},
+		{name: "unfulfilled retry", attempt: 3, number: 17, state: "incident"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			claims, source := lifecycleRecord(t)
+			q := issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, claims: claims, logRoot: t.TempDir(), logf: t.Logf}
+			source.RunError = "codex: codex reported failure: Failure: Production rollout remains pending. Error details: IAM setup and Secrets Manager configuration are outstanding."
+			source.Incident = localruntime.IssueIncidentExternalRollout
+			source.Outcome = "error"
+			source.Run.GitHubIssue.Claim.Attempt = 2
+			if tc.ordinary {
+				source.RunError = "internal invariant failed"
+				source.Incident = "missing_pr"
+			}
+			record := saveLegacyIssueRepair(t, &q, source)
+			if !tc.ordinary {
+				record.State = "blocked"
+				record.Error = failurefollowup.ExternalRolloutPrerequisitesReason
+			}
+			if !tc.legacy {
+				record.SourceClaimID = source.ID
+			}
+			source.RepairRequestID = record.RequestID
+			if err := q.store.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			other := source
+			other.ID = strings.Repeat("c", 32)
+			other.RequestID = "issue-" + other.ID
+			other.State = tc.state
+			other.RepairRequestID = ""
+			cfg := *source.Run.GitHubIssue
+			cfg.Number = tc.number
+			claim := *cfg.Claim
+			claim.ID = other.ID
+			claim.Attempt = tc.attempt
+			cfg.Claim = &claim
+			other.Run.GitHubIssue = &cfg
+			if other.State == "fulfilled" {
+				other.VerifiedAt = time.Now()
+			}
+			calls := 0
+			enqueue := func(context.Context, config.Config, bool, string, bool) (string, error) {
+				calls++
+				return "", errors.New("admission unavailable")
+			}
+			if tc.admissionRetry {
+				if err := claims.Save(source); err != nil {
+					t.Fatal(err)
+				}
+				q.reconcile(t.Context(), enqueue)
+				repairs, err := q.store.List()
+				if err != nil || len(repairs) != 1 || calls != 1 || repairs[0].State != "queued" || repairs[0].NextAttemptAt.IsZero() {
+					t.Fatalf("reopened repair was not queued for retry: calls=%d repairs=%+v err=%v", calls, repairs, err)
+				}
+				record = repairs[0]
+				record.NextAttemptAt = time.Time{}
+				if err := q.store.Save(record); err != nil {
+					t.Fatal(err)
+				}
+				calls = 0
+			}
+			var waiting *issueRepairWork
+			if tc.waitForSlot {
+				if err := claims.Save(source); err != nil {
+					t.Fatal(err)
+				}
+				q.reconcile(t.Context(), func(ctx context.Context, _ config.Config, _ bool, _ string, _ bool) (string, error) {
+					waiting = ctx.Value(issueRepairContextKey{}).(*issueRepairWork)
+					return waiting.record.RequestID, nil
+				})
+				if waiting == nil {
+					t.Fatal("reopened repair was not admitted to the queue")
+				}
+				t.Cleanup(func() { waiting.lock.Close() })
+			}
+			if tc.sourceFulfilled {
+				source.State = "fulfilled"
+				source.VerifiedAt = time.Now()
+			}
+			if err := claims.Save(source); err != nil {
+				t.Fatal(err)
+			}
+			if err := claims.Save(other); err != nil {
+				t.Fatal(err)
+			}
+			if waiting != nil {
+				if tc.sourceReadError {
+					if err := os.WriteFile(filepath.Join(claims.Root, source.ID+".json"), []byte("{"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if tc.unrelatedReadError {
+					if err := os.WriteFile(filepath.Join(claims.Root, other.ID+".json"), []byte("{"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				err := waiting.start()
+				waiting.finish("", app.Result{Err: err})
+				repairs, readErr := q.store.List()
+				if readErr != nil || len(repairs) != 1 {
+					t.Fatalf("repair records = %d, err = %v", len(repairs), readErr)
+				}
+				got := repairs[0]
+				switch {
+				case tc.skip:
+					if !errors.Is(err, errIssueRepairSourceFulfilled) || got.Started || got.State != "blocked" || got.Error != issueRepairSourceFulfilledReason {
+						t.Fatalf("superseded repair: started=%t state=%q error=%q, start error=%v", got.Started, got.State, got.Error, err)
+					}
+				case tc.sourceReadError:
+					if !errors.Is(err, errIssueRepairSourceCheck) || got.Started || got.State != "queued" || got.NextAttemptAt.IsZero() {
+						t.Fatalf("source check error did not defer repair: started=%t state=%q error=%v", got.Started, got.State, err)
+					}
+				default:
+					if err != nil || !got.Started {
+						t.Fatalf("eligible repair failed to start: started=%t error=%v", got.Started, err)
+					}
+				}
+				return
+			}
+			for range 2 {
+				q.reconcile(t.Context(), enqueue)
+			}
+			repairs, err := q.store.List()
+			if err != nil || len(repairs) != 1 {
+				t.Fatalf("repair records = %d, err = %v", len(repairs), err)
+			}
+			if tc.skip {
+				if calls != 0 || repairs[0].State != "blocked" || repairs[0].Error != issueRepairSourceFulfilledReason {
+					t.Fatalf("superseded repair changed or dispatched: calls=%d state=%q error=%q", calls, repairs[0].State, repairs[0].Error)
+				}
+			} else if calls != 1 || repairs[0].State != "queued" {
+				t.Fatalf("repair should remain eligible: calls=%d state=%q", calls, repairs[0].State)
+			}
+		})
+	}
 }
 
 func TestIssueRepairDependencyBlockDoesNotSuppressAnotherClaim(t *testing.T) {

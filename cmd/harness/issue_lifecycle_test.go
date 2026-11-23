@@ -279,6 +279,7 @@ func TestIssueRetentionAfterRetryWithBlockedRepair(t *testing.T) {
 		remove       bool
 	}{
 		{name: "legacy rollout skip", reason: failurefollowup.ExternalRolloutPrerequisitesReason, remove: true},
+		{name: "repair skipped after issue fulfillment", reason: issueRepairSourceFulfilledReason, remove: true},
 		{name: "previously started rollout repair", reason: failurefollowup.ExternalRolloutPrerequisitesReason, started: true},
 		{name: "other blocked repair", reason: localruntime.ErrIssueOwnershipChanged.Error()},
 	} {
@@ -433,10 +434,17 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 		{"queued and linked", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
 		{"dispatch intent without a claim link", "running", "", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
 		{"joined provisioning and flag status", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding | API and MCP flags default to off.", true},
-		{"provisioning with unavailable integration validation", "queued", "50", "Scoped IAM, shared reference key, and deployment still require infrastructure work. API flags default off. Docker-backed integration tests could not run because no container runtime was available.", true},
+		{"provisioning with unavailable integration validation", "queued", "50", "Scoped IAM, shared reference key, and deployment still require external provisioning. API flags default off. Docker-backed integration tests could not run because no container runtime was available.", true},
+		{"uncorroborated legacy rollout prerequisites", "queued", "50", "Infrastructure changes, shared Secrets Manager key, and live verification remain pending. API and MCP evidence switches default to off.", false},
+		{"legacy rollout with only secret confirmed", "queued", "50", "Infrastructure changes, shared Secrets Manager key, and live verification remain pending. API and MCP evidence switches default to off. The shared Secrets Manager key requires external provisioning.", false},
+		{"corroborated legacy rollout prerequisites", "queued", "50", "Infrastructure changes, shared Secrets Manager key, and live verification remain pending. API and MCP evidence switches default to off. Infrastructure changes and the shared Secrets Manager key require external provisioning.", true},
+		{"infrastructure configuration work", "queued", "50", "IAM policies and Secrets Manager configuration still require infrastructure work.", false},
+		{"ambiguous IAM and secret configuration", "queued", "50", "IAM setup and Secrets Manager configuration are outstanding.", false},
 		{"actionable", "queued", "50", "IAM approval and Secrets Manager provisioning are complete, but local fixes remain outstanding.", false},
 		{"actionable after provisioning details", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding. Deployment tests fail.", false},
 		{"actionable flag regression", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding | Due to a regression API flags default to off.", false},
+		{"stale stored blocker", "blocked", "50", "IAM setup and Secrets Manager configuration are outstanding.", false},
+		{"confirmed stored blocker", "blocked", "50", "IAM setup and Secrets Manager configuration require external provisioning.", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			claims, issue := lifecycleRecord(t)
@@ -445,11 +453,15 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 			run := failureFollowUpRunConfigWithContext(issue.RequestID, app.Result{}, issue.Run, q.logRoot, formatFailureFollowUpContext(tc.exitCode, failure, issue.Run.Prompt))
 			id := strings.Repeat("b", 32)
 			record := localruntime.IssueRepairRecord{ID: id, RequestID: "repair-" + id, State: tc.state, Run: run}
-			if tc.state == "queued" {
+			if tc.state == "queued" || tc.state == "blocked" {
 				issue.Outcome = "error"
 				issue.Error = failure.Error()
 				issue.Incident = "missing_pr"
 				issue.RepairRequestID = record.RequestID
+				if tc.state == "blocked" {
+					record.Error = failurefollowup.ExternalRolloutPrerequisitesReason
+					issue.Incident = localruntime.IssueIncidentExternalRollout
+				}
 				if err := claims.Save(issue); err != nil {
 					t.Fatal(err)
 				}
@@ -482,8 +494,8 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 
 func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 	t.Parallel()
-	const summary = "Failure: Production rollout remains pending."
-	const prerequisites = "IAM approval and Secrets Manager provisioning remain outstanding."
+	const summary = "Failure: #42 production rollout remains incomplete."
+	const prerequisites = "Infrastructure changes, shared Secrets Manager key, and live verification still require external provisioning. API and MCP evidence switches default to off."
 	const progress = "Added the endpoint in /tmp/worktree."
 	const stored = "codex: codex reported failure: " + summary + " Error details: " + prerequisites +
 		" | " + progress + " | Updated fixtures. | Validation passed for unit tests. | [error details truncated]"
@@ -494,6 +506,8 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 		{"linked repair with full report", "queued", logFileName, "stdout", "API flags default off.", true},
 		{"dispatch intent with legacy log", "running", legacyTaskLogFileName, "stdout", "API flags default off.", true},
 		{"deployment defect beyond truncation", "queued", logFileName, "stdout", "Smoke check returned HTTP 500.", false},
+		{"stored blocker with deployment defect beyond truncation", "blocked", logFileName, "stdout", "Smoke check returned HTTP 500.", false},
+		{"stored blocker with missing stdout", "blocked", "", "", "", true},
 		{"readiness timeout under validation beyond truncation", "queued", logFileName, "stdout", "## Validation\n- Readiness check timed out.", false},
 		{"passing validation beyond truncation", "queued", logFileName, "stdout", "## Validation\n- Unit tests passed.", true},
 		{"stderr echo", "queued", logFileName, "stderr", "API flags default off.", false},
@@ -507,6 +521,9 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 			issue.ExitCode = app.ExitCodex
 			record := saveLegacyIssueRepair(t, q, issue)
 			record.State = tc.state
+			if tc.state == "blocked" {
+				record.Error = failurefollowup.ExternalRolloutPrerequisitesReason
+			}
 			if err := q.store.Save(record); err != nil {
 				t.Fatal(err)
 			}
@@ -514,7 +531,11 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 			issue.Incident = "missing_pr"
 			issue.StoppedAt = time.Now().Add(-time.Minute)
 			issue.NextAttemptAt = time.Now().Add(time.Minute)
-			if tc.state == "queued" {
+			if tc.state == "blocked" {
+				issue.Incident = localruntime.IssueIncidentExternalRollout
+				issue.NextAttemptAt = time.Time{}
+			}
+			if tc.state == "queued" || tc.state == "blocked" {
 				issue.RepairRequestID = record.RequestID
 			} else {
 				issue.RunError = ""
