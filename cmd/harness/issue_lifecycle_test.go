@@ -368,6 +368,30 @@ func TestIssueRepairRequiresVerifiedPR(t *testing.T) {
 	}
 }
 
+func TestIssueRepairVerifiesSSHRepositoryIdentity(t *testing.T) {
+	t.Parallel()
+	for _, repo := range []string{"git@github.com:acme/harness.git", "ssh://git@github.com/acme/harness.git", "https://github.com/acme/harness.git", "acme/harness"} {
+		t.Run(repo, func(t *testing.T) {
+			calls := 0
+			q := issueRepairQueue{runner: repairPRRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+				calls++
+				if !strings.Contains(strings.Join(cmd.Args, " "), "--repo acme/harness") {
+					t.Fatalf("wrong verification target: %v", cmd.Args)
+				}
+				return execx.Result{Stdout: `{"url":"https://github.com/acme/harness/pull/42","state":"OPEN","headRefName":"repair-branch"}`}, nil
+			})}
+			record := localruntime.IssueRepairRecord{PRURL: "https://github.com/acme/harness/pull/42", Branch: "repair-branch", Run: config.Config{RepoURL: repo}}
+			if err := q.verifyPR(record); err != nil || calls != 1 {
+				t.Fatalf("verification = %v, calls = %d", err, calls)
+			}
+			record.PRURL = "https://github.com/other/harness/pull/42"
+			if err := q.verifyPR(record); err == nil || calls != 1 {
+				t.Fatal("cross-repository repair was accepted")
+			}
+		})
+	}
+}
+
 func TestIssueRepairOutboxBlocksLegacyOwnershipFailure(t *testing.T) {
 	t.Parallel()
 	claims, issue := lifecycleRecord(t)

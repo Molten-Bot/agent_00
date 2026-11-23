@@ -2170,6 +2170,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 
 	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=completed") {
 		t.Status = "completed"
+		t.Error = ""
 		t.WorkspaceDir = stringsx.FirstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
 		t.Branch = stringsx.FirstNonEmpty(fields["branch"], t.Branch)
 		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
@@ -2177,6 +2178,7 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 
 	if isFinalTaskLifecycleLine(fields) && strings.HasPrefix(line, "task status=ok") {
 		t.Status = "completed"
+		t.Error = ""
 		t.WorkspaceDir = stringsx.FirstNonEmpty(fields["workspace"], fields["workspace_dir"], t.WorkspaceDir)
 		t.Branch = stringsx.FirstNonEmpty(fields["branch"], t.Branch)
 		t.PRURL = stringsx.FirstNonEmpty(taskPRURLFromFields(fields), t.PRURL)
@@ -2286,6 +2288,12 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		}
 		if !agentInvocationLine {
 			t.Error = stringsx.FirstNonEmpty(fields["err"], fields["error"], t.Error)
+			// A successful stage supersedes earlier recoverable diagnostics (for
+			// example gh reporting no required checks before the fallback passes).
+			// Keep the original diagnostic in the logs, not as a current failure.
+			if t.Status == "running" && fields["stage"] != "" && fields["status"] == "ok" {
+				t.Error = ""
+			}
 		}
 		if fields["stage"] == "review" && fields["status"] == "warn" && fields["action"] == "leave_draft" && fields["reason"] == "fix_passes_exhausted" {
 			t.Warning = "Post-task review findings remain. Pull request left in draft for human review."
