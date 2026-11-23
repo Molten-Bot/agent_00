@@ -291,10 +291,10 @@ func TestIssueRecoveryFinalizesCompletedAttemptAfterOwnerRestored(t *testing.T) 
 		t.Fatalf("expected label removal failure after owner restored, got %v", err)
 	}
 	blocked = latestRecoveryRecord(t, s)
-	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || blocked.NextAttemptAt.IsZero() {
-		t.Fatalf("label removal failure lost the dispatch block: state=%s error=%q retry=%v", blocked.State, blocked.Error, blocked.NextAttemptAt)
+	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || !blocked.NextAttemptAt.IsZero() || blocked.NextUnlockAt.IsZero() {
+		t.Fatalf("label removal failure lost the dispatch block or cleanup deadline: state=%s error=%q dispatch=%v cleanup=%v", blocked.State, blocked.Error, blocked.NextAttemptAt, blocked.NextUnlockAt)
 	}
-	blocked.NextAttemptAt = time.Now().Add(-time.Second)
+	blocked.NextUnlockAt = time.Now().Add(-time.Second)
 	if err := s.IssueClaims.Save(blocked); err != nil {
 		t.Fatal(err)
 	}
@@ -350,10 +350,10 @@ func TestIssueRecoveryFinalizesInterruptedAttemptAfterOwnerRestored(t *testing.T
 		t.Fatalf("expected label removal failure after owner restored, got %v", err)
 	}
 	blocked = latestRecoveryRecord(t, s)
-	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || blocked.NextAttemptAt.IsZero() {
-		t.Fatalf("label removal failure lost the dispatch block: state=%s error=%q retry=%v", blocked.State, blocked.Error, blocked.NextAttemptAt)
+	if blocked.State != "blocked" || blocked.Error != localruntime.ErrIssueOwnershipChanged.Error() || !blocked.NextAttemptAt.IsZero() || blocked.NextUnlockAt.IsZero() {
+		t.Fatalf("label removal failure lost the dispatch block or cleanup deadline: state=%s error=%q dispatch=%v cleanup=%v", blocked.State, blocked.Error, blocked.NextAttemptAt, blocked.NextUnlockAt)
 	}
-	blocked.NextAttemptAt = time.Now().Add(-time.Second)
+	blocked.NextUnlockAt = time.Now().Add(-time.Second)
 	if err := s.IssueClaims.Save(blocked); err != nil {
 		t.Fatal(err)
 	}
@@ -572,6 +572,21 @@ func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 	if err := restarted.ReconcileIssueWork(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if f.deletes != 1 {
+		t.Fatalf("retried cleanup before its deadline: deletes=%d", f.deletes)
+	}
+	if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.NextUnlockAt = time.Now().Add(-time.Second)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ReconcileIssueWork(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := latestRecoveryRecord(t, restarted); got.UnlockPending || got.NextAttemptAt.IsZero() || f.deletes != 2 {
+		t.Fatalf("cleanup did not finish and start the run cooldown: pending=%t deadline=%v deletes=%d", got.UnlockPending, got.NextAttemptAt, f.deletes)
+	}
 	if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
 		r.NextAttemptAt = time.Now().Add(-time.Second)
 		r.PublicationReady = true
@@ -595,6 +610,61 @@ func expireIssueRetry(t *testing.T, s Server, id string) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestIssueRecoveryHonorsLabelCleanupRetryAfter(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, f := recoveryServer(t)
+	dispatches := 0
+	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
+		dispatches++
+		return "", errors.New("temporary dispatch failure")
+	}
+	s.pollGitHubIssueAutoStart(ctx)
+	waiting := latestRecoveryRecord(t, s)
+	if !waiting.UnlockPending || !waiting.NextAttemptAt.After(time.Now()) {
+		t.Fatalf("failed admission did not leave a label and dispatch cooldown: %+v", waiting)
+	}
+	requests := 0
+	rateLimited := errors.New("rate limited")
+	retryAt := time.Now().UTC().Truncate(time.Second).Add(2 * time.Hour)
+	s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		requests++
+		if strings.Contains(strings.Join(cmd.Args, " "), "--method DELETE") {
+			return execx.Result{Stdout: "HTTP/2.0 429 Too Many Requests\r\nRetry-After: " + retryAt.Format(http.TimeFormat) + "\r\n\r\n"}, rateLimited
+		}
+		return f.Run(ctx, cmd)
+	})
+	if err := s.ReconcileIssueWork(ctx); !errors.Is(err, rateLimited) {
+		t.Fatalf("label cleanup should run during dispatch cooldown, got %v", err)
+	}
+	s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+	got := latestRecoveryRecord(t, s)
+	if !got.UnlockPending || !got.NextUnlockAt.Equal(retryAt) || got.UnlockFailures != 1 ||
+		!got.NextAttemptAt.Equal(waiting.NextAttemptAt) || got.Failures != waiting.Failures {
+		t.Fatalf("cleanup failure changed dispatch backoff or lost Retry-After: %+v", got)
+	}
+	expireIssueRetry(t, s, waiting.ID)
+	before := requests
+	if err := s.ReconcileIssueWork(ctx); err != nil || requests != before {
+		t.Fatalf("reconciliation called GitHub during cleanup cooldown: requests=%d, error=%v", requests-before, err)
+	}
+	if err := s.IssueClaims.Update(waiting.ID, func(r *localruntime.IssueClaimRecord) error {
+		r.NextUnlockAt = time.Now().Add(-time.Second)
+		r.NextAttemptAt = waiting.NextAttemptAt
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.GitHubIssueRunner = f
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got = latestRecoveryRecord(t, s)
+	if got.UnlockPending || got.LabelAdded || !got.NextUnlockAt.IsZero() || got.UnlockFailures != 0 || f.deletes != 1 || dispatches != 1 {
+		t.Fatalf("due cleanup did not clear label and backoff: %+v deletes=%d dispatches=%d", got, f.deletes, dispatches)
 	}
 }
 
@@ -883,7 +953,10 @@ func testIssueRecoveryBlocksPrerequisite(t *testing.T, report, incident, want st
 		t.Fatal("expected temporary unlock failure")
 	}
 	if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
-		r.NextAttemptAt = time.Now().Add(-time.Second)
+		if !r.NextAttemptAt.IsZero() || r.NextUnlockAt.IsZero() {
+			t.Fatalf("dependency failure scheduled dispatch or lost cleanup deadline: dispatch=%v cleanup=%v", r.NextAttemptAt, r.NextUnlockAt)
+		}
+		r.NextUnlockAt = time.Now().Add(-time.Second)
 		return nil
 	}); err != nil {
 		t.Fatal(err)

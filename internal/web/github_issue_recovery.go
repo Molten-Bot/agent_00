@@ -257,7 +257,11 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	}
 	record.ProcessGroups = nil
 	record.ProcessUncertain = false
-	cooling := time.Now().Before(record.NextAttemptAt)
+	now := time.Now()
+	if record.UnlockPending && now.Before(record.NextUnlockAt) {
+		return nil
+	}
+	cooling := now.Before(record.NextAttemptAt)
 	// Failed admission can leave a label to clean up while dispatch cools down.
 	if cooling && (record.Outcome != "" || !record.UnlockPending) {
 		return nil
@@ -265,6 +269,9 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	issue := record.Run.GitHubIssue
 	remote, err := s.latestIssueAttempt(ctx, issue.Repository, issue.Number)
 	if err != nil {
+		if record.UnlockPending {
+			return s.deferIssueUnlock(record.ID, err)
+		}
 		return s.deferIssueRecord(record, err)
 	}
 	if staleOwner && (remote.Claim.ID != record.ID || remote.InstanceID != record.InstanceID) {
@@ -295,7 +302,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	// Unlock must remain possible even if PR lookup or settings are unavailable.
 	if record.UnlockPending && remote.Claim.ID == record.ID {
 		if err := s.unlockIssue(ctx, &record); err != nil {
-			return s.deferIssueRecord(record, err)
+			return s.deferIssueUnlock(record.ID, err)
 		}
 	}
 	if cooling {
@@ -381,7 +388,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	}
 	if record.Outcome != "" && record.NextAttemptAt.IsZero() {
 		record.State = "retry_wait"
-		record.NextAttemptAt = time.Now().Add(issueRetryDelay(record, policy))
+		record.NextAttemptAt = time.Now().Add(issueRetryDelay(record.ID, issueRetryFailures(record), policy))
 		return s.IssueClaims.Save(record)
 	}
 	if s.IssueReady != nil {
@@ -497,9 +504,13 @@ func issueRunFailures(record localruntime.IssueClaimRecord) int {
 	return failures
 }
 
-func issueRetryDelay(record localruntime.IssueClaimRecord, policy localruntime.IssueRecoveryConfig) time.Duration {
+func issueRetryFailures(record localruntime.IssueClaimRecord) int {
+	return max(record.AgentAttempts, record.Failures, issueRunFailures(record))
+}
+
+func issueRetryDelay(id string, failures int, policy localruntime.IssueRecoveryConfig) time.Duration {
 	seconds := policy.RetryDelaySeconds
-	for i := 1; i < max(record.AgentAttempts, record.Failures, issueRunFailures(record)) && seconds < policy.MaxBackoffSeconds; i++ {
+	for i := 1; i < failures && seconds < policy.MaxBackoffSeconds; i++ {
 		if seconds > policy.MaxBackoffSeconds/5 {
 			seconds = policy.MaxBackoffSeconds
 		} else {
@@ -509,19 +520,24 @@ func issueRetryDelay(record localruntime.IssueClaimRecord, policy localruntime.I
 	seconds = min(seconds, policy.MaxBackoffSeconds)
 	// Stable jitter survives restarts and makes tests deterministic.
 	jitter := 0
-	if len(record.ID) > 0 {
-		jitter = int(record.ID[0]) % max(1, seconds/5)
+	if len(id) > 0 {
+		jitter = int(id[0]) % max(1, seconds/5)
 	}
 	return time.Duration(min(seconds+jitter, policy.MaxBackoffSeconds)) * time.Second
 }
 
 func (s Server) scheduleIssueRetry(record *localruntime.IssueClaimRecord, cause error) {
 	record.Failures++
-	record.NextAttemptAt = time.Now().Add(issueRetryDelay(*record, s.IssueRecovery.Defaults()))
+	record.NextAttemptAt = issueRetryDeadline(record.ID, issueRetryFailures(*record), s.IssueRecovery.Defaults(), cause)
+}
+
+func issueRetryDeadline(id string, failures int, policy localruntime.IssueRecoveryConfig, cause error) time.Time {
+	deadline := time.Now().Add(issueRetryDelay(id, failures, policy))
 	var rate *issueRateLimitError
-	if errors.As(cause, &rate) && rate.RetryAt.After(record.NextAttemptAt) {
-		record.NextAttemptAt = rate.RetryAt
+	if errors.As(cause, &rate) && rate.RetryAt.After(deadline) {
+		return rate.RetryAt
 	}
+	return deadline
 }
 
 func repairableIssueIncident(record localruntime.IssueClaimRecord) bool {
@@ -583,6 +599,16 @@ func blockStaleIssueClaim(record *localruntime.IssueClaimRecord) {
 	record.NextAttemptAt = time.Time{}
 }
 
+func (s Server) deferIssueUnlock(id string, cause error) error {
+	err := s.IssueClaims.Update(id, func(record *localruntime.IssueClaimRecord) error {
+		record.UnlockPending = true
+		record.UnlockFailures++
+		record.NextUnlockAt = issueRetryDeadline(record.ID, record.UnlockFailures, s.IssueRecovery.Defaults(), cause)
+		return nil
+	})
+	return errors.Join(cause, err)
+}
+
 func (s Server) unlockIssue(ctx context.Context, record *localruntime.IssueClaimRecord) error {
 	issue := record.Run.GitHubIssue
 	// Read first: deletion after an accepted-but-lost response is idempotent.
@@ -598,6 +624,8 @@ func (s Server) unlockIssue(ctx context.Context, record *localruntime.IssueClaim
 	}
 	record.LabelAdded = false
 	record.UnlockPending = false
+	record.NextUnlockAt = time.Time{}
+	record.UnlockFailures = 0
 	return s.IssueClaims.Save(*record)
 }
 
