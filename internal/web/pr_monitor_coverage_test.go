@@ -718,7 +718,7 @@ func TestPRReviewCommentsHandlesNonPRURLRunErrorsAndEmptyPayloads(t *testing.T) 
 	if err != nil || comments != nil {
 		t.Fatalf("prReviewComments(blank stdout) = (%#v, %v), want (nil, nil)", comments, err)
 	}
-	wantArgs := []string{"api", "--method", "GET", "repos/acme/repo/pulls/1/comments", "-F", "per_page=100"}
+	wantArgs := []string{"api", "--paginate", "--method", "GET", "repos/acme/repo/pulls/1/comments", "-F", "per_page=100"}
 	if commands := blankRunner.Commands(); len(commands) != 1 || !slices.Equal(commands[0].Args, wantArgs) {
 		t.Fatalf("review comment commands = %+v, want gh %v", commands, wantArgs)
 	}

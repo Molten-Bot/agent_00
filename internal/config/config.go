@@ -1012,12 +1012,13 @@ func extractPRBodySummary(body string) string {
 			break
 		}
 		fence := body[opening[2]:opening[3]]
-		closing := "\n" + fence
-		_, after, found := strings.Cut(body[opening[1]:]+"\n", closing+"\n")
-		if !found {
+		closing := regexp.MustCompile("\n" + fence + "[ \t]*\n")
+		remainder := body[opening[1]:] + "\n"
+		match := closing.FindStringIndex(remainder)
+		if match == nil {
 			break
 		}
-		body = strings.TrimSpace(body[:opening[0]] + "\n\n" + strings.TrimPrefix(after, "\n"))
+		body = strings.TrimSpace(body[:opening[0]] + "\n\n" + strings.TrimPrefix(remainder[match[1]:], "\n"))
 	}
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyGeneratedByLine, ""))
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyFormatReferenceLine, ""))
