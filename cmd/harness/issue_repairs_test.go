@@ -184,6 +184,8 @@ func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
 		legacy, skip    bool
 		sourceFulfilled bool
 		admissionRetry  bool
+		waitForSlot     bool
+		sourceReadError bool
 		ordinary        bool
 	}{
 		{name: "legacy source log", attempt: 3, number: 17, state: "fulfilled", legacy: true, skip: true},
@@ -191,6 +193,10 @@ func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
 		{name: "source claim fulfilled", attempt: 3, number: 17, state: "incident", sourceFulfilled: true, skip: true},
 		{name: "newer attempt fulfilled after enqueue rejection", attempt: 3, number: 17, state: "fulfilled", admissionRetry: true, skip: true},
 		{name: "source fulfilled after enqueue rejection", attempt: 3, number: 17, state: "incident", sourceFulfilled: true, admissionRetry: true, skip: true},
+		{name: "newer attempt fulfilled while waiting for a slot", attempt: 3, number: 17, state: "fulfilled", waitForSlot: true, skip: true},
+		{name: "legacy source fulfilled while waiting for a slot", attempt: 3, number: 17, state: "incident", legacy: true, sourceFulfilled: true, waitForSlot: true, skip: true},
+		{name: "unfulfilled retry while waiting for a slot", attempt: 3, number: 17, state: "incident", waitForSlot: true},
+		{name: "source read failed after scheduler admission", attempt: 3, number: 17, state: "incident", waitForSlot: true, sourceReadError: true},
 		{name: "ordinary repair with newer fulfillment", attempt: 3, number: 17, state: "fulfilled", ordinary: true},
 		{name: "ordinary repair with fulfilled source", attempt: 3, number: 17, state: "incident", sourceFulfilled: true, ordinary: true},
 		{name: "different issue", attempt: 3, number: 18, state: "fulfilled"},
@@ -256,6 +262,20 @@ func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
 				}
 				calls = 0
 			}
+			var waiting *issueRepairWork
+			if tc.waitForSlot {
+				if err := claims.Save(source); err != nil {
+					t.Fatal(err)
+				}
+				q.reconcile(t.Context(), func(ctx context.Context, _ config.Config, _ bool, _ string, _ bool) (string, error) {
+					waiting = ctx.Value(issueRepairContextKey{}).(*issueRepairWork)
+					return waiting.record.RequestID, nil
+				})
+				if waiting == nil {
+					t.Fatal("reopened repair was not admitted to the queue")
+				}
+				t.Cleanup(func() { waiting.lock.Close() })
+			}
 			if tc.sourceFulfilled {
 				source.State = "fulfilled"
 				source.VerifiedAt = time.Now()
@@ -265,6 +285,35 @@ func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {
 			}
 			if err := claims.Save(other); err != nil {
 				t.Fatal(err)
+			}
+			if waiting != nil {
+				if tc.sourceReadError {
+					if err := os.WriteFile(filepath.Join(claims.Root, source.ID+".json"), []byte("{"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				err := waiting.start()
+				waiting.finish("", app.Result{Err: err})
+				repairs, readErr := q.store.List()
+				if readErr != nil || len(repairs) != 1 {
+					t.Fatalf("repair records = %d, err = %v", len(repairs), readErr)
+				}
+				got := repairs[0]
+				switch {
+				case tc.skip:
+					if !errors.Is(err, errIssueRepairSourceFulfilled) || got.Started || got.State != "blocked" || got.Error != issueRepairSourceFulfilledReason {
+						t.Fatalf("superseded repair: started=%t state=%q error=%q, start error=%v", got.Started, got.State, got.Error, err)
+					}
+				case tc.sourceReadError:
+					if !errors.Is(err, errIssueRepairSourceCheck) || got.Started || got.State != "queued" || got.NextAttemptAt.IsZero() {
+						t.Fatalf("source check error did not defer repair: started=%t state=%q error=%v", got.Started, got.State, err)
+					}
+				default:
+					if err != nil || !got.Started {
+						t.Fatalf("eligible repair failed to start: started=%t error=%v", got.Started, err)
+					}
+				}
+				return
 			}
 			for range 2 {
 				q.reconcile(t.Context(), enqueue)

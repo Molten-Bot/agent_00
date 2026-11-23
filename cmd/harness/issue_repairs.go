@@ -26,6 +26,9 @@ import (
 const issueRepairSource = "issue_repair"
 const issueRepairSourceFulfilledReason = "source issue already fulfilled"
 
+var errIssueRepairSourceFulfilled = errors.New(issueRepairSourceFulfilledReason)
+var errIssueRepairSourceCheck = errors.New("recheck reopened repair source")
+
 type issueRepairContextKey struct{}
 type issueRepairWork struct {
 	queue  *issueRepairQueue
@@ -283,7 +286,7 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 			}
 			// Admission errors return reopened rollout repairs to the queue.
 			if (record.ReopenedRollout || isSkippedRolloutRepair(record)) && !record.Started && record.PRURL == "" &&
-				(issue.State == "fulfilled" || newerIssueAttemptFulfilled(issue, issues)) {
+				issueRepairSourceFulfilled(issue, issues) {
 				return issueRepairSourceFulfilledReason, nil
 			}
 		} else if issue.RepairRequestID != record.RequestID && issueRepairID(issue) != record.ID {
@@ -330,7 +333,10 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 	return "", err
 }
 
-func newerIssueAttemptFulfilled(source localruntime.IssueClaimRecord, issues []localruntime.IssueClaimRecord) bool {
+func issueRepairSourceFulfilled(source localruntime.IssueClaimRecord, issues []localruntime.IssueClaimRecord) bool {
+	if source.State == "fulfilled" {
+		return true
+	}
 	issue := source.Run.GitHubIssue
 	key := localruntime.IssueExecutionKey(issue)
 	for _, current := range issues {
@@ -460,6 +466,21 @@ func issueRepairFailureDetail(prompt string) string {
 }
 
 func (w *issueRepairWork) start() error {
+	if w.record.Started {
+		return nil
+	}
+	if w.record.ReopenedRollout {
+		// The source may have been fulfilled while the scheduler held this repair.
+		issues, err := w.queue.claims.List()
+		for _, issue := range issues {
+			if isIssueRepairSource(w.record, issue) && issueRepairSourceFulfilled(issue, issues) {
+				return errIssueRepairSourceFulfilled
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("%w: %w", errIssueRepairSourceCheck, err)
+		}
+	}
 	w.queue.mu.Lock()
 	defer w.queue.mu.Unlock()
 	w.record.Started = true
@@ -476,6 +497,10 @@ func (w *issueRepairWork) finish(state string, result app.Result) {
 	record.Error = "repair attempt ended without a verified PR; inspect its logs"
 	if result.Err != nil {
 		record.Error = failurefollowup.RedactFailureDetail(result.Err.Error())
+	}
+	if errors.Is(result.Err, errIssueRepairSourceCheck) {
+		record.State = "queued"
+		record.NextAttemptAt = time.Now().Add(time.Minute)
 	}
 	if resultHasPR(result) {
 		if err := w.queue.verifyPR(record); err == nil {

@@ -480,11 +480,6 @@ func runServer(args []string) int {
 			if repairWork != nil {
 				runCtx = context.WithValue(runCtx, issueRepairContextKey{}, repairWork)
 				defer func() { repairWork.finish(finalState, issueResult) }()
-				if err := repairWork.start(); err != nil {
-					finalState = "error"
-					issueResult.Err = err
-					return
-				}
 			}
 			if issueWork != nil {
 				defer func() {
@@ -626,6 +621,18 @@ func runServer(args []string) int {
 
 				signingSnapshot := admission.SigningSnapshot
 				release := admission.Release
+				if repairWork != nil {
+					if err := repairWork.start(); err != nil {
+						release()
+						finalState = "error"
+						if errors.Is(err, errIssueRepairSourceFulfilled) {
+							finalState = "stopped"
+						}
+						issueResult.Err = err
+						daemonLogger("task status=%s request_id=%s err=%q", finalState, requestID, failurefollowup.RedactFailureDetail(err.Error()))
+						return
+					}
+				}
 
 				if taskHandle != nil {
 					taskHandle.SetRunning(true)
