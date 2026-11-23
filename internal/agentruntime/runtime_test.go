@@ -579,13 +579,14 @@ func TestBuildCommandClaudeDisallowedTools(t *testing.T) {
 
 	cmd, err := rt.BuildCommand("/tmp/repo", "review pr", RunOptions{
 		DisallowedTools: []string{"Edit", "Write", "NotebookEdit", "  "},
+		Env:             []string{"PATH=/usr/bin"},
 	})
 	if err != nil {
 		t.Fatalf("BuildCommand() error = %v", err)
 	}
 	wantArgs := []string{
 		"sandbox", "-P", "agent00_review",
-		"-c", `permissions.agent00_review={filesystem={":root"="read"},network={enabled=true}}`,
+		"-c", `permissions.agent00_review={filesystem={":minimal"="read","/tmp/repo"="read","/usr/bin"="read","/usr"="read"},network={enabled=true}}`,
 		"--", "claude",
 		"--print", "--output-format", "text", "--prompt-suggestions", "false",
 		"--no-session-persistence", "--dangerously-skip-permissions",
