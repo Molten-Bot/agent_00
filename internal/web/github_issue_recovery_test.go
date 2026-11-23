@@ -724,6 +724,7 @@ func TestIssueRecoveryBacksOffRepeatedFailuresWithoutAgentAttempts(t *testing.T)
 	t.Parallel()
 	ctx := t.Context()
 	s, f := recoveryServer(t)
+	s.IssueRecovery.MaxAttempts = 6 // Exercise the full backoff curve within an explicit budget.
 	s.pollGitHubIssueAutoStart(ctx)
 	for i, seconds := range []int{60, 300, 1500, 3600, 3600} {
 		// Preflight or publication can fail without starting another agent.
@@ -955,6 +956,34 @@ func TestIssueRecoveryBudgetStopAndNoChangeDoNotRerun(t *testing.T) {
 				t.Fatal("blocked issue reran")
 			}
 		})
+	}
+}
+
+func TestIssueRecoveryBoundsFailuresBeforeAgentStarts(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(context.Background())
+	record := completeRecoveryRecord(t, s, "error", 0)
+	record.PriorRunFailures = 2
+	record.RunError = "workflow: reserved issue branch cannot be renamed; explicit recovery is required"
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if err := s.ReconcileIssueWork(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := latestRecoveryRecord(t, s)
+	if len(f.submissions) != 1 || got.State != "blocked" || !strings.Contains(got.Error, "workflow retry budget exhausted") {
+		t.Fatalf("pre-agent failures escaped budget: submissions=%d state=%s error=%s", len(f.submissions), got.State, got.Error)
+	}
+	// Explicit recovery starts a fresh budget after the operator fixes the cause.
+	if response := retryIssue(t, s, got.ID, true); response.Code != http.StatusAccepted {
+		t.Fatalf("explicit recovery rejected: %d %s", response.Code, response.Body.String())
+	}
+	if next := latestRecoveryRecord(t, s); next.PriorRunFailures != 0 || len(f.submissions) != 2 {
+		t.Fatal("explicit recovery did not reset the workflow budget")
 	}
 }
 

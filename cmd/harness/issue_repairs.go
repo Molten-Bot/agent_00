@@ -39,6 +39,7 @@ type issueRepairQueue struct {
 	logf    func(string, ...any)
 	runner  execx.Runner
 	policy  localruntime.IssueRecoveryConfig
+	wake    chan struct{}
 }
 
 func (q *issueRepairQueue) capture(_ context.Context, issue localruntime.IssueClaimRecord) (string, error) {
@@ -76,7 +77,16 @@ func (q *issueRepairQueue) capture(_ context.Context, issue localruntime.IssueCl
 	}
 	run := failureFollowUpRunConfig(issue.RequestID, result, issue.Run, q.logRoot)
 	record := localruntime.IssueRepairRecord{ID: id, RequestID: "repair-" + id, SourceClaimID: issue.ID, State: "queued", Run: run}
-	return record.RequestID, q.store.Save(record)
+	err = q.store.Save(record)
+	if err == nil {
+		// Wake only after durable capture. The timer remains a restart/retry
+		// fallback, rather than adding up to a minute to every new repair.
+		select {
+		case q.wake <- struct{}{}:
+		default:
+		}
+	}
+	return record.RequestID, err
 }
 
 func issueRepairID(issue localruntime.IssueClaimRecord) string {
@@ -94,6 +104,7 @@ func (q *issueRepairQueue) run(ctx context.Context, enqueue localRunEnqueueFunc)
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-q.wake:
 		}
 	}
 }
@@ -443,7 +454,7 @@ func (w *issueRepairWork) finish(state string, result app.Result) {
 func (q *issueRepairQueue) verifyPR(record localruntime.IssueRepairRecord) error {
 	repository := githubutil.PullRequestRepository(record.PRURL)
 	repos := record.Run.RepoList()
-	if len(repos) != 1 || repository == "" || !strings.EqualFold(strings.TrimSuffix(strings.TrimPrefix(repos[0], "https://github.com/"), ".git"), repository) || record.Branch == "" {
+	if len(repos) != 1 || repository == "" || !githubutil.RepositoryMatches(repos[0], repository) || record.Branch == "" {
 		return fmt.Errorf("repair PR identity could not be verified")
 	}
 	if q.runner == nil {

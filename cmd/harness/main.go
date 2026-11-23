@@ -342,7 +342,7 @@ func runServer(args []string) int {
 		logRoot = strings.TrimSpace(mirror.rootDir)
 	}
 
-	repairQueue := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "issue-repairs")}, claims: issueClaims, logRoot: logRoot, logf: daemonLogger, runner: runner, policy: cfg.IssueRecovery.Defaults()}
+	repairQueue := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "issue-repairs")}, claims: issueClaims, logRoot: logRoot, logf: daemonLogger, runner: runner, policy: cfg.IssueRecovery.Defaults(), wake: make(chan struct{}, 1)}
 	var wakeIssueRecovery func()
 	var verifyIssueOwnership func(context.Context, config.Config) error
 	var queueFailureRerun func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string)

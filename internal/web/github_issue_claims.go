@@ -16,6 +16,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
@@ -957,12 +958,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 }
 
 func issueRepositoryMatchesRun(value, repository string) bool {
-	value = strings.TrimSpace(value)
-	for _, prefix := range []string{"https://github.com/", "ssh://git@github.com/", "git@github.com:"} {
-		value = strings.TrimPrefix(value, prefix)
-	}
-	value = strings.TrimSuffix(strings.TrimSuffix(value, "/"), ".git")
-	return strings.EqualFold(value, repository)
+	return githubutil.RepositoryMatches(value, repository)
 }
 
 // Inspect the broker as well as durable receipts: enqueue may have succeeded
