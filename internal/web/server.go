@@ -26,6 +26,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
 //go:embed static/*
@@ -83,6 +84,7 @@ type sitePageData struct {
 
 // Server provides an HTTP UI for local task monitoring.
 type Server struct {
+	Workflows               *workflow.Engine
 	CommitSigning           *localruntime.SigningSettings
 	Addr                    string
 	Broker                  *Broker
@@ -339,6 +341,9 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/github/issues", s.handleGitHubIssues)
 	mux.HandleFunc("/api/github/issues/", s.handleGitHubIssues)
 	mux.HandleFunc("/api/review-settings", s.handleReviewSettings)
+	mux.HandleFunc("/api/workflows", s.handleWorkflows)
+	mux.HandleFunc("/api/workflows/preview", s.handleWorkflowPreview)
+	mux.HandleFunc("/api/workflows/runs", s.handleWorkflowRuns)
 	mux.HandleFunc("/api/commit-signing", s.handleCommitSigning)
 	mux.HandleFunc("/api/commit-signing/verify", s.handleCommitSigning)
 	mux.HandleFunc("/api/agent-auth", s.handleAgentAuthStatus)

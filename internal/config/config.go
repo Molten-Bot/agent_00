@@ -58,6 +58,7 @@ type Config struct {
 	Reviewers                []string             `json:"reviewers"`
 	Draft                    bool                 `json:"draft,omitempty"`
 	AssignCreator            *bool                `json:"assignCreator,omitempty"`
+	Workflow                 *WorkflowRunConfig   `json:"workflow,omitempty"`
 	Review                   *ReviewConfig        `json:"review,omitempty"`
 	GitHubIssue              *GitHubIssueConfig   `json:"githubIssue,omitempty"`
 }
@@ -190,6 +191,14 @@ func promptImageFromDataURI(value string) (PromptImage, error) {
 }
 
 // ReviewConfig captures structured pull-request review context for review tasks.
+// WorkflowRunConfig records the policy used for an automated run.
+type WorkflowRunConfig struct {
+	ID           string `json:"id"`
+	EventID      string `json:"eventId"`
+	Name         string `json:"name"`
+	ReviewCycles int    `json:"reviewCycles"`
+}
+
 type ReviewConfig struct {
 	PRNumber                 int    `json:"prNumber,omitempty"`
 	PRURL                    string `json:"prUrl,omitempty"`
@@ -390,6 +399,9 @@ func (c *Config) ApplyDefaults() {
 
 // Validate checks required values and path safety.
 func (c Config) Validate() error {
+	if c.Workflow != nil && (c.Workflow.ID == "" || c.Workflow.EventID == "" || c.Workflow.ReviewCycles < 0 || c.Workflow.ReviewCycles > 10) {
+		return fmt.Errorf("invalid workflow run snapshot")
+	}
 	if strings.TrimSpace(c.Version) == "" {
 		return fmt.Errorf("version is required")
 	}
