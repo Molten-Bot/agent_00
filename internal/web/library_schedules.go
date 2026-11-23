@@ -10,6 +10,10 @@ func (s Server) handleLibrarySchedules(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet, http.MethodPut, http.MethodDelete) {
 		return
 	}
+	if s.Workflows != nil {
+		writeJSON(w, http.StatusGone, map[string]any{"error": "Library scheduling has moved to Workflow", "workflowUrl": "/#workflow"})
+		return
+	}
 	if s.LibrarySchedules == nil {
 		writeJSON(w, http.StatusNotImplemented, map[string]any{"ok": false, "error": "library schedules are unavailable"})
 		return

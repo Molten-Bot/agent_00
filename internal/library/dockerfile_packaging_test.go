@@ -355,7 +355,7 @@ func TestRuntimeDockerfilePinsAgentCLIs(t *testing.T) {
 	content := string(data)
 	for _, want := range []string{
 		"ARG CODEX_VERSION=0.171.0",
-		"ARG CLAUDE_CODE_VERSION=2.1.329",
+		"ARG CLAUDE_CODE_VERSION=2.1.330",
 		"ARG MARKED_VERSION=18.2.1",
 		"\"@openai/codex@${CODEX_VERSION}\"",
 		"\"@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}\"",

@@ -12,11 +12,11 @@
   <script>
     window.__RUNTIME_UI_CONFIG__ = {"automaticMode":false,"configuredHarness":"","configuredAgentLabel":"","promptImageHarnesses":["codex"],"githubReposReady":false};
   </script>
-  <script src="/static/lucide.min.js"></script>
+  <script src="/static/lucide.min.js?v=1.78.0"></script>
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
   <script src="/static/task-asset-preview.js?v=4"></script>
-  <link rel="stylesheet" href="/static/style.css?v=12">
+  <link rel="stylesheet" href="/static/style.css?v=13">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -208,7 +208,22 @@
                 </label>
               </div>
 
-              <div id="prompt-library-panel" class="prompt-panel hidden">
+              <div id="prompt-library-panel" class="prompt-panel hidden"><details class="library-sources"><summary>Manage custom libraries</summary><div class="review-settings-section custom-library-section" id="custom-library-section">
+            <h3>Custom libraries</h3>
+            
+            <div class="stack custom-library-fields">
+              <p>Pull library tasks from a private git repository your account can already access. Add the repo's SSH or HTTPS URL and a display name; this app clones <code>./prompt/*.md</code> from it once now, then refreshes hourly or whenever you reopen the app.</p>
+              <label for="custom-library-name">Name</label>
+              <input id="custom-library-name" class="prompt-text" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="acme-docs" maxlength="48">
+              <label for="custom-library-repo">Git repository (SSH or HTTPS)</label>
+              <input id="custom-library-repo" class="prompt-text" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="git@github.com:acme/internal-library.git">
+              <div class="commit-signing-actions">
+                <button id="custom-library-add" type="button" class="prompt-action-button prompt-submit">Add library repo</button>
+              </div>
+              <p id="custom-library-status" role="status" aria-live="polite"></p>
+              <div id="custom-library-list"></div>
+            </div>
+          </div></details>
                 <div class="prompt-grid">
                   <label id="library-repo-history-field" class="prompt-field prompt-field-repo-history">
                     <span class="prompt-label">Repository</span>
@@ -271,9 +286,7 @@
                 <div class="prompt-field prompt-field-task-list">
                   <div class="library-schedule-toolbar">
                     <span class="prompt-label">Task Library</span>
-                    <button id="library-schedules-open" class="prompt-action-button" type="button" title="View and manage recurring library tasks">
-                      <i data-lucide="calendar-clock" aria-hidden="true"></i><span>Schedules</span><span id="library-schedules-count"></span>
-                    </button>
+
                   </div>
                   <div id="library-type-tabs" class="library-type-tabs" role="tablist" aria-label="Library task types"></div>
                   <div id="library-task-list" class="library-task-list"></div>
@@ -417,6 +430,10 @@
               </div>
             </div>
           </section>
+        </section>
+
+        <section id="workflow-display" class="panel hidden" aria-labelledby="workflow-title" aria-hidden="true">
+          <div id="workflow-editor-root"></div>
         </section>
 
         <section id="dashboard-display" class="dashboard-display hidden" aria-labelledby="dashboard-title" aria-hidden="true">
@@ -612,53 +629,7 @@
     </div>
   </dialog>
 
-  <dialog id="library-schedule-modal" class="library-schedule-modal" aria-labelledby="library-schedule-title">
-    <div class="library-prompt-modal-head">
-      <h2 id="library-schedule-title">Schedules</h2>
-      <button id="library-schedule-close" class="settings-modal-close" type="button" title="Close schedules" aria-label="Close schedules"><i data-lucide="x" aria-hidden="true"></i></button>
-    </div>
-    <div class="library-schedule-body">
-      <p class="library-schedule-copy">Repeat library tasks while the app is running. One schedule per task and repository.</p>
-      <div id="library-schedule-list"></div>
-      <form id="library-schedule-editor" hidden>
-        <h3 id="library-schedule-task"></h3>
-        <p id="library-schedule-repo" class="library-schedule-copy"></p>
-        <p id="library-schedule-options" class="library-schedule-copy"></p>
-        <label id="library-schedule-context-field" class="prompt-field prompt-field-prompt-context hidden">
-          <span class="prompt-label" id="library-schedule-context-label">Additional context</span>
-          <textarea
-            id="library-schedule-context-input"
-            class="prompt-text prompt-control"
-            rows="3"
-            spellcheck="false"></textarea>
-        </label>
-        <label id="library-schedule-draft-field" class="prompt-field prompt-field-draft-pr">
-          <span class="prompt-label">Draft</span>
-          <span class="prompt-draft-toggle" title="Draft PR">
-            <input id="library-schedule-draft" class="prompt-draft-toggle-input" type="checkbox" aria-label="Open pull request as a draft">
-            <i data-lucide="git-pull-request-draft" class="prompt-draft-toggle-icon" aria-hidden="true"></i>
-          </span>
-        </label>
-        <label class="library-schedule-interval" for="library-schedule-hours">Repeat <output id="library-schedule-frequency" for="library-schedule-hours">every 24 hours</output></label>
-        <input id="library-schedule-hours" type="range" min="0" max="0" step="1" value="0" aria-label="Repeat interval in hours">
-        <div class="library-schedule-range"><span id="library-schedule-range-min"></span><span id="library-schedule-range-max"></span></div>
-        <p id="library-schedule-next" class="library-schedule-copy"></p>
-        <label id="library-schedule-run-now-field" class="prompt-field prompt-field-draft-pr">
-          <span><strong>Run Now</strong><small>Start one run when schedule is saved</small></span>
-          <span class="prompt-draft-toggle">
-            <input id="library-schedule-run-now" class="prompt-draft-toggle-input" type="checkbox" aria-label="Run task now after saving schedule">
-            <span class="prompt-draft-toggle-track" aria-hidden="true"><span class="prompt-draft-toggle-thumb"></span></span>
-          </span>
-        </label>
-        <div class="library-schedule-actions">
-          <button id="library-schedule-delete" class="prompt-action-button" type="button" title="Delete this recurring schedule" hidden><i data-lucide="trash-2" aria-hidden="true"></i><span>Delete</span></button>
-          <button id="library-schedule-back" class="prompt-action-button" type="button" title="Return to all schedules"><i data-lucide="arrow-left" aria-hidden="true"></i><span>Back</span></button>
-          <button id="library-schedule-save" class="prompt-action-button prompt-submit" type="submit" title="Save this recurring schedule"><i data-lucide="check" aria-hidden="true"></i><span>Save schedule</span></button>
-        </div>
-      </form>
-      <p id="library-schedule-status" class="library-schedule-copy" role="status" aria-live="polite"></p>
-    </div>
-  </dialog>
+
 
   <div
     id="library-prompt-modal"
@@ -823,30 +794,11 @@
 
         <div class="settings-tabbed-panel">
         <div class="settings-tabbar" role="tablist" aria-label="Settings sections">
-          <button id="settings-tab-library" class="settings-tab active" type="button" role="tab" aria-selected="true" aria-controls="custom-library-section" data-settings-tab="library">
-            <svg class="custom-library-tab-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="3" y="4" width="13" height="3" rx="1"></rect>
-              <rect x="3" y="10.5" width="10" height="3" rx="1"></rect>
-              <rect x="3" y="17" width="13" height="3" rx="1"></rect>
-              <path d="M19.5 4.5a4 4 0 1 1-1.2-2.8"></path>
-              <path d="M19.5 1v3.5h-3.5"></path>
-            </svg>
-            <span>Library</span>
-          </button>
           <button id="settings-tab-automation" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-automation" data-settings-tab="automation">
-            <i data-lucide="wand-sparkles" aria-hidden="true"></i><span>Automation</span>
+            <i data-lucide="wand-sparkles" aria-hidden="true"></i><span>Features</span>
           </button>
           <button id="settings-tab-repositories" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-repositories" data-settings-tab="repositories">
             <i data-lucide="folder-git-2" aria-hidden="true"></i><span>Repositories</span>
-          </button>
-          <button id="settings-tab-github-issues" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-github-issues" data-settings-tab="github-issues">
-            <i data-lucide="folder-kanban" aria-hidden="true"></i><span>GitHub Issues</span>
-          </button>
-          <button id="settings-tab-review" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-review" data-settings-tab="review">
-            <i data-lucide="message-circle-code" aria-hidden="true"></i><span>Post-task Review</span>
-          </button>
-          <button id="settings-tab-merge" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-merge" data-settings-tab="merge">
-            <i data-lucide="merge" aria-hidden="true"></i><span>Merge Method</span>
           </button>
           <button id="settings-tab-signing" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="commit-signing-section" data-settings-tab="signing">
             <i data-lucide="globe-lock" aria-hidden="true"></i><span>Commit Signing</span>
@@ -855,17 +807,17 @@
 
         <form id="review-settings-form" class="stack review-settings-form" data-settings-panel="review">
           <fieldset id="settings-panel-automation" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-automation" hidden>
-            <legend class="review-settings-section-title sr-only">Automation</legend>
-            <label class="selectable-option">
-              <input class="sr-only" id="review-settings-auto-merge" type="checkbox">
-              <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-robot-arm"><path d="M12 21 7.5 8.322"/><path d="m14 7 1.75-3.767a.5.5 0 0 1 .662-.172L20 5.005"/><path d="m20 8.998-3.588 1.944a.5.5 0 0 1-.662-.172L14 7H8"/><path d="M3.486 21h10"/><path d="M5 21V8.732"/><circle cx="6" cy="7" r="2"/></svg>
-              <span>Auto-merge clean reviews</span>
+            <legend class="review-settings-section-title sr-only">Features</legend><label class="selectable-option">
+          <input class="sr-only" id="review-settings-default-library" type="checkbox" checked>
+          <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="library-big"><rect width="8" height="18" x="3" y="3" rx="1"/><path d="M7 3v18"/><path d="M20.4 18.9c.2.5-.1 1.1-.6 1.3l-1.9.7c-.5.2-1.1-.1-1.3-.6L11.1 5.1c-.2-.5.1-1.1.6-1.3l1.9-.7c.5-.2 1.1.1 1.3.6Z"/></svg>
+          <span>Bundled library</span>
+        </label><label class="selectable-option">
+              <input class="sr-only" id="review-settings-github-issues-enabled" type="checkbox">
+              <i data-lucide="folder-kanban" aria-hidden="true"></i>
+              <span>GitHub Issues</span>
             </label>
-            <label class="selectable-option">
-              <input class="sr-only" id="review-settings-delete-merged-branches" type="checkbox">
-              <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="git-branch-minus"><path d="M15 6a9 9 0 0 0-9 9V3"/><path d="M21 18h-6"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></svg>
-              <span>Delete merged branches</span>
-            </label>
+            
+            
             <label class="selectable-option">
               <input class="sr-only" id="review-settings-chat-enabled" type="checkbox">
               <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="message-circle"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/></svg>
@@ -876,11 +828,16 @@
               <i data-lucide="braces" aria-hidden="true"></i>
               <span>JSON input</span>
             </label>
+            <label class="selectable-option">
+              <input class="sr-only" id="review-settings-workflow-enabled" type="checkbox">
+              <svg class="lucide lucide-diagram-flow-vertical" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 003.5 3.5 3.5 3.5 0 013.5 3.5v.5"/><path d="M12 8v.5A3.5 3.5 0 018.5 12 3.5 3.5 0 005 15.5v.5"/><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/></svg>
+              <span>Workflow (beta)</span>
+            </label>
           </fieldset>
           <div id="settings-panel-repositories" class="review-settings-section" role="tabpanel" aria-labelledby="settings-tab-repositories" hidden>
             <div class="repository-settings-heading">
               <strong>Repositories</strong>
-              <small>Deselect an owner to hide every repository it owns, or deselect single repositories.</small>
+              <small>Choose which repositories are available. Excluded repositories cannot start tasks or workflows.</small>
             </div>
             <div class="repository-settings-columns" id="review-settings-repository-columns">
               <div class="repository-settings-column" id="review-settings-owners-column">
@@ -894,13 +851,63 @@
             </div>
             <p id="review-settings-repositories-empty" class="github-issues-settings-description">No repositories loaded.</p>
           </div>
-          <fieldset id="settings-panel-github-issues" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-github-issues" hidden>
+          
+          
+          
+          <div class="review-settings-section commit-signing-section" id="commit-signing-section" role="tabpanel" aria-labelledby="settings-tab-signing" hidden>
+            <h3 class="review-settings-section-title sr-only">Commit signing</h3>
+            <div class="stack commit-signing-fields">
+              <p id="commit-signing-setup-required" class="commit-signing-required" role="alert" hidden></p>
+              <p>1. Paste your SSH private key and click Save signing settings. 2. Copy the public key shown below and add it to GitHub as a Signing Key. 3. Check registration, enable “Sign commits for all tasks”, and close settings to save. Changes apply to tasks that start after saving.</p>
+              <label for="commit-signing-private-key">SSH private key</label>
+              <textarea id="commit-signing-private-key" class="prompt-text agent-auth-secret-input" rows="4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="commit-signing-private-key-help" placeholder="Paste the full SSH private key, including BEGIN and END lines"></textarea>
+              <p id="commit-signing-private-key-help">Signing requires the private key. A public key alone cannot sign commits.</p>
+              <label for="commit-signing-passphrase">Passphrase (if your key is protected)</label>
+              <input id="commit-signing-passphrase" class="prompt-text" type="password" autocomplete="off">
+              <p>The app saves an unlocked copy of the key with restricted file permissions so background tasks can sign unattended. Your passphrase is never saved.</p>
+              <p id="commit-signing-account"></p>
+              <p id="commit-signing-fingerprint"></p>
+              <label for="commit-signing-public-key">Public signing key (read-only)</label>
+              <p id="commit-signing-public-key-help">Generated from your saved private key. Copy this key to GitHub; there is nothing to paste into this box.</p>
+              <textarea id="commit-signing-public-key" class="prompt-text" rows="3" readonly aria-describedby="commit-signing-public-key-help" placeholder="Your public key appears here after you save an SSH private key"></textarea>
+              <div class="commit-signing-actions">
+                <button id="commit-signing-copy" type="button" class="prompt-action-button" disabled>Copy public key</button>
+                <a id="commit-signing-github-link" href="https://github.com/settings/ssh/new" target="_blank" rel="noopener noreferrer">Add to GitHub as a Signing Key</a>
+              </div>
+              <p id="commit-signing-registration">No signing key configured.</p>
+              <div class="commit-signing-actions">
+                <button id="commit-signing-verify" type="button" class="prompt-action-button" disabled>Check registration</button>
+                <button id="commit-signing-save" type="button" class="prompt-action-button prompt-submit">Save signing settings</button>
+              </div>
+              <p id="commit-signing-status" role="status" aria-live="polite"></p>
+              <label class="selectable-option">
+                <input class="sr-only" id="commit-signing-enabled" type="checkbox" disabled aria-describedby="commit-signing-enabled-help">
+                <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="earth-lock"><path d="M7 3.34V5a3 3 0 0 0 3 3"/><path d="M11 21.95V18a2 2 0 0 0-2-2 2 2 0 0 1-2-2v-1a2 2 0 0 0-2-2H2.05"/><path d="M21.54 15H17a2 2 0 0 0-2 2v4.54"/><path d="M12 2a10 10 0 1 0 9.54 13"/><path d="M20 6V4a2 2 0 1 0-4 0v2"/><rect width="8" height="5" x="14" y="6" rx="1"/></svg>
+                <span>Sign commits for all tasks</span>
+              </label>
+              <p id="commit-signing-enabled-help">Save an SSH private key above to enable commit signing.</p>
+            </div>
+          </div>
+          
+        </form>
+        </div>
+        <p id="review-settings-status" class="settings-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
+
+      </div>
+    </section>
+  </div>
+
+  <div hidden inert id="legacy-automation-settings" aria-hidden="true"><label class="selectable-option">
+              <input class="sr-only" id="review-settings-auto-merge" type="checkbox">
+              <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-robot-arm"><path d="M12 21 7.5 8.322"/><path d="m14 7 1.75-3.767a.5.5 0 0 1 .662-.172L20 5.005"/><path d="m20 8.998-3.588 1.944a.5.5 0 0 1-.662-.172L14 7H8"/><path d="M3.486 21h10"/><path d="M5 21V8.732"/><circle cx="6" cy="7" r="2"/></svg>
+              <span>Auto-merge clean reviews</span>
+            </label><label class="selectable-option">
+              <input class="sr-only" id="review-settings-delete-merged-branches" type="checkbox">
+              <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="git-branch-minus"><path d="M15 6a9 9 0 0 0-9 9V3"/><path d="M21 18h-6"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></svg>
+              <span>Delete merged branches</span>
+            </label><fieldset id="settings-panel-github-issues" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-github-issues" hidden>
             <legend class="review-settings-section-title sr-only">GitHub Issues</legend>
-            <label class="selectable-option">
-              <input class="sr-only" id="review-settings-github-issues-enabled" type="checkbox">
-              <i data-lucide="folder-kanban" aria-hidden="true"></i>
-              <span>Enable GitHub Issues workflow</span>
-            </label>
+            
             <label class="selectable-option">
               <input class="sr-only" id="review-settings-assign-creator" type="checkbox">
               <i data-lucide="user-check" aria-hidden="true"></i>
@@ -971,8 +978,7 @@
                 </label>
               </div>
             </div>
-          </fieldset>
-          <div id="settings-panel-review" class="review-settings-section review-settings-level" role="tabpanel" aria-labelledby="settings-tab-review" hidden>
+          </fieldset><div id="settings-panel-review" class="review-settings-section review-settings-level" role="tabpanel" aria-labelledby="settings-tab-review" hidden>
             <input id="review-settings-level" type="hidden" value="off">
             <div class="review-slider">
               <label class="sr-only" for="review-settings-slider">Number of post-task reviews</label>
@@ -985,8 +991,7 @@
                 <span class="review-slider-stop" title="High · 10 reviews"><svg><use href="#review-high"/></svg></span>
               </div>
             </div>
-          </div>
-          <div id="settings-panel-merge" class="review-settings-section review-settings-merge-method" role="tabpanel" aria-labelledby="settings-tab-merge" hidden>
+          </div><div id="settings-panel-merge" class="review-settings-section review-settings-merge-method" role="tabpanel" aria-labelledby="settings-tab-merge" hidden>
             <span id="review-settings-merge-method-label" class="sr-only">Merge Method</span>
             <input id="review-settings-merge-method" type="hidden" value="squash">
             <div class="review-settings-merge-slider" role="radiogroup" aria-labelledby="review-settings-merge-method-label">
@@ -1001,69 +1006,7 @@
                 <i data-lucide="git-branch" aria-hidden="true"></i><span>Rebase</span>
               </button>
             </div>
-          </div>
-          <div class="review-settings-section commit-signing-section" id="commit-signing-section" role="tabpanel" aria-labelledby="settings-tab-signing" hidden>
-            <h3 class="review-settings-section-title sr-only">Commit signing</h3>
-            <div class="stack commit-signing-fields">
-              <p id="commit-signing-setup-required" class="commit-signing-required" role="alert" hidden></p>
-              <p>1. Paste your SSH private key and click Save signing settings. 2. Copy the public key shown below and add it to GitHub as a Signing Key. 3. Check registration, enable “Sign commits for all tasks”, and close settings to save. Changes apply to tasks that start after saving.</p>
-              <label for="commit-signing-private-key">SSH private key</label>
-              <textarea id="commit-signing-private-key" class="prompt-text agent-auth-secret-input" rows="4" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="commit-signing-private-key-help" placeholder="Paste the full SSH private key, including BEGIN and END lines"></textarea>
-              <p id="commit-signing-private-key-help">Signing requires the private key. A public key alone cannot sign commits.</p>
-              <label for="commit-signing-passphrase">Passphrase (if your key is protected)</label>
-              <input id="commit-signing-passphrase" class="prompt-text" type="password" autocomplete="off">
-              <p>The app saves an unlocked copy of the key with restricted file permissions so background tasks can sign unattended. Your passphrase is never saved.</p>
-              <p id="commit-signing-account"></p>
-              <p id="commit-signing-fingerprint"></p>
-              <label for="commit-signing-public-key">Public signing key (read-only)</label>
-              <p id="commit-signing-public-key-help">Generated from your saved private key. Copy this key to GitHub; there is nothing to paste into this box.</p>
-              <textarea id="commit-signing-public-key" class="prompt-text" rows="3" readonly aria-describedby="commit-signing-public-key-help" placeholder="Your public key appears here after you save an SSH private key"></textarea>
-              <div class="commit-signing-actions">
-                <button id="commit-signing-copy" type="button" class="prompt-action-button" disabled>Copy public key</button>
-                <a id="commit-signing-github-link" href="https://github.com/settings/ssh/new" target="_blank" rel="noopener noreferrer">Add to GitHub as a Signing Key</a>
-              </div>
-              <p id="commit-signing-registration">No signing key configured.</p>
-              <div class="commit-signing-actions">
-                <button id="commit-signing-verify" type="button" class="prompt-action-button" disabled>Check registration</button>
-                <button id="commit-signing-save" type="button" class="prompt-action-button prompt-submit">Save signing settings</button>
-              </div>
-              <p id="commit-signing-status" role="status" aria-live="polite"></p>
-              <label class="selectable-option">
-                <input class="sr-only" id="commit-signing-enabled" type="checkbox" disabled aria-describedby="commit-signing-enabled-help">
-                <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="earth-lock"><path d="M7 3.34V5a3 3 0 0 0 3 3"/><path d="M11 21.95V18a2 2 0 0 0-2-2 2 2 0 0 1-2-2v-1a2 2 0 0 0-2-2H2.05"/><path d="M21.54 15H17a2 2 0 0 0-2 2v4.54"/><path d="M12 2a10 10 0 1 0 9.54 13"/><path d="M20 6V4a2 2 0 1 0-4 0v2"/><rect width="8" height="5" x="14" y="6" rx="1"/></svg>
-                <span>Sign commits for all tasks</span>
-              </label>
-              <p id="commit-signing-enabled-help">Save an SSH private key above to enable commit signing.</p>
-            </div>
-          </div>
-          <div class="review-settings-section custom-library-section" id="custom-library-section" role="tabpanel" aria-labelledby="settings-tab-library">
-            <h3 class="review-settings-section-title sr-only">Library</h3>
-            <label class="selectable-option">
-          <input class="sr-only" id="review-settings-default-library" type="checkbox" checked>
-          <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="library-big"><rect width="8" height="18" x="3" y="3" rx="1"/><path d="M7 3v18"/><path d="M20.4 18.9c.2.5-.1 1.1-.6 1.3l-1.9.7c-.5.2-1.1-.1-1.3-.6L11.1 5.1c-.2-.5.1-1.1.6-1.3l1.9-.7c.5-.2 1.1.1 1.3.6Z"/></svg>
-          <span>Show default library</span>
-        </label>
-            <div class="stack custom-library-fields">
-              <p>Pull library tasks from a private git repository your account can already access. Add the repo's SSH or HTTPS URL and a display name; this app clones <code>./prompt/*.md</code> from it once now, then refreshes hourly or whenever you reopen the app.</p>
-              <label for="custom-library-name">Name</label>
-              <input id="custom-library-name" class="prompt-text" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="acme-docs" maxlength="48">
-              <label for="custom-library-repo">Git repository (SSH or HTTPS)</label>
-              <input id="custom-library-repo" class="prompt-text" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="git@github.com:acme/internal-library.git">
-              <div class="commit-signing-actions">
-                <button id="custom-library-add" type="button" class="prompt-action-button prompt-submit">Add library repo</button>
-              </div>
-              <p id="custom-library-status" role="status" aria-live="polite"></p>
-              <div id="custom-library-list"></div>
-            </div>
-          </div>
-        </form>
-        </div>
-        <p id="review-settings-status" class="settings-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
-
-      </div>
-    </section>
-  </div>
-
+          </div></div>
   <!-- bottom-dock -->
 
   <script>
@@ -1725,6 +1668,7 @@
         reviewLevel: ["off", "low", "medium", "high"].includes(level) ? level : "off",
         defaultLibraryEnabled: defaultLibraryRaw === undefined ? true : Boolean(defaultLibraryRaw),
         chatEnabled: chatEnabledRaw === undefined ? false : Boolean(chatEnabledRaw),
+        workflowEnabled: (settings.workflow_enabled ?? settings.workflowEnabled) === true,
         jsonEnabled: jsonEnabledRaw === undefined ? false : Boolean(jsonEnabledRaw),
         githubIssuesEnabled: githubIssuesEnabledRaw === undefined ? false : Boolean(githubIssuesEnabledRaw),
         githubIssueLinkMode: ["reference", "close"].includes(githubIssueLinkModeRaw) ? githubIssueLinkModeRaw : "reference",
@@ -1977,7 +1921,7 @@
       ui: stateUI,
       agentAuth: normalizeAgentAuth({ required: true, ready: false, state: "checking", message: "Checking agent authorization…" }),
       reviewSettings: normalizeReviewSettings({}),
-      settingsTab: "library",
+      settingsTab: "repositories",
       customLibraryGeneration: null,
       snapshot: null,
       selectedTaskId: "",
@@ -2247,6 +2191,8 @@
     const reviewSettingsDeleteMergedBranches = document.getElementById("review-settings-delete-merged-branches");
     const reviewSettingsDefaultLibrary = document.getElementById("review-settings-default-library");
     const reviewSettingsChatEnabled = document.getElementById("review-settings-chat-enabled");
+    const reviewSettingsWorkflowEnabled = document.getElementById("review-settings-workflow-enabled");
+    const workflowDisplay = document.getElementById("workflow-display");
     const reviewSettingsJSONEnabled = document.getElementById("review-settings-json-enabled");
     const reviewSettingsRepositories = document.getElementById("review-settings-repositories");
     const reviewSettingsOwners = document.getElementById("review-settings-owners");
@@ -2277,11 +2223,7 @@
     const settingsTabPanels = {
       automation: document.getElementById("settings-panel-automation"),
       repositories: document.getElementById("settings-panel-repositories"),
-      "github-issues": document.getElementById("settings-panel-github-issues"),
-      review: document.getElementById("settings-panel-review"),
-      merge: document.getElementById("settings-panel-merge"),
       signing: document.getElementById("commit-signing-section"),
-      library: document.getElementById("custom-library-section"),
     };
     const reviewSettingsLevel = document.getElementById("review-settings-level");
     const reviewSettingsSlider = document.getElementById("review-settings-slider");
@@ -2338,6 +2280,18 @@
 
     function chatFeatureEnabled() {
       return state.reviewSettings?.chatEnabled === true;
+    }
+
+    function syncWorkflowAvailability() {
+      const enabled = state.reviewSettings?.workflowEnabled === true;
+      const link = document.getElementById("workflow-dock-link");
+      link?.classList.toggle("hidden", !enabled);
+      link?.setAttribute("aria-disabled", String(!enabled));
+      if (enabled) link?.removeAttribute("tabindex");
+      else link?.setAttribute("tabindex", "-1");
+      if (!enabled && state.appDisplay === "workflow") {
+        setAppDisplay("studio", { updateHash: true });
+      }
     }
 
     function jsonFeatureEnabled() {
@@ -2944,7 +2898,7 @@
     }
 
     function setSettingsTab(tab) {
-      const normalized = Object.prototype.hasOwnProperty.call(settingsTabPanels, tab) ? tab : "library";
+      const normalized = Object.prototype.hasOwnProperty.call(settingsTabPanels, tab) ? tab : "repositories";
       if (state.settingsOpen && normalized !== state.settingsTab) {
         trackAnalyticsEvent("settings_tab_selected", { tab: normalized });
       }
@@ -3006,6 +2960,7 @@
       if (reviewSettingsJSONEnabled instanceof HTMLInputElement) {
         reviewSettingsJSONEnabled.checked = state.reviewSettings.jsonEnabled;
       }
+      reviewSettingsWorkflowEnabled.checked = state.reviewSettings.workflowEnabled;
       renderRepositorySettings();
       renderRepoHistoryOptions();
       if (reviewSettingsGitHubIssuesEnabled instanceof HTMLInputElement) {
@@ -3027,6 +2982,7 @@
       syncGitHubIssuesLinkModeSetting();
       syncChatDockLinkAvailability();
       syncJSONModeLinkAvailability();
+      syncWorkflowAvailability();
       if (!state.reviewSettings.chatEnabled && state.appDisplay === "chat") {
         setAppDisplay("studio");
       }
@@ -3084,6 +3040,7 @@
         state.settingsLoadAttempted = true;
         syncChatDockLinkAvailability();
         syncJSONModeLinkAvailability();
+        syncWorkflowAvailability();
         syncGitHubIssuesDockLinkAvailability();
       } finally {
         setSettingsBusy(false);
@@ -3101,6 +3058,7 @@
         review_level: String(reviewSettingsLevel?.value || "off").trim().toLowerCase() || "off",
         default_library_enabled: reviewSettingsDefaultLibrary instanceof HTMLInputElement ? reviewSettingsDefaultLibrary.checked : true,
         chat_enabled: reviewSettingsChatEnabled instanceof HTMLInputElement ? reviewSettingsChatEnabled.checked : false,
+        workflow_enabled: reviewSettingsWorkflowEnabled.checked,
         json_enabled: reviewSettingsJSONEnabled instanceof HTMLInputElement ? reviewSettingsJSONEnabled.checked : false,
         github_issues_enabled: reviewSettingsGitHubIssuesEnabled instanceof HTMLInputElement ? reviewSettingsGitHubIssuesEnabled.checked : false,
         github_issue_link_mode: reviewSettingsGitHubIssuesLinkClose instanceof HTMLInputElement && reviewSettingsGitHubIssuesLinkClose.checked ? "close" : "reference",
@@ -6631,7 +6589,7 @@
       }
       replaceLucideIcons(libraryTaskList);
       updateLibraryScheduleTrigger(activeEntry);
-      window.LibrarySchedulesUI?.refreshButtons();
+
     }
 
     function renderLibraryPromptContextField(entry) {
@@ -6662,9 +6620,13 @@
         return;
       }
       libraryScheduleTrigger.dataset.taskName = entry.name;
-      libraryScheduleTrigger.title = `Schedule ${entry.displayName}`;
-      libraryScheduleTrigger.setAttribute("aria-label", `Schedule ${entry.displayName}`);
-      libraryScheduleTrigger.onclick = () => window.LibrarySchedulesUI?.openFor(entry);
+      libraryScheduleTrigger.title = `Create scheduled workflow for ${entry.displayName}`;
+      libraryScheduleTrigger.setAttribute("aria-label", `Create scheduled workflow for ${entry.displayName}`);
+      libraryScheduleTrigger.onclick = () => {
+ if(!state.reviewSettings.workflowEnabled){document.getElementById("settings-open").click();setSettingsTab("automation");setReviewSettingsStatus("", "Enable Workflow (beta) to create scheduled workflows.");return;}
+ try { const payload = libraryPayload(entry.name); window.pendingWorkflowSchedule = {...payload,workflowRepository:githubRepoPathFromValue(payload.repos[0])}; window.location.hash = "workflow"; setAppDisplay("workflow"); void loadWorkflowEditor().then(()=>window.dispatchEvent(new Event("workflow-create-schedule"))); }
+ catch(error){setLocalPromptStatus("error",error.message);}
+ };
     }
 
     function syncBaseBranchClearState() {
@@ -9096,7 +9058,7 @@
 
     function appDisplayFromHash() {
       const hash = String(window.location.hash || "").replace(/^#/, "").trim().toLowerCase();
-      if (hash === "dashboard" || hash === "chat" || hash === "work") {
+      if (hash === "dashboard" || hash === "chat" || hash === "work" || hash === "workflow") {
         return hash;
       }
       if (hash === "current-work") {
@@ -9170,13 +9132,36 @@
         state.taskVisible = true;
         return;
       }
-      if (state.appDisplay === "studio" || state.appDisplay === "chat") {
+      if (state.appDisplay === "studio" || state.appDisplay === "chat" || state.appDisplay === "workflow") {
         state.taskVisible = false;
       }
     }
 
+    let workflowEditorLoad;
+    function loadWorkflowEditor() {
+      if (!workflowEditorLoad) {
+        const css = document.createElement("link");
+        css.rel = "stylesheet";
+        css.href = "/static/workflow-editor.css?v=6";
+        document.head.appendChild(css);
+        workflowEditorLoad = new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "/static/workflow-editor.js?v=6";
+          script.onload = resolve;
+          script.onerror = () => { script.remove(); css.remove(); workflowEditorLoad = null; reject(new Error("Unable to load Workflow editor. Reload to try again.")); };
+          document.head.appendChild(script);
+        });
+      }
+      return workflowEditorLoad.then(() => {
+        window.mountWorkflowEditor();
+        window.dispatchEvent(new CustomEvent("workflow-display", { detail: "workflow" }));
+      }).catch(error => {
+        document.getElementById("workflow-editor-root").textContent = error.message;
+      });
+    }
+
     function setAppDisplay(display, options = {}) {
-      let mode = display === "dashboard" || display === "chat" || display === "work" ? display : "studio";
+      let mode = display === "dashboard" || display === "chat" || display === "work" || display === "workflow" ? display : "studio";
       if (mode === "dashboard" && !dashboardAvailable(state.snapshot)) {
         mode = "studio";
       }
@@ -9193,6 +9178,14 @@
           }
         });
         mode = "studio";
+      }
+      if (mode === "workflow" && state.reviewSettings?.workflowEnabled !== true) {
+        mode = "studio";
+      }
+      workflowDisplay.classList.toggle("hidden", mode !== "workflow");
+      workflowDisplay.setAttribute("aria-hidden", String(mode !== "workflow"));
+      if (mode === "workflow") {
+        void loadWorkflowEditor();
       }
       const showDashboard = mode === "dashboard";
       const showChat = mode === "chat";
@@ -9234,13 +9227,15 @@
       if (options.updateHash) {
         const nextHash = typeof options.updateHash === "string"
           ? options.updateHash
-          : mode === "dashboard"
-            ? "#dashboard"
-            : mode === "chat"
-              ? "#chat"
-              : showWork
-                ? "#current-work"
-                : promptHashFromMode(state.promptMode);
+          : mode === "workflow"
+            ? "#workflow"
+            : mode === "dashboard"
+              ? "#dashboard"
+              : mode === "chat"
+                ? "#chat"
+                : showWork
+                  ? "#current-work"
+                  : promptHashFromMode(state.promptMode);
         if (window.location.hash !== nextHash) {
           window.history.pushState(null, "", nextHash);
         }
@@ -10930,6 +10925,8 @@
         case "json":
         case "raw":
           return "json";
+        case "workflow":
+          return "workflow";
         case "github_issues":
           return "github_issues";
         default:
@@ -13650,6 +13647,8 @@
         const initialDisplay = appDisplayFromHash();
         if (initialDisplay === "dashboard") {
           setAppDisplay("dashboard");
+        } else if (initialDisplay === "workflow") {
+          setAppDisplay("workflow");
         } else if (initialDisplay === "work") {
           setAppDisplay("work");
         }
@@ -14177,7 +14176,7 @@
       window.CommitSigningSettings?.setModalBusy(Boolean(busy));
       reviewSettingsClose.disabled = Boolean(busy);
       for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches,
-        reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsGitHubIssuesEnabled,
+        reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsWorkflowEnabled, reviewSettingsGitHubIssuesEnabled,
         issueAutomationRepository, issueAutomationRepositoryEnabled, issueAutomationStopLegacy,
         reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsGitHubIssuesAutoStartOnlyAssigned, reviewSettingsGitHubIssuesAutoStartLabels, reviewSettingsGitHubIssuesExclusionLabel, reviewSettingsAssignCreator, reviewSettingsSlider, ...reviewSettingsMergeOptions,
         ...Array.from(reviewSettingsRepositories?.querySelectorAll("input") || []),
@@ -14229,7 +14228,7 @@
     if (reviewSettingsForm) {
       reviewSettingsForm.addEventListener("submit", submitReviewSettings);
     }
-    for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches, reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled,
+    for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches, reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsWorkflowEnabled,
       reviewSettingsGitHubIssuesEnabled, issueAutomationRepositoryEnabled, reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsGitHubIssuesAutoStartOnlyAssigned, reviewSettingsGitHubIssuesAutoStartLabels, reviewSettingsGitHubIssuesExclusionLabel, reviewSettingsAssignCreator, ...reviewSettingsGitHubIssuesLinkModeOptions]) {
       control.addEventListener("change", () => setReviewSettingsStatus("", "Changes will be saved on close."));
     }
@@ -14287,6 +14286,10 @@
         setAppDisplay("studio");
       }
     });
+    reviewSettingsWorkflowEnabled.addEventListener("change", () => {
+      state.reviewSettings = { ...state.reviewSettings, workflowEnabled: reviewSettingsWorkflowEnabled.checked };
+      syncWorkflowAvailability();
+    });
     reviewSettingsJSONEnabled?.addEventListener("change", () => {
       state.reviewSettings = { ...state.reviewSettings, jsonEnabled: Boolean(reviewSettingsJSONEnabled.checked) };
       syncJSONModeLinkAvailability();
@@ -14320,6 +14323,7 @@
       setSettingsTab(settingsTabButtons[index].dataset.settingsTab);
       settingsTabButtons[index].focus();
     });
+    document.querySelector(".library-sources").addEventListener("toggle", event => { if(event.target.open) window.dispatchEvent(new Event("custom-library-sources-open")); });
     setSettingsTab(state.settingsTab);
     if (reviewSettingsClose) {
       reviewSettingsClose.addEventListener("click", () => {
@@ -14580,7 +14584,7 @@
     loadInitial();
     startStream();
   </script>
-  <script src="/static/library-schedules.js?v=1"></script>
+
   <script src="/static/commit-signing.js"></script>
   <script src="/static/custom-library-sources.js"></script>
   <script src="/static/marked.umd.js?v=18.2.1"></script>

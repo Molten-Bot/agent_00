@@ -56,6 +56,12 @@ func (f *fakeRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, er
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.exps) == 0 {
+		// Most harness tests focus on unrelated publishing behavior. Explicit
+		// expectations take precedence in the mergeability regression tests.
+		if cmd.Name == "gh" && slices.Contains(cmd.Args, "state,mergeable,baseRefName,headRefName") {
+			f.calls = append(f.calls, cmd)
+			return execx.Result{Stdout: `{"state":"OPEN","mergeable":"MERGEABLE"}`}, nil
+		}
 		if isImplicitBranchFreshnessCommand(cmd) {
 			f.calls = append(f.calls, cmd)
 			return execx.Result{}, nil
@@ -79,6 +85,12 @@ func (f *fakeRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, er
 	}
 
 	if matchIndex < 0 {
+		// Most harness tests focus on unrelated publishing behavior. Explicit
+		// expectations take precedence in the mergeability regression tests.
+		if cmd.Name == "gh" && slices.Contains(cmd.Args, "state,mergeable,baseRefName,headRefName") {
+			f.calls = append(f.calls, cmd)
+			return execx.Result{Stdout: `{"state":"OPEN","mergeable":"MERGEABLE"}`}, nil
+		}
 		if isImplicitBranchFreshnessCommand(cmd) {
 			f.calls = append(f.calls, cmd)
 			return execx.Result{}, nil

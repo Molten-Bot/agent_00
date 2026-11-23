@@ -31,6 +31,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/multiplex"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
 	"github.com/Molten-Bot/agent_00/internal/web"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
 	"github.com/Molten-Bot/agent_00/internal/workspace"
 )
 
@@ -349,6 +350,7 @@ func runServer(args []string) int {
 	var queueFailureFollowUp func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string)
 	var queueUnexpectedNoChangesFollowUp func(requestID string, result app.Result, runCfg config.Config)
 	var queueEscalatedNoChangesFollowUp func(requestID string, result app.Result, runCfg config.Config)
+	var workflowEngine *workflow.Engine
 	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error)
 	enqueueLocalRun = func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error) {
 		if err := persistentLogs.Error(); err != nil {
@@ -374,9 +376,14 @@ func runServer(args []string) int {
 		if err != nil {
 			return "", fmt.Errorf("load runtime config: %w", err)
 		}
+		if err := workflowRepositoryGate(cfg.RuntimeConfigPath, runCfg); err != nil {
+			return "", err
+		}
 		runCfg = applyDefaultAgentRuntimeConfig(runCfg, activeCfg)
 		assignCreator := localruntime.ReadRuntimeConfigAssignCreator(cfg.RuntimeConfigPath)
-		runCfg.AssignCreator = &assignCreator
+		if runCfg.AssignCreator == nil {
+			runCfg.AssignCreator = &assignCreator
+		}
 		runCfg, err = localruntime.ApplyBoundAgentRuntime(runCfg, activeCfg)
 		if err != nil {
 			return "", err
@@ -637,9 +644,15 @@ func runServer(args []string) int {
 				if taskHandle != nil {
 					taskHandle.SetRunning(true)
 				}
-				finalReviewPasses := activeCfg.ReviewWatch.ReviewCount()
-				if startCfg, startCfgErr := effectiveRuntimeConfig(activeCfg); startCfgErr == nil {
-					finalReviewPasses = startCfg.ReviewWatch.ReviewCount()
+				finalReviewPasses := 0
+				if runCfg.Workflow != nil {
+					finalReviewPasses = runCfg.Workflow.ReviewCycles
+				}
+				if err := workflowRepositoryGate(cfg.RuntimeConfigPath, runCfg); err != nil {
+					finalState = "error"
+					issueResult.Err = err
+					release()
+					return
 				}
 				taskRunner := execx.Runner(runner)
 				if issueWork != nil {
@@ -684,6 +697,19 @@ func runServer(args []string) int {
 				}
 				defer release()
 
+				if runCfg.Workflow != nil && workflowEngine != nil {
+					status := "succeeded"
+					if outcome.Result.Err != nil || outcome.State == "error" || outcome.State == "stopped" {
+						status = "failed"
+					}
+					reason := "Task completed"
+					if outcome.Result.Err != nil {
+						reason = outcome.Result.Err.Error()
+					}
+					if err := workflowEngine.Complete(runCfg.Workflow.EventID, workflow.Outcome{Status: status, PRURL: outcome.Result.PRURL, Reason: reason, ReviewClean: outcome.Result.ReviewClean, ReviewedHead: outcome.Result.ReviewedHead}); err != nil {
+						daemonLogger("workflow status=error action=complete err=%q", err)
+					}
+				}
 				issueResult = outcome.Result
 				finalState = outcome.State
 				switch outcome.State {
@@ -888,6 +914,11 @@ func runServer(args []string) int {
 		uiServer.AutomaticMode = *uiAutomatic
 		uiServer.ConfiguredHarness = cfg.AgentHarness
 		uiServer.GitHubIssueRunner = runner
+		if err := configureWorkflows(ctx, cfg, runner, &uiServer, monitorBroker, enqueueLocalRun, daemonLogger); err != nil {
+			daemonLogger("workflow status=error err=%q", err)
+			return app.ExitConfig
+		}
+		workflowEngine = uiServer.Workflows
 		uiServer.IssueClaims = issueClaims
 		uiServer.IssueRecovery = &cfg.IssueRecovery
 		uiServer.IssueRepair = repairQueue.capture
@@ -1001,21 +1032,7 @@ func runServer(args []string) int {
 			}
 		}
 
-		schedules := &localruntime.LibrarySchedules{
-			Path: cfg.RuntimeConfigPath, Init: cfg, Logf: daemonLogger,
-			Submit: func(reqCtx context.Context, runCfg config.Config) (string, error) {
-				id, err := enqueueLocalRun(reqCtx, runCfg, true, libraryScheduleSource, false)
-				if err == nil {
-					recordLibraryUsage(runCfg)
-				}
-				return id, err
-			},
-			Active: func(schedule localruntime.LibrarySchedule) bool {
-				return libraryScheduleActive(monitorBroker, schedule)
-			},
-		}
-		uiServer.LibrarySchedules = schedules
-		go schedules.Run(ctx)
+		// Scheduled tasks are now owned by the workflow engine.
 
 		customLibrarySources := &localruntime.CustomLibrarySources{
 			Path:   cfg.RuntimeConfigPath,
@@ -1029,7 +1046,7 @@ func runServer(args []string) int {
 		uiServer.CustomLibrarySources = customLibrarySources
 		go customLibrarySources.Run(ctx, time.Hour)
 		uiServer.SubmitLocalPrompt = func(reqCtx context.Context, body []byte) (string, error) {
-			runCfg, err := localruntime.ParseRunConfigJSON(body)
+			runCfg, err := parseWorkflowOrSelection(body)
 			if err != nil {
 				return "", fmt.Errorf("invalid run config: %w", err)
 			}
@@ -1037,7 +1054,7 @@ func runServer(args []string) int {
 			return enqueueLocalRun(reqCtx, runCfg, true, localSubmitSource, false)
 		}
 		uiServer.SubmitTaskRerun = func(reqCtx context.Context, _ string, body []byte, force bool) (string, error) {
-			runCfg, err := localruntime.ParseRunConfigJSON(body)
+			runCfg, err := parseWorkflowOrSelection(body)
 			if err != nil {
 				return "", fmt.Errorf("invalid run config: %w", err)
 			}
@@ -1097,38 +1114,17 @@ func runServer(args []string) int {
 				writeStderrLine(logger, fmt.Sprintf("error: %v", err))
 				return app.ExitPreflight
 			}
+			go workflowEngine.Run(ctx)
 			daemonLogger("localruntime.ui status=ready url=%s", monitorURL(*uiListen))
 		case <-ctx.Done():
 			return app.ExitSuccess
 		}
 		prMonitor := &web.PRMergeMonitor{
-			Runner:      runner,
-			Broker:      monitorBroker,
-			Logf:        daemonLogger,
-			CleanupTask: cleanupTaskLogs,
-			DeleteMergedBranchesEnabled: func() bool {
-				activeCfg, err := effectiveRuntimeConfig(cfg)
-				if err != nil {
-					activeCfg = cfg
-				}
-				activeCfg.ApplyDefaults()
-				return activeCfg.ReviewWatch.DeleteMergedBranchesEnabled()
-			},
-			OnReviewFeedback: func(reqCtx context.Context, task web.Task, feedback web.PRReviewFeedback) (string, error) {
-				runConfigJSON, ok := monitorBroker.TaskRunConfig(task.RequestID)
-				if !ok {
-					return "", fmt.Errorf("stored run config not found for request %s", task.RequestID)
-				}
-				originalCfg, err := localruntime.ParseRunConfigJSON(runConfigJSON)
-				if err != nil {
-					return "", fmt.Errorf("parse stored run config for request %s: %w", task.RequestID, err)
-				}
-				followUpCfg, err := prReviewFeedbackRunConfig(originalCfg, task, feedback)
-				if err != nil {
-					return "", err
-				}
-				return enqueueLocalRun(reqCtx, followUpCfg, true, prReviewFeedbackSource, false)
-			},
+			Runner:                      runner,
+			Broker:                      monitorBroker,
+			Logf:                        daemonLogger,
+			CleanupTask:                 cleanupTaskLogs,
+			DeleteMergedBranchesEnabled: func() bool { return false },
 		}
 		go func() {
 			if err := prMonitor.Run(ctx); err != nil {
@@ -1144,7 +1140,7 @@ func runServer(args []string) int {
 	} else {
 		daemonLogger("review_watch status=warn action=load_runtime_config err=%q", err)
 	}
-	reviewWatcher = startGitHubReviewWatcher(ctx, runner, reviewWatcherCfg, enqueueLocalRun, daemonLogger)
+	_ = reviewWatcherCfg // GitHub activations are owned by per-repository workflows.
 	runBootDiagnostics(ctx, runner, daemonLogger, cfg)
 	<-ctx.Done()
 	return app.ExitSuccess
@@ -1563,7 +1559,12 @@ func runLocalTask(
 		logf("task request_id=%s %s", requestID, line)
 	}
 
+	var cleanReview bool
+	var reviewedHead string
+	h.OnReviewResult = func(clean bool, head string) { cleanReview = clean; reviewedHead = head }
 	res := h.Run(ctx, runCfg)
+	res.ReviewClean = cleanReview
+	res.ReviewedHead = reviewedHead
 	if ctx.Err() == nil && res.ExitCode == app.ExitWorkspace && res.WorkspaceDir == "" &&
 		(canRetryWorkspace || localruntime.IsWorkspaceDiskFull(res.Err)) {
 		return localTaskOutcome{State: "retry_workspace", Result: res}
@@ -2857,6 +2858,7 @@ func loadReviewSettingsState(cfg localruntime.InitConfig) (web.ReviewSettingsSta
 		ReviewLevel:                        activeCfg.ReviewWatch.ReviewLevel,
 		DefaultLibraryEnabled:              ui.DefaultLibraryEnabled,
 		ChatEnabled:                        ui.ChatEnabled,
+		WorkflowEnabled:                    ui.WorkflowEnabled,
 		JSONEnabled:                        ui.JSONEnabled,
 		GitHubIssuesEnabled:                ui.GitHubIssuesEnabled,
 		GitHubIssueLinkMode:                ui.GitHubIssueLinkMode,
@@ -2906,6 +2908,7 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		ReviewLevel:          reviewLevel,
 	}
 	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled, req.GitHubIssueLinkMode, req.GitHubIssueAutoStartAssigned, req.AssignCreator, localruntime.RuntimeConfigUISettingsUpdate{
+		WorkflowEnabled:           req.WorkflowEnabled,
 		OnlyAssigned:              req.GitHubIssueAutoStartOnlyAssigned,
 		Labels:                    req.GitHubIssueAutoStartLabels,
 		ExclusionLabel:            req.GitHubIssueAutoStartExclusionLabel,

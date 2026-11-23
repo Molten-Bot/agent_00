@@ -150,6 +150,48 @@ done
 	}
 }
 
+func TestCodexReadOnlyReviewCanReadDiskWorkspace(t *testing.T) {
+	if os.Getenv("HARNESS_TEST_CODEX_SANDBOX") != "1" {
+		t.Skip("set HARNESS_TEST_CODEX_SANDBOX=1 to exercise the installed sandbox")
+	}
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	home := filepath.Join(root, "codex-home")
+	for _, dir := range []string{repo, home} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "marker"), []byte("prepared checkout"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := Resolve(HarnessCodex, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := rt.BuildCommand(repo, "Review", RunOptions{
+		WorkspaceDir: root, DisallowedTools: []string{"Edit", "Write"},
+		Env: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "CODEX_HOME=" + home},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the generated review policy without running a model or needing auth.
+	cmd.Args = append([]string{"sandbox", "-c", `sandbox_mode="read-only"`}, cmd.Args[3:]...)
+	cmd.Args = append(cmd.Args, "--", "/bin/sh", "-c", `set -eu
+ test "$(cat marker)" = "prepared checkout"
+ if (printf changed > marker) 2>/dev/null; then exit 1; fi
+ if (printf created > new-file) 2>/dev/null; then exit 1; fi
+ `)
+	cmd.Stdin = ""
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	res, err := (execx.OSRunner{}).Run(ctx, cmd)
+	if err != nil {
+		t.Fatalf("read-only review probe: %v\n%s\n%s", err, res.Stdout, res.Stderr)
+	}
+}
+
 // Run with TMPDIR on /dev/shm to exercise RAM-backed task workspaces as well
 // as the default disk-backed temporary directory.
 func TestReviewSandboxWorkspaceReadable(t *testing.T) {

@@ -97,5 +97,8 @@ func setGitHubIssuePrompt(run *config.Config, issue GitHubIssue) {
 			fmt.Fprintf(&prompt, "- %s (%s): %s\n", asset.Name, asset.Source, asset.URL)
 		}
 	}
+	if run.Workflow != nil && run.Workflow.Instructions != "" {
+		fmt.Fprintf(&prompt, "\n\n## Workflow instructions\n%s\n", run.Workflow.Instructions)
+	}
 	run.Prompt = strings.TrimSpace(prompt.String())
 }

@@ -232,3 +232,18 @@ func TestDedupeHelpersHandleEmptyValues(t *testing.T) {
 		t.Fatalf("normalizeTargetSubdirForDeduper(empty) = %q, want .", got)
 	}
 }
+
+func TestWorkflowActivationsHaveIndependentDedupeKeys(t *testing.T) {
+	t.Parallel()
+	cfg := Config{RepoURL: "https://github.com/acme/repo", Prompt: "Review this pull request", Workflow: &WorkflowRunConfig{ID: "one", EventID: "event-one"}}
+	first := DedupeKey(cfg)
+	cfg.Workflow.EventID = "event-two"
+	if DedupeKey(cfg) == first {
+		t.Fatal("distinct workflow activations collapsed")
+	}
+	cfg.Workflow.EventID = "event-one"
+	cfg.Workflow.Name = "Renamed"
+	if DedupeKey(cfg) != first {
+		t.Fatal("renaming changed activation identity")
+	}
+}

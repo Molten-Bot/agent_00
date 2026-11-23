@@ -129,6 +129,8 @@ var errFinalReviewFindingsRemain = errors.New("post-task review findings remain"
 
 // Result captures run output and status.
 type Result struct {
+	ReviewClean      bool
+	ReviewedHead     string
 	ExitCode         int
 	Err              error
 	WorkspaceDir     string
@@ -200,6 +202,8 @@ type Harness struct {
 	OnPRTitle func(url, title string)
 	// OnPRCreated reports the URL and title of a newly created pull request.
 	OnPRCreated func(url, title string)
+	// OnReviewResult separates successful writeback from a clean review.
+	OnReviewResult func(clean bool, head string)
 
 	ResumeIssueWorkspace bool
 	// IssuePublicationReady records that a prior attempt accepted the agent result.
@@ -335,6 +339,12 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	h.logf("stage=auth status=ok")
 
 	h.logf("stage=workspace status=start")
+	// Read-only sandboxes replace /dev, hiding RAM checkouts under /dev/shm.
+	// Allocate on disk before cloning, including implementation runs that
+	// will later enter a read-only review pass. Keep the sandbox read-only.
+	if cfg.Review != nil || h.FinalReviewPasses > 0 {
+		h.Workspace.PreferDisk = true
+	}
 	runDir, guid, err := h.Workspace.CreateRunDir()
 	if err != nil {
 		return h.fail(ExitWorkspace, "workspace", err, "")
@@ -644,6 +654,19 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		res.ExitCode = ExitSuccess
 		return res
 	}
+	noChangePRsRepaired := false
+	verifyNoChangePRs := func() (int, string, error) {
+		for i := range repos {
+			if strings.TrimSpace(repos[i].PRURL) == "" {
+				continue
+			}
+			if code, stage, err := h.ensurePullRequestMergeable(ctx, runCfg, &repos[i], runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage); err != nil {
+				return code, stage, err
+			}
+			noChangePRsRepaired = noChangePRsRepaired || repos[i].Changed
+		}
+		return ExitSuccess, "", nil
+	}
 	if changedCount == 0 {
 		if agentOutputClaimsFileChanges(agentRes) {
 			return h.fail(
@@ -668,8 +691,11 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		if err := h.populateNoChangePRURLs(ctx, repos, cfg, requiresVerifiedNoChangePRURL(cfg.Prompt)); err != nil {
 			return h.failWithRepos(ExitPR, "pr", err, runDir, repos)
 		}
+		if code, stage, err := verifyNoChangePRs(); err != nil {
+			return h.failWithRepos(code, stage, err, runDir, repos)
+		}
 		h.logf("stage=git status=no_changes")
-		res := buildResult(runDir, repos, true)
+		res := buildResult(runDir, repos, !noChangePRsRepaired)
 		res.NoChangeEvidence = noChangeEvidence
 		res.ExitCode = ExitSuccess
 		return res
@@ -706,8 +732,11 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		if err := h.populateNoChangePRURLs(ctx, repos, cfg, requiresVerifiedNoChangePRURL(cfg.Prompt)); err != nil {
 			return h.failWithRepos(ExitPR, "pr", err, runDir, repos)
 		}
+		if code, stage, err := verifyNoChangePRs(); err != nil {
+			return h.failWithRepos(code, stage, err, runDir, repos)
+		}
 		h.logf("stage=git status=no_changes")
-		res := buildResult(runDir, repos, true)
+		res := buildResult(runDir, repos, !noChangePRsRepaired)
 		res.ExitCode = ExitSuccess
 		return res
 	}
@@ -734,8 +763,15 @@ func (h Harness) processChangedRepo(
 		ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt,
 		agentsPath, codexTargetLabel, agentStage, multiRepo,
 	)
-	if err != nil || h.FinalReviewPasses <= 0 || isReviewOnlyRun(cfg) || repo == nil || !repo.Changed || strings.TrimSpace(repo.PRURL) == "" {
+	if err != nil || isReviewOnlyRun(cfg) || repo == nil || !repo.Changed || strings.TrimSpace(repo.PRURL) == "" {
 		return exitCode, stage, err
+	}
+	// Check after publishing/CI and before review, including reused PR branches.
+	if exitCode, stage, err := h.ensurePullRequestMergeable(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage); err != nil {
+		return exitCode, stage, err
+	}
+	if repo.ReviewStoppedOnMerge || h.FinalReviewPasses <= 0 {
+		return ExitSuccess, "", nil
 	}
 	exitCode, stage, err = h.runFinalReviewCycle(
 		ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt,
@@ -751,6 +787,14 @@ func (h Harness) processChangedRepo(
 		}
 	} else if err != nil {
 		return exitCode, stage, err
+	}
+	// The base can advance while reviews and repairs run. Never release a
+	// conflicting PR or report a successful draft handoff without checking again.
+	if exitCode, stage, err := h.ensurePullRequestMergeable(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage); err != nil {
+		return exitCode, stage, err
+	}
+	if repo.ReviewStoppedOnMerge {
+		return ExitSuccess, "", nil
 	}
 	if repo.CreateWorkBranch {
 		hasNetDiff, diffErr := h.repoHasEffectivePullRequestDiff(ctx, *repo)
@@ -4767,6 +4811,9 @@ func (h Harness) completeReviewRun(
 		}
 	}
 
+	if h.OnReviewResult != nil {
+		h.OnReviewResult(outcomeOK && reviewOutcomeAllowsAutoMerge(outcome), metadata.HeadRefOID)
+	}
 	if cfg.Review.AutoMerge {
 		if err := h.autoMergeCleanReview(ctx, *repo, writebackSelector, writebackRepo, cfg.Review.MergeMethod, metadata, outcome, reviewContext != nil && reviewContext.GitHubTokenEnvSanitized); err != nil {
 			return err
@@ -9141,7 +9188,7 @@ func baseSyncConflictPrompt(basePrompt, repoPath, repoURL, branch, baseBranch st
 		mergeSummary = "git merge reported conflicts but did not provide output."
 	}
 	return fmt.Sprintf(
-		"%s\n\nBase-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nBase branch being merged: %s\n\nThe harness fetched the latest base branch and `git merge --no-edit FETCH_HEAD` reported conflicts before PR creation.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest base-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. After resolving conflicts, leave the repository ready for the harness to commit the merge resolution and retry the base sync.\n\nOriginal task context:\n%s",
+		"%s\n\nBase-branch sync conflict remediation.\nTarget repository workspace path: %s\nTarget repository remote: %s\nCurrent work branch: %s\nBase branch being merged: %s\n\nThe harness fetched the latest base branch and `git merge --no-edit FETCH_HEAD` reported conflicts during pull request mergeability verification.\nMerge output:\n%s\n\nResolve the merge conflicts while preserving the original task work and the latest base-branch behavior. Do not discard unrelated work, reset history, force push, or change branches. After resolving conflicts, leave the repository ready for the harness to commit the merge resolution and retry the base sync.\n\nOriginal task context:\n%s",
 		mergePrompt,
 		strings.TrimSpace(repoPath),
 		strings.TrimSpace(repoURL),

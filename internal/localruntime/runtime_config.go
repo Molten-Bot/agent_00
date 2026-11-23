@@ -220,6 +220,7 @@ func validateIssueExclusionLabel(label string) error {
 }
 
 type RuntimeConfigUISettingsUpdate struct {
+	WorkflowEnabled           *bool
 	IssueRepositories         GitHubIssueRepositories
 	ExpectedIssueRepositories *GitHubIssueRepositoriesSnapshot
 	OnlyAssigned              *bool
@@ -296,6 +297,13 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 	onlyAssigned := githubIssueAutoStartOnlyAssignedFromDoc(doc)
 	var githubIssueAutoStartLabels *[]string
 	for _, setting := range settingsUpdates {
+		if setting.WorkflowEnabled != nil {
+			if *setting.WorkflowEnabled {
+				doc["workflow_enabled"] = true
+			} else {
+				delete(doc, "workflow_enabled")
+			}
+		}
 		if setting.OnlyAssigned != nil {
 			onlyAssigned = *setting.OnlyAssigned
 		}
@@ -552,6 +560,7 @@ type RuntimeConfigUISettings struct {
 	GitHubIssueRepositories            GitHubIssueRepositories
 	DefaultLibraryEnabled              bool
 	ChatEnabled                        bool
+	WorkflowEnabled                    bool
 	JSONEnabled                        bool
 	GitHubIssuesEnabled                bool
 	GitHubIssueLinkMode                string
@@ -612,6 +621,7 @@ func LoadRuntimeConfigUISettings(path string) (RuntimeConfigUISettings, error) {
 		GitHubIssueRepositories:            repositories,
 		DefaultLibraryEnabled:              defaultLibraryEnabledFromDoc(doc),
 		ChatEnabled:                        chatEnabledFromDoc(doc),
+		WorkflowEnabled:                    doc["workflow_enabled"] == true,
 		JSONEnabled:                        jsonEnabledFromDoc(doc),
 		GitHubIssuesEnabled:                githubIssuesEnabledFromDoc(doc),
 		GitHubIssueLinkMode:                githubIssueLinkModeFromDoc(doc),

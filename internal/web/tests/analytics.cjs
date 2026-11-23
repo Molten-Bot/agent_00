@@ -98,8 +98,8 @@ test('Studio reports each rendered route once with safe location and referrer', 
   assert.equal((await events(page, 'settings_tab_selected'))[0].tab, 'automation');
 
   await page.evaluate(() => { window.gtag = () => { throw new Error('Analytics unavailable'); }; });
-  await page.locator('#settings-tab-review').click();
-  await expect(page.locator('#settings-panel-review')).toBeVisible();
+  await page.locator('#settings-tab-repositories').click();
+  await expect(page.locator('#settings-panel-repositories')).toBeVisible();
 });
 
 test('Chat records validation and duplicate prompts without repository or prompt contents', async t => {
@@ -253,19 +253,6 @@ test('An image decode error reports a sanitized preview failure', async t => {
   ]);
 });
 
-test('Automation scan reports acceptance for HTTP 202', async t => {
-  const page = await openPage(t);
-  await page.route('**/api/review-settings', route => route.fulfill({ json: { ok: true, settings: { github_issues_enabled: true } } }));
-  await page.route('**/api/github/automation/scan', route => route.continue());
-  await page.goto(baseURL);
-  await page.locator('#settings-open').click();
-  await page.locator('#settings-tab-github-issues').click();
-  const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/github/automation/scan');
-  await page.locator('#github-automation-scan').click();
-  assert.equal((await response).status(), 202);
-  await expect.poll(async () => await events(page, 'github_automation_scan_accepted')).toHaveLength(1);
-  assert.equal((await events(page, 'github_automation_scan_queued')).length, 0);
-});
 
  test('Server-coalesced snapshots preserve pause and resume transitions', async t => {
   const page = await openPage(t, { initialSnapshot: { ...snapshot, tasks: [{

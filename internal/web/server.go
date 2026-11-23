@@ -26,6 +26,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
 //go:embed static/*
@@ -48,7 +49,7 @@ var sitePageTemplate = template.Must(template.New("site-page").Parse(`<!doctype 
   <script src="/static/analytics.js"></script>
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-BY33RFG2WB" referrerpolicy="no-referrer"></script>
   <script>window.trackAnalyticsPageView?.("/chat", { app_display: "chat" });</script>
-  <script src="/static/lucide.min.js"></script>
+  <script src="/static/lucide.min.js?v=1.78.0"></script>
   <script src="/static/site-header.js"></script>
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -83,6 +84,7 @@ type sitePageData struct {
 
 // Server provides an HTTP UI for local task monitoring.
 type Server struct {
+	Workflows               *workflow.Engine
 	CommitSigning           *localruntime.SigningSettings
 	Addr                    string
 	Broker                  *Broker
@@ -186,6 +188,7 @@ type ReviewSettingsState struct {
 	ReviewLevel                        string   `json:"review_level"`
 	DefaultLibraryEnabled              bool     `json:"default_library_enabled"`
 	ChatEnabled                        bool     `json:"chat_enabled"`
+	WorkflowEnabled                    bool     `json:"workflow_enabled"`
 	JSONEnabled                        bool     `json:"json_enabled"`
 	GitHubIssuesEnabled                bool     `json:"github_issues_enabled"`
 	GitHubIssueLinkMode                string   `json:"github_issue_link_mode"`
@@ -211,7 +214,8 @@ type ReviewSettingsRequest struct {
 	DefaultLibraryEnabled *bool `json:"default_library_enabled,omitempty"`
 	// ChatEnabled is a pointer for the same reason as DefaultLibraryEnabled.
 	ChatEnabled *bool `json:"chat_enabled,omitempty"`
-	// JSONEnabled is a pointer for the same reason as DefaultLibraryEnabled.
+	// WorkflowEnabled and JSONEnabled preserve saved values when omitted.
+	WorkflowEnabled                    *bool     `json:"workflow_enabled,omitempty"`
 	JSONEnabled                        *bool     `json:"json_enabled,omitempty"`
 	GitHubIssuesEnabled                *bool     `json:"github_issues_enabled,omitempty"`
 	GitHubIssueLinkMode                *string   `json:"github_issue_link_mode,omitempty"`
@@ -337,6 +341,10 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/github/issues", s.handleGitHubIssues)
 	mux.HandleFunc("/api/github/issues/", s.handleGitHubIssues)
 	mux.HandleFunc("/api/review-settings", s.handleReviewSettings)
+	mux.HandleFunc("/api/workflows", s.handleWorkflows)
+	mux.HandleFunc("/api/workflows/preview", s.handleWorkflowPreview)
+	mux.HandleFunc("/api/workflows/runs", s.handleWorkflowRuns)
+	mux.HandleFunc("/api/workflows/schedules", s.handleWorkflowSchedules)
 	mux.HandleFunc("/api/commit-signing", s.handleCommitSigning)
 	mux.HandleFunc("/api/commit-signing/verify", s.handleCommitSigning)
 	mux.HandleFunc("/api/agent-auth", s.handleAgentAuthStatus)
@@ -463,11 +471,16 @@ func (s Server) injectBottomDockComponent(ctx context.Context, data []byte) []by
 		return data
 	}
 	chatEnabled, jsonEnabled, githubIssuesEnabled := true, true, false
+	workflowEnabled := false
 	if s.ReviewSettingsStatus != nil {
 		settings, settingsErr := s.ReviewSettingsStatus(ctx)
 		chatEnabled = settingsErr == nil && settings.ChatEnabled
+		workflowEnabled = settingsErr == nil && settings.WorkflowEnabled
 		jsonEnabled = settingsErr == nil && settings.JSONEnabled
 		githubIssuesEnabled = settingsErr == nil && settings.GitHubIssuesEnabled
+	}
+	if workflowEnabled {
+		dock = bytes.Replace(dock, []byte(`id="workflow-dock-link" class="prompt-mode-link site-dock-link hidden"`), []byte(`id="workflow-dock-link" class="prompt-mode-link site-dock-link"`), 1)
 	}
 	if !chatEnabled {
 		dock = bytes.Replace(dock,

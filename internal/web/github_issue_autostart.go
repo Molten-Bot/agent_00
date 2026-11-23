@@ -162,6 +162,9 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 	if err := s.ReconcileIssueWork(ctx); err != nil {
 		status.addError(err)
 	}
+	if s.Workflows != nil {
+		return
+	} // Workflow definitions replace legacy auto-start; recovery above remains active.
 	settings, err := s.ReviewSettingsStatus(ctx)
 	if err != nil {
 		status.Error = "load automation settings: " + err.Error()

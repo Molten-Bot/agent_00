@@ -226,7 +226,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 
 	markup := resp.Body.String()
-	if !strings.Contains(markup, `href="/static/style.css?v=12"`) {
+	if !strings.Contains(markup, `href="/static/style.css?v=13"`) {
 		t.Fatalf("expected index html to include external stylesheet link")
 	}
 	if strings.Contains(markup, `tailwind`) || strings.Contains(markup, `cdn.tailwindcss.com`) {
@@ -1592,7 +1592,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `activatePromptMode("json");`) {
 		t.Fatalf("expected bottom dock Library and JSON controls to activate their Studio views through the shared mode path")
 	}
-	if !strings.Contains(markup, `let mode = display === "dashboard" || display === "chat" || display === "work" ? display : "studio";`) ||
+	if !strings.Contains(markup, `let mode = display === "dashboard" || display === "chat" || display === "work" || display === "workflow" ? display : "studio";`) ||
 		!strings.Contains(markup, `if (mode === "chat" && !state.githubReposReady) {`) ||
 		!strings.Contains(markup, `mode = "studio";`) ||
 		!strings.Contains(markup, `appLayout.hidden = false;`) ||
@@ -1602,7 +1602,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(markup, `function syncTaskVisibilityForAppDisplay()`) ||
 		!strings.Contains(markup, "if (state.appDisplay === \"work\") {\n        state.taskVisible = true;\n        return;\n      }") ||
-		!strings.Contains(markup, "if (state.appDisplay === \"studio\" || state.appDisplay === \"chat\") {\n        state.taskVisible = false;\n      }") ||
+		!strings.Contains(markup, "if (state.appDisplay === \"studio\" || state.appDisplay === \"chat\" || state.appDisplay === \"workflow\") {\n        state.taskVisible = false;\n      }") ||
 		!strings.Contains(markup, `syncTaskVisibilityForAppDisplay();`) {
 		t.Fatalf("expected index html to expand Current Work only on the Current Work view")
 	}
