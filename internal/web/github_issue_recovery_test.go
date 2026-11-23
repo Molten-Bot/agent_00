@@ -1057,7 +1057,7 @@ func TestIssueRecoveryBlocksExternalRolloutWithoutRepair(t *testing.T) {
 	record := completeRecoveryRecord(t, s, "error", 1)
 	record.Incident = "missing_pr"
 	const detail = "codex: codex reported failure: Failure: #42 production deployment is still incomplete. " +
-		"Error details: Secrets Manager setup, live verification, and infrastructure changes are outstanding. " +
+		"Error details: Secrets Manager setup, live verification, and production IAM approval are outstanding. " +
 		"CLI evidence switches default to disabled."
 	// Older records may carry the terminal error only in Error.
 	record.Error = detail

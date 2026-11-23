@@ -561,13 +561,13 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	if predicate == nil {
 		return false
 	}
-	// The status must apply to the provisioning items themselves. Reject a
-	// different subject or clause that merely mentions those prerequisites.
-	var infrastructure, secret bool
+	// The status must apply to the provisioning items themselves. Generic
+	// infrastructure changes can refer to unfinished repository edits.
+	var iam, secret bool
 	for _, item := range provisioningListSeparator.Split(statement[:predicate[0]], -1) {
 		switch {
-		case iamProvisioning.MatchString(item), item == "infrastructure changes":
-			infrastructure = true
+		case iamProvisioning.MatchString(item):
+			iam = true
 		case secretProvisioning.MatchString(item):
 			secret = true
 		case item == "deployment", item == "deployed source verification", item == "live source verification", item == "live verification":
@@ -575,7 +575,7 @@ func IsExternalRolloutFailure(summary, details string) bool {
 			return false
 		}
 	}
-	if !infrastructure || !secret {
+	if !iam || !secret {
 		return false
 	}
 	if !rolloutStatusOnly(statements[1:]) {
