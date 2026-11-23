@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
@@ -32,6 +33,7 @@ const prBodyFormatReferenceLine = "Standard PR format reference: https://github.
 const prBodyDefaultSummary = "This PR implements the requested changes described below.\nBuilt using AI-assisted engineering and reviewed before submission.\nOnly relevant files were modified."
 const prBodyFooter = "Curious how this was built? See how AI agents can help with your own projects: [Agent_00](https://molten.bot/code?source=pr)"
 const prBodyPromptHeading = "Original task prompt:"
+const githubPRBodyMaxBytes = 65_536 // A byte limit also fits GitHub's character limit.
 
 // Config is the v1 public contract for a harness run.
 type Config struct {
@@ -875,29 +877,20 @@ func NormalizePRBody(body, prompt string) string {
 	return ensurePRBodyPromptAndFooter(body, prompt)
 }
 
-// NormalizePRBodyForGitHubIssue adds an issue reference to the normalized PR
-// body while keeping the standard footer at the end.
+// NormalizePRBodyForGitHubIssue prepares a body for GitHub's size limit and
+// adds the configured issue reference before the standard footer.
 func NormalizePRBodyForGitHubIssue(body, prompt string, issue *GitHubIssueConfig) string {
-	normalized := NormalizePRBody(body, prompt)
-	if issue == nil || issue.Number <= 0 {
-		return normalized
-	}
-	line := fmt.Sprintf("Related to #%d", issue.Number)
-	if strings.EqualFold(strings.TrimSpace(issue.LinkMode), GitHubIssueLinkClose) {
-		line = fmt.Sprintf("Closes #%d", issue.Number)
-	}
-	if strings.Contains("\n"+normalized+"\n", "\n"+line+"\n") {
-		return normalized
-	}
-	if footerAt := strings.LastIndex(normalized, prBodyFooter); footerAt >= 0 {
-		return normalized[:footerAt] + line + "\n\n" + normalized[footerAt:]
-	}
-	return strings.TrimRight(normalized, "\n") + "\n\n" + line
+	return formatPRBody(body, prompt, issue, githubPRBodyMaxBytes)
 }
 
 var wsRE = regexp.MustCompile(`\s+`)
 var generatedPRTitleSuffixRE = regexp.MustCompile(`-[0-9]{8}-[0-9]{6}(?:-[0-9a-fA-F]{1,8})?$`)
-var generatedPRPromptBlockRE = regexp.MustCompile(`(?s)(?:^|\n{2,})` + prBodyPromptHeading + "\n```text\n.*?\n```")
+var generatedPRPromptOpeningRE = regexp.MustCompile(`^` + prBodyPromptHeading + "\n(`{3,})text\n")
+var prPromptFenceLineRE = regexp.MustCompile("(?m)^[ \t]*(`{3,})")
+var prSummaryFenceLineRE = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
+var prSummaryListMarkerRE = regexp.MustCompile(`^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])( +)`)
+var prSummaryPreOpeningRE = regexp.MustCompile(`(?i)^<pre(?:[ \t\r>]|$)`)
+var prSummaryPreClosingRE = regexp.MustCompile(`(?i)</pre>`)
 
 func normalizePRTitle(title string) string {
 	title = trimGeneratedPRTitleSuffix(strings.TrimSpace(title))
@@ -931,45 +924,348 @@ func ensurePRBodyFooter(body string) string {
 	if body == "" {
 		return prBodyFooter
 	}
-	if strings.Contains(body, "https://molten.bot/code?source=pr") {
+	if strings.HasSuffix(body, prBodyFooter) {
 		return body
 	}
 	return body + "\n\n" + prBodyFooter
 }
 
 func ensurePRBodyPromptAndFooter(body, prompt string) string {
-	body = extractPRBodySummary(body)
+	return formatPRBody(body, prompt, nil, 0)
+}
+
+func formatPRBody(body, prompt string, issue *GitHubIssueConfig, maxBytes int) string {
 	prompt = strings.TrimSpace(prompt)
-	if body == "" {
-		body = prBodyDefaultSummary
+	fenceLength := 3
+	for _, line := range prPromptFenceLineRE.FindAllStringSubmatch(prompt, -1) {
+		fenceLength = max(fenceLength, len(line[1])+1)
+	}
+	fence := strings.Repeat("`", fenceLength)
+	summary := extractPRBodySummary(body, prompt)
+	issueLine := ""
+	if issue != nil && issue.Number > 0 {
+		issueLine = fmt.Sprintf("Related to #%d", issue.Number)
+		if strings.EqualFold(strings.TrimSpace(issue.LinkMode), GitHubIssueLinkClose) {
+			issueLine = fmt.Sprintf("Closes #%d", issue.Number)
+		}
+	}
+	summary, hasIssueLine := preparePRBodySummary(summary, issueLine)
+	promptOmitted := false
+	if maxBytes > 0 {
+		summary = strings.ToValidUTF8(summary, "\uFFFD")
+		prompt = strings.ToValidUTF8(prompt, "\uFFFD")
+		// Reserve space for generated sections and the issue link. An oversized
+		// custom summary is omitted whole so it cannot leave Markdown unclosed.
+		maxBytes -= len(prBodyGeneratedByLine) + len(prBodyDefaultSummary) + len(prBodyFooter) + 4
+		if issueLine != "" {
+			maxBytes -= len(issueLine) + 2
+		}
+		summaryBudget := maxBytes - 2
+		if prompt != "" {
+			summaryBudget -= len(prPromptOmissionNotice) + 2
+		}
+		if len(summary) > summaryBudget {
+			summary = "[Custom PR summary omitted because it exceeds GitHub's body limit.]"
+			hasIssueLine = false
+		}
+		if summary != "" {
+			maxBytes -= len(summary) + 2
+		}
+		if prompt != "" {
+			blockOverhead := len(prBodyPromptHeading) + len("\ntext\n\n") + 2*len(fence)
+			prompt = limitPRPrompt(prompt, maxBytes-2-blockOverhead)
+			promptOmitted = prompt == ""
+		}
 	}
 
 	sections := []string{
 		prBodyGeneratedByLine,
 		prBodyDefaultSummary,
 	}
-	if body != "" && body != prBodyDefaultSummary {
-		sections = append(sections, body)
+	if summary != "" {
+		sections = append(sections, summary)
 	}
 	if prompt != "" {
-		sections = append(sections, prBodyPromptHeading+"\n```text\n"+prompt+"\n```")
+		sections = append(sections, prBodyPromptHeading+"\n"+fence+"text\n"+prompt+"\n"+fence)
+	} else if promptOmitted {
+		sections = append(sections, prPromptOmissionNotice)
+	}
+	if issueLine != "" && !hasIssueLine {
+		sections = append(sections, issueLine)
 	}
 	return ensurePRBodyFooter(strings.Join(sections, "\n\n"))
 }
 
-func extractPRBodySummary(body string) string {
+func preparePRBodySummary(summary, issueLine string) (string, bool) {
+	var fences prSummaryFences
+	var hasIssueLine bool
+	atSectionStart := true
+	for rest := summary; rest != ""; {
+		line, after, _ := strings.Cut(rest, "\n")
+		fences.advance(line)
+		if fences.outsideLiteral() && issueLine != "" && line == issueLine {
+			if atSectionStart && after == "" {
+				// Keep a trailing issue section after the prompt on repeated normalization.
+				return strings.TrimRight(summary[:len(summary)-len(rest)], "\n"), hasIssueLine
+			}
+			hasIssueLine = true
+		}
+		atSectionStart = line == ""
+		rest = after
+	}
+	if fences.fence != "" {
+		summary += "\n" + strings.Repeat(" ", fences.indent()) + fences.fence
+	}
+	if fences.inPre {
+		summary += "\n" + strings.Repeat(" ", fences.indent()) + "</pre>"
+	}
+	return summary, hasIssueLine
+}
+
+const prPromptOmissionNotice = "[Original task prompt omitted because it exceeds GitHub's body limit.]"
+
+func limitPRPrompt(prompt string, budget int) string {
+	const notice = "\n[Prompt truncated to fit GitHub's body limit.]"
+	if len(prompt) <= budget {
+		return prompt
+	}
+	if budget < len(notice) {
+		return ""
+	}
+	end := budget - len(notice)
+	for end > 0 && !utf8.RuneStart(prompt[end]) {
+		end--
+	}
+	return strings.TrimRight(prompt[:end], " \t\r\n") + notice
+}
+
+func extractPRBodySummary(body, prompt string) string {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return ""
 	}
 
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyFooter, ""))
-	body = strings.TrimSpace(generatedPRPromptBlockRE.ReplaceAllString(body, ""))
+	for {
+		start, content, fence, found := findPRPromptOpening(body)
+		if !found {
+			break
+		}
+		after, found := afterPRPromptFence(content, fence, prompt)
+		if !found {
+			break
+		}
+		body = strings.TrimSpace(strings.TrimRight(body[:start], "\n") + "\n\n" + strings.TrimPrefix(after, "\n"))
+	}
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyGeneratedByLine, ""))
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyFormatReferenceLine, ""))
 	body = strings.TrimSpace(strings.ReplaceAll(body, "Agent summary of issue resolution:", ""))
 	body = strings.TrimSpace(strings.ReplaceAll(body, prBodyDefaultSummary, ""))
 	return strings.TrimSpace(body)
+}
+
+func findPRPromptOpening(body string) (start int, content, fence string, found bool) {
+	atSectionStart := true
+	var fences prSummaryFences
+	for rest := body; rest != ""; {
+		line, after, _ := strings.Cut(rest, "\n")
+		fences.advance(line)
+		if fences.outsideLiteral() && atSectionStart {
+			if opening := generatedPRPromptOpeningRE.FindStringSubmatchIndex(rest); opening != nil {
+				return len(body) - len(rest), rest[opening[1]:], rest[opening[2]:opening[3]], true
+			}
+		}
+		atSectionStart = line == ""
+		rest = after
+	}
+	return 0, "", "", false
+}
+
+type prSummaryFences struct {
+	listIndents []int
+	fence       string
+	inComment   bool
+	inPre       bool
+}
+
+func (f *prSummaryFences) outsideLiteral() bool {
+	return f.fence == "" && !f.inComment && !f.inPre
+}
+
+func (f *prSummaryFences) indent() int {
+	if len(f.listIndents) == 0 {
+		return 0
+	}
+	return f.listIndents[len(f.listIndents)-1]
+}
+
+func (f *prSummaryFences) advance(line string) {
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	leading := len(line) - len(strings.TrimLeft(line, " "))
+	for leading < f.indent() {
+		// A dedent ends the list item and its Markdown blocks.
+		f.listIndents = f.listIndents[:len(f.listIndents)-1]
+		f.fence = ""
+		f.inComment = false
+		f.inPre = false
+	}
+	line = line[f.indent():]
+	if f.inComment {
+		f.inComment = !strings.Contains(line, "-->")
+		return
+	}
+	if f.inPre {
+		f.inPre = !prSummaryPreClosingRE.MatchString(line)
+		return
+	}
+	if f.fence == "" {
+		for {
+			marker := prSummaryListMarkerRE.FindStringSubmatchIndex(line)
+			if marker == nil {
+				break
+			}
+			width := marker[1]
+			if marker[3]-marker[2] > 4 {
+				width = marker[2] + 1
+			}
+			f.listIndents = append(f.listIndents, f.indent()+width)
+			line = line[width:]
+		}
+		trimmed := strings.TrimLeft(line, " ")
+		if len(line)-len(trimmed) <= 3 {
+			if strings.HasPrefix(trimmed, "<!--") {
+				f.inComment = !strings.Contains(trimmed[len("<!--"):], "-->")
+				return
+			}
+			if prSummaryPreOpeningRE.MatchString(trimmed) {
+				f.inPre = !prSummaryPreClosingRE.MatchString(trimmed)
+				return
+			}
+		}
+	}
+	f.fence = prSummaryFenceAfterLine(f.fence, line)
+}
+
+func prSummaryFenceAfterLine(fence, line string) string {
+	match := prSummaryFenceLineRE.FindStringSubmatch(line)
+	if match == nil {
+		return fence
+	}
+	delimiter, info := match[1], match[2]
+	if fence == "" && (delimiter[0] == '~' || !strings.Contains(info, "`")) {
+		return delimiter
+	}
+	if fence != "" && strings.HasPrefix(delimiter, fence) && strings.TrimSpace(info) == "" {
+		return ""
+	}
+	return fence
+}
+
+func afterPRPromptFence(body, fence, prompt string) (string, bool) {
+	legacy := fence == "```"
+	if legacy && prompt != "" {
+		// The known prompt can contain the same fence as its wrapper.
+		if rest, found := strings.CutPrefix(body, prompt+"\n"); found {
+			line, after, _ := strings.Cut(rest, "\n")
+			if strings.TrimRight(line, " \t\r") == fence {
+				return after, true
+			}
+		}
+	}
+
+	// Legacy wrappers and unlabeled code blocks can share a fence. The
+	// formatter closes the wrapper after trimmed prompt content and separates
+	// the next section with a blank line.
+	innerFenceLength := 0
+	previousLineBlank := true
+	var fallback string
+	var foundFallback bool
+	for {
+		rawLine, after, more := strings.Cut(body, "\n")
+		line := strings.TrimRight(rawLine, " \t\r")
+		if line == fence && innerFenceLength == 0 {
+			nextLine, _, _ := strings.Cut(after, "\n")
+			sectionEnd := !previousLineBlank && strings.TrimSpace(nextLine) == ""
+			candidatePadded := line != strings.TrimSuffix(rawLine, "\r")
+			if !legacy || !more || after == "" || (sectionEnd && !legacyPromptHasBareCodeClose(after, fence, candidatePadded)) {
+				return after, true
+			}
+			if !foundFallback {
+				fallback, foundFallback = after, true
+			}
+			innerFenceLength = len(fence)
+		} else if legacy {
+			// The prompt may end with an unclosed code example.
+			if line == fence && !foundFallback {
+				fallback, foundFallback = after, true
+			}
+			if match := prPromptFenceLineRE.FindStringSubmatchIndex(line); match != nil {
+				length := match[3] - match[2]
+				info := line[match[3]:]
+				if innerFenceLength == 0 && info != "" && !strings.Contains(info, "`") {
+					innerFenceLength = length
+				} else if innerFenceLength > 0 && info == "" && length >= innerFenceLength {
+					innerFenceLength = 0
+				}
+			}
+		}
+		if !more {
+			return fallback, foundFallback
+		}
+		previousLineBlank = strings.TrimSpace(line) == ""
+		body = after
+	}
+}
+
+func legacyPromptHasBareCodeClose(body, fence string, candidatePadded bool) bool {
+	previousLineBlank := true
+	var fences prSummaryFences
+	for body != "" {
+		line, after, _ := strings.Cut(body, "\n")
+		fences.advance(line)
+		if fences.fence != "" {
+			// Prefer the section break unless this fence looks like the end of
+			// an example followed by more prompt text or the wrapper's close.
+			nextLine, _, _ := strings.Cut(after, "\n")
+			nextLine = strings.TrimRight(nextLine, " \t\r")
+			if previousLineBlank || strings.TrimRight(line, " \t\r") != fence {
+				return false
+			}
+			if nextLine != "" {
+				return nextLine == fence
+			}
+			// An attached summary example can start with a blank line. Consume
+			// complete examples before treating an unmatched fence as a wrapper.
+			firstExample := true
+			bareExampleOpen := true
+			for after != "" {
+				line, after, _ = strings.Cut(after, "\n")
+				wasOutside := fences.outsideLiteral()
+				fences.advance(line)
+				if fences.fence == "" {
+					if firstExample && !candidatePadded && strings.TrimSuffix(line, "\r") != fence && strings.TrimRight(line, " \t\r") == fence {
+						// Padding at a section break can distinguish the wrapper
+						// from the prompt's literal bare delimiters.
+						nextLine, _, _ := strings.Cut(after, "\n")
+						followingLine, _, _ := strings.Cut(strings.TrimLeft(after, " \t\r\n"), "\n")
+						if strings.TrimSpace(nextLine) == "" && followingLine != "" && prSummaryFenceAfterLine("", followingLine) == "" {
+							return true
+						}
+					}
+					firstExample = false
+					bareExampleOpen = false
+				} else if wasOutside {
+					bareExampleOpen = fences.fence == fence && strings.TrimRight(line, " \t\r") == fence
+				}
+			}
+			return bareExampleOpen
+		}
+		previousLineBlank = strings.TrimSpace(line) == ""
+		body = after
+	}
+	return false
 }
 
 func summarize(s string, max int) string {

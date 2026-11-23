@@ -91,7 +91,9 @@ jobs:
           npm ci --prefix internal/web/workflow
           npm test --prefix internal/web/workflow
           npm run build --prefix internal/web/workflow
-          git diff --exit-code -- internal/web/static/workflow-editor.js internal/web/static/workflow-editor.css
+          # Container checkout ownership can differ from the user running Git.
+          # Explicitly trust this checkout and compare with HEAD, never two files.
+          git -c safe.directory="$GITHUB_WORKSPACE" diff --exit-code HEAD -- internal/web/static/workflow-editor.js internal/web/static/workflow-editor.css internal/web/static/workflow-editor.js.LEGAL.txt internal/web/static/workflow-editor-LICENSE.txt
 
       - name: Test web package
         run: go test -count=1 ./internal/web

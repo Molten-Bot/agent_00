@@ -230,7 +230,7 @@ func (r Runtime) BuildCommand(targetDir, prompt string, opts RunOptions) (execx.
 		readOnly := len(nonEmptyStrings(opts.DisallowedTools)) > 0
 		args := []string{"sandbox"}
 		if readOnly {
-			filesystem := `":root"="read"`
+			filesystem := reviewFilesystem(targetDir, opts)
 			if opts.WorkspaceDir != "" {
 				// Claude needs its isolated cache, temp files and session state.
 				// Permit only harness-owned IO, never the repository or task root.
@@ -431,20 +431,65 @@ func normalizeHarness(harness string) string {
 	return normalized
 }
 
-func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command, error) {
-	// Codex has no per-tool denylist like Claude's --disallowedTools. When the
-	// caller asks for a read-only pass (for example a post-task review that
-	// must not touch the repository), the only enforceable equivalent is to
-	// drop the whole invocation into Codex's read-only sandbox instead of
-	// workspace-write, so the CLI cannot write anywhere regardless of which
-	// tool it tries to use.
-	readOnly := len(nonEmptyStrings(opts.DisallowedTools)) > 0
-	sandboxMode := "workspace-write"
-	if readOnly {
-		sandboxMode = "read-only"
+// Broad root reads are mounted before Codex replaces /dev with a private device
+// tree. Use explicit read roots so RAM workspaces under /dev/shm are rebound
+// after that mount, including the shared guide and sibling context files.
+func reviewFilesystem(targetDir string, opts RunOptions) string {
+	root := opts.WorkspaceDir
+	if root == "" {
+		root = targetDir
 	}
-	args := []string{"exec", "--sandbox", sandboxMode, "-c", `approval_policy="never"`}
-	if !readOnly {
+	filesystem := `":minimal"="read"`
+	seen := map[string]bool{}
+	add := func(path string) {
+		if path != "" && filepath.Clean(path) != string(filepath.Separator) && !seen[path] {
+			filesystem += fmt.Sprintf(",%q=\"read\"", path)
+			seen[path] = true
+		}
+	}
+	add(root)
+	// Preserve access to user-installed tools and runtime configuration.
+	env := opts.Env
+	if len(env) == 0 {
+		env = os.Environ()
+	}
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && (key == "HOME" || key == "CODEX_HOME" || key == "CLAUDE_CONFIG_DIR") && filepath.IsAbs(value) {
+			add(value)
+		}
+		if ok && key == "PATH" {
+			for _, dir := range filepath.SplitList(value) {
+				if !filepath.IsAbs(dir) {
+					continue
+				}
+				add(dir)
+				// Tool distributions often keep libraries next to bin.
+				// Never add /: it would mask the explicit /dev read again.
+				if parent := filepath.Dir(dir); parent != string(filepath.Separator) {
+					add(parent)
+				}
+			}
+		}
+	}
+	for _, path := range opts.ImagePaths {
+		if filepath.IsAbs(path) {
+			add(path)
+		}
+	}
+	return filesystem
+}
+
+func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command, error) {
+	// A review must retain read access to the prepared checkout without
+	// granting the implicit cwd write access of workspace-write.
+	readOnly := len(nonEmptyStrings(opts.DisallowedTools)) > 0
+	args := []string{"exec", "-c", `approval_policy="never"`}
+	if readOnly {
+		args = append(args, "-P", "agent00_review", "-c",
+			"permissions.agent00_review={filesystem={"+reviewFilesystem(targetDir, opts)+"},network={enabled=false}}")
+	} else {
+		args = append([]string{"exec", "--sandbox", "workspace-write"}, args[1:]...)
 		args = append(args, workspaceSandboxArgs(opts)...)
 	}
 	if opts.SkipGitRepoCheck {

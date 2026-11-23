@@ -20,6 +20,12 @@ func codexCommandWithOptions(targetDir, prompt string, opts codexRunOptions) exe
 	if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../") {
 		opts.WorkspaceDir = testRunDir(strings.Split(rel, string(filepath.Separator))[0])
 	}
+	if len(opts.DisallowedTools) > 0 && opts.WorkspaceDir != "" && len(opts.Env) == 0 {
+		opts.Env, err = prepareAgentIOEnv(opts.WorkspaceDir, nil)
+		if err != nil {
+			panic(err)
+		}
+	}
 	cmd, err := agentCommandWithOptions(agentruntime.Default(), targetDir, prompt, opts)
 	if err != nil {
 		panic(err)

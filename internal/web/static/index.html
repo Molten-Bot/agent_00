@@ -826,7 +826,7 @@
             <label class="selectable-option">
               <input class="sr-only" id="review-settings-json-enabled" type="checkbox">
               <i data-lucide="braces" aria-hidden="true"></i>
-              <span>JSON input (experimental)</span>
+              <span>JSON input</span>
             </label>
             <label class="selectable-option">
               <input class="sr-only" id="review-settings-workflow-enabled" type="checkbox">
@@ -9688,7 +9688,7 @@
       if (!repos.length) return "-";
       const displayRepos = repos.map(taskSiteDisplayName).filter(Boolean);
       if (!displayRepos.length) return "-";
-      return `[${displayRepos.join(", ")}]`;
+      return displayRepos.join(", ");
     }
 
     function taskSiteDisplayName(value) {
@@ -12847,7 +12847,7 @@
           repos.className = "task-meta-sites";
           const reposLabel = document.createElement("span");
           reposLabel.className = "task-meta-sites-label";
-          reposLabel.textContent = `sites: ${formatTaskRepos(task)}`;
+          reposLabel.textContent = formatTaskRepos(task);
           repos.appendChild(reposLabel);
           const siteLinks = document.createElement("span");
           siteLinks.className = "task-site-url-actions";

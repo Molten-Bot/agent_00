@@ -400,8 +400,8 @@ func TestBuildCommandCodexReadOnlySandboxForDisallowedTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildCommand() error = %v", err)
 	}
-	if !containsString(cmd.Args, "read-only") {
-		t.Fatalf("Args = %#v, want read-only sandbox", cmd.Args)
+	if !containsString(cmd.Args, "agent00_review") {
+		t.Fatalf("Args = %#v, want review permission profile", cmd.Args)
 	}
 	for _, arg := range cmd.Args {
 		if arg == "--add-dir" || strings.Contains(arg, "writable_roots") {
@@ -493,4 +493,44 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestReviewFilesystemExplicitWorkspaceRead(t *testing.T) {
+	t.Parallel()
+	for _, root := range []string{"/dev/shm/tasks/example", "/tmp/tasks/example"} {
+		for _, harness := range []string{HarnessCodex, HarnessClaude} {
+			rt, _ := Resolve(harness, "")
+			cmd, err := rt.BuildCommand(filepath.Join(root, "repo"), "review", RunOptions{
+				WorkspaceDir: root, DisallowedTools: []string{"Write"},
+				Env: []string{"PATH=/usr/bin"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := strings.Join(cmd.Args, " ")
+			if !strings.Contains(args, `":minimal"="read"`) || !strings.Contains(args, `"`+root+`"="read"`) {
+				t.Fatalf("%s review lacks explicit workspace read: %s", harness, args)
+			}
+			if strings.Contains(args, `":root"`) || strings.Contains(args, `"`+root+`"="write"`) || strings.Contains(args, "--add-dir") {
+				t.Fatalf("%s review masks or makes workspace writable: %s", harness, args)
+			}
+		}
+	}
+}
+
+func TestReviewFilesystemPreservesToolAndImageReadsWithoutRootMount(t *testing.T) {
+	t.Parallel()
+	filesystem := reviewFilesystem("/dev/shm/task/repo", RunOptions{
+		WorkspaceDir: "/dev/shm/task",
+		Env:          []string{"HOME=/", "CODEX_HOME=/config/codex", "CLAUDE_CONFIG_DIR=/config/claude", "PATH=/:/opt/tool/bin:relative"},
+		ImagePaths:   []string{"/attachments/input.png"},
+	})
+	for _, path := range []string{"/dev/shm/task", "/config/codex", "/config/claude", "/opt/tool/bin", "/opt/tool", "/attachments/input.png"} {
+		if !strings.Contains(filesystem, `"`+path+`"="read"`) {
+			t.Fatalf("missing read access for %s: %s", path, filesystem)
+		}
+	}
+	if strings.Contains(filesystem, `"/"=`) || strings.Contains(filesystem, `":root"`) || strings.Contains(filesystem, "relative") || strings.Contains(filesystem, `="write"`) {
+		t.Fatalf("unexpected review permissions: %s", filesystem)
+	}
 }

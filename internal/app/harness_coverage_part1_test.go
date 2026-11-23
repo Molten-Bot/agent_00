@@ -919,6 +919,30 @@ func TestH1CovCreatePullRequestURL(t *testing.T) {
 		}
 	})
 
+	t.Run("body validation failure remains an error", func(t *testing.T) {
+		t.Parallel()
+		cfg := sampleConfig()
+		cfg.PRTitle = "Check correct permissions"
+		cfg.Prompt = "Check if a pull request already exists at https://example.com/other"
+		repo := repoWorkspace{Dir: "/repo", URL: cfg.RepoURL, Branch: "agent00-topic", BaseBranch: "main"}
+		cmd := prCreateWithOptionsCommand(repo.Dir, cfg, repo.BaseBranch, repo.Branch, "")
+		const detail = "pull request create failed: GraphQL: Body is too long (maximum is 65536 characters) (createPullRequest)"
+		exitErr := errors.New("exit status 1")
+		fake := &fakeRunner{t: t, exps: []expectedRun{{
+			cmd: cmd,
+			res: execx.Result{Stderr: detail},
+			err: fmt.Errorf("run gh %v: %w (%s)", cmd.Args, exitErr, detail),
+		}}}
+		h := New(fake)
+		prURL, err := h.createPullRequestURL(t.Context(), repo, cfg, true, repo.Branch, "")
+		if prURL != "" || !errors.Is(err, exitErr) || errors.Is(err, errPRCreatePermissionDenied) {
+			t.Fatalf("createPullRequestURL() = (%q, %v), want validation error", prURL, err)
+		}
+		if !strings.Contains(err.Error(), detail) || strings.Contains(err.Error(), cfg.PRTitle) || strings.Contains(err.Error(), cfg.Prompt) {
+			t.Fatalf("createPullRequestURL() error = %v, want only subprocess diagnostic", err)
+		}
+	})
+
 	t.Run("success extracts URL from stdout without createWorkBranch", func(t *testing.T) {
 		t.Parallel()
 		cfg := sampleConfig()
