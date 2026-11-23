@@ -6137,8 +6137,8 @@ func TestCommandBuilders(t *testing.T) {
 
 	pr := prCreateCommand(repoDir, cfg, branch)
 	normalizedPRBody := config.NormalizePRBody(cfg.PRBody, cfg.Prompt)
-	wantPrefix := []string{"pr", "create", "--base", "main", "--head", branch, "--title", cfg.PRTitle, "--body", normalizedPRBody}
-	if pr.Name != "gh" || pr.Dir != repoDir {
+	wantPrefix := []string{"pr", "create", "--base", "main", "--head", branch, "--title", cfg.PRTitle, "--body-file", "-"}
+	if pr.Name != "gh" || pr.Dir != repoDir || pr.Stdin != normalizedPRBody {
 		t.Fatalf("pr command unexpected: %+v", pr)
 	}
 	if !reflect.DeepEqual(pr.Args[:len(wantPrefix)], wantPrefix) {
@@ -6152,8 +6152,8 @@ func TestCommandBuilders(t *testing.T) {
 	}
 
 	prNoBase := prCreateWithoutBaseCommand(repoDir, cfg, branch)
-	wantNoBasePrefix := []string{"pr", "create", "--head", branch, "--title", cfg.PRTitle, "--body", normalizedPRBody}
-	if prNoBase.Name != "gh" || prNoBase.Dir != repoDir {
+	wantNoBasePrefix := []string{"pr", "create", "--head", branch, "--title", cfg.PRTitle, "--body-file", "-"}
+	if prNoBase.Name != "gh" || prNoBase.Dir != repoDir || prNoBase.Stdin != normalizedPRBody {
 		t.Fatalf("pr without base command unexpected: %+v", prNoBase)
 	}
 	if !reflect.DeepEqual(prNoBase.Args[:len(wantNoBasePrefix)], wantNoBasePrefix) {
@@ -6541,10 +6541,7 @@ func TestPRCreateCommandsEnforceStandardBodyFormat(t *testing.T) {
 	cfg.PRBody = "Hardened auth retry flow and fixed flaky assertions."
 
 	pr := prCreateCommand("/tmp/repo", cfg, "topic-branch")
-	body, ok := flagValue(pr.Args, "--body")
-	if !ok {
-		t.Fatalf("pr create args missing --body: %v", pr.Args)
-	}
+	body := pr.Stdin
 
 	required := []string{
 		"Proposed changes from Agent_00",
@@ -6566,10 +6563,7 @@ func TestPRCreateCommandsEnforceStandardBodyFormat(t *testing.T) {
 	}
 
 	prNoBase := prCreateWithoutBaseCommand("/tmp/repo", cfg, "topic-branch")
-	noBaseBody, ok := flagValue(prNoBase.Args, "--body")
-	if !ok {
-		t.Fatalf("pr create without base args missing --body: %v", prNoBase.Args)
-	}
+	noBaseBody := prNoBase.Stdin
 	if noBaseBody != body {
 		t.Fatalf("normalized PR body mismatch between command variants: with-base=%q without-base=%q", body, noBaseBody)
 	}
@@ -6598,8 +6592,7 @@ func TestPRCreateCommandsIncludeGitHubIssueLinkMode(t *testing.T) {
 				if got, ok := flagValue(command.Args, "--title"); !ok || got != title {
 					t.Fatalf("PR create title = %q, want %q", got, title)
 				}
-				body, ok := flagValue(command.Args, "--body")
-				if !ok || !strings.Contains(body, test.want) {
+				if body := command.Stdin; !strings.Contains(body, test.want) {
 					t.Fatalf("PR create body = %q, want %q", body, test.want)
 				}
 			}
