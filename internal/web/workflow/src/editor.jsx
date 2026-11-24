@@ -129,18 +129,34 @@ function Toggle({ label, value, onChange }) {
   );
 }
 function WorkflowCanvas({ workflow, onMove, onSelect, onArrange }) {
+  const flow = useReactFlow();
   const graph = useMemo(() => workflow ? diagram(workflow) : { nodes: [], edges: [] }, [workflow]);
-  const [layout, setLayout] = useState({ graph, workflowId: workflow?.id, nodes: graph.nodes });
+  const [layout, setLayout] = useState({ graph, nodes: graph.nodes });
 
   if (layout.graph !== graph) {
-    const previous = new Map(layout.workflowId === workflow?.id ? layout.nodes.map(node => [node.id, node]) : []);
-    // Keep measurements and selection when the workflow definition changes.
+    const previous = new Map(layout.nodes.map(node => [node.id, node]));
     const nodes = graph.nodes.map(node => {
       const existing = previous.get(node.id);
-      return existing ? { ...node, measured: existing.measured, selected: existing.selected } : node;
+      if (!existing) return node;
+      return {
+        ...node,
+        measured: existing.measured,
+        selected: existing.selected,
+        dragging: existing.dragging,
+        position: existing.dragging ? existing.position : node.position,
+      };
     });
-    setLayout({ graph, workflowId: workflow?.id, nodes });
+    setLayout({ graph, nodes });
   }
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.detail !== "workflow") return;
+      requestAnimationFrame(() => flow.fitView({ padding: 32, duration: 200 }));
+    };
+    window.addEventListener("workflow-display", handler);
+    return () => window.removeEventListener("workflow-display", handler);
+  }, [flow]);
 
   const handleNodesChange = useCallback(changes => {
     setLayout(previous => ({ ...previous, nodes: changes.applyTo(previous.nodes) }));
@@ -148,6 +164,12 @@ function WorkflowCanvas({ workflow, onMove, onSelect, onArrange }) {
     const moves = changes.toArray().filter(change => change.type === "position" && change.position && !change.dragging);
     if (moves.length) onMove(Object.fromEntries(moves.map(change => [change.id, change.position])));
   }, [onMove]);
+
+  function arrange(direction) {
+    if (!workflow) return;
+    onArrange(automaticLayout(workflow, direction, flow.getNodes()));
+    requestAnimationFrame(() => requestAnimationFrame(() => flow.fitView({ padding: 32, duration: 200 })));
+  }
 
   return (
     <ReactFlow
@@ -169,10 +191,10 @@ function WorkflowCanvas({ workflow, onMove, onSelect, onArrange }) {
     >
       <Background gap={22} />
       <Controls showInteractive={false}>
-        <ControlButton aria-label="Arrange workflow vertically" title="Automatic vertical layout" disabled={!workflow} onClick={() => onArrange("vertical")}>
+        <ControlButton aria-label="Arrange workflow vertically" title="Automatic vertical layout" disabled={!workflow} onClick={() => arrange("vertical")}>
           <Rows3 />
         </ControlButton>
-        <ControlButton aria-label="Arrange workflow horizontally" title="Automatic horizontal layout" disabled={!workflow} onClick={() => onArrange("horizontal")}>
+        <ControlButton aria-label="Arrange workflow horizontally" title="Automatic horizontal layout" disabled={!workflow} onClick={() => arrange("horizontal")}>
           <Columns3 />
         </ControlButton>
       </Controls>
@@ -200,7 +222,6 @@ function Editor() {
     [preview, setPreview] = useState(null),
     [busy, setBusy] = useState(false),
     [templatesOpen, setTemplatesOpen] = useState(true);
-  const flow = useReactFlow();
   const changeRepository = useCallback((repository) => {
     if (dirty) {
       setNotice("Save or discard changes first.");
@@ -265,14 +286,6 @@ function Editor() {
   }, []);
   useEffect(() => {
     const handler = (e) => {
-      if (e.detail !== "workflow") return;
-      requestAnimationFrame(() => flow.fitView({ padding: 32, duration: 200 }));
-    };
-    window.addEventListener("workflow-display", handler);
-    return () => window.removeEventListener("workflow-display", handler);
-  }, [flow]);
-  useEffect(() => {
-    const handler = (e) => {
       if (dirty) {
         e.preventDefault();
         e.returnValue = "";
@@ -316,13 +329,12 @@ function Editor() {
       setNotice(
         "Scheduled workflow draft created from Library. Save it, then enable when ready.",
       );
-      setTimeout(() => flow.fitView({ padding: 32 }), 0);
     };
     receive();
     window.addEventListener("workflow-create-schedule", receive);
     return () =>
       window.removeEventListener("workflow-create-schedule", receive);
-  }, [doc, dirty, flow]);
+  }, [doc, dirty]);
   const scheduled = current?.trigger.event === "schedule";
   const inputTriggered = current?.trigger.event.startsWith("app.");
   const libraryTask = libraryTasks.find(
@@ -350,11 +362,6 @@ function Editor() {
       },
     });
   }
-  function arrange(direction) {
-    if (!current) return;
-    edit({ positions: automaticLayout(current, direction, flow.getNodes()) });
-    requestAnimationFrame(() => requestAnimationFrame(() => flow.fitView({ padding: 32, duration: 200 })));
-  }
   function edit(update) {
     setCurrent((w) => ({ ...w, ...update }));
     setDirty(true);
@@ -370,7 +377,6 @@ function Editor() {
     setSelection("trigger");
     setPreview(null);
     setNotice("");
-    setTimeout(() => flow.fitView({ padding: 32 }), 0);
   }
   async function save(enabled = current.enabled) {
     setBusy(true);
@@ -407,7 +413,6 @@ function Editor() {
     setSelection("trigger");
     setDirty(true);
     setNotice(`${workflowTemplates.find((t) => t.id === kind).name} template copied. Review its settings, save the draft, then enable when ready.`);
-    setTimeout(() => flow.fitView({ padding: 32 }), 0);
   }
   async function showPreview() {
     setBusy(true);
@@ -592,12 +597,15 @@ function Editor() {
             {current ? "DEFINITION CANVAS" : "CHOOSE OR CREATE A WORKFLOW"}
             <span>{current?.repository}</span>
           </div>
-          <WorkflowCanvas
-            workflow={current}
-            onMove={positions => edit({ positions: { ...current.positions, ...positions } })}
-            onSelect={setSelection}
-            onArrange={arrange}
-          />
+          {/* Keep late drag events in the store for the workflow where they started. */}
+          <ReactFlowProvider key={current?.id}>
+            <WorkflowCanvas
+              workflow={current}
+              onMove={positions => edit({ positions: { ...current.positions, ...positions } })}
+              onSelect={setSelection}
+              onArrange={positions => edit({ positions })}
+            />
+          </ReactFlowProvider>
           {notice && (
             <div className="wf-notice" role="status">
               <div>
@@ -1089,9 +1097,5 @@ window.mountWorkflowEditor = () => {
   const container = document.getElementById("workflow-editor-root");
   if (!container) return;
   root = createRoot(container);
-  root.render(
-    <ReactFlowProvider>
-      <Editor />
-    </ReactFlowProvider>,
-  );
+  root.render(<Editor />);
 };

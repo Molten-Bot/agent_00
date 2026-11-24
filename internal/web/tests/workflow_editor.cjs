@@ -270,6 +270,13 @@ test('dragging a workflow node keeps nodes and edges visible', async t => {
  const dragged=await node.boundingBox();
  assert.notEqual(await node.evaluate(el=>el.style.transform),initialTransform);
  assert.ok(dragged.x>start.x+200);
+ const draggedTransform=await node.evaluate(el=>el.style.transform);
+ const name=page.getByLabel('Workflow name');
+ await name.focus();
+ await page.keyboard.press('End');
+ await page.keyboard.type(' updated');
+ assert.match(await name.inputValue(),/ updated$/);
+ assert.equal(await node.evaluate(el=>el.style.transform),draggedTransform,'settings edits keep the live drag position');
  await page.mouse.up();
  await node.locator('.react-flow__handle.source[data-handlepos="left"]').waitFor({state:'attached'});
  const dropped=await node.boundingBox();
@@ -278,6 +285,40 @@ test('dragging a workflow node keeps nodes and edges visible', async t => {
  await page.getByRole('button',{name:'Save draft',exact:true}).click();
  await page.getByText('Saved draft',{exact:true}).waitFor();
  assert.ok(getDocument().workflows[0].positions.task.x>80);
+ assert.match(getDocument().workflows[0].name,/ updated$/);
+});
+
+test('switching workflows by keyboard during a drag leaves the new workflow untouched', async t => {
+ const {page}=await openEditor(t,{width:1600,height:1050});
+ await selectRepository(page,'acme/repo');
+ const name=page.getByLabel('Workflow name');
+ for (const [template, title] of [['Assigned issues','First workflow'],['Prompt submission','Second workflow']]) {
+  await page.getByRole('button',{name:template,exact:true}).click();
+  await name.fill(title);
+  await page.getByRole('button',{name:'Save draft',exact:true}).click();
+  await page.getByText('Saved draft',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Dismiss message'}).click();
+ }
+ const node=page.locator('.react-flow__node[data-id="task"]');
+ const position=el=>el.style.transform;
+ const secondPosition=await node.evaluate(position);
+ await page.getByRole('button',{name:/First workflow/}).click();
+ await node.hover();
+ const firstPosition=await node.evaluate(position);
+ const start=await node.boundingBox();
+ const x=start.x+start.width/2, y=start.y+start.height/2;
+ await page.mouse.move(x,y);
+ await page.mouse.down();
+ await page.mouse.move(x+100,y,{steps:8});
+ assert.notEqual(await node.evaluate(position),firstPosition);
+ const second=page.getByRole('button',{name:/Second workflow/});
+ await second.focus();
+ await page.keyboard.press('Enter');
+ assert.equal(await name.inputValue(),'Second workflow');
+ await page.mouse.move(x+120,y,{steps:4});
+ await page.mouse.up();
+ assert.equal(await node.evaluate(position),secondPosition);
+ assert.equal(await page.locator('.wf-save-state').textContent(),'Saved draft');
 });
 
 test('automatic layout controls arrange, fit and persist workflow positions', async t => {
