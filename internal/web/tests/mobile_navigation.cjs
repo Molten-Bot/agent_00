@@ -378,29 +378,43 @@ test('multi-repository task highlights initial checks for the current repository
   const now = new Date().toISOString();
   const task = {
     request_id: 'multi-repo-review', prompt: 'Update navigation', repo: 'example/project, example/other',
-    started_at: now, updated_at: now, status: 'running', stage: 'checks',
-    pr_url: 'https://github.com/example/other/pull/10',
+    started_at: now, updated_at: now, status: 'running', stage: 'review_checks',
+    pr_url: 'https://github.com/example/project/pull/10',
     logs: [
       { stream: 'meta', text: 'task stage=review status=start action=pass pass=1 repo_dir=first' },
       { stream: 'meta', text: 'task stage=review_fix status=start action=agent pass=1 repo_dir=first' },
       { stream: 'meta', text: 'task stage=review_checks status=start action=verify pass=1 repo_dir=first' },
-      { stream: 'meta', text: 'task stage=checks status=start repo_dir=second' },
     ],
   };
   const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, [task]);
   const card = page.locator('#task-list .task[data-request-id="multi-repo-review"]');
   const current = card.locator('.task-progress-step.current');
   const reviews = card.locator('.task-progress-step[title^="Review (pass 1):"]');
+  const doneReviews = card.locator('.task-progress-step.done[title*="(pass 1):"]');
   await current.waitFor();
+  assert.match(await current.getAttribute('title'), /^Review Checks \(pass 1\): current/);
+
+  const publish = () => page.evaluate(task => render({ ...state.snapshot, tasks: [task] }), task);
+  task.stage = 'checks';
+  task.pr_url = 'https://github.com/example/other/pull/10';
+  task.logs.push({ stream: 'meta', text: 'task stage=checks status=start repo_dir=second' });
+  await publish();
   assert.match(await current.getAttribute('title'), /^Checks: current/);
   assert.equal(await reviews.count(), 1);
+  assert.equal(await doneReviews.count(), 3);
+
+  task.logs.push({ stream: 'stdout', text: 'Waiting for checks' });
+  await page.reload();
+  assert.match(await current.getAttribute('title'), /^Checks: current/);
+  assert.equal(await doneReviews.count(), 3);
 
   task.stage = 'review';
   task.logs.push({ stream: 'meta', text: 'task stage=review status=start action=pass pass=1 repo_dir=second' });
-  await page.evaluate(task => render({ ...state.snapshot, tasks: [task] }), task);
+  await publish();
   assert.equal(await reviews.count(), 2);
   assert.match(await reviews.first().getAttribute('title'), /^Review \(pass 1\): done/);
   assert.match(await reviews.last().getAttribute('title'), /^Review \(pass 1\): current/);
+  assert.equal(await doneReviews.count(), 3);
 });
 
 test('legacy issue prompts restore task actions and workflow links', async t => {

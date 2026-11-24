@@ -11562,7 +11562,7 @@
         const { stage, pass, repoDir } = reviewStart;
         const id = `${stage}:${pass}:${repoDir}`;
         const step = TASK_PROGRESS_STEP_DEFS[stage];
-        signals.reviewSteps.set(id, { ...step, id, label: `${step.label} (pass ${pass})` });
+        signals.reviewSteps.set(id, { ...step, id, repoDir, label: `${step.label} (pass ${pass})` });
         signals.activeReviewStepID = id;
       }
       const reviewTotal = Number.parseInt(String(parseTaskProgressField(line, "review_total") || ""), 10);
@@ -11729,6 +11729,7 @@
         signals?.hasReviewFixSeen ? "review_fix" : "",
         signals?.hasReviewChecksSeen ? "review_checks" : "",
         JSON.stringify([...signals.reviewSteps.keys()]),
+        signals.currentRepoDir,
         signals.activeReviewStepID,
         signals?.hasAutoMergeSeen ? "auto_merge" : "",
         String(signals?.currentAgentMode || ""),
@@ -11765,7 +11766,10 @@
         (String(task?.pr_url || "").trim() !== "" || !COMPLETED_STATUSES.has(status))
       ) {
         if (signals.reviewSteps.size) {
-          steps.push(...signals.reviewSteps.values());
+          for (const step of signals.reviewSteps.values()) {
+            const done = Boolean(step.repoDir && signals.currentRepoDir && step.repoDir !== signals.currentRepoDir);
+            steps.push({ ...step, done });
+          }
         } else {
           steps.push(TASK_PROGRESS_STEP_DEFS.review);
           if (signals.hasReviewFixSeen) {
@@ -11989,7 +11993,7 @@
         }
 
         let stateText = "upcoming";
-        if (i < index) {
+        if (i < index || step.done) {
           marker.classList.add("done");
           stateText = "done";
         } else if (i === index) {
