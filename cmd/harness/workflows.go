@@ -162,6 +162,9 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 		})
 	}
 	engine.Active = func(w workflow.Definition) bool {
+		if configuredScheduleOwnsWorkflow(cfg.RuntimeConfigPath, w) {
+			return true
+		}
 		for _, t := range broker.TaskList() {
 			switch t.Status {
 			case "completed", "no_changes", "merged", "error", "invalid", "stopped", "duplicate":

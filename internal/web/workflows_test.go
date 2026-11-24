@@ -113,7 +113,7 @@ func TestWorkflowIssueRetainsDurableClaimAndFreshPrompt(t *testing.T) {
 	}
 }
 
-func TestWorkflowLibraryEnableValidationAndRetiredScheduler(t *testing.T) {
+func TestWorkflowLibraryEnableValidationAndUnavailableScheduler(t *testing.T) {
 	t.Parallel()
 	s := NewServer("", NewBroker())
 	w := workflow.Definition{ID: "scheduled", Name: "Scheduled", Enabled: true, Repository: "acme/repo", Trigger: workflow.Trigger{Event: "schedule", IntervalHours: 24}, Task: workflow.Task{LibraryTaskName: "custom-audit"}}
@@ -144,7 +144,7 @@ func TestWorkflowLibraryEnableValidationAndRetiredScheduler(t *testing.T) {
 	for _, method := range []string{"GET", "PUT", "DELETE"} {
 		rec := httptest.NewRecorder()
 		s.Handler().ServeHTTP(rec, httptest.NewRequest(method, "/api/library/schedules", nil))
-		if rec.Code != 410 {
+		if rec.Code != http.StatusNotImplemented {
 			t.Fatal(method, rec.Code)
 		}
 	}

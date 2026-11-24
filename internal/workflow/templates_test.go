@@ -58,7 +58,11 @@ func TestBundledTemplatesMatchWorkflowContract(t *testing.T) {
 			}
 			tick(t, e)
 			w := doc.Workflows[0]
-			if w.Trigger.Event == "schedule" {
+			if IsInputEvent(w.Trigger.Event) {
+				if _, err := e.DispatchInput(t.Context(), w, func(r Run) (string, error) { return e.Submit(t.Context(), r) }); err != nil {
+					t.Fatal(err)
+				}
+			} else if w.Trigger.Event == "schedule" {
 				now = now.Add(time.Duration(w.Trigger.IntervalHours) * time.Hour)
 			} else {
 				*items = []Item{{Repository: w.Repository, Number: 1, Kind: strings.Split(w.Trigger.Event, ".")[0], Open: true, Viewer: "agent", Labels: []string{w.Trigger.Value}, Assignees: []string{"agent"}, Reviewers: []string{"agent"}, ChecksFailed: true, ReviewDecision: "CHANGES_REQUESTED"}}

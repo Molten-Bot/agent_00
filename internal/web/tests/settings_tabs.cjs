@@ -186,7 +186,7 @@ test('reauthentication start errors are visible and later status recovers', asyn
 
 test('feature settings save on close and survive reopening', async t => {
  const {page,writes}=await openSettings(t);
- assert.equal(await page.locator('[data-settings-tab]').count(),3);
+ assert.equal(await page.locator('[data-settings-tab]').count(),4);
  await select(page,'automation');
  assert.equal(await page.locator('#settings-tab-automation').innerText(),'Features');
  for(const id of ['review-settings-workflow-enabled','review-settings-json-enabled','review-settings-github-issues-enabled']) await toggle(page,id);
@@ -1326,4 +1326,16 @@ test('Workflow beta is opt-in, isolated, persistent, and disabled on direct navi
   await page.goto(`${baseURL}/#workflow`);
   await page.waitForFunction(() => document.body.dataset.appDisplay === 'studio');
   assert.equal(await page.locator('#workflow-display').isVisible(), false);
+});
+
+test('configuration-based workflow defaults remain editable alongside custom workflows', async t => {
+ const {page,writes}=await openSettings(t,{initialSettings:{...defaults,review_level:'low',auto_merge:true,workflow_enabled:true}});
+ await select(page,'defaults');
+ assert.equal(await page.locator('#review-settings-slider').inputValue(),'1');
+ assert.equal(await page.locator('#review-settings-auto-merge').isChecked(),true);
+ assert.equal(await page.locator('#review-settings-slider').isVisible(),true);
+ await page.locator('#review-settings-slider').fill('2');
+ await toggle(page,'review-settings-delete-merged-branches');
+ await close(page);
+ assert.ok(writes.some(w=>w.review_level==='medium'&&w.delete_merged_branches===true&&w.workflow_enabled===true));
 });

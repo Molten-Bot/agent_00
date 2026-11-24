@@ -10,7 +10,7 @@ import (
 func TestTriggerTransitionsWhileTaskIsRunning(t *testing.T) {
 	t.Parallel()
 	for _, event := range Events {
-		if event == "schedule" {
+		if event == "schedule" || IsInputEvent(event) {
 			continue
 		}
 		t.Run(event, func(t *testing.T) {

@@ -158,6 +158,20 @@ func (s *LibrarySchedules) transaction(change func(map[string]LibrarySchedule) e
 
 func (s *LibrarySchedules) List() ([]LibrarySchedule, error) { return s.transaction(nil) }
 
+// AdvanceNextRunAt adopts a later occurrence reservation from an older scheduler
+// without changing task options or rewinding the configured schedule.
+func (s *LibrarySchedules) AdvanceNextRunAt(key string, next time.Time) error {
+	_, err := s.transaction(func(entries map[string]LibrarySchedule) error {
+		entry, exists := entries[key]
+		if exists && next.After(entry.NextRunAt) {
+			entry.NextRunAt = next
+			entries[key] = entry
+		}
+		return nil
+	})
+	return err
+}
+
 func (s *LibrarySchedules) Save(input LibraryScheduleInput) (LibrarySchedule, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

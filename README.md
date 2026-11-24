@@ -84,7 +84,7 @@ available catalog; an unavailable task produces an explicit activation failure.
 
 ### Recurring library tasks
 
-Scheduling now lives in **Workflow**. Create a **Scheduled task** template, or
+Create custom schedules in **Workflow** with a **Scheduled task** template, or
 use the schedule shortcut beside a selected Library task to open a workflow
 draft carrying its repository, prompt context, branch, directory, reviewers,
 and draft-PR option. **Run** in Library still launches a one-time task.
@@ -111,11 +111,14 @@ repository has an active task. A failed submission is recorded and retried at
 the next interval. Pausing preserves the cursor; disabling the Workflow feature
 or excluding the repository prevents new occurrences and merges.
 
-Existing `config.json` library schedules migrate once into `workflows.json`,
-preserving their next due time and task options. They remain enabled definitions,
-but execution requires the Workflow feature to be enabled. The old scheduler is
-stopped and its API returns HTTP 410; the original entries remain for recovery.
-Deleting an imported workflow does not re-import it on restart.
+Existing `config.json` library schedules continue through the configured scheduler
+and `/api/library/schedules`. Opening Workflow does not import or disable them.
+For schedules imported by earlier builder versions, unchanged enabled copies
+retain the configured scheduler as their single owner, regardless of the Workflow
+feature toggle. Before dispatch, it adopts any later occurrence reservation from
+the imported copy's journal to prevent replay. Paused or edited copies remain
+custom-owned. New custom schedules and configured schedules retain their separate
+definitions.
 
 ### GitHub issue automation
 
@@ -126,10 +129,12 @@ Repositories may have no workflows or multiple independent workflows. The GitHub
 Issues feature controls the issue browser separately from workflow execution.
 
 Workflow polling checks every 30 seconds. Existing matching items are skipped on
-the first scan unless **Include existing matches** is enabled. Legacy global
-issue/review watchers no longer start new tasks. Existing per-repository issue
-rules migrate to disabled drafts; the original configuration remains intact and
-a private `workflow-legacy-settings.json` backup is saved alongside it.
+the first scan unless **Include existing matches** is enabled. Existing configured
+issue automation and review watching remain active independently of the builder.
+An enabled custom issue workflow replaces configured issue auto-start for that
+repository; disabled drafts do not. Existing per-repository issue rules are also
+copied to disabled drafts without changing their original configuration, and a
+private `workflow-legacy-settings.json` backup is saved alongside it.
 
 Task recovery belongs to the specific task on the **GitHub Issues** page. Select
 the issue there to review and retry its work when recovery is required.
@@ -506,12 +511,24 @@ go build -o bin/harness ./cmd/harness
 Local `harness serve` listens on `127.0.0.1:7777` by default.
 
 Workflow is an opt-in beta under **Settings → Features → Workflow (beta)**.
+Configured automation remains the default: review requests, issue auto-start,
+library schedules, post-task review levels, PR feedback repair, and merged-branch
+cleanup keep their existing settings. Custom workflows override their matching
+repository and trigger; tasks dispatched by a custom workflow use its own review
+and merge policy, including an explicit zero-review setting.
 The React Flow editor defines an executable pipeline: repository → trigger →
 filters → task → bounded review cycles → optional merge. Select a node to edit
 its policy and drag nodes to arrange the canvas. Connections describe this
 pipeline; arbitrary branches or custom executable node types are not supported.
 Save draft pauses the workflow; Enable is a separate action. Preview matches is
 read-only. Activation history explains submitted tasks and merge waits.
+
+The `app.prompt`, `app.json`, and `app.chat` triggers customize single-repository
+implementation submissions from their respective app sources. An enabled override
+must be unique for that repository and source. With no matching override, the
+original submission runs unchanged. The override preserves its payload and appends
+any additional instructions; review and merge steps are optional. The canvas shows
+only the steps applicable to the selected trigger and enabled policy.
 
 Choose a repository and a **Workflow template** to create an editable, disabled
 workflow. Templates cover labeled or assigned issues, requested PR reviews,
@@ -592,8 +609,9 @@ activation IDs, task outcomes, and merge state. Keep it on restart; do not use i
 as a shared definition file. A dispatch interrupted before its receipt is known
 is reconciled from task history and otherwise held for inspection, never blindly
 repeated. The global repository filter gates task admission and execution; commit
-signing remains global. Turning off Workflow stops new activations and merges,
+signing remains global. Turning off Workflow stops custom activations and merges,
 while already started tasks retain their captured policy and can finish.
+Configured default automation remains available with the builder off.
 
 The isolated editor source is in `internal/web/workflow`. To update its checked-in
 Go-embedded assets, run:
@@ -650,6 +668,9 @@ notifications by default. When the authenticated GitHub user is still requested
 as a PR reviewer, the harness queues the bundled `code-review` task and posts a
 summary comment back to the original PR. Auto-merge is off by default; opt in
 with `review_watch.auto_merge: true` in the runtime config.
+An enabled custom `pr.review_requested` workflow for a repository owns those
+requests instead. Custom workflow tasks are excluded from the default PR feedback
+and branch-cleanup automation so their explicit policies remain authoritative.
 
 For a manual `code-review` task, select the PR's head branch or include its PR
 URL. The review is read-only and posts back to that PR; a clean worktree is a
@@ -666,6 +687,8 @@ Actionable findings are repaired and checked before the next pass, including a
 clean confirmation after the final repair. If findings remain after the repair
 budget is exhausted, the completed task stays successful and its pull request
 stays in draft for human review.
+These settings apply to ordinary submitted tasks. An explicit workflow's
+`reviewCycles` overrides the configured review level for that task.
 
 ### Go Module
 

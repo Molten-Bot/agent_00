@@ -69,3 +69,24 @@ test("template copies are independent across repositories and preserve merge pol
   assert.equal(newWorkflow("acme/three", "delivery", "third").merge.method, "squash");
   assert.throws(() => newWorkflow("acme/repo", "missing", "id"), /Unknown workflow template/);
 });
+
+test("input workflows compose only active steps and identify their source", () => {
+  for (const source of ["prompt", "json", "chat"]) {
+    const w = newWorkflow("acme/repo", `app-${source}`, source);
+    let graph = diagram(w);
+    assert.deepEqual(graph.nodes.map(n => n.id), ["repository", "trigger", "task"]);
+    assert.equal(graph.nodes[1].data.icon, source);
+    assert.equal(graph.nodes[2].data.icon, "implement");
+    assert.equal(graph.nodes[2].data.last, true);
+    w.reviewCycles = 2;
+    w.merge.enabled = true;
+    graph = diagram(w);
+    assert.deepEqual(graph.nodes.map(n => n.id), ["repository", "trigger", "task", "review", "merge"]);
+    assert.equal(graph.edges.length, 4);
+  }
+  const review = newWorkflow("acme/repo", "review", "review");
+  review.reviewCycles = 2;
+  assert.equal(diagram(review).nodes.some(n => n.id === "review"), false);
+  assert.equal(diagram(review).nodes.find(n => n.id === "task").data.icon, "review");
+  assert.equal(diagram(newWorkflow("acme/repo", "repair", "repair")).nodes.find(n => n.id === "task").data.icon, "repair");
+});

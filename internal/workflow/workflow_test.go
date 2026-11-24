@@ -77,7 +77,7 @@ func TestFiltersAndTriggers(t *testing.T) {
 		t.Fatal("any rule ignored")
 	}
 	for _, event := range Events {
-		if event == "schedule" {
+		if event == "schedule" || IsInputEvent(event) {
 			continue
 		}
 		w.Trigger = Trigger{Event: event, Value: "agent"}

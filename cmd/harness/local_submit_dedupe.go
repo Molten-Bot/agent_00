@@ -184,6 +184,13 @@ func dedupeKeyForRunConfig(cfg config.Config) string {
 
 func dedupeKeyForSubmission(cfg config.Config, source string) string {
 	source = strings.TrimSpace(strings.ToLower(source))
+	if source == localSubmitSource && cfg.Workflow != nil {
+		// Repeated app submissions retain the normal duplicate-submit guard;
+		// automatic activations still get independent event identities.
+		policy := *cfg.Workflow
+		policy.EventID = policy.ID
+		cfg.Workflow = &policy
+	}
 	if !isAutomaticFollowUpSource(source) {
 		return dedupeKeyForRunConfig(cfg)
 	}

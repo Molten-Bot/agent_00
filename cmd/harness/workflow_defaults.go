@@ -33,10 +33,9 @@ func taskUsesDefaultPRAutomation(broker *web.Broker, engine *workflow.Engine, ta
 	return !engine.Owns(task.Repo, "pr.changes_requested") && !engine.Owns(task.Repo, "pr.checks_failed")
 }
 
-// Earlier builder versions copied schedules without removing config.json's
-// originals. Never run both copies, or revive a paused/edited custom copy.
-// An unchanged enabled copy can fall back to its configured default when the
-// builder feature is off, so the feature toggle does not disable old schedules.
+// Earlier builder versions copied schedules without removing their originals.
+// Unchanged imported copies keep the configured scheduler as their single owner.
+// Paused or edited copies retain explicit custom ownership.
 func workflowOwnsLibrarySchedule(engine *workflow.Engine, schedule localruntime.LibrarySchedule) bool {
 	if engine == nil {
 		return false
@@ -48,27 +47,71 @@ func workflowOwnsLibrarySchedule(engine *workflow.Engine, schedule localruntime.
 	if err != nil {
 		return true
 	}
-	sum := sha256.Sum256([]byte(schedule.Key))
-	id := "library-" + hex.EncodeToString(sum[:12])
 	for _, w := range doc.Workflows {
-		if w.ID != id {
-			continue
+		if w.ID == importedScheduleID(schedule) {
+			return !w.Enabled || !unchangedImportedSchedule(w, schedule)
 		}
-		if !w.Enabled || (engine.Enabled != nil && engine.Enabled()) {
+	}
+	return false
+}
+
+func importedScheduleID(schedule localruntime.LibrarySchedule) string {
+	sum := sha256.Sum256([]byte(schedule.Key))
+	return "library-" + hex.EncodeToString(sum[:12])
+}
+
+func unchangedImportedSchedule(w workflow.Definition, schedule localruntime.LibrarySchedule) bool {
+	target := strings.TrimSpace(schedule.TargetSubdir)
+	if target == "" {
+		target = "."
+	}
+	reviewers := append([]string{}, schedule.Reviewers...)
+	return w.ID == importedScheduleID(schedule) &&
+		workflow.CanonicalRepository(w.Repository) == workflow.CanonicalRepository(schedule.Repo) &&
+		w.Trigger.Event == "schedule" && w.Trigger.IntervalHours == float64(schedule.IntervalHours) &&
+		w.Task.Kind == "implement" && w.Task.LibraryTaskName == schedule.LibraryTaskName &&
+		w.Task.Instructions == schedule.PromptContext && w.Task.BaseBranch == schedule.BaseBranch &&
+		w.Task.TargetSubdir == target && w.Task.Draft == schedule.Draft &&
+		w.Task.Reviewers != nil && reflect.DeepEqual(*w.Task.Reviewers, reviewers) &&
+		w.ReviewCycles == 0 && w.Merge == (workflow.Merge{Method: "squash", RequireApproval: true})
+}
+
+func configuredScheduleOwnsWorkflow(path string, w workflow.Definition) bool {
+	if !strings.HasPrefix(w.ID, "library-") {
+		return false
+	}
+	schedules, err := (&localruntime.LibrarySchedules{Path: path}).List()
+	if err != nil {
+		return true
+	}
+	for _, schedule := range schedules {
+		if unchangedImportedSchedule(w, schedule) {
 			return true
 		}
-		target := strings.TrimSpace(schedule.TargetSubdir)
-		if target == "" {
-			target = "."
+	}
+	return false
+}
+
+func deferConfiguredLibrarySchedule(engine *workflow.Engine, path string, schedule localruntime.LibrarySchedule) bool {
+	if workflowOwnsLibrarySchedule(engine, schedule) {
+		return true
+	}
+	if engine == nil {
+		return false
+	}
+	// Read the current journal whenever admission is due, not only at startup:
+	// an edited custom copy may have run before being restored to its original.
+	statuses, err := engine.ScheduleStatus()
+	if err != nil {
+		return true
+	}
+	for _, status := range statuses {
+		if status.WorkflowID == importedScheduleID(schedule) && status.NextRunAt.After(schedule.NextRunAt) {
+			// Advance through a separate store facade: the caller holds its own
+			// scheduler mutex, while both stores share the config transaction lock.
+			_ = (&localruntime.LibrarySchedules{Path: path}).AdvanceNextRunAt(schedule.Key, status.NextRunAt)
+			return true // A failed persistence must also prevent duplicate work.
 		}
-		reviewers := append([]string{}, schedule.Reviewers...)
-		return workflow.CanonicalRepository(w.Repository) != workflow.CanonicalRepository(schedule.Repo) ||
-			w.Trigger.Event != "schedule" || w.Trigger.IntervalHours != float64(schedule.IntervalHours) ||
-			w.Task.Kind != "implement" || w.Task.LibraryTaskName != schedule.LibraryTaskName ||
-			w.Task.Instructions != schedule.PromptContext || w.Task.BaseBranch != schedule.BaseBranch ||
-			w.Task.TargetSubdir != target || w.Task.Draft != schedule.Draft ||
-			w.Task.Reviewers == nil || !reflect.DeepEqual(*w.Task.Reviewers, reviewers) ||
-			w.ReviewCycles != 0 || w.Merge != (workflow.Merge{Method: "squash", RequireApproval: true})
 	}
 	return false
 }

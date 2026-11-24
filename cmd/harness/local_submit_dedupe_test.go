@@ -538,3 +538,21 @@ func TestDuplicateSubmissionErrorMessageVariants(t *testing.T) {
 		})
 	}
 }
+
+func TestInputWorkflowSubmissionsRetainDuplicateGuard(t *testing.T) {
+	t.Parallel()
+	first := config.Config{RepoURL: "https://github.com/acme/repo", Prompt: "Implement this", Workflow: &config.WorkflowRunConfig{ID: "input-workflow", EventID: "first"}}
+	second := first
+	copy := *first.Workflow
+	copy.EventID = "second"
+	second.Workflow = &copy
+	if dedupeKeyForSubmission(first, localSubmitSource) != dedupeKeyForSubmission(second, localSubmitSource) {
+		t.Fatal("repeat input escaped duplicate guard")
+	}
+	if dedupeKeyForSubmission(first, "workflow") == dedupeKeyForSubmission(second, "workflow") {
+		t.Fatal("automatic events collapsed")
+	}
+	if first.Workflow.EventID != "first" {
+		t.Fatal("mutated captured event")
+	}
+}

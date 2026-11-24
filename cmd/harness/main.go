@@ -1043,7 +1043,7 @@ func runServer(args []string) int {
 				return id, err
 			},
 			Active: func(schedule localruntime.LibrarySchedule) bool {
-				return workflowOwnsLibrarySchedule(workflowEngine, schedule) || libraryScheduleActive(monitorBroker, schedule)
+				return deferConfiguredLibrarySchedule(workflowEngine, cfg.RuntimeConfigPath, schedule) || libraryScheduleActive(monitorBroker, schedule)
 			},
 		}
 		uiServer.LibrarySchedules = schedules

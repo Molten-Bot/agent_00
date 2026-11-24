@@ -800,6 +800,9 @@
           <button id="settings-tab-repositories" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-repositories" data-settings-tab="repositories">
             <i data-lucide="folder-git-2" aria-hidden="true"></i><span>Repositories</span>
           </button>
+          <button id="settings-tab-defaults" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-defaults" data-settings-tab="defaults">
+            <i data-lucide="sliders-horizontal" aria-hidden="true"></i><span>Default workflows</span>
+          </button>
           <button id="settings-tab-signing" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="commit-signing-section" data-settings-tab="signing">
             <i data-lucide="globe-lock" aria-hidden="true"></i><span>Commit Signing</span>
           </button>
@@ -889,15 +892,10 @@
             </div>
           </div>
           
-        </form>
-        </div>
-        <p id="review-settings-status" class="settings-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
-
-      </div>
-    </section>
-  </div>
-
-  <div hidden inert id="legacy-automation-settings" aria-hidden="true"><label class="selectable-option">
+<div id="settings-panel-defaults" class="review-settings-section" role="tabpanel" aria-labelledby="settings-tab-defaults" hidden>
+<h3>Default workflows</h3>
+<p class="github-issues-settings-description">These configuration settings apply to tasks and automations unless an enabled custom workflow takes ownership. Existing prompt, JSON, chat, issue, and library behavior is preserved.</p>
+<label class="selectable-option">
               <input class="sr-only" id="review-settings-auto-merge" type="checkbox">
               <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-robot-arm"><path d="M12 21 7.5 8.322"/><path d="m14 7 1.75-3.767a.5.5 0 0 1 .662-.172L20 5.005"/><path d="m20 8.998-3.588 1.944a.5.5 0 0 1-.662-.172L14 7H8"/><path d="M3.486 21h10"/><path d="M5 21V8.732"/><circle cx="6" cy="7" r="2"/></svg>
               <span>Auto-merge clean reviews</span>
@@ -905,7 +903,7 @@
               <input class="sr-only" id="review-settings-delete-merged-branches" type="checkbox">
               <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="git-branch-minus"><path d="M15 6a9 9 0 0 0-9 9V3"/><path d="M21 18h-6"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></svg>
               <span>Delete merged branches</span>
-            </label><fieldset id="settings-panel-github-issues" class="review-settings-section review-settings-automation" role="tabpanel" aria-labelledby="settings-tab-github-issues" hidden>
+            </label><fieldset id="settings-panel-github-issues" class="review-settings-section review-settings-automation" role="group" aria-label="Issue automation">
             <legend class="review-settings-section-title sr-only">GitHub Issues</legend>
             
             <label class="selectable-option">
@@ -978,8 +976,8 @@
                 </label>
               </div>
             </div>
-          </fieldset><div id="settings-panel-review" class="review-settings-section review-settings-level" role="tabpanel" aria-labelledby="settings-tab-review" hidden>
-            <input id="review-settings-level" type="hidden" value="off">
+          </fieldset><div id="settings-panel-review" class="review-settings-section review-settings-level" role="group" aria-label="Post-task reviews">
+            <h4>Post-task reviews</h4><input id="review-settings-level" type="hidden" value="off">
             <div class="review-slider">
               <label class="sr-only" for="review-settings-slider">Number of post-task reviews</label>
               <output class="review-slider-value" id="review-slider-value" for="review-settings-slider"><svg aria-hidden="true"><use id="review-selected-icon" href="#review-off"/></svg><span id="review-selected-text">Off · 0 reviews</span></output>
@@ -991,8 +989,8 @@
                 <span class="review-slider-stop" title="High · 10 reviews"><svg><use href="#review-high"/></svg></span>
               </div>
             </div>
-          </div><div id="settings-panel-merge" class="review-settings-section review-settings-merge-method" role="tabpanel" aria-labelledby="settings-tab-merge" hidden>
-            <span id="review-settings-merge-method-label" class="sr-only">Merge Method</span>
+          </div><div id="settings-panel-merge" class="review-settings-section review-settings-merge-method" role="group" aria-label="Merge method">
+            <h4>Merge method</h4><span id="review-settings-merge-method-label" class="sr-only">Merge Method</span>
             <input id="review-settings-merge-method" type="hidden" value="squash">
             <div class="review-settings-merge-slider" role="radiogroup" aria-labelledby="review-settings-merge-method-label">
               <span class="review-settings-merge-slider-thumb" aria-hidden="true"></span>
@@ -1007,6 +1005,14 @@
               </button>
             </div>
           </div></div>
+        </form>
+        </div>
+        <p id="review-settings-status" class="settings-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
+
+      </div>
+    </section>
+  </div>
+
   <!-- bottom-dock -->
 
   <script>
@@ -2222,6 +2228,7 @@
     const settingsTabButtons = Array.from(document.querySelectorAll("[data-settings-tab]"));
     const settingsTabPanels = {
       automation: document.getElementById("settings-panel-automation"),
+      defaults: document.getElementById("settings-panel-defaults"),
       repositories: document.getElementById("settings-panel-repositories"),
       signing: document.getElementById("commit-signing-section"),
     };
@@ -9142,11 +9149,11 @@
       if (!workflowEditorLoad) {
         const css = document.createElement("link");
         css.rel = "stylesheet";
-        css.href = "/static/workflow-editor.css?v=6";
+        css.href = "/static/workflow-editor.css?v=7";
         document.head.appendChild(css);
         workflowEditorLoad = new Promise((resolve, reject) => {
           const script = document.createElement("script");
-          script.src = "/static/workflow-editor.js?v=6";
+          script.src = "/static/workflow-editor.js?v=7";
           script.onload = resolve;
           script.onerror = () => { script.remove(); css.remove(); workflowEditorLoad = null; reject(new Error("Unable to load Workflow editor. Reload to try again.")); };
           document.head.appendChild(script);
