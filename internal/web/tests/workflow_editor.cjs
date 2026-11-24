@@ -32,7 +32,14 @@ async function selectRepository(page, repository) {
 test('multiple persistent workflows, disabled drafts, policy editing, activation and pause',async t=>{const {page,getDocument}=await openEditor(t);
  await selectRepository(page, 'acme/repo');await page.getByRole('button',{name:'Implement issues',exact:true}).click();await page.locator('.wf-node').first().waitFor();assert.equal(await page.locator('.wf-node').count(),4);
  await page.getByLabel('Workflow name').fill('Implement ready issues');await page.getByRole('button',{name:'Save draft',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.wf-save-state').textContent==='Saved draft');assert.equal(getDocument().workflows[0].enabled,false);
- await page.getByRole('button',{name:'Enable',exact:true}).click();await page.getByRole('button',{name:'Pause',exact:true}).waitFor();assert.equal(getDocument().workflows[0].enabled,true);await page.getByRole('button',{name:'Pause',exact:true}).click();
+ const pausedCard=page.getByRole('button',{name:'Implement ready issues, acme/repo, Paused',exact:true});
+ const runningCard=page.getByRole('button',{name:'Implement ready issues, acme/repo, Running',exact:true});
+ await pausedCard.locator('svg.lucide-pause').waitFor();
+ await page.getByRole('button',{name:'Enable',exact:true}).click();
+ await runningCard.locator('svg.lucide-play').waitFor();
+ assert.equal(getDocument().workflows[0].enabled,true);
+ await page.getByRole('button',{name:'Pause',exact:true}).click();
+ await pausedCard.locator('svg.lucide-pause').waitFor();
  await page.getByRole('button',{name:'Review PRs',exact:true}).click();await page.getByRole('button',{name:'Save draft',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.wf-save-state').textContent==='Saved draft');assert.equal(getDocument().workflows.length,2);
  await page.getByRole('button',{name:'Preview matches',exact:true}).click();await page.getByText('#12 Example issue',{exact:true}).waitFor();assert.equal(getDocument().workflows.every(w=>!w.enabled),true);
  await page.reload();await selectRepository(page, 'acme/repo');assert.equal(await page.locator('.wf-step').count(),2);await page.locator('.wf-step').first().click();await page.getByLabel('Review step',{exact:true}).check();await page.getByRole('slider',{name:'Review passes',exact:true}).fill('3');await page.getByRole('button',{name:'Save draft',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.wf-save-state').textContent==='Saved draft');assert.equal(getDocument().workflows[0].reviewCycles,4);
@@ -270,26 +277,31 @@ test('dragging a workflow node keeps nodes and edges visible', async t => {
  const dragged=await node.boundingBox();
  assert.notEqual(await node.evaluate(el=>el.style.transform),initialTransform);
  assert.ok(dragged.x>start.x+200);
+ const saveDraft=page.getByRole('button',{name:'Save draft',exact:true});
+ await node.focus();
+ await page.keyboard.press('ArrowRight');
+ assert.equal(await saveDraft.isDisabled(),true,'keyboard position changes do not clear the pointer drag guard');
  const draggedTransform=await node.evaluate(el=>el.style.transform);
  const name=page.getByLabel('Workflow name');
  await name.focus();
  await page.keyboard.press('End');
  await page.keyboard.type(' updated');
  assert.match(await name.inputValue(),/ updated$/);
+ assert.equal(await saveDraft.isDisabled(),true);
  assert.equal(await node.evaluate(el=>el.style.transform),draggedTransform,'settings edits keep the live drag position');
  await page.mouse.up();
  await node.locator('.react-flow__handle.source[data-handlepos="left"]').waitFor({state:'attached'});
  const dropped=await node.boundingBox();
  assert.ok(Math.abs(dropped.x-dragged.x)<2,'node stays where it was dropped');
  await page.getByText('Unsaved changes',{exact:true}).waitFor();
- await page.getByRole('button',{name:'Save draft',exact:true}).click();
+ await saveDraft.click();
  await page.getByText('Saved draft',{exact:true}).waitFor();
  assert.ok(getDocument().workflows[0].positions.task.x>80);
  assert.match(getDocument().workflows[0].name,/ updated$/);
 });
 
 test('switching workflows by keyboard during a drag leaves the new workflow untouched', async t => {
- const {page}=await openEditor(t,{width:1600,height:1050});
+ const {page,getDocument}=await openEditor(t,{width:1600,height:1050});
  await selectRepository(page,'acme/repo');
  const name=page.getByLabel('Workflow name');
  for (const [template, title] of [['Assigned issues','First workflow'],['Prompt submission','Second workflow']]) {
@@ -300,6 +312,7 @@ test('switching workflows by keyboard during a drag leaves the new workflow unto
   await page.getByRole('button',{name:'Dismiss message'}).click();
  }
  const node=page.locator('.react-flow__node[data-id="task"]');
+ const savedSecond=getDocument().workflows.find(w=>w.name==='Second workflow');
  const position=el=>el.style.transform;
  const secondPosition=await node.evaluate(position);
  await page.getByRole('button',{name:/First workflow/}).click();
@@ -314,12 +327,18 @@ test('switching workflows by keyboard during a drag leaves the new workflow unto
  const second=page.getByRole('button',{name:/Second workflow/});
  await second.focus();
  await page.keyboard.press('Enter');
- assert.equal(await name.inputValue(),'Second workflow');
+ assert.equal(await name.inputValue(),'First workflow','switching is blocked while the pointer drag is active');
+ assert.match(await page.getByRole('status').textContent(),/Finish moving the workflow/);
  await page.mouse.move(x+120,y,{steps:4});
  await page.mouse.up();
- assert.equal(await node.evaluate(position),secondPosition);
- assert.equal(await page.locator('.wf-save-state').textContent(),'Saved draft');
- assert.equal(await page.getByRole('button',{name:'Enable',exact:true}).isEnabled(),true);
+ assert.equal(await name.inputValue(),'First workflow');
+ assert.notEqual(await node.evaluate(position),firstPosition);
+ assert.equal(await page.locator('.wf-save-state').textContent(),'Unsaved changes');
+ await second.click();
+ assert.equal(await name.inputValue(),'First workflow','unsaved drag positions cannot be discarded by switching');
+ assert.match(await page.getByRole('status').textContent(),/Save or discard your changes/);
+ assert.equal(await page.getByRole('button',{name:'Enable',exact:true}).isDisabled(),true);
+ assert.deepEqual(getDocument().workflows.find(w=>w.id===savedSecond.id),savedSecond);
 });
 
 test('workflow save and activation controls cannot interrupt a node drag', async t => {

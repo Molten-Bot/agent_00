@@ -130,6 +130,7 @@ function Toggle({ label, value, onChange }) {
 }
 function WorkflowCanvas({ workflow, saving, onInit, onDragChange, onMove, onSelect, onArrange }) {
   const flow = useReactFlow();
+  const pointerDragging = useRef(false);
   const graph = useMemo(() => workflow ? diagram(workflow) : { nodes: [], edges: [] }, [workflow]);
   const [layout, setLayout] = useState({ graph, nodes: graph.nodes });
 
@@ -143,7 +144,7 @@ function WorkflowCanvas({ workflow, saving, onInit, onDragChange, onMove, onSele
         measured: existing.measured,
         selected: existing.selected,
         dragging: existing.dragging,
-        position: existing.dragging ? existing.position : node.position,
+        position: existing.dragging || pointerDragging.current ? existing.position : node.position,
       };
     });
     setLayout({ graph, nodes });
@@ -158,12 +159,15 @@ function WorkflowCanvas({ workflow, saving, onInit, onDragChange, onMove, onSele
     return () => window.removeEventListener("workflow-display", handler);
   }, [flow]);
 
-  useEffect(() => () => onDragChange(false), [onDragChange]);
+  useEffect(() => () => {
+    pointerDragging.current = false;
+    onDragChange(false);
+  }, [onDragChange]);
 
   const handleNodesChange = useCallback(changes => {
     setLayout(previous => ({ ...previous, nodes: changes.applyTo(previous.nodes) }));
     const positions = changes.toArray().filter(change => change.type === "position" && change.position);
-    if (positions.length) onDragChange(positions.some(change => change.dragging));
+    if (positions.length) onDragChange(pointerDragging.current || positions.some(change => change.dragging));
     // Keep handles on the same side during a drag and reroute when it ends.
     const moves = positions.filter(change => !change.dragging);
     if (moves.length) onMove(Object.fromEntries(moves.map(change => [change.id, change.position])));
@@ -186,8 +190,8 @@ function WorkflowCanvas({ workflow, saving, onInit, onDragChange, onMove, onSele
       onInit={onInit}
       onNodesChange={handleNodesChange}
       onNodeClick={(_, node) => onSelect(node.id)}
-      onNodeDragStart={() => onDragChange(true)}
-      onNodeDragStop={() => onDragChange(false)}
+      onNodeDragStart={() => { pointerDragging.current = true; onDragChange(true); }}
+      onNodeDragStop={() => { pointerDragging.current = false; onDragChange(false); }}
       nodesDraggable={!saving}
       nodesConnectable={false}
       edgesReconnectable={false}
@@ -234,7 +238,7 @@ function Editor() {
   const fitView = useRef(null);
   const busy = pendingAction !== null;
   const changeRepository = useCallback((repository) => {
-    if (dirty) {
+    if (dirty || dragging) {
       setNotice("Save or discard changes first.");
       return false;
     }
@@ -242,7 +246,7 @@ function Editor() {
     setCurrent(null);
     setPreview(null);
     return true;
-  }, [dirty]);
+  }, [dirty, dragging]);
   async function reload() {
     try {
       const d = await api("/api/workflows");
@@ -379,8 +383,8 @@ function Editor() {
     setPreview(null);
   }
   function choose(w) {
-    if (dirty) {
-      setNotice("Save or discard your changes before switching workflows.");
+    if (dirty || dragging) {
+      setNotice(dragging ? "Finish moving the workflow before switching workflows." : "Save or discard your changes before switching workflows.");
       return;
     }
     setRepo(w.repository);
@@ -417,8 +421,8 @@ function Editor() {
       setNotice("Choose a repository first.");
       return;
     }
-    if (dirty) {
-      setNotice("Save or discard the current draft first.");
+    if (dirty || dragging) {
+      setNotice(dragging ? "Finish moving the workflow before creating another." : "Save or discard the current draft first.");
       return;
     }
     setCurrent(newWorkflow(repo.trim(), kind));
@@ -567,20 +571,24 @@ function Editor() {
             onChange={changeRepository}
           />
           <div className="wf-step-list">
-            {visible.map((w) => (
-              <button
-                key={w.id}
-                className={`wf-step ${current?.id === w.id ? "wf-active" : ""}`}
-                onClick={() => choose(w)}
-              >
-                <span>
-                  <strong>{w.name}</strong>
-                  <small>
-                    {w.repository} · {w.enabled ? "Enabled" : "Draft"}
-                  </small>
-                </span>
-              </button>
-            ))}
+            {visible.map((w) => {
+              const status = w.enabled ? "Running" : "Paused";
+              const StatusIcon = w.enabled ? Play : Pause;
+              return (
+                <button
+                  key={w.id}
+                  className={`wf-step ${current?.id === w.id ? "wf-active" : ""}`}
+                  aria-label={`${w.name}, ${w.repository}, ${status}`}
+                  onClick={() => choose(w)}
+                >
+                  <span>
+                    <strong>{w.name}</strong>
+                    <small>{w.repository} · {status}</small>
+                  </span>
+                  <StatusIcon size={14} aria-hidden="true" />
+                </button>
+              );
+            })}
           </div>
           <div className="wf-templates-heading">
             <span className="wf-section-label">WORKFLOW TEMPLATES</span>
