@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ReactFlow,
@@ -9,10 +9,8 @@ import {
   getSmoothStepPath,
   Controls,
   ControlButton,
-  useUpdateNodeInternals,
   MiniMap,
   Handle,
-  Position,
   useReactFlow,
 } from "@xyflow/react";
 import {
@@ -59,18 +57,14 @@ const colors = {
   review: "#66b5eb",
   merge: "#de8fbd",
 };
-function StepNode({ id, data, selected }) {
-  const updateNodeInternals = useUpdateNodeInternals();
-  useEffect(() => { updateNodeInternals(id); }, [id, data.sourcePosition, data.targetPosition, data.last, updateNodeInternals]);
+function StepNode({ data, selected, sourcePosition, targetPosition }) {
   const Icon = icons[data.icon] || icons[data.kind];
   return (
     <div
       className={`wf-node ${selected ? "wf-node-selected" : ""}`}
       style={{ "--step-color": colors[data.kind] }}
     >
-      {data.kind !== "repository" && (
-        <Handle type="target" position={data.targetPosition || Position.Top} />
-      )}
+      {targetPosition && <Handle type="target" position={targetPosition} />}
       <div className="wf-node-top">
         <span className="wf-icon">
           <Icon size={17} />
@@ -82,9 +76,7 @@ function StepNode({ id, data, selected }) {
       </div>
       <strong>{data.label}</strong>
       <p>{data.detail}</p>
-      {!data.last && (
-        <Handle type="source" position={data.sourcePosition || Position.Bottom} />
-      )}
+      {sourcePosition && <Handle type="source" position={sourcePosition} />}
     </div>
   );
 }
@@ -136,6 +128,63 @@ function Toggle({ label, value, onChange }) {
     </label>
   );
 }
+function WorkflowCanvas({ workflow, onMove, onSelect, onArrange }) {
+  const graph = useMemo(() => workflow ? diagram(workflow) : { nodes: [], edges: [] }, [workflow]);
+  const [layout, setLayout] = useState({ graph, workflowId: workflow?.id, nodes: graph.nodes });
+
+  if (layout.graph !== graph) {
+    const previous = new Map(layout.workflowId === workflow?.id ? layout.nodes.map(node => [node.id, node]) : []);
+    // Keep measurements and selection when the workflow definition changes.
+    const nodes = graph.nodes.map(node => {
+      const existing = previous.get(node.id);
+      return existing ? { ...node, measured: existing.measured, selected: existing.selected } : node;
+    });
+    setLayout({ graph, workflowId: workflow?.id, nodes });
+  }
+
+  const handleNodesChange = useCallback(changes => {
+    setLayout(previous => ({ ...previous, nodes: changes.applyTo(previous.nodes) }));
+    // Keep handles on the same side during a drag and reroute when it ends.
+    const moves = changes.toArray().filter(change => change.type === "position" && change.position && !change.dragging);
+    if (moves.length) onMove(Object.fromEntries(moves.map(change => [change.id, change.position])));
+  }, [onMove]);
+
+  return (
+    <ReactFlow
+      proOptions={{ hideAttribution: true }}
+      defaultMarkerColor={null}
+      nodes={layout.nodes}
+      edges={graph.edges}
+      nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
+      onNodesChange={handleNodesChange}
+      onNodeClick={(_, node) => onSelect(node.id)}
+      nodesConnectable={false}
+      edgesReconnectable={false}
+      deleteKeyCode={null}
+      fitView
+      fitViewOptions={{ padding: 32 }}
+      minZoom={0.25}
+      maxZoom={1.6}
+    >
+      <Background gap={22} />
+      <Controls showInteractive={false}>
+        <ControlButton aria-label="Arrange workflow vertically" title="Automatic vertical layout" disabled={!workflow} onClick={() => onArrange("vertical")}>
+          <Rows3 />
+        </ControlButton>
+        <ControlButton aria-label="Arrange workflow horizontally" title="Automatic horizontal layout" disabled={!workflow} onClick={() => onArrange("horizontal")}>
+          <Columns3 />
+        </ControlButton>
+      </Controls>
+      <MiniMap
+        style={{ width: 120, height: 80 }}
+        nodeColor={(node) => colors[node.data.kind]}
+        pannable
+        zoomable
+      />
+    </ReactFlow>
+  );
+}
 function Editor() {
   const [doc, setDoc] = useState(null),
     [current, setCurrent] = useState(null),
@@ -152,7 +201,6 @@ function Editor() {
     [busy, setBusy] = useState(false),
     [templatesOpen, setTemplatesOpen] = useState(true);
   const flow = useReactFlow();
-  const graph = current ? diagram(current) : { nodes: [], edges: [] };
   const changeRepository = useCallback((repository) => {
     if (dirty) {
       setNotice("Save or discard changes first.");
@@ -544,50 +592,12 @@ function Editor() {
             {current ? "DEFINITION CANVAS" : "CHOOSE OR CREATE A WORKFLOW"}
             <span>{current?.repository}</span>
           </div>
-          <ReactFlow
-            proOptions={{ hideAttribution: true }}
-            defaultMarkerColor={null}
-            nodes={graph.nodes}
-            edges={graph.edges}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            onNodesChange={(changes) => {
-              const moves = changes
-                .toArray()
-                .filter((c) => c.type === "position" && c.position);
-              if (moves.length)
-                edit({
-                  positions: {
-                    ...current.positions,
-                    ...Object.fromEntries(moves.map((c) => [c.id, c.position])),
-                  },
-                });
-            }}
-            onNodeClick={(_, n) => setSelection(n.id)}
-            nodesConnectable={false}
-            edgesReconnectable={false}
-            deleteKeyCode={null}
-            fitView
-            fitViewOptions={{ padding: 32 }}
-            minZoom={0.25}
-            maxZoom={1.6}
-          >
-            <Background gap={22} />
-            <Controls showInteractive={false}>
-              <ControlButton aria-label="Arrange workflow vertically" title="Automatic vertical layout" disabled={!current} onClick={() => arrange("vertical")}>
-                <Rows3 />
-              </ControlButton>
-              <ControlButton aria-label="Arrange workflow horizontally" title="Automatic horizontal layout" disabled={!current} onClick={() => arrange("horizontal")}>
-                <Columns3 />
-              </ControlButton>
-            </Controls>
-            <MiniMap
-              style={{ width: 120, height: 80 }}
-              nodeColor={(n) => colors[n.data.kind]}
-              pannable
-              zoomable
-            />
-          </ReactFlow>
+          <WorkflowCanvas
+            workflow={current}
+            onMove={positions => edit({ positions: { ...current.positions, ...positions } })}
+            onSelect={setSelection}
+            onArrange={arrange}
+          />
           {notice && (
             <div className="wf-notice" role="status">
               <div>

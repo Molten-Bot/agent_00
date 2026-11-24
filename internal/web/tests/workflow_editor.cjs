@@ -229,6 +229,57 @@ test('review pass slider supports presets, keyboard, dragging and existing saved
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
 });
 
+test('dragging a workflow node keeps nodes and edges visible', async t => {
+ const {page,getDocument}=await openEditor(t,{width:1600,height:1050});
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Assigned issues',exact:true}).click();
+ await page.getByRole('button',{name:'Save draft',exact:true}).click();
+ await page.getByText('Saved draft',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Dismiss message'}).click();
+ await page.getByRole('button',{name:'Maximize Workflow'}).click();
+ await page.locator('.react-flow__controls-fitview').click();
+
+ const node=page.locator('.react-flow__node[data-id="task"]');
+ const source=node.locator('.react-flow__handle.source');
+ await page.waitForFunction(()=>document.querySelectorAll('.react-flow__edge-path').length===4);
+ await node.hover();
+ const initialTransform=await node.evaluate(el=>el.style.transform);
+ const start=await node.boundingBox();
+ const x=start.x+start.width/2, y=start.y+start.height/2;
+ await page.mouse.move(x,y);
+ await page.mouse.down();
+ await page.evaluate(()=>{
+  window.dragFrames=[];
+  function sample() {
+   window.dragFrames.push({
+    edges:document.querySelectorAll('.react-flow__edge-path').length,
+    hidden:!!document.querySelector('.react-flow__node[style*="visibility: hidden"]'),
+   });
+   window.dragFrame=requestAnimationFrame(sample);
+  }
+  window.dragFrame=requestAnimationFrame(sample);
+ });
+ await page.mouse.move(x+240,y+75,{steps:24});
+ const frames=await page.evaluate(()=>{
+  cancelAnimationFrame(window.dragFrame);
+  return window.dragFrames;
+ });
+ assert.ok(frames.length>1);
+ assert.ok(frames.every(frame=>frame.edges===4&&!frame.hidden), 'nodes and edges stay visible while dragging');
+ assert.equal(await source.getAttribute('data-handlepos'),'bottom');
+ const dragged=await node.boundingBox();
+ assert.notEqual(await node.evaluate(el=>el.style.transform),initialTransform);
+ assert.ok(dragged.x>start.x+200);
+ await page.mouse.up();
+ await node.locator('.react-flow__handle.source[data-handlepos="left"]').waitFor({state:'attached'});
+ const dropped=await node.boundingBox();
+ assert.ok(Math.abs(dropped.x-dragged.x)<2,'node stays where it was dropped');
+ await page.getByText('Unsaved changes',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Save draft',exact:true}).click();
+ await page.getByText('Saved draft',{exact:true}).waitFor();
+ assert.ok(getDocument().workflows[0].positions.task.x>80);
+});
+
 test('automatic layout controls arrange, fit and persist workflow positions', async t => {
  const {page,getDocument}=await openEditor(t);
  const vertical=page.getByRole('button',{name:'Arrange workflow vertically',exact:true});
