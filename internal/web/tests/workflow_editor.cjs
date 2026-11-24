@@ -67,13 +67,27 @@ test('cached owner picker filters repositories and protects unsaved drafts', asy
  const {page}=await openEditor(t);
  assert.equal(await page.getByPlaceholder('owner/repository').count(),0);
  assert.equal(await page.getByRole('button',{name:'Implement issues',exact:true}).isDisabled(),true);
- await selectRepository(page,'person/project');
+ await page.getByRole('group',{name:'Organizations & people',exact:true}).getByRole('button').filter({hasText:'person'}).click();
+ await page.getByRole('button',{name:'person/project',exact:true,pressed:true}).waitFor();
  assert.equal(await page.getByRole('group',{name:'Repositories',exact:true}).getByRole('button').count(),1);
  await selectRepository(page,'acme/repo');
  await page.getByRole('button',{name:'Implement issues',exact:true}).click();
  await page.getByRole('group',{name:'Organizations & people',exact:true}).getByRole('button').filter({hasText:'person'}).click();
  await page.getByText('Save or discard changes first.',{exact:true}).waitFor();
  assert.equal(await page.getByRole('button',{name:'acme/repo',exact:true}).getAttribute('aria-pressed'),'true');
+});
+
+test('a single Workflow owner is selected while multiple repositories remain a choice', async t => {
+ const {page}=await openEditor(t,undefined,{workflow_enabled:true,disabled_repositories:['person/project']});
+ const picker=page.locator('.wf-repository-picker');
+ const owners=picker.getByRole('group',{name:'Organizations & people',exact:true});
+ const repositories=picker.getByRole('group',{name:'Repositories',exact:true});
+ await owners.getByRole('button',{pressed:true}).waitFor();
+ assert.deepEqual(await repositories.getByRole('button',{pressed:false}).allTextContents(),['acme/other','acme/repo']);
+ for (const text of ['Organizations & people','Repositories']) {
+  assert.equal(await picker.getByText(text,{exact:true}).count(),0);
+ }
+ assert.equal(await page.getByRole('button',{name:'Implement issues',exact:true}).isDisabled(),true);
 });
 
 test('schedule scale drags between units and preserves minute and month intervals on reload', async t => {
@@ -187,17 +201,18 @@ test('automatic layout controls arrange, fit and persist workflow positions', as
 
 test('repository visibility is shared across Workflow, Studio, Chat, and Issues after Settings changes', async t => {
  const {page}=await openEditor(t,undefined,{workflow_enabled:true,chat_enabled:true,github_issues_enabled:true,disabled_repositories:['https://github.com/acme/other','person/project']});
- const owners=page.locator('.wf-repository-picker [aria-labelledby="wf-owners-label"] button');
- await page.waitForFunction(()=>document.querySelectorAll('.wf-repository-picker [aria-labelledby="wf-owners-label"] button').length===1);
- assert.match(await owners.first().textContent(),/acme/);
- await selectRepository(page,'acme/repo');
- assert.deepEqual(await page.locator('.wf-repository-picker [aria-labelledby="wf-repositories-label"] button').allTextContents(),['acme/repo']);
+ const picker=page.locator('.wf-repository-picker');
+ const owners=picker.getByRole('group',{name:'Organizations & people',exact:true});
+ const repositories=picker.getByRole('group',{name:'Repositories',exact:true});
+ await owners.getByRole('button',{name:/acme/,pressed:true}).waitFor();
+ await repositories.getByRole('button',{name:'acme/repo',exact:true,pressed:true}).waitFor();
+ assert.deepEqual(await repositories.getByRole('button').allTextContents(),['acme/repo']);
  await page.locator('#settings-open').click();
  await page.getByRole('tab',{name:'Repositories',exact:true}).click();
  await page.locator('#review-settings-owners [data-repo-owner="acme"]').click();
  await page.locator('#review-settings-close').click();
  await page.locator('#settings-gate').waitFor({state:'hidden'});
- await page.waitForFunction(()=>document.querySelectorAll('.wf-repository-picker [aria-labelledby="wf-owners-label"] button').length===0);
+ await owners.waitFor({state:'detached'});
  assert.equal(await page.locator('#builder-repo-select option[value*="acme/"]').count(),0);
  assert.equal(await page.locator('#library-repo-select option[value*="acme/"]').count(),0);
  await page.waitForFunction(()=>document.querySelectorAll('#github-issues-repo option[value="acme/repo"]').length===0);
@@ -207,15 +222,53 @@ test('repository visibility is shared across Workflow, Studio, Chat, and Issues 
  await page.locator('#review-settings-owners [data-repo-owner="person"]').click();
  await page.locator('#review-settings-close').click();
  await page.locator('#settings-gate').waitFor({state:'hidden'});
- await page.waitForFunction(()=>document.querySelector('.wf-repository-picker [aria-labelledby="wf-owners-label"] button')?.textContent.includes('person'));
- await selectRepository(page,'person/project');
- assert.deepEqual(await page.locator('.wf-repository-picker [aria-labelledby="wf-repositories-label"] button').allTextContents(),['person/project']);
+ await owners.getByRole('button',{name:/person/,pressed:true}).waitFor();
+ await repositories.getByRole('button',{name:'person/project',exact:true,pressed:true}).waitFor();
+ assert.deepEqual(await repositories.getByRole('button').allTextContents(),['person/project']);
  assert.equal(await page.locator('#builder-repo-select option[value*="person/project"]').count(),1);
  await page.waitForFunction(()=>document.querySelectorAll('#github-issues-repo option[value="person/project"]').length===1);
 });
 
+test('Workflow maximizes with navigation available and restores on leaving', async t => {
+ const {page}=await openEditor(t,{width:1600,height:900});
+ const panel=page.locator('#workflow-display');
+ const maximize=page.getByRole('button',{name:'Maximize Workflow'});
+ const restore=page.getByRole('button',{name:'Restore Workflow size'});
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Implement issues',exact:true}).click();
+ const workflowName=page.getByRole('textbox',{name:'Workflow name'});
+ await workflowName.fill('Unsaved workflow');
+ const defaultSize=await panel.boundingBox();
+
+ await maximize.click();
+ assert.equal(await restore.getAttribute('aria-expanded'),'true');
+ const expanded=await panel.boundingBox();
+ const dock=await page.locator('.page-bottom-dock').boundingBox();
+ assert.equal(expanded.x,0);
+ assert.equal(expanded.y,0);
+ assert.equal(expanded.width,1600);
+ assert.ok(expanded.height>defaultSize.height);
+ assert.ok(expanded.y+expanded.height<=dock.y);
+ await restore.click();
+ assert.deepEqual(await panel.boundingBox(),defaultSize);
+
+ await maximize.click();
+ await page.keyboard.press('Escape');
+ await maximize.waitFor();
+ assert.deepEqual(await panel.boundingBox(),defaultSize);
+
+ await maximize.click();
+ await page.locator('#prompt-mode-builder').click();
+ await panel.waitFor({state:'hidden'});
+ await page.locator('#workflow-dock-link').click();
+ await maximize.waitFor();
+ assert.deepEqual(await panel.boundingBox(),defaultSize);
+ assert.equal(await workflowName.inputValue(),'Unsaved workflow');
+});
+
 test('Workflow uses the same Studio panel and titlebar styles', async t => {
  const {page}=await openEditor(t);
+ assert.equal(await page.locator('#workflow-display .panel-header').getByText('Version 2', {exact:true}).count(), 0);
  // Compare settled theme styles rather than sampling the transition mid-frame.
  await page.addStyleTag({content:'.studio-panel { transition: none !important; }'});
  const styles=async selector=>page.locator(selector).evaluate(panel=>{

@@ -239,6 +239,42 @@ test('repository selections hide dropdown options and manual entry enables them 
   assert.deepEqual(writes.at(-1).disabled_repositories, []);
 });
 
+test('repository settings sort active selections by owner and update immediately', async t => {
+  const repoURL = name => `https://github.com/${name}`;
+  const repos = ['zeta/notes', 'acme/widget', 'globex/ledger', 'acme/gadget', 'acme/archive'].map(full_name => ({
+    full_name, name: full_name.split('/')[1], html_url: repoURL(full_name),
+  }));
+  const { page, writes } = await openSettings(t, {
+    initialSettings: { ...defaults, disabled_repositories: [repoURL('acme/archive')] },
+    configurePage: async page => {
+      await page.route('**/api/github/repos**', route => route.fulfill({ json: { ok: true, repos } }));
+    },
+  });
+  await select(page, 'repositories');
+  const rows = page.locator('#review-settings-repositories input');
+  const owners = page.locator('#review-settings-owners button');
+  const repoOrder = () => rows.evaluateAll(nodes => nodes.map(node => node.value));
+  const ownerOrder = () => owners.evaluateAll(nodes => nodes.map(node => node.dataset.repoOwner));
+  await page.waitForFunction(() => document.querySelectorAll('#review-settings-repositories input').length === 5);
+  assert.deepEqual(await repoOrder(), ['acme/gadget', 'acme/widget', 'globex/ledger', 'zeta/notes', 'acme/archive'].map(repoURL));
+  assert.deepEqual(await ownerOrder(), ['acme', 'globex', 'zeta']);
+
+  const gadget = page.locator(`#review-settings-repositories input[value="${repoURL('acme/gadget')}"]`);
+  await gadget.focus();
+  await page.keyboard.press('Space');
+  assert.deepEqual(await repoOrder(), ['acme/widget', 'globex/ledger', 'zeta/notes', 'acme/archive', 'acme/gadget'].map(repoURL));
+  assert.equal(await gadget.evaluate(node => node === document.activeElement), true);
+  await page.keyboard.press('Space');
+  assert.deepEqual(await repoOrder(), ['acme/gadget', 'acme/widget', 'globex/ledger', 'zeta/notes', 'acme/archive'].map(repoURL));
+
+  await toggleRepositoryRow(page, repoURL('globex/ledger'));
+  assert.deepEqual(await ownerOrder(), ['acme', 'zeta', 'globex']);
+  assert.deepEqual(await repoOrder(), ['acme/gadget', 'acme/widget', 'zeta/notes', 'acme/archive'].map(repoURL));
+  assert.equal(writes.length, 0, 'ordering updates before settings are saved');
+  await close(page);
+  assert.deepEqual(writes.at(-1).disabled_repositories, [repoURL('acme/archive'), repoURL('globex/ledger')]);
+});
+
 test('repository rows and owner buttons both look inert while settings load', async t => {
   let release = () => {};
   const loaded = new Promise(resolve => { release = resolve; });

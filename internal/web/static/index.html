@@ -7069,22 +7069,34 @@
       if (!reviewSettingsRepositories || !reviewSettingsOwners || !reviewSettingsRepositoriesEmpty) return;
       const repos = repositorySettingsRepoValues();
       const groups = repositoryOwnerGroups(repos);
-      const visibleRepos = repos.filter(repo => {
-        const owner = repositoryOwnerKey(repo);
-        if (!owner) return true;
-        const ownerRepos = groups.get(owner)?.repos || [];
-        return !ownerRepos.every(repositoryDisabled);
-      });
+      const ownerStates = new Map(Array.from(groups, ([key, group]) => [key, repositoryOwnerPressedValue(group.repos)]));
+      const sortedOwners = Array.from(groups).sort(([left], [right]) =>
+        Number(ownerStates.get(left) === "false") - Number(ownerStates.get(right) === "false") || left.localeCompare(right));
+      const visibleRepos = repos.map(repo => ({
+        repo,
+        owner: repositoryOwnerKey(repo),
+        name: displayRepoLabel(repo),
+        disabled: repositoryDisabled(repo),
+      })).filter(({ owner }) => ownerStates.get(owner) !== "false");
+      visibleRepos.sort((left, right) => Number(left.disabled) - Number(right.disabled)
+        || left.owner.localeCompare(right.owner) || left.name.localeCompare(right.name));
       const controlsDisabled = state.settingsBusy || !state.settingsLoaded;
-      reviewSettingsRepositories.replaceChildren(...visibleRepos.map(repo => {
+      const focusedControl = document.activeElement;
+      const focusedRepo = reviewSettingsRepositories.contains(focusedControl) ? focusedControl.value : "";
+      const focusedOwner = focusedRepo ? repositoryOwnerKey(focusedRepo)
+        : reviewSettingsOwners.contains(focusedControl) ? focusedControl.dataset.repoOwner : "";
+      let nextRepoFocus;
+      let nextOwnerFocus;
+      reviewSettingsRepositories.replaceChildren(...visibleRepos.map(({ repo, name, disabled }) => {
         const label = document.createElement("label");
         label.className = "selectable-option repository-settings-option";
         const input = document.createElement("input");
         input.className = "sr-only";
         input.type = "checkbox";
         input.value = repo;
-        input.checked = !repositoryDisabled(repo);
+        input.checked = !disabled;
         input.disabled = controlsDisabled;
+        if (repo === focusedRepo) nextRepoFocus = input;
         input.addEventListener("change", () => {
           const disabled = state.reviewSettings.disabledRepositories || [];
           const repoKey = repoDedupeKey(input.value);
@@ -7101,8 +7113,8 @@
         icon.setAttribute("data-lucide", "folder-git-2");
         icon.setAttribute("aria-hidden", "true");
         const text = document.createElement("span");
-        text.textContent = displayRepoLabel(repo);
-        label.title = text.textContent;
+        text.textContent = name;
+        label.title = name;
         label.append(input, icon, text);
         return label;
       }));
@@ -7110,14 +7122,15 @@
       reconcileRepositoryOwnerKeptDisabled();
 
       const owners = repositoryOwnerDetails();
-      reviewSettingsOwners.replaceChildren(...Array.from(groups, ([key, group]) => {
+      reviewSettingsOwners.replaceChildren(...sortedOwners.map(([key, group]) => {
         const details = owners.get(key) || { avatar: "", type: "" };
         const button = document.createElement("button");
         button.type = "button";
         button.className = "selectable-option repository-settings-owner";
         button.dataset.repoOwner = key;
         button.disabled = controlsDisabled;
-        button.setAttribute("aria-pressed", repositoryOwnerPressedValue(group.repos));
+        button.setAttribute("aria-pressed", ownerStates.get(key));
+        if (key === focusedOwner) nextOwnerFocus = button;
         const countLabel = `${group.repos.length} ${group.repos.length === 1 ? "repository" : "repositories"}`;
         button.title = `${group.login} · ${countLabel}`;
         // A button with text content ignores title for its accessible name, so
@@ -7154,6 +7167,7 @@
       reviewSettingsOwnersColumn?.classList.toggle("hidden", groups.size === 0);
       reviewSettingsRepositoryColumns?.classList.toggle("hidden", repos.length === 0);
       reviewSettingsRepositoriesEmpty.classList.toggle("hidden", visibleRepos.length > 0);
+      (nextRepoFocus || nextOwnerFocus)?.focus({ preventScroll: true });
     }
 
     function renderRepoHistorySelect(historyField, select, input) {
@@ -9024,11 +9038,11 @@
       if (!workflowEditorLoad) {
         const css = document.createElement("link");
         css.rel = "stylesheet";
-        css.href = "/static/workflow-editor.css?v=9";
+        css.href = "/static/workflow-editor.css?v=10";
         document.head.appendChild(css);
         workflowEditorLoad = new Promise((resolve, reject) => {
           const script = document.createElement("script");
-          script.src = "/static/workflow-editor.js?v=9";
+          script.src = "/static/workflow-editor.js?v=13";
           script.onload = resolve;
           script.onerror = () => { script.remove(); css.remove(); workflowEditorLoad = null; reject(new Error("Unable to load Workflow editor. Reload to try again.")); };
           document.head.appendChild(script);
@@ -9068,6 +9082,8 @@
       workflowDisplay.setAttribute("aria-hidden", String(mode !== "workflow"));
       if (mode === "workflow") {
         void loadWorkflowEditor();
+      } else if (state.appDisplay === "workflow") {
+        window.dispatchEvent(new CustomEvent("workflow-display", { detail: mode }));
       }
       const showDashboard = mode === "dashboard";
       const showChat = mode === "chat";

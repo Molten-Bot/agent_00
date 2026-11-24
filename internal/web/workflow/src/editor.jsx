@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ReactFlow,
@@ -24,6 +24,8 @@ import {
   Plus,
   Save,
   Download,
+  Maximize2,
+  Minimize2,
   Play,
   Pause,
   DiagramFlowVertical,
@@ -127,9 +129,20 @@ function Editor() {
     [notice, setNotice] = useState(""),
     [preview, setPreview] = useState(null),
     [runs, setRuns] = useState([]),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [maximized, setMaximized] = useState(false);
   const flow = useReactFlow();
   const graph = current ? diagram(current) : { nodes: [], edges: [] };
+  const changeRepository = useCallback((repository) => {
+    if (dirty) {
+      setNotice("Save or discard changes first.");
+      return false;
+    }
+    setRepo(repository);
+    setCurrent(null);
+    setPreview(null);
+    return true;
+  }, [dirty]);
   async function reload() {
     try {
       const d = await api("/api/workflows");
@@ -187,10 +200,11 @@ function Editor() {
   }, []);
   useEffect(() => {
     const handler = (e) => {
-      if (e.detail === "workflow")
-        requestAnimationFrame(() =>
-          flow.fitView({ padding: 32, duration: 200 }),
-        );
+      if (e.detail !== "workflow") {
+        setMaximized(false);
+        return;
+      }
+      requestAnimationFrame(() => flow.fitView({ padding: 32, duration: 200 }));
     };
     window.addEventListener("workflow-display", handler);
     return () => window.removeEventListener("workflow-display", handler);
@@ -397,8 +411,15 @@ function Editor() {
         "bot",
         "linkedIssue",
       ];
+  const sizeLabel = maximized ? "Restore Workflow size" : "Maximize Workflow";
   return (
-    <div className="wf-editor">
+    <div className={`wf-editor${maximized ? " wf-maximized" : ""}`} onKeyDown={(event) => {
+      if (maximized && event.key === "Escape" && !event.defaultPrevented) {
+        event.preventDefault();
+        event.stopPropagation();
+        setMaximized(false);
+      }
+    }}>
       <header className="panel-header prompt-titlebar">
         <div className="panel-header-copy">
           <span id="workflow-title" className="panel-section-title prompt-title-list">
@@ -418,15 +439,11 @@ function Editor() {
               onChange={(e) => edit({ name: e.target.value })}
             />
           )}
-          <span className="wf-save-state">
-            {dirty
-              ? "Unsaved changes"
-              : current?.enabled
-                ? "Enabled"
-                : current
-                  ? "Saved draft"
-                  : `Version ${doc?.version || 2}`}
-          </span>
+          {current && (
+            <span className="wf-save-state">
+              {dirty ? "Unsaved changes" : current.enabled ? "Enabled" : "Saved draft"}
+            </span>
+          )}
           <button
             disabled={!doc}
             onClick={exportAll}
@@ -453,6 +470,10 @@ function Editor() {
               </button>
             </>
           )}
+          <button type="button" aria-label={sizeLabel} title={sizeLabel} aria-expanded={maximized}
+            onClick={() => setMaximized(value => !value)}>
+            {maximized ? <Minimize2 size={16} aria-hidden="true" /> : <Maximize2 size={16} aria-hidden="true" />}
+          </button>
         </div>
       </header>
       <div className="wf-workspace">
@@ -464,20 +485,9 @@ function Editor() {
             loading={reposLoading}
             error={reposError}
             onRetry={loadRepos}
-            onChange={(repository) => {
-              if (dirty) {
-                setNotice("Save or discard changes first.");
-                return false;
-              }
-              setRepo(repository);
-              setCurrent(null);
-              setPreview(null);
-              return true;
-            }}
+            autoSelect={!dirty}
+            onChange={changeRepository}
           />
-          <p className="wf-muted">
-            Each repository can have several workflows, or none.
-          </p>
           <div className="wf-step-list">
             {visible.map((w) => (
               <button
@@ -494,11 +504,7 @@ function Editor() {
               </button>
             ))}
           </div>
-          {!visible.length && (
-            <p className="wf-muted">Create a workflow to configure task policies and automation for this repository.</p>
-          )}
           <div className="wf-section-label wf-spacer">WORKFLOW TEMPLATES</div>
-          <p className="wf-muted">Choose a repository above, then a template. Each creates an editable draft with automation off.</p>
           {workflowTemplates.map((template) => (
             <button
               className="wf-template wf-template-card"
