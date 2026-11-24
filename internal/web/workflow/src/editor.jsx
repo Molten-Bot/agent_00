@@ -21,6 +21,7 @@ import {
   FolderGit2,
   ListFilter,
   MessageSquareCode,
+  ChevronDown,
   Plus,
   Save,
   Download,
@@ -130,6 +131,7 @@ function Editor() {
     [preview, setPreview] = useState(null),
     [runs, setRuns] = useState([]),
     [busy, setBusy] = useState(false),
+    [templatesOpen, setTemplatesOpen] = useState(true),
     [maximized, setMaximized] = useState(false);
   const flow = useReactFlow();
   const graph = current ? diagram(current) : { nodes: [], edges: [] };
@@ -412,6 +414,7 @@ function Editor() {
         "linkedIssue",
       ];
   const sizeLabel = maximized ? "Restore Workflow size" : "Maximize Workflow";
+  const templatesLabel = templatesOpen ? "Hide workflow templates" : "Show workflow templates";
   return (
     <div className={`wf-editor${maximized ? " wf-maximized" : ""}`} onKeyDown={(event) => {
       if (maximized && event.key === "Escape" && !event.defaultPrevented) {
@@ -504,19 +507,27 @@ function Editor() {
               </button>
             ))}
           </div>
-          <div className="wf-section-label wf-spacer">WORKFLOW TEMPLATES</div>
-          {workflowTemplates.map((template) => (
-            <button
-              className="wf-template wf-template-card"
-              key={template.id}
-              aria-label={template.name}
-              onClick={() => create(template.id)}
-              disabled={!doc || !repos.some((r) => r.full_name === repo)}
-            >
-              <Plus size={14} />
-              <span><strong>{template.name}</strong><small>{template.description}</small></span>
+          <div className="wf-templates-heading">
+            <span className="wf-section-label">WORKFLOW TEMPLATES</span>
+            <button type="button" className="wf-templates-toggle" aria-label={templatesLabel} title={templatesLabel}
+              aria-expanded={templatesOpen} aria-controls="wf-templates" onClick={() => setTemplatesOpen(open => !open)}>
+              <ChevronDown size={14} aria-hidden="true" />
             </button>
-          ))}
+          </div>
+          <div id="wf-templates" hidden={!templatesOpen}>
+            {workflowTemplates.map((template) => (
+              <button
+                className="wf-template wf-template-card"
+                key={template.id}
+                aria-label={template.name}
+                onClick={() => create(template.id)}
+                disabled={!doc || !repos.some((r) => r.full_name === repo)}
+              >
+                <Plus size={14} />
+                <span><strong>{template.name}</strong><small>{template.description}</small></span>
+              </button>
+            ))}
+          </div>
         </aside>
         <div className="wf-canvas">
           <div className="wf-canvas-caption">
@@ -525,6 +536,7 @@ function Editor() {
           </div>
           <ReactFlow
             proOptions={{ hideAttribution: true }}
+            defaultMarkerColor={null}
             nodes={graph.nodes}
             edges={graph.edges}
             nodeTypes={nodeTypes}
@@ -977,12 +989,6 @@ function Editor() {
                 <>
                   <h2>Bounded review cycles</h2>
                   <ReviewPasses value={current.reviewCycles} onChange={(reviewCycles) => edit({ reviewCycles })} />
-                  <p className="wf-muted">
-                    {current.reviewCycles === 0 ? "Post-task reviews are off." : <>After implementation or repair, review and fix findings up
-                    to this limit. A final review confirms the result.
-                    Unresolved findings stop the run. Review-only tasks post one
-                    review.</>}
-                  </p>
                 </>
               )}
               {selection === "merge" && (

@@ -21,6 +21,8 @@ export function newWorkflow(repository, kind = "implement", id = crypto.randomUU
   if (!template) throw new Error(`Unknown workflow template: ${kind}`);
   return { ...structuredClone(template.definition), id, repository, enabled: false, includeBacklog: false };
 }
+const cycleArrow = { type: "arrowclosed", width: 20, height: 20 };
+
 export function diagram(w) {
   const input = w.trigger.event.startsWith("app.");
   const triggerIcons = { schedule: "calendar", "app.prompt": "prompt", "app.json": "json", "app.chat": "chat" };
@@ -56,9 +58,7 @@ export function diagram(w) {
     [
       "review",
       "Review cycles",
-      w.reviewCycles
-        ? `Up to ${w.reviewCycles} repair cycles`
-        : "No post-task review cycles",
+      "A fresh review agent checks each revision",
     ],
     [
       "merge",
@@ -83,12 +83,20 @@ export function diagram(w) {
       position: positions[index],
       data: { sourcePosition: index < steps.length - 1 ? side(positions[index], positions[index + 1]) : "bottom", targetPosition: index > 0 ? side(positions[index], positions[index - 1]) : "top", label, detail, kind: id, icon: id === "trigger" ? triggerIcon : id === "task" ? w.task.kind : id, last: index === steps.length - 1, enabled: w.enabled },
     })),
-    edges: steps.slice(1).map(([id], index) => ({
-      id: `${steps[index][0]}-${id}`,
-      source: steps[index][0],
-      target: id,
-      type: "smoothstep",
-    })),
+    edges: steps.slice(1).map(([target], index) => {
+      const source = steps[index][0];
+      const edge = { id: `${source}-${target}`, source, target, type: "smoothstep" };
+      if (source !== "task" || target !== "review") return edge;
+      const label = `${w.reviewCycles} ${w.reviewCycles === 1 ? "cycle" : "cycles"}`;
+      return {
+        ...edge,
+        markerStart: cycleArrow,
+        markerEnd: cycleArrow,
+        label,
+        labelStyle: { fontSize: 11, fontWeight: 600 },
+        ariaLabel: `Agent task and review, up to ${label}`,
+      };
+    }),
   };
 }
 export function replaceDefinition(document, definition) {

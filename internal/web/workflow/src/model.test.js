@@ -33,7 +33,11 @@ test("diagram represents actual policy and preserves layout", () => {
     x: 40,
     y: 50,
   });
-  assert.match(graph.nodes.find((n) => n.id === "review").data.detail, /5/);
+  const reviewEdge = graph.edges.find(edge => edge.id === "task-review");
+  assert.equal(reviewEdge.label, "5 cycles");
+  assert.equal(reviewEdge.markerStart.type, "arrowclosed");
+  assert.equal(reviewEdge.markerEnd.type, "arrowclosed");
+  assert.equal(graph.edges.filter(edge => edge.markerStart || edge.markerEnd).length, 1);
   assert.match(graph.nodes.find((n) => n.id === "merge").data.detail, /rebase/);
 });
 

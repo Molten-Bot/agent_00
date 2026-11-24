@@ -15,9 +15,10 @@ body[data-app-display="workflow"] .app.dashboard-app:has(.wf-maximized) > agent-
 .wf-editor :is(button,input,textarea):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .wf-editor button svg { flex: 0 0 auto; }
 .wf-editor h2 { margin: 9px 0; font-size: 15px; font-weight: 600; line-height: 1.35; }
-.wf-name { width: min(240px, 100%); }
-.wf-header-actions { flex-wrap: wrap; text-transform: none; }
-.wf-save-state { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--muted); margin-right: 10px; white-space: nowrap; }
+.wf-name { width: min(240px, 100%); min-width: 0; }
+.wf-header-actions { flex: 0 1 auto; min-width: 0; justify-content: flex-end; column-gap: clamp(4px, 1vw, 10px); text-transform: none; }
+.wf-header-actions > button { flex-shrink: 0; white-space: nowrap; }
+.wf-save-state { font-size: 10px; color: var(--muted); white-space: nowrap; }
 .wf-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
 .wf-editor button.wf-primary { background: var(--accent); color: #fff; border-color: transparent; }
 .wf-editor button.wf-primary:hover { filter: brightness(1.12); }
@@ -93,14 +94,19 @@ body[data-app-display="workflow"] .app.dashboard-app:has(.wf-maximized) > agent-
 .wf-editor .wf-toggle { display:flex; align-items:start; gap:9px; font-size:12px; line-height:1.5; margin:16px 0; }
 .wf-toggle input { width:auto; min-height:0; margin-top:3px; }
 .wf-template { width:100%; margin-top:8px; justify-content:start!important; }
-.wf-spacer { margin-top:24px; }
+.wf-templates-heading { display: flex; align-items: center; gap: 6px; margin-top: 24px; }
+.wf-editor .wf-templates-toggle { width: 28px; min-height: 28px; padding: 0; border: 0; background: transparent; }
+.wf-templates-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
 .wf-active { border-color:var(--accent)!important; background:var(--accent-soft)!important; }
 .wf-rule { padding:10px 0; border-bottom:1px solid var(--border); }
 .wf-activity { flex-shrink:0; border-top:1px solid var(--border); font-size:11px; padding:10px 18px; }
 .wf-activity summary { cursor:pointer; }
 .wf-activity > div { max-height:160px; overflow:auto; }
 .wf-editor button:disabled { opacity:.45; cursor:default; }
-@media(max-width:900px) { .wf-workspace {grid-template-columns:165px minmax(0,1fr) 210px;} .wf-header-actions {flex-wrap:wrap;} }
+@media(max-width:900px) { .wf-workspace {grid-template-columns:165px minmax(0,1fr) 210px;} }
+@media (max-width: 700px), (max-width: 1100px) and (max-height: 500px) and (pointer: coarse) {
+  .wf-header-actions { flex: 1 1 100%; flex-wrap: wrap; }
+}
 @media(max-width:650px) { .wf-workspace {display:flex; flex-direction:column; overflow:auto;} .wf-palette,.wf-inspector {display:block; max-height:none; overflow:visible; flex-shrink:0;} .wf-canvas {min-height:360px; flex-shrink:0;} }
 .wf-schedule-presets {display:flex;flex-wrap:wrap;gap:5px;}
 .wf-prompt-preview {font-size:11px;color:var(--muted);}
@@ -121,10 +127,7 @@ body[data-app-display="workflow"] .app.dashboard-app:has(.wf-maximized) > agent-
 .wf-composition .wf-toggle { margin: 10px 0; }
 .wf-review-slider { margin: 20px 0; }
 .wf-review-slider > label { color: var(--text-soft); font-size: 11px; }
-.wf-review-value { display: flex; align-items: center; gap: 8px; margin: 12px 0 8px; font-size: 15px; color: var(--text); }
-.wf-review-value svg { color: var(--accent); }
 .wf-editor .wf-review-slider input[type="range"] { display: block; width: 100%; height: 32px; margin: 0; padding: 0; accent-color: var(--accent); cursor: ew-resize; }
 .wf-review-stops { display: flex; justify-content: space-between; gap: 2px; }
-.wf-editor .wf-review-stops button { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px; min-width: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--text-soft); }
+.wf-editor .wf-review-stops button { padding: 6px; min-width: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--text-soft); }
 .wf-editor .wf-review-stops button[aria-pressed="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.wf-review-stops small { font-size: 9px; }

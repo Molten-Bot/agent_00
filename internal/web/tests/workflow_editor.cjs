@@ -145,11 +145,52 @@ test('in-app workflows keep defaults opt-in and compose review and merge steps',
  assert.equal(await page.locator('[data-id="trigger"] .lucide-file-json').count(),1);
 });
 
+test('the agent and review are connected by a bidirectional line with a live cycle count', async t => {
+ const {page}=await openEditor(t);
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Prompt submission',exact:true}).click();
+ const reviewStep=page.getByLabel('Review step',{exact:true});
+ const edge=page.getByTestId('rf__edge-task-review');
+ assert.equal(await edge.count(),0);
+ await reviewStep.check();
+ await edge.getByText('1 cycle',{exact:true}).waitFor();
+ const path=edge.locator('.react-flow__edge-path');
+ const marker=await path.getAttribute('marker-start');
+ assert.match(marker,/arrowclosed/);
+ assert.equal(await path.getAttribute('marker-end'),marker);
+ assert.equal(await page.locator('.react-flow__arrowhead').getAttribute('orient'),'auto-start-reverse');
+
+ await page.getByRole('button',{name:'4 passes',exact:true}).click();
+ await edge.getByText('4 cycles',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Arrange workflow horizontally',exact:true}).click();
+ await page.waitForFunction(()=>{
+  const edge=document.querySelector('[data-testid="rf__edge-task-review"]');
+  const path=edge?.querySelector('.react-flow__edge-path');
+  const background=edge?.querySelector('.react-flow__edge-textbg');
+  if (!path || !background) return false;
+  const length=path.getTotalLength();
+  const start=path.getPointAtLength(0);
+  const end=path.getPointAtLength(length);
+  const middle=path.getPointAtLength(length/2).matrixTransform(path.getScreenCTM());
+  const box=background.getBoundingClientRect();
+  return Math.abs(start.x-end.x)>Math.abs(start.y-end.y)
+    && Math.abs(box.x+box.width/2-middle.x)<2 && Math.abs(box.y+box.height/2-middle.y)<2;
+ });
+ await reviewStep.uncheck();
+ await edge.waitFor({state:'detached'});
+});
+
 test('review pass slider supports presets, keyboard, dragging and existing saved values', async t => {
  const {page,getDocument}=await openEditor(t,{width:390,height:844});
  await selectRepository(page,'acme/repo');await page.getByRole('button',{name:'Prompt submission',exact:true}).click();
  await page.getByLabel('Review step',{exact:true}).check();
  const slider=page.getByRole('slider',{name:'Review passes',exact:true});
+ const presets=page.getByRole('group',{name:'Review pass presets'});
+ assert.deepEqual(await presets.getByRole('button').allTextContents(),['','','','','']);
+ for(const icon of ['signal-zero','signal-low','signal-medium','signal-high','signal']) {
+  assert.equal(await presets.locator(`svg.lucide-${icon}`).count(),1);
+ }
+ assert.equal(await page.getByText(/A fresh review agent checks the changes/).count(),0);
  assert.equal(await page.getByRole('spinbutton').count(),0);
  for(const count of [0,1,2,4,8]) {
   await page.getByRole('button',{name:`${count} ${count===1?'pass':'passes'}`,exact:true}).click();
@@ -164,7 +205,8 @@ test('review pass slider supports presets, keyboard, dragging and existing saved
  await save();assert.equal(getDocument().workflows[0].reviewCycles,8);
  getDocument().workflows[0].reviewCycles=10;
  await page.reload();await selectRepository(page,'acme/repo');await page.locator('.wf-step').first().click();await page.locator('[data-id="review"]').click();
- await page.getByText('Saved value: 10 passes. Choose a preset to change it.',{exact:true}).waitFor();
+ assert.equal(await slider.getAttribute('aria-valuetext'),'10 passes, saved value; choose a preset to change');
+ assert.equal(await presets.getByRole('button',{pressed:true}).count(),0);
  await save();assert.equal(getDocument().workflows[0].reviewCycles,10);
  await page.getByRole('button',{name:'4 passes',exact:true}).click();await save();assert.equal(getDocument().workflows[0].reviewCycles,4);
  await page.screenshot({path:'/tmp/agent00-review-pass-slider.png',fullPage:true});
@@ -227,6 +269,39 @@ test('repository visibility is shared across Workflow, Studio, Chat, and Issues 
  assert.deepEqual(await repositories.getByRole('button').allTextContents(),['person/project']);
  assert.equal(await page.locator('#builder-repo-select option[value*="person/project"]').count(),1);
  await page.waitForFunction(()=>document.querySelectorAll('#github-issues-repo option[value="person/project"]').length===1);
+});
+
+test('Workflow templates can be collapsed and reopened from the sidebar heading', async t => {
+ const {page}=await openEditor(t);
+ await selectRepository(page,'acme/repo');
+ const template=page.getByRole('button',{name:'Implement issues',exact:true});
+ const hide=page.getByRole('button',{name:'Hide workflow templates'});
+ const show=page.getByRole('button',{name:'Show workflow templates'});
+ await template.waitFor();
+ assert.equal(await hide.getAttribute('aria-expanded'),'true');
+ await hide.click();
+ await template.waitFor({state:'hidden'});
+ assert.equal(await show.getAttribute('aria-expanded'),'false');
+ assert.equal(await page.getByText('WORKFLOW TEMPLATES',{exact:true}).isVisible(),true);
+ await show.click();
+ await template.click();
+ assert.equal(await page.getByLabel('Workflow name').inputValue(),'Implement issues');
+});
+
+test('Workflow header actions stay on one row at narrow desktop widths', async t => {
+ const {page}=await openEditor(t,{width:720,height:900});
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Scheduled task',exact:true}).click();
+ const header=page.locator('#workflow-display .panel-header');
+ const actions=header.getByRole('button');
+ for (const width of [720,834]) {
+  await page.setViewportSize({width,height:900});
+  const panel=await header.boundingBox();
+  const boxes=await Promise.all((await actions.all()).map(action=>action.boundingBox()));
+  assert.equal(boxes.length,5);
+  assert.ok(boxes.every(box=>Math.abs(box.y+box.height/2-(boxes[0].y+boxes[0].height/2))<1));
+  assert.ok(boxes.every(box=>box.x>=panel.x && box.x+box.width<=panel.x+panel.width));
+ }
 });
 
 test('Workflow maximizes with navigation available and restores on leaving', async t => {
