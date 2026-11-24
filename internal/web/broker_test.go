@@ -1294,7 +1294,7 @@ func TestBrokerPreservesWorkflowTriggerForIssueTask(t *testing.T) {
 	b := NewBroker()
 	const issueURL = "https://github.com/example/project/issues/42"
 	b.RecordTaskRunConfigWithSource("local-workflow-issue", []byte(`{
-		"workflow":{"id":"issue-workflow","eventId":"event-42"},
+		"workflow":{"id":"issue-workflow","eventId":"event-42","policyHash":"runtime-policy"},
 		"githubIssue":{"number":42,"url":"`+issueURL+`"}
 	}`), "github_issues")
 	b.DropTaskRunConfig("local-workflow-issue")

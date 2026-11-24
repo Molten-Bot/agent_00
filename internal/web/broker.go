@@ -3216,10 +3216,12 @@ func workflowFromRunConfigJSON(runConfigJSON []byte) string {
 func workflowTriggeredFromRunConfigJSON(runConfigJSON []byte) bool {
 	var raw struct {
 		Workflow *struct {
-			EventID string `json:"eventId"`
+			EventID    string `json:"eventId"`
+			PolicyHash string `json:"policyHash"`
 		} `json:"workflow"`
 	}
-	return json.Unmarshal(runConfigJSON, &raw) == nil && raw.Workflow != nil && raw.Workflow.EventID != ""
+	return json.Unmarshal(runConfigJSON, &raw) == nil && raw.Workflow != nil &&
+		raw.Workflow.EventID != "" && raw.Workflow.PolicyHash != ""
 }
 
 func agentHarnessFromRunConfigJSON(runConfigJSON []byte) string {
