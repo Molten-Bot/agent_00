@@ -2439,6 +2439,7 @@
           pruneRepoHistoryToLoadedGitHubRepos();
           renderRepoHistoryOptions();
           renderRepositorySettings();
+          notifyRepositoryVisibility();
           trackAnalyticsEvent("chat_repos_loaded", { repo_count: state.githubRepos.length });
         } catch (err) {
           if (loadSequence !== githubReposLoadSequence) {
@@ -2882,6 +2883,8 @@
       if (!state.reviewSettings.jsonEnabled && state.promptMode === "json") {
         setPromptMode("builder");
       }
+      notifyRepositoryVisibility();
+      renderChatRepos();
       setReviewSettingsMergeMethod(state.reviewSettings.mergeMethod);
       setReviewSettingsLevel(state.reviewSettings.reviewLevel);
       if (state.reviewSettings.message) {
@@ -6911,6 +6914,26 @@
       return key !== "" && disabledRepositoryKeys().has(key);
     }
 
+    // All screens share Settings' current repository visibility, including
+    // changes made while their UI remains mounted in the background.
+    window.RepositoryVisibility = {
+      filter(repositories) {
+        if (!state.settingsLoaded) return [];
+        return repositories.filter(repo => !repositoryDisabled(githubRepoSelectValue(repo)));
+      },
+      repositories() {
+        return state.githubReposReady ? this.filter(state.githubRepos) : null;
+      },
+    };
+    let repositoryVisibilitySnapshot = "";
+    function notifyRepositoryVisibility() {
+      const snapshot = JSON.stringify([state.settingsLoaded, state.reviewSettings.disabledRepositories,
+        state.githubReposReady, state.githubRepos.map(repo => githubRepoSelectValue(repo))]);
+      if (snapshot === repositoryVisibilitySnapshot) return;
+      repositoryVisibilitySnapshot = snapshot;
+      window.dispatchEvent(new Event("repository-visibility-changed"));
+    }
+
     function allGitHubRepoSelectValues() {
       const repos = Array.isArray(state.githubRepos) ? state.githubRepos : [];
       return repos.map(githubRepoSelectValue).filter(Boolean);
@@ -6987,6 +7010,7 @@
     function applyDisabledRepositories(values) {
       state.reviewSettings = { ...state.reviewSettings, disabledRepositories: dedupeRepoValues(values) };
       reconcileRepositoryOwnerKeptDisabled();
+      notifyRepositoryVisibility();
       renderRepositorySettings();
       renderRepoHistoryOptions();
       renderChatRepos();

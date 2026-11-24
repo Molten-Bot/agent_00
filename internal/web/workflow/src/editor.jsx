@@ -145,7 +145,8 @@ function Editor() {
     setReposError("");
     try {
       const data = await api("/api/github/repos");
-      setRepos(data.repos || []);
+      const visibility = window.RepositoryVisibility;
+      setRepos(visibility?.repositories() ?? visibility?.filter(data.repos || []) ?? data.repos ?? []);
     } catch (e) {
       setReposError(e.message);
     } finally {
@@ -158,6 +159,18 @@ function Editor() {
       .then((data) => setLibraryTasks(data.tasks || []))
       .catch((e) => setNotice(e.message));
     loadRepos();
+    const refreshRepositories = () => {
+      const enabled = window.RepositoryVisibility?.repositories();
+      if (enabled !== null && enabled !== undefined) {
+        setRepos(enabled);
+        setReposLoading(false);
+        setReposError("");
+      } else {
+        void loadRepos();
+      }
+    };
+    window.addEventListener("repository-visibility-changed", refreshRepositories);
+    return () => window.removeEventListener("repository-visibility-changed", refreshRepositories);
   }, []);
   useEffect(() => {
     const refresh = () => {

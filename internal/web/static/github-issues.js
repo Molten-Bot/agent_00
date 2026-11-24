@@ -841,10 +841,14 @@
     }
   }
 
+  let initializationSequence = 0;
   async function initialize() {
+    const sequence = ++initializationSequence;
+    const previousRepository = repoSelect.value;
     let stage = "settings";
     try {
       const settings = await requestJSON("/api/review-settings", { cache: "no-store" });
+      if (sequence !== initializationSequence) return;
       const values = settings.settings || {};
       const enabled = Boolean(values.github_issues_enabled ?? values.githubIssuesEnabled);
       const linkMode = String(values.github_issue_link_mode ?? values.githubIssueLinkMode ?? "reference").trim().toLowerCase();
@@ -857,7 +861,9 @@
       browser.hidden = false;
       stage = "repositories";
       const response = await requestJSON("/api/github/repos", { cache: "no-store" });
-      repositories = Array.isArray(response.repos) ? response.repos : [];
+      if (sequence !== initializationSequence) return;
+      const available = Array.isArray(response.repos) ? response.repos : [];
+      repositories = window.RepositoryVisibility?.repositories() ?? window.RepositoryVisibility?.filter(available) ?? available;
       repoSelect.replaceChildren();
       const placeholder = document.createElement("option");
       placeholder.value = "";
@@ -878,7 +884,8 @@
       const promptRepository = document.getElementById("builder-repo-select")?.value || "";
       let rememberedRepository = "";
       try { rememberedRepository = localStorage.getItem(repositoryStorageKey) || ""; } catch (_error) { /* Ignore unavailable storage. */ }
-      const preferred = repositories.find((repo) => repo.full_name === promptRepository)
+      const preferred = repositories.find((repo) => repo.full_name === previousRepository)
+        || repositories.find((repo) => repo.full_name === promptRepository)
         || repositories.find((repo) => repo.full_name === rememberedRepository);
       if (preferred) {
         repoSelect.value = preferred.full_name;
@@ -939,6 +946,7 @@
       if (note) note.textContent = taskLinkModeDescription(selectedIssue);
     }
   });
+  window.addEventListener("repository-visibility-changed", () => { void initialize(); });
   let initialization = null;
   window.initGitHubIssuesPanel = function initGitHubIssuesPanel() {
     if (!initialization) initialization = initialize();
