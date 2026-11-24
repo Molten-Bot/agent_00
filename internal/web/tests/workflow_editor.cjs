@@ -5,7 +5,8 @@ const baseURL=process.env.HARNESS_TEST_URL||'http://127.0.0.1:7777';
 let browser;
 before(async()=>{browser=await chromium.launch({headless:true,args:['--no-sandbox']})});
 after(async()=>{await browser?.close()});
-async function openEditor(t,viewport={width:1280,height:900}){
+async function openEditor(t,viewport={width:1280,height:900},initialSettings={workflow_enabled:true}){
+ let settings=initialSettings;
  const page=await browser.newPage({viewport});const errors=[];page.on('pageerror',e=>errors.push(e.message));t.after(async()=>{await page.close();assert.deepEqual(errors,[])});
  let doc={version:2,revision:0,workflows:[]};
  await page.addInitScript(()=>{window.EventSource=class{}});
@@ -18,7 +19,7 @@ async function openEditor(t,viewport={width:1280,height:900}){
  if(url.pathname==='/api/github/repos')return route.fulfill({json:{repos:[{full_name:'acme/repo'},{full_name:'acme/other'},{full_name:'person/project',owner_type:'User'}]}});
  if(url.pathname==='/api/status')return route.fulfill({json:{tasks:[],events:[],repositories:[],stats:{},resources:{}}});
  if(url.pathname==='/api/agent-auth')return route.fulfill({json:{ok:true,auth:{required:false,ready:true,state:'ready'}}});
- if(url.pathname==='/api/review-settings')return route.fulfill({json:{ok:true,settings:{workflow_enabled:true}}});
+ if(url.pathname==='/api/review-settings'){if(route.request().method()==='POST')settings=route.request().postDataJSON();return route.fulfill({json:{ok:true,settings}})};
  if(url.pathname.startsWith('/api/'))return route.fulfill({json:{ok:true}});return route.continue()});
  await page.goto(baseURL+'/#workflow');await page.getByRole('heading',{name:'Repository automations'}).waitFor();return {page,getDocument:()=>doc};
 }
@@ -182,4 +183,33 @@ test('automatic layout controls arrange, fit and persist workflow positions', as
  assert.equal(await page.locator('[data-id="task"] .react-flow__handle-bottom').count(),1);
  assert.equal(getDocument().workflows[0].merge.enabled,true);
  await page.screenshot({path:'/tmp/agent00-workflow-layout.png',fullPage:true});
+});
+
+test('repository visibility is shared across Workflow, Studio, Chat, and Issues after Settings changes', async t => {
+ const {page}=await openEditor(t,undefined,{workflow_enabled:true,chat_enabled:true,github_issues_enabled:true,disabled_repositories:['https://github.com/acme/other','person/project']});
+ const owners=page.locator('.wf-repository-picker [aria-labelledby="wf-owners-label"] button');
+ await page.waitForFunction(()=>document.querySelectorAll('.wf-repository-picker [aria-labelledby="wf-owners-label"] button').length===1);
+ assert.match(await owners.first().textContent(),/acme/);
+ await selectRepository(page,'acme/repo');
+ assert.deepEqual(await page.locator('.wf-repository-picker [aria-labelledby="wf-repositories-label"] button').allTextContents(),['acme/repo']);
+ await page.locator('#settings-open').click();
+ await page.getByRole('tab',{name:'Repositories',exact:true}).click();
+ await page.locator('#review-settings-owners [data-repo-owner="acme"]').click();
+ await page.locator('#review-settings-close').click();
+ await page.locator('#settings-gate').waitFor({state:'hidden'});
+ await page.waitForFunction(()=>document.querySelectorAll('.wf-repository-picker [aria-labelledby="wf-owners-label"] button').length===0);
+ assert.equal(await page.locator('#builder-repo-select option[value*="acme/"]').count(),0);
+ assert.equal(await page.locator('#library-repo-select option[value*="acme/"]').count(),0);
+ await page.waitForFunction(()=>document.querySelectorAll('#github-issues-repo option[value="acme/repo"]').length===0);
+ assert.equal(await page.locator('#chat-repo-grid .chat-repo-card').count(),0);
+ await page.locator('#settings-open').click();
+ await page.getByRole('tab',{name:'Repositories',exact:true}).click();
+ await page.locator('#review-settings-owners [data-repo-owner="person"]').click();
+ await page.locator('#review-settings-close').click();
+ await page.locator('#settings-gate').waitFor({state:'hidden'});
+ await page.waitForFunction(()=>document.querySelector('.wf-repository-picker [aria-labelledby="wf-owners-label"] button')?.textContent.includes('person'));
+ await selectRepository(page,'person/project');
+ assert.deepEqual(await page.locator('.wf-repository-picker [aria-labelledby="wf-repositories-label"] button').allTextContents(),['person/project']);
+ assert.equal(await page.locator('#builder-repo-select option[value*="person/project"]').count(),1);
+ await page.waitForFunction(()=>document.querySelectorAll('#github-issues-repo option[value="person/project"]').length===1);
 });

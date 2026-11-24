@@ -854,10 +854,12 @@
       const linkMode = String(values.github_issue_link_mode ?? values.githubIssueLinkMode ?? "reference").trim().toLowerCase();
       githubIssueLinkMode = linkMode === "close" ? "close" : "reference";
       if (!enabled) {
+        browser.hidden = true;
         disabled.hidden = false;
         setStatus("");
         return;
       }
+      disabled.hidden = true;
       browser.hidden = false;
       stage = "repositories";
       const response = await requestJSON("/api/github/repos", { cache: "no-store" });

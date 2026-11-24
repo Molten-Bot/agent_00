@@ -378,7 +378,8 @@ function Editor() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   const visible = (doc?.workflows || []).filter(
-    (w) => !repo || w.repository.toLowerCase() === repo.toLowerCase(),
+    (w) => repos.some(r => r.full_name.toLowerCase() === w.repository.toLowerCase())
+      && (!repo || w.repository.toLowerCase() === repo.toLowerCase()),
   );
   const updateTask = (field, value) =>
     edit({ task: { ...current.task, [field]: value } });
@@ -511,12 +512,6 @@ function Editor() {
               <span><strong>{template.name}</strong><small>{template.description}</small></span>
             </button>
           ))}
-          {doc?.migration && (
-            <details className="wf-migration">
-              <summary>Migration notes</summary>
-              <p>{doc.migration}</p>
-            </details>
-          )}
         </aside>
         <div className="wf-canvas">
           <div className="wf-canvas-caption">
