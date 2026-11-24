@@ -434,6 +434,7 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 		{"queued and linked", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
 		{"dispatch intent without a claim link", "running", "", "IAM approval and Secrets Manager provisioning remain outstanding.", true},
 		{"joined provisioning and flag status", "queued", "50", "IAM approval and Secrets Manager provisioning remain outstanding | API and MCP flags default to off.", true},
+		{"external provisioning with public probe evidence", "queued", "50", "Production ECS and Vault access require external provisioning. Public MCP health returned HTTP 200, and unauthenticated initialization returned HTTP 401. Production worker connectivity remains unverified.", true},
 		{"provisioning with unavailable integration validation", "queued", "50", "Scoped IAM, shared reference key, and deployment still require external provisioning. API flags default off. Docker-backed integration tests could not run because no container runtime was available.", true},
 		{"uncorroborated legacy rollout prerequisites", "queued", "50", "Infrastructure changes, shared Secrets Manager key, and live verification remain pending. API and MCP evidence switches default to off.", false},
 		{"legacy rollout with only secret confirmed", "queued", "50", "Infrastructure changes, shared Secrets Manager key, and live verification remain pending. API and MCP evidence switches default to off. The shared Secrets Manager key requires external provisioning.", false},

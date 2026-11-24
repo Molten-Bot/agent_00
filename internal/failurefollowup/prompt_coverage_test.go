@@ -3,6 +3,7 @@ package failurefollowup
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -167,6 +168,8 @@ func TestNonRemediableFailureReasonRequiresExternalRolloutEvidence(t *testing.T)
 		{"qualified cluster ambiguous status", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: A production Kubernetes cluster remains pending.", false},
 		{"qualified cluster with failed validation", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: A production Kubernetes cluster requires external provisioning. Deployment tests failed.", false},
 		{"explicit provisioning of other resources", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Production DNS records, TLS certificates, and database credentials require external provisioning.", true},
+		{"explicit provisioning of cloud services and access", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Production ECS, CloudWatch, and authorized Vault access require external provisioning.", true},
+		{"cloud access status without external provisioning", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Production ECS, CloudWatch, and authorized Vault access remain pending.", false},
 		{"ambiguous provisioning of other resources", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Production DNS records and TLS certificates remain pending.", false},
 		{"explicit provisioning alongside repository edits", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: VPC endpoints and migration fixes require external provisioning.", false},
 		{"explicit provisioning with failed validation", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Production DNS records require external provisioning. Deployment tests failed.", false},
@@ -324,5 +327,35 @@ func TestExternalRolloutRejectsMixedProbeResults(t *testing.T) {
 			"Scoped IAM and shared reference key still require external provisioning.\n"+result) {
 			t.Errorf("mixed result suppressed repair: %s", result)
 		}
+	}
+}
+
+func TestExternalRolloutWithPublicProbeEvidence(t *testing.T) {
+	t.Parallel()
+	const summary = "Failure: Production rollout remains pending."
+	const prerequisites = "Production ECS, CloudWatch, and authorized Vault access require external provisioning."
+	const probes = "Public MCP health returned HTTP/1.1 200 over TLS, and unauthenticated initialization returned HTTP/1.1 401."
+	const pending = "Production worker connectivity, root cause, and authenticated data retrieval remain unverified."
+	for _, tc := range []struct {
+		name, details string
+		blocked       bool
+	}{
+		{"flat report", prerequisites + " " + probes + " " + pending, true},
+		{"joined report", prerequisites + " | " + probes + " | " + pending, true},
+		{"CRLF report", prerequisites + "\r\n" + probes + "\r\n" + pending, true},
+		{"separate probe sentences", prerequisites + "\nPublic health check returned HTTP 200. Unauthenticated MCP initialization returned HTTP 401.\n" + pending, true},
+		{"authenticated initialization", prerequisites + " " + strings.Replace(probes, "unauthenticated", "authenticated", 1), false},
+		{"public health fails", prerequisites + " " + strings.Replace(probes, "200", "503", 1), false},
+		{"unauthenticated initialization fails unexpectedly", prerequisites + " " + strings.Replace(probes, "401", "500", 1), false},
+		{"additional local failure", prerequisites + " " + probes + " " + pending + " Local integration tests failed.", false},
+		{"unverified code changes", prerequisites + " " + probes + " Production adapter fixes remain unverified.", false},
+		{"unverified tests", prerequisites + " " + probes + " Production adapter test verification remains unverified.", false},
+		{"no external prerequisite", probes + " " + pending, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsExternalRolloutFailure(summary, tc.details); got != tc.blocked {
+				t.Fatalf("IsExternalRolloutFailure() = %t, want %t", got, tc.blocked)
+			}
+		})
 	}
 }

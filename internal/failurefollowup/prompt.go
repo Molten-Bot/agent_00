@@ -119,20 +119,25 @@ var secretProvisioning = regexp.MustCompile(`^` + secretPrerequisite + ` (?:(?:k
 var iamConfiguration = regexp.MustCompile(`^` + iamPrerequisite + `(?: (?:configuration|permissions?|polic(?:y|ies)|roles?|setup))?$`)
 var secretConfiguration = regexp.MustCompile(`^(?:` + secretPrerequisite + ` (?:configuration|keys?|secrets?|setup)|(?:production )?shared reference keys?)$`)
 var infrastructureResource = regexp.MustCompile(`^(?:production )?(?:infrastructure changes|(?:cloud |service )?accounts?|cloud resources?|(?:kubernetes |eks |ecs |gke |aks )?clusters?|credentials?|(?:tls |ssl )?certificates?|(?:database|network) (?:access|credentials)|databases?|dns(?: (?:delegation|records?|zones?))?|firewall rules?|kms keys?|(?:private )?networks?|subnets?|vpcs?|vpc endpoints?)$`)
+var managedServicePrerequisite = regexp.MustCompile(`^(?:production )?(?:ecs|cloudwatch|(?:authorized )?vault access)$`)
 var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* (?:flags?|evidence switches?) defaults?(?: to)? (?:off|disabled))$`)
 var unavailableContainerValidation = regexp.MustCompile(`^docker-backed (?:[a-z0-9_-]+ )*integration(?: tests?)? could not run because no container runtime was available$`)
+var unverifiedProductionChecks = regexp.MustCompile(`^production (?:[a-z0-9-]+ ){0,3}(?:connectivity|reachability)(?:, root cause)?(?:,? and authenticated (?:[a-z0-9-]+ ){0,2}(?:reads?|retrieval))? (?:remains?|is|are) unverified$`)
 var rolloutProgress = regexp.MustCompile(`^(?:added|implemented|updated|wired) \S`)
 var rolloutProgressFollowOn = regexp.MustCompile(`^(?:added|implemented|updated|wired|tests cover) \S`)
-var rolloutSentenceBoundary = regexp.MustCompile(`[.!?][ \t]+`)
+var rolloutSentenceBoundary = regexp.MustCompile(`[.!?][ \t]+|[.!?]?\r`)
 var rolloutValidationPassed = regexp.MustCompile(`^validation passed for [^;\s][^;]*$`)
 var rolloutSectionCheckPassed = regexp.MustCompile(`^[^;\s][^;]*[ :]passed[.!]?$`)
 var rolloutSectionCheckBlocker = regexp.MustCompile(`^no\b|\b(?:0|zero) passed\b|\b(?:never|crash(?:ed|es|ing)?|couldn't|didn't)\b`)
 
 const timeoutOutcome = `timed out|deadline exceeded`
+const rolloutHTTPStatus = `http(?:/\d(?:\.\d)?)? `
+const unauthenticatedRolloutProbe = `unauthenticated (?:mcp )?initialization returned ` + rolloutHTTPStatus + `401`
 
 var rolloutProgressBlocker = regexp.MustCompile(`\b(?:but|except|however|fail(?:ed|s|ure|ing)?|panics?|regressions?|blocked|broken|cannot|could not|unable|incomplete|pending|unavailable|missing|not|` + timeoutOutcome + `)\b`)
-var httpFailureStatus = regexp.MustCompile(`\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b`)
-var expectedUnauthorizedResult = regexp.MustCompile(`\b(?:(?:returned|received|got) |passed (?:with |\())expected http(?:/\d(?:\.\d)?)? 401\b|\bhttp(?:/\d(?:\.\d)?)? 401 (?:as expected\b|\(expected\))`)
+var httpFailureStatus = regexp.MustCompile(`\b` + rolloutHTTPStatus + `(?:[45]\d\d|000)\b`)
+var publicRolloutProbe = regexp.MustCompile(`^(?:public (?:mcp )?health(?: check)? returned ` + rolloutHTTPStatus + `200(?: over tls)?(?:,? and ` + unauthenticatedRolloutProbe + `)?|` + unauthenticatedRolloutProbe + `)$`)
+var expectedUnauthorizedResult = regexp.MustCompile(`\b(?:(?:returned|received|got) |passed (?:with |\())expected ` + rolloutHTTPStatus + `401\b|\b` + rolloutHTTPStatus + `401 (?:as expected\b|\(expected\))`)
 var validationTimeout = regexp.MustCompile(`\b(?:timeout|` + timeoutOutcome + `)\b`)
 var rolloutFailureOutcome = regexp.MustCompile(
 	`\b(?:(?:produced|returned) no response|exit(?:ed)?(?: with)? (?:status|code) [1-9][0-9]*|crash(?:ed|es|ing)? (?:on|during|at) startup|(?:probe|check|command|test) returned [1-9][0-9]*)\b|\bcurl: \([1-9][0-9]*\)|\b(?:connection refused|could not connect|failed to connect)\b`,
@@ -585,8 +590,15 @@ func IsExternalRolloutFailure(summary, details string) bool {
 		for _, statement := range statements {
 			statement = strings.TrimSpace(statement)
 			items := externalRolloutPrerequisites(statement)
-			if len(items) == 0 && statement != "" && !disabledRolloutStatus.MatchString(statement) && !unavailableContainerValidation.MatchString(statement) {
-				return false
+			if len(items) == 0 {
+				switch {
+				case statement == "", disabledRolloutStatus.MatchString(statement), unavailableContainerValidation.MatchString(statement),
+					publicRolloutProbe.MatchString(statement),
+					unverifiedProductionChecks.MatchString(statement) && !rolloutProgressBlocker.MatchString(statement):
+					continue
+				default:
+					return false
+				}
 			}
 			for _, item := range items {
 				infrastructureConfirmed = infrastructureConfirmed || strings.TrimPrefix(item, "production ") == "infrastructure changes"
@@ -647,7 +659,8 @@ func externalRolloutPrerequisites(statement string) []string {
 		switch {
 		case iamProvisioning.MatchString(item), secretProvisioning.MatchString(item):
 			prerequisites = append(prerequisites, item)
-		case explicitExternal && (iamConfiguration.MatchString(item) || secretConfiguration.MatchString(item) || infrastructureResource.MatchString(item)):
+		case explicitExternal && (iamConfiguration.MatchString(item) || secretConfiguration.MatchString(item) ||
+			infrastructureResource.MatchString(item) || managedServicePrerequisite.MatchString(item)):
 			prerequisites = append(prerequisites, item)
 		case item == "deployment", item == "deployed source verification", item == "live source verification", item == "live verification":
 		default:
@@ -707,9 +720,7 @@ func isRolloutProgressLine(line string) bool {
 }
 
 func rolloutStatements(line string) []string {
-	return strings.FieldsFunc(line, func(r rune) bool {
-		return r == '.' || r == '!' || r == '?' || r == '\r'
-	})
+	return rolloutSentenceBoundary.Split(strings.TrimRight(line, ".!? \t\r"), -1)
 }
 
 func isOpenDependencyFailure(summary, detail string) bool {
