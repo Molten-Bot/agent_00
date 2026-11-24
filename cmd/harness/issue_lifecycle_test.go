@@ -501,18 +501,19 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 		" | " + progress + " | Updated fixtures. | Validation passed for unit tests. | [error details truncated]"
 	for _, tc := range []struct {
 		name, state, file, stream, lastLine string
-		blocked                             bool
+		blocked, sourceAlreadyBlocked       bool
 	}{
-		{"linked repair with full report", "queued", logFileName, "stdout", "API flags default off.", true},
-		{"dispatch intent with legacy log", "running", legacyTaskLogFileName, "stdout", "API flags default off.", true},
-		{"deployment defect beyond truncation", "queued", logFileName, "stdout", "Smoke check returned HTTP 500.", false},
-		{"stored blocker with deployment defect beyond truncation", "blocked", logFileName, "stdout", "Smoke check returned HTTP 500.", false},
-		{"stored blocker with missing stdout", "blocked", "", "", "", true},
-		{"readiness timeout under validation beyond truncation", "queued", logFileName, "stdout", "## Validation\n- Readiness check timed out.", false},
-		{"passing validation beyond truncation", "queued", logFileName, "stdout", "## Validation\n- Unit tests passed.", true},
-		{"stderr echo", "queued", logFileName, "stderr", "API flags default off.", false},
-		{"unrelated report", "queued", logFileName, "stdout", "API flags default off.", false},
-		{"missing log", "queued", "", "", "", false},
+		{"linked repair with full report", "queued", logFileName, "stdout", "API flags default off.", true, false},
+		{"dispatch intent with legacy log", "running", legacyTaskLogFileName, "stdout", "API flags default off.", true, false},
+		{"deployment defect beyond truncation", "queued", logFileName, "stdout", "Smoke check returned HTTP 500.", false, false},
+		{"stored blocker with deployment defect beyond truncation", "blocked", logFileName, "stdout", "Smoke check returned HTTP 500.", false, true},
+		{"stored blocker with missing stdout", "blocked", "", "", "", true, true},
+		{"stored repair blocker with source still eligible for retry", "blocked", logFileName, "stdout", "API flags default off.", true, false},
+		{"readiness timeout under validation beyond truncation", "queued", logFileName, "stdout", "## Validation\n- Readiness check timed out.", false, false},
+		{"passing validation beyond truncation", "queued", logFileName, "stdout", "## Validation\n- Unit tests passed.", true, false},
+		{"stderr echo", "queued", logFileName, "stderr", "API flags default off.", false, false},
+		{"unrelated report", "queued", logFileName, "stdout", "API flags default off.", false, false},
+		{"missing log", "queued", "", "", "", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			claims, issue := lifecycleRecord(t)
@@ -531,7 +532,7 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 			issue.Incident = "missing_pr"
 			issue.StoppedAt = time.Now().Add(-time.Minute)
 			issue.NextAttemptAt = time.Now().Add(time.Minute)
-			if tc.state == "blocked" {
+			if tc.sourceAlreadyBlocked {
 				issue.Incident = localruntime.IssueIncidentExternalRollout
 				issue.NextAttemptAt = time.Time{}
 			}
@@ -587,23 +588,28 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 				if source.Incident != issue.Incident || !source.NextAttemptAt.Equal(issue.NextAttemptAt) {
 					t.Fatalf("changed source claim while locked: incident=%q next attempt=%v", source.Incident, source.NextAttemptAt)
 				}
-				// A concurrent subprocess can retain the descriptor until exec.
-				// Reconciliation defers a busy claim to the next pass.
-				waitForCondition(t, 5*time.Second, func() bool {
-					q.reconcile(t.Context(), enqueue)
-					if calls != 0 {
-						t.Fatal("dispatched repair while recovering an external rollout blocker")
-					}
-					repairs, err := q.store.List()
-					if err != nil || len(repairs) != 1 {
-						t.Fatalf("expected one retained repair, got %d, error=%v", len(repairs), err)
-					}
-					return repairs[0].State == "blocked"
-				})
 			}
-			for range 2 {
+			// A concurrent subprocess can retain a descriptor until exec.
+			// Reconciliation retries busy locks on the next pass.
+			waitForCondition(t, 5*time.Second, func() bool {
 				q.reconcile(t.Context(), enqueue)
-			}
+				if !tc.blocked {
+					return calls > 0
+				}
+				if calls != 0 {
+					t.Fatal("dispatched repair while recovering an external rollout blocker")
+				}
+				repairs, err := q.store.List()
+				if err != nil || len(repairs) != 1 {
+					t.Fatalf("expected one retained repair, got %d, error=%v", len(repairs), err)
+				}
+				source, err := claims.Load(issue.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return repairs[0].State == "blocked" && source.Incident == localruntime.IssueIncidentExternalRollout
+			})
+			q.reconcile(t.Context(), enqueue)
 			repairs, err := q.store.List()
 			if err != nil || len(repairs) != 1 {
 				t.Fatalf("expected one retained repair, got %d, error=%v", len(repairs), err)
