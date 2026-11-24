@@ -3159,6 +3159,10 @@ func compactStreamTaskLogs(logs []TaskLog) []TaskLog {
 		if !ok {
 			continue
 		}
+		if key == "" {
+			compacted = append(compacted, log)
+			continue
+		}
 		if _, seen := seenSignals[key]; seen {
 			continue
 		}
@@ -3178,13 +3182,43 @@ func taskProgressSignalLogKey(text string) (string, bool) {
 	if stage == "" {
 		return "", false
 	}
-	return strings.Join([]string{
+	// Repair attempts can repeat across review passes. Keep their order and context.
+	if isTaskAgentRepairProgressStart(fields) {
+		return "", true
+	}
+	key := []string{
 		stage,
+		fields["repo_dir"],
 		strings.TrimSpace(fields["action"]),
 		strings.TrimSpace(fields["strategy"]),
 		strings.TrimSpace(fields["remote"]),
 		strings.TrimSpace(fields["reason"]),
-	}, "\x00"), true
+	}
+	if isTaskReviewProgressStart(fields) {
+		key = append(key, fields["pass"])
+	}
+	return strings.Join(key, "\x00"), true
+}
+
+func isTaskReviewProgressStart(fields map[string]string) bool {
+	switch fields["stage"] {
+	case "review", "review_fix", "review_checks":
+		pass, ok := parseIntField(fields["pass"])
+		return fields["status"] == "start" && ok && pass > 0
+	default:
+		return false
+	}
+}
+
+func isTaskAgentRepairProgressStart(fields map[string]string) bool {
+	switch fields["stage"] {
+	case "agent", "claude", "codex":
+		switch fields["mode"] {
+		case "remediation", "base_sync_conflict", "remote_branch_sync_conflict":
+			return fields["status"] == "start" && fields["repo_dir"] != ""
+		}
+	}
+	return false
 }
 
 func withCacheControl(next http.Handler, cacheControl string) http.Handler {

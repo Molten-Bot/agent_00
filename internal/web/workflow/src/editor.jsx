@@ -615,20 +615,26 @@ function Editor() {
             onChange={changeRepository}
           />
           <div className="wf-step-list">
-            {visible.map((w) => (
+            {visible.map((w) => {
+              const status = w.enabled ? "Running" : "Paused";
+              const StatusIcon = w.enabled ? Play : Pause;
+              return (
               <button
                 key={w.id}
                 className={`wf-step ${current?.id === w.id ? "wf-active" : ""}`}
+                aria-label={`${w.name}, ${w.repository}, ${status}`}
                 onClick={() => choose(w.id)}
               >
                 <span>
                   <strong>{w.name}</strong>
                   <small>
-                    {w.repository} · {w.enabled ? "Enabled" : "Draft"}
+                    {w.repository} · {status}
                   </small>
                 </span>
+                <StatusIcon size={14} aria-hidden="true" />
               </button>
-            ))}
+              );
+            })}
           </div>
           <div className="wf-templates-heading">
             <span className="wf-section-label">WORKFLOW TEMPLATES</span>
