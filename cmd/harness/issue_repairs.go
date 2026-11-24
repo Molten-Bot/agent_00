@@ -321,6 +321,18 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 		if reason := failurefollowup.NonRemediableFailureReason(errors.New(sourceFailure)); isIssueRepairDependencyBlock(reason) {
 			return reason, nil
 		}
+		humanAction, humanMatched := q.humanActionBlockedFromLogs(issue.RequestID, sourceFailure)
+		if !humanMatched && failure != failurefollowup.RedactFailureDetail(sourceFailure) {
+			humanAction, humanMatched = q.humanActionBlockedFromLogs(issue.RequestID, failure)
+		}
+		if humanAction {
+			if issue.Incident != localruntime.IssueIncidentHumanAction {
+				if err := q.persistRecoveredHumanActionBlock(issue); err != nil {
+					return "", err
+				}
+			}
+			return failurefollowup.HumanActionRequiredReason, nil
+		}
 		blocked, matched := q.rolloutBlockedFromLogs(issue.RequestID, sourceFailure)
 		if !matched && failure != failurefollowup.RedactFailureDetail(sourceFailure) {
 			blocked, matched = q.rolloutBlockedFromLogs(issue.RequestID, failure)
@@ -369,6 +381,34 @@ func issueRepairSourceFulfilled(source localruntime.IssueClaimRecord, issues []l
 func (q *issueRepairQueue) rolloutBlockedFromLogs(requestID, failure string) (blocked, matched bool) {
 	return app.CheckExternalRolloutFailureFromStdout(failure, func(stage string) string {
 		return issueRepairAgentStdout(q.logRoot, requestID, stage)
+	})
+}
+
+func (q *issueRepairQueue) humanActionBlockedFromLogs(requestID, failure string) (blocked, matched bool) {
+	return app.CheckHumanActionFailureFromStdout(failure, func(stage string) string {
+		return issueRepairAgentStdout(q.logRoot, requestID, stage)
+	})
+}
+
+func (q *issueRepairQueue) persistRecoveredHumanActionBlock(issue localruntime.IssueClaimRecord) error {
+	lock, err := q.claims.TryLock(localruntime.IssueExecutionKey(issue.Run.GitHubIssue))
+	if err != nil {
+		return err
+	}
+	if lock == nil {
+		return errors.New("source issue claim is locked")
+	}
+	defer lock.Close()
+	return q.claims.Update(issue.ID, func(current *localruntime.IssueClaimRecord) error {
+		if current.RequestID != issue.RequestID || current.FailureDetail() != issue.FailureDetail() || current.Incident != issue.Incident {
+			return errors.New("source issue claim changed during human-action recovery")
+		}
+		if current.Outcome == "error" && current.State != "fulfilled" {
+			current.Incident = localruntime.IssueIncidentHumanAction
+			current.RunError = current.FailureDetail()
+			current.NextAttemptAt = time.Time{}
+		}
+		return nil
 	})
 }
 

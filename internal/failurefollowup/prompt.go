@@ -106,6 +106,7 @@ const OpenDependencyReason = "required dependency is still open"
 const HumanActionRequiredReason = "required human action is pending"
 
 var agentFailureReportPrefix = regexp.MustCompile(`^(?:(?:codex: )?codex|(?:claude: )?claude) reported failure:`)
+var agentSubprocessFailurePrefix = regexp.MustCompile(`^(?:codex|claude): (?:run|command)\b`)
 var blockedReviewReportPrefix = regexp.MustCompile(`^(?:review: )?post-task review pass [0-9]+ was blocked:`)
 var pendingHandoffSummary = regexp.MustCompile(`^failure: (?:[^.!?"\x60]+ )?(?:call|meeting) and email follow-up remain pending\.?$`)
 var humanOutreachPrerequisite = regexp.MustCompile(`^(?:[^.!?"\x60|]+ )?(?:call|meeting) (?:needs|requires) (?:[^.!?"\x60|]+ and )?human outreach(?:[.\n]| \| |$)`)
@@ -335,7 +336,7 @@ func RedactFailureDetail(detail string) string {
 // run's logs. Identifier patterns cannot reliably redact names or draft text.
 func FailureDetailForPrompt(detail string) string {
 	text := strings.ToLower(strings.TrimSpace(detail))
-	if agentFailureReportPrefix.MatchString(text) || blockedReviewReportPrefix.MatchString(text) {
+	if agentFailureReportPrefix.MatchString(text) || agentSubprocessFailurePrefix.MatchString(text) || blockedReviewReportPrefix.MatchString(text) {
 		return "[agent failure report withheld; see source run logs]"
 	}
 	return RedactFailureDetail(detail)
@@ -592,8 +593,11 @@ func IsHumanActionFailure(summary, details string) bool {
 	summary = strings.ToLower(strings.TrimSpace(summary))
 	details = strings.ToLower(strings.TrimSpace(details))
 	if details == "" || HasTruncatedErrorDetails(details) || handoffValidationFailure.MatchString(details) ||
-		HasValidationFailureEvidence(strings.ReplaceAll(details, " | ", "\n")) ||
+		HasValidationFailureEvidence(strings.ReplaceAll(details, " | ", "\n")) || HasValidationTimeout(details) ||
 		HasRolloutFailureOutcome(details) || HasHTTPFailureStatus(details) {
+		return false
+	}
+	if strings.Trim(details, " .\t\r\n") == "unknown error" {
 		return false
 	}
 	if strings.TrimSuffix(summary, ".") == "failure: human action remains pending" {

@@ -233,8 +233,12 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		previousIncident := record.Incident
 		truncated := failurefollowup.HasTruncatedErrorDetails(failure)
 		var blockedFromLogs, matchedLogs bool
+		var humanActionFromLogs bool
 		if truncated && s.IssueRolloutBlockedFromLogs != nil {
 			blockedFromLogs, matchedLogs = s.IssueRolloutBlockedFromLogs(record.RequestID, failure)
+		}
+		if truncated && s.IssueHumanActionBlockedFromLogs != nil {
+			humanActionFromLogs, _ = s.IssueHumanActionBlockedFromLogs(record.RequestID, failure)
 		}
 		// Legacy records used Error for both terminal reports and mutable
 		// recovery status. Only the terminal report can disprove a blocker.
@@ -248,7 +252,7 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			record.Incident = localruntime.IssueIncidentUnmergedDependency
 		case reason == failurefollowup.OpenDependencyReason:
 			record.Incident = localruntime.IssueIncidentOpenDependency
-		case reason == failurefollowup.HumanActionRequiredReason:
+		case reason == failurefollowup.HumanActionRequiredReason || humanActionFromLogs:
 			record.Incident = localruntime.IssueIncidentHumanAction
 		case reason == failurefollowup.ExternalRolloutPrerequisitesReason, blockedFromLogs:
 			record.Incident = localruntime.IssueIncidentExternalRollout

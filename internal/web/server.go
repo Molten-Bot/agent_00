@@ -122,6 +122,8 @@ type Server struct {
 	IssueRepair   func(context.Context, localruntime.IssueClaimRecord) (string, error)
 	// IssueRolloutBlockedFromLogs rechecks truncated failures before automatic retry.
 	IssueRolloutBlockedFromLogs func(requestID, failure string) (blocked, matched bool)
+	// IssueHumanActionBlockedFromLogs rechecks truncated human handoffs before retry.
+	IssueHumanActionBlockedFromLogs func(requestID, failure string) (blocked, matched bool)
 	IssueRepairs                *localruntime.IssueRepairStore
 	IssueReady                  func(context.Context) error
 	issueAutomation             *issueAutomationState

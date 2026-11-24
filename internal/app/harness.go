@@ -7601,6 +7601,38 @@ func CheckExternalRolloutFailureFromStdout(failure string, readStdout func(stage
 	return failurefollowup.IsExternalRolloutFailure(summary, details), true
 }
 
+// CheckHumanActionFailureFromStdout reclassifies a truncated handoff report
+// only when its preserved stdout matches the stored summary and contains the
+// complete human-action-only evidence.
+func CheckHumanActionFailureFromStdout(failure string, readStdout func(stage string) string) (blocked, matched bool) {
+	failure, _, _ = strings.Cut(failure, "\npersist task logs: ")
+	if !strings.HasSuffix(failure, truncatedErrorDetails) {
+		return false, false
+	}
+	stage, report, _ := strings.Cut(failure, ": ")
+	if stage != agentruntime.HarnessCodex && stage != agentruntime.HarnessClaude {
+		return false, false
+	}
+	if !strings.HasPrefix(report, stage+" reported failure: ") {
+		return false, false
+	}
+	stdout := readStdout(stage)
+	failed, summary := codexReportedFailureInOutput(stdout, true)
+	if !failed {
+		return false, false
+	}
+	detail := codexExtractErrorDetail(stdout)
+	details, ok := strings.CutPrefix(detail, "Error details:")
+	if !ok {
+		return false, false
+	}
+	legacy := stage + ": " + stage + " reported failure: " + summary + " " + codexDisplayErrorDetail(detail)
+	if legacy != failure && failurefollowup.RedactFailureDetail(legacy) != failure {
+		return false, false
+	}
+	return failurefollowup.IsHumanActionFailure(summary, details), true
+}
+
 func codexDisplayErrorDetail(detail string) string {
 	const maxDetailsLines = 3
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -49,6 +50,49 @@ func TestIssueRepairCaptureUsesWorkerFailureAfterUnlockError(t *testing.T) {
 	want := fmt.Sprintf("- exit_code=%d\n- error=%q", issue.ExitCode, "worker failed in [redacted-path]")
 	if !strings.Contains(prompt, want) || strings.Contains(prompt, "label removal") || strings.Contains(prompt, "/private/workspace") {
 		t.Fatal("repair prompt did not pair the exit code with the redacted worker failure")
+	}
+}
+
+func TestIssueRepairOutboxRechecksTruncatedHumanHandoffFromLogs(t *testing.T) {
+	t.Parallel()
+	claims, issue := lifecycleRecord(t)
+	q := issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, claims: claims, logRoot: t.TempDir(), logf: t.Logf}
+	issue.Incident = "missing_pr"
+	issue.Outcome = "error"
+	issue.ExitCode = app.ExitCodex
+	issue.RunError = "codex: codex reported failure: Failure: Human action remains pending. Error details: An operator must confirm the shipment." + failurefollowup.TruncatedErrorDetails
+	if err := claims.Save(issue); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.capture(t.Context(), issue); err != nil {
+		t.Fatal(err)
+	}
+	dir, ok := failurefollowup.TaskLogDir(q.logRoot, issue.RequestID)
+	if !ok {
+		t.Fatal("invalid issue log directory")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stdout := "Failure: Human action remains pending.\nError details: An operator must confirm the shipment."
+	line := "task request_id=" + issue.RequestID + " cmd phase=codex name=codex stream=stdout b64=" + base64.StdEncoding.EncodeToString([]byte(stdout)) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, failurefollowup.LogFileName), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	q.reconcile(t.Context(), func(context.Context, config.Config, bool, string, bool) (string, error) {
+		t.Error("human handoff repair dispatched despite the preserved full report")
+		return "", errors.New("unexpected dispatch")
+	})
+	repairs, err := q.store.List()
+	if err != nil || len(repairs) != 1 {
+		t.Fatalf("repair records = %d, err = %v", len(repairs), err)
+	}
+	if repairs[0].State != "blocked" || repairs[0].Error != failurefollowup.HumanActionRequiredReason {
+		t.Fatalf("repair state = %q, error = %q", repairs[0].State, repairs[0].Error)
+	}
+	updated, err := claims.Load(issue.ID)
+	if err != nil || updated.Incident != localruntime.IssueIncidentHumanAction || updated.NextAttemptAt.IsZero() {
+		t.Fatalf("source incident = %q, next attempt = %v, err = %v", updated.Incident, updated.NextAttemptAt, err)
 	}
 }
 

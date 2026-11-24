@@ -933,6 +933,7 @@ func runServer(args []string) int {
 		uiServer.IssueRecovery = &cfg.IssueRecovery
 		uiServer.IssueRepair = repairQueue.capture
 		uiServer.IssueRolloutBlockedFromLogs = repairQueue.rolloutBlockedFromLogs
+		uiServer.IssueHumanActionBlockedFromLogs = repairQueue.humanActionBlockedFromLogs
 		uiServer.IssueRepairs = repairQueue.store
 		uiServer.IssueReady = func(checkCtx context.Context) error {
 			if err := signingSubmissionGate(checkCtx, cfg, runner); err != nil {

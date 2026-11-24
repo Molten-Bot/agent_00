@@ -1159,6 +1159,41 @@ func TestIssueRecoveryChecksPreservedRolloutBeforeOverdueRetry(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryChecksPreservedHumanHandoffBeforeOverdueRetry(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(t.Context())
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.Incident = "missing_pr"
+	record.RunError = "codex: codex reported failure: Failure: Human action remains pending. " +
+		"Error details: An operator must confirm the shipment." + failurefollowup.TruncatedErrorDetails
+	record.NextAttemptAt = time.Now().Add(-time.Minute)
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	s.IssueHumanActionBlockedFromLogs = func(requestID, failure string) (bool, bool) {
+		reads++
+		if requestID != record.RequestID || failure != record.RunError {
+			t.Fatalf("stdout lookup used request %q and failure %q", requestID, failure)
+		}
+		return true, true
+	}
+	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
+		t.Fatal("human handoff failure queued a harness repair")
+		return "", nil
+	}
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := latestRecoveryRecord(t, s)
+	if reads != 1 || len(f.submissions) != 1 || got.Incident != localruntime.IssueIncidentHumanAction ||
+		got.State != "blocked" || !got.NextAttemptAt.IsZero() || got.FailureDetail() != record.RunError {
+		t.Fatalf("overdue claim was not durably blocked: state=%q incident=%q reads=%d submissions=%d",
+			got.State, got.Incident, reads, len(f.submissions))
+	}
+}
+
 func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 	t.Parallel()
 	const prefix = "codex: codex reported failure: Failure: Production rollout remains pending. Error details: "
