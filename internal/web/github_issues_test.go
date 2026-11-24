@@ -514,7 +514,7 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	if filtersAt < 0 || repositoryAt < filtersAt {
 		t.Error("repository picker should remain in the issue filter row after removing the duplicate heading")
 	}
-	if !strings.Contains(page, `class="panel prompt-wrap brand-login-card-shell"`) || strings.Contains(page, `class="github-issues-page-shell"`) {
+	if !strings.Contains(page, `class="panel studio-panel prompt-wrap brand-login-card-shell"`) || strings.Contains(page, `class="github-issues-page-shell"`) {
 		t.Error("issues should render inside the shared Studio panel, not a separate page shell")
 	}
 	legacy := httptest.NewRecorder()

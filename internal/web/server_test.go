@@ -995,7 +995,7 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, `id="task-panel"`) {
 		t.Fatalf("expected index html to include task panel wrapper")
 	}
-	if !strings.Contains(markup, `class="panel prompt-wrap`) {
+	if !strings.Contains(markup, `class="panel studio-panel prompt-wrap`) {
 		t.Fatalf("expected index html to include prompt wrap panel")
 	}
 	if !strings.Contains(markup, `promptWrap.classList.toggle("prompt-collapsed", !visible);`) {
