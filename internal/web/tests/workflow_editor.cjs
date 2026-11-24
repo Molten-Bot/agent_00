@@ -35,7 +35,7 @@ test('multiple persistent workflows, disabled drafts, policy editing, activation
  await page.getByRole('button',{name:'Enable',exact:true}).click();await page.getByRole('button',{name:'Pause',exact:true}).waitFor();assert.equal(getDocument().workflows[0].enabled,true);await page.getByRole('button',{name:'Pause',exact:true}).click();
  await page.getByRole('button',{name:'Review PRs',exact:true}).click();await page.getByRole('button',{name:'Save draft',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.wf-save-state').textContent==='Saved draft');assert.equal(getDocument().workflows.length,2);
  await page.getByRole('button',{name:'Preview matches',exact:true}).click();await page.getByText('#12 Example issue',{exact:true}).waitFor();assert.equal(getDocument().workflows.every(w=>!w.enabled),true);
- await page.reload();await selectRepository(page, 'acme/repo');assert.equal(await page.locator('.wf-step').count(),2);await page.locator('.wf-step').first().click();await page.getByLabel('Review step',{exact:true}).check();await page.getByLabel('Maximum repair cycles').fill('3');await page.getByRole('button',{name:'Save draft',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.wf-save-state').textContent==='Saved draft');assert.equal(getDocument().workflows[0].reviewCycles,3);
+ await page.reload();await selectRepository(page, 'acme/repo');assert.equal(await page.locator('.wf-step').count(),2);await page.locator('.wf-step').first().click();await page.getByLabel('Review step',{exact:true}).check();await page.getByRole('slider',{name:'Review passes',exact:true}).fill('3');await page.getByRole('button',{name:'Save draft',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.wf-save-state').textContent==='Saved draft');assert.equal(getDocument().workflows[0].reviewCycles,4);
  await selectRepository(page, 'acme/other');assert.equal(await page.locator('.wf-step').count(),0);assert.equal(getDocument().workflows.length,2);
  const editor=await page.locator('.wf-editor').boundingBox(),dock=await page.locator('.page-bottom-dock').boundingBox();assert.ok(editor.y+editor.height<=dock.y);});
 test('mobile editor exposes repository, canvas and settings without horizontal overflow',async t=>{const {page}=await openEditor(t,{width:390,height:844});await selectRepository(page, 'acme/repo');await page.getByRole('button',{name:'Implement issues',exact:true}).click();await page.getByLabel('Label',{exact:true}).fill('ready');assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));});
@@ -111,7 +111,7 @@ test('in-app workflows keep defaults opt-in and compose review and merge steps',
  assert.equal(await page.locator('[data-id="trigger"] .lucide-square-pen').count(),1);
  await page.getByLabel('Review step',{exact:true}).check();
  assert.equal(await page.locator('.wf-node').count(),4);
- await page.getByLabel('Maximum repair cycles').fill('2');
+ await page.getByRole('slider',{name:'Review passes',exact:true}).fill('2');
  await page.getByLabel('Merge step',{exact:true}).check();
  assert.equal(await page.locator('.wf-node').count(),5);
  await page.getByRole('button',{name:'Save draft',exact:true}).click();
@@ -128,4 +128,58 @@ test('in-app workflows keep defaults opt-in and compose review and merge steps',
  await page.waitForFunction(()=>document.querySelector('.wf-save-state').textContent==='Saved draft');
  await page.getByRole('button',{name:'JSON submission',exact:true}).click();
  assert.equal(await page.locator('[data-id="trigger"] .lucide-file-json').count(),1);
+});
+
+test('review pass slider supports presets, keyboard, dragging and existing saved values', async t => {
+ const {page,getDocument}=await openEditor(t,{width:390,height:844});
+ await selectRepository(page,'acme/repo');await page.getByRole('button',{name:'Prompt submission',exact:true}).click();
+ await page.getByLabel('Review step',{exact:true}).check();
+ const slider=page.getByRole('slider',{name:'Review passes',exact:true});
+ assert.equal(await page.getByRole('spinbutton').count(),0);
+ for(const count of [0,1,2,4,8]) {
+  await page.getByRole('button',{name:`${count} ${count===1?'pass':'passes'}`,exact:true}).click();
+  assert.equal(await slider.inputValue(),String([0,1,2,4,8].indexOf(count)));
+ }
+ await slider.focus();await page.keyboard.press('Home');await page.keyboard.press('ArrowRight');
+ assert.equal(await slider.getAttribute('aria-valuetext'),'1 pass');
+ await slider.scrollIntoViewIfNeeded();const box=await slider.boundingBox();
+ await page.mouse.move(box.x+box.width/4,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width-8,box.y+box.height/2,{steps:8});await page.mouse.up();
+ assert.equal(await slider.getAttribute('aria-valuetext'),'8 passes');
+ const save=async()=>{await page.getByRole('button',{name:'Save draft',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.wf-save-state').textContent==='Saved draft')};
+ await save();assert.equal(getDocument().workflows[0].reviewCycles,8);
+ getDocument().workflows[0].reviewCycles=10;
+ await page.reload();await selectRepository(page,'acme/repo');await page.locator('.wf-step').first().click();await page.locator('[data-id="review"]').click();
+ await page.getByText('Saved value: 10 passes. Choose a preset to change it.',{exact:true}).waitFor();
+ await save();assert.equal(getDocument().workflows[0].reviewCycles,10);
+ await page.getByRole('button',{name:'4 passes',exact:true}).click();await save();assert.equal(getDocument().workflows[0].reviewCycles,4);
+ await page.screenshot({path:'/tmp/agent00-review-pass-slider.png',fullPage:true});
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+});
+
+test('automatic layout controls arrange, fit and persist workflow positions', async t => {
+ const {page,getDocument}=await openEditor(t);
+ const vertical=page.getByRole('button',{name:'Arrange workflow vertically',exact:true});
+ const horizontal=page.getByRole('button',{name:'Arrange workflow horizontally',exact:true});
+ assert.equal(await vertical.isDisabled(),true);assert.equal(await horizontal.isDisabled(),true);
+ await selectRepository(page,'acme/repo');await page.getByRole('button',{name:'Issue to merge',exact:true}).click();
+ const save=async()=>{await page.getByRole('button',{name:'Save draft',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.wf-save-state').textContent==='Saved draft')};
+ assert.equal(await horizontal.locator('svg').evaluate(svg=>getComputedStyle(svg).fill),'none');
+ await horizontal.click();await save();
+ const horizontalPositions=structuredClone(getDocument().workflows[0].positions);
+ const values=Object.values(horizontalPositions);
+ assert.equal(values.length,6);assert.equal(new Set(values.map(p=>p.y)).size,1);
+ for(let i=1;i<values.length;i++)assert.ok(values[i].x>values[i-1].x+230);
+ assert.equal(await page.locator('[data-id="task"] .react-flow__handle-left').count(),1);
+ assert.equal(await page.locator('[data-id="task"] .react-flow__handle-right').count(),1);
+ await page.reload();await selectRepository(page,'acme/repo');await page.locator('.wf-step').first().click();
+ assert.equal(await page.locator('[data-id="task"] .react-flow__handle-left').count(),1);
+ assert.deepEqual(getDocument().workflows[0].positions,horizontalPositions);
+ await vertical.click();await save();
+ const verticalPositions=Object.values(getDocument().workflows[0].positions);
+ assert.equal(new Set(verticalPositions.map(p=>p.x)).size,1);
+ for(let i=1;i<verticalPositions.length;i++)assert.ok(verticalPositions[i].y>verticalPositions[i-1].y+100);
+ assert.equal(await page.locator('[data-id="task"] .react-flow__handle-top').count(),1);
+ assert.equal(await page.locator('[data-id="task"] .react-flow__handle-bottom').count(),1);
+ assert.equal(getDocument().workflows[0].merge.enabled,true);
+ await page.screenshot({path:'/tmp/agent00-workflow-layout.png',fullPage:true});
 });

@@ -5,6 +5,8 @@ import {
   ReactFlowProvider,
   Background,
   Controls,
+  ControlButton,
+  useUpdateNodeInternals,
   MiniMap,
   Handle,
   Position,
@@ -12,6 +14,7 @@ import {
 } from "@xyflow/react";
 import {
   Zap,
+  Rows3, Columns3,
   CalendarClock, FileJson, SquarePen, MessageSquare, GitPullRequest, CircleDot, Wrench,
   Bot,
   GitBranch,
@@ -28,9 +31,10 @@ import {
 } from "lucide-react";
 import "@xyflow/react/style.css";
 import "./style.css";
+import { ReviewPasses } from "./review-passes.jsx";
 import { ScheduleInterval } from "./schedule-interval.jsx";
 import { RepositoryPicker } from "./repository-picker.jsx";
-import { events, newWorkflow, diagram, replaceDefinition, workflowTemplates } from "./model.js";
+import { events, newWorkflow, diagram, replaceDefinition, workflowTemplates, automaticLayout } from "./model.js";
 const icons = {
   calendar: CalendarClock, json: FileJson, prompt: SquarePen, chat: MessageSquare, pullRequest: GitPullRequest, issue: CircleDot, implement: Bot, repair: Wrench,
   repository: FolderGit2,
@@ -48,7 +52,9 @@ const colors = {
   review: "#66b5eb",
   merge: "#de8fbd",
 };
-function StepNode({ data, selected }) {
+function StepNode({ id, data, selected }) {
+  const updateNodeInternals = useUpdateNodeInternals();
+  useEffect(() => { updateNodeInternals(id); }, [id, data.sourcePosition, data.targetPosition, data.last, updateNodeInternals]);
   const Icon = icons[data.icon] || icons[data.kind];
   return (
     <div
@@ -56,7 +62,7 @@ function StepNode({ data, selected }) {
       style={{ "--step-color": colors[data.kind] }}
     >
       {data.kind !== "repository" && (
-        <Handle type="target" position={Position.Top} />
+        <Handle type="target" position={data.targetPosition || Position.Top} />
       )}
       <div className="wf-node-top">
         <span className="wf-icon">
@@ -70,7 +76,7 @@ function StepNode({ data, selected }) {
       <strong>{data.label}</strong>
       <p>{data.detail}</p>
       {!data.last && (
-        <Handle type="source" position={Position.Bottom} />
+        <Handle type="source" position={data.sourcePosition || Position.Bottom} />
       )}
     </div>
   );
@@ -254,6 +260,11 @@ function Editor() {
         ...(event.startsWith("app.") ? { libraryTaskName: undefined } : {}),
       },
     });
+  }
+  function arrange(direction) {
+    if (!current) return;
+    edit({ positions: automaticLayout(current, direction, flow.getNodes()) });
+    requestAnimationFrame(() => requestAnimationFrame(() => flow.fitView({ padding: 32, duration: 200 })));
   }
   function edit(update) {
     setCurrent((w) => ({ ...w, ...update }));
@@ -526,7 +537,14 @@ function Editor() {
             maxZoom={1.6}
           >
             <Background gap={22} />
-            <Controls showInteractive={false} />
+            <Controls showInteractive={false}>
+              <ControlButton aria-label="Arrange workflow vertically" title="Automatic vertical layout" disabled={!current} onClick={() => arrange("vertical")}>
+                <Rows3 />
+              </ControlButton>
+              <ControlButton aria-label="Arrange workflow horizontally" title="Automatic horizontal layout" disabled={!current} onClick={() => arrange("horizontal")}>
+                <Columns3 />
+              </ControlButton>
+            </Controls>
             <MiniMap
               style={{ width: 120, height: 80 }}
               nodeColor={(n) => colors[n.data.kind]}
@@ -945,22 +963,12 @@ function Editor() {
               {selection === "review" && (
                 <>
                   <h2>Bounded review cycles</h2>
-                  <Field label="Maximum repair cycles">
-                    <input
-                      type="number"
-                      min="0"
-                      max="10"
-                      value={current.reviewCycles}
-                      onChange={(e) =>
-                        edit({ reviewCycles: Number(e.target.value) })
-                      }
-                    />
-                  </Field>
+                  <ReviewPasses value={current.reviewCycles} onChange={(reviewCycles) => edit({ reviewCycles })} />
                   <p className="wf-muted">
-                    After implementation or repair, review and fix findings up
+                    {current.reviewCycles === 0 ? "Post-task reviews are off." : <>After implementation or repair, review and fix findings up
                     to this limit. A final review confirms the result.
                     Unresolved findings stop the run. Review-only tasks post one
-                    review.
+                    review.</>}
                   </p>
                 </>
               )}

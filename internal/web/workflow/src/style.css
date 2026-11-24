@@ -52,6 +52,7 @@
 .wf-branches { display: flex; justify-content: space-around; font-size: 9px; color: var(--muted); margin: 12px -16px -7px; padding-top: 6px; border-top: 1px solid var(--border); }
 .wf-editor .react-flow__controls { box-shadow: none; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; bottom: 12px; left: 12px; }
 .wf-editor .react-flow__controls button { border-radius: 0; width: 30px; height: 30px; min-height: 30px; padding: 8px; }
+.wf-editor .react-flow__controls button svg.lucide { fill: none; stroke: currentColor; width: 14px; height: 14px; max-width: none; max-height: none; }
 .wf-editor .react-flow__minimap { width: 120px; height: 80px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; bottom: 12px; right: 12px; }
 .wf-inspector { padding: 24px 18px; border-left: 1px solid var(--border); overflow: auto; }
 .wf-inspector-heading { display: flex; justify-content: space-between; align-items: center; min-height: 26px; }
@@ -117,3 +118,12 @@
 
 .wf-composition { padding-bottom: 14px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
 .wf-composition .wf-toggle { margin: 10px 0; }
+.wf-review-slider { margin: 20px 0; }
+.wf-review-slider > label { color: var(--text-soft); font-size: 11px; }
+.wf-review-value { display: flex; align-items: center; gap: 8px; margin: 12px 0 8px; font-size: 15px; color: var(--text); }
+.wf-review-value svg { color: var(--accent); }
+.wf-editor .wf-review-slider input[type="range"] { display: block; width: 100%; height: 32px; margin: 0; padding: 0; accent-color: var(--accent); cursor: ew-resize; }
+.wf-review-stops { display: flex; justify-content: space-between; gap: 2px; }
+.wf-editor .wf-review-stops button { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px; min-width: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--text-soft); }
+.wf-editor .wf-review-stops button[aria-pressed="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.wf-review-stops small { font-size: 9px; }
