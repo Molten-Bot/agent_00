@@ -47,9 +47,6 @@ func workflowOwnsLibrarySchedule(engine *workflow.Engine, schedule localruntime.
 	if err != nil {
 		return true
 	}
-	if doc.ConfigurationMigrated {
-		return true
-	}
 	for _, w := range doc.Workflows {
 		if w.ID == importedScheduleID(schedule) {
 			return !w.Enabled || !unchangedImportedSchedule(w, schedule)

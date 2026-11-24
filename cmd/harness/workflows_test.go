@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Molten-Bot/agent_00/internal/web"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,44 +54,6 @@ func TestWorkflowRepositoryAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func TestWorkflowMigrationPreservesOriginalAndIsIdempotent(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	path := filepath.Join(root, "config.json")
-	original := []byte(`{"github_issue_repositories":{"acme/repo":{"auto_start":true,"only_assigned":true,"trigger_labels":["ready"],"exclusion_label":"in-progress"}}}`)
-	if err := os.WriteFile(path, original, 0600); err != nil {
-		t.Fatal(err)
-	}
-	cfg := localruntime.InitConfig{RuntimeConfigPath: path}
-	cfg.ApplyDefaults()
-	store := &workflow.Store{Path: filepath.Join(root, "workflows.json")}
-	if err := migrateWorkflowSettings(cfg, store); err != nil {
-		t.Fatal(err)
-	}
-	d, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(d.Workflows) != 1 || d.Workflows[0].Enabled || d.Workflows[0].IncludeBacklog {
-		t.Fatal(d)
-	}
-	d.Workflows[0].Name = "Edited"
-	if _, err = store.Save(d); err != nil {
-		t.Fatal(err)
-	}
-	if err = migrateWorkflowSettings(cfg, store); err != nil {
-		t.Fatal(err)
-	}
-	d, _ = store.Load()
-	if d.Workflows[0].Name != "Edited" {
-		t.Fatal("migration overwrote user edits")
-	}
-	backup, _ := os.ReadFile(filepath.Join(root, "workflow-legacy-settings.json"))
-	if string(backup) != string(original) {
-		t.Fatal("legacy settings not preserved")
-	}
-}
-
 func TestWorkflowLibraryPromptResolvesPerOccurrenceAndSurvivesSubmission(t *testing.T) {
 	t.Parallel()
 	revision := 0
@@ -123,69 +87,54 @@ func TestWorkflowLibraryPromptResolvesPerOccurrenceAndSurvivesSubmission(t *test
 		t.Fatal(issue, err)
 	}
 }
-func TestLibraryScheduleMigrationPreservesTimingAndIsOneTime(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	path := filepath.Join(root, "config.json")
-	cfg := localruntime.InitConfig{Version: "v1", RuntimeConfigPath: path}
-	cfg.ApplyDefaults()
-	legacy := &localruntime.LibrarySchedules{Path: path, Init: cfg}
-	saved, err := legacy.Save(localruntime.LibraryScheduleInput{LibraryTaskName: "unit-test-coverage", Repo: "https://github.com/acme/repo.git", IntervalHours: 12, BaseBranch: "feature", TargetSubdir: "src", Reviewers: []string{"reviewer"}, PromptContext: "Tests for API", Draft: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	store := &workflow.Store{Path: filepath.Join(root, "workflows.json")}
-	if err = store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{}}); err != nil {
-		t.Fatal(err)
-	}
-	if err = migrateLibrarySchedules(cfg, store); err != nil {
-		t.Fatal(err)
-	}
-	doc, _ := store.Load()
-	if len(doc.Workflows) != 1 || !doc.LibrarySchedulesMigrated {
-		t.Fatal(doc)
-	}
-	w := doc.Workflows[0]
-	if w.Trigger.Event != "schedule" || w.Trigger.IntervalHours != 12 || !w.Trigger.StartAt.Equal(saved.NextRunAt) || w.Task.LibraryTaskName != saved.LibraryTaskName || w.Task.Instructions != saved.PromptContext || w.Task.BaseBranch != "feature" || w.Task.TargetSubdir != "src" || !w.Task.Draft || !w.Enabled {
-		t.Fatal(w)
-	}
-	doc.Workflows = nil
-	store.Save(doc)
-	if err = migrateLibrarySchedules(cfg, store); err != nil {
-		t.Fatal(err)
-	}
-	doc, _ = store.Load()
-	if len(doc.Workflows) != 0 {
-		t.Fatal("deleted migration reappeared")
-	}
-	old, err := legacy.List()
-	if err != nil || len(old) != 1 {
-		t.Fatal("original schedules were not retained", err)
-	}
-}
 
-func TestLibraryScheduleMigrationKeepsExplicitRootAndNoReviewers(t *testing.T) {
+func TestConfigureWorkflowsNeverImportsLegacyConfiguration(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
-	cfg := localruntime.InitConfig{Version: "v1", RuntimeConfigPath: filepath.Join(root, "config.json")}
-	cfg.ApplyDefaults()
-	legacy := &localruntime.LibrarySchedules{Path: cfg.RuntimeConfigPath, Init: cfg}
-	if _, err := legacy.Save(localruntime.LibraryScheduleInput{LibraryTaskName: "unit-test-coverage", Repo: "acme/repo", IntervalHours: 24}); err != nil {
-		t.Fatal(err)
-	}
-	store := &workflow.Store{Path: filepath.Join(root, "workflows.json")}
-	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrateLibrarySchedules(cfg, store); err != nil {
-		t.Fatal(err)
-	}
-	doc, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	task := doc.Workflows[0].Task
-	if task.TargetSubdir != "." || task.Reviewers == nil || len(*task.Reviewers) != 0 {
-		t.Fatal("migration changed legacy root/reviewer defaults", task)
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("existing=%t", existing), func(t *testing.T) {
+			root := t.TempDir()
+			cfg := localruntime.InitConfig{Version: "v1", RuntimeConfigPath: filepath.Join(root, "config.json")}
+			cfg.ApplyDefaults()
+			original := []byte(`{"github_issues_enabled":true,"github_issue_repositories":{"acme/repo":{"auto_start":true,"trigger_labels":["ready"]}},"review_watch":{"review_level":"high","auto_merge":true}}`)
+			if err := os.WriteFile(cfg.RuntimeConfigPath, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			legacy := &localruntime.LibrarySchedules{Path: cfg.RuntimeConfigPath, Init: cfg}
+			if _, err := legacy.Save(localruntime.LibraryScheduleInput{LibraryTaskName: "unit-test-coverage", Repo: "acme/repo", IntervalHours: 24}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(cfg.RuntimeConfigPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := &workflow.Store{Path: filepath.Join(root, "workflows.json")}
+			if existing {
+				w := workflow.Definition{ID: "mine", Name: "My workflow", Repository: "acme/repo", Trigger: workflow.Trigger{Event: "app.prompt"}, Filters: workflow.Filters{Mode: "all"}, Task: workflow.Task{Kind: "implement", IssueLinkMode: "reference"}, Merge: workflow.Merge{Method: "squash"}}
+				if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{w}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			server := web.NewServer("", web.NewBroker())
+			for range 2 {
+				if err := configureWorkflows(context.Background(), cfg, nil, &server, server.Broker, nil, func(string, ...any) {}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			doc, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if existing {
+				want = 1
+			}
+			if len(doc.Workflows) != want || (existing && doc.Workflows[0].ID != "mine") {
+				t.Fatal("startup created or replaced workflows", doc)
+			}
+			after, err := os.ReadFile(cfg.RuntimeConfigPath)
+			if err != nil || string(after) != string(before) {
+				t.Fatal("startup changed legacy settings", err)
+			}
+		})
 	}
 }

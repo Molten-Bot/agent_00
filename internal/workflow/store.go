@@ -37,12 +37,6 @@ func (s *Store) Save(d Document) (Document, error) {
 	if old.Revision != d.Revision {
 		return old, ErrConflict
 	}
-	// Migration receipts belong to the store, not editor imports or older clients.
-	d.ConfigurationMigrated = old.ConfigurationMigrated || d.ConfigurationMigrated
-	if old.ConfigurationMigrated {
-		d.MigratedRepositories = old.MigratedRepositories
-	}
-	d.LibrarySchedulesMigrated = old.LibrarySchedulesMigrated || d.LibrarySchedulesMigrated
 	if err = d.Validate(); err != nil {
 		return old, err
 	}

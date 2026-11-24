@@ -6,7 +6,7 @@ import "strings"
 // for this repository and event. A trailing .* matches a trigger family.
 // An unreadable definition store fails closed to avoid duplicate dispatch.
 func (e *Engine) Owns(repo, event string) bool {
-	if e == nil || e.Enabled == nil {
+	if e == nil || e.Enabled == nil || !e.Enabled() {
 		return false
 	}
 	if e.Allowed != nil && !e.Allowed(repo) {
@@ -18,17 +18,6 @@ func (e *Engine) Owns(repo, event string) bool {
 	doc, err := e.Store.Load()
 	if err != nil {
 		return true
-	}
-	// A paused or deleted migrated rule must not reactivate legacy automation.
-	if doc.ConfigurationMigrated && strings.HasPrefix(event, "issue.") {
-		for _, migrated := range doc.MigratedRepositories {
-			if CanonicalRepository(migrated) == CanonicalRepository(repo) {
-				return true
-			}
-		}
-	}
-	if !e.Enabled() {
-		return false
 	}
 	for _, w := range doc.Workflows {
 		if !w.Enabled || CanonicalRepository(w.Repository) != CanonicalRepository(repo) {
