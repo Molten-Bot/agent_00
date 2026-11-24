@@ -553,6 +553,17 @@ is retained as `workflows.json.v1.bak`. Unsupported future versions are rejected
 An empty `workflows` array is valid. Keep exported definitions in your repository
 if you want Git history; credentials and runtime history do not belong in them.
 
+Agents can manage workflows through the running app's local HTTP API. Read
+`GET /api/workflows` to get the current revision and definitions. Submit the
+updated document to `PUT /api/workflows` with that revision to create, edit,
+enable, pause, or remove a workflow. On HTTP 409, read again and reapply your
+change to the newer document. Send a single definition to
+`POST /api/workflows/preview` to check matches before enabling. Use
+`GET /api/workflows/schedules` for schedule status and `GET /api/state` for task
+activity. `POST /api/workflows/scan` queues an immediate poll and returns HTTP
+202. Polls use the usual feature and repository gates, trigger deduplication,
+and schedule due times. Overlapping scan requests can share a polling cycle.
+
 ```json
 {
   "version": 2,
@@ -640,15 +651,18 @@ repository. The runner uses the running app's API and emits a JSON report with
 ```bash
 python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smoke-agent-a
 python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smoke-agent-a --action install
+python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smoke-agent-a --action enable --case labeled
+python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smoke-agent-a --action scan
 python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smoke-agent-a --action observe
+python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smoke-agent-a --action pause --case labeled
 python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smoke-agent-a --action cleanup
 ```
 
 The default check validates previews and rejected inputs without dispatching.
 Install creates disabled copies and verifies revision conflicts while preserving
-existing definitions. Follow the matrix to create fixtures and enable individual
-tests. Observe reads recent monitor events. Inspect the PR and checks to verify
-changes and CI outcomes.
+existing definitions. Use the fixture steps in the matrix and enable individual
+cases with `--case`. Scan queues an app poll. Observe reads recent monitor
+events. Inspect the PR and checks to verify changes and CI outcomes.
 Cleanup removes only unchanged disabled copies. Save private reports outside the
 repository with `--output /tmp/workflow-report.json`. Review-request and human
 approval scenarios need a second GitHub identity because authors cannot review

@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/Molten-Bot/agent_00/internal/config"
 	"io"
 	"net/http"
 	"strings"
 
+	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
@@ -134,6 +134,18 @@ func (s Server) handleWorkflowSchedules(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, 200, status)
+}
+
+func (s Server) handleWorkflowScan(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if s.Workflows == nil || s.Workflows.Store == nil {
+		workflowError(w, http.StatusServiceUnavailable, errors.New("workflow engine unavailable"))
+		return
+	}
+	s.Workflows.RequestScan()
+	writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
 }
 
 func (s Server) validateWorkflowLibrary(doc workflow.Document) error {

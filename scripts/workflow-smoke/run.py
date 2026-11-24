@@ -4,13 +4,17 @@
 Examples:
   python3 scripts/workflow-smoke/run.py --repo example/repository
   python3 scripts/workflow-smoke/run.py --repo example/repository --action install
+  python3 scripts/workflow-smoke/run.py --repo example/repository --action enable --case labeled
+  python3 scripts/workflow-smoke/run.py --repo example/repository --action scan
   python3 scripts/workflow-smoke/run.py --repo example/repository --action observe
+  python3 scripts/workflow-smoke/run.py --repo example/repository --action pause --case labeled
   python3 scripts/workflow-smoke/run.py --repo example/repository --action cleanup
 
 All modes use the existing local app. Check never saves definitions. Install saves
 DISABLED copies of the checked-in templates and verifies optimistic concurrency.
-Run the explicit preparation steps from matrix.json to exercise live execution;
-this runner never enables automation, changes global settings, or mutates GitHub.
+Run the explicit preparation steps from matrix.json before enabling a named case.
+Enable and pause affect only unedited definitions generated for this repo and prefix.
+Scan requests a normal polling cycle for all workflows in the running app.
 Observe reports runtime evidence separately from API contract checks. Cleanup
 removes only disabled definitions exactly matching this runner's generated copies.
 Use a unique --prefix to keep agents' tests independent. Exit 1 means a failed check,
@@ -143,7 +147,7 @@ def install(api, defs, report):
         return
     updated = copy.deepcopy(document)
     updated["workflows"] += [item for item in defs if item["id"] not in existing]
-    code, saved = api.request("/api/workflows", updated, "PUT")
+    code, _ = api.request("/api/workflows", updated, "PUT")
     expect(report, "install-disabled-definitions", code, 200)
     if code != 200:
         return
@@ -187,25 +191,56 @@ def cleanup(api, defs, report):
                reason="Edited or enabled definitions retained; pause and inspect them manually")
 
 
+def set_enabled(api, definition, enabled, report):
+    action = "enable" if enabled else "pause"
+    document = api.get("/api/workflows")
+    for item in document["workflows"]:
+        if item["id"] != definition["id"]:
+            continue
+        if {**item, "enabled": False} != definition:
+            record(report, action, "fail", reason="Stored definition has been edited", id=item["id"])
+            return
+        if item["enabled"] == enabled:
+            record(report, action, "pass", id=item["id"], enabled=enabled)
+            return
+        item["enabled"] = enabled
+        code, saved = api.request("/api/workflows", document, "PUT")
+        record(report, action, "pass" if code == 200 else "fail", id=item["id"],
+               httpStatus=code, error=saved.get("error"))
+        return
+    record(report, action, "fail", reason="Install the definition first", id=definition["id"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", required=True, help="Explicit owner/repository test target")
     parser.add_argument("--base-url", default="http://127.0.0.1:7777")
     parser.add_argument("--prefix", default="workflow-smoke", help="Unique namespace shared by install/observe/cleanup")
-    parser.add_argument("--action", choices=("check", "install", "observe", "cleanup"), default="check")
+    parser.add_argument("--action", choices=("check", "install", "enable", "pause", "scan", "observe", "cleanup"), default="check")
+    parser.add_argument("--case", choices=[case["id"] for case in MATRIX["cases"]],
+                        help="Required scenario for enable or pause")
     parser.add_argument("--output", type=Path, help="Write the JSON report to a private local file")
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo) or ".." in args.repo:
         parser.error("--repo must be owner/repository")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", args.prefix):
         parser.error("--prefix must contain 1–50 letters, digits, underscores, or hyphens")
+    if (args.action in ("enable", "pause")) != bool(args.case):
+        parser.error("--case is required for enable and pause, and is only used by those actions")
     report = {"version": 1, "action": args.action, "repository": args.repo, "prefix": args.prefix,
               "checkedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(), "results": []}
     api = API(args.base_url)
     defs = definitions(args.repo, args.prefix)
     exit_code = 0
     try:
-        {"check": check, "install": install, "observe": observe, "cleanup": cleanup}[args.action](api, defs, report)
+        if args.case:
+            definition = next(item for item in defs if item["id"] == f"{args.prefix}-{args.case}")
+            set_enabled(api, definition, args.action == "enable", report)
+        elif args.action == "scan":
+            code, _ = api.request("/api/workflows/scan", method="POST")
+            expect(report, "scan-accepted", code, 202)
+        else:
+            {"check": check, "install": install, "observe": observe, "cleanup": cleanup}[args.action](api, defs, report)
     except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
         record(report, "runner", "fail", reason=str(error))
         exit_code = 2

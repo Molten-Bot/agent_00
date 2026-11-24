@@ -54,6 +54,29 @@ class RunnerSafetyTests(unittest.TestCase):
         self.assertEqual(api.document, before)
         self.assertEqual(self.report["results"][0]["status"], "blocked")
 
+    def test_enable_and_pause_only_selected_definition(self):
+        api = StoreAPI([self.other, *self.definitions])
+        target = self.definitions[1]
+        run.set_enabled(api, target, True, self.report)
+        self.assertEqual(api.document["workflows"],
+                         [self.other, self.definitions[0], {**target, "enabled": True}, *self.definitions[2:]])
+        revision = api.document["revision"]
+        run.set_enabled(api, target, True, self.report)
+        self.assertEqual(api.document["revision"], revision)
+        run.set_enabled(api, target, False, self.report)
+        self.assertEqual(api.document["workflows"], [self.other, *self.definitions])
+        self.assertTrue(all(r["status"] == "pass" for r in self.report["results"]))
+
+    def test_enable_and_pause_refuse_edited_definitions(self):
+        target = self.definitions[0]
+        edited = {**target, "repository": "example/different", "enabled": True}
+        api = StoreAPI([self.other, edited])
+        before = copy.deepcopy(api.document)
+        run.set_enabled(api, target, True, self.report)
+        run.set_enabled(api, target, False, self.report)
+        self.assertEqual(api.document, before)
+        self.assertTrue(all(r["status"] == "fail" for r in self.report["results"]))
+
 
 if __name__ == "__main__":
     unittest.main()

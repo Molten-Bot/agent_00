@@ -4,16 +4,75 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/Molten-Bot/agent_00/internal/config"
-	"github.com/Molten-Bot/agent_00/internal/library"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
+
+func TestWorkflowScanAPIWakesPoller(t *testing.T) {
+	t.Parallel()
+	srv := NewServer("", NewBroker())
+	h := srv.Handler()
+	request := func(method, origin string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, "http://localhost/api/workflows/scan", nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := request(http.MethodPost, ""); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("scan with no engine returned %d", rec.Code)
+	}
+	scans := make(chan struct{}, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	srv.Workflows = &workflow.Engine{
+		Store:     &workflow.Store{Path: filepath.Join(t.TempDir(), "workflows.json")},
+		StatePath: filepath.Join(t.TempDir(), "workflow-state.json"),
+		Enabled: func() bool {
+			scans <- struct{}{}
+			return false
+		},
+	}
+	h = srv.Handler()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.Workflows.Run(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	awaitScan := func() {
+		t.Helper()
+		select {
+		case <-scans:
+		case <-ctx.Done():
+			t.Fatal("workflow scan did not run")
+		}
+	}
+	awaitScan()
+	if rec := request(http.MethodGet, ""); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET scan returned %d", rec.Code)
+	}
+	if rec := request(http.MethodPost, "https://example.com"); rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin scan returned %d", rec.Code)
+	}
+	if rec := request(http.MethodPost, ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("scan returned %d: %s", rec.Code, rec.Body)
+	}
+	awaitScan()
+}
 
 func TestWorkflowAPIStoreAndPreview(t *testing.T) {
 	t.Parallel()

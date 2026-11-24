@@ -15,6 +15,7 @@ import (
 
 type Item struct {
 	HumanApproved  bool     `json:"humanApproved"`
+	Merged         bool     `json:"merged,omitempty"`
 	Viewer         string   `json:"viewer,omitempty"`
 	Number         int      `json:"number"`
 	Repository     string   `json:"repository"`
@@ -185,6 +186,8 @@ type Engine struct {
 	InspectPR func(context.Context, string, string) (Item, error)
 	Merge     func(context.Context, Run) error
 	Logf      func(string, ...any)
+	wakeOnce  sync.Once
+	wake      chan struct{}
 	mu        sync.Mutex
 }
 
@@ -278,12 +281,13 @@ func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) 
 		return []Decision{{Item: Item{Repository: w.Repository, Kind: "schedule", Title: "Scheduled repository task"}, Matches: true, Reason: fmt.Sprintf("Runs every %g hours while enabled; no GitHub event is required", w.Trigger.IntervalHours)}}, nil
 	}
 	items, err := e.Fetch(ctx, w.Repository)
-	if err != nil {
+	kind := strings.Split(w.Trigger.Event, ".")[0]
+	if !usableSnapshot(kind, err) {
 		return nil, err
 	}
 	out := []Decision{}
 	for _, i := range items {
-		if i.Kind != strings.Split(w.Trigger.Event, ".")[0] {
+		if i.Kind != kind {
 			continue
 		}
 		ok, reason := Match(w, i)
@@ -291,10 +295,30 @@ func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) 
 	}
 	return out, nil
 }
+
+func usableSnapshot(kind string, err error) bool {
+	var partial *pullRequestSnapshotError
+	return err == nil || (kind == "issue" && errors.As(err, &partial))
+}
+
+func (e *Engine) wakeChannel() chan struct{} {
+	e.wakeOnce.Do(func() { e.wake = make(chan struct{}, 1) })
+	return e.wake
+}
+
+// RequestScan queues a normal polling cycle without interrupting one in progress.
+func (e *Engine) RequestScan() {
+	select {
+	case e.wakeChannel() <- struct{}{}:
+	default:
+	}
+}
+
 func (e *Engine) Run(ctx context.Context) {
 	timer := time.NewTicker(30 * time.Second)
 	defer timer.Stop()
-	for {
+	wake := e.wakeChannel()
+	for ctx.Err() == nil {
 		if err := e.Tick(ctx); err != nil && e.Logf != nil {
 			e.Logf("workflow status=error err=%q", err)
 		}
@@ -302,6 +326,7 @@ func (e *Engine) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
+		case <-wake:
 		}
 	}
 }
@@ -334,23 +359,23 @@ func (e *Engine) Tick(ctx context.Context) error {
 		if terminal(r.Status) {
 			continue
 		}
-		entity := fmt.Sprintf("%s#%d", strings.ToLower(r.Item.Repository), r.Item.Number)
-		busy[entity] = true
 		active := featureEnabled && exists && w.Enabled && e.Allowed(w.Repository) && e.Allowed(r.Item.Repository)
 		if r.Status == "dispatching" {
-			if e.Reconcile != nil {
+			if r.RequestID == "" && e.Reconcile != nil {
 				r.RequestID = e.Reconcile(r.ID)
 			}
-			if r.RequestID == "" {
+			if r.RequestID == "" && r.Outcome == nil {
 				r.Reason = "Submission outcome unknown after restart; retained to prevent duplicate work"
 				continue
 			}
 			r.Status = "running"
 		}
 		if r.Status == "running" {
-			o := e.Status(r.RequestID)
+			var o Outcome
 			if r.Outcome != nil {
 				o = *r.Outcome
+			} else {
+				o = e.Status(r.RequestID)
 			}
 			if o.Status == "failed" {
 				r.Status = "failed"
@@ -396,7 +421,10 @@ func (e *Engine) Tick(ctx context.Context) error {
 					return err
 				}
 			}
-			if !i.Open {
+			if i.Merged {
+				r.Status = "merged"
+				r.Reason = "Pull request merged"
+			} else if !i.Open {
 				r.Status = "completed"
 				r.Reason = "Pull request closed"
 			} else if i.Draft {
@@ -430,8 +458,11 @@ func (e *Engine) Tick(ctx context.Context) error {
 			}
 		}
 		r.UpdatedAt = e.now()
-		if terminal(r.Status) {
-			delete(busy, entity)
+	}
+	for _, r := range s.Runs {
+		if !terminal(r.Status) {
+			entity := fmt.Sprintf("%s#%d", strings.ToLower(r.Item.Repository), r.Item.Number)
+			busy[entity] = true
 		}
 	}
 	if err := save(); err != nil {
@@ -443,7 +474,12 @@ func (e *Engine) Tick(ctx context.Context) error {
 			e.logRun(r, "transition")
 		}
 	}
-	cache := map[string][]Item{}
+	type snapshot struct {
+		items []Item
+		err   error
+	}
+	cache := map[string]snapshot{}
+	reportedErrors := map[string]bool{}
 	for _, w := range d.Workflows {
 		if !featureEnabled || !w.Enabled || !e.Allowed(w.Repository) {
 			continue
@@ -458,20 +494,27 @@ func (e *Engine) Tick(ctx context.Context) error {
 			continue
 		}
 		key := strings.ToLower(w.Repository)
-		items, ok := cache[key]
+		fetched, ok := cache[key]
 		if !ok {
-			items, err = e.Fetch(ctx, w.Repository)
-			if err != nil {
-				errs = append(errs, err)
-				continue
+			fetched.items, fetched.err = e.Fetch(ctx, w.Repository)
+			cache[key] = fetched
+		}
+		kind := strings.Split(w.Trigger.Event, ".")[0]
+		if !usableSnapshot(kind, fetched.err) {
+			if !reportedErrors[key] {
+				errs = append(errs, fetched.err)
+				reportedErrors[key] = true
 			}
-			cache[key] = items
+			continue
 		}
 		// Configuration edits establish a fresh baseline; layout/name edits do not.
 		baselineKey := w.ID + ":" + w.ExecutionPolicyHash()
 		hadBaseline := s.Baselines[baselineKey]
-		seen := make(map[string]bool, len(items))
-		for _, i := range items {
+		seen := make(map[string]bool, len(fetched.items))
+		for _, i := range fetched.items {
+			if i.Kind != kind {
+				continue
+			}
 			entity := fmt.Sprintf("%s#%d", key, i.Number)
 			obsKey := baselineKey + ":" + entity
 			seen[obsKey] = true

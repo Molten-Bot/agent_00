@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,13 @@ import (
 )
 
 type GitHub struct{ Runner execx.Runner }
+
+// pullRequestSnapshotError preserves the complete issue snapshot when a pull
+// request listed by GitHub cannot be inspected.
+type pullRequestSnapshotError struct{ err error }
+
+func (e *pullRequestSnapshotError) Error() string { return e.err.Error() }
+func (e *pullRequestSnapshotError) Unwrap() error { return e.err }
 
 func (g GitHub) command(ctx context.Context, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -51,12 +59,17 @@ func (g GitHub) Fetch(ctx context.Context, repo string) ([]Item, error) {
 	}
 	viewer = strings.TrimSpace(viewer)
 	items := []Item{}
+	var pullRequestErr error
 	for _, page := range pages {
 		for _, v := range page {
 			if v.PullRequest != nil {
+				if pullRequestErr != nil {
+					continue
+				}
 				i, err := g.Inspect(ctx, repo, strconv.Itoa(v.Number))
 				if err != nil {
-					return nil, err
+					pullRequestErr = fmt.Errorf("inspect %s#%d: %w", repo, v.Number, err)
+					continue
 				}
 				i.Viewer = viewer
 				items = append(items, i)
@@ -75,6 +88,10 @@ func (g GitHub) Fetch(ctx context.Context, repo string) ([]Item, error) {
 			i.Viewer = viewer
 			items = append(items, i)
 		}
+	}
+	if pullRequestErr != nil {
+		items = slices.DeleteFunc(items, func(i Item) bool { return i.Kind == "pr" })
+		return items, &pullRequestSnapshotError{err: pullRequestErr}
 	}
 	return items, nil
 }
@@ -104,6 +121,9 @@ func (g GitHub) Inspect(ctx context.Context, repo, selector string) (Item, error
 	}
 	if p.Number < 1 {
 		return Item{}, fmt.Errorf("pull request response is missing its number")
+	}
+	if p.State == "MERGED" || p.State == "CLOSED" {
+		return Item{Repository: repo, Number: p.Number, Kind: "pr", URL: p.URL, HeadSHA: p.HeadRefOid, Merged: p.State == "MERGED"}, nil
 	}
 	// Older gh versions do not expose closingIssuesReferences in pr view's
 	// JSON field list. Ask GraphQL directly for the relationship count.
