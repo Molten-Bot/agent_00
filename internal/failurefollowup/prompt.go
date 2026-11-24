@@ -125,7 +125,14 @@ var unavailableContainerValidation = regexp.MustCompile(`^docker-backed (?:[a-z0
 var unverifiedProductionChecks = regexp.MustCompile(`^production (?:[a-z0-9-]+ ){0,3}(?:connectivity|reachability)(?:, root cause)?(?:,? and authenticated (?:[a-z0-9-]+ ){0,2}(?:reads?|retrieval))? (?:remains?|is|are) unverified$`)
 var rolloutProgress = regexp.MustCompile(`^(?:added|implemented|updated|wired) \S`)
 var rolloutProgressFollowOn = regexp.MustCompile(`^(?:added|implemented|updated|wired|tests cover) \S`)
-var rolloutSentenceBoundary = regexp.MustCompile(`[.!?][ \t]+|[.!?]?\r`)
+
+const rolloutSentenceBreak = `[.!?…]+[ \t\p{Zs}]+|[.!?…]*\r`
+
+var rolloutSentenceBoundary = regexp.MustCompile(rolloutSentenceBreak)
+
+// Status statements can use unspaced ellipses. Progress and validation lines
+// can contain commands such as `go test ./...`, so use spaced breaks there.
+var rolloutStatementBoundary = regexp.MustCompile(rolloutSentenceBreak + `|\.{3,}|…+`)
 var rolloutValidationPassed = regexp.MustCompile(`^validation passed for [^;\s][^;]*$`)
 var rolloutSectionCheckPassed = regexp.MustCompile(`^[^;\s][^;]*[ :]passed[.!]?$`)
 var rolloutSectionCheckBlocker = regexp.MustCompile(`^no\b|\b(?:0|zero) passed\b|\b(?:never|crash(?:ed|es|ing)?|couldn't|didn't)\b`)
@@ -720,7 +727,7 @@ func isRolloutProgressLine(line string) bool {
 }
 
 func rolloutStatements(line string) []string {
-	return rolloutSentenceBoundary.Split(strings.TrimRight(line, ".!? \t\r"), -1)
+	return rolloutStatementBoundary.Split(strings.TrimRight(line, ".!?… \t\r"), -1)
 }
 
 func isOpenDependencyFailure(summary, detail string) bool {
