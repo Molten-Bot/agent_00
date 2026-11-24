@@ -707,7 +707,7 @@ func runServer(args []string) int {
 					if outcome.Result.Err != nil {
 						reason = outcome.Result.Err.Error()
 					}
-					if err := workflowEngine.Complete(runCfg.Workflow.EventID, workflow.Outcome{Status: status, PRURL: outcome.Result.PRURL, Reason: reason, ReviewClean: outcome.Result.ReviewClean, ReviewedHead: outcome.Result.ReviewedHead}); err != nil {
+					if err := workflowEngine.Complete(runCfg.Workflow.EventID, workflow.Outcome{Status: status, PRURL: outcome.Result.PRURL, Reason: reason, ReviewClean: outcome.Result.ReviewClean, ReviewedHead: outcome.Result.ReviewedHead}); err != nil && !(source == rerunSource && errors.Is(err, workflow.ErrActivationNotFound)) {
 						daemonLogger("workflow status=error action=complete err=%q", err)
 					}
 				}
@@ -920,6 +920,15 @@ func runServer(args []string) int {
 			return app.ExitConfig
 		}
 		workflowEngine = uiServer.Workflows
+		brokerStatus := workflowEngine.Status
+		workflowEngine.Status = func(requestID string) workflow.Outcome {
+			// The worker can emit a terminal task log just before saving its
+			// review outcome. Prefer that outcome while the worker still owns it.
+			if _, err := localTaskController.handleFor(requestID); err == nil {
+				return workflow.Outcome{Status: "running"}
+			}
+			return brokerStatus(requestID)
+		}
 		uiServer.IssueClaims = issueClaims
 		uiServer.IssueRecovery = &cfg.IssueRecovery
 		uiServer.IssueRepair = repairQueue.capture
@@ -1068,13 +1077,16 @@ func runServer(args []string) int {
 			recordLibraryUsage(runCfg)
 			return enqueueLocalRun(reqCtx, runCfg, true, localSubmitSource, false)
 		}
-		uiServer.SubmitTaskRerun = func(reqCtx context.Context, _ string, body []byte, force bool) (string, error) {
+		uiServer.SubmitTaskRerun = func(reqCtx context.Context, requestID string, body []byte, force bool) (string, error) {
 			runCfg, err := parseWorkflowOrSelection(body)
 			if err != nil {
 				return "", fmt.Errorf("invalid run config: %w", err)
 			}
 			recordLibraryUsage(runCfg)
-			return enqueueLocalRun(reqCtx, runCfg, true, rerunSource, force)
+			task, _ := monitorBroker.Task(requestID)
+			return retryWorkflowTask(reqCtx, workflowEngine, task, runCfg, func(retryCfg config.Config) (string, error) {
+				return enqueueLocalRun(reqCtx, retryCfg, true, rerunSource, force)
+			})
 		}
 		uiServer.CloseTask = cleanupTaskLogs
 		uiServer.ResolveTaskControls = localTaskController.Controls

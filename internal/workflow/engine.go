@@ -143,6 +143,7 @@ func (w Definition) ExecutionPolicyHash() string {
 type Run struct {
 	Outcome   *Outcome   `json:"outcome,omitempty"`
 	ID        string     `json:"id"`
+	RetryOf   string     `json:"retryOf,omitempty"`
 	Workflow  Definition `json:"workflow"`
 	Item      Item       `json:"item"`
 	RequestID string     `json:"requestId,omitempty"`

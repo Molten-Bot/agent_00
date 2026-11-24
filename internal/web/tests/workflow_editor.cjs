@@ -15,7 +15,6 @@ async function openEditor(t,viewport={width:1280,height:900},initialSettings={wo
  if(url.pathname==='/api/workflows/preview')return route.fulfill({json:[{item:{number:12,title:'Example issue'},matches:true,reason:'Trigger and filters match'}]});
  if(url.pathname==='/api/library')return route.fulfill({json:{tasks:[{name:'audit',displayName:'Audit repository',prompt:'Audit the repository.'}]}});
  if(url.pathname==='/api/workflows/schedules')return route.fulfill({json:[]});
- if(url.pathname==='/api/workflows/runs')return route.fulfill({json:[]});
  if(url.pathname==='/api/github/repos')return route.fulfill({json:{repos:[{full_name:'acme/repo'},{full_name:'acme/other'},{full_name:'person/project',owner_type:'User'}]}});
  if(url.pathname==='/api/status')return route.fulfill({json:{tasks:[],events:[],repositories:[],stats:{},resources:{}}});
  if(url.pathname==='/api/agent-auth')return route.fulfill({json:{ok:true,auth:{required:false,ready:true,state:'ready'}}});
@@ -275,6 +274,28 @@ test('repository visibility is shared across Workflow, Studio, Chat, and Issues 
  await page.waitForFunction(()=>document.querySelectorAll('#github-issues-repo option[value="person/project"]').length===1);
 });
 
+test('Workflow draft controls are icon buttons in the header and preview stays available', async t => {
+ const {page,getDocument}=await openEditor(t);
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Implement issues',exact:true}).click();
+ const header=page.locator('#workflow-display .panel-header');
+ for (const name of ['Save draft','Delete draft','Enable']) {
+  const button=header.getByRole('button',{name,exact:true});
+  assert.equal(await button.getAttribute('title'),name);
+  assert.equal(await button.textContent(),'');
+  assert.equal(await button.locator('svg').count(),1);
+ }
+ assert.equal(await page.getByText('Activation history',{exact:true}).count(),0);
+ await header.getByRole('button',{name:'Save draft',exact:true}).click();
+ await page.getByText('Saved draft',{exact:true}).waitFor();
+ await header.getByRole('button',{name:'Preview matches',exact:true}).click();
+ await page.getByText('Matching preview (1 matches)',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Close preview',exact:true}).click();
+ await header.getByRole('button',{name:'Delete draft',exact:true}).click();
+ await page.getByText('Workflow deleted.',{exact:true}).waitFor();
+ assert.equal(getDocument().workflows.length,0);
+});
+
 test('Workflow templates can be collapsed and reopened from the sidebar heading', async t => {
  const {page}=await openEditor(t);
  await selectRepository(page,'acme/repo');
@@ -302,7 +323,7 @@ test('Workflow header actions stay on one row at narrow desktop widths', async t
   await page.setViewportSize({width,height:900});
   const panel=await header.boundingBox();
   const boxes=await Promise.all((await actions.all()).map(action=>action.boundingBox()));
-  assert.equal(boxes.length,5);
+  assert.equal(boxes.length,6);
   assert.ok(boxes.every(box=>Math.abs(box.y+box.height/2-(boxes[0].y+boxes[0].height/2))<1));
   assert.ok(boxes.every(box=>box.x>=panel.x && box.x+box.width<=panel.x+panel.width));
  }

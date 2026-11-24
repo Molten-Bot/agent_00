@@ -84,6 +84,7 @@ func (s Server) handleWorkflowPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, results)
 }
+
 // SubmitWorkflowRun retains durable issue ownership, fresh comments, dependencies,
 // and recovery used by manual issue tasks. PR workflows use the normal task queue.
 func (s Server) SubmitWorkflowRun(ctx context.Context, run config.Config, submit func(context.Context, []byte) (string, error)) (string, error) {

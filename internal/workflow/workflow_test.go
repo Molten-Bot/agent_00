@@ -140,6 +140,46 @@ func TestEngineBaselineDedupeRestartAndFilters(t *testing.T) {
 		t.Fatal("feature gate ignored")
 	}
 }
+
+func TestTickRemovesLegacyHistoryWhileKeepingPendingRuns(t *testing.T) {
+	t.Parallel()
+	w := definition("history-upgrade")
+	e, _, _ := testEngine(t, w)
+	e.Enabled = func() bool { return false }
+	s, err := e.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Observations["baseline:acme/repo#1"] = observation{Fingerprint: "issue.labeled", Generation: 2}
+	s.Baselines["baseline"] = true
+	s.Schedules = map[string]ScheduleCursor{w.ID: {Policy: "schedule-policy"}}
+	for _, status := range []string{"failed", "succeeded", "merged", "completed", "dispatching", "running", "waiting"} {
+		s.Runs = append(s.Runs, Run{ID: status, Workflow: w, Item: Item{Repository: w.Repository}, Status: status})
+	}
+	w.Merge.Enabled = true
+	doc, err := e.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Workflows = []Definition{w}
+	if _, err := e.Store.Save(doc); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(e.StatePath, s); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, e)
+	got, err := e.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Runs) != 3 || got.Runs[0].ID != "dispatching" || got.Runs[1].ID != "running" || got.Runs[2].ID != "waiting" {
+		t.Fatalf("retained activations: %+v", got.Runs)
+	}
+	if got.Observations["baseline:acme/repo#1"].Generation != 2 || !got.Baselines["baseline"] || got.Schedules[w.ID].Policy != "schedule-policy" {
+		t.Fatalf("lost operational state: %+v", got)
+	}
+}
 func TestEngineMultipleWorkflowsSerializeEntity(t *testing.T) {
 	t.Parallel()
 	a, b := definition("one"), definition("two")

@@ -32,6 +32,9 @@ func TestWorkflowAPIStoreAndPreview(t *testing.T) {
 		h.ServeHTTP(rec, httptest.NewRequest(method, path, bytes.NewReader(body)))
 		return rec
 	}
+	if rec := request(http.MethodGet, "/api/workflows/runs", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("activation history endpoint returned %d", rec.Code)
+	}
 	rec := request("GET", "/api/workflows", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatal(rec.Body)

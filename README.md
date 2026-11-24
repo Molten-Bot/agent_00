@@ -522,8 +522,8 @@ The React Flow editor defines an executable pipeline: repository → trigger →
 filters → task → bounded review cycles → optional merge. Select a node to edit
 its policy and drag nodes to arrange the canvas. Connections describe this
 pipeline; arbitrary branches or custom executable node types are not supported.
-Save draft pauses the workflow; Enable is a separate action. Preview matches is
-read-only. Activation history explains submitted tasks and merge waits.
+Save draft pauses the workflow. Enable is a separate action. Preview matches is
+read-only.
 
 The `app.prompt`, `app.json`, and `app.chat` triggers customize single-repository
 implementation submissions from their respective app sources. An enabled override
@@ -606,9 +606,10 @@ and optionally a `startAt` RFC 3339 timestamp. Agent steps reference a prompt wi
 `task.libraryTaskName`; `task.instructions` then supplies additional context.
 `task.baseBranch`, `targetSubdir`, and `reviewers` retain per-workflow task options.
 
-`workflow-state.json` is a separate, private runtime journal for schedule cursors, baselines,
-activation IDs, task outcomes, and merge state. Keep it on restart; do not use it
-as a shared definition file. A dispatch interrupted before its receipt is known
+`workflow-state.json` is private runtime state for schedule cursors, trigger deduplication,
+and work that still needs dispatch recovery or merge coordination. The app removes
+finished activations from this file during normal processing, including older records
+on the first poll after upgrade. Keep the file on restart. A dispatch interrupted before its receipt is known
 is reconciled from task history and otherwise held for inspection, never blindly
 repeated. The global repository filter gates task admission and execution; commit
 signing remains global. Turning off Workflow stops custom activations and merges,
@@ -646,7 +647,8 @@ python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smo
 The default check validates previews and rejected inputs without dispatching.
 Install creates disabled copies and verifies revision conflicts while preserving
 existing definitions. Follow the matrix to create fixtures and enable individual
-tests; observe reports runtime outcomes, not proof of PR contents or CI success.
+tests. Observe reads recent monitor events. Inspect the PR and checks to verify
+changes and CI outcomes.
 Cleanup removes only unchanged disabled copies. Save private reports outside the
 repository with `--output /tmp/workflow-report.json`. Review-request and human
 approval scenarios need a second GitHub identity because authors cannot review

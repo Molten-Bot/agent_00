@@ -24,6 +24,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import sys
 import urllib.error
 import urllib.request
@@ -91,9 +92,20 @@ def expect(report, name, actual, wanted):
     record(report, name, "pass" if actual == wanted else "fail", actual=actual, expected=wanted)
 
 
+def recent_runs(api):
+    runs = {}
+    for event in api.get("/api/status")["events"] or []:
+        line = event["line"]
+        if not line.startswith("workflow event="):
+            continue
+        fields = dict(part.split("=", 1) for part in shlex.split(line)[1:] if "=" in part)
+        if fields.get("run_id") and fields.get("workflow_id"):
+            runs[fields["run_id"]] = fields
+    return runs
+
+
 def check(api, defs, report):
-    before = api.get("/api/workflows/runs")
-    before_ids = {run["id"] for run in before}
+    before_ids = set(recent_runs(api))
     for definition in defs:
         code, preview = api.request("/api/workflows/preview", definition, "POST")
         valid = code == 200 and isinstance(preview, list)
@@ -117,8 +129,8 @@ def check(api, defs, report):
                               raw=(json.dumps(baseline) + suffix).encode())
         expect(report, f"reject:trailing{suffix}", code, 400)
     ids = {definition["id"] for definition in defs}
-    new_owned = [run["id"] for run in api.get("/api/workflows/runs")
-                 if run["id"] not in before_ids and run["workflow"]["id"] in ids]
+    new_owned = [run_id for run_id, run in recent_runs(api).items()
+                 if run_id not in before_ids and run["workflow_id"] in ids]
     expect(report, "preview-does-not-dispatch", len(new_owned), 0)
 
 
@@ -144,17 +156,17 @@ def install(api, defs, report):
 
 
 def observe(api, defs, report):
-    runs = api.get("/api/workflows/runs")
+    runs = recent_runs(api).values()
     for case, definition in zip(MATRIX["cases"], defs):
-        matching = [run for run in runs if run["workflow"]["id"] == definition["id"]]
+        matching = [run for run in runs if run["workflow_id"] == definition["id"]]
         latest = matching[-1] if matching else None
         status = ("fail" if latest and latest["status"] == "failed" else
                   "pass" if latest and latest["status"] in case["terminal"] else "blocked")
         record(report, f"execution:{case['id']}", status, runCount=len(matching),
                latestStatus=latest["status"] if latest else None,
-               requestId=latest.get("requestId") if latest else None,
+               requestId=latest.get("request_id") if latest else None,
                reason=latest.get("reason") if latest else case["fixture"],
-               evidenceScope="Runtime terminal state only; inspect PR diff, checks, and review evidence using matrix.json")
+               evidenceScope="Recent monitor events only. Inspect PR diff, checks, and reviews using matrix.json.")
     for name in ("dedupe", "pause", "merge-gates"):
         record(report, name, "blocked", reason="Requires controlled transitions and before/after observations; see matrix.json")
 

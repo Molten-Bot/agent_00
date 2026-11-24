@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
@@ -211,4 +213,32 @@ func parseWorkflowOrSelection(body []byte) (config.Config, error) {
 		return parseResolvedWorkflowConfig(body)
 	}
 	return localruntime.ParseRunConfigJSON(body)
+}
+
+func retryWorkflowTask(ctx context.Context, engine *workflow.Engine, task web.Task, cfg config.Config, submit func(config.Config) (string, error)) (string, error) {
+	if cfg.Workflow == nil || cfg.Workflow.PolicyHash == "" {
+		return submit(cfg)
+	}
+	switch task.Status {
+	case "error", "invalid", "stopped", "duplicate":
+	default:
+		return submit(cfg)
+	}
+	item := workflow.Item{Repository: workflow.CanonicalRepository(cfg.RepoURL)}
+	if cfg.GitHubIssue != nil {
+		item.Number = cfg.GitHubIssue.Number
+	} else if cfg.Review != nil {
+		item.Number, item.URL = cfg.Review.PRNumber, cfg.Review.PRURL
+	} else if _, number, ok := strings.Cut(strings.TrimRight(task.PRURL, "/"), "/pull/"); ok {
+		item.Number, _ = strconv.Atoi(number)
+		item.URL = task.PRURL
+	}
+	return engine.DispatchRetry(ctx, cfg.Workflow.ID, cfg.Workflow.PolicyHash, cfg.Workflow.EventID, item, func(run workflow.Run) (string, error) {
+		if run.ID != "" {
+			policy := *cfg.Workflow
+			policy.EventID = run.ID
+			cfg.Workflow = &policy
+		}
+		return submit(cfg)
+	})
 }

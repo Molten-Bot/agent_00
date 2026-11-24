@@ -45,13 +45,13 @@ func (e *Engine) DispatchInput(ctx context.Context, w Definition, submit func(Ru
 	if !IsInputEvent(w.Trigger.Event) || !e.StillEnabled(w) {
 		return "", fmt.Errorf("input workflow changed or is disabled")
 	}
-	return e.dispatch(w, Item{Repository: w.Repository, Kind: "app"}, "In-app submission", submit)
+	return e.dispatch(w, Item{Repository: w.Repository, Kind: "app", Title: "In-app submission"}, "In-app submission", "", submit)
 }
 
 // DispatchRetry gives an eligible retry its own operational receipt without
 // reading a completed activation. The saved fingerprint binds the retry to the
 // original workflow policy, and Tick still enforces current merge gates.
-func (e *Engine) DispatchRetry(ctx context.Context, id, policy string, item Item, submit func(Run) (string, error)) (string, error) {
+func (e *Engine) DispatchRetry(ctx context.Context, id, policy, priorEvent string, item Item, submit func(Run) (string, error)) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -64,23 +64,30 @@ func (e *Engine) DispatchRetry(ctx context.Context, id, policy string, item Item
 	for _, w := range doc.Workflows {
 		if w.ID == id && w.Merge.Enabled && w.ExecutionPolicyHash() == policy && CanonicalRepository(w.Repository) == CanonicalRepository(item.Repository) {
 			w.Enabled = true
-			return e.dispatch(w, item, "Workflow retry", submit)
+			return e.dispatch(w, item, "Workflow retry", priorEvent, submit)
 		}
 	}
 	return submit(Run{})
 }
 
 // dispatch must run with the engine mutex held.
-func (e *Engine) dispatch(w Definition, item Item, reason string, submit func(Run) (string, error)) (string, error) {
+func (e *Engine) dispatch(w Definition, item Item, reason, retryOf string, submit func(Run) (string, error)) (string, error) {
 	state, err := e.load()
 	if err != nil {
 		return "", err
+	}
+	if retryOf != "" {
+		for _, existing := range state.Runs {
+			if existing.RetryOf == retryOf {
+				return "", fmt.Errorf("workflow retry already active")
+			}
+		}
 	}
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return "", err
 	}
-	run := Run{ID: hex.EncodeToString(random[:]), Workflow: w, Item: item, Status: "dispatching", Reason: reason, UpdatedAt: e.now()}
+	run := Run{ID: hex.EncodeToString(random[:]), Workflow: w, Item: item, Status: "dispatching", Reason: reason, UpdatedAt: e.now(), RetryOf: retryOf}
 	state.Runs = append(state.Runs, run)
 	if err := e.save(state); err != nil {
 		return "", err

@@ -63,10 +63,27 @@ func TestInputWorkflowsKeepPayloadAndJournalCompletion(t *testing.T) {
 				t.Fatal(err)
 			}
 			runs, _ = s.Workflows.Runs()
-			if runs[0].Status != "succeeded" {
+			if len(runs) != 0 {
 				t.Fatal(runs)
 			}
 		})
+	}
+}
+
+func TestInputWorkflowRejectsClientSuppliedPolicyHash(t *testing.T) {
+	t.Parallel()
+	s, w := inputWorkflowServer(t, "prompt")
+	c := config.Config{RepoURL: "https://github.com/acme/repo", Prompt: "Implement", Workflow: &config.WorkflowRunConfig{ID: w.ID, EventID: "made-up", PolicyHash: w.ExecutionPolicyHash()}}
+	body, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.submitInputWorkflow(t.Context(), body, "prompt", func(context.Context, []byte) (string, error) {
+		t.Fatal("accepted forged workflow policy")
+		return "", nil
+	})
+	if err == nil {
+		t.Fatal("expected error for a client-supplied workflow policy fingerprint")
 	}
 }
 
@@ -112,7 +129,7 @@ func TestInputWorkflowFallbackRetainsOriginalSubmission(t *testing.T) {
 	}
 }
 
-func TestInputWorkflowRejectsConflictsAndRecordsSubmissionFailure(t *testing.T) {
+func TestInputWorkflowRejectsConflictsAndDoesNotRetainSubmissionFailure(t *testing.T) {
 	t.Parallel()
 	s, w := inputWorkflowServer(t, "prompt")
 	body := []byte(`{"repoUrl":"https://github.com/acme/repo","prompt":"Original"}`)
@@ -121,7 +138,7 @@ func TestInputWorkflowRejectsConflictsAndRecordsSubmissionFailure(t *testing.T) 
 		t.Fatal("swallowed error")
 	}
 	runs, _ := s.Workflows.Runs()
-	if len(runs) != 1 || runs[0].Status != "failed" {
+	if len(runs) != 0 {
 		t.Fatal(runs)
 	}
 	doc, _ := s.Workflows.Store.Load()

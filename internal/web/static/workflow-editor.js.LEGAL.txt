@@ -116,6 +116,7 @@ lucide-react/dist/esm/icons/signal.mjs:
 lucide-react/dist/esm/icons/square-pen.mjs:
 lucide-react/dist/esm/icons/sun.mjs:
 lucide-react/dist/esm/icons/timer.mjs:
+lucide-react/dist/esm/icons/trash.mjs:
 lucide-react/dist/esm/icons/user.mjs:
 lucide-react/dist/esm/icons/wrench.mjs:
 lucide-react/dist/esm/icons/x.mjs:

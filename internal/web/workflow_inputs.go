@@ -13,15 +13,17 @@ import (
 
 func (s Server) submitInputWorkflow(ctx context.Context, body []byte, source string, submit func(context.Context, []byte) (string, error)) (string, error) {
 	fallback := func() (string, error) { return s.submitWithIssueClaim(ctx, body, submit) }
-	if s.Workflows == nil || !workflow.IsInputEvent("app."+source) || !s.Workflows.Enabled() {
-		return fallback()
-	}
-	// Already-resolved workflows (including reruns) retain their captured policy.
 	var header struct {
 		Workflow *config.WorkflowRunConfig `json:"workflow"`
 	}
 	_ = json.Unmarshal(body, &header)
 	if header.Workflow != nil {
+		if header.Workflow.PolicyHash != "" {
+			return "", fmt.Errorf("workflow policy fingerprints are assigned by the runtime")
+		}
+		return fallback()
+	}
+	if s.Workflows == nil || !workflow.IsInputEvent("app."+source) || !s.Workflows.Enabled() {
 		return fallback()
 	}
 	c, err := localruntime.ParseRunConfigJSON(body)

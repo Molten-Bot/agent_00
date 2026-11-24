@@ -119,7 +119,7 @@ func TestScheduleGatesAndSubmissionFailureAdvanceOnce(t *testing.T) {
 		t.Fatal("failure loop", calls)
 	}
 	runs, _ := e.Runs()
-	if runs[0].Status != "failed" {
+	if len(runs) != 0 {
 		t.Fatal(runs)
 	}
 	now = now.Add(24 * time.Hour)

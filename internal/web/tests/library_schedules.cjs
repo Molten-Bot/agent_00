@@ -13,7 +13,7 @@ test('Library scheduling creates a workflow draft with its prompt and repository
  await page.addInitScript(()=>{window.EventSource=class{}});
  await page.route('**/*',route=>{const url=new URL(route.request().url());if(url.origin!==new URL(baseURL).origin)return route.abort();
  if(url.pathname==='/api/workflows'){if(route.request().method()==='PUT')doc={...route.request().postDataJSON(),revision:doc.revision+1};return route.fulfill({json:doc})}
- if(url.pathname==='/api/workflows/runs'||url.pathname==='/api/workflows/schedules')return route.fulfill({json:[]});
+ if(url.pathname==='/api/workflows/schedules')return route.fulfill({json:[]});
  if(url.pathname==='/api/library')return route.fulfill({json:{ok:true,tasks:[task]}});
  if(url.pathname==='/api/library/schedules'){legacyCalls++;return route.fulfill({status:410,json:{error:'Scheduling moved to Workflow'}})}
  if(url.pathname==='/api/github/repos')return route.fulfill({json:{ok:true,repos:[{full_name:'acme/repo',html_url:'https://github.com/acme/repo'}]}});
