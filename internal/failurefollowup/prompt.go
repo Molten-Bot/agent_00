@@ -106,6 +106,7 @@ const OpenDependencyReason = "required dependency is still open"
 const HumanActionRequiredReason = "required human action is pending"
 
 var agentFailureReportPrefix = regexp.MustCompile(`^(?:(?:codex: )?codex|(?:claude: )?claude) reported failure:`)
+var blockedReviewReportPrefix = regexp.MustCompile(`^(?:review: )?post-task review pass [0-9]+ was blocked:`)
 var pendingHandoffSummary = regexp.MustCompile(`^failure: (?:[^.!?"\x60]+ )?(?:call|meeting) and email follow-up remain pending\.?$`)
 var humanOutreachPrerequisite = regexp.MustCompile(`^(?:[^.!?"\x60|]+ )?(?:call|meeting) (?:needs|requires) (?:[^.!?"\x60|]+ and )?human outreach(?:[.\n]| \| |$)`)
 var handoffValidationFailure = regexp.MustCompile(`\b(?:tests?|checks?|validation) (?:still )?(?:fail(?:s|ed|ing)?|did not pass)\b`)
@@ -333,7 +334,8 @@ func RedactFailureDetail(detail string) string {
 // FailureDetailForPrompt keeps arbitrary agent-authored prose in the source
 // run's logs. Identifier patterns cannot reliably redact names or draft text.
 func FailureDetailForPrompt(detail string) string {
-	if agentFailureReportPrefix.MatchString(strings.ToLower(strings.TrimSpace(detail))) {
+	text := strings.ToLower(strings.TrimSpace(detail))
+	if agentFailureReportPrefix.MatchString(text) || blockedReviewReportPrefix.MatchString(text) {
 		return "[agent failure report withheld; see source run logs]"
 	}
 	return RedactFailureDetail(detail)
@@ -556,7 +558,7 @@ func NonRemediableFailureReason(err error) string {
 	reportedFailure := prefix != nil
 	if reportedFailure {
 		agentSummary := strings.TrimSpace(summary[prefix[1]:])
-		if isHumanActionFailure(agentSummary, details) {
+		if IsHumanActionFailure(agentSummary, details) {
 			return HumanActionRequiredReason
 		}
 		if IsExternalRolloutFailure(agentSummary, details) {
@@ -584,9 +586,14 @@ func NonRemediableFailureReason(err error) string {
 	return NonRemediableRepoAccessReason(err)
 }
 
-func isHumanActionFailure(summary, details string) bool {
-	details = strings.TrimSpace(details)
-	if details == "" || handoffValidationFailure.MatchString(details) || HasValidationFailureEvidence(details) || HasRolloutFailureOutcome(details) || HasHTTPFailureStatus(details) {
+// IsHumanActionFailure identifies reports where human action is the only blocker.
+// Truncated details can omit failed checks, so classification requires the full report.
+func IsHumanActionFailure(summary, details string) bool {
+	summary = strings.ToLower(strings.TrimSpace(summary))
+	details = strings.ToLower(strings.TrimSpace(details))
+	if details == "" || HasTruncatedErrorDetails(details) || handoffValidationFailure.MatchString(details) ||
+		HasValidationFailureEvidence(strings.ReplaceAll(details, " | ", "\n")) ||
+		HasRolloutFailureOutcome(details) || HasHTTPFailureStatus(details) {
 		return false
 	}
 	if strings.TrimSuffix(summary, ".") == "failure: human action remains pending" {

@@ -468,8 +468,10 @@ func TestNonRemediableHumanActionFailure(t *testing.T) {
 		want         string
 	}{
 		{"explicit handoff", "claude: claude reported failure: Failure: Human action remains pending.\nError details: An operator must confirm the shipment.", HumanActionRequiredReason},
-		{"legacy handoff", "codex: codex reported failure: Failure: Vendor meeting and email follow-up remain pending. Error details: The meeting requires confirmation and human outreach. | [error details truncated]", HumanActionRequiredReason},
+		{"legacy handoff", "codex: codex reported failure: Failure: Vendor meeting and email follow-up remain pending. Error details: The meeting requires confirmation and human outreach. | A response is pending.", HumanActionRequiredReason},
+		{"truncated handoff", "codex: codex reported failure: Failure: Vendor meeting and email follow-up remain pending. Error details: The meeting requires confirmation and human outreach." + TruncatedErrorDetails, ""},
 		{"mixed blocker", "codex: codex reported failure: Failure: Human action remains pending. Error details: An operator must confirm the shipment. Export tests still fail.", ""},
+		{"flattened test output", "codex: codex reported failure: Failure: Human action remains pending. Error details: An operator must confirm the shipment. | --- FAIL: TestExport (0.00s)", ""},
 		{"quoted details", "codex: codex reported failure: Failure: Export parser fails. Error details: Fixture reads `Failure: Human action remains pending.`", ""},
 		{"ambiguous pending work", "codex: codex reported failure: Failure: Export remains pending. Error details: Deployment needs human outreach.", ""},
 		{"missing details", "codex: codex reported failure: Failure: Human action remains pending.", ""},

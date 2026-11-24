@@ -536,12 +536,20 @@ func TestFailureFollowUpPromptRedactsIdentifiersInsideFailureError(t *testing.T)
 
 func TestFailureFollowUpPromptWithholdsAgentReport(t *testing.T) {
 	t.Parallel()
-	result := app.Result{ExitCode: app.ExitCodex, Err: errors.New(
-		"codex: codex reported failure: Failure: Export failed. Error details: Private draft for Example Person.",
-	)}
-	got := failureFollowUpPrompt(nil, result, config.Config{})
-	if strings.Contains(got, "Example Person") || !strings.Contains(got, "- exit_code=50") || !strings.Contains(got, "see source run logs") {
-		t.Fatal("follow-up prompt should keep the exit code and withhold agent prose")
+	for _, tc := range []struct{ name, prefix string }{
+		{"task", "codex: codex reported failure: Failure: Export failed. Error details: "},
+		{"blocked review", "review: post-task review pass 2 was blocked: "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := app.Result{ExitCode: app.ExitCodex, Err: errors.New(tc.prefix + "Private draft for Example Person.")}
+			got := failureFollowUpPrompt(nil, result, config.Config{})
+			if strings.Contains(got, "Example Person") || !strings.Contains(got, "- exit_code=50") || !strings.Contains(got, "see source run logs") {
+				t.Fatal("follow-up prompt should keep the exit code and withhold agent prose")
+			}
+			if body := config.NormalizePRBody("", got); strings.Contains(body, "Example Person") {
+				t.Fatal("follow-up PR body leaked agent prose")
+			}
+		})
 	}
 }
 

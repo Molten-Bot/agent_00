@@ -6991,12 +6991,14 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 	full = detail + "\n" + errorDetail
 	if strings.HasSuffix(display, truncatedErrorDetails) {
 		// Keep a complete blocker statement in the persisted error if the
-		// rest of the report only confirms progress or unavailable validation.
+		// full report confirms the same blocker.
 		if details, ok := strings.CutPrefix(errorDetail, "Error details:"); ok {
 			first, _, _ := strings.Cut(strings.TrimSpace(details), "\n")
-			if len(first) <= maxErrorDetailChars && failurefollowup.IsExternalRolloutFailure(detail, first) &&
-				failurefollowup.IsExternalRolloutFailure(detail, details) {
-				display = "Error details: " + first
+			if len(first) <= maxErrorDetailChars {
+				if (failurefollowup.IsHumanActionFailure(detail, first) && failurefollowup.IsHumanActionFailure(detail, details)) ||
+					(failurefollowup.IsExternalRolloutFailure(detail, first) && failurefollowup.IsExternalRolloutFailure(detail, details)) {
+					display = "Error details: " + first
+				}
 			}
 		}
 	}

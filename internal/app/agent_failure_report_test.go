@@ -380,6 +380,38 @@ func TestRunCodexClassifiesExternalRolloutBeforeDisplayTruncation(t *testing.T) 
 	}
 }
 
+func TestRunCodexClassifiesHumanHandoffBeforeDisplayTruncation(t *testing.T) {
+	t.Parallel()
+
+	const output = "Failure: Vendor meeting and email follow-up remain pending.\n" +
+		"Error details: The meeting requires confirmation and human outreach.\n" +
+		"Confirmation is pending.\n" +
+		"The operator has the contact information.\n" +
+		"A message is ready to send.\n" +
+		"Awaiting the operator.\n"
+	for _, tc := range []struct{ name, extra, want string }{
+		{"human handoff only", "", failurefollowup.HumanActionRequiredReason},
+		{"failed check after display limit", "## Validation\n--- FAIL: TestExport (0.00s)\n", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := t.TempDir()
+			const prompt = "Update the application"
+			h := New(&fakeRunner{t: t, exps: []expectedRun{{
+				cmd: codexCommand(target, prompt),
+				res: execx.Result{Stdout: output + tc.extra},
+			}}})
+			err := h.runCodex(t.Context(), agentruntime.Default(), target, prompt, codexRunOptions{}, "", "")
+			if err == nil {
+				t.Fatal("pending work must remain a failed run")
+			}
+			result := h.fail(ExitCodex, "codex", err, target)
+			if got := failurefollowup.NonRemediableFailureReason(errors.New(result.Err.Error())); got != tc.want {
+				t.Fatalf("reason = %q, want %q: %v", got, tc.want, err)
+			}
+		})
+	}
+}
+
 func TestCodexExtractErrorDetailPreservesStartupWithoutResponse(t *testing.T) {
 	t.Parallel()
 
