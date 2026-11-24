@@ -319,6 +319,107 @@ test('switching workflows by keyboard during a drag leaves the new workflow unto
  await page.mouse.up();
  assert.equal(await node.evaluate(position),secondPosition);
  assert.equal(await page.locator('.wf-save-state').textContent(),'Saved draft');
+ assert.equal(await page.getByRole('button',{name:'Enable',exact:true}).isEnabled(),true);
+});
+
+test('workflow save and activation controls cannot interrupt a node drag', async t => {
+ const {page,getDocument}=await openEditor(t,{width:1600,height:1050});
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Assigned issues',exact:true}).click();
+ const save=page.getByRole('button',{name:'Save draft',exact:true});
+ const enable=page.getByRole('button',{name:'Enable',exact:true});
+ const pause=page.getByRole('button',{name:'Pause',exact:true});
+ await save.click();
+ await page.getByText('Saved draft',{exact:true}).waitFor();
+
+ const node=page.locator('.react-flow__node[data-id="task"]');
+ for (const toggle of [enable,pause]) {
+  await page.getByRole('button',{name:'Dismiss message'}).click();
+  await node.hover();
+  const start=await node.boundingBox();
+  const x=start.x+start.width/2, y=start.y+start.height/2;
+  await page.mouse.move(x,y);
+  await page.mouse.down();
+  await page.mouse.move(x+70,y,{steps:8});
+  const revision=getDocument().revision;
+  const previousX=getDocument().workflows[0].positions?.task?.x ?? 80;
+  for (const button of [save,toggle]) {
+   assert.equal(await button.isDisabled(),true);
+   await button.focus();
+   await page.keyboard.press('Enter');
+  }
+  await page.mouse.up();
+  await page.getByText('Unsaved changes',{exact:true}).waitFor();
+  assert.equal(getDocument().revision,revision);
+  assert.equal(await toggle.isDisabled(),true);
+  await save.click();
+  await page.getByText('Saved draft',{exact:true}).waitFor();
+  assert.ok(getDocument().workflows[0].positions.task.x>previousX);
+  if (toggle===enable) {
+   await enable.click();
+   await pause.waitFor();
+  }
+ }
+});
+
+test('a pending workflow save prevents starting a drag', async t => {
+ const {page}=await openEditor(t,{width:1600,height:1050});
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Assigned issues',exact:true}).click();
+ let finishSave;
+ const pendingSave=new Promise(resolve=>{finishSave=resolve});
+ await page.route('**/api/workflows',async route=>{
+  if (route.request().method()==='PUT') await pendingSave;
+  await route.fallback();
+ });
+ try {
+  const node=page.locator('.react-flow__node[data-id="task"]');
+  await node.hover();
+  const position=await node.evaluate(el=>el.style.transform);
+  const save=page.getByRole('button',{name:'Save draft',exact:true});
+  await save.click();
+  assert.equal(await save.isDisabled(),true);
+  const box=await node.boundingBox();
+  const x=box.x+box.width/2, y=box.y+box.height/2;
+  await page.mouse.move(x,y);
+  await page.mouse.down();
+  await page.mouse.move(x+70,y,{steps:8});
+  await page.mouse.up();
+  assert.equal(await node.evaluate(el=>el.style.transform),position);
+ } finally {
+  finishSave();
+ }
+ await page.getByText('Saved draft',{exact:true}).waitFor();
+});
+
+test('reselecting the active workflow fits its graph after panning', async t => {
+ const {page}=await openEditor(t,{width:1600,height:1050});
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Assigned issues',exact:true}).click();
+ await page.getByRole('button',{name:'Save draft',exact:true}).click();
+ await page.getByText('Saved draft',{exact:true}).waitFor();
+ const workflow=page.locator('.wf-step.wf-active');
+ const canvas=page.locator('.react-flow');
+ const node=page.locator('.react-flow__node[data-id="task"]');
+ await node.hover();
+ const bounds=await canvas.boundingBox();
+ const y=bounds.y+bounds.height/2;
+ await page.mouse.move(bounds.x+bounds.width-20,y);
+ await page.mouse.down();
+ await page.mouse.move(bounds.x+20,y,{steps:12});
+ await page.mouse.up();
+ const panned=await node.boundingBox();
+ assert.ok(panned.x+panned.width<bounds.x,'panning moves the task off-screen');
+
+ await workflow.click();
+ await page.waitForFunction(()=>{
+  const canvas=document.querySelector('.react-flow').getBoundingClientRect();
+  const nodes=[...document.querySelectorAll('.react-flow__node')];
+  return nodes.length>0 && nodes.every(node=>{
+   const box=node.getBoundingClientRect();
+   return box.left>=canvas.left && box.right<=canvas.right && box.top>=canvas.top && box.bottom<=canvas.bottom;
+  });
+ },null,{timeout:3000});
 });
 
 test('automatic layout controls arrange, fit and persist workflow positions', async t => {

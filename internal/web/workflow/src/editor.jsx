@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ReactFlow,
@@ -128,7 +128,7 @@ function Toggle({ label, value, onChange }) {
     </label>
   );
 }
-function WorkflowCanvas({ workflow, onMove, onSelect, onArrange }) {
+function WorkflowCanvas({ workflow, saving, onInit, onDragChange, onMove, onSelect, onArrange }) {
   const flow = useReactFlow();
   const graph = useMemo(() => workflow ? diagram(workflow) : { nodes: [], edges: [] }, [workflow]);
   const [layout, setLayout] = useState({ graph, nodes: graph.nodes });
@@ -158,12 +158,16 @@ function WorkflowCanvas({ workflow, onMove, onSelect, onArrange }) {
     return () => window.removeEventListener("workflow-display", handler);
   }, [flow]);
 
+  useEffect(() => () => onDragChange(false), [onDragChange]);
+
   const handleNodesChange = useCallback(changes => {
     setLayout(previous => ({ ...previous, nodes: changes.applyTo(previous.nodes) }));
+    const positions = changes.toArray().filter(change => change.type === "position" && change.position);
+    if (positions.length) onDragChange(positions.some(change => change.dragging));
     // Keep handles on the same side during a drag and reroute when it ends.
-    const moves = changes.toArray().filter(change => change.type === "position" && change.position && !change.dragging);
+    const moves = positions.filter(change => !change.dragging);
     if (moves.length) onMove(Object.fromEntries(moves.map(change => [change.id, change.position])));
-  }, [onMove]);
+  }, [onDragChange, onMove]);
 
   function arrange(direction) {
     if (!workflow) return;
@@ -179,8 +183,12 @@ function WorkflowCanvas({ workflow, onMove, onSelect, onArrange }) {
       edges={graph.edges}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
+      onInit={onInit}
       onNodesChange={handleNodesChange}
       onNodeClick={(_, node) => onSelect(node.id)}
+      onNodeDragStart={() => onDragChange(true)}
+      onNodeDragStop={() => onDragChange(false)}
+      nodesDraggable={!saving}
       nodesConnectable={false}
       edgesReconnectable={false}
       deleteKeyCode={null}
@@ -220,8 +228,11 @@ function Editor() {
     [dirty, setDirty] = useState(false),
     [notice, setNotice] = useState(""),
     [preview, setPreview] = useState(null),
-    [busy, setBusy] = useState(false),
+    [pendingAction, setPendingAction] = useState(null),
+    [dragging, setDragging] = useState(false),
     [templatesOpen, setTemplatesOpen] = useState(true);
+  const fitView = useRef(null);
+  const busy = pendingAction !== null;
   const changeRepository = useCallback((repository) => {
     if (dirty) {
       setNotice("Save or discard changes first.");
@@ -377,9 +388,10 @@ function Editor() {
     setSelection("trigger");
     setPreview(null);
     setNotice("");
+    if (current?.id === w.id) fitView.current?.({ padding: 32, duration: 200 });
   }
   async function save(enabled = current.enabled) {
-    setBusy(true);
+    setPendingAction("save");
     try {
       const next = { ...current, enabled };
       const d = await api(
@@ -397,7 +409,7 @@ function Editor() {
     } catch (e) {
       setNotice(e.message);
     } finally {
-      setBusy(false);
+      setPendingAction(null);
     }
   }
   function create(kind) {
@@ -415,7 +427,7 @@ function Editor() {
     setNotice(`${workflowTemplates.find((t) => t.id === kind).name} template copied. Review its settings, save the draft, then enable when ready.`);
   }
   async function showPreview() {
-    setBusy(true);
+    setPendingAction("preview");
     try {
       setPreview(
         await api("/api/workflows/preview", jsonOptions("POST", current)),
@@ -424,11 +436,11 @@ function Editor() {
     } catch (e) {
       setNotice(e.message);
     } finally {
-      setBusy(false);
+      setPendingAction(null);
     }
   }
   async function remove() {
-    setBusy(true);
+    setPendingAction("delete");
     try {
       const d = await api(
         "/api/workflows",
@@ -445,7 +457,7 @@ function Editor() {
     } catch (e) {
       setNotice(e.message);
     } finally {
-      setBusy(false);
+      setPendingAction(null);
     }
   }
   function exportAll() {
@@ -518,7 +530,7 @@ function Editor() {
               <button disabled={busy} onClick={showPreview}>
                 {scheduled ? "Preview schedule" : "Preview matches"}
               </button>
-              <button type="button" aria-label="Save draft" title="Save draft" disabled={busy} onClick={() => save(false)}>
+              <button type="button" aria-label="Save draft" title="Save draft" disabled={busy || dragging} onClick={() => save(false)}>
                 <Save size={15} aria-hidden="true" />
               </button>
               <button type="button" aria-label="Delete draft" title="Delete draft" className="wf-delete" disabled={busy || current.enabled} onClick={remove}>
@@ -529,7 +541,7 @@ function Editor() {
                 className="wf-primary"
                 aria-label={current.enabled ? "Pause" : "Enable"}
                 title={current.enabled ? "Pause" : "Enable"}
-                disabled={busy || dirty}
+                disabled={busy || dragging || dirty}
                 onClick={() => save(!current.enabled)}
               >
                 {current.enabled ? <Pause size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}
@@ -601,6 +613,9 @@ function Editor() {
           <ReactFlowProvider key={current?.id}>
             <WorkflowCanvas
               workflow={current}
+              saving={pendingAction === "save"}
+              onInit={flow => { fitView.current = flow.fitView; }}
+              onDragChange={setDragging}
               onMove={positions => edit({ positions: { ...current.positions, ...positions } })}
               onSelect={setSelection}
               onArrange={positions => edit({ positions })}
