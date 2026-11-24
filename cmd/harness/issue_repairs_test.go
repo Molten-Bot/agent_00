@@ -60,9 +60,22 @@ func TestIssueRepairOutboxRechecksDependencyBlockers(t *testing.T) {
 		changedLogRoot                          bool
 	}{
 		{
+			name:     "queued human handoff report",
+			captured: "codex: codex reported failure: Failure: Vendor meeting and email follow-up remain pending. Error details: The meeting needs confirmation and human outreach.",
+			want:     failurefollowup.HumanActionRequiredReason,
+			legacy:   true,
+		},
+		{
+			name:     "persisted human handoff",
+			captured: "temporary recovery failure",
+			incident: localruntime.IssueIncidentHumanAction,
+			want:     failurefollowup.HumanActionRequiredReason,
+		},
+		{
 			name:     "legacy queued report",
 			captured: "codex: codex reported failure: Failure: Export remains blocked. Error details: #72 is still open and blocks the export | Verification is pending.",
 			want:     failurefollowup.OpenDependencyReason,
+			legacy:   true,
 		},
 		{
 			name:     "source report before classification",
@@ -179,10 +192,38 @@ func saveLegacyIssueRepair(t *testing.T, q *issueRepairQueue, issue localruntime
 		ID: id, RequestID: "repair-" + id, State: "queued",
 		Run: failureFollowUpRunConfig(issue.RequestID, result, issue.Run, q.logRoot),
 	}
+	record.Run.Prompt = legacyRepairPrompt(record.Run.Prompt, issue.FailureDetail())
 	if err := q.store.Save(record); err != nil {
 		t.Fatal(err)
 	}
 	return record
+}
+
+func legacyRepairPrompt(prompt, failure string) string {
+	return strings.Replace(prompt,
+		fmt.Sprintf("- error=%q", failurefollowup.FailureDetailForPrompt(failure)),
+		fmt.Sprintf("- error=%q", failurefollowup.RedactFailureDetail(failure)), 1)
+}
+
+func TestIssueRepairDispatchWithholdsLegacyAgentReport(t *testing.T) {
+	t.Parallel()
+	claims, issue := lifecycleRecord(t)
+	q := issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, claims: claims, logRoot: t.TempDir(), logf: t.Logf}
+	const privateText = "Private draft for Example Person"
+	issue.RunError = "codex: codex reported failure: Failure: Export failed. Error details: " + privateText
+	saveLegacyIssueRepair(t, &q, issue)
+
+	calls := 0
+	q.reconcile(t.Context(), func(_ context.Context, run config.Config, _ bool, _ string, _ bool) (string, error) {
+		calls++
+		if strings.Contains(run.Prompt, privateText) || !strings.Contains(run.Prompt, "see source run logs") {
+			t.Error("repair dispatch did not withhold the agent report")
+		}
+		return "", errors.New("admission unavailable")
+	})
+	if calls != 1 {
+		t.Fatalf("dispatch calls = %d, want 1", calls)
+	}
 }
 
 func TestIssueRepairOutboxKeepsSupersededRolloutSkipped(t *testing.T) {

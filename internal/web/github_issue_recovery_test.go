@@ -997,6 +997,12 @@ func TestIssueRecoveryBlocksPrerequisiteWithoutRepair(t *testing.T) {
 		want     string
 	}{
 		{
+			name:     "human action",
+			report:   "Human action remains pending. Error details: An operator must confirm the shipment.",
+			incident: localruntime.IssueIncidentHumanAction,
+			want:     "required human action is pending; explicit retry required after the handoff",
+		},
+		{
 			name:     "unmerged pull request",
 			report:   "Delivery blocked by unmerged #12. Error details: Required changes are pending review.",
 			incident: localruntime.IssueIncidentUnmergedDependency,

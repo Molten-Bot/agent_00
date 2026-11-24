@@ -212,7 +212,11 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 			continue
 		}
 		admissionCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		_, err = enqueue(context.WithValue(admissionCtx, issueRepairContextKey{}, work), record.Run, false, issueRepairSource, true)
+		run := record.Run
+		if safe := failurefollowup.FailureDetailForPrompt(failure); safe != failure && failure != "" {
+			run.Prompt = strings.Replace(run.Prompt, "\n- error="+strconv.Quote(failure)+"\n", "\n- error="+strconv.Quote(safe)+"\n", 1)
+		}
+		_, err = enqueue(context.WithValue(admissionCtx, issueRepairContextKey{}, work), run, false, issueRepairSource, true)
 		cancel()
 		if err != nil {
 			lock.Close()
@@ -240,7 +244,8 @@ func isSkippedRolloutRepair(record localruntime.IssueRepairRecord) bool {
 }
 
 func isIssueRepairDependencyBlock(reason string) bool {
-	return reason == failurefollowup.OpenDependencyReason || reason == failurefollowup.UnmergedDependencyReason || reason == failurefollowup.ExternalRolloutPrerequisitesReason
+	return reason == failurefollowup.OpenDependencyReason || reason == failurefollowup.UnmergedDependencyReason ||
+		reason == failurefollowup.ExternalRolloutPrerequisitesReason || reason == failurefollowup.HumanActionRequiredReason
 }
 
 func isIssueRepairClaimBlock(reason string) bool {
@@ -309,6 +314,8 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 			return failurefollowup.UnmergedDependencyReason, nil
 		case localruntime.IssueIncidentOpenDependency:
 			return failurefollowup.OpenDependencyReason, nil
+		case localruntime.IssueIncidentHumanAction:
+			return failurefollowup.HumanActionRequiredReason, nil
 		}
 		sourceFailure := issue.FailureDetail()
 		if reason := failurefollowup.NonRemediableFailureReason(errors.New(sourceFailure)); isIssueRepairDependencyBlock(reason) {

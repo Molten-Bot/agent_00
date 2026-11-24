@@ -451,6 +451,7 @@ func TestIssueRepairOutboxRechecksLegacyRolloutFailures(t *testing.T) {
 			q := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, claims: claims, logRoot: t.TempDir(), logf: t.Logf}
 			failure := errors.New("codex: codex reported failure: Failure: Production rollout remains pending.\nError details: " + tc.details)
 			run := failureFollowUpRunConfigWithContext(issue.RequestID, app.Result{}, issue.Run, q.logRoot, formatFailureFollowUpContext(tc.exitCode, failure, issue.Run.Prompt))
+			run.Prompt = legacyRepairPrompt(run.Prompt, failure.Error())
 			id := strings.Repeat("b", 32)
 			record := localruntime.IssueRepairRecord{ID: id, RequestID: "repair-" + id, State: tc.state, Run: run}
 			if tc.state == "queued" || tc.state == "blocked" {

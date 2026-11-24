@@ -25,6 +25,7 @@ const RedactedTaskPromptNotice = "Task prompt: redacted by the harness. Follow-u
 const FollowUpRepositoryURL = config.DefaultRepositoryURL
 
 const FailureResponseInstruction = "When the current run ends with an unresolved failure, start the final response with explicit `Failure:` and `Error details:` fields on consecutive lines, in that order. Describe earlier failures fixed during the run under `Resolved issue:` after any blocker fields."
+const humanActionFailureInstruction = "If human action is the only remaining blocker, use `Failure: Human action remains pending.` followed by `Error details:` naming the required action. Use the regular failure summary when repository changes or failed checks still need attention."
 const rolloutFailureEvidenceInstruction = "If external provisioning blocks a production rollout, use `Failure: Production rollout remains pending.` as the summary. On the next line, name the verified prerequisites in the first sentence of `Error details:` and explicitly state that they require external provisioning. For example:\n\nFailure: Production rollout remains pending.\nError details: IAM setup and Secrets Manager configuration require external provisioning.\n\nInclude any pending repository work or failed checks in the same error details. Omit credential values."
 const RuntimeToolingInstruction = "Runtime tooling available to agents includes Playwright for local browser testing, screenshots, and comparisons; npm for JavaScript package installs, scripts, tests, and builds; Python with pip and virtualenv; and Go tooling such as `go test` and `go build`. Use the matching local tooling when it fits the repository."
 const ValidationToolingInstruction = "If local test or validation tooling is unavailable in this runtime (for example `command not found`, missing `node_modules`, a missing repository validation script or task, or restricted network access blocking dependency downloads), do not fail solely for that and do not use `Failure:` solely for that validation gap. Continue with repository changes, run any alternative checks you can, and clearly report the validation gap."
@@ -36,6 +37,7 @@ const NoOpInstruction = "Only return a no-op when the task is genuinely review/i
 
 var ExecutionContract = strings.Join([]string{
 	FailureResponseInstruction,
+	humanActionFailureInstruction,
 	rolloutFailureEvidenceInstruction,
 	RuntimeToolingInstruction,
 	ValidationToolingInstruction,
@@ -99,6 +101,14 @@ const ExternalRolloutPrerequisitesReason = "production rollout requires external
 
 // OpenDependencyReason identifies an agent-reported open prerequisite.
 const OpenDependencyReason = "required dependency is still open"
+
+// HumanActionRequiredReason identifies work that must be completed by a person.
+const HumanActionRequiredReason = "required human action is pending"
+
+var agentFailureReportPrefix = regexp.MustCompile(`^(?:(?:codex: )?codex|(?:claude: )?claude) reported failure:`)
+var pendingHandoffSummary = regexp.MustCompile(`^failure: (?:[^.!?"\x60]+ )?(?:call|meeting) and email follow-up remain pending\.?$`)
+var humanOutreachPrerequisite = regexp.MustCompile(`^(?:[^.!?"\x60|]+ )?(?:call|meeting) (?:needs|requires) (?:[^.!?"\x60|]+ and )?human outreach(?:[.\n]| \| |$)`)
+var handoffValidationFailure = regexp.MustCompile(`\b(?:tests?|checks?|validation) (?:still )?(?:fail(?:s|ed|ing)?|did not pass)\b`)
 
 // Match a blocker in the agent's failure summary. Error details can quote the
 // same wording while describing a different, actionable failure. An apostrophe
@@ -320,6 +330,15 @@ func RedactFailureDetail(detail string) string {
 	return strings.TrimSpace(detail)
 }
 
+// FailureDetailForPrompt keeps arbitrary agent-authored prose in the source
+// run's logs. Identifier patterns cannot reliably redact names or draft text.
+func FailureDetailForPrompt(detail string) string {
+	if agentFailureReportPrefix.MatchString(strings.ToLower(strings.TrimSpace(detail))) {
+		return "[agent failure report withheld; see source run logs]"
+	}
+	return RedactFailureDetail(detail)
+}
+
 func ComposePrompt(requiredPrompt string, logPaths, fallbackLogPaths []string, noPathGuidance, contextBlock string) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(requiredPrompt))
@@ -533,12 +552,16 @@ func NonRemediableFailureReason(err error) string {
 		!strings.Contains(summary, "no longer blocked") && !strings.Contains(summary, "not blocked") {
 		return UnmergedDependencyReason
 	}
-	agentSummary, reportedFailure := strings.CutPrefix(summary, "codex: codex reported failure:")
-	if !reportedFailure {
-		agentSummary, reportedFailure = strings.CutPrefix(summary, "claude: claude reported failure:")
-	}
-	if reportedFailure && IsExternalRolloutFailure(agentSummary, details) {
-		return ExternalRolloutPrerequisitesReason
+	prefix := agentFailureReportPrefix.FindStringIndex(summary)
+	reportedFailure := prefix != nil
+	if reportedFailure {
+		agentSummary := strings.TrimSpace(summary[prefix[1]:])
+		if isHumanActionFailure(agentSummary, details) {
+			return HumanActionRequiredReason
+		}
+		if IsExternalRolloutFailure(agentSummary, details) {
+			return ExternalRolloutPrerequisitesReason
+		}
 	}
 	if isOpenDependencyFailure(summary, details) {
 		return OpenDependencyReason
@@ -559,6 +582,18 @@ func NonRemediableFailureReason(err error) string {
 		return marker
 	}
 	return NonRemediableRepoAccessReason(err)
+}
+
+func isHumanActionFailure(summary, details string) bool {
+	details = strings.TrimSpace(details)
+	if details == "" || handoffValidationFailure.MatchString(details) || HasValidationFailureEvidence(details) || HasRolloutFailureOutcome(details) || HasHTTPFailureStatus(details) {
+		return false
+	}
+	if strings.TrimSuffix(summary, ".") == "failure: human action remains pending" {
+		return true
+	}
+	// Older reports state the outreach prerequisite in the first sentence.
+	return pendingHandoffSummary.MatchString(summary) && humanOutreachPrerequisite.MatchString(details)
 }
 
 // IsExternalRolloutFailure identifies a reported rollout blocked by infrastructure.
