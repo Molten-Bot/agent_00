@@ -336,6 +336,16 @@ test('issue task adds review and fix markers as each pass starts', async t => {
   await stage('review_fix', 'status=start action=agent pass=2 repo_dir=.', 'Fix Findings (pass 2)');
   await stage('claude', 'status=running mode=review_fix attempt=2 repo_dir=.', 'Fix Findings (pass 2)');
   await stage('review_checks', 'status=start action=verify pass=2 repo_dir=.', 'Review Checks (pass 2)');
+  const progress = card.locator('.task-progress');
+  const scrollLeft = await progress.evaluate(node => {
+    node.scrollLeft = 12;
+    return node.scrollLeft;
+  });
+  assert.equal(scrollLeft, 12, 'user can scroll back to earlier steps');
+  task.logs.push({ stream: 'stdout', text: 'More review output' });
+  await publish();
+  assert.equal(await progress.evaluate(node => node.scrollLeft), scrollLeft, 'live output preserves horizontal scroll');
+
   await stage('review', 'status=start action=pass pass=3 repo_dir=.', 'Review (pass 3)');
   assert.deepEqual(await reviewMarkers.evaluateAll(nodes => nodes.map(node => node.title.split(':')[0])), [
     'Review (pass 1)', 'Fix Findings (pass 1)', 'Review Checks (pass 1)',
@@ -346,7 +356,7 @@ test('issue task adds review and fix markers as each pass starts', async t => {
     const marker = node.getBoundingClientRect();
     const track = node.closest('.task-progress').getBoundingClientRect();
     return marker.left >= track.left && marker.right <= track.right;
-  }), true, 'current review remains visible on a narrow screen');
+  }), true, 'a newly active step scrolls into view on a narrow screen');
 
   task.status = 'completed';
   task.logs.push(...Array.from({ length: 510 }, () => ({ stream: 'stdout', text: 'Agent output' })));
@@ -362,6 +372,35 @@ test('issue task adds review and fix markers as each pass starts', async t => {
     return { active: steps[index].id, reviews: steps.filter(step => step.label.includes('(pass ')).length };
   }, task.request_id);
   assert.deepEqual(restored, { active: 'finalize', reviews: 7 });
+});
+
+test('multi-repository task highlights initial checks for the current repository', async t => {
+  const now = new Date().toISOString();
+  const task = {
+    request_id: 'multi-repo-review', prompt: 'Update navigation', repo: 'example/project, example/other',
+    started_at: now, updated_at: now, status: 'running', stage: 'checks',
+    pr_url: 'https://github.com/example/other/pull/10',
+    logs: [
+      { stream: 'meta', text: 'task stage=review status=start action=pass pass=1 repo_dir=first' },
+      { stream: 'meta', text: 'task stage=review_fix status=start action=agent pass=1 repo_dir=first' },
+      { stream: 'meta', text: 'task stage=review_checks status=start action=verify pass=1 repo_dir=first' },
+      { stream: 'meta', text: 'task stage=checks status=start repo_dir=second' },
+    ],
+  };
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, [task]);
+  const card = page.locator('#task-list .task[data-request-id="multi-repo-review"]');
+  const current = card.locator('.task-progress-step.current');
+  const reviews = card.locator('.task-progress-step[title^="Review (pass 1):"]');
+  await current.waitFor();
+  assert.match(await current.getAttribute('title'), /^Checks: current/);
+  assert.equal(await reviews.count(), 1);
+
+  task.stage = 'review';
+  task.logs.push({ stream: 'meta', text: 'task stage=review status=start action=pass pass=1 repo_dir=second' });
+  await page.evaluate(task => render({ ...state.snapshot, tasks: [task] }), task);
+  assert.equal(await reviews.count(), 2);
+  assert.match(await reviews.first().getAttribute('title'), /^Review \(pass 1\): done/);
+  assert.match(await reviews.last().getAttribute('title'), /^Review \(pass 1\): current/);
 });
 
 test('legacy issue prompts restore task actions and workflow links', async t => {

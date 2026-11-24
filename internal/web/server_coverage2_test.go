@@ -703,6 +703,9 @@ func TestSrvcovCompactStreamTaskLogsDedupesRepeatedProgressSignals(t *testing.T)
 		{Text: "stage=clone action=start"}, // duplicate signal key: must be skipped
 		{Text: "plain log line without a stage marker"},
 		{Text: "stage=build action=compile"},
+		{Text: "stage=checks status=start repo_dir=first"},
+		{Text: "stage=review status=start action=pass pass=1 repo_dir=first"},
+		{Text: "stage=checks status=start repo_dir=second"},
 	}
 	tail := make([]TaskLog, maxStreamTaskLogs)
 	for i := range tail {
@@ -711,11 +714,14 @@ func TestSrvcovCompactStreamTaskLogsDedupesRepeatedProgressSignals(t *testing.T)
 	logs := append(append([]TaskLog(nil), head...), tail...)
 
 	got := compactStreamTaskLogs(logs)
-	if len(got) != 2+len(tail) {
-		t.Fatalf("compactStreamTaskLogs() len = %d, want %d", len(got), 2+len(tail))
+	wantHead := []TaskLog{head[0], head[3], head[4], head[5], head[6]}
+	if len(got) != len(wantHead)+len(tail) {
+		t.Fatalf("compactStreamTaskLogs() len = %d, want %d", len(got), len(wantHead)+len(tail))
 	}
-	if got[0].Text != "stage=clone action=start" || got[1].Text != "stage=build action=compile" {
-		t.Fatalf("compactStreamTaskLogs() compacted head = %#v, want deduped unique stage signals", got[:2])
+	for i, want := range wantHead {
+		if got[i].Text != want.Text {
+			t.Errorf("compactStreamTaskLogs() signal %d = %q, want %q", i, got[i].Text, want.Text)
+		}
 	}
 }
 

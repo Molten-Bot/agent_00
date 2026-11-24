@@ -16,7 +16,7 @@
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
   <script src="/static/task-asset-preview.js?v=4"></script>
-  <link rel="stylesheet" href="/static/style.css?v=16">
+  <link rel="stylesheet" href="/static/style.css?v=17">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -11499,6 +11499,8 @@
         hasReviewFixSeen: false,
         hasReviewChecksSeen: false,
         reviewSteps: new Map(),
+        currentRepoDir: "",
+        activeReviewStepID: "",
         hasAutoMergeSeen: false,
         currentAgentMode: "",
         hasReviewConfigSeen: false,
@@ -11522,6 +11524,8 @@
       clone.hasReviewFixSeen = Boolean(signals?.hasReviewFixSeen);
       clone.hasReviewChecksSeen = Boolean(signals?.hasReviewChecksSeen);
       clone.reviewSteps = new Map(signals.reviewSteps);
+      clone.currentRepoDir = signals.currentRepoDir;
+      clone.activeReviewStepID = signals.activeReviewStepID;
       clone.hasAutoMergeSeen = Boolean(signals?.hasAutoMergeSeen);
       clone.currentAgentMode = String(signals?.currentAgentMode || "");
       clone.hasReviewConfigSeen = Boolean(signals?.hasReviewConfigSeen);
@@ -11547,12 +11551,19 @@
         return;
       }
       signals.stages.add(stage);
+      const repoDir = log?.stream && log.stream !== "meta" ? "" : parseTaskProgressField(line, "repo_dir");
+      if (repoDir && repoDir !== signals.currentRepoDir) {
+        signals.currentRepoDir = repoDir;
+        signals.activeReviewStepID = "";
+        signals.currentAgentMode = "";
+      }
       const reviewStart = taskReviewProgressStart(log);
       if (reviewStart) {
         const { stage, pass, repoDir } = reviewStart;
         const id = `${stage}:${pass}:${repoDir}`;
         const step = TASK_PROGRESS_STEP_DEFS[stage];
         signals.reviewSteps.set(id, { ...step, id, label: `${step.label} (pass ${pass})` });
+        signals.activeReviewStepID = id;
       }
       const reviewTotal = Number.parseInt(String(parseTaskProgressField(line, "review_total") || ""), 10);
       if (Number.isFinite(reviewTotal) && reviewTotal >= 0) {
@@ -11718,6 +11729,7 @@
         signals?.hasReviewFixSeen ? "review_fix" : "",
         signals?.hasReviewChecksSeen ? "review_checks" : "",
         JSON.stringify([...signals.reviewSteps.keys()]),
+        signals.activeReviewStepID,
         signals?.hasAutoMergeSeen ? "auto_merge" : "",
         String(signals?.currentAgentMode || ""),
         signals?.hasReviewConfigSeen ? `review_total:${signals.reviewPasses}` : "",
@@ -11812,11 +11824,10 @@
         return "auto_merge";
       }
       // GitHub and agent status logs can arrive within a pass without starting a new step.
-      const latestReviewStep = [...signals.reviewSteps.keys()].at(-1);
-      if (latestReviewStep) {
+      if (signals.activeReviewStepID) {
         if (stage === "review" || stage === "review_fix" || stage === "review_checks" ||
             stage === "git" || stage === "pr" || stage === "checks" || TASK_PROGRESS_AGENT_STAGES.has(stage)) {
-          return latestReviewStep;
+          return signals.activeReviewStepID;
         }
       }
       if (stage === "review") {
@@ -11837,10 +11848,11 @@
         }
         return "agent";
       }
+      if (!signals.reviewSteps.size && signals.hasReviewFixSeen &&
+          (stage === "git" || stage === "pr" || stage === "checks")) {
+        return signals.hasReviewChecksSeen ? "review_checks" : "review_fix";
+      }
       if (stage === "git") {
-        if (signals.hasReviewFixSeen) {
-          return signals.hasReviewChecksSeen ? "review_checks" : "review_fix";
-        }
         if (!signals.hasAgentSeen) {
           if (signals.hasWorkflowSeen || signals.hasForkFallback || signals.hasPublishGitSeen) {
             return signals.hasForkFallback ? "fork" : "publish";
@@ -11850,15 +11862,9 @@
         return "commit";
       }
       if (stage === "pr") {
-        if (signals.hasReviewFixSeen) {
-          return signals.hasReviewChecksSeen ? "review_checks" : "review_fix";
-        }
         return "pr";
       }
       if (stage === "checks") {
-        if (signals.hasReviewFixSeen) {
-          return signals.hasReviewChecksSeen ? "review_checks" : "review_fix";
-        }
         return "checks";
       }
       if (stage === "finalize") {
@@ -11940,6 +11946,7 @@
       const index = Number.isFinite(model?.index) ? model.index : 0;
       const progress = document.createElement("div");
       progress.className = "task-progress";
+      progress.dataset.currentStepId = stepsModel[index]?.id || "";
       const taskStatus = normalizedTaskStatus(task?.status);
       progress.classList.toggle("is-running", taskStatus === "running" || taskStatus === "active");
 
@@ -12380,6 +12387,13 @@
       const shouldAnimateReflow = Boolean(previousOrderSig && previousOrderSig !== nextOrderSig);
       const previousTaskRects = shouldAnimateReflow ? captureTaskRects(listNode) : new Map();
       const scrollAnchor = captureTaskScrollAnchor(listNode);
+      const previousProgressByTask = new Map();
+      for (const progress of listNode.querySelectorAll(".task[data-request-id] .task-progress")) {
+        previousProgressByTask.set(progress.closest(".task").dataset.requestId, {
+          stepID: progress.dataset.currentStepId,
+          scrollLeft: progress.scrollLeft,
+        });
+      }
       listNode.dataset.renderSig = renderSig;
       listNode.dataset.taskOrderSig = nextOrderSig;
       listNode.dataset.pendingRenderSig = "";
@@ -12854,10 +12868,15 @@
       }
       restoreTaskScrollAnchor(listNode, scrollAnchor);
       animateTaskReflow(listNode, previousTaskRects);
-      for (const marker of listNode.querySelectorAll(".task-progress.is-running .task-progress-step.current")) {
-        const progress = marker.closest(".task-progress");
-        if (marker.offsetLeft + marker.offsetWidth + 8 > progress.clientWidth) {
-          progress.scrollLeft = marker.offsetLeft + marker.offsetWidth + 8 - progress.clientWidth;
+      for (const progress of listNode.querySelectorAll(".task-progress")) {
+        const previous = previousProgressByTask.get(progress.closest(".task").dataset.requestId);
+        if (previous?.stepID === progress.dataset.currentStepId) {
+          progress.scrollLeft = previous.scrollLeft;
+        } else if (progress.classList.contains("is-running")) {
+          const marker = progress.querySelector(".task-progress-step.current");
+          if (marker) {
+            progress.scrollLeft = Math.max(0, marker.offsetLeft + marker.offsetWidth + 8 - progress.clientWidth);
+          }
         }
       }
       applyTaskIconActivityClasses(listNode, tasks);

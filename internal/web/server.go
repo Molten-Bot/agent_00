@@ -3180,13 +3180,14 @@ func taskProgressSignalLogKey(text string) (string, bool) {
 	}
 	key := []string{
 		stage,
+		fields["repo_dir"],
 		strings.TrimSpace(fields["action"]),
 		strings.TrimSpace(fields["strategy"]),
 		strings.TrimSpace(fields["remote"]),
 		strings.TrimSpace(fields["reason"]),
 	}
 	if isTaskReviewProgressStart(fields) {
-		key = append(key, fields["repo_dir"], fields["pass"])
+		key = append(key, fields["pass"])
 	}
 	return strings.Join(key, "\x00"), true
 }
