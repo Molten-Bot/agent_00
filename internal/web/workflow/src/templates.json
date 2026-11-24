@@ -280,6 +280,108 @@
       },
       "name": "Review and merge",
       "description": "Review requested PRs, then squash merge clean reviews after successful checks and human approval. Delete the merged branch."
+    },
+    {
+      "id": "app-prompt",
+      "definition": {
+        "id": "app-prompt",
+        "name": "Prompt submission",
+        "repository": "example/repository",
+        "enabled": false,
+        "includeBacklog": false,
+        "trigger": {
+          "event": "app.prompt"
+        },
+        "filters": {
+          "mode": "all",
+          "rules": []
+        },
+        "task": {
+          "kind": "implement",
+          "instructions": "",
+          "assignCreator": false,
+          "issueLinkMode": "reference",
+          "draft": false
+        },
+        "reviewCycles": 0,
+        "merge": {
+          "enabled": false,
+          "method": "squash",
+          "requireApproval": true,
+          "deleteBranch": false
+        },
+        "positions": {}
+      },
+      "name": "Prompt submission",
+      "description": "Customize prompt submissions for this repository. Configuration defaults apply until enabled."
+    },
+    {
+      "id": "app-json",
+      "definition": {
+        "id": "app-json",
+        "name": "JSON submission",
+        "repository": "example/repository",
+        "enabled": false,
+        "includeBacklog": false,
+        "trigger": {
+          "event": "app.json"
+        },
+        "filters": {
+          "mode": "all",
+          "rules": []
+        },
+        "task": {
+          "kind": "implement",
+          "instructions": "",
+          "assignCreator": false,
+          "issueLinkMode": "reference",
+          "draft": false
+        },
+        "reviewCycles": 0,
+        "merge": {
+          "enabled": false,
+          "method": "squash",
+          "requireApproval": true,
+          "deleteBranch": false
+        },
+        "positions": {}
+      },
+      "name": "JSON submission",
+      "description": "Customize json submissions for this repository. Configuration defaults apply until enabled."
+    },
+    {
+      "id": "app-chat",
+      "definition": {
+        "id": "app-chat",
+        "name": "Chat submission",
+        "repository": "example/repository",
+        "enabled": false,
+        "includeBacklog": false,
+        "trigger": {
+          "event": "app.chat"
+        },
+        "filters": {
+          "mode": "all",
+          "rules": []
+        },
+        "task": {
+          "kind": "implement",
+          "instructions": "",
+          "assignCreator": false,
+          "issueLinkMode": "reference",
+          "draft": false
+        },
+        "reviewCycles": 0,
+        "merge": {
+          "enabled": false,
+          "method": "squash",
+          "requireApproval": true,
+          "deleteBranch": false
+        },
+        "positions": {}
+      },
+      "name": "Chat submission",
+      "description": "Customize chat submissions for this repository. Configuration defaults apply until enabled."
     }
   ]
 }

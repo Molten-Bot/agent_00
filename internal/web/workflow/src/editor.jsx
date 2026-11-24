@@ -12,6 +12,7 @@ import {
 } from "@xyflow/react";
 import {
   Zap,
+  CalendarClock, FileJson, SquarePen, MessageSquare, GitPullRequest, CircleDot, Wrench,
   Bot,
   GitBranch,
   FolderGit2,
@@ -31,6 +32,7 @@ import { ScheduleInterval } from "./schedule-interval.jsx";
 import { RepositoryPicker } from "./repository-picker.jsx";
 import { events, newWorkflow, diagram, replaceDefinition, workflowTemplates } from "./model.js";
 const icons = {
+  calendar: CalendarClock, json: FileJson, prompt: SquarePen, chat: MessageSquare, pullRequest: GitPullRequest, issue: CircleDot, implement: Bot, repair: Wrench,
   repository: FolderGit2,
   trigger: Zap,
   filters: ListFilter,
@@ -47,7 +49,7 @@ const colors = {
   merge: "#de8fbd",
 };
 function StepNode({ data, selected }) {
-  const Icon = icons[data.kind];
+  const Icon = icons[data.icon] || icons[data.kind];
   return (
     <div
       className={`wf-node ${selected ? "wf-node-selected" : ""}`}
@@ -67,7 +69,7 @@ function StepNode({ data, selected }) {
       </div>
       <strong>{data.label}</strong>
       <p>{data.detail}</p>
-      {data.kind !== "merge" && (
+      {!data.last && (
         <Handle type="source" position={Position.Bottom} />
       )}
     </div>
@@ -227,13 +229,14 @@ function Editor() {
       window.removeEventListener("workflow-create-schedule", receive);
   }, [doc, dirty, flow]);
   const scheduled = current?.trigger.event === "schedule";
+  const inputTriggered = current?.trigger.event.startsWith("app.");
   const libraryTask = libraryTasks.find(
     (t) => t.name === current?.task.libraryTaskName,
   );
   const instructionsLabel = current?.task.libraryTaskName
     ? (libraryTask?.promptContextLabel || "Additional context") +
       (libraryTask?.promptContextRequired ? " (required)" : " (optional)")
-    : "Instructions";
+    : inputTriggered ? "Additional instructions (optional)" : "Instructions";
   const scheduleStatus = scheduleStatuses.find(
     (s) => s.workflowId === current?.id,
   );
@@ -248,6 +251,7 @@ function Editor() {
       task: {
         ...current.task,
         kind: event.startsWith("pr.") ? "review" : "implement",
+        ...(event.startsWith("app.") ? { libraryTaskName: undefined } : {}),
       },
     });
   }
@@ -467,7 +471,7 @@ function Editor() {
             ))}
           </div>
           {!visible.length && (
-            <p className="wf-muted">No workflows for this repository.</p>
+            <p className="wf-muted">Configuration defaults apply. Create a workflow to override a trigger for this repository.</p>
           )}
           <div className="wf-section-label wf-spacer">WORKFLOW TEMPLATES</div>
           <p className="wf-muted">Choose a repository above, then a template. Each creates an editable draft with automation off.</p>
@@ -558,6 +562,12 @@ function Editor() {
           )}
         </div>
         <aside className="wf-inspector" aria-label="Step settings">
+          {current && <div className="wf-composition">
+            <span className="wf-section-label">COMPOSE STEPS</span>
+            {current.task.kind !== "review" && <Toggle label="Review step" value={current.reviewCycles > 0} onChange={(enabled) => { edit({reviewCycles: enabled ? 1 : 0}); setSelection(enabled ? "review" : "task"); }} />}
+            <Toggle label="Merge step" value={current.merge.enabled} onChange={(enabled) => { updateMerge("enabled", enabled); setSelection(enabled ? "merge" : "task"); }} />
+          </div>}
+
           <div className="wf-section-label">{selection.toUpperCase()}</div>
           {!current ? (
             <>
@@ -579,7 +589,7 @@ function Editor() {
                     The repository filter and commit signing settings apply to
                     every workflow.
                   </p>
-                  {!scheduled && (
+                  {!scheduled && !inputTriggered && (
                     <>
                       <Toggle
                         label="Include existing matching items on first activation"
@@ -606,7 +616,7 @@ function Editor() {
                         <option key={e} value={e}>
                           {e === "schedule"
                             ? "Scheduled"
-                            : e.replaceAll(".", " · ").replaceAll("_", " ")}
+                            : e.startsWith("app.") ? `${e.slice(4)} submission` : e.replaceAll(".", " · ").replaceAll("_", " ")}
                         </option>
                       ))}
                     </select>
@@ -678,7 +688,7 @@ function Editor() {
                       />
                     </Field>
                   )}
-                  {!scheduled && (
+                  {!scheduled && !inputTriggered && (
                     <>
                       <Toggle
                         label="Include existing matches on first activation"
@@ -693,7 +703,7 @@ function Editor() {
                   )}
                 </>
               )}
-              {selection === "filters" && !scheduled && (
+              {selection === "filters" && !scheduled && !inputTriggered && (
                 <>
                   <h2>Which items?</h2>
                   <Field label="Match rules">
@@ -810,7 +820,8 @@ function Editor() {
                       </select>
                     </Field>
                   )}
-                  <Field label="Prompt source">
+                  {inputTriggered && <p className="wf-muted">The submitted prompt, images, and JSON options are kept. Instructions below add context. Without an enabled custom workflow, existing configuration defaults apply.</p>}
+                  {!inputTriggered && <Field label="Prompt source">
                     <select
                       aria-label="Prompt source"
                       value={current.task.libraryTaskName || ""}
@@ -839,7 +850,7 @@ function Editor() {
                         </option>
                       ))}
                     </select>
-                  </Field>
+                  </Field>}
                   {current.task.libraryTaskName && (
                     <>
                       <p className="wf-muted">

@@ -248,6 +248,9 @@ func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) 
 	if !e.Allowed(w.Repository) {
 		return nil, fmt.Errorf("repository is disabled in Settings")
 	}
+	if IsInputEvent(w.Trigger.Event) {
+		return []Decision{{Item: Item{Repository: w.Repository, Kind: "app", Title: "In-app submission"}, Matches: true, Reason: "Runs when this repository receives a " + strings.TrimPrefix(w.Trigger.Event, "app.") + " submission; without an enabled override, configuration defaults apply"}}, nil
+	}
 	if w.Trigger.Event == "schedule" {
 		return []Decision{{Item: Item{Repository: w.Repository, Kind: "schedule", Title: "Scheduled repository task"}, Matches: true, Reason: fmt.Sprintf("Runs every %g hours while enabled; no GitHub event is required", w.Trigger.IntervalHours)}}, nil
 	}
@@ -420,6 +423,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	cache := map[string][]Item{}
 	for _, w := range d.Workflows {
 		if !featureEnabled || !w.Enabled || !e.Allowed(w.Repository) {
+			continue
+		}
+		if IsInputEvent(w.Trigger.Event) {
 			continue
 		}
 		if w.Trigger.Event == "schedule" {

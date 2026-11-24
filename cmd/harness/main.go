@@ -644,10 +644,11 @@ func runServer(args []string) int {
 				if taskHandle != nil {
 					taskHandle.SetRunning(true)
 				}
-				finalReviewPasses := 0
-				if runCfg.Workflow != nil {
-					finalReviewPasses = runCfg.Workflow.ReviewCycles
+				reviewCfg := activeCfg
+				if startCfg, startCfgErr := effectiveRuntimeConfig(activeCfg); startCfgErr == nil {
+					reviewCfg = startCfg
 				}
+				finalReviewPasses := taskReviewPasses(runCfg, reviewCfg.ReviewWatch)
 				if err := workflowRepositoryGate(cfg.RuntimeConfigPath, runCfg); err != nil {
 					finalState = "error"
 					issueResult.Err = err
@@ -1032,7 +1033,21 @@ func runServer(args []string) int {
 			}
 		}
 
-		// Scheduled tasks are now owned by the workflow engine.
+		schedules := &localruntime.LibrarySchedules{
+			Path: cfg.RuntimeConfigPath, Init: cfg, Logf: daemonLogger,
+			Submit: func(reqCtx context.Context, runCfg config.Config) (string, error) {
+				id, err := enqueueLocalRun(reqCtx, runCfg, true, libraryScheduleSource, false)
+				if err == nil {
+					recordLibraryUsage(runCfg)
+				}
+				return id, err
+			},
+			Active: func(schedule localruntime.LibrarySchedule) bool {
+				return workflowOwnsLibrarySchedule(workflowEngine, schedule) || libraryScheduleActive(monitorBroker, schedule)
+			},
+		}
+		uiServer.LibrarySchedules = schedules
+		go schedules.Run(ctx)
 
 		customLibrarySources := &localruntime.CustomLibrarySources{
 			Path:   cfg.RuntimeConfigPath,
@@ -1120,11 +1135,35 @@ func runServer(args []string) int {
 			return app.ExitSuccess
 		}
 		prMonitor := &web.PRMergeMonitor{
-			Runner:                      runner,
-			Broker:                      monitorBroker,
-			Logf:                        daemonLogger,
-			CleanupTask:                 cleanupTaskLogs,
-			DeleteMergedBranchesEnabled: func() bool { return false },
+			Runner:      runner,
+			Broker:      monitorBroker,
+			Logf:        daemonLogger,
+			CleanupTask: cleanupTaskLogs,
+			DefaultAutomationEnabled: func(task web.Task) bool {
+				return taskUsesDefaultPRAutomation(monitorBroker, workflowEngine, task)
+			},
+			DeleteMergedBranchesEnabled: func() bool {
+				activeCfg, err := effectiveRuntimeConfig(cfg)
+				if err != nil {
+					return false
+				}
+				return activeCfg.ReviewWatch.DeleteMergedBranchesEnabled()
+			},
+			OnReviewFeedback: func(reqCtx context.Context, task web.Task, feedback web.PRReviewFeedback) (string, error) {
+				raw, ok := monitorBroker.TaskRunConfig(task.RequestID)
+				if !ok {
+					return "", fmt.Errorf("stored run config not found for request %s", task.RequestID)
+				}
+				originalCfg, err := localruntime.ParseRunConfigJSON(raw)
+				if err != nil {
+					return "", fmt.Errorf("parse stored run config: %w", err)
+				}
+				followUpCfg, err := prReviewFeedbackRunConfig(originalCfg, task, feedback)
+				if err != nil {
+					return "", err
+				}
+				return enqueueLocalRun(reqCtx, followUpCfg, true, prReviewFeedbackSource, false)
+			},
 		}
 		go func() {
 			if err := prMonitor.Run(ctx); err != nil {
@@ -1140,7 +1179,12 @@ func runServer(args []string) int {
 	} else {
 		daemonLogger("review_watch status=warn action=load_runtime_config err=%q", err)
 	}
-	_ = reviewWatcherCfg // GitHub activations are owned by per-repository workflows.
+	reviewWatcher = startGitHubReviewWatcher(ctx, runner, reviewWatcherCfg, func(reqCtx context.Context, runCfg config.Config, followUp bool, source string, force bool) (string, error) {
+		if workflowEngine.Owns(runCfg.RepoURL, "pr.review_requested") {
+			return "", fmt.Errorf("review request is owned by an enabled custom workflow")
+		}
+		return enqueueLocalRun(reqCtx, runCfg, followUp, source, force)
+	}, daemonLogger)
 	runBootDiagnostics(ctx, runner, daemonLogger, cfg)
 	<-ctx.Done()
 	return app.ExitSuccess

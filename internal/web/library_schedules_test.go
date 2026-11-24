@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
 func TestLibraryScheduleAPI(t *testing.T) {
 	t.Parallel()
 	server := NewServer("", NewBroker())
+	server.Workflows = &workflow.Engine{} // Builder availability must not remove the configured API.
 	server.LibrarySchedules = &localruntime.LibrarySchedules{Path: filepath.Join(t.TempDir(), "config.json"), Init: localruntime.InitConfig{Version: "v1"}}
 	handler := server.Handler()
 	call := func(method, path, body string, want int) *httptest.ResponseRecorder {

@@ -114,3 +114,6 @@
 .wf-editor .wf-picker-list button { width: 100%; text-align: left; border-radius: var(--radius); }
 .wf-editor .wf-picker-list button[aria-pressed="true"] { border-color: var(--running); background: var(--surface-control-bg-strong); color: var(--text); }
 .wf-editor .wf-picker-list button[aria-pressed="true"] svg { color: var(--running); }
+
+.wf-composition { padding-bottom: 14px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
+.wf-composition .wf-toggle { margin: 10px 0; }

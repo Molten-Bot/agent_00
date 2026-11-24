@@ -30,7 +30,9 @@ type PRMergeMonitor struct {
 	OnReviewFeedback            func(context.Context, Task, PRReviewFeedback) (string, error)
 	DeleteMergedBranches        bool
 	DeleteMergedBranchesEnabled func() bool
-	PollInterval                time.Duration
+	// DefaultAutomationEnabled excludes tasks governed by explicit workflows.
+	DefaultAutomationEnabled func(Task) bool
+	PollInterval             time.Duration
 
 	mu             sync.Mutex
 	inFlight       map[string]struct{}
@@ -269,7 +271,7 @@ func (m *PRMergeMonitor) checkTaskPR(ctx context.Context, task Task) {
 			return
 		}
 	}
-	deleteMergedBranches := m.deleteMergedBranchesEnabled()
+	deleteMergedBranches := m.defaultAutomationEnabled(task) && m.deleteMergedBranchesEnabled()
 	if deleteMergedBranches {
 		if err := m.deleteMergedBranch(ctx, task, state); err != nil {
 			m.Logf("localruntime.ui status=warn event=pr_monitor_delete_branch request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
@@ -297,6 +299,10 @@ func (m *PRMergeMonitor) deleteMergedBranchesEnabled() bool {
 		return m.DeleteMergedBranchesEnabled()
 	}
 	return m.DeleteMergedBranches
+}
+
+func (m *PRMergeMonitor) defaultAutomationEnabled(task Task) bool {
+	return m.DefaultAutomationEnabled == nil || m.DefaultAutomationEnabled(task)
 }
 
 func (m *PRMergeMonitor) deleteMergedBranch(ctx context.Context, task Task, state prViewState) error {
@@ -356,7 +362,7 @@ func (s prViewState) HeadRepositoryNameWithOwner() string {
 }
 
 func (m *PRMergeMonitor) maybeQueueReviewFeedback(ctx context.Context, task Task, state prViewState) {
-	if m.OnReviewFeedback == nil || !shouldMonitorTaskReviewFeedback(task) || !state.Open() {
+	if m.OnReviewFeedback == nil || !m.defaultAutomationEnabled(task) || !shouldMonitorTaskReviewFeedback(task) || !state.Open() {
 		return
 	}
 	feedback := actionablePRReviewFeedback(task, state)

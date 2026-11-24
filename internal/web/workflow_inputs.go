@@ -1,0 +1,76 @@
+package web
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
+)
+
+func (s Server) submitInputWorkflow(ctx context.Context, body []byte, source string, submit func(context.Context, []byte) (string, error)) (string, error) {
+	fallback := func() (string, error) { return s.submitWithIssueClaim(ctx, body, submit) }
+	if s.Workflows == nil || !workflow.IsInputEvent("app."+source) || !s.Workflows.Enabled() {
+		return fallback()
+	}
+	// Already-resolved workflows (including reruns) retain their captured policy.
+	var header struct {
+		Workflow *config.WorkflowRunConfig `json:"workflow"`
+	}
+	_ = json.Unmarshal(body, &header)
+	if header.Workflow != nil {
+		return fallback()
+	}
+	c, err := localruntime.ParseRunConfigJSON(body)
+	if err != nil {
+		return "", err
+	}
+	var selected *workflow.Definition
+	for _, repo := range c.Repos {
+		w, err := s.Workflows.InputWorkflow(repo, source)
+		if err != nil {
+			return "", err
+		}
+		if w != nil {
+			selected = w
+		}
+	}
+	if selected == nil {
+		return fallback()
+	}
+	if len(c.Repos) != 1 {
+		return "", fmt.Errorf("a custom input workflow requires a single-repository submission; submit repositories separately")
+	}
+	if c.Review != nil || c.GitHubIssue != nil {
+		return "", fmt.Errorf("custom app workflows accept repository tasks; use the GitHub workflow for an issue or pull request")
+	}
+	w := *selected
+	if text := strings.TrimSpace(w.Task.Instructions); text != "" {
+		c.Prompt += "\n\nWorkflow instructions:\n" + text
+	}
+	if w.Task.BaseBranch != "" {
+		c.BaseBranch = w.Task.BaseBranch
+	}
+	if w.Task.TargetSubdir != "" {
+		c.TargetSubdir = w.Task.TargetSubdir
+	}
+	if w.Task.Reviewers != nil {
+		c.Reviewers = append([]string{}, (*w.Task.Reviewers)...)
+	}
+	c.AssignCreator = &w.Task.AssignCreator
+	c.Draft = w.Task.Draft
+	if err := c.Validate(); err != nil {
+		return "", err
+	}
+	return s.Workflows.DispatchInput(ctx, w, func(run workflow.Run) (string, error) {
+		c.Workflow = &config.WorkflowRunConfig{ID: w.ID, Name: w.Name, EventID: run.ID, Instructions: c.Prompt, ReviewCycles: w.ReviewCycles}
+		data, err := json.Marshal(c)
+		if err != nil {
+			return "", err
+		}
+		return submit(ctx, data)
+	})
+}

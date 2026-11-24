@@ -43,7 +43,7 @@ test("scheduled tasks use the same agent/review/merge pipeline without GitHub fi
   const graph = diagram(w);
   assert.equal(w.trigger.intervalHours, 24);
   assert.equal(w.enabled, false);
-  assert.equal(graph.nodes.length, 5);
+  assert.equal(graph.nodes.length, 3);
   assert.equal(
     graph.nodes.some((n) => n.id === "filters"),
     false,

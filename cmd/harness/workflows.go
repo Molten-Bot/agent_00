@@ -112,9 +112,8 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 	if _, err := store.Load(); err != nil {
 		return err
 	}
-	if err := migrateLibrarySchedules(cfg, store); err != nil {
-		return err
-	}
+	// Existing configured schedules remain defaults. The builder is additive;
+	// opening it must not migrate ownership or pause configured automation.
 	gh := workflow.GitHub{Runner: runner}
 	engine := &workflow.Engine{Store: store, StatePath: filepath.Join(root, "workflow-state.json"), Fetch: gh.Fetch, InspectPR: gh.Inspect, Merge: gh.Merge, Logf: logf}
 	engine.Enabled = func() bool {
@@ -214,7 +213,7 @@ func migrateWorkflowSettings(cfg localruntime.InitConfig, store *workflow.Store)
 	if err != nil {
 		return err
 	}
-	d := workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{}, Migration: "Legacy automation settings remain in config.json. Repository rules were copied as disabled drafts. Global review/merge preferences are no longer automatic; enable individual workflows explicitly."}
+	d := workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{}, Migration: "Configured automation remains active in config.json. Repository rules were copied as disabled drafts; enable a custom workflow to override its event family for that repository."}
 	// Preserve the exact legacy file before changing the source of automation behavior.
 	if raw, err := os.ReadFile(cfg.RuntimeConfigPath); err == nil {
 		backup := filepath.Join(filepath.Dir(store.Path), "workflow-legacy-settings.json")

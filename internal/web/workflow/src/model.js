@@ -2,6 +2,9 @@ import catalog from "./templates.json" with { type: "json" };
 export const workflowTemplates = catalog.templates;
 export const events = [
   "schedule",
+  "app.prompt",
+  "app.json",
+  "app.chat",
   "issue.opened",
   "issue.assigned",
   "issue.labeled",
@@ -19,11 +22,14 @@ export function newWorkflow(repository, kind = "implement", id = crypto.randomUU
   return { ...structuredClone(template.definition), id, repository, enabled: false, includeBacklog: false };
 }
 export function diagram(w) {
+  const input = w.trigger.event.startsWith("app.");
+  const triggerIcons = { schedule: "calendar", "app.prompt": "prompt", "app.json": "json", "app.chat": "chat" };
+  const triggerIcon = triggerIcons[w.trigger.event] || (w.trigger.event.startsWith("pr.") ? "pullRequest" : "issue");
   const steps = [
     ["repository", "Repository", w.repository || "Choose a repository"],
     [
       "trigger",
-      "Trigger",
+      input ? `${w.trigger.event.slice(4)} submission` : "Trigger",
       (w.trigger.event === "schedule"
         ? `Every ${w.trigger.intervalHours} hours`
         : w.trigger.event.replaceAll(".", " · ").replaceAll("_", " ")) +
@@ -45,7 +51,7 @@ export function diagram(w) {
           : "Agent task",
       w.task.libraryTaskName
         ? `Library · ${w.task.libraryTaskName}`
-        : w.task.instructions,
+        : w.task.instructions || (input ? "Use the submitted task and configuration" : ""),
     ],
     [
       "review",
@@ -62,13 +68,15 @@ export function diagram(w) {
         : "Leave the pull request for a human",
     ],
   ];
-  if (w.trigger.event === "schedule") steps.splice(2, 1);
+  if (w.trigger.event === "schedule" || input) steps.splice(2, 1);
+  if (!w.reviewCycles || w.task.kind === "review") steps.splice(steps.findIndex(([id]) => id === "review"), 1);
+  if (!w.merge.enabled) steps.splice(steps.findIndex(([id]) => id === "merge"), 1);
   return {
     nodes: steps.map(([id, label, detail], index) => ({
       id,
       type: "workflow",
       position: w.positions?.[id] || { x: 80, y: index * 145 },
-      data: { label, detail, kind: id, enabled: w.enabled },
+      data: { label, detail, kind: id, icon: id === "trigger" ? triggerIcon : id === "task" ? w.task.kind : id, last: index === steps.length - 1, enabled: w.enabled },
     })),
     edges: steps.slice(1).map(([id], index) => ({
       id: `${steps[index][0]}-${id}`,

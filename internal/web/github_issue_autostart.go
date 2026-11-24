@@ -162,9 +162,6 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 	if err := s.ReconcileIssueWork(ctx); err != nil {
 		status.addError(err)
 	}
-	if s.Workflows != nil {
-		return
-	} // Workflow definitions replace legacy auto-start; recovery above remains active.
 	settings, err := s.ReviewSettingsStatus(ctx)
 	if err != nil {
 		status.Error = "load automation settings: " + err.Error()
@@ -212,6 +209,9 @@ func (s Server) pollGitHubIssueAutoStart(ctx context.Context) {
 	scanRepos := make([]GitHubRepo, 0, len(repos))
 	for _, repo := range repos {
 		if name, ok := validGitHubRepository(repo.FullName); ok {
+			if s.Workflows.Owns(name, "issue.*") {
+				continue
+			}
 			if _, enabled := settings.issueAutoStartForRepository(name); enabled {
 				repo.FullName = name
 				scanRepos = append(scanRepos, repo)

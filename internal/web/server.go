@@ -2754,7 +2754,7 @@ func (s Server) handlePromptSubmit(
 	if source == "json" && !s.requireJSONEnabled(w, r) {
 		return
 	}
-	requestID, err := s.submitWithIssueClaim(r.Context(), body, submit)
+	requestID, err := s.submitInputWorkflow(r.Context(), body, source, submit)
 	if err != nil {
 		if errors.Is(err, errIssueRecoveryRequired) {
 			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": err.Error(), "recoveryRequired": true})
