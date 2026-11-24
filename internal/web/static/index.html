@@ -975,6 +975,7 @@
       review: { id: "review", label: "Review", detail: "Independent post-task pull request review.", icon: "review" },
       review_fix: { id: "review_fix", label: "Fix Findings", detail: "Apply the current review pass findings.", icon: "agent" },
       review_checks: { id: "review_checks", label: "Review Checks", detail: "Push review fixes and verify pull request checks.", icon: "review_checks" },
+      merge_conflict: { id: "merge_conflict", label: "Resolve Merge Conflicts", detail: "Agent resolves conflicts found during pull request mergeability verification.", icon: "agent" },
       finalize: { id: "finalize", label: "GitHub", detail: "Repository link before PR creation; pull request link once available.", icon: "github" },
       auto_merge: { id: "auto_merge", label: "Auto-merge", detail: "Clean pull request waits for GitHub auto-merge.", icon: "auto_merge" },
     });
@@ -11603,6 +11604,13 @@
           if (mode === "review_fix") {
             signals.hasReviewFixSeen = true;
           }
+          if (repoDir && signals.activeReviewStepID.startsWith("review:") &&
+              (mode === "base_sync_conflict" || mode === "remote_branch_sync_conflict") &&
+              parseTaskProgressField(line, "status") === "start") {
+            const id = `merge_conflict:${signals.activeReviewStepID}`;
+            signals.reviewSteps.set(id, { ...TASK_PROGRESS_STEP_DEFS.merge_conflict, id, repoDir });
+            signals.activeReviewStepID = id;
+          }
         }
         const action = String(parseTaskProgressField(line, "action") || "").trim().toLowerCase();
         if (action === "auto_merge") {
@@ -11827,7 +11835,7 @@
       if (taskAutoMergeStepEnabled(task) && signals.hasAutoMergeSeen) {
         return "auto_merge";
       }
-      // GitHub and agent status logs can arrive within a pass without starting a new step.
+      // GitHub and agent status logs can arrive within a pass or conflict repair without starting a new step.
       if (signals.activeReviewStepID) {
         if (stage === "review" || stage === "review_fix" || stage === "review_checks" ||
             stage === "git" || stage === "pr" || stage === "checks" || TASK_PROGRESS_AGENT_STAGES.has(stage)) {

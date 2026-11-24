@@ -358,6 +358,15 @@ test('issue task adds review and fix markers as each pass starts', async t => {
     return marker.left >= track.left && marker.right <= track.right;
   }), true, 'a newly active step scrolls into view on a narrow screen');
 
+  await stage('review', 'status=ok action=pass pass=3 findings=0 repo_dir=.', 'Review (pass 3)');
+  await stage('git', 'status=start action=check_mergeability', 'Review (pass 3)');
+  await stage('claude', 'status=start mode=base_sync_conflict attempt=1 repo_dir=.', 'Resolve Merge Conflicts');
+  assert.equal(await current.locator('img').getAttribute('src'), '/static/logos/claude-code.svg');
+  assert.match(await reviewMarkers.last().getAttribute('title'), /^Review \(pass 3\): done/);
+  await stage('git', 'status=start action=sync_base_commit repo_dir=.', 'Resolve Merge Conflicts');
+  await stage('claude', 'status=start mode=remote_branch_sync_conflict attempt=1 repo_dir=.', 'Resolve Merge Conflicts');
+  assert.equal(await card.locator('.task-progress-step[title^="Resolve Merge Conflicts:"]').count(), 1);
+
   task.status = 'completed';
   task.logs.push(...Array.from({ length: 510 }, () => ({ stream: 'stdout', text: 'Agent output' })));
   await publish();
