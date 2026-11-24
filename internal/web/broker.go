@@ -77,6 +77,7 @@ type Task struct {
 	Assets            []githubassets.Asset   `json:"assets,omitempty"`
 	Skill             string                 `json:"skill,omitempty"`
 	Workflow          string                 `json:"workflow,omitempty"`
+	WorkflowTriggered bool                   `json:"workflow_triggered,omitempty"`
 	AgentHarness      string                 `json:"agent_harness,omitempty"`
 	Repo              string                 `json:"repo,omitempty"`
 	Repos             []string               `json:"repos,omitempty"`
@@ -319,6 +320,7 @@ type taskState struct {
 	Assets            []githubassets.Asset
 	Skill             string
 	Workflow          string
+	WorkflowTriggered bool
 	AgentHarness      string
 	Repo              string
 	Repos             []string
@@ -556,6 +558,7 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			Assets:            slices.Clone(t.Assets),
 			Skill:             t.Skill,
 			Workflow:          taskWorkflow(t),
+			WorkflowTriggered: t.WorkflowTriggered,
 			AgentHarness:      taskAgentHarness(t),
 			Repo:              t.Repo,
 			Repos:             append([]string(nil), t.Repos...),
@@ -671,6 +674,7 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		Assets:            slices.Clone(t.Assets),
 		Skill:             t.Skill,
 		Workflow:          taskWorkflow(t),
+		WorkflowTriggered: t.WorkflowTriggered,
 		AgentHarness:      taskAgentHarness(t),
 		Repo:              t.Repo,
 		Repos:             append([]string(nil), t.Repos...),
@@ -821,6 +825,7 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 	repos := reposFromRunConfigJSON(cfgCopy)
 	reviewers := reviewersFromRunConfigJSON(cfgCopy)
 	workflow := workflowFromRunConfigJSON(cfgCopy)
+	workflowTriggered := workflowTriggeredFromRunConfigJSON(cfgCopy)
 	agentHarness := agentHarnessFromRunConfigJSON(cfgCopy)
 	autoMerge := autoMergeFromRunConfigJSON(cfgCopy)
 	source = stringsx.FirstNonEmpty(
@@ -879,6 +884,10 @@ func (b *Broker) RecordTaskRunConfigWithSource(requestID string, runConfigJSON [
 	if source != "" && t != nil && t.Source != source {
 		t.Source = source
 		b.recordTaskAttemptLocked(b.taskAttemptRootLocked(requestID), requestID, "", t.Status, t.Error, t.Workflow, t.AgentHarness, t.Source, t.Repos, t.PRURL, now)
+		changed = true
+	}
+	if t != nil && t.WorkflowTriggered != workflowTriggered {
+		t.WorkflowTriggered = workflowTriggered
 		changed = true
 	}
 	if prURL != "" && t != nil && t.PRURL != prURL {
@@ -3202,6 +3211,15 @@ func workflowFromRunConfigJSON(runConfigJSON []byte) string {
 		return "code-review"
 	}
 	return stringsx.FirstNonEmpty(raw.LibraryTaskName, raw.LibraryTaskNameLower, raw.Skill)
+}
+
+func workflowTriggeredFromRunConfigJSON(runConfigJSON []byte) bool {
+	var raw struct {
+		Workflow *struct {
+			EventID string `json:"eventId"`
+		} `json:"workflow"`
+	}
+	return json.Unmarshal(runConfigJSON, &raw) == nil && raw.Workflow != nil && raw.Workflow.EventID != ""
 }
 
 func agentHarnessFromRunConfigJSON(runConfigJSON []byte) string {
