@@ -152,6 +152,7 @@ type Run struct {
 	Reason    string     `json:"reason"`
 	PRURL     string     `json:"prUrl,omitempty"`
 	MergeHead string     `json:"mergeHead,omitempty"`
+	StartedAt *time.Time `json:"startedAt,omitempty"`
 	UpdatedAt time.Time  `json:"updatedAt"`
 }
 type observation struct {
@@ -265,7 +266,11 @@ func (e *Engine) logRun(r Run, event string) {
 	if strings.HasPrefix(r.Reason, "Merge blocked:") {
 		reason = "merge_blocked"
 	}
-	e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q status=%s reason=%s", event, r.Workflow.ID, r.ID, r.RequestID, r.Status, reason)
+	var durationMS int64
+	if r.StartedAt != nil && (r.Status == "succeeded" || r.Status == "merged") {
+		durationMS = r.UpdatedAt.Sub(*r.StartedAt).Milliseconds()
+	}
+	e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q status=%s reason=%s duration_ms=%d", event, r.Workflow.ID, r.ID, r.RequestID, r.Status, reason, durationMS)
 }
 func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) {
 	if err := w.Validate(); err != nil {
@@ -540,7 +545,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 				continue
 			}
 			id := digest([]any{obsKey, fingerprint, old.Generation})
-			r := Run{ID: id, Workflow: w, Item: i, Status: "dispatching", Reason: reason, UpdatedAt: e.now()}
+			now := e.now()
+			r := Run{ID: id, Workflow: w, Item: i, Status: "dispatching", Reason: reason, StartedAt: &now, UpdatedAt: now}
 			s.Runs = append(s.Runs, r)
 			if err := save(); err != nil {
 				return err

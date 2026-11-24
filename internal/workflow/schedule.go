@@ -81,7 +81,7 @@ func (e *Engine) tickSchedule(ctx context.Context, w Definition, s *State, busy 
 	// Missed intervals coalesce into one run; failure retries at the next interval.
 	cursor.NextRunAt = now.Add(time.Duration(math.Round(w.Trigger.IntervalHours*60)) * time.Minute)
 	s.Schedules[w.ID] = cursor
-	r := Run{ID: digest([]any{w.ID, cursor.Policy, occurrence}), Workflow: w, Item: Item{Repository: w.Repository, Kind: "schedule", Title: w.Name}, Status: "dispatching", Reason: "Schedule due at " + occurrence.Format(time.RFC3339), UpdatedAt: now}
+	r := Run{ID: digest([]any{w.ID, cursor.Policy, occurrence}), Workflow: w, Item: Item{Repository: w.Repository, Kind: "schedule", Title: w.Name}, Status: "dispatching", Reason: "Schedule due at " + occurrence.Format(time.RFC3339), StartedAt: &now, UpdatedAt: now}
 	s.Runs = append(s.Runs, r)
 	if err := e.save(*s); err != nil {
 		return err

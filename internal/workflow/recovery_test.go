@@ -3,8 +3,10 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
@@ -141,7 +143,9 @@ func TestTransientMergeFailureRetriesSameHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Runs = []Run{{ID: "merge", Workflow: w, Item: Item{Repository: w.Repository}, PRURL: "https://github.com/acme/repo/pull/42", Status: "waiting"}}
+	now := e.now()
+	startedAt := now.Add(-time.Minute)
+	s.Runs = []Run{{ID: "merge", Workflow: w, Item: Item{Repository: w.Repository}, PRURL: "https://github.com/acme/repo/pull/42", Status: "waiting", StartedAt: &startedAt}}
 	if err := e.save(s); err != nil {
 		t.Fatal(err)
 	}
@@ -151,11 +155,18 @@ func TestTransientMergeFailureRetriesSameHead(t *testing.T) {
 		t.Fatalf("unexpected state after merge failure: runs=%+v err=%v", runs, err)
 	}
 
-	restarted := &Engine{Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed, Fetch: e.Fetch, InspectPR: e.InspectPR, Merge: e.Merge}
+	var events []string
+	restarted := &Engine{Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed, Fetch: e.Fetch, InspectPR: e.InspectPR, Merge: e.Merge,
+		Now:  func() time.Time { return now.Add(time.Minute) },
+		Logf: func(format string, args ...any) { events = append(events, fmt.Sprintf(format, args...)) },
+	}
 	tick(t, restarted)
 	tick(t, restarted)
 	runs, err = restarted.Runs()
 	if err != nil || len(runs) != 0 || strings.Join(attemptedHeads, ",") != "reviewed-head,reviewed-head" {
 		t.Fatalf("unexpected state after retry: runs=%+v heads=%v err=%v", runs, attemptedHeads, err)
+	}
+	if len(events) != 1 || !strings.Contains(events[0], "status=merged reason=merged duration_ms=120000") {
+		t.Fatalf("expected one merge event with the full duration after restart, got %v", events)
 	}
 }

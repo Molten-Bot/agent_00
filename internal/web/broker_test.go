@@ -27,6 +27,32 @@ func TestWorkflowTransitionRemainsAnEventWithoutCreatingATask(t *testing.T) {
 	}
 }
 
+func TestDashboardCountsWorkflowDurationOnce(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	b.now = func() time.Time { return now }
+	b.IngestLog("task status=start request_id=req-42")
+	now = now.Add(20 * time.Second)
+	b.IngestLog("task status=completed request_id=req-42")
+	if got := b.Snapshot().Stats.TotalSavedSeconds; got != 20 {
+		t.Fatalf("task time saved = %v, want 20", got)
+	}
+	now = now.Add(time.Minute)
+	b.IngestLog("workflow event=transition workflow_id=delivery request_id=req-42 status=waiting duration_ms=80000")
+	if got := b.Snapshot().Stats.TotalSavedSeconds; got != 20 {
+		t.Fatalf("waiting workflow time saved = %v, want 20", got)
+	}
+	for range 2 {
+		b.IngestLog("workflow event=transition workflow_id=delivery request_id=req-42 status=merged duration_ms=80000")
+	}
+	b.IngestLog("workflow event=transition workflow_id=delivery request_id=restored status=merged duration_ms=30000")
+	if got := b.Snapshot().Stats.TotalSavedSeconds; got != 110 {
+		t.Fatalf("time saved = %v, want 110", got)
+	}
+}
+
 func TestBrokerTracksTaskLifecycleAndCommandOutput(t *testing.T) {
 	t.Parallel()
 

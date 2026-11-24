@@ -87,7 +87,8 @@ func (e *Engine) dispatch(w Definition, item Item, reason, retryOf string, submi
 	if _, err := rand.Read(random[:]); err != nil {
 		return "", err
 	}
-	run := Run{ID: hex.EncodeToString(random[:]), Workflow: w, Item: item, Status: "dispatching", Reason: reason, UpdatedAt: e.now(), RetryOf: retryOf}
+	now := e.now()
+	run := Run{ID: hex.EncodeToString(random[:]), Workflow: w, Item: item, Status: "dispatching", Reason: reason, StartedAt: &now, UpdatedAt: now, RetryOf: retryOf}
 	state.Runs = append(state.Runs, run)
 	if err := e.save(state); err != nil {
 		return "", err

@@ -279,20 +279,21 @@ type Broker struct {
 	maxEvents  int
 	maxTaskLog int
 
-	nextEventID   int64
-	events        []Event
-	releases      []releaseState
-	tasks         map[string]*taskState
-	closedTasks   map[string]time.Time
-	runConfigs    map[string][]byte
-	promptedRepos []string
-	repositories  []Repository
-	repoIndex     map[string]int
-	attempts      map[string][]taskAttemptState
-	attemptRoots  map[string]string
-	attemptSeq    uint64
-	rejectedSeq   uint64
-	subs          map[chan struct{}]struct{}
+	nextEventID       int64
+	events            []Event
+	releases          []releaseState
+	tasks             map[string]*taskState
+	closedTasks       map[string]time.Time
+	runConfigs        map[string][]byte
+	promptedRepos     []string
+	repositories      []Repository
+	repoIndex         map[string]int
+	attempts          map[string][]taskAttemptState
+	workflowDurations map[string]time.Duration
+	attemptRoots      map[string]string
+	attemptSeq        uint64
+	rejectedSeq       uint64
+	subs              map[chan struct{}]struct{}
 
 	resources          ResourceMetrics
 	maxConcurrentTasks int
@@ -446,9 +447,19 @@ func (b *Broker) IngestLog(line string) {
 		Line:      line,
 	})
 
+	workflowEvent := strings.HasPrefix(line, "workflow event=")
 	// Workflow events describe activations. A request ID links the event to a
 	// task, but the activation can outlive the task's monitor history.
-	if requestID != "" && !strings.HasPrefix(line, "workflow event=") &&
+	if workflowEvent && requestID != "" && fields["event"] == "transition" &&
+		(fields["status"] == "succeeded" || fields["status"] == "merged") {
+		if duration, err := time.ParseDuration(fields["duration_ms"] + "ms"); err == nil && duration > 0 {
+			if b.workflowDurations == nil {
+				b.workflowDurations = make(map[string]time.Duration)
+			}
+			b.workflowDurations[requestID] = duration
+		}
+	}
+	if requestID != "" && !workflowEvent &&
 		!isDuplicateTaskLifecycleLine(fields) &&
 		!b.isClosedTaskLocked(requestID, now) {
 		t := b.ensureTaskLocked(requestID, now)
@@ -1161,6 +1172,9 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 		}
 		duration := taskDuration(startedAt, updatedAt, now, status)
 		savedDuration := savedDurationForAttempt(attempt, status, duration)
+		if workflowDuration := b.workflowDurations[requestID]; workflowDuration > 0 {
+			savedDuration = workflowDuration
+		}
 		stats.TotalSavedSeconds += savedDuration.Seconds()
 		if reviewAttempt {
 			stats.ReviewSavedSeconds += savedDuration.Seconds()
@@ -1177,6 +1191,11 @@ func (b *Broker) dashboardStatsLocked(now time.Time, tasks []*taskState) Dashboa
 	}
 	for _, attempt := range seen {
 		recordAttempt(attempt)
+	}
+	for requestID, duration := range b.workflowDurations {
+		if _, ok := counted[requestID]; !ok {
+			stats.TotalSavedSeconds += duration.Seconds()
+		}
 	}
 	terminalTasks := stats.CompletedTasks + stats.FailedTasks + stats.StoppedTasks
 	if terminalTasks > 0 {
