@@ -81,7 +81,12 @@ lucide-react/dist/esm/shared/src/utils/hasA11yProp.mjs:
 lucide-react/dist/esm/context.mjs:
 lucide-react/dist/esm/Icon.mjs:
 lucide-react/dist/esm/createLucideIcon.mjs:
+lucide-react/dist/esm/icons/at-sign.mjs:
 lucide-react/dist/esm/icons/bot.mjs:
+lucide-react/dist/esm/icons/building-complex.mjs:
+lucide-react/dist/esm/icons/calendar-days.mjs:
+lucide-react/dist/esm/icons/calendar-range.mjs:
+lucide-react/dist/esm/icons/clock-3.mjs:
 lucide-react/dist/esm/icons/diagram-flow-vertical.mjs:
 lucide-react/dist/esm/icons/download.mjs:
 lucide-react/dist/esm/icons/folder-git-2.mjs:
@@ -92,6 +97,9 @@ lucide-react/dist/esm/icons/pause.mjs:
 lucide-react/dist/esm/icons/play.mjs:
 lucide-react/dist/esm/icons/plus.mjs:
 lucide-react/dist/esm/icons/save.mjs:
+lucide-react/dist/esm/icons/sun.mjs:
+lucide-react/dist/esm/icons/timer.mjs:
+lucide-react/dist/esm/icons/user.mjs:
 lucide-react/dist/esm/icons/x.mjs:
 lucide-react/dist/esm/icons/zap.mjs:
 lucide-react/dist/esm/lucide-react.mjs:

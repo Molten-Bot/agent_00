@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -30,7 +31,7 @@ func (e *Engine) scheduleCursor(w Definition, s State) ScheduleCursor {
 	cursor := s.Schedules[w.ID]
 	policy := schedulePolicy(w)
 	if cursor.Policy != policy {
-		cursor = ScheduleCursor{Policy: policy, NextRunAt: e.now().Add(time.Duration(w.Trigger.IntervalHours) * time.Hour)}
+		cursor = ScheduleCursor{Policy: policy, NextRunAt: e.now().Add(time.Duration(math.Round(w.Trigger.IntervalHours*60)) * time.Minute)}
 		if w.Trigger.StartAt != nil {
 			cursor.NextRunAt = w.Trigger.StartAt.UTC()
 		}
@@ -78,13 +79,14 @@ func (e *Engine) tickSchedule(ctx context.Context, w Definition, s *State, busy 
 	occurrence := cursor.NextRunAt
 	// Persist the occurrence and advance its cursor together before admission.
 	// Missed intervals coalesce into one run; failure retries at the next interval.
-	cursor.NextRunAt = now.Add(time.Duration(w.Trigger.IntervalHours) * time.Hour)
+	cursor.NextRunAt = now.Add(time.Duration(math.Round(w.Trigger.IntervalHours*60)) * time.Minute)
 	s.Schedules[w.ID] = cursor
 	r := Run{ID: digest([]any{w.ID, cursor.Policy, occurrence}), Workflow: w, Item: Item{Repository: w.Repository, Kind: "schedule", Title: w.Name}, Status: "dispatching", Reason: "Schedule due at " + occurrence.Format(time.RFC3339), UpdatedAt: now}
 	s.Runs = append(s.Runs, r)
 	if err := writeAtomic(e.StatePath, s); err != nil {
 		return err
 	}
+	e.logRun(r, "dispatch")
 	var id string
 	var err error
 	if !e.StillEnabled(w) {
@@ -101,5 +103,9 @@ func (e *Engine) tickSchedule(ctx context.Context, w Definition, s *State, busy 
 		s.Runs[index].RequestID = id
 		busy[entity] = true
 	}
-	return writeAtomic(e.StatePath, s)
+	if err := writeAtomic(e.StatePath, s); err != nil {
+		return err
+	}
+	e.logRun(s.Runs[index], "submission")
+	return nil
 }

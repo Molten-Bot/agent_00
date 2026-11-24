@@ -60,6 +60,14 @@
 .wf-field { display: flex; flex-direction: column; gap: 8px; font-size: 11px; color: var(--text-soft); margin: 18px 0; }
 .wf-editor .wf-field :is(input,textarea) { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 7px; padding: 10px; font-size: 12px; width: 100%; box-shadow: none; line-height: 1.6; }
 .wf-field textarea { resize: vertical; }
+.wf-schedule-interval { margin: 18px 0; }
+.wf-interval-label { color: var(--text-soft); font-size: 11px; }
+.wf-interval-units { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; margin-top: 12px; }
+.wf-editor .wf-interval-units button { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 7px 0; min-width: 0; border: 0; background: transparent; color: var(--text-soft); font-size: 10px; border-radius: 6px; }
+.wf-editor .wf-interval-units button[aria-pressed="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.wf-editor input.wf-interval-scale { display: block; width: calc(80% + 16px); margin: 8px auto 0; padding: 0; min-height: 24px; accent-color: var(--accent); cursor: ew-resize; }
+.wf-field.wf-interval-amount { margin: 12px 0 0; }
+.wf-interval-hint { color: var(--text-soft); font-size: 10px; line-height: 1.5; margin: 8px 0 0; }
 .wf-editor button.wf-delete { color: var(--bad); background: transparent; margin-top: 15px; }
 .wf-inspector-empty { text-align: center; padding-top: 80px; }
 .wf-inspector-empty > span { width: 48px; height: 48px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 12px; color: var(--muted); margin-bottom: 10px; }
@@ -100,3 +108,9 @@
 .wf-template-card > svg { margin-top: 2px; }
 .wf-template-card strong { display: block; font-size: 11px; }
 .wf-template-card small { display: block; margin-top: 5px; font-size: 10px; line-height: 1.5; color: var(--muted); }
+
+.wf-repository-picker { display: grid; gap: 8px; min-width: 0; }
+.wf-picker-list { max-height: 180px; overflow-y: auto; }
+.wf-editor .wf-picker-list button { width: 100%; text-align: left; border-radius: var(--radius); }
+.wf-editor .wf-picker-list button[aria-pressed="true"] { border-color: var(--running); background: var(--surface-control-bg-strong); color: var(--text); }
+.wf-editor .wf-picker-list button[aria-pressed="true"] svg { color: var(--running); }

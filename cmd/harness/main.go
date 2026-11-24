@@ -2645,9 +2645,24 @@ func runBootDiagnostics(
 		},
 	}
 	checkNames := []string{"git_cli", "gh_cli", runtime.RequirementName(), "gh_auth"}
+	if runtime.Harness == agentruntime.HarnessCodex {
+		checkNames = append(checkNames, "codex_policy_files")
+	}
 	logf("boot.diagnosis status=start checks=%s", strings.Join(checkNames, ","))
 
 	failedRequiredChecks := 0
+	if runtime.Harness == agentruntime.HarnessCodex {
+		home, policyErr := agentruntime.CodexHome(os.Environ())
+		if policyErr == nil {
+			policyErr = agentruntime.CheckCodexRules(home)
+		}
+		if policyErr != nil {
+			failedRequiredChecks++
+			logf("boot.diagnosis status=error requirement=codex_policy_files err=%q", policyErr)
+		} else {
+			logf("boot.diagnosis status=ok requirement=codex_policy_files detail=%q", "No NUL-byte corruption detected in user rules")
+		}
+	}
 	for _, check := range checks {
 		checkCtx, cancel := context.WithTimeout(ctx, bootDiagnosticTimeout)
 		res, err := runner.Run(checkCtx, check.cmd)
@@ -2685,7 +2700,7 @@ func runBootDiagnostics(
 		"boot.diagnosis status=warn required_checks=failed count=%d recommendation=%q",
 		failedRequiredChecks,
 		fmt.Sprintf(
-			"Install missing tools before running tasks: git, %s, %s.",
+			"Resolve the reported preflight errors before running tasks; required tools: git, %s, %s.",
 			gitHubCLIPackageLabel,
 			strings.TrimSpace(runtime.Command),
 		),

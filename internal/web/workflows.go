@@ -73,6 +73,10 @@ func (s Server) handleWorkflowPreview(w http.ResponseWriter, r *http.Request) {
 		workflowError(w, 400, err)
 		return
 	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		workflowError(w, 400, errors.New("expected one JSON document"))
+		return
+	}
 	results, err := s.Workflows.Preview(r.Context(), def)
 	if err != nil {
 		workflowError(w, 400, err)

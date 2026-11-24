@@ -56,6 +56,17 @@ func TestWorkflowAPIStoreAndPreview(t *testing.T) {
 	if len(decisions) != 1 || !decisions[0].Matches {
 		t.Fatal(decisions)
 	}
+	for _, suffix := range []string{" {}", " null", " trailing", strings.Repeat(" ", 1<<20)} {
+		body, err := json.Marshal(w)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/workflows/preview", strings.NewReader(string(body)+suffix)))
+		if rec.Code != http.StatusBadRequest || calls != 1 {
+			t.Fatalf("invalid preview body reached repository fetch: status=%d calls=%d", rec.Code, calls)
+		}
+	}
 	w.Repository = "acme/disabled"
 	rec = request("POST", "/api/workflows/preview", w)
 	if rec.Code != 400 || calls != 1 {

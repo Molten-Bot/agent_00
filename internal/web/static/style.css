@@ -6889,6 +6889,10 @@ body.onboarding-modal-open {
   font-weight: 700;
 }
 
+#settings-panel-repositories {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .repository-settings-heading {
   display: grid;
   gap: 3px;
@@ -6901,13 +6905,16 @@ body.onboarding-modal-open {
 .repository-settings-columns {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  min-height: 0;
   gap: 10px;
-  align-items: start;
 }
 
 .repository-settings-column {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 6px;
+  min-height: 0;
   min-width: 0;
 }
 
@@ -6921,7 +6928,7 @@ body.onboarding-modal-open {
   grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: 8px;
-  max-height: 320px;
+  min-height: 0;
   overflow-y: auto;
 }
 

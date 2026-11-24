@@ -486,7 +486,9 @@ func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command
 	readOnly := len(nonEmptyStrings(opts.DisallowedTools)) > 0
 	args := []string{"exec", "-c", `approval_policy="never"`}
 	if readOnly {
-		args = append(args, "-P", "agent00_review", "-c",
+		// exec does not expose sandbox's -P flag; select the same named
+		// permissions through its supported configuration override instead.
+		args = append(args, "-c", `default_permissions="agent00_review"`, "-c",
 			"permissions.agent00_review={filesystem={"+reviewFilesystem(targetDir, opts)+"},network={enabled=false}}")
 	} else {
 		args = append([]string{"exec", "--sandbox", "workspace-write"}, args[1:]...)

@@ -304,7 +304,7 @@ func migrateLibrarySchedules(cfg localruntime.InitConfig, store *workflow.Store)
 		if len(name) > 100 {
 			name = name[:100]
 		}
-		doc.Workflows = append(doc.Workflows, workflow.Definition{ID: id, Name: name, Repository: strings.SplitN(schedule.Key, "@", 2)[1], Enabled: true, Trigger: workflow.Trigger{Event: "schedule", IntervalHours: schedule.IntervalHours, StartAt: &next}, Filters: workflow.Filters{Mode: "all", Rules: []workflow.Rule{}}, Task: workflow.Task{Kind: "implement", LibraryTaskName: schedule.LibraryTaskName, Instructions: schedule.PromptContext, BaseBranch: schedule.BaseBranch, TargetSubdir: targetSubdir, Reviewers: &reviewers, Draft: schedule.Draft, AssignCreator: ui.AssignCreator, IssueLinkMode: "reference"}, Merge: workflow.Merge{Method: "squash", RequireApproval: true}})
+		doc.Workflows = append(doc.Workflows, workflow.Definition{ID: id, Name: name, Repository: strings.SplitN(schedule.Key, "@", 2)[1], Enabled: true, Trigger: workflow.Trigger{Event: "schedule", IntervalHours: float64(schedule.IntervalHours), StartAt: &next}, Filters: workflow.Filters{Mode: "all", Rules: []workflow.Rule{}}, Task: workflow.Task{Kind: "implement", LibraryTaskName: schedule.LibraryTaskName, Instructions: schedule.PromptContext, BaseBranch: schedule.BaseBranch, TargetSubdir: targetSubdir, Reviewers: &reviewers, Draft: schedule.Draft, AssignCreator: ui.AssignCreator, IssueLinkMode: "reference"}, Merge: workflow.Merge{Method: "squash", RequireApproval: true}})
 	}
 	doc.LibrarySchedulesMigrated = true
 	if len(schedules) > 0 {

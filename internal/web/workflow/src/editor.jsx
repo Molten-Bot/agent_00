@@ -27,6 +27,8 @@ import {
 } from "lucide-react";
 import "@xyflow/react/style.css";
 import "./style.css";
+import { ScheduleInterval } from "./schedule-interval.jsx";
+import { RepositoryPicker } from "./repository-picker.jsx";
 import { events, newWorkflow, diagram, replaceDefinition, workflowTemplates } from "./model.js";
 const icons = {
   repository: FolderGit2,
@@ -108,6 +110,8 @@ function Editor() {
     [current, setCurrent] = useState(null),
     [repo, setRepo] = useState(""),
     [repos, setRepos] = useState([]),
+    [reposLoading, setReposLoading] = useState(true),
+    [reposError, setReposError] = useState(""),
     [libraryTasks, setLibraryTasks] = useState([]),
     [scheduleStatuses, setScheduleStatuses] = useState([]),
     [selection, setSelection] = useState("trigger"),
@@ -128,14 +132,24 @@ function Editor() {
       setNotice(e.message);
     }
   }
+  async function loadRepos() {
+    setReposLoading(true);
+    setReposError("");
+    try {
+      const data = await api("/api/github/repos");
+      setRepos(data.repos || []);
+    } catch (e) {
+      setReposError(e.message);
+    } finally {
+      setReposLoading(false);
+    }
+  }
   useEffect(() => {
     reload();
     api("/api/library")
       .then((data) => setLibraryTasks(data.tasks || []))
       .catch((e) => setNotice(e.message));
-    api("/api/github/repos")
-      .then((data) => setRepos(data.repos || []))
-      .catch((e) => setNotice(e.message));
+    loadRepos();
   }, []);
   useEffect(() => {
     const refresh = () => {
@@ -247,6 +261,7 @@ function Editor() {
       setNotice("Save or discard your changes before switching workflows.");
       return;
     }
+    setRepo(w.repository);
     setCurrent(structuredClone(w));
     setSelection("trigger");
     setPreview(null);
@@ -415,27 +430,23 @@ function Editor() {
       <div className="wf-workspace">
         <aside className="wf-palette" aria-label="Repository workflows">
           <div className="wf-section-label">REPOSITORY</div>
-          <Field label="Repository">
-            <input
-              aria-label="Workflow repository"
-              placeholder="owner/repository"
-              list="wf-repos"
-              value={repo}
-              onChange={(e) => {
-                if (dirty) {
-                  setNotice("Save or discard changes first.");
-                  return;
-                }
-                setRepo(e.target.value);
-                setCurrent(null);
-              }}
-            />
-          </Field>
-          <datalist id="wf-repos">
-            {repos.map((r) => (
-              <option key={r.full_name} value={r.full_name} />
-            ))}
-          </datalist>
+          <RepositoryPicker
+            repositories={repos}
+            value={repo}
+            loading={reposLoading}
+            error={reposError}
+            onRetry={loadRepos}
+            onChange={(repository) => {
+              if (dirty) {
+                setNotice("Save or discard changes first.");
+                return false;
+              }
+              setRepo(repository);
+              setCurrent(null);
+              setPreview(null);
+              return true;
+            }}
+          />
           <p className="wf-muted">
             Each repository can have several workflows, or none.
           </p>
@@ -466,7 +477,7 @@ function Editor() {
               key={template.id}
               aria-label={template.name}
               onClick={() => create(template.id)}
-              disabled={!doc}
+              disabled={!doc || !repos.some((r) => r.full_name === repo)}
             >
               <Plus size={14} />
               <span><strong>{template.name}</strong><small>{template.description}</small></span>
@@ -485,6 +496,7 @@ function Editor() {
             <span>{current?.repository}</span>
           </div>
           <ReactFlow
+            proOptions={{ hideAttribution: true }}
             nodes={graph.nodes}
             edges={graph.edges}
             nodeTypes={nodeTypes}
@@ -601,44 +613,11 @@ function Editor() {
                   </Field>
                   {scheduled && (
                     <>
-                      <Field label="Repeat every (hours)">
-                        <input
-                          type="number"
-                          min="1"
-                          max="336"
-                          value={current.trigger.intervalHours}
-                          onChange={(e) =>
-                            edit({
-                              trigger: {
-                                ...current.trigger,
-                                intervalHours: Number(e.target.value),
-                              },
-                            })
-                          }
-                        />
-                      </Field>
-                      <div className="wf-schedule-presets">
-                        {[
-                          [1, "Hourly"],
-                          [24, "Daily"],
-                          [168, "Weekly"],
-                          [336, "Fortnightly"],
-                        ].map(([hours, label]) => (
-                          <button
-                            key={hours}
-                            onClick={() =>
-                              edit({
-                                trigger: {
-                                  ...current.trigger,
-                                  intervalHours: hours,
-                                },
-                              })
-                            }
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
+                      <ScheduleInterval
+                        key={current.id}
+                        hours={current.trigger.intervalHours}
+                        onChange={(intervalHours) => edit({ trigger: { ...current.trigger, intervalHours } })}
+                      />
                       <Field
                         label={`First run (optional, ${Intl.DateTimeFormat().resolvedOptions().timeZone})`}
                       >

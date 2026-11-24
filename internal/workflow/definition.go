@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -38,7 +39,7 @@ type Position struct {
 	Y float64 `json:"y"`
 }
 type Trigger struct {
-	IntervalHours int        `json:"intervalHours,omitempty"`
+	IntervalHours float64    `json:"intervalHours,omitempty"`
 	StartAt       *time.Time `json:"startAt,omitempty"`
 	Event         string     `json:"event"`
 	Value         string     `json:"value,omitempty"`
@@ -115,8 +116,9 @@ func (w Definition) Validate() error {
 		return fmt.Errorf("this trigger requires a label or GitHub login")
 	}
 	if w.Trigger.Event == "schedule" {
-		if w.Trigger.IntervalHours < 1 || w.Trigger.IntervalHours > 336 {
-			return fmt.Errorf("scheduled interval must be 1–336 hours")
+		minutes := w.Trigger.IntervalHours * 60
+		if math.IsNaN(minutes) || math.IsInf(minutes, 0) || minutes < 1 || minutes > 525600 || math.Abs(minutes-math.Round(minutes)) > 1e-7 {
+			return fmt.Errorf("scheduled interval must be whole minutes between 1 minute and 365 days")
 		}
 		if w.Task.Kind != "implement" || len(w.Filters.Rules) != 0 || w.IncludeBacklog {
 			return fmt.Errorf("scheduled triggers run repository tasks without issue/PR filters or backlog")

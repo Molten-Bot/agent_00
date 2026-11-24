@@ -14,6 +14,38 @@ func scheduledDefinition() Definition {
 	w.Trigger = Trigger{Event: "schedule", IntervalHours: 24}
 	return w
 }
+func TestScheduleMinuteAndMonthIntervals(t *testing.T) {
+	t.Parallel()
+	for _, minutes := range []int{1, 7, 30 * 24 * 60, 12 * 30 * 24 * 60} {
+		t.Run((time.Duration(minutes) * time.Minute).String(), func(t *testing.T) {
+			w := scheduledDefinition()
+			w.Trigger.IntervalHours = float64(minutes) / 60
+			e, _, count := testEngine(t, w)
+			now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			e.Now = func() time.Time { return now }
+			tick(t, e)
+			status, err := e.ScheduleStatus()
+			want := now.Add(time.Duration(minutes) * time.Minute)
+			if err != nil || len(status) != 1 || !status[0].NextRunAt.Equal(want) {
+				t.Fatalf("next run = %+v, %v; want %v", status, err, want)
+			}
+			now = want.Add(-time.Second)
+			tick(t, e)
+			if *count != 0 {
+				t.Fatal("ran before interval elapsed")
+			}
+			now = want
+			tick(t, e)
+			if *count != 1 {
+				t.Fatal("did not run when interval elapsed")
+			}
+			status, err = e.ScheduleStatus()
+			if err != nil || !status[0].NextRunAt.Equal(now.Add(time.Duration(minutes)*time.Minute)) {
+				t.Fatalf("next occurrence = %+v, %v", status, err)
+			}
+		})
+	}
+}
 func TestScheduleDueRestartCoalescingAndNoOverlap(t *testing.T) {
 	t.Parallel()
 	w := scheduledDefinition()
@@ -121,7 +153,7 @@ func TestScheduleChangesAndDefinitionValidation(t *testing.T) {
 	if !status[0].NextRunAt.Equal(now.Add(6*time.Hour)) || *count != 0 {
 		t.Fatal(status)
 	}
-	for _, hours := range []int{0, -1, 337} {
+	for _, hours := range []float64{0, -1, 8761, 0.01, 1.001} {
 		w.Trigger.IntervalHours = hours
 		if w.Validate() == nil {
 			t.Fatal("accepted interval", hours)

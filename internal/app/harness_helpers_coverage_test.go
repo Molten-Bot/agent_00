@@ -359,6 +359,42 @@ func TestShouldReplaceCheckSnapshotBranches(t *testing.T) {
 	}
 }
 
+func TestPrepareAgentIOEnvRelativeWorkspaceSurvivesAgentWorkingDirectory(t *testing.T) {
+	t.Parallel()
+	runDir := t.TempDir()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(cwd, runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := prepareAgentIOEnv(relative, []string{"PATH=/bin:/usr/bin", "HOME=" + t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Join(runDir, "repo")
+	if err := os.Mkdir(repoDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Agents execute inside the checkout, not the harness's working directory.
+	// Their shell and sandbox setup must still resolve every volatile path.
+	cmd := execx.Command{Name: "/bin/sh", Dir: repoDir, Env: env, Args: []string{"-c", `set -eu
+for path in "$HOME" "$TMPDIR" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR"; do
+    case "$path" in /*) ;; *) exit 1 ;; esac
+    test -d "$path"
+done
+printf ready > "$TMPDIR/sandbox-probe"
+`}}
+	if res, err := (execx.OSRunner{}).Run(t.Context(), cmd); err != nil {
+		t.Fatalf("agent cannot use its IO paths from checkout: %v\n%s", err, res.Stderr)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, ".agent00-agent-io", "tmp", "sandbox-probe")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPrepareAgentIOEnvRootsVolatilePathsInRunDir(t *testing.T) {
 	t.Parallel()
 

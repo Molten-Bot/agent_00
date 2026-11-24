@@ -206,6 +206,41 @@ func (e *Engine) Runs() ([]Run, error) {
 	s, err := e.load()
 	return s.Runs, err
 }
+
+// logRun emits only bounded lifecycle reasons. Detailed errors can contain
+// repository URLs, paths, or task instructions and remain in the run journal.
+func (e *Engine) logRun(r Run, event string) {
+	if e.Logf == nil {
+		return
+	}
+	reason := r.Status
+	switch r.Reason {
+	case "Waiting for checks and merge requirements":
+		reason = "merge_requirements"
+	case "Waiting for pull request to leave draft":
+		reason = "draft_pull_request"
+	case "Waiting for requested changes":
+		reason = "changes_requested"
+	case "Waiting for successful checks":
+		reason = "checks_pending"
+	case "Waiting for human approval":
+		reason = "approval_pending"
+	case "Waiting for pull request head commit":
+		reason = "head_missing"
+	case "Head changed after merge eligibility; a new review is required":
+		reason = "head_changed"
+	case "Merge paused: workflow feature, workflow, or repository is disabled":
+		reason = "merge_paused"
+	case "Workflow changed or was disabled before merge":
+		reason = "workflow_changed"
+	case "Review posted; no confirmed clean review, so merge was not attempted":
+		reason = "review_not_clean"
+	}
+	if strings.HasPrefix(r.Reason, "Merge blocked:") {
+		reason = "merge_blocked"
+	}
+	e.Logf("workflow event=%s workflow_id=%q run_id=%q request_id=%q status=%s reason=%s", event, r.Workflow.ID, r.ID, r.RequestID, r.Status, reason)
+}
 func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) {
 	if err := w.Validate(); err != nil {
 		return nil, err
@@ -214,7 +249,7 @@ func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) 
 		return nil, fmt.Errorf("repository is disabled in Settings")
 	}
 	if w.Trigger.Event == "schedule" {
-		return []Decision{{Item: Item{Repository: w.Repository, Kind: "schedule", Title: "Scheduled repository task"}, Matches: true, Reason: fmt.Sprintf("Runs every %d hours while enabled; no GitHub event is required", w.Trigger.IntervalHours)}}, nil
+		return []Decision{{Item: Item{Repository: w.Repository, Kind: "schedule", Title: "Scheduled repository task"}, Matches: true, Reason: fmt.Sprintf("Runs every %g hours while enabled; no GitHub event is required", w.Trigger.IntervalHours)}}, nil
 	}
 	items, err := e.Fetch(ctx, w.Repository)
 	if err != nil {
@@ -255,6 +290,10 @@ func (e *Engine) Tick(ctx context.Context) error {
 	s, err := e.load()
 	if err != nil {
 		return err
+	}
+	previous := make(map[string]Run, len(s.Runs))
+	for _, r := range s.Runs {
+		previous[r.ID] = r
 	}
 	save := func() error { return writeAtomic(e.StatePath, s) }
 	definitions := map[string]Definition{}
@@ -342,6 +381,8 @@ func (e *Engine) Tick(ctx context.Context) error {
 				r.Reason = "Waiting for successful checks"
 			} else if r.Workflow.Merge.RequireApproval && !i.HumanApproved {
 				r.Reason = "Waiting for human approval"
+			} else if i.HeadSHA == "" {
+				r.Reason = "Waiting for pull request head commit"
 			} else {
 				if r.MergeHead == "" {
 					r.MergeHead = i.HeadSHA
@@ -352,7 +393,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 				if r.MergeHead != i.HeadSHA {
 					r.Status = "failed"
 					r.Reason = "Head changed after merge eligibility; a new review is required"
-				} else if !e.StillEnabled(w) {
+				} else if !e.StillEnabled(r.Workflow) {
 					r.Reason = "Workflow changed or was disabled before merge"
 				} else if mergeErr := e.Merge(ctx, *r); mergeErr != nil {
 					r.Reason = "Merge blocked: " + mergeErr.Error()
@@ -369,6 +410,12 @@ func (e *Engine) Tick(ctx context.Context) error {
 	}
 	if err := save(); err != nil {
 		return err
+	}
+	for _, r := range s.Runs {
+		old := previous[r.ID]
+		if r.Status != old.Status || r.Reason != old.Reason {
+			e.logRun(r, "transition")
+		}
 	}
 	cache := map[string][]Item{}
 	for _, w := range d.Workflows {
@@ -398,9 +445,11 @@ func (e *Engine) Tick(ctx context.Context) error {
 		policy.Enabled = false
 		baselineKey := w.ID + ":" + digest(policy)
 		hadBaseline := s.Baselines[baselineKey]
+		seen := make(map[string]bool, len(items))
 		for _, i := range items {
 			entity := fmt.Sprintf("%s#%d", key, i.Number)
 			obsKey := baselineKey + ":" + entity
+			seen[obsKey] = true
 			old := s.Observations[obsKey]
 			match, reason := Match(w, i)
 			fingerprint := ""
@@ -410,7 +459,10 @@ func (e *Engine) Tick(ctx context.Context) error {
 			if old.Fingerprint == fingerprint {
 				continue
 			}
-			if busy[entity] && (hadBaseline || w.IncludeBacklog) {
+			// Keep observing a match becoming false while work is active. Only
+			// defer admission of a new match, otherwise a later false-to-true
+			// transition is lost permanently when the current task finishes.
+			if match && busy[entity] && (hadBaseline || w.IncludeBacklog) {
 				continue
 			}
 			old.Fingerprint = fingerprint
@@ -425,6 +477,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 			if err := save(); err != nil {
 				return err
 			}
+			e.logRun(r, "dispatch")
 			var request string
 			var submitErr error
 			if !e.StillEnabled(w) {
@@ -443,6 +496,16 @@ func (e *Engine) Tick(ctx context.Context) error {
 			}
 			if err := save(); err != nil {
 				return err
+			}
+			e.logRun(s.Runs[index], "submission")
+		}
+		// A successful fetch contains every open item. Closed items disappear
+		// from it; record that non-match so reopening can activate again.
+		for obsKey, old := range s.Observations {
+			if strings.HasPrefix(obsKey, baselineKey+":") && !seen[obsKey] && old.Fingerprint != "" {
+				old.Fingerprint = ""
+				old.Generation++
+				s.Observations[obsKey] = old
 			}
 		}
 		s.Baselines[baselineKey] = true

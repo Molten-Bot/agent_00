@@ -35,7 +35,7 @@ import errno, os, urllib.request
 assert urllib.request.urlopen(os.environ["PROBE_URL"], timeout=5).read() == b"network-ok"
 with open(os.environ["TMPDIR"] + "/tmp-write", "w") as f:
     f.write("allowed runtime IO")
-for path in ["repo-write", ".git/config", os.environ["TEST_ROOT"] + "/outside-write", "/tmp/agent00-review-write"]:
+for path in ["repo-write", ".git/config", os.environ["TEST_ROOT"] + "/outside-write"]:
     try:
         with open(path, "w") as f:
             f.write("unexpected write")
@@ -44,6 +44,14 @@ for path in ["repo-write", ".git/config", os.environ["TEST_ROOT"] + "/outside-wr
             continue
         raise
     raise SystemExit("review sandbox allowed write: " + path)
+# Some sandbox versions provide a private, disposable /tmp. A write there
+# is safe only if it cannot appear in the host's /tmp (checked below).
+try:
+    with open(os.environ["PROBE_GLOBAL_PATH"], "w") as f:
+        f.write("private sandbox scratch")
+except OSError as error:
+    if error.errno not in (errno.EACCES, errno.EPERM, errno.EROFS):
+        raise
 `), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -54,9 +62,11 @@ for path in ["repo-write", ".git/config", os.environ["TEST_ROOT"] + "/outside-wr
 	if err != nil {
 		t.Fatal(err)
 	}
+	globalPath := filepath.Join("/tmp", filepath.Base(filepath.Dir(root))+"-review-write")
+	t.Cleanup(func() { _ = os.Remove(globalPath) })
 	cmd, err := rt.BuildCommand(repo, "review", RunOptions{
 		WorkspaceDir: root, DisallowedTools: []string{"Edit", "Write", "NotebookEdit", "Bash"},
-		Env: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "TMPDIR=" + tmp, "TEST_ROOT=" + root, "PROBE_URL=" + server.URL},
+		Env: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root, "TMPDIR=" + tmp, "TEST_ROOT=" + root, "PROBE_URL=" + server.URL, "PROBE_GLOBAL_PATH=" + globalPath},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +76,9 @@ for path in ["repo-write", ".git/config", os.environ["TEST_ROOT"] + "/outside-wr
 	res, err := (execx.OSRunner{}).Run(ctx, cmd)
 	if err != nil {
 		t.Fatalf("review sandbox probe failed: %v\n%s\n%s", err, res.Stdout, res.Stderr)
+	}
+	if _, err := os.Stat(globalPath); !os.IsNotExist(err) {
+		t.Fatalf("review wrote outside its workspace into host /tmp: %v", err)
 	}
 }
 
@@ -176,8 +189,18 @@ func TestCodexReadOnlyReviewCanReadDiskWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Parse the actual exec invocation too: sandbox accepts flags (notably -P)
+	// that exec does not. --help avoids authentication and a model request.
+	parseCmd := cmd
+	parseCmd.Args = append(append([]string(nil), cmd.Args...), "--help")
+	parseCmd.Stdin = ""
+	parseCtx, parseCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer parseCancel()
+	if res, err := (execx.OSRunner{}).Run(parseCtx, parseCmd); err != nil {
+		t.Fatalf("Codex exec rejected review arguments: %v\n%s\n%s", err, res.Stdout, res.Stderr)
+	}
 	// Exercise the generated review policy without running a model or needing auth.
-	cmd.Args = append([]string{"sandbox", "-c", `sandbox_mode="read-only"`}, cmd.Args[3:]...)
+	cmd.Args[0] = "sandbox"
 	cmd.Args = append(cmd.Args, "--", "/bin/sh", "-c", `set -eu
  test "$(cat marker)" = "prepared checkout"
  if (printf changed > marker) 2>/dev/null; then exit 1; fi

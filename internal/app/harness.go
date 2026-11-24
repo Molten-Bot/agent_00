@@ -320,6 +320,15 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	agentStage := runtimeLogStage(runtime)
 
 	h.logf("stage=preflight status=start")
+	if runtime.Harness == agentruntime.HarnessCodex {
+		home, err := agentruntime.CodexHome(os.Environ())
+		if err == nil {
+			err = agentruntime.CheckCodexRules(home)
+		}
+		if err != nil {
+			return h.fail(ExitPreflight, "preflight", err, "")
+		}
+	}
 	for _, cmd := range preflightCommandsWithRuntime(runtime) {
 		if _, err := h.runCommand(ctx, "preflight", cmd); err != nil {
 			return h.fail(ExitPreflight, "preflight", err, "")
@@ -8080,6 +8089,13 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 	runDir = strings.TrimSpace(runDir)
 	if runDir == "" {
 		return nil, fmt.Errorf("run directory is required for agent io")
+	}
+	// Durable issue workspaces may be relative to the harness. The agent runs
+	// from its checkout, so inherited IO paths must not depend on that cwd.
+	var err error
+	runDir, err = filepath.Abs(runDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve agent io run directory: %w", err)
 	}
 
 	root := filepath.Join(runDir, ".agent00-agent-io")

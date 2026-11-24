@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "schedule",
+      "name": "Scheduled documentation change",
+      "template": "schedule",
+      "prepare": ["Set startAt to the current UTC time and enable the workflow.", "The agent adds docs/workflow-smoke-schedule.md with a short sentence and validates that it is nonempty."],
+      "expect": ["Exactly one activation has a requestId.", "A pull request changes only the requested documentation file.", "Pause after the first activation; repeated polls must not create another run."],
+      "fixture": "No GitHub event required; repository must have an initial commit.",
+      "terminal": ["succeeded"],
+      "instructions": "Add docs/workflow-smoke-schedule.md with the heading '# Scheduled workflow smoke test' and a sentence describing the scheduled workflow. Validate it with test -s docs/workflow-smoke-schedule.md. Make no other changes."
+    },
+    {
+      "id": "labeled",
+      "name": "Labeled issue to pull request",
+      "template": "implement",
+      "prepare": ["Create an issue asking for docs/workflow-smoke-labeled.md.", "Enable, wait for the initial baseline, then apply the workflow's unique label."],
+      "expect": ["Exactly one task is submitted for the matching issue.", "The PR references the issue and adds the requested file.", "Repeated polling and restarting the app do not duplicate the activation."],
+      "fixture": "An open issue newly receiving the namespaced ready label.",
+      "terminal": ["succeeded"]
+    },
+    {
+      "id": "assigned",
+      "name": "Assigned issue with review",
+      "template": "assigned",
+      "prepare": ["Create an unassigned issue asking for docs/workflow-smoke-assigned.md and apply the workflow's unique filter label.", "Enable, wait for baseline, then assign the issue to the authenticated account."],
+      "expect": ["Exactly one implementation task runs with the captured review policy.", "The PR contains the requested change and review completion is recorded."],
+      "fixture": "An issue carrying the namespaced filter label newly assigned to @me.",
+      "terminal": ["succeeded"]
+    },
+    {
+      "id": "review",
+      "name": "Review a pull request",
+      "template": "review",
+      "prepare": ["Create a small correct PR carrying the workflow's unique filter label using a second GitHub identity.", "Enable, wait for baseline, then request review from the app's authenticated account."],
+      "expect": ["One review task runs and publishes a review or review comment.", "The PR remains unmerged."],
+      "fixture": "Review requests cannot target the PR author; a second identity is required for the unmodified template.",
+      "terminal": ["succeeded"]
+    },
+    {
+      "id": "repair",
+      "name": "Repair a failing check",
+      "template": "repair",
+      "prepare": ["Create a PR carrying the unique filter label and a deliberately failing test with an obvious one-line fix.", "Enable before the check changes to failed, or explicitly include backlog for this isolated fixture."],
+      "expect": ["One repair task updates the existing PR branch.", "The repaired check passes; no second implementation PR appears."],
+      "fixture": "A labeled open PR with an actual failed check and reproducible test command.",
+      "terminal": ["succeeded"]
+    },
+    {
+      "id": "changes",
+      "name": "Address requested changes",
+      "template": "changes",
+      "prepare": ["Create a PR carrying the unique filter label.", "Enable, wait for baseline, then submit a specific change request from a non-author account."],
+      "expect": ["One repair task updates the same PR branch.", "The requested edit and relevant validation are present."],
+      "fixture": "GitHub disallows requesting changes on one's own PR; a second identity is required.",
+      "terminal": ["succeeded"]
+    },
+    {
+      "id": "delivery",
+      "name": "Issue through automatic merge",
+      "template": "delivery",
+      "prepare": ["Create an issue asking for one small documentation file.", "Enable, wait for baseline, then apply the namespaced ready label.", "Provide a successful check and approval from a non-author collaborator on the current PR head."],
+      "expect": ["The task creates a PR closing the issue.", "The run waits while checks or approval are missing.", "After checks and approval, the PR merges once and its branch is deleted."],
+      "fixture": "Successful CI plus eligible human approval; requireApproval remains enabled.",
+      "terminal": ["merged"]
+    },
+    {
+      "id": "review-merge",
+      "name": "Clean review through automatic merge",
+      "template": "review_merge",
+      "prepare": ["Create a correct PR with a passing check and the unique filter label from a second identity.", "Enable, wait for baseline, request review from the app account, and supply eligible human approval."],
+      "expect": ["A confirmed clean review is tied to the reviewed head.", "The PR merges once only after all checks and approval requirements pass.", "A changed head, review findings, or missing checks prevents merging."],
+      "fixture": "Second identity, passing checks, clean review, and eligible human approval.",
+      "terminal": ["merged"]
+    }
+  ],
+  "crossCutting": [
+    {"id": "malformed-preview", "expect": "Trailing JSON, unknown fields, and invalid policies return HTTP 400 without dispatching."},
+    {"id": "revision-conflict", "expect": "Reusing an old document revision returns HTTP 409 without losing other definitions."},
+    {"id": "disabled", "expect": "Disabled definitions never dispatch even when preview matches."},
+    {"id": "dedupe", "expect": "Repeated polling and restart produce one activation per observed transition."},
+    {"id": "pause", "expect": "Pausing prevents new activations and merges; already submitted tasks may finish."},
+    {"id": "merge-gates", "expect": "Missing checks, required approval, requested changes, draft PRs, and changed heads prevent merging."}
+  ]
+}

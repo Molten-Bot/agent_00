@@ -96,8 +96,9 @@ recorded with that task so later library edits do not change an existing run.
 Optional context extends the library prompt. Required context and non-default
 branch requirements are checked before enabling a workflow and again at execution.
 
-A scheduled trigger repeats every **1–336 hours**, with hourly/daily/weekly/
-fortnightly presets and an optional first-run date and time. The editor uses your
+A scheduled trigger repeats every **1 minute–365 days**. Drag the unit scale
+(minute, hour, day, week, month), then enter the repeat count. Months are fixed
+30-day intervals. An optional first-run date and time is also available. The editor uses your
 local timezone and saves an absolute timestamp. Without a first-run time, the
 first occurrence is due one interval after enabling. Changing the interval or
 first-run time resets the cursor; prompt and layout edits preserve it. Scheduled
@@ -606,6 +607,31 @@ go build -o bin/harness ./cmd/harness
 
 The editor is loaded only when Workflow opens. No Node server or runtime CDN is
 required. Generated assets and dependency license notices live in `internal/web/static`.
+
+#### Workflow smoke tests
+
+`scripts/workflow-smoke/matrix.json` lists small live scenarios for every workflow
+template, including fixture setup, expected outcomes, and merge prerequisites.
+Give each testing agent its own prefix and an explicitly designated disposable
+repository. The runner uses the running app's API and emits a JSON report with
+`pass`, `fail`, and `blocked` results:
+
+```bash
+python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smoke-agent-a
+python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smoke-agent-a --action install
+python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smoke-agent-a --action observe
+python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smoke-agent-a --action cleanup
+```
+
+The default check validates previews and rejected inputs without dispatching.
+Install creates disabled copies and verifies revision conflicts while preserving
+existing definitions. Follow the matrix to create fixtures and enable individual
+tests; observe reports runtime outcomes, not proof of PR contents or CI success.
+Cleanup removes only unchanged disabled copies. Save private reports outside the
+repository with `--output /tmp/workflow-report.json`. Review-request and human
+approval scenarios need a second GitHub identity because authors cannot review
+their own PRs. Keep those scenarios marked blocked when that prerequisite is
+unavailable rather than weakening their approval policy.
 
 Shared browser libraries (Lucide, Marked, xterm, and Emoji Mart) are pinned in
 `internal/web/vendor/package.json` and its lockfile. After updating those pins, run

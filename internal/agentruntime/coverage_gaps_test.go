@@ -400,10 +400,13 @@ func TestBuildCommandCodexReadOnlySandboxForDisallowedTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildCommand() error = %v", err)
 	}
-	if !containsString(cmd.Args, "agent00_review") {
+	if !containsString(cmd.Args, `default_permissions="agent00_review"`) {
 		t.Fatalf("Args = %#v, want review permission profile", cmd.Args)
 	}
 	for _, arg := range cmd.Args {
+		if arg == "-P" || arg == "--permission-profile" {
+			t.Fatalf("exec does not support permission-profile flags: %#v", cmd.Args)
+		}
 		if arg == "--add-dir" || strings.Contains(arg, "writable_roots") {
 			t.Fatalf("read-only Codex invocation must not grant writable dirs: %#v", cmd.Args)
 		}

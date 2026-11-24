@@ -14,7 +14,9 @@ func TestMain(m *testing.M) {
 	_ = os.Setenv("CODEX_HOME", filepath.Join(authRoot, "codex"))
 	_ = os.Setenv("HARNESS_AGENT_HARNESS", "")
 	_ = os.Setenv("HARNESS_AGENT_COMMAND", "")
-	_ = os.Setenv("HARNESS_RUNTIME_CONFIG_PATH", "")
+	// CLI tests must not read or overwrite runtime state left in the source
+	// checkout by a real invocation or another test process.
+	_ = os.Setenv("HARNESS_RUNTIME_CONFIG_PATH", filepath.Join(authRoot, "runtime-config.json"))
 	for _, key := range []string{
 		"HARNESS_COMMIT_SIGNING_PRIVATE_KEY",
 		"HARNESS_COMMIT_SIGNING_PRIVATE_KEY_FILE",

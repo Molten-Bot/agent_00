@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -26,11 +27,11 @@ func (g GitHub) Fetch(ctx context.Context, repo string) ([]Item, error) {
 	if !repoPattern.MatchString(repo) {
 		return nil, fmt.Errorf("invalid repository")
 	}
-	raw, err := g.command(ctx, "api", "--paginate", "--slurp", "repos/"+repo+"/issues?state=open&per_page=100")
+	raw, err := g.command(ctx, "api", "--paginate", "repos/"+repo+"/issues?state=open&per_page=100")
 	if err != nil {
 		return nil, err
 	}
-	var pages [][]struct {
+	type issue struct {
 		Number      int
 		Title, Body string
 		HTMLURL     string `json:"html_url"`
@@ -40,7 +41,8 @@ func (g GitHub) Fetch(ctx context.Context, repo string) ([]Item, error) {
 		Type        *struct{ Name string }
 		PullRequest *json.RawMessage `json:"pull_request"`
 	}
-	if err = json.Unmarshal([]byte(raw), &pages); err != nil {
+	pages, err := decodeGitHubPages[issue](raw)
+	if err != nil {
 		return nil, fmt.Errorf("decode GitHub issues: %w", err)
 	}
 	viewer, err := g.command(ctx, "api", "user", "--jq", ".login")
@@ -77,7 +79,10 @@ func (g GitHub) Fetch(ctx context.Context, repo string) ([]Item, error) {
 	return items, nil
 }
 func (g GitHub) Inspect(ctx context.Context, repo, selector string) (Item, error) {
-	raw, err := g.command(ctx, "pr", "view", selector, "--repo", repo, "--json", "number,title,body,url,author,labels,assignees,reviewRequests,baseRefName,headRefName,headRefOid,isDraft,closingIssuesReferences,reviewDecision,statusCheckRollup,state")
+	if !repoPattern.MatchString(repo) {
+		return Item{}, fmt.Errorf("invalid repository")
+	}
+	raw, err := g.command(ctx, "pr", "view", selector, "--repo", repo, "--json", "number,title,body,url,author,labels,assignees,reviewRequests,baseRefName,headRefName,headRefOid,isDraft,reviewDecision,statusCheckRollup,state")
 	if err != nil {
 		return Item{}, err
 	}
@@ -89,16 +94,29 @@ func (g GitHub) Inspect(ctx context.Context, repo, selector string) (Item, error
 			Login string
 			IsBot bool
 		}
-		Labels                  []struct{ Name string }
-		Assignees               []struct{ Login string }
-		ReviewRequests          []struct{ Login, Name, Slug string }
-		ClosingIssuesReferences []json.RawMessage
-		StatusCheckRollup       []struct{ Status, Conclusion, State string }
+		Labels            []struct{ Name string }
+		Assignees         []struct{ Login string }
+		ReviewRequests    []struct{ Login, Name, Slug string }
+		StatusCheckRollup []struct{ Status, Conclusion, State string }
 	}
 	if err = json.Unmarshal([]byte(raw), &p); err != nil {
 		return Item{}, err
 	}
-	i := Item{Repository: repo, Number: p.Number, Kind: "pr", Title: p.Title, Body: p.Body, URL: p.URL, Author: p.Author.Login, Bot: p.Author.IsBot, BaseBranch: p.BaseRefName, HeadBranch: p.HeadRefName, HeadSHA: p.HeadRefOid, Draft: p.IsDraft, LinkedIssue: len(p.ClosingIssuesReferences) > 0, ReviewDecision: p.ReviewDecision, Open: p.State == "OPEN", ChecksPassed: len(p.StatusCheckRollup) > 0}
+	if p.Number < 1 {
+		return Item{}, fmt.Errorf("pull request response is missing its number")
+	}
+	// Older gh versions do not expose closingIssuesReferences in pr view's
+	// JSON field list. Ask GraphQL directly for the relationship count.
+	parts := strings.SplitN(repo, "/", 2)
+	linked, err := g.command(ctx, "api", "graphql", "-f", "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences{totalCount}}}}", "-F", "owner="+parts[0], "-F", "name="+parts[1], "-F", "number="+strconv.Itoa(p.Number), "--jq", ".data.repository.pullRequest.closingIssuesReferences.totalCount")
+	if err != nil {
+		return Item{}, err
+	}
+	linkedCount, err := strconv.Atoi(strings.TrimSpace(linked))
+	if err != nil || linkedCount < 0 {
+		return Item{}, fmt.Errorf("decode linked issue count")
+	}
+	i := Item{Repository: repo, Number: p.Number, Kind: "pr", Title: p.Title, Body: p.Body, URL: p.URL, Author: p.Author.Login, Bot: p.Author.IsBot, BaseBranch: p.BaseRefName, HeadBranch: p.HeadRefName, HeadSHA: p.HeadRefOid, Draft: p.IsDraft, LinkedIssue: linkedCount > 0, ReviewDecision: p.ReviewDecision, Open: p.State == "OPEN", ChecksPassed: len(p.StatusCheckRollup) > 0}
 	for _, l := range p.Labels {
 		i.Labels = append(i.Labels, l.Name)
 	}
@@ -124,7 +142,7 @@ func (g GitHub) Inspect(ctx context.Context, repo, selector string) (Item, error
 			i.ChecksFailed = true
 		}
 	}
-	reviews, err := g.command(ctx, "api", "--paginate", "--slurp", "repos/"+repo+"/pulls/"+strconv.Itoa(i.Number)+"/reviews?per_page=100")
+	reviews, err := g.command(ctx, "api", "--paginate", "repos/"+repo+"/pulls/"+strconv.Itoa(i.Number)+"/reviews?per_page=100")
 	if err != nil {
 		return Item{}, err
 	}
@@ -165,8 +183,8 @@ func applyReviews(i *Item, raw string) error {
 		Association string `json:"author_association"`
 		User        struct{ Login, Type string }
 	}
-	var pages [][]review
-	if err := json.Unmarshal([]byte(raw), &pages); err != nil {
+	pages, err := decodeGitHubPages[review](raw)
+	if err != nil {
 		return fmt.Errorf("decode pull request reviews: %w", err)
 	}
 	latest := map[string]review{}
@@ -186,4 +204,30 @@ func applyReviews(i *Item, raw string) error {
 		}
 	}
 	return nil
+}
+
+// gh api --paginate emits consecutive JSON arrays. Decode every page without
+// --slurp, which is unavailable in older supported gh installations. Reject
+// empty/null output rather than treating an incomplete response as an empty
+// repository and resetting observations.
+func decodeGitHubPages[T any](raw string) ([][]T, error) {
+	dec := json.NewDecoder(strings.NewReader(raw))
+	var pages [][]T
+	for {
+		var page []T
+		err := dec.Decode(&page)
+		if err == io.EOF {
+			if len(pages) == 0 {
+				return nil, fmt.Errorf("expected a JSON array page")
+			}
+			return pages, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if page == nil {
+			return nil, fmt.Errorf("expected a JSON array page, got null")
+		}
+		pages = append(pages, page)
+	}
 }
