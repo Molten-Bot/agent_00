@@ -712,8 +712,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if !strings.Contains(markup, "const taskPanel = document.getElementById(\"task-panel\");") {
 		t.Fatalf("expected index html to cache the task panel element")
 	}
-	if !strings.Contains(markup, "if (open && !displayTasks(state.snapshot).length) {") {
-		t.Fatalf("expected index html to block fullscreen when no tasks exist")
+	if !strings.Contains(markup, "state.taskFullscreenOpen = open && hasTasks;") {
+		t.Fatalf("expected index html to block task fullscreen when no tasks exist")
 	}
 	if !strings.Contains(markup, "function setTaskPanelView(view, options = {})") {
 		t.Fatalf("expected index html to include task panel view mode switching")

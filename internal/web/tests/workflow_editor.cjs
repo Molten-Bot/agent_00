@@ -38,7 +38,20 @@ test('multiple persistent workflows, disabled drafts, policy editing, activation
  await page.reload();await selectRepository(page, 'acme/repo');assert.equal(await page.locator('.wf-step').count(),2);await page.locator('.wf-step').first().click();await page.getByLabel('Review step',{exact:true}).check();await page.getByRole('slider',{name:'Review passes',exact:true}).fill('3');await page.getByRole('button',{name:'Save draft',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.wf-save-state').textContent==='Saved draft');assert.equal(getDocument().workflows[0].reviewCycles,4);
  await selectRepository(page, 'acme/other');assert.equal(await page.locator('.wf-step').count(),0);assert.equal(getDocument().workflows.length,2);
  const editor=await page.locator('.wf-editor').boundingBox(),dock=await page.locator('.page-bottom-dock').boundingBox();assert.ok(editor.y+editor.height<=dock.y);});
-test('mobile editor exposes repository, canvas and settings without horizontal overflow',async t=>{const {page}=await openEditor(t,{width:390,height:844});await selectRepository(page, 'acme/repo');await page.getByRole('button',{name:'Implement issues',exact:true}).click();await page.getByLabel('Label',{exact:true}).fill('ready');assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));});
+test('mobile editor fits the viewport in both normal and fullscreen layouts',async t=>{
+ const {page}=await openEditor(t,{width:390,height:844});
+ await selectRepository(page, 'acme/repo');
+ await page.getByRole('button',{name:'Implement issues',exact:true}).click();
+ await page.getByLabel('Label',{exact:true}).fill('ready');
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ const maximize=page.getByRole('button',{name:'Maximize Workflow'});
+ await maximize.click();
+ const panel=page.locator('#workflow-display');
+ assert.ok(await panel.evaluate(node=>node.scrollWidth<=node.clientWidth));
+ await page.getByRole('button',{name:'Exit full screen Workflow'}).click();
+ await maximize.waitFor();
+ assert.equal(await page.getByLabel('Label',{exact:true}).inputValue(),'ready');
+});
 
 test('scheduled template supports library prompts, interval units, and inline fallback',async t=>{const {page,getDocument}=await openEditor(t);await selectRepository(page, 'acme/repo');await page.getByRole('button',{name:'Scheduled task',exact:true}).click();assert.equal(await page.locator('.wf-node').count(),3);await page.getByRole('button',{name:'days',exact:true}).click();await page.locator('[data-id="task"]').click();await page.getByLabel('Prompt source',{exact:true}).selectOption('audit');await page.getByText('Preview library prompt',{exact:true}).click();await page.getByText('Audit the repository.',{exact:true}).waitFor();await page.getByLabel('Additional context (optional)').fill('Focus on security');await page.getByRole('button',{name:'Save draft',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.wf-save-state').textContent==='Saved draft');assert.equal(getDocument().workflows[0].trigger.event,'schedule');assert.equal(getDocument().workflows[0].task.libraryTaskName,'audit');await page.getByLabel('Prompt source',{exact:true}).selectOption('');await page.getByLabel('Instructions',{exact:true}).fill('Run an inline repository task.');await page.getByRole('button',{name:'Save draft',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.wf-save-state').textContent==='Saved draft');assert.equal(getDocument().workflows[0].task.libraryTaskName,undefined);});
 
@@ -329,11 +342,11 @@ test('Workflow header actions stay on one row at narrow desktop widths', async t
  }
 });
 
-test('Workflow maximizes with navigation available and restores on leaving', async t => {
+test('Workflow uses the terminal fullscreen shell and preserves the draft on exit', async t => {
  const {page}=await openEditor(t,{width:1600,height:900});
  const panel=page.locator('#workflow-display');
  const maximize=page.getByRole('button',{name:'Maximize Workflow'});
- const restore=page.getByRole('button',{name:'Restore Workflow size'});
+ const restore=page.locator('#task-fullscreen-close');
  await selectRepository(page,'acme/repo');
  await page.getByRole('button',{name:'Implement issues',exact:true}).click();
  const workflowName=page.getByRole('textbox',{name:'Workflow name'});
@@ -341,16 +354,21 @@ test('Workflow maximizes with navigation available and restores on leaving', asy
  const defaultSize=await panel.boundingBox();
 
  await maximize.click();
- assert.equal(await restore.getAttribute('aria-expanded'),'true');
+ const shell=page.locator('#task-fullscreen');
+ assert.equal(await shell.getAttribute('data-mode'),'workflow');
+ assert.equal(await panel.locator('xpath=..').getAttribute('id'),'task-fullscreen-body');
+ assert.equal(await restore.getAttribute('aria-label'),'Exit full screen Workflow');
+ assert.equal(await restore.evaluate(button=>button===document.activeElement),true);
+ assert.equal(await page.locator('#task-fullscreen-output-panel').isVisible(),false);
+ assert.equal(await page.locator('.task-fullscreen-task-panel').isVisible(),false);
  const expanded=await panel.boundingBox();
- const dock=await page.locator('.page-bottom-dock').boundingBox();
- assert.equal(expanded.x,0);
- assert.equal(expanded.y,0);
- assert.equal(expanded.width,1600);
+ assert.equal(expanded.x,20);
+ assert.equal(expanded.y,20);
+ assert.equal(expanded.width,1560);
  assert.ok(expanded.height>defaultSize.height);
- assert.ok(expanded.y+expanded.height<=dock.y);
  await restore.click();
  assert.deepEqual(await panel.boundingBox(),defaultSize);
+ assert.equal(await maximize.evaluate(button=>button===document.activeElement),true);
 
  await maximize.click();
  await page.keyboard.press('Escape');
@@ -358,7 +376,7 @@ test('Workflow maximizes with navigation available and restores on leaving', asy
  assert.deepEqual(await panel.boundingBox(),defaultSize);
 
  await maximize.click();
- await page.locator('#prompt-mode-builder').click();
+ await page.evaluate(()=>{location.hash='builder'});
  await panel.waitFor({state:'hidden'});
  await page.locator('#workflow-dock-link').click();
  await maximize.waitFor();

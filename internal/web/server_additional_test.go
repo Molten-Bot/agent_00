@@ -1187,12 +1187,12 @@ func TestTaskPanelStylesConstrainHorizontalOverflow(t *testing.T) {
 	if !strings.Contains(css, ".task-fullscreen-output-panel {\n  min-height: 0;\n  overflow: hidden;\n  display: grid;\n  grid-template-rows: auto auto minmax(0, 1fr);\n}") {
 		t.Fatalf("expected full screen output panel to reserve the remaining viewport for terminal output")
 	}
-	if !strings.Contains(css, ".task-fullscreen-output-panel > .task-head {\n  padding-right: 56px;\n}") {
+	if !strings.Contains(css, ".task-fullscreen-output-panel > .task-head,\n.task-fullscreen .prompt-titlebar {\n  padding-right: 56px;\n}") {
 		t.Fatalf("expected full screen output header to reserve space for the close control")
 	}
-	if !strings.Contains(css, ".task-fullscreen[data-mode=\"console\"] .task-fullscreen-body {\n  grid-template-rows: minmax(0, 1fr);\n}") ||
-		!strings.Contains(css, ".task-fullscreen[data-mode=\"console\"] .task-fullscreen-task-panel {\n  display: none;\n}") {
-		t.Fatalf("expected console mode to reserve one bounded viewport row for terminal output")
+	if !strings.Contains(css, ".task-fullscreen-body {\n  min-height: 0;\n  height: 100dvh;\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);\n  grid-template-rows: minmax(0, 1fr);") ||
+		!strings.Contains(css, ".task-fullscreen:is([data-mode=\"console\"], [data-mode=\"workflow\"]) .task-fullscreen-task-panel {\n  display: none;\n}") {
+		t.Fatalf("expected Console and Workflow to share a bounded fullscreen row and hide the task list")
 	}
 	if !strings.Contains(css, ".task-fullscreen-head-label {\n  min-width: 0;\n  flex: 1 1 auto;\n  white-space: normal;\n  overflow-wrap: anywhere;\n}") {
 		t.Fatalf("expected full screen task headers to wrap long prompts instead of truncating")

@@ -5177,7 +5177,7 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   height: 100dvh;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 16px;
   padding:
     max(20px, env(safe-area-inset-top))
@@ -5186,15 +5186,7 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
     max(20px, env(safe-area-inset-left));
 }
 
-.task-fullscreen[data-mode="work"] .task-fullscreen-body {
-  grid-template-rows: minmax(0, 1fr);
-}
-
-.task-fullscreen[data-mode="console"] .task-fullscreen-body {
-  grid-template-rows: minmax(0, 1fr);
-}
-
-.task-fullscreen[data-mode="console"] .task-fullscreen-task-panel {
+.task-fullscreen:is([data-mode="console"], [data-mode="workflow"]) .task-fullscreen-task-panel {
   display: none;
 }
 
@@ -5219,7 +5211,8 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
-.task-fullscreen-output-panel > .task-head {
+.task-fullscreen-output-panel > .task-head,
+.task-fullscreen .prompt-titlebar {
   padding-right: 56px;
 }
 
@@ -5780,8 +5773,6 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   }
 
   .task-fullscreen-body {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr);
     padding: 16px;
   }
 
