@@ -186,7 +186,7 @@ test('reauthentication start errors are visible and later status recovers', asyn
 
 test('feature settings save on close and survive reopening', async t => {
  const {page,writes}=await openSettings(t);
- assert.equal(await page.locator('[data-settings-tab]').count(),4);
+ assert.equal(await page.locator('[data-settings-tab]').count(),3);
  await select(page,'automation');
  assert.equal(await page.locator('#settings-tab-automation').innerText(),'Features');
  for(const id of ['review-settings-workflow-enabled','review-settings-json-enabled','review-settings-github-issues-enabled']) await toggle(page,id);
@@ -1328,14 +1328,14 @@ test('Workflow beta is opt-in, isolated, persistent, and disabled on direct navi
   assert.equal(await page.locator('#workflow-display').isVisible(), false);
 });
 
-test('configuration-based workflow defaults remain editable alongside custom workflows', async t => {
- const {page,writes}=await openSettings(t,{initialSettings:{...defaults,review_level:'low',auto_merge:true,workflow_enabled:true}});
- await select(page,'defaults');
- assert.equal(await page.locator('#review-settings-slider').inputValue(),'1');
- assert.equal(await page.locator('#review-settings-auto-merge').isChecked(),true);
- assert.equal(await page.locator('#review-settings-slider').isVisible(),true);
- await page.locator('#review-settings-slider').fill('2');
- await toggle(page,'review-settings-delete-merged-branches');
+test('settings omit workflow defaults and preserve migrated configuration when saving features', async t => {
+ const {page,writes}=await openSettings(t,{initialSettings:{...defaults,review_level:'low',auto_merge:true,assign_creator:false,github_issue_link_mode:'close',workflow_enabled:true}});
+ assert.equal(await page.locator('#settings-tab-defaults, #settings-panel-defaults, #review-settings-slider').count(),0);
+ await select(page,'automation');
+ await toggle(page,'review-settings-json-enabled');
  await close(page);
- assert.ok(writes.some(w=>w.review_level==='medium'&&w.delete_merged_branches===true&&w.workflow_enabled===true));
+ const saved=writes.at(-1);
+ assert.equal(saved.review_level,'low');assert.equal(saved.auto_merge,true);
+ assert.equal(saved.assign_creator,false);assert.equal(saved.github_issue_link_mode,'close');
+ assert.equal(saved.json_enabled,true);
 });

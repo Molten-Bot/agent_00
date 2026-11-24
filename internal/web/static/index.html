@@ -785,7 +785,7 @@
           <div class="onboarding-modal-header">
             <h2 id="settings-title"><i data-lucide="settings" aria-hidden="true"></i><span>Settings</span></h2>
             <button id="settings-agent-reauthenticate" class="settings-auth-link hidden" type="button">Sign in again</button>
-            <p id="settings-message" class="sr-only">Configure library, automation, repositories, reviews, merging, and commit signing.</p>
+            <p id="settings-message" class="sr-only">Configure features, repositories, and commit signing.</p>
           </div>
           <button id="review-settings-close" class="settings-modal-close onboarding-modal-close" type="button" aria-label="Close settings" title="Close">
             <i data-lucide="x" aria-hidden="true"></i>
@@ -799,9 +799,6 @@
           </button>
           <button id="settings-tab-repositories" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-repositories" data-settings-tab="repositories">
             <i data-lucide="folder-git-2" aria-hidden="true"></i><span>Repositories</span>
-          </button>
-          <button id="settings-tab-defaults" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-defaults" data-settings-tab="defaults">
-            <i data-lucide="sliders-horizontal" aria-hidden="true"></i><span>Default workflows</span>
           </button>
           <button id="settings-tab-signing" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="commit-signing-section" data-settings-tab="signing">
             <i data-lucide="globe-lock" aria-hidden="true"></i><span>Commit Signing</span>
@@ -892,119 +889,6 @@
             </div>
           </div>
           
-<div id="settings-panel-defaults" class="review-settings-section" role="tabpanel" aria-labelledby="settings-tab-defaults" hidden>
-<h3>Default workflows</h3>
-<p class="github-issues-settings-description">These configuration settings apply to tasks and automations unless an enabled custom workflow takes ownership. Existing prompt, JSON, chat, issue, and library behavior is preserved.</p>
-<label class="selectable-option">
-              <input class="sr-only" id="review-settings-auto-merge" type="checkbox">
-              <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-robot-arm"><path d="M12 21 7.5 8.322"/><path d="m14 7 1.75-3.767a.5.5 0 0 1 .662-.172L20 5.005"/><path d="m20 8.998-3.588 1.944a.5.5 0 0 1-.662-.172L14 7H8"/><path d="M3.486 21h10"/><path d="M5 21V8.732"/><circle cx="6" cy="7" r="2"/></svg>
-              <span>Auto-merge clean reviews</span>
-            </label><label class="selectable-option">
-              <input class="sr-only" id="review-settings-delete-merged-branches" type="checkbox">
-              <svg viewBox="0 0 24 24" aria-hidden="true" data-lucide="git-branch-minus"><path d="M15 6a9 9 0 0 0-9 9V3"/><path d="M21 18h-6"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></svg>
-              <span>Delete merged branches</span>
-            </label><fieldset id="settings-panel-github-issues" class="review-settings-section review-settings-automation" role="group" aria-label="Issue automation">
-            <legend class="review-settings-section-title sr-only">GitHub Issues</legend>
-            
-            <label class="selectable-option">
-              <input class="sr-only" id="review-settings-assign-creator" type="checkbox">
-              <i data-lucide="user-check" aria-hidden="true"></i>
-              <span>Assign created pull requests and worked issues to me</span>
-            </label>
-            <div id="review-settings-github-issues-auto-start" class="github-issues-auto-start" hidden>
-              <div id="review-settings-github-issues-legacy" hidden>
-                <p class="github-issues-settings-description">Existing auto-start settings apply to all available repositories until you enable automation for a specific repository.</p>
-                <button id="review-settings-github-issues-stop-legacy" class="prompt-action-button" type="button">Turn off existing auto-start</button>
-              </div>
-              <label class="github-issues-auto-start-labels" for="review-settings-github-issues-repository">
-                <span>Automation repository</span>
-                <select id="review-settings-github-issues-repository" class="prompt-control">
-                  <option value="">Choose a repository</option>
-                </select>
-              </label>
-              <label id="review-settings-github-issues-repository-toggle" class="selectable-option" hidden>
-                <input class="sr-only" id="review-settings-github-issues-repository-enabled" type="checkbox">
-                <i data-lucide="folder-kanban" aria-hidden="true"></i>
-                <span>Enable issue automation for this repository</span>
-              </label>
-              <div id="review-settings-github-issues-repository-fields" class="github-issues-automation-fields" hidden>
-                <label class="selectable-option">
-                  <input class="sr-only" id="review-settings-github-issues-auto-start-assigned" type="checkbox">
-                  <i data-lucide="play" aria-hidden="true"></i>
-                  <span>Auto-start matching issues</span>
-                </label>
-                <label class="selectable-option">
-                  <input class="sr-only" id="review-settings-github-issues-auto-start-only-assigned" type="checkbox">
-                  <svg class="lucide lucide-user-round-arrow-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="m19 16-3 3"></path>
-                    <path d="M2 21a8 8 0 0 1 12.664-6.5"></path>
-                    <path d="M22 19h-6l3 3"></path>
-                    <circle cx="10" cy="8" r="5"></circle>
-                  </svg>
-                  <span>Only issues assigned to me</span>
-                </label>
-                <label class="github-issues-auto-start-labels" for="review-settings-github-issues-auto-start-labels">
-                  <span>Trigger labels <small>Match any label. Separate labels with commas.</small></span>
-                  <input id="review-settings-github-issues-auto-start-labels" type="text" placeholder="ready-for-agent">
-                </label>
-                <label class="github-issues-auto-start-labels" for="review-settings-github-issues-exclusion-label">
-                  <span>Exclusion label</span>
-                  <input id="review-settings-github-issues-exclusion-label" type="text" maxlength="50">
-                </label>
-              </div>
-              <section class="github-automation" aria-label="Issue automation status">
-                <div class="github-automation-toolbar">
-                  <p id="github-automation-status" class="github-issues-status" role="status">Loading…</p>
-                  <div class="github-automation-actions">
-                    <button id="github-automation-refresh" class="prompt-action-button" type="button">Refresh</button>
-                    <button id="github-automation-scan" class="prompt-action-button" type="button">Scan now</button>
-                  </div>
-                </div>
-                <div id="github-automation-error"></div>
-              </section>
-            </div>
-            <div id="review-settings-github-issues-link-mode" class="github-issues-settings-link-mode" hidden>
-              <span id="review-settings-github-issues-link-mode-label" class="github-issues-settings-heading">Pull request issue linking</span>
-              <div class="github-issue-link-options github-issues-settings-options" role="radiogroup" aria-labelledby="review-settings-github-issues-link-mode-label">
-                <label class="github-issue-link-option">
-                  <input id="review-settings-github-issues-link-reference" type="radio" name="github-issue-link-mode" value="reference">
-                  <span><strong>Reference issue</strong><small>Keep it open and add “Related to #N” to the pull request.</small></span>
-                </label>
-                <label class="github-issue-link-option">
-                  <input id="review-settings-github-issues-link-close" type="radio" name="github-issue-link-mode" value="close">
-                  <span><strong>Close on merge</strong><small>Close it when the pull request merges with “Closes #N”.</small></span>
-                </label>
-              </div>
-            </div>
-          </fieldset><div id="settings-panel-review" class="review-settings-section review-settings-level" role="group" aria-label="Post-task reviews">
-            <h4>Post-task reviews</h4><input id="review-settings-level" type="hidden" value="off">
-            <div class="review-slider">
-              <label class="sr-only" for="review-settings-slider">Number of post-task reviews</label>
-              <output class="review-slider-value" id="review-slider-value" for="review-settings-slider"><svg aria-hidden="true"><use id="review-selected-icon" href="#review-off"/></svg><span id="review-selected-text">Off · 0 reviews</span></output>
-              <input id="review-settings-slider" type="range" min="0" max="3" step="1" value="0" aria-valuetext="Off, 0 reviews">
-              <div class="review-slider-stops" aria-hidden="true">
-                <span class="review-slider-stop" data-current="true" title="Off · 0 reviews"><svg><use href="#review-off"/></svg></span>
-                <span class="review-slider-stop" title="Low · 2 reviews"><svg><use href="#review-low"/></svg></span>
-                <span class="review-slider-stop" title="Medium · 5 reviews"><svg><use href="#review-medium"/></svg></span>
-                <span class="review-slider-stop" title="High · 10 reviews"><svg><use href="#review-high"/></svg></span>
-              </div>
-            </div>
-          </div><div id="settings-panel-merge" class="review-settings-section review-settings-merge-method" role="group" aria-label="Merge method">
-            <h4>Merge method</h4><span id="review-settings-merge-method-label" class="sr-only">Merge Method</span>
-            <input id="review-settings-merge-method" type="hidden" value="squash">
-            <div class="review-settings-merge-slider" role="radiogroup" aria-labelledby="review-settings-merge-method-label">
-              <span class="review-settings-merge-slider-thumb" aria-hidden="true"></span>
-              <button class="review-settings-merge-option active" type="button" role="radio" aria-checked="true" data-review-settings-merge-method="squash">
-                <i data-lucide="git-commit-horizontal" aria-hidden="true"></i><span>Squash</span>
-              </button>
-              <button class="review-settings-merge-option" type="button" role="radio" aria-checked="false" data-review-settings-merge-method="merge">
-                <i data-lucide="git-merge" aria-hidden="true"></i><span>Merge</span>
-              </button>
-              <button class="review-settings-merge-option" type="button" role="radio" aria-checked="false" data-review-settings-merge-method="rebase">
-                <i data-lucide="git-branch" aria-hidden="true"></i><span>Rebase</span>
-              </button>
-            </div>
-          </div></div>
         </form>
         </div>
         <p id="review-settings-status" class="settings-status submit-status submit-status-inline onboarding-message" aria-live="polite"></p>
@@ -2228,7 +2112,6 @@
     const settingsTabButtons = Array.from(document.querySelectorAll("[data-settings-tab]"));
     const settingsTabPanels = {
       automation: document.getElementById("settings-panel-automation"),
-      defaults: document.getElementById("settings-panel-defaults"),
       repositories: document.getElementById("settings-panel-repositories"),
       signing: document.getElementById("commit-signing-section"),
     };
@@ -2933,6 +2816,7 @@
       const normalized = String(level || "").trim().toLowerCase();
       const index = Math.max(0, REVIEW_SETTINGS_LEVELS.findIndex(entry => entry.value === normalized));
       const selected = REVIEW_SETTINGS_LEVELS[index];
+      if (!reviewSettingsLevel || !reviewSettingsSlider) return;
       reviewSettingsLevel.value = selected.value;
       reviewSettingsSlider.value = String(index);
       const reviews = `${selected.count} ${selected.count === 1 ? "review" : "reviews"}`;
@@ -3059,17 +2943,17 @@
 
     function currentReviewSettingsPayload() {
       return {
-        auto_merge: Boolean(reviewSettingsAutoMerge?.checked),
-        delete_merged_branches: Boolean(reviewSettingsDeleteMergedBranches?.checked),
-        merge_method: String(reviewSettingsMergeMethod?.value || "squash").trim().toLowerCase() || "squash",
-        review_level: String(reviewSettingsLevel?.value || "off").trim().toLowerCase() || "off",
+        auto_merge: state.reviewSettings.autoMerge,
+        delete_merged_branches: state.reviewSettings.deleteMergedBranches,
+        merge_method: state.reviewSettings.mergeMethod,
+        review_level: state.reviewSettings.reviewLevel,
         default_library_enabled: reviewSettingsDefaultLibrary instanceof HTMLInputElement ? reviewSettingsDefaultLibrary.checked : true,
         chat_enabled: reviewSettingsChatEnabled instanceof HTMLInputElement ? reviewSettingsChatEnabled.checked : false,
         workflow_enabled: reviewSettingsWorkflowEnabled.checked,
         json_enabled: reviewSettingsJSONEnabled instanceof HTMLInputElement ? reviewSettingsJSONEnabled.checked : false,
         github_issues_enabled: reviewSettingsGitHubIssuesEnabled instanceof HTMLInputElement ? reviewSettingsGitHubIssuesEnabled.checked : false,
-        github_issue_link_mode: reviewSettingsGitHubIssuesLinkClose instanceof HTMLInputElement && reviewSettingsGitHubIssuesLinkClose.checked ? "close" : "reference",
-        assign_creator: reviewSettingsAssignCreator instanceof HTMLInputElement ? reviewSettingsAssignCreator.checked : true,
+        github_issue_link_mode: state.reviewSettings.githubIssueLinkMode,
+        assign_creator: state.reviewSettings.assignCreator,
         disabled_repositories: [...(state.reviewSettings.disabledRepositories || [])],
       };
     }
@@ -14318,7 +14202,7 @@
         setReviewSettingsStatus("", "Changes will be saved on close.");
       });
     });
-    reviewSettingsSlider.addEventListener("input", () => {
+    reviewSettingsSlider?.addEventListener("input", () => {
       setReviewSettingsLevel(REVIEW_SETTINGS_LEVELS[Number(reviewSettingsSlider.value)].value);
       setReviewSettingsStatus("", "Changes will be saved on close.");
     });
