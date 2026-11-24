@@ -513,7 +513,7 @@ for (const viewport of [{width:1440,height:1000},{width:1024,height:768}]) {
 
 for (const viewport of [{width:1440,height:1000},{width:1024,height:768}]) {
  test(`Library tasks occupy remaining Studio space without a spacer at ${viewport.width}×${viewport.height}`, async t => {
-  const {page}=await openPage(t,'library',viewport,false);
+  const {page}=await openPage(t,'studio-library',viewport,false);
   await page.locator('#library-task-list > *').first().waitFor();
   const geometry=async()=>page.evaluate(()=>{
    const panel=document.getElementById('prompt-library-panel');
