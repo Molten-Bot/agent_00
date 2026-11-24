@@ -1889,6 +1889,7 @@
       taskSoundInitialized: false,
       taskSoundSeenStatuses: new Map(),
       taskFullscreenOpen: false,
+      workflowFullscreenTrigger: null,
       appDisplay: "studio",
       agentAuthBusy: false,
       agentAuthGeneration: 0,
@@ -1963,6 +1964,7 @@
     const taskFullscreenToggle = document.getElementById("task-fullscreen-toggle");
     const taskFullscreen = document.getElementById("task-fullscreen");
     const taskFullscreenClose = document.getElementById("task-fullscreen-close");
+    const taskFullscreenBody = document.getElementById("task-fullscreen-body");
     const taskFullscreenList = document.getElementById("task-fullscreen-list");
     const taskFullscreenPanelTitle = document.getElementById("task-fullscreen-panel-title");
     const taskFullscreenHeadLabel = document.getElementById("task-fullscreen-head-label");
@@ -9078,6 +9080,9 @@
       if (mode === "workflow" && state.reviewSettings?.workflowEnabled !== true) {
         mode = "studio";
       }
+      if (mode !== "workflow" && state.workflowFullscreenTrigger) {
+        closeFullscreen("navigation");
+      }
       workflowDisplay.classList.toggle("hidden", mode !== "workflow");
       workflowDisplay.setAttribute("aria-hidden", String(mode !== "workflow"));
       if (mode === "workflow") {
@@ -10202,7 +10207,6 @@
       }
       if (state.taskFullscreenOpen && !displayTasks(state.snapshot).length) {
         state.taskFullscreenOpen = false;
-        document.body.classList.remove("task-fullscreen-open");
       }
       applyTaskPanelViewMeta();
       render(state.snapshot);
@@ -10229,7 +10233,6 @@
       }
       if (state.taskFullscreenOpen && !displayTasks(state.snapshot).length) {
         state.taskFullscreenOpen = false;
-        document.body.classList.remove("task-fullscreen-open");
       }
       applyTaskPanelViewMeta();
       render(state.snapshot);
@@ -10527,8 +10530,8 @@
 
     function renderTaskFullscreenCloseIcon(mode) {
       if (!taskFullscreenClose) return;
-      const normalizedMode = taskFullscreenMode(mode);
-      const label = normalizedMode === "console" ? "Close console view" : "Exit full screen work";
+      const label = mode === "workflow" ? "Exit full screen Workflow" : mode === "console" ? "Close console view" : "Exit full screen work";
+      if (taskFullscreenClose.getAttribute("aria-label") === label) return;
       const icon = "x";
       taskFullscreenClose.setAttribute("aria-label", label);
       taskFullscreenClose.setAttribute("title", label);
@@ -10544,43 +10547,63 @@
       replaceLucideIcons(taskFullscreenClose);
     }
 
+    function syncFullscreen(hasTasks = displayTasks(state.snapshot).length > 0) {
+      const mode = state.workflowFullscreenTrigger ? "workflow" : state.taskFullscreenMode;
+      const open = Boolean(state.workflowFullscreenTrigger || state.taskFullscreenOpen);
+      taskFullscreen.dataset.mode = mode;
+      taskFullscreen.classList.toggle("hidden", !open);
+      taskFullscreen.setAttribute("aria-hidden", String(!open));
+      document.body.classList.toggle("task-fullscreen-open", open);
+
+      taskFullscreenToggle.disabled = !hasTasks;
+      taskFullscreenToggle.setAttribute("aria-expanded", String(state.taskFullscreenOpen));
+      taskFullscreenToggle.setAttribute("aria-label", state.taskFullscreenOpen && mode === "work" ? "Exit full screen work" : "Open full screen work");
+      taskFullscreenClose.classList.toggle("hidden", !open);
+      taskFullscreenClose.setAttribute("aria-hidden", String(!open));
+      renderTaskFullscreenCloseIcon(mode);
+
+      const showConsole = open && mode === "console";
+      taskFullscreenOutputPanel.classList.toggle("hidden", !showConsole);
+      taskFullscreenOutputPanel.setAttribute("aria-hidden", String(!showConsole));
+    }
+
     function setTaskFullscreen(open, mode = state.taskFullscreenMode) {
-      if (open && !displayTasks(state.snapshot).length) {
-        open = false;
-      }
-      if (open) {
-        state.taskFullscreenMode = taskFullscreenMode(mode);
-      }
-      state.taskFullscreenOpen = Boolean(open);
-      if (taskFullscreen) {
-        taskFullscreen.classList.toggle("hidden", !state.taskFullscreenOpen);
-        taskFullscreen.setAttribute("aria-hidden", state.taskFullscreenOpen ? "false" : "true");
-        taskFullscreen.dataset.mode = state.taskFullscreenMode;
-      }
-      if (taskFullscreenToggle) {
-        const hasTasks = displayTasks(state.snapshot).length > 0;
-        taskFullscreenToggle.disabled = !hasTasks;
-        taskFullscreenToggle.setAttribute("aria-expanded", state.taskFullscreenOpen ? "true" : "false");
-        taskFullscreenToggle.setAttribute("aria-label", state.taskFullscreenOpen && state.taskFullscreenMode === "work" ? "Exit full screen work" : "Open full screen work");
-      }
-      if (taskFullscreenClose) {
-        taskFullscreenClose.classList.toggle("hidden", !state.taskFullscreenOpen);
-        taskFullscreenClose.setAttribute("aria-hidden", state.taskFullscreenOpen ? "false" : "true");
-        renderTaskFullscreenCloseIcon(state.taskFullscreenMode);
-      }
-      if (taskFullscreenOutputPanel) {
-        const showConsole = state.taskFullscreenOpen && state.taskFullscreenMode === "console";
-        taskFullscreenOutputPanel.classList.toggle("hidden", !showConsole);
-        taskFullscreenOutputPanel.setAttribute("aria-hidden", showConsole ? "false" : "true");
-      }
+      const hasTasks = displayTasks(state.snapshot).length > 0;
+      state.taskFullscreenOpen = open && hasTasks;
       if (state.taskFullscreenOpen) {
-        document.body.classList.add("task-fullscreen-open");
+        state.taskFullscreenMode = taskFullscreenMode(mode);
       } else {
-        document.body.classList.remove("task-fullscreen-open");
         closeTaskImageViewer();
       }
       applyTaskVisibility();
       render(state.snapshot);
+    }
+
+    function openWorkflowFullscreen(trigger) {
+      if (state.workflowFullscreenTrigger || state.appDisplay !== "workflow") return;
+      state.workflowFullscreenTrigger = trigger;
+      trigger.setAttribute("aria-expanded", "true");
+      trigger.hidden = true;
+      taskFullscreenBody.append(workflowDisplay);
+      workflowDisplay.classList.add("task-fullscreen-panel");
+      syncFullscreen();
+      taskFullscreenClose.focus();
+    }
+
+    function closeFullscreen(source) {
+      const trigger = state.workflowFullscreenTrigger;
+      if (trigger) {
+        state.workflowFullscreenTrigger = null;
+        dashboardDisplay.before(workflowDisplay);
+        workflowDisplay.classList.remove("task-fullscreen-panel");
+        trigger.hidden = false;
+        trigger.setAttribute("aria-expanded", "false");
+        syncFullscreen();
+        if (source !== "navigation") trigger.focus();
+        return;
+      }
+      setTaskFullscreen(false);
+      trackAnalyticsEvent("task_fullscreen_toggled", { open: false, source });
     }
 
     async function dismissTask(requestID) {
@@ -12816,7 +12839,6 @@
       const promptOnly = normalizeTaskPanelView(state.taskPanelView) === "prompt";
       if (!showTaskPanel && state.taskFullscreenOpen) {
         state.taskFullscreenOpen = false;
-        document.body.classList.remove("task-fullscreen-open");
       }
       applyTaskPanelViewMeta();
       if (rightCol) {
@@ -12828,26 +12850,7 @@
         taskPanel.setAttribute("aria-hidden", showTaskPanel ? "false" : "true");
       }
       applyTaskVisibility();
-      if (taskFullscreenToggle) {
-        taskFullscreenToggle.disabled = !hasTasks;
-        taskFullscreenToggle.setAttribute("aria-expanded", state.taskFullscreenOpen ? "true" : "false");
-        taskFullscreenToggle.setAttribute("aria-label", state.taskFullscreenOpen && state.taskFullscreenMode === "work" ? "Exit full screen work" : "Open full screen work");
-      }
-      if (taskFullscreenClose) {
-        taskFullscreenClose.classList.toggle("hidden", !state.taskFullscreenOpen);
-        taskFullscreenClose.setAttribute("aria-hidden", state.taskFullscreenOpen ? "false" : "true");
-        renderTaskFullscreenCloseIcon(state.taskFullscreenMode);
-      }
-      if (taskFullscreen) {
-        taskFullscreen.classList.toggle("hidden", !state.taskFullscreenOpen);
-        taskFullscreen.setAttribute("aria-hidden", state.taskFullscreenOpen ? "false" : "true");
-        taskFullscreen.dataset.mode = state.taskFullscreenMode;
-      }
-      if (taskFullscreenOutputPanel) {
-        const showConsole = state.taskFullscreenOpen && state.taskFullscreenMode === "console";
-        taskFullscreenOutputPanel.classList.toggle("hidden", !showConsole);
-        taskFullscreenOutputPanel.setAttribute("aria-hidden", showConsole ? "false" : "true");
-      }
+      syncFullscreen(hasTasks);
       if (!showTaskPanel) {
         if (taskList) {
           taskList.dataset.pendingRenderSig = "";
@@ -14229,9 +14232,10 @@
       setTaskFullscreen(nextOpen, "work");
       trackAnalyticsEvent("task_fullscreen_toggled", { open: nextOpen, source: "button", mode: "work" });
     });
-    taskFullscreenClose.addEventListener("click", () => {
-      setTaskFullscreen(false);
-      trackAnalyticsEvent("task_fullscreen_toggled", { open: false, source: "close_button" });
+    taskFullscreenClose.addEventListener("click", () => closeFullscreen("close_button"));
+    workflowDisplay.addEventListener("click", (event) => {
+      const trigger = event.target.closest("[data-workflow-fullscreen]");
+      if (trigger) openWorkflowFullscreen(trigger);
     });
     if (taskImageViewerClose) {
       taskImageViewerClose.addEventListener("click", closeTaskImageViewer);
@@ -14310,10 +14314,9 @@
           return;
         }
       }
-      if (event.key === "Escape" && state.taskFullscreenOpen) {
+      if (event.key === "Escape" && !event.defaultPrevented && (state.taskFullscreenOpen || state.workflowFullscreenTrigger)) {
         event.preventDefault();
-        setTaskFullscreen(false);
-        trackAnalyticsEvent("task_fullscreen_toggled", { open: false, source: "escape_key" });
+        closeFullscreen("escape_key");
         return;
       }
       if (event.key === "Escape" && state.settingsOpen) {

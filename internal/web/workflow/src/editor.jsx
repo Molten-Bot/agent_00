@@ -31,7 +31,6 @@ import {
   Trash2,
   Download,
   Maximize2,
-  Minimize2,
   Play,
   Pause,
   DiagramFlowVertical,
@@ -151,8 +150,7 @@ function Editor() {
     [notice, setNotice] = useState(""),
     [preview, setPreview] = useState(null),
     [busy, setBusy] = useState(false),
-    [templatesOpen, setTemplatesOpen] = useState(true),
-    [maximized, setMaximized] = useState(false);
+    [templatesOpen, setTemplatesOpen] = useState(true);
   const flow = useReactFlow();
   const graph = current ? diagram(current) : { nodes: [], edges: [] };
   const changeRepository = useCallback((repository) => {
@@ -219,10 +217,7 @@ function Editor() {
   }, []);
   useEffect(() => {
     const handler = (e) => {
-      if (e.detail !== "workflow") {
-        setMaximized(false);
-        return;
-      }
+      if (e.detail !== "workflow") return;
       requestAnimationFrame(() => flow.fitView({ padding: 32, duration: 200 }));
     };
     window.addEventListener("workflow-display", handler);
@@ -431,16 +426,9 @@ function Editor() {
         "bot",
         "linkedIssue",
       ];
-  const sizeLabel = maximized ? "Restore Workflow size" : "Maximize Workflow";
   const templatesLabel = templatesOpen ? "Hide workflow templates" : "Show workflow templates";
   return (
-    <div className={`wf-editor${maximized ? " wf-maximized" : ""}`} onKeyDown={(event) => {
-      if (maximized && event.key === "Escape" && !event.defaultPrevented) {
-        event.preventDefault();
-        event.stopPropagation();
-        setMaximized(false);
-      }
-    }}>
+    <div className="wf-editor">
       <header className="panel-header prompt-titlebar">
         <div className="panel-header-copy">
           <span id="workflow-title" className="panel-section-title prompt-title-list">
@@ -495,9 +483,9 @@ function Editor() {
               </button>
             </>
           )}
-          <button type="button" aria-label={sizeLabel} title={sizeLabel} aria-expanded={maximized}
-            onClick={() => setMaximized(value => !value)}>
-            {maximized ? <Minimize2 size={16} aria-hidden="true" /> : <Maximize2 size={16} aria-hidden="true" />}
+          <button type="button" data-workflow-fullscreen aria-label="Maximize Workflow" title="Maximize Workflow"
+            aria-controls="task-fullscreen" aria-expanded="false">
+            <Maximize2 size={16} aria-hidden="true" />
           </button>
         </div>
       </header>
