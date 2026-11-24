@@ -120,14 +120,14 @@ type Server struct {
 	// receipts and inherited worker locks. Legacy embedders remain manual-only.
 	IssueRecovery *localruntime.IssueRecoveryConfig
 	IssueRepair   func(context.Context, localruntime.IssueClaimRecord) (string, error)
-	// IssueRolloutBlockedFromLogs rechecks truncated failures before automatic retry.
-	IssueRolloutBlockedFromLogs func(requestID, failure string) (blocked, matched bool)
-	IssueRepairs                *localruntime.IssueRepairStore
-	IssueReady                  func(context.Context) error
-	issueAutomation             *issueAutomationState
-	gitHubRepos                 *gitHubRepoCache
-	issueAutoStartWake          chan time.Time
-	Ready                       chan<- error
+	// IssueExternalPrerequisiteFromLogs rechecks truncated failures before automatic retry.
+	IssueExternalPrerequisiteFromLogs func(requestID, failure string) (reason string, matched bool)
+	IssueRepairs                      *localruntime.IssueRepairStore
+	IssueReady                        func(context.Context) error
+	issueAutomation                   *issueAutomationState
+	gitHubRepos                       *gitHubRepoCache
+	issueAutoStartWake                chan time.Time
+	Ready                             chan<- error
 }
 
 // AgentAuthState describes current runtime agent-auth readiness and device flow hints.

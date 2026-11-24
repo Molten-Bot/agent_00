@@ -1116,6 +1116,37 @@ func TestIssueRecoveryBlocksExternalRolloutWithoutRepair(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryBlocksMissingExternalEvidenceWithoutRepair(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(t.Context())
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.Incident = "missing_pr"
+	record.RunError = "claude: claude reported failure: Failure: Equipment audit remains blocked. " +
+		"Error details: This runtime had no approved inspection record or authorized access to matching equipment logs."
+	record.NextAttemptAt = time.Now().Add(-time.Minute)
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
+		t.Fatal("missing external evidence queued a harness repair")
+		return "", nil
+	}
+	for range 2 {
+		if err := s.ReconcileIssueWork(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.State != "blocked" || got.Incident != localruntime.IssueIncidentExternalEvidence ||
+		got.RunError != record.RunError || !got.NextAttemptAt.IsZero() || len(f.submissions) != 1 {
+		t.Fatalf("unexpected recovery state: state=%q incident=%q submissions=%d", got.State, got.Incident, len(f.submissions))
+	}
+	if response := retryIssue(t, s, record.ID, true); response.Code != http.StatusAccepted || len(f.submissions) != 2 {
+		t.Fatalf("explicit retry: status=%d submissions=%d response=%s", response.Code, len(f.submissions), response.Body.String())
+	}
+}
+
 func TestIssueRecoveryChecksPreservedRolloutBeforeOverdueRetry(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
@@ -1129,12 +1160,12 @@ func TestIssueRecoveryChecksPreservedRolloutBeforeOverdueRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	reads := 0
-	s.IssueRolloutBlockedFromLogs = func(requestID, failure string) (bool, bool) {
+	s.IssueExternalPrerequisiteFromLogs = func(requestID, failure string) (string, bool) {
 		reads++
 		if requestID != record.RequestID || failure != record.RunError {
 			t.Fatalf("stdout lookup used request %q and failure %q", requestID, failure)
 		}
-		return true, true
+		return failurefollowup.ExternalRolloutPrerequisitesReason, true
 	}
 	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
 		t.Fatal("external provisioning failure queued a harness repair")
@@ -1192,11 +1223,11 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 				t.Fatal(err)
 			}
 			matchedLogs := tc.matchedLogs
-			s.IssueRolloutBlockedFromLogs = func(requestID, failure string) (bool, bool) {
+			s.IssueExternalPrerequisiteFromLogs = func(requestID, failure string) (string, bool) {
 				if requestID != record.RequestID || failure != truncated {
 					t.Fatalf("unexpected stdout lookup for %q and %q", requestID, failure)
 				}
-				return false, matchedLogs
+				return "", matchedLogs
 			}
 			calls := 0
 			s.IssueRepair = func(_ context.Context, issue localruntime.IssueClaimRecord) (string, error) {
