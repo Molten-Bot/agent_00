@@ -22,7 +22,7 @@
 .wf-editor .wf-search input { border: 0; padding: 0; background: none; color: var(--text); width: 100%; min-width: 0; font-size: 11px; box-shadow: none; min-height: 0; }
 .wf-step-list { display: flex; flex-direction: column; gap: 8px; }
 .wf-editor button.wf-step { padding: 11px 9px; text-align: left; justify-content: start; gap: 9px; background: transparent; cursor: grab; }
-.wf-step > span:nth-child(2) { flex: 1; min-width: 0; }
+.wf-step > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .wf-step strong { display: block; font-size: 11px; font-weight: 600; color: var(--text); }
 .wf-step small { display: block; font-size: 9px; color: var(--muted); line-height: 1.5; margin-top: 4px; }
 .wf-icon { display: inline-flex; align-items: center; justify-content: center; width: 31px; height: 31px; flex: 0 0 auto; border-radius: 8px; color: var(--step-color); background: color-mix(in srgb,var(--step-color) 12%,transparent); }
