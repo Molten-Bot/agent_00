@@ -90,8 +90,8 @@ func (d Document) Validate() error {
 		return fmt.Errorf("unsupported workflow version %d (supported: %d); file was not modified", d.Version, Version)
 	}
 	ids := map[string]bool{}
-	if len(d.Workflows) > 500 {
-		return fmt.Errorf("at most 500 workflows are supported")
+	if len(d.Workflows) > 5000 {
+		return fmt.Errorf("at most 5000 workflows are supported")
 	}
 	for _, w := range d.Workflows {
 		if ids[w.ID] {

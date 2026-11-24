@@ -33,7 +33,7 @@ func (s Server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, d)
 		return
 	}
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 2<<20))
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<20))
 	if err != nil {
 		workflowError(w, 400, err)
 		return
