@@ -2660,7 +2660,13 @@ func appendCappedTaskLog(logs []TaskLog, max int, entry TaskLog) []TaskLog {
 	if len(logs) < max {
 		return append(logs, entry)
 	}
-	copy(logs, logs[1:])
+	// Keep review pass milestones when rolling off older terminal output.
+	drop := 0
+	for drop < len(logs)-1 && logs[drop].Stream == "meta" && strings.Contains(logs[drop].Text, "stage=review") &&
+		isTaskReviewProgressStart(parseKVFields(logs[drop].Text)) {
+		drop++
+	}
+	copy(logs[drop:], logs[drop+1:])
 	logs[len(logs)-1] = entry
 	return logs
 }

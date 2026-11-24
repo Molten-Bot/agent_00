@@ -973,7 +973,7 @@
       checks: { id: "checks", label: "Checks", detail: "PR checks and remediation loop.", icon: "checks" },
       code_review: { id: "code_review", label: "Code Review", detail: "Read pull request context and post review findings.", icon: "review" },
       review: { id: "review", label: "Review", detail: "Independent post-task pull request review.", icon: "review" },
-      review_fix: { id: "review_fix", label: "Fix Findings", detail: "Apply the current review pass findings.", icon: "review_fix" },
+      review_fix: { id: "review_fix", label: "Fix Findings", detail: "Apply the current review pass findings.", icon: "agent" },
       review_checks: { id: "review_checks", label: "Review Checks", detail: "Push review fixes and verify pull request checks.", icon: "review_checks" },
       finalize: { id: "finalize", label: "GitHub", detail: "Repository link before PR creation; pull request link once available.", icon: "github" },
       auto_merge: { id: "auto_merge", label: "Auto-merge", detail: "Clean pull request waits for GitHub auto-merge.", icon: "auto_merge" },
@@ -1032,7 +1032,6 @@
       checks: "shield-check",
       code_review: "clipboard-check",
       review: "clipboard-check",
-      review_fix: "wrench",
       review_checks: "shield-check",
       auto_merge: "git-merge",
     });
@@ -1172,11 +1171,8 @@
     }
 
     function taskAgentLogoURL(task) {
-      const stageLogo = resolveAgentLogoURL(task?.stage);
-      if (stageLogo) {
-        return stageLogo;
-      }
-      return configuredAgentLogoURL() || AGENT_LOGO_URLS.codex;
+      return resolveAgentLogoURL(task?.agent_harness) || resolveAgentLogoURL(task?.stage) ||
+        configuredAgentLogoURL() || AGENT_LOGO_URLS.codex;
     }
 
     function taskProgressStepIconURL(step, task) {
@@ -10924,8 +10920,11 @@
       }
       const start = Math.max(0, logs.length - MAX_TERMINAL_LINES);
       const out = [];
-      for (let i = start; i < logs.length; i += 1) {
+      for (let i = 0; i < logs.length; i += 1) {
         const row = logs[i] || {};
+        if (i < start && !taskReviewProgressStart(row)) {
+          continue;
+        }
         out.push({
           time: String(row.time || ""),
           stream: String(row.stream || ""),
@@ -11468,6 +11467,23 @@
       return token;
     }
 
+    function taskReviewProgressStart(log) {
+      const line = String(log?.text || "");
+      if ((log?.stream && log.stream !== "meta") || !line.includes("stage=review") ||
+          parseTaskProgressField(line, "status") !== "start") {
+        return null;
+      }
+      const stage = parseTaskProgressField(line, "stage");
+      if (stage !== "review" && stage !== "review_fix" && stage !== "review_checks") {
+        return null;
+      }
+      const pass = Number(parseTaskProgressField(line, "pass"));
+      if (!Number.isSafeInteger(pass) || pass < 1) {
+        return null;
+      }
+      return { stage, pass, repoDir: parseTaskProgressField(line, "repo_dir") };
+    }
+
     function newTaskProgressSignals() {
       return {
         stages: new Set(),
@@ -11482,6 +11498,7 @@
         hasReviewSeen: false,
         hasReviewFixSeen: false,
         hasReviewChecksSeen: false,
+        reviewSteps: new Map(),
         hasAutoMergeSeen: false,
         currentAgentMode: "",
         hasReviewConfigSeen: false,
@@ -11504,6 +11521,7 @@
       clone.hasReviewSeen = Boolean(signals?.hasReviewSeen);
       clone.hasReviewFixSeen = Boolean(signals?.hasReviewFixSeen);
       clone.hasReviewChecksSeen = Boolean(signals?.hasReviewChecksSeen);
+      clone.reviewSteps = new Map(signals.reviewSteps);
       clone.hasAutoMergeSeen = Boolean(signals?.hasAutoMergeSeen);
       clone.currentAgentMode = String(signals?.currentAgentMode || "");
       clone.hasReviewConfigSeen = Boolean(signals?.hasReviewConfigSeen);
@@ -11519,8 +11537,8 @@
       ].join("\u001f");
     }
 
-    function applyTaskProgressLogSignal(signals, rawLine) {
-      const line = String(rawLine || "").trim();
+    function applyTaskProgressLogSignal(signals, log) {
+      const line = String(log?.text || "").trim();
       if (!line || !line.includes("stage=")) {
         return;
       }
@@ -11529,6 +11547,13 @@
         return;
       }
       signals.stages.add(stage);
+      const reviewStart = taskReviewProgressStart(log);
+      if (reviewStart) {
+        const { stage, pass, repoDir } = reviewStart;
+        const id = `${stage}:${pass}:${repoDir}`;
+        const step = TASK_PROGRESS_STEP_DEFS[stage];
+        signals.reviewSteps.set(id, { ...step, id, label: `${step.label} (pass ${pass})` });
+      }
       const reviewTotal = Number.parseInt(String(parseTaskProgressField(line, "review_total") || ""), 10);
       if (Number.isFinite(reviewTotal) && reviewTotal >= 0) {
         signals.hasReviewConfigSeen = true;
@@ -11609,7 +11634,7 @@
       if (!requestID) {
         const signals = newTaskProgressSignals();
         for (let i = 0; i < logs.length; i += 1) {
-          applyTaskProgressLogSignal(signals, logs[i]?.text);
+          applyTaskProgressLogSignal(signals, logs[i]);
         }
         return signals;
       }
@@ -11619,14 +11644,15 @@
       const cached = state.taskProgressSignalCache.get(requestID);
       let signals = cached ? cloneTaskProgressSignals(cached.signals) : newTaskProgressSignals();
       let startIndex = 0;
-      if (cached && logs.length >= cached.scannedCount && cached.firstKey === firstKey) {
+      if (cached && cached.scannedCount > 0 && logs.length >= cached.scannedCount &&
+          cached.firstKey === firstKey && cached.lastKey === taskProgressLogKey(logs[cached.scannedCount - 1])) {
         startIndex = cached.scannedCount;
-        if (logs.length === cached.scannedCount && cached.lastKey === lastKey) {
+        if (logs.length === cached.scannedCount) {
           return signals;
         }
       }
       for (let i = startIndex; i < logs.length; i += 1) {
-        applyTaskProgressLogSignal(signals, logs[i]?.text);
+        applyTaskProgressLogSignal(signals, logs[i]);
       }
       state.taskProgressSignalCache.set(requestID, {
         firstKey,
@@ -11691,6 +11717,7 @@
         signals?.hasReviewSeen ? "review" : "",
         signals?.hasReviewFixSeen ? "review_fix" : "",
         signals?.hasReviewChecksSeen ? "review_checks" : "",
+        JSON.stringify([...signals.reviewSteps.keys()]),
         signals?.hasAutoMergeSeen ? "auto_merge" : "",
         String(signals?.currentAgentMode || ""),
         signals?.hasReviewConfigSeen ? `review_total:${signals.reviewPasses}` : "",
@@ -11717,40 +11744,31 @@
       if (status !== "no_changes") {
         stepIDs.push("checks");
       }
+      const steps = stepIDs.map((id) => TASK_PROGRESS_STEP_DEFS[id]);
       if (
         status !== "no_changes" &&
         taskFinalReviewEligible(task) &&
-        (signals.hasReviewSeen || (signals.hasReviewConfigSeen ? signals.reviewPasses > 0 : taskReviewStepEnabled())) &&
+        (signals.hasReviewSeen || signals.hasReviewFixSeen || signals.hasReviewChecksSeen ||
+          (signals.hasReviewConfigSeen ? signals.reviewPasses > 0 : taskReviewStepEnabled())) &&
         (String(task?.pr_url || "").trim() !== "" || !COMPLETED_STATUSES.has(status))
       ) {
-        stepIDs.push("review");
-        if (signals.hasReviewFixSeen) {
-          stepIDs.push("review_fix");
-        }
-        if (signals.hasReviewChecksSeen || signals.hasReviewFixSeen) {
-          stepIDs.push("review_checks");
+        if (signals.reviewSteps.size) {
+          steps.push(...signals.reviewSteps.values());
+        } else {
+          steps.push(TASK_PROGRESS_STEP_DEFS.review);
+          if (signals.hasReviewFixSeen) {
+            steps.push(TASK_PROGRESS_STEP_DEFS.review_fix);
+          }
+          if (signals.hasReviewChecksSeen) {
+            steps.push(TASK_PROGRESS_STEP_DEFS.review_checks);
+          }
         }
       }
-      stepIDs.push("finalize");
+      steps.push(TASK_PROGRESS_STEP_DEFS.finalize);
       if (taskAutoMergeStepEnabled(task) && status !== "no_changes") {
-        stepIDs.push("auto_merge");
+        steps.push(TASK_PROGRESS_STEP_DEFS.auto_merge);
       }
-
-      const unique = [];
-      const seen = new Set();
-      for (let i = 0; i < stepIDs.length; i += 1) {
-        const id = stepIDs[i];
-        if (seen.has(id)) {
-          continue;
-        }
-        const step = TASK_PROGRESS_STEP_DEFS[id];
-        if (!step) {
-          continue;
-        }
-        seen.add(id);
-        unique.push(step);
-      }
-      return unique;
+      return steps;
     }
 
     function taskProgressCurrentStepID(task, signals) {
@@ -11793,6 +11811,14 @@
       if (taskAutoMergeStepEnabled(task) && signals.hasAutoMergeSeen) {
         return "auto_merge";
       }
+      // GitHub and agent status logs can arrive within a pass without starting a new step.
+      const latestReviewStep = [...signals.reviewSteps.keys()].at(-1);
+      if (latestReviewStep) {
+        if (stage === "review" || stage === "review_fix" || stage === "review_checks" ||
+            stage === "git" || stage === "pr" || stage === "checks" || TASK_PROGRESS_AGENT_STAGES.has(stage)) {
+          return latestReviewStep;
+        }
+      }
       if (stage === "review") {
         return "review";
       }
@@ -11813,7 +11839,7 @@
       }
       if (stage === "git") {
         if (signals.hasReviewFixSeen) {
-          return "review_checks";
+          return signals.hasReviewChecksSeen ? "review_checks" : "review_fix";
         }
         if (!signals.hasAgentSeen) {
           if (signals.hasWorkflowSeen || signals.hasForkFallback || signals.hasPublishGitSeen) {
@@ -11825,13 +11851,13 @@
       }
       if (stage === "pr") {
         if (signals.hasReviewFixSeen) {
-          return "review_checks";
+          return signals.hasReviewChecksSeen ? "review_checks" : "review_fix";
         }
         return "pr";
       }
       if (stage === "checks") {
         if (signals.hasReviewFixSeen) {
-          return "review_checks";
+          return signals.hasReviewChecksSeen ? "review_checks" : "review_fix";
         }
         return "checks";
       }
@@ -11860,6 +11886,7 @@
         String(task?.stage || ""),
         String(task?.stage_status || ""),
         String(task?.status || ""),
+        taskAgentLogoURL(task),
         taskAutoMergeStepEnabled(task) ? "auto_merge" : "",
         taskReviewStepEnabled() ? "review_cycle" : "",
         taskStartSource(task),
@@ -12827,6 +12854,12 @@
       }
       restoreTaskScrollAnchor(listNode, scrollAnchor);
       animateTaskReflow(listNode, previousTaskRects);
+      for (const marker of listNode.querySelectorAll(".task-progress.is-running .task-progress-step.current")) {
+        const progress = marker.closest(".task-progress");
+        if (marker.offsetLeft + marker.offsetWidth + 8 > progress.clientWidth) {
+          progress.scrollLeft = marker.offsetLeft + marker.offsetWidth + 8 - progress.clientWidth;
+        }
+      }
       applyTaskIconActivityClasses(listNode, tasks);
       replaceLucideIcons(listNode);
     }

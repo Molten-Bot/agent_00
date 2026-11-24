@@ -296,6 +296,74 @@ test('task card distinguishes the titled pull request from the merged pull reque
   assert.equal(await result.locator('.task-result-link').getAttribute('href'), trackedURL);
 });
 
+test('issue task adds review and fix markers as each pass starts', async t => {
+  const now = new Date().toISOString();
+  const task = {
+    request_id: 'issue-review-cycle', source: 'github_issues', agent_harness: 'claude',
+    prompt: 'Update navigation', repo: 'example/project', started_at: now, updated_at: now,
+    status: 'running', stage: 'checks', pr_url: 'https://github.com/example/project/pull/10',
+    logs: [{ stream: 'meta', text: 'task stage=config status=ok review_total=2' }],
+  };
+  let serverTasks = [task];
+  const { page } = await openPage(t, 'current-work', { width: 320, height: 844 }, true, () => ({ tasks: serverTasks }));
+  const card = page.locator('#task-list .task[data-request-id="issue-review-cycle"]');
+  const current = card.locator('.task-progress-step.current');
+  const reviewMarkers = card.locator('.task-progress-step[title^="Review"], .task-progress-step[title^="Fix Findings"]');
+  const publish = () => page.evaluate(task => {
+    render({ ...state.snapshot, tasks: [task] });
+  }, task);
+  const stage = async (name, log, label) => {
+    task.stage = name;
+    task.logs.push({ stream: 'meta', text: `task stage=${name} ${log}` });
+    await publish();
+    await card.locator(`.task-progress-step.current[title^="${label}:"]`).waitFor();
+  };
+
+  await card.locator('.task-progress-step[title^="Review: upcoming"]').waitFor();
+  assert.equal(await reviewMarkers.count(), 1);
+  await stage('review', 'status=start action=pass pass=1 repo_dir=.', 'Review (pass 1)');
+  await current.locator('svg.lucide-clipboard-check').waitFor();
+  assert.equal(await reviewMarkers.count(), 1);
+
+  await stage('review_fix', 'status=start action=agent pass=1 repo_dir=.', 'Fix Findings (pass 1)');
+  assert.equal(await current.locator('img').getAttribute('src'), '/static/logos/claude-code.svg');
+  assert.equal(await reviewMarkers.count(), 2);
+  await stage('review', 'status=warn action=check_pr_state pass=1 repo_dir=.', 'Fix Findings (pass 1)');
+  await stage('review_checks', 'status=start action=verify pass=1 repo_dir=.', 'Review Checks (pass 1)');
+  await stage('checks', 'status=running', 'Review Checks (pass 1)');
+
+  await stage('review', 'status=start action=pass pass=2 repo_dir=.', 'Review (pass 2)');
+  await stage('review_fix', 'status=start action=agent pass=2 repo_dir=.', 'Fix Findings (pass 2)');
+  await stage('claude', 'status=running mode=review_fix attempt=2 repo_dir=.', 'Fix Findings (pass 2)');
+  await stage('review_checks', 'status=start action=verify pass=2 repo_dir=.', 'Review Checks (pass 2)');
+  await stage('review', 'status=start action=pass pass=3 repo_dir=.', 'Review (pass 3)');
+  assert.deepEqual(await reviewMarkers.evaluateAll(nodes => nodes.map(node => node.title.split(':')[0])), [
+    'Review (pass 1)', 'Fix Findings (pass 1)', 'Review Checks (pass 1)',
+    'Review (pass 2)', 'Fix Findings (pass 2)', 'Review Checks (pass 2)', 'Review (pass 3)',
+  ]);
+  await current.locator('svg.lucide-clipboard-check').waitFor();
+  assert.equal(await current.evaluate(node => {
+    const marker = node.getBoundingClientRect();
+    const track = node.closest('.task-progress').getBoundingClientRect();
+    return marker.left >= track.left && marker.right <= track.right;
+  }), true, 'current review remains visible on a narrow screen');
+
+  task.status = 'completed';
+  task.logs.push(...Array.from({ length: 510 }, () => ({ stream: 'stdout', text: 'Agent output' })));
+  await publish();
+  await page.locator('#task-history-toggle').click();
+  await card.locator('.task-github-link').first().waitFor();
+  serverTasks = [];
+  await page.reload();
+  await card.locator('.task-github-link').first().waitFor();
+  const restored = await page.evaluate(id => {
+    const savedTask = state.taskHistoryByID.get(id);
+    const { steps, index } = taskProgressModel(savedTask);
+    return { active: steps[index].id, reviews: steps.filter(step => step.label.includes('(pass ')).length };
+  }, task.request_id);
+  assert.deepEqual(restored, { active: 'finalize', reviews: 7 });
+});
+
 test('legacy issue prompts restore task actions and workflow links', async t => {
   const now = new Date().toISOString();
   const issueTask = (id, number, status) => ({

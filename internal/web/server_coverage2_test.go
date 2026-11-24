@@ -719,6 +719,39 @@ func TestSrvcovCompactStreamTaskLogsDedupesRepeatedProgressSignals(t *testing.T)
 	}
 }
 
+func TestReviewProgressSurvivesTaskLogTrimming(t *testing.T) {
+	t.Parallel()
+
+	milestones := []string{
+		"task stage=review status=start action=pass pass=1 repo_dir=first",
+		"task stage=review_fix status=start action=agent pass=1 repo_dir=first",
+		"task stage=review_checks status=start action=verify pass=1 repo_dir=first",
+		"task stage=review status=start action=pass pass=2 repo_dir=first",
+		"task stage=review status=start action=pass pass=1 repo_dir=second",
+	}
+	const limit = maxStreamTaskLogs + 20
+	logs := []TaskLog{{Text: "early output"}}
+	for _, line := range milestones {
+		logs = appendCappedTaskLog(logs, limit, TaskLog{Text: line, Stream: "meta"})
+	}
+	for range limit + 10 {
+		logs = appendCappedTaskLog(logs, limit, TaskLog{Text: "agent output", Stream: "stdout"})
+	}
+	if len(logs) != limit {
+		t.Fatalf("capped log count = %d, want %d", len(logs), limit)
+	}
+	// Stream snapshots deduplicate stage signals from the older portion of the log.
+	compacted := compactStreamTaskLogs(logs)
+	if len(compacted) != maxStreamTaskLogs+len(milestones) {
+		t.Fatalf("compacted log count = %d, want %d", len(compacted), maxStreamTaskLogs+len(milestones))
+	}
+	for i, want := range milestones {
+		if got := compacted[i].Text; got != want {
+			t.Errorf("milestone %d = %q, want %q", i, got, want)
+		}
+	}
+}
+
 func TestSrvcovTaskProgressSignalLogKeyBlankStageIsIgnored(t *testing.T) {
 	t.Parallel()
 

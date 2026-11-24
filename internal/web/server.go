@@ -3178,13 +3178,27 @@ func taskProgressSignalLogKey(text string) (string, bool) {
 	if stage == "" {
 		return "", false
 	}
-	return strings.Join([]string{
+	key := []string{
 		stage,
 		strings.TrimSpace(fields["action"]),
 		strings.TrimSpace(fields["strategy"]),
 		strings.TrimSpace(fields["remote"]),
 		strings.TrimSpace(fields["reason"]),
-	}, "\x00"), true
+	}
+	if isTaskReviewProgressStart(fields) {
+		key = append(key, fields["repo_dir"], fields["pass"])
+	}
+	return strings.Join(key, "\x00"), true
+}
+
+func isTaskReviewProgressStart(fields map[string]string) bool {
+	switch fields["stage"] {
+	case "review", "review_fix", "review_checks":
+		pass, ok := parseIntField(fields["pass"])
+		return fields["status"] == "start" && ok && pass > 0
+	default:
+		return false
+	}
 }
 
 func withCacheControl(next http.Handler, cacheControl string) http.Handler {
