@@ -573,11 +573,33 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 					t.Fatalf("lock source claim: %v", err)
 				}
 				q.reconcile(t.Context(), enqueue)
-				lock.Close()
+				if err := lock.Close(); err != nil {
+					t.Fatal(err)
+				}
 				repairs, err := q.store.List()
 				if err != nil || len(repairs) != 1 || repairs[0].State != tc.state || calls != 0 {
 					t.Fatalf("changed outbox or dispatched while source claim was locked: calls=%d err=%v", calls, err)
 				}
+				source, err := claims.Load(issue.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if source.Incident != issue.Incident || !source.NextAttemptAt.Equal(issue.NextAttemptAt) {
+					t.Fatalf("changed source claim while locked: incident=%q next attempt=%v", source.Incident, source.NextAttemptAt)
+				}
+				// A concurrent subprocess can retain the descriptor until exec.
+				// Reconciliation defers a busy claim to the next pass.
+				waitForCondition(t, 5*time.Second, func() bool {
+					q.reconcile(t.Context(), enqueue)
+					if calls != 0 {
+						t.Fatal("dispatched repair while recovering an external rollout blocker")
+					}
+					repairs, err := q.store.List()
+					if err != nil || len(repairs) != 1 {
+						t.Fatalf("expected one retained repair, got %d, error=%v", len(repairs), err)
+					}
+					return repairs[0].State == "blocked"
+				})
 			}
 			for range 2 {
 				q.reconcile(t.Context(), enqueue)
