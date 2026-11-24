@@ -21,7 +21,7 @@ async function openEditor(t,viewport={width:1280,height:900},initialSettings={wo
  if(url.pathname==='/api/agent-auth')return route.fulfill({json:{ok:true,auth:{required:false,ready:true,state:'ready'}}});
  if(url.pathname==='/api/review-settings'){if(route.request().method()==='POST')settings=route.request().postDataJSON();return route.fulfill({json:{ok:true,settings}})};
  if(url.pathname.startsWith('/api/'))return route.fulfill({json:{ok:true}});return route.continue()});
- await page.goto(baseURL+'/#workflow');await page.getByRole('heading',{name:'Repository automations'}).waitFor();return {page,getDocument:()=>doc};
+ await page.goto(baseURL+'/#workflow');await page.locator('#workflow-title').waitFor();return {page,getDocument:()=>doc};
 }
 async function selectRepository(page, repository) {
  const owner = repository.split('/')[0];
@@ -212,4 +212,26 @@ test('repository visibility is shared across Workflow, Studio, Chat, and Issues 
  assert.deepEqual(await page.locator('.wf-repository-picker [aria-labelledby="wf-repositories-label"] button').allTextContents(),['person/project']);
  assert.equal(await page.locator('#builder-repo-select option[value*="person/project"]').count(),1);
  await page.waitForFunction(()=>document.querySelectorAll('#github-issues-repo option[value="person/project"]').length===1);
+});
+
+test('Workflow uses the same Studio panel and titlebar styles', async t => {
+ const {page}=await openEditor(t);
+ // Compare settled theme styles rather than sampling the transition mid-frame.
+ await page.addStyleTag({content:'.studio-panel { transition: none !important; }'});
+ const styles=async selector=>page.locator(selector).evaluate(panel=>{
+  const box=panel.getBoundingClientRect(), style=getComputedStyle(panel);
+  const header=getComputedStyle(panel.querySelector('.panel-header'));
+  const title=getComputedStyle(panel.querySelector('.panel-section-title'));
+  return {x:box.x,y:box.y,width:box.width,height:box.height,radius:style.borderRadius,border:style.border,background:style.background,shadow:style.boxShadow,headerPadding:header.padding,headerBackground:header.background,headerBorder:header.borderBottom,titleFont:title.font,titleSpacing:title.letterSpacing};
+ });
+ for (const theme of ['light','dark','night','pink']) {
+  await page.evaluate(theme=>{document.documentElement.classList.remove('light','dark','night','pink');document.documentElement.classList.add(theme);document.documentElement.dataset.theme=theme},theme);
+  await page.evaluate(()=>{location.hash='workflow'});
+  await page.locator('#workflow-display').waitFor({state:'visible'});
+  const workflow=await styles('#workflow-display');
+  await page.evaluate(()=>{location.hash='studio-builder'});
+  await page.locator('.prompt-wrap').waitFor({state:'visible'});
+  const studio=await styles('.prompt-wrap');
+  assert.deepEqual(workflow,studio,`${theme}: shared Studio chrome and available space`);
+ }
 });

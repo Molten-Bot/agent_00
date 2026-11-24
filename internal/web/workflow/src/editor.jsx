@@ -399,26 +399,25 @@ function Editor() {
       ];
   return (
     <div className="wf-editor">
-      <header className="wf-header">
-        <div className="wf-heading">
-          <div className="wf-eyebrow">
-            <DiagramFlowVertical size={15} />
-            <h1 id="workflow-title">Workflow</h1>
-            <span className="wf-beta">Beta</span>
-          </div>
-          {current ? (
+      <header className="panel-header prompt-titlebar">
+        <div className="panel-header-copy">
+          <span id="workflow-title" className="panel-section-title prompt-title-list">
+            <span className="prompt-title-mode active">
+              <DiagramFlowVertical className="prompt-title-icon" aria-hidden="true" />
+              <span>Workflow</span>
+            </span>
+          </span>
+        </div>
+        <div className="prompt-titlebar-actions wf-header-actions">
+          {current && (
             <input
-              className="wf-name"
+              className="prompt-control wf-name"
               aria-label="Workflow name"
               value={current.name}
               maxLength={100}
               onChange={(e) => edit({ name: e.target.value })}
             />
-          ) : (
-            <h2>Repository automations</h2>
           )}
-        </div>
-        <div className="wf-header-actions">
           <span className="wf-save-state">
             {dirty
               ? "Unsaved changes"

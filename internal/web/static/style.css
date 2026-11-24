@@ -747,6 +747,7 @@ agent-00-nav {
   min-height: calc(100vh - 130px);
 }
 
+body[data-app-display="workflow"] .app.dashboard-app,
 body[data-app-display="studio"] .app.dashboard-app {
   height: 100vh;
   height: 100dvh;
@@ -754,12 +755,15 @@ body[data-app-display="studio"] .app.dashboard-app {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+body[data-app-display="workflow"] .layout,
+body[data-app-display="workflow"] .right-col,
 body[data-app-display="studio"] .layout,
 body[data-app-display="studio"] .right-col {
   min-height: 0;
   height: 100%;
 }
 
+body[data-app-display="workflow"] .right-col,
 body[data-app-display="studio"] .right-col {
   align-content: stretch;
   grid-template-rows: minmax(0, 1fr);
@@ -890,7 +894,7 @@ body[data-app-display="work"] #task-panel {
 }
 
 #task-panel > .panel-header,
-.prompt-wrap > .panel-header {
+.studio-panel .panel-header {
   gap: 8px;
   padding: 12px 14px;
   font-size: 0.92rem;
@@ -975,7 +979,7 @@ body .right-col.prompt-collapsed.task-list-hidden {
   grid-template-rows: auto;
 }
 
-.prompt-wrap.panel {
+.studio-panel.panel {
   display: flex;
   flex-direction: column;
   position: relative;
@@ -997,7 +1001,7 @@ body .right-col.prompt-collapsed.task-list-hidden {
   box-shadow: var(--surface-glow-shadow);
 }
 
-.prompt-wrap .panel-header {
+.studio-panel .panel-header {
   border-bottom-color: var(--surface-header-border);
   background: var(--surface-header);
   color: var(--surface-label);
@@ -8171,7 +8175,7 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
     left: auto;
   }
 
-  .prompt-wrap.panel {
+  .studio-panel.panel {
     width: 100%;
     max-width: none;
   }
@@ -9574,30 +9578,11 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   }
 }
 
-/* Workflow is an isolated studio that shares the application shell. */
-body[data-app-display="workflow"] .app.dashboard-app {
-  height: 100vh;
-  height: 100dvh;
-  min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-body[data-app-display="workflow"] .layout,
-body[data-app-display="workflow"] .right-col {
-  min-height: 0;
-  height: 100%;
-}
-
-body[data-app-display="workflow"] .right-col {
-  align-content: stretch;
-  grid-template-rows: minmax(0, 1fr);
-}
-
 body[data-app-display="workflow"] #task-panel {
   display: none;
 }
 
 #workflow-display {
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }

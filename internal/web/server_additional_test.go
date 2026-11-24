@@ -1215,7 +1215,7 @@ func TestStudioStylesKeepPromptActionsVisible(t *testing.T) {
 	}
 
 	css := resp.Body.String()
-	if !strings.Contains(css, ".prompt-wrap .panel-header {\n  border-bottom-color: var(--surface-header-border);\n  background: var(--surface-header);\n  color: var(--surface-label);\n  letter-spacing: 0.11em;\n  justify-content: space-between;\n}") {
+	if !strings.Contains(css, ".studio-panel .panel-header {\n  border-bottom-color: var(--surface-header-border);\n  background: var(--surface-header);\n  color: var(--surface-label);\n  letter-spacing: 0.11em;\n  justify-content: space-between;\n}") {
 		t.Fatalf("expected Studio title bar to keep theme-aware styling while separating the section title from minimize controls")
 	}
 	if !strings.Contains(css, ".prompt-titlebar {\n  display: flex;\n  align-items: center;\n  gap: 12px;\n  justify-content: space-between;\n  flex: 0 0 auto;\n  min-height: 52px;\n}") {
@@ -1237,7 +1237,7 @@ func TestStudioStylesKeepPromptActionsVisible(t *testing.T) {
 	if !strings.Contains(css, ".prompt-mode-tabs-dock {\n  width: max-content;\n  max-width: calc(100vw - 28px);\n  overflow: visible;\n}") {
 		t.Fatalf("expected Studio mode tabs to remain scrollable within the bottom dock on narrow viewports")
 	}
-	if !strings.Contains(css, ".prompt-wrap.panel {\n  display: flex;\n  flex-direction: column;\n  position: relative;") {
+	if !strings.Contains(css, ".studio-panel.panel {\n  display: flex;\n  flex-direction: column;\n  position: relative;") {
 		t.Fatalf("expected studio panel to participate in the page flow instead of docking itself to the viewport")
 	}
 	if !strings.Contains(css, "body[data-app-display=\"studio\"] .prompt-wrap.panel:not(.prompt-collapsed) {\n  min-height: 0;\n  height: 100%;\n  overflow: hidden;\n}") ||
@@ -1384,10 +1384,10 @@ func TestStudioStylesUseRefinedPanelAndInputTreatment(t *testing.T) {
 	}
 
 	css := resp.Body.String()
-	if !strings.Contains(css, ".prompt-wrap.panel {\n  display: flex;\n  flex-direction: column;\n  position: relative;\n  left: auto;\n  right: auto;\n  bottom: auto;\n  z-index: auto;\n  width: 100%;\n  max-width: none;\n  max-height: none;") {
+	if !strings.Contains(css, ".studio-panel.panel {\n  display: flex;\n  flex-direction: column;\n  position: relative;\n  left: auto;\n  right: auto;\n  bottom: auto;\n  z-index: auto;\n  width: 100%;\n  max-width: none;\n  max-height: none;") {
 		t.Fatalf("expected studio panel to use theme-aware shell tokens")
 	}
-	if !strings.Contains(css, ".prompt-wrap .panel-header {\n  border-bottom-color: var(--surface-header-border);\n  background: var(--surface-header);\n  color: var(--surface-label);\n  letter-spacing: 0.11em;\n  justify-content: space-between;\n}") {
+	if !strings.Contains(css, ".studio-panel .panel-header {\n  border-bottom-color: var(--surface-header-border);\n  background: var(--surface-header);\n  color: var(--surface-label);\n  letter-spacing: 0.11em;\n  justify-content: space-between;\n}") {
 		t.Fatalf("expected studio header to separate its title from the minimize control in the stacked layout")
 	}
 	if !strings.Contains(css, ".prompt-mode-link.active,\n.prompt-mode-link[aria-current=\"page\"] {\n  color: var(--running);\n}") {
