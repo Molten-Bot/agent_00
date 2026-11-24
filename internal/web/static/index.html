@@ -16,7 +16,7 @@
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
   <script src="/static/task-asset-preview.js?v=4"></script>
-  <link rel="stylesheet" href="/static/style.css?v=13">
+  <link rel="stylesheet" href="/static/style.css?v=15">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -5084,6 +5084,14 @@
         return;
       }
       const styles = window.getComputedStyle(input);
+      if (styles.getPropertyValue("--prompt-fill-space").trim() === "1") {
+        input.style.removeProperty("--prompt-textarea-height");
+        input.style.removeProperty("height");
+        input.style.removeProperty("width");
+        input.classList.remove("prompt-textarea-manual-size");
+        input.classList.toggle("prompt-textarea-scroll", input.scrollHeight > input.clientHeight + 1);
+        return;
+      }
       const minHeight = Number.parseFloat(styles.minHeight) || 0;
       const parsedMaxHeight = Number.parseFloat(styles.maxHeight);
       const maxHeight = Number.isFinite(parsedMaxHeight) && parsedMaxHeight > 0

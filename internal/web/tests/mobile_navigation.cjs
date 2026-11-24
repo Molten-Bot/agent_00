@@ -484,3 +484,53 @@ for (const viewport of [{ width: 430, height: 932 }, { width: 932, height: 430 }
     assert.deepEqual(writes, [], 'browsing and drafting never starts a run');
   });
 }
+
+for (const viewport of [{width:1440,height:1000},{width:1024,height:768}]) {
+ test(`Studio prompt fills available space with padded edges at ${viewport.width}×${viewport.height}`, async t => {
+  const {page}=await openPage(t,'studio',viewport,false);
+  const prompt=page.locator('#builder-prompt-input');
+  const geometry=async()=>page.evaluate(()=>{
+   const input=document.getElementById('builder-prompt-input'), box=input.getBoundingClientRect();
+   const panel=document.getElementById('prompt-builder-panel').getBoundingClientRect();
+   const actions=document.querySelector('.prompt-actions').getBoundingClientRect();
+   const form=document.getElementById('local-prompt-form').getBoundingClientRect();
+   const style=getComputedStyle(input);
+   return {height:box.height,gap:actions.top-box.bottom,left:box.left-form.left,right:form.right-box.right,panelGap:panel.bottom-box.bottom,padding:parseFloat(style.paddingTop),scrolls:input.scrollHeight>input.clientHeight,actionsBottom:actions.bottom,viewport:innerHeight};
+  });
+  const before=await geometry();
+  assert.ok(before.height>250,JSON.stringify(before));
+  assert.ok(Math.abs(before.panelGap)<2,JSON.stringify(before));
+  assert.ok(before.gap>=6&&before.gap<=20,JSON.stringify(before));
+  assert.ok(before.left>=10&&before.left<=16&&before.right>=10&&before.right<=16,JSON.stringify(before));
+  assert.ok(before.padding>=10);assert.ok(before.actionsBottom<before.viewport);
+  await prompt.fill(Array.from({length:150},(_,i)=>`Prompt line ${i}`).join('\n'));
+  const after=await geometry();assert.ok(Math.abs(after.height-before.height)<2,JSON.stringify({before,after}));assert.equal(after.scrolls,true);
+  await page.setViewportSize({width:viewport.width,height:viewport.height+160});
+  await page.waitForFunction(h=>document.getElementById('builder-prompt-input').getBoundingClientRect().height>h+140,before.height);
+  if(viewport.width===1440)await page.screenshot({path:'/tmp/agent00-prompt-fill.png',fullPage:true});
+ });
+}
+
+for (const viewport of [{width:1440,height:1000},{width:1024,height:768}]) {
+ test(`Library tasks occupy remaining Studio space without a spacer at ${viewport.width}×${viewport.height}`, async t => {
+  const {page}=await openPage(t,'library',viewport,false);
+  await page.locator('#library-task-list > *').first().waitFor();
+  const geometry=async()=>page.evaluate(()=>{
+   const panel=document.getElementById('prompt-library-panel');
+   const copy=panel.querySelector('.prompt-field-copy').getBoundingClientRect();
+   const tasks=panel.querySelector('.prompt-field-task-list').getBoundingClientRect();
+   const list=document.getElementById('library-task-list').getBoundingClientRect();
+   const actions=document.querySelector('.prompt-actions').getBoundingClientRect();
+   return {gap:tasks.top-copy.bottom,height:list.height,bottomGap:actions.top-list.bottom,scrollable:document.getElementById('library-task-list').scrollHeight>list.height};
+  });
+  const before=await geometry();
+  assert.ok(before.gap>=6&&before.gap<=16,JSON.stringify(before));
+  assert.ok(before.height>180,JSON.stringify(before));
+  assert.ok(before.bottomGap>=6&&before.bottomGap<=32,JSON.stringify(before));
+  assert.equal(before.scrollable,true);
+  await page.setViewportSize({width:viewport.width,height:viewport.height+160});
+  await page.waitForFunction(h=>document.getElementById('library-task-list').getBoundingClientRect().height>h+140,before.height);
+  assert.ok((await geometry()).gap<=16);
+  if(viewport.width===1440)await page.screenshot({path:'/tmp/agent00-library-layout-fixed.png',fullPage:true});
+ });
+}
