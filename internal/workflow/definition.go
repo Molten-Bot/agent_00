@@ -15,6 +15,8 @@ import (
 const Version = 2
 
 type Document struct {
+	ConfigurationMigrated    bool         `json:"configurationMigrated,omitempty"`
+	MigratedRepositories     []string     `json:"migratedRepositories,omitempty"`
 	LibrarySchedulesMigrated bool         `json:"librarySchedulesMigrated,omitempty"`
 	Version                  int          `json:"version"`
 	Revision                 uint64       `json:"revision"`

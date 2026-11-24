@@ -482,7 +482,7 @@ function Editor() {
             ))}
           </div>
           {!visible.length && (
-            <p className="wf-muted">Configuration defaults apply. Create a workflow to override a trigger for this repository.</p>
+            <p className="wf-muted">Create a workflow to configure task policies and automation for this repository.</p>
           )}
           <div className="wf-section-label wf-spacer">WORKFLOW TEMPLATES</div>
           <p className="wf-muted">Choose a repository above, then a template. Each creates an editable draft with automation off.</p>

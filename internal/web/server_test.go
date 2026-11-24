@@ -502,23 +502,8 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected dock logo links to use shared icon-link styling")
 	}
 
-	if !strings.Contains(markup, `Auto-merge clean reviews`) ||
-		!strings.Contains(markup, `Delete merged branches`) ||
-		!strings.Contains(markup, `id="review-settings-level" type="hidden" value="off"`) ||
-		!strings.Contains(markup, `id="review-settings-slider" type="range" min="0" max="3" step="1"`) ||
-		!strings.Contains(markup, `id="review-selected-text">Off · 0 reviews</span>`) ||
-		!strings.Contains(markup, `href="#review-high"`) ||
-		!strings.Contains(markup, `id="review-settings-delete-merged-branches" type="checkbox"`) ||
-		!strings.Contains(markup, `id="review-settings-merge-method" type="hidden" value="squash"`) ||
-		!strings.Contains(markup, `role="radiogroup" aria-labelledby="review-settings-merge-method-label"`) ||
-		!strings.Contains(markup, `data-review-settings-merge-method="squash">`) ||
-		!strings.Contains(markup, `<i data-lucide="git-commit-horizontal" aria-hidden="true"></i><span>Squash</span>`) ||
-		!strings.Contains(markup, `data-review-settings-merge-method="merge">`) ||
-		!strings.Contains(markup, `<i data-lucide="git-merge" aria-hidden="true"></i><span>Merge</span>`) ||
-		!strings.Contains(markup, `data-review-settings-merge-method="rebase">`) ||
-		!strings.Contains(markup, `<i data-lucide="git-branch" aria-hidden="true"></i><span>Rebase</span>`) ||
-		strings.Contains(markup, `Merge commit`) {
-		t.Fatalf("expected index html to include review automation controls")
+	if strings.Contains(markup, `id="settings-tab-defaults"`) || strings.Contains(markup, `id="settings-panel-defaults"`) || strings.Contains(markup, `id="review-settings-slider"`) {
+		t.Fatal("legacy workflow controls must be removed from settings")
 	}
 
 	if strings.Contains(markup, `Update how this runtime appears in Molten Hub`) {

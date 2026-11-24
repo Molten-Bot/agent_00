@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
@@ -112,8 +113,14 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 	if _, err := store.Load(); err != nil {
 		return err
 	}
-	// Existing configured schedules remain defaults. The builder is additive;
-	// opening it must not migrate ownership or pause configured automation.
+	// Repository discovery supplies the scope for formerly global defaults.
+	// Retry failed discovery/migration; a persisted receipt makes success one-time.
+	var migrationMu sync.Mutex
+	server.MigrateWorkflowDefaults = func(repos []web.GitHubRepo) error {
+		migrationMu.Lock()
+		defer migrationMu.Unlock()
+		return migrateConfiguredWorkflows(cfg, store, repos)
+	}
 	gh := workflow.GitHub{Runner: runner}
 	engine := &workflow.Engine{Store: store, StatePath: filepath.Join(root, "workflow-state.json"), Fetch: gh.Fetch, InspectPR: gh.Inspect, Merge: gh.Merge, Logf: logf}
 	engine.Enabled = func() bool {
@@ -162,7 +169,11 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 		})
 	}
 	engine.Active = func(w workflow.Definition) bool {
-		if configuredScheduleOwnsWorkflow(cfg.RuntimeConfigPath, w) {
+		doc, err := store.Load()
+		if err != nil {
+			return true
+		}
+		if !doc.ConfigurationMigrated && configuredScheduleOwnsWorkflow(cfg.RuntimeConfigPath, w) {
 			return true
 		}
 		for _, t := range broker.TaskList() {

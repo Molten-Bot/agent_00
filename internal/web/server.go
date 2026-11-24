@@ -111,6 +111,7 @@ type Server struct {
 	ReviewSettingsStatus    func(context.Context) (ReviewSettingsState, error)
 	ConfigureReviewSettings func(context.Context, ReviewSettingsRequest) (ReviewSettingsState, error)
 	ResolveGitHubProfileURL func(context.Context) (string, error)
+	MigrateWorkflowDefaults func([]GitHubRepo) error
 	ResolveGitHubRepos      func(context.Context) ([]GitHubRepo, error)
 	GitHubIssueRunner       execx.Runner
 	assetTransport          http.RoundTripper
@@ -2420,6 +2421,11 @@ func (s Server) loadGitHubRepos(ctx context.Context) ([]GitHubRepo, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if s.MigrateWorkflowDefaults != nil {
+		if err := s.MigrateWorkflowDefaults(repos); err != nil {
+			return nil, fmt.Errorf("migrate workflow defaults: %w", err)
+		}
 	}
 	repos = enrichGitHubRepos(repos)
 	if s.Broker != nil {

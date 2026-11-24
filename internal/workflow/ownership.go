@@ -19,6 +19,14 @@ func (e *Engine) Owns(repo, event string) bool {
 	if err != nil {
 		return true
 	}
+	// A paused or deleted migrated rule must not reactivate legacy automation.
+	if doc.ConfigurationMigrated && strings.HasPrefix(event, "issue.") {
+		for _, migrated := range doc.MigratedRepositories {
+			if CanonicalRepository(migrated) == CanonicalRepository(repo) {
+				return true
+			}
+		}
+	}
 	for _, w := range doc.Workflows {
 		if !w.Enabled || CanonicalRepository(w.Repository) != CanonicalRepository(repo) {
 			continue
