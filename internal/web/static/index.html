@@ -2454,8 +2454,7 @@
           if (loadSequence === githubReposLoadSequence) {
             state.githubReposLoading = false;
             githubReposLoadPromise = null;
-            renderIssueAutomationRepositories();
-            syncChatDockLinkAvailability();
+                  syncChatDockLinkAvailability();
             if (state.appDisplay === "chat") {
               loadChatRepos();
             }
@@ -7038,51 +7037,7 @@
       button.prepend(avatar);
     }
 
-    function renderIssueAutomationFields() {
-      const repo = issueAutomationRepository.value;
-      const settings = state.reviewSettings.githubIssueRepositories?.[repo];
-      issueAutomationRepositoryToggle.hidden = !repo;
-      issueAutomationRepositoryEnabled.checked = Boolean(settings);
-      issueAutomationRepositoryFields.hidden = !settings;
-      if (settings) {
-        reviewSettingsGitHubIssuesAutoStartAssigned.checked = settings.auto_start;
-        reviewSettingsGitHubIssuesAutoStartOnlyAssigned.checked = settings.only_assigned;
-        reviewSettingsGitHubIssuesAutoStartLabels.value = (settings.trigger_labels || []).join(", ");
-        reviewSettingsGitHubIssuesExclusionLabel.value = settings.exclusion_label;
-      }
-    }
-
-    function renderIssueAutomationRepositories() {
-      const selected = issueAutomationRepository.value;
-      const configured = state.reviewSettings.githubIssueRepositories;
-      issueAutomationLegacy.hidden = configured !== null || !state.reviewSettings.githubIssueAutoStartAssigned;
-      const available = new Map();
-      for (const repo of state.githubRepos) {
-        const value = githubRepoSelectValue(repo);
-        const name = repo.full_name || githubRepoPathFromValue(value);
-        if (name && !repositoryDisabled(value)) available.set(name.toLowerCase(), name);
-      }
-      const selectedKeys = Object.keys(configured || {}).sort();
-      const availableKeys = [...available.keys()].filter(key => !configured?.[key]).sort();
-      const placeholder = selectedKeys.length || availableKeys.length
-        ? "Choose a repository"
-        : (state.githubReposLoadError || "No repositories available");
-      issueAutomationRepository.replaceChildren(new Option(placeholder, ""));
-      for (const [label, keys] of [["Enabled for automation", selectedKeys], ["Available repositories", availableKeys]]) {
-        if (!keys.length) continue;
-        const group = document.createElement("optgroup");
-        group.label = label;
-        for (const key of keys) {
-          group.append(new Option(available.get(key) || `${key} (unavailable)`, key));
-        }
-        issueAutomationRepository.append(group);
-      }
-      issueAutomationRepository.value = selectedKeys.includes(selected) || available.has(selected) ? selected : "";
-      renderIssueAutomationFields();
-    }
-
     function renderRepositorySettings() {
-      renderIssueAutomationRepositories();
       if (!reviewSettingsRepositories || !reviewSettingsOwners || !reviewSettingsRepositoriesEmpty) return;
       const repos = repositorySettingsRepoValues();
       const groups = repositoryOwnerGroups(repos);
@@ -14129,46 +14084,7 @@
     }
     for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches, reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsWorkflowEnabled,
       reviewSettingsGitHubIssuesEnabled, issueAutomationRepositoryEnabled, reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsGitHubIssuesAutoStartOnlyAssigned, reviewSettingsGitHubIssuesAutoStartLabels, reviewSettingsGitHubIssuesExclusionLabel, reviewSettingsAssignCreator, ...reviewSettingsGitHubIssuesLinkModeOptions]) {
-      control.addEventListener("change", () => setReviewSettingsStatus("", "Changes will be saved on close."));
-    }
-    issueAutomationRepository.addEventListener("change", renderIssueAutomationFields);
-    issueAutomationRepositoryEnabled.addEventListener("change", () => {
-      const repo = issueAutomationRepository.value;
-      if (!repo) return;
-      const current = state.reviewSettings;
-      const repositories = { ...current.githubIssueRepositories };
-      if (issueAutomationRepositoryEnabled.checked) {
-        repositories[repo] = {
-          auto_start: current.githubIssueRepositories === null && current.githubIssueAutoStartAssigned,
-          only_assigned: current.githubIssueAutoStartOnlyAssigned,
-          trigger_labels: current.githubIssueAutoStartLabels,
-          exclusion_label: current.githubIssueAutoStartExclusionLabel,
-        };
-      } else {
-        delete repositories[repo];
-      }
-      current.githubIssueRepositories = repositories;
-      issueAutomationRepositoriesEdited = true;
-      renderIssueAutomationRepositories();
-    });
-    issueAutomationStopLegacy.addEventListener("click", () => {
-      state.reviewSettings.githubIssueRepositories = {};
-      issueAutomationRepositoriesEdited = true;
-      renderIssueAutomationRepositories();
-      issueAutomationRepository.focus();
-      setReviewSettingsStatus("", "Changes will be saved on close.");
-    });
-    for (const control of [reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsGitHubIssuesAutoStartOnlyAssigned,
-      reviewSettingsGitHubIssuesAutoStartLabels, reviewSettingsGitHubIssuesExclusionLabel]) {
-      control.addEventListener("input", () => {
-        const settings = state.reviewSettings.githubIssueRepositories?.[issueAutomationRepository.value];
-        if (!settings) return;
-        settings.auto_start = reviewSettingsGitHubIssuesAutoStartAssigned.checked;
-        settings.only_assigned = reviewSettingsGitHubIssuesAutoStartOnlyAssigned.checked;
-        settings.trigger_labels = reviewSettingsGitHubIssuesAutoStartLabels.value.split(",").map(label => label.trim()).filter(Boolean);
-        settings.exclusion_label = reviewSettingsGitHubIssuesExclusionLabel.value.trim();
-        issueAutomationRepositoriesEdited = true;
-      });
+      control?.addEventListener("change", () => setReviewSettingsStatus("", "Changes will be saved on close."));
     }
     reviewSettingsGitHubIssuesEnabled?.addEventListener("change", () => {
       state.reviewSettings = { ...state.reviewSettings, githubIssuesEnabled: Boolean(reviewSettingsGitHubIssuesEnabled.checked) };

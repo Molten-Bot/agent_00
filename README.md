@@ -112,13 +112,10 @@ the next interval. Pausing preserves the cursor; disabling the Workflow feature
 or excluding the repository prevents new occurrences and merges.
 
 Existing `config.json` library schedules continue through the configured scheduler
-and `/api/library/schedules`. Opening Workflow does not import or disable them.
-For schedules imported by earlier builder versions, unchanged enabled copies
-retain the configured scheduler as their single owner, regardless of the Workflow
-feature toggle. Before dispatch, it adopts any later occurrence reservation from
-the imported copy's journal to prevent replay. Paused or edited copies remain
-custom-owned. New custom schedules and configured schedules retain their separate
-definitions.
+and `/api/library/schedules` in older versions. On first repository discovery,
+existing schedules are imported into Workflow with their next due time and task
+options. Workflow becomes their single scheduler; pausing or deleting an imported
+workflow does not reactivate the old schedule.
 
 ### GitHub issue automation
 
@@ -129,12 +126,15 @@ Repositories may have no workflows or multiple independent workflows. The GitHub
 Issues feature controls the issue browser separately from workflow execution.
 
 Workflow polling checks every 30 seconds. Existing matching items are skipped on
-the first scan unless **Include existing matches** is enabled. Existing configured
-issue automation and review watching remain active independently of the builder.
-An enabled custom issue workflow replaces configured issue auto-start for that
-repository; disabled drafts do not. Existing per-repository issue rules are also
-copied to disabled drafts without changing their original configuration, and a
-private `workflow-legacy-settings.json` backup is saved alongside it.
+the first scan unless **Include existing matches** is enabled. On first repository
+discovery after upgrading, existing prompt, JSON, and chat policies and enabled
+issue automation are imported automatically into workflows for the installation's
+repositories. Review counts, merge settings, assignment, issue linking, and issue
+filters are retained. Existing custom overrides remain intact. Workflow is enabled
+as part of this one-time migration; later edits, pauses, and deletions are preserved.
+The original settings are backed up privately as `workflow-legacy-settings.json`.
+Settings contains Features, Repositories, and Commit Signing; manage workflow
+policies in Workflow. GitHub review-request watching remains independent.
 
 Task recovery belongs to the specific task on the **GitHub Issues** page. Select
 the issue there to review and retry its work when recovery is required.

@@ -6,7 +6,7 @@ import "strings"
 // for this repository and event. A trailing .* matches a trigger family.
 // An unreadable definition store fails closed to avoid duplicate dispatch.
 func (e *Engine) Owns(repo, event string) bool {
-	if e == nil || e.Enabled == nil || !e.Enabled() {
+	if e == nil || e.Enabled == nil {
 		return false
 	}
 	if e.Allowed != nil && !e.Allowed(repo) {
@@ -26,6 +26,9 @@ func (e *Engine) Owns(repo, event string) bool {
 				return true
 			}
 		}
+	}
+	if !e.Enabled() {
+		return false
 	}
 	for _, w := range doc.Workflows {
 		if !w.Enabled || CanonicalRepository(w.Repository) != CanonicalRepository(repo) {

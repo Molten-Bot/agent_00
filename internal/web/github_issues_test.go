@@ -494,8 +494,8 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	if strings.Contains(page, `id="github-issues-title"`) || !strings.Contains(page, `data-prompt-title-label="GitHub Issues"`) {
 		t.Error("GitHub Issues should use the shared Studio title without a duplicate issue heading")
 	}
-	if count := strings.Count(page, `data-lucide="folder-kanban"`); count < 4 {
-		t.Errorf("folder-kanban icon appears %d times, want panel title, bottom dock, and settings controls", count)
+	if count := strings.Count(page, `data-lucide="folder-kanban"`); count < 3 {
+		t.Errorf("folder-kanban icon appears %d times, want panel title, bottom dock, and feature control", count)
 	}
 	libraryDockAt := strings.Index(page, `id="prompt-mode-library"`)
 	issuesDockAt := strings.Index(page, `id="github-issues-dock-link"`)
