@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ReactFlow,
@@ -27,7 +27,6 @@ import {
   RefreshCcwDot,
   ChevronDown,
   Plus,
-  Save,
   Trash2,
   Download,
   Maximize2,
@@ -41,7 +40,10 @@ import "./style.css";
 import { ReviewPasses } from "./review-passes.jsx";
 import { ScheduleInterval } from "./schedule-interval.jsx";
 import { RepositoryPicker } from "./repository-picker.jsx";
-import { events, newWorkflow, diagram, replaceDefinition, workflowTemplates, automaticLayout } from "./model.js";
+import {
+  events, newWorkflow, diagram, replaceDefinition, workflowTemplates,
+  automaticLayout, workflowSettings, incompleteWorkflow,
+} from "./model.js";
 const icons = {
   calendar: CalendarClock, json: FileJson, prompt: SquarePen, chat: MessageSquare, pullRequest: GitPullRequest, issue: CircleDot, implement: Bot, repair: Wrench,
   repository: FolderGit2,
@@ -116,6 +118,9 @@ const jsonOptions = (method, value) => ({
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify(value),
 });
+const autosaveDelay = 400;
+// Browsers limit the combined body size of outstanding keepalive requests.
+const canKeepAlive = (body) => new TextEncoder().encode(body).length <= 64 * 1024;
 function Field({ label, children }) {
   return (
     <label className="wf-field">
@@ -137,38 +142,51 @@ function Toggle({ label, value, onChange }) {
   );
 }
 function Editor() {
-  const [doc, setDoc] = useState(null),
-    [current, setCurrent] = useState(null),
-    [repo, setRepo] = useState(""),
+  const [editor, setEditor] = useState({ doc: null, current: null, savedSettings: null });
+  const latest = useRef(editor);
+  const write = useRef(null);
+  const updateEditor = useCallback((update) => {
+    latest.current = { ...latest.current, ...update };
+    setEditor(latest.current);
+  }, []);
+  const { doc, current, savedSettings } = editor;
+  const [repo, setRepo] = useState(""),
     [repos, setRepos] = useState([]),
     [reposLoading, setReposLoading] = useState(true),
     [reposError, setReposError] = useState(""),
     [libraryTasks, setLibraryTasks] = useState([]),
     [scheduleStatuses, setScheduleStatuses] = useState([]),
     [selection, setSelection] = useState("trigger"),
-    [dirty, setDirty] = useState(false),
     [notice, setNotice] = useState(""),
+    [saveError, setSaveError] = useState(""),
     [preview, setPreview] = useState(null),
     [busy, setBusy] = useState(false),
+    [saving, setSaving] = useState(false),
     [templatesOpen, setTemplatesOpen] = useState(true);
   const flow = useReactFlow();
   const graph = current ? diagram(current) : { nodes: [], edges: [] };
-  const changeRepository = useCallback((repository) => {
-    if (dirty) {
-      setNotice("Save or discard changes first.");
-      return false;
-    }
-    setRepo(repository);
-    setCurrent(null);
+  const settings = current && workflowSettings(current);
+  const dirty = !!current && settings !== savedSettings;
+  const incomplete = dirty ? incompleteWorkflow(current, libraryTasks) : "";
+  function openDefinition(definition, saved = false) {
+    updateEditor({
+      current: definition,
+      savedSettings: saved ? workflowSettings(definition) : null,
+    });
     setPreview(null);
-    return true;
-  }, [dirty]);
+    setSaveError("");
+    setNotice("");
+  }
+  async function changeRepository(repository, onChanged) {
+    if (!await flush()) return;
+    setRepo(repository);
+    openDefinition(null);
+    onChanged?.();
+  }
   async function reload() {
     try {
       const d = await api("/api/workflows");
-      setDoc(d);
-      setCurrent(null);
-      setDirty(false);
+      updateEditor({ doc: d });
     } catch (e) {
       setNotice(e.message);
     }
@@ -215,66 +233,87 @@ function Editor() {
     const timer = setInterval(refresh, 15000);
     return () => clearInterval(timer);
   }, []);
+  const flushAutosave = useEffectEvent(() => { void flush(); });
   useEffect(() => {
     const handler = (e) => {
-      if (e.detail !== "workflow") return;
-      requestAnimationFrame(() => flow.fitView({ padding: 32, duration: 200 }));
+      if (e.detail === "workflow") {
+        requestAnimationFrame(() => flow.fitView({ padding: 32, duration: 200 }));
+      } else {
+        flushAutosave();
+      }
     };
     window.addEventListener("workflow-display", handler);
     return () => window.removeEventListener("workflow-display", handler);
   }, [flow]);
+  const warnIfSaveNeedsTime = useEffectEvent((e) => {
+    const { doc, current, savedSettings } = latest.current;
+    const pending = current && workflowSettings(current);
+    const ready = doc && pending && (pending !== savedSettings || write.current?.settings)
+      && !incompleteWorkflow(current, libraryTasks);
+    // If a newer edit needs the next revision or the request exceeds the
+    // keepalive limit, give the current page time to finish saving.
+    if (ready && (write.current
+      ? pending !== write.current.settings || !write.current.keepalive
+      : !canKeepAlive(JSON.stringify(replaceDefinition(doc, current))))) {
+      void flush();
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  });
   useEffect(() => {
-    const handler = (e) => {
-      if (dirty) {
-        e.preventDefault();
-        e.returnValue = "";
-      }
+    const flushOnHide = () => flushAutosave();
+    const flushOnBackground = () => {
+      if (document.visibilityState === "hidden") flushAutosave();
     };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
-  }, [dirty]);
+    const warnOnUnload = (e) => warnIfSaveNeedsTime(e);
+    window.addEventListener("pagehide", flushOnHide);
+    window.addEventListener("beforeunload", warnOnUnload);
+    document.addEventListener("visibilitychange", flushOnBackground);
+    return () => {
+      window.removeEventListener("pagehide", flushOnHide);
+      window.removeEventListener("beforeunload", warnOnUnload);
+      document.removeEventListener("visibilitychange", flushOnBackground);
+    };
+  }, []);
   useEffect(() => {
-    const receive = () => {
-      const seed = window.pendingWorkflowSchedule;
-      if (!seed || !doc) return;
-      if (dirty) {
-        setNotice(
-          "Save or discard the current workflow before creating a schedule from Library.",
-        );
-        return;
-      }
-      delete window.pendingWorkflowSchedule;
-      const repository =
-        seed.workflowRepository ||
-        seed.repos[0]
-          .replace(/^https:\/\/github.com\//, "")
-          .replace(/^git@github.com:/, "")
-          .replace(/\.git$/, "");
-      const draft = newWorkflow(repository, "schedule");
-      draft.name = `Scheduled ${seed.librarytaskname}`;
-      draft.task = {
-        ...draft.task,
-        libraryTaskName: seed.librarytaskname,
-        instructions: seed.promptcontext || "",
-        baseBranch: seed.branch || "",
-        targetSubdir: seed.targetsubdir || ".",
-        reviewers: seed.reviewers || [],
-        draft: !!seed.draft,
-      };
-      setRepo(repository);
-      setCurrent(draft);
-      setDirty(true);
-      setSelection("trigger");
-      setNotice(
-        "Scheduled workflow draft created from Library. Save it, then enable when ready.",
-      );
-      setTimeout(() => flow.fitView({ padding: 32 }), 0);
+    if (!dirty || incomplete) return;
+    const timer = setTimeout(() => flushAutosave(), autosaveDelay);
+    return () => clearTimeout(timer);
+  }, [settings, dirty, incomplete]);
+  const receiveSchedule = useEffectEvent(async () => {
+    const seed = window.pendingWorkflowSchedule;
+    if (!seed || !latest.current.doc || !await flush() || window.pendingWorkflowSchedule !== seed) return;
+    delete window.pendingWorkflowSchedule;
+    const repository =
+      seed.workflowRepository ||
+      seed.repos[0]
+        .replace(/^https:\/\/github.com\//, "")
+        .replace(/^git@github.com:/, "")
+        .replace(/\.git$/, "");
+    const draft = newWorkflow(repository, "schedule");
+    draft.name = `Scheduled ${seed.librarytaskname}`;
+    draft.task = {
+      ...draft.task,
+      libraryTaskName: seed.librarytaskname,
+      instructions: seed.promptcontext || "",
+      baseBranch: seed.branch || "",
+      targetSubdir: seed.targetsubdir || ".",
+      reviewers: seed.reviewers || [],
+      draft: !!seed.draft,
     };
+    setRepo(repository);
+    openDefinition(draft);
+    setSelection("trigger");
+    setTimeout(() => flow.fitView({ padding: 32 }), 0);
+  });
+  const loaded = !!doc;
+  useEffect(() => {
+    const receive = () => { void receiveSchedule(); };
     receive();
     window.addEventListener("workflow-create-schedule", receive);
     return () =>
       window.removeEventListener("workflow-create-schedule", receive);
-  }, [doc, dirty, flow]);
+  }, [loaded]);
   const scheduled = current?.trigger.event === "schedule";
   const inputTriggered = current?.trigger.event.startsWith("app.");
   const libraryTask = libraryTasks.find(
@@ -304,99 +343,119 @@ function Editor() {
   }
   function arrange(direction) {
     if (!current) return;
-    edit({ positions: automaticLayout(current, direction, flow.getNodes()) });
+    moveNodes(automaticLayout(current, direction, flow.getNodes()));
     requestAnimationFrame(() => requestAnimationFrame(() => flow.fitView({ padding: 32, duration: 200 })));
   }
-  function edit(update) {
-    setCurrent((w) => ({ ...w, ...update }));
-    setDirty(true);
-    setPreview(null);
+  function moveNodes(positions) {
+    const definition = latest.current.current;
+    if (!definition) return;
+    updateEditor({
+      current: { ...definition, positions: { ...definition.positions, ...positions } },
+    });
   }
-  function choose(w) {
-    if (dirty) {
-      setNotice("Save or discard your changes before switching workflows.");
-      return;
-    }
-    setRepo(w.repository);
-    setCurrent(structuredClone(w));
-    setSelection("trigger");
+  function edit(update) {
+    updateEditor({ current: { ...latest.current.current, ...update } });
     setPreview(null);
+    setSaveError("");
     setNotice("");
+  }
+  async function choose(id) {
+    if (id === latest.current.current?.id || !await flush()) return;
+    const definition = latest.current.doc.workflows.find((w) => w.id === id);
+    if (!definition) return;
+    setRepo(definition.repository);
+    openDefinition(definition, true);
+    setSelection("trigger");
     setTimeout(() => flow.fitView({ padding: 32 }), 0);
   }
-  async function save(enabled = current.enabled) {
-    setBusy(true);
-    try {
-      const next = { ...current, enabled };
-      const d = await api(
-        "/api/workflows",
-        jsonOptions("PUT", replaceDefinition(doc, next)),
-      );
-      setDoc(d);
-      setCurrent(next);
-      setDirty(false);
-      setNotice(
-        enabled
-          ? "Workflow enabled. New matching events will start tasks."
-          : "Draft saved. This workflow will not start tasks.",
-      );
-    } catch (e) {
-      setNotice(e.message);
-    } finally {
-      setBusy(false);
+  function writeDocument(document, settings, onSaved) {
+    const request = jsonOptions("PUT", document);
+    const keepalive = canKeepAlive(request.body);
+    setSaving(true);
+    setSaveError("");
+    const result = api("/api/workflows", { ...request, keepalive })
+      .then((doc) => {
+        updateEditor({ doc });
+        onSaved();
+        return true;
+      })
+      .catch((e) => {
+        setSaveError(e.message);
+        return false;
+      })
+      .finally(() => {
+        write.current = null;
+        setSaving(false);
+      });
+    write.current = { result, settings, keepalive };
+    return write.current;
+  }
+  function saveDefinition(definition, toggle = false) {
+    const settings = workflowSettings(definition);
+    const attemptedSettings = toggle ? workflowSettings(latest.current.current) : settings;
+    return writeDocument(replaceDefinition(latest.current.doc, definition), attemptedSettings, () => {
+      updateEditor({
+        savedSettings: settings,
+        ...(toggle && { current: { ...latest.current.current, enabled: definition.enabled } }),
+      });
+      if (toggle) setNotice(definition.enabled ? "Workflow enabled." : "Workflow paused.");
+    });
+  }
+  async function flush() {
+    // All workflow mutations share the document revision. Recheck the current
+    // draft once each write finishes because edits can arrive while it runs.
+    for (;;) {
+      let pending = write.current;
+      if (!pending) {
+        const { doc, current, savedSettings } = latest.current;
+        if (!doc || !current || workflowSettings(current) === savedSettings || incompleteWorkflow(current, libraryTasks)) return true;
+        pending = saveDefinition(current);
+      }
+      if (!await pending.result) {
+        const current = latest.current.current;
+        if (!current || !pending.settings || workflowSettings(current) === pending.settings) return false;
+      }
     }
   }
-  function create(kind) {
+  function toggleEnabled() {
+    if (!write.current) saveDefinition({ ...latest.current.current, enabled: !current.enabled }, true);
+  }
+  async function create(kind) {
     if (!repo.trim()) {
       setNotice("Choose a repository first.");
       return;
     }
-    if (dirty) {
-      setNotice("Save or discard the current draft first.");
-      return;
-    }
-    setCurrent(newWorkflow(repo.trim(), kind));
+    if (!await flush()) return;
+    openDefinition(newWorkflow(repo.trim(), kind));
     setSelection("trigger");
-    setDirty(true);
-    setNotice(`${workflowTemplates.find((t) => t.id === kind).name} template copied. Review its settings, save the draft, then enable when ready.`);
     setTimeout(() => flow.fitView({ padding: 32 }), 0);
   }
   async function showPreview() {
     setBusy(true);
     try {
-      setPreview(
-        await api("/api/workflows/preview", jsonOptions("POST", current)),
-      );
-      setNotice("Preview only: no tasks were started.");
+      const matches = await api("/api/workflows/preview", jsonOptions("POST", current));
+      if (workflowSettings(current) === workflowSettings(latest.current.current || {})) {
+        setPreview(matches);
+        setNotice("Preview only: no tasks were started.");
+      }
     } catch (e) {
-      setNotice(e.message);
+      if (current.id === latest.current.current?.id) setNotice(e.message);
     } finally {
       setBusy(false);
     }
   }
-  async function remove() {
-    setBusy(true);
-    try {
-      const d = await api(
-        "/api/workflows",
-        jsonOptions("PUT", {
-          ...doc,
-          workflows: doc.workflows.filter((w) => w.id !== current.id),
-        }),
-      );
-      setDoc(d);
-      setCurrent(null);
-      setDirty(false);
-      setPreview(null);
+  function remove() {
+    if (write.current) return;
+    const workflows = doc.workflows.filter((w) => w.id !== current.id);
+    const removed = () => {
+      openDefinition(null);
       setNotice("Workflow deleted.");
-    } catch (e) {
-      setNotice(e.message);
-    } finally {
-      setBusy(false);
-    }
+    };
+    if (workflows.length === doc.workflows.length) removed();
+    else writeDocument({ ...doc, workflows }, null, removed);
   }
   function exportAll() {
-    const data = dirty && current ? replaceDefinition(doc, current) : doc;
+    const data = current ? replaceDefinition(doc, current) : doc;
     const url = URL.createObjectURL(
       new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }),
     );
@@ -427,6 +486,7 @@ function Editor() {
         "linkedIssue",
       ];
   const templatesLabel = templatesOpen ? "Hide workflow templates" : "Show workflow templates";
+  const message = incomplete || saveError || notice;
   return (
     <div className="wf-editor">
       <header className="panel-header prompt-titlebar">
@@ -449,8 +509,8 @@ function Editor() {
             />
           )}
           {current && (
-            <span className="wf-save-state">
-              {dirty ? "Unsaved changes" : current.enabled ? "Enabled" : "Saved draft"}
+            <span className="wf-save-state" role="status">
+              {incomplete ? "Incomplete" : saving ? "Saving…" : dirty ? "Unsaved changes" : current.enabled ? "Enabled" : "Saved draft"}
             </span>
           )}
           <button
@@ -465,10 +525,7 @@ function Editor() {
               <button disabled={busy} onClick={showPreview}>
                 {scheduled ? "Preview schedule" : "Preview matches"}
               </button>
-              <button type="button" aria-label="Save draft" title="Save draft" disabled={busy} onClick={() => save(false)}>
-                <Save size={15} aria-hidden="true" />
-              </button>
-              <button type="button" aria-label="Delete draft" title="Delete draft" className="wf-delete" disabled={busy || current.enabled} onClick={remove}>
+              <button type="button" aria-label="Delete draft" title="Delete draft" className="wf-delete" disabled={busy || saving || current.enabled} onClick={remove}>
                 <Trash2 size={15} aria-hidden="true" />
               </button>
               <button
@@ -476,8 +533,8 @@ function Editor() {
                 className="wf-primary"
                 aria-label={current.enabled ? "Pause" : "Enable"}
                 title={current.enabled ? "Pause" : "Enable"}
-                disabled={busy || dirty}
-                onClick={() => save(!current.enabled)}
+                disabled={busy || saving || dirty}
+                onClick={toggleEnabled}
               >
                 {current.enabled ? <Pause size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}
               </button>
@@ -506,7 +563,7 @@ function Editor() {
               <button
                 key={w.id}
                 className={`wf-step ${current?.id === w.id ? "wf-active" : ""}`}
-                onClick={() => choose(w)}
+                onClick={() => choose(w.id)}
               >
                 <span>
                   <strong>{w.name}</strong>
@@ -555,13 +612,7 @@ function Editor() {
               const moves = changes
                 .toArray()
                 .filter((c) => c.type === "position" && c.position);
-              if (moves.length)
-                edit({
-                  positions: {
-                    ...current.positions,
-                    ...Object.fromEntries(moves.map((c) => [c.id, c.position])),
-                  },
-                });
+              if (moves.length) moveNodes(Object.fromEntries(moves.map((c) => [c.id, c.position])));
             }}
             onNodeClick={(_, n) => setSelection(n.id)}
             nodesConnectable={false}
@@ -588,24 +639,22 @@ function Editor() {
               zoomable
             />
           </ReactFlow>
-          {notice && (
-            <div className="wf-notice" role="status">
+          {message && (
+            <div className={incomplete || saveError ? "wf-notice wf-notice-error" : "wf-notice"} role="status">
               <div>
-                <strong>{notice}</strong>
-                <button
+                <strong>{message}</strong>
+                {!incomplete && <button
                   aria-label="Dismiss message"
-                  onClick={() => setNotice("")}
+                  onClick={() => { setNotice(""); setSaveError(""); }}
                 >
                   <X size={14} />
-                </button>
+                </button>}
               </div>
-              {dirty && (
+              {dirty && !saving && (
                 <button
                   onClick={() => {
-                    setCurrent(
-                      doc.workflows.find((w) => w.id === current.id) || null,
-                    );
-                    setDirty(false);
+                    const stored = doc.workflows.find((w) => w.id === current.id);
+                    openDefinition(stored || null, !!stored);
                     setNotice("Changes discarded.");
                   }}
                 >
@@ -711,7 +760,7 @@ function Editor() {
                       </p>
                       <p className="wf-muted">
                         {dirty
-                          ? "Save to update the schedule."
+                          ? "Schedule updates after valid changes are saved."
                           : scheduleStatus?.nextRunAt &&
                               !scheduleStatus.nextRunAt.startsWith("0001")
                             ? `Next due: ${new Date(scheduleStatus.nextRunAt).toLocaleString()}${scheduleStatus.enabled ? "" : " (paused)"}`
@@ -965,12 +1014,11 @@ function Editor() {
                           e.target.value.split(",").map((v) => v.trim()),
                         )
                       }
-                      onBlur={() =>
-                        updateTask(
-                          "reviewers",
-                          (current.task.reviewers || []).filter(Boolean),
-                        )
-                      }
+                      onBlur={() => {
+                        if (current.task.reviewers?.some((reviewer) => !reviewer)) {
+                          updateTask("reviewers", current.task.reviewers.filter(Boolean));
+                        }
+                      }}
                     />
                   </Field>
                   <Toggle

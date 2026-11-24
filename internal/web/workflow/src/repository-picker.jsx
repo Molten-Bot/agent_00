@@ -42,7 +42,7 @@ export function RepositoryPicker({ repositories, value, onChange, autoSelect, lo
         {owners.map(([key, group]) => <button key={key} type="button" className="repository-settings-owner" aria-pressed={key === owner} onClick={() => {
           if (key === owner) return;
           const soleRepository = group.repositories.length === 1 ? group.repositories[0].full_name : "";
-          if (onChange(soleRepository)) setSelectedOwner(key);
+          onChange(soleRepository, () => setSelectedOwner(key));
         }}><OwnerIcon repository={group.repositories[0]} /><span>{group.name}</span><small>{group.repositories.length}</small></button>)}
       </div>
       <div className="repository-settings-list wf-picker-list" role="group" aria-label="Repositories">

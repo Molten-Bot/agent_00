@@ -108,6 +108,48 @@ export function replaceDefinition(document, definition) {
   };
 }
 
+export function workflowSettings({ positions, ...settings }) {
+  return JSON.stringify(settings);
+}
+
+// The PUT endpoint checks the full document before writing it. Catch incomplete
+// editor fields here so autosave can wait for the user to finish configuring them.
+export function incompleteWorkflow(w, libraryTasks) {
+  if (!w.name.trim() || new TextEncoder().encode(w.name).length > 100) {
+    return "Enter a workflow name of 1–100 bytes.";
+  }
+  const { event, value, intervalHours } = w.trigger;
+  if (/(assigned|labeled|review_requested)$/.test(event) && !value?.trim()) {
+    return "Enter a label or GitHub login for this trigger.";
+  }
+  if (event === "schedule") {
+    const minutes = intervalHours * 60;
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 525600 || Math.abs(minutes - Math.round(minutes)) > 1e-7) {
+      return "Enter a scheduled interval in whole minutes between 1 minute and 365 days.";
+    }
+  }
+  const rules = w.filters.rules || [];
+  if (rules.length > 50 || rules.some(({ field, value }) =>
+    !value.trim() || (["draft", "bot", "linkedIssue"].includes(field) && !["true", "false"].includes(value))
+  )) {
+    return "Complete each filter rule and use at most 50 rules.";
+  }
+  const { libraryTaskName, instructions, baseBranch, draft } = w.task;
+  if (libraryTaskName) {
+    const task = libraryTasks.find(({ name }) => name === libraryTaskName);
+    if (!task) return "Choose an available library prompt.";
+    if (task.promptContextRequired && !instructions.trim()) return "Enter the required library prompt context.";
+    const branch = baseBranch?.trim().replace(/^refs\/heads\//, "").replace(/^origin\//, "");
+    if (task.requiresNonDefaultBranch && !event.startsWith("pr.") && (!branch || ["main", "master", "trunk"].includes(branch))) {
+      return "Enter a non-default base branch for this library prompt.";
+    }
+  } else if (!event.startsWith("app.") && !instructions.trim()) {
+    return "Enter task instructions or choose a library prompt.";
+  }
+  if (w.merge.enabled && draft) return "Turn off draft pull requests or automatic merge.";
+  return "";
+}
+
 // Workflow execution is ordered; arrange only the currently visible steps.
 export function automaticLayout(workflow, direction, measuredNodes = []) {
   const sizes = new Map(measuredNodes.map(node => [node.id, node.measured || node]));
