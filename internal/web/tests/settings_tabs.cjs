@@ -186,7 +186,7 @@ test('reauthentication start errors are visible and later status recovers', asyn
 
 test('feature settings save on close and survive reopening', async t => {
  const {page,writes}=await openSettings(t);
- assert.equal(await page.locator('[data-settings-tab]').count(),3);
+ assert.equal(await page.locator('[data-settings-tab]').count(),4);
  await select(page,'automation');
  assert.equal(await page.locator('#settings-tab-automation').innerText(),'Features');
  for(const id of ['review-settings-workflow-enabled','review-settings-json-enabled','review-settings-github-issues-enabled']) await toggle(page,id);
@@ -1172,7 +1172,9 @@ test('library sources load on direct open and refresh after adding and removing'
       return route.fulfill({ json: { ok: true, sources } });
     });
   }});
-  await close(page); await page.locator('#prompt-mode-library').click(); await page.locator('.library-sources > summary').click();
+  await select(page, 'library');
+  assert.equal(await page.locator('#prompt-library-panel #custom-library-section, .library-sources').count(), 0);
+  assert.equal(await page.getByRole('tabpanel', {name:'Libraries', exact:true}).isVisible(), true);
   await page.waitForSelector('#custom-library-list .library-schedule-row');
   assert.equal(await page.locator('#custom-library-list .library-schedule-row').count(), 1);
   await page.locator('#custom-library-name').fill('new-library');
@@ -1209,7 +1211,9 @@ test('library source refresh failure does not report successful add as failed', 
       return route.fulfill({ json: { ok: true, sources: [] } });
     });
   }});
-  await close(page); await page.locator('#prompt-mode-library').click(); await page.locator('.library-sources > summary').click();
+  await select(page, 'library');
+  assert.equal(await page.locator('#prompt-library-panel #custom-library-section, .library-sources').count(), 0);
+  assert.equal(await page.getByRole('tabpanel', {name:'Libraries', exact:true}).isVisible(), true);
   await page.locator('#custom-library-name').fill('new-library');
   await page.locator('#custom-library-repo').fill('git@example.com:team/new.git');
   await page.locator('#custom-library-add').click();
@@ -1269,7 +1273,7 @@ for (const viewport of [{ width: 1280, height: 1100 }, { width: 430, height: 932
     });
     const initial = await geometry();
     assert.ok(initial.top >= 0 && initial.bottom <= viewport.height, 'dialog fits the screen');
-    for (const name of ['signing', 'automation', 'repositories']) {
+    for (const name of ['signing', 'automation', 'repositories', 'library']) {
       await select(page, name);
       const current = await geometry();
       for (const key of ['top', 'height', 'headerTop', 'tabsTop']) {

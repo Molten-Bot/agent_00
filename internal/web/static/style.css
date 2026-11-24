@@ -1179,7 +1179,7 @@ body[data-app-display="studio"][data-prompt-mode="json"] #local-prompt-input {
 }
 
 body[data-app-display="studio"][data-prompt-mode="library"] #prompt-library-panel {
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
 body[data-app-display="studio"][data-prompt-mode="library"] #prompt-library-panel > .prompt-field-task-list {

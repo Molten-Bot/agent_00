@@ -74,7 +74,7 @@ such key, so there the button disappears with the sidecar as before. Set
 
 ### Library settings
 
-Open **Library → Manage custom libraries** to add a private library repository
+Open **Settings → Libraries** to add a private library repository
 and choose its name. Its tasks appear under that source name. Explicit task
 `displayName` values are preserved; otherwise titles derive from the source and slug.
 
@@ -135,7 +135,7 @@ An enabled custom issue workflow replaces configured issue auto-start for that
 repository; disabled drafts do not. Existing per-repository issue rules are
 not imported. Workflow stores start empty; create the workflows you want in
 Workflow. Existing saved workflow definitions remain intact. Settings contains
-Features, Repositories, and Commit Signing; the Default workflows section has
+Features, Repositories, Libraries, and Commit Signing; the Default workflows section has
 been removed.
 
 Task recovery belongs to the specific task on the **GitHub Issues** page. Select

@@ -208,22 +208,7 @@
                 </label>
               </div>
 
-              <div id="prompt-library-panel" class="prompt-panel hidden"><details class="library-sources"><summary>Manage custom libraries</summary><div class="review-settings-section custom-library-section" id="custom-library-section">
-            <h3>Custom libraries</h3>
-            
-            <div class="stack custom-library-fields">
-              <p>Pull library tasks from a private git repository your account can already access. Add the repo's SSH or HTTPS URL and a display name; this app clones <code>./prompt/*.md</code> from it once now, then refreshes hourly or whenever you reopen the app.</p>
-              <label for="custom-library-name">Name</label>
-              <input id="custom-library-name" class="prompt-text" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="acme-docs" maxlength="48">
-              <label for="custom-library-repo">Git repository (SSH or HTTPS)</label>
-              <input id="custom-library-repo" class="prompt-text" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="git@github.com:acme/internal-library.git">
-              <div class="commit-signing-actions">
-                <button id="custom-library-add" type="button" class="prompt-action-button prompt-submit">Add library repo</button>
-              </div>
-              <p id="custom-library-status" role="status" aria-live="polite"></p>
-              <div id="custom-library-list"></div>
-            </div>
-          </div></details>
+              <div id="prompt-library-panel" class="prompt-panel hidden">
                 <div class="prompt-grid">
                   <label id="library-repo-history-field" class="prompt-field prompt-field-repo-history">
                     <span class="prompt-label">Repository</span>
@@ -785,7 +770,7 @@
           <div class="onboarding-modal-header">
             <h2 id="settings-title"><i data-lucide="settings" aria-hidden="true"></i><span>Settings</span></h2>
             <button id="settings-agent-reauthenticate" class="settings-auth-link hidden" type="button">Sign in again</button>
-            <p id="settings-message" class="sr-only">Configure features, repositories, and commit signing.</p>
+            <p id="settings-message" class="sr-only">Configure features, repositories, libraries, and commit signing.</p>
           </div>
           <button id="review-settings-close" class="settings-modal-close onboarding-modal-close" type="button" aria-label="Close settings" title="Close">
             <i data-lucide="x" aria-hidden="true"></i>
@@ -799,6 +784,9 @@
           </button>
           <button id="settings-tab-repositories" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-repositories" data-settings-tab="repositories">
             <i data-lucide="folder-git-2" aria-hidden="true"></i><span>Repositories</span>
+          </button>
+          <button id="settings-tab-library" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="custom-library-section" data-settings-tab="library">
+            <i data-lucide="library-big" aria-hidden="true"></i><span>Libraries</span>
           </button>
           <button id="settings-tab-signing" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="commit-signing-section" data-settings-tab="signing">
             <i data-lucide="globe-lock" aria-hidden="true"></i><span>Commit Signing</span>
@@ -854,6 +842,22 @@
           
           
           
+          <div class="review-settings-section custom-library-section" id="custom-library-section" role="tabpanel" aria-labelledby="settings-tab-library" hidden>
+            <h3>Custom libraries</h3>
+
+            <div class="stack custom-library-fields">
+              <p>Pull library tasks from a private git repository your account can already access. Add the repo's SSH or HTTPS URL and a display name; this app clones <code>./prompt/*.md</code> from it once now, then refreshes hourly or whenever you reopen the app.</p>
+              <label for="custom-library-name">Name</label>
+              <input id="custom-library-name" class="prompt-text" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="acme-docs" maxlength="48">
+              <label for="custom-library-repo">Git repository (SSH or HTTPS)</label>
+              <input id="custom-library-repo" class="prompt-text" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="git@github.com:acme/internal-library.git">
+              <div class="commit-signing-actions">
+                <button id="custom-library-add" type="button" class="prompt-action-button prompt-submit">Add library repo</button>
+              </div>
+              <p id="custom-library-status" role="status" aria-live="polite"></p>
+              <div id="custom-library-list"></div>
+            </div>
+          </div>
           <div class="review-settings-section commit-signing-section" id="commit-signing-section" role="tabpanel" aria-labelledby="settings-tab-signing" hidden>
             <h3 class="review-settings-section-title sr-only">Commit signing</h3>
             <div class="stack commit-signing-fields">
@@ -2113,6 +2117,7 @@
     const settingsTabPanels = {
       automation: document.getElementById("settings-panel-automation"),
       repositories: document.getElementById("settings-panel-repositories"),
+      library: document.getElementById("custom-library-section"),
       signing: document.getElementById("commit-signing-section"),
     };
     const reviewSettingsLevel = document.getElementById("review-settings-level");
@@ -14162,7 +14167,6 @@
       setSettingsTab(settingsTabButtons[index].dataset.settingsTab);
       settingsTabButtons[index].focus();
     });
-    document.querySelector(".library-sources").addEventListener("toggle", event => { if(event.target.open) window.dispatchEvent(new Event("custom-library-sources-open")); });
     setSettingsTab(state.settingsTab);
     if (reviewSettingsClose) {
       reviewSettingsClose.addEventListener("click", () => {
