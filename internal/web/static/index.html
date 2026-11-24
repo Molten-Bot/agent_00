@@ -16,7 +16,7 @@
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
   <script src="/static/task-asset-preview.js?v=4"></script>
-  <link rel="stylesheet" href="/static/style.css?v=15">
+  <link rel="stylesheet" href="/static/style.css?v=16">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -9040,11 +9040,11 @@
       if (!workflowEditorLoad) {
         const css = document.createElement("link");
         css.rel = "stylesheet";
-        css.href = "/static/workflow-editor.css?v=13";
+        css.href = "/static/workflow-editor.css?v=14";
         document.head.appendChild(css);
         workflowEditorLoad = new Promise((resolve, reject) => {
           const script = document.createElement("script");
-          script.src = "/static/workflow-editor.js?v=17";
+          script.src = "/static/workflow-editor.js?v=18";
           script.onload = resolve;
           script.onerror = () => { script.remove(); css.remove(); workflowEditorLoad = null; reject(new Error("Unable to load Workflow editor. Reload to try again.")); };
           document.head.appendChild(script);

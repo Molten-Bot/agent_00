@@ -1187,14 +1187,14 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	if strings.Contains(markup, "renderTaskCollection(selected ? [selected] : [], taskFullscreenList, null, {") {
 		t.Fatalf("expected index html to stop collapsing fullscreen mode to a single selected task")
 	}
-	if !strings.Contains(markup, "taskFullscreenClose.classList.toggle(\"hidden\", !state.taskFullscreenOpen);") {
-		t.Fatalf("expected index html to toggle dedicated full screen close visibility")
+	if !strings.Contains(markup, "taskFullscreenClose.classList.toggle(\"hidden\", !open);") {
+		t.Fatalf("expected index html to toggle the shared fullscreen close button")
 	}
-	if !strings.Contains(markup, "taskFullscreenClose.addEventListener(\"click\", () => {") {
-		t.Fatalf("expected index html to bind the dedicated full screen close control")
+	if !strings.Contains(markup, `taskFullscreenClose.addEventListener("click", () => closeFullscreen("close_button"));`) {
+		t.Fatalf("expected the close button to use the shared fullscreen handler")
 	}
-	if !strings.Contains(markup, "if (event.key === \"Escape\" && state.taskFullscreenOpen) {") {
-		t.Fatalf("expected index html to close full screen tasks on Escape")
+	if !strings.Contains(markup, `closeFullscreen("escape_key");`) {
+		t.Fatalf("expected Escape to use the shared fullscreen handler")
 	}
 	if !strings.Contains(markup, "event.preventDefault();") {
 		t.Fatalf("expected index html to treat Escape as a modal-dismiss action for full screen tasks")
