@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { newWorkflow, diagram, replaceDefinition, automaticLayout } from "./model.js";
+import { newWorkflow, diagram, replaceDefinition, automaticLayout, incompleteWorkflow } from "./model.js";
 test("new workflows are disabled, skip backlog, and default to manual merge", () => {
   for (const kind of ["implement", "review", "repair"]) {
     const w = newWorkflow("acme/repo", kind, "id");
@@ -58,6 +58,18 @@ test("scheduled tasks use the same agent/review/merge pipeline without GitHub fi
     graph.nodes.find((n) => n.id === "trigger").data.detail,
     /24 hours/,
   );
+});
+
+test("schedule autosave rejects an invalid optional first-run timestamp", () => {
+  const workflow = newWorkflow("acme/repo", "schedule", "scheduled");
+  const tasks = [{ name: "audit", prompt: "Audit" }];
+  assert.equal(incompleteWorkflow(workflow, tasks), "");
+  workflow.trigger.startAt = "0001-01-01T00:00:00.000Z";
+  assert.match(incompleteWorkflow(workflow, tasks), /valid first-run date/);
+  workflow.trigger.startAt = "not-a-date";
+  assert.match(incompleteWorkflow(workflow, tasks), /valid first-run date/);
+  workflow.trigger.startAt = "2026-11-24T18:00:00.000Z";
+  assert.equal(incompleteWorkflow(workflow, tasks), "");
 });
 
 test("template copies are independent across repositories and preserve merge policy", () => {

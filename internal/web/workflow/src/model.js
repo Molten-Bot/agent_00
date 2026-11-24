@@ -127,6 +127,12 @@ export function incompleteWorkflow(w, libraryTasks) {
     if (!Number.isFinite(minutes) || minutes < 1 || minutes > 525600 || Math.abs(minutes - Math.round(minutes)) > 1e-7) {
       return "Enter a scheduled interval in whole minutes between 1 minute and 365 days.";
     }
+    if (w.trigger.startAt !== undefined && w.trigger.startAt !== null) {
+      const startAt = new Date(w.trigger.startAt);
+      if (!Number.isFinite(startAt.getTime()) || startAt.toISOString() === "0001-01-01T00:00:00.000Z") {
+        return "Enter a valid first-run date and time.";
+      }
+    }
   }
   const rules = w.filters.rules || [];
   if (rules.length > 50 || rules.some(({ field, value }) =>

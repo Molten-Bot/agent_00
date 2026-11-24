@@ -23,7 +23,7 @@ async function openEditor(t,viewport={width:1280,height:900},initialSettings={wo
  if(url.pathname==='/api/agent-auth')return route.fulfill({json:{ok:true,auth:{required:false,ready:true,state:'ready'}}});
  if(url.pathname==='/api/review-settings'){if(route.request().method()==='POST')settings=route.request().postDataJSON();return route.fulfill({json:{ok:true,settings}})};
  if(url.pathname.startsWith('/api/'))return route.fulfill({json:{ok:true}});return route.continue()});
- await page.goto(baseURL+'/#workflow');await page.locator('#workflow-title').waitFor();return {page,getDocument:()=>doc,onSave:handler=>{beforeSave=handler}};
+ await page.goto(baseURL+'/#workflow');await page.locator('#workflow-title').waitFor();return {page,getDocument:()=>doc,setDocument:value=>{doc=value},onSave:handler=>{beforeSave=handler}};
 }
 async function waitForDraft(page) {
  await page.locator('.wf-save-state').filter({hasText:/^Saved draft$/}).waitFor({state:'attached'});
@@ -86,6 +86,35 @@ test('navigation saves valid edits and leaves incomplete changes at the last sav
  await selectRepository(page,'acme/repo');
  await page.getByRole('button',{name:new RegExp(reloadName)}).waitFor();
  assert.equal((await getDocument()).workflows.find(w=>w.id===definition.id).name,reloadName);
+});
+
+test('autosave refreshes the document revision and retries after a concurrent save', async t => {
+ const {page,getDocument,setDocument}=await openEditor(t);
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Implement issues',exact:true}).click();
+ await waitForDraft(page);
+ const workflow = getDocument().workflows[0];
+ const revision = getDocument().revision;
+ setDocument({...getDocument(),revision:revision+1});
+ await page.getByLabel('Workflow name').fill('Retried after concurrent save');
+ await page.locator('.wf-save-state').filter({hasText:/^Saved draft$/}).waitFor();
+ assert.equal(getDocument().revision,revision+2);
+ assert.equal(getDocument().workflows.find(w=>w.id===workflow.id).name,'Retried after concurrent save');
+});
+
+test('large pending autosaves survive leaving the page and restore on reload', async t => {
+ const {page,getDocument}=await openEditor(t);
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Implement issues',exact:true}).click();
+ await waitForDraft(page);
+ const workflow=getDocument().workflows[0];
+ const pending={...workflow,name:'Restored large workflow',task:{...workflow.task,instructions:'x'.repeat(70_000)}};
+ await page.evaluate(value=>localStorage.setItem('hubui.workflowPendingSave.v1',JSON.stringify({workflow:value})),pending);
+ await page.reload();
+ await page.waitForFunction(()=>localStorage.getItem('hubui.workflowPendingSave.v1')===null);
+ const restored=getDocument().workflows.find(w=>w.id===workflow.id);
+ assert.equal(restored.name,pending.name);
+ assert.equal(restored.task.instructions.length,70_000);
 });
 
 test('autosave keeps newer edits while an earlier revision is in flight', async t => {

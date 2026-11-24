@@ -110,7 +110,11 @@ const edgeTypes = { reviewCycle: ReviewCycleEdge };
 async function api(path, options) {
   const response = await fetch(path, options);
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "Request failed");
+  if (!response.ok) {
+    const error = new Error(data.error || "Request failed");
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 const jsonOptions = (method, value) => ({
@@ -121,6 +125,7 @@ const jsonOptions = (method, value) => ({
 const autosaveDelay = 400;
 // Browsers limit the combined body size of outstanding keepalive requests.
 const canKeepAlive = (body) => new TextEncoder().encode(body).length <= 64 * 1024;
+const pendingWorkflowSaveKey = "hubui.workflowPendingSave.v1";
 function Field({ label, children }) {
   return (
     <label className="wf-field">
@@ -185,7 +190,30 @@ function Editor() {
   }
   async function reload() {
     try {
-      const d = await api("/api/workflows");
+      let d = await api("/api/workflows");
+      let pending;
+      try {
+        pending = JSON.parse(localStorage.getItem(pendingWorkflowSaveKey) || "null");
+      } catch (_err) {
+        localStorage.removeItem(pendingWorkflowSaveKey);
+      }
+      if (pending?.workflow?.id) {
+        const saved = d.workflows.find((workflow) => workflow.id === pending.workflow.id);
+        if (saved && workflowSettings(saved) === workflowSettings(pending.workflow)) {
+          localStorage.removeItem(pendingWorkflowSaveKey);
+        } else {
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+              d = await api("/api/workflows", jsonOptions("PUT", replaceDefinition(d, pending.workflow)));
+              localStorage.removeItem(pendingWorkflowSaveKey);
+              break;
+            } catch (e) {
+              if (e.status !== 409 || attempt === 2) throw e;
+              d = await api("/api/workflows");
+            }
+          }
+        }
+      }
       updateEditor({ doc: d });
     } catch (e) {
       setNotice(e.message);
@@ -371,15 +399,38 @@ function Editor() {
   function writeDocument(document, settings, onSaved) {
     const request = jsonOptions("PUT", document);
     const keepalive = canKeepAlive(request.body);
+    const workflow = document.workflows.find((candidate) => workflowSettings(candidate) === settings);
+    const journal = workflow ? JSON.stringify({ workflow }) : "";
+    if (journal) {
+      try { localStorage.setItem(pendingWorkflowSaveKey, journal); } catch (_err) {}
+    }
     setSaving(true);
     setSaveError("");
     const result = api("/api/workflows", { ...request, keepalive })
       .then((doc) => {
+        if (journal) {
+          try {
+            if (localStorage.getItem(pendingWorkflowSaveKey) === journal) localStorage.removeItem(pendingWorkflowSaveKey);
+          } catch (_err) {}
+        }
         updateEditor({ doc });
         onSaved();
         return true;
       })
       .catch((e) => {
+        if (e.status === 409) {
+          return api("/api/workflows")
+            .then((doc) => {
+              updateEditor({ doc });
+              if (write.current) write.current.conflict = true;
+              setSaveError("");
+              return false;
+            })
+            .catch((reloadError) => {
+              setSaveError(reloadError.message);
+              return false;
+            });
+        }
         setSaveError(e.message);
         return false;
       })
@@ -404,6 +455,7 @@ function Editor() {
   async function flush() {
     // All workflow mutations share the document revision. Recheck the current
     // draft once each write finishes because edits can arrive while it runs.
+    let conflictRetries = 0;
     for (;;) {
       let pending = write.current;
       if (!pending) {
@@ -412,6 +464,10 @@ function Editor() {
         pending = saveDefinition(current);
       }
       if (!await pending.result) {
+        if (pending.conflict && conflictRetries < 3) {
+          conflictRetries += 1;
+          continue;
+        }
         const current = latest.current.current;
         if (!current || !pending.settings || workflowSettings(current) === pending.settings) return false;
       }
