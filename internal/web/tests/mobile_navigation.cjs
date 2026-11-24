@@ -306,7 +306,7 @@ test('workflow-triggered tasks start with the Workflow icon and keep their task 
   const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, [
     { ...issue, request_id: 'workflow-issue', workflow_triggered: true },
     { ...issue, request_id: 'direct-issue', status: 'pending', stage: 'task' },
-    { ...issue, request_id: 'workflow-review', source: 'review', github_issue_url: '',
+    { ...issue, request_id: 'workflow-review', source: 'prompt', github_issue_url: '',
       workflow_triggered: true, workflow: 'code-review', stage: 'review' },
   ]);
 
@@ -327,6 +327,7 @@ test('workflow-triggered tasks start with the Workflow icon and keep their task 
   const reviewSteps = stepsFor('workflow-review');
   await reviewSteps.first().locator('svg.lucide-diagram-flow-vertical').waitFor();
   assert.match(await reviewSteps.nth(1).getAttribute('title'), /^Review: done\./);
+  await reviewSteps.nth(1).locator('svg.lucide-git-pull-request').waitFor();
   assert.match(await reviewSteps.and(current).getAttribute('title'), /^Code Review: current\./);
 });
 

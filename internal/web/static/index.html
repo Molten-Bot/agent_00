@@ -11432,6 +11432,9 @@
       if (taskIssueURL(task) || task?.source === "github_issues") {
         return "entry_github_issue";
       }
+      if (task?.workflow_triggered && isReviewTask(task)) {
+        return "entry_review";
+      }
       switch (taskStartSource(task)) {
         case "chat":
           return "entry_chat";
