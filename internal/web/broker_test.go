@@ -13,6 +13,20 @@ import (
 	"time"
 )
 
+func TestWorkflowTransitionRemainsAnEventWithoutCreatingATask(t *testing.T) {
+	t.Parallel()
+
+	b := NewBroker()
+	b.IngestLog(`workflow event=transition workflow_id="delivery" run_id="run-1" request_id="req-42" status=waiting reason=approval_pending`)
+	snap := b.Snapshot()
+	if len(snap.Tasks) != 0 {
+		t.Fatalf("workflow transition created a task: %+v", snap.Tasks)
+	}
+	if len(snap.Events) != 1 || snap.Events[0].RequestID != "req-42" {
+		t.Fatalf("workflow transition lost its event or request ID: %+v", snap.Events)
+	}
+}
+
 func TestBrokerTracksTaskLifecycleAndCommandOutput(t *testing.T) {
 	t.Parallel()
 

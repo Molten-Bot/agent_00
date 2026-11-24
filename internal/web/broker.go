@@ -446,7 +446,9 @@ func (b *Broker) IngestLog(line string) {
 		Line:      line,
 	})
 
-	if requestID != "" &&
+	// Workflow events describe activations. A request ID links the event to a
+	// task, but the activation can outlive the task's monitor history.
+	if requestID != "" && !strings.HasPrefix(line, "workflow event=") &&
 		!isDuplicateTaskLifecycleLine(fields) &&
 		!b.isClosedTaskLocked(requestID, now) {
 		t := b.ensureTaskLocked(requestID, now)
