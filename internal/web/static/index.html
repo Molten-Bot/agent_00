@@ -12293,7 +12293,6 @@
             conceptSiteVisible: shouldShowTaskConceptSiteLink(task),
             conceptSiteState: taskConceptSiteState(task),
             branch: formatTaskBranch(task),
-            skill: String(task?.skill || ""),
             timing: taskTimingSignature(task),
             imageCount: taskImages(task).length,
             prURL: String(task?.pr_url || "").trim(),
@@ -12775,13 +12774,11 @@
           }
           const branch = document.createElement("div");
           branch.textContent = `branch: ${formatTaskBranch(task)}`;
-          const skill = document.createElement("div");
-          skill.textContent = `skill: ${task.skill || "-"}`;
           const update = document.createElement("div");
           update.className = "task-timing-summary";
           update.dataset.requestId = requestID;
           applyTaskTimingSummary(update, task);
-          meta.append(repos, branch, skill, update);
+          meta.append(repos, branch, update);
 
           footer.append(meta, topActions);
           body.append(footer);
