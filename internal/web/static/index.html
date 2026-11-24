@@ -3450,6 +3450,7 @@
           configuredAgentLabel: state.ui.configuredAgentLabel,
         }, state.agentAuth);
       }
+      window.mountWorkflowEditor?.(taskAgentLogoURL());
     }
 
     function setAgentAuthVerifyPending(pending) {
@@ -9044,14 +9045,14 @@
         document.head.appendChild(css);
         workflowEditorLoad = new Promise((resolve, reject) => {
           const script = document.createElement("script");
-          script.src = "/static/workflow-editor.js?v=18";
+          script.src = "/static/workflow-editor.js?v=19";
           script.onload = resolve;
           script.onerror = () => { script.remove(); css.remove(); workflowEditorLoad = null; reject(new Error("Unable to load Workflow editor. Reload to try again.")); };
           document.head.appendChild(script);
         });
       }
       return workflowEditorLoad.then(() => {
-        window.mountWorkflowEditor();
+        window.mountWorkflowEditor(taskAgentLogoURL());
         window.dispatchEvent(new CustomEvent("workflow-display", { detail: "workflow" }));
       }).catch(error => {
         document.getElementById("workflow-editor-root").textContent = error.message;
