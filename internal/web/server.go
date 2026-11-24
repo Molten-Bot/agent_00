@@ -343,7 +343,6 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/review-settings", s.handleReviewSettings)
 	mux.HandleFunc("/api/workflows", s.handleWorkflows)
 	mux.HandleFunc("/api/workflows/preview", s.handleWorkflowPreview)
-	mux.HandleFunc("/api/workflows/runs", s.handleWorkflowRuns)
 	mux.HandleFunc("/api/workflows/schedules", s.handleWorkflowSchedules)
 	mux.HandleFunc("/api/commit-signing", s.handleCommitSigning)
 	mux.HandleFunc("/api/commit-signing/verify", s.handleCommitSigning)

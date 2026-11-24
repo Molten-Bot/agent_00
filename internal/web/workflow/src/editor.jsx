@@ -4,6 +4,9 @@ import {
   ReactFlow,
   ReactFlowProvider,
   Background,
+  BaseEdge,
+  EdgeLabelRenderer,
+  getSmoothStepPath,
   Controls,
   ControlButton,
   useUpdateNodeInternals,
@@ -21,9 +24,11 @@ import {
   FolderGit2,
   ListFilter,
   MessageSquareCode,
+  RefreshCcwDot,
   ChevronDown,
   Plus,
   Save,
+  Trash2,
   Download,
   Maximize2,
   Minimize2,
@@ -85,6 +90,22 @@ function StepNode({ id, data, selected }) {
   );
 }
 const nodeTypes = { workflow: StepNode };
+function ReviewCycleEdge(props) {
+  const [path, x, y] = getSmoothStepPath(props);
+  return (
+    <>
+      <BaseEdge path={path} markerStart={props.markerStart} markerEnd={props.markerEnd} />
+      <EdgeLabelRenderer>
+        <span className="wf-review-cycle-label" aria-hidden="true"
+          style={{ transform: `translate(${x}px, ${y}px) translate(-50%, -50%)` }}>
+          {props.data.cycles}
+          <RefreshCcwDot size={12} aria-hidden="true" />
+        </span>
+      </EdgeLabelRenderer>
+    </>
+  );
+}
+const edgeTypes = { reviewCycle: ReviewCycleEdge };
 async function api(path, options) {
   const response = await fetch(path, options);
   const data = await response.json();
@@ -129,7 +150,6 @@ function Editor() {
     [dirty, setDirty] = useState(false),
     [notice, setNotice] = useState(""),
     [preview, setPreview] = useState(null),
-    [runs, setRuns] = useState([]),
     [busy, setBusy] = useState(false),
     [templatesOpen, setTemplatesOpen] = useState(true),
     [maximized, setMaximized] = useState(false);
@@ -189,11 +209,8 @@ function Editor() {
   }, []);
   useEffect(() => {
     const refresh = () => {
-      api("/api/workflows/schedules")
+      void api("/api/workflows/schedules")
         .then((data) => setScheduleStatuses(Array.isArray(data) ? data : []))
-        .catch(() => {});
-      return api("/api/workflows/runs")
-        .then(setRuns)
         .catch(() => {});
     };
     refresh();
@@ -375,7 +392,8 @@ function Editor() {
       setDoc(d);
       setCurrent(null);
       setDirty(false);
-      setNotice("Workflow deleted. Existing task history is retained.");
+      setPreview(null);
+      setNotice("Workflow deleted.");
     } catch (e) {
       setNotice(e.message);
     } finally {
@@ -459,17 +477,21 @@ function Editor() {
               <button disabled={busy} onClick={showPreview}>
                 {scheduled ? "Preview schedule" : "Preview matches"}
               </button>
-              <button disabled={busy} onClick={() => save(false)}>
-                <Save size={15} />
-                Save draft
+              <button type="button" aria-label="Save draft" title="Save draft" disabled={busy} onClick={() => save(false)}>
+                <Save size={15} aria-hidden="true" />
+              </button>
+              <button type="button" aria-label="Delete draft" title="Delete draft" className="wf-delete" disabled={busy || current.enabled} onClick={remove}>
+                <Trash2 size={15} aria-hidden="true" />
               </button>
               <button
+                type="button"
                 className="wf-primary"
+                aria-label={current.enabled ? "Pause" : "Enable"}
+                title={current.enabled ? "Pause" : "Enable"}
                 disabled={busy || dirty}
                 onClick={() => save(!current.enabled)}
               >
-                {current.enabled ? <Pause size={15} /> : <Play size={15} />}{" "}
-                {current.enabled ? "Pause" : "Enable"}
+                {current.enabled ? <Pause size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}
               </button>
             </>
           )}
@@ -540,6 +562,7 @@ function Editor() {
             nodes={graph.nodes}
             edges={graph.edges}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             onNodesChange={(changes) => {
               const moves = changes
                 .toArray()
@@ -1026,57 +1049,24 @@ function Editor() {
                   </p>
                 </>
               )}
-              <div className="wf-spacer">
-                <button
-                  disabled={busy || current.enabled}
-                  className="wf-delete"
-                  onClick={remove}
-                >
-                  Delete draft
-                </button>
-              </div>
             </>
           )}
         </aside>
       </div>
-      {(preview || current) && (
-        <details className="wf-activity" open={!!preview}>
-          <summary>
-            {preview ? "Matching preview" : "Activation history"}{" "}
-            {preview
-              ? `(${preview.filter((p) => p.matches).length} matches)`
-              : ""}
-          </summary>
+      {preview && (
+        <details className="wf-preview" open>
+          <summary>Matching preview ({preview.filter((p) => p.matches).length} matches)</summary>
           <div>
-            {preview
-              ? preview.map((p) => (
-                  <p key={p.item.number}>
-                    <strong>
-                      {p.item.kind === "schedule" ? "" : `#${p.item.number} `}
-                      {p.item.title}
-                    </strong>{" "}
-                    · {p.matches ? "Matches" : "Skipped"} — {p.reason}
-                  </p>
-                ))
-              : runs
-                  .filter((r) => r.workflow.id === current?.id)
-                  .slice(-30)
-                  .reverse()
-                  .map((r) => (
-                    <p key={r.id}>
-                      <strong>
-                        {r.item.kind === "schedule"
-                          ? "Scheduled run"
-                          : `#${r.item.number}`}{" "}
-                        · {r.status}
-                      </strong>{" "}
-                      — {r.reason}
-                      {r.requestId && ` · Task ${r.requestId}`}
-                    </p>
-                  ))}
-            {preview && (
-              <button onClick={() => setPreview(null)}>Close preview</button>
-            )}
+            {preview.map((p) => (
+              <p key={p.item.number}>
+                <strong>
+                  {p.item.kind === "schedule" ? "" : `#${p.item.number} `}
+                  {p.item.title}
+                </strong>{" "}
+                · {p.matches ? "Matches" : "Skipped"} — {p.reason}
+              </p>
+            ))}
+            <button onClick={() => setPreview(null)}>Close preview</button>
           </div>
         </details>
       )}

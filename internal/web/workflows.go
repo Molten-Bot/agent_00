@@ -84,22 +84,6 @@ func (s Server) handleWorkflowPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, results)
 }
-func (s Server) handleWorkflowRuns(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) {
-		return
-	}
-	if s.Workflows == nil {
-		workflowError(w, 503, errors.New("workflow store unavailable"))
-		return
-	}
-	runs, err := s.Workflows.Runs()
-	if err != nil {
-		workflowError(w, 500, err)
-		return
-	}
-	writeJSON(w, 200, runs)
-}
-
 // SubmitWorkflowRun retains durable issue ownership, fresh comments, dependencies,
 // and recovery used by manual issue tasks. PR workflows use the normal task queue.
 func (s Server) SubmitWorkflowRun(ctx context.Context, run config.Config, submit func(context.Context, []byte) (string, error)) (string, error) {

@@ -83,7 +83,7 @@ func (e *Engine) tickSchedule(ctx context.Context, w Definition, s *State, busy 
 	s.Schedules[w.ID] = cursor
 	r := Run{ID: digest([]any{w.ID, cursor.Policy, occurrence}), Workflow: w, Item: Item{Repository: w.Repository, Kind: "schedule", Title: w.Name}, Status: "dispatching", Reason: "Schedule due at " + occurrence.Format(time.RFC3339), UpdatedAt: now}
 	s.Runs = append(s.Runs, r)
-	if err := writeAtomic(e.StatePath, s); err != nil {
+	if err := e.save(*s); err != nil {
 		return err
 	}
 	e.logRun(r, "dispatch")
@@ -103,7 +103,7 @@ func (e *Engine) tickSchedule(ctx context.Context, w Definition, s *State, busy 
 		s.Runs[index].RequestID = id
 		busy[entity] = true
 	}
-	if err := writeAtomic(e.StatePath, s); err != nil {
+	if err := e.save(*s); err != nil {
 		return err
 	}
 	e.logRun(s.Runs[index], "submission")

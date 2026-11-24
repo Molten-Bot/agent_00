@@ -133,6 +133,13 @@ func digest(v any) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func (w Definition) ExecutionPolicyHash() string {
+	w.Positions = nil
+	w.Name = ""
+	w.Enabled = false
+	return digest(w)
+}
+
 type Run struct {
 	Outcome   *Outcome   `json:"outcome,omitempty"`
 	ID        string     `json:"id"`
@@ -180,6 +187,8 @@ type Engine struct {
 	mu        sync.Mutex
 }
 
+var ErrActivationNotFound = errors.New("workflow activation not found")
+
 func (e *Engine) load() (State, error) {
 	s := State{Version: 2, Observations: map[string]observation{}, Baselines: map[string]bool{}, Runs: []Run{}}
 	b, err := os.ReadFile(e.StatePath)
@@ -205,6 +214,19 @@ func (e *Engine) Runs() ([]Run, error) {
 	defer e.mu.Unlock()
 	s, err := e.load()
 	return s.Runs, err
+}
+
+// save persists only runs that still need dispatch recovery or merge coordination.
+// Keep the caller's slice intact so it can log a terminal transition after saving.
+func (e *Engine) save(s State) error {
+	active := make([]Run, 0, len(s.Runs))
+	for _, run := range s.Runs {
+		if !terminal(run.Status) {
+			active = append(active, run)
+		}
+	}
+	s.Runs = active
+	return writeAtomic(e.StatePath, s)
 }
 
 // logRun emits only bounded lifecycle reasons. Detailed errors can contain
@@ -298,7 +320,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 	for _, r := range s.Runs {
 		previous[r.ID] = r
 	}
-	save := func() error { return writeAtomic(e.StatePath, s) }
+	save := func() error { return e.save(s) }
 	definitions := map[string]Definition{}
 	for _, w := range d.Workflows {
 		definitions[w.ID] = w
@@ -445,11 +467,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 			cache[key] = items
 		}
 		// Configuration edits establish a fresh baseline; layout/name edits do not.
-		policy := w
-		policy.Positions = nil
-		policy.Name = ""
-		policy.Enabled = false
-		baselineKey := w.ID + ":" + digest(policy)
+		baselineKey := w.ID + ":" + w.ExecutionPolicyHash()
 		hadBaseline := s.Baselines[baselineKey]
 		seen := make(map[string]bool, len(items))
 		for _, i := range items {
@@ -536,13 +554,10 @@ func (e *Engine) Complete(id string, outcome Outcome) error {
 	for n := range s.Runs {
 		if s.Runs[n].ID == id {
 			s.Runs[n].Outcome = &outcome
-			if s.Runs[n].Status == "failed" {
-				s.Runs[n].Status = "running"
-			}
-			return writeAtomic(e.StatePath, s)
+			return e.save(s)
 		}
 	}
-	return fmt.Errorf("workflow activation not found")
+	return ErrActivationNotFound
 }
 
 // StillEnabled rechecks switches after potentially slow GitHub reads.
@@ -556,12 +571,7 @@ func (e *Engine) StillEnabled(w Definition) bool {
 	}
 	for _, current := range doc.Workflows {
 		if current.ID == w.ID && current.Enabled && strings.EqualFold(current.Repository, w.Repository) {
-			a, b := current, w
-			a.Name = ""
-			b.Name = ""
-			a.Positions = nil
-			b.Positions = nil
-			return digest(a) == digest(b)
+			return current.ExecutionPolicyHash() == w.ExecutionPolicyHash()
 		}
 	}
 	return false

@@ -151,9 +151,12 @@ test('the agent and review are connected by a bidirectional line with a live cyc
  await page.getByRole('button',{name:'Prompt submission',exact:true}).click();
  const reviewStep=page.getByLabel('Review step',{exact:true});
  const edge=page.getByTestId('rf__edge-task-review');
+ const label=page.locator('.wf-review-cycle-label');
  assert.equal(await edge.count(),0);
  await reviewStep.check();
- await edge.getByText('1 cycle',{exact:true}).waitFor();
+ await label.getByText('1',{exact:true}).waitFor();
+ assert.equal(await label.locator('svg.lucide-refresh-ccw-dot').count(),1);
+ assert.equal(await edge.getAttribute('aria-label'),'Agent task and review, up to 1 cycle');
  const path=edge.locator('.react-flow__edge-path');
  const marker=await path.getAttribute('marker-start');
  assert.match(marker,/arrowclosed/);
@@ -161,12 +164,12 @@ test('the agent and review are connected by a bidirectional line with a live cyc
  assert.equal(await page.locator('.react-flow__arrowhead').getAttribute('orient'),'auto-start-reverse');
 
  await page.getByRole('button',{name:'4 passes',exact:true}).click();
- await edge.getByText('4 cycles',{exact:true}).waitFor();
+ await label.getByText('4',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Arrange workflow horizontally',exact:true}).click();
  await page.waitForFunction(()=>{
   const edge=document.querySelector('[data-testid="rf__edge-task-review"]');
   const path=edge?.querySelector('.react-flow__edge-path');
-  const background=edge?.querySelector('.react-flow__edge-textbg');
+  const background=document.querySelector('.wf-review-cycle-label');
   if (!path || !background) return false;
   const length=path.getTotalLength();
   const start=path.getPointAtLength(0);
@@ -178,6 +181,7 @@ test('the agent and review are connected by a bidirectional line with a live cyc
  });
  await reviewStep.uncheck();
  await edge.waitFor({state:'detached'});
+ await label.waitFor({state:'detached'});
 });
 
 test('review pass slider supports presets, keyboard, dragging and existing saved values', async t => {

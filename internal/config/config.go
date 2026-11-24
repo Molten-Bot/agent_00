@@ -200,6 +200,7 @@ type WorkflowRunConfig struct {
 	EventID      string `json:"eventId"`
 	Name         string `json:"name"`
 	ReviewCycles int    `json:"reviewCycles"`
+	PolicyHash   string `json:"policyHash,omitempty"`
 }
 
 type ReviewConfig struct {

@@ -90,10 +90,10 @@ export function diagram(w) {
       const label = `${w.reviewCycles} ${w.reviewCycles === 1 ? "cycle" : "cycles"}`;
       return {
         ...edge,
+        type: "reviewCycle",
         markerStart: cycleArrow,
         markerEnd: cycleArrow,
-        label,
-        labelStyle: { fontSize: 11, fontWeight: 600 },
+        data: { cycles: w.reviewCycles },
         ariaLabel: `Agent task and review, up to ${label}`,
       };
     }),

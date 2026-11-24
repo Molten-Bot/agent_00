@@ -66,7 +66,7 @@ func (s Server) submitInputWorkflow(ctx context.Context, body []byte, source str
 		return "", err
 	}
 	return s.Workflows.DispatchInput(ctx, w, func(run workflow.Run) (string, error) {
-		c.Workflow = &config.WorkflowRunConfig{ID: w.ID, Name: w.Name, EventID: run.ID, Instructions: c.Prompt, ReviewCycles: w.ReviewCycles}
+		c.Workflow = &config.WorkflowRunConfig{ID: w.ID, Name: w.Name, EventID: run.ID, Instructions: c.Prompt, ReviewCycles: w.ReviewCycles, PolicyHash: w.ExecutionPolicyHash()}
 		data, err := json.Marshal(c)
 		if err != nil {
 			return "", err
