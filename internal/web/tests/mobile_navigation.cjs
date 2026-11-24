@@ -331,11 +331,21 @@ test('issue task adds review and fix markers as each pass starts', async t => {
   await stage('review', 'status=warn action=check_pr_state pass=1 repo_dir=.', 'Fix Findings (pass 1)');
   await stage('review_checks', 'status=start action=verify pass=1 repo_dir=.', 'Review Checks (pass 1)');
   await stage('checks', 'status=running', 'Review Checks (pass 1)');
+  await stage('checks', 'status=failed attempt=1 repo_dir=.', 'Review Checks (pass 1)');
+  await stage('claude', 'status=start mode=remediation attempt=1 repo_dir=.', 'Fix Failed Checks (attempt 1)');
+  assert.equal(await current.locator('img').getAttribute('src'), '/static/logos/claude-code.svg');
+  await stage('checks', 'status=start attempt=2 repo_dir=.', 'Review Checks (pass 1)');
+  await current.locator('svg.lucide-shield-check').waitFor();
+  await card.locator('.task-progress-step.done[title^="Fix Failed Checks (attempt 1):"]').waitFor();
 
   await stage('review', 'status=start action=pass pass=2 repo_dir=.', 'Review (pass 2)');
   await stage('review_fix', 'status=start action=agent pass=2 repo_dir=.', 'Fix Findings (pass 2)');
   await stage('claude', 'status=running mode=review_fix attempt=2 repo_dir=.', 'Fix Findings (pass 2)');
   await stage('review_checks', 'status=start action=verify pass=2 repo_dir=.', 'Review Checks (pass 2)');
+  await stage('claude', 'status=start mode=remediation attempt=1 repo_dir=.', 'Fix Failed Checks (attempt 1)');
+  await stage('checks', 'status=start attempt=2 repo_dir=.', 'Review Checks (pass 2)');
+  await stage('claude', 'status=start mode=remediation attempt=2 repo_dir=.', 'Fix Failed Checks (attempt 2)');
+  await stage('checks', 'status=start attempt=3 repo_dir=.', 'Review Checks (pass 2)');
   const progress = card.locator('.task-progress');
   const scrollLeft = await progress.evaluate(node => {
     node.scrollLeft = 12;
@@ -378,15 +388,24 @@ test('issue task adds review and fix markers as each pass starts', async t => {
   const restored = await page.evaluate(id => {
     const savedTask = state.taskHistoryByID.get(id);
     const { steps, index } = taskProgressModel(savedTask);
-    return { active: steps[index].id, reviews: steps.filter(step => step.label.includes('(pass ')).length };
+    const progress = renderTaskProgress(savedTask);
+    return {
+      active: steps[index].id,
+      reviews: steps.filter(step => step.label.includes('(pass ')).length,
+      conflictLogo: progress.querySelector('.task-progress-step.done[title^="Resolve Merge Conflicts:"] img')?.getAttribute('src'),
+      remediations: progress.querySelectorAll('.task-progress-step.done[title^="Fix Failed Checks"]').length,
+    };
   }, task.request_id);
-  assert.deepEqual(restored, { active: 'finalize', reviews: 7 });
+  assert.deepEqual(restored, {
+    active: 'finalize', reviews: 7, conflictLogo: '/static/logos/claude-code.svg', remediations: 3,
+  });
 });
 
 test('multi-repository task highlights initial checks for the current repository', async t => {
   const now = new Date().toISOString();
   const task = {
     request_id: 'multi-repo-review', prompt: 'Update navigation', repo: 'example/project, example/other',
+    agent_harness: 'codex',
     started_at: now, updated_at: now, status: 'running', stage: 'review_checks',
     pr_url: 'https://github.com/example/project/pull/10',
     logs: [
@@ -404,6 +423,12 @@ test('multi-repository task highlights initial checks for the current repository
   assert.match(await current.getAttribute('title'), /^Review Checks \(pass 1\): current/);
 
   const publish = () => page.evaluate(task => render({ ...state.snapshot, tasks: [task] }), task);
+  task.stage = 'codex';
+  task.logs.push({ stream: 'meta', text: 'task stage=codex status=start mode=remediation attempt=1 repo_dir=first' });
+  await publish();
+  assert.match(await current.getAttribute('title'), /^Fix Failed Checks \(attempt 1\): current/);
+  assert.equal(await current.locator('img').getAttribute('src'), '/static/logos/codex-cli.svg');
+
   task.stage = 'checks';
   task.pr_url = 'https://github.com/example/other/pull/10';
   task.logs.push({ stream: 'meta', text: 'task stage=checks status=start repo_dir=second' });

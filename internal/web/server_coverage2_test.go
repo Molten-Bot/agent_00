@@ -732,9 +732,15 @@ func TestReviewProgressSurvivesTaskLogTrimming(t *testing.T) {
 		"task stage=review status=start action=pass pass=1 repo_dir=first",
 		"task stage=review_fix status=start action=agent pass=1 repo_dir=first",
 		"task stage=review_checks status=start action=verify pass=1 repo_dir=first",
+		"task stage=claude status=start mode=remediation attempt=1 repo_dir=first",
 		"task stage=review status=start action=pass pass=2 repo_dir=first",
+		"task stage=review_checks status=start action=verify pass=2 repo_dir=first",
+		"task stage=claude status=start mode=remediation attempt=1 repo_dir=first",
+		"task stage=review status=start action=pass pass=3 repo_dir=first",
+		"task stage=claude status=start mode=base_sync_conflict attempt=1 repo_dir=first",
 		"task stage=checks status=start repo_dir=second attempt=1",
 		"task stage=review status=start action=pass pass=1 repo_dir=second",
+		"task stage=codex status=start mode=remote_branch_sync_conflict attempt=1 repo_dir=second",
 		"task stage=checks status=start repo_dir=third attempt=1",
 	}
 	const limit = maxStreamTaskLogs + 20

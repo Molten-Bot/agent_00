@@ -2660,7 +2660,7 @@ func appendCappedTaskLog(logs []TaskLog, max int, entry TaskLog) []TaskLog {
 	if len(logs) < max {
 		return append(logs, entry)
 	}
-	// Keep review passes and initial checks so snapshots can replay repository transitions.
+	// Keep review and repair starts and initial checks so snapshots can replay progress.
 	drop := 0
 	for drop < len(logs)-1 && isTaskProgressMilestone(logs[drop]) {
 		drop++
@@ -2671,11 +2671,12 @@ func appendCappedTaskLog(logs []TaskLog, max int, entry TaskLog) []TaskLog {
 }
 
 func isTaskProgressMilestone(log TaskLog) bool {
-	if log.Stream != "meta" || (!strings.Contains(log.Text, "stage=review") && !strings.Contains(log.Text, "stage=checks")) {
+	if log.Stream != "meta" || (!strings.Contains(log.Text, "stage=review") &&
+		!strings.Contains(log.Text, "stage=checks") && !strings.Contains(log.Text, "mode=")) {
 		return false
 	}
 	fields := parseKVFields(log.Text)
-	return isTaskReviewProgressStart(fields) ||
+	return isTaskReviewProgressStart(fields) || isTaskAgentRepairProgressStart(fields) ||
 		(fields["stage"] == "checks" && fields["status"] == "start" && fields["action"] == "" && fields["repo_dir"] != "")
 }
 
