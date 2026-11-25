@@ -4,12 +4,63 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
 )
+
+func TestOlderWorkflowJournalDoesNotTreatCleanFlagAsReceipt(t *testing.T) {
+	t.Parallel()
+	w := definition("legacy-review")
+	w.ReviewCycles, w.Merge.Enabled = 1, true
+	e, _, _ := testEngine(t, w)
+	s, err := e.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Runs = []Run{{ID: "legacy", Workflow: w, Item: Item{Repository: w.Repository}, Status: "running",
+		Outcome: &Outcome{Status: "succeeded", PRURL: "https://github.com/acme/repo/pull/12", LegacyReviewClean: true, LegacyReviewedHead: "abc"},
+	}}
+	if err := writeAtomic(e.StatePath, s); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(e.StatePath)
+	if err != nil || !strings.Contains(string(data), `"reviewClean": true`) {
+		t.Fatalf("legacy evidence missing from fixture: %v", err)
+	}
+	e.InspectPR = func(context.Context, string, string) (Item, error) {
+		t.Fatal("legacy review flag authorized merge eligibility")
+		return Item{}, nil
+	}
+	tick(t, e)
+	runs, err := e.Runs()
+	if err != nil || len(runs) != 0 {
+		t.Fatalf("legacy run was not retired: %+v, %v", runs, err)
+	}
+}
+
+func TestReviewOutcomeSurvivesWorkspaceCleanup(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	const requestID = "local-delivery"
+	w := definition("delivery")
+	w.ReviewCycles = 10
+	prURL := "https://github.com/acme/repo/pull/12"
+	receipt := fixtureReviewReceipt(w, prURL)
+	outcome := Outcome{Status: "succeeded", PRURL: prURL, ReviewReceipt: receipt, Reason: "task details"}
+	if err := SaveReviewOutcome(root, requestID, outcome); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadReviewOutcome(root, requestID)
+	if err != nil || got.Status != "succeeded" || got.PRURL != prURL || got.Reason != "" ||
+		got.ReviewReceipt == nil || !got.ReviewReceipt.Clean() || got.ReviewReceipt.ReviewID != receipt.ReviewID ||
+		got.ReviewReceipt.Policy != receipt.Policy {
+		t.Fatalf("archived outcome = %+v, err = %v", got, err)
+	}
+}
 
 func TestDispatchRecoveryUsesSavedOutcomeWithoutTaskHistory(t *testing.T) {
 	t.Parallel()

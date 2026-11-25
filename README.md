@@ -684,7 +684,7 @@ cases with `--case`. Scan queues an app poll. Observe reads recent monitor
 events. Inspect the PR and checks to verify changes and CI outcomes.
 Cleanup removes only unchanged disabled copies. Save private reports outside the
 repository with `--output /tmp/workflow-report.json`. Review-request and human
-approval scenarios need a second GitHub identity because authors cannot review
+approval scenarios need a second GitHub identity because authors cannot approve
 their own PRs. Keep those scenarios marked blocked when that prerequisite is
 unavailable rather than weakening their approval policy.
 
@@ -740,6 +740,100 @@ are repaired and checked before the next pass, including a clean confirmation
 after the final repair.
 If findings remain after the repair budget is exhausted, the completed task
 stays successful and its pull request stays in draft for human review.
+
+#### Published review gate
+
+Workflow reviews and implementation runs with review cycles need a submitted
+GitHub review on the exact PR head before automated merge. A clean review is
+posted with the `COMMENT` event, a structured verdict, and “No material issues
+found.” The task workspace records the review ID, head, run, pass, selected
+policy, and result. The server archives the outcome in `review-receipts` next
+to its runtime configuration before workspace cleanup. A lost write response
+is reconciled against submitted reviews before the harness can proceed.
+Conversation comments provide feedback only.
+Human approval, when required, remains a separate requirement.
+
+Code findings on the diff are submitted as review threads. Findings that
+require a branch or history repair outside review scope leave the gate blocked.
+A later clean pass can resolve a harness thread if it verified the fix and
+the thread has no replies. Before merge, the harness rechecks the head, review,
+change requests, and every page
+of conversations, including outdated threads. A changed head needs a fresh
+clean review. The task UI shows the review link and a pending or blocked reason.
+
+##### Enforce it for external clients
+
+1. Install a dedicated GitHub App with Checks write and Pull requests read.
+   Keep its installation credential in the trusted harness environment and
+   refresh it before expiration. Give the review writer Pull requests write.
+   Keep both the publisher and merge identities off branch bypass lists.
+2. On the target branch, activate a ruleset requiring pull requests, resolved
+   conversations, and the `agent00 / review-policy` status check. Select the
+   dedicated GitHub App as the check source. Keep existing CI and human approval
+   rules. The implementation supports direct merge, without a merge queue on
+   this branch.
+3. Set `HARNESS_REVIEW_CHECK_REPOSITORIES` to space-separated `owner/repo`
+   values, `HARNESS_REVIEW_CHECK_APP_ID` to the app's numeric ID, and
+   `HARNESS_REVIEW_CHECK_TOKEN` to its installation token. Agent_00 verifies
+   the active target rules and publishes the check only after verifying the
+   native review and conversations.
+4. With repository or organization administrative access, verify active target
+   rules with `gh api --paginate "repos/$repo/rules/branches/$branch"` (URL-encode
+   branch names with slashes). For each applicable ruleset ID, view its
+   `bypass_actors` in Settings → Rules → Rulesets or with
+   `gh api "repos/$repo/rulesets/$ruleset_id?includes_parents=true"`.
+   Confirm that the check's `integration_id` is the installed app ID and that
+   the bypass list is empty or contains only explicitly authorized operators.
+   Verify the actor type, ID, and bypass mode. An omitted list means the
+   inspecting credential cannot verify bypass. Authorized bypass is separate
+   from passing the gate and follows GitHub's ruleset audit behavior.
+
+A required check applies to every PR targeting the ruleset. Route unrelated PRs
+through a standalone Agent_00 review after their authors are ready, or scope
+the ruleset to a dedicated automation target branch and route ordinary PRs to
+an unscoped branch. GitHub checks attach to commits. Use distinct head SHAs for
+independently reviewed PRs. A controller should also verify the published
+review belongs to its PR and poll the head-bound check before requesting merge.
+
+[GitHub rules API](https://docs.github.com/en/rest/repos/rules) ·
+[GitHub Checks API](https://docs.github.com/en/rest/checks/runs) ·
+[GitHub pull request review API](https://docs.github.com/en/rest/pulls/reviews)
+
+##### App-managed verification
+
+Run the local integration tests to exercise the review agent selection, native
+writeback, workflow restart, and app-owned merge command against simulated
+GitHub responses.
+
+```sh
+go test ./internal/app -run 'TestAppManagedMergeAfterIndependentReviewAndRepair|TestProcessChangedRepoReleasesPRFromDraftAfterCleanFinalReviewCycle|TestStandaloneReviewRequiresNativeReceipt'
+go test ./internal/workflow -run TestImplementationMergeRequiresPersistedReceiptOnCurrentHead
+```
+
+The delivery smoke case uses 10 review cycles and the `easy` reviewer preset.
+In an app-managed smoke run, verify that green CI, a submitted clean review,
+and zero unresolved threads lead to one `gh pr merge --match-head-commit`
+call. The `review-merge` case exercises optional human approval separately.
+
+##### Disposable repository verification
+
+Use an explicitly designated disposable repository and a normal merge identity.
+Set one required CI job, the rules above, and the dedicated app. Save command
+results, including the merge exit status and head SHA, for each case.
+
+1. Open a draft with green CI and no submitted review. Mark it ready from a
+   separate client. `gh pr merge --squash --match-head-commit "$head"` must fail
+   because the required review check is missing.
+2. Run a standalone Agent_00 review with automatic merge off against head A.
+   Verify the submitted review ID, its `commit_id`, and the app's successful
+   check from the PR’s Checks tab or GitHub APIs. On one fixture, merge A
+   with the same command. On a second fixture, push B before merging. The A
+   precondition must fail, and B must remain blocked until fresh evidence exists.
+3. On a separate fixture with an explicitly authorized bypass actor, repeat
+   the green-CI, missing-review attempt as the normal identity. Then use
+   `gh pr merge --admin --squash --match-head-commit "$head"` as the authorized
+   admin. Record the result and the matching ruleset bypass actor. A permitted
+   bypass is an external merge with the review gate still incomplete.
 
 ### Go Module
 

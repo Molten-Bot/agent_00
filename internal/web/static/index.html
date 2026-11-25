@@ -12049,6 +12049,9 @@
       if (displayStatus === "warning") {
         title.textContent = "Review Warning";
         detail.textContent = String(task.warning || "").trim() || "Pull request needs human review.";
+      } else if (task.review_gate) {
+        title.textContent = "Merge Gate";
+        detail.textContent = task.review_gate;
       } else if (status === "completed") {
         title.textContent = "Task Success";
         detail.textContent = prURL ? "Pull request ready." : "Completed.";
@@ -12069,6 +12072,17 @@
         detail.textContent = task.error ? task.error : "See logs for failure details.";
       }
       node.appendChild(detail);
+
+      const reviewURL = String(task.review_url || "");
+      if (/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+#pullrequestreview-\d+$/.test(reviewURL)) {
+        const evidence = document.createElement("a");
+        evidence.className = "task-result-link";
+        evidence.href = reviewURL;
+        evidence.target = "_blank";
+        evidence.rel = "noopener noreferrer";
+        evidence.textContent = "Submitted review";
+        node.appendChild(evidence);
+      }
 
       if ((status === "completed" || status === "no_changes" || status === "merged") && prURL) {
         const link = document.createElement("a");

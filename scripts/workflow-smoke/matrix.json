@@ -58,11 +58,13 @@
     },
     {
       "id": "delivery",
-      "name": "Issue through automatic merge",
+      "name": "Issue through automatic merge with maximum review budget",
       "template": "delivery",
-      "prepare": ["Create an issue asking for one small documentation file.", "Enable, wait for baseline, then apply the namespaced ready label.", "Provide a successful check and approval from a non-author collaborator on the current PR head."],
-      "expect": ["The task creates a PR closing the issue.", "The run waits while checks or approval are missing.", "After checks and approval, the PR merges once and its branch is deleted."],
-      "fixture": "Successful CI plus eligible human approval; requireApproval remains enabled.",
+      "reviewCycles": 10,
+      "reviewComplexity": "easy",
+      "prepare": ["Create an issue asking for one small documentation file.", "Enable, wait for baseline, then apply the namespaced ready label.", "Provide a successful CI check on the current PR head. Use the protected review setup in the README for external enforcement."],
+      "expect": ["The task creates a PR closing the issue.", "The run waits while CI or the submitted clean review is missing.", "Record the submitted clean review ID and confirm its commit_id matches the head.", "After CI and review pass, the PR merges once and its branch is deleted."],
+      "fixture": "Successful CI and the published clean review gate. Use review-merge for the separate human approval case.",
       "terminal": ["merged"]
     },
     {

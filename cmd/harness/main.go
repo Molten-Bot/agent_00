@@ -691,16 +691,25 @@ func runServer(args []string) int {
 				}
 				defer release()
 
+				reviewOutcome := workflow.Outcome{
+					Status: "succeeded", PRURL: outcome.Result.PRURL, Reason: "Task completed",
+					ReviewReceipt: outcome.Result.ReviewReceipt, ReviewInterrupted: outcome.Result.ReviewInterrupted,
+				}
+				if outcome.Result.Err != nil || outcome.State == "error" || outcome.State == "stopped" {
+					reviewOutcome.Status = "failed"
+				}
+				if outcome.Result.Err != nil {
+					reviewOutcome.Reason = outcome.Result.Err.Error()
+				}
+				var reviewArchiveErr error
+				if reviewOutcome.ReviewReceipt != nil || reviewOutcome.ReviewInterrupted {
+					reviewArchiveErr = workflow.SaveReviewOutcome(filepath.Dir(cfg.RuntimeConfigPath), requestID, reviewOutcome)
+					if reviewArchiveErr != nil {
+						daemonLogger("task status=warn action=save_review_outcome request_id=%s err=%q", requestID, reviewArchiveErr)
+					}
+				}
 				if runCfg.Workflow != nil && workflowEngine != nil {
-					status := "succeeded"
-					if outcome.Result.Err != nil || outcome.State == "error" || outcome.State == "stopped" {
-						status = "failed"
-					}
-					reason := "Task completed"
-					if outcome.Result.Err != nil {
-						reason = outcome.Result.Err.Error()
-					}
-					if err := workflowEngine.Complete(runCfg.Workflow.EventID, workflow.Outcome{Status: status, PRURL: outcome.Result.PRURL, Reason: reason, ReviewClean: outcome.Result.ReviewClean, ReviewedHead: outcome.Result.ReviewedHead}); err != nil && !(source == rerunSource && errors.Is(err, workflow.ErrActivationNotFound)) {
+					if err := workflowEngine.Complete(runCfg.Workflow.EventID, reviewOutcome); err != nil && !(source == rerunSource && errors.Is(err, workflow.ErrActivationNotFound)) {
 						daemonLogger("workflow status=error action=complete err=%q", err)
 					}
 				}
@@ -727,7 +736,7 @@ func runServer(args []string) int {
 						)
 					}
 				}
-				if diskRequest.CleanupOnCompletion {
+				if diskRequest.CleanupOnCompletion && reviewArchiveErr == nil {
 					cleanupTaskWorkspaceOnCompletion(requestID, outcome.Result, daemonLogger)
 					if err := diskHistory.Flush(); err != nil {
 						daemonLogger("scheduler status=warn action=flush_task_disk_history request_id=%s err=%q", requestID, err)
@@ -1388,12 +1397,7 @@ func runLocalTask(
 		logf("task request_id=%s %s", requestID, line)
 	}
 
-	var cleanReview bool
-	var reviewedHead string
-	h.OnReviewResult = func(clean bool, head string) { cleanReview = clean; reviewedHead = head }
 	res := h.Run(ctx, runCfg)
-	res.ReviewClean = cleanReview
-	res.ReviewedHead = reviewedHead
 	_, issue := ctx.Value(issueExecutionContextKey{}).(*issueExecution)
 	if ctx.Err() == nil && !issue && res.ExitCode == app.ExitWorkspace && res.WorkspaceDir == "" &&
 		(canRetryWorkspace || workspace.IsDiskFull(res.Err)) {

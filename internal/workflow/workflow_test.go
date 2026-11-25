@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
 
 func definition(id string) Definition {
@@ -200,6 +203,19 @@ func TestEngineMultipleWorkflowsSerializeEntity(t *testing.T) {
 		t.Fatal("second independent workflow did not run", *count)
 	}
 }
+func fixtureReviewReceipt(w Definition, prURL string) *githubutil.ReviewReceipt {
+	passes := w.ReviewCycles
+	if w.Task.Kind == "review" {
+		passes = 0
+	}
+	return &githubutil.ReviewReceipt{
+		PRURL: prURL, Head: "abc", Run: "run", Pass: 1, ReviewID: 42,
+		Marker: "<!-- test review -->", URL: prURL + "#pullrequestreview-42",
+		Policy: githubutil.ReviewPolicy{FixPasses: passes, Hash: w.ExecutionPolicyHash()},
+		Result: json.RawMessage(`{"status":"clean","mergeReady":true,"findings":[]}`),
+	}
+}
+
 func TestEngineMergeGatesAndReviewFindings(t *testing.T) {
 	t.Parallel()
 	for _, clean := range []bool{false, true} {
@@ -217,7 +233,13 @@ func TestEngineMergeGatesAndReviewFindings(t *testing.T) {
 			e.Merge = func(context.Context, Run) error { merged++; return nil }
 			tick(t, e)
 			runs, _ := e.Runs()
-			e.Complete(runs[0].ID, Outcome{Status: "succeeded", ReviewClean: clean, ReviewedHead: "abc", PRURL: pr.URL})
+			outcome := Outcome{Status: "succeeded", PRURL: pr.URL}
+			if clean {
+				outcome.ReviewReceipt = fixtureReviewReceipt(w, pr.URL)
+			}
+			if err := e.Complete(runs[0].ID, outcome); err != nil {
+				t.Fatal(err)
+			}
 			tick(t, e)
 			if merged != 0 {
 				t.Fatal("merged without checks")
@@ -390,5 +412,109 @@ func TestHumanApprovalRequiresTrustedHumanOnCurrentHead(t *testing.T) {
 	}
 	if i.HumanApproved || i.ReviewDecision != "CHANGES_REQUESTED" {
 		t.Fatal("later review did not supersede approval")
+	}
+}
+
+func TestImplementationMergeRequiresPersistedReceiptOnCurrentHead(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, head                              string
+		receipt, interrupted, merge             bool
+		checksPending, unresolved, queueEnabled bool
+		requireApproval                         bool
+		requireCheck, checkPublished            bool
+	}{
+		{name: "no receipt", head: "abc"},
+		{name: "matching receipt", head: "abc", receipt: true, merge: true},
+		{name: "CI pending", head: "abc", receipt: true, checksPending: true},
+		{name: "unresolved thread", head: "abc", receipt: true, unresolved: true},
+		{name: "merge queue enabled", head: "abc", receipt: true, queueEnabled: true},
+		{name: "human approval required", head: "abc", receipt: true, requireApproval: true},
+		{name: "trusted check pending", head: "abc", receipt: true, requireCheck: true},
+		{name: "trusted check published", head: "abc", receipt: true, requireCheck: true, checkPublished: true, merge: true},
+		{name: "changed head", head: "def", receipt: true},
+		{name: "interrupted", head: "abc", receipt: true, interrupted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := definition("implementation")
+			w.Merge.Enabled, w.IncludeBacklog = true, true
+			w.Merge.DeleteBranch, w.Merge.RequireApproval = true, tc.requireApproval
+			w.ReviewCycles = 10
+			w.ReviewAgent.Complexity = "easy"
+			e, items, _ := testEngine(t, w)
+			*items = []Item{{Kind: "issue", Number: 1, Repository: w.Repository, Open: true, Labels: []string{"ready"}}}
+			tick(t, e)
+			runs, err := e.Runs()
+			if err != nil || len(runs) != 1 {
+				t.Fatalf("runs = %+v, %v", runs, err)
+			}
+			o := Outcome{Status: "succeeded", PRURL: "https://github.com/acme/repo/pull/12", ReviewInterrupted: tc.interrupted}
+			if tc.receipt {
+				o.ReviewReceipt = fixtureReviewReceipt(runs[0].Workflow, o.PRURL)
+				if tc.requireCheck {
+					o.ReviewReceipt.Policy.CheckAppID = 456
+				}
+			}
+			if err := e.Complete(runs[0].ID, o); err != nil {
+				t.Fatal(err)
+			}
+			merges := 0
+			prState := "OPEN"
+			gh := GitHub{Runner: fakeRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+				reply := func(raw string) (execx.Result, error) { return execx.Result{Stdout: raw}, nil }
+				args := strings.Join(cmd.Args, " ")
+				switch {
+				case strings.HasPrefix(args, "pr view "):
+					ci := "SUCCESS"
+					if tc.checksPending {
+						ci = ""
+					}
+					return reply(fmt.Sprintf(`{"number":12,"state":%q,"headRefOid":%q,"baseRefName":"main","reviewDecision":null,"statusCheckRollup":[{"name":"CI","conclusion":%q}]}`, prState, tc.head, ci))
+				case strings.Contains(args, "closingIssuesReferences"):
+					return reply("0")
+				case strings.Contains(args, "/rules/branches/main?"):
+					return reply(`[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"agent00 / review-policy","integration_id":456}]}},{"type":"pull_request","parameters":{"required_review_thread_resolution":true}}]`)
+				case strings.Contains(args, "/commits/abc/check-runs?"):
+					if tc.checkPublished {
+						return reply(fmt.Sprintf(`{"check_runs":[{"id":123,"name":"agent00 / review-policy","head_sha":"abc","external_id":"pr-12-review-%d","status":"completed","conclusion":"success","app":{"id":456}}]}`, o.ReviewReceipt.ReviewID))
+					}
+					return reply(`{"check_runs":[]}`)
+				case strings.Contains(args, "/reviews?"):
+					receipt := o.ReviewReceipt
+					reviews := []githubutil.SubmittedReview{{
+						ID: receipt.ReviewID, Head: receipt.Head, URL: receipt.URL, State: "COMMENTED", SubmittedAt: "2026-11-25T12:00:00Z",
+						Body: receipt.Marker + "\n" + githubutil.CleanReviewVerdict + "\nNo material issues found.",
+					}}
+					data, err := json.Marshal(reviews)
+					return execx.Result{Stdout: string(data)}, err
+				case strings.Contains(args, "reviewThreads(first:100"):
+					threads := "[]"
+					if tc.unresolved {
+						threads = `[{"id":"old","isResolved":false}]`
+					}
+					return reply(fmt.Sprintf(`{"data":{"repository":{"pullRequest":{"state":"OPEN","headRefOid":%q,"isMergeQueueEnabled":%t,"reviewThreads":{"nodes":%s,"pageInfo":{"hasNextPage":false}}}}}}`, tc.head, tc.queueEnabled, threads))
+				case strings.HasPrefix(args, "pr merge "):
+					if !strings.Contains(args, "--match-head-commit abc") || slices.Contains(cmd.Args, "--admin") || slices.Contains(cmd.Args, "--auto") {
+						t.Errorf("unexpected gh merge args: %v", cmd.Args)
+					}
+					merges++
+					prState = "MERGED"
+					return reply("")
+				default:
+					t.Fatalf("unexpected GitHub command: %v", cmd.Args)
+					return execx.Result{}, nil
+				}
+			})}
+			restarted := &Engine{
+				Store: e.Store, StatePath: e.StatePath, Enabled: e.Enabled, Allowed: e.Allowed,
+				Fetch: e.Fetch, Submit: e.Submit, Status: e.Status,
+				InspectPR: gh.Inspect, Merge: gh.Merge,
+			}
+			tick(t, restarted)
+			tick(t, restarted)
+			if (merges == 1) != tc.merge || merges > 1 {
+				t.Fatalf("merge attempts = %d", merges)
+			}
+		})
 	}
 }
