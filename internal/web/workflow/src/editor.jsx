@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import React, { createContext, useContext, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ReactFlow,
@@ -19,7 +19,6 @@ import {
   Zap,
   Rows3, Columns3,
   CalendarClock, FileJson, SquarePen, MessageSquare, GitPullRequest, CircleDot, Wrench,
-  Bot,
   GitBranch,
   FolderGit2,
   ListFilter,
@@ -45,11 +44,10 @@ import {
   automaticLayout, workflowSettings, incompleteWorkflow,
 } from "./model.js";
 const icons = {
-  calendar: CalendarClock, json: FileJson, prompt: SquarePen, chat: MessageSquare, pullRequest: GitPullRequest, issue: CircleDot, implement: Bot, repair: Wrench,
+  calendar: CalendarClock, json: FileJson, prompt: SquarePen, chat: MessageSquare, pullRequest: GitPullRequest, issue: CircleDot, repair: Wrench,
   repository: FolderGit2,
   trigger: Zap,
   filters: ListFilter,
-  task: Bot,
   review: MessageSquareCode,
   merge: GitBranch,
 };
@@ -61,9 +59,11 @@ const colors = {
   review: "#66b5eb",
   merge: "#de8fbd",
 };
+const AgentLogoContext = createContext("");
 function StepNode({ id, data, selected }) {
   const updateNodeInternals = useUpdateNodeInternals();
   useEffect(() => { updateNodeInternals(id); }, [id, data.sourcePosition, data.targetPosition, data.last, updateNodeInternals]);
+  const agentLogoURL = useContext(AgentLogoContext);
   const Icon = icons[data.icon] || icons[data.kind];
   return (
     <div
@@ -75,7 +75,7 @@ function StepNode({ id, data, selected }) {
       )}
       <div className="wf-node-top">
         <span className="wf-icon">
-          <Icon size={17} />
+          {Icon ? <Icon size={17} /> : <img src={agentLogoURL} width={17} height={17} alt="" draggable={false} />}
         </span>
         <span>{data.label}</span>
         <span className="wf-node-status">
@@ -1184,14 +1184,18 @@ function localDateInput(value) {
     .slice(0, 16);
 }
 let root;
-window.mountWorkflowEditor = () => {
-  if (root) return;
+let renderedAgentLogoURL;
+window.mountWorkflowEditor = (agentLogoURL) => {
+  if (root && renderedAgentLogoURL === agentLogoURL) return;
   const container = document.getElementById("workflow-editor-root");
   if (!container) return;
-  root = createRoot(container);
+  root ??= createRoot(container);
+  renderedAgentLogoURL = agentLogoURL;
   root.render(
-    <ReactFlowProvider>
-      <Editor />
-    </ReactFlowProvider>,
+    <AgentLogoContext.Provider value={agentLogoURL}>
+      <ReactFlowProvider>
+        <Editor />
+      </ReactFlowProvider>
+    </AgentLogoContext.Provider>,
   );
 };

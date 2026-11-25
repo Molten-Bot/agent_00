@@ -7,7 +7,7 @@ const baseURL=process.env.HARNESS_TEST_URL||'http://127.0.0.1:7777';
 let browser;
 before(async()=>{browser=await chromium.launch({headless:true,args:['--no-sandbox']})});
 after(async()=>{await browser?.close()});
-async function openEditor(t,viewport={width:1280,height:900},initialSettings={workflow_enabled:true},mockStorage=true){
+async function openEditor(t,viewport={width:1280,height:900},initialSettings={workflow_enabled:true},getAgentAuth=()=>({required:false,ready:true,state:'ready'}),mockStorage=true){
  let settings=initialSettings;
  const page=await browser.newPage({viewport});const errors=[];page.on('pageerror',e=>errors.push(e.message));t.after(async()=>{await page.close();assert.deepEqual(errors,[])});
  let doc={version:2,revision:0,workflows:[]};
@@ -20,7 +20,7 @@ async function openEditor(t,viewport={width:1280,height:900},initialSettings={wo
  if(url.pathname==='/api/workflows/schedules')return route.fulfill({json:[]});
  if(url.pathname==='/api/github/repos')return route.fulfill({json:{repos:[{full_name:'acme/repo'},{full_name:'acme/other'},{full_name:'person/project',owner_type:'User'}]}});
  if(url.pathname==='/api/status')return route.fulfill({json:{tasks:[],events:[],repositories:[],stats:{},resources:{}}});
- if(url.pathname==='/api/agent-auth')return route.fulfill({json:{ok:true,auth:{required:false,ready:true,state:'ready'}}});
+ if(url.pathname==='/api/agent-auth')return route.fulfill({json:{ok:true,auth:await getAgentAuth()}});
  if(url.pathname==='/api/review-settings'){if(route.request().method()==='POST')settings=route.request().postDataJSON();return route.fulfill({json:{ok:true,settings}})};
  if(url.pathname.startsWith('/api/'))return route.fulfill({json:{ok:true}});return route.continue()});
  await page.goto(baseURL+'/#workflow');await page.locator('#workflow-title').waitFor();return {page,getDocument:()=>doc,setDocument:value=>{doc=value},onSave:handler=>{beforeSave=handler}};
@@ -35,6 +35,28 @@ async function selectRepository(page, repository) {
  if (await button.getAttribute('aria-pressed') !== 'true') await button.click();
  await page.getByRole('group',{name:'Repositories',exact:true}).getByRole('button',{name:repository,exact:true}).click();
 }
+test('Agent task updates its SVG when the active harness changes',async t=>{
+ let finishAuth;
+ const auth=new Promise(resolve=>{finishAuth=resolve});
+ const ready={required:false,ready:true,state:'ready'};
+ const claude={...ready,harness:'claude'};
+ t.after(()=>finishAuth(claude));
+ let authRequests=0;
+ const {page}=await openEditor(t,undefined,undefined,()=>authRequests++===0 ? {...ready,harness:'codex'} : auth);
+ await selectRepository(page,'acme/repo');
+ await page.getByRole('button',{name:'Implement issues',exact:true}).click();
+ await page.getByLabel('Workflow name').fill('Keep this draft');
+ const logo=page.locator('[data-id="task"] .wf-icon img');
+ const expectLogo=async name=>{
+  const src=`/static/logos/${name}.svg`;
+  await logo.and(page.locator(`img[src="${src}"]`)).waitFor();
+  await logo.evaluate(img=>img.decode());
+ };
+ await expectLogo('codex-cli');
+ finishAuth(claude);
+ await expectLogo('claude-code');
+ assert.equal(await page.getByLabel('Workflow name').inputValue(),'Keep this draft');
+});
 test('multiple persistent workflows, disabled drafts, policy editing, activation and pause',async t=>{const {page,getDocument}=await openEditor(t);
  await selectRepository(page, 'acme/repo');await page.getByRole('button',{name:'Implement issues',exact:true}).click();await page.locator('.wf-node').first().waitFor();assert.equal(await page.locator('.wf-node').count(),4);
  await page.getByLabel('Workflow name').fill('Implement ready issues');await waitForDraft(page);assert.equal(getDocument().workflows[0].enabled,false);
@@ -56,7 +78,7 @@ test('multiple persistent workflows, disabled drafts, policy editing, activation
  const editor=await page.locator('.wf-editor').boundingBox(),dock=await page.locator('.page-bottom-dock').boundingBox();assert.ok(editor.y+editor.height<=dock.y);});
 
 test('navigation saves valid edits and leaves incomplete changes at the last saved revision', async t => {
- const {page}=await openEditor(t,undefined,undefined,false);
+ const {page}=await openEditor(t,undefined,undefined,undefined,false);
  const getDocument=async()=>(await page.request.get(baseURL+'/api/workflows')).json();
  const suffix=crypto.randomUUID().slice(0,8);
  const navigationName='Saved on navigation '+suffix;
