@@ -60,7 +60,9 @@ func TestIssueRepairOutboxRechecksTruncatedHumanHandoffFromLogs(t *testing.T) {
 	issue.Incident = "missing_pr"
 	issue.Outcome = "error"
 	issue.ExitCode = app.ExitCodex
-	issue.RunError = "codex: codex reported failure: Failure: Human action remains pending. Error details: An operator must confirm the shipment." + failurefollowup.TruncatedErrorDetails
+	issue.RunError = "codex: codex reported failure: Failure: Human action remains pending. " +
+		"Error details: An operator must confirm the shipment. | The delivery needs a replacement date. | " +
+		"Send confirmation to the requestor. " + failurefollowup.TruncatedErrorDetails
 	if err := claims.Save(issue); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +76,9 @@ func TestIssueRepairOutboxRechecksTruncatedHumanHandoffFromLogs(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	stdout := "Failure: Human action remains pending.\nError details: An operator must confirm the shipment."
+	stdout := "Failure: Human action remains pending.\nError details:\n" +
+		"An operator must confirm the shipment.\nThe delivery needs a replacement date.\n" +
+		"Send confirmation to the requestor.\nRecord the agreed time."
 	line := "task request_id=" + issue.RequestID + " cmd phase=codex name=codex stream=stdout b64=" + base64.StdEncoding.EncodeToString([]byte(stdout)) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, failurefollowup.LogFileName), []byte(line), 0o600); err != nil {
 		t.Fatal(err)
@@ -91,7 +95,7 @@ func TestIssueRepairOutboxRechecksTruncatedHumanHandoffFromLogs(t *testing.T) {
 		t.Fatalf("repair state = %q, error = %q", repairs[0].State, repairs[0].Error)
 	}
 	updated, err := claims.Load(issue.ID)
-	if err != nil || updated.Incident != localruntime.IssueIncidentHumanAction || updated.NextAttemptAt.IsZero() {
+	if err != nil || updated.Incident != localruntime.IssueIncidentHumanAction || !updated.NextAttemptAt.IsZero() {
 		t.Fatalf("source incident = %q, next attempt = %v, err = %v", updated.Incident, updated.NextAttemptAt, err)
 	}
 }
