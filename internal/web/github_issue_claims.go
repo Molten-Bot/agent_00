@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -371,6 +372,8 @@ func (s Server) blockIssueClaim(record localruntime.IssueClaimRecord, cause erro
 			current.UnlockPending = current.LabelAdded
 			if errors.Is(cause, localruntime.ErrIssueOwnershipChanged) {
 				blockStaleIssueClaim(current)
+			} else if errors.Is(cause, errWorkflowIssueRecovery) {
+				blockObservedWorkflowIssue(current)
 			} else if errors.Is(cause, app.ErrIssueBranchRecovery) {
 				blockIssueBranchRecovery(current, cause.Error())
 			} else if s.IssueRecovery != nil {
@@ -762,16 +765,13 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	if err != nil {
 		return issueRetryResult{}, 503, err
 	}
-	if !automatic && !settings.GitHubIssuesEnabled {
-		return issueRetryResult{}, 409, fmt.Errorf("GitHub Issues is disabled")
-	}
 	for _, disabled := range settings.DisabledRepositories {
 		if issueRepositoryMatchesRun(disabled, repository) {
 			return issueRetryResult{}, 409, fmt.Errorf("repository is disabled")
 		}
 	}
 	records, err := s.IssueClaims.List()
-	if err != nil && s.IssueRecovery == nil {
+	if err != nil && (!automatic || s.IssueRecovery == nil) {
 		return issueRetryResult{}, 503, err
 	}
 	if s.IssueRecovery != nil {
@@ -789,6 +789,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	}
 	var savedRun *config.Config
 	var previous localruntime.IssueClaimRecord
+	var observed localruntime.IssueClaimRecord
 	for _, record := range records {
 		issue := record.Run.GitHubIssue
 		if !strings.EqualFold(issue.Repository, repository) || issue.Number != number {
@@ -809,6 +810,32 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 			run := record.Run
 			savedRun = &run
 			previous = record
+		}
+		if isUnadmittedWorkflowIssue(record) && record.UpdatedAt.After(observed.UpdatedAt) {
+			observed = record
+		}
+	}
+	workflowRecovery := !automatic && savedRun == nil && remote.Claim.ID != "" && observed.ID != ""
+	ownedWorkflowRetry := !automatic && requestedRun == nil && previous.Version == 2 && previous.RequestID != "" &&
+		previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() &&
+		previous.ID == remote.Claim.ID && savedRun != nil && savedRun.Workflow != nil
+	if !automatic && !workflowRecovery && !ownedWorkflowRetry && !settings.GitHubIssuesEnabled {
+		return issueRetryResult{}, 409, fmt.Errorf("GitHub Issues is disabled")
+	}
+	if workflowRecovery {
+		if requestedRun != nil {
+			return issueRetryResult{}, http.StatusConflict, errIssueRecoveryRequired
+		}
+		savedRun = &observed.Run
+	}
+	if workflowRecovery || ownedWorkflowRetry {
+		var enabled bool
+		_, enabled, err = s.workflowIssueSettings(*savedRun)
+		if err != nil {
+			return issueRetryResult{}, http.StatusServiceUnavailable, err
+		}
+		if !enabled {
+			return issueRetryResult{}, http.StatusConflict, fmt.Errorf("recovery requires the originating workflow to be enabled with its original policy")
 		}
 	}
 	if automatic {
@@ -839,7 +866,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if err := pr.recoveryBlocker(claimedIssue); err != nil {
 			return issueRetryResult{}, http.StatusConflict, err
 		}
-		if pr.URL != "" && (automatic || branchRecovery) {
+		if pr.URL != "" && (automatic || branchRecovery || workflowRecovery || ownedWorkflowRetry) {
 			if !automatic && branchRecovery && previous.Version == 2 &&
 				previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() {
 				if err := s.verifyRecoveredIssuePR(ctx, previous, pr); err != nil {
@@ -868,10 +895,10 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	if err != nil {
 		return issueRetryResult{}, 502, err
 	}
-	if automatic && target.BlockedBy > 0 {
+	if (automatic || workflowRecovery || ownedWorkflowRetry) && target.BlockedBy > 0 {
 		return issueRetryResult{}, 409, fmt.Errorf("issue is blocked by %d open issue(s)", target.BlockedBy)
 	}
-	if (automatic || branchRecovery) && target.ClosingPRs > 0 {
+	if (automatic || branchRecovery || workflowRecovery || ownedWorkflowRetry) && target.ClosingPRs > 0 {
 		return issueRetryResult{}, 409, fmt.Errorf("%w: reconcile the issue's existing pull requests before using Recover / retry", app.ErrIssueBranchRecovery)
 	}
 	branch := fmt.Sprintf("agent00-issue-%d", number)
@@ -896,10 +923,10 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if err != nil {
 			return issueRetryResult{}, 502, err
 		}
-		if !exists && (automatic || branchRecovery || previous.WorkspaceDir != "") {
+		if !exists && (automatic || branchRecovery || workflowRecovery || previous.WorkspaceDir != "") {
 			return issueRetryResult{}, 409, missingReservedIssueRef(branch)
 		}
-		if (automatic || branchRecovery) && target.Linked > 0 && (!linked || target.Linked != 1) {
+		if (workflowRecovery || ((automatic || branchRecovery) && target.Linked > 0)) && (!linked || target.Linked != 1) {
 			return issueRetryResult{}, 409, fmt.Errorf("%w: reconcile the issue's linked branches with %q, then use Recover / retry",
 				app.ErrIssueBranchRecovery, branch)
 		}
@@ -950,6 +977,39 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	if err := githubassets.Validate(run.Assets); err != nil {
 		return issueRetryResult{}, 400, err
 	}
+	var recoverySHA string
+	if workflowRecovery {
+		configured := strings.TrimSpace(savedRun.BaseBranch)
+		if configured == "" {
+			configured = target.BaseBranch
+		}
+		if configured != base {
+			return issueRetryResult{}, http.StatusConflict, fmt.Errorf("reserved branch base does not match the workflow base")
+		}
+		var status int
+		recoverySHA, status, err = s.verifyObservedWorkflowBranch(ctx, repository, branch, base, target)
+		if err != nil {
+			return issueRetryResult{}, status, err
+		}
+	}
+	if workflowRecovery || ownedWorkflowRetry {
+		var retryOf string
+		if ownedWorkflowRetry {
+			// A stopped task can remain in the broker after its workflow run was
+			// pruned. Give its replacement a distinct, restart-stable event.
+			prior := *run.Workflow
+			retryOf = prior.EventID
+			if retryOf == "" {
+				return issueRetryResult{}, http.StatusConflict, fmt.Errorf("issue recovery requires a saved workflow event")
+			}
+			event := sha256.Sum256([]byte(retryOf + "/" + previous.ID))
+			prior.EventID = hex.EncodeToString(event[:16])
+			run.Workflow = &prior
+		}
+		if err := s.prepareWorkflowIssueRecovery(run, retryOf); err != nil {
+			return issueRetryResult{}, http.StatusConflict, err
+		}
+	}
 	record := localruntime.IssueClaimRecord{ID: claim.ID, InstanceID: s.instanceID(), Phase: "reserving", Run: run}
 	if s.IssueRecovery != nil {
 		if record.InstanceID == "" {
@@ -982,9 +1042,12 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if reserve {
 			ref = base
 		}
-		sha, err = s.issueBranchSHA(ctx, repository, ref)
-		if err != nil {
-			return issueRetryResult{}, 502, s.blockIssueClaim(record, err)
+		sha = recoverySHA
+		if sha == "" {
+			sha, err = s.issueBranchSHA(ctx, repository, ref)
+			if err != nil {
+				return issueRetryResult{}, 502, s.blockIssueClaim(record, err)
+			}
 		}
 		record.ReservationSHA = sha
 		if err := s.IssueClaims.Save(record); err != nil {
@@ -993,6 +1056,9 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		requestID, err := s.resumeIssueAdmission(ctx, record, submit)
 		if err != nil {
 			return issueRetryResult{}, 409, err
+		}
+		if workflowRecovery || ownedWorkflowRetry {
+			s.Workflows.RequestScan()
 		}
 		return issueRetryResult{RequestID: requestID}, http.StatusAccepted, nil
 	}
@@ -1015,6 +1081,38 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		return issueRetryResult{}, http.StatusConflict, err
 	}
 	return issueRetryResult{RequestID: requestID}, http.StatusAccepted, nil
+}
+
+// Compare immutable commit IDs so a moved branch cannot change the comparison.
+func (s Server) verifyObservedWorkflowBranch(ctx context.Context, repository, branch, base string, target issueClaimTarget) (string, int, error) {
+	head, err := s.issueBranchSHA(ctx, repository, branch)
+	if err != nil {
+		return "", http.StatusBadGateway, err
+	}
+	baseSHA := target.SHA
+	if base != target.BaseBranch {
+		baseSHA, err = s.issueBranchSHA(ctx, repository, base)
+		if err != nil {
+			return "", http.StatusBadGateway, err
+		}
+	}
+	if head == baseSHA {
+		return head, 0, nil
+	}
+	result, err := s.runIssueGH(ctx, execx.Command{Name: "gh", Args: []string{"api", "repos/" + repository + "/compare/" + baseSHA + "..." + head}})
+	if err != nil {
+		return "", http.StatusBadGateway, err
+	}
+	var comparison struct {
+		Ahead *int `json:"ahead_by"`
+	}
+	if err := json.Unmarshal([]byte(result.Stdout), &comparison); err != nil {
+		return "", http.StatusBadGateway, err
+	}
+	if comparison.Ahead == nil || *comparison.Ahead != 0 {
+		return "", http.StatusConflict, fmt.Errorf("inspect and reconcile commits on %q before recovering through the workflow", branch)
+	}
+	return head, 0, nil
 }
 
 func issueRepositoryMatchesRun(value, repository string) bool {

@@ -94,6 +94,11 @@ func (s Server) prepareObservedIssue(ctx context.Context, record localruntime.Is
 		return record, err
 	}
 	if reason := issueEligibilityReason(fresh, settings, login); reason != "" {
+		if record.Run.Workflow != nil && reason == "claimed elsewhere or excluded" {
+			if err := s.checkObservedIssueOwnership(ctx, record); err != nil {
+				return record, err
+			}
+		}
 		return record, fmt.Errorf("issue is ineligible: %s", reason)
 	}
 	target, err := s.issueClaimTarget(ctx, issue.Repository, issue.Number)
@@ -101,6 +106,11 @@ func (s Server) prepareObservedIssue(ctx context.Context, record localruntime.Is
 		return record, err
 	}
 	if target.Linked > 0 || target.ClosingPRs > 0 {
+		if record.Run.Workflow != nil {
+			if err := s.checkObservedIssueOwnership(ctx, record); err != nil {
+				return record, err
+			}
+		}
 		return record, fmt.Errorf("issue has an associated branch or closing PR; ownership requires inspection")
 	}
 	if target.BlockedBy > 0 {
@@ -130,6 +140,35 @@ func (s Server) prepareObservedIssue(ctx context.Context, record localruntime.Is
 	return record, s.IssueClaims.Save(record)
 }
 
+func (s Server) checkObservedIssueOwnership(ctx context.Context, record localruntime.IssueClaimRecord) error {
+	issue := record.Run.GitHubIssue
+	remote, err := s.latestIssueAttempt(ctx, issue.Repository, issue.Number)
+	if err == nil && remote.Claim.ID != "" && remote.Claim.ID != record.ID {
+		return errWorkflowIssueRecovery
+	}
+	return err
+}
+
+const workflowIssueRecoveryIncident = "workflow_issue_recovery"
+
+var errWorkflowIssueRecovery = errors.New("issue is reserved by a previous attempt; stop its worker on every instance, then use Recover / retry to resume through the workflow")
+
+// An observation has captured workflow settings but has never owned a worker or ref.
+func isUnadmittedWorkflowIssue(record localruntime.IssueClaimRecord) bool {
+	return record.Version == 2 && record.Run.Workflow != nil && record.Run.GitHubIssue.Claim.Attempt == 1 && !record.RemoteRecorded &&
+		!record.BranchReserved && record.RequestID == "" && record.WorkspaceDir == "" &&
+		record.StartedAt.IsZero() && record.Outcome == "" &&
+		(record.Phase == "observed" || record.Phase == "blocked")
+}
+
+func blockObservedWorkflowIssue(record *localruntime.IssueClaimRecord) {
+	record.Phase = "blocked"
+	record.State = "blocked"
+	record.Incident = workflowIssueRecoveryIncident
+	record.Error = errWorkflowIssueRecovery.Error()
+	record.NextAttemptAt = time.Time{}
+}
+
 // Resume only effects whose unique remote identity matches this durable intent.
 // Ownership tags precede linked-branch creation in protocol version two.
 func (s Server) resumeIssueAdmission(ctx context.Context, record localruntime.IssueClaimRecord, submit func(context.Context, []byte) (string, error)) (string, error) {
@@ -143,6 +182,9 @@ func (s Server) resumeIssueAdmission(ctx context.Context, record localruntime.Is
 	}
 	if remote.Claim.ID != record.ID {
 		if remote.Claim.Attempt >= issue.Claim.Attempt {
+			if record.Run.Workflow != nil && !record.RemoteRecorded && issue.Claim.Attempt == 1 {
+				return "", s.blockIssueClaim(record, errWorkflowIssueRecovery)
+			}
 			return "", s.blockIssueClaim(record, fmt.Errorf("claim belongs to another attempt; explicit recovery required"))
 		}
 		if err := s.publishIssueAttempt(ctx, issue, record.ReservationSHA, record.InstanceID); err != nil {
@@ -227,6 +269,9 @@ func (s Server) ReconcileIssueWork(ctx context.Context) error {
 }
 
 func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.IssueClaimRecord) error {
+	if record.Incident == workflowIssueRecoveryIncident {
+		return nil
+	}
 	if record.State == "fulfilled" && !record.UnlockPending {
 		s.publishVerifiedIssuePR(record)
 		return nil
@@ -366,6 +411,10 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	}
 	resumingNewIntent := record.Outcome == "" && !record.RemoteRecorded && remote.Claim.Attempt < issue.Claim.Attempt
 	if remote.Claim.ID != "" && !resumingNewIntent && (remote.Claim.ID != record.ID || remote.InstanceID != record.InstanceID) {
+		if isUnadmittedWorkflowIssue(record) {
+			blockObservedWorkflowIssue(&record)
+			return s.IssueClaims.Save(record)
+		}
 		record.State = "blocked"
 		record.Error = "ownership changed; explicit recovery required"
 		return s.IssueClaims.Save(record)
@@ -663,6 +712,10 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 		}
 		if errors.Is(cause, localruntime.ErrIssueOwnershipChanged) {
 			blockStaleIssueClaim(current)
+			return nil
+		}
+		if errors.Is(cause, errWorkflowIssueRecovery) {
+			blockObservedWorkflowIssue(current)
 			return nil
 		}
 		if current.Incident == localruntime.IssueIncidentWorkspaceStorage {

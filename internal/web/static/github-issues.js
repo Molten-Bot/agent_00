@@ -562,7 +562,7 @@
     issueList.appendChild(item);
   }
 
-  function renderIssueDetail(issue) {
+  function renderIssueDetail(issue, recoveryReason) {
     selectedIssue = issue;
     detail.replaceChildren();
     const repo = selectedRepository();
@@ -632,8 +632,8 @@
     const task = document.createElement("section");
     task.className = "github-issue-task";
     const taskHeading = addText(task, "div", "github-issue-task-heading", "");
-    addText(taskHeading, "strong", "", "Start a task from this issue");
-    addText(taskHeading, "span", "github-issue-link-mode-note", taskLinkModeDescription(issue));
+    addText(taskHeading, "strong", "", recoveryReason ? "Workflow recovery required" : "Start a task from this issue");
+    if (!recoveryReason) addText(taskHeading, "span", "github-issue-link-mode-note", taskLinkModeDescription(issue));
     const actions = document.createElement("div");
     actions.className = "prompt-actions github-issue-task-actions";
     const taskStatus = addText(actions, "p", "submit-status submit-status-inline is-visible github-issue-task-status", "");
@@ -651,6 +651,11 @@
     task.appendChild(actions);
     detailBody.appendChild(task);
     detail.appendChild(detailBody);
+    if (recoveryReason) {
+      taskStatus.textContent = recoveryReason;
+      start.hidden = true;
+      showRecoveryAction(issue, repo);
+    }
   }
 
   function renderEmptyDetail(title, description) {
@@ -782,7 +787,7 @@
       const body = await requestJSON(`/api/github/issues/${encodeURIComponent(number)}?${query}`, { cache: "no-store" });
       if (generation !== requestGeneration) return;
       loadingIssueNumber = null;
-      renderIssueDetail(body.issue);
+      renderIssueDetail(body.issue, body.recoveryReason);
       renderIssueList(currentIssues);
       setStatus("");
     } catch (error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -66,7 +67,7 @@ func recoveryServer(t *testing.T) (Server, *recoveryGitHub) {
 	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{w}}); err != nil {
 		t.Fatal(err)
 	}
-	s.Workflows = &workflow.Engine{Store: store, Enabled: func() bool { return true }, Allowed: func(string) bool { return true }}
+	s.Workflows = &workflow.Engine{Store: store, StatePath: filepath.Join(t.TempDir(), "state.json"), Enabled: func() bool { return true }, Allowed: func(string) bool { return true }}
 	return s, f
 }
 func latestRecoveryRecord(t *testing.T, s Server) localruntime.IssueClaimRecord {
@@ -123,6 +124,16 @@ func TestExplicitIssueRecoveryUsesPersistentOwner(t *testing.T) {
 	for _, action := range []string{"start", "recover"} {
 		t.Run(action, func(t *testing.T) {
 			s, f := recoveryServer(t)
+			doc, err := s.Workflows.Store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := &doc.Workflows[0]
+			w.Merge.Enabled = true
+			w.ReviewCycles = 2
+			if _, err := s.Workflows.Store.Save(doc); err != nil {
+				t.Fatal(err)
+			}
 			reconcileOrAdmitTestIssue(context.Background(), s)
 			previous := completeRecoveryRecord(t, s, "stopped", 3)
 			previous.PriorRunFailures = 2
@@ -170,6 +181,56 @@ func TestExplicitIssueRecoveryUsesPersistentOwner(t *testing.T) {
 			latest := latestRecoveryRecord(t, s)
 			if len(f.submissions) != 2 || latest.ID == previous.ID || latest.Run.GitHubIssue.Claim.Attempt != previous.Run.GitHubIssue.Claim.Attempt+1 {
 				t.Fatal("explicit recovery did not submit a fresh attempt")
+			}
+			if action == "recover" {
+				engine := s.Workflows
+				event := latest.Run.Workflow.EventID
+				prior := previous.Run.Workflow
+				runs, err := engine.Runs()
+				if err != nil || len(runs) != 1 || event == prior.EventID || runs[0].ID != event ||
+					runs[0].RetryOf != prior.EventID || runs[0].Workflow.ExecutionPolicyHash() != prior.PolicyHash {
+					t.Fatalf("recovered task lost its workflow run: %+v, %v", runs, err)
+				}
+				if err := engine.Complete(prior.EventID, workflow.Outcome{Status: "failed"}); !errors.Is(err, workflow.ErrActivationNotFound) {
+					t.Fatalf("stale completion reached retry: %v", err)
+				}
+				engine.Reconcile = func(id string) string {
+					for i, submission := range f.submissions {
+						if submission.Workflow.EventID == id {
+							return fmt.Sprintf("request-%d", i+1)
+						}
+					}
+					return ""
+				}
+				engine.Fetch = func(context.Context, string, workflow.ScanNeeds) ([]workflow.Item, error) { return nil, nil }
+				engine.Status = func(id string) workflow.Outcome {
+					if id != latest.RequestID {
+						t.Fatalf("journal queried old request %s", id)
+					}
+					return workflow.Outcome{Status: "running"}
+				}
+				if err := engine.Tick(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				runs, err = engine.Runs()
+				if err != nil || len(runs) != 1 || runs[0].RequestID != latest.RequestID || runs[0].Status != "running" {
+					t.Fatalf("retry did not attach to the current task: %+v, %v", runs, err)
+				}
+				const prURL = "https://github.com/acme/repo/pull/42"
+				if err := engine.Complete(event, workflow.Outcome{Status: "succeeded", PRURL: prURL, ReviewReceipt: recoveredWorkflowReview(*w, prURL)}); err != nil {
+					t.Fatal(err)
+				}
+				engine.InspectPR = func(context.Context, string, string) (workflow.Item, error) {
+					return workflow.Item{Open: true, ChecksPassed: true, HeadSHA: "reviewed-head"}, nil
+				}
+				merged := false
+				engine.Merge = func(_ context.Context, r workflow.Run) error {
+					merged = r.RequestID == latest.RequestID && r.ID == event && r.MergeHead == "reviewed-head" && r.Workflow.Merge.Method == "squash"
+					return nil
+				}
+				if err := engine.Tick(t.Context()); err != nil || !merged {
+					t.Fatalf("successful replacement did not reach merge controller: merged=%t, %v", merged, err)
+				}
 			}
 			if latest.Run.GitHubIssue.Claim.Branch != previous.Run.GitHubIssue.Claim.Branch || latest.AgentAttempts != 0 || issueRunFailures(latest) != 0 || latest.Outcome != "" {
 				t.Fatal("explicit recovery lost the branch or retained the previous retry limit")

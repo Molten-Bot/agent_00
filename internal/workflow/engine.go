@@ -789,6 +789,43 @@ func terminal(status string) bool {
 	return contains([]string{"failed", "succeeded", "merged", "completed"}, status)
 }
 
+// PrepareIssueRecovery retains the original event and merge policy before an
+// explicit recovery can enqueue a worker. Older journals dropped the run when
+// admission failed, even though the issue store retained the event and policy.
+func (e *Engine) PrepareIssueRecovery(workflowID, policy, eventID, retryOf string, item Item) error {
+	if eventID == "" || policy == "" {
+		return fmt.Errorf("issue recovery requires a saved workflow event and policy")
+	}
+	doc, err := e.Store.Load()
+	if err != nil {
+		return err
+	}
+	for _, w := range doc.Workflows {
+		if w.ID != workflowID || !strings.HasPrefix(w.Trigger.Event, "issue.") ||
+			w.ExecutionPolicyHash() != policy || CanonicalRepository(w.Repository) != CanonicalRepository(item.Repository) ||
+			!e.StillEnabled(w) {
+			continue
+		}
+		return e.transaction(func(s *State) error {
+			if existing := s.run(eventID); existing != nil {
+				if existing.RetryOf != retryOf || existing.Status != "pending_issue" || existing.RequestID != "" || existing.Outcome != nil ||
+					existing.Workflow.ID != workflowID || existing.Workflow.ExecutionPolicyHash() != policy ||
+					CanonicalRepository(existing.Item.Repository) != CanonicalRepository(item.Repository) || existing.Item.Number != item.Number {
+					return fmt.Errorf("workflow event already has an active or incompatible run")
+				}
+				return errJournalUnchanged
+			}
+			if s.busy(item) {
+				return fmt.Errorf("issue already has an active workflow run")
+			}
+			now := e.now()
+			s.Runs = append(s.Runs, Run{ID: eventID, RetryOf: retryOf, Workflow: w, Item: item, Status: "pending_issue", Reason: "Waiting for issue claim recovery", StartedAt: &now, UpdatedAt: now})
+			return nil
+		})
+	}
+	return fmt.Errorf("recovery requires the originating workflow to be enabled with its original policy")
+}
+
 // Complete durably records the task's semantic outcome independently of UI logs.
 func (e *Engine) Complete(id string, outcome Outcome) error {
 	return e.transaction(func(s *State) error {
