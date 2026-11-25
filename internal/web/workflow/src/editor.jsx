@@ -1042,7 +1042,11 @@ function Editor() {
                 <>
                   <h2>Agent task</h2>
                   <Field label="Task complexity">
-                    <select value={current.task.complexity || ""} onChange={(e) => updateTask("complexity", e.target.value || undefined)}>
+                    <select
+                      aria-label="Task complexity"
+                      value={current.task.complexity || ""}
+                      onChange={(e) => updateTask("complexity", e.target.value || undefined)}
+                    >
                       <option value="">Use settings default</option>
                       <option value="easy">Easy</option>
                       <option value="standard">Standard</option>
