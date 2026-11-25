@@ -35,7 +35,10 @@ export function RepositoryPicker({ repositories, value, onChange, autoSelect, lo
 
   return <div className="wf-repository-picker">
     {loading && <p role="status" className="wf-muted">Loading repositories…</p>}
-    {error && <div role="alert"><p className="wf-muted">{error}</p><button type="button" onClick={onRetry}>Retry repositories</button></div>}
+    {error && <div role="alert">
+      <p className="wf-muted">{error}{owners.length > 0 && " Showing last known repositories. The list may be stale."}</p>
+      <button type="button" disabled={loading} onClick={onRetry}>Retry repositories</button>
+    </div>}
     {!loading && !error && !owners.length && <p className="wf-muted">No repositories available. Check repository access in Settings.</p>}
     {!!owners.length && <>
       <div className="repository-settings-list wf-picker-list" role="group" aria-label="Organizations &amp; people">
