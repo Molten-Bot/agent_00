@@ -83,6 +83,7 @@ const (
 	IssueIncidentUnmergedDependency = "unmerged_dependency"
 	IssueIncidentOpenDependency     = "open_dependency"
 	IssueIncidentExternalRollout    = "external_rollout_prerequisites"
+	IssueIncidentHumanAction        = "human_action_required"
 	IssueIncidentExternalEvidence   = "external_evidence_prerequisites"
 )
 

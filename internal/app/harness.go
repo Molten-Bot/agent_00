@@ -6991,12 +6991,19 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 	full = detail + "\n" + errorDetail
 	if strings.HasSuffix(display, truncatedErrorDetails) {
 		// Keep a concise blocker statement when the full report confirms
-		// the same classification and contains no evidence of a code failure.
+		// the same classification and has no evidence of a code failure.
 		if details, ok := strings.CutPrefix(errorDetail, "Error details:"); ok {
 			first, _, _ := strings.Cut(strings.TrimSpace(details), "\n")
 			if len(first) <= maxErrorDetailChars {
-				if reason := failurefollowup.ExternalPrerequisiteFailureReason(detail, first); reason != "" &&
-					failurefollowup.ExternalPrerequisiteFailureReason(detail, details) == reason {
+				firstReason := failurefollowup.ExternalPrerequisiteFailureReason(detail, first)
+				fullReason := failurefollowup.ExternalPrerequisiteFailureReason(detail, details)
+				if firstReason == "" && failurefollowup.IsHumanActionFailure(detail, first) {
+					firstReason = failurefollowup.HumanActionRequiredReason
+				}
+				if fullReason == "" && failurefollowup.IsHumanActionFailure(detail, details) {
+					fullReason = failurefollowup.HumanActionRequiredReason
+				}
+				if firstReason != "" && firstReason == fullReason {
 					display = "Error details: " + first
 				}
 			}
@@ -7598,7 +7605,19 @@ func ExternalPrerequisiteFailureFromStdout(failure string, readStdout func(stage
 	if legacy != failure && failurefollowup.RedactFailureDetail(legacy) != failure {
 		return "", false
 	}
-	return failurefollowup.ExternalPrerequisiteFailureReason(summary, details), true
+	reason = failurefollowup.ExternalPrerequisiteFailureReason(summary, details)
+	if reason == "" && failurefollowup.IsHumanActionFailure(summary, details) {
+		reason = failurefollowup.HumanActionRequiredReason
+	}
+	return reason, true
+}
+
+// CheckHumanActionFailureFromStdout reclassifies a truncated handoff report
+// only when its preserved stdout matches the stored summary and contains the
+// complete human-action-only evidence.
+func CheckHumanActionFailureFromStdout(failure string, readStdout func(stage string) string) (blocked, matched bool) {
+	reason, matched := ExternalPrerequisiteFailureFromStdout(failure, readStdout)
+	return reason == failurefollowup.HumanActionRequiredReason, matched
 }
 
 func codexDisplayErrorDetail(detail string) string {

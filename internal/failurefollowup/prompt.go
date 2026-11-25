@@ -25,6 +25,7 @@ const RedactedTaskPromptNotice = "Task prompt: redacted by the harness. Follow-u
 const FollowUpRepositoryURL = config.DefaultRepositoryURL
 
 const FailureResponseInstruction = "When the current run ends with an unresolved failure, start the final response with explicit `Failure:` and `Error details:` fields on consecutive lines, in that order. Describe earlier failures fixed during the run under `Resolved issue:` after any blocker fields."
+const humanActionFailureInstruction = "If human action is the only remaining blocker, use `Failure: Human action remains pending.` followed by `Error details:` naming the required action. Use the regular failure summary when repository changes or failed checks still need attention."
 const rolloutFailureEvidenceInstruction = "If external provisioning blocks a production rollout, use `Failure: Production rollout remains pending.` as the summary. On the next line, name the verified prerequisites in the first sentence of `Error details:` and explicitly state that they require external provisioning. For example:\n\nFailure: Production rollout remains pending.\nError details: IAM setup and Secrets Manager configuration require external provisioning.\n\nInclude any pending repository work or failed checks in the same error details. Omit credential values."
 const RuntimeToolingInstruction = "Runtime tooling available to agents includes Playwright for local browser testing, screenshots, and comparisons; npm for JavaScript package installs, scripts, tests, and builds; Python with pip and virtualenv; and Go tooling such as `go test` and `go build`. Use the matching local tooling when it fits the repository."
 const ValidationToolingInstruction = "If local test or validation tooling is unavailable in this runtime (for example `command not found`, missing `node_modules`, a missing repository validation script or task, or restricted network access blocking dependency downloads), do not fail solely for that and do not use `Failure:` solely for that validation gap. Continue with repository changes, run any alternative checks you can, and clearly report the validation gap."
@@ -36,6 +37,7 @@ const NoOpInstruction = "Only return a no-op when the task is genuinely review/i
 
 var ExecutionContract = strings.Join([]string{
 	FailureResponseInstruction,
+	humanActionFailureInstruction,
 	rolloutFailureEvidenceInstruction,
 	RuntimeToolingInstruction,
 	ValidationToolingInstruction,
@@ -104,6 +106,16 @@ const ExternalEvidencePrerequisitesReason = "task requires approved evidence and
 // OpenDependencyReason identifies an agent-reported open prerequisite.
 const OpenDependencyReason = "required dependency is still open"
 
+// HumanActionRequiredReason identifies work that must be completed by a person.
+const HumanActionRequiredReason = "required human action is pending"
+
+var agentFailureReportPrefix = regexp.MustCompile(`^(?:(?:codex: )?codex|(?:claude: )?claude) reported failure:`)
+var agentSubprocessFailurePrefix = regexp.MustCompile(`^(?:codex|claude): (?:run|command)\b`)
+var blockedReviewReportPrefix = regexp.MustCompile(`^(?:review: )?post-task review pass [0-9]+ was blocked:`)
+var pendingHandoffSummary = regexp.MustCompile(`^failure: (?:[^.!?"\x60]+ )?(?:call|meeting) and email follow-up remain pending\.?$`)
+var humanOutreachPrerequisite = regexp.MustCompile(`^(?:[^.!?"\x60|]+ )?(?:call|meeting) (?:needs|requires) (?:[^.!?"\x60|]+ and )?human outreach(?:[.\n]| \| |$)`)
+var handoffValidationFailure = regexp.MustCompile(`\b(?:tests?|checks?|validation) (?:still )?(?:fail(?:s|ed|ing)?|did not pass)\b`)
+
 // Match a blocker in the agent's failure summary. Error details can quote the
 // same wording while describing a different, actionable failure. An apostrophe
 // between word characters can be part of a contraction rather than a quote.
@@ -123,20 +135,33 @@ var secretProvisioning = regexp.MustCompile(`^` + secretPrerequisite + ` (?:(?:k
 var iamConfiguration = regexp.MustCompile(`^` + iamPrerequisite + `(?: (?:configuration|permissions?|polic(?:y|ies)|roles?|setup))?$`)
 var secretConfiguration = regexp.MustCompile(`^(?:` + secretPrerequisite + ` (?:configuration|keys?|secrets?|setup)|(?:production )?shared reference keys?)$`)
 var infrastructureResource = regexp.MustCompile(`^(?:production )?(?:infrastructure changes|(?:cloud |service )?accounts?|cloud resources?|(?:kubernetes |eks |ecs |gke |aks )?clusters?|credentials?|(?:tls |ssl )?certificates?|(?:database|network) (?:access|credentials)|databases?|dns(?: (?:delegation|records?|zones?))?|firewall rules?|kms keys?|(?:private )?networks?|subnets?|vpcs?|vpc endpoints?)$`)
+var managedServicePrerequisite = regexp.MustCompile(`^(?:production )?(?:ecs|cloudwatch|(?:authorized )?vault access)$`)
 var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* (?:flags?|evidence switches?) defaults?(?: to)? (?:off|disabled))$`)
 var unavailableContainerValidation = regexp.MustCompile(`^docker-backed (?:[a-z0-9_-]+ )*integration(?: tests?)? could not run because no container runtime was available$`)
+var unverifiedProductionChecks = regexp.MustCompile(`^production (?:(?:api|database|data|endpoint|provider|service|statement|task|worker) ){0,3}(?:connectivity|reachability)(?:, root cause)?(?:,? and authenticated (?:[a-z0-9-]+ ){0,2}(?:reads?|retrieval))? (?:remains?|is|are) unverified$`)
 var rolloutProgress = regexp.MustCompile(`^(?:added|implemented|updated|wired) \S`)
 var rolloutProgressFollowOn = regexp.MustCompile(`^(?:added|implemented|updated|wired|tests cover) \S`)
-var rolloutSentenceBoundary = regexp.MustCompile(`[.!?][ \t]+`)
+
+const rolloutSentenceBreak = `[.!?…]+[ \t\p{Zs}]+|[.!?…]*\r`
+
+var rolloutSentenceBoundary = regexp.MustCompile(rolloutSentenceBreak)
+var unspacedRolloutStatusBoundary = regexp.MustCompile(`([.!?…]+)((?:[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* (?:flags?|evidence switches?) defaults?(?: to)? (?:off|disabled)|feature disabled))`)
+
+// Status statements can use unspaced ellipses. Progress and validation lines
+// can contain commands such as `go test ./...`, so use spaced breaks there.
+var rolloutStatementBoundary = regexp.MustCompile(rolloutSentenceBreak + `|\.{3,}|…+`)
 var rolloutValidationPassed = regexp.MustCompile(`^validation passed for [^;\s][^;]*$`)
 var rolloutSectionCheckPassed = regexp.MustCompile(`^[^;\s][^;]*[ :]passed[.!]?$`)
 var rolloutSectionCheckBlocker = regexp.MustCompile(`^no\b|\b(?:0|zero) passed\b|\b(?:never|crash(?:ed|es|ing)?|couldn't|didn't)\b`)
 
 const timeoutOutcome = `timed out|deadline exceeded`
+const rolloutHTTPStatus = `http(?:/\d(?:\.\d)?)? `
+const unauthenticatedRolloutProbe = `unauthenticated (?:mcp )?initialization returned ` + rolloutHTTPStatus + `401`
 
 var rolloutProgressBlocker = regexp.MustCompile(`\b(?:but|except|however|fail(?:ed|s|ure|ing)?|panics?|regressions?|blocked|broken|cannot|could not|unable|incomplete|pending|unavailable|missing|not|` + timeoutOutcome + `)\b`)
-var httpFailureStatus = regexp.MustCompile(`\bhttp(?:/\d(?:\.\d)?)? (?:[45]\d\d|000)\b`)
-var expectedUnauthorizedResult = regexp.MustCompile(`\b(?:(?:returned|received|got) |passed (?:with |\())expected http(?:/\d(?:\.\d)?)? 401\b|\bhttp(?:/\d(?:\.\d)?)? 401 (?:as expected\b|\(expected\))`)
+var httpFailureStatus = regexp.MustCompile(`\b` + rolloutHTTPStatus + `(?:[45]\d\d|000)\b`)
+var publicRolloutProbe = regexp.MustCompile(`^(?:public (?:mcp )?health(?: check)? returned ` + rolloutHTTPStatus + `200(?: over tls)?(?:,? and ` + unauthenticatedRolloutProbe + `)?|` + unauthenticatedRolloutProbe + `)$`)
+var expectedUnauthorizedResult = regexp.MustCompile(`\b(?:(?:returned|received|got) |passed (?:with |\())expected ` + rolloutHTTPStatus + `401\b|\b` + rolloutHTTPStatus + `401 (?:as expected\b|\(expected\))`)
 var validationTimeout = regexp.MustCompile(`\b(?:timeout|` + timeoutOutcome + `)\b`)
 var rolloutFailureOutcome = regexp.MustCompile(
 	`\b(?:(?:produced|returned) no response|exit(?:ed)?(?: with)? (?:status|code) [1-9][0-9]*|crash(?:ed|es|ing)? (?:on|during|at) startup|(?:probe|check|command|test) returned [1-9][0-9]*)\b|\bcurl: \([1-9][0-9]*\)|\b(?:connection refused|could not connect|failed to connect)\b`,
@@ -324,6 +349,16 @@ func RedactFailureDetail(detail string) string {
 	detail = repoReferencePattern.ReplaceAllString(detail, RedactedURLPlaceholder)
 	detail = branchSlugPattern.ReplaceAllString(detail, RedactedBranchPlaceholder)
 	return strings.TrimSpace(detail)
+}
+
+// FailureDetailForPrompt keeps arbitrary agent-authored prose in the source
+// run's logs. Identifier patterns cannot reliably redact names or draft text.
+func FailureDetailForPrompt(detail string) string {
+	text := strings.ToLower(strings.TrimSpace(detail))
+	if agentFailureReportPrefix.MatchString(text) || agentSubprocessFailurePrefix.MatchString(text) || blockedReviewReportPrefix.MatchString(text) {
+		return "[agent failure report withheld; see source run logs]"
+	}
+	return RedactFailureDetail(detail)
 }
 
 func ComposePrompt(requiredPrompt string, logPaths, fallbackLogPaths []string, noPathGuidance, contextBlock string) string {
@@ -539,13 +574,15 @@ func NonRemediableFailureReason(err error) string {
 		!strings.Contains(summary, "no longer blocked") && !strings.Contains(summary, "not blocked") {
 		return UnmergedDependencyReason
 	}
-	agentSummary, reportedFailure := strings.CutPrefix(summary, "codex: codex reported failure:")
-	if !reportedFailure {
-		agentSummary, reportedFailure = strings.CutPrefix(summary, "claude: claude reported failure:")
-	}
+	prefix := agentFailureReportPrefix.FindStringIndex(summary)
+	reportedFailure := prefix != nil
 	if reportedFailure {
+		agentSummary := strings.TrimSpace(summary[prefix[1]:])
 		if reason := ExternalPrerequisiteFailureReason(agentSummary, details); reason != "" {
 			return reason
+		}
+		if IsHumanActionFailure(agentSummary, details) {
+			return HumanActionRequiredReason
 		}
 	}
 	if isOpenDependencyFailure(summary, details) {
@@ -567,6 +604,26 @@ func NonRemediableFailureReason(err error) string {
 		return marker
 	}
 	return NonRemediableRepoAccessReason(err)
+}
+
+// IsHumanActionFailure identifies reports where human action is the only blocker.
+// Truncated details can omit failed checks, so classification requires the full report.
+func IsHumanActionFailure(summary, details string) bool {
+	summary = strings.ToLower(strings.TrimSpace(summary))
+	details = strings.ToLower(strings.TrimSpace(details))
+	if details == "" || HasTruncatedErrorDetails(details) || handoffValidationFailure.MatchString(details) ||
+		HasValidationFailureEvidence(strings.ReplaceAll(details, " | ", "\n")) || HasValidationTimeout(details) ||
+		HasRolloutFailureOutcome(details) || HasHTTPFailureStatus(details) {
+		return false
+	}
+	if strings.Trim(details, " .\t\r\n") == "unknown error" {
+		return false
+	}
+	if strings.TrimSuffix(summary, ".") == "failure: human action remains pending" {
+		return true
+	}
+	// Older reports state the outreach prerequisite in the first sentence.
+	return pendingHandoffSummary.MatchString(summary) && humanOutreachPrerequisite.MatchString(details)
 }
 
 // ExternalPrerequisiteFailureReason classifies complete agent reports blocked
@@ -593,7 +650,10 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	if !pendingProductionRolloutSummary.MatchString(strings.ToLower(strings.TrimSpace(summary))) {
 		return false
 	}
+	// Some flattened reports omit the space after a period before a status
+	// statement such as "API flags default to off".
 	details = strings.ToLower(strings.TrimSpace(details))
+	details = unspacedRolloutStatusBoundary.ReplaceAllString(details, "$1\n$2")
 	lines := strings.Split(strings.ReplaceAll(details, " | ", "\n"), "\n")
 	statements := rolloutStatements(lines[0])
 	if len(statements) == 0 || HasValidationFailureEvidence(details) || HasRolloutFailureOutcome(details) {
@@ -611,8 +671,15 @@ func IsExternalRolloutFailure(summary, details string) bool {
 		for _, statement := range statements {
 			statement = strings.TrimSpace(statement)
 			items := externalRolloutPrerequisites(statement)
-			if len(items) == 0 && statement != "" && !disabledRolloutStatus.MatchString(statement) && !unavailableContainerValidation.MatchString(statement) {
-				return false
+			if len(items) == 0 {
+				switch {
+				case statement == "", disabledRolloutStatus.MatchString(statement), unavailableContainerValidation.MatchString(statement),
+					publicRolloutProbe.MatchString(statement),
+					unverifiedProductionChecks.MatchString(statement) && !rolloutProgressBlocker.MatchString(statement):
+					continue
+				default:
+					return false
+				}
 			}
 			for _, item := range items {
 				infrastructureConfirmed = infrastructureConfirmed || strings.TrimPrefix(item, "production ") == "infrastructure changes"
@@ -673,7 +740,8 @@ func externalRolloutPrerequisites(statement string) []string {
 		switch {
 		case iamProvisioning.MatchString(item), secretProvisioning.MatchString(item):
 			prerequisites = append(prerequisites, item)
-		case explicitExternal && (iamConfiguration.MatchString(item) || secretConfiguration.MatchString(item) || infrastructureResource.MatchString(item)):
+		case explicitExternal && (iamConfiguration.MatchString(item) || secretConfiguration.MatchString(item) ||
+			infrastructureResource.MatchString(item) || managedServicePrerequisite.MatchString(item)):
 			prerequisites = append(prerequisites, item)
 		case item == "deployment", item == "deployed source verification", item == "live source verification", item == "live verification":
 		default:
@@ -733,9 +801,7 @@ func isRolloutProgressLine(line string) bool {
 }
 
 func rolloutStatements(line string) []string {
-	return strings.FieldsFunc(line, func(r rune) bool {
-		return r == '.' || r == '!' || r == '?' || r == '\r'
-	})
+	return rolloutStatementBoundary.Split(strings.TrimRight(line, ".!?… \t\r"), -1)
 }
 
 func isOpenDependencyFailure(summary, detail string) bool {
