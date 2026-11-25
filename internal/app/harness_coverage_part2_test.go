@@ -123,35 +123,6 @@ func TestReviewSummaryBodyPathBranches(t *testing.T) {
 	}
 }
 
-func TestPrMergeAutoCommandMergeMethods(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct {
-		method string
-		want   string
-	}{
-		{method: "merge", want: "--merge"},
-		{method: "rebase", want: "--rebase"},
-		{method: "squash", want: "--squash"},
-		{method: "unknown", want: "--squash"},
-		{method: "", want: "--squash"},
-	} {
-		cmd := prMergeAutoCommand("/repo", "42", "acme/repo", tc.method, "abc123")
-		if !slicesContains(cmd.Args, tc.want) {
-			t.Fatalf("prMergeAutoCommand(method=%q).Args = %v, want %q", tc.method, cmd.Args, tc.want)
-		}
-	}
-
-	withRepo := prMergeAutoCommand("/repo", "42", "acme/repo", "merge", "abc123")
-	if !slicesContains(withRepo.Args, "--repo") {
-		t.Fatalf("prMergeAutoCommand(targetRepo) args = %v, want --repo", withRepo.Args)
-	}
-	withoutRepo := prMergeAutoCommand("/repo", "42", "", "merge", "abc123")
-	if slicesContains(withoutRepo.Args, "--repo") {
-		t.Fatalf("prMergeAutoCommand(no targetRepo) args = %v, want no --repo", withoutRepo.Args)
-	}
-}
-
 func TestBaseSyncConflictPromptEmptyMergeSummary(t *testing.T) {
 	t.Parallel()
 

@@ -105,6 +105,8 @@ type Task struct {
 	PRTitleUpdatedAt  string                 `json:"pr_title_updated_at,omitempty"`
 	LiveAppURL        string                 `json:"live_app_url,omitempty"`
 	Error             string                 `json:"error,omitempty"`
+	ReviewURL         string                 `json:"review_url,omitempty"`
+	ReviewGate        string                 `json:"review_gate,omitempty"`
 	Warning           string                 `json:"warning,omitempty"`
 	StartedAt         string                 `json:"started_at"`
 	UpdatedAt         string                 `json:"updated_at"`
@@ -352,6 +354,8 @@ type taskState struct {
 	LiveAppURL        string
 	Error             string
 	Warning           string
+	ReviewURL         string
+	ReviewGate        string
 	StartedAt         time.Time
 	UpdatedAt         time.Time
 	TerminalAt        time.Time
@@ -468,6 +472,32 @@ func (b *Broker) IngestLog(line string) {
 				b.workflowDurations = make(map[string]time.Duration)
 			}
 			b.workflowDurations[requestID] = duration
+		}
+	}
+	if workflowEvent && fields["event"] == "transition" {
+		if t := b.tasks[requestID]; t != nil {
+			switch fields["reason"] {
+			case "review_not_clean":
+				t.ReviewGate = "Waiting for a submitted clean review on the current pull request head."
+			case "review_check_pending":
+				t.ReviewGate = "Waiting for the trusted review policy check."
+			case "review_threads_pending":
+				t.ReviewGate = "Waiting for unresolved review threads."
+			case "changes_requested":
+				t.ReviewGate = "Waiting for requested changes."
+			case "approval_pending":
+				t.ReviewGate = "Waiting for human approval on the current pull request head."
+			case "head_changed":
+				t.ReviewGate = "Pull request head changed. A fresh review is required."
+			case "external_merge":
+				t.ReviewGate = "Pull request merged externally during review."
+			case "merge_unconfirmed":
+				t.ReviewGate = "Pull request was already merged when the workflow checked."
+			case "merge_blocked":
+				t.ReviewGate = "Merge blocked. See workflow events for details."
+			default:
+				t.ReviewGate = ""
+			}
 		}
 	}
 	if requestID != "" && !workflowEvent &&
@@ -595,6 +625,8 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			LiveAppURL:        t.LiveAppURL,
 			Error:             t.Error,
 			Warning:           t.Warning,
+			ReviewURL:         t.ReviewURL,
+			ReviewGate:        t.ReviewGate,
 			StartedAt:         t.StartedAt.UTC().Format(time.RFC3339Nano),
 			UpdatedAt:         t.UpdatedAt.UTC().Format(time.RFC3339Nano),
 			DurationSeconds:   taskDuration(t.StartedAt, t.UpdatedAt, now, status).Seconds(),
@@ -715,6 +747,8 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		LiveAppURL:        t.LiveAppURL,
 		Error:             t.Error,
 		Warning:           t.Warning,
+		ReviewURL:         t.ReviewURL,
+		ReviewGate:        t.ReviewGate,
 		StartedAt:         t.StartedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt:         t.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		DurationSeconds:   taskDuration(t.StartedAt, t.UpdatedAt, now, status).Seconds(),
@@ -2207,6 +2241,8 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 		t.Status = "running"
 		t.explicitTerminal = fields["explicit_terminal"] == "true"
 		t.Warning = ""
+		t.ReviewURL = ""
+		t.ReviewGate = ""
 		t.Source = stringsx.FirstNonEmpty(t.Source, normalizeTaskSource(fields["source"]), defaultTaskSourceForRequestID(t.RequestID))
 		t.Skill = stringsx.FirstNonEmpty(t.Skill, fields["skill"])
 		t.Workflow = stringsx.FirstNonEmpty(t.Workflow, workflowFromFields(fields))
@@ -2353,11 +2389,17 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 				t.Error = ""
 			}
 		}
+		if fields["stage"] == "review" && fields["action"] == "receipt" {
+			t.ReviewURL = fields["review_url"]
+		}
+		if fields["stage"] == "review" && fields["action"] == "review_gate" && fields["reason"] == "review_not_clean" {
+			t.ReviewGate = "Waiting for a submitted clean review on the current pull request head."
+		}
 		if fields["stage"] == "review" && fields["status"] == "warn" && fields["action"] == "leave_draft" && fields["reason"] == "fix_passes_exhausted" {
 			t.Warning = "Post-task review findings remain. Pull request left in draft for human review."
 		}
 		if fields["stage"] == "review" && fields["status"] == "warn" && fields["action"] == "stop" && fields["reason"] == "pr_merged" {
-			t.Warning = "Pull request merged during post-task review. Review cycle stopped early."
+			t.Warning = "Pull request merged externally during review. Review interrupted."
 		}
 	}
 

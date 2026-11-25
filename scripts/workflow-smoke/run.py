@@ -76,6 +76,10 @@ def definitions(repo, prefix):
         definition = copy.deepcopy(templates[case["template"]])
         definition.update(id=f"{prefix}-{case['id']}", name=f"Smoke: {case['name']}",
                           repository=repo, enabled=False, includeBacklog=False)
+        if "reviewCycles" in case:
+            definition["reviewCycles"] = case["reviewCycles"]
+            definition.setdefault("reviewAgent", {})["complexity"] = case["reviewComplexity"]
+            definition["merge"]["requireApproval"] = False
         event = definition["trigger"]["event"]
         if "instructions" in case:
             definition["task"]["instructions"] = case["instructions"]

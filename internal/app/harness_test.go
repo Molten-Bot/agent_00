@@ -1108,15 +1108,30 @@ func TestRunBuildsReviewContextFromHeadBranchSelector(t *testing.T) {
 		{cmd: prReviewIssueCommentsCommand(repoDir, 42), res: execx.Result{Stdout: `[{"user":{"login":"reviewer"},"body":"Please add one more regression test."}]`}},
 		{cmd: prReviewReviewCommentsCommand(repoDir, 42), res: execx.Result{Stdout: `[]`}},
 		{cmd: prReviewReviewsCommand(repoDir, 42), res: execx.Result{Stdout: `[]`}},
-		{cmd: reviewDiffStatCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffStat}},
-		{cmd: reviewDiffPatchCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffPatch}},
+		{cmd: reviewDiffStatCommand(repoDir, remoteTrackingRef("main"), "abc123"), res: execx.Result{Stdout: diffStat}},
+		{cmd: reviewDiffPatchCommand(repoDir, remoteTrackingRef("main"), "abc123"), res: execx.Result{Stdout: diffPatch}},
+		{cmd: gitCommand(repoDir, "switch", "--detach", "abc123")},
 		{cmd: codexCommandWithOptions(targetDir, withAgentsPrompt(strings.TrimSpace(cfg.Prompt+"\n\n"+expectedPreparedReviewContext(repoURLFromConfig(cfg), metadataJSON, commentsText, diffStat, diffPatch)), agentsPath), codexRunOptions{DisallowedTools: readOnlyReviewDisallowedTools}), res: execx.Result{Stdout: reviewOutput}},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## main\n"}},
-		{cmd: prReviewSummaryCommand(repoDir, "42", "acme/repo", reviewSummaryBodyPath(runDir, 42))},
-		{cmd: prMergeAutoCommand(repoDir, "42", "acme/repo", "squash", "abc123")},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## HEAD (no branch)\n"}},
+		{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "abc123\n"}},
 	}}
 
-	h := New(fake)
+	api := &reviewAPIStub{t: t, head: "abc123"}
+	h := New(sessionRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		if res, ok, err := api.handle(cmd); ok {
+			return res, err
+		}
+		if slices.Contains(cmd.Args, "state,headRefOid,statusCheckRollup") {
+			return execx.Result{Stdout: `{"state":"OPEN","headRefOid":"abc123","statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`}, nil
+		}
+		if slices.Contains(cmd.Args, "repos/acme/repo/pulls/42/merge") {
+			if !slices.Contains(cmd.Args, "sha=abc123") {
+				t.Errorf("merge not pinned to reviewed commit")
+			}
+			return execx.Result{Stdout: `{"merged":true}`}, nil
+		}
+		return fake.Run(ctx, cmd)
+	}))
 	h.Now = func() time.Time { return now }
 	h.Workspace = testWorkspaceManager(guid)
 	h.TargetDirOK = func(path string) bool { return path == targetDir }
@@ -1203,7 +1218,7 @@ func TestCompleteReviewRunDefersTransientGitHubWritebackFailure(t *testing.T) {
 		logs = append(logs, fmt.Sprintf(format, args...))
 	}
 
-	cfg := config.Config{Review: &config.ReviewConfig{PRNumber: 42}}
+	cfg := config.Config{Review: &config.ReviewConfig{PRNumber: 42, AutoMerge: true}}
 	repo := repoWorkspace{Dir: repoDir}
 	reviewContext := &preparedReviewContext{
 		Selector: "42",
@@ -1213,7 +1228,7 @@ func TestCompleteReviewRunDefersTransientGitHubWritebackFailure(t *testing.T) {
 			HeadRefName: "feature/improve-tests",
 		},
 	}
-	agentRes := execx.Result{Stdout: "```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"No material issues.\",\"positives\":[\"Focused tests pass.\"],\"findings\":[]}\n```"}
+	agentRes := execx.Result{Stdout: "```json\n{\"status\":\"findings\",\"mergeReady\":false,\"summary\":\"No material issues.\",\"positives\":[\"Focused tests pass.\"],\"findings\":[]}\n```"}
 
 	if err := h.completeReviewRun(context.Background(), cfg, &repo, reviewContext, agentRes, runDir); err != nil {
 		t.Fatalf("completeReviewRun() err = %v, want nil for transient GitHub writeback failure", err)
@@ -1255,7 +1270,7 @@ func TestCompleteReviewRunReturnsNonTransientWritebackFailure(t *testing.T) {
 			URL:    "https://github.com/acme/repo/pull/42",
 		},
 	}
-	agentRes := execx.Result{Stdout: "```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"No material issues.\",\"positives\":[\"Focused tests pass.\"],\"findings\":[]}\n```"}
+	agentRes := execx.Result{Stdout: "```json\n{\"status\":\"findings\",\"mergeReady\":false,\"summary\":\"No material issues.\",\"positives\":[\"Focused tests pass.\"],\"findings\":[]}\n```"}
 
 	err := h.completeReviewRun(context.Background(), cfg, &repo, reviewContext, agentRes, runDir)
 	if err == nil {
@@ -1295,7 +1310,7 @@ func TestCompleteReviewRunDoesNotDeferWhenFallbackWritebackFailureIsPermanent(t 
 			URL:    "https://github.com/acme/repo/pull/42",
 		},
 	}
-	agentRes := execx.Result{Stdout: "```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"No material issues.\",\"positives\":[\"Focused tests pass.\"],\"findings\":[]}\n```"}
+	agentRes := execx.Result{Stdout: "```json\n{\"status\":\"findings\",\"mergeReady\":false,\"summary\":\"No material issues.\",\"positives\":[\"Focused tests pass.\"],\"findings\":[]}\n```"}
 
 	err := h.completeReviewRun(context.Background(), cfg, &repo, reviewContext, agentRes, runDir)
 	if err == nil {
@@ -1321,8 +1336,8 @@ func TestBuildReviewPromptContextRetriesMetadataWithoutInvalidGitHubTokenEnv(t *
 		{cmd: prReviewIssueCommentsCommand(repoDir, 2), res: execx.Result{Stdout: "[]"}},
 		{cmd: prReviewReviewCommentsCommand(repoDir, 2), res: execx.Result{Stdout: "[]"}},
 		{cmd: prReviewReviewsCommand(repoDir, 2), res: execx.Result{Stdout: "[]"}},
-		{cmd: reviewDiffStatCommand(repoDir, "refs/remotes/origin/main", "refs/remotes/origin/agent00-pr-2"), res: execx.Result{Stdout: " file.go | 1 +"}},
-		{cmd: reviewDiffPatchCommand(repoDir, "refs/remotes/origin/main", "refs/remotes/origin/agent00-pr-2"), res: execx.Result{Stdout: "diff --git a/file.go b/file.go"}},
+		{cmd: reviewDiffStatCommand(repoDir, "refs/remotes/origin/main", "abc123"), res: execx.Result{Stdout: " file.go | 1 +"}},
+		{cmd: reviewDiffPatchCommand(repoDir, "refs/remotes/origin/main", "abc123"), res: execx.Result{Stdout: "diff --git a/file.go b/file.go"}},
 	}}
 	var logs []string
 	h := New(fake)
@@ -1365,8 +1380,8 @@ func TestBuildReviewPromptContextRetriesMetadataWithoutRateLimitedGitHubTokenEnv
 		{cmd: prReviewIssueCommentsCommand(repoDir, 2), res: execx.Result{Stdout: "[]"}},
 		{cmd: prReviewReviewCommentsCommand(repoDir, 2), res: execx.Result{Stdout: "[]"}},
 		{cmd: prReviewReviewsCommand(repoDir, 2), res: execx.Result{Stdout: "[]"}},
-		{cmd: reviewDiffStatCommand(repoDir, "refs/remotes/origin/main", "refs/remotes/origin/agent00-pr-2"), res: execx.Result{Stdout: " file.go | 1 +"}},
-		{cmd: reviewDiffPatchCommand(repoDir, "refs/remotes/origin/main", "refs/remotes/origin/agent00-pr-2"), res: execx.Result{Stdout: "diff --git a/file.go b/file.go"}},
+		{cmd: reviewDiffStatCommand(repoDir, "refs/remotes/origin/main", "abc123"), res: execx.Result{Stdout: " file.go | 1 +"}},
+		{cmd: reviewDiffPatchCommand(repoDir, "refs/remotes/origin/main", "abc123"), res: execx.Result{Stdout: "diff --git a/file.go b/file.go"}},
 	}}
 	var logs []string
 	h := New(fake)
@@ -1388,78 +1403,6 @@ func TestBuildReviewPromptContextRetriesMetadataWithoutRateLimitedGitHubTokenEnv
 		if envContainsKey(fake.calls[idx].Env, "GH_TOKEN") || envContainsKey(fake.calls[idx].Env, "GITHUB_TOKEN") {
 			t.Fatalf("call %d env contains GitHub token variables", idx)
 		}
-	}
-}
-
-func TestAutoMergeCleanReviewSkipsUnsupportedAutoMergeConfiguration(t *testing.T) {
-	t.Parallel()
-
-	repo := repoWorkspace{Dir: "/repo"}
-	metadata := reviewPRMetadata{
-		URL:        "https://github.com/acme/repo/pull/42",
-		State:      "OPEN",
-		HeadRefOID: "abc123",
-	}
-	outcome := reviewOutcome{Status: "clean", MergeReady: true}
-	autoMergeErr := errors.New("run gh [pr merge 42 --auto --match-head-commit abc123 --squash]: exit status 1 (GraphQL: Pull request Protected branch rules not configured for this branch (enablePullRequestAutoMerge))")
-
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{
-			cmd: prMergeAutoCommand(repo.Dir, "42", "", "squash", "abc123"),
-			err: autoMergeErr,
-		},
-	}}
-
-	var logs []string
-	h := New(fake)
-	h.Logf = func(format string, args ...any) {
-		logs = append(logs, fmt.Sprintf(format, args...))
-	}
-
-	if err := h.autoMergeCleanReview(context.Background(), repo, "42", "", "squash", metadata, outcome, false); err != nil {
-		t.Fatalf("autoMergeCleanReview() err = %v, want nil for unsupported auto-merge config", err)
-	}
-	if len(fake.exps) != 0 {
-		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
-	}
-	if got := strings.Join(logs, "\n"); !strings.Contains(got, "reason=unsupported_or_unconfigured") {
-		t.Fatalf("logs = %q, want unsupported auto-merge skip reason", got)
-	}
-}
-
-func TestAutoMergeCleanReviewSkipsPermissionDeniedAutoMerge(t *testing.T) {
-	t.Parallel()
-
-	repo := repoWorkspace{Dir: "/repo"}
-	metadata := reviewPRMetadata{
-		URL:        "https://github.com/acme/repo/pull/42",
-		State:      "OPEN",
-		HeadRefOID: "abc123",
-	}
-	outcome := reviewOutcome{Status: "clean", MergeReady: true}
-	autoMergeErr := errors.New("run gh [pr merge 42 --auto --match-head-commit abc123 --squash --repo acme/repo]: exit status 1 (GraphQL: moltenbot000 does not have the correct permissions to execute `MergePullRequest` (mergePullRequest))")
-
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{
-			cmd: prMergeAutoCommand(repo.Dir, "42", "acme/repo", "squash", "abc123"),
-			err: autoMergeErr,
-		},
-	}}
-
-	var logs []string
-	h := New(fake)
-	h.Logf = func(format string, args ...any) {
-		logs = append(logs, fmt.Sprintf(format, args...))
-	}
-
-	if err := h.autoMergeCleanReview(context.Background(), repo, "42", "acme/repo", "squash", metadata, outcome, false); err != nil {
-		t.Fatalf("autoMergeCleanReview() err = %v, want nil for permission-denied auto-merge", err)
-	}
-	if len(fake.exps) != 0 {
-		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
-	}
-	if got := strings.Join(logs, "\n"); !strings.Contains(got, "reason=unsupported_or_unconfigured") {
-		t.Fatalf("logs = %q, want permission-denied auto-merge skip reason", got)
 	}
 }
 
@@ -6719,80 +6662,12 @@ func TestCreatePullRequestURLAutoDraftsWhenFinalReviewCycleActive(t *testing.T) 
 	}
 }
 
-func TestMarkPullRequestReadyForReview(t *testing.T) {
+func TestMarkPullRequestReadyForReviewRequiresReceipt(t *testing.T) {
 	t.Parallel()
-
+	h := New(&fakeRunner{t: t})
 	repo := repoWorkspace{Dir: "/repo", PRURL: "https://github.com/acme/repo/pull/9"}
-
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{cmd: prStateViewCommand(repo.Dir, repo.PRURL), res: execx.Result{Stdout: `{"url":"https://github.com/acme/repo/pull/9","state":"OPEN"}`}},
-		{cmd: prReadyCommand(repo.Dir, repo.PRURL), res: execx.Result{}},
-	}}
-	h := New(fake)
-
-	if err := h.markPullRequestReadyForReview(context.Background(), repo); err != nil {
-		t.Fatalf("markPullRequestReadyForReview() err = %v, want nil", err)
-	}
-	if len(fake.exps) != 0 {
-		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
-	}
-}
-
-func TestMarkPullRequestReadyForReviewSkipsAlreadyReady(t *testing.T) {
-	t.Parallel()
-
-	repo := repoWorkspace{Dir: "/repo", PRURL: "https://github.com/acme/repo/pull/9"}
-	alreadyReadyErr := errors.New(`run gh [pr ready 9]: exit status 1 (! Pull request acme/repo#9 is already "ready for review")`)
-
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{cmd: prStateViewCommand(repo.Dir, repo.PRURL), res: execx.Result{Stdout: `{"url":"https://github.com/acme/repo/pull/9","state":"OPEN"}`}},
-		{cmd: prReadyCommand(repo.Dir, repo.PRURL), err: alreadyReadyErr},
-	}}
-	h := New(fake)
-
-	if err := h.markPullRequestReadyForReview(context.Background(), repo); err != nil {
-		t.Fatalf("markPullRequestReadyForReview() err = %v, want nil when PR is already ready", err)
-	}
-	if len(fake.exps) != 0 {
-		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
-	}
-}
-
-func TestMarkPullRequestReadyForReviewSkipsWhenAlreadyMergedExternally(t *testing.T) {
-	t.Parallel()
-
-	repo := repoWorkspace{Dir: "/repo", PRURL: "https://github.com/acme/repo/pull/9"}
-
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{cmd: prStateViewCommand(repo.Dir, repo.PRURL), res: execx.Result{Stdout: `{"url":"https://github.com/acme/repo/pull/9","state":"MERGED","mergedAt":"2026-10-22T00:00:00Z"}`}},
-	}}
-	h := New(fake)
-
-	if err := h.markPullRequestReadyForReview(context.Background(), repo); err != nil {
-		t.Fatalf("markPullRequestReadyForReview() err = %v, want nil when PR was merged externally", err)
-	}
-	if len(fake.exps) != 0 {
-		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
-	}
-}
-
-func TestMarkPullRequestReadyForReviewSkipsWhenGHReportsMerged(t *testing.T) {
-	t.Parallel()
-
-	repo := repoWorkspace{Dir: "/repo", PRURL: "https://github.com/acme/repo/pull/9"}
-	mergedErr := errors.New(`run gh [pr ready 9]: exit status 1 (X Pull request #9 can't be marked as "ready for review" because it is merged)`)
-
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{cmd: prStateViewCommand(repo.Dir, repo.PRURL), err: errors.New("boom")},
-		{cmd: prReadyCommand(repo.Dir, repo.PRURL), err: mergedErr},
-	}}
-	h := New(fake)
-
-	if err := h.markPullRequestReadyForReview(context.Background(), repo); err != nil {
-		t.Fatalf("markPullRequestReadyForReview() err = %v, want nil when gh reports the PR merged", err)
-	}
-	if len(fake.exps) != 0 {
-		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
+	if err := h.markPullRequestReadyForReview(t.Context(), repo); err == nil {
+		t.Fatal("released pull request without review receipt")
 	}
 }
 

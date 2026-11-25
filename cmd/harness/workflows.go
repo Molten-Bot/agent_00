@@ -169,17 +169,29 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 		return false
 	}
 	engine.Status = func(id string) workflow.Outcome {
+		// The review outcome survives workspace cleanup and a daemon restart
+		// between task completion and the workflow journal update.
+		archived, archiveErr := workflow.LoadReviewOutcome(root, id)
 		for _, t := range broker.TaskList() {
 			if t.RequestID != id {
 				continue
 			}
 			switch t.Status {
 			case "completed", "no_changes", "merged":
+				if archiveErr == nil {
+					return archived
+				}
 				return workflow.Outcome{Status: "succeeded", PRURL: t.PRURL}
 			case "error", "invalid", "stopped", "duplicate":
+				if archiveErr == nil {
+					return workflow.Outcome{Status: "failed", PRURL: archived.PRURL, Reason: t.Error, ReviewInterrupted: archived.ReviewInterrupted}
+				}
 				return workflow.Outcome{Status: "failed", Reason: t.Error}
 			}
 			return workflow.Outcome{Status: "running"}
+		}
+		if archiveErr == nil {
+			return archived
 		}
 		return workflow.Outcome{Status: "running", Reason: "Task history unavailable"}
 	}

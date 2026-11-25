@@ -1781,7 +1781,7 @@ func TestBrokerPreservesMergedDuringReviewWarningOnCompletedTask(t *testing.T) {
 	if task.Status != "completed" {
 		t.Fatalf("task.Status = %q, want completed", task.Status)
 	}
-	if want := "Pull request merged during post-task review. Review cycle stopped early."; task.Warning != want {
+	if want := "Pull request merged externally during review. Review interrupted."; task.Warning != want {
 		t.Fatalf("task.Warning = %q, want %q", task.Warning, want)
 	}
 }
@@ -2093,5 +2093,19 @@ func TestBrokerCapsTaskLogsWithoutGrowingSlice(t *testing.T) {
 	}
 	if logs[1].Text != "task request_id=req-cap stage=pr status=ok" {
 		t.Fatalf("logs[1].Text = %q", logs[1].Text)
+	}
+}
+
+func TestTaskShowsPublishedReviewEvidenceAndPendingGate(t *testing.T) {
+	t.Parallel()
+	broker := NewBroker()
+	const url = "https://github.com/example/project/pull/12#pullrequestreview-50"
+	broker.IngestLog("task status=start request_id=review-task explicit_terminal=true")
+	broker.IngestLog("task request_id=review-task stage=review status=ok action=receipt review_url=" + url)
+	broker.IngestLog("task status=completed request_id=review-task")
+	broker.IngestLog("workflow event=transition request_id=review-task status=waiting reason=review_threads_pending")
+	task, ok := broker.Task("review-task")
+	if !ok || task.ReviewURL != url || task.ReviewGate != "Waiting for unresolved review threads." {
+		t.Fatalf("task did not preserve review evidence and pending gate: %+v", task)
 	}
 }

@@ -296,6 +296,29 @@ test('task card distinguishes the titled pull request from the merged pull reque
   assert.equal(await result.locator('.task-result-link').getAttribute('href'), trackedURL);
 });
 
+test('open task output updates when review gate and receipt arrive after completion', async t => {
+  const task = {
+    request_id: 'review-task', prompt: 'Review changes', repo: 'example/project',
+    status: 'completed', updated_at: new Date().toISOString(),
+    pr_url: 'https://github.com/example/project/pull/12',
+  };
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, [task]);
+  await page.locator('#task-history-toggle').click();
+  await page.locator('#task-list .task-output-toggle').click();
+  const result = page.locator('#task-fullscreen-result');
+  await result.getByText('Task Success').waitFor();
+
+  const update = fields => page.evaluate(task => {
+    queueStreamSnapshot(JSON.stringify({ ...state.snapshot, tasks: [task] }));
+  }, { ...task, ...fields });
+  const reviewGate = 'Waiting for a submitted clean review on the current pull request head.';
+  await update({ review_gate: reviewGate });
+  await result.getByText(reviewGate).waitFor();
+  const reviewURL = task.pr_url + '#pullrequestreview-42';
+  await update({ review_gate: reviewGate, review_url: reviewURL });
+  assert.equal(await result.getByRole('link', { name: 'Submitted review' }).getAttribute('href'), reviewURL);
+});
+
 test('workflow-triggered tasks start with the Workflow icon and keep their task steps', async t => {
   const now = new Date().toISOString();
   const issueURL = 'https://github.com/example/project/issues/42';

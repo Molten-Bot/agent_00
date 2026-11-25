@@ -254,6 +254,14 @@ func TestStripReviewOutcomeJSON(t *testing.T) {
 func TestParseReviewOutcome(t *testing.T) {
 	t.Parallel()
 
+	t.Run("plain JSON with nested findings", func(t *testing.T) {
+		t.Parallel()
+		outcome, ok := parseReviewOutcome(`{"status":"findings","mergeReady":false,"findings":[{"path":"main.go","line":12,"title":"Handle the error"}]}`)
+		if !ok || len(outcome.Findings) != 1 || outcome.Findings[0].Line != 12 {
+			t.Fatalf("parseReviewOutcome() = %+v, %t", outcome, ok)
+		}
+	})
+
 	t.Run("empty text", func(t *testing.T) {
 		t.Parallel()
 		if _, ok := parseReviewOutcome(""); ok {
@@ -305,7 +313,7 @@ func TestParseReviewOutcome(t *testing.T) {
 func TestNormalizeFinalReviewOutcome(t *testing.T) {
 	t.Parallel()
 
-	t.Run("drops history-only finding and marks outcome clean", func(t *testing.T) {
+	t.Run("blocks history-only finding", func(t *testing.T) {
 		t.Parallel()
 		outcome, ignored := normalizeFinalReviewOutcome(reviewOutcome{
 			Status:     "findings",
@@ -316,8 +324,8 @@ func TestNormalizeFinalReviewOutcome(t *testing.T) {
 				RequiresBranchHistoryChange: true,
 			}},
 		})
-		if ignored != 1 || outcome.Status != "clean" || !outcome.MergeReady || len(outcome.Findings) != 0 {
-			t.Fatalf("normalizeFinalReviewOutcome() = (%+v, %d), want clean outcome with one ignored finding", outcome, ignored)
+		if ignored != 1 || outcome.Status != "blocked" || outcome.MergeReady || len(outcome.Findings) != 0 {
+			t.Fatalf("normalizeFinalReviewOutcome() = (%+v, %d), want blocked outcome with one history finding", outcome, ignored)
 		}
 	})
 
@@ -366,7 +374,7 @@ func TestReviewOutcomeAllowsAutoMerge(t *testing.T) {
 		{
 			"merge ready with low severity finding",
 			reviewOutcome{MergeReady: true, Status: "clean", Findings: []reviewFinding{{Severity: "low"}}},
-			true,
+			false,
 		},
 		{
 			"merge ready with critical finding blocks merge",

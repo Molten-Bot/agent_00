@@ -11,11 +11,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
 func TestPostReviewSummaryFromRelativeServeConfig(t *testing.T) {
@@ -106,6 +108,7 @@ type cleanReviewCycleRunner struct {
 	argv             [][]string
 	emptyNetDiff     bool
 	mergeAfterReview bool
+	api              *reviewAPIStub
 }
 
 func TestFinalReviewModeUsesConfiguredReviewCounts(t *testing.T) {
@@ -131,6 +134,14 @@ func (r *cleanReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (exec
 	r.t.Helper()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.api == nil {
+		r.api = &reviewAPIStub{t: r.t, head: "head-sha"}
+	}
+	if res, ok, err := r.api.handle(cmd); ok {
+		r.comments = r.api.posts
+		return res, err
+	}
 
 	switch cmd.Name {
 	case "codex":
@@ -409,14 +420,25 @@ type finalFindingReviewCycleRunner struct {
 	comments     int
 	checks       int
 	drafted      int
+	released     int
 	fixPrompt    string
 	emptyNetDiff bool
 	modelProbes  int
 	agentCalls   []execx.Command
+	api          *reviewAPIStub
 }
 
 func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command) (execx.Result, error) {
 	r.t.Helper()
+	if r.api == nil {
+		r.api = &reviewAPIStub{t: r.t, head: "head-sha"}
+	}
+	if res, ok, err := r.api.handle(cmd); ok {
+		if len(cmd.Args) > 2 && cmd.Args[2] == "POST" {
+			r.comments++
+		}
+		return res, err
+	}
 	switch cmd.Name {
 	case "claude":
 		if reflect.DeepEqual(cmd.Args, []string{"--version"}) {
@@ -480,10 +502,11 @@ func (r *finalFindingReviewCycleRunner) Run(_ context.Context, cmd execx.Command
 			return execx.Result{Stdout: "tests\tpass\n"}, nil
 		}
 		if len(cmd.Args) >= 2 && cmd.Args[0] == "pr" && cmd.Args[1] == "ready" {
-			if len(cmd.Args) != 4 || cmd.Args[3] != "--undo" {
-				r.t.Fatalf("draft command args = %v, want pr ready <url> --undo", cmd.Args)
+			if slices.Contains(cmd.Args, "--undo") {
+				r.drafted++
+			} else {
+				r.released++
 			}
-			r.drafted++
 			return execx.Result{}, nil
 		}
 		if len(cmd.Args) >= 1 && cmd.Args[0] == "api" {
@@ -526,14 +549,14 @@ func TestRunFinalReviewCycleDoesNotSendBranchHistoryFindingToRepairAgent(t *test
 		"codex",
 		false,
 	)
-	if err != nil || exitCode != ExitSuccess || stage != "" {
-		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want success", exitCode, stage, err)
+	if err == nil || exitCode != ExitCodex || stage != "review" {
+		t.Fatalf("runFinalReviewCycle() = (%d, %q, %v), want blocked review", exitCode, stage, err)
 	}
 	if runner.reviews != 1 || runner.fixes != 0 {
 		t.Fatalf("review/fix calls = %d/%d, want 1/0", runner.reviews, runner.fixes)
 	}
-	if runner.comments != 1 {
-		t.Fatalf("comments = %d, want 1", runner.comments)
+	if runner.comments != 0 || repo.ReviewReceipt != nil {
+		t.Fatalf("history finding published a clean review: %d writes, receipt %+v", runner.comments, repo.ReviewReceipt)
 	}
 }
 
@@ -638,10 +661,10 @@ func TestRunFinalReviewCycleReportsRemainingFindingsAfterFinalConfirmation(t *te
 	}
 }
 
-func TestRunFinalReviewCycleContinuesAfterFixWithIndependentReviewAgent(t *testing.T) {
+func TestAppManagedMergeAfterIndependentReviewAndRepair(t *testing.T) {
 	runner := &finalFindingReviewCycleRunner{t: t, findingsPass: 1}
 	h := New(runner)
-	h.FinalReviewPasses = 3
+	h.FinalReviewPasses = 10
 	h.PRChecksWatchTimeout = -1
 	h.resolveTaskModel = func() (agentruntime.ModelSelection, error) {
 		return agentruntime.ModelSelection{Model: "sonnet"}, nil
@@ -669,8 +692,18 @@ func TestRunFinalReviewCycleContinuesAfterFixWithIndependentReviewAgent(t *testi
 	}
 
 	const reviewInstructions = "Check error handling and recovery."
+	w := workflow.Definition{
+		ID: "review-delivery", Name: "Review delivery", Repository: "acme/repo",
+		Enabled: true, IncludeBacklog: true, ReviewCycles: h.FinalReviewPasses,
+		ReviewAgent: config.ReviewAgentConfig{Complexity: "easy", Instructions: reviewInstructions},
+		Trigger:     workflow.Trigger{Event: "issue.opened"},
+		Filters:     workflow.Filters{Mode: "all"},
+		Task:        workflow.Task{Kind: "implement", Instructions: "Implement the requested behavior.", IssueLinkMode: "reference"},
+		Merge:       workflow.Merge{Enabled: true, Method: "squash", DeleteBranch: true},
+	}
 	cfg := config.Config{Prompt: "Implement the requested behavior.", Workflow: &config.WorkflowRunConfig{
-		ReviewAgent: config.ReviewAgentConfig{Instructions: reviewInstructions, Complexity: "advanced"},
+		PolicyHash:  w.ExecutionPolicyHash(),
+		ReviewAgent: config.ReviewAgentConfig{Instructions: reviewInstructions, Complexity: "easy"},
 	}}
 	exitCode, stage, err := h.runFinalReviewCycle(
 		t.Context(), cfg, repo, runtime, repoDir, codexRunOptions{}, "", "", "repo", "claude", false,
@@ -684,7 +717,7 @@ func TestRunFinalReviewCycleContinuesAfterFixWithIndependentReviewAgent(t *testi
 	if runner.modelProbes != 1 {
 		t.Fatalf("review model probes = %d, want 1", runner.modelProbes)
 	}
-	for i, wantModel := range []string{"opus", "sonnet", "opus"} {
+	for i, wantModel := range []string{"haiku", "sonnet", "haiku"} {
 		call := runner.agentCalls[i]
 		modelIndex := slices.Index(call.Args, "--model")
 		if modelIndex < 0 || call.Args[modelIndex+1] != wantModel {
@@ -694,6 +727,72 @@ func TestRunFinalReviewCycleContinuesAfterFixWithIndependentReviewAgent(t *testi
 			t.Fatalf("agent call %d received review instructions = %t", i+1, hasInstructions)
 		}
 	}
+	receipt := repo.ReviewReceipt
+	if receipt == nil || !receipt.Clean() || receipt.Policy.FixPasses != 10 || receipt.Policy.Complexity != "easy" {
+		t.Fatalf("final review did not capture the delivery policy: %+v", receipt)
+	}
+	if err := h.finishReviewGate(t.Context(), *repo, *receipt, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.markPullRequestReadyForReview(t.Context(), *repo); err != nil || runner.released != 1 {
+		t.Fatalf("ready calls = %d, error = %v", runner.released, err)
+	}
+
+	merges := 0
+	gh := workflow.GitHub{Runner: sessionRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		args := strings.Join(cmd.Args, " ")
+		switch {
+		case strings.Contains(args, "statusCheckRollup"):
+			return execx.Result{Stdout: `{"number":7,"state":"OPEN","headRefOid":"head-sha","statusCheckRollup":[{"name":"CI","conclusion":"SUCCESS"}]}`}, nil
+		case strings.Contains(args, "closingIssuesReferences"):
+			return execx.Result{Stdout: "0"}, nil
+		case strings.Contains(args, "reviewThreads(first:100"):
+			return execx.Result{Stdout: `{"data":{"repository":{"pullRequest":{"state":"OPEN","headRefOid":"head-sha","isMergeQueueEnabled":false,"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`}, nil
+		case strings.HasPrefix(args, "pr merge "):
+			want := []string{"pr", "merge", repo.PRURL, "--repo", w.Repository, "--squash", "--match-head-commit", receipt.Head, "--delete-branch"}
+			if !slices.Equal(cmd.Args, want) {
+				t.Fatalf("merge args = %v, want %v", cmd.Args, want)
+			}
+			merges++
+			return execx.Result{}, nil
+		case strings.HasSuffix(args, "--json state") && merges == 1:
+			return execx.Result{Stdout: `{"state":"MERGED"}`}, nil
+		default:
+			return runner.Run(ctx, cmd)
+		}
+	})}
+	store := &workflow.Store{Path: filepath.Join(t.TempDir(), "workflows.json")}
+	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{w}}); err != nil {
+		t.Fatal(err)
+	}
+	engine := &workflow.Engine{
+		Store: store, StatePath: filepath.Join(t.TempDir(), "state.json"),
+		Enabled: func() bool { return true }, Allowed: func(string) bool { return true },
+		Fetch: func(context.Context, string, workflow.ScanNeeds) ([]workflow.Item, error) {
+			return []workflow.Item{{Number: 1, Kind: "issue", Repository: w.Repository, Open: true}}, nil
+		},
+		Submit:    func(context.Context, workflow.Run) (string, error) { return "delivery-task", nil },
+		Status:    func(string) workflow.Outcome { return workflow.Outcome{Status: "running"} },
+		InspectPR: gh.Inspect, Merge: gh.Merge,
+	}
+	if err := engine.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := engine.Runs()
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("workflow activation = %+v, %v", runs, err)
+	}
+	if err := engine.Complete(runs[0].ID, workflow.Outcome{Status: "succeeded", PRURL: repo.PRURL, ReviewReceipt: receipt}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := engine.Tick(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if merges != 1 {
+		t.Fatalf("app invoked gh pr merge %d times, want 1", merges)
+	}
 }
 
 // TestProcessChangedRepoReleasesPRFromDraftAfterCleanFinalReviewCycle exercises
@@ -701,51 +800,64 @@ func TestRunFinalReviewCycleContinuesAfterFixWithIndependentReviewAgent(t *testi
 // flow finishes, a configured final review cycle must run, and a clean cycle
 // must release the auto-drafted PR instead of leaving it in draft.
 func TestProcessChangedRepoReleasesPRFromDraftAfterCleanFinalReviewCycle(t *testing.T) {
-	runner := &cleanReviewCycleRunner{t: t}
-	h := New(runner)
-	h.FinalReviewPasses = 1
+	for _, tc := range []struct {
+		name, head string
+		writeErr   error
+		wantReady  int
+	}{
+		{name: "acknowledged", head: "head-sha", wantReady: 1},
+		{name: "unacknowledged", head: "head-sha", writeErr: errors.New("upstream timeout")},
+		{name: "head changed", head: "new-head"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &cleanReviewCycleRunner{t: t, api: &reviewAPIStub{t: t, head: tc.head, writeErr: tc.writeErr}}
+			h := New(runner)
+			h.FinalReviewPasses = 1
+			h.Sleep = func(context.Context, time.Duration) error { return nil }
 
-	repoDir := filepath.Join(t.TempDir(), "repo")
-	if err := os.MkdirAll(repoDir, 0o755); err != nil {
-		t.Fatalf("mkdir repo: %v", err)
-	}
-	repo := &repoWorkspace{
-		URL:                "https://github.com/acme/repo.git",
-		Dir:                repoDir,
-		RelDir:             "repo",
-		Branch:             "feature",
-		BaseBranch:         "main",
-		PRURL:              "https://github.com/acme/repo/pull/7",
-		Changed:            true,
-		CreateWorkBranch:   true,
-		WriteAccessChecked: true,
-		WriteAccessAllowed: true,
-		PushRemote:         publishRemoteOrigin,
-	}
+			repoDir := filepath.Join(t.TempDir(), "repo")
+			if err := os.MkdirAll(repoDir, 0o755); err != nil {
+				t.Fatalf("mkdir repo: %v", err)
+			}
+			repo := &repoWorkspace{
+				URL:                "https://github.com/acme/repo.git",
+				Dir:                repoDir,
+				RelDir:             "repo",
+				Branch:             "feature",
+				BaseBranch:         "main",
+				PRURL:              "https://github.com/acme/repo/pull/7",
+				Changed:            true,
+				CreateWorkBranch:   true,
+				WriteAccessChecked: true,
+				WriteAccessAllowed: true,
+				PushRemote:         publishRemoteOrigin,
+			}
 
-	cfg := config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "do the work"}
+			cfg := config.Config{Prompt: "Implement the requested behavior.", CommitMessage: "do the work"}
 
-	exitCode, stage, err := h.processChangedRepo(
-		context.Background(),
-		cfg,
-		repo,
-		agentruntime.Default(),
-		repoDir,
-		codexRunOptions{},
-		"",
-		"",
-		"repo",
-		"codex",
-		false,
-	)
-	if err != nil || exitCode != ExitSuccess || stage != "" {
-		t.Fatalf("processChangedRepo() = (%d, %q, %v), want success", exitCode, stage, err)
-	}
-	if runner.reviews != 1 || runner.comments != 1 {
-		t.Fatalf("review/comment counts = %d/%d, want 1/1", runner.reviews, runner.comments)
-	}
-	if runner.released != 1 {
-		t.Fatalf("released count = %d, want 1 (PR must be released once the final review cycle is clean)", runner.released)
+			exitCode, stage, err := h.processChangedRepo(
+				context.Background(),
+				cfg,
+				repo,
+				agentruntime.Default(),
+				repoDir,
+				codexRunOptions{},
+				"",
+				"",
+				"repo",
+				"codex",
+				false,
+			)
+			if (err == nil) != (tc.wantReady == 1) {
+				t.Fatalf("processChangedRepo() = (%d, %q, %v)", exitCode, stage, err)
+			}
+			if runner.reviews != 1 || runner.comments != 1 {
+				t.Fatalf("review/comment counts = %d/%d, want 1/1", runner.reviews, runner.comments)
+			}
+			if runner.released != tc.wantReady {
+				t.Fatalf("released count = %d, want %d", runner.released, tc.wantReady)
+			}
+		})
 	}
 }
 

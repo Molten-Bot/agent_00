@@ -228,7 +228,7 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 		Labels            []struct{ Name string }
 		Assignees         []struct{ Login string }
 		ReviewRequests    []struct{ Login, Name, Slug string }
-		StatusCheckRollup []struct{ Status, Conclusion, State string }
+		StatusCheckRollup []githubutil.StatusCheck
 	}
 	if err = json.Unmarshal([]byte(raw), &p); err != nil {
 		return Item{}, err
@@ -253,7 +253,7 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 			return Item{}, fmt.Errorf("decode linked issue count")
 		}
 	}
-	i := Item{Repository: repo, Number: p.Number, Kind: "pr", Title: p.Title, Body: p.Body, URL: p.URL, Author: p.Author.Login, Bot: p.Author.IsBot, BaseBranch: p.BaseRefName, HeadBranch: p.HeadRefName, HeadSHA: p.HeadRefOid, Draft: p.IsDraft, LinkedIssue: linkedCount > 0, ReviewDecision: p.ReviewDecision, Open: p.State == "OPEN", ChecksPassed: len(p.StatusCheckRollup) > 0}
+	i := Item{Repository: repo, Number: p.Number, Kind: "pr", Title: p.Title, Body: p.Body, URL: p.URL, Author: p.Author.Login, Bot: p.Author.IsBot, BaseBranch: p.BaseRefName, HeadBranch: p.HeadRefName, HeadSHA: p.HeadRefOid, Draft: p.IsDraft, LinkedIssue: linkedCount > 0, ReviewDecision: p.ReviewDecision, Open: p.State == "OPEN"}
 	for _, l := range p.Labels {
 		i.Labels = append(i.Labels, l.Name)
 	}
@@ -267,18 +267,7 @@ func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNe
 			i.Reviewers = append(i.Reviewers, r.Slug)
 		}
 	}
-	for _, c := range p.StatusCheckRollup {
-		state := c.Conclusion
-		if state == "" {
-			state = c.State
-		}
-		if !contains([]string{"SUCCESS", "NEUTRAL", "SKIPPED"}, state) {
-			i.ChecksPassed = false
-		}
-		if contains([]string{"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"}, state) {
-			i.ChecksFailed = true
-		}
-	}
+	i.ChecksPassed, i.ChecksFailed = githubutil.CIStatus(p.StatusCheckRollup)
 	if !needs.Reviews {
 		return i, nil
 	}
@@ -295,12 +284,44 @@ func (g GitHub) Merge(ctx context.Context, r Run) error {
 	if r.MergeHead == "" {
 		return fmt.Errorf("missing reviewed head")
 	}
+	appID, err := githubutil.RequiredReviewCheckApp(r.Item.Repository)
+	if err != nil {
+		return err
+	}
+	if r.requiresReview() || appID > 0 {
+		receipt := r.cleanReviewReceipt(r.Outcome)
+		if receipt == nil || receipt.Head != r.MergeHead {
+			return fmt.Errorf("waiting for a submitted clean review on the current pull request head")
+		}
+		if err := githubutil.VerifyPublishedReviewCheck(ctx, g.command, *receipt); err != nil {
+			return err
+		}
+		if err := githubutil.VerifyReviewMergeGate(ctx, g.command, *receipt, r.Workflow.Merge.RequireApproval, r.Workflow.Merge.DeleteBranch); err != nil {
+			return err
+		}
+		if !r.Workflow.Merge.DeleteBranch {
+			return githubutil.MergeReviewedHead(ctx, g.command, *receipt, r.Workflow.Merge.Method)
+		}
+	}
 	args := []string{"pr", "merge", r.PRURL, "--repo", r.Item.Repository, "--" + r.Workflow.Merge.Method, "--match-head-commit", r.MergeHead}
 	if r.Workflow.Merge.DeleteBranch {
 		args = append(args, "--delete-branch")
 	}
-	_, err := g.command(ctx, args...)
-	return err
+	if _, err = g.command(ctx, args...); err != nil {
+		return err
+	}
+	if !r.requiresReview() && appID == 0 {
+		return nil
+	}
+	raw, err := g.command(ctx, "pr", "view", r.PRURL, "--repo", r.Item.Repository, "--json", "state")
+	if err != nil {
+		return err
+	}
+	var pr struct{ State string }
+	if err := json.Unmarshal([]byte(raw), &pr); err != nil || pr.State != "MERGED" {
+		return fmt.Errorf("GitHub did not confirm the pull request merged")
+	}
+	return nil
 }
 
 // CanonicalRepository accepts the forms used by the harness's run config.

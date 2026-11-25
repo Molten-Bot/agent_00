@@ -133,16 +133,16 @@ var errFinalReviewFindingsRemain = errors.New("post-task review findings remain"
 
 // Result captures run output and status.
 type Result struct {
-	ReviewClean      bool
-	ReviewedHead     string
-	ExitCode         int
-	Err              error
-	WorkspaceDir     string
-	Branch           string
-	PRURL            string
-	NoChanges        bool
-	NoChangeEvidence bool
-	RepoResults      []RepoResult
+	ReviewReceipt     *githubutil.ReviewReceipt
+	ReviewInterrupted bool
+	ExitCode          int
+	Err               error
+	WorkspaceDir      string
+	Branch            string
+	PRURL             string
+	NoChanges         bool
+	NoChangeEvidence  bool
+	RepoResults       []RepoResult
 }
 
 // RepoResult captures outcome details for one repository in a run.
@@ -182,6 +182,9 @@ type repoWorkspace struct {
 	PRCommentScreenshotBaseline map[string]string
 	PRCommentScreenshotFiles    []string
 	ReviewStoppedOnMerge        bool
+	ReviewInterrupted           bool
+	ReviewReceipt               *githubutil.ReviewReceipt
+	ReviewSanitize              bool
 }
 
 type codexRunOptions = agentruntime.RunOptions
@@ -206,8 +209,6 @@ type Harness struct {
 	OnPRTitle func(url, title string)
 	// OnPRCreated reports the URL and title of a newly created pull request.
 	OnPRCreated func(url, title string)
-	// OnReviewResult separates successful writeback from a clean review.
-	OnReviewResult func(clean bool, head string)
 
 	ResumeIssueWorkspace bool
 	// IssueCheckoutComplete records that the preserved checkout finished.
@@ -259,6 +260,9 @@ func New(runner execx.Runner) Harness {
 
 // Run executes a full automation attempt.
 func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
+	if cfg.Workflow != nil && cfg.Workflow.ReviewCycles > 0 {
+		h.FinalReviewPasses = cfg.Workflow.ReviewCycles
+	}
 	h.step("preflight")
 	if h.Runner == nil {
 		return h.fail(ExitUsage, "usage", fmt.Errorf("runner is required"), "")
@@ -666,6 +670,15 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 				runDir,
 			)
 		}
+		if reviewContext != nil && reviewContext.Metadata.HeadRefOID != "" && strings.EqualFold(reviewContext.Metadata.State, "OPEN") {
+			head, err := h.currentHead(ctx, repos[0])
+			if err != nil {
+				return h.failWithRepos(ExitGit, "review", err, runDir, repos)
+			}
+			if head != reviewContext.Metadata.HeadRefOID {
+				return h.failWithRepos(ExitGit, "review", fmt.Errorf("local HEAD changed during standalone review"), runDir, repos)
+			}
+		}
 		if err := h.completeReviewRun(ctx, runCfg, &repos[0], reviewContext, agentRes, runDir); err != nil {
 			return h.failWithRepos(ExitPR, "review", err, runDir, repos)
 		}
@@ -789,7 +802,12 @@ func (h Harness) processChangedRepo(
 	if exitCode, stage, err := h.ensurePullRequestMergeable(ctx, cfg, repo, runtime, codexDir, codexOpts, codexBasePrompt, agentsPath, codexTargetLabel, agentStage); err != nil {
 		return exitCode, stage, err
 	}
-	if repo.ReviewStoppedOnMerge || h.FinalReviewPasses <= 0 {
+	if h.FinalReviewPasses <= 0 {
+		return ExitSuccess, "", nil
+	}
+	if repo.ReviewStoppedOnMerge {
+		repo.ReviewInterrupted = true
+		h.logFinalReviewStoppedForMergedPR(*repo, 0, h.FinalReviewPasses)
 		return ExitSuccess, "", nil
 	}
 	exitCode, stage, err = h.runFinalReviewCycle(
@@ -813,6 +831,8 @@ func (h Harness) processChangedRepo(
 		return exitCode, stage, err
 	}
 	if repo.ReviewStoppedOnMerge {
+		repo.ReviewInterrupted = true
+		h.logFinalReviewStoppedForMergedPR(*repo, 0, h.FinalReviewPasses)
 		return ExitSuccess, "", nil
 	}
 	if repo.CreateWorkBranch {
@@ -834,9 +854,19 @@ func (h Harness) processChangedRepo(
 		)
 		return ExitSuccess, "", nil
 	}
+	if repo.ReviewReceipt == nil {
+		return ExitPR, "review", fmt.Errorf("waiting for a submitted clean review receipt")
+	}
+	if gateErr := h.finishReviewGate(ctx, *repo, *repo.ReviewReceipt, repo.ReviewSanitize); gateErr != nil {
+		if errors.Is(gateErr, githubutil.ErrReviewInterrupted) {
+			repo.ReviewInterrupted = true
+			h.logFinalReviewStoppedForMergedPR(*repo, 0, h.FinalReviewPasses)
+		}
+		return ExitPR, "review", gateErr
+	}
 	if !cfg.Draft {
 		if releaseErr := h.markPullRequestReadyForReview(ctx, *repo); releaseErr != nil {
-			return ExitPR, "review", releaseErr
+			return ExitPR, "review", h.reviewPublicationError(ctx, repo, 0, h.FinalReviewPasses, releaseErr)
 		}
 	}
 	return exitCode, stage, err
@@ -4137,6 +4167,8 @@ func buildResult(runDir string, repos []repoWorkspace, noChanges bool) Result {
 		}
 		if repo.PRURL != "" && res.PRURL == "" {
 			res.PRURL = repo.PRURL
+			res.ReviewReceipt = repo.ReviewReceipt
+			res.ReviewInterrupted = repo.ReviewInterrupted
 		}
 	}
 	if res.Branch == "" && len(repos) > 0 {
@@ -4208,6 +4240,12 @@ func (h Harness) prepareReviewPrompt(
 	}
 	h.logf("stage=review status=ok repo=%s repo_dir=%s", repo.URL, repo.RelDir)
 
+	if head := reviewContext.Metadata.HeadRefOID; head != "" && strings.EqualFold(reviewContext.Metadata.State, "OPEN") {
+		if _, err := h.runCommand(ctx, "review", gitCommand(repo.Dir, "switch", "--detach", head)); err != nil {
+			return "", nil, fmt.Errorf("check out the reviewed pull request head: %w", err)
+		}
+	}
+
 	if strings.TrimSpace(reviewContext.Prompt) == "" {
 		return basePrompt, reviewContext, nil
 	}
@@ -4238,6 +4276,7 @@ func (h Harness) runFinalReviewCycle(
 		reviewAgent = cfg.Workflow.ReviewAgent
 	}
 	reviewHarness := h
+	priorFindingReviews := map[string]string{}
 
 	// Allow one extra pass beyond FinalReviewPasses so a fix applied on the
 	// final configured pass is always confirmed clean by a follow-up review
@@ -4280,10 +4319,22 @@ func (h Harness) runFinalReviewCycle(
 		}
 		if strings.EqualFold(strings.TrimSpace(reviewContext.Metadata.State), "merged") {
 			repo.ReviewStoppedOnMerge = true
+			repo.ReviewInterrupted = true
 			h.logFinalReviewStoppedForMergedPR(*repo, pass, passLabelTotal)
 			return ExitSuccess, "", nil
 		}
+		if reviewContext.Metadata.HeadRefOID == "" || reviewContext.Metadata.HeadRefOID != headBefore {
+			return ExitPR, "review", fmt.Errorf("local HEAD does not match the current pull request head")
+		}
+		previousThreads, err := h.addressableReviewThreads(ctx, *repo, reviewContext, priorFindingReviews)
+		if err != nil {
+			return ExitPR, "review", h.reviewPublicationError(ctx, repo, pass, passLabelTotal, err)
+		}
 		reviewPrompt := finalReviewPrompt(cfg.Prompt, reviewAgent.Instructions, reviewContext.Prompt, pass, passLabelTotal)
+		if len(previousThreads) > 0 {
+			threadJSON, _ := json.Marshal(previousThreads)
+			reviewPrompt += "\n\nVerify the original finding for each thread below against this head. In the structured result, return a verifiedThreadIds array containing only IDs whose specific findings you verified were fixed. If an issue remains, report it again.\n" + string(threadJSON)
+		}
 		reviewPrompt, err = withReviewSkillPrompt(reviewPrompt)
 		if err != nil {
 			return ExitConfig, "review", err
@@ -4317,6 +4368,7 @@ func (h Harness) runFinalReviewCycle(
 		}
 		if h.finalReviewPullRequestMerged(ctx, *repo, pass, passLabelTotal) {
 			repo.ReviewStoppedOnMerge = true
+			repo.ReviewInterrupted = true
 			return ExitSuccess, "", nil
 		}
 		if err := h.validateEnforcedNonDefaultBranch(ctx, *repo); err != nil {
@@ -4366,22 +4418,38 @@ func (h Harness) runFinalReviewCycle(
 		}
 
 		commentBody := finalReviewCommentBody(outcome, pass, passLabelTotal)
-		bodyPath := finalReviewSummaryBodyPath(filepath.Dir(repo.Dir), reviewContext.Metadata.Number, pass)
-		if err := h.writeWorkspaceFile(bodyPath, []byte(commentBody), 0o600); err != nil {
-			return ExitWorkspace, "review", fmt.Errorf("write post-task review comment: %w", err)
-		}
-		selector, targetRepo := reviewWritebackTarget(reviewContext.Metadata, reviewCfg, reviewContext.Selector)
-		if err := h.postReviewSummary(
-			ctx,
-			repo.Dir,
-			selector,
-			targetRepo,
-			reviewContext.Metadata.Number,
-			bodyPath,
-			repo.PRURL,
-			reviewContext.GitHubTokenEnvSanitized,
-		); err != nil {
-			return ExitPR, "review", fmt.Errorf("post review cycle comment for pass %d: %w", pass, err)
+		inline := inlineReviewFindings(reviewContext.Diff, outcome.Findings)
+		if len(outcome.Findings) == 0 || len(inline) > 0 {
+			receipt, err := h.publishSubmittedReview(ctx, cfg, *repo, reviewContext, filepath.Dir(repo.Dir), pass, h.FinalReviewPasses, outcome, commentBody, inline)
+			if err != nil {
+				return ExitPR, "review", h.reviewPublicationError(ctx, repo, pass, passLabelTotal, fmt.Errorf("publish review pass %d: %w", pass, err))
+			}
+			if receipt.Clean() && len(outcome.Findings) == 0 {
+				repo.ReviewReceipt = &receipt
+				repo.ReviewSanitize = reviewContext.GitHubTokenEnvSanitized
+				h.logReviewReceipt(receipt)
+				var verified reviewOutcome
+				if err := json.Unmarshal(receipt.Result, &verified); err != nil {
+					return ExitPR, "review", fmt.Errorf("decode saved review result: %w", err)
+				}
+				if err := h.resolveAddressedReviewThreads(ctx, *repo, reviewContext, previousThreads, verified.VerifiedThreadIDs); err != nil {
+					return ExitPR, "review", h.reviewPublicationError(ctx, repo, pass, passLabelTotal, fmt.Errorf("resolve verified review findings: %w", err))
+				}
+			} else if len(inline) > 0 {
+				if receipt.ReviewNodeID == "" {
+					return ExitPR, "review", fmt.Errorf("GitHub review did not identify the submitted finding threads")
+				}
+				priorFindingReviews[receipt.ReviewNodeID] = receipt.Head
+			}
+		} else {
+			bodyPath := finalReviewSummaryBodyPath(filepath.Dir(repo.Dir), reviewContext.Metadata.Number, pass)
+			if err := h.writeWorkspaceFile(bodyPath, []byte(commentBody), 0o600); err != nil {
+				return ExitWorkspace, "review", fmt.Errorf("write post-task review comment: %w", err)
+			}
+			selector, targetRepo := reviewWritebackTarget(reviewContext.Metadata, reviewCfg, reviewContext.Selector)
+			if err := h.postReviewSummary(ctx, repo.Dir, selector, targetRepo, reviewContext.Metadata.Number, bodyPath, repo.PRURL, reviewContext.GitHubTokenEnvSanitized); err != nil {
+				return ExitPR, "review", fmt.Errorf("post review cycle comment for pass %d: %w", pass, err)
+			}
 		}
 		h.logf(
 			"stage=review status=ok action=pass review_mode=%s pass=%d total=%d findings=%d repo=%s repo_dir=%s pr_url=%s",
@@ -4429,6 +4497,7 @@ func (h Harness) runFinalReviewCycle(
 		}
 		if h.finalReviewPullRequestMerged(ctx, *repo, pass, h.FinalReviewPasses) {
 			repo.ReviewStoppedOnMerge = true
+			repo.ReviewInterrupted = true
 			return ExitSuccess, "", nil
 		}
 		if err := h.validateEnforcedNonDefaultBranch(ctx, *repo); err != nil {
@@ -4544,7 +4613,7 @@ func finalReviewPrompt(originalPrompt, reviewInstructions, preparedContext strin
 		instructions = "Review agent instructions:\n" + reviewInstructions + "\n\n"
 	}
 	return strings.TrimSpace(fmt.Sprintf(
-		"%s\n\nPost-task review pass %d/%d. Review the current pull request independently. Follow the bundled review skill as the controlling review standard and return its structured outcome.\n\nScope note: this cycle reviews file-content changes on the existing pull request branch. The harness exclusively owns branch selection, base synchronization, merges, rebases, cherry-picks, commits, pushes, PR creation/target, and commit-message/co-author mechanics. Never report ancestry, branch freshness, commit topology, or any other issue whose only repair requires changing Git metadata or history. Omit such issues instead of asking the repair agent to perform them. Focus findings on code correctness, tests, and task completeness that can be fixed by editing working-tree files. If a structured finding nevertheless requires a branch or history change, set `requiresBranchHistoryChange` to true so the harness will not send it to a file-repair pass.\n\n%sOriginal task prompt:\n%s\n\n%s",
+		"%s\n\nPost-task review pass %d/%d. Review the current pull request independently. Verify previously reported code findings against the current head before declaring the result clean. Follow the bundled review skill as the controlling review standard and return its structured outcome.\n\nScope note: this cycle reviews file-content changes on the existing pull request branch. The harness exclusively owns branch selection, base synchronization, merges, rebases, cherry-picks, commits, pushes, PR creation/target, and commit-message/co-author mechanics. Never report ancestry, branch freshness, commit topology, or any other issue whose only repair requires changing Git metadata or history. Omit such issues instead of asking the repair agent to perform them. Focus findings on code correctness, tests, and task completeness that can be fixed by editing working-tree files. If a structured finding nevertheless requires a branch or history change, set `requiresBranchHistoryChange` to true so the harness will not send it to a file-repair pass.\n\n%sOriginal task prompt:\n%s\n\n%s",
 		codeReviewLibraryPrompt(),
 		pass,
 		total,
@@ -4645,6 +4714,7 @@ type preparedReviewContext struct {
 	Selector                string
 	Metadata                reviewPRMetadata
 	Prompt                  string
+	Diff                    string
 	GitHubTokenEnvSanitized bool
 }
 
@@ -4697,7 +4767,7 @@ func (h Harness) buildReviewPromptContext(
 	discussionText := h.loadPullRequestDiscussion(ctx, repo.Dir, metadata.Number, gitHubTokenEnvSanitized)
 
 	baseRef := remoteTrackingRef(metadata.BaseRefName)
-	headRef := pullRequestTrackingRef(metadata.Number)
+	headRef := stringsx.FirstNonEmpty(metadata.HeadRefOID, pullRequestTrackingRef(metadata.Number))
 
 	diffStatRes, err := h.runCommand(ctx, "review", reviewDiffStatCommand(repo.Dir, baseRef, headRef))
 	if err != nil {
@@ -4745,6 +4815,7 @@ func (h Harness) buildReviewPromptContext(
 		Selector:                selector,
 		Metadata:                metadata,
 		Prompt:                  strings.TrimSpace(b.String()),
+		Diff:                    diffPatchRes.Stdout,
 		GitHubTokenEnvSanitized: gitHubTokenEnvSanitized,
 	}, nil
 }
@@ -4792,11 +4863,12 @@ type reviewFinding struct {
 }
 
 type reviewOutcome struct {
-	Status     string          `json:"status"`
-	MergeReady bool            `json:"mergeReady"`
-	Summary    string          `json:"summary"`
-	Positives  []string        `json:"positives"`
-	Findings   []reviewFinding `json:"findings"`
+	Status            string          `json:"status"`
+	MergeReady        bool            `json:"mergeReady"`
+	Summary           string          `json:"summary"`
+	Positives         []string        `json:"positives"`
+	Findings          []reviewFinding `json:"findings"`
+	VerifiedThreadIDs []string        `json:"verifiedThreadIds,omitempty"`
 }
 
 // normalizeFinalReviewOutcome keeps automated repair passes within their
@@ -4823,10 +4895,10 @@ func normalizeFinalReviewOutcome(outcome reviewOutcome) (reviewOutcome, int) {
 	}
 
 	outcome.Findings = kept
-	if len(kept) == 0 && outcome.Status == "findings" {
-		outcome.Status = "clean"
-		outcome.MergeReady = true
-		outcome.Summary = "No actionable file-content findings."
+	if len(kept) == 0 {
+		outcome.Status = "blocked"
+		outcome.MergeReady = false
+		outcome.Summary = "Reported findings require a branch or history change outside the automated repair scope."
 	}
 	return outcome, ignored
 }
@@ -4876,14 +4948,45 @@ func (h Harness) completeReviewRun(
 		return fmt.Errorf("review selector is required")
 	}
 
-	if reviewWritebackMode(cfg.Review.Writeback) == "summary-comment" {
+	sanitize := reviewContext != nil && reviewContext.GitHubTokenEnvSanitized
+	writeback := reviewWritebackMode(cfg.Review.Writeback) == "summary-comment"
+	if strings.EqualFold(metadata.State, "MERGED") {
+		repo.ReviewInterrupted = true
+		h.logFinalReviewStoppedForMergedPR(*repo, 1, 1)
+		return githubutil.ErrReviewInterrupted
+	}
+	clean := outcomeOK && reviewOutcomeAllowsAutoMerge(outcome)
+	var inline []inlineReviewFinding
+	if reviewContext != nil {
+		inline = inlineReviewFindings(reviewContext.Diff, outcome.Findings)
+	}
+	if (clean && (writeback || cfg.Review.AutoMerge)) || (writeback && len(inline) > 0) {
+		if reviewContext == nil {
+			return fmt.Errorf("missing reviewed pull request context")
+		}
+		outcome.Status = strings.ToLower(strings.TrimSpace(outcome.Status))
+		if clean {
+			outcome.Status = "clean"
+		}
+		receipt, err := h.publishSubmittedReview(ctx, cfg, *repo, reviewContext, runDir, 1, 0, outcome, conciseReviewCommentBody(outcome), inline)
+		if err != nil {
+			return h.reviewPublicationError(ctx, repo, 1, 1, fmt.Errorf("post pull request review: %w", err))
+		}
+		if receipt.Clean() && clean {
+			repo.ReviewReceipt = &receipt
+			h.logReviewReceipt(receipt)
+			if err := h.finishReviewGate(ctx, *repo, receipt, sanitize); err != nil {
+				return h.reviewPublicationError(ctx, repo, 1, 1, err)
+			}
+		}
+	} else if writeback {
 		body := reviewCommentBody(agentRes, outcome, outcomeOK)
 		bodyPath := reviewSummaryBodyPath(runDir, metadata.Number)
 		if err := h.writeWorkspaceFile(bodyPath, []byte(body), 0o600); err != nil {
 			return fmt.Errorf("write review summary body: %w", err)
 		}
 		h.logf("stage=review status=start action=comment pr_url=%s", prURL)
-		if err := h.postReviewSummary(ctx, repo.Dir, writebackSelector, writebackRepo, metadata.Number, bodyPath, prURL, reviewContext != nil && reviewContext.GitHubTokenEnvSanitized); err != nil {
+		if err := h.postReviewSummary(ctx, repo.Dir, writebackSelector, writebackRepo, metadata.Number, bodyPath, prURL, sanitize); err != nil {
 			if isTransientReviewWritebackError(err) {
 				h.logf("stage=review status=warn action=comment_writeback_deferred pr_url=%s err=%q", prURL, err)
 			} else {
@@ -4894,11 +4997,14 @@ func (h Harness) completeReviewRun(
 		}
 	}
 
-	if h.OnReviewResult != nil {
-		h.OnReviewResult(outcomeOK && reviewOutcomeAllowsAutoMerge(outcome), metadata.HeadRefOID)
+	if (writeback || cfg.Review.AutoMerge) && repo.ReviewReceipt == nil {
+		h.logf("stage=review status=warn action=review_gate reason=review_not_clean pr_url=%s", prURL)
 	}
-	if cfg.Review.AutoMerge {
-		if err := h.autoMergeCleanReview(ctx, *repo, writebackSelector, writebackRepo, cfg.Review.MergeMethod, metadata, outcome, reviewContext != nil && reviewContext.GitHubTokenEnvSanitized); err != nil {
+	if cfg.Review.AutoMerge && repo.ReviewReceipt != nil {
+		if err := h.autoMergeCleanReview(ctx, *repo, cfg.Review.MergeMethod, metadata, sanitize); err != nil {
+			if errors.Is(err, githubutil.ErrReviewInterrupted) {
+				return h.reviewPublicationError(ctx, repo, 1, 1, err)
+			}
 			return err
 		}
 	}
@@ -4972,48 +5078,31 @@ func isTransientReviewWritebackError(err error) bool {
 	return isTransientGitHubCLIError(err)
 }
 
-func (h Harness) autoMergeCleanReview(
-	ctx context.Context,
-	repo repoWorkspace,
-	selector string,
-	targetRepo string,
-	mergeMethod string,
-	metadata reviewPRMetadata,
-	outcome reviewOutcome,
-	sanitizeGitHubTokenEnv bool,
-) error {
-	if !reviewOutcomeAllowsAutoMerge(outcome) {
-		h.logf("stage=review status=skip action=auto_merge reason=review_not_clean pr_url=%s status=%s", metadata.URL, outcome.Status)
+func (h Harness) autoMergeCleanReview(ctx context.Context, repo repoWorkspace, method string, metadata reviewPRMetadata, sanitize bool) error {
+	if !strings.EqualFold(metadata.State, "OPEN") || metadata.IsDraft {
+		h.logf("stage=review status=skip action=auto_merge reason=pr_not_ready pr_url=%s", repo.PRURL)
 		return nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(metadata.State), "OPEN") {
-		h.logf("stage=review status=skip action=auto_merge reason=pr_not_open pr_url=%s state=%s", metadata.URL, metadata.State)
-		return nil
+	if repo.ReviewReceipt == nil {
+		return fmt.Errorf("waiting for a submitted clean review receipt")
 	}
-	if metadata.IsDraft {
-		h.logf("stage=review status=skip action=auto_merge reason=draft pr_url=%s", metadata.URL)
-		return nil
+	receipt := *repo.ReviewReceipt
+	gh := h.reviewGH(repo.Dir, sanitize)
+	if err := githubutil.VerifyReviewedHeadCI(ctx, gh, receipt); err != nil {
+		return err
 	}
-	headRefOID := strings.TrimSpace(metadata.HeadRefOID)
-	if headRefOID == "" {
-		h.logf("stage=review status=skip action=auto_merge reason=missing_head_ref_oid pr_url=%s", metadata.URL)
-		return nil
+	if err := githubutil.VerifyPublishedReviewCheck(ctx, gh, receipt); err != nil {
+		return err
 	}
-
-	method := reviewMergeMethod(mergeMethod)
-	h.logf("stage=review status=start action=auto_merge method=%s pr_url=%s", method, metadata.URL)
-	cmd := prMergeAutoCommand(repo.Dir, selector, targetRepo, method, headRefOID)
-	if sanitizeGitHubTokenEnv {
-		cmd = commandWithoutGitHubTokenEnv(cmd)
+	if err := githubutil.VerifyReviewGate(ctx, gh, receipt); err != nil {
+		return err
 	}
-	if _, err := h.runCommand(ctx, "review", cmd); err != nil {
-		if isAutoMergeUnsupportedError(err) {
-			h.logf("stage=review status=skip action=auto_merge reason=unsupported_or_unconfigured pr_url=%s err=%q", metadata.URL, err)
-			return nil
-		}
-		return fmt.Errorf("enable clean-review auto-merge: %w", err)
+	method = reviewMergeMethod(method)
+	h.logf("stage=review status=start action=auto_merge method=%s pr_url=%s", method, repo.PRURL)
+	if err := githubutil.MergeReviewedHead(ctx, gh, receipt, method); err != nil {
+		return err
 	}
-	h.logf("stage=review status=ok action=auto_merge method=%s pr_url=%s", method, metadata.URL)
+	h.logf("stage=review status=ok action=auto_merge method=%s pr_url=%s", method, repo.PRURL)
 	return nil
 }
 
@@ -5024,18 +5113,20 @@ func (h Harness) markPullRequestReadyForReview(ctx context.Context, repo repoWor
 	if prURL == "" {
 		return nil
 	}
-	if state, err := h.loadPullRequestState(ctx, repo.Dir, prURL); err == nil && !pullRequestStateIsOpen(state) {
-		h.logf("stage=review status=skip action=mark_ready reason=pr_not_open pr_url=%s state=%s", prURL, state.State)
-		return nil
+	if repo.ReviewReceipt == nil {
+		return fmt.Errorf("waiting for a submitted clean review receipt")
+	}
+	if err := h.checkReviewGate(ctx, repo, *repo.ReviewReceipt, repo.ReviewSanitize); err != nil {
+		return err
 	}
 	h.logf("stage=review status=start action=mark_ready pr_url=%s", prURL)
-	if _, err := h.runCommand(ctx, "review", prReadyCommand(repo.Dir, prURL)); err != nil {
+	cmd := prReadyCommand(repo.Dir, prURL)
+	if repo.ReviewSanitize {
+		cmd = commandWithoutGitHubTokenEnv(cmd)
+	}
+	if _, err := h.runCommand(ctx, "review", cmd); err != nil {
 		if isPRAlreadyReadyError(err) {
 			h.logf("stage=review status=skip action=mark_ready reason=already_ready pr_url=%s", prURL)
-			return nil
-		}
-		if isPRClosedOrMergedError(err) {
-			h.logf("stage=review status=skip action=mark_ready reason=pr_not_open pr_url=%s", prURL)
 			return nil
 		}
 		return fmt.Errorf("mark pull request ready for review: %w", err)
@@ -5112,30 +5203,6 @@ func isPRClosedOrMergedError(err error) bool {
 		"is already merged",
 	}
 	for _, fragment := range closedOrMergedFragments {
-		if strings.Contains(message, fragment) {
-			return true
-		}
-	}
-	return false
-}
-
-func isAutoMergeUnsupportedError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	unsupportedFragments := []string{
-		"enablepullrequestautomerge",
-		"protected branch rules not configured",
-		"auto-merge is disabled",
-		"auto merge is disabled",
-		"automerge is disabled",
-		"auto-merge is not enabled",
-		"does not have the correct permissions",
-		"mergepullrequest",
-		"resource not accessible by integration",
-	}
-	for _, fragment := range unsupportedFragments {
 		if strings.Contains(message, fragment) {
 			return true
 		}
@@ -5333,6 +5400,9 @@ func parseReviewOutcome(text string) (reviewOutcome, bool) {
 	if text == "" {
 		return reviewOutcome{}, false
 	}
+	if outcome, ok := parseReviewOutcomeJSON(text); ok {
+		return outcome, true
+	}
 	matches := fencedJSONBlockPattern.FindAllStringSubmatch(text, -1)
 	for i := len(matches) - 1; i >= 0; i-- {
 		if len(matches[i]) < 2 {
@@ -5391,13 +5461,7 @@ func reviewOutcomeAllowsAutoMerge(outcome reviewOutcome) bool {
 	default:
 		return false
 	}
-	for _, finding := range outcome.Findings {
-		switch strings.ToLower(strings.TrimSpace(finding.Severity)) {
-		case "critical", "high", "medium":
-			return false
-		}
-	}
-	return true
+	return len(outcome.Findings) == 0
 }
 
 func repoWorkspaceDirName(repoURL string, index, total int) string {
@@ -5486,20 +5550,6 @@ func prDraftCommand(repoDir, prURL string) execx.Command {
 		Name: "gh",
 		Args: []string{"pr", "ready", prURL, "--undo"},
 	}
-}
-
-func prMergeAutoCommand(repoDir, selector, targetRepo, method, headRefOID string) execx.Command {
-	args := []string{"pr", "merge", selector, "--auto", "--match-head-commit", headRefOID}
-	switch reviewMergeMethod(method) {
-	case "merge":
-		args = append(args, "--merge")
-	case "rebase":
-		args = append(args, "--rebase")
-	default:
-		args = append(args, "--squash")
-	}
-	args = appendGHRepoArg(args, targetRepo)
-	return ghCommand(repoDir, args...)
 }
 
 func appendGHRepoArg(args []string, targetRepo string) []string {
@@ -5593,6 +5643,12 @@ func (h Harness) step(step string) {
 }
 
 func (h Harness) runCommandUnchecked(ctx context.Context, phase string, cmd execx.Command) (result execx.Result, runErr error) {
+	if os.Getenv(reviewCheckTokenEnv) != "" {
+		if len(cmd.Env) == 0 {
+			cmd.Env = os.Environ()
+		}
+		cmd.Env = environWithoutKeys(cmd.Env, reviewCheckTokenEnv)
+	}
 	h.step(phase)
 	started := time.Now()
 	// Do not log arguments or environment: they can contain credentials or
@@ -8343,6 +8399,7 @@ func prepareAgentIOEnv(runDir string, environ []string) ([]string, error) {
 	}
 	// Codex owns persistent auth, configuration, skills and token rotation. Never
 	// clone its auth cache into a task worktree or discard a refreshed generation.
+	environ = environWithoutKeys(environ, reviewCheckTokenEnv)
 	codexConfigDir, err := agentruntime.CodexHome(environ)
 	if err != nil {
 		return nil, err
@@ -9601,7 +9658,7 @@ func latestCheckSnapshot(raw string) (latestChecksSnapshot, error) {
 	latestByName := make(map[string]latestCheckState, len(checks))
 	for i, check := range checks {
 		name := strings.TrimSpace(check.Name)
-		if name == "" {
+		if name == "" || name == githubutil.ReviewCheckName {
 			continue
 		}
 		bucket := strings.ToLower(strings.TrimSpace(check.Bucket))
@@ -9644,7 +9701,7 @@ func latestCheckSnapshotFromText(raw string) (latestChecksSnapshot, error) {
 		}
 		name := strings.TrimSpace(fields[0])
 		bucket := strings.ToLower(strings.TrimSpace(fields[1]))
-		if name == "" || bucket == "" || strings.Contains(name, "refreshing checks status") {
+		if name == "" || name == githubutil.ReviewCheckName || bucket == "" || strings.Contains(name, "refreshing checks status") {
 			continue
 		}
 		latestByName[name] = latestCheckState{
