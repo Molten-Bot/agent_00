@@ -486,6 +486,25 @@ test('multi-repository task highlights initial checks for the current repository
   assert.equal(await doneReviews.count(), 3);
 });
 
+test('current work lists running tasks by oldest start time first', async t => {
+  const now = Date.now();
+  const tasks = [
+    ['middle', 2, 0],
+    ['newest', 1, 1],
+    ['oldest', 3, 2],
+  ].map(([id, startMinutesAgo, updateMinutesAgo]) => ({
+    request_id: id, prompt: `Task ${id}`, repo: 'example/project', status: 'running',
+    started_at: new Date(now - startMinutesAgo * 60_000).toISOString(),
+    updated_at: new Date(now - updateMinutesAgo * 60_000).toISOString(),
+  }));
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, tasks);
+  const cards = page.locator('#task-list .task[data-request-id]');
+  await cards.last().waitFor();
+  assert.deepEqual(await cards.evaluateAll(nodes => nodes.map(node => node.dataset.requestId)), [
+    'oldest', 'middle', 'newest',
+  ]);
+});
+
 test('legacy issue prompts restore task actions and workflow links', async t => {
   const now = new Date().toISOString();
   const issueTask = (id, number, status) => ({

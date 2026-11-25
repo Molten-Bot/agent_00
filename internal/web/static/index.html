@@ -10742,7 +10742,7 @@
     function sortTasksByStartTime(tasks) {
       const out = Array.isArray(tasks) ? [...tasks] : [];
       out.sort((a, b) => {
-        const startedDiff = parseTaskTimestamp(b?.started_at) - parseTaskTimestamp(a?.started_at);
+        const startedDiff = parseTaskTimestamp(a?.started_at) - parseTaskTimestamp(b?.started_at);
         if (startedDiff !== 0) return startedDiff;
 
         return String(b?.request_id || "").localeCompare(String(a?.request_id || ""));

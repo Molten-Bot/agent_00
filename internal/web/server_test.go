@@ -1086,9 +1086,9 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected xterm stylesheet to load with xterm.js instead of through the global stylesheet")
 	}
 	if !strings.Contains(markup, "function sortTasksByStartTime(") ||
-		!strings.Contains(markup, "const startedDiff = parseTaskTimestamp(b?.started_at) - parseTaskTimestamp(a?.started_at);") ||
+		!strings.Contains(markup, "const startedDiff = parseTaskTimestamp(a?.started_at) - parseTaskTimestamp(b?.started_at);") ||
 		!strings.Contains(markup, "return sortTasksByStartTime(taskItems);") {
-		t.Fatalf("expected index html to keep current tasks in stable newest-to-oldest start order")
+		t.Fatalf("expected index html to keep current tasks in stable oldest-to-newest start order")
 	}
 	if !strings.Contains(markup, "const STREAM_RENDER_INTERVAL_MS = 500;") ||
 		!strings.Contains(markup, "window.requestAnimationFrame(renderPendingStreamSnapshot)") ||
