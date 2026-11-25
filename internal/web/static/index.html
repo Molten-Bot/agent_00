@@ -956,6 +956,7 @@
       review: { label: "Review", icon: "clipboard-check" },
     });
     const TASK_PROGRESS_STEP_DEFS = Object.freeze({
+      entry_workflow: { id: "entry_workflow", label: "Workflow", detail: "Triggered by Workflow.", icon: "entry_workflow" },
       entry_chat: { id: "entry_chat", label: "Chat", detail: "Queued from Chat.", icon: "entry_chat" },
       entry_prompt: { id: "entry_prompt", label: "Prompt", detail: "Queued from Prompt Studio.", icon: "entry_prompt" },
       entry_github_issue: { id: "entry_github_issue", label: "GitHub issue", detail: "Queued from a GitHub issue.", icon: "entry_github_issue" },
@@ -1017,6 +1018,7 @@
       default: "clock-3",
     });
     const TASK_PROGRESS_ICON_NAMES = Object.freeze({
+      entry_workflow: "diagram-flow-vertical",
       entry_chat: "message-circle",
       entry_prompt: "pencil",
       entry_github_issue: "square-kanban",
@@ -11432,6 +11434,9 @@
       if (taskIssueURL(task) || task?.source === "github_issues") {
         return "entry_github_issue";
       }
+      if (task?.workflow_triggered && isReviewTask(task)) {
+        return "entry_review";
+      }
       switch (taskStartSource(task)) {
         case "chat":
           return "entry_chat";
@@ -11770,14 +11775,15 @@
     function taskProgressStepsForTask(task, signals, currentStepID) {
       const status = normalizedTaskStatus(task?.status);
       const entry = taskProgressEntryStepID(task);
+      const entrySteps = task.workflow_triggered ? ["entry_workflow", entry] : [entry];
       if (isReadOnlyReviewTask(task)) {
-        const reviewStepIDs = [entry, "prepare", "clone", "code_review", "finalize"];
+        const reviewStepIDs = [...entrySteps, "prepare", "clone", "code_review", "finalize"];
         if (taskAutoMergeStepEnabled(task) && status !== "no_changes") {
           reviewStepIDs.push("auto_merge");
         }
         return reviewStepIDs.map((id) => TASK_PROGRESS_STEP_DEFS[id]).filter(Boolean);
       }
-      const stepIDs = [entry, "prepare", "clone", "branch", "publish"];
+      const stepIDs = [...entrySteps, "prepare", "clone", "branch", "publish"];
 
       if (signals.hasForkFallback) {
         stepIDs.push("fork");
@@ -11936,6 +11942,7 @@
         taskReviewStepEnabled() ? "review_cycle" : "",
         taskStartSource(task),
         taskProgressEntryStepID(task),
+        Boolean(task?.workflow_triggered),
         isReadOnlyReviewTask(task) ? "code_review" : "implementation",
         taskPullRequestURL(task),
         String(logs.length),
@@ -12358,6 +12365,7 @@
             stage: String(task?.stage || ""),
             autoMergeStep: taskAutoMergeStepEnabled(task),
             entryStep: taskProgressEntryStepID(task),
+            workflowTriggered: Boolean(task?.workflow_triggered),
             currentState: taskCurrentStateSignature(task),
             name: taskNameText(task),
             repos: formatTaskRepos(task),

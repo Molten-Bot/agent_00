@@ -296,6 +296,41 @@ test('task card distinguishes the titled pull request from the merged pull reque
   assert.equal(await result.locator('.task-result-link').getAttribute('href'), trackedURL);
 });
 
+test('workflow-triggered tasks start with the Workflow icon and keep their task steps', async t => {
+  const now = new Date().toISOString();
+  const issueURL = 'https://github.com/example/project/issues/42';
+  const issue = {
+    repo: 'example/project', source: 'github_issues', github_issue_url: issueURL,
+    started_at: now, updated_at: now, status: 'running', stage: 'agent',
+  };
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, [
+    { ...issue, request_id: 'workflow-issue', workflow_triggered: true },
+    { ...issue, request_id: 'direct-issue', status: 'pending', stage: 'task' },
+    { ...issue, request_id: 'workflow-review', source: 'prompt', github_issue_url: '',
+      workflow_triggered: true, workflow: 'code-review', stage: 'review' },
+  ]);
+
+  const stepsFor = id => page.locator(`#task-list .task[data-request-id="${id}"] .task-progress-step`);
+  const current = page.locator('.task-progress-step.current');
+  const workflowSteps = stepsFor('workflow-issue');
+  await workflowSteps.first().locator('svg.lucide-diagram-flow-vertical').waitFor();
+  assert.match(await workflowSteps.first().getAttribute('title'), /^Workflow: done\./);
+  assert.equal(await workflowSteps.nth(1).getAttribute('href'), issueURL);
+  assert.equal(await workflowSteps.nth(1).getAttribute('aria-label'), 'Open issue on GitHub.');
+  assert.match(await workflowSteps.and(current).getAttribute('title'), /^Agent Run: current\./);
+
+  const directSteps = stepsFor('direct-issue');
+  assert.equal(await directSteps.first().getAttribute('href'), issueURL);
+  assert.match(await directSteps.first().getAttribute('title'), /^GitHub issue: done\./);
+  assert.match(await directSteps.and(current).getAttribute('title'), /^Prepare: current\./);
+
+  const reviewSteps = stepsFor('workflow-review');
+  await reviewSteps.first().locator('svg.lucide-diagram-flow-vertical').waitFor();
+  assert.match(await reviewSteps.nth(1).getAttribute('title'), /^Review: done\./);
+  await reviewSteps.nth(1).locator('svg.lucide-git-pull-request').waitFor();
+  assert.match(await reviewSteps.and(current).getAttribute('title'), /^Code Review: current\./);
+});
+
 test('issue task adds review and fix markers as each pass starts', async t => {
   const now = new Date().toISOString();
   const task = {

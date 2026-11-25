@@ -1289,6 +1289,28 @@ func TestBrokerRecordTaskRunConfigCreatesPendingTaskAndNotifies(t *testing.T) {
 	}
 }
 
+func TestBrokerPreservesWorkflowTriggerForIssueTask(t *testing.T) {
+	t.Parallel()
+	b := NewBroker()
+	const issueURL = "https://github.com/example/project/issues/42"
+	b.RecordTaskRunConfigWithSource("local-workflow-issue", []byte(`{
+		"workflow":{"id":"issue-workflow","eventId":"event-42","policyHash":"runtime-policy"},
+		"githubIssue":{"number":42,"url":"`+issueURL+`"}
+	}`), "github_issues")
+	b.DropTaskRunConfig("local-workflow-issue")
+	b.RecordTaskRunConfig("local-library", []byte(`{"libraryTaskName":"unit-test-coverage"}`))
+
+	task, ok := b.Task("local-workflow-issue")
+	if !ok || !task.WorkflowTriggered || task.Source != "github_issues" || task.GitHubIssueURL != issueURL {
+		t.Fatalf("workflow issue task lost its origin or issue metadata: %+v", task)
+	}
+	for _, task := range b.Snapshot().Tasks {
+		if want := task.RequestID == "local-workflow-issue"; task.WorkflowTriggered != want {
+			t.Errorf("task %s workflow trigger = %t, want %t", task.RequestID, task.WorkflowTriggered, want)
+		}
+	}
+}
+
 func TestBrokerRecordTaskRunConfigWithSource(t *testing.T) {
 	t.Parallel()
 
