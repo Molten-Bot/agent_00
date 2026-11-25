@@ -25,6 +25,8 @@ func issueDependencyRetryError(incident string) string {
 		return failurefollowup.OpenDependencyReason + "; explicit retry required after resolution"
 	case localruntime.IssueIncidentExternalRollout:
 		return failurefollowup.ExternalRolloutPrerequisitesReason + "; explicit retry required after provisioning"
+	case localruntime.IssueIncidentHumanAction:
+		return failurefollowup.HumanActionRequiredReason + "; explicit retry required after the handoff"
 	case localruntime.IssueIncidentExternalEvidence:
 		return failurefollowup.ExternalEvidencePrerequisitesReason + "; explicit retry required after evidence and access are available"
 	default:
@@ -252,6 +254,8 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			record.Incident = localruntime.IssueIncidentUnmergedDependency
 		case reason == failurefollowup.OpenDependencyReason:
 			record.Incident = localruntime.IssueIncidentOpenDependency
+		case reason == failurefollowup.HumanActionRequiredReason:
+			record.Incident = localruntime.IssueIncidentHumanAction
 		case reason == failurefollowup.ExternalEvidencePrerequisitesReason:
 			record.Incident = localruntime.IssueIncidentExternalEvidence
 		case reason == failurefollowup.ExternalRolloutPrerequisitesReason:

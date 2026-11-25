@@ -8765,6 +8765,31 @@ func TestCodexReportedFailureIgnoresInterimFailureMarkerInNoisyStdout(t *testing
 	}
 }
 
+func TestCheckHumanActionFailureFromStdout(t *testing.T) {
+	t.Parallel()
+	const summary = "Failure: Human action remains pending."
+	const details = "Error details:\nAn operator must confirm the shipment.\nThe delivery needs a replacement date.\n" +
+		"Send confirmation to the requestor.\nRecord the agreed time."
+	const displayed = "Error details: An operator must confirm the shipment. | The delivery needs a replacement date. | " +
+		"Send confirmation to the requestor." + failurefollowup.TruncatedErrorDetails
+	failure := "codex: codex reported failure: " + summary + " " + displayed
+	blocked, matched := CheckHumanActionFailureFromStdout(failure, func(stage string) string {
+		if stage != "codex" {
+			t.Fatalf("stage = %q, want codex", stage)
+		}
+		return summary + "\n" + details
+	})
+	if !blocked || !matched {
+		t.Fatalf("CheckHumanActionFailureFromStdout() = (%v, %v), want (true, true)", blocked, matched)
+	}
+	blocked, matched = CheckHumanActionFailureFromStdout(failure, func(string) string {
+		return "Failure: Shipment failed.\nError details: a parser error"
+	})
+	if blocked || matched {
+		t.Fatalf("CheckHumanActionFailureFromStdout(mismatched output) = (%v, %v), want (false, false)", blocked, matched)
+	}
+}
+
 func TestCodexReportedFailureIgnoresBareFailureHeadingInCompletedSummary(t *testing.T) {
 	t.Parallel()
 

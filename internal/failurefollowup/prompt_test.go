@@ -461,3 +461,39 @@ func TestPushProtectionRequiresObservedPushError(t *testing.T) {
 		})
 	}
 }
+func TestNonRemediableHumanActionFailure(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, report string
+		want         string
+	}{
+		{"explicit handoff", "claude: claude reported failure: Failure: Human action remains pending.\nError details: An operator must confirm the shipment.", HumanActionRequiredReason},
+		{"legacy handoff", "codex: codex reported failure: Failure: Vendor meeting and email follow-up remain pending. Error details: The meeting requires confirmation and human outreach. | A response is pending.", HumanActionRequiredReason},
+		{"truncated handoff", "codex: codex reported failure: Failure: Vendor meeting and email follow-up remain pending. Error details: The meeting requires confirmation and human outreach." + TruncatedErrorDetails, ""},
+		{"mixed blocker", "codex: codex reported failure: Failure: Human action remains pending. Error details: An operator must confirm the shipment. Export tests still fail.", ""},
+		{"flattened test output", "codex: codex reported failure: Failure: Human action remains pending. Error details: An operator must confirm the shipment. | --- FAIL: TestExport (0.00s)", ""},
+		{"validation timeout", "codex: codex reported failure: Failure: Human action remains pending. Error details: An operator must confirm the shipment. Smoke test timed out after 5 minutes.", ""},
+		{"synthesized unknown details", "codex: codex reported failure: Failure: Human action remains pending. Error details: unknown error.", ""},
+		{"quoted details", "codex: codex reported failure: Failure: Export parser fails. Error details: Fixture reads `Failure: Human action remains pending.`", ""},
+		{"ambiguous pending work", "codex: codex reported failure: Failure: Export remains pending. Error details: Deployment needs human outreach.", ""},
+		{"missing details", "codex: codex reported failure: Failure: Human action remains pending.", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := NonRemediableFailureReason(errors.New(tc.report)); got != tc.want {
+				t.Fatalf("reason = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFailureDetailForPromptWithholdsAgentSubprocessOutput(t *testing.T) {
+	t.Parallel()
+	for _, detail := range []string{
+		"codex: run codex [sandbox -- codex --]: exit status 1 (private stdout and stderr)",
+		"claude: run codex [sandbox -- claude --print --]: exit status 1 (private output)",
+	} {
+		if got := FailureDetailForPrompt(detail); got != "[agent failure report withheld; see source run logs]" {
+			t.Fatalf("FailureDetailForPrompt(%q) = %q", detail, got)
+		}
+	}
+}
