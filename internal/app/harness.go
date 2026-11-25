@@ -4926,7 +4926,12 @@ func (h Harness) postReviewSummary(
 	prURL string,
 	sanitizeGitHubTokenEnv bool,
 ) error {
-	cmd := prReviewSummaryCommand(repoDir, selector, targetRepo, bodyPath)
+	// Relative summary paths use the harness working directory, but gh runs in repoDir.
+	bodyFile, err := filepath.Abs(bodyPath)
+	if err != nil {
+		return fmt.Errorf("resolve review summary body path: %w", err)
+	}
+	cmd := prReviewSummaryCommand(repoDir, selector, targetRepo, bodyFile)
 	if sanitizeGitHubTokenEnv {
 		cmd = commandWithoutGitHubTokenEnv(cmd)
 	}
@@ -4934,7 +4939,7 @@ func (h Harness) postReviewSummary(
 		return nil
 	} else {
 		h.logf("stage=review status=warn action=comment_review_failed pr_url=%s err=%q", prURL, err)
-		fallbackCmd := prReviewSummaryFallbackCommand(repoDir, selector, targetRepo, prNumber, bodyPath)
+		fallbackCmd := prReviewSummaryFallbackCommand(repoDir, selector, targetRepo, prNumber, bodyFile)
 		if sanitizeGitHubTokenEnv {
 			fallbackCmd = commandWithoutGitHubTokenEnv(fallbackCmd)
 		}
