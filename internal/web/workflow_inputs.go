@@ -67,6 +67,7 @@ func (s Server) submitInputWorkflow(ctx context.Context, body []byte, source str
 		c.Reviewers = append([]string{}, (*w.Task.Reviewers)...)
 	}
 	c.AssignCreator = &w.Task.AssignCreator
+	c.Complexity = w.Task.Complexity
 	c.Draft = w.Task.Draft
 	if err := c.Validate(); err != nil {
 		return "", err

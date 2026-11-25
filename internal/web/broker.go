@@ -70,6 +70,10 @@ type TaskStatusTransition struct {
 }
 
 type Task struct {
+	Complexity        string                 `json:"complexity,omitempty"`
+	ResolvedModel     string                 `json:"resolved_model,omitempty"`
+	CLIVersion        string                 `json:"cli_version,omitempty"`
+	ModelResolution   string                 `json:"model_resolution,omitempty"`
 	RequestID         string                 `json:"request_id"`
 	Source            string                 `json:"source,omitempty"`
 	Prompt            string                 `json:"prompt,omitempty"`
@@ -314,6 +318,9 @@ type Broker struct {
 }
 
 type taskState struct {
+	ResolvedModel     string
+	CLIVersion        string
+	ModelResolution   string
 	RequestID         string
 	Source            string
 	Prompt            string
@@ -577,6 +584,10 @@ func (b *Broker) snapshot(opts snapshotOptions) Snapshot {
 			Branch:            t.Branch,
 			GitHubIssueURL:    t.GitHubIssueURL,
 			PRURL:             t.PRURL,
+			Complexity:        b.runConfigFieldsLocked(t.RequestID).complexity,
+			ResolvedModel:     t.ResolvedModel,
+			CLIVersion:        t.CLIVersion,
+			ModelResolution:   t.ModelResolution,
 			IssueTitle:        b.runConfigFieldsLocked(t.RequestID).issueTitle,
 			PRTitle:           prTitle.title,
 			PRTitleURL:        prTitleURL,
@@ -693,6 +704,10 @@ func (b *Broker) Task(requestID string) (Task, bool) {
 		Branch:            t.Branch,
 		GitHubIssueURL:    t.GitHubIssueURL,
 		PRURL:             t.PRURL,
+		Complexity:        b.runConfigFieldsLocked(t.RequestID).complexity,
+		ResolvedModel:     t.ResolvedModel,
+		CLIVersion:        t.CLIVersion,
+		ModelResolution:   t.ModelResolution,
 		IssueTitle:        b.runConfigFieldsLocked(t.RequestID).issueTitle,
 		PRTitle:           prTitle.title,
 		PRTitleURL:        prTitleURL,
@@ -1677,6 +1692,7 @@ func normalizedGroupName(name, fallback string) string {
 // runConfigFields holds the values ensureTaskLocked derives from a stored run
 // config payload. Every field is a pure function of the payload bytes.
 type runConfigFields struct {
+	complexity   string
 	raw          []byte
 	images       []PromptImage
 	assets       []githubassets.Asset
@@ -1701,7 +1717,12 @@ func (b *Broker) runConfigFieldsLocked(requestID string) runConfigFields {
 	if cached, ok := b.runConfigFieldCache[requestID]; ok && len(cached.raw) == len(raw) && &cached.raw[0] == &raw[0] {
 		return cached
 	}
+	var requested struct {
+		Complexity string `json:"complexity"`
+	}
+	_ = json.Unmarshal(raw, &requested)
 	fields := runConfigFields{
+		complexity:   requested.Complexity,
 		raw:          raw,
 		images:       imagesFromRunConfigJSON(raw),
 		assets:       assetsFromRunConfigJSON(raw),
@@ -2298,6 +2319,11 @@ func (b *Broker) updateTaskFromLineLocked(t *taskState, line string, fields map[
 	}
 
 	if strings.HasPrefix(line, "task request_id=") {
+		if fields["action"] == "resolve_model" {
+			t.ResolvedModel = fields["model"]
+			t.CLIVersion = fields["cli_version"]
+			t.ModelResolution = fields["resolution"]
+		}
 		agentInvocationLine := isAgentInvocationWorkflowStatusFields(fields)
 		if stage := fields["stage"]; stage != "" {
 			t.Stage = stage

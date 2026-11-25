@@ -37,6 +37,7 @@ const githubPRBodyMaxBytes = 65_536 // A byte limit also fits GitHub's character
 
 // Config is the v1 public contract for a harness run.
 type Config struct {
+	Complexity               string               `json:"complexity,omitempty"`
 	Version                  string               `json:"version"`
 	RepoURL                  string               `json:"repoUrl"`
 	Repo                     string               `json:"repo"`
@@ -403,6 +404,9 @@ func (c *Config) ApplyDefaults() {
 
 // Validate checks required values and path safety.
 func (c Config) Validate() error {
+	if c.Complexity != "" && !agentruntime.ValidComplexity(c.Complexity) {
+		return fmt.Errorf("complexity must be easy, standard, or advanced")
+	}
 	if c.Workflow != nil && (c.Workflow.ID == "" || c.Workflow.EventID == "" || c.Workflow.ReviewCycles < 0 || c.Workflow.ReviewCycles > 10) {
 		return fmt.Errorf("invalid workflow run snapshot")
 	}

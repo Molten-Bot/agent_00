@@ -34,6 +34,8 @@ var promptImageHarnesses = map[string]struct{}{
 // RunOptions controls provider-specific execution behavior.
 type RunOptions struct {
 	// WorkspaceDir is the task's private parent directory, including repos and IO.
+	Model            string
+	ReasoningEffort  string
 	WorkspaceDir     string
 	SkipGitRepoCheck bool
 	ImagePaths       []string
@@ -494,6 +496,12 @@ func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command
 		args = append([]string{"exec", "--sandbox", "workspace-write"}, args[1:]...)
 		args = append(args, workspaceSandboxArgs(opts)...)
 	}
+	if opts.Model != "" {
+		args = append(args, "--model", opts.Model)
+	}
+	if opts.ReasoningEffort != "" {
+		args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%q", opts.ReasoningEffort))
+	}
 	if opts.SkipGitRepoCheck {
 		args = append(args, "--skip-git-repo-check")
 	}
@@ -540,6 +548,9 @@ func buildClaudeCommand(targetDir, prompt string, opts RunOptions) (execx.Comman
 			continue
 		}
 		args = append(args, "--add-dir", dir)
+	}
+	if opts.Model != "" {
+		args = append(args, "--model", opts.Model)
 	}
 	if tools := nonEmptyStrings(opts.DisallowedTools); len(tools) > 0 {
 		args = append(args, "--disallowedTools")

@@ -211,10 +211,11 @@ type Harness struct {
 	// SaveIssuePublicationReady checkpoints agent acceptance before publication.
 	SaveIssuePublicationReady func(bool) error
 
-	Signing        *gitsigning.Snapshot
-	LoadSigning    func(context.Context) (*gitsigning.Snapshot, error)
-	signingHistory map[string]map[string]bool
-	Runner         execx.Runner
+	Signing          *gitsigning.Snapshot
+	LoadSigning      func(context.Context) (*gitsigning.Snapshot, error)
+	signingHistory   map[string]map[string]bool
+	resolveTaskModel func() (agentruntime.ModelSelection, error)
+	Runner           execx.Runner
 	// AssetTransport optionally replaces HTTP transport for attachment downloads.
 	AssetTransport http.RoundTripper
 	Workspace      workspace.Manager
@@ -594,6 +595,18 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		return h.fail(ExitWorkspace, "workspace", err, runDir)
 	} else {
 		codexOpts.Env = h.Signing.Environment(env)
+	}
+	if cfg.Complexity != "" {
+		// A resumed publication can finish without an agent. Resolve on the
+		// first invocation and reuse the choice for review and remediation.
+		h.resolveTaskModel = sync.OnceValues(func() (agentruntime.ModelSelection, error) {
+			selection, err := runtime.ResolveModel(ctx, h.Runner, codexDir, codexOpts, cfg.Complexity)
+			if err != nil {
+				return selection, fmt.Errorf("resolve %s task complexity: %w", cfg.Complexity, err)
+			}
+			h.logf("stage=%s status=ok action=resolve_model complexity=%s model=%q cli_version=%q resolution=%s reasoning_effort=%q", agentStage, cfg.Complexity, selection.Model, selection.Version, selection.Source, selection.Effort)
+			return selection, nil
+		})
 	}
 	codexBasePrompt = withBackpressurePrompt(codexBasePrompt, h.collectBackpressureRequirements(repos, cfg.TargetSubdir))
 	codexTargetLabel := codexTargetLabel(cfg.TargetSubdir, len(repos) > 1)
@@ -6689,6 +6702,13 @@ func (h Harness) runCodexWithHeartbeat(
 	opts codexRunOptions,
 	invocation agentInvocationLogMetadata,
 ) (execx.Result, error) {
+	if h.resolveTaskModel != nil {
+		selection, err := h.resolveTaskModel()
+		if err != nil {
+			return execx.Result{}, err
+		}
+		opts.Model, opts.ReasoningEffort = selection.Model, selection.Effort
+	}
 	cmd, err := agentCommandWithOptions(runtime, targetDir, prompt, opts)
 	if err != nil {
 		return execx.Result{}, err

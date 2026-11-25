@@ -754,3 +754,18 @@ test('Workflow uses the same Studio panel and titlebar styles', async t => {
   assert.deepEqual(workflow,studio,`${theme}: shared Studio chrome and available space`);
  }
 });
+
+test('task complexity can override the application default and return to inheritance', async t => {
+  const { page, getDocument } = await openEditor(t);
+  await selectRepository(page, 'acme/repo');
+  await page.getByRole('button', { name: 'Scheduled task', exact: true }).click();
+  await page.locator('[data-id="task"]').click();
+  const complexity = page.getByLabel('Task complexity', { exact: true });
+  assert.equal(await complexity.inputValue(), '');
+  await complexity.selectOption('advanced');
+  await waitForDraft(page);
+  assert.equal(getDocument().workflows[0].task.complexity, 'advanced');
+  await complexity.selectOption('');
+  await waitForDraft(page);
+  assert.equal(getDocument().workflows[0].task.complexity, undefined);
+});

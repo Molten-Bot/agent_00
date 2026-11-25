@@ -16,9 +16,15 @@ func DedupeKey(cfg Config) string {
 		baseBranch = "default"
 	}
 
+	// Preserve deduplication against tasks admitted before complexity was recorded.
+	complexity := cfg.Complexity
+	if complexity == "standard" {
+		complexity = ""
+	}
 	repos := normalizeRepoListForDeduper(cfg.RepoList())
 	targetSubdir := normalizeTargetSubdirForDeduper(cfg.TargetSubdir)
 	payload := struct {
+		Complexity    string               `json:"complexity,omitempty"`
 		WorkflowEvent string               `json:"workflowEvent,omitempty"`
 		Repos         []string             `json:"repos"`
 		BaseBranch    string               `json:"baseBranch"`
@@ -29,6 +35,7 @@ func DedupeKey(cfg Config) string {
 		AgentCommand  string               `json:"agentCommand,omitempty"`
 		PromptHash    string               `json:"promptHash"`
 	}{
+		Complexity:    complexity,
 		WorkflowEvent: workflowEventID(cfg),
 		Repos:         repos,
 		BaseBranch:    baseBranch,

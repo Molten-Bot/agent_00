@@ -220,6 +220,7 @@ func validateIssueExclusionLabel(label string) error {
 }
 
 type RuntimeConfigUISettingsUpdate struct {
+	DefaultComplexity         *string
 	WorkflowEnabled           *bool
 	IssueRepositories         GitHubIssueRepositories
 	ExpectedIssueRepositories *GitHubIssueRepositoriesSnapshot
@@ -297,6 +298,12 @@ func SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(
 	onlyAssigned := githubIssueAutoStartOnlyAssignedFromDoc(doc)
 	var githubIssueAutoStartLabels *[]string
 	for _, setting := range settingsUpdates {
+		if setting.DefaultComplexity != nil {
+			if !agentruntime.ValidComplexity(*setting.DefaultComplexity) {
+				return fmt.Errorf("default complexity must be easy, standard, or advanced")
+			}
+			doc["default_complexity"] = *setting.DefaultComplexity
+		}
 		if setting.WorkflowEnabled != nil {
 			if *setting.WorkflowEnabled {
 				doc["workflow_enabled"] = true
@@ -557,6 +564,7 @@ func applyDefaultLibraryEnabledToDoc(doc map[string]any, enabled bool) {
 // RuntimeConfigUISettings holds the persisted UI and automation toggles read
 // from one runtime config file.
 type RuntimeConfigUISettings struct {
+	DefaultComplexity                  string
 	GitHubIssueRepositories            GitHubIssueRepositories
 	DefaultLibraryEnabled              bool
 	ChatEnabled                        bool
@@ -617,7 +625,16 @@ func LoadRuntimeConfigUISettings(path string) (RuntimeConfigUISettings, error) {
 			loadErr = fmt.Errorf("read %s: %w", githubIssueRepositoriesKey, err)
 		}
 	}
+	complexity := "standard"
+	if v, exists := doc["default_complexity"]; exists {
+		value, ok := v.(string)
+		if !ok || !agentruntime.ValidComplexity(value) {
+			return RuntimeConfigUISettings{}, fmt.Errorf("default_complexity must be easy, standard, or advanced")
+		}
+		complexity = value
+	}
 	return RuntimeConfigUISettings{
+		DefaultComplexity:                  complexity,
 		GitHubIssueRepositories:            repositories,
 		DefaultLibraryEnabled:              defaultLibraryEnabledFromDoc(doc),
 		ChatEnabled:                        chatEnabledFromDoc(doc),

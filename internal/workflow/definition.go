@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 )
 
 const Version = 2
@@ -54,6 +56,7 @@ type Rule struct {
 	Value    string `json:"value"`
 }
 type Task struct {
+	Complexity      string    `json:"complexity,omitempty"`
 	LibraryTaskName string    `json:"libraryTaskName,omitempty"`
 	BaseBranch      string    `json:"baseBranch,omitempty"`
 	TargetSubdir    string    `json:"targetSubdir,omitempty"`
@@ -163,6 +166,9 @@ func (w Definition) Validate() error {
 	}
 	if strings.HasPrefix(w.Trigger.Event, "pr.") && w.Task.Kind == "implement" {
 		return fmt.Errorf("PR triggers require review or repair")
+	}
+	if w.Task.Complexity != "" && !agentruntime.ValidComplexity(w.Task.Complexity) {
+		return fmt.Errorf("task complexity must be easy, standard, or advanced")
 	}
 	if w.ReviewCycles < 0 || w.ReviewCycles > 10 {
 		return fmt.Errorf("review cycles must be between 0 and 10")

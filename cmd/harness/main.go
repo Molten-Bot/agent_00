@@ -381,7 +381,14 @@ func runServer(args []string) int {
 			return "", err
 		}
 		runCfg = applyDefaultAgentRuntimeConfig(runCfg, activeCfg)
-		assignCreator := localruntime.ReadRuntimeConfigAssignCreator(cfg.RuntimeConfigPath)
+		settings, err := localruntime.LoadRuntimeConfigUISettings(cfg.RuntimeConfigPath)
+		if err != nil {
+			return "", err
+		}
+		if runCfg.Complexity == "" {
+			runCfg.Complexity = settings.DefaultComplexity
+		}
+		assignCreator := settings.AssignCreator
 		if runCfg.AssignCreator == nil {
 			runCfg.AssignCreator = &assignCreator
 		}
@@ -2943,6 +2950,7 @@ func loadReviewSettingsState(cfg localruntime.InitConfig) (web.ReviewSettingsSta
 		GitHubIssueAutoStartExclusionLabel: ui.GitHubIssueAutoStartExclusionLabel,
 		GitHubIssueAutoStartOnlyAssigned:   ui.GitHubIssueAutoStartOnlyAssigned,
 		GitHubIssueAutoStartLabels:         ui.GitHubIssueAutoStartLabels,
+		DefaultComplexity:                  ui.DefaultComplexity,
 		AssignCreator:                      ui.AssignCreator,
 		DisabledRepositories:               ui.DisabledRepositories,
 	}, errors.Join(err, uiErr)
@@ -2983,6 +2991,7 @@ func configureReviewSettings(cfg localruntime.InitConfig, req web.ReviewSettings
 		ReviewLevel:          reviewLevel,
 	}
 	if err := localruntime.SaveRuntimeConfigReviewDefaultLibraryAndGitHubIssuesSettings(cfg.RuntimeConfigPath, cfg, reviewCfg, req.DefaultLibraryEnabled, req.ChatEnabled, req.JSONEnabled, req.GitHubIssuesEnabled, req.GitHubIssueLinkMode, req.GitHubIssueAutoStartAssigned, req.AssignCreator, localruntime.RuntimeConfigUISettingsUpdate{
+		DefaultComplexity:         req.DefaultComplexity,
 		WorkflowEnabled:           req.WorkflowEnabled,
 		OnlyAssigned:              req.GitHubIssueAutoStartOnlyAssigned,
 		Labels:                    req.GitHubIssueAutoStartLabels,
