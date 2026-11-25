@@ -12,6 +12,8 @@ func TestGoogleAnalyticsInBrowser(t *testing.T) {
 	requireBrowserTooling(t, "Google Analytics check")
 
 	srv := NewServer("", NewBroker())
+	// Let the browser fixtures control repository availability without a server preload.
+	srv.gitHubRepos = nil
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
