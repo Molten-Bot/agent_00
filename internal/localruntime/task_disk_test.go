@@ -324,7 +324,7 @@ func TestAdaptiveSchedulerRechecksQueueAfterWorkspacePurge(t *testing.T) {
 	got.release()
 }
 
-func TestAdaptiveSchedulerReportsEstimateLargerThanFilesystem(t *testing.T) {
+func TestAdaptiveSchedulerCanForceStartEstimateLargerThanFilesystem(t *testing.T) {
 	t.Parallel()
 
 	const unit = workspace.MinimumFreeBytes
@@ -332,16 +332,57 @@ func TestAdaptiveSchedulerReportsEstimateLargerThanFilesystem(t *testing.T) {
 	controller.diskSpace = func(string) (string, uint64, uint64, error) {
 		return "disk", unit, unit, nil
 	}
+	root := t.TempDir()
 	request := TaskDiskRequest{
-		Workspace:     workspace.Manager{Root: t.TempDir()},
+		Workspace:     workspace.Manager{Root: root},
 		RequiredBytes: func() uint64 { return 2 * unit },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	queuedCtx, cancelQueued := context.WithCancel(ctx)
+	defer cancelQueued()
+	done := make(chan error, 1)
+	go func() {
+		_, release, err := controller.AcquireWorkspace(queuedCtx, "oversized", request, false)
+		if release != nil {
+			release()
+		}
+		done <- err
+	}()
+	waitForQueuedRequest(t, controller, "oversized")
+
+	// Force start cancels the pending acquire before retrying with the override.
+	cancelQueued()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("queued acquisition error = %v, want cancellation", err)
+	}
+	gotRoot, release, err := controller.AcquireWorkspace(ctx, "oversized", request, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if gotRoot != root {
+		t.Fatalf("forced workspace root = %q, want %q", gotRoot, root)
+	}
+}
+
+func TestAdaptiveSchedulerReportsFilesystemSmallerThanWorkspaceMinimum(t *testing.T) {
+	t.Parallel()
+
+	const unit = workspace.MinimumFreeBytes
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
+	controller.diskSpace = func(string) (string, uint64, uint64, error) {
+		return "disk", unit - 1, unit - 1, nil
+	}
+	request := TaskDiskRequest{
+		Workspace: workspace.Manager{Root: t.TempDir()},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, release, err := controller.AcquireWorkspace(ctx, "oversized", request, false)
 	if release != nil {
 		release()
-		t.Fatal("admitted task with an estimate larger than the filesystem")
+		t.Fatal("admitted task on a filesystem smaller than the workspace minimum")
 	}
 	if err == nil || !strings.Contains(err.Error(), "exceeding total filesystem capacity") {
 		t.Fatalf("acquisition error = %v, want filesystem capacity error", err)
