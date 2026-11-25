@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Molten-Bot/agent_00/internal/app"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
@@ -997,6 +998,12 @@ func TestIssueRecoveryBlocksPrerequisiteWithoutRepair(t *testing.T) {
 		want     string
 	}{
 		{
+			name:     "human action",
+			report:   "Human action remains pending. Error details: An operator must confirm the shipment.",
+			incident: localruntime.IssueIncidentHumanAction,
+			want:     "required human action is pending; explicit retry required after the handoff",
+		},
+		{
 			name:     "unmerged pull request",
 			report:   "Delivery blocked by unmerged #12. Error details: Required changes are pending review.",
 			incident: localruntime.IssueIncidentUnmergedDependency,
@@ -1184,12 +1191,56 @@ func TestIssueRecoveryChecksPreservedRolloutBeforeOverdueRetry(t *testing.T) {
 	}
 }
 
+func TestIssueRecoveryChecksPreservedHumanHandoffBeforeOverdueRetry(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(t.Context())
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.Incident = "missing_pr"
+	const summary = "Failure: Human action remains pending."
+	const fullReport = summary + "\nError details:\nAn operator must confirm the shipment.\n" +
+		"The delivery needs a replacement date.\nSend confirmation to the requestor.\nRecord the agreed time."
+	const displayed = "Error details: An operator must confirm the shipment. | The delivery needs a replacement date. | " +
+		"Send confirmation to the requestor." + failurefollowup.TruncatedErrorDetails
+	record.RunError = "codex: codex reported failure: " + summary + " " + displayed
+	record.NextAttemptAt = time.Now().Add(-time.Minute)
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	s.IssueExternalPrerequisiteFromLogs = func(requestID, failure string) (string, bool) {
+		reads++
+		if requestID != record.RequestID || failure != record.RunError {
+			t.Fatalf("stdout lookup used request %q and failure %q", requestID, failure)
+		}
+		return app.ExternalPrerequisiteFailureFromStdout(failure, func(stage string) string {
+			if stage != "codex" {
+				t.Fatalf("stdout lookup stage = %q, want codex", stage)
+			}
+			return fullReport
+		})
+	}
+	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
+		t.Fatal("human handoff failure queued a harness repair")
+		return "", nil
+	}
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := latestRecoveryRecord(t, s)
+	if reads != 1 || len(f.submissions) != 1 || got.Incident != localruntime.IssueIncidentHumanAction ||
+		got.State != "blocked" || !got.NextAttemptAt.IsZero() || got.FailureDetail() != record.RunError {
+		t.Fatalf("overdue claim was not durably blocked: state=%q incident=%q reads=%d submissions=%d",
+			got.State, got.Incident, reads, len(f.submissions))
+	}
+}
+
 func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 	t.Parallel()
 	const prefix = "codex: codex reported failure: Failure: Production rollout remains pending. Error details: "
 	const ambiguous = prefix + "IAM setup and Secrets Manager configuration are outstanding."
 	const confirmed = prefix + "IAM setup and Secrets Manager configuration require external provisioning."
-	const truncated = confirmed + failurefollowup.TruncatedErrorDetails
+	const truncated = confirmed + " | Service readiness still needs confirmation. | CloudWatch access is pending." + failurefollowup.TruncatedErrorDetails
 	for _, tc := range []struct {
 		name, evidence       string
 		matchedLogs, repair  bool

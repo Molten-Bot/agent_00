@@ -212,7 +212,11 @@ func (q *issueRepairQueue) reconcile(ctx context.Context, enqueue localRunEnqueu
 			continue
 		}
 		admissionCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		_, err = enqueue(context.WithValue(admissionCtx, issueRepairContextKey{}, work), record.Run, false, issueRepairSource, true)
+		run := record.Run
+		if safe := failurefollowup.FailureDetailForPrompt(failure); safe != failure && failure != "" {
+			run.Prompt = strings.Replace(run.Prompt, "\n- error="+strconv.Quote(failure)+"\n", "\n- error="+strconv.Quote(safe)+"\n", 1)
+		}
+		_, err = enqueue(context.WithValue(admissionCtx, issueRepairContextKey{}, work), run, false, issueRepairSource, true)
 		cancel()
 		if err != nil {
 			lock.Close()
@@ -242,7 +246,8 @@ func isSkippedRolloutRepair(record localruntime.IssueRepairRecord) bool {
 func isIssueRepairDependencyBlock(reason string) bool {
 	switch reason {
 	case failurefollowup.OpenDependencyReason, failurefollowup.UnmergedDependencyReason,
-		failurefollowup.ExternalRolloutPrerequisitesReason, failurefollowup.ExternalEvidencePrerequisitesReason:
+		failurefollowup.ExternalRolloutPrerequisitesReason, failurefollowup.ExternalEvidencePrerequisitesReason,
+		failurefollowup.HumanActionRequiredReason:
 		return true
 	default:
 		return false
@@ -315,6 +320,8 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 			return failurefollowup.UnmergedDependencyReason, nil
 		case localruntime.IssueIncidentOpenDependency:
 			return failurefollowup.OpenDependencyReason, nil
+		case localruntime.IssueIncidentHumanAction:
+			return failurefollowup.HumanActionRequiredReason, nil
 		case localruntime.IssueIncidentExternalEvidence:
 			return failurefollowup.ExternalEvidencePrerequisitesReason, nil
 		}
@@ -329,7 +336,10 @@ func (q *issueRepairQueue) dependencyBlockReason(record localruntime.IssueRepair
 		matchedLogs = matchedLogs || matched
 		if reason != "" {
 			incident := localruntime.IssueIncidentExternalRollout
-			if reason == failurefollowup.ExternalEvidencePrerequisitesReason {
+			switch reason {
+			case failurefollowup.HumanActionRequiredReason:
+				incident = localruntime.IssueIncidentHumanAction
+			case failurefollowup.ExternalEvidencePrerequisitesReason:
 				incident = localruntime.IssueIncidentExternalEvidence
 			}
 			if issue.Incident != incident {
