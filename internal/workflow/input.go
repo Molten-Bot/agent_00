@@ -37,8 +37,6 @@ func (e *Engine) InputWorkflow(repository, source string) (*Definition, error) {
 // DispatchInput journals submission before enqueueing, using the same completion
 // and merge gates as scheduled and GitHub-triggered work.
 func (e *Engine) DispatchInput(ctx context.Context, w Definition, submit func(Run) (string, error)) (string, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -52,8 +50,6 @@ func (e *Engine) DispatchInput(ctx context.Context, w Definition, submit func(Ru
 // reading a completed activation. The saved fingerprint binds the retry to the
 // original workflow policy, and Tick still enforces current merge gates.
 func (e *Engine) DispatchRetry(ctx context.Context, id, policy, priorEvent string, item Item, submit func(Run) (string, error)) (string, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -70,42 +66,48 @@ func (e *Engine) DispatchRetry(ctx context.Context, id, policy, priorEvent strin
 	return submit(Run{})
 }
 
-// dispatch must run with the engine mutex held.
 func (e *Engine) dispatch(w Definition, item Item, reason, retryOf string, submit func(Run) (string, error)) (string, error) {
-	state, err := e.load()
-	if err != nil {
-		return "", err
-	}
-	if retryOf != "" {
-		for _, existing := range state.Runs {
-			if existing.RetryOf == retryOf {
-				return "", fmt.Errorf("workflow retry already active")
-			}
-		}
-	}
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return "", err
 	}
 	now := e.now()
 	run := Run{ID: hex.EncodeToString(random[:]), Workflow: w, Item: item, Status: "dispatching", Reason: reason, StartedAt: &now, UpdatedAt: now, RetryOf: retryOf}
-	state.Runs = append(state.Runs, run)
-	if err := e.save(state); err != nil {
+	// Keep restart reconciliation away from this receipt until submit returns.
+	defer func() {
+		e.mu.Lock()
+		delete(e.submitting, run.ID)
+		e.mu.Unlock()
+	}()
+	err := e.transaction(func(state *State) error {
+		if retryOf != "" {
+			for _, existing := range state.Runs {
+				if existing.RetryOf == retryOf {
+					return fmt.Errorf("workflow retry already active")
+				}
+			}
+		}
+
+		state.Runs = append(state.Runs, run)
+		if e.submitting == nil {
+			e.submitting = map[string]bool{}
+		}
+		e.submitting[run.ID] = true
+		return nil
+	})
+	if err != nil {
 		return "", err
 	}
 	e.logRun(run, "dispatch")
-	request, submitErr := submit(run)
-	run.RequestID = request
-	run.UpdatedAt = e.now()
-	run.Status = "running"
-	if submitErr != nil {
-		run.Status = "failed"
-		run.Reason = "Submission failed: " + submitErr.Error()
+	var request string
+	var submitErr error
+	if IsInputEvent(w.Trigger.Event) && retryOf == "" && !e.StillEnabled(w) {
+		submitErr = fmt.Errorf("input workflow changed or is disabled")
+	} else {
+		request, submitErr = submit(run)
 	}
-	state.Runs[len(state.Runs)-1] = run
-	if err := e.save(state); err != nil {
+	if err := e.finishSubmission(run.ID, request, submitErr); err != nil {
 		return request, err
 	}
-	e.logRun(run, "submission")
 	return request, submitErr
 }

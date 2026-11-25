@@ -247,3 +247,62 @@ func TestThrottledWorkflowClaimRecoversOriginalEvent(t *testing.T) {
 		t.Fatal("lost activation or wrong submission count")
 	}
 }
+
+func TestLoopbackScheduleStatusDuringFetch(t *testing.T) {
+	s, w := inputWorkflowServer(t, "prompt")
+	schedule := w
+	schedule.ID = "timer"
+	schedule.Trigger = workflow.Trigger{Event: "schedule", IntervalHours: 2}
+	w.Trigger = workflow.Trigger{Event: "issue.opened"}
+	doc, err := s.Workflows.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Workflows = []workflow.Definition{schedule, w}
+	if _, err = s.Workflows.Store.Save(doc); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	s.Workflows.Now = func() time.Time { return now }
+	started, resume := make(chan struct{}), make(chan struct{})
+	s.Workflows.Fetch = func(context.Context, string, workflow.ScanNeeds) ([]workflow.Item, error) {
+		close(started)
+		<-resume
+		return nil, nil
+	}
+	server := httptest.NewServer(s.Handler())
+	defer server.Close()
+	done := make(chan error, 1)
+	go func() { done <- s.Workflows.Tick(t.Context()) }()
+	select {
+	case <-started:
+	case err := <-done:
+		t.Fatalf("tick ended before fetch: %v", err)
+	case <-time.After(3 * time.Second):
+		close(resume)
+		t.Fatal("fetch did not start")
+	}
+	defer func() {
+		close(resume)
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	client := server.Client()
+	client.Timeout = time.Second
+	start := time.Now()
+	resp, err := client.Get(server.URL + "/api/workflows/schedules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var status []workflow.ScheduleStatus
+	if err = json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(start)
+	if resp.StatusCode != 200 || len(status) != 1 || !status[0].NextRunAt.Equal(now.Add(2*time.Hour)) {
+		t.Fatalf("HTTP %d schedules=%+v", resp.StatusCode, status)
+	}
+	t.Logf("loopback schedule status during blocked fetch: %v", elapsed)
+}
