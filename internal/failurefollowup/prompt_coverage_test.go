@@ -192,6 +192,7 @@ func TestNonRemediableFailureReasonRequiresExternalRolloutEvidence(t *testing.T)
 		{"pending rollout with defaults status", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " API and MCP flags default to off.", true},
 		{"pending rollout with joined defaults status", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " | API and MCP flags default to off.", true},
 		{"pending rollout with joined unpunctuated details", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Production IAM access and Secrets Manager provisioning are still outstanding | API flags default to off", true},
+		{"pending rollout with unspaced sentence boundary", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: Production IAM access and Secrets Manager provisioning are still outstanding.API flags default to off", true},
 		{"pending rollout with flag regression", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " Due to a regression API flags default to off.", false},
 		{"pending rollout with failure after joined status", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " | API flags default to off | Deployment tests fail", false},
 		{"pending rollout with later test failure", "codex: codex reported failure: Failure: Production rollout remains pending. Error details: " + details + " Deployment tests fail.", false},
@@ -349,6 +350,7 @@ func TestExternalRolloutWithPublicProbeEvidence(t *testing.T) {
 		{"unauthenticated initialization fails unexpectedly", prerequisites + " " + strings.Replace(probes, "401", "500", 1), false},
 		{"additional local failure", prerequisites + " " + probes + " " + pending + " Local integration tests failed.", false},
 		{"unverified code changes", prerequisites + " " + probes + " Production adapter fixes remain unverified.", false},
+		{"adapter code changes mentioning connectivity", prerequisites + " " + probes + " Production adapter fixes for connectivity remain unverified.", false},
 		{"unverified tests", prerequisites + " " + probes + " Production adapter test verification remains unverified.", false},
 		{"no external prerequisite", probes + " " + pending, false},
 	} {

@@ -122,13 +122,14 @@ var infrastructureResource = regexp.MustCompile(`^(?:production )?(?:infrastruct
 var managedServicePrerequisite = regexp.MustCompile(`^(?:production )?(?:ecs|cloudwatch|(?:authorized )?vault access)$`)
 var disabledRolloutStatus = regexp.MustCompile(`^(?:feature disabled|[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* (?:flags?|evidence switches?) defaults?(?: to)? (?:off|disabled))$`)
 var unavailableContainerValidation = regexp.MustCompile(`^docker-backed (?:[a-z0-9_-]+ )*integration(?: tests?)? could not run because no container runtime was available$`)
-var unverifiedProductionChecks = regexp.MustCompile(`^production (?:[a-z0-9-]+ ){0,3}(?:connectivity|reachability)(?:, root cause)?(?:,? and authenticated (?:[a-z0-9-]+ ){0,2}(?:reads?|retrieval))? (?:remains?|is|are) unverified$`)
+var unverifiedProductionChecks = regexp.MustCompile(`^production (?:(?:api|database|data|endpoint|provider|service|statement|task|worker) ){0,3}(?:connectivity|reachability)(?:, root cause)?(?:,? and authenticated (?:[a-z0-9-]+ ){0,2}(?:reads?|retrieval))? (?:remains?|is|are) unverified$`)
 var rolloutProgress = regexp.MustCompile(`^(?:added|implemented|updated|wired) \S`)
 var rolloutProgressFollowOn = regexp.MustCompile(`^(?:added|implemented|updated|wired|tests cover) \S`)
 
 const rolloutSentenceBreak = `[.!?…]+[ \t\p{Zs}]+|[.!?…]*\r`
 
 var rolloutSentenceBoundary = regexp.MustCompile(rolloutSentenceBreak)
+var unspacedUppercaseSentenceBoundary = regexp.MustCompile(`([.!?…]+)([A-Z])`)
 
 // Status statements can use unspaced ellipses. Progress and validation lines
 // can contain commands such as `go test ./...`, so use spaced breaks there.
@@ -579,7 +580,11 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	if !pendingProductionRolloutSummary.MatchString(strings.ToLower(strings.TrimSpace(summary))) {
 		return false
 	}
-	details = strings.ToLower(strings.TrimSpace(details))
+	// Some reports omit the space after a period when flattening statements.
+	// Preserve the boundary when the next sentence starts with a capitalized
+	// status statement such as "API flags default to off".
+	details = unspacedUppercaseSentenceBoundary.ReplaceAllString(strings.TrimSpace(details), "$1\n$2")
+	details = strings.ToLower(details)
 	lines := strings.Split(strings.ReplaceAll(details, " | ", "\n"), "\n")
 	statements := rolloutStatements(lines[0])
 	if len(statements) == 0 || HasValidationFailureEvidence(details) || HasRolloutFailureOutcome(details) {
