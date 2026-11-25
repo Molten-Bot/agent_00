@@ -15,7 +15,85 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
+
+func TestPostReviewSummaryFromRelativeServeConfig(t *testing.T) {
+	t.Chdir(t.TempDir())
+	configPath := filepath.Join(".agent00", "issue-queue", "config.json")
+	stateDir := filepath.Dir(configPath)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"version":"v1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := localruntime.LoadRuntimeConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runDir := filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "issue-workspaces", "test-run")
+	repoDir := filepath.Join(runDir, "repo")
+	if err := os.MkdirAll(repoDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bodyPath := finalReviewSummaryBodyPath(runDir, 42, 1)
+	const summary = "No material issues found."
+	if err := os.WriteFile(bodyPath, []byte(summary), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name       string
+		targetRepo string
+		commands   []string
+		attempts   int
+	}{
+		{"native review", "acme/repo", []string{"review"}, 1},
+		{"API fallback", "acme/repo", []string{"review", "api"}, 1},
+		{"PR comment fallback", "", []string{"review", "comment"}, 1},
+		{"retry", "acme/repo", []string{"review", "api", "review"}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			h := New(sessionRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+				if cmd.Name != "gh" || cmd.Dir != repoDir || calls >= len(tc.commands) {
+					t.Fatalf("unexpected command in %q: %s %v", cmd.Dir, cmd.Name, cmd.Args)
+				}
+				operation := cmd.Args[0]
+				var path string
+				if i := slices.Index(cmd.Args, "--body-file"); i >= 0 {
+					operation, path = cmd.Args[1], cmd.Args[i+1]
+				} else {
+					path = strings.TrimPrefix(cmd.Args[len(cmd.Args)-1], "body=@")
+				}
+				if operation != tc.commands[calls] {
+					t.Fatalf("command %d = %v, want %s", calls+1, cmd.Args, tc.commands[calls])
+				}
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(cmd.Dir, path)
+				}
+				if body, err := os.ReadFile(path); err != nil || string(body) != summary {
+					t.Fatalf("gh could not read summary from %q: body = %q, err = %v", cmd.Dir, body, err)
+				}
+				calls++
+				if calls < len(tc.commands) {
+					return execx.Result{}, errors.New("simulated GitHub failure")
+				}
+				return execx.Result{}, nil
+			}))
+			for attempt := 1; attempt <= tc.attempts; attempt++ {
+				err := h.postReviewSummary(context.Background(), repoDir, "42", tc.targetRepo, 42, bodyPath, "", false)
+				if wantErr := attempt < tc.attempts; (err != nil) != wantErr {
+					t.Fatalf("postReviewSummary() attempt %d = %v, want error = %t", attempt, err, wantErr)
+				}
+			}
+			if calls != len(tc.commands) {
+				t.Fatalf("gh calls = %d, want %d", calls, len(tc.commands))
+			}
+		})
+	}
+}
 
 type cleanReviewCycleRunner struct {
 	t                *testing.T
