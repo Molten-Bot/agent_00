@@ -16,7 +16,7 @@
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
   <script src="/static/task-asset-preview.js?v=4"></script>
-  <link rel="stylesheet" href="/static/style.css?v=18">
+  <link rel="stylesheet" href="/static/style.css?v=19">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -12831,15 +12831,33 @@
           meta.append(repos, branch, update);
           if (task.complexity) {
             const runtime = document.createElement("div");
-            const model = task.resolved_model || (task.model_resolution ? "CLI default" : "");
             runtime.className = "task-runtime-complexity";
-            runtime.title = [`Complexity: ${task.complexity}`, model, task.cli_version, task.model_resolution].filter(Boolean).join(" · ");
-            runtime.setAttribute("role", "img");
-            runtime.setAttribute("aria-label", runtime.title);
+            const model = task.resolved_model || (task.model_resolution ? "CLI default" : "");
+            const text = [`Complexity: ${task.complexity}`, model, task.cli_version, task.model_resolution].filter(Boolean).join(" · ");
+            const trigger = document.createElement("button");
+            trigger.type = "button";
+            trigger.title = text;
+            trigger.setAttribute("aria-label", "Task runtime details");
+            trigger.setAttribute("aria-description", text);
             const icon = document.createElement("i");
             icon.setAttribute("data-lucide", complexityIcons[task.complexity] || complexityIcons.standard);
             icon.setAttribute("aria-hidden", "true");
-            runtime.appendChild(icon);
+            trigger.appendChild(icon);
+
+            const details = document.createElement("span");
+            details.className = "task-runtime-details";
+            details.popover = "auto";
+            details.textContent = text;
+            trigger.popoverTargetElement = details;
+            trigger.addEventListener("focus", () => {
+              if (trigger.matches(":focus-visible")) details.showPopover({ source: trigger });
+            });
+            trigger.addEventListener("blur", () => details.hidePopover());
+            details.addEventListener("beforetoggle", (event) => {
+              trigger.title = event.newState === "open" ? "" : text;
+            });
+            runtime.addEventListener("click", (event) => event.stopPropagation());
+            runtime.append(trigger, details);
             meta.appendChild(runtime);
           }
 
@@ -14415,6 +14433,8 @@
         }
       }
       if (event.key === "Escape" && !event.defaultPrevented && (state.taskFullscreenOpen || state.workflowFullscreenTrigger)) {
+        // Let the browser dismiss the runtime popover before closing fullscreen.
+        if (document.querySelector(".task-runtime-details:popover-open")) return;
         event.preventDefault();
         closeFullscreen("escape_key");
         return;

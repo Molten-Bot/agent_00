@@ -3,13 +3,14 @@
 const { before, after, test } = require('node:test');
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
+const { expect } = require('playwright/test');
 const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
 let browser;
 before(async () => { browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] }); });
 after(async () => { await browser?.close(); });
 const defaults = { auto_merge: false, delete_merged_branches: false, merge_method: 'squash', review_level: 'off', default_library_enabled: true, chat_enabled: true, workflow_enabled: false, json_enabled: false, github_issues_enabled: false, github_issue_link_mode: 'reference', github_issue_auto_start_assigned: false, github_issue_auto_start_only_assigned: true, github_issue_auto_start_labels: [], assign_creator: true };
-async function openSettings(t, { viewport = { width: 1280, height: 900 }, theme = 'dark', configurePage, initialSettings = defaults, path = '#settings' } = {}) {
-  const page = await browser.newPage({ viewport });
+async function openSettings(t, { viewport = { width: 1280, height: 900 }, hasTouch = false, theme = 'dark', configurePage, initialSettings = defaults, path = '#settings' } = {}) {
+  const page = await browser.newPage({ viewport, isMobile: hasTouch, hasTouch });
   t.after(() => page.close());
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -1412,8 +1413,9 @@ test('default complexity starts at Standard and saves on close', async t => {
   assert.equal(writes.at(-1).default_complexity, 'easy');
 });
 
-test('task runtime details appear on the complexity icon', async t => {
+async function openTaskRuntime(t, options = {}) {
   const { page } = await openSettings(t, {
+    ...options,
     path: '/#current-work',
     configurePage: async page => {
       await page.route('**/api/status', route => route.fulfill({
@@ -1427,9 +1429,54 @@ test('task runtime details appear on the complexity icon', async t => {
       }));
     },
   });
-  const details = 'Complexity: standard · gpt-6.2-sol · codex-cli 0.171.0 · model/list';
-  const icon = page.locator('#task-list').getByRole('img', { name: details, exact: true });
-  await icon.locator('svg.lucide-brain').waitFor();
-  assert.equal(await icon.getAttribute('title'), details);
-  assert.equal(await icon.textContent(), '');
+  const text = 'Complexity: standard · gpt-6.2-sol · codex-cli 0.171.0 · model/list';
+  const task = page.locator('#task-list .task[data-request-id="complexity-task"]');
+  const icon = task.getByRole('button', { name: 'Task runtime details' });
+  const details = task.getByText(text, { exact: true });
+  await expect(icon.locator('svg.lucide-brain')).toBeVisible();
+  await expect(icon).toHaveAttribute('title', text);
+  await expect(icon).toHaveAccessibleDescription(text);
+  await expect(icon).toHaveText('');
+  await expect(details).toBeHidden();
+  return { page, task, icon, details, text };
+}
+
+test('task runtime details appear on the complexity icon', async t => {
+  const { page, task, icon, details, text } = await openTaskRuntime(t);
+  await task.getByRole('button', { name: 'Open task output terminal logs.' }).focus();
+  await page.keyboard.press('Shift+Tab');
+  await expect(icon).toBeFocused();
+  await expect(details).toBeInViewport({ ratio: 1 });
+  await page.keyboard.press('Escape');
+  await expect(details).toBeHidden();
+  await expect(icon).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(details).toBeVisible();
+  await page.keyboard.press('Tab');
+  await expect(details).toBeHidden();
+
+  await page.locator('#task-fullscreen-toggle').click();
+  const fullscreen = page.locator('#task-fullscreen');
+  await fullscreen.getByRole('button', { name: 'Open task output terminal logs.' }).focus();
+  await page.keyboard.press('Shift+Tab');
+  const fullscreenDetails = fullscreen.getByText(text, { exact: true });
+  await expect(fullscreenDetails).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(fullscreenDetails).toBeHidden();
+  await expect(fullscreen).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(fullscreen).toBeHidden();
+});
+
+test('task runtime details open and dismiss on tap', async t => {
+  const { task, icon, details } = await openTaskRuntime(t, {
+    viewport: { width: 390, height: 844 }, hasTouch: true,
+  });
+  await icon.tap();
+  await expect(details).toBeInViewport({ ratio: 1 });
+  await icon.tap();
+  await expect(details).toBeHidden();
+  await icon.tap();
+  await task.locator('.task-id').tap();
+  await expect(details).toBeHidden();
 });

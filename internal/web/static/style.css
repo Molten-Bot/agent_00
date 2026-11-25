@@ -4577,10 +4577,50 @@ select.prompt-control {
   white-space: nowrap;
 }
 
+.task-runtime-complexity button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.task-runtime-complexity button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .task-runtime-complexity svg {
   display: block;
   width: 16px;
   height: 16px;
+}
+
+.task-runtime-details {
+  max-width: min(24rem, calc(100vw - 24px));
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--popover);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@supports (position-area: block-start) {
+  .task-runtime-details {
+    position-area: block-start span-inline-end;
+    position-try-fallbacks: flip-inline, flip-block, flip-block flip-inline;
+    justify-self: start;
+    margin: 4px;
+  }
 }
 
 .task-meta > .task-meta-sites {
@@ -4669,6 +4709,11 @@ html.pink .task-site-url-action[data-state="current"] {
   position: absolute;
   left: 4px;
   color: var(--meta);
+}
+
+.task-meta > .task-runtime-complexity::before {
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .task-progress {
