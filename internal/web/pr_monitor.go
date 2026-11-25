@@ -22,6 +22,7 @@ type PRMergeMonitor struct {
 	Logf         func(string, ...any)
 	CleanupTask  func(context.Context, string) error
 	PollInterval time.Duration
+	Cooldown     *githubutil.Cooldown
 
 	mu       sync.Mutex
 	inFlight map[string]struct{}
@@ -61,8 +62,12 @@ func (m *PRMergeMonitor) Run(ctx context.Context) error {
 }
 
 func (m *PRMergeMonitor) pollOnce(ctx context.Context) {
+	if !m.Cooldown.RetryAt().IsZero() {
+		return
+	}
 	tasks := m.Broker.TaskList()
 	active := make(map[string]struct{}, len(tasks))
+	reads := map[string]func() (prViewState, error){}
 	for _, task := range tasks {
 		active[task.RequestID] = struct{}{}
 		if !shouldMonitorTaskPR(task) {
@@ -71,9 +76,15 @@ func (m *PRMergeMonitor) pollOnce(ctx context.Context) {
 		if !m.beginCheck(task.RequestID) {
 			continue
 		}
+		read := reads[task.PRURL]
+		if read == nil {
+			read = sync.OnceValues(func() (prViewState, error) { return m.prState(ctx, task.PRURL) })
+			reads[task.PRURL] = read
+		}
 		go func(task Task) {
 			defer m.endCheck(task.RequestID)
-			m.checkTaskPR(ctx, task)
+			state, err := read()
+			m.applyPRState(ctx, task, state, err)
 		}(task)
 	}
 	m.forgetMissingTasks(active)
@@ -144,8 +155,7 @@ func (m *PRMergeMonitor) forgetMissingTasks(active map[string]struct{}) {
 	}
 }
 
-func (m *PRMergeMonitor) checkTaskPR(ctx context.Context, task Task) {
-	state, err := m.prState(ctx, task.PRURL)
+func (m *PRMergeMonitor) applyPRState(ctx context.Context, task Task, state prViewState, err error) {
 	if err != nil {
 		m.Logf("localruntime.ui status=warn event=pr_monitor request_id=%s pr_url=%s err=%q", task.RequestID, task.PRURL, err)
 		return
@@ -155,10 +165,10 @@ func (m *PRMergeMonitor) checkTaskPR(ctx context.Context, task Task) {
 			m.Broker.recordTaskPRTitle(task.RequestID, task.PRURL, state.Title, taskPRTitleMonitored)
 		} else {
 			titleCtx, cancel := context.WithTimeout(ctx, prMonitorTitleLookupTimeout)
-			result, err := m.Runner.Run(titleCtx, execx.Command{
+			result, err := m.Cooldown.Run(titleCtx, m.Runner, execx.Command{
 				Name: "gh",
 				Args: []string{"pr", "view", task.PRTitleURL, "--json", "title", "--jq", ".title"},
-			})
+			}, false)
 			cancel()
 			if err != nil {
 				m.Logf("localruntime.ui status=warn event=pr_monitor_title request_id=%s pr_url=%s err=%q", task.RequestID, task.PRTitleURL, err)
@@ -200,10 +210,10 @@ func (m *PRMergeMonitor) prState(ctx context.Context, prURL string) (prViewState
 	if repo := githubutil.PullRequestRepository(prURL); repo != "" {
 		args = append(args, "--repo", repo)
 	}
-	res, err := m.Runner.Run(ctx, execx.Command{
+	res, err := m.Cooldown.Run(ctx, m.Runner, execx.Command{
 		Name: "gh",
 		Args: args,
-	})
+	}, false)
 	if err != nil {
 		return prViewState{}, err
 	}

@@ -956,6 +956,7 @@ func runServer(args []string) int {
 			return app.ExitSuccess
 		}
 		prMonitor := &web.PRMergeMonitor{
+			Cooldown:    githubCooldown,
 			Runner:      runner,
 			Broker:      monitorBroker,
 			Logf:        daemonLogger,
