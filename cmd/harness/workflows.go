@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/Molten-Bot/agent_00/internal/library"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/web"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
@@ -98,7 +98,7 @@ func parseResolvedWorkflowConfig(body []byte) (config.Config, error) {
 	c.ApplyDefaults()
 	return c, c.Validate()
 }
-func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner execx.Runner, server *web.Server, broker *web.Broker, enqueue func(context.Context, config.Config, bool, string, bool) (string, error), logf func(string, ...any)) error {
+func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner execx.Runner, server *web.Server, broker *web.Broker, enqueue func(context.Context, config.Config, string, bool) (string, error), logf func(string, ...any)) error {
 	root := filepath.Dir(cfg.RuntimeConfigPath)
 	store := &workflow.Store{Path: filepath.Join(root, "workflows.json")}
 	// Workflow creation is explicit. Upgrading must never derive definitions
@@ -106,8 +106,6 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{}}); err != nil {
 		return err
 	}
-	// Existing configured schedules remain defaults. The builder is additive;
-	// opening it must not migrate ownership or pause configured automation.
 	gh := workflow.GitHub{Runner: runner, Cooldown: server.GitHubCooldown, Logf: logf}
 	engine := &workflow.Engine{Store: store, StatePath: filepath.Join(root, "workflow-state.json"), Fetch: gh.Fetch, InspectPR: gh.Inspect, Merge: gh.Merge, Logf: logf}
 	engine.Enabled = func() bool {
@@ -146,7 +144,7 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 			if err != nil {
 				return "", err
 			}
-			id, err := enqueue(submitCtx, parsed, false, "workflow", false)
+			id, err := enqueue(submitCtx, parsed, "workflow", false)
 			if err == nil && parsed.LibraryTaskName != "" {
 				if usageErr := localruntime.IncrementRuntimeConfigLibraryTaskUsage(cfg.RuntimeConfigPath, cfg, parsed.LibraryTaskName); usageErr != nil {
 					logf("workflow library usage status=warn err=%q", usageErr)
@@ -156,9 +154,6 @@ func configureWorkflows(ctx context.Context, cfg localruntime.InitConfig, runner
 		})
 	}
 	engine.Active = func(w workflow.Definition) bool {
-		if configuredScheduleOwnsWorkflow(cfg.RuntimeConfigPath, w) {
-			return true
-		}
 		for _, t := range broker.TaskList() {
 			switch t.Status {
 			case "completed", "no_changes", "merged", "error", "invalid", "stopped", "duplicate":

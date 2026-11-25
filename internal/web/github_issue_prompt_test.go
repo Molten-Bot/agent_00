@@ -26,7 +26,7 @@ func TestIssueAdmissionBuildsFreshPrompt(t *testing.T) {
 			f.issue.URL = ""
 			s := automationServer(t, f)
 			if mode == "automatic" {
-				s.pollGitHubIssueAutoStart(context.Background())
+				reconcileOrAdmitTestIssue(context.Background(), s)
 			} else {
 				run := issueRunConfig(GitHubRepo{FullName: "acme/repo"}, f.issue, config.GitHubIssueLinkClose)
 				run.Prompt = "Stale browser description"
@@ -154,7 +154,7 @@ func TestIssueContextFetchFailureDoesNotReserveOrSubmit(t *testing.T) {
 				f.comments = `[{"body":`
 			}
 			s := automationServer(t, f)
-			s.pollGitHubIssueAutoStart(context.Background())
+			reconcileOrAdmitTestIssue(context.Background(), s)
 			if len(f.submissions) != 0 || f.branch || len(f.tags) != 0 || s.issueAutomation.status.Error == "" {
 				t.Fatalf("incomplete context admitted: status=%+v", s.issueAutomation.status)
 			}

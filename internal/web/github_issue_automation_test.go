@@ -9,8 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -194,7 +192,7 @@ func TestIssueAutomationBacklogRestartAndMetadata(t *testing.T) {
 	t.Parallel()
 	f := newAutomationGitHub()
 	s := automationServer(t, f)
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	if len(f.submissions) != 1 {
 		t.Fatalf("submissions=%d status=%+v trace=%v", len(f.submissions), s.issueAutomation.status, f.trace)
 	}
@@ -202,10 +200,10 @@ func TestIssueAutomationBacklogRestartAndMetadata(t *testing.T) {
 	if run.GitHubIssue.Claim == nil || run.GitHubIssue.Claim.Branch != "agent00-issue-17" || run.BaseBranch != "main" || !strings.Contains(run.Prompt, "Customer task") {
 		t.Fatalf("missing claim/context: %+v", run)
 	}
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	restarted := automationServer(t, f)
 	restarted.IssueClaims = s.IssueClaims
-	restarted.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), restarted)
 	if len(f.submissions) != 1 {
 		t.Fatal("restart or repeated poll resubmitted")
 	}
@@ -220,75 +218,11 @@ func TestIssueAutomationBacklogRestartAndMetadata(t *testing.T) {
 	}
 }
 
-func TestIssueAutomationReconsidersChangedEligibility(t *testing.T) {
-	t.Parallel()
-	f := newAutomationGitHub()
-	s := automationServer(t, f)
-	f.issue.Labels = nil
-	s.pollGitHubIssueAutoStart(context.Background())
-	if len(f.submissions) != 0 || s.issueAutomation.status.Issues[0].Reason != "missing trigger label" {
-		t.Fatal("missing label not explained")
-	}
-	f.issue.Labels = []GitHubIssueLabel{{Name: "ready"}}
-	f.issue.Assignees = nil
-	s.pollGitHubIssueAutoStart(context.Background())
-	if len(f.submissions) != 0 || s.issueAutomation.status.Issues[0].Reason != "wrong assignee" {
-		t.Fatal("wrong assignee not explained")
-	}
-	f.issue.Assignees = []GitHubIssueUser{{Login: "octocat"}}
-	s.pollGitHubIssueAutoStart(context.Background())
-	if len(f.submissions) != 1 {
-		t.Fatalf("changed match suppressed: %+v", s.issueAutomation.status)
-	}
-}
-
-func TestIssueAutomationDefersOpenDependencies(t *testing.T) {
-	t.Parallel()
-	f := newAutomationGitHub()
-	f.blockedBy = 1
-	s := automationServer(t, f)
-	s.pollGitHubIssueAutoStart(context.Background())
-	if len(f.submissions) != 0 || f.branch || s.issueAutomation.status.Issues[0].Reason != "blocked by open issue" {
-		t.Fatalf("blocked issue admitted: status=%+v", s.issueAutomation.status)
-	}
-	f.blockedBy = 0
-	s.pollGitHubIssueAutoStart(context.Background())
-	if len(f.submissions) != 1 {
-		t.Fatalf("unblocked issue not reconsidered: status=%+v", s.issueAutomation.status)
-	}
-}
-
-func TestIssueAutomationRechecksDependenciesBeforeClaim(t *testing.T) {
-	t.Parallel()
-	f := newAutomationGitHub()
-	s := automationServer(t, f)
-	s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
-		result, err := f.Run(ctx, cmd)
-		if strings.Contains(strings.Join(cmd.Args, " "), "nodes(ids:") {
-			f.mu.Lock()
-			f.blockedBy = 1
-			f.mu.Unlock()
-		}
-		return result, err
-	})
-	s.pollGitHubIssueAutoStart(context.Background())
-	records, err := s.IssueClaims.List()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(f.submissions) != 0 || f.branch || len(f.tags) != 0 || len(records) != 0 {
-		t.Fatalf("dependency race created claim: submissions=%d branch=%t tags=%d records=%d", len(f.submissions), f.branch, len(f.tags), len(records))
-	}
-	if !strings.Contains(s.issueAutomation.status.Error, "blocked by 1 open issue") {
-		t.Fatalf("dependency race not explained: %+v", s.issueAutomation.status)
-	}
-}
-
 func TestIssueAutomationExplicitRetryOverridesOpenDependency(t *testing.T) {
 	t.Parallel()
 	f := newAutomationGitHub()
 	s := automationServer(t, f)
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	claimID := f.submissions[0].GitHubIssue.Claim.ID
 	f.blockedBy = 1
 	response := retryIssue(t, s, claimID, true)
@@ -306,7 +240,7 @@ func TestIssueAutomationIndependentInstancesClaimOnce(t *testing.T) {
 	a, b := automationServer(t, f), automationServer(t, f)
 	var wg sync.WaitGroup
 	for _, s := range []Server{a, b} {
-		wg.Go(func() { s.pollGitHubIssueAutoStart(context.Background()) })
+		wg.Go(func() { reconcileOrAdmitTestIssue(context.Background(), s) })
 	}
 	wg.Wait()
 	if len(f.submissions) != 1 {
@@ -332,7 +266,7 @@ func TestIssueAutomationFailuresRemainVisibleAndRecoverable(t *testing.T) {
 			default:
 				f.fail = stage
 			}
-			s.pollGitHubIssueAutoStart(context.Background())
+			reconcileOrAdmitTestIssue(context.Background(), s)
 			if s.issueAutomation.status.Error == "" {
 				t.Fatal("failure hidden")
 			}
@@ -343,7 +277,7 @@ func TestIssueAutomationFailuresRemainVisibleAndRecoverable(t *testing.T) {
 				f.fail = ""
 				f.ambiguous = false
 				s.SubmitLocalPrompt = f.submit
-				s.pollGitHubIssueAutoStart(context.Background())
+				reconcileOrAdmitTestIssue(context.Background(), s)
 				if len(f.submissions) != 0 {
 					t.Fatal("partial claim was automatically replayed")
 				}
@@ -379,7 +313,7 @@ func TestIssueAutomationRetryRequiresConfirmationAndSerializesInstances(t *testi
 	t.Parallel()
 	f := newAutomationGitHub()
 	initial := automationServer(t, f)
-	initial.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), initial)
 	id := f.submissions[0].GitHubIssue.Claim.ID
 	if response := retryIssue(t, initial, id, false); response.Code != 409 {
 		t.Fatalf("unconfirmed recovery=%d", response.Code)
@@ -405,128 +339,6 @@ func TestIssueAutomationRetryRequiresConfirmationAndSerializesInstances(t *testi
 	}
 	if response := retryIssue(t, initial, id, true); response.Code != 409 {
 		t.Fatal("stale recovery accepted")
-	}
-}
-
-func TestIssueAutomationListsBeyondThousandAndExcludesPRs(t *testing.T) {
-	t.Parallel()
-	s := NewServer("", NewBroker())
-	s.GitHubIssueRunner = githubIssueRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
-		if !strings.Contains(strings.Join(cmd.Args, " "), "--paginate") {
-			t.Fatal("missing pagination")
-		}
-		page := make([]map[string]any, 1000)
-		for i := range page {
-			page[i] = map[string]any{"number": i + 1, "node_id": "I" + strconv.Itoa(i+1), "state": "open"}
-		}
-		body, _ := json.Marshal(page)
-		return execx.Result{Stdout: string(body) + `[{"number":1001,"node_id":"I1001","state":"open"},{"number":1002,"pull_request":{}}]`}, nil
-	})
-	issues, err := s.listGitHubIssuesForAutoStart(context.Background(), "acme/repo")
-	if err != nil || len(issues) != 1001 {
-		t.Fatalf("issues=%d err=%v", len(issues), err)
-	}
-}
-
-func TestIssueAutomationWakeScansImmediatelyAndSettingsAlias(t *testing.T) {
-	t.Parallel()
-	f := newAutomationGitHub()
-	s := automationServer(t, f)
-	scanned := make(chan struct{}, 4)
-	s.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) { scanned <- struct{}{}; return nil, nil }
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go s.runGitHubIssueAutoStart(ctx)
-	select {
-	case <-scanned:
-	case <-time.After(time.Second):
-		t.Fatal("initial scan not run")
-	}
-	s.ConfigureReviewSettings = func(_ context.Context, req ReviewSettingsRequest) (ReviewSettingsState, error) {
-		if req.GitHubIssueAutoStartAssigned == nil || !*req.GitHubIssueAutoStartAssigned {
-			t.Fatal("enabled alias not normalized")
-		}
-		return ReviewSettingsState{GitHubIssueAutoStartAssigned: true}, nil
-	}
-	response := httptest.NewRecorder()
-	s.Handler().ServeHTTP(response, httptest.NewRequest("POST", "/api/review-settings", strings.NewReader(`{"github_issue_auto_start_enabled":true}`)))
-	if response.Code != 200 || !strings.Contains(response.Body.String(), `"github_issue_auto_start_enabled":true`) {
-		t.Fatalf("settings: %s", response.Body.String())
-	}
-	// The successful save must either have been consumed by the loop or remain
-	// buffered; test the explicit wake channel without racing the live loop.
-	cancel()
-	other := automationServer(t, f)
-	other.ConfigureReviewSettings = s.ConfigureReviewSettings
-	response = httptest.NewRecorder()
-	other.Handler().ServeHTTP(response, httptest.NewRequest("POST", "/api/review-settings", strings.NewReader(`{"github_issue_auto_start_enabled":true}`)))
-	select {
-	case <-other.issueAutoStartWake:
-	default:
-		t.Fatal("settings did not wake scanner")
-	}
-	response = httptest.NewRecorder()
-	other.Handler().ServeHTTP(response, httptest.NewRequest("POST", "/api/review-settings", strings.NewReader(`{"github_issue_auto_start_enabled":true,"github_issue_auto_start_assigned":false}`)))
-	if response.Code != 400 {
-		t.Fatal("conflicting aliases accepted")
-	}
-}
-
-func TestIssueAutomationTargetsSelectedRepositories(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	f := newAutomationGitHub()
-	s := automationServer(t, f)
-	repos := []GitHubRepo{
-		{FullName: "acme/repo", DefaultBranch: "main"},
-		{FullName: "acme/other", DefaultBranch: "main"},
-		{FullName: "acme/paused", DefaultBranch: "main"},
-		{FullName: "acme/unselected", DefaultBranch: "main"},
-		{FullName: "acme/disabled", DefaultBranch: "main"},
-	}
-	s.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) { return repos, nil }
-	settings, _ := s.ReviewSettingsStatus(ctx)
-	settings.DisabledRepositories = []string{"acme/disabled"}
-	settings.GitHubIssueRepositories = localruntime.GitHubIssueRepositories{}
-	s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) { return settings, nil }
-
-	s.pollGitHubIssueAutoStart(ctx)
-	if s.issueAutomation.status.Enabled || f.calls != 0 {
-		t.Fatal("empty repository selection fell back to global settings")
-	}
-
-	f.issue.Assignees = nil
-	f.issue.Labels = append(f.issue.Labels, GitHubIssueLabel{Name: "repo-claimed"})
-	settings.GitHubIssueRepositories["acme/repo"] = localruntime.GitHubIssueRepositorySettings{
-		AutoStart: true, TriggerLabels: []string{"ready"}, ExclusionLabel: "repo-claimed",
-	}
-	settings.GitHubIssueRepositories["acme/other"] = localruntime.GitHubIssueRepositorySettings{
-		AutoStart: true, OnlyAssigned: true, TriggerLabels: []string{"other-ready"}, ExclusionLabel: "other-claimed",
-	}
-	settings.GitHubIssueRepositories["acme/paused"] = localruntime.GitHubIssueRepositorySettings{
-		ExclusionLabel: "paused-claimed",
-	}
-	settings.GitHubIssueRepositories["acme/disabled"] = localruntime.GitHubIssueRepositorySettings{
-		AutoStart: true, ExclusionLabel: "disabled-claimed",
-	}
-	s.pollGitHubIssueAutoStart(ctx)
-	status := s.issueAutomation.status
-	if !status.Enabled || !slices.Equal(status.Repositories, []string{"acme/repo", "acme/other"}) || len(f.submissions) != 0 {
-		t.Fatalf("unexpected repository scan: %+v", status)
-	}
-	if len(status.Issues) != 2 || status.Issues[0].Reason != "claimed elsewhere or excluded" || status.Issues[1].Reason != "wrong assignee" {
-		t.Fatalf("wrong repository filters: %+v", status.Issues)
-	}
-
-	f.issue.Assignees = []GitHubIssueUser{{Login: "octocat"}}
-	f.issue.Labels = []GitHubIssueLabel{{Name: "ready"}}
-	s.pollGitHubIssueAutoStart(ctx)
-	status = s.issueAutomation.status
-	if len(status.Issues) != 2 || status.Issues[1].Reason != "missing trigger label" || len(f.submissions) != 1 {
-		t.Fatalf("wrong repository labels: %+v", status)
-	}
-	if issue := f.submissions[0].GitHubIssue; issue.Repository != "acme/repo" || issue.Claim.ExclusionLabel != "repo-claimed" {
-		t.Fatalf("wrong claim settings: %+v", issue)
 	}
 }
 
@@ -564,7 +376,7 @@ func TestIssueAutomationRefusesActiveLocalRetry(t *testing.T) {
 	t.Parallel()
 	f := newAutomationGitHub()
 	s := automationServer(t, f)
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	body, _ := json.Marshal(f.submissions[0])
 	s.Broker.RecordTaskRunConfig("request-1", body)
 	response := retryIssue(t, s, f.submissions[0].GitHubIssue.Claim.ID, true)
@@ -582,38 +394,9 @@ func TestIssueAutomationPersistsBeforeGitHubMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.IssueClaims.Root = root
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	if f.branch || len(f.submissions) > 0 || s.issueAutomation.status.Error == "" {
 		t.Fatalf("storage failure mutated GitHub: %+v", s.issueAutomation.status)
-	}
-}
-
-func TestIssueAutomationDisabledRepoAndDiscoveryRefresh(t *testing.T) {
-	t.Parallel()
-	f := newAutomationGitHub()
-	s := automationServer(t, f)
-	settings, _ := s.ReviewSettingsStatus(context.Background())
-	settings.DisabledRepositories = []string{"acme/repo"}
-	s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) { return settings, nil }
-	discovered := 0
-	s.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
-		discovered++
-		return []GitHubRepo{{FullName: "acme/repo", DefaultBranch: "main"}}, nil
-	}
-	s.pollGitHubIssueAutoStart(context.Background())
-	s.pollGitHubIssueAutoStart(context.Background())
-	if discovered != 1 || f.branch {
-		t.Fatal("disabled repository scanned or discovery not cached")
-	}
-	s.gitHubRepos.refreshedAt = time.Now().Add(-gitHubRepoCacheTTL)
-	s.pollGitHubIssueAutoStart(context.Background())
-	if discovered != 2 {
-		t.Fatal("repository discovery never refreshed")
-	}
-	settings.DisabledRepositories = nil
-	s.pollGitHubIssueAutoStart(context.Background())
-	if len(f.submissions) != 1 {
-		t.Fatalf("reenabled repository backlog ignored: %+v", s.issueAutomation.status)
 	}
 }
 
@@ -622,12 +405,12 @@ func TestIssueAutomationGitHubDeadlineAndPartialBranchData(t *testing.T) {
 	f := newAutomationGitHub()
 	s := automationServer(t, f)
 	s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
-		if strings.Contains(strings.Join(cmd.Args, " "), "nodes(ids:") {
-			return execx.Result{Stdout: `{"data":{"nodes":[null]}}`}, nil
+		if strings.Contains(strings.Join(cmd.Args, " "), "defaultBranchRef") {
+			return execx.Result{Stdout: `{"data":{}}`}, nil
 		}
 		return f.Run(ctx, cmd)
 	})
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	if f.branch || s.issueAutomation.status.Error == "" {
 		t.Fatal("incomplete associations treated as no branches")
 	}
@@ -640,4 +423,36 @@ func TestIssueAutomationGitHubDeadlineAndPartialBranchData(t *testing.T) {
 	if _, err := s.issueGitHubLogin(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("deadline ignored: %v", err)
 	}
+}
+
+// Seed a claim with an explicit item, then reconcile that durable claim on later calls.
+func reconcileOrAdmitTestIssue(ctx context.Context, s Server) {
+	err := s.ReconcileIssueWork(ctx)
+	records, listErr := s.IssueClaims.List()
+	if err == nil && len(records) == 0 && (s.IssueRecovery != nil || listErr == nil) {
+		var settings ReviewSettingsState
+		settings, err = s.ReviewSettingsStatus(ctx)
+		if err == nil {
+			var login string
+			login, err = s.issueGitHubLogin(ctx)
+			if err == nil {
+				run := issueRunConfig(GitHubRepo{FullName: "acme/repo", DefaultBranch: "main"}, GitHubIssue{Number: 17}, settings.GitHubIssueLinkMode)
+				if s.Workflows != nil {
+					run.Workflow = &config.WorkflowRunConfig{ID: "issues", EventID: "issue-17"}
+					settings, _, err = s.workflowIssueSettings(run)
+					if err != nil {
+						return
+					}
+				}
+				_, err = s.claimAndSubmitIssue(ctx, run, settings, login, s.SubmitLocalPrompt)
+			}
+		}
+	}
+	var status issueAutomationStatus
+	if err = errors.Join(err, listErr); err != nil {
+		status.addError(err)
+	}
+	s.issueAutomation.mu.Lock()
+	s.issueAutomation.status = status
+	s.issueAutomation.mu.Unlock()
 }

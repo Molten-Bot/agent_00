@@ -16,6 +16,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
 type recoveryGitHub struct {
@@ -60,6 +61,12 @@ func recoveryServer(t *testing.T) (Server, *recoveryGitHub) {
 	s := automationServer(t, f.automationGitHub)
 	s.GitHubIssueRunner = f
 	s.IssueRecovery = &localruntime.IssueRecoveryConfig{}
+	store := &workflow.Store{Path: filepath.Join(t.TempDir(), "workflows.json")}
+	w := workflow.Definition{ID: "issues", Name: "Issues", Repository: "acme/repo", Enabled: true, Trigger: workflow.Trigger{Event: "issue.opened"}, Filters: workflow.Filters{Mode: "all"}, Task: workflow.Task{Kind: "implement", Instructions: "Implement issue", IssueLinkMode: "reference"}, Merge: workflow.Merge{Method: "squash"}}
+	if err := store.Initialize(workflow.Document{Version: workflow.Version, Workflows: []workflow.Definition{w}}); err != nil {
+		t.Fatal(err)
+	}
+	s.Workflows = &workflow.Engine{Store: store, Enabled: func() bool { return true }, Allowed: func(string) bool { return true }}
 	return s, f
 }
 func latestRecoveryRecord(t *testing.T, s Server) localruntime.IssueClaimRecord {
@@ -99,12 +106,24 @@ func recoveryPR(state, merged, head, base string) string {
 	return `[{"number":42,"title":"` + recoveryPRTitle + `","state":"` + state + `","merged_at":` + merged + `,"head":{"ref":"` + head + `","sha":"existing-commits","repo":{"full_name":"acme/repo"}},"base":{"ref":"` + base + `","repo":{"full_name":"acme/repo"}}}]`
 }
 
+func TestIssueRecoveryWithEmptyClaimStoreLeavesGitHubIdle(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.Workflows = nil
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 0 || len(f.submissions) != 0 {
+		t.Fatalf("empty claim store triggered %d GitHub calls and %d submissions", f.calls, len(f.submissions))
+	}
+}
+
 func TestExplicitIssueRecoveryUsesPersistentOwner(t *testing.T) {
 	t.Parallel()
 	for _, action := range []string{"start", "recover"} {
 		t.Run(action, func(t *testing.T) {
 			s, f := recoveryServer(t)
-			s.pollGitHubIssueAutoStart(context.Background())
+			reconcileOrAdmitTestIssue(context.Background(), s)
 			previous := completeRecoveryRecord(t, s, "stopped", 3)
 			previous.PriorRunFailures = 2
 			previous.NextAttemptAt = time.Now().Add(time.Hour)
@@ -165,7 +184,7 @@ func TestIssueRecoveryRetryAfterDurableBranchReservationFailure(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			s, f := recoveryServer(t)
 			f.fail = "query=mutation"
-			s.pollGitHubIssueAutoStart(context.Background())
+			reconcileOrAdmitTestIssue(context.Background(), s)
 			record := latestRecoveryRecord(t, s)
 			if !record.RemoteRecorded || record.BranchReserved || f.branch || len(f.submissions) != 0 {
 				t.Fatalf("expected ownership without branch: %+v", record)
@@ -198,16 +217,13 @@ func TestIssueRecoveryBlocksStaleAdmissionUntilExplicitRetry(t *testing.T) {
 	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
 		return "", errors.New("issue owner is unavailable or changed: %!w(<nil>)")
 	}
-	s.pollGitHubIssueAutoStart(ctx)
+	reconcileOrAdmitTestIssue(ctx, s)
 	previous := latestRecoveryRecord(t, s)
 	if previous.State != "retry_wait" || !previous.UnlockPending || previous.AgentAttempts != 0 {
 		t.Fatalf("unexpected failed admission state: %s, unlock pending=%t, agent attempts=%d", previous.State, previous.UnlockPending, previous.AgentAttempts)
 	}
 	previous.Failures = 4
 	previous.NextAttemptAt = time.Now().Add(time.Hour)
-	if repairableIssueIncident(previous) {
-		t.Fatal("historical ownership failure would enqueue a repair")
-	}
 	if err := s.IssueClaims.Save(previous); err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +263,7 @@ func TestIssueRecoveryStopsRetryWhenDispatchRejectsOwner(t *testing.T) {
 	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
 		return "", errors.New("temporary dispatch failure")
 	}
-	s.pollGitHubIssueAutoStart(ctx)
+	reconcileOrAdmitTestIssue(ctx, s)
 	expireIssueRetry(t, s, latestRecoveryRecord(t, s).ID)
 	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
 		return "", localruntime.ErrIssueOwnershipChanged
@@ -256,7 +272,7 @@ func TestIssueRecoveryStopsRetryWhenDispatchRejectsOwner(t *testing.T) {
 		t.Fatalf("expected dispatch rejection, got %v", err)
 	}
 	record := latestRecoveryRecord(t, s)
-	if record.State != "blocked" || !record.NextAttemptAt.IsZero() || repairableIssueIncident(record) {
+	if record.State != "blocked" || !record.NextAttemptAt.IsZero() {
 		t.Fatalf("rejected dispatch state=%s retry=%v error=%q", record.State, record.NextAttemptAt, record.Error)
 	}
 	s.SubmitLocalPrompt = f.submit
@@ -269,7 +285,7 @@ func TestIssueRecoveryFinalizesCompletedAttemptAfterOwnerRestored(t *testing.T) 
 	t.Parallel()
 	ctx := context.Background()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(ctx)
+	reconcileOrAdmitTestIssue(ctx, s)
 	record := completeRecoveryRecord(t, s, "completed", 1)
 	identityPath := filepath.Join(s.IssueClaims.Root, "instance")
 	writeOwner := func(owner string) {
@@ -341,7 +357,7 @@ func initRecoveryCheckout(t *testing.T, workspace, branch string) (func(...strin
 func TestInterruptedIssueRecoveryBlocksUnpublishedWork(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(t.Context())
+	reconcileOrAdmitTestIssue(t.Context(), s)
 	record := completeRecoveryRecord(t, s, "", 1)
 	record.StoppedAt = time.Time{}
 	record.WorkspaceDir = t.TempDir()
@@ -365,7 +381,7 @@ func TestIssueRecoveryFinalizesInterruptedAttemptAfterOwnerRestored(t *testing.T
 	t.Parallel()
 	ctx := context.Background()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(ctx)
+	reconcileOrAdmitTestIssue(ctx, s)
 	record := completeRecoveryRecord(t, s, "completed", 1)
 	record.WorkspaceDir = t.TempDir()
 	_, head := initRecoveryCheckout(t, record.WorkspaceDir, record.Run.GitHubIssue.Claim.Branch)
@@ -429,39 +445,12 @@ func TestIssueRecoveryFinalizesInterruptedAttemptAfterOwnerRestored(t *testing.T
 	}
 }
 
-func TestIssueRecoveryScanReportsFiltersForTrackedIssues(t *testing.T) {
-	t.Parallel()
-	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(context.Background())
-	record := completeRecoveryRecord(t, s, "stopped", 1)
-	for _, reason := range []string{"wrong assignee", "missing trigger label"} {
-		f.issue.Assignees = []GitHubIssueUser{{Login: "octocat"}}
-		f.issue.Labels = []GitHubIssueLabel{{Name: "ready"}}
-		if reason == "wrong assignee" {
-			f.issue.Assignees = nil
-		} else {
-			f.issue.Labels = nil
-		}
-		s.pollGitHubIssueAutoStart(context.Background())
-		decisions := s.issueAutomation.status.Issues
-		if len(decisions) != 1 || decisions[0].Reason != reason {
-			t.Fatalf("tracked issue filter = %+v, want %q", decisions, reason)
-		}
-		if got := latestRecoveryRecord(t, s); got.ID != record.ID {
-			t.Fatal("filtering replaced the recovery record")
-		}
-	}
-	if len(f.submissions) != 1 {
-		t.Fatal("filtering restarted a stopped task")
-	}
-}
-
 func TestIssueRecoveryUnlocksOnlyAfterWorkerExit(t *testing.T) {
 	t.Parallel()
 	for _, outcome := range []string{"completed", "error", "no_changes", "stopped", "warn"} {
 		t.Run(outcome, func(t *testing.T) {
 			s, f := recoveryServer(t)
-			s.pollGitHubIssueAutoStart(context.Background())
+			reconcileOrAdmitTestIssue(context.Background(), s)
 			record := completeRecoveryRecord(t, s, outcome, 1)
 			lock, err := s.IssueClaims.TryLock(localruntime.IssueExecutionKey(record.Run.GitHubIssue))
 			if err != nil || lock == nil {
@@ -512,7 +501,7 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := recoveryServer(t)
-			s.pollGitHubIssueAutoStart(context.Background())
+			reconcileOrAdmitTestIssue(context.Background(), s)
 			record := completeRecoveryRecord(t, s, "error", 1)
 			s.Broker.IngestLog("task status=error request_id=" + record.RequestID)
 			f.prs = recoveryPR(tc.state, tc.merged, tc.head, tc.base)
@@ -574,7 +563,7 @@ func TestIssueRecoveryKeepsExistingMergeTarget(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(ctx)
+	reconcileOrAdmitTestIssue(ctx, s)
 	record := completeRecoveryRecord(t, s, "completed", 1)
 	const trackedURL = "https://github.com/acme/repo/pull/41"
 	s.Broker.IngestLog("task status=completed request_id=" + record.RequestID + " pr_url=" + trackedURL)
@@ -596,7 +585,7 @@ func TestIssueRecoveryPublishesVerifiedPRAfterTaskExpires(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(ctx)
+	reconcileOrAdmitTestIssue(ctx, s)
 	record := completeRecoveryRecord(t, s, "error", 1)
 	now := time.Now().Add(-defaultTerminalTaskTimeout)
 	s.Broker.now = func() time.Time { return now }
@@ -633,7 +622,7 @@ func TestIssueRecoveryReleasesInterruptedExecutionReserve(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	s, _ := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(ctx)
+	reconcileOrAdmitTestIssue(ctx, s)
 	record := latestRecoveryRecord(t, s)
 	if err := s.IssueClaims.BeginExecution(record); err != nil {
 		t.Fatal(err)
@@ -662,7 +651,7 @@ func TestIssueRecoveryReleasesInterruptedExecutionReserve(t *testing.T) {
 func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	record := completeRecoveryRecord(t, s, "error", 1)
 	f.deleteError = true
 	if err := s.ReconcileIssueWork(context.Background()); err == nil {
@@ -674,6 +663,7 @@ func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 	restarted := NewServer("", NewBroker())
 	restarted.IssueClaims = s.IssueClaims
 	restarted.IssueRecovery = s.IssueRecovery
+	restarted.Workflows = s.Workflows
 	restarted.GitHubIssueRunner = f
 	restarted.SubmitLocalPrompt = f.submit
 	restarted.ReviewSettingsStatus = s.ReviewSettingsStatus
@@ -738,7 +728,7 @@ func TestIssueRecoveryDefersCleanupAfterLabelAdmissionRateLimit(t *testing.T) {
 		}
 		return f.Run(ctx, cmd)
 	})
-	s.pollGitHubIssueAutoStart(ctx)
+	reconcileOrAdmitTestIssue(ctx, s)
 	s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
 	waiting := latestRecoveryRecord(t, s)
 	before := requests
@@ -760,7 +750,7 @@ func TestIssueRecoveryHonorsLabelCleanupRetryAfter(t *testing.T) {
 		dispatches++
 		return "", errors.New("temporary dispatch failure")
 	}
-	s.pollGitHubIssueAutoStart(ctx)
+	reconcileOrAdmitTestIssue(ctx, s)
 	waiting := latestRecoveryRecord(t, s)
 	if !waiting.UnlockPending || !waiting.NextAttemptAt.After(time.Now()) {
 		t.Fatalf("failed admission did not leave a label and dispatch cooldown: %+v", waiting)
@@ -838,7 +828,7 @@ func TestIssueRecoveryBacksOffRepeatedFailuresWithoutAgentAttempts(t *testing.T)
 	ctx := t.Context()
 	s, f := recoveryServer(t)
 	s.IssueRecovery.MaxAttempts = 6 // Exercise the full backoff curve within an explicit budget.
-	s.pollGitHubIssueAutoStart(ctx)
+	reconcileOrAdmitTestIssue(ctx, s)
 	for i, seconds := range []int{60, 300, 1500, 3600, 3600} {
 		// Preflight or publication can fail without starting another agent.
 		record := completeRecoveryRecord(t, s, "error", 0)
@@ -882,7 +872,7 @@ func TestIssueRecoveryBacksOffFailedSuccessorAdmission(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(ctx)
+	reconcileOrAdmitTestIssue(ctx, s)
 	previous := completeRecoveryRecord(t, s, "error", 0)
 	expireIssueRetry(t, s, previous.ID)
 	dispatchErr := errors.New("temporary dispatch failure")
@@ -953,55 +943,26 @@ func TestIssueRecoveryBacksOffFailedSuccessorAdmission(t *testing.T) {
 	}
 }
 
-func TestIssueRecoveryPersistsRepairReceiptBeforeFailedAdmission(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(ctx)
-	previous := completeRecoveryRecord(t, s, "error", 0)
-	expireIssueRetry(t, s, previous.ID)
-	s.IssueRepair = func(_ context.Context, record localruntime.IssueClaimRecord) (string, error) {
-		if record.ID != previous.ID {
-			t.Fatalf("repair attempted for claim %s, want %s", record.ID, previous.ID)
-		}
-		return "repair-request", nil
-	}
-	dispatchErr := errors.New("temporary dispatch failure")
-	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
-		return "", dispatchErr
-	}
-	if err := s.ReconcileIssueWork(ctx); !errors.Is(err, dispatchErr) {
-		t.Fatalf("expected dispatch failure, got %v", err)
-	}
-	if got := latestRecoveryRecord(t, s); got.ID == previous.ID || got.State != "retry_wait" || len(f.submissions) != 1 {
-		t.Fatalf("expected deferred successor, got claim %s in state %s", got.ID, got.State)
-	}
-	saved, err := (&localruntime.IssueClaimStore{Root: s.IssueClaims.Root}).Load(previous.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if saved.RepairRequestID != "repair-request" {
-		t.Fatalf("saved repair receipt = %q", saved.RepairRequestID)
-	}
-}
-
-func TestIssueRecoveryRespectsRepositoryAutoStart(t *testing.T) {
+func TestLegacyIssueClaimRequiresExplicitRetry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(ctx)
+	engine := s.Workflows
+	s.Workflows = nil
+	reconcileOrAdmitTestIssue(ctx, s)
+	s.Workflows = engine
 	record := completeRecoveryRecord(t, s, "error", 1)
 	settings, _ := s.ReviewSettingsStatus(ctx)
 	settings.GitHubIssueRepositories = localruntime.GitHubIssueRepositories{
-		"acme/other": {AutoStart: true, ExclusionLabel: "other-claimed"},
+		"acme/repo": {AutoStart: true, ExclusionLabel: "agent_00-in-progress"},
 	}
 	s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) { return settings, nil }
 	if err := s.ReconcileIssueWork(ctx); err != nil {
 		t.Fatal(err)
 	}
 	blocked := latestRecoveryRecord(t, s)
-	if blocked.State != "blocked" || blocked.Error != "issue automation disabled" || blocked.UnlockPending || len(f.submissions) != 1 {
-		t.Fatalf("removed repository did not finish cleanup and block retry: %+v", blocked)
+	if blocked.State != "blocked" || blocked.Error != "automatic issue retry requires an enabled workflow" || blocked.UnlockPending || len(f.submissions) != 1 {
+		t.Fatalf("legacy claim did not finish cleanup and block retry: %+v", blocked)
 	}
 	response := retryIssue(t, s, record.ID, true)
 	if response.Code != 202 || len(f.submissions) != 2 {
@@ -1009,19 +970,23 @@ func TestIssueRecoveryRespectsRepositoryAutoStart(t *testing.T) {
 	}
 }
 
-func TestIssueRecoveryUsesCurrentRepositoryExclusionLabel(t *testing.T) {
+func TestIssueRecoveryUsesWorkflowExclusionLabel(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(ctx)
+	reconcileOrAdmitTestIssue(ctx, s)
 	record := completeRecoveryRecord(t, s, "error", 1)
-	const exclusion = "team-claimed"
-	settings, _ := s.ReviewSettingsStatus(ctx)
-	settings.GitHubIssueRepositories = localruntime.GitHubIssueRepositories{
-		"acme/repo": {AutoStart: true, ExclusionLabel: exclusion},
+	const exclusion = localruntime.DefaultGitHubIssueExclusionLabel
+	// Retrying a workflow continues to work when the Issues view is disabled.
+	s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) {
+		return ReviewSettingsState{}, nil
 	}
-	s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) { return settings, nil }
-	f.issue.Labels = append(f.issue.Labels, GitHubIssueLabel{Name: exclusion})
+	record.LabelAdded = false
+	record.UnlockPending = false
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	f.issue.Labels = []GitHubIssueLabel{{Name: exclusion}}
 	makeRetryDue := func() {
 		t.Helper()
 		if err := s.IssueClaims.Update(record.ID, func(r *localruntime.IssueClaimRecord) error {
@@ -1035,8 +1000,8 @@ func TestIssueRecoveryUsesCurrentRepositoryExclusionLabel(t *testing.T) {
 	if err := s.ReconcileIssueWork(ctx); err == nil || !strings.Contains(err.Error(), "issue was excluded after its worker stopped") {
 		t.Fatalf("reconcile with current exclusion label = %v", err)
 	}
-	if len(f.submissions) != 1 || f.deletes != 1 || !githubIssueHasAnyLabel(f.issue, []string{exclusion}) {
-		t.Fatalf("expected only the prior claim label to be cleaned up: submissions=%d deletes=%d labels=%v", len(f.submissions), f.deletes, f.issue.Labels)
+	if len(f.submissions) != 1 || f.deletes != 0 || !githubIssueHasAnyLabel(f.issue, []string{exclusion}) {
+		t.Fatalf("expected workflow exclusion label to be preserved: submissions=%d deletes=%d labels=%v", len(f.submissions), f.deletes, f.issue.Labels)
 	}
 	for i, label := range f.issue.Labels {
 		if label.Name == exclusion {
@@ -1058,7 +1023,7 @@ func TestIssueRecoveryBudgetStopAndNoChangeDoNotRerun(t *testing.T) {
 	for _, outcome := range []string{"error", "stopped", "no_changes"} {
 		t.Run(outcome, func(t *testing.T) {
 			s, f := recoveryServer(t)
-			s.pollGitHubIssueAutoStart(context.Background())
+			reconcileOrAdmitTestIssue(context.Background(), s)
 			completeRecoveryRecord(t, s, outcome, 3)
 			for range 2 {
 				if err := s.ReconcileIssueWork(context.Background()); err != nil {
@@ -1075,7 +1040,7 @@ func TestIssueRecoveryBudgetStopAndNoChangeDoNotRerun(t *testing.T) {
 func TestIssueRecoveryBoundsFailuresBeforeAgentStarts(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	record := completeRecoveryRecord(t, s, "error", 0)
 	record.PriorRunFailures = 2
 	record.RunError = "workflow: write access check failed"
@@ -1106,7 +1071,7 @@ func TestIssueRecoveryBlocksReservedBranchConflictsAcrossRestart(t *testing.T) {
 	for _, name := range []string{"legacy rename rejection", "checkout conflict", "missing remote ref"} {
 		t.Run(name, func(t *testing.T) {
 			s, f := recoveryServer(t)
-			s.pollGitHubIssueAutoStart(context.Background())
+			reconcileOrAdmitTestIssue(context.Background(), s)
 			record := completeRecoveryRecord(t, s, "error", 0)
 			record.State = "retry_wait"
 			record.NextAttemptAt = time.Now().Add(-time.Minute)
@@ -1145,6 +1110,7 @@ func TestIssueRecoveryBlocksReservedBranchConflictsAcrossRestart(t *testing.T) {
 			restarted := NewServer("", NewBroker())
 			restarted.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
 			restarted.IssueRecovery = s.IssueRecovery
+			restarted.Workflows = s.Workflows
 			restarted.GitHubIssueRunner = s.GitHubIssueRunner
 			restarted.SubmitLocalPrompt = s.SubmitLocalPrompt
 			restarted.ReviewSettingsStatus = s.ReviewSettingsStatus
@@ -1226,7 +1192,7 @@ func TestIssueRecoveryBlocksReservedBranchConflictsAcrossRestart(t *testing.T) {
 func TestIssueRecoveryVerifiesReopenedPRBeforeCheckout(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(t.Context())
+	reconcileOrAdmitTestIssue(t.Context(), s)
 	record := completeRecoveryRecord(t, s, "error", 0)
 	record.Incident = localruntime.IssueIncidentBranchRecovery
 	record.ExitCode = app.ExitClone
@@ -1280,7 +1246,7 @@ func TestIssueRecoveryCleansUpLabelWhenAdmissionIsBlocked(t *testing.T) {
 				}
 				return res, err
 			})
-			s.pollGitHubIssueAutoStart(ctx)
+			reconcileOrAdmitTestIssue(ctx, s)
 			record := latestRecoveryRecord(t, s)
 			if restart {
 				// Restore the receipt an abrupt restart would find on disk.
@@ -1367,17 +1333,13 @@ func TestIssueRecoveryBlocksPrerequisiteWithoutRepair(t *testing.T) {
 func testIssueRecoveryBlocksPrerequisite(t *testing.T, report, incident, want string) {
 	t.Helper()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	record := completeRecoveryRecord(t, s, "error", 1)
 	record.Incident = "missing_pr"
 	record.Error = "codex: codex reported failure: Failure: " + report
 	record.NextAttemptAt = time.Now().Add(time.Hour)
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
-	}
-	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
-		t.Fatal("dependency failure queued a harness repair")
-		return "", nil
 	}
 	f.deleteError = true
 	if err := s.ReconcileIssueWork(context.Background()); err == nil {
@@ -1414,7 +1376,7 @@ func TestIssueRecoveryBlocksExternalRolloutWithoutRepair(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(ctx)
+	reconcileOrAdmitTestIssue(ctx, s)
 	record := completeRecoveryRecord(t, s, "error", 1)
 	record.Incident = "missing_pr"
 	const detail = "codex: codex reported failure: Failure: #42 production deployment is still incomplete. " +
@@ -1425,10 +1387,6 @@ func TestIssueRecoveryBlocksExternalRolloutWithoutRepair(t *testing.T) {
 	record.NextAttemptAt = time.Now().Add(time.Hour)
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
-	}
-	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
-		t.Fatal("external provisioning failure queued a harness repair")
-		return "", nil
 	}
 	for range 2 {
 		if err := s.ReconcileIssueWork(ctx); err != nil {
@@ -1450,7 +1408,7 @@ func TestIssueRecoveryBlocksExternalRolloutWithoutRepair(t *testing.T) {
 func TestIssueRecoveryBlocksMissingExternalEvidenceWithoutRepair(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(t.Context())
+	reconcileOrAdmitTestIssue(t.Context(), s)
 	record := completeRecoveryRecord(t, s, "error", 1)
 	record.Incident = "missing_pr"
 	record.RunError = "claude: claude reported failure: Failure: Equipment audit remains blocked. " +
@@ -1458,10 +1416,6 @@ func TestIssueRecoveryBlocksMissingExternalEvidenceWithoutRepair(t *testing.T) {
 	record.NextAttemptAt = time.Now().Add(-time.Minute)
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
-	}
-	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
-		t.Fatal("missing external evidence queued a harness repair")
-		return "", nil
 	}
 	for range 2 {
 		if err := s.ReconcileIssueWork(t.Context()); err != nil {
@@ -1481,7 +1435,7 @@ func TestIssueRecoveryBlocksMissingExternalEvidenceWithoutRepair(t *testing.T) {
 func TestIssueRecoveryChecksPreservedRolloutBeforeOverdueRetry(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(t.Context())
+	reconcileOrAdmitTestIssue(t.Context(), s)
 	record := completeRecoveryRecord(t, s, "error", 1)
 	record.Incident = "missing_pr"
 	record.RunError = "codex: codex reported failure: Failure: Production rollout remains pending. " +
@@ -1497,10 +1451,6 @@ func TestIssueRecoveryChecksPreservedRolloutBeforeOverdueRetry(t *testing.T) {
 			t.Fatalf("stdout lookup used request %q and failure %q", requestID, failure)
 		}
 		return failurefollowup.ExternalRolloutPrerequisitesReason, true
-	}
-	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
-		t.Fatal("external provisioning failure queued a harness repair")
-		return "", nil
 	}
 	for range 2 {
 		if err := s.ReconcileIssueWork(t.Context()); err != nil {
@@ -1518,7 +1468,7 @@ func TestIssueRecoveryChecksPreservedRolloutBeforeOverdueRetry(t *testing.T) {
 func TestIssueRecoveryChecksPreservedHumanHandoffBeforeOverdueRetry(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(t.Context())
+	reconcileOrAdmitTestIssue(t.Context(), s)
 	record := completeRecoveryRecord(t, s, "error", 1)
 	record.Incident = "missing_pr"
 	const summary = "Failure: Human action remains pending."
@@ -1544,10 +1494,6 @@ func TestIssueRecoveryChecksPreservedHumanHandoffBeforeOverdueRetry(t *testing.T
 			return fullReport
 		})
 	}
-	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
-		t.Fatal("human handoff failure queued a harness repair")
-		return "", nil
-	}
 	if err := s.ReconcileIssueWork(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -1567,24 +1513,24 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 	const truncated = confirmed + " | Service readiness still needs confirmation. | CloudWatch access is pending." + failurefollowup.TruncatedErrorDetails
 	for _, tc := range []struct {
 		name, evidence       string
-		matchedLogs, repair  bool
+		matchedLogs, retry   bool
 		legacyErrorFieldOnly bool
 		logsRestored         bool
 		recoveryStatusOnly   bool
 	}{
-		{name: "ambiguous preserved report", evidence: ambiguous, repair: true},
-		{name: "legacy error field", evidence: ambiguous, repair: true, legacyErrorFieldOnly: true},
+		{name: "ambiguous preserved report", evidence: ambiguous, retry: true},
+		{name: "legacy error field", evidence: ambiguous, retry: true, legacyErrorFieldOnly: true},
 		{name: "legacy recovery status", evidence: "temporary GitHub verification failure", legacyErrorFieldOnly: true, recoveryStatusOnly: true},
 		{name: "confirmed preserved report", evidence: confirmed},
 		{name: "confirmed legacy error field", evidence: confirmed, legacyErrorFieldOnly: true},
 		{name: "confirmed secret only", evidence: prefix + "The shared Secrets Manager key requires external provisioning.", legacyErrorFieldOnly: true},
-		{name: "matching stdout reports a failed check", evidence: truncated, matchedLogs: true, repair: true},
+		{name: "matching stdout reports a failed check", evidence: truncated, matchedLogs: true, retry: true},
 		{name: "no matching stdout for truncated report", evidence: truncated},
-		{name: "stdout restored after legacy error is overwritten", evidence: truncated, repair: true, legacyErrorFieldOnly: true, logsRestored: true},
+		{name: "stdout restored after legacy error is overwritten", evidence: truncated, retry: true, legacyErrorFieldOnly: true, logsRestored: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := recoveryServer(t)
-			s.pollGitHubIssueAutoStart(t.Context())
+			reconcileOrAdmitTestIssue(t.Context(), s)
 			record := completeRecoveryRecord(t, s, "error", 1)
 			record.State = "blocked"
 			record.Incident = localruntime.IssueIncidentExternalRollout
@@ -1604,14 +1550,6 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 				}
 				return "", matchedLogs
 			}
-			calls := 0
-			s.IssueRepair = func(_ context.Context, issue localruntime.IssueClaimRecord) (string, error) {
-				calls++
-				if issue.Incident != "missing_pr" || issue.FailureDetail() != tc.evidence {
-					t.Fatalf("unexpected repair evidence: incident=%q detail=%q", issue.Incident, issue.FailureDetail())
-				}
-				return "repair-test", nil
-			}
 			for pass := range 2 {
 				if err := s.ReconcileIssueWork(t.Context()); err != nil {
 					t.Fatal(err)
@@ -1619,9 +1557,9 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 				if pass == 0 && tc.logsRestored {
 					got := latestRecoveryRecord(t, s)
 					if got.State != "blocked" || got.Incident != record.Incident ||
-						got.Error != issueExplicitRetryError(record.Incident) || got.RunError != tc.evidence || calls != 0 {
-						t.Fatalf("legacy failure not preserved while stdout is unavailable: state=%q incident=%q error=%q run error=%q repair calls=%d",
-							got.State, got.Incident, got.Error, got.RunError, calls)
+						got.Error != issueExplicitRetryError(record.Incident) || got.RunError != tc.evidence {
+						t.Fatalf("legacy failure not preserved while stdout is unavailable: state=%q incident=%q error=%q run error=%q",
+							got.State, got.Incident, got.Error, got.RunError)
 					}
 					matchedLogs = true
 				}
@@ -1634,12 +1572,12 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 			if got.RunError != wantRunError || len(f.submissions) != 1 {
 				t.Fatalf("lost evidence or submitted a replacement worker: detail=%q submissions=%d", got.RunError, len(f.submissions))
 			}
-			if tc.repair {
-				if calls != 1 || got.RepairRequestID != "repair-test" || got.State != "retry_wait" || got.NextAttemptAt.IsZero() {
-					t.Fatalf("stale rollout block remained: calls=%d receipt=%q state=%q", calls, got.RepairRequestID, got.State)
+			if tc.retry {
+				if got.Incident != "missing_pr" || got.State != "retry_wait" || got.NextAttemptAt.IsZero() {
+					t.Fatalf("stale rollout block remained: incident=%q state=%q", got.Incident, got.State)
 				}
-			} else if calls != 0 || got.Incident != localruntime.IssueIncidentExternalRollout || got.State != "blocked" || !got.NextAttemptAt.IsZero() {
-				t.Fatalf("rollout block was lost: calls=%d incident=%q state=%q", calls, got.Incident, got.State)
+			} else if got.Incident != localruntime.IssueIncidentExternalRollout || got.State != "blocked" || !got.NextAttemptAt.IsZero() {
+				t.Fatalf("rollout block was lost: incident=%q state=%q", got.Incident, got.State)
 			}
 		})
 	}
@@ -1661,7 +1599,7 @@ func TestIssueRecoveryHandlesAmbiguousReservationAndFastCompletion(t *testing.T)
 		record.StoppedAt = time.Now()
 		return id, s.IssueClaims.Save(record)
 	}
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	got := latestRecoveryRecord(t, s)
 	if len(f.submissions) != 1 || got.Outcome != "no_changes" || got.Phase != "submitted" {
 		t.Fatalf("ambiguous mutation or fast receipt failed: %+v", got)
@@ -1675,7 +1613,7 @@ func TestIssueRecoveryCapturesAdmissionBeforeGitHubFails(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
 	f.fail = "issue view"
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	record := latestRecoveryRecord(t, s)
 	if record.Version != 2 || record.Incident != "admission" || record.Failures != 1 ||
 		!record.NextAttemptAt.After(time.Now()) || len(f.submissions) != 0 {
@@ -1694,7 +1632,7 @@ func TestIssueRecoveryCapturesAdmissionBeforeGitHubFails(t *testing.T) {
 func TestIssueRecoveryCorruptionAndStatusDoNotHideHealthyClaims(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	completeRecoveryRecord(t, s, "error", 1)
 	if err := os.WriteFile(filepath.Join(s.IssueClaims.Root, strings.Repeat("f", 32)+".json"), []byte("broken"), 0600); err != nil {
 		t.Fatal(err)
@@ -1776,11 +1714,11 @@ func TestIssueRecoveryPaginationCheckpoint(t *testing.T) {
 func TestIssueRecoveryDeliveredIssueDoesNotBecomeScanError(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	completeRecoveryRecord(t, s, "completed", 1)
 	f.prs = recoveryPR("open", "null", "agent00-issue-17", "main")
-	s.pollGitHubIssueAutoStart(context.Background())
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	if len(f.submissions) != 1 || s.issueAutomation.status.Error != "" || latestRecoveryRecord(t, s).State != "fulfilled" {
 		t.Fatalf("delivered issue treated as failed admission: %+v", s.issueAutomation.status)
 	}
@@ -1791,7 +1729,7 @@ func TestIssueRecoveryKeepsPausedAndUncertainWorkersBlocked(t *testing.T) {
 	for _, scenario := range []string{"paused", "uncertain"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, f := recoveryServer(t)
-			s.pollGitHubIssueAutoStart(context.Background())
+			reconcileOrAdmitTestIssue(context.Background(), s)
 			record := latestRecoveryRecord(t, s)
 			if scenario == "paused" {
 				record.Control = "paused"
@@ -1817,7 +1755,7 @@ func TestIssueRecoveryKeepsPausedAndUncertainWorkersBlocked(t *testing.T) {
 func TestIssueRecoveryBlocksLegacyDiskExhaustionUntilExplicitRetry(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	record := completeRecoveryRecord(t, s, "error", 1)
 	record.RunError = "codex: workspace storage ran out of space while the agent was running"
 	record.Error = "workflow retry budget exhausted; explicit retry required"
@@ -1825,10 +1763,6 @@ func TestIssueRecoveryBlocksLegacyDiskExhaustionUntilExplicitRetry(t *testing.T)
 	record.WorkspaceDir = filepath.Join(t.TempDir(), "retained")
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
-	}
-	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
-		t.Fatal("disk exhaustion queued an application repair after its status changed")
-		return "", nil
 	}
 	for range 2 {
 		if err := s.ReconcileIssueWork(context.Background()); err != nil {
@@ -1860,7 +1794,7 @@ func TestIssueRecoveryBlocksLegacyDiskExhaustionUntilExplicitRetry(t *testing.T)
 func TestIssueRecoveryDoesNotBlockOnDiskErrorQuotedInAgentReport(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)
-	s.pollGitHubIssueAutoStart(t.Context())
+	reconcileOrAdmitTestIssue(t.Context(), s)
 	record := completeRecoveryRecord(t, s, "error", 1)
 	record.RunError = "codex: codex reported failure: Failure: test assertions failed. Error details: Recovered from ENOSPC before running tests."
 	if err := s.IssueClaims.Save(record); err != nil {
@@ -1882,24 +1816,23 @@ func TestPreparedIssueRecoveryRechecksEligibility(t *testing.T) {
 			s, f := recoveryServer(t)
 			ctx := context.Background()
 			f.fail = "/labels?"
-			s.pollGitHubIssueAutoStart(ctx)
+			reconcileOrAdmitTestIssue(ctx, s)
 			record := latestRecoveryRecord(t, s)
 			if record.IssueNodeID == "" || record.Outcome != "" || len(f.submissions) != 0 {
 				t.Fatalf("expected prepared admission: %+v", record)
 			}
 			f.fail = ""
-			settings, _ := s.ReviewSettingsStatus(ctx)
 			switch scenario {
 			case "new exclusion":
-				settings.GitHubIssueAutoStartExclusionLabel = "new-exclusion"
-				f.issue.Labels = append(f.issue.Labels, GitHubIssueLabel{Name: "new-exclusion"})
+				record.LabelAdded = false
+				record.UnlockPending = false
+				f.issue.Labels = append(f.issue.Labels, GitHubIssueLabel{Name: localruntime.DefaultGitHubIssueExclusionLabel})
 			case "closed":
 				f.issue.State = "closed"
 			case "own label":
 				record.LabelAdded = true
 				f.issue.Labels = append(f.issue.Labels, GitHubIssueLabel{Name: record.Run.GitHubIssue.Claim.ExclusionLabel})
 			}
-			s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) { return settings, nil }
 			record.NextAttemptAt = time.Time{}
 			if err := s.IssueClaims.Save(record); err != nil {
 				t.Fatal(err)
@@ -1911,40 +1844,6 @@ func TestPreparedIssueRecoveryRechecksEligibility(t *testing.T) {
 				}
 			} else if err == nil || !strings.Contains(err.Error(), "issue is ineligible") || len(f.submissions) != 0 {
 				t.Fatalf("ineligible issue resumed: %v submissions=%d", err, len(f.submissions))
-			}
-		})
-	}
-}
-
-func TestThrottledDiscoveryResumesOnce(t *testing.T) {
-	t.Parallel()
-	for _, endpoint := range []string{"user", "/issues?state=open"} {
-		t.Run(endpoint, func(t *testing.T) {
-			s, f := recoveryServer(t)
-			now := time.Now()
-			s.GitHubCooldown.Now = func() time.Time { return now }
-			calls := 0
-			limited := true
-			s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
-				calls++
-				if limited && strings.Contains(cmd.Args[len(cmd.Args)-1], endpoint) {
-					return execx.Result{Stdout: "HTTP/2.0 429 Too Many Requests\r\nRetry-After: 120\r\n\r\n"}, errors.New("exit status 1")
-				}
-				return f.Run(ctx, cmd)
-			})
-			s.pollGitHubIssueAutoStart(t.Context())
-			before := calls
-			s.pollGitHubIssueAutoStart(t.Context())
-			status := s.snapshot().GitHubRate
-			if before == 0 || calls != before || len(f.submissions) != 0 || status.RetryAt == nil || !status.RetryAt.Equal(now.Add(2*time.Minute)) {
-				t.Fatal(calls, before, status)
-			}
-			limited = false
-			now = now.Add(2 * time.Minute)
-			s.pollGitHubIssueAutoStart(t.Context())
-			s.pollGitHubIssueAutoStart(t.Context())
-			if len(f.submissions) != 1 || latestRecoveryRecord(t, s).Run.GitHubIssue.Number != 17 {
-				t.Fatal("issue was lost or duplicated", s.issueAutomation.status)
 			}
 		})
 	}

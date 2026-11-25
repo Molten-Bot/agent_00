@@ -41,7 +41,34 @@ func issueExplicitRetryError(incident string) string {
 	}
 }
 
-func (s Server) WakeIssueRecovery() { s.wakeGitHubIssueAutoStart() }
+func (s Server) WakeIssueRecovery() {
+	select {
+	case s.issueRecoveryWake <- struct{}{}:
+	default:
+	}
+}
+
+func (s Server) runIssueRecovery(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for ctx.Err() == nil {
+		err := s.ReconcileIssueWork(ctx)
+		var status issueAutomationStatus
+		if err != nil && ctx.Err() == nil {
+			status.addError(err)
+			s.logf("localruntime.ui status=warn event=github_issue_recovery err=%q", status.Error)
+		}
+		s.issueAutomation.mu.Lock()
+		s.issueAutomation.status = status
+		s.issueAutomation.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		case <-s.issueRecoveryWake:
+		}
+	}
+}
 
 func (s Server) admitDurableIssue(ctx context.Context, run config.Config, settings ReviewSettingsState, login string, submit func(context.Context, []byte) (string, error)) (string, error) {
 	claim := &config.GitHubIssueClaim{ID: newIssueClaimID(), Branch: fmt.Sprintf("agent00-issue-%d", run.GitHubIssue.Number), BaseBranch: run.BaseBranch, ExclusionLabel: issueExclusionLabel(settings), Attempt: 1}
@@ -148,7 +175,7 @@ func (s Server) resumeIssueAdmission(ctx context.Context, record localruntime.Is
 	return s.finishIssueAdmission(ctx, record, submit)
 }
 
-// ReconcileIssueWork is also invoked after worker teardown. It does not rely on
+// ReconcileIssueWork checks existing claims after startup and worker teardown. It does not rely on
 // broker terminal status, labels, or elapsed time to establish worker liveness.
 func (s Server) ReconcileIssueWork(ctx context.Context) error {
 	if s.IssueRecovery == nil || s.IssueClaims == nil || s.issueAutomation == nil {
@@ -418,19 +445,6 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if record.Outcome != "" && record.Incident == "" {
 		record.Incident = "missing_pr"
 	}
-	if s.IssueRepair != nil && record.RepairRequestID == "" && repairableIssueIncident(record) {
-		id, repairErr := s.IssueRepair(ctx, record)
-		if repairErr != nil {
-			record.RepairError = repairErr.Error()
-		} else {
-			record.RepairRequestID = id
-			record.RepairError = ""
-		}
-		// Admission can defer its own retry without saving this record again.
-		if err := s.IssueClaims.Save(record); err != nil {
-			return fmt.Errorf("persist issue repair result: %w", err)
-		}
-	}
 	policy := s.IssueRecovery.Defaults()
 	explicitRetryError := issueExplicitRetryError(record.Incident)
 	if record.Control != "" || record.Outcome == "stopped" || record.Outcome == "no_changes" ||
@@ -454,28 +468,15 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		}
 		return s.IssueClaims.Save(record)
 	}
-	settings, err := s.ReviewSettingsStatus(ctx)
+	settings, enabled, err := s.workflowIssueSettings(record.Run)
 	if err != nil {
 		return s.deferIssueRecord(record, err)
 	}
-	settings, autoStart := settings.issueAutoStartForRepository(issue.Repository)
-	if record.Run.Workflow != nil {
-		settings, autoStart, err = s.workflowIssueSettings(record.Run)
-		if err != nil {
-			return s.deferIssueRecord(record, err)
-		}
-	}
-	if !autoStart {
+	if !enabled {
 		record.State = "blocked"
-		record.Error = "issue automation disabled"
+		record.Error = "automatic issue retry requires an enabled workflow"
+		record.NextAttemptAt = time.Time{}
 		return s.IssueClaims.Save(record)
-	}
-	for _, disabled := range settings.DisabledRepositories {
-		if issueRepositoryMatchesRun(disabled, issue.Repository) {
-			record.State = "blocked"
-			record.Error = "repository disabled"
-			return s.IssueClaims.Save(record)
-		}
 	}
 	if record.Outcome != "" && record.NextAttemptAt.IsZero() {
 		record.State = "retry_wait"
@@ -653,30 +654,6 @@ func issueRetryDeadline(id string, failures int, policy localruntime.IssueRecove
 	return deadline
 }
 
-func repairableIssueIncident(record localruntime.IssueClaimRecord) bool {
-	if record.Control != "" || record.Incident == "" || record.Incident == "service_shutdown" ||
-		issueExplicitRetryError(record.Incident) != "" || record.Outcome == "stopped" || (record.Outcome == "no_changes" && record.NoChangeEvidence) {
-		return false
-	}
-	if record.Outcome == "" && record.Failures < 3 {
-		return false
-	}
-	detail := record.FailureDetail()
-	if failurefollowup.NonRemediableFailureReason(errors.New(detail)) != "" {
-		return false
-	}
-	if strings.Contains(detail, localruntime.LegacyIssueOwnershipFailure) {
-		return false
-	}
-	lower := strings.ToLower(detail)
-	for _, reason := range []string{"issue is ineligible", "associated branch", "open dependencies", "dispatch capacity", "automation disabled", "repository disabled", "ownership", "permission", "rate limit", "worker descendants", "agent auth required"} {
-		if strings.Contains(lower, reason) {
-			return false
-		}
-	}
-	return true
-}
-
 func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause error) error {
 	// Merge, because submission may have launched a worker before returning an
 	// ambiguous receipt. Never overwrite a running or completed worker here.
@@ -684,10 +661,6 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 		if current.StartedAt.After(record.StartedAt) || current.StoppedAt.After(record.StoppedAt) {
 			return nil
 		}
-		if record.RepairRequestID != "" {
-			current.RepairRequestID = record.RepairRequestID
-		}
-		current.RepairError = record.RepairError
 		if errors.Is(cause, localruntime.ErrIssueOwnershipChanged) {
 			blockStaleIssueClaim(current)
 			return nil

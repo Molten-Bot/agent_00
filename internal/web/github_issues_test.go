@@ -488,8 +488,8 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 			t.Errorf("GitHub Issues settings should not render task automation control %q", removed)
 		}
 	}
-	if !strings.Contains(page, "github-automation.js?v=4") {
-		t.Error("GitHub Issues settings should retain automatic-discovery status and scan controls")
+	if strings.Contains(page, "github-automation.js") {
+		t.Error("GitHub Issues page loaded the retired auto-start script")
 	}
 	if strings.Contains(page, `id="github-issues-title"`) || !strings.Contains(page, `data-prompt-title-label="GitHub Issues"`) {
 		t.Error("GitHub Issues should use the shared Studio title without a duplicate issue heading")
@@ -527,10 +527,10 @@ func TestGitHubIssuesPanelRendersInsideStudio(t *testing.T) {
 	if asset.Code != http.StatusOK || strings.Contains(asset.Body.String(), "Edit prompt first") || strings.Contains(asset.Body.String(), "Start with this prompt") || !strings.Contains(asset.Body.String(), "Start task") || !strings.Contains(asset.Body.String(), `state: "open"`) || !strings.Contains(asset.Body.String(), "open issues") || !strings.Contains(asset.Body.String(), "linkMode: githubIssueLinkMode") || !strings.Contains(asset.Body.String(), "githubIssue:") || !strings.Contains(asset.Body.String(), "loadingIssueNumber") || !strings.Contains(asset.Body.String(), "task-icons-breathe") || !strings.Contains(asset.Body.String(), "github-issue-recover") || !strings.Contains(asset.Body.String(), `"X-Agent-Task-Source": "github_issues"`) {
 		t.Fatalf("issue browser asset response = %d, expected issue-only task launch", asset.Code)
 	}
-	automationAsset := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(automationAsset, httptest.NewRequest(http.MethodGet, "/static/github-automation.js", nil))
-	if automationAsset.Code != http.StatusOK || strings.Contains(automationAsset.Body.String(), "github-automation-decisions") || strings.Contains(automationAsset.Body.String(), "Retry") || strings.Contains(automationAsset.Body.String(), "Recovery details") {
-		t.Fatalf("automation settings asset response = %d, task listing or recovery controls remain", automationAsset.Code)
+	scan := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(scan, httptest.NewRequest(http.MethodPost, "/api/github/automation/scan", nil))
+	if scan.Code != http.StatusGone {
+		t.Fatalf("legacy issue scan response = %d, want 410", scan.Code)
 	}
 }
 

@@ -208,7 +208,7 @@ func TestWorkflowLibraryEnableValidationAndUnavailableScheduler(t *testing.T) {
 	for _, method := range []string{"GET", "PUT", "DELETE"} {
 		rec := httptest.NewRecorder()
 		s.Handler().ServeHTTP(rec, httptest.NewRequest(method, "/api/library/schedules", nil))
-		if rec.Code != http.StatusNotImplemented {
+		if rec.Code != http.StatusGone {
 			t.Fatal(method, rec.Code)
 		}
 	}

@@ -114,7 +114,7 @@ func (s Server) SubmitWorkflowRun(ctx context.Context, run config.Config, submit
 	return id, err
 }
 func (s Server) workflowIssueSettings(run config.Config) (ReviewSettingsState, bool, error) {
-	if s.Workflows == nil || run.Workflow == nil || !s.Workflows.Enabled() {
+	if s.Workflows == nil || s.Workflows.Store == nil || run.Workflow == nil || run.GitHubIssue == nil || !s.Workflows.Enabled() {
 		return ReviewSettingsState{}, false, nil
 	}
 	doc, err := s.Workflows.Store.Load()
@@ -122,8 +122,14 @@ func (s Server) workflowIssueSettings(run config.Config) (ReviewSettingsState, b
 		return ReviewSettingsState{}, false, err
 	}
 	for _, w := range doc.Workflows {
-		if w.ID == run.Workflow.ID && w.Enabled && s.Workflows.Allowed(w.Repository) && run.GitHubIssue != nil && workflow.CanonicalRepository(w.Repository) == workflow.CanonicalRepository(run.GitHubIssue.Repository) {
-			return ReviewSettingsState{WorkflowEnabled: true, GitHubIssuesEnabled: true, GitHubIssueAutoStartAssigned: true, GitHubIssueAutoStartExclusionLabel: "agent_00-in-progress"}, true, nil
+		if w.ID != run.Workflow.ID || !w.Enabled || !strings.HasPrefix(w.Trigger.Event, "issue.") {
+			continue
+		}
+		if run.Workflow.PolicyHash != "" && run.Workflow.PolicyHash != w.ExecutionPolicyHash() {
+			return ReviewSettingsState{}, false, nil
+		}
+		if s.Workflows.Allowed(w.Repository) && workflow.CanonicalRepository(w.Repository) == workflow.CanonicalRepository(run.GitHubIssue.Repository) {
+			return ReviewSettingsState{GitHubIssueAutoStartExclusionLabel: "agent_00-in-progress"}, true, nil
 		}
 	}
 	return ReviewSettingsState{}, false, nil
