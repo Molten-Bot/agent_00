@@ -148,3 +148,13 @@ test("automatic layouts use visible steps and measured sizes without changing ex
   const input = newWorkflow("acme/repo", "app-prompt", "simple");
   assert.deepEqual(Object.keys(automaticLayout(input, "vertical")), ["repository", "trigger", "task"]);
 });
+
+test("legacy review agent placement avoids nonadjacent nodes", () => {
+  const w = newWorkflow("acme/repo", "delivery", "layout");
+  const review = diagram(w).nodes.find(node => node.id === "review").position;
+  const initial = diagram(w).nodes.find(node => node.id === "reviewAgent").position;
+  w.positions = { repository: initial };
+  const agent = diagram(w).nodes.find(node => node.id === "reviewAgent");
+  assert.notDeepEqual(agent.position, initial);
+  assert.notDeepEqual(agent.position, review);
+});

@@ -86,9 +86,20 @@ export function diagram(w) {
     const occupiedSides = [positions[reviewIndex - 1], positions[reviewIndex + 1]]
       .filter(Boolean).map(position => side(reviewPosition, position));
     const { x, y } = reviewPosition;
-    if (!occupiedSides.includes("right")) agentPosition = { x: x + nodeWidth + layoutGap, y };
-    else if (!occupiedSides.includes("bottom")) agentPosition = { x, y: y + nodeHeight + layoutGap };
-    else agentPosition = { x: x - nodeWidth - layoutGap, y };
+    const directions = [
+      ["right", nodeWidth + layoutGap, 0], ["bottom", 0, nodeHeight + layoutGap],
+      ["left", -nodeWidth - layoutGap, 0], ["top", 0, -nodeHeight - layoutGap],
+    ].filter(([direction]) => !occupiedSides.includes(direction));
+    for (let distance = 1; !agentPosition; distance++) {
+      for (const [, dx, dy] of directions) {
+        const candidate = { x: x + distance * dx, y: y + distance * dy };
+        if (positions.every(p => Math.abs(p.x - candidate.x) >= nodeWidth ||
+            Math.abs(p.y - candidate.y) >= nodeHeight)) {
+          agentPosition = candidate;
+          break;
+        }
+      }
+    }
   }
   const nodes = steps.map(([id, label, detail], index) => ({
     id,
