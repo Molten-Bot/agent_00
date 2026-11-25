@@ -844,10 +844,11 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		t.Fatalf("expected index html to close Current Work header actions")
 	}
 	taskHeaderActions := markup[taskHeaderActionsStart : taskHeaderActionsStart+taskHeaderActionsEnd]
-	taskVisibilityIndex := strings.Index(taskHeaderActions, `id="task-visibility-toggle"`)
-	taskFullscreenIndex := strings.Index(taskHeaderActions, `id="task-fullscreen-toggle"`)
-	if taskVisibilityIndex < 0 || taskFullscreenIndex < 0 || taskVisibilityIndex <= taskFullscreenIndex {
-		t.Fatalf("expected task minimize control to render to the right of the expanded-mode control")
+	if strings.Contains(taskHeaderActions, `id="task-visibility-toggle"`) {
+		t.Fatalf("expected Current Work header to omit the task panel minimize control")
+	}
+	if !strings.Contains(taskHeaderActions, `id="task-fullscreen-toggle"`) {
+		t.Fatalf("expected Current Work header to include the fullscreen control")
 	}
 	if !strings.Contains(markup, `const TASK_STATUS_FILTER_KEY = "hubui.taskStatusFilter";`) {
 		t.Fatalf("expected index html to define a dedicated persisted task status filter storage key")
@@ -1000,12 +1001,6 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 	}
 	if !strings.Contains(markup, `promptWrap.classList.toggle("prompt-collapsed", !visible);`) {
 		t.Fatalf("expected index html to toggle collapsed studio state")
-	}
-	if !strings.Contains(markup, `const fullscreenOpen = Boolean(state.taskFullscreenOpen);`) ||
-		!strings.Contains(markup, `taskVisibilityToggle.hidden = fullscreenOpen;`) ||
-		!strings.Contains(markup, `taskVisibilityToggle.disabled = fullscreenOpen;`) ||
-		!strings.Contains(markup, `taskVisibilityToggle.setAttribute("aria-hidden", fullscreenOpen ? "true" : "false");`) {
-		t.Fatalf("expected task minimize control to be unavailable while Current Work is expanded")
 	}
 	if strings.Contains(markup, `id="prompt-visibility-toggle"`) {
 		t.Fatalf("expected the Studio panel collapse control to be removed")
@@ -1584,12 +1579,6 @@ func TestHandlerIndexServesHTML(t *testing.T) {
 		!strings.Contains(markup, `promptWrap.hidden = !showStudio;`) ||
 		!strings.Contains(markup, `const showTaskPanel = state.appDisplay === "work";`) {
 		t.Fatalf("expected index html to switch main views while isolating Current Work")
-	}
-	if !strings.Contains(markup, `function syncTaskVisibilityForAppDisplay()`) ||
-		!strings.Contains(markup, "if (state.appDisplay === \"work\") {\n        state.taskVisible = true;\n        return;\n      }") ||
-		!strings.Contains(markup, "if (state.appDisplay === \"studio\" || state.appDisplay === \"chat\" || state.appDisplay === \"workflow\") {\n        state.taskVisible = false;\n      }") ||
-		!strings.Contains(markup, `syncTaskVisibilityForAppDisplay();`) {
-		t.Fatalf("expected index html to expand Current Work only on the Current Work view")
 	}
 	if !strings.Contains(markup, `function syncPromptTitleModes()`) ||
 		!strings.Contains(markup, `item.hidden = !active;`) ||
@@ -3431,9 +3420,6 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	if !strings.Contains(css, ".task-fullscreen") {
 		t.Fatalf("expected stylesheet to include full screen task layout styles")
 	}
-	if !strings.Contains(css, "#task-panel.task-panel-collapsed.is-empty .task-scroll {\n  display: none;\n}") {
-		t.Fatalf("expected stylesheet to keep minimized task panel body hidden for empty task states")
-	}
 	if !strings.Contains(css, ".task-copy-link {") ||
 		!strings.Contains(css, "width: 34px;") ||
 		!strings.Contains(css, "height: 34px;") ||
@@ -3541,9 +3527,6 @@ func TestHandlerServesStaticCSS(t *testing.T) {
 	}
 	if !strings.Contains(css, ".prompt-mode-link") {
 		t.Fatalf("expected stylesheet to include prompt mode link styles")
-	}
-	if !strings.Contains(css, ".prompt-visibility-toggle") {
-		t.Fatalf("expected stylesheet to include studio visibility toggle styles")
 	}
 	if !strings.Contains(css, ".prompt-grid") {
 		t.Fatalf("expected stylesheet to include prompt grid styles")

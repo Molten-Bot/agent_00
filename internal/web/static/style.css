@@ -862,25 +862,6 @@ body[data-app-display="work"] #task-panel {
   gap: 6px;
 }
 
-.task-running-count {
-  position: absolute;
-  top: -7px;
-  right: -7px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--running);
-  color: #fff;
-  font-size: 0.66rem;
-  font-weight: 800;
-  line-height: 1;
-  box-shadow: 0 0 0 2px rgb(var(--hub-panel-rgb) / 1);
-}
-
 #task-panel {
   display: flex;
   flex-direction: column;
@@ -904,14 +885,6 @@ body[data-app-display="work"] #task-panel {
 
 #task-panel > .panel-header {
   border-bottom-color: rgb(var(--hub-border-rgb) / 1);
-}
-
-#task-panel.task-panel-collapsed {
-  min-height: var(--hub-studio-collapsed-height);
-}
-
-#task-panel.task-panel-collapsed .task-scroll {
-  display: none;
 }
 
 .task-fullscreen-head-label {
@@ -1484,10 +1457,6 @@ body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
   transform: translateY(-1px);
 }
 
-.prompt-titlebar .prompt-visibility-toggle {
-  margin-left: 0;
-}
-
 .page-bottom-dock {
   position: fixed;
   left: 50%;
@@ -1726,7 +1695,6 @@ body[data-app-display="studio"][data-prompt-mode="library"] .library-task-list {
 .prompt-control:focus,
 .prompt-text:focus,
 .prompt-action-paste:focus-visible,
-.prompt-visibility-toggle:focus-visible,
 .prompt-mode-link:focus-visible,
 .task-sound-toggle:focus-visible,
 .task-history-toggle:focus-visible,
@@ -2091,8 +2059,7 @@ select.prompt-control {
 .task-image-toggle,
 .task-prompt-toggle,
 .task-terminal-toggle,
-.task-fullscreen-toggle,
-.prompt-visibility-toggle {
+.task-fullscreen-toggle {
   border: 1px solid rgba(10, 132, 255, 0.16);
   color: var(--running);
   background: var(--surface-button-bg);
@@ -2261,8 +2228,7 @@ select.prompt-control {
 .task-image-toggle:hover,
 .task-prompt-toggle:hover,
 .task-terminal-toggle:hover,
-.task-fullscreen-toggle:hover,
-.prompt-visibility-toggle:hover {
+.task-fullscreen-toggle:hover {
   border-color: rgba(10, 132, 255, 0.28);
   color: var(--accent);
   transform: translateY(-1px);
@@ -2385,8 +2351,7 @@ select.prompt-control {
 .task-control-toggle:disabled,
 .task-stop:disabled,
 .task-close:disabled,
-.task-terminal-toggle:disabled,
-.prompt-visibility-toggle:disabled {
+.task-terminal-toggle:disabled {
   opacity: 0.6;
   transform: none;
   box-shadow: none;
@@ -2641,10 +2606,6 @@ select.prompt-control {
 #task-panel.is-empty .task-scroll {
   display: flex;
   align-items: stretch;
-}
-
-#task-panel.task-panel-collapsed.is-empty .task-scroll {
-  display: none;
 }
 
 .task-empty {
@@ -5691,31 +5652,9 @@ html.pink .task-progress-step.current .task-progress-step-icon.is-agent-logo {
   scrollbar-gutter: auto;
 }
 
-.prompt-visibility-toggle {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  justify-self: end;
-  border-radius: 999px;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  min-height: 30px;
-  font-size: 0.82rem;
-  font-weight: 800;
-  line-height: 1;
-  transition: border-color 0.12s ease, color 0.12s ease, transform 0.12s ease, opacity 0.12s ease;
-  flex-shrink: 0;
-}
-
 @media (max-width: 860px) {
   .prompt-titlebar {
     align-items: flex-start;
-  }
-
-  .prompt-visibility-toggle {
-    margin-left: 0;
   }
 }
 
@@ -7964,7 +7903,6 @@ html[data-hover-mode="on"] .task-sound-toggle:not(:disabled),
 html[data-hover-mode="on"] .task-history-toggle:not(:disabled),
 html[data-hover-mode="on"] .task-view-toggle:not(:disabled),
 html[data-hover-mode="on"] .task-fullscreen-toggle:not(:disabled),
-html[data-hover-mode="on"] .prompt-visibility-toggle:not(:disabled),
 html[data-hover-mode="on"] .task-close:not(:disabled),
 html[data-hover-mode="on"] .chat-repo-card-close:not(:disabled),
 html[data-hover-mode="on"] .task-control-toggle:not(:disabled),
@@ -7985,8 +7923,7 @@ html[data-hover-mode="on"] .task-terminal-toggle:not(:disabled),
 html[data-hover-mode="on"] .task-sound-toggle:not(:disabled),
 html[data-hover-mode="on"] .task-history-toggle:not(:disabled),
 html[data-hover-mode="on"] .task-view-toggle:not(:disabled),
-html[data-hover-mode="on"] .task-fullscreen-toggle:not(:disabled),
-html[data-hover-mode="on"] .prompt-visibility-toggle:not(:disabled) {
+html[data-hover-mode="on"] .task-fullscreen-toggle:not(:disabled) {
   border-color: color-mix(in srgb, var(--running) 36%, var(--border));
   color: var(--running);
   box-shadow: var(--shadow-sm);
@@ -8013,8 +7950,7 @@ html[data-hover-mode="off"] .task-terminal-toggle,
 html[data-hover-mode="off"] .task-sound-toggle,
 html[data-hover-mode="off"] .task-history-toggle,
 html[data-hover-mode="off"] .task-view-toggle,
-html[data-hover-mode="off"] .task-fullscreen-toggle,
-html[data-hover-mode="off"] .prompt-visibility-toggle {
+html[data-hover-mode="off"] .task-fullscreen-toggle {
   transition: none !important;
 }
 
@@ -8030,8 +7966,7 @@ html[data-hover-mode="off"] .task-terminal-toggle:hover,
 html[data-hover-mode="off"] .task-sound-toggle:hover,
 html[data-hover-mode="off"] .task-history-toggle:hover,
 html[data-hover-mode="off"] .task-view-toggle:hover,
-html[data-hover-mode="off"] .task-fullscreen-toggle:hover,
-html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
+html[data-hover-mode="off"] .task-fullscreen-toggle:hover {
   transform: none !important;
   box-shadow: none !important;
 }
@@ -8575,7 +8510,6 @@ html[data-hover-mode="off"] .prompt-visibility-toggle:hover {
   #task-panel > .panel-header { flex-shrink: 0; flex-wrap: wrap; padding: 10px; }
   .task-panel-actions { gap: 4px; margin-left: auto; }
   .task-panel-actions > button,
-  .prompt-visibility-toggle,
   .task .task-icon-button,
   .task .task-close,
   .task .task-copy-link {
