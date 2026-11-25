@@ -127,6 +127,11 @@ func TestRunCodexClassifiesDiskFullOnNonzeroExit(t *testing.T) {
 	}{
 		{name: "terminal diagnostic", stderr: "ENOSPC: failed writing cache", err: underlying, wantDiskFull: true},
 		{name: "terminal failure report", stdout: "Failure: Validation failed.\nError details: copy failed: no space left on device", wantDiskFull: true},
+		{name: "narration before error details", stdout: "Failure: Validation failed.\nValidation: Local checks stopped before reaching the assertions.\n**Error details:** copy failed with ENOSPC", wantDiskFull: true},
+		{name: "compact stderr narration before error details", stderr: "Failure: Validation failed.\nLocal checks stopped before reaching the assertions.\nError details: copy failed with ENOSPC", wantDiskFull: true},
+		{name: "narration alone mentions disk full", stdout: "Failure: Tests failed.\nRecovered an earlier ENOSPC by moving the cache."},
+		{name: "narration quotes earlier disk full report", stdout: "Failure: Tests failed.\nRecovered from this earlier error:\n~~~text\nError details: copy failed with ENOSPC\n~~~\nError details: assertion failed."},
+		{name: "details across transcript boundary", stdout: "Failure: Tests failed.\nexec\nError details: copy failed with ENOSPC"},
 		{name: "split failure report", stdout: "Failure: Validation failed.", stderr: "Error details: copy failed with ENOSPC", wantDiskFull: true},
 		{name: "split failure report with bullet", stdout: "Failure: Validation failed.", stderr: "**Error details:**\n- copy failed with ENOSPC", wantDiskFull: true},
 		{name: "split details echoed from prompt", stdout: "Failure: Validation failed.", stderr: "Error details: copy failed with ENOSPC", prompt: "Error details: copy failed with ENOSPC", wantFailure: "Failure: Validation failed."},

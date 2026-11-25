@@ -125,11 +125,14 @@ func (s *IssueClaimStore) BeginExecution(record IssueClaimRecord) error {
 		return err
 	}
 	if err := file.Close(); err != nil {
-		return err
+		return errors.Join(err, s.releaseExecutionReserve(record.ID))
 	}
 	baseline := record.AgentAttempts
 	record.ExecutionAgentAttempts = &baseline
-	return s.save(record)
+	if err := s.save(record); err != nil {
+		return errors.Join(err, s.releaseExecutionReserve(record.ID))
+	}
+	return nil
 }
 
 func issueStorageReserve(root, id string) string {
@@ -144,8 +147,12 @@ func (s *IssueClaimStore) ReleaseExecutionReserve(id string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.releaseExecutionReserve(id)
+}
+
+func (s *IssueClaimStore) releaseExecutionReserve(id string) error {
 	if err := os.Remove(issueStorageReserve(s.Root, id)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return fmt.Errorf("remove issue execution reserve: %w", err)
 	}
 	return syncIssueDirectory(s.Root)
 }

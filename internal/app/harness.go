@@ -6825,8 +6825,7 @@ func agentTerminalDiskFull(res execx.Result, prompt, failure string) bool {
 		var details string
 		for _, output := range []string{res.Stdout, res.Stderr} {
 			tail, _ := codexFailureReportTail(output, failure)
-			if startsWithErrorDetails(tail) {
-				details = codexExtractErrorDetail(tail)
+			if details = codexExtractAttachedErrorDetail(tail); details != "" {
 				break
 			}
 		}
@@ -7441,6 +7440,47 @@ func codexFailureReportTail(output, failure string) (string, bool) {
 func startsWithErrorDetails(output string) bool {
 	first, _, _ := strings.Cut(strings.TrimSpace(output), "\n")
 	return strings.HasPrefix(strings.ToLower(agentFailureFieldLine(first)), "error details:")
+}
+
+// codexExtractAttachedErrorDetail reads an explicit field after a matched
+// failure summary, allowing narration within the same report.
+func codexExtractAttachedErrorDetail(tail string) string {
+	lines := splitOutputLines(tail)
+	start := -1
+	var fence string
+report:
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if (strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~")) && isMarkdownCodeFence(line) {
+			if fence == "" {
+				fence = line[:3]
+			} else if strings.HasPrefix(line, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if fence != "" {
+			continue
+		}
+		switch strings.ToLower(line) {
+		case "user", "codex", "exec", "tokens used":
+			lines = lines[:i]
+			break report
+		}
+		if start >= 0 {
+			continue
+		}
+		field := strings.ToLower(agentFailureFieldLine(line))
+		if strings.HasPrefix(field, "error details:") {
+			start = i
+		} else if strings.HasPrefix(field, "failure:") || strings.HasPrefix(field, "task failed") {
+			return ""
+		}
+	}
+	if start >= 0 {
+		return codexExtractErrorDetail(strings.Join(lines[start:], "\n"))
+	}
+	return ""
 }
 
 func codexExtractStdoutErrorDetail(output, failure string) string {

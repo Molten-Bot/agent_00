@@ -35,7 +35,7 @@ func CheckPersistentStorage(path string) error {
 		return fmt.Errorf("%w: %s is on a memory-backed filesystem (free_bytes=%d total_bytes=%d); mount persistent disk storage there",
 			ErrUnsuitableStorage, path, stat.Bavail*uint64(stat.Bsize), stat.Blocks*uint64(stat.Bsize))
 	}
-	return nil
+	return checkWorkspaceInodes(path, stat)
 }
 
 // Reserve room for a checkout and its initial tooling. This check is deliberately
@@ -48,6 +48,14 @@ func checkWorkspaceSpace(path string) error {
 	available := stat.Bavail * uint64(stat.Bsize)
 	if available < MinimumFreeBytes {
 		return fmt.Errorf("workspace storage %s has only %d MiB free; at least 512 MiB is required; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem: %w", path, available/(1024*1024), syscall.ENOSPC)
+	}
+	return checkWorkspaceInodes(path, stat)
+}
+
+func checkWorkspaceInodes(path string, stat syscall.Statfs_t) error {
+	// Filesystems without inode accounting can report zero for both counts.
+	if stat.Files > 0 && stat.Ffree == 0 {
+		return fmt.Errorf("workspace storage %s has no free inodes; free up workspace storage or move it to another filesystem: %w", path, syscall.ENOSPC)
 	}
 	return nil
 }

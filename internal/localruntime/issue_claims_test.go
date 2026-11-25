@@ -1,6 +1,7 @@
 package localruntime
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,25 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 )
+
+func TestBeginExecutionReleasesReserveWhenReceiptSaveFails(t *testing.T) {
+	t.Parallel()
+	store := &IssueClaimStore{Root: t.TempDir()}
+	id := strings.Repeat("a", 32)
+	// A directory at the receipt path lets reserve creation succeed but
+	// prevents the temporary receipt from being renamed into place.
+	receipt := filepath.Join(store.Root, id+".json")
+	if err := os.Mkdir(receipt, 0700); err != nil {
+		t.Fatal(err)
+	}
+	var renameErr *os.LinkError
+	if err := store.BeginExecution(IssueClaimRecord{ID: id}); !errors.As(err, &renameErr) || renameErr.New != receipt {
+		t.Fatalf("BeginExecution error = %v, want receipt rename failure", err)
+	}
+	if _, err := os.Stat(issueStorageReserve(store.Root, id)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat execution reserve = %v, want missing reserve", err)
+	}
+}
 
 func TestIssueClaimStorePersistsAdmissionWithoutPartialFiles(t *testing.T) {
 	t.Parallel()

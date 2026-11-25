@@ -77,3 +77,34 @@ func TestCheckWorkspaceSpaceRejectsLowAvailableSpace(t *testing.T) {
 		t.Fatalf("checkWorkspaceSpace(low space) error = %q, want mention of free space shortfall", err.Error())
 	}
 }
+
+func TestWorkspacePreflightChecksFreeInodes(t *testing.T) {
+	orig := statfsFunc
+	t.Cleanup(func() { statfsFunc = orig })
+	for _, tc := range []struct {
+		name        string
+		files, free uint64
+		wantFull    bool
+	}{
+		{name: "exhausted", files: 100_000, wantFull: true},
+		{name: "available", files: 100_000, free: 10_000},
+		{name: "inode counts unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			statfsFunc = func(path string, stat *syscall.Statfs_t) error {
+				*stat = syscall.Statfs_t{Type: unix.EXT4_SUPER_MAGIC, Bsize: 4096, Blocks: 2_000_000, Bavail: 1_000_000, Files: tc.files, Ffree: tc.free}
+				return nil
+			}
+			for _, check := range []func(string) error{checkWorkspaceSpace, CheckPersistentStorage} {
+				err := check("/workspace")
+				if tc.wantFull {
+					if !errors.Is(err, syscall.ENOSPC) || !strings.Contains(err.Error(), "no free inodes") {
+						t.Fatalf("preflight error = %v, want ENOSPC with inode explanation", err)
+					}
+				} else if err != nil {
+					t.Fatalf("preflight rejected available storage: %v", err)
+				}
+			}
+		})
+	}
+}
