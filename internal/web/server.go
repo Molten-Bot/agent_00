@@ -100,7 +100,6 @@ type Server struct {
 	ForceRunTask            func(context.Context, string) error
 	StopTask                func(context.Context, string) error
 	ResolveTaskControls     func(string) TaskControls
-	LibrarySchedules        *localruntime.LibrarySchedules
 	CustomLibrarySources    *localruntime.CustomLibrarySources
 	LoadLibraryTasks        func() ([]library.TaskSummary, error)
 	AgentAuthStatus         func(context.Context) (AgentAuthState, error)
@@ -128,7 +127,7 @@ type Server struct {
 	IssueReady                        func(context.Context) error
 	issueAutomation                   *issueAutomationState
 	gitHubRepos                       *gitHubRepoCache
-	issueAutoStartWake                chan time.Time
+	issueRecoveryWake                 chan struct{}
 	Ready                             chan<- error
 }
 
@@ -241,13 +240,13 @@ type ReviewSettingsRequest struct {
 // NewServer returns a monitor HTTP server.
 func NewServer(addr string, broker *Broker) Server {
 	return Server{
-		Addr:               strings.TrimSpace(addr),
-		Broker:             broker,
-		Logf:               func(string, ...any) {},
-		gitHubRepos:        &gitHubRepoCache{},
-		issueAutoStartWake: make(chan time.Time, 1),
-		issueAutomation:    &issueAutomationState{},
-		GitHubCooldown:     &githubutil.Cooldown{},
+		Addr:              strings.TrimSpace(addr),
+		Broker:            broker,
+		Logf:              func(string, ...any) {},
+		gitHubRepos:       &gitHubRepoCache{},
+		issueRecoveryWake: make(chan struct{}, 1),
+		issueAutomation:   &issueAutomationState{},
+		GitHubCooldown:    &githubutil.Cooldown{},
 		LoadLibraryTasks: func() ([]library.TaskSummary, error) {
 			catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 			if err != nil {
@@ -281,8 +280,8 @@ func (s Server) Run(ctx context.Context) error {
 		return err
 	}
 	notifyServerReady(s.Ready, nil)
-	if s.GitHubIssueRunner != nil && s.SubmitLocalPrompt != nil && s.ReviewSettingsStatus != nil {
-		go s.runGitHubIssueAutoStart(ctx)
+	if s.IssueRecovery != nil && s.IssueClaims != nil && s.GitHubIssueRunner != nil && s.SubmitLocalPrompt != nil && s.ReviewSettingsStatus != nil {
+		go s.runIssueRecovery(ctx)
 	}
 
 	go func() {
@@ -329,7 +328,9 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/api/status", s.handleState)
 	mux.HandleFunc("/api/library", s.handleLibrary)
 	mux.HandleFunc("/api/library/run", s.handleLibraryRun)
-	mux.HandleFunc("/api/library/schedules", s.handleLibrarySchedules)
+	mux.HandleFunc("/api/library/schedules", func(w http.ResponseWriter, r *http.Request) {
+		writeJSONError(w, http.StatusGone, errors.New("Library scheduling moved to Workflow"))
+	})
 	mux.HandleFunc("/api/library/sources", s.handleCustomLibrarySources)
 	mux.HandleFunc("/api/stream", s.handleStream)
 	mux.HandleFunc("/api/local-prompt", s.handleLocalPrompt)
@@ -343,8 +344,7 @@ func (s Server) Handler() http.Handler {
 		if !requireMethod(w, r, http.MethodPost) {
 			return
 		}
-		s.wakeGitHubIssueAutoStart()
-		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+		writeJSONError(w, http.StatusGone, errors.New("Issue discovery moved to Workflow"))
 	})
 	mux.HandleFunc("/api/github/issues", s.handleGitHubIssues)
 	mux.HandleFunc("/api/github/issues/", s.handleGitHubIssues)
@@ -2119,7 +2119,7 @@ func (s Server) handleReviewSettings(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		s.wakeGitHubIssueAutoStart()
+		s.WakeIssueRecovery()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":       true,
 			"settings": normalizedIssueSettingsState(state),

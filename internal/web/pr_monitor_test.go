@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -71,7 +70,6 @@ func TestPRMergeMonitorRefreshesDisplayedPRTitle(t *testing.T) {
 	runner := &stubPRMonitorRunner{
 		results: []execx.Result{
 			{Stdout: `{"state":"OPEN","title":"Tracked PR title"}`},
-			{Stdout: `[]`},
 			{Stdout: "Renamed title\n"},
 		},
 	}
@@ -88,7 +86,7 @@ func TestPRMergeMonitorRefreshesDisplayedPRTitle(t *testing.T) {
 			got.PRTitleUpdatedAt, got.UpdatedAt, now.Format(time.RFC3339Nano), task.UpdatedAt)
 	}
 	commands := runner.Commands()
-	if want := []string{"pr", "view", displayedURL, "--json", "title", "--jq", ".title"}; len(commands) != 3 || !slices.Equal(commands[2].Args, want) {
+	if want := []string{"pr", "view", displayedURL, "--json", "title", "--jq", ".title"}; len(commands) != 2 || !slices.Equal(commands[1].Args, want) {
 		t.Fatalf("commands = %+v, want displayed PR lookup %v", commands, want)
 	}
 }
@@ -233,169 +231,8 @@ func TestPRMergeMonitorMarksMergedTaskDoneAndRunsCleanup(t *testing.T) {
 	if got, want := commands[0].Name, "gh"; got != want {
 		t.Fatalf("command name = %q, want %q", got, want)
 	}
-	if got, want := commands[0].Args, []string{"pr", "view", "42", "--json", "state,mergedAt,url,number,title,headRefName,baseRefName,headRepository,headRepositoryOwner,reviewDecision,latestReviews,comments", "--repo", "acme/repo"}; !slices.Equal(got, want) {
+	if got, want := commands[0].Args, []string{"pr", "view", "42", "--json", "state,mergedAt,title", "--repo", "acme/repo"}; !slices.Equal(got, want) {
 		t.Fatalf("command args = %v, want %v", got, want)
-	}
-}
-
-func TestPRMergeMonitorDeletesMergedBranchAndClosesTaskWhenEnabled(t *testing.T) {
-	t.Parallel()
-
-	broker := NewBroker()
-	broker.RecordTaskRunConfig("req-merged-delete", []byte(`{"repo":"git@github.com:acme/repo.git","prompt":"ship it"}`))
-	broker.IngestLog("dispatch status=start request_id=req-merged-delete repo=git@github.com:acme/repo.git")
-	broker.IngestLog("dispatch status=completed request_id=req-merged-delete workspace=/tmp/run branch=agent00-ship pr_url=https://github.com/acme/repo/pull/42")
-
-	runner := &stubPRMonitorRunner{
-		results: []execx.Result{
-			{Stdout: `{"state":"MERGED","mergedAt":"2026-04-09T12:00:00Z","headRefName":"agent00-ship","baseRefName":"main"}`},
-			{Stdout: `{}`},
-		},
-	}
-
-	cleanupCalls := make(chan string, 1)
-	monitor := PRMergeMonitor{
-		Runner:               runner,
-		Broker:               broker,
-		PollInterval:         10 * time.Millisecond,
-		DeleteMergedBranches: true,
-		CleanupTask: func(_ context.Context, requestID string) error {
-			cleanupCalls <- requestID
-			return nil
-		},
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- monitor.Run(ctx)
-	}()
-
-	waitForHubUITest(t, 5*time.Second, func() bool {
-		return len(runner.Commands()) >= 2
-	})
-
-	select {
-	case requestID := <-cleanupCalls:
-		if got, want := requestID, "req-merged-delete"; got != want {
-			t.Fatalf("cleanup requestID = %q, want %q", got, want)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("expected cleanup after branch deletion")
-	}
-
-	cancel()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("monitor.Run() error = %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for monitor shutdown")
-	}
-
-	snap := broker.Snapshot()
-	if got, want := len(snap.Tasks), 0; got != want {
-		t.Fatalf("len(tasks) after merged branch deletion = %d, want %d", got, want)
-	}
-	if got, want := len(snap.Releases), 1; got != want {
-		t.Fatalf("len(releases) after merged branch deletion = %d, want %d", got, want)
-	}
-
-	commands := runner.Commands()
-	if got, want := commands[1].Name, "gh"; got != want {
-		t.Fatalf("delete command name = %q, want %q", got, want)
-	}
-	if got, want := commands[1].Args, []string{"api", "-X", "DELETE", "repos/acme/repo/git/refs/heads/agent00-ship"}; !slices.Equal(got, want) {
-		t.Fatalf("delete command args = %v, want %v", got, want)
-	}
-}
-
-func TestPRMergeMonitorDeletesMergedForkBranchFromHeadRepository(t *testing.T) {
-	t.Parallel()
-
-	runner := &stubPRMonitorRunner{}
-	monitor := PRMergeMonitor{Runner: runner}
-
-	err := monitor.deleteMergedBranch(context.Background(), Task{
-		PRURL:  "https://github.com/acme/repo/pull/42",
-		Branch: "agent00-ship",
-	}, prViewState{
-		HeadRefName: "agent00-ship",
-		BaseRefName: "main",
-		HeadRepository: prRepository{
-			Name: "repo",
-		},
-		HeadRepoOwner: prActor{
-			Login: "contributor",
-		},
-	})
-	if err != nil {
-		t.Fatalf("deleteMergedBranch() error = %v", err)
-	}
-
-	commands := runner.Commands()
-	if got, want := len(commands), 1; got != want {
-		t.Fatalf("len(commands) = %d, want %d", got, want)
-	}
-	if got, want := commands[0].Args, []string{"api", "-X", "DELETE", "repos/contributor/repo/git/refs/heads/agent00-ship"}; !slices.Equal(got, want) {
-		t.Fatalf("delete command args = %v, want %v", got, want)
-	}
-}
-
-func TestPRMergeMonitorKeepsMergedTaskVisibleWhenBranchDeleteFails(t *testing.T) {
-	t.Parallel()
-
-	broker := NewBroker()
-	broker.IngestLog("dispatch status=start request_id=req-delete-fails repo=git@github.com:acme/repo.git")
-	broker.IngestLog("dispatch status=completed request_id=req-delete-fails workspace=/tmp/run branch=agent00-ship pr_url=https://github.com/acme/repo/pull/42")
-
-	runner := &stubPRMonitorRunner{
-		results: []execx.Result{
-			{Stdout: `{"state":"MERGED","mergedAt":"2026-04-09T12:00:00Z","headRefName":"agent00-ship","baseRefName":"main"}`},
-			{},
-		},
-		errs: []error{nil, errors.New("delete denied")},
-	}
-
-	monitor := PRMergeMonitor{
-		Runner:               runner,
-		Broker:               broker,
-		PollInterval:         10 * time.Millisecond,
-		DeleteMergedBranches: true,
-		Logf:                 func(string, ...any) {},
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- monitor.Run(ctx)
-	}()
-
-	waitForHubUITest(t, 5*time.Second, func() bool {
-		return len(runner.Commands()) >= 2
-	})
-
-	snap := broker.Snapshot()
-	if got, want := len(snap.Tasks), 1; got != want {
-		t.Fatalf("len(tasks) after failed branch deletion = %d, want %d", got, want)
-	}
-	if got, want := snap.Tasks[0].Status, "merged"; got != want {
-		t.Fatalf("task.Status after failed branch deletion = %q, want %q", got, want)
-	}
-
-	cancel()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("monitor.Run() error = %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for monitor shutdown")
 	}
 }
 
@@ -459,203 +296,7 @@ func TestPRMergeMonitorKeepsTaskVisibleUntilPRIsMerged(t *testing.T) {
 	}
 }
 
-func TestPRMergeMonitorQueuesActionableReviewFeedbackOncePerPR(t *testing.T) {
-	t.Parallel()
-
-	broker := NewBroker()
-	broker.RecordTaskRunConfig("req-feedback", []byte(`{"repo":"git@github.com:acme/repo.git","baseBranch":"main","prompt":"ship it"}`))
-	broker.IngestLog("dispatch status=start request_id=req-feedback repo=git@github.com:acme/repo.git")
-	broker.IngestLog("dispatch status=completed request_id=req-feedback workspace=/tmp/run branch=agent00-ship pr_url=https://github.com/acme/repo/pull/117")
-
-	reviewBody := "**Positive**\n- Good scope.\n\n**Negative**\n- [Medium] src/main.jsx:1139 - Custom theme radiogroup lacks arrow-key navigation."
-	runner := &stubPRMonitorRunner{
-		result: execx.Result{Stdout: fmt.Sprintf(`{
-			"state":"OPEN",
-			"mergedAt":"",
-			"url":"https://github.com/acme/repo/pull/117",
-			"number":117,
-			"title":"Ship it",
-			"headRefName":"agent00-ship",
-			"baseRefName":"main",
-			"reviewDecision":"REVIEW_REQUIRED",
-			"latestReviews":[{"id":"review-1","author":{"login":"reviewer"},"state":"COMMENTED","submittedAt":"2026-05-30T12:00:00Z","body":%q}],
-			"comments":[]
-		}`, reviewBody)},
-	}
-
-	calls := 0
-	var gotTask Task
-	var gotFeedback PRReviewFeedback
-	monitor := PRMergeMonitor{
-		Runner: runner,
-		Broker: broker,
-		Logf:   func(string, ...any) {},
-		OnReviewFeedback: func(_ context.Context, task Task, feedback PRReviewFeedback) (string, error) {
-			calls++
-			gotTask = task
-			gotFeedback = feedback
-			return "local-follow-up", nil
-		},
-	}
-
-	task := broker.Snapshot().Tasks[0]
-	monitor.checkTaskPR(context.Background(), task)
-	monitor.checkTaskPR(context.Background(), task)
-
-	if got, want := calls, 1; got != want {
-		t.Fatalf("OnReviewFeedback calls = %d, want %d", got, want)
-	}
-	if got, want := gotTask.RequestID, "req-feedback"; got != want {
-		t.Fatalf("feedback task request_id = %q, want %q", got, want)
-	}
-	if got, want := gotFeedback.PRURL, "https://github.com/acme/repo/pull/117"; got != want {
-		t.Fatalf("feedback.PRURL = %q, want %q", got, want)
-	}
-	if got, want := gotFeedback.HeadBranch, "agent00-ship"; got != want {
-		t.Fatalf("feedback.HeadBranch = %q, want %q", got, want)
-	}
-	if got, want := gotFeedback.BaseBranch, "main"; got != want {
-		t.Fatalf("feedback.BaseBranch = %q, want %q", got, want)
-	}
-	if got := len(gotFeedback.Items); got != 1 {
-		t.Fatalf("len(feedback.Items) = %d, want 1", got)
-	}
-	if !strings.Contains(gotFeedback.Items[0].Body, "Custom theme radiogroup lacks arrow-key navigation") {
-		t.Fatalf("feedback item body = %q", gotFeedback.Items[0].Body)
-	}
-	if gotFeedback.Digest == "" {
-		t.Fatal("feedback.Digest is empty")
-	}
-}
-
-func TestPRMergeMonitorIgnoresCleanReviewFeedback(t *testing.T) {
-	t.Parallel()
-
-	broker := NewBroker()
-	broker.IngestLog("dispatch status=start request_id=req-clean repo=git@github.com:acme/repo.git")
-	broker.IngestLog("dispatch status=completed request_id=req-clean workspace=/tmp/run branch=agent00-clean pr_url=https://github.com/acme/repo/pull/118")
-
-	reviewBody := "**Positive**\n- Looks safe.\n\n**Negative**\n- No material issues found."
-	runner := &stubPRMonitorRunner{
-		result: execx.Result{Stdout: fmt.Sprintf(`{
-			"state":"OPEN",
-			"mergedAt":"",
-			"url":"https://github.com/acme/repo/pull/118",
-			"headRefName":"agent00-clean",
-			"baseRefName":"main",
-			"latestReviews":[{"id":"review-1","author":{"login":"reviewer"},"state":"COMMENTED","submittedAt":"2026-05-30T12:00:00Z","body":%q}],
-			"comments":[]
-		}`, reviewBody)},
-	}
-
-	calls := 0
-	monitor := PRMergeMonitor{
-		Runner: runner,
-		Broker: broker,
-		Logf:   func(string, ...any) {},
-		OnReviewFeedback: func(_ context.Context, _ Task, _ PRReviewFeedback) (string, error) {
-			calls++
-			return "local-follow-up", nil
-		},
-	}
-
-	monitor.checkTaskPR(context.Background(), broker.Snapshot().Tasks[0])
-
-	if calls != 0 {
-		t.Fatalf("OnReviewFeedback calls = %d, want 0", calls)
-	}
-}
-
-func TestPRMergeMonitorQueuesReviewFeedbackFromLaterCommentPage(t *testing.T) {
-	t.Parallel()
-
-	const prURL = "https://github.com/acme/repo/pull/120"
-	broker := NewBroker()
-	broker.IngestLog("dispatch status=start request_id=req-inline repo=git@github.com:acme/repo.git")
-	broker.IngestLog("dispatch status=completed request_id=req-inline branch=feature pr_url=" + prURL)
-	task, _ := broker.Task("req-inline")
-
-	// Some gh versions print each paginated response as a separate JSON array.
-	firstPage := `[` + strings.Repeat(`{"body":"Looks good."},`, 99) + `{"body":"Looks good."}]`
-	runner := &stubPRMonitorRunner{results: []execx.Result{
-		{Stdout: `{"state":"OPEN","number":120,"title":"Update settings"}`},
-		{Stdout: firstPage + `[{"id":101,"body":"Please fix the missing error handling."}]`},
-	}}
-	var items []PRReviewFeedbackItem
-	monitor := PRMergeMonitor{
-		Runner: runner,
-		Broker: broker,
-		Logf:   t.Logf,
-		OnReviewFeedback: func(_ context.Context, _ Task, feedback PRReviewFeedback) (string, error) {
-			items = append(items, feedback.Items...)
-			return "local-follow-up", nil
-		},
-	}
-	monitor.checkTaskPR(t.Context(), task)
-
-	if len(items) != 1 || items[0].Kind != "review_comment" || items[0].ID != "101" {
-		t.Fatalf("queued items = %+v, want review comment 101", items)
-	}
-}
-
-func TestActionablePRReviewFeedbackIncludesInlineReviewComments(t *testing.T) {
-	t.Parallel()
-
-	task := Task{PRURL: "https://github.com/acme/repo/pull/120", Branch: "feature"}
-	feedback := actionablePRReviewFeedback(task, prViewState{
-		State:       "OPEN",
-		URL:         "https://github.com/acme/repo/pull/120",
-		HeadRefName: "feature",
-		BaseRefName: "main",
-		ReviewComments: []prReviewCommentEntry{{
-			ID:        123,
-			User:      prActor{Login: "reviewer"},
-			Path:      "src/main.jsx",
-			Line:      1139,
-			Body:      "Please add arrow-key navigation for the custom theme radiogroup.",
-			UpdatedAt: "2026-05-30T12:00:00Z",
-		}},
-	})
-
-	if got := len(feedback.Items); got != 1 {
-		t.Fatalf("len(feedback.Items) = %d, want 1", got)
-	}
-	item := feedback.Items[0]
-	if got, want := item.Kind, "review_comment"; got != want {
-		t.Fatalf("item.Kind = %q, want %q", got, want)
-	}
-	if !strings.Contains(item.Body, "src/main.jsx:1139") || !strings.Contains(item.Body, "arrow-key navigation") {
-		t.Fatalf("item.Body = %q, want location and comment text", item.Body)
-	}
-	if feedback.Digest == "" {
-		t.Fatal("feedback.Digest is empty")
-	}
-}
-
-func TestActionablePRReviewFeedbackIgnoresAutomatedReviewCycleComments(t *testing.T) {
-	t.Parallel()
-
-	task := Task{PRURL: "https://github.com/acme/repo/pull/120", Branch: "feature"}
-	feedback := actionablePRReviewFeedback(task, prViewState{
-		State:       "OPEN",
-		URL:         task.PRURL,
-		HeadRefName: "feature",
-		Comments: []prCommentEntry{
-			{ID: "legacy-bot", Body: "<!-- previous-agent-review-cycle pass=1 total=3 -->\n**Negative**\n- [Medium] fix this bug"},
-			{ID: "bot", Body: "<!-- agent00-review-cycle pass=1 total=3 -->\n**Negative**\n- [Medium] fix this bug"},
-			{ID: "human", Author: prActor{Login: "reviewer"}, Body: "Please fix the human-reported regression."},
-		},
-	})
-
-	if got := len(feedback.Items); got != 1 {
-		t.Fatalf("len(feedback.Items) = %d, want only human feedback", got)
-	}
-	if got := feedback.Items[0].ID; got != "human" {
-		t.Fatalf("feedback item ID = %q, want human", got)
-	}
-}
-
-func TestPRMergeMonitorDoesNotReplaceReviewTaskTitleOrQueueFeedback(t *testing.T) {
+func TestPRMergeMonitorDoesNotReplaceReviewTaskTitle(t *testing.T) {
 	t.Parallel()
 
 	broker := NewBroker()
@@ -663,30 +304,8 @@ func TestPRMergeMonitorDoesNotReplaceReviewTaskTitleOrQueueFeedback(t *testing.T
 	broker.IngestLog("dispatch status=start request_id=req-review repo=git@github.com:acme/repo.git")
 	broker.IngestLog("dispatch status=no_changes request_id=req-review workspace=/tmp/run branch=feature pr_url=https://github.com/acme/repo/pull/117")
 
-	reviewBody := "**Negative**\n- [Medium] src/main.jsx:1139 - Custom theme radiogroup lacks arrow-key navigation."
-	runner := &stubPRMonitorRunner{
-		result: execx.Result{Stdout: fmt.Sprintf(`{
-			"state":"OPEN",
-			"mergedAt":"",
-			"url":"https://github.com/acme/repo/pull/117",
-			"title":"Published PR title",
-			"headRefName":"feature",
-			"baseRefName":"main",
-			"latestReviews":[{"id":"review-1","author":{"login":"reviewer"},"state":"COMMENTED","submittedAt":"2026-05-30T12:00:00Z","body":%q}],
-			"comments":[]
-		}`, reviewBody)},
-	}
-
-	calls := 0
-	monitor := PRMergeMonitor{
-		Runner: runner,
-		Broker: broker,
-		Logf:   func(string, ...any) {},
-		OnReviewFeedback: func(_ context.Context, _ Task, _ PRReviewFeedback) (string, error) {
-			calls++
-			return "local-follow-up", nil
-		},
-	}
+	runner := &stubPRMonitorRunner{result: execx.Result{Stdout: `{"state":"OPEN","title":"Published PR title"}`}}
+	monitor := PRMergeMonitor{Runner: runner, Broker: broker, Logf: func(string, ...any) {}}
 
 	original, ok := broker.Task("req-review")
 	if !ok || original.Prompt == "" {
@@ -694,9 +313,6 @@ func TestPRMergeMonitorDoesNotReplaceReviewTaskTitleOrQueueFeedback(t *testing.T
 	}
 	monitor.checkTaskPR(t.Context(), original)
 
-	if calls != 0 {
-		t.Fatalf("OnReviewFeedback calls = %d, want 0", calls)
-	}
 	task, _ := broker.Task("req-review")
 	if task.PRTitle != "" || task.Prompt != original.Prompt {
 		t.Fatalf("review task prompt = %q, PR title = %q, want prompt %q and no PR title", task.Prompt, task.PRTitle, original.Prompt)
@@ -778,97 +394,4 @@ func waitForHubUITest(t *testing.T, timeout time.Duration, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition not met before timeout")
-}
-
-func TestBeginAndRollbackFeedbackQueue(t *testing.T) {
-	t.Parallel()
-
-	monitor := &PRMergeMonitor{}
-	task := Task{RequestID: "req-1", PRURL: "https://github.com/acme/repo/pull/7"}
-
-	// Missing PR URL or digest must not queue or panic on rollback.
-	if monitor.beginFeedbackQueue(Task{}, "digest-1") {
-		t.Fatal("beginFeedbackQueue(no pr url) = true, want false")
-	}
-	if monitor.beginFeedbackQueue(task, "  ") {
-		t.Fatal("beginFeedbackQueue(blank digest) = true, want false")
-	}
-	monitor.rollbackFeedbackQueue(Task{}, "digest-1")
-	monitor.rollbackFeedbackQueue(task, "  ")
-
-	if !monitor.beginFeedbackQueue(task, "digest-1") {
-		t.Fatal("beginFeedbackQueue(first digest) = false, want true")
-	}
-	// Re-queuing the same digest for the same PR must be rejected.
-	if monitor.beginFeedbackQueue(task, "digest-1") {
-		t.Fatal("beginFeedbackQueue(duplicate digest) = true, want false")
-	}
-
-	// Rolling back a stale digest must not evict the queued entry: the
-	// matching digest is still considered queued.
-	monitor.rollbackFeedbackQueue(task, "digest-stale")
-	if monitor.beginFeedbackQueue(task, "digest-1") {
-		t.Fatal("beginFeedbackQueue after rollback of mismatched digest = true, want queue entry still retained (false)")
-	}
-
-	// Rolling back the matching digest clears the entry so it can be requeued.
-	monitor.rollbackFeedbackQueue(task, "digest-1")
-	if !monitor.beginFeedbackQueue(task, "digest-1") {
-		t.Fatal("beginFeedbackQueue after matching rollback = false, want true")
-	}
-}
-
-func TestReviewEntryNeedsFollowUp(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		review prReviewEntry
-		want   bool
-	}{
-		{
-			name:   "changes requested with body needs follow up",
-			review: prReviewEntry{State: "changes_requested", Body: "please fix the bug"},
-			want:   true,
-		},
-		{
-			name:   "changes requested with blank body does not need follow up",
-			review: prReviewEntry{State: "CHANGES_REQUESTED", Body: "   "},
-			want:   false,
-		},
-		{
-			name:   "approved with plain praise does not need follow up",
-			review: prReviewEntry{State: "APPROVED", Body: "Negative\n- No material issues found"},
-			want:   false,
-		},
-		{
-			name:   "approved with actionable negative needs follow up",
-			review: prReviewEntry{State: "APPROVED", Body: "Negative\n- fix the flaky test"},
-			want:   true,
-		},
-		{
-			name:   "commented with actionable language needs follow up",
-			review: prReviewEntry{State: "COMMENTED", Body: "could you please add a test for this"},
-			want:   true,
-		},
-		{
-			name:   "commented with neutral body does not need follow up",
-			review: prReviewEntry{State: "COMMENTED", Body: "Looks good overall, nice work"},
-			want:   false,
-		},
-		{
-			name:   "empty state behaves like comment path",
-			review: prReviewEntry{State: "", Body: "this is broken"},
-			want:   true,
-		},
-	}
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := reviewEntryNeedsFollowUp(tt.review); got != tt.want {
-				t.Fatalf("reviewEntryNeedsFollowUp(%#v) = %t, want %t", tt.review, got, tt.want)
-			}
-		})
-	}
 }

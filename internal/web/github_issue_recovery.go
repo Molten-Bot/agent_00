@@ -41,7 +41,34 @@ func issueExplicitRetryError(incident string) string {
 	}
 }
 
-func (s Server) WakeIssueRecovery() { s.wakeGitHubIssueAutoStart() }
+func (s Server) WakeIssueRecovery() {
+	select {
+	case s.issueRecoveryWake <- struct{}{}:
+	default:
+	}
+}
+
+func (s Server) runIssueRecovery(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for ctx.Err() == nil {
+		err := s.ReconcileIssueWork(ctx)
+		var status issueAutomationStatus
+		if err != nil && ctx.Err() == nil {
+			status.addError(err)
+			s.logf("localruntime.ui status=warn event=github_issue_recovery err=%q", status.Error)
+		}
+		s.issueAutomation.mu.Lock()
+		s.issueAutomation.status = status
+		s.issueAutomation.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		case <-s.issueRecoveryWake:
+		}
+	}
+}
 
 func (s Server) admitDurableIssue(ctx context.Context, run config.Config, settings ReviewSettingsState, login string, submit func(context.Context, []byte) (string, error)) (string, error) {
 	claim := &config.GitHubIssueClaim{ID: newIssueClaimID(), Branch: fmt.Sprintf("agent00-issue-%d", run.GitHubIssue.Number), BaseBranch: run.BaseBranch, ExclusionLabel: issueExclusionLabel(settings), Attempt: 1}
@@ -148,7 +175,7 @@ func (s Server) resumeIssueAdmission(ctx context.Context, record localruntime.Is
 	return s.finishIssueAdmission(ctx, record, submit)
 }
 
-// ReconcileIssueWork is also invoked after worker teardown. It does not rely on
+// ReconcileIssueWork checks existing claims after startup and worker teardown. It does not rely on
 // broker terminal status, labels, or elapsed time to establish worker liveness.
 func (s Server) ReconcileIssueWork(ctx context.Context) error {
 	if s.IssueRecovery == nil || s.IssueClaims == nil || s.issueAutomation == nil {
@@ -454,28 +481,15 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		}
 		return s.IssueClaims.Save(record)
 	}
-	settings, err := s.ReviewSettingsStatus(ctx)
+	settings, enabled, err := s.workflowIssueSettings(record.Run)
 	if err != nil {
 		return s.deferIssueRecord(record, err)
 	}
-	settings, autoStart := settings.issueAutoStartForRepository(issue.Repository)
-	if record.Run.Workflow != nil {
-		settings, autoStart, err = s.workflowIssueSettings(record.Run)
-		if err != nil {
-			return s.deferIssueRecord(record, err)
-		}
-	}
-	if !autoStart {
+	if !enabled {
 		record.State = "blocked"
-		record.Error = "issue automation disabled"
+		record.Error = "automatic issue retry requires an enabled workflow"
+		record.NextAttemptAt = time.Time{}
 		return s.IssueClaims.Save(record)
-	}
-	for _, disabled := range settings.DisabledRepositories {
-		if issueRepositoryMatchesRun(disabled, issue.Repository) {
-			record.State = "blocked"
-			record.Error = "repository disabled"
-			return s.IssueClaims.Save(record)
-		}
 	}
 	if record.Outcome != "" && record.NextAttemptAt.IsZero() {
 		record.State = "retry_wait"

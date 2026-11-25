@@ -95,12 +95,8 @@ func TestConfigureWorkflowsNeverImportsLegacyConfiguration(t *testing.T) {
 			root := t.TempDir()
 			cfg := localruntime.InitConfig{Version: "v1", RuntimeConfigPath: filepath.Join(root, "config.json")}
 			cfg.ApplyDefaults()
-			original := []byte(`{"github_issues_enabled":true,"github_issue_repositories":{"acme/repo":{"auto_start":true,"trigger_labels":["ready"]}},"review_watch":{"review_level":"high","auto_merge":true}}`)
+			original := []byte(`{"github_issues_enabled":true,"github_issue_repositories":{"acme/repo":{"auto_start":true,"trigger_labels":["ready"],"exclusion_label":"agent_00-in-progress"}},"review_watch":{"enabled":true,"review_level":"high","auto_merge":true},"library_schedules":{"unit-test-coverage@acme/repo":{"libraryTaskName":"unit-test-coverage","repo":"acme/repo","intervalHours":24,"nextRunAt":"2026-01-01T00:00:00Z"}}}`)
 			if err := os.WriteFile(cfg.RuntimeConfigPath, original, 0600); err != nil {
-				t.Fatal(err)
-			}
-			legacy := &localruntime.LibrarySchedules{Path: cfg.RuntimeConfigPath, Init: cfg}
-			if _, err := legacy.Save(localruntime.LibraryScheduleInput{LibraryTaskName: "unit-test-coverage", Repo: "acme/repo", IntervalHours: 24}); err != nil {
 				t.Fatal(err)
 			}
 			before, err := os.ReadFile(cfg.RuntimeConfigPath)

@@ -22,15 +22,14 @@ const (
 	GitHubIssueLinkModeClose     = "close"
 )
 
-// Serialize read/modify/write operations across settings and recurring runs.
+// Serialize runtime config read/modify/write operations.
 var runtimeConfigMu sync.Mutex
 
 // RuntimeConfig persists local agent and review preferences.
 type RuntimeConfig struct {
 	InitConfig
 
-	LibraryTaskUsage map[string]int             `json:"library_task_usage,omitempty"`
-	LibrarySchedules map[string]LibrarySchedule `json:"library_schedules,omitempty"`
+	LibraryTaskUsage map[string]int `json:"library_task_usage,omitempty"`
 }
 
 // ApplyDefaults normalizes a persisted runtime config.

@@ -24,7 +24,6 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/customlibrary"
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
-	"github.com/Molten-Bot/agent_00/internal/githubreview"
 	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 	"github.com/Molten-Bot/agent_00/internal/library"
@@ -347,16 +346,12 @@ func runServer(args []string) int {
 		logRoot = strings.TrimSpace(mirror.rootDir)
 	}
 
-	repairQueue := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "issue-repairs")}, claims: issueClaims, logRoot: logRoot, logf: daemonLogger, runner: runner, policy: cfg.IssueRecovery.Defaults(), wake: make(chan struct{}, 1)}
+	repairHistory := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "issue-repairs")}, logRoot: logRoot}
 	var wakeIssueRecovery func()
 	var verifyIssueOwnership func(context.Context, config.Config) error
-	var queueFailureRerun func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string)
-	var queueFailureFollowUp func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string)
-	var queueUnexpectedNoChangesFollowUp func(requestID string, result app.Result, runCfg config.Config)
-	var queueEscalatedNoChangesFollowUp func(requestID string, result app.Result, runCfg config.Config)
 	var workflowEngine *workflow.Engine
-	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error)
-	enqueueLocalRun = func(reqCtx context.Context, runCfg config.Config, allowFailureFollowUp bool, source string, force bool) (string, error) {
+	var enqueueLocalRun func(reqCtx context.Context, runCfg config.Config, source string, force bool) (string, error)
+	enqueueLocalRun = func(reqCtx context.Context, runCfg config.Config, source string, force bool) (string, error) {
 		if err := persistentLogs.Error(); err != nil {
 			return "", fmt.Errorf("task log storage unavailable: %w", err)
 		}
@@ -428,7 +423,7 @@ func runServer(args []string) int {
 		if force {
 			dedupeKey = ""
 		}
-		allowCompletedDuplicate := source == rerunSource || source == libraryScheduleSource
+		allowCompletedDuplicate := source == rerunSource
 		if dedupeKey != "" {
 			if duplicate, state, duplicateOf := localSubmitDeduper.Check(dedupeKey, allowCompletedDuplicate); duplicate {
 				daemonLogger(
@@ -486,7 +481,6 @@ func runServer(args []string) int {
 			activeCfg localruntime.InitConfig,
 			dedupeKey string,
 			source string,
-			allowFailureFollowUp bool,
 			runCtx context.Context,
 			cancelRun context.CancelCauseFunc,
 			taskHandle *localTaskHandle,
@@ -556,14 +550,6 @@ func runServer(args []string) int {
 								Err:      fmt.Errorf("task wait: %w", waitErr),
 							}
 							issueResult = failedResult
-							if allowFailureFollowUp {
-								if queueFailureRerun != nil {
-									queueFailureRerun(requestID, failedResult, runCfg, source)
-								}
-								if queueFailureFollowUp != nil {
-									queueFailureFollowUp(requestID, failedResult, runCfg, source)
-								}
-							}
 						}
 						return
 					}
@@ -609,14 +595,6 @@ func runServer(args []string) int {
 							Err:      fmt.Errorf("task signing: %w", signingErr),
 						}
 						issueResult = failedResult
-						if allowFailureFollowUp {
-							if queueFailureRerun != nil {
-								queueFailureRerun(requestID, failedResult, runCfg, source)
-							}
-							if queueFailureFollowUp != nil {
-								queueFailureFollowUp(requestID, failedResult, runCfg, source)
-							}
-						}
 					}
 					return
 				}
@@ -642,14 +620,6 @@ func runServer(args []string) int {
 							Err:      fmt.Errorf("task acquire: %w", acquireErr),
 						}
 						issueResult = failedResult
-						if allowFailureFollowUp {
-							if queueFailureRerun != nil {
-								queueFailureRerun(requestID, failedResult, runCfg, source)
-							}
-							if queueFailureFollowUp != nil {
-								queueFailureFollowUp(requestID, failedResult, runCfg, source)
-							}
-						}
 					}
 					return
 				}
@@ -672,11 +642,6 @@ func runServer(args []string) int {
 				if taskHandle != nil {
 					taskHandle.SetRunning(true)
 				}
-				reviewCfg := activeCfg
-				if startCfg, startCfgErr := effectiveRuntimeConfig(activeCfg); startCfgErr == nil {
-					reviewCfg = startCfg
-				}
-				finalReviewPasses := taskReviewPasses(runCfg, reviewCfg.ReviewWatch)
 				if err := workflowRepositoryGate(cfg.RuntimeConfigPath, runCfg); err != nil {
 					finalState = "error"
 					issueResult.Err = err
@@ -704,7 +669,7 @@ func runServer(args []string) int {
 				taskWorkspace := diskRequest.Workspace
 				taskWorkspace.Root = workspaceRoot
 				canRetryWorkspace := diskRequest.RetryRoot == "" && canRetryTaskWorkspace(diskRequest.Workspace)
-				outcome := runLocalTask(runCtx, taskRunner, daemonLogger, "local", requestID, runCfg, finalReviewPasses, taskHandle, signingSnapshot, monitorBroker, taskWorkspace, func(runDir string) {
+				outcome := runLocalTask(runCtx, taskRunner, daemonLogger, "local", requestID, runCfg, taskReviewPasses(runCfg), taskHandle, signingSnapshot, monitorBroker, taskWorkspace, func(runDir string) {
 					recordLocalTaskDiskUsage(diskHistory, diskKey, requestID, runDir, daemonLogger)
 				}, canRetryWorkspace)
 				if taskHandle != nil {
@@ -748,14 +713,6 @@ func runServer(args []string) int {
 							gate.RequireReauthentication()
 						}
 					}
-					if allowFailureFollowUp {
-						if queueFailureRerun != nil {
-							queueFailureRerun(requestID, outcome.Result, runCfg, source)
-						}
-						if queueFailureFollowUp != nil {
-							queueFailureFollowUp(requestID, outcome.Result, runCfg, source)
-						}
-					}
 				case "no_changes":
 					if failureResult, failed := localNoChangesFailureResult(source, outcome.Result, runCfg); failed {
 						finalState = "error"
@@ -768,17 +725,7 @@ func runServer(args []string) int {
 							failureResult.PRURL,
 							failureResult.Err,
 						)
-					} else {
 					}
-					if source != issueRepairSource && source != noChangesFollowUpSource && source != noChangesEscalationSource && queueUnexpectedNoChangesFollowUp != nil {
-						queueUnexpectedNoChangesFollowUp(requestID, outcome.Result, runCfg)
-					}
-					if queueEscalatedNoChangesFollowUp != nil {
-						if ok, _ := shouldEscalateNoChangesFollowUp(source, outcome.Result, runCfg); ok {
-							queueEscalatedNoChangesFollowUp(requestID, outcome.Result, runCfg)
-						}
-					}
-				case "completed":
 				}
 				if diskRequest.CleanupOnCompletion {
 					cleanupTaskWorkspaceOnCompletion(requestID, outcome.Result, daemonLogger)
@@ -788,155 +735,12 @@ func runServer(args []string) int {
 				}
 				return
 			}
-		}(requestID, runCfg, activeCfg, dedupeKey, source, allowFailureFollowUp, runCtx, cancelRun, taskHandle)
+		}(requestID, runCfg, activeCfg, dedupeKey, source, runCtx, cancelRun, taskHandle)
 
 		dispatched = true
 		return requestID, nil
 	}
-	queueFailureRerun = func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string) {
-		if failedRunCfg.GitHubIssue != nil && failedRunCfg.GitHubIssue.Claim != nil {
-			return
-		}
-		if ok, reason := shouldQueueFailureRerun(source, failedResult); !ok {
-			daemonLogger(
-				"task status=warn action=skip_failure_rerun request_id=%s err=%q",
-				failedRequestID,
-				reason,
-			)
-			return
-		}
-
-		rerunRequestID, rerunErr := enqueueFailureRerun(ctx, enqueueLocalRun, failedRunCfg)
-		if rerunErr != nil {
-			daemonLogger(
-				"task status=warn action=queue_failure_rerun request_id=%s err=%q",
-				failedRequestID,
-				rerunErr,
-			)
-			return
-		}
-		daemonLogger(
-			"task status=ok action=queue_failure_rerun request_id=%s rerun_request_id=%s",
-			failedRequestID,
-			rerunRequestID,
-		)
-	}
-	queueFailureFollowUp = func(failedRequestID string, failedResult app.Result, failedRunCfg config.Config, source string) {
-		if failedRunCfg.GitHubIssue != nil && failedRunCfg.GitHubIssue.Claim != nil {
-			return
-		}
-		if ok, reason := shouldQueueFailureFollowUp(source, failedResult); !ok {
-			daemonLogger(
-				"task status=warn action=skip_failure_followup request_id=%s err=%q",
-				failedRequestID,
-				reason,
-			)
-			return
-		}
-
-		followUpCfg := failureFollowUpRunConfig(failedRequestID, failedResult, failedRunCfg, logRoot)
-		if len(followUpCfg.RepoList()) == 0 {
-			daemonLogger(
-				"task status=warn action=queue_failure_followup request_id=%s err=%q",
-				failedRequestID,
-				"no failed-task repo found for follow-up",
-			)
-			return
-		}
-		followUpRequestID, followUpErr := enqueueLocalRun(ctx, followUpCfg, true, failureFollowUpSource, false)
-		if followUpErr != nil {
-			daemonLogger(
-				"task status=warn action=queue_failure_followup request_id=%s err=%q",
-				failedRequestID,
-				followUpErr,
-			)
-			return
-		}
-		daemonLogger(
-			"task status=ok action=queue_failure_followup request_id=%s follow_up_request_id=%s",
-			failedRequestID,
-			followUpRequestID,
-		)
-	}
-	queueUnexpectedNoChangesFollowUp = func(requestID string, result app.Result, runCfg config.Config) {
-		if runCfg.GitHubIssue != nil && runCfg.GitHubIssue.Claim != nil {
-			return
-		}
-		logPaths := existingPaths(followUpTaskLogPaths(logRoot, requestID))
-		if ok, reason := shouldQueueUnexpectedNoChangesFollowUpWithLogs(result, runCfg, logPaths); !ok {
-			daemonLogger(
-				"task status=warn action=skip_no_changes_followup request_id=%s err=%q",
-				requestID,
-				reason,
-			)
-			return
-		}
-
-		followUpCfg := unexpectedNoChangesFollowUpRunConfig(requestID, result, runCfg, logRoot)
-		if len(followUpCfg.RepoList()) == 0 {
-			daemonLogger(
-				"task status=warn action=queue_no_changes_followup request_id=%s err=%q",
-				requestID,
-				"no task repo found for no-changes follow-up",
-			)
-			return
-		}
-
-		followUpRequestID, followUpErr := enqueueLocalRun(ctx, followUpCfg, true, noChangesFollowUpSource, false)
-		if followUpErr != nil {
-			daemonLogger(
-				"task status=warn action=queue_no_changes_followup request_id=%s err=%q",
-				requestID,
-				followUpErr,
-			)
-			return
-		}
-		daemonLogger(
-			"task status=ok action=queue_no_changes_followup request_id=%s follow_up_request_id=%s",
-			requestID,
-			followUpRequestID,
-		)
-	}
-	queueEscalatedNoChangesFollowUp = func(requestID string, result app.Result, runCfg config.Config) {
-		logPaths := existingPaths(followUpTaskLogPaths(logRoot, requestID))
-		if ok, reason := shouldEscalateNoChangesFollowUpWithLogs(noChangesFollowUpSource, result, runCfg, logPaths); !ok {
-			daemonLogger(
-				"task status=warn action=skip_no_changes_escalation request_id=%s err=%q",
-				requestID,
-				reason,
-			)
-			return
-		}
-
-		followUpCfg := escalatedNoChangesFollowUpRunConfig(requestID, result, runCfg, logRoot)
-		if len(followUpCfg.RepoList()) == 0 {
-			daemonLogger(
-				"task status=warn action=queue_no_changes_escalation request_id=%s err=%q",
-				requestID,
-				"no task repo found for no-changes escalation",
-			)
-			return
-		}
-
-		followUpRequestID, followUpErr := enqueueLocalRun(ctx, followUpCfg, false, noChangesEscalationSource, false)
-		if followUpErr != nil {
-			daemonLogger(
-				"task status=warn action=queue_no_changes_escalation request_id=%s err=%q",
-				requestID,
-				followUpErr,
-			)
-			return
-		}
-		daemonLogger(
-			"task status=ok action=queue_no_changes_escalation request_id=%s follow_up_request_id=%s",
-			requestID,
-			followUpRequestID,
-		)
-	}
-
-	go repairQueue.run(ctx, enqueueLocalRun)
 	githubCooldown := &githubutil.Cooldown{}
-	var reviewWatcher *githubreview.Watcher
 	if strings.TrimSpace(*uiListen) != "" {
 		uiServer := web.NewServer(*uiListen, monitorBroker)
 		uiReady := make(chan error, 1)
@@ -961,9 +765,8 @@ func runServer(args []string) int {
 		}
 		uiServer.IssueClaims = issueClaims
 		uiServer.IssueRecovery = &cfg.IssueRecovery
-		uiServer.IssueRepair = repairQueue.capture
-		uiServer.IssueExternalPrerequisiteFromLogs = repairQueue.externalPrerequisiteFromLogs
-		uiServer.IssueRepairs = repairQueue.store
+		uiServer.IssueExternalPrerequisiteFromLogs = repairHistory.externalPrerequisiteFromLogs
+		uiServer.IssueRepairs = repairHistory.store
 		uiServer.IssueReady = func(checkCtx context.Context) error {
 			if err := signingSubmissionGate(checkCtx, cfg, runner); err != nil {
 				return err
@@ -1053,16 +856,7 @@ func runServer(args []string) int {
 			return loadReviewSettingsState(cfg)
 		}
 		uiServer.ConfigureReviewSettings = func(_ context.Context, req web.ReviewSettingsRequest) (web.ReviewSettingsState, error) {
-			state, err := configureReviewSettings(cfg, req)
-			if err == nil && reviewWatcher != nil {
-				activeCfg, loadErr := effectiveRuntimeConfig(cfg)
-				if loadErr != nil {
-					err = loadErr
-				} else {
-					reviewWatcher.UpdateOptions(reviewWatcherOptions(activeCfg.ReviewWatch))
-				}
-			}
-			return state, err
+			return configureReviewSettings(cfg, req)
 		}
 		recordLibraryUsage := func(runCfg config.Config) {
 			if strings.TrimSpace(runCfg.LibraryTaskName) == "" {
@@ -1072,22 +866,6 @@ func runServer(args []string) int {
 				daemonLogger("library.usage status=warn task=%s err=%q", runCfg.LibraryTaskName, err)
 			}
 		}
-
-		schedules := &localruntime.LibrarySchedules{
-			Path: cfg.RuntimeConfigPath, Init: cfg, Logf: daemonLogger,
-			Submit: func(reqCtx context.Context, runCfg config.Config) (string, error) {
-				id, err := enqueueLocalRun(reqCtx, runCfg, true, libraryScheduleSource, false)
-				if err == nil {
-					recordLibraryUsage(runCfg)
-				}
-				return id, err
-			},
-			Active: func(schedule localruntime.LibrarySchedule) bool {
-				return deferConfiguredLibrarySchedule(workflowEngine, cfg.RuntimeConfigPath, schedule) || libraryScheduleActive(monitorBroker, schedule)
-			},
-		}
-		uiServer.LibrarySchedules = schedules
-		go schedules.Run(ctx)
 
 		customLibrarySources := &localruntime.CustomLibrarySources{
 			Path:   cfg.RuntimeConfigPath,
@@ -1106,7 +884,7 @@ func runServer(args []string) int {
 				return "", fmt.Errorf("invalid run config: %w", err)
 			}
 			recordLibraryUsage(runCfg)
-			return enqueueLocalRun(reqCtx, runCfg, true, localSubmitSource, false)
+			return enqueueLocalRun(reqCtx, runCfg, localSubmitSource, false)
 		}
 		uiServer.SubmitTaskRerun = func(reqCtx context.Context, requestID string, body []byte, force bool) (string, error) {
 			runCfg, err := parseWorkflowOrSelection(body)
@@ -1116,7 +894,7 @@ func runServer(args []string) int {
 			recordLibraryUsage(runCfg)
 			task, _ := monitorBroker.Task(requestID)
 			return retryWorkflowTask(reqCtx, workflowEngine, task, runCfg, func(retryCfg config.Config) (string, error) {
-				return enqueueLocalRun(reqCtx, retryCfg, true, rerunSource, force)
+				return enqueueLocalRun(reqCtx, retryCfg, rerunSource, force)
 			})
 		}
 		uiServer.CloseTask = cleanupTaskLogs
@@ -1182,31 +960,6 @@ func runServer(args []string) int {
 			Broker:      monitorBroker,
 			Logf:        daemonLogger,
 			CleanupTask: cleanupTaskLogs,
-			DefaultAutomationEnabled: func(task web.Task) bool {
-				return taskUsesDefaultPRAutomation(monitorBroker, workflowEngine, task)
-			},
-			DeleteMergedBranchesEnabled: func() bool {
-				activeCfg, err := effectiveRuntimeConfig(cfg)
-				if err != nil {
-					return false
-				}
-				return activeCfg.ReviewWatch.DeleteMergedBranchesEnabled()
-			},
-			OnReviewFeedback: func(reqCtx context.Context, task web.Task, feedback web.PRReviewFeedback) (string, error) {
-				raw, ok := monitorBroker.TaskRunConfig(task.RequestID)
-				if !ok {
-					return "", fmt.Errorf("stored run config not found for request %s", task.RequestID)
-				}
-				originalCfg, err := localruntime.ParseRunConfigJSON(raw)
-				if err != nil {
-					return "", fmt.Errorf("parse stored run config: %w", err)
-				}
-				followUpCfg, err := prReviewFeedbackRunConfig(originalCfg, task, feedback)
-				if err != nil {
-					return "", err
-				}
-				return enqueueLocalRun(reqCtx, followUpCfg, true, prReviewFeedbackSource, false)
-			},
 		}
 		go func() {
 			if err := prMonitor.Run(ctx); err != nil {
@@ -1216,18 +969,6 @@ func runServer(args []string) int {
 	}
 
 	maybeStartAgentAuth(ctx, runtimeCfg, authGate, daemonLogger)
-	reviewWatcherCfg := cfg
-	if activeCfg, err := effectiveRuntimeConfig(cfg); err == nil {
-		reviewWatcherCfg = activeCfg
-	} else {
-		daemonLogger("review_watch status=warn action=load_runtime_config err=%q", err)
-	}
-	reviewWatcher = startGitHubReviewWatcher(ctx, runner, githubCooldown, reviewWatcherCfg, func(reqCtx context.Context, runCfg config.Config, followUp bool, source string, force bool) (string, error) {
-		if workflowEngine.Owns(runCfg.RepoURL, "pr.review_requested") {
-			return "", fmt.Errorf("review request is owned by an enabled custom workflow")
-		}
-		return enqueueLocalRun(reqCtx, runCfg, followUp, source, force)
-	}, daemonLogger)
 	runBootDiagnostics(ctx, runner, daemonLogger, cfg)
 	<-ctx.Done()
 	return app.ExitSuccess
@@ -2640,67 +2381,6 @@ func taskStartSourceForSubmission(source string, runCfg config.Config) string {
 	}
 }
 
-func startGitHubReviewWatcher(
-	ctx context.Context,
-	runner execx.Runner,
-	cooldown *githubutil.Cooldown,
-	cfg localruntime.InitConfig,
-	enqueueLocalRun func(context.Context, config.Config, bool, string, bool) (string, error),
-	logf func(string, ...any),
-) *githubreview.Watcher {
-	if !cfg.ReviewWatch.EnabledValue() {
-		return nil
-	}
-	if runner == nil || enqueueLocalRun == nil {
-		if logf != nil {
-			logf("review_watch status=warn action=start err=%q", "runner or enqueue function unavailable")
-		}
-		return nil
-	}
-
-	watcher := &githubreview.Watcher{
-		Cooldown: cooldown,
-		Runner:   runner,
-		Enqueue: func(reqCtx context.Context, runCfg config.Config) (string, error) {
-			return enqueueLocalRun(reqCtx, runCfg, true, reviewWatchSource, false)
-		},
-		Logf:    logf,
-		Options: reviewWatcherOptions(cfg.ReviewWatch),
-	}
-	go func() {
-		if logf != nil {
-			logf("review_watch status=start interval_ms=%d", cfg.ReviewWatch.PollIntervalMS)
-		}
-		if err := watcher.Run(ctx); err != nil && logf != nil {
-			logf("review_watch status=error err=%q", err)
-		}
-	}()
-	return watcher
-}
-
-func reviewWatcherOptions(cfg localruntime.ReviewWatchConfig) githubreview.Options {
-	cfg.MergeMethod = normalizeReviewSettingsMergeMethod(cfg.MergeMethod)
-	if cfg.MergeMethod == "" {
-		cfg.MergeMethod = "squash"
-	}
-	if cfg.PollIntervalMS <= 0 {
-		cfg.PollIntervalMS = 60000
-	}
-	if strings.TrimSpace(cfg.Writeback) == "" {
-		cfg.Writeback = "summary-comment"
-	}
-	if strings.TrimSpace(cfg.ResponseMode) == "" {
-		cfg.ResponseMode = "off"
-	}
-	return githubreview.Options{
-		PollInterval: time.Duration(cfg.PollIntervalMS) * time.Millisecond,
-		Writeback:    cfg.Writeback,
-		AutoMerge:    cfg.AutoMergeEnabled(),
-		MergeMethod:  cfg.MergeMethod,
-		ResponseMode: cfg.ResponseMode,
-	}
-}
-
 func runBootDiagnostics(
 	ctx context.Context,
 	runner execx.Runner,
@@ -2969,9 +2649,9 @@ func loadReviewSettingsState(cfg localruntime.InitConfig) (web.ReviewSettingsSta
 		GitHubIssueRepositories:            ui.GitHubIssueRepositories,
 		GitHubIssueAutoStartAssigned:       ui.GitHubIssueAutoStartAssigned,
 		GitHubIssueAutoStartEnabled:        ui.GitHubIssueAutoStartAssigned,
-		GitHubIssueAutoStartExclusionLabel: ui.GitHubIssueAutoStartExclusionLabel,
 		GitHubIssueAutoStartOnlyAssigned:   ui.GitHubIssueAutoStartOnlyAssigned,
 		GitHubIssueAutoStartLabels:         ui.GitHubIssueAutoStartLabels,
+		GitHubIssueAutoStartExclusionLabel: ui.GitHubIssueAutoStartExclusionLabel,
 		DefaultComplexity:                  ui.DefaultComplexity,
 		AssignCreator:                      ui.AssignCreator,
 		DisabledRepositories:               ui.DisabledRepositories,

@@ -217,9 +217,7 @@ func (s Server) claimAndSubmitIssue(ctx context.Context, run config.Config, sett
 
 var errIssueRecoveryRequired = errors.New("issue is reserved by a previous attempt; use Recover / retry here or in Settings → GitHub Issues after its worker has stopped")
 
-// Explicit starts recover previous attempts under the one-worker-per-issue
-// assumption. The
-// background scanner must never turn a persistent failure into a retry loop.
+// Explicit starts recover previous attempts under the one-worker-per-issue assumption.
 func (s Server) claimAndSubmitIssueMode(ctx context.Context, run config.Config, settings ReviewSettingsState, login string, submit func(context.Context, []byte) (string, error), manual bool) (string, error) {
 	if s.issueAutomation == nil || s.IssueClaims == nil {
 		return "", fmt.Errorf("issue claim storage is unavailable")
@@ -451,7 +449,7 @@ func (s Server) finishIssueAdmission(ctx context.Context, record localruntime.Is
 	}); err != nil {
 		return "", fmt.Errorf("task %s was accepted but claim receipt could not be saved; do not resubmit: %w", requestID, err)
 	}
-	s.logf("localruntime.ui status=ok event=github_issue_auto_start issue=%d request_id=%s", issue.Number, requestID)
+	s.logf("localruntime.ui status=ok event=github_issue_submitted issue=%d request_id=%s", issue.Number, requestID)
 	return requestID, nil
 }
 
@@ -764,15 +762,8 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 	if err != nil {
 		return issueRetryResult{}, 503, err
 	}
-	if !settings.GitHubIssuesEnabled {
+	if !automatic && !settings.GitHubIssuesEnabled {
 		return issueRetryResult{}, 409, fmt.Errorf("GitHub Issues is disabled")
-	}
-	if automatic {
-		var enabled bool
-		settings, enabled = settings.issueAutoStartForRepository(repository)
-		if !enabled {
-			return issueRetryResult{}, 409, fmt.Errorf("issue automation disabled")
-		}
 	}
 	for _, disabled := range settings.DisabledRepositories {
 		if issueRepositoryMatchesRun(disabled, repository) {
@@ -818,6 +809,19 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 			run := record.Run
 			savedRun = &run
 			previous = record
+		}
+	}
+	if automatic {
+		if savedRun == nil {
+			return issueRetryResult{}, 409, fmt.Errorf("automatic issue retry requires a saved workflow run")
+		}
+		var enabled bool
+		settings, enabled, err = s.workflowIssueSettings(*savedRun)
+		if err != nil {
+			return issueRetryResult{}, 503, err
+		}
+		if !enabled {
+			return issueRetryResult{}, 409, fmt.Errorf("automatic issue retry requires an enabled workflow")
 		}
 	}
 	if requestedRun != nil && s.SubmitTaskRerun != nil {

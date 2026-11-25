@@ -38,7 +38,7 @@ func TestFailedIssueCanBeStartedOrRerun(t *testing.T) {
 					s.Broker.RecordTaskRunConfig(id, body)
 					return id, err
 				}
-				s.pollGitHubIssueAutoStart(context.Background())
+				reconcileOrAdmitTestIssue(context.Background(), s)
 				if len(f.submissions) != 1 {
 					t.Fatal("background poll restarted a failed task")
 				}
@@ -74,7 +74,7 @@ func TestIssueStartRecoversPriorAttempts(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			f := newAutomationGitHub()
 			s := automationServer(t, f)
-			s.pollGitHubIssueAutoStart(context.Background())
+			reconcileOrAdmitTestIssue(context.Background(), s)
 			saved, _ := json.Marshal(f.submissions[0])
 			if scenario != "missing task" {
 				s.Broker.RecordTaskRunConfig("request-1", saved)
@@ -129,7 +129,7 @@ func TestIssueRecoveryAfterBranchReservationFailure(t *testing.T) {
 	f := newAutomationGitHub()
 	s := automationServer(t, f)
 	f.fail = "query=mutation"
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	records, err := s.IssueClaims.List()
 	if err != nil || len(records) != 1 || f.branch || len(f.submissions) != 0 {
 		t.Fatalf("failed reservation: records=%v branch=%t err=%v", records, f.branch, err)
@@ -147,7 +147,7 @@ func TestFailedIssueConcurrentRestartsAdmitOnce(t *testing.T) {
 	t.Parallel()
 	f := newAutomationGitHub()
 	s := automationServer(t, f)
-	s.pollGitHubIssueAutoStart(context.Background())
+	reconcileOrAdmitTestIssue(context.Background(), s)
 	saved, _ := json.Marshal(f.submissions[0])
 	s.Broker.RecordTaskRunConfig("request-1", saved)
 	s.Broker.IngestLog("task status=error request_id=request-1")
@@ -192,7 +192,7 @@ func TestIssueStartIgnoresStaleDevelopmentLinks(t *testing.T) {
 					s, backend = recoveryServer(t)
 					f = backend.automationGitHub
 				}
-				s.pollGitHubIssueAutoStart(context.Background())
+				reconcileOrAdmitTestIssue(context.Background(), s)
 				if len(f.submissions) != 1 {
 					t.Fatal("initial task not submitted")
 				}

@@ -111,14 +111,8 @@ repository has an active task. A failed submission is recorded and retried at
 the next interval. Pausing preserves the cursor; disabling the Workflow feature
 or excluding the repository prevents new occurrences and merges.
 
-Existing `config.json` library schedules continue through the configured scheduler
-and `/api/library/schedules`. Opening Workflow does not import or disable them.
-For schedules imported by earlier builder versions, unchanged enabled copies
-retain the configured scheduler as their single owner, regardless of the Workflow
-feature toggle. Before dispatch, it adopts any later occurrence reservation from
-the imported copy's journal to prevent replay. Paused or edited copies remain
-custom-owned. New custom schedules and configured schedules retain their separate
-definitions.
+Create a scheduled workflow to replace any legacy `config.json` library
+schedule. Legacy schedules are left on disk for reference.
 
 ### GitHub issue automation
 
@@ -129,14 +123,8 @@ Repositories may have no workflows or multiple independent workflows. The GitHub
 Issues feature controls the issue browser separately from workflow execution.
 
 Workflow polling checks every 30 seconds. Existing matching items are skipped on
-the first scan unless **Include existing matches** is enabled. Existing configured
-issue automation and review watching remain active independently of the builder.
-An enabled custom issue workflow replaces configured issue auto-start for that
-repository; disabled drafts do not. Existing per-repository issue rules are
-not imported. Workflow stores start empty; create the workflows you want in
-Workflow. Existing saved workflow definitions remain intact. Settings contains
-Features, Repositories, Libraries, and Commit Signing; the Default workflows section has
-been removed.
+the first scan unless **Include existing matches** is enabled. Workflow stores
+start empty, and existing saved workflows retain their settings.
 
 Task recovery belongs to the specific task on the **GitHub Issues** page. Select
 the issue there to review and retry its work when recovery is required.
@@ -197,11 +185,12 @@ The local recovery protocol uses inherited Unix file locks and records process
 groups. A surviving agent or uncertain process termination prevents takeover.
 Legacy claims and ownership changes require **Retry** in **Settings → GitHub Issues**, after stopping
 the previous worker on every instance. Automatic cross-machine failover is not
-performed. Restarting the owning instance recovers its durable dispatch intents.
+performed. Restarting the owning instance recovers durable dispatch intents for enabled workflows.
 
-Background recovery verifies PR delivery before retrying, reuses preserved local
-changes and remote commits, and resumes publication once the journal confirms
-agent success. Legacy journals without this checkpoint rerun the agent before
+Background recovery verifies PR delivery for existing claims. An enabled workflow
+can retry an interrupted or failed run, reuse preserved local changes and remote
+commits, and resume publication once the journal confirms agent success. Other
+claims require explicit retry. Legacy journals without this checkpoint rerun the agent before
 publishing, because pending changes alone do not prove a successful result.
 It permits three agent attempts per failure cycle. Consecutive unsuccessful
 runs increase the retry delay fivefold, starting at one minute plus jitter and
@@ -229,13 +218,6 @@ runtime configuration (these are server settings, not run-config fields):
   "max_backoff_seconds": 3600
 }
 ```
-
-Suspected harness failures enqueue persistent, deduplicated agent_00 repair
-tasks based on local logs. Enqueue failures remain queued; failed or interrupted
-repair executions remain visible for investigation and do not spawn recursive
-repair tasks. Customer prompts and identifiers are redacted from repair prompts
-and PR context. A repair PR does not resolve the original issue, automatically
-merge/deploy a fix, or reset its retry budget.
 
 Repository rules must permit creation of ownership tags, branches, and issue
 labels. Permission or storage failures remain explicit blockers. Progress cannot
@@ -531,11 +513,9 @@ go build -o bin/harness ./cmd/harness
 Local `harness serve` listens on `127.0.0.1:7777` by default.
 
 Workflow is an opt-in beta under **Settings → Features → Workflow (beta)**.
-Configured automation remains the default: review requests, issue auto-start,
-library schedules, post-task review levels, PR feedback repair, and merged-branch
-cleanup keep their existing settings. Custom workflows override their matching
-repository and trigger; tasks dispatched by a custom workflow use its own review
-and merge policy, including an explicit zero-review setting.
+Enable a workflow to start work from a schedule, issue, review request, or other
+trigger. Workflows define their own review, repair, merge, and branch deletion
+policies. Legacy runtime settings for these actions are inactive.
 The React Flow editor defines an executable pipeline: repository → trigger →
 filters → task → bounded review cycles → optional merge. Select a node to edit
 its policy and drag nodes to arrange the canvas. Connections describe this
@@ -721,14 +701,8 @@ The web UI sends manual GA4 page views and engagement events. Keep Enhanced
 Measurement disabled on its GA4 web stream to prevent duplicate history-based
 page views and automatic collection of raw link and form URLs.
 
-With GitHub auth configured, local server mode also watches GitHub review-request
-notifications by default. When the authenticated GitHub user is still requested
-as a PR reviewer, the harness queues the bundled `code-review` task and posts a
-summary comment back to the original PR. Auto-merge is off by default; opt in
-with `review_watch.auto_merge: true` in the runtime config.
-An enabled custom `pr.review_requested` workflow for a repository owns those
-requests instead. Custom workflow tasks are excluded from the default PR feedback
-and branch-cleanup automation so their explicit policies remain authoritative.
+To review PRs automatically, enable a workflow with the `pr.review_requested`
+trigger for the repository.
 
 For a manual `code-review` task, select the PR's head branch or include its PR
 URL. The review is read-only and posts back to that PR; a clean worktree is a
@@ -737,16 +711,12 @@ as "fix the comments in the review" also use the selected head branch or PR URL
 to update the existing PR. If that target cannot be resolved or updated, the
 harness reports the targeting error instead of opening a replacement PR.
 
-Post-task PR review cycles are also off by default. Configure
-`review_watch.review_level` as `off`, `low`, `medium`, or `high` to run 0 or up
-to 2, 5, or 10 review-and-repair passes after a task creates its pull request and
-initial checks finish. A pass with no negative findings ends the cycle early.
-Actionable findings are repaired and checked before the next pass, including a
-clean confirmation after the final repair. If findings remain after the repair
-budget is exhausted, the completed task stays successful and its pull request
-stays in draft for human review.
-These settings apply to ordinary submitted tasks. An explicit workflow's
-`reviewCycles` overrides the configured review level for that task.
+Set a workflow's `reviewCycles` to run review-and-repair passes after a task
+creates its pull request and initial checks finish. A pass with no negative
+findings ends the cycle early. Actionable findings are repaired and checked
+before the next pass, including a clean confirmation after the final repair.
+If findings remain after the repair budget is exhausted, the completed task
+stays successful and its pull request stays in draft for human review.
 
 ### Go Module
 

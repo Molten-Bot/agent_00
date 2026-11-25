@@ -47,7 +47,5 @@
   //   "autoMerge": true,
   //   "mergeMethod": "squash"
   // }
-  // Recurring runs (re-run a library task on an interval) are not configured
-  // in this file; they are a dashboard/API feature. See
-  // library-schedule.example.json for that JSON contract.
+  // For recurring runs, enable a scheduled workflow in the dashboard.
 }
