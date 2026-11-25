@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"net/http"
 	"net/url"
 	"os"
@@ -6871,6 +6872,7 @@ func agentTerminalDiskFull(res execx.Result, prompt, failure string) bool {
 	if workspace.DiskFullDiagnostic(failure) {
 		return true
 	}
+	stderr := strings.TrimSpace(res.Stderr)
 	if failure != "" {
 		// Use only error details attached to the reported failure. The
 		// transcript can contain earlier failures that the agent recovered.
@@ -6884,14 +6886,19 @@ func agentTerminalDiskFull(res execx.Result, prompt, failure string) bool {
 		if details == "" && startsWithErrorDetails(res.Stderr) {
 			details = codexExtractStderrErrorDetail(res.Stderr, failure)
 		}
-		return workspace.DiskFullDiagnostic(details)
+		if details != "" {
+			return workspace.DiskFullDiagnostic(details)
+		}
+		// A standalone stderr diagnostic can supply the cause of a summary-only report.
+		if strings.ContainsRune(stderr, '\n') {
+			return false
+		}
 	}
 	// A CLI can exit before emitting a structured report. Its final stderr
 	// line must be a storage diagnostic, not an arbitrary mention of ENOSPC.
-	stderr := strings.TrimSpace(res.Stderr)
 	line := strings.ToLower(strings.TrimSpace(stderr[strings.LastIndexByte(stderr, '\n')+1:]))
 	return workspace.DiskFullDiagnostic(line) &&
-		(strings.HasPrefix(line, "enospc:") || strings.HasPrefix(line, "error:") ||
+		(line == "enospc" || strings.HasSuffix(line, ": no space left on device") || strings.HasPrefix(line, "enospc:") || strings.HasPrefix(line, "error:") ||
 			strings.HasPrefix(line, "fatal:") || strings.HasPrefix(line, "no space left on device") ||
 			strings.HasPrefix(line, "disk quota exceeded") || strings.HasPrefix(line, "out of diskspace"))
 }
@@ -6973,7 +6980,7 @@ func codexReportedCompactPlainFailure(output string) (bool, string) {
 		return false, ""
 	}
 	var failure string
-	for _, line := range nonEmpty {
+	for _, line := range reportProseLines(nonEmpty) {
 		field := agentFailureFieldLine(line)
 		if lower := strings.ToLower(field); strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
 			failure = field
@@ -7474,15 +7481,44 @@ func isNonFatalRemoteDeploymentAuthFailure(detail string, res execx.Result) bool
 	return true
 }
 
+// reportProseLines keeps the original indexes so details following a summary
+// can still include diagnostic output inside a code fence.
+func reportProseLines(lines []string) iter.Seq2[int, string] {
+	return func(yield func(int, string) bool) {
+		var fence string
+		for i, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if fence != "" {
+				if strings.HasPrefix(trimmed, fence) && strings.Trim(trimmed, fence[:1]) == "" {
+					fence = ""
+				}
+				continue
+			}
+			if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+				end := len(trimmed) - len(strings.TrimLeft(trimmed, trimmed[:1]))
+				fence = trimmed[:end]
+				continue
+			}
+			if !yield(i, line) {
+				return
+			}
+		}
+	}
+}
+
 func codexFailureReportTail(output, failure string) (string, bool) {
 	if failure == "" {
 		return "", false
 	}
 	lines := splitOutputLines(output)
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.EqualFold(agentFailureFieldLine(lines[i]), failure) {
-			return strings.TrimSpace(strings.Join(lines[i+1:], "\n")), true
+	last := -1
+	for i, line := range reportProseLines(lines) {
+		if strings.EqualFold(agentFailureFieldLine(line), failure) {
+			last = i
 		}
+	}
+	if last >= 0 {
+		return strings.TrimSpace(strings.Join(lines[last+1:], "\n")), true
 	}
 	return "", false
 }
@@ -7497,21 +7533,9 @@ func startsWithErrorDetails(output string) bool {
 func codexExtractAttachedErrorDetail(tail string) string {
 	lines := splitOutputLines(tail)
 	start := -1
-	var fence string
 report:
-	for i, line := range lines {
+	for i, line := range reportProseLines(lines) {
 		line = strings.TrimSpace(line)
-		if (strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~")) && isMarkdownCodeFence(line) {
-			if fence == "" {
-				fence = line[:3]
-			} else if strings.HasPrefix(line, fence) {
-				fence = ""
-			}
-			continue
-		}
-		if fence != "" {
-			continue
-		}
 		switch strings.ToLower(line) {
 		case "user", "codex", "exec", "tokens used":
 			lines = lines[:i]
@@ -7882,7 +7906,7 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 	}
 	lines := splitOutputLines(output)
 	nonEmpty := make([]string, 0, len(lines))
-	for _, line := range lines {
+	for _, line := range reportProseLines(lines) {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
