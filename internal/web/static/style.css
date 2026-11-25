@@ -9453,6 +9453,10 @@ html[data-hover-mode="off"] .task-fullscreen-toggle:hover {
   text-overflow: clip;
 }
 
+.github-issue-task-status a {
+  pointer-events: auto;
+}
+
 .github-issue-task-actions .prompt-actions-end {
   grid-area: 1 / 1;
   align-self: center;

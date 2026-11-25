@@ -738,7 +738,7 @@ test('GitHub Issues filters issues by linked branch and remembers the choice', a
   });
 });
 
-test('GitHub Issues offers recovery after a reserved-task error and requires confirmation', async t => {
+for (const fulfilled of [false, true]) test(`GitHub Issues recovery requires confirmation and reports ${fulfilled ? 'the verified PR' : 'the queued task'}`, async t => {
   const issue = { number: 17, title: 'Recover failed task', state: 'OPEN',
     url: 'https://github.com/acme/repo/issues/17', body: 'Retry this task.' };
   const retries = [];
@@ -764,6 +764,7 @@ test('GitHub Issues offers recovery after a reserved-task error and requires con
         }
         retries.push(route.request().postDataJSON());
         if (retries.length === 1) return route.fulfill({ status: 409, json: { ok: false, error: 'claim changed; refresh before retrying' } });
+        if (fulfilled) return route.fulfill({ json: { ok: true, prUrl: 'https://github.com/acme/repo/pull/42' } });
         return route.fulfill({ status: 202, json: { ok: true, request_id: 'recovered-17' } });
       });
     },
@@ -787,7 +788,15 @@ test('GitHub Issues offers recovery after a reserved-task error and requires con
   assert.equal(await recover.isEnabled(), true);
   page.once('dialog', dialog => dialog.accept());
   await recover.click();
-  await page.waitForFunction(() => document.querySelector('.github-issue-task-status').textContent === 'Task queued (recovered-17).');
+  if (fulfilled) {
+    const status = page.locator('.github-issue-task-status');
+    const link = status.getByRole('link', { name: 'Verified existing pull request' });
+    await link.click({ trial: true });
+    assert.equal(await status.textContent(), 'Verified existing pull request');
+    assert.equal(await link.getAttribute('href'), 'https://github.com/acme/repo/pull/42');
+  } else {
+    await page.waitForFunction(() => document.querySelector('.github-issue-task-status').textContent === 'Task queued (recovered-17).');
+  }
   assert.deepEqual(retries, [
     { repository: 'acme/repo', number: 17, expectedClaimId: 'claim-2', confirmStopped: true },
     { repository: 'acme/repo', number: 17, expectedClaimId: 'claim-3', confirmStopped: true },

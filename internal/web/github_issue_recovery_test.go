@@ -96,7 +96,7 @@ func completeRecoveryRecord(t *testing.T, s Server, outcome string, attempts int
 const recoveryPRTitle = "Manually opened PR"
 
 func recoveryPR(state, merged, head, base string) string {
-	return `[{"number":42,"title":"` + recoveryPRTitle + `","state":"` + state + `","merged_at":` + merged + `,"head":{"ref":"` + head + `","repo":{"full_name":"acme/repo"}},"base":{"ref":"` + base + `","repo":{"full_name":"acme/repo"}}}]`
+	return `[{"number":42,"title":"` + recoveryPRTitle + `","state":"` + state + `","merged_at":` + merged + `,"head":{"ref":"` + head + `","sha":"existing-commits","repo":{"full_name":"acme/repo"}},"base":{"ref":"` + base + `","repo":{"full_name":"acme/repo"}}}]`
 }
 
 func TestExplicitIssueRecoveryUsesPersistentOwner(t *testing.T) {
@@ -319,12 +319,56 @@ func TestIssueRecoveryFinalizesCompletedAttemptAfterOwnerRestored(t *testing.T) 
 	}
 }
 
+func initRecoveryCheckout(t *testing.T, workspace, branch string) (func(...string) string, string) {
+	t.Helper()
+	dir := filepath.Join(workspace, "repo")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) string {
+		t.Helper()
+		res, err := (execx.OSRunner{}).Run(t.Context(), execx.Command{Dir: dir, Name: "git", Args: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(res.Stdout)
+	}
+	git("init", "-b", branch)
+	git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--no-gpg-sign", "--allow-empty", "-m", "recovered work")
+	return git, git("rev-parse", "HEAD")
+}
+
+func TestInterruptedIssueRecoveryBlocksUnpublishedWork(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(t.Context())
+	record := completeRecoveryRecord(t, s, "", 1)
+	record.StoppedAt = time.Time{}
+	record.WorkspaceDir = t.TempDir()
+	branch := record.Run.GitHubIssue.Claim.Branch
+	git, _ := initRecoveryCheckout(t, record.WorkspaceDir, branch)
+	git("branch", "-m", "renamed")
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	f.prs = recoveryPR("open", "null", branch, "main")
+	if err := s.ReconcileIssueWork(t.Context()); !errors.Is(err, app.ErrIssueBranchRecovery) {
+		t.Fatalf("reconcile unpublished work: %v", err)
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.State != "blocked" || got.Incident != localruntime.IssueIncidentBranchRecovery || got.PRURL != "" || len(f.submissions) != 1 {
+		t.Fatalf("state=%s incident=%s pr=%q submissions=%d", got.State, got.Incident, got.PRURL, len(f.submissions))
+	}
+}
+
 func TestIssueRecoveryFinalizesInterruptedAttemptAfterOwnerRestored(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s, f := recoveryServer(t)
 	s.pollGitHubIssueAutoStart(ctx)
 	record := completeRecoveryRecord(t, s, "completed", 1)
+	record.WorkspaceDir = t.TempDir()
+	_, head := initRecoveryCheckout(t, record.WorkspaceDir, record.Run.GitHubIssue.Claim.Branch)
 	record.StoppedAt = time.Time{}
 	record.Outcome = ""
 	if err := s.IssueClaims.Save(record); err != nil {
@@ -369,6 +413,13 @@ func TestIssueRecoveryFinalizesInterruptedAttemptAfterOwnerRestored(t *testing.T
 	}
 
 	f.prs = recoveryPR("open", "null", "agent00-issue-17", "main")
+	f.prs = strings.Replace(f.prs, "existing-commits", head, 1)
+	s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		if strings.HasSuffix(cmd.Args[len(cmd.Args)-1], "/git/ref/heads/agent00-issue-17") {
+			return execx.Result{Stdout: `{"object":{"sha":"` + head + `"}}`}, nil
+		}
+		return f.Run(ctx, cmd)
+	})
 	if err := s.ReconcileIssueWork(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -455,6 +506,7 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 		{"open draft allowed", "open", "null", "agent00-issue-17", "main", true},
 		{"merged", "closed", `"2026-01-01T00:00:00Z"`, "agent00-issue-17", "main", true},
 		{"closed unmerged", "closed", "null", "agent00-issue-17", "main", false},
+		{"closed after retarget", "closed", "null", "agent00-issue-17", "other", false},
 		{"wrong head", "open", "null", "other", "main", false},
 		{"wrong base", "open", "null", "agent00-issue-17", "other", false},
 	} {
@@ -464,6 +516,12 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 			record := completeRecoveryRecord(t, s, "error", 1)
 			s.Broker.IngestLog("task status=error request_id=" + record.RequestID)
 			f.prs = recoveryPR(tc.state, tc.merged, tc.head, tc.base)
+			s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+				if tc.base != "main" && strings.Contains(strings.Join(cmd.Args, " "), "/pulls?base=main&") {
+					return execx.Result{Stdout: `[]`}, nil
+				}
+				return f.Run(ctx, cmd)
+			})
 			if err := s.ReconcileIssueWork(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -485,6 +543,28 @@ func TestIssueRecoveryVerifiesPRDespiteFailure(t *testing.T) {
 				}
 			} else if task.PRURL != "" || task.PRTitle != "" {
 				t.Fatalf("unverified PR published to task: (%q, %q)", task.PRURL, task.PRTitle)
+			}
+			if tc.state == "closed" && tc.merged == "null" {
+				response := retryIssue(t, s, record.ID, true)
+				if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "reopen the existing pull request") || len(f.submissions) != 1 {
+					t.Fatalf("closed PR retry: status=%d body=%s submissions=%d", response.Code, response.Body.String(), len(f.submissions))
+				}
+				expireIssueRetry(t, s, record.ID)
+				if err := s.ReconcileIssueWork(t.Context()); !errors.Is(err, app.ErrIssueBranchRecovery) {
+					t.Fatalf("automatic retry with closed PR: %v", err)
+				}
+				if blocked := latestRecoveryRecord(t, s); blocked.ID != record.ID || blocked.State != "blocked" ||
+					!blocked.NextAttemptAt.IsZero() || len(f.submissions) != 1 {
+					t.Fatalf("closed PR did not stop retries: state=%s next attempt=%v submissions=%d", blocked.State, blocked.NextAttemptAt, len(f.submissions))
+				}
+				if tc.base != "main" {
+					f.prs = recoveryPR("open", "null", tc.head, tc.base)
+					response := retryIssue(t, s, record.ID, true)
+					if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "retarget the existing pull request") ||
+						len(f.submissions) != 1 {
+						t.Fatalf("PR reopened on wrong base: status=%d body=%s submissions=%d", response.Code, response.Body.String(), len(f.submissions))
+					}
+				}
 			}
 		})
 	}
@@ -968,7 +1048,7 @@ func TestIssueRecoveryBoundsFailuresBeforeAgentStarts(t *testing.T) {
 	s.pollGitHubIssueAutoStart(context.Background())
 	record := completeRecoveryRecord(t, s, "error", 0)
 	record.PriorRunFailures = 2
-	record.RunError = "workflow: reserved issue branch cannot be renamed; explicit recovery is required"
+	record.RunError = "workflow: write access check failed"
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
@@ -987,6 +1067,219 @@ func TestIssueRecoveryBoundsFailuresBeforeAgentStarts(t *testing.T) {
 	}
 	if next := latestRecoveryRecord(t, s); next.PriorRunFailures != 0 || len(f.submissions) != 2 {
 		t.Fatal("explicit recovery did not reset the workflow budget")
+	}
+}
+
+func TestIssueRecoveryBlocksReservedBranchConflictsAcrossRestart(t *testing.T) {
+	// Run real Git subprocesses before parallel lock tests. Forked children
+	// can briefly inherit worker-lock descriptors before exec.
+	for _, name := range []string{"legacy rename rejection", "checkout conflict", "missing remote ref"} {
+		t.Run(name, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			s.pollGitHubIssueAutoStart(context.Background())
+			record := completeRecoveryRecord(t, s, "error", 0)
+			record.State = "retry_wait"
+			record.NextAttemptAt = time.Now().Add(-time.Minute)
+			switch name {
+			case "legacy rename rejection":
+				record.RunError = "workflow: reserved issue branch cannot be renamed; explicit recovery is required"
+				record.NextAttemptAt = time.Now().Add(time.Hour)
+				// Legacy conflicts must stop even if a matching PR is open.
+				f.prs = recoveryPR("open", "null", record.Run.GitHubIssue.Claim.Branch, "main")
+				record.WorkspaceDir = t.TempDir()
+			case "checkout conflict":
+				record.Incident = localruntime.IssueIncidentBranchRecovery
+				record.RunError = "git: reserved issue branch recovery required: preserve work at the current HEAD, then use Recover / retry"
+			case "missing remote ref":
+				// Development links can still report the old reserved branch.
+				s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+					if strings.Contains(strings.Join(cmd.Args, " "), "/git/matching-refs/heads/") {
+						return execx.Result{Stdout: `[{"ref":"refs/heads/agent00-issue-170"}]`}, nil
+					}
+					return f.Run(ctx, cmd)
+				})
+			}
+			if err := s.IssueClaims.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			err := s.ReconcileIssueWork(context.Background())
+			if err != nil && !errors.Is(err, app.ErrIssueBranchRecovery) {
+				t.Fatal(err)
+			}
+			got := latestRecoveryRecord(t, s)
+			if got.ID != record.ID || got.State != "blocked" || got.Incident != localruntime.IssueIncidentBranchRecovery ||
+				got.UnlockPending || !got.NextAttemptAt.IsZero() || got.RunError != record.RunError ||
+				!strings.Contains(got.Error, "Recover / retry") || len(f.submissions) != 1 {
+				t.Fatalf("branch conflict was not blocked on the same attempt: %+v, submissions=%d", got, len(f.submissions))
+			}
+			restarted := NewServer("", NewBroker())
+			restarted.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+			restarted.IssueRecovery = s.IssueRecovery
+			restarted.GitHubIssueRunner = s.GitHubIssueRunner
+			restarted.SubmitLocalPrompt = s.SubmitLocalPrompt
+			restarted.ReviewSettingsStatus = s.ReviewSettingsStatus
+			s = restarted
+			calls := f.calls
+			for range 3 {
+				if err := s.ReconcileIssueWork(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if f.calls != calls || len(f.submissions) != 1 {
+				t.Fatalf("blocked attempt polled or dispatched after restart: calls=%d, submissions=%d", f.calls-calls, len(f.submissions))
+			}
+			if name == "legacy rename rejection" {
+				branch := got.Run.GitHubIssue.Claim.Branch
+				git, head := initRecoveryCheckout(t, got.WorkspaceDir, branch)
+				dir := filepath.Join(got.WorkspaceDir, "repo")
+				assertBlocked := func(want string) {
+					t.Helper()
+					response := retryIssue(t, s, got.ID, true)
+					current := latestRecoveryRecord(t, s)
+					if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), want) ||
+						current.ID != got.ID || current.State != "blocked" || current.PRURL != "" || len(f.submissions) != 1 {
+						t.Fatalf("retry status=%d body=%s state=%s PR=%q submissions=%d", response.Code, response.Body.String(), current.State, current.PRURL, len(f.submissions))
+					}
+				}
+				f.prs = `[]`
+				git("branch", "-m", "renamed")
+				git("branch", branch)
+				assertBlocked("in the saved workspace")
+				if got := git("branch", "--show-current"); got != "renamed" {
+					t.Fatalf("recovery changed the checked-out branch to %q", got)
+				}
+				git("switch", branch)
+				f.prs = recoveryPR("closed", "null", branch, "main")
+				assertBlocked("reopen the existing pull request")
+				f.prs = recoveryPR("open", "null", branch, "main")
+				assertBlocked("publish them on")
+				f.prs = strings.Replace(f.prs, `"sha":"existing-commits"`, `"sha":"`+head+`"`, 1)
+				assertBlocked("publish them on") // The remote reserved ref still points elsewhere.
+				s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+					if strings.HasSuffix(cmd.Args[len(cmd.Args)-1], "/git/ref/heads/"+branch) {
+						return execx.Result{Stdout: `{"object":{"sha":"` + head + `"}}`}, nil
+					}
+					return f.Run(ctx, cmd)
+				})
+				pending := filepath.Join(dir, "pending.txt")
+				if err := os.WriteFile(pending, []byte("unpublished work"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				assertBlocked("publish them on")
+				if err := os.Remove(pending); err != nil {
+					t.Fatal(err)
+				}
+				if response := retryIssue(t, s, got.ID, true); response.Code != http.StatusOK ||
+					!strings.Contains(response.Body.String(), `"prUrl":"https://github.com/acme/repo/pull/42"`) ||
+					strings.Contains(response.Body.String(), "request_id") {
+					t.Fatalf("retry after reopening PR: status=%d, body=%s", response.Code, response.Body.String())
+				}
+				if verified := latestRecoveryRecord(t, s); verified.ID != got.ID || verified.State != "fulfilled" ||
+					verified.PRURL == "" || len(f.submissions) != 1 {
+					t.Fatalf("reopened PR did not fulfill the same attempt: %+v, submissions=%d", verified, len(f.submissions))
+				}
+				return
+			}
+			if name == "missing remote ref" {
+				if response := retryIssue(t, s, got.ID, true); response.Code != http.StatusConflict {
+					t.Fatalf("retry while ref is missing: status=%d, body=%s", response.Code, response.Body.String())
+				}
+				s.GitHubIssueRunner = f
+			}
+			if response := retryIssue(t, s, got.ID, true); response.Code != http.StatusAccepted || len(f.submissions) != 2 {
+				t.Fatalf("explicit retry: status=%d, body=%s, submissions=%d", response.Code, response.Body.String(), len(f.submissions))
+			}
+		})
+	}
+}
+
+func TestIssueRecoveryVerifiesReopenedPRBeforeCheckout(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(t.Context())
+	record := completeRecoveryRecord(t, s, "error", 0)
+	record.Incident = localruntime.IssueIncidentBranchRecovery
+	record.ExitCode = app.ExitClone
+	record.WorkspaceDir = t.TempDir()
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	branch := record.Run.GitHubIssue.Claim.Branch
+	f.prs = recoveryPR("closed", "null", branch, "main")
+	if response := retryIssue(t, s, record.ID, true); response.Code != http.StatusConflict ||
+		!strings.Contains(response.Body.String(), "reopen the existing pull request") {
+		t.Fatalf("closed PR: status=%d body=%s", response.Code, response.Body.String())
+	}
+	f.prs = recoveryPR("open", "null", branch, "main")
+	openPR := f.prs
+	f.prs = strings.Replace(openPR, "existing-commits", "different-commits", 1)
+	if response := retryIssue(t, s, record.ID, true); response.Code != http.StatusConflict ||
+		!strings.Contains(response.Body.String(), "reconcile the remote ref") {
+		t.Fatalf("PR head mismatch: status=%d body=%s", response.Code, response.Body.String())
+	}
+	f.prs = openPR
+	if response := retryIssue(t, s, record.ID, true); response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), `"prUrl":"https://github.com/acme/repo/pull/42"`) {
+		t.Fatalf("reopened PR: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := latestRecoveryRecord(t, s); got.ID != record.ID || got.State != "fulfilled" || len(f.submissions) != 1 {
+		t.Fatalf("expected original attempt fulfilled: claim=%s state=%s submissions=%d", got.ID, got.State, len(f.submissions))
+	}
+}
+
+func TestIssueRecoveryCleansUpLabelWhenAdmissionIsBlocked(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"missing ref during admission", "missing ref after restart", "closed PR after restart"} {
+		restart := strings.HasSuffix(name, "after restart")
+		t.Run(name, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			ctx := t.Context()
+			var interrupted localruntime.IssueClaimRecord
+			s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+				res, err := f.Run(ctx, cmd)
+				if err == nil && strings.Contains(strings.Join(cmd.Args, " "), "--method POST repos/acme/repo/issues/17/labels") {
+					if name == "closed PR after restart" {
+						f.prs = recoveryPR("closed", "null", "agent00-issue-17", "other")
+					} else {
+						f.branch = false
+					}
+					if restart {
+						interrupted = latestRecoveryRecord(t, s)
+						return execx.Result{}, context.Canceled
+					}
+				}
+				return res, err
+			})
+			s.pollGitHubIssueAutoStart(ctx)
+			record := latestRecoveryRecord(t, s)
+			if restart {
+				// Restore the receipt an abrupt restart would find on disk.
+				if err := s.IssueClaims.Save(interrupted); err != nil {
+					t.Fatal(err)
+				}
+				s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+				if err := s.ReconcileIssueWork(ctx); !errors.Is(err, app.ErrIssueBranchRecovery) {
+					t.Fatalf("reconcile missing ref: %v", err)
+				}
+			}
+			blocked := latestRecoveryRecord(t, s)
+			if blocked.State != "blocked" || !blocked.UnlockPending || !blocked.LabelAdded || len(f.submissions) != 0 {
+				t.Fatalf("missing ref did not block dispatch and schedule cleanup: state=%s unlock=%t label=%t submissions=%d",
+					blocked.State, blocked.UnlockPending, blocked.LabelAdded, len(f.submissions))
+			}
+			for range 2 {
+				if err := s.ReconcileIssueWork(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cleaned := latestRecoveryRecord(t, s)
+			if cleaned.ID != record.ID || cleaned.State != "blocked" || cleaned.UnlockPending || cleaned.LabelAdded ||
+				!cleaned.NextAttemptAt.IsZero() || f.deletes != 1 || len(f.submissions) != 0 ||
+				githubIssueHasAnyLabel(f.issue, []string{record.Run.GitHubIssue.Claim.ExclusionLabel}) {
+				t.Fatalf("blocked claim did not clean up its label: state=%s unlock=%t label=%t deletes=%d submissions=%d",
+					cleaned.State, cleaned.UnlockPending, cleaned.LabelAdded, f.deletes, len(f.submissions))
+			}
+		})
 	}
 }
 
