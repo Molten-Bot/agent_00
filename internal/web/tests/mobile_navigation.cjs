@@ -2,6 +2,7 @@
 // Requires Playwright/Chromium. All APIs use fixtures; no tasks or settings are changed.
 const { before, after, test } = require('node:test');
 const assert = require('node:assert/strict');
+const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const baseURL = process.env.HARNESS_TEST_URL || 'http://127.0.0.1:7777';
@@ -294,6 +295,29 @@ test('task card distinguishes the titled pull request from the merged pull reque
   await result.locator('.task-result-link').waitFor();
   assert.equal(await result.locator('.task-result-title').textContent(), 'PR Merged');
   assert.equal(await result.locator('.task-result-link').getAttribute('href'), trackedURL);
+});
+
+test('open task output updates when review gate and receipt arrive after completion', async t => {
+  const task = {
+    request_id: 'review-task', prompt: 'Review changes', repo: 'example/project',
+    status: 'completed', updated_at: new Date().toISOString(),
+    pr_url: 'https://github.com/example/project/pull/12',
+  };
+  const { page } = await openPage(t, 'current-work', { width: 1280, height: 900 }, false, [task]);
+  await page.locator('#task-history-toggle').click();
+  await page.locator('#task-list .task-output-toggle').click();
+  const result = page.locator('#task-fullscreen-result');
+  await result.getByText('Task Success').waitFor();
+
+  const update = fields => page.evaluate(task => {
+    queueStreamSnapshot(JSON.stringify({ ...state.snapshot, tasks: [task] }));
+  }, { ...task, ...fields });
+  const reviewGate = 'Waiting for a submitted clean review on the current pull request head.';
+  await update({ review_gate: reviewGate });
+  await result.getByText(reviewGate).waitFor();
+  const reviewURL = task.pr_url + '#pullrequestreview-42';
+  await update({ review_gate: reviewGate, review_url: reviewURL });
+  assert.equal(await result.getByRole('link', { name: 'Submitted review' }).getAttribute('href'), reviewURL);
 });
 
 test('workflow-triggered tasks start with the Workflow icon and keep their task steps', async t => {
@@ -716,7 +740,7 @@ for (const viewport of [{width:1440,height:1000},{width:1024,height:768}]) {
   const after=await geometry();assert.ok(Math.abs(after.height-before.height)<2,JSON.stringify({before,after}));assert.equal(after.scrolls,true);
   await page.setViewportSize({width:viewport.width,height:viewport.height+160});
   await page.waitForFunction(h=>document.getElementById('builder-prompt-input').getBoundingClientRect().height>h+140,before.height);
-  if(viewport.width===1440)await page.screenshot({path:'/tmp/agent00-prompt-fill.png',fullPage:true});
+  if(viewport.width===1440)await page.screenshot({path:path.join(tmpdir(),'agent00-prompt-fill.png'),fullPage:true});
  });
 }
 
@@ -740,6 +764,6 @@ for (const viewport of [{width:1440,height:1000},{width:1024,height:768}]) {
   await page.setViewportSize({width:viewport.width,height:viewport.height+160});
   await page.waitForFunction(h=>document.getElementById('library-task-list').getBoundingClientRect().height>h+140,before.height);
   assert.ok((await geometry()).gap<=16);
-  if(viewport.width===1440)await page.screenshot({path:'/tmp/agent00-library-layout-fixed.png',fullPage:true});
+  if(viewport.width===1440)await page.screenshot({path:path.join(tmpdir(),'agent00-library-layout-fixed.png'),fullPage:true});
  });
 }

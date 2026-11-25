@@ -266,6 +266,79 @@ func TestEngineMergeGatesAndReviewFindings(t *testing.T) {
 		})
 	}
 }
+
+func TestEngineReconcilesLateReviewReceipt(t *testing.T) {
+	t.Parallel()
+	w := definition("review")
+	w.Trigger = Trigger{Event: "pr.labeled", Value: "review"}
+	w.Task.Kind = "review"
+	w.Merge.Enabled, w.IncludeBacklog = true, true
+	e, items, submitted := testEngine(t, w)
+	pr := Item{
+		Number: 1, Repository: w.Repository, Kind: "pr", Open: true, Labels: []string{"review"},
+		URL: "https://github.com/acme/repo/pull/1", HeadSHA: "old", ChecksPassed: true, HumanApproved: true,
+	}
+	*items = []Item{pr}
+	inspections, merges := 0, 0
+	e.InspectPR = func(context.Context, string, string) (Item, error) {
+		inspections++
+		return pr, nil
+	}
+	e.Merge = func(_ context.Context, r Run) error {
+		if r.MergeHead != pr.HeadSHA {
+			t.Fatalf("merge head = %q, want %q", r.MergeHead, pr.HeadSHA)
+		}
+		merges++
+		pr.Open, pr.Merged = false, true
+		return nil
+	}
+	tick(t, e)
+	runs, err := e.Runs()
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("initial runs = %+v, error = %v", runs, err)
+	}
+	id := runs[0].ID
+	outcome := Outcome{Status: "succeeded", PRURL: pr.URL}
+	if err := e.Complete(id, outcome); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, e)
+	runs, err = e.Runs()
+	if err != nil || len(runs) != 1 || runs[0].ID != id || runs[0].MergeHead != "" || inspections != 1 || merges != 0 {
+		t.Fatalf("awaiting review: runs = %+v, inspections = %d, merges = %d, error = %v", runs, inspections, merges, err)
+	}
+
+	// A fresh trigger must still dispatch while the earlier activation waits.
+	(*items)[0].Labels = nil
+	tick(t, e)
+	(*items)[0].Labels = []string{"review"}
+	tick(t, e)
+	if *submitted != 2 {
+		t.Fatalf("submissions = %d, want 2", *submitted)
+	}
+
+	pr.HeadSHA = "new"
+	outcome.ReviewReceipt = fixtureReviewReceipt(w, pr.URL)
+	if err := e.Complete(id, outcome); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, e)
+	if merges != 0 {
+		t.Fatal("merged with a stale receipt")
+	}
+	freshReceipt := *outcome.ReviewReceipt
+	freshReceipt.Head = pr.HeadSHA
+	outcome.ReviewReceipt = &freshReceipt
+	if err := e.Complete(id, outcome); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, e)
+	tick(t, e)
+	if merges != 1 {
+		t.Fatalf("merges = %d, want 1", merges)
+	}
+}
+
 func TestUncertainSubmissionNeverAutomaticallyRetries(t *testing.T) {
 	t.Parallel()
 	w := definition("one")
@@ -481,6 +554,9 @@ func TestImplementationMergeRequiresPersistedReceiptOnCurrentHead(t *testing.T) 
 					return reply(`{"check_runs":[]}`)
 				case strings.Contains(args, "/reviews?"):
 					receipt := o.ReviewReceipt
+					if receipt == nil {
+						return reply("[]")
+					}
 					reviews := []githubutil.SubmittedReview{{
 						ID: receipt.ReviewID, Head: receipt.Head, URL: receipt.URL, State: "COMMENTED", SubmittedAt: "2026-11-25T12:00:00Z",
 						Body: receipt.Marker + "\n" + githubutil.CleanReviewVerdict + "\nNo material issues found.",

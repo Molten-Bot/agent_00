@@ -205,6 +205,8 @@ var ErrIssueAdmissionPending = errors.New("waiting for issue claim recovery")
 
 var ErrActivationNotFound = errors.New("workflow activation not found")
 
+const awaitingReview = "awaiting_review"
+
 func (e *Engine) load() (State, error) {
 	s := State{Version: 2, Observations: map[string]observation{}, Baselines: map[string]bool{}, Runs: []Run{}}
 	b, err := os.ReadFile(e.StatePath)
@@ -519,7 +521,7 @@ func (s *State) run(id string) *Run {
 
 func (s *State) busy(item Item) bool {
 	for _, run := range s.Runs {
-		if !terminal(run.Status) && strings.EqualFold(run.Item.Repository, item.Repository) && run.Item.Number == item.Number {
+		if run.Status != awaitingReview && !terminal(run.Status) && strings.EqualFold(run.Item.Repository, item.Repository) && run.Item.Number == item.Number {
 			return true
 		}
 	}
@@ -667,37 +669,40 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			}
 		}
 	}
-	if r.Status == "waiting" && (!exists || !w.Merge.Enabled) {
+	waiting := r.Status == "waiting" || r.Status == awaitingReview
+	if waiting && (!exists || !w.Merge.Enabled) {
 		r.Status = "succeeded"
 		r.Reason = "Automatic merge disabled in current definition"
+		waiting = false
 	}
-	if r.Status == "waiting" && !active {
+	if waiting && !active {
 		r.Reason = "Merge paused: workflow feature, workflow, or repository is disabled"
 	}
-	appID, policyErr := githubutil.RequiredReviewCheckApp(r.Item.Repository)
-	if r.Status == "waiting" && active && policyErr != nil {
-		r.Reason = policyErr.Error()
-		return finish()
-	}
-	reviewRequired := r.requiresReview() || appID > 0
-	if r.Status == "waiting" && active && reviewRequired {
-		if receipt := r.cleanReviewReceipt(r.Outcome); receipt != nil {
-			r.MergeHead = receipt.Head
-		} else {
-			// A completed task cannot publish more evidence. Release the
-			// entity so a new review activation can satisfy the pending gate.
-			r.Status = "completed"
-			r.Reason = "Waiting for a submitted clean review on the current pull request head"
-			r.UpdatedAt = e.now()
+	if waiting && active {
+		appID, policyErr := githubutil.RequiredReviewCheckApp(r.Item.Repository)
+		if policyErr != nil {
+			r.Reason = policyErr.Error()
 			return finish()
 		}
-	}
-	if r.Status == "waiting" && active {
+		reviewRequired := r.requiresReview() || appID > 0
 		i, inspectErr := e.InspectPR(ctx, r.Item.Repository, r.PRURL)
 		if inspectErr != nil {
 			return errors.Join(inspectErr, finish())
 		}
-		if r.MergeHead == "" && i.HeadSHA != "" {
+		if i.Open && reviewRequired {
+			receipt := r.cleanReviewReceipt(r.Outcome)
+			if receipt == nil {
+				// Retain the activation for late evidence without reserving the
+				// entity against fresh review work.
+				r.Status = awaitingReview
+				r.Reason = "Waiting for a submitted clean review on the current pull request head"
+				r.UpdatedAt = e.now()
+				return finish()
+			}
+			r.MergeHead = receipt.Head
+		}
+		r.Status = "waiting"
+		if !reviewRequired && r.MergeHead == "" && i.HeadSHA != "" {
 			r.MergeHead = i.HeadSHA
 		}
 		if err := commit(); err != nil {
@@ -716,7 +721,7 @@ func (e *Engine) reconcileRun(ctx context.Context, original Run, w Definition, e
 			r.Status = "completed"
 			r.Reason = "Pull request closed"
 		} else if reviewRequired && i.HeadSHA != "" && i.HeadSHA != r.MergeHead {
-			r.Status = "failed"
+			r.Status = awaitingReview
 			r.Reason = "Head changed after merge eligibility; a new review is required"
 		} else if i.Draft {
 			r.Reason = "Waiting for pull request to leave draft"
@@ -761,7 +766,7 @@ func (r Run) requiresReview() bool {
 }
 
 func (r Run) cleanReviewReceipt(outcome *Outcome) *githubutil.ReviewReceipt {
-	if outcome == nil || outcome.ReviewInterrupted || outcome.ReviewReceipt == nil {
+	if outcome == nil || outcome.Status != "succeeded" || outcome.ReviewInterrupted || outcome.ReviewReceipt == nil {
 		return nil
 	}
 	receipt := outcome.ReviewReceipt

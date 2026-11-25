@@ -31,14 +31,22 @@ func TestOlderWorkflowJournalDoesNotTreatCleanFlagAsReceipt(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), `"reviewClean": true`) {
 		t.Fatalf("legacy evidence missing from fixture: %v", err)
 	}
-	e.InspectPR = func(context.Context, string, string) (Item, error) {
+	pr := Item{Open: true, HeadSHA: "abc", ChecksPassed: true, HumanApproved: true}
+	e.InspectPR = func(context.Context, string, string) (Item, error) { return pr, nil }
+	e.Merge = func(context.Context, Run) error {
 		t.Fatal("legacy review flag authorized merge eligibility")
-		return Item{}, nil
+		return nil
 	}
 	tick(t, e)
 	runs, err := e.Runs()
+	if err != nil || len(runs) != 1 || runs[0].Status != awaitingReview || runs[0].MergeHead != "" {
+		t.Fatalf("legacy run did not wait for a receipt: %+v, %v", runs, err)
+	}
+	pr.Open = false
+	tick(t, e)
+	runs, err = e.Runs()
 	if err != nil || len(runs) != 0 {
-		t.Fatalf("legacy run was not retired: %+v, %v", runs, err)
+		t.Fatalf("closed pull request run was not retired: %+v, %v", runs, err)
 	}
 }
 
