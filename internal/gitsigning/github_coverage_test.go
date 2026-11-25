@@ -41,7 +41,7 @@ func TestGetDefaultsBaseURLWithoutRealNetwork(t *testing.T) {
 	// fine here since we only care that the request targeted the default
 	// host without touching the network. A dedicated test below exercises
 	// the malformed-body branch with a real body.
-	_ = g.get(context.Background(), "/user", &dst)
+	_ = g.get(context.Background(), "GitHub identity", "/user", &dst)
 	if !strings.HasPrefix(capturedURL, "https://api.github.com/user") {
 		t.Fatalf("get() with empty BaseURL used URL %q, want it to target the default GitHub API host", capturedURL)
 	}
@@ -53,7 +53,7 @@ func TestGetDefaultsBaseURLWithoutRealNetwork(t *testing.T) {
 func TestGetWrapsRequestConstructionError(t *testing.T) {
 	t.Parallel()
 	g := GitHub{BaseURL: "https://example.invalid"}
-	err := g.get(context.Background(), "/bad\npath", &struct{}{})
+	err := g.get(context.Background(), "GitHub identity", "/bad\npath", &struct{}{})
 	if !errors.Is(err, ErrSetup) || !strings.Contains(err.Error(), "cannot prepare GitHub request") {
 		t.Fatalf("get(invalid path) error = %v, want cannot prepare GitHub request error", err)
 	}
@@ -76,7 +76,7 @@ func TestGetUsesDefaultClientAndOmitsAuthHeaderWhenTokenEmpty(t *testing.T) {
 	var dst struct {
 		Login string `json:"login"`
 	}
-	if err := g.get(context.Background(), "/user", &dst); err != nil {
+	if err := g.get(context.Background(), "GitHub identity", "/user", &dst); err != nil {
 		t.Fatalf("get() with nil Client error = %v", err)
 	}
 	if dst.Login != "test-bot" {
@@ -93,7 +93,7 @@ func TestGetWrapsTransportError(t *testing.T) {
 		return nil, errors.New("simulated dial failure: should not leak")
 	})}
 	g := GitHub{Client: client, BaseURL: "https://example.invalid"}
-	err := g.get(context.Background(), "/user", &struct{}{})
+	err := g.get(context.Background(), "GitHub identity", "/user", &struct{}{})
 	if !errors.Is(err, ErrSetup) || !strings.Contains(err.Error(), "GitHub is unavailable; try again") {
 		t.Fatalf("get(transport error) error = %v, want GitHub unavailable error", err)
 	}
@@ -112,7 +112,7 @@ func TestGetWrapsMalformedJSONResponse(t *testing.T) {
 	}))
 	defer server.Close()
 	g := GitHub{Client: server.Client(), BaseURL: server.URL}
-	err := g.get(context.Background(), "/user", &struct{}{})
+	err := g.get(context.Background(), "GitHub identity", "/user", &struct{}{})
 	if !errors.Is(err, ErrSetup) || !strings.Contains(err.Error(), "invalid GitHub response") {
 		t.Fatalf("get(malformed JSON) error = %v, want invalid GitHub response error", err)
 	}

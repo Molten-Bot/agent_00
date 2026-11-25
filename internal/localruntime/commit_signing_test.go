@@ -488,3 +488,65 @@ func TestSigningSettingsMissingKeyFailsClosed(t *testing.T) {
 		t.Fatalf("enabled missing config accepted: %v", err)
 	}
 }
+
+func TestSigningQuotaHoldRecoversWithSavedKey(t *testing.T) {
+	t.Parallel()
+	raw, public := signingTestKeyPair(t)
+	var limited atomic.Bool
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path == "/user" {
+			json.NewEncoder(w).Encode(map[string]any{"login": "test-bot", "id": 123})
+			return
+		}
+		if limited.Load() {
+			w.Header().Set("Retry-After", "120")
+			w.WriteHeader(429)
+			return
+		}
+		json.NewEncoder(w).Encode([]map[string]string{{"key": public}})
+	}))
+	defer server.Close()
+	now := time.Now()
+	store := SigningSettings{Path: filepath.Join(t.TempDir(), "config.json"), Runner: signingTestRunner{}, Now: func() time.Time { return now }, GitHub: func() gitsigning.GitHub { return gitsigning.GitHub{BaseURL: server.URL, Client: server.Client()} }}
+	ctx := t.Context()
+	if _, err := store.Configure(ctx, CommitSigningRequest{Enabled: true, PrivateKey: raw, Passphrase: "test-passphrase"}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	limited.Store(true)
+	if err := store.SubmissionRequirement(ctx); !errors.Is(err, ErrSigningSetupRequired) {
+		t.Fatalf("missing hold: %v", err)
+	}
+	state := store.ApplySetupRequirement(signingState(before))
+	if !state.SetupRequired || state.Registration != "pending" || !strings.Contains(state.Message, "signing key registration verification pending") {
+		t.Fatalf("unexpected state: %+v", state)
+	}
+	count := calls.Load()
+	now = now.Add(time.Minute)
+	if err := store.SubmissionRequirement(ctx); err == nil {
+		t.Fatal("submission accepted during cooldown")
+	}
+	if snapshot, err := store.ValidatedSnapshot(ctx); snapshot != nil || err == nil {
+		t.Fatal("held task received signing material")
+	}
+	if _, err := store.Verify(ctx); err == nil {
+		t.Fatal("verification succeeded during cooldown")
+	}
+	if calls.Load() != count {
+		t.Fatal("GitHub contacted before retry deadline")
+	}
+	limited.Store(false)
+	now = now.Add(time.Minute)
+	if err := store.SubmissionRequirement(ctx); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.ValidatedSnapshot(ctx)
+	if err != nil || snapshot == nil || snapshot.Config != before {
+		t.Fatalf("saved signing key did not recover: %v", err)
+	}
+}
