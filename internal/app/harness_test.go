@@ -8771,7 +8771,7 @@ func TestCheckHumanActionFailureFromStdout(t *testing.T) {
 	const details = "Error details:\nAn operator must confirm the shipment.\nThe delivery needs a replacement date.\n" +
 		"Send confirmation to the requestor.\nRecord the agreed time."
 	const displayed = "Error details: An operator must confirm the shipment. | The delivery needs a replacement date. | " +
-		"Send confirmation to the requestor. " + failurefollowup.TruncatedErrorDetails
+		"Send confirmation to the requestor." + failurefollowup.TruncatedErrorDetails
 	failure := "codex: codex reported failure: " + summary + " " + displayed
 	blocked, matched := CheckHumanActionFailureFromStdout(failure, func(stage string) string {
 		if stage != "codex" {

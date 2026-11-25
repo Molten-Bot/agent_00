@@ -1201,7 +1201,7 @@ func TestIssueRecoveryChecksPreservedHumanHandoffBeforeOverdueRetry(t *testing.T
 	const fullReport = summary + "\nError details:\nAn operator must confirm the shipment.\n" +
 		"The delivery needs a replacement date.\nSend confirmation to the requestor.\nRecord the agreed time."
 	const displayed = "Error details: An operator must confirm the shipment. | The delivery needs a replacement date. | " +
-		"Send confirmation to the requestor. " + failurefollowup.TruncatedErrorDetails
+		"Send confirmation to the requestor." + failurefollowup.TruncatedErrorDetails
 	record.RunError = "codex: codex reported failure: " + summary + " " + displayed
 	record.NextAttemptAt = time.Now().Add(-time.Minute)
 	if err := s.IssueClaims.Save(record); err != nil {
@@ -1240,7 +1240,7 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 	const prefix = "codex: codex reported failure: Failure: Production rollout remains pending. Error details: "
 	const ambiguous = prefix + "IAM setup and Secrets Manager configuration are outstanding."
 	const confirmed = prefix + "IAM setup and Secrets Manager configuration require external provisioning."
-	const truncated = confirmed + " | Service readiness still needs confirmation. | CloudWatch access is pending. | " + failurefollowup.TruncatedErrorDetails
+	const truncated = confirmed + " | Service readiness still needs confirmation. | CloudWatch access is pending." + failurefollowup.TruncatedErrorDetails
 	for _, tc := range []struct {
 		name, evidence       string
 		matchedLogs, repair  bool

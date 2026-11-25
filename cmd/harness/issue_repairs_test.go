@@ -62,7 +62,7 @@ func TestIssueRepairOutboxRechecksTruncatedHumanHandoffFromLogs(t *testing.T) {
 	issue.ExitCode = app.ExitCodex
 	issue.RunError = "codex: codex reported failure: Failure: Human action remains pending. " +
 		"Error details: An operator must confirm the shipment. | The delivery needs a replacement date. | " +
-		"Send confirmation to the requestor. " + failurefollowup.TruncatedErrorDetails
+		"Send confirmation to the requestor." + failurefollowup.TruncatedErrorDetails
 	if err := claims.Save(issue); err != nil {
 		t.Fatal(err)
 	}
