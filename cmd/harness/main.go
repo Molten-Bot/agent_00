@@ -1018,6 +1018,7 @@ func runServer(args []string) int {
 					errs = append(errs, removeErr)
 				case removed:
 					daemonLogger("task status=ok action=task_close_cleanup request_id=%s workspace_dir=%s", requestID, workspaceDir)
+					scheduler.RecheckQueue()
 				default:
 					daemonLogger("task status=warn action=skip_workspace_cleanup request_id=%s workspace_dir=%s", requestID, workspaceDir)
 				}

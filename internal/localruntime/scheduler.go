@@ -429,6 +429,13 @@ func (c *AdaptiveScheduler) sampleAndUpdate() {
 	c.sampleResources(true)
 }
 
+// RecheckQueue retries admission after workspace cleanup frees disk space.
+func (c *AdaptiveScheduler) RecheckQueue() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tryGrantLocked(0)
+}
+
 func (c *AdaptiveScheduler) sampleResources(retryDisk bool) {
 	if c == nil || c.sample == nil {
 		return
@@ -438,9 +445,7 @@ func (c *AdaptiveScheduler) sampleResources(retryDisk bool) {
 	if err != nil {
 		c.logf("scheduler status=sample_error err=%q", err)
 		if retryDisk {
-			c.mu.Lock()
-			c.tryGrantLocked(0)
-			c.mu.Unlock()
+			c.RecheckQueue()
 		}
 		return
 	}

@@ -21,6 +21,92 @@ func (f issueBranchRunner) Run(ctx context.Context, cmd execx.Command) (execx.Re
 	return f(ctx, cmd)
 }
 
+func TestReservedIssueCheckoutRecovery(t *testing.T) {
+	t.Parallel()
+	const reserved = "agent00-issue-17"
+	const renamed = "renamed"
+	for _, tc := range []struct {
+		name        string
+		prepare     []string
+		remotePR    bool
+		beforeAgent bool
+		wantBranch  string
+		wantError   string
+	}{
+		{name: "local rename after agent", wantBranch: reserved},
+		{name: "local rename on restart", beforeAgent: true, wantBranch: reserved},
+		{name: "reserved name taken", prepare: []string{"branch", reserved, "main"}, wantBranch: renamed, wantError: "reconcile it onto"},
+		{name: "branch switch", prepare: []string{"switch", "main"}, wantBranch: "main", wantError: "reconcile it onto"},
+		{name: "published rename", prepare: []string{"push", "origin", renamed}, wantBranch: renamed, wantError: "reconcile published branch"},
+		{name: "PR on renamed branch", remotePR: true, wantBranch: renamed, wantError: "reconcile the pull request"},
+		{name: "missing remote ref", prepare: []string{"push", "origin", "--delete", reserved}, wantBranch: reserved, wantError: "restore origin's"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			dir, remoteDir := t.TempDir(), t.TempDir()
+			runGit := func(dir string, args ...string) string {
+				t.Helper()
+				res, err := (execx.OSRunner{}).Run(ctx, gitCommand(dir, args...))
+				if err != nil {
+					t.Fatalf("git %v: %v", args, err)
+				}
+				return strings.TrimSpace(res.Stdout)
+			}
+			runGit(remoteDir, "init", "--bare", "-b", "main")
+			runGit(dir, "init", "-b", "main")
+			runGit(dir, "config", "user.name", "Test")
+			runGit(dir, "config", "user.email", "test@example.com")
+			file := filepath.Join(dir, "work.txt")
+			if err := os.WriteFile(file, []byte("base"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			runGit(dir, "add", "work.txt")
+			runGit(dir, "commit", "--no-gpg-sign", "-m", "base")
+			runGit(dir, "switch", "-c", reserved)
+			runGit(dir, "remote", "add", "origin", remoteDir)
+			runGit(dir, "push", "origin", "main", reserved)
+			runGit(dir, "branch", "-m", renamed)
+			runGit(dir, "commit", "--no-gpg-sign", "--allow-empty", "-m", "agent commit")
+			if len(tc.prepare) > 0 {
+				runGit(dir, tc.prepare...)
+			}
+			if err := os.WriteFile(file, []byte("pending change"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			head := runGit(dir, "rev-parse", "HEAD")
+			h := New(issueBranchRunner(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+				if cmd.Name == "gh" {
+					if tc.remotePR && slices.Contains(cmd.Args, renamed) {
+						return execx.Result{Stdout: `[{"url":"https://github.com/acme/repo/pull/42"}]`}, nil
+					}
+					return execx.Result{Stdout: "[]"}, nil
+				}
+				return (execx.OSRunner{}).Run(ctx, cmd)
+			}))
+			repo := repoWorkspace{Dir: dir, URL: "https://github.com/acme/repo", Branch: reserved, RequiredBranch: reserved,
+				IssueClaimBranch: true, RequiresNonDefaultBranch: true}
+			validate := h.validateEnforcedNonDefaultBranchAfterAgent
+			if tc.beforeAgent {
+				validate = h.validateEnforcedNonDefaultBranch
+			}
+			err := validate(ctx, repo)
+			if tc.wantError == "" && err != nil ||
+				tc.wantError != "" && (!errors.Is(err, ErrIssueBranchRecovery) || !strings.Contains(err.Error(), tc.wantError)) {
+				t.Fatalf("validation error = %v, want %q", err, tc.wantError)
+			}
+			if branch := runGit(dir, "branch", "--show-current"); branch != tc.wantBranch || runGit(dir, "rev-parse", "HEAD") != head {
+				t.Fatalf("checkout changed unexpectedly, branch = %q, want %q", branch, tc.wantBranch)
+			}
+			if status := runGit(dir, "status", "--porcelain"); status != "M work.txt" {
+				t.Fatalf("pending work lost: %q", status)
+			}
+			if tc.wantBranch == reserved && runGit(dir, "branch", "--list", renamed) != "" {
+				t.Fatal("restoration left a duplicate local branch")
+			}
+		})
+	}
+}
+
 func TestClaimedIssueRetryClonesAndFastForwardsReservedBranchBeforeAgent(t *testing.T) {
 	t.Parallel()
 	cfg := sampleConfig()

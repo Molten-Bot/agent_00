@@ -145,6 +145,9 @@ func (e *issueExecution) finish(ctx context.Context, state string, result app.Re
 		if state == "interrupted" && errors.Is(context.Cause(ctx), context.Canceled) {
 			record.Incident = "service_shutdown"
 		}
+		if errors.Is(result.Err, app.ErrIssueBranchRecovery) {
+			record.Incident = localruntime.IssueIncidentBranchRecovery
+		}
 		if journalErr != nil || ((state == "error" || state == "interrupted") &&
 			(workspace.IsDiskFull(result.Err) || errors.Is(result.Err, workspace.ErrUnsuitableStorage))) {
 			record.Incident = localruntime.IssueIncidentWorkspaceStorage

@@ -737,7 +737,7 @@
       const buttons = Array.from(actions.querySelectorAll("button"));
       const taskStatus = actions.closest(".github-issue-task-actions").querySelector(".github-issue-task-status");
       buttons.forEach((entry) => { entry.disabled = true; });
-      let queued = false;
+      let recovered = false;
       try {
         const query = new URLSearchParams({ repo: repo.full_name, number: issue.number });
         const claim = await requestJSON(`/api/github/automation/retry?${query}`, { cache: "no-store" });
@@ -748,12 +748,21 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ repository: repo.full_name, number: issue.number, expectedClaimId: claim.expectedClaimId, confirmStopped: true }),
         });
-        queued = true;
-        taskStatus.textContent = `Task queued (${body.request_id || "request accepted"}).`;
+        recovered = true;
+        if (body.prUrl) {
+          const link = document.createElement("a");
+          link.href = body.prUrl;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.textContent = "Verified existing pull request";
+          taskStatus.replaceChildren(link);
+        } else {
+          taskStatus.textContent = `Task queued (${body.request_id || "request accepted"}).`;
+        }
       } catch (error) {
         taskStatus.textContent = `Could not recover task: ${error.message || "request failed"}`;
       } finally {
-        if (!queued) buttons.forEach((entry) => { entry.disabled = false; });
+        if (!recovered) buttons.forEach((entry) => { entry.disabled = false; });
       }
     });
     actions.prepend(button);

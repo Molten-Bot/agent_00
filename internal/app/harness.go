@@ -60,6 +60,9 @@ var readOnlyReviewDisallowedTools = []string{"Edit", "Write", "NotebookEdit", "B
 // ErrWorkspaceDiskFull identifies local storage exhaustion reported by a subprocess.
 var ErrWorkspaceDiskFull = workspace.ErrDiskFull
 
+// ErrIssueBranchRecovery identifies branch conflicts that need operator action.
+var ErrIssueBranchRecovery = errors.New("reserved issue branch recovery required")
+
 const (
 	ExitSuccess   = 0
 	ExitUsage     = 2
@@ -432,7 +435,11 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		// Clone the reserved branch without fallback, preserving prior commits on
 		// explicit retry. Use the original base for diff/review/PR operations.
 		repos[0].BaseBranch = issueClaim.BaseBranch
+		repos[0].Branch = issueClaim.Branch
 		repos[0].CreateWorkBranch = true
+		if err := h.validateEnforcedNonDefaultBranch(ctx, repos[0]); err != nil {
+			return h.fail(ExitGit, "git", err, runDir)
+		}
 		if _, err := h.runCommand(ctx, "git", fetchBaseBranchCommand(repos[0].Dir, issueClaim.BaseBranch)); err != nil {
 			return h.fail(ExitGit, "git", err, runDir)
 		}
@@ -455,7 +462,6 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 	for i := range repos {
 		branch := strings.TrimSpace(repos[i].BaseBranch)
 		if issueClaim != nil {
-			repos[i].Branch = issueClaim.Branch
 			h.logf("stage=git status=ok action=issue_claim_branch branch=%s baseBranch=%s", issueClaim.Branch, issueClaim.BaseBranch)
 			continue
 		}
@@ -479,11 +485,6 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 			return h.fail(ExitGit, "git", err, runDir)
 		}
 		h.logf("stage=git status=ok action=branch branch=%s repo=%s repo_dir=%s", branch, repos[i].URL, repos[i].RelDir)
-	}
-	if issueClaim != nil {
-		if err := h.validateEnforcedNonDefaultBranches(ctx, repos); err != nil {
-			return h.fail(ExitGit, "git", err, runDir)
-		}
 	}
 	// Capture unpublished local work before preflight can import remote commits.
 	localPublicationPending := false
@@ -2187,7 +2188,8 @@ func (h Harness) renameGeneratedWorkBranch(ctx context.Context, repo *repoWorksp
 		return fmt.Errorf("repo workspace is required")
 	}
 	if repo.IssueClaimBranch {
-		return fmt.Errorf("reserved issue branch cannot be renamed; explicit recovery is required")
+		return fmt.Errorf("%w: resolve the publication conflict on %q (reopen its existing PR if closed), then use Recover / retry",
+			ErrIssueBranchRecovery, repo.Branch)
 	}
 	oldBranch := normalizeBranchRef(repo.Branch)
 	if oldBranch == "" {
@@ -3323,6 +3325,10 @@ func (h Harness) validateEnforcedNonDefaultBranchDefault(ctx context.Context, re
 }
 
 func requiredRemoteBranchError(repo repoWorkspace, requiredBranch string) error {
+	if repo.IssueClaimBranch {
+		return fmt.Errorf("%w: restore origin's %q ref to the intended issue commits, then use Recover / retry",
+			ErrIssueBranchRecovery, "refs/heads/"+requiredBranch)
+	}
 	return fmt.Errorf(
 		"library task %q requires a remote branch head; configured base branch %q does not resolve to refs/heads/%s for repo %s",
 		strings.TrimSpace(repo.RequiredBranchTask),
@@ -3367,6 +3373,9 @@ func (h Harness) validateEnforcedNonDefaultBranchCheckout(ctx context.Context, r
 		)
 	}
 	currentBranch := strings.TrimSpace(currentRes.Stdout)
+	if repo.IssueClaimBranch && currentBranch != requiredBranch {
+		return h.restoreReservedIssueCheckout(ctx, repo, currentBranch, requiredBranch)
+	}
 	if currentBranch == "" {
 		return fmt.Errorf(
 			"library task %q requires a checked-out non-default branch; configured base branch %q left HEAD detached for repo %s",
@@ -3385,6 +3394,46 @@ func (h Harness) validateEnforcedNonDefaultBranchCheckout(ctx context.Context, r
 		)
 	}
 
+	return nil
+}
+
+func (h Harness) restoreReservedIssueCheckout(ctx context.Context, repo repoWorkspace, current, reserved string) error {
+	recovery := fmt.Errorf("%w: preserve work at the current HEAD (branch %q), reconcile it onto %q in the saved workspace, then use Recover / retry",
+		ErrIssueBranchRecovery, current, reserved)
+	if current == "" {
+		return recovery
+	}
+	// The last checkout or rename must be a direct rename of the reserved
+	// branch. A branch switch, copy, or missing reflog requires inspection.
+	reflog, err := h.runCommand(ctx, "git", gitCommand(repo.Dir, "reflog", "show", "-1", "--format=%gs",
+		"--grep-reflog=^(Branch: |checkout: )", "--extended-regexp", "HEAD"))
+	if err != nil {
+		return fmt.Errorf("inspect checkout history for reserved issue branch %q: %w", reserved, err)
+	}
+	if strings.TrimSpace(reflog.Stdout) != "Branch: renamed refs/heads/"+reserved+" to refs/heads/"+current {
+		return recovery
+	}
+	remote, err := h.runCommand(ctx, "git", gitCommand(repo.Dir, "ls-remote", "--heads", "origin", "refs/heads/"+current))
+	if err != nil {
+		return fmt.Errorf("check whether renamed issue branch %q was published: %w", current, err)
+	}
+	if hasRemoteBranch(remote) {
+		return fmt.Errorf("%w; reconcile published branch %q and its pull requests before retrying", recovery, current)
+	}
+	ref, _ := parseGitHubRepoRef(repo.URL)
+	renamed := repoWorkspace{Dir: repo.Dir, URL: repo.URL, Branch: current, PRHeadRef: current, PRTargetRepo: ref.owner + "/" + ref.name}
+	prURL, err := h.lookupAnyPRURLByHead(ctx, renamed)
+	if err != nil {
+		return err
+	}
+	if prURL != "" {
+		return fmt.Errorf("%w; reconcile the pull request for %q before retrying", recovery, current)
+	}
+	// Non-forced rename leaves both refs intact if the reserved name exists.
+	if _, err := h.runCommand(ctx, "git", gitCommand(repo.Dir, "branch", "-m", "--", current, reserved)); err != nil {
+		return fmt.Errorf("%w: %v", recovery, err)
+	}
+	h.logf("stage=git status=ok action=restore_issue_branch branch=%s previous_branch=%s", reserved, current)
 	return nil
 }
 
@@ -3615,6 +3664,9 @@ func (h Harness) cloneRepository(ctx context.Context, repo *repoWorkspace, branc
 		repo.CreateWorkBranch = shouldCreateWorkBranch(branch) && !shouldReuseExistingBranch(*repo)
 		h.logf("stage=clone status=ok repo=%s repo_dir=%s", repoURL, repo.RelDir)
 		return nil
+	}
+	if repo.IssueClaimBranch && isMissingRemoteBranchCloneError(cloneErr, cloneRes) {
+		return requiredRemoteBranchError(*repo, normalizeBranchRef(repo.RequiredBranch))
 	}
 	if repo.RequiresNonDefaultBranch || repo.RequireExistingPR {
 		return fmt.Errorf(
