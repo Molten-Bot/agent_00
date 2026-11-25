@@ -123,9 +123,16 @@ func TestRunCodexClassifiesDiskFullOnNonzeroExit(t *testing.T) {
 		prompt               string
 		err                  error
 		wantDiskFull         bool
+		wantFailure          string
 	}{
 		{name: "terminal diagnostic", stderr: "ENOSPC: failed writing cache", err: underlying, wantDiskFull: true},
 		{name: "terminal failure report", stdout: "Failure: Validation failed.\nError details: copy failed: no space left on device", wantDiskFull: true},
+		{name: "split failure report", stdout: "Failure: Validation failed.", stderr: "Error details: copy failed with ENOSPC", wantDiskFull: true},
+		{name: "split failure report with bullet", stdout: "Failure: Validation failed.", stderr: "**Error details:**\n- copy failed with ENOSPC", wantDiskFull: true},
+		{name: "split details echoed from prompt", stdout: "Failure: Validation failed.", stderr: "Error details: copy failed with ENOSPC", prompt: "Error details: copy failed with ENOSPC", wantFailure: "Failure: Validation failed."},
+		{name: "later stdout failure", stdout: "Failure: ENOSPC copying cache.\nError details: copy failed with ENOSPC\nFailure: Tests failed.\nError details: assertion failed.", wantFailure: "Failure: Tests failed. Error details: assertion failed."},
+		{name: "later compact stderr failure", stderr: "Failure: ENOSPC copying cache.\nError details: copy failed with ENOSPC\nFailure: Tests failed.\nError details: assertion failed.", wantFailure: "Failure: Tests failed. Error details: assertion failed."},
+		{name: "later disk full failure", stdout: "Failure: Tests failed.\nError details: assertion failed.\nFailure: Validation could not finish.\nError details: copy failed with ENOSPC", wantDiskFull: true},
 		{name: "typed error", err: syscall.ENOSPC, wantDiskFull: true},
 		{name: "prompt echo", stderr: "task prompt: investigate ENOSPC\nERROR: unrelated failure", err: underlying},
 		{name: "echoed failure field", stderr: "user\nFailure: ENOSPC\nERROR: unrelated failure", prompt: "Failure: ENOSPC"},
@@ -145,6 +152,9 @@ func TestRunCodexClassifiesDiskFullOnNonzeroExit(t *testing.T) {
 			_, err := h.runCodexWithHeartbeat(context.Background(), agentruntime.Default(), t.TempDir(), prompt, codexRunOptions{}, agentInvocationLogMetadata{})
 			if tc.err != nil && !errors.Is(err, tc.err) || errors.Is(err, workspace.ErrDiskFull) != tc.wantDiskFull {
 				t.Fatalf("agent error = %v, want disk exhaustion=%t and underlying %v", err, tc.wantDiskFull, tc.err)
+			}
+			if tc.wantFailure != "" && (err == nil || !strings.Contains(err.Error(), tc.wantFailure)) {
+				t.Fatalf("agent error = %v, want %q", err, tc.wantFailure)
 			}
 		})
 	}

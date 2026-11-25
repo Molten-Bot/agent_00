@@ -6822,19 +6822,19 @@ func agentTerminalDiskFull(res execx.Result, prompt, failure string) bool {
 	if failure != "" {
 		// Use only error details attached to the reported failure. The
 		// transcript can contain earlier failures that the agent recovered.
+		var details string
 		for _, output := range []string{res.Stdout, res.Stderr} {
-			lines := splitOutputLines(output)
-			for i := len(lines) - 1; i >= 0; i-- {
-				if agentFailureFieldLine(lines[i]) == failure {
-					details := strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
-					first, _, _ := strings.Cut(details, "\n")
-					if strings.HasPrefix(strings.ToLower(agentFailureFieldLine(first)), "error details:") &&
-						workspace.DiskFullDiagnostic(codexExtractErrorDetail(details)) {
-						return true
-					}
-					break
-				}
+			tail, _ := codexFailureReportTail(output, failure)
+			if startsWithErrorDetails(tail) {
+				details = codexExtractErrorDetail(tail)
+				break
 			}
+		}
+		if details == "" && startsWithErrorDetails(res.Stderr) {
+			details = codexExtractStderrErrorDetail(res.Stderr, failure)
+		}
+		if workspace.DiskFullDiagnostic(details) {
+			return true
 		}
 	}
 	// A CLI can exit before emitting a structured report. Its final stderr
@@ -6923,16 +6923,18 @@ func codexReportedCompactPlainFailure(output string) (bool, string) {
 	if len(nonEmpty) == 0 || len(nonEmpty) > 8 {
 		return false, ""
 	}
+	var failure string
 	for _, line := range nonEmpty {
 		field := agentFailureFieldLine(line)
 		if lower := strings.ToLower(field); strings.HasPrefix(lower, "failure:") || strings.HasPrefix(lower, "task failed") {
-			return true, field
+			failure = field
+			continue
 		}
-		if isNoImplementationTargetLine(strings.ToLower(line)) {
+		if failure == "" && isNoImplementationTargetLine(strings.ToLower(line)) {
 			return true, "Failure: agent did not identify an implementation target."
 		}
 	}
-	return false, ""
+	return failure != "", failure
 }
 
 func isNoImplementationTargetLine(lowerLine string) bool {
@@ -6996,7 +6998,7 @@ func codexFailureDetailWithErrorDetails(res execx.Result, failureDetail string) 
 	if detail == "" {
 		detail = "Failure: task failed."
 	}
-	errorDetail := codexExtractErrorDetail(res.Stdout)
+	errorDetail := codexExtractStdoutErrorDetail(res.Stdout, failureDetail)
 	if errorDetail == "" {
 		errorDetail = codexExtractStderrErrorDetail(res.Stderr, detail)
 	}
@@ -7423,6 +7425,31 @@ func isNonFatalRemoteDeploymentAuthFailure(detail string, res execx.Result) bool
 	return true
 }
 
+func codexFailureReportTail(output, failure string) (string, bool) {
+	if failure == "" {
+		return "", false
+	}
+	lines := splitOutputLines(output)
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.EqualFold(agentFailureFieldLine(lines[i]), failure) {
+			return strings.TrimSpace(strings.Join(lines[i+1:], "\n")), true
+		}
+	}
+	return "", false
+}
+
+func startsWithErrorDetails(output string) bool {
+	first, _, _ := strings.Cut(strings.TrimSpace(output), "\n")
+	return strings.HasPrefix(strings.ToLower(agentFailureFieldLine(first)), "error details:")
+}
+
+func codexExtractStdoutErrorDetail(output, failure string) string {
+	if tail, ok := codexFailureReportTail(output, failure); ok {
+		output = tail
+	}
+	return codexExtractErrorDetail(output)
+}
+
 func codexExtractStderrErrorDetail(output, failure string) string {
 	// Codex writes its prompt and tool transcript to stderr. Only consume a
 	// compact report at the start of the stream or a standalone diagnostic.
@@ -7432,15 +7459,15 @@ func codexExtractStderrErrorDetail(output, failure string) string {
 		return ""
 	}
 	first := agentFailureFieldLine(lines[0])
-	if len(lines) > 1 && strings.EqualFold(first, failure) {
+	if len(lines) > 1 && (strings.EqualFold(first, failure) || strings.HasPrefix(strings.ToLower(first), "failure:")) {
 		for _, line := range lines[1:] {
 			switch strings.ToLower(strings.TrimSpace(line)) {
 			case "user", "codex", "exec", "tokens used":
 				return ""
 			}
 		}
-		if strings.HasPrefix(strings.ToLower(agentFailureFieldLine(lines[1])), "error details:") {
-			return codexExtractErrorDetail(output)
+		if tail, ok := codexFailureReportTail(output, failure); ok && startsWithErrorDetails(tail) {
+			return codexExtractErrorDetail(tail)
 		}
 		return ""
 	}
@@ -7610,7 +7637,7 @@ func ExternalPrerequisiteFailureFromStdout(failure string, readStdout func(stage
 	if !failed {
 		return "", false
 	}
-	detail := codexExtractErrorDetail(stdout)
+	detail := codexExtractStdoutErrorDetail(stdout, summary)
 	details, ok := strings.CutPrefix(detail, "Error details:")
 	if !ok {
 		return "", false
@@ -7787,15 +7814,17 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 
 	var structuredTaskFailureLine string
 	var structuredErrorLine string
+	var failure string
 	for i, trimmed := range nonEmpty[start:] {
 		lower := strings.ToLower(trimmed)
 		if field := agentFailureFieldLine(trimmed); strings.HasPrefix(strings.ToLower(field), "failure:") {
 			if isBareFailureHeadingAfterCompletion(field, nonEmpty[:start+i]) {
 				continue
 			}
-			return true, field
+			failure = field
+			continue
 		}
-		if isNoImplementationTargetLine(lower) {
+		if failure == "" && isNoImplementationTargetLine(lower) {
 			return true, "Failure: agent did not identify an implementation target."
 		}
 		if allowStructured && structuredTaskFailureLine == "" && isStructuredTaskFailureLine(trimmed) {
@@ -7805,6 +7834,9 @@ func codexReportedFailureInOutput(output string, allowStructured bool) (bool, st
 		if allowStructured && structuredTaskFailureLine != "" && structuredErrorLine == "" && isStructuredFailureErrorLine(trimmed) {
 			structuredErrorLine = trimmed
 		}
+	}
+	if failure != "" {
+		return true, failure
 	}
 
 	// Treat structured JSON-style failure output as fatal only when both a

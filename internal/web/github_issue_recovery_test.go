@@ -549,6 +549,36 @@ func TestIssueRecoveryPublishesVerifiedPRAfterTaskExpires(t *testing.T) {
 	check(s.Broker.Snapshot())
 }
 
+func TestIssueRecoveryReleasesInterruptedExecutionReserve(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s, _ := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(ctx)
+	record := latestRecoveryRecord(t, s)
+	if err := s.IssueClaims.BeginExecution(record); err != nil {
+		t.Fatal(err)
+	}
+	reserve := filepath.Join(s.IssueClaims.Root, ".storage-reserve-"+record.ID)
+	if _, err := os.Stat(reserve); err != nil {
+		t.Fatal(err)
+	}
+
+	s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+	if err := s.ReconcileIssueWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.IssueClaims.Load(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Outcome != "interrupted" || got.StoppedAt.IsZero() || got.ExecutionAgentAttempts != nil {
+		t.Fatalf("recovered outcome = %q, stopped at %v, execution baseline = %v", got.Outcome, got.StoppedAt, got.ExecutionAgentAttempts)
+	}
+	if _, err := os.Stat(reserve); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("execution reserve still present or inaccessible: %v", err)
+	}
+}
+
 func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 	t.Parallel()
 	s, f := recoveryServer(t)

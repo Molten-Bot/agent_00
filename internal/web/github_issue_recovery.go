@@ -343,6 +343,17 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		}
 		record.UnlockPending = record.LabelAdded
 	}
+	if record.Outcome == "interrupted" && record.ExecutionAgentAttempts != nil {
+		// Persist the interruption before removing the reserve. A missing
+		// reserve on an unfinished execution signals journal exhaustion.
+		if err := s.IssueClaims.Save(record); err != nil {
+			return fmt.Errorf("persist interrupted issue outcome: %w", err)
+		}
+		if err := s.IssueClaims.ReleaseExecutionReserve(record.ID); err != nil {
+			return fmt.Errorf("release interrupted issue execution reserve: %w", err)
+		}
+		record.ExecutionAgentAttempts = nil
+	}
 	// Unlock must remain possible even if PR lookup or settings are unavailable.
 	if record.UnlockPending && remote.Claim.ID == record.ID {
 		if err := s.unlockIssue(ctx, &record); err != nil {
