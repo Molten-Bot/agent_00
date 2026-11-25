@@ -202,6 +202,7 @@ func TestClaimedIssuePreservesExistingCheckout(t *testing.T) {
 		return execx.Result{Stdout: "git@github.com:acme/repo.git\n"}, nil
 	}))
 	h.ResumeIssueWorkspace = true
+	h.IssueCheckoutComplete = true
 	repo := repoWorkspace{URL: "https://github.com/acme/repo", Dir: dir, IssueClaimBranch: true}
 	if err := h.cloneRepository(context.Background(), &repo, "agent00-issue-17", nil); err != nil {
 		t.Fatal(err)

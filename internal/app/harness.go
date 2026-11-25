@@ -206,6 +206,8 @@ type Harness struct {
 	OnReviewResult func(clean bool, head string)
 
 	ResumeIssueWorkspace bool
+	// IssueCheckoutComplete records that the preserved checkout finished.
+	IssueCheckoutComplete bool
 	// IssuePublicationReady records that a prior attempt accepted the agent result.
 	IssuePublicationReady bool
 	// SaveIssuePublicationReady checkpoints agent acceptance before publication.
@@ -3437,7 +3439,7 @@ func (h Harness) cloneRepository(ctx context.Context, repo *repoWorkspace, branc
 	if repo == nil {
 		return fmt.Errorf("repo workspace is required")
 	}
-	if h.ResumeIssueWorkspace && repo.IssueClaimBranch {
+	if h.ResumeIssueWorkspace && h.IssueCheckoutComplete && repo.IssueClaimBranch {
 		if info, err := os.Stat(filepath.Join(repo.Dir, ".git")); err == nil && info.IsDir() {
 			remote, err := h.runCommand(ctx, "clone", gitCommand(repo.Dir, "remote", "get-url", "origin"))
 			if err != nil {
@@ -6738,7 +6740,7 @@ func (h Harness) runCodexWithHeartbeat(
 			}
 			failed, detail := codexReportedFailure(run.res)
 			if workspace.IsDiskFull(run.err) || ((failed || run.err != nil) &&
-				workspace.DiskFullDiagnostic(strings.ReplaceAll(run.res.Stdout+"\n"+run.res.Stderr, prompt, ""))) {
+				agentTerminalDiskFull(run.res, prompt, detail)) {
 				return run.res, fmt.Errorf("%s: workspace storage ran out of space while the agent was running; configure HARNESS_WORKSPACE_DISK_BASE on a disk-backed filesystem or free up space: %w", agentStage, errors.Join(ErrWorkspaceDiskFull, run.err))
 			}
 			if failed {
@@ -6804,6 +6806,45 @@ func (h Harness) runCodexWithHeartbeat(
 			return execx.Result{}, runCtx.Err()
 		}
 	}
+}
+
+func agentTerminalDiskFull(res execx.Result, prompt, failure string) bool {
+	if prompt = strings.TrimSpace(prompt); prompt != "" {
+		echo := "\n" + prompt + "\n"
+		res.Stdout = strings.ReplaceAll("\n"+res.Stdout+"\n", echo, "\n")
+		res.Stderr = strings.ReplaceAll("\n"+res.Stderr+"\n", echo, "\n")
+		// A failure field can itself have come from the echoed prompt.
+		_, failure = codexReportedFailure(res)
+	}
+	if workspace.DiskFullDiagnostic(failure) {
+		return true
+	}
+	if failure != "" {
+		// Use only error details attached to the reported failure. The
+		// transcript can contain earlier failures that the agent recovered.
+		for _, output := range []string{res.Stdout, res.Stderr} {
+			lines := splitOutputLines(output)
+			for i := len(lines) - 1; i >= 0; i-- {
+				if agentFailureFieldLine(lines[i]) == failure {
+					details := strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
+					first, _, _ := strings.Cut(details, "\n")
+					if strings.HasPrefix(strings.ToLower(agentFailureFieldLine(first)), "error details:") &&
+						workspace.DiskFullDiagnostic(codexExtractErrorDetail(details)) {
+						return true
+					}
+					break
+				}
+			}
+		}
+	}
+	// A CLI can exit before emitting a structured report. Its final stderr
+	// line must be a storage diagnostic, not an arbitrary mention of ENOSPC.
+	stderr := strings.TrimSpace(res.Stderr)
+	line := strings.ToLower(strings.TrimSpace(stderr[strings.LastIndexByte(stderr, '\n')+1:]))
+	return workspace.DiskFullDiagnostic(line) &&
+		(strings.HasPrefix(line, "enospc:") || strings.HasPrefix(line, "error:") ||
+			strings.HasPrefix(line, "fatal:") || strings.HasPrefix(line, "no space left on device") ||
+			strings.HasPrefix(line, "disk quota exceeded") || strings.HasPrefix(line, "out of diskspace"))
 }
 
 func codexInvocationAuthenticationFailed(res execx.Result, err error) bool {

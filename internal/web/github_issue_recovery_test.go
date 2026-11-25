@@ -600,7 +600,7 @@ func TestIssueRecoveryRetriesUnlockAndAdmissionAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := latestRecoveryRecord(t, s)
-	if len(f.submissions) != 2 || got.AgentAttempts != 1 || got.Run.GitHubIssue.Claim.Attempt != 2 || !got.PublicationReady {
+	if len(f.submissions) != 2 || got.AgentAttempts != 1 || got.Run.GitHubIssue.Claim.Attempt != 2 || !got.PublicationReady || !got.CheckoutComplete {
 		t.Fatalf("retry lost lineage: %+v submissions=%d", got, len(f.submissions))
 	}
 }
@@ -1531,6 +1531,24 @@ func TestIssueRecoveryBlocksLegacyDiskExhaustionUntilExplicitRetry(t *testing.T)
 	next := latestRecoveryRecord(t, s)
 	if len(f.submissions) != 2 || next.WorkspaceDir != got.WorkspaceDir || next.AgentAttempts != 0 {
 		t.Fatalf("retry did not retain the workspace and reset the cycle: %+v", next)
+	}
+}
+
+func TestIssueRecoveryDoesNotBlockOnDiskErrorQuotedInAgentReport(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(t.Context())
+	record := completeRecoveryRecord(t, s, "error", 1)
+	record.RunError = "codex: codex reported failure: Failure: test assertions failed. Error details: Recovered from ENOSPC before running tests."
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.State != "retry_wait" || got.Incident == localruntime.IssueIncidentWorkspaceStorage || len(f.submissions) != 1 {
+		t.Fatalf("recovery state=%q incident=%q submissions=%d", got.State, got.Incident, len(f.submissions))
 	}
 }
 

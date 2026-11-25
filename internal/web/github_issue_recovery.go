@@ -249,12 +249,17 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 		// Legacy records used Error for both terminal reports and mutable
 		// recovery status. Only the terminal report can disprove a blocker.
 		lowerFailure := strings.ToLower(failure)
+		// Older harnesses wrapped confirmed storage errors in this diagnosis.
+		// Ordinary agent reports can quote disk errors from earlier commands.
+		_, reported, agentReport := strings.Cut(lowerFailure, " reported failure: ")
+		legacyDiskFull := workspace.DiskFullDiagnostic(failure) &&
+			(!agentReport || strings.HasPrefix(reported, "workspace storage ran out of space"))
 		terminalEvidence := failure != "" && failure != issueExplicitRetryError(previousIncident) &&
 			(record.RunError != "" ||
 				strings.HasPrefix(lowerFailure, "codex: codex reported failure: failure:") ||
 				strings.HasPrefix(lowerFailure, "claude: claude reported failure: failure:"))
 		switch {
-		case workspace.DiskFullDiagnostic(failure):
+		case legacyDiskFull:
 			record.Incident = localruntime.IssueIncidentWorkspaceStorage
 		case reason == failurefollowup.UnmergedDependencyReason:
 			record.Incident = localruntime.IssueIncidentUnmergedDependency
@@ -623,6 +628,13 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 		current.RepairError = record.RepairError
 		if errors.Is(cause, localruntime.ErrIssueOwnershipChanged) {
 			blockStaleIssueClaim(current)
+			return nil
+		}
+		if current.Incident == localruntime.IssueIncidentWorkspaceStorage {
+			// Remote verification can back off while the storage hold stays visible.
+			current.State = "blocked"
+			current.Error = issueExplicitRetryError(current.Incident)
+			current.NextAttemptAt = issueRetryDeadline(current.ID, issueRetryFailures(*current), s.IssueRecovery.Defaults(), cause)
 			return nil
 		}
 		if !isStaleIssueClaim(*current) {

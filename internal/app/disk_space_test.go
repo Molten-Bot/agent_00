@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
@@ -117,12 +118,35 @@ func TestRunCodexRejectsAgentDiskSpaceExhaustionBeforeValidationGap(t *testing.T
 func TestRunCodexClassifiesDiskFullOnNonzeroExit(t *testing.T) {
 	t.Parallel()
 	underlying := errors.New("exit status 1")
-	for _, stderr := range []string{"ENOSPC: failed writing cache", "task prompt: investigate ENOSPC\nERROR: unrelated failure"} {
-		h := New(diskFullRunner{err: underlying, res: execx.Result{Stderr: stderr}})
-		_, err := h.runCodexWithHeartbeat(context.Background(), agentruntime.Default(), t.TempDir(), "investigate ENOSPC", codexRunOptions{}, agentInvocationLogMetadata{})
-		if !errors.Is(err, underlying) || errors.Is(err, workspace.ErrDiskFull) != strings.HasPrefix(stderr, "ENOSPC") {
-			t.Fatalf("stderr %q produced error %v", stderr, err)
-		}
+	for _, tc := range []struct {
+		name, stdout, stderr string
+		prompt               string
+		err                  error
+		wantDiskFull         bool
+	}{
+		{name: "terminal diagnostic", stderr: "ENOSPC: failed writing cache", err: underlying, wantDiskFull: true},
+		{name: "terminal failure report", stdout: "Failure: Validation failed.\nError details: copy failed: no space left on device", wantDiskFull: true},
+		{name: "typed error", err: syscall.ENOSPC, wantDiskFull: true},
+		{name: "prompt echo", stderr: "task prompt: investigate ENOSPC\nERROR: unrelated failure", err: underlying},
+		{name: "echoed failure field", stderr: "user\nFailure: ENOSPC\nERROR: unrelated failure", prompt: "Failure: ENOSPC"},
+		{name: "diagnostic shares prompt wording", stderr: "Error: write ENOSPC", prompt: "ENOSPC", err: underlying, wantDiskFull: true},
+		{name: "recovered tool failure", stdout: "ENOSPC: failed writing cache\nRecovered by moving cache.\nFailure: unrelated test failed."},
+		{name: "stale error details", stdout: "Error details: ENOSPC: failed writing cache\nRecovered by moving cache.\nFailure: unrelated test failed.\nError details: assertion failed."},
+		{name: "recovered stderr diagnostic", stderr: "ENOSPC: failed writing cache\nERROR: unrelated failure", err: underlying},
+		{name: "successful run with disk warning", stdout: "Done.", stderr: "ENOSPC: failed writing cache"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := New(diskFullRunner{err: tc.err, res: execx.Result{Stdout: tc.stdout, Stderr: tc.stderr}})
+			prompt := tc.prompt
+			if prompt == "" {
+				prompt = "investigate ENOSPC"
+			}
+			_, err := h.runCodexWithHeartbeat(context.Background(), agentruntime.Default(), t.TempDir(), prompt, codexRunOptions{}, agentInvocationLogMetadata{})
+			if tc.err != nil && !errors.Is(err, tc.err) || errors.Is(err, workspace.ErrDiskFull) != tc.wantDiskFull {
+				t.Fatalf("agent error = %v, want disk exhaustion=%t and underlying %v", err, tc.wantDiskFull, tc.err)
+			}
+		})
 	}
 }
 

@@ -503,7 +503,8 @@ func runServer(args []string) int {
 							daemonLogger("event=issue_finish status=warn request_id=%s err=%q", requestID, "issue journal is full; free disk space so the outcome can be saved")
 							reported = true
 						}
-						// Keep the issue lock until its outcome is durable.
+						// Retry the full receipt while the daemon is running.
+						// The issue journal also records a restart-safe storage hold.
 						select {
 						case <-ctx.Done():
 							return false

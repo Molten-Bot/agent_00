@@ -130,6 +130,83 @@ func TestIssueExecutionDiskFullRestoresAgentBudget(t *testing.T) {
 	}
 }
 
+func TestIssueExecutionStorageHoldSurvivesRestartWithoutTerminalReceipt(t *testing.T) {
+	t.Parallel()
+	store, record := lifecycleRecord(t)
+	record.AgentAttempts = 1
+	record.PriorRunFailures = 2
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+	if err != nil || work == nil {
+		t.Fatalf("prepare issue execution = %v, %v", work, err)
+	}
+	defer work.lock.Close()
+	h := app.Harness{}
+	_, done := work.configure(t.Context(), &h)
+	defer done()
+	h.OnCheckout()
+	h.OnStep("agent")
+	running, err := store.Load(record.ID)
+	if err != nil || running.AgentAttempts != 2 || !running.CheckoutComplete || running.Outcome != "" {
+		t.Fatalf("running receipt = %+v, error = %v", running, err)
+	}
+	// Record the same fallback used when writing a terminal receipt fails.
+	if err := store.ReleaseExecutionReserve(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := work.lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := &localruntime.IssueClaimStore{Root: store.Root}
+	got, err := restarted.Load(record.ID)
+	if err != nil || got.AgentAttempts != 1 || got.PriorRunFailures != 2 || !got.CheckoutComplete ||
+		got.State != "blocked" || got.Incident != localruntime.IssueIncidentWorkspaceStorage ||
+		got.Outcome != "error" || got.StoppedAt.IsZero() || !got.UnlockPending {
+		t.Fatalf("restarted receipt = %+v, error = %v", got, err)
+	}
+	if work, duplicate, err := prepareIssueExecution(restarted, record.Run, localruntime.IssueRecoveryConfig{}); err != nil || work != nil || duplicate != record.RequestID {
+		t.Fatalf("held work redispatched: work=%v duplicate=%q err=%v", work, duplicate, err)
+	}
+}
+
+func TestIssueExecutionRetryReusesOnlyCompletedCheckout(t *testing.T) {
+	t.Parallel()
+	for _, complete := range []bool{false, true} {
+		t.Run(fmt.Sprintf("checkout complete=%t", complete), func(t *testing.T) {
+			t.Parallel()
+			store, record := lifecycleRecord(t)
+			previousDir := filepath.Join(filepath.Dir(store.Root), "issue-workspaces", strings.Repeat("b", 32))
+			gitDir := filepath.Join(previousDir, "repo", ".git")
+			if err := os.MkdirAll(gitDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			record.WorkspaceDir = previousDir
+			record.CheckoutComplete = complete
+			if err := store.Save(record); err != nil {
+				t.Fatal(err)
+			}
+			work, _, err := prepareIssueExecution(store, record.Run, localruntime.IssueRecoveryConfig{})
+			if err != nil || work == nil {
+				t.Fatalf("prepare issue execution = %v, %v", work, err)
+			}
+			defer work.lock.Close()
+			want := previousDir
+			if !complete {
+				want = filepath.Join(filepath.Dir(previousDir), record.ID)
+			}
+			if work.record.WorkspaceDir != want {
+				t.Fatalf("retry workspace = %q, want %q", work.record.WorkspaceDir, want)
+			}
+			if _, err := os.Stat(gitDir); err != nil {
+				t.Fatalf("checkout evidence lost: %v", err)
+			}
+		})
+	}
+}
+
 func TestIssueExecutionRejectsSupersededOwner(t *testing.T) {
 	t.Parallel()
 	store, record := lifecycleRecord(t)
