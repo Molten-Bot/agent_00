@@ -81,7 +81,9 @@ export function diagram(w) {
       id,
       type: "workflow",
       position: positions[index],
-      data: { sourcePosition: index < steps.length - 1 ? side(positions[index], positions[index + 1]) : "bottom", targetPosition: index > 0 ? side(positions[index], positions[index - 1]) : "top", label, detail, kind: id, icon: id === "trigger" ? triggerIcon : id === "task" ? w.task.kind : id, last: index === steps.length - 1, enabled: w.enabled },
+      sourcePosition: index < steps.length - 1 ? side(positions[index], positions[index + 1]) : undefined,
+      targetPosition: index > 0 ? side(positions[index], positions[index - 1]) : undefined,
+      data: { label, detail, kind: id, icon: id === "trigger" ? triggerIcon : id === "task" ? w.task.kind : id, enabled: w.enabled },
     })),
     edges: steps.slice(1).map(([target], index) => {
       const source = steps[index][0];

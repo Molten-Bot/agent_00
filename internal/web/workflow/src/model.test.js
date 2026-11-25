@@ -94,12 +94,15 @@ test("input workflows compose only active steps and identify their source", () =
     assert.deepEqual(graph.nodes.map(n => n.id), ["repository", "trigger", "task"]);
     assert.equal(graph.nodes[1].data.icon, source);
     assert.equal(graph.nodes[2].data.icon, "implement");
-    assert.equal(graph.nodes[2].data.last, true);
+    assert.equal(graph.nodes[0].targetPosition, undefined);
+    assert.equal(graph.nodes[2].sourcePosition, undefined);
     w.reviewCycles = 2;
     w.merge.enabled = true;
     graph = diagram(w);
     assert.deepEqual(graph.nodes.map(n => n.id), ["repository", "trigger", "task", "review", "merge"]);
     assert.equal(graph.edges.length, 4);
+    assert.equal(graph.nodes[2].sourcePosition, "bottom");
+    assert.equal(graph.nodes[4].sourcePosition, undefined);
   }
   const review = newWorkflow("acme/repo", "review", "review");
   review.reviewCycles = 2;
@@ -121,13 +124,13 @@ test("automatic layouts use visible steps and measured sizes without changing ex
       if (direction === "horizontal") {
         assert.equal(current.position.y, previous.position.y);
         assert.ok(current.position.x > previous.position.x + 260);
-        assert.equal(current.data.targetPosition, "left");
-        assert.equal(previous.data.sourcePosition, "right");
+        assert.equal(current.targetPosition, "left");
+        assert.equal(previous.sourcePosition, "right");
       } else {
         assert.equal(current.position.x, previous.position.x);
         assert.ok(current.position.y > previous.position.y + 180);
-        assert.equal(current.data.targetPosition, "top");
-        assert.equal(previous.data.sourcePosition, "bottom");
+        assert.equal(current.targetPosition, "top");
+        assert.equal(previous.sourcePosition, "bottom");
       }
     }
     assert.deepEqual(graph.edges, diagram(w).edges);
