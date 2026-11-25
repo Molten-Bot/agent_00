@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ReactFlow,
@@ -11,13 +11,14 @@ import {
   ControlButton,
   MiniMap,
   Handle,
+  Position,
+  useUpdateNodeInternals,
   useReactFlow,
 } from "@xyflow/react";
 import {
   Zap,
   Rows3, Columns3,
   CalendarClock, FileJson, SquarePen, MessageSquare, GitPullRequest, CircleDot, Wrench,
-  Bot,
   GitBranch,
   FolderGit2,
   ListFilter,
@@ -41,11 +42,10 @@ import { ScheduleInterval } from "./schedule-interval.jsx";
 import { RepositoryPicker } from "./repository-picker.jsx";
 import { events, newWorkflow, diagram, replaceDefinition, workflowTemplates, automaticLayout } from "./model.js";
 const icons = {
-  calendar: CalendarClock, json: FileJson, prompt: SquarePen, chat: MessageSquare, pullRequest: GitPullRequest, issue: CircleDot, implement: Bot, repair: Wrench,
+  calendar: CalendarClock, json: FileJson, prompt: SquarePen, chat: MessageSquare, pullRequest: GitPullRequest, issue: CircleDot, repair: Wrench,
   repository: FolderGit2,
   trigger: Zap,
   filters: ListFilter,
-  task: Bot,
   review: MessageSquareCode,
   merge: GitBranch,
 };
@@ -57,17 +57,23 @@ const colors = {
   review: "#66b5eb",
   merge: "#de8fbd",
 };
-function StepNode({ data, selected, sourcePosition, targetPosition }) {
+const AgentLogoContext = createContext("");
+function StepNode({ id, data, selected, sourcePosition, targetPosition }) {
+  const updateNodeInternals = useUpdateNodeInternals();
+  useEffect(() => { updateNodeInternals(id); }, [id, sourcePosition, targetPosition, data.last, updateNodeInternals]);
+  const agentLogoURL = useContext(AgentLogoContext);
   const Icon = icons[data.icon] || icons[data.kind];
   return (
     <div
       className={`wf-node ${selected ? "wf-node-selected" : ""}`}
       style={{ "--step-color": colors[data.kind] }}
     >
-      {targetPosition && <Handle type="target" position={targetPosition} />}
+      {data.kind !== "repository" && (
+        <Handle type="target" position={targetPosition || Position.Top} />
+      )}
       <div className="wf-node-top">
         <span className="wf-icon">
-          <Icon size={17} />
+          {Icon ? <Icon size={17} /> : <img src={agentLogoURL} width={17} height={17} alt="" draggable={false} />}
         </span>
         <span>{data.label}</span>
         <span className="wf-node-status">
@@ -76,7 +82,9 @@ function StepNode({ data, selected, sourcePosition, targetPosition }) {
       </div>
       <strong>{data.label}</strong>
       <p>{data.detail}</p>
-      {sourcePosition && <Handle type="source" position={sourcePosition} />}
+      {!data.last && (
+        <Handle type="source" position={sourcePosition || Position.Bottom} />
+      )}
     </div>
   );
 }
@@ -1115,10 +1123,18 @@ function localDateInput(value) {
     .slice(0, 16);
 }
 let root;
-window.mountWorkflowEditor = () => {
-  if (root) return;
+let renderedAgentLogoURL;
+window.mountWorkflowEditor = (agentLogoURL) => {
+  if (root && renderedAgentLogoURL === agentLogoURL) return;
   const container = document.getElementById("workflow-editor-root");
   if (!container) return;
-  root = createRoot(container);
-  root.render(<Editor />);
+  root ??= createRoot(container);
+  renderedAgentLogoURL = agentLogoURL;
+  root.render(
+    <AgentLogoContext.Provider value={agentLogoURL}>
+      <ReactFlowProvider>
+        <Editor />
+      </ReactFlowProvider>
+    </AgentLogoContext.Provider>,
+  );
 };

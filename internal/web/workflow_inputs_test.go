@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
@@ -173,6 +174,7 @@ func TestPromptEndpointRoutesEachInputSource(t *testing.T) {
 				if c.Workflow == nil || c.Workflow.ID != "input" {
 					t.Fatal("source did not select workflow")
 				}
+				s.Broker.RecordTaskRunConfig("request-one", body)
 				calls++
 				return "request-one", nil
 			}
@@ -182,6 +184,53 @@ func TestPromptEndpointRoutesEachInputSource(t *testing.T) {
 			s.handleLocalPrompt(result, req)
 			if result.Code != http.StatusAccepted || calls != 1 {
 				t.Fatal(result.Code, result.Body.String(), calls)
+			}
+			task, ok := s.Broker.Task("request-one")
+			if !ok || !task.WorkflowTriggered || task.Source != source {
+				t.Fatalf("workflow task lost its origin or input source: %+v", task)
+			}
+		})
+	}
+}
+
+func TestJSONSubmissionCannotSetWorkflowMarker(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{"event ID only", `{"repoUrl":"https://github.com/acme/repo","prompt":"Fix endpoint","workflow":{"id":"input","eventId":"client-event"}}`, http.StatusAccepted},
+		{"encoded policy hash", `"{\"repoUrl\":\"https://github.com/acme/repo\",\"prompt\":\"Fix endpoint\",\"workflow\":{\"id\":\"input\",\"eventId\":\"client-event\",\"policyHash\":\"client-policy\"}}"`, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewServer("", NewBroker())
+			s.ReviewSettingsStatus = func(context.Context) (ReviewSettingsState, error) {
+				return ReviewSettingsState{JSONEnabled: true}, nil
+			}
+			var submitted bool
+			s.SubmitLocalPrompt = func(_ context.Context, body []byte) (string, error) {
+				run, err := localruntime.ParseRunConfigJSON(body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data, err := json.Marshal(run)
+				if err != nil {
+					t.Fatal(err)
+				}
+				submitted = true
+				s.Broker.RecordTaskRunConfig("request-one", data)
+				return "request-one", nil
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/local-prompt", strings.NewReader(tc.body))
+			req.Header.Set(taskSourceHeader, "json")
+			result := httptest.NewRecorder()
+			s.handleLocalPrompt(result, req)
+			if result.Code != tc.wantStatus || submitted != (tc.wantStatus == http.StatusAccepted) {
+				t.Fatalf("status = %d, submitted = %t, response = %s", result.Code, submitted, result.Body)
+			}
+			if task, ok := s.Broker.Task("request-one"); submitted && (!ok || task.WorkflowTriggered || task.Source != "json") {
+				t.Fatalf("expected a direct JSON task, got %+v", task)
 			}
 		})
 	}

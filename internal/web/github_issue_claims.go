@@ -112,6 +112,10 @@ func (s Server) submitWithIssueClaim(ctx context.Context, body []byte, submit fu
 	if err != nil {
 		return submit(ctx, body)
 	} // preserve the submitter's validation response
+	return s.submitParsedWithIssueClaim(ctx, body, run, submit)
+}
+
+func (s Server) submitParsedWithIssueClaim(ctx context.Context, body []byte, run config.Config, submit func(context.Context, []byte) (string, error)) (string, error) {
 	if run.GitHubIssue == nil {
 		return submit(ctx, body)
 	}

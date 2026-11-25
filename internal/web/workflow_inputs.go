@@ -12,21 +12,25 @@ import (
 )
 
 func (s Server) submitInputWorkflow(ctx context.Context, body []byte, source string, submit func(context.Context, []byte) (string, error)) (string, error) {
-	fallback := func() (string, error) { return s.submitWithIssueClaim(ctx, body, submit) }
 	var header struct {
 		Workflow *config.WorkflowRunConfig `json:"workflow"`
 	}
 	_ = json.Unmarshal(body, &header)
-	if header.Workflow != nil {
-		if header.Workflow.PolicyHash != "" {
-			return "", fmt.Errorf("workflow policy fingerprints are assigned by the runtime")
-		}
-		return fallback()
-	}
-	if s.Workflows == nil || !workflow.IsInputEvent("app."+source) || !s.Workflows.Enabled() {
-		return fallback()
-	}
 	c, err := localruntime.ParseRunConfigJSON(body)
+	// Check both the resolved config form and the normalized input, which also accepts a JSON string.
+	if (header.Workflow != nil && header.Workflow.PolicyHash != "") ||
+		(err == nil && c.Workflow != nil && c.Workflow.PolicyHash != "") {
+		return "", fmt.Errorf("workflow policy fingerprints are assigned by the runtime")
+	}
+	fallback := func() (string, error) {
+		if err != nil {
+			return submit(ctx, body) // Preserve the submitter's validation response.
+		}
+		return s.submitParsedWithIssueClaim(ctx, body, c, submit)
+	}
+	if header.Workflow != nil || s.Workflows == nil || !workflow.IsInputEvent("app."+source) || !s.Workflows.Enabled() {
+		return fallback()
+	}
 	if err != nil {
 		return "", err
 	}

@@ -82,7 +82,6 @@ lucide-react/dist/esm/context.mjs:
 lucide-react/dist/esm/Icon.mjs:
 lucide-react/dist/esm/createLucideIcon.mjs:
 lucide-react/dist/esm/icons/at-sign.mjs:
-lucide-react/dist/esm/icons/bot.mjs:
 lucide-react/dist/esm/icons/building-complex.mjs:
 lucide-react/dist/esm/icons/calendar-clock.mjs:
 lucide-react/dist/esm/icons/calendar-days.mjs:
