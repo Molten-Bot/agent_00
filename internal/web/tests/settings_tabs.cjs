@@ -753,7 +753,8 @@ for (const fulfilled of [false, true]) test(`GitHub Issues recovery requires con
       ] } }));
       await page.route('**/api/github/issues**', route => route.fulfill({ json:
         new URL(route.request().url()).pathname.endsWith('/17')
-          ? { ok: true, issue } : { ok: true, issues: [issue] },
+          ? { ok: true, issue, recoveryReason: fulfilled ? undefined : 'Previous attempt blocked. Recover / retry through its workflow.' }
+          : { ok: true, issues: [issue] },
       }));
       await page.route('**/api/local-prompt', route => route.fulfill({ status: 409,
         json: { ok: false, recoveryRequired: true, error: 'Use Recover / retry after the previous worker has stopped.' },
@@ -773,7 +774,13 @@ for (const fulfilled of [false, true]) test(`GitHub Issues recovery requires con
   await page.locator('#github-issues-repo').selectOption('acme/repo');
   await page.locator('.github-issue-list-item').click();
   const start = page.getByRole('button', { name: 'Start task', exact: true });
-  await start.click();
+  if (fulfilled) {
+    await start.click();
+  } else {
+    await expect(page.getByText('Workflow recovery required', { exact: true })).toBeVisible();
+    await expect(page.locator('.github-issue-task-status')).toContainText('Recover / retry through its workflow');
+    await expect(start).toBeHidden();
+  }
   const recover = page.getByRole('button', { name: 'Recover / retry', exact: true });
   await recover.waitFor();
   page.once('dialog', async dialog => {
@@ -802,7 +809,7 @@ for (const fulfilled of [false, true]) test(`GitHub Issues recovery requires con
     { repository: 'acme/repo', number: 17, expectedClaimId: 'claim-2', confirmStopped: true },
     { repository: 'acme/repo', number: 17, expectedClaimId: 'claim-3', confirmStopped: true },
   ]);
-  assert.equal(await start.isDisabled(), true);
+  if (fulfilled) assert.equal(await start.isDisabled(), true);
   assert.equal(await recover.isDisabled(), true);
 });
 

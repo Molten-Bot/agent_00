@@ -438,7 +438,12 @@ func reconcileOrAdmitTestIssue(ctx context.Context, s Server) {
 			if err == nil {
 				run := issueRunConfig(GitHubRepo{FullName: "acme/repo", DefaultBranch: "main"}, GitHubIssue{Number: 17}, settings.GitHubIssueLinkMode)
 				if s.Workflows != nil {
-					run.Workflow = &config.WorkflowRunConfig{ID: "issues", EventID: "issue-17"}
+					doc, loadErr := s.Workflows.Store.Load()
+					if loadErr != nil || len(doc.Workflows) != 1 {
+						panic("missing issue workflow fixture")
+					}
+					w := doc.Workflows[0]
+					run.Workflow = &config.WorkflowRunConfig{ID: w.ID, EventID: "issue-17", PolicyHash: w.ExecutionPolicyHash(), ReviewCycles: w.ReviewCycles}
 					settings, _, err = s.workflowIssueSettings(run)
 					if err != nil {
 						return

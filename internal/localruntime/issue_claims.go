@@ -64,6 +64,9 @@ type IssueClaimRecord struct {
 	NoChangeEvidence bool          `json:"noChangeEvidence,omitempty"`
 	Control          string        `json:"control,omitempty"`
 
+	// Cross-instance workflow recovery must verify this reservation again before dispatch.
+	RequireReservationSHA bool `json:"requireReservationSha,omitempty"`
+
 	// ExecutionAgentAttempts records the retry count before the active worker.
 	ExecutionAgentAttempts *int `json:"executionAgentAttempts,omitempty"`
 }

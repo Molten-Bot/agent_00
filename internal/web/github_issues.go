@@ -11,6 +11,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
 const (
@@ -333,7 +334,26 @@ func (s Server) handleGitHubIssueDetail(w http.ResponseWriter, r *http.Request, 
 		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "issue": issue})
+	response := map[string]any{"ok": true, "issue": issue}
+	if s.IssueClaims != nil && strings.EqualFold(issue.State, "open") {
+		records, _ := s.IssueClaims.List()
+		var latest localruntime.IssueClaimRecord
+		for _, record := range records {
+			key := record.Run.GitHubIssue
+			if !strings.EqualFold(key.Repository, repository) || key.Number != number {
+				continue
+			}
+			if latest.ID == "" || key.Claim.Attempt > latest.Run.GitHubIssue.Claim.Attempt ||
+				(key.Claim.Attempt == latest.Run.GitHubIssue.Claim.Attempt && record.UpdatedAt.After(latest.UpdatedAt)) {
+				latest = record
+			}
+		}
+		if latest.Incident == workflowIssueRecoveryIncident ||
+			(latest.Incident == localruntime.IssueIncidentBranchRecovery && hasUnsubmittedWorkflowRecovery(latest)) {
+			response["recoveryReason"] = latest.Error
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s Server) fetchGitHubIssue(ctx context.Context, repository string, number int) (GitHubIssue, error) {

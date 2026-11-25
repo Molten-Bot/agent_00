@@ -104,6 +104,9 @@ func (s Server) SubmitWorkflowRun(ctx context.Context, run config.Config, submit
 		return "", fmt.Errorf("workflow is disabled")
 	}
 	id, err := s.claimAndSubmitIssue(ctx, run, settings, "", submit)
+	if errors.Is(err, errWorkflowIssueRecovery) {
+		return "", fmt.Errorf("%w: %w", workflow.ErrIssueAdmissionPending, err)
+	}
 	var deferred *issueAdmissionDeferredError
 	var rate *githubutil.RateLimitError
 	if errors.As(err, &deferred) && errors.As(deferred, &rate) {
@@ -112,6 +115,12 @@ func (s Server) SubmitWorkflowRun(ctx context.Context, run config.Config, submit
 		return "", fmt.Errorf("%w: %w", workflow.ErrIssueAdmissionPending, rate)
 	}
 	return id, err
+}
+
+func (s Server) prepareWorkflowIssueRecovery(run config.Config, retryOf string) error {
+	issue := run.GitHubIssue
+	return s.Workflows.PrepareIssueRecovery(run.Workflow.ID, run.Workflow.PolicyHash, run.Workflow.EventID, retryOf,
+		workflow.Item{Kind: "issue", Repository: issue.Repository, Number: issue.Number, Title: issue.Title, URL: issue.URL, Open: true})
 }
 func (s Server) workflowIssueSettings(run config.Config) (ReviewSettingsState, bool, error) {
 	if s.Workflows == nil || s.Workflows.Store == nil || run.Workflow == nil || run.GitHubIssue == nil || !s.Workflows.Enabled() {
