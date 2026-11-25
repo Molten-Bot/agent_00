@@ -21,14 +21,14 @@ import (
 )
 
 type issueAutomationState struct {
-	mu             sync.Mutex
-	admission      sync.Mutex
-	status         issueAutomationStatus
-	reposRefreshed time.Time
-	instanceID     string
+	mu         sync.Mutex
+	admission  sync.Mutex
+	status     issueAutomationStatus
+	instanceID string
 }
 
 type issueAutomationStatus struct {
+	RetryAt      *time.Time                `json:"retryAt,omitempty"`
 	Enabled      bool                      `json:"enabled"`
 	Account      string                    `json:"account"`
 	Repositories []string                  `json:"repositories"`
@@ -371,7 +371,7 @@ func (s Server) blockIssueClaim(record localruntime.IssueClaimRecord, cause erro
 				blockStaleIssueClaim(current)
 			} else if s.IssueRecovery != nil {
 				s.scheduleIssueRetry(current, cause)
-				var rate *issueRateLimitError
+				var rate *githubutil.RateLimitError
 				if current.UnlockPending && errors.As(cause, &rate) && rate.RetryAt.After(current.NextUnlockAt) {
 					current.NextUnlockAt = rate.RetryAt
 				}
@@ -601,6 +601,9 @@ func (s Server) handleIssueAutomationStatus(w http.ResponseWriter, r *http.Reque
 	s.issueAutomation.mu.Lock()
 	status := s.issueAutomation.status
 	s.issueAutomation.mu.Unlock()
+	if until := s.GitHubCooldown.RetryAt(); !until.IsZero() {
+		status.RetryAt = &until
+	}
 	records, err := s.IssueClaims.List()
 	// Never expose stored task prompts through the status endpoint.
 	claims := []map[string]any{}

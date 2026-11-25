@@ -23,6 +23,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/agentruntime"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
@@ -112,6 +113,7 @@ type Server struct {
 	ConfigureReviewSettings func(context.Context, ReviewSettingsRequest) (ReviewSettingsState, error)
 	ResolveGitHubProfileURL func(context.Context) (string, error)
 	ResolveGitHubRepos      func(context.Context) ([]GitHubRepo, error)
+	GitHubCooldown          *githubutil.Cooldown
 	GitHubIssueRunner       execx.Runner
 	assetTransport          http.RoundTripper
 	assetPlaybackKey        []byte
@@ -172,13 +174,16 @@ type GitHubRepo struct {
 	PushedAt       string `json:"pushed_at,omitempty"`
 }
 
+const gitHubRepoCacheTTL = time.Hour
+
 type gitHubRepoCache struct {
-	mu         sync.Mutex
-	loaded     bool
-	loading    bool
-	wait       chan struct{}
-	repos      []GitHubRepo
-	generation uint64
+	refreshedAt time.Time
+	mu          sync.Mutex
+	loaded      bool
+	loading     bool
+	wait        chan struct{}
+	repos       []GitHubRepo
+	generation  uint64
 }
 
 type ReviewSettingsState struct {
@@ -240,6 +245,7 @@ func NewServer(addr string, broker *Broker) Server {
 		gitHubRepos:        &gitHubRepoCache{},
 		issueAutoStartWake: make(chan time.Time, 1),
 		issueAutomation:    &issueAutomationState{},
+		GitHubCooldown:     &githubutil.Cooldown{},
 		LoadLibraryTasks: func() ([]library.TaskSummary, error) {
 			catalog, err := library.LoadCustomizedCatalog(library.DefaultDir)
 			if err != nil {
@@ -422,6 +428,14 @@ func (s Server) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
 		repos, err = s.refreshGitHubRepos(r.Context())
 	} else {
 		repos, err = s.resolveGitHubRepos(r.Context())
+	}
+	if err != nil {
+		var rate *githubutil.RateLimitError
+		if errors.As(err, &rate) {
+			if cached, ok := s.cachedGitHubRepos(); ok {
+				repos, err = cached, nil
+			}
+		}
 	}
 	if err != nil {
 		s.logf("localruntime.ui status=warn endpoint=github_repos err=%q", err)
@@ -2013,6 +2027,7 @@ func (s Server) streamSnapshot() Snapshot {
 }
 
 func (s Server) withTaskControls(snapshot Snapshot) Snapshot {
+	snapshot.GitHubRate = s.GitHubCooldown.Status()
 	if s.ResolveTaskControls == nil {
 		return snapshot
 	}
@@ -2465,7 +2480,7 @@ func (c *gitHubRepoCache) active() bool {
 
 func (c *gitHubRepoCache) resolve(ctx context.Context, load func(context.Context) ([]GitHubRepo, error)) ([]GitHubRepo, error) {
 	c.mu.Lock()
-	if c.loaded {
+	if c.loaded && time.Since(c.refreshedAt) < gitHubRepoCacheTTL {
 		defer c.mu.Unlock()
 		return append([]GitHubRepo(nil), c.repos...), nil
 	}
@@ -2495,6 +2510,7 @@ func (c *gitHubRepoCache) resolve(ctx context.Context, load func(context.Context
 	}
 	if generation == c.generation {
 		c.repos = append([]GitHubRepo(nil), repos...)
+		c.refreshedAt = time.Now()
 		c.loaded = true
 		return append([]GitHubRepo(nil), c.repos...), nil
 	}
@@ -2523,6 +2539,7 @@ func (c *gitHubRepoCache) storeIfCurrent(generation uint64, repos []GitHubRepo) 
 		return
 	}
 	c.repos = append([]GitHubRepo(nil), repos...)
+	c.refreshedAt = time.Now()
 	c.loaded = true
 }
 

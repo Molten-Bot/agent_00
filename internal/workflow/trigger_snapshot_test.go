@@ -29,6 +29,8 @@ func TestIssueTriggerContinuesWhenPullRequestSnapshotFails(t *testing.T) {
 	e.Fetch = (GitHub{Runner: fakeRunner(func(_ context.Context, command execx.Command) (execx.Result, error) {
 		args := strings.Join(command.Args, " ")
 		switch {
+		case strings.Contains(args, "/pulls?"):
+			return execx.Result{Stdout: `[{"number":2}]`}, nil
 		case strings.Contains(args, "/issues?"):
 			polls++
 			if broken {
@@ -77,5 +79,51 @@ func TestIssueTriggerContinuesWhenPullRequestSnapshotFails(t *testing.T) {
 	tick(t, e)
 	if strings.Join(submitted, ",") != "pr,issue" {
 		t.Fatalf("pull request recovery duplicated work: %v", submitted)
+	}
+}
+
+func TestOnlyEnabledTriggersRequestGitHubData(t *testing.T) {
+	t.Parallel()
+	issues := definition("issues")
+	disabled := definition("disabled")
+	disabled.Enabled = false
+	disabled.Trigger = Trigger{Event: "pr.review_requested", Value: "@me"}
+	disabled.Task.Kind = "review"
+	e, _, _ := testEngine(t, issues, disabled)
+	calls := 0
+	e.Fetch = (GitHub{Runner: fakeRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		calls++
+		if !strings.Contains(strings.Join(cmd.Args, " "), "/issues?") {
+			t.Fatalf("unneeded GitHub call %v", cmd.Args)
+		}
+		return execx.Result{Stdout: `[{"number":1,"pull_request":{}}]`}, nil
+	})}).Fetch
+	tick(t, e)
+	if calls != 1 {
+		t.Fatalf("issue-only poll made %d GitHub calls", calls)
+	}
+	e.Enabled = func() bool { return false }
+	tick(t, e)
+	if calls != 1 {
+		t.Fatal("disabled feature polled GitHub")
+	}
+}
+
+func TestBasicPRTriggerUsesOnlyPullsCollection(t *testing.T) {
+	t.Parallel()
+	w := definition("prs")
+	w.Trigger = Trigger{Event: "pr.review_requested", Value: "reviewer"}
+	w.Task.Kind = "review"
+	w.IncludeBacklog = true
+	e, _, submitted := testEngine(t, w)
+	e.Fetch = (GitHub{Runner: fakeRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		if !strings.Contains(strings.Join(cmd.Args, " "), "/pulls?") {
+			t.Fatalf("extra GitHub lookup: %v", cmd.Args)
+		}
+		return execx.Result{Stdout: `[{"number":4,"head":{"ref":"topic","sha":"abc"},"base":{"ref":"main"},"requested_reviewers":[{"login":"reviewer"}]}]`}, nil
+	})}).Fetch
+	tick(t, e)
+	if *submitted != 1 {
+		t.Fatal("missed review request")
 	}
 }

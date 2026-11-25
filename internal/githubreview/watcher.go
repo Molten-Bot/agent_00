@@ -12,6 +12,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
@@ -32,10 +33,11 @@ type Options struct {
 }
 
 type Watcher struct {
-	Runner  execx.Runner
-	Enqueue EnqueueFunc
-	Logf    func(string, ...any)
-	Options Options
+	Cooldown *githubutil.Cooldown
+	Runner   execx.Runner
+	Enqueue  EnqueueFunc
+	Logf     func(string, ...any)
+	Options  Options
 
 	mu        sync.Mutex
 	seen      map[string]struct{}
@@ -209,8 +211,15 @@ func (w *Watcher) queueCandidate(ctx context.Context, candidate reviewCandidate,
 	w.logf("review_watch status=queued request_id=%s owner_repo=%s pr=%d reviewer=%s head=%s", requestID, ownerRepo, prNumber, viewer, details.Head.SHA)
 }
 
+func (w *Watcher) run(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+	if err := w.Cooldown.CheckDiscovery(); err != nil {
+		return execx.Result{}, err
+	}
+	return w.Cooldown.Run(ctx, w.Runner, cmd, w.Cooldown != nil)
+}
+
 func (w *Watcher) notifications(ctx context.Context) ([]notificationThread, error) {
-	res, err := w.Runner.Run(ctx, notificationsCommand())
+	res, err := w.run(ctx, notificationsCommand())
 	if err != nil {
 		return nil, fmt.Errorf("load github notifications: %w", err)
 	}
@@ -222,7 +231,7 @@ func (w *Watcher) notifications(ctx context.Context) ([]notificationThread, erro
 }
 
 func (w *Watcher) viewerLogin(ctx context.Context) (string, error) {
-	res, err := w.Runner.Run(ctx, viewerCommand())
+	res, err := w.run(ctx, viewerCommand())
 	if err != nil {
 		return "", fmt.Errorf("load github viewer: %w", err)
 	}
@@ -236,7 +245,7 @@ func (w *Watcher) viewerLogin(ctx context.Context) (string, error) {
 }
 
 func (w *Watcher) requestedReviewPullRequests(ctx context.Context) ([]searchPullRequest, error) {
-	res, err := w.Runner.Run(ctx, requestedReviewPullRequestsCommand())
+	res, err := w.run(ctx, requestedReviewPullRequestsCommand())
 	if err != nil {
 		return nil, fmt.Errorf("search requested review pull requests: %w", err)
 	}
@@ -248,7 +257,7 @@ func (w *Watcher) requestedReviewPullRequests(ctx context.Context) ([]searchPull
 }
 
 func (w *Watcher) isRequestedReviewer(ctx context.Context, ownerRepo string, prNumber int, viewer string) (bool, error) {
-	res, err := w.Runner.Run(ctx, requestedReviewersCommand(ownerRepo, prNumber))
+	res, err := w.run(ctx, requestedReviewersCommand(ownerRepo, prNumber))
 	if err != nil {
 		return false, fmt.Errorf("load requested reviewers: %w", err)
 	}
@@ -265,7 +274,7 @@ func (w *Watcher) isRequestedReviewer(ctx context.Context, ownerRepo string, prN
 }
 
 func (w *Watcher) pullRequestDetails(ctx context.Context, ownerRepo string, prNumber int) (pullRequestDetails, error) {
-	res, err := w.Runner.Run(ctx, pullRequestDetailsCommand(ownerRepo, prNumber))
+	res, err := w.run(ctx, pullRequestDetailsCommand(ownerRepo, prNumber))
 	if err != nil {
 		return pullRequestDetails{}, fmt.Errorf("load pull request details: %w", err)
 	}
@@ -420,7 +429,7 @@ func requestedReviewPullRequestsCommand() execx.Command {
 }
 
 func viewerCommand() execx.Command {
-	return execx.Command{Name: "gh", Args: []string{"api", "user"}}
+	return execx.Command{Name: "gh", Args: []string{"api", "--cache", "10m", "user"}}
 }
 
 func requestedReviewersCommand(ownerRepo string, prNumber int) execx.Command {

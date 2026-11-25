@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Molten-Bot/agent_00/internal/config"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
@@ -102,7 +103,15 @@ func (s Server) SubmitWorkflowRun(ctx context.Context, run config.Config, submit
 	if !enabled {
 		return "", fmt.Errorf("workflow is disabled")
 	}
-	return s.claimAndSubmitIssue(ctx, run, settings, "", submit)
+	id, err := s.claimAndSubmitIssue(ctx, run, settings, "", submit)
+	var deferred *issueAdmissionDeferredError
+	var rate *githubutil.RateLimitError
+	if errors.As(err, &deferred) && errors.As(deferred, &rate) {
+		// The durable claim owns the retry. The workflow must only reconcile
+		// the original event ID with the worker that claim eventually starts.
+		return "", fmt.Errorf("%w: %w", workflow.ErrIssueAdmissionPending, rate)
+	}
+	return id, err
 }
 func (s Server) workflowIssueSettings(run config.Config) (ReviewSettingsState, bool, error) {
 	if s.Workflows == nil || run.Workflow == nil || !s.Workflows.Enabled() {

@@ -24,7 +24,7 @@ func inputWorkflowServer(t *testing.T, source string) (Server, workflow.Definiti
 		t.Fatal(err)
 	}
 	s := NewServer("", NewBroker())
-	s.Workflows = &workflow.Engine{Store: store, StatePath: filepath.Join(root, "state.json"), Enabled: func() bool { return true }, Allowed: func(string) bool { return true }, Fetch: func(context.Context, string) ([]workflow.Item, error) {
+	s.Workflows = &workflow.Engine{Store: store, StatePath: filepath.Join(root, "state.json"), Enabled: func() bool { return true }, Allowed: func(string) bool { return true }, Fetch: func(context.Context, string, workflow.ScanNeeds) ([]workflow.Item, error) {
 		t.Fatal("app input polled GitHub")
 		return nil, nil
 	}, Status: func(string) workflow.Outcome { return workflow.Outcome{Status: "running"} }}

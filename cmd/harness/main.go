@@ -25,6 +25,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/githubreview"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/gitsigning"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
@@ -907,6 +908,7 @@ func runServer(args []string) int {
 	}
 
 	go repairQueue.run(ctx, enqueueLocalRun)
+	githubCooldown := &githubutil.Cooldown{}
 	var reviewWatcher *githubreview.Watcher
 	if strings.TrimSpace(*uiListen) != "" {
 		uiServer := web.NewServer(*uiListen, monitorBroker)
@@ -914,6 +916,7 @@ func runServer(args []string) int {
 		uiServer.Ready = uiReady
 		uiServer.AutomaticMode = *uiAutomatic
 		uiServer.ConfiguredHarness = cfg.AgentHarness
+		uiServer.GitHubCooldown = githubCooldown
 		uiServer.GitHubIssueRunner = runner
 		if err := configureWorkflows(ctx, cfg, runner, &uiServer, monitorBroker, enqueueLocalRun, daemonLogger); err != nil {
 			daemonLogger("workflow status=error err=%q", err)
@@ -1191,7 +1194,7 @@ func runServer(args []string) int {
 	} else {
 		daemonLogger("review_watch status=warn action=load_runtime_config err=%q", err)
 	}
-	reviewWatcher = startGitHubReviewWatcher(ctx, runner, reviewWatcherCfg, func(reqCtx context.Context, runCfg config.Config, followUp bool, source string, force bool) (string, error) {
+	reviewWatcher = startGitHubReviewWatcher(ctx, runner, githubCooldown, reviewWatcherCfg, func(reqCtx context.Context, runCfg config.Config, followUp bool, source string, force bool) (string, error) {
 		if workflowEngine.Owns(runCfg.RepoURL, "pr.review_requested") {
 			return "", fmt.Errorf("review request is owned by an enabled custom workflow")
 		}
@@ -2611,6 +2614,7 @@ func taskStartSourceForSubmission(source string, runCfg config.Config) string {
 func startGitHubReviewWatcher(
 	ctx context.Context,
 	runner execx.Runner,
+	cooldown *githubutil.Cooldown,
 	cfg localruntime.InitConfig,
 	enqueueLocalRun func(context.Context, config.Config, bool, string, bool) (string, error),
 	logf func(string, ...any),
@@ -2626,7 +2630,8 @@ func startGitHubReviewWatcher(
 	}
 
 	watcher := &githubreview.Watcher{
-		Runner: runner,
+		Cooldown: cooldown,
+		Runner:   runner,
 		Enqueue: func(reqCtx context.Context, runCfg config.Config) (string, error) {
 			return enqueueLocalRun(reqCtx, runCfg, true, reviewWatchSource, false)
 		},

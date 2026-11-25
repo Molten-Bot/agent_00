@@ -180,7 +180,7 @@ type Engine struct {
 	StatePath string
 	Enabled   func() bool
 	Allowed   func(string) bool
-	Fetch     func(context.Context, string) ([]Item, error)
+	Fetch     func(context.Context, string, ScanNeeds) ([]Item, error)
 	Submit    func(context.Context, Run) (string, error)
 	Status    func(string) Outcome
 	Reconcile func(string) string
@@ -191,6 +191,8 @@ type Engine struct {
 	wake      chan struct{}
 	mu        sync.Mutex
 }
+
+var ErrIssueAdmissionPending = errors.New("waiting for issue claim recovery")
 
 var ErrActivationNotFound = errors.New("workflow activation not found")
 
@@ -285,7 +287,9 @@ func (e *Engine) Preview(ctx context.Context, w Definition) ([]Decision, error) 
 	if w.Trigger.Event == "schedule" {
 		return []Decision{{Item: Item{Repository: w.Repository, Kind: "schedule", Title: "Scheduled repository task"}, Matches: true, Reason: fmt.Sprintf("Runs every %g hours while enabled; no GitHub event is required", w.Trigger.IntervalHours)}}, nil
 	}
-	items, err := e.Fetch(ctx, w.Repository)
+	var needs ScanNeeds
+	needs.include(w)
+	items, err := e.Fetch(ctx, w.Repository, needs)
 	kind := strings.Split(w.Trigger.Event, ".")[0]
 	if !usableSnapshot(kind, err) {
 		return nil, err
@@ -365,13 +369,18 @@ func (e *Engine) Tick(ctx context.Context) error {
 			continue
 		}
 		active := featureEnabled && exists && w.Enabled && e.Allowed(w.Repository) && e.Allowed(r.Item.Repository)
-		if r.Status == "dispatching" {
+		if r.Status == "dispatching" || r.Status == "pending_issue" {
 			if r.RequestID == "" && e.Reconcile != nil {
 				r.RequestID = e.Reconcile(r.ID)
 			}
 			if r.RequestID == "" && r.Outcome == nil {
-				r.Reason = "Submission outcome unknown after restart; retained to prevent duplicate work"
+				if r.Status == "dispatching" {
+					r.Reason = "Submission outcome unknown after restart; retained to prevent duplicate work"
+				}
 				continue
+			}
+			if r.Status == "pending_issue" {
+				r.Reason = "Issue claim recovered"
 			}
 			r.Status = "running"
 		}
@@ -483,6 +492,15 @@ func (e *Engine) Tick(ctx context.Context) error {
 		items []Item
 		err   error
 	}
+	needsByRepo := map[string]ScanNeeds{}
+	for _, w := range d.Workflows {
+		if w.Enabled && (strings.HasPrefix(w.Trigger.Event, "issue.") || strings.HasPrefix(w.Trigger.Event, "pr.")) {
+			key := strings.ToLower(w.Repository)
+			needs := needsByRepo[key]
+			needs.include(w)
+			needsByRepo[key] = needs
+		}
+	}
 	cache := map[string]snapshot{}
 	reportedErrors := map[string]bool{}
 	for _, w := range d.Workflows {
@@ -501,7 +519,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 		key := strings.ToLower(w.Repository)
 		fetched, ok := cache[key]
 		if !ok {
-			fetched.items, fetched.err = e.Fetch(ctx, w.Repository)
+			fetched.items, fetched.err = e.Fetch(ctx, w.Repository, needsByRepo[key])
 			cache[key] = fetched
 		}
 		kind := strings.Split(w.Trigger.Event, ".")[0]
@@ -560,7 +578,12 @@ func (e *Engine) Tick(ctx context.Context) error {
 				request, submitErr = e.Submit(ctx, r)
 			}
 			index := len(s.Runs) - 1
-			if submitErr != nil {
+			if errors.Is(submitErr, ErrIssueAdmissionPending) {
+				s.Runs[index].Status = "pending_issue"
+				s.Runs[index].Reason = submitErr.Error()
+				busy[entity] = true
+				errs = append(errs, submitErr)
+			} else if submitErr != nil {
 				s.Runs[index].Status = "failed"
 				s.Runs[index].Reason = "Submission failed: " + submitErr.Error()
 			} else {

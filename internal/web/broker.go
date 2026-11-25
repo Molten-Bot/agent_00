@@ -18,6 +18,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/library"
 	"github.com/Molten-Bot/agent_00/internal/stringsx"
 )
@@ -253,15 +254,16 @@ type CountStatsGroup struct {
 
 // Snapshot is the complete monitor payload for the web UI.
 type Snapshot struct {
-	GeneratedAt             string          `json:"generated_at"`
-	Resources               ResourceMetrics `json:"resources"`
-	Stats                   DashboardStats  `json:"stats"`
-	Repositories            []Repository    `json:"repositories,omitempty"`
-	Releases                []Release       `json:"releases"`
-	Events                  []Event         `json:"events"`
-	Tasks                   []Task          `json:"tasks"`
-	PromptedRepos           []string        `json:"prompted_repos,omitempty"`
-	CustomLibraryGeneration int64           `json:"custom_library_generation"`
+	GitHubRate              githubutil.RateStatus `json:"github_rate,omitzero"`
+	GeneratedAt             string                `json:"generated_at"`
+	Resources               ResourceMetrics       `json:"resources"`
+	Stats                   DashboardStats        `json:"stats"`
+	Repositories            []Repository          `json:"repositories,omitempty"`
+	Releases                []Release             `json:"releases"`
+	Events                  []Event               `json:"events"`
+	Tasks                   []Task                `json:"tasks"`
+	PromptedRepos           []string              `json:"prompted_repos,omitempty"`
+	CustomLibraryGeneration int64                 `json:"custom_library_generation"`
 
 	VerifiedTaskPRs map[string]verifiedTaskPR `json:"verified_task_prs,omitempty"`
 }

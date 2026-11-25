@@ -85,6 +85,7 @@
             </div>
           </div>
           <div class="scroll task-scroll">
+            <p id="task-github-rate" role="status" hidden></p>
             <div id="task-list" class="task-list"></div>
           </div>
         </section>
@@ -797,6 +798,7 @@
               <i data-lucide="folder-kanban" aria-hidden="true"></i>
               <span>GitHub Issues</span>
             </label>
+            <p id="settings-github-rate" role="status" hidden></p>
             
             
             <label class="selectable-option">
@@ -2333,7 +2335,7 @@
     }
 
     function taskViewAvailable(snapshot = state.snapshot) {
-      return runningTasks(snapshot).length > 0 || completedTasks(snapshot).length > 0;
+      return Boolean(snapshot?.github_rate?.retryAt || snapshot?.github_rate?.discoveryPaused) || runningTasks(snapshot).length > 0 || completedTasks(snapshot).length > 0;
     }
 
     function syncTaskViewDockState(snapshot = state.snapshot) {
@@ -11337,6 +11339,7 @@
     }
 
     function hasTaskPanelContent(snapshot) {
+      if (snapshot?.github_rate?.retryAt || snapshot?.github_rate?.discoveryPaused) return true;
       const runningCount = runningTasks(snapshot).length;
       const completedCount = completedTasks(snapshot).length;
       if (runningCount > 0) {
@@ -13493,11 +13496,31 @@
       return true;
     }
 
+    function renderGitHubRate(rate) {
+      const budget = rate?.core;
+      const quota = budget ? `GitHub REST quota: ${budget.remaining} of ${budget.limit} requests left until ${new Date(budget.resetAt).toLocaleTimeString()}.` : "";
+      let pause = "";
+      if (rate?.retryAt) {
+        pause = `GitHub rate limited issue, review, and workflow requests. Queued issue work will retry after ${new Date(rate.retryAt).toLocaleTimeString()}.`;
+      } else if (rate?.discoveryPaused) {
+        pause = "New issue, review, and workflow scans are paused to reserve requests for work already in progress.";
+      }
+      for (const [id, message] of [
+        ["task-github-rate", pause ? [pause, quota].filter(Boolean).join(" ") : ""],
+        ["settings-github-rate", [pause, quota].filter(Boolean).join(" ")],
+      ]) {
+        const element = document.getElementById(id);
+        element.textContent = message;
+        element.hidden = !message;
+      }
+    }
+
     function render(snapshot) {
       if (!snapshot || snapshotIsOlder(snapshot)) return;
       syncCustomLibraryGeneration(snapshot);
       const previousSnapshot = state.snapshot;
       state.snapshot = snapshot;
+      renderGitHubRate(snapshot.github_rate);
       syncLocalPromptSubmitDisabled();
       syncTaskCompletionSounds(snapshot);
       syncTaskViewDockCompletion(previousSnapshot, snapshot);
@@ -13557,7 +13580,7 @@
     async function loadInitial() {
       try {
         const githubReposPromise = state.githubReposReady
-          ? loadGitHubReposForChat({ force: true, refresh: true, keepExisting: true })
+          ? loadGitHubReposForChat({ force: true, keepExisting: true })
           : loadGitHubReposForChat();
         void loadGitHubProfileLink();
         void loadLibraryTasks();
@@ -14472,7 +14495,7 @@
   <script src="/static/commit-signing.js"></script>
   <script src="/static/custom-library-sources.js"></script>
   <script src="/static/marked.umd.js?v=18.2.1"></script>
-  <script src="/static/github-issues.js?v=19"></script>
+  <script src="/static/github-issues.js?v=20"></script>
   <script src="/static/github-automation.js?v=4"></script>
 </body>
 </html>
