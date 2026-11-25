@@ -22,6 +22,9 @@ export function newWorkflow(repository, kind = "implement", id = crypto.randomUU
   return { ...structuredClone(template.definition), id, repository, enabled: false, includeBacklog: false };
 }
 const cycleArrow = { type: "arrowclosed", width: 20, height: 20 };
+const nodeWidth = 230;
+const nodeHeight = 140;
+const layoutGap = 64;
 
 export function diagram(w) {
   const input = w.trigger.event.startsWith("app.");
@@ -58,7 +61,7 @@ export function diagram(w) {
     [
       "review",
       "Review cycles",
-      "A fresh review agent checks each revision",
+      "Repair findings and review the updated PR",
     ],
     [
       "merge",
@@ -76,30 +79,70 @@ export function diagram(w) {
     const dx = to.x - from.x, dy = to.y - from.y;
     return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy >= 0 ? "bottom" : "top");
   };
-  return {
-    nodes: steps.map(([id, label, detail], index) => ({
-      id,
+  const reviewIndex = steps.findIndex(([id]) => id === "review");
+  const reviewPosition = positions[reviewIndex];
+  let agentPosition = w.positions?.reviewAgent;
+  if (reviewPosition && !agentPosition) {
+    const occupiedSides = [positions[reviewIndex - 1], positions[reviewIndex + 1]]
+      .filter(Boolean).map(position => side(reviewPosition, position));
+    const { x, y } = reviewPosition;
+    const directions = [
+      ["right", nodeWidth + layoutGap, 0], ["bottom", 0, nodeHeight + layoutGap],
+      ["left", -nodeWidth - layoutGap, 0], ["top", 0, -nodeHeight - layoutGap],
+    ].filter(([direction]) => !occupiedSides.includes(direction));
+    for (let distance = 1; !agentPosition; distance++) {
+      for (const [, dx, dy] of directions) {
+        const candidate = { x: x + distance * dx, y: y + distance * dy };
+        if (positions.every(p => Math.abs(p.x - candidate.x) >= nodeWidth ||
+            Math.abs(p.y - candidate.y) >= nodeHeight)) {
+          agentPosition = candidate;
+          break;
+        }
+      }
+    }
+  }
+  const nodes = steps.map(([id, label, detail], index) => ({
+    id,
+    type: "workflow",
+    position: positions[index],
+    sourcePosition: index < steps.length - 1 ? side(positions[index], positions[index + 1]) : undefined,
+    targetPosition: index > 0 ? side(positions[index], positions[index - 1]) : undefined,
+    data: {
+      label, detail, kind: id, icon: id === "trigger" ? triggerIcon : id === "task" ? w.task.kind : id,
+      enabled: w.enabled,
+      reviewAgentSide: id === "review" ? side(reviewPosition, agentPosition) : undefined,
+    },
+  }));
+  const edges = steps.slice(1).map(([target], index) => {
+    const source = steps[index][0];
+    return { id: `${source}-${target}`, source, target, type: "smoothstep" };
+  });
+  if (reviewPosition) {
+    nodes.push({
+      id: "reviewAgent",
       type: "workflow",
-      position: positions[index],
-      sourcePosition: index < steps.length - 1 ? side(positions[index], positions[index + 1]) : undefined,
-      targetPosition: index > 0 ? side(positions[index], positions[index - 1]) : undefined,
-      data: { label, detail, kind: id, icon: id === "trigger" ? triggerIcon : id === "task" ? w.task.kind : id, enabled: w.enabled },
-    })),
-    edges: steps.slice(1).map(([target], index) => {
-      const source = steps[index][0];
-      const edge = { id: `${source}-${target}`, source, target, type: "smoothstep" };
-      if (source !== "task" || target !== "review") return edge;
-      const label = `${w.reviewCycles} ${w.reviewCycles === 1 ? "cycle" : "cycles"}`;
-      return {
-        ...edge,
-        type: "reviewCycle",
-        markerStart: cycleArrow,
-        markerEnd: cycleArrow,
-        data: { cycles: w.reviewCycles },
-        ariaLabel: `Agent task and review, up to ${label}`,
-      };
-    }),
-  };
+      position: agentPosition,
+      targetPosition: side(agentPosition, reviewPosition),
+      data: {
+        label: "Review agent",
+        detail: w.reviewAgent?.instructions?.trim() || "Review the current pull request",
+        kind: "reviewAgent",
+        enabled: w.enabled,
+      },
+    });
+    const label = `${w.reviewCycles} ${w.reviewCycles === 1 ? "cycle" : "cycles"}`;
+    edges.push({
+      id: "review-reviewAgent",
+      source: "review",
+      sourceHandle: "reviewAgent",
+      target: "reviewAgent",
+      type: "reviewCycle",
+      markerEnd: cycleArrow,
+      data: { cycles: w.reviewCycles },
+      ariaLabel: `Review cycles and review agent, up to ${label}`,
+    });
+  }
+  return { nodes, edges };
 }
 export function replaceDefinition(document, definition) {
   return {
@@ -164,9 +207,17 @@ export function automaticLayout(workflow, direction, measuredNodes = []) {
   const positions = { ...workflow.positions };
   let offset = 80;
   for (const node of diagram(workflow).nodes) {
+    if (node.id === "reviewAgent") {
+      const reviewSize = sizes.get("review");
+      const { x, y } = positions.review;
+      positions.reviewAgent = direction === "horizontal"
+        ? { x, y: y + (reviewSize?.height || nodeHeight) + layoutGap }
+        : { x: x + (reviewSize?.width || nodeWidth) + layoutGap, y };
+      continue;
+    }
     positions[node.id] = direction === "horizontal" ? { x: offset, y: 80 } : { x: 80, y: offset };
     const size = sizes.get(node.id);
-    offset += (direction === "horizontal" ? size?.width || 230 : size?.height || 140) + 64;
+    offset += (direction === "horizontal" ? size?.width || nodeWidth : size?.height || nodeHeight) + layoutGap;
   }
   return positions;
 }

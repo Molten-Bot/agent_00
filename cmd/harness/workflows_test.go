@@ -20,6 +20,7 @@ func TestWorkflowRunConfigPolicies(t *testing.T) {
 	for _, kind := range []string{"implement", "review", "repair"} {
 		t.Run(kind, func(t *testing.T) {
 			w := workflow.Definition{ID: "one", Name: "Workflow", Repository: "acme/repo", ReviewCycles: 3, Task: workflow.Task{Complexity: "advanced", Kind: kind, Instructions: "Do the work", IssueLinkMode: "close"}}
+			w.ReviewAgent = config.ReviewAgentConfig{Complexity: "easy", Instructions: "Check for regressions"}
 			i := workflow.Item{Number: 12, Kind: "issue", URL: "https://github.com/acme/repo/issues/12", Title: "A task", HeadBranch: "feature"}
 			if kind != "implement" {
 				i.Kind = "pr"
@@ -29,7 +30,7 @@ func TestWorkflowRunConfigPolicies(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if c.Complexity != "advanced" || c.Workflow.ReviewCycles != 3 || c.Workflow.EventID != "event" || *c.AssignCreator {
+			if c.Complexity != "advanced" || c.Workflow.ReviewCycles != 3 || c.Workflow.ReviewAgent != w.ReviewAgent || c.Workflow.EventID != "event" || *c.AssignCreator {
 				t.Fatal(c)
 			}
 			if kind == "review" && (c.Review == nil || c.Review.AutoMerge || c.Review.Writeback != "summary-comment") {

@@ -23,20 +23,21 @@ test("multiple workflows survive independent updates", () => {
 test("diagram represents actual policy and preserves layout", () => {
   const w = newWorkflow("acme/repo", "implement", "one");
   w.reviewCycles = 5;
+  w.reviewAgent = { instructions: "Check error handling", complexity: "advanced" };
   w.merge.enabled = true;
   w.merge.method = "rebase";
   w.positions.task = { x: 40, y: 50 };
   const graph = diagram(w);
-  assert.equal(graph.nodes.length, 6);
-  assert.equal(graph.edges.length, 5);
+  assert.equal(graph.nodes.length, 7);
+  assert.equal(graph.edges.length, 6);
   assert.deepEqual(graph.nodes.find((n) => n.id === "task").position, {
     x: 40,
     y: 50,
   });
-  const reviewEdge = graph.edges.find(edge => edge.id === "task-review");
+  assert.equal(graph.nodes.find((n) => n.id === "reviewAgent").data.detail, "Check error handling");
+  const reviewEdge = graph.edges.find(edge => edge.id === "review-reviewAgent");
   assert.equal(reviewEdge.data.cycles, 5);
-  assert.equal(reviewEdge.ariaLabel, "Agent task and review, up to 5 cycles");
-  assert.equal(reviewEdge.markerStart.type, "arrowclosed");
+  assert.equal(reviewEdge.ariaLabel, "Review cycles and review agent, up to 5 cycles");
   assert.equal(reviewEdge.markerEnd.type, "arrowclosed");
   assert.equal(graph.edges.filter(edge => edge.markerStart || edge.markerEnd).length, 1);
   assert.match(graph.nodes.find((n) => n.id === "merge").data.detail, /rebase/);
@@ -99,14 +100,14 @@ test("input workflows compose only active steps and identify their source", () =
     w.reviewCycles = 2;
     w.merge.enabled = true;
     graph = diagram(w);
-    assert.deepEqual(graph.nodes.map(n => n.id), ["repository", "trigger", "task", "review", "merge"]);
-    assert.equal(graph.edges.length, 4);
+    assert.deepEqual(graph.nodes.map(n => n.id), ["repository", "trigger", "task", "review", "merge", "reviewAgent"]);
+    assert.equal(graph.edges.length, 5);
     assert.equal(graph.nodes[2].sourcePosition, "bottom");
     assert.equal(graph.nodes[4].sourcePosition, undefined);
   }
   const review = newWorkflow("acme/repo", "review", "review");
   review.reviewCycles = 2;
-  assert.equal(diagram(review).nodes.some(n => n.id === "review"), false);
+  assert.equal(diagram(review).nodes.some(n => n.id === "review" || n.id === "reviewAgent"), false);
   assert.equal(diagram(review).nodes.find(n => n.id === "task").data.icon, "review");
   assert.equal(diagram(newWorkflow("acme/repo", "repair", "repair")).nodes.find(n => n.id === "task").data.icon, "repair");
 });
@@ -119,7 +120,7 @@ test("automatic layouts use visible steps and measured sizes without changing ex
   for (const direction of ["vertical", "horizontal"]) {
     const positions = automaticLayout(w, direction, nodes);
     const graph = diagram({ ...w, positions });
-    for (let i = 1; i < graph.nodes.length; i++) {
+    for (let i = 1; i < graph.nodes.length - 1; i++) {
       const previous = graph.nodes[i - 1], current = graph.nodes[i];
       if (direction === "horizontal") {
         assert.equal(current.position.y, previous.position.y);
@@ -133,9 +134,27 @@ test("automatic layouts use visible steps and measured sizes without changing ex
         assert.equal(previous.sourcePosition, "bottom");
       }
     }
+    const { review, reviewAgent } = positions;
+    assert.deepEqual(reviewAgent, direction === "horizontal"
+      ? { x: review.x, y: review.y + 180 + 64 }
+      : { x: review.x + 260 + 64, y: review.y });
     assert.deepEqual(graph.edges, diagram(w).edges);
+    delete positions.reviewAgent;
+    const legacyNodes = diagram({ ...w, positions }).nodes;
+    const legacyAgent = legacyNodes.find(n => n.id === "reviewAgent");
+    assert.equal(legacyAgent.targetPosition, direction === "horizontal" ? "top" : "left");
   }
   assert.deepEqual(w, original);
   const input = newWorkflow("acme/repo", "app-prompt", "simple");
   assert.deepEqual(Object.keys(automaticLayout(input, "vertical")), ["repository", "trigger", "task"]);
+});
+
+test("legacy review agent placement avoids nonadjacent nodes", () => {
+  const w = newWorkflow("acme/repo", "delivery", "layout");
+  const review = diagram(w).nodes.find(node => node.id === "review").position;
+  const initial = diagram(w).nodes.find(node => node.id === "reviewAgent").position;
+  w.positions = { repository: initial };
+  const agent = diagram(w).nodes.find(node => node.id === "reviewAgent");
+  assert.notDeepEqual(agent.position, initial);
+  assert.notDeepEqual(agent.position, review);
 });

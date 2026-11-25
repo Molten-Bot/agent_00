@@ -38,6 +38,7 @@ import {
 import "@xyflow/react/style.css";
 import "./style.css";
 import { ReviewPasses } from "./review-passes.jsx";
+import { ComplexitySlider } from "./complexity-slider.jsx";
 import { ScheduleInterval } from "./schedule-interval.jsx";
 import { RepositoryPicker } from "./repository-picker.jsx";
 import { events, newWorkflow, diagram, replaceDefinition, workflowTemplates, workflowSettings, incompleteWorkflow, automaticLayout } from "./model.js";
@@ -55,12 +56,13 @@ const colors = {
   filters: "#e5ae58",
   task: "#a18aff",
   review: "#66b5eb",
+  reviewAgent: "#a18aff",
   merge: "#de8fbd",
 };
 const AgentLogoContext = createContext("");
 function StepNode({ id, data, selected, sourcePosition, targetPosition }) {
   const updateNodeInternals = useUpdateNodeInternals();
-  useEffect(() => { updateNodeInternals(id); }, [id, sourcePosition, targetPosition, data.last, updateNodeInternals]);
+  useEffect(() => { updateNodeInternals(id); }, [id, sourcePosition, targetPosition, data.reviewAgentSide, updateNodeInternals]);
   const agentLogoURL = useContext(AgentLogoContext);
   const Icon = icons[data.icon] || icons[data.kind];
   return (
@@ -68,8 +70,8 @@ function StepNode({ id, data, selected, sourcePosition, targetPosition }) {
       className={`wf-node ${selected ? "wf-node-selected" : ""}`}
       style={{ "--step-color": colors[data.kind] }}
     >
-      {data.kind !== "repository" && (
-        <Handle type="target" position={targetPosition || Position.Top} />
+      {targetPosition && (
+        <Handle type="target" position={targetPosition} />
       )}
       <div className="wf-node-top">
         <span className="wf-icon">
@@ -82,8 +84,11 @@ function StepNode({ id, data, selected, sourcePosition, targetPosition }) {
       </div>
       <strong>{data.label}</strong>
       <p>{data.detail}</p>
-      {!data.last && (
-        <Handle type="source" position={sourcePosition || Position.Bottom} />
+      {sourcePosition && (
+        <Handle type="source" position={sourcePosition} />
+      )}
+      {data.reviewAgentSide && (
+        <Handle id="reviewAgent" type="source" position={data.reviewAgentSide} />
       )}
     </div>
   );
@@ -91,9 +96,15 @@ function StepNode({ id, data, selected, sourcePosition, targetPosition }) {
 const nodeTypes = { workflow: StepNode };
 function ReviewCycleEdge(props) {
   const [path, x, y] = getSmoothStepPath(props);
+  const { sourceX, sourceY, targetX, targetY, sourcePosition } = props;
+  const horizontal = sourcePosition === Position.Left || sourcePosition === Position.Right;
+  const returnX = (sourceX + targetX) / 2 + (horizontal ? 0 : 48);
+  const returnY = (sourceY + targetY) / 2 + (horizontal ? 48 : 0);
+  const returnPath = `M ${targetX},${targetY} Q ${returnX},${returnY} ${sourceX},${sourceY}`;
   return (
     <>
-      <BaseEdge path={path} markerStart={props.markerStart} markerEnd={props.markerEnd} />
+      <BaseEdge path={path} markerEnd={props.markerEnd} />
+      <BaseEdge path={returnPath} markerEnd={props.markerEnd} interactionWidth={0} />
       <EdgeLabelRenderer>
         <span className="wf-review-cycle-label" aria-hidden="true"
           style={{ transform: `translate(${x}px, ${y}px) translate(-50%, -50%)` }}>
@@ -245,7 +256,7 @@ function WorkflowCanvas({ workflow, saving, onInit, onDragChange, onMove, onSele
     </ReactFlow>
   );
 }
-function Editor() {
+function Editor({ defaultComplexity }) {
   const [editor, setEditor] = useState({ doc: null, current: null, savedSettings: null });
   const latest = useRef(editor);
   const write = useRef(null);
@@ -634,6 +645,17 @@ function Editor() {
   );
   const updateTask = (field, value) =>
     edit({ task: { ...current.task, [field]: value } });
+  const updateReviewAgent = (field, value) => {
+    const reviewAgent = { ...current.reviewAgent, [field]: value };
+    if (!value) delete reviewAgent[field];
+    edit({ reviewAgent: Object.keys(reviewAgent).length ? reviewAgent : undefined });
+  };
+  function updateReviewCycles(reviewCycles) {
+    edit({ reviewCycles });
+    if (reviewCycles && !current.reviewCycles) {
+      requestAnimationFrame(() => requestAnimationFrame(() => fitView.current?.({ padding: 32 })));
+    }
+  }
   const updateMerge = (field, value) =>
     edit({ merge: { ...current.merge, [field]: value } });
   const ruleFields = current?.trigger.event.startsWith("issue.")
@@ -810,11 +832,11 @@ function Editor() {
         <aside className="wf-inspector" aria-label="Step settings">
           {current && <div className="wf-composition">
             <span className="wf-section-label">COMPOSE STEPS</span>
-            {current.task.kind !== "review" && <Toggle label="Review step" value={current.reviewCycles > 0} onChange={(enabled) => { edit({reviewCycles: enabled ? 1 : 0}); setSelection(enabled ? "review" : "task"); }} />}
+            {current.task.kind !== "review" && <Toggle label="Review step" value={current.reviewCycles > 0} onChange={(enabled) => { updateReviewCycles(enabled ? 1 : 0); setSelection(enabled ? "review" : "task"); }} />}
             <Toggle label="Merge step" value={current.merge.enabled} onChange={(enabled) => { updateMerge("enabled", enabled); setSelection(enabled ? "merge" : "task"); }} />
           </div>}
 
-          <div className="wf-section-label">{selection.toUpperCase()}</div>
+          <div className="wf-section-label">{selection === "reviewAgent" ? "REVIEW AGENT" : selection.toUpperCase()}</div>
           {!current ? (
             <>
               <h2>Build an automation</h2>
@@ -1055,18 +1077,11 @@ function Editor() {
               {selection === "task" && (
                 <>
                   <h2>Agent task</h2>
-                  <Field label="Task complexity">
-                    <select
-                      aria-label="Task complexity"
-                      value={current.task.complexity || ""}
-                      onChange={(e) => updateTask("complexity", e.target.value || undefined)}
-                    >
-                      <option value="">Use settings default</option>
-                      <option value="easy">Easy</option>
-                      <option value="standard">Standard</option>
-                      <option value="advanced">Advanced</option>
-                    </select>
-                  </Field>
+                  <ComplexitySlider
+                    value={current.task.complexity}
+                    defaultComplexity={defaultComplexity}
+                    onChange={(value) => updateTask("complexity", value)}
+                  />
                   {current.trigger.event.startsWith("pr.") && (
                     <Field label="Task kind">
                       <select
@@ -1202,7 +1217,28 @@ function Editor() {
               {selection === "review" && (
                 <>
                   <h2>Bounded review cycles</h2>
-                  <ReviewPasses value={current.reviewCycles} onChange={(reviewCycles) => edit({ reviewCycles })} />
+                  <ReviewPasses value={current.reviewCycles} onChange={updateReviewCycles} />
+                </>
+              )}
+              {selection === "reviewAgent" && (
+                <>
+                  <h2>Review agent</h2>
+                  <ComplexitySlider
+                    label="Review complexity"
+                    inheritedLabel="Use agent task complexity"
+                    value={current.reviewAgent?.complexity}
+                    defaultComplexity={current.task.complexity || defaultComplexity}
+                    onChange={(value) => updateReviewAgent("complexity", value)}
+                  />
+                  <Field label="Review prompt (optional)">
+                    <textarea
+                      aria-label="Review prompt (optional)"
+                      rows={6}
+                      value={current.reviewAgent?.instructions || ""}
+                      onChange={(e) => updateReviewAgent("instructions", e.target.value)}
+                      placeholder="Check for regressions, missing tests, and unintended changes"
+                    />
+                  </Field>
                 </>
               )}
               {selection === "merge" && (
@@ -1278,16 +1314,18 @@ function localDateInput(value) {
 }
 let root;
 let renderedAgentLogoURL;
-window.mountWorkflowEditor = (agentLogoURL) => {
-  if (root && renderedAgentLogoURL === agentLogoURL) return;
+let renderedDefaultComplexity;
+window.mountWorkflowEditor = (agentLogoURL, defaultComplexity) => {
+  if (root && renderedAgentLogoURL === agentLogoURL && renderedDefaultComplexity === defaultComplexity) return;
   const container = document.getElementById("workflow-editor-root");
   if (!container) return;
   root ??= createRoot(container);
   renderedAgentLogoURL = agentLogoURL;
+  renderedDefaultComplexity = defaultComplexity;
   root.render(
     <AgentLogoContext.Provider value={agentLogoURL}>
       <ReactFlowProvider>
-        <Editor />
+        <Editor defaultComplexity={defaultComplexity} />
       </ReactFlowProvider>
     </AgentLogoContext.Provider>,
   );

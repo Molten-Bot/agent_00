@@ -4577,6 +4577,52 @@ select.prompt-control {
   white-space: nowrap;
 }
 
+.task-runtime-complexity button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.task-runtime-complexity button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.task-runtime-complexity svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.task-runtime-details {
+  max-width: min(24rem, calc(100vw - 24px));
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--popover);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@supports (position-area: block-start) {
+  .task-runtime-details {
+    position-area: block-start span-inline-end;
+    position-try-fallbacks: flip-inline, flip-block, flip-block flip-inline;
+    justify-self: start;
+    margin: 4px;
+  }
+}
+
 .task-meta > .task-meta-sites {
   display: inline-flex;
   align-items: center;
@@ -4663,6 +4709,11 @@ html.pink .task-site-url-action[data-state="current"] {
   position: absolute;
   left: 4px;
   color: var(--meta);
+}
+
+.task-meta > .task-runtime-complexity::before {
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .task-progress {
@@ -8235,6 +8286,40 @@ html[data-hover-mode="off"] .task-fullscreen-toggle:hover {
   .review-settings-automation { grid-template-columns: minmax(0, 1fr); }
   .selectable-option { justify-content: flex-start; }
 }
+
+.complexity-slider input[type="range"],
+.wf-editor .complexity-slider input[type="range"] {
+  display: block;
+  width: calc(100% - 16px);
+  height: 24px;
+  margin: 0 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  accent-color: var(--running);
+  cursor: ew-resize;
+}
+.complexity-stops { display: flex; justify-content: space-between; }
+.complexity-slider .complexity-stops button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+}
+.complexity-stops button svg { width: 18px; height: 18px; }
+.complexity-slider .complexity-stops button:hover { color: var(--text); }
+.complexity-slider .complexity-stops button[aria-pressed="true"] {
+  color: var(--running);
+  background: color-mix(in srgb, var(--running) 12%, transparent);
+}
+.complexity-slider :is(button, input):disabled { opacity: .45; cursor: default; }
 
 .review-slider { padding: 8px 10px 20px; }
 .review-slider-value { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; color: var(--text); font-size: 15px; }

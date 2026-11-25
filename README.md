@@ -729,9 +729,15 @@ to update the existing PR. If that target cannot be resolved or updated, the
 harness reports the targeting error instead of opening a replacement PR.
 
 Set a workflow's `reviewCycles` to run review-and-repair passes after a task
-creates its pull request and initial checks finish. A pass with no negative
-findings ends the cycle early. Actionable findings are repaired and checked
-before the next pass, including a clean confirmation after the final repair.
+creates its pull request and initial checks finish. Each pass starts a fresh
+agent against the current PR. Select the **Review agent** node to add review
+instructions or choose a separate complexity. Exported workflows store these
+options as `reviewAgent.instructions` and `reviewAgent.complexity`. When review
+complexity is unset, the reviewer uses the agent task's complexity.
+
+A pass with no negative findings ends the cycle early. Actionable findings
+are repaired and checked before the next pass, including a clean confirmation
+after the final repair.
 If findings remain after the repair budget is exhausted, the completed task
 stays successful and its pull request stays in draft for human review.
 
