@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ReactFlow,
@@ -9,10 +9,10 @@ import {
   getSmoothStepPath,
   Controls,
   ControlButton,
-  useUpdateNodeInternals,
   MiniMap,
   Handle,
   Position,
+  useUpdateNodeInternals,
   useReactFlow,
 } from "@xyflow/react";
 import {
@@ -58,9 +58,9 @@ const colors = {
   merge: "#de8fbd",
 };
 const AgentLogoContext = createContext("");
-function StepNode({ id, data, selected }) {
+function StepNode({ id, data, selected, sourcePosition, targetPosition }) {
   const updateNodeInternals = useUpdateNodeInternals();
-  useEffect(() => { updateNodeInternals(id); }, [id, data.sourcePosition, data.targetPosition, data.last, updateNodeInternals]);
+  useEffect(() => { updateNodeInternals(id); }, [id, sourcePosition, targetPosition, data.last, updateNodeInternals]);
   const agentLogoURL = useContext(AgentLogoContext);
   const Icon = icons[data.icon] || icons[data.kind];
   return (
@@ -69,7 +69,7 @@ function StepNode({ id, data, selected }) {
       style={{ "--step-color": colors[data.kind] }}
     >
       {data.kind !== "repository" && (
-        <Handle type="target" position={data.targetPosition || Position.Top} />
+        <Handle type="target" position={targetPosition || Position.Top} />
       )}
       <div className="wf-node-top">
         <span className="wf-icon">
@@ -83,7 +83,7 @@ function StepNode({ id, data, selected }) {
       <strong>{data.label}</strong>
       <p>{data.detail}</p>
       {!data.last && (
-        <Handle type="source" position={data.sourcePosition || Position.Bottom} />
+        <Handle type="source" position={sourcePosition || Position.Bottom} />
       )}
     </div>
   );
@@ -136,6 +136,97 @@ function Toggle({ label, value, onChange }) {
     </label>
   );
 }
+function WorkflowCanvas({ workflow, saving, onInit, onDragChange, onMove, onSelect, onArrange }) {
+  const flow = useReactFlow();
+  const pointerDragging = useRef(false);
+  const graph = useMemo(() => workflow ? diagram(workflow) : { nodes: [], edges: [] }, [workflow]);
+  const [layout, setLayout] = useState({ graph, nodes: graph.nodes });
+
+  if (layout.graph !== graph) {
+    const previous = new Map(layout.nodes.map(node => [node.id, node]));
+    const nodes = graph.nodes.map(node => {
+      const existing = previous.get(node.id);
+      if (!existing) return node;
+      return {
+        ...node,
+        measured: existing.measured,
+        selected: existing.selected,
+        dragging: existing.dragging,
+        position: existing.dragging || pointerDragging.current ? existing.position : node.position,
+      };
+    });
+    setLayout({ graph, nodes });
+  }
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.detail !== "workflow") return;
+      requestAnimationFrame(() => flow.fitView({ padding: 32, duration: 200 }));
+    };
+    window.addEventListener("workflow-display", handler);
+    return () => window.removeEventListener("workflow-display", handler);
+  }, [flow]);
+
+  useEffect(() => () => {
+    pointerDragging.current = false;
+    onDragChange(false);
+  }, [onDragChange]);
+
+  const handleNodesChange = useCallback(changes => {
+    setLayout(previous => ({ ...previous, nodes: changes.applyTo(previous.nodes) }));
+    const positions = changes.toArray().filter(change => change.type === "position" && change.position);
+    if (positions.length) onDragChange(pointerDragging.current || positions.some(change => change.dragging));
+    // Keep handles on the same side during a drag and reroute when it ends.
+    const moves = positions.filter(change => !change.dragging);
+    if (moves.length) onMove(Object.fromEntries(moves.map(change => [change.id, change.position])));
+  }, [onDragChange, onMove]);
+
+  function arrange(direction) {
+    if (!workflow) return;
+    onArrange(automaticLayout(workflow, direction, flow.getNodes()));
+    requestAnimationFrame(() => requestAnimationFrame(() => flow.fitView({ padding: 32, duration: 200 })));
+  }
+
+  return (
+    <ReactFlow
+      proOptions={{ hideAttribution: true }}
+      defaultMarkerColor={null}
+      nodes={layout.nodes}
+      edges={graph.edges}
+      nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
+      onInit={onInit}
+      onNodesChange={handleNodesChange}
+      onNodeClick={(_, node) => onSelect(node.id)}
+      onNodeDragStart={() => { pointerDragging.current = true; onDragChange(true); }}
+      onNodeDragStop={() => { pointerDragging.current = false; onDragChange(false); }}
+      nodesDraggable={!saving}
+      nodesConnectable={false}
+      edgesReconnectable={false}
+      deleteKeyCode={null}
+      fitView
+      fitViewOptions={{ padding: 32 }}
+      minZoom={0.25}
+      maxZoom={1.6}
+    >
+      <Background gap={22} />
+      <Controls showInteractive={false}>
+        <ControlButton aria-label="Arrange workflow vertically" title="Automatic vertical layout" disabled={!workflow} onClick={() => arrange("vertical")}>
+          <Rows3 />
+        </ControlButton>
+        <ControlButton aria-label="Arrange workflow horizontally" title="Automatic horizontal layout" disabled={!workflow} onClick={() => arrange("horizontal")}>
+          <Columns3 />
+        </ControlButton>
+      </Controls>
+      <MiniMap
+        style={{ width: 120, height: 80 }}
+        nodeColor={(node) => colors[node.data.kind]}
+        pannable
+        zoomable
+      />
+    </ReactFlow>
+  );
+}
 function Editor() {
   const [doc, setDoc] = useState(null),
     [current, setCurrent] = useState(null),
@@ -149,12 +240,13 @@ function Editor() {
     [dirty, setDirty] = useState(false),
     [notice, setNotice] = useState(""),
     [preview, setPreview] = useState(null),
-    [busy, setBusy] = useState(false),
+    [pendingAction, setPendingAction] = useState(null),
+    [dragging, setDragging] = useState(false),
     [templatesOpen, setTemplatesOpen] = useState(true);
-  const flow = useReactFlow();
-  const graph = current ? diagram(current) : { nodes: [], edges: [] };
+  const fitView = useRef(null);
+  const busy = pendingAction !== null;
   const changeRepository = useCallback((repository) => {
-    if (dirty) {
+    if (dirty || dragging) {
       setNotice("Save or discard changes first.");
       return false;
     }
@@ -162,7 +254,7 @@ function Editor() {
     setCurrent(null);
     setPreview(null);
     return true;
-  }, [dirty]);
+  }, [dirty, dragging]);
   async function reload() {
     try {
       const d = await api("/api/workflows");
@@ -217,14 +309,6 @@ function Editor() {
   }, []);
   useEffect(() => {
     const handler = (e) => {
-      if (e.detail !== "workflow") return;
-      requestAnimationFrame(() => flow.fitView({ padding: 32, duration: 200 }));
-    };
-    window.addEventListener("workflow-display", handler);
-    return () => window.removeEventListener("workflow-display", handler);
-  }, [flow]);
-  useEffect(() => {
-    const handler = (e) => {
       if (dirty) {
         e.preventDefault();
         e.returnValue = "";
@@ -268,13 +352,12 @@ function Editor() {
       setNotice(
         "Scheduled workflow draft created from Library. Save it, then enable when ready.",
       );
-      setTimeout(() => flow.fitView({ padding: 32 }), 0);
     };
     receive();
     window.addEventListener("workflow-create-schedule", receive);
     return () =>
       window.removeEventListener("workflow-create-schedule", receive);
-  }, [doc, dirty, flow]);
+  }, [doc, dirty]);
   const scheduled = current?.trigger.event === "schedule";
   const inputTriggered = current?.trigger.event.startsWith("app.");
   const libraryTask = libraryTasks.find(
@@ -302,19 +385,14 @@ function Editor() {
       },
     });
   }
-  function arrange(direction) {
-    if (!current) return;
-    edit({ positions: automaticLayout(current, direction, flow.getNodes()) });
-    requestAnimationFrame(() => requestAnimationFrame(() => flow.fitView({ padding: 32, duration: 200 })));
-  }
   function edit(update) {
     setCurrent((w) => ({ ...w, ...update }));
     setDirty(true);
     setPreview(null);
   }
   function choose(w) {
-    if (dirty) {
-      setNotice("Save or discard your changes before switching workflows.");
+    if (dirty || dragging) {
+      setNotice(dragging ? "Finish moving the workflow before switching workflows." : "Save or discard your changes before switching workflows.");
       return;
     }
     setRepo(w.repository);
@@ -322,10 +400,10 @@ function Editor() {
     setSelection("trigger");
     setPreview(null);
     setNotice("");
-    setTimeout(() => flow.fitView({ padding: 32 }), 0);
+    if (current?.id === w.id) fitView.current?.({ padding: 32, duration: 200 });
   }
   async function save(enabled = current.enabled) {
-    setBusy(true);
+    setPendingAction("save");
     try {
       const next = { ...current, enabled };
       const d = await api(
@@ -343,7 +421,7 @@ function Editor() {
     } catch (e) {
       setNotice(e.message);
     } finally {
-      setBusy(false);
+      setPendingAction(null);
     }
   }
   function create(kind) {
@@ -351,18 +429,17 @@ function Editor() {
       setNotice("Choose a repository first.");
       return;
     }
-    if (dirty) {
-      setNotice("Save or discard the current draft first.");
+    if (dirty || dragging) {
+      setNotice(dragging ? "Finish moving the workflow before creating another." : "Save or discard the current draft first.");
       return;
     }
     setCurrent(newWorkflow(repo.trim(), kind));
     setSelection("trigger");
     setDirty(true);
     setNotice(`${workflowTemplates.find((t) => t.id === kind).name} template copied. Review its settings, save the draft, then enable when ready.`);
-    setTimeout(() => flow.fitView({ padding: 32 }), 0);
   }
   async function showPreview() {
-    setBusy(true);
+    setPendingAction("preview");
     try {
       setPreview(
         await api("/api/workflows/preview", jsonOptions("POST", current)),
@@ -371,11 +448,11 @@ function Editor() {
     } catch (e) {
       setNotice(e.message);
     } finally {
-      setBusy(false);
+      setPendingAction(null);
     }
   }
   async function remove() {
-    setBusy(true);
+    setPendingAction("delete");
     try {
       const d = await api(
         "/api/workflows",
@@ -392,7 +469,7 @@ function Editor() {
     } catch (e) {
       setNotice(e.message);
     } finally {
-      setBusy(false);
+      setPendingAction(null);
     }
   }
   function exportAll() {
@@ -465,7 +542,7 @@ function Editor() {
               <button disabled={busy} onClick={showPreview}>
                 {scheduled ? "Preview schedule" : "Preview matches"}
               </button>
-              <button type="button" aria-label="Save draft" title="Save draft" disabled={busy} onClick={() => save(false)}>
+              <button type="button" aria-label="Save draft" title="Save draft" disabled={busy || dragging} onClick={() => save(false)}>
                 <Save size={15} aria-hidden="true" />
               </button>
               <button type="button" aria-label="Delete draft" title="Delete draft" className="wf-delete" disabled={busy || current.enabled} onClick={remove}>
@@ -476,7 +553,7 @@ function Editor() {
                 className="wf-primary"
                 aria-label={current.enabled ? "Pause" : "Enable"}
                 title={current.enabled ? "Pause" : "Enable"}
-                disabled={busy || dirty}
+                disabled={busy || dragging || dirty}
                 onClick={() => save(!current.enabled)}
               >
                 {current.enabled ? <Pause size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}
@@ -548,50 +625,18 @@ function Editor() {
             {current ? "DEFINITION CANVAS" : "CHOOSE OR CREATE A WORKFLOW"}
             <span>{current?.repository}</span>
           </div>
-          <ReactFlow
-            proOptions={{ hideAttribution: true }}
-            defaultMarkerColor={null}
-            nodes={graph.nodes}
-            edges={graph.edges}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            onNodesChange={(changes) => {
-              const moves = changes
-                .toArray()
-                .filter((c) => c.type === "position" && c.position);
-              if (moves.length)
-                edit({
-                  positions: {
-                    ...current.positions,
-                    ...Object.fromEntries(moves.map((c) => [c.id, c.position])),
-                  },
-                });
-            }}
-            onNodeClick={(_, n) => setSelection(n.id)}
-            nodesConnectable={false}
-            edgesReconnectable={false}
-            deleteKeyCode={null}
-            fitView
-            fitViewOptions={{ padding: 32 }}
-            minZoom={0.25}
-            maxZoom={1.6}
-          >
-            <Background gap={22} />
-            <Controls showInteractive={false}>
-              <ControlButton aria-label="Arrange workflow vertically" title="Automatic vertical layout" disabled={!current} onClick={() => arrange("vertical")}>
-                <Rows3 />
-              </ControlButton>
-              <ControlButton aria-label="Arrange workflow horizontally" title="Automatic horizontal layout" disabled={!current} onClick={() => arrange("horizontal")}>
-                <Columns3 />
-              </ControlButton>
-            </Controls>
-            <MiniMap
-              style={{ width: 120, height: 80 }}
-              nodeColor={(n) => colors[n.data.kind]}
-              pannable
-              zoomable
+          {/* Keep late drag events in the store for the workflow where they started. */}
+          <ReactFlowProvider key={current?.id}>
+            <WorkflowCanvas
+              workflow={current}
+              saving={pendingAction === "save"}
+              onInit={flow => { fitView.current = flow.fitView; }}
+              onDragChange={setDragging}
+              onMove={positions => edit({ positions: { ...current.positions, ...positions } })}
+              onSelect={setSelection}
+              onArrange={positions => edit({ positions })}
             />
-          </ReactFlow>
+          </ReactFlowProvider>
           {notice && (
             <div className="wf-notice" role="status">
               <div>
