@@ -659,7 +659,7 @@ function Editor() {
           )}
           {current && (
             <span className="wf-save-state" role="status">
-              {incomplete ? "Incomplete" : saving ? "Saving…" : dirty ? "Unsaved changes" : current.enabled ? "Enabled" : "Saved draft"}
+              {incomplete ? "Incomplete" : saving ? "Saving…" : dirty ? "Unsaved changes" : ""}
             </span>
           )}
           <button

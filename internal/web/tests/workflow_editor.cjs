@@ -25,8 +25,8 @@ async function openEditor(t,viewport={width:1280,height:900},initialSettings={wo
  if(url.pathname.startsWith('/api/'))return route.fulfill({json:{ok:true}});return route.continue()});
  await page.goto(baseURL+'/#workflow');await page.locator('#workflow-title').waitFor();return {page,getDocument:()=>doc,setDocument:value=>{doc=value},onSave:handler=>{beforeSave=handler}};
 }
-async function waitForDraft(page) {
- await page.locator('.wf-save-state').filter({hasText:/^Saved draft$/}).waitFor({state:'attached'});
+async function waitForSaved(page) {
+ await page.locator('.wf-save-state:empty').waitFor({state:'attached'});
 }
 async function selectRepository(page, repository) {
  const owner = repository.split('/')[0];
@@ -69,21 +69,28 @@ test('Agent task updates its SVG when the active harness changes',async t=>{
 });
 test('multiple persistent workflows, disabled drafts, policy editing, activation and pause',async t=>{const {page,getDocument}=await openEditor(t);
  await selectRepository(page, 'acme/repo');await page.getByRole('button',{name:'Implement issues',exact:true}).click();await page.locator('.wf-node').first().waitFor();assert.equal(await page.locator('.wf-node').count(),4);
- await page.getByLabel('Workflow name').fill('Implement ready issues');await waitForDraft(page);assert.equal(getDocument().workflows[0].enabled,false);
+ await page.getByLabel('Workflow name').fill('Implement ready issues');await waitForSaved(page);assert.equal(getDocument().workflows[0].enabled,false);
  const pausedCard=page.getByRole('button',{name:'Implement ready issues, acme/repo, Paused',exact:true});
  const runningCard=page.getByRole('button',{name:'Implement ready issues, acme/repo, Running',exact:true});
+ const header=page.locator('.wf-editor .panel-header');
+ const enable=header.getByRole('button',{name:'Enable',exact:true});
+ const pause=header.getByRole('button',{name:'Pause',exact:true});
  await pausedCard.locator('svg.lucide-pause').waitFor();
- await page.getByRole('button',{name:'Enable',exact:true}).click();
+ await enable.locator('svg.lucide-play').waitFor();
+ assert.equal(await header.getByText(/^(Enabled|Disabled|Saved draft)$/).count(),0);
+ await enable.click();
  await runningCard.locator('svg.lucide-play').waitFor();
+ await pause.locator('svg.lucide-pause').waitFor();
+ assert.equal(await header.getByText(/^(Enabled|Disabled|Saved draft)$/).count(),0);
  assert.equal(getDocument().workflows[0].enabled,true);
  await page.getByLabel('Workflow name').fill('Enabled issue workflow');
- await page.locator('.wf-save-state').filter({hasText:/^Enabled$/}).waitFor();
+ await waitForSaved(page);
  assert.equal(getDocument().workflows[0].name,'Enabled issue workflow');
  await page.getByRole('button',{name:'Pause',exact:true}).click();
  await page.getByRole('button',{name:'Enabled issue workflow, acme/repo, Paused',exact:true}).locator('svg.lucide-pause').waitFor();
- await page.getByRole('button',{name:'Review PRs',exact:true}).click();await waitForDraft(page);assert.equal(getDocument().workflows.length,2);
+ await page.getByRole('button',{name:'Review PRs',exact:true}).click();await waitForSaved(page);assert.equal(getDocument().workflows.length,2);
  await page.getByRole('button',{name:'Preview matches',exact:true}).click();await page.getByText('#12 Example issue',{exact:true}).waitFor();assert.equal(getDocument().workflows.every(w=>!w.enabled),true);
- await page.reload();await selectRepository(page, 'acme/repo');assert.equal(await page.locator('.wf-step').count(),2);await page.locator('.wf-step').first().click();await page.getByLabel('Review step',{exact:true}).check();await page.getByRole('slider',{name:'Review passes',exact:true}).fill('3');await waitForDraft(page);assert.equal(getDocument().workflows[0].reviewCycles,4);
+ await page.reload();await selectRepository(page, 'acme/repo');assert.equal(await page.locator('.wf-step').count(),2);await page.locator('.wf-step').first().click();await page.getByLabel('Review step',{exact:true}).check();await page.getByRole('slider',{name:'Review passes',exact:true}).fill('3');await waitForSaved(page);assert.equal(getDocument().workflows[0].reviewCycles,4);
  await selectRepository(page, 'acme/other');await page.locator('.wf-step').first().waitFor({state:'detached'});assert.equal(getDocument().workflows.length,2);
  const editor=await page.locator('.wf-editor').boundingBox(),dock=await page.locator('.page-bottom-dock').boundingBox();assert.ok(editor.y+editor.height<=dock.y);});
 
@@ -95,13 +102,13 @@ test('navigation saves valid edits and leaves incomplete changes at the last sav
  const reloadName='Saved on reload '+suffix;
  await selectRepository(page,'acme/repo');
  await page.getByRole('button',{name:'Implement issues',exact:true}).click();
- await waitForDraft(page);
+ await waitForSaved(page);
  const name=page.getByLabel('Workflow name');
  await name.fill(navigationName);
  await page.evaluate(()=>{location.hash='studio-builder'});
  await page.locator('#workflow-display').waitFor({state:'hidden'});
  await page.locator('#workflow-dock-link').click();
- await waitForDraft(page);
+ await waitForSaved(page);
  const saved=await getDocument();
  const definition=saved.workflows.find(w=>w.name===navigationName);
  assert.ok(definition);
@@ -129,12 +136,12 @@ test('autosave refreshes the document revision and retries after a concurrent sa
  const {page,getDocument,setDocument}=await openEditor(t);
  await selectRepository(page,'acme/repo');
  await page.getByRole('button',{name:'Implement issues',exact:true}).click();
- await waitForDraft(page);
+ await waitForSaved(page);
  const workflow = getDocument().workflows[0];
  const revision = getDocument().revision;
  setDocument({...getDocument(),revision:revision+1});
  await page.getByLabel('Workflow name').fill('Retried after concurrent save');
- await page.locator('.wf-save-state').filter({hasText:/^Saved draft$/}).waitFor();
+ await waitForSaved(page);
  assert.equal(getDocument().revision,revision+2);
  assert.equal(getDocument().workflows.find(w=>w.id===workflow.id).name,'Retried after concurrent save');
 });
@@ -143,7 +150,7 @@ test('large pending autosaves survive leaving the page and restore on reload', a
  const {page,getDocument}=await openEditor(t);
  await selectRepository(page,'acme/repo');
  await page.getByRole('button',{name:'Implement issues',exact:true}).click();
- await waitForDraft(page);
+ await waitForSaved(page);
  const workflow=getDocument().workflows[0];
  const pending={...workflow,name:'Restored large workflow',task:{...workflow.task,instructions:'x'.repeat(70_000)}};
  await page.evaluate(value=>sessionStorage.setItem('hubui.workflowPendingSave.v1',JSON.stringify(value)),{workflow:pending,base:workflow});
@@ -158,7 +165,7 @@ test('autosave keeps newer edits while an earlier revision is in flight', async 
  const {page,getDocument,onSave}=await openEditor(t);
  await selectRepository(page,'acme/repo');
  await page.getByRole('button',{name:'Implement issues',exact:true}).click();
- await waitForDraft(page);
+ await waitForSaved(page);
  const revision=getDocument().revision;
  let finishSave;
  const saving=new Promise(resolve=>{finishSave=resolve});
@@ -171,7 +178,7 @@ test('autosave keeps newer edits while an earlier revision is in flight', async 
  } finally {
   finishSave();
  }
- await waitForDraft(page);
+ await waitForSaved(page);
  assert.equal(await name.inputValue(),'Latest edit');
  assert.equal(getDocument().revision,revision+2);
  assert.equal(getDocument().workflows[0].name,'Latest edit');
@@ -191,15 +198,15 @@ test('mobile editor fits the viewport in both normal and fullscreen layouts',asy
  assert.equal(await page.getByLabel('Label',{exact:true}).inputValue(),'ready');
 });
 
-test('scheduled template supports library prompts, interval units, and inline fallback',async t=>{const {page,getDocument}=await openEditor(t);await selectRepository(page, 'acme/repo');await page.getByRole('button',{name:'Scheduled task',exact:true}).click();assert.equal(await page.locator('.wf-node').count(),3);await page.getByRole('button',{name:'days',exact:true}).click();await page.locator('[data-id="task"]').click();await page.getByLabel('Prompt source',{exact:true}).selectOption('audit');await page.getByText('Preview library prompt',{exact:true}).click();await page.getByText('Audit the repository.',{exact:true}).waitFor();await page.getByLabel('Additional context (optional)').fill('Focus on security');await waitForDraft(page);assert.equal(getDocument().workflows[0].trigger.event,'schedule');assert.equal(getDocument().workflows[0].task.libraryTaskName,'audit');await page.getByLabel('Prompt source',{exact:true}).selectOption('');await page.getByLabel('Instructions',{exact:true}).fill('Run an inline repository task.');await waitForDraft(page);assert.equal(getDocument().workflows[0].task.libraryTaskName,undefined);});
+test('scheduled template supports library prompts, interval units, and inline fallback',async t=>{const {page,getDocument}=await openEditor(t);await selectRepository(page, 'acme/repo');await page.getByRole('button',{name:'Scheduled task',exact:true}).click();assert.equal(await page.locator('.wf-node').count(),3);await page.getByRole('button',{name:'days',exact:true}).click();await page.locator('[data-id="task"]').click();await page.getByLabel('Prompt source',{exact:true}).selectOption('audit');await page.getByText('Preview library prompt',{exact:true}).click();await page.getByText('Audit the repository.',{exact:true}).waitFor();await page.getByLabel('Additional context (optional)').fill('Focus on security');await waitForSaved(page);assert.equal(getDocument().workflows[0].trigger.event,'schedule');assert.equal(getDocument().workflows[0].task.libraryTaskName,'audit');await page.getByLabel('Prompt source',{exact:true}).selectOption('');await page.getByLabel('Instructions',{exact:true}).fill('Run an inline repository task.');await waitForSaved(page);assert.equal(getDocument().workflows[0].task.libraryTaskName,undefined);});
 
 test('retired automation templates create independent disabled workflows for one repository',async t=>{
  const {page,getDocument}=await openEditor(t);
  await selectRepository(page, 'acme/repo');
  await page.getByRole('button',{name:'Assigned issues',exact:true}).click();
- await waitForDraft(page);
+ await waitForSaved(page);
  await page.getByRole('button',{name:'Issue to merge',exact:true}).click();
- await waitForDraft(page);
+ await waitForSaved(page);
  const workflows=getDocument().workflows;
  assert.equal(workflows.length,2);
  assert.ok(workflows.every(w=>w.repository==='acme/repo'&&!w.enabled&&!w.includeBacklog));
@@ -244,7 +251,7 @@ test('schedule scale drags between units and preserves minute and month interval
  await page.getByRole('button',{name:'Scheduled task',exact:true}).click();
  await page.getByRole('button',{name:'minutes',exact:true}).click();
  await page.getByLabel('Repeat every (minutes)',{exact:true}).fill('7');
- await waitForDraft(page);
+ await waitForSaved(page);
  assert.equal(getDocument().workflows[0].trigger.intervalHours,7/60);
  await page.reload();await selectRepository(page,'acme/repo');await page.locator('.wf-step').first().click();await page.locator('[data-id="trigger"]').click();
  assert.equal(await page.getByLabel('Repeat every (minutes)',{exact:true}).inputValue(),'7');
@@ -253,12 +260,12 @@ test('schedule scale drags between units and preserves minute and month interval
  await page.mouse.move(box.x+8,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width-8,box.y+box.height/2,{steps:12});await page.mouse.up();
  assert.equal(await slider.getAttribute('aria-valuetext'),'months');
  await page.getByLabel('Repeat every (months)',{exact:true}).fill('2');
- await waitForDraft(page);assert.equal(getDocument().workflows[0].trigger.intervalHours,1440);
+ await waitForSaved(page);assert.equal(getDocument().workflows[0].trigger.intervalHours,1440);
  await page.reload();await selectRepository(page,'acme/repo');await page.locator('.wf-step').first().click();await page.locator('[data-id="trigger"]').click();
  assert.equal(await page.getByLabel('Repeat every (months)',{exact:true}).inputValue(),'2');
  await page.getByRole('slider',{name:'Repeat interval scale'}).focus();await page.keyboard.press('Home');await page.keyboard.press('ArrowRight');
  assert.equal(await page.getByRole('slider').getAttribute('aria-valuetext'),'hours');
- await page.getByRole('button',{name:'weeks',exact:true}).click();await waitForDraft(page);assert.equal(getDocument().workflows[0].trigger.intervalHours,336);
+ await page.getByRole('button',{name:'weeks',exact:true}).click();await waitForSaved(page);assert.equal(getDocument().workflows[0].trigger.intervalHours,336);
  const scale=await page.getByRole('slider').boundingBox(),amount=await page.getByLabel('Repeat every (weeks)',{exact:true}).boundingBox();assert.ok(scale.y+scale.height<amount.y);
  assert.equal(await page.locator('.wf-interval-units svg').count(),5);
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
@@ -276,7 +283,7 @@ test('in-app workflows keep defaults opt-in and compose review and merge steps',
  await page.getByRole('slider',{name:'Review passes',exact:true}).fill('2');
  await page.getByLabel('Merge step',{exact:true}).check();
  assert.equal(await page.locator('.wf-node').count(),5);
- await waitForDraft(page);
+ await waitForSaved(page);
  const w=getDocument().workflows[0];
  assert.equal(w.trigger.event,'app.prompt');assert.equal(w.enabled,false);assert.equal(w.reviewCycles,2);assert.equal(w.merge.enabled,true);
  await page.getByLabel('Review step',{exact:true}).uncheck();
@@ -285,7 +292,7 @@ test('in-app workflows keep defaults opt-in and compose review and merge steps',
  await page.locator('[data-id="task"]').click();
  assert.equal(await page.getByLabel('Prompt source',{exact:true}).count(),0);
  await page.getByLabel('Additional instructions (optional)',{exact:true}).fill('Keep the submitted task scope.');
- await waitForDraft(page);
+ await waitForSaved(page);
  await page.getByRole('button',{name:'JSON submission',exact:true}).click();
  assert.equal(await page.locator('[data-id="trigger"] .lucide-file-json').count(),1);
 });
@@ -350,13 +357,13 @@ test('review pass slider supports presets, keyboard, dragging and existing saved
  await slider.scrollIntoViewIfNeeded();const box=await slider.boundingBox();
  await page.mouse.move(box.x+box.width/4,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width-8,box.y+box.height/2,{steps:8});await page.mouse.up();
  assert.equal(await slider.getAttribute('aria-valuetext'),'8 passes');
- await waitForDraft(page);assert.equal(getDocument().workflows[0].reviewCycles,8);
+ await waitForSaved(page);assert.equal(getDocument().workflows[0].reviewCycles,8);
  getDocument().workflows[0].reviewCycles=10;
  await page.reload();await selectRepository(page,'acme/repo');await page.locator('.wf-step').first().click();await page.locator('[data-id="review"]').click();
  assert.equal(await slider.getAttribute('aria-valuetext'),'10 passes, saved value; choose a preset to change');
  assert.equal(await presets.getByRole('button',{pressed:true}).count(),0);
- await waitForDraft(page);assert.equal(getDocument().workflows[0].reviewCycles,10);
- await page.getByRole('button',{name:'4 passes',exact:true}).click();await waitForDraft(page);assert.equal(getDocument().workflows[0].reviewCycles,4);
+ await waitForSaved(page);assert.equal(getDocument().workflows[0].reviewCycles,10);
+ await page.getByRole('button',{name:'4 passes',exact:true}).click();await waitForSaved(page);assert.equal(getDocument().workflows[0].reviewCycles,4);
  await page.screenshot({path:join(tmpdir(),'agent00-review-pass-slider.png'),fullPage:true});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
 });
@@ -365,8 +372,7 @@ test('dragging a workflow node keeps nodes and edges visible', async t => {
  const {page,getDocument}=await openEditor(t,{width:1600,height:1050});
  await selectRepository(page,'acme/repo');
  await page.getByRole('button',{name:'Assigned issues',exact:true}).click();
- await waitForDraft(page);
- await page.getByText('Saved draft',{exact:true}).waitFor();
+ await waitForSaved(page);
 
  await page.getByRole('button',{name:'Maximize Workflow'}).click();
  await page.locator('.react-flow__controls-fitview').click();
@@ -418,8 +424,7 @@ test('dragging a workflow node keeps nodes and edges visible', async t => {
  await node.locator('.react-flow__handle.source[data-handlepos="left"]').waitFor({state:'attached'});
  const dropped=await node.boundingBox();
  assert.ok(Math.abs(dropped.x-dragged.x)<2,'node stays where it was dropped');
- await waitForDraft(page);
- await page.getByText('Saved draft',{exact:true}).waitFor();
+ await waitForSaved(page);
  assert.ok(getDocument().workflows[0].positions.task.x>80);
  assert.match(getDocument().workflows[0].name,/ updated$/);
 });
@@ -431,8 +436,7 @@ test('switching workflows by keyboard during a drag leaves the new workflow unto
  for (const [template, title] of [['Assigned issues','First workflow'],['Prompt submission','Second workflow']]) {
   await page.getByRole('button',{name:template,exact:true}).click();
   await name.fill(title);
-  await waitForDraft(page);
-  await page.getByText('Saved draft',{exact:true}).waitFor();
+  await waitForSaved(page);
 
  }
  const node=page.locator('.react-flow__node[data-id="task"]');
@@ -469,8 +473,7 @@ test('workflow save and activation controls cannot interrupt a node drag', async
 
  const enable=page.getByRole('button',{name:'Enable',exact:true});
  const pause=page.getByRole('button',{name:'Pause',exact:true});
- await waitForDraft(page);
- await page.getByText('Saved draft',{exact:true}).waitFor();
+ await waitForSaved(page);
 
  const node=page.locator('.react-flow__node[data-id="task"]');
  for (const toggle of [enable,pause]) {
@@ -492,7 +495,7 @@ test('workflow save and activation controls cannot interrupt a node drag', async
 
   assert.equal(getDocument().revision,revision);
   await page.getByLabel("Workflow name").fill("Moved "+previousX);
-  await page.locator(".wf-save-state").filter({hasText:/^(Saved draft|Enabled)$/}).waitFor();
+  await waitForSaved(page);
   assert.ok(getDocument().workflows[0].positions.task.x>previousX);
   if (toggle===enable) {
    await enable.click();
@@ -529,15 +532,14 @@ test('a pending workflow save prevents starting a drag', async t => {
  } finally {
   finishSave();
  }
- await page.getByText('Saved draft',{exact:true}).waitFor();
+ await waitForSaved(page);
 });
 
 test('reselecting the active workflow fits its graph after panning', async t => {
  const {page}=await openEditor(t,{width:1600,height:1050});
  await selectRepository(page,'acme/repo');
  await page.getByRole('button',{name:'Assigned issues',exact:true}).click();
- await waitForDraft(page);
- await page.getByText('Saved draft',{exact:true}).waitFor();
+ await waitForSaved(page);
  const workflow=page.locator('.wf-step.wf-active');
  const canvas=page.locator('.react-flow');
  const node=page.locator('.react-flow__node[data-id="task"]');
@@ -569,7 +571,7 @@ test('layout changes stay local until a workflow settings edit', async t => {
  assert.equal(await vertical.isDisabled(),true);assert.equal(await horizontal.isDisabled(),true);
  await selectRepository(page,'acme/repo');await page.getByRole('button',{name:'Issue to merge',exact:true}).click();
  assert.equal(await horizontal.locator('svg').evaluate(svg=>getComputedStyle(svg).fill),'none');
- await waitForDraft(page);
+ await waitForSaved(page);
  const initialRevision=getDocument().revision;
  const node=page.locator('[data-id="trigger"]');
  const box=await node.boundingBox();
@@ -582,7 +584,7 @@ test('layout changes stay local until a workflow settings edit', async t => {
  await page.waitForTimeout(600);
  assert.equal(getDocument().revision,initialRevision);
  await page.getByLabel('Workflow name').fill('Horizontal workflow');
- await waitForDraft(page);
+ await waitForSaved(page);
  const horizontalPositions=structuredClone(getDocument().workflows[0].positions);
  const steps=['repository','trigger','filters','task','review','merge'];
  const values=steps.map(step=>horizontalPositions[step]);
@@ -595,7 +597,7 @@ test('layout changes stay local until a workflow settings edit', async t => {
  assert.deepEqual(getDocument().workflows[0].positions,horizontalPositions);
  await vertical.click();
  await page.getByLabel('Workflow name').fill('Vertical workflow');
- await waitForDraft(page);
+ await waitForSaved(page);
  const verticalPositions=steps.map(step=>getDocument().workflows[0].positions[step]);
  assert.equal(new Set(verticalPositions.map(p=>p.x)).size,1);
  for(let i=1;i<verticalPositions.length;i++)assert.ok(verticalPositions[i].y>verticalPositions[i-1].y+100);
@@ -648,7 +650,7 @@ test('Workflow draft controls are icon buttons in the header and preview stays a
   assert.equal(await button.locator('svg').count(),1);
  }
  assert.equal(await page.getByText('Activation history',{exact:true}).count(),0);
- await waitForDraft(page);
+ await waitForSaved(page);
  await header.getByRole('button',{name:'Preview matches',exact:true}).click();
  await page.getByText('Matching preview (1 matches)',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Close preview',exact:true}).click();
