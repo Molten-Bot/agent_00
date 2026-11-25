@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -125,5 +126,72 @@ func TestBasicPRTriggerUsesOnlyPullsCollection(t *testing.T) {
 	tick(t, e)
 	if *submitted != 1 {
 		t.Fatal("missed review request")
+	}
+}
+
+func TestIssueLabelScanCost(t *testing.T) {
+	t.Parallel()
+	for _, count := range []int{1, 100} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			t.Parallel()
+			w := definition("issues")
+			w.Trigger.Value = "@me" // A literal label, even when it resembles a login.
+			e, _, _ := testEngine(t, w)
+			var rows []string
+			for n := 1; n <= count; n++ {
+				rows = append(rows, fmt.Sprintf(`{"number":%d,"pull_request":{}}`, n))
+			}
+			calls := 0
+			e.Fetch = (GitHub{Runner: fakeRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+				calls++
+				if strings.Join(cmd.Args, " ") != "api --paginate repos/acme/repo/issues?state=open&per_page=100" {
+					t.Fatalf("unexpected lookup %v", cmd.Args)
+				}
+				return execx.Result{Stdout: "[" + strings.Join(rows, ",") + "]"}, nil
+			})}).Fetch
+			ds, err := e.Preview(context.Background(), w)
+			if err != nil || len(ds) != 0 || calls != 1 {
+				t.Fatalf("preview decisions=%v calls=%d err=%v", ds, calls, err)
+			}
+			tick(t, e)
+			if calls != 2 {
+				t.Fatalf("poll made %d calls", calls-1)
+			}
+		})
+	}
+}
+
+func TestMixedWorkflowsShareCollectionListings(t *testing.T) {
+	t.Parallel()
+	issue := definition("issues")
+	pr := definition("prs")
+	pr.Trigger = Trigger{Event: "pr.ready"}
+	pr.Task.Kind = "review"
+	issue.IncludeBacklog, pr.IncludeBacklog = true, true
+	other := pr
+	other.ID = "other"
+	e, _, submitted := testEngine(t, issue, pr, other)
+	var calls []string
+	var logs []string
+	e.Fetch = (GitHub{Logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }, Runner: fakeRunner(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+		args := strings.Join(cmd.Args, " ")
+		switch {
+		case strings.Contains(args, "/issues?"):
+			calls = append(calls, "issues")
+			return execx.Result{Stdout: `[{"number":1,"labels":[{"name":"ready"}]},{"number":2,"pull_request":{}}]`}, nil
+		case strings.Contains(args, "/pulls?"):
+			calls = append(calls, "pulls")
+			return execx.Result{Stdout: `[{"number":2,"head":{"ref":"topic","sha":"abc"}}]`}, nil
+		default:
+			t.Fatalf("unexpected detail lookup %v", cmd.Args)
+			return execx.Result{}, nil
+		}
+	})}).Fetch
+	tick(t, e)
+	if strings.Join(calls, ",") != "issues,pulls" || *submitted != 2 {
+		t.Fatalf("calls=%v submissions=%d", calls, *submitted)
+	}
+	if len(logs) != 1 || !strings.Contains(logs[0], "gh_calls=2 duration_ms=") {
+		t.Fatalf("scan logs=%v", logs)
 	}
 }
