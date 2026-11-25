@@ -430,7 +430,8 @@ test('switching workflows by keyboard during a drag leaves the new workflow unto
  const position=el=>el.style.transform;
  const secondPosition=await node.evaluate(position);
  await page.getByRole('button',{name:/First workflow/}).click();
- await node.hover();
+ await page.locator('.react-flow__controls-fitview').click();
+  await node.hover();
  const firstPosition=await node.evaluate(position);
  const start=await node.boundingBox();
  const x=start.x+start.width/2, y=start.y+start.height/2;
@@ -465,6 +466,7 @@ test('workflow save and activation controls cannot interrupt a node drag', async
  const node=page.locator('.react-flow__node[data-id="task"]');
  for (const toggle of [enable,pause]) {
 
+  await page.locator('.react-flow__controls-fitview').click();
   await node.hover();
   const start=await node.boundingBox();
   const x=start.x+start.width/2, y=start.y+start.height/2;
@@ -503,6 +505,7 @@ test('a pending workflow save prevents starting a drag', async t => {
  });
  try {
   const node=page.locator('.react-flow__node[data-id="task"]');
+  await page.locator('.react-flow__controls-fitview').click();
   await node.hover();
   const position=await node.evaluate(el=>el.style.transform);
 

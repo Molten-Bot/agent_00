@@ -356,11 +356,7 @@ function Editor() {
   const flushAutosave = useEffectEvent(() => { void flush(); });
   useEffect(() => {
     const handler = (e) => {
-      if (e.detail === "workflow") {
-        requestAnimationFrame(() => fitView.current?.({ padding: 32, duration: 200 }));
-      } else {
-        flushAutosave();
-      }
+      if (e.detail !== "workflow") flushAutosave();
     };
     window.addEventListener("workflow-display", handler);
     return () => window.removeEventListener("workflow-display", handler);
