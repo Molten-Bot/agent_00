@@ -337,7 +337,8 @@ test('review cycles loop through an independently configurable review agent', as
  const prompt=page.getByLabel('Review prompt (optional)',{exact:true});
  const complexity=page.getByLabel('Review complexity',{exact:true});
  await prompt.fill('Check error handling and recovery.');
- await complexity.selectOption('advanced');
+ await complexity.focus();
+ await complexity.press('End');
  assert.equal(await page.getByLabel('Base branch (optional)',{exact:true}).count(),0);
  assert.equal(await page.getByLabel('Target directory (optional)',{exact:true}).count(),0);
  await waitForSaved(page);
@@ -347,7 +348,7 @@ test('review cycles loop through an independently configurable review agent', as
  await page.locator('.wf-step').first().click();
  await agent.click();
  assert.equal(await prompt.inputValue(),'Check error handling and recovery.');
- assert.equal(await complexity.inputValue(),'advanced');
+ assert.equal(await complexity.getAttribute('aria-valuetext'),'Advanced');
  await page.locator('.react-flow__controls-fitview').click();
  await page.waitForFunction(()=>{
   const canvas=document.querySelector('.react-flow').getBoundingClientRect();
@@ -790,16 +791,29 @@ test('Workflow uses the same Studio panel and titlebar styles', async t => {
 });
 
 test('task complexity can override the application default and return to inheritance', async t => {
-  const { page, getDocument } = await openEditor(t);
+  const { page, getDocument } = await openEditor(t, undefined, {
+    workflow_enabled: true, default_complexity: 'easy',
+  });
   await selectRepository(page, 'acme/repo');
   await page.getByRole('button', { name: 'Scheduled task', exact: true }).click();
   await page.locator('[data-id="task"]').click();
-  const complexity = page.getByLabel('Task complexity', { exact: true });
-  assert.equal(await complexity.inputValue(), '');
-  await complexity.selectOption('advanced');
+  const complexity = page.getByRole('slider', { name: 'Complexity', exact: true });
+  const inherited = (name) => page.getByRole('button', { name: `Use settings default (${name})`, exact: true });
+  await inherited('Easy').locator('svg.lucide-rabbit').waitFor();
+  assert.equal(await complexity.getAttribute('aria-valuetext'), 'Use settings default (Easy)');
+  await complexity.press('End');
   await waitForSaved(page);
   assert.equal(getDocument().workflows[0].task.complexity, 'advanced');
-  await complexity.selectOption('');
+  await inherited('Easy').click();
   await waitForSaved(page);
+  assert.equal(getDocument().workflows[0].task.complexity, undefined);
+
+  await page.locator('#settings-open').click();
+  await page.locator('#settings-tab-automation').click();
+  await page.getByRole('group', { name: 'Default complexity presets' }).getByRole('button', { name: 'Standard' }).click();
+  await page.locator('#review-settings-close').click();
+  await page.locator('#settings-gate').waitFor({ state: 'hidden' });
+  await inherited('Standard').locator('svg.lucide-brain').waitFor();
+  assert.equal(await complexity.getAttribute('aria-valuetext'), 'Use settings default (Standard)');
   assert.equal(getDocument().workflows[0].task.complexity, undefined);
 });

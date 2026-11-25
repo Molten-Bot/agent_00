@@ -82,6 +82,7 @@ lucide-react/dist/esm/context.mjs:
 lucide-react/dist/esm/Icon.mjs:
 lucide-react/dist/esm/createLucideIcon.mjs:
 lucide-react/dist/esm/icons/at-sign.mjs:
+lucide-react/dist/esm/icons/brain.mjs:
 lucide-react/dist/esm/icons/building-complex.mjs:
 lucide-react/dist/esm/icons/calendar-clock.mjs:
 lucide-react/dist/esm/icons/calendar-days.mjs:
@@ -103,6 +104,7 @@ lucide-react/dist/esm/icons/message-square.mjs:
 lucide-react/dist/esm/icons/pause.mjs:
 lucide-react/dist/esm/icons/play.mjs:
 lucide-react/dist/esm/icons/plus.mjs:
+lucide-react/dist/esm/icons/rabbit.mjs:
 lucide-react/dist/esm/icons/refresh-ccw-dot.mjs:
 lucide-react/dist/esm/icons/rows-3.mjs:
 lucide-react/dist/esm/icons/signal-high.mjs:
@@ -110,6 +112,7 @@ lucide-react/dist/esm/icons/signal-low.mjs:
 lucide-react/dist/esm/icons/signal-medium.mjs:
 lucide-react/dist/esm/icons/signal-zero.mjs:
 lucide-react/dist/esm/icons/signal.mjs:
+lucide-react/dist/esm/icons/sparkles.mjs:
 lucide-react/dist/esm/icons/square-pen.mjs:
 lucide-react/dist/esm/icons/sun.mjs:
 lucide-react/dist/esm/icons/timer.mjs:

@@ -38,6 +38,7 @@ import {
 import "@xyflow/react/style.css";
 import "./style.css";
 import { ReviewPasses } from "./review-passes.jsx";
+import { ComplexitySlider } from "./complexity-slider.jsx";
 import { ScheduleInterval } from "./schedule-interval.jsx";
 import { RepositoryPicker } from "./repository-picker.jsx";
 import { events, newWorkflow, diagram, replaceDefinition, workflowTemplates, workflowSettings, incompleteWorkflow, automaticLayout } from "./model.js";
@@ -245,7 +246,7 @@ function WorkflowCanvas({ workflow, saving, onInit, onDragChange, onMove, onSele
     </ReactFlow>
   );
 }
-function Editor() {
+function Editor({ defaultComplexity }) {
   const [editor, setEditor] = useState({ doc: null, current: null, savedSettings: null });
   const latest = useRef(editor);
   const write = useRef(null);
@@ -1062,18 +1063,11 @@ function Editor() {
               {selection === "task" && (
                 <>
                   <h2>Agent task</h2>
-                  <Field label="Task complexity">
-                    <select
-                      aria-label="Task complexity"
-                      value={current.task.complexity || ""}
-                      onChange={(e) => updateTask("complexity", e.target.value || undefined)}
-                    >
-                      <option value="">Use settings default</option>
-                      <option value="easy">Easy</option>
-                      <option value="standard">Standard</option>
-                      <option value="advanced">Advanced</option>
-                    </select>
-                  </Field>
+                  <ComplexitySlider
+                    value={current.task.complexity}
+                    defaultComplexity={defaultComplexity}
+                    onChange={(value) => updateTask("complexity", value)}
+                  />
                   {current.trigger.event.startsWith("pr.") && (
                     <Field label="Task kind">
                       <select
@@ -1215,18 +1209,13 @@ function Editor() {
               {selection === "reviewAgent" && (
                 <>
                   <h2>Review agent</h2>
-                  <Field label="Review complexity">
-                    <select
-                      aria-label="Review complexity"
-                      value={current.reviewAgent?.complexity || ""}
-                      onChange={(e) => updateReviewAgent("complexity", e.target.value)}
-                    >
-                      <option value="">Use agent task complexity</option>
-                      <option value="easy">Easy</option>
-                      <option value="standard">Standard</option>
-                      <option value="advanced">Advanced</option>
-                    </select>
-                  </Field>
+                  <ComplexitySlider
+                    label="Review complexity"
+                    inheritedLabel="Use agent task complexity"
+                    value={current.reviewAgent?.complexity}
+                    defaultComplexity={current.task.complexity || defaultComplexity}
+                    onChange={(value) => updateReviewAgent("complexity", value)}
+                  />
                   <Field label="Review prompt (optional)">
                     <textarea
                       aria-label="Review prompt (optional)"
@@ -1311,16 +1300,18 @@ function localDateInput(value) {
 }
 let root;
 let renderedAgentLogoURL;
-window.mountWorkflowEditor = (agentLogoURL) => {
-  if (root && renderedAgentLogoURL === agentLogoURL) return;
+let renderedDefaultComplexity;
+window.mountWorkflowEditor = (agentLogoURL, defaultComplexity) => {
+  if (root && renderedAgentLogoURL === agentLogoURL && renderedDefaultComplexity === defaultComplexity) return;
   const container = document.getElementById("workflow-editor-root");
   if (!container) return;
   root ??= createRoot(container);
   renderedAgentLogoURL = agentLogoURL;
+  renderedDefaultComplexity = defaultComplexity;
   root.render(
     <AgentLogoContext.Provider value={agentLogoURL}>
       <ReactFlowProvider>
-        <Editor />
+        <Editor defaultComplexity={defaultComplexity} />
       </ReactFlowProvider>
     </AgentLogoContext.Provider>,
   );
