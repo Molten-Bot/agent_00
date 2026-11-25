@@ -82,13 +82,6 @@
                 title="Open full screen tasks">
                 <i data-lucide="maximize-2" class="task-fullscreen-toggle-icon" aria-hidden="true"></i>
               </button>
-              <button
-                id="task-visibility-toggle"
-                class="task-visibility-toggle prompt-visibility-toggle"
-                type="button"
-                aria-pressed="true"
-                aria-label="Minimize tasks panel"
-                title="Minimize tasks panel">▾<span id="task-running-count" class="task-running-count hidden" aria-hidden="true">0</span></button>
             </div>
           </div>
           <div class="scroll task-scroll">
@@ -907,7 +900,6 @@
     const REPO_HISTORY_KEY = "hubui.repoHistory.v1";
     const REVIEWER_HISTORY_KEY = "hubui.reviewerHistory.v1";
     const PROMPT_MODE_KEY = "hubui.localPromptMode";
-    const TASK_VISIBILITY_KEY = "hubui.taskPanelVisible";
     const TASK_PANEL_VIEW_KEY = "hubui.taskPanelView";
     const TASK_STATUS_FILTER_KEY = "hubui.taskStatusFilter";
     const TASK_HISTORY_KEY = "hubui.taskHistory.v1";
@@ -1634,14 +1626,6 @@
       }
     }
 
-    function loadTaskVisibility() {
-      try {
-        return localStorage.getItem(TASK_VISIBILITY_KEY) !== "hidden";
-      } catch (_err) {
-        return true;
-      }
-    }
-
     function loadTaskPanelView() {
       try {
         const raw = String(localStorage.getItem(TASK_PANEL_VIEW_KEY) || "").trim().toLowerCase();
@@ -1826,7 +1810,6 @@
       promptMode: loadPromptMode(),
       selectedLibraryType: "",
       selectedLibraryTask: "",
-      taskVisible: loadTaskVisibility(),
       taskPanelView: loadTaskPanelView(),
       taskStatusFilter: loadTaskStatusFilter(),
       taskFullscreenMode: "work",
@@ -1956,7 +1939,6 @@
     const taskList = document.getElementById("task-list");
     const taskPanel = document.getElementById("task-panel");
     const taskPanelTitle = document.getElementById("task-panel-title");
-    const taskVisibilityToggle = document.getElementById("task-visibility-toggle");
     const taskSoundToggle = document.getElementById("task-sound-toggle");
     const taskHistoryToggle = document.getElementById("task-history-toggle");
     const taskHistoryToggleBadge = document.getElementById("task-history-toggle-badge");
@@ -6706,14 +6688,6 @@
       }
     }
 
-    function persistTaskVisibility() {
-      try {
-        localStorage.setItem(TASK_VISIBILITY_KEY, state.taskVisible ? "visible" : "hidden");
-      } catch (_err) {
-        // Ignore localStorage failures.
-      }
-    }
-
     function builderPayload() {
       const repo = normalizeRepoValue(builderRepoInput.value);
       if (!repo) {
@@ -9026,16 +9000,6 @@
       }
     }
 
-    function syncTaskVisibilityForAppDisplay() {
-      if (state.appDisplay === "work") {
-        state.taskVisible = true;
-        return;
-      }
-      if (state.appDisplay === "studio" || state.appDisplay === "chat" || state.appDisplay === "workflow") {
-        state.taskVisible = false;
-      }
-    }
-
     let workflowEditorLoad;
     function loadWorkflowEditor() {
       if (!workflowEditorLoad) {
@@ -9097,7 +9061,6 @@
       const showStudio = mode === "studio";
       state.appDisplay = mode;
       document.body.dataset.appDisplay = mode;
-      syncTaskVisibilityForAppDisplay();
       if (appLayout) {
         appLayout.hidden = false;
         appLayout.dataset.appDisplay = mode;
@@ -9262,38 +9225,6 @@
       if (automatic) {
         setLocalPromptStatus("warn", "Automatic mode enabled; Studio is hidden.");
       }
-    }
-
-    function applyTaskVisibility() {
-      const visible = Boolean(state.taskVisible);
-      const fullscreenOpen = Boolean(state.taskFullscreenOpen);
-      const runningCount = runningTasks(state.snapshot).length;
-      if (taskPanel) {
-        taskPanel.classList.toggle("task-panel-collapsed", !visible);
-      }
-      if (taskVisibilityToggle) {
-        taskVisibilityToggle.hidden = fullscreenOpen;
-        taskVisibilityToggle.disabled = fullscreenOpen;
-        taskVisibilityToggle.setAttribute("aria-hidden", fullscreenOpen ? "true" : "false");
-        const arrow = document.createTextNode(visible ? "▾" : "▸");
-        const count = document.createElement("span");
-        count.id = "task-running-count";
-        count.className = "task-running-count";
-        count.textContent = `${Math.min(99, runningCount)}`;
-        count.setAttribute("aria-hidden", "true");
-        count.classList.toggle("hidden", visible || runningCount <= 0);
-        taskVisibilityToggle.replaceChildren(arrow, count);
-        taskVisibilityToggle.setAttribute("aria-label", visible ? "Minimize tasks panel" : "Expand tasks panel");
-        taskVisibilityToggle.title = visible ? "Minimize tasks panel" : "Expand tasks panel";
-        taskVisibilityToggle.setAttribute("aria-pressed", visible ? "true" : "false");
-      }
-    }
-
-    function toggleTaskVisibility() {
-      state.taskVisible = !state.taskVisible;
-      persistTaskVisibility();
-      applyTaskVisibility();
-      trackAnalyticsEvent("task_visibility_changed", { visible: state.taskVisible });
     }
 
     function relativeTime(iso) {
@@ -10576,7 +10507,6 @@
       } else {
         closeTaskImageViewer();
       }
-      applyTaskVisibility();
       render(state.snapshot);
     }
 
@@ -12945,7 +12875,6 @@
         taskPanel.classList.toggle("is-empty", !hasTasks);
         taskPanel.setAttribute("aria-hidden", showTaskPanel ? "false" : "true");
       }
-      applyTaskVisibility();
       syncFullscreen(hasTasks);
       if (!showTaskPanel) {
         if (taskList) {
@@ -14298,7 +14227,6 @@
       void verifyAgentDeviceAuth();
       return false;
     };
-    taskVisibilityToggle.addEventListener("click", toggleTaskVisibility);
     taskHistoryToggle.addEventListener("click", () => {
       const currentFilter = normalizeTaskStatusFilter(state.taskStatusFilter);
       const nextFilter = currentFilter === "running"
@@ -14532,7 +14460,6 @@
       clearTaskHistoryUnseen();
     }
     applyTaskPanelViewMeta();
-    applyTaskVisibility();
     applyTaskSoundToggleMeta();
     renderConfiguredAgent();
     applyAgentAuthGate(state.agentAuth);
