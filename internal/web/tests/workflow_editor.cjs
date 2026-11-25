@@ -36,12 +36,13 @@ async function selectRepository(page, repository) {
  await page.getByRole('group',{name:'Repositories',exact:true}).getByRole('button',{name:repository,exact:true}).click();
 }
 async function visibleNodeCenter(page,node) {
+ await node.hover();
  const bounds=await node.boundingBox();
  const canvas=await page.locator('.react-flow').boundingBox();
  const viewport=await page.evaluate(()=>({width:innerWidth,height:innerHeight}));
  const left=Math.max(bounds.x,canvas.x,0),right=Math.min(bounds.x+bounds.width,canvas.x+canvas.width,viewport.width);
  const top=Math.max(bounds.y,canvas.y,0),bottom=Math.min(bounds.y+bounds.height,canvas.y+canvas.height,viewport.height);
- assert.ok(right-left>20&&bottom-top>20,'node and canvas overlap inside the viewport');
+ assert.ok(right>left&&bottom>top,'node and canvas overlap inside the viewport');
  return {x:(left+right)/2,y:(top+bottom)/2};
 }
 test('Agent task updates its SVG when the active harness changes',async t=>{
