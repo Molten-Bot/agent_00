@@ -360,12 +360,23 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	}
 	// Branch conflicts need explicit recovery with evidence from the saved
 	// workspace before a matching PR can fulfill the claim.
-	if remote.Claim.ID == record.ID && record.BranchReserved && !requiresIssueBranchRecovery(record) {
+	ownsBranch := remote.Claim.ID == record.ID && record.BranchReserved
+	if (ownsBranch || record.Outcome == "") && !requiresIssueBranchRecovery(record) {
 		pr, err := s.findIssuePR(ctx, issue)
 		if err != nil {
 			return s.deferIssueRecord(record, err)
 		}
-		if pr.URL != "" && !pr.Closed && pr.BaseBranch == issue.Claim.BaseBranch {
+		if record.Outcome == "" {
+			if err := pr.recoveryBlocker(issue); err != nil {
+				return s.deferIssueRecord(record, err)
+			}
+		}
+		if ownsBranch && pr.URL != "" && !pr.Closed && pr.BaseBranch == issue.Claim.BaseBranch {
+			if record.Outcome == "interrupted" {
+				if err := s.verifyRecoveredIssuePR(ctx, record, pr); err != nil {
+					return s.deferIssueRecord(record, err)
+				}
+			}
 			return s.recordVerifiedIssuePR(record, pr)
 		}
 	}
@@ -740,6 +751,25 @@ type issuePullRequest struct {
 	BaseBranch string
 	Closed     bool
 	Merged     bool
+}
+
+func (pr issuePullRequest) recoveryBlocker(issue *config.GitHubIssueConfig) error {
+	if pr.URL == "" {
+		return nil
+	}
+	action := ""
+	switch {
+	case pr.Closed && pr.BaseBranch != issue.Claim.BaseBranch:
+		action = fmt.Sprintf("reopen the existing pull request for %q and retarget it to %q", issue.Claim.Branch, issue.Claim.BaseBranch)
+	case pr.Closed:
+		action = fmt.Sprintf("reopen the existing pull request for %q", issue.Claim.Branch)
+	case pr.BaseBranch != issue.Claim.BaseBranch:
+		action = fmt.Sprintf("retarget the existing pull request for %q to %q", issue.Claim.Branch, issue.Claim.BaseBranch)
+	}
+	if action != "" {
+		return fmt.Errorf("%w: %s before using Recover / retry", app.ErrIssueBranchRecovery, action)
+	}
+	return nil
 }
 
 // Claimed issue runs have exactly one checkout, under repo/ in the workspace.

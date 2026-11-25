@@ -832,19 +832,8 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if err != nil {
 			return issueRetryResult{}, 502, err
 		}
-		if pr.URL != "" {
-			action := ""
-			switch {
-			case pr.Closed && pr.BaseBranch != remote.Claim.BaseBranch:
-				action = fmt.Sprintf("reopen the existing pull request for %q and retarget it to %q", remote.Claim.Branch, remote.Claim.BaseBranch)
-			case pr.Closed:
-				action = fmt.Sprintf("reopen the existing pull request for %q", remote.Claim.Branch)
-			case pr.BaseBranch != remote.Claim.BaseBranch:
-				action = fmt.Sprintf("retarget the existing pull request for %q to %q", remote.Claim.Branch, remote.Claim.BaseBranch)
-			}
-			if action != "" {
-				return issueRetryResult{}, http.StatusConflict, fmt.Errorf("%w: %s before using Recover / retry", app.ErrIssueBranchRecovery, action)
-			}
+		if err := pr.recoveryBlocker(claimedIssue); err != nil {
+			return issueRetryResult{}, http.StatusConflict, err
 		}
 		if pr.URL != "" && (automatic || branchRecovery) {
 			if !automatic && branchRecovery && previous.Version == 2 &&

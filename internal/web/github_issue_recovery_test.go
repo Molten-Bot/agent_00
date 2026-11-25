@@ -319,12 +319,56 @@ func TestIssueRecoveryFinalizesCompletedAttemptAfterOwnerRestored(t *testing.T) 
 	}
 }
 
+func initRecoveryCheckout(t *testing.T, workspace, branch string) (func(...string) string, string) {
+	t.Helper()
+	dir := filepath.Join(workspace, "repo")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) string {
+		t.Helper()
+		res, err := (execx.OSRunner{}).Run(t.Context(), execx.Command{Dir: dir, Name: "git", Args: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(res.Stdout)
+	}
+	git("init", "-b", branch)
+	git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--no-gpg-sign", "--allow-empty", "-m", "recovered work")
+	return git, git("rev-parse", "HEAD")
+}
+
+func TestInterruptedIssueRecoveryBlocksUnpublishedWork(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.pollGitHubIssueAutoStart(t.Context())
+	record := completeRecoveryRecord(t, s, "", 1)
+	record.StoppedAt = time.Time{}
+	record.WorkspaceDir = t.TempDir()
+	branch := record.Run.GitHubIssue.Claim.Branch
+	git, _ := initRecoveryCheckout(t, record.WorkspaceDir, branch)
+	git("branch", "-m", "renamed")
+	if err := s.IssueClaims.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	f.prs = recoveryPR("open", "null", branch, "main")
+	if err := s.ReconcileIssueWork(t.Context()); !errors.Is(err, app.ErrIssueBranchRecovery) {
+		t.Fatalf("reconcile unpublished work: %v", err)
+	}
+	got := latestRecoveryRecord(t, s)
+	if got.State != "blocked" || got.Incident != localruntime.IssueIncidentBranchRecovery || got.PRURL != "" || len(f.submissions) != 1 {
+		t.Fatalf("state=%s incident=%s pr=%q submissions=%d", got.State, got.Incident, got.PRURL, len(f.submissions))
+	}
+}
+
 func TestIssueRecoveryFinalizesInterruptedAttemptAfterOwnerRestored(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s, f := recoveryServer(t)
 	s.pollGitHubIssueAutoStart(ctx)
 	record := completeRecoveryRecord(t, s, "completed", 1)
+	record.WorkspaceDir = t.TempDir()
+	_, head := initRecoveryCheckout(t, record.WorkspaceDir, record.Run.GitHubIssue.Claim.Branch)
 	record.StoppedAt = time.Time{}
 	record.Outcome = ""
 	if err := s.IssueClaims.Save(record); err != nil {
@@ -369,6 +413,13 @@ func TestIssueRecoveryFinalizesInterruptedAttemptAfterOwnerRestored(t *testing.T
 	}
 
 	f.prs = recoveryPR("open", "null", "agent00-issue-17", "main")
+	f.prs = strings.Replace(f.prs, "existing-commits", head, 1)
+	s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		if strings.HasSuffix(cmd.Args[len(cmd.Args)-1], "/git/ref/heads/agent00-issue-17") {
+			return execx.Result{Stdout: `{"object":{"sha":"` + head + `"}}`}, nil
+		}
+		return f.Run(ctx, cmd)
+	})
 	if err := s.ReconcileIssueWork(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -1079,21 +1130,8 @@ func TestIssueRecoveryBlocksReservedBranchConflictsAcrossRestart(t *testing.T) {
 			}
 			if name == "legacy rename rejection" {
 				branch := got.Run.GitHubIssue.Claim.Branch
+				git, head := initRecoveryCheckout(t, got.WorkspaceDir, branch)
 				dir := filepath.Join(got.WorkspaceDir, "repo")
-				if err := os.Mkdir(dir, 0700); err != nil {
-					t.Fatal(err)
-				}
-				git := func(args ...string) string {
-					t.Helper()
-					res, err := (execx.OSRunner{}).Run(t.Context(), execx.Command{Dir: dir, Name: "git", Args: args})
-					if err != nil {
-						t.Fatal(err)
-					}
-					return strings.TrimSpace(res.Stdout)
-				}
-				git("init", "-b", branch)
-				git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--no-gpg-sign", "--allow-empty", "-m", "recovered work")
-				head := git("rev-parse", "HEAD")
 				assertBlocked := func(want string) {
 					t.Helper()
 					response := retryIssue(t, s, got.ID, true)
@@ -1189,13 +1227,10 @@ func TestIssueRecoveryVerifiesReopenedPRBeforeCheckout(t *testing.T) {
 	}
 }
 
-func TestIssueRecoveryCleansUpLabelWhenReservedRefVanishesBeforeDispatch(t *testing.T) {
+func TestIssueRecoveryCleansUpLabelWhenAdmissionIsBlocked(t *testing.T) {
 	t.Parallel()
-	for _, restart := range []bool{false, true} {
-		name := "during admission"
-		if restart {
-			name = "after restart"
-		}
+	for _, name := range []string{"missing ref during admission", "missing ref after restart", "closed PR after restart"} {
+		restart := strings.HasSuffix(name, "after restart")
 		t.Run(name, func(t *testing.T) {
 			s, f := recoveryServer(t)
 			ctx := t.Context()
@@ -1203,7 +1238,11 @@ func TestIssueRecoveryCleansUpLabelWhenReservedRefVanishesBeforeDispatch(t *test
 			s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
 				res, err := f.Run(ctx, cmd)
 				if err == nil && strings.Contains(strings.Join(cmd.Args, " "), "--method POST repos/acme/repo/issues/17/labels") {
-					f.branch = false
+					if name == "closed PR after restart" {
+						f.prs = recoveryPR("closed", "null", "agent00-issue-17", "other")
+					} else {
+						f.branch = false
+					}
 					if restart {
 						interrupted = latestRecoveryRecord(t, s)
 						return execx.Result{}, context.Canceled
