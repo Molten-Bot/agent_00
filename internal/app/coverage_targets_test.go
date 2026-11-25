@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -212,45 +211,6 @@ func TestMergeAbortCommand(t *testing.T) {
 	}
 }
 
-func TestStripReviewOutcomeJSON(t *testing.T) {
-	t.Parallel()
-
-	t.Run("empty text", func(t *testing.T) {
-		t.Parallel()
-		if got := stripReviewOutcomeJSON(""); got != "" {
-			t.Fatalf("stripReviewOutcomeJSON(empty) = %q, want empty", got)
-		}
-	})
-
-	t.Run("no fenced block returns original text", func(t *testing.T) {
-		t.Parallel()
-		text := "just plain commentary, no json here"
-		if got := stripReviewOutcomeJSON(text); got != text {
-			t.Fatalf("stripReviewOutcomeJSON(no fence) = %q, want %q", got, text)
-		}
-	})
-
-	t.Run("strips valid outcome JSON block", func(t *testing.T) {
-		t.Parallel()
-		text := "Before text.\n\n```json\n{\"status\":\"clean\",\"mergeReady\":true,\"summary\":\"ok\"}\n```\n\nAfter text."
-		got := stripReviewOutcomeJSON(text)
-		if strings.Contains(got, "mergeReady") {
-			t.Fatalf("stripReviewOutcomeJSON() = %q, want JSON removed", got)
-		}
-		if !strings.Contains(got, "Before text.") || !strings.Contains(got, "After text.") {
-			t.Fatalf("stripReviewOutcomeJSON() = %q, want surrounding text preserved", got)
-		}
-	})
-
-	t.Run("fenced block with braces but invalid JSON is left untouched", func(t *testing.T) {
-		t.Parallel()
-		text := "```json\n{not valid json}\n```"
-		if got := stripReviewOutcomeJSON(text); got != text {
-			t.Fatalf("stripReviewOutcomeJSON(invalid json block) = %q, want unchanged %q", got, text)
-		}
-	})
-}
-
 func TestParseReviewOutcome(t *testing.T) {
 	t.Parallel()
 
@@ -450,58 +410,6 @@ func TestReviewMergeMethod(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestPRReviewSummaryFallbackCommand(t *testing.T) {
-	t.Parallel()
-
-	t.Run("no target repo falls back to pr comment", func(t *testing.T) {
-		t.Parallel()
-		got := prReviewSummaryFallbackCommand("/repo", "42", "", 0, "/tmp/body.md")
-		want := execx.Command{Dir: "/repo", Name: "gh", Args: []string{"pr", "comment", "42", "--body-file", "/tmp/body.md"}}
-		if strings.Join(got.Args, " ") != strings.Join(want.Args, " ") {
-			t.Fatalf("prReviewSummaryFallbackCommand() = %+v, want %+v", got, want)
-		}
-	})
-
-	t.Run("target repo with explicit PR number uses issues API", func(t *testing.T) {
-		t.Parallel()
-		got := prReviewSummaryFallbackCommand("/repo", "42", "acme/repo", 42, "/tmp/body.md")
-		want := execx.Command{
-			Dir:  "/repo",
-			Name: "gh",
-			Args: []string{"api", "repos/acme/repo/issues/42/comments", "-F", "body=@/tmp/body.md"},
-		}
-		if strings.Join(got.Args, " ") != strings.Join(want.Args, " ") {
-			t.Fatalf("prReviewSummaryFallbackCommand() = %+v, want %+v", got, want)
-		}
-	})
-
-	t.Run("target repo with numeric selector derives PR number", func(t *testing.T) {
-		t.Parallel()
-		got := prReviewSummaryFallbackCommand("/repo", "99", "acme/repo", 0, "/tmp/body.md")
-		want := execx.Command{
-			Dir:  "/repo",
-			Name: "gh",
-			Args: []string{"api", "repos/acme/repo/issues/99/comments", "-F", "body=@/tmp/body.md"},
-		}
-		if strings.Join(got.Args, " ") != strings.Join(want.Args, " ") {
-			t.Fatalf("prReviewSummaryFallbackCommand() = %+v, want %+v", got, want)
-		}
-	})
-
-	t.Run("target repo with non-numeric selector falls back to pr comment with repo flag", func(t *testing.T) {
-		t.Parallel()
-		got := prReviewSummaryFallbackCommand("/repo", "feature-branch", "acme/repo", 0, "/tmp/body.md")
-		want := execx.Command{
-			Dir:  "/repo",
-			Name: "gh",
-			Args: []string{"pr", "comment", "feature-branch", "--body-file", "/tmp/body.md", "--repo", "acme/repo"},
-		}
-		if strings.Join(got.Args, " ") != strings.Join(want.Args, " ") {
-			t.Fatalf("prReviewSummaryFallbackCommand() = %+v, want %+v", got, want)
-		}
-	})
 }
 
 func TestGitHubRepoRefWithOwnerAndName(t *testing.T) {
@@ -954,22 +862,6 @@ func TestStageHarnessManagedConflictResolutionRejectsUnconfirmedMarkerFreeConfli
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
-	}
-}
-
-func TestReviewSummaryWritebackErrorMethods(t *testing.T) {
-	t.Parallel()
-
-	reviewErr := errors.New("review command boom")
-	fallbackErr := errors.New("fallback comment boom")
-	e := reviewSummaryWritebackError{reviewErr: reviewErr, fallbackErr: fallbackErr}
-
-	want := fmt.Sprintf("review command failed: %v; fallback pull request comment failed: %v", reviewErr, fallbackErr)
-	if got := e.Error(); got != want {
-		t.Fatalf("Error() = %q, want %q", got, want)
-	}
-	if got := e.Unwrap(); !errors.Is(got, fallbackErr) {
-		t.Fatalf("Unwrap() = %v, want %v", got, fallbackErr)
 	}
 }
 

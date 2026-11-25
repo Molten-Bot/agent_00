@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -24,6 +26,8 @@ type reviewAPIStub struct {
 	posts        int
 	writeErr     error
 	lostResponse bool
+	hideReview   bool
+	comments     []inlineReviewFinding
 }
 
 func (r *reviewAPIStub) handle(cmd execx.Command) (execx.Result, bool, error) {
@@ -35,6 +39,7 @@ func (r *reviewAPIStub) handle(cmd execx.Command) (execx.Result, bool, error) {
 		var submitted struct {
 			Head        string `json:"commit_id"`
 			Event, Body string
+			Comments    []inlineReviewFinding
 		}
 		if err := json.Unmarshal([]byte(cmd.Stdin), &submitted); err != nil || submitted.Event != "COMMENT" || submitted.Head == "" {
 			r.t.Errorf("invalid submitted review: %+v, %v", submitted, err)
@@ -42,6 +47,7 @@ func (r *reviewAPIStub) handle(cmd execx.Command) (execx.Result, bool, error) {
 		if r.writeErr != nil {
 			return execx.Result{}, true, r.writeErr
 		}
+		r.comments = submitted.Comments
 		r.review = githubutil.SubmittedReview{
 			ID: int64(r.posts), Head: submitted.Head, State: "COMMENTED", Body: submitted.Body,
 			URL: "https://github.com/acme/repo/pull/42#pullrequestreview-1", SubmittedAt: "2026-11-25T12:00:00Z",
@@ -53,7 +59,7 @@ func (r *reviewAPIStub) handle(cmd execx.Command) (execx.Result, bool, error) {
 		return execx.Result{Stdout: string(data)}, true, nil
 	}
 	if len(cmd.Args) == 3 && cmd.Args[0] == "api" && cmd.Args[1] == "--paginate" && strings.Contains(cmd.Args[2], "/reviews?") {
-		if r.review.ID == 0 {
+		if r.review.ID == 0 || r.hideReview {
 			return execx.Result{Stdout: "[]"}, true, nil
 		}
 		data, _ := json.Marshal([]githubutil.SubmittedReview{r.review})
@@ -117,7 +123,8 @@ func TestStandaloneReviewRequiresNativeReceipt(t *testing.T) {
 			cfg := config.Config{Review: &config.ReviewConfig{PRNumber: 42, AutoMerge: tc.writeback != "off", Writeback: tc.writeback}}
 			prepared := &preparedReviewContext{Metadata: reviewPRMetadata{Number: 42, URL: prURL, State: "OPEN", HeadRefOID: "abc123"}}
 			runDir := t.TempDir()
-			err := h.completeReviewRun(t.Context(), cfg, &repo, prepared, execx.Result{Stdout: cleanReviewOutput}, runDir)
+			agentRes := execx.Result{Stdout: cleanReviewOutput, Stderr: "GitHub publication connection diagnostic"}
+			err := h.completeReviewRun(t.Context(), cfg, &repo, prepared, agentRes, runDir)
 			if (err != nil) != (tc.writeFails || tc.checksFail || tc.head != "abc123") {
 				t.Fatalf("unexpected outcome: %v", err)
 			}
@@ -125,6 +132,9 @@ func TestStandaloneReviewRequiresNativeReceipt(t *testing.T) {
 				t.Fatalf("merge calls = %d", merges)
 			}
 			if tc.merge {
+				if strings.Contains(api.review.Body, agentRes.Stderr) {
+					t.Fatal("publication diagnostics leaked into the clean review")
+				}
 				receipt, err := h.publishSubmittedReview(t.Context(), cfg, repo, prepared, runDir, 1, 0, reviewOutcome{Status: "clean", MergeReady: true}, "retry", nil)
 				if err != nil || !receipt.Clean() || api.posts != 1 {
 					t.Fatalf("resume wrote another review or lost receipt: %+v, %v, writes %d", receipt, err, api.posts)
@@ -135,6 +145,91 @@ func TestStandaloneReviewRequiresNativeReceipt(t *testing.T) {
 				if err == nil || api.posts != 1 {
 					t.Fatalf("ambiguous write permitted another submission: %v, writes %d", err, api.posts)
 				}
+			}
+		})
+	}
+}
+
+func TestStandaloneFindingReviewReconcilesAmbiguousWrite(t *testing.T) {
+	t.Chdir(t.TempDir())
+	runDir := filepath.Join(".agent00", "issue-workspaces", "review")
+	repo := repoWorkspace{Dir: filepath.Join(runDir, "repo")}
+	if err := os.MkdirAll(repo.Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const finding = `{"status":"findings","mergeReady":false,"findings":[{"severity":"Medium","path":"main.go","line":11,"title":"Handle the error"}]}`
+	const patch = "diff --git a/main.go b/main.go\n--- a/main.go\n+++ b/main.go\n@@ -1,2 +10,2 @@\n context\n-old\n+new\n"
+	for _, tc := range []struct {
+		name, diff   string
+		wantComments int
+	}{
+		{name: "inline", diff: patch, wantComments: 1},
+		{name: "summary only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prURL := "https://github.com/acme/repo/pull/42"
+			api := reviewAPIStub{t: t, lostResponse: true, hideReview: true}
+			h := New(sessionRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+				if cmd.Dir != repo.Dir {
+					t.Errorf("command ran in %q, want %q", cmd.Dir, repo.Dir)
+				}
+				if res, ok, err := api.handle(cmd); ok {
+					return res, err
+				}
+				if slices.ContainsFunc(cmd.Args, func(arg string) bool { return strings.Contains(arg, "state,mergedAt,") }) {
+					return execx.Result{Stdout: `{"state":"OPEN"}`}, nil
+				}
+				t.Errorf("unexpected command: %v", cmd.Args)
+				return execx.Result{}, errors.New("unexpected command")
+			}))
+			h.Sleep = func(context.Context, time.Duration) error { return nil }
+			cfg := config.Config{Review: &config.ReviewConfig{PRNumber: 42}}
+			passDir := filepath.Join(runDir, tc.name)
+			if err := os.Mkdir(passDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			prepared := &preparedReviewContext{Diff: tc.diff, Metadata: reviewPRMetadata{URL: prURL, State: "OPEN", HeadRefOID: "abc123"}}
+			agentRes := execx.Result{Stdout: "Checking the diff.\n\n```json\n" + finding + "\n```"}
+			if err := h.completeReviewRun(t.Context(), cfg, &repo, prepared, agentRes, passDir); err == nil || !strings.Contains(err.Error(), "waiting for acknowledged submitted review") {
+				t.Fatalf("initial completion = %v, want unacknowledged review", err)
+			}
+			api.hideReview = false
+			// A fresh agent result cannot replace the verdict already submitted for the pass.
+			if err := h.completeReviewRun(t.Context(), cfg, &repo, prepared, execx.Result{Stdout: cleanReviewOutput}, passDir); err != nil {
+				t.Fatalf("reconcile review: %v", err)
+			}
+			if api.posts != 1 || repo.ReviewReceipt != nil || len(api.comments) != tc.wantComments ||
+				!strings.HasPrefix(api.review.Body, "<!-- agent00-review ") ||
+				!strings.Contains(api.review.Body, "Handle the error") || strings.Contains(api.review.Body, "Checking the diff") {
+				t.Fatalf("posts = %d, inline = %+v, body = %q, clean receipt = %+v", api.posts, api.comments, api.review.Body, repo.ReviewReceipt)
+			}
+		})
+	}
+}
+
+func TestStandaloneReviewPublishesOnlyCodeVerdicts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, output, wantError string }{
+		{"progress only", "Checking the diff.", "no valid structured outcome"},
+		{"stderr verdict only", "", "no valid structured outcome"},
+		{"inspection blocked", `{"status":"blocked","mergeReady":false,"summary":"Checkout is incomplete","findings":[]}`, "review inspection blocked: Checkout is incomplete"},
+		{"publication error as finding", `{"status":"findings","mergeReady":false,"findings":[{"title":"Could not connect to GitHub to publish"}]}`, "requires a file, line, and title"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := New(sessionRunnerFunc(func(_ context.Context, cmd execx.Command) (execx.Result, error) {
+				t.Errorf("invalid or blocked verdict attempted a GitHub command: %v", cmd.Args)
+				return execx.Result{}, errors.New("unexpected command")
+			}))
+			h.Logf = func(format string, args ...any) {
+				if strings.Contains(fmt.Sprintf(format, args...), "review_not_clean") {
+					t.Error("invalid or blocked verdict was treated as a code finding")
+				}
+			}
+			cfg := config.Config{Review: &config.ReviewConfig{PRNumber: 42}}
+			prepared := &preparedReviewContext{Metadata: reviewPRMetadata{URL: "https://github.com/acme/repo/pull/42", State: "OPEN", HeadRefOID: "abc123"}}
+			err := h.completeReviewRun(t.Context(), cfg, &repoWorkspace{}, prepared, execx.Result{Stdout: tc.output, Stderr: cleanReviewOutput}, t.TempDir())
+			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("completion = %v, want %q", err, tc.wantError)
 			}
 		})
 	}

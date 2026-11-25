@@ -748,8 +748,10 @@ GitHub review on the exact PR head before automated merge. A clean review is
 posted with the `COMMENT` event, a structured verdict, and “No material issues
 found.” The task workspace records the review ID, head, run, pass, selected
 policy, and result. The server archives the outcome in `review-receipts` next
-to its runtime configuration before workspace cleanup. A lost write response
-is reconciled against submitted reviews before the harness can proceed.
+to its runtime configuration before workspace cleanup. The review agent
+returns a structured code verdict. The harness publishes one native review per
+completed pass with writeback enabled and reconciles lost responses against
+submitted reviews. Publication failures are reported as harness errors.
 Conversation comments provide feedback only.
 Human approval, when required, remains a separate requirement.
 

@@ -108,21 +108,6 @@ func TestTruncateReviewCommentBodyTruncates(t *testing.T) {
 	}
 }
 
-func TestReviewSummaryBodyPathBranches(t *testing.T) {
-	t.Parallel()
-
-	runDir := "/tmp/run"
-	if got, want := reviewSummaryBodyPath(runDir, 42), filepath.Join(runDir, "review-summary-pr-42.md"); got != want {
-		t.Fatalf("reviewSummaryBodyPath(positive pr) = %q, want %q", got, want)
-	}
-	if got, want := reviewSummaryBodyPath(runDir, 0), filepath.Join(runDir, "review-summary.md"); got != want {
-		t.Fatalf("reviewSummaryBodyPath(no pr) = %q, want %q", got, want)
-	}
-	if got, want := reviewSummaryBodyPath(runDir, -1), filepath.Join(runDir, "review-summary.md"); got != want {
-		t.Fatalf("reviewSummaryBodyPath(negative pr) = %q, want %q", got, want)
-	}
-}
-
 func TestBaseSyncConflictPromptEmptyMergeSummary(t *testing.T) {
 	t.Parallel()
 
@@ -263,43 +248,6 @@ func TestIsCodexExecutionTransportFailure(t *testing.T) {
 	// Markers found only in captured output (not the error string) must still match.
 	if !isCodexExecutionTransportFailure(execx.Result{Stderr: "stream disconnected before completion"}, errors.New("exit status 1")) {
 		t.Fatal("isCodexExecutionTransportFailure(marker in stderr) = false, want true")
-	}
-}
-
-func TestWriteWorkspaceFileFallsBackToOSWriteFile(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	target := filepath.Join(dir, "file.txt")
-	h := Harness{}
-	if err := h.writeWorkspaceFile(target, []byte("hello"), 0o644); err != nil {
-		t.Fatalf("writeWorkspaceFile() error = %v", err)
-	}
-	got, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	if string(got) != "hello" {
-		t.Fatalf("writeWorkspaceFile() wrote %q, want hello", string(got))
-	}
-}
-
-func TestWriteWorkspaceFileUsesWorkspaceOverride(t *testing.T) {
-	t.Parallel()
-
-	var capturedPath string
-	var capturedData []byte
-	h := Harness{}
-	h.Workspace.WriteFile = func(path string, data []byte, _ os.FileMode) error {
-		capturedPath = path
-		capturedData = data
-		return nil
-	}
-	if err := h.writeWorkspaceFile("/virtual/path.txt", []byte("payload"), 0o600); err != nil {
-		t.Fatalf("writeWorkspaceFile() error = %v", err)
-	}
-	if capturedPath != "/virtual/path.txt" || string(capturedData) != "payload" {
-		t.Fatalf("writeWorkspaceFile() did not invoke override correctly: path=%q data=%q", capturedPath, capturedData)
 	}
 }
 

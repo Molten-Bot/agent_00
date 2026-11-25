@@ -491,7 +491,10 @@ func buildCodexCommand(targetDir, prompt string, opts RunOptions) (execx.Command
 		// exec does not expose sandbox's -P flag; select the same named
 		// permissions through its supported configuration override instead.
 		args = append(args, "-c", `default_permissions="agent00_review"`, "-c",
-			"permissions.agent00_review={filesystem={"+reviewFilesystem(targetDir, opts)+"},network={enabled=false}}")
+			"permissions.agent00_review={filesystem={"+reviewFilesystem(targetDir, opts)+"},network={enabled=false}}",
+			// Connectors, extensions, and hooks can run outside the shell sandbox.
+			"-c", "mcp_servers={}", "--disable", "apps", "--disable", "plugins", "--disable", "hooks",
+			"--disable", "browser_use", "--disable", "computer_use")
 	} else {
 		args = append([]string{"exec", "--sandbox", "workspace-write"}, args[1:]...)
 		args = append(args, workspaceSandboxArgs(opts)...)
@@ -553,7 +556,11 @@ func buildClaudeCommand(targetDir, prompt string, opts RunOptions) (execx.Comman
 		args = append(args, "--model", opts.Model)
 	}
 	if tools := nonEmptyStrings(opts.DisallowedTools); len(tools) > 0 {
-		args = append(args, "--disallowedTools")
+		// Claude itself needs network access to reach its provider. Restrict
+		// the model to local reads even when the process can authenticate to GitHub.
+		args = append(args, "--safe-mode", "--tools", "Read,Glob,Grep",
+			"--settings", `{"disableAllHooks":true,"disableClaudeAiConnectors":true}`,
+			"--disallowedTools", "mcp__*")
 		args = append(args, tools...)
 	}
 	// Keep task content out of argv: subprocess errors include the arguments,

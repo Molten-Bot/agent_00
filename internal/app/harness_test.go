@@ -1016,12 +1016,12 @@ func TestRunBuildsReviewContextBeforeInvokingCodex(t *testing.T) {
 	cfg.Review = &config.ReviewConfig{PRNumber: 42}
 
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
-	guid := "abcdef123456"
+	guid := "prepared-review-context"
 	runDir := testRunDir(guid)
 	agentsPath := filepath.Join(runDir, "AGENTS.md")
 	repoDir := filepath.Join(runDir, "repo")
 	targetDir := filepath.Join(repoDir, cfg.TargetSubdir)
-	metadataJSON := `{"number":42,"title":"Improve tests","body":"Adds stronger coverage.","url":"https://github.com/acme/repo/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","headRefName":"feature/improve-tests","author":{"login":"octocat"}}`
+	metadataJSON := `{"number":42,"title":"Improve tests","body":"Adds stronger coverage.","url":"https://github.com/acme/repo/pull/42","state":"OPEN","isDraft":false,"baseRefName":"main","headRefName":"feature/improve-tests","headRefOid":"abc123","author":{"login":"octocat"}}`
 	commentsText := expectedReviewDiscussion(
 		`[{"user":{"login":"reviewer"},"body":"Please add one more regression test."}]`,
 		`[]`,
@@ -1042,14 +1042,21 @@ func TestRunBuildsReviewContextBeforeInvokingCodex(t *testing.T) {
 		{cmd: prReviewIssueCommentsCommand(repoDir, 42), res: execx.Result{Stdout: `[{"user":{"login":"reviewer"},"body":"Please add one more regression test."}]`}},
 		{cmd: prReviewReviewCommentsCommand(repoDir, 42), res: execx.Result{Stdout: `[]`}},
 		{cmd: prReviewReviewsCommand(repoDir, 42), res: execx.Result{Stdout: `[]`}},
-		{cmd: reviewDiffStatCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffStat}},
-		{cmd: reviewDiffPatchCommand(repoDir, remoteTrackingRef("main"), pullRequestTrackingRef(42)), res: execx.Result{Stdout: diffPatch}},
-		{cmd: codexCommandWithOptions(targetDir, withAgentsPrompt(strings.TrimSpace(cfg.Prompt+"\n\n"+expectedPreparedReviewContext(repoURLFromConfig(cfg), metadataJSON, commentsText, diffStat, diffPatch)), agentsPath), codexRunOptions{DisallowedTools: readOnlyReviewDisallowedTools})},
-		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## main\n"}},
-		{cmd: prReviewSummaryCommand(repoDir, "42", "acme/repo", reviewSummaryBodyPath(runDir, 42))},
+		{cmd: reviewDiffStatCommand(repoDir, remoteTrackingRef("main"), "abc123"), res: execx.Result{Stdout: diffStat}},
+		{cmd: reviewDiffPatchCommand(repoDir, remoteTrackingRef("main"), "abc123"), res: execx.Result{Stdout: diffPatch}},
+		{cmd: gitCommand(repoDir, "switch", "--detach", "abc123")},
+		{cmd: codexCommandWithOptions(targetDir, withAgentsPrompt(strings.TrimSpace(cfg.Prompt+"\n\n"+expectedPreparedReviewContext(repoURLFromConfig(cfg), metadataJSON, commentsText, diffStat, diffPatch)), agentsPath), codexRunOptions{DisallowedTools: readOnlyReviewDisallowedTools}), res: execx.Result{Stdout: `{"status":"findings","mergeReady":false,"findings":[{"severity":"Medium","path":"internal/service_test.go","line":12,"title":"Missing assertion"}]}`}},
+		{cmd: statusCommand(repoDir), res: execx.Result{Stdout: "## HEAD (no branch)\n"}},
+		{cmd: headCommitSHACommand(repoDir), res: execx.Result{Stdout: "abc123\n"}},
 	}}
 
-	h := New(fake)
+	api := &reviewAPIStub{t: t}
+	h := New(sessionRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+		if res, ok, err := api.handle(cmd); ok {
+			return res, err
+		}
+		return fake.Run(ctx, cmd)
+	}))
 	h.Now = func() time.Time { return now }
 	h.Workspace = testWorkspaceManager(guid)
 	h.TargetDirOK = func(path string) bool { return path == targetDir }
@@ -1066,6 +1073,9 @@ func TestRunBuildsReviewContextBeforeInvokingCodex(t *testing.T) {
 	}
 	if got, want := res.PRURL, "https://github.com/acme/repo/pull/42"; got != want {
 		t.Fatalf("PRURL = %q, want %q", got, want)
+	}
+	if api.posts != 1 || !strings.Contains(api.review.Body, "Missing assertion") {
+		t.Fatalf("native reviews = %d, body = %q", api.posts, api.review.Body)
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
@@ -1148,176 +1158,6 @@ func TestRunBuildsReviewContextFromHeadBranchSelector(t *testing.T) {
 	}
 	if len(fake.exps) != 0 {
 		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
-	}
-}
-
-func TestCompleteReviewRunFallsBackToIssueCommentWhenReviewWritebackFails(t *testing.T) {
-	t.Parallel()
-
-	runDir := t.TempDir()
-	repoDir := t.TempDir()
-	bodyPath := reviewSummaryBodyPath(runDir, 42)
-	reviewErr := errors.New("run gh [pr review 42 --comment --body-file body --repo acme/repo]: exit status 1 (GraphQL: Could not resolve to a Repository with the name 'acme/repo'. (repository))")
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{
-			cmd: prReviewSummaryCommand(repoDir, "42", "acme/repo", bodyPath),
-			err: reviewErr,
-		},
-		{cmd: prReviewSummaryFallbackCommand(repoDir, "42", "acme/repo", 42, bodyPath)},
-	}}
-	var logs []string
-	h := New(fake)
-	h.Logf = func(format string, args ...any) {
-		logs = append(logs, fmt.Sprintf(format, args...))
-	}
-
-	cfg := config.Config{Review: &config.ReviewConfig{PRNumber: 42}}
-	repo := repoWorkspace{Dir: repoDir}
-	reviewContext := &preparedReviewContext{
-		Selector: "42",
-		Metadata: reviewPRMetadata{
-			Number:      42,
-			URL:         "https://github.com/acme/repo/pull/42",
-			HeadRefName: "feature/improve-tests",
-		},
-	}
-	agentRes := execx.Result{Stdout: "```json\n{\"status\":\"findings\",\"mergeReady\":false,\"summary\":\"One issue.\",\"findings\":[{\"severity\":\"Medium\",\"path\":\"src/app.js\",\"line\":9,\"title\":\"Bug\"}]}\n```"}
-
-	if err := h.completeReviewRun(context.Background(), cfg, &repo, reviewContext, agentRes, runDir); err != nil {
-		t.Fatalf("completeReviewRun() err = %v, want nil after fallback", err)
-	}
-	if len(fake.exps) != 0 {
-		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
-	}
-	if got := strings.Join(logs, "\n"); !strings.Contains(got, "action=comment_review_failed") || !strings.Contains(got, "action=comment_fallback") {
-		t.Fatalf("logs = %q, want review failure and fallback entries", got)
-	}
-}
-
-func TestCompleteReviewRunDefersTransientGitHubWritebackFailure(t *testing.T) {
-	t.Parallel()
-
-	runDir := t.TempDir()
-	repoDir := t.TempDir()
-	bodyPath := reviewSummaryBodyPath(runDir, 42)
-	reviewErr := errors.New("run gh [pr review 42 --comment --body-file body --repo acme/repo]: exit status 1 (error connecting to api.github.com | check your internet connection or https://githubstatus.com)")
-	fallbackErr := errors.New("run gh [api repos/acme/repo/issues/42/comments -F body=@body]: exit status 1 (error connecting to api.github.com | check your internet connection or https://githubstatus.com)")
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{
-			cmd: prReviewSummaryCommand(repoDir, "42", "acme/repo", bodyPath),
-			err: reviewErr,
-		},
-		{
-			cmd: prReviewSummaryFallbackCommand(repoDir, "42", "acme/repo", 42, bodyPath),
-			err: fallbackErr,
-		},
-	}}
-	var logs []string
-	h := New(fake)
-	h.Logf = func(format string, args ...any) {
-		logs = append(logs, fmt.Sprintf(format, args...))
-	}
-
-	cfg := config.Config{Review: &config.ReviewConfig{PRNumber: 42, AutoMerge: true}}
-	repo := repoWorkspace{Dir: repoDir}
-	reviewContext := &preparedReviewContext{
-		Selector: "42",
-		Metadata: reviewPRMetadata{
-			Number:      42,
-			URL:         "https://github.com/acme/repo/pull/42",
-			HeadRefName: "feature/improve-tests",
-		},
-	}
-	agentRes := execx.Result{Stdout: "```json\n{\"status\":\"findings\",\"mergeReady\":false,\"summary\":\"No material issues.\",\"positives\":[\"Focused tests pass.\"],\"findings\":[]}\n```"}
-
-	if err := h.completeReviewRun(context.Background(), cfg, &repo, reviewContext, agentRes, runDir); err != nil {
-		t.Fatalf("completeReviewRun() err = %v, want nil for transient GitHub writeback failure", err)
-	}
-	if len(fake.exps) != 0 {
-		t.Fatalf("unconsumed expectations: %d", len(fake.exps))
-	}
-	if got := strings.Join(logs, "\n"); !strings.Contains(got, "action=comment_writeback_deferred") {
-		t.Fatalf("logs = %q, want deferred writeback warning", got)
-	}
-}
-
-func TestCompleteReviewRunReturnsNonTransientWritebackFailure(t *testing.T) {
-	t.Parallel()
-
-	runDir := t.TempDir()
-	repoDir := t.TempDir()
-	bodyPath := reviewSummaryBodyPath(runDir, 42)
-	reviewErr := errors.New("run gh [pr review 42 --comment --body-file body --repo acme/repo]: exit status 1 (HTTP 401: Requires authentication (https://api.github.com/graphql))")
-	fallbackErr := errors.New("run gh [api repos/acme/repo/issues/42/comments -F body=@body]: exit status 1 (HTTP 403: Resource not accessible by integration (https://api.github.com/graphql))")
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{
-			cmd: prReviewSummaryCommand(repoDir, "42", "acme/repo", bodyPath),
-			err: reviewErr,
-		},
-		{
-			cmd: prReviewSummaryFallbackCommand(repoDir, "42", "acme/repo", 42, bodyPath),
-			err: fallbackErr,
-		},
-	}}
-	h := New(fake)
-
-	cfg := config.Config{Review: &config.ReviewConfig{PRNumber: 42}}
-	repo := repoWorkspace{Dir: repoDir}
-	reviewContext := &preparedReviewContext{
-		Selector: "42",
-		Metadata: reviewPRMetadata{
-			Number: 42,
-			URL:    "https://github.com/acme/repo/pull/42",
-		},
-	}
-	agentRes := execx.Result{Stdout: "```json\n{\"status\":\"findings\",\"mergeReady\":false,\"summary\":\"No material issues.\",\"positives\":[\"Focused tests pass.\"],\"findings\":[]}\n```"}
-
-	err := h.completeReviewRun(context.Background(), cfg, &repo, reviewContext, agentRes, runDir)
-	if err == nil {
-		t.Fatal("completeReviewRun() err = nil, want non-transient writeback failure")
-	}
-	if !strings.Contains(err.Error(), "post pull request review summary") {
-		t.Fatalf("completeReviewRun() err = %q, want writeback context", err)
-	}
-}
-
-func TestCompleteReviewRunDoesNotDeferWhenFallbackWritebackFailureIsPermanent(t *testing.T) {
-	t.Parallel()
-
-	runDir := t.TempDir()
-	repoDir := t.TempDir()
-	bodyPath := reviewSummaryBodyPath(runDir, 42)
-	reviewErr := errors.New("run gh [pr review 42 --comment --body-file body --repo acme/repo]: exit status 1 (error connecting to api.github.com | check your internet connection or https://githubstatus.com)")
-	fallbackErr := errors.New("run gh [api repos/acme/repo/issues/42/comments -F body=@body]: exit status 1 (HTTP 403: Resource not accessible by integration (https://api.github.com/graphql))")
-	fake := &fakeRunner{t: t, exps: []expectedRun{
-		{
-			cmd: prReviewSummaryCommand(repoDir, "42", "acme/repo", bodyPath),
-			err: reviewErr,
-		},
-		{
-			cmd: prReviewSummaryFallbackCommand(repoDir, "42", "acme/repo", 42, bodyPath),
-			err: fallbackErr,
-		},
-	}}
-	h := New(fake)
-
-	cfg := config.Config{Review: &config.ReviewConfig{PRNumber: 42}}
-	repo := repoWorkspace{Dir: repoDir}
-	reviewContext := &preparedReviewContext{
-		Selector: "42",
-		Metadata: reviewPRMetadata{
-			Number: 42,
-			URL:    "https://github.com/acme/repo/pull/42",
-		},
-	}
-	agentRes := execx.Result{Stdout: "```json\n{\"status\":\"findings\",\"mergeReady\":false,\"summary\":\"No material issues.\",\"positives\":[\"Focused tests pass.\"],\"findings\":[]}\n```"}
-
-	err := h.completeReviewRun(context.Background(), cfg, &repo, reviewContext, agentRes, runDir)
-	if err == nil {
-		t.Fatal("completeReviewRun() err = nil, want permanent fallback writeback failure")
-	}
-	if !strings.Contains(err.Error(), "post pull request review summary") {
-		t.Fatalf("completeReviewRun() err = %q, want writeback context", err)
 	}
 }
 
@@ -1435,7 +1275,7 @@ func TestReviewCommentBodyUsesStructuredPositiveNegativePoints(t *testing.T) {
 	if !ok {
 		t.Fatal("parseReviewOutcome() ok = false, want true")
 	}
-	got := reviewCommentBody(execx.Result{Stdout: output}, outcome, ok)
+	got := conciseReviewCommentBody(outcome)
 	want := "**Positive**\n" +
 		"- Adds focused regression coverage.\n" +
 		"- Keeps the existing public API unchanged.\n" +
@@ -1455,7 +1295,7 @@ func TestReviewCommentBodyCleanOutcomeKeepsPositiveNegativeShape(t *testing.T) {
 	if !ok {
 		t.Fatal("parseReviewOutcome() ok = false, want true")
 	}
-	got := reviewCommentBody(execx.Result{Stdout: output}, outcome, ok)
+	got := conciseReviewCommentBody(outcome)
 	want := "**Positive**\n" +
 		"- No material issues found.\n" +
 		"\n" +
@@ -1463,22 +1303,6 @@ func TestReviewCommentBodyCleanOutcomeKeepsPositiveNegativeShape(t *testing.T) {
 		"- No material issues found."
 	if got != want {
 		t.Fatalf("reviewCommentBody(clean) = %q, want %q", got, want)
-	}
-}
-
-func TestReviewOutputTextPrefersStdoutOverStderrDiagnostics(t *testing.T) {
-	t.Parallel()
-
-	res := execx.Result{
-		Stdout: "```json\n{\"status\":\"clean\",\"mergeReady\":true,\"findings\":[]}\n```",
-		Stderr: "echoed prompt: ```json\n{\"status\":\"clean|findings|blocked\",\"mergeReady\":false}\n```",
-	}
-	outcome, ok := parseReviewOutcome(reviewOutputText(res))
-	if !ok {
-		t.Fatal("parseReviewOutcome() ok = false, want true")
-	}
-	if outcome.Status != "clean" || !outcome.MergeReady {
-		t.Fatalf("outcome = %+v, want clean stdout outcome", outcome)
 	}
 }
 

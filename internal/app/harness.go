@@ -45,7 +45,7 @@ import (
 // only returns the single final assistant message, so once a background task
 // finishes after the agent already produced its review text, the captured
 // output becomes a short "stale follow-up" acknowledgment instead of the
-// required fenced JSON outcome, and parseReviewOutcome has nothing to parse.
+// required JSON outcome, and parseReviewOutcome has nothing to parse.
 // A review pass must run synchronously in the invoking turn so its own final
 // message always carries the mandated verdict. This is blocked even for
 // read-only sub-agent use (e.g. Explore) because the harness cannot
@@ -53,7 +53,7 @@ import (
 // that parallel-exploration capability during review is an accepted
 // trade-off against the alternative of silently dropping the verdict.
 // ReportFindings is blocked for the same reason: the bundled review skill
-// requires the verdict as fenced JSON in that final text message, not routed
+// requires the verdict as JSON in that final text message, not routed
 // through a separate structured-output tool call that parseReviewOutcome
 // never inspects.
 var readOnlyReviewDisallowedTools = []string{"Edit", "Write", "NotebookEdit", "Bash", "Agent", "Skill", "Workflow", "ReportFindings"}
@@ -609,7 +609,9 @@ func (h Harness) Run(ctx context.Context, cfg config.Config) Result {
 		// first invocation and reuse the choice for follow-up agents by default.
 		h.resolveTaskModel = h.lazyTaskModel(ctx, runtime, codexDir, codexOpts, cfg.Complexity, agentStage, "resolve_model")
 	}
-	codexBasePrompt = withBackpressurePrompt(codexBasePrompt, h.collectBackpressureRequirements(repos, cfg.TargetSubdir))
+	if !reviewRun {
+		codexBasePrompt = withBackpressurePrompt(codexBasePrompt, h.collectBackpressureRequirements(repos, cfg.TargetSubdir))
+	}
 	codexTargetLabel := codexTargetLabel(cfg.TargetSubdir, len(repos) > 1)
 	initialRepo, initialRepoDir := initialAgentInvocationRepoMetadata(repos)
 	initialAgentInvocation := newAgentInvocationLogMetadata(runtime, invocationMode, 1, initialRepo, initialRepoDir, codexTargetLabel)
@@ -4386,7 +4388,7 @@ func (h Harness) runFinalReviewCycle(
 			return ExitCodex, "review", fmt.Errorf("post-task review pass %d modified repository files or history", pass)
 		}
 
-		outcome, ok := parseReviewOutcome(reviewOutputText(reviewRes))
+		outcome, ok := parseReviewOutcome(reviewRes.Stdout)
 		if !ok {
 			return ExitCodex, "review", fmt.Errorf("post-task review pass %d returned no valid structured outcome", pass)
 		}
@@ -4402,54 +4404,33 @@ func (h Harness) runFinalReviewCycle(
 				repo.PRURL,
 			)
 		}
-		switch outcome.Status {
-		case "blocked":
-			return ExitCodex, "review", fmt.Errorf("post-task review pass %d was blocked: %s", pass, strings.TrimSpace(outcome.Summary))
-		case "clean":
-			if len(outcome.Findings) != 0 || !outcome.MergeReady {
-				return ExitCodex, "review", fmt.Errorf("post-task review pass %d returned an inconsistent clean outcome", pass)
-			}
-		case "findings":
-			if len(outcome.Findings) == 0 {
-				return ExitCodex, "review", fmt.Errorf("post-task review pass %d reported findings without actionable items", pass)
-			}
-		default:
-			return ExitCodex, "review", fmt.Errorf("post-task review pass %d returned unsupported status %q", pass, outcome.Status)
+		if err := validateReviewOutcome(outcome); err != nil {
+			return ExitCodex, "review", fmt.Errorf("post-task review pass %d: %w", pass, err)
 		}
 
 		commentBody := finalReviewCommentBody(outcome, pass, passLabelTotal)
 		inline := inlineReviewFindings(reviewContext.Diff, outcome.Findings)
-		if len(outcome.Findings) == 0 || len(inline) > 0 {
-			receipt, err := h.publishSubmittedReview(ctx, cfg, *repo, reviewContext, filepath.Dir(repo.Dir), pass, h.FinalReviewPasses, outcome, commentBody, inline)
-			if err != nil {
-				return ExitPR, "review", h.reviewPublicationError(ctx, repo, pass, passLabelTotal, fmt.Errorf("publish review pass %d: %w", pass, err))
+		receipt, err := h.publishSubmittedReview(ctx, cfg, *repo, reviewContext, filepath.Dir(repo.Dir), pass, h.FinalReviewPasses, outcome, commentBody, inline)
+		if err != nil {
+			return ExitPR, "review", h.reviewPublicationError(ctx, repo, pass, passLabelTotal, fmt.Errorf("publish review pass %d: %w", pass, err))
+		}
+		// On reconciliation, the already-submitted verdict drives the cycle.
+		outcome = reviewOutcome{}
+		if err := json.Unmarshal(receipt.Result, &outcome); err != nil {
+			return ExitPR, "review", fmt.Errorf("decode saved review result: %w", err)
+		}
+		if receipt.Clean() {
+			repo.ReviewReceipt = &receipt
+			repo.ReviewSanitize = reviewContext.GitHubTokenEnvSanitized
+			h.logReviewReceipt(receipt)
+			if err := h.resolveAddressedReviewThreads(ctx, *repo, reviewContext, previousThreads, outcome.VerifiedThreadIDs); err != nil {
+				return ExitPR, "review", h.reviewPublicationError(ctx, repo, pass, passLabelTotal, fmt.Errorf("resolve verified review findings: %w", err))
 			}
-			if receipt.Clean() && len(outcome.Findings) == 0 {
-				repo.ReviewReceipt = &receipt
-				repo.ReviewSanitize = reviewContext.GitHubTokenEnvSanitized
-				h.logReviewReceipt(receipt)
-				var verified reviewOutcome
-				if err := json.Unmarshal(receipt.Result, &verified); err != nil {
-					return ExitPR, "review", fmt.Errorf("decode saved review result: %w", err)
-				}
-				if err := h.resolveAddressedReviewThreads(ctx, *repo, reviewContext, previousThreads, verified.VerifiedThreadIDs); err != nil {
-					return ExitPR, "review", h.reviewPublicationError(ctx, repo, pass, passLabelTotal, fmt.Errorf("resolve verified review findings: %w", err))
-				}
-			} else if len(inline) > 0 {
-				if receipt.ReviewNodeID == "" {
-					return ExitPR, "review", fmt.Errorf("GitHub review did not identify the submitted finding threads")
-				}
-				priorFindingReviews[receipt.ReviewNodeID] = receipt.Head
+		} else if len(inlineReviewFindings(reviewContext.Diff, outcome.Findings)) > 0 {
+			if receipt.ReviewNodeID == "" {
+				return ExitPR, "review", fmt.Errorf("GitHub review did not identify the submitted finding threads")
 			}
-		} else {
-			bodyPath := finalReviewSummaryBodyPath(filepath.Dir(repo.Dir), reviewContext.Metadata.Number, pass)
-			if err := h.writeWorkspaceFile(bodyPath, []byte(commentBody), 0o600); err != nil {
-				return ExitWorkspace, "review", fmt.Errorf("write post-task review comment: %w", err)
-			}
-			selector, targetRepo := reviewWritebackTarget(reviewContext.Metadata, reviewCfg, reviewContext.Selector)
-			if err := h.postReviewSummary(ctx, repo.Dir, selector, targetRepo, reviewContext.Metadata.Number, bodyPath, repo.PRURL, reviewContext.GitHubTokenEnvSanitized); err != nil {
-				return ExitPR, "review", fmt.Errorf("post review cycle comment for pass %d: %w", pass, err)
-			}
+			priorFindingReviews[receipt.ReviewNodeID] = receipt.Head
 		}
 		h.logf(
 			"stage=review status=ok action=pass review_mode=%s pass=%d total=%d findings=%d repo=%s repo_dir=%s pr_url=%s",
@@ -4626,13 +4607,6 @@ func finalReviewPrompt(originalPrompt, reviewInstructions, preparedContext strin
 func finalReviewCommentBody(outcome reviewOutcome, pass, total int) string {
 	marker := fmt.Sprintf("<!-- agent00-review-cycle pass=%d total=%d -->", pass, total)
 	return truncateReviewCommentBody(marker + "\n" + conciseReviewCommentBody(outcome))
-}
-
-func finalReviewSummaryBodyPath(runDir string, prNumber, pass int) string {
-	if prNumber > 0 {
-		return filepath.Join(runDir, fmt.Sprintf("review-cycle-pr-%d-pass-%d.md", prNumber, pass))
-	}
-	return filepath.Join(runDir, fmt.Sprintf("review-cycle-pass-%d.md", pass))
 }
 
 func finalReviewFixPrompt(originalPrompt string, repo repoWorkspace, findings []reviewFinding, pass, total int) string {
@@ -4871,6 +4845,34 @@ type reviewOutcome struct {
 	VerifiedThreadIDs []string        `json:"verifiedThreadIds,omitempty"`
 }
 
+// Validate the verdict before publishing. An inspection failure has no code
+// findings, and a finding needs a source location even if it has no diff hunk.
+func validateReviewOutcome(outcome reviewOutcome) error {
+	switch outcome.Status {
+	case "blocked":
+		if outcome.MergeReady || len(outcome.Findings) != 0 || strings.TrimSpace(outcome.Summary) == "" {
+			return fmt.Errorf("review agent returned an inconsistent blocked outcome")
+		}
+		return fmt.Errorf("review inspection blocked: %s", strings.TrimSpace(outcome.Summary))
+	case "clean":
+		if !outcome.MergeReady || len(outcome.Findings) != 0 {
+			return fmt.Errorf("review agent returned an inconsistent clean outcome")
+		}
+	case "findings":
+		if outcome.MergeReady || len(outcome.Findings) == 0 {
+			return fmt.Errorf("review agent returned an inconsistent findings outcome")
+		}
+		for i, finding := range outcome.Findings {
+			if strings.TrimSpace(finding.Path) == "" || finding.Line <= 0 || strings.TrimSpace(finding.Title) == "" {
+				return fmt.Errorf("review finding %d requires a file, line, and title", i+1)
+			}
+		}
+	default:
+		return fmt.Errorf("review agent returned unsupported status %q", outcome.Status)
+	}
+	return nil
+}
+
 // normalizeFinalReviewOutcome keeps automated repair passes within their
 // writable boundary. The harness owns Git metadata and history, while review
 // fix agents can only edit working-tree files. A reviewer may still surface a
@@ -4942,12 +4944,6 @@ func (h Harness) completeReviewRun(
 		repo.Branch = head
 	}
 
-	outcome, outcomeOK := parseReviewOutcome(reviewOutputText(agentRes))
-	writebackSelector, writebackRepo := reviewWritebackTarget(metadata, *cfg.Review, selector)
-	if writebackSelector == "" {
-		return fmt.Errorf("review selector is required")
-	}
-
 	sanitize := reviewContext != nil && reviewContext.GitHubTokenEnvSanitized
 	writeback := reviewWritebackMode(cfg.Review.Writeback) == "summary-comment"
 	if strings.EqualFold(metadata.State, "MERGED") {
@@ -4955,45 +4951,33 @@ func (h Harness) completeReviewRun(
 		h.logFinalReviewStoppedForMergedPR(*repo, 1, 1)
 		return githubutil.ErrReviewInterrupted
 	}
-	clean := outcomeOK && reviewOutcomeAllowsAutoMerge(outcome)
-	var inline []inlineReviewFinding
-	if reviewContext != nil {
-		inline = inlineReviewFindings(reviewContext.Diff, outcome.Findings)
+	outcome, ok := parseReviewOutcome(agentRes.Stdout)
+	if !ok {
+		return fmt.Errorf("review agent returned no valid structured outcome")
 	}
-	if (clean && (writeback || cfg.Review.AutoMerge)) || (writeback && len(inline) > 0) {
+	clean := reviewOutcomeAllowsAutoMerge(outcome)
+	if clean {
+		outcome.Status = "clean"
+	}
+	if err := validateReviewOutcome(outcome); err != nil {
+		return err
+	}
+	if writeback || (clean && cfg.Review.AutoMerge) {
 		if reviewContext == nil {
 			return fmt.Errorf("missing reviewed pull request context")
 		}
-		outcome.Status = strings.ToLower(strings.TrimSpace(outcome.Status))
-		if clean {
-			outcome.Status = "clean"
-		}
-		receipt, err := h.publishSubmittedReview(ctx, cfg, *repo, reviewContext, runDir, 1, 0, outcome, conciseReviewCommentBody(outcome), inline)
+		inline := inlineReviewFindings(reviewContext.Diff, outcome.Findings)
+		body := truncateReviewCommentBody(conciseReviewCommentBody(outcome))
+		receipt, err := h.publishSubmittedReview(ctx, cfg, *repo, reviewContext, runDir, 1, 0, outcome, body, inline)
 		if err != nil {
-			return h.reviewPublicationError(ctx, repo, 1, 1, fmt.Errorf("post pull request review: %w", err))
+			return h.reviewPublicationError(ctx, repo, 1, 1, fmt.Errorf("publish pull request review: %w", err))
 		}
-		if receipt.Clean() && clean {
+		if receipt.Clean() {
 			repo.ReviewReceipt = &receipt
 			h.logReviewReceipt(receipt)
 			if err := h.finishReviewGate(ctx, *repo, receipt, sanitize); err != nil {
 				return h.reviewPublicationError(ctx, repo, 1, 1, err)
 			}
-		}
-	} else if writeback {
-		body := reviewCommentBody(agentRes, outcome, outcomeOK)
-		bodyPath := reviewSummaryBodyPath(runDir, metadata.Number)
-		if err := h.writeWorkspaceFile(bodyPath, []byte(body), 0o600); err != nil {
-			return fmt.Errorf("write review summary body: %w", err)
-		}
-		h.logf("stage=review status=start action=comment pr_url=%s", prURL)
-		if err := h.postReviewSummary(ctx, repo.Dir, writebackSelector, writebackRepo, metadata.Number, bodyPath, prURL, sanitize); err != nil {
-			if isTransientReviewWritebackError(err) {
-				h.logf("stage=review status=warn action=comment_writeback_deferred pr_url=%s err=%q", prURL, err)
-			} else {
-				return fmt.Errorf("post pull request review summary: %w", err)
-			}
-		} else {
-			h.logf("stage=review status=ok action=comment pr_url=%s", prURL)
 		}
 	}
 
@@ -5009,73 +4993,6 @@ func (h Harness) completeReviewRun(
 		}
 	}
 	return nil
-}
-
-func reviewWritebackTarget(metadata reviewPRMetadata, reviewCfg config.ReviewConfig, fallbackSelector string) (string, string) {
-	prURL := stringsx.FirstNonEmpty(metadata.URL, reviewCfg.PRURL)
-	selector := strings.TrimSpace(fallbackSelector)
-	if metadata.Number > 0 {
-		selector = strconv.Itoa(metadata.Number)
-	} else if prSelector := githubutil.PullRequestSelector(prURL); prSelector != "" {
-		selector = prSelector
-	}
-	return selector, githubutil.PullRequestRepository(prURL)
-}
-
-func (h Harness) postReviewSummary(
-	ctx context.Context,
-	repoDir string,
-	selector string,
-	targetRepo string,
-	prNumber int,
-	bodyPath string,
-	prURL string,
-	sanitizeGitHubTokenEnv bool,
-) error {
-	// Relative summary paths use the harness working directory, but gh runs in repoDir.
-	bodyFile, err := filepath.Abs(bodyPath)
-	if err != nil {
-		return fmt.Errorf("resolve review summary body path: %w", err)
-	}
-	cmd := prReviewSummaryCommand(repoDir, selector, targetRepo, bodyFile)
-	if sanitizeGitHubTokenEnv {
-		cmd = commandWithoutGitHubTokenEnv(cmd)
-	}
-	if _, err := h.runCommand(ctx, "review", cmd); err == nil {
-		return nil
-	} else {
-		h.logf("stage=review status=warn action=comment_review_failed pr_url=%s err=%q", prURL, err)
-		fallbackCmd := prReviewSummaryFallbackCommand(repoDir, selector, targetRepo, prNumber, bodyFile)
-		if sanitizeGitHubTokenEnv {
-			fallbackCmd = commandWithoutGitHubTokenEnv(fallbackCmd)
-		}
-		if _, fallbackErr := h.runCommand(ctx, "review", fallbackCmd); fallbackErr != nil {
-			return reviewSummaryWritebackError{reviewErr: err, fallbackErr: fallbackErr}
-		}
-	}
-	h.logf("stage=review status=ok action=comment_fallback pr_url=%s", prURL)
-	return nil
-}
-
-type reviewSummaryWritebackError struct {
-	reviewErr   error
-	fallbackErr error
-}
-
-func (e reviewSummaryWritebackError) Error() string {
-	return fmt.Sprintf("review command failed: %v; fallback pull request comment failed: %v", e.reviewErr, e.fallbackErr)
-}
-
-func (e reviewSummaryWritebackError) Unwrap() error {
-	return e.fallbackErr
-}
-
-func isTransientReviewWritebackError(err error) bool {
-	var writebackErr reviewSummaryWritebackError
-	if errors.As(err, &writebackErr) {
-		return isTransientGitHubCLIError(writebackErr.fallbackErr)
-	}
-	return isTransientGitHubCLIError(err)
 }
 
 func (h Harness) autoMergeCleanReview(ctx context.Context, repo repoWorkspace, method string, metadata reviewPRMetadata, sanitize bool) error {
@@ -5210,14 +5127,6 @@ func isPRClosedOrMergedError(err error) bool {
 	return false
 }
 
-func (h Harness) writeWorkspaceFile(path string, data []byte, perm os.FileMode) error {
-	writeFile := h.Workspace.WriteFile
-	if writeFile == nil {
-		writeFile = os.WriteFile
-	}
-	return writeFile(path, data, perm)
-}
-
 func reviewWritebackMode(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "summary", "comment", "summary-comment":
@@ -5236,37 +5145,6 @@ func reviewMergeMethod(value string) string {
 	default:
 		return "squash"
 	}
-}
-
-func reviewOutputText(res execx.Result) string {
-	stdout := strings.TrimSpace(res.Stdout)
-	stderr := strings.TrimSpace(res.Stderr)
-	// Agent runtimes write progress and echoed prompts to stderr, while the
-	// requested review is returned on stdout. Mixing streams can make an echoed
-	// JSON example look like the final structured result.
-	if stdout != "" {
-		return stdout
-	}
-	return stderr
-}
-
-func reviewCommentBody(res execx.Result, outcome reviewOutcome, outcomeOK bool) string {
-	if outcomeOK {
-		return truncateReviewCommentBody(conciseReviewCommentBody(outcome))
-	}
-
-	body := strings.TrimSpace(stripReviewOutcomeJSON(reviewOutputText(res)))
-	if body == "" {
-		body = strings.TrimSpace(outcome.Summary)
-	}
-	if body == "" {
-		if reviewOutcomeAllowsAutoMerge(outcome) {
-			body = "Review completed. No material issues were found."
-		} else {
-			body = "Review completed, but no review summary was returned by the agent."
-		}
-	}
-	return truncateReviewCommentBody(body)
 }
 
 func conciseReviewCommentBody(outcome reviewOutcome) string {
@@ -5386,13 +5264,6 @@ func truncateReviewCommentBody(body string) string {
 	return strings.TrimSpace(body[:maxReviewCommentBodyChars]) + "\n\n...(truncated)"
 }
 
-func reviewSummaryBodyPath(runDir string, prNumber int) string {
-	if prNumber > 0 {
-		return filepath.Join(runDir, fmt.Sprintf("review-summary-pr-%d.md", prNumber))
-	}
-	return filepath.Join(runDir, "review-summary.md")
-}
-
 var fencedJSONBlockPattern = regexp.MustCompile("(?s)```(?:json)?\\s*(\\{.*?\\})\\s*```")
 
 func parseReviewOutcome(text string) (reviewOutcome, bool) {
@@ -5431,25 +5302,6 @@ func parseReviewOutcomeJSON(raw string) (reviewOutcome, bool) {
 	outcome.Status = strings.ToLower(strings.TrimSpace(outcome.Status))
 	outcome.Positives = normalizeReviewCommentPoints(outcome.Positives, 3)
 	return outcome, true
-}
-
-func stripReviewOutcomeJSON(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return ""
-	}
-	matches := fencedJSONBlockPattern.FindAllStringSubmatchIndex(text, -1)
-	for i := len(matches) - 1; i >= 0; i-- {
-		match := matches[i]
-		if len(match) < 4 {
-			continue
-		}
-		if _, ok := parseReviewOutcomeJSON(text[match[2]:match[3]]); !ok {
-			continue
-		}
-		return strings.TrimSpace(text[:match[0]] + text[match[1]:])
-	}
-	return text
 }
 
 func reviewOutcomeAllowsAutoMerge(outcome reviewOutcome) bool {
@@ -5510,32 +5362,6 @@ func prReviewReviewsCommand(repoDir string, number int) execx.Command {
 	return ghCommand(repoDir, "api", fmt.Sprintf("repos/:owner/:repo/pulls/%d/reviews", number), "--paginate")
 }
 
-func prReviewSummaryCommand(repoDir, selector, targetRepo, bodyFile string) execx.Command {
-	args := []string{"pr", "review", selector, "--comment", "--body-file", bodyFile}
-	args = appendGHRepoArg(args, targetRepo)
-	return ghCommand(repoDir, args...)
-}
-
-func prReviewSummaryFallbackCommand(repoDir, selector, targetRepo string, prNumber int, bodyFile string) execx.Command {
-	targetRepo = strings.TrimSpace(targetRepo)
-	if targetRepo != "" {
-		if prNumber <= 0 {
-			prNumber, _ = strconv.Atoi(strings.TrimSpace(selector))
-		}
-		if prNumber > 0 {
-			return ghCommand(repoDir,
-				"api",
-				fmt.Sprintf("repos/%s/issues/%d/comments", targetRepo, prNumber),
-				"-F",
-				"body=@"+bodyFile,
-			)
-		}
-	}
-	args := []string{"pr", "comment", selector, "--body-file", bodyFile}
-	args = appendGHRepoArg(args, targetRepo)
-	return ghCommand(repoDir, args...)
-}
-
 func prReadyCommand(repoDir, prURL string) execx.Command {
 	return execx.Command{
 		Dir:  repoDir,
@@ -5550,14 +5376,6 @@ func prDraftCommand(repoDir, prURL string) execx.Command {
 		Name: "gh",
 		Args: []string{"pr", "ready", prURL, "--undo"},
 	}
-}
-
-func appendGHRepoArg(args []string, targetRepo string) []string {
-	targetRepo = strings.TrimSpace(targetRepo)
-	if targetRepo == "" {
-		return args
-	}
-	return append(args, "--repo", targetRepo)
 }
 
 func fetchRemoteBranchCommand(repoDir, branch string) execx.Command {
@@ -9389,16 +9207,18 @@ func requiredStatusChecksCommand(repoDir, repoNameWithOwner, branch string) exec
 	return ghCommand(repoDir, "api", route)
 }
 
-// withCompletionGatePromptForMode adds implementation-only quality guidance.
-// Read-only reviews cannot make code or test changes, so requiring them to meet
-// quality targets would make their prompt internally contradictory.
+// withCompletionGatePromptForMode adds the execution contract for implementation.
+// Read-only reviews follow the review skill's output contract.
 func withCompletionGatePromptForMode(prompt string, implementation bool) string {
 	base := strings.TrimSpace(prompt)
+	if !implementation {
+		return base
+	}
 	if base == "" {
 		base = "Improve this repository in a minimal, production-ready way."
 	}
 
-	if implementation && !strings.Contains(base, measuredQualityTargetInstruction) {
+	if !strings.Contains(base, measuredQualityTargetInstruction) {
 		base += "\n\n" + measuredQualityTargetInstruction
 	}
 	return failurefollowup.WithExecutionContract(withImplementationTargetGuard(base))
