@@ -133,7 +133,7 @@ var rolloutProgressFollowOn = regexp.MustCompile(`^(?:added|implemented|updated|
 const rolloutSentenceBreak = `[.!?…]+[ \t\p{Zs}]+|[.!?…]*\r`
 
 var rolloutSentenceBoundary = regexp.MustCompile(rolloutSentenceBreak)
-var unspacedUppercaseSentenceBoundary = regexp.MustCompile(`([.!?…]+)([A-Z])`)
+var unspacedRolloutStatusBoundary = regexp.MustCompile(`([.!?…]+)((?:[a-z0-9][a-z0-9_-]*(?: and [a-z0-9][a-z0-9_-]*)* (?:flags?|evidence switches?) defaults?(?: to)? (?:off|disabled)|feature disabled))`)
 
 // Status statements can use unspaced ellipses. Progress and validation lines
 // can contain commands such as `go test ./...`, so use spaced breaks there.
@@ -606,11 +606,10 @@ func IsExternalRolloutFailure(summary, details string) bool {
 	if !pendingProductionRolloutSummary.MatchString(strings.ToLower(strings.TrimSpace(summary))) {
 		return false
 	}
-	// Some reports omit the space after a period when flattening statements.
-	// Preserve the boundary when the next sentence starts with a capitalized
-	// status statement such as "API flags default to off".
-	details = unspacedUppercaseSentenceBoundary.ReplaceAllString(strings.TrimSpace(details), "$1\n$2")
-	details = strings.ToLower(details)
+	// Some flattened reports omit the space after a period before a status
+	// statement such as "API flags default to off".
+	details = strings.ToLower(strings.TrimSpace(details))
+	details = unspacedRolloutStatusBoundary.ReplaceAllString(details, "$1\n$2")
 	lines := strings.Split(strings.ReplaceAll(details, " | ", "\n"), "\n")
 	statements := rolloutStatements(lines[0])
 	if len(statements) == 0 || HasValidationFailureEvidence(details) || HasRolloutFailureOutcome(details) {
