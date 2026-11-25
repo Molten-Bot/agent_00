@@ -97,6 +97,10 @@ const UnmergedDependencyReason = "required pull request is unmerged"
 // happen before a production rollout can continue.
 const ExternalRolloutPrerequisitesReason = "production rollout requires external prerequisites"
 
+// ExternalEvidencePrerequisitesReason identifies evidence and access the runtime
+// needs from an authorized source before the task can proceed.
+const ExternalEvidencePrerequisitesReason = "task requires approved evidence and authorized access"
+
 // OpenDependencyReason identifies an agent-reported open prerequisite.
 const OpenDependencyReason = "required dependency is still open"
 
@@ -194,7 +198,9 @@ const rolloutEvidenceChannel = `(?:api|cli|mcp)`
 const evidenceSentenceBreak = `(?:\.\s+(?:\|\s+)?| \| |\n)`
 
 var (
-	blockedFailureSummary = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:[ \t]*(?:((?:[^"'\x60\r\n]|\b'\b|` +
+	missingAuthorizedEvidence = regexp.MustCompile(`^this runtime (?:has|had) no approved [^.!?;|\n]+ (?:or|and no) authorized access to [^.!?;|\n]+(?:[.!?](?:\s|$)|$)`)
+	evidenceRepositoryFailure = regexp.MustCompile(`\b(?:regressions?|panics?|crash(?:es|ed|ing)?|(?:builds?|tests?|checks?|validation) (?:still )?(?:fail(?:s|ed|ing)?|did not pass)|(?:code|repository) (?:changes|fixes) (?:are |remain )?(?:required|pending|needed))\b`)
+	blockedFailureSummary     = regexp.MustCompile(`^(?:codex: codex|claude: claude) reported failure: failure:[ \t]*(?:((?:[^"'\x60\r\n]|\b'\b|` +
 		backtickedIssueID + `)+?) (?:remains |is )?)?blocked(?: (` + openDependencyCause + `))?[.!]?$`)
 	negatedBlockerOperation = regexp.MustCompile(`(?:\b(?:not|never|no longer)|n['’]t)(?: yet| currently)?$`)
 	openDependencyDetail    = wrappedDetailPattern(`^blocked ` + openDependencyCause + blockerDetailEnd)
@@ -550,8 +556,10 @@ func NonRemediableFailureReason(err error) string {
 	if !reportedFailure {
 		agentSummary, reportedFailure = strings.CutPrefix(summary, "claude: claude reported failure:")
 	}
-	if reportedFailure && IsExternalRolloutFailure(agentSummary, details) {
-		return ExternalRolloutPrerequisitesReason
+	if reportedFailure {
+		if reason := ExternalPrerequisiteFailureReason(agentSummary, details); reason != "" {
+			return reason
+		}
 	}
 	if isOpenDependencyFailure(summary, details) {
 		return OpenDependencyReason
@@ -572,6 +580,24 @@ func NonRemediableFailureReason(err error) string {
 		return marker
 	}
 	return NonRemediableRepoAccessReason(err)
+}
+
+// ExternalPrerequisiteFailureReason classifies complete agent reports blocked
+// by external provisioning or by missing approved evidence and access.
+func ExternalPrerequisiteFailureReason(summary, details string) string {
+	if IsExternalRolloutFailure(summary, details) {
+		return ExternalRolloutPrerequisitesReason
+	}
+	summary = strings.ToLower(strings.TrimSpace(summary))
+	details = strings.ToLower(strings.TrimSpace(details))
+	report := blockedFailureSummary.FindStringSubmatch("codex: codex reported failure: " + summary)
+	if report == nil || report[2] != "" || negatedBlockerOperation.MatchString(report[1]) ||
+		HasTruncatedErrorDetails(details) || !missingAuthorizedEvidence.MatchString(details) ||
+		evidenceRepositoryFailure.MatchString(details) || HasValidationFailureEvidence(details) ||
+		HasRolloutFailureOutcome(details) || HasValidationTimeout(details) {
+		return ""
+	}
+	return ExternalEvidencePrerequisitesReason
 }
 
 // IsExternalRolloutFailure identifies a reported rollout blocked by infrastructure.

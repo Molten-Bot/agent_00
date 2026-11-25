@@ -663,12 +663,18 @@ func TestCodexReportedFailurePreservesWrappedRolloutBlocker(t *testing.T) {
 
 func TestRunCodexDependencyClassificationSurvivesDisplayFormatting(t *testing.T) {
 	t.Parallel()
+	const evidence = "This runtime had no approved inspection record or authorized access to matching equipment logs.\n" +
+		"| Item | Evidence needed |\n|---|---|\n| Pump | Signed inspection record |\n| Motor | Maintenance log |"
 	for _, tc := range []struct {
 		name, report, want string
 	}{
 		{"soft wrap extends operation", "Failure: Export remains blocked.\nError details: #72 is still open and blocks the export\ndocumentation. Fix the export parser.", ""},
 		{"soft wrap within operation", "Failure: Production rollout for #81 remains blocked.\nError details: #72 is still open and blocks the production\nrollout for #81\nVerification is pending.", failurefollowup.OpenDependencyReason},
 		{"paragraph evidence", "Failure: Production rollout remains blocked.\nError details: #72 is still open\n\nIts proposed configuration lacks account metadata needed for evidence reads.\n\nCredential setup and verification remain pending. API and CLI evidence stay disabled by default.", failurefollowup.OpenDependencyReason},
+		{"external evidence with table", "Failure: Equipment audit remains blocked.\nError details: " + evidence, failurefollowup.ExternalEvidencePrerequisitesReason},
+		{"external evidence with failed checks", "Failure: Equipment audit remains blocked.\nError details: " + evidence + "\nValidation: Unit tests failed.", ""},
+		{"quoted external evidence", "Failure: Parser regression.\nError details: " + evidence, ""},
+		{"incidental external evidence", "Failure: Equipment audit is no longer blocked.\nError details: " + evidence, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

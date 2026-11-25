@@ -120,14 +120,14 @@ type Server struct {
 	// receipts and inherited worker locks. Legacy embedders remain manual-only.
 	IssueRecovery *localruntime.IssueRecoveryConfig
 	IssueRepair   func(context.Context, localruntime.IssueClaimRecord) (string, error)
-	// IssueRolloutBlockedFromLogs rechecks truncated failures before automatic retry.
-	IssueRolloutBlockedFromLogs func(requestID, failure string) (blocked, matched bool)
-	IssueRepairs                *localruntime.IssueRepairStore
-	IssueReady                  func(context.Context) error
-	issueAutomation             *issueAutomationState
-	gitHubRepos                 *gitHubRepoCache
-	issueAutoStartWake          chan time.Time
-	Ready                       chan<- error
+	// IssueExternalPrerequisiteFromLogs rechecks truncated failures before automatic retry.
+	IssueExternalPrerequisiteFromLogs func(requestID, failure string) (reason string, matched bool)
+	IssueRepairs                      *localruntime.IssueRepairStore
+	IssueReady                        func(context.Context) error
+	issueAutomation                   *issueAutomationState
+	gitHubRepos                       *gitHubRepoCache
+	issueAutoStartWake                chan time.Time
+	Ready                             chan<- error
 }
 
 // AgentAuthState describes current runtime agent-auth readiness and device flow hints.
@@ -3159,6 +3159,10 @@ func compactStreamTaskLogs(logs []TaskLog) []TaskLog {
 		if !ok {
 			continue
 		}
+		if key == "" {
+			compacted = append(compacted, log)
+			continue
+		}
 		if _, seen := seenSignals[key]; seen {
 			continue
 		}
@@ -3178,13 +3182,43 @@ func taskProgressSignalLogKey(text string) (string, bool) {
 	if stage == "" {
 		return "", false
 	}
-	return strings.Join([]string{
+	// Repair attempts can repeat across review passes. Keep their order and context.
+	if isTaskAgentRepairProgressStart(fields) {
+		return "", true
+	}
+	key := []string{
 		stage,
+		fields["repo_dir"],
 		strings.TrimSpace(fields["action"]),
 		strings.TrimSpace(fields["strategy"]),
 		strings.TrimSpace(fields["remote"]),
 		strings.TrimSpace(fields["reason"]),
-	}, "\x00"), true
+	}
+	if isTaskReviewProgressStart(fields) {
+		key = append(key, fields["pass"])
+	}
+	return strings.Join(key, "\x00"), true
+}
+
+func isTaskReviewProgressStart(fields map[string]string) bool {
+	switch fields["stage"] {
+	case "review", "review_fix", "review_checks":
+		pass, ok := parseIntField(fields["pass"])
+		return fields["status"] == "start" && ok && pass > 0
+	default:
+		return false
+	}
+}
+
+func isTaskAgentRepairProgressStart(fields map[string]string) bool {
+	switch fields["stage"] {
+	case "agent", "claude", "codex":
+		switch fields["mode"] {
+		case "remediation", "base_sync_conflict", "remote_branch_sync_conflict":
+			return fields["status"] == "start" && fields["repo_dir"] != ""
+		}
+	}
+	return false
 }
 
 func withCacheControl(next http.Handler, cacheControl string) http.Handler {
