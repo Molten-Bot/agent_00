@@ -12547,20 +12547,6 @@
         renderEmptyState();
         restoreTaskScrollAnchor(listNode, scrollAnchor);
         replaceLucideIcons(listNode);
-      if (focusedRuntimeID || openRuntimeID) {
-        for (const runtime of listNode.querySelectorAll(".task-runtime-complexity")) {
-          const id = runtime.closest(".task").dataset.requestId;
-          const button = runtime.querySelector("button");
-          const details = runtime.querySelector(".task-runtime-details");
-          if (id === focusedRuntimeID) button.focus({ preventScroll: true });
-          if (nativeRuntimePopover) {
-            if (id === openRuntimeID) details.showPopover({ source: button });
-            else if (id === focusedRuntimeID) details.hidePopover();
-          } else {
-            details.hidden = id !== openRuntimeID;
-          }
-        }
-      }
         return;
       }
 
@@ -12954,6 +12940,20 @@
       }
       applyTaskIconActivityClasses(listNode, tasks);
       replaceLucideIcons(listNode);
+      if (focusedRuntimeID || openRuntimeID) {
+        for (const runtime of listNode.querySelectorAll(".task-runtime-complexity")) {
+          const id = runtime.closest(".task").dataset.requestId;
+          const button = runtime.querySelector("button");
+          const details = runtime.querySelector(".task-runtime-details");
+          if (id === focusedRuntimeID) button.focus({ preventScroll: true });
+          if (nativeRuntimePopover) {
+            if (id === openRuntimeID) details.showPopover({ source: button });
+            else if (id === focusedRuntimeID) details.hidePopover();
+          } else {
+            details.hidden = id !== openRuntimeID;
+          }
+        }
+      }
     }
 
     function renderTasks(snapshot) {
