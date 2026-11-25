@@ -348,7 +348,8 @@ func (s Server) handleGitHubIssueDetail(w http.ResponseWriter, r *http.Request, 
 				latest = record
 			}
 		}
-		if latest.Incident == workflowIssueRecoveryIncident {
+		if latest.Incident == workflowIssueRecoveryIncident ||
+			(latest.Incident == localruntime.IssueIncidentBranchRecovery && hasUnsubmittedWorkflowRecovery(latest)) {
 			response["recoveryReason"] = latest.Error
 		}
 	}

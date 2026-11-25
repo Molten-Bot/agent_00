@@ -441,6 +441,15 @@ func (s Server) finishIssueAdmission(ctx context.Context, record localruntime.Is
 	if err != nil {
 		return "", s.blockIssueClaim(record, err)
 	}
+	if record.RequireReservationSHA {
+		sha, err := s.issueBranchSHA(ctx, issue.Repository, issue.Claim.Branch)
+		if err != nil {
+			return "", s.blockIssueClaim(record, err)
+		}
+		if sha != record.ReservationSHA {
+			return "", s.blockIssueClaim(record, fmt.Errorf("%w: branch %q moved after verification; inspect its commits before using Recover / retry", app.ErrIssueBranchRecovery, issue.Claim.Branch))
+		}
+	}
 	requestID, err := submit(ctx, body)
 	if err != nil {
 		return "", s.blockIssueClaim(record, fmt.Errorf("submit claimed issue: %w", err))
@@ -815,8 +824,9 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 			observed = record
 		}
 	}
-	workflowRecovery := !automatic && savedRun == nil && remote.Claim.ID != "" && observed.ID != ""
-	ownedWorkflowRetry := !automatic && requestedRun == nil && previous.Version == 2 && previous.RequestID != "" &&
+	workflowRecovery := !automatic && remote.Claim.ID != "" &&
+		((savedRun == nil && observed.ID != "") || hasUnsubmittedWorkflowRecovery(previous))
+	ownedWorkflowRetry := !automatic && !workflowRecovery && requestedRun == nil && previous.Version == 2 && previous.RequestID != "" &&
 		previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() &&
 		previous.ID == remote.Claim.ID && savedRun != nil && savedRun.Workflow != nil
 	if !automatic && !workflowRecovery && !ownedWorkflowRetry && !settings.GitHubIssuesEnabled {
@@ -826,7 +836,9 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if requestedRun != nil {
 			return issueRetryResult{}, http.StatusConflict, errIssueRecoveryRequired
 		}
-		savedRun = &observed.Run
+		if savedRun == nil {
+			savedRun = &observed.Run
+		}
 	}
 	if workflowRecovery || ownedWorkflowRetry {
 		var enabled bool
@@ -867,7 +879,7 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 			return issueRetryResult{}, http.StatusConflict, err
 		}
 		if pr.URL != "" && (automatic || branchRecovery || workflowRecovery || ownedWorkflowRetry) {
-			if !automatic && branchRecovery && previous.Version == 2 &&
+			if !automatic && !workflowRecovery && branchRecovery && previous.Version == 2 &&
 				previous.InstanceID == remote.InstanceID && previous.InstanceID == s.instanceID() {
 				if err := s.verifyRecoveredIssuePR(ctx, previous, pr); err != nil {
 					status := http.StatusBadGateway
@@ -1019,6 +1031,8 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		record.State = "reserving"
 		record.IssueNodeID = target.ID
 		record.BranchReserved = !reserve
+		record.ReservationSHA = recoverySHA
+		record.RequireReservationSHA = recoverySHA != ""
 		record.WorkspaceDir = previous.WorkspaceDir
 		// Older records can prove checkout completion through a later stage.
 		switch previous.Step {
@@ -1042,16 +1056,15 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		if reserve {
 			ref = base
 		}
-		sha = recoverySHA
-		if sha == "" {
+		if record.ReservationSHA == "" {
 			sha, err = s.issueBranchSHA(ctx, repository, ref)
 			if err != nil {
 				return issueRetryResult{}, 502, s.blockIssueClaim(record, err)
 			}
-		}
-		record.ReservationSHA = sha
-		if err := s.IssueClaims.Save(record); err != nil {
-			return issueRetryResult{}, 503, err
+			record.ReservationSHA = sha
+			if err := s.IssueClaims.Save(record); err != nil {
+				return issueRetryResult{}, 503, err
+			}
 		}
 		requestID, err := s.resumeIssueAdmission(ctx, record, submit)
 		if err != nil {
@@ -1081,6 +1094,10 @@ func (s Server) recoverIssueClaimWithRun(ctx context.Context, repository string,
 		return issueRetryResult{}, http.StatusConflict, err
 	}
 	return issueRetryResult{RequestID: requestID}, http.StatusAccepted, nil
+}
+
+func hasUnsubmittedWorkflowRecovery(record localruntime.IssueClaimRecord) bool {
+	return record.RequireReservationSHA && record.Phase != "submitted" && record.StartedAt.IsZero() && record.Outcome == ""
 }
 
 // Compare immutable commit IDs so a moved branch cannot change the comparison.

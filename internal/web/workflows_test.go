@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -181,12 +182,16 @@ func TestWorkflowIssueRetainsDurableClaimAndFreshPrompt(t *testing.T) {
 
 func TestWorkflowRecoversPreviouslyClaimedIssue(t *testing.T) {
 	t.Parallel()
-	for _, legacy := range []bool{false, true} {
-		name := "pending event"
-		if legacy {
-			name = "older journal with no run"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		legacy, moveBranch bool
+	}{
+		{name: "pending event"},
+		{name: "older journal with no run", legacy: true},
+		{name: "branch moves during admission", moveBranch: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			legacy := tc.legacy
 			s, f := recoveryServer(t)
 			ctx := t.Context()
 			old := issueAttemptMetadata{InstanceID: "previous-runtime", Claim: config.GitHubIssueClaim{
@@ -202,11 +207,17 @@ func TestWorkflowRecoversPreviouslyClaimedIssue(t *testing.T) {
 			f.tags["old-tag"] = string(metadata)
 
 			ahead := 0
+			head := "old-head"
+			moveOnLabel := false
 			s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+				args := strings.Join(cmd.Args, " ")
 				switch {
-				case strings.Contains(strings.Join(cmd.Args, " "), "/git/ref/heads/agent00-issue-17"):
-					return execx.Result{Stdout: `{"object":{"sha":"old-head"}}`}, nil
-				case strings.Contains(strings.Join(cmd.Args, " "), "/compare/base...old-head"):
+				case strings.Contains(args, "--method POST") && strings.Contains(args, "/issues/17/labels") && moveOnLabel:
+					head = "independent-commit"
+					ahead = 1
+				case strings.Contains(args, "/git/ref/heads/agent00-issue-17"):
+					return execx.Result{Stdout: fmt.Sprintf(`{"object":{"sha":%q}}`, head)}, nil
+				case strings.Contains(args, "/compare/base..."+head):
 					result, err := json.Marshal(map[string]int{"ahead_by": ahead, "behind_by": 9})
 					return execx.Result{Stdout: string(result)}, err
 				}
@@ -329,14 +340,40 @@ func TestWorkflowRecoversPreviouslyClaimedIssue(t *testing.T) {
 			}
 
 			f.issue.Body = "Updated issue requirements"
-			request(http.MethodPost, retryPath, retryBody, http.StatusAccepted, "request-1")
+			if tc.moveBranch {
+				moveOnLabel = true
+				request(http.MethodPost, retryPath, retryBody, http.StatusConflict, "moved after verification")
+				blocked := latestRecoveryRecord(t, s)
+				if blocked.State != "blocked" || blocked.Incident != localruntime.IssueIncidentBranchRecovery ||
+					blocked.ReservationSHA != "old-head" || len(f.submissions) != 0 {
+					t.Fatalf("moved branch was not held for explicit recovery: %+v", blocked)
+				}
+				s.IssueClaims = &localruntime.IssueClaimStore{Root: s.IssueClaims.Root}
+				if err := s.ReconcileIssueWork(ctx); err != nil {
+					t.Fatal(err)
+				}
+				request(http.MethodGet, "/api/github/issues/17?repo=acme/repo", "", http.StatusOK, "moved after verification")
+				body := strings.Replace(retryBody, old.Claim.ID, blocked.ID, 1)
+				request(http.MethodPost, retryPath, body, http.StatusConflict, "inspect and reconcile commits")
+				if len(f.submissions) != 0 {
+					t.Fatal("retry admitted independent commits")
+				}
+				head, ahead, moveOnLabel = "old-head", 0, false
+				request(http.MethodPost, retryPath, body, http.StatusAccepted, "request-1")
+			} else {
+				request(http.MethodPost, retryPath, retryBody, http.StatusAccepted, "request-1")
+			}
 			request(http.MethodPost, retryPath, retryBody, http.StatusConflict, "claim changed")
 			if len(f.submissions) != 1 {
 				t.Fatalf("submitted %d attempts", len(f.submissions))
 			}
 			run := f.submissions[0]
 			claim := run.GitHubIssue.Claim
-			if claim.Attempt != 4 || claim.Branch != old.Claim.Branch || claim.BaseBranch != "main" || run.GitHubIssue.LinkMode != config.GitHubIssueLinkClose ||
+			attempt := 4
+			if tc.moveBranch {
+				attempt++
+			}
+			if claim.Attempt != attempt || claim.Branch != old.Claim.Branch || claim.BaseBranch != "main" || run.GitHubIssue.LinkMode != config.GitHubIssueLinkClose ||
 				run.Workflow == nil || run.Workflow.EventID != event || run.Workflow.PolicyHash != policy || run.Workflow.ReviewCycles != 2 ||
 				!strings.Contains(run.Prompt, "Updated issue requirements") {
 				t.Fatalf("recovery lost branch or workflow settings: %+v", run)
