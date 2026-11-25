@@ -14,6 +14,7 @@ import (
 	"github.com/Molten-Bot/agent_00/internal/execx"
 	"github.com/Molten-Bot/agent_00/internal/failurefollowup"
 	"github.com/Molten-Bot/agent_00/internal/githubassets"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
 )
 
@@ -465,10 +466,6 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 			return s.deferIssueRecord(record, fmt.Errorf("issue is ineligible: %s", reason))
 		}
 		if record.IssueNodeID == "" {
-			login, err := s.issueGitHubLogin(ctx)
-			if err != nil {
-				return s.deferIssueRecord(record, err)
-			}
 			record, err = s.prepareObservedIssue(ctx, record, settings, login)
 			if err != nil {
 				return s.deferIssueRecord(record, err)
@@ -574,7 +571,7 @@ func (s Server) scheduleIssueRetry(record *localruntime.IssueClaimRecord, cause 
 
 func issueRetryDeadline(id string, failures int, policy localruntime.IssueRecoveryConfig, cause error) time.Time {
 	deadline := time.Now().Add(issueRetryDelay(id, failures, policy))
-	var rate *issueRateLimitError
+	var rate *githubutil.RateLimitError
 	if errors.As(cause, &rate) && rate.RetryAt.After(deadline) {
 		return rate.RetryAt
 	}

@@ -170,3 +170,33 @@ func TestTransientMergeFailureRetriesSameHead(t *testing.T) {
 		t.Fatalf("expected one merge event with the full duration after restart, got %v", events)
 	}
 }
+
+func TestThrottledIssueAdmissionReconcilesOriginalActivation(t *testing.T) {
+	t.Parallel()
+	w := definition("pending")
+	w.IncludeBacklog = true
+	e, items, _ := testEngine(t, w)
+	*items = []Item{{Number: 17, Kind: "issue", Repository: w.Repository, Open: true, Labels: []string{"ready"}}}
+	attempts := 0
+	e.Submit = func(context.Context, Run) (string, error) { attempts++; return "", ErrIssueAdmissionPending }
+	if err := e.Tick(t.Context()); !errors.Is(err, ErrIssueAdmissionPending) {
+		t.Fatal(err)
+	}
+	runs, err := e.Runs()
+	if err != nil || len(runs) != 1 || runs[0].Status != "pending_issue" {
+		t.Fatal(runs, err)
+	}
+	id := runs[0].ID
+	tick(t, e)
+	e.Reconcile = func(event string) string {
+		if event != id {
+			t.Fatal(event)
+		}
+		return "recovered-worker"
+	}
+	tick(t, e)
+	runs, err = e.Runs()
+	if err != nil || len(runs) != 1 || runs[0].RequestID != "recovered-worker" || runs[0].Status != "running" || attempts != 1 {
+		t.Fatal(runs, attempts, err)
+	}
+}

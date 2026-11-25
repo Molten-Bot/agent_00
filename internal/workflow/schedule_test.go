@@ -52,7 +52,7 @@ func TestScheduleDueRestartCoalescingAndNoOverlap(t *testing.T) {
 	e, _, count := testEngine(t, w)
 	now := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	e.Now = func() time.Time { return now }
-	e.Fetch = func(context.Context, string) ([]Item, error) {
+	e.Fetch = func(context.Context, string, ScanNeeds) ([]Item, error) {
 		t.Fatal("scheduled task fetched GitHub events")
 		return nil, nil
 	}

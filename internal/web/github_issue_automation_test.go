@@ -605,7 +605,7 @@ func TestIssueAutomationDisabledRepoAndDiscoveryRefresh(t *testing.T) {
 	if discovered != 1 || f.branch {
 		t.Fatal("disabled repository scanned or discovery not cached")
 	}
-	s.issueAutomation.reposRefreshed = time.Now().Add(-6 * time.Minute)
+	s.gitHubRepos.refreshedAt = time.Now().Add(-gitHubRepoCacheTTL)
 	s.pollGitHubIssueAutoStart(context.Background())
 	if discovered != 2 {
 		t.Fatal("repository discovery never refreshed")

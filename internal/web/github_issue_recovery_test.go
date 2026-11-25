@@ -712,6 +712,7 @@ func TestIssueRecoveryHonorsLabelCleanupRetryAfter(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	s.GitHubCooldown.Now = func() time.Time { return retryAt }
 	s.GitHubIssueRunner = f
 	if err := s.ReconcileIssueWork(ctx); err != nil {
 		t.Fatal(err)
@@ -1437,13 +1438,8 @@ func TestIssueRecoveryIndependentInstancesAndStaleOwnership(t *testing.T) {
 	}
 }
 
-func TestIssueRecoveryRateHeadersAndPaginationCheckpoint(t *testing.T) {
+func TestIssueRecoveryPaginationCheckpoint(t *testing.T) {
 	t.Parallel()
-	body, err := issueAPIResponse("HTTP/2.0 429 Too Many Requests\r\nRetry-After: 600\r\n\r\n{\"message\":\"slow down\"}\n", errors.New("rate limited"))
-	var limit *issueRateLimitError
-	if !errors.As(err, &limit) || time.Until(limit.RetryAt) < 9*time.Minute || !strings.HasPrefix(body, "{") {
-		t.Fatalf("rate response=%s %v", body, err)
-	}
 	s, _ := recoveryServer(t)
 	if _, err := s.IssueClaims.ScanPage("acme/repo", 12); err != nil {
 		t.Fatal(err)
@@ -1556,6 +1552,40 @@ func TestPreparedIssueRecoveryRechecksEligibility(t *testing.T) {
 				}
 			} else if err == nil || !strings.Contains(err.Error(), "issue is ineligible") || len(f.submissions) != 0 {
 				t.Fatalf("ineligible issue resumed: %v submissions=%d", err, len(f.submissions))
+			}
+		})
+	}
+}
+
+func TestThrottledDiscoveryResumesOnce(t *testing.T) {
+	t.Parallel()
+	for _, endpoint := range []string{"user", "/issues?state=open"} {
+		t.Run(endpoint, func(t *testing.T) {
+			s, f := recoveryServer(t)
+			now := time.Now()
+			s.GitHubCooldown.Now = func() time.Time { return now }
+			calls := 0
+			limited := true
+			s.GitHubIssueRunner = githubIssueRunnerFunc(func(ctx context.Context, cmd execx.Command) (execx.Result, error) {
+				calls++
+				if limited && strings.Contains(cmd.Args[len(cmd.Args)-1], endpoint) {
+					return execx.Result{Stdout: "HTTP/2.0 429 Too Many Requests\r\nRetry-After: 120\r\n\r\n"}, errors.New("exit status 1")
+				}
+				return f.Run(ctx, cmd)
+			})
+			s.pollGitHubIssueAutoStart(t.Context())
+			before := calls
+			s.pollGitHubIssueAutoStart(t.Context())
+			status := s.snapshot().GitHubRate
+			if before == 0 || calls != before || len(f.submissions) != 0 || status.RetryAt == nil || !status.RetryAt.Equal(now.Add(2*time.Minute)) {
+				t.Fatal(calls, before, status)
+			}
+			limited = false
+			now = now.Add(2 * time.Minute)
+			s.pollGitHubIssueAutoStart(t.Context())
+			s.pollGitHubIssueAutoStart(t.Context())
+			if len(f.submissions) != 1 || latestRecoveryRecord(t, s).Run.GitHubIssue.Number != 17 {
+				t.Fatal("issue was lost or duplicated", s.issueAutomation.status)
 			}
 		})
 	}

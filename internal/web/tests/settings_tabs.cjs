@@ -586,7 +586,7 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
   });
 
   assert.notEqual(await page.locator('body').getAttribute('data-prompt-mode'), 'issues');
-  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=19');
+  assert.equal(await page.locator('script[src^="/static/github-issues.js"]').getAttribute('src'), '/static/github-issues.js?v=20');
   await page.waitForFunction(() => document.querySelector('.github-issue-empty-state h2')?.textContent === 'No repositories available');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No repositories available');
   await page.locator('#github-issues-dock-link').click();
@@ -595,6 +595,7 @@ test('GitHub Issues settings initialize even when Studio opens in another prompt
 
 test('GitHub Issues remembers its repository and gives a useful empty state', async t => {
   let lastSearch = '';
+  let issueRequests = 0;
   const { page } = await openSettings(t, {
     path: '/',
     initialSettings: { ...defaults, github_issues_enabled: true },
@@ -604,6 +605,7 @@ test('GitHub Issues remembers its repository and gives a useful empty state', as
         { full_name: 'Molten-Bot/agent_00', default_branch: 'main' },
       ] } }));
       await page.route('**/api/github/issues**', route => {
+        issueRequests++;
         lastSearch = new URL(route.request().url()).searchParams.get('search') || '';
         return route.fulfill({ json: { ok: true, issues: [] } });
       });
@@ -611,12 +613,13 @@ test('GitHub Issues remembers its repository and gives a useful empty state', as
   });
 
   await page.waitForFunction(() => document.getElementById('github-issues-repo').value === 'Molten-Bot/agent_00');
+  assert.equal(issueRequests, 0, 'unopened issue list should not query GitHub');
+  await page.locator('#github-issues-dock-link').click();
   await page.waitForFunction(() => document.getElementById('github-issues-count').textContent === '0');
   assert.equal(await page.locator('.github-issues-empty').textContent(), 'No open issues are assigned to you. Use the filter button to show every open issue.');
   assert.equal(await page.locator('#github-issues-search').getAttribute('placeholder'), 'Search issues assigned to you');
   assert.equal(await page.locator('.github-issue-empty-state h2').textContent(), 'No assigned issues', 'an empty list must not invite choosing an issue');
   assert.equal(await page.locator('.github-issue-empty-state p').textContent(), 'No open issues are assigned to you. Use the filter button to show every open issue.');
-  await page.locator('#github-issues-dock-link').click();
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.body.scrollWidth), 390, 'mobile Issues view should not scroll horizontally');
   assert.equal(await page.locator('#github-issues-filters button').count(), 0, 'issue search should not need a Search button');

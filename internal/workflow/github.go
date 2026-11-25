@@ -11,9 +11,13 @@ import (
 	"time"
 
 	"github.com/Molten-Bot/agent_00/internal/execx"
+	"github.com/Molten-Bot/agent_00/internal/githubutil"
 )
 
-type GitHub struct{ Runner execx.Runner }
+type GitHub struct {
+	Runner   execx.Runner
+	Cooldown *githubutil.Cooldown
+}
 
 // pullRequestSnapshotError preserves the complete issue snapshot when a pull
 // request listed by GitHub cannot be inspected.
@@ -25,48 +29,91 @@ func (e *pullRequestSnapshotError) Unwrap() error { return e.err }
 func (g GitHub) command(ctx context.Context, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	r, err := g.Runner.Run(ctx, execx.Command{Name: "gh", Args: args})
+	r, err := g.Cooldown.Run(ctx, g.Runner, execx.Command{Name: "gh", Args: args}, g.Cooldown != nil)
 	if err != nil {
 		return "", fmt.Errorf("GitHub %s: %w", args[0], err)
 	}
 	return r.Stdout, nil
 }
-func (g GitHub) Fetch(ctx context.Context, repo string) ([]Item, error) {
+
+// ScanNeeds combines the GitHub data required by enabled triggers in one repository.
+type ScanNeeds struct {
+	Issues, PullRequests, Viewer, LinkedIssues, Reviews, Checks bool
+}
+
+func (n *ScanNeeds) include(w Definition) {
+	n.Issues = n.Issues || strings.HasPrefix(w.Trigger.Event, "issue.")
+	n.PullRequests = n.PullRequests || strings.HasPrefix(w.Trigger.Event, "pr.")
+	n.Reviews = n.Reviews || w.Trigger.Event == "pr.changes_requested"
+	n.Checks = n.Checks || w.Trigger.Event == "pr.checks_failed"
+	n.Viewer = n.Viewer || w.Trigger.Value == "@me"
+	for _, rule := range w.Filters.Rules {
+		n.LinkedIssues = n.LinkedIssues || rule.Field == "linkedIssue"
+		n.Viewer = n.Viewer || (rule.Value == "@me" && contains([]string{"author", "assignee", "reviewer"}, rule.Field))
+	}
+}
+
+func (g GitHub) Fetch(ctx context.Context, repo string, needs ScanNeeds) ([]Item, error) {
 	if !repoPattern.MatchString(repo) {
 		return nil, fmt.Errorf("invalid repository")
 	}
-	raw, err := g.command(ctx, "api", "--paginate", "repos/"+repo+"/issues?state=open&per_page=100")
+	if err := g.Cooldown.CheckDiscovery(); err != nil {
+		return nil, err
+	}
+	resource := "issues"
+	if !needs.Issues {
+		resource = "pulls"
+	}
+	raw, err := g.command(ctx, "api", "--paginate", "repos/"+repo+"/"+resource+"?state=open&per_page=100")
 	if err != nil {
 		return nil, err
 	}
 	type issue struct {
-		Number      int
-		Title, Body string
-		HTMLURL     string `json:"html_url"`
-		User        struct{ Login, Type string }
-		Labels      []struct{ Name string }
-		Assignees   []struct{ Login string }
-		Type        *struct{ Name string }
-		PullRequest *json.RawMessage `json:"pull_request"`
+		Number             int
+		Title, Body        string
+		HTMLURL            string `json:"html_url"`
+		User               struct{ Login, Type string }
+		Labels             []struct{ Name string }
+		Assignees          []struct{ Login string }
+		Type               *struct{ Name string }
+		PullRequest        *json.RawMessage `json:"pull_request"`
+		Draft              bool
+		Head, Base         struct{ Ref, SHA string }
+		RequestedReviewers []struct{ Login string }      `json:"requested_reviewers"`
+		RequestedTeams     []struct{ Name, Slug string } `json:"requested_teams"`
 	}
 	pages, err := decodeGitHubPages[issue](raw)
 	if err != nil {
 		return nil, fmt.Errorf("decode GitHub issues: %w", err)
 	}
-	viewer, err := g.command(ctx, "api", "user", "--jq", ".login")
-	if err != nil {
+	if err := g.Cooldown.CheckDiscovery(); err != nil {
 		return nil, err
 	}
-	viewer = strings.TrimSpace(viewer)
+	var viewer string
+	if needs.Viewer {
+		viewer, err = g.command(ctx, "api", "user", "--jq", ".login", "--cache", "10m")
+		if err != nil {
+			return nil, err
+		}
+		viewer = strings.TrimSpace(viewer)
+	}
 	items := []Item{}
 	var pullRequestErr error
 	for _, page := range pages {
 		for _, v := range page {
-			if v.PullRequest != nil {
-				if pullRequestErr != nil {
+			isPR := v.PullRequest != nil || resource == "pulls"
+			// The pulls collection already contains the head, labels, assignees,
+			// and requested reviewers required by basic PR triggers.
+			listedPR := resource == "pulls" && v.Head.Ref != "" && v.Head.SHA != "" && !needs.Reviews && !needs.Checks && !needs.LinkedIssues
+			if isPR && !listedPR {
+				if !needs.PullRequests || pullRequestErr != nil {
 					continue
 				}
-				i, err := g.Inspect(ctx, repo, strconv.Itoa(v.Number))
+				if err := g.Cooldown.CheckDiscovery(); err != nil {
+					pullRequestErr = err
+					continue
+				}
+				i, err := g.inspect(ctx, repo, strconv.Itoa(v.Number), needs)
 				if err != nil {
 					pullRequestErr = fmt.Errorf("inspect %s#%d: %w", repo, v.Number, err)
 					continue
@@ -82,6 +129,22 @@ func (g GitHub) Fetch(ctx context.Context, repo string) ([]Item, error) {
 			for _, a := range v.Assignees {
 				i.Assignees = append(i.Assignees, a.Login)
 			}
+			if listedPR {
+				i.Kind = "pr"
+				i.Draft = v.Draft
+				i.HeadBranch, i.HeadSHA, i.BaseBranch = v.Head.Ref, v.Head.SHA, v.Base.Ref
+				for _, reviewer := range v.RequestedReviewers {
+					i.Reviewers = append(i.Reviewers, reviewer.Login)
+				}
+				for _, team := range v.RequestedTeams {
+					if team.Slug != "" {
+						i.Reviewers = append(i.Reviewers, team.Slug)
+					}
+					if team.Name != "" {
+						i.Reviewers = append(i.Reviewers, team.Name)
+					}
+				}
+			}
 			if v.Type != nil {
 				i.IssueType = v.Type.Name
 			}
@@ -96,10 +159,21 @@ func (g GitHub) Fetch(ctx context.Context, repo string) ([]Item, error) {
 	return items, nil
 }
 func (g GitHub) Inspect(ctx context.Context, repo, selector string) (Item, error) {
+	return g.inspect(ctx, repo, selector, ScanNeeds{LinkedIssues: true, Reviews: true, Checks: true})
+}
+
+func (g GitHub) inspect(ctx context.Context, repo, selector string, needs ScanNeeds) (Item, error) {
 	if !repoPattern.MatchString(repo) {
 		return Item{}, fmt.Errorf("invalid repository")
 	}
-	raw, err := g.command(ctx, "pr", "view", selector, "--repo", repo, "--json", "number,title,body,url,author,labels,assignees,reviewRequests,baseRefName,headRefName,headRefOid,isDraft,reviewDecision,statusCheckRollup,state")
+	fields := "number,title,body,url,author,labels,assignees,reviewRequests,baseRefName,headRefName,headRefOid,isDraft,state"
+	if needs.Reviews {
+		fields += ",reviewDecision"
+	}
+	if needs.Checks {
+		fields += ",statusCheckRollup"
+	}
+	raw, err := g.command(ctx, "pr", "view", selector, "--repo", repo, "--json", fields)
 	if err != nil {
 		return Item{}, err
 	}
@@ -127,14 +201,17 @@ func (g GitHub) Inspect(ctx context.Context, repo, selector string) (Item, error
 	}
 	// Older gh versions do not expose closingIssuesReferences in pr view's
 	// JSON field list. Ask GraphQL directly for the relationship count.
-	parts := strings.SplitN(repo, "/", 2)
-	linked, err := g.command(ctx, "api", "graphql", "-f", "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences{totalCount}}}}", "-F", "owner="+parts[0], "-F", "name="+parts[1], "-F", "number="+strconv.Itoa(p.Number), "--jq", ".data.repository.pullRequest.closingIssuesReferences.totalCount")
-	if err != nil {
-		return Item{}, err
-	}
-	linkedCount, err := strconv.Atoi(strings.TrimSpace(linked))
-	if err != nil || linkedCount < 0 {
-		return Item{}, fmt.Errorf("decode linked issue count")
+	linkedCount := 0
+	if needs.LinkedIssues {
+		parts := strings.SplitN(repo, "/", 2)
+		linked, err := g.command(ctx, "api", "graphql", "-f", "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences{totalCount}}}}", "-F", "owner="+parts[0], "-F", "name="+parts[1], "-F", "number="+strconv.Itoa(p.Number), "--jq", ".data.repository.pullRequest.closingIssuesReferences.totalCount")
+		if err != nil {
+			return Item{}, err
+		}
+		linkedCount, err = strconv.Atoi(strings.TrimSpace(linked))
+		if err != nil || linkedCount < 0 {
+			return Item{}, fmt.Errorf("decode linked issue count")
+		}
 	}
 	i := Item{Repository: repo, Number: p.Number, Kind: "pr", Title: p.Title, Body: p.Body, URL: p.URL, Author: p.Author.Login, Bot: p.Author.IsBot, BaseBranch: p.BaseRefName, HeadBranch: p.HeadRefName, HeadSHA: p.HeadRefOid, Draft: p.IsDraft, LinkedIssue: linkedCount > 0, ReviewDecision: p.ReviewDecision, Open: p.State == "OPEN", ChecksPassed: len(p.StatusCheckRollup) > 0}
 	for _, l := range p.Labels {
@@ -161,6 +238,9 @@ func (g GitHub) Inspect(ctx context.Context, repo, selector string) (Item, error
 		if contains([]string{"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"}, state) {
 			i.ChecksFailed = true
 		}
+	}
+	if !needs.Reviews {
+		return i, nil
 	}
 	reviews, err := g.command(ctx, "api", "--paginate", "repos/"+repo+"/pulls/"+strconv.Itoa(i.Number)+"/reviews?per_page=100")
 	if err != nil {

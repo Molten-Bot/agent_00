@@ -21,7 +21,7 @@ func TestGitHubPaginationWorksWithoutSlurp(t *testing.T) {
 		}
 		return execx.Result{Stdout: "agent\n"}, nil
 	})}
-	items, err := g.Fetch(context.Background(), "acme/repo")
+	items, err := g.Fetch(context.Background(), "acme/repo", ScanNeeds{Issues: true, PullRequests: true, Viewer: true, Reviews: true, LinkedIssues: true, Checks: true})
 	if err != nil || len(items) != 2 || items[0].Number != 1 || items[1].Number != 2 {
 		t.Fatal(items, err)
 	}
@@ -42,7 +42,7 @@ func TestGitHubPaginationRejectsIncompleteResponses(t *testing.T) {
 		t.Run(raw, func(t *testing.T) {
 			t.Parallel()
 			g := GitHub{Runner: fakeRunner(func(context.Context, execx.Command) (execx.Result, error) { return execx.Result{Stdout: raw}, nil })}
-			items, err := g.Fetch(context.Background(), "acme/repo")
+			items, err := g.Fetch(context.Background(), "acme/repo", ScanNeeds{Issues: true, PullRequests: true, Viewer: true, Reviews: true, LinkedIssues: true, Checks: true})
 			if err == nil || items != nil {
 				t.Fatalf("accepted incomplete response: %#v %v", items, err)
 			}
