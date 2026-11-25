@@ -765,9 +765,9 @@ test('task complexity can override the application default and return to inherit
   const complexity = page.getByLabel('Task complexity', { exact: true });
   assert.equal(await complexity.inputValue(), '');
   await complexity.selectOption('advanced');
-  await waitForDraft(page);
+  await waitForSaved(page);
   assert.equal(getDocument().workflows[0].task.complexity, 'advanced');
   await complexity.selectOption('');
-  await waitForDraft(page);
+  await waitForSaved(page);
   assert.equal(getDocument().workflows[0].task.complexity, undefined);
 });
