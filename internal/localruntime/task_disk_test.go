@@ -265,6 +265,89 @@ func TestAdaptiveSchedulerRetriesDiskPressureWithFailedCPUSample(t *testing.T) {
 	}
 }
 
+func TestAdaptiveSchedulerRechecksQueueAfterWorkspacePurge(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	retained := filepath.Join(root, "completed-task")
+	if err := os.Mkdir(retained, 0700); err != nil {
+		t.Fatal(err)
+	}
+	const unit = workspace.MinimumFreeBytes
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 2, SampleWindow: 1}, nil)
+	controller.sample = staticSample{value: resourceSample{CPUPercent: 95}}
+	controller.sampleAndUpdate()
+	controller.diskSpace = func(string) (string, uint64, uint64, error) {
+		_, err := os.Stat(retained)
+		if errors.Is(err, os.ErrNotExist) {
+			return "disk", 2 * unit, 2 * unit, nil
+		}
+		return "disk", 0, 2 * unit, err
+	}
+	request := TaskDiskRequest{
+		Workspace:     workspace.Manager{Root: root},
+		RequiredBytes: func() uint64 { return unit },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	type admission struct {
+		release func()
+		err     error
+	}
+	queue := func(id string) <-chan admission {
+		done := make(chan admission, 1)
+		go func() {
+			_, release, err := controller.AcquireWorkspace(ctx, id, request, false)
+			done <- admission{release: release, err: err}
+		}()
+		waitForQueuedRequest(t, controller, id)
+		return done
+	}
+	first, second := queue("first"), queue("second")
+	if err := os.RemoveAll(retained); err != nil {
+		t.Fatal(err)
+	}
+	controller.RecheckQueue()
+	got := <-first
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	defer got.release()
+	waitForQueuedRequest(t, controller, "second")
+
+	controller.sample = staticSample{value: resourceSample{CPUPercent: 20}}
+	controller.sampleAndUpdate()
+	got = <-second
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	got.release()
+}
+
+func TestAdaptiveSchedulerReportsEstimateLargerThanFilesystem(t *testing.T) {
+	t.Parallel()
+
+	const unit = workspace.MinimumFreeBytes
+	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
+	controller.diskSpace = func(string) (string, uint64, uint64, error) {
+		return "disk", unit, unit, nil
+	}
+	request := TaskDiskRequest{
+		Workspace:     workspace.Manager{Root: t.TempDir()},
+		RequiredBytes: func() uint64 { return 2 * unit },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, release, err := controller.AcquireWorkspace(ctx, "oversized", request, false)
+	if release != nil {
+		release()
+		t.Fatal("admitted task with an estimate larger than the filesystem")
+	}
+	if err == nil || !strings.Contains(err.Error(), "exceeding total filesystem capacity") {
+		t.Fatalf("acquisition error = %v, want filesystem capacity error", err)
+	}
+}
+
 func TestAdaptiveSchedulerReportsWorkspaceSetupFailure(t *testing.T) {
 	t.Parallel()
 
@@ -439,7 +522,7 @@ func TestAdaptiveSchedulerDrainsWorkspacesForOlderDiskWaiter(t *testing.T) {
 			}
 			younger := &taskWaiter{disk: &small}
 			controller.waiters = append(controller.waiters, younger)
-			controller.tryGrantLocked(1)
+			controller.tryGrantLocked(len(controller.waiters) - 1)
 			if younger.granted == tc.wantDrain {
 				t.Fatalf("younger admitted = %v, want drain = %v", younger.granted, tc.wantDrain)
 			}
