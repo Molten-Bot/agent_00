@@ -522,8 +522,10 @@ The React Flow editor defines an executable pipeline: repository → trigger →
 filters → task → bounded review cycles → optional merge. Select a node to edit
 its policy and drag nodes to arrange the canvas. Connections describe this
 pipeline; arbitrary branches or custom executable node types are not supported.
-Save draft pauses the workflow. Enable is a separate action. Preview matches is
-read-only.
+Valid workflow settings save automatically, including when you leave the editor.
+Incomplete changes leave the last saved version in place. Moving nodes alone
+does not trigger a save. Enable and Pause control whether the workflow runs.
+Preview matches is read-only.
 
 The `app.prompt`, `app.json`, and `app.chat` triggers customize single-repository
 implementation submissions from their respective app sources. An enabled override
@@ -536,7 +538,7 @@ Choose a repository and a **Workflow template** to create an editable, disabled
 workflow. Templates cover labeled or assigned issues, requested PR reviews,
 requested changes, failed checks, scheduled tasks, issue-to-merge, and
 review-and-merge. Merge templates require successful checks and human approval;
-review-and-merge also requires a clean agent review. Save and explicitly enable
+review-and-merge also requires a clean agent review. Explicitly enable
 each workflow when ready. Multiple copies can target the same repository.
 Templates are independent copies: editing one does not change other workflows.
 The versioned catalog is `internal/web/workflow/src/templates.json`; its definitions
