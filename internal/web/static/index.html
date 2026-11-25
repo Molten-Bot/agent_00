@@ -16,7 +16,7 @@
   <script id="d3-script" defer src="https://cdn.jsdelivr.net/npm/d3@7.9.2/dist/d3.min.js"></script>
   <script src="/static/site-header.js"></script>
   <script src="/static/task-asset-preview.js?v=4"></script>
-  <link rel="stylesheet" href="/static/style.css?v=17">
+  <link rel="stylesheet" href="/static/style.css?v=18">
 </head>
 <body>
   <svg class="settings-icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -816,9 +816,16 @@
               <svg class="lucide lucide-diagram-flow-vertical" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 003.5 3.5 3.5 3.5 0 013.5 3.5v.5"/><path d="M12 8v.5A3.5 3.5 0 018.5 12 3.5 3.5 0 005 15.5v.5"/><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/></svg>
               <span>Workflow (beta)</span>
             </label>
-            <label>Default task complexity
-              <select id="settings-default-complexity"><option value="easy">Easy</option><option value="standard" selected>Standard</option><option value="advanced">Advanced</option></select>
-            </label>
+            <div class="complexity-slider">
+              <label for="settings-default-complexity">Default task complexity</label>
+              <input id="settings-default-complexity" type="range" min="0" max="2" step="1" value="1"
+                title="Standard" aria-valuetext="Standard">
+              <div class="complexity-stops" role="group" aria-label="Default complexity presets">
+                <button type="button" data-complexity="easy" aria-label="Easy" title="Easy" aria-pressed="false"><i data-lucide="rabbit" aria-hidden="true"></i></button>
+                <button type="button" data-complexity="standard" aria-label="Standard" title="Standard" aria-pressed="true"><i data-lucide="brain" aria-hidden="true"></i></button>
+                <button type="button" data-complexity="advanced" aria-label="Advanced" title="Advanced" aria-pressed="false"><i data-lucide="sparkles" aria-hidden="true"></i></button>
+              </div>
+            </div>
           </fieldset>
           <div id="settings-panel-repositories" class="review-settings-section" role="tabpanel" aria-labelledby="settings-tab-repositories" hidden>
             <div class="repository-settings-heading">
@@ -2074,7 +2081,9 @@
     const reviewSettingsDeleteMergedBranches = document.getElementById("review-settings-delete-merged-branches");
     const reviewSettingsDefaultLibrary = document.getElementById("review-settings-default-library");
     const reviewSettingsChatEnabled = document.getElementById("review-settings-chat-enabled");
-    const defaultComplexitySelect = document.getElementById("settings-default-complexity");
+    const defaultComplexitySlider = document.getElementById("settings-default-complexity");
+    const defaultComplexityStops = Array.from(defaultComplexitySlider.parentElement.querySelectorAll("[data-complexity]"));
+    const complexityIcons = { easy: "rabbit", standard: "brain", advanced: "sparkles" };
     const reviewSettingsWorkflowEnabled = document.getElementById("review-settings-workflow-enabled");
     const workflowDisplay = document.getElementById("workflow-display");
     const reviewSettingsJSONEnabled = document.getElementById("review-settings-json-enabled");
@@ -2825,6 +2834,18 @@
 
     let issueAutomationRepositoriesEdited = false;
     let issueAutomationRepositoriesSnapshot = null;
+    function setDefaultComplexity(value) {
+      let index = defaultComplexityStops.findIndex((stop) => stop.dataset.complexity === value);
+      if (index === -1) index = 1;
+      const selected = defaultComplexityStops[index];
+      state.reviewSettings.defaultComplexity = selected.dataset.complexity;
+      defaultComplexitySlider.value = index;
+      defaultComplexitySlider.title = selected.title;
+      defaultComplexitySlider.setAttribute("aria-valuetext", selected.title);
+      for (const stop of defaultComplexityStops) {
+        stop.setAttribute("aria-pressed", String(stop === selected));
+      }
+    }
     function applyReviewSettingsState(nextState) {
       const previousAutoMerge = taskAutoMergeStepEnabled();
       const previousReviewCycle = taskReviewStepEnabled();
@@ -2846,7 +2867,8 @@
       if (reviewSettingsJSONEnabled instanceof HTMLInputElement) {
         reviewSettingsJSONEnabled.checked = state.reviewSettings.jsonEnabled;
       }
-      defaultComplexitySelect.value = state.reviewSettings.defaultComplexity;
+      setDefaultComplexity(state.reviewSettings.defaultComplexity);
+      window.mountWorkflowEditor?.(taskAgentLogoURL(), state.reviewSettings.defaultComplexity);
       reviewSettingsWorkflowEnabled.checked = state.reviewSettings.workflowEnabled;
       renderRepositorySettings();
       renderRepoHistoryOptions();
@@ -2947,7 +2969,7 @@
         review_level: state.reviewSettings.reviewLevel,
         default_library_enabled: reviewSettingsDefaultLibrary instanceof HTMLInputElement ? reviewSettingsDefaultLibrary.checked : true,
         chat_enabled: reviewSettingsChatEnabled instanceof HTMLInputElement ? reviewSettingsChatEnabled.checked : false,
-        default_complexity: defaultComplexitySelect.value,
+        default_complexity: state.reviewSettings.defaultComplexity,
         workflow_enabled: reviewSettingsWorkflowEnabled.checked,
         json_enabled: reviewSettingsJSONEnabled instanceof HTMLInputElement ? reviewSettingsJSONEnabled.checked : false,
         github_issues_enabled: reviewSettingsGitHubIssuesEnabled instanceof HTMLInputElement ? reviewSettingsGitHubIssuesEnabled.checked : false,
@@ -3441,7 +3463,7 @@
           configuredAgentLabel: state.ui.configuredAgentLabel,
         }, state.agentAuth);
       }
-      window.mountWorkflowEditor?.(taskAgentLogoURL());
+      window.mountWorkflowEditor?.(taskAgentLogoURL(), state.reviewSettings.defaultComplexity);
     }
 
     function setAgentAuthVerifyPending(pending) {
@@ -9018,14 +9040,14 @@
         document.head.appendChild(css);
         workflowEditorLoad = new Promise((resolve, reject) => {
           const script = document.createElement("script");
-          script.src = "/static/workflow-editor.js?v=22";
+          script.src = "/static/workflow-editor.js?v=23";
           script.onload = resolve;
           script.onerror = () => { script.remove(); css.remove(); workflowEditorLoad = null; reject(new Error("Unable to load Workflow editor. Reload to try again.")); };
           document.head.appendChild(script);
         });
       }
       return workflowEditorLoad.then(() => {
-        window.mountWorkflowEditor(taskAgentLogoURL());
+        window.mountWorkflowEditor(taskAgentLogoURL(), state.reviewSettings.defaultComplexity);
         window.dispatchEvent(new CustomEvent("workflow-display", { detail: "workflow" }));
       }).catch(error => {
         document.getElementById("workflow-editor-root").textContent = error.message;
@@ -12810,7 +12832,14 @@
           if (task.complexity) {
             const runtime = document.createElement("div");
             const model = task.resolved_model || (task.model_resolution ? "CLI default" : "");
-            runtime.textContent = [`Complexity: ${task.complexity}`, model, task.cli_version, task.model_resolution].filter(Boolean).join(" · ");
+            runtime.className = "task-runtime-complexity";
+            runtime.title = [`Complexity: ${task.complexity}`, model, task.cli_version, task.model_resolution].filter(Boolean).join(" · ");
+            runtime.setAttribute("role", "img");
+            runtime.setAttribute("aria-label", runtime.title);
+            const icon = document.createElement("i");
+            icon.setAttribute("data-lucide", complexityIcons[task.complexity] || complexityIcons.standard);
+            icon.setAttribute("aria-hidden", "true");
+            runtime.appendChild(icon);
             meta.appendChild(runtime);
           }
 
@@ -14136,9 +14165,9 @@
       state.settingsBusy = Boolean(busy);
       updateSettingsAgentAuth();
       window.CommitSigningSettings?.setModalBusy(Boolean(busy));
-      defaultComplexitySelect.disabled = Boolean(busy) || !state.settingsLoaded;
       reviewSettingsClose.disabled = Boolean(busy);
       for (const control of [reviewSettingsAutoMerge, reviewSettingsDeleteMergedBranches,
+        defaultComplexitySlider, ...defaultComplexityStops,
         reviewSettingsDefaultLibrary, reviewSettingsChatEnabled, reviewSettingsJSONEnabled, reviewSettingsWorkflowEnabled, reviewSettingsGitHubIssuesEnabled,
         issueAutomationRepository, issueAutomationRepositoryEnabled, issueAutomationStopLegacy,
         reviewSettingsGitHubIssuesAutoStartAssigned, reviewSettingsGitHubIssuesAutoStartOnlyAssigned, reviewSettingsGitHubIssuesAutoStartLabels, reviewSettingsGitHubIssuesExclusionLabel, reviewSettingsAssignCreator, reviewSettingsSlider, ...reviewSettingsMergeOptions,
@@ -14210,10 +14239,16 @@
         setAppDisplay("studio");
       }
     });
-    defaultComplexitySelect.addEventListener("change", () => {
-      state.reviewSettings.defaultComplexity = defaultComplexitySelect.value;
+    function editDefaultComplexity(value) {
+      setDefaultComplexity(value);
       setReviewSettingsStatus("", "Changes will be saved on close.");
+    }
+    defaultComplexitySlider.addEventListener("input", () => {
+      editDefaultComplexity(defaultComplexityStops[Number(defaultComplexitySlider.value)].dataset.complexity);
     });
+    for (const stop of defaultComplexityStops) {
+      stop.addEventListener("click", () => editDefaultComplexity(stop.dataset.complexity));
+    }
     reviewSettingsWorkflowEnabled.addEventListener("change", () => {
       state.reviewSettings = { ...state.reviewSettings, workflowEnabled: reviewSettingsWorkflowEnabled.checked };
       syncWorkflowAvailability();

@@ -1395,9 +1395,41 @@ test('settings omit workflow defaults and preserve migrated configuration when s
 test('default complexity starts at Standard and saves on close', async t => {
   const { page, writes } = await openSettings(t);
   await select(page, 'automation');
-  const complexity = page.getByLabel('Default task complexity');
-  assert.equal(await complexity.inputValue(), 'standard');
-  await complexity.selectOption('easy');
+  const complexity = page.getByRole('slider', { name: 'Default task complexity' });
+  const presets = page.getByRole('group', { name: 'Default complexity presets' });
+  assert.equal(await complexity.getAttribute('aria-valuetext'), 'Standard');
+  for (const [label, icon] of [['Easy', 'rabbit'], ['Standard', 'brain'], ['Advanced', 'sparkles']]) {
+    const stop = presets.getByRole('button', { name: label, exact: true });
+    await stop.locator(`svg.lucide-${icon}`).waitFor();
+    assert.equal(await stop.getAttribute('title'), label);
+    assert.equal(await stop.textContent(), '');
+  }
+  await complexity.press('End');
+  assert.equal(await complexity.getAttribute('aria-valuetext'), 'Advanced');
+  await presets.getByRole('button', { name: 'Easy', exact: true }).click();
+  assert.equal(await complexity.inputValue(), '0');
   await close(page);
   assert.equal(writes.at(-1).default_complexity, 'easy');
+});
+
+test('task runtime details appear on the complexity icon', async t => {
+  const { page } = await openSettings(t, {
+    path: '/#current-work',
+    configurePage: async page => {
+      await page.route('**/api/status', route => route.fulfill({
+        json: {
+          tasks: [{
+            request_id: 'complexity-task', status: 'running', complexity: 'standard',
+            resolved_model: 'gpt-6.2-sol', cli_version: 'codex-cli 0.171.0', model_resolution: 'model/list',
+          }],
+          events: [], repositories: [], stats: {}, resources: {},
+        },
+      }));
+    },
+  });
+  const details = 'Complexity: standard · gpt-6.2-sol · codex-cli 0.171.0 · model/list';
+  const icon = page.locator('#task-list').getByRole('img', { name: details, exact: true });
+  await icon.locator('svg.lucide-brain').waitFor();
+  assert.equal(await icon.getAttribute('title'), details);
+  assert.equal(await icon.textContent(), '');
 });
