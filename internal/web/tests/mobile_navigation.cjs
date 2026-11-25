@@ -716,7 +716,6 @@ for (const viewport of [{width:1440,height:1000},{width:1024,height:768}]) {
   const after=await geometry();assert.ok(Math.abs(after.height-before.height)<2,JSON.stringify({before,after}));assert.equal(after.scrolls,true);
   await page.setViewportSize({width:viewport.width,height:viewport.height+160});
   await page.waitForFunction(h=>document.getElementById('builder-prompt-input').getBoundingClientRect().height>h+140,before.height);
-  if(viewport.width===1440)await page.screenshot({path:'/tmp/agent00-prompt-fill.png',fullPage:true});
  });
 }
 
@@ -740,6 +739,5 @@ for (const viewport of [{width:1440,height:1000},{width:1024,height:768}]) {
   await page.setViewportSize({width:viewport.width,height:viewport.height+160});
   await page.waitForFunction(h=>document.getElementById('library-task-list').getBoundingClientRect().height>h+140,before.height);
   assert.ok((await geometry()).gap<=16);
-  if(viewport.width===1440)await page.screenshot({path:'/tmp/agent00-library-layout-fixed.png',fullPage:true});
  });
 }

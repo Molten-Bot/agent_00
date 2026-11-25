@@ -6543,11 +6543,25 @@
       libraryScheduleTrigger.dataset.taskName = entry.name;
       libraryScheduleTrigger.title = `Create scheduled workflow for ${entry.displayName}`;
       libraryScheduleTrigger.setAttribute("aria-label", `Create scheduled workflow for ${entry.displayName}`);
-      libraryScheduleTrigger.onclick = () => {
- if(!state.reviewSettings.workflowEnabled){document.getElementById("settings-open").click();setSettingsTab("automation");setReviewSettingsStatus("", "Enable Workflow (beta) to create scheduled workflows.");return;}
- try { const payload = libraryPayload(entry.name); window.pendingWorkflowSchedule = {...payload,workflowRepository:githubRepoPathFromValue(payload.repos[0])}; window.location.hash = "workflow"; setAppDisplay("workflow"); void loadWorkflowEditor().then(()=>window.dispatchEvent(new Event("workflow-create-schedule"))); }
- catch(error){setLocalPromptStatus("error",error.message);}
- };
+      libraryScheduleTrigger.onclick = async () => {
+        if (!state.settingsLoaded) await loadReviewSettings();
+        if (!state.reviewSettings.workflowEnabled) {
+          document.getElementById("settings-open").click();
+          setSettingsTab("automation");
+          setReviewSettingsStatus("", "Enable Workflow (beta) to create scheduled workflows.");
+          return;
+        }
+        try {
+          const payload = libraryPayload(entry.name);
+          window.pendingWorkflowSchedule = { ...payload, workflowRepository: githubRepoPathFromValue(payload.repos[0]) };
+          window.location.hash = "workflow";
+          setAppDisplay("workflow");
+          await loadWorkflowEditor();
+          window.dispatchEvent(new Event("workflow-create-schedule"));
+        } catch (error) {
+          setLocalPromptStatus("error", error.message);
+        }
+      };
     }
 
     function syncBaseBranchClearState() {

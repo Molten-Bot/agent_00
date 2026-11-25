@@ -1,6 +1,8 @@
 package web
 
 import (
+	"context"
+	"errors"
 	"io/fs"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +14,10 @@ func TestGoogleAnalyticsInBrowser(t *testing.T) {
 	requireBrowserTooling(t, "Google Analytics check")
 
 	srv := NewServer("", NewBroker())
+	// Let the browser fixtures control repository availability without a server preload.
+	srv.ResolveGitHubRepos = func(context.Context) ([]GitHubRepo, error) {
+		return nil, errors.New("repository data is supplied by the browser fixtures")
+	}
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
