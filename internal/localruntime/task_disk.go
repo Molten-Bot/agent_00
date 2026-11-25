@@ -172,7 +172,7 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 	minimum := max(workspace.MinimumFreeBytes, required)
 	var fallbackRoot, fallbackDevice string
 	var setupErr error
-	blocked := false
+	var blocked, tooSmall bool
 	manager := waiter.disk.Workspace
 	if !force {
 		// Disk admission handles free space. PrepareRoots checks setup even
@@ -222,8 +222,14 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 			continue
 		}
 		if !force && minimum > sample.total {
-			// Freeing space here cannot admit this task. Keep looking for
-			// a usable root or a setup error that explains the failure.
+			// Draining cannot make this estimate fit. Keep Force start available
+			// unless the allocator itself rejects this undersized root.
+			checkSpace := waiter.disk.Workspace.CheckSpace
+			if sample.total < workspace.MinimumFreeBytes && checkSpace != nil && checkSpace(root) != nil {
+				tooSmall = true
+			} else {
+				blocked = true
+			}
 			continue
 		}
 		// Reserve each running task's full allowance. Free space may already
@@ -265,6 +271,9 @@ func (c *AdaptiveScheduler) reserveDiskLocked(waiter *taskWaiter, force bool, sa
 	}
 	if blocked {
 		return false, nil
+	}
+	if setupErr == nil && tooSmall {
+		return false, fmt.Errorf("workspace storage requires %d bytes, exceeding total filesystem capacity", workspace.MinimumFreeBytes)
 	}
 	return false, setupErr
 }
