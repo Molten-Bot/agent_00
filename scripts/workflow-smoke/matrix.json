@@ -73,6 +73,33 @@
       "expect": ["A confirmed clean review is tied to the reviewed head.", "The PR merges once only after all checks and approval requirements pass.", "A changed head, review findings, or missing checks prevents merging."],
       "fixture": "Second identity, passing checks, clean review, and eligible human approval.",
       "terminal": ["merged"]
+    },
+    {
+      "id": "app-prompt",
+      "name": "Prompt submission",
+      "template": "app-prompt",
+      "prepare": ["Enable the namespaced workflow on the disposable repository.", "Run --action submit --case app-prompt."],
+      "expect": ["The returned request selects this workflow and retains the prompt source and submitted marker.", "Its PR adds only the requested marker file with the submitted contents."],
+      "fixture": "A disposable repository and an authenticated gh CLI with read access to its PRs.",
+      "terminal": ["completed"]
+    },
+    {
+      "id": "app-json",
+      "name": "JSON submission",
+      "template": "app-json",
+      "prepare": ["Enable the namespaced workflow on the disposable repository. Enable JSON in app settings.", "Run --action submit --case app-json."],
+      "expect": ["The returned request selects this workflow and retains the json source and submitted marker.", "Its PR adds only the requested marker file with the submitted contents."],
+      "fixture": "A disposable repository and an authenticated gh CLI with read access to its PRs.",
+      "terminal": ["completed"]
+    },
+    {
+      "id": "app-chat",
+      "name": "Chat submission",
+      "template": "app-chat",
+      "prepare": ["Enable the namespaced workflow on the disposable repository. Enable Chat in app settings.", "Run --action submit --case app-chat."],
+      "expect": ["The returned request selects this workflow and retains the chat source and submitted marker.", "Its PR adds only the requested marker file with the submitted contents."],
+      "fixture": "A disposable repository and an authenticated gh CLI with read access to its PRs.",
+      "terminal": ["completed"]
     }
   ],
   "crossCutting": [

@@ -5,6 +5,7 @@ Examples:
   python3 scripts/workflow-smoke/run.py --repo example/repository
   python3 scripts/workflow-smoke/run.py --repo example/repository --action install
   python3 scripts/workflow-smoke/run.py --repo example/repository --action enable --case labeled
+  python3 scripts/workflow-smoke/run.py --repo example/repository --action submit --case app-prompt
   python3 scripts/workflow-smoke/run.py --repo example/repository --action scan
   python3 scripts/workflow-smoke/run.py --repo example/repository --action observe
   python3 scripts/workflow-smoke/run.py --repo example/repository --action pause --case labeled
@@ -29,7 +30,10 @@ import os
 from pathlib import Path
 import re
 import shlex
+import subprocess
 import sys
+import time
+import uuid
 import urllib.error
 import urllib.request
 
@@ -42,10 +46,10 @@ class API:
     def __init__(self, base):
         self.base = base.rstrip("/")
 
-    def request(self, path, data=None, method=None, raw=None):
+    def request(self, path, data=None, method=None, raw=None, headers=None):
         body = raw if raw is not None else (json.dumps(data).encode() if data is not None else None)
         request = urllib.request.Request(self.base + path, data=body, method=method,
-                                         headers={"Content-Type": "application/json"})
+                                         headers={"Content-Type": "application/json", **(headers or {})})
         try:
             response = urllib.request.urlopen(request, timeout=90)
         except urllib.error.HTTPError as error:
@@ -72,14 +76,15 @@ def definitions(repo, prefix):
         definition = copy.deepcopy(templates[case["template"]])
         definition.update(id=f"{prefix}-{case['id']}", name=f"Smoke: {case['name']}",
                           repository=repo, enabled=False, includeBacklog=False)
+        event = definition["trigger"]["event"]
         if "instructions" in case:
             definition["task"]["instructions"] = case["instructions"]
-        else:
+        elif not event.startswith("app."):
             definition["task"]["instructions"] += " Keep the change limited to the smoke-test fixture and report validation results."
         label = f"{prefix}-{case['id']}"
-        if definition["trigger"]["event"] == "issue.labeled":
+        if event == "issue.labeled":
             definition["trigger"]["value"] = label
-        elif definition["trigger"]["event"] != "schedule":
+        elif event != "schedule" and not event.startswith("app."):
             definition["filters"]["rules"] = [{"field": "label", "operator": "is", "value": label}]
         definition.pop("positions", None)
         if not definition["trigger"].get("value"):
@@ -96,9 +101,9 @@ def expect(report, name, actual, wanted):
     record(report, name, "pass" if actual == wanted else "fail", actual=actual, expected=wanted)
 
 
-def recent_runs(api):
+def recent_runs(snapshot):
     runs = {}
-    for event in api.get("/api/status")["events"] or []:
+    for event in snapshot["events"] or []:
         line = event["line"]
         if not line.startswith("workflow event="):
             continue
@@ -109,7 +114,7 @@ def recent_runs(api):
 
 
 def check(api, defs, report):
-    before_ids = set(recent_runs(api))
+    before_ids = set(recent_runs(api.get("/api/status")))
     for definition in defs:
         code, preview = api.request("/api/workflows/preview", definition, "POST")
         valid = code == 200 and isinstance(preview, list)
@@ -133,7 +138,7 @@ def check(api, defs, report):
                               raw=(json.dumps(baseline) + suffix).encode())
         expect(report, f"reject:trailing{suffix}", code, 400)
     ids = {definition["id"] for definition in defs}
-    new_owned = [run_id for run_id, run in recent_runs(api).items()
+    new_owned = [run_id for run_id, run in recent_runs(api.get("/api/status")).items()
                  if run_id not in before_ids and run["workflow_id"] in ids]
     expect(report, "preview-does-not-dispatch", len(new_owned), 0)
 
@@ -160,8 +165,12 @@ def install(api, defs, report):
 
 
 def observe(api, defs, report):
-    runs = recent_runs(api).values()
+    runs = recent_runs(api.get("/api/status")).values()
     for case, definition in zip(MATRIX["cases"], defs):
+        if definition["trigger"]["event"].startswith("app."):
+            record(report, f"execution:{case['id']}", "blocked",
+                   reason="Use the submit action for request-specific task and PR evidence")
+            continue
         matching = [run for run in runs if run["workflow_id"] == definition["id"]]
         latest = matching[-1] if matching else None
         status = ("fail" if latest and latest["status"] == "failed" else
@@ -173,6 +182,73 @@ def observe(api, defs, report):
                evidenceScope="Recent monitor events only. Inspect PR diff, checks, and reviews using matrix.json.")
     for name in ("dedupe", "pause", "merge-gates"):
         record(report, name, "blocked", reason="Requires controlled transitions and before/after observations; see matrix.json")
+
+
+def verify_artifact(repo, pr_url, path, marker):
+    match = re.fullmatch(r"https://github\.com/" + re.escape(repo) + r"/pull/([1-9][0-9]*)", pr_url, re.I)
+    if not match:
+        return False
+    result = subprocess.run(["gh", "api", "--hostname", "github.com",
+                             f"repos/{repo}/pulls/{match[1]}/files"], capture_output=True, timeout=90)
+    if result.returncode:
+        raise RuntimeError("Could not read the fixture PR files with gh api")
+    files = json.loads(result.stdout)
+    return (len(files) == 1 and files[0]["filename"] == path and files[0]["status"] == "added"
+            and files[0]["additions"] == 1 and "+" + marker in files[0].get("patch", "").splitlines())
+
+
+def submit(api, definition, report, timeout):
+    source = definition["trigger"]["event"].removeprefix("app.")
+    repo = definition["repository"]
+    check_name = f"execution:app-{source}"
+    settings = api.get("/api/review-settings")["settings"]
+    for feature in (["workflow"] if source == "prompt" else ["workflow", source]):
+        if not settings[feature + "_enabled"]:
+            record(report, check_name, "blocked", reason=f"Enable {feature} in app settings")
+            return
+    if {**definition, "enabled": True} not in api.get("/api/workflows")["workflows"]:
+        record(report, check_name, "blocked", reason="Install and enable the matching smoke definition first")
+        return
+
+    marker = f"workflow-smoke-{source}-{uuid.uuid4().hex}"
+    path = f"docs/{marker}.md"
+    body = {"repoUrl": f"https://github.com/{repo}",
+            "prompt": f"Create {path} containing only the line {marker}. Make no other changes."}
+    code, reply = api.request("/api/local-prompt", body, "POST", headers={"X-Agent-Task-Source": source})
+    request_id = reply.get("request_id")
+    evidence = dict(requestId=request_id, marker=marker, artifact=path, workflowId=definition["id"])
+    if code != 202 or not isinstance(request_id, str) or not request_id.strip():
+        record(report, check_name, "fail", httpStatus=code, reason="Expected an accepted request ID", **evidence)
+        return
+
+    snapshot = api.get("/api/status")
+    workflows = {run["workflow_id"] for run in recent_runs(snapshot).values() if run.get("request_id") == request_id}
+    if workflows != {definition["id"]}:
+        record(report, check_name, "fail", actualWorkflows=sorted(workflows), **evidence)
+        return
+    deadline = time.monotonic() + timeout
+    while True:
+        task = next((t for t in snapshot["tasks"] or [] if t["request_id"] == request_id), {})
+        if task.get("source") != source or not task.get("workflow_triggered") or body["prompt"] not in task.get("prompt", ""):
+            record(report, check_name, "fail", reason="Task missing or source, workflow or payload mismatch",
+                   actualSource=task.get("source"), **evidence)
+            return
+        status = task["status"]
+        if status == "completed":
+            pr = task.get("pr_url", "")
+            try:
+                valid = verify_artifact(repo, pr, path, marker)
+            except (OSError, subprocess.TimeoutExpired, RuntimeError, ValueError) as error:
+                record(report, check_name, "fail", prUrl=pr, reason=str(error), **evidence)
+                return
+            record(report, check_name, "pass" if valid else "fail", prUrl=pr, artifactVerified=valid, **evidence)
+            return
+        remaining = deadline - time.monotonic()
+        if status not in ("pending", "running") or remaining <= 0:
+            record(report, check_name, "fail", taskStatus=status, reason="Task did not complete", **evidence)
+            return
+        time.sleep(min(5, remaining))
+        snapshot = api.get("/api/status")
 
 
 def cleanup(api, defs, report):
@@ -216,17 +292,22 @@ def main():
     parser.add_argument("--repo", required=True, help="Explicit owner/repository test target")
     parser.add_argument("--base-url", default="http://127.0.0.1:7777")
     parser.add_argument("--prefix", default="workflow-smoke", help="Unique namespace shared by install/observe/cleanup")
-    parser.add_argument("--action", choices=("check", "install", "enable", "pause", "scan", "observe", "cleanup"), default="check")
+    parser.add_argument("--action", choices=("check", "install", "enable", "pause", "scan", "observe", "submit", "cleanup"), default="check")
     parser.add_argument("--case", choices=[case["id"] for case in MATRIX["cases"]],
-                        help="Required scenario for enable or pause")
+                        help="Required scenario for enable, pause or submit")
     parser.add_argument("--output", type=Path, help="Write the JSON report to a private local file")
+    parser.add_argument("--timeout", type=int, default=1800, help="Seconds to wait for a submitted task")
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo) or ".." in args.repo:
         parser.error("--repo must be owner/repository")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", args.prefix):
         parser.error("--prefix must contain 1–50 letters, digits, underscores, or hyphens")
-    if (args.action in ("enable", "pause")) != bool(args.case):
-        parser.error("--case is required for enable and pause, and is only used by those actions")
+    if (args.action in ("enable", "pause", "submit")) != bool(args.case):
+        parser.error("--case is required for enable, pause and submit, and is only used by those actions")
+    if args.action == "submit" and args.case not in ("app-prompt", "app-json", "app-chat"):
+        parser.error("submit requires an app case")
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
     report = {"version": 1, "action": args.action, "repository": args.repo, "prefix": args.prefix,
               "checkedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(), "results": []}
     api = API(args.base_url)
@@ -235,13 +316,16 @@ def main():
     try:
         if args.case:
             definition = next(item for item in defs if item["id"] == f"{args.prefix}-{args.case}")
-            set_enabled(api, definition, args.action == "enable", report)
+            if args.action == "submit":
+                submit(api, definition, report, args.timeout)
+            else:
+                set_enabled(api, definition, args.action == "enable", report)
         elif args.action == "scan":
             code, _ = api.request("/api/workflows/scan", method="POST")
             expect(report, "scan-accepted", code, 202)
         else:
             {"check": check, "install": install, "observe": observe, "cleanup": cleanup}[args.action](api, defs, report)
-    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
+    except (subprocess.TimeoutExpired, OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
         record(report, "runner", "fail", reason=str(error))
         exit_code = 2
     report["summary"] = {status: sum(result["status"] == status for result in report["results"])

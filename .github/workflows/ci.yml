@@ -30,6 +30,9 @@ jobs:
           cache: true
           cache-dependency-path: go.mod
 
+      - name: Check workflow smoke matrix and runner
+        run: python3 -m unittest discover -s scripts/workflow-smoke -v
+
       - name: Download modules
         run: go mod download
 

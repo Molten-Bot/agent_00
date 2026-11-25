@@ -709,6 +709,24 @@ approval scenarios need a second GitHub identity because authors cannot review
 their own PRs. Keep those scenarios marked blocked when that prerequisite is
 unavailable rather than weakening their approval policy.
 
+For Prompt, JSON, and Chat, install the definitions and enable one app case.
+Use the same disposable repository and prefix for each command. The explicit
+`submit` action queues one real task and waits up to 30 minutes (`--timeout`
+in seconds). For example, after install:
+
+```bash
+python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smoke-agent-a --action enable --case app-json
+python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smoke-agent-a --action submit --case app-json
+python3 scripts/workflow-smoke/run.py --repo example/workflow-tests --prefix smoke-agent-a --action pause --case app-json
+```
+
+Use `app-prompt` or `app-chat` for the other sources. The submit report checks
+the returned request ID against the workflow event and task, then uses the
+authenticated `gh` CLI to verify the unique marker file in that task's PR.
+Disabled Chat or JSON settings produce a blocked result before submission.
+The observe action reports app cases as blocked and points to the submit action
+for request-specific verification.
+
 Shared browser libraries (Lucide, Marked, xterm, and Emoji Mart) are pinned in
 `internal/web/vendor/package.json` and its lockfile. After updating those pins, run
 `npm ci --prefix internal/web/vendor` and `npm run build --prefix internal/web/vendor`
