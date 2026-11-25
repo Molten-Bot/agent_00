@@ -9014,11 +9014,11 @@
       if (!workflowEditorLoad) {
         const css = document.createElement("link");
         css.rel = "stylesheet";
-        css.href = "/static/workflow-editor.css?v=15";
+        css.href = "/static/workflow-editor.css?v=16";
         document.head.appendChild(css);
         workflowEditorLoad = new Promise((resolve, reject) => {
           const script = document.createElement("script");
-          script.src = "/static/workflow-editor.js?v=21";
+          script.src = "/static/workflow-editor.js?v=22";
           script.onload = resolve;
           script.onerror = () => { script.remove(); css.remove(); workflowEditorLoad = null; reject(new Error("Unable to load Workflow editor. Reload to try again.")); };
           document.head.appendChild(script);
@@ -10751,7 +10751,7 @@
     function sortTasksByStartTime(tasks) {
       const out = Array.isArray(tasks) ? [...tasks] : [];
       out.sort((a, b) => {
-        const startedDiff = parseTaskTimestamp(b?.started_at) - parseTaskTimestamp(a?.started_at);
+        const startedDiff = parseTaskTimestamp(a?.started_at) - parseTaskTimestamp(b?.started_at);
         if (startedDiff !== 0) return startedDiff;
 
         return String(b?.request_id || "").localeCompare(String(a?.request_id || ""));

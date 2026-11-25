@@ -11,6 +11,7 @@
 .wf-header-actions { flex: 0 1 auto; min-width: 0; justify-content: flex-end; column-gap: clamp(4px, 1vw, 10px); text-transform: none; }
 .wf-header-actions > button { flex-shrink: 0; white-space: nowrap; }
 .wf-save-state { font-size: 10px; color: var(--muted); white-space: nowrap; }
+.wf-save-state:empty { position: absolute; }
 .wf-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
 .wf-editor button.wf-primary { background: var(--accent); color: #fff; border-color: transparent; }
 .wf-editor button.wf-primary:hover { filter: brightness(1.12); }
