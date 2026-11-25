@@ -40,7 +40,7 @@ import "./style.css";
 import { ReviewPasses } from "./review-passes.jsx";
 import { ScheduleInterval } from "./schedule-interval.jsx";
 import { RepositoryPicker } from "./repository-picker.jsx";
-import { events, newWorkflow, diagram, replaceDefinition, workflowTemplates, automaticLayout } from "./model.js";
+import { events, newWorkflow, diagram, replaceDefinition, workflowTemplates, workflowSettings, incompleteWorkflow, automaticLayout } from "./model.js";
 const icons = {
   calendar: CalendarClock, json: FileJson, prompt: SquarePen, chat: MessageSquare, pullRequest: GitPullRequest, issue: CircleDot, repair: Wrench,
   repository: FolderGit2,
