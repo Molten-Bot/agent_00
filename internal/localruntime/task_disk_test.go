@@ -375,7 +375,7 @@ func TestAdaptiveSchedulerReportsFilesystemSmallerThanWorkspaceMinimum(t *testin
 		return "disk", unit - 1, unit - 1, nil
 	}
 	request := TaskDiskRequest{
-		Workspace: workspace.Manager{Root: t.TempDir()},
+		Workspace: workspace.Manager{Root: t.TempDir(), CheckSpace: func(string) error { return syscall.ENOSPC }},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -716,22 +716,18 @@ func TestAdaptiveSchedulerTriesAnotherWorkspaceAfterSetupFailure(t *testing.T) {
 	}
 }
 
-func TestAdaptiveSchedulerReportsFallbackSetupFailureWhenPreferredIsTooSmall(t *testing.T) {
+func TestAdaptiveSchedulerKeepsOversizedPreferredRootForceStartable(t *testing.T) {
 	const unit = workspace.MinimumFreeBytes
 	ram, disk := t.TempDir(), t.TempDir()
 	t.Setenv("HARNESS_WORKSPACE_RAM_BASE", ram)
 	t.Setenv("HARNESS_WORKSPACE_DISK_BASE", disk)
 	t.Setenv("HARNESS_WORKSPACE_ROOT_NAME", "test-workspaces")
 
-	controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
-	total := uint64(unit)
-	controller.diskSpace = func(string) (string, uint64, uint64, error) {
-		return "ram", unit, total, nil
-	}
 	request := TaskDiskRequest{
 		Workspace: workspace.Manager{
 			PathExists: func(string) bool { return true },
 			CanExec:    func(string) bool { return true },
+			CheckSpace: func(string) error { return nil },
 			MkdirAll: func(path string, _ os.FileMode) error {
 				if filepath.Dir(path) == disk {
 					return os.ErrPermission
@@ -741,19 +737,28 @@ func TestAdaptiveSchedulerReportsFallbackSetupFailureWhenPreferredIsTooSmall(t *
 		},
 		RequiredBytes: func() uint64 { return 2 * unit },
 	}
-	waiter := &taskWaiter{disk: &request}
-	controller.waiters = []*taskWaiter{waiter}
-	controller.tryGrantLocked(0)
-	if !errors.Is(waiter.err, os.ErrPermission) || waiter.diskBlocked || waiter.granted {
-		t.Fatalf("too-small preferred root: error = %v, blocked = %v, granted = %v", waiter.err, waiter.diskBlocked, waiter.granted)
-	}
+	for _, total := range []uint64{unit - 1, unit, 2 * unit} {
+		controller := NewAdaptiveScheduler(SchedulerConfig{MaxParallel: 1}, nil)
+		controller.diskSpace = func(string) (string, uint64, uint64, error) {
+			return "ram", min(unit, total), total, nil
+		}
+		waiter := &taskWaiter{disk: &request}
+		controller.waiters = []*taskWaiter{waiter}
+		controller.tryGrantLocked(0)
+		if waiter.err != nil || !waiter.diskBlocked || waiter.granted {
+			t.Fatalf("capacity %d: error = %v, blocked = %v, granted = %v", total, waiter.err, waiter.diskBlocked, waiter.granted)
+		}
 
-	total = 2 * unit
-	waiter = &taskWaiter{disk: &request}
-	controller.waiters = []*taskWaiter{waiter}
-	controller.tryGrantLocked(0)
-	if waiter.err != nil || !waiter.diskBlocked || waiter.granted {
-		t.Fatalf("preferred root with recoverable pressure: error = %v, blocked = %v, granted = %v", waiter.err, waiter.diskBlocked, waiter.granted)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		root, release, err := controller.AcquireWorkspace(ctx, "override", request, true)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		release()
+		if want := filepath.Join(ram, "test-workspaces"); root != want {
+			t.Fatalf("capacity %d: forced root = %q, want %q", total, root, want)
+		}
 	}
 }
 
