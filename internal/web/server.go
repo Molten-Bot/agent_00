@@ -120,7 +120,6 @@ type Server struct {
 	// IssueRecovery is enabled only when the submitter implements durable
 	// receipts and inherited worker locks. Legacy embedders remain manual-only.
 	IssueRecovery *localruntime.IssueRecoveryConfig
-	IssueRepair   func(context.Context, localruntime.IssueClaimRecord) (string, error)
 	// IssueExternalPrerequisiteFromLogs rechecks truncated failures before automatic retry.
 	IssueExternalPrerequisiteFromLogs func(requestID, failure string) (reason string, matched bool)
 	IssueRepairs                      *localruntime.IssueRepairStore

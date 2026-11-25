@@ -54,23 +54,6 @@ func TestSettingsAndIssueAssetsTrackMeaningfulEngagement(t *testing.T) {
 			},
 		},
 		{
-			asset: "static/library-schedules.js",
-			events: []string{
-				"library_schedules_opened",
-				"library_schedules_load_failed",
-				"library_schedule_editor_opened",
-				"library_schedule_validation_failed",
-				"library_schedule_${operation}_started",
-				"library_schedule_${operation}_succeeded",
-				"library_schedule_${operation}_failed",
-				"library_schedule_run_now_started",
-				"library_schedule_run_now_succeeded",
-				"library_schedule_run_now_duplicate",
-				"library_schedule_run_now_failed",
-				"library_schedules_refresh_failed",
-			},
-		},
-		{
 			asset: "static/github-issues.js",
 			events: []string{
 				"github_issue_opened_external",

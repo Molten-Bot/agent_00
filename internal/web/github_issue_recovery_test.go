@@ -106,6 +106,18 @@ func recoveryPR(state, merged, head, base string) string {
 	return `[{"number":42,"title":"` + recoveryPRTitle + `","state":"` + state + `","merged_at":` + merged + `,"head":{"ref":"` + head + `","sha":"existing-commits","repo":{"full_name":"acme/repo"}},"base":{"ref":"` + base + `","repo":{"full_name":"acme/repo"}}}]`
 }
 
+func TestIssueRecoveryWithEmptyClaimStoreLeavesGitHubIdle(t *testing.T) {
+	t.Parallel()
+	s, f := recoveryServer(t)
+	s.Workflows = nil
+	if err := s.ReconcileIssueWork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 0 || len(f.submissions) != 0 {
+		t.Fatalf("empty claim store triggered %d GitHub calls and %d submissions", f.calls, len(f.submissions))
+	}
+}
+
 func TestExplicitIssueRecoveryUsesPersistentOwner(t *testing.T) {
 	t.Parallel()
 	for _, action := range []string{"start", "recover"} {
@@ -212,9 +224,6 @@ func TestIssueRecoveryBlocksStaleAdmissionUntilExplicitRetry(t *testing.T) {
 	}
 	previous.Failures = 4
 	previous.NextAttemptAt = time.Now().Add(time.Hour)
-	if repairableIssueIncident(previous) {
-		t.Fatal("historical ownership failure would enqueue a repair")
-	}
 	if err := s.IssueClaims.Save(previous); err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +272,7 @@ func TestIssueRecoveryStopsRetryWhenDispatchRejectsOwner(t *testing.T) {
 		t.Fatalf("expected dispatch rejection, got %v", err)
 	}
 	record := latestRecoveryRecord(t, s)
-	if record.State != "blocked" || !record.NextAttemptAt.IsZero() || repairableIssueIncident(record) {
+	if record.State != "blocked" || !record.NextAttemptAt.IsZero() {
 		t.Fatalf("rejected dispatch state=%s retry=%v error=%q", record.State, record.NextAttemptAt, record.Error)
 	}
 	s.SubmitLocalPrompt = f.submit
@@ -934,38 +943,6 @@ func TestIssueRecoveryBacksOffFailedSuccessorAdmission(t *testing.T) {
 	}
 }
 
-func TestIssueRecoveryPersistsRepairReceiptBeforeFailedAdmission(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	s, f := recoveryServer(t)
-	reconcileOrAdmitTestIssue(ctx, s)
-	previous := completeRecoveryRecord(t, s, "error", 0)
-	expireIssueRetry(t, s, previous.ID)
-	s.IssueRepair = func(_ context.Context, record localruntime.IssueClaimRecord) (string, error) {
-		if record.ID != previous.ID {
-			t.Fatalf("repair attempted for claim %s, want %s", record.ID, previous.ID)
-		}
-		return "repair-request", nil
-	}
-	dispatchErr := errors.New("temporary dispatch failure")
-	s.SubmitLocalPrompt = func(context.Context, []byte) (string, error) {
-		return "", dispatchErr
-	}
-	if err := s.ReconcileIssueWork(ctx); !errors.Is(err, dispatchErr) {
-		t.Fatalf("expected dispatch failure, got %v", err)
-	}
-	if got := latestRecoveryRecord(t, s); got.ID == previous.ID || got.State != "retry_wait" || len(f.submissions) != 1 {
-		t.Fatalf("expected deferred successor, got claim %s in state %s", got.ID, got.State)
-	}
-	saved, err := (&localruntime.IssueClaimStore{Root: s.IssueClaims.Root}).Load(previous.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if saved.RepairRequestID != "repair-request" {
-		t.Fatalf("saved repair receipt = %q", saved.RepairRequestID)
-	}
-}
-
 func TestLegacyIssueClaimRequiresExplicitRetry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1364,10 +1341,6 @@ func testIssueRecoveryBlocksPrerequisite(t *testing.T, report, incident, want st
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
-	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
-		t.Fatal("dependency failure queued a harness repair")
-		return "", nil
-	}
 	f.deleteError = true
 	if err := s.ReconcileIssueWork(context.Background()); err == nil {
 		t.Fatal("expected temporary unlock failure")
@@ -1415,10 +1388,6 @@ func TestIssueRecoveryBlocksExternalRolloutWithoutRepair(t *testing.T) {
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
 	}
-	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
-		t.Fatal("external provisioning failure queued a harness repair")
-		return "", nil
-	}
 	for range 2 {
 		if err := s.ReconcileIssueWork(ctx); err != nil {
 			t.Fatal(err)
@@ -1447,10 +1416,6 @@ func TestIssueRecoveryBlocksMissingExternalEvidenceWithoutRepair(t *testing.T) {
 	record.NextAttemptAt = time.Now().Add(-time.Minute)
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
-	}
-	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
-		t.Fatal("missing external evidence queued a harness repair")
-		return "", nil
 	}
 	for range 2 {
 		if err := s.ReconcileIssueWork(t.Context()); err != nil {
@@ -1486,10 +1451,6 @@ func TestIssueRecoveryChecksPreservedRolloutBeforeOverdueRetry(t *testing.T) {
 			t.Fatalf("stdout lookup used request %q and failure %q", requestID, failure)
 		}
 		return failurefollowup.ExternalRolloutPrerequisitesReason, true
-	}
-	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
-		t.Fatal("external provisioning failure queued a harness repair")
-		return "", nil
 	}
 	for range 2 {
 		if err := s.ReconcileIssueWork(t.Context()); err != nil {
@@ -1533,10 +1494,6 @@ func TestIssueRecoveryChecksPreservedHumanHandoffBeforeOverdueRetry(t *testing.T
 			return fullReport
 		})
 	}
-	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
-		t.Fatal("human handoff failure queued a harness repair")
-		return "", nil
-	}
 	if err := s.ReconcileIssueWork(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -1556,20 +1513,20 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 	const truncated = confirmed + " | Service readiness still needs confirmation. | CloudWatch access is pending." + failurefollowup.TruncatedErrorDetails
 	for _, tc := range []struct {
 		name, evidence       string
-		matchedLogs, repair  bool
+		matchedLogs, retry   bool
 		legacyErrorFieldOnly bool
 		logsRestored         bool
 		recoveryStatusOnly   bool
 	}{
-		{name: "ambiguous preserved report", evidence: ambiguous, repair: true},
-		{name: "legacy error field", evidence: ambiguous, repair: true, legacyErrorFieldOnly: true},
+		{name: "ambiguous preserved report", evidence: ambiguous, retry: true},
+		{name: "legacy error field", evidence: ambiguous, retry: true, legacyErrorFieldOnly: true},
 		{name: "legacy recovery status", evidence: "temporary GitHub verification failure", legacyErrorFieldOnly: true, recoveryStatusOnly: true},
 		{name: "confirmed preserved report", evidence: confirmed},
 		{name: "confirmed legacy error field", evidence: confirmed, legacyErrorFieldOnly: true},
 		{name: "confirmed secret only", evidence: prefix + "The shared Secrets Manager key requires external provisioning.", legacyErrorFieldOnly: true},
-		{name: "matching stdout reports a failed check", evidence: truncated, matchedLogs: true, repair: true},
+		{name: "matching stdout reports a failed check", evidence: truncated, matchedLogs: true, retry: true},
 		{name: "no matching stdout for truncated report", evidence: truncated},
-		{name: "stdout restored after legacy error is overwritten", evidence: truncated, repair: true, legacyErrorFieldOnly: true, logsRestored: true},
+		{name: "stdout restored after legacy error is overwritten", evidence: truncated, retry: true, legacyErrorFieldOnly: true, logsRestored: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := recoveryServer(t)
@@ -1593,14 +1550,6 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 				}
 				return "", matchedLogs
 			}
-			calls := 0
-			s.IssueRepair = func(_ context.Context, issue localruntime.IssueClaimRecord) (string, error) {
-				calls++
-				if issue.Incident != "missing_pr" || issue.FailureDetail() != tc.evidence {
-					t.Fatalf("unexpected repair evidence: incident=%q detail=%q", issue.Incident, issue.FailureDetail())
-				}
-				return "repair-test", nil
-			}
 			for pass := range 2 {
 				if err := s.ReconcileIssueWork(t.Context()); err != nil {
 					t.Fatal(err)
@@ -1608,9 +1557,9 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 				if pass == 0 && tc.logsRestored {
 					got := latestRecoveryRecord(t, s)
 					if got.State != "blocked" || got.Incident != record.Incident ||
-						got.Error != issueExplicitRetryError(record.Incident) || got.RunError != tc.evidence || calls != 0 {
-						t.Fatalf("legacy failure not preserved while stdout is unavailable: state=%q incident=%q error=%q run error=%q repair calls=%d",
-							got.State, got.Incident, got.Error, got.RunError, calls)
+						got.Error != issueExplicitRetryError(record.Incident) || got.RunError != tc.evidence {
+						t.Fatalf("legacy failure not preserved while stdout is unavailable: state=%q incident=%q error=%q run error=%q",
+							got.State, got.Incident, got.Error, got.RunError)
 					}
 					matchedLogs = true
 				}
@@ -1623,12 +1572,12 @@ func TestIssueRecoveryRechecksStoredRolloutIncident(t *testing.T) {
 			if got.RunError != wantRunError || len(f.submissions) != 1 {
 				t.Fatalf("lost evidence or submitted a replacement worker: detail=%q submissions=%d", got.RunError, len(f.submissions))
 			}
-			if tc.repair {
-				if calls != 1 || got.RepairRequestID != "repair-test" || got.State != "retry_wait" || got.NextAttemptAt.IsZero() {
-					t.Fatalf("stale rollout block remained: calls=%d receipt=%q state=%q", calls, got.RepairRequestID, got.State)
+			if tc.retry {
+				if got.Incident != "missing_pr" || got.State != "retry_wait" || got.NextAttemptAt.IsZero() {
+					t.Fatalf("stale rollout block remained: incident=%q state=%q", got.Incident, got.State)
 				}
-			} else if calls != 0 || got.Incident != localruntime.IssueIncidentExternalRollout || got.State != "blocked" || !got.NextAttemptAt.IsZero() {
-				t.Fatalf("rollout block was lost: calls=%d incident=%q state=%q", calls, got.Incident, got.State)
+			} else if got.Incident != localruntime.IssueIncidentExternalRollout || got.State != "blocked" || !got.NextAttemptAt.IsZero() {
+				t.Fatalf("rollout block was lost: incident=%q state=%q", got.Incident, got.State)
 			}
 		})
 	}
@@ -1814,10 +1763,6 @@ func TestIssueRecoveryBlocksLegacyDiskExhaustionUntilExplicitRetry(t *testing.T)
 	record.WorkspaceDir = filepath.Join(t.TempDir(), "retained")
 	if err := s.IssueClaims.Save(record); err != nil {
 		t.Fatal(err)
-	}
-	s.IssueRepair = func(context.Context, localruntime.IssueClaimRecord) (string, error) {
-		t.Fatal("disk exhaustion queued an application repair after its status changed")
-		return "", nil
 	}
 	for range 2 {
 		if err := s.ReconcileIssueWork(context.Background()); err != nil {

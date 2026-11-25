@@ -445,19 +445,6 @@ func (s Server) reconcileIssueRecord(ctx context.Context, record localruntime.Is
 	if record.Outcome != "" && record.Incident == "" {
 		record.Incident = "missing_pr"
 	}
-	if s.IssueRepair != nil && record.RepairRequestID == "" && repairableIssueIncident(record) {
-		id, repairErr := s.IssueRepair(ctx, record)
-		if repairErr != nil {
-			record.RepairError = repairErr.Error()
-		} else {
-			record.RepairRequestID = id
-			record.RepairError = ""
-		}
-		// Admission can defer its own retry without saving this record again.
-		if err := s.IssueClaims.Save(record); err != nil {
-			return fmt.Errorf("persist issue repair result: %w", err)
-		}
-	}
 	policy := s.IssueRecovery.Defaults()
 	explicitRetryError := issueExplicitRetryError(record.Incident)
 	if record.Control != "" || record.Outcome == "stopped" || record.Outcome == "no_changes" ||
@@ -667,30 +654,6 @@ func issueRetryDeadline(id string, failures int, policy localruntime.IssueRecove
 	return deadline
 }
 
-func repairableIssueIncident(record localruntime.IssueClaimRecord) bool {
-	if record.Control != "" || record.Incident == "" || record.Incident == "service_shutdown" ||
-		issueExplicitRetryError(record.Incident) != "" || record.Outcome == "stopped" || (record.Outcome == "no_changes" && record.NoChangeEvidence) {
-		return false
-	}
-	if record.Outcome == "" && record.Failures < 3 {
-		return false
-	}
-	detail := record.FailureDetail()
-	if failurefollowup.NonRemediableFailureReason(errors.New(detail)) != "" {
-		return false
-	}
-	if strings.Contains(detail, localruntime.LegacyIssueOwnershipFailure) {
-		return false
-	}
-	lower := strings.ToLower(detail)
-	for _, reason := range []string{"issue is ineligible", "associated branch", "open dependencies", "dispatch capacity", "automation disabled", "repository disabled", "ownership", "permission", "rate limit", "worker descendants", "agent auth required"} {
-		if strings.Contains(lower, reason) {
-			return false
-		}
-	}
-	return true
-}
-
 func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause error) error {
 	// Merge, because submission may have launched a worker before returning an
 	// ambiguous receipt. Never overwrite a running or completed worker here.
@@ -698,10 +661,6 @@ func (s Server) deferIssueRecord(record localruntime.IssueClaimRecord, cause err
 		if current.StartedAt.After(record.StartedAt) || current.StoppedAt.After(record.StoppedAt) {
 			return nil
 		}
-		if record.RepairRequestID != "" {
-			current.RepairRequestID = record.RepairRequestID
-		}
-		current.RepairError = record.RepairError
 		if errors.Is(cause, localruntime.ErrIssueOwnershipChanged) {
 			blockStaleIssueClaim(current)
 			return nil

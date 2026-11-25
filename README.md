@@ -625,7 +625,6 @@ is reconciled from task history and otherwise held for inspection, never blindly
 repeated. The global repository filter gates task admission and execution; commit
 signing remains global. Turning off Workflow stops custom activations and merges,
 while already started tasks retain their captured policy and can finish.
-Configured default automation remains available with the builder off.
 
 In Settings → Features, **Default task complexity** starts at Standard. Each workflow’s
 Agent task can inherit that setting or select Easy, Standard, or Advanced. The

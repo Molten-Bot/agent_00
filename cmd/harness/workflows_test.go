@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/Molten-Bot/agent_00/internal/web"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/Molten-Bot/agent_00/internal/config"
 	"github.com/Molten-Bot/agent_00/internal/localruntime"
+	"github.com/Molten-Bot/agent_00/internal/web"
 	"github.com/Molten-Bot/agent_00/internal/workflow"
 )
 
@@ -95,7 +95,7 @@ func TestConfigureWorkflowsNeverImportsLegacyConfiguration(t *testing.T) {
 			root := t.TempDir()
 			cfg := localruntime.InitConfig{Version: "v1", RuntimeConfigPath: filepath.Join(root, "config.json")}
 			cfg.ApplyDefaults()
-			original := []byte(`{"github_issues_enabled":true,"github_issue_repositories":{"acme/repo":{"auto_start":true,"trigger_labels":["ready"],"exclusion_label":"agent_00-in-progress"}},"review_watch":{"enabled":true,"review_level":"high","auto_merge":true},"library_schedules":{"unit-test-coverage@acme/repo":{"libraryTaskName":"unit-test-coverage","repo":"acme/repo","intervalHours":24,"nextRunAt":"2026-01-01T00:00:00Z"}}}`)
+			original := []byte(`{"workflow_enabled":true,"github_issues_enabled":true,"github_issue_repositories":{"acme/repo":{"auto_start":true,"trigger_labels":["ready"],"exclusion_label":"agent_00-in-progress"}},"review_watch":{"enabled":true,"review_level":"high","auto_merge":true},"library_schedules":{"unit-test-coverage@acme/repo":{"libraryTaskName":"unit-test-coverage","repo":"acme/repo","intervalHours":24,"nextRunAt":"2026-01-01T00:00:00Z"}}}`)
 			if err := os.WriteFile(cfg.RuntimeConfigPath, original, 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -115,6 +115,13 @@ func TestConfigureWorkflowsNeverImportsLegacyConfiguration(t *testing.T) {
 				if err := configureWorkflows(context.Background(), cfg, nil, &server, server.Broker, nil, func(string, ...any) {}); err != nil {
 					t.Fatal(err)
 				}
+			}
+			server.Workflows.Fetch = func(context.Context, string, workflow.ScanNeeds) ([]workflow.Item, error) {
+				t.Fatal("startup scanned GitHub without an enabled workflow")
+				return nil, nil
+			}
+			if err := server.Workflows.Tick(t.Context()); err != nil {
+				t.Fatal(err)
 			}
 			doc, err := store.Load()
 			if err != nil {
