@@ -636,6 +636,48 @@ func TestIssueRepairOutboxRechecksTruncatedRolloutFromStdout(t *testing.T) {
 	}
 }
 
+func TestIssueRepairOutboxBlocksTruncatedExternalEvidence(t *testing.T) {
+	t.Parallel()
+	claims, issue := lifecycleRecord(t)
+	q := &issueRepairQueue{store: &localruntime.IssueRepairStore{Root: t.TempDir()}, claims: claims, logRoot: t.TempDir(), logf: t.Logf}
+	const summary = "Failure: Equipment audit remains blocked."
+	const details = "Error details: This runtime had no approved inspection record or authorized access to matching equipment logs."
+	lines := []string{summary, details, "| Item | Evidence needed |", "|---|---|", "| Pump | Signed inspection record |", "| Motor | Maintenance log |"}
+	issue.RunError = "codex: codex reported failure: " + summary + " " + details + " | " + strings.Join(lines[2:5], " | ") + failurefollowup.TruncatedErrorDetails
+	issue.Outcome = "error"
+	issue.Incident = "missing_pr"
+	issue.NextAttemptAt = time.Now().Add(time.Minute)
+	repair := saveLegacyIssueRepair(t, q, issue)
+	issue.RepairRequestID = repair.RequestID
+	if err := claims.Save(issue); err != nil {
+		t.Fatal(err)
+	}
+	dir, _ := taskLogDir(q.logRoot, issue.RequestID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	var log strings.Builder
+	for _, line := range lines {
+		fmt.Fprintf(&log, "task request_id=%s cmd phase=codex name=codex stream=stdout b64=%s\n",
+			issue.RequestID, base64.StdEncoding.EncodeToString([]byte(line)))
+	}
+	if err := os.WriteFile(filepath.Join(dir, logFileName), []byte(log.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	q.reconcile(t.Context(), func(context.Context, config.Config, bool, string, bool) (string, error) {
+		t.Fatal("missing external evidence dispatched a repair")
+		return "", nil
+	})
+	repairs, err := q.store.List()
+	if err != nil || len(repairs) != 1 || repairs[0].State != "blocked" || repairs[0].Error != failurefollowup.ExternalEvidencePrerequisitesReason {
+		t.Fatalf("expected blocked repair, got %v, error=%v", repairs, err)
+	}
+	saved, err := claims.Load(issue.ID)
+	if err != nil || saved.Incident != localruntime.IssueIncidentExternalEvidence || !saved.NextAttemptAt.IsZero() {
+		t.Fatalf("expected persisted prerequisite and cleared retry deadline, got %q and %v, error=%v", saved.Incident, saved.NextAttemptAt, err)
+	}
+}
+
 func TestIssueRepairRecoversRawAgentStdoutAtEveryLogLevel(t *testing.T) {
 	t.Parallel()
 	for _, level := range []localruntime.LogLevel{localruntime.LogLevelDebug, localruntime.LogLevelInfo, localruntime.LogLevelWarn} {
